@@ -1,0 +1,57 @@
+# -------------------------------------------------------------
+# tasks/main.yml
+# -------------------------------------------------------------
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  tags: [packages]
+
+- name: Install baseline packages
+  ansible.builtin.apt:
+    name: "{{ common_packages }}"
+    state: present
+  tags: [packages]
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ common_timezone }}"
+  tags: [timezone]
+
+- name: Enable and start chrony (NTP)
+  ansible.builtin.service:
+    name: chrony
+    enabled: yes
+    state: started
+  when: "chrony" in common_packages
+  tags: [ntp]
+
+- name: Hold current Ubuntu kernel (prevent accidental upgrades)
+  ansible.builtin.apt:
+    name: linux-image-generic
+    state: present
+    lock_timeout: 120
+    lock_package: yes                  # equivalent to apt-mark hold
+  tags: [kernel]
+
+- name: Deploy unattended‑upgrades configuration
+  ansible.builtin.template:
+    src: unattended-upgrades.conf.j2
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart unattended-upgrades
+  tags: [security]
+
+- name: Apply sysctl parameters
+  ansible.builtin.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: yes
+  loop: "{{ common_sysctl | dict2items }}"
+  notify: reload sysctl
+  tags: [sysctl]
+

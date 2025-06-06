@@ -1,0 +1,12 @@
+# Python venv / IDE
+.venv/
+__pycache__/
+*.pyc
+
+# Ansible artefacts
+*.retry
+*.log
+
+# Editor backups
+*~
+# End

@@ -1,0 +1,10 @@
+# playbooks/common.yml
+# =============================================================
+---
+- name: Apply common baseline configuration to storage nodes
+  hosts: storage_nodes           # defined in inventories/lab.ini
+  gather_facts: true             # role relies on facts
+  roles:
+    - role: common               # our baseline role
+      tags:
+        - common

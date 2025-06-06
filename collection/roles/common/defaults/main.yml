@@ -1,0 +1,20 @@
+# =============================================================
+# Role: common
+# Directory: collection/roles/common/
+# =============================================================
+#
+# -------------------------------------------------------------
+# defaults/main.yml
+# -------------------------------------------------------------
+common_timezone: "Europe/Amsterdam"
+common_packages:
+  - curl
+  - vim
+  - htop
+  - chrony                # NTP daemon; change to ntp if preferred
+  - unattended-upgrades
+  - ca-certificates
+common_sysctl:
+  net.core.rmem_max: 268435456
+  net.core.wmem_max: 268435456
+  vm.swappiness: 10
