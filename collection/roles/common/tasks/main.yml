@@ -24,15 +24,13 @@
     name: chrony
     enabled: yes
     state: started
-  when: "chrony" in common_packages
+  when: "'chrony' in common_packages"
   tags: [ntp]
 
 - name: Hold current Ubuntu kernel (prevent accidental upgrades)
-  ansible.builtin.apt:
+  ansible.builtin.dpkg_selections:
     name: linux-image-generic
-    state: present
-    lock_timeout: 120
-    lock_package: yes                  # equivalent to apt-mark hold
+    selection: hold
   tags: [kernel]
 
 - name: Deploy unattended‑upgrades configuration
