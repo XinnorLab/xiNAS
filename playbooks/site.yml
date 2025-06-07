@@ -1,0 +1,7 @@
+---
+- name: Configure storage node (baseline + performance tuning)
+  hosts: storage_nodes
+  gather_facts: true
+  roles:
+    - role: common
+    - role: perf_tuning

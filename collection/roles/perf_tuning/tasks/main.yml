@@ -1,0 +1,103 @@
+# -------------------------------------------------------------
+# tasks/main.yml
+# -------------------------------------------------------------
+---
+- name: Install auxiliary packages needed by tuning tasks
+  ansible.builtin.apt:
+    name:
+      - cpufrequtils
+      - tuned
+    state: present
+  tags: [packages]
+
+# ===== Kernel boot parameters =====
+- name: Add high-performance kernel parameters (Xinnor guide)
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX="(.*)"'
+    line: 'GRUB_CMDLINE_LINUX="intel_idle.max_cstate=0 {{ "mitigations=off noibrs noibpb nopti nospectre_v2 nospec_store_bypass_disable no_stf_barrier mds=off" if perf_disable_mitigations else "" }} $1"'
+    backrefs: yes
+  notify: update grub
+  when: ansible_facts['cmdline'] is defined
+  tags: [kernel]
+
+- name: Configure NVMe polling mode ({{ perf_nvme_poll_queues }} queues)
+  ansible.builtin.lineinfile:
+    path: /etc/modprobe.d/nvme.conf
+    create: yes
+    line: "options nvme poll_queues={{ perf_nvme_poll_queues }}"
+  notify: rebuild initramfs
+  tags: [nvme]
+
+# ===== CPU governor & irqbalance =====
+- name: Set CPU frequency governor to {{ perf_cpu_governor }}
+  ansible.builtin.command: "cpupower frequency-set -g {{ perf_cpu_governor }}"
+  when: ansible_facts['architecture'] == 'x86_64'
+  tags: [cpu]
+
+- name: Stop and disable irqbalance if requested
+  ansible.builtin.service:
+    name: irqbalance
+    state: stopped
+    enabled: no
+  when: perf_stop_irqbalance
+  tags: [cpu]
+
+# ===== Disable THP / KSM =====
+- name: Disable Transparent Huge Pages at runtime
+  ansible.builtin.shell: |
+    echo never > /sys/kernel/mm/transparent_hugepage/enabled
+    echo never > /sys/kernel/mm/transparent_hugepage/defrag
+  when: perf_disable_thp
+  tags: [memory]
+
+- name: Disable Kernel Samepage Merging (KSM)
+  ansible.builtin.shell: "echo 0 > /sys/kernel/mm/ksm/run"
+  when: perf_disable_ksm
+  tags: [memory]
+
+# ===== I/O scheduler & queue depth =====
+- name: Force {{ perf_scheduler }} scheduler on NVMe devices
+  ansible.builtin.shell: |
+    for dev in /sys/block/nvme*/queue/scheduler; do echo {{ perf_scheduler }} > "$dev"; done
+  tags: [io]
+
+- name: Increase nr_requests queue depth to {{ perf_nr_requests }} on NVMe devices
+  ansible.builtin.shell: |
+    for dev in /sys/block/nvme*/queue/nr_requests; do echo {{ perf_nr_requests }} > "$dev"; done
+  tags: [io]
+
+- name: Set read-ahead to {{ perf_read_ahead_kb }} KB for NVMe devices
+  ansible.builtin.shell: |
+    for blk in /dev/nvme*n*; do /sbin/blockdev --setra {{ perf_read_ahead_kb }} "$blk"; done
+  tags: [io]
+
+# ===== Sysctl network 400 Gbit =====
+- name: Apply network sysctl parameters for 400 Gbit throughput
+  ansible.builtin.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: yes
+  loop:
+    - { key: 'net.core.rmem_max',     value: '{{ perf_net_rmem_max }}' }
+    - { key: 'net.core.wmem_max',     value: '{{ perf_net_wmem_max }}' }
+    - { key: 'net.core.netdev_max_backlog', value: '{{ perf_net_backlog }}' }
+  tags: [network]
+
+- name: Configure MTU {{ perf_net_mtu }} on high-speed interfaces
+  ansible.builtin.command: "ip link set dev {{ item }} mtu {{ perf_net_mtu }}"
+  loop: "{{ perf_net_ifaces }}"
+  when: perf_net_ifaces | length > 0
+  tags: [network]
+
+- name: Increase ring buffers via ethtool on 400 Gbit NICs
+  ansible.builtin.command: "ethtool -G {{ item }} rx {{ perf_net_ring_rx }} tx {{ perf_net_ring_tx }}"
+  loop: "{{ perf_net_ifaces }}"
+  when: perf_net_ifaces | length > 0
+  tags: [network]
+
+# ===== TuneD profile =====
+- name: Activate tuned profile {{ perf_tuned_profile }}
+  ansible.builtin.command: "tuned-adm profile {{ perf_tuned_profile }}"
+  tags: [tuned]
