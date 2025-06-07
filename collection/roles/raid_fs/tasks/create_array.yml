@@ -1,0 +1,12 @@
+- name: Create array {{ item.name }}
+  command: >-
+    xicli raid create -n {{ item.name }} -l {{ item.level }}
+    -d {{ item.devices | join(' ') }} -ss {{ item.strip_size_kb }}
+  register: raid_create
+  tags: [raid_fs, raid]
+
+- name: Wait for xiRAID block device /dev/xi_{{ item.name }}
+  wait_for:
+    path: "/dev/xi_{{ item.name }}"
+    timeout: 120
+  tags: [raid_fs, raid]
