@@ -6,4 +6,5 @@
     - role: common
     - role: doca_ofed
     - role: xiraid_classic
+    - role: raid_fs
     - role: perf_tuning

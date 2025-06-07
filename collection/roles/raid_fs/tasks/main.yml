@@ -1,0 +1,32 @@
+---
+- name: Gather existing xiRAID arrays (json)
+  command: xicli raid list --json
+  register: xiraid_list
+  changed_when: false
+  failed_when: xiraid_list.rc != 0
+  tags: [raid_fs, raid]
+
+- name: Set fact – parsed arrays
+  set_fact:
+    existing_arrays: "{{ xiraid_list.stdout | from_json }}"
+  tags: [raid_fs, raid]
+
+- name: Create xiRAID arrays that are missing
+  include_tasks: create_array.yml
+  loop: "{{ xiraid_arrays }}"
+  loop_control:
+    loop_var: item
+  when: item.name not in existing_arrays | json_query('[].name')
+
+# ----------------------- Filesystem section -------------------
+- name: Ensure XFS utils present
+  apt:
+    name: xfsprogs
+    state: present
+  tags: [raid_fs, fs]
+
+- name: Create XFS filesystems if absent
+  include_tasks: create_fs.yml
+  loop: "{{ xfs_filesystems }}"
+  loop_control:
+    loop_var: item
