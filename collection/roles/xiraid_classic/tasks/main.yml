@@ -1,0 +1,55 @@
+---
+- name: Ensure kernel headers present (xiRAID DKMS needs them)
+  ansible.builtin.apt:
+    name: "linux-headers-{{ ansible_kernel }}"
+    state: present
+  tags: [xiraid, deps]
+
+- name: Download xiRAID repository package for current kernel
+  ansible.builtin.get_url:
+    url: "{{ xiraid_repo_url }}"
+    dest: "/tmp/{{ xiraid_repo_filename }}"
+    mode: 0644
+    force: no
+  register: xiraid_repo_pkg
+  tags: [xiraid, download]
+
+- name: Add xiRAID APT repository (.deb)
+  ansible.builtin.apt:
+    deb: "/tmp/{{ xiraid_repo_filename }}"
+    state: present
+  register: xiraid_repo_added
+  tags: [xiraid, repo]
+
+- name: Update APT cache (if repo added)
+  ansible.builtin.apt:
+    update_cache: yes
+  when: xiraid_repo_added is changed
+  tags: [xiraid, repo]
+
+- name: Install xiRAID packages (kernel module + CLI)
+  ansible.builtin.apt:
+    name: "{{ xiraid_packages }}"
+    state: present
+  register: xiraid_pkgs
+  tags: [xiraid, install]
+
+# Optional verification section
+- name: Verify xiRAID kernel module loaded
+  ansible.builtin.shell: "lsmod | grep -q xiraid"
+  changed_when: false
+  register: mod_check
+  failed_when: mod_check.rc != 0
+  tags: [xiraid, verify]
+
+- name: Show xiRAID version
+  ansible.builtin.command: "xicli -v"
+  changed_when: false
+  tags: [xiraid, verify]
+
+- name: Reboot to complete xiRAID installation (if requested)
+  ansible.builtin.reboot:
+    reboot_timeout: 1200
+    msg: "Reboot by xiraid_classic role after install"
+  when: xiraid_pkgs is changed and xiraid_auto_reboot | bool
+  tags: [xiraid, reboot]
