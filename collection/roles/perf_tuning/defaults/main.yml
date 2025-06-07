@@ -1,0 +1,25 @@
+# =============================================================
+# Role: perf_tuning
+# Directory: collection/roles/perf_tuning/
+# Purpose: Apply Xinnor-recommended performance and 400 Gbit network tuning.
+# =============================================================
+# These variables can be overridden in group_vars/<group>.yml
+perf_disable_mitigations: true         # add Spectre/Meltdown mitigations=off, etc.
+perf_nvme_poll_queues: 4               # echo "options nvme poll_queues=4"
+perf_stop_irqbalance: true             # stop irqbalance
+perf_cpu_governor: "performance"       # cpupower governor
+perf_disable_thp: true                 # transparent hugepages=never
+perf_disable_ksm: true
+perf_scheduler: "noop"                  # I/O scheduler for NVMe
+perf_nr_requests: 512
+perf_read_ahead_kb: 65536             # blockdev --setra
+perf_tuned_profile: "throughput-performance"
+
+# network (400 Gbit / ConnectX-7) section
+perf_net_ifaces: []                   # list of iface names, e.g. ["mlx0"]
+perf_net_mtu: 9000
+perf_net_ring_rx: 8192
+perf_net_ring_tx: 8192
+perf_net_rmem_max: 1073741824         # 1 GiB
+perf_net_wmem_max: 1073741824
+perf_net_backlog: 250000

@@ -1,0 +1,9 @@
+# -------------------------------------------------------------
+# handlers/main.yml
+# -------------------------------------------------------------
+---
+- name: update grub
+  ansible.builtin.command: update-grub
+
+- name: rebuild initramfs
+  ansible.builtin.command: update-initramfs -u -k all
