@@ -1,8 +1,9 @@
 ---
-- name: Configure storage node (baseline + performance tuning)
+- name: Full storage-node configuration (common → OFED → xiRAID → perf)
   hosts: storage_nodes
   gather_facts: true
   roles:
     - role: common
     - role: doca_ofed
+    - role: xiraid_classic
     - role: perf_tuning
