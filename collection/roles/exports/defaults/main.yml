@@ -1,0 +1,8 @@
+# List of export rules. Each item fields:
+#   path    – directory to export (will be created if missing)
+#   clients – host or network mask, or "*" for all
+#   options – NFS export options
+exports:
+  - path: /mnt/data
+    clients: "*"
+    options: "rw,sync,insecure,no_root_squash,no_subtree_check,no_wdelay"

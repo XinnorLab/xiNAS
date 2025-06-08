@@ -1,0 +1,35 @@
+---
+- name: Install NFS server packages
+  ansible.builtin.apt:
+    name:
+      - nfs-kernel-server
+      - nfs-common
+    state: present
+  tags: [nfs_server, install]
+
+- name: Configure /etc/nfs.conf (threads, RDMA, port)
+  ansible.builtin.blockinfile:
+    path: /etc/nfs.conf
+    marker: "# {mark} ANSIBLE managed section – nfs_server role"
+    block: |
+      [exportd]
+      threads={{ nfs_threads }}
+
+      [nfsd]
+      threads={{ nfs_threads }}
+      vers3=y
+      vers4=y
+      vers4.0=y
+      vers4.1=y
+      vers4.2=y
+      rdma=y
+      rdma-port={{ nfs_rdma_port }}
+  notify: restart nfs
+  tags: [nfs_server, config]
+
+- name: Enable and start nfs-server service
+  ansible.builtin.service:
+    name: nfs-server
+    enabled: true
+    state: started
+  tags: [nfs_server, service]

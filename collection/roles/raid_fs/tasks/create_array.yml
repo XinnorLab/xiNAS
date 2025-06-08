@@ -1,12 +1,20 @@
+- name: Build device list string
+  ansible.builtin.set_fact:
+    _devlist: "{{ item.devices | join(' ') }}"
+
+- name: Calculate data disk count (for RAID5/6 stripe-width)
+  ansible.builtin.set_fact:
+    _sw: "{{ (item.devices | length) - (item.parity_disks | default(0)) }}"
+
 - name: Create array {{ item.name }}
-  command: >-
+  ansible.builtin.command: >-
     xicli raid create -n {{ item.name }} -l {{ item.level }}
-    -d {{ item.devices | join(' ') }} -ss {{ item.strip_size_kb }}
+    -d {{ _devlist }} -ss {{ item.strip_size_kb }}
   register: raid_create
   tags: [raid_fs, raid]
 
 - name: Wait for xiRAID block device /dev/xi_{{ item.name }}
-  wait_for:
+  ansible.builtin.wait_for:
     path: "/dev/xi_{{ item.name }}"
     timeout: 120
   tags: [raid_fs, raid]

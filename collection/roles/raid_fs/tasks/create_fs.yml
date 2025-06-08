@@ -1,11 +1,11 @@
 - name: Check if {{ item.data_device }} already has XFS label {{ item.label }}
-  command: blkid -s TYPE -o value {{ item.data_device }}
+  ansible.builtin.command: blkid -s TYPE -o value {{ item.data_device }}
   register: blkid_out
   failed_when: false
   changed_when: false
 
 - name: Make filesystem {{ item.label }} on {{ item.data_device }}
-  command: >-
+  ansible.builtin.command: >-
     mkfs.xfs -f -L {{ item.label }} -d su={{ item.su_kb }}k,sw={{ item.sw }}
     -l logdev={{ item.log_device }},size={{ item.log_size }}
     -s size={{ item.sector_size }} {{ item.data_device }}
@@ -13,14 +13,14 @@
   tags: [raid_fs, fs, mkfs]
 
 - name: Create mountpoint {{ item.mountpoint }}
-  file:
+  ansible.builtin.file:
     path: "{{ item.mountpoint }}"
     state: directory
     mode: '0755'
   tags: [raid_fs, fs]
 
 - name: Mount filesystem {{ item.label }} (and add to fstab)
-  mount:
+  ansible.builtin.mount:
     path: "{{ item.mountpoint }}"
     src: "LABEL={{ item.label }}"
     fstype: xfs
