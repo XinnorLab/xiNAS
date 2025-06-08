@@ -5,25 +5,27 @@
     state: present
   tags: [xiraid, deps]
 
-- name: Download xiRAID repository package for current kernel
+
+- name: Download xiRAID repo package
   ansible.builtin.get_url:
-    url: "{{ xiraid_repo_url }}"
-    dest: "/tmp/{{ xiraid_repo_filename }}"
-    mode: 0644
+    url: "{{ xiraid_repo_pkg_url }}"
+    dest: "/tmp/{{ xiraid_repo_pkg }}"
+    mode: '0644'
     force: no
-  register: xiraid_repo_pkg
+  register: xiraid_repo_dl
   tags: [xiraid, download]
 
-- name: Add xiRAID APT repository (.deb)
+- name: Install xiRAID repo package
   ansible.builtin.apt:
-    deb: "/tmp/{{ xiraid_repo_filename }}"
+    deb: "/tmp/{{ xiraid_repo_pkg }}"
     state: present
+  when: xiraid_repo_dl.changed
   register: xiraid_repo_added
   tags: [xiraid, repo]
 
-- name: Update APT cache (if repo added)
+- name: Update apt cache after xiRAID repo added
   ansible.builtin.apt:
-    update_cache: yes
+    update_cache: true
   when: xiraid_repo_added is changed
   tags: [xiraid, repo]
 
