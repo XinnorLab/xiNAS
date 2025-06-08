@@ -1,16 +1,20 @@
 # xiRAID version to install (use 4.x.y). The repo package is auto-derived.
 xiraid_version: "4.2.0"
 
-# Repo package filename for current kernel (override if you mirror files)
-# Example: xiraid-repo_1.2.0-1462.kver.6.8_amd64.deb
-# xiRAID repo package uses major.minor kernel version only
-xiraid_repo_kernel: "{{ ansible_kernel | regex_replace('^(\\d+\\.\\d+).*', '\\1') }}"
-xiraid_repo_filename: "xiraid-repo_1.2.0-1462.kver.{{ xiraid_repo_kernel }}_amd64.deb"
+# Version of the repository package
+xiraid_repo_version: "1.2.0-1462"
+
+# Target kernel for the repo package (current kernel by default)
+xiraid_kernel: "{{ ansible_kernel }}"
+
+# Compose repository package name
+xiraid_repo_pkg: "xiraid-repo_{{ xiraid_repo_version }}.kver.{{ xiraid_kernel }}_amd64.deb"
 
 # Base URL to Xinnor repository (multi-pack works for 20.04/22.04/24.04)
-xiraid_repo_base_url: "https://pkg.xinnor.io/repository/Repository/xiraid/ubuntu/multi-pack"
+xiraid_repo_url_base: "https://pkg.xinnor.io/repository/Repository/xiraid/ubuntu/multi-pack"
 
-xiraid_repo_url: "{{ xiraid_repo_base_url }}/{{ xiraid_repo_filename }}"
+# Full URL of repository package
+xiraid_repo_pkg_url: "{{ xiraid_repo_url_base }}/{{ xiraid_repo_pkg }}"
 
 # List of xiRAID packages; adjust if version scheme changes.
 xiraid_packages:
