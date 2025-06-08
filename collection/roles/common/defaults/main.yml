@@ -14,6 +14,7 @@ common_packages:
   - chrony                # NTP daemon; change to ntp if preferred
   - unattended-upgrades
   - ca-certificates
+chrony_service_name: chrony
 common_sysctl:
   net.core.rmem_max: 268435456
   net.core.wmem_max: 268435456
