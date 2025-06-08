@@ -21,7 +21,7 @@
 
 - name: Enable and start chrony (NTP)
   ansible.builtin.service:
-    name: chrony
+    name: "{{ chrony_service_name }}"
     enabled: yes
     state: started
   when: "'chrony' in common_packages"
