@@ -1,15 +1,10 @@
-doca_ofed_version: "24.07-0.6.1.0"
-# Repository package (*.deb) that adds the APT repo for DOCA-OFED
-# For other versions/OS tweak only this variable.
-doca_ofed_repo_deb: "doca-ofed-{{ doca_ofed_version }}-ubuntu24.04-x86_64.deb"
-# Direct URL to download the repo package (can be a local mirror)
-doca_ofed_dl_url: "https://content.mellanox.com/ofed/MLNX_OFED-{{ doca_ofed_version }}/{{ doca_ofed_repo_deb }}"
+doca_distro_series: "ubuntu24.04"
+doca_version: "2.9.1"          # or "DGX_latest_DOCA" for always-latest
+doca_repo_base: "https://linux.mellanox.com/public/repo/doca"
+doca_repo_component: "{{ doca_version }}/{{ doca_distro_series }}/x86_64"
 
-# List of OFED components to install via apt once the repo is added.
-doca_ofed_components:
-  - doca-ofed-dkms
-  - doca-ofed-basic
-  # - doca-ofed-debuginfo
+doca_pkgs:
+  - doca-ofed          # DKMS-driven kernel stack
+  - doca-ofed-userspace
 
-# Whether to automatically reboot if the installer asks for it
 doca_ofed_auto_reboot: false
