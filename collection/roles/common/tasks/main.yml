@@ -14,6 +14,12 @@
     state: present
   tags: [packages]
 
+- name: Install chrony package
+  ansible.builtin.apt:
+    name: "{{ chrony_package_name }}"
+    state: present
+  tags: [ntp]
+
 - name: Set timezone
   community.general.timezone:
     name: "{{ common_timezone }}"

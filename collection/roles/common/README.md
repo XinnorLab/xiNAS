@@ -7,6 +7,7 @@ Baseline configuration for all storage nodes. Installs essential packages, confi
 * **`common_packages`** – list of baseline packages to install.
 * **`common_sysctl`** – dictionary of sysctl parameters.
 * **`chrony_service_name`** – name of the chrony service to manage (default `chrony`).
+* **`chrony_package_name`** – name of the chrony package to install (default `chrony`).
 
 ## Example
 ```yaml
