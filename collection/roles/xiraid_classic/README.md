@@ -7,7 +7,7 @@ kernel module.
 * `xiraid_repo_version` – version of `xiraid-repo_*.deb` package.
 * `xiraid_kernel` – kernel version used for the repo package (defaults to major.minor of the current kernel).
 * `xiraid_repo_pkg_url` – full URL to download the repository package; override for offline mirror.
-* `xiraid_packages` – list of debs (`xiraid-core`, `xicli`, etc.).
+* `xiraid_packages` – list of deb packages (defaults to `xiraid-core`).
 * `xiraid_auto_reboot` – reboot after install.
 
 ## Example play snippet
