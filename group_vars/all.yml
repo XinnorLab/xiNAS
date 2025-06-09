@@ -4,6 +4,9 @@
 nfs_threads: 64
 nfs_rdma_port: 20049
 
+# xiRAID license file path
+xiraid_license_path: /tmp/license
+
 # NFS exports
 exports:
   - path: /mnt/data

@@ -5,6 +5,8 @@
 #   strip_size_kb – stripe size in KiB (e.g. 128)
 #   devices       – list of NVMe block devices (absolute paths)
 #   parity_disks  – optional, if level 6/5 specify data disk count for sw calc
+xiraid_license_path: "/tmp/license"
+
 xiraid_arrays:
   - name: media6
     level: 6
