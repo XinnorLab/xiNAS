@@ -24,3 +24,6 @@ xiraid_packages:
 
 # Whether to reboot automatically after install (usually not required)
 xiraid_auto_reboot: false
+
+# Automatically accept xiRAID EULA after installation
+xiraid_accept_eula: true

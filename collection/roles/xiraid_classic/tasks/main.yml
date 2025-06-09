@@ -35,6 +35,12 @@
   register: xiraid_pkgs
   tags: [xiraid, install]
 
+- name: Accept xiRAID EULA
+  ansible.builtin.command: xicli settings eula modify -s accepted
+  when: xiraid_accept_eula | bool
+  changed_when: false
+  tags: [xiraid, eula]
+
 # Optional verification section
 - name: Verify xiRAID kernel module loaded
   ansible.builtin.shell: "lsmod | grep -q xiraid"
