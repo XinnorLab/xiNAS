@@ -1,4 +1,9 @@
 ---
+- name: Apply xiRAID license
+  ansible.builtin.command: "xicli license update -p {{ xiraid_license_path }}"
+  changed_when: false
+  tags: [raid_fs, raid]
+
 - name: Gather existing xiRAID arrays (json)
   ansible.builtin.command: xicli raid show -f json
   register: xiraid_list
