@@ -29,10 +29,20 @@
     for md in $md_devs; do
       [ -n "$(lsblk -nro MOUNTPOINT "$md")" ] && continue
       comps=$(ls -1 /sys/block/$(basename "$md")/slaves)
+      stop_md=0
       for c in $comps; do
         case " {{ xiraid_device_basenames | join(' ') }} " in
           *" $c "*)
-            mdadm --stop "$md"
+            stop_md=1
+            ;;
+        esac
+      done
+      if [ "$stop_md" = 1 ]; then
+        mdadm --stop "$md"
+      fi
+      for c in $comps; do
+        case " {{ xiraid_device_basenames | join(' ') }} " in
+          *" $c "*)
             mdadm --zero-superblock "/dev/$c"
             ;;
         esac
