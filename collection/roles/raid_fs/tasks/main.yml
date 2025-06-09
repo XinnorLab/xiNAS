@@ -4,6 +4,36 @@
   changed_when: false
   tags: [raid_fs, raid]
 
+- name: Build list of xiRAID devices
+  ansible.builtin.set_fact:
+    xiraid_device_basenames: "{{ xiraid_arrays | map(attribute='devices') | flatten | map('basename') | list }}"
+  tags: [raid_fs, raid]
+
+- name: Find active MD RAID arrays
+  ansible.builtin.command: lsblk -ln -o NAME,TYPE | awk '$2 ~ /^raid/ {print "/dev/"$1}'
+  register: mdraid_scan
+  changed_when: false
+  failed_when: false
+  tags: [raid_fs, raid]
+
+- name: Stop leftover MD RAID arrays on xiRAID devices
+  ansible.builtin.shell: |
+    set -e
+    md_devs=$(lsblk -ln -o NAME,TYPE | awk '$2 ~ /^raid/ {print "/dev/"$1}')
+    for md in $md_devs; do
+      [ -n "$(lsblk -nro MOUNTPOINT "$md")" ] && continue
+      comps=$(lsblk -nr -o NAME "$md" | tail -n +2)
+      for c in $comps; do
+        case " {{ xiraid_device_basenames | join(' ') }} " in
+          *" $c "*) mdadm --stop "$md" ;; 
+        esac
+      done
+    done
+  args:
+    executable: /bin/bash
+  changed_when: false
+  tags: [raid_fs, raid]
+
 - name: Gather existing xiRAID arrays (json)
   ansible.builtin.command: xicli raid show -f json
   register: xiraid_list
