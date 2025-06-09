@@ -5,6 +5,7 @@ Creates xiRAID arrays and tuned XFS filesystems as per Xinnor NFS RDMA blog.
 * `xiraid_arrays` – list of array definitions (name, level, devices, strip size, parity).
 * `xfs_filesystems` – list defining data/log device pairs, mount point, mkfs params.
 * `xiraid_license_path` – path to license file applied before arrays are created.
+* `xiraid_force_metadata` – when `true` add `--force_metadata` to array creation.
 
 ## Example playbook
 ```yaml

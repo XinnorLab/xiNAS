@@ -7,6 +7,10 @@
 #   parity_disks  – optional, if level 6/5 specify data disk count for sw calc
 xiraid_license_path: "/tmp/license"
 
+# Whether to pass `--force_metadata` when creating arrays
+# Set to `false` if metadata should not be overwritten
+xiraid_force_metadata: true
+
 xiraid_arrays:
   - name: media6
     level: 6
