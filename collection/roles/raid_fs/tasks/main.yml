@@ -28,7 +28,7 @@
     md_devs=$(lsblk -ln -o NAME,TYPE | awk '$2 ~ /^raid/ {print "/dev/"$1}')
     for md in $md_devs; do
       [ -n "$(lsblk -nro MOUNTPOINT "$md")" ] && continue
-      comps=$(lsblk -nr -o NAME "$md" | tail -n +2)
+      comps=$(ls -1 /sys/block/$(basename "$md")/slaves)
       for c in $comps; do
         case " {{ xiraid_device_basenames | join(' ') }} " in
           *" $c "*)
