@@ -4,8 +4,10 @@ xiraid_version: "4.2.0"
 # Version of the repository package
 xiraid_repo_version: "1.2.0-1462"
 
-# Target kernel for the repo package (current kernel by default)
-xiraid_kernel: "{{ ansible_kernel }}"
+# Target kernel for the repo package (current kernel's major.minor by default)
+# Repository packages are named with just the major and minor kernel numbers
+# (e.g. `kver.6.8`), so extract those from `ansible_kernel`.
+xiraid_kernel: "{{ ansible_kernel | regex_replace('^(\\d+\\.\\d+).*', '\\1') }}"
 
 # Compose repository package name
 xiraid_repo_pkg: "xiraid-repo_{{ xiraid_repo_version }}.kver.{{ xiraid_kernel }}_amd64.deb"
