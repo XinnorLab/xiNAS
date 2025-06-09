@@ -12,6 +12,10 @@
     -d {{ _devlist }} -ss {{ item.strip_size_kb }}
     {% if xiraid_force_metadata | bool %}--force_metadata{% endif %}
   register: raid_create
+  changed_when: raid_create.rc == 0
+  failed_when:
+    - raid_create.rc != 0
+    - raid_create.stderr is not search('already exists')
   tags: [raid_fs, raid]
 
 - name: Wait for xiRAID block device /dev/xi_{{ item.name }}
