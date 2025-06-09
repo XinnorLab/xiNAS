@@ -1,6 +1,6 @@
 ---
 - name: Gather existing xiRAID arrays (json)
-  ansible.builtin.command: xicli raid list --json
+  ansible.builtin.command: xicli raid show -f json
   register: xiraid_list
   changed_when: false
   failed_when: xiraid_list.rc != 0
