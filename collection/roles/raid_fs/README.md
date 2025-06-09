@@ -7,6 +7,9 @@ Creates xiRAID arrays and tuned XFS filesystems as per Xinnor NFS RDMA blog.
 * `xiraid_license_path` – path to license file applied before arrays are created.
 * `xiraid_force_metadata` – when `true` add `--force_metadata` to array creation.
 
+This role requires the **mdadm** package to be installed so that any
+leftover Linux MD arrays on xiRAID devices can be stopped and wiped.
+
 ## Example playbook
 ```yaml
 - hosts: storage_nodes

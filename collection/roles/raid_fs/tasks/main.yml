@@ -9,6 +9,12 @@
     xiraid_device_basenames: "{{ xiraid_arrays | map(attribute='devices') | flatten | map('basename') | list }}"
   tags: [raid_fs, raid]
 
+- name: Ensure mdadm package present
+  ansible.builtin.apt:
+    name: mdadm
+    state: present
+  tags: [raid_fs, raid]
+
 - name: Find active MD RAID arrays
   ansible.builtin.command: lsblk -ln -o NAME,TYPE | awk '$2 ~ /^raid/ {print "/dev/"$1}'
   register: mdraid_scan
@@ -25,7 +31,10 @@
       comps=$(lsblk -nr -o NAME "$md" | tail -n +2)
       for c in $comps; do
         case " {{ xiraid_device_basenames | join(' ') }} " in
-          *" $c "*) mdadm --stop "$md" ;; 
+          *" $c "*)
+            mdadm --stop "$md"
+            mdadm --zero-superblock "/dev/$c"
+            ;;
         esac
       done
     done
