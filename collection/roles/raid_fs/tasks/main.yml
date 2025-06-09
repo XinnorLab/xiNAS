@@ -18,7 +18,7 @@
     loop_var: item
   # If `xiraid_list.stdout` couldn't be parsed, `existing_arrays` may be `None`.
   # Apply `default([])` before the `json_query` filter to avoid type errors.
-  when: item.name not in (existing_arrays | default([]) | json_query('[].name'))
+  when: item.name not in ((existing_arrays | default([]) | json_query('[].name')) | default([]))
   tags: [raid_fs, raid]
 
 # ----------------------- Filesystem section -------------------
