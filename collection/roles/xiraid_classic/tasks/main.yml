@@ -23,13 +23,12 @@
   register: xiraid_repo_added
   tags: [xiraid, repo]
 
-- name: Update apt cache after xiRAID repo added
+- name: Update apt cache
   ansible.builtin.apt:
     update_cache: true
-  when: xiraid_repo_added is changed
-  tags: [xiraid, repo]
+  tags: [xiraid, install]
 
-- name: Install xiRAID packages (kernel module + CLI)
+- name: Install xiRAID core package
   ansible.builtin.apt:
     name: "{{ xiraid_packages }}"
     state: present

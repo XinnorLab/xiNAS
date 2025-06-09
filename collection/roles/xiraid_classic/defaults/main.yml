@@ -21,7 +21,6 @@ xiraid_repo_pkg_url: "{{ xiraid_repo_url_base }}/{{ xiraid_repo_pkg }}"
 # List of xiRAID packages; adjust if version scheme changes.
 xiraid_packages:
   - xiraid-core
-  - xicli
 
 # Whether to reboot automatically after install (usually not required)
 xiraid_auto_reboot: false
