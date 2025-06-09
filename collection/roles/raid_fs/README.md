@@ -10,6 +10,10 @@ Creates xiRAID arrays and tuned XFS filesystems as per Xinnor NFS RDMA blog.
 This role requires the **mdadm** package to be installed so that any
 leftover Linux MD arrays on xiRAID devices can be stopped and wiped.
 
+Array creation is idempotent. If a RAID with the same name already
+exists in the xiRAID configuration file, the role will skip creation
+without failing.
+
 ## Example playbook
 ```yaml
 - hosts: storage_nodes
