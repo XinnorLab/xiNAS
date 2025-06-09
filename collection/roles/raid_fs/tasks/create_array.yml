@@ -10,6 +10,7 @@
   ansible.builtin.command: >-
     xicli raid create -n {{ item.name }} -l {{ item.level }}
     -d {{ _devlist }} -ss {{ item.strip_size_kb }}
+    {% if xiraid_force_metadata | bool %}--force_metadata{% endif %}
   register: raid_create
   tags: [raid_fs, raid]
 
