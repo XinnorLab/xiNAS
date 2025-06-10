@@ -1,6 +1,12 @@
-- name: Check if {{ item.data_device }} already has XFS label {{ item.label }}
+- name: Query filesystem type on {{ item.data_device }}
   ansible.builtin.command: blkid -s TYPE -o value {{ item.data_device }}
-  register: blkid_out
+  register: blkid_type
+  failed_when: false
+  changed_when: false
+
+- name: Query filesystem label on {{ item.data_device }}
+  ansible.builtin.command: blkid -s LABEL -o value {{ item.data_device }}
+  register: blkid_label
   failed_when: false
   changed_when: false
 
@@ -9,7 +15,7 @@
     mkfs.xfs -f -L {{ item.label }} -d su={{ item.su_kb }}k,sw={{ item.sw }}
     -l logdev={{ item.log_device }},size={{ item.log_size }}
     -s size={{ item.sector_size }} {{ item.data_device }}
-  when: blkid_out.stdout != 'xfs'
+  when: blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
   tags: [raid_fs, fs, mkfs]
 
 - name: Create mountpoint {{ item.mountpoint }}
