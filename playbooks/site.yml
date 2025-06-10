@@ -5,6 +5,7 @@
   roles:
     - role: common
     - role: doca_ofed
+    - role: net_controllers
     - role: xiraid_classic  # EULA is accepted automatically
     - role: raid_fs
     - role: exports       # manage /etc/exports
