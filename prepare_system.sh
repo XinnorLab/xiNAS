@@ -1,11 +1,10 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
+#!/bin/bash
+set -e
 # Install required packages
 sudo apt-get update -y
 sudo apt-get install -y ansible git
 
-REPO_URL="https://github.com/XinnorLab/xiNAS"
+REPO_URL="https://github.com/XinnorLab/xiNAS/"
 REPO_DIR="xiNAS"
 
 # Determine if repo already exists in current directory
@@ -37,6 +36,7 @@ if [[ ! $confirm =~ ^[Yy]$ ]]; then
     echo "Aborting." >&2
     exit 1
 fi
+
 
 # Run ansible playbook
 ansible-playbook playbooks/site.yml -v
