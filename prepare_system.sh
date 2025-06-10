@@ -20,6 +20,11 @@ fi
 # Pull latest changes
 git pull origin main
 
+# Show hardware key required for license
+echo "HWKEY:"
+chmod +x ./hwkey
+./hwkey
+
 # Ask for license and store it
 if [ -f /tmp/license ]; then
     echo "Using existing license from /tmp/license"
