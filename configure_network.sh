@@ -18,6 +18,7 @@ done
 
 configs=()
 count=0
+printed_table_header=0
 while [[ $count -lt 4 ]]; do
     read -rp "Interface to configure (leave empty to finish): " iface
     [[ -z "$iface" ]] && break
@@ -26,6 +27,15 @@ while [[ $count -lt 4 ]]; do
         continue
     fi
     read -rp "IPv4 address for $iface (A.B.C.D/EE): " addr
+    current_ip=$(ip -o -4 addr show "$iface" | awk '{print $4}')
+    [[ -z "$current_ip" ]] && current_ip="none"
+
+    if [[ $printed_table_header -eq 0 ]]; then
+        printf '\n%-10s %-18s %-18s\n' "Interface" "Current IP" "New IP"
+        printed_table_header=1
+    fi
+    printf '%-10s %-18s %-18s\n' "$iface" "$current_ip" "$addr"
+
     configs+=("$iface:$addr")
     count=$((count+1))
 done
