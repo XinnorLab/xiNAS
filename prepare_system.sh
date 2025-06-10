@@ -2,7 +2,7 @@
 set -e
 # Install required packages
 sudo apt-get update -y
-sudo apt-get install -y ansible git whiptail
+sudo apt-get install -y ansible git whiptail dialog
 
 REPO_URL="https://github.com/XinnorLab/xiNAS/"
 REPO_DIR="xiNAS"

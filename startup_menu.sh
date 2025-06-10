@@ -27,21 +27,18 @@ enter_license() {
         fi
     fi
 
-    cat <<EOF > "$TMP_DIR/license_example"
+    echo "hwkey: ${hwkey_val}" > "$TMP_DIR/license_tmp"
+    if command -v dialog >/dev/null 2>&1; then
+        dialog --title "Enter License" --editbox "$TMP_DIR/license_tmp" 20 70 2>"$TMP_DIR/license"
+        local d_status=$?
+        [ $d_status -eq 0 ] || return
+    else
+        whiptail --title "Enter License" --msgbox "Paste license in the terminal. End with Ctrl-D." 10 60
+        cat >>"$TMP_DIR/license" <<EOF
 hwkey: ${hwkey_val}
-license_key: <license_key>
-version: <version>
-crypto_version: <crypto_version>
-created: <YYYY-MM-DD>
-expired: <YYYY-MM-DD>
-disks: <disks>
-levels: <levels>
-type: <type>
 EOF
-
-    whiptail --title "License Format" --textbox "$TMP_DIR/license_example" 20 70
-
-    whiptail --title "Enter License" --inputbox "Paste license in the shown format:" 20 70 2>"$TMP_DIR/license" || return
+        cat >>"$TMP_DIR/license"
+    fi
     cat "$TMP_DIR/license" > "$license_file"
 }
 
