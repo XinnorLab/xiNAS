@@ -1,0 +1,10 @@
+---
+- name: Deploy netplan configuration for network controllers
+  ansible.builtin.template:
+    src: netplan.yaml.j2
+    dest: /etc/netplan/99-xinas.yaml
+    owner: root
+    group: root
+    mode: '0644'
+  notify: apply netplan
+  tags: [network]

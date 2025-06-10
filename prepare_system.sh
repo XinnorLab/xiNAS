@@ -33,6 +33,9 @@ else
     cat > /tmp/license
 fi
 
+# Configure network interfaces via startup script
+./configure_network.sh
+
 # Show tasks to be performed by Ansible
 echo "The following Ansible tasks will be executed:"
 ansible-playbook playbooks/site.yml --list-tasks
