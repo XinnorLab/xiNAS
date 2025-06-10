@@ -1,6 +1,5 @@
 #!/bin/bash
 set -e
-
 # Install required packages
 sudo apt-get update -y
 sudo apt-get install -y ansible git
@@ -22,18 +21,22 @@ fi
 git pull origin main
 
 # Ask for license and store it
-echo "Please paste your license. Finish input with Ctrl-D on a new line:"
-cat > /tmp/license
+if [ -f /tmp/license ]; then
+    echo "Using existing license from /tmp/license"
+else
+    echo "Please paste your license. Finish input with Ctrl-D on a new line:"
+    cat > /tmp/license
+fi
 
-# Show tasks to be performed
-cat <<'TASKS'
-The script will perform the following tasks:
-1. Install ansible and git.
-2. Clone the xiNAS repository.
-3. Update the repository from origin main.
-4. Store the provided license in /tmp/license.
-5. Run ansible-playbook playbooks/site.yml -v.
-TASKS
+# Show tasks to be performed by Ansible
+echo "The following Ansible tasks will be executed:"
+ansible-playbook playbooks/site.yml --list-tasks
+read -rp "Continue with these tasks? [y/N] " confirm
+if [[ ! $confirm =~ ^[Yy]$ ]]; then
+    echo "Aborting." >&2
+    exit 1
+fi
+
 
 # Run ansible playbook
 ansible-playbook playbooks/site.yml -v
