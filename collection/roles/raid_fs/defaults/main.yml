@@ -28,8 +28,8 @@ xiraid_arrays:
       - /dev/nvme10n1
     parity_disks: 2          # for RAID6 strip‑width calc (data = devs - parity)
 
-  - name: media0             # log device, RAID1
-    level: 1
+  - name: media0             # log device, RAID10
+    level: 10
     strip_size_kb: 16
     devices:
       - /dev/nvme11n1
