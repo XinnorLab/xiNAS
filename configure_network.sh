@@ -5,8 +5,16 @@ ROLE_TEMPLATE="collection/roles/net_controllers/templates/netplan.yaml.j2"
 # list available interfaces excluding loopback
 available=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo)
 
-echo "Available interfaces:"
-echo "$available"
+echo "Available interfaces (current IPv4, speed):"
+for iface in $available; do
+    ip_addr=$(ip -o -4 addr show "$iface" | awk '{print $4}')
+    [[ -z "$ip_addr" ]] && ip_addr="none"
+    speed="unknown"
+    if [[ -e "/sys/class/net/$iface/speed" ]]; then
+        speed=$(cat "/sys/class/net/$iface/speed" 2>/dev/null || echo "unknown")
+    fi
+    echo "  $iface - $ip_addr - ${speed}Mb/s"
+done
 
 configs=()
 count=0
