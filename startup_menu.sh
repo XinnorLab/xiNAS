@@ -12,6 +12,13 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 # Show license prompt and save to /tmp/license
 enter_license() {
     local license_file="/tmp/license"
+    [ -x ./hwkey ] || chmod +x ./hwkey
+    local hwkey_val
+    hwkey_val=$(./hwkey 2>/dev/null | tr -d '\n')
+
+    # Show HWKEY to the user
+    whiptail --title "Hardware Key" --msgbox "HWKEY: ${hwkey_val}" 10 60
+
     if [ -f "$license_file" ]; then
         if whiptail --yesno "License already exists. Replace it?" 10 60; then
             rm -f "$license_file"
@@ -19,7 +26,22 @@ enter_license() {
             return
         fi
     fi
-    whiptail --title "Enter License" --inputbox "Paste license string:" 10 60 2>"$TMP_DIR/license" || return
+
+    cat <<EOF > "$TMP_DIR/license_example"
+hwkey: ${hwkey_val}
+license_key: 863D8988D68A814F8E83D52626A6F864450CE388DBFEBB2B10DE217836149C2941734A3E4BB86DAD4F1E66CB9A06F977CFF944D0B5A2398DBF05B4E9AAE65D43ACD10748C4F40A310720C87E74BEEDD9FB3B38A68675CEDF1467386A3F5290B4EBF2AFB326C5D7EB6D62D69DA8CD3B5CCCF6315450E66434813D99A644D80D7B
+version: 1
+crypto_version: 1
+created: 2025-06-09
+expired: 2026-06-01
+disks: 128
+levels: 70
+type: nvme
+EOF
+
+    whiptail --title "License Format" --textbox "$TMP_DIR/license_example" 20 70
+
+    whiptail --title "Enter License" --inputbox "Paste license string:" 20 70 2>"$TMP_DIR/license" || return
     cat "$TMP_DIR/license" > "$license_file"
 }
 
