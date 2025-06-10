@@ -10,7 +10,7 @@ perf_stop_irqbalance: false            # stop irqbalance
 perf_cpu_governor: "performance"       # cpupower governor
 perf_disable_thp: true                 # transparent hugepages=never
 perf_disable_ksm: true
-perf_scheduler: "noop"                  # I/O scheduler for NVMe
+perf_scheduler: "noop"                  # I/O scheduler for NVMe (unused)
 perf_nr_requests: 512
 perf_read_ahead_kb: 65536             # blockdev --setra
 perf_tuned_profile: "throughput-performance"
