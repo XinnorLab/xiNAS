@@ -6,7 +6,7 @@ recommended in Xinnor blogs (2023-2025) and NVIDIA ConnectX-7 (400 Gbit) docs.
 ## Features
 * Disables or relaxes CPU security mitigations (optional) to reduce latency.
 * Enables NVMe polling queues and noop scheduler.
-* Stops **irqbalance**, sets CPU governor to *performance*, applies TuneD
+* Optionally stops **irqbalance**, sets CPU governor to *performance*, applies TuneD
   *throughput-performance* profile.
 * Turns off THP/KSM and ups read-ahead, queue depth and *nr_requests*.
 * Network block:
