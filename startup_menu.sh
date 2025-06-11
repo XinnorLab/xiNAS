@@ -63,18 +63,27 @@ configure_nfs_shares() {
         whiptail --msgbox "File $vars_file not found" 8 60
         return
     fi
+    local share_start
+    share_start=$(grep -n '^exports:' "$vars_file" | cut -d: -f1)
     local tmp="$TMP_DIR/nfs_info"
-    {
-        echo "NFS server parameters:";
-        echo "  nfs_threads: $(grep '^nfs_threads:' "$vars_file" | awk '{print $2}')";
-        echo "  nfs_rdma_port: $(grep '^nfs_rdma_port:' "$vars_file" | awk '{print $2}')";
-        echo;
-        echo "Defined exports:";
-        awk '/^exports:/ {flag=1; next} /^#/ {if(flag) exit} flag' "$vars_file";
-        echo;
-        echo "Edit $vars_file to change these settings.";
-    } > "$tmp"
-    whiptail --title "NFS Shares" --textbox "$tmp" 20 70
+    sed -n "$((share_start+1)),$((share_start+3))p" "$vars_file" > "$tmp"
+    whiptail --title "NFS Share" --textbox "$tmp" 12 70
+
+    local default_path
+    default_path=$(awk '/^exports:/ {flag=1; next} flag && /- path:/ {print $3; exit}' "$vars_file")
+
+    while true; do
+        local choice
+        choice=$(whiptail --title "NFS Share" --menu "Choose an action:" 15 70 5 \
+            1 "Edit default share" \
+            2 "Add new share" \
+            3 "Back" 3>&1 1>&2 2>&3)
+        case "$choice" in
+            1) ./configure_nfs_exports.sh --edit "$default_path" ;;
+            2) ./configure_nfs_exports.sh --add ;;
+            *) break ;;
+        esac
+    done
 }
 
 # Edit NFS export clients and options interactively
