@@ -21,6 +21,9 @@ enter_license() {
 
     if [ -f "$license_file" ]; then
         if whiptail --yesno "License already exists. Replace it?" 10 60; then
+            local ts
+            ts=$(date +%Y%m%d%H%M%S)
+            cp "$license_file" "${license_file}.${ts}.bak"
             rm -f "$license_file"
         else
             return

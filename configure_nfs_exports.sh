@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Interactive editor for NFS export clients and options
 set -euo pipefail
+
+backup_if_changed() {
+    local file="$1" newfile="$2" ts
+    [ -f "$file" ] || return
+    if ! cmp -s "$file" "$newfile"; then
+        ts=$(date +%Y%m%d%H%M%S)
+        cp "$file" "${file}.${ts}.bak"
+    fi
+}
+
 vars_file="group_vars/all.yml"
 
 if [ ! -f "$vars_file" ]; then
@@ -25,6 +35,7 @@ edit_export() {
     [ $status -ne 0 ] && return
     tmp=$(mktemp)
     yq ".exports |= map(if .path==\"$path\" then .clients=\"${clients}\" | .options=\"${options}\" else . end)" "$vars_file" > "$tmp"
+    backup_if_changed "$vars_file" "$tmp"
     mv "$tmp" "$vars_file"
 }
 
@@ -48,6 +59,7 @@ add_export() {
     [ $status -ne 0 ] && return
     tmp=$(mktemp)
     yq ".exports += [{\"path\": \"${path}\", \"clients\": \"${clients}\", \"options\": \"${options}\"}]" "$vars_file" > "$tmp"
+    backup_if_changed "$vars_file" "$tmp"
     mv "$tmp" "$vars_file"
 }
 
