@@ -56,6 +56,27 @@ show_playbook_info() {
     fi
 }
 
+# Show NFS share configuration based on group_vars/all.yml
+configure_nfs_shares() {
+    local vars_file="group_vars/all.yml"
+    if [ ! -f "$vars_file" ]; then
+        whiptail --msgbox "File $vars_file not found" 8 60
+        return
+    fi
+    local tmp="$TMP_DIR/nfs_info"
+    {
+        echo "NFS server parameters:";
+        echo "  nfs_threads: $(grep '^nfs_threads:' "$vars_file" | awk '{print $2}')";
+        echo "  nfs_rdma_port: $(grep '^nfs_rdma_port:' "$vars_file" | awk '{print $2}')";
+        echo;
+        echo "Defined exports:";
+        awk '/^exports:/ {flag=1; next} /^#/ {if(flag) exit} flag' "$vars_file";
+        echo;
+        echo "Edit $vars_file to change these settings.";
+    } > "$tmp"
+    whiptail --title "NFS Shares" --textbox "$tmp" 20 70
+}
+
 # Run ansible-playbook and stream output
 run_playbook() {
     local log="$TMP_DIR/playbook.log"
@@ -82,12 +103,14 @@ while true; do
     choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 10 \
         1 "Enter License" \
         2 "Configure Network" \
-        3 "Exit" \
+        3 "Configure NFS Shares" \
+        4 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
         2) configure_network ;;
-        3) exit 0 ;;
+        3) configure_nfs_shares ;;
+        4) exit 0 ;;
     esac
 done
 
