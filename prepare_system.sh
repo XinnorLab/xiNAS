@@ -2,10 +2,10 @@
 set -e
 # Install required packages
 sudo apt-get update -y
-sudo apt-get install -y ansible git whiptail dialog
-# Install yq for YAML processing used by configuration scripts
-sudo apt-get update -y
-sudo apt-get install -y yq
+sudo apt-get install -y ansible git whiptail dialog wget
+# Install yq v4 for YAML processing used by configuration scripts
+sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
+sudo chmod +x /usr/local/bin/yq
 
 REPO_URL="https://github.com/XinnorLab/xiNAS/"
 REPO_DIR="xiNAS"
