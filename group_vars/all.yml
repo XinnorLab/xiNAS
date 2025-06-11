@@ -31,8 +31,8 @@ xiraid_arrays:
       - /dev/nvme10n1
     parity_disks: 2
 
-  - name: media0
-    level: 10
+  - name: media1
+    level: 1
     strip_size_kb: 16
     devices:
       - /dev/nvme11n1
@@ -41,10 +41,10 @@ xiraid_arrays:
 xfs_filesystems:
   - label: nfsdata
     data_device: "/dev/xi_media6"
-    log_device: "/dev/xi_media0"
+    log_device: "/dev/xi_media1"
     su_kb: 128
     sw: 8
     log_size: 1G
     sector_size: 4k
     mountpoint: /mnt/data
-    mount_opts: "logdev=/dev/xi_media0,noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k"
+    mount_opts: "logdev=/dev/xi_media1,noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k"
