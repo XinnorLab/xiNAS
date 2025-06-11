@@ -30,9 +30,19 @@ fi
 PLAYBOOK="playbooks/site.yml"
 
 # Build a short description of roles from the site.yml file
-ROLE_LIST=$(grep -E '^\s*- role:' "$PLAYBOOK" | awk '{print $3}' | tr '\n' ' ')
+ROLE_NAMES=$(grep -E '^\s*- role:' "$PLAYBOOK" | awk '{print $3}')
+ROLE_LIST=""
+for role in $ROLE_NAMES; do
+    desc_file="collection/roles/${role}/README.md"
+    if [ -f "$desc_file" ]; then
+        desc=$(awk 'NF && $0 !~ /^#/ {print; exit}' "$desc_file")
+    else
+        desc="No description available"
+    fi
+    ROLE_LIST="${ROLE_LIST}\n - ${role}: ${desc}"
+done
 
-if whiptail --yesno "Run Ansible playbook to configure the system?\n\nThis will execute the following roles: $ROLE_LIST" 15 70; then
+if whiptail --yesno "Run Ansible playbook to configure the system?\n\nThis will execute the following roles:${ROLE_LIST}" 20 70; then
     INV_FILE=$(whiptail --inputbox "Inventory to use for Ansible" 10 70 "inventories/lab.ini" 3>&1 1>&2 2>&3)
     ansible-playbook "$PLAYBOOK" -i "$INV_FILE" -v
 fi
