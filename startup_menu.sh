@@ -82,16 +82,12 @@ while true; do
     choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 10 \
         1 "Enter License" \
         2 "Configure Network" \
-        3 "Show Playbook Info" \
-        4 "Run Ansible Playbook" \
-        5 "Exit" \
+        3 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
         2) configure_network ;;
-        3) show_playbook_info ;;
-        4) run_playbook && exit 0 || exit 1 ;;
-        5) exit 0 ;;
+        3) exit 0 ;;
     esac
 done
 
