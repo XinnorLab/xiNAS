@@ -36,7 +36,7 @@ edit_devices() {
     set -e
     [ $status -ne 0 ] && return
     tmp=$(mktemp)
-    NEW_LIST="$new" yq -y "(.xiraid_arrays[] | select(.level==${level})).devices = (env(NEW_LIST) | split(\" \") )" "$vars_file" > "$tmp"
+    NEW_LIST="$new" yq "(.xiraid_arrays[] | select(.level==${level})).devices = (env(NEW_LIST) | split(\" \") )" "$vars_file" > "$tmp"
     mv "$tmp" "$vars_file"
 }
 

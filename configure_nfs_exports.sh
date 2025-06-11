@@ -24,7 +24,7 @@ edit_export() {
     set -e
     [ $status -ne 0 ] && return
     tmp=$(mktemp)
-    yq -y ".exports |= map(if .path==\"$path\" then .clients=\"${clients}\" | .options=\"${options}\" else . end)" "$vars_file" > "$tmp"
+    yq ".exports |= map(if .path==\"$path\" then .clients=\"${clients}\" | .options=\"${options}\" else . end)" "$vars_file" > "$tmp"
     mv "$tmp" "$vars_file"
 }
 
@@ -47,7 +47,7 @@ add_export() {
     set -e
     [ $status -ne 0 ] && return
     tmp=$(mktemp)
-    yq -y ".exports += [{\"path\": \"${path}\", \"clients\": \"${clients}\", \"options\": \"${options}\"}]" "$vars_file" > "$tmp"
+    yq ".exports += [{\"path\": \"${path}\", \"clients\": \"${clients}\", \"options\": \"${options}\"}]" "$vars_file" > "$tmp"
     mv "$tmp" "$vars_file"
 }
 
