@@ -1,11 +1,14 @@
 #!/bin/bash
+# Interactive network configuration helper for xiNAS
 set -e
+
 ROLE_TEMPLATE="collection/roles/net_controllers/templates/netplan.yaml.j2"
 
-# list available interfaces excluding loopback
+# Build list of available interfaces excluding loopback
 available=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo)
 
-echo "Available interfaces (current IPv4, speed):"
+# Prepare menu options: iface "ip - speed"
+menu_items=()
 for iface in $available; do
     ip_addr=$(ip -o -4 addr show "$iface" | awk '{print $4}')
     [[ -z "$ip_addr" ]] && ip_addr="none"
@@ -13,31 +16,32 @@ for iface in $available; do
     if [[ -e "/sys/class/net/$iface/speed" ]]; then
         speed=$(cat "/sys/class/net/$iface/speed" 2>/dev/null || echo "unknown")
     fi
-    echo "  $iface - $ip_addr - ${speed}Mb/s"
+    menu_items+=("$iface" "$ip_addr - ${speed}Mb/s")
 done
 
 configs=()
-count=0
-printed_table_header=0
-while [[ $count -lt 4 ]]; do
-    read -rp "Interface to configure (leave empty to finish): " iface
-    [[ -z "$iface" ]] && break
-    if ! echo "$available" | grep -qw "$iface"; then
-        echo "Interface $iface not found" >&2
-        continue
+while [[ ${#configs[@]} -lt 4 && ${#menu_items[@]} -gt 0 ]]; do
+    iface=$(whiptail --title "Select Interface" --menu \
+        "Choose interface to configure:" 20 70 10 \
+        "cancel" "Finish" \
+        "${menu_items[@]}" 3>&1 1>&2 2>&3)
+    [ $? -ne 0 ] && break
+    if [[ "$iface" == "cancel" ]]; then
+        break
     fi
-    read -rp "IPv4 address for $iface (A.B.C.D/EE): " addr
-    current_ip=$(ip -o -4 addr show "$iface" | awk '{print $4}')
-    [[ -z "$current_ip" ]] && current_ip="none"
-
-    if [[ $printed_table_header -eq 0 ]]; then
-        printf '\n%-10s %-18s %-18s\n' "Interface" "Current IP" "New IP"
-        printed_table_header=1
-    fi
-    printf '%-10s %-18s %-18s\n' "$iface" "$current_ip" "$addr"
-
+    addr=$(whiptail --inputbox "IPv4 address for $iface (A.B.C.D/EE)" \
+        8 60 3>&1 1>&2 2>&3)
+    [ $? -ne 0 ] && continue
     configs+=("$iface:$addr")
-    count=$((count+1))
+
+    # remove chosen interface from menu_items to avoid duplicates
+    new_items=()
+    for ((i=0;i<${#menu_items[@]};i+=2)); do
+        if [[ "${menu_items[i]}" != "$iface" ]]; then
+            new_items+=("${menu_items[i]}" "${menu_items[i+1]}")
+        fi
+    done
+    menu_items=("${new_items[@]}")
 done
 
 if [[ ${#configs[@]} -eq 0 ]]; then
@@ -52,7 +56,7 @@ network:
 EOF2
 
 for cfg in "${configs[@]}"; do
-    IFS=: read name addr <<< "$cfg"
+    IFS=: read -r name addr <<< "$cfg"
     cat >> "$ROLE_TEMPLATE" <<EOF2
     $name:
       dhcp4: no
@@ -60,4 +64,4 @@ for cfg in "${configs[@]}"; do
 EOF2
 done
 
-echo "Updated $ROLE_TEMPLATE"
+whiptail --msgbox "Updated $ROLE_TEMPLATE" 8 60

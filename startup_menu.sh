@@ -43,14 +43,7 @@ enter_license() {
 
 # Run network configuration script and show output
 configure_network() {
-    local log="$TMP_DIR/network.log"
-    whiptail --infobox "Running network configuration..." 8 60
-    if ./configure_network.sh >"$log" 2>&1; then
-        whiptail --title "Configure Network" --textbox "$log" 20 70
-    else
-        whiptail --title "Configure Network" --textbox "$log" 20 70
-        whiptail --msgbox "Network configuration failed" 8 60
-    fi
+    ./configure_network.sh
 }
 
 # Display playbook information from /opt/provision/README.md
