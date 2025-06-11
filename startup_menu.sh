@@ -29,9 +29,9 @@ enter_license() {
 
     : > "$TMP_DIR/license_tmp"
     if command -v dialog >/dev/null 2>&1; then
-        dialog --title "Enter License" --editbox "$TMP_DIR/license_tmp" 20 70 2>"$TMP_DIR/license"
-        local d_status=$?
-        if [ $d_status -ne 0 ]; then
+        if dialog --title "Enter License" --editbox "$TMP_DIR/license_tmp" 20 70 2>"$TMP_DIR/license"; then
+            :
+        else
             return 0
         fi
     else
