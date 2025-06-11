@@ -4,6 +4,14 @@ set -euo pipefail
 
 vars_file="group_vars/all.yml"
 
+# Ensure required commands are present
+for cmd in yq whiptail; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "Error: required command '$cmd' not found. Please run prepare_system.sh or install it manually." >&2
+        exit 1
+    fi
+done
+
 if [ ! -f "$vars_file" ]; then
     echo "Error: $vars_file not found" >&2
     exit 1
