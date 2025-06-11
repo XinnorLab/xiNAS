@@ -27,16 +27,15 @@ enter_license() {
         fi
     fi
 
-    echo "hwkey: ${hwkey_val}" > "$TMP_DIR/license_tmp"
+    : > "$TMP_DIR/license_tmp"
     if command -v dialog >/dev/null 2>&1; then
         dialog --title "Enter License" --editbox "$TMP_DIR/license_tmp" 20 70 2>"$TMP_DIR/license"
         local d_status=$?
-        [ $d_status -eq 0 ] || return
+        if [ $d_status -ne 0 ]; then
+            return 0
+        fi
     else
         whiptail --title "Enter License" --msgbox "Paste license in the terminal. End with Ctrl-D." 10 60
-        cat >>"$TMP_DIR/license" <<EOF
-hwkey: ${hwkey_val}
-EOF
         cat >>"$TMP_DIR/license"
     fi
     cat "$TMP_DIR/license" > "$license_file"
