@@ -4,44 +4,68 @@ set -e
 
 ROLE_TEMPLATE="collection/roles/net_controllers/templates/netplan.yaml.j2"
 
-# Build list of available interfaces excluding loopback
-available=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo)
+# Gather available interfaces excluding loopback
+readarray -t interfaces < <(ip -o link show | awk -F': ' '{print $2}' | grep -v lo)
 
-# Prepare menu options: iface "ip - speed"
-menu_items=()
-for iface in $available; do
+# Maps to store current and new IP addresses
+declare -A curr_ip new_ip
+configs=()
+
+for iface in "${interfaces[@]}"; do
     ip_addr=$(ip -o -4 addr show "$iface" | awk '{print $4}')
     [[ -z "$ip_addr" ]] && ip_addr="none"
-    speed="unknown"
-    if [[ -e "/sys/class/net/$iface/speed" ]]; then
-        speed=$(cat "/sys/class/net/$iface/speed" 2>/dev/null || echo "unknown")
-    fi
-    menu_items+=("$iface" "$ip_addr - ${speed}Mb/s")
+    curr_ip[$iface]="$ip_addr"
+    new_ip[$iface]=""
 done
 
-configs=()
-while [[ ${#configs[@]} -lt 4 && ${#menu_items[@]} -gt 0 ]]; do
-    iface=$(whiptail --title "Select Interface" --menu \
-        "Choose interface to configure:" 20 70 10 \
-        "cancel" "Finish" \
+while true; do
+    # Build menu items dynamically with current and new IPs
+    menu_items=()
+    for iface in "${interfaces[@]}"; do
+        speed="unknown"
+        if [[ -e "/sys/class/net/$iface/speed" ]]; then
+            speed=$(cat "/sys/class/net/$iface/speed" 2>/dev/null || echo "unknown")
+        fi
+        desc="${curr_ip[$iface]}"
+        [[ -n "${new_ip[$iface]}" ]] && desc+=" -> ${new_ip[$iface]}"
+        desc+=" - ${speed}Mb/s"
+        menu_items+=("$iface" "$desc")
+    done
+    menu_items+=("Finish" "Finish configuration")
+
+    # Show interface selection menu
+    set +e
+    iface=$(whiptail --title "Select Interface" --menu "Choose interface to configure:" 20 70 10 \
         "${menu_items[@]}" 3>&1 1>&2 2>&3)
-    [ $? -ne 0 ] && break
-    if [[ "$iface" == "cancel" ]]; then
+    status=$?
+    set -e
+    if [[ $status -ne 0 ]]; then
+        # cancel pressed -> go back to previous screen
+        exit 0
+    fi
+    if [[ "$iface" == "Finish" ]]; then
         break
     fi
-    addr=$(whiptail --inputbox "IPv4 address for $iface (A.B.C.D/EE)" \
-        8 60 3>&1 1>&2 2>&3)
-    [ $? -ne 0 ] && continue
-    configs+=("$iface:$addr")
 
-    # remove chosen interface from menu_items to avoid duplicates
-    new_items=()
-    for ((i=0;i<${#menu_items[@]};i+=2)); do
-        if [[ "${menu_items[i]}" != "$iface" ]]; then
-            new_items+=("${menu_items[i]}" "${menu_items[i+1]}")
+    prompt="IPv4 address for $iface (current: ${curr_ip[$iface]})"
+    [[ -n "${new_ip[$iface]}" ]] && prompt+=" [new: ${new_ip[$iface]}]"
+    set +e
+    addr=$(whiptail --inputbox "$prompt" 8 60 3>&1 1>&2 2>&3)
+    status=$?
+    set -e
+    [[ $status -ne 0 ]] && continue
+    new_ip[$iface]="$addr"
+    found=""
+    for i in "${!configs[@]}"; do
+        IFS=: read -r name _ <<< "${configs[i]}"
+        if [[ "$name" == "$iface" ]]; then
+            configs[i]="$iface:$addr"
+            found=1
+            break
         fi
     done
-    menu_items=("${new_items[@]}")
+    [[ -z "$found" ]] && configs+=("$iface:$addr")
+
 done
 
 if [[ ${#configs[@]} -eq 0 ]]; then
@@ -64,4 +88,13 @@ for cfg in "${configs[@]}"; do
 EOF2
 done
 
-whiptail --msgbox "Updated $ROLE_TEMPLATE" 8 60
+# Prepare summary message of interface changes
+summary="Updated $ROLE_TEMPLATE\n"
+for iface in "${interfaces[@]}"; do
+    new="${new_ip[$iface]}"
+    [[ -z "$new" ]] && continue
+    summary+="$iface: ${curr_ip[$iface]} -> $new\n"
+
+done
+
+whiptail --msgbox "$summary" 15 70
