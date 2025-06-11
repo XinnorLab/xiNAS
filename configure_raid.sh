@@ -19,7 +19,7 @@ fi
 
 get_devices() {
     local level="$1"
-    yq -r ".xiraid_arrays[] | select(.level==${level}) | .devices | join(' ')" "$vars_file" 2>/dev/null
+    yq -r ".xiraid_arrays[] | select(.level==${level}) | .devices | join(\" \" )" "$vars_file" 2>/dev/null
 }
 
 edit_devices() {
