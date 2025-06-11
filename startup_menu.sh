@@ -77,6 +77,11 @@ configure_nfs_shares() {
     whiptail --title "NFS Shares" --textbox "$tmp" 20 70
 }
 
+# Edit NFS export clients and options interactively
+edit_nfs_exports() {
+    ./configure_nfs_exports.sh
+}
+
 # Run ansible-playbook and stream output
 run_playbook() {
     local log="$TMP_DIR/playbook.log"
@@ -104,13 +109,15 @@ while true; do
         1 "Enter License" \
         2 "Configure Network" \
         3 "Configure NFS Shares" \
-        4 "Exit" \
+        4 "Edit NFS Exports" \
+        5 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
         2) configure_network ;;
         3) configure_nfs_shares ;;
-        4) exit 0 ;;
+        4) edit_nfs_exports ;;
+        5) exit 0 ;;
     esac
 done
 
