@@ -51,6 +51,15 @@ add_export() {
     mv "$tmp" "$vars_file"
 }
 
+# Allow non-interactive calls for editing or adding a single export
+if [ "${1:-}" = "--edit" ] && [ -n "${2:-}" ]; then
+    edit_export "$2"
+    exit 0
+elif [ "${1:-}" = "--add" ]; then
+    add_export
+    exit 0
+fi
+
 while true; do
     mapfile -t paths < <(yq -r '.exports[].path' "$vars_file")
     menu_items=()
