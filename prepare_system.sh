@@ -25,6 +25,8 @@ echo "HWKEY:"
 chmod +x ./hwkey
 ./hwkey
 
-# Launch interactive startup menu for configuration and deployment
-chmod +x startup_menu.sh
-./startup_menu.sh
+# Ask whether to run interactive configuration menu
+if whiptail --yesno "Configure this system now?" 8 60; then
+    chmod +x startup_menu.sh
+    ./startup_menu.sh
+fi

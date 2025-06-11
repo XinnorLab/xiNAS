@@ -31,6 +31,8 @@ while true; do
         desc+=" - ${speed}Mb/s"
         menu_items+=("$iface" "$desc")
     done
+    # Add a blank line before the finish option for clarity
+    menu_items+=("" "")
     menu_items+=("Finish" "Finish configuration")
 
     # Show interface selection menu
