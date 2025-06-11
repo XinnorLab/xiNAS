@@ -20,11 +20,6 @@ fi
 # Pull latest changes
 git pull origin main
 
-# Show hardware key required for license for reference
-echo "HWKEY:"
-chmod +x ./hwkey
-./hwkey
-
 # Ask whether to run interactive configuration menu
 if whiptail --yesno "Configure this system now?" 8 60; then
     chmod +x startup_menu.sh
