@@ -2,6 +2,15 @@
 # Interactive network configuration helper for xiNAS
 set -e
 
+backup_if_changed() {
+    local file="$1" newfile="$2" ts
+    [ -f "$file" ] || return
+    if ! cmp -s "$file" "$newfile"; then
+        ts=$(date +%Y%m%d%H%M%S)
+        cp "$file" "${file}.${ts}.bak"
+    fi
+}
+
 ROLE_TEMPLATE="collection/roles/net_controllers/templates/netplan.yaml.j2"
 
 # Gather available interfaces excluding loopback
@@ -74,7 +83,8 @@ if [[ ${#configs[@]} -eq 0 ]]; then
     configs=("ib0:100.100.100.1/24")
 fi
 
-cat > "$ROLE_TEMPLATE" <<EOF2
+tmp_file=$(mktemp)
+cat > "$tmp_file" <<EOF2
 network:
   version: 2
   renderer: networkd
@@ -83,12 +93,15 @@ EOF2
 
 for cfg in "${configs[@]}"; do
     IFS=: read -r name addr <<< "$cfg"
-    cat >> "$ROLE_TEMPLATE" <<EOF2
+    cat >> "$tmp_file" <<EOF2
     $name:
       dhcp4: no
       addresses: [ $addr ]
 EOF2
 done
+
+backup_if_changed "$ROLE_TEMPLATE" "$tmp_file"
+mv "$tmp_file" "$ROLE_TEMPLATE"
 
 # Prepare summary message of interface changes
 summary="Updated $ROLE_TEMPLATE\n"
