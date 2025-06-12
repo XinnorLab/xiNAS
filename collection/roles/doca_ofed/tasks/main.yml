@@ -34,6 +34,7 @@
     state: present
     update_cache: yes
   register: ofed_pkgs
+  notify: restart openibd
   tags: [ofed, install]
 
 - name: Reboot if kernel modules built and reboot requested
