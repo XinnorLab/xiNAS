@@ -63,12 +63,9 @@ add_export() {
     mv "$tmp" "$vars_file"
 }
 
-# Allow non-interactive calls for editing or adding a single export
+# Allow non-interactive calls for editing a single export
 if [ "${1:-}" = "--edit" ] && [ -n "${2:-}" ]; then
     edit_export "$2"
-    exit 0
-elif [ "${1:-}" = "--add" ]; then
-    add_export
     exit 0
 fi
 
@@ -79,7 +76,6 @@ while true; do
         clients=$(yq -r ".exports[] | select(.path==\"$p\") | .clients" "$vars_file")
         menu_items+=("$p" "clients: $clients")
     done
-    menu_items+=("Add" "Add new export")
     menu_items+=("Back" "Return to main menu")
     set +e
     choice=$(whiptail --title "NFS Exports" --menu "Select export to edit:" 20 70 10 "${menu_items[@]}" 3>&1 1>&2 2>&3)
@@ -88,9 +84,5 @@ while true; do
     if [ $status -ne 0 ] || [ "$choice" = "Back" ]; then
         break
     fi
-    if [ "$choice" = "Add" ]; then
-        add_export
-    else
-        edit_export "$choice"
-    fi
+    edit_export "$choice"
 done

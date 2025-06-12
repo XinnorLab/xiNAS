@@ -99,13 +99,11 @@ configure_nfs_shares() {
 
     while true; do
         local choice
-        choice=$(whiptail --title "NFS Share" --menu "Choose an action:" 15 70 5 \
+        choice=$(whiptail --title "NFS Share" --menu "Choose an action:" 15 70 4 \
             1 "Edit default share" \
-            2 "Add new share" \
-            3 "Back" 3>&1 1>&2 2>&3)
+            2 "Back" 3>&1 1>&2 2>&3)
         case "$choice" in
             1) ./configure_nfs_exports.sh --edit "$default_path" ;;
-            2) ./configure_nfs_exports.sh --add ;;
             *) break ;;
         esac
     done
