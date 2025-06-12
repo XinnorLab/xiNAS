@@ -149,7 +149,7 @@ while true; do
         2 "Configure Network" \
         3 "Configure RAID" \
         4 "Edit NFS Exports" \
-        5 "Exit" \
+        5 "Continue" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
