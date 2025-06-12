@@ -44,9 +44,31 @@ enter_license() {
     cat "$TMP_DIR/license" > "$license_file"
 }
 
-# Run network configuration script and show output
+# Edit network configuration for Ansible netplan role
 configure_network() {
-    ./configure_network.sh
+    local template="collection/roles/net_controllers/templates/netplan.yaml.j2"
+    if [ ! -f "$template" ]; then
+        whiptail --msgbox "File $template not found" 8 60
+        return
+    fi
+
+    local edit_tmp="$TMP_DIR/netplan_edit"
+    cp "$template" "$edit_tmp"
+
+    if command -v dialog >/dev/null 2>&1; then
+        if dialog --title "Edit netplan template" --editbox "$edit_tmp" 20 70 2>"$TMP_DIR/netplan_new"; then
+            cat "$TMP_DIR/netplan_new" > "$template"
+        else
+            return 0
+        fi
+    else
+        whiptail --title "Edit netplan" --msgbox "Modify $template in the terminal. End with Ctrl-D." 10 60
+        cat "$template" > "$TMP_DIR/netplan_new"
+        cat >> "$TMP_DIR/netplan_new"
+        cat "$TMP_DIR/netplan_new" > "$template"
+    fi
+
+    whiptail --title "Ansible Netplan" --textbox "$template" 20 70
 }
 
 # Display playbook information from /opt/provision/README.md
