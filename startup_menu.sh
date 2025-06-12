@@ -26,7 +26,7 @@ enter_license() {
             cp "$license_file" "${license_file}.${ts}.bak"
             rm -f "$license_file"
         else
-            return
+            return 0
         fi
     fi
 
