@@ -3,7 +3,7 @@
 # Directory: collection/roles/perf_tuning/
 # Purpose: Apply Xinnor-recommended performance and 400 Gbit network tuning.
 # =============================================================
-# These variables can be overridden in group_vars/<group>.yml
+# These variables can be overridden via inventory if needed
 perf_disable_mitigations: true         # add Spectre/Meltdown mitigations=off, etc.
 perf_nvme_poll_queues: 4               # echo "options nvme poll_queues=4"
 perf_stop_irqbalance: false            # stop irqbalance

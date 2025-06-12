@@ -11,7 +11,7 @@ backup_if_changed() {
     fi
 }
 
-vars_file="group_vars/all.yml"
+vars_file="collection/roles/exports/defaults/main.yml"
 
 if [ ! -f "$vars_file" ]; then
     echo "Error: $vars_file not found" >&2

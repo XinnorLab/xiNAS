@@ -11,7 +11,7 @@ backup_if_changed() {
     fi
 }
 
-vars_file="group_vars/all.yml"
+vars_file="collection/roles/raid_fs/defaults/main.yml"
 
 # Ensure required commands are present
 for cmd in yq whiptail; do

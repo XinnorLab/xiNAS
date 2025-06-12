@@ -81,9 +81,9 @@ show_playbook_info() {
     fi
 }
 
-# Show NFS share configuration based on group_vars/all.yml
+# Show NFS share configuration based on exports role defaults
 configure_nfs_shares() {
-    local vars_file="group_vars/all.yml"
+    local vars_file="collection/roles/exports/defaults/main.yml"
     if [ ! -f "$vars_file" ]; then
         whiptail --msgbox "File $vars_file not found" 8 60
         return
