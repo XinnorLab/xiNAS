@@ -14,7 +14,7 @@ enter_license() {
     local license_file="/tmp/license"
     [ -x ./hwkey ] || chmod +x ./hwkey
     local hwkey_val
-    hwkey_val=$(./hwkey 2>/dev/null | tr -d '\n')
+    hwkey_val=$(./hwkey 2>/dev/null | tr -d '\n' | tr '[:lower:]' '[:upper:]')
 
     # Show HWKEY to the user
     whiptail --title "Hardware Key" --msgbox "HWKEY: ${hwkey_val}\nRequest your license key from xiNNOR Support." 10 60
