@@ -11,7 +11,9 @@ backup_if_changed() {
     fi
 }
 
-ROLE_TEMPLATE="collection/roles/net_controllers/templates/netplan.yaml.j2"
+ROLE_TEMPLATE_DEFAULT="collection/roles/net_controllers/templates/netplan.yaml.j2"
+# Allow override of the configuration file via environment variable
+ROLE_TEMPLATE="${ROLE_TEMPLATE_OVERRIDE:-$ROLE_TEMPLATE_DEFAULT}"
 
 # Gather available interfaces excluding loopback
 readarray -t interfaces < <(ip -o link show | awk -F': ' '{print $2}' | grep -v lo)
