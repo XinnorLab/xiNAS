@@ -34,7 +34,7 @@ edit_export() {
     set -e
     [ $status -ne 0 ] && return
     tmp=$(mktemp)
-    yq ".exports[] | select(.path == \"$path\") |= (.clients = \"${clients}\" | .options = \"${options}\")" "$vars_file" > "$tmp"
+    yq e "(.exports[] | select(.path == \"$path\") | .clients) = \"${clients}\" | (.exports[] | select(.path == \"$path\") | .options) = \"${options}\"" "$vars_file" > "$tmp"
     backup_if_changed "$vars_file" "$tmp"
     mv "$tmp" "$vars_file"
 }
