@@ -15,7 +15,7 @@ recommended in Xinnor blogs (2023-2025) and NVIDIA ConnectX-7 (400 Gbit) docs.
 
 ## Variables
 See `defaults/main.yml` for the full list; most tuning knobs can be disabled or
-altered via inventory/group_vars.
+altered via inventory variables.
 
 ## Example
 ```yaml
