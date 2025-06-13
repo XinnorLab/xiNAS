@@ -170,11 +170,12 @@ configure_git_repo() {
 
 # Run ansible-playbook and stream output
 run_playbook() {
+    local playbook="${1:-$REPO_DIR/site.yml}"
     local log="$TMP_DIR/playbook.log"
     touch "$log"
     whiptail --title "Ansible Playbook" --tailbox "$log" 20 70 &
     local box_pid=$!
-    if ansible-playbook "$REPO_DIR/site.yml" >"$log" 2>&1; then
+    if ansible-playbook "$playbook" >"$log" 2>&1; then
         result=0
     else
         result=$?
@@ -189,23 +190,73 @@ run_playbook() {
     return $result
 }
 
+# Copy configuration files from a preset directory and optionally run its playbook
+apply_preset() {
+    local preset="$1"
+    local pdir="$REPO_DIR/presets/$preset"
+    [ -d "$pdir" ] || { whiptail --msgbox "Preset $preset not found" 8 60; return; }
+
+    local msg="Applying preset: $preset\n"
+    if [ -f "$pdir/netplan.yaml.j2" ]; then
+        cp "$pdir/netplan.yaml.j2" "collection/roles/net_controllers/templates/netplan.yaml.j2"
+        msg+="- network configuration\n"
+    fi
+    if [ -f "$pdir/raid_fs.yml" ]; then
+        cp "$pdir/raid_fs.yml" "collection/roles/raid_fs/defaults/main.yml"
+        msg+="- RAID configuration\n"
+    fi
+    if [ -f "$pdir/nfs_exports.yml" ]; then
+        cp "$pdir/nfs_exports.yml" "collection/roles/exports/defaults/main.yml"
+        msg+="- NFS exports\n"
+    fi
+    if [ -f "$pdir/playbook.yml" ]; then
+        run_playbook "$pdir/playbook.yml"
+    fi
+    whiptail --msgbox "$msg" 15 70
+}
+
+# Present available presets to the user
+choose_preset() {
+    local preset_dir="$REPO_DIR/presets"
+    [ -d "$preset_dir" ] || { whiptail --msgbox "No presets available" 8 60; return; }
+
+    local items=()
+    for d in "$preset_dir"/*/; do
+        [ -d "$d" ] || continue
+        items+=("$(basename "$d")" "")
+    done
+    items+=("Back" "Return")
+
+    set +e
+    local choice
+    choice=$(whiptail --title "Presets" --menu "Select preset:" 20 70 10 "${items[@]}" 3>&1 1>&2 2>&3)
+    local status=$?
+    set -e
+    if [ $status -ne 0 ] || [ "$choice" = "Back" ]; then
+        return
+    fi
+    apply_preset "$choice"
+}
+
 # Main menu loop
 while true; do
-    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 13 \
+    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 14 \
         1 "Enter License" \
         2 "Configure Network" \
         3 "Configure RAID" \
         4 "Edit NFS Exports" \
-        5 "Git Repository Configuration" \
-        6 "Continue" \
+        5 "Presets" \
+        6 "Git Repository Configuration" \
+        7 "Continue" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
         2) configure_network ;;
         3) configure_raid ;;
         4) edit_nfs_exports ;;
-        5) configure_git_repo ;;
-        6) exit 0 ;;
+        5) choose_preset ;;
+        6) configure_git_repo ;;
+        7) exit 0 ;;
     esac
 done
 

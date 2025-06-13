@@ -1,0 +1,46 @@
+# Default values for the raid_fs role
+#
+# The actual RAID array and filesystem configuration is stored here so
+# interactive helper scripts can modify it directly.
+xiraid_license_path: "/tmp/license"
+
+# Whether to pass `--force_metadata` when creating arrays
+# Set to `false` if metadata should not be overwritten
+xiraid_force_metadata: true
+
+# Default RAID arrays and filesystem definitions used by the xiNAS example
+# deployment. Modify these values directly rather than using group variables.
+xiraid_arrays:
+  - name: media6
+    level: 6
+    strip_size_kb: 128
+    devices:
+      - /dev/nvme1n1
+      - /dev/nvme2n1
+      - /dev/nvme3n1
+      - /dev/nvme4n1
+      - /dev/nvme5n1
+      - /dev/nvme6n1
+      - /dev/nvme7n1
+      - /dev/nvme8n1
+      - /dev/nvme9n1
+      - /dev/nvme10n1
+    parity_disks: 2
+
+  - name: media1
+    level: 1
+    strip_size_kb: 16
+    devices:
+      - /dev/nvme11n1
+      - /dev/nvme12n1
+
+xfs_filesystems:
+  - label: nfsdata
+    data_device: "/dev/xi_media6"
+    log_device: "/dev/xi_media1"
+    su_kb: 128
+    sw: 8
+    log_size: 1G
+    sector_size: 4k
+    mountpoint: /mnt/data
+    mount_opts: "logdev=/dev/xi_media1,noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k"
