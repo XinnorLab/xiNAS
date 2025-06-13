@@ -20,8 +20,10 @@ else
     cd "$REPO_DIR"
 fi
 
-# Pull latest changes
-git pull origin main
+# Ask whether to update repository
+if whiptail --yesno "Update xiNAS code from GitHub?" 8 60; then
+    git pull origin main
+fi
 
 # Ask whether to run interactive configuration menu
 if whiptail --yesno "Configure this system now?" 8 60; then
