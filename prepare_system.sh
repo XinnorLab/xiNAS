@@ -48,7 +48,7 @@ for role in $ROLE_NAMES; do
     ROLE_LIST="${ROLE_LIST}\n - ${role}: ${desc}"
 done
 
-if whiptail --yesno "Run Ansible playbook to configure the system?\n\nThis will execute the following roles:${ROLE_LIST}" 20 70; then
+if whiptail --yesno --scrolltext "Run Ansible playbook to configure the system?\n\nThis will execute the following roles:${ROLE_LIST}" 20 70; then
     INV_FILE=$(whiptail --inputbox "Inventory to use for Ansible" 10 70 "inventories/lab.ini" 3>&1 1>&2 2>&3)
     ansible-playbook "$PLAYBOOK" -i "$INV_FILE" -v
     chmod +x post_install_menu.sh
