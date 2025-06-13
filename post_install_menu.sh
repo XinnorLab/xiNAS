@@ -5,6 +5,10 @@ set -euo pipefail
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# Directory with Ansible repository
+REPO_DIR="/opt/provision"
+DEFAULT_GIT_URL="https://github.com/XinnorLab/xiNAS"
+
 show_raid_info() {
     local out="$TMP_DIR/raid_info"
     if ! xicli raid show >"$out" 2>&1; then
@@ -50,18 +54,69 @@ manage_network() {
     fi
 }
 
+is_custom_repo() {
+    [ -d "$REPO_DIR/.git" ] || return 1
+    local url
+    url=$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || echo "")
+    if [ -z "$url" ] && [ -f "$REPO_DIR/repo.url" ]; then
+        url=$(cat "$REPO_DIR/repo.url")
+    fi
+    local def="${DEFAULT_GIT_URL%/}"
+    case "$url" in
+        "$def"|"$def.git"|*"XinnorLab/xiNAS"*) return 1 ;;
+    esac
+    return 0
+}
+
+has_repo_changes() {
+    [ -d "$REPO_DIR/.git" ] || return 1
+    git -C "$REPO_DIR" status --porcelain | grep -q .
+}
+
+store_config_repo() {
+    local msg
+    msg=$(whiptail --inputbox "Commit message" 8 60 "Save configuration" 3>&1 1>&2 2>&3) || return 0
+    git -C "$REPO_DIR" add -A
+    if git -C "$REPO_DIR" commit -m "$msg" >/dev/null 2>&1; then
+        if git -C "$REPO_DIR" push >/dev/null 2>&1; then
+            whiptail --msgbox "Configuration saved to repository" 8 60
+        else
+            whiptail --msgbox "Failed to push changes" 8 60
+        fi
+    else
+        whiptail --msgbox "No changes to commit" 8 60
+    fi
+}
+
 while true; do
-    choice=$(whiptail --title "Post Install Menu" --menu "Select an option:" 20 70 10 \
-        1 "RAID Groups information" \
-        2 "xiRAID license information" \
-        3 "File system and NFS share information" \
-        4 "Network post install settings" \
-        5 "Exit" 3>&1 1>&2 2>&3)
+    menu_items=(
+        1 "RAID Groups information"
+        2 "xiRAID license information"
+        3 "File system and NFS share information"
+        4 "Network post install settings"
+    )
+    save_opt=5
+    if is_custom_repo && has_repo_changes; then
+        menu_items+=("$save_opt" "Store configuration to Git repository")
+        exit_opt=$((save_opt + 1))
+    else
+        exit_opt=$save_opt
+    fi
+    menu_items+=("$exit_opt" "Exit")
+
+    choice=$(whiptail --title "Post Install Menu" --menu "Select an option:" 20 70 10 "${menu_items[@]}" 3>&1 1>&2 2>&3)
     case "$choice" in
         1) show_raid_info ;;
         2) show_license_info ;;
         3) show_nfs_info ;;
         4) manage_network ;;
+        "$save_opt")
+            if is_custom_repo && has_repo_changes; then
+                store_config_repo
+            else
+                break
+            fi
+            ;;
         *) break ;;
     esac
 done
