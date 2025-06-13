@@ -119,6 +119,40 @@ configure_raid() {
     ./configure_raid.sh
 }
 
+# Configure or update git repository under /opt/provision
+configure_git_repo() {
+    local repo_dir="/opt/provision"
+    mkdir -p "$repo_dir"
+
+    local current_url=""
+    local current_branch="main"
+    if [ -d "$repo_dir/.git" ]; then
+        current_url=$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)
+        current_branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+    elif [ -f "$repo_dir/repo.url" ]; then
+        current_url=$(cat "$repo_dir/repo.url")
+        [ -f "$repo_dir/repo.branch" ] && current_branch=$(cat "$repo_dir/repo.branch")
+    fi
+
+    url=$(whiptail --inputbox "Git repository URL" 8 60 "$current_url" 3>&1 1>&2 2>&3) || return 0
+    branch=$(whiptail --inputbox "Git branch" 8 60 "$current_branch" 3>&1 1>&2 2>&3) || return 0
+
+    if [ -d "$repo_dir/.git" ]; then
+        git -C "$repo_dir" remote set-url origin "$url"
+        git -C "$repo_dir" fetch origin
+        git -C "$repo_dir" checkout "$branch"
+        git -C "$repo_dir" pull origin "$branch"
+    else
+        rm -rf "$repo_dir"
+        git clone -b "$branch" "$url" "$repo_dir"
+    fi
+
+    echo "$url" >"$repo_dir/repo.url"
+    echo "$branch" >"$repo_dir/repo.branch"
+
+    whiptail --msgbox "Repository configured at $repo_dir" 8 60
+}
+
 # Run ansible-playbook and stream output
 run_playbook() {
     local log="$TMP_DIR/playbook.log"
@@ -142,19 +176,21 @@ run_playbook() {
 
 # Main menu loop
 while true; do
-    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 10 \
+    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 12 \
         1 "Enter License" \
         2 "Configure Network" \
         3 "Configure RAID" \
         4 "Edit NFS Exports" \
-        5 "Continue" \
+        5 "Configure Git Repository" \
+        6 "Continue" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
         2) configure_network ;;
         3) configure_raid ;;
         4) edit_nfs_exports ;;
-        5) exit 0 ;;
+        5) configure_git_repo ;;
+        6) exit 0 ;;
     esac
 done
 
