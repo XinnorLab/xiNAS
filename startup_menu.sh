@@ -153,6 +153,18 @@ configure_git_repo() {
     whiptail --msgbox "Repository configured at $repo_dir" 8 60
 }
 
+# Show current git configuration from /opt/provision
+show_git_config() {
+    local repo_dir="/opt/provision"
+    local out="$TMP_DIR/git_config"
+    if [ -d "$repo_dir/.git" ]; then
+        git -C "$repo_dir" config --list >"$out" 2>&1
+    else
+        git config --list >"$out" 2>&1 || echo "No git configuration found" >"$out"
+    fi
+    whiptail --title "Git Configuration" --textbox "$out" 20 70
+}
+
 # Run ansible-playbook and stream output
 run_playbook() {
     local log="$TMP_DIR/playbook.log"
@@ -176,13 +188,14 @@ run_playbook() {
 
 # Main menu loop
 while true; do
-    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 12 \
+    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 13 \
         1 "Enter License" \
         2 "Configure Network" \
         3 "Configure RAID" \
         4 "Edit NFS Exports" \
         5 "Configure Git Repository" \
-        6 "Continue" \
+        6 "Show Git Configuration" \
+        7 "Continue" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
@@ -190,7 +203,8 @@ while true; do
         3) configure_raid ;;
         4) edit_nfs_exports ;;
         5) configure_git_repo ;;
-        6) exit 0 ;;
+        6) show_git_config ;;
+        7) exit 0 ;;
     esac
 done
 
