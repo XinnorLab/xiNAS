@@ -70,14 +70,14 @@ configure_network() {
         cat "$TMP_DIR/netplan_new" > "$template"
     fi
 
-    whiptail --title "Ansible Netplan" --textbox "$template" 20 70
+    whiptail --title "Ansible Netplan" --scrolltext --textbox "$template" 20 70
 }
 
 # Display playbook information from /opt/provision/README.md
 show_playbook_info() {
     local info_file="/opt/provision/README.md"
     if [ -f "$info_file" ]; then
-        whiptail --title "Playbook Info" --textbox "$info_file" 20 70
+        whiptail --title "Playbook Info" --scrolltext --textbox "$info_file" 20 70
     else
         whiptail --msgbox "File $info_file not found" 8 60
     fi
@@ -94,7 +94,7 @@ configure_nfs_shares() {
     share_start=$(grep -n '^exports:' "$vars_file" | cut -d: -f1)
     local tmp="$TMP_DIR/nfs_info"
     sed -n "$((share_start+1)),$((share_start+3))p" "$vars_file" > "$tmp"
-    whiptail --title "NFS Share" --textbox "$tmp" 12 70
+    whiptail --title "NFS Share" --scrolltext --textbox "$tmp" 12 70
 
     local default_path
     default_path=$(awk '/^exports:/ {flag=1; next} flag && /- path:/ {print $3; exit}' "$vars_file")
@@ -132,7 +132,7 @@ configure_git_repo() {
     else
         git config --list >"$out" 2>&1 || echo "No git configuration found" >"$out"
     fi
-    whiptail --title "Current Git Configuration" --textbox "$out" 20 70
+    whiptail --title "Current Git Configuration" --scrolltext --textbox "$out" 20 70
     if ! whiptail --yesno "Modify Git repository settings?" 8 60; then
         return 0
     fi
