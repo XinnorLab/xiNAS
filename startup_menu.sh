@@ -6,6 +6,8 @@
 
 set -euo pipefail
 TMP_DIR="$(mktemp -d)"
+# Directory of the repository currently being configured
+REPO_DIR="$(pwd)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 # Prompt user for license string and store it in /tmp/license
@@ -162,6 +164,8 @@ configure_git_repo() {
     echo "$branch" >"$repo_dir/repo.branch"
 
     whiptail --msgbox "Repository configured at $repo_dir" 8 60
+    REPO_DIR="$repo_dir"
+    cd "$REPO_DIR"
 }
 
 # Run ansible-playbook and stream output
@@ -170,7 +174,7 @@ run_playbook() {
     touch "$log"
     whiptail --title "Ansible Playbook" --tailbox "$log" 20 70 &
     local box_pid=$!
-    if ansible-playbook /opt/provision/site.yml >"$log" 2>&1; then
+    if ansible-playbook "$REPO_DIR/site.yml" >"$log" 2>&1; then
         result=0
     else
         result=$?

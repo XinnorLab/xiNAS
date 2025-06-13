@@ -74,17 +74,17 @@ has_repo_changes() {
 }
 
 store_config_repo() {
-    local msg
+    local msg out
     msg=$(whiptail --inputbox "Commit message" 8 60 "Save configuration" 3>&1 1>&2 2>&3) || return 0
     git -C "$REPO_DIR" add -A
-    if git -C "$REPO_DIR" commit -m "$msg" >/dev/null 2>&1; then
+    if out=$(git -C "$REPO_DIR" commit -m "$msg" 2>&1); then
         if git -C "$REPO_DIR" push >/dev/null 2>&1; then
             whiptail --msgbox "Configuration saved to repository" 8 60
         else
             whiptail --msgbox "Failed to push changes" 8 60
         fi
     else
-        whiptail --msgbox "No changes to commit" 8 60
+        whiptail --msgbox "Git commit failed:\n${out}" 15 70
     fi
 }
 
