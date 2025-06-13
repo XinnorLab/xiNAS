@@ -14,7 +14,7 @@ show_raid_info() {
     if ! xicli raid show >"$out" 2>&1; then
         echo "Failed to run xicli raid show" >"$out"
     fi
-    whiptail --title "RAID Groups" --scrolltext --textbox "$out" 20 70
+    whiptail --title "RAID Groups" --textbox "$out" 20 70
 }
 
 show_license_info() {
@@ -22,7 +22,7 @@ show_license_info() {
     if ! xicli license show >"$out" 2>&1; then
         echo "Failed to run xicli license show" >"$out"
     fi
-    whiptail --title "xiRAID License" --scrolltext --textbox "$out" 20 70
+    whiptail --title "xiRAID License" --textbox "$out" 20 70
 }
 
 show_nfs_info() {
@@ -41,13 +41,13 @@ show_nfs_info() {
             echo "/etc/exports not found"
         fi
     } >"$out"
-    whiptail --title "Filesystem & NFS" --scrolltext --textbox "$out" 20 70
+    whiptail --title "Filesystem & NFS" --textbox "$out" 20 70
 }
 
 manage_network() {
     local out="$TMP_DIR/net_info"
     ip -o -4 addr show | awk '{print $2, $4}' >"$out"
-    whiptail --title "Network Interfaces" --scrolltext --textbox "$out" 20 70
+    whiptail --title "Network Interfaces" --textbox "$out" 20 70
     if whiptail --yesno "Modify network configuration?" 8 60; then
         ROLE_TEMPLATE_OVERRIDE=/etc/netplan/99-xinas.yaml ./configure_network.sh
         netplan apply
