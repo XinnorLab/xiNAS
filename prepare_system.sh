@@ -41,7 +41,7 @@ ROLE_LIST=""
 for role in $ROLE_NAMES; do
     desc_file="collection/roles/${role}/README.md"
     if [ -f "$desc_file" ]; then
-        desc=$(awk 'NF && $0 !~ /^#/ {print; exit}' "$desc_file")
+        desc=$(awk '/^#/ {next} /^\s*$/ {if(found) exit; else next} {if(found) {printf " %s", $0} else {printf "%s", $0; found=1}} END {print ""}' "$desc_file")
     else
         desc="No description available"
     fi
