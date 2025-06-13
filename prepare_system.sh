@@ -22,6 +22,7 @@ fi
 
 # Ask whether to update repository
 if whiptail --yesno "Update xiNAS code from GitHub?" 8 60; then
+    git reset --hard
     git pull origin main
 fi
 
