@@ -4,7 +4,7 @@ This repository contains scripts and Ansible playbooks used to provision xiNAS n
 
 ## Getting started
 
-1. Run `prepare_system.sh` on the target host. This installs required packages including `yq` version 4, `whiptail`, and Ansible, then clones the repository.
+1. Run `prepare_system.sh` on the target host. This installs required packages including `yq` version 4, `whiptail`, and Ansible, then clones the repository. The script also asks if you want to update the code from GitHub before proceeding.
 2. Execute `startup_menu.sh` to configure network, RAID arrays and NFS exports interactively.
 3. Optionally run the included Ansible playbook to apply the configuration.
 
