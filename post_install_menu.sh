@@ -11,10 +11,17 @@ DEFAULT_GIT_URL="https://github.com/XinnorLab/xiNAS"
 
 show_raid_info() {
     local out="$TMP_DIR/raid_info"
-    if ! xicli raid show >"$out" 2>&1; then
+    local raw="$TMP_DIR/raid_raw"
+    if xicli raid show -f json >"$raw" 2>&1; then
+        if python3 -m json.tool "$raw" >"$out" 2>/dev/null; then
+            :
+        else
+            cat "$raw" >"$out"
+        fi
+    else
         echo "Failed to run xicli raid show" >"$out"
     fi
-    whiptail --title "RAID Groups" --textbox "$out" 20 70
+    whiptail --title "RAID Groups" --scrolltext --textbox "$out" 20 70
 }
 
 show_license_info() {
