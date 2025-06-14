@@ -13,10 +13,39 @@ show_raid_info() {
     local out="$TMP_DIR/raid_info"
     local raw="$TMP_DIR/raid_raw"
     if xicli raid show -f json >"$raw" 2>&1; then
-        if python3 -m json.tool "$raw" >"$out" 2>/dev/null; then
+        if python3 - "$raw" <<'EOF' >"$out" 2>/dev/null; then
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    data = json.load(f)
+arrays = []
+if isinstance(data, list):
+    arrays = data
+elif isinstance(data, dict):
+    for key in ("raid_groups", "arrays", "groups"):
+        if isinstance(data.get(key), list):
+            arrays = data[key]
+            break
+    if not arrays:
+        arrays = [dict(v, name=k) if isinstance(v, dict) else {"name": k}
+                  for k, v in data.items()]
+print("{:<15} {:>12} {:>10} {:<20} {:>5} {:>7}".format(
+    'Name', 'Size', 'Strip', 'Status', 'Lvl', 'Devs'))
+for arr in arrays:
+    name = arr.get('name', '')
+    size = arr.get('size', '')
+    strip = (arr.get('strip_size') or arr.get('strip_size_kb') or '')
+    status = arr.get('state') or arr.get('status') or ''
+    if isinstance(status, list):
+        status = ' '.join(status)
+    level = arr.get('level', '')
+    num = len(arr.get('devices', []))
+    print("{:<15} {:>12} {:>10} {:<20} {:>5} {:>7}".format(
+        name, size, strip, status, level, num))
+EOF
             :
         else
-            cat "$raw" >"$out"
+            python3 -m json.tool "$raw" >"$out" 2>/dev/null || cat "$raw" >"$out"
         fi
     else
         echo "Failed to run xicli raid show" >"$out"
