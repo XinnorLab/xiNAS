@@ -14,7 +14,7 @@ backup_if_changed() {
 vars_file="collection/roles/raid_fs/defaults/main.yml"
 
 # Ensure required commands are present
-for cmd in yq whiptail; do
+for cmd in yq whiptail lsblk; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "Error: required command '$cmd' not found. Please run prepare_system.sh or install it manually." >&2
         exit 1
@@ -29,6 +29,18 @@ fi
 get_devices() {
     local level="$1"
     yq -r ".xiraid_arrays[] | select(.level==${level}) | .devices | join(\" \" )" "$vars_file" 2>/dev/null
+}
+
+# Display detected NVMe drives using whiptail
+show_nvme_drives() {
+    local tmp
+    tmp="$(mktemp)"
+    lsblk -d -o NAME,VENDOR,SIZE 2>/dev/null | awk '$1 ~ /^nvme/ {printf "/dev/%s %s %s\n", $1, $2, $3}' > "$tmp"
+    if [ ! -s "$tmp" ]; then
+        echo "No NVMe drives detected" > "$tmp"
+    fi
+    whiptail --title "NVMe Drives" --textbox "$tmp" 20 60
+    rm -f "$tmp"
 }
 
 edit_devices() {
@@ -50,6 +62,7 @@ edit_devices() {
     mv "$tmp" "$vars_file"
 }
 
+show_nvme_drives
 while true; do
     raid6_devices=$(get_devices 6)
     raid1_devices=$(get_devices 1)
