@@ -35,11 +35,13 @@ get_devices() {
 show_nvme_drives() {
     local tmp
     tmp="$(mktemp)"
-    lsblk -d -o NAME,VENDOR,SIZE 2>/dev/null | awk '$1 ~ /^nvme/ {printf "/dev/%s %s %s\n", $1, $2, $3}' > "$tmp"
+    # Include model information since the vendor field is often blank for NVMe devices
+    lsblk -d -o NAME,VENDOR,MODEL,SIZE 2>/dev/null \
+        | awk '$1 ~ /^nvme/ {printf "/dev/%s %s %s %s\n", $1, $2, $3, $4}' > "$tmp"
     if [ ! -s "$tmp" ]; then
         echo "No NVMe drives detected" > "$tmp"
     fi
-    whiptail --title "NVMe Drives" --textbox "$tmp" 20 60
+    whiptail --title "NVMe Drives" --scrolltext --textbox "$tmp" 20 60
     rm -f "$tmp"
 }
 
