@@ -33,20 +33,22 @@ else
     cd "$REPO_DIR"
 fi
 
-# Ask whether to update repository
-if whiptail --yesno "Update xiNAS code from GitHub?" 8 60; then
-    git reset --hard
-    git pull origin main
+# In expert mode allow updating the repository from GitHub
+if [ "$EXPERT" -eq 1 ]; then
+    if whiptail --yesno "Update xiNAS code from GitHub?" 8 60; then
+        git reset --hard
+        git pull origin main
+    fi
 fi
 
-# Ask whether to run interactive configuration menu
-if whiptail --yesno "Configure this system now?" 8 60; then
-    chmod +x startup_menu.sh simple_menu.sh
-    if [ "$EXPERT" -eq 1 ]; then
+# Run the configuration menu
+chmod +x startup_menu.sh simple_menu.sh
+if [ "$EXPERT" -eq 1 ]; then
+    if whiptail --yesno "Configure this system now?" 8 60; then
         ./startup_menu.sh
-    else
-        ./simple_menu.sh
     fi
+else
+    ./simple_menu.sh
 fi
 
 # After the menu has finished, explain the Ansible run and optionally execute it
