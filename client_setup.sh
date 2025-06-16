@@ -69,9 +69,9 @@ main() {
 
     mkdir -p "$mount_point"
     if [[ "$proto" == "RDMA" ]]; then
-        opts="rdma,port=20049,nconnect=16,vers=4.2"
+        opts="rdma,port=20049,nconnect=16,vers=4.2,sync"
     else
-        opts="nconnect=16,vers=4.2"
+        opts="nconnect=16,vers=4.2,sync"
     fi
     if ! mountpoint -q "$mount_point"; then
         mount -t nfs -o "$opts" "$server_ip:$share" "$mount_point"
