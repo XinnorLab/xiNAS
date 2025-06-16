@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configure NFS client with optional RDMA according to xiNNOR blog post
+# Configure NFS client for RDMA or TCP transport according to xiNNOR blog post
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
@@ -52,7 +52,7 @@ main() {
         run_playbook playbooks/doca_ofed_install.yml
     fi
 
-    proto=$(ask_input "Protocol to use (NFS or RDMA)" "RDMA")
+    proto=$(ask_input "Protocol to use (RDMA or TCP)" "RDMA")
     proto=${proto^^}
     server_ip=$(ask_input "Server IP address" "10.239.239.100")
     share=$(ask_input "NFS share" "/mnt/data")
