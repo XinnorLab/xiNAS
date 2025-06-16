@@ -1,5 +1,18 @@
 #!/bin/bash
 set -e
+
+usage() {
+    echo "Usage: $0 [-e]" >&2
+    echo "  -e  Expert mode with full startup menu" >&2
+}
+
+EXPERT=0
+while getopts "e" opt; do
+    case $opt in
+        e) EXPERT=1 ;;
+        *) usage; exit 1 ;;
+    esac
+done
 # Install required packages
 sudo apt-get update -y
 sudo apt-get install -y ansible git whiptail dialog wget
@@ -28,8 +41,12 @@ fi
 
 # Ask whether to run interactive configuration menu
 if whiptail --yesno "Configure this system now?" 8 60; then
-    chmod +x startup_menu.sh
-    ./startup_menu.sh
+    chmod +x startup_menu.sh simple_menu.sh
+    if [ "$EXPERT" -eq 1 ]; then
+        ./startup_menu.sh
+    else
+        ./simple_menu.sh
+    fi
 fi
 
 # After the menu has finished, explain the Ansible run and optionally execute it
