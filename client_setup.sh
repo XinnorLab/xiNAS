@@ -2,6 +2,11 @@
 # Configure NFS client with optional RDMA according to xiNNOR blog post
 set -euo pipefail
 
+if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root" >&2
+    exit 1
+fi
+
 WHIPTAIL=$(command -v whiptail || true)
 
 ask_yes_no() {
