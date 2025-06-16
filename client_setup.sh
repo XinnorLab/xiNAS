@@ -78,8 +78,13 @@ main() {
             echo "Warning: failed to mount $server_ip:$share" >&2
     fi
 
+    if mountpoint -q "$mount_point"; then
+        mount_opts=$(awk -v mp="$mount_point" '$2==mp {print $4}' /proc/mounts)
+    fi
+    mount_opts=${mount_opts:-$opts}
+
     if ! grep -q "^$server_ip:$share" /etc/fstab; then
-        echo "$server_ip:$share $mount_point nfs $opts 0 0" >> /etc/fstab
+        echo "$server_ip:$share $mount_point nfs $mount_opts 0 0" >> /etc/fstab
     fi
 
     echo "Configuration complete. Reboot recommended to apply module options." >&2
