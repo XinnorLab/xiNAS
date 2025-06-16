@@ -74,10 +74,13 @@ main() {
         opts="nconnect=16,vers=4.2,sync"
     fi
     if ! mountpoint -q "$mount_point"; then
-        mount -t nfs -o "$opts" "$server_ip:$share" "$mount_point"
+        mount -t nfs -o "$opts" "$server_ip:$share" "$mount_point" || \
+            echo "Warning: failed to mount $server_ip:$share" >&2
     fi
 
-    grep -q "^$server_ip:$share" /etc/fstab || echo "$server_ip:$share $mount_point nfs $opts 0 0" >> /etc/fstab
+    if ! grep -q "^$server_ip:$share" /etc/fstab; then
+        echo "$server_ip:$share $mount_point nfs $opts 0 0" >> /etc/fstab
+    fi
 
     echo "Configuration complete. Reboot recommended to apply module options." >&2
 }
