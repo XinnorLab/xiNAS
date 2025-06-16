@@ -8,5 +8,8 @@ This repository contains scripts and Ansible playbooks used to provision xiNAS n
    The script immediately launches a simplified start menu in default mode to enter the license and choose a preset. Use `-e` to access the full interactive menu and additional options such as updating the repository.
 2. Execute `startup_menu.sh` separately if you need the complete configuration menu outside of the expert mode.
 3. Optionally run the included Ansible playbook to apply the configuration.
+4. To configure an NFS client on another system, run `sudo ./client_setup.sh`. Root
+   privileges are required to install packages, create the mount point and mount
+   the exported share.
 
 The `prepare_system.sh` script installs dependencies required by the interactive helper scripts. The helper scripts rely on the [`mikefarah/yq`](https://github.com/mikefarah/yq) binary (v4+). If you encounter errors such as `jq: error: env/1 is not defined`, make sure this version of `yq` is installed by re-running `prepare_system.sh` or installing it manually.
