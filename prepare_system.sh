@@ -41,35 +41,46 @@ if [ "$EXPERT" -eq 1 ]; then
     fi
 fi
 
-# Run the configuration menu
 chmod +x startup_menu.sh simple_menu.sh
-if [ "$EXPERT" -eq 1 ]; then
-    if whiptail --yesno "Configure this system now?" 8 60; then
-        ./startup_menu.sh
-    fi
-else
-    ./simple_menu.sh
-fi
 
-# After the menu has finished, explain the Ansible run and optionally execute it
 PLAYBOOK="playbooks/site.yml"
 
-# Build a short description of roles from the site.yml file
-ROLE_NAMES=$(grep -E '^\s*- role:' "$PLAYBOOK" | awk '{print $3}')
-ROLE_LIST=""
-for role in $ROLE_NAMES; do
-    desc_file="collection/roles/${role}/README.md"
-    if [ -f "$desc_file" ]; then
-        desc=$(awk '/^#/ {next} /^\s*$/ {if(found) exit; else next} {if(found) {printf " %s", $0} else {printf "%s", $0; found=1}} END {print ""}' "$desc_file")
+while true; do
+    menu_status=0
+    if [ "$EXPERT" -eq 1 ]; then
+        if whiptail --yesno "Configure this system now?" 8 60; then
+            ./startup_menu.sh
+            menu_status=$?
+        else
+            menu_status=2
+        fi
     else
-        desc="No description available"
+        ./simple_menu.sh
+        menu_status=$?
     fi
-    ROLE_LIST="${ROLE_LIST}\n - ${role}: ${desc}"
-done
 
-if whiptail --yesno --scrolltext "Run Ansible playbook to configure the system?\n\nThis will execute the following roles:${ROLE_LIST}" 20 70; then
-    INV_FILE=$(whiptail --inputbox "Inventory to use for Ansible" 10 70 "inventories/lab.ini" 3>&1 1>&2 2>&3)
-    ansible-playbook "$PLAYBOOK" -i "$INV_FILE" -v
-    chmod +x post_install_menu.sh
-    ./post_install_menu.sh
-fi
+    if [ "$menu_status" -eq 2 ]; then
+        exit 0
+    fi
+
+    # Build a short description of roles from the site.yml file
+    ROLE_NAMES=$(grep -E '^\s*- role:' "$PLAYBOOK" | awk '{print $3}')
+    ROLE_LIST=""
+    for role in $ROLE_NAMES; do
+        desc_file="collection/roles/${role}/README.md"
+        if [ -f "$desc_file" ]; then
+            desc=$(awk '/^#/ {next} /^\s*$/ {if(found) exit; else next} {if(found) {printf " %s", $0} else {printf "%s", $0; found=1}} END {print ""}' "$desc_file")
+        else
+            desc="No description available"
+        fi
+        ROLE_LIST="${ROLE_LIST}\n - ${role}: ${desc}"
+    done
+
+    if whiptail --yesno --scrolltext "Run Ansible playbook to configure the system?\n\nThis will execute the following roles:${ROLE_LIST}" 20 70; then
+        INV_FILE=$(whiptail --inputbox "Inventory to use for Ansible" 10 70 "inventories/lab.ini" 3>&1 1>&2 2>&3)
+        ansible-playbook "$PLAYBOOK" -i "$INV_FILE" -v
+        chmod +x post_install_menu.sh
+        ./post_install_menu.sh
+        break
+    fi
+done
