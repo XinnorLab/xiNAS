@@ -242,17 +242,39 @@ choose_preset() {
     apply_preset "$choice"
 }
 
+# Save current configuration files as a new preset directory
+save_preset() {
+    local preset
+    preset=$(whiptail --inputbox "Preset name" 8 60 3>&1 1>&2 2>&3) || return
+    [ -n "$preset" ] || { whiptail --msgbox "Preset name cannot be empty" 8 60; return; }
+
+    local pdir="$REPO_DIR/presets/$preset"
+    if [ -d "$pdir" ]; then
+        if ! whiptail --yesno "Preset exists. Overwrite?" 8 60; then
+            return
+        fi
+        rm -rf "$pdir"
+    fi
+    mkdir -p "$pdir"
+    cp "collection/roles/net_controllers/templates/netplan.yaml.j2" "$pdir/netplan.yaml.j2" 2>/dev/null || true
+    cp "collection/roles/raid_fs/defaults/main.yml" "$pdir/raid_fs.yml" 2>/dev/null || true
+    cp "collection/roles/exports/defaults/main.yml" "$pdir/nfs_exports.yml" 2>/dev/null || true
+    [ -f "playbooks/site.yml" ] && cp "playbooks/site.yml" "$pdir/playbook.yml"
+    whiptail --msgbox "Preset saved to $pdir" 8 60
+}
+
 # Main menu loop
 while true; do
-    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 15 \
+    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 16 \
         1 "Enter License" \
         2 "Configure Network" \
         3 "Configure RAID" \
         4 "Edit NFS Exports" \
         5 "Presets" \
-        6 "Git Repository Configuration" \
-        7 "Continue" \
-        8 "Exit" \
+        6 "Save Current as Preset" \
+        7 "Git Repository Configuration" \
+        8 "Continue" \
+        9 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
@@ -260,9 +282,10 @@ while true; do
         3) configure_raid ;;
         4) edit_nfs_exports ;;
         5) choose_preset ;;
-        6) configure_git_repo ;;
-        7) exit 0 ;;
-        8) exit 2 ;;
+        6) save_preset ;;
+        7) configure_git_repo ;;
+        8) exit 0 ;;
+        9) exit 2 ;;
     esac
 done
 
