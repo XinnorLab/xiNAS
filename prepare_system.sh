@@ -48,12 +48,8 @@ PLAYBOOK="playbooks/site.yml"
 while true; do
     menu_status=0
     if [ "$EXPERT" -eq 1 ]; then
-        if whiptail --yesno "Configure this system now?" 8 60; then
-            ./startup_menu.sh
-            menu_status=$?
-        else
-            menu_status=2
-        fi
+        ./startup_menu.sh
+        menu_status=$?
     else
         ./simple_menu.sh
         menu_status=$?
