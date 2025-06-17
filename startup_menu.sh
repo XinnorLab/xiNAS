@@ -244,7 +244,7 @@ choose_preset() {
 
 # Main menu loop
 while true; do
-    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 14 \
+    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 15 \
         1 "Enter License" \
         2 "Configure Network" \
         3 "Configure RAID" \
@@ -252,6 +252,7 @@ while true; do
         5 "Presets" \
         6 "Git Repository Configuration" \
         7 "Continue" \
+        8 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
@@ -261,6 +262,7 @@ while true; do
         5) choose_preset ;;
         6) configure_git_repo ;;
         7) exit 0 ;;
+        8) exit 2 ;;
     esac
 done
 

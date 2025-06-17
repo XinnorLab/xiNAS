@@ -106,14 +106,16 @@ choose_preset() {
 }
 
 while true; do
-    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 15 70 5 \
+    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 15 70 6 \
         1 "Enter License" \
         2 "Presets" \
         3 "Continue" \
+        4 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
         2) choose_preset ;;
         3) exit 0 ;;
+        4) exit 2 ;;
     esac
 done
