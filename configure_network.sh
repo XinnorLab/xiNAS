@@ -11,6 +11,22 @@ backup_if_changed() {
     fi
 }
 
+# Validate IPv4 address with CIDR prefix
+valid_ipv4_cidr() {
+    local ip=${1%/*}
+    local prefix=${1#*/}
+    # Expect form a.b.c.d/prefix
+    [[ "$1" == */* ]] || return 1
+    [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS=. read -r o1 o2 o3 o4 <<< "$ip"
+    for octet in $o1 $o2 $o3 $o4; do
+        [[ $octet -ge 0 && $octet -le 255 ]] || return 1
+    done
+    [[ $prefix =~ ^[0-9]{1,2}$ ]] || return 1
+    [[ $prefix -ge 0 && $prefix -le 32 ]] || return 1
+    return 0
+}
+
 ROLE_TEMPLATE_DEFAULT="collection/roles/net_controllers/templates/netplan.yaml.j2"
 # Allow override of the configuration file via environment variable
 ROLE_TEMPLATE="${ROLE_TEMPLATE_OVERRIDE:-$ROLE_TEMPLATE_DEFAULT}"
@@ -62,22 +78,29 @@ while true; do
 
     prompt="IPv4 address for $iface (current: ${curr_ip[$iface]})"
     [[ -n "${new_ip[$iface]}" ]] && prompt+=" [new: ${new_ip[$iface]}]"
-    set +e
-    addr=$(whiptail --inputbox "$prompt" 8 60 3>&1 1>&2 2>&3)
-    status=$?
-    set -e
-    [[ $status -ne 0 ]] && continue
-    new_ip[$iface]="$addr"
-    found=""
-    for i in "${!configs[@]}"; do
-        IFS=: read -r name _ <<< "${configs[i]}"
-        if [[ "$name" == "$iface" ]]; then
-            configs[i]="$iface:$addr"
-            found=1
+    while true; do
+        set +e
+        addr=$(whiptail --inputbox "$prompt" 8 60 3>&1 1>&2 2>&3)
+        status=$?
+        set -e
+        [[ $status -ne 0 ]] && continue 2
+        if valid_ipv4_cidr "$addr"; then
+            new_ip[$iface]="$addr"
+            found=""
+            for i in "${!configs[@]}"; do
+                IFS=: read -r name _ <<< "${configs[i]}"
+                if [[ "$name" == "$iface" ]]; then
+                    configs[i]="$iface:$addr"
+                    found=1
+                    break
+                fi
+            done
+            [[ -z "$found" ]] && configs+=("$iface:$addr")
             break
+        else
+            whiptail --msgbox "Invalid IPv4/CIDR format" 8 60
         fi
     done
-    [[ -z "$found" ]] && configs+=("$iface:$addr")
 
 done
 
