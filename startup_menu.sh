@@ -16,20 +16,26 @@ enter_license() {
     local license_file="/tmp/license"
     [ -x ./hwkey ] || chmod +x ./hwkey
     local hwkey_val
+    local replace=0
+
+    if [ -f "$license_file" ]; then
+        if whiptail --yesno "License already exists. Replace it?" 10 60; then
+            replace=1
+        else
+            return 0
+        fi
+    fi
+
     hwkey_val=$(./hwkey 2>/dev/null | tr -d '\n' | tr '[:lower:]' '[:upper:]')
 
     # Show HWKEY to the user
     whiptail --title "Hardware Key" --msgbox "HWKEY: ${hwkey_val}\nRequest your license key from xiNNOR Support." 10 60
 
-    if [ -f "$license_file" ]; then
-        if whiptail --yesno "License already exists. Replace it?" 10 60; then
-            local ts
-            ts=$(date +%Y%m%d%H%M%S)
-            cp "$license_file" "${license_file}.${ts}.bak"
-            rm -f "$license_file"
-        else
-            return 0
-        fi
+    if [ $replace -eq 1 ]; then
+        local ts
+        ts=$(date +%Y%m%d%H%M%S)
+        cp "$license_file" "${license_file}.${ts}.bak"
+        rm -f "$license_file"
     fi
 
     : > "$TMP_DIR/license_tmp"
