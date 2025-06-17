@@ -229,14 +229,19 @@ choose_preset() {
         [ -d "$d" ] || continue
         items+=("$(basename "$d")" "")
     done
+    items+=("Save" "Save current configuration")
     items+=("Back" "Return")
 
     set +e
     local choice
-    choice=$(whiptail --title "Presets" --menu "Select preset:" 20 70 10 "${items[@]}" 3>&1 1>&2 2>&3)
+    choice=$(whiptail --title "Presets" --menu "Select preset or save current:" 20 70 10 "${items[@]}" 3>&1 1>&2 2>&3)
     local status=$?
     set -e
     if [ $status -ne 0 ] || [ "$choice" = "Back" ]; then
+        return
+    fi
+    if [ "$choice" = "Save" ]; then
+        save_preset
         return
     fi
     apply_preset "$choice"
@@ -271,10 +276,9 @@ while true; do
         3 "Configure RAID" \
         4 "Edit NFS Exports" \
         5 "Presets" \
-        6 "Save Current as Preset" \
-        7 "Git Repository Configuration" \
-        8 "Continue" \
-        9 "Exit" \
+        6 "Git Repository Configuration" \
+        7 "Continue" \
+        8 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
@@ -282,10 +286,9 @@ while true; do
         3) configure_raid ;;
         4) edit_nfs_exports ;;
         5) choose_preset ;;
-        6) save_preset ;;
-        7) configure_git_repo ;;
-        8) exit 0 ;;
-        9) exit 2 ;;
+        6) configure_git_repo ;;
+        7) exit 0 ;;
+        8) exit 2 ;;
     esac
 done
 
