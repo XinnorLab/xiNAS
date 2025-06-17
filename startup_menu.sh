@@ -174,7 +174,7 @@ configure_git_repo() {
 
 # Run ansible-playbook and stream output
 run_playbook() {
-    local playbook="${1:-$REPO_DIR/site.yml}"
+    local playbook="${1:-$REPO_DIR/playbooks/site.yml}"
     local log="$TMP_DIR/playbook.log"
     touch "$log"
     if command -v dialog >/dev/null 2>&1; then
@@ -219,7 +219,8 @@ apply_preset() {
         msg+="- NFS exports\n"
     fi
     if [ -f "$pdir/playbook.yml" ]; then
-        run_playbook "$pdir/playbook.yml"
+        cp "$pdir/playbook.yml" "playbooks/site.yml"
+        msg+="- playbook updated\n"
     fi
     whiptail --msgbox "$msg" 15 70
 }
@@ -292,7 +293,12 @@ while true; do
         4) edit_nfs_exports ;;
         5) choose_preset ;;
         6) configure_git_repo ;;
-        7) exit 0 ;;
+        7)
+            run_playbook "playbooks/site.yml"
+            chmod +x post_install_menu.sh
+            ./post_install_menu.sh
+            exit 0
+            ;;
         8) exit 2 ;;
     esac
 done

@@ -42,7 +42,7 @@ enter_license() {
 }
 
 run_playbook() {
-    local playbook="${1:-$REPO_DIR/site.yml}"
+    local playbook="${1:-$REPO_DIR/playbooks/site.yml}"
     local log="$TMP_DIR/playbook.log"
     touch "$log"
     if command -v dialog >/dev/null 2>&1; then
@@ -85,7 +85,8 @@ apply_preset() {
         msg+="- NFS exports\n"
     fi
     if [ -f "$pdir/playbook.yml" ]; then
-        run_playbook "$pdir/playbook.yml"
+        cp "$pdir/playbook.yml" "playbooks/site.yml"
+        msg+="- playbook updated\n"
     fi
     whiptail --msgbox "$msg" 15 70
 }
@@ -120,7 +121,12 @@ while true; do
     case "$choice" in
         1) enter_license ;;
         2) choose_preset ;;
-        3) exit 0 ;;
+        3)
+            run_playbook "playbooks/site.yml"
+            chmod +x post_install_menu.sh
+            ./post_install_menu.sh
+            exit 0
+            ;;
         4) exit 2 ;;
     esac
 done
