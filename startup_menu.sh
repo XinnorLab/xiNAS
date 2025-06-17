@@ -177,8 +177,13 @@ run_playbook() {
     local playbook="${1:-$REPO_DIR/site.yml}"
     local log="$TMP_DIR/playbook.log"
     touch "$log"
-    whiptail --title "Ansible Playbook" --tailbox "$log" 20 70 &
-    local box_pid=$!
+    if command -v dialog >/dev/null 2>&1; then
+        dialog --title "Ansible Playbook" --tailboxbg "$log" 20 70 &
+        local box_pid=$!
+    else
+        whiptail --title "Ansible Playbook" --textbox "$log" 20 70 &
+        local box_pid=$!
+    fi
     if ansible-playbook "$playbook" >"$log" 2>&1; then
         result=0
     else
