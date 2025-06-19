@@ -10,6 +10,7 @@
   ansible.builtin.command: >-
     xicli raid create -n {{ item.name }} -l {{ item.level }}
     -d {{ _devlist }} -ss {{ item.strip_size_kb }}
+    {% if item.spare_pool is defined %}-sp {{ item.spare_pool }}{% endif %}
     {% if xiraid_force_metadata | bool %}--force_metadata{% endif %}
   register: raid_create
   changed_when: raid_create.rc == 0

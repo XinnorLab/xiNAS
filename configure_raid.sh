@@ -31,6 +31,24 @@ get_devices() {
     yq -r ".xiraid_arrays[] | select(.level==${level}) | .devices | join(\" \" )" "$vars_file" 2>/dev/null
 }
 
+get_spare_devices() {
+    yq -r '.xiraid_spare_pools[0].devices | join(" ")' "$vars_file" 2>/dev/null
+}
+
+edit_spare_pool() {
+    local current new tmp status
+    current="$(get_spare_devices)"
+    set +e
+    new=$(whiptail --inputbox "Space-separated devices for spare pool" 10 70 "$current" 3>&1 1>&2 2>&3)
+    status=$?
+    set -e
+    [ $status -ne 0 ] && return
+    tmp=$(mktemp)
+    NEW_LIST="$new" yq '.xiraid_spare_pools[0].devices = (env(NEW_LIST) | split(" "))' "$vars_file" > "$tmp"
+    backup_if_changed "$vars_file" "$tmp"
+    mv "$tmp" "$vars_file"
+}
+
 # Display detected NVMe drives using whiptail
 show_nvme_drives() {
     local tmp
@@ -68,13 +86,16 @@ show_nvme_drives
 while true; do
     raid6_devices=$(get_devices 6)
     raid1_devices=$(get_devices 1)
-    menu=$(whiptail --title "RAID Configuration" --menu "Select array to edit:" 15 70 5 \
+    spare_devices=$(get_spare_devices)
+    menu=$(whiptail --title "RAID Configuration" --menu "Select array to edit:" 15 70 6 \
         1 "RAID6: ${raid6_devices:-none}" \
         2 "RAID1: ${raid1_devices:-none}" \
-        3 "Back" 3>&1 1>&2 2>&3)
+        3 "Spare: ${spare_devices:-none}" \
+        4 "Back" 3>&1 1>&2 2>&3)
     case "$menu" in
         1) edit_devices 6 ;;
         2) edit_devices 1 ;;
+        3) edit_spare_pool ;;
         *) break ;;
     esac
 done

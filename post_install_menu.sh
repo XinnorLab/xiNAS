@@ -47,6 +47,13 @@ EOF
         else
             python3 -m json.tool "$raw" >"$out" 2>/dev/null || cat "$raw" >"$out"
         fi
+        {
+            echo
+            echo "Spare Pools:"
+            if ! xicli pool show; then
+                echo "Failed to run xicli pool show"
+            fi
+        } >>"$out"
     else
         echo "Failed to run xicli raid show" >"$out"
     fi

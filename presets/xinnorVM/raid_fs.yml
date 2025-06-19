@@ -8,38 +8,39 @@ xiraid_license_path: "/tmp/license"
 # Set to `false` if metadata should not be overwritten
 xiraid_force_metadata: true
 
-# Spare pool definitions. A single pool example:
-# xiraid_spare_pools:
-#   - name: sp1
-#     devices:
-#       - /dev/sdq
-xiraid_spare_pools: []
-
 # Default RAID arrays and filesystem definitions used by the xiNAS example
 # deployment. Modify these values directly rather than using group variables.
+xiraid_spare_pools:
+  - name: sp1
+    devices:
+      - /dev/sdq
+
 xiraid_arrays:
   - name: media6
     level: 6
     strip_size_kb: 128
+    spare_pool: sp1
     devices:
-      - /dev/nvme1n1
-      - /dev/nvme2n1
-      - /dev/nvme3n1
-      - /dev/nvme4n1
-      - /dev/nvme5n1
-      - /dev/nvme6n1
-      - /dev/nvme7n1
-      - /dev/nvme8n1
-      - /dev/nvme9n1
-      - /dev/nvme10n1
+      - /dev/sde
+      - /dev/sdf
+      - /dev/sdg
+      - /dev/sdh
+      - /dev/sdi
+      - /dev/sdj
+      - /dev/sdk
+      - /dev/sdl
+      - /dev/sdm
+      - /dev/sdn
+      - /dev/sdo
+      - /dev/sdp
     parity_disks: 2
 
   - name: media1
     level: 1
     strip_size_kb: 16
     devices:
-      - /dev/nvme11n1
-      - /dev/nvme12n1
+      - /dev/sdc
+      - /dev/sdd
 
 xfs_filesystems:
   - label: nfsdata

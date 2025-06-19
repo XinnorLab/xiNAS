@@ -15,6 +15,32 @@
     state: present
   tags: [raid_fs, raid]
 
+- name: Gather existing spare pools
+  ansible.builtin.command: xicli pool show -f json
+  register: xiraid_pools
+  changed_when: false
+  failed_when: xiraid_pools.rc != 0
+  tags: [raid_fs, raid]
+
+- name: Set fact – parsed pools
+  ansible.builtin.set_fact:
+    existing_pools: "{{ xiraid_pools.stdout | from_json }}"
+  tags: [raid_fs, raid]
+
+- name: Create xiRAID spare pools
+  ansible.builtin.command: >-
+    xicli pool create -n {{ item.name }} -d {{ item.devices | join(' ') }}
+  register: pool_create
+  changed_when: pool_create.rc == 0
+  failed_when:
+    - pool_create.rc != 0
+    - pool_create.stderr is not search('already exists')
+  loop: "{{ xiraid_spare_pools }}"
+  loop_control:
+    loop_var: item
+  when: item.name not in ((existing_pools | default([], true) | json_query('[].name')) | default([], true))
+  tags: [raid_fs, raid]
+
 - name: Find active MD RAID arrays
   ansible.builtin.command: lsblk -ln -o NAME,TYPE | awk '$2 ~ /^raid/ {print "/dev/"$1}'
   register: mdraid_scan
