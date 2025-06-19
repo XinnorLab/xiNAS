@@ -8,3 +8,8 @@ doca_pkgs:
   - doca-ofed-userspace
 
 doca_ofed_auto_reboot: false
+
+# Netplan template containing desired InfiniBand names
+ib_netplan_template: "/opt/provision/collection/roles/net_controllers/templates/netplan.yaml.j2"
+# Location of generated udev rules for InfiniBand
+ib_udev_rules_file: "/etc/udev/rules.d/70-ib-names.rules"

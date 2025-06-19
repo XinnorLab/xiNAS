@@ -37,6 +37,22 @@
   notify: restart openibd
   tags: [ofed, install]
 
+- name: Deploy InfiniBand UDEV rename script
+  ansible.builtin.copy:
+    src: configure_ib_udev.sh
+    dest: /usr/local/sbin/configure_ib_udev.sh
+    mode: '0755'
+  tags: [ofed, udev]
+
+- name: Generate UDEV rules for InfiniBand interfaces
+  ansible.builtin.command: >-
+    /usr/local/sbin/configure_ib_udev.sh
+    {{ ib_netplan_template }}
+    {{ ib_udev_rules_file }}
+  register: ib_udev_result
+  changed_when: ib_udev_result.rc == 0
+  tags: [ofed, udev]
+
 - name: Reboot if kernel modules built and reboot requested
   ansible.builtin.reboot:
     msg: "Reboot after DOCA-OFED install (role doca_ofed)"
