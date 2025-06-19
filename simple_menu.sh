@@ -43,28 +43,26 @@ enter_license() {
 
 run_playbook() {
     local playbook="${1:-$REPO_DIR/playbooks/site.yml}"
-    local log="$TMP_DIR/playbook.log"
-    touch "$log"
-    if command -v dialog >/dev/null 2>&1; then
-        dialog --title "Ansible Playbook" --tailboxbg "$log" 20 70 &
-        local box_pid=$!
-    else
-        whiptail --title "Ansible Playbook" --textbox "$log" 20 70 &
-        local box_pid=$!
-    fi
-    if ansible-playbook "$playbook" >"$log" 2>&1; then
-        result=0
-    else
-        result=$?
-    fi
-    kill "$box_pid" 2>/dev/null || true
-    wait "$box_pid" 2>/dev/null || true
-    if [ $result -eq 0 ]; then
-        whiptail --msgbox "Playbook completed successfully" 8 60
-    else
-        whiptail --msgbox "Playbook failed. Check log: $log" 10 60
-    fi
-    return $result
+    local inventory="${2:-inventories/lab.ini}"
+    ansible-playbook "$playbook" -i "$inventory" -v
+    return $?
+}
+
+confirm_playbook() {
+    local playbook="${1:-$REPO_DIR/playbooks/site.yml}"
+    local roles role_list desc_file desc
+    roles=$(grep -E '^\s*- role:' "$playbook" | awk '{print $3}')
+    role_list=""
+    for r in $roles; do
+        desc_file="$REPO_DIR/collection/roles/${r}/README.md"
+        if [ -f "$desc_file" ]; then
+            desc=$(awk '/^#/ {next} /^[[:space:]]*$/ {if(found) exit; next} {if(found){printf " %s", $0} else {printf "%s", $0; found=1}} END{print ""}' "$desc_file")
+        else
+            desc="No description available"
+        fi
+        role_list="${role_list}\n - ${r}: ${desc}"
+    done
+    whiptail --yesno --scrolltext "Run Ansible playbook to configure the system?\n\nThis will execute the following roles:${role_list}" 20 70
 }
 
 apply_preset() {
@@ -122,10 +120,12 @@ while true; do
         1) enter_license ;;
         2) choose_preset ;;
         3)
-            run_playbook "playbooks/site.yml"
-            chmod +x post_install_menu.sh
-            ./post_install_menu.sh
-            exit 0
+            if confirm_playbook "playbooks/site.yml"; then
+                run_playbook "playbooks/site.yml" "inventories/lab.ini"
+                chmod +x post_install_menu.sh
+                ./post_install_menu.sh
+                exit 0
+            fi
             ;;
         4) exit 2 ;;
     esac
