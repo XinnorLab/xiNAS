@@ -32,7 +32,8 @@ get_devices() {
 }
 
 get_spare_devices() {
-    yq -r '.xiraid_spare_pools[0].devices | join(" ")' "$vars_file" 2>/dev/null
+    # Gracefully handle presets without a spare pool defined
+    yq -r '(.xiraid_spare_pools[0].devices // []) | join(" ")' "$vars_file" 2>/dev/null
 }
 
 edit_spare_pool() {
