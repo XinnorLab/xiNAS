@@ -295,8 +295,7 @@ while true; do
         6) configure_git_repo ;;
         7)
             if confirm_playbook "playbooks/site.yml"; then
-                inv_file=$(whiptail --inputbox "Inventory to use for Ansible" 10 70 "inventories/lab.ini" 3>&1 1>&2 2>&3) || continue
-                run_playbook "playbooks/site.yml" "$inv_file"
+                run_playbook "playbooks/site.yml"
                 chmod +x post_install_menu.sh
                 ./post_install_menu.sh
                 exit 0
