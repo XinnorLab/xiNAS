@@ -12,7 +12,7 @@ xiraid_exporter_install_dir: "/usr/sbin"
 
 # Command line flags for the exporter service
 xiraid_exporter_flags:
-  - '--xiraid-srv-hostname=localhost'
+  - '--xiraid-srv-hostname={{ xinas_hostname }}'
   - '--xiraid-srv-port=6066'
   - '--xiraid-cert-path=/etc/xraid/crt/server-cert.crt'
   - '--metrics-endpoint=/metrics'
