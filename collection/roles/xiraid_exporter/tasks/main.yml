@@ -54,6 +54,26 @@
     creates: ca-cert.crt
   tags: [xiraid_exporter, cert]
 
+- name: Check existing xiRAID server certificate subject
+  ansible.builtin.command: openssl x509 -noout -subject -in server-cert.crt
+  args:
+    chdir: /etc/xraid/crt
+  register: server_cert_subject
+  failed_when: false
+  changed_when: false
+  tags: [xiraid_exporter, cert]
+
+- name: Remove outdated xiRAID certificate files
+  ansible.builtin.file:
+    path: "/etc/xraid/crt/{{ item }}"
+    state: absent
+  loop:
+    - server-cert.crt
+    - server-cert.csr
+    - server-key.key
+  when: server_cert_subject.stdout is defined and xinas_hostname not in server_cert_subject.stdout
+  tags: [xiraid_exporter, cert]
+
 - name: Generate xiRAID server key and CSR
   ansible.builtin.command: >-
     openssl req -newkey rsa:2048 -nodes -keyout server-key.key
