@@ -20,3 +20,5 @@ common_sysctl:
   net.core.rmem_max: 268435456
   net.core.wmem_max: 268435456
   vm.swappiness: 10
+# Hostname for the node. If empty, the role constructs 'xiNAS-HWKEY'.
+xinas_hostname: ""

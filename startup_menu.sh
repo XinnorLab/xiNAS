@@ -76,6 +76,11 @@ configure_network() {
 
     whiptail --title "Ansible Netplan" --textbox "$template" 20 70
 }
+# Configure hostname for Ansible role
+configure_hostname() {
+    ./configure_hostname.sh
+}
+
 
 # Display playbook information from /opt/provision/README.md
 show_playbook_info() {
@@ -106,9 +111,18 @@ configure_nfs_shares() {
 
     while true; do
         local choice
-        choice=$(whiptail --title "NFS Share" --menu "Choose an action:" 15 70 4 \
-            1 "Edit default share" \
-            2 "Back" 3>&1 1>&2 2>&3)
+    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 16 \
+        1 "Enter License" \
+        2 "Configure Network" \
+        3 "Set Hostname" \
+        3 "Set Hostname" \
+        4 "Configure RAID" \
+        5 "Edit NFS Exports" \
+        6 "Presets" \
+        7 "Git Repository Configuration" \
+        8 "Continue" \
+        9 "Exit" \
+        3>&1 1>&2 2>&3)
         case "$choice" in
             1) ./configure_nfs_exports.sh --edit "$default_path" ;;
             *) break ;;
@@ -279,21 +293,23 @@ while true; do
     choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 16 \
         1 "Enter License" \
         2 "Configure Network" \
-        3 "Configure RAID" \
-        4 "Edit NFS Exports" \
-        5 "Presets" \
-        6 "Git Repository Configuration" \
-        7 "Continue" \
-        8 "Exit" \
+        3 "Set Hostname" \
+        4 "Configure RAID" \
+        5 "Edit NFS Exports" \
+        6 "Presets" \
+        7 "Git Repository Configuration" \
+        8 "Continue" \
+        9 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) enter_license ;;
         2) configure_network ;;
-        3) configure_raid ;;
-        4) edit_nfs_exports ;;
-        5) choose_preset ;;
-        6) configure_git_repo ;;
-        7)
+        3) configure_hostname ;;
+        4) configure_raid ;;
+        5) edit_nfs_exports ;;
+        6) choose_preset ;;
+        7) configure_git_repo ;;
+        8)
             if confirm_playbook "playbooks/site.yml"; then
                 run_playbook "playbooks/site.yml"
                 chmod +x post_install_menu.sh
@@ -301,7 +317,7 @@ while true; do
                 exit 0
             fi
             ;;
-        8) exit 2 ;;
+        9) exit 2 ;;
     esac
 done
 

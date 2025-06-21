@@ -59,3 +59,24 @@
   notify: reload sysctl
   tags: [sysctl]
 
+
+- name: Retrieve xiRAID hardware key
+  ansible.builtin.command: ./hwkey
+  args:
+    chdir: "{{ playbook_dir }}/.."
+  register: hwkey_result
+  changed_when: false
+  failed_when: hwkey_result.rc != 0
+  when: xinas_hostname | length == 0
+  tags: [hostname]
+
+- name: Set default hostname fact
+  ansible.builtin.set_fact:
+    xinas_hostname: "xiNAS-{{ hwkey_result.stdout | trim | upper }}"
+  when: xinas_hostname | length == 0
+  tags: [hostname]
+
+- name: Set system hostname
+  ansible.builtin.hostname:
+    name: "{{ xinas_hostname }}"
+  tags: [hostname]

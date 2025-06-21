@@ -57,7 +57,7 @@
 - name: Generate xiRAID server key and CSR
   ansible.builtin.command: >-
     openssl req -newkey rsa:2048 -nodes -keyout server-key.key
-    -subj '/C=US/ST=State/L=City/O=Company/OU=IT/CN=localhost'
+    -subj '/C=US/ST=State/L=City/O=Company/OU=IT/CN={{ xinas_hostname }}'
     -out server-cert.csr
   args:
     chdir: /etc/xraid/crt
@@ -66,7 +66,7 @@
 
 - name: Generate xiRAID server certificate
   ansible.builtin.shell: >-
-    openssl x509 -req -extfile <(printf 'subjectAltName=DNS:localhost,IP:127.0.0.1')
+    openssl x509 -req -extfile <(printf 'subjectAltName=DNS:{{ xinas_hostname }},IP:127.0.0.1')
     -days 365 -in server-cert.csr -CA ca-cert.crt -CAkey ca.key -CAcreateserial
     -out server-cert.crt
   args:
