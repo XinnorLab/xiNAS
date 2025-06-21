@@ -89,7 +89,10 @@ show_nfs_info() {
 
 manage_network() {
     local out="$TMP_DIR/net_info"
-    ip -o -4 addr show | awk '{print $2, $4}' >"$out"
+    {
+        echo "Hostname: $(hostname)"
+        ip -o -4 addr show | awk '{print $2, $4}'
+    } >"$out"
     whiptail --title "Network Interfaces" --textbox "$out" 20 70
     if whiptail --yesno "Modify network configuration?" 8 60; then
         ROLE_TEMPLATE_OVERRIDE=/etc/netplan/99-xinas.yaml ./configure_network.sh
