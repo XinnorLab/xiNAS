@@ -16,16 +16,16 @@ valid_hostname() {
     [[ $name =~ ^[A-Za-z0-9][-A-Za-z0-9]{0,62}$ ]]
 }
 
-# Update /etc/hosts with provided hostname using 127.0.1.1 entry
+# Update /etc/hosts with provided hostname using 127.0.0.1 entry
 update_hosts_file() {
     local host="$1" hosts_file="/etc/hosts" tmp
     [ -w "$hosts_file" ] || return
     tmp=$(mktemp)
-    if grep -q '^127\.0\.1\.1' "$hosts_file"; then
-        sed "s/^127\.0\.1\.1\s*.*/127.0.1.1\t$host/" "$hosts_file" > "$tmp"
+    if grep -q '^127\.0\.0\.1' "$hosts_file"; then
+        sed "s/^127\.0\.0\.1\s*.*/127.0.0.1\t$host/" "$hosts_file" > "$tmp"
     else
         cat "$hosts_file" > "$tmp"
-        echo -e "127.0.1.1\t$host" >> "$tmp"
+        echo -e "127.0.0.1\t$host" >> "$tmp"
     fi
     backup_if_changed "$hosts_file" "$tmp"
     mv "$tmp" "$hosts_file"
