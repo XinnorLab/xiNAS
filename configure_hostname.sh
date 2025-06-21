@@ -52,16 +52,19 @@ if [ -z "$current" ]; then
     current="xiNAS-$hw"
 fi
 
-set +e
-name=$(whiptail --inputbox "Hostname" 8 60 "$current" 3>&1 1>&2 2>&3)
-status=$?
-set -e
-[ $status -ne 0 ] && exit 0
-
-if ! valid_hostname "$name"; then
-    whiptail --msgbox "Invalid hostname format" 8 60
-    exit 1
-fi
+while true; do
+    set +e
+    name=$(whiptail --inputbox "Hostname" 8 60 "$current" 3>&1 1>&2 2>&3)
+    status=$?
+    set -e
+    [ $status -ne 0 ] && exit 0
+    if valid_hostname "$name"; then
+        break
+    else
+        whiptail --msgbox "Invalid hostname format" 8 60
+        current="$name"
+    fi
+done
 
 tmp=$(mktemp)
 NAME="$name" yq e '.xinas_hostname = env(NAME)' "$vars_file" > "$tmp"
