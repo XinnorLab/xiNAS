@@ -11,9 +11,8 @@ This repository contains scripts and Ansible playbooks used to provision xiNAS n
    The playbook will run at that point, executing all configured roles. An **Exit** option is available if you want to leave without running the playbook.
 4. To configure an NFS client on another system, run `sudo ./client_setup.sh`. Root
    privileges are required to install packages, create the mount point and mount
-   the exported share. During the setup you can choose the desired NFS security
-   mode such as `sys` or Kerberos. If you only need the client pieces, copy the
-   contents of the `client_repo` directory into a separate repository and run
-   the script from there.
+   the exported share. If you only need the client pieces, copy the contents of
+   the `client_repo` directory into a separate repository and run the script
+   from there.
 
 The `prepare_system.sh` script installs dependencies required by the interactive helper scripts. The helper scripts rely on the [`mikefarah/yq`](https://github.com/mikefarah/yq) binary (v4+). If you encounter errors such as `jq: error: env/1 is not defined`, make sure this version of `yq` is installed by re-running `prepare_system.sh` or installing it manually.
