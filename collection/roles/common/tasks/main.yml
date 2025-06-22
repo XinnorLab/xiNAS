@@ -39,15 +39,6 @@
     selection: hold
   tags: [kernel]
 
-- name: Deploy unattended‑upgrades configuration
-  ansible.builtin.template:
-    src: unattended-upgrades.conf.j2
-    dest: /etc/apt/apt.conf.d/20auto-upgrades
-    owner: root
-    group: root
-    mode: '0644'
-  notify: restart unattended-upgrades
-  tags: [security]
 
 - name: Apply sysctl parameters
   ansible.builtin.sysctl:
