@@ -22,10 +22,11 @@ update_hosts_file() {
     [ -w "$hosts_file" ] || return
     tmp=$(mktemp)
     if grep -q '^127\.0\.0\.1' "$hosts_file"; then
-        sed "s/^127\.0\.0\.1\s*.*/127.0.0.1\t$host/" "$hosts_file" > "$tmp"
+        # Preserve localhost alias while updating the hostname
+        sed "s/^127\.0\.0\.1\s*.*/127.0.0.1\t$host localhost/" "$hosts_file" > "$tmp"
     else
         cat "$hosts_file" > "$tmp"
-        echo -e "127.0.0.1\t$host" >> "$tmp"
+        echo -e "127.0.0.1\t$host localhost" >> "$tmp"
     fi
     backup_if_changed "$hosts_file" "$tmp"
     mv "$tmp" "$hosts_file"
