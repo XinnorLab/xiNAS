@@ -16,3 +16,5 @@ This repository contains scripts and Ansible playbooks used to provision xiNAS n
    from there.
 
 The `prepare_system.sh` script installs dependencies required by the interactive helper scripts. The helper scripts rely on the [`mikefarah/yq`](https://github.com/mikefarah/yq) binary (v4+). If you encounter errors such as `jq: error: env/1 is not defined`, make sure this version of `yq` is installed by re-running `prepare_system.sh` or installing it manually.
+
+The `configure_hostname.sh` script updates `/etc/hosts` so that the system's hostname shares the `127.0.0.1` entry with `localhost`.
