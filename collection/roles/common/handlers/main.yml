@@ -5,7 +5,3 @@
 - name: reload sysctl
   ansible.builtin.command: sysctl --system
 
-- name: restart unattended-upgrades
-  ansible.builtin.service:
-    name: unattended-upgrades
-    state: restarted
