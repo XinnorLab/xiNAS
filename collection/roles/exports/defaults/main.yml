@@ -5,4 +5,4 @@
 exports:
   - path: /mnt/data
     clients: "*"
-    options: "rw,sync,insecure,no_root_squash,no_subtree_check,no_wdelay"
+    options: "rw,sync,insecure,no_root_squash,no_subtree_check,no_wdelay,fsid=0"
