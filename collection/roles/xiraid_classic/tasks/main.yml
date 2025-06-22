@@ -35,10 +35,10 @@
   tags: [xiraid, install]
 
 - name: Install xiRAID core package
-  ansible.builtin.apt:
-    name: "{{ xiraid_packages }}"
-    state: present
+  ansible.builtin.command:
+    cmd: "apt-get install --reinstall -y {{ xiraid_packages | join(' ') }}"
   register: xiraid_pkgs
+  changed_when: false
   tags: [xiraid, install]
 
 - name: Accept xiRAID EULA
