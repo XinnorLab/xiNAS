@@ -32,6 +32,28 @@ ask_input() {
     echo "$result"
 }
 
+# Present a choice between RDMA and TCP protocols using a menu when possible
+select_protocol() {
+    local default="${1:-RDMA}" choice status
+    if [ -n "$WHIPTAIL" ]; then
+        set +e
+        choice=$(whiptail --title "Select Protocol" --menu "Choose NFS protocol:" 15 60 2 \
+            RDMA "Remote DMA" \
+            TCP "TCP" 3>&1 1>&2 2>&3)
+        status=$?
+        set -e
+        if [ $status -ne 0 ]; then
+            choice="$default"
+        fi
+    else
+        PS3="Select protocol [1-2]: "
+        select choice in RDMA TCP; do
+            [ -n "$choice" ] && break
+        done
+    fi
+    echo "${choice:-$default}"
+}
+
 run_playbook() {
     local pb="$1" log
     log=$(mktemp)
@@ -52,7 +74,7 @@ main() {
         run_playbook playbooks/doca_ofed_install.yml
     fi
 
-    proto=$(ask_input "Protocol to use (RDMA or TCP)" "RDMA")
+    proto=$(select_protocol "RDMA")
     proto=${proto^^}
     server_ip=$(ask_input "Server IP address" "10.239.239.100")
     share=$(ask_input "NFS share" "/mnt/data")
