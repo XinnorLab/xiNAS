@@ -33,6 +33,9 @@ else
     cd "$REPO_DIR"
 fi
 
+# Ensure the hardware key utility is executable
+[ -x ./hwkey ] || chmod +x ./hwkey
+
 # In expert mode allow updating the repository from GitHub
 if [ "$EXPERT" -eq 1 ]; then
     if whiptail --yesno "Update xiNAS code from GitHub?" 8 60; then
