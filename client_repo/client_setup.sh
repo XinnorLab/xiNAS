@@ -38,8 +38,8 @@ select_protocol() {
     if [ -n "$WHIPTAIL" ]; then
         set +e
         choice=$(whiptail --title "Select Protocol" --menu "Choose NFS protocol:" 15 60 2 \
-            RDMA "Remote DMA" \
-            TCP "TCP" 3>&1 1>&2 2>&3)
+            RDMA "" \
+            TCP "" 3>&1 1>&2 2>&3)
         status=$?
         set -e
         if [ $status -ne 0 ]; then
