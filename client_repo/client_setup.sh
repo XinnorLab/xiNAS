@@ -54,6 +54,30 @@ select_protocol() {
     echo "${choice:-$default}"
 }
 
+# Present a choice for NFS security mode
+select_security() {
+    local default="${1:-sys}" choice status
+    if [ -n "$WHIPTAIL" ]; then
+        set +e
+        choice=$(whiptail --title "Select Security" --menu "Choose NFS security mode:" 15 60 4 \
+            sys "AUTH_SYS" \
+            krb5 "Kerberos" \
+            krb5i "Kerberos+Integrity" \
+            krb5p "Kerberos+Privacy" 3>&1 1>&2 2>&3)
+        status=$?
+        set -e
+        if [ $status -ne 0 ]; then
+            choice="$default"
+        fi
+    else
+        PS3="Select security mode [1-4]: "
+        select choice in sys krb5 krb5i krb5p; do
+            [ -n "$choice" ] && break
+        done
+    fi
+    echo "${choice:-$default}"
+}
+
 run_playbook() {
     local pb="$1" log
     log=$(mktemp)
@@ -79,6 +103,7 @@ main() {
     server_ip=$(ask_input "Server IP address" "10.239.239.100")
     share=$(ask_input "NFS share" "/mnt/data")
     mount_point=$(ask_input "Local mount point" "/mnt/nfs")
+    sec_mode=$(select_security "sys")
 
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update -y
@@ -91,9 +116,9 @@ main() {
 
     mkdir -p "$mount_point"
     if [[ "$proto" == "RDMA" ]]; then
-        opts="rdma,port=20049,nconnect=16,vers=4.2,sync"
+        opts="rdma,port=20049,nconnect=16,vers=4.2,sync,sec=$sec_mode"
     else
-        opts="nconnect=16,vers=4.2,sync"
+        opts="nconnect=16,vers=4.2,sync,sec=$sec_mode"
     fi
     if ! mountpoint -q "$mount_point"; then
         mount -t nfs -o "$opts" "$server_ip:$share" "$mount_point" || \

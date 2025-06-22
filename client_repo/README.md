@@ -13,7 +13,8 @@ Included files:
 - `ansible.cfg` – minimal Ansible configuration
 
 To use this directory as a separate repo, copy it to a new Git repository and run
-`client_setup.sh` with root privileges on the client machine:
+`client_setup.sh` with root privileges on the client machine. The script allows
+you to choose NFS security modes such as `sys` or Kerberos during setup:
 
 ```bash
 sudo ./client_setup.sh
