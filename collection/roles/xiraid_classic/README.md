@@ -4,7 +4,7 @@ kernel module. The role accepts the xiRAID EULA automatically using
 `xicli settings eula modify -s accepted`.
 
 ## Variables
-* `xiraid_version` – set to 4.2.0, 4.1.0 ...
+* `xiraid_version` – set to 4.3.0, 4.2.0 ...
 * `xiraid_repo_version` – version of `xiraid-repo_*.deb` package.
 * `xiraid_kernel` – kernel version used for the repo package (defaults to major.minor of the current kernel).
 * `xiraid_repo_pkg_url` – full URL to download the repository package; override for offline mirror.
@@ -20,5 +20,5 @@ kernel module. The role accepts the xiRAID EULA automatically using
 ```
 
 ### References
-* Xinnor xiRAID 4.2.0 Installation Guide (Ubuntu)
-* xiRAID Classic 4.1.0 PDF – package names and repo workflow
+* Xinnor xiRAID 4.3.0 Installation Guide (Ubuntu)
+* xiRAID Classic 4.2.0 PDF – package names and repo workflow
