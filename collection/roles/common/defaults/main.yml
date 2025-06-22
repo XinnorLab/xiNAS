@@ -12,6 +12,7 @@ common_packages:
   - vim
   - htop
   - chrony                # NTP daemon; change to ntp if preferred
+  - unattended-upgrades
   - ca-certificates
 chrony_service_name: chrony
 chrony_package_name: chrony
