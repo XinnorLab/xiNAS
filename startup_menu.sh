@@ -10,6 +10,15 @@ TMP_DIR="$(mktemp -d)"
 REPO_DIR="$(pwd)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+check_license() {
+    local license_file="/tmp/license"
+    if [ ! -f "$license_file" ]; then
+        whiptail --msgbox "License file $license_file not found. Please run 'Enter License' first." 10 60
+        return 1
+    fi
+    return 0
+}
+
 # Prompt user for license string and store it in /tmp/license
 # Show license prompt and save to /tmp/license
 enter_license() {
@@ -337,7 +346,7 @@ while true; do
         6) choose_preset ;;
         7) configure_git_repo ;;
         8)
-            if check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
+            if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
                 run_playbook "playbooks/site.yml"
                 chmod +x post_install_menu.sh
                 ./post_install_menu.sh
