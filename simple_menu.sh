@@ -14,6 +14,12 @@ check_license() {
     return 0
 }
 
+# Display package status using dpkg-query with a trailing newline
+pkg_status() {
+    local pkg="$1"
+    dpkg-query -W -f='${Status}\n' "$pkg" 2>/dev/null || true
+}
+
 enter_license() {
     local license_file="/tmp/license"
     [ -x ./hwkey ] || chmod +x ./hwkey
@@ -59,8 +65,10 @@ run_playbook() {
 
 # Check for installed xiRAID packages and optionally remove them
 check_remove_xiraid() {
-    local pkgs found
+    local pkgs found repo_status
     pkgs=$(dpkg -l 'xiraid*' 2>/dev/null | awk '/^ii/{print $2}')
+    repo_status=$(pkg_status xiraid-repo)
+    [ -n "$repo_status" ] && echo "xiraid-repo: $repo_status"
     if [ -z "$pkgs" ]; then
         return 0
     fi
