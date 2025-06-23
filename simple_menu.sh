@@ -3,6 +3,8 @@
 set -euo pipefail
 TMP_DIR="$(mktemp -d)"
 REPO_DIR="$(pwd)"
+# Path to whiptail if available
+WHIPTAIL=$(command -v whiptail || true)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 check_license() {
