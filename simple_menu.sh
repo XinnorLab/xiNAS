@@ -72,9 +72,14 @@ check_remove_xiraid() {
     [ -n "$repo_status" ] && echo "xiraid-repo: $repo_status"
     rm -f "$log"
     if [ -z "$pkgs" ]; then
-        sudo apt-get autoremove -y --allow-change-held-packages >"$log" 2>&1 || true
+        sudo apt-get autoremove -y -qq --allow-change-held-packages >"$log" 2>&1 || true
         if [ -s "$log" ]; then
-            whiptail --title "xiRAID Removal" --textbox "$log" 20 70
+            msg="Obsolete packages removed"
+            if [ -n "$WHIPTAIL" ]; then
+                whiptail --msgbox "$msg" 8 60
+            else
+                echo "$msg"
+            fi
             rm -f "$log"
         fi
         return 0
@@ -85,13 +90,19 @@ check_remove_xiraid() {
         return 1
     fi
 
-    sudo apt-get purge -y --allow-change-held-packages $pkgs >"$log" 2>&1 || true
-    sudo apt-get autoremove -y --allow-change-held-packages >>"$log" 2>&1 || true
-    sudo rm -rf /etc/xiraid >>"$log" 2>&1 || true
-    if [ -s "$log" ]; then
-        whiptail --title "xiRAID Removal" --textbox "$log" 20 70
-        rm -f "$log"
+    if sudo apt-get purge -y -qq --allow-change-held-packages $pkgs >"$log" 2>&1 \
+        && sudo apt-get autoremove -y -qq --allow-change-held-packages >>"$log" 2>&1 \
+        && sudo rm -rf /etc/xiraid >>"$log" 2>&1; then
+        msg="xiRAID packages removed successfully"
+    else
+        msg="Errors occurred during removal. See $log for details"
     fi
+    if [ -n "$WHIPTAIL" ]; then
+        whiptail --msgbox "$msg" 8 60
+    else
+        echo "$msg"
+    fi
+    rm -f "$log"
     return 0
 }
 
