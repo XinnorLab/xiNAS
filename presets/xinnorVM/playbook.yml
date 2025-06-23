@@ -4,6 +4,7 @@
   gather_facts: true
   vars:
     perf_disable_cpupower: true
+    perf_nr_requests: 0
   roles:
     - role: common
     - role: doca_ofed
