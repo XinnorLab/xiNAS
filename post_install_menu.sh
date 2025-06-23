@@ -12,44 +12,23 @@ DEFAULT_GIT_URL="https://github.com/XinnorLab/xiNAS"
 show_raid_info() {
     local out="$TMP_DIR/raid_info"
     local raw="$TMP_DIR/raid_raw"
+    local pool_raw="$TMP_DIR/pool_raw"
     if xicli raid show -f json >"$raw" 2>&1; then
-        if python3 - "$raw" <<'EOF' >"$out" 2>/dev/null; then
-import json, sys
-path = sys.argv[1]
-with open(path) as f:
-    data = json.load(f)
-arrays = []
-if isinstance(data, list):
-    arrays = data
-elif isinstance(data, dict):
-    for key in ("raid_groups", "arrays", "groups"):
-        if isinstance(data.get(key), list):
-            arrays = data[key]
-            break
-    if not arrays:
-        arrays = [dict(v, name=k) if isinstance(v, dict) else {"name": k}
-                  for k, v in data.items()]
-print("{:<15} {:>12} {:>10} {:<20} {:>5}".format(
-    'Name', 'Size', 'Strip', 'Status', 'Lvl'))
-for arr in arrays:
-    name = arr.get('name', '')
-    size = arr.get('size', '')
-    strip = (arr.get('strip_size') or arr.get('strip_size_kb') or '')
-    status = arr.get('state') or arr.get('status') or ''
-    if isinstance(status, list):
-        status = ' '.join(status)
-    level = arr.get('level', '')
-    print("{:<15} {:>12} {:>10} {:<20} {:>5}".format(
-        name, size, strip, status, level))
-EOF
+        if python3 -m json.tool "$raw" >"$out" 2>/dev/null; then
             :
         else
-            python3 -m json.tool "$raw" >"$out" 2>/dev/null || cat "$raw" >"$out"
+            cat "$raw" >"$out"
         fi
         {
             echo
             echo "Spare Pools:"
-            if ! xicli pool show; then
+            if xicli pool show -f json >"$pool_raw" 2>&1; then
+                if [ "$(tr -d '\n\r\t ' < "$pool_raw")" = "[]" ]; then
+                    echo "None"
+                else
+                    python3 -m json.tool "$pool_raw" 2>/dev/null || cat "$pool_raw"
+                fi
+            else
                 echo "Failed to run xicli pool show"
             fi
         } >>"$out"
