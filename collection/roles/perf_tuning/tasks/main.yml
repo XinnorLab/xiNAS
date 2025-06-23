@@ -63,12 +63,19 @@
 
 - name: Increase nr_requests queue depth to {{ perf_nr_requests }} on NVMe devices
   ansible.builtin.shell: |
-    for dev in /sys/block/nvme*/queue/nr_requests; do echo {{ perf_nr_requests }} > "$dev"; done
+    for dev in /sys/block/nvme*/queue/nr_requests; do
+      [ -e "$dev" ] || continue
+      echo {{ perf_nr_requests }} > "$dev"
+    done
+  when: perf_nr_requests | int > 0
   tags: [io]
 
 - name: Set read-ahead to {{ perf_read_ahead_kb }} KB for NVMe devices
   ansible.builtin.shell: |
-    for blk in /dev/nvme*n*; do /sbin/blockdev --setra {{ perf_read_ahead_kb }} "$blk"; done
+    for blk in /dev/nvme*n*; do
+      [ -e "$blk" ] || continue
+      /sbin/blockdev --setra {{ perf_read_ahead_kb }} "$blk"
+    done
   tags: [io]
 
 # ===== Sysctl network 400 Gbit =====
