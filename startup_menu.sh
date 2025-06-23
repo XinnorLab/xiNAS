@@ -213,7 +213,8 @@ run_playbook() {
 # Check for installed xiRAID packages and optionally remove them
 check_remove_xiraid() {
     local pkgs found repo_status
-    pkgs=$(dpkg -l 'xiraid*' 2>/dev/null | awk '/^ii/{print $2}')
+    pkgs=$(dpkg-query -W -f='${Package} ${Status}\n' 'xiraid*' 2>/dev/null | \
+        awk '$4=="installed"{print $1}')
     repo_status=$(pkg_status xiraid-repo)
     [ -n "$repo_status" ] && echo "xiraid-repo: $repo_status"
     if [ -z "$pkgs" ]; then
