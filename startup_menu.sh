@@ -212,12 +212,18 @@ run_playbook() {
 
 # Check for installed xiRAID packages and optionally remove them
 check_remove_xiraid() {
-    local pkgs found repo_status
+    local pkgs found repo_status log=/tmp/xiraid_remove.log
     pkgs=$(dpkg-query -W -f='${Package} ${Status}\n' 'xiraid*' 2>/dev/null | \
         awk '$4=="installed"{print $1}')
     repo_status=$(pkg_status xiraid-repo)
     [ -n "$repo_status" ] && echo "xiraid-repo: $repo_status"
+    rm -f "$log"
     if [ -z "$pkgs" ]; then
+        sudo apt-get autoremove -y >"$log" 2>&1 || true
+        if [ -s "$log" ]; then
+            whiptail --title "xiRAID Removal" --textbox "$log" 20 70
+            rm -f "$log"
+        fi
         return 0
     fi
 
@@ -226,12 +232,12 @@ check_remove_xiraid() {
         return 1
     fi
 
-    sudo apt-get purge -y $pkgs >/tmp/xiraid_remove.log 2>&1 || true
-    sudo apt-get autoremove -y >>/tmp/xiraid_remove.log 2>&1 || true
-    sudo rm -rf /etc/xiraid >>/tmp/xiraid_remove.log 2>&1 || true
-    if [ -s /tmp/xiraid_remove.log ]; then
-        whiptail --title "xiRAID Removal" --textbox /tmp/xiraid_remove.log 20 70
-        rm -f /tmp/xiraid_remove.log
+    sudo apt-get purge -y $pkgs >"$log" 2>&1 || true
+    sudo apt-get autoremove -y >>"$log" 2>&1 || true
+    sudo rm -rf /etc/xiraid >>"$log" 2>&1 || true
+    if [ -s "$log" ]; then
+        whiptail --title "xiRAID Removal" --textbox "$log" 20 70
+        rm -f "$log"
     fi
     return 0
 }
