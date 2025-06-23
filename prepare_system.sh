@@ -4,12 +4,14 @@ set -e
 usage() {
     echo "Usage: $0 [-e]" >&2
     echo "  -e  Expert mode with full startup menu" >&2
+    echo "  -h  Show this help message" >&2
 }
 
 EXPERT=0
-while getopts "e" opt; do
+while getopts "eh" opt; do
     case $opt in
         e) EXPERT=1 ;;
+        h) usage; exit 0 ;;
         *) usage; exit 1 ;;
     esac
 done

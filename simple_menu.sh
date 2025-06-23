@@ -109,20 +109,7 @@ check_remove_xiraid() {
 }
 
 confirm_playbook() {
-    local playbook="${1:-$REPO_DIR/playbooks/site.yml}"
-    local roles role_list desc_file desc
-    roles=$(grep -E '^\s*- role:' "$playbook" | awk '{print $3}')
-    role_list=""
-    for r in $roles; do
-        desc_file="$REPO_DIR/collection/roles/${r}/README.md"
-        if [ -f "$desc_file" ]; then
-            desc=$(awk '/^#/ {next} /^[[:space:]]*$/ {if(found) exit; next} {if(found){printf " %s", $0} else {printf "%s", $0; found=1}} END{print ""}' "$desc_file")
-        else
-            desc="No description available"
-        fi
-        role_list="${role_list}\n - ${r}: ${desc}"
-    done
-    whiptail --yesno --scrolltext "Run Ansible playbook to configure the system?\n\nThis will execute the following roles:${role_list}" 20 70
+    whiptail --yesno "Run Ansible playbook to configure the system?" 8 60
 }
 
 apply_preset() {
