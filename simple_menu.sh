@@ -59,24 +59,20 @@ run_playbook() {
 
 # Check for installed xiRAID packages and optionally remove them
 check_remove_xiraid() {
-    local pkgs=(xiraid-appimage xiraid-core xiraid-kmod xiraid-repo)
-    local found=()
-    for p in "${pkgs[@]}"; do
-        if dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "install ok installed"; then
-            found+=("$p")
-        fi
-    done
-    if [ ${#found[@]} -eq 0 ]; then
+    local pkgs found
+    pkgs=$(dpkg -l 'xiraid*' 2>/dev/null | awk '/^ii/{print $2}')
+    if [ -z "$pkgs" ]; then
         return 0
     fi
 
-    if ! whiptail --yesno "Found installed xiRAID packages: ${found[*]}\nRemove them before running Ansible?" 12 70; then
+    found=$(echo "$pkgs" | tr '\n' ' ')
+    if ! whiptail --yesno "Found installed xiRAID packages:\n${found}\nRemove them before running Ansible?" 12 70; then
         return 1
     fi
 
-    sudo apt-get remove -y xiraid-appimage xiraid-core xiraid-kmod >/tmp/xiraid_remove.log 2>&1 || true
-    sudo apt-get remove -y xiraid-repo >>/tmp/xiraid_remove.log 2>&1 || true
+    sudo apt-get purge -y $pkgs >/tmp/xiraid_remove.log 2>&1 || true
     sudo apt-get autoremove -y >>/tmp/xiraid_remove.log 2>&1 || true
+    sudo rm -rf /etc/xiraid >>/tmp/xiraid_remove.log 2>&1 || true
     if [ -s /tmp/xiraid_remove.log ]; then
         whiptail --title "xiRAID Removal" --textbox /tmp/xiraid_remove.log 20 70
         rm -f /tmp/xiraid_remove.log
