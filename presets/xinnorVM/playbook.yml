@@ -2,6 +2,8 @@
 - name: Full storage-node configuration (common → OFED → xiRAID → NFS → perf)
   hosts: storage_nodes
   gather_facts: true
+  vars:
+    perf_disable_cpupower: true
   roles:
     - role: common
     - role: doca_ofed

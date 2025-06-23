@@ -32,7 +32,9 @@
 # ===== CPU governor & irqbalance =====
 - name: Set CPU frequency governor to {{ perf_cpu_governor }}
   ansible.builtin.command: "cpupower frequency-set -g {{ perf_cpu_governor }}"
-  when: ansible_facts['architecture'] == 'x86_64'
+  when:
+    - ansible_facts['architecture'] == 'x86_64'
+    - not perf_disable_cpupower
   tags: [cpu]
 
 - name: Stop and disable irqbalance if requested

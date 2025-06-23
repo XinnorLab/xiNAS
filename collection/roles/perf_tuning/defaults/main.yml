@@ -7,6 +7,7 @@
 perf_disable_mitigations: true         # add Spectre/Meltdown mitigations=off, etc.
 perf_nvme_poll_queues: 4               # echo "options nvme poll_queues=4"
 perf_stop_irqbalance: false            # stop irqbalance
+perf_disable_cpupower: false          # skip cpupower governor adjustment
 perf_cpu_governor: "performance"       # cpupower governor
 perf_disable_thp: true                 # transparent hugepages=never
 perf_disable_ksm: true
