@@ -25,11 +25,20 @@
     mode: '0755'
   tags: [raid_fs, fs]
 
+- name: Compute mount options for {{ item.label }}
+  ansible.builtin.set_fact:
+    mount_device: >-
+      {{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
+    mount_opts_with_wanted: >-
+      {{ item.mount_opts | default('') }}{{ ',' if item.mount_opts else '' }}
+      x-systemd.wanted-by={{ mount_device }}
+  tags: [raid_fs, fs]
+
 - name: Mount filesystem {{ item.label }} (and add to fstab)
   ansible.builtin.mount:
     path: "{{ item.mountpoint }}"
     src: "LABEL={{ item.label }}"
     fstype: xfs
-    opts: "{{ item.mount_opts }}"
+    opts: "{{ mount_opts_with_wanted }}"
     state: mounted
   tags: [raid_fs, fs]
