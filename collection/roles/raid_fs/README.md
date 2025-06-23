@@ -10,6 +10,11 @@ Creates xiRAID arrays and tuned XFS filesystems as per Xinnor NFS RDMA blog.
 This role requires the **mdadm** package to be installed so that any
 leftover Linux MD arrays on xiRAID devices can be stopped and wiped.
 
+When mounting filesystems the role automatically appends an
+`x-systemd.wanted-by` option referencing the underlying block device so
+that the mount is handled by `systemd` at boot time. This follows the
+[xiRAID documentation on file system mounting](https://xinnor.io/docs/xiRAID-4.3.0/E/en/AG/2/file_system_mounting_examples.html).
+
 Array creation is idempotent. If a RAID with the same name already
 exists in the xiRAID configuration file, the role will skip creation
 without failing.
