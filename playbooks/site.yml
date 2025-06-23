@@ -10,5 +10,5 @@
     - role: raid_fs
     - role: exports       # manage /etc/exports
     - role: nfs_server    # configure kernel NFS server
-    - role: xiraid_exporter    # expose xiRAID metrics
+    #- role: xiraid_exporter    # expose xiRAID metrics (temporarily disabled)
     - role: perf_tuning
