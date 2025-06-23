@@ -48,6 +48,33 @@ run_playbook() {
     return $?
 }
 
+# Check for installed xiRAID packages and optionally remove them
+check_remove_xiraid() {
+    local pkgs=(xiraid-appimage xiraid-core xiraid-kmod xiraid-repo)
+    local found=()
+    for p in "${pkgs[@]}"; do
+        if dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "install ok installed"; then
+            found+=("$p")
+        fi
+    done
+    if [ ${#found[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    if ! whiptail --yesno "Found installed xiRAID packages: ${found[*]}\nRemove them before running Ansible?" 12 70; then
+        return 1
+    fi
+
+    sudo apt-get remove -y xiraid-appimage xiraid-core xiraid-kmod >/tmp/xiraid_remove.log 2>&1 || true
+    sudo apt-get remove -y xiraid-repo >>/tmp/xiraid_remove.log 2>&1 || true
+    sudo apt-get autoremove -y >>/tmp/xiraid_remove.log 2>&1 || true
+    if [ -s /tmp/xiraid_remove.log ]; then
+        whiptail --title "xiRAID Removal" --textbox /tmp/xiraid_remove.log 20 70
+        rm -f /tmp/xiraid_remove.log
+    fi
+    return 0
+}
+
 confirm_playbook() {
     local playbook="${1:-$REPO_DIR/playbooks/site.yml}"
     local roles role_list desc_file desc
@@ -120,7 +147,7 @@ while true; do
         1) enter_license ;;
         2) choose_preset ;;
         3)
-            if confirm_playbook "playbooks/site.yml"; then
+            if check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
                 run_playbook "playbooks/site.yml" "inventories/lab.ini"
                 chmod +x post_install_menu.sh
                 ./post_install_menu.sh
