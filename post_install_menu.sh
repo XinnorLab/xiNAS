@@ -29,8 +29,8 @@ elif isinstance(data, dict):
     if not arrays:
         arrays = [dict(v, name=k) if isinstance(v, dict) else {"name": k}
                   for k, v in data.items()]
-print("{:<15} {:>12} {:>10} {:<20} {:>5} {:>7}".format(
-    'Name', 'Size', 'Strip', 'Status', 'Lvl', 'Devs'))
+print("{:<15} {:>12} {:>10} {:<20} {:>5}".format(
+    'Name', 'Size', 'Strip', 'Status', 'Lvl'))
 for arr in arrays:
     name = arr.get('name', '')
     size = arr.get('size', '')
@@ -39,9 +39,8 @@ for arr in arrays:
     if isinstance(status, list):
         status = ' '.join(status)
     level = arr.get('level', '')
-    num = len(arr.get('devices', []))
-    print("{:<15} {:>12} {:>10} {:<20} {:>5} {:>7}".format(
-        name, size, strip, status, level, num))
+    print("{:<15} {:>12} {:>10} {:<20} {:>5}".format(
+        name, size, strip, status, level))
 EOF
             :
         else
