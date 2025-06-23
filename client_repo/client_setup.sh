@@ -74,12 +74,6 @@ main() {
         run_playbook playbooks/doca_ofed_install.yml
     fi
 
-    proto=$(select_protocol "RDMA")
-    proto=${proto^^}
-    server_ip=$(ask_input "Server IP address" "10.239.239.100")
-    share=$(ask_input "NFS share" "/mnt/data")
-    mount_point=$(ask_input "Local mount point" "/mnt/nfs")
-
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update -y
         apt-get install -y nfs-common
@@ -89,27 +83,42 @@ main() {
 
     echo "options nfs max_session_slots=180" > /etc/modprobe.d/nfsclient.conf
 
-    mkdir -p "$mount_point"
-    if [[ "$proto" == "RDMA" ]]; then
-        opts="rdma,port=20049,nconnect=16,vers=4.2,sync"
-    else
-        opts="nconnect=16,vers=4.2,sync"
-    fi
-    if ! mountpoint -q "$mount_point"; then
-        mount -t nfs -o "$opts" "$server_ip:$share" "$mount_point" || \
-            echo "Warning: failed to mount $server_ip:$share" >&2
-    fi
+    while true; do
+        proto=$(select_protocol "RDMA")
+        proto=${proto^^}
+        server_ip=$(ask_input "Server IP address" "10.239.239.100")
+        share=$(ask_input "NFS share" "/mnt/data")
+        mount_point=$(ask_input "Local mount point" "/mnt/nfs")
 
-    if mountpoint -q "$mount_point"; then
+        mkdir -p "$mount_point"
+        if [[ "$proto" == "RDMA" ]]; then
+            opts="rdma,port=20049,nconnect=16,vers=4.2,sync"
+        else
+            opts="nconnect=16,vers=4.2,sync"
+        fi
+
+        if ! mountpoint -q "$mount_point"; then
+            if ! mount -t nfs -o "$opts" "$server_ip:$share" "$mount_point"; then
+                msg="Failed to mount $server_ip:$share"
+                if [ -n "$WHIPTAIL" ]; then
+                    whiptail --msgbox "$msg" 8 60
+                else
+                    echo "Warning: $msg" >&2
+                fi
+                continue
+            fi
+        fi
+
         mount_opts=$(awk -v mp="$mount_point" '$2==mp {print $4}' /proc/mounts)
-    fi
-    mount_opts=${mount_opts:-$opts}
+        mount_opts=${mount_opts:-$opts}
 
-    if ! grep -q "^$server_ip:$share" /etc/fstab; then
-        echo "$server_ip:$share $mount_point nfs $mount_opts 0 0" >> /etc/fstab
-    fi
+        if ! grep -q "^$server_ip:$share" /etc/fstab; then
+            echo "$server_ip:$share $mount_point nfs $mount_opts 0 0" >> /etc/fstab
+        fi
 
-    echo "Configuration complete. Reboot recommended to apply module options." >&2
+        echo "Configuration complete. Reboot recommended to apply module options." >&2
+        break
+    done
 }
 
 main "$@"
