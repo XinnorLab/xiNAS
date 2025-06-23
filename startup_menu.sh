@@ -6,6 +6,8 @@
 
 set -euo pipefail
 TMP_DIR="$(mktemp -d)"
+# Path to whiptail if available
+WHIPTAIL=$(command -v whiptail || true)
 # Directory of the repository currently being configured
 REPO_DIR="$(pwd)"
 trap 'rm -rf "$TMP_DIR"' EXIT
