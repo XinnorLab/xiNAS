@@ -31,7 +31,7 @@
       {{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
     mount_opts_with_wanted: >-
       {{ item.mount_opts | default('') }}{{ ',' if item.mount_opts else '' }}
-      x-systemd.wanted-by={{ mount_device }}
+      x-systemd.wanted-by={{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
   tags: [raid_fs, fs]
 
 - name: Mount filesystem {{ item.label }} (and add to fstab)
