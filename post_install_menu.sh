@@ -14,10 +14,19 @@ show_raid_info() {
     local raw="$TMP_DIR/raid_raw"
     local pool_raw="$TMP_DIR/pool_raw"
     if xicli raid show -f json >"$raw" 2>&1; then
-        if python3 -m json.tool "$raw" >"$out" 2>/dev/null; then
-            :
+        if command -v jq >/dev/null && jq -e . "$raw" >/dev/null 2>&1; then
+            jq -r '.[] |
+                "RAID Name: \(.name)\n" +
+                "RAID Level: \(.level)\n" +
+                "Stripe Size: \(.strip_size_kb) KB\n" +
+                "Volume: /dev/xi_\(.name)\n" +
+                ""' "$raw" >"$out"
         else
-            cat "$raw" >"$out"
+            if python3 -m json.tool "$raw" >"$out" 2>/dev/null; then
+                :
+            else
+                cat "$raw" >"$out"
+            fi
         fi
         {
             echo
