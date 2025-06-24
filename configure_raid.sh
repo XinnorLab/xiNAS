@@ -88,11 +88,15 @@ while true; do
     raid6_devices=$(get_devices 6)
     raid1_devices=$(get_devices 1)
     spare_devices=$(get_spare_devices)
+    set +e
     menu=$(whiptail --title "RAID Configuration" --menu "Select array to edit:" 15 70 6 \
         1 "RAID6: ${raid6_devices:-none}" \
         2 "RAID1: ${raid1_devices:-none}" \
         3 "Spare: ${spare_devices:-none}" \
         4 "Back" 3>&1 1>&2 2>&3)
+    status=$?
+    set -e
+    [ $status -ne 0 ] && break
     case "$menu" in
         1) edit_devices 6 ;;
         2) edit_devices 1 ;;
