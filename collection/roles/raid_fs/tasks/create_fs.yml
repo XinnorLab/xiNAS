@@ -35,9 +35,12 @@
     mount_device: >-
       {{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
     mount_opts: "{{ item.mount_opts | default('') }}"
+  tags: [raid_fs, fs]
+
+- name: Build mount options with systemd dependency for {{ item.label }}
+  ansible.builtin.set_fact:
     mount_opts_with_wanted: >-
-      {{ mount_opts }}{{ ',' if mount_opts else '' }}
-      x-systemd.wanted-by={{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
+      {{ mount_opts }}{{ ',' if mount_opts else '' }}x-systemd.wanted-by={{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
   tags: [raid_fs, fs]
 
 - name: Mount filesystem {{ item.label }}
