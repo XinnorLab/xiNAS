@@ -18,6 +18,11 @@
   when: blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
   tags: [raid_fs, fs, mkfs]
 
+- name: Wait for block devices to settle
+  ansible.builtin.command: udevadm settle
+  changed_when: false
+  tags: [raid_fs, fs, mkfs]
+
 - name: Create mountpoint {{ item.mountpoint }}
   ansible.builtin.file:
     path: "{{ item.mountpoint }}"
