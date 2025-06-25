@@ -45,7 +45,8 @@ edit_spare_pool() {
     set -e
     [ $status -ne 0 ] && return
     tmp=$(mktemp)
-    NEW_LIST="$new" yq '.xiraid_spare_pools[0].devices = (env(NEW_LIST) | split(" "))' "$vars_file" > "$tmp"
+    # Ensure the spare pool has a name and update its device list
+    NEW_LIST="$new" yq '.xiraid_spare_pools[0].name //= "sp1" | .xiraid_spare_pools[0].devices = (env(NEW_LIST) | split(" "))' "$vars_file" > "$tmp"
     backup_if_changed "$vars_file" "$tmp"
     mv "$tmp" "$vars_file"
 }
