@@ -34,6 +34,8 @@
   ansible.builtin.set_fact:
     block_device_unit: >-
       dev-{{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
+    log_device_unit: >-
+      dev-{{ item.log_device | regex_replace('^/','') | replace('/', '-') }}.device
     unit_opts: >-
       {{ 'defaults' + (',' + item.mount_opts if (item.mount_opts | default('') | length > 0) else '') }}
     mount_unit: >-
