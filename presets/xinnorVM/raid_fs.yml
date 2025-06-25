@@ -9,7 +9,7 @@ xiraid_license_path: "/tmp/license"
 xiraid_force_metadata: true
 
 # When true, always format XFS filesystems even if the label already exists
-xfs_force_mkfs: false
+xfs_force_mkfs: true
 
 # Default RAID arrays and filesystem definitions used by the xiNAS example
 # deployment. Modify these values directly rather than using group variables.
