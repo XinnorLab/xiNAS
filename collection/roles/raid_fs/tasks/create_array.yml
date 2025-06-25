@@ -1,10 +1,12 @@
 - name: Build device list string
   ansible.builtin.set_fact:
     _devlist: "{{ item.devices | join(' ') }}"
+  tags: [raid_fs, raid]
 
 - name: Calculate data disk count (for RAID5/6 stripe-width)
   ansible.builtin.set_fact:
     _sw: "{{ (item.devices | length) - (item.parity_disks | default(0)) }}"
+  tags: [raid_fs, raid]
 
 - name: Create array {{ item.name }}
   ansible.builtin.command: >-
