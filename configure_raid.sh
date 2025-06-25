@@ -76,14 +76,20 @@ show_nvme_drives() {
 
 edit_devices() {
     local level="$1"
+    local label
+    case "$level" in
+        6) label="DATA" ;;
+        1) label="LOG" ;;
+        *) label="RAID${level}" ;;
+    esac
     local current new tmp status
     current="$(get_devices "$level")"
     if [ -z "$current" ]; then
-        whiptail --msgbox "No RAID${level} array defined" 8 60
+        whiptail --msgbox "No ${label} array defined" 8 60
         return
     fi
     set +e
-    new=$(whiptail --inputbox "Space-separated devices for RAID${level}" 10 70 "$current" 3>&1 1>&2 2>&3)
+    new=$(whiptail --inputbox "Space-separated devices for ${label}" 10 70 "$current" 3>&1 1>&2 2>&3)
     status=$?
     set -e
     [ $status -ne 0 ] && return
@@ -100,8 +106,8 @@ while true; do
     spare_devices=$(get_spare_devices)
     set +e
     menu=$(whiptail --title "RAID Configuration" --menu "Select array to edit:" 15 70 6 \
-        1 "RAID6: ${raid6_devices:-none}" \
-        2 "RAID1: ${raid1_devices:-none}" \
+        1 "DATA: ${raid6_devices:-none}" \
+        2 "LOG: ${raid1_devices:-none}" \
         3 "Spare: ${spare_devices:-none}" \
         4 "Back" 3>&1 1>&2 2>&3)
     status=$?

@@ -16,7 +16,7 @@ xiraid_spare_pools:
       - /dev/sdq
 
 xiraid_arrays:
-  - name: media6
+  - name: data
     level: 6
     strip_size_kb: 128
     spare_pool: sp1
@@ -35,7 +35,7 @@ xiraid_arrays:
       - /dev/sdp
     parity_disks: 2
 
-  - name: media1
+  - name: log
     level: 1
     strip_size_kb: 16
     devices:
@@ -44,11 +44,11 @@ xiraid_arrays:
 
 xfs_filesystems:
   - label: nfsdata
-    data_device: "/dev/xi_media6"
-    log_device: "/dev/xi_media1"
+    data_device: "/dev/xi_data"
+    log_device: "/dev/xi_log"
     su_kb: 128
     sw: 8
     log_size: 1G
     sector_size: 4k
     mountpoint: /mnt/data
-    mount_opts: "logdev=/dev/xi_media1,noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k"
+    mount_opts: "logdev=/dev/xi_log,noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k"
