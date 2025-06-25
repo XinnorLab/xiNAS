@@ -4,7 +4,7 @@
   changed_when: false
   tags: [raid_fs, raid]
 
-- name: Build list of xiRAID devices
+- name: Build list of xiRAID device paths
   ansible.builtin.set_fact:
     xiraid_device_paths: >-
       {{
@@ -12,6 +12,10 @@
         (xiraid_spare_pools | default([]) | map(attribute='devices') | flatten | list))
         | unique | list
       }}
+  tags: [raid_fs, raid]
+
+- name: Build list of xiRAID device basenames
+  ansible.builtin.set_fact:
     xiraid_device_basenames: "{{ xiraid_device_paths | map('basename') | list }}"
   tags: [raid_fs, raid]
 
