@@ -137,7 +137,7 @@ configure_nfs_shares() {
         5 "Edit NFS Exports" \
         6 "Presets" \
         7 "Git Repository Configuration" \
-        8 "Continue" \
+        8 "Install" \
         9 "Exit" \
         3>&1 1>&2 2>&3)
         case "$choice" in
@@ -358,7 +358,7 @@ while true; do
         5 "Edit NFS Exports" \
         6 "Presets" \
         7 "Git Repository Configuration" \
-        8 "Continue" \
+        8 "Install" \
         9 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
