@@ -21,6 +21,15 @@ for cmd in yq whiptail lsblk; do
     fi
 done
 
+# Ensure yq v4 is used rather than the older v3 release packaged by some
+# distributions. When a v3 binary appears earlier in PATH it triggers errors
+# such as "'//' expects 2 args but there is 1" during YAML processing.
+if ! yq --version 2>/dev/null | grep -q 'version v4'; then
+    echo "Error: yq version 4.x is required. Run prepare_system.sh or adjust your PATH to use /usr/local/bin/yq" >&2
+    command -v yq >/dev/null 2>&1 && echo "Current yq path: $(command -v yq)" >&2
+    exit 1
+fi
+
 if [ ! -f "$vars_file" ]; then
     echo "Error: $vars_file not found" >&2
     exit 1
@@ -46,7 +55,7 @@ edit_spare_pool() {
     [ $status -ne 0 ] && return
     tmp=$(mktemp)
     # Ensure the spare pool has a name and update its device list
-    NEW_LIST="$new" yq '.xiraid_spare_pools[0].name //= "sp1" | .xiraid_spare_pools[0].devices = (env(NEW_LIST) | split(" "))' "$vars_file" > "$tmp"
+    NEW_LIST="$new" yq eval '.xiraid_spare_pools |= [(.[0] // {"name":"sp1"}) | .devices = (env(NEW_LIST) | split(" "))]' "$vars_file" > "$tmp"
     backup_if_changed "$vars_file" "$tmp"
     mv "$tmp" "$vars_file"
 }
