@@ -118,6 +118,20 @@
   when: item.name not in ((existing_arrays | default([], true) | json_query('[].name')) | default([], true))
   tags: [raid_fs, raid]
 
+- name: Attach spare pools to existing arrays
+  ansible.builtin.command: >-
+    xicli raid modify --name {{ item.name }} -sp {{ item.spare_pool }}
+  register: raid_mod
+  changed_when: raid_mod.rc == 0
+  failed_when:
+    - raid_mod.rc != 0
+    - raid_mod.stderr is not search('already')
+  loop: "{{ xiraid_arrays }}"
+  loop_control:
+    loop_var: item
+  when: item.spare_pool is defined
+  tags: [raid_fs, raid]
+
 # ----------------------- Filesystem section -------------------
 - name: Ensure XFS utils present
   ansible.builtin.apt:
