@@ -20,7 +20,7 @@
   tags: [raid_fs, raid]
 
 - name: Clean xiRAID drives
-  ansible.builtin.command: "xicli drive clean {{ item }}"
+  ansible.builtin.command: "xicli drive clean -d {{ item }}"
   loop: "{{ xiraid_device_paths }}"
   changed_when: false
   tags: [raid_fs, raid, cleanup]

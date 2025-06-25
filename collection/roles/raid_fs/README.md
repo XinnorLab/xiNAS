@@ -11,8 +11,8 @@ This role requires the **mdadm** package to be installed so that any
 leftover Linux MD arrays on xiRAID devices can be stopped and wiped.
 
 All drives referenced by the array and spare pool definitions are
-cleaned using `xicli drive clean` before new pools or arrays are
-created.
+cleaned using `xicli drive clean -d <device>` (or `--drives`) before
+new pools or arrays are created.
 
 When mounting filesystems the role automatically appends an
 `x-systemd.wanted-by` option referencing the underlying block device so
