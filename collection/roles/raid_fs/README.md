@@ -10,6 +10,10 @@ Creates xiRAID arrays and tuned XFS filesystems as per Xinnor NFS RDMA blog.
 This role requires the **mdadm** package to be installed so that any
 leftover Linux MD arrays on xiRAID devices can be stopped and wiped.
 
+All drives referenced by the array and spare pool definitions are
+cleaned using `xicli drive clean` before new pools or arrays are
+created.
+
 When mounting filesystems the role automatically appends an
 `x-systemd.wanted-by` option referencing the underlying block device so
 that the mount is handled by `systemd` at boot time. This follows the
