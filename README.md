@@ -4,7 +4,7 @@ This repository contains scripts and Ansible playbooks used to provision xiNAS n
 
 ## Getting started
 
-1. Run `prepare_system.sh` on the target host (use the `-e` option for expert mode). This installs required packages including `yq` version 4, `whiptail`, and Ansible, then clones the repository.
+1. Run `prepare_system.sh` on the target host (use the `-e` option for expert mode). Use `-u` to update the repository without launching any menus. This installs required packages including `yq` version 4, `whiptail`, and Ansible, then clones the repository.
    The script immediately launches a simplified start menu in default mode to enter the license and choose a preset. Use `-e` to access the full interactive menu with additional options such as updating the repository or saving the current configuration as a new preset.
 2. Execute `startup_menu.sh` separately if you need the complete configuration menu outside of the expert mode. Any presets you create in expert mode will also be available here and in the simplified menu. It also allows setting a custom hostname.
 3. To apply the configuration, choose **Continue** from the menu.
