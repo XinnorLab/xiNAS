@@ -1,6 +1,7 @@
 [Unit]
-Description=Mount filesystem on xiRAID Classic
-DefaultDependencies=no
+Description=xiRAID Classic {{ item.mountpoint | regex_replace('^.*/', '') }}
+Requires={{ block_device_unit }} {{ log_device_unit }}
+After={{ block_device_unit }} {{ log_device_unit }}
 Before=umount.target
 Conflicts=umount.target
 
@@ -11,5 +12,4 @@ Options={{ unit_opts }}
 Type=xfs
 
 [Install]
-WantedBy=multi-user.target
-WantedBy={{ block_device_unit }}
+WantedBy=local-fs.target
