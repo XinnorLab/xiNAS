@@ -11,6 +11,7 @@ kernel module. The role accepts the xiRAID EULA automatically using
 * `xiraid_packages` – list of deb packages (defaults to `xiraid-core`).
 * `xiraid_auto_reboot` – reboot after install.
 * `xiraid_accept_eula` – automatically accept the xiRAID EULA (default: `true`).
+* Existing repository packages in `/tmp` are removed before download to ensure updates are installed.
 
 ## Example play snippet
 ```yaml

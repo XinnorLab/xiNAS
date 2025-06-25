@@ -11,6 +11,11 @@
     state: present
   tags: [xiraid, deps]
 
+- name: Remove any existing xiRAID repo package before download
+  ansible.builtin.file:
+    path: "/tmp/{{ xiraid_repo_pkg }}"
+    state: absent
+  tags: [xiraid, cleanup]
 
 - name: Download xiRAID repo package
   ansible.builtin.get_url:
