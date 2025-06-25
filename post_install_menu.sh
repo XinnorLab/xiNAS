@@ -18,7 +18,7 @@ show_raid_info() {
             jq -r '.[] |
                 "RAID Name: \(.name)\n" +
                 "RAID Level: \(.level)\n" +
-                "Strip Size: \(.strip_size_kb) KB\n" +
+                "Strip Size: \(.strip_size_kb // .strip_size) KB\n" +
                 "Spare Pool: \(.spare_pool // "-" )\n" +
                 "Size: \(.size // "-" )\n" +
                 "Volume: /dev/xi_\(.name)\n" +
