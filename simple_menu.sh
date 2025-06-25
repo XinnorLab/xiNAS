@@ -160,7 +160,7 @@ while true; do
     choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 15 70 6 \
         1 "Enter License" \
         2 "Presets" \
-        3 "Continue" \
+        3 "Install" \
         4 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
