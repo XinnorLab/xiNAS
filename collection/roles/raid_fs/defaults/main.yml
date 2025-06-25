@@ -8,6 +8,9 @@ xiraid_license_path: "/tmp/license"
 # Set to `false` if metadata should not be overwritten
 xiraid_force_metadata: true
 
+# When true, always format XFS filesystems even if the label already exists
+xfs_force_mkfs: false
+
 # Spare pool definitions. A single pool example:
 # xiraid_spare_pools:
 #   - name: sp1
