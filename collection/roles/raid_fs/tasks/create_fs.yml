@@ -33,9 +33,9 @@
 - name: Compute mount unit parameters for {{ item.label }}
   ansible.builtin.set_fact:
     block_device_unit: >-
-      dev-{{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
+      {{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
     log_device_unit: >-
-      dev-{{ item.log_device | regex_replace('^/','') | replace('/', '-') }}.device
+      {{ item.log_device | regex_replace('^/','') | replace('/', '-') }}.device
     unit_opts: >-
       {{ 'defaults' + (',' + item.mount_opts if (item.mount_opts | default('') | length > 0) else '') }}
     mount_unit: >-
