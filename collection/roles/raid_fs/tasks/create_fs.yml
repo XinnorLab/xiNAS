@@ -50,6 +50,9 @@
   notify: reload systemd
   tags: [raid_fs, fs]
 
+- name: Reload systemd before enabling mount unit
+  meta: flush_handlers
+
 - name: Enable and start mount unit for {{ item.label }}
   ansible.builtin.systemd:
     name: "{{ mount_unit }}"
