@@ -2,25 +2,31 @@
 set -e
 
 usage() {
-    echo "Usage: $0 [-e]" >&2
+    echo "Usage: $0 [-e] [-u]" >&2
     echo "  -e  Expert mode with full startup menu" >&2
+    echo "  -u  Update repository and exit" >&2
     echo "  -h  Show this help message" >&2
 }
 
 EXPERT=0
-while getopts "eh" opt; do
+UPDATE_ONLY=0
+while getopts "ehu" opt; do
     case $opt in
         e) EXPERT=1 ;;
+        u) UPDATE_ONLY=1 ;;
         h) usage; exit 0 ;;
         *) usage; exit 1 ;;
     esac
 done
-# Install required packages
-sudo apt-get update -y
-sudo apt-get install -y ansible git whiptail dialog wget
-# Install yq v4 for YAML processing used by configuration scripts
-sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
-sudo chmod +x /usr/local/bin/yq
+
+# Install required packages unless only updating the repository
+if [ "$UPDATE_ONLY" -eq 0 ]; then
+    sudo apt-get update -y
+    sudo apt-get install -y ansible git whiptail dialog wget
+    # Install yq v4 for YAML processing used by configuration scripts
+    sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
+    sudo chmod +x /usr/local/bin/yq
+fi
 
 REPO_URL="https://github.com/XinnorLab/xiNAS/"
 REPO_DIR="xiNAS"
@@ -33,6 +39,13 @@ else
         git clone "$REPO_URL" "$REPO_DIR"
     fi
     cd "$REPO_DIR"
+fi
+
+# If only updating the repository, perform the update and exit
+if [ "$UPDATE_ONLY" -eq 1 ]; then
+    git reset --hard
+    git pull origin main
+    exit 0
 fi
 
 # Ensure the hardware key utility is executable
