@@ -15,7 +15,7 @@
     mkfs.xfs -f -L {{ item.label }} -d su={{ item.su_kb }}k,sw={{ item.sw }}
     -l logdev={{ item.log_device }},size={{ item.log_size }}
     -s size={{ item.sector_size }} {{ item.data_device }}
-  when: blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+  when: xfs_force_mkfs | bool or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
   tags: [raid_fs, fs, mkfs]
 
 - name: Wait for block devices to settle
