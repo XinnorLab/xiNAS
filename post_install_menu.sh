@@ -37,7 +37,18 @@ show_raid_info() {
                 if [ "$(tr -d '\n\r\t ' < "$pool_raw")" = "[]" ]; then
                     echo "None"
                 else
-                    python3 -m json.tool "$pool_raw" 2>/dev/null || cat "$pool_raw"
+                    if command -v jq >/dev/null && jq -e . "$pool_raw" >/dev/null 2>&1; then
+                        jq -r 'to_entries[] | "\(.key): \(.value.state[0])\n  devices: \(.value.devices | map(.[1]) | join(" "))"' "$pool_raw"
+                    else
+                        python3 - "$pool_raw" <<'EOF'
+import json,sys
+data=json.load(open(sys.argv[1]))
+for name,info in data.items():
+    state=info.get("state",["-"])[0]
+    devices=" ".join(d[1] for d in info.get("devices",[]))
+    print(f"{name}: {state}\n  devices: {devices}")
+EOF
+                    fi
                 fi
             else
                 echo "Failed to run xicli pool show"
