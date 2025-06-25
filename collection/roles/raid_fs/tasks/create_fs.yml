@@ -30,33 +30,27 @@
     mode: '0755'
   tags: [raid_fs, fs]
 
-- name: Compute mount options for {{ item.label }}
+- name: Compute mount unit parameters for {{ item.label }}
   ansible.builtin.set_fact:
-    mount_device: >-
-      {{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
-    mount_opts: "{{ item.mount_opts | default('') }}"
+    block_device_unit: >-
+      dev-{{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
+    unit_opts: >-
+      {{ 'defaults' + (',' + item.mount_opts if (item.mount_opts | default('') | length > 0) else '') }}
+    mount_unit: >-
+      {{ item.mountpoint | regex_replace('^/','') | replace('/', '-') }}.mount
   tags: [raid_fs, fs]
 
-- name: Build mount options with systemd dependency for {{ item.label }}
-  ansible.builtin.set_fact:
-    mount_opts_with_wanted: >-
-      {{ mount_opts }}{{ ',' if mount_opts else '' }}x-systemd.wanted-by={{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
+- name: Deploy systemd mount unit for {{ item.label }}
+  ansible.builtin.template:
+    src: mount.unit.j2
+    dest: "/etc/systemd/system/{{ mount_unit }}"
+    mode: '0644'
+  notify: reload systemd
   tags: [raid_fs, fs]
 
-- name: Mount filesystem {{ item.label }}
-  ansible.builtin.mount:
-    path: "{{ item.mountpoint }}"
-    src: "LABEL={{ item.label }}"
-    fstype: xfs
-    opts: "{{ mount_opts }}"
-    state: mounted
-  tags: [raid_fs, fs]
-
-- name: Ensure fstab entry for {{ item.label }} with systemd dependency
-  ansible.builtin.mount:
-    path: "{{ item.mountpoint }}"
-    src: "LABEL={{ item.label }}"
-    fstype: xfs
-    opts: "{{ mount_opts_with_wanted }}"
-    state: present
+- name: Enable and start mount unit for {{ item.label }}
+  ansible.builtin.systemd:
+    name: "{{ mount_unit }}"
+    enabled: true
+    state: started
   tags: [raid_fs, fs]

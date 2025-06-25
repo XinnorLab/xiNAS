@@ -1,0 +1,15 @@
+[Unit]
+Description=Mount filesystem on xiRAID Classic
+DefaultDependencies=no
+Before=umount.target
+Conflicts=umount.target
+
+[Mount]
+What={{ item.data_device }}
+Where={{ item.mountpoint }}
+Options={{ unit_opts }}
+Type=xfs
+
+[Install]
+WantedBy=multi-user.target
+WantedBy={{ block_device_unit }}
