@@ -87,7 +87,7 @@ main() {
         proto=$(select_protocol "RDMA")
         proto=${proto^^}
         server_ip=$(ask_input "Server IP address" "10.239.239.100")
-        share=$(ask_input "NFS share" "/mnt/data")
+        share=$(ask_input "NFS share" "/")
         mount_point=$(ask_input "Local mount point" "/mnt/nfs")
 
         mkdir -p "$mount_point"
