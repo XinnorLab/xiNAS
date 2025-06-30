@@ -86,7 +86,24 @@ main() {
     while true; do
         proto=$(select_protocol "RDMA")
         proto=${proto^^}
+
         server_ip=$(ask_input "Server IP address" "10.239.239.100")
+        server_ips=("$server_ip")
+        while ask_yes_no "Add another server IP address?"; do
+            ip=$(ask_input "Additional server IP address" "")
+            server_ips+=("$ip")
+        done
+
+        if [[ ${#server_ips[@]} -gt 1 ]]; then
+            client_ips=()
+            while true; do
+                ip=$(ask_input "Client IP address for path ${#client_ips[@]}" "")
+                client_ips+=("$ip")
+                [[ ${#client_ips[@]} -ge ${#server_ips[@]} ]] && break
+                ask_yes_no "Add another client IP address?" || break
+            done
+        fi
+
         share=$(ask_input "NFS share" "/")
         mount_point=$(ask_input "Local mount point" "/mnt/nfs")
 
@@ -97,8 +114,15 @@ main() {
             opts="nconnect=16,vers=4.2,sync"
         fi
 
+        server_spec="$server_ip"
+        if [[ ${#server_ips[@]} -gt 1 ]]; then
+            server_spec=$(IFS=,; echo "${server_ips[*]}")
+            client_spec=$(IFS=,; echo "${client_ips[*]}")
+            opts+="\,clientaddr=${client_spec}"
+        fi
+
         if ! mountpoint -q "$mount_point"; then
-            if ! mount -t nfs -o "$opts" "$server_ip:$share" "$mount_point"; then
+            if ! mount -t nfs -o "$opts" "$server_spec:$share" "$mount_point"; then
                 msg="Failed to mount $server_ip:$share"
                 if [ -n "$WHIPTAIL" ]; then
                     whiptail --msgbox "$msg" 8 60
@@ -112,8 +136,8 @@ main() {
         mount_opts=$(awk -v mp="$mount_point" '$2==mp {print $4}' /proc/mounts)
         mount_opts=${mount_opts:-$opts}
 
-        if ! grep -q "^$server_ip:$share" /etc/fstab; then
-            echo "$server_ip:$share $mount_point nfs $mount_opts 0 0" >> /etc/fstab
+        if ! grep -q "^$server_spec:$share" /etc/fstab; then
+            echo "$server_spec:$share $mount_point nfs $mount_opts 0 0" >> /etc/fstab
         fi
 
         echo "Configuration complete. Reboot recommended to apply module options." >&2
