@@ -94,15 +94,6 @@ main() {
             server_ips+=("$ip")
         done
 
-        if [[ ${#server_ips[@]} -gt 1 ]]; then
-            client_ips=()
-            while true; do
-                ip=$(ask_input "Client IP address for path ${#client_ips[@]}" "")
-                client_ips+=("$ip")
-                [[ ${#client_ips[@]} -ge ${#server_ips[@]} ]] && break
-                ask_yes_no "Add another client IP address?" || break
-            done
-        fi
 
         share=$(ask_input "NFS share" "/")
         mount_point=$(ask_input "Local mount point" "/mnt/nfs")
@@ -117,8 +108,6 @@ main() {
         server_spec="$server_ip"
         if [[ ${#server_ips[@]} -gt 1 ]]; then
             server_spec=$(IFS=,; echo "${server_ips[*]}")
-            client_spec=$(IFS=,; echo "${client_ips[*]}")
-            opts+="\,clientaddr=${client_spec}"
         fi
 
         if ! mountpoint -q "$mount_point"; then
