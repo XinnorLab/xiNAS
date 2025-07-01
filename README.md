@@ -13,7 +13,8 @@ This repository contains scripts and Ansible playbooks used to provision xiNAS n
    privileges are required to install packages, create the mount point and mount
    the exported share. If you only need the client pieces, copy the contents of
    the `client_repo` directory into a separate repository and run the script
-   from there.
+   from there. If you choose to install DOCA OFED using the provided playbook,
+   the script will automatically install Ansible packages when needed.
 
 The `prepare_system.sh` script installs dependencies required by the interactive helper scripts. The helper scripts rely on the [`mikefarah/yq`](https://github.com/mikefarah/yq) binary (v4+). If you encounter errors such as `jq: error: env/1 is not defined`, make sure this version of `yq` is installed by re-running `prepare_system.sh` or installing it manually.
 Earlier versions of the RAID configuration script failed with `'//' expects 2 args but there is 1` when no spare pool existed. The script now creates the pool automatically the first time you enter devices.

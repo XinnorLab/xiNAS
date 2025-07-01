@@ -13,7 +13,9 @@ Included files:
 - `ansible.cfg` – minimal Ansible configuration
 
 To use this directory as a separate repo, copy it to a new Git repository and run
-`client_setup.sh` with root privileges on the client machine:
+`client_setup.sh` with root privileges on the client machine. If you elect to
+install DOCA OFED via the included playbook, the script will install the required
+Ansible packages automatically:
 
 ```bash
 sudo ./client_setup.sh

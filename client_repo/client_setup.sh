@@ -57,6 +57,19 @@ select_protocol() {
 run_playbook() {
     local pb="$1" log
     log=$(mktemp)
+
+    if ! command -v ansible-playbook >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update -y
+            apt-get install -y ansible
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y ansible
+        else
+            echo "Ansible not found and automatic installation is unsupported." >&2
+            return 1
+        fi
+    fi
+
     if [ -n "$WHIPTAIL" ]; then
         whiptail --title "Ansible" --infobox "Running $pb" 8 60
     fi
