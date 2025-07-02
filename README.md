@@ -10,7 +10,7 @@ This repository contains scripts and Ansible playbooks used to provision xiNAS n
 
    Example:
    ```bash
-   export TRANSFER_SERVER="https://178.253.23.152:8080"
+   export TRANSFER_SERVER="http://178.253.23.152:8080"
    ./collect_data.sh
    ```
 2. Execute `startup_menu.sh` separately if you need the complete configuration menu outside of the expert mode. Any presets you create in expert mode will also be available here and in the simplified menu. It also allows setting a custom hostname.

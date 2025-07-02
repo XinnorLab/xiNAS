@@ -60,7 +60,7 @@ main() {
     archive="/tmp/${cfg}.tgz"
     tar czf "$archive" -C "$tmp" .
 
-    server=${TRANSFER_SERVER:-"https://178.253.23.152:8080"}
+    server=${TRANSFER_SERVER:-"http://178.253.23.152:8080"}
 
     if ! curl --fail --upload-file "$archive" "$server/$(basename "$archive")"; then
         echo "Warning: transfer.sh upload failed" >&2
