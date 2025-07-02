@@ -16,24 +16,17 @@ ask_input() {
 }
 
 main() {
-    local cfg email tmp archive server_arg server
+    local cfg email tmp archive server
 
-    server_arg=${TRANSFER_SERVER:-}
     while [ $# -gt 0 ]; do
         case $1 in
-            --server)
-                [ $# -gt 1 ] || { echo "Missing argument for --server" >&2; return 1; }
-                server_arg=$2
-                shift 2
-                continue
-                ;;
             -h|--help)
-                echo "Usage: $0 [--server url]" >&2
+                echo "Usage: $0" >&2
                 return 0
                 ;;
             *)
                 echo "Unknown option: $1" >&2
-                echo "Usage: $0 [--server url]" >&2
+                echo "Usage: $0" >&2
                 return 1
                 ;;
         esac
@@ -64,13 +57,12 @@ main() {
         fi
     done
 
-    archive="${cfg}.tgz"
+    archive="/tmp/${cfg}.tgz"
     tar czf "$archive" -C "$tmp" .
 
-    server=${server_arg:-$(ask_input "transfer.sh server" "https://178.253.23.152")}
-    [ -n "$server" ] || exit 1
+    server=${TRANSFER_SERVER:-"https://178.253.23.152:8080"}
 
-    if ! curl --fail --upload-file "$archive" "$server/$archive"; then
+    if ! curl --fail --upload-file "$archive" "$server/$(basename "$archive")"; then
         echo "Warning: transfer.sh upload failed" >&2
     fi
 
