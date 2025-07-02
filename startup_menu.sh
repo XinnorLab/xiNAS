@@ -350,26 +350,28 @@ save_preset() {
 
 # Main menu loop
 while true; do
-    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 16 \
-        1 "Enter License" \
-        2 "Configure Network" \
-        3 "Set Hostname" \
-        4 "Configure RAID" \
-        5 "Edit NFS Exports" \
-        6 "Presets" \
-        7 "Git Repository Configuration" \
-        8 "Install" \
-        9 "Exit" \
+    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 17 \
+        1 "Collect Data" \
+        2 "Enter License" \
+        3 "Configure Network" \
+        4 "Set Hostname" \
+        5 "Configure RAID" \
+        6 "Edit NFS Exports" \
+        7 "Presets" \
+        8 "Git Repository Configuration" \
+        9 "Install" \
+        10 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
-        1) enter_license ;;
-        2) configure_network ;;
-        3) configure_hostname ;;
-        4) configure_raid ;;
-        5) edit_nfs_exports ;;
-        6) choose_preset ;;
-        7) configure_git_repo ;;
-        8)
+        1) ./collect_data.sh ;;
+        2) enter_license ;;
+        3) configure_network ;;
+        4) configure_hostname ;;
+        5) configure_raid ;;
+        6) edit_nfs_exports ;;
+        7) choose_preset ;;
+        8) configure_git_repo ;;
+        9)
             if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
                 run_playbook "playbooks/site.yml"
                 chmod +x post_install_menu.sh
@@ -377,7 +379,7 @@ while true; do
                 exit 0
             fi
             ;;
-        9) exit 2 ;;
+        10) exit 2 ;;
     esac
 done
 
