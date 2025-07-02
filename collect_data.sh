@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Collect system data and upload to SharePoint
+# Collect system data and upload via transfer.sh
 set -euo pipefail
 
 WHIPTAIL=$(command -v whiptail || true)
@@ -16,24 +16,24 @@ ask_input() {
 }
 
 main() {
-    local cfg email tmp archive dest_arg dest
+    local cfg email tmp archive server_arg server
 
-    dest_arg=${RCLONE_DEST:-}
+    server_arg=${TRANSFER_SERVER:-}
     while [ $# -gt 0 ]; do
         case $1 in
-            --dest)
-                [ $# -gt 1 ] || { echo "Missing argument for --dest" >&2; return 1; }
-                dest_arg=$2
+            --server)
+                [ $# -gt 1 ] || { echo "Missing argument for --server" >&2; return 1; }
+                server_arg=$2
                 shift 2
                 continue
                 ;;
             -h|--help)
-                echo "Usage: $0 [--dest remote:path]" >&2
+                echo "Usage: $0 [--server url]" >&2
                 return 0
                 ;;
             *)
                 echo "Unknown option: $1" >&2
-                echo "Usage: $0 [--dest remote:path]" >&2
+                echo "Usage: $0 [--server url]" >&2
                 return 1
                 ;;
         esac
@@ -67,28 +67,11 @@ main() {
     archive="${cfg}.tgz"
     tar czf "$archive" -C "$tmp" .
 
-    # Install rclone if not present
-    if ! command -v rclone >/dev/null 2>&1; then
-        if command -v apt-get >/dev/null 2>&1; then
-            apt-get update -y
-            apt-get install -y rclone
-        elif command -v yum >/dev/null 2>&1; then
-            yum install -y rclone
-        else
-            curl https://rclone.org/install.sh | bash
-        fi
-    fi
+    server=${server_arg:-$(ask_input "transfer.sh server" "https://178.253.23.152")}
+    [ -n "$server" ] || exit 1
 
-    dest=${dest_arg:-$(ask_input "rclone destination (remote:path)" "sharepoint:")}
-    [ -n "$dest" ] || exit 1
-    remote_name=${dest%%:*}:
-    if ! rclone listremotes | grep -qx "$remote_name"; then
-        echo "rclone remote $remote_name not found. Launching rclone config..." >&2
-        rclone config
-    fi
-
-    if ! rclone copy "$archive" "$dest"; then
-        echo "Warning: rclone upload failed" >&2
+    if ! curl --fail --upload-file "$archive" "$server/$archive"; then
+        echo "Warning: transfer.sh upload failed" >&2
     fi
 
     rm -rf "$tmp"
