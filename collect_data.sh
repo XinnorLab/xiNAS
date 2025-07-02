@@ -16,7 +16,29 @@ ask_input() {
 }
 
 main() {
-    local cfg email tmp archive
+    local cfg email tmp archive dest_arg dest
+
+    dest_arg=${RCLONE_DEST:-}
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --dest)
+                [ $# -gt 1 ] || { echo "Missing argument for --dest" >&2; return 1; }
+                dest_arg=$2
+                shift 2
+                continue
+                ;;
+            -h|--help)
+                echo "Usage: $0 [--dest remote:path]" >&2
+                return 0
+                ;;
+            *)
+                echo "Unknown option: $1" >&2
+                echo "Usage: $0 [--dest remote:path]" >&2
+                return 1
+                ;;
+        esac
+    done
+
     cfg=$(ask_input "Enter config name" "config") || exit 1
     email=$(ask_input "Enter your email" "user@example.com") || exit 1
     tmp=$(mktemp -d)
@@ -57,7 +79,8 @@ main() {
         fi
     fi
 
-    dest=$(ask_input "rclone destination (remote:path)" "sharepoint:") || exit 1
+    dest=${dest_arg:-$(ask_input "rclone destination (remote:path)" "sharepoint:")}
+    [ -n "$dest" ] || exit 1
     remote_name=${dest%%:*}:
     if ! rclone listremotes | grep -qx "$remote_name"; then
         echo "rclone remote $remote_name not found. Launching rclone config..." >&2
