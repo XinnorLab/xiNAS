@@ -45,8 +45,28 @@ main() {
     archive="${cfg}.tgz"
     tar czf "$archive" -C "$tmp" .
 
-    # Attempt upload
-    curl -T "$archive" "https://xinnor.sharepoint.com/:f:/s/XiStorage/Er7lQJlm58hJh5wjoYirZ7gBlq9Z2lyvIcBSyd8plqlL7Q?e=vgzKKM" || true
+    # Install rclone if not present
+    if ! command -v rclone >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update -y
+            apt-get install -y rclone
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y rclone
+        else
+            curl https://rclone.org/install.sh | bash
+        fi
+    fi
+
+    dest=$(ask_input "rclone destination (remote:path)" "sharepoint:") || exit 1
+    remote_name=${dest%%:*}:
+    if ! rclone listremotes | grep -qx "$remote_name"; then
+        echo "rclone remote $remote_name not found. Launching rclone config..." >&2
+        rclone config
+    fi
+
+    if ! rclone copy "$archive" "$dest"; then
+        echo "Warning: rclone upload failed" >&2
+    fi
 
     rm -rf "$tmp"
     echo "Archive created: $archive"
