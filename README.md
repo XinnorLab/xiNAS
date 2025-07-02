@@ -6,12 +6,12 @@ This repository contains scripts and Ansible playbooks used to provision xiNAS n
 
 1. Run `prepare_system.sh` on the target host (use the `-e` option for expert mode). Use `-u` to update the repository without launching any menus. This installs required packages including `yq` version 4, `whiptail`, and Ansible, then clones the repository.
    The script immediately launches a simplified start menu in default mode to enter the license and choose a preset. Use `-e` to access the full interactive menu with additional options such as updating the repository or saving the current configuration as a new preset.
-   Both menus now include a **Collect Data** option for gathering system information into a tar archive and uploading it via `transfer.sh`. You can specify the server URL non-interactively using the `--server` option or the `TRANSFER_SERVER` environment variable.
+   Both menus now include a **Collect Data** option for gathering system information into a tar archive and uploading it via `transfer.sh`. The upload server is configured automatically and listens on port 8080. You can override it by setting the `TRANSFER_SERVER` environment variable if needed.
 
    Example:
    ```bash
-   export TRANSFER_SERVER="https://178.253.23.152"
-   ./collect_data.sh --server "$TRANSFER_SERVER"
+   export TRANSFER_SERVER="https://178.253.23.152:8080"
+   ./collect_data.sh
    ```
 2. Execute `startup_menu.sh` separately if you need the complete configuration menu outside of the expert mode. Any presets you create in expert mode will also be available here and in the simplified menu. It also allows setting a custom hostname.
 3. To apply the configuration, choose **Install** from the menu.
