@@ -9,6 +9,8 @@
   ansible.builtin.apt:
     name: "linux-headers-{{ ansible_kernel }}"
     state: present
+    update_cache: true
+    cache_valid_time: 3600
   tags: [xiraid, deps]
 
 - name: Remove any existing xiRAID repo package before download
@@ -37,13 +39,15 @@
 - name: Update apt cache
   ansible.builtin.apt:
     update_cache: true
+    cache_valid_time: 3600
   tags: [xiraid, install]
 
-- name: Install xiRAID core package
-  ansible.builtin.command:
-    cmd: "apt-get install --reinstall -y {{ xiraid_packages | join(' ') }}"
+- name: Ensure xiRAID packages are installed
+  ansible.builtin.apt:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ xiraid_packages }}"
   register: xiraid_pkgs
-  changed_when: false
   tags: [xiraid, install]
 
 - name: Accept xiRAID EULA
