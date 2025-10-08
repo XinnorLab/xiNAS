@@ -6,7 +6,7 @@ kernel module. The role accepts the xiRAID EULA automatically using
 ## Variables
 * `xiraid_version` – set to 4.3.0, 4.2.0 ...
 * `xiraid_repo_version` – version of `xiraid-repo_*.deb` package.
-* `xiraid_kernel` – kernel version used for the repo package (defaults to major.minor of the current kernel).
+* `xiraid_repo_kernel` – kernel track used for the repository package (defaults to `6.8`, matching the published multi-pack build).
 * `xiraid_repo_pkg_url` – full URL to download the repository package; override for offline mirror.
 * `xiraid_packages` – list of deb packages (defaults to `xiraid-core`).
 * `xiraid_auto_reboot` – reboot after install.
