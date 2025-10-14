@@ -39,7 +39,7 @@
 - name: Update apt cache
   ansible.builtin.apt:
     update_cache: true
-    cache_valid_time: 3600
+    cache_valid_time: "{{ 0 if (xiraid_repo_added is defined and xiraid_repo_added is changed) else 3600 }}"
   tags: [xiraid, install]
 
 - name: Ensure xiRAID packages are installed
