@@ -6,6 +6,7 @@ doca_repo_component: "{{ doca_version }}/{{ doca_distro_series }}/x86_64"
 doca_pkgs:
   - doca-ofed          # DKMS-driven kernel stack
   - doca-ofed-userspace
+  - mlnx-nfsrdma-dkms  # Kernel module required for NFS over RDMA
 
 doca_ofed_auto_reboot: false
 
