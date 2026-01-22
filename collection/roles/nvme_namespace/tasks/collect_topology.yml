@@ -1,0 +1,90 @@
+---
+# Collect NVMe controller topology information
+
+# Check nvme-cli is available
+- name: Verify nvme-cli is installed
+  ansible.builtin.command: which nvme
+  register: nvme_cli_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail if nvme-cli not installed
+  ansible.builtin.fail:
+    msg: |
+      nvme-cli is not installed. Please install it:
+        apt-get install nvme-cli
+  when: nvme_cli_check.rc != 0
+
+# Get existing namespaces for each data controller
+- name: List existing namespaces per controller
+  ansible.builtin.shell: |
+    nvme list-ns {{ item }} 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+$' || true
+  register: nvme_existing_ns
+  loop: "{{ nvme_data_drives }}"
+  changed_when: false
+
+# Get total NVM capacity per controller (in bytes)
+- name: Get NVM capacity per controller
+  ansible.builtin.shell: |
+    # Try to get total NVM capacity from id-ctrl
+    cap=$(nvme id-ctrl {{ item }} 2>/dev/null | grep -E '^\s*tnvmcap\s*:' | awk -F: '{print $2}' | tr -d ' ')
+    if [ -z "$cap" ] || [ "$cap" = "0" ]; then
+      # Fallback: sum namespace sizes
+      cap=$(nvme list 2>/dev/null | grep "{{ item | basename }}" | awk '{print $5}' | head -1)
+      # Convert to bytes if needed (assumes GB suffix)
+      case "$cap" in
+        *TB) cap=$(echo "$cap" | sed 's/TB//' | awk '{printf "%.0f", $1 * 1000000000000}') ;;
+        *GB) cap=$(echo "$cap" | sed 's/GB//' | awk '{printf "%.0f", $1 * 1000000000}') ;;
+        *MB) cap=$(echo "$cap" | sed 's/MB//' | awk '{printf "%.0f", $1 * 1000000}') ;;
+        *) cap="0" ;;
+      esac
+    fi
+    echo "${cap:-0}"
+  register: nvme_capacity_info
+  loop: "{{ nvme_data_drives }}"
+  changed_when: false
+
+# Get LBA size for each controller (needed for namespace creation)
+- name: Get LBA format size per controller
+  ansible.builtin.shell: |
+    # Get LBA size from first namespace or default to 512
+    size=$(nvme id-ns {{ item }}n1 2>/dev/null | grep -E 'in use.*lbads' | awk '{for(i=1;i<=NF;i++) if($i ~ /lbads/) print $(i+1)}' | head -1)
+    if [ -z "$size" ]; then
+      # Fallback: check id-ns output format
+      size=$(nvme id-ns {{ item }}n1 2>/dev/null | grep -E '^\s*lbaf\s+0' | grep -oE 'lbads:[0-9]+' | cut -d: -f2)
+    fi
+    # Convert log2 to actual size if needed, or default to 512
+    if [ -n "$size" ] && [ "$size" -lt 32 ]; then
+      echo $((1 << size))
+    elif [ -n "$size" ]; then
+      echo "$size"
+    else
+      echo "512"
+    fi
+  register: nvme_lba_size
+  loop: "{{ nvme_data_drives }}"
+  changed_when: false
+  failed_when: false
+
+# Build topology data structure
+- name: Build NVMe topology fact
+  ansible.builtin.set_fact:
+    nvme_topology: >-
+      {{ nvme_topology | default([]) + [{
+        'controller': item.item,
+        'existing_namespaces': nvme_existing_ns.results[idx].stdout_lines | default([]),
+        'capacity_bytes': nvme_capacity_info.results[idx].stdout | int,
+        'lba_size': nvme_lba_size.results[idx].stdout | default('512') | int
+      }] }}
+  loop: "{{ nvme_existing_ns.results }}"
+  loop_control:
+    index_var: idx
+
+- name: Display collected topology
+  ansible.builtin.debug:
+    msg: |
+      NVMe Topology for {{ item.controller }}:
+        Existing namespaces: {{ item.existing_namespaces | join(', ') | default('none') }}
+        Total capacity: {{ (item.capacity_bytes / 1000000000) | round(2) }} GB
+        LBA size: {{ item.lba_size }} bytes
+  loop: "{{ nvme_topology }}"

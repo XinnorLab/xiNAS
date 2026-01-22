@@ -1,0 +1,100 @@
+---
+# Detect system drives and enumerate NVMe data drives
+
+# Step 1: Get the device containing the root filesystem
+- name: Get root filesystem device
+  ansible.builtin.shell: |
+    set -o pipefail
+    dev=$(findmnt -no SOURCE / | head -1)
+    # Handle partition numbers (nvme0n1p1 -> nvme0n1, sda1 -> sda)
+    echo "$dev" | sed -E 's/p?[0-9]+$//'
+  args:
+    executable: /bin/bash
+  register: root_device
+  changed_when: false
+
+# Step 2: Get device containing /boot (if separate partition)
+- name: Get boot filesystem device
+  ansible.builtin.shell: |
+    set -o pipefail
+    dev=$(findmnt -no SOURCE /boot 2>/dev/null | head -1)
+    if [ -n "$dev" ]; then
+      echo "$dev" | sed -E 's/p?[0-9]+$//'
+    fi
+  args:
+    executable: /bin/bash
+  register: boot_device
+  changed_when: false
+  failed_when: false
+
+# Step 3: Get EFI system partition device
+- name: Get EFI partition device
+  ansible.builtin.shell: |
+    set -o pipefail
+    # Look for EFI System Partition by GUID
+    dev=$(lsblk -nro NAME,PARTTYPE 2>/dev/null | grep -i 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b' | awk '{print $1}' | head -1)
+    if [ -n "$dev" ]; then
+      echo "/dev/$dev" | sed -E 's/p?[0-9]+$//'
+    fi
+  args:
+    executable: /bin/bash
+  register: efi_device
+  changed_when: false
+  failed_when: false
+
+# Step 4: Consolidate system drives (remove duplicates and empty entries)
+- name: Build system drive list
+  ansible.builtin.set_fact:
+    nvme_system_drives: >-
+      {{ [root_device.stdout | trim,
+          boot_device.stdout | default('') | trim,
+          efi_device.stdout | default('') | trim]
+         | select('match', '^/dev/')
+         | unique
+         | list }}
+
+# Step 5: Get all NVMe controllers (base devices, not namespaces)
+- name: List all NVMe controllers
+  ansible.builtin.shell: |
+    ls -1d /dev/nvme[0-9]* 2>/dev/null | grep -E '^/dev/nvme[0-9]+$' || true
+  register: nvme_controllers_raw
+  changed_when: false
+
+- name: Parse NVMe controller list
+  ansible.builtin.set_fact:
+    nvme_all_controllers: "{{ nvme_controllers_raw.stdout_lines | default([]) }}"
+
+# Step 6: Filter out system drives to get data drives
+# For NVMe, we need to check if any namespace on the controller is a system drive
+- name: Identify system NVMe controllers
+  ansible.builtin.set_fact:
+    nvme_system_controllers: >-
+      {{ nvme_system_drives
+         | select('match', '^/dev/nvme')
+         | map('regex_replace', 'n[0-9]+$', '')
+         | unique
+         | list }}
+
+- name: Set data drives fact (excluding system drives)
+  ansible.builtin.set_fact:
+    nvme_data_drives: >-
+      {{ nvme_all_controllers
+         | reject('in', nvme_system_controllers)
+         | list }}
+
+# Step 7: Display detection results
+- name: Display detected drives
+  ansible.builtin.debug:
+    msg: |
+      ========== NVMe Drive Detection ==========
+      System drives (PROTECTED):
+        Root device: {{ root_device.stdout | trim }}
+        Boot device: {{ boot_device.stdout | default('(same as root)') | trim }}
+        EFI device:  {{ efi_device.stdout | default('(not found)') | trim }}
+        Controllers: {{ nvme_system_controllers | join(', ') | default('none') }}
+
+      Data drives (available for namespace operations):
+        {{ nvme_data_drives | join('\n        ') | default('none found') }}
+
+      Total data drives: {{ nvme_data_drives | length }}
+      ===========================================

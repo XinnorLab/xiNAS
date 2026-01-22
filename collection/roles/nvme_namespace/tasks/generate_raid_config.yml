@@ -1,0 +1,149 @@
+---
+# Generate RAID configuration for raid_fs role
+
+# Validate minimum device counts for requested RAID levels
+- name: Calculate available device counts
+  ansible.builtin.set_fact:
+    nvme_small_ns_count: "{{ nvme_small_ns_devices | length }}"
+    nvme_large_ns_count: "{{ nvme_large_ns_devices | length }}"
+
+# Determine if we can create the requested RAID arrays
+- name: Validate RAID 5 requirements for data array
+  ansible.builtin.set_fact:
+    nvme_can_create_data_raid: >-
+      {{ nvme_large_ns_count | int >= nvme_min_devices_for_raid5 | int }}
+  when: nvme_raid_data_level | int == 5
+
+- name: Validate RAID 6 requirements for data array
+  ansible.builtin.set_fact:
+    nvme_can_create_data_raid: >-
+      {{ nvme_large_ns_count | int >= 4 }}
+  when: nvme_raid_data_level | int == 6
+
+- name: Validate RAID 10 requirements for log array
+  ansible.builtin.set_fact:
+    nvme_can_create_log_raid: >-
+      {{ (nvme_small_ns_count | int >= nvme_min_devices_for_raid10 | int) and
+         (nvme_small_ns_count | int % 2 == 0) }}
+  when: nvme_raid_log_level | int == 10
+
+- name: Validate RAID 1 requirements for log array
+  ansible.builtin.set_fact:
+    nvme_can_create_log_raid: >-
+      {{ nvme_small_ns_count | int >= 2 }}
+  when: nvme_raid_log_level | int == 1
+
+# Set defaults for other RAID levels
+- name: Default data RAID validation
+  ansible.builtin.set_fact:
+    nvme_can_create_data_raid: "{{ nvme_large_ns_count | int >= 2 }}"
+  when: nvme_can_create_data_raid is not defined
+
+- name: Default log RAID validation
+  ansible.builtin.set_fact:
+    nvme_can_create_log_raid: "{{ nvme_small_ns_count | int >= 2 }}"
+  when: nvme_can_create_log_raid is not defined
+
+# Report validation results
+- name: Report insufficient devices for data array
+  ansible.builtin.debug:
+    msg: |
+      WARNING: Insufficient devices for data array (RAID {{ nvme_raid_data_level }})
+      Available: {{ nvme_large_ns_count }} large namespaces
+      Required: {{ nvme_min_devices_for_raid5 }} (RAID 5) or 4 (RAID 6)
+  when: not (nvme_can_create_data_raid | bool)
+
+- name: Report insufficient devices for log array
+  ansible.builtin.debug:
+    msg: |
+      WARNING: Insufficient devices for log array (RAID {{ nvme_raid_log_level }})
+      Available: {{ nvme_small_ns_count }} small namespaces
+      Required: {{ nvme_min_devices_for_raid10 }} (RAID 10, must be even) or 2 (RAID 1)
+  when: not (nvme_can_create_log_raid | bool)
+
+# Calculate parity disks based on RAID level
+- name: Calculate parity disks for data array
+  ansible.builtin.set_fact:
+    _data_parity_disks: >-
+      {% if nvme_raid_data_level | int == 5 %}1{% elif nvme_raid_data_level | int == 6 %}2{% else %}0{% endif %}
+
+# Calculate stripe width for XFS (data disks - parity)
+- name: Calculate XFS stripe width
+  ansible.builtin.set_fact:
+    _xfs_stripe_width: "{{ (nvme_large_ns_count | int) - (_data_parity_disks | int) }}"
+  when: nvme_can_create_data_raid | bool
+
+# Generate xiraid_arrays fact for raid_fs role
+- name: Generate xiraid_arrays configuration
+  ansible.builtin.set_fact:
+    xiraid_arrays:
+      - name: data
+        level: "{{ nvme_raid_data_level }}"
+        strip_size_kb: "{{ nvme_raid_data_strip_kb }}"
+        devices: "{{ nvme_large_ns_devices }}"
+        parity_disks: "{{ _data_parity_disks | int }}"
+      - name: log
+        level: "{{ nvme_raid_log_level }}"
+        strip_size_kb: "{{ nvme_raid_log_strip_kb }}"
+        devices: "{{ nvme_small_ns_devices }}"
+  when:
+    - nvme_can_create_data_raid | bool
+    - nvme_can_create_log_raid | bool
+
+# Generate xfs_filesystems fact for raid_fs role
+- name: Generate xfs_filesystems configuration
+  ansible.builtin.set_fact:
+    xfs_filesystems:
+      - label: nfsdata
+        data_device: "/dev/xi_data"
+        log_device: "/dev/xi_log"
+        su_kb: "{{ nvme_raid_data_strip_kb }}"
+        sw: "{{ _xfs_stripe_width | int }}"
+        log_size: 1G
+        sector_size: 4k
+        mountpoint: /mnt/data
+        mount_opts: "logdev=/dev/xi_log,noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k"
+  when:
+    - nvme_can_create_data_raid | bool
+    - nvme_can_create_log_raid | bool
+
+# Fail if we can't create required arrays
+- name: Fail on insufficient devices
+  ansible.builtin.fail:
+    msg: |
+      Cannot create required RAID arrays due to insufficient devices.
+      Data array (RAID {{ nvme_raid_data_level }}): {{ 'OK' if nvme_can_create_data_raid | bool else 'FAILED - need more devices' }}
+      Log array (RAID {{ nvme_raid_log_level }}): {{ 'OK' if nvme_can_create_log_raid | bool else 'FAILED - need more devices' }}
+  when: not (nvme_can_create_data_raid | bool and nvme_can_create_log_raid | bool)
+
+# Display final configuration
+- name: Display generated RAID configuration
+  ansible.builtin.debug:
+    msg: |
+      ========== Generated RAID Configuration ==========
+      DATA Array:
+        Name: data
+        Level: RAID {{ nvme_raid_data_level }}
+        Strip size: {{ nvme_raid_data_strip_kb }}KB
+        Devices ({{ nvme_large_ns_devices | length }}):
+          {{ nvme_large_ns_devices | join('\n          ') }}
+        Parity disks: {{ _data_parity_disks }}
+
+      LOG Array:
+        Name: log
+        Level: RAID {{ nvme_raid_log_level }}
+        Strip size: {{ nvme_raid_log_strip_kb }}KB
+        Devices ({{ nvme_small_ns_devices | length }}):
+          {{ nvme_small_ns_devices | join('\n          ') }}
+
+      XFS Filesystem:
+        Label: nfsdata
+        Data device: /dev/xi_data
+        Log device: /dev/xi_log
+        Stripe unit: {{ nvme_raid_data_strip_kb }}KB
+        Stripe width: {{ _xfs_stripe_width }}
+        Mount point: /mnt/data
+      =================================================
+  when:
+    - nvme_can_create_data_raid | bool
+    - nvme_can_create_log_raid | bool

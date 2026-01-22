@@ -1,0 +1,82 @@
+---
+# Main entry point for nvme_namespace role
+#
+# This role automatically detects non-system NVMe drives, rebuilds namespaces
+# according to the specification, and generates RAID configuration for the
+# raid_fs role.
+
+- name: Check if automatic namespace management is enabled
+  ansible.builtin.debug:
+    msg: |
+      Automatic NVMe namespace management is DISABLED.
+      Set nvme_auto_namespace: true to enable.
+      Using manual RAID configuration from presets.
+  when: not nvme_auto_namespace | bool
+
+- name: Run automatic namespace management
+  when: nvme_auto_namespace | bool
+  block:
+    # Phase 1: Detect system and data drives
+    - name: Detect system and data drives
+      ansible.builtin.include_tasks: detect_drives.yml
+
+    # Phase 2: Abort if system drive not found (safety check)
+    - name: Abort if system drive not found
+      ansible.builtin.fail:
+        msg: |
+          CRITICAL: Could not detect system drive.
+          Aborting to prevent accidental data loss on the OS drive.
+          If this is intentional, set nvme_abort_if_no_system_drive: false
+      when:
+        - nvme_abort_if_no_system_drive | bool
+        - nvme_system_drives is not defined or nvme_system_drives | length == 0
+
+    # Phase 3: Check if there are any data drives to process
+    - name: Check for available data drives
+      ansible.builtin.debug:
+        msg: |
+          No NVMe data drives found for namespace operations.
+          All detected NVMe drives appear to be system drives.
+      when: nvme_data_drives | length == 0
+
+    # Phase 4: Collect NVMe topology (only if we have data drives)
+    - name: Collect NVMe topology
+      ansible.builtin.include_tasks: collect_topology.yml
+      when: nvme_data_drives | length > 0
+
+    # Phase 5: Rebuild namespaces (only if we have data drives)
+    - name: Rebuild namespaces on data drives
+      ansible.builtin.include_tasks: rebuild_namespaces.yml
+      when: nvme_data_drives | length > 0
+
+    # Phase 6: Generate RAID configuration (only if namespaces were created)
+    - name: Generate RAID configuration
+      ansible.builtin.include_tasks: generate_raid_config.yml
+      when:
+        - nvme_data_drives | length > 0
+        - nvme_small_ns_devices is defined
+        - nvme_large_ns_devices is defined
+        - nvme_small_ns_devices | length > 0
+        - nvme_large_ns_devices | length > 0
+
+    # Phase 7: Summary report
+    - name: Display final summary
+      ansible.builtin.debug:
+        msg: |
+          ============ NVMe Namespace Management Complete ============
+          System drives (protected): {{ nvme_system_drives | join(', ') }}
+          Data drives processed: {{ nvme_data_drives | length }}
+
+          Namespace creation:
+            Small namespaces (n1, {{ nvme_small_ns_size_mb }}MB): {{ nvme_small_ns_devices | default([]) | length }}
+            Large namespaces (n2, remaining): {{ nvme_large_ns_devices | default([]) | length }}
+
+          {% if nvme_failed_devices | default([]) | length > 0 %}
+          FAILED DEVICES: {{ nvme_failed_devices | join(', ') }}
+          {% endif %}
+
+          RAID configuration generated for raid_fs role:
+            Data array: RAID {{ nvme_raid_data_level }} with {{ nvme_large_ns_devices | default([]) | length }} devices
+            Log array: RAID {{ nvme_raid_log_level }} with {{ nvme_small_ns_devices | default([]) | length }} devices
+          ===========================================================
+      when: nvme_data_drives | length > 0

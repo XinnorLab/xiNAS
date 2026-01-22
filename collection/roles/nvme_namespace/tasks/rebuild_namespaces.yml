@@ -1,0 +1,241 @@
+---
+# Rebuild NVMe namespaces on data drives
+# Creates: n1 = small namespace (500MB), n2 = large namespace (remaining capacity)
+
+# Initialize tracking variables
+- name: Initialize failed devices list
+  ansible.builtin.set_fact:
+    nvme_failed_devices: []
+
+# Delete existing namespaces on each data drive
+- name: Delete existing namespaces
+  ansible.builtin.shell: |
+    set -e
+    controller="{{ item.controller }}"
+    failed=0
+
+    # Get list of existing namespace IDs
+    ns_list=$(nvme list-ns "$controller" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+$' || true)
+
+    for nsid in $ns_list; do
+      echo "Detaching and deleting namespace $nsid on $controller"
+      # Detach from all controllers (controller ID 0)
+      nvme detach-ns "$controller" -n "$nsid" -c 0 2>/dev/null || true
+      # Delete the namespace
+      if ! nvme delete-ns "$controller" -n "$nsid" 2>&1; then
+        echo "Warning: Failed to delete namespace $nsid on $controller"
+        failed=1
+      fi
+    done
+
+    exit $failed
+  args:
+    executable: /bin/bash
+  register: ns_delete_result
+  loop: "{{ nvme_topology }}"
+  changed_when: ns_delete_result.rc == 0
+  failed_when: false
+
+# Track failed deletions
+- name: Track failed namespace deletions
+  ansible.builtin.set_fact:
+    nvme_failed_devices: "{{ nvme_failed_devices + [item.item.controller] }}"
+  loop: "{{ ns_delete_result.results }}"
+  when:
+    - item.rc != 0
+    - not nvme_skip_failed_devices | bool
+
+- name: Fail on namespace deletion errors
+  ansible.builtin.fail:
+    msg: "Failed to delete namespaces on: {{ nvme_failed_devices | join(', ') }}"
+  when:
+    - nvme_failed_devices | length > 0
+    - not nvme_skip_failed_devices | bool
+
+# Create small namespace (500MB) on each drive
+- name: Create small namespace ({{ nvme_small_ns_size_mb }}MB)
+  ansible.builtin.shell: |
+    set -e
+    controller="{{ item.controller }}"
+    lba_size="{{ item.lba_size }}"
+    size_mb="{{ nvme_small_ns_size_mb }}"
+
+    # Calculate block count
+    blocks=$(( size_mb * 1024 * 1024 / lba_size ))
+
+    echo "Creating small namespace on $controller: $blocks blocks (${size_mb}MB, LBA=${lba_size})"
+
+    # Create namespace with size and capacity equal
+    nvme create-ns "$controller" -s "$blocks" -c "$blocks" -f 0 -d 0
+
+    # Get the new namespace ID (should be 1)
+    nsid=$(nvme list-ns "$controller" 2>/dev/null | tail -1 | awk '{print $1}')
+
+    if [ -z "$nsid" ]; then
+      echo "Error: Failed to get namespace ID after creation"
+      exit 1
+    fi
+
+    echo "Attaching namespace $nsid to controller"
+    nvme attach-ns "$controller" -n "$nsid" -c 0
+
+    echo "Successfully created small namespace: ${controller}n${nsid}"
+  args:
+    executable: /bin/bash
+  register: small_ns_result
+  loop: "{{ nvme_topology }}"
+  when: item.controller not in nvme_failed_devices
+  changed_when: small_ns_result.rc == 0
+  failed_when: false
+
+# Track failed small namespace creations
+- name: Track failed small namespace creations
+  ansible.builtin.set_fact:
+    nvme_failed_devices: "{{ nvme_failed_devices + [item.item.controller] }}"
+  loop: "{{ small_ns_result.results }}"
+  when:
+    - item.skipped is not defined or not item.skipped
+    - item.rc is defined and item.rc != 0
+
+# Create large namespace (remaining capacity) on each drive
+- name: Create large namespace (remaining capacity)
+  ansible.builtin.shell: |
+    set -e
+    controller="{{ item.controller }}"
+    lba_size="{{ item.lba_size }}"
+
+    # Get unallocated capacity
+    # First try to get it from id-ctrl
+    unalloc=$(nvme id-ctrl "$controller" 2>/dev/null | grep -E '^\s*unvmcap\s*:' | awk -F: '{print $2}' | tr -d ' ')
+
+    if [ -z "$unalloc" ] || [ "$unalloc" = "0" ]; then
+      # Calculate from total capacity minus allocated
+      total_cap=$(nvme id-ctrl "$controller" 2>/dev/null | grep -E '^\s*tnvmcap\s*:' | awk -F: '{print $2}' | tr -d ' ')
+      # Get size of existing namespaces
+      alloc=0
+      for ns in $(nvme list-ns "$controller" 2>/dev/null | awk '{print $1}'); do
+        ns_size=$(nvme id-ns "${controller}n${ns}" 2>/dev/null | grep -E '^\s*nsze\s*:' | awk -F: '{print $2}' | tr -d ' ')
+        alloc=$((alloc + ns_size * lba_size))
+      done
+      unalloc=$((total_cap - alloc))
+    fi
+
+    if [ "$unalloc" -le 1048576 ]; then
+      echo "Warning: Insufficient unallocated capacity ($unalloc bytes) on $controller"
+      exit 0
+    fi
+
+    # Leave 1MB buffer, calculate blocks
+    blocks=$(( (unalloc - 1048576) / lba_size ))
+
+    echo "Creating large namespace on $controller: $blocks blocks ($(( blocks * lba_size / 1000000000 ))GB)"
+
+    # Create namespace
+    nvme create-ns "$controller" -s "$blocks" -c "$blocks" -f 0 -d 0
+
+    # Get the new namespace ID (should be 2)
+    nsid=$(nvme list-ns "$controller" 2>/dev/null | tail -1 | awk '{print $1}')
+
+    if [ -z "$nsid" ]; then
+      echo "Error: Failed to get namespace ID after creation"
+      exit 1
+    fi
+
+    echo "Attaching namespace $nsid to controller"
+    nvme attach-ns "$controller" -n "$nsid" -c 0
+
+    echo "Successfully created large namespace: ${controller}n${nsid}"
+  args:
+    executable: /bin/bash
+  register: large_ns_result
+  loop: "{{ nvme_topology }}"
+  when: item.controller not in nvme_failed_devices
+  changed_when: large_ns_result.rc == 0
+  failed_when: false
+
+# Track failed large namespace creations
+- name: Track failed large namespace creations
+  ansible.builtin.set_fact:
+    nvme_failed_devices: "{{ nvme_failed_devices + [item.item.controller] }}"
+  loop: "{{ large_ns_result.results }}"
+  when:
+    - item.skipped is not defined or not item.skipped
+    - item.rc is defined and item.rc != 0
+
+# Rescan NVMe subsystem to detect new namespaces
+- name: Rescan NVMe controllers
+  ansible.builtin.shell: |
+    # Try nvme reset first, fall back to echo 1 to rescan
+    nvme reset {{ item.controller }} 2>/dev/null || \
+      echo 1 > /sys/class/nvme/{{ item.controller | basename }}/rescan 2>/dev/null || \
+      true
+  loop: "{{ nvme_topology }}"
+  when: item.controller not in nvme_failed_devices
+  changed_when: false
+  failed_when: false
+
+# Wait for namespace devices to appear
+- name: Wait for small namespace devices (n1) to appear
+  ansible.builtin.wait_for:
+    path: "/dev/{{ item.controller | basename }}n1"
+    timeout: 30
+  loop: "{{ nvme_topology }}"
+  when: item.controller not in nvme_failed_devices
+  ignore_errors: "{{ nvme_skip_failed_devices }}"
+
+- name: Wait for large namespace devices (n2) to appear
+  ansible.builtin.wait_for:
+    path: "/dev/{{ item.controller | basename }}n2"
+    timeout: 30
+  loop: "{{ nvme_topology }}"
+  when: item.controller not in nvme_failed_devices
+  ignore_errors: "{{ nvme_skip_failed_devices }}"
+
+# Collect final namespace list
+- name: List created small namespaces (n1)
+  ansible.builtin.shell: |
+    ls -1 /dev/{{ item.controller | basename }}n1 2>/dev/null || true
+  register: small_ns_devices
+  loop: "{{ nvme_topology }}"
+  when: item.controller not in nvme_failed_devices
+  changed_when: false
+
+- name: List created large namespaces (n2)
+  ansible.builtin.shell: |
+    ls -1 /dev/{{ item.controller | basename }}n2 2>/dev/null || true
+  register: large_ns_devices
+  loop: "{{ nvme_topology }}"
+  when: item.controller not in nvme_failed_devices
+  changed_when: false
+
+# Build device lists for RAID configuration
+- name: Build small namespace device list
+  ansible.builtin.set_fact:
+    nvme_small_ns_devices: >-
+      {{ small_ns_devices.results
+         | selectattr('stdout', 'defined')
+         | selectattr('stdout', 'match', '^/dev/')
+         | map(attribute='stdout')
+         | list }}
+
+- name: Build large namespace device list
+  ansible.builtin.set_fact:
+    nvme_large_ns_devices: >-
+      {{ large_ns_devices.results
+         | selectattr('stdout', 'defined')
+         | selectattr('stdout', 'match', '^/dev/')
+         | map(attribute='stdout')
+         | list }}
+
+- name: Display namespace rebuild results
+  ansible.builtin.debug:
+    msg: |
+      ========== Namespace Rebuild Results ==========
+      Small namespaces (n1) created: {{ nvme_small_ns_devices | length }}
+        {{ nvme_small_ns_devices | join('\n        ') | default('none') }}
+
+      Large namespaces (n2) created: {{ nvme_large_ns_devices | length }}
+        {{ nvme_large_ns_devices | join('\n        ') | default('none') }}
+
+      Failed devices: {{ nvme_failed_devices | join(', ') | default('none') }}
+      ===============================================

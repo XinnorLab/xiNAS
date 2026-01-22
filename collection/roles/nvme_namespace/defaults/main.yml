@@ -1,0 +1,26 @@
+# Default values for the nvme_namespace role
+#
+# This role automatically detects non-system NVMe drives, rebuilds namespaces,
+# and generates RAID configuration for the raid_fs role.
+
+# Enable/disable automatic namespace management
+nvme_auto_namespace: true
+
+# Size of the small namespace (MB) - used for XFS log device
+nvme_small_ns_size_mb: 500
+
+# RAID levels for auto-generated arrays
+nvme_raid_data_level: 5       # RAID 5 for large namespaces (data array)
+nvme_raid_log_level: 10       # RAID 10 for small namespaces (log array)
+
+# Strip sizes for RAID arrays (KB)
+nvme_raid_data_strip_kb: 128
+nvme_raid_log_strip_kb: 16
+
+# Safety settings
+nvme_abort_if_no_system_drive: true   # Abort if system drive cannot be detected
+nvme_skip_failed_devices: true        # Continue if individual device fails
+
+# Minimum device counts for RAID creation
+nvme_min_devices_for_raid5: 3         # Minimum devices for RAID 5
+nvme_min_devices_for_raid10: 4        # Minimum devices for RAID 10 (must be even)

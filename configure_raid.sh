@@ -12,6 +12,7 @@ backup_if_changed() {
 }
 
 vars_file="collection/roles/raid_fs/defaults/main.yml"
+auto_vars_file="collection/roles/nvme_namespace/defaults/main.yml"
 
 # Ensure required commands are present
 for cmd in yq whiptail lsblk; do
@@ -99,17 +100,101 @@ edit_devices() {
     mv "$tmp" "$vars_file"
 }
 
+# Auto-detect functions
+get_auto_enabled() {
+    if [ -f "$auto_vars_file" ]; then
+        yq -r '.nvme_auto_namespace // false' "$auto_vars_file" 2>/dev/null
+    else
+        echo "false"
+    fi
+}
+
+detect_system_drive() {
+    local root_dev boot_dev efi_dev
+    root_dev=$(findmnt -no SOURCE / 2>/dev/null | head -1 | sed -E 's/p?[0-9]+$//')
+    boot_dev=$(findmnt -no SOURCE /boot 2>/dev/null | head -1 | sed -E 's/p?[0-9]+$//' || true)
+    efi_dev=$(lsblk -nro NAME,PARTTYPE 2>/dev/null | grep -i 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b' | awk '{print "/dev/"$1}' | sed -E 's/p?[0-9]+$//' | head -1 || true)
+    echo "$root_dev $boot_dev $efi_dev" | tr ' ' '\n' | grep -E '^/dev/' | sort -u | tr '\n' ' '
+}
+
+detect_nvme_data_drives() {
+    local system_drives="$1"
+    for ctrl in /dev/nvme[0-9]*; do
+        [[ "$ctrl" =~ ^/dev/nvme[0-9]+$ ]] || continue
+        local is_system=0
+        for sys in $system_drives; do
+            # Check if system drive is on this controller
+            [[ "$sys" == "$ctrl"* ]] && is_system=1 && break
+        done
+        [[ $is_system -eq 0 ]] && echo "$ctrl"
+    done
+}
+
+show_auto_detection() {
+    local tmp system_drives data_drives
+    tmp="$(mktemp)"
+    system_drives=$(detect_system_drive)
+    data_drives=$(detect_nvme_data_drives "$system_drives")
+
+    {
+        echo "=== Auto-Detection Results ==="
+        echo ""
+        echo "System drives (PROTECTED):"
+        for d in $system_drives; do
+            echo "  $d"
+        done
+        echo ""
+        echo "Data drives (will be reconfigured):"
+        if [ -n "$data_drives" ]; then
+            for d in $data_drives; do
+                echo "  $d"
+            done
+        else
+            echo "  (none found)"
+        fi
+        echo ""
+        echo "Total data drives: $(echo "$data_drives" | wc -w)"
+        echo ""
+        echo "Auto-mode enabled: $(get_auto_enabled)"
+    } > "$tmp"
+
+    whiptail --title "Auto-Detection Results" --scrolltext --textbox "$tmp" 22 70
+    rm -f "$tmp"
+}
+
+toggle_auto_mode() {
+    if [ ! -f "$auto_vars_file" ]; then
+        whiptail --msgbox "Auto-detection role not found.\nFile missing: $auto_vars_file" 10 60
+        return
+    fi
+    local current new_val tmp
+    current=$(get_auto_enabled)
+    if [ "$current" = "true" ]; then
+        new_val="false"
+    else
+        new_val="true"
+    fi
+    tmp=$(mktemp)
+    yq ".nvme_auto_namespace = $new_val" "$auto_vars_file" > "$tmp"
+    backup_if_changed "$auto_vars_file" "$tmp"
+    mv "$tmp" "$auto_vars_file"
+    whiptail --msgbox "Auto-namespace mode: $new_val\n\nWhen enabled, the playbook will automatically:\n- Detect system vs data NVMe drives\n- Rebuild namespaces (500MB + remaining)\n- Create RAID 10 (log) and RAID 5 (data)" 14 60
+}
+
 show_nvme_drives
 while true; do
     raid6_devices=$(get_devices 6)
     raid1_devices=$(get_devices 1)
     spare_devices=$(get_spare_devices)
+    auto_enabled=$(get_auto_enabled)
     set +e
-    menu=$(whiptail --title "RAID Configuration" --menu "Select array to edit:" 15 70 6 \
+    menu=$(whiptail --title "RAID Configuration" --menu "Select option (Auto-mode: $auto_enabled):" 17 70 7 \
         1 "DATA: ${raid6_devices:-none}" \
         2 "LOG: ${raid1_devices:-none}" \
         3 "Spare: ${spare_devices:-none}" \
-        4 "Back" 3>&1 1>&2 2>&3)
+        4 "Auto-Detect Drives" \
+        5 "Toggle Auto-Mode ($auto_enabled)" \
+        6 "Back" 3>&1 1>&2 2>&3)
     status=$?
     set -e
     [ $status -ne 0 ] && break
@@ -117,6 +202,8 @@ while true; do
         1) edit_devices 6 ;;
         2) edit_devices 1 ;;
         3) edit_spare_pool ;;
+        4) show_auto_detection ;;
+        5) toggle_auto_mode ;;
         *) break ;;
     esac
 done
