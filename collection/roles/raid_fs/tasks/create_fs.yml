@@ -10,9 +10,27 @@
   failed_when: false
   changed_when: false
 
+# Calculate XFS geometry from RAID array if not explicitly provided
+- name: Find data array for geometry calculation
+  ansible.builtin.set_fact:
+    _data_array: "{{ xiraid_arrays | selectattr('name', 'equalto', 'data') | first | default({}) }}"
+  when: item.su_kb is not defined or item.sw is not defined
+
+- name: Calculate XFS geometry from data array
+  ansible.builtin.set_fact:
+    _fs_su_kb: "{{ item.su_kb | default(_data_array.strip_size_kb | default(128)) }}"
+    _fs_sw: "{{ item.sw | default((_data_array.devices | default([]) | length) - (_data_array.parity_disks | default(1) | int)) }}"
+  when: item.su_kb is not defined or item.sw is not defined
+
+- name: Use explicit XFS geometry
+  ansible.builtin.set_fact:
+    _fs_su_kb: "{{ item.su_kb }}"
+    _fs_sw: "{{ item.sw }}"
+  when: item.su_kb is defined and item.sw is defined
+
 - name: Make filesystem {{ item.label }} on {{ item.data_device }}
   ansible.builtin.command: >-
-    mkfs.xfs -f -L {{ item.label }} -d su={{ item.su_kb }}k,sw={{ item.sw }}
+    mkfs.xfs -f -L {{ item.label }} -d su={{ _fs_su_kb }}k,sw={{ _fs_sw }}
     -l logdev={{ item.log_device }},size={{ item.log_size }}
     -s size={{ item.sector_size }} {{ item.data_device }}
   when: (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label

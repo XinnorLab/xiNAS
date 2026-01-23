@@ -41,8 +41,7 @@ xfs_filesystems:
   - label: nfsdata
     data_device: "/dev/xi_data"
     log_device: "/dev/xi_log"
-    su_kb: 128
-    sw: 9
+    # su_kb and sw are auto-calculated from data array geometry
     log_size: 1G
     sector_size: 4k
     mountpoint: /mnt/data

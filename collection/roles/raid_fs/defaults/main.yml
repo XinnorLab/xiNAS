@@ -15,7 +15,7 @@ xfs_force_mkfs: true
 # deployment. Modify these values directly rather than using group variables.
 xiraid_arrays:
   - name: data
-    level: 6
+    level: 5
     strip_size_kb: 128
     devices:
       - /dev/nvme1n1
@@ -28,21 +28,24 @@ xiraid_arrays:
       - /dev/nvme8n1
       - /dev/nvme9n1
       - /dev/nvme10n1
-    parity_disks: 2
+    parity_disks: 1
 
   - name: log
-    level: 1
+    level: 10
     strip_size_kb: 16
     devices:
       - /dev/nvme11n1
       - /dev/nvme12n1
 
+# XFS filesystem definitions
+# Note: su_kb and sw can be omitted - they will be calculated automatically
+# from the corresponding RAID array (data array for data_device)
 xfs_filesystems:
   - label: nfsdata
     data_device: "/dev/xi_data"
     log_device: "/dev/xi_log"
-    su_kb: 128
-    sw: 8
+    # su_kb: auto-calculated from data array strip_size_kb
+    # sw: auto-calculated as (data array devices - parity_disks)
     log_size: 1G
     sector_size: 4k
     mountpoint: /mnt/data
