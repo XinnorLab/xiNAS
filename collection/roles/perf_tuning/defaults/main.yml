@@ -9,12 +9,27 @@ perf_nvme_poll_queues: 4               # echo "options nvme poll_queues=4"
 perf_stop_irqbalance: false            # stop irqbalance
 perf_disable_cpupower: false          # skip cpupower governor adjustment
 perf_cpu_governor: "performance"       # cpupower governor
-perf_disable_thp: true                 # transparent hugepages=never
+perf_disable_thp: true                 # transparent hugepages=never (runtime + kernel param)
 perf_disable_ksm: true
 perf_scheduler: "noop"                  # I/O scheduler for NVMe (unused)
 perf_nr_requests: 512
 perf_read_ahead_kb: 65536             # blockdev --setra
 perf_tuned_profile: "throughput-performance"
+
+# ===== VM / Memory Management =====
+# MGLRU (Multi-Gen LRU) - improved page reclaim for large memory systems
+perf_vm_lru_gen: 1                     # enable MGLRU (kernel 6.1+)
+perf_vm_min_ttl_ms: 10000              # minimum TTL before page reclaim
+perf_vm_watermark_scale_factor: 200    # earlier kswapd wakeup
+
+# Writeback tuning
+perf_vm_dirty_background_ratio: 5      # start background writeback at 5%
+perf_vm_dirty_ratio: 15                # block processes at 15% dirty pages
+
+# Reclaim behavior
+perf_vm_swappiness: 1                  # strongly prefer file cache over swap
+perf_vm_zone_reclaim_mode: 0           # disable zone reclaim for NUMA
+perf_vm_vfs_cache_pressure: 200        # aggressively reclaim dentries/inodes
 
 # network (400 Gbit / ConnectX-7) section
 perf_net_ifaces: []                   # list of iface names, e.g. ["mlx0"]

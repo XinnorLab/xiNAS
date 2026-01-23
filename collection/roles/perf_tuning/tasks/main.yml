@@ -16,7 +16,7 @@
   ansible.builtin.lineinfile:
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX="(.*)"'
-    line: 'GRUB_CMDLINE_LINUX="intel_idle.max_cstate=0 {{ "mitigations=off noibrs noibpb nopti nospectre_v2 nospec_store_bypass_disable no_stf_barrier mds=off" if perf_disable_mitigations else "" }} $1"'
+    line: 'GRUB_CMDLINE_LINUX="intel_idle.max_cstate=0 {{ "transparent_hugepage=never" if perf_disable_thp else "" }} {{ "mitigations=off noibrs noibpb nopti nospectre_v2 nospec_store_bypass_disable no_stf_barrier mds=off" if perf_disable_mitigations else "" }} $1"'
     backrefs: yes
   notify: update grub
   when: ansible_facts['cmdline'] is defined
@@ -58,6 +58,30 @@
   ansible.builtin.shell: "echo 0 > /sys/kernel/mm/ksm/run"
   when: perf_disable_ksm
   tags: [memory]
+
+# ===== VM / Memory sysctl parameters =====
+- name: Apply VM sysctl parameters for memory management
+  ansible.builtin.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/90-perf-vm.conf
+    reload: yes
+    ignoreerrors: yes
+  loop:
+    # MGLRU (Multi-Gen LRU) - kernel 6.1+
+    - { key: 'vm.lru_gen.enabled', value: '{{ perf_vm_lru_gen }}' }
+    - { key: 'vm.lru_gen.min_ttl_ms', value: '{{ perf_vm_min_ttl_ms }}' }
+    # Watermark
+    - { key: 'vm.watermark_scale_factor', value: '{{ perf_vm_watermark_scale_factor }}' }
+    # Writeback
+    - { key: 'vm.dirty_background_ratio', value: '{{ perf_vm_dirty_background_ratio }}' }
+    - { key: 'vm.dirty_ratio', value: '{{ perf_vm_dirty_ratio }}' }
+    # Reclaim behavior
+    - { key: 'vm.swappiness', value: '{{ perf_vm_swappiness }}' }
+    - { key: 'vm.zone_reclaim_mode', value: '{{ perf_vm_zone_reclaim_mode }}' }
+    - { key: 'vm.vfs_cache_pressure', value: '{{ perf_vm_vfs_cache_pressure }}' }
+  tags: [memory, vm]
 
 # ===== I/O scheduler & queue depth =====
 # noop scheduler configuration removed
