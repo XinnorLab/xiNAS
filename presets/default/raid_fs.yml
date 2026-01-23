@@ -15,7 +15,7 @@ xfs_force_mkfs: true
 # deployment. Modify these values directly rather than using group variables.
 xiraid_arrays:
   - name: data
-    level: 6
+    level: 5
     strip_size_kb: 128
     devices:
       - /dev/nvme1n1
@@ -28,10 +28,10 @@ xiraid_arrays:
       - /dev/nvme8n1
       - /dev/nvme9n1
       - /dev/nvme10n1
-    parity_disks: 2
+    parity_disks: 1
 
   - name: log
-    level: 1
+    level: 10
     strip_size_kb: 16
     devices:
       - /dev/nvme11n1
