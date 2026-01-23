@@ -51,10 +51,13 @@
   failed_when:
     - pool_create.rc != 0
     - pool_create.stderr is not search('already exists')
-  loop: "{{ xiraid_spare_pools }}"
+  loop: "{{ xiraid_spare_pools | default([]) }}"
   loop_control:
     loop_var: item
-  when: item.name not in ((existing_pools | default([], true) | json_query('[].name')) | default([], true))
+  when:
+    - xiraid_spare_pools is defined
+    - xiraid_spare_pools | length > 0
+    - item.name not in ((existing_pools | default([], true) | json_query('[].name')) | default([], true))
   tags: [raid_fs, raid]
 
 - name: Find active MD RAID arrays
