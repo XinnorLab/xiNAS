@@ -67,31 +67,9 @@ enter_license() {
     cat "$TMP_DIR/license" > "$license_file"
 }
 
-# Edit network configuration for Ansible netplan role
+# Edit network configuration (IP pool or manual)
 configure_network() {
-    local template="collection/roles/net_controllers/templates/netplan.yaml.j2"
-    if [ ! -f "$template" ]; then
-        whiptail --msgbox "File $template not found" 8 60
-        return
-    fi
-
-    local edit_tmp="$TMP_DIR/netplan_edit"
-    cp "$template" "$edit_tmp"
-
-    if command -v dialog >/dev/null 2>&1; then
-        if dialog --title "Edit netplan template" --editbox "$edit_tmp" 20 70 2>"$TMP_DIR/netplan_new"; then
-            cat "$TMP_DIR/netplan_new" > "$template"
-        else
-            return 0
-        fi
-    else
-        whiptail --title "Edit netplan" --msgbox "Modify $template in the terminal. End with Ctrl-D." 10 60
-        cat "$template" > "$TMP_DIR/netplan_new"
-        cat >> "$TMP_DIR/netplan_new"
-        cat "$TMP_DIR/netplan_new" > "$template"
-    fi
-
-    whiptail --title "Ansible Netplan" --textbox "$template" 20 70
+    ./configure_network.sh
 }
 # Configure hostname for Ansible role
 configure_hostname() {
@@ -280,9 +258,13 @@ apply_preset() {
     [ -d "$pdir" ] || { whiptail --msgbox "Preset $preset not found" 8 60; return; }
 
     local msg="Applying preset: $preset\n"
+    if [ -f "$pdir/network.yml" ]; then
+        cp "$pdir/network.yml" "collection/roles/net_controllers/defaults/main.yml"
+        msg+="- IP pool configuration\n"
+    fi
     if [ -f "$pdir/netplan.yaml.j2" ]; then
         cp "$pdir/netplan.yaml.j2" "collection/roles/net_controllers/templates/netplan.yaml.j2"
-        msg+="- network configuration\n"
+        msg+="- network template\n"
     fi
     if [ -f "$pdir/raid_fs.yml" ]; then
         cp "$pdir/raid_fs.yml" "collection/roles/raid_fs/defaults/main.yml"
@@ -341,6 +323,7 @@ save_preset() {
         rm -rf "$pdir"
     fi
     mkdir -p "$pdir"
+    cp "collection/roles/net_controllers/defaults/main.yml" "$pdir/network.yml" 2>/dev/null || true
     cp "collection/roles/net_controllers/templates/netplan.yaml.j2" "$pdir/netplan.yaml.j2" 2>/dev/null || true
     cp "collection/roles/raid_fs/defaults/main.yml" "$pdir/raid_fs.yml" 2>/dev/null || true
     cp "collection/roles/exports/defaults/main.yml" "$pdir/nfs_exports.yml" 2>/dev/null || true

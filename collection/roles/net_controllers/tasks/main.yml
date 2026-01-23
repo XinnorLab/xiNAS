@@ -1,10 +1,91 @@
 ---
+# =============================================================
+# Role: net_controllers
+# Purpose: Configure high-speed network interfaces with automatic IP allocation
+# =============================================================
+
+# Step 1: Detect high-speed network interfaces
+- name: Detect high-speed network interfaces (InfiniBand + mlx5)
+  ansible.builtin.shell: |
+    set -o pipefail
+    for iface in /sys/class/net/*; do
+      [ -d "$iface" ] || continue
+      name=$(basename "$iface")
+      # Skip loopback and virtual interfaces
+      [ "$name" = "lo" ] && continue
+      [ -e "$iface/device" ] || continue
+
+      type=$(cat "$iface/type" 2>/dev/null || echo "0")
+      driver=$(basename "$(readlink -f "$iface/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
+
+      # InfiniBand interfaces (type 32) or mlx5_core driver
+      if [ "$type" = "32" ] || [ "$driver" = "mlx5_core" ]; then
+        echo "$name"
+      fi
+    done | sort
+  args:
+    executable: /bin/bash
+  register: detected_interfaces
+  changed_when: false
+  when: net_ip_pool_enabled | bool
+  tags: [network]
+
+- name: Display detected interfaces
+  ansible.builtin.debug:
+    msg: "Detected high-speed interfaces: {{ detected_interfaces.stdout_lines | default([]) | join(', ') }}"
+  when: net_ip_pool_enabled | bool
+  tags: [network]
+
+# Step 2: Build IP allocation map from pool
+- name: Build IP allocation map from pool
+  ansible.builtin.set_fact:
+    net_allocated_ips: >-
+      {%- set result = {} -%}
+      {%- set pool_parts = net_ip_pool_start.split('.') -%}
+      {%- set base = pool_parts[0] ~ '.' ~ pool_parts[1] ~ '.' -%}
+      {%- set start_octet = pool_parts[2] | int -%}
+      {%- set host_octet = pool_parts[3] -%}
+      {%- for iface in detected_interfaces.stdout_lines | default([]) -%}
+      {%- if iface in net_manual_ips -%}
+      {%- set _ = result.update({iface: net_manual_ips[iface]}) -%}
+      {%- else -%}
+      {%- set _ = result.update({iface: base ~ (start_octet + loop.index0) ~ '.' ~ host_octet ~ '/' ~ net_ip_pool_prefix | string}) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ result }}
+  when: net_ip_pool_enabled | bool
+  tags: [network]
+
+- name: Display IP allocation
+  ansible.builtin.debug:
+    msg: |
+      IP Allocation:
+      {% for iface, ip in net_allocated_ips.items() %}
+        {{ iface }}: {{ ip }}
+      {% endfor %}
+  when: net_ip_pool_enabled | bool and (net_allocated_ips | length > 0)
+  tags: [network]
+
+# Step 3: Deploy netplan configuration
 - name: Deploy netplan configuration for network controllers
   ansible.builtin.template:
     src: netplan.yaml.j2
     dest: /etc/netplan/99-xinas.yaml
     owner: root
     group: root
-    mode: '0644'
+    mode: '0600'
   notify: apply netplan
+  when: net_ip_pool_enabled | bool and (net_allocated_ips | default({}) | length > 0)
+  tags: [network]
+
+# Fallback: Manual mode (pool disabled)
+- name: Deploy static netplan configuration (manual mode)
+  ansible.builtin.template:
+    src: netplan.yaml.j2
+    dest: /etc/netplan/99-xinas.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  notify: apply netplan
+  when: not net_ip_pool_enabled | bool
   tags: [network]

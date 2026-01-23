@@ -117,9 +117,13 @@ apply_preset() {
     local pdir="$REPO_DIR/presets/$preset"
     [ -d "$pdir" ] || { whiptail --msgbox "Preset $preset not found" 8 60; return; }
     local msg="Applying preset: $preset\n"
+    if [ -f "$pdir/network.yml" ]; then
+        cp "$pdir/network.yml" "collection/roles/net_controllers/defaults/main.yml"
+        msg+="- IP pool configuration\n"
+    fi
     if [ -f "$pdir/netplan.yaml.j2" ]; then
         cp "$pdir/netplan.yaml.j2" "collection/roles/net_controllers/templates/netplan.yaml.j2"
-        msg+="- network configuration\n"
+        msg+="- network template\n"
     fi
     if [ -f "$pdir/raid_fs.yml" ]; then
         cp "$pdir/raid_fs.yml" "collection/roles/raid_fs/defaults/main.yml"
@@ -157,18 +161,20 @@ choose_preset() {
 }
 
 while true; do
-    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 15 70 7 \
+    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 16 70 8 \
         1 "Collect Data" \
         2 "Enter License" \
-        3 "Presets" \
-        4 "Install" \
-        5 "Exit" \
+        3 "Configure Network (IP Pool)" \
+        4 "Presets" \
+        5 "Install" \
+        6 "Exit" \
         3>&1 1>&2 2>&3)
     case "$choice" in
         1) ./collect_data.sh ;;
         2) enter_license ;;
-        3) choose_preset ;;
-        4)
+        3) ./configure_network.sh ;;
+        4) choose_preset ;;
+        5)
             if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
                 run_playbook "playbooks/site.yml" "inventories/lab.ini"
                 chmod +x post_install_menu.sh
@@ -176,6 +182,6 @@ while true; do
                 exit 0
             fi
             ;;
-        5) exit 2 ;;
+        6) exit 2 ;;
     esac
 done

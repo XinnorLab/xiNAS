@@ -1,0 +1,26 @@
+---
+# =============================================================
+# Role: net_controllers
+# Purpose: Configure high-speed network interfaces with automatic IP allocation
+# =============================================================
+
+# Automatic IP pool allocation
+net_ip_pool_enabled: true
+net_ip_pool_start: "10.10.1.1"
+net_ip_pool_end: "10.10.255.1"
+net_ip_pool_prefix: 24
+
+# Interface detection filters
+# Detects InfiniBand (type 32) and mlx5_core driver interfaces
+net_detect_infiniband: true
+net_detect_mlx5: true
+
+# Manual IP overrides (takes precedence over pool allocation)
+# Example:
+#   net_manual_ips:
+#     ib0: "192.168.1.100/24"
+#     ibp65s0: "10.20.30.1/24"
+net_manual_ips: {}
+
+# MTU for high-speed interfaces (0 = use system default)
+net_mtu: 0
