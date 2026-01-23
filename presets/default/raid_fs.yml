@@ -42,7 +42,7 @@ xfs_filesystems:
     data_device: "/dev/xi_data"
     log_device: "/dev/xi_log"
     su_kb: 128
-    sw: 8
+    sw: 9
     log_size: 1G
     sector_size: 4k
     mountpoint: /mnt/data
