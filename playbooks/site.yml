@@ -7,9 +7,7 @@
     - role: doca_ofed
     - role: net_controllers
     - role: xiraid_classic  # EULA is accepted automatically
-    - role: nvme_namespace  # Auto-detect drives and rebuild namespaces
     - role: raid_fs
     - role: exports       # manage /etc/exports
     - role: nfs_server    # configure kernel NFS server
-    #- role: xiraid_exporter    # expose xiRAID metrics (temporarily disabled)
     - role: perf_tuning

@@ -1,4 +1,4 @@
-doca_distro_series: "ubuntu24.04"
+doca_distro_series: "ubuntu22.04"
 doca_version: "2.9.1"          # or "DGX_latest_DOCA" for always-latest
 doca_repo_base: "https://linux.mellanox.com/public/repo/doca"
 doca_repo_component: "{{ doca_version }}/{{ doca_distro_series }}/x86_64"

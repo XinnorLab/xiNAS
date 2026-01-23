@@ -11,13 +11,6 @@ xiraid_force_metadata: true
 # When true, always format XFS filesystems even if the label already exists
 xfs_force_mkfs: true
 
-# Spare pool definitions. A single pool example:
-# xiraid_spare_pools:
-#   - name: sp1
-#     devices:
-#       - /dev/sdq
-xiraid_spare_pools: []
-
 # Default RAID arrays and filesystem definitions used by the xiNAS example
 # deployment. Modify these values directly rather than using group variables.
 xiraid_arrays:
