@@ -1,0 +1,54 @@
+---
+# Configure RoCE mode and ToS settings
+
+# Step 1: Set RoCE mode via rdma_cm configfs (if available)
+- name: Check for rdma_cm configfs
+  ansible.builtin.stat:
+    path: /sys/kernel/config/rdma_cm
+  register: rdma_cm_configfs
+
+- name: Configure RoCE version via rdma_cm configfs
+  ansible.builtin.shell: |
+    rdma_dev="{{ roce_iface_to_rdma[item] }}"
+    mode_file="/sys/kernel/config/rdma_cm/${rdma_dev}/ports/1/default_roce_mode"
+    if [ -f "$mode_file" ]; then
+      echo "{{ 'RoCE v2' if roce_version == '2' else 'IB/RoCE v1' }}" > "$mode_file"
+      echo "Set RoCE mode on ${rdma_dev}"
+    else
+      echo "configfs not available for ${rdma_dev}"
+    fi
+  args:
+    executable: /bin/bash
+  loop: "{{ roce_detected_interfaces }}"
+  register: roce_mode_set
+  changed_when: "'Set RoCE mode' in roce_mode_set.stdout"
+  failed_when: false
+  when: rdma_cm_configfs.stat.exists
+  tags: [roce_lossless, roce]
+
+# Step 2: Set cma_roce_tos via sysctl
+- name: Configure RDMA CM RoCE ToS
+  ansible.builtin.sysctl:
+    name: net.rdma_cm.default_roce_tos
+    value: "{{ roce_cma_tos }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/90-roce-lossless.conf
+    reload: true
+  when: roce_cma_tos | int >= 0
+  tags: [roce_lossless, roce]
+
+# Step 3: Verify mlx5 module parameters for RoCE
+- name: Check mlx5_core module is loaded
+  ansible.builtin.shell: lsmod | grep -q mlx5_core
+  register: mlx5_loaded
+  changed_when: false
+  failed_when: false
+
+- name: Log RoCE configuration
+  ansible.builtin.debug:
+    msg: |
+      RoCE configured:
+        Version: RoCEv{{ roce_version }}
+        CMA ToS: {{ roce_cma_tos }} (DSCP {{ (roce_cma_tos | int) // 4 }})
+        mlx5_core loaded: {{ 'yes' if mlx5_loaded.rc == 0 else 'no' }}
+  tags: [roce_lossless, roce]

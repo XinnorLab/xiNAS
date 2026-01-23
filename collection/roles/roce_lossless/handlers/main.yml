@@ -1,0 +1,11 @@
+---
+# Handlers for roce_lossless role
+
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart openibd
+  ansible.builtin.service:
+    name: openibd
+    state: restarted

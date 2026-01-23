@@ -1,0 +1,107 @@
+---
+# Validate lossless RoCE configuration
+
+- name: Initialize validation results
+  ansible.builtin.set_fact:
+    roce_validation_passed: true
+    roce_validation_errors: []
+
+# Validation 1: Check PFC is active via mlnx_qos
+- name: Get mlnx_qos output for validation
+  ansible.builtin.command: "mlnx_qos -i {{ item }}"
+  loop: "{{ roce_detected_interfaces }}"
+  register: mlnx_qos_output
+  changed_when: false
+  failed_when: false
+
+- name: Validate PFC configuration
+  ansible.builtin.set_fact:
+    roce_validation_passed: false
+    roce_validation_errors: "{{ roce_validation_errors + ['PFC validation failed on ' + item.item + ': mlnx_qos returned error'] }}"
+  loop: "{{ mlnx_qos_output.results }}"
+  when: item.rc != 0
+
+# Validation 2: Check RDMA device is visible
+- name: Validate RDMA devices are visible
+  ansible.builtin.command: rdma link show
+  register: rdma_link_validate
+  changed_when: false
+  failed_when: false
+
+- name: Check RDMA interfaces in output
+  ansible.builtin.set_fact:
+    roce_validation_passed: false
+    roce_validation_errors: "{{ roce_validation_errors + ['RDMA device not visible for ' + item] }}"
+  loop: "{{ roce_detected_interfaces }}"
+  when: item not in rdma_link_validate.stdout
+
+# Validation 3: Check ibv_devinfo shows devices
+- name: Validate via ibv_devinfo
+  ansible.builtin.command: ibv_devinfo
+  register: ibv_validate
+  changed_when: false
+  failed_when: false
+
+- name: Check ibv_devinfo output
+  ansible.builtin.set_fact:
+    roce_validation_passed: false
+    roce_validation_errors: "{{ roce_validation_errors + ['ibv_devinfo failed or shows no devices'] }}"
+  when: ibv_validate.rc != 0 or 'hca_id' not in ibv_validate.stdout
+
+# Validation 4: Check ethtool pause/flow counters
+- name: Get pause frame statistics
+  ansible.builtin.shell: "ethtool -S {{ item }} 2>/dev/null | grep -E 'pause|pfc' || echo 'no stats'"
+  args:
+    executable: /bin/bash
+  loop: "{{ roce_detected_interfaces }}"
+  register: pause_stats
+  changed_when: false
+  failed_when: false
+
+# Validation 5: Verify sysctl settings
+- name: Validate cma_roce_tos sysctl
+  ansible.builtin.command: sysctl -n net.rdma_cm.default_roce_tos
+  register: tos_validate
+  changed_when: false
+  failed_when: false
+  when: roce_cma_tos | int >= 0
+
+- name: Check ToS value
+  ansible.builtin.set_fact:
+    roce_validation_passed: false
+    roce_validation_errors: "{{ roce_validation_errors + ['cma_roce_tos mismatch: expected ' + (roce_cma_tos | string) + ', got ' + tos_validate.stdout] }}"
+  when:
+    - roce_cma_tos | int >= 0
+    - tos_validate.stdout | trim | int != roce_cma_tos | int
+
+# Display validation summary
+- name: Display validation results
+  ansible.builtin.debug:
+    msg: |
+      ============ Lossless RoCE Validation Results ============
+      Overall status: {{ 'PASSED' if roce_validation_passed else 'FAILED' }}
+
+      {% if not roce_validation_passed %}
+      Errors:
+      {% for error in roce_validation_errors %}
+        - {{ error }}
+      {% endfor %}
+      {% endif %}
+
+      Pause frame statistics:
+      {% for result in pause_stats.results %}
+      {{ result.item }}:
+      {{ result.stdout | default('  (no stats available)') | indent(2) }}
+      {% endfor %}
+      ==========================================================
+  tags: [roce_lossless, validation]
+
+# Fail if validation errors and fail_on_validation_error is true
+- name: Fail on validation errors
+  ansible.builtin.fail:
+    msg: |
+      Lossless RoCE validation failed:
+      {{ roce_validation_errors | join('\n') }}
+  when:
+    - not roce_validation_passed
+    - roce_fail_on_validation_error | bool

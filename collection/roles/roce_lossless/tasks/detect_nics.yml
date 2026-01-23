@@ -1,0 +1,92 @@
+---
+# Detect Mellanox/NVIDIA NICs with RoCE capability
+
+# Step 1: Use provided interfaces or auto-detect
+- name: Check if interfaces are explicitly provided
+  ansible.builtin.set_fact:
+    roce_use_auto_detect: "{{ roce_interfaces | length == 0 }}"
+
+# Step 2: Auto-detect mlx5_core interfaces
+- name: Auto-detect Mellanox NICs with mlx5_core driver
+  when: roce_use_auto_detect | bool
+  block:
+    - name: Find interfaces using mlx5_core driver
+      ansible.builtin.shell: |
+        set -o pipefail
+        for iface in /sys/class/net/*; do
+          [ -L "$iface/device/driver" ] || continue
+          driver=$(basename "$(readlink -f "$iface/device/driver")")
+          if [ "$driver" = "{{ roce_driver_filter }}" ]; then
+            basename "$iface"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: mlx_ifaces_raw
+      changed_when: false
+
+    - name: Parse detected interfaces
+      ansible.builtin.set_fact:
+        roce_auto_detected: "{{ mlx_ifaces_raw.stdout_lines | default([]) }}"
+
+# Step 3: Verify RoCE capability via rdma link
+- name: Verify RDMA/RoCE capability on detected interfaces
+  ansible.builtin.shell: |
+    set -o pipefail
+    rdma link show 2>/dev/null | grep -oE 'netdev [^ ]+' | awk '{print $2}' | sort -u
+  args:
+    executable: /bin/bash
+  register: rdma_capable_raw
+  changed_when: false
+  failed_when: false
+
+- name: Parse RDMA-capable interfaces
+  ansible.builtin.set_fact:
+    roce_rdma_capable: "{{ rdma_capable_raw.stdout_lines | default([]) }}"
+
+# Step 4: Cross-reference mlx5 interfaces with RDMA capability
+- name: Build final interface list (auto-detect mode)
+  ansible.builtin.set_fact:
+    roce_detected_interfaces: "{{ roce_auto_detected | intersect(roce_rdma_capable) | list }}"
+  when: roce_use_auto_detect | bool
+
+- name: Build final interface list (explicit mode)
+  ansible.builtin.set_fact:
+    roce_detected_interfaces: "{{ roce_interfaces | intersect(roce_rdma_capable) | list }}"
+  when: not roce_use_auto_detect | bool
+
+# Step 5: Get RDMA device names for each interface
+- name: Map interfaces to RDMA devices
+  ansible.builtin.shell: |
+    set -o pipefail
+    rdma link show 2>/dev/null | grep 'netdev {{ item }}' | awk '{print $2}' | sed 's|/.*||'
+  args:
+    executable: /bin/bash
+  register: rdma_dev_map
+  loop: "{{ roce_detected_interfaces }}"
+  changed_when: false
+  failed_when: false
+
+- name: Build interface to RDMA device mapping
+  ansible.builtin.set_fact:
+    roce_iface_to_rdma: "{{ dict(roce_detected_interfaces | zip(rdma_dev_map.results | map(attribute='stdout') | list)) }}"
+
+# Step 6: Display detection results
+- name: Display detected NICs
+  ansible.builtin.debug:
+    msg: |
+      ========== RoCE NIC Detection ==========
+      Driver filter: {{ roce_driver_filter }}
+      Auto-detect mode: {{ roce_use_auto_detect }}
+
+      mlx5_core interfaces: {{ roce_auto_detected | default([]) | join(', ') | default('N/A') }}
+      RDMA-capable interfaces: {{ roce_rdma_capable | join(', ') | default('none') }}
+
+      Final interface list: {{ roce_detected_interfaces | join(', ') | default('NONE') }}
+
+      Interface to RDMA device mapping:
+      {% for iface, rdma_dev in roce_iface_to_rdma.items() %}
+        {{ iface }} -> {{ rdma_dev }}
+      {% endfor %}
+      =========================================
+  tags: [roce_lossless, detection]

@@ -1,0 +1,67 @@
+---
+# =============================================================
+# Role: roce_lossless
+# Purpose: Configure lossless Ethernet (DCB/PFC/ETS) for RoCE on Mellanox NICs
+# =============================================================
+
+# Enable/disable the entire role
+roce_lossless_enabled: true
+
+# ===== NIC Detection =====
+# List of interfaces to configure. If empty, auto-detect Mellanox RoCE-capable NICs
+roce_interfaces: []
+# Example: ["enp1s0f0np0", "enp1s0f1np1"]
+
+# Driver filter for auto-detection (only mlx5_core supports RoCE well)
+roce_driver_filter: "mlx5_core"
+
+# ===== Priority Flow Control (PFC) =====
+# PFC priority for RoCE traffic (typically 3 or 4)
+roce_pfc_priority: 3
+
+# Enable PFC on the specified priority (disable on others)
+roce_pfc_enabled: true
+
+# ===== Enhanced Transmission Selection (ETS) =====
+# ETS bandwidth allocation (must sum to 100)
+# Format: "bw1,bw2,bw3,bw4,bw5,bw6,bw7,bw8" for TCs 0-7
+roce_ets_tc_bw: "10,10,10,50,10,0,10,0"
+
+# Traffic class for RoCE (matches PFC priority)
+roce_traffic_class: 3
+
+# ===== DSCP/PCP Mapping =====
+# RoCEv2 DSCP value (26=AF31 for standard RoCE, 46=EF for high-priority)
+roce_dscp: 26
+
+# PCP (802.1p) value for tagged VLANs
+roce_pcp: 3
+
+# Enable trust mode (dscp, pcp, or both)
+roce_trust_mode: "dscp"
+
+# ===== RoCE Mode =====
+# RoCE version: "1" (RoCE v1), "2" (RoCEv2/routable)
+roce_version: "2"
+
+# Set RoCE ToS/DSCP via cma_roce_tos sysctl (0-255, -1 to skip)
+# 106 = DSCP 26 shifted left 2 bits + ECN bits
+roce_cma_tos: 106
+
+# ===== ECN Configuration =====
+# Enable ECN marking
+roce_ecn_enabled: true
+
+# ===== Validation =====
+# Run validation checks after configuration
+roce_validate: true
+
+# Fail playbook if validation fails
+roce_fail_on_validation_error: false
+
+# ===== Persistence =====
+# Create systemd service to re-apply settings on boot
+roce_persist: true
+
+# Path for persistence script
+roce_persist_script: "/usr/local/sbin/roce-lossless-config.sh"

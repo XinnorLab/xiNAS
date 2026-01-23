@@ -1,0 +1,45 @@
+---
+# Create persistence mechanism for lossless RoCE settings
+
+# Step 1: Deploy persistence script
+- name: Deploy RoCE lossless configuration script
+  ansible.builtin.template:
+    src: roce-lossless-config.sh.j2
+    dest: "{{ roce_persist_script }}"
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [roce_lossless, persist]
+
+# Step 2: Create systemd service
+- name: Deploy systemd service for RoCE persistence
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/roce-lossless.service
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Apply lossless Ethernet settings for RoCE
+      After=network-online.target openibd.service
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart={{ roce_persist_script }}
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: reload systemd
+  tags: [roce_lossless, persist]
+
+# Step 3: Enable and start the service
+- name: Flush handlers to reload systemd
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable RoCE lossless service
+  ansible.builtin.service:
+    name: roce-lossless
+    enabled: true
+  tags: [roce_lossless, persist]

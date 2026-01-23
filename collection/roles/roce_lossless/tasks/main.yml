@@ -1,0 +1,77 @@
+---
+# Main entry point for roce_lossless role
+#
+# Configures lossless Ethernet (DCB/PFC/ETS) for RoCE on Mellanox/NVIDIA NICs
+
+- name: Check if lossless RoCE configuration is enabled
+  ansible.builtin.debug:
+    msg: "Lossless RoCE configuration is DISABLED. Set roce_lossless_enabled: true to enable."
+  when: not roce_lossless_enabled | bool
+
+- name: Configure lossless Ethernet for RoCE
+  when: roce_lossless_enabled | bool
+  block:
+    # Phase 1: Detect Mellanox NICs with RoCE capability
+    - name: Detect RoCE-capable NICs
+      ansible.builtin.include_tasks: detect_nics.yml
+
+    # Phase 2: Abort if no RoCE NICs found
+    - name: Check for RoCE-capable NICs
+      ansible.builtin.fail:
+        msg: |
+          No Mellanox/NVIDIA NICs with RoCE capability detected.
+          Ensure DOCA-OFED is installed and mlx5_core driver is loaded.
+      when: roce_detected_interfaces | length == 0
+
+    # Phase 3: Configure DCB (PFC/ETS)
+    - name: Configure DCB/PFC/ETS
+      ansible.builtin.include_tasks: configure_dcb.yml
+
+    # Phase 4: Configure DSCP/PCP mapping
+    - name: Configure DSCP/PCP mapping
+      ansible.builtin.include_tasks: configure_dscp.yml
+
+    # Phase 5: Configure RoCE mode and ToS
+    - name: Configure RoCE parameters
+      ansible.builtin.include_tasks: configure_roce.yml
+
+    # Phase 6: Configure ECN
+    - name: Configure ECN
+      ansible.builtin.include_tasks: configure_ecn.yml
+      when: roce_ecn_enabled | bool
+
+    # Phase 7: Create persistence mechanism
+    - name: Setup boot persistence
+      ansible.builtin.include_tasks: persist_config.yml
+      when: roce_persist | bool
+
+    # Phase 8: Validate configuration
+    - name: Validate lossless configuration
+      ansible.builtin.include_tasks: validate.yml
+      when: roce_validate | bool
+
+    # Phase 9: Summary report
+    - name: Display configuration summary
+      ansible.builtin.debug:
+        msg: |
+          ============ RoCE Lossless Configuration Complete ============
+          Interfaces configured: {{ roce_detected_interfaces | join(', ') }}
+
+          DCB Configuration:
+            PFC enabled on priority: {{ roce_pfc_priority }}
+            Traffic class: {{ roce_traffic_class }}
+            ETS bandwidth allocation: {{ roce_ets_tc_bw }}
+
+          DSCP/PCP Mapping:
+            DSCP: {{ roce_dscp }}
+            PCP: {{ roce_pcp }}
+            Trust mode: {{ roce_trust_mode }}
+
+          RoCE Configuration:
+            Version: RoCEv{{ roce_version }}
+            CMA ToS: {{ roce_cma_tos }}
+
+          ECN: {{ 'enabled' if roce_ecn_enabled else 'disabled' }}
+          Persistence: {{ 'enabled' if roce_persist else 'disabled' }}
+          =============================================================
+      tags: [roce_lossless]

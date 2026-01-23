@@ -1,0 +1,21 @@
+---
+# Configure Explicit Congestion Notification (ECN) for RoCE
+
+# Step 1: Enable ECN on the RoCE traffic class
+- name: Enable ECN for RoCE traffic class
+  ansible.builtin.command: "mlnx_qos -i {{ item }} --ecn={{ roce_traffic_class }},on"
+  loop: "{{ roce_detected_interfaces }}"
+  register: ecn_config
+  changed_when: ecn_config.rc == 0
+  failed_when:
+    - ecn_config.rc != 0
+    - "'not supported' not in ecn_config.stderr | default('')"
+  tags: [roce_lossless, ecn]
+
+- name: Log ECN configuration
+  ansible.builtin.debug:
+    msg: |
+      ECN configured on {{ roce_detected_interfaces | join(', ') }}:
+        Traffic class: {{ roce_traffic_class }}
+        Status: enabled
+  tags: [roce_lossless, ecn]

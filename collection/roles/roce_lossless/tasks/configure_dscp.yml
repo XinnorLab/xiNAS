@@ -1,0 +1,45 @@
+---
+# Configure DSCP/PCP mapping and trust mode
+
+# Step 1: Set trust mode (dscp, pcp, or both)
+- name: Configure trust mode to {{ roce_trust_mode }}
+  ansible.builtin.command: "mlnx_qos -i {{ item }} --trust={{ roce_trust_mode }}"
+  loop: "{{ roce_detected_interfaces }}"
+  register: trust_config
+  changed_when: trust_config.rc == 0
+  failed_when:
+    - trust_config.rc != 0
+    - "'not supported' not in trust_config.stderr | default('')"
+  tags: [roce_lossless, dscp]
+
+# Step 2: Map DSCP to priority/TC
+# DSCP 26 (AF31) -> Priority 3 -> TC 3
+- name: Configure DSCP to priority mapping
+  ansible.builtin.command: "mlnx_qos -i {{ item }} --dscp2prio set,{{ roce_dscp }},{{ roce_pfc_priority }}"
+  loop: "{{ roce_detected_interfaces }}"
+  register: dscp2prio_config
+  changed_when: dscp2prio_config.rc == 0
+  failed_when:
+    - dscp2prio_config.rc != 0
+    - "'not supported' not in dscp2prio_config.stderr | default('')"
+  tags: [roce_lossless, dscp]
+
+# Step 3: Map PCP (802.1p) to priority (for VLAN-tagged traffic)
+- name: Configure PCP to priority mapping
+  ansible.builtin.command: "mlnx_qos -i {{ item }} --pcp2prio {{ roce_pcp }},{{ roce_pfc_priority }}"
+  loop: "{{ roce_detected_interfaces }}"
+  register: pcp2prio_config
+  changed_when: pcp2prio_config.rc == 0
+  failed_when:
+    - pcp2prio_config.rc != 0
+    - "'not supported' not in pcp2prio_config.stderr | default('')"
+  tags: [roce_lossless, dscp]
+
+- name: Log DSCP/PCP configuration
+  ansible.builtin.debug:
+    msg: |
+      DSCP/PCP configured on {{ roce_detected_interfaces | join(', ') }}:
+        Trust mode: {{ roce_trust_mode }}
+        DSCP {{ roce_dscp }} -> Priority {{ roce_pfc_priority }}
+        PCP {{ roce_pcp }} -> Priority {{ roce_pfc_priority }}
+  tags: [roce_lossless, dscp]

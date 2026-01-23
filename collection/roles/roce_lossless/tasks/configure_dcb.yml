@@ -1,0 +1,65 @@
+---
+# Configure DCB (PFC/ETS) using mlnx_qos tool
+
+# Step 1: Check if mlnx_qos is available
+- name: Verify mlnx_qos tool is available
+  ansible.builtin.command: which mlnx_qos
+  register: mlnx_qos_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail if mlnx_qos not found
+  ansible.builtin.fail:
+    msg: |
+      mlnx_qos tool not found. Ensure DOCA-OFED is installed correctly.
+      The doca_ofed role should run before roce_lossless.
+  when: mlnx_qos_check.rc != 0
+
+# Step 2: Build PFC string (e.g., "0,0,0,1,0,0,0,0" for priority 3)
+- name: Build PFC priority string
+  ansible.builtin.set_fact:
+    roce_pfc_string: >-
+      {%- set pfc_list = [] -%}
+      {%- for i in range(8) -%}
+      {%- if i == roce_pfc_priority | int -%}
+      {%- set _ = pfc_list.append('1') -%}
+      {%- else -%}
+      {%- set _ = pfc_list.append('0') -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ pfc_list | join(',') }}
+
+# Step 3: Enable DCB on interfaces
+- name: Enable DCB mode on interfaces
+  ansible.builtin.command: "mlnx_qos -i {{ item }} --dcbx_mode=firmware"
+  loop: "{{ roce_detected_interfaces }}"
+  register: dcb_enable
+  changed_when: dcb_enable.rc == 0
+  failed_when:
+    - dcb_enable.rc != 0
+    - "'already' not in dcb_enable.stderr | default('')"
+  tags: [roce_lossless, dcb]
+
+# Step 4: Configure PFC
+- name: Configure PFC on priority {{ roce_pfc_priority }}
+  ansible.builtin.command: "mlnx_qos -i {{ item }} --pfc {{ roce_pfc_string | trim }}"
+  loop: "{{ roce_detected_interfaces }}"
+  register: pfc_config
+  changed_when: pfc_config.rc == 0
+  tags: [roce_lossless, pfc]
+
+# Step 5: Configure ETS bandwidth allocation
+- name: Configure ETS traffic class bandwidth
+  ansible.builtin.command: "mlnx_qos -i {{ item }} --tc_bw {{ roce_ets_tc_bw }}"
+  loop: "{{ roce_detected_interfaces }}"
+  register: ets_config
+  changed_when: ets_config.rc == 0
+  tags: [roce_lossless, ets]
+
+- name: Log DCB configuration
+  ansible.builtin.debug:
+    msg: |
+      DCB configured on {{ roce_detected_interfaces | join(', ') }}:
+        PFC: {{ roce_pfc_string | trim }}
+        ETS TC bandwidth: {{ roce_ets_tc_bw }}
+  tags: [roce_lossless, dcb]
