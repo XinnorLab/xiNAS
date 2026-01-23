@@ -48,15 +48,22 @@
               RDMA is ready to use.
               ==================================================
 
-        # Still configure RoCE ToS for apps that use it
-        - name: Configure RDMA CM ToS for InfiniBand
+        # Configure RoCE ToS if available (may not exist on pure IB systems)
+        - name: Check if RDMA CM ToS sysctl exists
+          ansible.builtin.stat:
+            path: /proc/sys/net/rdma_cm/default_roce_tos
+          register: roce_tos_sysctl
+
+        - name: Configure RDMA CM ToS (if available)
           ansible.builtin.sysctl:
             name: net.rdma_cm.default_roce_tos
-            value: "{{ roce_cma_tos }}"
+            value: "{{ roce_cma_tos | string }}"
             state: present
             sysctl_file: /etc/sysctl.d/90-roce-lossless.conf
             reload: true
-          when: roce_cma_tos | int >= 0
+          when:
+            - roce_cma_tos | int >= 0
+            - roce_tos_sysctl.stat.exists
           tags: [roce_lossless, ib]
 
     # Phase 4: RoCE mode - full DCB/PFC/ETS configuration
