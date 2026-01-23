@@ -103,17 +103,21 @@
   ansible.builtin.shell: |
     for dev in /sys/block/nvme*/queue/nr_requests; do
       [ -e "$dev" ] || continue
-      echo {{ perf_nr_requests }} > "$dev"
+      echo {{ perf_nr_requests }} > "$dev" 2>/dev/null || true
     done
+    exit 0
   when: perf_nr_requests | int > 0
+  changed_when: false
   tags: [io]
 
 - name: Set read-ahead to {{ perf_read_ahead_kb }} KB for NVMe devices
   ansible.builtin.shell: |
     for blk in /dev/nvme*n*; do
       [ -e "$blk" ] || continue
-      /sbin/blockdev --setra {{ perf_read_ahead_kb }} "$blk"
+      /sbin/blockdev --setra {{ perf_read_ahead_kb }} "$blk" 2>/dev/null || true
     done
+    exit 0
+  changed_when: false
   tags: [io]
 
 # ===== Sysctl network 400 Gbit =====
