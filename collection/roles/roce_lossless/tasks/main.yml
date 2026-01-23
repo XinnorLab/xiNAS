@@ -1,77 +1,140 @@
 ---
 # Main entry point for roce_lossless role
 #
-# Configures lossless Ethernet (DCB/PFC/ETS) for RoCE on Mellanox/NVIDIA NICs
+# Configures lossless RDMA:
+# - InfiniBand: Native lossless, minimal configuration needed
+# - RoCE: Requires DCB/PFC/ETS for lossless Ethernet
 
-- name: Check if lossless RoCE configuration is enabled
+- name: Check if lossless RDMA configuration is enabled
   ansible.builtin.debug:
-    msg: "Lossless RoCE configuration is DISABLED. Set roce_lossless_enabled: true to enable."
+    msg: "Lossless RDMA configuration is DISABLED. Set roce_lossless_enabled: true to enable."
   when: not roce_lossless_enabled | bool
 
-- name: Configure lossless Ethernet for RoCE
+- name: Configure lossless RDMA
   when: roce_lossless_enabled | bool
   block:
-    # Phase 1: Detect Mellanox NICs with RoCE capability
-    - name: Detect RoCE-capable NICs
+    # Phase 1: Detect Mellanox NICs and determine mode (IB vs RoCE)
+    - name: Detect RDMA-capable NICs
       ansible.builtin.include_tasks: detect_nics.yml
 
-    # Phase 2: Abort if no RoCE NICs found
-    - name: Check for RoCE-capable NICs
-      ansible.builtin.fail:
-        msg: |
-          No Mellanox/NVIDIA NICs with RoCE capability detected.
-          Ensure DOCA-OFED is installed and mlx5_core driver is loaded.
-      when: roce_detected_interfaces | length == 0
-
-    # Phase 3: Configure DCB (PFC/ETS)
-    - name: Configure DCB/PFC/ETS
-      ansible.builtin.include_tasks: configure_dcb.yml
-
-    # Phase 4: Configure DSCP/PCP mapping
-    - name: Configure DSCP/PCP mapping
-      ansible.builtin.include_tasks: configure_dscp.yml
-
-    # Phase 5: Configure RoCE mode and ToS
-    - name: Configure RoCE parameters
-      ansible.builtin.include_tasks: configure_roce.yml
-
-    # Phase 6: Configure ECN
-    - name: Configure ECN
-      ansible.builtin.include_tasks: configure_ecn.yml
-      when: roce_ecn_enabled | bool
-
-    # Phase 7: Create persistence mechanism
-    - name: Setup boot persistence
-      ansible.builtin.include_tasks: persist_config.yml
-      when: roce_persist | bool
-
-    # Phase 8: Validate configuration
-    - name: Validate lossless configuration
-      ansible.builtin.include_tasks: validate.yml
-      when: roce_validate | bool
-
-    # Phase 9: Summary report
-    - name: Display configuration summary
+    # Phase 2: Handle detection results
+    - name: Check RDMA detection results
       ansible.builtin.debug:
         msg: |
-          ============ RoCE Lossless Configuration Complete ============
-          Interfaces configured: {{ roce_detected_interfaces | join(', ') }}
+          RDMA Mode: {{ rdma_effective_mode }}
+          {% if rdma_effective_mode == 'ib' %}
+          Native InfiniBand detected - skipping PFC/ETS (IB is inherently lossless)
+          {% elif rdma_effective_mode == 'roce' %}
+          RoCE detected - configuring PFC/ETS for lossless Ethernet
+          {% elif rdma_effective_mode == 'none' %}
+          No RDMA devices detected
+          {% endif %}
 
-          DCB Configuration:
-            PFC enabled on priority: {{ roce_pfc_priority }}
-            Traffic class: {{ roce_traffic_class }}
-            ETS bandwidth allocation: {{ roce_ets_tc_bw }}
+    # Phase 3: InfiniBand mode - minimal configuration
+    - name: Configure InfiniBand mode
+      when: rdma_effective_mode == 'ib'
+      block:
+        - name: Display InfiniBand configuration
+          ansible.builtin.debug:
+            msg: |
+              ============ InfiniBand Configuration ============
+              Mode: Native InfiniBand (inherently lossless)
 
-          DSCP/PCP Mapping:
-            DSCP: {{ roce_dscp }}
-            PCP: {{ roce_pcp }}
-            Trust mode: {{ roce_trust_mode }}
+              Detected IB devices: {{ detected_ib_devices | length }}
 
-          RoCE Configuration:
-            Version: RoCEv{{ roce_version }}
-            CMA ToS: {{ roce_cma_tos }}
+              No PFC/ETS configuration needed - InfiniBand provides
+              built-in flow control and lossless transport.
 
-          ECN: {{ 'enabled' if roce_ecn_enabled else 'disabled' }}
-          Persistence: {{ 'enabled' if roce_persist else 'disabled' }}
-          =============================================================
-      tags: [roce_lossless]
+              RDMA is ready to use.
+              ==================================================
+
+        # Still configure RoCE ToS for apps that use it
+        - name: Configure RDMA CM ToS for InfiniBand
+          ansible.builtin.sysctl:
+            name: net.rdma_cm.default_roce_tos
+            value: "{{ roce_cma_tos }}"
+            state: present
+            sysctl_file: /etc/sysctl.d/90-roce-lossless.conf
+            reload: true
+          when: roce_cma_tos | int >= 0
+          tags: [roce_lossless, ib]
+
+    # Phase 4: RoCE mode - full DCB/PFC/ETS configuration
+    - name: Configure RoCE mode (lossless Ethernet)
+      when: rdma_effective_mode == 'roce'
+      block:
+        # Check for RoCE interfaces
+        - name: Check for RoCE-capable NICs
+          ansible.builtin.fail:
+            msg: |
+              No RoCE-capable NICs detected.
+              Ensure DOCA-OFED is installed and Ethernet interfaces with RDMA are available.
+          when: roce_detected_interfaces | length == 0
+
+        # Configure DCB (PFC/ETS)
+        - name: Configure DCB/PFC/ETS
+          ansible.builtin.include_tasks: configure_dcb.yml
+
+        # Configure DSCP/PCP mapping
+        - name: Configure DSCP/PCP mapping
+          ansible.builtin.include_tasks: configure_dscp.yml
+
+        # Configure RoCE mode and ToS
+        - name: Configure RoCE parameters
+          ansible.builtin.include_tasks: configure_roce.yml
+
+        # Configure ECN
+        - name: Configure ECN
+          ansible.builtin.include_tasks: configure_ecn.yml
+          when: roce_ecn_enabled | bool
+
+        # Create persistence mechanism
+        - name: Setup boot persistence
+          ansible.builtin.include_tasks: persist_config.yml
+          when: roce_persist | bool
+
+        # Validate configuration
+        - name: Validate lossless configuration
+          ansible.builtin.include_tasks: validate.yml
+          when: roce_validate | bool
+
+        # Summary report
+        - name: Display RoCE configuration summary
+          ansible.builtin.debug:
+            msg: |
+              ============ RoCE Lossless Configuration Complete ============
+              Mode: RoCE (RDMA over Converged Ethernet)
+              Interfaces configured: {{ roce_detected_interfaces | join(', ') }}
+
+              DCB Configuration:
+                PFC enabled on priority: {{ roce_pfc_priority }}
+                Traffic class: {{ roce_traffic_class }}
+                ETS bandwidth allocation: {{ roce_ets_tc_bw }}
+
+              DSCP/PCP Mapping:
+                DSCP: {{ roce_dscp }}
+                PCP: {{ roce_pcp }}
+                Trust mode: {{ roce_trust_mode }}
+
+              RoCE Configuration:
+                Version: RoCEv{{ roce_version }}
+                CMA ToS: {{ roce_cma_tos }}
+
+              ECN: {{ 'enabled' if roce_ecn_enabled else 'disabled' }}
+              Persistence: {{ 'enabled' if roce_persist else 'disabled' }}
+              =============================================================
+          tags: [roce_lossless]
+
+    # Phase 5: No RDMA detected
+    - name: Handle no RDMA devices
+      when: rdma_effective_mode == 'none'
+      ansible.builtin.debug:
+        msg: |
+          ============ No RDMA Devices Detected ============
+          No InfiniBand or RoCE devices were found.
+
+          Ensure:
+          - DOCA-OFED is installed
+          - mlx5_core driver is loaded
+          - RDMA-capable NICs are present
+          ===================================================

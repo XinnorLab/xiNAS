@@ -1,18 +1,24 @@
 ---
 # =============================================================
 # Role: roce_lossless
-# Purpose: Configure lossless Ethernet (DCB/PFC/ETS) for RoCE on Mellanox NICs
+# Purpose: Configure lossless RDMA - InfiniBand (native) or RoCE (Ethernet)
 # =============================================================
 
 # Enable/disable the entire role
 roce_lossless_enabled: true
 
+# ===== RDMA Mode =====
+# "auto" - auto-detect: skip config for native IB (already lossless), configure PFC/ETS for RoCE
+# "ib"   - native InfiniBand mode (skip PFC/ETS, IB is inherently lossless)
+# "roce" - RoCE mode (configure PFC/ETS for lossless Ethernet)
+rdma_mode: "auto"
+
 # ===== NIC Detection =====
-# List of interfaces to configure. If empty, auto-detect Mellanox RoCE-capable NICs
+# List of interfaces to configure. If empty, auto-detect Mellanox RDMA-capable NICs
 roce_interfaces: []
 # Example: ["enp1s0f0np0", "enp1s0f1np1"]
 
-# Driver filter for auto-detection (only mlx5_core supports RoCE well)
+# Driver filter for auto-detection (only mlx5_core supports RDMA well)
 roce_driver_filter: "mlx5_core"
 
 # ===== Priority Flow Control (PFC) =====

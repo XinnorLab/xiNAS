@@ -1,5 +1,5 @@
 ---
-# Detect Mellanox/NVIDIA NICs with RoCE capability
+# Detect Mellanox/NVIDIA NICs with RDMA capability (InfiniBand or RoCE)
 
 # Step 1: Use provided interfaces or auto-detect
 - name: Check if interfaces are explicitly provided
@@ -29,8 +29,55 @@
       ansible.builtin.set_fact:
         roce_auto_detected: "{{ mlx_ifaces_raw.stdout_lines | default([]) }}"
 
-# Step 3: Verify RoCE capability via rdma link
-- name: Verify RDMA/RoCE capability on detected interfaces
+# Step 3: Get all RDMA devices and their link layer type
+- name: Get RDMA devices with link layer info
+  ansible.builtin.shell: |
+    set -o pipefail
+    for dev in /sys/class/infiniband/*; do
+      [ -d "$dev" ] || continue
+      devname=$(basename "$dev")
+      for port in "$dev"/ports/*; do
+        [ -d "$port" ] || continue
+        portnum=$(basename "$port")
+        link_layer=$(cat "$port/link_layer" 2>/dev/null || echo "unknown")
+        # Get netdev if available
+        netdev=""
+        if [ -f "$port/gid_attrs/ndevs/0" ]; then
+          netdev=$(cat "$port/gid_attrs/ndevs/0" 2>/dev/null || echo "")
+        fi
+        echo "${devname}:${portnum}:${link_layer}:${netdev}"
+      done
+    done
+  args:
+    executable: /bin/bash
+  register: rdma_devices_raw
+  changed_when: false
+  failed_when: false
+
+- name: Parse RDMA devices info
+  ansible.builtin.set_fact:
+    rdma_devices_info: "{{ rdma_devices_raw.stdout_lines | default([]) }}"
+
+# Step 4: Determine detected link types
+- name: Detect link layer types
+  ansible.builtin.set_fact:
+    detected_ib_devices: >-
+      {{ rdma_devices_info | select('search', ':InfiniBand:') | list }}
+    detected_roce_devices: >-
+      {{ rdma_devices_info | select('search', ':Ethernet:') | list }}
+
+# Step 5: Set effective RDMA mode
+- name: Determine effective RDMA mode
+  ansible.builtin.set_fact:
+    rdma_effective_mode: >-
+      {%- if rdma_mode == 'auto' -%}
+      {%- if detected_roce_devices | length > 0 -%}roce{%- elif detected_ib_devices | length > 0 -%}ib{%- else -%}none{%- endif -%}
+      {%- else -%}
+      {{ rdma_mode }}
+      {%- endif -%}
+
+# Step 6: Get RDMA-capable network interfaces
+- name: Get RDMA-capable interfaces via rdma link
   ansible.builtin.shell: |
     set -o pipefail
     rdma link show 2>/dev/null | grep -oE 'netdev [^ ]+' | awk '{print $2}' | sort -u
@@ -44,10 +91,10 @@
   ansible.builtin.set_fact:
     roce_rdma_capable: "{{ rdma_capable_raw.stdout_lines | default([]) }}"
 
-# Step 4: Cross-reference mlx5 interfaces with RDMA capability
+# Step 7: Build final interface list
 - name: Build final interface list (auto-detect mode)
   ansible.builtin.set_fact:
-    roce_detected_interfaces: "{{ roce_auto_detected | intersect(roce_rdma_capable) | list }}"
+    roce_detected_interfaces: "{{ roce_auto_detected | default([]) | intersect(roce_rdma_capable) | list }}"
   when: roce_use_auto_detect | bool
 
 - name: Build final interface list (explicit mode)
@@ -55,7 +102,7 @@
     roce_detected_interfaces: "{{ roce_interfaces | intersect(roce_rdma_capable) | list }}"
   when: not roce_use_auto_detect | bool
 
-# Step 5: Get RDMA device names for each interface
+# Step 8: Get RDMA device names for each interface
 - name: Map interfaces to RDMA devices
   ansible.builtin.shell: |
     set -o pipefail
@@ -70,23 +117,35 @@
 - name: Build interface to RDMA device mapping
   ansible.builtin.set_fact:
     roce_iface_to_rdma: "{{ dict(roce_detected_interfaces | zip(rdma_dev_map.results | map(attribute='stdout') | list)) }}"
+  when: roce_detected_interfaces | length > 0
 
-# Step 6: Display detection results
+- name: Set empty mapping if no interfaces
+  ansible.builtin.set_fact:
+    roce_iface_to_rdma: {}
+  when: roce_detected_interfaces | length == 0
+
+# Step 9: Display detection results
 - name: Display detected NICs
   ansible.builtin.debug:
     msg: |
-      ========== RoCE NIC Detection ==========
-      Driver filter: {{ roce_driver_filter }}
-      Auto-detect mode: {{ roce_use_auto_detect }}
+      ========== RDMA NIC Detection ==========
+      Configured mode: {{ rdma_mode }}
+      Effective mode: {{ rdma_effective_mode }}
+
+      Detected devices:
+        InfiniBand: {{ detected_ib_devices | length }} device(s)
+        RoCE/Ethernet: {{ detected_roce_devices | length }} device(s)
 
       mlx5_core interfaces: {{ roce_auto_detected | default([]) | join(', ') | default('N/A') }}
       RDMA-capable interfaces: {{ roce_rdma_capable | join(', ') | default('none') }}
 
       Final interface list: {{ roce_detected_interfaces | join(', ') | default('NONE') }}
 
-      Interface to RDMA device mapping:
-      {% for iface, rdma_dev in roce_iface_to_rdma.items() %}
-        {{ iface }} -> {{ rdma_dev }}
-      {% endfor %}
+      {% if rdma_effective_mode == 'ib' %}
+      NOTE: Native InfiniBand detected - PFC/ETS configuration will be SKIPPED
+            (InfiniBand is inherently lossless)
+      {% elif rdma_effective_mode == 'roce' %}
+      NOTE: RoCE (Ethernet) detected - PFC/ETS will be configured for lossless transport
+      {% endif %}
       =========================================
   tags: [roce_lossless, detection]

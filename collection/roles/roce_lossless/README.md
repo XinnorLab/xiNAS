@@ -1,10 +1,15 @@
 # roce_lossless
 
-Configure lossless Ethernet (DCB/PFC/ETS) for RoCE on Mellanox/NVIDIA NICs.
+Configure lossless RDMA transport for InfiniBand or RoCE on Mellanox/NVIDIA NICs.
 
 ## Overview
 
-This role enables lossless transport for RoCEv2 over UDP/IP on NVIDIA/Mellanox NICs by configuring:
+This role supports two RDMA modes:
+
+**InfiniBand (IB)** - Native InfiniBand is inherently lossless. No PFC/ETS configuration needed.
+
+**RoCE (RDMA over Converged Ethernet)** - Requires DCB/PFC/ETS configuration for lossless transport:
+
 
 - **PFC** (Priority Flow Control) - Prevents packet loss by pausing traffic on congested priorities
 - **ETS** (Enhanced Transmission Selection) - Guarantees bandwidth allocation for RoCE traffic
@@ -22,6 +27,7 @@ This role enables lossless transport for RoCEv2 over UDP/IP on NVIDIA/Mellanox N
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `roce_lossless_enabled` | `true` | Enable/disable the role |
+| `rdma_mode` | `auto` | RDMA mode: `auto`, `ib`, or `roce` |
 | `roce_interfaces` | `[]` | Interfaces to configure (auto-detect if empty) |
 | `roce_driver_filter` | `mlx5_core` | Driver to filter during auto-detection |
 | `roce_pfc_priority` | `3` | PFC priority for RoCE traffic (0-7) |
