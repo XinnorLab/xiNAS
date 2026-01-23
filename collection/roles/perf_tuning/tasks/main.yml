@@ -7,6 +7,7 @@
     name:
       - cpufrequtils
       - linux-tools-common
+      - linux-tools-generic
       - tuned
     state: present
   tags: [packages]
@@ -33,9 +34,21 @@
 # ===== CPU governor & irqbalance =====
 - name: Set CPU frequency governor to {{ perf_cpu_governor }}
   ansible.builtin.command: "cpupower frequency-set -g {{ perf_cpu_governor }}"
+  register: cpupower_result
+  changed_when: cpupower_result.rc == 0
+  failed_when: false
   when:
     - ansible_facts['architecture'] == 'x86_64'
     - not perf_disable_cpupower
+  tags: [cpu]
+
+- name: Warn if cpupower failed
+  ansible.builtin.debug:
+    msg: "WARNING: cpupower failed (rc={{ cpupower_result.rc }}). Install linux-tools-{{ ansible_kernel }} if needed."
+  when:
+    - cpupower_result is defined
+    - cpupower_result.rc is defined
+    - cpupower_result.rc != 0
   tags: [cpu]
 
 - name: Stop and disable irqbalance if requested
