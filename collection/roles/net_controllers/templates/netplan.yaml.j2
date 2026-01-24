@@ -1,20 +1,7 @@
-# Ansible managed - xiNAS network configuration
 network:
   version: 2
   renderer: networkd
   ethernets:
-{% if net_ip_pool_enabled | default(false) and net_allocated_ips is defined %}
-{% for iface, ip in net_allocated_ips.items() %}
-    {{ iface }}:
-      dhcp4: no
-      addresses: [{{ ip }}]
-{% if net_mtu | default(0) | int > 0 %}
-      mtu: {{ net_mtu }}
-{% endif %}
-{% endfor %}
-{% else %}
-    # Fallback static configuration
     ib0:
       dhcp4: no
-      addresses: [100.100.100.1/24]
-{% endif %}
+      addresses: [ 100.100.100.1/24 ]

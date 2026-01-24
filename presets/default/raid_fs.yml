@@ -1,48 +1,27 @@
 # Default values for the raid_fs role
 #
-# The actual RAID array and filesystem configuration is stored here so
-# interactive helper scripts can modify it directly.
+# This preset uses automatic NVMe namespace detection.
+# The nvme_namespace role will:
+# - Detect all non-system NVMe drives
+# - Create small namespaces (n1) for XFS log device
+# - Create large namespaces (n2) for data
+# - Generate xiraid_arrays and xfs_filesystems automatically
+
 xiraid_license_path: "/tmp/license"
 
 # Whether to pass `--force_metadata` when creating arrays
-# Set to `false` if metadata should not be overwritten
 xiraid_force_metadata: true
 
 # When true, always format XFS filesystems even if the label already exists
 xfs_force_mkfs: true
 
-# Default RAID arrays and filesystem definitions used by the xiNAS example
-# deployment. Modify these values directly rather than using group variables.
-xiraid_arrays:
-  - name: data
-    level: 5
-    strip_size_kb: 128
-    devices:
-      - /dev/nvme1n1
-      - /dev/nvme2n1
-      - /dev/nvme3n1
-      - /dev/nvme4n1
-      - /dev/nvme5n1
-      - /dev/nvme6n1
-      - /dev/nvme7n1
-      - /dev/nvme8n1
-      - /dev/nvme9n1
-      - /dev/nvme10n1
-    parity_disks: 1
+# Enable automatic NVMe namespace management
+# This will auto-detect drives and generate RAID configuration
+nvme_auto_namespace: true
 
-  - name: log
-    level: 10
-    strip_size_kb: 16
-    devices:
-      - /dev/nvme11n1
-      - /dev/nvme12n1
+# RAID levels for auto-generated arrays
+nvme_raid_data_level: 5       # RAID 5 for large namespaces (data array)
+nvme_raid_log_level: 10       # RAID 10 for small namespaces (log array)
 
-xfs_filesystems:
-  - label: nfsdata
-    data_device: "/dev/xi_data"
-    log_device: "/dev/xi_log"
-    # su_kb and sw are auto-calculated from data array geometry
-    log_size: 1G
-    sector_size: 4k
-    mountpoint: /mnt/data
-    mount_opts: "logdev=/dev/xi_log,noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k"
+# Note: xiraid_arrays and xfs_filesystems are generated automatically
+# by nvme_namespace role when nvme_auto_namespace: true

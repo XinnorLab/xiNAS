@@ -6,8 +6,8 @@
     - role: common
     - role: doca_ofed
     - role: net_controllers
-    - role: roce_lossless   # Configure lossless Ethernet (DCB/PFC/ETS) for RoCE
     - role: xiraid_classic  # EULA is accepted automatically
+    - role: nvme_namespace  # Auto-detect drives and create namespaces
     - role: raid_fs
     - role: exports       # manage /etc/exports
     - role: nfs_server    # configure kernel NFS server
