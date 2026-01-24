@@ -1,4 +1,32 @@
 ---
+# Validate required variables
+- name: Check if xiraid_arrays is defined
+  ansible.builtin.fail:
+    msg: |
+      xiraid_arrays is not defined!
+
+      If using automatic detection (nvme_auto_namespace: true):
+        - Ensure nvme_namespace role runs before raid_fs
+        - Check that NVMe data drives were detected
+        - Review nvme_namespace role output for errors
+
+      If using manual configuration:
+        - Define xiraid_arrays in your preset (e.g., presets/default/raid_fs.yml)
+        - Set nvme_auto_namespace: false
+  when: xiraid_arrays is not defined or xiraid_arrays | length == 0
+
+- name: Check if xfs_filesystems is defined
+  ansible.builtin.fail:
+    msg: |
+      xfs_filesystems is not defined!
+
+      If using automatic detection (nvme_auto_namespace: true):
+        - Ensure nvme_namespace role runs before raid_fs
+
+      If using manual configuration:
+        - Define xfs_filesystems in your preset
+  when: xfs_filesystems is not defined or xfs_filesystems | length == 0
+
 - name: Apply xiRAID license
   ansible.builtin.command: "xicli license update -p {{ xiraid_license_path }}"
   changed_when: false

@@ -25,12 +25,25 @@
     nvme_can_create_log_raid: >-
       {{ (nvme_small_ns_count | int >= nvme_min_devices_for_raid10 | int) and
          (nvme_small_ns_count | int % 2 == 0) }}
+    _log_raid_level: "{{ nvme_raid_log_level }}"
   when: nvme_raid_log_level | int == 10
+
+# Fallback to RAID 1 if not enough devices for RAID 10
+- name: Fallback to RAID 1 for log array (insufficient devices for RAID 10)
+  ansible.builtin.set_fact:
+    nvme_can_create_log_raid: "{{ nvme_small_ns_count | int >= 2 }}"
+    _log_raid_level: "1"
+  when:
+    - nvme_raid_log_level | int == 10
+    - nvme_can_create_log_raid is defined
+    - not (nvme_can_create_log_raid | bool)
+    - nvme_small_ns_count | int >= 2
 
 - name: Validate RAID 1 requirements for log array
   ansible.builtin.set_fact:
     nvme_can_create_log_raid: >-
       {{ nvme_small_ns_count | int >= 2 }}
+    _log_raid_level: "1"
   when: nvme_raid_log_level | int == 1
 
 # Set defaults for other RAID levels
@@ -42,6 +55,7 @@
 - name: Default log RAID validation
   ansible.builtin.set_fact:
     nvme_can_create_log_raid: "{{ nvme_small_ns_count | int >= 2 }}"
+    _log_raid_level: "{{ nvme_raid_log_level }}"
   when: nvme_can_create_log_raid is not defined
 
 # Report validation results
@@ -83,7 +97,7 @@
         devices: "{{ nvme_large_ns_devices }}"
         parity_disks: "{{ _data_parity_disks | int }}"
       - name: log
-        level: "{{ nvme_raid_log_level }}"
+        level: "{{ _log_raid_level | default(nvme_raid_log_level) }}"
         strip_size_kb: "{{ nvme_raid_log_strip_kb }}"
         devices: "{{ nvme_small_ns_devices }}"
   when:
@@ -131,7 +145,8 @@
 
       LOG Array:
         Name: log
-        Level: RAID {{ nvme_raid_log_level }}
+        Level: RAID {{ _log_raid_level | default(nvme_raid_log_level) }}{% if _log_raid_level | default(nvme_raid_log_level) | string != nvme_raid_log_level | string %} (fallback from RAID {{ nvme_raid_log_level }}){% endif %}
+
         Strip size: {{ nvme_raid_log_strip_kb }}KB
         Devices ({{ nvme_small_ns_devices | length }}):
           {{ nvme_small_ns_devices | join('\n          ') }}
