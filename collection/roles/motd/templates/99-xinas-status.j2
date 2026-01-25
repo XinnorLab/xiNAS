@@ -105,13 +105,36 @@ LOAD=$(cat /proc/loadavg | awk '{print $1", "$2", "$3}')
 KERNEL=$(uname -r)
 MEMORY=$(free -h | awk '/^Mem:/ {printf "%s / %s (%.0f%%)", $3, $2, $3/$2*100}')
 
+# CPU Info
+CPU_CORES=$(nproc)
+CPU_MODEL=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ //' | sed 's/(R)//g' | sed 's/(TM)//g' | cut -c1-40)
+# CPU usage (idle from top, calculate usage)
+CPU_IDLE=$(top -bn1 | grep "Cpu(s)" | awk '{print $8}' | cut -d. -f1 2>/dev/null)
+if [[ -n "$CPU_IDLE" ]]; then
+    CPU_USAGE=$((100 - CPU_IDLE))
+else
+    # Alternative method using /proc/stat
+    CPU_USAGE=$(awk '/^cpu / {usage=100-($5*100/($2+$3+$4+$5+$6+$7+$8))} END {printf "%.0f", usage}' /proc/stat 2>/dev/null)
+fi
+CPU_INFO="${CPU_CORES} cores @ ${CPU_USAGE}% usage"
+
+# NFSD threads
+if [[ -f /proc/fs/nfsd/threads ]]; then
+    NFSD_THREADS=$(cat /proc/fs/nfsd/threads 2>/dev/null)
+    NFSD_INFO="${NFSD_THREADS} threads"
+else
+    NFSD_INFO="not running"
+fi
+
 print_center "SYSTEM INFORMATION" "$WHITE"
 print_separator
 print_row "  Hostname" "$HOSTNAME" "$GREEN"
 print_row "  Kernel" "$KERNEL" "$CYAN"
 print_row "  Uptime" "$UPTIME" "$CYAN"
+print_row "  CPU" "$CPU_INFO" "$CYAN"
 print_row "  Load Average" "$LOAD" "$CYAN"
 print_row "  Memory" "$MEMORY" "$CYAN"
+print_row "  NFS Daemon" "$NFSD_INFO" "$CYAN"
 print_separator
 
 # Network Interfaces
