@@ -7,8 +7,9 @@
 nvme_auto_namespace: true
 
 # Use existing namespaces instead of recreating them
-# Set to true if drives already have n1/n2 namespaces or don't support namespace mgmt
-nvme_use_existing_namespaces: false
+# Set to true if drives already have namespaces or don't support namespace mgmt
+# Default: true (safer - doesn't destroy existing data)
+nvme_use_existing_namespaces: true
 
 # Size of the small namespace (MB) - used for XFS log device
 nvme_small_ns_size_mb: 500
