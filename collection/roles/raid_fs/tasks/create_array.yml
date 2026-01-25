@@ -5,7 +5,7 @@
 
 - name: Calculate data disk count (for RAID5/6 stripe-width)
   ansible.builtin.set_fact:
-    _sw: "{{ (item.devices | length) - (item.parity_disks | default(0)) }}"
+    _sw: "{{ (item.devices | length | int) - (item.parity_disks | default(0) | int) }}"
   tags: [raid_fs, raid]
 
 - name: Create array {{ item.name }}
