@@ -39,15 +39,25 @@
           All detected NVMe drives appear to be system drives.
       when: nvme_data_drives | length == 0
 
-    # Phase 4: Collect NVMe topology (only if we have data drives)
-    - name: Collect NVMe topology
-      ansible.builtin.include_tasks: collect_topology.yml
-      when: nvme_data_drives | length > 0
+    # Phase 4: Either use existing namespaces or rebuild them
+    - name: Use existing namespaces (skip rebuild)
+      ansible.builtin.include_tasks: detect_existing_namespaces.yml
+      when:
+        - nvme_data_drives | length > 0
+        - nvme_use_existing_namespaces | bool
 
-    # Phase 5: Rebuild namespaces (only if we have data drives)
+    - name: Collect NVMe topology for namespace rebuild
+      ansible.builtin.include_tasks: collect_topology.yml
+      when:
+        - nvme_data_drives | length > 0
+        - not (nvme_use_existing_namespaces | bool)
+
+    # Phase 5: Rebuild namespaces (only if not using existing)
     - name: Rebuild namespaces on data drives
       ansible.builtin.include_tasks: rebuild_namespaces.yml
-      when: nvme_data_drives | length > 0
+      when:
+        - nvme_data_drives | length > 0
+        - not (nvme_use_existing_namespaces | bool)
 
     # Phase 6: Generate RAID configuration (only if namespaces were created)
     - name: Generate RAID configuration

@@ -1,0 +1,55 @@
+---
+# Detect existing NVMe namespaces on data drives
+# Used when nvme_use_existing_namespaces: true
+
+- name: Initialize namespace device lists
+  ansible.builtin.set_fact:
+    nvme_small_ns_devices: []
+    nvme_large_ns_devices: []
+    nvme_failed_devices: []
+
+# Detect all existing namespaces on data drives
+- name: Detect existing namespaces on data drives
+  ansible.builtin.shell: |
+    controller="{{ item }}"
+    # List all namespaces on this controller
+    ls -1 /dev/$(basename "$controller")n* 2>/dev/null | sort -V || true
+  args:
+    executable: /bin/bash
+  register: existing_ns_result
+  loop: "{{ nvme_data_drives }}"
+  changed_when: false
+
+# Build device lists from existing namespaces
+# Assume: n1 = small (log), n2+ = large (data)
+- name: Build namespace device lists from existing namespaces
+  ansible.builtin.set_fact:
+    nvme_small_ns_devices: >-
+      {{ nvme_small_ns_devices | default([]) +
+         (item.stdout_lines | select('match', '.*/nvme[0-9]+n1$') | list) }}
+    nvme_large_ns_devices: >-
+      {{ nvme_large_ns_devices | default([]) +
+         (item.stdout_lines | select('match', '.*/nvme[0-9]+n[2-9]$') | list) +
+         (item.stdout_lines | select('match', '.*/nvme[0-9]+n[0-9][0-9]+$') | list) }}
+  loop: "{{ existing_ns_result.results }}"
+  when: item.stdout_lines | length > 0
+
+# If no n2 namespaces found, use n1 for data (single namespace per drive)
+- name: Use n1 namespaces for data if no n2 found
+  ansible.builtin.set_fact:
+    nvme_large_ns_devices: "{{ nvme_small_ns_devices }}"
+    nvme_small_ns_devices: []
+  when:
+    - nvme_large_ns_devices | length == 0
+    - nvme_small_ns_devices | length > 0
+
+- name: Display detected existing namespaces
+  ansible.builtin.debug:
+    msg: |
+      ========== Existing Namespace Detection ==========
+      Small namespaces (n1) detected: {{ nvme_small_ns_devices | length }}
+        {{ nvme_small_ns_devices | join('\n        ') | default('none') }}
+
+      Large namespaces (n2+) detected: {{ nvme_large_ns_devices | length }}
+        {{ nvme_large_ns_devices | join('\n        ') | default('none') }}
+      ==================================================

@@ -19,6 +19,10 @@ xfs_force_mkfs: true
 # This will auto-detect drives and generate RAID configuration
 nvme_auto_namespace: true
 
+# Use existing namespaces instead of recreating them
+# Set to true if drives already have namespaces or don't support namespace mgmt
+nvme_use_existing_namespaces: true
+
 # RAID levels for auto-generated arrays
 nvme_raid_data_level: 5       # RAID 5 for large namespaces (data array)
 nvme_raid_log_level: 10       # RAID 10 for small namespaces (log array)
