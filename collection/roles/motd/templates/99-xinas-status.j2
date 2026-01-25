@@ -1,0 +1,299 @@
+#!/bin/bash
+# xiNAS Dynamic MOTD - System Status Display
+# Deployed by Ansible
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+GRAY='\033[0;90m'
+NC='\033[0m'
+BOLD='\033[1m'
+
+# Box drawing characters
+H_LINE="━"
+V_LINE="┃"
+TL="┏"
+TR="┓"
+BL="┗"
+BR="┛"
+T_DOWN="┳"
+T_UP="┻"
+T_RIGHT="┣"
+T_LEFT="┫"
+CROSS="╋"
+
+# Get terminal width (default 80)
+TERM_WIDTH=${COLUMNS:-80}
+[[ $TERM_WIDTH -gt 100 ]] && TERM_WIDTH=100
+BOX_WIDTH=$((TERM_WIDTH - 2))
+
+# Helper functions
+print_line() {
+    local char="${1:-$H_LINE}"
+    printf "%s" "$TL"
+    for ((i=0; i<BOX_WIDTH; i++)); do printf "%s" "$char"; done
+    printf "%s\n" "$TR"
+}
+
+print_separator() {
+    printf "%s" "$T_RIGHT"
+    for ((i=0; i<BOX_WIDTH; i++)); do printf "%s" "$H_LINE"; done
+    printf "%s\n" "$T_LEFT"
+}
+
+print_bottom() {
+    printf "%s" "$BL"
+    for ((i=0; i<BOX_WIDTH; i++)); do printf "%s" "$H_LINE"; done
+    printf "%s\n" "$BR"
+}
+
+print_row() {
+    local label="$1"
+    local value="$2"
+    local color="${3:-$NC}"
+    # Strip color codes for length calculation
+    local clean_label=$(echo -e "$label" | sed 's/\x1b\[[0-9;]*m//g')
+    local clean_value=$(echo -e "$value" | sed 's/\x1b\[[0-9;]*m//g')
+    local padding=$((BOX_WIDTH - ${#clean_label} - ${#clean_value} - 4))
+    [[ $padding -lt 1 ]] && padding=1
+    printf "%s ${label}" "$V_LINE"
+    printf "%*s" $padding ""
+    printf "${color}${value}${NC} %s\n" "$V_LINE"
+}
+
+print_center() {
+    local text="$1"
+    local color="${2:-$WHITE}"
+    local clean_text=$(echo -e "$text" | sed 's/\x1b\[[0-9;]*m//g')
+    local padding=$(( (BOX_WIDTH - ${#clean_text}) / 2 ))
+    printf "%s" "$V_LINE"
+    printf "%*s" $padding ""
+    printf "${color}${text}${NC}"
+    printf "%*s" $((BOX_WIDTH - padding - ${#clean_text})) ""
+    printf "%s\n" "$V_LINE"
+}
+
+print_empty() {
+    printf "%s" "$V_LINE"
+    printf "%*s" $BOX_WIDTH ""
+    printf "%s\n" "$V_LINE"
+}
+
+# Header
+echo ""
+echo -e "${CYAN}"
+print_line
+print_empty
+print_center "██╗  ██╗██╗███╗   ██╗ █████╗ ███████╗" "$BLUE"
+print_center "╚██╗██╔╝██║████╗  ██║██╔══██╗██╔════╝" "$BLUE"
+print_center " ╚███╔╝ ██║██╔██╗ ██║███████║███████╗" "$BLUE"
+print_center " ██╔██╗ ██║██║╚██╗██║██╔══██║╚════██║" "$BLUE"
+print_center "██╔╝ ██╗██║██║ ╚████║██║  ██║███████║" "$BLUE"
+print_center "╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝" "$BLUE"
+print_empty
+print_center "High-Performance NAS Server" "$YELLOW"
+print_separator
+
+# System Info
+HOSTNAME=$(hostname -f 2>/dev/null || hostname)
+UPTIME=$(uptime -p 2>/dev/null | sed 's/up //')
+LOAD=$(cat /proc/loadavg | awk '{print $1", "$2", "$3}')
+KERNEL=$(uname -r)
+MEMORY=$(free -h | awk '/^Mem:/ {printf "%s / %s (%.0f%%)", $3, $2, $3/$2*100}')
+
+print_center "SYSTEM INFORMATION" "$WHITE"
+print_separator
+print_row "  Hostname" "$HOSTNAME" "$GREEN"
+print_row "  Kernel" "$KERNEL" "$CYAN"
+print_row "  Uptime" "$UPTIME" "$CYAN"
+print_row "  Load Average" "$LOAD" "$CYAN"
+print_row "  Memory" "$MEMORY" "$CYAN"
+print_separator
+
+# Network Interfaces
+print_center "NETWORK INTERFACES" "$WHITE"
+print_separator
+
+# Get high-speed interfaces (InfiniBand + mlx5)
+for iface in $(ls /sys/class/net/ 2>/dev/null | grep -v '^lo$'); do
+    # Skip if no IP
+    ip_addr=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/\d+' | head -1)
+    [[ -z "$ip_addr" ]] && continue
+
+    # Get interface type and speed
+    iface_type=$(cat /sys/class/net/"$iface"/type 2>/dev/null)
+    speed=$(cat /sys/class/net/"$iface"/speed 2>/dev/null)
+    driver=$(basename "$(readlink -f /sys/class/net/"$iface"/device/driver 2>/dev/null)" 2>/dev/null)
+    state=$(cat /sys/class/net/"$iface"/operstate 2>/dev/null)
+
+    # Format speed
+    if [[ "$speed" =~ ^[0-9]+$ ]]; then
+        if [[ $speed -ge 100000 ]]; then
+            speed_str="${speed%000} Gbps"
+        elif [[ $speed -ge 1000 ]]; then
+            speed_str="$((speed/1000)) Gbps"
+        else
+            speed_str="${speed} Mbps"
+        fi
+    else
+        speed_str="N/A"
+    fi
+
+    # Determine interface category
+    if [[ "$iface_type" == "32" ]]; then
+        category="${YELLOW}IB${NC}"
+    elif [[ "$driver" == "mlx5_core" ]]; then
+        category="${CYAN}RDMA${NC}"
+    elif [[ "$iface" == eth* ]] || [[ "$iface" == en* ]]; then
+        category="${GREEN}ETH${NC}"
+    else
+        category="${GRAY}NET${NC}"
+    fi
+
+    # State color
+    if [[ "$state" == "up" ]]; then
+        state_color=$GREEN
+        state_icon="●"
+    else
+        state_color=$RED
+        state_icon="○"
+    fi
+
+    printf "%s  ${state_color}${state_icon}${NC} %-12s [${category}]  %-18s  ${CYAN}%s${NC}" "$V_LINE" "$iface" "$ip_addr" "$speed_str"
+    printf "%*s%s\n" $((BOX_WIDTH - 52)) "" "$V_LINE"
+done
+
+print_separator
+
+# RAID Status
+print_center "RAID ARRAYS" "$WHITE"
+print_separator
+
+if command -v xicli &> /dev/null; then
+    raid_json=$(xicli raid show -f json 2>/dev/null)
+    if [[ -n "$raid_json" && "$raid_json" != "[]" ]]; then
+        echo "$raid_json" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for arr in data:
+        name = arr.get('name', 'unknown')
+        level = arr.get('level', '?')
+        state = arr.get('state', 'unknown')
+        size_bytes = arr.get('size', 0)
+
+        # Convert size
+        if size_bytes >= 1099511627776:
+            size_str = f'{size_bytes/1099511627776:.1f} TB'
+        elif size_bytes >= 1073741824:
+            size_str = f'{size_bytes/1073741824:.1f} GB'
+        else:
+            size_str = f'{size_bytes/1048576:.1f} MB'
+
+        # State color code
+        if state.lower() in ['online', 'optimal', 'active']:
+            state_color = '\033[0;32m'  # Green
+            icon = '●'
+        elif state.lower() in ['degraded', 'rebuilding']:
+            state_color = '\033[1;33m'  # Yellow
+            icon = '◐'
+        else:
+            state_color = '\033[0;31m'  # Red
+            icon = '○'
+
+        print(f'  {state_color}{icon}\033[0m  {name:<12} RAID {level:<4} {size_str:<12} {state_color}{state}\033[0m')
+except:
+    print('  Unable to parse RAID status')
+" 2>/dev/null | while read line; do
+            printf "%s%s" "$V_LINE" "$line"
+            printf "%*s%s\n" $((BOX_WIDTH - 50)) "" "$V_LINE"
+        done
+    else
+        print_row "  Status" "No RAID arrays configured" "$YELLOW"
+    fi
+else
+    print_row "  Status" "xiRAID not installed" "$GRAY"
+fi
+
+print_separator
+
+# NFS Shares
+print_center "NFS SHARES" "$WHITE"
+print_separator
+
+if [[ -f /etc/exports ]]; then
+    share_count=0
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+
+        share_path=$(echo "$line" | awk '{print $1}')
+        [[ -z "$share_path" ]] && continue
+
+        # Check if mounted/accessible
+        if mountpoint -q "$share_path" 2>/dev/null || [[ -d "$share_path" ]]; then
+            status_color=$GREEN
+            status_icon="●"
+            # Get size if possible
+            size=$(df -h "$share_path" 2>/dev/null | awk 'NR==2 {print $2}')
+            used=$(df -h "$share_path" 2>/dev/null | awk 'NR==2 {print $5}')
+            size_info="${size:-N/A} (${used:-N/A} used)"
+        else
+            status_color=$RED
+            status_icon="○"
+            size_info="Not mounted"
+        fi
+
+        printf "%s  ${status_color}${status_icon}${NC}  %-30s  ${CYAN}%s${NC}" "$V_LINE" "$share_path" "$size_info"
+        printf "%*s%s\n" $((BOX_WIDTH - 55)) "" "$V_LINE"
+        ((share_count++))
+    done < /etc/exports
+
+    [[ $share_count -eq 0 ]] && print_row "  Status" "No shares configured" "$YELLOW"
+else
+    print_row "  Status" "NFS not configured" "$GRAY"
+fi
+
+print_separator
+
+# Active NFS Clients
+print_center "ACTIVE NFS CLIENTS" "$WHITE"
+print_separator
+
+if [[ -f /proc/fs/nfsd/clients/*/info ]]; then
+    client_count=0
+    for client_dir in /proc/fs/nfsd/clients/*/; do
+        [[ -f "${client_dir}info" ]] || continue
+        client_ip=$(grep -oP 'address:\s*\K[\d.]+' "${client_dir}info" 2>/dev/null | head -1)
+        [[ -n "$client_ip" ]] && {
+            printf "%s  ${GREEN}●${NC}  %-40s" "$V_LINE" "$client_ip"
+            printf "%*s%s\n" $((BOX_WIDTH - 45)) "" "$V_LINE"
+            ((client_count++))
+        }
+    done
+    [[ $client_count -eq 0 ]] && print_row "  Status" "No active clients" "$GRAY"
+else
+    # Alternative method using ss
+    nfs_clients=$(ss -tn state established '( dport = :2049 )' 2>/dev/null | awk 'NR>1 {print $4}' | cut -d: -f1 | sort -u)
+    if [[ -n "$nfs_clients" ]]; then
+        echo "$nfs_clients" | while read client_ip; do
+            printf "%s  ${GREEN}●${NC}  %-40s" "$V_LINE" "$client_ip"
+            printf "%*s%s\n" $((BOX_WIDTH - 45)) "" "$V_LINE"
+        done
+    else
+        print_row "  Status" "No active clients" "$GRAY"
+    fi
+fi
+
+# Footer
+print_separator
+print_empty
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+print_center "Last updated: $TIMESTAMP" "$GRAY"
+print_bottom
+echo -e "${NC}"

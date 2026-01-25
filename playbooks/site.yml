@@ -12,3 +12,4 @@
     - role: exports       # manage /etc/exports
     - role: nfs_server    # configure kernel NFS server
     - role: perf_tuning
+    - role: motd          # fancy login banner with NAS status

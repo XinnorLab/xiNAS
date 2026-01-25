@@ -1,0 +1,5 @@
+# xiNAS MOTD configuration
+motd_enabled: true
+
+# Disable default Ubuntu MOTD components
+motd_disable_default: true

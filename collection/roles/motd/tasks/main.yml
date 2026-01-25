@@ -1,0 +1,66 @@
+---
+# Deploy xiNAS dynamic MOTD
+
+- name: Disable default Ubuntu MOTD scripts
+  ansible.builtin.file:
+    path: "/etc/update-motd.d/{{ item }}"
+    mode: '0644'
+  loop:
+    - 10-help-text
+    - 50-motd-news
+    - 80-esm
+    - 80-livepatch
+    - 91-release-upgrade
+    - 95-hwe-eol
+  failed_when: false
+  when: motd_disable_default | bool
+  tags: [motd]
+
+- name: Deploy xiNAS MOTD script
+  ansible.builtin.template:
+    src: 99-xinas-status.j2
+    dest: /etc/update-motd.d/99-xinas-status
+    mode: '0755'
+    owner: root
+    group: root
+  when: motd_enabled | bool
+  tags: [motd]
+
+- name: Ensure MOTD is regenerated on login
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/login
+    line: "session    optional   pam_motd.so motd=/run/motd.dynamic"
+    regexp: "pam_motd.*motd=/run/motd.dynamic"
+    state: present
+  failed_when: false
+  tags: [motd]
+
+- name: Ensure SSH shows MOTD
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PrintMotd"
+    line: "PrintMotd no"
+    state: present
+  notify: reload sshd
+  failed_when: false
+  tags: [motd]
+
+- name: Ensure SSH uses PAM (for dynamic MOTD)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?UsePAM"
+    line: "UsePAM yes"
+    state: present
+  notify: reload sshd
+  failed_when: false
+  tags: [motd]
+
+# Also create a standalone script for manual viewing
+- name: Create xinas-status command
+  ansible.builtin.copy:
+    src: /etc/update-motd.d/99-xinas-status
+    dest: /usr/local/bin/xinas-status
+    mode: '0755'
+    remote_src: true
+  when: motd_enabled | bool
+  tags: [motd]
