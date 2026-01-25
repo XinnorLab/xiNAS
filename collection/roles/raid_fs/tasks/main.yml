@@ -50,7 +50,20 @@
 - name: Clean xiRAID drives
   ansible.builtin.command: "xicli drive clean -d {{ item }}"
   loop: "{{ xiraid_device_paths }}"
+  register: drive_clean_result
   changed_when: false
+  failed_when: false
+  tags: [raid_fs, raid, cleanup]
+
+- name: Warn about drives that could not be cleaned
+  ansible.builtin.debug:
+    msg: "WARNING: Could not clean {{ item.item }}: {{ item.stderr | default('unknown error') }}"
+  loop: "{{ drive_clean_result.results }}"
+  when:
+    - item.rc is defined
+    - item.rc != 0
+  loop_control:
+    label: "{{ item.item }}"
   tags: [raid_fs, raid, cleanup]
 
 - name: Ensure mdadm package present
