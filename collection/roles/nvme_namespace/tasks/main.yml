@@ -20,7 +20,14 @@
     - name: Detect system and data drives
       ansible.builtin.include_tasks: detect_drives.yml
 
-    # Phase 2: Abort if system drive not found (safety check)
+    # Phase 2: Cleanup existing storage (LVM, MD, ZFS) on data drives
+    - name: Cleanup existing storage configurations
+      ansible.builtin.include_tasks: cleanup_storage.yml
+      when:
+        - nvme_data_drives | length > 0
+        - nvme_cleanup_existing_storage | default(true) | bool
+
+    # Phase 3: Abort if system drive not found (safety check)
     - name: Abort if system drive not found
       ansible.builtin.fail:
         msg: |
@@ -31,7 +38,7 @@
         - nvme_abort_if_no_system_drive | bool
         - nvme_system_drives is not defined or nvme_system_drives | length == 0
 
-    # Phase 3: Check if there are any data drives to process
+    # Phase 4: Check if there are any data drives to process
     - name: Check for available data drives
       ansible.builtin.debug:
         msg: |
@@ -39,7 +46,7 @@
           All detected NVMe drives appear to be system drives.
       when: nvme_data_drives | length == 0
 
-    # Phase 4: Either use existing namespaces or rebuild them
+    # Phase 5: Either use existing namespaces or rebuild them
     - name: Use existing namespaces (skip rebuild)
       ansible.builtin.include_tasks: detect_existing_namespaces.yml
       when:
@@ -52,14 +59,14 @@
         - nvme_data_drives | length > 0
         - not (nvme_use_existing_namespaces | bool)
 
-    # Phase 5: Rebuild namespaces (only if not using existing)
+    # Phase 6: Rebuild namespaces (only if not using existing)
     - name: Rebuild namespaces on data drives
       ansible.builtin.include_tasks: rebuild_namespaces.yml
       when:
         - nvme_data_drives | length > 0
         - not (nvme_use_existing_namespaces | bool)
 
-    # Phase 6: Generate RAID configuration (only if namespaces were created)
+    # Phase 7: Generate RAID configuration (only if namespaces were created)
     - name: Generate RAID configuration
       ansible.builtin.include_tasks: generate_raid_config.yml
       when:
@@ -69,7 +76,7 @@
         - nvme_small_ns_devices | length > 0
         - nvme_large_ns_devices | length > 0
 
-    # Phase 7: Summary report
+    # Phase 8: Summary report
     - name: Display final summary
       ansible.builtin.debug:
         msg: |

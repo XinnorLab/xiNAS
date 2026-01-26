@@ -1,0 +1,287 @@
+---
+# Detect and remove existing storage configurations (LVM, MD RAID, ZFS) on data drives
+# This runs before namespace operations to ensure clean drives
+
+- name: Initialize cleanup tracking
+  ansible.builtin.set_fact:
+    nvme_found_lvm_pvs: []
+    nvme_found_lvm_vgs: []
+    nvme_found_md_arrays: []
+    nvme_found_zpools: []
+    nvme_cleanup_required: false
+
+# ============ DETECT LVM ============
+- name: Check for LVM physical volumes on data drives
+  ansible.builtin.shell: |
+    pvs --noheadings -o pv_name,vg_name 2>/dev/null | while read pv vg; do
+      for drive in {{ nvme_data_drives | join(' ') }}; do
+        if [[ "$pv" == "${drive}"* ]]; then
+          echo "${pv}|${vg}"
+        fi
+      done
+    done
+  args:
+    executable: /bin/bash
+  register: lvm_pv_check
+  changed_when: false
+  failed_when: false
+
+- name: Parse LVM physical volumes
+  ansible.builtin.set_fact:
+    nvme_found_lvm_pvs: "{{ lvm_pv_check.stdout_lines | default([]) }}"
+  when: lvm_pv_check.stdout_lines | default([]) | length > 0
+
+- name: Extract unique VGs from PVs
+  ansible.builtin.set_fact:
+    nvme_found_lvm_vgs: "{{ nvme_found_lvm_pvs | map('split', '|') | map('last') | select('ne', '') | unique | list }}"
+  when: nvme_found_lvm_pvs | length > 0
+
+# ============ DETECT MD RAID ============
+- name: Check for MD RAID arrays using data drives
+  ansible.builtin.shell: |
+    for md in /dev/md*; do
+      [ -b "$md" ] || continue
+      # Get component devices
+      components=$(mdadm --detail "$md" 2>/dev/null | grep -E '^\s+/dev/' | awk '{print $NF}')
+      for comp in $components; do
+        for drive in {{ nvme_data_drives | join(' ') }}; do
+          if [[ "$comp" == "${drive}"* ]]; then
+            echo "$md"
+            break 2
+          fi
+        done
+      done
+    done 2>/dev/null | sort -u
+  args:
+    executable: /bin/bash
+  register: md_array_check
+  changed_when: false
+  failed_when: false
+
+- name: Parse MD RAID arrays
+  ansible.builtin.set_fact:
+    nvme_found_md_arrays: "{{ md_array_check.stdout_lines | default([]) }}"
+  when: md_array_check.stdout_lines | default([]) | length > 0
+
+# ============ DETECT ZFS ============
+- name: Check if ZFS is available
+  ansible.builtin.command: which zpool
+  register: zpool_available
+  changed_when: false
+  failed_when: false
+
+- name: Check for ZFS pools using data drives
+  ansible.builtin.shell: |
+    zpool list -H -o name 2>/dev/null | while read pool; do
+      # Get devices in pool
+      devices=$(zpool status "$pool" 2>/dev/null | grep -E '^\s+(nvme|sd)' | awk '{print "/dev/"$1}')
+      for dev in $devices; do
+        for drive in {{ nvme_data_drives | join(' ') }}; do
+          if [[ "$dev" == "${drive}"* ]]; then
+            echo "$pool"
+            break 2
+          fi
+        done
+      done
+    done 2>/dev/null | sort -u
+  args:
+    executable: /bin/bash
+  register: zpool_check
+  changed_when: false
+  failed_when: false
+  when: zpool_available.rc == 0
+
+- name: Parse ZFS pools
+  ansible.builtin.set_fact:
+    nvme_found_zpools: "{{ zpool_check.stdout_lines | default([]) }}"
+  when:
+    - zpool_available.rc | default(1) == 0
+    - zpool_check.stdout_lines | default([]) | length > 0
+
+# ============ DETERMINE IF CLEANUP NEEDED ============
+- name: Check if cleanup is required
+  ansible.builtin.set_fact:
+    nvme_cleanup_required: >-
+      {{ (nvme_found_lvm_vgs | length > 0) or
+         (nvme_found_md_arrays | length > 0) or
+         (nvme_found_zpools | length > 0) }}
+
+# ============ DISPLAY FINDINGS ============
+- name: Display detected storage configurations
+  ansible.builtin.debug:
+    msg: |
+      ╔══════════════════════════════════════════════════════════════════════╗
+      ║  ⚠️  EXISTING STORAGE CONFIGURATIONS DETECTED                        ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      {% if nvme_found_lvm_vgs | length > 0 %}
+      ║  LVM Volume Groups:                                                  ║
+      {% for vg in nvme_found_lvm_vgs %}
+      ║    • {{ vg | regex_replace('(.{60}).*', '\1...') }}{{ ' ' * (58 - (vg | length if vg | length < 60 else 60)) }}║
+      {% endfor %}
+      {% endif %}
+      {% if nvme_found_md_arrays | length > 0 %}
+      ║  MD RAID Arrays:                                                     ║
+      {% for md in nvme_found_md_arrays %}
+      ║    • {{ md }}{{ ' ' * (62 - md | length) }}║
+      {% endfor %}
+      {% endif %}
+      {% if nvme_found_zpools | length > 0 %}
+      ║  ZFS Pools:                                                          ║
+      {% for pool in nvme_found_zpools %}
+      ║    • {{ pool }}{{ ' ' * (62 - pool | length) }}║
+      {% endfor %}
+      {% endif %}
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  These will be DESTROYED to prepare drives for xiRAID.               ║
+      ║  ALL DATA ON THESE STORAGE CONFIGURATIONS WILL BE LOST!              ║
+      ╚══════════════════════════════════════════════════════════════════════╝
+  when: nvme_cleanup_required | bool
+
+- name: No cleanup required
+  ansible.builtin.debug:
+    msg: "No existing LVM, MD RAID, or ZFS configurations found on data drives."
+  when: not (nvme_cleanup_required | bool)
+
+# ============ CONFIRMATION PROMPT ============
+- name: Prompt for cleanup confirmation
+  ansible.builtin.pause:
+    prompt: |
+
+      ╔══════════════════════════════════════════════════════════════════════╗
+      ║  ⚠️  WARNING: DATA DESTRUCTION                                       ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  The following will be permanently destroyed:                        ║
+      ║    • {{ nvme_found_lvm_vgs | length }} LVM volume group(s)                                        ║
+      ║    • {{ nvme_found_md_arrays | length }} MD RAID array(s)                                           ║
+      ║    • {{ nvme_found_zpools | length }} ZFS pool(s)                                                 ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Type 'YES' to proceed, or press Ctrl+C to abort                     ║
+      ╚══════════════════════════════════════════════════════════════════════╝
+
+      Confirm destruction (YES/no)
+  register: cleanup_confirmation
+  when:
+    - nvme_cleanup_required | bool
+    - not (nvme_skip_cleanup_confirmation | default(false) | bool)
+
+- name: Verify confirmation
+  ansible.builtin.fail:
+    msg: "Cleanup cancelled by user. Aborting to protect existing data."
+  when:
+    - nvme_cleanup_required | bool
+    - not (nvme_skip_cleanup_confirmation | default(false) | bool)
+    - cleanup_confirmation.user_input | default('') | upper != 'YES'
+
+# ============ REMOVE ZFS POOLS ============
+- name: Destroy ZFS pools
+  ansible.builtin.command: "zpool destroy -f {{ item }}"
+  loop: "{{ nvme_found_zpools }}"
+  when:
+    - nvme_found_zpools | length > 0
+    - nvme_cleanup_required | bool
+  register: zpool_destroy
+  failed_when: false
+
+- name: Report ZFS pool destruction
+  ansible.builtin.debug:
+    msg: "Destroyed ZFS pool: {{ item.item }} (rc={{ item.rc }})"
+  loop: "{{ zpool_destroy.results | default([]) }}"
+  when: zpool_destroy.results is defined
+
+# ============ REMOVE MD RAID ARRAYS ============
+- name: Stop MD RAID arrays
+  ansible.builtin.command: "mdadm --stop {{ item }}"
+  loop: "{{ nvme_found_md_arrays }}"
+  when:
+    - nvme_found_md_arrays | length > 0
+    - nvme_cleanup_required | bool
+  register: md_stop
+  failed_when: false
+
+- name: Zero MD superblocks on data drives
+  ansible.builtin.shell: |
+    for drive in {{ nvme_data_drives | join(' ') }}; do
+      for part in ${drive}* ${drive}p*; do
+        [ -b "$part" ] && mdadm --zero-superblock "$part" 2>/dev/null || true
+      done
+    done
+  args:
+    executable: /bin/bash
+  when:
+    - nvme_found_md_arrays | length > 0
+    - nvme_cleanup_required | bool
+  changed_when: false
+  failed_when: false
+
+# ============ REMOVE LVM ============
+- name: Deactivate LVM volume groups
+  ansible.builtin.command: "vgchange -an {{ item }}"
+  loop: "{{ nvme_found_lvm_vgs }}"
+  when:
+    - nvme_found_lvm_vgs | length > 0
+    - nvme_cleanup_required | bool
+  register: vg_deactivate
+  failed_when: false
+
+- name: Remove LVM volume groups
+  ansible.builtin.command: "vgremove -f {{ item }}"
+  loop: "{{ nvme_found_lvm_vgs }}"
+  when:
+    - nvme_found_lvm_vgs | length > 0
+    - nvme_cleanup_required | bool
+  register: vg_remove
+  failed_when: false
+
+- name: Remove LVM physical volumes on data drives
+  ansible.builtin.shell: |
+    for drive in {{ nvme_data_drives | join(' ') }}; do
+      for part in ${drive}* ${drive}p*; do
+        [ -b "$part" ] && pvremove -f "$part" 2>/dev/null || true
+      done
+    done
+  args:
+    executable: /bin/bash
+  when:
+    - nvme_found_lvm_pvs | length > 0
+    - nvme_cleanup_required | bool
+  changed_when: false
+  failed_when: false
+
+# ============ WIPE PARTITION TABLES ============
+- name: Wipe partition tables on data drives
+  ansible.builtin.shell: |
+    drive="{{ item }}"
+    # Wipe GPT and MBR signatures
+    wipefs -a "$drive" 2>/dev/null || true
+    # Clear first and last MB (partition tables)
+    dd if=/dev/zero of="$drive" bs=1M count=1 2>/dev/null || true
+    dd if=/dev/zero of="$drive" bs=1M seek=$(($(blockdev --getsz "$drive") / 2048 - 1)) count=1 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  loop: "{{ nvme_data_drives }}"
+  when: nvme_cleanup_required | bool
+  changed_when: false
+  failed_when: false
+
+- name: Inform kernel of partition table changes
+  ansible.builtin.command: "partprobe {{ item }}"
+  loop: "{{ nvme_data_drives }}"
+  when: nvme_cleanup_required | bool
+  changed_when: false
+  failed_when: false
+
+# ============ SUMMARY ============
+- name: Cleanup summary
+  ansible.builtin.debug:
+    msg: |
+      ╔══════════════════════════════════════════════════════════════════════╗
+      ║  ✓ STORAGE CLEANUP COMPLETE                                          ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Removed:                                                            ║
+      ║    • {{ nvme_found_lvm_vgs | length }} LVM volume group(s)                                        ║
+      ║    • {{ nvme_found_md_arrays | length }} MD RAID array(s)                                           ║
+      ║    • {{ nvme_found_zpools | length }} ZFS pool(s)                                                 ║
+      ║                                                                      ║
+      ║  Data drives are now clean and ready for xiRAID configuration.       ║
+      ╚══════════════════════════════════════════════════════════════════════╝
+  when: nvme_cleanup_required | bool
