@@ -14,13 +14,21 @@
     controller="{{ item.controller }}"
     failed=0
 
+    # Get controller ID for detach
+    cntlid=$(nvme id-ctrl "$controller" 2>/dev/null | awk '/cntlid/{print $3}')
+    cntlid=${cntlid:-0}
+    # Remove 0x prefix if present
+    cntlid=$(echo "$cntlid" | sed 's/^0x//')
+    # Convert hex to decimal
+    cntlid=$((16#$cntlid))
+
     # Get list of existing namespace IDs
     ns_list=$(nvme list-ns "$controller" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+$' || true)
 
     for nsid in $ns_list; do
-      echo "Detaching and deleting namespace $nsid on $controller"
-      # Detach from all controllers (controller ID 0)
-      nvme detach-ns "$controller" -n "$nsid" -c 0 2>/dev/null || true
+      echo "Detaching and deleting namespace $nsid on $controller (cntlid=$cntlid)"
+      # Detach using actual controller ID
+      nvme detach-ns "$controller" -n "$nsid" -c "$cntlid" 2>/dev/null || true
       # Delete the namespace
       if ! nvme delete-ns "$controller" -n "$nsid" 2>&1; then
         echo "Warning: Failed to delete namespace $nsid on $controller"
