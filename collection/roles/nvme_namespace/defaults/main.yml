@@ -8,8 +8,8 @@ nvme_auto_namespace: true
 
 # Use existing namespaces instead of recreating them
 # Set to true if drives already have namespaces or don't support namespace mgmt
-# Default: true (safer - doesn't destroy existing data)
-nvme_use_existing_namespaces: true
+# Set to false to rebuild namespaces with proper format (4KB, shared)
+nvme_use_existing_namespaces: false
 
 # Size of the small namespace (MB) - used for XFS log device
 nvme_small_ns_size_mb: 500
@@ -21,6 +21,10 @@ nvme_raid_log_level: 10       # RAID 10 for small namespaces (log array)
 # Strip sizes for RAID arrays (KB)
 nvme_raid_data_strip_kb: 128
 nvme_raid_log_strip_kb: 16
+
+# Namespace format settings
+nvme_namespace_block_size: 4096       # Block size in bytes (512, 4096)
+nvme_namespace_shared: true           # Enable shared namespace (nmic=1) for multi-controller access
 
 # Safety settings
 nvme_abort_if_no_system_drive: true   # Abort if system drive cannot be detected

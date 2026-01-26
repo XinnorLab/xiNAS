@@ -20,8 +20,12 @@ xfs_force_mkfs: true
 nvme_auto_namespace: true
 
 # Use existing namespaces instead of recreating them
-# Set to true if drives already have namespaces or don't support namespace mgmt
-nvme_use_existing_namespaces: true
+# Set to FALSE to rebuild namespaces with proper 4KB blocks and shared flag
+nvme_use_existing_namespaces: false
+
+# Namespace format settings (4KB blocks, shared for multi-controller)
+nvme_namespace_block_size: 4096
+nvme_namespace_shared: true
 
 # RAID levels for auto-generated arrays
 nvme_raid_data_level: 5       # RAID 5 for large namespaces (data array)

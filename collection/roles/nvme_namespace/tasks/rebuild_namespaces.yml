@@ -57,16 +57,44 @@
   ansible.builtin.shell: |
     set -e
     controller="{{ item.controller }}"
-    lba_size="{{ item.lba_size }}"
+    block_size="{{ nvme_namespace_block_size }}"
     size_mb="{{ nvme_small_ns_size_mb }}"
+    shared="{{ nvme_namespace_shared | bool | lower }}"
 
-    # Calculate block count
-    blocks=$(( size_mb * 1024 * 1024 / lba_size ))
+    # Calculate block count using configured block size
+    blocks=$(( size_mb * 1024 * 1024 / block_size ))
 
-    echo "Creating small namespace on $controller: $blocks blocks (${size_mb}MB, LBA=${lba_size})"
+    # Determine LBA format index for desired block size
+    # Parse available formats and find matching lbads
+    target_lbads=9  # default 512 bytes (2^9)
+    case "$block_size" in
+      4096) target_lbads=12 ;;  # 2^12 = 4096
+      512)  target_lbads=9 ;;   # 2^9 = 512
+    esac
+
+    # Find flbas index with matching lbads (no metadata)
+    flbas=$(nvme id-ns "$controller" -n 0xffffffff 2>/dev/null | \
+            grep -E "^lbaf\s+[0-9]+" | \
+            grep "ms:0" | \
+            grep "lbads:${target_lbads}" | \
+            head -1 | \
+            awk '{print $2}' | tr -d ':')
+
+    if [ -z "$flbas" ]; then
+      echo "Warning: Could not find LBA format for ${block_size} bytes, using format 0"
+      flbas=0
+    fi
+
+    # Build nmic flag for shared namespace
+    nmic_flag=""
+    if [ "$shared" = "true" ]; then
+      nmic_flag="-m 1"
+    fi
+
+    echo "Creating small namespace on $controller: $blocks blocks (${size_mb}MB, BS=${block_size}, flbas=${flbas}, shared=${shared})"
 
     # Create namespace with size and capacity equal
-    nvme create-ns "$controller" -s "$blocks" -c "$blocks" -f 0 -d 0
+    nvme create-ns "$controller" -s "$blocks" -c "$blocks" -f "$flbas" -d 0 $nmic_flag
 
     # Get the new namespace ID (should be 1)
     nsid=$(nvme list-ns "$controller" 2>/dev/null | tail -1 | awk '{print $1}')
@@ -76,8 +104,12 @@
       exit 1
     fi
 
-    echo "Attaching namespace $nsid to controller"
-    nvme attach-ns "$controller" -n "$nsid" -c 0
+    # Get controller ID for attach
+    cntlid=$(nvme id-ctrl "$controller" 2>/dev/null | awk '/cntlid/{print $3}')
+    cntlid=${cntlid:-0}
+
+    echo "Attaching namespace $nsid to controller (cntlid=$cntlid)"
+    nvme attach-ns "$controller" -n "$nsid" -c "$cntlid"
 
     echo "Successfully created small namespace: ${controller}n${nsid}"
   args:
@@ -102,10 +134,10 @@
   ansible.builtin.shell: |
     set -e
     controller="{{ item.controller }}"
-    lba_size="{{ item.lba_size }}"
+    block_size="{{ nvme_namespace_block_size }}"
+    shared="{{ nvme_namespace_shared | bool | lower }}"
 
     # Get unallocated capacity
-    # First try to get it from id-ctrl
     unalloc=$(nvme id-ctrl "$controller" 2>/dev/null | grep -E '^\s*unvmcap\s*:' | awk -F: '{print $2}' | tr -d ' ')
 
     if [ -z "$unalloc" ] || [ "$unalloc" = "0" ]; then
@@ -115,7 +147,7 @@
       alloc=0
       for ns in $(nvme list-ns "$controller" 2>/dev/null | awk '{print $1}'); do
         ns_size=$(nvme id-ns "${controller}n${ns}" 2>/dev/null | grep -E '^\s*nsze\s*:' | awk -F: '{print $2}' | tr -d ' ')
-        alloc=$((alloc + ns_size * lba_size))
+        alloc=$((alloc + ns_size * block_size))
       done
       unalloc=$((total_cap - alloc))
     fi
@@ -125,13 +157,39 @@
       exit 0
     fi
 
-    # Leave 1MB buffer, calculate blocks
-    blocks=$(( (unalloc - 1048576) / lba_size ))
+    # Determine LBA format index for desired block size
+    target_lbads=9  # default 512 bytes (2^9)
+    case "$block_size" in
+      4096) target_lbads=12 ;;  # 2^12 = 4096
+      512)  target_lbads=9 ;;   # 2^9 = 512
+    esac
 
-    echo "Creating large namespace on $controller: $blocks blocks ($(( blocks * lba_size / 1000000000 ))GB)"
+    # Find flbas index with matching lbads (no metadata)
+    flbas=$(nvme id-ns "$controller" -n 0xffffffff 2>/dev/null | \
+            grep -E "^lbaf\s+[0-9]+" | \
+            grep "ms:0" | \
+            grep "lbads:${target_lbads}" | \
+            head -1 | \
+            awk '{print $2}' | tr -d ':')
+
+    if [ -z "$flbas" ]; then
+      echo "Warning: Could not find LBA format for ${block_size} bytes, using format 0"
+      flbas=0
+    fi
+
+    # Build nmic flag for shared namespace
+    nmic_flag=""
+    if [ "$shared" = "true" ]; then
+      nmic_flag="-m 1"
+    fi
+
+    # Leave 1MB buffer, calculate blocks
+    blocks=$(( (unalloc - 1048576) / block_size ))
+
+    echo "Creating large namespace on $controller: $blocks blocks ($(( blocks * block_size / 1000000000 ))GB, BS=${block_size}, flbas=${flbas}, shared=${shared})"
 
     # Create namespace
-    nvme create-ns "$controller" -s "$blocks" -c "$blocks" -f 0 -d 0
+    nvme create-ns "$controller" -s "$blocks" -c "$blocks" -f "$flbas" -d 0 $nmic_flag
 
     # Get the new namespace ID (should be 2)
     nsid=$(nvme list-ns "$controller" 2>/dev/null | tail -1 | awk '{print $1}')
@@ -141,8 +199,12 @@
       exit 1
     fi
 
-    echo "Attaching namespace $nsid to controller"
-    nvme attach-ns "$controller" -n "$nsid" -c 0
+    # Get controller ID for attach
+    cntlid=$(nvme id-ctrl "$controller" 2>/dev/null | awk '/cntlid/{print $3}')
+    cntlid=${cntlid:-0}
+
+    echo "Attaching namespace $nsid to controller (cntlid=$cntlid)"
+    nvme attach-ns "$controller" -n "$nsid" -c "$cntlid"
 
     echo "Successfully created large namespace: ${controller}n${nsid}"
   args:
