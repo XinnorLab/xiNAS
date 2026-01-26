@@ -18,7 +18,7 @@
 # Get existing namespaces for each data controller
 - name: List existing namespaces per controller
   ansible.builtin.shell: |
-    nvme list-ns {{ item }} 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+$' || true
+    nvme list-ns {{ item }} -a 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+$' || true
   register: nvme_existing_ns
   loop: "{{ nvme_data_drives }}"
   changed_when: false
