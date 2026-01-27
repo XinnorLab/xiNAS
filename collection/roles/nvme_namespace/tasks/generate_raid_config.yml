@@ -23,27 +23,37 @@
 - name: Validate RAID 10 requirements for log array
   ansible.builtin.set_fact:
     nvme_can_create_log_raid: >-
-      {{ (nvme_small_ns_count | int >= nvme_min_devices_for_raid10 | int) and
-         (nvme_small_ns_count | int % 2 == 0) }}
+      {{ nvme_small_ns_count | int >= nvme_min_devices_for_raid10 | int }}
     _log_raid_level: "{{ nvme_raid_log_level }}"
+    # For RAID 10, use N-1 devices if count is odd to ensure even number
+    _log_device_count: >-
+      {{ (nvme_small_ns_count | int) - (nvme_small_ns_count | int % 2) }}
   when: nvme_raid_log_level | int == 10
 
-# Fallback to RAID 1 if not enough devices for RAID 10
-- name: Fallback to RAID 1 for log array (insufficient devices for RAID 10)
+# Trim device list for RAID 10 if odd count (use first N-1 devices)
+- name: Adjust log devices for RAID 10 (odd count uses N-1)
   ansible.builtin.set_fact:
-    nvme_can_create_log_raid: "{{ nvme_small_ns_count | int >= 2 }}"
-    _log_raid_level: "1"
+    _log_devices_adjusted: "{{ nvme_small_ns_devices[:_log_device_count | int] }}"
+    _log_device_dropped: "{{ nvme_small_ns_devices[_log_device_count | int:] }}"
   when:
     - nvme_raid_log_level | int == 10
-    - nvme_can_create_log_raid is defined
-    - not (nvme_can_create_log_raid | bool)
-    - nvme_small_ns_count | int >= 2
+    - nvme_small_ns_count | int % 2 == 1
+
+- name: Use all log devices for RAID 10 (even count)
+  ansible.builtin.set_fact:
+    _log_devices_adjusted: "{{ nvme_small_ns_devices }}"
+    _log_device_dropped: []
+  when:
+    - nvme_raid_log_level | int == 10
+    - nvme_small_ns_count | int % 2 == 0
 
 - name: Validate RAID 1 requirements for log array
   ansible.builtin.set_fact:
     nvme_can_create_log_raid: >-
       {{ nvme_small_ns_count | int >= 2 }}
     _log_raid_level: "1"
+    _log_devices_adjusted: "{{ nvme_small_ns_devices }}"
+    _log_device_dropped: []
   when: nvme_raid_log_level | int == 1
 
 # Set defaults for other RAID levels
@@ -56,6 +66,8 @@
   ansible.builtin.set_fact:
     nvme_can_create_log_raid: "{{ nvme_small_ns_count | int >= 2 }}"
     _log_raid_level: "{{ nvme_raid_log_level }}"
+    _log_devices_adjusted: "{{ nvme_small_ns_devices }}"
+    _log_device_dropped: []
   when: nvme_can_create_log_raid is not defined
 
 # Report validation results
@@ -72,7 +84,7 @@
     msg: |
       WARNING: Insufficient devices for log array (RAID {{ nvme_raid_log_level }})
       Available: {{ nvme_small_ns_count }} small namespaces
-      Required: {{ nvme_min_devices_for_raid10 }} (RAID 10, must be even) or 2 (RAID 1)
+      Required: {{ nvme_min_devices_for_raid10 }} (RAID 10) or 2 (RAID 1)
   when: not (nvme_can_create_log_raid | bool)
 
 # Calculate parity disks based on RAID level
@@ -99,7 +111,7 @@
       - name: log
         level: "{{ _log_raid_level | default(nvme_raid_log_level) }}"
         strip_size_kb: "{{ nvme_raid_log_strip_kb }}"
-        devices: "{{ nvme_small_ns_devices }}"
+        devices: "{{ _log_devices_adjusted }}"
   when:
     - nvme_can_create_data_raid | bool
     - nvme_can_create_log_raid | bool
@@ -145,11 +157,11 @@
 
       LOG Array:
         Name: log
-        Level: RAID {{ _log_raid_level | default(nvme_raid_log_level) }}{% if _log_raid_level | default(nvme_raid_log_level) | string != nvme_raid_log_level | string %} (fallback from RAID {{ nvme_raid_log_level }}){% endif %}
-
+        Level: RAID {{ _log_raid_level | default(nvme_raid_log_level) }}
         Strip size: {{ nvme_raid_log_strip_kb }}KB
-        Devices ({{ nvme_small_ns_devices | length }}):
-          {{ nvme_small_ns_devices | join('\n          ') }}
+        Devices ({{ _log_devices_adjusted | length }}{% if _log_device_dropped | length > 0 %}, dropped {{ _log_device_dropped | length }} for even count{% endif %}):
+          {{ _log_devices_adjusted | join('\n          ') }}
+        {% if _log_device_dropped | length > 0 %}Excluded device: {{ _log_device_dropped | join(', ') }}{% endif %}
 
       XFS Filesystem:
         Label: nfsdata
