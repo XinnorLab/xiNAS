@@ -23,7 +23,8 @@
     cntlid=$((16#$cntlid))
 
     # Get list of existing namespace IDs (use -a to include unattached namespaces)
-    ns_list=$(nvme list-ns "$controller" -a 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+$' || true)
+    # Output format is "[   0]:0x1" - extract hex NSID after colon and convert to decimal
+    ns_list=$(nvme list-ns "$controller" -a 2>/dev/null | awk -F: '{gsub(/^0x/,"",$2); if($2 ~ /^[0-9a-fA-F]+$/) printf "%d\n", strtonum("0x"$2)}' || true)
 
     for nsid in $ns_list; do
       echo "Detaching and deleting namespace $nsid on $controller (cntlid=$cntlid)"
@@ -105,7 +106,8 @@
     nvme create-ns "$controller" -s "$blocks" -c "$blocks" -f "$flbas" -d 0 $nmic_flag
 
     # Get the new namespace ID (should be 1) - use -a to see unattached namespaces
-    nsid=$(nvme list-ns "$controller" -a 2>/dev/null | tail -1 | awk '{print $1}')
+    # Output format is "[   0]:0x1" - extract hex NSID and convert to decimal
+    nsid=$(nvme list-ns "$controller" -a 2>/dev/null | tail -1 | awk -F: '{gsub(/^0x/,"",$2); printf "%d", strtonum("0x"$2)}')
 
     if [ -z "$nsid" ]; then
       echo "Error: Failed to get namespace ID after creation"
@@ -153,7 +155,7 @@
       total_cap=$(nvme id-ctrl "$controller" 2>/dev/null | grep -E '^\s*tnvmcap\s*:' | awk -F: '{print $2}' | tr -d ' ')
       # Get size of existing namespaces
       alloc=0
-      for ns in $(nvme list-ns "$controller" -a 2>/dev/null | awk '{print $1}'); do
+      for ns in $(nvme list-ns "$controller" -a 2>/dev/null | awk -F: '{gsub(/^0x/,"",$2); if($2 ~ /^[0-9a-fA-F]+$/) printf "%d\n", strtonum("0x"$2)}'); do
         ns_size=$(nvme id-ns "${controller}n${ns}" 2>/dev/null | grep -E '^\s*nsze\s*:' | awk -F: '{print $2}' | tr -d ' ')
         alloc=$((alloc + ns_size * block_size))
       done
@@ -200,7 +202,8 @@
     nvme create-ns "$controller" -s "$blocks" -c "$blocks" -f "$flbas" -d 0 $nmic_flag
 
     # Get the new namespace ID (should be 2) - use -a to see unattached namespaces
-    nsid=$(nvme list-ns "$controller" -a 2>/dev/null | tail -1 | awk '{print $1}')
+    # Output format is "[   0]:0x1" - extract hex NSID and convert to decimal
+    nsid=$(nvme list-ns "$controller" -a 2>/dev/null | tail -1 | awk -F: '{gsub(/^0x/,"",$2); printf "%d", strtonum("0x"$2)}')
 
     if [ -z "$nsid" ]; then
       echo "Error: Failed to get namespace ID after creation"
