@@ -64,3 +64,94 @@
     remote_src: true
   when: motd_enabled | bool
   tags: [motd]
+
+# Pre-login banner (SSH Banner directive)
+- name: Deploy banner generator script
+  ansible.builtin.template:
+    src: generate-banner.j2
+    dest: /usr/local/bin/xinas-generate-banner
+    mode: '0755'
+    owner: root
+    group: root
+  when: banner_enabled | bool
+  tags: [motd, banner]
+
+- name: Generate initial banner
+  ansible.builtin.command: /usr/local/bin/xinas-generate-banner
+  changed_when: true
+  when: banner_enabled | bool
+  tags: [motd, banner]
+
+- name: Set up cron job to refresh banner
+  ansible.builtin.cron:
+    name: "Refresh xiNAS login banner"
+    minute: "*/{{ banner_refresh_minutes }}"
+    job: "/usr/local/bin/xinas-generate-banner"
+    user: root
+    state: present
+  when: banner_enabled | bool
+  tags: [motd, banner]
+
+- name: Enable SSH banner
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?Banner"
+    line: "Banner /etc/issue.net"
+    state: present
+  notify: reload sshd
+  when: banner_enabled | bool
+  tags: [motd, banner]
+
+- name: Disable SSH banner when not enabled
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^Banner"
+    state: absent
+  notify: reload sshd
+  when: not (banner_enabled | bool)
+  tags: [motd, banner]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Post-Install Management Menu
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- name: Find xiNAS repository directory
+  ansible.builtin.set_fact:
+    xinas_repo_dir: "{{ playbook_dir | dirname }}"
+  tags: [motd, menu]
+
+- name: Deploy xiNAS management menu
+  ansible.builtin.copy:
+    src: "{{ xinas_repo_dir }}/post_install_menu.sh"
+    dest: /usr/local/bin/xinas-menu
+    mode: '0755'
+    owner: root
+    group: root
+  when: menu_enabled | bool
+  tags: [motd, menu]
+
+- name: Create symlink for post_install_menu.sh
+  ansible.builtin.file:
+    src: /usr/local/bin/xinas-menu
+    dest: /usr/local/bin/post_install_menu.sh
+    state: link
+  when: menu_enabled | bool
+  failed_when: false
+  tags: [motd, menu]
+
+- name: Deploy login menu hint script
+  ansible.builtin.template:
+    src: xinas-menu-hint.sh.j2
+    dest: /etc/profile.d/99-xinas-menu.sh
+    mode: '0755'
+    owner: root
+    group: root
+  when: menu_hint_enabled | bool
+  tags: [motd, menu]
+
+- name: Remove login menu hint when disabled
+  ansible.builtin.file:
+    path: /etc/profile.d/99-xinas-menu.sh
+    state: absent
+  when: not (menu_hint_enabled | bool)
+  tags: [motd, menu]

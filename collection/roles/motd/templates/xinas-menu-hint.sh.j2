@@ -1,0 +1,35 @@
+#!/bin/bash
+# xiNAS Post-Login Menu Hint
+# Deployed by Ansible - shows management menu option after login
+
+# Only run in interactive shells
+[[ $- == *i* ]] || return 0
+
+# Only run for SSH/console logins, not subshells
+[[ -z "$XINAS_MENU_SHOWN" ]] || return 0
+export XINAS_MENU_SHOWN=1
+
+# Colors
+CYAN=$'\033[0;36m'
+YELLOW=$'\033[1;33m'
+GREEN=$'\033[0;32m'
+GRAY=$'\033[0;90m'
+NC=$'\033[0m'
+
+echo ""
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}💡${NC} ${YELLOW}Tip:${NC} Run ${GREEN}xinas-menu${NC} to open the management console"
+echo -e "${GRAY}    Or use ${NC}xinas-status${GRAY} for a quick system overview${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+{% if menu_auto_launch | default(false) %}
+# Auto-launch menu on login (configurable)
+if [[ -x /usr/local/bin/xinas-menu ]]; then
+    read -t 5 -n 1 -p "Press any key to skip menu (auto-launching in 5s)..." skip_menu
+    echo ""
+    if [[ -z "$skip_menu" ]]; then
+        /usr/local/bin/xinas-menu --no-welcome
+    fi
+fi
+{% endif %}

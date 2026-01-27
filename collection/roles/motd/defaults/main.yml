@@ -3,3 +3,18 @@ motd_enabled: true
 
 # Disable default Ubuntu MOTD components
 motd_disable_default: true
+
+# Pre-login banner (shows system status before SSH login)
+banner_enabled: false
+
+# Banner refresh interval in minutes (cron schedule)
+banner_refresh_minutes: 5
+
+# Post-login management menu
+menu_enabled: true
+
+# Show menu hint after login
+menu_hint_enabled: true
+
+# Auto-launch menu on login (if true, menu starts automatically)
+menu_auto_launch: false
