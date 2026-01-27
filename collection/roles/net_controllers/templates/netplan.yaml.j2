@@ -2,6 +2,19 @@ network:
   version: 2
   renderer: networkd
   ethernets:
-    ib0:
+{% if net_allocated_ips is defined and net_allocated_ips | length > 0 %}
+{% for iface, ip in net_allocated_ips.items() %}
+    {{ iface }}:
       dhcp4: no
-      addresses: [ 100.100.100.1/24 ]
+      addresses: [ {{ ip }} ]
+{% if net_mtu | default(0) | int > 0 %}
+      mtu: {{ net_mtu }}
+{% endif %}
+{% endfor %}
+{% else %}
+    # No interfaces detected - add manual configuration below
+    # Example for InfiniBand:
+    # ibp65s0:
+    #   dhcp4: no
+    #   addresses: [ 10.10.1.1/24 ]
+{% endif %}

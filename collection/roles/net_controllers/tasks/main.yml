@@ -74,6 +74,7 @@
     owner: root
     group: root
     mode: '0600'
+  become: true
   notify: apply netplan
   when: net_ip_pool_enabled | bool and (net_allocated_ips | default({}) | length > 0)
   tags: [network]
@@ -86,6 +87,7 @@
     owner: root
     group: root
     mode: '0600'
+  become: true
   notify: apply netplan
   when: not net_ip_pool_enabled | bool
   tags: [network]
