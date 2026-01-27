@@ -160,30 +160,94 @@ choose_preset() {
     apply_preset "$choice"
 }
 
+has_license() {
+    [ -f "/tmp/license" ] && [ -s "/tmp/license" ]
+}
+
+show_welcome() {
+    whiptail --title "✨ Welcome to xiNAS!" --msgbox "\
+   Your journey to high-performance storage starts here!
+
+   ┌─────────────────────────────────────────────┐
+   │  📊  Collect your system information        │
+   │  🔑  Enter your license (required)          │
+   │  🌐  Configure your network                 │
+   │  🚀  Launch the installation                │
+   └─────────────────────────────────────────────┘
+
+   Need help? Contact: support@xinnor.io
+" 18 55
+}
+
+# Show welcome message on first run
+show_welcome
+
 while true; do
-    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 16 70 8 \
-        1 "Collect Data" \
-        2 "Enter License" \
-        3 "Configure Network (IP Pool)" \
-        4 "Presets" \
-        5 "Install" \
-        6 "Exit" \
+    # Build dynamic menu based on license status
+    if has_license; then
+        license_text="🔑 Enter License ✓ Licensed"
+        install_text="🚀 Install → Ready to go!"
+    else
+        license_text="🔑 Enter License ⚠ REQUIRED"
+        install_text="🚀 Install (License required)"
+    fi
+
+    choice=$(whiptail --title "═══ xiNAS Setup ═══" --nocancel --menu "\
+  Welcome! Let's set up your storage system.
+  ─────────────────────────────────────────────
+
+  Status: $(has_license && echo '✅ License OK' || echo '❌ No License')
+
+  Select an option:" 20 60 6 \
+        "1" "📊 Collect System Data" \
+        "2" "$license_text" \
+        "3" "🌐 Configure Network" \
+        "4" "📦 Choose Preset" \
+        "5" "$install_text" \
+        "6" "🚪 Exit" \
         3>&1 1>&2 2>&3)
+
     case "$choice" in
         1) ./collect_data.sh ;;
         2) enter_license ;;
         3) ./configure_network.sh ;;
         4) choose_preset ;;
         5)
+            if ! has_license; then
+                whiptail --title "⚠️ License Required" --msgbox "\
+   Oops! You need a license to continue.
+
+   ┌─────────────────────────────────────────┐
+   │  Please complete step 2 first:          │
+   │                                         │
+   │  🔑 Enter License                       │
+   │                                         │
+   │  Contact: support@xinnor.io             │
+   └─────────────────────────────────────────┘
+
+   We're excited to have you on board! 🎉
+" 16 50
+                continue
+            fi
             if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
                 run_playbook "playbooks/site.yml" "inventories/lab.ini"
                 echo ""
-                echo "Deployment complete. System status:"
+                echo "🎉 Deployment complete! System status:"
                 echo ""
                 xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
                 exit 0
             fi
             ;;
-        6) exit 2 ;;
+        6)
+            whiptail --title "👋 See you soon!" --msgbox "\
+   Thank you for choosing xiNAS!
+
+   Run this menu again anytime:
+   ./simple_menu.sh
+
+   Questions? support@xinnor.io
+" 12 45
+            exit 2
+            ;;
     esac
 done

@@ -331,20 +331,52 @@ save_preset() {
     whiptail --msgbox "Preset saved to $pdir" 8 60
 }
 
+has_license() {
+    [ -f "/tmp/license" ] && [ -s "/tmp/license" ]
+}
+
+# Show welcome message
+whiptail --title "✨ Welcome to xiNAS Expert Mode!" --msgbox "\
+   Advanced configuration for power users!
+
+   ┌─────────────────────────────────────────────┐
+   │  📊  Collect system information             │
+   │  🔑  Enter your license (required)          │
+   │  🌐  Configure network & hostname           │
+   │  💾  Configure RAID & NFS exports           │
+   │  📦  Manage presets                         │
+   │  🚀  Launch the installation                │
+   └─────────────────────────────────────────────┘
+
+   Need help? Contact: support@xinnor.io
+" 20 55
+
 # Main menu loop
 while true; do
-    choice=$(whiptail --title "xiNAS Setup" --nocancel --menu "Choose an action:" 20 70 17 \
-        1 "Collect Data" \
-        2 "Enter License" \
-        3 "Configure Network" \
-        4 "Set Hostname" \
-        5 "Configure RAID" \
-        6 "Edit NFS Exports" \
-        7 "Presets" \
-        8 "Git Repository Configuration" \
-        9 "Install" \
-        10 "Exit" \
+    # Build dynamic menu based on license status
+    if has_license; then
+        license_text="🔑 Enter License ✓ Licensed"
+        install_text="🚀 Install → Ready to go!"
+    else
+        license_text="🔑 Enter License ⚠ REQUIRED"
+        install_text="🚀 Install (License required)"
+    fi
+
+    choice=$(whiptail --title "═══ xiNAS Expert Setup ═══" --nocancel --menu "\
+  Status: $(has_license && echo '✅ License OK' || echo '❌ No License')
+  ─────────────────────────────────────────────" 24 65 10 \
+        "1" "📊 Collect System Data" \
+        "2" "$license_text" \
+        "3" "🌐 Configure Network" \
+        "4" "🏷️  Set Hostname" \
+        "5" "💾 Configure RAID" \
+        "6" "📂 Edit NFS Exports" \
+        "7" "📦 Presets" \
+        "8" "🔧 Git Repository Configuration" \
+        "9" "$install_text" \
+        "10" "🚪 Exit" \
         3>&1 1>&2 2>&3)
+
     case "$choice" in
         1) ./collect_data.sh ;;
         2) enter_license ;;
@@ -355,16 +387,42 @@ while true; do
         7) choose_preset ;;
         8) configure_git_repo ;;
         9)
+            if ! has_license; then
+                whiptail --title "⚠️ License Required" --msgbox "\
+   Oops! You need a license to continue.
+
+   ┌─────────────────────────────────────────┐
+   │  Please complete step 2 first:          │
+   │                                         │
+   │  🔑 Enter License                       │
+   │                                         │
+   │  Contact: support@xinnor.io             │
+   └─────────────────────────────────────────┘
+
+   We're excited to have you on board! 🎉
+" 16 50
+                continue
+            fi
             if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
                 run_playbook "playbooks/site.yml"
                 echo ""
-                echo "Deployment complete. System status:"
+                echo "🎉 Deployment complete! System status:"
                 echo ""
                 xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
                 exit 0
             fi
             ;;
-        10) exit 2 ;;
+        10)
+            whiptail --title "👋 See you soon!" --msgbox "\
+   Thank you for choosing xiNAS!
+
+   Run this menu again anytime:
+   ./startup_menu.sh
+
+   Questions? support@xinnor.io
+" 12 45
+            exit 2
+            ;;
     esac
 done
 
