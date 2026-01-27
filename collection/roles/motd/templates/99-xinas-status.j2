@@ -63,21 +63,20 @@ sparkline() {
 }
 
 echo ""
-echo ""
+echo -e "${BLUE}"
+cat << 'EOF'
 
-# Fancy header with gradient effect
-echo -e "${BLUE}    ╔═══════════════════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}    ║${NC}                                                                               ${BLUE}║${NC}"
-echo -e "${BLUE}    ║${NC}    ${LIGHT_BLUE}██╗  ██╗${CYAN}██╗${LIGHT_CYAN}███╗   ██╗${GREEN} █████╗ ${LIGHT_GREEN}███████╗${NC}                                    ${BLUE}║${NC}"
-echo -e "${BLUE}    ║${NC}    ${LIGHT_BLUE}╚██╗██╔╝${CYAN}██║${LIGHT_CYAN}████╗  ██║${GREEN}██╔══██╗${LIGHT_GREEN}██╔════╝${NC}                                    ${BLUE}║${NC}"
-echo -e "${BLUE}    ║${NC}     ${LIGHT_BLUE}╚███╔╝ ${CYAN}██║${LIGHT_CYAN}██╔██╗ ██║${GREEN}███████║${LIGHT_GREEN}███████╗${NC}                                    ${BLUE}║${NC}"
-echo -e "${BLUE}    ║${NC}     ${LIGHT_BLUE}██╔██╗ ${CYAN}██║${LIGHT_CYAN}██║╚██╗██║${GREEN}██╔══██║${LIGHT_GREEN}╚════██║${NC}                                    ${BLUE}║${NC}"
-echo -e "${BLUE}    ║${NC}    ${LIGHT_BLUE}██╔╝ ██╗${CYAN}██║${LIGHT_CYAN}██║ ╚████║${GREEN}██║  ██║${LIGHT_GREEN}███████║${NC}                                    ${BLUE}║${NC}"
-echo -e "${BLUE}    ║${NC}    ${LIGHT_BLUE}╚═╝  ╚═╝${CYAN}╚═╝${LIGHT_CYAN}╚═╝  ╚═══╝${GREEN}╚═╝  ╚═╝${LIGHT_GREEN}╚══════╝${NC}                                    ${BLUE}║${NC}"
-echo -e "${BLUE}    ║${NC}                                                                               ${BLUE}║${NC}"
-echo -e "${BLUE}    ║${NC}             ${WHITE}━━━━━ ${YELLOW}High-Performance NAS Server${WHITE} ━━━━━${NC}                        ${BLUE}║${NC}"
-echo -e "${BLUE}    ║${NC}                                                                               ${BLUE}║${NC}"
-echo -e "${BLUE}    ╚═══════════════════════════════════════════════════════════════════════════════╝${NC}"
+    ██╗  ██╗██╗███╗   ██╗ █████╗ ███████╗
+    ╚██╗██╔╝██║████╗  ██║██╔══██╗██╔════╝
+     ╚███╔╝ ██║██╔██╗ ██║███████║███████╗
+     ██╔██╗ ██║██║╚██╗██║██╔══██║╚════██║
+    ██╔╝ ██╗██║██║ ╚████║██║  ██║███████║
+    ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝
+EOF
+echo -e "${NC}"
+echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}     High-Performance NAS Server${NC}"
+echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
 # Gather system info
