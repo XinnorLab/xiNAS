@@ -177,8 +177,10 @@ while true; do
         5)
             if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
                 run_playbook "playbooks/site.yml" "inventories/lab.ini"
-                chmod +x post_install_menu.sh
-                ./post_install_menu.sh
+                echo ""
+                echo "Deployment complete. System status:"
+                echo ""
+                xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
                 exit 0
             fi
             ;;

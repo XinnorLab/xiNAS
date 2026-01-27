@@ -88,16 +88,8 @@ echo -e "${GREEN}========================================${NC}"
 echo ""
 echo -e "Installation directory: ${BLUE}${INSTALL_DIR}${NC}"
 echo ""
-echo -e "To start the menu:"
-echo -e "  ${YELLOW}cd ${INSTALL_DIR} && ./startup_menu.sh${NC}"
-echo ""
-echo -e "Or run directly:"
-echo -e "  ${YELLOW}${INSTALL_DIR}/startup_menu.sh${NC}"
-echo ""
 
-# Ask to launch menu
-read -p "Launch xiNAS menu now? [Y/n] " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    exec ./startup_menu.sh
-fi
+# Show system status
+echo -e "${BLUE}System Status:${NC}"
+echo ""
+xinas-status 2>/dev/null || echo "Run 'xinas-status' after deployment to see system status."
