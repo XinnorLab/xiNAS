@@ -59,6 +59,15 @@ echo -e "    ${DIM}💬 Need help?${NC} ${CYAN}support@xinnor.io${NC}"
 echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
 echo ""
 
+# Ask user to continue
+read -p "    Ready to begin? [Y/n] " -n 1 -r
+echo ""
+if [[ $REPLY =~ ^[Nn]$ ]]; then
+    echo -e "    ${YELLOW}Installation cancelled. Run this script again when ready.${NC}"
+    exit 0
+fi
+echo ""
+
 # Check if running as root
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}Error: This script must be run as root${NC}"
