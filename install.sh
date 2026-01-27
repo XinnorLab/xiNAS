@@ -28,6 +28,37 @@ echo -e "${YELLOW}     High-Performance NAS Provisioning${NC}"
 echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
+# Quick Start Guide
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+DIM='\033[2m'
+
+echo -e "${WHITE}    ┌─────────────────────────────────────────────────────────────┐${NC}"
+echo -e "${WHITE}    │${NC}  ${CYAN}✨ Welcome to xiNAS - Let's get you started!${NC}               ${WHITE}│${NC}"
+echo -e "${WHITE}    └─────────────────────────────────────────────────────────────┘${NC}"
+echo ""
+echo -e "    ${WHITE}QUICK START GUIDE${NC}"
+echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
+echo ""
+echo -e "    ${GREEN}①${NC}  ${WHITE}Collect System Data${NC}"
+echo -e "        ${DIM}Run${NC} ${CYAN}./collect_data.sh${NC} ${DIM}to gather hardware info for licensing${NC}"
+echo ""
+echo -e "    ${YELLOW}②${NC}  ${WHITE}Obtain & Enter License${NC} ${RED}★ Required${NC}"
+echo -e "        ${DIM}Get your license from${NC} ${CYAN}https://xinnor.io${NC}"
+echo -e "        ${DIM}Enter it in the setup menu when prompted${NC}"
+echo ""
+echo -e "    ${GREEN}③${NC}  ${WHITE}Configure Network${NC} ${DIM}(Optional)${NC}"
+echo -e "        ${DIM}Set IP ranges and interfaces for your storage network${NC}"
+echo -e "        ${DIM}Skip to use automatic detection${NC}"
+echo ""
+echo -e "    ${GREEN}④${NC}  ${WHITE}Run Installation${NC}"
+echo -e "        ${DIM}Select your preset and let the magic happen!${NC}"
+echo ""
+echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
+echo -e "    ${DIM}Need help?${NC} ${CYAN}https://github.com/XinnorLab/xiNAS${NC}"
+echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
+echo ""
+
 # Check if running as root
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}Error: This script must be run as root${NC}"
