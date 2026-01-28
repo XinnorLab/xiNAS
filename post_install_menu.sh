@@ -214,6 +214,123 @@ PYEOF
     whiptail --title "$title" --scrolltext --textbox "$out" 30 82
 }
 
+show_physical_drives() {
+    if ! command -v xicli &>/dev/null; then
+        echo "xicli not found"
+        return
+    fi
+
+    local json_file
+    json_file=$(mktemp)
+
+    if ! xicli raid show -f json -e > "$json_file" 2>&1; then
+        echo "Failed to get RAID information"
+        rm -f "$json_file"
+        return
+    fi
+
+    python3 - "$json_file" << 'PYEOF'
+import sys
+import json
+
+W = 74
+
+def line(content="", border="│"):
+    padding = W - len(content)
+    if padding < 0:
+        content = content[:W]
+        padding = 0
+    return f"{border} {content}{' ' * padding}{border}"
+
+def separator(char="─", left="├", right="┤"):
+    return f"{left}{char * (W + 1)}{right}"
+
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+
+    if not data:
+        print("No RAID arrays configured")
+        sys.exit(0)
+
+    # Header
+    print(f"╔{'═' * (W + 1)}╗")
+    title = "💿  PHYSICAL DRIVES"
+    pad = (W - len(title)) // 2
+    print(f"║{' ' * pad}{title}{' ' * (W - pad - len(title) + 1)}║")
+    print(f"╚{'═' * (W + 1)}╝")
+    print()
+
+    # Collect all drives from all arrays
+    all_drives = []
+    for arr_name, arr in data.items():
+        devices = arr.get("devices", [])
+        health = arr.get("devices_health") or []
+        wear = arr.get("devices_wear") or []
+        serials = arr.get("serials") or []
+
+        for i, dev in enumerate(devices):
+            idx = dev[0]
+            path = dev[1]
+            state = dev[2][0] if dev[2] else "unknown"
+            h = health[i] if i < len(health) else "N/A"
+            w = wear[i] if i < len(wear) else "N/A"
+            serial = serials[i] if i < len(serials) else "N/A"
+            all_drives.append({
+                "array": arr_name,
+                "idx": idx,
+                "path": path,
+                "state": state,
+                "health": h,
+                "wear": w,
+                "serial": serial
+            })
+
+    # Group by array
+    arrays = {}
+    for d in all_drives:
+        arr = d["array"]
+        if arr not in arrays:
+            arrays[arr] = []
+        arrays[arr].append(d)
+
+    for arr_name, drives in arrays.items():
+        online = sum(1 for d in drives if d["state"].lower() == "online")
+        total = len(drives)
+
+        print(f"┌{'─' * (W + 1)}┐")
+        print(line(f" Array: {arr_name.upper()} ({online}/{total} online)"))
+        print(separator())
+        print(line(f"  {'Device':<16} {'State':<10} {'Health':<8} {'Wear':<8} {'Serial'}"))
+        print(separator())
+
+        for d in drives:
+            path = d["path"].replace("/dev/", "")
+            state = d["state"]
+            icon = "●" if state.lower() == "online" else "○"
+            health = d["health"]
+            wear = d["wear"]
+            serial = d["serial"][:16] if len(d["serial"]) > 16 else d["serial"]
+            print(line(f"  {icon} {path:<14} {state:<10} {health:<8} {wear:<8} {serial}"))
+
+        print(line())
+        print(f"└{'─' * (W + 1)}┘")
+        print()
+
+    # Summary
+    total_drives = len(all_drives)
+    online_drives = sum(1 for d in all_drives if d["state"].lower() == "online")
+    print(f"{'━' * (W + 3)}")
+    print(f"  Total: {total_drives} drives, {online_drives} online")
+    print(f"{'━' * (W + 3)}")
+
+except Exception as e:
+    print(f"Error: {e}")
+PYEOF
+
+    rm -f "$json_file"
+}
+
 raid_menu() {
     local choice
     local out
@@ -233,17 +350,13 @@ raid_menu() {
             2) show_raid_info "true" ;;
             3)
                 out="$TMP_DIR/drives"
-                if command -v xicli &>/dev/null; then
-                    xicli drive show > "$out" 2>&1 || true
-                else
-                    echo "xicli not found" > "$out"
-                fi
-                whiptail --title "💿 Physical Drives" --scrolltext --textbox "$out" 24 78
+                show_physical_drives > "$out"
+                whiptail --title "💿 Physical Drives" --scrolltext --textbox "$out" 24 80
                 ;;
             4)
                 out="$TMP_DIR/pools"
                 if command -v xicli &>/dev/null; then
-                    xicli pool show > "$out" 2>&1 || true
+                    xicli pool show > "$out" 2>&1 || echo "No spare pools configured" > "$out"
                 else
                     echo "xicli not found" > "$out"
                 fi
@@ -633,18 +746,8 @@ quick_actions_menu() {
                 ;;
             4)
                 out="$TMP_DIR/disks"
-                {
-                    echo "═══ Disk Health Status ═══"
-                    echo ""
-                    if command -v xicli &>/dev/null; then
-                        xicli drive show 2>&1 || echo "Failed to get drive info"
-                    else
-                        lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,STATE 2>/dev/null || true
-                        echo ""
-                        df -h 2>/dev/null || true
-                    fi
-                } > "$out"
-                whiptail --title "💾 Disk Health" --scrolltext --textbox "$out" 24 78
+                show_physical_drives > "$out"
+                whiptail --title "💾 Disk Health" --scrolltext --textbox "$out" 24 80
                 ;;
             5)
                 out="$TMP_DIR/services"
