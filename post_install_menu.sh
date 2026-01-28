@@ -1008,7 +1008,7 @@ def explain_access(client_spec):
 
         # Explain host
         if host == "*":
-            host_desc = "Everyone (all computers)"
+            host_desc = "Everyone (all hosts)"
         elif "/" in host:
             host_desc = f"Network: {host}"
         else:
@@ -1078,7 +1078,7 @@ def get_active_clients():
 print("NFS SHARED FOLDERS")
 print("=" * 65)
 print()
-print("  NFS (Network File System) allows other computers to access")
+print("  NFS (Network File System) allows other hosts to access")
 print("  folders on this server over the network.")
 print()
 
@@ -1134,14 +1134,14 @@ for i, share in enumerate(shares, 1):
 
 # Active clients
 print()
-print("  CONNECTED COMPUTERS")
+print("  CONNECTED HOSTS")
 print("-" * 65)
 clients = get_active_clients()
 if clients:
     for ip in clients:
         print(f"  [*] {ip}")
 else:
-    print("  No computers currently connected")
+    print("  No hosts currently connected")
 print()
 print("=" * 65)
 PYEOF
@@ -1186,7 +1186,7 @@ shared folders on your NAS." 10 50
     share_path=$(whiptail --title "Select Shared Folder" --menu "\
 Choose a folder to change access settings:
 
-These are the folders that other computers
+These are the folders that other hosts
 can connect to over the network." 18 60 8 \
         "${menu_items[@]}" 3>&1 1>&2 2>&3) || return
 
@@ -1214,9 +1214,9 @@ Who should be able to connect to:
 $share_path
 
 Choose who can access this folder:" 18 60 5 \
-        "1" "Everyone (any computer on the network)" \
+        "1" "Everyone (any host on the network)" \
         "2" "Specific network (e.g., 192.168.1.0/24)" \
-        "3" "Single computer (by IP address)" \
+        "3" "Single host (by IP address)" \
         3>&1 1>&2 2>&3) || return
 
     local new_host
@@ -1229,18 +1229,18 @@ Choose who can access this folder:" 18 60 5 \
 Enter the network address:
 
 Example: 192.168.1.0/24
-This allows all computers from 192.168.1.1 to 192.168.1.254
+This allows all hosts from 192.168.1.1 to 192.168.1.254
 
 Format: X.X.X.0/24" 14 55 "192.168.1.0/24" 3>&1 1>&2 2>&3) || return
             [[ -z "$new_host" ]] && new_host="*"
             ;;
         3)
             new_host=$(whiptail --title "Enter Computer IP" --inputbox "\
-Enter the IP address of the computer:
+Enter the IP address of the host:
 
 Example: 192.168.1.100
 
-Only this computer will be able to connect." 12 55 "" 3>&1 1>&2 2>&3) || return
+Only this host will be able to connect." 12 55 "" 3>&1 1>&2 2>&3) || return
             [[ -z "$new_host" ]] && new_host="*"
             ;;
     esac
@@ -1248,7 +1248,7 @@ Only this computer will be able to connect." 12 55 "" 3>&1 1>&2 2>&3) || return
     # Step 2: Read or Read-Write?
     local perm_choice
     perm_choice=$(whiptail --title "Step 2: Access Permissions" --menu "\
-What can connected computers do?
+What can connected hosts do?
 
 Share: $share_path
 Access: $new_host" 16 60 3 \
@@ -1347,7 +1347,7 @@ add_nfs_share() {
 Enter the folder path to share:
 
 This is the folder on this server that other
-computers will be able to access.
+hosts will be able to access.
 
 Example: /mnt/data/shared" 14 55 "/mnt/data/" 3>&1 1>&2 2>&3) || return
 
@@ -1384,9 +1384,9 @@ Use 'Edit Share Settings' to modify it." 10 50
 Who should be able to access this folder?
 
 Folder: $share_path" 16 60 4 \
-        "1" "Everyone (any computer)" \
+        "1" "Everyone (any host)" \
         "2" "Specific network (recommended)" \
-        "3" "Single computer only" \
+        "3" "Single host only" \
         3>&1 1>&2 2>&3) || return
 
     local new_host
@@ -1409,7 +1409,7 @@ Enter the IP address:" 10 55 "" 3>&1 1>&2 2>&3) || return
     # Step 3: Permissions
     local perm_choice
     perm_choice=$(whiptail --title "Add New Share - Step 3" --menu "\
-What permissions should connected computers have?" 14 60 2 \
+What permissions should connected hosts have?" 14 60 2 \
         "1" "Read & Write (full access)" \
         "2" "Read Only (view only)" \
         3>&1 1>&2 2>&3) || return
@@ -1442,7 +1442,7 @@ Permissions: $perm_desc" 12 55; then
             whiptail --title "Share Created!" --msgbox "\
 New shared folder created successfully!
 
-Other computers can now connect to:
+Other hosts can now connect to:
 $share_path
 
 From: $host_desc" 12 55
