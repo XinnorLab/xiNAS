@@ -966,198 +966,537 @@ show_status() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NFS Access Rights Functions
+# NFS Access Rights Functions (User-Friendly)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 show_nfs_exports() {
     local out="$TMP_DIR/nfs_info"
-    {
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "                    NFS EXPORT CONFIGURATION"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo ""
 
-        if [[ -f /etc/exports ]]; then
-            echo "─── Current Exports (/etc/exports) ─────────────────────────────"
-            echo ""
-            cat /etc/exports
-            echo ""
-            echo "─── Active NFS Clients ──────────────────────────────────────────"
-            echo ""
+    python3 - > "$out" << 'PYEOF'
+import os
+import subprocess
 
-            # Check for active clients
-            local client_count=0
-            if [[ -d /proc/fs/nfsd/clients ]]; then
-                for client_dir in /proc/fs/nfsd/clients/*/; do
-                    [[ -f "${client_dir}info" ]] || continue
-                    client_ip=$(grep -oP 'address:\s*\K[\d.]+' "${client_dir}info" 2>/dev/null | head -1)
-                    [[ -n "$client_ip" ]] && {
-                        echo "  ● $client_ip"
-                        ((client_count++))
-                    }
-                done
-            fi
+def run(cmd):
+    try:
+        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
+    except:
+        return ""
 
-            if [[ $client_count -eq 0 ]]; then
-                # Fallback: check established connections
-                ss -tn state established '( dport = :2049 )' 2>/dev/null | \
-                    awk 'NR>1 {split($4,a,":"); print "  ● " a[1]}' | sort -u
-                [[ $(ss -tn state established '( dport = :2049 )' 2>/dev/null | wc -l) -le 1 ]] && \
-                    echo "  No active clients"
-            fi
+def parse_export_line(line):
+    """Parse an export line into path and clients"""
+    parts = line.split()
+    if not parts:
+        return None, []
+    path = parts[0]
+    clients = parts[1:] if len(parts) > 1 else []
+    return path, clients
 
-            echo ""
-            echo "─── Share Usage ───────────────────────────────────────────────────"
-            echo ""
-            awk '{print $1}' /etc/exports 2>/dev/null | while read -r path; do
-                [[ -z "$path" || "$path" =~ ^# ]] && continue
-                if [[ -d "$path" ]]; then
-                    df -h "$path" 2>/dev/null | awk 'NR==2 {printf "  %-25s %s used of %s (%s)\n", "'"$path"'", $3, $2, $5}'
-                else
-                    echo "  $path (not mounted)"
-                fi
-            done
-        else
-            echo "  /etc/exports not found"
-            echo ""
-            echo "  NFS exports have not been configured yet."
-            echo "  Run the installation playbook to set up NFS shares."
-        fi
+def explain_access(client_spec):
+    """Explain access rules in simple terms"""
+    if not client_spec:
+        return "No access configured"
 
-    } > "$out"
+    explanations = []
+    for spec in client_spec:
+        # Parse host(options)
+        if "(" in spec:
+            host = spec.split("(")[0]
+            opts = spec.split("(")[1].rstrip(")")
+        else:
+            host = spec
+            opts = ""
 
-    whiptail --title "📂 NFS Shares" --scrolltext --textbox "$out" 24 78
+        # Explain host
+        if host == "*":
+            host_desc = "Everyone (all computers)"
+        elif "/" in host:
+            host_desc = f"Network: {host}"
+        else:
+            host_desc = f"Host: {host}"
+
+        # Explain options
+        opt_list = opts.split(",") if opts else []
+        perms = []
+        if "rw" in opt_list:
+            perms.append("Read & Write")
+        elif "ro" in opt_list:
+            perms.append("Read Only")
+        else:
+            perms.append("Read & Write")  # default
+
+        if "no_root_squash" in opt_list:
+            perms.append("Full admin access")
+
+        explanations.append(f"  {host_desc}: {', '.join(perms)}")
+
+    return "\n".join(explanations)
+
+def get_share_usage(path):
+    """Get disk usage for a share path"""
+    try:
+        result = run(f"df -h '{path}' 2>/dev/null | tail -1")
+        if result:
+            parts = result.split()
+            if len(parts) >= 5:
+                return f"{parts[2]} used of {parts[1]} ({parts[4]})"
+    except:
+        pass
+    return "N/A"
+
+def get_active_clients():
+    """Get list of connected NFS clients"""
+    clients = []
+    # Try /proc/fs/nfsd/clients
+    clients_dir = "/proc/fs/nfsd/clients"
+    if os.path.isdir(clients_dir):
+        for entry in os.listdir(clients_dir):
+            info_file = os.path.join(clients_dir, entry, "info")
+            if os.path.isfile(info_file):
+                try:
+                    with open(info_file) as f:
+                        for line in f:
+                            if "address:" in line:
+                                ip = line.split("address:")[1].strip().split()[0]
+                                if ip and ip not in clients:
+                                    clients.append(ip)
+                except:
+                    pass
+
+    # Fallback to ss
+    if not clients:
+        result = run("ss -tn state established '( dport = :2049 )' 2>/dev/null")
+        for line in result.split("\n")[1:]:
+            parts = line.split()
+            if len(parts) >= 4:
+                ip = parts[3].rsplit(":", 1)[0]
+                if ip and ip not in clients:
+                    clients.append(ip)
+
+    return clients
+
+# Main output
+print("NFS SHARED FOLDERS")
+print("=" * 65)
+print()
+print("  NFS (Network File System) allows other computers to access")
+print("  folders on this server over the network.")
+print()
+
+exports_file = "/etc/exports"
+if not os.path.isfile(exports_file):
+    print("  [!] No shares configured yet.")
+    print()
+    print("  Run the installation wizard to set up shared folders.")
+    exit(0)
+
+# Parse exports
+shares = []
+with open(exports_file) as f:
+    for line in f:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        path, clients = parse_export_line(line)
+        if path:
+            shares.append({"path": path, "clients": clients})
+
+if not shares:
+    print("  [!] No shares configured in /etc/exports")
+    exit(0)
+
+print("-" * 65)
+print("  YOUR SHARED FOLDERS")
+print("-" * 65)
+print()
+
+for i, share in enumerate(shares, 1):
+    path = share["path"]
+    clients = share["clients"]
+
+    # Check if path exists
+    exists = os.path.isdir(path)
+    status = "[OK]" if exists else "[!]"
+
+    print(f"  {i}. {path}  {status}")
+    print()
+
+    if exists:
+        usage = get_share_usage(path)
+        print(f"     Storage: {usage}")
+    else:
+        print("     Storage: Path does not exist!")
+
+    print()
+    print("     Who can access:")
+    print(explain_access(clients))
+    print()
+    print("-" * 65)
+
+# Active clients
+print()
+print("  CONNECTED COMPUTERS")
+print("-" * 65)
+clients = get_active_clients()
+if clients:
+    for ip in clients:
+        print(f"  [*] {ip}")
+else:
+    print("  No computers currently connected")
+print()
+print("=" * 65)
+PYEOF
+
+    whiptail --title "NFS Shared Folders" --scrolltext --textbox "$out" 28 70
 }
 
-edit_nfs_clients() {
-    if [[ ! -f /etc/exports ]]; then
-        whiptail --title "⚠️ No Exports" --msgbox "\
-   No NFS exports configured yet.
+edit_nfs_share() {
+    local exports_file="/etc/exports"
 
-   Run the installation playbook first to set up
-   your NFS shares, then return here to modify
-   access rights.
-" 12 55
+    if [[ ! -f "$exports_file" ]]; then
+        whiptail --title "No Shares" --msgbox "\
+No shared folders configured yet.
+
+Run the installation wizard first to create
+shared folders on your NAS." 10 50
         return
     fi
 
-    # Parse current exports
-    local exports_file="/etc/exports"
-    local out="$TMP_DIR/exports_list"
-
+    # Get list of shares
     mapfile -t paths < <(awk '!/^#/ && NF {print $1}' "$exports_file" 2>/dev/null)
 
     if [[ ${#paths[@]} -eq 0 ]]; then
-        whiptail --title "⚠️ No Exports" --msgbox "No exports found in /etc/exports" 8 45
+        whiptail --title "No Shares" --msgbox "No shared folders found." 8 40
         return
     fi
 
-    # Build menu
+    # Build menu with friendly descriptions
     local menu_items=()
     for path in "${paths[@]}"; do
-        local clients
-        clients=$(awk -v p="$path" '$1==p {for(i=2;i<=NF;i++) printf "%s ", $i}' "$exports_file" | head -c 40)
-        menu_items+=("$path" "${clients:-no clients}")
-    done
-    menu_items+=("Back" "Return to menu")
-
-    while true; do
-        local choice
-        choice=$(whiptail --title "📂 Edit NFS Access Rights" --menu "\
-  Select an export to modify access:
-  ─────────────────────────────────────────────" 20 70 10 \
-            "${menu_items[@]}" 3>&1 1>&2 2>&3) || break
-
-        [[ "$choice" == "Back" ]] && break
-
-        # Get current settings for this export
-        local current_line
-        current_line=$(grep "^${choice}[[:space:]]" "$exports_file" 2>/dev/null | head -1)
-        local current_clients
-        current_clients=$(echo "$current_line" | awk '{for(i=2;i<=NF;i++) print $i}')
-
-        # Show edit dialog
-        local new_clients
-        new_clients=$(whiptail --title "✏️ Edit: $choice" --inputbox "\
-  Current access rules:
-  $current_clients
-
-  Enter new access rules (e.g., *(rw,sync,no_subtree_check))
-
-  Common formats:
-    *                    - Allow all hosts
-    192.168.1.0/24       - Allow subnet
-    client.example.com   - Allow specific host
-
-  Common options:
-    rw,sync,no_subtree_check,no_root_squash
-" 20 70 "$current_clients" 3>&1 1>&2 2>&3) || continue
-
-        if [[ -n "$new_clients" ]]; then
-            # Create backup
-            local ts
-            ts=$(date +%Y%m%d%H%M%S)
-            sudo cp "$exports_file" "${exports_file}.${ts}.bak"
-
-            # Update the export line
-            sudo sed -i "s|^${choice}[[:space:]].*|${choice} ${new_clients}|" "$exports_file"
-
-            # Refresh exports
-            if sudo exportfs -ra 2>/dev/null; then
-                whiptail --title "✅ Success" --msgbox "\
-   Export updated successfully!
-
-   Path: $choice
-   Access: $new_clients
-
-   Changes are now active.
-" 12 55
-                # Update menu items
-                menu_items=()
-                for path in "${paths[@]}"; do
-                    local clients
-                    clients=$(awk -v p="$path" '$1==p {for(i=2;i<=NF;i++) printf "%s ", $i}' "$exports_file" | head -c 40)
-                    menu_items+=("$path" "${clients:-no clients}")
-                done
-                menu_items+=("Back" "Return to menu")
-            else
-                whiptail --title "⚠️ Warning" --msgbox "Export updated but exportfs failed.\nCheck configuration manually." 10 55
-            fi
+        local desc
+        if [[ -d "$path" ]]; then
+            desc="Folder exists"
+        else
+            desc="[!] Path not found"
         fi
+        menu_items+=("$path" "$desc")
     done
+
+    # Select share to edit
+    local share_path
+    share_path=$(whiptail --title "Select Shared Folder" --menu "\
+Choose a folder to change access settings:
+
+These are the folders that other computers
+can connect to over the network." 18 60 8 \
+        "${menu_items[@]}" 3>&1 1>&2 2>&3) || return
+
+    # Get current settings
+    local current_line
+    current_line=$(grep "^${share_path}[[:space:]]" "$exports_file" 2>/dev/null | head -1)
+    local current_spec
+    current_spec=$(echo "$current_line" | awk '{print $2}')
+
+    # Parse current host
+    local current_host="*"
+    local current_rw="rw"
+    local current_root="no_root_squash"
+
+    if [[ -n "$current_spec" ]]; then
+        current_host="${current_spec%%(*}"
+        [[ "$current_spec" == *"ro"* ]] && current_rw="ro"
+        [[ "$current_spec" != *"no_root_squash"* ]] && current_root="root_squash"
+    fi
+
+    # Step 1: Who can access?
+    local access_choice
+    access_choice=$(whiptail --title "Step 1: Who Can Access?" --menu "\
+Who should be able to connect to:
+$share_path
+
+Choose who can access this folder:" 18 60 5 \
+        "1" "Everyone (any computer on the network)" \
+        "2" "Specific network (e.g., 192.168.1.0/24)" \
+        "3" "Single computer (by IP address)" \
+        3>&1 1>&2 2>&3) || return
+
+    local new_host
+    case "$access_choice" in
+        1)
+            new_host="*"
+            ;;
+        2)
+            new_host=$(whiptail --title "Enter Network Address" --inputbox "\
+Enter the network address:
+
+Example: 192.168.1.0/24
+This allows all computers from 192.168.1.1 to 192.168.1.254
+
+Format: X.X.X.0/24" 14 55 "192.168.1.0/24" 3>&1 1>&2 2>&3) || return
+            [[ -z "$new_host" ]] && new_host="*"
+            ;;
+        3)
+            new_host=$(whiptail --title "Enter Computer IP" --inputbox "\
+Enter the IP address of the computer:
+
+Example: 192.168.1.100
+
+Only this computer will be able to connect." 12 55 "" 3>&1 1>&2 2>&3) || return
+            [[ -z "$new_host" ]] && new_host="*"
+            ;;
+    esac
+
+    # Step 2: Read or Read-Write?
+    local perm_choice
+    perm_choice=$(whiptail --title "Step 2: Access Permissions" --menu "\
+What can connected computers do?
+
+Share: $share_path
+Access: $new_host" 16 60 3 \
+        "1" "Read & Write (can add, edit, delete files)" \
+        "2" "Read Only (can only view files)" \
+        3>&1 1>&2 2>&3) || return
+
+    local new_rw
+    case "$perm_choice" in
+        1) new_rw="rw" ;;
+        2) new_rw="ro" ;;
+    esac
+
+    # Step 3: Admin access?
+    local admin_choice
+    admin_choice=$(whiptail --title "Step 3: Admin Access" --menu "\
+Allow full administrator access?
+
+If enabled, remote admin users have full control
+over files (same as local root user).
+
+Recommended: Yes for trusted networks" 16 60 2 \
+        "1" "Yes - Full admin access (recommended)" \
+        "2" "No - Limited access (more secure)" \
+        3>&1 1>&2 2>&3) || return
+
+    local new_root
+    case "$admin_choice" in
+        1) new_root="no_root_squash" ;;
+        2) new_root="root_squash" ;;
+    esac
+
+    # Build the new export line
+    local new_options="${new_rw},sync,no_subtree_check,${new_root}"
+    local new_spec="${new_host}(${new_options})"
+    local new_line="${share_path} ${new_spec}"
+
+    # Show summary and confirm
+    local perm_desc="Read & Write"
+    [[ "$new_rw" == "ro" ]] && perm_desc="Read Only"
+
+    local admin_desc="Yes (full control)"
+    [[ "$new_root" == "root_squash" ]] && admin_desc="No (limited)"
+
+    local host_desc="$new_host"
+    [[ "$new_host" == "*" ]] && host_desc="Everyone"
+
+    if whiptail --title "Confirm Changes" --yesno "\
+Please review your settings:
+
+Shared Folder: $share_path
+
+Who can access:   $host_desc
+Permissions:      $perm_desc
+Admin access:     $admin_desc
+
+Apply these settings?" 16 55; then
+
+        # Create backup
+        local ts
+        ts=$(date +%Y%m%d%H%M%S)
+        sudo cp "$exports_file" "${exports_file}.${ts}.bak"
+
+        # Update the export line
+        sudo sed -i "s|^${share_path}[[:space:]].*|${new_line}|" "$exports_file"
+
+        # Apply changes
+        if sudo exportfs -ra 2>/dev/null; then
+            whiptail --title "Success!" --msgbox "\
+Settings updated successfully!
+
+Folder: $share_path
+Access: $host_desc ($perm_desc)
+
+Changes are now active. Computers can
+connect using this address:
+
+  $share_path" 14 55
+        else
+            whiptail --title "Warning" --msgbox "\
+Settings saved but could not activate.
+
+Please check /etc/exports for errors
+or restart the NFS service." 10 50
+        fi
+    fi
+}
+
+add_nfs_share() {
+    # Add a new NFS share
+    local exports_file="/etc/exports"
+
+    # Step 1: Enter folder path
+    local share_path
+    share_path=$(whiptail --title "Add New Shared Folder - Step 1" --inputbox "\
+Enter the folder path to share:
+
+This is the folder on this server that other
+computers will be able to access.
+
+Example: /mnt/data/shared" 14 55 "/mnt/data/" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$share_path" ]] && return
+
+    # Check if path exists
+    if [[ ! -d "$share_path" ]]; then
+        if whiptail --title "Folder Not Found" --yesno "\
+The folder does not exist:
+$share_path
+
+Would you like to create it?" 10 50; then
+            if ! sudo mkdir -p "$share_path" 2>/dev/null; then
+                whiptail --title "Error" --msgbox "Could not create folder." 8 40
+                return
+            fi
+        else
+            return
+        fi
+    fi
+
+    # Check if already shared
+    if grep -q "^${share_path}[[:space:]]" "$exports_file" 2>/dev/null; then
+        whiptail --title "Already Shared" --msgbox "\
+This folder is already being shared.
+
+Use 'Edit Share Settings' to modify it." 10 50
+        return
+    fi
+
+    # Step 2: Who can access?
+    local access_choice
+    access_choice=$(whiptail --title "Add New Share - Step 2" --menu "\
+Who should be able to access this folder?
+
+Folder: $share_path" 16 60 4 \
+        "1" "Everyone (any computer)" \
+        "2" "Specific network (recommended)" \
+        "3" "Single computer only" \
+        3>&1 1>&2 2>&3) || return
+
+    local new_host
+    case "$access_choice" in
+        1)
+            new_host="*"
+            ;;
+        2)
+            new_host=$(whiptail --title "Network Address" --inputbox "\
+Enter network address (e.g., 192.168.1.0/24):" 10 55 "192.168.1.0/24" 3>&1 1>&2 2>&3) || return
+            [[ -z "$new_host" ]] && new_host="*"
+            ;;
+        3)
+            new_host=$(whiptail --title "Computer IP" --inputbox "\
+Enter the IP address:" 10 55 "" 3>&1 1>&2 2>&3) || return
+            [[ -z "$new_host" ]] && new_host="*"
+            ;;
+    esac
+
+    # Step 3: Permissions
+    local perm_choice
+    perm_choice=$(whiptail --title "Add New Share - Step 3" --menu "\
+What permissions should connected computers have?" 14 60 2 \
+        "1" "Read & Write (full access)" \
+        "2" "Read Only (view only)" \
+        3>&1 1>&2 2>&3) || return
+
+    local new_rw="rw"
+    [[ "$perm_choice" == "2" ]] && new_rw="ro"
+
+    # Build export line
+    local new_line="${share_path} ${new_host}(${new_rw},sync,no_subtree_check,no_root_squash)"
+
+    # Confirm
+    local host_desc="$new_host"
+    [[ "$new_host" == "*" ]] && host_desc="Everyone"
+
+    local perm_desc="Read & Write"
+    [[ "$new_rw" == "ro" ]] && perm_desc="Read Only"
+
+    if whiptail --title "Confirm New Share" --yesno "\
+Create this shared folder?
+
+Folder:      $share_path
+Access:      $host_desc
+Permissions: $perm_desc" 12 55; then
+
+        # Add to exports
+        echo "$new_line" | sudo tee -a "$exports_file" > /dev/null
+
+        # Apply
+        if sudo exportfs -ra 2>/dev/null; then
+            whiptail --title "Share Created!" --msgbox "\
+New shared folder created successfully!
+
+Other computers can now connect to:
+$share_path
+
+From: $host_desc" 12 55
+        else
+            whiptail --title "Warning" --msgbox "Share added but could not activate." 8 50
+        fi
+    fi
 }
 
 nfs_menu() {
     local choice
     while true; do
-        choice=$(whiptail --title "═══ 📂 NFS Access Management ═══" --menu "\
-  Manage NFS share permissions
-  ─────────────────────────────────────────────" 18 60 5 \
-            "1" "📊 View Current Shares & Clients" \
-            "2" "✏️  Edit Access Rights" \
-            "3" "🔄 Refresh Exports" \
-            "4" "📋 View Raw /etc/exports" \
-            "5" "🔙 Back" \
+        # Get quick status
+        local share_count=0
+        local client_count=0
+        if [[ -f /etc/exports ]]; then
+            share_count=$(grep -c '^/' /etc/exports 2>/dev/null || echo 0)
+        fi
+        if [[ -d /proc/fs/nfsd/clients ]]; then
+            client_count=$(ls -1 /proc/fs/nfsd/clients 2>/dev/null | wc -l)
+        fi
+
+        choice=$(whiptail --title "NFS Shared Folders" --menu "\
+  Manage folders shared over the network
+
+  Status: $share_count shared folder(s), $client_count connected
+  ─────────────────────────────────────────────" 20 60 6 \
+            "1" "View Shared Folders" \
+            "2" "Edit Share Settings" \
+            "3" "Add New Shared Folder" \
+            "4" "Refresh (apply changes)" \
+            "5" "View Config File" \
+            "6" "Back" \
             3>&1 1>&2 2>&3) || break
 
         case "$choice" in
             1) show_nfs_exports ;;
-            2) edit_nfs_clients ;;
-            3)
-                if sudo exportfs -ra 2>/dev/null; then
-                    whiptail --title "✅ Success" --msgbox "NFS exports refreshed successfully!" 8 45
-                else
-                    whiptail --title "❌ Error" --msgbox "Failed to refresh NFS exports.\nCheck /etc/exports for errors." 10 50
-                fi
-                ;;
+            2) edit_nfs_share ;;
+            3) add_nfs_share ;;
             4)
-                if [[ -f /etc/exports ]]; then
-                    whiptail --title "📋 /etc/exports" --scrolltext --textbox /etc/exports 20 70
+                if sudo exportfs -ra 2>/dev/null; then
+                    whiptail --title "Success" --msgbox "Shared folders refreshed!" 8 40
                 else
-                    whiptail --title "📋 /etc/exports" --msgbox "File not found." 8 40
+                    whiptail --title "Error" --msgbox "Failed to refresh.\nCheck settings for errors." 10 45
                 fi
                 ;;
-            5) break ;;
+            5)
+                if [[ -f /etc/exports ]]; then
+                    whiptail --title "/etc/exports" --scrolltext --textbox /etc/exports 20 70
+                else
+                    whiptail --title "Config File" --msgbox "No configuration file found." 8 40
+                fi
+                ;;
+            6) break ;;
         esac
     done
 }
