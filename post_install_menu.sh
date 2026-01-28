@@ -74,12 +74,23 @@ import json
 
 # Box drawing constants
 W = 74  # Inner width of the box
+import unicodedata
+
+def char_width(c):
+    """Get display width of a character (emoji=2, most others=1)"""
+    if ord(c) > 0x1F000:  # Emoji range
+        return 2
+    ea = unicodedata.east_asian_width(c)
+    return 2 if ea in ('F', 'W') else 1
+
+def visible_len(s):
+    """Get visible terminal width of string"""
+    return sum(char_width(c) for c in s)
 
 def line(content="", border="│"):
     """Create a line with proper padding to align right border"""
-    # Count visible characters (Unicode icons are 1 char width in terminal)
-    visible_len = len(content)
-    padding = W - visible_len
+    vlen = visible_len(content)
+    padding = W - vlen
     if padding < 0:
         content = content[:W]
         padding = 0
@@ -129,8 +140,9 @@ try:
     # Header
     print(f"╔{'═' * (W + 1)}╗")
     title = "💾  RAID ARRAY STATUS"
-    pad = (W - len(title)) // 2
-    print(f"║{' ' * pad}{title}{' ' * (W - pad - len(title) + 1)}║")
+    title_width = visible_len(title)
+    pad = (W - title_width) // 2
+    print(f"║{' ' * pad}{title}{' ' * (W - pad - title_width + 1)}║")
     print(f"╚{'═' * (W + 1)}╝")
     print()
 
@@ -233,11 +245,23 @@ show_physical_drives() {
 import sys
 import json
 import os
+import unicodedata
 
 W = 76
 
+def char_width(c):
+    """Get display width of a character (emoji=2, most others=1)"""
+    if ord(c) > 0x1F000:  # Emoji range
+        return 2
+    ea = unicodedata.east_asian_width(c)
+    return 2 if ea in ('F', 'W') else 1
+
+def visible_len(s):
+    """Get visible terminal width of string"""
+    return sum(char_width(c) for c in s)
+
 def line(content="", border="│"):
-    padding = W - len(content)
+    padding = W - visible_len(content)
     if padding < 0:
         content = content[:W]
         padding = 0
@@ -284,8 +308,9 @@ try:
     # Header
     print(f"╔{'═' * (W + 1)}╗")
     title = "💿  PHYSICAL DRIVES"
-    pad = (W - len(title)) // 2
-    print(f"║{' ' * pad}{title}{' ' * (W - pad - len(title) + 1)}║")
+    title_width = visible_len(title)
+    pad = (W - title_width) // 2
+    print(f"║{' ' * pad}{title}{' ' * (W - pad - title_width + 1)}║")
     print(f"╚{'═' * (W + 1)}╝")
     print()
 
