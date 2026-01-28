@@ -215,8 +215,9 @@ PYEOF
 }
 
 raid_menu() {
+    local choice
+    local out
     while true; do
-        local choice
         choice=$(whiptail --title "═══ 💾 RAID Management ═══" --menu "\
   View and manage your storage arrays
   ─────────────────────────────────────────────" 18 60 5 \
@@ -231,7 +232,7 @@ raid_menu() {
             1) show_raid_info "false" ;;
             2) show_raid_info "true" ;;
             3)
-                local out="$TMP_DIR/drives"
+                out="$TMP_DIR/drives"
                 if command -v xicli &>/dev/null; then
                     xicli drive show > "$out" 2>&1
                 else
@@ -240,7 +241,7 @@ raid_menu() {
                 whiptail --title "💿 Physical Drives" --scrolltext --textbox "$out" 24 78
                 ;;
             4)
-                local out="$TMP_DIR/pools"
+                out="$TMP_DIR/pools"
                 if command -v xicli &>/dev/null; then
                     xicli pool show > "$out" 2>&1
                 else
@@ -305,8 +306,9 @@ show_network_info() {
 }
 
 network_menu() {
+    local choice
+    local netplan_file
     while true; do
-        local choice
         choice=$(whiptail --title "═══ 🌐 Network Settings ═══" --menu "\
   Configure network interfaces
   ─────────────────────────────────────────────" 18 60 5 \
@@ -343,7 +345,7 @@ network_menu() {
                 fi
                 ;;
             4)
-                local netplan_file=""
+                netplan_file=""
                 for f in /etc/netplan/99-xinas.yaml /etc/netplan/*.yaml; do
                     [[ -f "$f" ]] && { netplan_file="$f"; break; }
                 done
@@ -549,8 +551,8 @@ edit_nfs_clients() {
 }
 
 nfs_menu() {
+    local choice
     while true; do
-        local choice
         choice=$(whiptail --title "═══ 📂 NFS Access Management ═══" --menu "\
   Manage NFS share permissions
   ─────────────────────────────────────────────" 18 60 5 \
@@ -588,8 +590,11 @@ nfs_menu() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 quick_actions_menu() {
+    local choice
+    local out
+    local status
+    local icon
     while true; do
-        local choice
         choice=$(whiptail --title "═══ ⚡ Quick Actions ═══" --menu "\
   Common administrative tasks
   ─────────────────────────────────────────────" 18 60 6 \
@@ -618,7 +623,7 @@ quick_actions_menu() {
                 fi
                 ;;
             3)
-                local out="$TMP_DIR/logs"
+                out="$TMP_DIR/logs"
                 {
                     echo "═══ Recent System Messages ═══"
                     echo ""
@@ -627,7 +632,7 @@ quick_actions_menu() {
                 whiptail --title "📋 System Logs" --scrolltext --textbox "$out" 24 78
                 ;;
             4)
-                local out="$TMP_DIR/disks"
+                out="$TMP_DIR/disks"
                 {
                     echo "═══ Disk Health Status ═══"
                     echo ""
@@ -642,7 +647,7 @@ quick_actions_menu() {
                 whiptail --title "💾 Disk Health" --scrolltext --textbox "$out" 24 78
                 ;;
             5)
-                local out="$TMP_DIR/services"
+                out="$TMP_DIR/services"
                 {
                     echo "═══ Service Status ═══"
                     echo ""
