@@ -57,35 +57,164 @@ show_raid_info() {
         return
     fi
 
-    {
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "                    RAID ARRAY INFORMATION"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo ""
+    # Get JSON output and format it nicely
+    local json_file="$TMP_DIR/raid_json"
+    local ext_flag=""
+    [[ "$extended" == "true" ]] && ext_flag="-e"
 
-        if [[ "$extended" == "true" ]]; then
-            xicli raid show -e 2>&1 || echo "Failed to retrieve extended RAID info"
-        else
-            xicli raid show 2>&1 || echo "Failed to retrieve RAID info"
-        fi
+    if ! xicli raid show -f json $ext_flag > "$json_file" 2>&1; then
+        whiptail --title "$title" --msgbox "Failed to retrieve RAID information" 8 50
+        return
+    fi
 
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "                      SPARE POOLS"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo ""
-        xicli pool show 2>&1 || echo "No spare pools configured"
+    # Format the JSON output using Python
+    python3 << 'PYEOF' "$json_file" "$extended" > "$out"
+import sys
+import json
 
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "                    PHYSICAL DRIVES"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo ""
-        xicli drive show 2>&1 || echo "Failed to retrieve drive info"
+def progress_bar(percent, width=30):
+    """Create a text progress bar"""
+    filled = int(percent * width / 100)
+    empty = width - filled
+    bar = "█" * filled + "░" * empty
+    return f"[{bar}] {percent:3d}%"
 
-    } > "$out" 2>&1
+def format_size(size_str):
+    """Format size string"""
+    return size_str if size_str else "N/A"
 
-    whiptail --title "$title" --scrolltext --textbox "$out" 24 78
+def format_state(state_list):
+    """Format state with icons"""
+    if not state_list:
+        return "unknown"
+    states = state_list if isinstance(state_list, list) else [state_list]
+    icons = {
+        "online": "✓",
+        "initialized": "✓",
+        "initing": "⟳",
+        "degraded": "⚠",
+        "rebuilding": "⟳",
+        "offline": "✗",
+        "failed": "✗"
+    }
+    result = []
+    for s in states:
+        icon = icons.get(s.lower(), "•")
+        result.append(f"{icon} {s}")
+    return " ".join(result)
+
+def count_device_states(devices):
+    """Count devices by state"""
+    online = 0
+    degraded = 0
+    offline = 0
+    for dev in devices:
+        state = dev[2][0].lower() if dev[2] else "unknown"
+        if state == "online":
+            online += 1
+        elif state in ["degraded", "rebuilding"]:
+            degraded += 1
+        else:
+            offline += 1
+    return online, degraded, offline
+
+try:
+    json_file = sys.argv[1]
+    extended = sys.argv[2] == "true"
+
+    with open(json_file) as f:
+        data = json.load(f)
+
+    if not data:
+        print("No RAID arrays configured")
+        sys.exit(0)
+
+    print("╔══════════════════════════════════════════════════════════════════════════╗")
+    print("║                         💾  RAID ARRAY STATUS                            ║")
+    print("╚══════════════════════════════════════════════════════════════════════════╝")
+    print()
+
+    for name, arr in data.items():
+        level = arr.get("level", "?")
+        size = format_size(arr.get("size"))
+        state = arr.get("state", [])
+        devices = arr.get("devices", [])
+        strip_size = arr.get("strip_size", "?")
+        sparepool = arr.get("sparepool", "-")
+        init_progress = arr.get("init_progress")
+        memory_mb = arr.get("memory_usage_mb", 0)
+        block_size = arr.get("block_size", 4096)
+
+        online, degraded, offline = count_device_states(devices)
+        total_devs = len(devices)
+
+        # State styling
+        state_str = format_state(state)
+        is_healthy = all(s.lower() in ["online", "initialized"] for s in state)
+        is_initing = any(s.lower() == "initing" for s in state)
+
+        print(f"┌──────────────────────────────────────────────────────────────────────────┐")
+        print(f"│  Array: {name.upper():<12}                                                │")
+        print(f"├──────────────────────────────────────────────────────────────────────────┤")
+        print(f"│                                                                          │")
+        print(f"│   RAID Level    │  RAID-{level:<6}                                        │")
+        print(f"│   Capacity      │  {size:<15}                                   │")
+        print(f"│   Status        │  {state_str:<40}     │")
+        print(f"│   Devices       │  {total_devs} total ({online} online", end="")
+        if degraded > 0:
+            print(f", {degraded} degraded", end="")
+        if offline > 0:
+            print(f", {offline} offline", end="")
+        print(f")                    │")
+        print(f"│   Strip Size    │  {strip_size} KB                                         │")
+        print(f"│   Spare Pool    │  {sparepool:<15}                                   │")
+
+        if init_progress is not None and is_initing:
+            print(f"│                                                                          │")
+            print(f"│   ⟳ Initializing: {progress_bar(init_progress)}              │")
+
+        if extended:
+            print(f"│                                                                          │")
+            print(f"│   Memory Usage  │  {memory_mb} MB                                        │")
+            print(f"│   Block Size    │  {block_size} bytes                                    │")
+
+            # Show device health/wear if available
+            health = arr.get("devices_health")
+            wear = arr.get("devices_wear")
+            if health or wear:
+                print(f"│                                                                          │")
+                print(f"├──────────────────────────────────────────────────────────────────────────┤")
+                print(f"│   DEVICE HEALTH & WEAR                                                   │")
+                print(f"├──────────────────────────────────────────────────────────────────────────┤")
+
+                for i, dev in enumerate(devices):
+                    dev_path = dev[1]
+                    dev_state = dev[2][0] if dev[2] else "?"
+                    h = health[i] if health and i < len(health) else "N/A"
+                    w = wear[i] if wear and i < len(wear) else "N/A"
+                    state_icon = "●" if dev_state.lower() == "online" else "○"
+                    # Truncate device path for display
+                    short_path = dev_path.replace("/dev/", "")
+                    print(f"│   {state_icon} {short_path:<12}  Health: {h:<6}  Wear: {w:<6}                   │")
+
+        print(f"│                                                                          │")
+        print(f"└──────────────────────────────────────────────────────────────────────────┘")
+        print()
+
+    # Summary
+    total_arrays = len(data)
+    healthy_arrays = sum(1 for arr in data.values()
+                        if all(s.lower() in ["online", "initialized"] for s in arr.get("state", [])))
+    print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print(f"  Summary: {total_arrays} array(s), {healthy_arrays} healthy")
+    print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+except Exception as e:
+    print(f"Error parsing RAID data: {e}")
+    sys.exit(1)
+PYEOF
+
+    whiptail --title "$title" --scrolltext --textbox "$out" 30 82
 }
 
 raid_menu() {
