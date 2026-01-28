@@ -72,42 +72,39 @@ show_raid_info() {
 import sys
 import json
 
+# Box drawing constants
+W = 74  # Inner width of the box
+
+def line(content="", border="│"):
+    """Create a line with proper padding to align right border"""
+    # Count visible characters (Unicode icons are 1 char width in terminal)
+    visible_len = len(content)
+    padding = W - visible_len
+    if padding < 0:
+        content = content[:W]
+        padding = 0
+    return f"{border} {content}{' ' * padding}{border}"
+
+def separator(char="─", left="├", right="┤"):
+    return f"{left}{char * (W + 1)}{right}"
+
 def progress_bar(percent, width=30):
-    """Create a text progress bar"""
     filled = int(percent * width / 100)
     empty = width - filled
-    bar = "█" * filled + "░" * empty
-    return f"[{bar}] {percent:3d}%"
-
-def format_size(size_str):
-    """Format size string"""
-    return size_str if size_str else "N/A"
+    return f"[{'█' * filled}{'░' * empty}] {percent:3d}%"
 
 def format_state(state_list):
-    """Format state with icons"""
     if not state_list:
         return "unknown"
     states = state_list if isinstance(state_list, list) else [state_list]
     icons = {
-        "online": "✓",
-        "initialized": "✓",
-        "initing": "⟳",
-        "degraded": "⚠",
-        "rebuilding": "⟳",
-        "offline": "✗",
-        "failed": "✗"
+        "online": "✓", "initialized": "✓", "initing": "⟳",
+        "degraded": "⚠", "rebuilding": "⟳", "offline": "✗", "failed": "✗"
     }
-    result = []
-    for s in states:
-        icon = icons.get(s.lower(), "•")
-        result.append(f"{icon} {s}")
-    return " ".join(result)
+    return " ".join(f"{icons.get(s.lower(), '•')} {s}" for s in states)
 
 def count_device_states(devices):
-    """Count devices by state"""
-    online = 0
-    degraded = 0
-    offline = 0
+    online = degraded = offline = 0
     for dev in devices:
         state = dev[2][0].lower() if dev[2] else "unknown"
         if state == "online":
@@ -129,14 +126,17 @@ try:
         print("No RAID arrays configured")
         sys.exit(0)
 
-    print("╔══════════════════════════════════════════════════════════════════════════╗")
-    print("║                         💾  RAID ARRAY STATUS                            ║")
-    print("╚══════════════════════════════════════════════════════════════════════════╝")
+    # Header
+    print(f"╔{'═' * (W + 1)}╗")
+    title = "💾  RAID ARRAY STATUS"
+    pad = (W - len(title)) // 2
+    print(f"║{' ' * pad}{title}{' ' * (W - pad - len(title) + 1)}║")
+    print(f"╚{'═' * (W + 1)}╝")
     print()
 
     for name, arr in data.items():
         level = arr.get("level", "?")
-        size = format_size(arr.get("size"))
+        size = arr.get("size", "N/A")
         state = arr.get("state", [])
         devices = arr.get("devices", [])
         strip_size = arr.get("strip_size", "?")
@@ -147,67 +147,64 @@ try:
 
         online, degraded, offline = count_device_states(devices)
         total_devs = len(devices)
-
-        # State styling
         state_str = format_state(state)
-        is_healthy = all(s.lower() in ["online", "initialized"] for s in state)
         is_initing = any(s.lower() == "initing" for s in state)
 
-        print(f"┌──────────────────────────────────────────────────────────────────────────┐")
-        print(f"│  Array: {name.upper():<12}                                                │")
-        print(f"├──────────────────────────────────────────────────────────────────────────┤")
-        print(f"│                                                                          │")
-        print(f"│   RAID Level    │  RAID-{level:<6}                                        │")
-        print(f"│   Capacity      │  {size:<15}                                   │")
-        print(f"│   Status        │  {state_str:<40}     │")
-        print(f"│   Devices       │  {total_devs} total ({online} online", end="")
+        # Build device summary
+        dev_parts = [f"{total_devs} total", f"{online} online"]
         if degraded > 0:
-            print(f", {degraded} degraded", end="")
+            dev_parts.append(f"{degraded} degraded")
         if offline > 0:
-            print(f", {offline} offline", end="")
-        print(f")                    │")
-        print(f"│   Strip Size    │  {strip_size} KB                                         │")
-        print(f"│   Spare Pool    │  {sparepool:<15}                                   │")
+            dev_parts.append(f"{offline} offline")
+        dev_summary = " | ".join(dev_parts)
+
+        # Array box
+        print(f"┌{'─' * (W + 1)}┐")
+        print(line(f" Array: {name.upper()}"))
+        print(separator())
+        print(line())
+        print(line(f"  RAID Level    │  RAID-{level}"))
+        print(line(f"  Capacity      │  {size}"))
+        print(line(f"  Status        │  {state_str}"))
+        print(line(f"  Devices       │  {dev_summary}"))
+        print(line(f"  Strip Size    │  {strip_size} KB"))
+        print(line(f"  Spare Pool    │  {sparepool}"))
 
         if init_progress is not None and is_initing:
-            print(f"│                                                                          │")
-            print(f"│   ⟳ Initializing: {progress_bar(init_progress)}              │")
+            print(line())
+            print(line(f"  ⟳ Initializing: {progress_bar(init_progress)}"))
 
         if extended:
-            print(f"│                                                                          │")
-            print(f"│   Memory Usage  │  {memory_mb} MB                                        │")
-            print(f"│   Block Size    │  {block_size} bytes                                    │")
+            print(line())
+            print(line(f"  Memory Usage  │  {memory_mb} MB"))
+            print(line(f"  Block Size    │  {block_size} bytes"))
 
-            # Show device health/wear if available
             health = arr.get("devices_health")
             wear = arr.get("devices_wear")
             if health or wear:
-                print(f"│                                                                          │")
-                print(f"├──────────────────────────────────────────────────────────────────────────┤")
-                print(f"│   DEVICE HEALTH & WEAR                                                   │")
-                print(f"├──────────────────────────────────────────────────────────────────────────┤")
-
+                print(line())
+                print(separator())
+                print(line(" DEVICE HEALTH & WEAR"))
+                print(separator())
                 for i, dev in enumerate(devices):
-                    dev_path = dev[1]
+                    dev_path = dev[1].replace("/dev/", "")
                     dev_state = dev[2][0] if dev[2] else "?"
                     h = health[i] if health and i < len(health) else "N/A"
                     w = wear[i] if wear and i < len(wear) else "N/A"
-                    state_icon = "●" if dev_state.lower() == "online" else "○"
-                    # Truncate device path for display
-                    short_path = dev_path.replace("/dev/", "")
-                    print(f"│   {state_icon} {short_path:<12}  Health: {h:<6}  Wear: {w:<6}                   │")
+                    icon = "●" if dev_state.lower() == "online" else "○"
+                    print(line(f"  {icon} {dev_path:<14} Health: {h:<6} Wear: {w}"))
 
-        print(f"│                                                                          │")
-        print(f"└──────────────────────────────────────────────────────────────────────────┘")
+        print(line())
+        print(f"└{'─' * (W + 1)}┘")
         print()
 
     # Summary
     total_arrays = len(data)
-    healthy_arrays = sum(1 for arr in data.values()
-                        if all(s.lower() in ["online", "initialized"] for s in arr.get("state", [])))
-    print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print(f"  Summary: {total_arrays} array(s), {healthy_arrays} healthy")
-    print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    healthy = sum(1 for a in data.values()
+                  if all(s.lower() in ["online", "initialized"] for s in a.get("state", [])))
+    print(f"{'━' * (W + 3)}")
+    print(f"  Summary: {total_arrays} array(s), {healthy} healthy")
+    print(f"{'━' * (W + 3)}")
 
 except Exception as e:
     print(f"Error parsing RAID data: {e}")
