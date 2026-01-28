@@ -479,49 +479,213 @@ raid_menu() {
 
 show_network_info() {
     local out="$TMP_DIR/net_info"
-    {
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "                    NETWORK CONFIGURATION"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo ""
-        echo "Hostname: $(hostname -f 2>/dev/null || hostname)"
-        echo ""
-        echo "─── Active Interfaces ───────────────────────────────────────────"
-        echo ""
 
-        for iface in /sys/class/net/*; do
-            [[ -d "$iface" ]] || continue
-            name=$(basename "$iface")
-            [[ "$name" == "lo" ]] && continue
+    python3 - > "$out" << 'PYEOF'
+import subprocess
+import os
+import socket
 
-            state=$(cat "$iface/operstate" 2>/dev/null || echo "unknown")
-            speed=$(cat "$iface/speed" 2>/dev/null || echo "")
-            driver=$(basename "$(readlink -f "$iface/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
-            ip_addr=$(ip -o -4 addr show "$name" 2>/dev/null | awk '{print $4}' | head -1)
-            [[ -z "$ip_addr" ]] && ip_addr="No IP"
+def run(cmd):
+    try:
+        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
+    except:
+        return ""
 
-            # Format speed
-            if [[ "$speed" =~ ^[0-9]+$ ]] && [[ $speed -gt 0 ]]; then
-                if [[ $speed -ge 1000 ]]; then
-                    speed_str="$((speed/1000))Gb/s"
-                else
-                    speed_str="${speed}Mb/s"
-                fi
-            else
-                speed_str="--"
-            fi
+def get_interfaces():
+    interfaces = []
+    net_path = "/sys/class/net"
+    for iface in os.listdir(net_path):
+        if iface == "lo":
+            continue
+        iface_path = os.path.join(net_path, iface)
+        if not os.path.isdir(iface_path):
+            continue
 
-            printf "  %-12s  %-18s  %-10s  %s  (%s)\n" "$name" "$ip_addr" "$speed_str" "$state" "$driver"
-        done
+        # Get state
+        try:
+            with open(os.path.join(iface_path, "operstate")) as f:
+                state = f.read().strip()
+        except:
+            state = "unknown"
 
-        echo ""
-        echo "─── Routing Table ─────────────────────────────────────────────────"
-        echo ""
-        ip route show 2>/dev/null | head -10
+        # Get speed
+        try:
+            with open(os.path.join(iface_path, "speed")) as f:
+                speed = int(f.read().strip())
+        except:
+            speed = 0
 
-    } > "$out"
+        # Get MAC
+        try:
+            with open(os.path.join(iface_path, "address")) as f:
+                mac = f.read().strip()
+        except:
+            mac = "N/A"
 
-    whiptail --title "🌐 Network Information" --scrolltext --textbox "$out" 24 78
+        # Get driver
+        try:
+            driver_link = os.path.join(iface_path, "device/driver")
+            driver = os.path.basename(os.readlink(driver_link))
+        except:
+            driver = ""
+
+        # Get IP
+        ip_out = run(f"ip -o -4 addr show {iface}")
+        ip_addr = ""
+        if ip_out:
+            parts = ip_out.split()
+            for i, p in enumerate(parts):
+                if p == "inet" and i + 1 < len(parts):
+                    ip_addr = parts[i + 1]
+                    break
+
+        # Get IPv6
+        ip6_out = run(f"ip -o -6 addr show {iface} scope global")
+        ip6_addr = ""
+        if ip6_out:
+            parts = ip6_out.split()
+            for i, p in enumerate(parts):
+                if p == "inet6" and i + 1 < len(parts):
+                    ip6_addr = parts[i + 1]
+                    break
+
+        interfaces.append({
+            "name": iface,
+            "state": state,
+            "speed": speed,
+            "mac": mac,
+            "driver": driver,
+            "ip": ip_addr,
+            "ip6": ip6_addr
+        })
+
+    return sorted(interfaces, key=lambda x: x["name"])
+
+def format_speed(speed):
+    if speed <= 0:
+        return "---"
+    elif speed >= 100000:
+        return f"{speed // 1000}Gb/s"
+    elif speed >= 1000:
+        return f"{speed // 1000}Gb/s"
+    else:
+        return f"{speed}Mb/s"
+
+def speed_bar(speed):
+    """Visual bar for speed"""
+    if speed <= 0:
+        return "[----]"
+    elif speed >= 100000:
+        return "[****]"  # 100Gb+
+    elif speed >= 25000:
+        return "[*** ]"  # 25-100Gb
+    elif speed >= 10000:
+        return "[**  ]"  # 10-25Gb
+    elif speed >= 1000:
+        return "[*   ]"  # 1-10Gb
+    else:
+        return "[.   ]"  # < 1Gb
+
+# Header
+hostname = socket.gethostname()
+try:
+    fqdn = socket.getfqdn()
+except:
+    fqdn = hostname
+
+print("NETWORK CONFIGURATION")
+print("=" * 72)
+print()
+
+# System info
+print(f"  Hostname:  {hostname}")
+if fqdn != hostname:
+    print(f"  FQDN:      {fqdn}")
+print()
+
+# Get default gateway
+gw_info = run("ip route | grep default")
+if gw_info:
+    parts = gw_info.split()
+    gw_ip = parts[2] if len(parts) > 2 else "N/A"
+    gw_dev = parts[4] if len(parts) > 4 else "N/A"
+    print(f"  Gateway:   {gw_ip} via {gw_dev}")
+
+# Get DNS
+dns_servers = []
+try:
+    with open("/etc/resolv.conf") as f:
+        for line in f:
+            if line.strip().startswith("nameserver"):
+                dns_servers.append(line.split()[1])
+except:
+    pass
+if dns_servers:
+    print(f"  DNS:       {', '.join(dns_servers[:3])}")
+
+print()
+print("-" * 72)
+print("  NETWORK INTERFACES")
+print("-" * 72)
+print()
+
+interfaces = get_interfaces()
+up_count = sum(1 for i in interfaces if i["state"] == "up")
+total = len(interfaces)
+
+print(f"  Found {total} interface(s), {up_count} active")
+print()
+
+for iface in interfaces:
+    name = iface["name"]
+    state = iface["state"]
+    speed = iface["speed"]
+    mac = iface["mac"]
+    driver = iface["driver"]
+    ip = iface["ip"]
+    ip6 = iface["ip6"]
+
+    # Status icon
+    if state == "up":
+        icon = "[UP]"
+    elif state == "down":
+        icon = "[DN]"
+    else:
+        icon = "[??]"
+
+    speed_str = format_speed(speed)
+    bar = speed_bar(speed)
+
+    print(f"  {icon} {name}")
+    print(f"      State:   {state:<10} Speed: {bar} {speed_str}")
+    if ip:
+        print(f"      IPv4:    {ip}")
+    else:
+        print(f"      IPv4:    (not configured)")
+    if ip6:
+        print(f"      IPv6:    {ip6}")
+    print(f"      MAC:     {mac}")
+    if driver:
+        print(f"      Driver:  {driver}")
+    print()
+
+print("-" * 72)
+print("  ROUTING TABLE")
+print("-" * 72)
+print()
+
+routes = run("ip route show")
+if routes:
+    for line in routes.split("\n")[:8]:
+        print(f"  {line}")
+else:
+    print("  No routes configured")
+
+print()
+print("=" * 72)
+PYEOF
+
+    whiptail --title "Network Information" --scrolltext --textbox "$out" 28 78
 }
 
 network_menu() {
