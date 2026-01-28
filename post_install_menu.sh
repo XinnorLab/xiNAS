@@ -245,29 +245,17 @@ show_physical_drives() {
 import sys
 import json
 import os
-import unicodedata
 
 W = 76
 
-def char_width(c):
-    """Get display width of a character (emoji=2, most others=1)"""
-    if ord(c) > 0x1F000:  # Emoji range
-        return 2
-    ea = unicodedata.east_asian_width(c)
-    return 2 if ea in ('F', 'W') else 1
-
-def visible_len(s):
-    """Get visible terminal width of string"""
-    return sum(char_width(c) for c in s)
-
-def line(content="", border="│"):
-    padding = W - visible_len(content)
+def line(content="", border="|"):
+    padding = W - len(content)
     if padding < 0:
         content = content[:W]
         padding = 0
     return f"{border} {content}{' ' * padding}{border}"
 
-def separator(char="─", left="├", right="┤"):
+def separator(char="-", left="+", right="+"):
     return f"{left}{char * (W + 1)}{right}"
 
 def get_drive_size(path):
@@ -305,13 +293,12 @@ try:
         print("No RAID arrays configured")
         sys.exit(0)
 
-    # Header
-    print(f"╔{'═' * (W + 1)}╗")
-    title = "💿  PHYSICAL DRIVES"
-    title_width = visible_len(title)
-    pad = (W - title_width) // 2
-    print(f"║{' ' * pad}{title}{' ' * (W - pad - title_width + 1)}║")
-    print(f"╚{'═' * (W + 1)}╝")
+    # Header - use simple ASCII for consistent alignment
+    print("=" * (W + 3))
+    title = "PHYSICAL DRIVES"
+    pad = (W - len(title)) // 2
+    print(f" {' ' * pad}{title}")
+    print("=" * (W + 3))
     print()
 
     # Collect all drives from all arrays
@@ -353,32 +340,124 @@ try:
         online = sum(1 for d in drives if d["state"].lower() == "online")
         total = len(drives)
 
-        print(f"┌{'─' * (W + 1)}┐")
+        print(f"+{'-' * (W + 1)}+")
         print(line(f" Array: {arr_name.upper()} ({online}/{total} online)"))
         print(separator())
-        print(line(f"  {'Device':<14} {'Size':<9} {'State':<8} {'Health':<7} {'Wear':<6} {'Serial'}"))
+        # Header row - fixed columns
+        hdr = f"  {'Device':<14}{'Size':<10}{'State':<10}{'Health':<8}{'Wear':<7}{'Serial'}"
+        print(line(hdr))
         print(separator())
 
         for d in drives:
             path = d["path"].replace("/dev/", "")
             state = d["state"]
-            icon = "●" if state.lower() == "online" else "○"
+            icon = "*" if state.lower() == "online" else "o"
             health = d["health"]
             wear = d["wear"]
             size = d["size"]
-            serial = d["serial"][:14] if len(d["serial"]) > 14 else d["serial"]
-            print(line(f"  {icon} {path:<12} {size:<9} {state:<8} {health:<7} {wear:<6} {serial}"))
+            serial = d["serial"][:12] if len(d["serial"]) > 12 else d["serial"]
+            row = f"  {icon} {path:<12}{size:<10}{state:<10}{health:<8}{wear:<7}{serial}"
+            print(line(row))
 
         print(line())
-        print(f"└{'─' * (W + 1)}┘")
-        print()
+        print(f"+{'-' * (W + 1)}+")
 
+    print()
     # Summary
     total_drives = len(all_drives)
     online_drives = sum(1 for d in all_drives if d["state"].lower() == "online")
-    print(f"{'━' * (W + 3)}")
     print(f"  Total: {total_drives} drives, {online_drives} online")
-    print(f"{'━' * (W + 3)}")
+    print("=" * (W + 3))
+
+except Exception as e:
+    print(f"Error: {e}")
+PYEOF
+
+    rm -f "$json_file"
+}
+
+show_spare_pools() {
+    if ! command -v xicli &>/dev/null; then
+        echo "xicli not found"
+        return
+    fi
+
+    local json_file
+    json_file=$(mktemp)
+
+    if ! xicli pool show -f json > "$json_file" 2>&1; then
+        echo "Failed to get spare pool information"
+        rm -f "$json_file"
+        return
+    fi
+
+    python3 - "$json_file" << 'PYEOF'
+import sys
+import json
+
+W = 66
+
+def line(content="", border="|"):
+    padding = W - len(content)
+    if padding < 0:
+        content = content[:W]
+        padding = 0
+    return f"{border} {content}{' ' * padding}{border}"
+
+def separator(char="-", left="+", right="+"):
+    return f"{left}{char * (W + 1)}{right}"
+
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+
+    if not data:
+        print("=" * 50)
+        print("          SPARE POOLS")
+        print("=" * 50)
+        print()
+        print("  No spare pools configured.")
+        print()
+        print("  Spare pools can be created with:")
+        print("    xicli pool create <name> <device1> [device2...]")
+        print()
+        sys.exit(0)
+
+    # Header
+    print("=" * (W + 3))
+    print("          SPARE POOLS")
+    print("=" * (W + 3))
+    print()
+
+    for name, pool in data.items():
+        devices = pool.get("devices", [])
+        serials = pool.get("serials", [])
+        sizes = pool.get("sizes", [])
+        state = pool.get("state", "unknown")
+
+        print(f"+{'-' * (W + 1)}+")
+        print(line(f" Pool: {name.upper()}"))
+        print(separator())
+        print(line(f"  State: {state}"))
+        print(line(f"  Devices: {len(devices)}"))
+        print(separator())
+
+        if devices:
+            print(line(f"  {'Device':<20}{'Size':<15}{'Serial'}"))
+            print(separator())
+            for i, dev in enumerate(devices):
+                dev_path = dev[1] if isinstance(dev, list) else dev
+                dev_path = dev_path.replace("/dev/", "")
+                size = sizes[i] if i < len(sizes) else "N/A"
+                serial = serials[i][:16] if i < len(serials) and serials[i] else "N/A"
+                print(line(f"  {dev_path:<20}{size:<15}{serial}"))
+
+        print(line())
+        print(f"+{'-' * (W + 1)}+")
+        print()
+
+    print(f"  Total: {len(data)} pool(s)")
+    print("=" * (W + 3))
 
 except Exception as e:
     print(f"Error: {e}")
@@ -411,11 +490,7 @@ raid_menu() {
                 ;;
             4)
                 out="$TMP_DIR/pools"
-                if command -v xicli &>/dev/null; then
-                    xicli pool show > "$out" 2>&1 || echo "No spare pools configured" > "$out"
-                else
-                    echo "xicli not found" > "$out"
-                fi
+                show_spare_pools > "$out"
                 whiptail --title "🏊 Spare Pools" --scrolltext --textbox "$out" 20 70
                 ;;
             5) break ;;
