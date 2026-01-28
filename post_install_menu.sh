@@ -246,25 +246,10 @@ import sys
 import json
 import os
 
-W = 76
-
-def line(content="", border="|"):
-    padding = W - len(content)
-    if padding < 0:
-        content = content[:W]
-        padding = 0
-    return f"{border} {content}{' ' * padding}{border}"
-
-def separator(char="-", left="+", right="+"):
-    return f"{left}{char * (W + 1)}{right}"
-
 def get_drive_size(path):
     """Get drive size from /sys/block"""
     try:
-        # Extract base device name (e.g., nvme10n2 from /dev/nvme10n2)
         dev_name = os.path.basename(path)
-        # For NVMe namespaces, we need the parent device
-        # nvme10n2 -> check /sys/block/nvme10n2/size
         size_path = f"/sys/block/{dev_name}/size"
         if os.path.exists(size_path):
             with open(size_path) as f:
@@ -277,11 +262,11 @@ def get_drive_size(path):
 
 def format_size(bytes_size):
     """Format bytes to human readable"""
-    if bytes_size >= 1099511627776:  # TB
+    if bytes_size >= 1099511627776:
         return f"{bytes_size / 1099511627776:.1f} TB"
-    elif bytes_size >= 1073741824:  # GB
+    elif bytes_size >= 1073741824:
         return f"{bytes_size / 1073741824:.0f} GB"
-    elif bytes_size >= 1048576:  # MB
+    elif bytes_size >= 1048576:
         return f"{bytes_size / 1048576:.0f} MB"
     return f"{bytes_size} B"
 
@@ -293,12 +278,8 @@ try:
         print("No RAID arrays configured")
         sys.exit(0)
 
-    # Header - use simple ASCII for consistent alignment
-    print("=" * (W + 3))
-    title = "PHYSICAL DRIVES"
-    pad = (W - len(title)) // 2
-    print(f" {' ' * pad}{title}")
-    print("=" * (W + 3))
+    print("PHYSICAL DRIVES")
+    print("=" * 75)
     print()
 
     # Collect all drives from all arrays
@@ -340,13 +321,10 @@ try:
         online = sum(1 for d in drives if d["state"].lower() == "online")
         total = len(drives)
 
-        print(f"+{'-' * (W + 1)}+")
-        print(line(f" Array: {arr_name.upper()} ({online}/{total} online)"))
-        print(separator())
-        # Header row - fixed columns
-        hdr = f"  {'Device':<14}{'Size':<10}{'State':<10}{'Health':<8}{'Wear':<7}{'Serial'}"
-        print(line(hdr))
-        print(separator())
+        print(f"Array: {arr_name.upper()} ({online}/{total} online)")
+        print("-" * 75)
+        print(f"  {'Device':<14}{'Size':<10}{'State':<10}{'Health':<8}{'Wear':<7}{'Serial'}")
+        print("-" * 75)
 
         for d in drives:
             path = d["path"].replace("/dev/", "")
@@ -355,19 +333,16 @@ try:
             health = d["health"]
             wear = d["wear"]
             size = d["size"]
-            serial = d["serial"][:12] if len(d["serial"]) > 12 else d["serial"]
-            row = f"  {icon} {path:<12}{size:<10}{state:<10}{health:<8}{wear:<7}{serial}"
-            print(line(row))
+            serial = d["serial"][:16] if len(d["serial"]) > 16 else d["serial"]
+            print(f"  {icon} {path:<12}{size:<10}{state:<10}{health:<8}{wear:<7}{serial}")
 
-        print(line())
-        print(f"+{'-' * (W + 1)}+")
+        print()
 
-    print()
     # Summary
     total_drives = len(all_drives)
     online_drives = sum(1 for d in all_drives if d["state"].lower() == "online")
-    print(f"  Total: {total_drives} drives, {online_drives} online")
-    print("=" * (W + 3))
+    print("=" * 75)
+    print(f"Total: {total_drives} drives, {online_drives} online")
 
 except Exception as e:
     print(f"Error: {e}")
@@ -419,7 +394,7 @@ try:
         print("  No spare pools configured.")
         print()
         print("  Spare pools can be created with:")
-        print("    xicli pool create <name> <device1> [device2...]")
+        print("    xicli pool create -n <name> -d <drive1> [drive2]..[driveN]")
         print()
         sys.exit(0)
 
