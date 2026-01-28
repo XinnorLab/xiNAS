@@ -688,42 +688,236 @@ PYEOF
     whiptail --title "Network Information" --scrolltext --textbox "$out" 28 78
 }
 
+edit_interface_ip() {
+    # Edit IP address of a specific interface directly in netplan
+    local netplan_file="/etc/netplan/99-xinas.yaml"
+
+    # Find the netplan file
+    if [[ ! -f "$netplan_file" ]]; then
+        for f in /etc/netplan/*.yaml; do
+            [[ -f "$f" ]] && { netplan_file="$f"; break; }
+        done
+    fi
+
+    if [[ ! -f "$netplan_file" ]]; then
+        whiptail --title "No Config" --msgbox "No netplan configuration found.\n\nRun the initial setup first." 10 50
+        return
+    fi
+
+    # Get list of interfaces from the system
+    local ifaces=()
+    local menu_items=()
+
+    for iface_path in /sys/class/net/*; do
+        [[ -d "$iface_path" ]] || continue
+        local name
+        name=$(basename "$iface_path")
+        [[ "$name" == "lo" ]] && continue
+
+        local state ip_addr speed_str
+        state=$(cat "$iface_path/operstate" 2>/dev/null || echo "unknown")
+        ip_addr=$(ip -o -4 addr show "$name" 2>/dev/null | awk '{print $4}' | head -1)
+        [[ -z "$ip_addr" ]] && ip_addr="no IP"
+
+        local speed
+        speed=$(cat "$iface_path/speed" 2>/dev/null || echo "0")
+        if [[ "$speed" =~ ^[0-9]+$ ]] && [[ $speed -gt 0 ]]; then
+            if [[ $speed -ge 1000 ]]; then
+                speed_str="$((speed/1000))G"
+            else
+                speed_str="${speed}M"
+            fi
+        else
+            speed_str="--"
+        fi
+
+        ifaces+=("$name")
+        menu_items+=("$name" "[$state] $ip_addr ($speed_str)")
+    done
+
+    if [[ ${#ifaces[@]} -eq 0 ]]; then
+        whiptail --title "No Interfaces" --msgbox "No network interfaces found." 8 45
+        return
+    fi
+
+    menu_items+=("" "")
+    menu_items+=("Done" "Finish and apply changes")
+
+    local changes_made=false
+
+    while true; do
+        local choice
+        choice=$(whiptail --title "Edit Interface IP" --menu "\
+Select interface to configure:
+
+Current netplan: $netplan_file" 20 65 10 \
+            "${menu_items[@]}" 3>&1 1>&2 2>&3) || break
+
+        [[ "$choice" == "Done" ]] && break
+        [[ -z "$choice" ]] && continue
+
+        # Get current IP for this interface
+        local current_ip
+        current_ip=$(ip -o -4 addr show "$choice" 2>/dev/null | awk '{print $4}' | head -1)
+        [[ -z "$current_ip" ]] && current_ip="10.10.1.1/24"
+
+        local new_ip
+        new_ip=$(whiptail --title "Configure $choice" --inputbox "\
+Enter IPv4 address with prefix:
+
+Current: $current_ip
+Format:  X.X.X.X/prefix (e.g., 192.168.1.100/24)
+
+Leave empty to skip this interface." 14 55 "$current_ip" 3>&1 1>&2 2>&3) || continue
+
+        [[ -z "$new_ip" ]] && continue
+
+        # Validate IP/CIDR format
+        if [[ ! "$new_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+            whiptail --title "Invalid Format" --msgbox "Invalid IP format.\n\nUse: X.X.X.X/prefix (e.g., 192.168.1.100/24)" 10 50
+            continue
+        fi
+
+        # Update netplan file using Python for safe YAML editing
+        local tmp_file
+        tmp_file=$(mktemp)
+
+        python3 - "$netplan_file" "$choice" "$new_ip" "$tmp_file" << 'PYEOF'
+import sys
+import yaml
+
+netplan_file = sys.argv[1]
+iface = sys.argv[2]
+new_ip = sys.argv[3]
+tmp_file = sys.argv[4]
+
+try:
+    with open(netplan_file) as f:
+        config = yaml.safe_load(f) or {}
+except:
+    config = {}
+
+# Ensure structure exists
+if "network" not in config:
+    config["network"] = {}
+if "version" not in config["network"]:
+    config["network"]["version"] = 2
+if "renderer" not in config["network"]:
+    config["network"]["renderer"] = "networkd"
+if "ethernets" not in config["network"]:
+    config["network"]["ethernets"] = {}
+
+# Update interface
+config["network"]["ethernets"][iface] = {
+    "dhcp4": False,
+    "addresses": [new_ip]
+}
+
+with open(tmp_file, "w") as f:
+    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+
+print("OK")
+PYEOF
+
+        if [[ -f "$tmp_file" && -s "$tmp_file" ]]; then
+            # Backup and replace
+            local ts
+            ts=$(date +%Y%m%d%H%M%S)
+            sudo cp "$netplan_file" "${netplan_file}.${ts}.bak" 2>/dev/null || true
+            sudo cp "$tmp_file" "$netplan_file"
+            changes_made=true
+
+            # Update menu display
+            menu_items=()
+            for iface_path in /sys/class/net/*; do
+                [[ -d "$iface_path" ]] || continue
+                local name
+                name=$(basename "$iface_path")
+                [[ "$name" == "lo" ]] && continue
+
+                local state ip_show speed_str
+                state=$(cat "$iface_path/operstate" 2>/dev/null || echo "unknown")
+
+                # Show new IP if just changed, otherwise current
+                if [[ "$name" == "$choice" ]]; then
+                    ip_show="$new_ip [NEW]"
+                else
+                    ip_show=$(ip -o -4 addr show "$name" 2>/dev/null | awk '{print $4}' | head -1)
+                    [[ -z "$ip_show" ]] && ip_show="no IP"
+                fi
+
+                local speed
+                speed=$(cat "$iface_path/speed" 2>/dev/null || echo "0")
+                if [[ "$speed" =~ ^[0-9]+$ ]] && [[ $speed -gt 0 ]]; then
+                    if [[ $speed -ge 1000 ]]; then
+                        speed_str="$((speed/1000))G"
+                    else
+                        speed_str="${speed}M"
+                    fi
+                else
+                    speed_str="--"
+                fi
+
+                menu_items+=("$name" "[$state] $ip_show ($speed_str)")
+            done
+            menu_items+=("" "")
+            menu_items+=("Done" "Finish and apply changes")
+
+            whiptail --title "Updated" --msgbox "Interface $choice configured:\n\nIP: $new_ip\n\nSelect 'Done' to apply changes." 12 50
+        fi
+        rm -f "$tmp_file"
+    done
+
+    # Apply changes if any were made
+    if [[ "$changes_made" == "true" ]]; then
+        if whiptail --title "Apply Changes" --yesno "\
+Network configuration has been updated.
+
+Apply changes now?
+
+This will run 'netplan apply' to activate
+the new IP addresses.
+
+Active connections may be briefly interrupted." 14 55; then
+            if sudo netplan apply 2>&1; then
+                whiptail --title "Success" --msgbox "Network configuration applied!\n\nNew settings are now active." 10 50
+            else
+                whiptail --title "Error" --msgbox "Failed to apply network configuration.\n\nCheck: sudo netplan try" 10 50
+            fi
+        fi
+    fi
+}
+
 network_menu() {
     local choice
     local netplan_file
     while true; do
-        choice=$(whiptail --title "═══ 🌐 Network Settings ═══" --menu "\
+        choice=$(whiptail --title "Network Settings" --menu "\
   Configure network interfaces
   ─────────────────────────────────────────────" 18 60 5 \
-            "1" "📊 View Current Configuration" \
-            "2" "✏️  Edit Network Settings" \
-            "3" "🔄 Apply Network Changes" \
-            "4" "📋 View Netplan Config" \
-            "5" "🔙 Back" \
+            "1" "View Current Configuration" \
+            "2" "Edit Interface IP Address" \
+            "3" "Apply Network Changes" \
+            "4" "View Netplan Config File" \
+            "5" "Back" \
             3>&1 1>&2 2>&3) || break
 
         case "$choice" in
             1) show_network_info ;;
-            2)
-                if [[ -f /etc/netplan/99-xinas.yaml ]]; then
-                    ROLE_TEMPLATE_OVERRIDE=/etc/netplan/99-xinas.yaml "$SCRIPT_DIR/configure_network.sh"
-                else
-                    "$SCRIPT_DIR/configure_network.sh"
-                fi
-                ;;
+            2) edit_interface_ip ;;
             3)
-                if whiptail --title "🔄 Apply Changes" --yesno "\
+                if whiptail --title "Apply Changes" --yesno "\
    Apply network configuration?
 
    This will run 'netplan apply' to activate
    any changes to the network settings.
 
-   ⚠️  Active connections may be briefly interrupted.
+   Active connections may be briefly interrupted.
 " 14 55; then
                     if sudo netplan apply 2>/dev/null; then
-                        whiptail --title "✅ Success" --msgbox "Network configuration applied successfully!" 8 50
+                        whiptail --title "Success" --msgbox "Network configuration applied successfully!" 8 50
                     else
-                        whiptail --title "❌ Error" --msgbox "Failed to apply network configuration.\nCheck /var/log/syslog for details." 10 55
+                        whiptail --title "Error" --msgbox "Failed to apply network configuration.\nCheck /var/log/syslog for details." 10 55
                     fi
                 fi
                 ;;
@@ -733,9 +927,9 @@ network_menu() {
                     [[ -f "$f" ]] && { netplan_file="$f"; break; }
                 done
                 if [[ -n "$netplan_file" && -f "$netplan_file" ]]; then
-                    whiptail --title "📋 Netplan: $netplan_file" --scrolltext --textbox "$netplan_file" 24 78
+                    whiptail --title "Netplan: $netplan_file" --scrolltext --textbox "$netplan_file" 24 78
                 else
-                    whiptail --title "📋 Netplan" --msgbox "No netplan configuration found." 8 45
+                    whiptail --title "Netplan" --msgbox "No netplan configuration found." 8 45
                 fi
                 ;;
             5) break ;;
