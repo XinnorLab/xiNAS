@@ -232,8 +232,9 @@ show_physical_drives() {
     python3 - "$json_file" << 'PYEOF'
 import sys
 import json
+import os
 
-W = 74
+W = 76
 
 def line(content="", border="│"):
     padding = W - len(content)
@@ -244,6 +245,33 @@ def line(content="", border="│"):
 
 def separator(char="─", left="├", right="┤"):
     return f"{left}{char * (W + 1)}{right}"
+
+def get_drive_size(path):
+    """Get drive size from /sys/block"""
+    try:
+        # Extract base device name (e.g., nvme10n2 from /dev/nvme10n2)
+        dev_name = os.path.basename(path)
+        # For NVMe namespaces, we need the parent device
+        # nvme10n2 -> check /sys/block/nvme10n2/size
+        size_path = f"/sys/block/{dev_name}/size"
+        if os.path.exists(size_path):
+            with open(size_path) as f:
+                sectors = int(f.read().strip())
+                bytes_size = sectors * 512
+                return format_size(bytes_size)
+    except:
+        pass
+    return "N/A"
+
+def format_size(bytes_size):
+    """Format bytes to human readable"""
+    if bytes_size >= 1099511627776:  # TB
+        return f"{bytes_size / 1099511627776:.1f} TB"
+    elif bytes_size >= 1073741824:  # GB
+        return f"{bytes_size / 1073741824:.0f} GB"
+    elif bytes_size >= 1048576:  # MB
+        return f"{bytes_size / 1048576:.0f} MB"
+    return f"{bytes_size} B"
 
 try:
     with open(sys.argv[1]) as f:
@@ -276,6 +304,7 @@ try:
             h = health[i] if i < len(health) else "N/A"
             w = wear[i] if i < len(wear) else "N/A"
             serial = serials[i] if i < len(serials) else "N/A"
+            size = get_drive_size(path)
             all_drives.append({
                 "array": arr_name,
                 "idx": idx,
@@ -283,7 +312,8 @@ try:
                 "state": state,
                 "health": h,
                 "wear": w,
-                "serial": serial
+                "serial": serial,
+                "size": size
             })
 
     # Group by array
@@ -301,7 +331,7 @@ try:
         print(f"┌{'─' * (W + 1)}┐")
         print(line(f" Array: {arr_name.upper()} ({online}/{total} online)"))
         print(separator())
-        print(line(f"  {'Device':<16} {'State':<10} {'Health':<8} {'Wear':<8} {'Serial'}"))
+        print(line(f"  {'Device':<14} {'Size':<9} {'State':<8} {'Health':<7} {'Wear':<6} {'Serial'}"))
         print(separator())
 
         for d in drives:
@@ -310,8 +340,9 @@ try:
             icon = "●" if state.lower() == "online" else "○"
             health = d["health"]
             wear = d["wear"]
-            serial = d["serial"][:16] if len(d["serial"]) > 16 else d["serial"]
-            print(line(f"  {icon} {path:<14} {state:<10} {health:<8} {wear:<8} {serial}"))
+            size = d["size"]
+            serial = d["serial"][:14] if len(d["serial"]) > 14 else d["serial"]
+            print(line(f"  {icon} {path:<12} {size:<9} {state:<8} {health:<7} {wear:<6} {serial}"))
 
         print(line())
         print(f"└{'─' * (W + 1)}┘")
