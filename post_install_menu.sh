@@ -234,7 +234,7 @@ raid_menu() {
             3)
                 out="$TMP_DIR/drives"
                 if command -v xicli &>/dev/null; then
-                    xicli drive show > "$out" 2>&1
+                    xicli drive show > "$out" 2>&1 || true
                 else
                     echo "xicli not found" > "$out"
                 fi
@@ -243,7 +243,7 @@ raid_menu() {
             4)
                 out="$TMP_DIR/pools"
                 if command -v xicli &>/dev/null; then
-                    xicli pool show > "$out" 2>&1
+                    xicli pool show > "$out" 2>&1 || true
                 else
                     echo "xicli not found" > "$out"
                 fi
@@ -637,11 +637,11 @@ quick_actions_menu() {
                     echo "═══ Disk Health Status ═══"
                     echo ""
                     if command -v xicli &>/dev/null; then
-                        xicli drive show 2>&1
+                        xicli drive show 2>&1 || echo "Failed to get drive info"
                     else
-                        lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,STATE 2>/dev/null
+                        lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,STATE 2>/dev/null || true
                         echo ""
-                        df -h 2>/dev/null
+                        df -h 2>/dev/null || true
                     fi
                 } > "$out"
                 whiptail --title "💾 Disk Health" --scrolltext --textbox "$out" 24 78
@@ -777,7 +777,7 @@ case "${1:-}" in
     --raid|-r)
         # Quick RAID info
         if command -v xicli &>/dev/null; then
-            xicli raid show
+            xicli raid show || true
         else
             echo "xicli not found"
         fi
