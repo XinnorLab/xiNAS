@@ -68,7 +68,7 @@ show_raid_info() {
     fi
 
     # Format the JSON output using Python
-    python3 << 'PYEOF' "$json_file" "$extended" > "$out"
+    python3 - "$json_file" "$extended" > "$out" << 'PYEOF'
 import sys
 import json
 
