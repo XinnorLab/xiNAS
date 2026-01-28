@@ -255,7 +255,7 @@ try:
 
     # Header
     print(f"╔{'═' * (W + 1)}╗")
-    title = "💿  PHYSICAL DRIVES"
+    title = "🖴  PHYSICAL DRIVES"
     pad = (W - len(title)) // 2
     print(f"║{' ' * pad}{title}{' ' * (W - pad - len(title) + 1)}║")
     print(f"╚{'═' * (W + 1)}╝")
@@ -340,7 +340,7 @@ raid_menu() {
   ─────────────────────────────────────────────" 18 60 5 \
             "1" "📊 Quick Overview" \
             "2" "📋 Extended Details (-e)" \
-            "3" "💿 Physical Drives" \
+            "3" "🖴 Physical Drives" \
             "4" "🏊 Spare Pools" \
             "5" "🔙 Back" \
             3>&1 1>&2 2>&3) || break
@@ -351,7 +351,7 @@ raid_menu() {
             3)
                 out="$TMP_DIR/drives"
                 show_physical_drives > "$out"
-                whiptail --title "💿 Physical Drives" --scrolltext --textbox "$out" 24 80
+                whiptail --title "🖴 Physical Drives" --scrolltext --textbox "$out" 24 80
                 ;;
             4)
                 out="$TMP_DIR/pools"
