@@ -15,8 +15,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+DIM='\033[2m'
 NC='\033[0m'
+
+# Show branded header
+show_header() {
+    clear
+    echo -e "${BLUE}"
+    cat << 'EOF'
+
+    ██╗  ██╗██╗███╗   ██╗ █████╗ ███████╗
+    ╚██╗██╔╝██║████╗  ██║██╔══██╗██╔════╝
+     ╚███╔╝ ██║██╔██╗ ██║███████║███████╗
+     ██╔██╗ ██║██║╚██╗██║██╔══██║╚════██║
+    ██╔╝ ██╗██║██║ ╚████║██║  ██║███████║
+    ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝
+EOF
+    echo -e "${NC}"
+    echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}     NAS Management Console${NC}"
+    echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+}
 
 # Check if running in interactive terminal
 if [[ ! -t 0 ]]; then
@@ -1622,35 +1645,44 @@ show_welcome() {
 
     # Get RAID status summary
     local raid_status="Not installed"
+    local raid_icon="${RED}○${NC}"
     if command -v xicli &>/dev/null; then
         local raid_count
         raid_count=$(xicli raid show -f json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d) if isinstance(d,list) else len(d.keys()))" 2>/dev/null || echo "0")
-        [[ "$raid_count" != "0" ]] && raid_status="$raid_count array(s)"
+        if [[ "$raid_count" != "0" ]]; then
+            raid_status="$raid_count array(s)"
+            raid_icon="${GREEN}●${NC}"
+        fi
     fi
 
     # Get NFS status
     local nfs_status="Stopped"
+    local nfs_icon="${RED}○${NC}"
     if [[ -f /proc/fs/nfsd/threads ]]; then
         local threads
         threads=$(cat /proc/fs/nfsd/threads 2>/dev/null)
         nfs_status="Running ($threads threads)"
+        nfs_icon="${GREEN}●${NC}"
     fi
 
-    whiptail --title "✨ xiNAS Management Console" --msgbox "\
-   Welcome back to your NAS server!
-
-   ┌─────────────────────────────────────────────┐
-   │  🖥️  Host:    $hostname
-   │  ⏱️  Uptime:  $uptime_str
-   │  💾  RAID:    $raid_status
-   │  📂  NFS:     $nfs_status
-   └─────────────────────────────────────────────┘
-
-   Select an option from the menu to manage
-   your storage system.
-
-   Need help? Contact: support@xinnor.io
-" 20 55
+    show_header
+    echo -e "${WHITE}    ┌─────────────────────────────────────────────────────────────┐${NC}"
+    echo -e "${WHITE}    │${NC}  ${CYAN}✨ Welcome back to your NAS server!${NC}                        ${WHITE}│${NC}"
+    echo -e "${WHITE}    └─────────────────────────────────────────────────────────────┘${NC}"
+    echo ""
+    echo -e "    ${WHITE}SYSTEM STATUS${NC}"
+    echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
+    echo ""
+    echo -e "        ${WHITE}Host:${NC}    ${CYAN}$hostname${NC}"
+    echo -e "        ${WHITE}Uptime:${NC}  ${GREEN}$uptime_str${NC}"
+    echo -e "        ${WHITE}RAID:${NC}    $raid_icon $raid_status"
+    echo -e "        ${WHITE}NFS:${NC}     $nfs_icon $nfs_status"
+    echo ""
+    echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
+    echo -e "    ${DIM}Need help?${NC} ${CYAN}support@xinnor.io${NC}"
+    echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
+    echo ""
+    read -p "    Press Enter to continue..." -r
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -7,6 +7,36 @@ REPO_DIR="$(pwd)"
 WHIPTAIL=$(command -v whiptail || true)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# Show branded header
+show_header() {
+    clear
+    echo -e "${BLUE}"
+    cat << 'EOF'
+
+    ██╗  ██╗██╗███╗   ██╗ █████╗ ███████╗
+    ╚██╗██╔╝██║████╗  ██║██╔══██╗██╔════╝
+     ╚███╔╝ ██║██╔██╗ ██║███████║███████╗
+     ██╔██╗ ██║██║╚██╗██║██╔══██║╚════██║
+    ██╔╝ ██╗██║██║ ╚████║██║  ██║███████║
+    ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝
+EOF
+    echo -e "${NC}"
+    echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}     High-Performance NAS Setup${NC}"
+    echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+}
+
 check_license() {
     local license_file="/tmp/license"
     if [ ! -f "$license_file" ]; then
@@ -165,21 +195,35 @@ has_license() {
 }
 
 show_welcome() {
-    whiptail --title "✨ Welcome to xiNAS!" --msgbox "\
-   Your journey to high-performance storage starts here!
-
-   ┌─────────────────────────────────────────────┐
-   │  📊  Collect your system information        │
-   │  🔑  Enter your license (required)          │
-   │  🌐  Configure your network                 │
-   │  🚀  Launch the installation                │
-   └─────────────────────────────────────────────┘
-
-   Need help? Contact: support@xinnor.io
-" 18 55
+    show_header
+    echo -e "${WHITE}    ┌─────────────────────────────────────────────────────────────┐${NC}"
+    echo -e "${WHITE}    │${NC}  ${CYAN}✨ Welcome to xiNAS Setup!${NC}                                 ${WHITE}│${NC}"
+    echo -e "${WHITE}    └─────────────────────────────────────────────────────────────┘${NC}"
+    echo ""
+    echo -e "    ${WHITE}QUICK START GUIDE${NC}"
+    echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
+    echo ""
+    echo -e "    ${GREEN}①${NC}  ${WHITE}📊 Collect System Data${NC}"
+    echo -e "        ${DIM}Gather hardware info for licensing${NC}"
+    echo ""
+    echo -e "    ${YELLOW}②${NC}  ${WHITE}🔑 Enter License${NC} ${RED}★ Required${NC}"
+    echo -e "        ${DIM}Contact${NC} ${CYAN}support@xinnor.io${NC} ${DIM}for your license${NC}"
+    echo ""
+    echo -e "    ${GREEN}③${NC}  ${WHITE}🌐 Configure Network${NC} ${DIM}(Optional)${NC}"
+    echo -e "        ${DIM}Set IP ranges for your storage network${NC}"
+    echo ""
+    echo -e "    ${GREEN}④${NC}  ${WHITE}🚀 Run Installation${NC}"
+    echo -e "        ${DIM}Deploy your high-performance NAS!${NC}"
+    echo ""
+    echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
+    echo -e "    ${DIM}Need help?${NC} ${CYAN}support@xinnor.io${NC}"
+    echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
+    echo ""
+    read -p "    Press Enter to continue..." -r
 }
 
 # Show welcome message on first run
+show_header
 show_welcome
 
 while true; do
