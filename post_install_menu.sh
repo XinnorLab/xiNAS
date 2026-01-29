@@ -1196,15 +1196,19 @@ can connect to over the network." 18 60 8 \
     local current_spec
     current_spec=$(echo "$current_line" | awk '{print $2}')
 
-    # Parse current host
+    # Parse current host and options
     local current_host="*"
     local current_rw="rw"
     local current_root="no_root_squash"
+    local current_options=""
 
     if [[ -n "$current_spec" ]]; then
         current_host="${current_spec%%(*}"
-        [[ "$current_spec" == *"ro"* ]] && current_rw="ro"
-        [[ "$current_spec" != *"no_root_squash"* ]] && current_root="root_squash"
+        # Extract options between parentheses
+        current_options="${current_spec#*(}"
+        current_options="${current_options%)}"
+        [[ "$current_options" == *"ro"* ]] && current_rw="ro"
+        [[ "$current_options" != *"no_root_squash"* ]] && current_root="root_squash"
     fi
 
     # Step 1: Who can access?
@@ -1281,8 +1285,27 @@ Recommended: Yes for trusted networks" 16 60 2 \
         2) new_root="root_squash" ;;
     esac
 
-    # Build the new export line
-    local new_options="${new_rw},sync,no_subtree_check,${new_root}"
+    # Build the new export line - preserve existing optimized options
+    local new_options=""
+    if [[ -n "$current_options" ]]; then
+        # Start with existing options and update only what changed
+        new_options="$current_options"
+        # Replace rw/ro
+        if [[ "$new_rw" == "rw" ]]; then
+            new_options=$(echo "$new_options" | sed 's/\bro\b/rw/')
+        else
+            new_options=$(echo "$new_options" | sed 's/\brw\b/ro/')
+        fi
+        # Replace root_squash/no_root_squash
+        if [[ "$new_root" == "no_root_squash" ]]; then
+            new_options=$(echo "$new_options" | sed 's/\broot_squash\b/no_root_squash/')
+        else
+            new_options=$(echo "$new_options" | sed 's/\bno_root_squash\b/root_squash/')
+        fi
+    else
+        # No existing options, use defaults
+        new_options="${new_rw},sync,no_subtree_check,${new_root}"
+    fi
     local new_spec="${new_host}(${new_options})"
     local new_line="${share_path} ${new_spec}"
 
@@ -1417,8 +1440,20 @@ What permissions should connected hosts have?" 14 60 2 \
     local new_rw="rw"
     [[ "$perm_choice" == "2" ]] && new_rw="ro"
 
-    # Build export line
-    local new_line="${share_path} ${new_host}(${new_rw},sync,no_subtree_check,no_root_squash)"
+    # Build export line - copy optimized options from existing share if available
+    local base_options="${new_rw},sync,no_subtree_check,no_root_squash"
+    local existing_opts
+    existing_opts=$(grep -m1 '^/' "$exports_file" 2>/dev/null | grep -oP '\([^)]+\)' | tr -d '()')
+    if [[ -n "$existing_opts" ]]; then
+        # Use existing options as template, just update rw/ro
+        base_options="$existing_opts"
+        if [[ "$new_rw" == "rw" ]]; then
+            base_options=$(echo "$base_options" | sed 's/\bro\b/rw/')
+        else
+            base_options=$(echo "$base_options" | sed 's/\brw\b/ro/')
+        fi
+    fi
+    local new_line="${share_path} ${new_host}(${base_options})"
 
     # Confirm
     local host_desc="$new_host"
