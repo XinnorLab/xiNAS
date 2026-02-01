@@ -161,52 +161,61 @@ header "RAID ARRAYS"
 separator
 
 if command -v xicli &> /dev/null; then
-    raid_json=$(xicli raid show -f json 2>/dev/null)
-    if [[ -n "$raid_json" && "$raid_json" != "{}" && "$raid_json" != "null" ]]; then
-        echo "$raid_json" | python3 -c "
-import sys, json
+    raid_tmp=$(mktemp)
+    xicli raid show -f json > "$raid_tmp" 2>/dev/null
+    if [[ -s "$raid_tmp" ]]; then
+        python3 << PYEOF > "${raid_tmp}.out"
+import json
 try:
-    data = json.load(sys.stdin)
+    with open('$raid_tmp') as f:
+        data = json.load(f)
     if not data:
-        print('NONE')
-        sys.exit(0)
-    arrays = data.values() if isinstance(data, dict) else data
-    for arr in arrays:
-        name = arr.get('name', 'unknown')
-        level = arr.get('level', '?')
-        state_val = arr.get('state', 'unknown')
-        state = state_val[0] if isinstance(state_val, list) else state_val
-        size_val = arr.get('size', 0)
-        if isinstance(size_val, str):
-            size_str = size_val
-        else:
-            if size_val >= 1099511627776:
-                size_str = f'{size_val/1099511627776:.1f} TB'
-            elif size_val >= 1073741824:
-                size_str = f'{size_val/1073741824:.1f} GB'
+        print('NONE||')
+    else:
+        arrays = data.values() if isinstance(data, dict) else data
+        for arr in arrays:
+            name = arr.get('name', 'unknown')
+            level = arr.get('level', '?')
+            state_val = arr.get('state')
+            if isinstance(state_val, list) and len(state_val) > 0 and state_val[0]:
+                state = str(state_val[0])
+            elif state_val and not isinstance(state_val, list):
+                state = str(state_val)
             else:
-                size_str = f'{size_val/1048576:.0f} MB'
-        # Status icon
-        if state.lower() in ['online', 'optimal', 'active', 'initialized']:
-            icon = '[OK]'
-        elif state.lower() in ['degraded', 'rebuilding', 'initing']:
-            icon = '[!!]'
-        else:
-            icon = '[XX]'
-        print(f'{icon}|{name}|RAID{level}|{size_str}|{state}')
+                state = 'inactive'
+            size_val = arr.get('size', 0)
+            if isinstance(size_val, str):
+                size_str = ' '.join(size_val.split())
+            elif size_val:
+                if size_val >= 1099511627776:
+                    size_str = f'{size_val/1099511627776:.1f} TB'
+                else:
+                    size_str = f'{size_val/1073741824:.1f} GB'
+            else:
+                size_str = 'N/A'
+            if state.lower() in ['online', 'optimal', 'active', 'initialized']:
+                icon = '[OK]'
+            elif state.lower() in ['degraded', 'rebuilding', 'initing']:
+                icon = '[!!]'
+            else:
+                icon = '[--]'
+            print(f'{icon}|{name}|RAID{level}|{size_str}|{state}')
 except Exception as e:
-    print(f'ERR|{e}')
-" 2>/dev/null | while IFS='|' read -r icon name level size state; do
+    print(f'ERR|{e}|')
+PYEOF
+        while IFS='|' read -r icon name level size state; do
             if [[ "$icon" == "NONE" ]]; then
                 row "  No RAID arrays configured"
             elif [[ "$icon" == "ERR" ]]; then
                 row "  Error reading RAID: $name"
-            else
-                printf "| %-73s |\n" "  $icon $(printf '%-12s' $name) $(printf '%-8s' $level) $(printf '%-12s' $size) $state"
+            elif [[ -n "$icon" ]]; then
+                printf "| %-73s |\n" "  $icon $(printf '%-12s' "$name") $(printf '%-8s' "$level") $(printf '%-12s' "$size") $state"
             fi
-        done
+        done < "${raid_tmp}.out"
+        rm -f "$raid_tmp" "${raid_tmp}.out"
     else
         row "  No RAID arrays configured"
+        rm -f "$raid_tmp"
     fi
 else
     row "  xiRAID not installed"
