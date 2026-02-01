@@ -1560,6 +1560,421 @@ nfs_menu() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# User Management Functions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+show_users() {
+    local out="$TMP_DIR/users_info"
+
+    python3 - > "$out" << 'PYEOF'
+import pwd
+import grp
+import subprocess
+import os
+
+def run(cmd):
+    try:
+        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
+    except:
+        return ""
+
+def get_quota(user):
+    """Get user quota if quotas are enabled"""
+    try:
+        result = run(f"quota -u {user} 2>/dev/null | tail -1")
+        if result and not result.startswith("Disk"):
+            parts = result.split()
+            if len(parts) >= 3:
+                used = parts[1]
+                limit = parts[2]
+                if limit != "0":
+                    return f"{used}/{limit} KB"
+        return "No limit"
+    except:
+        return "N/A"
+
+print("USER ACCOUNTS")
+print("=" * 70)
+print()
+
+# Get regular users (UID >= 1000, with home directory)
+users = []
+for p in pwd.getpwall():
+    if p.pw_uid >= 1000 and p.pw_uid < 65534:
+        if os.path.isdir(p.pw_dir) or p.pw_dir.startswith("/home"):
+            users.append(p)
+
+if not users:
+    print("  No regular user accounts found.")
+    print()
+    print("  System only has root and service accounts.")
+else:
+    print(f"  Found {len(users)} user account(s)")
+    print()
+    print("-" * 70)
+    print(f"  {'Username':<15} {'UID':<8} {'Group':<15} {'Home Directory'}")
+    print("-" * 70)
+
+    for u in sorted(users, key=lambda x: x.pw_name):
+        try:
+            group = grp.getgrgid(u.pw_gid).gr_name
+        except:
+            group = str(u.pw_gid)
+        print(f"  {u.pw_name:<15} {u.pw_uid:<8} {group:<15} {u.pw_dir}")
+
+    print("-" * 70)
+
+print()
+
+# Check if quotas are enabled
+quota_status = run("quotaon -p /mnt/data 2>/dev/null")
+if "is on" in quota_status:
+    print("  Disk Quotas: ENABLED")
+else:
+    print("  Disk Quotas: Not enabled")
+    print("  (Enable with: sudo quotaon -v /mnt/data)")
+
+print()
+print("=" * 70)
+PYEOF
+
+    whiptail --title "User Accounts" --scrolltext --textbox "$out" 24 76
+}
+
+create_user() {
+    # Step 1: Enter username
+    local username
+    username=$(whiptail --title "Create User - Step 1" --inputbox "\
+Enter the username for the new account:
+
+Rules:
+- Lowercase letters and numbers only
+- Must start with a letter
+- 3-32 characters long" 14 55 "" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$username" ]] && return
+
+    # Validate username
+    if [[ ! "$username" =~ ^[a-z][a-z0-9]{2,31}$ ]]; then
+        whiptail --title "Invalid Username" --msgbox "\
+Invalid username format.
+
+Username must:
+- Start with a lowercase letter
+- Contain only lowercase letters and numbers
+- Be 3-32 characters long" 12 50
+        return
+    fi
+
+    # Check if user exists
+    if id "$username" &>/dev/null; then
+        whiptail --title "User Exists" --msgbox "User '$username' already exists." 8 45
+        return
+    fi
+
+    # Step 2: Set password
+    local password password2
+    password=$(whiptail --title "Create User - Step 2" --passwordbox "\
+Enter password for '$username':
+
+(Minimum 6 characters)" 10 50 "" 3>&1 1>&2 2>&3) || return
+
+    if [[ ${#password} -lt 6 ]]; then
+        whiptail --title "Password Too Short" --msgbox "Password must be at least 6 characters." 8 45
+        return
+    fi
+
+    password2=$(whiptail --title "Create User - Step 2" --passwordbox "\
+Confirm password:" 10 50 "" 3>&1 1>&2 2>&3) || return
+
+    if [[ "$password" != "$password2" ]]; then
+        whiptail --title "Password Mismatch" --msgbox "Passwords do not match." 8 40
+        return
+    fi
+
+    # Step 3: Additional options
+    local create_home="yes"
+    local add_to_nfs="no"
+
+    if whiptail --title "Create User - Step 3" --yesno "\
+Create home directory for '$username'?
+
+This will create /home/$username" 10 50; then
+        create_home="yes"
+    else
+        create_home="no"
+    fi
+
+    # Confirm
+    if whiptail --title "Confirm User Creation" --yesno "\
+Create this user account?
+
+Username:    $username
+Home Dir:    $([ "$create_home" = "yes" ] && echo "/home/$username" || echo "None")
+
+Proceed?" 12 50; then
+
+        # Create user
+        local useradd_opts="-m"
+        [[ "$create_home" != "yes" ]] && useradd_opts="-M"
+
+        if sudo useradd $useradd_opts -s /bin/bash "$username" 2>/dev/null; then
+            # Set password
+            echo "$username:$password" | sudo chpasswd 2>/dev/null
+
+            whiptail --title "User Created" --msgbox "\
+User '$username' created successfully!
+
+The user can now log in with their password.
+
+To set a disk quota, use 'Set User Quota'
+from the User Management menu." 12 50
+        else
+            whiptail --title "Error" --msgbox "Failed to create user.\nCheck system logs for details." 10 50
+        fi
+    fi
+}
+
+delete_user() {
+    # Get list of users
+    local users=()
+    while IFS=: read -r uname _ uid _ _ home _; do
+        if [[ $uid -ge 1000 && $uid -lt 65534 ]]; then
+            users+=("$uname" "$home")
+        fi
+    done < /etc/passwd
+
+    if [[ ${#users[@]} -eq 0 ]]; then
+        whiptail --title "No Users" --msgbox "No regular user accounts to delete." 8 45
+        return
+    fi
+
+    local username
+    username=$(whiptail --title "Delete User" --menu "\
+Select user to delete:
+
+WARNING: This cannot be undone!" 18 60 8 \
+        "${users[@]}" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$username" ]] && return
+
+    # Confirm with username
+    local confirm
+    confirm=$(whiptail --title "Confirm Deletion" --inputbox "\
+Are you sure you want to delete user '$username'?
+
+This will:
+- Remove the user account
+- Optionally remove their home directory
+
+Type the username to confirm:" 14 55 "" 3>&1 1>&2 2>&3) || return
+
+    if [[ "$confirm" != "$username" ]]; then
+        whiptail --title "Cancelled" --msgbox "Username did not match. User not deleted." 8 50
+        return
+    fi
+
+    # Ask about home directory
+    local remove_home=""
+    if whiptail --title "Remove Home Directory?" --yesno "\
+Also remove the home directory?
+
+/home/$username
+
+Select 'No' to keep the files." 10 50; then
+        remove_home="-r"
+    fi
+
+    if sudo userdel $remove_home "$username" 2>/dev/null; then
+        whiptail --title "User Deleted" --msgbox "User '$username' has been deleted." 8 45
+    else
+        whiptail --title "Error" --msgbox "Failed to delete user." 8 40
+    fi
+}
+
+set_user_quota() {
+    # Check if quota tools are available
+    if ! command -v setquota &>/dev/null; then
+        whiptail --title "Quota Tools Missing" --msgbox "\
+Quota tools are not installed.
+
+Install with:
+  sudo apt-get install quota" 10 50
+        return
+    fi
+
+    # Get mount point for quotas
+    local mount_point="/mnt/data"
+
+    if [[ ! -d "$mount_point" ]]; then
+        mount_point=$(whiptail --title "Mount Point" --inputbox "\
+Enter the mount point for quotas:
+
+Example: /mnt/data or /home" 10 50 "/mnt/data" 3>&1 1>&2 2>&3) || return
+    fi
+
+    if [[ ! -d "$mount_point" ]]; then
+        whiptail --title "Invalid Path" --msgbox "Mount point does not exist." 8 40
+        return
+    fi
+
+    # Get list of users
+    local users=()
+    while IFS=: read -r uname _ uid _ _ _ _; do
+        if [[ $uid -ge 1000 && $uid -lt 65534 ]]; then
+            # Get current quota
+            local quota_info
+            quota_info=$(quota -u "$uname" 2>/dev/null | tail -1 | awk '{print $3}')
+            [[ -z "$quota_info" || "$quota_info" == "0" ]] && quota_info="No limit"
+            users+=("$uname" "Limit: $quota_info")
+        fi
+    done < /etc/passwd
+
+    if [[ ${#users[@]} -eq 0 ]]; then
+        whiptail --title "No Users" --msgbox "No regular user accounts found." 8 45
+        return
+    fi
+
+    local username
+    username=$(whiptail --title "Set Quota - Select User" --menu "\
+Select user to set quota for:
+
+Mount point: $mount_point" 18 60 8 \
+        "${users[@]}" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$username" ]] && return
+
+    # Get quota size
+    local quota_size
+    quota_size=$(whiptail --title "Set Quota - Size" --inputbox "\
+Enter disk quota for '$username':
+
+Examples:
+  10G    = 10 Gigabytes
+  500M   = 500 Megabytes
+  0      = No limit (unlimited)
+
+Enter size:" 16 50 "10G" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$quota_size" ]] && return
+
+    # Convert to KB
+    local quota_kb=0
+    if [[ "$quota_size" == "0" ]]; then
+        quota_kb=0
+    elif [[ "$quota_size" =~ ^([0-9]+)[Gg]$ ]]; then
+        quota_kb=$((${BASH_REMATCH[1]} * 1024 * 1024))
+    elif [[ "$quota_size" =~ ^([0-9]+)[Mm]$ ]]; then
+        quota_kb=$((${BASH_REMATCH[1]} * 1024))
+    elif [[ "$quota_size" =~ ^([0-9]+)[Kk]?$ ]]; then
+        quota_kb=${BASH_REMATCH[1]}
+    else
+        whiptail --title "Invalid Size" --msgbox "Invalid quota format.\n\nUse: 10G, 500M, or 1024K" 10 45
+        return
+    fi
+
+    # Set soft limit slightly lower than hard limit
+    local soft_kb=$((quota_kb * 90 / 100))
+
+    # Confirm
+    local limit_desc="Unlimited"
+    [[ $quota_kb -gt 0 ]] && limit_desc="$quota_size"
+
+    if whiptail --title "Confirm Quota" --yesno "\
+Set disk quota for '$username'?
+
+Limit: $limit_desc
+Mount: $mount_point
+
+Proceed?" 12 50; then
+
+        # Enable quotas if not already
+        sudo quotaon "$mount_point" 2>/dev/null || true
+
+        # Set quota
+        if sudo setquota -u "$username" $soft_kb $quota_kb 0 0 "$mount_point" 2>/dev/null; then
+            whiptail --title "Quota Set" --msgbox "\
+Disk quota set successfully!
+
+User:    $username
+Limit:   $limit_desc
+Mount:   $mount_point" 12 50
+        else
+            whiptail --title "Error" --msgbox "\
+Failed to set quota.
+
+Make sure quotas are enabled:
+  sudo quotacheck -cug $mount_point
+  sudo quotaon $mount_point" 12 50
+        fi
+    fi
+}
+
+show_quotas() {
+    local out="$TMP_DIR/quotas_info"
+
+    {
+        echo "DISK QUOTA REPORT"
+        printf '=%.0s' {1..70}; echo ""
+        echo ""
+
+        # Check quota status on common mount points
+        for mp in /mnt/data /home /; do
+            [[ -d "$mp" ]] || continue
+
+            echo "Mount Point: $mp"
+            printf -- '-%.0s' {1..70}; echo ""
+
+            quota_status=$(quotaon -p "$mp" 2>/dev/null)
+            if [[ "$quota_status" == *"is on"* ]]; then
+                echo "  Status: ENABLED"
+                echo ""
+                echo "  User quotas:"
+                repquota -u "$mp" 2>/dev/null | grep -v "^#" | grep -v "^$" | head -20 || echo "  No quotas set"
+            else
+                echo "  Status: Not enabled"
+            fi
+            echo ""
+        done
+
+        printf '=%.0s' {1..70}; echo ""
+    } > "$out"
+
+    whiptail --title "Disk Quotas" --scrolltext --textbox "$out" 24 76
+}
+
+user_menu() {
+    local choice
+    while true; do
+        # Get user count
+        local user_count
+        user_count=$(awk -F: '$3 >= 1000 && $3 < 65534 {count++} END {print count+0}' /etc/passwd)
+
+        choice=$(whiptail --title "User Management" --menu "\
+  Manage user accounts and disk quotas
+
+  Users: $user_count account(s)
+  ─────────────────────────────────────────────" 20 60 7 \
+            "1" "View User Accounts" \
+            "2" "Create New User" \
+            "3" "Delete User" \
+            "4" "Set User Quota" \
+            "5" "View Quota Report" \
+            "6" "Back" \
+            3>&1 1>&2 2>&3) || break
+
+        case "$choice" in
+            1) show_users ;;
+            2) create_user ;;
+            3) delete_user ;;
+            4) set_user_quota ;;
+            5) show_quotas ;;
+            6) break ;;
+        esac
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Quick Actions
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1699,13 +2114,14 @@ main_menu() {
         local choice
         choice=$(whiptail --title "═══ xiNAS Management ═══" --menu "\
   $(hostname) | $(uptime -p 2>/dev/null | sed 's/up //')
-  ─────────────────────────────────────────────" 20 60 8 \
+  ─────────────────────────────────────────────" 22 60 8 \
             "1" "📊 System Status" \
             "2" "💾 RAID Management" \
             "3" "🌐 Network Settings" \
             "4" "📂 NFS Access Rights" \
-            "5" "⚡ Quick Actions" \
-            "6" "🚪 Exit" \
+            "5" "👥 User Management" \
+            "6" "⚡ Quick Actions" \
+            "7" "🚪 Exit" \
             3>&1 1>&2 2>&3) || break
 
         case "$choice" in
@@ -1713,8 +2129,9 @@ main_menu() {
             2) raid_menu ;;
             3) network_menu ;;
             4) nfs_menu ;;
-            5) quick_actions_menu ;;
-            6)
+            5) user_menu ;;
+            6) quick_actions_menu ;;
+            7)
                 whiptail --title "👋 See you soon!" --msgbox "\
    Thank you for using xiNAS!
 
