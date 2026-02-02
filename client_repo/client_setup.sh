@@ -370,8 +370,29 @@ This will install:
             return 1
         fi
 
-        # Configure NFS client for better performance
-        echo "options nfs max_session_slots=180" > /etc/modprobe.d/nfsclient.conf
+        # Configure NFS client kernel module for better performance
+        cat > /etc/modprobe.d/nfsclient.conf <<'EOF'
+# NFS client performance tuning for high-throughput workloads
+options nfs max_session_slots=180
+options nfs max_session_cb_slots=48
+options nfs callback_nr_threads=10
+options nfs nfs4_disable_idmapping=1
+options nfs nfs_idmap_cache_timeout=900
+options nfs delay_retrans=-1
+options nfs nfs_access_max_cachesize=4194304
+options nfs enable_ino64=1
+EOF
+
+        # Configure sysctl parameters for high-throughput NFS
+        cat > /etc/sysctl.d/90-nfs-client.conf <<'EOF'
+# Network buffer sizes for high-throughput NFS (256 MB)
+net.core.rmem_max = 268435456
+net.core.wmem_max = 268435456
+
+# Minimize swapping for better NFS performance
+vm.swappiness = 10
+EOF
+        sysctl --system >/dev/null 2>&1
 
         whiptail --title "Success" --msgbox "\
 NFS client tools installed successfully!
