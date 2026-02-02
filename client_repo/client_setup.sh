@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-CLIENT_VERSION="1.3.0"
+CLIENT_VERSION="1.4.0"
 
 # Network configuration file
 NETWORK_CONFIG="$SCRIPT_DIR/network_config.yml"
@@ -442,48 +442,77 @@ Would you like to:
         fi
     fi
 
-    # Step 2: Connection mode selection (TCP only)
+    # Step 2: Number of server IPs (for multi-IP distribution)
+    local num_ips
+    num_ips=$(whiptail --title "Step 2: Number of Server IPs" --menu "\
+How many server IP addresses will you use?
+
+Using multiple IPs distributes connections for
+better performance across network paths.
+
+The 16 available NFS connections will be evenly
+distributed across all IPs." 18 60 4 \
+        "1" "Single IP (16 connections)" \
+        "2" "Two IPs (8 connections each)" \
+        "4" "Four IPs (4 connections each)" \
+        "8" "Eight IPs (2 connections each)" \
+        3>&1 1>&2 2>&3) || return
+
+    local nconnect=$((16 / num_ips))
+
+    # Step 2b: TCP mode selection (only for single IP TCP)
     local trunking_mode="manual"
-    if [[ "$protocol" == "TCP" ]]; then
-        trunking_mode=$(whiptail --title "Step 2: TCP Mode" --menu "\
+    if [[ "$protocol" == "TCP" && "$num_ips" -eq 1 ]]; then
+        trunking_mode=$(whiptail --title "Step 2b: TCP Mode" --menu "\
 Choose TCP connection mode:
 
-Training:  Single IP, nconnect=16, attribute caching
+Training:  nconnect=16, attribute caching
            Best for ML/AI training workloads
 
 Trunking:  Session trunking with trunkdiscovery
            Server advertises multiple IPs (vers=4.1)" 18 65 2 \
-            "manual" "Training Throughput (nconnect=16) (Recommended)" \
+            "manual" "Training Throughput (Recommended)" \
             "auto" "Session Trunking (trunkdiscovery)" \
             3>&1 1>&2 2>&3) || return
     fi
 
-    # Step 3: Enter server IP
-    local server_ip
-    local step_num="3"
-    [[ "$protocol" == "RDMA" ]] && step_num="2"
+    # Step 3: Enter server IP(s)
+    local server_ips=()
+    local i
+    for ((i=1; i<=num_ips; i++)); do
+        local ip_label="Server Address"
+        local ip_prompt="Enter the IP address of your xiNAS server:"
+        if [[ $num_ips -gt 1 ]]; then
+            ip_label="Server Address $i of $num_ips"
+            ip_prompt="Enter IP address $i of $num_ips:"
+        fi
 
-    local ip_hint=""
-    if [[ "$trunking_mode" == "auto" ]]; then
-        ip_hint="
+        local ip_hint=""
+        if [[ "$trunking_mode" == "auto" ]]; then
+            ip_hint="
+
 With trunkdiscovery, the NFS client will
 automatically discover additional server IPs."
-    fi
+        fi
 
-    server_ip=$(whiptail --title "Step $step_num: Server Address" --inputbox "\
-Enter the IP address of your xiNAS server:
+        local server_ip
+        server_ip=$(whiptail --title "Step 3: $ip_label" --inputbox "\
+$ip_prompt
 
 Example: 192.168.1.100 or 10.10.1.1
 
-This is the storage network IP of your NAS.$ip_hint" 16 55 "10.10.1.1" 3>&1 1>&2 2>&3) || return
+This is the storage network IP of your NAS.$ip_hint" 16 55 "10.10.1.$i" 3>&1 1>&2 2>&3) || return
 
-    [[ -z "$server_ip" ]] && return
+        [[ -z "$server_ip" ]] && return
 
-    # Validate IP format
-    if [[ ! "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        whiptail --title "Invalid IP" --msgbox "Please enter a valid IP address." 8 45
-        return
-    fi
+        # Validate IP format
+        if [[ ! "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            whiptail --title "Invalid IP" --msgbox "Please enter a valid IP address." 8 45
+            return
+        fi
+
+        server_ips+=("$server_ip")
+    done
 
     # Step 4: Enter remote share path
     local share_path
@@ -499,15 +528,24 @@ Ask your NAS administrator if unsure." 14 55 "/mnt/data" 3>&1 1>&2 2>&3) || retu
     [[ -z "$share_path" ]] && share_path="/"
 
     # Step 5: Enter local mount point
-    local mount_point
-    mount_point=$(whiptail --title "Step 5: Mount Point" --inputbox "\
-Enter the local directory to mount the share:
+    local mount_point_base
+    local mount_point_msg="Enter the local directory to mount the share:
 
 This directory will be created if it doesn't exist.
 
-Example: /mnt/nas" 14 55 "/mnt/nas" 3>&1 1>&2 2>&3) || return
+Example: /mnt/nas"
+    if [[ $num_ips -gt 1 ]]; then
+        mount_point_msg="Enter the base directory for mount points:
 
-    [[ -z "$mount_point" ]] && mount_point="/mnt/nas"
+Each IP will be mounted to a numbered subdirectory:
+  /mnt/nas/1, /mnt/nas/2, etc.
+
+Example: /mnt/nas"
+    fi
+    mount_point_base=$(whiptail --title "Step 5: Mount Point" --inputbox "\
+$mount_point_msg" 14 55 "/mnt/nas" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$mount_point_base" ]] && mount_point_base="/mnt/nas"
 
     # Step 6: Mount options
     local add_to_fstab="yes"
@@ -523,91 +561,124 @@ Recommended: Yes" 12 50; then
         add_to_fstab="no"
     fi
 
-    # Build mount options based on protocol and trunking mode
+    # Build mount options based on protocol and mode
     local mount_opts
+    local proto_desc
+    local mode_desc
+    local conn_desc
 
     if [[ "$protocol" == "RDMA" ]]; then
         # RDMA recipe: vers=4.2, proto=rdma, lookupcache=positive, actimeo=120
-        mount_opts="vers=4.2,proto=rdma,port=20049,hard,max_connect=16,nconnect=8,rsize=1048576,wsize=1048576,lookupcache=positive,actimeo=120"
+        mount_opts="vers=4.2,proto=rdma,port=20049,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=positive,actimeo=120"
+        proto_desc="RDMA (high-performance)"
+        mode_desc="lookupcache=positive, actimeo=120"
+        conn_desc="nconnect=$nconnect per IP (total: 16)"
     elif [[ "$trunking_mode" == "auto" ]]; then
         # TCP with trunking: vers=4.1, trunkdiscovery
-        mount_opts="vers=4.1,proto=tcp,hard,max_connect=16,nconnect=8,rsize=1048576,wsize=1048576,trunkdiscovery"
+        mount_opts="vers=4.1,proto=tcp,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,trunkdiscovery"
+        proto_desc="TCP with Trunking"
+        mode_desc="vers=4.1, trunkdiscovery"
+        conn_desc="nconnect=$nconnect per IP (total: 16)"
     else
-        # TCP training throughput (single IP): vers=4.2, nconnect=16, attribute caching
-        mount_opts="vers=4.2,proto=tcp,hard,nconnect=16,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600"
+        # TCP training throughput: vers=4.2, attribute caching
+        mount_opts="vers=4.2,proto=tcp,hard,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600"
+        proto_desc="TCP Training Throughput"
+        mode_desc="lookupcache=all, attribute caching"
+        conn_desc="nconnect=$nconnect per IP (total: 16)"
     fi
 
     # Confirm settings
-    local proto_desc="TCP"
-    local mode_desc=""
-    local conn_desc=""
-
-    if [[ "$protocol" == "RDMA" ]]; then
-        proto_desc="RDMA (high-performance)"
-        mode_desc="lookupcache=positive, actimeo=120"
-        conn_desc="max_connect=16, nconnect=8"
-    elif [[ "$trunking_mode" == "auto" ]]; then
-        proto_desc="TCP with Trunking"
-        mode_desc="vers=4.1, trunkdiscovery"
-        conn_desc="max_connect=16, nconnect=8"
-    else
-        proto_desc="TCP Training Throughput"
-        mode_desc="lookupcache=all, attribute caching"
-        conn_desc="nconnect=16"
+    local ip_list="${server_ips[*]}"
+    local mount_point_desc="$mount_point_base"
+    if [[ $num_ips -gt 1 ]]; then
+        mount_point_desc="$mount_point_base/{1..$num_ips}"
     fi
 
     if ! whiptail --title "Confirm Settings" --yesno "\
 Please review your mount configuration:
 
-Server:       $server_ip
+Server IPs:   $ip_list
 Share:        $share_path
-Mount Point:  $mount_point
+Mount Point:  $mount_point_desc
 Protocol:     $proto_desc
 Mode:         $mode_desc
 Connections:  $conn_desc
 I/O Size:     rsize/wsize=1MB
 Persistent:   $add_to_fstab
 
-Proceed with mounting?" 20 60; then
+Proceed with mounting?" 20 65; then
         return
     fi
 
-    # Mount the share with trunking options
+    # Mount each IP
     local mount_log="$TMP_DIR/mount.log"
+    local failed_mounts=()
+    local successful_mounts=()
 
-    # Create mount point
-    mkdir -p "$mount_point"
-
-    whiptail --title "Mounting..." --infobox "Connecting to $server_ip ($proto_desc)..." 6 60
-
-    local mount_cmd="mount -t nfs -o $mount_opts $server_ip:$share_path $mount_point"
-    local mount_success=false
-
-    if $mount_cmd > "$mount_log" 2>&1; then
-        mount_success=true
-
-        # Add to fstab if requested
-        if [[ "$add_to_fstab" == "yes" ]]; then
-            # Remove any existing entry for this mount point
-            sed -i "\|^.*[[:space:]]$mount_point[[:space:]]|d" /etc/fstab 2>/dev/null || true
-            # Add new entry
-            echo "$server_ip:$share_path $mount_point nfs $mount_opts 0 0" >> /etc/fstab
+    for ((i=0; i<num_ips; i++)); do
+        local current_ip="${server_ips[$i]}"
+        local mount_point
+        if [[ $num_ips -eq 1 ]]; then
+            mount_point="$mount_point_base"
+        else
+            mount_point="$mount_point_base/$((i+1))"
         fi
-    fi
+
+        # Create mount point
+        mkdir -p "$mount_point"
+
+        whiptail --title "Mounting..." --infobox "Connecting to $current_ip ($((i+1))/$num_ips)..." 6 55
+
+        local mount_cmd="mount -t nfs -o $mount_opts $current_ip:$share_path $mount_point"
+
+        if $mount_cmd > "$mount_log" 2>&1; then
+            successful_mounts+=("$current_ip → $mount_point")
+
+            # Add to fstab if requested
+            if [[ "$add_to_fstab" == "yes" ]]; then
+                # Remove any existing entry for this mount point
+                sed -i "\|^.*[[:space:]]$mount_point[[:space:]]|d" /etc/fstab 2>/dev/null || true
+                # Add new entry
+                echo "$current_ip:$share_path $mount_point nfs $mount_opts 0 0" >> /etc/fstab
+            fi
+        else
+            failed_mounts+=("$current_ip: $(cat "$mount_log")")
+        fi
+    done
 
     # Show results
-    if [[ "$mount_success" == "true" ]]; then
-        whiptail --title "Success!" --msgbox "\
-NFS share mounted successfully!
+    if [[ ${#failed_mounts[@]} -eq 0 ]]; then
+        local mount_list=""
+        for m in "${successful_mounts[@]}"; do
+            mount_list+="  $m"$'\n'
+        done
 
-Server:      $server_ip
-Mount Point: $mount_point
+        whiptail --title "Success!" --msgbox "\
+NFS share(s) mounted successfully!
+
 Protocol:    $proto_desc
 Connections: $conn_desc
 
-$([ "$add_to_fstab" == "yes" ] && echo "This mount will persist across reboots.")
+Mounted:
+$mount_list
+$([ "$add_to_fstab" == "yes" ] && echo "These mounts will persist across reboots.")
 
-Use 'nfsstat -m' to verify connection status." 16 60
+Use 'nfsstat -m' to verify connection status." 20 65
+    elif [[ ${#successful_mounts[@]} -gt 0 ]]; then
+        local fail_list=""
+        for f in "${failed_mounts[@]}"; do
+            fail_list+="  $f"$'\n'
+        done
+
+        whiptail --title "Partial Success" --msgbox "\
+Some mounts succeeded, others failed.
+
+Failed:
+$fail_list
+Troubleshooting:
+- Check server IPs are correct
+- Verify NFS server is running
+- Check firewall settings" 18 65
     else
         whiptail --title "Mount Failed" --msgbox "\
 Failed to mount NFS share.
@@ -619,8 +690,7 @@ Troubleshooting:
 - Check server IP is correct
 - Verify NFS server is running
 - Check firewall settings (port 2049/20049)
-- For RDMA: ensure DOCA OFED is installed
-- Verify server supports trunking" 20 65
+- For RDMA: ensure DOCA OFED is installed" 18 65
     fi
 }
 
@@ -1730,63 +1800,97 @@ case "${1:-}" in
         ;;
     --mount|-m)
         # Quick mount mode with optimized NFS options
-        # Usage: SERVER:SHARE MOUNTPOINT [rdma|tcp|trunk]
+        # Supports multiple IPs: SERVER1,SERVER2:SHARE MOUNTPOINT [rdma|tcp|trunk]
         shift
         if [[ $# -lt 2 ]]; then
             echo "Usage: $0 --mount SERVER:SHARE MOUNTPOINT [MODE]"
+            echo "       $0 --mount SERVER1,SERVER2:SHARE MOUNTPOINT [MODE]"
             echo ""
             echo "Modes:"
-            echo "  tcp      - TCP training throughput (nconnect=16, attribute caching)"
+            echo "  tcp      - TCP training throughput (attribute caching)"
             echo "  trunk    - TCP with session trunking (vers=4.1, trunkdiscovery)"
             echo "  rdma     - RDMA transport (requires DOCA OFED)"
             echo ""
             echo "Default: tcp"
             echo ""
-            echo "Mount option profiles:"
-            echo "  tcp:   vers=4.2,nconnect=16,lookupcache=all,acregmin=60,acregmax=600"
-            echo "  trunk: vers=4.1,max_connect=16,nconnect=8,trunkdiscovery"
-            echo "  rdma:  vers=4.2,proto=rdma,port=20049,max_connect=16,nconnect=8"
+            echo "Multi-IP support (distributes 16 connections):"
+            echo "  1 IP  = nconnect=16"
+            echo "  2 IPs = nconnect=8 each (mounts to /mnt/nas/1, /mnt/nas/2)"
+            echo "  4 IPs = nconnect=4 each"
+            echo "  8 IPs = nconnect=2 each"
+            echo ""
+            echo "Examples:"
+            echo "  -m 10.10.1.1:/data /mnt/nas"
+            echo "  -m 10.10.1.1,10.10.1.2:/data /mnt/nas rdma"
             exit 1
         fi
         server_share="$1"
         mount_point="$2"
         mode="${3:-tcp}"
 
-        # Parse server and share path
-        server_ip="${server_share%%:*}"
+        # Parse server(s) and share path
+        servers_part="${server_share%%:*}"
         share_path="${server_share#*:}"
+
+        # Split servers by comma
+        IFS=',' read -ra server_ips <<< "$servers_part"
+        num_ips=${#server_ips[@]}
+
+        # Validate number of IPs (must be power of 2, max 16)
+        if [[ $num_ips -ne 1 && $num_ips -ne 2 && $num_ips -ne 4 && $num_ips -ne 8 && $num_ips -ne 16 ]]; then
+            echo "Error: Number of IPs must be 1, 2, 4, 8, or 16"
+            exit 1
+        fi
+
+        nconnect=$((16 / num_ips))
 
         # Build mount options based on mode
         case "$mode" in
             rdma)
                 # RDMA recipe
-                opts="vers=4.2,proto=rdma,port=20049,hard,max_connect=16,nconnect=8,rsize=1048576,wsize=1048576,lookupcache=positive,actimeo=120"
+                opts="vers=4.2,proto=rdma,port=20049,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=positive,actimeo=120"
                 mode_desc="RDMA"
                 ;;
             trunk)
                 # TCP with session trunking
-                opts="vers=4.1,proto=tcp,hard,max_connect=16,nconnect=8,rsize=1048576,wsize=1048576,trunkdiscovery"
+                opts="vers=4.1,proto=tcp,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,trunkdiscovery"
                 mode_desc="TCP Trunking"
                 ;;
             tcp|*)
-                # TCP training throughput (single IP)
-                opts="vers=4.2,proto=tcp,hard,nconnect=16,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600"
+                # TCP training throughput
+                opts="vers=4.2,proto=tcp,hard,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600"
                 mode_desc="TCP Training"
                 ;;
         esac
 
-        mkdir -p "$mount_point"
-        echo "Mounting $server_ip:$share_path to $mount_point"
         echo "Mode: $mode_desc"
-        echo "Options: $opts"
-        if mount -t nfs -o "$opts" "$server_ip:$share_path" "$mount_point"; then
-            echo -e "${GREEN}Mount successful${NC}"
+        echo "Connections: nconnect=$nconnect per IP (total: 16)"
+        echo ""
+
+        exit_code=0
+        for ((i=0; i<num_ips; i++)); do
+            current_ip="${server_ips[$i]}"
+            if [[ $num_ips -eq 1 ]]; then
+                current_mount="$mount_point"
+            else
+                current_mount="$mount_point/$((i+1))"
+            fi
+            mkdir -p "$current_mount"
+            echo "Mounting $current_ip:$share_path to $current_mount"
+            if ! mount -t nfs -o "$opts" "$current_ip:$share_path" "$current_mount"; then
+                echo -e "${RED}Failed to mount $current_ip${NC}"
+                exit_code=1
+            else
+                echo -e "${GREEN}OK${NC}"
+            fi
+        done
+
+        if [[ $exit_code -eq 0 ]]; then
+            echo ""
+            echo -e "${GREEN}All mounts successful${NC}"
             echo "Use 'nfsstat -m' to verify connection status"
-            exit 0
-        else
-            echo -e "${RED}Mount failed${NC}"
-            exit 1
         fi
+        exit $exit_code
         ;;
     --network-status|-n)
         echo -e "${CYAN}Network Configuration Status${NC}"
@@ -1828,14 +1932,20 @@ case "${1:-}" in
         echo "  --help, -h                Show this help"
         echo ""
         echo "Mount modes:"
-        echo "  tcp   - Training throughput (vers=4.2, nconnect=16, attribute caching)"
-        echo "  trunk - Session trunking (vers=4.1, max_connect=16, trunkdiscovery)"
-        echo "  rdma  - RDMA transport (vers=4.2, port=20049, lookupcache=positive)"
+        echo "  tcp   - Training throughput (vers=4.2, attribute caching)"
+        echo "  trunk - Session trunking (vers=4.1, trunkdiscovery)"
+        echo "  rdma  - RDMA transport (vers=4.2, port=20049)"
+        echo ""
+        echo "Multi-IP support (distributes 16 connections):"
+        echo "  1 IP  = nconnect=16"
+        echo "  2 IPs = nconnect=8 each"
+        echo "  4 IPs = nconnect=4 each"
         echo ""
         echo "Examples:"
-        echo "  -m 10.10.1.1:/data /mnt/nas          # TCP training (default)"
-        echo "  -m 10.10.1.1:/data /mnt/nas trunk    # TCP with trunking"
-        echo "  -m 10.10.1.1:/data /mnt/nas rdma     # RDMA"
+        echo "  -m 10.10.1.1:/data /mnt/nas              # Single IP TCP"
+        echo "  -m 10.10.1.1,10.10.1.2:/data /mnt/nas    # Multi-IP TCP"
+        echo "  -m 10.10.1.1:/data /mnt/nas trunk        # TCP trunking"
+        echo "  -m 10.10.1.1:/data /mnt/nas rdma         # RDMA"
         echo ""
         echo "Without options, launches the interactive menu."
         exit 0
