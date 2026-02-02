@@ -11,6 +11,10 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 # Script directory for relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Version tracking
+CLIENT_VERSION="1.0.0"
+UPDATE_AVAILABLE=""
+
 # Colors for terminal output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -20,6 +24,59 @@ CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 DIM='\033[2m'
 NC='\033[0m'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Update Check
+# ═══════════════════════════════════════════════════════════════════════════════
+
+check_for_updates() {
+    # Only check if installed via git (standard install location)
+    local install_dir="/opt/xinas-client"
+    local git_dir="$install_dir/.git"
+
+    # Also check if running from a git repo directly
+    if [[ ! -d "$git_dir" ]]; then
+        git_dir="$SCRIPT_DIR/../.git"
+        [[ -d "$git_dir" ]] || git_dir="$SCRIPT_DIR/.git"
+        [[ -d "$git_dir" ]] || return 0  # Not a git install, skip check
+        install_dir="$(dirname "$git_dir")"
+    fi
+
+    # Skip if no git command
+    command -v git &>/dev/null || return 0
+
+    # Skip if no network (quick check)
+    timeout 2 bash -c "echo >/dev/tcp/github.com/443" 2>/dev/null || return 0
+
+    # Get local commit
+    local local_commit
+    local_commit=$(git -C "$install_dir" rev-parse HEAD 2>/dev/null) || return 0
+
+    # Fetch latest (quiet, background-friendly)
+    git -C "$install_dir" fetch --quiet origin main 2>/dev/null || return 0
+
+    # Get remote commit
+    local remote_commit
+    remote_commit=$(git -C "$install_dir" rev-parse origin/main 2>/dev/null) || return 0
+
+    # Compare
+    if [[ "$local_commit" != "$remote_commit" ]]; then
+        UPDATE_AVAILABLE="true"
+    fi
+}
+
+show_update_banner() {
+    if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+        echo -e "${YELLOW}    ┌─────────────────────────────────────────────────────────────┐${NC}"
+        echo -e "${YELLOW}    │${NC}  ${CYAN}📦 Update available!${NC} Run: ${WHITE}curl -fsSL https://xinnor.io/install_client.sh | sudo bash${NC}"
+        echo -e "${YELLOW}    └─────────────────────────────────────────────────────────────┘${NC}"
+        echo ""
+    fi
+}
+
+# Run update check in background to avoid slowing startup
+check_for_updates &
+UPDATE_CHECK_PID=$!
 
 # Check for root
 if [[ $EUID -ne 0 ]]; then
@@ -70,6 +127,19 @@ EOF
 
 show_welcome() {
     show_header
+
+    # Wait for update check to complete (with timeout)
+    if [[ -n "${UPDATE_CHECK_PID:-}" ]]; then
+        # Wait up to 3 seconds for the background check
+        for _ in {1..30}; do
+            kill -0 "$UPDATE_CHECK_PID" 2>/dev/null || break
+            sleep 0.1
+        done 2>/dev/null
+        wait "$UPDATE_CHECK_PID" 2>/dev/null || true
+    fi
+
+    # Show update banner if available
+    show_update_banner
 
     # Get current mount status
     local nfs_mounts
@@ -740,6 +810,104 @@ NFS service availability." 12 55 "10.10.1.1" 3>&1 1>&2 2>&3) || return
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Update Management
+# ═══════════════════════════════════════════════════════════════════════════════
+
+check_and_update() {
+    local install_dir="/opt/xinas-client"
+    local git_dir="$install_dir/.git"
+
+    # Check alternate locations
+    if [[ ! -d "$git_dir" ]]; then
+        git_dir="$SCRIPT_DIR/../.git"
+        [[ -d "$git_dir" ]] || git_dir="$SCRIPT_DIR/.git"
+        if [[ -d "$git_dir" ]]; then
+            install_dir="$(dirname "$git_dir")"
+        fi
+    fi
+
+    if [[ ! -d "$git_dir" ]]; then
+        whiptail --title "Not Git Installation" --msgbox "\
+This installation was not done via git.
+
+To enable automatic updates, reinstall using:
+  curl -fsSL https://xinnor.io/install_client.sh | sudo bash" 12 60
+        return
+    fi
+
+    if ! command -v git &>/dev/null; then
+        whiptail --title "Git Not Found" --msgbox "\
+Git is required for update checking.
+
+Install git first, then retry." 10 50
+        return
+    fi
+
+    whiptail --title "Checking..." --infobox "Checking for updates..." 6 40
+
+    # Fetch latest
+    if ! git -C "$install_dir" fetch --quiet origin main 2>/dev/null; then
+        whiptail --title "Network Error" --msgbox "\
+Could not connect to update server.
+
+Please check your internet connection." 10 50
+        return
+    fi
+
+    local local_commit remote_commit
+    local_commit=$(git -C "$install_dir" rev-parse HEAD 2>/dev/null)
+    remote_commit=$(git -C "$install_dir" rev-parse origin/main 2>/dev/null)
+
+    if [[ "$local_commit" == "$remote_commit" ]]; then
+        whiptail --title "Up to Date" --msgbox "\
+xiNAS Client is up to date!
+
+Version: $CLIENT_VERSION
+Commit:  ${local_commit:0:8}" 12 50
+        UPDATE_AVAILABLE=""
+        return
+    fi
+
+    # Show what's new
+    local changes
+    changes=$(git -C "$install_dir" log --oneline HEAD..origin/main 2>/dev/null | head -10)
+
+    if whiptail --title "Update Available" --yesno "\
+A new version is available!
+
+Current: ${local_commit:0:8}
+Latest:  ${remote_commit:0:8}
+
+Recent changes:
+$changes
+
+Update now?" 20 60; then
+
+        whiptail --title "Updating..." --infobox "Downloading update..." 6 40
+
+        if git -C "$install_dir" pull --quiet origin main 2>/dev/null; then
+            UPDATE_AVAILABLE=""
+            whiptail --title "Updated!" --msgbox "\
+xiNAS Client has been updated!
+
+The menu will now restart with the new version." 10 55
+
+            # Re-execute the script with the new version
+            exec "$0" "$@"
+        else
+            whiptail --title "Update Failed" --msgbox "\
+Update failed. You can try manually:
+
+  cd $install_dir
+  git pull origin main
+
+Or reinstall:
+  curl -fsSL https://xinnor.io/install_client.sh | sudo bash" 14 60
+        fi
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Main Menu
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -754,17 +922,22 @@ main_menu() {
         local rdma_status="No"
         [[ -d /sys/class/infiniband ]] && [[ -n "$(ls /sys/class/infiniband/ 2>/dev/null)" ]] && rdma_status="Yes"
 
+        # Build update indicator
+        local update_indicator=""
+        [[ "$UPDATE_AVAILABLE" == "true" ]] && update_indicator=" | ${YELLOW}Update!${NC}"
+
         local choice
-        choice=$(whiptail --title "═══ xiNAS Client Setup ═══" --menu "\
+        choice=$(whiptail --title "═══ xiNAS Client Setup v$CLIENT_VERSION ═══" --menu "\
   $(hostname) | Mounts: $nfs_mounts | RDMA: $rdma_status
-  ─────────────────────────────────────────────" 20 60 8 \
+  ─────────────────────────────────────────────" 22 60 9 \
             "1" "📊 System Status" \
             "2" "🔌 Connect to NAS" \
             "3" "📁 Manage Mounts" \
             "4" "🔧 Install NFS Tools" \
             "5" "⚡ Install DOCA OFED" \
             "6" "🔍 Test Connection" \
-            "7" "🚪 Exit" \
+            "7" "🔄 Check for Updates" \
+            "8" "🚪 Exit" \
             3>&1 1>&2 2>&3) || break
 
         case "$choice" in
@@ -774,7 +947,8 @@ main_menu() {
             4) install_nfs_tools ;;
             5) install_doca_ofed ;;
             6) test_connection ;;
-            7)
+            7) check_and_update ;;
+            8)
                 whiptail --title "See you soon!" --msgbox "\
    Thank you for using xiNAS Client Setup!
 
@@ -794,6 +968,46 @@ main_menu() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 case "${1:-}" in
+    --version|-v)
+        echo "xiNAS Client v$CLIENT_VERSION"
+        # Show git commit if available
+        _install_dir="/opt/xinas-client"
+        [[ -d "$_install_dir/.git" ]] || _install_dir="$SCRIPT_DIR/.."
+        [[ -d "$_install_dir/.git" ]] || _install_dir="$SCRIPT_DIR"
+        if [[ -d "$_install_dir/.git" ]] && command -v git &>/dev/null; then
+            _commit=$(git -C "$_install_dir" rev-parse --short HEAD 2>/dev/null)
+            [[ -n "$_commit" ]] && echo "Commit: $_commit"
+        fi
+        exit 0
+        ;;
+    --update|-u)
+        echo -e "${CYAN}Checking for updates...${NC}"
+        _install_dir="/opt/xinas-client"
+        [[ -d "$_install_dir/.git" ]] || _install_dir="$SCRIPT_DIR/.."
+        [[ -d "$_install_dir/.git" ]] || _install_dir="$SCRIPT_DIR"
+        if [[ ! -d "$_install_dir/.git" ]]; then
+            echo -e "${RED}Error: Not a git installation${NC}"
+            echo "Reinstall using: curl -fsSL https://xinnor.io/install_client.sh | sudo bash"
+            exit 1
+        fi
+        git -C "$_install_dir" fetch --quiet origin main 2>/dev/null || {
+            echo -e "${RED}Error: Could not fetch updates${NC}"
+            exit 1
+        }
+        _local_commit=$(git -C "$_install_dir" rev-parse HEAD 2>/dev/null)
+        _remote_commit=$(git -C "$_install_dir" rev-parse origin/main 2>/dev/null)
+        if [[ "$_local_commit" == "$_remote_commit" ]]; then
+            echo -e "${GREEN}Already up to date${NC}"
+            exit 0
+        fi
+        echo -e "${YELLOW}Update available: ${_local_commit:0:8} -> ${_remote_commit:0:8}${NC}"
+        git -C "$_install_dir" pull --quiet origin main 2>/dev/null && {
+            echo -e "${GREEN}Updated successfully!${NC}"
+            exit 0
+        }
+        echo -e "${RED}Update failed${NC}"
+        exit 1
+        ;;
     --status|-s)
         mount -t nfs,nfs4 2>/dev/null || echo "No NFS mounts"
         exit 0
@@ -819,13 +1033,15 @@ case "${1:-}" in
         exit $?
         ;;
     --help|-h)
-        echo "xiNAS Client Setup"
+        echo "xiNAS Client Setup v$CLIENT_VERSION"
         echo ""
         echo "Usage: sudo $0 [OPTIONS]"
         echo ""
         echo "Options:"
         echo "  --status, -s              Show current NFS mounts"
         echo "  --mount, -m SERVER MOUNT  Quick mount (e.g., -m 10.10.1.1:/data /mnt/nas)"
+        echo "  --version, -v             Show version information"
+        echo "  --update, -u              Check for and install updates"
         echo "  --help, -h                Show this help"
         echo ""
         echo "Without options, launches the interactive menu."
