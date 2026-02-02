@@ -12,6 +12,56 @@ WHIPTAIL=$(command -v whiptail || true)
 REPO_DIR="$(pwd)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# Update check
+UPDATE_AVAILABLE=""
+
+check_for_updates() {
+    # Check if running from a git repo
+    local git_dir="$REPO_DIR/.git"
+    [[ -d "$git_dir" ]] || return 0
+
+    # Skip if no git command
+    command -v git &>/dev/null || return 0
+
+    # Skip if no network (quick check)
+    timeout 2 bash -c "echo >/dev/tcp/github.com/443" 2>/dev/null || return 0
+
+    # Get local commit
+    local local_commit
+    local_commit=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null) || return 0
+
+    # Fetch latest (quiet, background-friendly)
+    git -C "$REPO_DIR" fetch --quiet origin main 2>/dev/null || return 0
+
+    # Get remote commit
+    local remote_commit
+    remote_commit=$(git -C "$REPO_DIR" rev-parse origin/main 2>/dev/null) || return 0
+
+    # Compare
+    if [[ "$local_commit" != "$remote_commit" ]]; then
+        UPDATE_AVAILABLE="true"
+    fi
+}
+
+do_update() {
+    if ! command -v git &>/dev/null; then
+        whiptail --title "Error" --msgbox "Git is not installed." 8 40
+        return 1
+    fi
+
+    whiptail --title "Updating..." --infobox "Pulling latest changes from origin/main..." 6 50
+
+    if git -C "$REPO_DIR" pull origin main 2>"$TMP_DIR/update.log"; then
+        UPDATE_AVAILABLE=""
+        whiptail --title "✅ Update Complete" --msgbox "xiNAS has been updated successfully!\n\nPlease restart the menu to use the new version." 10 50
+    else
+        whiptail --title "❌ Update Failed" --msgbox "Failed to update:\n\n$(cat "$TMP_DIR/update.log")" 12 60
+    fi
+}
+
+# Run update check in background
+check_for_updates &
+
 check_license() {
     local license_file="/tmp/license"
     if [ ! -f "$license_file" ]; then
@@ -353,7 +403,7 @@ whiptail --title "✨ Welcome to xiNAS Expert Mode!" --msgbox "\
 
 # Main menu loop
 while true; do
-    # Build dynamic menu based on license status
+    # Build dynamic menu based on license and update status
     if has_license; then
         license_text="🔑 Enter License ✓ Licensed"
         install_text="🚀 Install → Ready to go!"
@@ -362,9 +412,17 @@ while true; do
         install_text="🚀 Install (License required)"
     fi
 
+    # Update status indicator
+    update_status=""
+    update_text="🔄 Check for Updates"
+    if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+        update_status=" | 📦 Update available!"
+        update_text="🔄 Update Available ⬆️"
+    fi
+
     choice=$(whiptail --title "═══ xiNAS Expert Setup ═══" --nocancel --menu "\
-  Status: $(has_license && echo '✅ License OK' || echo '❌ No License')
-  ─────────────────────────────────────────────" 24 65 10 \
+  Status: $(has_license && echo '✅ License OK' || echo '❌ No License')$update_status
+  ─────────────────────────────────────────────" 26 65 12 \
         "1" "📊 Collect System Data" \
         "2" "$license_text" \
         "3" "🌐 Configure Network" \
@@ -374,7 +432,8 @@ while true; do
         "7" "📦 Presets" \
         "8" "🔧 Git Repository Configuration" \
         "9" "$install_text" \
-        "10" "🚪 Exit" \
+        "10" "$update_text" \
+        "11" "🚪 Exit" \
         3>&1 1>&2 2>&3)
 
     case "$choice" in
@@ -413,6 +472,29 @@ while true; do
             fi
             ;;
         10)
+            if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+                if whiptail --title "📦 Update Available" --yesno "\
+   A new version of xiNAS is available!
+
+   Would you like to update now?
+
+   This will pull the latest changes from GitHub.
+" 12 50; then
+                    do_update
+                fi
+            else
+                whiptail --title "Checking for Updates" --infobox "Checking for updates..." 6 40
+                check_for_updates
+                if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+                    if whiptail --title "📦 Update Available" --yesno "Update found! Install now?" 8 40; then
+                        do_update
+                    fi
+                else
+                    whiptail --title "✅ Up to Date" --msgbox "xiNAS is already up to date!" 8 40
+                fi
+            fi
+            ;;
+        11)
             whiptail --title "👋 See you soon!" --msgbox "\
    Thank you for choosing xiNAS!
 
