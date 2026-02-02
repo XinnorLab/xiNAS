@@ -1504,7 +1504,7 @@ EOF
       mtu: $net_mtu
 EOF
         fi
-        ((idx++))
+        ((++idx))
     done
 
     # Show preview
