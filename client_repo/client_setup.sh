@@ -552,24 +552,24 @@ Recommended: Yes" 12 50; then
 
     if [[ "$protocol" == "RDMA" ]]; then
         # RDMA with training options
-        mount_opts="vers=4.2,proto=rdma,port=20049,hard,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
+        mount_opts="vers=4.2,proto=rdma,port=20049,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
         proto_desc="RDMA"
         if [[ $num_ips -gt 1 ]]; then
             mode_desc="training + trunking"
         else
             mode_desc="training (attribute caching)"
         fi
-        conn_desc="nconnect=$nconnect per IP (total: 16)"
+        conn_desc="max_connect=16, nconnect=$nconnect per IP"
     else
         # TCP with training options
-        mount_opts="vers=4.2,proto=tcp,hard,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
+        mount_opts="vers=4.2,proto=tcp,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
         proto_desc="TCP"
         if [[ $num_ips -gt 1 ]]; then
             mode_desc="training + trunking"
         else
             mode_desc="training (attribute caching)"
         fi
-        conn_desc="nconnect=$nconnect per IP (total: 16)"
+        conn_desc="max_connect=16, nconnect=$nconnect per IP"
     fi
 
     # Confirm settings
@@ -1840,17 +1840,17 @@ case "${1:-}" in
         # Build mount options - training profile for all
         case "$proto" in
             rdma)
-                opts="vers=4.2,proto=rdma,port=20049,hard,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
+                opts="vers=4.2,proto=rdma,port=20049,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
                 proto_desc="RDMA"
                 ;;
             tcp|*)
-                opts="vers=4.2,proto=tcp,hard,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
+                opts="vers=4.2,proto=tcp,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
                 proto_desc="TCP"
                 ;;
         esac
 
         echo "Protocol: $proto_desc"
-        echo "Connections: nconnect=$nconnect per IP (total: 16)"
+        echo "Connections: max_connect=16, nconnect=$nconnect per IP"
         [[ $num_ips -gt 1 ]] && echo "Trunking: enabled (trunkdiscovery)"
         echo ""
 
