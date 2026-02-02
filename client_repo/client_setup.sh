@@ -12,7 +12,10 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-CLIENT_VERSION="1.0.0"
+CLIENT_VERSION="1.1.0"
+
+# Network configuration file
+NETWORK_CONFIG="$SCRIPT_DIR/network_config.yml"
 UPDATE_AVAILABLE=""
 
 # Colors for terminal output
@@ -179,7 +182,8 @@ show_welcome() {
     echo ""
     echo -e "    ${GREEN}①${NC}  ${WHITE}Install NFS Tools${NC} ${DIM}(if not installed)${NC}"
     echo -e "    ${GREEN}②${NC}  ${WHITE}Install DOCA OFED${NC} ${DIM}(for RDMA support)${NC}"
-    echo -e "    ${GREEN}③${NC}  ${WHITE}Connect to NAS${NC} ${DIM}(mount NFS share)${NC}"
+    echo -e "    ${GREEN}③${NC}  ${WHITE}Configure Network${NC} ${DIM}(storage network IPs)${NC}"
+    echo -e "    ${GREEN}④${NC}  ${WHITE}Connect to NAS${NC} ${DIM}(mount NFS share)${NC}"
     echo ""
     echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
     echo -e "    ${DIM}Need help?${NC} ${CYAN}support@xinnor.io${NC}"
@@ -290,6 +294,38 @@ show_status() {
         else
             echo "  No NFS entries in /etc/fstab"
         fi
+        echo ""
+
+        # High-speed network interfaces
+        echo "HIGH-SPEED NETWORK INTERFACES"
+        printf -- '-%.0s' {1..70}; echo ""
+        local hs_found=0
+        for iface in /sys/class/net/*; do
+            [ -d "$iface" ] || continue
+            local name
+            name=$(basename "$iface")
+            [ "$name" = "lo" ] && continue
+            [ -e "$iface/device" ] || continue
+
+            local type driver
+            type=$(cat "$iface/type" 2>/dev/null || echo "0")
+            driver=$(basename "$(readlink -f "$iface/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
+
+            if [ "$type" = "32" ] || [ "$driver" = "mlx5_core" ]; then
+                local ip_addr speed state
+                ip_addr=$(ip -o -4 addr show "$name" 2>/dev/null | awk '{print $4}')
+                [[ -z "$ip_addr" ]] && ip_addr="no IP"
+                speed=$(cat "$iface/speed" 2>/dev/null || echo "unknown")
+                state=$(cat "$iface/operstate" 2>/dev/null || echo "unknown")
+                echo "  [*] $name"
+                echo "      IP:     $ip_addr"
+                echo "      Speed:  ${speed}Mb/s"
+                echo "      State:  $state"
+                echo "      Driver: $driver"
+                hs_found=1
+            fi
+        done
+        [[ $hs_found -eq 0 ]] && echo "  No high-speed interfaces detected"
         echo ""
 
         printf '=%.0s' {1..70}; echo ""
@@ -908,6 +944,613 @@ Or reinstall:
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Network Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Validate IPv4 address (without CIDR)
+valid_ipv4() {
+    local ip="$1"
+    [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS=. read -r o1 o2 o3 o4 <<< "$ip"
+    for octet in $o1 $o2 $o3 $o4; do
+        [[ $octet -ge 0 && $octet -le 255 ]] || return 1
+    done
+    return 0
+}
+
+# Validate IPv4 address with CIDR prefix
+valid_ipv4_cidr() {
+    local ip=${1%/*}
+    local prefix=${1#*/}
+    [[ "$1" == */* ]] || return 1
+    valid_ipv4 "$ip" || return 1
+    [[ $prefix =~ ^[0-9]{1,2}$ ]] || return 1
+    [[ $prefix -ge 0 && $prefix -le 32 ]] || return 1
+    return 0
+}
+
+# Get current network pool settings
+get_network_pool_settings() {
+    if [[ -f "$NETWORK_CONFIG" ]] && command -v yq &>/dev/null; then
+        net_pool_enabled=$(yq '.net_ip_pool_enabled // false' "$NETWORK_CONFIG" 2>/dev/null || echo "false")
+        net_pool_start=$(yq '.net_ip_pool_start // "10.10.1.2"' "$NETWORK_CONFIG" 2>/dev/null || echo "10.10.1.2")
+        net_pool_end=$(yq '.net_ip_pool_end // "10.10.255.2"' "$NETWORK_CONFIG" 2>/dev/null || echo "10.10.255.2")
+        net_pool_prefix=$(yq '.net_ip_pool_prefix // 24' "$NETWORK_CONFIG" 2>/dev/null || echo "24")
+        net_mtu=$(yq '.net_mtu // 0' "$NETWORK_CONFIG" 2>/dev/null || echo "0")
+    else
+        net_pool_enabled=false
+        net_pool_start="10.10.1.2"
+        net_pool_end="10.10.255.2"
+        net_pool_prefix=24
+        net_mtu=0
+    fi
+}
+
+# Save network pool settings
+save_network_pool_settings() {
+    local start="$1" end="$2" prefix="$3" mtu="${4:-0}"
+
+    # Install yq if not present
+    if ! command -v yq &>/dev/null; then
+        if command -v snap &>/dev/null; then
+            snap install yq 2>/dev/null || true
+        fi
+    fi
+
+    cat > "$NETWORK_CONFIG" <<EOF
+---
+# xiNAS Client Network Configuration
+# Automatic IP pool allocation for storage network interfaces
+net_ip_pool_enabled: true
+net_ip_pool_start: "$start"
+net_ip_pool_end: "$end"
+net_ip_pool_prefix: $prefix
+
+# Interface detection
+net_detect_infiniband: true
+net_detect_mlx5: true
+
+# MTU (0 = system default, 9000 = jumbo frames)
+net_mtu: $mtu
+EOF
+}
+
+# Detect high-speed network interfaces
+detect_high_speed_interfaces() {
+    local interfaces=()
+    for iface in /sys/class/net/*; do
+        [ -d "$iface" ] || continue
+        local name
+        name=$(basename "$iface")
+        [ "$name" = "lo" ] && continue
+        [ -e "$iface/device" ] || continue
+
+        local type driver
+        type=$(cat "$iface/type" 2>/dev/null || echo "0")
+        driver=$(basename "$(readlink -f "$iface/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
+
+        # InfiniBand (type 32) or NVIDIA MLX5 driver
+        if [ "$type" = "32" ] || [ "$driver" = "mlx5_core" ]; then
+            interfaces+=("$name")
+        fi
+    done
+    echo "${interfaces[@]}"
+}
+
+# Configure IP pool for automatic allocation
+configure_network_ip_pool() {
+    get_network_pool_settings
+
+    # Input start IP
+    while true; do
+        local new_start
+        new_start=$(whiptail --title "Network: IP Pool Start" --inputbox "\
+Configure IP pool for storage network interfaces.
+
+Start IP address of the pool:
+
+Format: X.X.X.X (e.g., 10.10.1.2)
+Each interface will get the next subnet:
+  Interface 1: 10.10.1.2
+  Interface 2: 10.10.2.2
+  etc.
+
+Note: Use .2 addresses if .1 is your NAS server." 18 60 "$net_pool_start" 3>&1 1>&2 2>&3) || return
+
+        if valid_ipv4 "$new_start"; then
+            break
+        else
+            whiptail --title "Invalid IP" --msgbox "Invalid IP address format. Use X.X.X.X" 8 50
+        fi
+    done
+
+    # Input end IP
+    while true; do
+        local new_end
+        new_end=$(whiptail --title "Network: IP Pool End" --inputbox "\
+End IP address of the pool:
+
+Format: X.X.X.X (e.g., 10.10.255.2)" 12 60 "$net_pool_end" 3>&1 1>&2 2>&3) || return
+
+        if valid_ipv4 "$new_end"; then
+            break
+        else
+            whiptail --title "Invalid IP" --msgbox "Invalid IP address format. Use X.X.X.X" 8 50
+        fi
+    done
+
+    # Input prefix
+    while true; do
+        local new_prefix
+        new_prefix=$(whiptail --title "Network: Subnet Prefix" --inputbox "\
+Subnet prefix (CIDR):
+
+(e.g., 24 for /24 = 255.255.255.0)" 12 50 "$net_pool_prefix" 3>&1 1>&2 2>&3) || return
+
+        if [[ $new_prefix =~ ^[0-9]{1,2}$ ]] && [[ $new_prefix -ge 1 && $new_prefix -le 32 ]]; then
+            break
+        else
+            whiptail --title "Invalid Prefix" --msgbox "Invalid prefix. Use 1-32." 8 40
+        fi
+    done
+
+    # Input MTU
+    local new_mtu
+    new_mtu=$(whiptail --title "Network: MTU Setting" --inputbox "\
+MTU (Maximum Transmission Unit):
+
+  0    = System default
+  1500 = Standard Ethernet
+  9000 = Jumbo frames (recommended for storage)
+
+Leave at 0 unless you know your network supports jumbo frames." 16 60 "$net_mtu" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$new_mtu" ]] && new_mtu=0
+
+    # Save settings
+    save_network_pool_settings "$new_start" "$new_end" "$new_prefix" "$new_mtu"
+
+    # Show summary
+    whiptail --title "IP Pool Configured" --msgbox "\
+IP Pool configured:
+
+Range: $new_start - $new_end
+Prefix: /$new_prefix
+MTU: $([ "$new_mtu" = "0" ] && echo "System default" || echo "$new_mtu")
+
+Interfaces will be auto-assigned:
+  Interface 1: ${new_start}/${new_prefix}
+  Interface 2: next subnet
+  etc.
+
+Saved to: $NETWORK_CONFIG
+
+Use 'Apply Network Configuration' to activate." 18 60
+}
+
+# Configure interfaces manually
+configure_network_manual() {
+    # Gather available interfaces
+    readarray -t all_interfaces < <(ip -o link show | awk -F': ' '{print $2}' | grep -v lo)
+
+    if [[ ${#all_interfaces[@]} -eq 0 ]]; then
+        whiptail --title "No Interfaces" --msgbox "No network interfaces found." 8 45
+        return
+    fi
+
+    declare -A curr_ip new_ip
+    local configs=()
+
+    for iface in "${all_interfaces[@]}"; do
+        local ip_addr
+        ip_addr=$(ip -o -4 addr show "$iface" 2>/dev/null | awk '{print $4}')
+        [[ -z "$ip_addr" ]] && ip_addr="none"
+        curr_ip[$iface]="$ip_addr"
+        new_ip[$iface]=""
+    done
+
+    while true; do
+        local menu_items=()
+        for iface in "${all_interfaces[@]}"; do
+            local speed="unknown"
+            if [[ -e "/sys/class/net/$iface/speed" ]]; then
+                speed=$(cat "/sys/class/net/$iface/speed" 2>/dev/null || echo "unknown")
+            fi
+            # Check if high-speed interface
+            local type driver marker=""
+            if [[ -e "/sys/class/net/$iface/device" ]]; then
+                type=$(cat "/sys/class/net/$iface/type" 2>/dev/null || echo "0")
+                driver=$(basename "$(readlink -f "/sys/class/net/$iface/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
+                if [ "$type" = "32" ] || [ "$driver" = "mlx5_core" ]; then
+                    marker=" [RDMA]"
+                fi
+            fi
+            local desc="${curr_ip[$iface]}"
+            [[ -n "${new_ip[$iface]}" ]] && desc+=" -> ${new_ip[$iface]}"
+            desc+=" - ${speed}Mb/s${marker}"
+            menu_items+=("$iface" "$desc")
+        done
+        menu_items+=("" "")
+        menu_items+=("Finish" "Apply configuration")
+
+        local iface
+        iface=$(whiptail --title "Manual Network Configuration" --menu "\
+Select interface to configure:
+
+[RDMA] indicates high-speed interfaces suitable for storage." 20 70 10 \
+            "${menu_items[@]}" 3>&1 1>&2 2>&3) || return
+
+        [[ "$iface" == "Finish" ]] && break
+        [[ -z "$iface" ]] && continue
+
+        local prompt="IPv4 address for $iface (current: ${curr_ip[$iface]})"
+        [[ -n "${new_ip[$iface]}" ]] && prompt+="\n[new: ${new_ip[$iface]}]"
+
+        while true; do
+            local addr
+            addr=$(whiptail --title "Configure: $iface" --inputbox "\
+$prompt
+
+Format: X.X.X.X/prefix (e.g., 10.10.1.2/24)
+
+Leave empty to skip this interface." 14 60 3>&1 1>&2 2>&3) || break
+
+            [[ -z "$addr" ]] && break
+
+            if valid_ipv4_cidr "$addr"; then
+                new_ip[$iface]="$addr"
+                local found=""
+                for i in "${!configs[@]}"; do
+                    local name
+                    IFS=: read -r name _ <<< "${configs[i]}"
+                    if [[ "$name" == "$iface" ]]; then
+                        configs[i]="$iface:$addr"
+                        found=1
+                        break
+                    fi
+                done
+                [[ -z "$found" ]] && configs+=("$iface:$addr")
+                break
+            else
+                whiptail --title "Invalid Format" --msgbox "Invalid IPv4/CIDR format. Use X.X.X.X/prefix" 8 60
+            fi
+        done
+    done
+
+    if [[ ${#configs[@]} -eq 0 ]]; then
+        whiptail --title "No Changes" --msgbox "No interfaces were configured." 8 45
+        return
+    fi
+
+    # Ask for MTU
+    get_network_pool_settings
+    local mtu
+    mtu=$(whiptail --title "MTU Setting" --inputbox "\
+MTU (Maximum Transmission Unit):
+
+  0    = System default
+  1500 = Standard Ethernet
+  9000 = Jumbo frames (recommended for storage)" 14 55 "$net_mtu" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$mtu" ]] && mtu=0
+
+    # Generate netplan configuration
+    local netplan_file="/etc/netplan/99-xinas-client.yaml"
+    local tmp_file
+    tmp_file=$(mktemp)
+
+    cat > "$tmp_file" <<EOF
+# xiNAS Client Network Configuration
+# Generated by client_setup.sh
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+EOF
+
+    for cfg in "${configs[@]}"; do
+        local name addr
+        IFS=: read -r name addr <<< "$cfg"
+        cat >> "$tmp_file" <<EOF
+    $name:
+      dhcp4: no
+      addresses: [ $addr ]
+EOF
+        if [[ "$mtu" -gt 0 ]]; then
+            cat >> "$tmp_file" <<EOF
+      mtu: $mtu
+EOF
+        fi
+    done
+
+    # Show preview
+    local preview="$TMP_DIR/netplan_preview"
+    cat "$tmp_file" > "$preview"
+
+    if whiptail --title "Confirm Configuration" --yesno "\
+Review the netplan configuration:
+
+$(cat "$preview")
+
+Apply this configuration?
+
+This will modify: $netplan_file" 24 70; then
+        # Backup existing config
+        if [[ -f "$netplan_file" ]]; then
+            cp "$netplan_file" "${netplan_file}.$(date +%Y%m%d%H%M%S).bak"
+        fi
+
+        mv "$tmp_file" "$netplan_file"
+        chmod 600 "$netplan_file"
+
+        # Save MTU to config
+        if [[ -f "$NETWORK_CONFIG" ]] && command -v yq &>/dev/null; then
+            yq -i ".net_mtu = $mtu" "$NETWORK_CONFIG" 2>/dev/null || true
+            yq -i '.net_ip_pool_enabled = false' "$NETWORK_CONFIG" 2>/dev/null || true
+        else
+            cat > "$NETWORK_CONFIG" <<EOF
+---
+net_ip_pool_enabled: false
+net_mtu: $mtu
+EOF
+        fi
+
+        if whiptail --title "Apply Now?" --yesno "\
+Configuration saved to $netplan_file
+
+Apply network configuration now?
+
+Warning: This may briefly disrupt network connectivity." 12 55; then
+            whiptail --title "Applying..." --infobox "Applying network configuration..." 6 45
+            if netplan apply 2>/dev/null; then
+                sleep 2
+                whiptail --title "Success" --msgbox "\
+Network configuration applied successfully!
+
+Configured interfaces:
+$(for cfg in "${configs[@]}"; do echo "  ${cfg/:/ -> }"; done)
+
+MTU: $([ "$mtu" = "0" ] && echo "System default" || echo "$mtu")" 16 55
+            else
+                whiptail --title "Warning" --msgbox "\
+netplan apply returned an error.
+
+Please check the configuration:
+  cat $netplan_file
+
+You may need to apply manually:
+  sudo netplan apply" 14 55
+            fi
+        else
+            whiptail --title "Saved" --msgbox "\
+Configuration saved but not applied.
+
+To apply later, run:
+  sudo netplan apply" 10 50
+        fi
+    else
+        rm -f "$tmp_file"
+    fi
+}
+
+# Apply IP pool configuration to interfaces
+apply_network_pool() {
+    get_network_pool_settings
+
+    if [[ "$net_pool_enabled" != "true" ]]; then
+        whiptail --title "Pool Not Configured" --msgbox "\
+IP pool is not enabled.
+
+Please configure the IP pool first using
+'Configure IP Pool' option." 10 50
+        return
+    fi
+
+    # Detect high-speed interfaces
+    local hs_ifaces
+    hs_ifaces=$(detect_high_speed_interfaces)
+
+    if [[ -z "$hs_ifaces" ]]; then
+        whiptail --title "No Interfaces" --msgbox "\
+No high-speed interfaces detected.
+
+Make sure DOCA OFED is installed and your
+InfiniBand/RDMA hardware is recognized." 12 55
+        return
+    fi
+
+    # Convert to array
+    local interfaces=($hs_ifaces)
+
+    if [[ ${#interfaces[@]} -eq 0 ]]; then
+        whiptail --title "No Interfaces" --msgbox "No interfaces to configure." 8 45
+        return
+    fi
+
+    # Parse start IP to calculate allocation
+    IFS=. read -r s1 s2 s3 s4 <<< "$net_pool_start"
+
+    # Generate netplan
+    local netplan_file="/etc/netplan/99-xinas-client.yaml"
+    local tmp_file
+    tmp_file=$(mktemp)
+
+    cat > "$tmp_file" <<EOF
+# xiNAS Client Network Configuration
+# Generated by client_setup.sh (IP Pool Mode)
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+EOF
+
+    local idx=0
+    local allocated_ips=""
+    for iface in "${interfaces[@]}"; do
+        # Calculate IP: increment third octet for each interface
+        local ip_third=$((s3 + idx))
+        local ip="${s1}.${s2}.${ip_third}.${s4}"
+        allocated_ips+="  $iface: ${ip}/${net_pool_prefix}\n"
+
+        cat >> "$tmp_file" <<EOF
+    $iface:
+      dhcp4: no
+      addresses: [ ${ip}/${net_pool_prefix} ]
+EOF
+        if [[ "$net_mtu" -gt 0 ]]; then
+            cat >> "$tmp_file" <<EOF
+      mtu: $net_mtu
+EOF
+        fi
+        ((idx++))
+    done
+
+    # Show preview
+    if whiptail --title "Apply IP Pool Configuration" --yesno "\
+Detected ${#interfaces[@]} high-speed interface(s).
+
+IP Allocation:
+$(echo -e "$allocated_ips")
+Pool: $net_pool_start - $net_pool_end / $net_pool_prefix
+MTU: $([ "$net_mtu" = "0" ] && echo "System default" || echo "$net_mtu")
+
+Apply this configuration?" 20 60; then
+        # Backup existing config
+        if [[ -f "$netplan_file" ]]; then
+            cp "$netplan_file" "${netplan_file}.$(date +%Y%m%d%H%M%S).bak"
+        fi
+
+        mv "$tmp_file" "$netplan_file"
+        chmod 600 "$netplan_file"
+
+        whiptail --title "Applying..." --infobox "Applying network configuration..." 6 45
+
+        if netplan apply 2>/dev/null; then
+            sleep 2
+            whiptail --title "Success" --msgbox "\
+Network configuration applied!
+
+Configured interfaces:
+$(echo -e "$allocated_ips")
+Configuration: $netplan_file" 16 55
+        else
+            whiptail --title "Warning" --msgbox "\
+netplan apply returned an error.
+
+Please check the configuration manually:
+  cat $netplan_file
+  sudo netplan apply" 12 55
+        fi
+    else
+        rm -f "$tmp_file"
+    fi
+}
+
+# View current network configuration
+view_network_config() {
+    get_network_pool_settings
+
+    local out="$TMP_DIR/network_config"
+    {
+        echo "NETWORK CONFIGURATION"
+        printf '=%.0s' {1..60}; echo ""
+        echo ""
+
+        echo "IP POOL SETTINGS"
+        printf -- '-%.0s' {1..60}; echo ""
+        echo "  Enabled: $net_pool_enabled"
+        echo "  Range:   $net_pool_start - $net_pool_end"
+        echo "  Prefix:  /$net_pool_prefix"
+        echo "  MTU:     $([ "$net_mtu" = "0" ] && echo "System default" || echo "$net_mtu")"
+        echo ""
+
+        echo "DETECTED HIGH-SPEED INTERFACES"
+        printf -- '-%.0s' {1..60}; echo ""
+        local found=0
+        for iface in /sys/class/net/*; do
+            [ -d "$iface" ] || continue
+            local name
+            name=$(basename "$iface")
+            [ "$name" = "lo" ] && continue
+            [ -e "$iface/device" ] || continue
+
+            local type driver
+            type=$(cat "$iface/type" 2>/dev/null || echo "0")
+            driver=$(basename "$(readlink -f "$iface/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
+
+            if [ "$type" = "32" ] || [ "$driver" = "mlx5_core" ]; then
+                local ip_addr speed state
+                ip_addr=$(ip -o -4 addr show "$name" 2>/dev/null | awk '{print $4}')
+                [[ -z "$ip_addr" ]] && ip_addr="no IP"
+                speed=$(cat "$iface/speed" 2>/dev/null || echo "unknown")
+                state=$(cat "$iface/operstate" 2>/dev/null || echo "unknown")
+                echo "  $name:"
+                echo "    IP:     $ip_addr"
+                echo "    Speed:  ${speed}Mb/s"
+                echo "    State:  $state"
+                echo "    Driver: $driver"
+                found=1
+            fi
+        done
+        [[ $found -eq 0 ]] && echo "  No high-speed interfaces detected"
+        echo ""
+
+        echo "CURRENT NETPLAN (99-xinas-client.yaml)"
+        printf -- '-%.0s' {1..60}; echo ""
+        if [[ -f "/etc/netplan/99-xinas-client.yaml" ]]; then
+            cat "/etc/netplan/99-xinas-client.yaml" | sed 's/^/  /'
+        else
+            echo "  Not configured"
+        fi
+        echo ""
+
+        echo "ALL NETWORK INTERFACES"
+        printf -- '-%.0s' {1..60}; echo ""
+        ip -br addr 2>/dev/null | sed 's/^/  /'
+        echo ""
+
+        printf '=%.0s' {1..60}; echo ""
+    } > "$out"
+
+    whiptail --title "Network Configuration" --scrolltext --textbox "$out" 28 76
+}
+
+# Network settings menu
+configure_network() {
+    while true; do
+        get_network_pool_settings
+
+        local pool_status="DISABLED"
+        [[ "$net_pool_enabled" == "true" ]] && pool_status="ENABLED"
+
+        # Count high-speed interfaces
+        local hs_count
+        hs_count=$(detect_high_speed_interfaces | wc -w)
+
+        local choice
+        choice=$(whiptail --title "Network Settings" --menu "\
+IP Pool: $net_pool_start - $net_pool_end [$pool_status]
+High-speed interfaces detected: $hs_count
+
+Configure storage network interfaces:" 18 65 6 \
+            "1" "Configure IP Pool (automatic allocation)" \
+            "2" "Configure Interfaces Manually" \
+            "3" "Apply IP Pool Configuration" \
+            "4" "View Current Configuration" \
+            "5" "Back to Main Menu" \
+            3>&1 1>&2 2>&3) || return
+
+        case "$choice" in
+            1) configure_network_ip_pool ;;
+            2) configure_network_manual ;;
+            3) apply_network_pool ;;
+            4) view_network_config ;;
+            5) return ;;
+        esac
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Main Menu
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -929,26 +1572,28 @@ main_menu() {
         local choice
         choice=$(whiptail --title "═══ xiNAS Client Setup v$CLIENT_VERSION ═══" --menu "\
   $(hostname) | Mounts: $nfs_mounts | RDMA: $rdma_status
-  ─────────────────────────────────────────────" 22 60 9 \
+  ─────────────────────────────────────────────" 24 60 10 \
             "1" "📊 System Status" \
             "2" "🔌 Connect to NAS" \
             "3" "📁 Manage Mounts" \
-            "4" "🔧 Install NFS Tools" \
-            "5" "⚡ Install DOCA OFED" \
-            "6" "🔍 Test Connection" \
-            "7" "🔄 Check for Updates" \
-            "8" "🚪 Exit" \
+            "4" "🌐 Network Settings" \
+            "5" "🔧 Install NFS Tools" \
+            "6" "⚡ Install DOCA OFED" \
+            "7" "🔍 Test Connection" \
+            "8" "🔄 Check for Updates" \
+            "9" "🚪 Exit" \
             3>&1 1>&2 2>&3) || break
 
         case "$choice" in
             1) show_status ;;
             2) configure_nfs_mount ;;
             3) manage_mounts ;;
-            4) install_nfs_tools ;;
-            5) install_doca_ofed ;;
-            6) test_connection ;;
-            7) check_and_update ;;
-            8)
+            4) configure_network ;;
+            5) install_nfs_tools ;;
+            6) install_doca_ofed ;;
+            7) test_connection ;;
+            8) check_and_update ;;
+            9)
                 whiptail --title "See you soon!" --msgbox "\
    Thank you for using xiNAS Client Setup!
 
@@ -1032,6 +1677,32 @@ case "${1:-}" in
         mount -t nfs -o "$opts" "$server_share" "$mount_point"
         exit $?
         ;;
+    --network-status|-n)
+        echo -e "${CYAN}Network Configuration Status${NC}"
+        echo ""
+        if [[ -f "$NETWORK_CONFIG" ]]; then
+            echo "Configuration file: $NETWORK_CONFIG"
+            cat "$NETWORK_CONFIG"
+        else
+            echo "No network configuration file found."
+        fi
+        echo ""
+        echo -e "${CYAN}High-Speed Interfaces:${NC}"
+        for iface in /sys/class/net/*; do
+            [ -d "$iface" ] || continue
+            name=$(basename "$iface")
+            [ "$name" = "lo" ] && continue
+            [ -e "$iface/device" ] || continue
+            type=$(cat "$iface/type" 2>/dev/null || echo "0")
+            driver=$(basename "$(readlink -f "$iface/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
+            if [ "$type" = "32" ] || [ "$driver" = "mlx5_core" ]; then
+                ip_addr=$(ip -o -4 addr show "$name" 2>/dev/null | awk '{print $4}' || echo "no IP")
+                [[ -z "$ip_addr" ]] && ip_addr="no IP"
+                echo "  $name: $ip_addr (driver: $driver)"
+            fi
+        done
+        exit 0
+        ;;
     --help|-h)
         echo "xiNAS Client Setup v$CLIENT_VERSION"
         echo ""
@@ -1040,6 +1711,7 @@ case "${1:-}" in
         echo "Options:"
         echo "  --status, -s              Show current NFS mounts"
         echo "  --mount, -m SERVER MOUNT  Quick mount (e.g., -m 10.10.1.1:/data /mnt/nas)"
+        echo "  --network-status, -n      Show network configuration status"
         echo "  --version, -v             Show version information"
         echo "  --update, -u              Check for and install updates"
         echo "  --help, -h                Show this help"
