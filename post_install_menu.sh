@@ -11,6 +11,41 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 # Script directory for relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Update check
+UPDATE_AVAILABLE=""
+
+check_for_updates() {
+    local git_dir="$SCRIPT_DIR/.git"
+    [[ -d "$git_dir" ]] || return 0
+    command -v git &>/dev/null || return 0
+    timeout 2 bash -c "echo >/dev/tcp/github.com/443" 2>/dev/null || return 0
+    local local_commit
+    local_commit=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null) || return 0
+    git -C "$SCRIPT_DIR" fetch --quiet origin main 2>/dev/null || return 0
+    local remote_commit
+    remote_commit=$(git -C "$SCRIPT_DIR" rev-parse origin/main 2>/dev/null) || return 0
+    if [[ "$local_commit" != "$remote_commit" ]]; then
+        UPDATE_AVAILABLE="true"
+    fi
+}
+
+do_update() {
+    if ! command -v git &>/dev/null; then
+        whiptail --title "Error" --msgbox "Git is not installed." 8 40
+        return 1
+    fi
+    whiptail --title "Updating..." --infobox "Pulling latest changes from origin/main..." 6 50
+    if git -C "$SCRIPT_DIR" pull origin main 2>"$TMP_DIR/update.log"; then
+        UPDATE_AVAILABLE=""
+        whiptail --title "✅ Update Complete" --msgbox "xiNAS has been updated!\n\nPlease restart the menu to use the new version." 10 50
+    else
+        whiptail --title "❌ Update Failed" --msgbox "Failed to update:\n\n$(cat "$TMP_DIR/update.log")" 12 60
+    fi
+}
+
+# Run update check in background
+check_for_updates &
+
 # Colors for terminal output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -2111,17 +2146,26 @@ main_menu() {
     fi
 
     while true; do
+        # Update status indicator
+        local update_status=""
+        local update_text="🔄 Check for Updates"
+        if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+            update_status=" | 📦 Update!"
+            update_text="🔄 Update Available ⬆️"
+        fi
+
         local choice
         choice=$(whiptail --title "═══ xiNAS Management ═══" --menu "\
-  $(hostname) | $(uptime -p 2>/dev/null | sed 's/up //')
-  ─────────────────────────────────────────────" 22 60 8 \
+  $(hostname) | $(uptime -p 2>/dev/null | sed 's/up //')$update_status
+  ─────────────────────────────────────────────" 24 60 9 \
             "1" "📊 System Status" \
             "2" "💾 RAID Management" \
             "3" "🌐 Network Settings" \
             "4" "📂 NFS Access Rights" \
             "5" "👥 User Management" \
             "6" "⚡ Quick Actions" \
-            "7" "🚪 Exit" \
+            "7" "$update_text" \
+            "8" "🚪 Exit" \
             3>&1 1>&2 2>&3) || break
 
         case "$choice" in
@@ -2132,6 +2176,26 @@ main_menu() {
             5) user_menu ;;
             6) quick_actions_menu ;;
             7)
+                if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+                    if whiptail --title "📦 Update Available" --yesno "\
+   A new version of xiNAS is available!
+
+   Would you like to update now?" 10 45; then
+                        do_update
+                    fi
+                else
+                    whiptail --title "Checking..." --infobox "Checking for updates..." 6 35
+                    check_for_updates
+                    if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+                        if whiptail --title "📦 Update" --yesno "Update found! Install now?" 8 40; then
+                            do_update
+                        fi
+                    else
+                        whiptail --title "✅ Up to Date" --msgbox "xiNAS is already up to date!" 8 40
+                    fi
+                fi
+                ;;
+            8)
                 whiptail --title "👋 See you soon!" --msgbox "\
    Thank you for using xiNAS!
 
