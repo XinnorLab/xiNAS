@@ -442,26 +442,57 @@ Would you like to:
         fi
     fi
 
-    # Step 2: Enter server IP
-    local server_ip
-    server_ip=$(whiptail --title "Step 2: Server Address" --inputbox "\
-Enter the IP address of your xiNAS server:
+    # Step 2: Number of server IPs
+    local num_ips
+    num_ips=$(whiptail --title "Step 2: Number of Server IPs" --menu "\
+How many server IP addresses will you use?
+
+Using multiple IPs distributes connections for
+better performance across network paths.
+
+The 16 available NFS connections will be evenly
+distributed across all IPs." 18 60 4 \
+        "1" "Single IP (16 connections)" \
+        "2" "Two IPs (8 connections each)" \
+        "4" "Four IPs (4 connections each)" \
+        "8" "Eight IPs (2 connections each)" \
+        3>&1 1>&2 2>&3) || return
+
+    local nconnect=$((16 / num_ips))
+
+    # Step 3: Enter server IP(s)
+    local server_ips=()
+    local i
+    for ((i=1; i<=num_ips; i++)); do
+        local ip_label="Server Address"
+        local ip_prompt="Enter the IP address of your xiNAS server:"
+        if [[ $num_ips -gt 1 ]]; then
+            ip_label="Server Address $i of $num_ips"
+            ip_prompt="Enter IP address $i of $num_ips:"
+        fi
+
+        local server_ip
+        server_ip=$(whiptail --title "Step 3: $ip_label" --inputbox "\
+$ip_prompt
 
 Example: 192.168.1.100 or 10.10.1.1
 
-This is the storage network IP of your NAS." 14 55 "10.10.1.1" 3>&1 1>&2 2>&3) || return
+This is the storage network IP of your NAS." 14 55 "10.10.1.$i" 3>&1 1>&2 2>&3) || return
 
-    [[ -z "$server_ip" ]] && return
+        [[ -z "$server_ip" ]] && return
 
-    # Validate IP format
-    if [[ ! "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        whiptail --title "Invalid IP" --msgbox "Please enter a valid IP address." 8 45
-        return
-    fi
+        # Validate IP format
+        if [[ ! "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            whiptail --title "Invalid IP" --msgbox "Please enter a valid IP address." 8 45
+            return
+        fi
 
-    # Step 3: Enter remote share path
+        server_ips+=("$server_ip")
+    done
+
+    # Step 4: Enter remote share path
     local share_path
-    share_path=$(whiptail --title "Step 3: Share Path" --inputbox "\
+    share_path=$(whiptail --title "Step 4: Share Path" --inputbox "\
 Enter the NFS share path on the server:
 
 Examples:
@@ -472,20 +503,29 @@ Ask your NAS administrator if unsure." 14 55 "/mnt/data" 3>&1 1>&2 2>&3) || retu
 
     [[ -z "$share_path" ]] && share_path="/"
 
-    # Step 4: Enter local mount point
-    local mount_point
-    mount_point=$(whiptail --title "Step 4: Mount Point" --inputbox "\
-Enter the local directory to mount the share:
+    # Step 5: Enter local mount point
+    local mount_point_base
+    local mount_point_msg="Enter the local directory to mount the share:
 
 This directory will be created if it doesn't exist.
 
-Example: /mnt/nas" 12 55 "/mnt/nas" 3>&1 1>&2 2>&3) || return
+Example: /mnt/nas"
+    if [[ $num_ips -gt 1 ]]; then
+        mount_point_msg="Enter the base directory for mount points:
 
-    [[ -z "$mount_point" ]] && mount_point="/mnt/nas"
+Each IP will be mounted to a numbered subdirectory:
+  /mnt/nas/1, /mnt/nas/2, etc.
 
-    # Step 5: Mount options
+Example: /mnt/nas"
+    fi
+    mount_point_base=$(whiptail --title "Step 5: Mount Point" --inputbox "\
+$mount_point_msg" 14 55 "/mnt/nas" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$mount_point_base" ]] && mount_point_base="/mnt/nas"
+
+    # Step 6: Mount options
     local add_to_fstab="yes"
-    if whiptail --title "Step 5: Persistent Mount" --yesno "\
+    if whiptail --title "Step 6: Persistent Mount" --yesno "\
 Add this mount to /etc/fstab?
 
 If yes, the share will be automatically
@@ -500,77 +540,118 @@ Recommended: Yes" 12 50; then
     # Build mount options
     local mount_opts
     if [[ "$protocol" == "RDMA" ]]; then
-        mount_opts="rdma,port=20049,nconnect=16,vers=4.2,sync"
+        mount_opts="rdma,port=20049,nconnect=$nconnect,vers=4.2,sync"
     else
-        mount_opts="nconnect=16,vers=4.2,sync"
+        mount_opts="nconnect=$nconnect,vers=4.2,sync"
     fi
 
     # Confirm settings
     local proto_desc="TCP (standard)"
     [[ "$protocol" == "RDMA" ]] && proto_desc="RDMA (high-performance)"
 
+    local ip_list="${server_ips[*]}"
+    local mount_point_desc="$mount_point_base"
+    if [[ $num_ips -gt 1 ]]; then
+        mount_point_desc="$mount_point_base/{1..$num_ips}"
+    fi
+
     if ! whiptail --title "Confirm Settings" --yesno "\
 Please review your mount configuration:
 
-Server:      $server_ip
+Server IPs:  $ip_list
 Share:       $share_path
-Mount Point: $mount_point
+Mount Point: $mount_point_desc
 Protocol:    $proto_desc
+Connections: $nconnect per IP (total: 16)
 Persistent:  $add_to_fstab
 
-Proceed with mounting?" 16 55; then
+Proceed with mounting?" 18 60; then
         return
     fi
 
-    # Create mount point
-    mkdir -p "$mount_point"
-
-    # Attempt to mount
-    whiptail --title "Mounting..." --infobox "Connecting to $server_ip..." 6 45
-
-    local mount_cmd="mount -t nfs -o $mount_opts $server_ip:$share_path $mount_point"
+    # Mount each IP
     local mount_log="$TMP_DIR/mount.log"
+    local failed_mounts=()
+    local successful_mounts=()
 
-    if $mount_cmd > "$mount_log" 2>&1; then
-        # Success - add to fstab if requested
-        if [[ "$add_to_fstab" == "yes" ]]; then
-            # Remove any existing entry for this mount point
-            sed -i "\|^.*[[:space:]]$mount_point[[:space:]]|d" /etc/fstab 2>/dev/null || true
-            # Add new entry
-            echo "$server_ip:$share_path $mount_point nfs $mount_opts 0 0" >> /etc/fstab
+    for ((i=0; i<num_ips; i++)); do
+        local current_ip="${server_ips[$i]}"
+        local mount_point
+        if [[ $num_ips -eq 1 ]]; then
+            mount_point="$mount_point_base"
+        else
+            mount_point="$mount_point_base/$((i+1))"
         fi
 
-        # Get actual mount info
-        local actual_opts
-        actual_opts=$(mount | grep "$mount_point" | grep -oP '\(\K[^)]+' || echo "$mount_opts")
+        # Create mount point
+        mkdir -p "$mount_point"
+
+        whiptail --title "Mounting..." --infobox "Connecting to $current_ip ($((i+1))/$num_ips)..." 6 50
+
+        local mount_cmd="mount -t nfs -o $mount_opts $current_ip:$share_path $mount_point"
+
+        if $mount_cmd > "$mount_log" 2>&1; then
+            successful_mounts+=("$current_ip → $mount_point")
+
+            # Add to fstab if requested
+            if [[ "$add_to_fstab" == "yes" ]]; then
+                # Remove any existing entry for this mount point
+                sed -i "\|^.*[[:space:]]$mount_point[[:space:]]|d" /etc/fstab 2>/dev/null || true
+                # Add new entry
+                echo "$current_ip:$share_path $mount_point nfs $mount_opts 0 0" >> /etc/fstab
+            fi
+        else
+            failed_mounts+=("$current_ip: $(cat "$mount_log")")
+        fi
+    done
+
+    # Show results
+    if [[ ${#failed_mounts[@]} -eq 0 ]]; then
+        local mount_list=""
+        for m in "${successful_mounts[@]}"; do
+            mount_list+="  $m"$'\n'
+        done
 
         whiptail --title "Success!" --msgbox "\
-NFS share mounted successfully!
+NFS share(s) mounted successfully!
 
-Server:      $server_ip
-Share:       $share_path
-Mount Point: $mount_point
 Protocol:    $proto_desc
+Connections: $nconnect per IP (total: 16)
 
-You can now access your files at:
-  $mount_point
+Mounted:
+$mount_list
+$([ "$add_to_fstab" == "yes" ] && echo "These mounts will persist across reboots.")" 20 60
+    elif [[ ${#successful_mounts[@]} -gt 0 ]]; then
+        local fail_list=""
+        for f in "${failed_mounts[@]}"; do
+            fail_list+="  $f"$'\n'
+        done
 
-$([ "$add_to_fstab" == "yes" ] && echo "This mount will persist across reboots.")" 18 55
+        whiptail --title "Partial Success" --msgbox "\
+Some mounts succeeded, others failed.
+
+Failed:
+$fail_list
+Troubleshooting:
+- Check server IPs are correct
+- Verify NFS server is running
+- Check firewall settings" 18 65
     else
-        # Mount failed
-        local error_msg
-        error_msg=$(cat "$mount_log")
+        local fail_list=""
+        for f in "${failed_mounts[@]}"; do
+            fail_list+="  $f"$'\n'
+        done
 
         whiptail --title "Mount Failed" --msgbox "\
-Failed to mount NFS share.
+Failed to mount NFS share(s).
 
-Error: $error_msg
-
+Errors:
+$fail_list
 Troubleshooting:
-- Check server IP is correct
+- Check server IPs are correct
 - Verify NFS server is running
 - Check firewall settings
-- For RDMA: ensure DOCA OFED is installed" 16 60
+- For RDMA: ensure DOCA OFED is installed" 18 65
     fi
 }
 
@@ -1680,23 +1761,60 @@ case "${1:-}" in
         ;;
     --mount|-m)
         # Quick mount mode
+        # Supports multiple IPs: SERVER1,SERVER2:SHARE MOUNTPOINT [rdma|tcp]
         shift
         if [[ $# -lt 2 ]]; then
             echo "Usage: $0 --mount SERVER:SHARE MOUNTPOINT [rdma|tcp]"
+            echo "       $0 --mount SERVER1,SERVER2:SHARE MOUNTPOINT [rdma|tcp]"
+            echo ""
+            echo "Multiple IPs distribute 16 connections evenly:"
+            echo "  1 IP  = nconnect=16"
+            echo "  2 IPs = nconnect=8 each"
+            echo "  4 IPs = nconnect=4 each"
             exit 1
         fi
         server_share="$1"
         mount_point="$2"
         proto="${3:-tcp}"
 
-        mkdir -p "$mount_point"
-        if [[ "$proto" == "rdma" ]]; then
-            opts="rdma,port=20049,nconnect=16,vers=4.2,sync"
-        else
-            opts="nconnect=16,vers=4.2,sync"
+        # Parse server(s) and share path
+        servers_part="${server_share%%:*}"
+        share_path="${server_share#*:}"
+
+        # Split servers by comma
+        IFS=',' read -ra server_ips <<< "$servers_part"
+        num_ips=${#server_ips[@]}
+
+        # Validate number of IPs (must be power of 2, max 16)
+        if [[ $num_ips -ne 1 && $num_ips -ne 2 && $num_ips -ne 4 && $num_ips -ne 8 && $num_ips -ne 16 ]]; then
+            echo "Error: Number of IPs must be 1, 2, 4, 8, or 16"
+            exit 1
         fi
-        mount -t nfs -o "$opts" "$server_share" "$mount_point"
-        exit $?
+
+        nconnect=$((16 / num_ips))
+
+        if [[ "$proto" == "rdma" ]]; then
+            opts="rdma,port=20049,nconnect=$nconnect,vers=4.2,sync"
+        else
+            opts="nconnect=$nconnect,vers=4.2,sync"
+        fi
+
+        exit_code=0
+        for ((i=0; i<num_ips; i++)); do
+            current_ip="${server_ips[$i]}"
+            if [[ $num_ips -eq 1 ]]; then
+                current_mount="$mount_point"
+            else
+                current_mount="$mount_point/$((i+1))"
+            fi
+            mkdir -p "$current_mount"
+            echo "Mounting $current_ip:$share_path to $current_mount (nconnect=$nconnect)"
+            if ! mount -t nfs -o "$opts" "$current_ip:$share_path" "$current_mount"; then
+                echo "Failed to mount $current_ip"
+                exit_code=1
+            fi
+        done
+        exit $exit_code
         ;;
     --network-status|-n)
         echo -e "${CYAN}Network Configuration Status${NC}"
@@ -1731,11 +1849,19 @@ case "${1:-}" in
         echo ""
         echo "Options:"
         echo "  --status, -s              Show current NFS mounts"
-        echo "  --mount, -m SERVER MOUNT  Quick mount (e.g., -m 10.10.1.1:/data /mnt/nas)"
+        echo "  --mount, -m SERVER MOUNT  Quick mount (see examples below)"
         echo "  --network-status, -n      Show network configuration status"
         echo "  --version, -v             Show version information"
         echo "  --update, -u              Check for and install updates"
         echo "  --help, -h                Show this help"
+        echo ""
+        echo "Mount examples:"
+        echo "  Single IP:    -m 10.10.1.1:/data /mnt/nas [tcp|rdma]"
+        echo "  Multiple IPs: -m 10.10.1.1,10.10.1.2:/data /mnt/nas [tcp|rdma]"
+        echo ""
+        echo "Multiple IPs distribute 16 connections evenly across all addresses:"
+        echo "  1 IP  = nconnect=16       4 IPs = nconnect=4 each"
+        echo "  2 IPs = nconnect=8 each   8 IPs = nconnect=2 each"
         echo ""
         echo "Without options, launches the interactive menu."
         exit 0
