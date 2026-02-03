@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Interactive editor for RAID drive lists
+# Uses colored console menus
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/menu_lib.sh"
 
 backup_if_changed() {
     local file="$1" newfile="$2" ts
@@ -15,7 +19,7 @@ vars_file="collection/roles/raid_fs/defaults/main.yml"
 auto_vars_file="collection/roles/nvme_namespace/defaults/main.yml"
 
 # Ensure required commands are present
-for cmd in yq whiptail lsblk; do
+for cmd in yq lsblk; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "Error: required command '$cmd' not found. Please run prepare_system.sh or install it manually." >&2
         exit 1
@@ -47,13 +51,9 @@ get_spare_devices() {
 }
 
 edit_spare_pool() {
-    local current new tmp status
+    local current new tmp
     current="$(get_spare_devices)"
-    set +e
-    new=$(whiptail --inputbox "Space-separated devices for spare pool" 10 70 "$current" 3>&1 1>&2 2>&3)
-    status=$?
-    set -e
-    [ $status -ne 0 ] && return
+    new=$(input_box "Spare Pool" "Space-separated devices for spare pool:" "$current") || return
     tmp=$(mktemp)
     # Ensure the spare pool has a name and update its device list
     NEW_LIST="$new" yq eval '.xiraid_spare_pools |= [(.[0] // {"name":"sp1"}) | .devices = (env(NEW_LIST) | split(" "))]' "$vars_file" > "$tmp"
@@ -61,17 +61,19 @@ edit_spare_pool() {
     mv "$tmp" "$vars_file"
 }
 
-# Display detected NVMe drives using whiptail
+# Display detected NVMe drives
 show_nvme_drives() {
     local tmp
     tmp="$(mktemp)"
-    # Include model information since the vendor field is often blank for NVMe devices
-    lsblk -d -o NAME,VENDOR,MODEL,SIZE 2>/dev/null \
-        | awk '$1 ~ /^nvme/ {printf "/dev/%s %s %s %s\n", $1, $2, $3, $4}' > "$tmp"
-    if [ ! -s "$tmp" ]; then
-        echo "No NVMe drives detected" > "$tmp"
-    fi
-    whiptail --title "NVMe Drives" --scrolltext --textbox "$tmp" 20 60
+    {
+        echo "NVMe Drives Detected"
+        echo "===================="
+        echo ""
+        # Include model information since the vendor field is often blank for NVMe devices
+        lsblk -d -o NAME,VENDOR,MODEL,SIZE 2>/dev/null \
+            | awk '$1 ~ /^nvme/ {printf "/dev/%s %s %s %s\n", $1, $2, $3, $4}' || echo "No NVMe drives detected"
+    } > "$tmp"
+    text_box "NVMe Drives" "$tmp"
     rm -f "$tmp"
 }
 
@@ -83,17 +85,13 @@ edit_devices() {
         1) label="LOG" ;;
         *) label="RAID${level}" ;;
     esac
-    local current new tmp status
+    local current new tmp
     current="$(get_devices "$level")"
     if [ -z "$current" ]; then
-        whiptail --msgbox "No ${label} array defined" 8 60
+        msg_box "Not Defined" "No ${label} array defined"
         return
     fi
-    set +e
-    new=$(whiptail --inputbox "Space-separated devices for ${label}" 10 70 "$current" 3>&1 1>&2 2>&3)
-    status=$?
-    set -e
-    [ $status -ne 0 ] && return
+    new=$(input_box "${label} Array" "Space-separated devices for ${label}:" "$current") || return
     tmp=$(mktemp)
     NEW_LIST="$new" yq "(.xiraid_arrays[] | select(.level==${level})).devices = (env(NEW_LIST) | split(\" \") )" "$vars_file" > "$tmp"
     backup_if_changed "$vars_file" "$tmp"
@@ -158,13 +156,13 @@ show_auto_detection() {
         echo "Auto-mode enabled: $(get_auto_enabled)"
     } > "$tmp"
 
-    whiptail --title "Auto-Detection Results" --scrolltext --textbox "$tmp" 22 70
+    text_box "Auto-Detection Results" "$tmp"
     rm -f "$tmp"
 }
 
 toggle_auto_mode() {
     if [ ! -f "$auto_vars_file" ]; then
-        whiptail --msgbox "Auto-detection role not found.\nFile missing: $auto_vars_file" 10 60
+        msg_box "Not Found" "Auto-detection role not found.\nFile missing: $auto_vars_file"
         return
     fi
     local current new_val tmp
@@ -178,7 +176,7 @@ toggle_auto_mode() {
     yq ".nvme_auto_namespace = $new_val" "$auto_vars_file" > "$tmp"
     backup_if_changed "$auto_vars_file" "$tmp"
     mv "$tmp" "$auto_vars_file"
-    whiptail --msgbox "Auto-namespace mode: $new_val\n\nWhen enabled, the playbook will automatically:\n- Detect system vs data NVMe drives\n- Rebuild namespaces (500MB + remaining)\n- Create RAID 10 (log) and RAID 5 (data)" 14 60
+    msg_box "Auto Mode" "Auto-namespace mode: $new_val\n\nWhen enabled, the playbook will automatically:\n- Detect system vs data NVMe drives\n- Rebuild namespaces (500MB + remaining)\n- Create RAID 10 (log) and RAID 5 (data)"
 }
 
 show_nvme_drives
@@ -187,18 +185,21 @@ while true; do
     raid1_devices=$(get_devices 1)
     spare_devices=$(get_spare_devices)
     auto_enabled=$(get_auto_enabled)
-    set +e
-    menu=$(whiptail --title "RAID Configuration" --menu "Select option (Auto-mode: $auto_enabled):" 17 70 7 \
-        1 "DATA: ${raid6_devices:-none}" \
-        2 "LOG: ${raid1_devices:-none}" \
-        3 "Spare: ${spare_devices:-none}" \
-        4 "Auto-Detect Drives" \
-        5 "Toggle Auto-Mode ($auto_enabled)" \
-        6 "Back" 3>&1 1>&2 2>&3)
-    status=$?
-    set -e
-    [ $status -ne 0 ] && break
-    case "$menu" in
+
+    clear
+    echo -e "${CYAN}RAID Configuration${NC}"
+    echo -e "${DIM}Auto-mode: $auto_enabled${NC}"
+    echo ""
+
+    choice=$(menu_select "RAID Configuration" "Select option:" \
+        "1" "DATA: ${raid6_devices:-none}" \
+        "2" "LOG: ${raid1_devices:-none}" \
+        "3" "Spare: ${spare_devices:-none}" \
+        "4" "Auto-Detect Drives" \
+        "5" "Toggle Auto-Mode ($auto_enabled)" \
+        "6" "Back") || break
+
+    case "$choice" in
         1) edit_devices 6 ;;
         2) edit_devices 1 ;;
         3) edit_spare_pool ;;
@@ -207,4 +208,3 @@ while true; do
         *) break ;;
     esac
 done
-

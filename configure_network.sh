@@ -1,8 +1,11 @@
 #!/bin/bash
 # Interactive network configuration helper for xiNAS
+# Uses colored console menus
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/menu_lib.sh"
+
 ROLE_DEFAULTS="$SCRIPT_DIR/collection/roles/net_controllers/defaults/main.yml"
 ROLE_TEMPLATE="$SCRIPT_DIR/collection/roles/net_controllers/templates/netplan.yaml.j2"
 
@@ -88,49 +91,34 @@ configure_ip_pool() {
 
     # Input start IP
     while true; do
-        set +e
-        new_start=$(whiptail --inputbox "Start IP address of the pool:\n\nFormat: X.X.X.X (e.g., 10.10.1.1)\nEach interface will get next subnet: 10.10.1.1, 10.10.2.1, ..." \
-            12 60 "$pool_start" 3>&1 1>&2 2>&3)
-        status=$?
-        set -e
-        [[ $status -ne 0 ]] && return
+        new_start=$(input_box "IP Pool - Start Address" "Start IP address of the pool:\n\nFormat: X.X.X.X (e.g., 10.10.1.1)\nEach interface will get next subnet: 10.10.1.1, 10.10.2.1, ..." "$pool_start") || return
 
         if valid_ipv4 "$new_start"; then
             break
         else
-            whiptail --msgbox "Invalid IP address format. Use X.X.X.X" 8 50
+            msg_box "Invalid IP" "Invalid IP address format. Use X.X.X.X"
         fi
     done
 
     # Input end IP
     while true; do
-        set +e
-        new_end=$(whiptail --inputbox "End IP address of the pool:\n\nFormat: X.X.X.X (e.g., 10.10.255.1)" \
-            10 60 "$pool_end" 3>&1 1>&2 2>&3)
-        status=$?
-        set -e
-        [[ $status -ne 0 ]] && return
+        new_end=$(input_box "IP Pool - End Address" "End IP address of the pool:\n\nFormat: X.X.X.X (e.g., 10.10.255.1)" "$pool_end") || return
 
         if valid_ipv4 "$new_end"; then
             break
         else
-            whiptail --msgbox "Invalid IP address format. Use X.X.X.X" 8 50
+            msg_box "Invalid IP" "Invalid IP address format. Use X.X.X.X"
         fi
     done
 
     # Input prefix
     while true; do
-        set +e
-        new_prefix=$(whiptail --inputbox "Subnet prefix (CIDR):\n\n(e.g., 24 for /24 = 255.255.255.0)" \
-            10 50 "$pool_prefix" 3>&1 1>&2 2>&3)
-        status=$?
-        set -e
-        [[ $status -ne 0 ]] && return
+        new_prefix=$(input_box "IP Pool - Prefix" "Subnet prefix (CIDR):\n\n(e.g., 24 for /24 = 255.255.255.0)" "$pool_prefix") || return
 
         if [[ $new_prefix =~ ^[0-9]{1,2}$ ]] && [[ $new_prefix -ge 1 && $new_prefix -le 32 ]]; then
             break
         else
-            whiptail --msgbox "Invalid prefix. Use 1-32." 8 40
+            msg_box "Invalid Prefix" "Invalid prefix. Use 1-32."
         fi
     done
 
@@ -138,7 +126,7 @@ configure_ip_pool() {
     save_pool_settings "$new_start" "$new_end" "$new_prefix"
 
     # Show summary
-    whiptail --msgbox "IP Pool configured:\n\nRange: $new_start - $new_end\nPrefix: /$new_prefix\n\nInterfaces will be auto-assigned:\n  Interface 1: ${new_start}/${new_prefix}\n  Interface 2: next subnet\n  etc.\n\nSaved to: $ROLE_DEFAULTS" 16 60
+    msg_box "IP Pool Configured" "IP Pool configured:\n\nRange: $new_start - $new_end\nPrefix: /$new_prefix\n\nInterfaces will be auto-assigned:\n  Interface 1: ${new_start}/${new_prefix}\n  Interface 2: next subnet\n  etc.\n\nSaved to: $ROLE_DEFAULTS"
 }
 
 # Configure interfaces manually (legacy mode)
@@ -173,25 +161,21 @@ configure_manual() {
             desc+=" - ${speed}Mb/s"
             menu_items+=("$iface" "$desc")
         done
-        menu_items+=("" "")
         menu_items+=("Finish" "Finish configuration")
 
-        set +e
-        iface=$(whiptail --title "Select Interface" --menu "Choose interface to configure:" 20 70 10 \
-            "${menu_items[@]}" 3>&1 1>&2 2>&3)
-        status=$?
-        set -e
-        [[ $status -ne 0 ]] && return
+        clear
+        echo -e "${CYAN}Manual Network Configuration${NC}"
+        echo ""
+
+        iface=$(menu_select "Select Interface" "Choose interface to configure:" "${menu_items[@]}") || return
         [[ "$iface" == "Finish" ]] && break
 
         prompt="IPv4 address for $iface (current: ${curr_ip[$iface]})"
         [[ -n "${new_ip[$iface]}" ]] && prompt+=" [new: ${new_ip[$iface]}]"
+
         while true; do
-            set +e
-            addr=$(whiptail --inputbox "$prompt\n\nFormat: X.X.X.X/prefix (e.g., 192.168.1.1/24)" 10 60 3>&1 1>&2 2>&3)
-            status=$?
-            set -e
-            [[ $status -ne 0 ]] && continue 2
+            addr=$(input_box "Configure $iface" "$prompt\n\nFormat: X.X.X.X/prefix (e.g., 192.168.1.1/24)") || break
+
             if valid_ipv4_cidr "$addr"; then
                 new_ip[$iface]="$addr"
                 found=""
@@ -206,7 +190,7 @@ configure_manual() {
                 [[ -z "$found" ]] && configs+=("$iface:$addr")
                 break
             else
-                whiptail --msgbox "Invalid IPv4/CIDR format" 8 60
+                msg_box "Invalid Format" "Invalid IPv4/CIDR format"
             fi
         done
     done
@@ -235,36 +219,45 @@ EOF
     backup_if_changed "$ROLE_TEMPLATE" "$tmp_file"
     mv "$tmp_file" "$ROLE_TEMPLATE"
 
-    whiptail --msgbox "Manual configuration saved to:\n$ROLE_TEMPLATE\n\nNote: IP pool is DISABLED in manual mode." 12 60
+    msg_box "Manual Config Saved" "Manual configuration saved to:\n$ROLE_TEMPLATE\n\nNote: IP pool is DISABLED in manual mode."
 }
 
 # View current configuration
 view_config() {
     get_pool_settings
 
-    msg="=== IP Pool Settings ===\n"
-    msg+="Enabled: $pool_enabled\n"
-    msg+="Range: $pool_start - $pool_end\n"
-    msg+="Prefix: /$pool_prefix\n\n"
+    local tmp="$TMP_DIR/net_config"
+    TMP_DIR="${TMP_DIR:-/tmp}"
+    mkdir -p "$TMP_DIR"
+    tmp="$TMP_DIR/net_config_$$"
 
-    msg+="=== Detected High-Speed Interfaces ===\n"
-    for iface in /sys/class/net/*; do
-        [ -d "$iface" ] || continue
-        name=$(basename "$iface")
-        [ "$name" = "lo" ] && continue
-        [ -e "$iface/device" ] || continue
+    {
+        echo "=== IP Pool Settings ==="
+        echo "Enabled: $pool_enabled"
+        echo "Range: $pool_start - $pool_end"
+        echo "Prefix: /$pool_prefix"
+        echo ""
+        echo "=== Detected High-Speed Interfaces ==="
 
-        type=$(cat "$iface/type" 2>/dev/null || echo "0")
-        driver=$(basename "$(readlink -f "$iface/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
+        for iface in /sys/class/net/*; do
+            [ -d "$iface" ] || continue
+            name=$(basename "$iface")
+            [ "$name" = "lo" ] && continue
+            [ -e "$iface/device" ] || continue
 
-        if [ "$type" = "32" ] || [ "$driver" = "mlx5_core" ]; then
-            ip_addr=$(ip -o -4 addr show "$name" 2>/dev/null | awk '{print $4}')
-            [[ -z "$ip_addr" ]] && ip_addr="no IP"
-            msg+="  $name: $ip_addr (driver: $driver)\n"
-        fi
-    done
+            type=$(cat "$iface/type" 2>/dev/null || echo "0")
+            driver=$(basename "$(readlink -f "$iface/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
 
-    whiptail --msgbox "$msg" 20 70
+            if [ "$type" = "32" ] || [ "$driver" = "mlx5_core" ]; then
+                ip_addr=$(ip -o -4 addr show "$name" 2>/dev/null | awk '{print $4}')
+                [[ -z "$ip_addr" ]] && ip_addr="no IP"
+                echo "  $name: $ip_addr (driver: $driver)"
+            fi
+        done
+    } > "$tmp"
+
+    text_box "Network Configuration" "$tmp"
+    rm -f "$tmp"
 }
 
 # Main menu
@@ -275,18 +268,16 @@ main_menu() {
         pool_status="ENABLED"
         [[ "$pool_enabled" != "true" ]] && pool_status="DISABLED"
 
-        set +e
-        choice=$(whiptail --title "Network Configuration" --menu \
-            "Current IP Pool: $pool_start - $pool_end [$pool_status]\n\nSelect option:" 16 70 5 \
+        clear
+        echo -e "${CYAN}Network Configuration${NC}"
+        echo -e "${DIM}Current IP Pool: $pool_start - $pool_end [$pool_status]${NC}"
+        echo ""
+
+        choice=$(menu_select "Network Configuration" "Select option:" \
             "1" "Configure IP Pool (automatic allocation)" \
             "2" "Configure interfaces manually" \
             "3" "View current configuration" \
-            "4" "Back to main menu" \
-            3>&1 1>&2 2>&3)
-        status=$?
-        set -e
-
-        [[ $status -ne 0 ]] && break
+            "4" "Back to main menu") || break
 
         case "$choice" in
             1) configure_ip_pool ;;

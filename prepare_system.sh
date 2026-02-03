@@ -1,4 +1,6 @@
 #!/bin/bash
+# Prepare system for xiNAS installation
+# Uses colored console menus
 set -e
 
 usage() {
@@ -19,13 +21,26 @@ while getopts "ehu" opt; do
     esac
 done
 
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+echo -e "${CYAN}xiNAS System Preparation${NC}"
+echo ""
+
 # Install required packages unless only updating the repository
 if [ "$UPDATE_ONLY" -eq 0 ]; then
+    echo -e "${YELLOW}Installing required packages...${NC}"
     sudo apt-get update -y
-    sudo apt-get install -y ansible git whiptail dialog wget
+    sudo apt-get install -y ansible git dialog wget
     # Install yq v4 for YAML processing used by configuration scripts
+    echo -e "${YELLOW}Installing yq...${NC}"
     sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
     sudo chmod +x /usr/local/bin/yq
+    echo -e "${GREEN}Packages installed successfully${NC}"
 fi
 
 REPO_URL="https://github.com/XinnorLab/xiNAS/"
@@ -36,6 +51,7 @@ if [ -f "ansible.cfg" ] && [ -d "playbooks" ]; then
     REPO_DIR="$(pwd)"
 else
     if [ ! -d "$REPO_DIR" ]; then
+        echo -e "${YELLOW}Cloning xiNAS repository...${NC}"
         git clone "$REPO_URL" "$REPO_DIR"
     fi
     cd "$REPO_DIR"
@@ -43,19 +59,37 @@ fi
 
 # If only updating the repository, perform the update and exit
 if [ "$UPDATE_ONLY" -eq 1 ]; then
+    echo -e "${YELLOW}Updating repository...${NC}"
     git reset --hard
     git pull origin main
+    echo -e "${GREEN}Repository updated${NC}"
     exit 0
 fi
 
 # Ensure the hardware key utility is executable
 [ -x ./hwkey ] || chmod +x ./hwkey
 
-# In expert mode allow updating the repository from GitHub
-if [ "$EXPERT" -eq 1 ]; then
-    if whiptail --yesno "Update xiNAS code from GitHub?" 8 60; then
-        git reset --hard
-        git pull origin main
+# Source the menu library if available
+if [ -f "lib/menu_lib.sh" ]; then
+    source "lib/menu_lib.sh"
+
+    # In expert mode allow updating the repository from GitHub
+    if [ "$EXPERT" -eq 1 ]; then
+        if yes_no "Update Repository" "Update xiNAS code from GitHub?"; then
+            git reset --hard
+            git pull origin main
+            msg_box "Updated" "Repository updated successfully"
+        fi
+    fi
+else
+    # Fallback to simple prompt if menu library not available
+    if [ "$EXPERT" -eq 1 ]; then
+        echo -e "${YELLOW}Update xiNAS code from GitHub? (y/n)${NC}"
+        read -r response
+        if [[ "$response" =~ ^[Yy] ]]; then
+            git reset --hard
+            git pull origin main
+        fi
     fi
 fi
 

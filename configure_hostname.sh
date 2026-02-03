@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Interactive helper to configure system hostname for xiNAS
+# Uses colored console menus
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/menu_lib.sh"
 
 backup_if_changed() {
     local file="$1" newfile="$2" ts
@@ -34,7 +38,7 @@ update_hosts_file() {
 
 vars_file="collection/roles/common/defaults/main.yml"
 
-for cmd in yq whiptail; do
+for cmd in yq; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "Error: required command '$cmd' not found. Please run prepare_system.sh or install it manually." >&2
         exit 1
@@ -54,15 +58,12 @@ if [ -z "$current" ]; then
 fi
 
 while true; do
-    set +e
-    name=$(whiptail --inputbox "Hostname" 8 60 "$current" 3>&1 1>&2 2>&3)
-    status=$?
-    set -e
-    [ $status -ne 0 ] && exit 0
+    name=$(input_box "Set Hostname" "Enter the hostname for this system:\n\nFormat: letters, numbers, and hyphens\nMust start with a letter or number" "$current") || exit 0
+
     if valid_hostname "$name"; then
         break
     else
-        whiptail --msgbox "Invalid hostname format" 8 60
+        msg_box "Invalid Hostname" "Invalid hostname format.\n\nHostname must:\n- Start with a letter or number\n- Contain only letters, numbers, and hyphens\n- Be 1-63 characters long"
         current="$name"
     fi
 done
@@ -74,5 +75,4 @@ mv "$tmp" "$vars_file"
 
 update_hosts_file "$name"
 
-whiptail --msgbox "Hostname set to $name" 8 60
-
+msg_box "Hostname Set" "Hostname set to: $name"

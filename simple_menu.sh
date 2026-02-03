@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Simplified startup menu for xiNAS
+# Uses colored console menus instead of whiptail
 set -euo pipefail
 TMP_DIR="$(mktemp -d)"
 REPO_DIR="$(pwd)"
-# Path to whiptail if available
-WHIPTAIL=$(command -v whiptail || true)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 trap 'rm -rf "$TMP_DIR"' EXIT
+
+# Source the menu library
+source "$SCRIPT_DIR/lib/menu_lib.sh"
 
 # Update check
 UPDATE_AVAILABLE=""
@@ -27,29 +30,19 @@ check_for_updates() {
 
 do_update() {
     if ! command -v git &>/dev/null; then
-        whiptail --title "Error" --msgbox "Git is not installed." 8 40
+        msg_box "Error" "Git is not installed."
         return 1
     fi
-    whiptail --title "Updating..." --infobox "Pulling latest changes..." 6 40
+    info_box "Updating..." "Pulling latest changes..."
     if git -C "$REPO_DIR" pull origin main 2>"$TMP_DIR/update.log"; then
         UPDATE_AVAILABLE=""
-        whiptail --title "✅ Updated" --msgbox "xiNAS updated!\n\nRestart the menu to use new version." 10 45
+        msg_box "Updated" "xiNAS updated!\n\nRestart the menu to use new version."
     else
-        whiptail --title "❌ Failed" --msgbox "Update failed:\n\n$(cat "$TMP_DIR/update.log")" 12 55
+        msg_box "Failed" "Update failed:\n\n$(cat "$TMP_DIR/update.log")"
     fi
 }
 
 check_for_updates &
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-DIM='\033[2m'
-NC='\033[0m'
 
 # Show branded header
 show_header() {
@@ -74,7 +67,7 @@ EOF
 check_license() {
     local license_file="/tmp/license"
     if [ ! -f "$license_file" ]; then
-        whiptail --msgbox "License file $license_file not found. Please run 'Enter License' first." 10 60
+        msg_box "License Required" "License file $license_file not found.\nPlease run 'Enter License' first."
         return 1
     fi
     return 0
@@ -94,7 +87,7 @@ enter_license() {
 
     local ts=""
     if [ -f "$license_file" ]; then
-        if whiptail --yesno "License already exists. Replace it?" 10 60; then
+        if yes_no "License Exists" "License already exists. Replace it?"; then
             replace=1
             ts=$(date +%Y%m%d%H%M%S)
         else
@@ -103,7 +96,7 @@ enter_license() {
     fi
 
     hwkey_val=$(./hwkey 2>/dev/null | tr -d '\n' | tr '[:lower:]' '[:upper:]')
-    whiptail --title "Hardware Key" --msgbox "HWKEY: ${hwkey_val}\nRequest your license key from xiNNOR Support." 10 60
+    msg_box "Hardware Key" "HWKEY: ${hwkey_val}\n\nRequest your license key from xiNNOR Support."
 
     : > "$TMP_DIR/license_tmp"
     if command -v dialog >/dev/null 2>&1; then
@@ -113,7 +106,7 @@ enter_license() {
             return 0
         fi
     else
-        whiptail --title "Enter License" --msgbox "Paste license in the terminal. End with Ctrl-D." 10 60
+        msg_box "Enter License" "Paste license in the terminal. End with Ctrl-D."
         cat >>"$TMP_DIR/license"
     fi
     if [ $replace -eq 1 ]; then
@@ -140,19 +133,14 @@ check_remove_xiraid() {
     if [ -z "$pkgs" ]; then
         sudo apt-get autoremove -y -qq --allow-change-held-packages >"$log" 2>&1 || true
         if [ -s "$log" ]; then
-            msg="Obsolete packages removed"
-            if [ -n "$WHIPTAIL" ]; then
-                whiptail --msgbox "$msg" 8 60
-            else
-                echo "$msg"
-            fi
+            msg_box "Cleanup" "Obsolete packages removed"
             rm -f "$log"
         fi
         return 0
     fi
 
     found=$(echo "$pkgs" | tr '\n' ' ')
-    if ! whiptail --yesno "Found installed xiRAID packages:\n${found}\nRemove them before running Ansible?" 12 70; then
+    if ! yes_no "xiRAID Packages" "Found installed xiRAID packages:\n${found}\n\nRemove them before running Ansible?"; then
         return 1
     fi
 
@@ -163,23 +151,19 @@ check_remove_xiraid() {
     else
         msg="Errors occurred during removal. See $log for details"
     fi
-    if [ -n "$WHIPTAIL" ]; then
-        whiptail --msgbox "$msg" 8 60
-    else
-        echo "$msg"
-    fi
+    msg_box "Removal Complete" "$msg"
     rm -f "$log"
     return 0
 }
 
 confirm_playbook() {
-    whiptail --yesno "Run Ansible playbook to configure the system?" 8 60
+    yes_no "Run Playbook" "Run Ansible playbook to configure the system?"
 }
 
 apply_preset() {
     local preset="$1"
     local pdir="$REPO_DIR/presets/$preset"
-    [ -d "$pdir" ] || { whiptail --msgbox "Preset $preset not found" 8 60; return; }
+    [ -d "$pdir" ] || { msg_box "Error" "Preset $preset not found"; return; }
     local msg="Applying preset: $preset\n"
     if [ -f "$pdir/network.yml" ]; then
         cp "$pdir/network.yml" "collection/roles/net_controllers/defaults/main.yml"
@@ -201,24 +185,24 @@ apply_preset() {
         cp "$pdir/playbook.yml" "playbooks/site.yml"
         msg+="- playbook updated\n"
     fi
-    whiptail --msgbox "$msg" 15 70
+    msg_box "Preset Applied" "$msg"
 }
 
 choose_preset() {
     local preset_dir="$REPO_DIR/presets"
-    [ -d "$preset_dir" ] || { whiptail --msgbox "No presets available" 8 60; return; }
-    local items=()
+    [ -d "$preset_dir" ] || { msg_box "No Presets" "No presets available"; return; }
+    local -a items=()
     for d in "$preset_dir"/*/; do
         [ -d "$d" ] || continue
-        items+=("$(basename "$d")" "")
+        items+=("$(basename "$d")" "Preset configuration")
     done
-    items+=("Back" "Return")
-    set +e
+    items+=("Back" "Return to main menu")
+
+    show_header
     local choice
-    choice=$(whiptail --title "Presets" --menu "Select preset:" 20 70 10 "${items[@]}" 3>&1 1>&2 2>&3)
-    local status=$?
-    set -e
-    if [ $status -ne 0 ] || [ "$choice" = "Back" ]; then
+    choice=$(menu_select "Presets" "Select preset:" "${items[@]}") || return
+
+    if [ "$choice" = "Back" ]; then
         return
     fi
     apply_preset "$choice"
@@ -261,6 +245,8 @@ show_header
 show_welcome
 
 while true; do
+    show_header
+
     # Build dynamic menu based on license and update status
     if has_license; then
         license_text="🔑 Enter License ✓ Licensed"
@@ -270,28 +256,26 @@ while true; do
         install_text="🚀 Install (License required)"
     fi
 
-    update_status=""
     update_text="🔄 Check for Updates"
     if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-        update_status=" | 📦 Update!"
         update_text="🔄 Update Available ⬆️"
     fi
 
-    choice=$(whiptail --title "═══ xiNAS Setup ═══" --nocancel --menu "\
-  Welcome! Let's set up your storage system.
-  ─────────────────────────────────────────────
+    # Show status line
+    echo -e "  ${WHITE}Status:${NC} $(has_license && echo "${GREEN}✅ License OK${NC}" || echo "${RED}❌ No License${NC}")"
+    if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+        echo -e "         ${YELLOW}📦 Update available!${NC}"
+    fi
+    echo ""
 
-  Status: $(has_license && echo '✅ License OK' || echo '❌ No License')$update_status
-
-  Select an option:" 22 60 7 \
+    choice=$(menu_select "xiNAS Setup" "Select an option:" \
         "1" "📊 Collect System Data" \
         "2" "$license_text" \
         "3" "🌐 Configure Network" \
         "4" "📦 Choose Preset" \
         "5" "$install_text" \
         "6" "$update_text" \
-        "7" "🚪 Exit" \
-        3>&1 1>&2 2>&3)
+        "7" "🚪 Exit") || { echo ""; exit 2; }
 
     case "$choice" in
         1) ./collect_data.sh ;;
@@ -300,19 +284,7 @@ while true; do
         4) choose_preset ;;
         5)
             if ! has_license; then
-                whiptail --title "⚠️ License Required" --msgbox "\
-   Oops! You need a license to continue.
-
-   ┌─────────────────────────────────────────┐
-   │  Please complete step 2 first:          │
-   │                                         │
-   │  🔑 Enter License                       │
-   │                                         │
-   │  Contact: support@xinnor.io             │
-   └─────────────────────────────────────────┘
-
-   We're excited to have you on board! 🎉
-" 16 50
+                msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 2 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
                 continue
             fi
             if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
@@ -326,30 +298,23 @@ while true; do
             ;;
         6)
             if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-                if whiptail --title "📦 Update Available" --yesno "Update xiNAS now?" 8 35; then
+                if yes_no "Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?"; then
                     do_update
                 fi
             else
-                whiptail --title "Checking..." --infobox "Checking for updates..." 6 35
+                info_box "Checking..." "Checking for updates..."
                 check_for_updates
                 if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-                    if whiptail --title "📦 Update" --yesno "Update found! Install?" 8 35; then
+                    if yes_no "Update Found" "Update found! Install now?"; then
                         do_update
                     fi
                 else
-                    whiptail --title "✅ Up to Date" --msgbox "Already up to date!" 8 30
+                    msg_box "Up to Date" "xiNAS is already up to date!"
                 fi
             fi
             ;;
         7)
-            whiptail --title "👋 See you soon!" --msgbox "\
-   Thank you for choosing xiNAS!
-
-   Run this menu again anytime:
-   ./simple_menu.sh
-
-   Questions? support@xinnor.io
-" 12 45
+            msg_box "See you soon!" "Thank you for choosing xiNAS!\n\nRun this menu again anytime:\n./simple_menu.sh\n\nQuestions? support@xinnor.io"
             exit 2
             ;;
     esac

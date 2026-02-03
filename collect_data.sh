@@ -1,19 +1,10 @@
 #!/usr/bin/env bash
 # Collect system data and upload via transfer.sh
+# Uses colored console prompts
 set -euo pipefail
 
-WHIPTAIL=$(command -v whiptail || true)
-
-ask_input() {
-    local prompt="$1" default="$2" result
-    if [ -n "$WHIPTAIL" ]; then
-        result=$(whiptail --inputbox "$prompt" 8 60 "$default" 3>&1 1>&2 2>&3) || return 1
-        echo "$result"
-    else
-        read -rp "$prompt [$default]: " result
-        echo "${result:-$default}"
-    fi
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/menu_lib.sh"
 
 main() {
     local cfg email tmp archive server
@@ -32,12 +23,14 @@ main() {
         esac
     done
 
-    cfg=$(ask_input "Enter config name" "config") || exit 1
-    email=$(ask_input "Enter your email" "user@example.com") || exit 1
+    cfg=$(input_box "Config Name" "Enter config name for this collection:" "config") || exit 1
+    email=$(input_box "Email" "Enter your email address:" "user@example.com") || exit 1
     tmp=$(mktemp -d)
 
     echo "Config name: $cfg" > "$tmp/info.txt"
     echo "Email: $email" >> "$tmp/info.txt"
+
+    info_box "Collecting Data" "Gathering system information..."
 
     lsblk -o NAME,SIZE,TYPE,MOUNTPOINT > "$tmp/lsblk.txt"
     cat /proc/mdstat > "$tmp/mdstat.txt" 2>/dev/null || true
@@ -62,12 +55,14 @@ main() {
 
     server=${TRANSFER_SERVER:-"http://178.253.23.152:8080"}
 
+    info_box "Uploading" "Uploading data to server..."
+
     if ! curl --fail --upload-file "$archive" "$server/$(basename "$archive")"; then
-        echo "Warning: transfer.sh upload failed" >&2
+        msg_warn "Transfer.sh upload failed"
     fi
 
     rm -rf "$tmp"
-    echo "Archive created: $archive"
+    msg_box "Collection Complete" "Archive created: $archive\n\nData has been collected and uploaded."
 }
 
 main "$@"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # xiNAS Post-Install Management Menu
-# Emotionally-designed interactive menu for daily NAS management
+# Colored console menu for daily NAS management
 # Run after each login for quick system management
 
 set -euo pipefail
@@ -10,6 +10,9 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 # Script directory for relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source the menu library
+source "$SCRIPT_DIR/lib/menu_lib.sh"
 
 # Update check
 UPDATE_AVAILABLE=""
@@ -31,30 +34,20 @@ check_for_updates() {
 
 do_update() {
     if ! command -v git &>/dev/null; then
-        whiptail --title "Error" --msgbox "Git is not installed." 8 40
+        msg_box "Error" "Git is not installed."
         return 1
     fi
-    whiptail --title "Updating..." --infobox "Pulling latest changes from origin/main..." 6 50
+    info_box "Updating..." "Pulling latest changes from origin/main..."
     if git -C "$SCRIPT_DIR" pull origin main 2>"$TMP_DIR/update.log"; then
         UPDATE_AVAILABLE=""
-        whiptail --title "✅ Update Complete" --msgbox "xiNAS has been updated!\n\nPlease restart the menu to use the new version." 10 50
+        msg_box "Update Complete" "xiNAS has been updated!\n\nPlease restart the menu to use the new version."
     else
-        whiptail --title "❌ Update Failed" --msgbox "Failed to update:\n\n$(cat "$TMP_DIR/update.log")" 12 60
+        msg_box "Update Failed" "Failed to update:\n\n$(cat "$TMP_DIR/update.log")"
     fi
 }
 
 # Run update check in background
 check_for_updates &
-
-# Colors for terminal output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-DIM='\033[2m'
-NC='\033[0m'
 
 # Show branded header
 show_header() {
@@ -82,13 +75,6 @@ if [[ ! -t 0 ]]; then
     exit 1
 fi
 
-# Check for whiptail
-if ! command -v whiptail &>/dev/null; then
-    echo -e "${RED}Error: whiptail is required${NC}"
-    echo "Install with: sudo apt-get install whiptail"
-    exit 1
-fi
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # RAID Information Functions
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -96,22 +82,14 @@ fi
 show_raid_info() {
     local extended="${1:-false}"
     local out="$TMP_DIR/raid_info"
-    local title="💾 RAID Arrays"
+    local title="RAID Arrays"
 
     if [[ "$extended" == "true" ]]; then
-        title="💾 RAID Arrays (Extended)"
+        title="RAID Arrays (Extended)"
     fi
 
     if ! command -v xicli &>/dev/null; then
-        whiptail --title "$title" --msgbox "\
-   ⚠️  xiRAID CLI not found
-
-   The xicli command is not installed.
-   Please ensure xiRAID is properly installed.
-
-   Run the installation playbook first:
-   ./startup_menu.sh → Install
-" 14 50
+        msg_box "$title" "xiRAID CLI not found\n\nThe xicli command is not installed.\nPlease ensure xiRAID is properly installed.\n\nRun the installation playbook first:\n./startup_menu.sh → Install"
         return
     fi
 
@@ -121,7 +99,7 @@ show_raid_info() {
     [[ "$extended" == "true" ]] && ext_flag="-e"
 
     if ! xicli raid show -f json $ext_flag > "$json_file" 2>&1; then
-        whiptail --title "$title" --msgbox "Failed to retrieve RAID information" 8 50
+        msg_box "$title" "Failed to retrieve RAID information"
         return
     fi
 
@@ -145,7 +123,7 @@ def visible_len(s):
     """Get visible terminal width of string"""
     return sum(char_width(c) for c in s)
 
-def line(content="", border="│"):
+def line(content="", border="|"):
     """Create a line with proper padding to align right border"""
     vlen = visible_len(content)
     padding = W - vlen
@@ -154,21 +132,21 @@ def line(content="", border="│"):
         padding = 0
     return f"{border} {content}{' ' * padding}{border}"
 
-def separator(char="─", left="├", right="┤"):
+def separator(char="-", left="+", right="+"):
     return f"{left}{char * (W + 1)}{right}"
 
 def progress_bar(percent, width=30):
     filled = int(percent * width / 100)
     empty = width - filled
-    return f"[{'█' * filled}{'░' * empty}] {percent:3d}%"
+    return f"[{'#' * filled}{'.' * empty}] {percent:3d}%"
 
 def format_state(state_list):
     if not state_list:
         return "unknown"
     states = state_list if isinstance(state_list, list) else [state_list]
     icons = {
-        "online": "✓", "initialized": "✓", "initing": "⟳",
-        "degraded": "⚠", "rebuilding": "⟳", "offline": "✗", "failed": "✗"
+        "online": "*", "initialized": "*", "initing": "~",
+        "degraded": "!", "rebuilding": "~", "offline": "x", "failed": "x"
     }
     return " ".join(f"{icons.get(s.lower(), '•')} {s}" for s in states)
 
@@ -196,12 +174,12 @@ try:
         sys.exit(0)
 
     # Header
-    print(f"╔{'═' * (W + 1)}╗")
-    title = "💾  RAID ARRAY STATUS"
+    print(f"+{'=' * (W + 1)}+")
+    title = "  RAID ARRAY STATUS"
     title_width = visible_len(title)
     pad = (W - title_width) // 2
-    print(f"║{' ' * pad}{title}{' ' * (W - pad - title_width + 1)}║")
-    print(f"╚{'═' * (W + 1)}╝")
+    print(f"|{' ' * pad}{title}{' ' * (W - pad - title_width + 1)}|")
+    print(f"+{'=' * (W + 1)}+")
     print()
 
     for name, arr in data.items():
@@ -229,25 +207,25 @@ try:
         dev_summary = " | ".join(dev_parts)
 
         # Array box
-        print(f"┌{'─' * (W + 1)}┐")
+        print(f"+{'-' * (W + 1)}+")
         print(line(f" Array: {name.upper()}"))
         print(separator())
         print(line())
-        print(line(f"  RAID Level    │  RAID-{level}"))
-        print(line(f"  Capacity      │  {size}"))
-        print(line(f"  Status        │  {state_str}"))
-        print(line(f"  Devices       │  {dev_summary}"))
-        print(line(f"  Strip Size    │  {strip_size} KB"))
-        print(line(f"  Spare Pool    │  {sparepool}"))
+        print(line(f"  RAID Level    |  RAID-{level}"))
+        print(line(f"  Capacity      |  {size}"))
+        print(line(f"  Status        |  {state_str}"))
+        print(line(f"  Devices       |  {dev_summary}"))
+        print(line(f"  Strip Size    |  {strip_size} KB"))
+        print(line(f"  Spare Pool    |  {sparepool}"))
 
         if init_progress is not None and is_initing:
             print(line())
-            print(line(f"  ⟳ Initializing: {progress_bar(init_progress)}"))
+            print(line(f"  ~ Initializing: {progress_bar(init_progress)}"))
 
         if extended:
             print(line())
-            print(line(f"  Memory Usage  │  {memory_mb} MB"))
-            print(line(f"  Block Size    │  {block_size} bytes"))
+            print(line(f"  Memory Usage  |  {memory_mb} MB"))
+            print(line(f"  Block Size    |  {block_size} bytes"))
 
             health = arr.get("devices_health")
             wear = arr.get("devices_wear")
@@ -261,27 +239,27 @@ try:
                     dev_state = dev[2][0] if dev[2] else "?"
                     h = health[i] if health and i < len(health) else "N/A"
                     w = wear[i] if wear and i < len(wear) else "N/A"
-                    icon = "●" if dev_state.lower() == "online" else "○"
+                    icon = "*" if dev_state.lower() == "online" else "o"
                     print(line(f"  {icon} {dev_path:<14} Health: {h:<6} Wear: {w}"))
 
         print(line())
-        print(f"└{'─' * (W + 1)}┘")
+        print(f"+{'-' * (W + 1)}+")
         print()
 
     # Summary
     total_arrays = len(data)
     healthy = sum(1 for a in data.values()
                   if all(s.lower() in ["online", "initialized"] for s in a.get("state", [])))
-    print(f"{'━' * (W + 3)}")
+    print(f"{'=' * (W + 3)}")
     print(f"  Summary: {total_arrays} array(s), {healthy} healthy")
-    print(f"{'━' * (W + 3)}")
+    print(f"{'=' * (W + 3)}")
 
 except Exception as e:
     print(f"Error parsing RAID data: {e}")
     sys.exit(1)
 PYEOF
 
-    whiptail --title "$title" --scrolltext --textbox "$out" 30 82
+    text_box "$title" "$out"
 }
 
 show_physical_drives() {
@@ -503,15 +481,13 @@ raid_menu() {
     local choice
     local out
     while true; do
-        choice=$(whiptail --title "═══ 💾 RAID Management ═══" --menu "\
-  View and manage your storage arrays
-  ─────────────────────────────────────────────" 18 60 5 \
-            "1" "📊 Quick Overview" \
-            "2" "📋 Extended Details (-e)" \
-            "3" "💿 Physical Drives" \
-            "4" "🏊 Spare Pools" \
-            "5" "🔙 Back" \
-            3>&1 1>&2 2>&3) || break
+        show_header
+        choice=$(menu_select "RAID Management" "View and manage your storage arrays" \
+            "1" "Quick Overview" \
+            "2" "Extended Details (-e)" \
+            "3" "Physical Drives" \
+            "4" "Spare Pools" \
+            "5" "Back") || break
 
         case "$choice" in
             1) show_raid_info "false" ;;
@@ -519,12 +495,12 @@ raid_menu() {
             3)
                 out="$TMP_DIR/drives"
                 show_physical_drives > "$out"
-                whiptail --title "💿 Physical Drives" --scrolltext --textbox "$out" 24 80
+                text_box "Physical Drives" "$out"
                 ;;
             4)
                 out="$TMP_DIR/pools"
                 show_spare_pools > "$out"
-                whiptail --title "🏊 Spare Pools" --scrolltext --textbox "$out" 20 70
+                text_box "Spare Pools" "$out"
                 ;;
             5) break ;;
         esac
@@ -743,7 +719,7 @@ print()
 print("=" * 72)
 PYEOF
 
-    whiptail --title "Network Information" --scrolltext --textbox "$out" 28 78
+    text_box "Network Information" "$out"
 }
 
 edit_interface_ip() {
@@ -758,13 +734,13 @@ edit_interface_ip() {
     fi
 
     if [[ ! -f "$netplan_file" ]]; then
-        whiptail --title "No Config" --msgbox "No netplan configuration found.\n\nRun the initial setup first." 10 50
+        msg_box "No Config" "No netplan configuration found.\n\nRun the initial setup first."
         return
     fi
 
     # Get list of interfaces from the system
-    local ifaces=()
-    local menu_items=()
+    local -a ifaces=()
+    local -a menu_items=()
 
     for iface_path in /sys/class/net/*; do
         [[ -d "$iface_path" ]] || continue
@@ -794,22 +770,19 @@ edit_interface_ip() {
     done
 
     if [[ ${#ifaces[@]} -eq 0 ]]; then
-        whiptail --title "No Interfaces" --msgbox "No network interfaces found." 8 45
+        msg_box "No Interfaces" "No network interfaces found."
         return
     fi
 
-    menu_items+=("" "")
     menu_items+=("Done" "Finish and apply changes")
 
     local changes_made=false
 
     while true; do
+        show_header
         local choice
-        choice=$(whiptail --title "Edit Interface IP" --menu "\
-Select interface to configure:
-
-Current netplan: $netplan_file" 20 65 10 \
-            "${menu_items[@]}" 3>&1 1>&2 2>&3) || break
+        choice=$(menu_select "Edit Interface IP" "Select interface to configure:\n\nCurrent netplan: $netplan_file" \
+            "${menu_items[@]}") || break
 
         [[ "$choice" == "Done" ]] && break
         [[ -z "$choice" ]] && continue
@@ -820,19 +793,13 @@ Current netplan: $netplan_file" 20 65 10 \
         [[ -z "$current_ip" ]] && current_ip="10.10.1.1/24"
 
         local new_ip
-        new_ip=$(whiptail --title "Configure $choice" --inputbox "\
-Enter IPv4 address with prefix:
-
-Current: $current_ip
-Format:  X.X.X.X/prefix (e.g., 192.168.1.100/24)
-
-Leave empty to skip this interface." 14 55 "$current_ip" 3>&1 1>&2 2>&3) || continue
+        new_ip=$(input_box "Configure $choice" "Enter IPv4 address with prefix:\n\nCurrent: $current_ip\nFormat:  X.X.X.X/prefix (e.g., 192.168.1.100/24)\n\nLeave empty to skip this interface." "$current_ip") || continue
 
         [[ -z "$new_ip" ]] && continue
 
         # Validate IP/CIDR format
         if [[ ! "$new_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; then
-            whiptail --title "Invalid Format" --msgbox "Invalid IP format.\n\nUse: X.X.X.X/prefix (e.g., 192.168.1.100/24)" 10 50
+            msg_box "Invalid Format" "Invalid IP format.\n\nUse: X.X.X.X/prefix (e.g., 192.168.1.100/24)"
             continue
         fi
 
@@ -918,29 +885,20 @@ PYEOF
 
                 menu_items+=("$name" "[$state] $ip_show ($speed_str)")
             done
-            menu_items+=("" "")
             menu_items+=("Done" "Finish and apply changes")
 
-            whiptail --title "Updated" --msgbox "Interface $choice configured:\n\nIP: $new_ip\n\nSelect 'Done' to apply changes." 12 50
+            msg_box "Updated" "Interface $choice configured:\n\nIP: $new_ip\n\nSelect 'Done' to apply changes."
         fi
         rm -f "$tmp_file"
     done
 
     # Apply changes if any were made
     if [[ "$changes_made" == "true" ]]; then
-        if whiptail --title "Apply Changes" --yesno "\
-Network configuration has been updated.
-
-Apply changes now?
-
-This will run 'netplan apply' to activate
-the new IP addresses.
-
-Active connections may be briefly interrupted." 14 55; then
+        if yes_no "Apply Changes" "Network configuration has been updated.\n\nApply changes now?\n\nThis will run 'netplan apply' to activate\nthe new IP addresses.\n\nActive connections may be briefly interrupted."; then
             if sudo netplan apply 2>&1; then
-                whiptail --title "Success" --msgbox "Network configuration applied!\n\nNew settings are now active." 10 50
+                msg_box "Success" "Network configuration applied!\n\nNew settings are now active."
             else
-                whiptail --title "Error" --msgbox "Failed to apply network configuration.\n\nCheck: sudo netplan try" 10 50
+                msg_box "Error" "Failed to apply network configuration.\n\nCheck: sudo netplan try"
             fi
         fi
     fi
@@ -950,32 +908,23 @@ network_menu() {
     local choice
     local netplan_file
     while true; do
-        choice=$(whiptail --title "Network Settings" --menu "\
-  Configure network interfaces
-  ─────────────────────────────────────────────" 18 60 5 \
+        show_header
+        choice=$(menu_select "Network Settings" "Configure network interfaces" \
             "1" "View Current Configuration" \
             "2" "Edit Interface IP Address" \
             "3" "Apply Network Changes" \
             "4" "View Netplan Config File" \
-            "5" "Back" \
-            3>&1 1>&2 2>&3) || break
+            "5" "Back") || break
 
         case "$choice" in
             1) show_network_info ;;
             2) edit_interface_ip ;;
             3)
-                if whiptail --title "Apply Changes" --yesno "\
-   Apply network configuration?
-
-   This will run 'netplan apply' to activate
-   any changes to the network settings.
-
-   Active connections may be briefly interrupted.
-" 14 55; then
+                if yes_no "Apply Changes" "Apply network configuration?\n\nThis will run 'netplan apply' to activate\nany changes to the network settings.\n\nActive connections may be briefly interrupted."; then
                     if sudo netplan apply 2>/dev/null; then
-                        whiptail --title "Success" --msgbox "Network configuration applied successfully!" 8 50
+                        msg_box "Success" "Network configuration applied successfully!"
                     else
-                        whiptail --title "Error" --msgbox "Failed to apply network configuration.\nCheck /var/log/syslog for details." 10 55
+                        msg_box "Error" "Failed to apply network configuration.\nCheck /var/log/syslog for details."
                     fi
                 fi
                 ;;
@@ -985,9 +934,9 @@ network_menu() {
                     [[ -f "$f" ]] && { netplan_file="$f"; break; }
                 done
                 if [[ -n "$netplan_file" && -f "$netplan_file" ]]; then
-                    whiptail --title "Netplan: $netplan_file" --scrolltext --textbox "$netplan_file" 24 78
+                    text_box "Netplan: $netplan_file" "$netplan_file"
                 else
-                    whiptail --title "Netplan" --msgbox "No netplan configuration found." 8 45
+                    msg_box "Netplan" "No netplan configuration found."
                 fi
                 ;;
             5) break ;;
@@ -1204,18 +1153,14 @@ print()
 print("=" * 65)
 PYEOF
 
-    whiptail --title "NFS Shared Folders" --scrolltext --textbox "$out" 28 70
+    text_box "NFS Shared Folders" "$out"
 }
 
 edit_nfs_share() {
     local exports_file="/etc/exports"
 
     if [[ ! -f "$exports_file" ]]; then
-        whiptail --title "No Shares" --msgbox "\
-No shared folders configured yet.
-
-Run the installation wizard first to create
-shared folders on your NAS." 10 50
+        msg_box "No Shares" "No shared folders configured yet.\n\nRun the installation wizard first to create\nshared folders on your NAS."
         return
     fi
 
@@ -1223,12 +1168,12 @@ shared folders on your NAS." 10 50
     mapfile -t paths < <(awk '!/^#/ && NF {print $1}' "$exports_file" 2>/dev/null)
 
     if [[ ${#paths[@]} -eq 0 ]]; then
-        whiptail --title "No Shares" --msgbox "No shared folders found." 8 40
+        msg_box "No Shares" "No shared folders found."
         return
     fi
 
     # Build menu with friendly descriptions
-    local menu_items=()
+    local -a menu_items=()
     for path in "${paths[@]}"; do
         local desc
         if [[ -d "$path" ]]; then
@@ -1240,13 +1185,10 @@ shared folders on your NAS." 10 50
     done
 
     # Select share to edit
+    show_header
     local share_path
-    share_path=$(whiptail --title "Select Shared Folder" --menu "\
-Choose a folder to change access settings:
-
-These are the folders that other hosts
-can connect to over the network." 18 60 8 \
-        "${menu_items[@]}" 3>&1 1>&2 2>&3) || return
+    share_path=$(menu_select "Select Shared Folder" "Choose a folder to change access settings:\n\nThese are the folders that other hosts\ncan connect to over the network." \
+        "${menu_items[@]}") || return
 
     # Get current settings
     local current_line
@@ -1270,16 +1212,12 @@ can connect to over the network." 18 60 8 \
     fi
 
     # Step 1: Who can access?
+    show_header
     local access_choice
-    access_choice=$(whiptail --title "Step 1: Who Can Access?" --menu "\
-Who should be able to connect to:
-$share_path
-
-Choose who can access this folder:" 18 60 5 \
+    access_choice=$(menu_select "Step 1: Who Can Access?" "Who should be able to connect to:\n$share_path\n\nChoose who can access this folder:" \
         "1" "Everyone (any host on the network)" \
         "2" "Specific network (e.g., 192.168.1.0/24)" \
-        "3" "Single host (by IP address)" \
-        3>&1 1>&2 2>&3) || return
+        "3" "Single host (by IP address)") || return
 
     local new_host
     case "$access_choice" in
@@ -1287,36 +1225,21 @@ Choose who can access this folder:" 18 60 5 \
             new_host="*"
             ;;
         2)
-            new_host=$(whiptail --title "Enter Network Address" --inputbox "\
-Enter the network address:
-
-Example: 192.168.1.0/24
-This allows all hosts from 192.168.1.1 to 192.168.1.254
-
-Format: X.X.X.0/24" 14 55 "192.168.1.0/24" 3>&1 1>&2 2>&3) || return
+            new_host=$(input_box "Enter Network Address" "Enter the network address:\n\nExample: 192.168.1.0/24\nThis allows all hosts from 192.168.1.1 to 192.168.1.254\n\nFormat: X.X.X.0/24" "192.168.1.0/24") || return
             [[ -z "$new_host" ]] && new_host="*"
             ;;
         3)
-            new_host=$(whiptail --title "Enter Computer IP" --inputbox "\
-Enter the IP address of the host:
-
-Example: 192.168.1.100
-
-Only this host will be able to connect." 12 55 "" 3>&1 1>&2 2>&3) || return
+            new_host=$(input_box "Enter Computer IP" "Enter the IP address of the host:\n\nExample: 192.168.1.100\n\nOnly this host will be able to connect.") || return
             [[ -z "$new_host" ]] && new_host="*"
             ;;
     esac
 
     # Step 2: Read or Read-Write?
+    show_header
     local perm_choice
-    perm_choice=$(whiptail --title "Step 2: Access Permissions" --menu "\
-What can connected hosts do?
-
-Share: $share_path
-Access: $new_host" 16 60 3 \
+    perm_choice=$(menu_select "Step 2: Access Permissions" "What can connected hosts do?\n\nShare: $share_path\nAccess: $new_host" \
         "1" "Read & Write (can add, edit, delete files)" \
-        "2" "Read Only (can only view files)" \
-        3>&1 1>&2 2>&3) || return
+        "2" "Read Only (can only view files)") || return
 
     local new_rw
     case "$perm_choice" in
@@ -1325,17 +1248,11 @@ Access: $new_host" 16 60 3 \
     esac
 
     # Step 3: Admin access?
+    show_header
     local admin_choice
-    admin_choice=$(whiptail --title "Step 3: Admin Access" --menu "\
-Allow full administrator access?
-
-If enabled, remote admin users have full control
-over files (same as local root user).
-
-Recommended: Yes for trusted networks" 16 60 2 \
+    admin_choice=$(menu_select "Step 3: Admin Access" "Allow full administrator access?\n\nIf enabled, remote admin users have full control\nover files (same as local root user).\n\nRecommended: Yes for trusted networks" \
         "1" "Yes - Full admin access (recommended)" \
-        "2" "No - Limited access (more secure)" \
-        3>&1 1>&2 2>&3) || return
+        "2" "No - Limited access (more secure)") || return
 
     local new_root
     case "$admin_choice" in
@@ -1377,16 +1294,7 @@ Recommended: Yes for trusted networks" 16 60 2 \
     local host_desc="$new_host"
     [[ "$new_host" == "*" ]] && host_desc="Everyone"
 
-    if whiptail --title "Confirm Changes" --yesno "\
-Please review your settings:
-
-Shared Folder: $share_path
-
-Who can access:   $host_desc
-Permissions:      $perm_desc
-Admin access:     $admin_desc
-
-Apply these settings?" 16 55; then
+    if yes_no "Confirm Changes" "Please review your settings:\n\nShared Folder: $share_path\n\nWho can access:   $host_desc\nPermissions:      $perm_desc\nAdmin access:     $admin_desc\n\nApply these settings?"; then
 
         # Create backup
         local ts
@@ -1398,22 +1306,9 @@ Apply these settings?" 16 55; then
 
         # Apply changes
         if sudo exportfs -ra 2>/dev/null; then
-            whiptail --title "Success!" --msgbox "\
-Settings updated successfully!
-
-Folder: $share_path
-Access: $host_desc ($perm_desc)
-
-Changes are now active. Computers can
-connect using this address:
-
-  $share_path" 14 55
+            msg_box "Success!" "Settings updated successfully!\n\nFolder: $share_path\nAccess: $host_desc ($perm_desc)\n\nChanges are now active. Computers can\nconnect using this address:\n\n  $share_path"
         else
-            whiptail --title "Warning" --msgbox "\
-Settings saved but could not activate.
-
-Please check /etc/exports for errors
-or restart the NFS service." 10 50
+            msg_box "Warning" "Settings saved but could not activate.\n\nPlease check /etc/exports for errors\nor restart the NFS service."
         fi
     fi
 }
@@ -1424,25 +1319,15 @@ add_nfs_share() {
 
     # Step 1: Enter folder path
     local share_path
-    share_path=$(whiptail --title "Add New Shared Folder - Step 1" --inputbox "\
-Enter the folder path to share:
-
-This is the folder on this server that other
-hosts will be able to access.
-
-Example: /mnt/data/shared" 14 55 "/mnt/data/" 3>&1 1>&2 2>&3) || return
+    share_path=$(input_box "Add New Shared Folder - Step 1" "Enter the folder path to share:\n\nThis is the folder on this server that other\nhosts will be able to access.\n\nExample: /mnt/data/shared" "/mnt/data/") || return
 
     [[ -z "$share_path" ]] && return
 
     # Check if path exists
     if [[ ! -d "$share_path" ]]; then
-        if whiptail --title "Folder Not Found" --yesno "\
-The folder does not exist:
-$share_path
-
-Would you like to create it?" 10 50; then
+        if yes_no "Folder Not Found" "The folder does not exist:\n$share_path\n\nWould you like to create it?"; then
             if ! sudo mkdir -p "$share_path" 2>/dev/null; then
-                whiptail --title "Error" --msgbox "Could not create folder." 8 40
+                msg_box "Error" "Could not create folder."
                 return
             fi
         else
@@ -1452,23 +1337,17 @@ Would you like to create it?" 10 50; then
 
     # Check if already shared
     if grep -q "^${share_path}[[:space:]]" "$exports_file" 2>/dev/null; then
-        whiptail --title "Already Shared" --msgbox "\
-This folder is already being shared.
-
-Use 'Edit Share Settings' to modify it." 10 50
+        msg_box "Already Shared" "This folder is already being shared.\n\nUse 'Edit Share Settings' to modify it."
         return
     fi
 
     # Step 2: Who can access?
+    show_header
     local access_choice
-    access_choice=$(whiptail --title "Add New Share - Step 2" --menu "\
-Who should be able to access this folder?
-
-Folder: $share_path" 16 60 4 \
+    access_choice=$(menu_select "Add New Share - Step 2" "Who should be able to access this folder?\n\nFolder: $share_path" \
         "1" "Everyone (any host)" \
         "2" "Specific network (recommended)" \
-        "3" "Single host only" \
-        3>&1 1>&2 2>&3) || return
+        "3" "Single host only") || return
 
     local new_host
     case "$access_choice" in
@@ -1476,24 +1355,21 @@ Folder: $share_path" 16 60 4 \
             new_host="*"
             ;;
         2)
-            new_host=$(whiptail --title "Network Address" --inputbox "\
-Enter network address (e.g., 192.168.1.0/24):" 10 55 "192.168.1.0/24" 3>&1 1>&2 2>&3) || return
+            new_host=$(input_box "Network Address" "Enter network address (e.g., 192.168.1.0/24):" "192.168.1.0/24") || return
             [[ -z "$new_host" ]] && new_host="*"
             ;;
         3)
-            new_host=$(whiptail --title "Computer IP" --inputbox "\
-Enter the IP address:" 10 55 "" 3>&1 1>&2 2>&3) || return
+            new_host=$(input_box "Computer IP" "Enter the IP address:") || return
             [[ -z "$new_host" ]] && new_host="*"
             ;;
     esac
 
     # Step 3: Permissions
+    show_header
     local perm_choice
-    perm_choice=$(whiptail --title "Add New Share - Step 3" --menu "\
-What permissions should connected hosts have?" 14 60 2 \
+    perm_choice=$(menu_select "Add New Share - Step 3" "What permissions should connected hosts have?" \
         "1" "Read & Write (full access)" \
-        "2" "Read Only (view only)" \
-        3>&1 1>&2 2>&3) || return
+        "2" "Read Only (view only)") || return
 
     local new_rw="rw"
     [[ "$perm_choice" == "2" ]] && new_rw="ro"
@@ -1520,27 +1396,16 @@ What permissions should connected hosts have?" 14 60 2 \
     local perm_desc="Read & Write"
     [[ "$new_rw" == "ro" ]] && perm_desc="Read Only"
 
-    if whiptail --title "Confirm New Share" --yesno "\
-Create this shared folder?
-
-Folder:      $share_path
-Access:      $host_desc
-Permissions: $perm_desc" 12 55; then
+    if yes_no "Confirm New Share" "Create this shared folder?\n\nFolder:      $share_path\nAccess:      $host_desc\nPermissions: $perm_desc"; then
 
         # Add to exports
         echo "$new_line" | sudo tee -a "$exports_file" > /dev/null
 
         # Apply
         if sudo exportfs -ra 2>/dev/null; then
-            whiptail --title "Share Created!" --msgbox "\
-New shared folder created successfully!
-
-Other hosts can now connect to:
-$share_path
-
-From: $host_desc" 12 55
+            msg_box "Share Created!" "New shared folder created successfully!\n\nOther hosts can now connect to:\n$share_path\n\nFrom: $host_desc"
         else
-            whiptail --title "Warning" --msgbox "Share added but could not activate." 8 50
+            msg_box "Warning" "Share added but could not activate."
         fi
     fi
 }
@@ -1558,18 +1423,14 @@ nfs_menu() {
             client_count=$(ls -1 /proc/fs/nfsd/clients 2>/dev/null | wc -l)
         fi
 
-        choice=$(whiptail --title "NFS Shared Folders" --menu "\
-  Manage folders shared over the network
-
-  Status: $share_count shared folder(s), $client_count connected
-  ─────────────────────────────────────────────" 20 60 6 \
+        show_header
+        choice=$(menu_select "NFS Shared Folders" "Manage folders shared over the network\n\nStatus: $share_count shared folder(s), $client_count connected" \
             "1" "View Shared Folders" \
             "2" "Edit Share Settings" \
             "3" "Add New Shared Folder" \
             "4" "Refresh (apply changes)" \
             "5" "View Config File" \
-            "6" "Back" \
-            3>&1 1>&2 2>&3) || break
+            "6" "Back") || break
 
         case "$choice" in
             1) show_nfs_exports ;;
@@ -1577,16 +1438,16 @@ nfs_menu() {
             3) add_nfs_share ;;
             4)
                 if sudo exportfs -ra 2>/dev/null; then
-                    whiptail --title "Success" --msgbox "Shared folders refreshed!" 8 40
+                    msg_box "Success" "Shared folders refreshed!"
                 else
-                    whiptail --title "Error" --msgbox "Failed to refresh.\nCheck settings for errors." 10 45
+                    msg_box "Error" "Failed to refresh.\nCheck settings for errors."
                 fi
                 ;;
             5)
                 if [[ -f /etc/exports ]]; then
-                    whiptail --title "/etc/exports" --scrolltext --textbox /etc/exports 20 70
+                    text_box "/etc/exports" /etc/exports
                 else
-                    whiptail --title "Config File" --msgbox "No configuration file found." 8 40
+                    msg_box "Config File" "No configuration file found."
                 fi
                 ;;
             6) break ;;
@@ -1673,81 +1534,55 @@ print()
 print("=" * 70)
 PYEOF
 
-    whiptail --title "User Accounts" --scrolltext --textbox "$out" 24 76
+    text_box "User Accounts" "$out"
 }
 
 create_user() {
     # Step 1: Enter username
     local username
-    username=$(whiptail --title "Create User - Step 1" --inputbox "\
-Enter the username for the new account:
-
-Rules:
-- Lowercase letters and numbers only
-- Must start with a letter
-- 3-32 characters long" 14 55 "" 3>&1 1>&2 2>&3) || return
+    username=$(input_box "Create User - Step 1" "Enter the username for the new account:\n\nRules:\n- Lowercase letters and numbers only\n- Must start with a letter\n- 3-32 characters long") || return
 
     [[ -z "$username" ]] && return
 
     # Validate username
     if [[ ! "$username" =~ ^[a-z][a-z0-9]{2,31}$ ]]; then
-        whiptail --title "Invalid Username" --msgbox "\
-Invalid username format.
-
-Username must:
-- Start with a lowercase letter
-- Contain only lowercase letters and numbers
-- Be 3-32 characters long" 12 50
+        msg_box "Invalid Username" "Invalid username format.\n\nUsername must:\n- Start with a lowercase letter\n- Contain only lowercase letters and numbers\n- Be 3-32 characters long"
         return
     fi
 
     # Check if user exists
     if id "$username" &>/dev/null; then
-        whiptail --title "User Exists" --msgbox "User '$username' already exists." 8 45
+        msg_box "User Exists" "User '$username' already exists."
         return
     fi
 
     # Step 2: Set password
     local password password2
-    password=$(whiptail --title "Create User - Step 2" --passwordbox "\
-Enter password for '$username':
-
-(Minimum 6 characters)" 10 50 "" 3>&1 1>&2 2>&3) || return
+    password=$(password_box "Create User - Step 2" "Enter password for '$username':\n\n(Minimum 6 characters)") || return
 
     if [[ ${#password} -lt 6 ]]; then
-        whiptail --title "Password Too Short" --msgbox "Password must be at least 6 characters." 8 45
+        msg_box "Password Too Short" "Password must be at least 6 characters."
         return
     fi
 
-    password2=$(whiptail --title "Create User - Step 2" --passwordbox "\
-Confirm password:" 10 50 "" 3>&1 1>&2 2>&3) || return
+    password2=$(password_box "Create User - Step 2" "Confirm password:") || return
 
     if [[ "$password" != "$password2" ]]; then
-        whiptail --title "Password Mismatch" --msgbox "Passwords do not match." 8 40
+        msg_box "Password Mismatch" "Passwords do not match."
         return
     fi
 
     # Step 3: Additional options
     local create_home="yes"
-    local add_to_nfs="no"
 
-    if whiptail --title "Create User - Step 3" --yesno "\
-Create home directory for '$username'?
-
-This will create /home/$username" 10 50; then
+    if yes_no "Create User - Step 3" "Create home directory for '$username'?\n\nThis will create /home/$username"; then
         create_home="yes"
     else
         create_home="no"
     fi
 
     # Confirm
-    if whiptail --title "Confirm User Creation" --yesno "\
-Create this user account?
-
-Username:    $username
-Home Dir:    $([ "$create_home" = "yes" ] && echo "/home/$username" || echo "None")
-
-Proceed?" 12 50; then
+    if yes_no "Confirm User Creation" "Create this user account?\n\nUsername:    $username\nHome Dir:    $([ "$create_home" = "yes" ] && echo "/home/$username" || echo "None")\n\nProceed?"; then
 
         # Create user
         local useradd_opts="-m"
@@ -1757,22 +1592,16 @@ Proceed?" 12 50; then
             # Set password
             echo "$username:$password" | sudo chpasswd 2>/dev/null
 
-            whiptail --title "User Created" --msgbox "\
-User '$username' created successfully!
-
-The user can now log in with their password.
-
-To set a disk quota, use 'Set User Quota'
-from the User Management menu." 12 50
+            msg_box "User Created" "User '$username' created successfully!\n\nThe user can now log in with their password.\n\nTo set a disk quota, use 'Set User Quota'\nfrom the User Management menu."
         else
-            whiptail --title "Error" --msgbox "Failed to create user.\nCheck system logs for details." 10 50
+            msg_box "Error" "Failed to create user.\nCheck system logs for details."
         fi
     fi
 }
 
 delete_user() {
     # Get list of users
-    local users=()
+    local -a users=()
     while IFS=: read -r uname _ uid _ _ home _; do
         if [[ $uid -ge 1000 && $uid -lt 65534 ]]; then
             users+=("$uname" "$home")
@@ -1780,61 +1609,43 @@ delete_user() {
     done < /etc/passwd
 
     if [[ ${#users[@]} -eq 0 ]]; then
-        whiptail --title "No Users" --msgbox "No regular user accounts to delete." 8 45
+        msg_box "No Users" "No regular user accounts to delete."
         return
     fi
 
+    show_header
     local username
-    username=$(whiptail --title "Delete User" --menu "\
-Select user to delete:
-
-WARNING: This cannot be undone!" 18 60 8 \
-        "${users[@]}" 3>&1 1>&2 2>&3) || return
+    username=$(menu_select "Delete User" "Select user to delete:\n\nWARNING: This cannot be undone!" \
+        "${users[@]}") || return
 
     [[ -z "$username" ]] && return
 
     # Confirm with username
     local confirm
-    confirm=$(whiptail --title "Confirm Deletion" --inputbox "\
-Are you sure you want to delete user '$username'?
-
-This will:
-- Remove the user account
-- Optionally remove their home directory
-
-Type the username to confirm:" 14 55 "" 3>&1 1>&2 2>&3) || return
+    confirm=$(input_box "Confirm Deletion" "Are you sure you want to delete user '$username'?\n\nThis will:\n- Remove the user account\n- Optionally remove their home directory\n\nType the username to confirm:") || return
 
     if [[ "$confirm" != "$username" ]]; then
-        whiptail --title "Cancelled" --msgbox "Username did not match. User not deleted." 8 50
+        msg_box "Cancelled" "Username did not match. User not deleted."
         return
     fi
 
     # Ask about home directory
     local remove_home=""
-    if whiptail --title "Remove Home Directory?" --yesno "\
-Also remove the home directory?
-
-/home/$username
-
-Select 'No' to keep the files." 10 50; then
+    if yes_no "Remove Home Directory?" "Also remove the home directory?\n\n/home/$username\n\nSelect 'No' to keep the files."; then
         remove_home="-r"
     fi
 
     if sudo userdel $remove_home "$username" 2>/dev/null; then
-        whiptail --title "User Deleted" --msgbox "User '$username' has been deleted." 8 45
+        msg_box "User Deleted" "User '$username' has been deleted."
     else
-        whiptail --title "Error" --msgbox "Failed to delete user." 8 40
+        msg_box "Error" "Failed to delete user."
     fi
 }
 
 set_user_quota() {
     # Check if quota tools are available
     if ! command -v setquota &>/dev/null; then
-        whiptail --title "Quota Tools Missing" --msgbox "\
-Quota tools are not installed.
-
-Install with:
-  sudo apt-get install quota" 10 50
+        msg_box "Quota Tools Missing" "Quota tools are not installed.\n\nInstall with:\n  sudo apt-get install quota"
         return
     fi
 
@@ -1842,19 +1653,16 @@ Install with:
     local mount_point="/mnt/data"
 
     if [[ ! -d "$mount_point" ]]; then
-        mount_point=$(whiptail --title "Mount Point" --inputbox "\
-Enter the mount point for quotas:
-
-Example: /mnt/data or /home" 10 50 "/mnt/data" 3>&1 1>&2 2>&3) || return
+        mount_point=$(input_box "Mount Point" "Enter the mount point for quotas:\n\nExample: /mnt/data or /home" "/mnt/data") || return
     fi
 
     if [[ ! -d "$mount_point" ]]; then
-        whiptail --title "Invalid Path" --msgbox "Mount point does not exist." 8 40
+        msg_box "Invalid Path" "Mount point does not exist."
         return
     fi
 
     # Get list of users
-    local users=()
+    local -a users=()
     while IFS=: read -r uname _ uid _ _ _ _; do
         if [[ $uid -ge 1000 && $uid -lt 65534 ]]; then
             # Get current quota
@@ -1866,30 +1674,20 @@ Example: /mnt/data or /home" 10 50 "/mnt/data" 3>&1 1>&2 2>&3) || return
     done < /etc/passwd
 
     if [[ ${#users[@]} -eq 0 ]]; then
-        whiptail --title "No Users" --msgbox "No regular user accounts found." 8 45
+        msg_box "No Users" "No regular user accounts found."
         return
     fi
 
+    show_header
     local username
-    username=$(whiptail --title "Set Quota - Select User" --menu "\
-Select user to set quota for:
-
-Mount point: $mount_point" 18 60 8 \
-        "${users[@]}" 3>&1 1>&2 2>&3) || return
+    username=$(menu_select "Set Quota - Select User" "Select user to set quota for:\n\nMount point: $mount_point" \
+        "${users[@]}") || return
 
     [[ -z "$username" ]] && return
 
     # Get quota size
     local quota_size
-    quota_size=$(whiptail --title "Set Quota - Size" --inputbox "\
-Enter disk quota for '$username':
-
-Examples:
-  10G    = 10 Gigabytes
-  500M   = 500 Megabytes
-  0      = No limit (unlimited)
-
-Enter size:" 16 50 "10G" 3>&1 1>&2 2>&3) || return
+    quota_size=$(input_box "Set Quota - Size" "Enter disk quota for '$username':\n\nExamples:\n  10G    = 10 Gigabytes\n  500M   = 500 Megabytes\n  0      = No limit (unlimited)\n\nEnter size:" "10G") || return
 
     [[ -z "$quota_size" ]] && return
 
@@ -1904,7 +1702,7 @@ Enter size:" 16 50 "10G" 3>&1 1>&2 2>&3) || return
     elif [[ "$quota_size" =~ ^([0-9]+)[Kk]?$ ]]; then
         quota_kb=${BASH_REMATCH[1]}
     else
-        whiptail --title "Invalid Size" --msgbox "Invalid quota format.\n\nUse: 10G, 500M, or 1024K" 10 45
+        msg_box "Invalid Size" "Invalid quota format.\n\nUse: 10G, 500M, or 1024K"
         return
     fi
 
@@ -1915,32 +1713,16 @@ Enter size:" 16 50 "10G" 3>&1 1>&2 2>&3) || return
     local limit_desc="Unlimited"
     [[ $quota_kb -gt 0 ]] && limit_desc="$quota_size"
 
-    if whiptail --title "Confirm Quota" --yesno "\
-Set disk quota for '$username'?
-
-Limit: $limit_desc
-Mount: $mount_point
-
-Proceed?" 12 50; then
+    if yes_no "Confirm Quota" "Set disk quota for '$username'?\n\nLimit: $limit_desc\nMount: $mount_point\n\nProceed?"; then
 
         # Enable quotas if not already
         sudo quotaon "$mount_point" 2>/dev/null || true
 
         # Set quota
         if sudo setquota -u "$username" $soft_kb $quota_kb 0 0 "$mount_point" 2>/dev/null; then
-            whiptail --title "Quota Set" --msgbox "\
-Disk quota set successfully!
-
-User:    $username
-Limit:   $limit_desc
-Mount:   $mount_point" 12 50
+            msg_box "Quota Set" "Disk quota set successfully!\n\nUser:    $username\nLimit:   $limit_desc\nMount:   $mount_point"
         else
-            whiptail --title "Error" --msgbox "\
-Failed to set quota.
-
-Make sure quotas are enabled:
-  sudo quotacheck -cug $mount_point
-  sudo quotaon $mount_point" 12 50
+            msg_box "Error" "Failed to set quota.\n\nMake sure quotas are enabled:\n  sudo quotacheck -cug $mount_point\n  sudo quotaon $mount_point"
         fi
     fi
 }
@@ -1975,7 +1757,7 @@ show_quotas() {
         printf '=%.0s' {1..70}; echo ""
     } > "$out"
 
-    whiptail --title "Disk Quotas" --scrolltext --textbox "$out" 24 76
+    text_box "Disk Quotas" "$out"
 }
 
 user_menu() {
@@ -1985,18 +1767,14 @@ user_menu() {
         local user_count
         user_count=$(awk -F: '$3 >= 1000 && $3 < 65534 {count++} END {print count+0}' /etc/passwd)
 
-        choice=$(whiptail --title "User Management" --menu "\
-  Manage user accounts and disk quotas
-
-  Users: $user_count account(s)
-  ─────────────────────────────────────────────" 20 60 7 \
+        show_header
+        choice=$(menu_select "User Management" "Manage user accounts and disk quotas\n\nUsers: $user_count account(s)" \
             "1" "View User Accounts" \
             "2" "Create New User" \
             "3" "Delete User" \
             "4" "Set User Quota" \
             "5" "View Quota Report" \
-            "6" "Back" \
-            3>&1 1>&2 2>&3) || break
+            "6" "Back") || break
 
         case "$choice" in
             1) show_users ;;
@@ -2019,63 +1797,56 @@ quick_actions_menu() {
     local status
     local icon
     while true; do
-        choice=$(whiptail --title "═══ ⚡ Quick Actions ═══" --menu "\
-  Common administrative tasks
-  ─────────────────────────────────────────────" 18 60 6 \
-            "1" "📊 Show xinas-status" \
-            "2" "🔄 Restart NFS Server" \
-            "3" "📋 View System Logs" \
-            "4" "💾 Check Disk Health" \
-            "5" "🔍 Service Status" \
-            "6" "🔙 Back" \
-            3>&1 1>&2 2>&3) || break
+        show_header
+        choice=$(menu_select "Quick Actions" "Common administrative tasks" \
+            "1" "Show xinas-status" \
+            "2" "Restart NFS Server" \
+            "3" "View System Logs" \
+            "4" "Check Disk Health" \
+            "5" "Service Status" \
+            "6" "Back") || break
 
         case "$choice" in
             1) show_status ;;
             2)
-                if whiptail --title "🔄 Restart NFS" --yesno "\
-   Restart the NFS server?
-
-   ⚠️  Active client connections may be
-   temporarily interrupted.
-" 11 50; then
+                if yes_no "Restart NFS" "Restart the NFS server?\n\nActive client connections may be\ntemporarily interrupted."; then
                     if sudo systemctl restart nfs-server 2>/dev/null; then
-                        whiptail --title "✅ Success" --msgbox "NFS server restarted successfully!" 8 45
+                        msg_box "Success" "NFS server restarted successfully!"
                     else
-                        whiptail --title "❌ Error" --msgbox "Failed to restart NFS server." 8 45
+                        msg_box "Error" "Failed to restart NFS server."
                     fi
                 fi
                 ;;
             3)
                 out="$TMP_DIR/logs"
                 {
-                    echo "═══ Recent System Messages ═══"
+                    echo "=== Recent System Messages ==="
                     echo ""
                     journalctl -n 50 --no-pager 2>/dev/null || dmesg | tail -50
                 } > "$out"
-                whiptail --title "📋 System Logs" --scrolltext --textbox "$out" 24 78
+                text_box "System Logs" "$out"
                 ;;
             4)
                 out="$TMP_DIR/disks"
                 show_physical_drives > "$out"
-                whiptail --title "💾 Disk Health" --scrolltext --textbox "$out" 24 80
+                text_box "Disk Health" "$out"
                 ;;
             5)
                 out="$TMP_DIR/services"
                 {
-                    echo "═══ Service Status ═══"
+                    echo "=== Service Status ==="
                     echo ""
                     for svc in nfs-server xiraid nfsdcld rpcbind; do
                         status=$(systemctl is-active "$svc" 2>/dev/null || echo "not found")
                         case "$status" in
-                            active) icon="✓" ;;
-                            inactive) icon="○" ;;
+                            active) icon="*" ;;
+                            inactive) icon="o" ;;
                             *) icon="?" ;;
                         esac
                         printf "  %s  %-20s %s\n" "$icon" "$svc" "$status"
                     done
                 } > "$out"
-                whiptail --title "🔍 Services" --textbox "$out" 16 50
+                text_box "Services" "$out"
                 ;;
             6) break ;;
         esac
@@ -2095,29 +1866,29 @@ show_welcome() {
 
     # Get RAID status summary
     local raid_status="Not installed"
-    local raid_icon="${RED}○${NC}"
+    local raid_icon="${RED}o${NC}"
     if command -v xicli &>/dev/null; then
         local raid_count
         raid_count=$(xicli raid show -f json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d) if isinstance(d,list) else len(d.keys()))" 2>/dev/null || echo "0")
         if [[ "$raid_count" != "0" ]]; then
             raid_status="$raid_count array(s)"
-            raid_icon="${GREEN}●${NC}"
+            raid_icon="${GREEN}*${NC}"
         fi
     fi
 
     # Get NFS status
     local nfs_status="Stopped"
-    local nfs_icon="${RED}○${NC}"
+    local nfs_icon="${RED}o${NC}"
     if [[ -f /proc/fs/nfsd/threads ]]; then
         local threads
         threads=$(cat /proc/fs/nfsd/threads 2>/dev/null)
         nfs_status="Running ($threads threads)"
-        nfs_icon="${GREEN}●${NC}"
+        nfs_icon="${GREEN}*${NC}"
     fi
 
     show_header
     echo -e "${WHITE}    ┌─────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${WHITE}    │${NC}  ${CYAN}✨ Welcome back to your NAS server!${NC}                        ${WHITE}│${NC}"
+    echo -e "${WHITE}    │${NC}  ${CYAN}Welcome back to your NAS server!${NC}                           ${WHITE}│${NC}"
     echo -e "${WHITE}    └─────────────────────────────────────────────────────────────┘${NC}"
     echo ""
     echo -e "    ${WHITE}SYSTEM STATUS${NC}"
@@ -2148,25 +1919,29 @@ main_menu() {
     while true; do
         # Update status indicator
         local update_status=""
-        local update_text="🔄 Check for Updates"
+        local update_text="Check for Updates"
         if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-            update_status=" | 📦 Update!"
-            update_text="🔄 Update Available ⬆️"
+            update_status=" | Update!"
+            update_text="Update Available"
         fi
 
+        show_header
+        echo -e "  ${WHITE}$(hostname)${NC} | $(uptime -p 2>/dev/null | sed 's/up //')"
+        if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+            echo -e "  ${YELLOW}Update available!${NC}"
+        fi
+        echo ""
+
         local choice
-        choice=$(whiptail --title "═══ xiNAS Management ═══" --menu "\
-  $(hostname) | $(uptime -p 2>/dev/null | sed 's/up //')$update_status
-  ─────────────────────────────────────────────" 24 60 9 \
-            "1" "📊 System Status" \
-            "2" "💾 RAID Management" \
-            "3" "🌐 Network Settings" \
-            "4" "📂 NFS Access Rights" \
-            "5" "👥 User Management" \
-            "6" "⚡ Quick Actions" \
+        choice=$(menu_select "xiNAS Management" "Select an option:" \
+            "1" "System Status" \
+            "2" "RAID Management" \
+            "3" "Network Settings" \
+            "4" "NFS Access Rights" \
+            "5" "User Management" \
+            "6" "Quick Actions" \
             "7" "$update_text" \
-            "8" "🚪 Exit" \
-            3>&1 1>&2 2>&3) || break
+            "8" "Exit") || break
 
         case "$choice" in
             1) show_status ;;
@@ -2177,36 +1952,23 @@ main_menu() {
             6) quick_actions_menu ;;
             7)
                 if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-                    if whiptail --title "📦 Update Available" --yesno "\
-   A new version of xiNAS is available!
-
-   Would you like to update now?" 10 45; then
+                    if yes_no "Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?"; then
                         do_update
                     fi
                 else
-                    whiptail --title "Checking..." --infobox "Checking for updates..." 6 35
+                    info_box "Checking..." "Checking for updates..."
                     check_for_updates
                     if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-                        if whiptail --title "📦 Update" --yesno "Update found! Install now?" 8 40; then
+                        if yes_no "Update Found" "Update found! Install now?"; then
                             do_update
                         fi
                     else
-                        whiptail --title "✅ Up to Date" --msgbox "xiNAS is already up to date!" 8 40
+                        msg_box "Up to Date" "xiNAS is already up to date!"
                     fi
                 fi
                 ;;
             8)
-                whiptail --title "👋 See you soon!" --msgbox "\
-   Thank you for using xiNAS!
-
-   Run this menu again anytime:
-     post_install_menu.sh
-
-   Or view status with:
-     xinas-status
-
-   Questions? support@xinnor.io
-" 14 50
+                msg_box "See you soon!" "Thank you for using xiNAS!\n\nRun this menu again anytime:\n  post_install_menu.sh\n\nOr view status with:\n  xinas-status\n\nQuestions? support@xinnor.io"
                 exit 0
                 ;;
         esac
