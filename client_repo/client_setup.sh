@@ -1471,6 +1471,98 @@ will NOT be deleted." 12 55; then
     done
 }
 
+# Check for CSI NFS driver updates
+check_csi_nfs_updates() {
+    # Returns: 0 = update available, 1 = up to date or not installed, 2 = error
+    # Sets CSI_CURRENT_VERSION and CSI_LATEST_VERSION variables
+
+    if ! check_csi_nfs_installed; then
+        return 1
+    fi
+
+    # Get current installed version
+    CSI_CURRENT_VERSION=""
+    CSI_LATEST_VERSION=""
+
+    # Try to get version from helm
+    if command -v helm &>/dev/null && helm list -n kube-system 2>/dev/null | grep -q csi-driver-nfs; then
+        CSI_CURRENT_VERSION=$(helm list -n kube-system -o json 2>/dev/null | grep -o '"chart":"csi-driver-nfs-[^"]*"' | head -1 | sed 's/.*csi-driver-nfs-\([^"]*\)".*/\1/')
+    fi
+
+    # If no helm version, try to get from image tag
+    if [[ -z "$CSI_CURRENT_VERSION" ]]; then
+        CSI_CURRENT_VERSION=$(kubectl get deployment -n kube-system csi-nfs-controller -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | grep -o 'v[0-9.]*' || echo "")
+    fi
+
+    [[ -z "$CSI_CURRENT_VERSION" ]] && CSI_CURRENT_VERSION="unknown"
+
+    # Get latest version from GitHub API
+    CSI_LATEST_VERSION=$(curl -fsSL --connect-timeout 5 https://api.github.com/repos/kubernetes-csi/csi-driver-nfs/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+
+    if [[ -z "$CSI_LATEST_VERSION" ]]; then
+        return 2  # Could not check
+    fi
+
+    # Compare versions (simple string comparison)
+    if [[ "$CSI_CURRENT_VERSION" != "$CSI_LATEST_VERSION" && "$CSI_CURRENT_VERSION" != "unknown" ]]; then
+        return 0  # Update available
+    fi
+
+    return 1  # Up to date or unknown
+}
+
+# Upgrade CSI NFS driver
+upgrade_csi_nfs_driver() {
+    local log="$TMP_DIR/csi_upgrade.log"
+
+    if command -v helm &>/dev/null && helm list -n kube-system 2>/dev/null | grep -q csi-driver-nfs; then
+        # Upgrade via Helm
+        whiptail --title "Upgrading CSI Driver" --infobox "Upgrading CSI NFS Driver via Helm..." 6 50
+
+        {
+            echo "Updating Helm repositories..."
+            helm repo update
+            echo "Upgrading csi-driver-nfs..."
+            helm upgrade csi-driver-nfs csi-driver-nfs/csi-driver-nfs \
+                --namespace kube-system \
+                --wait
+        } > "$log" 2>&1
+
+        if [[ $? -eq 0 ]]; then
+            return 0
+        else
+            whiptail --title "Upgrade Failed" --scrolltext --textbox "$log" 20 70
+            return 1
+        fi
+    else
+        # Reinstall via script (script method doesn't have clean upgrade)
+        if whiptail --title "Upgrade CSI Driver" --yesno "\
+The CSI driver was installed via script.
+
+To upgrade, it will be reinstalled.
+This should not affect existing PVCs.
+
+Proceed with reinstall?" 12 55; then
+            whiptail --title "Upgrading CSI Driver" --infobox "Reinstalling CSI NFS Driver..." 6 50
+
+            {
+                echo "Removing old installation..."
+                curl -skSL https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/deploy/uninstall-driver.sh | bash -s master --
+                echo "Installing latest version..."
+                curl -skSL https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/deploy/install-driver.sh | bash -s master --
+            } > "$log" 2>&1
+
+            if check_csi_nfs_installed; then
+                return 0
+            else
+                whiptail --title "Upgrade Failed" --scrolltext --textbox "$log" 20 70
+                return 1
+            fi
+        fi
+        return 1
+    fi
+}
+
 # CSI NFS Driver menu
 kubernetes_csi_nfs_menu() {
     # Check if running on a Kubernetes node
@@ -1515,33 +1607,68 @@ https://kubernetes.io/docs/tasks/tools/" 12 55
         # Get quick status
         local k8s_status="Not configured"
         local csi_status="Not installed"
+        local csi_version=""
+        local update_marker=""
 
         if kubectl cluster-info &>/dev/null 2>&1; then
             k8s_status="Connected"
             if check_csi_nfs_installed; then
                 csi_status="Installed"
+                # Check version
+                if command -v helm &>/dev/null && helm list -n kube-system 2>/dev/null | grep -q csi-driver-nfs; then
+                    csi_version=$(helm list -n kube-system -o json 2>/dev/null | grep -o '"chart":"csi-driver-nfs-[^"]*"' | head -1 | sed 's/.*csi-driver-nfs-\([^"]*\)".*/\1/')
+                fi
+                if [[ -z "$csi_version" ]]; then
+                    csi_version=$(kubectl get deployment -n kube-system csi-nfs-controller -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | grep -o 'v[0-9.]*' || echo "")
+                fi
+                [[ -n "$csi_version" ]] && csi_status="$csi_version"
+
+                # Quick update check (cached for menu display)
+                if check_csi_nfs_updates 2>/dev/null; then
+                    update_marker=" ⬆"
+                fi
             fi
         fi
 
         local choice
         choice=$(whiptail --title "Kubernetes CSI NFS Driver" --menu "\
-  Cluster: $k8s_status | CSI Driver: $csi_status
-  ─────────────────────────────────────────────" 20 65 8 \
+  Cluster: $k8s_status | CSI Driver: $csi_status$update_marker
+  ─────────────────────────────────────────────" 22 65 9 \
             "1" "📊 Check Status" \
             "2" "📦 Install CSI NFS Driver" \
-            "3" "⚙️  Configure Storage Class" \
-            "4" "📁 Manage Storage Classes" \
-            "5" "🗑️  Uninstall CSI NFS Driver" \
-            "6" "🔙 Back to Main Menu" \
+            "3" "🔄 Upgrade CSI NFS Driver" \
+            "4" "⚙️  Configure Storage Class" \
+            "5" "📁 Manage Storage Classes" \
+            "6" "🗑️  Uninstall CSI NFS Driver" \
+            "7" "🔙 Back to Main Menu" \
             3>&1 1>&2 2>&3) || return
 
         case "$choice" in
             1) show_csi_nfs_status ;;
             2) install_csi_nfs_driver ;;
-            3) configure_csi_nfs_storage_class ;;
-            4) manage_csi_nfs_storage_classes ;;
-            5) uninstall_csi_nfs_driver ;;
-            6) return ;;
+            3)
+                if ! check_csi_nfs_installed; then
+                    whiptail --title "Not Installed" --msgbox "CSI NFS driver is not installed.\n\nInstall it first using option 2." 10 50
+                elif check_csi_nfs_updates; then
+                    if whiptail --title "Update Available" --yesno "\
+CSI NFS Driver update available!
+
+Current: $CSI_CURRENT_VERSION
+Latest:  $CSI_LATEST_VERSION
+
+Upgrade now?" 14 50; then
+                        if upgrade_csi_nfs_driver; then
+                            whiptail --title "Upgraded!" --msgbox "CSI NFS Driver upgraded to $CSI_LATEST_VERSION!" 8 55
+                        fi
+                    fi
+                else
+                    whiptail --title "Up to Date" --msgbox "CSI NFS Driver is up to date.\n\nVersion: ${CSI_CURRENT_VERSION:-$csi_version}" 10 50
+                fi
+                ;;
+            4) configure_csi_nfs_storage_class ;;
+            5) manage_csi_nfs_storage_classes ;;
+            6) uninstall_csi_nfs_driver ;;
+            7) return ;;
         esac
     done
 }
@@ -1657,83 +1784,113 @@ check_and_update() {
         fi
     fi
 
-    if [[ ! -d "$git_dir" ]]; then
-        whiptail --title "Not Git Installation" --msgbox "\
-This installation was not done via git.
-
-To enable automatic updates, reinstall using:
-  curl -fsSL https://xinnor.io/install_client.sh | sudo bash" 12 60
-        return
-    fi
-
-    if ! command -v git &>/dev/null; then
-        whiptail --title "Git Not Found" --msgbox "\
-Git is required for update checking.
-
-Install git first, then retry." 10 50
-        return
-    fi
+    local client_update_available=""
+    local csi_update_available=""
+    local local_commit=""
+    local remote_commit=""
 
     whiptail --title "Checking..." --infobox "Checking for updates..." 6 40
 
-    # Fetch latest
-    if ! git -C "$install_dir" fetch --quiet origin main 2>/dev/null; then
-        whiptail --title "Network Error" --msgbox "\
-Could not connect to update server.
-
-Please check your internet connection." 10 50
-        return
+    # Check xiNAS Client updates
+    if [[ -d "$git_dir" ]] && command -v git &>/dev/null; then
+        if git -C "$install_dir" fetch --quiet origin main 2>/dev/null; then
+            local_commit=$(git -C "$install_dir" rev-parse HEAD 2>/dev/null)
+            remote_commit=$(git -C "$install_dir" rev-parse origin/main 2>/dev/null)
+            if [[ "$local_commit" != "$remote_commit" ]]; then
+                client_update_available="true"
+            fi
+        fi
     fi
 
-    local local_commit remote_commit
-    local_commit=$(git -C "$install_dir" rev-parse HEAD 2>/dev/null)
-    remote_commit=$(git -C "$install_dir" rev-parse origin/main 2>/dev/null)
+    # Check CSI NFS driver updates
+    if check_csi_nfs_installed && check_kubernetes_available; then
+        if check_csi_nfs_updates; then
+            csi_update_available="true"
+        fi
+    fi
 
-    if [[ "$local_commit" == "$remote_commit" ]]; then
+    # No updates available
+    if [[ -z "$client_update_available" && -z "$csi_update_available" ]]; then
+        local csi_msg=""
+        if check_csi_nfs_installed; then
+            csi_msg="\nCSI NFS Driver: ${CSI_CURRENT_VERSION:-installed}"
+        fi
         whiptail --title "Up to Date" --msgbox "\
-xiNAS Client is up to date!
+Everything is up to date!
 
-Version: $CLIENT_VERSION
-Commit:  ${local_commit:0:8}" 12 50
+xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg" 12 55
         UPDATE_AVAILABLE=""
         return
     fi
 
-    # Show what's new
-    local changes
-    changes=$(git -C "$install_dir" log --oneline HEAD..origin/main 2>/dev/null | head -10)
+    # Build update message
+    local update_msg="Updates available:\n\n"
+    local update_options=()
 
-    if whiptail --title "Update Available" --yesno "\
-A new version is available!
+    if [[ -n "$client_update_available" ]]; then
+        local changes
+        changes=$(git -C "$install_dir" log --oneline HEAD..origin/main 2>/dev/null | head -5)
+        update_msg+="xiNAS Client:\n"
+        update_msg+="  Current: ${local_commit:0:8}\n"
+        update_msg+="  Latest:  ${remote_commit:0:8}\n"
+        update_msg+="  Changes:\n$(echo "$changes" | sed 's/^/    /')\n\n"
+        update_options+=("client" "Update xiNAS Client" "ON")
+    fi
 
-Current: ${local_commit:0:8}
-Latest:  ${remote_commit:0:8}
+    if [[ -n "$csi_update_available" ]]; then
+        update_msg+="CSI NFS Driver:\n"
+        update_msg+="  Current: $CSI_CURRENT_VERSION\n"
+        update_msg+="  Latest:  $CSI_LATEST_VERSION\n"
+        update_options+=("csi" "Update CSI NFS Driver" "ON")
+    fi
 
-Recent changes:
-$changes
-
-Update now?" 20 60; then
-
-        whiptail --title "Updating..." --infobox "Downloading update..." 6 40
-
-        if git -C "$install_dir" pull --quiet origin main 2>/dev/null; then
-            UPDATE_AVAILABLE=""
-            whiptail --title "Updated!" --msgbox "\
-xiNAS Client has been updated!
-
-The menu will now restart with the new version." 10 55
-
-            # Re-execute the script with the new version
-            exec "$0" "$@"
+    # Show update dialog
+    if [[ ${#update_options[@]} -eq 3 ]]; then
+        # Only one update available, use simple yesno
+        if [[ -n "$client_update_available" ]]; then
+            if whiptail --title "Update Available" --yesno "$(echo -e "$update_msg")\nUpdate xiNAS Client now?" 22 65; then
+                whiptail --title "Updating..." --infobox "Downloading xiNAS Client update..." 6 50
+                if git -C "$install_dir" pull --quiet origin main 2>/dev/null; then
+                    UPDATE_AVAILABLE=""
+                    whiptail --title "Updated!" --msgbox "xiNAS Client updated!\n\nThe menu will restart." 10 50
+                    exec "$0" "$@"
+                else
+                    whiptail --title "Update Failed" --msgbox "Failed to update. Try: git pull origin main" 10 55
+                fi
+            fi
         else
-            whiptail --title "Update Failed" --msgbox "\
-Update failed. You can try manually:
+            if whiptail --title "Update Available" --yesno "$(echo -e "$update_msg")\nUpdate CSI NFS Driver now?" 18 65; then
+                if upgrade_csi_nfs_driver; then
+                    whiptail --title "Updated!" --msgbox "CSI NFS Driver updated to $CSI_LATEST_VERSION!" 8 55
+                fi
+            fi
+        fi
+    else
+        # Multiple updates, use checklist
+        local selected
+        selected=$(whiptail --title "Updates Available" --checklist \
+            "$(echo -e "$update_msg")Select updates to install:" 26 70 2 \
+            "${update_options[@]}" 3>&1 1>&2 2>&3) || return
 
-  cd $install_dir
-  git pull origin main
+        if [[ "$selected" == *"client"* ]]; then
+            whiptail --title "Updating..." --infobox "Downloading xiNAS Client update..." 6 50
+            if git -C "$install_dir" pull --quiet origin main 2>/dev/null; then
+                UPDATE_AVAILABLE=""
+            else
+                whiptail --title "Client Update Failed" --msgbox "Failed to update client." 8 45
+            fi
+        fi
 
-Or reinstall:
-  curl -fsSL https://xinnor.io/install_client.sh | sudo bash" 14 60
+        if [[ "$selected" == *"csi"* ]]; then
+            if upgrade_csi_nfs_driver; then
+                whiptail --title "CSI Updated" --msgbox "CSI NFS Driver updated!" 8 40
+            fi
+        fi
+
+        # Restart if client was updated
+        if [[ "$selected" == *"client"* ]] && [[ -z "$UPDATE_AVAILABLE" ]]; then
+            whiptail --title "Updated!" --msgbox "Updates installed!\n\nThe menu will restart." 10 45
+            exec "$0" "$@"
         fi
     fi
 }
