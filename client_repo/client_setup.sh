@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-CLIENT_VERSION="1.5.0"
+CLIENT_VERSION="1.6.0"
 
 # Network configuration file
 NETWORK_CONFIG="$SCRIPT_DIR/network_config.yml"
@@ -523,9 +523,56 @@ $mount_point_msg" 14 55 "/mnt/nas" 3>&1 1>&2 2>&3) || return
 
     [[ -z "$mount_point_base" ]] && mount_point_base="/mnt/nas"
 
-    # Step 6: Mount options
+    # Step 6: Authentication
+    local sec_mode="sys"
+    local auth_desc="None (UID/GID)"
+    if whiptail --title "Step 6: Authentication" --yesno "\
+Does your NFS server require authentication?
+
+Select 'Yes' if your administrator has set up
+Kerberos (krb5) authentication.
+
+Select 'No' for standard UID/GID mapping." 12 55; then
+        sec_mode=$(whiptail --title "Step 6: Security Mode" --menu "\
+Select the NFS security mode:
+
+Your administrator should tell you which
+mode is configured on the server." 16 60 4 \
+            "krb5" "Kerberos authentication" \
+            "krb5i" "Kerberos + integrity checking" \
+            "krb5p" "Kerberos + encryption (most secure)" \
+            "sys" "Standard UID/GID (no Kerberos)" \
+            3>&1 1>&2 2>&3) || return
+
+        case "$sec_mode" in
+            krb5)  auth_desc="Kerberos" ;;
+            krb5i) auth_desc="Kerberos + integrity" ;;
+            krb5p) auth_desc="Kerberos + encryption" ;;
+            sys)   auth_desc="None (UID/GID)" ;;
+        esac
+
+        # Check for Kerberos ticket if using krb5
+        if [[ "$sec_mode" != "sys" ]]; then
+            if ! klist &>/dev/null; then
+                whiptail --title "⚠️ Kerberos Ticket Required" --msgbox "\
+No Kerberos ticket found!
+
+Before mounting, you need to authenticate:
+
+  kinit username@REALM
+
+Ask your administrator for:
+  - Your Kerberos username
+  - The realm name (e.g., XINNOR.IO)
+
+The mount will proceed but may fail without a valid ticket." 16 60
+            fi
+        fi
+    fi
+
+    # Step 7: Persistent mount
     local add_to_fstab="yes"
-    if whiptail --title "Step 6: Persistent Mount" --yesno "\
+    if whiptail --title "Step 7: Persistent Mount" --yesno "\
 Add this mount to /etc/fstab?
 
 If yes, the share will be automatically
@@ -550,9 +597,12 @@ Recommended: Yes" 12 50; then
         trunk_opts=",trunkdiscovery"
     fi
 
+    # Add security option
+    local sec_opts=",sec=$sec_mode"
+
     if [[ "$protocol" == "RDMA" ]]; then
         # RDMA with training options
-        mount_opts="vers=4.2,proto=rdma,port=20049,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
+        mount_opts="vers=4.2,proto=rdma,port=20049,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}${sec_opts}"
         proto_desc="RDMA"
         if [[ $num_ips -gt 1 ]]; then
             mode_desc="training + trunking"
@@ -562,7 +612,7 @@ Recommended: Yes" 12 50; then
         conn_desc="max_connect=16, nconnect=$nconnect per IP"
     else
         # TCP with training options
-        mount_opts="vers=4.2,proto=tcp,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
+        mount_opts="vers=4.2,proto=tcp,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}${sec_opts}"
         proto_desc="TCP"
         if [[ $num_ips -gt 1 ]]; then
             mode_desc="training + trunking"
@@ -587,11 +637,12 @@ Share:        $share_path
 Mount Point:  $mount_point_desc
 Protocol:     $proto_desc
 Mode:         $mode_desc
+Auth:         $auth_desc (sec=$sec_mode)
 Connections:  $conn_desc
 I/O Size:     rsize/wsize=1MB
 Persistent:   $add_to_fstab
 
-Proceed with mounting?" 20 65; then
+Proceed with mounting?" 22 65; then
         return
     fi
 
@@ -1785,19 +1836,21 @@ case "${1:-}" in
         ;;
     --mount|-m)
         # Quick mount mode with training options
-        # Supports multiple IPs: SERVER1,SERVER2:SHARE MOUNTPOINT [rdma|tcp]
+        # Supports multiple IPs: SERVER1,SERVER2:SHARE MOUNTPOINT [tcp|rdma] [sec]
         shift
         if [[ $# -lt 2 ]]; then
-            echo "Usage: $0 --mount SERVER:SHARE MOUNTPOINT [tcp|rdma]"
-            echo "       $0 --mount SERVER1,SERVER2:SHARE MOUNTPOINT [tcp|rdma]"
+            echo "Usage: $0 --mount SERVER:SHARE MOUNTPOINT [PROTO] [SEC]"
+            echo "       $0 --mount SERVER1,SERVER2:SHARE MOUNTPOINT [PROTO] [SEC]"
             echo ""
-            echo "Protocols:"
+            echo "Protocols (PROTO):"
             echo "  tcp   - TCP transport (default)"
             echo "  rdma  - RDMA transport (requires DOCA OFED)"
             echo ""
-            echo "All mounts use training options:"
-            echo "  vers=4.2, hard, rsize/wsize=1MB"
-            echo "  lookupcache=all, acregmin=60, acregmax=600"
+            echo "Security modes (SEC):"
+            echo "  sys   - Standard UID/GID mapping (default)"
+            echo "  krb5  - Kerberos authentication"
+            echo "  krb5i - Kerberos + integrity checking"
+            echo "  krb5p - Kerberos + encryption"
             echo ""
             echo "Multi-IP support (distributes 16 connections + trunking):"
             echo "  1 IP  = nconnect=16"
@@ -1807,13 +1860,20 @@ case "${1:-}" in
             echo ""
             echo "Examples:"
             echo "  -m 10.10.1.1:/data /mnt/nas"
-            echo "  -m 10.10.1.1,10.10.1.2:/data /mnt/nas"
+            echo "  -m 10.10.1.1:/data /mnt/nas tcp krb5p"
             echo "  -m 10.10.1.1,10.10.1.2:/data /mnt/nas rdma"
             exit 1
         fi
         server_share="$1"
         mount_point="$2"
         proto="${3:-tcp}"
+        sec_mode="${4:-sys}"
+
+        # Validate security mode
+        case "$sec_mode" in
+            sys|krb5|krb5i|krb5p) ;;
+            *) echo "Error: Invalid security mode '$sec_mode'. Use: sys, krb5, krb5i, krb5p"; exit 1 ;;
+        esac
 
         # Parse server(s) and share path
         servers_part="${server_share%%:*}"
@@ -1840,16 +1900,17 @@ case "${1:-}" in
         # Build mount options - training profile for all
         case "$proto" in
             rdma)
-                opts="vers=4.2,proto=rdma,port=20049,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
+                opts="vers=4.2,proto=rdma,port=20049,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts},sec=$sec_mode"
                 proto_desc="RDMA"
                 ;;
             tcp|*)
-                opts="vers=4.2,proto=tcp,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts}"
+                opts="vers=4.2,proto=tcp,hard,max_connect=16,nconnect=$nconnect,rsize=1048576,wsize=1048576,lookupcache=all,acregmin=60,acregmax=600,acdirmin=60,acdirmax=600${trunk_opts},sec=$sec_mode"
                 proto_desc="TCP"
                 ;;
         esac
 
         echo "Protocol: $proto_desc"
+        echo "Security: sec=$sec_mode"
         echo "Connections: max_connect=16, nconnect=$nconnect per IP"
         [[ $num_ips -gt 1 ]] && echo "Trunking: enabled (trunkdiscovery)"
         echo ""
@@ -1918,21 +1979,25 @@ case "${1:-}" in
         echo "  --update, -u              Check for and install updates"
         echo "  --help, -h                Show this help"
         echo ""
-        echo "Protocols:"
+        echo "Mount: -m SERVER:SHARE MOUNTPOINT [PROTO] [SEC]"
+        echo ""
+        echo "Protocols (PROTO):"
         echo "  tcp   - TCP transport (default)"
         echo "  rdma  - RDMA transport (requires DOCA OFED)"
         echo ""
-        echo "All mounts use training options (lookupcache=all, attribute caching)"
+        echo "Security (SEC):"
+        echo "  sys   - Standard UID/GID (default)"
+        echo "  krb5  - Kerberos authentication"
+        echo "  krb5i - Kerberos + integrity"
+        echo "  krb5p - Kerberos + encryption"
         echo ""
-        echo "Multi-IP support (distributes 16 connections):"
-        echo "  1 IP  = nconnect=16"
-        echo "  2 IPs = nconnect=8 each + trunking"
-        echo "  4 IPs = nconnect=4 each + trunking"
-        echo "  8 IPs = nconnect=2 each + trunking"
+        echo "Multi-IP (distributes 16 connections + trunking):"
+        echo "  1 IP = nconnect=16, 2 IPs = nconnect=8 each, etc."
         echo ""
         echo "Examples:"
-        echo "  -m 10.10.1.1:/data /mnt/nas              # Single IP TCP"
-        echo "  -m 10.10.1.1,10.10.1.2:/data /mnt/nas    # 2 IPs + trunking"
+        echo "  -m 10.10.1.1:/data /mnt/nas              # TCP, sec=sys"
+        echo "  -m 10.10.1.1:/data /mnt/nas tcp krb5p    # TCP + Kerberos"
+        echo "  -m 10.10.1.1,10.10.1.2:/data /mnt/nas    # Multi-IP"
         echo "  -m 10.10.1.1:/data /mnt/nas rdma         # RDMA"
         echo ""
         echo "Without options, launches the interactive menu."
