@@ -41,34 +41,34 @@ _menu_get_term_size() {
     TERM_COLS=$(tput cols 2>/dev/null || echo 80)
 }
 
-# Move cursor to position
-_menu_cursor_to() {
-    printf '\033[%d;%dH' "$1" "$2"
-}
-
 # Hide cursor
 _menu_cursor_hide() {
-    printf '\033[?25l'
+    printf '\033[?25l' >/dev/tty
 }
 
 # Show cursor
 _menu_cursor_show() {
-    printf '\033[?25h'
+    printf '\033[?25h' >/dev/tty
 }
 
 # Clear from cursor to end of line
 _menu_clear_line() {
-    printf '\033[K'
+    printf '\033[K' >/dev/tty
+}
+
+# Move cursor up N lines
+_menu_cursor_up() {
+    printf '\033[%dA' "${1:-1}" >/dev/tty
 }
 
 # Read a single keypress (handles arrow keys)
 _menu_read_key() {
     local key
-    IFS= read -rsn1 key
+    IFS= read -rsn1 key </dev/tty
 
     # Handle escape sequences (arrow keys, etc.)
     if [[ "$key" == $'\033' ]]; then
-        read -rsn2 -t 0.1 key
+        read -rsn2 -t 0.1 key </dev/tty
         case "$key" in
             '[A') echo "UP" ;;
             '[B') echo "DOWN" ;;
@@ -88,11 +88,10 @@ _menu_read_key() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Drawing Functions
+# Drawing Functions (all output to /dev/tty)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Draw a box with title
-# Usage: _menu_draw_box "title" width
 _menu_draw_box() {
     local title="$1"
     local width="${2:-60}"
@@ -100,27 +99,27 @@ _menu_draw_box() {
     local padding=$(( (width - title_len - 2) / 2 ))
 
     # Top border
-    printf "${CYAN}${BOX_TL}"
-    printf '%*s' "$padding" '' | tr ' ' "$BOX_H"
-    printf " ${WHITE}${BOLD}%s${NC}${CYAN} " "$title"
-    printf '%*s' "$((width - padding - title_len - 2))" '' | tr ' ' "$BOX_H"
-    printf "${BOX_TR}${NC}\n"
+    printf "${CYAN}${BOX_TL}" >/dev/tty
+    printf '%*s' "$padding" '' | tr ' ' "$BOX_H" >/dev/tty
+    printf " ${WHITE}${BOLD}%s${NC}${CYAN} " "$title" >/dev/tty
+    printf '%*s' "$((width - padding - title_len - 2))" '' | tr ' ' "$BOX_H" >/dev/tty
+    printf "${BOX_TR}${NC}\n" >/dev/tty
 }
 
 # Draw box bottom
 _menu_draw_box_bottom() {
     local width="${1:-60}"
-    printf "${CYAN}${BOX_BL}"
-    printf '%*s' "$width" '' | tr ' ' "$BOX_H"
-    printf "${BOX_BR}${NC}\n"
+    printf "${CYAN}${BOX_BL}" >/dev/tty
+    printf '%*s' "$width" '' | tr ' ' "$BOX_H" >/dev/tty
+    printf "${BOX_BR}${NC}\n" >/dev/tty
 }
 
 # Draw horizontal separator
 _menu_draw_separator() {
     local width="${1:-60}"
-    printf "${DIM}"
-    printf '%*s' "$width" '' | tr ' ' "$BOX_LINE"
-    printf "${NC}\n"
+    printf "${DIM}" >/dev/tty
+    printf '%*s' "$width" '' | tr ' ' "$BOX_LINE" >/dev/tty
+    printf "${NC}\n" >/dev/tty
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -152,7 +151,6 @@ menu_select() {
     local selected=0
     local key
     local width=60
-    local start_row
 
     # Calculate max width needed
     for ((i=0; i<num_items; i++)); do
@@ -161,55 +159,61 @@ menu_select() {
     done
     [[ $width -gt 78 ]] && width=78
 
-    # Save cursor position and hide cursor
+    # Calculate total menu height for cursor movement
+    local menu_height=$((num_items + 6))
+    [[ -n "$prompt" ]] && menu_height=$((menu_height + 2))
+
     _menu_cursor_hide
-    tput sc 2>/dev/null || printf '\033[s'
 
-    # Render function
+    # Render function - all output to /dev/tty
     _render_menu() {
-        # Restore cursor position
-        tput rc 2>/dev/null || printf '\033[u'
+        local redraw="${1:-false}"
 
-        echo ""
+        # If redrawing, move cursor up to start of menu
+        if [[ "$redraw" == "true" ]]; then
+            _menu_cursor_up "$menu_height"
+        fi
+
+        echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
-        echo ""
+        echo "" >/dev/tty
 
         # Prompt
         if [[ -n "$prompt" ]]; then
-            printf "  ${WHITE}%s${NC}\n" "$prompt"
+            printf "  ${WHITE}%s${NC}\n" "$prompt" >/dev/tty
             _menu_draw_separator "$width"
-            echo ""
+            echo "" >/dev/tty
         fi
 
         # Menu items
         for ((i=0; i<num_items; i++)); do
             if [[ $i -eq $selected ]]; then
                 # Selected item - highlight
-                printf "  ${REVERSE}${GREEN} > ${keys[$i]}${NC}${REVERSE}${GREEN}"
+                printf "  ${REVERSE}${GREEN} > ${keys[$i]}" >/dev/tty
                 if [[ -n "${descs[$i]}" ]]; then
-                    printf "  %s" "${descs[$i]}"
+                    printf "  %s" "${descs[$i]}" >/dev/tty
                 fi
-                printf "${NC}"
+                printf "${NC}" >/dev/tty
                 _menu_clear_line
-                echo ""
+                echo "" >/dev/tty
             else
                 # Normal item
-                printf "  ${DIM}   ${NC}${YELLOW}${keys[$i]}${NC}"
+                printf "  ${DIM}   ${NC}${YELLOW}${keys[$i]}${NC}" >/dev/tty
                 if [[ -n "${descs[$i]}" ]]; then
-                    printf "  ${WHITE}%s${NC}" "${descs[$i]}"
+                    printf "  ${WHITE}%s${NC}" "${descs[$i]}" >/dev/tty
                 fi
                 _menu_clear_line
-                echo ""
+                echo "" >/dev/tty
             fi
         done
 
-        echo ""
+        echo "" >/dev/tty
         _menu_draw_separator "$width"
-        printf "  ${DIM}↑↓ Navigate  Enter Select  Esc Cancel${NC}\n"
+        printf "  ${DIM}↑↓ Navigate  Enter Select  Esc Cancel${NC}\n" >/dev/tty
     }
 
     # Initial render
-    _render_menu
+    _render_menu "false"
 
     # Input loop
     while true; do
@@ -219,16 +223,16 @@ menu_select() {
             UP)
                 ((selected--))
                 [[ $selected -lt 0 ]] && selected=$((num_items - 1))
-                _render_menu
+                _render_menu "true"
                 ;;
             DOWN)
                 ((selected++))
                 [[ $selected -ge $num_items ]] && selected=0
-                _render_menu
+                _render_menu "true"
                 ;;
             ENTER)
                 _menu_cursor_show
-                echo "${keys[$selected]}"
+                echo "${keys[$selected]}"  # This goes to stdout for capture
                 return 0
                 ;;
             ESC)
@@ -242,7 +246,7 @@ menu_select() {
                     for ((i=0; i<num_items; i++)); do
                         if [[ "${keys[$i]}" == "$num_key" ]]; then
                             _menu_cursor_show
-                            echo "${keys[$i]}"
+                            echo "${keys[$i]}"  # This goes to stdout for capture
                             return 0
                         fi
                     done
@@ -270,20 +274,20 @@ msg_box() {
     [[ $((max_line + 6)) -gt $width ]] && width=$((max_line + 6))
     [[ $width -gt 78 ]] && width=78
 
-    echo ""
+    echo "" >/dev/tty
     _menu_draw_box "$title" "$width"
-    echo ""
+    echo "" >/dev/tty
 
     # Display message
     while IFS= read -r line; do
-        printf "  ${WHITE}%s${NC}\n" "$line"
+        printf "  ${WHITE}%s${NC}\n" "$line" >/dev/tty
     done <<< "$message"
 
-    echo ""
+    echo "" >/dev/tty
     _menu_draw_separator "$width"
-    printf "  ${DIM}Press Enter to continue...${NC}"
-    read -r
-    echo ""
+    printf "  ${DIM}Press Enter to continue...${NC}" >/dev/tty
+    read -r </dev/tty
+    echo "" >/dev/tty
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -301,40 +305,45 @@ yes_no() {
     local selected=0  # 0=Yes, 1=No
     [[ "$default" == "n" ]] && selected=1
 
+    local menu_height=8
+
     _menu_cursor_hide
-    tput sc 2>/dev/null || printf '\033[s'
 
     _render_yesno() {
-        tput rc 2>/dev/null || printf '\033[u'
+        local redraw="${1:-false}"
 
-        echo ""
+        if [[ "$redraw" == "true" ]]; then
+            _menu_cursor_up "$menu_height"
+        fi
+
+        echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
-        echo ""
+        echo "" >/dev/tty
 
         # Question
-        printf "  ${WHITE}%s${NC}\n" "$question"
-        echo ""
+        printf "  ${WHITE}%s${NC}\n" "$question" >/dev/tty
+        echo "" >/dev/tty
 
         # Yes/No buttons
-        printf "  "
+        printf "  " >/dev/tty
         if [[ $selected -eq 0 ]]; then
-            printf "${REVERSE}${GREEN}  Yes  ${NC}"
+            printf "${REVERSE}${GREEN}  Yes  ${NC}" >/dev/tty
         else
-            printf "${DIM}  Yes  ${NC}"
+            printf "${DIM}  Yes  ${NC}" >/dev/tty
         fi
-        printf "    "
+        printf "    " >/dev/tty
         if [[ $selected -eq 1 ]]; then
-            printf "${REVERSE}${RED}  No   ${NC}"
+            printf "${REVERSE}${RED}  No   ${NC}" >/dev/tty
         else
-            printf "${DIM}  No   ${NC}"
+            printf "${DIM}  No   ${NC}" >/dev/tty
         fi
-        echo ""
-        echo ""
+        echo "" >/dev/tty
+        echo "" >/dev/tty
         _menu_draw_separator "$width"
-        printf "  ${DIM}←→ Switch  Enter Confirm  Esc Cancel${NC}\n"
+        printf "  ${DIM}←→ Switch  Enter Confirm  Esc Cancel${NC}\n" >/dev/tty
     }
 
-    _render_yesno
+    _render_yesno "false"
 
     while true; do
         local key=$(_menu_read_key)
@@ -342,26 +351,26 @@ yes_no() {
         case "$key" in
             LEFT|UP|RIGHT|DOWN)
                 selected=$((1 - selected))
-                _render_yesno
+                _render_yesno "true"
                 ;;
             ENTER)
                 _menu_cursor_show
-                echo ""
+                echo "" >/dev/tty
                 return $selected
                 ;;
             ESC)
                 _menu_cursor_show
-                echo ""
+                echo "" >/dev/tty
                 return 1
                 ;;
             [yY])
                 _menu_cursor_show
-                echo ""
+                echo "" >/dev/tty
                 return 0
                 ;;
             [nN])
                 _menu_cursor_show
-                echo ""
+                echo "" >/dev/tty
                 return 1
                 ;;
         esac
@@ -380,31 +389,31 @@ input_box() {
     local default="${3:-}"
     local width=60
 
-    echo ""
+    echo "" >/dev/tty
     _menu_draw_box "$title" "$width"
-    echo ""
-    printf "  ${WHITE}%s${NC}\n" "$prompt"
-    echo ""
+    echo "" >/dev/tty
+    printf "  ${WHITE}%s${NC}\n" "$prompt" >/dev/tty
+    echo "" >/dev/tty
     _menu_draw_separator "$width"
 
     # Show input prompt with default
-    printf "  ${CYAN}>${NC} "
+    printf "  ${CYAN}>${NC} " >/dev/tty
 
     local input
     if [[ -n "$default" ]]; then
-        read -r -e -i "$default" input
+        read -r -e -i "$default" input </dev/tty
     else
-        read -r input
+        read -r input </dev/tty
     fi
 
     local status=$?
-    echo ""
+    echo "" >/dev/tty
 
     if [[ $status -ne 0 ]]; then
         return 1
     fi
 
-    echo "$input"
+    echo "$input"  # Goes to stdout for capture
     return 0
 }
 
@@ -419,21 +428,21 @@ password_box() {
     local prompt="$2"
     local width=55
 
-    echo ""
+    echo "" >/dev/tty
     _menu_draw_box "$title" "$width"
-    echo ""
-    printf "  ${WHITE}%s${NC}\n" "$prompt"
-    echo ""
+    echo "" >/dev/tty
+    printf "  ${WHITE}%s${NC}\n" "$prompt" >/dev/tty
+    echo "" >/dev/tty
     _menu_draw_separator "$width"
 
-    printf "  ${CYAN}>${NC} "
+    printf "  ${CYAN}>${NC} " >/dev/tty
 
     local password=""
     local char
 
     _menu_cursor_show
 
-    while IFS= read -rsn1 char; do
+    while IFS= read -rsn1 char </dev/tty; do
         if [[ -z "$char" ]]; then
             # Enter pressed
             break
@@ -441,21 +450,21 @@ password_box() {
             # Backspace
             if [[ -n "$password" ]]; then
                 password="${password%?}"
-                printf '\b \b'
+                printf '\b \b' >/dev/tty
             fi
         elif [[ "$char" == $'\033' ]]; then
             # Escape - cancel
-            echo ""
+            echo "" >/dev/tty
             return 1
         else
             password+="$char"
-            printf '*'
+            printf '*' >/dev/tty
         fi
     done
 
-    echo ""
-    echo ""
-    echo "$password"
+    echo "" >/dev/tty
+    echo "" >/dev/tty
+    echo "$password"  # Goes to stdout for capture
     return 0
 }
 
@@ -469,19 +478,19 @@ text_box() {
     local title="$1"
     local content="$2"
 
-    echo ""
+    echo "" >/dev/tty
     _menu_draw_box "$title" 70
-    echo ""
+    echo "" >/dev/tty
 
     if [[ -f "$content" ]]; then
         # It's a file - use less with colors
-        less -R "$content" 2>/dev/null || cat "$content"
+        less -R "$content" </dev/tty >/dev/tty 2>/dev/tty || cat "$content" >/dev/tty
     else
         # It's text content
-        echo "$content" | less -R 2>/dev/null || echo "$content"
+        echo "$content" | less -R </dev/tty >/dev/tty 2>/dev/tty || echo "$content" >/dev/tty
     fi
 
-    echo ""
+    echo "" >/dev/tty
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -494,11 +503,11 @@ info_box() {
     local message="$2"
     local width=50
 
-    echo ""
+    echo "" >/dev/tty
     _menu_draw_box "$title" "$width"
-    echo ""
-    printf "  ${YELLOW}⟳${NC} ${WHITE}%s${NC}\n" "$message"
-    echo ""
+    echo "" >/dev/tty
+    printf "  ${YELLOW}⟳${NC} ${WHITE}%s${NC}\n" "$message" >/dev/tty
+    echo "" >/dev/tty
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -531,20 +540,26 @@ check_list() {
     local key
     local width=60
 
+    local menu_height=$((num_items + 6))
+    [[ -n "$prompt" ]] && menu_height=$((menu_height + 2))
+
     _menu_cursor_hide
-    tput sc 2>/dev/null || printf '\033[s'
 
     _render_checklist() {
-        tput rc 2>/dev/null || printf '\033[u'
+        local redraw="${1:-false}"
 
-        echo ""
+        if [[ "$redraw" == "true" ]]; then
+            _menu_cursor_up "$menu_height"
+        fi
+
+        echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
-        echo ""
+        echo "" >/dev/tty
 
         if [[ -n "$prompt" ]]; then
-            printf "  ${WHITE}%s${NC}\n" "$prompt"
+            printf "  ${WHITE}%s${NC}\n" "$prompt" >/dev/tty
             _menu_draw_separator "$width"
-            echo ""
+            echo "" >/dev/tty
         fi
 
         for ((i=0; i<num_items; i++)); do
@@ -556,21 +571,21 @@ check_list() {
             fi
 
             if [[ $i -eq $selected ]]; then
-                printf "  ${REVERSE} > %s ${keys[$i]} %s ${NC}" "$checkbox" "${descs[$i]}"
+                printf "  ${REVERSE} > %b ${keys[$i]} %s ${NC}" "$checkbox" "${descs[$i]}" >/dev/tty
                 _menu_clear_line
             else
-                printf "     %s ${YELLOW}%s${NC} ${WHITE}%s${NC}" "$checkbox" "${keys[$i]}" "${descs[$i]}"
+                printf "     %b ${YELLOW}%s${NC} ${WHITE}%s${NC}" "$checkbox" "${keys[$i]}" "${descs[$i]}" >/dev/tty
                 _menu_clear_line
             fi
-            echo ""
+            echo "" >/dev/tty
         done
 
-        echo ""
+        echo "" >/dev/tty
         _menu_draw_separator "$width"
-        printf "  ${DIM}↑↓ Navigate  Space Toggle  Enter Done  Esc Cancel${NC}\n"
+        printf "  ${DIM}↑↓ Navigate  Space Toggle  Enter Done  Esc Cancel${NC}\n" >/dev/tty
     }
 
-    _render_checklist
+    _render_checklist "false"
 
     while true; do
         key=$(_menu_read_key)
@@ -579,12 +594,12 @@ check_list() {
             UP)
                 ((selected--))
                 [[ $selected -lt 0 ]] && selected=$((num_items - 1))
-                _render_checklist
+                _render_checklist "true"
                 ;;
             DOWN)
                 ((selected++))
                 [[ $selected -ge $num_items ]] && selected=0
-                _render_checklist
+                _render_checklist "true"
                 ;;
             " ")
                 # Toggle selection
@@ -593,7 +608,7 @@ check_list() {
                 else
                     states[$selected]="ON"
                 fi
-                _render_checklist
+                _render_checklist "true"
                 ;;
             ENTER)
                 _menu_cursor_show
@@ -604,7 +619,7 @@ check_list() {
                         result+="${keys[$i]} "
                     fi
                 done
-                echo "${result% }"
+                echo "${result% }"  # Goes to stdout for capture
                 return 0
                 ;;
             ESC)
@@ -621,22 +636,22 @@ check_list() {
 
 # Show a success message (green)
 msg_success() {
-    printf "\n  ${GREEN}✓${NC} ${WHITE}%s${NC}\n\n" "$1"
+    printf "\n  ${GREEN}✓${NC} ${WHITE}%s${NC}\n\n" "$1" >/dev/tty
 }
 
 # Show an error message (red)
 msg_error() {
-    printf "\n  ${RED}✗${NC} ${WHITE}%s${NC}\n\n" "$1"
+    printf "\n  ${RED}✗${NC} ${WHITE}%s${NC}\n\n" "$1" >/dev/tty
 }
 
 # Show a warning message (yellow)
 msg_warn() {
-    printf "\n  ${YELLOW}⚠${NC} ${WHITE}%s${NC}\n\n" "$1"
+    printf "\n  ${YELLOW}⚠${NC} ${WHITE}%s${NC}\n\n" "$1" >/dev/tty
 }
 
 # Show an info message (cyan)
 msg_info() {
-    printf "\n  ${CYAN}ℹ${NC} ${WHITE}%s${NC}\n\n" "$1"
+    printf "\n  ${CYAN}ℹ${NC} ${WHITE}%s${NC}\n\n" "$1" >/dev/tty
 }
 
 # Print colored status
@@ -646,16 +661,16 @@ print_status() {
 
     case "$status" in
         ok|success|active|online|up)
-            printf "${GREEN}●${NC} %s\n" "$message"
+            printf "${GREEN}●${NC} %s\n" "$message" >/dev/tty
             ;;
         error|failed|offline|down)
-            printf "${RED}●${NC} %s\n" "$message"
+            printf "${RED}●${NC} %s\n" "$message" >/dev/tty
             ;;
         warn|warning|degraded)
-            printf "${YELLOW}●${NC} %s\n" "$message"
+            printf "${YELLOW}●${NC} %s\n" "$message" >/dev/tty
             ;;
         *)
-            printf "${DIM}●${NC} %s\n" "$message"
+            printf "${DIM}●${NC} %s\n" "$message" >/dev/tty
             ;;
     esac
 }
