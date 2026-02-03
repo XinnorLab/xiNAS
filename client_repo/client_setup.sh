@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-CLIENT_VERSION="1.6.0"
+CLIENT_VERSION="1.7.0"
 
 # Network configuration file
 NETWORK_CONFIG="$SCRIPT_DIR/network_config.yml"
@@ -184,6 +184,7 @@ show_welcome() {
     echo -e "    ${GREEN}②${NC}  ${WHITE}Install DOCA OFED${NC} ${DIM}(for RDMA support)${NC}"
     echo -e "    ${GREEN}③${NC}  ${WHITE}Configure Network${NC} ${DIM}(storage network IPs)${NC}"
     echo -e "    ${GREEN}④${NC}  ${WHITE}Connect to NAS${NC} ${DIM}(mount NFS share)${NC}"
+    echo -e "    ${GREEN}⑤${NC}  ${WHITE}K8s CSI Driver${NC} ${DIM}(for Kubernetes volumes)${NC}"
     echo ""
     echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
     echo -e "    ${DIM}Need help?${NC} ${CYAN}support@xinnor.io${NC}"
@@ -926,6 +927,623 @@ RDMA will not be available until reboot." 10 50; then
     else
         whiptail --title "Installation Failed" --scrolltext --textbox "$log" 20 70
     fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Kubernetes CSI NFS Driver
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Check if kubectl is available and cluster is accessible
+check_kubernetes_available() {
+    if ! command -v kubectl &>/dev/null; then
+        return 1
+    fi
+    if ! kubectl cluster-info &>/dev/null; then
+        return 2
+    fi
+    return 0
+}
+
+# Check if CSI NFS driver is installed
+check_csi_nfs_installed() {
+    if ! check_kubernetes_available; then
+        return 1
+    fi
+    # Check for CSI driver pods
+    kubectl get pods -n kube-system -l app.kubernetes.io/name=csi-driver-nfs &>/dev/null 2>&1 && return 0
+    kubectl get pods -n kube-system -l app=csi-nfs-controller &>/dev/null 2>&1 && return 0
+    # Check for CSI driver daemonset
+    kubectl get daemonset -n kube-system csi-nfs-node &>/dev/null 2>&1 && return 0
+    return 1
+}
+
+# Show CSI NFS driver status
+show_csi_nfs_status() {
+    local out="$TMP_DIR/csi_status"
+
+    {
+        echo "KUBERNETES CSI NFS DRIVER STATUS"
+        printf '=%.0s' {1..70}; echo ""
+        echo ""
+
+        # Check kubectl
+        echo "PREREQUISITES"
+        printf -- '-%.0s' {1..70}; echo ""
+        if command -v kubectl &>/dev/null; then
+            echo "  [OK] kubectl installed: $(kubectl version --client -o json 2>/dev/null | grep -o '"gitVersion":"[^"]*"' | head -1 | cut -d'"' -f4)"
+        else
+            echo "  [!!] kubectl NOT installed"
+            echo "       Install: https://kubernetes.io/docs/tasks/tools/"
+            echo ""
+            printf '=%.0s' {1..70}; echo ""
+            return
+        fi
+
+        if command -v helm &>/dev/null; then
+            echo "  [OK] helm installed: $(helm version --short 2>/dev/null)"
+        else
+            echo "  [--] helm not installed (optional)"
+        fi
+        echo ""
+
+        # Check cluster connectivity
+        echo "CLUSTER CONNECTIVITY"
+        printf -- '-%.0s' {1..70}; echo ""
+        if kubectl cluster-info &>/dev/null; then
+            echo "  [OK] Kubernetes cluster accessible"
+            local context
+            context=$(kubectl config current-context 2>/dev/null || echo "unknown")
+            echo "       Context: $context"
+            local nodes
+            nodes=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
+            echo "       Nodes: $nodes"
+        else
+            echo "  [!!] Cannot connect to Kubernetes cluster"
+            echo "       Check your kubeconfig: kubectl config view"
+            echo ""
+            printf '=%.0s' {1..70}; echo ""
+            return
+        fi
+        echo ""
+
+        # Check CSI driver
+        echo "CSI NFS DRIVER"
+        printf -- '-%.0s' {1..70}; echo ""
+        if check_csi_nfs_installed; then
+            echo "  [OK] CSI NFS driver installed"
+            echo ""
+            echo "  Controller pods:"
+            kubectl get pods -n kube-system -l app=csi-nfs-controller --no-headers 2>/dev/null | sed 's/^/       /' || \
+            kubectl get pods -n kube-system -l app.kubernetes.io/name=csi-driver-nfs --no-headers 2>/dev/null | sed 's/^/       /'
+            echo ""
+            echo "  Node pods:"
+            kubectl get pods -n kube-system -l app=csi-nfs-node --no-headers 2>/dev/null | sed 's/^/       /'
+        else
+            echo "  [!!] CSI NFS driver NOT installed"
+            echo "       Use 'Install CSI NFS Driver' to install"
+        fi
+        echo ""
+
+        # Check storage classes
+        echo "NFS STORAGE CLASSES"
+        printf -- '-%.0s' {1..70}; echo ""
+        local nfs_sc
+        nfs_sc=$(kubectl get storageclass -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.provisioner}{"\n"}{end}' 2>/dev/null | grep -i nfs || true)
+        if [[ -n "$nfs_sc" ]]; then
+            echo "$nfs_sc" | while read -r name provisioner; do
+                local default_marker=""
+                kubectl get storageclass "$name" -o jsonpath='{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}' 2>/dev/null | grep -q "true" && default_marker=" (default)"
+                echo "  [*] $name$default_marker"
+                echo "      Provisioner: $provisioner"
+            done
+        else
+            echo "  [--] No NFS storage classes found"
+            echo "       Use 'Configure Storage Class' to create one"
+        fi
+        echo ""
+
+        # Check PVCs using NFS
+        echo "NFS PERSISTENT VOLUME CLAIMS"
+        printf -- '-%.0s' {1..70}; echo ""
+        local nfs_pvcs
+        nfs_pvcs=$(kubectl get pvc --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\t"}{.spec.storageClassName}{"\t"}{.status.phase}{"\n"}{end}' 2>/dev/null | grep -E "nfs|xiNAS|xinas" || true)
+        if [[ -n "$nfs_pvcs" ]]; then
+            echo "  NAMESPACE          NAME                      STORAGECLASS     STATUS"
+            echo "$nfs_pvcs" | while IFS=$'\t' read -r ns name sc phase; do
+                printf "  %-18s %-25s %-15s %s\n" "$ns" "$name" "$sc" "$phase"
+            done
+        else
+            echo "  [--] No NFS-based PVCs found"
+        fi
+        echo ""
+
+        printf '=%.0s' {1..70}; echo ""
+    } > "$out"
+
+    whiptail --title "CSI NFS Driver Status" --scrolltext --textbox "$out" 30 80
+}
+
+# Install CSI NFS driver
+install_csi_nfs_driver() {
+    # Check prerequisites
+    if ! command -v kubectl &>/dev/null; then
+        whiptail --title "kubectl Required" --msgbox "\
+kubectl is not installed.
+
+Install kubectl first:
+  https://kubernetes.io/docs/tasks/tools/
+
+Or for Ubuntu/Debian:
+  sudo snap install kubectl --classic" 14 55
+        return 1
+    fi
+
+    if ! kubectl cluster-info &>/dev/null; then
+        whiptail --title "Cluster Not Accessible" --msgbox "\
+Cannot connect to Kubernetes cluster.
+
+Make sure:
+1. A Kubernetes cluster is running
+2. kubectl is properly configured
+3. You have cluster access permissions
+
+Check with: kubectl cluster-info" 14 55
+        return 1
+    fi
+
+    # Check if already installed
+    if check_csi_nfs_installed; then
+        local pods
+        pods=$(kubectl get pods -n kube-system -l app=csi-nfs-controller --no-headers 2>/dev/null | head -3 || true)
+        whiptail --title "Already Installed" --msgbox "\
+CSI NFS driver is already installed.
+
+Controller pods:
+$pods
+
+Use 'Check Status' to see full details." 14 60
+        return 0
+    fi
+
+    # Choose installation method
+    local method
+    method=$(whiptail --title "Installation Method" --menu "\
+Choose installation method:
+
+Helm is recommended if available.
+Script install works without Helm." 16 60 2 \
+        "helm" "Install via Helm (recommended)" \
+        "script" "Install via official script" \
+        3>&1 1>&2 2>&3) || return
+
+    local log="$TMP_DIR/csi_install.log"
+
+    case "$method" in
+        helm)
+            # Check for helm
+            if ! command -v helm &>/dev/null; then
+                if whiptail --title "Helm Not Found" --yesno "\
+Helm is not installed.
+
+Install Helm now?
+
+This will download and install Helm 3." 12 50; then
+                    whiptail --title "Installing Helm..." --infobox "Downloading and installing Helm..." 6 50
+                    if curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash > "$log" 2>&1; then
+                        whiptail --title "Helm Installed" --msgbox "Helm installed successfully!" 8 40
+                    else
+                        whiptail --title "Helm Install Failed" --scrolltext --textbox "$log" 20 70
+                        return 1
+                    fi
+                else
+                    return
+                fi
+            fi
+
+            whiptail --title "Installing CSI NFS Driver" --infobox "\
+Installing CSI NFS Driver via Helm...
+
+This may take a few minutes." 8 55
+
+            {
+                echo "Adding CSI NFS Helm repository..."
+                helm repo add csi-driver-nfs https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts
+                echo "Updating Helm repositories..."
+                helm repo update
+                echo "Installing csi-driver-nfs..."
+                helm install csi-driver-nfs csi-driver-nfs/csi-driver-nfs \
+                    --namespace kube-system \
+                    --set controller.replicas=1 \
+                    --wait
+            } > "$log" 2>&1
+
+            if [[ $? -eq 0 ]]; then
+                whiptail --title "Installation Complete" --msgbox "\
+CSI NFS Driver installed successfully!
+
+Next steps:
+1. Create a StorageClass for your NFS server
+2. Create PersistentVolumeClaims using the StorageClass
+
+Use 'Configure Storage Class' to set up
+a StorageClass for your xiNAS server." 16 60
+            else
+                whiptail --title "Installation Failed" --scrolltext --textbox "$log" 20 70
+                return 1
+            fi
+            ;;
+
+        script)
+            whiptail --title "Installing CSI NFS Driver" --infobox "\
+Installing CSI NFS Driver via script...
+
+This may take a few minutes." 8 55
+
+            {
+                echo "Downloading and running CSI NFS install script..."
+                curl -skSL https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/deploy/install-driver.sh | bash -s master --
+            } > "$log" 2>&1
+
+            if [[ $? -eq 0 ]] && check_csi_nfs_installed; then
+                whiptail --title "Installation Complete" --msgbox "\
+CSI NFS Driver installed successfully!
+
+Next steps:
+1. Create a StorageClass for your NFS server
+2. Create PersistentVolumeClaims using the StorageClass
+
+Use 'Configure Storage Class' to set up
+a StorageClass for your xiNAS server." 16 60
+            else
+                whiptail --title "Installation Failed" --scrolltext --textbox "$log" 20 70
+                return 1
+            fi
+            ;;
+    esac
+}
+
+# Uninstall CSI NFS driver
+uninstall_csi_nfs_driver() {
+    if ! check_csi_nfs_installed; then
+        whiptail --title "Not Installed" --msgbox "CSI NFS driver is not installed." 8 45
+        return
+    fi
+
+    if ! whiptail --title "Confirm Uninstall" --yesno "\
+Uninstall CSI NFS Driver?
+
+WARNING: This will remove the CSI driver.
+Existing PVCs may become inaccessible.
+
+Are you sure?" 12 50; then
+        return
+    fi
+
+    local log="$TMP_DIR/csi_uninstall.log"
+
+    whiptail --title "Uninstalling..." --infobox "Removing CSI NFS Driver..." 6 45
+
+    # Try helm uninstall first
+    if command -v helm &>/dev/null && helm list -n kube-system | grep -q csi-driver-nfs; then
+        helm uninstall csi-driver-nfs -n kube-system > "$log" 2>&1
+    else
+        # Use the uninstall script
+        curl -skSL https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/deploy/uninstall-driver.sh | bash -s master -- > "$log" 2>&1
+    fi
+
+    if ! check_csi_nfs_installed; then
+        whiptail --title "Uninstalled" --msgbox "CSI NFS Driver has been removed." 8 45
+    else
+        whiptail --title "Uninstall Issue" --scrolltext --textbox "$log" 20 70
+    fi
+}
+
+# Configure NFS StorageClass for xiNAS
+configure_csi_nfs_storage_class() {
+    if ! check_kubernetes_available; then
+        whiptail --title "Cluster Not Accessible" --msgbox "\
+Cannot connect to Kubernetes cluster.
+
+Make sure kubectl is configured and
+the cluster is accessible." 10 50
+        return 1
+    fi
+
+    if ! check_csi_nfs_installed; then
+        if ! whiptail --title "Driver Not Installed" --yesno "\
+CSI NFS driver is not installed.
+
+Install it now?" 10 45; then
+            return
+        fi
+        install_csi_nfs_driver || return 1
+    fi
+
+    # Get NFS server address
+    local nfs_server
+    nfs_server=$(whiptail --title "NFS Server Address" --inputbox "\
+Enter the xiNAS server IP address:
+
+This should be the storage network IP
+that Kubernetes nodes can access.
+
+Example: 10.10.1.1" 14 55 "10.10.1.1" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$nfs_server" ]] && return
+
+    # Validate IP format
+    if [[ ! "$nfs_server" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        whiptail --title "Invalid IP" --msgbox "Please enter a valid IP address." 8 45
+        return
+    fi
+
+    # Get NFS share path
+    local nfs_share
+    nfs_share=$(whiptail --title "NFS Share Path" --inputbox "\
+Enter the NFS export path on the server:
+
+This is the base path that will be used
+for dynamic provisioning.
+
+Example: /mnt/data" 14 55 "/mnt/data" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$nfs_share" ]] && nfs_share="/mnt/data"
+
+    # Storage class name
+    local sc_name
+    sc_name=$(whiptail --title "Storage Class Name" --inputbox "\
+Enter a name for the StorageClass:
+
+This will be used in PVC definitions.
+
+Example: xinas-nfs" 14 55 "xinas-nfs" 3>&1 1>&2 2>&3) || return
+
+    [[ -z "$sc_name" ]] && sc_name="xinas-nfs"
+
+    # Reclaim policy
+    local reclaim_policy
+    reclaim_policy=$(whiptail --title "Reclaim Policy" --menu "\
+Select the reclaim policy:
+
+What happens when a PVC is deleted?" 14 60 3 \
+        "Delete" "Delete the data (default)" \
+        "Retain" "Keep the data for manual cleanup" \
+        "Archive" "Archive before deletion" \
+        3>&1 1>&2 2>&3) || return
+
+    [[ -z "$reclaim_policy" ]] && reclaim_policy="Delete"
+
+    # Set as default?
+    local set_default="false"
+    if whiptail --title "Default StorageClass" --yesno "\
+Make this the default StorageClass?
+
+If yes, PVCs without an explicit storageClassName
+will use this StorageClass." 12 55; then
+        set_default="true"
+    fi
+
+    # Generate StorageClass YAML
+    local sc_file="$TMP_DIR/storageclass.yaml"
+    cat > "$sc_file" <<EOF
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: $sc_name
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "$set_default"
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: $nfs_server
+  share: $nfs_share
+  # subDir: \${pvc.metadata.namespace}/\${pvc.metadata.name}
+reclaimPolicy: $reclaim_policy
+volumeBindingMode: Immediate
+mountOptions:
+  - nfsvers=4.2
+  - hard
+  - nconnect=16
+  - rsize=1048576
+  - wsize=1048576
+EOF
+
+    # Show preview and confirm
+    if ! whiptail --title "Confirm StorageClass" --yesno "\
+StorageClass configuration:
+
+Name:          $sc_name
+NFS Server:    $nfs_server
+NFS Share:     $nfs_share
+Reclaim:       $reclaim_policy
+Default:       $set_default
+
+Create this StorageClass?" 18 60; then
+        return
+    fi
+
+    # Apply the StorageClass
+    local log="$TMP_DIR/sc_apply.log"
+    if kubectl apply -f "$sc_file" > "$log" 2>&1; then
+        whiptail --title "StorageClass Created" --msgbox "\
+StorageClass '$sc_name' created successfully!
+
+Example PVC:
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: my-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: $sc_name
+  resources:
+    requests:
+      storage: 100Gi" 22 60
+    else
+        whiptail --title "Failed" --scrolltext --textbox "$log" 20 70
+    fi
+}
+
+# List and manage storage classes
+manage_csi_nfs_storage_classes() {
+    if ! check_kubernetes_available; then
+        whiptail --title "Cluster Not Accessible" --msgbox "Cannot connect to Kubernetes cluster." 8 50
+        return
+    fi
+
+    while true; do
+        # Get NFS storage classes
+        local sc_list=()
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            local name provisioner
+            name=$(echo "$line" | awk '{print $1}')
+            provisioner=$(echo "$line" | awk '{print $2}')
+            if [[ "$provisioner" == *"nfs"* ]]; then
+                local default_marker=""
+                kubectl get storageclass "$name" -o jsonpath='{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}' 2>/dev/null | grep -q "true" && default_marker=" (default)"
+                sc_list+=("$name" "$provisioner$default_marker")
+            fi
+        done < <(kubectl get storageclass --no-headers 2>/dev/null)
+
+        if [[ ${#sc_list[@]} -eq 0 ]]; then
+            whiptail --title "No NFS StorageClasses" --msgbox "\
+No NFS StorageClasses found.
+
+Use 'Create StorageClass' to add one." 10 50
+            return
+        fi
+
+        sc_list+=("" "")
+        sc_list+=("Back" "Return to CSI menu")
+
+        local choice
+        choice=$(whiptail --title "NFS Storage Classes" --menu "\
+Select a StorageClass to manage:" 18 70 8 \
+            "${sc_list[@]}" 3>&1 1>&2 2>&3) || return
+
+        [[ "$choice" == "Back" || -z "$choice" ]] && return
+
+        # Show options for selected StorageClass
+        local action
+        action=$(whiptail --title "StorageClass: $choice" --menu "\
+Select action:" 14 55 4 \
+            "1" "View Details" \
+            "2" "Delete StorageClass" \
+            "3" "Set as Default" \
+            "4" "Back" \
+            3>&1 1>&2 2>&3) || continue
+
+        case "$action" in
+            1)
+                local details="$TMP_DIR/sc_details"
+                kubectl get storageclass "$choice" -o yaml > "$details" 2>&1
+                whiptail --title "StorageClass: $choice" --scrolltext --textbox "$details" 25 80
+                ;;
+            2)
+                if whiptail --title "Delete StorageClass" --yesno "\
+Delete StorageClass '$choice'?
+
+Note: Existing PVCs using this StorageClass
+will NOT be deleted." 12 55; then
+                    if kubectl delete storageclass "$choice" &>/dev/null; then
+                        whiptail --title "Deleted" --msgbox "StorageClass '$choice' deleted." 8 45
+                    else
+                        whiptail --title "Error" --msgbox "Failed to delete StorageClass." 8 45
+                    fi
+                fi
+                ;;
+            3)
+                # Remove default from others first
+                for sc in $(kubectl get storageclass -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+                    kubectl patch storageclass "$sc" -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' &>/dev/null || true
+                done
+                # Set this one as default
+                if kubectl patch storageclass "$choice" -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}' &>/dev/null; then
+                    whiptail --title "Default Set" --msgbox "'$choice' is now the default StorageClass." 8 55
+                else
+                    whiptail --title "Error" --msgbox "Failed to set as default." 8 45
+                fi
+                ;;
+        esac
+    done
+}
+
+# CSI NFS Driver menu
+kubernetes_csi_nfs_menu() {
+    # Check if running on a Kubernetes node
+    if ! command -v kubectl &>/dev/null; then
+        if ! whiptail --title "kubectl Not Found" --yesno "\
+kubectl is not installed on this system.
+
+This feature requires:
+- kubectl command-line tool
+- Access to a Kubernetes cluster
+
+Would you like to install kubectl?" 14 55; then
+            return
+        fi
+
+        whiptail --title "Installing kubectl..." --infobox "Installing kubectl..." 6 40
+
+        if command -v snap &>/dev/null; then
+            snap install kubectl --classic &>/dev/null
+        elif command -v apt-get &>/dev/null; then
+            curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg &>/dev/null
+            echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
+            apt-get update -qq && apt-get install -y -qq kubectl
+        else
+            whiptail --title "Manual Install Required" --msgbox "\
+Could not auto-install kubectl.
+
+Please install manually:
+https://kubernetes.io/docs/tasks/tools/" 12 55
+            return
+        fi
+
+        if command -v kubectl &>/dev/null; then
+            whiptail --title "Installed" --msgbox "kubectl installed successfully!" 8 40
+        else
+            whiptail --title "Installation Failed" --msgbox "Failed to install kubectl." 8 40
+            return
+        fi
+    fi
+
+    while true; do
+        # Get quick status
+        local k8s_status="Not configured"
+        local csi_status="Not installed"
+
+        if kubectl cluster-info &>/dev/null 2>&1; then
+            k8s_status="Connected"
+            if check_csi_nfs_installed; then
+                csi_status="Installed"
+            fi
+        fi
+
+        local choice
+        choice=$(whiptail --title "Kubernetes CSI NFS Driver" --menu "\
+  Cluster: $k8s_status | CSI Driver: $csi_status
+  ─────────────────────────────────────────────" 20 65 8 \
+            "1" "📊 Check Status" \
+            "2" "📦 Install CSI NFS Driver" \
+            "3" "⚙️  Configure Storage Class" \
+            "4" "📁 Manage Storage Classes" \
+            "5" "🗑️  Uninstall CSI NFS Driver" \
+            "6" "🔙 Back to Main Menu" \
+            3>&1 1>&2 2>&3) || return
+
+        case "$choice" in
+            1) show_csi_nfs_status ;;
+            2) install_csi_nfs_driver ;;
+            3) configure_csi_nfs_storage_class ;;
+            4) manage_csi_nfs_storage_classes ;;
+            5) uninstall_csi_nfs_driver ;;
+            6) return ;;
+        esac
+    done
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1749,16 +2367,17 @@ main_menu() {
         local choice
         choice=$(whiptail --title "═══ xiNAS Client Setup v$CLIENT_VERSION ═══" --menu "\
   $(hostname) | Mounts: $nfs_mounts | RDMA: $rdma_status
-  ─────────────────────────────────────────────" 24 60 10 \
+  ─────────────────────────────────────────────" 26 60 11 \
             "1" "📊 System Status" \
             "2" "🔌 Connect to NAS" \
             "3" "📁 Manage Mounts" \
             "4" "🌐 Network Settings" \
             "5" "🔧 Install NFS Tools" \
             "6" "⚡ Install DOCA OFED" \
-            "7" "🔍 Test Connection" \
-            "8" "🔄 Check for Updates" \
-            "9" "🚪 Exit" \
+            "7" "☸️  Kubernetes CSI NFS Driver" \
+            "8" "🔍 Test Connection" \
+            "9" "🔄 Check for Updates" \
+            "0" "🚪 Exit" \
             3>&1 1>&2 2>&3) || break
 
         case "$choice" in
@@ -1768,9 +2387,10 @@ main_menu() {
             4) configure_network ;;
             5) install_nfs_tools ;;
             6) install_doca_ofed ;;
-            7) test_connection ;;
-            8) check_and_update ;;
-            9)
+            7) kubernetes_csi_nfs_menu ;;
+            8) test_connection ;;
+            9) check_and_update ;;
+            0)
                 whiptail --title "See you soon!" --msgbox "\
    Thank you for using xiNAS Client Setup!
 
@@ -1966,6 +2586,41 @@ case "${1:-}" in
         done
         exit 0
         ;;
+    --csi|--csi-nfs)
+        # Direct access to CSI NFS menu
+        kubernetes_csi_nfs_menu
+        exit 0
+        ;;
+    --csi-status)
+        # Show CSI NFS driver status (non-interactive)
+        if ! command -v kubectl &>/dev/null; then
+            echo -e "${RED}Error: kubectl not installed${NC}"
+            exit 1
+        fi
+        if ! kubectl cluster-info &>/dev/null; then
+            echo -e "${RED}Error: Cannot connect to Kubernetes cluster${NC}"
+            exit 1
+        fi
+        echo -e "${CYAN}Kubernetes CSI NFS Driver Status${NC}"
+        echo ""
+        echo "Cluster: $(kubectl config current-context 2>/dev/null || echo 'unknown')"
+        echo ""
+        if check_csi_nfs_installed; then
+            echo -e "${GREEN}CSI NFS Driver: Installed${NC}"
+            echo ""
+            echo "Controller pods:"
+            kubectl get pods -n kube-system -l app=csi-nfs-controller --no-headers 2>/dev/null | sed 's/^/  /' || true
+            echo ""
+            echo "Node pods:"
+            kubectl get pods -n kube-system -l app=csi-nfs-node --no-headers 2>/dev/null | sed 's/^/  /' || true
+        else
+            echo -e "${YELLOW}CSI NFS Driver: Not installed${NC}"
+        fi
+        echo ""
+        echo "NFS StorageClasses:"
+        kubectl get storageclass -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.provisioner}{"\n"}{end}' 2>/dev/null | grep -i nfs | sed 's/^/  /' || echo "  (none)"
+        exit 0
+        ;;
     --help|-h)
         echo "xiNAS Client Setup v$CLIENT_VERSION"
         echo ""
@@ -1975,6 +2630,8 @@ case "${1:-}" in
         echo "  --status, -s              Show current NFS mounts"
         echo "  --mount, -m SERVER MOUNT  Quick mount (see below)"
         echo "  --network-status, -n      Show network configuration status"
+        echo "  --csi, --csi-nfs          Open Kubernetes CSI NFS menu"
+        echo "  --csi-status              Show CSI NFS driver status"
         echo "  --version, -v             Show version information"
         echo "  --update, -u              Check for and install updates"
         echo "  --help, -h                Show this help"
@@ -1993,6 +2650,10 @@ case "${1:-}" in
         echo ""
         echo "Multi-IP (distributes 16 connections + trunking):"
         echo "  1 IP = nconnect=16, 2 IPs = nconnect=8 each, etc."
+        echo ""
+        echo "Kubernetes CSI NFS Driver:"
+        echo "  The CSI driver enables dynamic NFS volume provisioning"
+        echo "  in Kubernetes clusters using your xiNAS server."
         echo ""
         echo "Examples:"
         echo "  -m 10.10.1.1:/data /mnt/nas              # TCP, sec=sys"
