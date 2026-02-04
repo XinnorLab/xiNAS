@@ -77,12 +77,14 @@ _menu_draw_box() {
     local title="$1"
     local width="${2:-60}"
     local title_len=${#title}
-    local padding=$(( (width - title_len - 2) / 2 ))
+    # Account for: ╔ (1) + left padding + space (1) + title + space (1) + right padding + ╗ (1)
+    local padding=$(( (width - title_len - 4) / 2 ))
+    [[ $padding -lt 1 ]] && padding=1
 
     printf "${CYAN}${BOX_TL}" >/dev/tty
     printf '%*s' "$padding" '' | tr ' ' "$BOX_H" >/dev/tty
     printf " ${WHITE}${BOLD}%s${NC}${CYAN} " "$title" >/dev/tty
-    printf '%*s' "$((width - padding - title_len - 2))" '' | tr ' ' "$BOX_H" >/dev/tty
+    printf '%*s' "$((width - padding - title_len - 4))" '' | tr ' ' "$BOX_H" >/dev/tty
     printf "${BOX_TR}${NC}\n" >/dev/tty
 }
 
