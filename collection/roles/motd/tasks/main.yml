@@ -120,6 +120,26 @@
     xinas_repo_dir: "{{ playbook_dir | dirname }}"
   tags: [motd, menu]
 
+- name: Create lib directory for menu library
+  ansible.builtin.file:
+    path: /usr/local/bin/lib
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  when: menu_enabled | bool
+  tags: [motd, menu]
+
+- name: Deploy menu library
+  ansible.builtin.copy:
+    src: "{{ xinas_repo_dir }}/lib/menu_lib.sh"
+    dest: /usr/local/bin/lib/menu_lib.sh
+    mode: '0644'
+    owner: root
+    group: root
+  when: menu_enabled | bool
+  tags: [motd, menu]
+
 - name: Deploy xiNAS management menu
   ansible.builtin.copy:
     src: "{{ xinas_repo_dir }}/post_install_menu.sh"
