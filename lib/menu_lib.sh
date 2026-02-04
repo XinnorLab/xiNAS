@@ -214,7 +214,7 @@ msg_box() {
     local width=60
 
     # Interpret \n escape sequences
-    message=$(echo -e "$message")
+    message=$(printf '%b' "$message")
 
     # Calculate width based on content
     local max_line=0
@@ -269,7 +269,7 @@ yes_no() {
     [[ "$default" == "n" ]] && selected=1
 
     # Interpret \n escape sequences
-    question=$(echo -e "$question")
+    question=$(printf '%b' "$question")
 
     # Calculate width based on longest line
     local max_line=0
@@ -351,7 +351,7 @@ input_box() {
     local width=60
 
     # Interpret \n escape sequences
-    prompt=$(echo -e "$prompt")
+    prompt=$(printf '%b' "$prompt")
 
     # Calculate width based on longest line
     local max_line=0
@@ -484,7 +484,7 @@ info_box() {
     local width=50
 
     # Interpret \n escape sequences
-    message=$(echo -e "$message")
+    message=$(printf '%b' "$message")
 
     # Calculate width based on longest line
     local max_line=0
