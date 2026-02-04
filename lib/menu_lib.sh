@@ -213,6 +213,9 @@ msg_box() {
     local message="$2"
     local width=60
 
+    # Interpret \n escape sequences
+    message=$(echo -e "$message")
+
     # Calculate width based on content
     local max_line=0
     while IFS= read -r line; do
