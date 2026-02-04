@@ -213,8 +213,9 @@ msg_box() {
     local message="$2"
     local width=60
 
-    # Interpret \n escape sequences
-    message=$(printf '%b' "$message")
+    # Convert literal \n to actual newlines
+    local newline=$'\n'
+    message="${message//\\n/$newline}"
 
     # Calculate width based on content
     local max_line=0
@@ -268,8 +269,9 @@ yes_no() {
     local selected=0
     [[ "$default" == "n" ]] && selected=1
 
-    # Interpret \n escape sequences
-    question=$(printf '%b' "$question")
+    # Convert literal \n to actual newlines
+    local newline=$'\n'
+    question="${question//\\n/$newline}"
 
     # Calculate width based on longest line
     local max_line=0
@@ -350,8 +352,9 @@ input_box() {
     local default="${3:-}"
     local width=60
 
-    # Interpret \n escape sequences
-    prompt=$(printf '%b' "$prompt")
+    # Convert literal \n to actual newlines
+    local newline=$'\n'
+    prompt="${prompt//\\n/$newline}"
 
     # Calculate width based on longest line
     local max_line=0
@@ -483,8 +486,9 @@ info_box() {
     local message="$2"
     local width=50
 
-    # Interpret \n escape sequences
-    message=$(printf '%b' "$message")
+    # Convert literal \n to actual newlines
+    local newline=$'\n'
+    message="${message//\\n/$newline}"
 
     # Calculate width based on longest line
     local max_line=0
