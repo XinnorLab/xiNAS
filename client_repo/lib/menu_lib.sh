@@ -143,27 +143,66 @@ menu_select() {
     _render_menu() {
         _menu_clear_screen
 
+        local inner_width=$((width - 2))
+
         echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
-        echo "" >/dev/tty
 
+        # Prompt line with borders
         if [[ -n "$prompt" ]]; then
-            printf "  ${WHITE}%s${NC}\n" "$prompt" >/dev/tty
-            _menu_draw_separator "$width"
-            echo "" >/dev/tty
+            local prompt_len=${#prompt}
+            local prompt_pad=$((inner_width - prompt_len - 2))
+            [[ $prompt_pad -lt 0 ]] && prompt_pad=0
+            printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
+            printf '%*s' "$prompt_pad" '' >/dev/tty
+            printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+            # Separator inside box
+            printf "${CYAN}${BOX_V}${NC}${DIM}" >/dev/tty
+            _menu_repeat_char "$BOX_LINE" "$inner_width" >/dev/tty
+            printf "${NC}${CYAN}${BOX_V}${NC}\n" >/dev/tty
         fi
 
+        # Menu items with borders
         for ((i=0; i<num_items; i++)); do
+            local item_text
             if [[ $i -eq $selected ]]; then
-                printf "  ${REVERSE}${GREEN} > %s  %s ${NC}\n" "${keys[$i]}" "${descs[$i]}" >/dev/tty
+                item_text=" > ${keys[$i]}  ${descs[$i]} "
             else
-                printf "  ${DIM}   ${NC}${YELLOW}%s${NC}  ${WHITE}%s${NC}\n" "${keys[$i]}" "${descs[$i]}" >/dev/tty
+                item_text="   ${keys[$i]}  ${descs[$i]}"
             fi
+            local item_len=${#item_text}
+            local item_pad=$((inner_width - item_len - 1))
+            [[ $item_pad -lt 0 ]] && item_pad=0
+
+            printf "${CYAN}${BOX_V}${NC}" >/dev/tty
+            if [[ $i -eq $selected ]]; then
+                printf "${REVERSE}${GREEN}%s${NC}" "$item_text" >/dev/tty
+            else
+                printf "${DIM}   ${NC}${YELLOW}%s${NC}  ${WHITE}%s${NC}" "${keys[$i]}" "${descs[$i]}" >/dev/tty
+            fi
+            printf '%*s' "$item_pad" '' >/dev/tty
+            printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
         done
 
-        echo "" >/dev/tty
-        _menu_draw_separator "$width"
-        printf "  ${DIM}↑↓ Navigate  Enter Select  Esc Cancel${NC}\n" >/dev/tty
+        # Empty line before footer
+        printf "${CYAN}${BOX_V}${NC}" >/dev/tty
+        printf '%*s' "$inner_width" '' >/dev/tty
+        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+        # Footer with help text
+        local help_text="↑↓ Navigate  Enter Select  Esc Cancel"
+        local help_len=${#help_text}
+        local help_pad=$((inner_width - help_len - 1))
+        [[ $help_pad -lt 0 ]] && help_pad=0
+        printf "${CYAN}${BOX_V}${NC} ${DIM}%s${NC}" "$help_text" >/dev/tty
+        printf '%*s' "$help_pad" '' >/dev/tty
+        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+        # Bottom border
+        printf "${CYAN}${BOX_BL}" >/dev/tty
+        _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
+        printf "${BOX_BR}${NC}\n" >/dev/tty
     }
 
     _render_menu
@@ -286,15 +325,37 @@ yes_no() {
     _render_yesno() {
         _menu_clear_screen
 
+        local inner_width=$((width - 2))
+
         echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
-        echo "" >/dev/tty
-        while IFS= read -r line; do
-            printf "  ${WHITE}%s${NC}\n" "$line" >/dev/tty
-        done <<< "$question"
-        echo "" >/dev/tty
 
-        printf "  " >/dev/tty
+        # Question lines with borders
+        while IFS= read -r line; do
+            local line_len=${#line}
+            local padding=$((inner_width - line_len - 2))
+            [[ $padding -lt 0 ]] && padding=0
+            printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$line" >/dev/tty
+            printf '%*s' "$padding" '' >/dev/tty
+            printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+        done <<< "$question"
+
+        # Empty line with borders
+        printf "${CYAN}${BOX_V}${NC}" >/dev/tty
+        printf '%*s' "$inner_width" '' >/dev/tty
+        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+        # Yes/No buttons line with borders
+        local buttons=""
+        if [[ $selected -eq 0 ]]; then
+            buttons="  [YES]      No  "
+        else
+            buttons="   Yes     [NO]  "
+        fi
+        local btn_pad=$((inner_width - 20))
+        [[ $btn_pad -lt 0 ]] && btn_pad=0
+
+        printf "${CYAN}${BOX_V}${NC}  " >/dev/tty
         if [[ $selected -eq 0 ]]; then
             printf "${REVERSE}${GREEN}  Yes  ${NC}" >/dev/tty
         else
@@ -306,10 +367,27 @@ yes_no() {
         else
             printf "${DIM}  No   ${NC}" >/dev/tty
         fi
-        echo "" >/dev/tty
-        echo "" >/dev/tty
-        _menu_draw_separator "$width"
-        printf "  ${DIM}←→ Switch  Enter Confirm${NC}\n" >/dev/tty
+        printf '%*s' "$btn_pad" '' >/dev/tty
+        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+        # Empty line with borders
+        printf "${CYAN}${BOX_V}${NC}" >/dev/tty
+        printf '%*s' "$inner_width" '' >/dev/tty
+        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+        # Footer with help text
+        local help_text="←→ Switch  Enter Confirm"
+        local help_len=${#help_text}
+        local help_pad=$((inner_width - help_len - 1))
+        [[ $help_pad -lt 0 ]] && help_pad=0
+        printf "${CYAN}${BOX_V}${NC} ${DIM}%s${NC}" "$help_text" >/dev/tty
+        printf '%*s' "$help_pad" '' >/dev/tty
+        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+        # Bottom border
+        printf "${CYAN}${BOX_BL}" >/dev/tty
+        _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
+        printf "${BOX_BR}${NC}\n" >/dev/tty
     }
 
     _render_yesno
@@ -561,34 +639,77 @@ check_list() {
     _render_checklist() {
         _menu_clear_screen
 
+        local inner_width=$((width - 2))
+
         echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
-        echo "" >/dev/tty
 
+        # Prompt line with borders
         if [[ -n "$prompt" ]]; then
-            printf "  ${WHITE}%s${NC}\n" "$prompt" >/dev/tty
-            _menu_draw_separator "$width"
-            echo "" >/dev/tty
+            local prompt_len=${#prompt}
+            local prompt_pad=$((inner_width - prompt_len - 2))
+            [[ $prompt_pad -lt 0 ]] && prompt_pad=0
+            printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
+            printf '%*s' "$prompt_pad" '' >/dev/tty
+            printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+            # Separator inside box
+            printf "${CYAN}${BOX_V}${NC}${DIM}" >/dev/tty
+            _menu_repeat_char "$BOX_LINE" "$inner_width" >/dev/tty
+            printf "${NC}${CYAN}${BOX_V}${NC}\n" >/dev/tty
         fi
 
+        # Checklist items with borders
         for ((i=0; i<num_items; i++)); do
-            local checkbox
+            local checkbox_char
             if [[ "${states[$i]}" == "ON" ]]; then
-                checkbox="${GREEN}[✓]${NC}"
+                checkbox_char="[✓]"
             else
-                checkbox="${DIM}[ ]${NC}"
+                checkbox_char="[ ]"
             fi
 
+            local item_text
             if [[ $i -eq $selected ]]; then
-                printf "  ${REVERSE} > %b %s %s ${NC}\n" "$checkbox" "${keys[$i]}" "${descs[$i]}" >/dev/tty
+                item_text=" > $checkbox_char ${keys[$i]} ${descs[$i]} "
             else
-                printf "     %b ${YELLOW}%s${NC} ${WHITE}%s${NC}\n" "$checkbox" "${keys[$i]}" "${descs[$i]}" >/dev/tty
+                item_text="   $checkbox_char ${keys[$i]} ${descs[$i]}"
             fi
+            local item_len=${#item_text}
+            local item_pad=$((inner_width - item_len - 1))
+            [[ $item_pad -lt 0 ]] && item_pad=0
+
+            printf "${CYAN}${BOX_V}${NC}" >/dev/tty
+            if [[ $i -eq $selected ]]; then
+                printf "${REVERSE}${GREEN}%s${NC}" "$item_text" >/dev/tty
+            else
+                if [[ "${states[$i]}" == "ON" ]]; then
+                    printf "   ${GREEN}%s${NC} ${YELLOW}%s${NC} ${WHITE}%s${NC}" "$checkbox_char" "${keys[$i]}" "${descs[$i]}" >/dev/tty
+                else
+                    printf "   ${DIM}%s${NC} ${YELLOW}%s${NC} ${WHITE}%s${NC}" "$checkbox_char" "${keys[$i]}" "${descs[$i]}" >/dev/tty
+                fi
+            fi
+            printf '%*s' "$item_pad" '' >/dev/tty
+            printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
         done
 
-        echo "" >/dev/tty
-        _menu_draw_separator "$width"
-        printf "  ${DIM}↑↓ Navigate  Space Toggle  Enter Done${NC}\n" >/dev/tty
+        # Empty line before footer
+        printf "${CYAN}${BOX_V}${NC}" >/dev/tty
+        printf '%*s' "$inner_width" '' >/dev/tty
+        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+        # Footer with help text
+        local help_text="↑↓ Navigate  Space Toggle  Enter Done"
+        local help_len=${#help_text}
+        local help_pad=$((inner_width - help_len - 1))
+        [[ $help_pad -lt 0 ]] && help_pad=0
+        printf "${CYAN}${BOX_V}${NC} ${DIM}%s${NC}" "$help_text" >/dev/tty
+        printf '%*s' "$help_pad" '' >/dev/tty
+        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+        # Bottom border
+        printf "${CYAN}${BOX_BL}" >/dev/tty
+        _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
+        printf "${BOX_BR}${NC}\n" >/dev/tty
     }
 
     _render_checklist
