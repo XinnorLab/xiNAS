@@ -11,8 +11,19 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 # Script directory for relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source the menu library
-source "$SCRIPT_DIR/lib/menu_lib.sh"
+# Source the menu library (check multiple locations)
+if [[ -f "$SCRIPT_DIR/lib/menu_lib.sh" ]]; then
+    source "$SCRIPT_DIR/lib/menu_lib.sh"
+elif [[ -f "/usr/local/bin/lib/menu_lib.sh" ]]; then
+    source "/usr/local/bin/lib/menu_lib.sh"
+elif [[ -f "/opt/xiNAS/lib/menu_lib.sh" ]]; then
+    source "/opt/xiNAS/lib/menu_lib.sh"
+elif [[ -f "/home/xinnor/xiNAS/lib/menu_lib.sh" ]]; then
+    source "/home/xinnor/xiNAS/lib/menu_lib.sh"
+else
+    echo "Error: menu_lib.sh not found" >&2
+    exit 1
+fi
 
 # Update check
 UPDATE_AVAILABLE=""
