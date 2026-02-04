@@ -556,6 +556,77 @@ text_box() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# text_area - Multi-line Text Input
+# ═══════════════════════════════════════════════════════════════════════════════
+
+text_area() {
+    local title="$1"
+    local prompt="$2"
+    local output_file="$3"
+    local width=70
+
+    local inner_width=$((width - 2))
+
+    # Convert literal \n to actual newlines
+    local newline=$'\n'
+    prompt="${prompt//\\n/$newline}"
+
+    _menu_clear_screen
+
+    echo "" >/dev/tty
+    _menu_draw_box "$title" "$width"
+
+    # Prompt lines with borders
+    while IFS= read -r line; do
+        local line_len=${#line}
+        local padding=$((inner_width - line_len - 2))
+        [[ $padding -lt 0 ]] && padding=0
+        printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$line" >/dev/tty
+        printf '%*s' "$padding" '' >/dev/tty
+        printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+    done <<< "$prompt"
+
+    # Empty line with borders
+    printf "${CYAN}${BOX_V}${NC}" >/dev/tty
+    printf '%*s' "$inner_width" '' >/dev/tty
+    printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+    # Bottom border
+    printf "${CYAN}${BOX_BL}" >/dev/tty
+    _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
+    printf "${BOX_BR}${NC}\n" >/dev/tty
+
+    echo "" >/dev/tty
+    printf "  ${DIM}Paste text below. Press Ctrl-D on empty line when done, Ctrl-C to cancel.${NC}\n" >/dev/tty
+    printf "  ${CYAN}────────────────────────────────────────────────────────────────${NC}\n" >/dev/tty
+
+    _menu_cursor_show
+
+    # Read multi-line input
+    local text=""
+    if [[ -n "$output_file" ]]; then
+        cat </dev/tty > "$output_file" 2>/dev/null
+        local status=$?
+        echo "" >/dev/tty
+        if [[ $status -eq 0 ]] && [[ -s "$output_file" ]]; then
+            return 0
+        else
+            return 1
+        fi
+    else
+        text=$(cat </dev/tty 2>/dev/null)
+        local status=$?
+        echo "" >/dev/tty
+        if [[ $status -eq 0 ]] && [[ -n "$text" ]]; then
+            echo "$text"
+            return 0
+        else
+            return 1
+        fi
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # info_box - Temporary Status Message (No Wait) with Full Border
 # ═══════════════════════════════════════════════════════════════════════════════
 

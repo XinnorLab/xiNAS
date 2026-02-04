@@ -98,16 +98,8 @@ enter_license() {
     hwkey_val=$(./hwkey 2>/dev/null | tr -d '\n' | tr '[:lower:]' '[:upper:]')
     msg_box "Hardware Key" "HWKEY: ${hwkey_val}\n\nRequest your license key from xiNNOR Support."
 
-    : > "$TMP_DIR/license_tmp"
-    if command -v dialog >/dev/null 2>&1; then
-        if dialog --title "Enter License" --editbox "$TMP_DIR/license_tmp" 20 70 2>"$TMP_DIR/license"; then
-            :
-        else
-            return 0
-        fi
-    else
-        msg_box "Enter License" "Paste license in the terminal. End with Ctrl-D."
-        cat >>"$TMP_DIR/license"
+    if ! text_area "Enter License" "Paste your license key below:" "$TMP_DIR/license"; then
+        return 0
     fi
     if [ $replace -eq 1 ]; then
         cp "$license_file" "${license_file}.${ts}.bak"
