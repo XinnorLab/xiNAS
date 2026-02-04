@@ -73,25 +73,37 @@ _menu_read_key() {
 # Drawing Functions
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_menu_repeat_char() {
+    local char="$1"
+    local count="$2"
+    local result=""
+    for ((i=0; i<count; i++)); do
+        result+="$char"
+    done
+    printf '%s' "$result"
+}
+
 _menu_draw_box() {
     local title="$1"
     local width="${2:-60}"
     local title_len=${#title}
     # Account for: ╔ (1) + left padding + space (1) + title + space (1) + right padding + ╗ (1)
-    local padding=$(( (width - title_len - 4) / 2 ))
-    [[ $padding -lt 1 ]] && padding=1
+    local left_pad=$(( (width - title_len - 4) / 2 ))
+    local right_pad=$(( width - title_len - 4 - left_pad ))
+    [[ $left_pad -lt 1 ]] && left_pad=1
+    [[ $right_pad -lt 1 ]] && right_pad=1
 
     printf "${CYAN}${BOX_TL}" >/dev/tty
-    printf '%*s' "$padding" '' | tr ' ' "$BOX_H" >/dev/tty
+    _menu_repeat_char "$BOX_H" "$left_pad" >/dev/tty
     printf " ${WHITE}${BOLD}%s${NC}${CYAN} " "$title" >/dev/tty
-    printf '%*s' "$((width - padding - title_len - 4))" '' | tr ' ' "$BOX_H" >/dev/tty
+    _menu_repeat_char "$BOX_H" "$right_pad" >/dev/tty
     printf "${BOX_TR}${NC}\n" >/dev/tty
 }
 
 _menu_draw_separator() {
     local width="${1:-60}"
     printf "${DIM}" >/dev/tty
-    printf '%*s' "$width" '' | tr ' ' "$BOX_LINE" >/dev/tty
+    _menu_repeat_char "$BOX_LINE" "$width" >/dev/tty
     printf "${NC}\n" >/dev/tty
 }
 
