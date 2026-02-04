@@ -205,7 +205,7 @@ menu_select() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# msg_box - Display Message Box
+# msg_box - Display Message Box with Full Border
 # ═══════════════════════════════════════════════════════════════════════════════
 
 msg_box() {
@@ -213,6 +213,7 @@ msg_box() {
     local message="$2"
     local width=60
 
+    # Calculate width based on content
     local max_line=0
     while IFS= read -r line; do
         [[ ${#line} -gt $max_line ]] && max_line=${#line}
@@ -220,16 +221,33 @@ msg_box() {
     [[ $((max_line + 6)) -gt $width ]] && width=$((max_line + 6))
     [[ $width -gt 78 ]] && width=78
 
+    local inner_width=$((width - 2))
+
+    _menu_clear_screen
     echo "" >/dev/tty
     _menu_draw_box "$title" "$width"
-    echo "" >/dev/tty
 
+    # Content lines with side borders
     while IFS= read -r line; do
-        printf "  ${WHITE}%s${NC}\n" "$line" >/dev/tty
+        local line_len=${#line}
+        local padding=$((inner_width - line_len - 2))
+        [[ $padding -lt 0 ]] && padding=0
+        printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$line" >/dev/tty
+        printf '%*s' "$padding" '' >/dev/tty
+        printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
     done <<< "$message"
 
+    # Empty line before footer
+    printf "${CYAN}${BOX_V}${NC}" >/dev/tty
+    printf '%*s' "$inner_width" '' >/dev/tty
+    printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+    # Bottom border
+    printf "${CYAN}${BOX_BL}" >/dev/tty
+    _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
+    printf "${BOX_BR}${NC}\n" >/dev/tty
+
     echo "" >/dev/tty
-    _menu_draw_separator "$width"
     printf "  ${DIM}Press Enter to continue...${NC}" >/dev/tty
     read -r </dev/tty
     echo "" >/dev/tty
@@ -307,7 +325,7 @@ yes_no() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# input_box - Text Input
+# input_box - Text Input with Full Border
 # ═══════════════════════════════════════════════════════════════════════════════
 
 input_box() {
@@ -316,14 +334,35 @@ input_box() {
     local default="${3:-}"
     local width=60
 
+    local prompt_len=${#prompt}
+    [[ $((prompt_len + 6)) -gt $width ]] && width=$((prompt_len + 6))
+    [[ $width -gt 78 ]] && width=78
+
+    local inner_width=$((width - 2))
+    local padding=$((inner_width - prompt_len - 2))
+    [[ $padding -lt 0 ]] && padding=0
+
     _menu_clear_screen
 
     echo "" >/dev/tty
     _menu_draw_box "$title" "$width"
+
+    # Prompt line with borders
+    printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
+    printf '%*s' "$padding" '' >/dev/tty
+    printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+    # Empty line with borders
+    printf "${CYAN}${BOX_V}${NC}" >/dev/tty
+    printf '%*s' "$inner_width" '' >/dev/tty
+    printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+    # Bottom border
+    printf "${CYAN}${BOX_BL}" >/dev/tty
+    _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
+    printf "${BOX_BR}${NC}\n" >/dev/tty
+
     echo "" >/dev/tty
-    printf "  ${WHITE}%s${NC}\n" "$prompt" >/dev/tty
-    echo "" >/dev/tty
-    _menu_draw_separator "$width"
     printf "  ${CYAN}>${NC} " >/dev/tty
 
     _menu_cursor_show
@@ -410,7 +449,7 @@ text_box() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# info_box - Temporary Status Message (No Wait)
+# info_box - Temporary Status Message (No Wait) with Full Border
 # ═══════════════════════════════════════════════════════════════════════════════
 
 info_box() {
@@ -418,10 +457,29 @@ info_box() {
     local message="$2"
     local width=50
 
+    local msg_len=${#message}
+    [[ $((msg_len + 8)) -gt $width ]] && width=$((msg_len + 8))
+    [[ $width -gt 78 ]] && width=78
+
+    local inner_width=$((width - 2))
+    local content="⟳ $message"
+    local content_len=$((${#message} + 2))
+    local padding=$((inner_width - content_len - 2))
+    [[ $padding -lt 0 ]] && padding=0
+
+    _menu_clear_screen
     echo "" >/dev/tty
     _menu_draw_box "$title" "$width"
-    echo "" >/dev/tty
-    printf "  ${YELLOW}⟳${NC} ${WHITE}%s${NC}\n" "$message" >/dev/tty
+
+    # Content with borders
+    printf "${CYAN}${BOX_V}${NC} ${YELLOW}⟳${NC} ${WHITE}%s${NC}" "$message" >/dev/tty
+    printf '%*s' "$padding" '' >/dev/tty
+    printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+    # Bottom border
+    printf "${CYAN}${BOX_BL}" >/dev/tty
+    _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
+    printf "${BOX_BR}${NC}\n" >/dev/tty
     echo "" >/dev/tty
 }
 
