@@ -16,38 +16,60 @@ BOLD=$'\033[1m'
 # Box width
 W=75
 
+# Icons
+ICON_OK="${GREEN}●${NC}"
+ICON_WARN="${YELLOW}●${NC}"
+ICON_ERR="${RED}●${NC}"
+ICON_INFO="${CYAN}●${NC}"
+ICON_UP="${GREEN}▲${NC}"
+ICON_DOWN="${RED}▼${NC}"
+
 # Draw functions
 line() {
-    printf "+%${W}s+\n" | tr ' ' '-'
+    echo -e "${CYAN}+$(printf '%*s' $W '' | tr ' ' '-')+${NC}"
 }
 
 header() {
     local title="$1"
-    printf "| %-$((W-2))s |\n" "$title"
+    echo -e "${CYAN}|${NC} ${BOLD}${WHITE}$title${NC}$(printf '%*s' $((W - ${#title} - 2)) '')${CYAN}|${NC}"
 }
 
 row() {
     printf "| %-$((W-2))s |\n" "$1"
 }
 
+row_color() {
+    echo -e "${CYAN}|${NC} $1$(printf '%*s' $((W - 3)) '')${CYAN}|${NC}"
+}
+
 empty_row() {
-    printf "| %$((W-2))s |\n" ""
+    echo -e "${CYAN}|${NC}$(printf '%*s' $((W)) '')${CYAN}|${NC}"
 }
 
 separator() {
-    printf "+%${W}s+\n" | tr ' ' '-'
+    echo -e "${CYAN}+$(printf '%*s' $W '' | tr ' ' '-')+${NC}"
 }
 
-# Progress bar (no colors for alignment)
+# Progress bar with color
 progress_bar() {
     local percent=$1
     local width=${2:-20}
     local filled=$((percent * width / 100))
     local empty=$((width - filled))
-    local bar=""
-    for ((i=0; i<filled; i++)); do bar+="#"; done
-    for ((i=0; i<empty; i++)); do bar+="."; done
-    echo "$bar"
+    local color
+    if [[ $percent -ge 90 ]]; then
+        color="$RED"
+    elif [[ $percent -ge 70 ]]; then
+        color="$YELLOW"
+    else
+        color="$GREEN"
+    fi
+    local bar="${color}"
+    for ((i=0; i<filled; i++)); do bar+="█"; done
+    bar+="${GRAY}"
+    for ((i=0; i<empty; i++)); do bar+="░"; done
+    bar+="${NC}"
+    echo -e "$bar"
 }
 
 echo ""
@@ -95,30 +117,34 @@ fi
 
 # ============== SYSTEM ==============
 line
-header "SYSTEM"
+header "📊 SYSTEM"
 separator
-row "  Hostname:  $HOSTNAME"
-row "  Uptime:    $UPTIME"
-row "  Kernel:    $KERNEL"
-row "  NFS:       $NFSD_STATUS"
+echo -e "${CYAN}|${NC}   ${WHITE}Hostname:${NC}  ${GREEN}$HOSTNAME${NC}$(printf '%*s' $((W - ${#HOSTNAME} - 14)) '')${CYAN}|${NC}"
+echo -e "${CYAN}|${NC}   ${WHITE}Uptime:${NC}    ${YELLOW}$UPTIME${NC}$(printf '%*s' $((W - ${#UPTIME} - 14)) '')${CYAN}|${NC}"
+echo -e "${CYAN}|${NC}   ${WHITE}Kernel:${NC}    $KERNEL$(printf '%*s' $((W - ${#KERNEL} - 14)) '')${CYAN}|${NC}"
+if [[ "$NFSD_STATUS" == "Stopped" ]]; then
+    echo -e "${CYAN}|${NC}   ${WHITE}NFS:${NC}       ${RED}$NFSD_STATUS${NC}$(printf '%*s' $((W - ${#NFSD_STATUS} - 11)) '')${CYAN}|${NC}"
+else
+    echo -e "${CYAN}|${NC}   ${WHITE}NFS:${NC}       ${GREEN}$NFSD_STATUS${NC}$(printf '%*s' $((W - ${#NFSD_STATUS} - 11)) '')${CYAN}|${NC}"
+fi
 line
 echo ""
 
 # ============== RESOURCES ==============
 line
-header "RESOURCES"
+header "💻 RESOURCES"
 separator
 CPU_BAR=$(progress_bar $CPU_USAGE 25)
 MEM_BAR=$(progress_bar $MEM_PERCENT 25)
-row "  CPU:   [$CPU_BAR] ${CPU_USAGE}%  ($CPU_CORES cores)"
-row "  MEM:   [$MEM_BAR] ${MEM_PERCENT}%  ($MEM_USED_H / $MEM_TOTAL_H)"
-row "  LOAD:  $LOAD (1/5/15 min)"
+echo -e "${CYAN}|${NC}   ${WHITE}CPU:${NC}   [${CPU_BAR}] ${CPU_USAGE}%  ${GRAY}($CPU_CORES cores)${NC}       ${CYAN}|${NC}"
+echo -e "${CYAN}|${NC}   ${WHITE}MEM:${NC}   [${MEM_BAR}] ${MEM_PERCENT}%  ${GRAY}($MEM_USED_H / $MEM_TOTAL_H)${NC}  ${CYAN}|${NC}"
+echo -e "${CYAN}|${NC}   ${WHITE}LOAD:${NC}  $LOAD ${GRAY}(1/5/15 min)${NC}                        ${CYAN}|${NC}"
 line
 echo ""
 
 # ============== NETWORK ==============
 line
-header "NETWORK INTERFACES"
+header "🌐 NETWORK INTERFACES"
 separator
 
 net_count=0
@@ -132,32 +158,34 @@ for iface in $(ls /sys/class/net/ 2>/dev/null | grep -v '^lo$' | sort); do
     # Format speed
     if [[ "$speed" =~ ^[0-9]+$ ]] && [[ $speed -gt 0 ]]; then
         if [[ $speed -ge 1000 ]]; then
-            speed_str="$((speed/1000))Gb/s"
+            speed_str="${GREEN}$((speed/1000))Gb/s${NC}"
         else
-            speed_str="${speed}Mb/s"
+            speed_str="${YELLOW}${speed}Mb/s${NC}"
         fi
     else
-        speed_str="---"
+        speed_str="${GRAY}---${NC}"
     fi
 
     # State indicator
     if [[ "$state" == "up" ]]; then
-        state_icon="[UP]"
+        state_icon="${GREEN}▲${NC}"
+        state_color="$GREEN"
     else
-        state_icon="[DN]"
+        state_icon="${RED}▼${NC}"
+        state_color="$RED"
     fi
 
-    printf "| %-73s |\n" "  $state_icon $(printf '%-12s' $iface) $(printf '%-20s' $ip_addr) $speed_str"
+    echo -e "${CYAN}|${NC}   ${state_icon} ${WHITE}$(printf '%-12s' $iface)${NC} ${YELLOW}$(printf '%-20s' $ip_addr)${NC} ${speed_str}             ${CYAN}|${NC}"
     ((net_count++))
 done
 
-[[ $net_count -eq 0 ]] && row "  No network interfaces"
+[[ $net_count -eq 0 ]] && echo -e "${CYAN}|${NC}   ${GRAY}No network interfaces${NC}                                                 ${CYAN}|${NC}"
 line
 echo ""
 
 # ============== RAID ==============
 line
-header "RAID ARRAYS"
+header "💾 RAID ARRAYS"
 separator
 
 if command -v xicli &> /dev/null; then
@@ -194,38 +222,48 @@ try:
             else:
                 size_str = 'N/A'
             if state.lower() in ['online', 'optimal', 'active', 'initialized']:
-                icon = '[OK]'
+                icon = 'OK'
             elif state.lower() in ['degraded', 'rebuilding', 'initing']:
-                icon = '[!!]'
+                icon = 'WARN'
             else:
-                icon = '[--]'
+                icon = 'ERR'
             print(f'{icon}|{name}|RAID{level}|{size_str}|{state}')
 except Exception as e:
-    print(f'ERR|{e}|')
+    print(f'ERROR|{e}|')
 PYEOF
         while IFS='|' read -r icon name level size state; do
             if [[ "$icon" == "NONE" ]]; then
-                row "  No RAID arrays configured"
-            elif [[ "$icon" == "ERR" ]]; then
-                row "  Error reading RAID: $name"
+                echo -e "${CYAN}|${NC}   ${GRAY}No RAID arrays configured${NC}                                             ${CYAN}|${NC}"
+            elif [[ "$icon" == "ERROR" ]]; then
+                echo -e "${CYAN}|${NC}   ${RED}●${NC} Error reading RAID: $name                                       ${CYAN}|${NC}"
             elif [[ -n "$icon" ]]; then
-                printf "| %-73s |\n" "  $icon $(printf '%-12s' "$name") $(printf '%-8s' "$level") $(printf '%-12s' "$size") $state"
+                if [[ "$icon" == "OK" ]]; then
+                    status_icon="${GREEN}●${NC}"
+                    state_color="$GREEN"
+                elif [[ "$icon" == "WARN" ]]; then
+                    status_icon="${YELLOW}●${NC}"
+                    state_color="$YELLOW"
+                else
+                    status_icon="${RED}●${NC}"
+                    state_color="$RED"
+                fi
+                echo -e "${CYAN}|${NC}   ${status_icon} ${WHITE}$(printf '%-12s' "$name")${NC} ${CYAN}$(printf '%-8s' "$level")${NC} ${YELLOW}$(printf '%-12s' "$size")${NC} ${state_color}$state${NC}     ${CYAN}|${NC}"
             fi
         done < "${raid_tmp}.out"
         rm -f "$raid_tmp" "${raid_tmp}.out"
     else
-        row "  No RAID arrays configured"
+        echo -e "${CYAN}|${NC}   ${GRAY}No RAID arrays configured${NC}                                             ${CYAN}|${NC}"
         rm -f "$raid_tmp"
     fi
 else
-    row "  xiRAID not installed"
+    echo -e "${CYAN}|${NC}   ${GRAY}xiRAID not installed${NC}                                                  ${CYAN}|${NC}"
 fi
 line
 echo ""
 
 # ============== NFS SHARES ==============
 line
-header "NFS SHARES"
+header "📁 NFS SHARES"
 separator
 
 share_count=0
@@ -240,21 +278,21 @@ if [[ -f /etc/exports ]]; then
         if [[ -d "$share_path" ]]; then
             disk_info=$(df -h "$share_path" 2>/dev/null | awk 'NR==2 {print $3"/"$2" ("$5")"}')
             [[ -z "$disk_info" ]] && disk_info="N/A"
-            printf "| %-73s |\n" "  [OK] $(printf '%-30s' $share_path) $disk_info"
+            echo -e "${CYAN}|${NC}   ${GREEN}●${NC} ${WHITE}$(printf '%-30s' $share_path)${NC} ${YELLOW}$disk_info${NC}           ${CYAN}|${NC}"
         else
-            printf "| %-73s |\n" "  [!!] $(printf '%-30s' $share_path) not mounted"
+            echo -e "${CYAN}|${NC}   ${RED}●${NC} ${WHITE}$(printf '%-30s' $share_path)${NC} ${RED}not mounted${NC}              ${CYAN}|${NC}"
         fi
         ((share_count++))
     done < /etc/exports
 fi
 
-[[ $share_count -eq 0 ]] && row "  No NFS shares configured"
+[[ $share_count -eq 0 ]] && echo -e "${CYAN}|${NC}   ${GRAY}No NFS shares configured${NC}                                              ${CYAN}|${NC}"
 line
 echo ""
 
 # ============== ACTIVE CLIENTS ==============
 line
-header "ACTIVE NFS CLIENTS"
+header "👥 ACTIVE NFS CLIENTS"
 separator
 
 client_count=0
@@ -263,7 +301,7 @@ if [[ -d /proc/fs/nfsd/clients ]]; then
         [[ -f "${client_dir}info" ]] || continue
         client_ip=$(grep -oP 'address:\s*\K[\d.]+' "${client_dir}info" 2>/dev/null | head -1)
         [[ -n "$client_ip" ]] && {
-            row "  [*] $client_ip"
+            echo -e "${CYAN}|${NC}   ${GREEN}●${NC} ${WHITE}$client_ip${NC}                                                        ${CYAN}|${NC}"
             ((client_count++))
         }
     done
@@ -273,18 +311,18 @@ if [[ $client_count -eq 0 ]]; then
     nfs_clients=$(ss -tn state established '( dport = :2049 )' 2>/dev/null | awk 'NR>1 {split($4,a,":"); print a[1]}' | sort -u)
     for client_ip in $nfs_clients; do
         [[ -n "$client_ip" ]] && {
-            row "  [*] $client_ip"
+            echo -e "${CYAN}|${NC}   ${GREEN}●${NC} ${WHITE}$client_ip${NC}                                                        ${CYAN}|${NC}"
             ((client_count++))
         }
     done
 fi
 
-[[ $client_count -eq 0 ]] && row "  No active clients"
+[[ $client_count -eq 0 ]] && echo -e "${CYAN}|${NC}   ${GRAY}No active clients${NC}                                                     ${CYAN}|${NC}"
 line
 echo ""
 
 # Footer
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-echo "  Last updated: $TIMESTAMP"
-echo "  Run 'xinas-menu' for management options"
+echo -e "  ${GRAY}Last updated: ${WHITE}$TIMESTAMP${NC}"
+echo -e "  ${GRAY}Run '${CYAN}xinas-menu${GRAY}' for management options${NC}"
 echo ""
