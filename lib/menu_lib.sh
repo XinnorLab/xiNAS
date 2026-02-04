@@ -268,6 +268,17 @@ yes_no() {
     local selected=0
     [[ "$default" == "n" ]] && selected=1
 
+    # Interpret \n escape sequences
+    question=$(echo -e "$question")
+
+    # Calculate width based on longest line
+    local max_line=0
+    while IFS= read -r line; do
+        [[ ${#line} -gt $max_line ]] && max_line=${#line}
+    done <<< "$question"
+    [[ $((max_line + 6)) -gt $width ]] && width=$((max_line + 6))
+    [[ $width -gt 78 ]] && width=78
+
     _menu_cursor_hide
 
     _render_yesno() {
@@ -276,7 +287,9 @@ yes_no() {
         echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
         echo "" >/dev/tty
-        printf "  ${WHITE}%s${NC}\n" "$question" >/dev/tty
+        while IFS= read -r line; do
+            printf "  ${WHITE}%s${NC}\n" "$line" >/dev/tty
+        done <<< "$question"
         echo "" >/dev/tty
 
         printf "  " >/dev/tty
@@ -337,23 +350,33 @@ input_box() {
     local default="${3:-}"
     local width=60
 
-    local prompt_len=${#prompt}
-    [[ $((prompt_len + 6)) -gt $width ]] && width=$((prompt_len + 6))
+    # Interpret \n escape sequences
+    prompt=$(echo -e "$prompt")
+
+    # Calculate width based on longest line
+    local max_line=0
+    while IFS= read -r line; do
+        [[ ${#line} -gt $max_line ]] && max_line=${#line}
+    done <<< "$prompt"
+    [[ $((max_line + 6)) -gt $width ]] && width=$((max_line + 6))
     [[ $width -gt 78 ]] && width=78
 
     local inner_width=$((width - 2))
-    local padding=$((inner_width - prompt_len - 2))
-    [[ $padding -lt 0 ]] && padding=0
 
     _menu_clear_screen
 
     echo "" >/dev/tty
     _menu_draw_box "$title" "$width"
 
-    # Prompt line with borders
-    printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
-    printf '%*s' "$padding" '' >/dev/tty
-    printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+    # Prompt lines with borders
+    while IFS= read -r line; do
+        local line_len=${#line}
+        local padding=$((inner_width - line_len - 2))
+        [[ $padding -lt 0 ]] && padding=0
+        printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$line" >/dev/tty
+        printf '%*s' "$padding" '' >/dev/tty
+        printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+    done <<< "$prompt"
 
     # Empty line with borders
     printf "${CYAN}${BOX_V}${NC}" >/dev/tty
@@ -460,24 +483,41 @@ info_box() {
     local message="$2"
     local width=50
 
-    local msg_len=${#message}
-    [[ $((msg_len + 8)) -gt $width ]] && width=$((msg_len + 8))
+    # Interpret \n escape sequences
+    message=$(echo -e "$message")
+
+    # Calculate width based on longest line
+    local max_line=0
+    while IFS= read -r line; do
+        [[ ${#line} -gt $max_line ]] && max_line=${#line}
+    done <<< "$message"
+    [[ $((max_line + 8)) -gt $width ]] && width=$((max_line + 8))
     [[ $width -gt 78 ]] && width=78
 
     local inner_width=$((width - 2))
-    local content="⟳ $message"
-    local content_len=$((${#message} + 2))
-    local padding=$((inner_width - content_len - 2))
-    [[ $padding -lt 0 ]] && padding=0
 
     _menu_clear_screen
     echo "" >/dev/tty
     _menu_draw_box "$title" "$width"
 
-    # Content with borders
-    printf "${CYAN}${BOX_V}${NC} ${YELLOW}⟳${NC} ${WHITE}%s${NC}" "$message" >/dev/tty
-    printf '%*s' "$padding" '' >/dev/tty
-    printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+    # Content lines with borders
+    local first_line=1
+    while IFS= read -r line; do
+        local line_len=${#line}
+        local prefix_len=2
+        [[ $first_line -eq 1 ]] && prefix_len=4  # "⟳ " takes 2 extra
+        local padding=$((inner_width - line_len - prefix_len))
+        [[ $padding -lt 0 ]] && padding=0
+
+        if [[ $first_line -eq 1 ]]; then
+            printf "${CYAN}${BOX_V}${NC} ${YELLOW}⟳${NC} ${WHITE}%s${NC}" "$line" >/dev/tty
+            first_line=0
+        else
+            printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$line" >/dev/tty
+        fi
+        printf '%*s' "$padding" '' >/dev/tty
+        printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+    done <<< "$message"
 
     # Bottom border
     printf "${CYAN}${BOX_BL}" >/dev/tty
