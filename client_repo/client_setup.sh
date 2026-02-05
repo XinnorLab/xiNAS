@@ -1556,7 +1556,7 @@ gds_menu() {
             "$gpu_status | $rdma_status | GDS: $gds_status" \
             "1" "📊 Show GDS Status" \
             "2" "📦 Install GDS" \
-            "3" "⚙️  Configure cuFile (NFS/RDMA)" \
+            "3" "🛠 Configure cuFile (NFS/RDMA)" \
             "4" "✅ Verify GDS" \
             "5" "🔙 Back to Main Menu") || return
 
@@ -2269,7 +2269,7 @@ https://kubernetes.io/docs/tasks/tools/"
             "1" "📊 Check Status" \
             "2" "📦 Install CSI NFS Driver" \
             "3" "🔄 Upgrade CSI NFS Driver" \
-            "4" "⚙️  Configure Storage Class" \
+            "4" "🛠 Configure Storage Class" \
             "5" "📁 Manage Storage Classes" \
             "6" "🗑️  Uninstall CSI NFS Driver" \
             "7" "🔙 Back to Main Menu") || return
@@ -3164,7 +3164,7 @@ main_menu() {
         [[ -d /sys/class/infiniband ]] && [[ -n "$(ls /sys/class/infiniband/ 2>/dev/null)" ]] && rdma_status="Yes"
 
         # Check for missing essential components (plain text - colors don't work in menu items)
-        local advanced_label="⚙️  Advanced Settings"
+        local advanced_label="🛠 Advanced Settings"
         local missing_components=false
 
         if ! command -v mount.nfs &>/dev/null; then
@@ -3177,7 +3177,7 @@ main_menu() {
 
         # Add warning indicator to Advanced Settings if components missing
         if [[ "$missing_components" == "true" ]]; then
-            advanced_label="⚙️  Advanced Settings [!]"
+            advanced_label="🛠 Advanced Settings [!]"
         fi
 
         local choice

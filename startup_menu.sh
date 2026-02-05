@@ -476,9 +476,9 @@ while true; do
     fi
 
     # Advanced settings indicator
-    advanced_text="⚙️  Advanced Settings"
+    advanced_text="🛠 Advanced Settings"
     if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-        advanced_text="⚙️  Advanced Settings [!]"
+        advanced_text="🛠 Advanced Settings [!]"
     fi
 
     # Show status bar
