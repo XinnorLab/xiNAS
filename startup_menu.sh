@@ -465,7 +465,6 @@ while true; do
     show_header
 
     # Build dynamic menu based on license status
-    local license_text license_status install_text
     if has_license; then
         license_text="🔑 Enter License [Licensed]"
         license_status="${GREEN}✅ Licensed${NC}"
@@ -477,7 +476,7 @@ while true; do
     fi
 
     # Advanced settings indicator
-    local advanced_text="⚙️  Advanced Settings"
+    advanced_text="⚙️  Advanced Settings"
     if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
         advanced_text="⚙️  Advanced Settings [!]"
     fi
