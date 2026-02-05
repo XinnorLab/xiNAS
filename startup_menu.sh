@@ -403,55 +403,103 @@ echo -e "    ${DIM}────────────────────�
 echo ""
 read -p "    Press Enter to continue..." -r
 
-# Main menu loop
+# ═══════════════════════════════════════════════════════════════════════════════
+# Advanced Settings Menu
+# ═══════════════════════════════════════════════════════════════════════════════
+
+advanced_settings_menu() {
+    while true; do
+        show_header
+
+        # Update status indicator
+        local update_text="🔄 Check for Updates"
+        if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+            update_text="🔄 Check for Updates [Update Available!]"
+        fi
+
+        local choice
+        choice=$(menu_select "Advanced Settings" "Configuration & Management Options" \
+            "1" "🌐 Configure Network" \
+            "2" "🏷️  Set Hostname" \
+            "3" "💾 Configure RAID" \
+            "4" "📂 Edit NFS Exports" \
+            "5" "📦 Presets" \
+            "6" "🔧 Git Repository Configuration" \
+            "7" "$update_text" \
+            "0" "🔙 Back to Main Menu") || return
+
+        case "$choice" in
+            1) configure_network ;;
+            2) configure_hostname ;;
+            3) configure_raid ;;
+            4) edit_nfs_exports ;;
+            5) choose_preset ;;
+            6) configure_git_repo ;;
+            7)
+                if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+                    if yes_no "Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?\n\nThis will pull the latest changes from GitHub."; then
+                        do_update
+                    fi
+                else
+                    info_box "Checking for Updates" "Checking for updates..."
+                    check_for_updates
+                    if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+                        if yes_no "Update Found" "Update found! Install now?"; then
+                            do_update
+                        fi
+                    else
+                        msg_box "Up to Date" "xiNAS is already up to date!"
+                    fi
+                fi
+                ;;
+            0) return ;;
+        esac
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Main Menu
+# ═══════════════════════════════════════════════════════════════════════════════
+
 while true; do
     show_header
 
-    # Build dynamic menu based on license and update status
+    # Build dynamic menu based on license status
+    local license_text license_status install_text
     if has_license; then
-        license_text="🔑 Enter License ✓ Licensed"
-        install_text="🚀 Install → Ready to go!"
+        license_text="🔑 Enter License [Licensed]"
+        license_status="${GREEN}✅ Licensed${NC}"
+        install_text="🚀 Install"
     else
-        license_text="🔑 Enter License ⚠ REQUIRED"
-        install_text="🚀 Install (License required)"
+        license_text="🔑 Enter License [Required]"
+        license_status="${RED}❌ No License${NC}"
+        install_text="🚀 Install [License Required]"
     fi
 
-    # Update status indicator
-    update_text="🔄 Check for Updates"
+    # Advanced settings indicator
+    local advanced_text="⚙️  Advanced Settings"
     if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-        update_text="🔄 Update Available ⬆️"
+        advanced_text="⚙️  Advanced Settings [!]"
     fi
 
-    # Show status
-    echo -e "  ${WHITE}Status:${NC} $(has_license && echo "${GREEN}✅ License OK${NC}" || echo "${RED}❌ No License${NC}")"
+    # Show status bar
+    echo -e "  ${WHITE}License:${NC} $license_status"
     if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-        echo -e "         ${YELLOW}📦 Update available!${NC}"
+        echo -e "  ${WHITE}Updates:${NC} ${YELLOW}📦 Update available!${NC}"
     fi
     echo ""
 
-    choice=$(menu_select "xiNAS Expert Setup" "Select an option:" \
+    choice=$(menu_select "xiNAS Setup" "Select an option:" \
         "1" "📊 Collect System Data" \
         "2" "$license_text" \
-        "3" "🌐 Configure Network" \
-        "4" "🏷️  Set Hostname" \
-        "5" "💾 Configure RAID" \
-        "6" "📂 Edit NFS Exports" \
-        "7" "📦 Presets" \
-        "8" "🔧 Git Repository Configuration" \
-        "9" "$install_text" \
-        "10" "$update_text" \
-        "11" "🚪 Exit") || { echo ""; exit 2; }
+        "3" "$install_text" \
+        "4" "$advanced_text" \
+        "0" "🚪 Exit") || { echo ""; exit 2; }
 
     case "$choice" in
         1) ./collect_data.sh ;;
         2) enter_license ;;
-        3) configure_network ;;
-        4) configure_hostname ;;
-        5) configure_raid ;;
-        6) edit_nfs_exports ;;
-        7) choose_preset ;;
-        8) configure_git_repo ;;
-        9)
+        3)
             if ! has_license; then
                 msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 2 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
                 continue
@@ -465,24 +513,8 @@ while true; do
                 exit 0
             fi
             ;;
-        10)
-            if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-                if yes_no "Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?\n\nThis will pull the latest changes from GitHub."; then
-                    do_update
-                fi
-            else
-                info_box "Checking for Updates" "Checking for updates..."
-                check_for_updates
-                if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-                    if yes_no "Update Found" "Update found! Install now?"; then
-                        do_update
-                    fi
-                else
-                    msg_box "Up to Date" "xiNAS is already up to date!"
-                fi
-            fi
-            ;;
-        11)
+        4) advanced_settings_menu ;;
+        0)
             msg_box "See you soon!" "Thank you for choosing xiNAS!\n\nRun this menu again anytime:\n./startup_menu.sh\n\nQuestions? support@xinnor.io"
             exit 2
             ;;
