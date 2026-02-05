@@ -1716,6 +1716,10 @@ check_and_update() {
     local install_dir="/opt/xinas-client"
     local git_dir="$install_dir/.git"
 
+    # Initialize CSI variables to prevent unbound errors
+    CSI_CURRENT_VERSION="${CSI_CURRENT_VERSION:-}"
+    CSI_LATEST_VERSION="${CSI_LATEST_VERSION:-}"
+
     # Check alternate locations
     if [[ ! -d "$git_dir" ]]; then
         git_dir="$SCRIPT_DIR/../.git"
@@ -1802,7 +1806,7 @@ xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg"
         else
             if yes_no "Update Available" "$update_msg\n\nUpdate CSI NFS Driver now?"; then
                 if upgrade_csi_nfs_driver; then
-                    msg_box "Updated!" "CSI NFS Driver updated to $CSI_LATEST_VERSION!"
+                    msg_box "Updated!" "CSI NFS Driver updated to ${CSI_LATEST_VERSION:-latest}!"
                 fi
             fi
         fi
