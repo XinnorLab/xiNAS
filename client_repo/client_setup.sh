@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-CLIENT_VERSION="1.8.0"
+CLIENT_VERSION="1.9.0"
 
 # Network configuration file
 NETWORK_CONFIG="$SCRIPT_DIR/network_config.yml"
@@ -2967,6 +2967,63 @@ configure_network() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
+# Advanced Settings Menu
+# ═══════════════════════════════════════════════════════════════════════════════
+
+advanced_settings_menu() {
+    while true; do
+        # Check installation status for indicators
+        local nfs_indicator=""
+        local doca_indicator=""
+        local gds_indicator=""
+
+        if ! command -v mount.nfs &>/dev/null; then
+            nfs_indicator=" ${RED}[Not Installed]${NC}"
+        else
+            nfs_indicator=" ${GREEN}[OK]${NC}"
+        fi
+
+        if [[ ! -d /sys/class/infiniband ]] || [[ -z "$(ls /sys/class/infiniband/ 2>/dev/null)" ]]; then
+            doca_indicator=" ${RED}[Not Installed]${NC}"
+        else
+            doca_indicator=" ${GREEN}[OK]${NC}"
+        fi
+
+        if ! lsmod 2>/dev/null | grep -q nvidia_fs; then
+            gds_indicator=" ${GRAY}[Not Installed]${NC}"
+        else
+            gds_indicator=" ${GREEN}[OK]${NC}"
+        fi
+
+        local choice
+        choice=$(menu_select "Advanced Settings" \
+            "Installation & Configuration Options" \
+            "1" "📁 Manage Mounts" \
+            "2" "🌐 Network Settings" \
+            "3" "🔧 Install NFS Tools${nfs_indicator}" \
+            "4" "⚡ Install DOCA OFED${doca_indicator}" \
+            "5" "🚀 GPUDirect Storage (GDS)${gds_indicator}" \
+            "6" "☸️  Kubernetes CSI NFS Driver" \
+            "7" "🔍 Test Connection" \
+            "8" "🔄 Check for Updates" \
+            "0" "🔙 Back to Main Menu") || return
+
+        case "$choice" in
+            1) manage_mounts ;;
+            2) configure_network ;;
+            3) install_nfs_tools ;;
+            4) install_doca_ofed ;;
+            5) gds_menu ;;
+            6) kubernetes_csi_nfs_menu ;;
+            7) test_connection ;;
+            8) check_and_update ;;
+            0) return ;;
+        esac
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Main Menu
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2981,36 +3038,39 @@ main_menu() {
         local rdma_status="No"
         [[ -d /sys/class/infiniband ]] && [[ -n "$(ls /sys/class/infiniband/ 2>/dev/null)" ]] && rdma_status="Yes"
 
-        # Build update indicator
-        local update_indicator=""
-        [[ "$UPDATE_AVAILABLE" == "true" ]] && update_indicator=" | ${YELLOW}Update!${NC}"
+        # Check for missing essential components
+        local warnings=""
+        local advanced_label="⚙️  Advanced Settings"
+
+        if ! command -v mount.nfs &>/dev/null; then
+            warnings="${RED}⚠ NFS Tools not installed${NC}"
+        fi
+
+        if [[ ! -d /sys/class/infiniband ]] || [[ -z "$(ls /sys/class/infiniband/ 2>/dev/null)" ]]; then
+            if [[ -n "$warnings" ]]; then
+                warnings="${warnings}  ${RED}⚠ DOCA OFED not installed${NC}"
+            else
+                warnings="${RED}⚠ DOCA OFED not installed${NC}"
+            fi
+        fi
+
+        # Add warning indicator to Advanced Settings if components missing
+        if [[ -n "$warnings" ]]; then
+            advanced_label="⚙️  Advanced Settings ${RED}[!]${NC}"
+        fi
 
         local choice
         choice=$(menu_select "xiNAS Client Setup v$CLIENT_VERSION" \
             "$(hostname) | Mounts: $nfs_mounts | RDMA: $rdma_status" \
             "1" "📊 System Status" \
             "2" "🔌 Connect to NAS" \
-            "3" "📁 Manage Mounts" \
-            "4" "🌐 Network Settings" \
-            "5" "🔧 Install NFS Tools" \
-            "6" "⚡ Install DOCA OFED" \
-            "7" "🚀 GPUDirect Storage (GDS)" \
-            "8" "☸️  Kubernetes CSI NFS Driver" \
-            "9" "🔍 Test Connection" \
-            "A" "🔄 Check for Updates" \
+            "3" "${advanced_label}" \
             "0" "🚪 Exit") || break
 
         case "$choice" in
             1) show_status ;;
             2) configure_nfs_mount ;;
-            3) manage_mounts ;;
-            4) configure_network ;;
-            5) install_nfs_tools ;;
-            6) install_doca_ofed ;;
-            7) gds_menu ;;
-            8) kubernetes_csi_nfs_menu ;;
-            9) test_connection ;;
-            A) check_and_update ;;
+            3) advanced_settings_menu ;;
             0)
                 msg_box "See you soon!" "\
    Thank you for using xiNAS Client Setup!
