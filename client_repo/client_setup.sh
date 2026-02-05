@@ -88,20 +88,15 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-# Check for whiptail
-WHIPTAIL=$(command -v whiptail || true)
-if [[ -z "$WHIPTAIL" ]]; then
-    echo -e "${YELLOW}Installing whiptail...${NC}"
-    if command -v apt-get &>/dev/null; then
-        apt-get update -qq && apt-get install -y -qq whiptail
-    elif command -v yum &>/dev/null; then
-        yum install -y newt
-    fi
-    WHIPTAIL=$(command -v whiptail || true)
-fi
-
-if [[ -z "$WHIPTAIL" ]]; then
-    echo -e "${RED}Error: whiptail is required for this menu${NC}"
+# Source the menu library (check multiple locations)
+if [[ -f "$SCRIPT_DIR/lib/menu_lib.sh" ]]; then
+    source "$SCRIPT_DIR/lib/menu_lib.sh"
+elif [[ -f "/usr/local/bin/lib/menu_lib.sh" ]]; then
+    source "/usr/local/bin/lib/menu_lib.sh"
+elif [[ -f "/opt/xinas-client/lib/menu_lib.sh" ]]; then
+    source "/opt/xinas-client/lib/menu_lib.sh"
+else
+    echo -e "${RED}Error: menu_lib.sh not found${NC}"
     exit 1
 fi
 
@@ -332,7 +327,7 @@ show_status() {
         printf '=%.0s' {1..70}; echo ""
     } > "$out"
 
-    whiptail --title "System Status" --scrolltext --textbox "$out" 28 76
+    text_box "System Status" "$out"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -341,23 +336,23 @@ show_status() {
 
 install_nfs_tools() {
     if command -v mount.nfs4 &>/dev/null; then
-        whiptail --title "Already Installed" --msgbox "\
+        msg_box "Already Installed" "\
 NFS client tools are already installed.
 
-You can proceed to mount NFS shares." 10 50
+You can proceed to mount NFS shares."
         return 0
     fi
 
-    if whiptail --title "Install NFS Tools" --yesno "\
+    if yes_no "Install NFS Tools" "\
 NFS client tools are not installed.
 
 Install them now?
 
 This will install:
   - nfs-common (Debian/Ubuntu)
-  - nfs-utils (RHEL/CentOS)" 14 50; then
+  - nfs-utils (RHEL/CentOS)"; then
 
-        whiptail --title "Installing..." --infobox "Installing NFS client tools..." 6 45
+        info_box "Installing..." "Installing NFS client tools..."
 
         if command -v apt-get &>/dev/null; then
             apt-get update -qq
@@ -367,7 +362,7 @@ This will install:
         elif command -v dnf &>/dev/null; then
             dnf install -y nfs-utils
         else
-            whiptail --title "Error" --msgbox "Could not detect package manager." 8 45
+            msg_box "Error" "Could not detect package manager."
             return 1
         fi
 
@@ -395,20 +390,20 @@ vm.swappiness = 10
 EOF
         sysctl --system >/dev/null 2>&1
 
-        whiptail --title "Success" --msgbox "\
+        msg_box "Success" "\
 NFS client tools installed successfully!
 
-You can now mount NFS shares from your xiNAS server." 10 55
+You can now mount NFS shares from your xiNAS server."
     fi
 }
 
 configure_nfs_mount() {
     # Check if NFS tools are installed
     if ! command -v mount.nfs4 &>/dev/null; then
-        if whiptail --title "NFS Tools Required" --yesno "\
+        if yes_no "NFS Tools Required" "\
 NFS client tools are not installed.
 
-Install them now?" 10 45; then
+Install them now?"; then
             install_nfs_tools
         else
             return
@@ -417,26 +412,20 @@ Install them now?" 10 45; then
 
     # Step 1: Select protocol
     local protocol
-    protocol=$(whiptail --title "Step 1: Select Protocol" --menu "\
-Choose the connection protocol:
-
-RDMA provides much higher performance but requires
-compatible network hardware (InfiniBand/RoCE).
-
-TCP works with any network." 18 60 2 \
+    protocol=$(menu_select "Step 1: Select Protocol" \
+        "Choose protocol (RDMA=high performance, TCP=universal)" \
         "RDMA" "High-performance (requires DOCA OFED)" \
-        "TCP" "Standard (works everywhere)" \
-        3>&1 1>&2 2>&3) || return
+        "TCP" "Standard (works everywhere)") || return
 
     # Check RDMA availability if selected
     if [[ "$protocol" == "RDMA" ]]; then
         if [[ ! -d /sys/class/infiniband ]] || [[ -z "$(ls /sys/class/infiniband/ 2>/dev/null)" ]]; then
-            if ! whiptail --title "RDMA Not Available" --yesno "\
+            if ! yes_no "RDMA Not Available" "\
 RDMA hardware not detected on this system.
 
 Would you like to:
 - Yes: Continue with TCP instead
-- No: Cancel and install DOCA OFED first" 12 55; then
+- No: Cancel and install DOCA OFED first"; then
                 return
             fi
             protocol="TCP"
@@ -445,19 +434,12 @@ Would you like to:
 
     # Step 2: Number of server IPs (for multi-IP distribution)
     local num_ips
-    num_ips=$(whiptail --title "Step 2: Number of Server IPs" --menu "\
-How many server IP addresses will you use?
-
-Using multiple IPs distributes connections across
-network paths with session trunking (trunkdiscovery).
-
-The 16 available NFS connections will be evenly
-distributed across all IPs." 18 60 4 \
+    num_ips=$(menu_select "Step 2: Number of Server IPs" \
+        "How many IPs? Multiple IPs use session trunking." \
         "1" "Single IP (nconnect=16)" \
         "2" "Two IPs with trunking (nconnect=8 each)" \
         "4" "Four IPs with trunking (nconnect=4 each)" \
-        "8" "Eight IPs with trunking (nconnect=2 each)" \
-        3>&1 1>&2 2>&3) || return
+        "8" "Eight IPs with trunking (nconnect=2 each)") || return
 
     local nconnect=$((16 / num_ips))
 
@@ -473,18 +455,18 @@ distributed across all IPs." 18 60 4 \
         fi
 
         local server_ip
-        server_ip=$(whiptail --title "Step 3: $ip_label" --inputbox "\
+        server_ip=$(input_box "Step 3: $ip_label" "\
 $ip_prompt
 
 Example: 192.168.1.100 or 10.10.1.1
 
-This is the storage network IP of your NAS." 14 55 "10.10.1.$i" 3>&1 1>&2 2>&3) || return
+This is the storage network IP of your NAS." "10.10.1.$i" 3>&1 1>&2 2>&3) || return
 
         [[ -z "$server_ip" ]] && return
 
         # Validate IP format
         if [[ ! "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            whiptail --title "Invalid IP" --msgbox "Please enter a valid IP address." 8 45
+            msg_box "Invalid IP" "Please enter a valid IP address."
             return
         fi
 
@@ -493,14 +475,14 @@ This is the storage network IP of your NAS." 14 55 "10.10.1.$i" 3>&1 1>&2 2>&3) 
 
     # Step 4: Enter remote share path
     local share_path
-    share_path=$(whiptail --title "Step 4: Share Path" --inputbox "\
+    share_path=$(input_box "Step 4: Share Path" "\
 Enter the NFS share path on the server:
 
 Examples:
   /mnt/data      - Data volume
   /              - Root export
 
-Ask your NAS administrator if unsure." 14 55 "/mnt/data" 3>&1 1>&2 2>&3) || return
+Ask your NAS administrator if unsure." "/mnt/data" 3>&1 1>&2 2>&3) || return
 
     [[ -z "$share_path" ]] && share_path="/"
 
@@ -519,31 +501,27 @@ Each IP will be mounted to a numbered subdirectory:
 
 Example: /mnt/nas"
     fi
-    mount_point_base=$(whiptail --title "Step 5: Mount Point" --inputbox "\
-$mount_point_msg" 14 55 "/mnt/nas" 3>&1 1>&2 2>&3) || return
+    mount_point_base=$(input_box "Step 5: Mount Point" "\
+$mount_point_msg" "/mnt/nas" 3>&1 1>&2 2>&3) || return
 
     [[ -z "$mount_point_base" ]] && mount_point_base="/mnt/nas"
 
     # Step 6: Authentication
     local sec_mode="sys"
     local auth_desc="None (UID/GID)"
-    if whiptail --title "Step 6: Authentication" --yesno "\
+    if yes_no "Step 6: Authentication" "\
 Does your NFS server require authentication?
 
 Select 'Yes' if your administrator has set up
 Kerberos (krb5) authentication.
 
-Select 'No' for standard UID/GID mapping." 12 55; then
-        sec_mode=$(whiptail --title "Step 6: Security Mode" --menu "\
-Select the NFS security mode:
-
-Your administrator should tell you which
-mode is configured on the server." 16 60 4 \
+Select 'No' for standard UID/GID mapping."; then
+        sec_mode=$(menu_select "Step 6: Security Mode" \
+            "Select NFS security mode:" \
             "krb5" "Kerberos authentication" \
             "krb5i" "Kerberos + integrity checking" \
             "krb5p" "Kerberos + encryption (most secure)" \
-            "sys" "Standard UID/GID (no Kerberos)" \
-            3>&1 1>&2 2>&3) || return
+            "sys" "Standard UID/GID (no Kerberos)") || return
 
         case "$sec_mode" in
             krb5)  auth_desc="Kerberos" ;;
@@ -555,7 +533,7 @@ mode is configured on the server." 16 60 4 \
         # Check for Kerberos ticket if using krb5
         if [[ "$sec_mode" != "sys" ]]; then
             if ! klist &>/dev/null; then
-                whiptail --title "⚠️ Kerberos Ticket Required" --msgbox "\
+                msg_box "⚠️ Kerberos Ticket Required" "\
 No Kerberos ticket found!
 
 Before mounting, you need to authenticate:
@@ -566,20 +544,20 @@ Ask your administrator for:
   - Your Kerberos username
   - The realm name (e.g., XINNOR.IO)
 
-The mount will proceed but may fail without a valid ticket." 16 60
+The mount will proceed but may fail without a valid ticket."
             fi
         fi
     fi
 
     # Step 7: Persistent mount
     local add_to_fstab="yes"
-    if whiptail --title "Step 7: Persistent Mount" --yesno "\
+    if yes_no "Step 7: Persistent Mount" "\
 Add this mount to /etc/fstab?
 
 If yes, the share will be automatically
 mounted when the system boots.
 
-Recommended: Yes" 12 50; then
+Recommended: Yes"; then
         add_to_fstab="yes"
     else
         add_to_fstab="no"
@@ -630,7 +608,7 @@ Recommended: Yes" 12 50; then
         mount_point_desc="$mount_point_base/{1..$num_ips}"
     fi
 
-    if ! whiptail --title "Confirm Settings" --yesno "\
+    if ! yes_no "Confirm Settings" "\
 Please review your mount configuration:
 
 Server IPs:   $ip_list
@@ -643,7 +621,7 @@ Connections:  $conn_desc
 I/O Size:     rsize/wsize=1MB
 Persistent:   $add_to_fstab
 
-Proceed with mounting?" 22 65; then
+Proceed with mounting?"; then
         return
     fi
 
@@ -664,7 +642,7 @@ Proceed with mounting?" 22 65; then
         # Create mount point
         mkdir -p "$mount_point"
 
-        whiptail --title "Mounting..." --infobox "Connecting to $current_ip ($((i+1))/$num_ips)..." 6 55
+        info_box "Mounting..." "Connecting to $current_ip ($((i+1))/$num_ips)..."
 
         local mount_cmd="mount -t nfs -o $mount_opts $current_ip:$share_path $mount_point"
 
@@ -690,24 +668,14 @@ Proceed with mounting?" 22 65; then
             mount_list+="  $m"$'\n'
         done
 
-        whiptail --title "Success!" --msgbox "\
-NFS share(s) mounted successfully!
-
-Protocol:    $proto_desc
-Connections: $conn_desc
-
-Mounted:
-$mount_list
-$([ "$add_to_fstab" == "yes" ] && echo "These mounts will persist across reboots.")
-
-Use 'nfsstat -m' to verify connection status." 20 65
+        msg_box "Success!" "NFS share(s) mounted successfully!\n\nProtocol: $proto_desc\nConnections: $conn_desc\n\nMounted:\n$mount_list\n$([ "$add_to_fstab" == "yes" ] && echo "These mounts will persist across reboots.")\n\nUse 'nfsstat -m' to verify."
     elif [[ ${#successful_mounts[@]} -gt 0 ]]; then
         local fail_list=""
         for f in "${failed_mounts[@]}"; do
             fail_list+="  $f"$'\n'
         done
 
-        whiptail --title "Partial Success" --msgbox "\
+        msg_box "Partial Success" "\
 Some mounts succeeded, others failed.
 
 Failed:
@@ -715,19 +683,9 @@ $fail_list
 Troubleshooting:
 - Check server IPs are correct
 - Verify NFS server is running
-- Check firewall settings" 18 65
+- Check firewall settings"
     else
-        whiptail --title "Mount Failed" --msgbox "\
-Failed to mount NFS share.
-
-Error:
-$(cat "$mount_log")
-
-Troubleshooting:
-- Check server IP is correct
-- Verify NFS server is running
-- Check firewall settings (port 2049/20049)
-- For RDMA: ensure DOCA OFED is installed" 18 65
+        msg_box "Mount Failed" "Failed to mount NFS share.\n\nError:\n$(cat "$mount_log")\n\nTroubleshooting:\n- Check server IP is correct\n- Verify NFS server is running\n- Check firewall settings"
     fi
 }
 
@@ -752,10 +710,10 @@ manage_mounts() {
         done < <(mount -t nfs,nfs4 2>/dev/null)
 
         if [[ ${#mounts[@]} -eq 0 ]]; then
-            whiptail --title "No Mounts" --msgbox "\
+            msg_box "No Mounts" "\
 No active NFS mounts found.
 
-Use 'Connect to NAS' to mount a share." 10 50
+Use 'Connect to NAS' to mount a share."
             return
         fi
 
@@ -763,11 +721,9 @@ Use 'Connect to NAS' to mount a share." 10 50
         mount_info+=("Back" "Return to main menu")
 
         local choice
-        choice=$(whiptail --title "Manage NFS Mounts" --menu "\
-Select a mount to manage:
-
-Active NFS mounts: ${#mounts[@]}" 18 65 8 \
-            "${mount_info[@]}" 3>&1 1>&2 2>&3) || return
+        choice=$(menu_select "Manage NFS Mounts" \
+            "Active NFS mounts: ${#mounts[@]}" \
+            "${mount_info[@]}") || return
 
         [[ "$choice" == "Back" || -z "$choice" ]] && return
 
@@ -778,17 +734,12 @@ Active NFS mounts: ${#mounts[@]}" 18 65 8 \
         opts=$(mount | grep " $choice " | grep -oP '\(\K[^)]+')
 
         local action
-        action=$(whiptail --title "Mount: $choice" --menu "\
-Server: $server
-Share:  $share
-Options: $opts
-
-Select action:" 18 60 4 \
+        action=$(menu_select "Mount: $choice" \
+            "Server: $server | Share: $share" \
             "1" "View Details" \
             "2" "Unmount" \
             "3" "Remount" \
-            "4" "Back" \
-            3>&1 1>&2 2>&3) || continue
+            "4" "Back") || continue
 
         case "$action" in
             1)
@@ -809,32 +760,32 @@ Select action:" 18 60 4 \
                     echo ""
                     printf '=%.0s' {1..60}; echo ""
                 } > "$details"
-                whiptail --title "Mount Details" --textbox "$details" 20 65
+                text_box "Mount Details" "$details"
                 ;;
             2)
-                if whiptail --title "Unmount" --yesno "\
+                if yes_no "Unmount" "\
 Unmount $choice?
 
 Server: $server:$share
 
-Make sure no programs are using this mount." 12 55; then
+Make sure no programs are using this mount."; then
                     if umount "$choice" 2>/dev/null; then
-                        whiptail --title "Unmounted" --msgbox "Successfully unmounted $choice" 8 50
+                        msg_box "Unmounted" "Successfully unmounted $choice"
                     else
-                        whiptail --title "Error" --msgbox "\
+                        msg_box "Error" "\
 Failed to unmount.
 
 The mount may be in use. Try:
-  lsof +f -- $choice" 12 55
+  lsof +f -- $choice"
                     fi
                 fi
                 ;;
             3)
-                if whiptail --title "Remount" --yesno "Remount $choice?" 8 45; then
+                if yes_no "Remount" "Remount $choice?"; then
                     if mount -o remount "$choice" 2>/dev/null; then
-                        whiptail --title "Remounted" --msgbox "Successfully remounted $choice" 8 50
+                        msg_box "Remounted" "Successfully remounted $choice"
                     else
-                        whiptail --title "Error" --msgbox "Failed to remount." 8 40
+                        msg_box "Error" "Failed to remount."
                     fi
                 fi
                 ;;
@@ -852,18 +803,18 @@ install_doca_ofed() {
         local ib_devices
         ib_devices=$(ls /sys/class/infiniband/ 2>/dev/null | tr '\n' ' ')
         if [[ -n "$ib_devices" ]]; then
-            whiptail --title "DOCA OFED Status" --msgbox "\
+            msg_box "DOCA OFED Status" "\
 DOCA OFED appears to be installed.
 
 Detected devices: $ib_devices
 
 If you need to reinstall, use:
-  ansible-playbook playbooks/doca_ofed_install.yml" 12 55
+  ansible-playbook playbooks/doca_ofed_install.yml"
             return
         fi
     fi
 
-    if ! whiptail --title "Install DOCA OFED" --yesno "\
+    if ! yes_no "Install DOCA OFED" "\
 Install NVIDIA DOCA OFED drivers?
 
 This enables RDMA support for high-performance
@@ -874,20 +825,20 @@ Requirements:
 - Internet connection for package download
 - System reboot after installation
 
-Proceed with installation?" 16 55; then
+Proceed with installation?"; then
         return
     fi
 
     # Check for Ansible
     if ! command -v ansible-playbook &>/dev/null; then
-        whiptail --title "Installing Ansible..." --infobox "Installing Ansible..." 6 40
+        info_box "Installing Ansible..." "Installing Ansible..."
         if command -v apt-get &>/dev/null; then
             apt-get update -qq
             apt-get install -y -qq ansible
         elif command -v yum &>/dev/null; then
             yum install -y ansible
         else
-            whiptail --title "Error" --msgbox "Could not install Ansible." 8 45
+            msg_box "Error" "Could not install Ansible."
             return 1
         fi
     fi
@@ -895,37 +846,37 @@ Proceed with installation?" 16 55; then
     # Run the playbook
     local playbook="$SCRIPT_DIR/playbooks/doca_ofed_install.yml"
     if [[ ! -f "$playbook" ]]; then
-        whiptail --title "Error" --msgbox "Playbook not found:\n$playbook" 10 55
+        msg_box "Error" "Playbook not found:\n$playbook"
         return 1
     fi
 
     local log="$TMP_DIR/ansible.log"
 
-    whiptail --title "Installing DOCA OFED" --infobox "\
+    info_box "Installing DOCA OFED" "\
 Installing NVIDIA DOCA OFED...
 
 This may take several minutes.
-Please wait..." 10 50
+Please wait..."
 
     cd "$SCRIPT_DIR"
     if ansible-playbook "$playbook" -i inventories/lab.ini > "$log" 2>&1; then
-        whiptail --title "Installation Complete" --msgbox "\
+        msg_box "Installation Complete" "\
 DOCA OFED installed successfully!
 
 A system reboot is recommended to load
 the new kernel modules.
 
 After reboot, RDMA will be available for
-high-performance NFS connections." 14 55
+high-performance NFS connections."
 
-        if whiptail --title "Reboot Now?" --yesno "\
+        if yes_no "Reboot Now?" "\
 Reboot the system now?
 
-RDMA will not be available until reboot." 10 50; then
+RDMA will not be available until reboot."; then
             reboot
         fi
     else
-        whiptail --title "Installation Failed" --scrolltext --textbox "$log" 20 70
+        text_box "Installation Failed" "$log"
     fi
 }
 
@@ -1060,26 +1011,26 @@ show_csi_nfs_status() {
         printf '=%.0s' {1..70}; echo ""
     } > "$out"
 
-    whiptail --title "CSI NFS Driver Status" --scrolltext --textbox "$out" 30 80
+    text_box "CSI NFS Driver Status" "$out"
 }
 
 # Install CSI NFS driver
 install_csi_nfs_driver() {
     # Check prerequisites
     if ! command -v kubectl &>/dev/null; then
-        whiptail --title "kubectl Required" --msgbox "\
+        msg_box "kubectl Required" "\
 kubectl is not installed.
 
 Install kubectl first:
   https://kubernetes.io/docs/tasks/tools/
 
 Or for Ubuntu/Debian:
-  sudo snap install kubectl --classic" 14 55
+  sudo snap install kubectl --classic"
         return 1
     fi
 
     if ! kubectl cluster-info &>/dev/null; then
-        whiptail --title "Cluster Not Accessible" --msgbox "\
+        msg_box "Cluster Not Accessible" "\
 Cannot connect to Kubernetes cluster.
 
 Make sure:
@@ -1087,7 +1038,7 @@ Make sure:
 2. kubectl is properly configured
 3. You have cluster access permissions
 
-Check with: kubectl cluster-info" 14 55
+Check with: kubectl cluster-info"
         return 1
     fi
 
@@ -1095,26 +1046,22 @@ Check with: kubectl cluster-info" 14 55
     if check_csi_nfs_installed; then
         local pods
         pods=$(kubectl get pods -n kube-system -l app=csi-nfs-controller --no-headers 2>/dev/null | head -3 || true)
-        whiptail --title "Already Installed" --msgbox "\
+        msg_box "Already Installed" "\
 CSI NFS driver is already installed.
 
 Controller pods:
 $pods
 
-Use 'Check Status' to see full details." 14 60
+Use 'Check Status' to see full details."
         return 0
     fi
 
     # Choose installation method
     local method
-    method=$(whiptail --title "Installation Method" --menu "\
-Choose installation method:
-
-Helm is recommended if available.
-Script install works without Helm." 16 60 2 \
+    method=$(menu_select "Installation Method" \
+        "Helm is recommended if available" \
         "helm" "Install via Helm (recommended)" \
-        "script" "Install via official script" \
-        3>&1 1>&2 2>&3) || return
+        "script" "Install via official script") || return
 
     local log="$TMP_DIR/csi_install.log"
 
@@ -1122,17 +1069,17 @@ Script install works without Helm." 16 60 2 \
         helm)
             # Check for helm
             if ! command -v helm &>/dev/null; then
-                if whiptail --title "Helm Not Found" --yesno "\
+                if yes_no "Helm Not Found" "\
 Helm is not installed.
 
 Install Helm now?
 
-This will download and install Helm 3." 12 50; then
-                    whiptail --title "Installing Helm..." --infobox "Downloading and installing Helm..." 6 50
+This will download and install Helm 3."; then
+                    info_box "Installing Helm..." "Downloading and installing Helm..."
                     if curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash > "$log" 2>&1; then
-                        whiptail --title "Helm Installed" --msgbox "Helm installed successfully!" 8 40
+                        msg_box "Helm Installed" "Helm installed successfully!"
                     else
-                        whiptail --title "Helm Install Failed" --scrolltext --textbox "$log" 20 70
+                        text_box "Helm Install Failed" "$log"
                         return 1
                     fi
                 else
@@ -1140,10 +1087,10 @@ This will download and install Helm 3." 12 50; then
                 fi
             fi
 
-            whiptail --title "Installing CSI NFS Driver" --infobox "\
+            info_box "Installing CSI NFS Driver" "\
 Installing CSI NFS Driver via Helm...
 
-This may take a few minutes." 8 55
+This may take a few minutes."
 
             {
                 echo "Adding CSI NFS Helm repository..."
@@ -1158,7 +1105,7 @@ This may take a few minutes." 8 55
             } > "$log" 2>&1
 
             if [[ $? -eq 0 ]]; then
-                whiptail --title "Installation Complete" --msgbox "\
+                msg_box "Installation Complete" "\
 CSI NFS Driver installed successfully!
 
 Next steps:
@@ -1166,18 +1113,18 @@ Next steps:
 2. Create PersistentVolumeClaims using the StorageClass
 
 Use 'Configure Storage Class' to set up
-a StorageClass for your xiNAS server." 16 60
+a StorageClass for your xiNAS server."
             else
-                whiptail --title "Installation Failed" --scrolltext --textbox "$log" 20 70
+                text_box "Installation Failed" "$log"
                 return 1
             fi
             ;;
 
         script)
-            whiptail --title "Installing CSI NFS Driver" --infobox "\
+            info_box "Installing CSI NFS Driver" "\
 Installing CSI NFS Driver via script...
 
-This may take a few minutes." 8 55
+This may take a few minutes."
 
             {
                 echo "Downloading and running CSI NFS install script..."
@@ -1185,7 +1132,7 @@ This may take a few minutes." 8 55
             } > "$log" 2>&1
 
             if [[ $? -eq 0 ]] && check_csi_nfs_installed; then
-                whiptail --title "Installation Complete" --msgbox "\
+                msg_box "Installation Complete" "\
 CSI NFS Driver installed successfully!
 
 Next steps:
@@ -1193,9 +1140,9 @@ Next steps:
 2. Create PersistentVolumeClaims using the StorageClass
 
 Use 'Configure Storage Class' to set up
-a StorageClass for your xiNAS server." 16 60
+a StorageClass for your xiNAS server."
             else
-                whiptail --title "Installation Failed" --scrolltext --textbox "$log" 20 70
+                text_box "Installation Failed" "$log"
                 return 1
             fi
             ;;
@@ -1205,23 +1152,23 @@ a StorageClass for your xiNAS server." 16 60
 # Uninstall CSI NFS driver
 uninstall_csi_nfs_driver() {
     if ! check_csi_nfs_installed; then
-        whiptail --title "Not Installed" --msgbox "CSI NFS driver is not installed." 8 45
+        msg_box "Not Installed" "CSI NFS driver is not installed."
         return
     fi
 
-    if ! whiptail --title "Confirm Uninstall" --yesno "\
+    if ! yes_no "Confirm Uninstall" "\
 Uninstall CSI NFS Driver?
 
 WARNING: This will remove the CSI driver.
 Existing PVCs may become inaccessible.
 
-Are you sure?" 12 50; then
+Are you sure?"; then
         return
     fi
 
     local log="$TMP_DIR/csi_uninstall.log"
 
-    whiptail --title "Uninstalling..." --infobox "Removing CSI NFS Driver..." 6 45
+    info_box "Uninstalling..." "Removing CSI NFS Driver..."
 
     # Try helm uninstall first
     if command -v helm &>/dev/null && helm list -n kube-system | grep -q csi-driver-nfs; then
@@ -1232,28 +1179,28 @@ Are you sure?" 12 50; then
     fi
 
     if ! check_csi_nfs_installed; then
-        whiptail --title "Uninstalled" --msgbox "CSI NFS Driver has been removed." 8 45
+        msg_box "Uninstalled" "CSI NFS Driver has been removed."
     else
-        whiptail --title "Uninstall Issue" --scrolltext --textbox "$log" 20 70
+        text_box "Uninstall Issue" "$log"
     fi
 }
 
 # Configure NFS StorageClass for xiNAS
 configure_csi_nfs_storage_class() {
     if ! check_kubernetes_available; then
-        whiptail --title "Cluster Not Accessible" --msgbox "\
+        msg_box "Cluster Not Accessible" "\
 Cannot connect to Kubernetes cluster.
 
 Make sure kubectl is configured and
-the cluster is accessible." 10 50
+the cluster is accessible."
         return 1
     fi
 
     if ! check_csi_nfs_installed; then
-        if ! whiptail --title "Driver Not Installed" --yesno "\
+        if ! yes_no "Driver Not Installed" "\
 CSI NFS driver is not installed.
 
-Install it now?" 10 45; then
+Install it now?"; then
             return
         fi
         install_csi_nfs_driver || return 1
@@ -1261,65 +1208,62 @@ Install it now?" 10 45; then
 
     # Get NFS server address
     local nfs_server
-    nfs_server=$(whiptail --title "NFS Server Address" --inputbox "\
+    nfs_server=$(input_box "NFS Server Address" "\
 Enter the xiNAS server IP address:
 
 This should be the storage network IP
 that Kubernetes nodes can access.
 
-Example: 10.10.1.1" 14 55 "10.10.1.1" 3>&1 1>&2 2>&3) || return
+Example: 10.10.1.1" "10.10.1.1" 3>&1 1>&2 2>&3) || return
 
     [[ -z "$nfs_server" ]] && return
 
     # Validate IP format
     if [[ ! "$nfs_server" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        whiptail --title "Invalid IP" --msgbox "Please enter a valid IP address." 8 45
+        msg_box "Invalid IP" "Please enter a valid IP address."
         return
     fi
 
     # Get NFS share path
     local nfs_share
-    nfs_share=$(whiptail --title "NFS Share Path" --inputbox "\
+    nfs_share=$(input_box "NFS Share Path" "\
 Enter the NFS export path on the server:
 
 This is the base path that will be used
 for dynamic provisioning.
 
-Example: /mnt/data" 14 55 "/mnt/data" 3>&1 1>&2 2>&3) || return
+Example: /mnt/data" "/mnt/data" 3>&1 1>&2 2>&3) || return
 
     [[ -z "$nfs_share" ]] && nfs_share="/mnt/data"
 
     # Storage class name
     local sc_name
-    sc_name=$(whiptail --title "Storage Class Name" --inputbox "\
+    sc_name=$(input_box "Storage Class Name" "\
 Enter a name for the StorageClass:
 
 This will be used in PVC definitions.
 
-Example: xinas-nfs" 14 55 "xinas-nfs" 3>&1 1>&2 2>&3) || return
+Example: xinas-nfs" "xinas-nfs" 3>&1 1>&2 2>&3) || return
 
     [[ -z "$sc_name" ]] && sc_name="xinas-nfs"
 
     # Reclaim policy
     local reclaim_policy
-    reclaim_policy=$(whiptail --title "Reclaim Policy" --menu "\
-Select the reclaim policy:
-
-What happens when a PVC is deleted?" 14 60 3 \
+    reclaim_policy=$(menu_select "Reclaim Policy" \
+        "What happens when a PVC is deleted?" \
         "Delete" "Delete the data (default)" \
         "Retain" "Keep the data for manual cleanup" \
-        "Archive" "Archive before deletion" \
-        3>&1 1>&2 2>&3) || return
+        "Archive" "Archive before deletion") || return
 
     [[ -z "$reclaim_policy" ]] && reclaim_policy="Delete"
 
     # Set as default?
     local set_default="false"
-    if whiptail --title "Default StorageClass" --yesno "\
+    if yes_no "Default StorageClass" "\
 Make this the default StorageClass?
 
 If yes, PVCs without an explicit storageClassName
-will use this StorageClass." 12 55; then
+will use this StorageClass."; then
         set_default="true"
     fi
 
@@ -1349,7 +1293,7 @@ mountOptions:
 EOF
 
     # Show preview and confirm
-    if ! whiptail --title "Confirm StorageClass" --yesno "\
+    if ! yes_no "Confirm StorageClass" "\
 StorageClass configuration:
 
 Name:          $sc_name
@@ -1358,14 +1302,14 @@ NFS Share:     $nfs_share
 Reclaim:       $reclaim_policy
 Default:       $set_default
 
-Create this StorageClass?" 18 60; then
+Create this StorageClass?"; then
         return
     fi
 
     # Apply the StorageClass
     local log="$TMP_DIR/sc_apply.log"
     if kubectl apply -f "$sc_file" > "$log" 2>&1; then
-        whiptail --title "StorageClass Created" --msgbox "\
+        msg_box "StorageClass Created" "\
 StorageClass '$sc_name' created successfully!
 
 Example PVC:
@@ -1380,16 +1324,16 @@ spec:
   storageClassName: $sc_name
   resources:
     requests:
-      storage: 100Gi" 22 60
+      storage: 100Gi"
     else
-        whiptail --title "Failed" --scrolltext --textbox "$log" 20 70
+        text_box "Failed" "$log"
     fi
 }
 
 # List and manage storage classes
 manage_csi_nfs_storage_classes() {
     if ! check_kubernetes_available; then
-        whiptail --title "Cluster Not Accessible" --msgbox "Cannot connect to Kubernetes cluster." 8 50
+        msg_box "Cluster Not Accessible" "Cannot connect to Kubernetes cluster."
         return
     fi
 
@@ -1409,10 +1353,10 @@ manage_csi_nfs_storage_classes() {
         done < <(kubectl get storageclass --no-headers 2>/dev/null)
 
         if [[ ${#sc_list[@]} -eq 0 ]]; then
-            whiptail --title "No NFS StorageClasses" --msgbox "\
+            msg_box "No NFS StorageClasses" "\
 No NFS StorageClasses found.
 
-Use 'Create StorageClass' to add one." 10 50
+Use 'Create StorageClass' to add one."
             return
         fi
 
@@ -1420,38 +1364,37 @@ Use 'Create StorageClass' to add one." 10 50
         sc_list+=("Back" "Return to CSI menu")
 
         local choice
-        choice=$(whiptail --title "NFS Storage Classes" --menu "\
-Select a StorageClass to manage:" 18 70 8 \
-            "${sc_list[@]}" 3>&1 1>&2 2>&3) || return
+        choice=$(menu_select "NFS Storage Classes" \
+            "Select a StorageClass to manage:" \
+            "${sc_list[@]}") || return
 
         [[ "$choice" == "Back" || -z "$choice" ]] && return
 
         # Show options for selected StorageClass
         local action
-        action=$(whiptail --title "StorageClass: $choice" --menu "\
-Select action:" 14 55 4 \
+        action=$(menu_select "StorageClass: $choice" \
+            "Select action:" \
             "1" "View Details" \
             "2" "Delete StorageClass" \
             "3" "Set as Default" \
-            "4" "Back" \
-            3>&1 1>&2 2>&3) || continue
+            "4" "Back") || continue
 
         case "$action" in
             1)
                 local details="$TMP_DIR/sc_details"
                 kubectl get storageclass "$choice" -o yaml > "$details" 2>&1
-                whiptail --title "StorageClass: $choice" --scrolltext --textbox "$details" 25 80
+                text_box "StorageClass: $choice" "$details"
                 ;;
             2)
-                if whiptail --title "Delete StorageClass" --yesno "\
+                if yes_no "Delete StorageClass" "\
 Delete StorageClass '$choice'?
 
 Note: Existing PVCs using this StorageClass
-will NOT be deleted." 12 55; then
+will NOT be deleted."; then
                     if kubectl delete storageclass "$choice" &>/dev/null; then
-                        whiptail --title "Deleted" --msgbox "StorageClass '$choice' deleted." 8 45
+                        msg_box "Deleted" "StorageClass '$choice' deleted."
                     else
-                        whiptail --title "Error" --msgbox "Failed to delete StorageClass." 8 45
+                        msg_box "Error" "Failed to delete StorageClass."
                     fi
                 fi
                 ;;
@@ -1462,9 +1405,9 @@ will NOT be deleted." 12 55; then
                 done
                 # Set this one as default
                 if kubectl patch storageclass "$choice" -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}' &>/dev/null; then
-                    whiptail --title "Default Set" --msgbox "'$choice' is now the default StorageClass." 8 55
+                    msg_box "Default Set" "'$choice' is now the default StorageClass."
                 else
-                    whiptail --title "Error" --msgbox "Failed to set as default." 8 45
+                    msg_box "Error" "Failed to set as default."
                 fi
                 ;;
         esac
@@ -1517,7 +1460,7 @@ upgrade_csi_nfs_driver() {
 
     if command -v helm &>/dev/null && helm list -n kube-system 2>/dev/null | grep -q csi-driver-nfs; then
         # Upgrade via Helm
-        whiptail --title "Upgrading CSI Driver" --infobox "Upgrading CSI NFS Driver via Helm..." 6 50
+        info_box "Upgrading CSI Driver" "Upgrading CSI NFS Driver via Helm..."
 
         {
             echo "Updating Helm repositories..."
@@ -1531,19 +1474,19 @@ upgrade_csi_nfs_driver() {
         if [[ $? -eq 0 ]]; then
             return 0
         else
-            whiptail --title "Upgrade Failed" --scrolltext --textbox "$log" 20 70
+            text_box "Upgrade Failed" "$log"
             return 1
         fi
     else
         # Reinstall via script (script method doesn't have clean upgrade)
-        if whiptail --title "Upgrade CSI Driver" --yesno "\
+        if yes_no "Upgrade CSI Driver" "\
 The CSI driver was installed via script.
 
 To upgrade, it will be reinstalled.
 This should not affect existing PVCs.
 
-Proceed with reinstall?" 12 55; then
-            whiptail --title "Upgrading CSI Driver" --infobox "Reinstalling CSI NFS Driver..." 6 50
+Proceed with reinstall?"; then
+            info_box "Upgrading CSI Driver" "Reinstalling CSI NFS Driver..."
 
             {
                 echo "Removing old installation..."
@@ -1555,7 +1498,7 @@ Proceed with reinstall?" 12 55; then
             if check_csi_nfs_installed; then
                 return 0
             else
-                whiptail --title "Upgrade Failed" --scrolltext --textbox "$log" 20 70
+                text_box "Upgrade Failed" "$log"
                 return 1
             fi
         fi
@@ -1567,18 +1510,18 @@ Proceed with reinstall?" 12 55; then
 kubernetes_csi_nfs_menu() {
     # Check if running on a Kubernetes node
     if ! command -v kubectl &>/dev/null; then
-        if ! whiptail --title "kubectl Not Found" --yesno "\
+        if ! yes_no "kubectl Not Found" "\
 kubectl is not installed on this system.
 
 This feature requires:
 - kubectl command-line tool
 - Access to a Kubernetes cluster
 
-Would you like to install kubectl?" 14 55; then
+Would you like to install kubectl?"; then
             return
         fi
 
-        whiptail --title "Installing kubectl..." --infobox "Installing kubectl..." 6 40
+        info_box "Installing kubectl..." "Installing kubectl..."
 
         if command -v snap &>/dev/null; then
             snap install kubectl --classic &>/dev/null
@@ -1587,18 +1530,18 @@ Would you like to install kubectl?" 14 55; then
             echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
             apt-get update -qq && apt-get install -y -qq kubectl
         else
-            whiptail --title "Manual Install Required" --msgbox "\
+            msg_box "Manual Install Required" "\
 Could not auto-install kubectl.
 
 Please install manually:
-https://kubernetes.io/docs/tasks/tools/" 12 55
+https://kubernetes.io/docs/tasks/tools/"
             return
         fi
 
         if command -v kubectl &>/dev/null; then
-            whiptail --title "Installed" --msgbox "kubectl installed successfully!" 8 40
+            msg_box "Installed" "kubectl installed successfully!"
         else
-            whiptail --title "Installation Failed" --msgbox "Failed to install kubectl." 8 40
+            msg_box "Installation Failed" "Failed to install kubectl."
             return
         fi
     fi
@@ -1631,38 +1574,36 @@ https://kubernetes.io/docs/tasks/tools/" 12 55
         fi
 
         local choice
-        choice=$(whiptail --title "Kubernetes CSI NFS Driver" --menu "\
-  Cluster: $k8s_status | CSI Driver: $csi_status$update_marker
-  ─────────────────────────────────────────────" 22 65 9 \
+        choice=$(menu_select "Kubernetes CSI NFS Driver" \
+            "Cluster: $k8s_status | CSI: $csi_status$update_marker" \
             "1" "📊 Check Status" \
             "2" "📦 Install CSI NFS Driver" \
             "3" "🔄 Upgrade CSI NFS Driver" \
             "4" "⚙️  Configure Storage Class" \
             "5" "📁 Manage Storage Classes" \
             "6" "🗑️  Uninstall CSI NFS Driver" \
-            "7" "🔙 Back to Main Menu" \
-            3>&1 1>&2 2>&3) || return
+            "7" "🔙 Back to Main Menu") || return
 
         case "$choice" in
             1) show_csi_nfs_status ;;
             2) install_csi_nfs_driver ;;
             3)
                 if ! check_csi_nfs_installed; then
-                    whiptail --title "Not Installed" --msgbox "CSI NFS driver is not installed.\n\nInstall it first using option 2." 10 50
+                    msg_box "Not Installed" "CSI NFS driver is not installed.\n\nInstall it first using option 2."
                 elif check_csi_nfs_updates; then
-                    if whiptail --title "Update Available" --yesno "\
+                    if yes_no "Update Available" "\
 CSI NFS Driver update available!
 
 Current: $CSI_CURRENT_VERSION
 Latest:  $CSI_LATEST_VERSION
 
-Upgrade now?" 14 50; then
+Upgrade now?"; then
                         if upgrade_csi_nfs_driver; then
-                            whiptail --title "Upgraded!" --msgbox "CSI NFS Driver upgraded to $CSI_LATEST_VERSION!" 8 55
+                            msg_box "Upgraded!" "CSI NFS Driver upgraded to $CSI_LATEST_VERSION!"
                         fi
                     fi
                 else
-                    whiptail --title "Up to Date" --msgbox "CSI NFS Driver is up to date.\n\nVersion: ${CSI_CURRENT_VERSION:-$csi_version}" 10 50
+                    msg_box "Up to Date" "CSI NFS Driver is up to date.\n\nVersion: ${CSI_CURRENT_VERSION:-$csi_version}"
                 fi
                 ;;
             4) configure_csi_nfs_storage_class ;;
@@ -1679,11 +1620,11 @@ Upgrade now?" 14 50; then
 
 test_connection() {
     local server_ip
-    server_ip=$(whiptail --title "Test Connection" --inputbox "\
+    server_ip=$(input_box "Test Connection" "\
 Enter the xiNAS server IP to test:
 
 This will check network connectivity and
-NFS service availability." 12 55 "10.10.1.1" 3>&1 1>&2 2>&3) || return
+NFS service availability." "10.10.1.1" 3>&1 1>&2 2>&3) || return
 
     [[ -z "$server_ip" ]] && return
 
@@ -1764,7 +1705,7 @@ NFS service availability." 12 55 "10.10.1.1" 3>&1 1>&2 2>&3) || return
         printf '=%.0s' {1..60}; echo ""
     } > "$out"
 
-    whiptail --title "Connection Test: $server_ip" --scrolltext --textbox "$out" 28 70
+    text_box "Connection Test: $server_ip" "$out"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1789,7 +1730,7 @@ check_and_update() {
     local local_commit=""
     local remote_commit=""
 
-    whiptail --title "Checking..." --infobox "Checking for updates..." 6 40
+    info_box "Checking..." "Checking for updates..."
 
     # Check xiNAS Client updates
     if [[ -d "$git_dir" ]] && command -v git &>/dev/null; then
@@ -1815,10 +1756,10 @@ check_and_update() {
         if check_csi_nfs_installed; then
             csi_msg="\nCSI NFS Driver: ${CSI_CURRENT_VERSION:-installed}"
         fi
-        whiptail --title "Up to Date" --msgbox "\
+        msg_box "Up to Date" "\
 Everything is up to date!
 
-xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg" 12 55
+xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg"
         UPDATE_AVAILABLE=""
         return
     fi
@@ -1848,48 +1789,48 @@ xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg" 1
     if [[ ${#update_options[@]} -eq 3 ]]; then
         # Only one update available, use simple yesno
         if [[ -n "$client_update_available" ]]; then
-            if whiptail --title "Update Available" --yesno "$(echo -e "$update_msg")\nUpdate xiNAS Client now?" 22 65; then
-                whiptail --title "Updating..." --infobox "Downloading xiNAS Client update..." 6 50
+            if yes_no "Update Available" "$update_msg\n\nUpdate xiNAS Client now?"; then
+                info_box "Updating..." "Downloading xiNAS Client update..."
                 if git -C "$install_dir" pull --quiet origin main 2>/dev/null; then
                     UPDATE_AVAILABLE=""
-                    whiptail --title "Updated!" --msgbox "xiNAS Client updated!\n\nThe menu will restart." 10 50
+                    msg_box "Updated!" "xiNAS Client updated!\n\nThe menu will restart."
                     exec "$0" "$@"
                 else
-                    whiptail --title "Update Failed" --msgbox "Failed to update. Try: git pull origin main" 10 55
+                    msg_box "Update Failed" "Failed to update. Try: git pull origin main"
                 fi
             fi
         else
-            if whiptail --title "Update Available" --yesno "$(echo -e "$update_msg")\nUpdate CSI NFS Driver now?" 18 65; then
+            if yes_no "Update Available" "$update_msg\n\nUpdate CSI NFS Driver now?"; then
                 if upgrade_csi_nfs_driver; then
-                    whiptail --title "Updated!" --msgbox "CSI NFS Driver updated to $CSI_LATEST_VERSION!" 8 55
+                    msg_box "Updated!" "CSI NFS Driver updated to $CSI_LATEST_VERSION!"
                 fi
             fi
         fi
     else
         # Multiple updates, use checklist
         local selected
-        selected=$(whiptail --title "Updates Available" --checklist \
-            "$(echo -e "$update_msg")Select updates to install:" 26 70 2 \
-            "${update_options[@]}" 3>&1 1>&2 2>&3) || return
+        selected=$(check_list "Updates Available" \
+            "Select updates to install:" \
+            "${update_options[@]}") || return
 
         if [[ "$selected" == *"client"* ]]; then
-            whiptail --title "Updating..." --infobox "Downloading xiNAS Client update..." 6 50
+            info_box "Updating..." "Downloading xiNAS Client update..."
             if git -C "$install_dir" pull --quiet origin main 2>/dev/null; then
                 UPDATE_AVAILABLE=""
             else
-                whiptail --title "Client Update Failed" --msgbox "Failed to update client." 8 45
+                msg_box "Client Update Failed" "Failed to update client."
             fi
         fi
 
         if [[ "$selected" == *"csi"* ]]; then
             if upgrade_csi_nfs_driver; then
-                whiptail --title "CSI Updated" --msgbox "CSI NFS Driver updated!" 8 40
+                msg_box "CSI Updated" "CSI NFS Driver updated!"
             fi
         fi
 
         # Restart if client was updated
         if [[ "$selected" == *"client"* ]] && [[ -z "$UPDATE_AVAILABLE" ]]; then
-            whiptail --title "Updated!" --msgbox "Updates installed!\n\nThe menu will restart." 10 45
+            msg_box "Updated!" "Updates installed!\n\nThe menu will restart."
             exec "$0" "$@"
         fi
     fi
@@ -1996,7 +1937,7 @@ configure_network_ip_pool() {
     # Input start IP
     while true; do
         local new_start
-        new_start=$(whiptail --title "Network: IP Pool Start" --inputbox "\
+        new_start=$(input_box "Network: IP Pool Start" "\
 Configure IP pool for storage network interfaces.
 
 Start IP address of the pool:
@@ -2007,55 +1948,55 @@ Each interface will get the next subnet:
   Interface 2: 10.10.2.2
   etc.
 
-Note: Use .2 addresses if .1 is your NAS server." 18 60 "$net_pool_start" 3>&1 1>&2 2>&3) || return
+Note: Use .2 addresses if .1 is your NAS server." "$net_pool_start" 3>&1 1>&2 2>&3) || return
 
         if valid_ipv4 "$new_start"; then
             break
         else
-            whiptail --title "Invalid IP" --msgbox "Invalid IP address format. Use X.X.X.X" 8 50
+            msg_box "Invalid IP" "Invalid IP address format. Use X.X.X.X"
         fi
     done
 
     # Input end IP
     while true; do
         local new_end
-        new_end=$(whiptail --title "Network: IP Pool End" --inputbox "\
+        new_end=$(input_box "Network: IP Pool End" "\
 End IP address of the pool:
 
-Format: X.X.X.X (e.g., 10.10.255.2)" 12 60 "$net_pool_end" 3>&1 1>&2 2>&3) || return
+Format: X.X.X.X (e.g., 10.10.255.2)" "$net_pool_end" 3>&1 1>&2 2>&3) || return
 
         if valid_ipv4 "$new_end"; then
             break
         else
-            whiptail --title "Invalid IP" --msgbox "Invalid IP address format. Use X.X.X.X" 8 50
+            msg_box "Invalid IP" "Invalid IP address format. Use X.X.X.X"
         fi
     done
 
     # Input prefix
     while true; do
         local new_prefix
-        new_prefix=$(whiptail --title "Network: Subnet Prefix" --inputbox "\
+        new_prefix=$(input_box "Network: Subnet Prefix" "\
 Subnet prefix (CIDR):
 
-(e.g., 24 for /24 = 255.255.255.0)" 12 50 "$net_pool_prefix" 3>&1 1>&2 2>&3) || return
+(e.g., 24 for /24 = 255.255.255.0)" "$net_pool_prefix" 3>&1 1>&2 2>&3) || return
 
         if [[ $new_prefix =~ ^[0-9]{1,2}$ ]] && [[ $new_prefix -ge 1 && $new_prefix -le 32 ]]; then
             break
         else
-            whiptail --title "Invalid Prefix" --msgbox "Invalid prefix. Use 1-32." 8 40
+            msg_box "Invalid Prefix" "Invalid prefix. Use 1-32."
         fi
     done
 
     # Input MTU
     local new_mtu
-    new_mtu=$(whiptail --title "Network: MTU Setting" --inputbox "\
+    new_mtu=$(input_box "Network: MTU Setting" "\
 MTU (Maximum Transmission Unit):
 
   0    = System default
   1500 = Standard Ethernet
   9000 = Jumbo frames (recommended for storage)
 
-Leave at 0 unless you know your network supports jumbo frames." 16 60 "$net_mtu" 3>&1 1>&2 2>&3) || return
+Leave at 0 unless you know your network supports jumbo frames." "$net_mtu" 3>&1 1>&2 2>&3) || return
 
     [[ -z "$new_mtu" ]] && new_mtu=0
 
@@ -2063,21 +2004,7 @@ Leave at 0 unless you know your network supports jumbo frames." 16 60 "$net_mtu"
     save_network_pool_settings "$new_start" "$new_end" "$new_prefix" "$new_mtu"
 
     # Show summary
-    whiptail --title "IP Pool Configured" --msgbox "\
-IP Pool configured:
-
-Range: $new_start - $new_end
-Prefix: /$new_prefix
-MTU: $([ "$new_mtu" = "0" ] && echo "System default" || echo "$new_mtu")
-
-Interfaces will be auto-assigned:
-  Interface 1: ${new_start}/${new_prefix}
-  Interface 2: next subnet
-  etc.
-
-Saved to: $NETWORK_CONFIG
-
-Use 'Apply Network Configuration' to activate." 18 60
+    msg_box "IP Pool Configured" "IP Pool configured:\n\nRange: $new_start - $new_end\nPrefix: /$new_prefix\nMTU: $([ "$new_mtu" = "0" ] && echo "System default" || echo "$new_mtu")\n\nSaved to: $NETWORK_CONFIG\n\nUse 'Apply Network Configuration' to activate."
 }
 
 # Configure interfaces manually
@@ -2086,7 +2013,7 @@ configure_network_manual() {
     readarray -t all_interfaces < <(ip -o link show | awk -F': ' '{print $2}' | grep -v lo)
 
     if [[ ${#all_interfaces[@]} -eq 0 ]]; then
-        whiptail --title "No Interfaces" --msgbox "No network interfaces found." 8 45
+        msg_box "No Interfaces" "No network interfaces found."
         return
     fi
 
@@ -2126,11 +2053,9 @@ configure_network_manual() {
         menu_items+=("Finish" "Apply configuration")
 
         local iface
-        iface=$(whiptail --title "Manual Network Configuration" --menu "\
-Select interface to configure:
-
-[RDMA] indicates high-speed interfaces suitable for storage." 20 70 10 \
-            "${menu_items[@]}" 3>&1 1>&2 2>&3) || return
+        iface=$(menu_select "Manual Network Configuration" \
+            "[RDMA] indicates high-speed interfaces" \
+            "${menu_items[@]}") || return
 
         [[ "$iface" == "Finish" ]] && break
         [[ -z "$iface" ]] && continue
@@ -2140,12 +2065,12 @@ Select interface to configure:
 
         while true; do
             local addr
-            addr=$(whiptail --title "Configure: $iface" --inputbox "\
+            addr=$(input_box "Configure: $iface" "\
 $prompt
 
 Format: X.X.X.X/prefix (e.g., 10.10.1.2/24)
 
-Leave empty to skip this interface." 14 60 3>&1 1>&2 2>&3) || break
+Leave empty to skip this interface." 3>&1 1>&2 2>&3) || break
 
             [[ -z "$addr" ]] && break
 
@@ -2164,25 +2089,25 @@ Leave empty to skip this interface." 14 60 3>&1 1>&2 2>&3) || break
                 [[ -z "$found" ]] && configs+=("$iface:$addr")
                 break
             else
-                whiptail --title "Invalid Format" --msgbox "Invalid IPv4/CIDR format. Use X.X.X.X/prefix" 8 60
+                msg_box "Invalid Format" "Invalid IPv4/CIDR format. Use X.X.X.X/prefix"
             fi
         done
     done
 
     if [[ ${#configs[@]} -eq 0 ]]; then
-        whiptail --title "No Changes" --msgbox "No interfaces were configured." 8 45
+        msg_box "No Changes" "No interfaces were configured."
         return
     fi
 
     # Ask for MTU
     get_network_pool_settings
     local mtu
-    mtu=$(whiptail --title "MTU Setting" --inputbox "\
+    mtu=$(input_box "MTU Setting" "\
 MTU (Maximum Transmission Unit):
 
   0    = System default
   1500 = Standard Ethernet
-  9000 = Jumbo frames (recommended for storage)" 14 55 "$net_mtu" 3>&1 1>&2 2>&3) || return
+  9000 = Jumbo frames (recommended for storage)" "$net_mtu" 3>&1 1>&2 2>&3) || return
 
     [[ -z "$mtu" ]] && mtu=0
 
@@ -2219,14 +2144,7 @@ EOF
     local preview="$TMP_DIR/netplan_preview"
     cat "$tmp_file" > "$preview"
 
-    if whiptail --title "Confirm Configuration" --yesno "\
-Review the netplan configuration:
-
-$(cat "$preview")
-
-Apply this configuration?
-
-This will modify: $netplan_file" 24 70; then
+    if yes_no "Confirm Configuration" "Apply this netplan configuration?\n\nThis will modify: $netplan_file"; then
         # Backup existing config
         if [[ -f "$netplan_file" ]]; then
             cp "$netplan_file" "${netplan_file}.$(date +%Y%m%d%H%M%S).bak"
@@ -2247,38 +2165,32 @@ net_mtu: $mtu
 EOF
         fi
 
-        if whiptail --title "Apply Now?" --yesno "\
+        if yes_no "Apply Now?" "\
 Configuration saved to $netplan_file
 
 Apply network configuration now?
 
-Warning: This may briefly disrupt network connectivity." 12 55; then
-            whiptail --title "Applying..." --infobox "Applying network configuration..." 6 45
+Warning: This may briefly disrupt network connectivity."; then
+            info_box "Applying..." "Applying network configuration..."
             if netplan apply 2>/dev/null; then
                 sleep 2
-                whiptail --title "Success" --msgbox "\
-Network configuration applied successfully!
-
-Configured interfaces:
-$(for cfg in "${configs[@]}"; do echo "  ${cfg/:/ -> }"; done)
-
-MTU: $([ "$mtu" = "0" ] && echo "System default" || echo "$mtu")" 16 55
+                msg_box "Success" "Network configuration applied successfully!\n\nMTU: $([ "$mtu" = "0" ] && echo "System default" || echo "$mtu")"
             else
-                whiptail --title "Warning" --msgbox "\
+                msg_box "Warning" "\
 netplan apply returned an error.
 
 Please check the configuration:
   cat $netplan_file
 
 You may need to apply manually:
-  sudo netplan apply" 14 55
+  sudo netplan apply"
             fi
         else
-            whiptail --title "Saved" --msgbox "\
+            msg_box "Saved" "\
 Configuration saved but not applied.
 
 To apply later, run:
-  sudo netplan apply" 10 50
+  sudo netplan apply"
         fi
     else
         rm -f "$tmp_file"
@@ -2290,11 +2202,11 @@ apply_network_pool() {
     get_network_pool_settings
 
     if [[ "$net_pool_enabled" != "true" ]]; then
-        whiptail --title "Pool Not Configured" --msgbox "\
+        msg_box "Pool Not Configured" "\
 IP pool is not enabled.
 
 Please configure the IP pool first using
-'Configure IP Pool' option." 10 50
+'Configure IP Pool' option."
         return
     fi
 
@@ -2303,11 +2215,11 @@ Please configure the IP pool first using
     hs_ifaces=$(detect_high_speed_interfaces)
 
     if [[ -z "$hs_ifaces" ]]; then
-        whiptail --title "No Interfaces" --msgbox "\
+        msg_box "No Interfaces" "\
 No high-speed interfaces detected.
 
 Make sure DOCA OFED is installed and your
-InfiniBand/RDMA hardware is recognized." 12 55
+InfiniBand/RDMA hardware is recognized."
         return
     fi
 
@@ -2315,7 +2227,7 @@ InfiniBand/RDMA hardware is recognized." 12 55
     local interfaces=($hs_ifaces)
 
     if [[ ${#interfaces[@]} -eq 0 ]]; then
-        whiptail --title "No Interfaces" --msgbox "No interfaces to configure." 8 45
+        msg_box "No Interfaces" "No interfaces to configure."
         return
     fi
 
@@ -2358,15 +2270,7 @@ EOF
     done
 
     # Show preview
-    if whiptail --title "Apply IP Pool Configuration" --yesno "\
-Detected ${#interfaces[@]} high-speed interface(s).
-
-IP Allocation:
-$(echo -e "$allocated_ips")
-Pool: $net_pool_start - $net_pool_end / $net_pool_prefix
-MTU: $([ "$net_mtu" = "0" ] && echo "System default" || echo "$net_mtu")
-
-Apply this configuration?" 20 60; then
+    if yes_no "Apply IP Pool Configuration" "Detected ${#interfaces[@]} interface(s).\n\nPool: $net_pool_start - $net_pool_end / $net_pool_prefix\n\nApply this configuration?"; then
         # Backup existing config
         if [[ -f "$netplan_file" ]]; then
             cp "$netplan_file" "${netplan_file}.$(date +%Y%m%d%H%M%S).bak"
@@ -2375,23 +2279,18 @@ Apply this configuration?" 20 60; then
         mv "$tmp_file" "$netplan_file"
         chmod 600 "$netplan_file"
 
-        whiptail --title "Applying..." --infobox "Applying network configuration..." 6 45
+        info_box "Applying..." "Applying network configuration..."
 
         if netplan apply 2>/dev/null; then
             sleep 2
-            whiptail --title "Success" --msgbox "\
-Network configuration applied!
-
-Configured interfaces:
-$(echo -e "$allocated_ips")
-Configuration: $netplan_file" 16 55
+            msg_box "Success" "Network configuration applied!\n\nConfiguration: $netplan_file"
         else
-            whiptail --title "Warning" --msgbox "\
+            msg_box "Warning" "\
 netplan apply returned an error.
 
 Please check the configuration manually:
   cat $netplan_file
-  sudo netplan apply" 12 55
+  sudo netplan apply"
         fi
     else
         rm -f "$tmp_file"
@@ -2464,7 +2363,7 @@ view_network_config() {
         printf '=%.0s' {1..60}; echo ""
     } > "$out"
 
-    whiptail --title "Network Configuration" --scrolltext --textbox "$out" 28 76
+    text_box "Network Configuration" "$out"
 }
 
 # Network settings menu
@@ -2480,17 +2379,13 @@ configure_network() {
         hs_count=$(detect_high_speed_interfaces | wc -w)
 
         local choice
-        choice=$(whiptail --title "Network Settings" --menu "\
-IP Pool: $net_pool_start - $net_pool_end [$pool_status]
-High-speed interfaces detected: $hs_count
-
-Configure storage network interfaces:" 18 65 6 \
+        choice=$(menu_select "Network Settings" \
+            "IP Pool: $net_pool_start - $net_pool_end [$pool_status]" \
             "1" "Configure IP Pool (automatic allocation)" \
             "2" "Configure Interfaces Manually" \
             "3" "Apply IP Pool Configuration" \
             "4" "View Current Configuration" \
-            "5" "Back to Main Menu" \
-            3>&1 1>&2 2>&3) || return
+            "5" "Back to Main Menu") || return
 
         case "$choice" in
             1) configure_network_ip_pool ;;
@@ -2522,9 +2417,8 @@ main_menu() {
         [[ "$UPDATE_AVAILABLE" == "true" ]] && update_indicator=" | ${YELLOW}Update!${NC}"
 
         local choice
-        choice=$(whiptail --title "═══ xiNAS Client Setup v$CLIENT_VERSION ═══" --menu "\
-  $(hostname) | Mounts: $nfs_mounts | RDMA: $rdma_status
-  ─────────────────────────────────────────────" 26 60 11 \
+        choice=$(menu_select "xiNAS Client Setup v$CLIENT_VERSION" \
+            "$(hostname) | Mounts: $nfs_mounts | RDMA: $rdma_status" \
             "1" "📊 System Status" \
             "2" "🔌 Connect to NAS" \
             "3" "📁 Manage Mounts" \
@@ -2534,8 +2428,7 @@ main_menu() {
             "7" "☸️  Kubernetes CSI NFS Driver" \
             "8" "🔍 Test Connection" \
             "9" "🔄 Check for Updates" \
-            "0" "🚪 Exit" \
-            3>&1 1>&2 2>&3) || break
+            "0" "🚪 Exit") || break
 
         case "$choice" in
             1) show_status ;;
@@ -2548,14 +2441,14 @@ main_menu() {
             8) test_connection ;;
             9) check_and_update ;;
             0)
-                whiptail --title "See you soon!" --msgbox "\
+                msg_box "See you soon!" "\
    Thank you for using xiNAS Client Setup!
 
    Run this menu again anytime:
      sudo ./client_setup.sh
 
    Questions? support@xinnor.io
-" 12 50
+"
                 exit 0
                 ;;
         esac
