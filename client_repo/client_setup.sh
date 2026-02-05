@@ -2974,27 +2974,27 @@ configure_network() {
 
 advanced_settings_menu() {
     while true; do
-        # Check installation status for indicators
+        # Check installation status for indicators (plain text - colors don't work in menu items)
         local nfs_indicator=""
         local doca_indicator=""
         local gds_indicator=""
 
         if ! command -v mount.nfs &>/dev/null; then
-            nfs_indicator=" ${RED}[Not Installed]${NC}"
+            nfs_indicator=" [Not Installed]"
         else
-            nfs_indicator=" ${GREEN}[OK]${NC}"
+            nfs_indicator=" [OK]"
         fi
 
         if [[ ! -d /sys/class/infiniband ]] || [[ -z "$(ls /sys/class/infiniband/ 2>/dev/null)" ]]; then
-            doca_indicator=" ${RED}[Not Installed]${NC}"
+            doca_indicator=" [Not Installed]"
         else
-            doca_indicator=" ${GREEN}[OK]${NC}"
+            doca_indicator=" [OK]"
         fi
 
         if ! lsmod 2>/dev/null | grep -q nvidia_fs; then
-            gds_indicator=" ${GRAY}[Not Installed]${NC}"
+            gds_indicator=""
         else
-            gds_indicator=" ${GREEN}[OK]${NC}"
+            gds_indicator=" [OK]"
         fi
 
         local choice
@@ -3039,25 +3039,21 @@ main_menu() {
         local rdma_status="No"
         [[ -d /sys/class/infiniband ]] && [[ -n "$(ls /sys/class/infiniband/ 2>/dev/null)" ]] && rdma_status="Yes"
 
-        # Check for missing essential components
-        local warnings=""
+        # Check for missing essential components (plain text - colors don't work in menu items)
         local advanced_label="⚙️  Advanced Settings"
+        local missing_components=false
 
         if ! command -v mount.nfs &>/dev/null; then
-            warnings="${RED}⚠ NFS Tools not installed${NC}"
+            missing_components=true
         fi
 
         if [[ ! -d /sys/class/infiniband ]] || [[ -z "$(ls /sys/class/infiniband/ 2>/dev/null)" ]]; then
-            if [[ -n "$warnings" ]]; then
-                warnings="${warnings}  ${RED}⚠ DOCA OFED not installed${NC}"
-            else
-                warnings="${RED}⚠ DOCA OFED not installed${NC}"
-            fi
+            missing_components=true
         fi
 
         # Add warning indicator to Advanced Settings if components missing
-        if [[ -n "$warnings" ]]; then
-            advanced_label="⚙️  Advanced Settings ${RED}[!]${NC}"
+        if [[ "$missing_components" == "true" ]]; then
+            advanced_label="⚙️  Advanced Settings [!]"
         fi
 
         local choice
