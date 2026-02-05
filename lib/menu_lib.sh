@@ -7,18 +7,31 @@
 # Color Definitions
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if [[ -z "${NC:-}" ]] && [[ -t 1 ]]; then
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[1;33m'
-    BLUE='\033[0;34m'
-    CYAN='\033[0;36m'
-    MAGENTA='\033[0;35m'
-    WHITE='\033[1;37m'
-    DIM='\033[2m'
-    BOLD='\033[1m'
-    REVERSE='\033[7m'
-    NC='\033[0m'
+# Always define color variables (empty if not a terminal)
+if [[ -t 1 ]] || [[ -t 2 ]]; then
+    RED=${RED:-'\033[0;31m'}
+    GREEN=${GREEN:-'\033[0;32m'}
+    YELLOW=${YELLOW:-'\033[1;33m'}
+    BLUE=${BLUE:-'\033[0;34m'}
+    CYAN=${CYAN:-'\033[0;36m'}
+    MAGENTA=${MAGENTA:-'\033[0;35m'}
+    WHITE=${WHITE:-'\033[1;37m'}
+    DIM=${DIM:-'\033[2m'}
+    BOLD=${BOLD:-'\033[1m'}
+    REVERSE=${REVERSE:-'\033[7m'}
+    NC=${NC:-'\033[0m'}
+else
+    RED=${RED:-''}
+    GREEN=${GREEN:-''}
+    YELLOW=${YELLOW:-''}
+    BLUE=${BLUE:-''}
+    CYAN=${CYAN:-''}
+    MAGENTA=${MAGENTA:-''}
+    WHITE=${WHITE:-''}
+    DIM=${DIM:-''}
+    BOLD=${BOLD:-''}
+    REVERSE=${REVERSE:-''}
+    NC=${NC:-''}
 fi
 
 # Box drawing characters
