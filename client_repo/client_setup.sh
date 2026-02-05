@@ -881,6 +881,571 @@ RDMA will not be available until reboot."; then
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# GPUDirect Storage (GDS) Support
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Default cufile.json path
+CUFILE_JSON_PATH="${CUFILE_JSON_PATH:-/etc/cufile.json}"
+
+# Check if NVIDIA GPU driver is installed
+check_nvidia_driver() {
+    if ! command -v nvidia-smi &>/dev/null; then
+        return 1
+    fi
+    nvidia-smi &>/dev/null
+    return $?
+}
+
+# Check if GDS is installed
+check_gds_installed() {
+    # Check for nvidia-fs kernel module
+    if lsmod | grep -q nvidia_fs; then
+        return 0
+    fi
+    # Check if nvidia-gds package is installed
+    if command -v dpkg &>/dev/null; then
+        dpkg -l nvidia-gds 2>/dev/null | grep -q "^ii" && return 0
+    elif command -v rpm &>/dev/null; then
+        rpm -q nvidia-gds &>/dev/null && return 0
+    fi
+    # Check for cufile library
+    if [[ -f /usr/local/cuda/lib64/libcufile.so ]] || \
+       ldconfig -p 2>/dev/null | grep -q libcufile; then
+        return 0
+    fi
+    return 1
+}
+
+# Get CUDA path
+get_cuda_path() {
+    if [[ -d /usr/local/cuda ]]; then
+        echo "/usr/local/cuda"
+    elif [[ -n "${CUDA_HOME:-}" ]]; then
+        echo "$CUDA_HOME"
+    else
+        # Find newest cuda installation
+        ls -d /usr/local/cuda-* 2>/dev/null | sort -V | tail -1
+    fi
+}
+
+# Show GDS status
+show_gds_status() {
+    local out="$TMP_DIR/gds_status"
+    {
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "                  GPUDirect Storage (GDS) Status"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo ""
+
+        # GPU Driver
+        echo "▶ NVIDIA GPU Driver:"
+        if check_nvidia_driver; then
+            nvidia-smi --query-gpu=name,driver_version,cuda_version --format=csv,noheader 2>/dev/null | head -5 | while read -r line; do
+                echo "  ✓ $line"
+            done
+        else
+            echo "  ✗ Not installed or not working"
+        fi
+        echo ""
+
+        # CUDA
+        echo "▶ CUDA Toolkit:"
+        local cuda_path
+        cuda_path=$(get_cuda_path)
+        if [[ -n "$cuda_path" ]] && [[ -d "$cuda_path" ]]; then
+            local cuda_ver
+            cuda_ver=$("$cuda_path/bin/nvcc" --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9.]*\).*/\1/')
+            echo "  ✓ Path: $cuda_path"
+            echo "  ✓ Version: ${cuda_ver:-unknown}"
+        else
+            echo "  ✗ Not found"
+        fi
+        echo ""
+
+        # GDS Installation
+        echo "▶ GDS Installation:"
+        if check_gds_installed; then
+            echo "  ✓ GDS is installed"
+
+            # Check nvidia-fs module
+            if lsmod | grep -q nvidia_fs; then
+                echo "  ✓ nvidia-fs kernel module: loaded"
+            else
+                echo "  ⚠ nvidia-fs kernel module: not loaded"
+            fi
+
+            # Check libraries
+            if [[ -f /usr/local/cuda/lib64/libcufile.so ]]; then
+                echo "  ✓ libcufile.so: found"
+            fi
+            if [[ -f /usr/local/cuda/lib64/libcufile_rdma.so ]]; then
+                echo "  ✓ libcufile_rdma.so: found (RDMA support)"
+            else
+                echo "  ⚠ libcufile_rdma.so: not found"
+            fi
+
+            # Check /proc/driver/nvidia-fs
+            if [[ -d /proc/driver/nvidia-fs ]]; then
+                echo "  ✓ /proc/driver/nvidia-fs: present"
+            else
+                echo "  ⚠ /proc/driver/nvidia-fs: not present"
+            fi
+        else
+            echo "  ✗ GDS is not installed"
+        fi
+        echo ""
+
+        # RDMA Devices
+        echo "▶ RDMA Devices:"
+        if [[ -d /sys/class/infiniband ]]; then
+            local rdma_devs
+            rdma_devs=$(ls /sys/class/infiniband/ 2>/dev/null)
+            if [[ -n "$rdma_devs" ]]; then
+                for dev in $rdma_devs; do
+                    local state
+                    state=$(cat /sys/class/infiniband/$dev/ports/1/state 2>/dev/null | awk '{print $2}')
+                    echo "  ✓ $dev: $state"
+                done
+                # Show ibdev2netdev if available
+                if command -v ibdev2netdev &>/dev/null; then
+                    echo "  Interface mapping:"
+                    ibdev2netdev 2>/dev/null | while read -r line; do
+                        echo "    $line"
+                    done
+                fi
+            else
+                echo "  ✗ No RDMA devices found"
+            fi
+        else
+            echo "  ✗ RDMA not available"
+        fi
+        echo ""
+
+        # cufile.json Configuration
+        echo "▶ cuFile Configuration ($CUFILE_JSON_PATH):"
+        if [[ -f "$CUFILE_JSON_PATH" ]]; then
+            echo "  ✓ Config file exists"
+            if command -v jq &>/dev/null; then
+                # Check NFS RDMA config
+                local rdma_addrs nfs_mounts
+                rdma_addrs=$(jq -r '.fs.nfs.rdma_dev_addr_list // empty' "$CUFILE_JSON_PATH" 2>/dev/null)
+                nfs_mounts=$(jq -r '.fs.nfs.mount_table // empty' "$CUFILE_JSON_PATH" 2>/dev/null)
+                if [[ -n "$rdma_addrs" ]] && [[ "$rdma_addrs" != "null" ]]; then
+                    echo "  ✓ NFS RDMA addresses configured"
+                else
+                    echo "  ⚠ NFS RDMA addresses not configured"
+                fi
+            fi
+        else
+            echo "  ⚠ Config file not found (using defaults)"
+        fi
+        echo ""
+
+        # gdscheck output (if available)
+        echo "▶ gdscheck Verification:"
+        local gdscheck_path
+        gdscheck_path=$(find /usr/local/cuda*/gds/tools -name "gdscheck.py" 2>/dev/null | head -1)
+        if [[ -n "$gdscheck_path" ]] && [[ -x "$gdscheck_path" ]]; then
+            echo "  Running gdscheck..."
+            echo ""
+            sudo "$gdscheck_path" -p 2>&1 | grep -E "(GDS|RDMA|NFS|nvidia|Supported|Loaded|Configured|compat)" | head -20 | while read -r line; do
+                echo "  $line"
+            done
+        else
+            echo "  ⚠ gdscheck not found"
+        fi
+        echo ""
+
+        # nvidia-fs stats
+        if [[ -f /proc/driver/nvidia-fs/stats ]]; then
+            echo "▶ nvidia-fs Stats:"
+            head -20 /proc/driver/nvidia-fs/stats | while read -r line; do
+                echo "  $line"
+            done
+            echo ""
+        fi
+
+        # IOMMU status
+        echo "▶ IOMMU Status:"
+        if dmesg 2>/dev/null | grep -qi "IOMMU enabled"; then
+            echo "  ⚠ IOMMU is enabled (may impact GDS performance)"
+        else
+            echo "  ✓ IOMMU appears disabled"
+        fi
+        echo ""
+
+    } > "$out"
+
+    text_box "GDS Status" "$out"
+}
+
+# Install GDS packages
+install_gds() {
+    # Pre-flight checks
+    if ! check_nvidia_driver; then
+        msg_box "GPU Driver Required" "NVIDIA GPU driver is not installed or not working.\n\nPlease install NVIDIA drivers first:\n  apt install nvidia-driver-xxx\n\nOr use DOCA OFED installation which includes drivers."
+        return 1
+    fi
+
+    local cuda_path
+    cuda_path=$(get_cuda_path)
+    if [[ -z "$cuda_path" ]]; then
+        if ! yes_no "CUDA Not Found" "CUDA toolkit not detected.\n\nGDS requires CUDA to be installed first.\n\nWould you like to continue anyway?\n(Select No to install CUDA first)"; then
+            return 1
+        fi
+    fi
+
+    if check_gds_installed; then
+        if ! yes_no "GDS Already Installed" "GDS appears to be already installed.\n\nWould you like to reinstall/update?"; then
+            return 0
+        fi
+    fi
+
+    if ! yes_no "Install GPUDirect Storage" "Install NVIDIA GPUDirect Storage (GDS)?\n\nThis enables direct GPU memory access for storage I/O,\nbypassing CPU for maximum performance with NFS/RDMA.\n\nRequirements:\n- NVIDIA GPU with driver installed\n- CUDA toolkit\n- RDMA-capable network (for NFS/RDMA)\n\nProceed with installation?"; then
+        return 0
+    fi
+
+    local log="$TMP_DIR/gds_install.log"
+    info_box "Installing GDS" "Installing NVIDIA GDS packages..."
+
+    if command -v apt-get &>/dev/null; then
+        {
+            apt-get update
+            apt-get install -y nvidia-gds
+        } > "$log" 2>&1
+    elif command -v yum &>/dev/null; then
+        yum install -y nvidia-gds > "$log" 2>&1
+    elif command -v dnf &>/dev/null; then
+        dnf install -y nvidia-gds > "$log" 2>&1
+    else
+        msg_box "Error" "Could not detect package manager."
+        return 1
+    fi
+
+    if [[ $? -eq 0 ]]; then
+        # Load nvidia-fs module
+        modprobe nvidia-fs 2>/dev/null || true
+
+        msg_box "GDS Installed" "GPUDirect Storage installed successfully!\n\nNext steps:\n1. Configure cuFile for your NFS mounts\n2. Verify with 'gdscheck'\n3. Reboot may be required for full functionality"
+
+        if ! lsmod | grep -q nvidia_fs; then
+            if yes_no "Reboot Required" "nvidia-fs module could not be loaded.\n\nA reboot is required to complete installation.\n\nReboot now?"; then
+                reboot
+            fi
+        fi
+    else
+        text_box "Installation Failed" "$log"
+        return 1
+    fi
+}
+
+# Configure cufile.json for NFS/RDMA
+configure_cufile() {
+    if ! check_gds_installed; then
+        msg_box "GDS Not Installed" "GPUDirect Storage is not installed.\n\nPlease install GDS first."
+        return 1
+    fi
+
+    # Get RDMA interface IPs
+    local rdma_ips=()
+    if [[ -d /sys/class/infiniband ]]; then
+        for dev in $(ls /sys/class/infiniband/ 2>/dev/null); do
+            if command -v ibdev2netdev &>/dev/null; then
+                local netdev
+                netdev=$(ibdev2netdev 2>/dev/null | grep "^$dev" | awk '{print $5}')
+                if [[ -n "$netdev" ]]; then
+                    local ip
+                    ip=$(ip -4 addr show "$netdev" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+                    [[ -n "$ip" ]] && rdma_ips+=("$ip")
+                fi
+            fi
+        done
+    fi
+
+    # Get current NFS mounts with RDMA
+    local nfs_mounts=()
+    while read -r line; do
+        if [[ "$line" == *"proto=rdma"* ]] || [[ "$line" == *"nfs"* ]]; then
+            local server mp
+            server=$(echo "$line" | awk '{print $1}' | cut -d: -f1)
+            mp=$(echo "$line" | awk '{print $2}')
+            [[ -n "$server" ]] && [[ -n "$mp" ]] && nfs_mounts+=("$server:$mp")
+        fi
+    done < <(mount | grep nfs)
+
+    # Show current config
+    local config_msg="Current RDMA IPs detected: ${rdma_ips[*]:-none}\n"
+    config_msg+="Current NFS mounts: ${#nfs_mounts[@]}\n\n"
+
+    if [[ -f "$CUFILE_JSON_PATH" ]]; then
+        config_msg+="Existing cufile.json will be backed up."
+    else
+        config_msg+="A new cufile.json will be created."
+    fi
+
+    if ! yes_no "Configure cuFile" "$config_msg\n\nConfigure cufile.json for GDS with NFS/RDMA?"; then
+        return 0
+    fi
+
+    # Get RDMA IPs from user if not auto-detected
+    local rdma_ip_list=""
+    if [[ ${#rdma_ips[@]} -eq 0 ]]; then
+        rdma_ip_list=$(input_box "RDMA Client IPs" "Enter comma-separated RDMA interface IPs:\n\nExample: 192.168.10.21,192.168.10.22" "") || return
+    else
+        rdma_ip_list=$(input_box "RDMA Client IPs" "Detected RDMA IPs. Edit if needed:\n\nThese are the client-side RDMA interface IPs." "$(IFS=,; echo "${rdma_ips[*]}")") || return
+    fi
+
+    [[ -z "$rdma_ip_list" ]] && { msg_box "Error" "No RDMA IPs specified."; return 1; }
+
+    # Get NFS server/mount mappings
+    local mount_config=""
+    if [[ ${#nfs_mounts[@]} -gt 0 ]]; then
+        msg_box "NFS Mounts Detected" "Found ${#nfs_mounts[@]} NFS mount(s).\n\nThese will be added to cufile.json."
+    else
+        local server_ip mount_point
+        server_ip=$(input_box "NFS Server IP" "Enter NFS server IP address:" "") || return
+        mount_point=$(input_box "Mount Point" "Enter local mount point for this server:" "/mnt/nfs/rdma0") || return
+        [[ -n "$server_ip" ]] && [[ -n "$mount_point" ]] && nfs_mounts+=("$server_ip:$mount_point")
+    fi
+
+    # Backup existing config
+    if [[ -f "$CUFILE_JSON_PATH" ]]; then
+        cp "$CUFILE_JSON_PATH" "${CUFILE_JSON_PATH}.bak.$(date +%Y%m%d%H%M%S)"
+    fi
+
+    # Check for jq
+    if ! command -v jq &>/dev/null; then
+        info_box "Installing jq" "Installing jq for JSON processing..."
+        if command -v apt-get &>/dev/null; then
+            apt-get install -y -qq jq
+        elif command -v yum &>/dev/null; then
+            yum install -y jq
+        fi
+    fi
+
+    # Build cufile.json
+    info_box "Configuring" "Writing cufile.json configuration..."
+
+    # Convert IPs to JSON array
+    local ip_array
+    ip_array=$(echo "$rdma_ip_list" | tr ',' '\n' | jq -R . | jq -s .)
+
+    # Build mount table
+    local mount_table="[]"
+    for mount_entry in "${nfs_mounts[@]}"; do
+        local srv mp
+        srv=$(echo "$mount_entry" | cut -d: -f1)
+        mp=$(echo "$mount_entry" | cut -d: -f2-)
+        mount_table=$(echo "$mount_table" | jq --arg s "$srv" --arg m "$mp" '. + [{($s): $m}]')
+    done
+
+    # Create or update cufile.json
+    if [[ -f "$CUFILE_JSON_PATH" ]]; then
+        # Update existing
+        jq --argjson ips "$ip_array" --argjson mounts "$mount_table" '
+            .fs.nfs.rdma_dev_addr_list = $ips |
+            .fs.nfs.mount_table = $mounts |
+            .fs.nfs.use_pci_p2pdma = false
+        ' "$CUFILE_JSON_PATH" > "${CUFILE_JSON_PATH}.tmp" && mv "${CUFILE_JSON_PATH}.tmp" "$CUFILE_JSON_PATH"
+    else
+        # Create new
+        jq -n --argjson ips "$ip_array" --argjson mounts "$mount_table" '{
+            "logging": {
+                "dir": "/var/log/cufile",
+                "level": "ERROR"
+            },
+            "fs": {
+                "nfs": {
+                    "rdma_dev_addr_list": $ips,
+                    "mount_table": $mounts,
+                    "use_pci_p2pdma": false
+                }
+            },
+            "profile": {
+                "nvtx": false,
+                "cufile_stats": 0
+            }
+        }' > "$CUFILE_JSON_PATH"
+    fi
+
+    chmod 644 "$CUFILE_JSON_PATH"
+
+    msg_box "Configuration Complete" "cufile.json has been configured!\n\nRDMA IPs: $rdma_ip_list\nNFS Mounts: ${#nfs_mounts[@]}\nConfig: $CUFILE_JSON_PATH\n\nUse 'Verify GDS' to check the configuration."
+}
+
+# Verify GDS installation and configuration
+verify_gds() {
+    if ! check_gds_installed; then
+        msg_box "GDS Not Installed" "GPUDirect Storage is not installed.\n\nPlease install GDS first."
+        return 1
+    fi
+
+    local out="$TMP_DIR/gds_verify"
+    {
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "                    GDS Verification Results"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo ""
+
+        local all_passed=true
+
+        # Check 1: nvidia-fs module
+        echo "▶ Check 1: nvidia-fs Kernel Module"
+        if lsmod | grep -q nvidia_fs; then
+            echo "  ✓ PASS: nvidia-fs module is loaded"
+        else
+            echo "  ✗ FAIL: nvidia-fs module not loaded"
+            echo "    Try: modprobe nvidia-fs"
+            all_passed=false
+        fi
+        echo ""
+
+        # Check 2: GDS libraries
+        echo "▶ Check 2: GDS Libraries"
+        local cuda_path
+        cuda_path=$(get_cuda_path)
+        if [[ -f "$cuda_path/lib64/libcufile.so" ]]; then
+            echo "  ✓ PASS: libcufile.so found"
+        else
+            echo "  ✗ FAIL: libcufile.so not found"
+            all_passed=false
+        fi
+        if [[ -f "$cuda_path/lib64/libcufile_rdma.so" ]]; then
+            echo "  ✓ PASS: libcufile_rdma.so found (RDMA support)"
+        else
+            echo "  ⚠ WARN: libcufile_rdma.so not found"
+        fi
+        echo ""
+
+        # Check 3: /proc/driver/nvidia-fs
+        echo "▶ Check 3: nvidia-fs Proc Interface"
+        if [[ -d /proc/driver/nvidia-fs ]]; then
+            echo "  ✓ PASS: /proc/driver/nvidia-fs exists"
+            if [[ -f /proc/driver/nvidia-fs/stats ]]; then
+                echo "  ✓ PASS: stats file readable"
+            fi
+        else
+            echo "  ✗ FAIL: /proc/driver/nvidia-fs not present"
+            all_passed=false
+        fi
+        echo ""
+
+        # Check 4: cufile.json
+        echo "▶ Check 4: cuFile Configuration"
+        if [[ -f "$CUFILE_JSON_PATH" ]]; then
+            echo "  ✓ PASS: $CUFILE_JSON_PATH exists"
+            if command -v jq &>/dev/null; then
+                if jq -e '.fs.nfs.rdma_dev_addr_list' "$CUFILE_JSON_PATH" &>/dev/null; then
+                    echo "  ✓ PASS: NFS RDMA addresses configured"
+                else
+                    echo "  ⚠ WARN: NFS RDMA not configured"
+                fi
+            fi
+        else
+            echo "  ⚠ WARN: $CUFILE_JSON_PATH not found (defaults will be used)"
+        fi
+        echo ""
+
+        # Check 5: gdscheck
+        echo "▶ Check 5: gdscheck Verification"
+        local gdscheck_path
+        gdscheck_path=$(find /usr/local/cuda*/gds/tools -name "gdscheck.py" 2>/dev/null | head -1)
+        if [[ -n "$gdscheck_path" ]] && [[ -x "$gdscheck_path" ]]; then
+            echo "  Running: $gdscheck_path -p"
+            echo ""
+            local gds_out
+            gds_out=$(sudo "$gdscheck_path" -p 2>&1)
+            echo "$gds_out" | while read -r line; do
+                echo "  $line"
+            done
+            echo ""
+
+            # Parse key results
+            if echo "$gds_out" | grep -q "Userspace RDMA : Supported"; then
+                echo "  ✓ PASS: Userspace RDMA supported"
+            fi
+            if echo "$gds_out" | grep -q "rdma library : Loaded"; then
+                echo "  ✓ PASS: RDMA library loaded"
+            fi
+            if echo "$gds_out" | grep -q "NFS : compat"; then
+                echo "  ✓ INFO: NFS in compatibility mode (expected)"
+            fi
+        else
+            echo "  ⚠ WARN: gdscheck not found"
+            echo "    Expected at: /usr/local/cuda/gds/tools/gdscheck.py"
+        fi
+        echo ""
+
+        # Check 6: GPU/NIC topology
+        echo "▶ Check 6: GPU/NIC Topology (for performance)"
+        if command -v nvidia-smi &>/dev/null; then
+            echo "  GPU-NIC topology (nvidia-smi topo -mp):"
+            nvidia-smi topo -mp 2>/dev/null | head -15 | while read -r line; do
+                echo "    $line"
+            done
+        fi
+        echo ""
+
+        # Summary
+        echo "═══════════════════════════════════════════════════════════════"
+        if $all_passed; then
+            echo "  ✓ All critical checks PASSED"
+            echo ""
+            echo "  GDS is ready for use with cuFile API applications."
+            echo "  Note: Regular read()/write() apps won't use GDS automatically."
+        else
+            echo "  ⚠ Some checks FAILED - see above for details"
+        fi
+        echo "═══════════════════════════════════════════════════════════════"
+    } > "$out"
+
+    text_box "GDS Verification" "$out"
+}
+
+# GDS Main Menu
+gds_menu() {
+    while true; do
+        # Build status indicators
+        local gds_status="Not Installed"
+        local gpu_status="No GPU"
+        local rdma_status="No RDMA"
+
+        if check_nvidia_driver; then
+            gpu_status="GPU OK"
+        fi
+
+        if [[ -d /sys/class/infiniband ]] && [[ -n "$(ls /sys/class/infiniband/ 2>/dev/null)" ]]; then
+            rdma_status="RDMA OK"
+        fi
+
+        if check_gds_installed; then
+            if lsmod | grep -q nvidia_fs; then
+                gds_status="Active"
+            else
+                gds_status="Installed (module not loaded)"
+            fi
+        fi
+
+        local choice
+        choice=$(menu_select "GPUDirect Storage (GDS)" \
+            "$gpu_status | $rdma_status | GDS: $gds_status" \
+            "1" "📊 Show GDS Status" \
+            "2" "📦 Install GDS" \
+            "3" "⚙️  Configure cuFile (NFS/RDMA)" \
+            "4" "✅ Verify GDS" \
+            "5" "🔙 Back to Main Menu") || return
+
+        case "$choice" in
+            1) show_gds_status ;;
+            2) install_gds ;;
+            3) configure_cufile ;;
+            4) verify_gds ;;
+            5) return ;;
+        esac
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Kubernetes CSI NFS Driver
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2429,9 +2994,10 @@ main_menu() {
             "4" "🌐 Network Settings" \
             "5" "🔧 Install NFS Tools" \
             "6" "⚡ Install DOCA OFED" \
-            "7" "☸️  Kubernetes CSI NFS Driver" \
-            "8" "🔍 Test Connection" \
-            "9" "🔄 Check for Updates" \
+            "7" "🚀 GPUDirect Storage (GDS)" \
+            "8" "☸️  Kubernetes CSI NFS Driver" \
+            "9" "🔍 Test Connection" \
+            "A" "🔄 Check for Updates" \
             "0" "🚪 Exit") || break
 
         case "$choice" in
@@ -2441,9 +3007,10 @@ main_menu() {
             4) configure_network ;;
             5) install_nfs_tools ;;
             6) install_doca_ofed ;;
-            7) kubernetes_csi_nfs_menu ;;
-            8) test_connection ;;
-            9) check_and_update ;;
+            7) gds_menu ;;
+            8) kubernetes_csi_nfs_menu ;;
+            9) test_connection ;;
+            A) check_and_update ;;
             0)
                 msg_box "See you soon!" "\
    Thank you for using xiNAS Client Setup!
