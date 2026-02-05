@@ -59,6 +59,36 @@ _menu_clear_screen() {
     printf '\033[2J\033[H' >/dev/tty
 }
 
+# Calculate display width of a string (accounts for emoji width)
+# Emojis typically display as 2 columns but count as 1-4 bytes
+_menu_display_width() {
+    local str="$1"
+    local len=${#str}
+    local extra=0
+
+    # Count common emojis (each adds 1 extra column since they display as 2 cols)
+    # Match emoji ranges: most common emojis are in these Unicode blocks
+    local emoji_count=0
+
+    # Simple approach: count characters that are likely emojis (non-ASCII high bytes)
+    # This works for most common emojis used in menus
+    local i char
+    for ((i=0; i<${#str}; i++)); do
+        char="${str:$i:1}"
+        # Check if character is outside ASCII range (potential emoji/wide char)
+        if [[ "$char" > $'\x7f' ]]; then
+            # Check for common emoji patterns
+            case "$char" in
+                📊|🔑|🚀|🛠|🚪|🌐|📦|💾|📂|🏷|🔧|⚡|☸|🔍|🔄|📁|📋|🔙|✅|❌|▲|▼|●|⚠|📊|🔌|🗑)
+                    ((extra++))
+                    ;;
+            esac
+        fi
+    done
+
+    echo $((len + extra))
+}
+
 # Read a single keypress (handles arrow keys)
 _menu_read_key() {
     local key
@@ -99,7 +129,7 @@ _menu_repeat_char() {
 _menu_draw_box() {
     local title="$1"
     local width="${2:-60}"
-    local title_len=${#title}
+    local title_len=$(_menu_display_width "$title")
     # Account for: ╔ (1) + left padding + space (1) + title + space (1) + right padding + ╗ (1)
     local left_pad=$(( (width - title_len - 4) / 2 ))
     local right_pad=$(( width - title_len - 4 - left_pad ))
@@ -144,9 +174,9 @@ menu_select() {
     local selected=0
     local width=60
 
-    # Calculate width
+    # Calculate width (account for emoji display width)
     for ((i=0; i<num_items; i++)); do
-        local item_len=$((${#keys[$i]} + ${#descs[$i]} + 8))
+        local item_len=$(($(_menu_display_width "${keys[$i]}") + $(_menu_display_width "${descs[$i]}") + 8))
         [[ $item_len -gt $width ]] && width=$item_len
     done
     [[ $width -gt 78 ]] && width=78
@@ -163,7 +193,7 @@ menu_select() {
 
         # Prompt line with borders
         if [[ -n "$prompt" ]]; then
-            local prompt_len=${#prompt}
+            local prompt_len=$(_menu_display_width "$prompt")
             local prompt_pad=$((inner_width - prompt_len - 2))
             [[ $prompt_pad -lt 0 ]] && prompt_pad=0
             printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
@@ -184,7 +214,7 @@ menu_select() {
             else
                 item_text="   ${keys[$i]}  ${descs[$i]}"
             fi
-            local item_len=${#item_text}
+            local item_len=$(_menu_display_width "$item_text")
             local item_pad=$((inner_width - item_len - 1))
             [[ $item_pad -lt 0 ]] && item_pad=0
 
@@ -205,7 +235,7 @@ menu_select() {
 
         # Footer with help text
         local help_text="↑↓ Navigate  Enter Select  Esc Cancel"
-        local help_len=${#help_text}
+        local help_len=$(_menu_display_width "$help_text")
         local help_pad=$((inner_width - help_len - 1))
         [[ $help_pad -lt 0 ]] && help_pad=0
         printf "${CYAN}${BOX_V}${NC} ${DIM}%s${NC}" "$help_text" >/dev/tty
@@ -730,7 +760,7 @@ check_list() {
 
         # Prompt line with borders
         if [[ -n "$prompt" ]]; then
-            local prompt_len=${#prompt}
+            local prompt_len=$(_menu_display_width "$prompt")
             local prompt_pad=$((inner_width - prompt_len - 2))
             [[ $prompt_pad -lt 0 ]] && prompt_pad=0
             printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
@@ -758,7 +788,7 @@ check_list() {
             else
                 item_text="   $checkbox_char ${keys[$i]} ${descs[$i]}"
             fi
-            local item_len=${#item_text}
+            local item_len=$(_menu_display_width "$item_text")
             local item_pad=$((inner_width - item_len - 1))
             [[ $item_pad -lt 0 ]] && item_pad=0
 
@@ -783,7 +813,7 @@ check_list() {
 
         # Footer with help text
         local help_text="↑↓ Navigate  Space Toggle  Enter Done"
-        local help_len=${#help_text}
+        local help_len=$(_menu_display_width "$help_text")
         local help_pad=$((inner_width - help_len - 1))
         [[ $help_pad -lt 0 ]] && help_pad=0
         printf "${CYAN}${BOX_V}${NC} ${DIM}%s${NC}" "$help_text" >/dev/tty
