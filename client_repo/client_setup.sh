@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-CLIENT_VERSION="1.9.0"
+CLIENT_VERSION="1.10.0"
 
 # Network configuration file
 NETWORK_CONFIG="$SCRIPT_DIR/network_config.yml"
@@ -194,141 +194,265 @@ show_welcome() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 show_status() {
-    local out="$TMP_DIR/status"
+    # Box drawing characters
+    local BOX_H="═" BOX_V="║" BOX_TL="╔" BOX_TR="╗" BOX_BL="╚" BOX_BR="╝"
+    local W=76
 
-    {
-        echo "CLIENT SYSTEM STATUS"
-        printf '=%.0s' {1..70}; echo ""
-        echo ""
+    # Helper to draw horizontal line
+    draw_line() {
+        local left="$1" right="$2" char="${3:-$BOX_H}"
+        echo -en "${CYAN}${left}"
+        for ((i=0; i<W-2; i++)); do echo -en "$char"; done
+        echo -e "${right}${NC}"
+    }
 
-        echo "  Hostname:  $(hostname)"
-        echo "  Kernel:    $(uname -r)"
-        echo ""
+    # Helper to print a row with content
+    row() {
+        local content="$1"
+        local padding=$((W - 4))
+        printf "${CYAN}${BOX_V}${NC} %-${padding}b ${CYAN}${BOX_V}${NC}\n" "$content"
+    }
 
-        # NFS tools status
-        echo "NFS TOOLS"
-        printf -- '-%.0s' {1..70}; echo ""
-        if command -v mount.nfs4 &>/dev/null; then
-            echo "  [OK] NFS client tools installed"
-            local nfs_version
-            nfs_version=$(rpcinfo -p 2>/dev/null | grep -m1 nfs | awk '{print $2}' || echo "N/A")
-            echo "       NFS version: $nfs_version"
-        else
-            echo "  [!!] NFS client tools NOT installed"
-            echo "       Install with: apt-get install nfs-common"
-        fi
-        echo ""
+    # Helper for section header
+    section() {
+        local title="$1" icon="$2"
+        draw_line "╠" "╣"
+        local header="${icon} ${WHITE}${title}${NC}"
+        row "$header"
+        draw_line "╠" "╣"
+    }
 
-        # RDMA status
-        echo "RDMA SUPPORT"
-        printf -- '-%.0s' {1..70}; echo ""
-        if [[ -d /sys/class/infiniband ]]; then
-            local ib_devices
-            ib_devices=$(ls /sys/class/infiniband/ 2>/dev/null | tr '\n' ' ')
-            if [[ -n "$ib_devices" ]]; then
-                echo "  [OK] RDMA devices found: $ib_devices"
-                # Show link status
-                for dev in /sys/class/infiniband/*/ports/*/state; do
-                    [[ -f "$dev" ]] || continue
-                    local state
-                    state=$(cat "$dev" 2>/dev/null | awk '{print $2}')
-                    local dev_name
-                    dev_name=$(echo "$dev" | sed 's|/sys/class/infiniband/||;s|/ports.*||')
-                    local port
-                    port=$(echo "$dev" | grep -oP 'ports/\K\d+')
-                    echo "       $dev_name port $port: $state"
-                done
-            else
-                echo "  [--] RDMA module loaded but no devices"
-            fi
-        else
-            echo "  [!!] RDMA not available"
-            echo "       Install DOCA OFED for RDMA support"
-        fi
-        echo ""
+    # Progress bar helper
+    progress_bar() {
+        local percent=$1 width=${2:-20}
+        local filled=$((percent * width / 100))
+        local empty=$((width - filled))
+        local color
+        if [[ $percent -ge 90 ]]; then color="$RED"
+        elif [[ $percent -ge 70 ]]; then color="$YELLOW"
+        else color="$GREEN"; fi
+        local bar="${color}"
+        for ((i=0; i<filled; i++)); do bar+="█"; done
+        bar+="${GRAY}"
+        for ((i=0; i<empty; i++)); do bar+="░"; done
+        bar+="${NC}"
+        echo -e "$bar"
+    }
 
-        # Current NFS mounts
-        echo "ACTIVE NFS MOUNTS"
-        printf -- '-%.0s' {1..70}; echo ""
-        local mounts
-        mounts=$(mount -t nfs,nfs4 2>/dev/null)
-        if [[ -n "$mounts" ]]; then
-            echo "$mounts" | while read -r line; do
-                local server share mountpoint
-                server=$(echo "$line" | awk -F: '{print $1}')
-                share=$(echo "$line" | awk '{print $1}' | cut -d: -f2)
-                mountpoint=$(echo "$line" | awk '{print $3}')
-                local opts
-                opts=$(echo "$line" | grep -oP '\(\K[^)]+')
+    clear
+    echo ""
 
-                echo "  [*] $mountpoint"
-                echo "      Server: $server"
-                echo "      Share:  $share"
-                if [[ "$opts" == *"rdma"* ]]; then
-                    echo "      Mode:   RDMA (high-performance)"
-                else
-                    echo "      Mode:   TCP"
-                fi
-                echo ""
+    # Header with logo
+    echo -e "${BLUE}"
+    echo '    ██╗  ██╗██╗███╗   ██╗ █████╗ ███████╗'
+    echo '    ╚██╗██╔╝██║████╗  ██║██╔══██╗██╔════╝'
+    echo '     ╚███╔╝ ██║██╔██╗ ██║███████║███████╗'
+    echo '     ██╔██╗ ██║██║╚██╗██║██╔══██║╚════██║'
+    echo '    ██╔╝ ██╗██║██║ ╚████║██║  ██║███████║'
+    echo '    ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝'
+    echo -e "${NC}"
+    echo -e "    ${GREEN}NFS Client Status${NC}"
+    echo ""
+
+    # Top border
+    draw_line "$BOX_TL" "$BOX_TR"
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # SYSTEM INFO
+    # ══════════════════════════════════════════════════════════════════════════════
+    section "SYSTEM" "📊"
+
+    local hostname_str=$(hostname -f 2>/dev/null || hostname)
+    local kernel_str=$(uname -r)
+    local uptime_str=$(uptime -p 2>/dev/null | sed 's/up //' || echo "N/A")
+
+    # CPU & Memory
+    local cpu_cores=$(nproc 2>/dev/null || echo "?")
+    local cpu_idle=$(top -bn1 2>/dev/null | grep "Cpu(s)" | awk '{print $8}' | cut -d. -f1)
+    [[ -z "$cpu_idle" ]] && cpu_idle=$(awk '/^cpu / {print int($5*100/($2+$3+$4+$5+$6+$7+$8))}' /proc/stat 2>/dev/null)
+    local cpu_usage=$((100 - ${cpu_idle:-0}))
+
+    local mem_total=$(free -b 2>/dev/null | awk '/^Mem:/ {print $2}')
+    local mem_used=$(free -b 2>/dev/null | awk '/^Mem:/ {print $3}')
+    local mem_percent=$((mem_used * 100 / mem_total))
+    local mem_total_h=$(free -h 2>/dev/null | awk '/^Mem:/ {print $2}')
+    local mem_used_h=$(free -h 2>/dev/null | awk '/^Mem:/ {print $3}')
+
+    row "   ${WHITE}Hostname:${NC}  ${GREEN}$hostname_str${NC}"
+    row "   ${WHITE}Kernel:${NC}    $kernel_str"
+    row "   ${WHITE}Uptime:${NC}    ${YELLOW}$uptime_str${NC}"
+    row ""
+    local cpu_bar=$(progress_bar $cpu_usage 25)
+    local mem_bar=$(progress_bar $mem_percent 25)
+    row "   ${WHITE}CPU:${NC}  [$cpu_bar] ${cpu_usage}%  ${GRAY}($cpu_cores cores)${NC}"
+    row "   ${WHITE}MEM:${NC}  [$mem_bar] ${mem_percent}%  ${GRAY}($mem_used_h / $mem_total_h)${NC}"
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # NFS TOOLS
+    # ══════════════════════════════════════════════════════════════════════════════
+    section "NFS TOOLS" "🔧"
+
+    if command -v mount.nfs4 &>/dev/null; then
+        row "   ${GREEN}●${NC} NFS client tools ${GREEN}installed${NC}"
+        local nfs_version=$(rpcinfo -p 2>/dev/null | grep -m1 nfs | awk '{print $2}' || echo "N/A")
+        row "     ${GRAY}Protocol version: NFSv$nfs_version${NC}"
+    else
+        row "   ${RED}●${NC} NFS client tools ${RED}NOT installed${NC}"
+        row "     ${GRAY}Install: apt-get install nfs-common${NC}"
+    fi
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # RDMA STATUS
+    # ══════════════════════════════════════════════════════════════════════════════
+    section "RDMA / DOCA OFED" "⚡"
+
+    if [[ -d /sys/class/infiniband ]]; then
+        local ib_devices=$(ls /sys/class/infiniband/ 2>/dev/null | tr '\n' ' ')
+        if [[ -n "$ib_devices" ]]; then
+            row "   ${GREEN}●${NC} RDMA ${GREEN}available${NC}"
+            for dev in /sys/class/infiniband/*/ports/*/state; do
+                [[ -f "$dev" ]] || continue
+                local state=$(cat "$dev" 2>/dev/null | awk '{print $2}')
+                local dev_name=$(echo "$dev" | sed 's|/sys/class/infiniband/||;s|/ports.*||')
+                local port=$(echo "$dev" | grep -oP 'ports/\K\d+')
+                local state_color="$GREEN"
+                local state_icon="▲"
+                [[ "$state" != "ACTIVE" ]] && { state_color="$RED"; state_icon="▼"; }
+                row "     ${state_color}${state_icon}${NC} ${WHITE}$dev_name${NC} port $port: ${state_color}$state${NC}"
             done
         else
-            echo "  No NFS mounts active"
-            echo ""
+            row "   ${YELLOW}●${NC} RDMA module loaded, ${YELLOW}no devices${NC}"
         fi
+    else
+        row "   ${RED}●${NC} RDMA ${RED}not available${NC}"
+        row "     ${GRAY}Install DOCA OFED for RDMA support${NC}"
+    fi
 
-        # /etc/fstab NFS entries
-        echo "CONFIGURED MOUNTS (fstab)"
-        printf -- '-%.0s' {1..70}; echo ""
-        local fstab_nfs
-        fstab_nfs=$(grep -E '^\s*[^#].*\snfs' /etc/fstab 2>/dev/null || true)
-        if [[ -n "$fstab_nfs" ]]; then
-            echo "$fstab_nfs" | while read -r line; do
-                local server mountpoint
-                server=$(echo "$line" | awk '{print $1}')
-                mountpoint=$(echo "$line" | awk '{print $2}')
-                echo "  $server -> $mountpoint"
-            done
+    # ══════════════════════════════════════════════════════════════════════════════
+    # GPUDirect Storage
+    # ══════════════════════════════════════════════════════════════════════════════
+    section "GPUDirect Storage (GDS)" "🚀"
+
+    if lsmod 2>/dev/null | grep -q nvidia_fs; then
+        row "   ${GREEN}●${NC} nvidia-fs module ${GREEN}loaded${NC}"
+        if [[ -f /etc/cufile.json ]]; then
+            row "   ${GREEN}●${NC} cuFile configured"
         else
-            echo "  No NFS entries in /etc/fstab"
+            row "   ${YELLOW}●${NC} cuFile ${YELLOW}not configured${NC}"
         fi
-        echo ""
+    else
+        row "   ${GRAY}●${NC} GDS ${GRAY}not installed${NC} (optional)"
+    fi
 
-        # High-speed network interfaces
-        echo "HIGH-SPEED NETWORK INTERFACES"
-        printf -- '-%.0s' {1..70}; echo ""
-        local hs_found=0
-        for iface in /sys/class/net/*; do
-            [ -d "$iface" ] || continue
-            local name
-            name=$(basename "$iface")
-            [ "$name" = "lo" ] && continue
-            [ -e "$iface/device" ] || continue
+    # ══════════════════════════════════════════════════════════════════════════════
+    # ACTIVE NFS MOUNTS
+    # ══════════════════════════════════════════════════════════════════════════════
+    section "ACTIVE NFS MOUNTS" "📁"
 
-            local type driver
-            type=$(cat "$iface/type" 2>/dev/null || echo "0")
-            driver=$(basename "$(readlink -f "$iface/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
+    local mounts=$(mount -t nfs,nfs4 2>/dev/null)
+    if [[ -n "$mounts" ]]; then
+        echo "$mounts" | while read -r line; do
+            local server=$(echo "$line" | awk -F: '{print $1}')
+            local share=$(echo "$line" | awk '{print $1}' | cut -d: -f2)
+            local mountpoint=$(echo "$line" | awk '{print $3}')
+            local opts=$(echo "$line" | grep -oP '\(\K[^)]+')
 
-            if [ "$type" = "32" ] || [ "$driver" = "mlx5_core" ]; then
-                local ip_addr speed state
-                ip_addr=$(ip -o -4 addr show "$name" 2>/dev/null | awk '{print $4}')
-                [[ -z "$ip_addr" ]] && ip_addr="no IP"
-                speed=$(cat "$iface/speed" 2>/dev/null || echo "unknown")
-                state=$(cat "$iface/operstate" 2>/dev/null || echo "unknown")
-                echo "  [*] $name"
-                echo "      IP:     $ip_addr"
-                echo "      Speed:  ${speed}Mb/s"
-                echo "      State:  $state"
-                echo "      Driver: $driver"
-                hs_found=1
+            local mode_icon="${YELLOW}TCP${NC}"
+            [[ "$opts" == *"rdma"* ]] && mode_icon="${GREEN}RDMA${NC}"
+
+            # Get usage if mounted
+            local usage=""
+            if [[ -d "$mountpoint" ]]; then
+                local disk_info=$(df -h "$mountpoint" 2>/dev/null | awk 'NR==2 {print $3"/"$2" ("$5")"}')
+                [[ -n "$disk_info" ]] && usage=" ${GRAY}$disk_info${NC}"
             fi
+
+            row "   ${GREEN}●${NC} ${WHITE}$mountpoint${NC}$usage"
+            row "     ${GRAY}$server:$share${NC} [$mode_icon]"
         done
-        [[ $hs_found -eq 0 ]] && echo "  No high-speed interfaces detected"
-        echo ""
+    else
+        row "   ${GRAY}No active NFS mounts${NC}"
+    fi
 
-        printf '=%.0s' {1..70}; echo ""
-    } > "$out"
+    # ══════════════════════════════════════════════════════════════════════════════
+    # FSTAB ENTRIES
+    # ══════════════════════════════════════════════════════════════════════════════
+    section "CONFIGURED MOUNTS (fstab)" "📋"
 
-    text_box "System Status" "$out"
+    local fstab_nfs=$(grep -E '^\s*[^#].*\snfs' /etc/fstab 2>/dev/null || true)
+    if [[ -n "$fstab_nfs" ]]; then
+        echo "$fstab_nfs" | while read -r line; do
+            local server=$(echo "$line" | awk '{print $1}')
+            local mountpoint=$(echo "$line" | awk '{print $2}')
+            local is_mounted=""
+            mount | grep -q " $mountpoint " && is_mounted="${GREEN}[mounted]${NC}" || is_mounted="${GRAY}[not mounted]${NC}"
+            row "   ${CYAN}●${NC} $server ${GRAY}→${NC} ${WHITE}$mountpoint${NC} $is_mounted"
+        done
+    else
+        row "   ${GRAY}No NFS entries in /etc/fstab${NC}"
+    fi
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # NETWORK INTERFACES
+    # ══════════════════════════════════════════════════════════════════════════════
+    section "NETWORK INTERFACES" "🌐"
+
+    local net_count=0
+    for iface in /sys/class/net/*; do
+        [ -d "$iface" ] || continue
+        local name=$(basename "$iface")
+        [ "$name" = "lo" ] && continue
+        [ -e "$iface/device" ] || continue
+
+        local type=$(cat "$iface/type" 2>/dev/null || echo "0")
+        local driver=$(basename "$(readlink -f "$iface/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
+
+        # Show high-speed interfaces (InfiniBand or mlx5)
+        if [ "$type" = "32" ] || [ "$driver" = "mlx5_core" ]; then
+            local ip_addr=$(ip -o -4 addr show "$name" 2>/dev/null | awk '{print $4}')
+            [[ -z "$ip_addr" ]] && ip_addr="${GRAY}no IP${NC}"
+            local speed=$(cat "$iface/speed" 2>/dev/null || echo "-1")
+            local state=$(cat "$iface/operstate" 2>/dev/null || echo "unknown")
+
+            # Format speed
+            local speed_str
+            if [[ "$speed" =~ ^[0-9]+$ ]] && [[ $speed -gt 0 ]]; then
+                if [[ $speed -ge 1000 ]]; then
+                    speed_str="${GREEN}$((speed/1000))Gb/s${NC}"
+                else
+                    speed_str="${YELLOW}${speed}Mb/s${NC}"
+                fi
+            else
+                speed_str="${GRAY}---${NC}"
+            fi
+
+            # State indicator
+            local state_icon state_color
+            if [[ "$state" == "up" ]]; then
+                state_icon="${GREEN}▲${NC}"
+            else
+                state_icon="${RED}▼${NC}"
+            fi
+
+            row "   $state_icon ${WHITE}$(printf '%-12s' $name)${NC} ${YELLOW}$(printf '%-20s' $ip_addr)${NC} $speed_str"
+            ((net_count++))
+        fi
+    done
+
+    [[ $net_count -eq 0 ]] && row "   ${GRAY}No high-speed interfaces detected${NC}"
+
+    # Bottom border
+    draw_line "$BOX_BL" "$BOX_BR"
+
+    # Footer
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo ""
+    echo -e "  ${GRAY}Last updated: ${WHITE}$timestamp${NC}"
+    echo ""
+
+    # Wait for user
+    echo -e "  ${DIM}Press Enter to continue...${NC}"
+    read -r
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
