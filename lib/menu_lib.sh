@@ -59,58 +59,10 @@ _menu_clear_screen() {
     printf '\033[2J\033[H' >/dev/tty
 }
 
-# Calculate display width of a string (accounts for emoji/wide character width)
-# Most emojis render as 2 terminal columns but ${#str} counts them as 1
+# Calculate display width of a string
+# Uses bash ${#str} which counts characters (emojis as 1 char = 1 column)
 _menu_display_width() {
-    local str="$1"
-    if command -v python3 &>/dev/null; then
-        python3 -c "
-import sys
-s = sys.argv[1]
-w = 0
-for c in s:
-    cp = ord(c)
-    # Emoji and wide character ranges that render as 2 columns in terminals:
-    # - CJK, fullwidth forms
-    # - Most emoji blocks (U+1F000+)
-    # - Miscellaneous symbols (U+2600-U+27BF)
-    # - Dingbats (U+2700-U+27BF)
-    # - Variation selectors (U+FE00-U+FE0F) = 0 width
-    if 0xFE00 <= cp <= 0xFE0F:
-        continue  # variation selectors are zero-width
-    elif cp >= 0x1F000:
-        w += 2  # all emoji above U+1F000
-    elif 0x2600 <= cp <= 0x27BF:
-        w += 2  # misc symbols & dingbats
-    elif 0x2B50 <= cp <= 0x2B55:
-        w += 2  # additional symbols
-    elif 0x231A <= cp <= 0x23F3:
-        w += 2  # misc technical
-    elif 0x2934 <= cp <= 0x2935:
-        w += 2
-    elif 0x25AA <= cp <= 0x25FE:
-        w += 2  # geometric shapes
-    elif 0x2702 <= cp <= 0x27B0:
-        w += 2  # dingbats
-    elif 0x2000 <= cp <= 0x206F:
-        w += 1  # general punctuation (normal width)
-    elif 0x2500 <= cp <= 0x257F:
-        w += 1  # box drawing (single column)
-    elif 0x2580 <= cp <= 0x259F:
-        w += 1  # block elements (single column)
-    elif cp > 0x7F and cp < 0x2500:
-        w += 1  # other non-ASCII (arrows, etc) = 1
-    else:
-        w += 1  # ASCII
-print(w)
-" "$str"
-    else
-        # Fallback: use wc -L (mostly correct, some emojis off by 1)
-        local width
-        width=$(printf '%s' "$str" | wc -L 2>/dev/null)
-        [[ -z "$width" || "$width" -eq 0 ]] && width=${#str}
-        echo "$width"
-    fi
+    echo "${#1}"
 }
 
 # Read a single keypress (handles arrow keys)
