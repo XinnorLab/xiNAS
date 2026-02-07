@@ -10,6 +10,7 @@
     - role: doca_ofed
     - role: net_controllers
     - role: xiraid_classic  # EULA is accepted automatically
+    - role: nvme_namespace  # Auto-detect drives (VM mode: all block devices)
     - role: raid_fs
     - role: exports       # manage /etc/exports
     - role: nfs_server    # configure kernel NFS server

@@ -1,57 +1,29 @@
-# Default values for the raid_fs role
+# VM preset - Auto-detect all non-OS drives
 #
-# The actual RAID array and filesystem configuration is stored here so
-# interactive helper scripts can modify it directly.
+# For virtual machines with virtio/SCSI drives (no NVMe namespace support).
+# Detects all block devices, excludes the OS drive, then assigns:
+#   - First 2 drives → log array (RAID 1 mirror)
+#   - Remaining drives → data array (RAID 5)
 xiraid_license_path: "/tmp/license"
 
 # Whether to pass `--force_metadata` when creating arrays
-# Set to `false` if metadata should not be overwritten
 xiraid_force_metadata: true
 
 # When true, always format XFS filesystems even if the label already exists
 xfs_force_mkfs: true
 
-# Default RAID arrays and filesystem definitions used by the xiNAS example
-# deployment. Modify these values directly rather than using group variables.
-xiraid_spare_pools:
-  - name: sp1
-    devices:
-      - /dev/sdq
+# AUTOMATIC DRIVE DETECTION (VM MODE)
+# Detect all block devices instead of NVMe controllers only
+nvme_auto_namespace: true
+nvme_detect_mode: "all"
 
-xiraid_arrays:
-  - name: data
-    level: 6
-    strip_size_kb: 128
-    spare_pool: sp1
-    devices:
-      - /dev/sde
-      - /dev/sdf
-      - /dev/sdg
-      - /dev/sdh
-      - /dev/sdi
-      - /dev/sdj
-      - /dev/sdk
-      - /dev/sdl
-      - /dev/sdm
-      - /dev/sdn
-      - /dev/sdo
-      - /dev/sdp
-    parity_disks: 2
+# Number of drives to assign to log array (first N non-OS drives)
+nvme_log_drive_count: 2
 
-  - name: log
-    level: 1
-    strip_size_kb: 16
-    devices:
-      - /dev/sdc
-      - /dev/sdd
+# RAID levels for auto-generated arrays
+nvme_raid_data_level: 5        # RAID 5 for data drives
+nvme_raid_log_level: 1         # RAID 1 (mirror) for 2 log drives
 
-xfs_filesystems:
-  - label: nfsdata
-    data_device: "/dev/xi_data"
-    log_device: "/dev/xi_log"
-    su_kb: 128
-    sw: 8
-    log_size: 1G
-    sector_size: 4k
-    mountpoint: /mnt/data
-    mount_opts: "logdev=/dev/xi_log,noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k"
+# Strip sizes for RAID arrays (KB)
+nvme_raid_data_strip_kb: 128
+nvme_raid_log_strip_kb: 16

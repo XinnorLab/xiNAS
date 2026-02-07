@@ -6,6 +6,16 @@
 # Enable/disable automatic namespace management
 nvme_auto_namespace: true
 
+# Drive detection mode:
+#   "nvme" - Detect NVMe controllers only (bare metal with NVMe drives)
+#   "all"  - Detect all block devices (VMs with virtio/SCSI drives)
+# In "all" mode, namespace rebuild is skipped and whole drives are used directly
+nvme_detect_mode: "nvme"
+
+# Number of drives to assign to the log array (used in "all" mode)
+# First N non-OS drives become log devices, remaining become data devices
+nvme_log_drive_count: 2
+
 # Use existing namespaces instead of recreating them
 # Set to true if drives already have namespaces or don't support namespace mgmt
 # Set to false to rebuild namespaces with proper format (4KB, shared)

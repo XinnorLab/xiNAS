@@ -1,0 +1,94 @@
+---
+# Detect all non-OS block devices (for VMs with virtio/SCSI drives)
+# Assigns first N drives to log, remaining to data
+
+# Step 1: Get the device containing the root filesystem
+- name: Get root filesystem device
+  ansible.builtin.shell: |
+    set -o pipefail
+    dev=$(findmnt -no SOURCE / | head -1)
+    # Handle partition numbers (nvme0n1p1 -> nvme0n1, sda1 -> sda, vda1 -> vda)
+    echo "$dev" | sed -E 's/p?[0-9]+$//'
+  args:
+    executable: /bin/bash
+  register: root_device
+  changed_when: false
+
+# Step 2: Get device containing /boot (if separate partition)
+- name: Get boot filesystem device
+  ansible.builtin.shell: |
+    set -o pipefail
+    dev=$(findmnt -no SOURCE /boot 2>/dev/null | head -1)
+    if [ -n "$dev" ]; then
+      echo "$dev" | sed -E 's/p?[0-9]+$//'
+    fi
+  args:
+    executable: /bin/bash
+  register: boot_device
+  changed_when: false
+  failed_when: false
+
+# Step 3: Get EFI system partition device
+- name: Get EFI partition device
+  ansible.builtin.shell: |
+    set -o pipefail
+    dev=$(lsblk -nro NAME,PARTTYPE 2>/dev/null | grep -i 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b' | awk '{print $1}' | head -1)
+    if [ -n "$dev" ]; then
+      echo "/dev/$dev" | sed -E 's/p?[0-9]+$//'
+    fi
+  args:
+    executable: /bin/bash
+  register: efi_device
+  changed_when: false
+  failed_when: false
+
+# Step 4: Consolidate system drives
+- name: Build system drive list
+  ansible.builtin.set_fact:
+    nvme_system_drives: >-
+      {{ [root_device.stdout | trim,
+          boot_device.stdout | default('') | trim,
+          efi_device.stdout | default('') | trim]
+         | select('match', '^/dev/')
+         | unique
+         | list }}
+
+# Step 5: Enumerate ALL block devices (disk type only, no partitions)
+- name: List all block devices
+  ansible.builtin.shell: |
+    lsblk -dnpo NAME,TYPE 2>/dev/null | awk '$2 == "disk" {print $1}' | sort
+  register: all_drives_raw
+  changed_when: false
+
+# Step 6: Filter out system drives to get data drives
+- name: Set data drives (excluding system drives)
+  ansible.builtin.set_fact:
+    nvme_data_drives: >-
+      {{ all_drives_raw.stdout_lines | default([])
+         | reject('in', nvme_system_drives)
+         | list }}
+
+# Step 7: Split drives into log and data groups
+- name: Assign log drives (first {{ nvme_log_drive_count }} non-OS drives)
+  ansible.builtin.set_fact:
+    nvme_small_ns_devices: "{{ nvme_data_drives[:nvme_log_drive_count | int] }}"
+    nvme_large_ns_devices: "{{ nvme_data_drives[nvme_log_drive_count | int:] }}"
+
+# Step 8: Display detection results
+- name: Display detected drives
+  ansible.builtin.debug:
+    msg: |
+      ========== All-Drive Detection (VM Mode) ==========
+      System drives (PROTECTED):
+        Root device: {{ root_device.stdout | trim }}
+        Boot device: {{ boot_device.stdout | default('(same as root)') | trim }}
+        EFI device:  {{ efi_device.stdout | default('(not found)') | trim }}
+
+      All block devices: {{ all_drives_raw.stdout_lines | default([]) | join(', ') }}
+
+      Data drives ({{ nvme_data_drives | length }} total):
+        Log drives (first {{ nvme_log_drive_count }}):
+          {{ nvme_small_ns_devices | join(', ') | default('none') }}
+        Data drives (remaining):
+          {{ nvme_large_ns_devices | join(', ') | default('none') }}
+      =====================================================
