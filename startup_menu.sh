@@ -361,6 +361,25 @@ has_license() {
     [ -f "/tmp/license" ] && [ -s "/tmp/license" ]
 }
 
+# Detect if running inside a virtual machine
+is_vm() {
+    local virt
+    virt=$(systemd-detect-virt 2>/dev/null) || virt=""
+    [[ -n "$virt" && "$virt" != "none" ]]
+}
+
+# Suggest VM preset if running inside a VM
+suggest_vm_preset() {
+    is_vm || return 0
+    local virt_type
+    virt_type=$(systemd-detect-virt 2>/dev/null)
+
+    if yes_no "Virtual Machine Detected" \
+        "This system is running as a VM ($virt_type).\n\nVMs typically use virtio/SCSI drives instead of NVMe.\nThe xinnorVM preset auto-detects all non-OS drives\nand assigns them for RAID (2 log + remaining data).\n\nApply the xinnorVM preset?"; then
+        apply_preset "xinnorVM"
+    fi
+}
+
 # Show branded header
 show_header() {
     clear
@@ -402,6 +421,9 @@ echo -e "    ${DIM}Need help?${NC} ${CYAN}support@xinnor.io${NC}"
 echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
 echo ""
 read -p "    Press Enter to continue..." -r
+
+# Suggest VM preset if running on a virtual machine
+suggest_vm_preset
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Advanced Settings Menu

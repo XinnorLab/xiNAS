@@ -204,6 +204,25 @@ has_license() {
     [ -f "/tmp/license" ] && [ -s "/tmp/license" ]
 }
 
+# Detect if running inside a virtual machine
+is_vm() {
+    local virt
+    virt=$(systemd-detect-virt 2>/dev/null) || virt=""
+    [[ -n "$virt" && "$virt" != "none" ]]
+}
+
+# Suggest VM preset if running inside a VM and preset not yet applied
+suggest_vm_preset() {
+    is_vm || return 0
+    local virt_type
+    virt_type=$(systemd-detect-virt 2>/dev/null)
+
+    if yes_no "Virtual Machine Detected" \
+        "This system is running as a VM ($virt_type).\n\nVMs typically use virtio/SCSI drives instead of NVMe.\nThe xinnorVM preset auto-detects all non-OS drives\nand assigns them for RAID (2 log + remaining data).\n\nApply the xinnorVM preset?"; then
+        apply_preset "xinnorVM"
+    fi
+}
+
 show_welcome() {
     show_header
     echo -e "${WHITE}    ┌─────────────────────────────────────────────────────────────┐${NC}"
@@ -285,6 +304,9 @@ advanced_settings_menu() {
 # Show welcome message on first run
 show_header
 show_welcome
+
+# Suggest VM preset if running on a virtual machine
+suggest_vm_preset
 
 while true; do
     show_header

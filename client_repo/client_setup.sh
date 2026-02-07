@@ -194,32 +194,29 @@ show_welcome() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 show_status() {
-    # Box drawing characters
-    local BOX_H="═" BOX_V="║" BOX_TL="╔" BOX_TR="╗" BOX_BL="╚" BOX_BR="╝"
     local W=76
 
-    # Helper to draw horizontal line
+    # Helper to draw horizontal line (no side borders)
     draw_line() {
-        local left="$1" right="$2" char="${3:-$BOX_H}"
-        echo -en "${CYAN}${left}"
-        for ((i=0; i<W-2; i++)); do echo -en "$char"; done
-        echo -e "${right}${NC}"
+        local char="${1:-─}"
+        echo -en "  ${CYAN}"
+        for ((i=0; i<W-4; i++)); do echo -en "$char"; done
+        echo -e "${NC}"
     }
 
-    # Helper to print a row with content
+    # Helper to print a row (no side borders)
     row() {
         local content="$1"
-        local padding=$((W - 4))
-        printf "${CYAN}${BOX_V}${NC} %-${padding}b ${CYAN}${BOX_V}${NC}\n" "$content"
+        printf "  %b\n" "$content"
     }
 
     # Helper for section header
     section() {
         local title="$1" icon="$2"
-        draw_line "╠" "╣"
-        local header="${icon} ${WHITE}${title}${NC}"
-        row "$header"
-        draw_line "╠" "╣"
+        echo ""
+        draw_line "─"
+        printf "  ${icon} ${WHITE}${title}${NC}\n"
+        draw_line "─"
     }
 
     # Progress bar helper
@@ -253,9 +250,6 @@ show_status() {
     echo -e "${NC}"
     echo -e "    ${GREEN}NFS Client Status${NC}"
     echo ""
-
-    # Top border
-    draw_line "$BOX_TL" "$BOX_TR"
 
     # ══════════════════════════════════════════════════════════════════════════════
     # SYSTEM INFO
@@ -440,9 +434,6 @@ show_status() {
     done
 
     [[ $net_count -eq 0 ]] && row "   ${GRAY}No high-speed interfaces detected${NC}"
-
-    # Bottom border
-    draw_line "$BOX_BL" "$BOX_BR"
 
     # Footer
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
