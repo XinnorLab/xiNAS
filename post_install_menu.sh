@@ -493,12 +493,12 @@ raid_menu() {
     local out
     while true; do
         show_header
-        choice=$(menu_select "RAID Management" "View and manage your storage arrays" \
-            "1" "Quick Overview" \
-            "2" "Extended Details (-e)" \
-            "3" "Physical Drives" \
-            "4" "Spare Pools" \
-            "5" "Back") || break
+        choice=$(menu_select "💾 RAID Management" "View and manage your storage arrays" \
+            "1" "📋 Quick Overview" \
+            "2" "🔍 Extended Details" \
+            "3" "💿 Physical Drives" \
+            "4" "🔄 Spare Pools" \
+            "0" "🔙 Back") || break
 
         case "$choice" in
             1) show_raid_info "false" ;;
@@ -506,14 +506,14 @@ raid_menu() {
             3)
                 out="$TMP_DIR/drives"
                 show_physical_drives > "$out"
-                text_box "Physical Drives" "$out"
+                text_box "💿 Physical Drives" "$out"
                 ;;
             4)
                 out="$TMP_DIR/pools"
                 show_spare_pools > "$out"
-                text_box "Spare Pools" "$out"
+                text_box "🔄 Spare Pools" "$out"
                 ;;
-            5) break ;;
+            0) break ;;
         esac
     done
 }
@@ -920,12 +920,12 @@ network_menu() {
     local netplan_file
     while true; do
         show_header
-        choice=$(menu_select "Network Settings" "Configure network interfaces" \
-            "1" "View Current Configuration" \
-            "2" "Edit Interface IP Address" \
-            "3" "Apply Network Changes" \
-            "4" "View Netplan Config File" \
-            "5" "Back") || break
+        choice=$(menu_select "🌐 Network Settings" "Configure network interfaces" \
+            "1" "📋 View Current Configuration" \
+            "2" "✏️  Edit Interface IP Address" \
+            "3" "🚀 Apply Network Changes" \
+            "4" "📄 View Netplan Config File" \
+            "0" "🔙 Back") || break
 
         case "$choice" in
             1) show_network_info ;;
@@ -945,12 +945,12 @@ network_menu() {
                     [[ -f "$f" ]] && { netplan_file="$f"; break; }
                 done
                 if [[ -n "$netplan_file" && -f "$netplan_file" ]]; then
-                    text_box "Netplan: $netplan_file" "$netplan_file"
+                    text_box "📄 Netplan: $netplan_file" "$netplan_file"
                 else
                     msg_box "Netplan" "No netplan configuration found."
                 fi
                 ;;
-            5) break ;;
+            0) break ;;
         esac
     done
 }
@@ -1435,13 +1435,13 @@ nfs_menu() {
         fi
 
         show_header
-        choice=$(menu_select "NFS Shared Folders" "Manage folders shared over the network\n\nStatus: $share_count shared folder(s), $client_count connected" \
-            "1" "View Shared Folders" \
-            "2" "Edit Share Settings" \
-            "3" "Add New Shared Folder" \
-            "4" "Refresh (apply changes)" \
-            "5" "View Config File" \
-            "6" "Back") || break
+        choice=$(menu_select "📂 NFS Shared Folders" "Manage folders shared over the network\n\nStatus: $share_count shared folder(s), $client_count connected" \
+            "1" "📋 View Shared Folders" \
+            "2" "✏️  Edit Share Settings" \
+            "3" "➕ Add New Shared Folder" \
+            "4" "🔄 Refresh (apply changes)" \
+            "5" "📄 View Config File" \
+            "0" "🔙 Back") || break
 
         case "$choice" in
             1) show_nfs_exports ;;
@@ -1449,19 +1449,19 @@ nfs_menu() {
             3) add_nfs_share ;;
             4)
                 if sudo exportfs -ra 2>/dev/null; then
-                    msg_box "Success" "Shared folders refreshed!"
+                    msg_box "✅ Success" "Shared folders refreshed!"
                 else
-                    msg_box "Error" "Failed to refresh.\nCheck settings for errors."
+                    msg_box "❌ Error" "Failed to refresh.\nCheck settings for errors."
                 fi
                 ;;
             5)
                 if [[ -f /etc/exports ]]; then
-                    text_box "/etc/exports" /etc/exports
+                    text_box "📄 /etc/exports" /etc/exports
                 else
                     msg_box "Config File" "No configuration file found."
                 fi
                 ;;
-            6) break ;;
+            0) break ;;
         esac
     done
 }
@@ -1779,13 +1779,13 @@ user_menu() {
         user_count=$(awk -F: '$3 >= 1000 && $3 < 65534 {count++} END {print count+0}' /etc/passwd)
 
         show_header
-        choice=$(menu_select "User Management" "Manage user accounts and disk quotas\n\nUsers: $user_count account(s)" \
-            "1" "View User Accounts" \
-            "2" "Create New User" \
-            "3" "Delete User" \
-            "4" "Set User Quota" \
-            "5" "View Quota Report" \
-            "6" "Back") || break
+        choice=$(menu_select "👥 User Management" "Manage user accounts and disk quotas\n\nUsers: $user_count account(s)" \
+            "1" "📋 View User Accounts" \
+            "2" "➕ Create New User" \
+            "3" "🗑  Delete User" \
+            "4" "📏 Set User Quota" \
+            "5" "📊 View Quota Report" \
+            "0" "🔙 Back") || break
 
         case "$choice" in
             1) show_users ;;
@@ -1793,7 +1793,7 @@ user_menu() {
             3) delete_user ;;
             4) set_user_quota ;;
             5) show_quotas ;;
-            6) break ;;
+            0) break ;;
         esac
     done
 }
@@ -1809,13 +1809,13 @@ quick_actions_menu() {
     local icon
     while true; do
         show_header
-        choice=$(menu_select "Quick Actions" "Common administrative tasks" \
-            "1" "Show xinas-status" \
-            "2" "Restart NFS Server" \
-            "3" "View System Logs" \
-            "4" "Check Disk Health" \
-            "5" "Service Status" \
-            "6" "Back") || break
+        choice=$(menu_select "⚡ Quick Actions" "Common administrative tasks" \
+            "1" "📊 Show xinas-status" \
+            "2" "🔁 Restart NFS Server" \
+            "3" "📜 View System Logs" \
+            "4" "💿 Check Disk Health" \
+            "5" "🔧 Service Status" \
+            "0" "🔙 Back") || break
 
         case "$choice" in
             1) show_status ;;
@@ -1847,7 +1847,7 @@ quick_actions_menu() {
                 {
                     echo "=== Service Status ==="
                     echo ""
-                    for svc in nfs-server xiraid nfsdcld rpcbind; do
+                    for svc in nfs-server xiraid xiraid-exporter nfsdcld rpcbind; do
                         status=$(systemctl is-active "$svc" 2>/dev/null || echo "not found")
                         case "$status" in
                             active) icon="*" ;;
@@ -1857,12 +1857,163 @@ quick_actions_menu() {
                         printf "  %s  %-20s %s\n" "$icon" "$svc" "$status"
                     done
                 } > "$out"
-                text_box "Services" "$out"
+                text_box "🔧 Services" "$out"
                 ;;
-            6) break ;;
+            0) break ;;
         esac
     done
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# xiRAID Exporter
+# ═══════════════════════════════════════════════════════════════════════════════
+
+EXPORTER_GITHUB_REPO="E4-Computer-Engineering/xiraid-exporter"
+EXPORTER_UPDATE_AVAILABLE=""
+
+get_exporter_installed_version() {
+    dpkg-query -W -f='${Version}' xiraid-exporter 2>/dev/null || echo ""
+}
+
+get_exporter_latest_version() {
+    local latest
+    latest=$(curl -fsSL "https://api.github.com/repos/${EXPORTER_GITHUB_REPO}/releases/latest" 2>/dev/null \
+        | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
+    echo "$latest"
+}
+
+check_exporter_update() {
+    local installed latest
+    installed=$(get_exporter_installed_version)
+    [[ -z "$installed" ]] && return 0
+    latest=$(get_exporter_latest_version)
+    [[ -z "$latest" ]] && return 0
+    if [[ "$installed" != "$latest" ]]; then
+        EXPORTER_UPDATE_AVAILABLE="$latest"
+    else
+        EXPORTER_UPDATE_AVAILABLE=""
+    fi
+}
+
+install_xiraid_exporter() {
+    local version="$1"
+    local arch="amd64"
+    local deb_url="https://github.com/${EXPORTER_GITHUB_REPO}/releases/download/v${version}/xiraid-exporter_${version}_linux_${arch}.deb"
+    local deb_file="/tmp/xiraid-exporter_${version}.deb"
+
+    info_box "📥 Downloading" "Downloading xiraid-exporter v${version}..."
+    if ! curl -fSL -o "$deb_file" "$deb_url" 2>"$TMP_DIR/exporter_dl.log"; then
+        msg_box "Download Failed" "Could not download xiraid-exporter v${version}.\n\n$(cat "$TMP_DIR/exporter_dl.log")"
+        return 1
+    fi
+
+    info_box "📦 Installing" "Installing xiraid-exporter v${version}..."
+    if sudo dpkg -i "$deb_file" 2>"$TMP_DIR/exporter_inst.log"; then
+        sudo systemctl daemon-reload
+        sudo systemctl enable xiraid-exporter 2>/dev/null || true
+        sudo systemctl restart xiraid-exporter 2>/dev/null || true
+        msg_box "✅ Installed" "xiraid-exporter v${version} installed and started.\n\nMetrics available at http://localhost:9827/metrics"
+        EXPORTER_UPDATE_AVAILABLE=""
+    else
+        msg_box "❌ Install Failed" "Failed to install package.\n\n$(cat "$TMP_DIR/exporter_inst.log")"
+        return 1
+    fi
+    rm -f "$deb_file"
+}
+
+uninstall_xiraid_exporter() {
+    if yes_no "🗑  Uninstall" "Remove xiraid-exporter and stop the service?"; then
+        sudo systemctl stop xiraid-exporter 2>/dev/null || true
+        sudo systemctl disable xiraid-exporter 2>/dev/null || true
+        if sudo apt-get purge -y xiraid-exporter 2>"$TMP_DIR/exporter_rm.log"; then
+            msg_box "✅ Removed" "xiraid-exporter has been uninstalled."
+        else
+            msg_box "❌ Error" "Failed to remove.\n\n$(cat "$TMP_DIR/exporter_rm.log")"
+        fi
+    fi
+}
+
+manage_xiraid_exporter() {
+    while true; do
+        show_header
+
+        local installed
+        installed=$(get_exporter_installed_version)
+
+        if [[ -n "$installed" ]]; then
+            local svc_status
+            svc_status=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+            local status_color="$GREEN"
+            [[ "$svc_status" != "active" ]] && status_color="$RED"
+
+            echo -e "  ${WHITE}📈 xiRAID Exporter:${NC} ${status_color}● v${installed} (${svc_status})${NC}"
+            [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]] && echo -e "  ${WHITE}🔄 Update:${NC} ${YELLOW}v${EXPORTER_UPDATE_AVAILABLE} available${NC}"
+            echo ""
+
+            local update_item="🔄 Check for Update"
+            [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]] && update_item="🔄 Update to v${EXPORTER_UPDATE_AVAILABLE}"
+
+            local choice
+            choice=$(menu_select "📈 xiRAID Exporter" "Manage Exporter" \
+                "1" "$update_item" \
+                "2" "🔁 Restart Service" \
+                "3" "🗑  Uninstall" \
+                "0" "🔙 Back") || return
+
+            case "$choice" in
+                1)
+                    if [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
+                        install_xiraid_exporter "$EXPORTER_UPDATE_AVAILABLE"
+                    else
+                        info_box "🔄 Checking..." "Checking for exporter updates..."
+                        check_exporter_update
+                        if [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
+                            if yes_no "🔄 Update Available" "xiraid-exporter v${EXPORTER_UPDATE_AVAILABLE} is available.\nInstalled: v${installed}\n\nUpdate now?"; then
+                                install_xiraid_exporter "$EXPORTER_UPDATE_AVAILABLE"
+                            fi
+                        else
+                            msg_box "✅ Up to Date" "xiraid-exporter v${installed} is the latest version."
+                        fi
+                    fi
+                    ;;
+                2)
+                    sudo systemctl restart xiraid-exporter 2>/dev/null
+                    msg_box "✅ Restarted" "xiraid-exporter service restarted."
+                    ;;
+                3) uninstall_xiraid_exporter ;;
+                0) return ;;
+            esac
+        else
+            echo -e "  ${WHITE}📈 xiRAID Exporter:${NC} ${GRAY}Not installed${NC}"
+            echo -e "  ${DIM}Prometheus metrics exporter for xiRAID storage${NC}"
+            echo ""
+
+            local choice
+            choice=$(menu_select "📈 xiRAID Exporter" "Install Exporter" \
+                "1" "📥 Install Latest" \
+                "0" "🔙 Back") || return
+
+            case "$choice" in
+                1)
+                    info_box "🔍 Checking..." "Fetching latest version..."
+                    local latest
+                    latest=$(get_exporter_latest_version)
+                    if [[ -z "$latest" ]]; then
+                        msg_box "❌ Error" "Could not fetch latest version from GitHub.\nCheck your internet connection."
+                    else
+                        if yes_no "📥 Install" "Install xiraid-exporter v${latest}?\n\nThis will:\n- Download the .deb package from GitHub\n- Install and enable the systemd service\n- Expose metrics on port 9827"; then
+                            install_xiraid_exporter "$latest"
+                        fi
+                    fi
+                    ;;
+                0) return ;;
+            esac
+        fi
+    done
+}
+
+# Background exporter update check
+check_exporter_update &
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Welcome Screen
@@ -1928,31 +2079,47 @@ main_menu() {
     fi
 
     while true; do
-        # Update status indicator
-        local update_status=""
-        local update_text="Check for Updates"
-        if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-            update_status=" | Update!"
-            update_text="Update Available"
+        # Update status indicators
+        local update_text="🔄 Check for Updates"
+        if [[ "$UPDATE_AVAILABLE" == "true" ]] || [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
+            update_text="🔄 Check for Updates [Update Available!]"
+        fi
+
+        # Exporter status indicator
+        local exporter_text="📈 xiRAID Exporter"
+        local exporter_ver
+        exporter_ver=$(get_exporter_installed_version)
+        if [[ -n "$exporter_ver" ]]; then
+            local svc_state
+            svc_state=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+            if [[ "$svc_state" == "active" ]]; then
+                exporter_text="📈 xiRAID Exporter [v${exporter_ver} Running]"
+            else
+                exporter_text="📈 xiRAID Exporter [v${exporter_ver} Stopped]"
+            fi
+            [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]] && exporter_text="📈 xiRAID Exporter [Update!]"
+        else
+            exporter_text="📈 xiRAID Exporter [Not Installed]"
         fi
 
         show_header
         echo -e "  ${WHITE}$(hostname)${NC} | $(uptime -p 2>/dev/null | sed 's/up //')"
         if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-            echo -e "  ${YELLOW}Update available!${NC}"
+            echo -e "  ${YELLOW}📦 Update available!${NC}"
         fi
         echo ""
 
         local choice
         choice=$(menu_select "xiNAS Management" "Select an option:" \
-            "1" "System Status" \
-            "2" "RAID Management" \
-            "3" "Network Settings" \
-            "4" "NFS Access Rights" \
-            "5" "User Management" \
-            "6" "Quick Actions" \
-            "7" "$update_text" \
-            "8" "Exit") || break
+            "1" "📊 System Status" \
+            "2" "💾 RAID Management" \
+            "3" "🌐 Network Settings" \
+            "4" "📂 NFS Access Rights" \
+            "5" "👥 User Management" \
+            "6" "$exporter_text" \
+            "7" "⚡ Quick Actions" \
+            "8" "$update_text" \
+            "0" "🚪 Exit") || break
 
         case "$choice" in
             1) show_status ;;
@@ -1960,26 +2127,29 @@ main_menu() {
             3) network_menu ;;
             4) nfs_menu ;;
             5) user_menu ;;
-            6) quick_actions_menu ;;
-            7)
+            6) manage_xiraid_exporter ;;
+            7) quick_actions_menu ;;
+            8)
                 if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-                    if yes_no "Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?"; then
+                    if yes_no "🔄 Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?"; then
                         do_update
                     fi
                 else
-                    info_box "Checking..." "Checking for updates..."
+                    info_box "🔄 Checking..." "Checking for updates..."
                     check_for_updates
-                    if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-                        if yes_no "Update Found" "Update found! Install now?"; then
-                            do_update
-                        fi
+                    check_exporter_update
+                    if [[ "$UPDATE_AVAILABLE" == "true" ]] || [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
+                        local msg=""
+                        [[ "$UPDATE_AVAILABLE" == "true" ]] && msg+="xiNAS: update available\n"
+                        [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]] && msg+="xiraid-exporter: v${EXPORTER_UPDATE_AVAILABLE} available\n"
+                        msg_box "📦 Updates Found" "$msg"
                     else
-                        msg_box "Up to Date" "xiNAS is already up to date!"
+                        msg_box "✅ Up to Date" "Everything is up to date!"
                     fi
                 fi
                 ;;
-            8)
-                msg_box "See you soon!" "Thank you for using xiNAS!\n\nRun this menu again anytime:\n  post_install_menu.sh\n\nOr view status with:\n  xinas-status\n\nQuestions? support@xinnor.io"
+            0)
+                msg_box "👋 See you soon!" "Thank you for using xiNAS!\n\nRun this menu again anytime:\n  xinas-menu\n\nOr view status with:\n  xinas-status\n\nQuestions? support@xinnor.io"
                 exit 0
                 ;;
         esac
