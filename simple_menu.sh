@@ -252,6 +252,162 @@ show_welcome() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# xiRAID Exporter
+# ═══════════════════════════════════════════════════════════════════════════════
+
+EXPORTER_GITHUB_REPO="E4-Computer-Engineering/xiraid-exporter"
+EXPORTER_UPDATE_AVAILABLE=""
+
+# Get installed version of xiraid-exporter (empty if not installed)
+get_exporter_installed_version() {
+    dpkg-query -W -f='${Version}' xiraid-exporter 2>/dev/null || echo ""
+}
+
+# Get latest release version from GitHub
+get_exporter_latest_version() {
+    local latest
+    latest=$(curl -fsSL "https://api.github.com/repos/${EXPORTER_GITHUB_REPO}/releases/latest" 2>/dev/null \
+        | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
+    echo "$latest"
+}
+
+# Check if a newer exporter version is available
+check_exporter_update() {
+    local installed latest
+    installed=$(get_exporter_installed_version)
+    [[ -z "$installed" ]] && return 0
+    latest=$(get_exporter_latest_version)
+    [[ -z "$latest" ]] && return 0
+    if [[ "$installed" != "$latest" ]]; then
+        EXPORTER_UPDATE_AVAILABLE="$latest"
+    else
+        EXPORTER_UPDATE_AVAILABLE=""
+    fi
+}
+
+# Install or upgrade xiraid-exporter from GitHub releases
+install_xiraid_exporter() {
+    local version="$1"
+    local arch="amd64"
+    local deb_url="https://github.com/${EXPORTER_GITHUB_REPO}/releases/download/v${version}/xiraid-exporter_${version}_linux_${arch}.deb"
+    local deb_file="/tmp/xiraid-exporter_${version}.deb"
+
+    info_box "Downloading" "Downloading xiraid-exporter v${version}..."
+    if ! curl -fSL -o "$deb_file" "$deb_url" 2>"$TMP_DIR/exporter_dl.log"; then
+        msg_box "Download Failed" "Could not download xiraid-exporter v${version}.\n\n$(cat "$TMP_DIR/exporter_dl.log")"
+        return 1
+    fi
+
+    info_box "Installing" "Installing xiraid-exporter v${version}..."
+    if sudo dpkg -i "$deb_file" 2>"$TMP_DIR/exporter_inst.log"; then
+        sudo systemctl daemon-reload
+        sudo systemctl enable xiraid-exporter 2>/dev/null || true
+        sudo systemctl restart xiraid-exporter 2>/dev/null || true
+        msg_box "Installed" "xiraid-exporter v${version} installed and started.\n\nMetrics available at http://localhost:9827/metrics"
+        EXPORTER_UPDATE_AVAILABLE=""
+    else
+        msg_box "Install Failed" "Failed to install package.\n\n$(cat "$TMP_DIR/exporter_inst.log")"
+        return 1
+    fi
+    rm -f "$deb_file"
+}
+
+# Uninstall xiraid-exporter
+uninstall_xiraid_exporter() {
+    if yes_no "Uninstall" "Remove xiraid-exporter and stop the service?"; then
+        sudo systemctl stop xiraid-exporter 2>/dev/null || true
+        sudo systemctl disable xiraid-exporter 2>/dev/null || true
+        if sudo apt-get purge -y xiraid-exporter 2>"$TMP_DIR/exporter_rm.log"; then
+            msg_box "Removed" "xiraid-exporter has been uninstalled."
+        else
+            msg_box "Error" "Failed to remove.\n\n$(cat "$TMP_DIR/exporter_rm.log")"
+        fi
+    fi
+}
+
+# xiRAID Exporter management menu
+manage_xiraid_exporter() {
+    while true; do
+        show_header
+
+        local installed
+        installed=$(get_exporter_installed_version)
+
+        if [[ -n "$installed" ]]; then
+            local svc_status
+            svc_status=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+            local status_color="$GREEN" status_icon="●"
+            [[ "$svc_status" != "active" ]] && { status_color="$RED"; status_icon="●"; }
+
+            echo -e "  ${WHITE}xiRAID Exporter:${NC} ${status_color}${status_icon} v${installed} (${svc_status})${NC}"
+            if [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
+                echo -e "  ${WHITE}Update:${NC} ${YELLOW}v${EXPORTER_UPDATE_AVAILABLE} available${NC}"
+            fi
+            echo ""
+
+            local update_item="🔄 Check for Update"
+            [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]] && update_item="🔄 Update to v${EXPORTER_UPDATE_AVAILABLE}"
+
+            local choice
+            choice=$(menu_select "xiRAID Exporter" "Manage Exporter" \
+                "1" "$update_item" \
+                "2" "🔁 Restart Service" \
+                "3" "🗑  Uninstall" \
+                "0" "🔙 Back") || return
+
+            case "$choice" in
+                1)
+                    if [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
+                        install_xiraid_exporter "$EXPORTER_UPDATE_AVAILABLE"
+                    else
+                        info_box "Checking..." "Checking for exporter updates..."
+                        check_exporter_update
+                        if [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
+                            if yes_no "Update Available" "xiraid-exporter v${EXPORTER_UPDATE_AVAILABLE} is available.\nInstalled: v${installed}\n\nUpdate now?"; then
+                                install_xiraid_exporter "$EXPORTER_UPDATE_AVAILABLE"
+                            fi
+                        else
+                            msg_box "Up to Date" "xiraid-exporter v${installed} is the latest version."
+                        fi
+                    fi
+                    ;;
+                2)
+                    sudo systemctl restart xiraid-exporter 2>/dev/null
+                    msg_box "Restarted" "xiraid-exporter service restarted."
+                    ;;
+                3) uninstall_xiraid_exporter ;;
+                0) return ;;
+            esac
+        else
+            echo -e "  ${WHITE}xiRAID Exporter:${NC} ${GRAY}Not installed${NC}"
+            echo -e "  ${DIM}Prometheus metrics exporter for xiRAID storage${NC}"
+            echo ""
+
+            local choice
+            choice=$(menu_select "xiRAID Exporter" "Install Exporter" \
+                "1" "📥 Install Latest" \
+                "0" "🔙 Back") || return
+
+            case "$choice" in
+                1)
+                    info_box "Checking..." "Fetching latest version..."
+                    local latest
+                    latest=$(get_exporter_latest_version)
+                    if [[ -z "$latest" ]]; then
+                        msg_box "Error" "Could not fetch latest version from GitHub.\nCheck your internet connection."
+                    else
+                        if yes_no "Install" "Install xiraid-exporter v${latest}?\n\nThis will:\n- Download the .deb package from GitHub\n- Install and enable the systemd service\n- Expose metrics on port 9827"; then
+                            install_xiraid_exporter "$latest"
+                        fi
+                    fi
+                    ;;
+                0) return ;;
+            esac
+        fi
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Advanced Settings Menu
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -259,23 +415,42 @@ advanced_settings_menu() {
     while true; do
         show_header
 
-        # Update status indicator
-        update_text="🔄 Check for Updates"
-        if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+        # Update status indicators
+        local update_text="🔄 Check for Updates"
+        if [[ "$UPDATE_AVAILABLE" == "true" ]] || [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
             update_text="🔄 Check for Updates [Update Available!]"
+        fi
+
+        # Exporter status indicator
+        local exporter_text="📈 xiRAID Exporter"
+        local exporter_ver
+        exporter_ver=$(get_exporter_installed_version)
+        if [[ -n "$exporter_ver" ]]; then
+            local svc_state
+            svc_state=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+            if [[ "$svc_state" == "active" ]]; then
+                exporter_text="📈 xiRAID Exporter [v${exporter_ver} Running]"
+            else
+                exporter_text="📈 xiRAID Exporter [v${exporter_ver} Stopped]"
+            fi
+            [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]] && exporter_text="📈 xiRAID Exporter [Update!]"
+        else
+            exporter_text="📈 xiRAID Exporter [Not Installed]"
         fi
 
         local choice
         choice=$(menu_select "Advanced Settings" "Configuration Options" \
             "1" "🌐 Configure Network" \
             "2" "📦 Choose Preset" \
-            "3" "$update_text" \
+            "3" "$exporter_text" \
+            "4" "$update_text" \
             "0" "🔙 Back to Main Menu") || return
 
         case "$choice" in
             1) ./configure_network.sh ;;
             2) choose_preset ;;
-            3)
+            3) manage_xiraid_exporter ;;
+            4)
                 if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
                     if yes_no "Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?"; then
                         do_update
@@ -283,12 +458,14 @@ advanced_settings_menu() {
                 else
                     info_box "Checking..." "Checking for updates..."
                     check_for_updates
-                    if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-                        if yes_no "Update Found" "Update found! Install now?"; then
-                            do_update
-                        fi
+                    check_exporter_update
+                    if [[ "$UPDATE_AVAILABLE" == "true" ]] || [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
+                        local msg=""
+                        [[ "$UPDATE_AVAILABLE" == "true" ]] && msg+="xiNAS: update available\n"
+                        [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]] && msg+="xiraid-exporter: v${EXPORTER_UPDATE_AVAILABLE} available\n"
+                        msg_box "Updates Found" "$msg"
                     else
-                        msg_box "Up to Date" "xiNAS is already up to date!"
+                        msg_box "Up to Date" "Everything is up to date!"
                     fi
                 fi
                 ;;
@@ -300,6 +477,9 @@ advanced_settings_menu() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # Main Menu
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# Background update checks (after all functions defined)
+check_exporter_update &
 
 # Show welcome message on first run
 show_header

@@ -1,38 +1,21 @@
 ---
-- name: Download xiraid_exporter archive
+- name: Download xiraid-exporter .deb package
   ansible.builtin.get_url:
     url: "{{ xiraid_exporter_download_url }}"
-    dest: "/tmp/xiraid_exporter_{{ xiraid_exporter_version }}.tar.gz"
+    dest: "/tmp/xiraid-exporter_{{ xiraid_exporter_version }}.deb"
     mode: '0644'
     force: no
   tags: [xiraid_exporter, download]
 
-- name: Extract xiraid_exporter binary
-  ansible.builtin.unarchive:
-    src: "/tmp/xiraid_exporter_{{ xiraid_exporter_version }}.tar.gz"
-    dest: "/tmp"
-    remote_src: yes
-    creates: "/tmp/xiraid_exporter_v{{ xiraid_exporter_version }}_{{ xiraid_exporter_arch }}"
+- name: Install xiraid-exporter package
+  ansible.builtin.apt:
+    deb: "/tmp/xiraid-exporter_{{ xiraid_exporter_version }}.deb"
+    state: present
   tags: [xiraid_exporter, install]
 
-- name: Install xiraid_exporter binary
-  ansible.builtin.copy:
-    src: "/tmp/xiraid_exporter_v{{ xiraid_exporter_version }}_{{ xiraid_exporter_arch }}/xiraid_exporter"
-    dest: "{{ xiraid_exporter_install_dir }}/xiraid_exporter"
-    mode: '0755'
-  tags: [xiraid_exporter, install]
-
-- name: Install systemd service unit
-  ansible.builtin.template:
-    src: xiraid_exporter.service.j2
-    dest: /etc/systemd/system/xiraid_exporter.service
-    mode: '0644'
-  notify: reload xiraid_exporter
-  tags: [xiraid_exporter, service]
-
-- name: Enable and start xiraid_exporter service
+- name: Enable and start xiraid-exporter service
   ansible.builtin.service:
-    name: xiraid_exporter
+    name: xiraid-exporter
     enabled: true
     state: started
   tags: [xiraid_exporter, service]

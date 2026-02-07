@@ -1,26 +1,14 @@
-# xiraid_exporter version to install
-xiraid_exporter_version: "2.0.0"
+# xiraid-exporter version to install
+xiraid_exporter_version: "1.1.0"
 
 # Architecture for the release asset
-xiraid_exporter_arch: "Linux_x86_64"
+xiraid_exporter_arch: "amd64"
 
-# Download URL of the release archive
-xiraid_exporter_download_url: "https://github.com/ithilbor/xiraid_exporter/releases/download/v{{ xiraid_exporter_version }}/xiraid_exporter_v{{ xiraid_exporter_version }}_{{ xiraid_exporter_arch }}.tar.gz"
+# GitHub repository for releases
+xiraid_exporter_github_repo: "E4-Computer-Engineering/xiraid-exporter"
 
-# Install directory for the exporter binary
-xiraid_exporter_install_dir: "/usr/sbin"
+# Download URL of the .deb package
+xiraid_exporter_download_url: "https://github.com/{{ xiraid_exporter_github_repo }}/releases/download/v{{ xiraid_exporter_version }}/xiraid-exporter_{{ xiraid_exporter_version }}_linux_{{ xiraid_exporter_arch }}.deb"
 
-# Command line flags for the exporter service
-xiraid_exporter_flags:
-  - '--xiraid-srv-hostname=localhost'
-  - '--xiraid-srv-port=6066'
-  - '--xiraid-cert-path=/etc/xraid/crt/server-cert.crt'
-  - '--metrics-endpoint=/metrics'
-  - '--collector.xiraid_license_show'
-  - '--collector.xiraid_raid_show'
-  - '--no-prometheus-default-metrics'
-  - '--max-concurrent-requests=40'
-  - '--gomaxprocs=1'
-  - '--web.listen-address=:9505'
-  - '--log.level=info'
-  - '--log.format=logfmt'
+# Metrics listen port
+xiraid_exporter_port: 9827
