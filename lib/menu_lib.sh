@@ -59,11 +59,6 @@ _menu_clear_screen() {
     printf '\033[2J\033[H' >/dev/tty
 }
 
-# Calculate display width of a string
-# Uses bash ${#str} which counts characters (emojis as 1 char = 1 column)
-_menu_display_width() {
-    echo "${#1}"
-}
 
 # Read a single keypress (handles arrow keys)
 _menu_read_key() {
@@ -105,7 +100,7 @@ _menu_repeat_char() {
 _menu_draw_box() {
     local title="$1"
     local width="${2:-60}"
-    local title_len=$(_menu_display_width "$title")
+    local title_len=${#title}
     # Account for: ╔ (1) + left padding + space (1) + title + space (1) + right padding + ╗ (1)
     local left_pad=$(( (width - title_len - 4) / 2 ))
     local right_pad=$(( width - title_len - 4 - left_pad ))
@@ -152,7 +147,7 @@ menu_select() {
 
     # Calculate width (account for emoji display width)
     for ((i=0; i<num_items; i++)); do
-        local item_len=$(($(_menu_display_width "${keys[$i]}") + $(_menu_display_width "${descs[$i]}") + 8))
+        local item_len=$((${#keys[$i]} + ${#descs[$i]} + 8))
         [[ $item_len -gt $width ]] && width=$item_len
     done
     [[ $width -gt 78 ]] && width=78
@@ -169,59 +164,31 @@ menu_select() {
 
         # Prompt line with borders
         if [[ -n "$prompt" ]]; then
-            local prompt_len=$(_menu_display_width "$prompt")
+            local prompt_len=${#prompt}
             local prompt_pad=$((inner_width - prompt_len - 2))
             [[ $prompt_pad -lt 0 ]] && prompt_pad=0
             printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
             printf '%*s' "$prompt_pad" '' >/dev/tty
             printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
-
-            # Separator inside box
-            printf "${CYAN}${BOX_V}${NC}${DIM}" >/dev/tty
-            _menu_repeat_char "$BOX_LINE" "$inner_width" >/dev/tty
-            printf "${NC}${CYAN}${BOX_V}${NC}\n" >/dev/tty
         fi
 
-        # Menu items with borders
-        for ((i=0; i<num_items; i++)); do
-            local item_text
-            if [[ $i -eq $selected ]]; then
-                item_text=" > ${keys[$i]}  ${descs[$i]} "
-            else
-                item_text="   ${keys[$i]}  ${descs[$i]}"
-            fi
-            local item_len=$(_menu_display_width "$item_text")
-            local item_pad=$((inner_width - item_len))
-            [[ $item_pad -lt 0 ]] && item_pad=0
-
-            printf "${CYAN}${BOX_V}${NC}" >/dev/tty
-            if [[ $i -eq $selected ]]; then
-                printf "${REVERSE}${GREEN}%s${NC}" "$item_text" >/dev/tty
-            else
-                printf "${DIM}   ${NC}${YELLOW}%s${NC}  ${WHITE}%s${NC}" "${keys[$i]}" "${descs[$i]}" >/dev/tty
-            fi
-            printf '%*s' "$item_pad" '' >/dev/tty
-            printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
-        done
-
-        # Empty line before footer
-        printf "${CYAN}${BOX_V}${NC}" >/dev/tty
-        printf '%*s' "$inner_width" '' >/dev/tty
-        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
-
-        # Footer with help text
-        local help_text="↑↓ Navigate  Enter Select  Esc Cancel"
-        local help_len=$(_menu_display_width "$help_text")
-        local help_pad=$((inner_width - help_len - 1))
-        [[ $help_pad -lt 0 ]] && help_pad=0
-        printf "${CYAN}${BOX_V}${NC} ${DIM}%s${NC}" "$help_text" >/dev/tty
-        printf '%*s' "$help_pad" '' >/dev/tty
-        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
-
-        # Bottom border
+        # Close the header box
         printf "${CYAN}${BOX_BL}" >/dev/tty
         _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
         printf "${BOX_BR}${NC}\n" >/dev/tty
+
+        # Menu items (no side borders)
+        for ((i=0; i<num_items; i++)); do
+            if [[ $i -eq $selected ]]; then
+                printf "${REVERSE}${GREEN} > %s  %s ${NC}\n" "${keys[$i]}" "${descs[$i]}" >/dev/tty
+            else
+                printf "${DIM}   ${NC}${YELLOW}%s${NC}  ${WHITE}%s${NC}\n" "${keys[$i]}" "${descs[$i]}" >/dev/tty
+            fi
+        done
+
+        # Footer help text
+        echo "" >/dev/tty
+        printf "  ${DIM}↑↓ Navigate  Enter Select  Esc Cancel${NC}\n" >/dev/tty
     }
 
     _render_menu
@@ -736,20 +703,20 @@ check_list() {
 
         # Prompt line with borders
         if [[ -n "$prompt" ]]; then
-            local prompt_len=$(_menu_display_width "$prompt")
+            local prompt_len=${#prompt}
             local prompt_pad=$((inner_width - prompt_len - 2))
             [[ $prompt_pad -lt 0 ]] && prompt_pad=0
             printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
             printf '%*s' "$prompt_pad" '' >/dev/tty
             printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
-
-            # Separator inside box
-            printf "${CYAN}${BOX_V}${NC}${DIM}" >/dev/tty
-            _menu_repeat_char "$BOX_LINE" "$inner_width" >/dev/tty
-            printf "${NC}${CYAN}${BOX_V}${NC}\n" >/dev/tty
         fi
 
-        # Checklist items with borders
+        # Close the header box
+        printf "${CYAN}${BOX_BL}" >/dev/tty
+        _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
+        printf "${BOX_BR}${NC}\n" >/dev/tty
+
+        # Checklist items (no side borders)
         for ((i=0; i<num_items; i++)); do
             local checkbox_char
             if [[ "${states[$i]}" == "ON" ]]; then
@@ -758,48 +725,20 @@ check_list() {
                 checkbox_char="[ ]"
             fi
 
-            local item_text
             if [[ $i -eq $selected ]]; then
-                item_text=" > $checkbox_char ${keys[$i]} ${descs[$i]} "
-            else
-                item_text="   $checkbox_char ${keys[$i]} ${descs[$i]}"
-            fi
-            local item_len=$(_menu_display_width "$item_text")
-            local item_pad=$((inner_width - item_len))
-            [[ $item_pad -lt 0 ]] && item_pad=0
-
-            printf "${CYAN}${BOX_V}${NC}" >/dev/tty
-            if [[ $i -eq $selected ]]; then
-                printf "${REVERSE}${GREEN}%s${NC}" "$item_text" >/dev/tty
+                printf "${REVERSE}${GREEN} > %s %s %s ${NC}\n" "$checkbox_char" "${keys[$i]}" "${descs[$i]}" >/dev/tty
             else
                 if [[ "${states[$i]}" == "ON" ]]; then
-                    printf "   ${GREEN}%s${NC} ${YELLOW}%s${NC} ${WHITE}%s${NC}" "$checkbox_char" "${keys[$i]}" "${descs[$i]}" >/dev/tty
+                    printf "   ${GREEN}%s${NC} ${YELLOW}%s${NC} ${WHITE}%s${NC}\n" "$checkbox_char" "${keys[$i]}" "${descs[$i]}" >/dev/tty
                 else
-                    printf "   ${DIM}%s${NC} ${YELLOW}%s${NC} ${WHITE}%s${NC}" "$checkbox_char" "${keys[$i]}" "${descs[$i]}" >/dev/tty
+                    printf "   ${DIM}%s${NC} ${YELLOW}%s${NC} ${WHITE}%s${NC}\n" "$checkbox_char" "${keys[$i]}" "${descs[$i]}" >/dev/tty
                 fi
             fi
-            printf '%*s' "$item_pad" '' >/dev/tty
-            printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
         done
 
-        # Empty line before footer
-        printf "${CYAN}${BOX_V}${NC}" >/dev/tty
-        printf '%*s' "$inner_width" '' >/dev/tty
-        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
-
-        # Footer with help text
-        local help_text="↑↓ Navigate  Space Toggle  Enter Done"
-        local help_len=$(_menu_display_width "$help_text")
-        local help_pad=$((inner_width - help_len - 1))
-        [[ $help_pad -lt 0 ]] && help_pad=0
-        printf "${CYAN}${BOX_V}${NC} ${DIM}%s${NC}" "$help_text" >/dev/tty
-        printf '%*s' "$help_pad" '' >/dev/tty
-        printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
-
-        # Bottom border
-        printf "${CYAN}${BOX_BL}" >/dev/tty
-        _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
-        printf "${BOX_BR}${NC}\n" >/dev/tty
+        # Footer help text
+        echo "" >/dev/tty
+        printf "  ${DIM}↑↓ Navigate  Space Toggle  Enter Done${NC}\n" >/dev/tty
     }
 
     _render_checklist
