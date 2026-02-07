@@ -239,7 +239,7 @@ menu_select() {
                 item_text="   ${keys[$i]}  ${descs[$i]}"
             fi
             local item_len=$(_menu_display_width "$item_text")
-            local item_pad=$((inner_width - item_len - 1))
+            local item_pad=$((inner_width - item_len))
             [[ $item_pad -lt 0 ]] && item_pad=0
 
             printf "${CYAN}${BOX_V}${NC}" >/dev/tty
@@ -813,7 +813,7 @@ check_list() {
                 item_text="   $checkbox_char ${keys[$i]} ${descs[$i]}"
             fi
             local item_len=$(_menu_display_width "$item_text")
-            local item_pad=$((inner_width - item_len - 1))
+            local item_pad=$((inner_width - item_len))
             [[ $item_pad -lt 0 ]] && item_pad=0
 
             printf "${CYAN}${BOX_V}${NC}" >/dev/tty
