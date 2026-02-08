@@ -36,7 +36,14 @@ fi
 _chc_ensure_tmp() {
     if [[ -z "$CHC_TMP_DIR" ]]; then
         CHC_TMP_DIR="$(mktemp -d)"
-        trap 'rm -rf "$CHC_TMP_DIR"' EXIT
+        # Compose with existing EXIT trap (don't overwrite parent's cleanup)
+        local _existing_trap
+        _existing_trap="$(trap -p EXIT | sed "s/^trap -- '//;s/' EXIT$//" || true)"
+        if [[ -n "$_existing_trap" ]]; then
+            trap "${_existing_trap}; rm -rf \"$CHC_TMP_DIR\"" EXIT
+        else
+            trap 'rm -rf "$CHC_TMP_DIR"' EXIT
+        fi
     fi
 }
 
@@ -52,7 +59,8 @@ run_client_healthcheck() {
     _chc_ensure_tmp
     local out="$CHC_TMP_DIR/healthcheck_result"
 
-    python3 - "$profile_file" "$CHC_LOG_DIR" "${extra_flags[@]}" > "$out" 2>"$CHC_TMP_DIR/hc_err" << 'PYEOF'
+    local _pyrc=0
+    python3 - "$profile_file" "$CHC_LOG_DIR" "${extra_flags[@]}" > "$out" 2>"$CHC_TMP_DIR/hc_err" << 'PYEOF' || _pyrc=$?
 import sys
 import os
 import json
@@ -1304,7 +1312,7 @@ if __name__ == "__main__" or True:
     main()
 PYEOF
 
-    if [[ $? -ne 0 ]]; then
+    if [[ $_pyrc -ne 0 ]]; then
         echo "Health check engine failed:" >&2
         cat "$CHC_TMP_DIR/hc_err" >&2
         return 1
@@ -1312,8 +1320,8 @@ PYEOF
 
     # Extract saved report paths from stderr
     local report_text report_json
-    report_text=$(grep '__REPORT_TEXT__=' "$CHC_TMP_DIR/hc_err" 2>/dev/null | sed 's/__REPORT_TEXT__=//')
-    report_json=$(grep '__REPORT_JSON__=' "$CHC_TMP_DIR/hc_err" 2>/dev/null | sed 's/__REPORT_JSON__=//')
+    report_text=$(grep '__REPORT_TEXT__=' "$CHC_TMP_DIR/hc_err" 2>/dev/null | sed 's/__REPORT_TEXT__=//' || true)
+    report_json=$(grep '__REPORT_JSON__=' "$CHC_TMP_DIR/hc_err" 2>/dev/null | sed 's/__REPORT_JSON__=//' || true)
 
     [[ -n "$report_text" ]] && echo "$report_text" > "$CHC_TMP_DIR/last_report_text"
     [[ -n "$report_json" ]] && echo "$report_json" > "$CHC_TMP_DIR/last_report_json"
@@ -1331,6 +1339,10 @@ run_and_display_client_healthcheck() {
     local flags=("$@")
     local profile_file="$CHC_PROFILES_DIR/${profile}.yml"
 
+    # Create tmp dir in parent shell so subshell $(...) inherits it
+    # without setting a new EXIT trap that would delete files prematurely
+    _chc_ensure_tmp
+
     if [[ ! -f "$profile_file" ]]; then
         if declare -f msg_box &>/dev/null; then
             msg_box "Error" "Profile not found: $profile_file"
@@ -1344,14 +1356,14 @@ run_and_display_client_healthcheck() {
         info_box "Running Health Check" "Profile: $profile\nThis may take a moment..."
     fi
 
-    local result_file
-    result_file=$(run_client_healthcheck "$profile_file" "${flags[@]}")
+    local result_file=""
+    result_file=$(run_client_healthcheck "$profile_file" "${flags[@]}") || true
 
-    if [[ -f "$result_file" ]]; then
+    if [[ -n "$result_file" ]] && [[ -f "$result_file" ]]; then
         # Extract overall status and summary from report
         local overall summary saved_path=""
-        overall=$(grep 'Overall:' "$result_file" 2>/dev/null | head -1 | sed 's/.*\[//;s/\].*//')
-        summary=$(grep -E 'PASS:.*WARN:.*FAIL:' "$result_file" 2>/dev/null | head -1 | sed 's/^  //')
+        overall=$(grep 'Overall:' "$result_file" 2>/dev/null | head -1 | sed 's/.*\[//;s/\].*//' || true)
+        summary=$(grep -E 'PASS:.*WARN:.*FAIL:' "$result_file" 2>/dev/null | head -1 | sed 's/^  //' || true)
 
         if [[ -f "$CHC_TMP_DIR/last_report_text" ]]; then
             saved_path=$(cat "$CHC_TMP_DIR/last_report_text")
@@ -1601,9 +1613,9 @@ _chc_cli_main() {
     fi
 
     _chc_ensure_tmp
-    local result_file
-    result_file=$(run_client_healthcheck "$profile_file" "${flags[@]}")
-    if [[ -f "$result_file" ]]; then
+    local result_file=""
+    result_file=$(run_client_healthcheck "$profile_file" "${flags[@]}") || true
+    if [[ -n "$result_file" ]] && [[ -f "$result_file" ]]; then
         cat "$result_file"
     fi
 }
