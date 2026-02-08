@@ -11,6 +11,9 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 # Script directory for relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Version tracking
+XINAS_MENU_VERSION="1.1.0"
+
 # Source the menu library (check multiple locations)
 if [[ -f "$SCRIPT_DIR/lib/menu_lib.sh" ]]; then
     source "$SCRIPT_DIR/lib/menu_lib.sh"
@@ -92,16 +95,21 @@ show_header() {
 EOF
     echo -e "${NC}"
     echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}     NAS Management Console${NC}"
+    echo -e "${YELLOW}     NAS Management Console${NC}  ${DIM}v${XINAS_MENU_VERSION}${NC}"
     echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
-# Check if running in interactive terminal
-if [[ ! -t 0 ]]; then
-    echo "This script must be run in an interactive terminal"
-    exit 1
-fi
+# Check if running in interactive terminal (skip for non-interactive CLI flags)
+case "${1:-}" in
+    --version|-v|--help|-h|--status|-s|--raid|-r|--healthcheck|--hc) ;;
+    *)
+        if [[ ! -t 0 ]]; then
+            echo "This script must be run in an interactive terminal"
+            exit 1
+        fi
+        ;;
+esac
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # RAID Information Functions
@@ -2181,6 +2189,14 @@ main_menu() {
 
 # Handle command line arguments
 case "${1:-}" in
+    --version|-v)
+        echo "xiNAS Menu v$XINAS_MENU_VERSION"
+        if [[ -d "$SCRIPT_DIR/.git" ]] && command -v git &>/dev/null; then
+            _commit=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null)
+            [[ -n "$_commit" ]] && echo "Commit: $_commit"
+        fi
+        exit 0
+        ;;
     --status|-s)
         # Quick status view
         if command -v xinas-status &>/dev/null; then
@@ -2206,11 +2222,12 @@ case "${1:-}" in
         exit 0
         ;;
     --help|-h)
-        echo "xiNAS Post-Install Management Menu"
+        echo "xiNAS Management Menu v$XINAS_MENU_VERSION"
         echo ""
         echo "Usage: $0 [OPTIONS]"
         echo ""
         echo "Options:"
+        echo "  --version, -v    Show version information"
         echo "  --status, -s     Show system status and exit"
         echo "  --raid, -r       Show RAID info and exit"
         echo "  --healthcheck    Run health check (--quick|--standard|--deep|--json)"

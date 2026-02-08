@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-CLIENT_VERSION="1.10.0"
+CLIENT_VERSION="1.11.0"
 
 # Network configuration file
 NETWORK_CONFIG="$SCRIPT_DIR/network_config.yml"
