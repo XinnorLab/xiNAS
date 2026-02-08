@@ -1348,18 +1348,36 @@ run_and_display_client_healthcheck() {
     result_file=$(run_client_healthcheck "$profile_file" "${flags[@]}")
 
     if [[ -f "$result_file" ]]; then
-        if declare -f text_box &>/dev/null; then
-            text_box "🩺 Client Health Check Results" "$result_file"
-        else
-            cat "$result_file"
-        fi
+        # Extract overall status and summary from report
+        local overall summary saved_path=""
+        overall=$(grep 'Overall:' "$result_file" 2>/dev/null | head -1 | sed 's/.*\[//;s/\].*//')
+        summary=$(grep -E 'PASS:.*WARN:.*FAIL:' "$result_file" 2>/dev/null | head -1 | sed 's/^  //')
 
         if [[ -f "$CHC_TMP_DIR/last_report_text" ]]; then
-            local saved_path
             saved_path=$(cat "$CHC_TMP_DIR/last_report_text")
-            if [[ -n "$saved_path" ]] && declare -f msg_box &>/dev/null; then
-                msg_box "Report Saved" "Reports saved to:\n\n$saved_path\n\n(JSON report also saved alongside)"
+        fi
+
+        # Build completion message
+        local status_icon=""
+        case "$overall" in
+            PASS) status_icon="✅" ;;
+            WARN) status_icon="⚠️" ;;
+            FAIL) status_icon="❌" ;;
+            *)    status_icon="🩺" ;;
+        esac
+
+        if declare -f yes_no &>/dev/null; then
+            local notify_msg="Health check complete!\n\n${status_icon} Overall: ${overall}\n\n${summary}"
+            if [[ -n "$saved_path" ]]; then
+                notify_msg+="\n\nReport saved to:\n${saved_path}"
             fi
+            notify_msg+="\n\nWould you like to view the full report?"
+
+            if yes_no "🩺 Health Check Complete" "$notify_msg"; then
+                text_box "🩺 Client Health Check Results" "$result_file"
+            fi
+        else
+            cat "$result_file"
         fi
     fi
 }
