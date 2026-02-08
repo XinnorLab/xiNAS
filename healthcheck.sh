@@ -1023,73 +1023,105 @@ def compute_overall(results):
         return "WARN"
     return "PASS"
 
-def generate_text_report(results, metadata):
+class C:
+    """ANSI color codes for terminal output."""
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    RED = "\033[31m"
+    BLUE = "\033[34m"
+    CYAN = "\033[36m"
+    DIM = "\033[2m"
+    BOLD = "\033[1m"
+    NC = "\033[0m"
+
+def _status_color(status):
+    return {"PASS": C.GREEN, "WARN": C.YELLOW, "FAIL": C.RED, "SKIP": C.DIM}.get(status, "")
+
+def generate_text_report(results, metadata, color=False):
     W = 74
     lines = []
 
     overall = compute_overall(results)
-    status_icon = {"PASS": "[PASS]", "WARN": "[WARN]", "FAIL": "[FAIL]"}
+    oc = _status_color(overall) if color else ""
+    nc = C.NC if color else ""
+    bld = C.BOLD if color else ""
+    dim = C.DIM if color else ""
+    cyn = C.CYAN if color else ""
+    grn = C.GREEN if color else ""
+    ylw = C.YELLOW if color else ""
+    red = C.RED if color else ""
+    blu = C.BLUE if color else ""
 
-    lines.append("=" * (W + 2))
+    status_icon = {"PASS": f"{grn}[PASS]{nc}", "WARN": f"{ylw}[WARN]{nc}", "FAIL": f"{red}[FAIL]{nc}"}
+
+    lines.append(f"{dim}{'=' * (W + 2)}{nc}")
     title = "xiNAS HEALTH CHECK REPORT"
     pad = (W - len(title)) // 2
-    lines.append(f"{' ' * pad}{title}")
-    lines.append("=" * (W + 2))
+    lines.append(f"{bld}{' ' * pad}{title}{nc}")
+    lines.append(f"{dim}{'=' * (W + 2)}{nc}")
     lines.append("")
-    lines.append(f"  Date:      {metadata.get('timestamp', 'N/A')}")
-    lines.append(f"  Hostname:  {metadata.get('hostname', 'N/A')}")
-    lines.append(f"  Profile:   {metadata.get('profile', 'N/A')}")
-    lines.append(f"  Duration:  {metadata.get('duration', 'N/A')}")
+    lines.append(f"  {dim}Date:{nc}      {metadata.get('timestamp', 'N/A')}")
+    lines.append(f"  {dim}Hostname:{nc}  {metadata.get('hostname', 'N/A')}")
+    lines.append(f"  {dim}Profile:{nc}   {metadata.get('profile', 'N/A')}")
+    lines.append(f"  {dim}Duration:{nc}  {metadata.get('duration', 'N/A')}")
     lines.append("")
-    lines.append(f"  Overall:   {status_icon.get(overall, overall)} {overall}")
+    lines.append(f"  Overall:   {status_icon.get(overall, overall)} {oc}{bld}{overall}{nc}")
     lines.append("")
 
     # Summary counts
     counts = {"PASS": 0, "WARN": 0, "FAIL": 0, "SKIP": 0}
     for r in results:
         counts[r.status] = counts.get(r.status, 0) + 1
-    lines.append(f"  PASS: {counts['PASS']}  |  WARN: {counts['WARN']}  |  FAIL: {counts['FAIL']}  |  SKIP: {counts['SKIP']}")
+    lines.append(f"  {grn}PASS: {counts['PASS']}{nc}  |  {ylw}WARN: {counts['WARN']}{nc}  |  {red}FAIL: {counts['FAIL']}{nc}  |  {dim}SKIP: {counts['SKIP']}{nc}")
     lines.append("")
-    lines.append("-" * (W + 2))
+    lines.append(f"{dim}{'-' * (W + 2)}{nc}")
 
     # Group by section
-    sections = {}
+    sections_grouped = {}
     for r in results:
-        sections.setdefault(r.section, []).append(r)
+        sections_grouped.setdefault(r.section, []).append(r)
 
-    for section, section_results in sections.items():
+    icon_map = {
+        "PASS": f"{grn}[OK]{nc}",
+        "WARN": f"{ylw}[!!]{nc}",
+        "FAIL": f"{red}[XX]{nc}",
+        "SKIP": f"{dim}[--]{nc}",
+    }
+
+    for section, section_results in sections_grouped.items():
         lines.append("")
-        lines.append(f"  [{section.upper()}]")
-        lines.append(f"  {'─' * (W - 2)}")
+        lines.append(f"  {bld}{cyn}[{section.upper()}]{nc}")
+        lines.append(f"  {dim}{'─' * (W - 2)}{nc}")
 
         for r in section_results:
-            icon = {"PASS": "[OK]", "WARN": "[!!]", "FAIL": "[XX]", "SKIP": "[--]"}.get(r.status, "[??]")
-            lines.append(f"  {icon}  {r.name}")
-            lines.append(f"         Actual: {r.actual}  |  Expected: {r.expected}")
+            sc = _status_color(r.status) if color else ""
+            icon = icon_map.get(r.status, "[??]")
+            lines.append(f"  {icon}  {sc}{r.name}{nc}")
+            lines.append(f"         {dim}Actual:{nc} {r.actual}  {dim}|{nc}  {dim}Expected:{nc} {r.expected}")
             if r.evidence:
-                lines.append(f"         Evidence: {r.evidence}")
+                lines.append(f"         {dim}Evidence:{nc} {r.evidence}")
             if r.status in ("WARN", "FAIL"):
                 if r.impact:
-                    lines.append(f"         Impact: {r.impact}")
+                    lines.append(f"         {ylw}Impact:{nc} {r.impact}")
                 if r.fix_hint:
-                    lines.append(f"         Fix: {r.fix_hint}")
+                    lines.append(f"         {blu}Fix:{nc} {r.fix_hint}")
             lines.append("")
 
-    lines.append("=" * (W + 2))
+    lines.append(f"{dim}{'=' * (W + 2)}{nc}")
 
     # Remediation summary for failures and warnings
     issues = [r for r in results if r.status in ("FAIL", "WARN")]
     if issues:
         lines.append("")
-        lines.append("  REMEDIATION SUMMARY")
-        lines.append(f"  {'─' * (W - 2)}")
+        lines.append(f"  {bld}{red}REMEDIATION SUMMARY{nc}")
+        lines.append(f"  {dim}{'─' * (W - 2)}{nc}")
         for i, r in enumerate(issues, 1):
-            status_tag = "FAIL" if r.status == "FAIL" else "WARN"
-            lines.append(f"  {i}. [{status_tag}] {r.section} > {r.name}")
+            sc = red if r.status == "FAIL" else ylw
+            lines.append(f"  {i}. {sc}[{r.status}]{nc} {r.section} > {r.name}")
             if r.fix_hint:
-                lines.append(f"     -> {r.fix_hint}")
+                lines.append(f"     {blu}->{nc} {r.fix_hint}")
         lines.append("")
-        lines.append("=" * (W + 2))
+        lines.append(f"{dim}{'=' * (W + 2)}{nc}")
 
     return "\n".join(lines)
 
@@ -1180,11 +1212,12 @@ def main():
         "duration": duration,
     }
 
-    # Generate reports
-    text_report = generate_text_report(all_results, metadata)
+    # Generate reports (plain for saving, colored for display)
+    text_report_plain = generate_text_report(all_results, metadata, color=False)
+    text_report_color = generate_text_report(all_results, metadata, color=True)
     json_report = generate_json_report(all_results, metadata)
 
-    # Save reports
+    # Save reports (always plain text, no ANSI codes)
     if not flag_no_save:
         try:
             os.makedirs(log_dir, mode=0o755, exist_ok=True)
@@ -1192,7 +1225,7 @@ def main():
             text_path = os.path.join(log_dir, f"healthcheck_{ts}.txt")
             json_path = os.path.join(log_dir, f"healthcheck_{ts}.json")
             with open(text_path, "w") as f:
-                f.write(text_report)
+                f.write(text_report_plain)
             with open(json_path, "w") as f:
                 f.write(json_report)
             # Store paths for bash wrapper
@@ -1201,11 +1234,11 @@ def main():
         except OSError as e:
             print(f"Warning: Could not save reports: {e}", file=sys.stderr)
 
-    # Output
+    # Output (colored for terminal display)
     if flag_json_only:
         print(json_report)
     else:
-        print(text_report)
+        print(text_report_color)
 
 if __name__ == "__main__" or True:
     main()
