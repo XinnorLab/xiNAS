@@ -6,9 +6,21 @@
 set -euo pipefail
 
 HC_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HC_PROFILES_DIR="$HC_SCRIPT_DIR/healthcheck_profiles"
 HC_LOG_DIR="/var/log/xinas/healthcheck"
 HC_TMP_DIR=""
+
+# Locate profiles directory (check multiple locations)
+HC_PROFILES_DIR=""
+for _hc_p in "$HC_SCRIPT_DIR/healthcheck_profiles" \
+             "/usr/local/bin/healthcheck_profiles" \
+             "/opt/xiNAS/healthcheck_profiles" \
+             "/home/xinnor/xiNAS/healthcheck_profiles"; do
+    if [[ -d "$_hc_p" ]]; then
+        HC_PROFILES_DIR="$_hc_p"
+        break
+    fi
+done
+: "${HC_PROFILES_DIR:=$HC_SCRIPT_DIR/healthcheck_profiles}"
 
 # Source menu library if not already loaded (standalone mode)
 if ! declare -f menu_select &>/dev/null; then

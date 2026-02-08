@@ -25,6 +25,23 @@ else
     exit 1
 fi
 
+# Locate healthcheck.sh (check multiple locations)
+_find_healthcheck() {
+    local paths=(
+        "$SCRIPT_DIR/healthcheck.sh"
+        "/usr/local/bin/healthcheck.sh"
+        "/opt/xiNAS/healthcheck.sh"
+        "/home/xinnor/xiNAS/healthcheck.sh"
+    )
+    for p in "${paths[@]}"; do
+        if [[ -f "$p" ]]; then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Update check
 UPDATE_AVAILABLE=""
 
@@ -2130,7 +2147,7 @@ main_menu() {
             5) user_menu ;;
             6) manage_xiraid_exporter ;;
             7) quick_actions_menu ;;
-            8) source "$SCRIPT_DIR/healthcheck.sh"; healthcheck_menu ;;
+            8) local _hc; _hc=$(_find_healthcheck) && source "$_hc" && healthcheck_menu || msg_box "Error" "healthcheck.sh not found" ;;
             9)
                 if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
                     if yes_no "🔄 Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?"; then
@@ -2183,7 +2200,8 @@ case "${1:-}" in
         exit 0
         ;;
     --healthcheck|--hc)
-        source "$SCRIPT_DIR/healthcheck.sh"
+        _hc=$(_find_healthcheck) || { echo "Error: healthcheck.sh not found" >&2; exit 1; }
+        source "$_hc"
         _hc_cli_main "${@:2}"
         exit 0
         ;;
