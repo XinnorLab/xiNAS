@@ -2118,7 +2118,8 @@ main_menu() {
             "5" "👥 User Management" \
             "6" "$exporter_text" \
             "7" "⚡ Quick Actions" \
-            "8" "$update_text" \
+            "8" "🩺 Health Check" \
+            "9" "$update_text" \
             "0" "🚪 Exit") || break
 
         case "$choice" in
@@ -2129,7 +2130,8 @@ main_menu() {
             5) user_menu ;;
             6) manage_xiraid_exporter ;;
             7) quick_actions_menu ;;
-            8)
+            8) source "$SCRIPT_DIR/healthcheck.sh"; healthcheck_menu ;;
+            9)
                 if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
                     if yes_no "🔄 Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?"; then
                         do_update
@@ -2180,6 +2182,11 @@ case "${1:-}" in
         fi
         exit 0
         ;;
+    --healthcheck|--hc)
+        source "$SCRIPT_DIR/healthcheck.sh"
+        _hc_cli_main "${@:2}"
+        exit 0
+        ;;
     --help|-h)
         echo "xiNAS Post-Install Management Menu"
         echo ""
@@ -2188,6 +2195,7 @@ case "${1:-}" in
         echo "Options:"
         echo "  --status, -s     Show system status and exit"
         echo "  --raid, -r       Show RAID info and exit"
+        echo "  --healthcheck    Run health check (--quick|--standard|--deep|--json)"
         echo "  --no-welcome     Skip welcome screen"
         echo "  --help, -h       Show this help message"
         echo ""

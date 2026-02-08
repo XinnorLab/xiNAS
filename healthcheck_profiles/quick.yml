@@ -1,0 +1,31 @@
+profile: quick
+description: "Quick health check - /proc and /sys reads only"
+timeout_seconds: 60
+sections:
+  cpu: { enabled: true, checks: [governor, tuned_profile] }
+  kernel: { enabled: true, checks: [thp, ksm, mitigations] }
+  vm: { enabled: true, checks: [swappiness, dirty_background_ratio, dirty_ratio, vfs_cache_pressure] }
+  network: { enabled: true, checks: [link_state, mtu, sysctl_rmem, sysctl_wmem, sysctl_backlog] }
+  storage: { enabled: true, checks: [raid_status, mount_status] }
+  nfs: { enabled: true, checks: [service_running, threads, versions] }
+  rdma: { enabled: false }
+  nvme_health: { enabled: false }
+  filesystem: { enabled: false }
+expectations:
+  cpu_governor: "performance"
+  tuned_profile: "throughput-performance"
+  vm_swappiness: 1
+  vm_dirty_background_ratio: 5
+  vm_dirty_ratio: 15
+  vm_vfs_cache_pressure: 200
+  net_mtu: 9000
+  net_rmem_max: 1073741824
+  net_wmem_max: 1073741824
+  net_backlog: 250000
+  net_ring_rx: 8192
+  net_ring_tx: 8192
+  nvme_nr_requests: 512
+  nfs_threads: 64
+  thp: "never"
+  ksm: 0
+  mitigations_off: true
