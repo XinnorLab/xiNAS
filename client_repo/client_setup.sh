@@ -101,6 +101,23 @@ else
     exit 1
 fi
 
+# Locate client_healthcheck.sh (check multiple locations)
+_find_client_healthcheck() {
+    local paths=(
+        "$SCRIPT_DIR/client_healthcheck.sh"
+        "/opt/xinas-client/client_healthcheck.sh"
+        "/usr/local/bin/client_healthcheck.sh"
+        "/home/xinnor/xiNAS/client_repo/client_healthcheck.sh"
+    )
+    for p in "${paths[@]}"; do
+        if [[ -f "$p" ]]; then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Display Functions
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -3122,7 +3139,8 @@ advanced_settings_menu() {
             "5" "🚀 GPUDirect Storage (GDS)${gds_indicator}" \
             "6" "☸️  Kubernetes CSI NFS Driver" \
             "7" "🔍 Test Connection" \
-            "8" "🔄 Check for Updates" \
+            "8" "🩺 Client Health Check" \
+            "9" "🔄 Check for Updates" \
             "0" "🔙 Back to Main Menu") || return
 
         case "$choice" in
@@ -3133,7 +3151,8 @@ advanced_settings_menu() {
             5) gds_menu ;;
             6) kubernetes_csi_nfs_menu ;;
             7) test_connection ;;
-            8) check_and_update ;;
+            8) local _chc; _chc=$(_find_client_healthcheck) && source "$_chc" && client_healthcheck_menu || msg_box "Error" "client_healthcheck.sh not found" ;;
+            9) check_and_update ;;
             0) return ;;
         esac
     done
@@ -3414,6 +3433,12 @@ case "${1:-}" in
         kubectl get storageclass -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.provisioner}{"\n"}{end}' 2>/dev/null | grep -i nfs | sed 's/^/  /' || echo "  (none)"
         exit 0
         ;;
+    --healthcheck|--hc)
+        _chc=$(_find_client_healthcheck) || { echo -e "${RED}Error: client_healthcheck.sh not found${NC}" >&2; exit 1; }
+        source "$_chc"
+        _chc_cli_main "${@:2}"
+        exit 0
+        ;;
     --help|-h)
         echo "xiNAS Client Setup v$CLIENT_VERSION"
         echo ""
@@ -3422,6 +3447,7 @@ case "${1:-}" in
         echo "Options:"
         echo "  --status, -s              Show current NFS mounts"
         echo "  --mount, -m SERVER MOUNT  Quick mount (see below)"
+        echo "  --healthcheck             Run client health check (--default|--ai-training|--json)"
         echo "  --network-status, -n      Show network configuration status"
         echo "  --csi, --csi-nfs          Open Kubernetes CSI NFS menu"
         echo "  --csi-status              Show CSI NFS driver status"

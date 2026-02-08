@@ -1,0 +1,40 @@
+profile: default
+description: "Default client profile - general NFS client performance"
+timeout_seconds: 60
+sections:
+  host_info: { enabled: true, checks: [os_version, kernel_version, packages, time_sync] }
+  kernel_sysctl: { enabled: true, checks: [file_max, rmem_max, wmem_max, swappiness] }
+  nfs_client: { enabled: true, checks: [modules_loaded, modprobe_conf, sysctl_conf, rpc_stats] }
+  mounts: { enabled: true, checks: [active_mounts, nfs_version, mount_options, persistence] }
+  network: { enabled: true, checks: [link_state, mtu, errors_drops] }
+  rdma: { enabled: false }
+  gds: { enabled: false }
+  runtime: { enabled: true, checks: [nfs_errors, cpu_iowait, memory_pressure] }
+expectations:
+  nfs_version: "4.2"
+  mount_proto: "tcp"
+  mount_hard: true
+  mount_rsize: 1048576
+  mount_wsize: 1048576
+  mount_max_connect: 16
+  mount_lookupcache: "all"
+  mount_acregmin: 60
+  mount_acregmax: 600
+  mount_acdirmin: 60
+  mount_acdirmax: 600
+  sysctl_rmem_max: 268435456
+  sysctl_wmem_max: 268435456
+  sysctl_swappiness: 10
+  sysctl_file_max: 1048576
+  modprobe_max_session_slots: 180
+  modprobe_max_session_cb_slots: 48
+  modprobe_callback_nr_threads: 10
+  modprobe_nfs4_disable_idmapping: 1
+  modprobe_delay_retrans: -1
+  modprobe_nfs_access_max_cachesize: 4194304
+  modprobe_enable_ino64: 1
+  net_mtu: 9000
+  net_speed_min: 25000
+  nfs_retrans_warn: 100
+  nfs_timeout_warn: 10
+  packages_required: [nfs-common]

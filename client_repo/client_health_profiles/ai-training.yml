@@ -1,0 +1,43 @@
+profile: ai-training
+description: "AI/ML training workload - high throughput, large sequential reads, GDS optional"
+timeout_seconds: 300
+sections:
+  host_info: { enabled: true, checks: [os_version, kernel_version, packages, time_sync, gpu_inventory] }
+  kernel_sysctl: { enabled: true, checks: [file_max, rmem_max, wmem_max, swappiness, dirty_background_ratio, dirty_ratio, congestion_control] }
+  nfs_client: { enabled: true, checks: [modules_loaded, modprobe_conf, sysctl_conf, rpc_stats, dmesg_nfs] }
+  mounts: { enabled: true, checks: [active_mounts, nfs_version, mount_options, persistence, mountstats] }
+  network: { enabled: true, checks: [link_state, speed, mtu, errors_drops, tcp_retransmits, route_to_server] }
+  rdma: { enabled: true, checks: [rdma_devices, port_state] }
+  gds: { enabled: true, checks: [nvidia_driver, nvidia_fs_module, cufile_config, gds_libraries] }
+  runtime: { enabled: true, checks: [nfs_errors, cpu_iowait, memory_pressure, softirq_pressure] }
+expectations:
+  nfs_version: "4.2"
+  mount_proto: "rdma"
+  mount_hard: true
+  mount_rsize: 1048576
+  mount_wsize: 1048576
+  mount_max_connect: 16
+  mount_lookupcache: "all"
+  mount_acregmin: 60
+  mount_acregmax: 600
+  mount_acdirmin: 60
+  mount_acdirmax: 600
+  sysctl_rmem_max: 268435456
+  sysctl_wmem_max: 268435456
+  sysctl_swappiness: 10
+  sysctl_file_max: 1048576
+  sysctl_dirty_background_ratio: 5
+  sysctl_dirty_ratio: 20
+  modprobe_max_session_slots: 180
+  modprobe_max_session_cb_slots: 48
+  modprobe_callback_nr_threads: 10
+  modprobe_nfs4_disable_idmapping: 1
+  modprobe_delay_retrans: -1
+  modprobe_nfs_access_max_cachesize: 4194304
+  modprobe_enable_ino64: 1
+  net_mtu: 9000
+  net_speed_min: 100000
+  nfs_retrans_warn: 50
+  nfs_timeout_warn: 5
+  packages_required: [nfs-common, rdma-core]
+  gds_required: true
