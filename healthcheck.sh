@@ -1321,6 +1321,18 @@ run_and_display_healthcheck() {
             if yes_no "🩺 Health Check Complete" "$notify_msg"; then
                 text_box "🩺 Health Check Results" "$result_file"
             fi
+
+            # Offer remediation wizard if issues found
+            if [[ "$overall" != "PASS" ]] && [[ -f "$HC_TMP_DIR/last_report_json" ]]; then
+                local wiz_json_path
+                wiz_json_path=$(cat "$HC_TMP_DIR/last_report_json")
+                if [[ -f "$wiz_json_path" ]]; then
+                    if yes_no "🔧 Remediation Wizard" \
+                        "Issues were found in the health check.\n\nWould you like to run the remediation wizard\nto fix them automatically?"; then
+                        remediation_wizard "$wiz_json_path"
+                    fi
+                fi
+            fi
         else
             cat "$result_file"
         fi
@@ -1395,6 +1407,196 @@ view_report_directory() {
     fi
 }
 
+remediation_wizard() {
+    local json_path="$1"
+    _hc_ensure_tmp
+    local issues_file="$HC_TMP_DIR/fixable_issues"
+    local manual_file="$HC_TMP_DIR/manual_issues"
+    local sysctl_file="$HC_TMP_DIR/sysctl_applied"
+
+    # Extract fixable issues from JSON report
+    python3 - "$json_path" "$issues_file" "$manual_file" << 'PYEOF'
+import sys, json, re
+
+json_path = sys.argv[1]
+issues_path = sys.argv[2]
+manual_path = sys.argv[3]
+
+AUTO_PATTERNS = [
+    r'^sysctl\s+-w\s+',
+    r'^echo\s+.*\s*>\s*/',
+    r'^cpupower\s+',
+    r'^tuned-adm\s+',
+    r'^ip\s+link\s+set\s+',
+    r'^ethtool\s+-[GK]\s+',
+    r'^mlnx_qos\s+',
+    r'^systemctl\s+(start|restart|enable)\s+',
+    r'^modprobe\s+',
+    r'^apt\s+install\s+',
+    r'^timedatectl\s+',
+]
+
+def is_auto_fixable(hint):
+    for pat in AUTO_PATTERNS:
+        if re.match(pat, hint):
+            return True
+    return False
+
+with open(json_path) as f:
+    report = json.load(f)
+
+auto_issues = []
+manual_issues = []
+idx = 0
+
+for check in report.get("checks", []):
+    if check["status"] not in ("FAIL", "WARN"):
+        continue
+    hint = check.get("fix_hint", "").strip()
+    if not hint:
+        continue
+    idx += 1
+    line = "{idx}|{status}|{section}|{name}|{hint}|{auto}".format(
+        idx=idx, status=check["status"], section=check["section"],
+        name=check["name"], hint=hint, auto="1" if is_auto_fixable(hint) else "0"
+    )
+    if is_auto_fixable(hint):
+        auto_issues.append(line)
+    else:
+        manual_issues.append(line)
+
+with open(issues_path, "w") as f:
+    f.write("\n".join(auto_issues))
+
+with open(manual_path, "w") as f:
+    f.write("\n".join(manual_issues))
+PYEOF
+
+    # Count issues
+    local auto_count=0 manual_count=0
+    [[ -s "$issues_file" ]] && auto_count=$(wc -l < "$issues_file")
+    [[ -s "$manual_file" ]] && manual_count=$(wc -l < "$manual_file")
+
+    if [[ $auto_count -eq 0 && $manual_count -eq 0 ]]; then
+        msg_box "✅ No Fixable Issues" "No issues with fix hints were found.\n\nThe system looks good!"
+        return
+    fi
+
+    # Build check_list from auto-fixable issues
+    if [[ $auto_count -gt 0 ]]; then
+        local -a cl_items=()
+        while IFS='|' read -r idx status section name hint auto; do
+            [[ -z "$idx" ]] && continue
+            local default_state="OFF"
+            [[ "$status" == "FAIL" ]] && default_state="ON"
+            local label="[$status] $section > $name"
+            # Truncate label if too long for whiptail
+            [[ ${#label} -gt 60 ]] && label="${label:0:57}..."
+            cl_items+=("$idx" "$label" "$default_state")
+        done < "$issues_file"
+
+        local selected=""
+        selected=$(check_list "🔧 Remediation Wizard" \
+            "Select issues to fix ($auto_count auto-fixable).\nFAIL items are pre-selected, WARN items are not." \
+            "${cl_items[@]}") || {
+            # User cancelled check_list
+            if [[ $manual_count -gt 0 ]]; then
+                _hc_show_manual_guidance "$manual_file"
+            fi
+            return
+        }
+
+        if [[ -n "$selected" ]]; then
+            > "$sysctl_file"  # initialize sysctl tracking file
+            local applied=0 failed=0
+
+            # Process each selected issue
+            for sel_idx in $selected; do
+                # Strip quotes from check_list output
+                sel_idx="${sel_idx//\"/}"
+                local line=""
+                line=$(grep "^${sel_idx}|" "$issues_file" 2>/dev/null || true)
+                [[ -z "$line" ]] && continue
+
+                IFS='|' read -r _idx status section name hint _auto <<< "$line"
+
+                if yes_no "🔧 Apply Fix" \
+                    "[$status] $section > $name\n\nCommand to run:\n  $hint\n\nExecute this fix?"; then
+
+                    local output="" rc=0
+                    output=$(sudo bash -c "$hint" 2>&1) || rc=$?
+
+                    if [[ $rc -eq 0 ]]; then
+                        ((applied++))
+                        msg_box "✅ Fix Applied" "[$status] $section > $name\n\nCommand succeeded.\n${output:+\nOutput: $output}"
+                        # Track sysctl commands for persistence
+                        if [[ "$hint" =~ ^sysctl\ -w\  ]]; then
+                            echo "$hint" >> "$sysctl_file"
+                        fi
+                    else
+                        ((failed++))
+                        msg_box "❌ Fix Failed" "[$status] $section > $name\n\nCommand failed (exit code $rc).\n${output:+\nOutput: $output}"
+                    fi
+                fi
+            done
+
+            # Summary
+            if [[ $applied -gt 0 || $failed -gt 0 ]]; then
+                msg_box "🔧 Remediation Summary" "$applied fix(es) applied successfully.\n$failed fix(es) failed."
+            fi
+
+            # Sysctl persistence
+            if [[ -s "$sysctl_file" ]]; then
+                if yes_no "💾 Persist Sysctl Changes" \
+                    "Some sysctl values were changed at runtime.\n\nMake them persistent across reboots?\n(Writes to /etc/sysctl.d/99-xinas-tuning.conf)"; then
+                    local sysctl_conf="/etc/sysctl.d/99-xinas-tuning.conf"
+                    {
+                        echo "# xiNAS health check remediation - $(date '+%Y-%m-%d %H:%M:%S')"
+                        while IFS= read -r scmd; do
+                            # Extract key=value from "sysctl -w key=value"
+                            local kv="${scmd#sysctl -w }"
+                            echo "$kv"
+                        done < "$sysctl_file"
+                    } | sudo tee "$sysctl_conf" > /dev/null
+                    msg_box "💾 Saved" "Sysctl settings written to:\n$sysctl_conf"
+                fi
+            fi
+        fi
+    fi
+
+    # Show manual guidance if any
+    if [[ $manual_count -gt 0 ]]; then
+        _hc_show_manual_guidance "$manual_file"
+    fi
+
+    # Offer re-run
+    if yes_no "🔄 Re-run Health Check" \
+        "Would you like to re-run a quick health check\nto verify the applied fixes?"; then
+        run_and_display_healthcheck "quick"
+    fi
+}
+
+_hc_show_manual_guidance() {
+    local manual_file="$1"
+    _hc_ensure_tmp
+    local guide="$HC_TMP_DIR/manual_guide"
+
+    {
+        echo "The following issues require manual intervention:"
+        echo ""
+        local i=0
+        while IFS='|' read -r idx status section name hint auto; do
+            [[ -z "$idx" ]] && continue
+            ((i++))
+            echo "  $i. [$status] $section > $name"
+            echo "     -> $hint"
+            echo ""
+        done < "$manual_file"
+    } > "$guide"
+
+    text_box "📋 Manual Remediation Steps" "$guide"
+}
+
 healthcheck_menu() {
     local choice
     while true; do
@@ -1408,6 +1610,7 @@ healthcheck_menu() {
             "3" "🔬 Deep Check (5-10 min)" \
             "4" "📄 View Last Report" \
             "5" "📂 Browse Reports" \
+            "6" "🔧 Remediation Wizard" \
             "0" "🔙 Back") || break
 
         case "$choice" in
@@ -1426,6 +1629,23 @@ healthcheck_menu() {
                 ;;
             4) view_last_report ;;
             5) view_report_directory ;;
+            6)
+                # Find last JSON report
+                _hc_ensure_tmp
+                local json_path=""
+                if [[ -f "$HC_TMP_DIR/last_report_json" ]]; then
+                    json_path=$(cat "$HC_TMP_DIR/last_report_json")
+                fi
+                if [[ -z "$json_path" ]] || [[ ! -f "$json_path" ]]; then
+                    # Fall back to latest saved JSON
+                    json_path=$(ls -t "$HC_LOG_DIR"/healthcheck_*.json 2>/dev/null | head -1)
+                fi
+                if [[ -n "$json_path" ]] && [[ -f "$json_path" ]]; then
+                    remediation_wizard "$json_path"
+                else
+                    msg_box "No Report" "No health check report found.\n\nRun a health check first."
+                fi
+                ;;
             0) break ;;
         esac
     done

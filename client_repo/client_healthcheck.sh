@@ -1427,6 +1427,18 @@ run_and_display_client_healthcheck() {
             if yes_no "🩺 Health Check Complete" "$notify_msg"; then
                 text_box "🩺 Client Health Check Results" "$result_file"
             fi
+
+            # Offer remediation wizard if issues found
+            if [[ "$overall" != "PASS" ]] && [[ -f "$CHC_TMP_DIR/last_report_json" ]]; then
+                local wiz_json_path
+                wiz_json_path=$(cat "$CHC_TMP_DIR/last_report_json")
+                if [[ -f "$wiz_json_path" ]]; then
+                    if yes_no "🔧 Remediation Wizard" \
+                        "Issues were found in the health check.\n\nWould you like to run the remediation wizard\nto fix them automatically?"; then
+                        client_remediation_wizard "$wiz_json_path"
+                    fi
+                fi
+            fi
         else
             cat "$result_file"
         fi
@@ -1499,6 +1511,185 @@ view_client_report_directory() {
     fi
 }
 
+client_remediation_wizard() {
+    local json_path="$1"
+    _chc_ensure_tmp
+    local issues_file="$CHC_TMP_DIR/fixable_issues"
+    local manual_file="$CHC_TMP_DIR/manual_issues"
+    local sysctl_file="$CHC_TMP_DIR/sysctl_applied"
+
+    # Extract fixable issues from JSON report
+    python3 - "$json_path" "$issues_file" "$manual_file" << 'PYEOF'
+import sys, json, re
+
+json_path = sys.argv[1]
+issues_path = sys.argv[2]
+manual_path = sys.argv[3]
+
+AUTO_PATTERNS = [
+    r'^sysctl\s+-w\s+',
+    r'^echo\s+.*\s*>\s*/',
+    r'^ip\s+link\s+set\s+',
+    r'^modprobe\s+',
+    r'^apt\s+install\s+',
+    r'^timedatectl\s+',
+    r'^systemctl\s+(start|restart|enable)\s+',
+]
+
+def is_auto_fixable(hint):
+    for pat in AUTO_PATTERNS:
+        if re.match(pat, hint):
+            return True
+    return False
+
+with open(json_path) as f:
+    report = json.load(f)
+
+auto_issues = []
+manual_issues = []
+idx = 0
+
+for check in report.get("checks", []):
+    if check["status"] not in ("FAIL", "WARN"):
+        continue
+    hint = check.get("fix_hint", "").strip()
+    if not hint:
+        continue
+    idx += 1
+    line = "{idx}|{status}|{section}|{name}|{hint}|{auto}".format(
+        idx=idx, status=check["status"], section=check["section"],
+        name=check["name"], hint=hint, auto="1" if is_auto_fixable(hint) else "0"
+    )
+    if is_auto_fixable(hint):
+        auto_issues.append(line)
+    else:
+        manual_issues.append(line)
+
+with open(issues_path, "w") as f:
+    f.write("\n".join(auto_issues))
+
+with open(manual_path, "w") as f:
+    f.write("\n".join(manual_issues))
+PYEOF
+
+    # Count issues
+    local auto_count=0 manual_count=0
+    [[ -s "$issues_file" ]] && auto_count=$(wc -l < "$issues_file")
+    [[ -s "$manual_file" ]] && manual_count=$(wc -l < "$manual_file")
+
+    if [[ $auto_count -eq 0 && $manual_count -eq 0 ]]; then
+        msg_box "✅ No Fixable Issues" "No issues with fix hints were found.\n\nThe client looks good!"
+        return
+    fi
+
+    # Build check_list from auto-fixable issues
+    if [[ $auto_count -gt 0 ]]; then
+        local -a cl_items=()
+        while IFS='|' read -r idx status section name hint auto; do
+            [[ -z "$idx" ]] && continue
+            local default_state="OFF"
+            [[ "$status" == "FAIL" ]] && default_state="ON"
+            local label="[$status] $section > $name"
+            [[ ${#label} -gt 60 ]] && label="${label:0:57}..."
+            cl_items+=("$idx" "$label" "$default_state")
+        done < "$issues_file"
+
+        local selected=""
+        selected=$(check_list "🔧 Client Remediation Wizard" \
+            "Select issues to fix ($auto_count auto-fixable).\nFAIL items are pre-selected, WARN items are not." \
+            "${cl_items[@]}") || {
+            if [[ $manual_count -gt 0 ]]; then
+                _chc_show_manual_guidance "$manual_file"
+            fi
+            return
+        }
+
+        if [[ -n "$selected" ]]; then
+            > "$sysctl_file"
+            local applied=0 failed=0
+
+            for sel_idx in $selected; do
+                sel_idx="${sel_idx//\"/}"
+                local line=""
+                line=$(grep "^${sel_idx}|" "$issues_file" 2>/dev/null || true)
+                [[ -z "$line" ]] && continue
+
+                IFS='|' read -r _idx status section name hint _auto <<< "$line"
+
+                if yes_no "🔧 Apply Fix" \
+                    "[$status] $section > $name\n\nCommand to run:\n  $hint\n\nExecute this fix?"; then
+
+                    local output="" rc=0
+                    output=$(bash -c "$hint" 2>&1) || rc=$?
+
+                    if [[ $rc -eq 0 ]]; then
+                        ((applied++))
+                        msg_box "✅ Fix Applied" "[$status] $section > $name\n\nCommand succeeded.\n${output:+\nOutput: $output}"
+                        if [[ "$hint" =~ ^sysctl\ -w\  ]]; then
+                            echo "$hint" >> "$sysctl_file"
+                        fi
+                    else
+                        ((failed++))
+                        msg_box "❌ Fix Failed" "[$status] $section > $name\n\nCommand failed (exit code $rc).\n${output:+\nOutput: $output}"
+                    fi
+                fi
+            done
+
+            if [[ $applied -gt 0 || $failed -gt 0 ]]; then
+                msg_box "🔧 Remediation Summary" "$applied fix(es) applied successfully.\n$failed fix(es) failed."
+            fi
+
+            # Sysctl persistence
+            if [[ -s "$sysctl_file" ]]; then
+                if yes_no "💾 Persist Sysctl Changes" \
+                    "Some sysctl values were changed at runtime.\n\nMake them persistent across reboots?\n(Writes to /etc/sysctl.d/90-nfs-client-tuning.conf)"; then
+                    local sysctl_conf="/etc/sysctl.d/90-nfs-client-tuning.conf"
+                    {
+                        echo "# xiNAS client health check remediation - $(date '+%Y-%m-%d %H:%M:%S')"
+                        while IFS= read -r scmd; do
+                            local kv="${scmd#sysctl -w }"
+                            echo "$kv"
+                        done < "$sysctl_file"
+                    } > "$sysctl_conf"
+                    msg_box "💾 Saved" "Sysctl settings written to:\n$sysctl_conf"
+                fi
+            fi
+        fi
+    fi
+
+    # Show manual guidance if any
+    if [[ $manual_count -gt 0 ]]; then
+        _chc_show_manual_guidance "$manual_file"
+    fi
+
+    # Offer re-run
+    if yes_no "🔄 Re-run Health Check" \
+        "Would you like to re-run a quick health check\nto verify the applied fixes?"; then
+        run_and_display_client_healthcheck "default"
+    fi
+}
+
+_chc_show_manual_guidance() {
+    local manual_file="$1"
+    _chc_ensure_tmp
+    local guide="$CHC_TMP_DIR/manual_guide"
+
+    {
+        echo "The following issues require manual intervention:"
+        echo ""
+        local i=0
+        while IFS='|' read -r idx status section name hint auto; do
+            [[ -z "$idx" ]] && continue
+            ((i++))
+            echo "  $i. [$status] $section > $name"
+            echo "     -> $hint"
+            echo ""
+        done < "$manual_file"
+    } > "$guide"
+
+    text_box "📋 Manual Remediation Steps" "$guide"
+}
+
 client_healthcheck_menu() {
     # Determine available profiles
     local -a profiles=()
@@ -1518,6 +1709,7 @@ client_healthcheck_menu() {
             "3" "🔬 Deep Check (5-10 min)" \
             "4" "📄 View Last Report" \
             "5" "📂 Browse Reports" \
+            "6" "🔧 Remediation Wizard" \
             "0" "🔙 Back") || break
 
         case "$choice" in
@@ -1586,6 +1778,21 @@ client_healthcheck_menu() {
                 ;;
             4) view_last_client_report ;;
             5) view_client_report_directory ;;
+            6)
+                _chc_ensure_tmp
+                local json_path=""
+                if [[ -f "$CHC_TMP_DIR/last_report_json" ]]; then
+                    json_path=$(cat "$CHC_TMP_DIR/last_report_json")
+                fi
+                if [[ -z "$json_path" ]] || [[ ! -f "$json_path" ]]; then
+                    json_path=$(ls -t "$CHC_LOG_DIR"/client-health_*.json 2>/dev/null | head -1)
+                fi
+                if [[ -n "$json_path" ]] && [[ -f "$json_path" ]]; then
+                    client_remediation_wizard "$json_path"
+                else
+                    msg_box "No Report" "No health check report found.\n\nRun a health check first."
+                fi
+                ;;
             0) break ;;
         esac
     done
