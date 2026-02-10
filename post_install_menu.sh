@@ -2011,6 +2011,7 @@ manage_xiraid_exporter() {
         else
             echo -e "  ${WHITE}📈 xiRAID Exporter:${NC} ${DIM}Not installed${NC}"
             echo -e "  ${DIM}Prometheus metrics exporter for xiRAID storage${NC}"
+            echo -e "  ${DIM}Developed by E4 Computer Engineering${NC}"
             echo ""
 
             local choice
@@ -2026,7 +2027,7 @@ manage_xiraid_exporter() {
                     if [[ -z "$latest" ]]; then
                         msg_box "❌ Error" "Could not fetch latest version from GitHub.\nCheck your internet connection."
                     else
-                        if yes_no "📥 Install" "Install xiraid-exporter v${latest}?\n\nThis will:\n- Download the .deb package from GitHub\n- Install and enable the systemd service\n- Expose metrics on port 9827"; then
+                        if yes_no "📥 Install" "Install xiraid-exporter v${latest}?\nDeveloped by E4 Computer Engineering\n\nThis will:\n- Download the .deb package from GitHub\n- Install and enable the systemd service\n- Expose metrics on port 9827"; then
                             install_xiraid_exporter "$latest"
                         fi
                     fi
