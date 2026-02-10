@@ -81,7 +81,20 @@
 
 - name: Set fact – parsed pools
   ansible.builtin.set_fact:
-    existing_pools: "{{ xiraid_pools.stdout | from_json }}"
+    _raw_pools: "{{ xiraid_pools.stdout | from_json }}"
+  tags: [raid_fs, raid]
+
+- name: Set fact – existing pool names
+  ansible.builtin.set_fact:
+    existing_pool_names: >-
+      {%- set parsed = _raw_pools | default({}, true) -%}
+      {%- if parsed is mapping -%}
+        {{ parsed.keys() | list }}
+      {%- elif parsed is iterable and parsed is not string -%}
+        {{ parsed | map(attribute='name') | list }}
+      {%- else -%}
+        []
+      {%- endif -%}
   tags: [raid_fs, raid]
 
 - name: Create xiRAID spare pools
@@ -98,7 +111,7 @@
   when:
     - xiraid_spare_pools is defined
     - xiraid_spare_pools | length > 0
-    - item.name not in ((existing_pools | default([], true) | json_query('[].name')) | default([], true))
+    - item.name not in existing_pool_names
   tags: [raid_fs, raid]
 
 - name: Find active MD RAID arrays
@@ -148,7 +161,22 @@
 
 - name: Set fact – parsed arrays
   ansible.builtin.set_fact:
-    existing_arrays: "{{ xiraid_list.stdout | from_json }}"
+    _raw_arrays: "{{ xiraid_list.stdout | from_json }}"
+  tags: [raid_fs, raid]
+
+# xicli returns either a list of dicts or a dict keyed by array name.
+# Normalise to a flat list of array name strings for the skip check.
+- name: Set fact – existing array names
+  ansible.builtin.set_fact:
+    existing_array_names: >-
+      {%- set parsed = _raw_arrays | default({}, true) -%}
+      {%- if parsed is mapping -%}
+        {{ parsed.keys() | list }}
+      {%- elif parsed is iterable and parsed is not string -%}
+        {{ parsed | map(attribute='name') | list }}
+      {%- else -%}
+        []
+      {%- endif -%}
   tags: [raid_fs, raid]
 
 - name: Create xiRAID arrays that are missing
@@ -156,10 +184,7 @@
   loop: "{{ xiraid_arrays }}"
   loop_control:
     loop_var: item
-  # If `xiraid_list.stdout` couldn't be parsed, `existing_arrays` may be `None`.
-  # Apply `default([])` before the `json_query` filter to avoid type errors.
-  # Pass `true` to `default` so that `None` is treated as undefined.
-  when: item.name not in ((existing_arrays | default([], true) | json_query('[].name')) | default([], true))
+  when: item.name not in existing_array_names
   tags: [raid_fs, raid]
 
 - name: Attach spare pools to existing arrays
