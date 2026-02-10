@@ -166,18 +166,40 @@ try:
 except Exception:
     sys.exit(1)
 
-arrays = data if isinstance(data, list) else data.get("arrays", data.get("data", []))
+# Handle multiple JSON shapes:
+#   list of array dicts:       [{"name": "data", ...}, ...]
+#   "arrays" or "data" key:    {"arrays": [...]}
+#   dict keyed by array name:  {"data": {...}, "log": {...}}
+if isinstance(data, list):
+    arrays = data
+elif "arrays" in data:
+    arrays = data["arrays"]
+else:
+    # Dict keyed by array name — check if values look like array objects
+    vals = [v for v in data.values() if isinstance(v, dict) and ("level" in v or "devices" in v)]
+    arrays = vals if vals else []
 if not arrays:
     sys.exit(1)
 
 for a in arrays:
     name = a.get("name", "unknown")
     level = a.get("level", a.get("raid_level", "?"))
-    devices = a.get("devices", a.get("disks", []))
+    raw_devs = a.get("devices", a.get("disks", []))
     strip = a.get("strip_size", a.get("strip_size_kb", "?"))
     state = a.get("state", a.get("status", "unknown"))
-    dev_count = len(devices) if isinstance(devices, list) else "?"
-    dev_list = " ".join(devices) if isinstance(devices, list) else str(devices)
+    # devices may be simple strings or [index, path, status] triples
+    devices = []
+    if isinstance(raw_devs, list):
+        for d in raw_devs:
+            if isinstance(d, list) and len(d) >= 2:
+                devices.append(str(d[1]))
+            elif isinstance(d, str):
+                devices.append(d)
+    dev_count = len(devices)
+    # state may be a list like ["online", "initialized"]
+    if isinstance(state, list):
+        state = ",".join(state)
+    dev_list = " ".join(devices)
     print(f"{name}|{level}|{dev_count}|{strip}|{state}|{dev_list}")
 PYEOF2
 )
