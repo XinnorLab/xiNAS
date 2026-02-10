@@ -97,10 +97,16 @@ _menu_repeat_char() {
     printf '%s' "$result"
 }
 
+# Return the display width of a string (handles emoji and wide chars)
+_menu_display_width() {
+    printf '%s' "$1" | wc -L
+}
+
 _menu_draw_box() {
     local title="$1"
     local width="${2:-60}"
-    local title_len=${#title}
+    local title_len
+    title_len=$(_menu_display_width "$title")
     # Account for: ╔ (1) + left padding + space (1) + title + space (1) + right padding + ╗ (1)
     local left_pad=$(( (width - title_len - 4) / 2 ))
     local right_pad=$(( width - title_len - 4 - left_pad ))
@@ -164,7 +170,8 @@ menu_select() {
 
         # Prompt line with borders
         if [[ -n "$prompt" ]]; then
-            local prompt_len=${#prompt}
+            local prompt_len
+            prompt_len=$(_menu_display_width "$prompt")
             local prompt_pad=$((inner_width - prompt_len - 2))
             [[ $prompt_pad -lt 0 ]] && prompt_pad=0
             printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
@@ -245,7 +252,8 @@ msg_box() {
     # Calculate width based on content
     local max_line=0
     while IFS= read -r line; do
-        [[ ${#line} -gt $max_line ]] && max_line=${#line}
+        local _dw; _dw=$(_menu_display_width "$line")
+        [[ $_dw -gt $max_line ]] && max_line=$_dw
     done <<< "$message"
     [[ $((max_line + 6)) -gt $width ]] && width=$((max_line + 6))
     [[ $width -gt 78 ]] && width=78
@@ -258,7 +266,7 @@ msg_box() {
 
     # Content lines with side borders
     while IFS= read -r line; do
-        local line_len=${#line}
+        local line_len; line_len=$(_menu_display_width "$line")
         local padding=$((inner_width - line_len - 2))
         [[ $padding -lt 0 ]] && padding=0
         printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$line" >/dev/tty
@@ -301,7 +309,8 @@ yes_no() {
     # Calculate width based on longest line
     local max_line=0
     while IFS= read -r line; do
-        [[ ${#line} -gt $max_line ]] && max_line=${#line}
+        local _dw; _dw=$(_menu_display_width "$line")
+        [[ $_dw -gt $max_line ]] && max_line=$_dw
     done <<< "$question"
     [[ $((max_line + 6)) -gt $width ]] && width=$((max_line + 6))
     [[ $width -gt 78 ]] && width=78
@@ -318,7 +327,7 @@ yes_no() {
 
         # Question lines with borders
         while IFS= read -r line; do
-            local line_len=${#line}
+            local line_len; line_len=$(_menu_display_width "$line")
             local padding=$((inner_width - line_len - 2))
             [[ $padding -lt 0 ]] && padding=0
             printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$line" >/dev/tty
@@ -363,7 +372,7 @@ yes_no() {
 
         # Footer with help text
         local help_text="←→ Switch  Enter Confirm"
-        local help_len=${#help_text}
+        local help_len; help_len=$(_menu_display_width "$help_text")
         local help_pad=$((inner_width - help_len - 1))
         [[ $help_pad -lt 0 ]] && help_pad=0
         printf "${CYAN}${BOX_V}${NC} ${DIM}%s${NC}" "$help_text" >/dev/tty
@@ -423,7 +432,8 @@ input_box() {
     # Calculate width based on longest line
     local max_line=0
     while IFS= read -r line; do
-        [[ ${#line} -gt $max_line ]] && max_line=${#line}
+        local _dw; _dw=$(_menu_display_width "$line")
+        [[ $_dw -gt $max_line ]] && max_line=$_dw
     done <<< "$prompt"
     [[ $((max_line + 6)) -gt $width ]] && width=$((max_line + 6))
     [[ $width -gt 78 ]] && width=78
@@ -437,7 +447,7 @@ input_box() {
 
     # Prompt lines with borders
     while IFS= read -r line; do
-        local line_len=${#line}
+        local line_len; line_len=$(_menu_display_width "$line")
         local padding=$((inner_width - line_len - 2))
         [[ $padding -lt 0 ]] && padding=0
         printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$line" >/dev/tty
@@ -564,7 +574,7 @@ text_area() {
 
     # Prompt lines with borders
     while IFS= read -r line; do
-        local line_len=${#line}
+        local line_len; line_len=$(_menu_display_width "$line")
         local padding=$((inner_width - line_len - 2))
         [[ $padding -lt 0 ]] && padding=0
         printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$line" >/dev/tty
@@ -628,7 +638,8 @@ info_box() {
     # Calculate width based on longest line
     local max_line=0
     while IFS= read -r line; do
-        [[ ${#line} -gt $max_line ]] && max_line=${#line}
+        local _dw; _dw=$(_menu_display_width "$line")
+        [[ $_dw -gt $max_line ]] && max_line=$_dw
     done <<< "$message"
     [[ $((max_line + 8)) -gt $width ]] && width=$((max_line + 8))
     [[ $width -gt 78 ]] && width=78
@@ -642,7 +653,7 @@ info_box() {
     # Content lines with borders
     local first_line=1
     while IFS= read -r line; do
-        local line_len=${#line}
+        local line_len; line_len=$(_menu_display_width "$line")
         local prefix_len=2
         [[ $first_line -eq 1 ]] && prefix_len=4  # "⟳ " takes 2 extra
         local padding=$((inner_width - line_len - prefix_len))
@@ -703,7 +714,8 @@ check_list() {
 
         # Prompt line with borders
         if [[ -n "$prompt" ]]; then
-            local prompt_len=${#prompt}
+            local prompt_len
+            prompt_len=$(_menu_display_width "$prompt")
             local prompt_pad=$((inner_width - prompt_len - 2))
             [[ $prompt_pad -lt 0 ]] && prompt_pad=0
             printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
