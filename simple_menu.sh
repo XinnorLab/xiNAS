@@ -148,17 +148,14 @@ check_remove_xiraid() {
     return 0
 }
 
-use_existing_raid() {
-    # Query existing xiRAID arrays via xicli
-    if ! command -v xicli &>/dev/null; then
-        msg_box "❌ Error" "xicli is not installed.\nCannot query existing RAID arrays."
-        return 1
-    fi
+# Detection-only: populate $TMP_DIR/arrays.txt with parsed array info
+# Returns 0 if arrays found, 1 if none (or xicli unavailable)
+detect_xiraid_arrays() {
+    command -v xicli &>/dev/null || return 1
 
     local json_out
-    json_out=$(xicli raid show -f json 2>/dev/null) || json_out=""
+    json_out=$(xicli raid show -f json 2>/dev/null) || return 1
 
-    # Parse arrays using Python
     local arrays_file="$TMP_DIR/arrays.txt"
     local py_script
     py_script=$(cat << 'PYEOF2'
@@ -186,10 +183,14 @@ PYEOF2
 )
     echo "$json_out" | python3 -c "$py_script" > "$arrays_file" 2>/dev/null
 
-    if [[ ! -s "$arrays_file" ]]; then
-        msg_box "❌ No Arrays Found" "No existing RAID arrays detected.\n\nUse 'Fresh Install' or create arrays via\nAdvanced Settings → Configure RAID (Manual)."
-        return 1
-    fi
+    [[ -s "$arrays_file" ]]
+}
+
+# Interactive reuse flow: map DATA + LOG arrays, write config via yq
+# Requires detect_xiraid_arrays to have been called first
+# Returns 0 on success, 1 if user declines or arrays insufficient
+reuse_existing_arrays() {
+    local arrays_file="$TMP_DIR/arrays.txt"
 
     # Display arrays to user
     local display_file="$TMP_DIR/array_display.txt"
@@ -202,23 +203,29 @@ PYEOF2
     } > "$display_file"
     text_box "💾 Existing RAID Arrays" "$display_file"
 
-    # Build array name list for menus
+    # Ask whether to reuse
+    if ! yes_no "Reuse Arrays?" "Existing xiRAID arrays found. Reuse them?"; then
+        return 1
+    fi
+
+    # Build array name list
     local -a array_names=()
     while IFS='|' read -r name level dev_count strip state dev_list; do
         array_names+=("$name")
     done < "$arrays_file"
 
-    if [[ ${#array_names[@]} -eq 0 ]]; then
-        msg_box "❌ Error" "Failed to parse array names."
+    # Require at least 2 arrays (DATA + LOG)
+    if [[ ${#array_names[@]} -lt 2 ]]; then
+        msg_box "❌ Not Enough Arrays" \
+            "Reuse requires exactly 2 arrays (DATA + LOG).\nOnly ${#array_names[@]} array(s) found.\n\nProceeding with a clean install to recreate all arrays."
         return 1
     fi
 
     # Select DATA array
     local -a data_menu_items=()
     for aname in "${array_names[@]}"; do
-        local info
+        local info alevel acount
         info=$(grep "^${aname}|" "$arrays_file" | head -1)
-        local alevel acount
         alevel=$(echo "$info" | cut -d'|' -f2)
         acount=$(echo "$info" | cut -d'|' -f3)
         data_menu_items+=("$aname" "RAID$alevel, $acount drives")
@@ -228,13 +235,12 @@ PYEOF2
     data_array=$(menu_select "Select Data Array" "Choose the array for primary data storage:" \
         "${data_menu_items[@]}") || return 1
 
-    # Select LOG array (optional)
-    local -a log_menu_items=("none" "No log device")
+    # Select LOG array (mandatory — no "none" option)
+    local -a log_menu_items=()
     for aname in "${array_names[@]}"; do
         [[ "$aname" == "$data_array" ]] && continue
-        local info
+        local info alevel acount
         info=$(grep "^${aname}|" "$arrays_file" | head -1)
-        local alevel acount
         alevel=$(echo "$info" | cut -d'|' -f2)
         acount=$(echo "$info" | cut -d'|' -f3)
         log_menu_items+=("$aname" "RAID$alevel, $acount drives")
@@ -244,43 +250,39 @@ PYEOF2
     log_array=$(menu_select "Select Log Array" "Choose the array for XFS log device:" \
         "${log_menu_items[@]}") || return 1
 
-    [[ "$log_array" == "none" ]] && log_array=""
-
     # Get mountpoint and label
     local mountpoint label
     mountpoint=$(input_box "Mountpoint" "XFS mountpoint:" "/mnt/data") || return 1
     label=$(input_box "FS Label" "XFS filesystem label:" "nfsdata") || return 1
 
     # Read array details for config
-    local data_info data_level data_strip data_devices data_dev_list
+    local data_info data_level data_strip data_dev_list
     data_info=$(grep "^${data_array}|" "$arrays_file" | head -1)
     data_level=$(echo "$data_info" | cut -d'|' -f2)
     data_strip=$(echo "$data_info" | cut -d'|' -f4)
     data_dev_list=$(echo "$data_info" | cut -d'|' -f6)
 
-    # Calculate parity disks for data array
     local data_parity=0
     case "$data_level" in
         5) data_parity=1 ;;
         6) data_parity=2 ;;
     esac
 
-    local log_level="" log_strip="" log_dev_list=""
-    if [[ -n "$log_array" ]]; then
-        local log_info
-        log_info=$(grep "^${log_array}|" "$arrays_file" | head -1)
-        log_level=$(echo "$log_info" | cut -d'|' -f2)
-        log_strip=$(echo "$log_info" | cut -d'|' -f4)
-        log_dev_list=$(echo "$log_info" | cut -d'|' -f6)
-    fi
+    local log_info log_level log_strip log_dev_list
+    log_info=$(grep "^${log_array}|" "$arrays_file" | head -1)
+    log_level=$(echo "$log_info" | cut -d'|' -f2)
+    log_strip=$(echo "$log_info" | cut -d'|' -f4)
+    log_dev_list=$(echo "$log_info" | cut -d'|' -f6)
+
+    local log_parity=0
+    case "$log_level" in
+        5) log_parity=1 ;;
+        6) log_parity=2 ;;
+    esac
 
     # Confirm selections
     local confirm_msg="Data Array: $data_array (RAID$data_level)\n"
-    if [[ -n "$log_array" ]]; then
-        confirm_msg+="Log Array:  $log_array (RAID$log_level)\n"
-    else
-        confirm_msg+="Log Array:  (none)\n"
-    fi
+    confirm_msg+="Log Array:  $log_array (RAID$log_level)\n"
     confirm_msg+="Mountpoint: $mountpoint\n"
     confirm_msg+="Label:      $label\n"
     confirm_msg+="\nThe playbook will skip RAID creation and\ncreate filesystems on the existing arrays."
@@ -293,18 +295,21 @@ PYEOF2
     local auto_vars="$REPO_DIR/collection/roles/nvme_namespace/defaults/main.yml"
     local raid_vars="$REPO_DIR/collection/roles/raid_fs/defaults/main.yml"
 
-    # Disable auto namespace and force flags
     yq -i '.nvme_auto_namespace = false' "$auto_vars"
     yq -i '.xiraid_force_metadata = false' "$raid_vars"
     yq -i '.xfs_force_mkfs = false' "$raid_vars"
 
-    # Build xiraid_arrays - data array
+    # Build xiraid_arrays YAML
     local data_devices_yaml=""
     for dev in $data_dev_list; do
         data_devices_yaml+="      - \"$dev\""$'\n'
     done
 
-    # Build the arrays and filesystems YAML
+    local log_devices_yaml=""
+    for dev in $log_dev_list; do
+        log_devices_yaml+="      - \"$dev\""$'\n'
+    done
+
     local arrays_yaml
     arrays_yaml="xiraid_arrays:"$'\n'
     arrays_yaml+="  - name: \"$data_array\""$'\n'
@@ -313,54 +318,46 @@ PYEOF2
     arrays_yaml+="    parity_disks: $data_parity"$'\n'
     arrays_yaml+="    devices:"$'\n'
     arrays_yaml+="$data_devices_yaml"
+    arrays_yaml+="  - name: \"$log_array\""$'\n'
+    arrays_yaml+="    level: $log_level"$'\n'
+    arrays_yaml+="    strip_size_kb: $log_strip"$'\n'
+    arrays_yaml+="    parity_disks: $log_parity"$'\n'
+    arrays_yaml+="    devices:"$'\n'
+    arrays_yaml+="$log_devices_yaml"
 
-    if [[ -n "$log_array" ]]; then
-        local log_devices_yaml=""
-        for dev in $log_dev_list; do
-            log_devices_yaml+="      - \"$dev\""$'\n'
-        done
-        local log_parity=0
-        case "$log_level" in
-            5) log_parity=1 ;;
-            6) log_parity=2 ;;
-        esac
-        arrays_yaml+="  - name: \"$log_array\""$'\n'
-        arrays_yaml+="    level: $log_level"$'\n'
-        arrays_yaml+="    strip_size_kb: $log_strip"$'\n'
-        arrays_yaml+="    parity_disks: $log_parity"$'\n'
-        arrays_yaml+="    devices:"$'\n'
-        arrays_yaml+="$log_devices_yaml"
-    fi
-
-    # Build xfs_filesystems YAML
+    # Build xfs_filesystems YAML (LOG always present)
     local fs_yaml
     fs_yaml="xfs_filesystems:"$'\n'
     fs_yaml+="  - label: \"$label\""$'\n'
     fs_yaml+="    data_device: \"/dev/xi_${data_array}\""$'\n'
-
-    if [[ -n "$log_array" ]]; then
-        fs_yaml+="    log_device: \"/dev/xi_${log_array}\""$'\n'
-        fs_yaml+="    log_size: 1G"$'\n'
-        fs_yaml+="    sector_size: 4k"$'\n'
-        fs_yaml+="    mountpoint: \"$mountpoint\""$'\n'
-        fs_yaml+="    mount_opts: \"logdev=/dev/xi_${log_array},noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k\""$'\n'
-    else
-        fs_yaml+="    sector_size: 4k"$'\n'
-        fs_yaml+="    mountpoint: \"$mountpoint\""$'\n'
-        fs_yaml+="    mount_opts: \"noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k\""$'\n'
-    fi
+    fs_yaml+="    log_device: \"/dev/xi_${log_array}\""$'\n'
+    fs_yaml+="    log_size: 1G"$'\n'
+    fs_yaml+="    sector_size: 4k"$'\n'
+    fs_yaml+="    mountpoint: \"$mountpoint\""$'\n'
+    fs_yaml+="    mount_opts: \"logdev=/dev/xi_${log_array},noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k\""$'\n'
 
     # Write arrays and filesystems to raid_fs defaults
-    # First remove any existing commented examples, then append
     local combined_yaml="${arrays_yaml}${fs_yaml}"
     echo "$combined_yaml" > "$TMP_DIR/raid_config.yml"
 
-    # Merge into raid_fs defaults: keep top-level scalar keys, replace arrays/filesystems
     yq -i 'del(.xiraid_arrays) | del(.xfs_filesystems)' "$raid_vars"
     yq -i '. *= load("'"$TMP_DIR/raid_config.yml"'")' "$raid_vars"
 
     msg_box "✅ Config Written" "Configuration saved.\n\nThe playbook will:\n  • Skip namespace recreation\n  • Skip array creation (arrays exist)\n  • Create XFS filesystem on /dev/xi_${data_array}\n  • Configure NFS exports and tuning"
     return 0
+}
+
+# Clean install: remove xiRAID packages, confirm, run playbook
+# Returns 1 if any step is declined/fails
+clean_install() {
+    if ! check_remove_xiraid; then return 1; fi
+    if ! confirm_playbook; then return 1; fi
+    run_playbook "playbooks/site.yml" "inventories/lab.ini"
+    echo ""
+    echo "🎉 Deployment complete! System status:"
+    echo ""
+    xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
+    exit 0
 }
 
 confirm_playbook() {
@@ -567,51 +564,26 @@ while true; do
             fi
             if ! check_license; then continue; fi
 
-            # Check for existing xiRAID installation
-            xiraid_installed=false
-            if dpkg-query -W -f='${Status}' xiraid 2>/dev/null | grep -q installed; then
-                xiraid_installed=true
-            fi
-
-            if [[ "$xiraid_installed" == true ]]; then
-                install_choice=$(menu_select "xiRAID Detected" "xiRAID is already installed. Choose an option:" \
-                    "1" "🔄 Fresh Install (remove existing xiRAID)" \
-                    "2" "💾 Use Existing RAID Arrays" \
-                    "0" "🔙 Cancel") || continue
-
-                case "$install_choice" in
-                    1)
-                        if check_remove_xiraid && confirm_playbook; then
-                            run_playbook "playbooks/site.yml" "inventories/lab.ini"
-                            echo ""
-                            echo "🎉 Deployment complete! System status:"
-                            echo ""
-                            xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
-                            exit 0
-                        fi
-                        ;;
-                    2)
-                        if use_existing_raid && confirm_playbook; then
-                            run_playbook "playbooks/site.yml" "inventories/lab.ini"
-                            echo ""
-                            echo "🎉 Deployment complete! System status:"
-                            echo ""
-                            xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
-                            exit 0
-                        fi
-                        ;;
-                    0) continue ;;
-                esac
-            else
-                # No xiRAID installed, normal fresh install
-                if confirm_playbook; then
-                    run_playbook "playbooks/site.yml" "inventories/lab.ini"
-                    echo ""
-                    echo "🎉 Deployment complete! System status:"
-                    echo ""
-                    xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
-                    exit 0
+            # Detect existing xiRAID arrays first
+            if detect_xiraid_arrays; then
+                # Arrays found — offer reuse
+                if reuse_existing_arrays; then
+                    # Reuse succeeded — run playbook
+                    if confirm_playbook; then
+                        run_playbook "playbooks/site.yml" "inventories/lab.ini"
+                        echo ""
+                        echo "🎉 Deployment complete! System status:"
+                        echo ""
+                        xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
+                        exit 0
+                    fi
+                else
+                    # User declined reuse or not enough arrays — clean install
+                    clean_install
                 fi
+            else
+                # No arrays (or no xicli) — clean install
+                clean_install
             fi
             ;;
         4) advanced_settings_menu ;;
