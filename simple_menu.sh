@@ -316,8 +316,10 @@ reuse_existing_arrays() {
     # Write configuration via yq
     local auto_vars="$REPO_DIR/collection/roles/nvme_namespace/defaults/main.yml"
     local raid_vars="$REPO_DIR/collection/roles/raid_fs/defaults/main.yml"
+    local xiraid_vars="$REPO_DIR/collection/roles/xiraid_classic/defaults/main.yml"
 
     yq -i '.nvme_auto_namespace = false' "$auto_vars"
+    yq -i '.xiraid_skip_install = true' "$xiraid_vars"
     yq -i '.xiraid_force_metadata = false' "$raid_vars"
     yq -i '.xfs_force_mkfs = false' "$raid_vars"
 

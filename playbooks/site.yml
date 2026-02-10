@@ -7,6 +7,7 @@
     - role: doca_ofed
     - role: net_controllers
     - role: xiraid_classic  # EULA is accepted automatically
+      when: not (xiraid_skip_install | default(false) | bool)
     - role: nvme_namespace  # Auto-detect drives and create namespaces
     - role: raid_fs
     - role: exports       # manage /etc/exports
