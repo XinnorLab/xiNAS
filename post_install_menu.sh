@@ -2009,7 +2009,7 @@ manage_xiraid_exporter() {
                 0) return ;;
             esac
         else
-            echo -e "  ${WHITE}📈 xiRAID Exporter:${NC} ${GRAY}Not installed${NC}"
+            echo -e "  ${WHITE}📈 xiRAID Exporter:${NC} ${DIM}Not installed${NC}"
             echo -e "  ${DIM}Prometheus metrics exporter for xiRAID storage${NC}"
             echo ""
 
