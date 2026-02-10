@@ -28,6 +28,21 @@
     _fs_sw: "{{ item.sw }}"
   when: item.su_kb is defined and item.sw is defined
 
+- name: Check if {{ item.data_device }} is currently mounted
+  ansible.builtin.command: findmnt -n -o TARGET {{ item.data_device }}
+  register: _current_mount
+  failed_when: false
+  changed_when: false
+  tags: [raid_fs, fs, mkfs]
+
+- name: Unmount {{ item.data_device }} before mkfs
+  ansible.builtin.command: umount {{ item.data_device }}
+  when:
+    - _current_mount.rc == 0
+    - _current_mount.stdout | length > 0
+    - (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+  tags: [raid_fs, fs, mkfs]
+
 - name: Make filesystem {{ item.label }} on {{ item.data_device }}
   ansible.builtin.command: >-
     mkfs.xfs -f -L {{ item.label }} -d su={{ _fs_su_kb }}k,sw={{ _fs_sw }}
