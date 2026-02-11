@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-XINAS_MENU_VERSION="1.2.0"
+XINAS_MENU_VERSION="1.2.1"
 
 # Source the menu library (check multiple locations)
 if [[ -f "$SCRIPT_DIR/lib/menu_lib.sh" ]]; then
@@ -472,6 +472,19 @@ def format_size(bytes_size):
         return f"{bytes_size / 1048576:.0f} MB"
     return f"{bytes_size} B"
 
+def get_numa_node(path):
+    """Get NUMA node for a block device from sysfs"""
+    try:
+        dev_name = os.path.basename(path)
+        numa_path = f"/sys/block/{dev_name}/device/numa_node"
+        if os.path.exists(numa_path):
+            with open(numa_path) as f:
+                node = f.read().strip()
+                return node if node != "-1" else "-"
+    except:
+        pass
+    return "-"
+
 try:
     with open(sys.argv[1]) as f:
         data = json.load(f)
@@ -500,6 +513,7 @@ try:
             w = wear[i] if i < len(wear) else "N/A"
             serial = serials[i] if i < len(serials) else "N/A"
             size = get_drive_size(path)
+            numa = get_numa_node(path)
             all_drives.append({
                 "array": arr_name,
                 "idx": idx,
@@ -508,7 +522,8 @@ try:
                 "health": h,
                 "wear": w,
                 "serial": serial,
-                "size": size
+                "size": size,
+                "numa": numa
             })
 
     # Group by array
@@ -525,7 +540,7 @@ try:
 
         print(f"Array: {arr_name.upper()} ({online}/{total} online)")
         print("-" * 75)
-        print(f"  {'Device':<14}{'Size':<10}{'State':<10}{'Health':<8}{'Wear':<7}{'Serial'}")
+        print(f"  {'Device':<14}{'Size':<10}{'State':<10}{'NUMA':<6}{'Health':<8}{'Wear':<7}{'Serial'}")
         print("-" * 75)
 
         for d in drives:
@@ -535,16 +550,21 @@ try:
             health = d["health"]
             wear = d["wear"]
             size = d["size"]
+            numa = d["numa"]
             serial = d["serial"][:16] if len(d["serial"]) > 16 else d["serial"]
-            print(f"  {icon} {path:<12}{size:<10}{state:<10}{health:<8}{wear:<7}{serial}")
+            print(f"  {icon} {path:<12}{size:<10}{state:<10}{numa:<6}{health:<8}{wear:<7}{serial}")
 
         print()
 
     # Summary
     total_drives = len(all_drives)
     online_drives = sum(1 for d in all_drives if d["state"].lower() == "online")
+    numa_nodes = sorted(set(d["numa"] for d in all_drives if d["numa"] != "-"))
     print("=" * 75)
-    print(f"Total: {total_drives} drives, {online_drives} online")
+    summary = f"Total: {total_drives} drives, {online_drives} online"
+    if numa_nodes:
+        summary += f" (NUMA nodes: {', '.join(numa_nodes)})"
+    print(summary)
 
 except Exception as e:
     print(f"Error: {e}")
