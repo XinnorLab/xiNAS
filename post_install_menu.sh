@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-XINAS_MENU_VERSION="1.2.1"
+XINAS_MENU_VERSION="1.2.2"
 
 # Source the menu library (check multiple locations)
 if [[ -f "$SCRIPT_DIR/lib/menu_lib.sh" ]]; then
@@ -473,9 +473,20 @@ def format_size(bytes_size):
     return f"{bytes_size} B"
 
 def get_numa_node(path):
-    """Get NUMA node for a block device from sysfs"""
+    """Get NUMA node for an NVMe device from sysfs"""
+    import re
     try:
         dev_name = os.path.basename(path)
+        # Extract controller name (nvme0 from nvme0n1, nvme10 from nvme10n2)
+        m = re.match(r"(nvme\d+)", dev_name)
+        if m:
+            ctrl = m.group(1)
+            numa_path = f"/sys/class/nvme/{ctrl}/numa_node"
+            if os.path.exists(numa_path):
+                with open(numa_path) as f:
+                    node = f.read().strip()
+                    return node if node != "-1" else "-"
+        # Fallback for non-NVMe block devices
         numa_path = f"/sys/block/{dev_name}/device/numa_node"
         if os.path.exists(numa_path):
             with open(numa_path) as f:
