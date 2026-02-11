@@ -1,5 +1,6 @@
-# Number of threads for both exportd and nfsd (blog recommends 64)
-nfs_threads: 64
+# Number of threads for both exportd and nfsd
+# Default: one thread per physical CPU core
+nfs_threads: "{{ ansible_processor_cores * ansible_processor_count }}"
 
 # Port used for NFS-RDMA service (blog uses 20049)
 nfs_rdma_port: 20049

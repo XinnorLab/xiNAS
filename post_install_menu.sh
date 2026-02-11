@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-XINAS_MENU_VERSION="1.2.2"
+XINAS_MENU_VERSION="1.2.3"
 
 # Source the menu library (check multiple locations)
 if [[ -f "$SCRIPT_DIR/lib/menu_lib.sh" ]]; then
