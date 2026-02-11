@@ -30,6 +30,7 @@ fi
 
 # Audit log
 AUDIT_LOG="/var/log/xinas/audit.log"
+AUDIT_LOGROTATE="/etc/logrotate.d/xinas-audit"
 
 audit_log() {
     local action="$1"
@@ -41,6 +42,20 @@ audit_log() {
     printf '%s | %-8s | %s' "$ts" "$user" "$action" >> "$AUDIT_LOG"
     [[ -n "$detail" ]] && printf ' | %s' "$detail" >> "$AUDIT_LOG"
     printf '\n' >> "$AUDIT_LOG"
+    # Ensure logrotate config exists
+    if [[ ! -f "$AUDIT_LOGROTATE" ]]; then
+        cat > "$AUDIT_LOGROTATE" 2>/dev/null <<'LOGROTATE'
+/var/log/xinas/audit.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}
+LOGROTATE
+    fi
 }
 
 # Locate healthcheck.sh (check multiple locations)
@@ -195,6 +210,10 @@ def format_state(state_list):
     if not state_list:
         return "unknown"
     states = state_list if isinstance(state_list, list) else [state_list]
+    # Filter out None/empty values
+    states = [s for s in states if s]
+    if not states:
+        return "unknown"
     icons = {
         "online": "*", "initialized": "*", "initing": "~",
         "degraded": "!", "rebuilding": "~", "offline": "x", "failed": "x"
@@ -204,7 +223,8 @@ def format_state(state_list):
 def count_device_states(devices):
     online = degraded = offline = 0
     for dev in devices:
-        state = dev[2][0].lower() if dev[2] else "unknown"
+        raw = dev[2][0] if dev[2] and dev[2][0] else None
+        state = raw.lower() if raw else "unknown"
         if state == "online":
             online += 1
         elif state in ["degraded", "rebuilding"]:
@@ -247,7 +267,7 @@ try:
         online, degraded, offline = count_device_states(devices)
         total_devs = len(devices)
         state_str = format_state(state)
-        is_initing = any(s.lower() == "initing" for s in state)
+        is_initing = any(s and s.lower() == "initing" for s in state)
 
         # Build device summary
         dev_parts = [f"{total_devs} total", f"{online} online"]
