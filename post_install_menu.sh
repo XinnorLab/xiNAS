@@ -28,6 +28,21 @@ else
     exit 1
 fi
 
+# Audit log
+AUDIT_LOG="/var/log/xinas/audit.log"
+
+audit_log() {
+    local action="$1"
+    local detail="${2:-}"
+    local ts
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    local user="${SUDO_USER:-$USER}"
+    mkdir -p "$(dirname "$AUDIT_LOG")"
+    printf '%s | %-8s | %s' "$ts" "$user" "$action" >> "$AUDIT_LOG"
+    [[ -n "$detail" ]] && printf ' | %s' "$detail" >> "$AUDIT_LOG"
+    printf '\n' >> "$AUDIT_LOG"
+}
+
 # Locate healthcheck.sh (check multiple locations)
 _find_healthcheck() {
     local paths=(
@@ -526,14 +541,16 @@ raid_menu() {
             "0" "🔙 Back") || break
 
         case "$choice" in
-            1) show_raid_info "false" ;;
-            2) show_raid_info "true" ;;
+            1) audit_log "RAID > Quick Overview"; show_raid_info "false" ;;
+            2) audit_log "RAID > Extended Details"; show_raid_info "true" ;;
             3)
+                audit_log "RAID > Physical Drives"
                 out="$TMP_DIR/drives"
                 show_physical_drives > "$out"
                 text_box "💿 Physical Drives" "$out"
                 ;;
             4)
+                audit_log "RAID > Spare Pools"
                 out="$TMP_DIR/pools"
                 show_spare_pools > "$out"
                 text_box "🔄 Spare Pools" "$out"
@@ -953,18 +970,21 @@ network_menu() {
             "0" "🔙 Back") || break
 
         case "$choice" in
-            1) show_network_info ;;
-            2) edit_interface_ip ;;
+            1) audit_log "Network > View Config"; show_network_info ;;
+            2) audit_log "Network > Edit IP"; edit_interface_ip ;;
             3)
                 if yes_no "Apply Changes" "Apply network configuration?\n\nThis will run 'netplan apply' to activate\nany changes to the network settings.\n\nActive connections may be briefly interrupted."; then
                     if sudo netplan apply 2>/dev/null; then
+                        audit_log "Network > Apply Netplan" "success"
                         msg_box "Success" "Network configuration applied successfully!"
                     else
+                        audit_log "Network > Apply Netplan" "failed"
                         msg_box "Error" "Failed to apply network configuration.\nCheck /var/log/syslog for details."
                     fi
                 fi
                 ;;
             4)
+                audit_log "Network > View Netplan File"
                 netplan_file=""
                 for f in /etc/netplan/99-xinas.yaml /etc/netplan/*.yaml; do
                     [[ -f "$f" ]] && { netplan_file="$f"; break; }
@@ -1469,17 +1489,20 @@ nfs_menu() {
             "0" "🔙 Back") || break
 
         case "$choice" in
-            1) show_nfs_exports ;;
-            2) edit_nfs_share ;;
-            3) add_nfs_share ;;
+            1) audit_log "NFS > View Shares"; show_nfs_exports ;;
+            2) audit_log "NFS > Edit Share"; edit_nfs_share ;;
+            3) audit_log "NFS > Add Share"; add_nfs_share ;;
             4)
                 if sudo exportfs -ra 2>/dev/null; then
+                    audit_log "NFS > Refresh Exports" "success"
                     msg_box "✅ Success" "Shared folders refreshed!"
                 else
+                    audit_log "NFS > Refresh Exports" "failed"
                     msg_box "❌ Error" "Failed to refresh.\nCheck settings for errors."
                 fi
                 ;;
             5)
+                audit_log "NFS > View Config"
                 if [[ -f /etc/exports ]]; then
                     text_box "📄 /etc/exports" /etc/exports
                 else
@@ -1813,11 +1836,11 @@ user_menu() {
             "0" "🔙 Back") || break
 
         case "$choice" in
-            1) show_users ;;
-            2) create_user ;;
-            3) delete_user ;;
-            4) set_user_quota ;;
-            5) show_quotas ;;
+            1) audit_log "Users > View Accounts"; show_users ;;
+            2) audit_log "Users > Create User"; create_user ;;
+            3) audit_log "Users > Delete User"; delete_user ;;
+            4) audit_log "Users > Set Quota"; set_user_quota ;;
+            5) audit_log "Users > View Quotas"; show_quotas ;;
             0) break ;;
         esac
     done
@@ -1826,6 +1849,22 @@ user_menu() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # Quick Actions
 # ═══════════════════════════════════════════════════════════════════════════════
+
+view_audit_log() {
+    if [[ ! -f "$AUDIT_LOG" ]]; then
+        msg_box "📝 Audit Log" "No audit log entries yet.\n\nActions will be recorded as you use the menu."
+        return
+    fi
+    local out="$TMP_DIR/audit_view"
+    {
+        echo "AUDIT LOG"
+        echo "========="
+        echo "Log file: $AUDIT_LOG"
+        echo ""
+        tail -200 "$AUDIT_LOG" | tac
+    } > "$out"
+    text_box "📝 Audit Log (recent 200)" "$out"
+}
 
 quick_actions_menu() {
     local choice
@@ -1840,20 +1879,24 @@ quick_actions_menu() {
             "3" "📜 View System Logs" \
             "4" "💿 Check Disk Health" \
             "5" "🔧 Service Status" \
+            "6" "📝 Audit Log" \
             "0" "🔙 Back") || break
 
         case "$choice" in
-            1) show_status ;;
+            1) audit_log "Quick > Status"; show_status ;;
             2)
                 if yes_no "Restart NFS" "Restart the NFS server?\n\nActive client connections may be\ntemporarily interrupted."; then
                     if sudo systemctl restart nfs-server 2>/dev/null; then
+                        audit_log "Quick > Restart NFS" "success"
                         msg_box "Success" "NFS server restarted successfully!"
                     else
+                        audit_log "Quick > Restart NFS" "failed"
                         msg_box "Error" "Failed to restart NFS server."
                     fi
                 fi
                 ;;
             3)
+                audit_log "Quick > System Logs"
                 out="$TMP_DIR/logs"
                 {
                     echo "=== Recent System Messages ==="
@@ -1863,11 +1906,13 @@ quick_actions_menu() {
                 text_box "System Logs" "$out"
                 ;;
             4)
+                audit_log "Quick > Disk Health"
                 out="$TMP_DIR/disks"
                 show_physical_drives > "$out"
                 text_box "Disk Health" "$out"
                 ;;
             5)
+                audit_log "Quick > Service Status"
                 out="$TMP_DIR/services"
                 {
                     echo "=== Service Status ==="
@@ -1884,6 +1929,7 @@ quick_actions_menu() {
                 } > "$out"
                 text_box "🔧 Services" "$out"
                 ;;
+            6) audit_log "Quick > View Audit Log"; view_audit_log ;;
             0) break ;;
         esac
     done
@@ -1988,12 +2034,15 @@ manage_xiraid_exporter() {
             case "$choice" in
                 1)
                     if [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
+                        audit_log "Exporter > Update" "to v${EXPORTER_UPDATE_AVAILABLE}"
                         install_xiraid_exporter "$EXPORTER_UPDATE_AVAILABLE"
                     else
+                        audit_log "Exporter > Check Update"
                         info_box "🔄 Checking..." "Checking for exporter updates..."
                         check_exporter_update
                         if [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
                             if yes_no "🔄 Update Available" "xiraid-exporter v${EXPORTER_UPDATE_AVAILABLE} is available.\nInstalled: v${installed}\n\nUpdate now?"; then
+                                audit_log "Exporter > Update" "to v${EXPORTER_UPDATE_AVAILABLE}"
                                 install_xiraid_exporter "$EXPORTER_UPDATE_AVAILABLE"
                             fi
                         else
@@ -2002,10 +2051,11 @@ manage_xiraid_exporter() {
                     fi
                     ;;
                 2)
+                    audit_log "Exporter > Restart"
                     sudo systemctl restart xiraid-exporter 2>/dev/null
                     msg_box "✅ Restarted" "xiraid-exporter service restarted."
                     ;;
-                3) uninstall_xiraid_exporter ;;
+                3) audit_log "Exporter > Uninstall"; uninstall_xiraid_exporter ;;
                 0) return ;;
             esac
         else
@@ -2021,6 +2071,7 @@ manage_xiraid_exporter() {
 
             case "$choice" in
                 1)
+                    audit_log "Exporter > Install"
                     info_box "🔍 Checking..." "Fetching latest version..."
                     local latest
                     latest=$(get_exporter_latest_version)
@@ -2149,15 +2200,16 @@ main_menu() {
             "0" "🚪 Exit") || break
 
         case "$choice" in
-            1) show_status ;;
-            2) raid_menu ;;
-            3) network_menu ;;
-            4) nfs_menu ;;
-            5) user_menu ;;
-            6) manage_xiraid_exporter ;;
-            7) quick_actions_menu ;;
-            8) local _hc; _hc=$(_find_healthcheck) && source "$_hc" && healthcheck_menu || msg_box "Error" "healthcheck.sh not found" ;;
+            1) audit_log "System Status"; show_status ;;
+            2) audit_log "RAID Management"; raid_menu ;;
+            3) audit_log "Network Settings"; network_menu ;;
+            4) audit_log "NFS Access Rights"; nfs_menu ;;
+            5) audit_log "User Management"; user_menu ;;
+            6) audit_log "xiRAID Exporter"; manage_xiraid_exporter ;;
+            7) audit_log "Quick Actions"; quick_actions_menu ;;
+            8) audit_log "Health Check"; local _hc; _hc=$(_find_healthcheck) && source "$_hc" && healthcheck_menu || msg_box "Error" "healthcheck.sh not found" ;;
             9)
+                audit_log "Check for Updates"
                 if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
                     if yes_no "🔄 Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?"; then
                         do_update
