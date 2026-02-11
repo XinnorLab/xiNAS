@@ -77,19 +77,75 @@ _find_healthcheck() {
 
 # Update check
 UPDATE_AVAILABLE=""
+UPDATE_DETAILS=""
+
+# Locate the xiNAS git repo (may differ from SCRIPT_DIR when installed to /usr/local/bin)
+_find_repo_dir() {
+    local candidates=(
+        "$SCRIPT_DIR"
+        "/opt/xiNAS"
+        "/home/xinnor/xiNAS"
+    )
+    for dir in "${candidates[@]}"; do
+        if [[ -d "$dir/.git" ]]; then
+            echo "$dir"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Compare installed scripts against repo copies; populate UPDATE_DETAILS
+_check_installed_files() {
+    local repo_dir="$1"
+    local stale_files=()
+    # Map: repo_path -> installed_path
+    local -A file_map=(
+        ["post_install_menu.sh"]="/usr/local/bin/xinas-menu"
+        ["lib/menu_lib.sh"]="/usr/local/bin/lib/menu_lib.sh"
+        ["healthcheck.sh"]="/usr/local/bin/healthcheck.sh"
+    )
+    for repo_rel in "${!file_map[@]}"; do
+        local repo_file="$repo_dir/$repo_rel"
+        local inst_file="${file_map[$repo_rel]}"
+        if [[ -f "$repo_file" ]] && [[ -f "$inst_file" ]]; then
+            if ! cmp -s "$repo_file" "$inst_file"; then
+                stale_files+=("$repo_rel")
+            fi
+        fi
+    done
+    if (( ${#stale_files[@]} > 0 )); then
+        UPDATE_DETAILS="Outdated installed files:\n"
+        for f in "${stale_files[@]}"; do
+            UPDATE_DETAILS+="  - $f\n"
+        done
+        return 0
+    fi
+    return 1
+}
 
 check_for_updates() {
-    local git_dir="$SCRIPT_DIR/.git"
-    [[ -d "$git_dir" ]] || return 0
     command -v git &>/dev/null || return 0
+    local repo_dir
+    repo_dir=$(_find_repo_dir) || return 0
+
+    # Check if installed copies differ from repo
+    if _check_installed_files "$repo_dir"; then
+        UPDATE_AVAILABLE="true"
+    fi
+
+    # Check remote for new commits
     timeout 2 bash -c "echo >/dev/tcp/github.com/443" 2>/dev/null || return 0
     local local_commit
-    local_commit=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null) || return 0
-    git -C "$SCRIPT_DIR" fetch --quiet origin main 2>/dev/null || return 0
+    local_commit=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null) || return 0
+    git -C "$repo_dir" fetch --quiet origin main 2>/dev/null || return 0
     local remote_commit
-    remote_commit=$(git -C "$SCRIPT_DIR" rev-parse origin/main 2>/dev/null) || return 0
+    remote_commit=$(git -C "$repo_dir" rev-parse origin/main 2>/dev/null) || return 0
     if [[ "$local_commit" != "$remote_commit" ]]; then
         UPDATE_AVAILABLE="true"
+        local behind
+        behind=$(git -C "$repo_dir" rev-list --count HEAD..origin/main 2>/dev/null) || behind="?"
+        UPDATE_DETAILS="Remote is ${behind} commit(s) ahead\n${UPDATE_DETAILS}"
     fi
 }
 
@@ -98,17 +154,56 @@ do_update() {
         msg_box "Error" "Git is not installed."
         return 1
     fi
+    local repo_dir
+    repo_dir=$(_find_repo_dir) || { msg_box "Error" "Cannot find xiNAS git repository."; return 1; }
+
     info_box "Updating..." "Pulling latest changes from origin/main..."
-    if git -C "$SCRIPT_DIR" pull origin main 2>"$TMP_DIR/update.log"; then
+    if git -C "$repo_dir" pull origin main 2>"$TMP_DIR/update.log"; then
+        # Sync installed scripts from repo
+        local synced=()
+        if [[ -f "$repo_dir/post_install_menu.sh" ]]; then
+            cp "$repo_dir/post_install_menu.sh" /usr/local/bin/xinas-menu 2>/dev/null && synced+=("xinas-menu")
+        fi
+        if [[ -f "$repo_dir/lib/menu_lib.sh" ]]; then
+            mkdir -p /usr/local/bin/lib
+            cp "$repo_dir/lib/menu_lib.sh" /usr/local/bin/lib/menu_lib.sh 2>/dev/null && synced+=("lib/menu_lib.sh")
+        fi
+        if [[ -f "$repo_dir/healthcheck.sh" ]]; then
+            cp "$repo_dir/healthcheck.sh" /usr/local/bin/healthcheck.sh 2>/dev/null && synced+=("healthcheck.sh")
+        fi
+        if [[ -d "$repo_dir/healthcheck_profiles" ]]; then
+            cp -r "$repo_dir/healthcheck_profiles" /usr/local/bin/ 2>/dev/null && synced+=("healthcheck_profiles/")
+        fi
         UPDATE_AVAILABLE=""
-        msg_box "Update Complete" "xiNAS has been updated!\n\nPlease restart the menu to use the new version."
+        UPDATE_DETAILS=""
+        local sync_msg=""
+        if (( ${#synced[@]} > 0 )); then
+            sync_msg="\n\nSynced installed files:\n"
+            for f in "${synced[@]}"; do
+                sync_msg+="  - $f\n"
+            done
+        fi
+        msg_box "Update Complete" "xiNAS has been updated!${sync_msg}\nPlease restart the menu to use the new version."
     else
         msg_box "Update Failed" "Failed to update:\n\n$(cat "$TMP_DIR/update.log")"
     fi
 }
 
-# Run update check in background
-check_for_updates &
+# Run update check in background (use temp file to pass results back from subshell)
+_UPDATE_FILE="$TMP_DIR/.update_status"
+(
+    check_for_updates
+    if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
+        printf '%s\n' "$UPDATE_DETAILS" > "$_UPDATE_FILE"
+    fi
+) &
+_load_bg_update() {
+    if [[ -f "$_UPDATE_FILE" ]]; then
+        UPDATE_AVAILABLE="true"
+        UPDATE_DETAILS=$(cat "$_UPDATE_FILE")
+        rm -f "$_UPDATE_FILE"
+    fi
+}
 
 # Show branded header
 show_header() {
@@ -2176,6 +2271,9 @@ main_menu() {
     fi
 
     while true; do
+        # Pick up results from background update check
+        _load_bg_update
+
         # Update status indicators
         local update_text="🔄 Check for Updates"
         if [[ "$UPDATE_AVAILABLE" == "true" ]] || [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
@@ -2231,7 +2329,10 @@ main_menu() {
             9)
                 audit_log "Check for Updates"
                 if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-                    if yes_no "🔄 Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?"; then
+                    local detail_msg="A new version of xiNAS is available!"
+                    [[ -n "$UPDATE_DETAILS" ]] && detail_msg+="\n\n${UPDATE_DETAILS}"
+                    detail_msg+="\n\nWould you like to update now?"
+                    if yes_no "🔄 Update Available" "$detail_msg"; then
                         do_update
                     fi
                 else
@@ -2241,6 +2342,7 @@ main_menu() {
                     if [[ "$UPDATE_AVAILABLE" == "true" ]] || [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]]; then
                         local msg=""
                         [[ "$UPDATE_AVAILABLE" == "true" ]] && msg+="xiNAS: update available\n"
+                        [[ -n "$UPDATE_DETAILS" ]] && msg+="${UPDATE_DETAILS}\n"
                         [[ -n "$EXPORTER_UPDATE_AVAILABLE" ]] && msg+="xiraid-exporter: v${EXPORTER_UPDATE_AVAILABLE} available\n"
                         msg_box "📦 Updates Found" "$msg"
                     else
