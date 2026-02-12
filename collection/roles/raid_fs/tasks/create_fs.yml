@@ -43,10 +43,25 @@
     - (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
   tags: [raid_fs, fs, mkfs]
 
+- name: Get log device size in bytes for {{ item.log_device }}
+  ansible.builtin.command: blockdev --getsize64 {{ item.log_device }}
+  register: _log_dev_bytes
+  changed_when: false
+  when: (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+  tags: [raid_fs, fs, mkfs]
+
+- name: Calculate effective log size for {{ item.label }}
+  ansible.builtin.set_fact:
+    _effective_log_size: >-
+      {{ (item.log_size | human_to_bytes | int > _log_dev_bytes.stdout | int)
+         | ternary(_log_dev_bytes.stdout | int | string, item.log_size) }}
+  when: (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+  tags: [raid_fs, fs, mkfs]
+
 - name: Make filesystem {{ item.label }} on {{ item.data_device }}
   ansible.builtin.command: >-
     mkfs.xfs -f -L {{ item.label }} -d su={{ _fs_su_kb }}k,sw={{ _fs_sw }}
-    -l logdev={{ item.log_device }},size={{ item.log_size }}
+    -l logdev={{ item.log_device }},size={{ _effective_log_size }}
     -s size={{ item.sector_size }} {{ item.data_device }}
   when: (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
   tags: [raid_fs, fs, mkfs]
