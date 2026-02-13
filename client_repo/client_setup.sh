@@ -625,13 +625,13 @@ This is the storage network IP of your NAS." "10.10.1.$i" ) || return
     # Step 4: Enter remote share path
     local share_path
     share_path=$(input_box "Step 4: Share Path" "\
-Enter the NFS share path on the server:
+Enter the NFS export path on the server:
 
-Examples:
-  /mnt/data      - Data volume
-  /              - Root export
+  /              - Root export (default, fsid=0)
+  /mnt/data      - Specific data volume
 
-Ask your NAS administrator if unsure." "/mnt/data" ) || return
+Tip: Use / for the root export unless your
+server has multiple named exports." "/" ) || return
 
     [[ -z "$share_path" ]] && share_path="/"
 
@@ -1949,9 +1949,10 @@ Enter the NFS export path on the server:
 This is the base path that will be used
 for dynamic provisioning.
 
-Example: /mnt/data" "/mnt/data" ) || return
+  /              - Root export (default, fsid=0)
+  /mnt/data      - Specific data volume" "/" ) || return
 
-    [[ -z "$nfs_share" ]] && nfs_share="/mnt/data"
+    [[ -z "$nfs_share" ]] && nfs_share="/"
 
     # Storage class name
     local sc_name
