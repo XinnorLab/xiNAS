@@ -79,10 +79,10 @@ _load_update_flag() {
 show_update_banner() {
     _load_update_flag
     if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
-        echo -e "${YELLOW}    ┌─────────────────────────────────────────────────────────────┐${NC}"
-        echo -e "${YELLOW}    │${NC}  ${CYAN}📦 Update available!${NC}                                         ${YELLOW}│${NC}"
-        echo -e "${YELLOW}    │${NC}  Use ${WHITE}Advanced Settings → Check for Updates${NC} to install     ${YELLOW}│${NC}"
-        echo -e "${YELLOW}    └─────────────────────────────────────────────────────────────┘${NC}"
+        echo -e "${YELLOW}    ┌──────────────────────────────────────────────────────┐${NC}"
+        echo -e "${YELLOW}    │${NC}  Update available!                                 ${YELLOW}│${NC}"
+        echo -e "${YELLOW}    │${NC}  Use ${WHITE}Advanced Settings > Check for Updates${NC}       ${YELLOW}│${NC}"
+        echo -e "${YELLOW}    └──────────────────────────────────────────────────────┘${NC}"
         echo ""
     fi
 }
@@ -3314,11 +3314,14 @@ main_menu() {
 
         # Update indicator for main menu
         local update_hint=""
-        [[ "$UPDATE_AVAILABLE" == "true" ]] && update_hint=" | UPDATE available!"
+        [[ "$UPDATE_AVAILABLE" == "true" ]] && update_hint=" | Update available!"
+
+        local short_host
+        short_host=$(hostname -s 2>/dev/null || hostname)
 
         local choice
-        choice=$(menu_select "xiNAS Client Setup v$CLIENT_VERSION" \
-            "$(hostname) | Mounts: $nfs_mounts | RDMA: $rdma_status${update_hint}" \
+        choice=$(menu_select "xiNAS Client v$CLIENT_VERSION" \
+            "${short_host} | Mounts: $nfs_mounts | RDMA: $rdma_status${update_hint}" \
             "1" "📊 System Status" \
             "2" "🔌 Connect to NAS" \
             "3" "${advanced_label}" \
