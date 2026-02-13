@@ -765,7 +765,7 @@ Esc = Back to previous step"; then
     [[ $step -lt 1 ]] && return 0
 
     # Build mount options - training profile for all variants
-    # Multi-IP (2+) adds trunking (trunkdiscovery)
+    # Multi-IP (2+) adds trunking (trunkdiscovery) on supported kernels
     local mount_opts
     local proto_desc
     local mode_desc
@@ -773,8 +773,14 @@ Esc = Back to previous step"; then
     local trunk_opts=""
 
     # Add trunking for multi-IP configurations
+    # trunkdiscovery requires kernel >= 6.x (Ubuntu 24.04, RHEL 9+)
+    # Ubuntu 22.04 (kernel 5.15) does not support it
     if [[ $num_ips -gt 1 ]]; then
-        trunk_opts=",trunkdiscovery"
+        local kmajor
+        kmajor=$(uname -r | cut -d. -f1)
+        if [[ "$kmajor" -ge 6 ]]; then
+            trunk_opts=",trunkdiscovery"
+        fi
     fi
 
     # Add security option
@@ -3447,10 +3453,14 @@ case "${1:-}" in
 
         nconnect=$((16 / num_ips))
 
-        # Add trunking for multi-IP configurations
+        # Add trunking for multi-IP configurations (kernel >= 6.x only)
         trunk_opts=""
         if [[ $num_ips -gt 1 ]]; then
-            trunk_opts=",trunkdiscovery"
+            local kmajor
+            kmajor=$(uname -r | cut -d. -f1)
+            if [[ "$kmajor" -ge 6 ]]; then
+                trunk_opts=",trunkdiscovery"
+            fi
         fi
 
         # Build mount options - training profile for all
