@@ -545,7 +545,7 @@ Install them now?"; then
 
     # Check if network is configured
     if [[ ! -f /etc/netplan/99-xinas-client.yaml ]]; then
-        if yes_no "Network Not Configured" "\
+        if ! yes_no "Network Not Configured" "\
 No storage network configuration found.
 
 It is recommended to configure the storage
@@ -554,9 +554,7 @@ network interfaces before connecting to a NAS.
 Continue anyway?
   Yes = Skip and connect using existing network
   No  = Go back and configure network first"; then
-            :  # continue
-        else
-            return
+            return 0
         fi
     fi
 
