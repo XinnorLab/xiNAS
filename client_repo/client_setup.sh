@@ -65,11 +65,19 @@ check_for_updates() {
 
     # Compare
     if [[ "$local_commit" != "$remote_commit" ]]; then
+        echo "true" > "$UPDATE_FLAG_FILE"
+    fi
+}
+
+# Read update result from background check
+_load_update_flag() {
+    if [[ -f "$UPDATE_FLAG_FILE" ]]; then
         UPDATE_AVAILABLE="true"
     fi
 }
 
 show_update_banner() {
+    _load_update_flag
     if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
         echo -e "${YELLOW}    ┌─────────────────────────────────────────────────────────────┐${NC}"
         echo -e "${YELLOW}    │${NC}  ${CYAN}📦 Update available!${NC}                                         ${YELLOW}│${NC}"
@@ -78,6 +86,9 @@ show_update_banner() {
         echo ""
     fi
 }
+
+# Flag file for background update check (subshell can't set parent vars)
+UPDATE_FLAG_FILE="$TMP_DIR/.update_available"
 
 # Run update check in background to avoid slowing startup
 check_for_updates &
@@ -2497,7 +2508,7 @@ check_and_update() {
 Everything is up to date!
 
 xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg"
-        UPDATE_AVAILABLE=""
+        UPDATE_AVAILABLE=""; rm -f "$UPDATE_FLAG_FILE"
         return
     fi
 
@@ -2529,7 +2540,7 @@ xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg"
             if yes_no "Update Available" "$update_msg\n\nUpdate xiNAS Client now?"; then
                 info_box "Updating..." "Downloading xiNAS Client update..."
                 if git -C "$install_dir" pull --quiet origin main 2>/dev/null; then
-                    UPDATE_AVAILABLE=""
+                    UPDATE_AVAILABLE=""; rm -f "$UPDATE_FLAG_FILE"
                     msg_box "Updated!" "xiNAS Client updated!\n\nThe menu will restart."
                     exec "$0" "$@"
                 else
@@ -2553,7 +2564,7 @@ xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg"
         if [[ "$selected" == *"client"* ]]; then
             info_box "Updating..." "Downloading xiNAS Client update..."
             if git -C "$install_dir" pull --quiet origin main 2>/dev/null; then
-                UPDATE_AVAILABLE=""
+                UPDATE_AVAILABLE=""; rm -f "$UPDATE_FLAG_FILE"
             else
                 msg_box "Client Update Failed" "Failed to update client."
             fi
@@ -3179,6 +3190,9 @@ configure_network() {
 
 advanced_settings_menu() {
     while true; do
+        # Refresh update flag from background check
+        _load_update_flag
+
         # Check installation status for indicators (plain text - colors don't work in menu items)
         local nfs_indicator=""
         local doca_indicator=""
@@ -3243,6 +3257,9 @@ main_menu() {
     show_welcome
 
     while true; do
+        # Refresh update flag from background check
+        _load_update_flag
+
         # Get quick status for menu
         local nfs_mounts
         nfs_mounts=$(mount -t nfs,nfs4 2>/dev/null | wc -l || echo "0")
