@@ -213,6 +213,13 @@ def get_high_speed_interfaces():
             result.append(iface)
     return result
 
+def get_iface_expected_mtu(iface, default_mtu=9000):
+    """Return expected MTU: IB (type=32) = 4092, Ethernet/RoCE = default_mtu."""
+    iface_type = read_file(f"/sys/class/net/{iface}/type")
+    if iface_type and iface_type.strip() == "32":  # ARPHRD_INFINIBAND
+        return 4092
+    return default_mtu
+
 def get_nfs_mounts():
     """Parse active NFS mounts from /proc/mounts."""
     mounts = []
@@ -726,16 +733,23 @@ def check_network(exp, checks):
                     fix_hint="Check cable, switch port speed, and driver"))
 
     if "mtu" in checks:
-        expected_mtu = exp.get("net_mtu", 9000)
+        profile_mtu = exp.get("net_mtu", 9000)
         for iface in ifaces:
             mtu = read_file(f"/sys/class/net/{iface}/mtu")
-            if mtu and int(mtu) >= expected_mtu:
+            if mtu is None:
+                continue
+            expected_mtu = get_iface_expected_mtu(iface, profile_mtu)
+            if int(mtu) >= expected_mtu:
                 results.append(CheckResult("Network", f"mtu ({iface})", "PASS",
                     mtu, str(expected_mtu)))
-            elif mtu:
+            else:
+                if expected_mtu == 4092:
+                    impact = "IB MTU below maximum 4092"
+                else:
+                    impact = "Non-jumbo MTU reduces NFS and RDMA throughput"
                 results.append(CheckResult("Network", f"mtu ({iface})", "FAIL",
                     mtu, str(expected_mtu),
-                    impact="Non-jumbo MTU reduces NFS and RDMA throughput",
+                    impact=impact,
                     fix_hint=f"ip link set {iface} mtu {expected_mtu}"))
 
     if "errors_drops" in checks:

@@ -45,6 +45,37 @@
   when: net_ip_pool_enabled | bool
   tags: [network]
 
+# Step 1b: Build per-interface MTU map (auto-detect when net_mtu is 0)
+- name: Build per-interface MTU map (auto-detect IB vs RoCE)
+  ansible.builtin.shell: |
+    set -o pipefail
+    for iface in {{ detected_interfaces.stdout_lines | default([]) | join(' ') }}; do
+      type=$(cat "/sys/class/net/$iface/type" 2>/dev/null || echo "0")
+      if [ "$type" = "32" ]; then
+        echo "$iface:4092"
+      else
+        echo "$iface:9000"
+      fi
+    done
+  args:
+    executable: /bin/bash
+  register: mtu_detection
+  changed_when: false
+  when: net_ip_pool_enabled | bool and (net_mtu | default(0) | int == 0)
+  tags: [network]
+
+- name: Set per-interface MTU facts
+  ansible.builtin.set_fact:
+    net_iface_mtus: >-
+      {%- set result = {} -%}
+      {%- for line in mtu_detection.stdout_lines | default([]) -%}
+      {%- set parts = line.split(':') -%}
+      {%- set _ = result.update({parts[0]: parts[1] | int}) -%}
+      {%- endfor -%}
+      {{ result }}
+  when: net_ip_pool_enabled | bool and (net_mtu | default(0) | int == 0)
+  tags: [network]
+
 # Step 2: Build IP allocation map from pool
 - name: Build IP allocation map from pool
   ansible.builtin.set_fact:

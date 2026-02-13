@@ -80,7 +80,7 @@ net_detect_mlx5: true
 # Manual IP overrides
 net_manual_ips: {}
 
-# MTU (0 = system default)
+# MTU (0 = auto-detect: 4092 for InfiniBand, 9000 for RoCE/Ethernet)
 net_mtu: 0
 EOF
 }

@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-CLIENT_VERSION="1.11.0"
+CLIENT_VERSION="1.12.0"
 
 # Network configuration file
 NETWORK_CONFIG="$SCRIPT_DIR/network_config.yml"
@@ -285,7 +285,7 @@ show_status() {
 
     local mem_total=$(free -b 2>/dev/null | awk '/^Mem:/ {print $2}')
     local mem_used=$(free -b 2>/dev/null | awk '/^Mem:/ {print $3}')
-    local mem_percent=$((mem_used * 100 / mem_total))
+    local mem_percent=$(( ${mem_total:-1} > 0 ? mem_used * 100 / mem_total : 0 ))
     local mem_total_h=$(free -h 2>/dev/null | awk '/^Mem:/ {print $2}')
     local mem_used_h=$(free -h 2>/dev/null | awk '/^Mem:/ {print $3}')
 
@@ -446,7 +446,7 @@ show_status() {
             fi
 
             row "   $state_icon ${WHITE}$(printf '%-12s' $name)${NC} ${YELLOW}$(printf '%-20s' $ip_addr)${NC} $speed_str"
-            ((net_count++))
+            ((net_count++)) || true
         fi
     done
 
@@ -2632,6 +2632,17 @@ detect_high_speed_interfaces() {
     echo "${interfaces[@]}"
 }
 
+# Get optimal MTU for an interface based on link type
+get_iface_mtu() {
+    local iface="$1"
+    local type=$(cat "/sys/class/net/$iface/type" 2>/dev/null || echo "0")
+    if [[ "$type" == "32" ]]; then
+        echo 4092   # InfiniBand (IPoIB)
+    else
+        echo 9000   # RoCE / Ethernet
+    fi
+}
+
 # Configure IP pool for automatic allocation
 configure_network_ip_pool() {
     get_network_pool_settings
@@ -2694,11 +2705,11 @@ Subnet prefix (CIDR):
     new_mtu=$(input_box "Network: MTU Setting" "\
 MTU (Maximum Transmission Unit):
 
-  0    = System default
+  0    = Auto-detect (4092 for IB, 9000 for RoCE)
   1500 = Standard Ethernet
-  9000 = Jumbo frames (recommended for storage)
+  9000 = Jumbo frames
 
-Leave at 0 unless you know your network supports jumbo frames." "$net_mtu" 3>&1 1>&2 2>&3) || return
+Leave at 0 to auto-detect based on interface type." "$net_mtu" 3>&1 1>&2 2>&3) || return
 
     [[ -z "$new_mtu" ]] && new_mtu=0
 
@@ -2706,7 +2717,7 @@ Leave at 0 unless you know your network supports jumbo frames." "$net_mtu" 3>&1 
     save_network_pool_settings "$new_start" "$new_end" "$new_prefix" "$new_mtu"
 
     # Show summary
-    msg_box "IP Pool Configured" "IP Pool configured:\n\nRange: $new_start - $new_end\nPrefix: /$new_prefix\nMTU: $([ "$new_mtu" = "0" ] && echo "System default" || echo "$new_mtu")\n\nSaved to: $NETWORK_CONFIG\n\nUse 'Apply Network Configuration' to activate."
+    msg_box "IP Pool Configured" "IP Pool configured:\n\nRange: $new_start - $new_end\nPrefix: /$new_prefix\nMTU: $([ "$new_mtu" = "0" ] && echo "Auto-detect (4092 IB / 9000 RoCE)" || echo "$new_mtu")\n\nSaved to: $NETWORK_CONFIG\n\nUse 'Apply Network Configuration' to activate."
 }
 
 # Configure interfaces manually
@@ -2807,9 +2818,11 @@ Leave empty to skip this interface." 3>&1 1>&2 2>&3) || break
     mtu=$(input_box "MTU Setting" "\
 MTU (Maximum Transmission Unit):
 
-  0    = System default
+  0    = Auto-detect (4092 for IB, 9000 for RoCE)
   1500 = Standard Ethernet
-  9000 = Jumbo frames (recommended for storage)" "$net_mtu" 3>&1 1>&2 2>&3) || return
+  9000 = Jumbo frames
+
+Leave at 0 to auto-detect based on interface type." "$net_mtu" 3>&1 1>&2 2>&3) || return
 
     [[ -z "$mtu" ]] && mtu=0
 
@@ -2838,6 +2851,13 @@ EOF
         if [[ "$mtu" -gt 0 ]]; then
             cat >> "$tmp_file" <<EOF
       mtu: $mtu
+EOF
+        else
+            # Auto-detect MTU based on interface type
+            local auto_mtu
+            auto_mtu=$(get_iface_mtu "$name")
+            cat >> "$tmp_file" <<EOF
+      mtu: $auto_mtu
 EOF
         fi
     done
@@ -2876,7 +2896,7 @@ Warning: This may briefly disrupt network connectivity."; then
             info_box "Applying..." "Applying network configuration..."
             if netplan apply 2>/dev/null; then
                 sleep 2
-                msg_box "Success" "Network configuration applied successfully!\n\nMTU: $([ "$mtu" = "0" ] && echo "System default" || echo "$mtu")"
+                msg_box "Success" "Network configuration applied successfully!\n\nMTU: $([ "$mtu" = "0" ] && echo "Auto-detect (4092 IB / 9000 RoCE)" || echo "$mtu")"
             else
                 msg_box "Warning" "\
 netplan apply returned an error.
@@ -2967,6 +2987,13 @@ EOF
             cat >> "$tmp_file" <<EOF
       mtu: $net_mtu
 EOF
+        else
+            # Auto-detect MTU based on interface type
+            local auto_mtu
+            auto_mtu=$(get_iface_mtu "$iface")
+            cat >> "$tmp_file" <<EOF
+      mtu: $auto_mtu
+EOF
         fi
         ((++idx))
     done
@@ -3014,7 +3041,7 @@ view_network_config() {
         echo "  Enabled: $net_pool_enabled"
         echo "  Range:   $net_pool_start - $net_pool_end"
         echo "  Prefix:  /$net_pool_prefix"
-        echo "  MTU:     $([ "$net_mtu" = "0" ] && echo "System default" || echo "$net_mtu")"
+        echo "  MTU:     $([ "$net_mtu" = "0" ] && echo "Auto-detect (4092 IB / 9000 RoCE)" || echo "$net_mtu")"
         echo ""
 
         echo "DETECTED HIGH-SPEED INTERFACES"

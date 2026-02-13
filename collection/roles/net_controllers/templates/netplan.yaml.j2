@@ -9,6 +9,8 @@ network:
       addresses: [ {{ ip }} ]
 {% if net_mtu | default(0) | int > 0 %}
       mtu: {{ net_mtu }}
+{% elif net_iface_mtus is defined and iface in net_iface_mtus %}
+      mtu: {{ net_iface_mtus[iface] }}
 {% endif %}
 {% endfor %}
 {% else %}
