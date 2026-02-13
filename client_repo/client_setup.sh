@@ -570,145 +570,164 @@ Continue anyway?
         fi
     fi
 
-    # Step 1: Select protocol
-    local protocol
-    protocol=$(menu_select "Step 1: Select Protocol" \
-        "Choose protocol (RDMA=high performance, TCP=universal)" \
-        "RDMA" "High-performance (requires DOCA OFED)" \
-        "TCP" "Standard (works everywhere)") || return
+    # Wizard with back navigation
+    local step=1
+    local protocol="" num_ips="" nconnect=""
+    local server_ips=()
+    local share_path="" mount_point_base=""
+    local sec_mode="sys" auth_desc="None (UID/GID)"
+    local add_to_fstab="yes"
 
-    # Check RDMA availability if selected
-    if [[ "$protocol" == "RDMA" ]]; then
-        if [[ ! -d /sys/class/infiniband ]] || [[ -z "$(ls /sys/class/infiniband/ 2>/dev/null)" ]]; then
-            if ! yes_no "RDMA Not Available" "\
+    while [[ $step -ge 1 && $step -le 7 ]]; do
+        case $step in
+        1)  # Step 1: Select protocol
+            protocol=$(menu_select "Step 1/7: Select Protocol" \
+                "Choose protocol (RDMA=high performance, TCP=universal)" \
+                "RDMA" "High-performance (requires DOCA OFED)" \
+                "TCP" "Standard (works everywhere)") || return 0
+
+            # Check RDMA availability if selected
+            if [[ "$protocol" == "RDMA" ]]; then
+                if [[ ! -d /sys/class/infiniband ]] || [[ -z "$(ls /sys/class/infiniband/ 2>/dev/null)" ]]; then
+                    if ! yes_no "RDMA Not Available" "\
 RDMA hardware not detected on this system.
 
 Would you like to:
 - Yes: Continue with TCP instead
 - No: Cancel and install DOCA OFED first"; then
-                return
+                        return 0
+                    fi
+                    protocol="TCP"
+                fi
             fi
-            protocol="TCP"
-        fi
-    fi
+            ((step++))
+            ;;
+        2)  # Step 2: Number of server IPs
+            num_ips=$(menu_select "Step 2/7: Number of Server IPs" \
+                "How many IPs? Multiple IPs use session trunking. Esc=Back" \
+                "1" "Single IP (nconnect=16)" \
+                "2" "Two IPs with trunking (nconnect=8 each)" \
+                "4" "Four IPs with trunking (nconnect=4 each)" \
+                "8" "Eight IPs with trunking (nconnect=2 each)") || { ((step--)); continue; }
 
-    # Step 2: Number of server IPs (for multi-IP distribution)
-    local num_ips
-    num_ips=$(menu_select "Step 2: Number of Server IPs" \
-        "How many IPs? Multiple IPs use session trunking." \
-        "1" "Single IP (nconnect=16)" \
-        "2" "Two IPs with trunking (nconnect=8 each)" \
-        "4" "Four IPs with trunking (nconnect=4 each)" \
-        "8" "Eight IPs with trunking (nconnect=2 each)") || return
+            nconnect=$((16 / num_ips))
+            ((step++))
+            ;;
+        3)  # Step 3: Enter server IP(s)
+            server_ips=()
+            local i ip_ok=true
+            for ((i=1; i<=num_ips; i++)); do
+                local ip_label="Server Address"
+                local ip_prompt="Enter the IP address of your xiNAS server:"
+                local ip_skip=""
+                if [[ $num_ips -gt 1 ]]; then
+                    ip_label="Server Address $i of $num_ips"
+                    ip_prompt="Enter IP address $i of $num_ips:"
+                    if [[ $i -gt 1 ]]; then
+                        ip_skip="\n\nLeave empty to finish with ${#server_ips[@]} IP(s)."
+                    fi
+                fi
 
-    local nconnect=$((16 / num_ips))
-
-    # Step 3: Enter server IP(s)
-    local server_ips=()
-    local i
-    for ((i=1; i<=num_ips; i++)); do
-        local ip_label="Server Address"
-        local ip_prompt="Enter the IP address of your xiNAS server:"
-        local ip_skip=""
-        if [[ $num_ips -gt 1 ]]; then
-            ip_label="Server Address $i of $num_ips"
-            ip_prompt="Enter IP address $i of $num_ips:"
-            if [[ $i -gt 1 ]]; then
-                ip_skip="\n\nLeave empty to finish with ${#server_ips[@]} IP(s)."
-            fi
-        fi
-
-        local server_ip
-        server_ip=$(input_box "Step 3: $ip_label" "\
+                local server_ip
+                server_ip=$(input_box "Step 3/7: $ip_label" "\
 $ip_prompt
 
 Example: 192.168.1.100 or 10.10.1.1
 
-This is the storage network IP of your NAS.${ip_skip}" "10.10.1.$i" ) || return
+This is the storage network IP of your NAS.${ip_skip}
 
-        # Allow skipping from 2nd IP onwards
-        if [[ -z "$server_ip" ]]; then
-            if [[ ${#server_ips[@]} -gt 0 ]]; then
-                break
-            else
-                return
-            fi
-        fi
+Esc = Back to previous step" "10.10.1.$i" ) || { ((step--)); ip_ok=false; break; }
 
-        # Validate IP format
-        if [[ ! "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            msg_box "Invalid IP" "Please enter a valid IP address."
-            return
-        fi
+                # Allow skipping from 2nd IP onwards
+                if [[ -z "$server_ip" ]]; then
+                    if [[ ${#server_ips[@]} -gt 0 ]]; then
+                        break
+                    else
+                        ((step--)); ip_ok=false; break
+                    fi
+                fi
 
-        server_ips+=("$server_ip")
-    done
+                # Validate IP format
+                if [[ ! "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    msg_box "Invalid IP" "Please enter a valid IP address."
+                    ip_ok=false; break
+                fi
 
-    # Recalculate num_ips and nconnect based on actual IPs entered
-    num_ips=${#server_ips[@]}
-    nconnect=$((16 / num_ips))
+                server_ips+=("$server_ip")
+            done
+            [[ "$ip_ok" != "true" ]] && continue
 
-    # Step 4: Enter remote share path
-    local share_path
-    share_path=$(input_box "Step 4: Share Path" "\
+            # Recalculate based on actual IPs entered
+            num_ips=${#server_ips[@]}
+            nconnect=$((16 / num_ips))
+            ((step++))
+            ;;
+        4)  # Step 4: Share path
+            share_path=$(input_box "Step 4/7: Share Path" "\
 Enter the NFS export path on the server:
 
   /              - Root export (default, fsid=0)
   /mnt/data      - Specific data volume
 
 Tip: Use / for the root export unless your
-server has multiple named exports." "/" ) || return
+server has multiple named exports.
 
-    [[ -z "$share_path" ]] && share_path="/"
+Esc = Back to previous step" "/" ) || { ((step--)); continue; }
 
-    # Step 5: Enter local mount point
-    local mount_point_base
-    local mount_point_msg="Enter the local directory to mount the share:
+            [[ -z "$share_path" ]] && share_path="/"
+            ((step++))
+            ;;
+        5)  # Step 5: Mount point
+            local mount_point_msg="Enter the local directory to mount the share:
 
 This directory will be created if it doesn't exist.
 
 Example: /mnt/nas"
-    if [[ $num_ips -gt 1 ]]; then
-        mount_point_msg="Enter the base directory for mount points:
+            if [[ $num_ips -gt 1 ]]; then
+                mount_point_msg="Enter the base directory for mount points:
 
 Each IP will be mounted to a numbered subdirectory:
   /mnt/nas/1, /mnt/nas/2, etc.
 
 Example: /mnt/nas"
-    fi
-    mount_point_base=$(input_box "Step 5: Mount Point" "\
-$mount_point_msg" "/mnt/nas" ) || return
+            fi
+            mount_point_base=$(input_box "Step 5/7: Mount Point" "\
+$mount_point_msg
 
-    [[ -z "$mount_point_base" ]] && mount_point_base="/mnt/nas"
+Esc = Back to previous step" "/mnt/nas" ) || { ((step--)); continue; }
 
-    # Step 6: Authentication
-    local sec_mode="sys"
-    local auth_desc="None (UID/GID)"
-    if yes_no "Step 6: Authentication" "\
+            [[ -z "$mount_point_base" ]] && mount_point_base="/mnt/nas"
+            ((step++))
+            ;;
+        6)  # Step 6: Authentication
+            sec_mode="sys"
+            auth_desc="None (UID/GID)"
+            if yes_no "Step 6/7: Authentication" "\
 Does your NFS server require authentication?
 
 Select 'Yes' if your administrator has set up
 Kerberos (krb5) authentication.
 
-Select 'No' for standard UID/GID mapping."; then
-        sec_mode=$(menu_select "Step 6: Security Mode" \
-            "Select NFS security mode:" \
-            "krb5" "Kerberos authentication" \
-            "krb5i" "Kerberos + integrity checking" \
-            "krb5p" "Kerberos + encryption (most secure)" \
-            "sys" "Standard UID/GID (no Kerberos)") || return
+Select 'No' for standard UID/GID mapping.
+Esc = Back to previous step"; then
+                sec_mode=$(menu_select "Step 6/7: Security Mode" \
+                    "Select NFS security mode: Esc=Back" \
+                    "krb5" "Kerberos authentication" \
+                    "krb5i" "Kerberos + integrity checking" \
+                    "krb5p" "Kerberos + encryption (most secure)" \
+                    "sys" "Standard UID/GID (no Kerberos)") || { continue; }
 
-        case "$sec_mode" in
-            krb5)  auth_desc="Kerberos" ;;
-            krb5i) auth_desc="Kerberos + integrity" ;;
-            krb5p) auth_desc="Kerberos + encryption" ;;
-            sys)   auth_desc="None (UID/GID)" ;;
-        esac
+                case "$sec_mode" in
+                    krb5)  auth_desc="Kerberos" ;;
+                    krb5i) auth_desc="Kerberos + integrity" ;;
+                    krb5p) auth_desc="Kerberos + encryption" ;;
+                    sys)   auth_desc="None (UID/GID)" ;;
+                esac
 
-        # Check for Kerberos ticket if using krb5
-        if [[ "$sec_mode" != "sys" ]]; then
-            if ! klist &>/dev/null; then
-                msg_box "⚠️ Kerberos Ticket Required" "\
+                # Check for Kerberos ticket if using krb5
+                if [[ "$sec_mode" != "sys" ]]; then
+                    if ! klist &>/dev/null; then
+                        msg_box "Kerberos Ticket Required" "\
 No Kerberos ticket found!
 
 Before mounting, you need to authenticate:
@@ -720,23 +739,31 @@ Ask your administrator for:
   - The realm name (e.g., XINNOR.IO)
 
 The mount will proceed but may fail without a valid ticket."
+                    fi
+                fi
             fi
-        fi
-    fi
-
-    # Step 7: Persistent mount
-    local add_to_fstab="yes"
-    if yes_no "Step 7: Persistent Mount" "\
+            ((step++))
+            ;;
+        7)  # Step 7: Persistent mount
+            if yes_no "Step 7/7: Persistent Mount" "\
 Add this mount to /etc/fstab?
 
 If yes, the share will be automatically
 mounted when the system boots.
 
-Recommended: Yes"; then
-        add_to_fstab="yes"
-    else
-        add_to_fstab="no"
-    fi
+Recommended: Yes
+Esc = Back to previous step"; then
+                add_to_fstab="yes"
+            else
+                add_to_fstab="no"
+            fi
+            ((step++))
+            ;;
+        esac
+    done
+
+    # User went back past step 1
+    [[ $step -lt 1 ]] && return 0
 
     # Build mount options - training profile for all variants
     # Multi-IP (2+) adds trunking (trunkdiscovery)
@@ -796,8 +823,9 @@ Connections:  $conn_desc
 I/O Size:     rsize/wsize=1MB
 Persistent:   $add_to_fstab
 
-Proceed with mounting?"; then
-        return
+Proceed with mounting?
+No = Go back and change settings"; then
+        return 0
     fi
 
     # Mount each IP
