@@ -829,12 +829,15 @@ Some mounts succeeded, others failed.
 
 Failed:
 $fail_list
+Command:
+  $mount_cmd
+
 Troubleshooting:
 - Check server IPs are correct
 - Verify NFS server is running
 - Check firewall settings"
     else
-        msg_box "Mount Failed" "Failed to mount NFS share.\n\nError:\n$(cat "$mount_log")\n\nTroubleshooting:\n- Check server IP is correct\n- Verify NFS server is running\n- Check firewall settings"
+        msg_box "Mount Failed" "Failed to mount NFS share.\n\nError:\n$(cat "$mount_log")\n\nCommand:\n  $mount_cmd\n\nTroubleshooting:\n- Check server IP is correct\n- Verify NFS server is running\n- Check firewall settings"
     fi
 }
 
@@ -3421,6 +3424,7 @@ case "${1:-}" in
             echo "Mounting $current_ip:$share_path to $current_mount"
             if ! mount -t nfs -o "$opts" "$current_ip:$share_path" "$current_mount"; then
                 echo -e "${RED}Failed to mount $current_ip${NC}"
+                echo -e "Command: mount -t nfs -o $opts $current_ip:$share_path $current_mount"
                 exit_code=1
             else
                 echo -e "${GREEN}OK${NC}"
