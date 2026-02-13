@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-CLIENT_VERSION="1.12.1"
+CLIENT_VERSION="1.12.2"
 
 # Network configuration file
 NETWORK_CONFIG="$SCRIPT_DIR/network_config.yml"
@@ -72,7 +72,8 @@ check_for_updates() {
 show_update_banner() {
     if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
         echo -e "${YELLOW}    ┌─────────────────────────────────────────────────────────────┐${NC}"
-        echo -e "${YELLOW}    │${NC}  ${CYAN}📦 Update available!${NC} Run: ${WHITE}curl -fsSL https://xinnor.io/install_client.sh | sudo bash${NC}"
+        echo -e "${YELLOW}    │${NC}  ${CYAN}📦 Update available!${NC}                                         ${YELLOW}│${NC}"
+        echo -e "${YELLOW}    │${NC}  Use ${WHITE}Advanced Settings → Check for Updates${NC} to install     ${YELLOW}│${NC}"
         echo -e "${YELLOW}    └─────────────────────────────────────────────────────────────┘${NC}"
         echo ""
     fi
@@ -3182,6 +3183,10 @@ advanced_settings_menu() {
             gds_indicator=" [OK]"
         fi
 
+        # Highlight update item if available
+        local update_label="🔄 Check for Updates"
+        [[ "$UPDATE_AVAILABLE" == "true" ]] && update_label="🔄 Check for Updates [NEW!]"
+
         local choice
         choice=$(menu_select "Advanced Settings" \
             "Installation & Configuration Options" \
@@ -3193,7 +3198,7 @@ advanced_settings_menu() {
             "6" "☸️  Kubernetes CSI NFS Driver" \
             "7" "🔍 Test Connection" \
             "8" "🩺 Client Health Check" \
-            "9" "🔄 Check for Updates" \
+            "9" "${update_label}" \
             "0" "🔙 Back to Main Menu") || return
 
         case "$choice" in
@@ -3243,9 +3248,13 @@ main_menu() {
             advanced_label="🛠 Advanced Settings [!]"
         fi
 
+        # Update indicator for main menu
+        local update_hint=""
+        [[ "$UPDATE_AVAILABLE" == "true" ]] && update_hint=" | UPDATE available!"
+
         local choice
         choice=$(menu_select "xiNAS Client Setup v$CLIENT_VERSION" \
-            "$(hostname) | Mounts: $nfs_mounts | RDMA: $rdma_status" \
+            "$(hostname) | Mounts: $nfs_mounts | RDMA: $rdma_status${update_hint}" \
             "1" "📊 System Status" \
             "2" "🔌 Connect to NAS" \
             "3" "${advanced_label}" \
