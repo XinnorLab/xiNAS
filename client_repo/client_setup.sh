@@ -608,7 +608,7 @@ $ip_prompt
 
 Example: 192.168.1.100 or 10.10.1.1
 
-This is the storage network IP of your NAS." "10.10.1.$i" 3>&1 1>&2 2>&3) || return
+This is the storage network IP of your NAS." "10.10.1.$i" ) || return
 
         [[ -z "$server_ip" ]] && return
 
@@ -630,7 +630,7 @@ Examples:
   /mnt/data      - Data volume
   /              - Root export
 
-Ask your NAS administrator if unsure." "/mnt/data" 3>&1 1>&2 2>&3) || return
+Ask your NAS administrator if unsure." "/mnt/data" ) || return
 
     [[ -z "$share_path" ]] && share_path="/"
 
@@ -650,7 +650,7 @@ Each IP will be mounted to a numbered subdirectory:
 Example: /mnt/nas"
     fi
     mount_point_base=$(input_box "Step 5: Mount Point" "\
-$mount_point_msg" "/mnt/nas" 3>&1 1>&2 2>&3) || return
+$mount_point_msg" "/mnt/nas" ) || return
 
     [[ -z "$mount_point_base" ]] && mount_point_base="/mnt/nas"
 
@@ -1927,7 +1927,7 @@ Enter the xiNAS server IP address:
 This should be the storage network IP
 that Kubernetes nodes can access.
 
-Example: 10.10.1.1" "10.10.1.1" 3>&1 1>&2 2>&3) || return
+Example: 10.10.1.1" "10.10.1.1" ) || return
 
     [[ -z "$nfs_server" ]] && return
 
@@ -1945,7 +1945,7 @@ Enter the NFS export path on the server:
 This is the base path that will be used
 for dynamic provisioning.
 
-Example: /mnt/data" "/mnt/data" 3>&1 1>&2 2>&3) || return
+Example: /mnt/data" "/mnt/data" ) || return
 
     [[ -z "$nfs_share" ]] && nfs_share="/mnt/data"
 
@@ -1956,7 +1956,7 @@ Enter a name for the StorageClass:
 
 This will be used in PVC definitions.
 
-Example: xinas-nfs" "xinas-nfs" 3>&1 1>&2 2>&3) || return
+Example: xinas-nfs" "xinas-nfs" ) || return
 
     [[ -z "$sc_name" ]] && sc_name="xinas-nfs"
 
@@ -2337,7 +2337,7 @@ test_connection() {
 Enter the xiNAS server IP to test:
 
 This will check network connectivity and
-NFS service availability." "10.10.1.1" 3>&1 1>&2 2>&3) || return
+NFS service availability." "10.10.1.1" ) || return
 
     [[ -z "$server_ip" ]] && return
 
@@ -2676,7 +2676,7 @@ Each interface will get the next subnet:
   Interface 2: 10.10.2.2
   etc.
 
-Note: Use .2 addresses if .1 is your NAS server." "$net_pool_start" 3>&1 1>&2 2>&3) || return
+Note: Use .2 addresses if .1 is your NAS server." "$net_pool_start" ) || return
 
         if valid_ipv4 "$new_start"; then
             break
@@ -2691,7 +2691,7 @@ Note: Use .2 addresses if .1 is your NAS server." "$net_pool_start" 3>&1 1>&2 2>
         new_end=$(input_box "Network: IP Pool End" "\
 End IP address of the pool:
 
-Format: X.X.X.X (e.g., 10.10.255.2)" "$net_pool_end" 3>&1 1>&2 2>&3) || return
+Format: X.X.X.X (e.g., 10.10.255.2)" "$net_pool_end" ) || return
 
         if valid_ipv4 "$new_end"; then
             break
@@ -2706,7 +2706,7 @@ Format: X.X.X.X (e.g., 10.10.255.2)" "$net_pool_end" 3>&1 1>&2 2>&3) || return
         new_prefix=$(input_box "Network: Subnet Prefix" "\
 Subnet prefix (CIDR):
 
-(e.g., 24 for /24 = 255.255.255.0)" "$net_pool_prefix" 3>&1 1>&2 2>&3) || return
+(e.g., 24 for /24 = 255.255.255.0)" "$net_pool_prefix" ) || return
 
         if [[ $new_prefix =~ ^[0-9]{1,2}$ ]] && [[ $new_prefix -ge 1 && $new_prefix -le 32 ]]; then
             break
@@ -2724,7 +2724,7 @@ MTU (Maximum Transmission Unit):
   1500 = Standard Ethernet
   9000 = Jumbo frames
 
-Leave at 0 to auto-detect based on interface type." "$net_mtu" 3>&1 1>&2 2>&3) || return
+Leave at 0 to auto-detect based on interface type." "$net_mtu" ) || return
 
     [[ -z "$new_mtu" ]] && new_mtu=0
 
@@ -2798,7 +2798,7 @@ $prompt
 
 Format: X.X.X.X/prefix (e.g., 10.10.1.2/24)
 
-Leave empty to skip this interface." 3>&1 1>&2 2>&3) || break
+Leave empty to skip this interface." ) || break
 
             [[ -z "$addr" ]] && break
 
@@ -2837,7 +2837,7 @@ MTU (Maximum Transmission Unit):
   1500 = Standard Ethernet
   9000 = Jumbo frames
 
-Leave at 0 to auto-detect based on interface type." "$net_mtu" 3>&1 1>&2 2>&3) || return
+Leave at 0 to auto-detect based on interface type." "$net_mtu" ) || return
 
     [[ -z "$mtu" ]] && mtu=0
 
