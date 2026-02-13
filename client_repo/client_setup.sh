@@ -657,9 +657,8 @@ Esc = Back to previous step" "10.10.1.$i" ) || { ((step--)); ip_ok=false; break;
             done
             [[ "$ip_ok" != "true" ]] && continue
 
-            # Recalculate based on actual IPs entered
+            # Update num_ips for actual IPs entered, keep nconnect from original selection
             num_ips=${#server_ips[@]}
-            nconnect=$((16 / num_ips))
             ((step++))
             ;;
         4)  # Step 4: Share path
