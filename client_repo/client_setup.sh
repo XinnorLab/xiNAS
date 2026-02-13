@@ -679,17 +679,14 @@ Esc = Back to previous step" "/" ) || { ((step--)); continue; }
         5)  # Step 5: Mount point
             local mount_point_msg="Enter the local directory to mount the share:
 
-This directory will be created if it doesn't exist.
-
-Example: /mnt/nas"
+This directory will be created if it doesn't exist."
             if [[ $num_ips -gt 1 ]]; then
-                mount_point_msg="Enter the base directory for mount points:
+                mount_point_msg="Enter the mount directory:
 
-Each IP will be mounted to a numbered subdirectory:
-  /mnt/nas/1, /mnt/nas/2, etc.
-
-Example: /mnt/nas"
+All ${num_ips} IPs will be trunked into a single mount.
+This directory will be created if it doesn't exist."
             fi
+            mount_point_msg+="\n\nExample: /mnt/nas"
             mount_point_base=$(input_box "Step 5/7: Mount Point" "\
 $mount_point_msg
 
@@ -811,9 +808,6 @@ Esc = Back to previous step"; then
     # Confirm settings
     local ip_list="${server_ips[*]}"
     local mount_point_desc="$mount_point_base"
-    if [[ $num_ips -gt 1 ]]; then
-        mount_point_desc="$mount_point_base/{1..$num_ips}"
-    fi
 
     if ! yes_no "Confirm Settings" "\
 Please review your mount configuration:
@@ -833,22 +827,16 @@ No = Go back and change settings"; then
         return 0
     fi
 
-    # Mount each IP
+    # Mount — all IPs trunk into a single mount point
     local mount_log="$TMP_DIR/mount.log"
+    local mount_point="$mount_point_base"
     local failed_mounts=()
     local successful_mounts=()
 
+    mkdir -p "$mount_point"
+
     for ((i=0; i<num_ips; i++)); do
         local current_ip="${server_ips[$i]}"
-        local mount_point
-        if [[ $num_ips -eq 1 ]]; then
-            mount_point="$mount_point_base"
-        else
-            mount_point="$mount_point_base/$((i+1))"
-        fi
-
-        # Create mount point
-        mkdir -p "$mount_point"
 
         info_box "Mounting..." "Connecting to $current_ip ($((i+1))/$num_ips)..."
 
@@ -856,18 +844,20 @@ No = Go back and change settings"; then
 
         if $mount_cmd > "$mount_log" 2>&1; then
             successful_mounts+=("$current_ip → $mount_point")
-
-            # Add to fstab if requested
-            if [[ "$add_to_fstab" == "yes" ]]; then
-                # Remove any existing entry for this mount point
-                sed -i "\|^.*[[:space:]]$mount_point[[:space:]]|d" /etc/fstab 2>/dev/null || true
-                # Add new entry
-                echo "$current_ip:$share_path $mount_point nfs $mount_opts 0 0" >> /etc/fstab
-            fi
         else
             failed_mounts+=("$current_ip: $(cat "$mount_log")")
         fi
     done
+
+    # Add to fstab if requested (one entry per IP, all to same mount point)
+    if [[ "$add_to_fstab" == "yes" && ${#successful_mounts[@]} -gt 0 ]]; then
+        # Remove existing entries for this mount point
+        sed -i "\|^.*[[:space:]]${mount_point}[[:space:]]|d" /etc/fstab 2>/dev/null || true
+        for ((i=0; i<${#successful_mounts[@]}; i++)); do
+            local fstab_ip="${server_ips[$i]}"
+            echo "$fstab_ip:$share_path $mount_point nfs $mount_opts 0 0" >> /etc/fstab
+        done
+    fi
 
     # Show results
     if [[ ${#failed_mounts[@]} -eq 0 ]]; then
@@ -3482,18 +3472,13 @@ case "${1:-}" in
         echo ""
 
         exit_code=0
+        mkdir -p "$mount_point"
         for ((i=0; i<num_ips; i++)); do
             current_ip="${server_ips[$i]}"
-            if [[ $num_ips -eq 1 ]]; then
-                current_mount="$mount_point"
-            else
-                current_mount="$mount_point/$((i+1))"
-            fi
-            mkdir -p "$current_mount"
-            echo "Mounting $current_ip:$share_path to $current_mount"
-            if ! mount -t nfs -o "$opts" "$current_ip:$share_path" "$current_mount"; then
+            echo "Mounting $current_ip:$share_path to $mount_point"
+            if ! mount -t nfs -o "$opts" "$current_ip:$share_path" "$mount_point"; then
                 echo -e "${RED}Failed to mount $current_ip${NC}"
-                echo -e "Command: mount -t nfs -o $opts $current_ip:$share_path $current_mount"
+                echo -e "Command: mount -t nfs -o $opts $current_ip:$share_path $mount_point"
                 exit_code=1
             else
                 echo -e "${GREEN}OK${NC}"
