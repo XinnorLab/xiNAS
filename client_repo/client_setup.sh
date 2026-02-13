@@ -598,9 +598,13 @@ Would you like to:
     for ((i=1; i<=num_ips; i++)); do
         local ip_label="Server Address"
         local ip_prompt="Enter the IP address of your xiNAS server:"
+        local ip_skip=""
         if [[ $num_ips -gt 1 ]]; then
             ip_label="Server Address $i of $num_ips"
             ip_prompt="Enter IP address $i of $num_ips:"
+            if [[ $i -gt 1 ]]; then
+                ip_skip="\n\nLeave empty to finish with ${#server_ips[@]} IP(s)."
+            fi
         fi
 
         local server_ip
@@ -609,9 +613,16 @@ $ip_prompt
 
 Example: 192.168.1.100 or 10.10.1.1
 
-This is the storage network IP of your NAS." "10.10.1.$i" ) || return
+This is the storage network IP of your NAS.${ip_skip}" "10.10.1.$i" ) || return
 
-        [[ -z "$server_ip" ]] && return
+        # Allow skipping from 2nd IP onwards
+        if [[ -z "$server_ip" ]]; then
+            if [[ ${#server_ips[@]} -gt 0 ]]; then
+                break
+            else
+                return
+            fi
+        fi
 
         # Validate IP format
         if [[ ! "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -621,6 +632,10 @@ This is the storage network IP of your NAS." "10.10.1.$i" ) || return
 
         server_ips+=("$server_ip")
     done
+
+    # Recalculate num_ips and nconnect based on actual IPs entered
+    num_ips=${#server_ips[@]}
+    nconnect=$((16 / num_ips))
 
     # Step 4: Enter remote share path
     local share_path
