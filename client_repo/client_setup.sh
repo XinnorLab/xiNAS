@@ -2731,8 +2731,19 @@ Leave at 0 to auto-detect based on interface type." "$net_mtu" ) || return
     # Save settings
     save_network_pool_settings "$new_start" "$new_end" "$new_prefix" "$new_mtu"
 
-    # Show summary
-    msg_box "IP Pool Configured" "IP Pool configured:\n\nRange: $new_start - $new_end\nPrefix: /$new_prefix\nMTU: $([ "$new_mtu" = "0" ] && echo "Auto-detect (4092 IB / 9000 RoCE)" || echo "$new_mtu")\n\nSaved to: $NETWORK_CONFIG\n\nUse 'Apply Network Configuration' to activate."
+    # Show summary and offer to apply
+    if yes_no "IP Pool Configured" "\
+IP Pool configured:
+
+Range: $new_start - $new_end
+Prefix: /$new_prefix
+MTU: $([ "$new_mtu" = "0" ] && echo "Auto-detect (4092 IB / 9000 RoCE)" || echo "$new_mtu")
+
+Saved to: $NETWORK_CONFIG
+
+Apply network configuration now?"; then
+        apply_network_pool
+    fi
 }
 
 # Configure interfaces manually
