@@ -705,7 +705,7 @@ Select 'Yes' if your administrator has set up
 Kerberos (krb5) authentication.
 
 Select 'No' for standard UID/GID mapping.
-Esc = Back to previous step"; then
+Esc = Back to previous step" "n"; then
                 sec_mode=$(menu_select "Step 6/7: Security Mode" \
                     "Select NFS security mode: Esc=Back" \
                     "krb5" "Kerberos authentication" \
