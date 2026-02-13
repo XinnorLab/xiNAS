@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-CLIENT_VERSION="1.12.0"
+CLIENT_VERSION="1.12.1"
 
 # Network configuration file
 NETWORK_CONFIG="$SCRIPT_DIR/network_config.yml"
@@ -538,6 +538,23 @@ NFS client tools are not installed.
 
 Install them now?"; then
             install_nfs_tools
+        else
+            return
+        fi
+    fi
+
+    # Check if network is configured
+    if [[ ! -f /etc/netplan/99-xinas-client.yaml ]]; then
+        if yes_no "Network Not Configured" "\
+No storage network configuration found.
+
+It is recommended to configure the storage
+network interfaces before connecting to a NAS.
+
+Continue anyway?
+  Yes = Skip and connect using existing network
+  No  = Go back and configure network first"; then
+            :  # continue
         else
             return
         fi
