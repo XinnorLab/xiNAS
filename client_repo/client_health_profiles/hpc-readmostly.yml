@@ -10,6 +10,7 @@ sections:
   rdma: { enabled: true, checks: [rdma_devices, port_state] }
   gds: { enabled: false }
   runtime: { enabled: true, checks: [nfs_errors, cpu_iowait, memory_pressure, softirq_pressure] }
+  kerberos: { enabled: false, checks: [krb5_conf, klist_ticket, idmapd_domain, time_sync] }
 expectations:
   nfs_version: "4.2"
   mount_proto: "tcp"

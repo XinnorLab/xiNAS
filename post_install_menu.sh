@@ -1236,6 +1236,12 @@ def explain_access(client_spec):
         if "no_root_squash" in opt_list:
             perms.append("Full admin access")
 
+        # Extract security mode
+        sec_mode = "sys"
+        for o in opt_list:
+            if o.startswith("sec="):
+                sec_mode = o.split("=", 1)[1]
+
         explanations.append(f"  {host_desc}: {', '.join(perms)}")
 
     return "\n".join(explanations)
@@ -1335,6 +1341,23 @@ for i, share in enumerate(shares, 1):
     else:
         print("     Storage: Path does not exist!")
 
+    # Get security mode from first client spec
+    share_sec = "sys"
+    for c in clients:
+        if "(" in c:
+            copts = c.split("(")[1].rstrip(")").split(",")
+            for o in copts:
+                if o.startswith("sec="):
+                    share_sec = o.split("=", 1)[1]
+            break
+
+    sec_labels = {
+        "sys": "Standard (UID/GID)",
+        "krb5": "Kerberos",
+        "krb5i": "Kerberos + integrity",
+        "krb5p": "Kerberos + encryption",
+    }
+    print(f"     Security: {sec_labels.get(share_sec, share_sec)}")
     print()
     print("     Who can access:")
     print(explain_access(clients))
@@ -1462,6 +1485,31 @@ edit_nfs_share() {
         2) new_root="root_squash" ;;
     esac
 
+    # Step 4: Security Mode
+    # Parse existing sec= from current options (default: sys)
+    local current_sec="sys"
+    if [[ "$current_options" =~ sec=([^,]+) ]]; then
+        current_sec="${BASH_REMATCH[1]}"
+    fi
+
+    # Check Kerberos readiness for the info line
+    local krb_status
+    krb_status=$(check_kerberos_server_readiness | head -1)
+    local krb_note=""
+    if [[ "$krb_status" != "READY" ]]; then
+        krb_note="\n\nNote: Kerberos infrastructure is not configured\non this server. krb5 modes may not work until\n/etc/krb5.conf and keytab are set up."
+    fi
+
+    show_header
+    local sec_choice
+    sec_choice=$(menu_select "Step 4: Security Mode" "Select authentication mode for:\n$share_path\n\nCurrent: $current_sec${krb_note}" \
+        "sys" "Standard UID/GID (default)" \
+        "krb5" "Kerberos authentication" \
+        "krb5i" "Kerberos + integrity" \
+        "krb5p" "Kerberos + encryption") || return
+
+    local new_sec="$sec_choice"
+
     # Build the new export line - preserve existing optimized options
     local new_options=""
     if [[ -n "$current_options" ]]; then
@@ -1479,9 +1527,21 @@ edit_nfs_share() {
         else
             new_options=$(echo "$new_options" | sed 's/\bno_root_squash\b/root_squash/')
         fi
+        # Update sec= option
+        if [[ "$new_sec" != "sys" ]]; then
+            if [[ "$new_options" =~ sec= ]]; then
+                new_options=$(echo "$new_options" | sed "s/sec=[^,]*/sec=${new_sec}/")
+            else
+                new_options="${new_options},sec=${new_sec}"
+            fi
+        else
+            # Remove sec= if reverting to sys (NFS default)
+            new_options=$(echo "$new_options" | sed 's/,sec=[^,]*//;s/^sec=[^,]*,//')
+        fi
     else
         # No existing options, use defaults
         new_options="${new_rw},sync,no_subtree_check,${new_root}"
+        [[ "$new_sec" != "sys" ]] && new_options="${new_options},sec=${new_sec}"
     fi
     local new_spec="${new_host}(${new_options})"
     local new_line="${share_path} ${new_spec}"
@@ -1493,10 +1553,17 @@ edit_nfs_share() {
     local admin_desc="Yes (full control)"
     [[ "$new_root" == "root_squash" ]] && admin_desc="No (limited)"
 
+    local sec_desc="Standard UID/GID"
+    case "$new_sec" in
+        krb5)  sec_desc="Kerberos" ;;
+        krb5i) sec_desc="Kerberos + integrity" ;;
+        krb5p) sec_desc="Kerberos + encryption" ;;
+    esac
+
     local host_desc="$new_host"
     [[ "$new_host" == "*" ]] && host_desc="Everyone"
 
-    if yes_no "Confirm Changes" "Please review your settings:\n\nShared Folder: $share_path\n\nWho can access:   $host_desc\nPermissions:      $perm_desc\nAdmin access:     $admin_desc\n\nApply these settings?"; then
+    if yes_no "Confirm Changes" "Please review your settings:\n\nShared Folder: $share_path\n\nWho can access:   $host_desc\nPermissions:      $perm_desc\nAdmin access:     $admin_desc\nSecurity:         $sec_desc\n\nApply these settings?"; then
 
         # Create backup
         local ts
@@ -1576,6 +1643,24 @@ add_nfs_share() {
     local new_rw="rw"
     [[ "$perm_choice" == "2" ]] && new_rw="ro"
 
+    # Step 4: Security Mode
+    local krb_status
+    krb_status=$(check_kerberos_server_readiness | head -1)
+    local krb_note=""
+    if [[ "$krb_status" != "READY" ]]; then
+        krb_note="\n\nNote: Kerberos infrastructure is not configured\non this server. krb5 modes may not work until\n/etc/krb5.conf and keytab are set up."
+    fi
+
+    show_header
+    local sec_choice
+    sec_choice=$(menu_select "Add New Share - Step 4" "Select authentication mode:${krb_note}" \
+        "sys" "Standard UID/GID (default)" \
+        "krb5" "Kerberos authentication" \
+        "krb5i" "Kerberos + integrity" \
+        "krb5p" "Kerberos + encryption") || return
+
+    local new_sec="$sec_choice"
+
     # Build export line - copy optimized options from existing share if available
     local base_options="${new_rw},sync,no_subtree_check,no_root_squash"
     local existing_opts
@@ -1589,6 +1674,17 @@ add_nfs_share() {
             base_options=$(echo "$base_options" | sed 's/\brw\b/ro/')
         fi
     fi
+    # Add sec= if not sys
+    if [[ "$new_sec" != "sys" ]]; then
+        if [[ "$base_options" =~ sec= ]]; then
+            base_options=$(echo "$base_options" | sed "s/sec=[^,]*/sec=${new_sec}/")
+        else
+            base_options="${base_options},sec=${new_sec}"
+        fi
+    else
+        # Remove sec= if present (sys is NFS default)
+        base_options=$(echo "$base_options" | sed 's/,sec=[^,]*//;s/^sec=[^,]*,//')
+    fi
     local new_line="${share_path} ${new_host}(${base_options})"
 
     # Confirm
@@ -1598,7 +1694,14 @@ add_nfs_share() {
     local perm_desc="Read & Write"
     [[ "$new_rw" == "ro" ]] && perm_desc="Read Only"
 
-    if yes_no "Confirm New Share" "Create this shared folder?\n\nFolder:      $share_path\nAccess:      $host_desc\nPermissions: $perm_desc"; then
+    local sec_desc="Standard UID/GID"
+    case "$new_sec" in
+        krb5)  sec_desc="Kerberos" ;;
+        krb5i) sec_desc="Kerberos + integrity" ;;
+        krb5p) sec_desc="Kerberos + encryption" ;;
+    esac
+
+    if yes_no "Confirm New Share" "Create this shared folder?\n\nFolder:      $share_path\nAccess:      $host_desc\nPermissions: $perm_desc\nSecurity:    $sec_desc"; then
 
         # Add to exports
         echo "$new_line" | sudo tee -a "$exports_file" > /dev/null
@@ -1609,6 +1712,33 @@ add_nfs_share() {
         else
             msg_box "Warning" "Share added but could not activate."
         fi
+    fi
+}
+
+check_kerberos_server_readiness() {
+    # Quick check for Kerberos infrastructure on the server
+    local warnings=()
+    local ready=true
+
+    if [[ ! -f /etc/krb5.conf ]]; then
+        warnings+=("- /etc/krb5.conf not found")
+        ready=false
+    fi
+    if [[ ! -f /etc/krb5.keytab ]]; then
+        warnings+=("- /etc/krb5.keytab not found")
+        ready=false
+    fi
+    if ! systemctl is-active --quiet rpc-svcgssd 2>/dev/null && \
+       ! systemctl is-active --quiet gssproxy 2>/dev/null; then
+        warnings+=("- Neither rpc-svcgssd nor gssproxy is active")
+        ready=false
+    fi
+
+    if [[ "$ready" == "false" ]]; then
+        echo "NOT READY"
+        printf '%s\n' "${warnings[@]}"
+    else
+        echo "READY"
     fi
 }
 

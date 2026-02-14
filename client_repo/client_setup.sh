@@ -720,21 +720,45 @@ Esc = Back to previous step" "n"; then
                     sys)   auth_desc="None (UID/GID)" ;;
                 esac
 
-                # Check for Kerberos ticket if using krb5
+                # Pre-flight checks for Kerberos modes
                 if [[ "$sec_mode" != "sys" ]]; then
-                    if ! klist &>/dev/null; then
-                        msg_box "Kerberos Ticket Required" "\
-No Kerberos ticket found!
+                    local krb_warnings=""
 
-Before mounting, you need to authenticate:
+                    # Check 1: krb5.conf exists
+                    if [[ ! -f /etc/krb5.conf ]]; then
+                        krb_warnings+="- /etc/krb5.conf not found\n  Install: apt install krb5-user\n\n"
+                    fi
 
-  kinit username@REALM
+                    # Check 2: Time sync (Kerberos is clock-sensitive)
+                    local ntp_synced
+                    ntp_synced=$(timedatectl show --property=NTPSynchronized --value 2>/dev/null || echo "")
+                    if [[ "$ntp_synced" == "no" ]]; then
+                        krb_warnings+="- System clock is NOT synchronized\n  Kerberos requires accurate time\n  Fix: timedatectl set-ntp true\n\n"
+                    fi
 
-Ask your administrator for:
-  - Your Kerberos username
-  - The realm name (e.g., XINNOR.IO)
+                    # Show warnings if any
+                    if [[ -n "$krb_warnings" ]]; then
+                        msg_box "Kerberos Warnings" "The following issues were detected:\n\n${krb_warnings}The mount may fail without these resolved."
+                    fi
 
-The mount will proceed but may fail without a valid ticket."
+                    # Check 3: Kerberos ticket
+                    if ! klist -s 2>/dev/null; then
+                        if yes_no "No Kerberos Ticket" "No valid Kerberos ticket found.\n\nWould you like to authenticate now?\n\nSelect 'No' to continue without a ticket\n(mount may fail)."; then
+                            local krb_user
+                            krb_user=$(input_box "Kerberos Username" "Enter your Kerberos principal:\n\nExample: user@REALM.COM") || true
+                            if [[ -n "$krb_user" ]]; then
+                                local krb_pass
+                                krb_pass=$(password_box "Kerberos Password" "Enter password for ${krb_user}:") || true
+                                if [[ -n "$krb_pass" ]]; then
+                                    local kinit_out
+                                    kinit_out=$(echo "$krb_pass" | kinit "$krb_user" 2>&1) && \
+                                        msg_box "Authentication Success" "Kerberos ticket obtained for:\n${krb_user}" || \
+                                        msg_box "Authentication Failed" "kinit failed:\n\n${kinit_out}\n\nThe mount will proceed but may fail."
+                                fi
+                            fi
+                        else
+                            msg_box "Warning" "Continuing without Kerberos ticket.\nThe mount may fail with sec=${sec_mode}."
+                        fi
                     fi
                 fi
             fi

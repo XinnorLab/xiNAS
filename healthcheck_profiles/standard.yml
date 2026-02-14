@@ -11,6 +11,7 @@ sections:
   rdma: { enabled: true, checks: [rdma_devices, port_state] }
   nvme_health: { enabled: false }
   filesystem: { enabled: false }
+  kerberos: { enabled: false, checks: [krb5_conf, klist_ticket, idmapd_domain, time_sync] }
 expectations:
   cpu_governor: "performance"
   tuned_profile: "throughput-performance"

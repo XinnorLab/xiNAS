@@ -1071,6 +1071,74 @@ def check_runtime(exp, checks):
     return results
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Section: Kerberos
+# ─────────────────────────────────────────────────────────────────────────────
+
+def check_kerberos(exp, checks):
+    results = []
+
+    if "krb5_conf" in checks:
+        content = read_file("/etc/krb5.conf")
+        if content and "[libdefaults]" in content:
+            results.append(CheckResult("Kerberos", "krb5_conf", "PASS",
+                "present with [libdefaults]", "present"))
+        elif content:
+            results.append(CheckResult("Kerberos", "krb5_conf", "WARN",
+                "present but missing [libdefaults]", "[libdefaults] section",
+                impact="krb5.conf may be misconfigured",
+                fix_hint="Ensure /etc/krb5.conf has a [libdefaults] section"))
+        else:
+            results.append(CheckResult("Kerberos", "krb5_conf", "FAIL",
+                "not found", "present",
+                impact="Kerberos configuration missing - krb5 mounts will fail",
+                fix_hint="apt install krb5-user && configure /etc/krb5.conf"))
+
+    if "klist_ticket" in checks:
+        klist = run_cmd("klist -s 2>/dev/null && echo valid || echo none")
+        if klist == "valid":
+            results.append(CheckResult("Kerberos", "klist_ticket", "PASS",
+                "valid ticket", "valid ticket"))
+        else:
+            results.append(CheckResult("Kerberos", "klist_ticket", "WARN",
+                "no valid ticket", "valid ticket",
+                impact="No Kerberos ticket - krb5 NFS mounts may fail",
+                fix_hint="kinit user@REALM"))
+
+    if "idmapd_domain" in checks:
+        content = read_file("/etc/idmapd.conf")
+        if content:
+            m = re.search(r'^\s*Domain\s*=\s*(\S+)', content, re.MULTILINE)
+            if m:
+                results.append(CheckResult("Kerberos", "idmapd_domain", "PASS",
+                    m.group(1), "configured",
+                    evidence=f"Domain = {m.group(1)}"))
+            else:
+                results.append(CheckResult("Kerberos", "idmapd_domain", "WARN",
+                    "not set", "configured",
+                    impact="NFSv4 ID mapping may not work correctly with Kerberos",
+                    fix_hint="Set Domain = YOUR.REALM in /etc/idmapd.conf"))
+        else:
+            results.append(CheckResult("Kerberos", "idmapd_domain", "WARN",
+                "/etc/idmapd.conf not found", "configured",
+                fix_hint="apt install nfs-common && configure /etc/idmapd.conf"))
+
+    if "time_sync" in checks:
+        timedatectl = run_cmd("timedatectl show --property=NTPSynchronized --value 2>/dev/null")
+        if timedatectl == "yes":
+            results.append(CheckResult("Kerberos", "time_sync", "PASS",
+                "NTP synchronized", "synchronized"))
+        elif timedatectl == "no":
+            results.append(CheckResult("Kerberos", "time_sync", "FAIL",
+                "NTP not synchronized", "synchronized",
+                impact="Kerberos requires accurate time - clock skew causes auth failures",
+                fix_hint="timedatectl set-ntp true"))
+        else:
+            results.append(CheckResult("Kerberos", "time_sync", "SKIP",
+                "N/A", "synchronized"))
+
+    return results
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Report generators
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1309,6 +1377,7 @@ def main():
         "rdma": check_rdma,
         "gds": check_gds,
         "runtime": check_runtime,
+        "kerberos": check_kerberos,
     }
 
     for section_name, checker in section_map.items():
