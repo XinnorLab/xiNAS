@@ -168,15 +168,19 @@ menu_select() {
         echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
 
-        # Prompt line with borders
+        # Prompt lines with borders (supports \n for multiline)
         if [[ -n "$prompt" ]]; then
-            local prompt_len
-            prompt_len=$(_menu_display_width "$prompt")
-            local prompt_pad=$((inner_width - prompt_len - 2))
-            [[ $prompt_pad -lt 0 ]] && prompt_pad=0
-            printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
-            printf '%*s' "$prompt_pad" '' >/dev/tty
-            printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+            local newline=$'\n'
+            local expanded_prompt="${prompt//\\n/$newline}"
+            while IFS= read -r pline; do
+                local pline_len
+                pline_len=$(_menu_display_width "$pline")
+                local pline_pad=$((inner_width - pline_len - 2))
+                [[ $pline_pad -lt 0 ]] && pline_pad=0
+                printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$pline" >/dev/tty
+                printf '%*s' "$pline_pad" '' >/dev/tty
+                printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+            done <<< "$expanded_prompt"
         fi
 
         # Close the header box
@@ -712,15 +716,19 @@ check_list() {
         echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
 
-        # Prompt line with borders
+        # Prompt lines with borders (supports \n for multiline)
         if [[ -n "$prompt" ]]; then
-            local prompt_len
-            prompt_len=$(_menu_display_width "$prompt")
-            local prompt_pad=$((inner_width - prompt_len - 2))
-            [[ $prompt_pad -lt 0 ]] && prompt_pad=0
-            printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$prompt" >/dev/tty
-            printf '%*s' "$prompt_pad" '' >/dev/tty
-            printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+            local newline=$'\n'
+            local expanded_prompt="${prompt//\\n/$newline}"
+            while IFS= read -r pline; do
+                local pline_len
+                pline_len=$(_menu_display_width "$pline")
+                local pline_pad=$((inner_width - pline_len - 2))
+                [[ $pline_pad -lt 0 ]] && pline_pad=0
+                printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$pline" >/dev/tty
+                printf '%*s' "$pline_pad" '' >/dev/tty
+                printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+            done <<< "$expanded_prompt"
         fi
 
         # Close the header box
