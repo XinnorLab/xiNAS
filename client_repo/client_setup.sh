@@ -542,6 +542,65 @@ You can now mount NFS shares from your xiNAS server."
     fi
 }
 
+configure_idmapd_domain() {
+    # Configure /etc/idmapd.conf Domain for NFSv4 ID mapping (Kerberos)
+    local idmapd_conf="/etc/idmapd.conf"
+
+    # If Domain is already set (uncommented), nothing to do
+    if grep -qP '^\s*Domain\s*=' "$idmapd_conf" 2>/dev/null; then
+        return 0
+    fi
+
+    # Auto-detect domain
+    local detected_domain=""
+    detected_domain=$(dnsdomainname 2>/dev/null || true)
+    if [[ -z "$detected_domain" ]]; then
+        detected_domain=$(awk '/^(search|domain)/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
+    fi
+
+    # Prompt user with detected value pre-filled
+    local domain
+    domain=$(input_box "NFSv4 ID Mapping Domain" \
+        "Kerberos NFS requires a domain for ID mapping.\n\nThis must match on server and all clients.\nTypically your DNS domain (e.g. example.com).\n\nEnter the NFSv4 domain:" \
+        "$detected_domain") || return 0
+
+    if [[ -z "$domain" ]]; then
+        msg_box "Skipped" "No domain entered. idmapd.conf was not changed.\nID mapping may not work with Kerberos."
+        return 0
+    fi
+
+    # Update or create idmapd.conf
+    if [[ -f "$idmapd_conf" ]]; then
+        if grep -qP '^\s*#\s*Domain\s*=' "$idmapd_conf"; then
+            # Uncomment and update existing commented line
+            sudo sed -i "s/^\s*#\s*Domain\s*=.*/Domain = ${domain}/" "$idmapd_conf"
+        elif grep -qP '^\[General\]' "$idmapd_conf"; then
+            # Insert after [General]
+            sudo sed -i "/^\[General\]/a Domain = ${domain}" "$idmapd_conf"
+        else
+            # Append a [General] section
+            printf '\n[General]\nDomain = %s\n' "$domain" | sudo tee -a "$idmapd_conf" > /dev/null
+        fi
+    else
+        # Create minimal idmapd.conf
+        sudo tee "$idmapd_conf" > /dev/null <<EOF
+[General]
+Domain = ${domain}
+
+[Mapping]
+Nobody-User = nobody
+Nobody-Group = nogroup
+EOF
+    fi
+
+    # Restart nfs-idmapd if running
+    if systemctl is-active --quiet nfs-idmapd 2>/dev/null; then
+        sudo systemctl restart nfs-idmapd
+    fi
+
+    msg_box "Domain Configured" "NFSv4 ID mapping domain set to:\n${domain}\n\nFile: ${idmapd_conf}"
+}
+
 configure_nfs_mount() {
     # Check if NFS tools are installed
     if ! command -v mount.nfs4 &>/dev/null; then
@@ -739,6 +798,13 @@ Esc = Back to previous step" "n"; then
                     # Show warnings if any
                     if [[ -n "$krb_warnings" ]]; then
                         msg_box "Kerberos Warnings" "The following issues were detected:\n\n${krb_warnings}The mount may fail without these resolved."
+                    fi
+
+                    # Check/configure idmapd.conf domain
+                    local idmapd_domain
+                    idmapd_domain=$(grep -Po '^\s*Domain\s*=\s*\K\S+' /etc/idmapd.conf 2>/dev/null || true)
+                    if [[ -z "$idmapd_domain" ]]; then
+                        configure_idmapd_domain
                     fi
 
                     # Check 3: Kerberos ticket
