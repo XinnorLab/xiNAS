@@ -503,14 +503,47 @@ password_box() {
     local prompt="$2"
     local width=55
 
+    # Convert literal \n to actual newlines
+    local newline=$'\n'
+    prompt="${prompt//\\n/$newline}"
+
+    # Calculate width based on longest line
+    local max_line=0
+    while IFS= read -r line; do
+        local _dw; _dw=$(_menu_display_width "$line")
+        [[ $_dw -gt $max_line ]] && max_line=$_dw
+    done <<< "$prompt"
+    [[ $((max_line + 6)) -gt $width ]] && width=$((max_line + 6))
+    [[ $width -gt 78 ]] && width=78
+
+    local inner_width=$((width - 2))
+
     _menu_clear_screen
 
     echo "" >/dev/tty
     _menu_draw_box "$title" "$width"
+
+    # Prompt lines with borders
+    while IFS= read -r line; do
+        local line_len; line_len=$(_menu_display_width "$line")
+        local padding=$((inner_width - line_len - 2))
+        [[ $padding -lt 0 ]] && padding=0
+        printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$line" >/dev/tty
+        printf '%*s' "$padding" '' >/dev/tty
+        printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+    done <<< "$prompt"
+
+    # Empty line with borders
+    printf "${CYAN}${BOX_V}${NC}" >/dev/tty
+    printf '%*s' "$inner_width" '' >/dev/tty
+    printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
+
+    # Bottom border
+    printf "${CYAN}${BOX_BL}" >/dev/tty
+    _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
+    printf "${BOX_BR}${NC}\n" >/dev/tty
+
     echo "" >/dev/tty
-    printf "  ${WHITE}%s${NC}\n" "$prompt" >/dev/tty
-    echo "" >/dev/tty
-    _menu_draw_separator "$width"
     printf "  ${CYAN}>${NC} " >/dev/tty
 
     local password=""
