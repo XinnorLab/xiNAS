@@ -172,7 +172,11 @@ menu_select() {
         if [[ -n "$prompt" ]]; then
             local newline=$'\n'
             local expanded_prompt="${prompt//\\n/$newline}"
-            while IFS= read -r pline; do
+            local -a _plines=()
+            mapfile -t _plines <<< "$expanded_prompt"
+            local _pi
+            for _pi in "${!_plines[@]}"; do
+                local pline="${_plines[$_pi]}"
                 local pline_len
                 pline_len=$(_menu_display_width "$pline")
                 local pline_pad=$((inner_width - pline_len - 2))
@@ -180,7 +184,7 @@ menu_select() {
                 printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$pline" >/dev/tty
                 printf '%*s' "$pline_pad" '' >/dev/tty
                 printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
-            done <<< "$expanded_prompt"
+            done
         fi
 
         # Close the header box
@@ -720,7 +724,11 @@ check_list() {
         if [[ -n "$prompt" ]]; then
             local newline=$'\n'
             local expanded_prompt="${prompt//\\n/$newline}"
-            while IFS= read -r pline; do
+            local -a _plines=()
+            mapfile -t _plines <<< "$expanded_prompt"
+            local _pi
+            for _pi in "${!_plines[@]}"; do
+                local pline="${_plines[$_pi]}"
                 local pline_len
                 pline_len=$(_menu_display_width "$pline")
                 local pline_pad=$((inner_width - pline_len - 2))
@@ -728,7 +736,7 @@ check_list() {
                 printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$pline" >/dev/tty
                 printf '%*s' "$pline_pad" '' >/dev/tty
                 printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
-            done <<< "$expanded_prompt"
+            done
         fi
 
         # Close the header box
