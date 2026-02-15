@@ -1456,301 +1456,325 @@ edit_nfs_share() {
         [[ "$current_options" != *"no_root_squash"* ]] && current_root="root_squash"
     fi
 
-    # Step 1: Who can access?
-    show_header
-    local access_choice
-    access_choice=$(menu_select "Step 1: Who Can Access?" "Who should be able to connect to:\n$share_path\n\nChoose who can access this folder:" \
-        "1" "Everyone (any host on the network)" \
-        "2" "Specific network (e.g., 192.168.1.0/24)" \
-        "3" "Single host (by IP address)") || return
+    # Wizard steps with back navigation
+    local step=1
+    local access_choice="" new_host="" perm_choice="" new_rw=""
+    local admin_choice="" new_root="" sec_choice="" new_sec=""
 
-    local new_host
-    case "$access_choice" in
-        1)
-            new_host="*"
-            ;;
-        2)
-            new_host=$(input_box "Enter Network Address" "Enter the network address:\n\nExample: 192.168.1.0/24\nThis allows all hosts from 192.168.1.1 to 192.168.1.254\n\nFormat: X.X.X.0/24" "192.168.1.0/24") || return
-            [[ -z "$new_host" ]] && new_host="*"
-            ;;
-        3)
-            new_host=$(input_box "Enter Computer IP" "Enter the IP address of the host:\n\nExample: 192.168.1.100\n\nOnly this host will be able to connect.") || return
-            [[ -z "$new_host" ]] && new_host="*"
-            ;;
-    esac
-
-    # Step 2: Read or Read-Write?
-    show_header
-    local perm_choice
-    perm_choice=$(menu_select "Step 2: Access Permissions" "What can connected hosts do?\n\nShare: $share_path\nAccess: $new_host" \
-        "1" "Read & Write (can add, edit, delete files)" \
-        "2" "Read Only (can only view files)") || return
-
-    local new_rw
-    case "$perm_choice" in
-        1) new_rw="rw" ;;
-        2) new_rw="ro" ;;
-    esac
-
-    # Step 3: Admin access?
-    show_header
-    local admin_choice
-    admin_choice=$(menu_select "Step 3: Admin Access" "Allow full administrator access?\n\nIf enabled, remote admin users have full control\nover files (same as local root user).\n\nRecommended: Yes for trusted networks" \
-        "1" "Yes - Full admin access (recommended)" \
-        "2" "No - Limited access (more secure)") || return
-
-    local new_root
-    case "$admin_choice" in
-        1) new_root="no_root_squash" ;;
-        2) new_root="root_squash" ;;
-    esac
-
-    # Step 4: Security Mode
     # Parse existing sec= from current options (default: sys)
     local current_sec="sys"
     if [[ "$current_options" =~ sec=([^,]+) ]]; then
         current_sec="${BASH_REMATCH[1]}"
     fi
 
-    # Check Kerberos readiness for the info line
-    local krb_status
-    krb_status=$(check_kerberos_server_readiness | head -1)
-    local krb_note=""
-    if [[ "$krb_status" != "READY" ]]; then
-        krb_note="\n\nNote: Kerberos infrastructure is not configured\non this server. krb5 modes may not work until\n/etc/krb5.conf and keytab are set up."
-    fi
+    while [[ $step -ge 1 && $step -le 5 ]]; do
+        case $step in
+        1)  # Step 1: Who can access?
+            show_header
+            access_choice=$(menu_select "Step 1: Who Can Access?  (Esc = Back)" "Who should be able to connect to:\n$share_path\n\nChoose who can access this folder:" \
+                "1" "Everyone (any host on the network)" \
+                "2" "Specific network (e.g., 192.168.1.0/24)" \
+                "3" "Single host (by IP address)") || { ((step--)); continue; }
 
-    show_header
-    local sec_choice
-    sec_choice=$(menu_select "Step 4: Security Mode" "Select authentication mode for:\n$share_path\n\nCurrent: $current_sec${krb_note}" \
-        "sys" "Standard UID/GID (default)" \
-        "krb5" "Kerberos authentication" \
-        "krb5i" "Kerberos + integrity" \
-        "krb5p" "Kerberos + encryption") || return
+            case "$access_choice" in
+                1)
+                    new_host="*"
+                    ;;
+                2)
+                    new_host=$(input_box "Enter Network Address" "Enter the network address:\n\nExample: 192.168.1.0/24\nThis allows all hosts from 192.168.1.1 to 192.168.1.254\n\nFormat: X.X.X.0/24" "192.168.1.0/24") || continue
+                    [[ -z "$new_host" ]] && new_host="*"
+                    ;;
+                3)
+                    new_host=$(input_box "Enter Computer IP" "Enter the IP address of the host:\n\nExample: 192.168.1.100\n\nOnly this host will be able to connect.") || continue
+                    [[ -z "$new_host" ]] && new_host="*"
+                    ;;
+            esac
+            ((step++))
+            ;;
+        2)  # Step 2: Read or Read-Write?
+            show_header
+            perm_choice=$(menu_select "Step 2: Access Permissions  (Esc = Back)" "What can connected hosts do?\n\nShare: $share_path\nAccess: $new_host" \
+                "1" "Read & Write (can add, edit, delete files)" \
+                "2" "Read Only (can only view files)") || { ((step--)); continue; }
 
-    local new_sec="$sec_choice"
+            case "$perm_choice" in
+                1) new_rw="rw" ;;
+                2) new_rw="ro" ;;
+            esac
+            ((step++))
+            ;;
+        3)  # Step 3: Admin access?
+            show_header
+            admin_choice=$(menu_select "Step 3: Admin Access  (Esc = Back)" "Allow full administrator access?\n\nIf enabled, remote admin users have full control\nover files (same as local root user).\n\nRecommended: Yes for trusted networks" \
+                "1" "Yes - Full admin access (recommended)" \
+                "2" "No - Limited access (more secure)") || { ((step--)); continue; }
 
-    # Configure idmapd domain if switching to Kerberos
-    if [[ "$new_sec" != "sys" ]]; then
-        local idmapd_domain
-        idmapd_domain=$(grep -Po '^\s*Domain\s*=\s*\K\S+' /etc/idmapd.conf 2>/dev/null || true)
-        if [[ -z "$idmapd_domain" ]]; then
-            configure_idmapd_domain
-        fi
-    fi
-
-    # Build the new export line - preserve existing optimized options
-    local new_options=""
-    if [[ -n "$current_options" ]]; then
-        # Start with existing options and update only what changed
-        new_options="$current_options"
-        # Replace rw/ro
-        if [[ "$new_rw" == "rw" ]]; then
-            new_options=$(echo "$new_options" | sed 's/\bro\b/rw/')
-        else
-            new_options=$(echo "$new_options" | sed 's/\brw\b/ro/')
-        fi
-        # Replace root_squash/no_root_squash
-        if [[ "$new_root" == "no_root_squash" ]]; then
-            new_options=$(echo "$new_options" | sed 's/\broot_squash\b/no_root_squash/')
-        else
-            new_options=$(echo "$new_options" | sed 's/\bno_root_squash\b/root_squash/')
-        fi
-        # Update sec= option
-        if [[ "$new_sec" != "sys" ]]; then
-            if [[ "$new_options" =~ sec= ]]; then
-                new_options=$(echo "$new_options" | sed "s/sec=[^,]*/sec=${new_sec}/")
-            else
-                new_options="${new_options},sec=${new_sec}"
+            case "$admin_choice" in
+                1) new_root="no_root_squash" ;;
+                2) new_root="root_squash" ;;
+            esac
+            ((step++))
+            ;;
+        4)  # Step 4: Security Mode
+            # Check Kerberos readiness for the info line
+            local krb_status
+            krb_status=$(check_kerberos_server_readiness | head -1)
+            local krb_note=""
+            if [[ "$krb_status" != "READY" ]]; then
+                krb_note="\n\nNote: Kerberos infrastructure is not configured\non this server. krb5 modes may not work until\n/etc/krb5.conf and keytab are set up."
             fi
-        else
-            # Remove sec= if reverting to sys (NFS default)
-            new_options=$(echo "$new_options" | sed 's/,sec=[^,]*//;s/^sec=[^,]*,//')
-        fi
-    else
-        # No existing options, use defaults
-        new_options="${new_rw},sync,no_subtree_check,${new_root}"
-        [[ "$new_sec" != "sys" ]] && new_options="${new_options},sec=${new_sec}"
-    fi
-    local new_spec="${new_host}(${new_options})"
-    local new_line="${share_path} ${new_spec}"
 
-    # Show summary and confirm
-    local perm_desc="Read & Write"
-    [[ "$new_rw" == "ro" ]] && perm_desc="Read Only"
+            show_header
+            sec_choice=$(menu_select "Step 4: Security Mode  (Esc = Back)" "Select authentication mode for:\n$share_path\n\nCurrent: $current_sec${krb_note}" \
+                "sys" "Standard UID/GID (default)" \
+                "krb5" "Kerberos authentication" \
+                "krb5i" "Kerberos + integrity" \
+                "krb5p" "Kerberos + encryption") || { ((step--)); continue; }
 
-    local admin_desc="Yes (full control)"
-    [[ "$new_root" == "root_squash" ]] && admin_desc="No (limited)"
+            new_sec="$sec_choice"
 
-    local sec_desc="Standard UID/GID"
-    case "$new_sec" in
-        krb5)  sec_desc="Kerberos" ;;
-        krb5i) sec_desc="Kerberos + integrity" ;;
-        krb5p) sec_desc="Kerberos + encryption" ;;
-    esac
+            # Configure idmapd domain if switching to Kerberos
+            if [[ "$new_sec" != "sys" ]]; then
+                local idmapd_domain
+                idmapd_domain=$(grep -Po '^\s*Domain\s*=\s*\K\S+' /etc/idmapd.conf 2>/dev/null || true)
+                if [[ -z "$idmapd_domain" ]]; then
+                    configure_idmapd_domain
+                fi
+            fi
+            ((step++))
+            ;;
+        5)  # Confirm and apply
+            # Build the new export line - preserve existing optimized options
+            local new_options=""
+            if [[ -n "$current_options" ]]; then
+                # Start with existing options and update only what changed
+                new_options="$current_options"
+                # Replace rw/ro
+                if [[ "$new_rw" == "rw" ]]; then
+                    new_options=$(echo "$new_options" | sed 's/\bro\b/rw/')
+                else
+                    new_options=$(echo "$new_options" | sed 's/\brw\b/ro/')
+                fi
+                # Replace root_squash/no_root_squash
+                if [[ "$new_root" == "no_root_squash" ]]; then
+                    new_options=$(echo "$new_options" | sed 's/\broot_squash\b/no_root_squash/')
+                else
+                    new_options=$(echo "$new_options" | sed 's/\bno_root_squash\b/root_squash/')
+                fi
+                # Update sec= option
+                if [[ "$new_sec" != "sys" ]]; then
+                    if [[ "$new_options" =~ sec= ]]; then
+                        new_options=$(echo "$new_options" | sed "s/sec=[^,]*/sec=${new_sec}/")
+                    else
+                        new_options="${new_options},sec=${new_sec}"
+                    fi
+                else
+                    # Remove sec= if reverting to sys (NFS default)
+                    new_options=$(echo "$new_options" | sed 's/,sec=[^,]*//;s/^sec=[^,]*,//')
+                fi
+            else
+                # No existing options, use defaults
+                new_options="${new_rw},sync,no_subtree_check,${new_root}"
+                [[ "$new_sec" != "sys" ]] && new_options="${new_options},sec=${new_sec}"
+            fi
+            local new_spec="${new_host}(${new_options})"
+            local new_line="${share_path} ${new_spec}"
 
-    local host_desc="$new_host"
-    [[ "$new_host" == "*" ]] && host_desc="Everyone"
+            # Show summary and confirm
+            local perm_desc="Read & Write"
+            [[ "$new_rw" == "ro" ]] && perm_desc="Read Only"
 
-    if yes_no "Confirm Changes" "Please review your settings:\n\nShared Folder: $share_path\n\nWho can access:   $host_desc\nPermissions:      $perm_desc\nAdmin access:     $admin_desc\nSecurity:         $sec_desc\n\nApply these settings?"; then
+            local admin_desc="Yes (full control)"
+            [[ "$new_root" == "root_squash" ]] && admin_desc="No (limited)"
 
-        # Create backup
-        local ts
-        ts=$(date +%Y%m%d%H%M%S)
-        sudo cp "$exports_file" "${exports_file}.${ts}.bak"
+            local sec_desc="Standard UID/GID"
+            case "$new_sec" in
+                krb5)  sec_desc="Kerberos" ;;
+                krb5i) sec_desc="Kerberos + integrity" ;;
+                krb5p) sec_desc="Kerberos + encryption" ;;
+            esac
 
-        # Update the export line
-        sudo sed -i "s|^${share_path}[[:space:]].*|${new_line}|" "$exports_file"
+            local host_desc="$new_host"
+            [[ "$new_host" == "*" ]] && host_desc="Everyone"
 
-        # Apply changes
-        if sudo exportfs -ra 2>/dev/null; then
-            msg_box "Success!" "Settings updated successfully!\n\nFolder: $share_path\nAccess: $host_desc ($perm_desc)\n\nChanges are now active. Computers can\nconnect using this address:\n\n  $share_path"
-        else
-            msg_box "Warning" "Settings saved but could not activate.\n\nPlease check /etc/exports for errors\nor restart the NFS service."
-        fi
-    fi
+            if yes_no "Confirm Changes" "Please review your settings:\n\nShared Folder: $share_path\n\nWho can access:   $host_desc\nPermissions:      $perm_desc\nAdmin access:     $admin_desc\nSecurity:         $sec_desc\n\nApply these settings?"; then
+
+                # Create backup
+                local ts
+                ts=$(date +%Y%m%d%H%M%S)
+                sudo cp "$exports_file" "${exports_file}.${ts}.bak"
+
+                # Update the export line
+                sudo sed -i "s|^${share_path}[[:space:]].*|${new_line}|" "$exports_file"
+
+                # Apply changes
+                if sudo exportfs -ra 2>/dev/null; then
+                    msg_box "Success!" "Settings updated successfully!\n\nFolder: $share_path\nAccess: $host_desc ($perm_desc)\n\nChanges are now active. Computers can\nconnect using this address:\n\n  $share_path"
+                else
+                    msg_box "Warning" "Settings saved but could not activate.\n\nPlease check /etc/exports for errors\nor restart the NFS service."
+                fi
+                return 0
+            else
+                ((step--)); continue
+            fi
+            ;;
+        esac
+    done
 }
 
 add_nfs_share() {
     # Add a new NFS share
     local exports_file="/etc/exports"
 
-    # Step 1: Enter folder path
-    local share_path
-    share_path=$(input_box "Add New Shared Folder - Step 1" "Enter the folder path to share:\n\nThis is the folder on this server that other\nhosts will be able to access.\n\nExample: /mnt/data/shared" "/mnt/data/") || return
+    # Wizard steps with back navigation
+    local step=1
+    local share_path="" access_choice="" new_host=""
+    local perm_choice="" new_rw="" sec_choice="" new_sec=""
 
-    [[ -z "$share_path" ]] && return
+    while [[ $step -ge 1 && $step -le 5 ]]; do
+        case $step in
+        1)  # Step 1: Enter folder path
+            share_path=$(input_box "Add New Shared Folder - Step 1  (Esc = Back)" "Enter the folder path to share:\n\nThis is the folder on this server that other\nhosts will be able to access.\n\nExample: /mnt/data/shared" "/mnt/data/") || { ((step--)); continue; }
 
-    # Check if path exists
-    if [[ ! -d "$share_path" ]]; then
-        if yes_no "Folder Not Found" "The folder does not exist:\n$share_path\n\nWould you like to create it?"; then
-            if ! sudo mkdir -p "$share_path" 2>/dev/null; then
-                msg_box "Error" "Could not create folder."
-                return
+            [[ -z "$share_path" ]] && { ((step--)); continue; }
+
+            # Check if path exists
+            if [[ ! -d "$share_path" ]]; then
+                if yes_no "Folder Not Found" "The folder does not exist:\n$share_path\n\nWould you like to create it?"; then
+                    if ! sudo mkdir -p "$share_path" 2>/dev/null; then
+                        msg_box "Error" "Could not create folder."
+                        continue
+                    fi
+                else
+                    continue
+                fi
             fi
-        else
-            return
-        fi
-    fi
 
-    # Check if already shared
-    if grep -q "^${share_path}[[:space:]]" "$exports_file" 2>/dev/null; then
-        msg_box "Already Shared" "This folder is already being shared.\n\nUse 'Edit Share Settings' to modify it."
-        return
-    fi
-
-    # Step 2: Who can access?
-    show_header
-    local access_choice
-    access_choice=$(menu_select "Add New Share - Step 2" "Who should be able to access this folder?\n\nFolder: $share_path" \
-        "1" "Everyone (any host)" \
-        "2" "Specific network (recommended)" \
-        "3" "Single host only") || return
-
-    local new_host
-    case "$access_choice" in
-        1)
-            new_host="*"
+            # Check if already shared
+            if grep -q "^${share_path}[[:space:]]" "$exports_file" 2>/dev/null; then
+                msg_box "Already Shared" "This folder is already being shared.\n\nUse 'Edit Share Settings' to modify it."
+                continue
+            fi
+            ((step++))
             ;;
-        2)
-            new_host=$(input_box "Network Address" "Enter network address (e.g., 192.168.1.0/24):" "192.168.1.0/24") || return
-            [[ -z "$new_host" ]] && new_host="*"
+        2)  # Step 2: Who can access?
+            show_header
+            access_choice=$(menu_select "Add New Share - Step 2  (Esc = Back)" "Who should be able to access this folder?\n\nFolder: $share_path" \
+                "1" "Everyone (any host)" \
+                "2" "Specific network (recommended)" \
+                "3" "Single host only") || { ((step--)); continue; }
+
+            case "$access_choice" in
+                1)
+                    new_host="*"
+                    ;;
+                2)
+                    new_host=$(input_box "Network Address" "Enter network address (e.g., 192.168.1.0/24):" "192.168.1.0/24") || continue
+                    [[ -z "$new_host" ]] && new_host="*"
+                    ;;
+                3)
+                    new_host=$(input_box "Computer IP" "Enter the IP address:") || continue
+                    [[ -z "$new_host" ]] && new_host="*"
+                    ;;
+            esac
+            ((step++))
             ;;
-        3)
-            new_host=$(input_box "Computer IP" "Enter the IP address:") || return
-            [[ -z "$new_host" ]] && new_host="*"
+        3)  # Step 3: Permissions
+            show_header
+            perm_choice=$(menu_select "Add New Share - Step 3  (Esc = Back)" "What permissions should connected hosts have?" \
+                "1" "Read & Write (full access)" \
+                "2" "Read Only (view only)") || { ((step--)); continue; }
+
+            new_rw="rw"
+            [[ "$perm_choice" == "2" ]] && new_rw="ro"
+            ((step++))
             ;;
-    esac
+        4)  # Step 4: Security Mode
+            local krb_status
+            krb_status=$(check_kerberos_server_readiness | head -1)
+            local krb_note=""
+            if [[ "$krb_status" != "READY" ]]; then
+                krb_note="\n\nNote: Kerberos infrastructure is not configured\non this server. krb5 modes may not work until\n/etc/krb5.conf and keytab are set up."
+            fi
 
-    # Step 3: Permissions
-    show_header
-    local perm_choice
-    perm_choice=$(menu_select "Add New Share - Step 3" "What permissions should connected hosts have?" \
-        "1" "Read & Write (full access)" \
-        "2" "Read Only (view only)") || return
+            show_header
+            sec_choice=$(menu_select "Add New Share - Step 4  (Esc = Back)" "Select authentication mode:${krb_note}" \
+                "sys" "Standard UID/GID (default)" \
+                "krb5" "Kerberos authentication" \
+                "krb5i" "Kerberos + integrity" \
+                "krb5p" "Kerberos + encryption") || { ((step--)); continue; }
 
-    local new_rw="rw"
-    [[ "$perm_choice" == "2" ]] && new_rw="ro"
+            new_sec="$sec_choice"
 
-    # Step 4: Security Mode
-    local krb_status
-    krb_status=$(check_kerberos_server_readiness | head -1)
-    local krb_note=""
-    if [[ "$krb_status" != "READY" ]]; then
-        krb_note="\n\nNote: Kerberos infrastructure is not configured\non this server. krb5 modes may not work until\n/etc/krb5.conf and keytab are set up."
-    fi
+            # Configure idmapd domain if switching to Kerberos
+            if [[ "$new_sec" != "sys" ]]; then
+                local idmapd_domain
+                idmapd_domain=$(grep -Po '^\s*Domain\s*=\s*\K\S+' /etc/idmapd.conf 2>/dev/null || true)
+                if [[ -z "$idmapd_domain" ]]; then
+                    configure_idmapd_domain
+                fi
+            fi
+            ((step++))
+            ;;
+        5)  # Confirm and apply
+            # Build export line - copy optimized options from existing share if available
+            local base_options="${new_rw},sync,no_subtree_check,no_root_squash"
+            local existing_opts
+            existing_opts=$(grep -m1 '^/' "$exports_file" 2>/dev/null | grep -oP '\([^)]+\)' | tr -d '()')
+            if [[ -n "$existing_opts" ]]; then
+                # Use existing options as template, just update rw/ro
+                base_options="$existing_opts"
+                if [[ "$new_rw" == "rw" ]]; then
+                    base_options=$(echo "$base_options" | sed 's/\bro\b/rw/')
+                else
+                    base_options=$(echo "$base_options" | sed 's/\brw\b/ro/')
+                fi
+            fi
+            # Add sec= if not sys
+            if [[ "$new_sec" != "sys" ]]; then
+                if [[ "$base_options" =~ sec= ]]; then
+                    base_options=$(echo "$base_options" | sed "s/sec=[^,]*/sec=${new_sec}/")
+                else
+                    base_options="${base_options},sec=${new_sec}"
+                fi
+            else
+                # Remove sec= if present (sys is NFS default)
+                base_options=$(echo "$base_options" | sed 's/,sec=[^,]*//;s/^sec=[^,]*,//')
+            fi
+            local new_line="${share_path} ${new_host}(${base_options})"
 
-    show_header
-    local sec_choice
-    sec_choice=$(menu_select "Add New Share - Step 4" "Select authentication mode:${krb_note}" \
-        "sys" "Standard UID/GID (default)" \
-        "krb5" "Kerberos authentication" \
-        "krb5i" "Kerberos + integrity" \
-        "krb5p" "Kerberos + encryption") || return
+            # Confirm
+            local host_desc="$new_host"
+            [[ "$new_host" == "*" ]] && host_desc="Everyone"
 
-    local new_sec="$sec_choice"
+            local perm_desc="Read & Write"
+            [[ "$new_rw" == "ro" ]] && perm_desc="Read Only"
 
-    # Configure idmapd domain if switching to Kerberos
-    if [[ "$new_sec" != "sys" ]]; then
-        local idmapd_domain
-        idmapd_domain=$(grep -Po '^\s*Domain\s*=\s*\K\S+' /etc/idmapd.conf 2>/dev/null || true)
-        if [[ -z "$idmapd_domain" ]]; then
-            configure_idmapd_domain
-        fi
-    fi
+            local sec_desc="Standard UID/GID"
+            case "$new_sec" in
+                krb5)  sec_desc="Kerberos" ;;
+                krb5i) sec_desc="Kerberos + integrity" ;;
+                krb5p) sec_desc="Kerberos + encryption" ;;
+            esac
 
-    # Build export line - copy optimized options from existing share if available
-    local base_options="${new_rw},sync,no_subtree_check,no_root_squash"
-    local existing_opts
-    existing_opts=$(grep -m1 '^/' "$exports_file" 2>/dev/null | grep -oP '\([^)]+\)' | tr -d '()')
-    if [[ -n "$existing_opts" ]]; then
-        # Use existing options as template, just update rw/ro
-        base_options="$existing_opts"
-        if [[ "$new_rw" == "rw" ]]; then
-            base_options=$(echo "$base_options" | sed 's/\bro\b/rw/')
-        else
-            base_options=$(echo "$base_options" | sed 's/\brw\b/ro/')
-        fi
-    fi
-    # Add sec= if not sys
-    if [[ "$new_sec" != "sys" ]]; then
-        if [[ "$base_options" =~ sec= ]]; then
-            base_options=$(echo "$base_options" | sed "s/sec=[^,]*/sec=${new_sec}/")
-        else
-            base_options="${base_options},sec=${new_sec}"
-        fi
-    else
-        # Remove sec= if present (sys is NFS default)
-        base_options=$(echo "$base_options" | sed 's/,sec=[^,]*//;s/^sec=[^,]*,//')
-    fi
-    local new_line="${share_path} ${new_host}(${base_options})"
+            if yes_no "Confirm New Share" "Create this shared folder?\n\nFolder:      $share_path\nAccess:      $host_desc\nPermissions: $perm_desc\nSecurity:    $sec_desc"; then
 
-    # Confirm
-    local host_desc="$new_host"
-    [[ "$new_host" == "*" ]] && host_desc="Everyone"
+                # Add to exports
+                echo "$new_line" | sudo tee -a "$exports_file" > /dev/null
 
-    local perm_desc="Read & Write"
-    [[ "$new_rw" == "ro" ]] && perm_desc="Read Only"
-
-    local sec_desc="Standard UID/GID"
-    case "$new_sec" in
-        krb5)  sec_desc="Kerberos" ;;
-        krb5i) sec_desc="Kerberos + integrity" ;;
-        krb5p) sec_desc="Kerberos + encryption" ;;
-    esac
-
-    if yes_no "Confirm New Share" "Create this shared folder?\n\nFolder:      $share_path\nAccess:      $host_desc\nPermissions: $perm_desc\nSecurity:    $sec_desc"; then
-
-        # Add to exports
-        echo "$new_line" | sudo tee -a "$exports_file" > /dev/null
-
-        # Apply
-        if sudo exportfs -ra 2>/dev/null; then
-            msg_box "Share Created!" "New shared folder created successfully!\n\nOther hosts can now connect to:\n$share_path\n\nFrom: $host_desc"
-        else
-            msg_box "Warning" "Share added but could not activate."
-        fi
-    fi
+                # Apply
+                if sudo exportfs -ra 2>/dev/null; then
+                    msg_box "Share Created!" "New shared folder created successfully!\n\nOther hosts can now connect to:\n$share_path\n\nFrom: $host_desc"
+                else
+                    msg_box "Warning" "Share added but could not activate."
+                fi
+                return 0
+            else
+                ((step--)); continue
+            fi
+            ;;
+        esac
+    done
 }
 
 configure_idmapd_domain() {
@@ -1970,65 +1994,75 @@ PYEOF
 }
 
 create_user() {
-    # Step 1: Enter username
-    local username
-    username=$(input_box "Create User - Step 1" "Enter the username for the new account:\n\nRules:\n- Lowercase letters and numbers only\n- Must start with a letter\n- 3-32 characters long") || return
+    # Wizard steps with back navigation
+    local step=1
+    local username="" password="" password2="" create_home="yes"
 
-    [[ -z "$username" ]] && return
+    while [[ $step -ge 1 && $step -le 3 ]]; do
+        case $step in
+        1)  # Step 1: Enter username
+            username=$(input_box "Create User - Step 1  (Esc = Back)" "Enter the username for the new account:\n\nRules:\n- Lowercase letters and numbers only\n- Must start with a letter\n- 3-32 characters long") || { ((step--)); continue; }
 
-    # Validate username
-    if [[ ! "$username" =~ ^[a-z][a-z0-9]{2,31}$ ]]; then
-        msg_box "Invalid Username" "Invalid username format.\n\nUsername must:\n- Start with a lowercase letter\n- Contain only lowercase letters and numbers\n- Be 3-32 characters long"
-        return
-    fi
+            [[ -z "$username" ]] && { ((step--)); continue; }
 
-    # Check if user exists
-    if id "$username" &>/dev/null; then
-        msg_box "User Exists" "User '$username' already exists."
-        return
-    fi
+            # Validate username
+            if [[ ! "$username" =~ ^[a-z][a-z0-9]{2,31}$ ]]; then
+                msg_box "Invalid Username" "Invalid username format.\n\nUsername must:\n- Start with a lowercase letter\n- Contain only lowercase letters and numbers\n- Be 3-32 characters long"
+                continue
+            fi
 
-    # Step 2: Set password
-    local password password2
-    password=$(password_box "Create User - Step 2" "Enter password for '$username':\n\n(Minimum 6 characters)") || return
+            # Check if user exists
+            if id "$username" &>/dev/null; then
+                msg_box "User Exists" "User '$username' already exists."
+                continue
+            fi
+            ((step++))
+            ;;
+        2)  # Step 2: Set password
+            password=$(password_box "Create User - Step 2  (Esc = Back)" "Enter password for '$username':\n\n(Minimum 6 characters)") || { ((step--)); continue; }
 
-    if [[ ${#password} -lt 6 ]]; then
-        msg_box "Password Too Short" "Password must be at least 6 characters."
-        return
-    fi
+            if [[ ${#password} -lt 6 ]]; then
+                msg_box "Password Too Short" "Password must be at least 6 characters."
+                continue
+            fi
 
-    password2=$(password_box "Create User - Step 2" "Confirm password:") || return
+            password2=$(password_box "Create User - Step 2" "Confirm password:") || continue
 
-    if [[ "$password" != "$password2" ]]; then
-        msg_box "Password Mismatch" "Passwords do not match."
-        return
-    fi
+            if [[ "$password" != "$password2" ]]; then
+                msg_box "Password Mismatch" "Passwords do not match."
+                continue
+            fi
+            ((step++))
+            ;;
+        3)  # Step 3: Home directory + confirm
+            if yes_no "Create User - Step 3  (Esc = Back)" "Create home directory for '$username'?\n\nThis will create /home/$username"; then
+                create_home="yes"
+            else
+                create_home="no"
+            fi
 
-    # Step 3: Additional options
-    local create_home="yes"
+            # Confirm
+            if yes_no "Confirm User Creation" "Create this user account?\n\nUsername:    $username\nHome Dir:    $([ "$create_home" = "yes" ] && echo "/home/$username" || echo "None")\n\nProceed?"; then
 
-    if yes_no "Create User - Step 3" "Create home directory for '$username'?\n\nThis will create /home/$username"; then
-        create_home="yes"
-    else
-        create_home="no"
-    fi
+                # Create user
+                local useradd_opts="-m"
+                [[ "$create_home" != "yes" ]] && useradd_opts="-M"
 
-    # Confirm
-    if yes_no "Confirm User Creation" "Create this user account?\n\nUsername:    $username\nHome Dir:    $([ "$create_home" = "yes" ] && echo "/home/$username" || echo "None")\n\nProceed?"; then
+                if sudo useradd $useradd_opts -s /bin/bash "$username" 2>/dev/null; then
+                    # Set password
+                    echo "$username:$password" | sudo chpasswd 2>/dev/null
 
-        # Create user
-        local useradd_opts="-m"
-        [[ "$create_home" != "yes" ]] && useradd_opts="-M"
-
-        if sudo useradd $useradd_opts -s /bin/bash "$username" 2>/dev/null; then
-            # Set password
-            echo "$username:$password" | sudo chpasswd 2>/dev/null
-
-            msg_box "User Created" "User '$username' created successfully!\n\nThe user can now log in with their password.\n\nTo set a disk quota, use 'Set User Quota'\nfrom the User Management menu."
-        else
-            msg_box "Error" "Failed to create user.\nCheck system logs for details."
-        fi
-    fi
+                    msg_box "User Created" "User '$username' created successfully!\n\nThe user can now log in with their password.\n\nTo set a disk quota, use 'Set User Quota'\nfrom the User Management menu."
+                else
+                    msg_box "Error" "Failed to create user.\nCheck system logs for details."
+                fi
+                return 0
+            else
+                ((step--)); continue
+            fi
+            ;;
+        esac
+    done
 }
 
 delete_user() {
