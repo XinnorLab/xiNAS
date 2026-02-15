@@ -5,6 +5,26 @@
 
 set -euo pipefail
 
+# Debug mode: --debug or --db flag enables error tracing
+XINAS_DEBUG=false
+for _arg in "$@"; do
+    [[ "$_arg" == "--debug" || "$_arg" == "--db" ]] && XINAS_DEBUG=true
+done
+if [[ "$XINAS_DEBUG" == "true" ]]; then
+    XINAS_DEBUG_LOG="/tmp/xinas-debug.log"
+    : > "$XINAS_DEBUG_LOG"
+    _debug_trap() {
+        local _ec=$? _ln=${BASH_LINENO[0]} _cmd="$BASH_COMMAND"
+        local _fn="${FUNCNAME[1]:-main}" _src="${BASH_SOURCE[1]:-unknown}"
+        printf '[ERR] exit=%d line=%d func=%s cmd=%s file=%s\n' \
+            "$_ec" "$_ln" "$_fn" "$_cmd" "$_src" >> "$XINAS_DEBUG_LOG"
+        printf '[ERR] exit=%d line=%d func=%s cmd=%s\n' \
+            "$_ec" "$_ln" "$_fn" "$_cmd" >/dev/tty
+    }
+    trap '_debug_trap' ERR
+    echo "Debug mode ON — logging to $XINAS_DEBUG_LOG"
+fi
+
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -227,7 +247,7 @@ EOF
 
 # Check if running in interactive terminal (skip for non-interactive CLI flags)
 case "${1:-}" in
-    --version|-v|--help|-h|--status|-s|--raid|-r|--healthcheck|--hc) ;;
+    --version|-v|--help|-h|--status|-s|--raid|-r|--healthcheck|--hc|--debug|--db) ;;
     *)
         if [[ ! -t 0 ]]; then
             echo "This script must be run in an interactive terminal"
@@ -2645,6 +2665,7 @@ case "${1:-}" in
         echo "  --raid, -r       Show RAID info and exit"
         echo "  --healthcheck    Run health check (--quick|--standard|--deep|--json)"
         echo "  --no-welcome     Skip welcome screen"
+        echo "  --debug, --db    Enable error tracing (log to /tmp/xinas-debug.log)"
         echo "  --help, -h       Show this help message"
         echo ""
         echo "Without options, launches the interactive menu."
@@ -2652,6 +2673,9 @@ case "${1:-}" in
         ;;
     --no-welcome)
         main_menu --no-welcome
+        ;;
+    --debug|--db)
+        main_menu
         ;;
     *)
         main_menu
