@@ -1880,14 +1880,10 @@ remove_nfs_share() {
     current_line=$(grep "^${share_path}[[:space:]]" "$exports_file" 2>/dev/null | head -1)
 
     # Detect if this is a default/primary share (deployed by preset)
+    # Only exact top-level data mount paths are considered default
     local is_default=false
-    # Check against known preset paths and primary data mount
     local _norm_path="${share_path%/}"
-    if [[ "$_norm_path" == "/mnt/data" ]]; then
-        is_default=true
-    fi
-    # Also check if it's the only share or has fsid=0 (root export)
-    if [[ "$current_line" == *"fsid=0"* ]]; then
+    if [[ "$_norm_path" == "/mnt/data" || "$_norm_path" == "/mnt/storage" ]]; then
         is_default=true
     fi
 
