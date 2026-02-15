@@ -1678,10 +1678,46 @@ add_nfs_share() {
                 fi
             fi
 
-            # Check if already shared
-            if grep -q "^${share_path}[[:space:]]" "$exports_file" 2>/dev/null; then
+            # Normalize path: remove trailing slash (except root /)
+            share_path="${share_path%/}"
+            [[ -z "$share_path" ]] && share_path="/"
+
+            # Check if already shared (exact match or trailing-slash variant)
+            if grep -qE "^${share_path}/?[[:space:]]" "$exports_file" 2>/dev/null; then
                 msg_box "Already Shared" "This folder is already being shared.\n\nUse 'Edit Share Settings' to modify it."
                 continue
+            fi
+
+            # Check for parent/child overlap with existing shares
+            local _overlap=""
+            while IFS= read -r _eline; do
+                [[ -z "$_eline" ]] && continue
+                local _epath
+                _epath=$(printf '%s' "$_eline" | awk '{print $1}')
+                _epath="${_epath%/}"
+                [[ -z "$_epath" ]] && _epath="/"
+                if [[ "$share_path" == "$_epath"/* ]]; then
+                    _overlap="Parent folder already shared: $_epath"
+                    break
+                elif [[ "$_epath" == "$share_path"/* ]]; then
+                    _overlap="Child folder already shared: $_epath"
+                    break
+                fi
+            done < <(grep '^/' "$exports_file" 2>/dev/null)
+
+            if [[ -n "$_overlap" ]]; then
+                if ! yes_no "Overlap Detected" "$_overlap\n\nSharing overlapping paths can cause\nunexpected NFS behavior.\n\nContinue anyway?"; then
+                    continue
+                fi
+            fi
+
+            # Check for duplicate entries already in the file
+            local _dup_count
+            _dup_count=$(grep -cE '^/' "$exports_file" 2>/dev/null || echo 0)
+            local _unique_count
+            _unique_count=$(awk '!/^#/ && /^\// {print $1}' "$exports_file" 2>/dev/null | sed 's|/$||' | sort -u | wc -l)
+            if [[ "$_dup_count" -gt "$_unique_count" && "$_unique_count" -gt 0 ]]; then
+                msg_warn "Note: /etc/exports contains duplicate entries. Review with 'View Config File'."
             fi
             step=$((step + 1))
             ;;
