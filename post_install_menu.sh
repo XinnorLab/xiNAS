@@ -2339,13 +2339,27 @@ set_user_quota() {
 
     if [[ "$_quota_enabled" == "false" ]]; then
         if [[ "$_fs_type" == "xfs" ]]; then
-            if yes_no "Quotas Not Enabled" "User quotas are not enabled on $mount_point.\n\nFilesystem: XFS\n\nXFS requires the 'uquota' mount option.\nThis needs a remount to activate.\n\nEnable quotas now? (remounts $mount_point)"; then
+            if yes_no "Quotas Not Enabled" "User quotas are not enabled on $mount_point.\n\nFilesystem: XFS\n\nXFS requires the 'uquota' mount option.\nThis needs a remount to activate.\n\nNFS server will be temporarily stopped\nand restarted. Client connections will\nbe briefly interrupted.\n\nEnable quotas now?"; then
+                op_start "Enable Quotas: $mount_point"
+
+                # Stop NFS server before remount
+                op_run "stop nfs-server" sudo systemctl stop nfs-server || true
+
+                # Remount with uquota
                 local _remount_out
                 _remount_out=$(sudo mount -o remount,uquota "$mount_point" 2>&1) && true
                 if [[ $? -ne 0 ]]; then
-                    msg_box "Error" "Failed to remount with quota support.\n\n${_remount_out}\n\nYou may need to add 'uquota' to the mount\noptions manually and reboot."
+                    # Restart NFS even on failure
+                    op_run "restart nfs-server" sudo systemctl start nfs-server || true
+                    op_step "remount with uquota" 1 "$_remount_out"
+                    op_end "" "Error" "You may need to add 'uquota' to the mount\noptions manually and reboot." || true
                     return
                 fi
+                op_step "remount with uquota" 0
+
+                # Restart NFS server
+                op_run "start nfs-server" sudo systemctl start nfs-server || true
+                op_verify "nfs-server active" bash -c "systemctl is-active nfs-server | grep -q active" || true
                 # Update systemd mount unit if present
                 local _mount_unit
                 _mount_unit=$(systemd-escape --path --suffix=mount "$mount_point" 2>/dev/null || true)
@@ -2367,7 +2381,8 @@ set_user_quota() {
                         sudo sed -i "s|${_old_opts}|${_old_opts},uquota|" /etc/fstab 2>/dev/null || true
                     fi
                 fi
-                msg_box "Quotas Enabled" "User quotas enabled on $mount_point.\n\nYou can now set quotas for users."
+                op_verify "quotas active" bash -c "xfs_quota -x -c 'state -u' '$mount_point' 2>/dev/null | grep -qi 'Accounting.*ON'" || true
+                op_end "Quotas enabled on $mount_point\nNFS server restarted" "Quotas Enabled" "You can now set quotas for users." || true
             else
                 return
             fi
