@@ -5,6 +5,9 @@
 
 set -euo pipefail
 
+# Save original args for exec restart after update
+_ORIG_ARGS=("$@")
+
 # Debug mode: --debug or --db flag enables error tracing
 XINAS_DEBUG=false
 for _arg in "$@"; do
@@ -203,7 +206,8 @@ do_update() {
                 sync_msg+="  - $f\n"
             done
         fi
-        msg_box "Update Complete" "xiNAS has been updated!${sync_msg}\nPlease restart the menu to use the new version."
+        msg_box "Update Complete" "xiNAS has been updated!${sync_msg}\nRestarting menu..."
+        exec "$0" "${_ORIG_ARGS[@]}"
     else
         msg_box "Update Failed" "Failed to update:\n\n$(cat "$TMP_DIR/update.log")"
     fi
