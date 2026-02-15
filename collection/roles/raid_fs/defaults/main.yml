@@ -46,4 +46,4 @@ xfs_force_mkfs: true
 #     log_size: 1G
 #     sector_size: 4k
 #     mountpoint: /mnt/data
-#     mount_opts: "logdev=/dev/xi_log,noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k"
+#     mount_opts: "logdev=/dev/xi_log,noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k,uquota"

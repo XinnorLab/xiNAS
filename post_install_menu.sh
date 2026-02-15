@@ -2310,6 +2310,61 @@ set_user_quota() {
         return
     fi
 
+    # Check if quotas are enabled on the filesystem
+    local _fs_type
+    _fs_type=$(df -T "$mount_point" 2>/dev/null | awk 'NR==2{print $2}' || true)
+    local _quota_enabled=false
+    if [[ "$_fs_type" == "xfs" ]]; then
+        # XFS: check for usrquota in mount options
+        if mount | grep -q "$mount_point.*usrquota\|$mount_point.*uquota"; then
+            _quota_enabled=true
+        fi
+    else
+        # ext4/other: check quotaon
+        if quotaon -p "$mount_point" 2>/dev/null | grep -q "is on"; then
+            _quota_enabled=true
+        fi
+    fi
+
+    if [[ "$_quota_enabled" == "false" ]]; then
+        if [[ "$_fs_type" == "xfs" ]]; then
+            if yes_no "Quotas Not Enabled" "User quotas are not enabled on $mount_point.\n\nFilesystem: XFS\n\nXFS requires the 'uquota' mount option.\nThis needs a remount to activate.\n\nEnable quotas now? (remounts $mount_point)"; then
+                if sudo mount -o remount,uquota "$mount_point" 2>/dev/null; then
+                    # Update systemd mount unit if present
+                    local _mount_unit
+                    _mount_unit=$(systemd-escape --path --suffix=mount "$mount_point" 2>/dev/null || true)
+                    if [[ -n "$_mount_unit" && -f "/etc/systemd/system/$_mount_unit" ]]; then
+                        local _cur_opts
+                        _cur_opts=$(grep '^Options=' "/etc/systemd/system/$_mount_unit" | sed 's/^Options=//')
+                        if [[ -n "$_cur_opts" && "$_cur_opts" != *"uquota"* ]]; then
+                            sudo sed -i "s|^Options=.*|Options=${_cur_opts},uquota|" "/etc/systemd/system/$_mount_unit"
+                            sudo systemctl daemon-reload
+                        fi
+                    fi
+                    # Also update fstab if present
+                    if grep -q "$mount_point" /etc/fstab 2>/dev/null; then
+                        local _fstab_line
+                        _fstab_line=$(grep "$mount_point" /etc/fstab | head -1)
+                        if [[ -n "$_fstab_line" && "$_fstab_line" != *"uquota"* ]]; then
+                            local _old_opts
+                            _old_opts=$(echo "$_fstab_line" | awk '{print $4}')
+                            sudo sed -i "s|${_old_opts}|${_old_opts},uquota|" /etc/fstab 2>/dev/null || true
+                        fi
+                    fi
+                    msg_box "Quotas Enabled" "User quotas enabled on $mount_point.\n\nYou can now set quotas for users."
+                else
+                    msg_box "Error" "Failed to remount with quota support.\n\nYou may need to add 'uquota' to the mount\noptions manually and reboot."
+                    return
+                fi
+            else
+                return
+            fi
+        else
+            msg_box "Quotas Not Enabled" "User quotas are not enabled on $mount_point.\n\nEnable with:\n  sudo quotacheck -cug $mount_point\n  sudo quotaon $mount_point"
+            return
+        fi
+    fi
+
     # Get list of users
     local -a users=()
     while IFS=: read -r uname _ uid _ _ _ _; do
