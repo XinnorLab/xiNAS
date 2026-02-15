@@ -1843,6 +1843,95 @@ add_nfs_share() {
     done
 }
 
+remove_nfs_share() {
+    local exports_file="/etc/exports"
+
+    if [[ ! -f "$exports_file" ]]; then
+        msg_box "No Shares" "No shared folders configured."
+        return
+    fi
+
+    # Get list of shares
+    mapfile -t paths < <(awk '!/^#/ && NF {print $1}' "$exports_file" 2>/dev/null)
+
+    if [[ ${#paths[@]} -eq 0 ]]; then
+        msg_box "No Shares" "No shared folders found."
+        return
+    fi
+
+    # Build menu
+    local -a menu_items=()
+    for path in "${paths[@]}"; do
+        local spec
+        spec=$(grep "^${path}[[:space:]]" "$exports_file" 2>/dev/null | awk '{print $2}' | head -1)
+        menu_items+=("$path" "${spec:-unknown}")
+    done
+
+    # Select share to remove
+    show_header
+    local share_path
+    share_path=$(menu_select "Remove Shared Folder" "Select a folder to stop sharing:\n\nThis will remove it from /etc/exports.\nThe folder itself will NOT be deleted." \
+        "${menu_items[@]}") || return
+
+    [[ -z "$share_path" ]] && return
+
+    # Get the current export line for display
+    local current_line
+    current_line=$(grep "^${share_path}[[:space:]]" "$exports_file" 2>/dev/null | head -1)
+
+    # Detect if this is a default/primary share (deployed by preset)
+    local is_default=false
+    # Check against known preset paths and primary data mount
+    local _norm_path="${share_path%/}"
+    if [[ "$_norm_path" == "/mnt/data" ]]; then
+        is_default=true
+    fi
+    # Also check if it's the only share or has fsid=0 (root export)
+    if [[ "$current_line" == *"fsid=0"* ]]; then
+        is_default=true
+    fi
+
+    # First confirmation
+    if ! yes_no "Remove Share" "Remove this shared folder?\n\nFolder: $share_path\nExport: ${current_line##* }\n\nThe folder and its files will NOT be deleted.\nOnly the NFS share will be removed."; then
+        return
+    fi
+
+    # Double confirmation for default/primary shares
+    if [[ "$is_default" == "true" ]]; then
+        local confirm_text
+        confirm_text=$(input_box "⚠  Default Share" "WARNING: This is a primary/default share\ndeployed during initial setup.\n\nRemoving it may disrupt all connected clients.\n\nType the path to confirm removal:\n$share_path") || return
+
+        if [[ "$confirm_text" != "$share_path" ]]; then
+            msg_box "Cancelled" "Path did not match. Share not removed."
+            return
+        fi
+    fi
+
+    op_start "Remove NFS Share: $share_path" "$current_line"
+
+    # Backup exports file
+    local ts
+    ts=$(date +%Y%m%d%H%M%S)
+    sudo cp "$exports_file" "${exports_file}.${ts}.bak"
+    op_step "backup /etc/exports" 0
+
+    # Remove the line
+    op_run "remove from /etc/exports" sudo sed -i "\|^${share_path}[[:space:]]|d" "$exports_file" || true
+
+    # Unexport and refresh
+    op_run "unexport share" sudo exportfs -u "*:${share_path}" || true
+    op_run "exportfs -ra" sudo exportfs -ra || true
+
+    # Verify removal
+    op_verify "share removed from exports" bash -c "! grep -q '^${share_path}[[:space:]]' '$exports_file'" || true
+    op_verify "share not active" bash -c "! exportfs -v 2>/dev/null | grep -q '${share_path}'" || true
+
+    local _remaining
+    _remaining=$(grep -c '^/' "$exports_file" 2>/dev/null || echo 0)
+    op_end "Remaining shares: ${_remaining}" "Share Removed" || true
+    audit_log "NFS > Remove Share" "$share_path"
+}
+
 configure_idmapd_domain() {
     # Configure /etc/idmapd.conf Domain for NFSv4 ID mapping (Kerberos)
     local idmapd_conf="/etc/idmapd.conf"
@@ -1948,15 +2037,17 @@ nfs_menu() {
             "1" "📋 View Shared Folders" \
             "2" "✏️  Edit Share Settings" \
             "3" "➕ Add New Shared Folder" \
-            "4" "🔄 Refresh (apply changes)" \
-            "5" "📄 View Config File" \
+            "4" "🗑  Remove Shared Folder" \
+            "5" "🔄 Refresh (apply changes)" \
+            "6" "📄 View Config File" \
             "0" "🔙 Back") || break
 
         case "$choice" in
             1) audit_log "NFS > View Shares"; show_nfs_exports ;;
             2) audit_log "NFS > Edit Share"; edit_nfs_share ;;
             3) audit_log "NFS > Add Share"; add_nfs_share ;;
-            4)
+            4) audit_log "NFS > Remove Share"; remove_nfs_share ;;
+            5)
                 op_start "Refresh NFS Exports"
                 op_run "exportfs -ra" sudo exportfs -ra || true
                 local _export_count=""
@@ -1970,7 +2061,7 @@ nfs_menu() {
                     audit_log "NFS > Refresh Exports" "failed"
                 fi
                 ;;
-            5)
+            6)
                 audit_log "NFS > View Config"
                 if [[ -f /etc/exports ]]; then
                     text_box "📄 /etc/exports" /etc/exports
