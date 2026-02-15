@@ -14,6 +14,7 @@ common_packages:
   - chrony                # NTP daemon; change to ntp if preferred
   - unattended-upgrades
   - ca-certificates
+  - quota                 # Disk quota tools for user quota management
 chrony_service_name: chrony
 chrony_package_name: chrony
 common_sysctl:
