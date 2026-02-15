@@ -1518,7 +1518,7 @@ edit_nfs_share() {
         4)  # Step 4: Security Mode
             # Check Kerberos readiness for the info line
             local krb_status
-            krb_status=$(check_kerberos_server_readiness | head -1)
+            krb_status=$(check_kerberos_server_readiness | head -1 || true)
             local krb_note=""
             if [[ "$krb_status" != "READY" ]]; then
                 krb_note="\n\nNote: Kerberos infrastructure is not configured\non this server. krb5 modes may not work until\n/etc/krb5.conf and keytab are set up."
@@ -1691,7 +1691,7 @@ add_nfs_share() {
             ;;
         4)  # Step 4: Security Mode
             local krb_status
-            krb_status=$(check_kerberos_server_readiness | head -1)
+            krb_status=$(check_kerberos_server_readiness | head -1 || true)
             local krb_note=""
             if [[ "$krb_status" != "READY" ]]; then
                 krb_note="\n\nNote: Kerberos infrastructure is not configured\non this server. krb5 modes may not work until\n/etc/krb5.conf and keytab are set up."
