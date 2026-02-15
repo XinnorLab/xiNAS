@@ -173,7 +173,7 @@ menu_select() {
             local newline=$'\n'
             local expanded_prompt="${prompt//\\n/$newline}"
             local -a _plines=()
-            mapfile -t _plines <<< "$expanded_prompt"
+            mapfile -t _plines <<< "$expanded_prompt" || true
             local _pi
             for _pi in "${!_plines[@]}"; do
                 local pline="${_plines[$_pi]}"
@@ -725,7 +725,7 @@ check_list() {
             local newline=$'\n'
             local expanded_prompt="${prompt//\\n/$newline}"
             local -a _plines=()
-            mapfile -t _plines <<< "$expanded_prompt"
+            mapfile -t _plines <<< "$expanded_prompt" || true
             local _pi
             for _pi in "${!_plines[@]}"; do
                 local pline="${_plines[$_pi]}"
