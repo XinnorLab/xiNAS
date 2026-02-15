@@ -158,29 +158,35 @@ menu_select() {
     done
     [[ $width -gt 78 ]] && width=78
 
+    local inner_width=$((width - 2))
+
+    # Pre-build bordered prompt string (outside _render_menu for set -e safety)
+    local _bordered_prompt=""
+    if [[ -n "$prompt" ]]; then
+        local _rest="${prompt//\\n/$'\n'}"
+        local _pline _plen _ppad
+        while true; do
+            _pline="${_rest%%$'\n'*}"
+            _plen=${#_pline}
+            _ppad=$(( inner_width - _plen - 2 ))
+            [[ $_ppad -lt 0 ]] && _ppad=0
+            _bordered_prompt+=$(printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}\n" "$_pline" "$_ppad" '')
+            [[ "$_rest" == *$'\n'* ]] || break
+            _rest="${_rest#*$'\n'}"
+        done
+    fi
+
     _menu_cursor_hide
 
     _render_menu() {
         _menu_clear_screen
 
-        local inner_width=$((width - 2))
-
         echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
 
-        # Prompt lines with borders (supports \n for multiline)
-        if [[ -n "$prompt" ]]; then
-            local _rest="${prompt//\\n/$'\n'}"
-            local _pline
-            while true; do
-                _pline="${_rest%%$'\n'*}"
-                local _plen=${#_pline}
-                local _ppad=$(( inner_width - _plen - 2 ))
-                [[ $_ppad -lt 0 ]] && _ppad=0
-                printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}\n" "$_pline" "$_ppad" '' >/dev/tty
-                [[ "$_rest" == *$'\n'* ]] || break
-                _rest="${_rest#*$'\n'}"
-            done
+        # Prompt (pre-built)
+        if [[ -n "$_bordered_prompt" ]]; then
+            printf '%s' "$_bordered_prompt" >/dev/tty
         fi
 
         # Close the header box
@@ -706,29 +712,35 @@ check_list() {
     local selected=0
     local width=60
 
+    local inner_width=$((width - 2))
+
+    # Pre-build bordered prompt string (outside _render_checklist for set -e safety)
+    local _bordered_prompt=""
+    if [[ -n "$prompt" ]]; then
+        local _rest="${prompt//\\n/$'\n'}"
+        local _pline _plen _ppad
+        while true; do
+            _pline="${_rest%%$'\n'*}"
+            _plen=${#_pline}
+            _ppad=$(( inner_width - _plen - 2 ))
+            [[ $_ppad -lt 0 ]] && _ppad=0
+            _bordered_prompt+=$(printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}\n" "$_pline" "$_ppad" '')
+            [[ "$_rest" == *$'\n'* ]] || break
+            _rest="${_rest#*$'\n'}"
+        done
+    fi
+
     _menu_cursor_hide
 
     _render_checklist() {
         _menu_clear_screen
 
-        local inner_width=$((width - 2))
-
         echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
 
-        # Prompt lines with borders (supports \n for multiline)
-        if [[ -n "$prompt" ]]; then
-            local _rest="${prompt//\\n/$'\n'}"
-            local _pline
-            while true; do
-                _pline="${_rest%%$'\n'*}"
-                local _plen=${#_pline}
-                local _ppad=$(( inner_width - _plen - 2 ))
-                [[ $_ppad -lt 0 ]] && _ppad=0
-                printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}\n" "$_pline" "$_ppad" '' >/dev/tty
-                [[ "$_rest" == *$'\n'* ]] || break
-                _rest="${_rest#*$'\n'}"
-            done
+        # Prompt (pre-built)
+        if [[ -n "$_bordered_prompt" ]]; then
+            printf '%s' "$_bordered_prompt" >/dev/tty
         fi
 
         # Close the header box
