@@ -158,37 +158,38 @@ menu_select() {
     done
     [[ $width -gt 78 ]] && width=78
 
-    local inner_width=$((width - 2))
-
-    # Pre-build bordered prompt string (no subshells — safe under set -euo pipefail)
-    local _bordered_prompt=""
+    # Pre-split prompt into lines array (safe under set -euo pipefail)
+    local -a _prompt_lines=()
     if [[ -n "$prompt" ]]; then
-        local _rest="${prompt//\\n/$'\n'}"
-        local _pline _plen _ppad _prow
-        while true; do
-            _pline="${_rest%%$'\n'*}"
-            _plen=${#_pline}
-            _ppad=$(( inner_width - _plen - 2 ))
-            [[ $_ppad -lt 0 ]] && _ppad=0
-            printf -v _prow "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}" "$_pline" "$_ppad" ''
-            _bordered_prompt+="${_prow}"$'\n'
-            [[ "$_rest" == *$'\n'* ]] || break
-            _rest="${_rest#*$'\n'}"
+        local _tmp="${prompt//\\n/$'\n'}"
+        while [[ "$_tmp" == *$'\n'* ]]; do
+            _prompt_lines+=("${_tmp%%$'\n'*}")
+            _tmp="${_tmp#*$'\n'}"
         done
+        _prompt_lines+=("$_tmp")
+    else
+        _prompt_lines+=("$prompt")
     fi
+    local _num_plines=${#_prompt_lines[@]}
 
     _menu_cursor_hide
 
     _render_menu() {
         _menu_clear_screen
 
+        local inner_width=$((width - 2))
+
         echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
 
-        # Prompt (pre-built)
-        if [[ -n "$_bordered_prompt" ]]; then
-            printf '%s' "$_bordered_prompt" >/dev/tty
-        fi
+        # Prompt lines with borders
+        for ((_pi=0; _pi<_num_plines; _pi++)); do
+            local _pl="${_prompt_lines[$_pi]}"
+            local _pl_len=${#_pl}
+            local _pl_pad=$(( inner_width - _pl_len - 2 ))
+            [[ $_pl_pad -lt 0 ]] && _pl_pad=0
+            printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}\n" "$_pl" "$_pl_pad" '' >/dev/tty
+        done
 
         # Close the header box
         printf "${CYAN}${BOX_BL}" >/dev/tty
@@ -713,37 +714,38 @@ check_list() {
     local selected=0
     local width=60
 
-    local inner_width=$((width - 2))
-
-    # Pre-build bordered prompt string (no subshells — safe under set -euo pipefail)
-    local _bordered_prompt=""
+    # Pre-split prompt into lines array (safe under set -euo pipefail)
+    local -a _prompt_lines=()
     if [[ -n "$prompt" ]]; then
-        local _rest="${prompt//\\n/$'\n'}"
-        local _pline _plen _ppad _prow
-        while true; do
-            _pline="${_rest%%$'\n'*}"
-            _plen=${#_pline}
-            _ppad=$(( inner_width - _plen - 2 ))
-            [[ $_ppad -lt 0 ]] && _ppad=0
-            printf -v _prow "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}" "$_pline" "$_ppad" ''
-            _bordered_prompt+="${_prow}"$'\n'
-            [[ "$_rest" == *$'\n'* ]] || break
-            _rest="${_rest#*$'\n'}"
+        local _tmp="${prompt//\\n/$'\n'}"
+        while [[ "$_tmp" == *$'\n'* ]]; do
+            _prompt_lines+=("${_tmp%%$'\n'*}")
+            _tmp="${_tmp#*$'\n'}"
         done
+        _prompt_lines+=("$_tmp")
+    else
+        _prompt_lines+=("$prompt")
     fi
+    local _num_plines=${#_prompt_lines[@]}
 
     _menu_cursor_hide
 
     _render_checklist() {
         _menu_clear_screen
 
+        local inner_width=$((width - 2))
+
         echo "" >/dev/tty
         _menu_draw_box "$title" "$width"
 
-        # Prompt (pre-built)
-        if [[ -n "$_bordered_prompt" ]]; then
-            printf '%s' "$_bordered_prompt" >/dev/tty
-        fi
+        # Prompt lines with borders
+        for ((_pi=0; _pi<_num_plines; _pi++)); do
+            local _pl="${_prompt_lines[$_pi]}"
+            local _pl_len=${#_pl}
+            local _pl_pad=$(( inner_width - _pl_len - 2 ))
+            [[ $_pl_pad -lt 0 ]] && _pl_pad=0
+            printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}\n" "$_pl" "$_pl_pad" '' >/dev/tty
+        done
 
         # Close the header box
         printf "${CYAN}${BOX_BL}" >/dev/tty
