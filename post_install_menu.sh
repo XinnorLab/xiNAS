@@ -1474,7 +1474,7 @@ edit_nfs_share() {
             access_choice=$(menu_select "Step 1: Who Can Access?  (Esc = Back)" "Who should be able to connect to:\n$share_path\n\nChoose who can access this folder:" \
                 "1" "Everyone (any host on the network)" \
                 "2" "Specific network (e.g., 192.168.1.0/24)" \
-                "3" "Single host (by IP address)") || { ((step--)); continue; }
+                "3" "Single host (by IP address)") || { step=$((step - 1)); continue; }
 
             case "$access_choice" in
                 1)
@@ -1489,31 +1489,31 @@ edit_nfs_share() {
                     [[ -z "$new_host" ]] && new_host="*"
                     ;;
             esac
-            ((step++))
+            step=$((step + 1))
             ;;
         2)  # Step 2: Read or Read-Write?
             show_header
             perm_choice=$(menu_select "Step 2: Access Permissions  (Esc = Back)" "What can connected hosts do?\n\nShare: $share_path\nAccess: $new_host" \
                 "1" "Read & Write (can add, edit, delete files)" \
-                "2" "Read Only (can only view files)") || { ((step--)); continue; }
+                "2" "Read Only (can only view files)") || { step=$((step - 1)); continue; }
 
             case "$perm_choice" in
                 1) new_rw="rw" ;;
                 2) new_rw="ro" ;;
             esac
-            ((step++))
+            step=$((step + 1))
             ;;
         3)  # Step 3: Admin access?
             show_header
             admin_choice=$(menu_select "Step 3: Admin Access  (Esc = Back)" "Allow full administrator access?\n\nIf enabled, remote admin users have full control\nover files (same as local root user).\n\nRecommended: Yes for trusted networks" \
                 "1" "Yes - Full admin access (recommended)" \
-                "2" "No - Limited access (more secure)") || { ((step--)); continue; }
+                "2" "No - Limited access (more secure)") || { step=$((step - 1)); continue; }
 
             case "$admin_choice" in
                 1) new_root="no_root_squash" ;;
                 2) new_root="root_squash" ;;
             esac
-            ((step++))
+            step=$((step + 1))
             ;;
         4)  # Step 4: Security Mode
             # Check Kerberos readiness for the info line
@@ -1529,7 +1529,7 @@ edit_nfs_share() {
                 "sys" "Standard UID/GID (default)" \
                 "krb5" "Kerberos authentication" \
                 "krb5i" "Kerberos + integrity" \
-                "krb5p" "Kerberos + encryption") || { ((step--)); continue; }
+                "krb5p" "Kerberos + encryption") || { step=$((step - 1)); continue; }
 
             new_sec="$sec_choice"
 
@@ -1541,7 +1541,7 @@ edit_nfs_share() {
                     configure_idmapd_domain
                 fi
             fi
-            ((step++))
+            step=$((step + 1))
             ;;
         5)  # Confirm and apply
             # Build the new export line - preserve existing optimized options
@@ -1615,7 +1615,7 @@ edit_nfs_share() {
                 fi
                 return 0
             else
-                ((step--)); continue
+                step=$((step - 1)); continue
             fi
             ;;
         esac
@@ -1634,9 +1634,9 @@ add_nfs_share() {
     while [[ $step -ge 1 && $step -le 5 ]]; do
         case $step in
         1)  # Step 1: Enter folder path
-            share_path=$(input_box "Add New Shared Folder - Step 1  (Esc = Back)" "Enter the folder path to share:\n\nThis is the folder on this server that other\nhosts will be able to access.\n\nExample: /mnt/data/shared" "/mnt/data/") || { ((step--)); continue; }
+            share_path=$(input_box "Add New Shared Folder - Step 1  (Esc = Back)" "Enter the folder path to share:\n\nThis is the folder on this server that other\nhosts will be able to access.\n\nExample: /mnt/data/shared" "/mnt/data/") || { step=$((step - 1)); continue; }
 
-            [[ -z "$share_path" ]] && { ((step--)); continue; }
+            [[ -z "$share_path" ]] && { step=$((step - 1)); continue; }
 
             # Check if path exists
             if [[ ! -d "$share_path" ]]; then
@@ -1655,14 +1655,14 @@ add_nfs_share() {
                 msg_box "Already Shared" "This folder is already being shared.\n\nUse 'Edit Share Settings' to modify it."
                 continue
             fi
-            ((step++))
+            step=$((step + 1))
             ;;
         2)  # Step 2: Who can access?
             show_header
             access_choice=$(menu_select "Add New Share - Step 2  (Esc = Back)" "Who should be able to access this folder?\n\nFolder: $share_path" \
                 "1" "Everyone (any host)" \
                 "2" "Specific network (recommended)" \
-                "3" "Single host only") || { ((step--)); continue; }
+                "3" "Single host only") || { step=$((step - 1)); continue; }
 
             case "$access_choice" in
                 1)
@@ -1677,17 +1677,17 @@ add_nfs_share() {
                     [[ -z "$new_host" ]] && new_host="*"
                     ;;
             esac
-            ((step++))
+            step=$((step + 1))
             ;;
         3)  # Step 3: Permissions
             show_header
             perm_choice=$(menu_select "Add New Share - Step 3  (Esc = Back)" "What permissions should connected hosts have?" \
                 "1" "Read & Write (full access)" \
-                "2" "Read Only (view only)") || { ((step--)); continue; }
+                "2" "Read Only (view only)") || { step=$((step - 1)); continue; }
 
             new_rw="rw"
             [[ "$perm_choice" == "2" ]] && new_rw="ro"
-            ((step++))
+            step=$((step + 1))
             ;;
         4)  # Step 4: Security Mode
             local krb_status
@@ -1702,7 +1702,7 @@ add_nfs_share() {
                 "sys" "Standard UID/GID (default)" \
                 "krb5" "Kerberos authentication" \
                 "krb5i" "Kerberos + integrity" \
-                "krb5p" "Kerberos + encryption") || { ((step--)); continue; }
+                "krb5p" "Kerberos + encryption") || { step=$((step - 1)); continue; }
 
             new_sec="$sec_choice"
 
@@ -1714,7 +1714,7 @@ add_nfs_share() {
                     configure_idmapd_domain
                 fi
             fi
-            ((step++))
+            step=$((step + 1))
             ;;
         5)  # Confirm and apply
             # Build export line - copy optimized options from existing share if available
@@ -1770,7 +1770,7 @@ add_nfs_share() {
                 fi
                 return 0
             else
-                ((step--)); continue
+                step=$((step - 1)); continue
             fi
             ;;
         esac
@@ -2001,9 +2001,9 @@ create_user() {
     while [[ $step -ge 1 && $step -le 3 ]]; do
         case $step in
         1)  # Step 1: Enter username
-            username=$(input_box "Create User - Step 1  (Esc = Back)" "Enter the username for the new account:\n\nRules:\n- Lowercase letters and numbers only\n- Must start with a letter\n- 3-32 characters long") || { ((step--)); continue; }
+            username=$(input_box "Create User - Step 1  (Esc = Back)" "Enter the username for the new account:\n\nRules:\n- Lowercase letters and numbers only\n- Must start with a letter\n- 3-32 characters long") || { step=$((step - 1)); continue; }
 
-            [[ -z "$username" ]] && { ((step--)); continue; }
+            [[ -z "$username" ]] && { step=$((step - 1)); continue; }
 
             # Validate username
             if [[ ! "$username" =~ ^[a-z][a-z0-9]{2,31}$ ]]; then
@@ -2016,10 +2016,10 @@ create_user() {
                 msg_box "User Exists" "User '$username' already exists."
                 continue
             fi
-            ((step++))
+            step=$((step + 1))
             ;;
         2)  # Step 2: Set password
-            password=$(password_box "Create User - Step 2  (Esc = Back)" "Enter password for '$username':\n\n(Minimum 6 characters)") || { ((step--)); continue; }
+            password=$(password_box "Create User - Step 2  (Esc = Back)" "Enter password for '$username':\n\n(Minimum 6 characters)") || { step=$((step - 1)); continue; }
 
             if [[ ${#password} -lt 6 ]]; then
                 msg_box "Password Too Short" "Password must be at least 6 characters."
@@ -2032,7 +2032,7 @@ create_user() {
                 msg_box "Password Mismatch" "Passwords do not match."
                 continue
             fi
-            ((step++))
+            step=$((step + 1))
             ;;
         3)  # Step 3: Home directory + confirm
             if yes_no "Create User - Step 3  (Esc = Back)" "Create home directory for '$username'?\n\nThis will create /home/$username"; then
@@ -2058,7 +2058,7 @@ create_user() {
                 fi
                 return 0
             else
-                ((step--)); continue
+                step=$((step - 1)); continue
             fi
             ;;
         esac
