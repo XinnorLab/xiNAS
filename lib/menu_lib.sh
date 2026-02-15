@@ -160,18 +160,18 @@ menu_select() {
 
     local inner_width=$((width - 2))
 
-    # Pre-build bordered prompt string (outside _render_menu for set -e safety)
+    # Pre-build bordered prompt string (no subshells — safe under set -euo pipefail)
     local _bordered_prompt=""
     if [[ -n "$prompt" ]]; then
         local _rest="${prompt//\\n/$'\n'}"
-        local _pline _plen _ppad
+        local _pline _plen _ppad _prow
         while true; do
             _pline="${_rest%%$'\n'*}"
             _plen=${#_pline}
             _ppad=$(( inner_width - _plen - 2 ))
             [[ $_ppad -lt 0 ]] && _ppad=0
-            _bordered_prompt+=$(printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}" "$_pline" "$_ppad" '')
-            _bordered_prompt+=$'\n'
+            printf -v _prow "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}" "$_pline" "$_ppad" ''
+            _bordered_prompt+="${_prow}"$'\n'
             [[ "$_rest" == *$'\n'* ]] || break
             _rest="${_rest#*$'\n'}"
         done
@@ -715,18 +715,18 @@ check_list() {
 
     local inner_width=$((width - 2))
 
-    # Pre-build bordered prompt string (outside _render_checklist for set -e safety)
+    # Pre-build bordered prompt string (no subshells — safe under set -euo pipefail)
     local _bordered_prompt=""
     if [[ -n "$prompt" ]]; then
         local _rest="${prompt//\\n/$'\n'}"
-        local _pline _plen _ppad
+        local _pline _plen _ppad _prow
         while true; do
             _pline="${_rest%%$'\n'*}"
             _plen=${#_pline}
             _ppad=$(( inner_width - _plen - 2 ))
             [[ $_ppad -lt 0 ]] && _ppad=0
-            _bordered_prompt+=$(printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}" "$_pline" "$_ppad" '')
-            _bordered_prompt+=$'\n'
+            printf -v _prow "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}" "$_pline" "$_ppad" ''
+            _bordered_prompt+="${_prow}"$'\n'
             [[ "$_rest" == *$'\n'* ]] || break
             _rest="${_rest#*$'\n'}"
         done
