@@ -170,20 +170,16 @@ menu_select() {
 
         # Prompt lines with borders (supports \n for multiline)
         if [[ -n "$prompt" ]]; then
-            local newline=$'\n'
-            local expanded_prompt="${prompt//\\n/$newline}"
-            local -a _plines=()
-            mapfile -t _plines <<< "$expanded_prompt" || true
-            local _pi
-            for _pi in "${!_plines[@]}"; do
-                local pline="${_plines[$_pi]}"
-                local pline_len
-                pline_len=$(_menu_display_width "$pline")
-                local pline_pad=$((inner_width - pline_len - 2))
-                [[ $pline_pad -lt 0 ]] && pline_pad=0
-                printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$pline" >/dev/tty
-                printf '%*s' "$pline_pad" '' >/dev/tty
-                printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+            local _rest="${prompt//\\n/$'\n'}"
+            local _pline
+            while true; do
+                _pline="${_rest%%$'\n'*}"
+                local _plen=${#_pline}
+                local _ppad=$(( inner_width - _plen - 2 ))
+                [[ $_ppad -lt 0 ]] && _ppad=0
+                printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}\n" "$_pline" "$_ppad" '' >/dev/tty
+                [[ "$_rest" == *$'\n'* ]] || break
+                _rest="${_rest#*$'\n'}"
             done
         fi
 
@@ -722,20 +718,16 @@ check_list() {
 
         # Prompt lines with borders (supports \n for multiline)
         if [[ -n "$prompt" ]]; then
-            local newline=$'\n'
-            local expanded_prompt="${prompt//\\n/$newline}"
-            local -a _plines=()
-            mapfile -t _plines <<< "$expanded_prompt" || true
-            local _pi
-            for _pi in "${!_plines[@]}"; do
-                local pline="${_plines[$_pi]}"
-                local pline_len
-                pline_len=$(_menu_display_width "$pline")
-                local pline_pad=$((inner_width - pline_len - 2))
-                [[ $pline_pad -lt 0 ]] && pline_pad=0
-                printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}" "$pline" >/dev/tty
-                printf '%*s' "$pline_pad" '' >/dev/tty
-                printf " ${CYAN}${BOX_V}${NC}\n" >/dev/tty
+            local _rest="${prompt//\\n/$'\n'}"
+            local _pline
+            while true; do
+                _pline="${_rest%%$'\n'*}"
+                local _plen=${#_pline}
+                local _ppad=$(( inner_width - _plen - 2 ))
+                [[ $_ppad -lt 0 ]] && _ppad=0
+                printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}\n" "$_pline" "$_ppad" '' >/dev/tty
+                [[ "$_rest" == *$'\n'* ]] || break
+                _rest="${_rest#*$'\n'}"
             done
         fi
 
