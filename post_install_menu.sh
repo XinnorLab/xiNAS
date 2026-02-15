@@ -1891,8 +1891,31 @@ remove_nfs_share() {
         is_default=true
     fi
 
+    # Extract host and options separately for readable display
+    local _export_host _export_opts
+    _export_host=$(printf '%s' "${current_line##* }" | sed 's/(.*//')
+    _export_opts=$(printf '%s' "${current_line##* }" | grep -oP '\([^)]*\)' || true)
+    _export_opts="${_export_opts#(}"
+    _export_opts="${_export_opts%)}"
+
+    # Wrap long options into two lines (max ~60 chars per line)
+    local _opts_display=""
+    if [[ ${#_export_opts} -le 60 ]]; then
+        _opts_display="$_export_opts"
+    else
+        # Split at a comma near the midpoint
+        local _half=$(( ${#_export_opts} / 2 ))
+        local _split_pos
+        _split_pos=$(printf '%s' "${_export_opts:0:$((_half+10))}" | grep -ob ',' | tail -1 | cut -d: -f1)
+        if [[ -n "$_split_pos" ]]; then
+            _opts_display="${_export_opts:0:$((_split_pos+1))}\n         ${_export_opts:$((_split_pos+1))}"
+        else
+            _opts_display="$_export_opts"
+        fi
+    fi
+
     # First confirmation
-    if ! yes_no "Remove Share" "Remove this shared folder?\n\nFolder: $share_path\nExport: ${current_line##* }\n\nThe folder and its files will NOT be deleted.\nOnly the NFS share will be removed."; then
+    if ! yes_no "Remove Share" "Remove this shared folder?\n\nFolder:  $share_path\nAccess:  $_export_host\nOptions: $_opts_display\n\nThe folder and its files will NOT be deleted.\nOnly the NFS share will be removed."; then
         return
     fi
 
