@@ -170,7 +170,8 @@ menu_select() {
             _plen=${#_pline}
             _ppad=$(( inner_width - _plen - 2 ))
             [[ $_ppad -lt 0 ]] && _ppad=0
-            _bordered_prompt+=$(printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}\n" "$_pline" "$_ppad" '')
+            _bordered_prompt+=$(printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}" "$_pline" "$_ppad" '')
+            _bordered_prompt+=$'\n'
             [[ "$_rest" == *$'\n'* ]] || break
             _rest="${_rest#*$'\n'}"
         done
@@ -724,7 +725,8 @@ check_list() {
             _plen=${#_pline}
             _ppad=$(( inner_width - _plen - 2 ))
             [[ $_ppad -lt 0 ]] && _ppad=0
-            _bordered_prompt+=$(printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}\n" "$_pline" "$_ppad" '')
+            _bordered_prompt+=$(printf "${CYAN}${BOX_V}${NC} ${WHITE}%s${NC}%*s ${CYAN}${BOX_V}${NC}" "$_pline" "$_ppad" '')
+            _bordered_prompt+=$'\n'
             [[ "$_rest" == *$'\n'* ]] || break
             _rest="${_rest#*$'\n'}"
         done
