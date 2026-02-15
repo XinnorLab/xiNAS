@@ -35,7 +35,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-XINAS_MENU_VERSION="1.3.0"
+XINAS_MENU_VERSION="1.4.0"
 
 # Source the menu library (check multiple locations)
 if [[ -f "$SCRIPT_DIR/lib/menu_lib.sh" ]]; then
@@ -49,6 +49,17 @@ elif [[ -f "/home/xinnor/xiNAS/lib/menu_lib.sh" ]]; then
 else
     echo "Error: menu_lib.sh not found" >&2
     exit 1
+fi
+
+# Source operation status library
+if [[ -f "$SCRIPT_DIR/lib/op_status.sh" ]]; then
+    source "$SCRIPT_DIR/lib/op_status.sh"
+elif [[ -f "/usr/local/bin/lib/op_status.sh" ]]; then
+    source "/usr/local/bin/lib/op_status.sh"
+elif [[ -f "/opt/xiNAS/lib/op_status.sh" ]]; then
+    source "/opt/xiNAS/lib/op_status.sh"
+elif [[ -f "/home/xinnor/xiNAS/lib/op_status.sh" ]]; then
+    source "/home/xinnor/xiNAS/lib/op_status.sh"
 fi
 
 # Audit log
@@ -80,6 +91,9 @@ audit_log() {
 LOGROTATE
     fi
 }
+
+# Initialize operation log
+_op_log_init
 
 # Locate healthcheck.sh (check multiple locations)
 _find_healthcheck() {
@@ -126,6 +140,7 @@ _check_installed_files() {
     local -A file_map=(
         ["post_install_menu.sh"]="/usr/local/bin/xinas-menu"
         ["lib/menu_lib.sh"]="/usr/local/bin/lib/menu_lib.sh"
+        ["lib/op_status.sh"]="/usr/local/bin/lib/op_status.sh"
         ["healthcheck.sh"]="/usr/local/bin/healthcheck.sh"
     )
     for repo_rel in "${!file_map[@]}"; do
@@ -190,6 +205,10 @@ do_update() {
         if [[ -f "$repo_dir/lib/menu_lib.sh" ]]; then
             mkdir -p /usr/local/bin/lib
             cp "$repo_dir/lib/menu_lib.sh" /usr/local/bin/lib/menu_lib.sh 2>/dev/null && synced+=("lib/menu_lib.sh")
+        fi
+        if [[ -f "$repo_dir/lib/op_status.sh" ]]; then
+            mkdir -p /usr/local/bin/lib
+            cp "$repo_dir/lib/op_status.sh" /usr/local/bin/lib/op_status.sh 2>/dev/null && synced+=("lib/op_status.sh")
         fi
         if [[ -f "$repo_dir/healthcheck.sh" ]]; then
             cp "$repo_dir/healthcheck.sh" /usr/local/bin/healthcheck.sh 2>/dev/null && synced+=("healthcheck.sh")
@@ -1118,11 +1137,13 @@ PYEOF
     # Apply changes if any were made
     if [[ "$changes_made" == "true" ]]; then
         if yes_no "Apply Changes" "Network configuration has been updated.\n\nApply changes now?\n\nThis will run 'netplan apply' to activate\nthe new IP addresses.\n\nActive connections may be briefly interrupted."; then
-            if sudo netplan apply 2>&1; then
-                msg_box "Success" "Network configuration applied!\n\nNew settings are now active."
-            else
-                msg_box "Error" "Failed to apply network configuration.\n\nCheck: sudo netplan try"
-            fi
+            op_start "Apply Network Config"
+            op_step "backup + update netplan" 0
+            op_run "netplan apply" sudo netplan apply || true
+            local _iface_info=""
+            _iface_info=$(ip -o -4 addr show 2>/dev/null | grep -v '127.0.0.1' | awk '{print $2, $4}' | tr '\n' ', ' || true)
+            op_verify "interfaces configured" test -n "$_iface_info" || true
+            op_end "${_iface_info}" || true
         fi
     fi
 }
@@ -1603,20 +1624,23 @@ edit_nfs_share() {
 
             if yes_no "Confirm Changes" "Please review your settings:\n\nShared Folder: $share_path\n\nWho can access:   $host_desc\nPermissions:      $perm_desc\nAdmin access:     $admin_desc\nSecurity:         $sec_desc\n\nApply these settings?"; then
 
+                op_start "Edit NFS Share: $share_path" "$(grep "^${share_path}[[:space:]]" "$exports_file" 2>/dev/null | head -1 || true)"
+
                 # Create backup
                 local ts
                 ts=$(date +%Y%m%d%H%M%S)
+                op_step "backup /etc/exports" 0
                 sudo cp "$exports_file" "${exports_file}.${ts}.bak"
 
                 # Update the export line
-                sudo sed -i "s|^${share_path}[[:space:]].*|${new_line}|" "$exports_file"
+                op_run "update export line" sudo sed -i "s|^${share_path}[[:space:]].*|${new_line}|" "$exports_file" || true
 
                 # Apply changes
-                if sudo exportfs -ra 2>/dev/null; then
-                    msg_box "Success!" "Settings updated successfully!\n\nFolder: $share_path\nAccess: $host_desc ($perm_desc)\n\nChanges are now active. Computers can\nconnect using this address:\n\n  $share_path"
-                else
-                    msg_box "Warning" "Settings saved but could not activate.\n\nPlease check /etc/exports for errors\nor restart the NFS service."
-                fi
+                op_run "exportfs -ra" sudo exportfs -ra || true
+                local _active_line=""
+                _active_line=$(exportfs -v 2>/dev/null | grep "$share_path" || true)
+                op_verify "share active" test -n "$_active_line" || true
+                op_end "Folder: $share_path\nAccess: $host_desc ($perm_desc)" || true
                 return 0
             else
                 step=$((step - 1)); continue
@@ -1763,15 +1787,17 @@ add_nfs_share() {
 
             if yes_no "Confirm New Share" "Create this shared folder?\n\nFolder:      $share_path\nAccess:      $host_desc\nPermissions: $perm_desc\nSecurity:    $sec_desc"; then
 
+                op_start "Add NFS Share: $share_path"
+
                 # Add to exports
-                echo "$new_line" | sudo tee -a "$exports_file" > /dev/null
+                op_run "add to /etc/exports" bash -c "echo '$new_line' | sudo tee -a '$exports_file' > /dev/null" || true
 
                 # Apply
-                if sudo exportfs -ra 2>/dev/null; then
-                    msg_box "Share Created!" "New shared folder created successfully!\n\nOther hosts can now connect to:\n$share_path\n\nFrom: $host_desc"
-                else
-                    msg_box "Warning" "Share added but could not activate."
-                fi
+                op_run "exportfs -ra" sudo exportfs -ra || true
+                local _active_line=""
+                _active_line=$(exportfs -v 2>/dev/null | grep "$share_path" || true)
+                op_verify "share active" test -n "$_active_line" || true
+                op_end "Folder: $share_path\nAccess: $host_desc ($perm_desc)" "Share Created" || true
                 return 0
             else
                 step=$((step - 1)); continue
@@ -1808,36 +1834,37 @@ configure_idmapd_domain() {
         return 0
     fi
 
+    op_start "Configure idmapd Domain"
+
     # Update or create idmapd.conf
     if [[ -f "$idmapd_conf" ]]; then
         if grep -qP '^\s*#\s*Domain\s*=' "$idmapd_conf"; then
-            # Uncomment and update existing commented line
-            sudo sed -i "s/^\s*#\s*Domain\s*=.*/Domain = ${domain}/" "$idmapd_conf"
+            op_run "uncomment Domain" sudo sed -i "s/^\s*#\s*Domain\s*=.*/Domain = ${domain}/" "$idmapd_conf" || true
         elif grep -qP '^\[General\]' "$idmapd_conf"; then
-            # Insert after [General]
-            sudo sed -i "/^\[General\]/a Domain = ${domain}" "$idmapd_conf"
+            op_run "insert Domain" sudo sed -i "/^\[General\]/a Domain = ${domain}" "$idmapd_conf" || true
         else
-            # Append a [General] section
-            printf '\n[General]\nDomain = %s\n' "$domain" | sudo tee -a "$idmapd_conf" > /dev/null
+            op_run "append [General] section" bash -c "printf '\n[General]\nDomain = %s\n' '$domain' | sudo tee -a '$idmapd_conf' > /dev/null" || true
         fi
     else
-        # Create minimal idmapd.conf
-        sudo tee "$idmapd_conf" > /dev/null <<EOF
+        op_run "create idmapd.conf" bash -c "sudo tee '$idmapd_conf' > /dev/null <<IDMAPEOF
 [General]
 Domain = ${domain}
 
 [Mapping]
 Nobody-User = nobody
 Nobody-Group = nogroup
-EOF
+IDMAPEOF" || true
     fi
 
     # Restart nfs-idmapd if running
     if systemctl is-active --quiet nfs-idmapd 2>/dev/null; then
-        sudo systemctl restart nfs-idmapd
+        op_run "restart nfs-idmapd" sudo systemctl restart nfs-idmapd || true
     fi
 
-    msg_box "Domain Configured" "NFSv4 ID mapping domain set to:\n${domain}\n\nFile: ${idmapd_conf}"
+    local _domain_check=""
+    _domain_check=$(grep -Po '^\s*Domain\s*=\s*\K\S+' "$idmapd_conf" 2>/dev/null || true)
+    op_verify "Domain set in idmapd.conf" test "$_domain_check" = "$domain" || true
+    op_end "Domain: ${_domain_check}" "Domain Configured" || true
 }
 
 check_kerberos_server_readiness() {
@@ -1894,12 +1921,17 @@ nfs_menu() {
             2) audit_log "NFS > Edit Share"; edit_nfs_share ;;
             3) audit_log "NFS > Add Share"; add_nfs_share ;;
             4)
-                if sudo exportfs -ra 2>/dev/null; then
+                op_start "Refresh NFS Exports"
+                op_run "exportfs -ra" sudo exportfs -ra || true
+                local _export_count=""
+                _export_count=$(exportfs -v 2>/dev/null | wc -l)
+                op_verify "exports active" test "$_export_count" -gt 0 || true
+                local _ec=0
+                op_end "Active exports: ${_export_count}" || _ec=$?
+                if [[ $_ec -eq 0 ]]; then
                     audit_log "NFS > Refresh Exports" "success"
-                    msg_box "✅ Success" "Shared folders refreshed!"
                 else
                     audit_log "NFS > Refresh Exports" "failed"
-                    msg_box "❌ Error" "Failed to refresh.\nCheck settings for errors."
                 fi
                 ;;
             5)
@@ -2052,14 +2084,16 @@ create_user() {
                 local useradd_opts="-m"
                 [[ "$create_home" != "yes" ]] && useradd_opts="-M"
 
-                if sudo useradd $useradd_opts -s /bin/bash "$username" 2>/dev/null; then
-                    # Set password
-                    echo "$username:$password" | sudo chpasswd 2>/dev/null
-
-                    msg_box "User Created" "User '$username' created successfully!\n\nThe user can now log in with their password.\n\nTo set a disk quota, use 'Set User Quota'\nfrom the User Management menu."
-                else
-                    msg_box "Error" "Failed to create user.\nCheck system logs for details."
+                op_start "Create User: $username" "user does not exist"
+                if ! op_run "useradd $username" sudo useradd $useradd_opts -s /bin/bash "$username"; then
+                    op_end "" "Error" "Check system logs for details." || true
+                    return 0
                 fi
+                op_run "set password" bash -c "echo '$username:$password' | sudo chpasswd" || true
+                local _uid_info=""
+                _uid_info=$(id "$username" 2>/dev/null || echo "")
+                op_verify "user exists" id "$username" || true
+                op_end "$_uid_info" "User Created" "The user can now log in with their password.\n\nTo set a disk quota, use 'Set User Quota'\nfrom the User Management menu." || true
                 return 0
             else
                 step=$((step - 1)); continue
@@ -2105,11 +2139,10 @@ delete_user() {
         remove_home="-r"
     fi
 
-    if sudo userdel $remove_home "$username" 2>/dev/null; then
-        msg_box "User Deleted" "User '$username' has been deleted."
-    else
-        msg_box "Error" "Failed to delete user."
-    fi
+    op_start "Delete User: $username"
+    op_run "userdel $username" sudo userdel $remove_home "$username" || true
+    op_verify "user removed" bash -c "! id '$username' 2>/dev/null" || true
+    op_end "" || true
 }
 
 set_user_quota() {
@@ -2185,15 +2218,16 @@ set_user_quota() {
 
     if yes_no "Confirm Quota" "Set disk quota for '$username'?\n\nLimit: $limit_desc\nMount: $mount_point\n\nProceed?"; then
 
+        op_start "Set Quota: $username"
         # Enable quotas if not already
-        sudo quotaon "$mount_point" 2>/dev/null || true
+        op_run "quotaon $mount_point" sudo quotaon "$mount_point" || true
 
         # Set quota
-        if sudo setquota -u "$username" $soft_kb $quota_kb 0 0 "$mount_point" 2>/dev/null; then
-            msg_box "Quota Set" "Disk quota set successfully!\n\nUser:    $username\nLimit:   $limit_desc\nMount:   $mount_point"
-        else
-            msg_box "Error" "Failed to set quota.\n\nMake sure quotas are enabled:\n  sudo quotacheck -cug $mount_point\n  sudo quotaon $mount_point"
-        fi
+        op_run "setquota $username" sudo setquota -u "$username" $soft_kb $quota_kb 0 0 "$mount_point" || true
+        local _quota_detail=""
+        _quota_detail=$(sudo repquota -u "$mount_point" 2>/dev/null | grep "^${username}" || echo "")
+        op_verify "quota applied" test -n "$_quota_detail" || true
+        op_end "User: $username  Limit: $limit_desc  Mount: $mount_point" || true
     fi
 }
 
@@ -2297,12 +2331,17 @@ quick_actions_menu() {
             1) audit_log "Quick > Status"; show_status ;;
             2)
                 if yes_no "Restart NFS" "Restart the NFS server?\n\nActive client connections may be\ntemporarily interrupted."; then
-                    if sudo systemctl restart nfs-server 2>/dev/null; then
+                    op_start "Restart NFS Server"
+                    op_run "systemctl restart nfs-server" sudo systemctl restart nfs-server || true
+                    local _nfs_status=""
+                    _nfs_status=$(systemctl is-active nfs-server 2>/dev/null || echo "unknown")
+                    op_verify "nfs-server active" test "$_nfs_status" = "active" || true
+                    local _ec=0
+                    op_end "nfs-server: ${_nfs_status}" || _ec=$?
+                    if [[ $_ec -eq 0 ]]; then
                         audit_log "Quick > Restart NFS" "success"
-                        msg_box "Success" "NFS server restarted successfully!"
                     else
                         audit_log "Quick > Restart NFS" "failed"
-                        msg_box "Error" "Failed to restart NFS server."
                     fi
                 fi
                 ;;
@@ -2383,35 +2422,44 @@ install_xiraid_exporter() {
     local deb_url="https://github.com/${EXPORTER_GITHUB_REPO}/releases/download/v${version}/xiraid-exporter_${version}_linux_${arch}.deb"
     local deb_file="/tmp/xiraid-exporter_${version}.deb"
 
+    op_start "Install xiraid-exporter v${version}"
+
     info_box "📥 Downloading" "Downloading xiraid-exporter v${version}..."
-    if ! curl -fSL -o "$deb_file" "$deb_url" 2>"$TMP_DIR/exporter_dl.log"; then
-        msg_box "Download Failed" "Could not download xiraid-exporter v${version}.\n\n$(cat "$TMP_DIR/exporter_dl.log")"
+    if ! op_run "download .deb" curl -fSL -o "$deb_file" "$deb_url"; then
+        op_end "" "Download Failed" || true
         return 1
     fi
 
     info_box "📦 Installing" "Installing xiraid-exporter v${version}..."
-    if sudo dpkg -i "$deb_file" 2>"$TMP_DIR/exporter_inst.log"; then
-        sudo systemctl daemon-reload
-        sudo systemctl enable xiraid-exporter 2>/dev/null || true
-        sudo systemctl restart xiraid-exporter 2>/dev/null || true
-        msg_box "✅ Installed" "xiraid-exporter v${version} installed and started.\n\nMetrics available at http://localhost:9827/metrics"
-        EXPORTER_UPDATE_AVAILABLE=""
-    else
-        msg_box "❌ Install Failed" "Failed to install package.\n\n$(cat "$TMP_DIR/exporter_inst.log")"
+    if ! op_run "dpkg -i" sudo dpkg -i "$deb_file"; then
+        op_end "" "Install Failed" || true
+        rm -f "$deb_file"
         return 1
     fi
+    op_run "daemon-reload" sudo systemctl daemon-reload || true
+    op_run "enable service" sudo systemctl enable xiraid-exporter || true
+    op_run "start service" sudo systemctl restart xiraid-exporter || true
+
+    local _svc_status=""
+    _svc_status=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+    op_verify "service active" test "$_svc_status" = "active" || true
+    local _installed_ver=""
+    _installed_ver=$(dpkg -l xiraid-exporter 2>/dev/null | awk '/xiraid-exporter/{print $3}' || true)
+    op_end "v${_installed_ver} (${_svc_status})\nMetrics: http://localhost:9827/metrics" "Installed" || true
+    EXPORTER_UPDATE_AVAILABLE=""
     rm -f "$deb_file"
 }
 
 uninstall_xiraid_exporter() {
     if yes_no "🗑  Uninstall" "Remove xiraid-exporter and stop the service?"; then
-        sudo systemctl stop xiraid-exporter 2>/dev/null || true
-        sudo systemctl disable xiraid-exporter 2>/dev/null || true
-        if sudo apt-get purge -y xiraid-exporter 2>"$TMP_DIR/exporter_rm.log"; then
-            msg_box "✅ Removed" "xiraid-exporter has been uninstalled."
-        else
-            msg_box "❌ Error" "Failed to remove.\n\n$(cat "$TMP_DIR/exporter_rm.log")"
-        fi
+        op_start "Uninstall xiraid-exporter"
+        op_run "stop service" sudo systemctl stop xiraid-exporter || true
+        op_run "disable service" sudo systemctl disable xiraid-exporter || true
+        op_run "purge package" sudo apt-get purge -y xiraid-exporter || true
+        local _svc_status=""
+        _svc_status=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+        op_verify "service stopped" test "$_svc_status" != "active" || true
+        op_end "" || true
     fi
 }
 
@@ -2463,8 +2511,12 @@ manage_xiraid_exporter() {
                     ;;
                 2)
                     audit_log "Exporter > Restart"
-                    sudo systemctl restart xiraid-exporter 2>/dev/null
-                    msg_box "✅ Restarted" "xiraid-exporter service restarted."
+                    op_start "Restart xiraid-exporter"
+                    op_run "systemctl restart xiraid-exporter" sudo systemctl restart xiraid-exporter || true
+                    local _svc_status=""
+                    _svc_status=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+                    op_verify "service active" test "$_svc_status" = "active" || true
+                    op_end "xiraid-exporter: ${_svc_status}" || true
                     ;;
                 3) audit_log "Exporter > Uninstall"; uninstall_xiraid_exporter ;;
                 0) return ;;

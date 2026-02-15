@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-CLIENT_VERSION="1.12.2"
+CLIENT_VERSION="1.13.0"
 
 # Network configuration file
 NETWORK_CONFIG="$SCRIPT_DIR/network_config.yml"
@@ -112,6 +112,18 @@ else
     echo -e "${RED}Error: menu_lib.sh not found${NC}"
     exit 1
 fi
+
+# Source operation status library
+if [[ -f "$SCRIPT_DIR/lib/op_status.sh" ]]; then
+    source "$SCRIPT_DIR/lib/op_status.sh"
+elif [[ -f "/usr/local/bin/lib/op_status.sh" ]]; then
+    source "/usr/local/bin/lib/op_status.sh"
+elif [[ -f "/opt/xinas-client/lib/op_status.sh" ]]; then
+    source "/opt/xinas-client/lib/op_status.sh"
+fi
+
+# Initialize operation log
+_op_log_init
 
 # Locate client_healthcheck.sh (check multiple locations)
 _find_client_healthcheck() {
@@ -497,17 +509,18 @@ This will install:
   - nfs-common (Debian/Ubuntu)
   - nfs-utils (RHEL/CentOS)"; then
 
+        op_start "Install NFS Tools"
         info_box "Installing..." "Installing NFS client tools..."
 
         if command -v apt-get &>/dev/null; then
-            apt-get update -qq
-            apt-get install -y -qq nfs-common
+            op_run "apt-get install nfs-common" bash -c "apt-get update -qq && apt-get install -y -qq nfs-common" || true
         elif command -v yum &>/dev/null; then
-            yum install -y nfs-utils
+            op_run "yum install nfs-utils" yum install -y nfs-utils || true
         elif command -v dnf &>/dev/null; then
-            dnf install -y nfs-utils
+            op_run "dnf install nfs-utils" dnf install -y nfs-utils || true
         else
-            msg_box "Error" "Could not detect package manager."
+            op_step "detect package manager" 1 "no apt-get/yum/dnf found"
+            op_end "" "Error" || true
             return 1
         fi
 
@@ -523,6 +536,7 @@ options nfs delay_retrans=-1
 options nfs nfs_access_max_cachesize=4194304
 options nfs enable_ino64=1
 EOF
+        op_step "configure modprobe.d/nfsclient.conf" 0
 
         # Configure sysctl parameters for high-throughput NFS
         cat > /etc/sysctl.d/90-nfs-client.conf <<'EOF'
@@ -533,12 +547,11 @@ net.core.wmem_max = 268435456
 # Minimize swapping for better NFS performance
 vm.swappiness = 10
 EOF
-        sysctl --system >/dev/null 2>&1
+        op_step "configure sysctl.d/90-nfs-client.conf" 0
+        op_run "sysctl --system" bash -c "sysctl --system >/dev/null 2>&1" || true
 
-        msg_box "Success" "\
-NFS client tools installed successfully!
-
-You can now mount NFS shares from your xiNAS server."
+        op_verify "mount.nfs4 available" command -v mount.nfs4 || true
+        op_end "" "Success" "You can now mount NFS shares from your xiNAS server." || true
     fi
 }
 
@@ -569,36 +582,37 @@ configure_idmapd_domain() {
         return 0
     fi
 
+    op_start "Configure idmapd Domain"
+
     # Update or create idmapd.conf
     if [[ -f "$idmapd_conf" ]]; then
         if grep -qP '^\s*#\s*Domain\s*=' "$idmapd_conf"; then
-            # Uncomment and update existing commented line
-            sudo sed -i "s/^\s*#\s*Domain\s*=.*/Domain = ${domain}/" "$idmapd_conf"
+            op_run "uncomment Domain" sudo sed -i "s/^\s*#\s*Domain\s*=.*/Domain = ${domain}/" "$idmapd_conf" || true
         elif grep -qP '^\[General\]' "$idmapd_conf"; then
-            # Insert after [General]
-            sudo sed -i "/^\[General\]/a Domain = ${domain}" "$idmapd_conf"
+            op_run "insert Domain" sudo sed -i "/^\[General\]/a Domain = ${domain}" "$idmapd_conf" || true
         else
-            # Append a [General] section
-            printf '\n[General]\nDomain = %s\n' "$domain" | sudo tee -a "$idmapd_conf" > /dev/null
+            op_run "append [General] section" bash -c "printf '\n[General]\nDomain = %s\n' '$domain' | sudo tee -a '$idmapd_conf' > /dev/null" || true
         fi
     else
-        # Create minimal idmapd.conf
-        sudo tee "$idmapd_conf" > /dev/null <<EOF
+        op_run "create idmapd.conf" bash -c "sudo tee '$idmapd_conf' > /dev/null <<IDMAPEOF
 [General]
 Domain = ${domain}
 
 [Mapping]
 Nobody-User = nobody
 Nobody-Group = nogroup
-EOF
+IDMAPEOF" || true
     fi
 
     # Restart nfs-idmapd if running
     if systemctl is-active --quiet nfs-idmapd 2>/dev/null; then
-        sudo systemctl restart nfs-idmapd
+        op_run "restart nfs-idmapd" sudo systemctl restart nfs-idmapd || true
     fi
 
-    msg_box "Domain Configured" "NFSv4 ID mapping domain set to:\n${domain}\n\nFile: ${idmapd_conf}"
+    local _domain_check=""
+    _domain_check=$(grep -Po '^\s*Domain\s*=\s*\K\S+' "$idmapd_conf" 2>/dev/null || true)
+    op_verify "Domain set in idmapd.conf" test "$_domain_check" = "$domain" || true
+    op_end "Domain: ${_domain_check}" "Domain Configured" || true
 }
 
 configure_nfs_mount() {
@@ -925,6 +939,8 @@ No = Go back and change settings"; then
 
     mkdir -p "$mount_point"
 
+    op_start "Mount NFS: $share_path" "Protocol: $proto_desc, IPs: $num_ips"
+
     for ((i=0; i<num_ips; i++)); do
         local current_ip="${server_ips[$i]}"
 
@@ -934,8 +950,10 @@ No = Go back and change settings"; then
 
         if $mount_cmd > "$mount_log" 2>&1; then
             successful_mounts+=("$current_ip → $mount_point")
+            op_step "mount $current_ip" 0
         else
             failed_mounts+=("$current_ip: $(cat "$mount_log")")
+            op_step "mount $current_ip" 1 "$(cat "$mount_log" | head -1)"
         fi
     done
 
@@ -947,37 +965,14 @@ No = Go back and change settings"; then
             local fstab_ip="${server_ips[$i]}"
             echo "$fstab_ip:$share_path $mount_point nfs $mount_opts 0 0" >> /etc/fstab
         done
+        op_step "add to fstab" 0
     fi
 
-    # Show results
-    if [[ ${#failed_mounts[@]} -eq 0 ]]; then
-        local mount_list=""
-        for m in "${successful_mounts[@]}"; do
-            mount_list+="  $m"$'\n'
-        done
+    op_verify "mountpoint active" mountpoint -q "$mount_point" || true
 
-        msg_box "Success!" "NFS share(s) mounted successfully!\n\nProtocol: $proto_desc\nConnections: $conn_desc\n\nMounted:\n$mount_list\n$([ "$add_to_fstab" == "yes" ] && echo "These mounts will persist across reboots.")\n\nUse 'nfsstat -m' to verify."
-    elif [[ ${#successful_mounts[@]} -gt 0 ]]; then
-        local fail_list=""
-        for f in "${failed_mounts[@]}"; do
-            fail_list+="  $f"$'\n'
-        done
-
-        msg_box "Partial Success" "\
-Some mounts succeeded, others failed.
-
-Failed:
-$fail_list
-Command:
-  $mount_cmd
-
-Troubleshooting:
-- Check server IPs are correct
-- Verify NFS server is running
-- Check firewall settings"
-    else
-        msg_box "Mount Failed" "Failed to mount NFS share.\n\nError:\n$(cat "$mount_log")\n\nCommand:\n  $mount_cmd\n\nTroubleshooting:\n- Check server IP is correct\n- Verify NFS server is running\n- Check firewall settings"
-    fi
+    local _mount_summary="${#successful_mounts[@]}/${num_ips} IP(s) mounted"
+    [[ "$add_to_fstab" == "yes" ]] && _mount_summary+=", persistent"
+    op_end "$_mount_summary" "" "Protocol: $proto_desc\nConnections: $conn_desc" || true
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1060,24 +1055,18 @@ Unmount $choice?
 Server: $server:$share
 
 Make sure no programs are using this mount."; then
-                    if umount "$choice" 2>/dev/null; then
-                        msg_box "Unmounted" "Successfully unmounted $choice"
-                    else
-                        msg_box "Error" "\
-Failed to unmount.
-
-The mount may be in use. Try:
-  lsof +f -- $choice"
-                    fi
+                    op_start "Unmount: $choice"
+                    op_run "umount $choice" umount "$choice" || true
+                    op_verify "not mounted" bash -c "! mountpoint -q '$choice' 2>/dev/null" || true
+                    op_end "" || true
                 fi
                 ;;
             3)
                 if yes_no "Remount" "Remount $choice?"; then
-                    if mount -o remount "$choice" 2>/dev/null; then
-                        msg_box "Remounted" "Successfully remounted $choice"
-                    else
-                        msg_box "Error" "Failed to remount."
-                    fi
+                    op_start "Remount: $choice"
+                    op_run "remount $choice" mount -o remount "$choice" || true
+                    op_verify "mounted" mountpoint -q "$choice" || true
+                    op_end "" || true
                 fi
                 ;;
         esac
@@ -1143,6 +1132,8 @@ Proceed with installation?"; then
 
     local log="$TMP_DIR/ansible.log"
 
+    op_start "Install DOCA OFED"
+
     info_box "Installing DOCA OFED" "\
 Installing NVIDIA DOCA OFED...
 
@@ -1150,15 +1141,12 @@ This may take several minutes.
 Please wait..."
 
     cd "$SCRIPT_DIR"
-    if ansible-playbook "$playbook" -i inventories/lab.ini > "$log" 2>&1; then
-        msg_box "Installation Complete" "\
-DOCA OFED installed successfully!
-
-A system reboot is recommended to load
-the new kernel modules.
-
-After reboot, RDMA will be available for
-high-performance NFS connections."
+    if op_run "ansible-playbook doca_ofed_install" bash -c "ansible-playbook '$playbook' -i inventories/lab.ini > '$log' 2>&1"; then
+        local _ib_devs=""
+        _ib_devs=$(ls /sys/class/infiniband/ 2>/dev/null | tr '\n' ' ' || true)
+        op_verify "InfiniBand devices" test -d /sys/class/infiniband || true
+        op_end "Devices: ${_ib_devs:-none (reboot required)}" "Installation Complete" \
+            "A system reboot is recommended to load\nthe new kernel modules." || true
 
         if yes_no "Reboot Now?" "\
 Reboot the system now?
@@ -1167,7 +1155,8 @@ RDMA will not be available until reboot."; then
             reboot
         fi
     else
-        text_box "Installation Failed" "$log"
+        op_end "" "Installation Failed" "See log for details." || true
+        text_box "Installation Log" "$log"
     fi
 }
 
@@ -1397,27 +1386,26 @@ install_gds() {
     fi
 
     local log="$TMP_DIR/gds_install.log"
+    op_start "Install GPUDirect Storage"
     info_box "Installing GDS" "Installing NVIDIA GDS packages..."
 
+    local _pkg_ok=true
     if command -v apt-get &>/dev/null; then
-        {
-            apt-get update
-            apt-get install -y nvidia-gds
-        } > "$log" 2>&1
+        op_run "apt-get install nvidia-gds" bash -c "apt-get update && apt-get install -y nvidia-gds" || _pkg_ok=false
     elif command -v yum &>/dev/null; then
-        yum install -y nvidia-gds > "$log" 2>&1
+        op_run "yum install nvidia-gds" yum install -y nvidia-gds || _pkg_ok=false
     elif command -v dnf &>/dev/null; then
-        dnf install -y nvidia-gds > "$log" 2>&1
+        op_run "dnf install nvidia-gds" dnf install -y nvidia-gds || _pkg_ok=false
     else
-        msg_box "Error" "Could not detect package manager."
+        op_step "detect package manager" 1 "no apt-get/yum/dnf found"
+        op_end "" "Error" || true
         return 1
     fi
 
-    if [[ $? -eq 0 ]]; then
-        # Load nvidia-fs module
-        modprobe nvidia-fs 2>/dev/null || true
-
-        msg_box "GDS Installed" "GPUDirect Storage installed successfully!\n\nNext steps:\n1. Configure cuFile for your NFS mounts\n2. Verify with 'gdscheck'\n3. Reboot may be required for full functionality"
+    if [[ "$_pkg_ok" == "true" ]]; then
+        op_run "modprobe nvidia-fs" modprobe nvidia-fs || true
+        op_verify "nvidia_fs loaded" bash -c "lsmod | grep -q nvidia_fs" || true
+        op_end "" "GDS Installed" "Next steps:\n1. Configure cuFile for your NFS mounts\n2. Verify with 'gdscheck'" || true
 
         if ! lsmod | grep -q nvidia_fs; then
             if yes_no "Reboot Required" "nvidia-fs module could not be loaded.\n\nA reboot is required to complete installation.\n\nReboot now?"; then
@@ -1425,7 +1413,7 @@ install_gds() {
             fi
         fi
     else
-        text_box "Installation Failed" "$log"
+        op_end "" "Installation Failed" || true
         return 1
     fi
 }
@@ -1515,6 +1503,7 @@ configure_cufile() {
     fi
 
     # Build cufile.json
+    op_start "Configure cuFile" "RDMA IPs: $rdma_ip_list"
     info_box "Configuring" "Writing cufile.json configuration..."
 
     # Convert IPs to JSON array
@@ -1533,35 +1522,24 @@ configure_cufile() {
     # Create or update cufile.json
     if [[ -f "$CUFILE_JSON_PATH" ]]; then
         # Update existing
-        jq --argjson ips "$ip_array" --argjson mounts "$mount_table" '
-            .fs.nfs.rdma_dev_addr_list = $ips |
-            .fs.nfs.mount_table = $mounts |
+        op_run "update cufile.json" bash -c "jq --argjson ips '$ip_array' --argjson mounts '$mount_table' '
+            .fs.nfs.rdma_dev_addr_list = \$ips |
+            .fs.nfs.mount_table = \$mounts |
             .fs.nfs.use_pci_p2pdma = false
-        ' "$CUFILE_JSON_PATH" > "${CUFILE_JSON_PATH}.tmp" && mv "${CUFILE_JSON_PATH}.tmp" "$CUFILE_JSON_PATH"
+        ' '$CUFILE_JSON_PATH' > '${CUFILE_JSON_PATH}.tmp' && mv '${CUFILE_JSON_PATH}.tmp' '$CUFILE_JSON_PATH'" || true
     else
         # Create new
-        jq -n --argjson ips "$ip_array" --argjson mounts "$mount_table" '{
-            "logging": {
-                "dir": "/var/log/cufile",
-                "level": "ERROR"
-            },
-            "fs": {
-                "nfs": {
-                    "rdma_dev_addr_list": $ips,
-                    "mount_table": $mounts,
-                    "use_pci_p2pdma": false
-                }
-            },
-            "profile": {
-                "nvtx": false,
-                "cufile_stats": 0
-            }
-        }' > "$CUFILE_JSON_PATH"
+        op_run "create cufile.json" bash -c "jq -n --argjson ips '$ip_array' --argjson mounts '$mount_table' '{
+            \"logging\": {\"dir\": \"/var/log/cufile\", \"level\": \"ERROR\"},
+            \"fs\": {\"nfs\": {\"rdma_dev_addr_list\": \$ips, \"mount_table\": \$mounts, \"use_pci_p2pdma\": false}},
+            \"profile\": {\"nvtx\": false, \"cufile_stats\": 0}
+        }' > '$CUFILE_JSON_PATH'" || true
     fi
 
     chmod 644 "$CUFILE_JSON_PATH"
 
-    msg_box "Configuration Complete" "cufile.json has been configured!\n\nRDMA IPs: $rdma_ip_list\nNFS Mounts: ${#nfs_mounts[@]}\nConfig: $CUFILE_JSON_PATH\n\nUse 'Verify GDS' to check the configuration."
+    op_verify "cufile.json valid" jq . "$CUFILE_JSON_PATH" || true
+    op_end "RDMA IPs: $rdma_ip_list\nNFS Mounts: ${#nfs_mounts[@]}\nConfig: $CUFILE_JSON_PATH" "Configuration Complete" || true
 }
 
 # Verify GDS installation and configuration
@@ -1943,64 +1921,34 @@ This will download and install Helm 3."; then
                 fi
             fi
 
+            op_start "Install CSI NFS Driver (Helm)"
             info_box "Installing CSI NFS Driver" "\
 Installing CSI NFS Driver via Helm...
 
 This may take a few minutes."
 
-            {
-                echo "Adding CSI NFS Helm repository..."
-                helm repo add csi-driver-nfs https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts
-                echo "Updating Helm repositories..."
-                helm repo update
-                echo "Installing csi-driver-nfs..."
-                helm install csi-driver-nfs csi-driver-nfs/csi-driver-nfs \
-                    --namespace kube-system \
-                    --set controller.replicas=1 \
-                    --wait
-            } > "$log" 2>&1
+            op_run "helm repo add" helm repo add csi-driver-nfs https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts || true
+            op_run "helm repo update" helm repo update || true
+            op_run "helm install csi-driver-nfs" helm install csi-driver-nfs csi-driver-nfs/csi-driver-nfs \
+                --namespace kube-system \
+                --set controller.replicas=1 \
+                --wait || true
 
-            if [[ $? -eq 0 ]]; then
-                msg_box "Installation Complete" "\
-CSI NFS Driver installed successfully!
-
-Next steps:
-1. Create a StorageClass for your NFS server
-2. Create PersistentVolumeClaims using the StorageClass
-
-Use 'Configure Storage Class' to set up
-a StorageClass for your xiNAS server."
-            else
-                text_box "Installation Failed" "$log"
-                return 1
-            fi
+            op_verify "CSI NFS driver running" check_csi_nfs_installed || true
+            op_end "" "Installation Complete" "Next steps:\n1. Create a StorageClass for your NFS server\n2. Use 'Configure Storage Class' to set up" || true
             ;;
 
         script)
+            op_start "Install CSI NFS Driver (Script)"
             info_box "Installing CSI NFS Driver" "\
 Installing CSI NFS Driver via script...
 
 This may take a few minutes."
 
-            {
-                echo "Downloading and running CSI NFS install script..."
-                curl -skSL https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/deploy/install-driver.sh | bash -s master --
-            } > "$log" 2>&1
+            op_run "run install script" bash -c "curl -skSL https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/deploy/install-driver.sh | bash -s master --" || true
 
-            if [[ $? -eq 0 ]] && check_csi_nfs_installed; then
-                msg_box "Installation Complete" "\
-CSI NFS Driver installed successfully!
-
-Next steps:
-1. Create a StorageClass for your NFS server
-2. Create PersistentVolumeClaims using the StorageClass
-
-Use 'Configure Storage Class' to set up
-a StorageClass for your xiNAS server."
-            else
-                text_box "Installation Failed" "$log"
-                return 1
-            fi
+            op_verify "CSI NFS driver running" check_csi_nfs_installed || true
+            op_end "" "Installation Complete" "Next steps:\n1. Create a StorageClass for your NFS server\n2. Use 'Configure Storage Class' to set up" || true
             ;;
     esac
 }
@@ -2022,23 +1970,20 @@ Are you sure?"; then
         return
     fi
 
-    local log="$TMP_DIR/csi_uninstall.log"
+    op_start "Uninstall CSI NFS Driver"
 
     info_box "Uninstalling..." "Removing CSI NFS Driver..."
 
     # Try helm uninstall first
     if command -v helm &>/dev/null && helm list -n kube-system | grep -q csi-driver-nfs; then
-        helm uninstall csi-driver-nfs -n kube-system > "$log" 2>&1
+        op_run "helm uninstall csi-driver-nfs" helm uninstall csi-driver-nfs -n kube-system || true
     else
         # Use the uninstall script
-        curl -skSL https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/deploy/uninstall-driver.sh | bash -s master -- > "$log" 2>&1
+        op_run "run uninstall script" bash -c "curl -skSL https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/deploy/uninstall-driver.sh | bash -s master --" || true
     fi
 
-    if ! check_csi_nfs_installed; then
-        msg_box "Uninstalled" "CSI NFS Driver has been removed."
-    else
-        text_box "Uninstall Issue" "$log"
-    fi
+    op_verify "driver removed" bash -c "! check_csi_nfs_installed" || true
+    op_end "" || true
 }
 
 # Configure NFS StorageClass for xiNAS
@@ -2164,27 +2109,10 @@ Create this StorageClass?"; then
     fi
 
     # Apply the StorageClass
-    local log="$TMP_DIR/sc_apply.log"
-    if kubectl apply -f "$sc_file" > "$log" 2>&1; then
-        msg_box "StorageClass Created" "\
-StorageClass '$sc_name' created successfully!
-
-Example PVC:
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: my-pvc
-spec:
-  accessModes:
-    - ReadWriteMany
-  storageClassName: $sc_name
-  resources:
-    requests:
-      storage: 100Gi"
-    else
-        text_box "Failed" "$log"
-    fi
+    op_start "Create StorageClass: $sc_name"
+    op_run "kubectl apply" kubectl apply -f "$sc_file" || true
+    op_verify "StorageClass exists" kubectl get storageclass "$sc_name" || true
+    op_end "Server: $nfs_server  Share: $nfs_share" "StorageClass Created" || true
 }
 
 # List and manage storage classes
@@ -2248,24 +2176,22 @@ Delete StorageClass '$choice'?
 
 Note: Existing PVCs using this StorageClass
 will NOT be deleted."; then
-                    if kubectl delete storageclass "$choice" &>/dev/null; then
-                        msg_box "Deleted" "StorageClass '$choice' deleted."
-                    else
-                        msg_box "Error" "Failed to delete StorageClass."
-                    fi
+                    op_start "Delete StorageClass: $choice"
+                    op_run "kubectl delete storageclass" kubectl delete storageclass "$choice" || true
+                    op_verify "removed" bash -c "! kubectl get storageclass '$choice' &>/dev/null" || true
+                    op_end "" || true
                 fi
                 ;;
             3)
+                op_start "Set Default StorageClass: $choice"
                 # Remove default from others first
                 for sc in $(kubectl get storageclass -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
                     kubectl patch storageclass "$sc" -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' &>/dev/null || true
                 done
                 # Set this one as default
-                if kubectl patch storageclass "$choice" -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}' &>/dev/null; then
-                    msg_box "Default Set" "'$choice' is now the default StorageClass."
-                else
-                    msg_box "Error" "Failed to set as default."
-                fi
+                op_run "set $choice as default" kubectl patch storageclass "$choice" -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}' || true
+                op_verify "is default" bash -c "kubectl get storageclass '$choice' -o jsonpath='{.metadata.annotations.storageclass\\.kubernetes\\.io/is-default-class}' 2>/dev/null | grep -q true" || true
+                op_end "" || true
                 ;;
         esac
     done
@@ -3063,20 +2989,15 @@ Configuration saved to $netplan_file
 Apply network configuration now?
 
 Warning: This may briefly disrupt network connectivity."; then
+            op_start "Apply Network Config (Manual)"
+            op_step "backup + write netplan" 0
             info_box "Applying..." "Applying network configuration..."
-            if netplan apply 2>/dev/null; then
-                sleep 2
-                msg_box "Success" "Network configuration applied successfully!\n\nMTU: $([ "$mtu" = "0" ] && echo "Auto-detect (4092 IB / 9000 RoCE)" || echo "$mtu")"
-            else
-                msg_box "Warning" "\
-netplan apply returned an error.
-
-Please check the configuration:
-  cat $netplan_file
-
-You may need to apply manually:
-  sudo netplan apply"
-            fi
+            op_run "netplan apply" netplan apply || true
+            sleep 2
+            local _iface_info=""
+            _iface_info=$(ip -o -4 addr show 2>/dev/null | grep -v '127.0.0.1' | awk '{print $2, $4}' | tr '\n' ', ' || true)
+            op_verify "interfaces configured" test -n "$_iface_info" || true
+            op_end "${_iface_info}\nMTU: $([ "$mtu" = "0" ] && echo "Auto-detect" || echo "$mtu")" || true
         else
             msg_box "Saved" "\
 Configuration saved but not applied.
@@ -3170,27 +3091,25 @@ EOF
 
     # Show preview
     if yes_no "Apply IP Pool Configuration" "Detected ${#interfaces[@]} interface(s).\n\nPool: $net_pool_start - $net_pool_end / $net_pool_prefix\n\nApply this configuration?"; then
+        op_start "Apply Network Config (IP Pool)"
         # Backup existing config
         if [[ -f "$netplan_file" ]]; then
             cp "$netplan_file" "${netplan_file}.$(date +%Y%m%d%H%M%S).bak"
+            op_step "backup netplan" 0
         fi
 
         mv "$tmp_file" "$netplan_file"
         chmod 600 "$netplan_file"
+        op_step "write netplan config" 0
 
         info_box "Applying..." "Applying network configuration..."
 
-        if netplan apply 2>/dev/null; then
-            sleep 2
-            msg_box "Success" "Network configuration applied!\n\nConfiguration: $netplan_file"
-        else
-            msg_box "Warning" "\
-netplan apply returned an error.
-
-Please check the configuration manually:
-  cat $netplan_file
-  sudo netplan apply"
-        fi
+        op_run "netplan apply" netplan apply || true
+        sleep 2
+        local _iface_info=""
+        _iface_info=$(ip -o -4 addr show 2>/dev/null | grep -v '127.0.0.1' | awk '{print $2, $4}' | tr '\n' ', ' || true)
+        op_verify "interfaces configured" test -n "$_iface_info" || true
+        op_end "${_iface_info}\nConfig: $netplan_file" || true
     else
         rm -f "$tmp_file"
     fi
