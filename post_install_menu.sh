@@ -2314,10 +2314,13 @@ set_user_quota() {
     local -a users=()
     while IFS=: read -r uname _ uid _ _ _ _; do
         if [[ $uid -ge 1000 && $uid -lt 65534 ]]; then
-            # Get current quota
-            local quota_info
-            quota_info=$(quota -u "$uname" 2>/dev/null | tail -1 | awk '{print $3}')
-            [[ -z "$quota_info" || "$quota_info" == "0" ]] && quota_info="No limit"
+            # Get current quota (quota command may fail if quotas not enabled)
+            local quota_info="No limit"
+            if command -v quota &>/dev/null; then
+                quota_info=$(quota -u "$uname" 2>/dev/null | tail -1 || true)
+                quota_info=$(printf '%s' "$quota_info" | awk '{print $3}')
+                [[ -z "$quota_info" || "$quota_info" == "0" ]] && quota_info="No limit"
+            fi
             users+=("$uname" "Limit: $quota_info")
         fi
     done < /etc/passwd
