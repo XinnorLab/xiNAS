@@ -35,7 +35,7 @@ echo ""
 if [ "$UPDATE_ONLY" -eq 0 ]; then
     echo -e "${YELLOW}Installing required packages...${NC}"
     sudo apt-get update -y
-    sudo apt-get install -y ansible git dialog wget
+    sudo apt-get install -y ansible git dialog wget btop
     # Install yq v4 for YAML processing used by configuration scripts
     echo -e "${YELLOW}Installing yq...${NC}"
     sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"

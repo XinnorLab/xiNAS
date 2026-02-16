@@ -562,13 +562,21 @@ advanced_settings_menu() {
         choice=$(menu_select "Advanced Settings" "Configuration Options" \
             "1" "🌐 Configure Network" \
             "2" "📦 Choose Preset" \
-            "3" "$update_text" \
+            "3" "📈 System Monitor (btop)" \
+            "4" "$update_text" \
             "0" "🔙 Back to Main Menu") || return
 
         case "$choice" in
             1) ./configure_network.sh ;;
             2) choose_preset ;;
             3)
+                if command -v btop &>/dev/null; then
+                    btop
+                else
+                    msg_box "Not Installed" "btop is not installed.\n\nInstall with: sudo apt-get install btop"
+                fi
+                ;;
+            4)
                 if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
                     if yes_no "Update Available" "A new version of xiNAS is available!\n\nWould you like to update now?"; then
                         do_update
