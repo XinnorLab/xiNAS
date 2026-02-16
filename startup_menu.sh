@@ -226,6 +226,19 @@ run_playbook() {
     return $?
 }
 
+# Run a playbook with extra variables
+run_playbook_with_vars() {
+    local playbook="${1:-$REPO_DIR/playbooks/site.yml}"
+    local extra_vars="${2:-}"
+    local inventory="inventories/lab.ini"
+    if [[ -n "$extra_vars" ]]; then
+        ansible-playbook "$playbook" -i "$inventory" -v -e "$extra_vars"
+    else
+        ansible-playbook "$playbook" -i "$inventory" -v
+    fi
+    return $?
+}
+
 # Check for installed xiRAID packages and optionally remove them
 check_remove_xiraid() {
     local pkgs found repo_status log=/tmp/xiraid_remove.log
@@ -276,6 +289,105 @@ confirm_playbook() {
         role_list="${role_list}\n - ${r}: ${desc}"
     done
     yes_no "Run Playbook" "Run Ansible playbook to configure the system?\n\nThis will execute the following roles:${role_list}"
+}
+
+# Show installation profile selection with descriptions
+install_menu() {
+    if ! has_license; then
+        msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 2 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
+        return
+    fi
+
+    local choice
+    choice=$(menu_select "Installation Profile" "Choose how to deploy xiNAS:" \
+        "1" "🖥️  Full Installation (NVMe)" \
+        "2" "🖧  VM Profile (Virtual Machine)" \
+        "3" "💾 Use Existing RAID Arrays" \
+        "0" "🔙 Back") || return
+
+    local desc=""
+    case "$choice" in
+        1)
+            desc="FULL INSTALLATION — NVMe Auto-Detect\n"
+            desc+="\nThis is the standard deployment for physical servers\n"
+            desc+="with NVMe drives. The installer will:\n"
+            desc+="\n  1. Configure system basics (timezone, packages, NTP)"
+            desc+="\n  2. Install NVIDIA DOCA-OFED drivers for RDMA networking"
+            desc+="\n  3. Configure network interfaces (IP addressing)"
+            desc+="\n  4. Install Xinnor xiRAID software"
+            desc+="\n  5. Auto-detect NVMe drives and create namespaces"
+            desc+="\n  6. Build RAID arrays (RAID 5 data + RAID 10 log)"
+            desc+="\n  7. Create XFS filesystem and mount storage"
+            desc+="\n  8. Configure NFS exports for client access"
+            desc+="\n  9. Apply performance tuning"
+            desc+="\n\nAll non-OS NVMe drives will be used for storage."
+            desc+="\nExisting data on those drives will be erased."
+            if ! yes_no "Full Installation" "$desc"; then
+                return
+            fi
+            apply_preset "default"
+            ;;
+        2)
+            desc="VM PROFILE — Virtual Machine\n"
+            desc+="\nOptimized for virtual environments using virtio or\n"
+            desc+="SCSI drives instead of NVMe. The installer will:\n"
+            desc+="\n  1. Configure system basics (timezone, packages, NTP)"
+            desc+="\n  2. Install NVIDIA DOCA-OFED drivers"
+            desc+="\n  3. Configure network interfaces"
+            desc+="\n  4. Install Xinnor xiRAID software"
+            desc+="\n  5. Auto-detect all non-OS block devices"
+            desc+="\n  6. Assign drives: 2 smallest for log, rest for data"
+            desc+="\n  7. Build RAID arrays and create XFS filesystem"
+            desc+="\n  8. Configure NFS exports for client access"
+            desc+="\n  9. Apply VM-tuned performance settings"
+            desc+="\n\nAll non-OS drives will be used for storage."
+            desc+="\nExisting data on those drives will be erased."
+            if ! yes_no "VM Installation" "$desc"; then
+                return
+            fi
+            apply_preset "xinnorVM"
+            ;;
+        3)
+            desc="EXISTING RAID — Skip Array Creation\n"
+            desc+="\nUse this when xiRAID arrays are already configured\n"
+            desc+="and you only need to set up NFS. The installer will:\n"
+            desc+="\n  1. Configure system basics (timezone, packages, NTP)"
+            desc+="\n  2. Install NVIDIA DOCA-OFED drivers"
+            desc+="\n  3. Configure network interfaces"
+            desc+="\n  4. Skip xiRAID install and RAID array creation"
+            desc+="\n  5. Create XFS filesystem on existing RAID devices"
+            desc+="\n  6. Configure NFS exports for client access"
+            desc+="\n  7. Apply performance tuning"
+            desc+="\n\nExisting RAID arrays must already be present."
+            desc+="\nRAID devices (/dev/xi_data, /dev/xi_log) must exist."
+            if ! yes_no "Existing RAID Installation" "$desc"; then
+                return
+            fi
+            # Use default preset but skip xiRAID installation
+            apply_preset "default"
+            # Set skip flags for xiraid and namespace roles
+            local extra_vars="xiraid_skip_install=true nvme_auto_namespace=false"
+            if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
+                run_playbook_with_vars "playbooks/site.yml" "$extra_vars"
+                echo ""
+                echo "🎉 Deployment complete! System status:"
+                echo ""
+                xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
+                exit 0
+            fi
+            return
+            ;;
+        0) return ;;
+    esac
+
+    if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
+        run_playbook "playbooks/site.yml"
+        echo ""
+        echo "🎉 Deployment complete! System status:"
+        echo ""
+        xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
+        exit 0
+    fi
 }
 
 # Copy configuration files from a preset directory and optionally run its playbook
@@ -520,20 +632,7 @@ while true; do
     case "$choice" in
         1) ./collect_data.sh ;;
         2) enter_license ;;
-        3)
-            if ! has_license; then
-                msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 2 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
-                continue
-            fi
-            if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
-                run_playbook "playbooks/site.yml"
-                echo ""
-                echo "🎉 Deployment complete! System status:"
-                echo ""
-                xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
-                exit 0
-            fi
-            ;;
+        3) install_menu ;;
         4) advanced_settings_menu ;;
         0)
             msg_box "See you soon!" "Thank you for choosing xiNAS!\n\nRun this menu again anytime:\n./startup_menu.sh\n\nQuestions? support@xinnor.io"
