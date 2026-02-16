@@ -2555,7 +2555,8 @@ quick_actions_menu() {
             "3" "📜 View System Logs" \
             "4" "💿 Check Disk Health" \
             "5" "🔧 Service Status" \
-            "6" "📝 Audit Log" \
+            "6" "📈 System Monitor (btop)" \
+            "7" "📝 Audit Log" \
             "0" "🔙 Back") || break
 
         case "$choice" in
@@ -2610,7 +2611,15 @@ quick_actions_menu() {
                 } > "$out"
                 text_box "🔧 Services" "$out"
                 ;;
-            6) audit_log "Quick > View Audit Log"; view_audit_log ;;
+            6)
+                audit_log "Quick > System Monitor"
+                if command -v btop &>/dev/null; then
+                    btop
+                else
+                    msg_box "Not Installed" "btop is not installed.\n\nInstall with: sudo apt-get install btop"
+                fi
+                ;;
+            7) audit_log "Quick > View Audit Log"; view_audit_log ;;
             0) break ;;
         esac
     done
