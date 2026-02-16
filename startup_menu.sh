@@ -78,6 +78,33 @@ pkg_status() {
     dpkg-query -W -f='${Status}\n' "$pkg" 2>/dev/null || true
 }
 
+# Try to recover license from running xiRAID via xicli license show
+# Returns 0 if license was recovered, 1 otherwise
+recover_license_from_xiraid() {
+    local license_file="/tmp/license"
+
+    # Check if xicli is available and xiRAID is running
+    if ! command -v xicli &>/dev/null; then
+        return 1
+    fi
+
+    local license_output=""
+    license_output=$(xicli license show 2>/dev/null) || return 1
+
+    # Check that output contains actual license data (not just an error or empty)
+    if [[ -z "$license_output" ]] || echo "$license_output" | grep -qi "no license\|not found\|error"; then
+        return 1
+    fi
+
+    if yes_no "Recover License" \
+        "xiRAID is running with an active license but no\nlicense file exists in /tmp.\n\nRecover license from the running system?\n\nThis will save the current license to $license_file"; then
+        echo "$license_output" > "$license_file"
+        msg_box "License Recovered" "License recovered from xiRAID and saved\nto $license_file"
+        return 0
+    fi
+    return 1
+}
+
 # Prompt user for license string and store it in /tmp/license
 # Show license prompt and save to /tmp/license
 enter_license() {
@@ -92,6 +119,11 @@ enter_license() {
             replace=1
             ts=$(date +%Y%m%d%H%M%S)
         else
+            return 0
+        fi
+    else
+        # No license file — try to recover from running xiRAID
+        if recover_license_from_xiraid; then
             return 0
         fi
     fi
