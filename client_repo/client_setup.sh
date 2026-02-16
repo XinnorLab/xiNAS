@@ -120,6 +120,14 @@ elif [[ -f "/usr/local/bin/lib/op_status.sh" ]]; then
     source "/usr/local/bin/lib/op_status.sh"
 elif [[ -f "/opt/xinas-client/lib/op_status.sh" ]]; then
     source "/opt/xinas-client/lib/op_status.sh"
+else
+    # Provide no-op stubs so the script works without op_status.sh
+    _op_log_init() { :; }
+    op_start()  { :; }
+    op_step()   { :; }
+    op_run()    { shift; "$@"; }
+    op_verify() { shift; "$@"; }
+    op_end()    { return 0; }
 fi
 
 # Initialize operation log
