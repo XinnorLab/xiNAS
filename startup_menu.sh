@@ -326,8 +326,11 @@ confirm_playbook() {
 # Show installation profile selection with descriptions
 install_menu() {
     if ! has_license; then
-        msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 2 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
-        return
+        # Try to recover license from running xiRAID before giving up
+        if ! recover_license_from_xiraid; then
+            msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 2 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
+            return
+        fi
     fi
 
     local choice
