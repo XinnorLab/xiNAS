@@ -81,26 +81,22 @@ pkg_status() {
 }
 
 # Check if xiRAID has an active license via xicli
-# Sets _XIRAID_LICENSE_KEY if found
+# Sets _XIRAID_LICENSE_OUTPUT if found
 # Returns 0 if active license found, 1 otherwise
 _xiraid_has_license() {
-    _XIRAID_LICENSE_KEY=""
+    _XIRAID_LICENSE_OUTPUT=""
     command -v xicli &>/dev/null || return 1
 
     local output=""
     output=$(xicli license show 2>/dev/null) || return 1
-
-    # Extract license_key value
-    local key=""
-    key=$(echo "$output" | awk -F': ' '/^license_key:/ {print $2}') || true
-    [[ -z "$key" ]] && return 1
+    [[ -z "$output" ]] && return 1
 
     # Check status is valid
     local status=""
     status=$(echo "$output" | awk -F': ' '/^status:/ {print $2}') || true
     [[ "$status" != "valid" ]] && return 1
 
-    _XIRAID_LICENSE_KEY="$key"
+    _XIRAID_LICENSE_OUTPUT="$output"
     return 0
 }
 
@@ -129,7 +125,7 @@ enter_license() {
                 2) ;; # fall through to manual paste
                 3)
                     cp "$license_file" "${license_file}.$(date +%Y%m%d%H%M%S).bak"
-                    echo "$_XIRAID_LICENSE_KEY" > "$license_file"
+                    echo "$_XIRAID_LICENSE_OUTPUT" > "$license_file"
                     msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to $license_file"
                     return 0
                     ;;
@@ -150,7 +146,7 @@ enter_license() {
             "0" "🔙 Back") || return
         case "$choice" in
             1)
-                echo "$_XIRAID_LICENSE_KEY" > "$license_file"
+                echo "$_XIRAID_LICENSE_OUTPUT" > "$license_file"
                 msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to $license_file"
                 return 0
                 ;;
@@ -646,7 +642,7 @@ while true; do
             if ! has_license; then
                 # Try to recover license from running xiRAID
                 if _xiraid_has_license; then
-                    echo "$_XIRAID_LICENSE_KEY" > /tmp/license
+                    echo "$_XIRAID_LICENSE_OUTPUT" > /tmp/license
                     msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to /tmp/license"
                 else
                     msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 2 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
