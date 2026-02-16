@@ -2,6 +2,7 @@
 # Simplified startup menu for xiNAS
 # Uses colored console menus instead of whiptail
 set -euo pipefail
+XINAS_SETUP_VERSION="1.1.0"
 TMP_DIR="$(mktemp -d)"
 REPO_DIR="$(pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,7 +60,7 @@ show_header() {
 EOF
     echo -e "${NC}"
     echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}     High-Performance NAS Setup${NC}"
+    echo -e "${YELLOW}     xiNAS Setup${NC}  ${DIM}v${XINAS_SETUP_VERSION}${NC}"
     echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
@@ -79,20 +80,83 @@ pkg_status() {
     dpkg-query -W -f='${Status}\n' "$pkg" 2>/dev/null || true
 }
 
+# Check if xiRAID has an active license via xicli
+# Sets _XIRAID_LICENSE_KEY if found
+# Returns 0 if active license found, 1 otherwise
+_xiraid_has_license() {
+    _XIRAID_LICENSE_KEY=""
+    command -v xicli &>/dev/null || return 1
+
+    local output=""
+    output=$(xicli license show 2>/dev/null) || return 1
+
+    # Extract license_key value
+    local key=""
+    key=$(echo "$output" | awk -F': ' '/^license_key:/ {print $2}') || true
+    [[ -z "$key" ]] && return 1
+
+    # Check status is valid
+    local status=""
+    status=$(echo "$output" | awk -F': ' '/^status:/ {print $2}') || true
+    [[ "$status" != "valid" ]] && return 1
+
+    _XIRAID_LICENSE_KEY="$key"
+    return 0
+}
+
 enter_license() {
     local license_file="/tmp/license"
     [ -x ./hwkey ] || chmod +x ./hwkey
     local hwkey_val
-    local replace=0
 
-    local ts=""
-    if [ -f "$license_file" ]; then
-        if yes_no "License Exists" "License already exists. Replace it?"; then
-            replace=1
-            ts=$(date +%Y%m%d%H%M%S)
+    # Check if xiRAID already has an active license
+    local has_xiraid_license=false
+    if _xiraid_has_license; then
+        has_xiraid_license=true
+    fi
+
+    if [ -f "$license_file" ] && [ -s "$license_file" ]; then
+        # License file exists and is not empty
+        if [[ "$has_xiraid_license" == "true" ]]; then
+            local choice
+            choice=$(menu_select "License" "License file already exists." \
+                "1" "✅ Keep current license" \
+                "2" "📋 Replace — paste new license" \
+                "3" "🔄 Replace — recover from xiRAID" \
+                "0" "🔙 Back") || return
+            case "$choice" in
+                1) return 0 ;;
+                2) ;; # fall through to manual paste
+                3)
+                    cp "$license_file" "${license_file}.$(date +%Y%m%d%H%M%S).bak"
+                    echo "$_XIRAID_LICENSE_KEY" > "$license_file"
+                    msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to $license_file"
+                    return 0
+                    ;;
+                0) return 0 ;;
+            esac
         else
-            return 0
+            if ! yes_no "License Exists" "License already exists. Replace it?"; then
+                return 0
+            fi
         fi
+        cp "$license_file" "${license_file}.$(date +%Y%m%d%H%M%S).bak"
+    elif [[ "$has_xiraid_license" == "true" ]]; then
+        # No license file but xiRAID has one — offer recovery or manual
+        local choice
+        choice=$(menu_select "Enter License" "No license file found. xiRAID has an active license." \
+            "1" "🔄 Recover license from xiRAID (Recommended)" \
+            "2" "📋 Enter license manually" \
+            "0" "🔙 Back") || return
+        case "$choice" in
+            1)
+                echo "$_XIRAID_LICENSE_KEY" > "$license_file"
+                msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to $license_file"
+                return 0
+                ;;
+            2) ;; # fall through to manual paste
+            0) return 0 ;;
+        esac
     fi
 
     hwkey_val=$(./hwkey 2>/dev/null | tr -d '\n' | tr '[:lower:]' '[:upper:]')
@@ -100,9 +164,6 @@ enter_license() {
 
     if ! text_area "Enter License" "Paste your license key below:" "$TMP_DIR/license"; then
         return 0
-    fi
-    if [ $replace -eq 1 ]; then
-        cp "$license_file" "${license_file}.${ts}.bak"
     fi
     cat "$TMP_DIR/license" > "$license_file"
 }
@@ -571,7 +632,7 @@ while true; do
     fi
     echo ""
 
-    choice=$(menu_select "xiNAS Setup" "Select an option:" \
+    choice=$(menu_select "xiNAS Setup v${XINAS_SETUP_VERSION}" "Select an option:" \
         "1" "📊 Collect System Data" \
         "2" "$license_text" \
         "3" "$install_text" \
@@ -583,8 +644,14 @@ while true; do
         2) enter_license ;;
         3)
             if ! has_license; then
-                msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 2 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
-                continue
+                # Try to recover license from running xiRAID
+                if _xiraid_has_license; then
+                    echo "$_XIRAID_LICENSE_KEY" > /tmp/license
+                    msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to /tmp/license"
+                else
+                    msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 2 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
+                    continue
+                fi
             fi
             if ! check_license; then continue; fi
 
