@@ -1010,13 +1010,54 @@ def check_nfs(exp, checks):
 
     return results
 
+def check_services(exp, checks):
+    results = []
+
+    # Map of check names to systemd unit names and descriptions
+    service_map = {
+        "xiraid": ("xiraid.target", "xiRAID storage engine"),
+        "nfs_server": ("nfs-server", "NFS server"),
+        "rpcbind": ("rpcbind", "RPC port mapper"),
+        "nfsdcld": ("nfsdcld", "NFS client tracking daemon"),
+        "xiraid_exporter": ("xiraid-exporter", "xiRAID Prometheus exporter"),
+        "chrony": ("chrony", "NTP time synchronization"),
+    }
+
+    for check_name in checks:
+        if check_name not in service_map:
+            continue
+        unit, desc = service_map[check_name]
+        output = run_cmd(f"systemctl is-active {unit} 2>/dev/null")
+        if output == "active":
+            results.append(CheckResult("Services", check_name, "PASS",
+                "active", "active"))
+        elif output == "inactive":
+            # Check if the unit exists at all
+            unit_state = run_cmd(f"systemctl list-unit-files {unit} 2>/dev/null")
+            if unit and unit_state:
+                results.append(CheckResult("Services", check_name, "FAIL",
+                    "inactive", "active",
+                    impact=f"{desc} is not running",
+                    fix_hint=f"systemctl start {unit}"))
+            else:
+                results.append(CheckResult("Services", check_name, "SKIP",
+                    "not installed", "active",
+                    evidence=f"{unit} unit not found"))
+        else:
+            results.append(CheckResult("Services", check_name, "FAIL",
+                output or "unknown", "active",
+                impact=f"{desc} is in state: {output}",
+                fix_hint=f"systemctl restart {unit}"))
+
+    return results
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Report generators
 # ─────────────────────────────────────────────────────────────────────────────
 
 def compute_overall(results):
     """Compute overall status: PASS, WARN, FAIL."""
-    critical_sections = {"Network", "Storage", "NFS"}
+    critical_sections = {"Services", "Network", "Storage", "NFS"}
     has_fail = False
     warn_count = 0
     critical_warn = False
@@ -1189,6 +1230,7 @@ def main():
     # Run checks
     all_results = []
     section_map = {
+        "services": check_services,
         "cpu": check_cpu,
         "kernel": check_kernel,
         "vm": check_vm,

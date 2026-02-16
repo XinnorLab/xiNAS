@@ -2,6 +2,7 @@ profile: quick
 description: "Quick health check - /proc and /sys reads only"
 timeout_seconds: 60
 sections:
+  services: { enabled: true, checks: [xiraid, nfs_server, rpcbind] }
   cpu: { enabled: true, checks: [governor, tuned_profile] }
   kernel: { enabled: true, checks: [thp, ksm, mitigations] }
   vm: { enabled: true, checks: [swappiness, dirty_background_ratio, dirty_ratio, vfs_cache_pressure] }

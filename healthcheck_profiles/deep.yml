@@ -2,6 +2,7 @@ profile: deep
 description: "Deep health check - includes SMART, NVMe logs, FS checks, full RDMA"
 timeout_seconds: 600
 sections:
+  services: { enabled: true, checks: [xiraid, nfs_server, rpcbind, nfsdcld, xiraid_exporter, chrony] }
   cpu: { enabled: true, checks: [governor, tuned_profile, numa_balance] }
   kernel: { enabled: true, checks: [thp, ksm, mitigations] }
   vm: { enabled: true, checks: [swappiness, dirty_background_ratio, dirty_ratio, vfs_cache_pressure, zone_reclaim] }
