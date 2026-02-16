@@ -2611,7 +2611,7 @@ quick_actions_menu() {
                 {
                     echo "=== Service Status ==="
                     echo ""
-                    for svc in nfs-server xiraid xiraid-exporter nfsdcld rpcbind; do
+                    for svc in nfs-server xiraid.target xiraid-exporter nfsdcld rpcbind; do
                         status=$(systemctl is-active "$svc" 2>/dev/null || echo "not found")
                         case "$status" in
                             active) icon="*" ;;
