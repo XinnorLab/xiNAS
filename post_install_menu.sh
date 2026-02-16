@@ -1580,11 +1580,23 @@ edit_nfs_share() {
                 else
                     new_options=$(echo "$new_options" | sed 's/\brw\b/ro/')
                 fi
+                # Strip legacy all_squash and anonuid/anongid options
+                new_options=$(echo "$new_options" | sed 's/,all_squash//;s/all_squash,//;s/all_squash//')
+                new_options=$(echo "$new_options" | sed 's/,anonuid=[0-9]*//g;s/anonuid=[0-9]*,//g;s/anonuid=[0-9]*//g')
+                new_options=$(echo "$new_options" | sed 's/,anongid=[0-9]*//g;s/anongid=[0-9]*,//g;s/anongid=[0-9]*//g')
                 # Replace root_squash/no_root_squash
                 if [[ "$new_root" == "no_root_squash" ]]; then
-                    new_options=$(echo "$new_options" | sed 's/\broot_squash\b/no_root_squash/')
+                    if [[ "$new_options" == *"root_squash"* ]]; then
+                        new_options=$(echo "$new_options" | sed 's/\broot_squash\b/no_root_squash/')
+                    elif [[ "$new_options" != *"no_root_squash"* ]]; then
+                        new_options="${new_options},no_root_squash"
+                    fi
                 else
-                    new_options=$(echo "$new_options" | sed 's/\bno_root_squash\b/root_squash/')
+                    if [[ "$new_options" == *"no_root_squash"* ]]; then
+                        new_options=$(echo "$new_options" | sed 's/\bno_root_squash\b/root_squash/')
+                    elif [[ "$new_options" != *"root_squash"* ]]; then
+                        new_options="${new_options},root_squash"
+                    fi
                 fi
                 # Update sec= option
                 if [[ "$new_sec" != "sys" ]]; then

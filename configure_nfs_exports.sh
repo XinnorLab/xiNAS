@@ -48,7 +48,7 @@ add_export() {
 
     clients=$(input_box "Add Export" "Clients for $path:\n\nExamples:\n  *           = everyone\n  192.168.1.0/24 = specific network" "*") || return
 
-    options=$(input_box "Add Export" "Options for $path:\n\nDefault: rw,sync" "rw,sync") || return
+    options=$(input_box "Add Export" "Options for $path:\n\nDefault: rw,sync,no_root_squash" "rw,sync,no_root_squash,no_subtree_check") || return
 
     tmp=$(mktemp)
     yq ".exports += [{\"path\": \"${path}\", \"clients\": \"${clients}\", \"options\": \"${options}\"}]" "$vars_file" > "$tmp"
