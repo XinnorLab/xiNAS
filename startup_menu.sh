@@ -689,7 +689,7 @@ while true; do
     fi
     echo ""
 
-    choice=$(menu_select "xiNAS Setup" "Select an option:" \
+    choice=$(menu_select "xiNAS Setup v${XINAS_SETUP_VERSION}" "Select an option:" \
         "1" "📊 Collect System Data" \
         "2" "$license_text" \
         "3" "$install_text" \
