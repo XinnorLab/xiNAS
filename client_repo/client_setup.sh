@@ -1187,18 +1187,20 @@ check_nvidia_driver() {
 # Check if GDS is installed
 check_gds_installed() {
     # Check for nvidia-fs kernel module
-    if lsmod | grep -q nvidia_fs; then
+    if lsmod 2>/dev/null | grep -q nvidia_fs 2>/dev/null || false; then
         return 0
     fi
     # Check if nvidia-gds package is installed
     if command -v dpkg &>/dev/null; then
-        dpkg -l nvidia-gds 2>/dev/null | grep -q "^ii" && return 0
+        if dpkg -l nvidia-gds 2>/dev/null | grep -q "^ii" 2>/dev/null || false; then
+            return 0
+        fi
     elif command -v rpm &>/dev/null; then
         rpm -q nvidia-gds &>/dev/null && return 0
     fi
     # Check for cufile library
     if [[ -f /usr/local/cuda/lib64/libcufile.so ]] || \
-       ldconfig -p 2>/dev/null | grep -q libcufile; then
+       { ldconfig -p 2>/dev/null | grep -q libcufile 2>/dev/null || false; }; then
         return 0
     fi
     return 1
@@ -1230,7 +1232,7 @@ show_gds_status() {
         if check_nvidia_driver; then
             nvidia-smi --query-gpu=name,driver_version,cuda_version --format=csv,noheader 2>/dev/null | head -5 | while read -r line; do
                 echo "  ✓ $line"
-            done
+            done || true
         else
             echo "  ✗ Not installed or not working"
         fi
@@ -1256,7 +1258,7 @@ show_gds_status() {
             echo "  ✓ GDS is installed"
 
             # Check nvidia-fs module
-            if lsmod | grep -q nvidia_fs; then
+            if lsmod 2>/dev/null | grep -q nvidia_fs 2>/dev/null || false; then
                 echo "  ✓ nvidia-fs kernel module: loaded"
             else
                 echo "  ⚠ nvidia-fs kernel module: not loaded"
@@ -1299,7 +1301,7 @@ show_gds_status() {
                     echo "  Interface mapping:"
                     ibdev2netdev 2>/dev/null | while read -r line; do
                         echo "    $line"
-                    done
+                    done || true
                 fi
             else
                 echo "  ✗ No RDMA devices found"
@@ -1332,13 +1334,15 @@ show_gds_status() {
         # gdscheck output (if available)
         echo "▶ gdscheck Verification:"
         local gdscheck_path
-        gdscheck_path=$(find /usr/local/cuda*/gds/tools -name "gdscheck.py" 2>/dev/null | head -1)
+        gdscheck_path=$(find /usr/local/cuda*/gds/tools -name "gdscheck.py" 2>/dev/null | head -1 || true)
         if [[ -n "$gdscheck_path" ]] && [[ -x "$gdscheck_path" ]]; then
             echo "  Running gdscheck..."
             echo ""
-            sudo "$gdscheck_path" -p 2>&1 | grep -E "(GDS|RDMA|NFS|nvidia|Supported|Loaded|Configured|compat)" | head -20 | while read -r line; do
+            local _gds_out=""
+            _gds_out=$(sudo "$gdscheck_path" -p 2>&1 || true)
+            echo "$_gds_out" | grep -E "(GDS|RDMA|NFS|nvidia|Supported|Loaded|Configured|compat)" | head -20 | while read -r line; do
                 echo "  $line"
-            done
+            done || true
         else
             echo "  ⚠ gdscheck not found"
         fi
@@ -1347,15 +1351,15 @@ show_gds_status() {
         # nvidia-fs stats
         if [[ -f /proc/driver/nvidia-fs/stats ]]; then
             echo "▶ nvidia-fs Stats:"
-            head -20 /proc/driver/nvidia-fs/stats | while read -r line; do
+            head -20 /proc/driver/nvidia-fs/stats 2>/dev/null | while read -r line; do
                 echo "  $line"
-            done
+            done || true
             echo ""
         fi
 
         # IOMMU status
         echo "▶ IOMMU Status:"
-        if dmesg 2>/dev/null | grep -qi "IOMMU enabled"; then
+        if dmesg 2>/dev/null | grep -qi "IOMMU enabled" || false; then
             echo "  ⚠ IOMMU is enabled (may impact GDS performance)"
         else
             echo "  ✓ IOMMU appears disabled"
@@ -1626,25 +1630,25 @@ verify_gds() {
         # Check 5: gdscheck
         echo "▶ Check 5: gdscheck Verification"
         local gdscheck_path
-        gdscheck_path=$(find /usr/local/cuda*/gds/tools -name "gdscheck.py" 2>/dev/null | head -1)
+        gdscheck_path=$(find /usr/local/cuda*/gds/tools -name "gdscheck.py" 2>/dev/null | head -1 || true)
         if [[ -n "$gdscheck_path" ]] && [[ -x "$gdscheck_path" ]]; then
             echo "  Running: $gdscheck_path -p"
             echo ""
             local gds_out
-            gds_out=$(sudo "$gdscheck_path" -p 2>&1)
+            gds_out=$(sudo "$gdscheck_path" -p 2>&1 || true)
             echo "$gds_out" | while read -r line; do
                 echo "  $line"
-            done
+            done || true
             echo ""
 
             # Parse key results
-            if echo "$gds_out" | grep -q "Userspace RDMA : Supported"; then
+            if echo "$gds_out" | grep -q "Userspace RDMA : Supported" || false; then
                 echo "  ✓ PASS: Userspace RDMA supported"
             fi
-            if echo "$gds_out" | grep -q "rdma library : Loaded"; then
+            if echo "$gds_out" | grep -q "rdma library : Loaded" || false; then
                 echo "  ✓ PASS: RDMA library loaded"
             fi
-            if echo "$gds_out" | grep -q "NFS : compat"; then
+            if echo "$gds_out" | grep -q "NFS : compat" || false; then
                 echo "  ✓ INFO: NFS in compatibility mode (expected)"
             fi
         else
@@ -1659,7 +1663,7 @@ verify_gds() {
             echo "  GPU-NIC topology (nvidia-smi topo -mp):"
             nvidia-smi topo -mp 2>/dev/null | head -15 | while read -r line; do
                 echo "    $line"
-            done
+            done || true
         fi
         echo ""
 
@@ -1696,7 +1700,7 @@ gds_menu() {
         fi
 
         if check_gds_installed; then
-            if lsmod | grep -q nvidia_fs; then
+            if lsmod 2>/dev/null | grep -q nvidia_fs 2>/dev/null || false; then
                 gds_status="Active"
             else
                 gds_status="Installed (module not loaded)"
