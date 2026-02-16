@@ -35,6 +35,29 @@
   changed_when: false
   tags: [raid_fs, fs, mkfs]
 
+- name: Check if nfs-server is active before unmount
+  ansible.builtin.command: systemctl is-active nfs-server
+  register: _nfs_was_active
+  failed_when: false
+  changed_when: false
+  when:
+    - _current_mount.rc == 0
+    - _current_mount.stdout | length > 0
+    - (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+  tags: [raid_fs, fs, mkfs]
+
+- name: Stop nfs-server to release {{ item.data_device }}
+  ansible.builtin.systemd:
+    name: nfs-server
+    state: stopped
+  when:
+    - _current_mount.rc == 0
+    - _current_mount.stdout | length > 0
+    - (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+    - _nfs_was_active.rc is defined
+    - _nfs_was_active.rc == 0
+  tags: [raid_fs, fs, mkfs]
+
 - name: Unmount {{ item.data_device }} before mkfs
   ansible.builtin.command: umount {{ item.data_device }}
   when:
@@ -107,3 +130,13 @@
     enabled: true
     state: started
   tags: [raid_fs, fs]
+
+- name: Restart nfs-server after remount (was running before)
+  ansible.builtin.systemd:
+    name: nfs-server
+    state: started
+  when:
+    - _nfs_was_active is defined
+    - _nfs_was_active.rc is defined
+    - _nfs_was_active.rc == 0
+  tags: [raid_fs, fs, mkfs]
