@@ -1214,7 +1214,7 @@ get_cuda_path() {
         echo "$CUDA_HOME"
     else
         # Find newest cuda installation
-        ls -d /usr/local/cuda-* 2>/dev/null | sort -V | tail -1
+        ls -d /usr/local/cuda-* 2>/dev/null | sort -V | tail -1 || true
     fi
 }
 
@@ -1243,8 +1243,8 @@ show_gds_status() {
         local cuda_path
         cuda_path=$(get_cuda_path)
         if [[ -n "$cuda_path" ]] && [[ -d "$cuda_path" ]]; then
-            local cuda_ver
-            cuda_ver=$("$cuda_path/bin/nvcc" --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9.]*\).*/\1/')
+            local cuda_ver=""
+            cuda_ver=$("$cuda_path/bin/nvcc" --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9.]*\).*/\1/') || true
             echo "  ✓ Path: $cuda_path"
             echo "  ✓ Version: ${cuda_ver:-unknown}"
         else
@@ -1288,12 +1288,12 @@ show_gds_status() {
         # RDMA Devices
         echo "▶ RDMA Devices:"
         if [[ -d /sys/class/infiniband ]]; then
-            local rdma_devs
-            rdma_devs=$(ls /sys/class/infiniband/ 2>/dev/null)
+            local rdma_devs=""
+            rdma_devs=$(ls /sys/class/infiniband/ 2>/dev/null) || true
             if [[ -n "$rdma_devs" ]]; then
                 for dev in $rdma_devs; do
-                    local state
-                    state=$(cat /sys/class/infiniband/$dev/ports/1/state 2>/dev/null | awk '{print $2}')
+                    local state=""
+                    state=$(cat "/sys/class/infiniband/$dev/ports/1/state" 2>/dev/null | awk '{print $2}') || true
                     echo "  ✓ $dev: $state"
                 done
                 # Show ibdev2netdev if available
@@ -1317,9 +1317,9 @@ show_gds_status() {
             echo "  ✓ Config file exists"
             if command -v jq &>/dev/null; then
                 # Check NFS RDMA config
-                local rdma_addrs nfs_mounts
-                rdma_addrs=$(jq -r '.fs.nfs.rdma_dev_addr_list // empty' "$CUFILE_JSON_PATH" 2>/dev/null)
-                nfs_mounts=$(jq -r '.fs.nfs.mount_table // empty' "$CUFILE_JSON_PATH" 2>/dev/null)
+                local rdma_addrs="" nfs_mounts=""
+                rdma_addrs=$(jq -r '.fs.nfs.rdma_dev_addr_list // empty' "$CUFILE_JSON_PATH" 2>/dev/null) || true
+                nfs_mounts=$(jq -r '.fs.nfs.mount_table // empty' "$CUFILE_JSON_PATH" 2>/dev/null) || true
                 if [[ -n "$rdma_addrs" ]] && [[ "$rdma_addrs" != "null" ]]; then
                     echo "  ✓ NFS RDMA addresses configured"
                 else
