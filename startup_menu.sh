@@ -4,6 +4,7 @@
 # Exits on errors and cleans up temporary files
 
 set -euo pipefail
+XINAS_SETUP_VERSION="1.1.0"
 TMP_DIR="$(mktemp -d)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Directory of the repository currently being configured
@@ -573,7 +574,7 @@ show_header() {
 EOF
     echo -e "${NC}"
     echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}     Expert Mode Setup${NC}"
+    echo -e "${YELLOW}     xiNAS Setup${NC}  ${DIM}v${XINAS_SETUP_VERSION}${NC}"
     echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
