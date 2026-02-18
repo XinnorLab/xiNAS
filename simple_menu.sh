@@ -564,6 +564,7 @@ advanced_settings_menu() {
             "2" "📦 Choose Preset" \
             "3" "📈 System Monitor (btop)" \
             "4" "$update_text" \
+            "5" "📖 Installation Guide" \
             "0" "🔙 Back to Main Menu") || return
 
         case "$choice" in
@@ -591,6 +592,14 @@ advanced_settings_menu() {
                     else
                         msg_box "Up to Date" "xiNAS is already up to date!"
                     fi
+                fi
+                ;;
+            5)
+                local guide_file="$SCRIPT_DIR/install.MD"
+                if [[ -f "$guide_file" ]]; then
+                    text_box "📖 Installation Guide" "$guide_file"
+                else
+                    msg_box "Not Found" "install.MD not found.\n\nRun an update to download the latest files."
                 fi
                 ;;
             0) return ;;
