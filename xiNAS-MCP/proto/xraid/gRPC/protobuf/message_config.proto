@@ -1,0 +1,52 @@
+/**
+    * Messages to manage the configuration file.
+*/
+syntax = "proto3";
+
+package xraid.v2;
+
+/**
+    * Apply the configuration file for all restoring RAIDs.
+*/
+message ConfigApply{
+
+}
+
+/**
+    * Save the current configuration file
+    * (create the backup file backup_raid.conf at the current directory).
+*/
+message ConfigBackup{
+
+}
+
+/**
+    * Restore the configuration file from a file or from the drives.
+*/
+message ConfigRestore{
+    reserved 1;
+    reserved "file";
+    /**
+        * The list of block devices to restore the configuration file to /etc/{program_name}/raid.conf.drive
+        * (default from all drives).
+    */
+    repeated string drives = 2;
+    /**
+        * A file to restore the common configuration file (default /etc/{program_name}/raid.conf.bak).
+    */
+    optional string common_file = 3;
+    /**
+        * A file to restore the RAID configuration file (raids/{program_name}/raid_name.conf.bak).
+    */
+    optional string raid_file = 4;
+}
+
+/**
+    * Show configuration files stored on the drives.
+*/
+message ConfigShow{
+    /**
+        * The list of block devices to show configuration files (default from all drives).
+    */
+    repeated string drives = 1;
+}

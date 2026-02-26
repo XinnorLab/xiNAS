@@ -1,0 +1,72 @@
+/**
+    * Messages to manage the spare pool.
+*/
+syntax = "proto3";
+
+package xraid.v2;
+
+/**
+    * Add drives to the spare pool.
+*/
+message PoolAdd{
+    /**
+        * The name of the spare pool.
+    */
+    string name = 1;
+    /**
+        * The list of block devices to add to the spare pool.
+    */
+    repeated string drives = 2;
+}
+
+/**
+    * Create the spare pool.
+*/
+message PoolCreate{
+    /**
+        * The name of the spare pool.
+    */
+    string name = 1;
+    /**
+        * The list of block devices to create the spare pool.
+    */
+    repeated string drives = 2;
+}
+
+/**
+    * Delete the spare pool.
+*/
+message PoolDelete{
+    /**
+        * The name of the spare pool.
+    */
+    string name = 1;
+}
+
+/**
+    * Remove drives from the spare pool.
+*/
+message PoolRemove{
+    /**
+        * The name of the spare pool.
+    */
+    string name = 1;
+    /**
+        * The list of block devices to remove from the spare pool.
+    */
+    repeated string drives = 2;
+}
+
+/**
+    * Show info on the spare pool.
+*/
+message PoolShow{
+    /**
+        * The name of the spare pool.
+    */
+    optional string name = 1;
+    /**
+        * Size units.
+    */
+    optional string units = 2;
+}

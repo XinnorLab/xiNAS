@@ -1,0 +1,34 @@
+[Unit]
+Description=xiNAS NFS Helper Daemon
+Documentation=https://github.com/xinnor/xiNAS
+After=network.target nfs-kernel-server.service
+Wants=nfs-kernel-server.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/lib/xinas-mcp/nfs-helper/nfs_helper.py
+Restart=on-failure
+RestartSec=5s
+
+# Runtime directory creates /run/xinas-nfs-helper/
+RuntimeDirectory=xinas-nfs-helper
+RuntimeDirectoryMode=0755
+
+# Run as root (required for /etc/exports and xfs_quota)
+User=root
+Group=root
+
+# Hardening
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/etc/exports /etc/projects /etc/projid /run
+
+Environment=NFS_HELPER_SOCKET=/run/xinas-nfs-helper.sock
+Environment=LOG_LEVEL=INFO
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=xinas-nfs-helper
+
+[Install]
+WantedBy=multi-user.target

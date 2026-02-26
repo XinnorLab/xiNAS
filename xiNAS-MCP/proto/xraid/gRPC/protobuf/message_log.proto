@@ -1,0 +1,23 @@
+/**
+    * Messages to manage the event log operations.
+*/
+syntax = "proto3";
+
+package xraid.v2;
+
+/**
+    * Collect the event log entries into a .tar.gz file.
+*/
+message LogCollect{
+
+}
+
+/**
+    * Show the last entries in the event log.
+*/
+message LogShow{
+    /**
+        * The number of entries in the event log, starting from the last entry.
+    */
+    optional uint32 lines = 1;
+}

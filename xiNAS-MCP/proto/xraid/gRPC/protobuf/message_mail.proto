@@ -1,0 +1,37 @@
+/**
+    * Messages to manage the mail notification.
+*/
+syntax = "proto3";
+
+package xraid.v2;
+
+/**
+    * Add the recipient's email and notification level.
+*/
+message MailAdd{
+    /**
+        * Receiver's email.
+    */
+    string address = 1;
+    /**
+        * The notification level.
+    */
+    string level = 2;
+}
+
+/**
+    * Remove the email from the list of notification recipients.
+*/
+message MailRemove{
+    /**
+        * The email address to remove from the list of notification recipients.
+    */
+    string address = 1;
+}
+
+/**
+    * Show the list of email notification recipients.
+*/
+message MailShow{
+
+}

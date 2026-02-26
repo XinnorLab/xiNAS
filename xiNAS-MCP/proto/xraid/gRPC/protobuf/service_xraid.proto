@@ -1,0 +1,235 @@
+syntax = "proto3";
+
+package xraid.v2;
+
+import "message_config.proto";
+import "message_drive.proto";
+import "message_license.proto";
+import "message_log.proto";
+import "message_mail.proto";
+import "message_pool.proto";
+import "message_raid.proto";
+import "message_settings.proto";
+
+message ResponseMessage {
+    optional string message = 1;
+}
+
+service XRAIDService {
+    /**
+        * Apply the configuration file for all restoring RAIDs.
+    */
+    rpc config_apply(ConfigApply) returns (ResponseMessage) {};
+    /**
+        * Save the current configuration file.
+    */
+    rpc config_backup(ConfigBackup) returns (ResponseMessage) {};
+    /**
+        * Restore the configuration file from a file or from the drives.
+    */
+    rpc config_restore(ConfigRestore) returns (ResponseMessage) {};
+    /**
+        * Show configuration files stored on the drives.
+    */
+    rpc config_show(ConfigShow) returns (ResponseMessage) {};
+
+    /**
+        * Delete the metadata and reset the error counter from the drives.
+    */
+    rpc drive_clean(DriveClean) returns (ResponseMessage) {};
+    /**
+        * Reset the current numbers of faults for drives.
+    */
+    rpc drive_faulty_count_reset(DriveFaultyCountReset) returns (ResponseMessage) {};
+    /**
+        * Show the current numbers of faults for drives.
+    */
+    rpc drive_faulty_count_show(DriveFaultyCountShow) returns (ResponseMessage) {};
+    /**
+        * Manage the drive LED indication.
+    */
+    rpc drive_locate(DriveLocate) returns (ResponseMessage) {};
+
+    /**
+        * Delete the current license.
+    */
+    rpc license_delete(LicenseDelete) returns (ResponseMessage) {};
+    /**
+        * Show info on the current license.
+    */
+    rpc license_show(LicenseShow) returns (ResponseMessage) {};
+    /**
+        * Update the current license.
+    */
+    rpc license_update(LicenseUpdate) returns (ResponseMessage) {};
+
+    /**
+        * Collect the event log entries into a .tar.gz file.
+    */
+    rpc log_collect(LogCollect) returns (ResponseMessage) {};
+    /**
+        * Show the last entries in the event log.
+    */
+    rpc log_show(LogShow) returns (ResponseMessage) {};
+
+    /**
+        * Add the recipient's email and notification level.
+    */
+    rpc mail_add(MailAdd) returns (ResponseMessage) {};
+    /**
+        * Remove the email from the list of notification recipients.
+    */
+    rpc mail_remove(MailRemove) returns (ResponseMessage) {};
+    /**
+        * Show the list of email notification recipients.
+    */
+    rpc mail_show(MailShow) returns (ResponseMessage) {};
+
+    /**
+        * Add drives to the spare pool.
+    */
+    rpc pool_add(PoolAdd) returns (ResponseMessage) {};
+    /**
+        * Create the spare pool.
+    */
+    rpc pool_create(PoolCreate) returns (ResponseMessage) {};
+    /**
+        * Delete the spare pool.
+    */
+    rpc pool_delete(PoolDelete) returns (ResponseMessage) {};
+    /**
+        * Remove drives from the spare pool.
+    */
+    rpc pool_remove(PoolRemove) returns (ResponseMessage) {};
+    /**
+        * Show info on the spare pool.
+    */
+    rpc pool_show(PoolShow) returns (ResponseMessage) {};
+
+    /**
+        * Create the RAID.
+    */
+    rpc raid_create(RaidCreate) returns (ResponseMessage) {};
+    /**
+        * Delete the RAID without possibility to restore the RAID and data on it.
+    */
+    rpc raid_destroy(RaidDestroy) returns (ResponseMessage) {};
+    /**
+        * Import the RAID from drive metadata.
+    */
+    rpc raid_import_apply(RaidImportApply) returns (ResponseMessage) {};
+    /**
+        * Show info about the RAIDs that can be imported from the drives.
+    */
+    rpc raid_import_show(RaidImportShow) returns (ResponseMessage) {};
+     /**
+        * Start or continue the RAID initialization.
+    */
+    rpc raid_init_start(RaidInitStart) returns (ResponseMessage) {};
+    /**
+        * Stop the RAID initialization.
+    */
+    rpc raid_init_stop(RaidInitStop) returns (ResponseMessage) {};
+    /**
+        * Modify the parameters of the created RAID.
+    */
+    rpc raid_modify(RaidModify) returns (ResponseMessage) {};
+    /**
+        * Start the RAID reconstruction.
+    */
+    rpc raid_recon_start(RaidReconStart) returns (ResponseMessage) {};
+    /**
+        * Stop the RAID reconstruction.
+    */
+    rpc raid_recon_stop(RaidReconStop) returns (ResponseMessage) {};
+    /**
+        * Replace or remove the drive from the RAID.
+    */
+    rpc raid_replace(RaidReplace) returns (ResponseMessage) {};
+    /**
+        * Change the RAID size.
+    */
+    rpc raid_resize(RaidResize) returns (ResponseMessage) {};
+    /**
+        * Restore the RAID from the configuration file.
+    */
+    rpc raid_restore(RaidRestore) returns (ResponseMessage) {};
+    /**
+        * Start the RAID restripe.
+    */
+    rpc raid_restripe_start(RaidRestripeStart) returns (ResponseMessage) {};
+    /**
+        * Continue the RAID restripe.
+    */
+    rpc raid_restripe_continue(RaidRestripeContinue) returns (ResponseMessage) {};
+    /**
+        * Pause the RAID restripe.
+    */
+    rpc raid_restripe_stop(RaidRestripeStop) returns (ResponseMessage) {};
+    /**
+        * Show info about the RAID.
+    */
+    rpc raid_show(RaidShow) returns (ResponseMessage) {};
+    /**
+        * Remove (unload) the RAID with possibility to restore the RAID
+        * and save data on it.
+    */
+    rpc raid_unload(RaidUnload) returns (ResponseMessage) {};
+
+    /**
+        * Modify the connection settings.
+    */
+    rpc settings_auth_modify(SettingsAuthModify) returns (ResponseMessage) {};
+    /**
+        * Show the connection settings.
+    */
+    rpc settings_auth_show(SettingsAuthShow) returns (ResponseMessage) {};
+    /**
+        * Manage the threshold value of I/O errors for all drives.
+    */
+    rpc settings_faulty_count_modify(SettingsFaultyCountModify) returns (ResponseMessage) {};
+    /**
+        * Show the threshold value of I/O errors for all drives.
+    */
+    rpc settings_faulty_count_show(SettingsFaultyCountShow) returns (ResponseMessage) {};
+    /**
+        * Manage logging settings.
+    */
+    rpc settings_log_modify(SettingsLogModify) returns (ResponseMessage) {};
+    /**
+        * Show logging settings.
+    */
+    rpc settings_log_show(SettingsLogShow) returns (ResponseMessage) {};
+    /**
+        * Manage email notification settings.
+    */
+    rpc settings_mail_modify(SettingsMailModify) returns (ResponseMessage) {};
+    /**
+        * Show email notification settings.
+    */
+    rpc settings_mail_show(SettingsMailShow) returns (ResponseMessage) {};
+    /**
+        * Manage the spare pool settings.
+    */
+    rpc settings_pool_modify(SettingsPoolModify) returns (ResponseMessage) {};
+    /**
+        * Show the spare pool settings.
+    */
+    rpc settings_pool_show(SettingsPoolShow) returns (ResponseMessage) {};
+    /**
+        * Manage RAID monitoring.
+    */
+    rpc settings_scanner_modify(SettingsScannerModify) returns (ResponseMessage) {};
+    /**
+        * Show RAID monitoring parameters.
+    */
+    rpc settings_scanner_show(SettingsScannerShow) returns (ResponseMessage) {};
+    /**
+        * Manage cluster settings.
+    */
+    rpc settings_cluster_modify(SettingsClusterModify) returns (ResponseMessage) {};
+    /**
+        * Show cluster settings.
+    */
+    rpc settings_cluster_show(SettingsClusterShow) returns (ResponseMessage) {};
+}

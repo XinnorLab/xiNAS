@@ -1,0 +1,145 @@
+/**
+    * Messages to manage the additional settings of the program.
+*/
+syntax = "proto3";
+
+package xraid.v2;
+
+/**
+    * Modify connection settings.
+*/
+message SettingsAuthModify{
+    /**
+        * The host name or IP address for the connection.
+    */
+    optional string host = 1;
+    /**
+        * The port for the connection.
+    */
+    optional uint32 port = 2;
+}
+/**
+    * Show connection settings.
+*/
+message SettingsAuthShow{
+
+}
+
+/**
+    * Manage the threshold value of I/O errors for all drives.
+*/
+message SettingsFaultyCountModify{
+    /**
+        * The threshold value for all drives.
+    */
+    optional uint32 threshold = 1;
+}
+
+/**
+    * Show the threshold value of I/O errors for all drives.
+*/
+message SettingsFaultyCountShow{
+
+}
+
+/**
+    * Manage logging settings.
+*/
+message SettingsLogModify{
+    /**
+        * Logging level.
+    */
+    optional string level = 1;
+}
+
+/**
+    * Show logging settings.
+*/
+message SettingsLogShow{
+
+}
+
+/**
+    * Manage email notification settings.
+*/
+message SettingsMailModify{
+    /**
+        * The polling interval for RAIDs and the drives in seconds.
+    */
+    optional uint32 polling_interval = 1;
+    /**
+        * Polling interval for the progress of initialization
+        * and reconstruction, in minutes.
+    */
+    optional uint32 progress_polling_interval = 2;
+}
+
+/**
+    * Show email notification settings.
+*/
+message SettingsMailShow{
+
+}
+
+/**
+    * Manage the spare pool settings.
+*/
+message SettingsPoolModify{
+    /**
+        * Delay time (in seconds) for the drive replacement from the spare pools.
+    */
+    optional uint32 replace_delay = 1;
+}
+
+/**
+    * Show the spare pool settings.
+*/
+message SettingsPoolShow{
+
+}
+
+/**
+    * Manage RAID monitoring.
+*/
+message SettingsScannerModify{
+    reserved 1;
+    reserved "polling_interval";
+    /**
+        * S.M.A.R.T. drive health polling interval, in seconds.
+    */
+    optional uint32 smart_polling_interval = 2;
+    /**
+        * Enable (1) or disable (0) the automatic LED indication
+        * of drives in the system.
+    */
+    optional uint32 led_enabled = 3;
+    /**
+        * The polling interval for RAIDs and drives in seconds.
+    */
+    optional uint32 scanner_polling_interval = 4;
+}
+
+/**
+    * Show RAID monitoring parameters.
+*/
+message SettingsScannerShow{
+
+}
+
+/**
+    * Manage cluster settings.
+*/
+message SettingsClusterModify{
+    /**
+        * Enable (1) or disable (0) automatic RAIDs start.
+    */
+    optional uint32 raid_autostart = 1;
+}
+
+/**
+    * Show cluster settings.
+*/
+message SettingsClusterShow{
+
+}
+

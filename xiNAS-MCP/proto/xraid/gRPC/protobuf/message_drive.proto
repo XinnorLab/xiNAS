@@ -1,0 +1,51 @@
+/**
+    * Messages to manage the drives.
+*/
+syntax = "proto3";
+
+package xraid.v2;
+
+/**
+    * Delete the metadata and reset the error counter from the drives.
+*/
+message DriveClean{
+    /**
+        * The list of block devices to delete metadata and reset the fault counter.
+    */
+    repeated string drives = 1;
+}
+
+/**
+    * Reset the current numbers of faults for drives.
+*/
+message DriveFaultyCountReset{
+    /**
+        * The list of block devices to reset their current numbers of faults (default for all drives).
+    */
+    repeated string drives = 1;
+}
+
+/**
+    * Show the current numbers of faults for drives.
+*/
+message DriveFaultyCountShow{
+    /**
+        * The list of block devices to show their current numbers of faults (default for all drives).
+    */
+    repeated string drives = 1;
+    /**
+        * The RAID name for which drives the current number of faults will be shown.
+    */
+    optional string name = 2;
+}
+
+/**
+    * Manage the drive LED indication.
+*/
+message DriveLocate{
+    /**
+        * The list of block devices to switch the indication on
+        * or switch the indication off (the null value).
+    */
+    repeated string drives = 1;
+}

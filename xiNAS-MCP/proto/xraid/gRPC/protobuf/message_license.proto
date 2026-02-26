@@ -1,0 +1,30 @@
+/**
+    * Messages to manage the license.
+*/
+syntax = "proto3";
+
+package xraid.v2;
+
+/**
+    * Delete the current license.
+*/
+message LicenseDelete{
+
+}
+
+/**
+    * Show info on the current license.
+*/
+message LicenseShow{
+
+}
+
+/**
+    * Update the current license.
+*/
+message LicenseUpdate{
+    /**
+        * The path to the new license file.
+    */
+    string path = 1;
+}

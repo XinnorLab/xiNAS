@@ -1,0 +1,25 @@
+# Path where xiNAS repo is installed (set by install.sh → /opt/xiNAS)
+xinas_mcp_repo_path: /opt/xiNAS/xiNAS-MCP
+
+# NFS helper daemon installation target
+xinas_mcp_helper_lib_path: /usr/lib/xinas-mcp/nfs-helper
+
+# MCP server config directory
+xinas_mcp_config_dir: /etc/xinas-mcp
+
+# NFS helper Unix socket path (must match nfs-helper service Environment=)
+xinas_mcp_nfs_socket: /run/xinas-nfs-helper.sock
+
+# Prometheus metrics endpoint (xiraid-exporter listens on :9827)
+xinas_mcp_prometheus_url: "http://localhost:9827/metrics"
+
+# Audit log path (directory is created by this role)
+xinas_mcp_audit_log_path: /var/log/xinas/mcp-audit.jsonl
+
+# SSE transport (false = stdio only; used by Claude Code)
+xinas_mcp_sse_enabled: false
+xinas_mcp_sse_port: 8080
+
+# Deploy Claude Code MCP integration for root user
+xinas_mcp_configure_claude: true
+xinas_mcp_claude_config_dir: /root/.claude

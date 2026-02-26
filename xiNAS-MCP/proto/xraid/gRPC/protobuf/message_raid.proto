@@ -1,0 +1,434 @@
+/**
+    * Messages to manage the RAID.
+*/
+syntax = "proto3";
+
+package xraid.v2;
+
+/**
+    * Create the RAID.
+*/
+message RaidCreate{
+    reserved 16, 17, 21 to 23, 31;
+    reserved "merge_wait", "merge_max";
+    /**
+        * The name of the RAID.
+    */
+    string name = 1;
+    /**
+        * The level of the RAID.
+    */
+    string level = 2;
+    /**
+        * The list of block devices to create the RAID.
+    */
+    repeated string drives = 3;
+
+    /**
+        * The number of drives for one RAID group of level 5, 6, or 7.3
+        * of the appropriate RAID 50, 60, or 70.
+    */
+    optional uint32 group_size = 4;
+    /**
+        * The number of syndromes M in the N+M RAID.
+    */
+    optional uint32 synd_cnt = 5;
+    /**
+        * Strip size in KiB.
+    */
+    optional uint32 strip_size = 6;
+    /**
+        * RAID block size in bytes.
+    */
+    optional uint32 block_size = 7;
+    /**
+        * Name of the spare pool to assign to the RAID.
+    */
+    optional string sparepool = 8;
+    /**
+        * Initialization priority in percent.
+    */
+    optional uint32 init_prio = 9;
+    /**
+        * Reconstruction priority in percent.
+    */
+    optional uint32 recon_prio = 10;
+    /**
+        * Restriping priority in percent.
+    */
+    optional uint32 restripe_prio = 11;
+    /**
+        * Enable (1) or disable (0) the resync function.
+    */
+    optional uint32 resync_enabled = 12;
+    /**
+        * Enable (1) or disable (0) the scheduling function.
+    */
+    optional uint32 sched_enabled = 13;
+    /**
+        * Enable (1) or disable (0) the merge read function.
+    */
+    optional uint32 merge_read_enabled = 14;
+    /**
+        * Enable (1) or disable (0) the merge write function.
+    */
+    optional uint32 merge_write_enabled = 15;
+    /**
+        * RAM usage limit in MiB.
+    */
+    optional uint32 memory_limit = 18;
+    /**
+        * Set the limitation of requests per RAID. The 0 value disables the limitation.
+    */
+    optional uint32 request_limit = 19;
+    /**
+        * Allow overwriting metadata on disks.
+    */
+    optional bool force_metadata = 20;
+    /**
+        * Maximum wait time (in microseconds) for stripe accumulation with "merge" enabled for read requests.
+    */
+    optional uint32 merge_read_max = 24;
+    /**
+        * Wait time (in microseconds) between requests with "merge" enabled for read requests.
+    */
+    optional uint32 merge_read_wait = 25;
+    /**
+        * Maximum wait time (in microseconds) for stripe accumulation with "merge" enabled for write requests.
+    */
+    optional uint32 merge_write_max = 26;
+    /**
+        * Wait time (in microseconds) between requests with "merge" enabled for write requests.
+    */
+    optional uint32 merge_write_wait = 27;
+    /**
+        * Set the CPU numbers on which the current RAID is allowed to run.
+    */
+    optional string cpu_allowed = 28;
+    /**
+        * Enable (1) or disable (0) the adaptive merge write function.
+    */
+    optional uint32 adaptive_merge = 29;
+    /**
+        * Adaptive merge parameter setting happens once at startup,
+        * after completion parameters are set to found values and do not change anymore.
+    */
+    optional bool single_run = 30;
+    /**
+        * Reserved memory pool in MiB.
+    */
+    optional uint32 memory_prealloc = 32;
+    /**
+        * Force the command execution.
+    */
+    optional bool force = 100;
+}
+
+/**
+    * Delete the RAID without possibility to restore the RAID and data on it.
+*/
+message RaidDestroy{
+    reserved 4;
+    /**
+        * The name of the RAID.
+    */
+    optional string name = 1;
+    /**
+        * Delete all the RAIDs.
+    */
+    optional bool all = 2;
+    /**
+        * The flag to confirm a command with major impact.
+     */
+    optional bool force = 3;
+}
+
+/**
+    * Import the RAID from drive metadata.
+*/
+message RaidImportApply{
+    /**
+        * UUID of the RAID.
+    */
+    optional string uuid = 1;
+    /**
+        * The new name for the RAID.
+    */
+    optional string new_name = 2;
+}
+
+/**
+    * Show info about the RAIDs that can be imported from the drives.
+*/
+message RaidImportShow{
+    /**
+        * The list of block devices to show the RAID info.
+    */
+    repeated string drives = 1;
+    /**
+        * Show non-recoverable RAIDs in the import list.
+    */
+    optional bool offline = 2;
+}
+
+/**
+    * Start or continue the RAID initialization.
+*/
+message RaidInitStart{
+    /**
+        * The name of the RAID.
+    */
+    string name = 1;
+}
+
+/**
+    * Stop the RAID initialization.
+*/
+message RaidInitStop{
+    /**
+        * The name of the RAID.
+    */
+    string name = 1;
+}
+
+/**
+    * Modify the parameters of the created RAID.
+*/
+message RaidModify{
+    reserved 10, 11, 17 to 19, 27;
+    reserved "merge_wait", "merge_max";
+    /**
+        * The name of the RAID.
+    */
+    string name = 1;
+
+    /**
+        * Name of the spare pool to assign to the RAID.
+    */
+    optional string sparepool = 2;
+    /**
+        * Initialization priority in percent.
+    */
+    optional uint32 init_prio = 3;
+    /**
+        * Reconstruction priority in percent.
+    */
+    optional uint32 recon_prio = 4;
+    /**
+        * Restriping priority in percent.
+    */
+    optional uint32 restripe_prio = 5;
+    /**
+        * Enable (1) or disable (0) the resync function.
+    */
+    optional uint32 resync_enabled = 6;
+    /**
+        * Enable (1) or disable (0) the scheduling function.
+    */
+    optional uint32 sched_enabled = 7;
+    /**
+        * Enable (1) or disable (0) the merge read function.
+    */
+    optional uint32 merge_read_enabled = 8;
+    /**
+        * Enable (1) or disable (0) the merge write function.
+     */
+    optional uint32 merge_write_enabled = 9;
+    /**
+        * RAM usage limit in MiB.
+    */
+    optional uint32 memory_limit = 12;
+    /**
+        * Set the limitation of requests per RAID. The 0 value disables the limitation.
+    */
+    optional uint32 request_limit = 13;
+    /**
+        * Change RAID state to online if the RAID has unrecoverable sections.
+    */
+    optional bool force_online = 14;
+    /**
+        * Force RAID re-initialization.
+    */
+    optional bool force_resync = 15;
+    /**
+        * The flag to confirm a command with major impact.
+     */
+    optional bool force = 16;
+    /**
+        * Maximum wait time (in microseconds) for stripe accumulation with "merge" enabled for read requests.
+    */
+    optional uint32 merge_read_max = 20;
+    /**
+        * Wait time (in microseconds) between requests with "merge" enabled for read requests.
+    */
+    optional uint32 merge_read_wait = 21;
+    /**
+        * Maximum wait time (in microseconds) for stripe accumulation with "merge" enabled for write requests.
+    */
+    optional uint32 merge_write_max = 22;
+    /**
+        * Wait time (in microseconds) between requests with "merge" enabled for write requests.
+    */
+    optional uint32 merge_write_wait = 23;
+    /**
+        * Set the CPU numbers on which the current RAID is allowed to run.
+    */
+    optional string cpu_allowed = 24;
+    /**
+        * Enable (1) or disable (0) the adaptive merge write function.
+    */
+    optional uint32 adaptive_merge = 25;
+    /**
+        * Adaptive merge parameter setting happens once at startup,
+        * after completion parameters are set to found values and do not change anymore.
+    */
+    optional bool single_run = 26;
+    /**
+        * Reserved memory pool in MiB
+    */
+    optional uint32 memory_prealloc = 28;
+}
+
+/**
+    * Start the RAID reconstruction.
+*/
+message RaidReconStart{
+    /**
+        * The name of the RAID.
+    */
+    string name = 1;
+}
+
+/**
+    * Stop the RAID reconstruction.
+*/
+message RaidReconStop{
+    /**
+        * The name of the RAID.
+    */
+    string name = 1;
+}
+
+/**
+    * Replace or remove the drive from the RAID.
+*/
+message RaidReplace{
+    reserved 4;
+    /**
+        * The name of the RAID.
+    */
+    string name = 1;
+    /**
+        * The number of the drive.
+    */
+    uint32 number = 2;
+    /**
+        * The new block device.
+    */
+    string drive = 3;
+}
+
+/**
+    * Change the RAID size.
+*/
+message RaidResize{
+    /**
+        * The name of the RAID.
+    */
+    string name = 1;
+}
+
+/**
+    * Restore the RAID from the configuration file.
+*/
+message RaidRestore{
+    reserved 3;
+    /**
+        * The name of the RAID.
+    */
+    optional string name = 1;
+    /**
+        * Restore all available RAIDs.
+    */
+    optional bool all = 2;
+}
+
+/**
+    * Start the RAID restripe.
+*/
+message RaidRestripeStart{
+    /**
+        * The name of the RAID.
+    */
+    string name = 1;
+    /**
+        * The new level for the RAID.
+    */
+    string level = 2;
+    /**
+        * The list of block devices to restripe the RAID.
+    */
+    repeated string drives = 3;
+    /**
+        * The number of drives for one RAID group of level 5, 6, or 7.3
+        * of the appropriate RAID 50, 60, or 70.
+    */
+    optional uint32 group_size = 4;
+}
+
+/**
+    * Continue the RAID restripe.
+*/
+message RaidRestripeContinue{
+    /**
+        * The name of the RAID.
+    */
+    string name = 1;
+}
+
+/**
+    * Pause the RAID restripe.
+*/
+message RaidRestripeStop{
+    /**
+        * The name of the RAID.
+    */
+    string name = 1;
+}
+
+/**
+    * Show info about the RAID.
+*/
+message RaidShow{
+    /**
+        * The name of the RAID.
+    */
+    optional string name = 1;
+    /**
+        * Show RAIDs that were not unloaded by the raid unload command.
+    */
+    optional bool online = 2;
+    /**
+        * Size units.
+    */
+    optional string units = 3;
+    /**
+        * Show extended output.
+    */
+    optional bool extended = 4;
+}
+
+/**
+    * Remove (unload) the RAID with possibility to restore the RAID
+    * and save data on it.
+*/
+message RaidUnload{
+    /**
+        * The name of the RAID.
+    */
+    optional string name = 1;
+    /**
+        * Unload all available RAIDs.
+    */
+    optional bool all = 2;
+}
