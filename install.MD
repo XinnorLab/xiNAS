@@ -1,8 +1,11 @@
-# xiNAS Server Installation Guide
+# xiNAS Installation Guide
 
 ## Table of Contents
 
-- [Quick Start](#quick-start)
+- [Server Installation](#server-installation)
+- [Client Installation](#client-installation)
+- [xinas-menu Reference](#xinas-menu-reference)
+- [xinas-client Reference](#xinas-client-reference)
 - [Settings Reference](#settings-reference)
   - [Network Configuration](#network-configuration)
   - [RAID and Storage Configuration](#raid-and-storage-configuration)
@@ -10,9 +13,8 @@
   - [Hostname Configuration](#hostname-configuration)
   - [Performance Tuning](#performance-tuning)
   - [Presets](#presets)
-- [Detailed Architecture](#detailed-architecture)
+- [Architecture](#architecture)
   - [Installation Flow](#installation-flow)
-  - [Menu System](#menu-system)
   - [Ansible Playbook Execution Order](#ansible-playbook-execution-order)
   - [Ansible Roles Reference](#ansible-roles-reference)
   - [Variable Priority](#variable-priority)
@@ -21,67 +23,206 @@
 
 ---
 
-## Quick Start
+## Server Installation
 
 ### One-Command Install
 
+Run on the NAS server as root:
+
 ```bash
-bash <(curl -fsSL https://github.com/XinnorLab/xiNAS/raw/main/prepare_system.sh)
+curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install.sh | sudo bash
 ```
 
-This bootstraps the system (installs Ansible, yq, git, dialog), clones the repository, and launches the Simple Menu.
+This installs all dependencies (Ansible, yq, git, dialog), clones the repository to `/opt/xiNAS`, and opens the provisioning menu.
 
-### Step-by-Step
+### Installation Steps
 
-1. **Run the installer** (downloads dependencies and opens the menu):
-   ```bash
-   ./prepare_system.sh
-   ```
+1. **Collect system data** — use menu option **1 · Collect System Data** to gather hardware info and generate your hardware key.
 
-2. **Enter your xiRAID license** (menu option 2). The hardware key is displayed on screen -- send it to `support@xinnor.io` to receive a license.
+2. **Obtain a license** — send the hardware key to `support@xinnor.io`. Enter the received license via **2 · Enter xiRAID License**. The license is stored at `/tmp/license` and cleared on reboot.
 
-3. **Press Install** (menu option 3). The installer will:
-   - Configure baseline OS settings (timezone, NTP, packages)
+3. **Run the installation** — select **3 · Install** and choose a profile:
+   - **Full (NVMe)** — bare-metal servers with NVMe drives. Erases all non-OS NVMe data.
+   - **VM** — virtual machines with virtio/SCSI devices.
+   - **Existing RAID** — skips array creation; uses existing `/dev/xi_data` and `/dev/xi_log`.
+
+   The installer will:
+   - Configure baseline OS (timezone, NTP, packages)
    - Install NVIDIA DOCA-OFED drivers for RDMA networking
    - Assign static IPs to high-speed interfaces
    - Install Xinnor xiRAID software
    - Auto-detect NVMe drives, create namespaces and RAID arrays
-   - Create an XFS filesystem and mount it at `/mnt/data`
-   - Configure NFS exports so clients can connect
+   - Create an XFS filesystem mounted at `/mnt/data`
+   - Configure NFS exports
    - Apply performance tuning for 400 Gbit throughput
 
-4. **Done.** Clients can mount the share:
+4. **Done.** Clients can now mount the share:
    ```bash
    mount -t nfs -o vers=4.1,proto=rdma,port=20049 <server-ip>:/mnt/data /mnt/nas
    ```
 
-### Expert Mode
+### Post-Install Management
 
-For full control over every setting before deployment:
-
-```bash
-./prepare_system.sh -e
-```
-
-This opens the Expert Menu with access to network configuration, RAID device assignment, NFS export editing, hostname, and preset management before running the playbook.
-
-### Update Only
-
-Pull the latest xiNAS code without launching the menu:
+After deployment the management menu is always available as:
 
 ```bash
-./prepare_system.sh -u
+sudo xinas-menu
 ```
+
+### Advanced Configuration Before Install
+
+To customize network, RAID, NFS exports, or presets before running the playbook, use menu option **4 · Advanced Settings** which provides sub-menus for:
+
+- **Network** — IP pool, interface detection, manual IPs
+- **RAID** — drive detection mode, RAID levels, namespace sizes
+- **NFS Exports** — export paths, client rules, options
+- **Hostname** — system hostname
+- **Presets** — load, save, or switch deployment profiles
+
+---
+
+## Client Installation
+
+### One-Command Install
+
+Run on each client machine as root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install_client.sh | sudo bash
+```
+
+This installs NFS tools, RDMA prerequisites, clones the client package, and registers the `xinas-client` command.
+
+The client setup wizard launches automatically at the end. Run it again any time:
+
+```bash
+sudo xinas-client
+```
+
+---
+
+## xinas-menu Reference
+
+The server management menu (`xinas-menu`) provides all post-deployment administration.
+
+### Main Menu
+
+| Option | Function |
+|--------|----------|
+| **1 · System Status** | Hardware overview — CPU, memory, RAID health, network interfaces, NFS exports, running services |
+| **2 · RAID Management** | View array status, rebuild, add/remove drives, manage xiRAID arrays |
+| **3 · Network Settings** | View and edit interface IPs, apply netplan changes |
+| **4 · NFS Access Rights** | Add/remove shared folders, set client access, permissions, and security mode |
+| **5 · User Management** | Create/delete users, set disk quotas |
+| **6 · xiRAID Exporter** | Install and manage the Prometheus metrics exporter |
+| **7 · Quick Actions** | Common tasks: restart NFS, remount filesystem, show logs, open system monitor |
+| **8 · Health Check** | Run diagnostics (quick / standard / deep) and save reports |
+| **9 · Check for Updates** | Pull latest xiNAS code and update the menu |
+| **0 · Exit** | Exit the menu |
+
+### xinas-menu > System Status
+
+Displays a real-time dashboard:
+- CPU and memory utilization
+- All xiRAID arrays with health indicators
+- Network interfaces with IP addresses and link state
+- Active NFS exports and connected clients
+- Service status: nfs-server, xiraid, DOCA-OFED
+
+### xinas-menu > RAID Management
+
+| Action | Description |
+|--------|-------------|
+| View Array Status | Show all arrays, member drives, and health |
+| Drive Details | Per-drive statistics and SMART info |
+| Rebuild Array | Start or monitor a rebuild |
+| License Info | Show current xiRAID license details |
+
+### xinas-menu > NFS Access Rights
+
+Step-by-step wizard to add a shared folder:
+
+1. **Select folder** — choose an existing path or create a new one
+2. **Who can access** — all hosts (`*`), a network (`192.168.1.0/24`), or a single IP
+3. **Permissions** — read-write or read-only
+4. **Admin access** — allow root mapping (`no_root_squash`) for trusted networks
+5. **Security mode** — `sys` (standard), `krb5`, `krb5i`, or `krb5p`
+
+### xinas-menu > Health Check
+
+Runs configurable diagnostics across three profiles:
+
+| Profile | Checks |
+|---------|--------|
+| **Quick** | Service status, RAID state, filesystem mounts |
+| **Standard** | Above + network connectivity, NFS exports, drive health |
+| **Deep** | Above + performance benchmarks, log analysis, full SMART scan |
+
+Reports are saved to `/var/log/xinas/`.
+
+---
+
+## xinas-client Reference
+
+The client menu (`xinas-client`) handles connection setup, mount management, and optional component installation.
+
+### Main Menu
+
+| Option | Function |
+|--------|----------|
+| **1 · System Status** | Client hardware overview — NFS tools, RDMA adapters, active mounts, protocol version |
+| **2 · Connect to NAS** | Guided wizard to mount a xiNAS server share |
+| **3 · Advanced Settings** | Install components, manage mounts, Kubernetes CSI, diagnostics |
+| **0 · Exit** | Exit the menu |
+
+### xinas-client > Connect to NAS
+
+Seven-step wizard:
+
+1. **Protocol** — NFS-RDMA (recommended) or TCP
+2. **Number of server IPs** — for multi-path connections
+3. **Server IP(s)** — one per storage network interface
+4. **Export path** — remote path to mount (e.g. `/mnt/data`)
+5. **Mount point** — local directory (created if missing)
+6. **NFS version** — NFSv4.1 (recommended) or NFSv3
+7. **Security mode** — `sys`, `krb5`, `krb5i`, or `krb5p`
+
+The resulting mount command is shown and optionally added to `/etc/fstab` for persistence.
+
+### xinas-client > Advanced Settings
+
+| Option | Function |
+|--------|----------|
+| **1 · Manage Mounts** | List, remount, unmount, or remove fstab entries |
+| **2 · Network Settings** | View and configure client-side network interfaces |
+| **3 · Install NFS Tools** | Install `nfs-common` / `nfs-utils` if missing |
+| **4 · Install DOCA OFED** | Install NVIDIA DOCA-OFED for RDMA support |
+| **5 · GPUDirect Storage (GDS)** | Install and configure NVIDIA GDS for direct GPU-NFS I/O |
+| **6 · Kubernetes CSI NFS Driver** | Deploy and manage NFS StorageClasses in Kubernetes |
+| **7 · Test Connection** | Check NFS port (2049), RDMA port (20049), and RPC services |
+| **8 · Client Health Check** | Run client-side diagnostics |
+| **9 · Check for Updates** | Update the client package |
+| **0 · Back** | Return to main menu |
+
+### xinas-client > Test Connection
+
+Runs five checks and reports pass/fail for each:
+
+1. Network connectivity (ping)
+2. NFS service — port 2049
+3. NFS-RDMA service — port 20049
+4. RPC services
+5. Available exports (`showmount -e`)
 
 ---
 
 ## Settings Reference
 
-All settings below can be edited through the interactive menus or by directly modifying the Ansible role defaults in `collection/roles/<role>/defaults/main.yml`.
+All settings can be changed through the menus described above or by directly editing the Ansible role defaults in `collection/roles/<role>/defaults/main.yml`.
 
 ### Network Configuration
 
-Edit via: `./configure_network.sh` or Expert Menu > Advanced Settings > Network
+Edit via: **xinas-menu > Network Settings** or provisioning menu **> Advanced Settings > Network**
 
 #### Automatic IP Pool (Default)
 
@@ -116,7 +257,7 @@ net_manual_ips:
 
 ### RAID and Storage Configuration
 
-Edit via: `./configure_raid.sh` or Expert Menu > Advanced Settings > RAID
+Edit via: provisioning menu **> Advanced Settings > RAID**
 
 #### Automatic Drive Detection (Default)
 
@@ -195,7 +336,7 @@ xfs_filesystems:
 
 ### NFS Export Configuration
 
-Edit via: `./configure_nfs_exports.sh` or Expert Menu > Advanced Settings > NFS Exports
+Edit via: **xinas-menu > NFS Access Rights** or provisioning menu **> Advanced Settings > NFS Exports**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -209,9 +350,9 @@ exports:
 ```
 
 Each export entry has:
-- **path** -- directory to share (created if missing)
-- **clients** -- `*` (everyone), a network (`192.168.1.0/24`), or a single host IP
-- **options** -- comma-separated NFS export options
+- **path** — directory to share (created if missing)
+- **clients** — `*` (everyone), a network (`192.168.1.0/24`), or a single host IP
+- **options** — comma-separated NFS export options
 
 Common options: `rw`, `ro`, `sync`, `async`, `no_root_squash`, `root_squash`, `insecure`, `no_subtree_check`, `fsid=0`
 
@@ -224,7 +365,7 @@ Common options: `rw`, `ro`, `sync`, `async`, `no_root_squash`, `root_squash`, `i
 
 ### Hostname Configuration
 
-Edit via: `./configure_hostname.sh`
+Edit via: provisioning menu **> Advanced Settings > Hostname**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -280,6 +421,8 @@ All tuning is applied by the `perf_tuning` role. Override via inventory or prese
 
 Presets bundle all configuration into a reusable profile stored in `presets/<name>/`.
 
+Edit via: provisioning menu **> Advanced Settings > Presets**
+
 #### Default Preset (`presets/default/`)
 
 For bare-metal servers with NVMe drives:
@@ -299,66 +442,34 @@ For virtual machines with virtio/SCSI drives:
 
 #### Custom Presets
 
-Save from Expert Menu > Advanced Settings > Presets > Save. Creates a directory under `presets/<name>/` with all current settings.
+Save from provisioning menu **> Advanced Settings > Presets > Save**. Creates a directory under `presets/<name>/` with all current settings.
 
 ---
 
-## Detailed Architecture
+## Architecture
 
 ### Installation Flow
 
 ```
-prepare_system.sh                     # Bootstrap: install deps, clone repo
+install.sh                            # Bootstrap: install deps, clone to /opt/xiNAS
   |
-  +--> simple_menu.sh                 # Default: guided install
-  |      1. Enter license
-  |      2. Press Install
-  |      3. Playbook runs automatically
-  |
-  +--> startup_menu.sh  (with -e)    # Expert: full configuration control
+  +--> Provisioning Menu              # Guided install wizard
          1. Collect system data
          2. Enter license
-         3. Configure network, RAID, NFS, hostname
-         4. Choose install profile
-         5. Playbook runs with selected preset
+         3. Install  →  choose profile (Full NVMe / VM / Existing RAID)
+         4. Advanced Settings  →  network, RAID, NFS, hostname, presets
+
+After deployment:
+  xinas-menu                          # Ongoing server management
+  xinas-client  (on clients)          # Client connection and management
 ```
-
-### Menu System
-
-#### Simple Menu (`simple_menu.sh`)
-
-| Option | Action |
-|--------|--------|
-| 1 | Collect system data and upload |
-| 2 | Enter xiRAID license |
-| 3 | Run full installation playbook |
-| 4 | Advanced settings (network, presets, monitor) |
-| 0 | Exit |
-
-Detects existing xiRAID arrays and offers to reuse them. Auto-detects VMs and suggests the VM preset.
-
-#### Expert Menu (`startup_menu.sh`)
-
-| Option | Action |
-|--------|--------|
-| 1 | Collect system data |
-| 2 | Enter xiRAID license |
-| 3 | Install (choose profile: Full NVMe, VM, or Existing RAID) |
-| 4 | Advanced settings (network, RAID, NFS, hostname, presets) |
-| 0 | Exit |
-
-**Installation profiles:**
-
-- **Full (NVMe)** -- complete deployment for bare-metal servers. Erases all non-OS NVMe drives. Uses `default` preset.
-- **VM** -- optimized for virtual machines. Detects all block devices. Uses `xinnorVM` preset.
-- **Existing RAID** -- skips xiRAID install and array creation. Creates XFS on pre-existing `/dev/xi_data` and `/dev/xi_log`. Uses `default` preset with `xiraid_skip_install=true`.
 
 ### Ansible Playbook Execution Order
 
 The main playbook (`playbooks/site.yml`) runs roles in this order:
 
 ```
-common ──> doca_ofed ──> net_controllers ──> xiraid_classic ──> nvme_namespace ──> raid_fs ──> exports ──> nfs_server ──> perf_tuning ──> motd
+common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace → raid_fs → exports → nfs_server → perf_tuning → motd
 ```
 
 Each role is idempotent and safe to re-run, except `xfs_force_mkfs: true` which forces filesystem recreation.
@@ -367,8 +478,8 @@ Each role is idempotent and safe to re-run, except `xfs_force_mkfs: true` which 
 
 ```bash
 ansible-playbook playbooks/common.yml             # Baseline OS config only
-ansible-playbook playbooks/doca_ofed_install.yml   # DOCA-OFED drivers only
-ansible-playbook playbooks/site.yml                # Full deployment
+ansible-playbook playbooks/doca_ofed_install.yml  # DOCA-OFED drivers only
+ansible-playbook playbooks/site.yml               # Full deployment
 ansible-playbook playbooks/site.yml --tags nfs_server  # Single role
 ```
 
@@ -378,7 +489,6 @@ ansible-playbook playbooks/site.yml --tags nfs_server  # Single role
 
 **Purpose:** Baseline OS configuration.
 
-**What it does:**
 - Sets system timezone
 - Installs packages: curl, vim, htop, chrony, ca-certificates, quota, unattended-upgrades
 - Configures chrony NTP
@@ -395,7 +505,6 @@ ansible-playbook playbooks/site.yml --tags nfs_server  # Single role
 
 **Purpose:** Install NVIDIA DOCA-OFED drivers for RDMA networking.
 
-**What it does:**
 - Adds Mellanox APT repository
 - Installs doca-ofed kernel stack (DKMS), userspace tools, and mlnx-nfsrdma-dkms
 - Generates udev rules for InfiniBand interface naming
@@ -413,7 +522,6 @@ Supports: InfiniBand, RoCE (RDMA over Converged Ethernet) on Mellanox ConnectX N
 
 **Purpose:** Configure static IPs on high-speed network interfaces.
 
-**What it does:**
 - Detects InfiniBand and MLX5 interfaces
 - Allocates IPs from pool (auto) or uses manual overrides
 - Generates and applies netplan configuration
@@ -424,7 +532,6 @@ See [Network Configuration](#network-configuration) for all variables.
 
 **Purpose:** Install Xinnor xiRAID software.
 
-**What it does:**
 - Downloads and installs the xiraid-repo package
 - Installs xiraid-core with DKMS kernel module
 - Accepts EULA automatically
@@ -444,7 +551,6 @@ Skip with: `xiraid_skip_install: true` (for systems with xiRAID already installe
 
 **Purpose:** Auto-detect drives, rebuild NVMe namespaces, generate RAID configuration.
 
-**What it does:**
 1. Identifies the system drive (root/boot/EFI partitions) and excludes it
 2. Enumerates all other NVMe controllers (or all block devices in VM mode)
 3. Optionally cleans existing LVM/MD/ZFS on data drives
@@ -452,8 +558,8 @@ Skip with: `xiraid_skip_install: true` (for systems with xiRAID already installe
 5. Generates `xiraid_arrays` and `xfs_filesystems` facts consumed by the `raid_fs` role
 
 **Two modes:**
-- `nvme` (default) -- bare metal with NVMe SSDs. Rebuilds namespaces with 4KB blocks.
-- `all` -- VMs with virtio/SCSI. Uses whole drives, no namespace rebuild. First N drives = log, rest = data.
+- `nvme` (default) — bare metal with NVMe SSDs. Rebuilds namespaces with 4KB blocks.
+- `all` — VMs with virtio/SCSI. Uses whole drives, no namespace rebuild. First N drives = log, rest = data.
 
 See [RAID and Storage Configuration](#raid-and-storage-configuration) for all variables.
 
@@ -463,7 +569,6 @@ See [RAID and Storage Configuration](#raid-and-storage-configuration) for all va
 
 **Purpose:** Create xiRAID arrays and XFS filesystems.
 
-**What it does:**
 1. Loads xiRAID license
 2. Cleans drives with `xicli drive clean`
 3. Creates RAID arrays (data + log)
@@ -474,45 +579,27 @@ See [RAID and Storage Configuration](#raid-and-storage-configuration) for all va
    - noatime, nodiratime, largeio, inode64
 5. Creates persistent systemd mount units
 
-| Variable | Default |
-|----------|---------|
-| `xiraid_license_path` | `/tmp/license` |
-| `xiraid_force_metadata` | `true` |
-| `xfs_force_mkfs` | `true` |
-| `xiraid_arrays` | (generated by nvme_namespace) |
-| `xfs_filesystems` | (generated by nvme_namespace) |
-
 #### 7. exports
 
 **Purpose:** Generate `/etc/exports` and reload NFS export table.
 
-**What it does:**
 - Creates export directories if missing
 - Writes `/etc/exports` from template
 - Runs `exportfs -ra` to activate
-
-See [NFS Export Configuration](#nfs-export-configuration) for variables.
 
 #### 8. nfs_server
 
 **Purpose:** Install and configure the NFS kernel server with RDMA support.
 
-**What it does:**
 - Installs nfs-kernel-server
 - Sets nfsd and exportd thread counts (default = CPU core count)
 - Enables NFS-RDMA on port 20049
 - Starts and enables the nfs-server systemd unit
 
-| Variable | Default |
-|----------|---------|
-| `nfs_threads` | CPU cores |
-| `nfs_rdma_port` | `20049` |
-
 #### 9. perf_tuning
 
 **Purpose:** Apply performance optimizations for high-throughput NFS-RDMA.
 
-**What it does:**
 - Optionally disables Spectre/Meltdown mitigations
 - Enables NVMe polling queues
 - Sets CPU governor to `performance`
@@ -521,29 +608,20 @@ See [NFS Export Configuration](#nfs-export-configuration) for variables.
 - Configures memory writeback ratios and MGLRU
 - Tunes network stack for 400 Gbit (jumbo frames, large ring buffers, 1 GiB socket buffers)
 
-See [Performance Tuning](#performance-tuning) for all variables.
-
 #### 10. motd
 
 **Purpose:** Set up login banner and management menu hint.
 
-**What it does:**
 - Creates a branded MOTD displayed on SSH login
-- Optionally removes Ubuntu default MOTD
-- Installs `xinas-menu` command for post-install management
-
-| Variable | Default |
-|----------|---------|
-| `motd_enabled` | `true` |
-| `motd_disable_default` | `true` |
+- Installs the `xinas-menu` command
 
 ### Variable Priority
 
 Settings are resolved in this order (highest wins):
 
-1. **CLI / inventory variables** -- `ansible-playbook -e "var=value"` or `inventories/lab.ini`
-2. **Preset playbook vars** -- `presets/<name>/playbook.yml` vars section
-3. **Role defaults** -- `collection/roles/<role>/defaults/main.yml`
+1. **CLI / inventory variables** — `ansible-playbook -e "var=value"` or `inventories/lab.ini`
+2. **Preset playbook vars** — `presets/<name>/playbook.yml` vars section
+3. **Role defaults** — `collection/roles/<role>/defaults/main.yml`
 
 ---
 
@@ -568,7 +646,7 @@ The installer automatically installs all software dependencies (Ansible, yq, git
 
 ### License
 
-A xiRAID license is required. The hardware key is displayed in the menu -- send it to `support@xinnor.io`. The license file is stored at `/tmp/license` (cleared on reboot; re-enter via the management menu).
+A xiRAID license is required. The hardware key is shown during provisioning — send it to `support@xinnor.io`. The license is stored at `/tmp/license` (cleared on reboot; re-enter via **xinas-menu > Quick Actions** or re-run the provisioning menu).
 
 ---
 
@@ -578,8 +656,8 @@ A xiRAID license is required. The hardware key is displayed in the menu -- send 
 
 The installer requires mikefarah/yq v4 at `/usr/local/bin/yq`. If an older Python yq is installed:
 ```bash
-which -a yq        # check which versions are in PATH
-/usr/local/bin/yq --version  # should show mikefarah/yq v4.x
+which -a yq
+/usr/local/bin/yq --version   # should show mikefarah/yq v4.x
 ```
 
 ### NVMe drives not detected
@@ -605,7 +683,7 @@ exportfs -v
 showmount -e localhost
 ```
 
-For RDMA mounts, verify DOCA-OFED is installed on both server and client, and port 20049 is reachable.
+For RDMA mounts, verify DOCA-OFED is installed on both server and client, and port 20049 is reachable. Use **xinas-client > Advanced Settings > Test Connection** to diagnose.
 
 ### Re-running the playbook
 
@@ -620,6 +698,8 @@ ansible-playbook playbooks/site.yml -e "xfs_force_mkfs=true"
 ```
 
 ### Checking status after install
+
+Use **xinas-menu > System Status** for a live dashboard, or run CLI tools directly:
 
 ```bash
 xicli raid show           # RAID array status
