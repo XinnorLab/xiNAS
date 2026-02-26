@@ -337,8 +337,13 @@ show_status() {
 
     if command -v mount.nfs4 &>/dev/null; then
         row "   ${GREEN}●${NC} NFS client tools ${GREEN}installed${NC}"
-        local nfs_version=$(rpcinfo -p 2>/dev/null | grep -m1 nfs | awk '{print $2}' || echo "N/A")
-        row "     ${GRAY}Protocol version: NFSv$nfs_version${NC}"
+        local nfs_version
+        nfs_version=$(awk '$3 ~ /^nfs/ { n=split($4,o,","); for(i=1;i<=n;i++) if(o[i]~/^vers=/) { split(o[i],v,"="); print v[2]; exit } }' /proc/mounts 2>/dev/null | head -1 || true)
+        if [[ -n "$nfs_version" ]]; then
+            row "     ${GRAY}Protocol version: NFSv$nfs_version${NC}"
+        else
+            row "     ${GRAY}Protocol version: N/A (no active mounts)${NC}"
+        fi
     else
         row "   ${RED}●${NC} NFS client tools ${RED}NOT installed${NC}"
         row "     ${GRAY}Install: apt-get install nfs-common${NC}"
