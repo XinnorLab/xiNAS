@@ -1,17 +1,35 @@
 #!/bin/bash
 # xiNAS Installation Script
-# Usage: curl -fsSL https://yourwebsite.com/xiNAS_install.sh | bash
-#    or: wget -qO- https://yourwebsite.com/xiNAS_install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install.sh | sudo bash
+#    or: wget -qO- https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install.sh | sudo bash
 
 set -e
 
-# Colors for output
+# ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+DIM='\033[2m'
+BOLD='\033[1m'
+NC='\033[0m'
 
+# ── Output helpers ─────────────────────────────────────────────────────────────
+SEP="${DIM}     ──────────────────────────────────────────────────────${NC}"
+
+step() {
+    echo ""
+    echo -e "  ${CYAN}${BOLD}▶ $1${NC}"
+    echo -e "$SEP"
+}
+ok()   { echo -e "     ${GREEN}✓${NC}  $*"; }
+info() { echo -e "     ${DIM}›${NC}  $*"; }
+warn() { echo -e "     ${YELLOW}⚠${NC}  $*"; }
+fail() { echo -e "     ${RED}✗${NC}  $*"; }
+
+# ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "${BLUE}"
 cat << 'EOF'
 
@@ -23,113 +41,117 @@ cat << 'EOF'
     ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝
 EOF
 echo -e "${NC}"
-echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}     High-Performance NAS Provisioning${NC}"
-echo -e "${GREEN}    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "  ${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "  ${YELLOW}${BOLD}  High-Performance NAS Provisioning${NC}"
+echo -e "  ${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-# Quick Start Guide
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-DIM='\033[2m'
-
-echo -e "${WHITE}    ┌─────────────────────────────────────────────────────────────┐${NC}"
-echo -e "${WHITE}    │${NC}  ${CYAN}✨ Welcome to xiNAS - Let's get you started!${NC}               ${WHITE}│${NC}"
-echo -e "${WHITE}    └─────────────────────────────────────────────────────────────┘${NC}"
+# ── Quick Start Guide ─────────────────────────────────────────────────────────
+echo -e "  ${WHITE}┌───────────────────────────────────────────────────────┐${NC}"
+echo -e "  ${WHITE}│${NC}  ${CYAN}${BOLD}✨  Welcome to xiNAS — let's get you started!${NC}       ${WHITE}│${NC}"
+echo -e "  ${WHITE}└───────────────────────────────────────────────────────┘${NC}"
 echo ""
-echo -e "    ${WHITE}QUICK START GUIDE${NC}"
-echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
+echo -e "  ${WHITE}${BOLD}QUICK START GUIDE${NC}"
+echo -e "  ${DIM}───────────────────────────────────────────────────────${NC}"
 echo ""
-echo -e "    ${GREEN}①${NC}  ${WHITE}📊 Collect System Data${NC}"
-echo -e "        ${DIM}Use the menu to gather hardware info for licensing${NC}"
+echo -e "  ${CYAN}${BOLD}①${NC}  ${WHITE}📊 Collect System Data${NC}"
+echo -e "      ${DIM}Gather hardware info and generate your licensing key${NC}"
 echo ""
-echo -e "    ${YELLOW}②${NC}  ${WHITE}🔑 Obtain & Enter License${NC} ${RED}★ Required${NC}"
-echo -e "        ${DIM}Contact${NC} ${CYAN}XINNOR Support Team${NC} ${DIM}to get your license${NC}"
-echo -e "        ${DIM}Enter it in the setup menu when prompted${NC}"
+echo -e "  ${YELLOW}${BOLD}②${NC}  ${WHITE}🔑 Obtain & Enter License${NC}  ${RED}${BOLD}★ Required${NC}"
+echo -e "      ${DIM}Send hardware key to${NC} ${CYAN}support@xinnor.io${NC}"
+echo -e "      ${DIM}then enter the received license in the menu${NC}"
 echo ""
-echo -e "    ${GREEN}③${NC}  ${WHITE}🌐 Configure Network${NC} ${DIM}(Optional)${NC}"
-echo -e "        ${DIM}Set IP ranges and interfaces for your storage network${NC}"
-echo -e "        ${DIM}Skip to use automatic detection${NC}"
+echo -e "  ${CYAN}${BOLD}③${NC}  ${WHITE}🌐 Configure Network${NC}  ${DIM}(optional — skip for auto-detect)${NC}"
+echo -e "      ${DIM}Set IP ranges and interfaces for your storage network${NC}"
 echo ""
-echo -e "    ${GREEN}④${NC}  ${WHITE}🚀 Run Installation${NC}"
-echo -e "        ${DIM}Select your preset and let the magic happen!${NC}"
+echo -e "  ${CYAN}${BOLD}④${NC}  ${WHITE}🚀 Run Installation${NC}"
+echo -e "      ${DIM}Select your profile and let the installer do the rest${NC}"
 echo ""
-echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
-echo -e "    ${DIM}💬 Need help?${NC} ${CYAN}support@xinnor.io${NC}"
-echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
+echo -e "  ${DIM}───────────────────────────────────────────────────────${NC}"
+echo -e "  ${DIM}💬 Questions?${NC}  ${CYAN}support@xinnor.io${NC}"
+echo -e "  ${DIM}───────────────────────────────────────────────────────${NC}"
 echo ""
 
-# Ask user to continue
-read -p "    Ready to begin? [Y/n] " -n 1 -r
+# ── Confirm ───────────────────────────────────────────────────────────────────
+read -p "  Ready to begin? [Y/n] " -n 1 -r
 echo ""
 if [[ $REPLY =~ ^[Nn]$ ]]; then
-    echo -e "    ${YELLOW}Installation cancelled. Run this script again when ready.${NC}"
+    echo ""
+    warn "Installation cancelled. Run this script again when ready."
+    echo ""
     exit 0
 fi
-echo ""
 
-# Check if running as root
+# ── Step 1: Requirements ──────────────────────────────────────────────────────
+step "Checking requirements"
+
 if [[ $EUID -ne 0 ]]; then
-   echo -e "${RED}Error: This script must be run as root${NC}"
-   echo "Please run: sudo bash -c \"\$(curl -fsSL URL)\""
-   exit 1
+    fail "${RED}Must be run as root${NC}"
+    echo ""
+    echo -e "     Run:  ${CYAN}sudo bash <(curl -fsSL URL)${NC}"
+    echo ""
+    exit 1
 fi
+ok "Running as root"
 
-# Check Ubuntu version
 if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     if [[ "$ID" != "ubuntu" ]]; then
-        echo -e "${YELLOW}Warning: xiNAS is designed for Ubuntu. Detected: $ID${NC}"
-        read -p "Continue anyway? [y/N] " -n 1 -r
-        echo
+        warn "xiNAS is designed for Ubuntu — detected: ${BOLD}$PRETTY_NAME${NC}"
+        read -p "     Continue anyway? [y/N] " -n 1 -r
+        echo ""
         [[ ! $REPLY =~ ^[Yy]$ ]] && exit 1
+    else
+        ok "OS: ${BOLD}$PRETTY_NAME${NC}"
     fi
-    echo -e "${GREEN}Detected: $PRETTY_NAME${NC}"
 else
-    echo -e "${YELLOW}Warning: Could not detect OS version${NC}"
+    warn "Could not detect OS version"
 fi
 
-# Installation directory
+# ── Step 2: Repository ────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/xiNAS"
 REPO_URL="https://github.com/XinnorLab/xiNAS.git"
 
-echo -e "${BLUE}Installing xiNAS to ${INSTALL_DIR}...${NC}"
+step "Setting up repository"
+info "Target: ${WHITE}${INSTALL_DIR}${NC}"
 
-# Install git if not present
-if ! command -v git &> /dev/null; then
-    echo -e "${YELLOW}Installing git...${NC}"
+if ! command -v git &>/dev/null; then
+    info "Installing git..."
     apt-get update -qq
-    apt-get install -y git
-fi
-
-# Clone or update repository
-if [[ -d "$INSTALL_DIR" ]]; then
-    echo -e "${YELLOW}Existing installation found. Updating...${NC}"
-    cd "$INSTALL_DIR"
-    git fetch origin
-    git reset --hard origin/main
+    apt-get install -y git -qq
+    ok "git installed"
 else
-    echo -e "${GREEN}Cloning xiNAS repository...${NC}"
-    git clone "$REPO_URL" "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
+    ok "git found"
 fi
 
-# Make scripts executable
-chmod +x *.sh 2>/dev/null || true
+if [[ -d "$INSTALL_DIR" ]]; then
+    info "Existing installation found — updating..."
+    cd "$INSTALL_DIR"
+    git fetch origin -q
+    git reset --hard origin/main -q
+    ok "Repository updated"
+else
+    info "Cloning repository..."
+    git clone -q "$REPO_URL" "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+    ok "Repository cloned to ${WHITE}${INSTALL_DIR}${NC}"
+fi
 
-# Run prepare_system.sh to install dependencies
-echo -e "${BLUE}Running system preparation...${NC}"
+chmod +x ./*.sh 2>/dev/null || true
+
+# ── Step 3: System preparation ────────────────────────────────────────────────
+step "Launching setup wizard"
+info "Installing Ansible, yq, and launching the provisioning menu..."
+echo ""
+
 ./prepare_system.sh
 
+# ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  xiNAS installation complete!${NC}"
-echo -e "${GREEN}========================================${NC}"
+echo -e "  ${GREEN}╔═══════════════════════════════════════════════════════╗${NC}"
+echo -e "  ${GREEN}║${NC}  ${GREEN}${BOLD}✓  xiNAS installed successfully!${NC}                     ${GREEN}║${NC}"
+echo -e "  ${GREEN}║${NC}                                                       ${GREEN}║${NC}"
+echo -e "  ${GREEN}║${NC}  ${DIM}Directory :${NC}  ${WHITE}${INSTALL_DIR}${NC}                    ${GREEN}║${NC}"
+echo -e "  ${GREEN}║${NC}  ${DIM}Management:${NC}  ${CYAN}sudo xinas-menu${NC}                      ${GREEN}║${NC}"
+echo -e "  ${GREEN}╚═══════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "Installation directory: ${BLUE}${INSTALL_DIR}${NC}"
-echo ""
-
-# Show system status
-echo -e "${BLUE}System Status:${NC}"
-echo ""
-xinas-status 2>/dev/null || echo "Run 'xinas-status' after deployment to see system status."
