@@ -8,11 +8,21 @@
 # Enable automatic drive detection
 nvme_auto_namespace: true
 
-# Use "all" mode to detect all block devices (not just NVMe controllers)
+# Drive detection mode:
+#   "nvme" - Detect NVMe controllers only (bare metal with NVMe drives)
+#   "all"  - Detect all block devices (VMs with virtio/SCSI drives)
+# In "all" mode, namespace rebuild is skipped and whole drives are used directly
 nvme_detect_mode: "all"
 
-# Number of drives to assign to log array (first N non-OS drives)
+# Number of drives to assign to the log array (used in "all" mode)
+# First N non-OS drives become log devices, remaining become data devices
 nvme_log_drive_count: 2
+
+# Use existing namespaces instead of recreating them
+nvme_use_existing_namespaces: false
+
+# Size of the small namespace (MB) - used for XFS log device
+nvme_small_ns_size_mb: 500
 
 # RAID levels for auto-generated arrays
 nvme_raid_data_level: 5        # RAID 5 for data drives
@@ -21,3 +31,19 @@ nvme_raid_log_level: 1         # RAID 1 (mirror) for 2 log drives
 # Strip sizes for RAID arrays (KB)
 nvme_raid_data_strip_kb: 128
 nvme_raid_log_strip_kb: 16
+
+# Namespace format settings
+nvme_namespace_block_size: 4096       # Block size in bytes (512, 4096)
+nvme_namespace_shared: true           # Enable shared namespace (nmic=1) for multi-controller access
+
+# Safety settings
+nvme_abort_if_no_system_drive: true   # Abort if system drive cannot be detected
+nvme_skip_failed_devices: true        # Continue if individual device fails
+
+# Storage cleanup settings
+nvme_cleanup_existing_storage: true   # Detect and remove LVM, MD RAID, ZFS on data drives
+nvme_skip_cleanup_confirmation: false # Skip confirmation prompt (DANGEROUS - set true for automation)
+
+# Minimum device counts for RAID creation
+nvme_min_devices_for_raid5: 3         # Minimum devices for RAID 5
+nvme_min_devices_for_raid10: 4        # Minimum devices for RAID 10 (must be even)
