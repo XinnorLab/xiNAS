@@ -18,10 +18,11 @@ RuntimeDirectoryMode=0755
 User=root
 Group=root
 
-# Hardening
-PrivateTmp=true
-ProtectSystem=full
-ReadWritePaths=/etc/exports /etc/projects /etc/projid /run
+# Minimal hardening — service runs as root and manages /etc/exports, /run
+# ProtectSystem=full is intentionally omitted: it makes /etc read-only and
+# ReadWritePaths can only re-open paths that already exist at service start,
+# so a missing /etc/exports would remain read-only (PermissionError on create).
+ProtectHome=true
 
 Environment=NFS_HELPER_SOCKET=/run/xinas-nfs-helper.sock
 Environment=LOG_LEVEL=INFO

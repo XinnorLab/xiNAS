@@ -92,6 +92,14 @@ LOGROTATE
     fi
 }
 
+# Return the systemd active state of a service without triggering errexit.
+# Usage: state=$(_service_state <unit>)
+_service_state() {
+    local s
+    s=$(systemctl is-active "$1" 2>/dev/null) || true
+    echo "${s:-inactive}"
+}
+
 # Initialize operation log
 _op_log_init
 
@@ -2578,7 +2586,7 @@ quick_actions_menu() {
                     op_start "Restart NFS Server"
                     op_run "systemctl restart nfs-server" sudo systemctl restart nfs-server || true
                     local _nfs_status=""
-                    _nfs_status=$(systemctl is-active nfs-server 2>/dev/null || echo "unknown")
+                    _nfs_status=$(_service_state nfs-server)
                     op_verify "nfs-server active" test "$_nfs_status" = "active" || true
                     local _ec=0
                     op_end "nfs-server: ${_nfs_status}" || _ec=$?
@@ -2612,7 +2620,7 @@ quick_actions_menu() {
                     echo "=== Service Status ==="
                     echo ""
                     for svc in nfs-server xiraid.target xiraid-exporter xinas-nfs-helper nfsdcld rpcbind; do
-                        status=$(systemctl is-active "$svc" 2>/dev/null || echo "not found")
+                        status=$(_service_state "$svc")
                         case "$status" in
                             active) icon="*" ;;
                             inactive) icon="o" ;;
@@ -2693,7 +2701,7 @@ install_xiraid_exporter() {
     op_run "start service" sudo systemctl restart xiraid-exporter || true
 
     local _svc_status=""
-    _svc_status=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+    _svc_status=$(_service_state xiraid-exporter)
     op_verify "service active" test "$_svc_status" = "active" || true
     local _installed_ver=""
     _installed_ver=$(dpkg -l xiraid-exporter 2>/dev/null | awk '/xiraid-exporter/{print $3}' || true)
@@ -2709,7 +2717,7 @@ uninstall_xiraid_exporter() {
         op_run "disable service" sudo systemctl disable xiraid-exporter || true
         op_run "purge package" sudo apt-get purge -y xiraid-exporter || true
         local _svc_status=""
-        _svc_status=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+        _svc_status=$(_service_state xiraid-exporter)
         op_verify "service stopped" test "$_svc_status" != "active" || true
         op_end "" || true
     fi
@@ -2724,7 +2732,7 @@ manage_xiraid_exporter() {
 
         if [[ -n "$installed" ]]; then
             local svc_status
-            svc_status=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+            svc_status=$(_service_state xiraid-exporter)
             local status_color="$GREEN"
             [[ "$svc_status" != "active" ]] && status_color="$RED"
 
@@ -2766,7 +2774,7 @@ manage_xiraid_exporter() {
                     op_start "Restart xiraid-exporter"
                     op_run "systemctl restart xiraid-exporter" sudo systemctl restart xiraid-exporter || true
                     local _svc_status=""
-                    _svc_status=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+                    _svc_status=$(_service_state xiraid-exporter)
                     op_verify "service active" test "$_svc_status" = "active" || true
                     op_end "xiraid-exporter: ${_svc_status}" || true
                     ;;
@@ -2996,7 +3004,7 @@ mcp_menu() {
         mcp_built="no"
         [[ -f "$MCP_DIST" ]] && mcp_built="yes"
 
-        nfs_status=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+        nfs_status=$(_service_state "$MCP_NFS_HELPER_SVC")
 
         local mcp_color nfs_color
         [[ "$mcp_built"   == "yes"    ]] && mcp_color="$GREEN" || mcp_color="$RED"
@@ -3020,6 +3028,7 @@ mcp_menu() {
             "4" "🔐 Root SSH Access" \
             "5" "📄 View Config" \
             "6" "📜 View Audit Log" \
+            "7" "📋 NFS Helper Logs" \
             "0" "🔙 Back") || return
 
         case "$choice" in
@@ -3030,7 +3039,7 @@ mcp_menu() {
                         "Stop xinas-nfs-helper?\n\nThis prevents the MCP server from\nmanaging NFS exports until restarted."; then
                         op_start "Stop xinas-nfs-helper"
                         op_run "systemctl stop" systemctl stop "$MCP_NFS_HELPER_SVC" || true
-                        _s=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+                        _s=$(_service_state "$MCP_NFS_HELPER_SVC")
                         op_verify "service stopped" test "$_s" != "active" || true
                         op_end "xinas-nfs-helper: ${_s}" || true
                         audit_log "MCP > Stop NFS Helper" "$_s"
@@ -3039,7 +3048,7 @@ mcp_menu() {
                     audit_log "MCP > Start NFS Helper"
                     op_start "Start xinas-nfs-helper"
                     op_run "systemctl start" systemctl start "$MCP_NFS_HELPER_SVC" || true
-                    _s=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+                    _s=$(_service_state "$MCP_NFS_HELPER_SVC")
                     op_verify "service active" test "$_s" = "active" || true
                     op_end "xinas-nfs-helper: ${_s}" || true
                     audit_log "MCP > Start NFS Helper" "$_s"
@@ -3049,7 +3058,7 @@ mcp_menu() {
                 audit_log "MCP > Restart NFS Helper"
                 op_start "Restart xinas-nfs-helper"
                 op_run "systemctl restart" systemctl restart "$MCP_NFS_HELPER_SVC" || true
-                _s=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+                _s=$(_service_state "$MCP_NFS_HELPER_SVC")
                 op_verify "service active" test "$_s" = "active" || true
                 op_end "xinas-nfs-helper: ${_s}" || true
                 ;;
@@ -3069,7 +3078,7 @@ mcp_menu() {
                     fi
                     echo ""
 
-                    _s=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+                    _s=$(_service_state "$MCP_NFS_HELPER_SVC")
                     if [[ "$_s" == "active" ]]; then
                         echo "  [*] NFS Helper    ${_s}"
                     else
@@ -3139,6 +3148,15 @@ mcp_menu() {
                     msg_box "📜 Audit Log" \
                         "No audit log yet.\n\nThe log appears at:\n${MCP_AUDIT_LOG}\n\nafter the first AI tool call."
                 fi
+                ;;
+            7)
+                audit_log "MCP > NFS Helper Logs"
+                out="$TMP_DIR/nfs_helper_logs"
+                {
+                    journalctl -u "$MCP_NFS_HELPER_SVC" --no-pager -n 100 2>/dev/null \
+                        || echo "(journalctl unavailable)"
+                } > "$out"
+                text_box "📋 NFS Helper Logs (last 100 lines)" "$out"
                 ;;
             0) return ;;
         esac
@@ -3224,7 +3242,7 @@ main_menu() {
         exporter_ver=$(get_exporter_installed_version)
         if [[ -n "$exporter_ver" ]]; then
             local svc_state
-            svc_state=$(systemctl is-active xiraid-exporter 2>/dev/null || echo "inactive")
+            svc_state=$(_service_state xiraid-exporter)
             if [[ "$svc_state" == "active" ]]; then
                 exporter_text="📈 xiRAID Exporter [v${exporter_ver} Running]"
             else
@@ -3238,7 +3256,7 @@ main_menu() {
         # MCP status indicator
         local mcp_text="🤖 AI / MCP Server"
         local _mcp_nfs_state
-        _mcp_nfs_state=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+        _mcp_nfs_state=$(_service_state "$MCP_NFS_HELPER_SVC")
         if [[ -f "$MCP_DIST" ]]; then
             if [[ "$_mcp_nfs_state" == "active" ]]; then
                 mcp_text="🤖 AI / MCP Server [Ready]"
