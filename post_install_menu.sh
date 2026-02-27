@@ -2872,6 +2872,7 @@ mcp_ssh_access_menu() {
             "2" "🔑 Set Root Password" \
             "3" "📋 Show Authorized Keys" \
             "4" "📋 Show: claude mcp add command" \
+            "5" "➕ Paste SSH Public Key" \
             "0" "🔙 Back") || return
 
         case "$choice" in
@@ -2947,11 +2948,39 @@ SSHEOF
                     echo "Prerequisites:"
                     echo "  1. PermitRootLogin = prohibit-password (or yes)"
                     echo "  2. Your SSH public key in /root/.ssh/authorized_keys"
-                    echo "     → ssh-copy-id root@${_ip}"
+                    echo "     → Use option 5 (Paste SSH Public Key) in this menu"
                     echo "  3. /usr/local/bin/xinas-mcp wrapper installed"
                     echo "     → run: ansible-playbook playbooks/site.yml --tags xinas_mcp,ssh"
                 } > "$out"
                 text_box "🖥️  Claude Code Setup" "$out"
+                ;;
+            5)
+                audit_log "MCP > Paste SSH Key"
+                local _pubkey
+                _pubkey=$(input_box "➕ Paste SSH Public Key" \
+                    "Paste your SSH public key below.\n\nGet it on your workstation with:\n  cat ~/.ssh/id_ed25519.pub\n  cat ~/.ssh/id_rsa.pub")
+                if [[ -z "$_pubkey" ]]; then
+                    msg_box "❌ Cancelled" "No key entered. Nothing was changed."
+                elif [[ "$_pubkey" != ssh-* && "$_pubkey" != ecdsa-* && "$_pubkey" != sk-* ]]; then
+                    msg_box "❌ Invalid Key" \
+                        "Not a valid SSH public key.\n\nPublic keys start with:\n  ssh-ed25519\n  ssh-rsa\n  ecdsa-sha2-nistp256\netc.\n\nMake sure you copy the .pub file contents,\nnot the private key."
+                else
+                    mkdir -p /root/.ssh
+                    chmod 700 /root/.ssh
+                    if [[ -f /root/.ssh/authorized_keys ]] && \
+                       grep -qF "$_pubkey" /root/.ssh/authorized_keys 2>/dev/null; then
+                        msg_box "ℹ️  Already Present" \
+                            "This key is already in authorized_keys.\n\nNo changes made."
+                    else
+                        echo "$_pubkey" >> /root/.ssh/authorized_keys
+                        chmod 600 /root/.ssh/authorized_keys
+                        audit_log "MCP > Paste SSH Key" "added"
+                        local _ip2
+                        _ip2=$(hostname -I | awk '{print $1}')
+                        msg_box "✅ Key Added" \
+                            "SSH key added to /root/.ssh/authorized_keys\n\nTest the connection from your workstation:\n  ssh root@${_ip2}\n\nThen register MCP:\n  claude mcp add --transport stdio xinas -- ssh -T root@${_ip2} xinas-mcp"
+                    fi
+                fi
                 ;;
             0) return ;;
         esac
