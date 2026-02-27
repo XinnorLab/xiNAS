@@ -35,7 +35,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version tracking
-XINAS_MENU_VERSION="1.4.0"
+XINAS_MENU_VERSION="1.4.1"
 
 # Source the menu library (check multiple locations)
 if [[ -f "$SCRIPT_DIR/lib/menu_lib.sh" ]]; then
@@ -3029,6 +3029,7 @@ mcp_menu() {
             "5" "📄 View Config" \
             "6" "📜 View Audit Log" \
             "7" "📋 NFS Helper Logs" \
+            "8" "🔄 Check & Install Updates" \
             "0" "🔙 Back") || return
 
         case "$choice" in
@@ -3157,6 +3158,54 @@ mcp_menu() {
                         || echo "(journalctl unavailable)"
                 } > "$out"
                 text_box "📋 NFS Helper Logs (last 100 lines)" "$out"
+                ;;
+            8)
+                audit_log "MCP > Check Updates"
+                local _repo="/opt/xiNAS"
+                local _mcp_dir="$_repo/xiNAS-MCP"
+                local _helper_lib="/usr/lib/xinas-mcp/nfs-helper"
+
+                git -C "$_repo" fetch origin main --quiet 2>/dev/null || true
+
+                local _behind
+                _behind=$(git -C "$_repo" rev-list HEAD..origin/main --count 2>/dev/null || echo "0")
+
+                if [[ "$_behind" == "0" ]]; then
+                    msg_box "🔄 MCP Updates" "Already up to date.\n\nNo new commits on origin/main."
+                else
+                    local _log
+                    _log=$(git -C "$_repo" log HEAD..origin/main --oneline 2>/dev/null | head -10)
+                    if yes_no "🔄 MCP Updates Available" \
+                        "${_behind} update(s) available:\n\n${_log}\n\nInstall now?"; then
+                        audit_log "MCP > Install Updates" "${_behind} commits"
+                        local _before
+                        _before=$(git -C "$_repo" rev-parse HEAD 2>/dev/null || echo "")
+                        op_start "Update MCP & NFS Helper"
+                        op_run "git pull"        git -C "$_repo" pull origin main --quiet
+                        local _pkg_changed=""
+                        if [[ -n "$_before" ]]; then
+                            _pkg_changed=$(git -C "$_repo" diff "$_before" HEAD \
+                                -- xiNAS-MCP/package-lock.json --name-only 2>/dev/null || true)
+                        fi
+                        [[ -n "$_pkg_changed" ]] && op_run "npm ci" npm --prefix "$_mcp_dir" ci
+                        op_run "npm run build"   npm --prefix "$_mcp_dir" run build
+                        op_run "copy nfs-helper" cp "$_mcp_dir"/nfs-helper/nfs_helper.py \
+                                                    "$_mcp_dir"/nfs-helper/nfs_exports.py \
+                                                    "$_mcp_dir"/nfs-helper/nfs_quota.py \
+                                                    "$_mcp_dir"/nfs-helper/nfs_sessions.py \
+                                                    "$_helper_lib/"
+                        op_run "set permissions" chmod 755 "$_helper_lib/nfs_helper.py"
+                        op_run "update service file" \
+                            cp "$_mcp_dir/nfs-helper/xinas-nfs-helper.service" \
+                               /etc/systemd/system/xinas-nfs-helper.service
+                        op_run "daemon-reload"   systemctl daemon-reload
+                        op_run "restart nfs-helper" systemctl restart "$MCP_NFS_HELPER_SVC"
+                        local _s
+                        _s=$(_service_state "$MCP_NFS_HELPER_SVC")
+                        op_verify "nfs-helper active" test "$_s" = "active"
+                        op_end "NFS Helper: ${_s}"
+                    fi
+                fi
                 ;;
             0) return ;;
         esac
