@@ -15,6 +15,8 @@ strongly-typed tools to AI assistants such as Claude Code.
 | 5 | Creates `/etc/xinas-mcp/config.json` with sane defaults (never overwrites existing config) |
 | 6 | Creates `/var/log/xinas/` audit log directory |
 | 7 | Deploys `/root/.claude/mcp_servers.json` so Claude Code discovers the MCP server automatically |
+| 8 | Creates `/etc/ssh/sshd_config.d/10-xinas-root-access.conf` to enable key-based root SSH (overrides cloud-init drop-ins that disable root login) |
+| 9 | Creates `/usr/local/bin/xinas-mcp` wrapper script for clean remote SSH invocation |
 
 ## Requirements
 
@@ -36,17 +38,40 @@ strongly-typed tools to AI assistants such as Claude Code.
 | `xinas_mcp_sse_port` | `8080` | SSE port (only used when sse_enabled=true) |
 | `xinas_mcp_configure_claude` | `true` | Deploy Claude Code MCP integration for root |
 | `xinas_mcp_claude_config_dir` | `/root/.claude` | Claude Code config directory |
+| `xinas_mcp_allow_root_ssh` | `true` | Enable key-based root SSH via sshd drop-in (safe: password login stays blocked) |
 
 ## Using with Claude Code
 
-After installation, Claude Code (running as root) will automatically pick up the
-`/root/.claude/mcp_servers.json` config. To verify:
+### Option A — Claude Code running on the NAS (root shell)
+
+The Ansible role deploys `/root/.claude/mcp_servers.json` automatically.
+Just run `claude` on the NAS and the `xinas` server is available.
+
+### Option B — Claude Code on your workstation (remote)
+
+The MCP server must run on the NAS (it connects to local xiRAID gRPC and NFS sockets).
+Use the SSH stdio transport — Claude Code pipes JSON-RPC over the connection:
 
 ```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node /opt/xiNAS/xiNAS-MCP/dist/index.js
+# Add once on your workstation
+claude mcp add --transport stdio xinas -- ssh -T root@<nas-ip> xinas-mcp
 ```
 
-The output should list all 33 xiNAS tools.
+**Prerequisite:** Copy your workstation's SSH public key to the NAS first:
+
+```bash
+ssh-copy-id root@<nas-ip>
+```
+
+Verify the connection:
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  | ssh -T root@<nas-ip> xinas-mcp \
+  | python3 -m json.tool | grep '"name"' | head -5
+```
+
+The output should list the first 5 of 33 xiNAS tools.
 
 ## NFS helper verification
 
@@ -65,3 +90,4 @@ echo '{"op":"list_exports","request_id":"test-1"}' | nc -U /run/xinas-nfs-helper
 | `xinas_mcp,nfs_helper` | NFS daemon install only |
 | `xinas_mcp,config` | Config and log directories only |
 | `xinas_mcp,claude` | Claude Code integration only |
+| `xinas_mcp,ssh` | sshd drop-in + wrapper script only |

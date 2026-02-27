@@ -184,3 +184,31 @@
     force: false    # preserve user-added MCP servers
   when: xinas_mcp_configure_claude
   tags: [xinas_mcp, claude]
+
+# ─── 6. Root SSH access for Claude Code ───────────────────────────────────────
+
+- name: Allow root SSH login via key auth (for Claude Code MCP connection)
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-xinas-root-access.conf
+    content: |
+      # Managed by xinas_mcp Ansible role
+      # Allows key-based root SSH login for Claude Code MCP stdio transport
+      # Password root login remains blocked by default Ubuntu policy
+      PermitRootLogin prohibit-password
+    owner: root
+    group: root
+    mode: '0644'
+  when: xinas_mcp_allow_root_ssh
+  notify: restart sshd
+  tags: [xinas_mcp, ssh]
+
+- name: Create xinas-mcp wrapper script
+  ansible.builtin.copy:
+    dest: /usr/local/bin/xinas-mcp
+    content: |
+      #!/bin/sh
+      exec node {{ xinas_mcp_repo_path }}/dist/index.js "$@"
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [xinas_mcp, ssh]

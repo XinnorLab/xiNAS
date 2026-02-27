@@ -23,3 +23,8 @@ xinas_mcp_sse_port: 8080
 # Deploy Claude Code MCP integration for root user
 xinas_mcp_configure_claude: true
 xinas_mcp_claude_config_dir: /root/.claude
+
+# Allow root SSH login via key auth (PermitRootLogin prohibit-password)
+# Required for Claude Code MCP SSH transport from a remote workstation
+# Set false if SSH access is managed separately
+xinas_mcp_allow_root_ssh: true
