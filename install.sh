@@ -108,6 +108,35 @@ else
     warn "Could not detect OS version"
 fi
 
+# ── Step 1b: Root SSH access ──────────────────────────────────────────────────
+step "Configuring root SSH access"
+
+# Ubuntu cloud images (AWS/GCP/Azure) drop a cloud-init config that sets
+# PermitRootLogin no. We override it with a lower-numbered drop-in so
+# key-based root SSH works for the AI / MCP bridge.
+_sshd_dropin="/etc/ssh/sshd_config.d/10-xinas-root-access.conf"
+mkdir -p /etc/ssh/sshd_config.d
+if [[ ! -f "$_sshd_dropin" ]]; then
+    cat > "$_sshd_dropin" <<'SSHEOF'
+# Managed by xiNAS installer
+# Allows key-based root SSH login (for Claude Code MCP stdio transport)
+# Password root login remains blocked by Ubuntu default policy
+PermitRootLogin prohibit-password
+SSHEOF
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+    ok "Root SSH key-login enabled (password login stays blocked)"
+else
+    ok "Root SSH config already present"
+fi
+
+# Warn if root has no password — useful for console recovery and sudo auditing
+_root_pw=$(passwd -S root 2>/dev/null | awk '{print $2}')
+if [[ "$_root_pw" == "L" || "$_root_pw" == "NP" ]]; then
+    warn "Root has no password set — run ${CYAN}xinas-menu${NC} → A → 4 to set one"
+else
+    ok "Root password is set"
+fi
+
 # ── Step 2: Repository ────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/xiNAS"
 REPO_URL="https://github.com/XinnorLab/xiNAS.git"

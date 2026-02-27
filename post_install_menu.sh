@@ -2815,6 +2815,148 @@ MCP_DIST="/opt/xiNAS/xiNAS-MCP/dist/index.js"
 MCP_CONFIG="/etc/xinas-mcp/config.json"
 MCP_AUDIT_LOG="/var/log/xinas/mcp-audit.jsonl"
 MCP_NFS_HELPER_SVC="xinas-nfs-helper"
+MCP_SSHD_DROPIN="/etc/ssh/sshd_config.d/10-xinas-root-access.conf"
+
+# ── Root SSH access sub-menu ──────────────────────────────────────────────────
+
+mcp_ssh_access_menu() {
+    local choice out
+
+    while true; do
+        show_header
+
+        # Effective PermitRootLogin value (after all drop-ins are merged)
+        local prl prl_color prl_ok
+        prl=$(sshd -T 2>/dev/null | grep -i "^permitrootlogin" | awk '{print $2}')
+        [[ -z "$prl" ]] && prl="(unknown)"
+        case "$prl" in
+            prohibit-password|without-password)
+                prl_color="$GREEN"; prl_ok="yes" ;;
+            yes)
+                prl_color="$YELLOW"; prl_ok="yes" ;;
+            *)
+                prl_color="$RED";   prl_ok="no"  ;;
+        esac
+
+        # Root password status
+        local rpw rpw_color rpw_label
+        rpw=$(passwd -S root 2>/dev/null | awk '{print $2}' || echo "unknown")
+        case "$rpw" in
+            P)  rpw_color="$GREEN";  rpw_label="Set" ;;
+            L)  rpw_color="$YELLOW"; rpw_label="Locked (no password)" ;;
+            NP) rpw_color="$RED";    rpw_label="Not set" ;;
+            *)  rpw_color="$DIM";    rpw_label="Unknown ($rpw)" ;;
+        esac
+
+        # Authorized keys count
+        local key_count=0
+        [[ -f /root/.ssh/authorized_keys ]] && \
+            key_count=$(grep -c "^ssh-" /root/.ssh/authorized_keys 2>/dev/null || echo "0")
+        local key_color="$GREEN"
+        [[ "$key_count" -eq 0 ]] && key_color="$YELLOW"
+
+        echo -e "  ${WHITE}PermitRootLogin:${NC}  ${prl_color}${prl}${NC}"
+        echo -e "  ${WHITE}Root password:  ${NC}  ${rpw_color}${rpw_label}${NC}"
+        echo -e "  ${WHITE}Authorized keys:${NC}  ${key_color}${key_count} key(s) in /root/.ssh/authorized_keys${NC}"
+        echo ""
+
+        local fix_label
+        if [[ "$prl_ok" == "yes" ]]; then
+            fix_label="✅ Root SSH login active (${prl})"
+        else
+            fix_label="🔧 Enable Root SSH Key Login"
+        fi
+
+        choice=$(menu_select "🔐 Root SSH Access" "Manage root SSH for Claude Code" \
+            "1" "$fix_label" \
+            "2" "🔑 Set Root Password" \
+            "3" "📋 Show Authorized Keys" \
+            "4" "📋 Show: claude mcp add command" \
+            "0" "🔙 Back") || return
+
+        case "$choice" in
+            1)
+                if [[ "$prl_ok" == "yes" ]]; then
+                    msg_box "✅ Already Enabled" \
+                        "Root SSH key login is already configured.\n\nEffective setting:  ${prl}\n\nNo action needed."
+                else
+                    audit_log "MCP > Enable Root SSH"
+                    mkdir -p /etc/ssh/sshd_config.d
+                    cat > "$MCP_SSHD_DROPIN" <<'SSHEOF'
+# Managed by xiNAS
+# Allows key-based root SSH login for Claude Code MCP stdio transport
+# Password root login remains blocked
+PermitRootLogin prohibit-password
+SSHEOF
+                    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+                    local _new
+                    _new=$(sshd -T 2>/dev/null | grep -i "^permitrootlogin" | awk '{print $2}')
+                    audit_log "MCP > Enable Root SSH" "$_new"
+                    msg_box "✅ Done" \
+                        "Root SSH key login enabled.\n\nEffective: ${_new}\nDrop-in:  ${MCP_SSHD_DROPIN}"
+                fi
+                ;;
+            2)
+                audit_log "MCP > Set Root Password"
+                echo ""
+                echo -e "  ${CYAN}Setting root password — enter new password below:${NC}"
+                echo ""
+                if passwd root; then
+                    audit_log "MCP > Set Root Password" "success"
+                    msg_box "✅ Done" "Root password set successfully."
+                else
+                    msg_box "❌ Cancelled" "Root password was not changed."
+                fi
+                ;;
+            3)
+                out="$TMP_DIR/ssh_keys_out"
+                {
+                    echo "Authorized keys for root:"
+                    echo ""
+                    local _auth="/root/.ssh/authorized_keys"
+                    if [[ -f "$_auth" ]]; then
+                        local i=0
+                        while IFS= read -r _line; do
+                            [[ -z "$_line" || "$_line" == \#* ]] && continue
+                            i=$((i + 1))
+                            local _ktype _kcomment
+                            _ktype=$(echo "$_line"    | awk '{print $1}')
+                            _kcomment=$(echo "$_line" | awk '{print $NF}')
+                            echo "  $i. $_ktype  ...  $_kcomment"
+                        done < "$_auth"
+                        [[ $i -eq 0 ]] && echo "  (file exists but contains no keys)"
+                    else
+                        echo "  /root/.ssh/authorized_keys not found"
+                        echo ""
+                        echo "  Add your workstation key with:"
+                        echo "    ssh-copy-id root@$(hostname -I | awk '{print $1}')"
+                    fi
+                } > "$out"
+                text_box "🔑 Authorized Keys" "$out"
+                ;;
+            4)
+                local _ip
+                _ip=$(hostname -I | awk '{print $1}')
+                out="$TMP_DIR/mcp_cmd_out"
+                {
+                    echo "Run once on your workstation to register the MCP server:"
+                    echo ""
+                    echo "  claude mcp add --transport stdio xinas -- \\"
+                    echo "    ssh -T root@${_ip} xinas-mcp"
+                    echo ""
+                    echo "Prerequisites:"
+                    echo "  1. PermitRootLogin = prohibit-password (or yes)"
+                    echo "  2. Your SSH public key in /root/.ssh/authorized_keys"
+                    echo "     → ssh-copy-id root@${_ip}"
+                    echo "  3. /usr/local/bin/xinas-mcp wrapper installed"
+                    echo "     → run: ansible-playbook playbooks/site.yml --tags xinas_mcp,ssh"
+                } > "$out"
+                text_box "🖥️  Claude Code Setup" "$out"
+                ;;
+            0) return ;;
+        esac
+    done
+}
 
 mcp_menu() {
     local choice nfs_status mcp_built out _s
@@ -2846,7 +2988,7 @@ mcp_menu() {
             "1" "$toggle_label" \
             "2" "🔁 Restart NFS Helper" \
             "3" "📋 View Status" \
-            "4" "🔑 SSH Keys (remote Claude Code)" \
+            "4" "🔐 Root SSH Access" \
             "5" "📄 View Config" \
             "6" "📜 View Audit Log" \
             "0" "🔙 Back") || return
@@ -2950,38 +3092,7 @@ mcp_menu() {
                 } > "$out"
                 text_box "🤖 MCP Status" "$out"
                 ;;
-            4)
-                audit_log "MCP > SSH Keys"
-                out="$TMP_DIR/mcp_ssh"
-                {
-                    echo "=== Root SSH Keys (for remote Claude Code) ==="
-                    echo ""
-                    local _auth="/root/.ssh/authorized_keys"
-                    if [[ -f "$_auth" ]]; then
-                        local i=0
-                        while IFS= read -r _line; do
-                            [[ -z "$_line" || "$_line" == \#* ]] && continue
-                            i=$((i + 1))
-                            local _type _comment
-                            _type=$(echo "$_line"  | awk '{print $1}')
-                            _comment=$(echo "$_line" | awk '{print $NF}')
-                            echo "  $i. $_type  ...  $_comment"
-                        done < "$_auth"
-                        [[ $i -eq 0 ]] && echo "  (file exists but contains no keys)"
-                    else
-                        echo "  /root/.ssh/authorized_keys not found."
-                    fi
-                    echo ""
-                    local _ip
-                    _ip=$(hostname -I | awk '{print $1}')
-                    echo "To add your workstation key:"
-                    echo "  ssh-copy-id root@${_ip}"
-                    echo ""
-                    echo "Then on your workstation, register the MCP server:"
-                    echo "  claude mcp add --transport stdio xinas -- ssh -T root@${_ip} xinas-mcp"
-                } > "$out"
-                text_box "🔑 SSH Keys" "$out"
-                ;;
+            4) audit_log "MCP > Root SSH Access"; mcp_ssh_access_menu ;;
             5)
                 audit_log "MCP > View Config"
                 if [[ -f "$MCP_CONFIG" ]]; then
