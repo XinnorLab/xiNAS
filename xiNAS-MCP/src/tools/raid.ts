@@ -105,7 +105,7 @@ async function getMountedArrayPaths(): Promise<Map<string, string>> {
 export async function handleRaidList(params: z.infer<typeof RaidListSchema>) {
   resolveController(params.controller_id);
   const client = await getClient(params.controller_id);
-  const resp = await withRetry(() => raidShow(client, { extended: params.extended }), 'raid.list');
+  const resp = await withRetry(() => raidShow(client, { extended: params.extended, units: 'g' }), 'raid.list');
   return resp.data;
 }
 
@@ -209,7 +209,7 @@ export async function handleRaidModifyPerformance(params: z.infer<typeof RaidMod
     preflight: async () => {
       const client = await getClient(params.controller_id);
       const showResp = await withRetry(
-        () => raidShow(client, { name: params.array_id, extended: false }),
+        () => raidShow(client, { name: params.array_id, extended: false, units: 'g' }),
         'raid.modify_performance preflight'
       );
       const raids = showResp.data as Array<{ name: string; state: string }> | null;
@@ -293,7 +293,7 @@ export async function handleRaidLifecycleControl(
       const interval = setInterval(async () => {
         try {
           const c = await getClient(ctrlId);
-          const r = await raidShow(c, { name: arrayId, extended: true });
+          const r = await raidShow(c, { name: arrayId, extended: true, units: 'g' });
           const raids = r.data as Array<{ name: string; init_progress?: number; recon_progress?: number; state?: string }> | null;
           const info = raids?.find(x => x.name === arrayId);
           if (info) {
