@@ -4,7 +4,7 @@
 # Exits on errors and cleans up temporary files
 
 set -euo pipefail
-XINAS_SETUP_VERSION="1.1.0"
+XINAS_SETUP_VERSION="1.1.1"
 TMP_DIR="$(mktemp -d)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Directory of the repository currently being configured
@@ -53,8 +53,44 @@ do_update() {
 
     info_box "Updating..." "Pulling latest changes from origin/main..."
 
+    local _before
+    _before=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo "")
+
     if git -C "$REPO_DIR" pull origin main 2>"$TMP_DIR/update.log"; then
         UPDATE_AVAILABLE=""
+
+        # Rebuild MCP server and NFS helper if installed
+        local _mcp_dir="$REPO_DIR/xiNAS-MCP"
+        local _helper_lib="/usr/lib/xinas-mcp/nfs-helper"
+        if [[ -d "$_mcp_dir" && -f "$_mcp_dir/package.json" ]]; then
+            info_box "Updating..." "Rebuilding MCP server..."
+            local _pkg_changed=""
+            if [[ -n "$_before" ]]; then
+                _pkg_changed=$(git -C "$REPO_DIR" diff "$_before" HEAD \
+                    -- xiNAS-MCP/package-lock.json --name-only 2>/dev/null || true)
+            fi
+            [[ -n "$_pkg_changed" ]] && \
+                npm --prefix "$_mcp_dir" ci 2>>"$TMP_DIR/npm.log" || true
+            npm --prefix "$_mcp_dir" run build 2>>"$TMP_DIR/npm.log" || {
+                msg_box "MCP Build Warning" \
+                    "MCP server build failed:\n\n$(head -5 "$TMP_DIR/npm.log")\n\nBase xiNAS update was successful."
+            }
+
+            if [[ -d "$_helper_lib" ]]; then
+                info_box "Updating..." "Copying NFS helper files..."
+                cp "$_mcp_dir"/nfs-helper/nfs_helper.py \
+                   "$_mcp_dir"/nfs-helper/nfs_exports.py \
+                   "$_mcp_dir"/nfs-helper/nfs_quota.py \
+                   "$_mcp_dir"/nfs-helper/nfs_sessions.py \
+                   "$_helper_lib/" 2>/dev/null || true
+                chmod 755 "$_helper_lib/nfs_helper.py" 2>/dev/null || true
+                cp "$_mcp_dir/nfs-helper/xinas-nfs-helper.service" \
+                   /etc/systemd/system/xinas-nfs-helper.service 2>/dev/null || true
+                systemctl daemon-reload 2>/dev/null || true
+                systemctl restart xinas-nfs-helper 2>/dev/null || true
+            fi
+        fi
+
         msg_box "Update Complete" "xiNAS has been updated successfully!\n\nPlease restart the menu to use the new version."
     else
         msg_box "Update Failed" "Failed to update:\n\n$(cat "$TMP_DIR/update.log")"
