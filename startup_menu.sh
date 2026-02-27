@@ -472,6 +472,10 @@ apply_preset() {
         cp "$pdir/raid_fs.yml" "collection/roles/raid_fs/defaults/main.yml"
         msg+="- RAID configuration\n"
     fi
+    if [ -f "$pdir/nvme_namespace.yml" ]; then
+        cp "$pdir/nvme_namespace.yml" "collection/roles/nvme_namespace/defaults/main.yml"
+        msg+="- NVMe namespace configuration\n"
+    fi
     if [ -f "$pdir/nfs_exports.yml" ]; then
         cp "$pdir/nfs_exports.yml" "collection/roles/exports/defaults/main.yml"
         msg+="- NFS exports\n"
@@ -527,6 +531,7 @@ save_preset() {
     cp "collection/roles/net_controllers/defaults/main.yml" "$pdir/network.yml" 2>/dev/null || true
     cp "collection/roles/net_controllers/templates/netplan.yaml.j2" "$pdir/netplan.yaml.j2" 2>/dev/null || true
     cp "collection/roles/raid_fs/defaults/main.yml" "$pdir/raid_fs.yml" 2>/dev/null || true
+    cp "collection/roles/nvme_namespace/defaults/main.yml" "$pdir/nvme_namespace.yml" 2>/dev/null || true
     cp "collection/roles/exports/defaults/main.yml" "$pdir/nfs_exports.yml" 2>/dev/null || true
     [ -f "playbooks/site.yml" ] && cp "playbooks/site.yml" "$pdir/playbook.yml"
     msg_box "Preset Saved" "Preset saved to $pdir"

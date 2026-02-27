@@ -1,0 +1,23 @@
+# VM preset - nvme_namespace role configuration
+#
+# For virtual machines with virtio/SCSI drives (no NVMe namespace support).
+# Detects all block devices, excludes the OS drive, then assigns:
+#   - First N drives → log array (RAID 1 mirror)
+#   - Remaining drives → data array (RAID 5)
+
+# Enable automatic drive detection
+nvme_auto_namespace: true
+
+# Use "all" mode to detect all block devices (not just NVMe controllers)
+nvme_detect_mode: "all"
+
+# Number of drives to assign to log array (first N non-OS drives)
+nvme_log_drive_count: 2
+
+# RAID levels for auto-generated arrays
+nvme_raid_data_level: 5        # RAID 5 for data drives
+nvme_raid_log_level: 1         # RAID 1 (mirror) for 2 log drives
+
+# Strip sizes for RAID arrays (KB)
+nvme_raid_data_strip_kb: 128
+nvme_raid_log_strip_kb: 16
