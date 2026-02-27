@@ -2611,7 +2611,7 @@ quick_actions_menu() {
                 {
                     echo "=== Service Status ==="
                     echo ""
-                    for svc in nfs-server xiraid.target xiraid-exporter nfsdcld rpcbind; do
+                    for svc in nfs-server xiraid.target xiraid-exporter xinas-nfs-helper nfsdcld rpcbind; do
                         status=$(systemctl is-active "$svc" 2>/dev/null || echo "not found")
                         case "$status" in
                             active) icon="*" ;;
@@ -2808,6 +2808,204 @@ manage_xiraid_exporter() {
 check_exporter_update &
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# MCP Server Management
+# ═══════════════════════════════════════════════════════════════════════════════
+
+MCP_DIST="/opt/xiNAS/xiNAS-MCP/dist/index.js"
+MCP_CONFIG="/etc/xinas-mcp/config.json"
+MCP_AUDIT_LOG="/var/log/xinas/mcp-audit.jsonl"
+MCP_NFS_HELPER_SVC="xinas-nfs-helper"
+
+mcp_menu() {
+    local choice nfs_status mcp_built out _s
+
+    while true; do
+        show_header
+
+        mcp_built="no"
+        [[ -f "$MCP_DIST" ]] && mcp_built="yes"
+
+        nfs_status=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+
+        local mcp_color nfs_color
+        [[ "$mcp_built"   == "yes"    ]] && mcp_color="$GREEN" || mcp_color="$RED"
+        [[ "$nfs_status"  == "active" ]] && nfs_color="$GREEN" || nfs_color="$RED"
+
+        echo -e "  ${WHITE}🤖 MCP Server:${NC}  ${mcp_color}● $(
+            [[ "$mcp_built" == "yes" ]] && echo "Ready (stdio)" || echo "Not built"
+        )${NC}"
+        echo -e "  ${WHITE}🔧 NFS Helper:${NC}  ${nfs_color}● ${nfs_status}${NC}"
+        echo ""
+
+        local toggle_label
+        [[ "$nfs_status" == "active" ]] \
+            && toggle_label="⏹  Stop NFS Helper" \
+            || toggle_label="▶  Start NFS Helper"
+
+        choice=$(menu_select "🤖 AI / MCP Server" "Manage Claude Code bridge" \
+            "1" "$toggle_label" \
+            "2" "🔁 Restart NFS Helper" \
+            "3" "📋 View Status" \
+            "4" "🔑 SSH Keys (remote Claude Code)" \
+            "5" "📄 View Config" \
+            "6" "📜 View Audit Log" \
+            "0" "🔙 Back") || return
+
+        case "$choice" in
+            1)
+                if [[ "$nfs_status" == "active" ]]; then
+                    audit_log "MCP > Stop NFS Helper"
+                    if yes_no "⏹  Stop NFS Helper" \
+                        "Stop xinas-nfs-helper?\n\nThis prevents the MCP server from\nmanaging NFS exports until restarted."; then
+                        op_start "Stop xinas-nfs-helper"
+                        op_run "systemctl stop" systemctl stop "$MCP_NFS_HELPER_SVC" || true
+                        _s=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+                        op_verify "service stopped" test "$_s" != "active" || true
+                        op_end "xinas-nfs-helper: ${_s}" || true
+                        audit_log "MCP > Stop NFS Helper" "$_s"
+                    fi
+                else
+                    audit_log "MCP > Start NFS Helper"
+                    op_start "Start xinas-nfs-helper"
+                    op_run "systemctl start" systemctl start "$MCP_NFS_HELPER_SVC" || true
+                    _s=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+                    op_verify "service active" test "$_s" = "active" || true
+                    op_end "xinas-nfs-helper: ${_s}" || true
+                    audit_log "MCP > Start NFS Helper" "$_s"
+                fi
+                ;;
+            2)
+                audit_log "MCP > Restart NFS Helper"
+                op_start "Restart xinas-nfs-helper"
+                op_run "systemctl restart" systemctl restart "$MCP_NFS_HELPER_SVC" || true
+                _s=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+                op_verify "service active" test "$_s" = "active" || true
+                op_end "xinas-nfs-helper: ${_s}" || true
+                ;;
+            3)
+                audit_log "MCP > View Status"
+                out="$TMP_DIR/mcp_status"
+                {
+                    echo "=== MCP Server Status ==="
+                    echo ""
+
+                    if [[ -f "$MCP_DIST" ]]; then
+                        echo "  [*] MCP server    Ready (stdio)"
+                        echo "      Binary:       $MCP_DIST"
+                    else
+                        echo "  [!] MCP server    NOT BUILT"
+                        echo "      Run: cd /opt/xiNAS/xiNAS-MCP && npm run build"
+                    fi
+                    echo ""
+
+                    _s=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+                    if [[ "$_s" == "active" ]]; then
+                        echo "  [*] NFS Helper    ${_s}"
+                    else
+                        echo "  [!] NFS Helper    ${_s}"
+                    fi
+                    local _sock="/run/xinas-nfs-helper.sock"
+                    if [[ -S "$_sock" ]]; then
+                        echo "      Socket:       $_sock (OK)"
+                    else
+                        echo "      Socket:       $_sock (missing)"
+                    fi
+                    echo ""
+
+                    if [[ -f "$MCP_CONFIG" ]]; then
+                        echo "  [*] Config        $MCP_CONFIG"
+                        local _cid
+                        _cid=$(python3 -c \
+                            "import json; d=json.load(open('$MCP_CONFIG')); \
+                             c=d.get('controller_id',''); \
+                             print(c[:20]+'...' if c else '(not set)')" \
+                            2>/dev/null || echo "(unreadable)")
+                        echo "      Controller:   $_cid"
+                    else
+                        echo "  [!] Config        Missing: $MCP_CONFIG"
+                    fi
+                    echo ""
+
+                    local _auth="/root/.ssh/authorized_keys"
+                    if [[ -f "$_auth" ]]; then
+                        local _n
+                        _n=$(grep -c "^ssh-" "$_auth" 2>/dev/null || echo "0")
+                        echo "  SSH keys for root: $_n key(s) in $_auth"
+                    else
+                        echo "  SSH keys for root: none (authorized_keys missing)"
+                        echo "      Add with: ssh-copy-id root@$(hostname -I | awk '{print $1}')"
+                    fi
+                    echo ""
+
+                    local _mcp_cfg="/root/.claude/mcp_servers.json"
+                    if [[ -f "$_mcp_cfg" ]]; then
+                        echo "  [*] Claude Code   $_mcp_cfg"
+                    else
+                        echo "  [ ] Claude Code   Not configured locally"
+                        local _ip
+                        _ip=$(hostname -I | awk '{print $1}')
+                        echo "      Remote setup:"
+                        echo "        claude mcp add --transport stdio xinas -- ssh -T root@${_ip} xinas-mcp"
+                    fi
+                } > "$out"
+                text_box "🤖 MCP Status" "$out"
+                ;;
+            4)
+                audit_log "MCP > SSH Keys"
+                out="$TMP_DIR/mcp_ssh"
+                {
+                    echo "=== Root SSH Keys (for remote Claude Code) ==="
+                    echo ""
+                    local _auth="/root/.ssh/authorized_keys"
+                    if [[ -f "$_auth" ]]; then
+                        local i=0
+                        while IFS= read -r _line; do
+                            [[ -z "$_line" || "$_line" == \#* ]] && continue
+                            i=$((i + 1))
+                            local _type _comment
+                            _type=$(echo "$_line"  | awk '{print $1}')
+                            _comment=$(echo "$_line" | awk '{print $NF}')
+                            echo "  $i. $_type  ...  $_comment"
+                        done < "$_auth"
+                        [[ $i -eq 0 ]] && echo "  (file exists but contains no keys)"
+                    else
+                        echo "  /root/.ssh/authorized_keys not found."
+                    fi
+                    echo ""
+                    local _ip
+                    _ip=$(hostname -I | awk '{print $1}')
+                    echo "To add your workstation key:"
+                    echo "  ssh-copy-id root@${_ip}"
+                    echo ""
+                    echo "Then on your workstation, register the MCP server:"
+                    echo "  claude mcp add --transport stdio xinas -- ssh -T root@${_ip} xinas-mcp"
+                } > "$out"
+                text_box "🔑 SSH Keys" "$out"
+                ;;
+            5)
+                audit_log "MCP > View Config"
+                if [[ -f "$MCP_CONFIG" ]]; then
+                    text_box "📄 MCP Config" "$MCP_CONFIG"
+                else
+                    msg_box "❌ Not Found" \
+                        "Config not found:\n${MCP_CONFIG}\n\nRe-run the Ansible role to create it:\n  ansible-playbook playbooks/site.yml --tags xinas_mcp,config"
+                fi
+                ;;
+            6)
+                audit_log "MCP > View Audit Log"
+                if [[ -f "$MCP_AUDIT_LOG" ]]; then
+                    text_box "📜 MCP Audit Log" "$MCP_AUDIT_LOG"
+                else
+                    msg_box "📜 Audit Log" \
+                        "No audit log yet.\n\nThe log appears at:\n${MCP_AUDIT_LOG}\n\nafter the first AI tool call."
+                fi
+                ;;
+            0) return ;;
+        esac
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Welcome Screen
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2897,6 +3095,20 @@ main_menu() {
             exporter_text="📈 xiRAID Exporter [Not Installed]"
         fi
 
+        # MCP status indicator
+        local mcp_text="🤖 AI / MCP Server"
+        local _mcp_nfs_state
+        _mcp_nfs_state=$(systemctl is-active "$MCP_NFS_HELPER_SVC" 2>/dev/null || echo "inactive")
+        if [[ -f "$MCP_DIST" ]]; then
+            if [[ "$_mcp_nfs_state" == "active" ]]; then
+                mcp_text="🤖 AI / MCP Server [Ready]"
+            else
+                mcp_text="🤖 AI / MCP Server [NFS Helper Stopped]"
+            fi
+        else
+            mcp_text="🤖 AI / MCP Server [Not Built]"
+        fi
+
         show_header
         echo -e "  ${WHITE}$(hostname)${NC} | $(uptime -p 2>/dev/null | sed 's/up //')"
         if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
@@ -2915,6 +3127,7 @@ main_menu() {
             "7" "⚡ Quick Actions" \
             "8" "🩺 Health Check" \
             "9" "$update_text" \
+            "A" "$mcp_text" \
             "0" "🚪 Exit") || break
 
         case "$choice" in
@@ -2926,6 +3139,7 @@ main_menu() {
             6) audit_log "xiRAID Exporter"; manage_xiraid_exporter ;;
             7) audit_log "Quick Actions"; quick_actions_menu ;;
             8) audit_log "Health Check"; local _hc; _hc=$(_find_healthcheck) && source "$_hc" && healthcheck_menu || msg_box "Error" "healthcheck.sh not found" ;;
+            A) audit_log "MCP Server"; mcp_menu ;;
             9)
                 audit_log "Check for Updates"
                 if [[ "$UPDATE_AVAILABLE" == "true" ]]; then
