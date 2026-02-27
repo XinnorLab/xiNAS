@@ -96,7 +96,7 @@ export async function handleGetStatus(params: z.infer<typeof GetStatusSchema>) {
     withRetry(() => licenseShow(client), 'license_show'),
   ]);
 
-  const services = ['xraid-server', 'nfs-server', 'nfs-kernel-server', 'xinas-nfs-helper']
+  const services = ['xiraid-server', 'nfs-server', 'nfs-kernel-server', 'xinas-nfs-helper']
     .map(s => getServiceState(s));
 
   return {

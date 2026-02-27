@@ -59,7 +59,7 @@ function readCaCert(): Buffer {
   }
   throw new McpToolError(
     ErrorCode.INTERNAL,
-    `xiRAID CA cert not found. Tried: ${candidates.join(', ')}. Is xraid-server.service running?`
+    `xiRAID CA cert not found. Tried: ${candidates.join(', ')}. Is xiraid-server.service running?`
   );
 }
 
