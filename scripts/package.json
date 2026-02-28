@@ -1,0 +1,13 @@
+{
+  "name": "xinas-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "xiNAS automation scripts",
+  "scripts": {
+    "tq-publish": "node tq-publish.mjs"
+  },
+  "dependencies": {
+    "@testquality/sdk": "latest"
+  }
+}
