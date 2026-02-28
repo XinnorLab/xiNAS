@@ -41,6 +41,8 @@ jobs:
         id: generate
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           DIFF=$(cat /tmp/pr-diff.txt)
           SKILL=$(cat /tmp/skill-methodology.md)
@@ -52,8 +54,8 @@ jobs:
             -d "$(jq -n \
               --arg skill "$SKILL" \
               --arg diff "$DIFF" \
-              --arg pr "${{ github.event.pull_request.number }}" \
-              --arg title "${{ github.event.pull_request.title }}" \
+              --arg pr "$PR_NUMBER" \
+              --arg title "$PR_TITLE" \
               '{
                 model: "claude-sonnet-4-5-20250514",
                 max_tokens: 8192,
@@ -80,10 +82,11 @@ jobs:
         if: success()
         env:
           TQ_ACCESS_TOKEN: ${{ secrets.TQ_ACCESS_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           node scripts/tq-publish.mjs \
             --input /tmp/test-design.json \
-            --pr ${{ github.event.pull_request.number }} \
+            --pr "$PR_NUMBER" \
             --project xiNAS
 
       - name: Post PR comment
