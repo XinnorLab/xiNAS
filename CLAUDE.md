@@ -28,6 +28,13 @@ ansible-playbook playbooks/site.yml --tags "nfs_server"  # Run specific role
 ./client_setup.sh        # NFS client configuration (run from client_repo/)
 ```
 
+### Test Design
+```bash
+# Manual: invoke /test-designer in Claude Code conversation
+# Automated: triggers on PR via .github/workflows/test-designer.yml
+# Publish manually: node scripts/tq-publish.mjs --input <json> [--pr <num>] [--dry-run]
+```
+
 ### Configuration Editors
 ```bash
 ./configure_network.sh      # Edit netplan template
