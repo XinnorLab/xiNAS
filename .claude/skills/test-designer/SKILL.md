@@ -140,7 +140,9 @@ Produce TWO outputs:
 Display the test plan and test cases in readable markdown format using the templates.
 
 **B) JSON (for TestQuality publishing):**
-Output a fenced JSON block tagged `test-designer-json`:
+Output a fenced JSON block tagged `test-designer-json`.
+
+**CRITICAL: Use EXACTLY these field names. Do NOT rename, add, or restructure fields. The `tq-publish.mjs` script parses this exact schema and will fail if fields are renamed (e.g., do NOT use `riskAnalysis` instead of `risks`).**
 
 ~~~
 ```test-designer-json
@@ -165,6 +167,7 @@ Output a fenced JSON block tagged `test-designer-json`:
       "preconditions": "...",
       "inputData": "...",
       "steps": [{"step": 1, "action": "...", "expected": "..."}],
+      "expectedResult": "...",
       "observability": "...",
       "references": ["..."]
     }
@@ -172,6 +175,14 @@ Output a fenced JSON block tagged `test-designer-json`:
 }
 ```
 ~~~
+
+**JSON field name rules:**
+- `risks` (not `riskAnalysis`) — each item has `description` and `severity` only
+- `strategy` is a flat string array (not objects)
+- `entryCriteria` and `exitCriteria` are strings (not arrays)
+- `traceability` has exactly `pr`, `commit`, `components`
+- `steps` array items have exactly `step`, `action`, `expected`
+- Do NOT add extra top-level fields like `changeType`, `subsystem`, or `id` to `testPlan`
 
 ## Publishing to TestQuality
 
@@ -191,3 +202,6 @@ After generating output, inform the user:
 | Missing idempotency tests for Ansible | Always include "run twice, verify same result" for role changes |
 | No preconditions specified | Every test case needs explicit starting state |
 | Vague expected results ("should work") | Specify exact observable outcome (log message, return value, file state) |
+| Adding extra fields to JSON schema | Follow the EXACT schema above — `tq-publish.mjs` breaks on unknown fields |
+| Using `riskAnalysis` instead of `risks` | Field name is `risks` with items `{description, severity}` |
+| Making `entryCriteria`/`exitCriteria` arrays | These are strings, not arrays |
