@@ -73,7 +73,8 @@ async function tqFetch(path, method = 'GET', body = null) {
 }
 
 async function findOrCreateProject(name) {
-  const projects = await tqFetch('/api/project');
+  const resp = await tqFetch('/api/project');
+  const projects = Array.isArray(resp) ? resp : (resp.data || []);
   const existing = projects.find(p => p.name === name);
   if (existing) return existing;
   return tqFetch('/api/project', 'POST', { name });
