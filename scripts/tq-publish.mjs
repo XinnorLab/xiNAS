@@ -95,17 +95,18 @@ async function createTestPlan(projectId, plan) {
 }
 
 async function createTestSuite(projectId, planId, name) {
-  return tqFetch('/api/suite', 'POST', {
+  const suite = await tqFetch('/api/suite', 'POST', {
     project_id: projectId,
-    plan_id: planId,
     name,
   });
+  // Link suite to plan
+  await tqFetch(`/api/plan/${planId}/suite/${suite.id}`, 'PUT', {});
+  return suite;
 }
 
 async function createTestCase(projectId, suiteId, tc) {
   const test = await tqFetch('/api/test', 'POST', {
     project_id: projectId,
-    suite_id: suiteId,
     name: `${tc.id}: ${tc.title}`,
     precondition: tc.preconditions,
     description: [
@@ -117,6 +118,9 @@ async function createTestCase(projectId, suiteId, tc) {
       `**References:** ${tc.references?.join(', ')}`,
     ].join('\n'),
   });
+
+  // Link test to suite
+  await tqFetch(`/api/suite/${suiteId}/test/${test.id}`, 'PUT', {});
 
   // Add steps
   for (const step of tc.steps || []) {
