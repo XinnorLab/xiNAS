@@ -80,6 +80,12 @@ async function findOrCreateProject(name) {
   return tqFetch('/api/project', 'POST', { name });
 }
 
+async function findRootSuite(projectId) {
+  const resp = await tqFetch(`/api/suite?project_id=${projectId}`);
+  const suites = Array.isArray(resp) ? resp : (resp.data || []);
+  return suites.find(s => s.is_root) || null;
+}
+
 async function createTestPlan(projectId, plan) {
   return tqFetch('/api/plan', 'POST', {
     project_id: projectId,
@@ -94,10 +100,11 @@ async function createTestPlan(projectId, plan) {
   });
 }
 
-async function createTestSuite(projectId, planId, name) {
+async function createTestSuite(projectId, planId, name, rootSuiteId) {
   const suite = await tqFetch('/api/suite', 'POST', {
     project_id: projectId,
     name,
+    ...(rootSuiteId ? { parent_id: rootSuiteId } : {}),
   });
   // Link suite to plan
   await tqFetch(`/api/plan/${planId}/suite/${suite.id}`, 'PUT', {});
@@ -141,6 +148,9 @@ async function main() {
     const project = await findOrCreateProject(values.project);
     console.log(`Project: ${project.name} (ID: ${project.id})`);
 
+    const rootSuite = await findRootSuite(project.id);
+    if (rootSuite) console.log(`Root suite: ${rootSuite.name} (ID: ${rootSuite.id})`);
+
     const plan = await createTestPlan(project.id, testPlan);
     console.log(`Test Plan created: ${plan.name} (ID: ${plan.id})`);
 
@@ -154,7 +164,7 @@ async function main() {
 
     let totalCreated = 0;
     for (const [component, cases] of Object.entries(byComponent)) {
-      const suite = await createTestSuite(project.id, plan.id, component);
+      const suite = await createTestSuite(project.id, plan.id, component, rootSuite?.id);
       console.log(`  Suite: ${component} (${cases.length} cases)`);
       for (const tc of cases) {
         await createTestCase(project.id, suite.id, tc);
