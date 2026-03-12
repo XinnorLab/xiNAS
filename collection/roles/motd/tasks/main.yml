@@ -111,46 +111,6 @@
   when: not (banner_enabled | bool)
   tags: [motd, banner]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Post-Install Management Menu
-# ═══════════════════════════════════════════════════════════════════════════════
-
-- name: Find xiNAS repository directory
-  ansible.builtin.set_fact:
-    xinas_repo_dir: "{{ playbook_dir | dirname }}"
-  tags: [motd, menu]
-
-- name: Create lib directory for menu library
-  ansible.builtin.file:
-    path: /usr/local/bin/lib
-    state: directory
-    mode: '0755'
-    owner: root
-    group: root
-  when: menu_enabled | bool
-  tags: [motd, menu]
-
-- name: Deploy menu library
-  ansible.builtin.copy:
-    src: "{{ xinas_repo_dir }}/lib/menu_lib.sh"
-    dest: /usr/local/bin/lib/menu_lib.sh
-    mode: '0644'
-    owner: root
-    group: root
-  when: menu_enabled | bool
-  tags: [motd, menu]
-
-- name: Deploy post_install_menu.sh (legacy Bash menu, kept for reference)
-  ansible.builtin.copy:
-    src: "{{ xinas_repo_dir }}/post_install_menu.sh"
-    dest: /usr/local/bin/post_install_menu.sh
-    mode: '0755'
-    owner: root
-    group: root
-  when: menu_enabled | bool
-  tags: [motd, menu]
-  # NOTE: /usr/local/bin/xinas-menu is now managed by the xinas_menu role
-  # (Python/Textual wrapper). Do NOT overwrite it here.
 
 - name: Deploy login menu hint script
   ansible.builtin.template:

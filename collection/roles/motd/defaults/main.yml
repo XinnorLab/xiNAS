@@ -10,11 +10,8 @@ banner_enabled: false
 # Banner refresh interval in minutes (cron schedule)
 banner_refresh_minutes: 5
 
-# Post-login management menu
-menu_enabled: true
-
-# Show menu hint after login
+# Show xinas-menu hint after login
 menu_hint_enabled: true
 
-# Auto-launch menu on login (if true, menu starts automatically)
+# Auto-launch xinas-menu on login
 menu_auto_launch: false
