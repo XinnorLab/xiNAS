@@ -131,35 +131,50 @@ def _copy_text(text: str) -> str:
     """Copy text to clipboard using the best available method.
 
     Priority:
-      1. tmux set-buffer  (works inside tmux without any extra config)
+      1. tmux set-buffer  (inside tmux — no extra config needed)
       2. xclip -selection clipboard
       3. xsel --clipboard --input
       4. wl-copy  (Wayland)
+      5. write to /tmp/xinas_copy.txt as last resort
     Returns a short status string for the notification.
     """
     import os
     import subprocess
+    import tempfile
 
     data = text.encode()
 
     # ── tmux ──────────────────────────────────────────────────────────────
     if os.environ.get("TMUX"):
+        # set-buffer passes text as argument — works on all tmux versions
         try:
-            subprocess.run(
-                ["tmux", "load-buffer", "-"],
-                input=data, check=True, timeout=5,
+            r = subprocess.run(
+                ["tmux", "set-buffer", "--", text],
+                capture_output=True, timeout=5,
             )
-            return "Copied to tmux buffer  (paste with prefix + ])"
+            if r.returncode == 0:
+                return "Copied to tmux buffer  (paste with prefix + ])"
+        except Exception:
+            pass
+        # fallback: load-buffer via stdin (tmux ≥ 2.0)
+        try:
+            r = subprocess.run(
+                ["tmux", "load-buffer", "-"],
+                input=data, capture_output=True, timeout=5,
+            )
+            if r.returncode == 0:
+                return "Copied to tmux buffer  (paste with prefix + ])"
         except Exception:
             pass
 
     # ── xclip ─────────────────────────────────────────────────────────────
     try:
-        subprocess.run(
+        r = subprocess.run(
             ["xclip", "-selection", "clipboard"],
-            input=data, check=True, timeout=5,
+            input=data, capture_output=True, timeout=5,
         )
-        return "Copied to clipboard (xclip)"
+        if r.returncode == 0:
+            return "Copied to clipboard (xclip)"
     except FileNotFoundError:
         pass
     except Exception:
@@ -167,11 +182,12 @@ def _copy_text(text: str) -> str:
 
     # ── xsel ──────────────────────────────────────────────────────────────
     try:
-        subprocess.run(
+        r = subprocess.run(
             ["xsel", "--clipboard", "--input"],
-            input=data, check=True, timeout=5,
+            input=data, capture_output=True, timeout=5,
         )
-        return "Copied to clipboard (xsel)"
+        if r.returncode == 0:
+            return "Copied to clipboard (xsel)"
     except FileNotFoundError:
         pass
     except Exception:
@@ -179,11 +195,23 @@ def _copy_text(text: str) -> str:
 
     # ── wl-copy (Wayland) ─────────────────────────────────────────────────
     try:
-        subprocess.run(["wl-copy"], input=data, check=True, timeout=5)
-        return "Copied to clipboard (wl-copy)"
+        r = subprocess.run(
+            ["wl-copy"], input=data, capture_output=True, timeout=5,
+        )
+        if r.returncode == 0:
+            return "Copied to clipboard (wl-copy)"
     except FileNotFoundError:
         pass
     except Exception:
         pass
 
-    return "Copy failed — install xclip or xsel"
+    # ── last resort: write to temp file ───────────────────────────────────
+    try:
+        path = "/tmp/xinas_copy.txt"
+        with open(path, "w") as f:
+            f.write(text)
+        return f"Saved to {path}  (cat {path} | xclip)"
+    except Exception:
+        pass
+
+    return "Copy failed — no clipboard tool available"
