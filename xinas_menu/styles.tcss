@@ -71,11 +71,34 @@ NavigableMenu {
 ScrollableTextView {
     background: $surface;
     border: solid $primary-darken-1;
-    padding: 0 1;
+    padding: 0 0;
     height: 1fr;
     min-height: 6;
     overflow-y: auto;
     color: $text;
+}
+
+/* TextArea inside ScrollableTextView — match panel theme, no extra chrome */
+ScrollableTextView TextArea {
+    background: $surface;
+    color: $text;
+    border: none;
+    padding: 0 1;
+    height: 1fr;
+}
+
+ScrollableTextView TextArea:focus {
+    border: none;
+}
+
+/* Selection highlight */
+ScrollableTextView TextArea > .text-area--cursor {
+    background: $primary;
+    color: $text;
+}
+
+ScrollableTextView TextArea > .text-area--selection {
+    background: $primary-darken-1;
 }
 
 /* ── ServiceBadge ─────────────────────────────────────────────── */
