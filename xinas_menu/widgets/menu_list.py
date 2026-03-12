@@ -20,11 +20,14 @@ class MenuItem:
     separator: bool = False  # if True, renders as divider line
 
 
-class NavigableMenu(Widget):
+class NavigableMenu(Widget, can_focus=True):
     """Keyboard-navigable menu.
 
     Emits a :class:`Selected` message when the user presses Enter or a
     hotkey that matches a menu item key.
+
+    Must be focused to receive key events — call .focus() or set
+    auto_focus on the parent screen.
     """
 
     BINDINGS: ClassVar[list[Binding]] = [
@@ -32,6 +35,12 @@ class NavigableMenu(Widget):
         Binding("down", "move_down", "Down", show=False),
         Binding("enter", "select", "Select", show=False),
     ]
+
+    DEFAULT_CSS = """
+    NavigableMenu:focus {
+        border: solid $accent;
+    }
+    """
 
     class Selected(Message):
         """Emitted when an item is selected."""
@@ -46,6 +55,11 @@ class NavigableMenu(Widget):
     def __init__(self, items: list[MenuItem], **kwargs) -> None:
         super().__init__(**kwargs)
         self._items = items
+        # Set highlighted to first non-separator item
+        for i, item in enumerate(items):
+            if not item.separator and item.enabled:
+                self.highlighted = i
+                break
 
     @property
     def _navigable(self) -> list[tuple[int, MenuItem]]:
@@ -65,6 +79,9 @@ class NavigableMenu(Widget):
                 if idx == self.highlighted:
                     cls += " --highlight"
                 yield Label(label_text, classes=cls, id=f"menu-item-{idx}")
+
+    def on_mount(self) -> None:
+        self.focus()
 
     def watch_highlighted(self, _old: int, new: int) -> None:
         for i, _item in enumerate(self._items):
