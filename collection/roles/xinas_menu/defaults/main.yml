@@ -1,0 +1,33 @@
+---
+# ── xinas_menu role defaults ──────────────────────────────────────────────────
+
+# Where the xinas_menu Python package is installed
+xinas_menu_package_path: /opt/xiNAS/xinas_menu
+
+# Python virtualenv shared with xinas_mcp and other tooling
+xinas_menu_venv_path: /opt/xiNAS/venv
+
+# Path to the xiNAS-MCP proto directory (used for gRPC stub generation)
+xinas_mcp_proto_path: /opt/xiNAS/xiNAS-MCP/proto/xraid/gRPC/protobuf
+
+# Wrapper script paths
+xinas_menu_wrapper_path: /usr/local/bin/xinas-menu
+xinas_setup_wrapper_path: /usr/local/bin/xinas-setup
+
+# Source repo root (used to sync xinas_menu/ package)
+xinas_repo_path: /opt/xiNAS
+
+# Log directory
+xinas_log_dir: /var/log/xinas
+
+# Proto files to compile into gRPC stubs
+xinas_menu_proto_files:
+  - service_xraid.proto
+  - message_raid.proto
+  - message_pool.proto
+  - message_drive.proto
+  - message_license.proto
+  - message_config.proto
+  - message_log.proto
+  - message_mail.proto
+  - message_settings.proto

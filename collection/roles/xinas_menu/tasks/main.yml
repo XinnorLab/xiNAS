@@ -1,0 +1,147 @@
+---
+# ─── 1. Python venv prerequisites ─────────────────────────────────────────────
+
+- name: Install python3-venv apt package
+  ansible.builtin.apt:
+    name: python3-venv
+    state: present
+    update_cache: false
+  tags: [xinas_menu, python]
+
+# ─── 2. Create or update virtualenv ───────────────────────────────────────────
+
+- name: Create Python virtualenv at {{ xinas_menu_venv_path }}
+  ansible.builtin.command:
+    cmd: python3 -m venv {{ xinas_menu_venv_path }}
+    creates: "{{ xinas_menu_venv_path }}/bin/python"
+  tags: [xinas_menu, python]
+
+- name: Install pip packages into venv
+  ansible.builtin.pip:
+    name:
+      - "textual>=0.70.0"
+      - "grpcio>=1.60.0"
+      - "grpcio-tools>=1.60.0"
+      - "protobuf>=4.25.0"
+      - "pyyaml>=6.0"
+    virtualenv: "{{ xinas_menu_venv_path }}"
+    state: present
+  tags: [xinas_menu, python]
+
+# ─── 3. Sync xinas_menu package ───────────────────────────────────────────────
+
+- name: Sync xinas_menu Python package to {{ xinas_menu_package_path }}
+  ansible.builtin.synchronize:
+    src: "{{ xinas_repo_path }}/xinas_menu/"
+    dest: "{{ xinas_menu_package_path }}/"
+    delete: true
+    recursive: true
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+      - "--exclude=api/proto/*.py"   # don't overwrite generated stubs
+  tags: [xinas_menu, sync]
+
+# ─── 4. Generate gRPC stubs ───────────────────────────────────────────────────
+
+- name: Create api/proto directory
+  ansible.builtin.file:
+    path: "{{ xinas_menu_package_path }}/api/proto"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [xinas_menu, grpc]
+
+- name: Generate gRPC Python stubs
+  ansible.builtin.command:
+    cmd: >
+      {{ xinas_menu_venv_path }}/bin/python -m grpc_tools.protoc
+      --proto_path={{ xinas_mcp_proto_path }}
+      --python_out={{ xinas_menu_package_path }}/api/proto
+      --grpc_python_out={{ xinas_menu_package_path }}/api/proto
+      {{ item }}
+    chdir: "{{ xinas_mcp_proto_path }}"
+  loop: "{{ xinas_menu_proto_files }}"
+  tags: [xinas_menu, grpc]
+
+- name: Fix generated stub imports (relative → package-absolute)
+  ansible.builtin.replace:
+    path: "{{ xinas_menu_package_path }}/api/proto/{{ item | regex_replace('\\.proto$', '_pb2_grpc.py') }}"
+    regexp: '^import (service_xraid|message_[a-z]+)_pb2'
+    replace: 'from xinas_menu.api.proto import \1_pb2'
+  loop: "{{ xinas_menu_proto_files }}"
+  failed_when: false   # grpc stubs may not exist for all protos
+  tags: [xinas_menu, grpc]
+
+- name: Write api/proto/__init__.py
+  ansible.builtin.copy:
+    dest: "{{ xinas_menu_package_path }}/api/proto/__init__.py"
+    content: |
+      """Generated gRPC stubs — do not edit manually."""
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [xinas_menu, grpc]
+
+# ─── 5. Wrapper scripts ────────────────────────────────────────────────────────
+
+- name: Write xinas-menu wrapper script
+  ansible.builtin.copy:
+    dest: "{{ xinas_menu_wrapper_path }}"
+    content: |
+      #!/bin/sh
+      # xiNAS Management Console wrapper
+      # Managed by xinas_menu Ansible role — do not edit manually
+      PYTHONPATH={{ xinas_menu_package_path | dirname }} \
+        exec {{ xinas_menu_venv_path }}/bin/python -m xinas_menu "$@"
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [xinas_menu, wrapper]
+
+- name: Write xinas-setup wrapper script
+  ansible.builtin.copy:
+    dest: "{{ xinas_setup_wrapper_path }}"
+    content: |
+      #!/bin/sh
+      # xiNAS Setup (provisioning) wrapper
+      # Managed by xinas_menu Ansible role — do not edit manually
+      PYTHONPATH={{ xinas_menu_package_path | dirname }} \
+        exec {{ xinas_menu_venv_path }}/bin/python -m xinas_menu --setup "$@"
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [xinas_menu, wrapper]
+
+# ─── 6. Log directory ─────────────────────────────────────────────────────────
+
+- name: Ensure log directory exists
+  ansible.builtin.file:
+    path: "{{ xinas_log_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+  tags: [xinas_menu, logs]
+
+- name: Ensure healthcheck log subdirectory exists
+  ansible.builtin.file:
+    path: "{{ xinas_log_dir }}/healthcheck"
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+  tags: [xinas_menu, logs]
+
+# ─── 7. Smoke test ────────────────────────────────────────────────────────────
+
+- name: Smoke-test xinas_menu import
+  ansible.builtin.command:
+    cmd: >
+      {{ xinas_menu_venv_path }}/bin/python -c
+      "from xinas_menu.api.grpc_client import XiRAIDClient; print('xinas_menu OK')"
+  environment:
+    PYTHONPATH: "{{ xinas_menu_package_path | dirname }}"
+  changed_when: false
+  tags: [xinas_menu, smoke_test]
