@@ -140,24 +140,17 @@
   when: menu_enabled | bool
   tags: [motd, menu]
 
-- name: Deploy xiNAS management menu
+- name: Deploy post_install_menu.sh (legacy Bash menu, kept for reference)
   ansible.builtin.copy:
     src: "{{ xinas_repo_dir }}/post_install_menu.sh"
-    dest: /usr/local/bin/xinas-menu
+    dest: /usr/local/bin/post_install_menu.sh
     mode: '0755'
     owner: root
     group: root
   when: menu_enabled | bool
   tags: [motd, menu]
-
-- name: Create symlink for post_install_menu.sh
-  ansible.builtin.file:
-    src: /usr/local/bin/xinas-menu
-    dest: /usr/local/bin/post_install_menu.sh
-    state: link
-  when: menu_enabled | bool
-  failed_when: false
-  tags: [motd, menu]
+  # NOTE: /usr/local/bin/xinas-menu is now managed by the xinas_menu role
+  # (Python/Textual wrapper). Do NOT overwrite it here.
 
 - name: Deploy login menu hint script
   ansible.builtin.template:
