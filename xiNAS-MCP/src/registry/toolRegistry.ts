@@ -7,7 +7,7 @@ import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { McpToolError } from '../types/common.js';
+import { McpToolError, type Role } from '../types/common.js';
 import { checkPermission, buildContext } from '../middleware/rbac.js';
 import { AuditLogger } from '../middleware/audit.js';
 import { loadConfig } from '../config/serverConfig.js';
@@ -118,7 +118,13 @@ const TOOLS: ToolDef[] = [
   { name: 'job.cancel', description: 'Cancel a running job', schema: JobCancelSchema, handler: handleJobCancel },
 ];
 
-export function registerAllTools(server: Server): void {
+/**
+ * Register all tools on a Server instance.
+ * @param defaultRole Role to use when no Bearer token is present in the request.
+ *                    stdio servers pass 'admin'; HTTP session servers pass the
+ *                    role resolved from the connection's Bearer token.
+ */
+export function registerAllTools(server: Server, defaultRole?: Role): void {
   // List tools handler
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: TOOLS.map(t => ({
@@ -141,13 +147,13 @@ export function registerAllTools(server: Server): void {
       };
     }
 
-    // Build call context (use 'admin' role for local/unconfigured access, token lookup otherwise)
+    // Build call context. Per-request _meta token takes priority, then defaultRole.
     const authHeader = (request as { params: { arguments?: unknown; _meta?: { authorization?: string } } })
       .params._meta?.authorization;
     const token = authHeader?.replace('Bearer ', '');
-    const role = token
+    const role: Role = token
       ? (config.tokens[token] ?? 'viewer')
-      : 'admin'; // Local stdio = admin
+      : (defaultRole ?? 'admin');
     const ctx = buildContext(token, role);
 
     const startMs = Date.now();

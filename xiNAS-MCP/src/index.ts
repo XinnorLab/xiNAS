@@ -1,6 +1,6 @@
 /**
  * xiNAS-MCP entry point.
- * Starts the MCP server on stdio (or SSE if configured).
+ * Starts the MCP server on stdio, with optional SSE and Streamable HTTP transports.
  */
 
 import { startMcpServer } from './server/mcpServer.js';

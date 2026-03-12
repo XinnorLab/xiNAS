@@ -12,6 +12,12 @@ import type { Role } from '../types/common.js';
 const CONFIG_PATH = '/etc/xinas-mcp/config.json';
 const CONFIG_DIR = '/etc/xinas-mcp';
 
+export interface TlsConfig {
+  cert: string;    // Path to server certificate
+  key: string;     // Path to server private key
+  ca?: string;     // Path to CA cert for client verification (enables mTLS)
+}
+
 export interface ServerConfig {
   controller_id: string;
   nfs_helper_socket: string;
@@ -20,6 +26,9 @@ export interface ServerConfig {
   tokens: Record<string, Role>;
   sse_enabled: boolean;
   sse_port?: number;
+  http_enabled: boolean;
+  http_port?: number;
+  tls?: TlsConfig;
 }
 
 const DEFAULTS: Omit<ServerConfig, 'controller_id'> = {
@@ -28,6 +37,7 @@ const DEFAULTS: Omit<ServerConfig, 'controller_id'> = {
   audit_log_path: '/var/log/xinas/mcp-audit.jsonl',
   tokens: {},
   sse_enabled: false,
+  http_enabled: false,
 };
 
 let _config: ServerConfig | null = null;
@@ -53,6 +63,9 @@ export function loadConfig(): ServerConfig {
     tokens: raw.tokens ?? DEFAULTS.tokens,
     sse_enabled: raw.sse_enabled ?? DEFAULTS.sse_enabled,
     ...(raw.sse_port !== undefined ? { sse_port: raw.sse_port } : {}),
+    http_enabled: raw.http_enabled ?? DEFAULTS.http_enabled,
+    ...(raw.http_port !== undefined ? { http_port: raw.http_port } : {}),
+    ...(raw.tls ? { tls: raw.tls } : {}),
   };
 
   // Persist if we generated a new controller_id

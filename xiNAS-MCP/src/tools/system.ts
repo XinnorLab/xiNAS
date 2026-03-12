@@ -41,13 +41,20 @@ export const GetPerformanceSchema = z.object({
 
 export function handleGetServerInfo(_params: z.infer<typeof GetServerInfoSchema>) {
   const config = loadConfig();
+  const port = config.http_port ?? config.sse_port ?? 8080;
   return {
     name: 'xinas-mcp',
     version: '0.1.0',
     controller_id: config.controller_id,
     supported_namespaces: ['system', 'network', 'health', 'disk', 'raid', 'share', 'auth', 'job'],
-    transport: 'stdio',
-    sse_enabled: config.sse_enabled,
+    transports: {
+      stdio: true,
+      sse: config.sse_enabled,
+      streamable_http: config.http_enabled,
+      ...(config.sse_enabled || config.http_enabled ? { port } : {}),
+      tls: !!config.tls,
+      mtls: !!(config.tls?.ca),
+    },
   };
 }
 
