@@ -196,12 +196,15 @@ def _collect_system_status() -> str:
     if shutil.which("xinas-status"):
         try:
             r = subprocess.run(
-                ["xinas-status"],
+                "xinas-status",
+                shell=True,
                 capture_output=True, text=True, timeout=15,
                 env={**__import__("os").environ, "TERM": "dumb"},
             )
             raw = r.stdout or r.stderr or ""
-            return _ANSI.sub("", raw)
+            cleaned = _ANSI.sub("", raw)
+            if cleaned.strip():
+                return cleaned
         except Exception:
             pass
 
