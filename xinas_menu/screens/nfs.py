@@ -371,7 +371,9 @@ def _format_exports(data: Any) -> str:
                     with open(info_file) as f:
                         for ln in f:
                             if "address:" in ln:
-                                ip = ln.split("address:")[1].strip().split()[0]
+                                raw = ln.split("address:")[1].strip().strip('"').strip("'")
+                                # strip port (last :N component)
+                                ip = raw.rsplit(":", 1)[0] if ":" in raw else raw
                                 if ip and ip not in clients:
                                     clients.append(ip)
                 except Exception:
