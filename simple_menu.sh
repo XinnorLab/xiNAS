@@ -2,7 +2,7 @@
 # Simplified startup menu for xiNAS
 # Uses colored console menus instead of whiptail
 set -euo pipefail
-XINAS_SETUP_VERSION="1.1.0"
+XINAS_SETUP_VERSION="2.0.0"
 TMP_DIR="$(mktemp -d)"
 REPO_DIR="$(pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
