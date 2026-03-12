@@ -23,6 +23,7 @@ class XiNASApp(App):
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
+        Binding("ctrl+y", "copy_content", "Copy", show=False),
         Binding("u", "check_update", "Update", show=False),
         Binding("?", "help", "Help", show=False),
     ]
@@ -97,6 +98,19 @@ class XiNASApp(App):
             await self.push_screen_wait(
                 ConfirmDialog(f"Update failed: {msg}", "Update Error")
             )
+
+    def action_copy_content(self) -> None:
+        """Copy the visible content panel text to clipboard (Ctrl+Y)."""
+        from xinas_menu.widgets.text_view import ScrollableTextView
+        try:
+            screen = self.screen
+            view = screen.query_one(ScrollableTextView)
+            text = view.get_text()
+            if text:
+                self.copy_to_clipboard(text)
+                self.notify("Copied to clipboard", timeout=2)
+        except Exception:
+            pass
 
     def action_help(self) -> None:
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
