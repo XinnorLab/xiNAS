@@ -82,9 +82,9 @@ class QuickActionsScreen(Screen):
         # Append gRPC info when available (may take a moment)
         ok, info, err = await self.app.grpc.get_server_info()
         if ok:
-            view.append(f"\n[bold]xiRAID Server Info[/bold]\n{_format_server_info(info)}")
+            view.append(f"\n  xiRAID: connected\n{_format_server_info(info)}")
         else:
-            view.append(f"\n[yellow]xiRAID: {err[:80]}[/yellow]")
+            view.append(f"\n  xiRAID: {_grpc_short_error(err)}")
 
     async def _restart_nfs(self) -> None:
         confirmed = await self.app.push_screen_wait(
@@ -198,7 +198,33 @@ def _format_server_info(info) -> str:
             lic = info.get("license")
             if lic:
                 return f"  License: {lic}"
-            return "  Connected"
+            return ""
         return f"  {info}"
     except Exception:
-        return "  Connected"
+        return ""
+
+
+def _grpc_short_error(err: str) -> str:
+    """Extract a human-readable one-liner from a verbose gRPC error string."""
+    import re
+    if not err:
+        return "not connected"
+    # StatusCode.UNAVAILABLE / Connection refused
+    if "UNAVAILABLE" in err or "Connection refused" in err or "failed to connect" in err.lower():
+        return "not connected  (xiRAID service unavailable)"
+    # StatusCode.UNAUTHENTICATED
+    if "UNAUTHENTICATED" in err:
+        return "authentication failed"
+    # StatusCode.DEADLINE_EXCEEDED
+    if "DEADLINE_EXCEEDED" in err or "Deadline" in err:
+        return "timed out"
+    # stubs not installed
+    if "stubs not available" in err:
+        return err
+    # Generic: extract 'details = "..."' if present
+    m = re.search(r'details\s*=\s*["\']([^"\']{1,120})', err)
+    if m:
+        return m.group(1)
+    # Fallback: first line, capped
+    first_line = err.splitlines()[0] if err else err
+    return first_line[:100] if len(first_line) > 100 else first_line
