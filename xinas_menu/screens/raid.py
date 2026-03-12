@@ -1,15 +1,16 @@
 """RAIDScreen — Quick Overview, Extended Details, Physical Drives, Spare Pools."""
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 from typing import Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Label, Footer
+from textual import work
 
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -32,27 +33,29 @@ class RAIDScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Label("  ── RAID Management ──", id="screen-title")
-        yield NavigableMenu(_MENU, id="raid-nav")
-        yield ScrollableTextView(id="raid-content")
+        yield Label("  RAID Management", id="screen-title")
+        with Horizontal(id="split-layout"):
+            yield NavigableMenu(_MENU, id="raid-nav")
+            yield ScrollableTextView(id="raid-content")
         yield Footer()
 
     def on_mount(self) -> None:
-        asyncio.create_task(self._show_quick())
+        self._show_quick()
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            asyncio.create_task(self._show_quick())
+            self._show_quick()
         elif key == "2":
-            asyncio.create_task(self._show_extended())
+            self._show_extended()
         elif key == "3":
-            asyncio.create_task(self._show_drives())
+            self._show_drives()
         elif key == "4":
-            asyncio.create_task(self._show_pools())
+            self._show_pools()
 
+    @work(exclusive=True)
     async def _show_quick(self) -> None:
         view = self.query_one("#raid-content", ScrollableTextView)
         view.set_content("Loading RAID arrays…")
@@ -62,6 +65,7 @@ class RAIDScreen(Screen):
             else f"Could not load RAID info: {_grpc_short_error(err)}"
         )
 
+    @work(exclusive=True)
     async def _show_extended(self) -> None:
         view = self.query_one("#raid-content", ScrollableTextView)
         view.set_content("Loading RAID arrays (extended)…")
@@ -71,6 +75,7 @@ class RAIDScreen(Screen):
             else f"Could not load RAID info: {_grpc_short_error(err)}"
         )
 
+    @work(exclusive=True)
     async def _show_drives(self) -> None:
         view = self.query_one("#raid-content", ScrollableTextView)
         view.set_content("Loading physical drives…")
@@ -80,6 +85,7 @@ class RAIDScreen(Screen):
             else f"Could not load drive info: {_grpc_short_error(err)}"
         )
 
+    @work(exclusive=True)
     async def _show_pools(self) -> None:
         view = self.query_one("#raid-content", ScrollableTextView)
         view.set_content("Loading spare pools…")
@@ -94,17 +100,26 @@ class RAIDScreen(Screen):
 
 _W = 70  # inner box width (between borders)
 
+# ANSI color codes for RAID display
+_GRN, _YLW, _RED, _CYN, _BLD, _DIM, _NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _visible_len(s: str) -> int:
+    """Length of string after stripping ANSI escape codes."""
+    return len(_ANSI_RE.sub("", s))
+
 
 def _box_line(content: str = "", w: int = _W) -> str:
-    pad = w - len(content)
+    pad = w - _visible_len(content)
     if pad < 0:
         content = content[:w]
         pad = 0
-    return f"| {content}{' ' * pad}|"
+    return f"{_DIM}|{_NC} {content}{' ' * pad}{_DIM}|{_NC}"
 
 
 def _box_sep(char: str = "-", w: int = _W) -> str:
-    return f"+{char * (w + 1)}+"
+    return f"{_DIM}+{char * (w + 1)}+{_NC}"
 
 
 def _progress_bar(percent: int, width: int = 28) -> str:
@@ -116,14 +131,25 @@ def _progress_bar(percent: int, width: int = 28) -> str:
 def _state_icon(state: str) -> str:
     s = state.lower()
     if s in ("online", "initialized"):
-        return "*"
+        return f"{_GRN}*{_NC}"
     if s in ("initing", "rebuilding"):
-        return "~"
+        return f"{_YLW}~{_NC}"
     if s == "degraded":
-        return "!"
+        return f"{_YLW}!{_NC}"
     if s in ("offline", "failed"):
-        return "x"
+        return f"{_RED}x{_NC}"
     return "o"
+
+
+def _state_color(state: str) -> str:
+    s = state.lower()
+    if s in ("online", "initialized"):
+        return _GRN
+    if s in ("initing", "rebuilding", "degraded"):
+        return _YLW
+    if s in ("offline", "failed"):
+        return _RED
+    return ""
 
 
 def _format_state(state_list: Any) -> str:
@@ -133,7 +159,7 @@ def _format_state(state_list: Any) -> str:
     states = [s for s in states if s]
     if not states:
         return "unknown"
-    return " ".join(f"{_state_icon(s)} {s}" for s in states)
+    return " ".join(f"{_state_icon(s)} {_state_color(s)}{s}{_NC}" for s in states)
 
 
 def _count_states(devices: list) -> tuple[int, int, int]:
@@ -170,12 +196,12 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
     title = "RAID ARRAYS — EXTENDED" if extended else "RAID ARRAYS — QUICK OVERVIEW"
     lines.append(_box_sep("="))
     pad = (_W - len(title)) // 2
-    lines.append(f"|{' ' * pad}{title}{' ' * (_W - pad - len(title) + 1)}|")
+    lines.append(f"{_DIM}|{_NC}{' ' * pad}{_BLD}{_CYN}{title}{_NC}{' ' * (_W - pad - len(title) + 1)}{_DIM}|{_NC}")
     lines.append(_box_sep("="))
     lines.append("")
 
     if not arrays:
-        lines.append("  (no RAID arrays configured)")
+        lines.append(f"  {_DIM}(no RAID arrays configured){_NC}")
         return "\n".join(lines)
 
     for name, arr in arrays.items():
@@ -196,39 +222,39 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
         state_str = _format_state(state)
         is_initing = any((s or "").lower() == "initing" for s in (state or []))
 
-        dev_parts = [f"{total} total", f"{online} online"]
+        dev_parts = [f"{total} total", f"{_GRN}{online} online{_NC}"]
         if degraded:
-            dev_parts.append(f"{degraded} degraded")
+            dev_parts.append(f"{_YLW}{degraded} degraded{_NC}")
         if offline:
-            dev_parts.append(f"{offline} offline")
-        dev_summary = " | ".join(dev_parts)
+            dev_parts.append(f"{_RED}{offline} offline{_NC}")
+        dev_summary = f" {_DIM}|{_NC} ".join(dev_parts)
 
         lines.append(_box_sep("-"))
-        lines.append(_box_line(f" Array: {name.upper()}"))
+        lines.append(_box_line(f" {_BLD}Array: {name.upper()}{_NC}"))
         lines.append(_box_sep())
         lines.append(_box_line())
-        lines.append(_box_line(f"  RAID Level    |  RAID-{level}"))
-        lines.append(_box_line(f"  Capacity      |  {size}"))
-        lines.append(_box_line(f"  Status        |  {state_str}"))
-        lines.append(_box_line(f"  Devices       |  {dev_summary}"))
-        lines.append(_box_line(f"  Strip Size    |  {strip_size} KB"))
-        lines.append(_box_line(f"  Spare Pool    |  {sparepool}"))
+        lines.append(_box_line(f"  {_DIM}RAID Level{_NC}    |  RAID-{level}"))
+        lines.append(_box_line(f"  {_DIM}Capacity{_NC}      |  {size}"))
+        lines.append(_box_line(f"  {_DIM}Status{_NC}        |  {state_str}"))
+        lines.append(_box_line(f"  {_DIM}Devices{_NC}       |  {dev_summary}"))
+        lines.append(_box_line(f"  {_DIM}Strip Size{_NC}    |  {strip_size} KB"))
+        lines.append(_box_line(f"  {_DIM}Spare Pool{_NC}    |  {sparepool}"))
 
         if init_progress is not None and is_initing:
             lines.append(_box_line())
-            lines.append(_box_line(f"  ~ Initializing: {_progress_bar(init_progress)}"))
+            lines.append(_box_line(f"  {_YLW}~ Initializing: {_progress_bar(init_progress)}{_NC}"))
 
         if extended:
             lines.append(_box_line())
-            lines.append(_box_line(f"  Memory Usage  |  {memory_mb} MB"))
-            lines.append(_box_line(f"  Block Size    |  {block_size} bytes"))
+            lines.append(_box_line(f"  {_DIM}Memory Usage{_NC}  |  {memory_mb} MB"))
+            lines.append(_box_line(f"  {_DIM}Block Size{_NC}    |  {block_size} bytes"))
 
             health = arr.get("devices_health") or []
             wear = arr.get("devices_wear") or []
             if health or wear:
                 lines.append(_box_line())
                 lines.append(_box_sep())
-                lines.append(_box_line(" DEVICE HEALTH & WEAR"))
+                lines.append(_box_line(f" {_BLD}{_CYN}DEVICE HEALTH & WEAR{_NC}"))
                 lines.append(_box_sep())
                 for i, dev in enumerate(devices):
                     dev_path = (dev[1] if isinstance(dev, list) and len(dev) > 1
@@ -238,7 +264,8 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
                     h = health[i] if i < len(health) else "N/A"
                     w = wear[i] if i < len(wear) else "N/A"
                     icon = _state_icon(dev_state)
-                    lines.append(_box_line(f"  {icon} {dev_path:<16} Health: {h:<8} Wear: {w}"))
+                    sc = _state_color(dev_state)
+                    lines.append(_box_line(f"  {icon} {sc}{dev_path:<16}{_NC} {_DIM}Health:{_NC} {h:<8} {_DIM}Wear:{_NC} {w}"))
 
         lines.append(_box_line())
         lines.append(_box_sep("-"))
@@ -252,7 +279,8 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
         )
     )
     lines.append(_box_sep("="))
-    lines.append(f"  Summary: {len(arrays)} array(s), {healthy} healthy")
+    hc = _GRN if healthy == len(arrays) else _YLW
+    lines.append(f"  Summary: {len(arrays)} array(s), {hc}{healthy} healthy{_NC}")
     lines.append(_box_sep("="))
     return "\n".join(lines)
 
@@ -301,12 +329,12 @@ def _format_physical_drives(data: Any) -> str:
     lines: list[str] = []
 
     W2 = 75
-    lines.append("PHYSICAL DRIVES")
-    lines.append("=" * W2)
+    lines.append(f"{_BLD}{_CYN}PHYSICAL DRIVES{_NC}")
+    lines.append(f"{_DIM}{'=' * W2}{_NC}")
     lines.append("")
 
     if not arrays:
-        lines.append("  (no RAID arrays configured)")
+        lines.append(f"  {_DIM}(no RAID arrays configured){_NC}")
         return "\n".join(lines)
 
     all_drives: list[dict] = []
@@ -342,16 +370,17 @@ def _format_physical_drives(data: Any) -> str:
     for arr_name, drives in grouped.items():
         online = sum(1 for d in drives if d["state"].lower() == "online")
         total = len(drives)
-        lines.append(f"Array: {arr_name.upper()}  ({online}/{total} online)")
-        lines.append("-" * W2)
-        lines.append(f"  {'Device':<16}{'Size':<10}{'State':<12}{'NUMA':<6}{'Health':<9}{'Wear':<8}Serial")
-        lines.append("-" * W2)
+        lines.append(f"{_BLD}Array: {arr_name.upper()}{_NC}  ({_GRN}{online}{_NC}/{total} online)")
+        lines.append(f"{_DIM}{'-' * W2}{_NC}")
+        lines.append(f"  {_DIM}{'Device':<16}{'Size':<10}{'State':<12}{'NUMA':<6}{'Health':<9}{'Wear':<8}Serial{_NC}")
+        lines.append(f"{_DIM}{'-' * W2}{_NC}")
         for d in drives:
             short = d["path"].replace("/dev/", "")
             icon = _state_icon(d["state"])
+            sc = _state_color(d["state"])
             serial = str(d["serial"])[:16]
             lines.append(
-                f"  {icon} {short:<14}{d['size']:<10}{d['state']:<12}"
+                f"  {icon} {short:<14}{d['size']:<10}{sc}{d['state']:<12}{_NC}"
                 f"{d['numa']:<6}{str(d['health']):<9}{str(d['wear']):<8}{serial}"
             )
         lines.append("")
@@ -359,10 +388,10 @@ def _format_physical_drives(data: Any) -> str:
     total_drives = len(all_drives)
     online_drives = sum(1 for d in all_drives if d["state"].lower() == "online")
     numa_nodes = sorted(set(d["numa"] for d in all_drives if d["numa"] != "-"))
-    lines.append("=" * W2)
-    summary = f"  Total: {total_drives} drive(s), {online_drives} online"
+    lines.append(f"{_DIM}{'=' * W2}{_NC}")
+    summary = f"  Total: {total_drives} drive(s), {_GRN}{online_drives} online{_NC}"
     if numa_nodes:
-        summary += f"  |  NUMA nodes: {', '.join(numa_nodes)}"
+        summary += f"  {_DIM}|{_NC}  NUMA nodes: {', '.join(numa_nodes)}"
     lines.append(summary)
     return "\n".join(lines)
 
@@ -381,7 +410,7 @@ def _format_spare_pools(data: Any) -> str:
 
     lines.append(bs("="))
     pad = (W3 - len("SPARE POOLS")) // 2
-    lines.append(f"|{' ' * pad}SPARE POOLS{' ' * (W3 - pad - len('SPARE POOLS') + 1)}|")
+    lines.append(f"{_DIM}|{_NC}{' ' * pad}{_BLD}{_CYN}SPARE POOLS{_NC}{' ' * (W3 - pad - len('SPARE POOLS') + 1)}{_DIM}|{_NC}")
     lines.append(bs("="))
     lines.append("")
 

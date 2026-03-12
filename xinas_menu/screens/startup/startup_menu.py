@@ -49,7 +49,7 @@ class StartupApp(App):
 
     async def _apply_update(self) -> None:
         import asyncio
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, msg = await loop.run_in_executor(None, self._update_checker.apply_update)
         if ok:
             self.audit.log("system.update", "git pull succeeded — restarting")

@@ -28,14 +28,12 @@ class ConfirmDialog(ModalScreen[bool]):
         self._title = title
 
     def compose(self) -> ComposeResult:
-        with self.app.compose_context():
-            pass
         from textual.containers import Vertical, Horizontal
         with Vertical(id="dialog-container"):
             yield Label(self._title, id="dialog-title")
             yield Label(self._message, id="dialog-body")
             with Horizontal(id="dialog-buttons"):
-                yield Button("Yes [y]", variant="error", id="btn-yes")
+                yield Button("Yes [y]", variant="error", id="btn-yes", classes="dialog-btn")
                 yield Button("No [n]", variant="primary", id="btn-no", classes="dialog-btn")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

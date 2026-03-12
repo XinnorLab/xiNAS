@@ -88,7 +88,7 @@ class AdvancedScreen(Screen):
             InputDialog("Git remote URL (blank to show current):", "Git Config")
         )
         if not url:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             out = await loop.run_in_executor(
                 None,
                 lambda: subprocess.run(
@@ -99,7 +99,7 @@ class AdvancedScreen(Screen):
             view = self.query_one("#adv-content", ScrollableTextView)
             view.set_content(out or "[dim]No remotes.[/dim]")
         else:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             r = await loop.run_in_executor(
                 None,
                 lambda: subprocess.run(

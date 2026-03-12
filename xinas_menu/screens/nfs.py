@@ -6,9 +6,10 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label
-from textual.widgets import Footer
+from textual.widgets import Label, Footer
+from textual import work
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -35,16 +36,18 @@ class NFSScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Label("  ── NFS Access Rights ──", id="screen-title")
-        yield NavigableMenu(_MENU, id="nfs-nav")
-        yield ScrollableTextView(id="nfs-content")
+        yield Label("  NFS Access Rights", id="screen-title")
+        with Horizontal(id="split-layout"):
+            yield NavigableMenu(_MENU, id="nfs-nav")
+            yield ScrollableTextView(id="nfs-content")
         yield Footer()
 
     def on_mount(self) -> None:
-        asyncio.create_task(self._load_exports())
+        self._load_exports()
 
+    @work(exclusive=True)
     async def _load_exports(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, data, err = await loop.run_in_executor(None, self.app.nfs.list_exports)
         view = self.query_one("#nfs-content", ScrollableTextView)
         if ok:
@@ -57,20 +60,21 @@ class NFSScreen(Screen):
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            asyncio.create_task(self._load_exports())
+            self._load_exports()
         elif key == "2":
-            asyncio.create_task(self._add_share_wizard())
+            self._add_share_wizard()
         elif key == "3":
-            asyncio.create_task(self._edit_share())
+            self._edit_share()
         elif key == "4":
-            asyncio.create_task(self._remove_share())
+            self._remove_share()
         elif key == "5":
-            asyncio.create_task(self._show_sessions())
+            self._show_sessions()
         elif key == "6":
-            asyncio.create_task(self._configure_idmapd())
+            self._configure_idmapd()
 
     # ── Wizard: Add Share (5 steps) ─────────────────────────────────────────
 
+    @work(exclusive=True)
     async def _add_share_wizard(self) -> None:
         """5-step share creation wizard."""
         # Step 1: Export path
@@ -120,7 +124,7 @@ class NFSScreen(Screen):
         if not confirmed:
             return
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, _, err = await loop.run_in_executor(
             None,
             lambda: self.app.nfs.add_export(
@@ -133,6 +137,7 @@ class NFSScreen(Screen):
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
 
+    @work(exclusive=True)
     async def _edit_share(self) -> None:
         path = await self.app.push_screen_wait(
             InputDialog("Export path to edit:", "Edit Share")
@@ -153,7 +158,7 @@ class NFSScreen(Screen):
         if not patch:
             return
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, _, err = await loop.run_in_executor(
             None, lambda: self.app.nfs.update_export(path, patch)
         )
@@ -163,6 +168,7 @@ class NFSScreen(Screen):
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
 
+    @work(exclusive=True)
     async def _remove_share(self) -> None:
         path = await self.app.push_screen_wait(
             InputDialog("Export path to remove:", "Remove Share")
@@ -174,7 +180,7 @@ class NFSScreen(Screen):
         )
         if not confirmed:
             return
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, _, err = await loop.run_in_executor(
             None, lambda: self.app.nfs.remove_export(path)
         )
@@ -184,8 +190,9 @@ class NFSScreen(Screen):
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
 
+    @work(exclusive=True)
     async def _show_sessions(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, data, err = await loop.run_in_executor(None, self.app.nfs.list_sessions)
         view = self.query_one("#nfs-content", ScrollableTextView)
         if ok:
@@ -193,6 +200,7 @@ class NFSScreen(Screen):
         else:
             view.set_content(f"[red]{err}[/red]")
 
+    @work(exclusive=True)
     async def _configure_idmapd(self) -> None:
         domain = await self.app.push_screen_wait(
             InputDialog("NFS4 idmapd domain:", "Configure idmapd Domain",
@@ -201,7 +209,7 @@ class NFSScreen(Screen):
         if not domain:
             return
         from xinas_menu.utils.subprocess_utils import run_cmd
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _set_domain():
             import re
@@ -229,6 +237,7 @@ def _format_exports(data: Any) -> str:
     import os
     import subprocess
 
+    GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
     W = 65
     lines: list[str] = []
 
@@ -282,10 +291,10 @@ def _format_exports(data: Any) -> str:
                         "krb5i": "Kerberos+integrity", "krb5p": "Kerberos+encryption"}.get(s, s)
         return "Standard (UID/GID)"
 
-    lines.append("NFS SHARED FOLDERS")
-    lines.append("=" * W)
+    lines.append(f"{BLD}{CYN}NFS SHARED FOLDERS{NC}")
+    lines.append(f"{DIM}{'=' * W}{NC}")
     lines.append("")
-    lines.append("  NFS allows other hosts to access folders on this server.")
+    lines.append(f"  {DIM}NFS allows other hosts to access folders on this server.{NC}")
     lines.append("")
 
     # Build list of (path, raw_client_strings) from socket data or /etc/exports
@@ -324,43 +333,43 @@ def _format_exports(data: Any) -> str:
             return "\n".join(lines)
 
     if not shares:
-        lines.append("  No shares configured.")
+        lines.append(f"  {DIM}No shares configured.{NC}")
         lines.append("")
-        lines.append("  Use 'Add Share' to create an NFS export.")
+        lines.append(f"  Use {GRN}'Add Share'{NC} to create an NFS export.")
         lines.append("")
         return "\n".join(lines)
 
-    lines.append("-" * W)
-    lines.append("  YOUR SHARED FOLDERS")
-    lines.append("-" * W)
+    lines.append(f"{DIM}{'-' * W}{NC}")
+    lines.append(f"  {BLD}{CYN}YOUR SHARED FOLDERS{NC}")
+    lines.append(f"{DIM}{'-' * W}{NC}")
     lines.append("")
 
     for i, (path, raw_clients) in enumerate(shares, 1):
         exists = os.path.isdir(path)
-        status = "[OK]" if exists else "[!] PATH MISSING"
-        lines.append(f"  {i}. {path}  {status}")
+        status = f"{GRN}[OK]{NC}" if exists else f"{RED}[!] PATH MISSING{NC}"
+        lines.append(f"  {BLD}{i}.{NC} {path}  {status}")
         lines.append("")
         if exists:
-            lines.append(f"     Storage:   {_share_usage(path)}")
+            lines.append(f"     {DIM}Storage:{NC}   {_share_usage(path)}")
         else:
-            lines.append("     Storage:   Path does not exist!")
+            lines.append(f"     {DIM}Storage:{NC}   {RED}Path does not exist!{NC}")
         all_opts = []
         for spec in raw_clients:
             if "(" in spec:
                 all_opts = spec.split("(", 1)[1].rstrip(")").split(",")
                 break
-        lines.append(f"     Security:  {_sec_label(all_opts)}")
+        lines.append(f"     {DIM}Security:{NC}  {_sec_label(all_opts)}")
         lines.append("")
-        lines.append("     Who can access:")
+        lines.append(f"     {DIM}Who can access:{NC}")
         for spec in raw_clients:
             lines.append(f"       {_explain_client(spec)}")
         lines.append("")
-        lines.append("-" * W)
+        lines.append(f"{DIM}{'-' * W}{NC}")
 
     # Connected clients
     lines.append("")
-    lines.append("  CONNECTED HOSTS")
-    lines.append("-" * W)
+    lines.append(f"  {BLD}{CYN}CONNECTED HOSTS{NC}")
+    lines.append(f"{DIM}{'-' * W}{NC}")
     clients: list[str] = []
     clients_dir = "/proc/fs/nfsd/clients"
     if os.path.isdir(clients_dir):
@@ -388,11 +397,11 @@ def _format_exports(data: Any) -> str:
                     clients.append(ip)
     if clients:
         for ip in clients:
-            lines.append(f"  * {ip}")
+            lines.append(f"  {GRN}*{NC} {ip}")
     else:
-        lines.append("  No hosts currently connected")
+        lines.append(f"  {DIM}No hosts currently connected{NC}")
     lines.append("")
-    lines.append("=" * W)
+    lines.append(f"{DIM}{'=' * W}{NC}")
     return "\n".join(lines)
 
 

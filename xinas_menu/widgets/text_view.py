@@ -1,8 +1,9 @@
 """ScrollableTextView — read-only info panel with clipboard copy.
 
 The content area never steals keyboard focus from NavigableMenu.
-Text is rendered via a non-focusable TextArea subclass, so arrow-key
-navigation in NavigableMenu always works.
+Text is rendered via a non-focusable RichLog, so arrow-key
+navigation in NavigableMenu always works.  Rich markup and ANSI
+color codes are rendered as colored text.
 
 To copy content:
   Ctrl+Y (or 'Y' from the menu)   — copies the full panel text to clipboard
@@ -12,17 +13,22 @@ from __future__ import annotations
 
 import re
 
+from rich.text import Text
 from textual.widget import Widget
-from textual.widgets import TextArea
+from textual.widgets import RichLog
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
-def _strip_markup(text: str) -> str:
-    """Remove Rich/Textual markup tags like [bold], [red], [/red], [$accent]."""
-    return re.sub(r'\[/?[^\[\]\n]{1,40}\]', '', text)
+def _strip_for_clipboard(text: str) -> str:
+    """Remove ANSI escape codes and Rich markup tags for plain-text clipboard copy."""
+    text = _ANSI_RE.sub("", text)
+    text = re.sub(r'\[/?[^\[\]\n]{1,40}\]', '', text)
+    return text
 
 
-class _DisplayTextArea(TextArea, can_focus=False):
-    """TextArea that never takes keyboard focus.
+class _DisplayLog(RichLog, can_focus=False):
+    """RichLog that never takes keyboard focus.
 
     Prevents the content panel from stealing focus away from NavigableMenu.
     Terminal-level Shift+drag text selection still works normally.
@@ -30,7 +36,7 @@ class _DisplayTextArea(TextArea, can_focus=False):
 
 
 class ScrollableTextView(Widget):
-    """Read-only text panel. Content is never empty; markup is stripped.
+    """Read-only text panel with Rich markup and ANSI color support.
 
     Use set_content() / append() to update.
     Call get_text() to retrieve plain text for clipboard operations.
@@ -41,7 +47,7 @@ class ScrollableTextView(Widget):
         height: 1fr;
         overflow-y: auto;
     }
-    ScrollableTextView _DisplayTextArea {
+    ScrollableTextView _DisplayLog {
         height: 1fr;
         border: none;
         padding: 0 1;
@@ -52,40 +58,48 @@ class ScrollableTextView(Widget):
     def __init__(self, content: str = "", **kwargs) -> None:
         super().__init__(**kwargs)
         self._initial_content = content
-        self._plain_text = _strip_markup(content)
+        self._raw_text = content
+        self._plain_text = _strip_for_clipboard(content)
 
     def compose(self):
-        yield _DisplayTextArea(
-            self._plain_text,
-            read_only=True,
+        yield _DisplayLog(
+            highlight=False,
+            markup=True,
             id="text-view-area",
-            show_line_numbers=False,
         )
 
     def on_mount(self) -> None:
+        if self._initial_content:
+            self._write_content(self._initial_content)
+
+    def _write_content(self, text: str) -> None:
+        """Write text to the RichLog, handling ANSI codes if present."""
         try:
-            ta = self.query_one("#text-view-area", _DisplayTextArea)
-            ta.move_cursor((0, 0))
+            log = self.query_one("#text-view-area", _DisplayLog)
+            log.clear()
+            if "\x1b[" in text:
+                log.write(Text.from_ansi(text))
+            else:
+                log.write(text)
         except Exception:
             pass
 
     def set_content(self, text: str) -> None:
         """Replace all content."""
-        self._plain_text = _strip_markup(text)
-        try:
-            ta = self.query_one("#text-view-area", _DisplayTextArea)
-            ta.load_text(self._plain_text)
-            ta.move_cursor((0, 0))
-        except Exception:
-            pass
+        self._raw_text = text
+        self._plain_text = _strip_for_clipboard(text)
+        self._write_content(text)
 
     def append(self, text: str) -> None:
         """Append text at the end."""
-        addition = _strip_markup(text)
-        self._plain_text = (self._plain_text + "\n" + addition).lstrip("\n")
+        self._raw_text = (self._raw_text + "\n" + text).lstrip("\n")
+        self._plain_text = _strip_for_clipboard(self._raw_text)
         try:
-            ta = self.query_one("#text-view-area", _DisplayTextArea)
-            ta.load_text(self._plain_text)
+            log = self.query_one("#text-view-area", _DisplayLog)
+            if "\x1b[" in text:
+                log.write(Text.from_ansi(text))
+            else:
+                log.write(text)
         except Exception:
             pass
 

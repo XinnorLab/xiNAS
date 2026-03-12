@@ -67,7 +67,7 @@ class StartupMainScreen(Screen):
         if not collect_script.exists():
             view.set_content("[red]collect_data.sh not found.[/red]")
             return
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         r = await loop.run_in_executor(
             None,
             lambda: subprocess.run(

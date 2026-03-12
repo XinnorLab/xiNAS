@@ -9,9 +9,10 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label
-from textual.widgets import Footer
+from textual.widgets import Label, Footer
+from textual import work
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -38,64 +39,74 @@ class ExporterScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Label("  ── xiRAID Exporter ──", id="screen-title")
-        yield NavigableMenu(_MENU, id="exp-nav")
-        yield ScrollableTextView(id="exp-content")
+        yield Label("  xiRAID Exporter", id="screen-title")
+        with Horizontal(id="split-layout"):
+            yield NavigableMenu(_MENU, id="exp-nav")
+            yield ScrollableTextView(id="exp-content")
         yield Footer()
 
     def on_mount(self) -> None:
-        asyncio.create_task(self._show_status())
+        self._show_status()
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            asyncio.create_task(self._show_status())
+            self._show_status()
         elif key == "2":
-            asyncio.create_task(self._check_or_install())
+            self._check_or_install()
         elif key == "3":
-            asyncio.create_task(self._restart_service())
+            self._restart_service()
         elif key == "4":
-            asyncio.create_task(self._uninstall())
+            self._uninstall()
 
+    @work(exclusive=True)
     async def _show_status(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         installed = await loop.run_in_executor(None, _get_installed_version)
 
         from xinas_menu.utils.service_ctl import ServiceController
         ctl = ServiceController()
         state = await loop.run_in_executor(None, lambda: ctl.state("xiraid-exporter"))
 
-        lines: list[str] = ["xiRAID Exporter", "=" * 50, ""]
+        GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+        lines: list[str] = [f"{BLD}{CYN}xiRAID Exporter{NC}", f"{DIM}{'=' * 50}{NC}", ""]
         if installed:
-            svc_icon = "*" if state.is_active else "o"
-            lines.append(f"  {svc_icon}  xiraid-exporter   v{installed}  ({state.active})")
-            lines.append("     Metrics:  http://localhost:9827/metrics")
+            if state.is_active:
+                svc_icon = f"{GRN}*{NC}"
+                svc_status = f"{GRN}{state.active}{NC}"
+            else:
+                svc_icon = f"{RED}o{NC}"
+                svc_status = f"{RED}{state.active}{NC}"
+            lines.append(f"  {svc_icon}  xiraid-exporter   v{installed}  ({svc_status})")
+            lines.append(f"     {DIM}Metrics:{NC}  http://localhost:9827/metrics")
         else:
-            lines.append("  o  xiraid-exporter   Not installed")
-            lines.append("     Prometheus metrics exporter for xiRAID storage")
-            lines.append("     Developed by E4 Computer Engineering")
+            lines.append(f"  {DIM}o{NC}  xiraid-exporter   {YLW}Not installed{NC}")
+            lines.append(f"     {DIM}Prometheus metrics exporter for xiRAID storage{NC}")
+            lines.append(f"     {DIM}Developed by E4 Computer Engineering{NC}")
         lines.append("")
-        lines.append("  Fetching latest version…")
+        lines.append(f"  {DIM}Fetching latest version…{NC}")
 
         view = self.query_one("#exp-content", ScrollableTextView)
         view.set_content("\n".join(lines))
 
         # Background: fetch and show latest version
-        asyncio.create_task(self._append_latest(lines, view, installed))
+        self._append_latest(lines, view, installed)
 
+    @work(exclusive=False)
     async def _append_latest(self, lines: list, view: ScrollableTextView,
                               installed: str | None) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         latest = await loop.run_in_executor(None, _get_latest_version)
         lines[-1] = f"  Latest available:  {latest or '(could not fetch)'}"
         if installed and latest and installed != latest:
             lines.append(f"  Update available:  v{latest}")
         view.set_content("\n".join(lines))
 
+    @work(exclusive=True)
     async def _check_or_install(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         installed = await loop.run_in_executor(None, _get_installed_version)
         latest = await loop.run_in_executor(None, _get_latest_version)
 
@@ -130,8 +141,9 @@ class ExporterScreen(Screen):
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
         await self._show_status()
 
+    @work(exclusive=True)
     async def _restart_service(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         installed = await loop.run_in_executor(None, _get_installed_version)
         if not installed:
             await self.app.push_screen_wait(ConfirmDialog("xiraid-exporter is not installed.", "Not Installed"))
@@ -151,8 +163,9 @@ class ExporterScreen(Screen):
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
         await self._show_status()
 
+    @work(exclusive=True)
     async def _uninstall(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         installed = await loop.run_in_executor(None, _get_installed_version)
         if not installed:
             await self.app.push_screen_wait(ConfirmDialog("xiraid-exporter is not installed.", "Not Installed"))

@@ -34,7 +34,7 @@ class HostnameConfigScreen(Screen[bool]):
         hostname = self.query_one("#hostname-input", Input).value.strip()
         if not hostname:
             return
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, err = await loop.run_in_executor(None, lambda: _apply_hostname(hostname))
         if ok:
             self.app.audit.log("system.hostname", hostname, "OK")

@@ -6,9 +6,10 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label
-from textual.widgets import Footer
+from textual.widgets import Label, Footer
+from textual import work
 
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -33,9 +34,10 @@ class HealthScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Label("  ── Health Check ──", id="screen-title")
-        yield NavigableMenu(_MENU, id="health-nav")
-        yield ScrollableTextView("  Select a profile to run a health check.", id="health-content")
+        yield Label("  Health Check", id="screen-title")
+        with Horizontal(id="split-layout"):
+            yield NavigableMenu(_MENU, id="health-nav")
+            yield ScrollableTextView("  Select a profile to run a health check.", id="health-content")
         yield Footer()
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
@@ -43,14 +45,15 @@ class HealthScreen(Screen):
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            asyncio.create_task(self._run_check("quick"))
+            self._run_check("quick")
         elif key == "2":
-            asyncio.create_task(self._run_check("standard"))
+            self._run_check("standard")
         elif key == "3":
-            asyncio.create_task(self._run_check("deep"))
+            self._run_check("deep")
         elif key == "4":
-            asyncio.create_task(self._view_last())
+            self._view_last()
 
+    @work(exclusive=True)
     async def _run_check(self, profile: str) -> None:
         view = self.query_one("#health-content", ScrollableTextView)
         view.set_content(f"[dim]Running {profile} health check…[/dim]")
@@ -64,7 +67,7 @@ class HealthScreen(Screen):
             return
 
         from xinas_menu.health.engine import run_health_check
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             text, json_path = await loop.run_in_executor(
                 None,
@@ -82,6 +85,7 @@ class HealthScreen(Screen):
         except Exception as exc:
             view.set_content(f"[red]Health check failed: {exc}[/red]")
 
+    @work(exclusive=True)
     async def _view_last(self) -> None:
         import glob
         log_dir = Path("/var/log/xinas/healthcheck")

@@ -50,7 +50,7 @@ class NetworkConfigScreen(Screen[bool]):
         if not self._cfg_path:
             return
         content = self.query_one("#netplan-editor", TextArea).text
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, err = await loop.run_in_executor(
             None, lambda: _save_netplan(self._cfg_path, content, apply=True)
         )
@@ -65,7 +65,7 @@ class NetworkConfigScreen(Screen[bool]):
         if not self._cfg_path:
             return
         content = self.query_one("#netplan-editor", TextArea).text
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, err = await loop.run_in_executor(
             None, lambda: _save_netplan(self._cfg_path, content, apply=False)
         )

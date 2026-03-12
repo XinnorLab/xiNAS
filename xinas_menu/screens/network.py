@@ -9,8 +9,10 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Label, Footer
+from textual import work
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -35,33 +37,36 @@ class NetworkScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Label("  ── Network Settings ──", id="screen-title")
-        yield NavigableMenu(_MENU, id="net-nav")
-        yield ScrollableTextView(id="net-content")
+        yield Label("  Network Settings", id="screen-title")
+        with Horizontal(id="split-layout"):
+            yield NavigableMenu(_MENU, id="net-nav")
+            yield ScrollableTextView(id="net-content")
         yield Footer()
 
     def on_mount(self) -> None:
-        asyncio.create_task(self._show_network_info())
+        self._show_network_info()
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            asyncio.create_task(self._show_network_info())
+            self._show_network_info()
         elif key == "2":
-            asyncio.create_task(self._edit_interface_ip())
+            self._edit_interface_ip()
         elif key == "3":
-            asyncio.create_task(self._apply_netplan())
+            self._apply_netplan()
         elif key == "4":
-            asyncio.create_task(self._view_netplan_file())
+            self._view_netplan_file()
 
+    @work(exclusive=True)
     async def _show_network_info(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(None, _collect_network_info)
         view = self.query_one("#net-content", ScrollableTextView)
         view.set_content(text)
 
+    @work(exclusive=True)
     async def _edit_interface_ip(self) -> None:
         iface = await self.app.push_screen_wait(
             InputDialog("Interface name:", "Edit Interface IP", placeholder="eth0")
@@ -92,7 +97,7 @@ class NetworkScreen(Screen):
         if not confirmed:
             return
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, err = await loop.run_in_executor(None, lambda: _update_netplan(iface, ip, gw))
         if ok:
             self.app.audit.log("network.edit_ip", f"{iface}={ip}", "OK")
@@ -100,6 +105,7 @@ class NetworkScreen(Screen):
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
 
+    @work(exclusive=True)
     async def _apply_netplan(self) -> None:
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
@@ -110,7 +116,7 @@ class NetworkScreen(Screen):
         if not confirmed:
             return
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, out, err = await loop.run_in_executor(None, lambda: _run("netplan", "apply"))
         if ok:
             self.app.audit.log("network.netplan_apply", "", "OK")
@@ -121,9 +127,10 @@ class NetworkScreen(Screen):
                 ConfirmDialog(f"netplan apply failed:\n{(err or out)[:300]}", "Error")
             )
 
+    @work(exclusive=True)
     async def _view_netplan_file(self) -> None:
         view = self.query_one("#net-content", ScrollableTextView)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         path, text = await loop.run_in_executor(None, _read_netplan_file)
         if text:
             view.set_content(f"Netplan: {path}\n{'=' * 60}\n\n{text}")
@@ -164,6 +171,7 @@ def _format_speed(speed: int) -> str:
 
 
 def _collect_network_info() -> str:
+    GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
     W = 72
     lines: list[str] = []
 
@@ -173,12 +181,12 @@ def _collect_network_info() -> str:
     except Exception:
         fqdn = hostname
 
-    lines.append("NETWORK CONFIGURATION")
-    lines.append("=" * W)
+    lines.append(f"{BLD}{CYN}NETWORK CONFIGURATION{NC}")
+    lines.append(f"{DIM}{'=' * W}{NC}")
     lines.append("")
-    lines.append(f"  Hostname:  {hostname}")
+    lines.append(f"  {DIM}Hostname:{NC}  {GRN}{hostname}{NC}")
     if fqdn != hostname:
-        lines.append(f"  FQDN:      {fqdn}")
+        lines.append(f"  {DIM}FQDN:{NC}      {fqdn}")
     lines.append("")
 
     gw_info = _run_cmd("ip route | grep default")
@@ -186,7 +194,7 @@ def _collect_network_info() -> str:
         parts = gw_info.split()
         gw_ip = parts[2] if len(parts) > 2 else "N/A"
         gw_dev = parts[4] if len(parts) > 4 else ""
-        lines.append(f"  Gateway:   {gw_ip}" + (f" via {gw_dev}" if gw_dev else ""))
+        lines.append(f"  {DIM}Gateway:{NC}   {gw_ip}" + (f" via {gw_dev}" if gw_dev else ""))
 
     dns_servers: list[str] = []
     try:
@@ -196,12 +204,12 @@ def _collect_network_info() -> str:
     except Exception:
         pass
     if dns_servers:
-        lines.append(f"  DNS:       {', '.join(dns_servers[:3])}")
+        lines.append(f"  {DIM}DNS:{NC}       {', '.join(dns_servers[:3])}")
 
     lines.append("")
-    lines.append("-" * W)
-    lines.append("  NETWORK INTERFACES")
-    lines.append("-" * W)
+    lines.append(f"{DIM}{'-' * W}{NC}")
+    lines.append(f"  {BLD}{CYN}NETWORK INTERFACES{NC}")
+    lines.append(f"{DIM}{'-' * W}{NC}")
     lines.append("")
 
     interfaces: list[dict] = []
@@ -260,38 +268,46 @@ def _collect_network_info() -> str:
         })
 
     up_count = sum(1 for i in interfaces if i["state"] == "up")
-    lines.append(f"  Found {len(interfaces)} interface(s), {up_count} active")
+    lines.append(f"  Found {len(interfaces)} interface(s), {GRN}{up_count} active{NC}")
     lines.append("")
 
     for iface in interfaces:
         state = iface["state"]
-        icon = "[UP]" if state == "up" else ("[DN]" if state == "down" else "[??]")
+        if state == "up":
+            icon = f"{GRN}[UP]{NC}"
+            sc = GRN
+        elif state == "down":
+            icon = f"{RED}[DN]{NC}"
+            sc = RED
+        else:
+            icon = f"{YLW}[??]{NC}"
+            sc = YLW
         speed = iface["speed"]
         speed_str = _format_speed(speed)
         bar = _speed_bar(speed)
 
-        lines.append(f"  {icon} {iface['name']}")
-        lines.append(f"      State:   {state:<10} Speed: {bar} {speed_str}")
-        lines.append(f"      IPv4:    {iface['ip4'] or '(not configured)'}")
+        lines.append(f"  {icon} {BLD}{iface['name']}{NC}")
+        lines.append(f"      {DIM}State:{NC}   {sc}{state:<10}{NC} {DIM}Speed:{NC} {bar} {speed_str}")
+        lines.append(f"      {DIM}IPv4:{NC}    {iface['ip4'] or f'{DIM}(not configured){NC}'}")
         if iface["ip6"]:
-            lines.append(f"      IPv6:    {iface['ip6']}")
-        lines.append(f"      MAC:     {iface['mac']}")
+            lines.append(f"      {DIM}IPv6:{NC}    {iface['ip6']}")
+        lines.append(f"      {DIM}MAC:{NC}     {iface['mac']}")
         if iface["driver"]:
-            lines.append(f"      Driver:  {iface['driver']}")
+            lines.append(f"      {DIM}Driver:{NC}  {iface['driver']}")
         lines.append("")
 
-    lines.append("-" * W)
-    lines.append("  ROUTING TABLE")
-    lines.append("-" * W)
+    lines.append(f"{DIM}{'-' * W}{NC}")
+    lines.append(f"  {BLD}{CYN}ROUTING TABLE{NC}")
+    lines.append(f"{DIM}{'-' * W}{NC}")
     lines.append("")
     routes = _run_cmd("ip route show")
     if routes:
         for line in routes.splitlines()[:10]:
             lines.append(f"  {line}")
     else:
-        lines.append("  No routes configured")
+        lines.append(f"  {DIM}No routes configured{NC}")
     lines.append("")
-    lines.append("=" * W)
+    lines.append(f"{DIM}{'=' * W}{NC}")
     return "\n".join(lines)
 
 

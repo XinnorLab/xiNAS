@@ -9,9 +9,10 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label
-from textual.widgets import Footer
+from textual.widgets import Label, Footer
+from textual import work
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -39,35 +40,38 @@ class UsersScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Label("  ── User Management ──", id="screen-title")
-        yield NavigableMenu(_MENU, id="users-nav")
-        yield ScrollableTextView(id="users-content")
+        yield Label("  User Management", id="screen-title")
+        with Horizontal(id="split-layout"):
+            yield NavigableMenu(_MENU, id="users-nav")
+            yield ScrollableTextView(id="users-content")
         yield Footer()
 
     def on_mount(self) -> None:
-        asyncio.create_task(self._list_users())
+        self._list_users()
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            asyncio.create_task(self._list_users())
+            self._list_users()
         elif key == "2":
-            asyncio.create_task(self._create_user())
+            self._create_user()
         elif key == "3":
-            asyncio.create_task(self._delete_user())
+            self._delete_user()
         elif key == "4":
-            asyncio.create_task(self._set_quota())
+            self._set_quota()
         elif key == "5":
-            asyncio.create_task(self._show_quotas())
+            self._show_quotas()
 
+    @work(exclusive=True)
     async def _list_users(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         users = await loop.run_in_executor(None, _get_local_users)
         view = self.query_one("#users-content", ScrollableTextView)
         view.set_content(_format_users(users))
 
+    @work(exclusive=True)
     async def _create_user(self) -> None:
         username = await self.app.push_screen_wait(
             InputDialog("New username:", "Create User")
@@ -95,7 +99,7 @@ class UsersScreen(Screen):
         if not confirmed:
             return
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, err = await loop.run_in_executor(
             None, lambda: _create_user_sync(username, home, password)
         )
@@ -105,6 +109,7 @@ class UsersScreen(Screen):
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
 
+    @work(exclusive=True)
     async def _delete_user(self) -> None:
         username = await self.app.push_screen_wait(
             InputDialog("Username to delete:", "Delete User")
@@ -118,7 +123,7 @@ class UsersScreen(Screen):
         if not confirmed:
             return
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, err = await loop.run_in_executor(
             None, lambda: _run_cmd("userdel", username)
         )
@@ -128,6 +133,7 @@ class UsersScreen(Screen):
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
 
+    @work(exclusive=True)
     async def _set_quota(self) -> None:
         username = await self.app.push_screen_wait(
             InputDialog("Username:", "Set Disk Quota")
@@ -160,7 +166,7 @@ class UsersScreen(Screen):
             await self.app.push_screen_wait(ConfirmDialog("Invalid quota value.", "Error"))
             return
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, _, err = await loop.run_in_executor(
             None,
             lambda: self.app.nfs.set_quota(export_path, soft_kb, hard_kb),
@@ -171,8 +177,9 @@ class UsersScreen(Screen):
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
 
+    @work(exclusive=True)
     async def _show_quotas(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, stdout, stderr = await loop.run_in_executor(
             None, lambda: _run_cmd("repquota", "-a")
         )
@@ -188,29 +195,30 @@ def _get_local_users() -> list[pwd.struct_passwd]:
 
 
 def _format_users(users: list[pwd.struct_passwd]) -> str:
+    GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
     W = 70
     lines: list[str] = []
-    lines.append("USER ACCOUNTS")
-    lines.append("=" * W)
+    lines.append(f"{BLD}{CYN}USER ACCOUNTS{NC}")
+    lines.append(f"{DIM}{'=' * W}{NC}")
     lines.append("")
 
     if not users:
-        lines.append("  No regular user accounts found.")
+        lines.append(f"  {DIM}No regular user accounts found.{NC}")
         lines.append("")
-        lines.append("  System only has root and service accounts.")
+        lines.append(f"  {DIM}System only has root and service accounts.{NC}")
     else:
-        lines.append(f"  Found {len(users)} user account(s)")
+        lines.append(f"  Found {GRN}{len(users)}{NC} user account(s)")
         lines.append("")
-        lines.append("-" * W)
-        lines.append(f"  {'Username':<16} {'UID':<8} {'Group':<16} Home Directory")
-        lines.append("-" * W)
+        lines.append(f"{DIM}{'-' * W}{NC}")
+        lines.append(f"  {DIM}{'Username':<16} {'UID':<8} {'Group':<16} Home Directory{NC}")
+        lines.append(f"{DIM}{'-' * W}{NC}")
         for u in sorted(users, key=lambda x: x.pw_name):
             try:
                 group = grp.getgrgid(u.pw_gid).gr_name
             except Exception:
                 group = str(u.pw_gid)
-            lines.append(f"  {u.pw_name:<16} {u.pw_uid:<8} {group:<16} {u.pw_dir}")
-        lines.append("-" * W)
+            lines.append(f"  {GRN}{u.pw_name:<16}{NC} {u.pw_uid:<8} {group:<16} {u.pw_dir}")
+        lines.append(f"{DIM}{'-' * W}{NC}")
 
     lines.append("")
     # Quota status
@@ -220,14 +228,14 @@ def _format_users(users: list[pwd.struct_passwd]) -> str:
             capture_output=True, text=True, timeout=5,
         )
         if "is on" in r.stdout + r.stderr:
-            lines.append("  Disk Quotas: ENABLED on /mnt/data")
+            lines.append(f"  Disk Quotas: {GRN}ENABLED{NC} on /mnt/data")
         else:
-            lines.append("  Disk Quotas: Not enabled")
-            lines.append("  (Enable with: sudo quotaon -v /mnt/data)")
+            lines.append(f"  Disk Quotas: {YLW}Not enabled{NC}")
+            lines.append(f"  {DIM}(Enable with: sudo quotaon -v /mnt/data){NC}")
     except Exception:
-        lines.append("  Disk Quotas: status unknown")
+        lines.append(f"  Disk Quotas: {DIM}status unknown{NC}")
     lines.append("")
-    lines.append("=" * W)
+    lines.append(f"{DIM}{'=' * W}{NC}")
     return "\n".join(lines)
 
 

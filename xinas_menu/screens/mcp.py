@@ -7,9 +7,10 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label
-from textual.widgets import Footer
+from textual.widgets import Label, Footer
+from textual import work
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -41,38 +42,40 @@ class MCPScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Label("  ── MCP Server ──", id="screen-title")
-        yield NavigableMenu(_MENU, id="mcp-nav")
-        yield ScrollableTextView(id="mcp-content")
+        yield Label("  MCP Server", id="screen-title")
+        with Horizontal(id="split-layout"):
+            yield NavigableMenu(_MENU, id="mcp-nav")
+            yield ScrollableTextView(id="mcp-content")
         yield Footer()
 
     def on_mount(self) -> None:
-        asyncio.create_task(self._show_status())
+        self._show_status()
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            asyncio.create_task(self._toggle_nfs_helper())
+            self._toggle_nfs_helper()
         elif key == "2":
-            asyncio.create_task(self._restart())
+            self._restart()
         elif key == "3":
-            asyncio.create_task(self._show_status())
+            self._show_status()
         elif key == "4":
             self.app.push_screen(SSHAccessScreen())
         elif key == "5":
-            asyncio.create_task(self._view_config())
+            self._view_config()
         elif key == "6":
-            asyncio.create_task(self._view_audit())
+            self._view_audit()
         elif key == "7":
-            asyncio.create_task(self._view_nfs_logs())
+            self._view_nfs_logs()
         elif key == "8":
-            asyncio.create_task(self._check_updates())
+            self._check_updates()
 
+    @work(exclusive=True)
     async def _toggle_nfs_helper(self) -> None:
         from xinas_menu.utils.service_ctl import ServiceController
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ctl = ServiceController()
         state = await loop.run_in_executor(None, lambda: ctl.state("xinas-nfs-helper"))
         if state.is_active:
@@ -91,9 +94,10 @@ class MCPScreen(Screen):
         await self.app.push_screen_wait(ConfirmDialog(msg, "NFS Helper"))
         await self._show_status()
 
+    @work(exclusive=True)
     async def _show_status(self) -> None:
         from xinas_menu.utils.service_ctl import ServiceController
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ctl = ServiceController()
 
         mcp_dist = Path("/opt/xiNAS/xiNAS-MCP/dist/index.js")
@@ -102,31 +106,38 @@ class MCPScreen(Screen):
 
         nfs_state = await loop.run_in_executor(None, lambda: ctl.state("xinas-nfs-helper"))
 
-        lines = ["=== MCP Server Status ===", ""]
+        GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+        lines = [f"{BLD}{CYN}=== MCP Server Status ==={NC}", ""]
         if mcp_dist.exists():
-            lines.append(f"  *  MCP server    Ready (stdio)")
-            lines.append(f"     Binary:       {mcp_dist}")
+            lines.append(f"  {GRN}*{NC}  MCP server    {GRN}Ready (stdio){NC}")
+            lines.append(f"     {DIM}Binary:{NC}       {mcp_dist}")
         else:
-            lines.append("  !  MCP server    NOT BUILT")
-            lines.append("     Run: cd /opt/xiNAS/xiNAS-MCP && npm run build")
+            lines.append(f"  {RED}!{NC}  MCP server    {RED}NOT BUILT{NC}")
+            lines.append(f"     {DIM}Run: cd /opt/xiNAS/xiNAS-MCP && npm run build{NC}")
         lines.append("")
 
-        nfs_icon = "*" if nfs_state.is_active else "!"
-        lines.append(f"  {nfs_icon}  NFS Helper    {nfs_state.active}")
-        lines.append(f"     Socket:       {nfs_sock}  ({'OK' if nfs_sock.exists() else 'missing'})")
+        if nfs_state.is_active:
+            nfs_icon = f"{GRN}*{NC}"
+            nfs_status = f"{GRN}{nfs_state.active}{NC}"
+        else:
+            nfs_icon = f"{RED}!{NC}"
+            nfs_status = f"{RED}{nfs_state.active}{NC}"
+        lines.append(f"  {nfs_icon}  NFS Helper    {nfs_status}")
+        sock_status = f"{GRN}OK{NC}" if nfs_sock.exists() else f"{RED}missing{NC}"
+        lines.append(f"     {DIM}Socket:{NC}       {nfs_sock}  ({sock_status})")
         lines.append("")
 
         if mcp_cfg.exists():
-            lines.append(f"  *  Config        {mcp_cfg}")
+            lines.append(f"  {GRN}*{NC}  Config        {mcp_cfg}")
             try:
                 import json
                 d = json.loads(mcp_cfg.read_text())
                 cid = d.get("controller_id", "")
-                lines.append(f"     Controller:   {(cid[:20] + '...') if len(cid) > 20 else cid or '(not set)'}")
+                lines.append(f"     {DIM}Controller:{NC}   {(cid[:20] + '...') if len(cid) > 20 else cid or '(not set)'}")
             except Exception:
                 pass
         else:
-            lines.append(f"  !  Config        Missing: {mcp_cfg}")
+            lines.append(f"  {RED}!{NC}  Config        {RED}Missing: {mcp_cfg}{NC}")
         lines.append("")
 
         ak = Path("/root/.ssh/authorized_keys")
@@ -135,33 +146,34 @@ class MCPScreen(Screen):
                 n = sum(1 for l in ak.read_text().splitlines() if l.startswith("ssh-"))
             except Exception:
                 n = 0
-            lines.append(f"  SSH keys for root: {n} key(s) in {ak}")
+            lines.append(f"  {DIM}SSH keys for root:{NC} {GRN}{n}{NC} key(s) in {ak}")
         else:
-            lines.append("  SSH keys for root: none (authorized_keys missing)")
+            lines.append(f"  {DIM}SSH keys for root:{NC} {YLW}none (authorized_keys missing){NC}")
             import socket as _sock
             try:
                 ip = _sock.gethostbyname(_sock.gethostname())
             except Exception:
                 ip = "10.10.1.1"
-            lines.append(f"     Add with: ssh-copy-id root@{ip}")
+            lines.append(f"     {DIM}Add with:{NC} ssh-copy-id root@{ip}")
         lines.append("")
 
         claude_cfg = Path("/root/.claude/mcp_servers.json")
         if claude_cfg.exists():
-            lines.append(f"  *  Claude Code   {claude_cfg}")
+            lines.append(f"  {GRN}*{NC}  Claude Code   {claude_cfg}")
         else:
-            lines.append("  [ ] Claude Code   Not configured locally")
+            lines.append(f"  {DIM}[ ]{NC} Claude Code   {YLW}Not configured locally{NC}")
             try:
                 import socket as _sock
                 ip = _sock.gethostbyname(_sock.gethostname())
             except Exception:
                 ip = "10.10.1.1"
-            lines.append(f"     Register with:")
+            lines.append(f"     {DIM}Register with:{NC}")
             lines.append(f"       claude mcp add --transport stdio xinas -- ssh -T root@{ip} xinas-mcp")
 
         view = self.query_one("#mcp-content", ScrollableTextView)
         view.set_content("\n".join(lines))
 
+    @work(exclusive=True)
     async def _restart(self) -> None:
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog("Restart xinas-mcp and xinas-nfs-helper?", "Confirm")
@@ -169,7 +181,7 @@ class MCPScreen(Screen):
         if not confirmed:
             return
         from xinas_menu.utils.service_ctl import ServiceController
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ctl = ServiceController()
         results = []
         for svc in ("xinas-mcp", "xinas-nfs-helper"):
@@ -181,6 +193,7 @@ class MCPScreen(Screen):
         )
         await self._show_status()
 
+    @work(exclusive=True)
     async def _setup(self) -> None:
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog("Run Ansible xinas_mcp role to install/update MCP?", "Setup MCP")
@@ -195,6 +208,7 @@ class MCPScreen(Screen):
             )
         )
 
+    @work(exclusive=True)
     async def _view_config(self) -> None:
         view = self.query_one("#mcp-content", ScrollableTextView)
         try:
@@ -205,6 +219,7 @@ class MCPScreen(Screen):
         except Exception as exc:
             view.set_content(f"[red]{exc}[/red]")
 
+    @work(exclusive=True)
     async def _view_audit(self) -> None:
         view = self.query_one("#mcp-content", ScrollableTextView)
         try:
@@ -215,8 +230,9 @@ class MCPScreen(Screen):
         except Exception as exc:
             view.set_content(f"[red]{exc}[/red]")
 
+    @work(exclusive=True)
     async def _view_nfs_logs(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         r = await loop.run_in_executor(
             None,
             lambda: subprocess.run(
@@ -227,6 +243,7 @@ class MCPScreen(Screen):
         view = self.query_one("#mcp-content", ScrollableTextView)
         view.set_content(r.stdout or "[dim]No NFS helper log entries.[/dim]")
 
+    @work(exclusive=True)
     async def _check_updates(self) -> None:
         view = self.query_one("#mcp-content", ScrollableTextView)
         view.set_content("[dim]Checking for updates…[/dim]")
@@ -261,27 +278,29 @@ class SSHAccessScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Label("  ── SSH Access Settings ──")
-        yield NavigableMenu(self._MENU, id="ssh-nav")
-        yield ScrollableTextView(id="ssh-content")
+        yield Label("  SSH Access Settings", id="screen-title")
+        with Horizontal(id="split-layout"):
+            yield NavigableMenu(self._MENU, id="ssh-nav")
+            yield ScrollableTextView(id="ssh-content")
         yield Footer()
 
     def on_mount(self) -> None:
-        asyncio.create_task(self._show_status())
+        self._show_status()
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            asyncio.create_task(self._show_status())
+            self._show_status()
         elif key == "2":
-            asyncio.create_task(self._enable_root_ssh())
+            self._enable_root_ssh()
         elif key == "3":
-            asyncio.create_task(self._disable_root_ssh())
+            self._disable_root_ssh()
         elif key == "4":
-            asyncio.create_task(self._add_key())
+            self._add_key()
 
+    @work(exclusive=True)
     async def _show_status(self) -> None:
         lines = ["[bold]Root SSH Configuration[/bold]\n"]
         if self._SSH_CFG.exists():
@@ -297,13 +316,14 @@ class SSHAccessScreen(Screen):
         view = self.query_one("#ssh-content", ScrollableTextView)
         view.set_content("\n".join(lines))
 
+    @work(exclusive=True)
     async def _enable_root_ssh(self) -> None:
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog("Enable key-based root SSH login?", "Confirm")
         )
         if not confirmed:
             return
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, err = await loop.run_in_executor(None, _enable_root_ssh_sync)
         if ok:
             self.app.audit.log("ssh.root_enable", "", "OK")
@@ -312,6 +332,7 @@ class SSHAccessScreen(Screen):
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
         await self._show_status()
 
+    @work(exclusive=True)
     async def _disable_root_ssh(self) -> None:
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog("Disable root SSH login?", "Confirm")
@@ -326,6 +347,7 @@ class SSHAccessScreen(Screen):
             await self.app.push_screen_wait(ConfirmDialog(str(exc), "Error"))
         await self._show_status()
 
+    @work(exclusive=True)
     async def _add_key(self) -> None:
         key = await self.app.push_screen_wait(
             InputDialog("Paste public key:", "Add Authorized Key")

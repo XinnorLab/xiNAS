@@ -22,7 +22,7 @@ class UpdateChecker:
 
     async def check(self) -> bool:
         """Fetch and compare local HEAD vs origin/main. Non-blocking."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._check_sync)
 
     def _check_sync(self) -> bool:

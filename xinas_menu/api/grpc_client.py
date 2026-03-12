@@ -180,7 +180,7 @@ class XiRAIDClient:
         return True
 
     async def _call(self, method_name: str, request, timeout: int = 10) -> tuple[bool, Any, str]:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             if not self._ensure_channel():
                 return _no_stubs_error()
@@ -277,7 +277,7 @@ class XiRAIDClient:
 
     async def disk_list(self) -> tuple[bool, Any, str]:
         """List block drives (OS-level lsblk + RAID membership from raid_show)."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             disks = await loop.run_in_executor(None, _collect_disk_info_sync)
             # Enrich with RAID membership

@@ -73,7 +73,7 @@ class RAIDConfigScreen(Screen[bool]):
         if not self._cfg_path:
             return
         content = self.query_one("#raid-editor", TextArea).text
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok, err = await loop.run_in_executor(None, lambda: _write_yaml(self._cfg_path, content))
         if ok:
             self.app.audit.log("raid.config_save", str(self._cfg_path), "OK")
