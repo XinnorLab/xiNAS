@@ -104,8 +104,8 @@ class XiNASApp(App):
             view = screen.query_one(ScrollableTextView)
             text = view.get_text()
             if text:
-                self.copy_to_clipboard(text)
-                self.notify("Copied to clipboard", timeout=2)
+                msg = _copy_text(text)
+                self.notify(msg, timeout=3)
         except Exception:
             pass
 
@@ -125,3 +125,65 @@ class XiNASApp(App):
 
     async def on_unmount(self) -> None:
         self.grpc.close()
+
+
+def _copy_text(text: str) -> str:
+    """Copy text to clipboard using the best available method.
+
+    Priority:
+      1. tmux set-buffer  (works inside tmux without any extra config)
+      2. xclip -selection clipboard
+      3. xsel --clipboard --input
+      4. wl-copy  (Wayland)
+    Returns a short status string for the notification.
+    """
+    import os
+    import subprocess
+
+    data = text.encode()
+
+    # ── tmux ──────────────────────────────────────────────────────────────
+    if os.environ.get("TMUX"):
+        try:
+            subprocess.run(
+                ["tmux", "load-buffer", "-"],
+                input=data, check=True, timeout=5,
+            )
+            return "Copied to tmux buffer  (paste with prefix + ])"
+        except Exception:
+            pass
+
+    # ── xclip ─────────────────────────────────────────────────────────────
+    try:
+        subprocess.run(
+            ["xclip", "-selection", "clipboard"],
+            input=data, check=True, timeout=5,
+        )
+        return "Copied to clipboard (xclip)"
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    # ── xsel ──────────────────────────────────────────────────────────────
+    try:
+        subprocess.run(
+            ["xsel", "--clipboard", "--input"],
+            input=data, check=True, timeout=5,
+        )
+        return "Copied to clipboard (xsel)"
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    # ── wl-copy (Wayland) ─────────────────────────────────────────────────
+    try:
+        subprocess.run(["wl-copy"], input=data, check=True, timeout=5)
+        return "Copied to clipboard (wl-copy)"
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    return "Copy failed — install xclip or xsel"
