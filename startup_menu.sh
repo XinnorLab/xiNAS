@@ -4,7 +4,7 @@
 # Exits on errors and cleans up temporary files
 
 set -euo pipefail
-XINAS_SETUP_VERSION="1.1.1"
+XINAS_SETUP_VERSION="2.0.0"
 TMP_DIR="$(mktemp -d)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Directory of the repository currently being configured

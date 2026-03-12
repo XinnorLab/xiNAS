@@ -30,9 +30,10 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _print_version() -> None:
+def _print_version(setup_mode: bool = False) -> None:
     from xinas_menu.version import XINAS_MENU_VERSION
-    print(f"xinas_menu {XINAS_MENU_VERSION}")
+    name = "xinas_setup" if setup_mode else "xinas_menu"
+    print(f"{name} {XINAS_MENU_VERSION}")
 
 
 def _print_status() -> None:
@@ -57,7 +58,7 @@ def main() -> None:
     args = _parse_args()
 
     if args.version:
-        _print_version()
+        _print_version(setup_mode=args.setup)
         sys.exit(0)
 
     if args.status:
