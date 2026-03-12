@@ -193,11 +193,11 @@ def _collect_system_status() -> str:
 
     _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
-    if shutil.which("xinas-status"):
+    xinas_status = shutil.which("xinas-status")
+    if xinas_status:
         try:
             r = subprocess.run(
-                "xinas-status",
-                shell=True,
+                ["bash", xinas_status],
                 capture_output=True, text=True, timeout=15,
                 env={**__import__("os").environ, "TERM": "dumb"},
             )
