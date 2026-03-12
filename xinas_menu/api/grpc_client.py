@@ -25,8 +25,11 @@ from pathlib import Path
 from typing import Any
 
 _GRPC_ADDRESS = "localhost:6066"
+# Cert paths in priority order — must match xiNAS-MCP/src/grpc/client.ts
 _TLS_FALLBACK_PATHS = [
-    "/etc/xiraid/server.crt",
+    "/etc/xraid/crt/ca-cert.pem",   # primary (matches MCP TS client)
+    "/etc/xraid/crt/ca-cert.crt",   # alternate extension
+    "/etc/xiraid/server.crt",        # legacy fallback
     "/etc/xinas-mcp/server.crt",
 ]
 
