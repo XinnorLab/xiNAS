@@ -80,15 +80,8 @@
   failed_when: false   # grpc stubs may not exist for all protos
   tags: [xinas_menu, grpc]
 
-- name: Write api/proto/__init__.py
-  ansible.builtin.copy:
-    dest: "{{ xinas_menu_package_path }}/api/proto/__init__.py"
-    content: |
-      """Generated gRPC stubs — do not edit manually."""
-    owner: root
-    group: root
-    mode: '0644'
-  tags: [xinas_menu, grpc]
+# api/proto/__init__.py is git-tracked and contains the sys.path fix
+# for bare protoc imports. Do not overwrite it here.
 
 # ─── 5. Wrapper scripts ────────────────────────────────────────────────────────
 
