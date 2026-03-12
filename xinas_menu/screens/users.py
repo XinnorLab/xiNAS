@@ -33,7 +33,7 @@ class UsersScreen(Screen):
     """User account management."""
 
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back", show=False),
+        Binding("escape", "app.pop_screen", "Back", show=True, key_display="0/Esc"),
         Binding("0", "app.pop_screen", "Back", show=False),
     ]
 

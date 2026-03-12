@@ -23,9 +23,9 @@ class XiNASApp(App):
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
-        Binding("ctrl+y", "copy_content", "Copy", show=False),
-        Binding("u", "check_update", "Update", show=False),
-        Binding("?", "help", "Help", show=False),
+        Binding("ctrl+y", "copy_content", "Copy output", show=True),
+        Binding("u", "check_update", "Check updates", show=True),
+        Binding("?", "help", "Help", show=True),
     ]
 
     update_available: reactive[bool] = reactive(False)

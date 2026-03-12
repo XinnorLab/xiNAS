@@ -43,7 +43,7 @@ class MainMenuScreen(Screen):
     """Root navigation screen."""
 
     BINDINGS = [
-        Binding("escape", "app.quit", "Quit", show=False),
+        Binding("escape", "app.quit", "Quit", show=True, key_display="0/Esc"),
         Binding("0", "exit_app", "Exit", show=False),
     ]
 

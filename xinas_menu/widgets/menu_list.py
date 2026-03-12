@@ -31,9 +31,9 @@ class NavigableMenu(Widget, can_focus=True):
     """
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("up", "move_up", "Up", show=False),
-        Binding("down", "move_down", "Down", show=False),
-        Binding("enter", "select", "Select", show=False),
+        Binding("up", "move_up", "Navigate", show=True, key_display="↑↓"),
+        Binding("down", "move_down", "Navigate", show=False),
+        Binding("enter", "select", "Select", show=True),
     ]
 
     DEFAULT_CSS = """

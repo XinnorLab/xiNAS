@@ -35,7 +35,7 @@ class MCPScreen(Screen):
     """MCP server management."""
 
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back", show=False),
+        Binding("escape", "app.pop_screen", "Back", show=True, key_display="0/Esc"),
         Binding("0", "app.pop_screen", "Back", show=False),
     ]
 
@@ -164,7 +164,7 @@ class SSHAccessScreen(Screen):
     """Configure root SSH access for Claude Code."""
 
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back", show=False),
+        Binding("escape", "app.pop_screen", "Back", show=True, key_display="0/Esc"),
         Binding("0", "app.pop_screen", "Back", show=False),
     ]
 
