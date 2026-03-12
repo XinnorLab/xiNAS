@@ -72,6 +72,8 @@ ScrollableTextView {
     background: $surface;
     border: solid $primary-darken-1;
     padding: 0 1;
+    height: 1fr;
+    min-height: 6;
     overflow-y: auto;
     color: $text;
 }

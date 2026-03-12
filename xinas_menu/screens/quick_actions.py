@@ -74,14 +74,15 @@ class QuickActionsScreen(Screen):
     async def _system_status(self) -> None:
         view = self.query_one("#qa-content", ScrollableTextView)
         loop = asyncio.get_event_loop()
+        # Show basic status immediately — don't wait for gRPC
         text = await loop.run_in_executor(None, _collect_system_status)
-        # Also probe gRPC
+        view.set_content(text)
+        # Append gRPC info when available (may take a moment)
         ok, info, err = await self.app.grpc.get_server_info()
         if ok:
-            text += f"\n[bold]xiRAID Server Info[/bold]\n{_format_server_info(info)}"
+            view.append(f"\n[bold]xiRAID Server Info[/bold]\n{_format_server_info(info)}")
         else:
-            text += f"\n[yellow]xiRAID gRPC: {err[:80]}[/yellow]"
-        view.set_content(text)
+            view.append(f"\n[yellow]xiRAID: {err[:80]}[/yellow]")
 
     async def _restart_nfs(self) -> None:
         confirmed = await self.app.push_screen_wait(
