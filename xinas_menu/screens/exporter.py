@@ -11,6 +11,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Label
+from textual.widgets import Footer
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -39,6 +40,7 @@ class ExporterScreen(Screen):
         yield Label("  ── xiRAID Exporter ──", id="screen-title")
         yield NavigableMenu(_MENU, id="exp-nav")
         yield ScrollableTextView(id="exp-content")
+        yield Footer()
 
     def on_mount(self) -> None:
         asyncio.create_task(self._show_status())

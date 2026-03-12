@@ -5,6 +5,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Label
+from textual.widgets import Footer
 
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 
@@ -50,6 +51,7 @@ class MainMenuScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Label("  Select an option:", id="main-prompt")
         yield NavigableMenu(_ITEMS, id="main-nav")
+        yield Footer()
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         self._handle(event.key)

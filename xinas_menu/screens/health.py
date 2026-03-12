@@ -8,6 +8,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Label
+from textual.widgets import Footer
 
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -35,6 +36,7 @@ class HealthScreen(Screen):
         yield Label("  ── Health Check ──", id="screen-title")
         yield NavigableMenu(_MENU, id="health-nav")
         yield ScrollableTextView(
+        yield Footer()
             "  Select a profile to run a health check.", id="health-content"
         )
 

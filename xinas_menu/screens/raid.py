@@ -8,6 +8,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Label
+from textual.widgets import Footer
 
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -32,6 +33,7 @@ class RAIDScreen(Screen):
         yield Label("  ── RAID Management ──", id="screen-title")
         yield NavigableMenu(_MENU, id="raid-nav")
         yield ScrollableTextView(id="raid-content")
+        yield Footer()
 
     def on_mount(self) -> None:
         asyncio.create_task(self._load_summary())

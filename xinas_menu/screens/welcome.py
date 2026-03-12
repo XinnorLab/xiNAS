@@ -7,6 +7,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Label
+from textual.widgets import Footer
 
 from xinas_menu.version import XINAS_MENU_VERSION
 
@@ -38,6 +39,7 @@ class WelcomeScreen(Screen):
             )
             yield Label("  Connecting to xiRAID…", id="welcome-status")
             yield Label("\n  Press [Enter] or wait to continue", id="welcome-hint")
+        yield Footer()
 
     async def on_mount(self) -> None:
         # Probe gRPC and NFS helper status in background

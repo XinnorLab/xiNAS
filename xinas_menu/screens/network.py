@@ -9,6 +9,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Label
+from textual.widgets import Footer
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -35,6 +36,7 @@ class NetworkScreen(Screen):
         yield Label("  ── Network Settings ──", id="screen-title")
         yield NavigableMenu(_MENU, id="net-nav")
         yield ScrollableTextView(id="net-content")
+        yield Footer()
 
     def on_mount(self) -> None:
         asyncio.create_task(self._show_network_info())

@@ -45,9 +45,6 @@ class XiNASApp(App):
 
     def compose(self) -> ComposeResult:
         yield XiNASHeader()
-        # Screens are pushed imperatively; nothing else at root level
-        from textual.widgets import Footer
-        yield Footer()
 
     async def on_mount(self) -> None:
         from xinas_menu.screens.welcome import WelcomeScreen

@@ -9,6 +9,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Label
+from textual.widgets import Footer
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -43,6 +44,7 @@ class MCPScreen(Screen):
         yield Label("  ── MCP Server ──", id="screen-title")
         yield NavigableMenu(_MENU, id="mcp-nav")
         yield ScrollableTextView(id="mcp-content")
+        yield Footer()
 
     def on_mount(self) -> None:
         asyncio.create_task(self._show_status())
@@ -182,6 +184,7 @@ class SSHAccessScreen(Screen):
         yield Label("  ── SSH Access Settings ──")
         yield NavigableMenu(self._MENU, id="ssh-nav")
         yield ScrollableTextView(id="ssh-content")
+        yield Footer()
 
     def on_mount(self) -> None:
         asyncio.create_task(self._show_status())
