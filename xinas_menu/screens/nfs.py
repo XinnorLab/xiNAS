@@ -225,33 +225,185 @@ class NFSScreen(Screen):
 
 
 def _format_exports(data: Any) -> str:
-    lines = ["[bold]NFS Exports[/bold]\n"]
-    try:
-        exports = data or []
-        if not exports:
-            lines.append("  (no exports configured)")
-        for exp in exports:
-            path = exp.get("path", "?")
+    """Format NFS exports — uses socket data if available, falls back to /etc/exports."""
+    import os
+    import subprocess
+
+    W = 65
+    lines: list[str] = []
+
+    def _run(cmd: str) -> str:
+        try:
+            return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL,
+                                           text=True).strip()
+        except Exception:
+            return ""
+
+    def _share_usage(path: str) -> str:
+        try:
+            r = _run(f"df -h '{path}' 2>/dev/null | tail -1")
+            if r:
+                p = r.split()
+                if len(p) >= 5:
+                    return f"{p[2]} used of {p[1]} ({p[4]})"
+        except Exception:
+            pass
+        return "N/A"
+
+    def _explain_client(spec: str) -> str:
+        if "(" in spec:
+            host, opts_raw = spec.split("(", 1)
+            opts_raw = opts_raw.rstrip(")")
+        else:
+            host, opts_raw = spec, ""
+        if host == "*":
+            host_desc = "Everyone (all hosts)"
+        elif "/" in host:
+            host_desc = f"Network: {host}"
+        else:
+            host_desc = f"Host: {host}"
+        opts = opts_raw.split(",") if opts_raw else []
+        perms = []
+        if "rw" in opts:
+            perms.append("Read & Write")
+        elif "ro" in opts:
+            perms.append("Read Only")
+        else:
+            perms.append("Read & Write")
+        if "no_root_squash" in opts:
+            perms.append("full admin")
+        return f"{host_desc}  [{', '.join(perms)}]"
+
+    def _sec_label(opts: list[str]) -> str:
+        for o in opts:
+            if o.startswith("sec="):
+                s = o.split("=", 1)[1]
+                return {"sys": "Standard (UID/GID)", "krb5": "Kerberos",
+                        "krb5i": "Kerberos+integrity", "krb5p": "Kerberos+encryption"}.get(s, s)
+        return "Standard (UID/GID)"
+
+    lines.append("NFS SHARED FOLDERS")
+    lines.append("=" * W)
+    lines.append("")
+    lines.append("  NFS allows other hosts to access folders on this server.")
+    lines.append("")
+
+    # Build list of (path, raw_client_strings) from socket data or /etc/exports
+    shares: list[tuple[str, list[str]]] = []
+
+    if data and isinstance(data, list):
+        for exp in data:
+            if not isinstance(exp, dict):
+                continue
+            path = exp.get("path", "")
             clients = exp.get("clients", [])
             options = exp.get("options", [])
-            lines.append(f"  [cyan]{path}[/cyan]")
-            for c in clients:
-                lines.append(f"      {c}  ({','.join(options)})")
-    except Exception as exc:
-        lines.append(f"[dim](parse error: {exc})[/dim]")
+            if path:
+                # Re-assemble as client(opts) strings for unified processing
+                raw = [f"*({','.join(options)})" if not clients else
+                       f"{c}({','.join(options)})" for c in (clients or ["*"])]
+                shares.append((path, raw))
+    else:
+        # Fallback: read /etc/exports directly
+        exports_file = "/etc/exports"
+        try:
+            with open(exports_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split()
+                    if parts:
+                        shares.append((parts[0], parts[1:]))
+        except FileNotFoundError:
+            lines.append("  /etc/exports not found — NFS may not be configured.")
+            lines.append("")
+            return "\n".join(lines)
+        except Exception as exc:
+            lines.append(f"  Error reading /etc/exports: {exc}")
+            return "\n".join(lines)
+
+    if not shares:
+        lines.append("  No shares configured.")
+        lines.append("")
+        lines.append("  Use 'Add Share' to create an NFS export.")
+        lines.append("")
+        return "\n".join(lines)
+
+    lines.append("-" * W)
+    lines.append("  YOUR SHARED FOLDERS")
+    lines.append("-" * W)
+    lines.append("")
+
+    for i, (path, raw_clients) in enumerate(shares, 1):
+        exists = os.path.isdir(path)
+        status = "[OK]" if exists else "[!] PATH MISSING"
+        lines.append(f"  {i}. {path}  {status}")
+        lines.append("")
+        if exists:
+            lines.append(f"     Storage:   {_share_usage(path)}")
+        else:
+            lines.append("     Storage:   Path does not exist!")
+        all_opts = []
+        for spec in raw_clients:
+            if "(" in spec:
+                all_opts = spec.split("(", 1)[1].rstrip(")").split(",")
+                break
+        lines.append(f"     Security:  {_sec_label(all_opts)}")
+        lines.append("")
+        lines.append("     Who can access:")
+        for spec in raw_clients:
+            lines.append(f"       {_explain_client(spec)}")
+        lines.append("")
+        lines.append("-" * W)
+
+    # Connected clients
+    lines.append("")
+    lines.append("  CONNECTED HOSTS")
+    lines.append("-" * W)
+    clients: list[str] = []
+    clients_dir = "/proc/fs/nfsd/clients"
+    if os.path.isdir(clients_dir):
+        for entry in os.listdir(clients_dir):
+            info_file = os.path.join(clients_dir, entry, "info")
+            if os.path.isfile(info_file):
+                try:
+                    with open(info_file) as f:
+                        for ln in f:
+                            if "address:" in ln:
+                                ip = ln.split("address:")[1].strip().split()[0]
+                                if ip and ip not in clients:
+                                    clients.append(ip)
+                except Exception:
+                    pass
+    if not clients:
+        result = _run("ss -tn state established '( dport = :2049 )' 2>/dev/null")
+        for ln in result.splitlines()[1:]:
+            p = ln.split()
+            if len(p) >= 4:
+                ip = p[3].rsplit(":", 1)[0]
+                if ip and ip not in clients:
+                    clients.append(ip)
+    if clients:
+        for ip in clients:
+            lines.append(f"  * {ip}")
+    else:
+        lines.append("  No hosts currently connected")
+    lines.append("")
+    lines.append("=" * W)
     return "\n".join(lines)
 
 
 def _format_sessions(data: Any) -> str:
-    lines = ["[bold]Active NFS Sessions[/bold]\n"]
+    lines = ["Active NFS Sessions\n"]
     try:
         sessions = data or []
         if not sessions:
             lines.append("  (no active sessions)")
         for s in sessions:
-            client = s.get("client", "?")
-            path = s.get("path", "?")
-            lines.append(f"  {client}  →  {path}")
+            client = s.get("client", "?") if isinstance(s, dict) else str(s)
+            path = s.get("path", "?") if isinstance(s, dict) else ""
+            lines.append(f"  {client}  ->  {path}")
     except Exception as exc:
-        lines.append(f"[dim](parse error: {exc})[/dim]")
+        lines.append(f"(parse error: {exc})")
     return "\n".join(lines)

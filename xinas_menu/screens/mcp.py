@@ -17,14 +17,14 @@ from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
 _MENU = [
-    MenuItem("1", "Show MCP Status"),
-    MenuItem("2", "Setup / Reinstall"),
-    MenuItem("3", "Restart MCP Server"),
+    MenuItem("1", "Toggle NFS Helper (Start/Stop)"),
+    MenuItem("2", "Restart NFS Helper"),
+    MenuItem("3", "Show MCP Status"),
     MenuItem("4", "SSH Access Settings"),
     MenuItem("5", "View MCP Config"),
     MenuItem("6", "View Audit Log"),
     MenuItem("7", "View NFS Helper Logs"),
-    MenuItem("8", "Check for MCP Updates"),
+    MenuItem("8", "Check & Install Updates"),
     MenuItem("0", "Back"),
 ]
 
@@ -54,11 +54,11 @@ class MCPScreen(Screen):
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            asyncio.create_task(self._show_status())
+            asyncio.create_task(self._toggle_nfs_helper())
         elif key == "2":
-            asyncio.create_task(self._setup())
-        elif key == "3":
             asyncio.create_task(self._restart())
+        elif key == "3":
+            asyncio.create_task(self._show_status())
         elif key == "4":
             self.app.push_screen(SSHAccessScreen())
         elif key == "5":
@@ -70,15 +70,95 @@ class MCPScreen(Screen):
         elif key == "8":
             asyncio.create_task(self._check_updates())
 
+    async def _toggle_nfs_helper(self) -> None:
+        from xinas_menu.utils.service_ctl import ServiceController
+        loop = asyncio.get_event_loop()
+        ctl = ServiceController()
+        state = await loop.run_in_executor(None, lambda: ctl.state("xinas-nfs-helper"))
+        if state.is_active:
+            confirmed = await self.app.push_screen_wait(
+                ConfirmDialog("Stop xinas-nfs-helper?\n\nThis prevents MCP from managing NFS exports until restarted.", "Stop NFS Helper")
+            )
+            if not confirmed:
+                return
+            ok, err = await loop.run_in_executor(None, lambda: ctl.stop("xinas-nfs-helper"))
+            msg = "xinas-nfs-helper stopped." if ok else f"Failed: {err}"
+        else:
+            ok, err = await loop.run_in_executor(None, lambda: ctl.start("xinas-nfs-helper"))
+            msg = "xinas-nfs-helper started." if ok else f"Failed: {err}"
+        if ok:
+            self.app.audit.log("mcp.nfs_helper_toggle", "start" if not state.is_active else "stop", "OK")
+        await self.app.push_screen_wait(ConfirmDialog(msg, "NFS Helper"))
+        await self._show_status()
+
     async def _show_status(self) -> None:
         from xinas_menu.utils.service_ctl import ServiceController
         loop = asyncio.get_event_loop()
         ctl = ServiceController()
-        lines = ["[bold]MCP Server Status[/bold]\n"]
-        for svc in ("xinas-mcp", "xinas-nfs-helper"):
-            state = await loop.run_in_executor(None, lambda s=svc: ctl.state(s))
-            color = "green" if state.is_active else "red"
-            lines.append(f"  [{color}]●[/{color}] {svc:<30} {state.active}")
+
+        mcp_dist = Path("/opt/xiNAS/xiNAS-MCP/dist/index.js")
+        nfs_sock = Path("/run/xinas-nfs-helper.sock")
+        mcp_cfg = _MCP_CONFIG
+
+        nfs_state = await loop.run_in_executor(None, lambda: ctl.state("xinas-nfs-helper"))
+
+        lines = ["=== MCP Server Status ===", ""]
+        if mcp_dist.exists():
+            lines.append(f"  *  MCP server    Ready (stdio)")
+            lines.append(f"     Binary:       {mcp_dist}")
+        else:
+            lines.append("  !  MCP server    NOT BUILT")
+            lines.append("     Run: cd /opt/xiNAS/xiNAS-MCP && npm run build")
+        lines.append("")
+
+        nfs_icon = "*" if nfs_state.is_active else "!"
+        lines.append(f"  {nfs_icon}  NFS Helper    {nfs_state.active}")
+        lines.append(f"     Socket:       {nfs_sock}  ({'OK' if nfs_sock.exists() else 'missing'})")
+        lines.append("")
+
+        if mcp_cfg.exists():
+            lines.append(f"  *  Config        {mcp_cfg}")
+            try:
+                import json
+                d = json.loads(mcp_cfg.read_text())
+                cid = d.get("controller_id", "")
+                lines.append(f"     Controller:   {(cid[:20] + '...') if len(cid) > 20 else cid or '(not set)'}")
+            except Exception:
+                pass
+        else:
+            lines.append(f"  !  Config        Missing: {mcp_cfg}")
+        lines.append("")
+
+        ak = Path("/root/.ssh/authorized_keys")
+        if ak.exists():
+            try:
+                n = sum(1 for l in ak.read_text().splitlines() if l.startswith("ssh-"))
+            except Exception:
+                n = 0
+            lines.append(f"  SSH keys for root: {n} key(s) in {ak}")
+        else:
+            lines.append("  SSH keys for root: none (authorized_keys missing)")
+            import socket as _sock
+            try:
+                ip = _sock.gethostbyname(_sock.gethostname())
+            except Exception:
+                ip = "10.10.1.1"
+            lines.append(f"     Add with: ssh-copy-id root@{ip}")
+        lines.append("")
+
+        claude_cfg = Path("/root/.claude/mcp_servers.json")
+        if claude_cfg.exists():
+            lines.append(f"  *  Claude Code   {claude_cfg}")
+        else:
+            lines.append("  [ ] Claude Code   Not configured locally")
+            try:
+                import socket as _sock
+                ip = _sock.gethostbyname(_sock.gethostname())
+            except Exception:
+                ip = "10.10.1.1"
+            lines.append(f"     Register with:")
+            lines.append(f"       claude mcp add --transport stdio xinas -- ssh -T root@{ip} xinas-mcp")
+
         view = self.query_one("#mcp-content", ScrollableTextView)
         view.set_content("\n".join(lines))
 

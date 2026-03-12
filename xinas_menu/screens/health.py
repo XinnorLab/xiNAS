@@ -35,10 +35,8 @@ class HealthScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Label("  ── Health Check ──", id="screen-title")
         yield NavigableMenu(_MENU, id="health-nav")
-        yield ScrollableTextView(
+        yield ScrollableTextView("  Select a profile to run a health check.", id="health-content")
         yield Footer()
-            "  Select a profile to run a health check.", id="health-content"
-        )
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key

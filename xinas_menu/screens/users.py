@@ -188,11 +188,46 @@ def _get_local_users() -> list[pwd.struct_passwd]:
 
 
 def _format_users(users: list[pwd.struct_passwd]) -> str:
-    lines = ["[bold]Local Users (UID >= 1000)[/bold]\n"]
-    for u in sorted(users, key=lambda x: x.pw_uid):
-        lines.append(
-            f"  [cyan]{u.pw_name:<20}[/cyan]  uid={u.pw_uid}  {u.pw_dir}"
+    W = 70
+    lines: list[str] = []
+    lines.append("USER ACCOUNTS")
+    lines.append("=" * W)
+    lines.append("")
+
+    if not users:
+        lines.append("  No regular user accounts found.")
+        lines.append("")
+        lines.append("  System only has root and service accounts.")
+    else:
+        lines.append(f"  Found {len(users)} user account(s)")
+        lines.append("")
+        lines.append("-" * W)
+        lines.append(f"  {'Username':<16} {'UID':<8} {'Group':<16} Home Directory")
+        lines.append("-" * W)
+        for u in sorted(users, key=lambda x: x.pw_name):
+            try:
+                group = grp.getgrgid(u.pw_gid).gr_name
+            except Exception:
+                group = str(u.pw_gid)
+            lines.append(f"  {u.pw_name:<16} {u.pw_uid:<8} {group:<16} {u.pw_dir}")
+        lines.append("-" * W)
+
+    lines.append("")
+    # Quota status
+    try:
+        r = subprocess.run(
+            ["quotaon", "-p", "/mnt/data"],
+            capture_output=True, text=True, timeout=5,
         )
+        if "is on" in r.stdout + r.stderr:
+            lines.append("  Disk Quotas: ENABLED on /mnt/data")
+        else:
+            lines.append("  Disk Quotas: Not enabled")
+            lines.append("  (Enable with: sudo quotaon -v /mnt/data)")
+    except Exception:
+        lines.append("  Disk Quotas: status unknown")
+    lines.append("")
+    lines.append("=" * W)
     return "\n".join(lines)
 
 

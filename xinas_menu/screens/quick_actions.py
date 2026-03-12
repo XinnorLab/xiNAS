@@ -17,20 +17,24 @@ from xinas_menu.widgets.service_badge import ServiceBadge
 from xinas_menu.widgets.text_view import ScrollableTextView
 
 _MENU = [
-    MenuItem("1", "System Status"),
-    MenuItem("2", "Restart NFS"),
+    MenuItem("1", "Show System Status"),
+    MenuItem("2", "Restart NFS Server"),
     MenuItem("3", "View System Logs"),
-    MenuItem("4", "Disk Health (SMART)"),
+    MenuItem("4", "Check Disk Health"),
     MenuItem("5", "Service Status"),
-    MenuItem("6", "View Audit Log"),
+    MenuItem("6", "System Monitor (btop)"),
+    MenuItem("7", "View Audit Log"),
     MenuItem("0", "Back"),
 ]
 
 _SERVICES = [
-    "xiraid-server",
     "nfs-server",
+    "xiraid-server",
+    "xiraid-exporter",
     "xinas-nfs-helper",
     "xinas-mcp",
+    "nfsdcld",
+    "rpcbind",
 ]
 
 
@@ -71,6 +75,8 @@ class QuickActionsScreen(Screen):
         elif key == "5":
             asyncio.create_task(self._service_status())
         elif key == "6":
+            asyncio.create_task(self._system_monitor())
+        elif key == "7":
             asyncio.create_task(self._view_audit_log())
 
     async def _system_status(self) -> None:
@@ -107,12 +113,12 @@ class QuickActionsScreen(Screen):
         r = await loop.run_in_executor(
             None,
             lambda: subprocess.run(
-                ["journalctl", "-n", "100", "--no-pager", "-u", "nfs-server",
-                 "-u", "xiraid-server"],
+                ["journalctl", "-n", "50", "--no-pager"],
                 capture_output=True, text=True,
             )
         )
-        view.set_content(r.stdout or "[dim]No log entries.[/dim]")
+        text = "=== Recent System Messages ===\n\n" + (r.stdout or "(no entries)")
+        view.set_content(text)
 
     async def _disk_health(self) -> None:
         view = self.query_one("#qa-content", ScrollableTextView)
@@ -145,13 +151,28 @@ class QuickActionsScreen(Screen):
         loop = asyncio.get_event_loop()
         from xinas_menu.utils.service_ctl import ServiceController
         ctl = ServiceController()
-        lines = ["[bold]Service Status[/bold]\n"]
+        lines = ["=== Service Status ===", ""]
         for svc in _SERVICES:
             state = await loop.run_in_executor(None, lambda s=svc: ctl.state(s))
-            color = "green" if state.is_active else "red"
-            lines.append(f"  [{color}]●[/{color}] {svc:<35} {state.active}")
+            icon = "*" if state.is_active else "o"
+            lines.append(f"  {icon}  {svc:<30} {state.active}")
         view = self.query_one("#qa-content", ScrollableTextView)
         view.set_content("\n".join(lines))
+
+    async def _system_monitor(self) -> None:
+        """Launch btop if available, otherwise show top output snapshot."""
+        view = self.query_one("#qa-content", ScrollableTextView)
+        loop = asyncio.get_event_loop()
+        has_btop = await loop.run_in_executor(
+            None, lambda: subprocess.run(["which", "btop"], capture_output=True).returncode == 0
+        )
+        if has_btop:
+            view.set_content("Launching btop — press q to return to menu.")
+            # btop is full-screen TUI; run it directly (blocks until user exits)
+            await loop.run_in_executor(None, lambda: subprocess.run(["btop"]))
+            await self._system_status()
+        else:
+            view.set_content("btop is not installed.\n\nInstall with: sudo apt-get install btop")
 
     async def _view_audit_log(self) -> None:
         from xinas_menu.utils.audit import AUDIT_LOG
