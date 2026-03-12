@@ -65,8 +65,12 @@ def _load_channel_credentials():
     return None
 
 
+_STUBS_ERROR: str = ""
+
+
 def _import_stubs():
-    """Return (stub_module, grpc_module) or (None, None)."""
+    """Return (pb2, pb2_grpc, grpc) or (None, None, None) on failure."""
+    global _STUBS_ERROR
     try:
         import grpc
         from xinas_menu.api.proto import (  # noqa: F401 — generated at deploy time
@@ -74,11 +78,14 @@ def _import_stubs():
             service_xraid_pb2_grpc as pb2_grpc,
         )
         return pb2, pb2_grpc, grpc
-    except ImportError:
+    except Exception as exc:
+        _STUBS_ERROR = str(exc)
         return None, None, None
 
 
-_NO_STUBS = (False, None, "gRPC stubs not installed — run the xinas_menu Ansible role")
+def _no_stubs_error() -> tuple:
+    detail = f": {_STUBS_ERROR}" if _STUBS_ERROR else ""
+    return (False, None, f"gRPC stubs not available{detail}")
 
 
 class XiRAIDClient:
@@ -112,7 +119,7 @@ class XiRAIDClient:
         loop = asyncio.get_event_loop()
         try:
             if not self._ensure_channel():
-                return _NO_STUBS
+                return _no_stubs_error()
             stub = self._stub
 
             def _sync():
@@ -130,39 +137,39 @@ class XiRAIDClient:
         """List all RAID arrays."""
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("RaidList", pb2.RaidListRequest())
 
     async def raid_show(self, units: str = "g") -> tuple[bool, Any, str]:
         """Show RAID details (capacity in given units)."""
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("RaidShow", pb2.RaidShowRequest(units=units))
 
     async def raid_get(self, raid_id: str) -> tuple[bool, Any, str]:
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("RaidGet", pb2.RaidGetRequest(raid_id=raid_id))
 
     async def raid_create(self, **kwargs) -> tuple[bool, Any, str]:
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("RaidCreate", pb2.RaidCreateRequest(**kwargs))
 
     async def raid_delete(self, raid_id: str, force: bool = False) -> tuple[bool, Any, str]:
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("RaidDelete", pb2.RaidDeleteRequest(
             raid_id=raid_id, force=force))
 
     async def raid_lifecycle_control(self, raid_id: str, action: str) -> tuple[bool, Any, str]:
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("RaidLifecycleControl", pb2.RaidLifecycleControlRequest(
             raid_id=raid_id, action=action))
 
@@ -171,13 +178,13 @@ class XiRAIDClient:
     async def disk_list(self) -> tuple[bool, Any, str]:
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("DiskList", pb2.DiskListRequest())
 
     async def disk_get_smart(self, disk_id: str) -> tuple[bool, Any, str]:
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("DiskGetSmart", pb2.DiskGetSmartRequest(disk_id=disk_id))
 
     # ── Pools ──────────────────────────────────────────────────────────────
@@ -185,7 +192,7 @@ class XiRAIDClient:
     async def pool_list(self) -> tuple[bool, Any, str]:
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("PoolList", pb2.PoolListRequest())
 
     # ── System / License ───────────────────────────────────────────────────
@@ -193,25 +200,25 @@ class XiRAIDClient:
     async def get_server_info(self) -> tuple[bool, Any, str]:
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("GetServerInfo", pb2.GetServerInfoRequest())
 
     async def get_license_info(self) -> tuple[bool, Any, str]:
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("GetLicenseInfo", pb2.GetLicenseInfoRequest())
 
     async def set_license(self, key: str) -> tuple[bool, Any, str]:
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("SetLicense", pb2.SetLicenseRequest(key=key))
 
     async def get_performance(self) -> tuple[bool, Any, str]:
         pb2, _, _ = _import_stubs()
         if pb2 is None:
-            return _NO_STUBS
+            return _no_stubs_error()
         return await self._call("GetPerformance", pb2.GetPerformanceRequest())
 
     def close(self) -> None:
