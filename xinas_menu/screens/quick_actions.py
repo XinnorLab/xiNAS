@@ -187,8 +187,26 @@ class QuickActionsScreen(Screen):
 
 
 def _collect_system_status() -> str:
-    import os
-    lines = ["[bold]System Status[/bold]\n"]
+    """Run xinas-status if available and strip ANSI codes; fall back to basic info."""
+    import re
+    import shutil
+
+    _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+    if shutil.which("xinas-status"):
+        try:
+            r = subprocess.run(
+                ["xinas-status"],
+                capture_output=True, text=True, timeout=15,
+                env={**__import__("os").environ, "TERM": "dumb"},
+            )
+            raw = r.stdout or r.stderr or ""
+            return _ANSI.sub("", raw)
+        except Exception:
+            pass
+
+    # Fallback — basic info
+    lines: list[str] = ["System Status\n" + "=" * 50 + "\n"]
     try:
         import platform
         lines.append(f"  Hostname:  {platform.node()}")
@@ -200,14 +218,18 @@ def _collect_system_status() -> str:
             secs = float(f.read().split()[0])
         days, rem = divmod(int(secs), 86400)
         hours, rem = divmod(rem, 3600)
-        mins = rem // 60
-        lines.append(f"  Uptime:    {days}d {hours}h {mins}m")
+        lines.append(f"  Uptime:    {days}d {hours}h {rem // 60}m")
     except Exception:
         pass
     try:
-        import shutil
-        total, used, free = shutil.disk_usage("/")
-        lines.append(f"  Root disk: {used//2**30}G used / {total//2**30}G total")
+        total, used, _ = shutil.disk_usage("/")
+        lines.append(f"  Root disk: {used // 2**30}G used / {total // 2**30}G total")
+    except Exception:
+        pass
+    try:
+        with open("/proc/loadavg") as f:
+            la = f.read().split()
+        lines.append(f"  Load:      {la[0]}  {la[1]}  {la[2]}")
     except Exception:
         pass
     return "\n".join(lines)
