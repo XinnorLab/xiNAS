@@ -28,18 +28,24 @@
     state: present
   tags: [xinas_menu, python]
 
-# ─── 3. Sync xinas_menu package ───────────────────────────────────────────────
+# ─── 3. Verify xinas_menu package is present ─────────────────────────────────
+# The package lives inside the git repo at xinas_repo_path/xinas_menu/.
+# When the repo is deployed to xinas_menu_package_path/../ (e.g. /opt/xiNAS),
+# src and dest are identical — no copy needed.  We just assert the key file
+# exists; if someone deploys to a separate prefix they can override this task.
 
-- name: Sync xinas_menu Python package to {{ xinas_menu_package_path }}
-  ansible.builtin.synchronize:
-    src: "{{ xinas_repo_path }}/xinas_menu/"
-    dest: "{{ xinas_menu_package_path }}/"
-    delete: true
-    recursive: true
-    rsync_opts:
-      - "--exclude=__pycache__"
-      - "--exclude=*.pyc"
-      - "--exclude=api/proto/*.py"   # don't overwrite generated stubs
+- name: Verify xinas_menu package exists at {{ xinas_menu_package_path }}
+  ansible.builtin.stat:
+    path: "{{ xinas_menu_package_path }}/__main__.py"
+  register: _xinas_menu_main
+  tags: [xinas_menu, sync]
+
+- name: Fail if xinas_menu package not found
+  ansible.builtin.fail:
+    msg: >
+      xinas_menu package not found at {{ xinas_menu_package_path }}.
+      Ensure the xiNAS repo contains xinas_menu/ and xinas_repo_path is correct.
+  when: not _xinas_menu_main.stat.exists
   tags: [xinas_menu, sync]
 
 # ─── 4. Generate gRPC stubs ───────────────────────────────────────────────────
