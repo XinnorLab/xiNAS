@@ -114,21 +114,27 @@ class QuickActionsScreen(Screen):
 
     async def _disk_health(self) -> None:
         view = self.query_one("#qa-content", ScrollableTextView)
-        view.set_content("[dim]Querying disk SMART data via gRPC…[/dim]")
+        view.set_content("[dim]Scanning drives…[/dim]")
         ok, data, err = await self.app.grpc.disk_list()
         if not ok:
             view.set_content(f"[red]{err}[/red]")
             return
 
-        lines = ["[bold]NVMe Drive SMART Summary[/bold]\n"]
+        lines = ["[bold]Drive Summary[/bold]\n"]
         try:
-            disks = getattr(data, "disks", data) or []
+            disks = data if isinstance(data, list) else []
+            if not disks:
+                lines.append("  (no drives found)")
             for d in disks:
-                name = getattr(d, "name", "?")
-                smart = getattr(d, "smart_status", "unknown")
-                temp = getattr(d, "temperature_c", "?")
-                color = "green" if smart in ("passed", "ok", "healthy") else "yellow"
-                lines.append(f"  [{color}]{name}[/{color}]  SMART:{smart}  Temp:{temp}°C")
+                name = d.get("name", "?") if isinstance(d, dict) else str(d)
+                model = (d.get("model", "") if isinstance(d, dict) else "").strip()
+                size = d.get("size", "?") if isinstance(d, dict) else "?"
+                raid_name = d.get("raid_name", "") if isinstance(d, dict) else ""
+                member_state = d.get("member_state", "") if isinstance(d, dict) else ""
+                transport = d.get("transport", "") if isinstance(d, dict) else ""
+                role = f"[{raid_name}] {member_state}" if raid_name else "unassigned"
+                color = "green" if raid_name else "cyan"
+                lines.append(f"  [{color}]{name}[/{color}]  {model}  {size}  {transport}  {role}")
         except Exception as exc:
             lines.append(f"[dim](parse error: {exc})[/dim]")
         view.set_content("\n".join(lines))
@@ -186,8 +192,11 @@ def _collect_system_status() -> str:
 
 def _format_server_info(info) -> str:
     try:
-        version = getattr(info, "version", "?")
-        build = getattr(info, "build", "")
-        return f"  Version: {version} {build}"
-    except Exception:
+        if isinstance(info, dict):
+            lic = info.get("license")
+            if lic:
+                return f"  License: {lic}"
+            return "  Connected"
         return f"  {info}"
+    except Exception:
+        return "  Connected"
