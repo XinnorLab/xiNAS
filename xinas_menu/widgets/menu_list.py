@@ -81,7 +81,9 @@ class NavigableMenu(Widget, can_focus=True):
                 yield Label(label_text, classes=cls, id=f"menu-item-{idx}")
 
     def on_mount(self) -> None:
-        self.focus()
+        # Defer focus until after Textual's own focus restoration runs,
+        # otherwise the screen's focus management overrides our focus() call.
+        self.call_after_refresh(self.focus)
 
     def watch_highlighted(self, _old: int, new: int) -> None:
         for i, _item in enumerate(self._items):
