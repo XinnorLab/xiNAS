@@ -20,7 +20,6 @@ import json
 import os
 import subprocess
 import warnings
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -147,10 +146,7 @@ def _collect_disk_info_sync() -> list:
 
 
 class XiRAIDClient:
-    """Async-friendly gRPC client for xiRAID.
-
-    Uses a thread-pool executor so synchronous gRPC calls don't block the
-    Textual event loop.
+    """Async gRPC client for xiRAID using grpc.aio.
 
     All RPCs are snake_case (e.g. raid_show, pool_show, license_show).
     Request types come from message_*_pb2 modules (not service_xraid_pb2).
@@ -159,7 +155,6 @@ class XiRAIDClient:
 
     def __init__(self, address: str = _GRPC_ADDRESS) -> None:
         self._address = address
-        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="grpc")
         self._channel = None
         self._stub = None
 
@@ -177,25 +172,19 @@ class XiRAIDClient:
             ("grpc.enable_retries", 0),
         ]
         if creds is not None:
-            self._channel = grpc.secure_channel(self._address, creds, options=opts)
+            self._channel = grpc.aio.secure_channel(self._address, creds, options=opts)
         else:
-            self._channel = grpc.insecure_channel(self._address, options=opts)
+            self._channel = grpc.aio.insecure_channel(self._address, options=opts)
         # XRAIDServiceStub — note XRAID (not XiRAID)
         self._stub = pb2_grpc.XRAIDServiceStub(self._channel)
         return True
 
     async def _call(self, method_name: str, request, timeout: int = 5) -> tuple[bool, Any, str]:
-        loop = asyncio.get_running_loop()
         try:
             if not self._ensure_channel():
                 return _no_stubs_error()
-            stub = self._stub
-
-            def _sync():
-                method = getattr(stub, method_name)
-                return method(request, timeout=timeout)
-
-            resp = await loop.run_in_executor(self._executor, _sync)
+            method = getattr(self._stub, method_name)
+            resp = await method(request, timeout=timeout)
             data = _parse_response(resp)
             return True, data, ""
         except Exception as exc:
@@ -371,7 +360,6 @@ class XiRAIDClient:
         """No gRPC performance RPC — returns empty dict."""
         return True, {}, ""
 
-    def close(self) -> None:
+    async def close(self) -> None:
         if self._channel is not None:
-            self._channel.close()
-        self._executor.shutdown(wait=False)
+            await self._channel.close()

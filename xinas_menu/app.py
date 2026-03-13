@@ -148,7 +148,7 @@ class XiNASApp(App):
         )
 
     async def on_unmount(self) -> None:
-        self.grpc.close()
+        await self.grpc.close()
 
 
 def _copy_text(text: str) -> str:

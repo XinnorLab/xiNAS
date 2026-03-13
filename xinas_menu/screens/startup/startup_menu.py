@@ -59,4 +59,4 @@ class StartupApp(App):
             await self.push_screen_wait(ConfirmDialog(f"Update failed: {msg}", "Error"))
 
     async def on_unmount(self) -> None:
-        self.grpc.close()
+        await self.grpc.close()
