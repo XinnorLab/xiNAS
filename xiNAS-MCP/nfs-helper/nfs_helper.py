@@ -109,9 +109,14 @@ def _exportfs_reload() -> None:
             text=True,
             timeout=30,
         )
+        stderr = result.stderr.strip()
         if result.returncode != 0:
-            raise RuntimeError(f"exportfs -r failed: {result.stderr.strip()}")
-        log.info("exportfs -r succeeded")
+            # "Failed to stat" warnings are non-fatal (path doesn't exist yet)
+            if stderr and "Failed to stat" not in stderr:
+                raise RuntimeError(f"exportfs -r failed: {stderr}")
+            log.warning("exportfs -r: %s", stderr)
+        else:
+            log.info("exportfs -r succeeded")
     except FileNotFoundError:
         raise RuntimeError("exportfs not found — is nfs-kernel-server installed?")
 

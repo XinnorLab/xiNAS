@@ -327,12 +327,18 @@ def _format_exports(data: Any) -> str:
                 continue
             path = exp.get("path", "")
             clients = exp.get("clients", [])
-            options = exp.get("options", [])
-            if path:
-                # Re-assemble as client(opts) strings for unified processing
-                raw = [f"*({','.join(options)})" if not clients else
-                       f"{c}({','.join(options)})" for c in (clients or ["*"])]
-                shares.append((path, raw))
+            if not path:
+                continue
+            # clients may be [{"host": "*", "options": [...]}] or ["host(opts)"]
+            raw: list[str] = []
+            for c in (clients or [{"host": "*", "options": []}]):
+                if isinstance(c, dict):
+                    host = c.get("host", "*")
+                    opts = c.get("options", [])
+                    raw.append(f"{host}({','.join(opts)})" if opts else host)
+                else:
+                    raw.append(str(c))
+            shares.append((path, raw))
     else:
         # Fallback: read /etc/exports directly
         exports_file = "/etc/exports"
