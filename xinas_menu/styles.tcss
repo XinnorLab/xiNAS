@@ -179,7 +179,8 @@ ConfirmDialog, InputDialog {
     background: #16213e;
     border: thick #00d4aa 60%;
     padding: 1 2;
-    width: 64;
+    width: 80;
+    max-width: 90%;
     height: auto;
     min-height: 8;
 }
