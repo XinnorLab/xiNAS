@@ -36,7 +36,7 @@ class SelectDialog(ModalScreen[str | None]):
             if self._prompt:
                 yield Label(self._prompt, id="dialog-body")
             yield OptionList(
-                *[Option(item, id=item) for item in self._items],
+                *[Option(item, id=f"opt-{i}") for i, item in enumerate(self._items)],
                 id="dialog-select",
             )
             with Horizontal(id="dialog-buttons"):
