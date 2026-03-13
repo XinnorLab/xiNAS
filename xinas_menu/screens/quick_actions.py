@@ -88,7 +88,12 @@ class QuickActionsScreen(Screen):
         loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(None, _collect_system_status)
         view.set_content(text)
-        ok, info, err = await self.app.grpc.get_server_info()
+        try:
+            ok, info, err = await asyncio.wait_for(
+                self.app.grpc.get_server_info(), timeout=5,
+            )
+        except asyncio.TimeoutError:
+            ok, info, err = False, None, "timed out"
         if ok:
             view.append(f"\n  xiRAID: connected\n{_format_server_info(info)}")
         else:
@@ -223,7 +228,7 @@ def _collect_system_status() -> str:
             env.setdefault("TERM", "xterm-256color")
             r = subprocess.run(
                 ["bash", xinas_status],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=5,
                 env=env,
             )
             raw = r.stdout or r.stderr or ""

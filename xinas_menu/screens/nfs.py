@@ -128,7 +128,7 @@ class NFSScreen(Screen):
         ok, _, err = await loop.run_in_executor(
             None,
             lambda: self.app.nfs.add_export(
-                {"path": path, "clients": [clients], "options": options}
+                {"path": path, "clients": [{"host": clients, "options": options}]}
             ),
         )
         if ok:
@@ -150,13 +150,15 @@ class NFSScreen(Screen):
         new_opts = await self.app.push_screen_wait(
             InputDialog("New options (leave blank to keep):", "Edit Share — Options")
         )
-        patch: dict = {}
-        if new_clients:
-            patch["clients"] = [new_clients]
-        if new_opts:
-            patch["options"] = [o.strip() for o in new_opts.split(",") if o.strip()]
-        if not patch:
+        if not new_clients and not new_opts:
             return
+        opts = [o.strip() for o in new_opts.split(",") if o.strip()] if new_opts else []
+        patch: dict = {}
+        if new_clients or opts:
+            # Build proper client structure; when only one field is given,
+            # use sensible defaults for the other.
+            host = new_clients or "*"
+            patch["clients"] = [{"host": host, "options": opts}]
 
         loop = asyncio.get_running_loop()
         ok, _, err = await loop.run_in_executor(

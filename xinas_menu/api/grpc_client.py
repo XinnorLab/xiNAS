@@ -171,15 +171,20 @@ class XiRAIDClient:
         if pb2_grpc is None:
             return False
         creds = _load_channel_credentials()
+        opts = [
+            ("grpc.initial_reconnect_backoff_ms", 500),
+            ("grpc.max_reconnect_backoff_ms", 2000),
+            ("grpc.enable_retries", 0),
+        ]
         if creds is not None:
-            self._channel = grpc.secure_channel(self._address, creds)
+            self._channel = grpc.secure_channel(self._address, creds, options=opts)
         else:
-            self._channel = grpc.insecure_channel(self._address)
+            self._channel = grpc.insecure_channel(self._address, options=opts)
         # XRAIDServiceStub — note XRAID (not XiRAID)
         self._stub = pb2_grpc.XRAIDServiceStub(self._channel)
         return True
 
-    async def _call(self, method_name: str, request, timeout: int = 10) -> tuple[bool, Any, str]:
+    async def _call(self, method_name: str, request, timeout: int = 5) -> tuple[bool, Any, str]:
         loop = asyncio.get_running_loop()
         try:
             if not self._ensure_channel():
