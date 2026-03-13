@@ -49,6 +49,10 @@ def handle_add_export(req: dict) -> None:
         raise ValueError("Missing or invalid 'entry' field")
     if "path" not in entry:
         raise ValueError("entry.path is required")
+    path = entry["path"]
+    if not os.path.isdir(path):
+        os.makedirs(path, exist_ok=True)
+        log.info("Created export directory: %s", path)
     add_export(entry)
     _exportfs_reload()
 
