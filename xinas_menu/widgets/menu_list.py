@@ -127,6 +127,27 @@ class NavigableMenu(Widget, can_focus=True):
                 self.post_message(NavigableMenu.Selected(item.key, item.label))
                 return
 
+    def update_items(self, items: list[MenuItem]) -> None:
+        """Replace menu items and re-render."""
+        self._items = items
+        # Reset highlight to first navigable item
+        for i, item in enumerate(items):
+            if not item.separator and item.enabled:
+                self.highlighted = i
+                break
+        # Remove all children and recompose
+        self.remove_children()
+        for idx, item in enumerate(self._items):
+            if item.separator:
+                lbl = Label("  ─────────────────────────────", classes="menu-item-separator")
+            else:
+                label_text = f"  [{item.key}] {item.label}"
+                cls = "menu-item"
+                if idx == self.highlighted:
+                    cls += " --highlight"
+                lbl = Label(label_text, classes=cls, id=f"menu-item-{idx}")
+            self.mount(lbl)
+
     def on_key(self, event) -> None:
         key = event.character or ""
         if not key:
