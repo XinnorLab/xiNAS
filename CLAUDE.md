@@ -79,6 +79,7 @@ Each preset directory (`presets/default/`, `presets/xinnorVM/`) contains:
 
 ## Important Notes
 
+- **Shell menu scripts are OBSOLETE** - The legacy Bash/whiptail menu scripts (`startup_menu.sh`, `post_install_menu.sh`, `configure_*.sh`, `simple_menu.sh`) are deprecated. All new features, settings screens, and configuration UIs **must** be implemented in the Python-based `xinas_menu/` package (Textual TUI). Do NOT add functionality to shell `.sh` menu scripts.
 - **No build/test system** - This is infrastructure-as-code; validation occurs through Ansible modules
 - **yq v4 required** - Shell scripts use mikefarah/yq (not the Python jq wrapper). Ensure `/usr/local/bin/yq` is in PATH
 - **Roles are idempotent** - Safe to re-run, except `xfs_force_mkfs: true` forces filesystem recreation

@@ -26,6 +26,8 @@ class XiNASApp(App):
         Binding("ctrl+y", "copy_content", "Copy output", show=True),
         Binding("u", "check_update", "Check updates", show=True),
         Binding("?", "help", "Help", show=True),
+        Binding("pageup", "scroll_up", "Scroll", show=True, key_display="PgUp/Dn"),
+        Binding("pagedown", "scroll_down", "Scroll", show=False),
     ]
 
     update_available: reactive[bool] = reactive(False)
@@ -109,6 +111,26 @@ class XiNASApp(App):
         except Exception:
             pass
 
+    def action_scroll_up(self) -> None:
+        """Scroll the content panel up."""
+        from xinas_menu.widgets.text_view import ScrollableTextView
+        try:
+            view = self.screen.query_one(ScrollableTextView)
+            log = view.query_one("#text-view-area")
+            log.scroll_page_up()
+        except Exception:
+            pass
+
+    def action_scroll_down(self) -> None:
+        """Scroll the content panel down."""
+        from xinas_menu.widgets.text_view import ScrollableTextView
+        try:
+            view = self.screen.query_one(ScrollableTextView)
+            log = view.query_one("#text-view-area")
+            log.scroll_page_down()
+        except Exception:
+            pass
+
     def action_help(self) -> None:
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
         self.push_screen(
@@ -117,7 +139,9 @@ class XiNASApp(App):
                 "Arrow keys / number keys — navigate\n"
                 "Enter — select\n"
                 "0 or Esc — back\n"
+                "PgUp / PgDn — scroll output panel\n"
                 "U — check for updates\n"
+                "Ctrl+Y — copy output to clipboard\n"
                 "Ctrl+C — quit",
                 "Help",
             )
