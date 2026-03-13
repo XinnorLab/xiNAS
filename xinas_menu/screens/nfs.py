@@ -133,7 +133,7 @@ class NFSScreen(Screen):
         )
         if ok:
             self.app.audit.log("nfs.add_export", path, "OK")
-            await self._load_exports()
+            self._load_exports()
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
 
@@ -166,7 +166,7 @@ class NFSScreen(Screen):
         )
         if ok:
             self.app.audit.log("nfs.update_export", path, "OK")
-            await self._load_exports()
+            self._load_exports()
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
 
@@ -188,7 +188,7 @@ class NFSScreen(Screen):
         )
         if ok:
             self.app.audit.log("nfs.remove_export", path, "OK")
-            await self._load_exports()
+            self._load_exports()
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
 
