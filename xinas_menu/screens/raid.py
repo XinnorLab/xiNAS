@@ -1,4 +1,4 @@
-"""RAIDScreen — Quick Overview, Extended Details, Physical Drives, Spare Pools."""
+"""RAIDScreen — Quick Overview, Extended Details, Physical Drives, Spare Pools, CRUD."""
 from __future__ import annotations
 
 import os
@@ -12,20 +12,70 @@ from textual.screen import Screen
 from textual.widgets import Label, Footer
 from textual import work
 
+from xinas_menu.widgets.confirm_dialog import ConfirmDialog
+from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
+from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
+
+_RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]
+_STRIP_SIZES = ["16", "32", "64", "128", "256"]
+_MODIFY_PARAMS = [
+    ("strip_size", "Strip Size (KB)", "select", _STRIP_SIZES),
+    ("group_size", "Group Size", "input", None),
+    ("sparepool", "Spare Pool", "input", None),
+    ("init_prio", "Init Priority (0-100)", "input", None),
+    ("recon_prio", "Recon Priority (0-100)", "input", None),
+    ("resync_enabled", "Resync Enabled", "select", ["true", "false"]),
+    ("sched_enabled", "Scheduler Enabled", "select", ["true", "false"]),
+    ("memory_limit", "Memory Limit (MB)", "input", None),
+    ("merge_read_enabled", "Merge Read Enabled", "select", ["true", "false"]),
+    ("merge_write_enabled", "Merge Write Enabled", "select", ["true", "false"]),
+    ("merge_read_max", "Merge Read Max (KB)", "input", None),
+    ("merge_write_max", "Merge Write Max (KB)", "input", None),
+]
 
 _MENU = [
     MenuItem("1", "Quick Overview"),
     MenuItem("2", "Extended Details"),
     MenuItem("3", "Physical Drives"),
     MenuItem("4", "Spare Pools"),
+    MenuItem("", "", separator=True),
+    MenuItem("5", "Create Array"),
+    MenuItem("6", "Modify Array"),
+    MenuItem("7", "Delete Array"),
     MenuItem("0", "Back"),
 ]
 
 
+async def _get_drive_groups(grpc_client) -> tuple[dict[str, list[str]], list[dict]]:
+    """Fetch NVMe drives grouped by NUMA node + size category."""
+    ok, disks, err = await grpc_client.disk_list()
+    if not ok or not disks:
+        return {}, []
+    SMALL_THRESHOLD = 1_000_000_000  # 1 GB
+    nvme = [d for d in disks if "nvme" in d.get("name", "").lower()
+            and not d.get("system") and not d.get("raid_name")]
+    if not nvme:
+        return {}, nvme
+    groups: dict[str, list[str]] = {}
+    for d in nvme:
+        numa = d.get("numa_node", d.get("numa", "0"))
+        size_bytes = d.get("size_bytes", d.get("size_raw", 0)) or 0
+        size_cat = "small" if size_bytes < SMALL_THRESHOLD else "large"
+        key = f"All {size_cat} NVMe, NUMA {numa}"
+        groups.setdefault(key, []).append(d["name"])
+    all_large = [d["name"] for d in nvme if (d.get("size_bytes", d.get("size_raw", 0)) or 0) >= SMALL_THRESHOLD]
+    all_small = [d["name"] for d in nvme if (d.get("size_bytes", d.get("size_raw", 0)) or 0) < SMALL_THRESHOLD]
+    if all_large:
+        groups[f"All large NVMe ({len(all_large)} drives)"] = all_large
+    if all_small:
+        groups[f"All small NVMe ({len(all_small)} drives)"] = all_small
+    return groups, nvme
+
+
 class RAIDScreen(Screen):
-    """RAID management — read-only views."""
+    """RAID management — views and CRUD operations for arrays."""
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back", show=True, key_display="0/Esc"),
@@ -54,6 +104,12 @@ class RAIDScreen(Screen):
             self._show_drives()
         elif key == "4":
             self._show_pools()
+        elif key == "5":
+            self._create_array_wizard()
+        elif key == "6":
+            self._modify_array()
+        elif key == "7":
+            self._delete_array()
 
     @work(exclusive=True)
     async def _show_quick(self) -> None:
@@ -94,6 +150,246 @@ class RAIDScreen(Screen):
             _format_spare_pools(data) if ok
             else f"Could not load pool info: {_grpc_short_error(err)}"
         )
+
+    # ── Create Array Wizard ──────────────────────────────────────────────────
+
+    @work(exclusive=True)
+    async def _create_array_wizard(self) -> None:
+        """Multi-step wizard: name -> level -> drives -> strip -> group_size -> spare -> confirm."""
+        # Step 1: Array name
+        name = await self.app.push_screen_wait(
+            InputDialog("Array name:", "Create Array — Step 1", placeholder="data0")
+        )
+        if not name:
+            return
+
+        # Step 2: RAID level
+        level = await self.app.push_screen_wait(
+            SelectDialog(_RAID_LEVELS, title="Create Array — Step 2",
+                         prompt="Select RAID level:")
+        )
+        if not level:
+            return
+
+        # Step 3: Select drives (grouped by NUMA/size)
+        groups, nvme = await _get_drive_groups(self.app.grpc)
+        if not nvme:
+            await self.app.push_screen_wait(
+                ConfirmDialog("No available NVMe drives found.", "Error")
+            )
+            return
+
+        choices = list(groups.keys()) + ["Manual entry"]
+        group_choice = await self.app.push_screen_wait(
+            SelectDialog(choices, title="Create Array — Step 3",
+                         prompt="Select drive group:")
+        )
+        if not group_choice:
+            return
+
+        if group_choice == "Manual entry":
+            drives_str = await self.app.push_screen_wait(
+                InputDialog("Drive names (comma-separated):",
+                            "Create Array — Drives",
+                            placeholder="nvme0n1,nvme1n1,nvme2n1")
+            )
+            if not drives_str:
+                return
+            drives = [d.strip() for d in drives_str.split(",") if d.strip()]
+        else:
+            drives = groups.get(group_choice, [])
+
+        if not drives:
+            await self.app.push_screen_wait(
+                ConfirmDialog("No drives selected.", "Error")
+            )
+            return
+
+        # Step 4: Strip size
+        strip = await self.app.push_screen_wait(
+            SelectDialog(_STRIP_SIZES, title="Create Array — Step 4",
+                         prompt="Strip size (KB), default 64:")
+        )
+        if not strip:
+            strip = "64"
+
+        # Step 5: Group size (mandatory for RAID 50/60)
+        kwargs: dict[str, Any] = {"strip_size": int(strip)}
+        if level in ("50", "60"):
+            group_size = await self.app.push_screen_wait(
+                InputDialog("Group size (required for RAID 50/60):",
+                            "Create Array — Step 5", placeholder="4")
+            )
+            if not group_size:
+                return
+            kwargs["group_size"] = int(group_size)
+
+        # Step 6: Spare pool (optional)
+        sparepool = await self.app.push_screen_wait(
+            InputDialog("Spare pool name (leave blank for none):",
+                        "Create Array — Spare Pool")
+        )
+        if sparepool:
+            kwargs["sparepool"] = sparepool
+
+        # Confirm
+        summary = (
+            f"Name:       {name}\n"
+            f"Level:      RAID-{level}\n"
+            f"Drives:     {', '.join(drives)}\n"
+            f"Strip Size: {strip} KB"
+        )
+        if "group_size" in kwargs:
+            summary += f"\nGroup Size: {kwargs['group_size']}"
+        if "sparepool" in kwargs:
+            summary += f"\nSpare Pool: {kwargs['sparepool']}"
+
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(f"Create this RAID array?\n\n{summary}",
+                          "Confirm Create")
+        )
+        if not confirmed:
+            return
+
+        ok, _, err = await self.app.grpc.raid_create(name, level, drives, **kwargs)
+        if ok:
+            self.app.audit.log("raid.create",
+                               f"{name} RAID-{level} ({len(drives)} drives)", "OK")
+            self._show_quick()
+        else:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Create failed.\n{_grpc_short_error(err)}", "Error")
+            )
+
+    # ── Modify Array ─────────────────────────────────────────────────────────
+
+    @work(exclusive=True)
+    async def _modify_array(self) -> None:
+        """Pick array -> pick parameter -> enter value -> confirm -> apply."""
+        ok, data, err = await self.app.grpc.raid_show()
+        if not ok or not data:
+            await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"No arrays available.\n{_grpc_short_error(err)}" if not ok
+                    else "No RAID arrays configured.",
+                    "Modify Array",
+                )
+            )
+            return
+
+        arrays = _as_array_dict(data)
+        names = list(arrays.keys())
+        if not names:
+            await self.app.push_screen_wait(
+                ConfirmDialog("No RAID arrays configured.", "Modify Array")
+            )
+            return
+
+        arr_name = await self.app.push_screen_wait(
+            SelectDialog(names, title="Modify Array",
+                         prompt="Select array to modify:")
+        )
+        if not arr_name:
+            return
+
+        param_labels = [f"{label} ({key})" for key, label, _, _ in _MODIFY_PARAMS]
+        param_choice = await self.app.push_screen_wait(
+            SelectDialog(param_labels, title="Modify Array — Parameter",
+                         prompt=f"Select parameter for {arr_name}:")
+        )
+        if not param_choice:
+            return
+
+        # Find the selected parameter
+        idx = param_labels.index(param_choice)
+        key, label, kind, options = _MODIFY_PARAMS[idx]
+
+        if kind == "select" and options:
+            value = await self.app.push_screen_wait(
+                SelectDialog(options, title=f"Set {label}",
+                             prompt=f"New value for {label}:")
+            )
+        else:
+            value = await self.app.push_screen_wait(
+                InputDialog(f"New value for {label}:", f"Set {label}")
+            )
+
+        if value is None:
+            return
+
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(
+                f"Modify {arr_name}?\n\n{label}: {value}",
+                "Confirm Modify",
+            )
+        )
+        if not confirmed:
+            return
+
+        ok, _, err = await self.app.grpc.raid_modify(arr_name, **{key: value})
+        if ok:
+            self.app.audit.log("raid.modify", f"{arr_name} {key}={value}", "OK")
+            self._show_quick()
+        else:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Modify failed.\n{_grpc_short_error(err)}", "Error")
+            )
+
+    # ── Delete Array ─────────────────────────────────────────────────────────
+
+    @work(exclusive=True)
+    async def _delete_array(self) -> None:
+        """Pick array -> confirm with warning -> destroy."""
+        ok, data, err = await self.app.grpc.raid_show()
+        if not ok or not data:
+            await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"No arrays available.\n{_grpc_short_error(err)}" if not ok
+                    else "No RAID arrays configured.",
+                    "Delete Array",
+                )
+            )
+            return
+
+        arrays = _as_array_dict(data)
+        names = list(arrays.keys())
+        if not names:
+            await self.app.push_screen_wait(
+                ConfirmDialog("No RAID arrays configured.", "Delete Array")
+            )
+            return
+
+        arr_name = await self.app.push_screen_wait(
+            SelectDialog(names, title="Delete Array",
+                         prompt="Select array to delete:")
+        )
+        if not arr_name:
+            return
+
+        arr = arrays.get(arr_name, {})
+        level = arr.get("level", "?") if isinstance(arr, dict) else "?"
+        size = arr.get("size", "N/A") if isinstance(arr, dict) else "N/A"
+        devs = arr.get("devices", []) if isinstance(arr, dict) else []
+        warning = (
+            f"RAID-{level}  |  {size}  |  {len(devs)} drive(s)\n\n"
+            f"WARNING: This will DESTROY array '{arr_name}' and all data on it!\n"
+            f"This action cannot be undone."
+        )
+
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(warning, f"Delete {arr_name}?")
+        )
+        if not confirmed:
+            return
+
+        ok, _, err = await self.app.grpc.raid_destroy(arr_name, force=True)
+        if ok:
+            self.app.audit.log("raid.destroy", arr_name, "OK")
+            self._show_quick()
+        else:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Delete failed.\n{_grpc_short_error(err)}", "Error")
+            )
 
 
 # ── Formatters ────────────────────────────────────────────────────────────────
