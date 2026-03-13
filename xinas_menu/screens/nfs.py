@@ -80,7 +80,7 @@ class NFSScreen(Screen):
         # Step 1: Export path
         path = await self.app.push_screen_wait(
             InputDialog("Export path (e.g. /mnt/data/share1):", "Add Share — Step 1/5",
-                        placeholder="/mnt/data/")
+                        default="/mnt/data/")
         )
         if not path:
             return
