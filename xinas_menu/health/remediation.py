@@ -78,8 +78,8 @@ class RemediationWizard:
         self._report = json.loads(self._path.read_text())
 
     def failed_checks(self) -> list[dict]:
-        results = self._report.get("results", [])
-        return [r for r in results if r.get("status") in ("FAIL", "WARN")]
+        checks = self._report.get("checks", [])
+        return [c for c in checks if c.get("status") in ("FAIL", "WARN")]
 
     def actions(self) -> list[RemediationAction]:
         """Build remediation actions for all failed/warned checks.
@@ -89,7 +89,7 @@ class RemediationWizard:
         result: list[RemediationAction] = []
         for check in self.failed_checks():
             name = check.get("name", "")
-            desc = check.get("message", name)
+            desc = check.get("impact") or name
             hint = check.get("fix_hint", "")
             status = check.get("status", "")
             evidence = check.get("evidence", "")
