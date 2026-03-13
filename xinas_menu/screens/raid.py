@@ -26,18 +26,19 @@ _ARRAY_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]
 _STRIP_SIZES = ["16", "32", "64", "128", "256"]
 _MODIFY_PARAMS = [
-    ("strip_size", "Strip Size (KB)", "select", _STRIP_SIZES),
-    ("group_size", "Group Size", "input", None),
-    ("sparepool", "Spare Pool", "input", None),
-    ("init_prio", "Init Priority (0-100)", "input", None),
-    ("recon_prio", "Recon Priority (0-100)", "input", None),
-    ("resync_enabled", "Resync Enabled", "select", ["true", "false"]),
-    ("sched_enabled", "Scheduler Enabled", "select", ["true", "false"]),
-    ("memory_limit", "Memory Limit (MB)", "input", None),
-    ("merge_read_enabled", "Merge Read Enabled", "select", ["true", "false"]),
-    ("merge_write_enabled", "Merge Write Enabled", "select", ["true", "false"]),
-    ("merge_read_max", "Merge Read Max (KB)", "input", None),
-    ("merge_write_max", "Merge Write Max (KB)", "input", None),
+    # (key, label, kind, options, value_type)
+    ("strip_size", "Strip Size (KB)", "select", _STRIP_SIZES, int),
+    ("group_size", "Group Size", "input", None, int),
+    ("sparepool", "Spare Pool", "input", None, str),
+    ("init_prio", "Init Priority (0-100)", "input", None, int),
+    ("recon_prio", "Recon Priority (0-100)", "input", None, int),
+    ("resync_enabled", "Resync Enabled", "select", ["true", "false"], str),
+    ("sched_enabled", "Scheduler Enabled", "select", ["true", "false"], str),
+    ("memory_limit", "Memory Limit (MB)", "input", None, int),
+    ("merge_read_enabled", "Merge Read Enabled", "select", ["true", "false"], str),
+    ("merge_write_enabled", "Merge Write Enabled", "select", ["true", "false"], str),
+    ("merge_read_max", "Merge Read Max (KB)", "input", None, int),
+    ("merge_write_max", "Merge Write Max (KB)", "input", None, int),
 ]
 
 _MENU = [
@@ -308,7 +309,7 @@ class RAIDScreen(Screen):
         if not arr_name:
             return
 
-        param_labels = [f"{label} ({key})" for key, label, _, _ in _MODIFY_PARAMS]
+        param_labels = [f"{label} ({key})" for key, label, _, _, _ in _MODIFY_PARAMS]
         param_choice = await self.app.push_screen_wait(
             SelectDialog(param_labels, title="Modify Array — Parameter",
                          prompt=f"Select parameter for {arr_name}:")
@@ -318,7 +319,7 @@ class RAIDScreen(Screen):
 
         # Find the selected parameter
         idx = param_labels.index(param_choice)
-        key, label, kind, options = _MODIFY_PARAMS[idx]
+        key, label, kind, options, vtype = _MODIFY_PARAMS[idx]
 
         if kind == "select" and options:
             value = await self.app.push_screen_wait(
@@ -340,6 +341,15 @@ class RAIDScreen(Screen):
             )
         )
         if not confirmed:
+            return
+
+        # Convert value to the expected type (Input widgets return strings)
+        try:
+            value = vtype(value)
+        except (ValueError, TypeError):
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Invalid value: expected {vtype.__name__}", "Error")
+            )
             return
 
         ok, _, err = await self.app.grpc.raid_modify(arr_name, **{key: value})
