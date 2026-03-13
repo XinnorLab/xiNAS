@@ -2832,8 +2832,15 @@ _mcp_config_get() {
 }
 
 _mcp_config_set() {
-    local tmp
-    tmp=$(jq "$1" "$MCP_CONFIG") && echo "$tmp" > "$MCP_CONFIG"
+    local tmp_file
+    tmp_file=$(mktemp "${MCP_CONFIG}.XXXXXX") || return 1
+    if jq "$1" "$MCP_CONFIG" > "$tmp_file"; then
+        chmod 600 "$tmp_file"
+        mv "$tmp_file" "$MCP_CONFIG"
+    else
+        rm -f "$tmp_file"
+        return 1
+    fi
 }
 
 _mcp_config_apply() {
@@ -2850,7 +2857,7 @@ mcp_tokens_menu() {
         show_header
 
         # List current tokens
-        local token_list token_count
+        local token_count
         token_count=$(_mcp_config_get '.tokens | length')
         [[ "$token_count" == "null" ]] && token_count=0
 
@@ -2883,7 +2890,9 @@ mcp_tokens_menu() {
 
                 # Check if name already exists in token_labels
                 local name_exists
-                name_exists=$(jq -r ".token_labels | to_entries[] | select(.value == \"$token_name\") | .key" "$MCP_CONFIG" 2>/dev/null)
+                name_exists=$(jq -r --arg name "$token_name" \
+                    '.token_labels | to_entries[] | select(.value == $name) | .key' \
+                    "$MCP_CONFIG" 2>/dev/null)
                 if [[ -n "$name_exists" ]]; then
                     msg_box "❌ Exists" "Token '${token_name}' already exists.\nRemove it first to regenerate."
                     continue
@@ -2903,11 +2912,9 @@ mcp_tokens_menu() {
                 local token_value
                 token_value=$(openssl rand -hex 32)
 
-                # Store token_value→role in tokens map and name→value in token_labels
-                _mcp_config_set '.tokens //= {}' || true
-                _mcp_config_set '.token_labels //= {}' || true
-                _mcp_config_set ".tokens[\"$token_value\"] = \"$role\"" || true
-                _mcp_config_apply ".token_labels[\"$token_value\"] = \"$token_name\"" || {
+                # Store token_value→role and label in a single atomic write
+                _mcp_config_apply "$(jq -n --arg tv "$token_value" --arg r "$role" --arg tn "$token_name" \
+                    '"(.tokens //= {}) | (.token_labels //= {}) | .tokens[\($tv)] = \($r) | .token_labels[\($tv)] = \($tn)"' -r)" || {
                     msg_box "❌ Error" "Failed to save token."
                     continue
                 }
@@ -3100,14 +3107,11 @@ mcp_remote_access_menu() {
                 _ip=$(hostname -I | awk '{print $1}')
                 [[ -n "$tls_cert" && "$tls_cert" != "null" ]] && proto="https" || proto="http"
 
-                local _first_token _first_label
+                local _first_token
                 _first_token=$(jq -r '.tokens | keys[0] // empty' "$MCP_CONFIG" 2>/dev/null)
-                _first_label=""
-                if [[ -n "$_first_token" ]]; then
-                    _first_label=$(jq -r ".token_labels[\"$_first_token\"] // \"token\"" "$MCP_CONFIG" 2>/dev/null)
-                fi
 
                 local out="$TMP_DIR/mcp_connect_cmd"
+                install -m 0600 /dev/null "$out"
                 {
                     echo "=== MCP Remote Connection ==="
                     echo ""
