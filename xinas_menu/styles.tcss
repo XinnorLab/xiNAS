@@ -1,30 +1,30 @@
-/* xiNAS Textual CSS — professional NAS management theme */
+/* xiNAS Textual CSS — Enterprise Premium theme (Blue + Teal) */
 
 /* ── Global ──────────────────────────────────────────────────── */
 Screen {
-    background: $surface;
+    background: #0c0e14;
 }
 
 /* ── Header ──────────────────────────────────────────────────── */
 #xinas-header {
     height: auto;
-    background: #1a1a2e;
+    background: #111520;
     color: $text;
     text-align: center;
     padding: 0 1;
 }
 
 #header-banner {
-    color: #00d4aa;
+    color: #4d8bff;
     text-style: bold;
 }
 
 #header-subtitle {
-    color: #8888aa;
+    color: #6b7394;
 }
 
 #update-badge {
-    color: #ffcc00;
+    color: #e6a817;
     text-style: bold;
     display: none;
 }
@@ -35,8 +35,8 @@ Screen {
 
 /* ── Screen Title ────────────────────────────────────────────── */
 #screen-title {
-    background: #16213e;
-    color: #00d4aa;
+    background: #1a2038;
+    color: #4d8bff;
     text-style: bold;
     padding: 0 2;
     height: 1;
@@ -55,8 +55,8 @@ Screen {
     min-width: 30;
     max-width: 42;
     height: 1fr;
-    background: #0f1729;
-    border-right: solid #2a3a5a;
+    background: #141824;
+    border-right: solid #2a3454;
     padding: 1 0;
 }
 
@@ -70,7 +70,7 @@ Screen {
 NavigableMenu {
     height: auto;
     max-height: 100%;
-    background: #0f1729;
+    background: #141824;
     padding: 1 0;
 }
 
@@ -80,47 +80,47 @@ NavigableMenu:focus {
 
 .menu-item {
     padding: 0 1;
-    color: #ccccdd;
+    color: #d0d4e0;
     height: 1;
 }
 
 .menu-item:hover {
-    background: #1e3a5f;
+    background: #1a2d50;
     color: #ffffff;
 }
 
 .menu-item.--highlight {
-    background: #1e3a5f;
+    background: #1a2d50;
     color: #ffffff;
     text-style: bold;
 }
 
 .menu-item-number {
-    color: #00d4aa;
+    color: #4d8bff;
     text-style: bold;
 }
 
 .menu-item-separator {
-    color: #333355;
+    color: #2a3454;
     padding: 0 1;
     height: 1;
 }
 
 /* ── ScrollableTextView ────────────────────────────────────────── */
 ScrollableTextView {
-    background: $surface;
-    border: solid #2a3a5a;
+    background: #0c0e14;
+    border: round #2a3454;
     height: 1fr;
     min-height: 6;
     overflow-y: auto;
-    color: $text;
+    color: #d0d4e0;
     margin: 0;
 }
 
 /* TextArea inside content panel — no border/chrome, transparent bg */
 ScrollableTextView TextArea {
-    background: $surface;
-    color: $text;
+    background: #0c0e14;
+    color: #d0d4e0;
     border: none;
     padding: 0 1;
     height: 1fr;
@@ -141,23 +141,23 @@ ScrollableTextView TextArea:focus {
 }
 
 .service-badge.inactive {
-    color: #cc4444;
+    color: #e85555;
 }
 
 .service-badge.failed {
-    color: #ff3333;
+    color: #e85555;
     text-style: bold reverse;
 }
 
 .service-badge.unknown {
-    color: #ccaa00;
+    color: #e6a817;
 }
 
 /* ── OpStatusWidget ────────────────────────────────────────────── */
 OpStatusWidget {
     height: auto;
-    background: $surface;
-    border: solid #2a3a5a;
+    background: #0c0e14;
+    border: round #2a3454;
     padding: 0 1;
     margin: 1 0;
 }
@@ -167,17 +167,17 @@ OpStatusWidget {
 }
 
 .op-step-fail {
-    color: #ff4444;
+    color: #e85555;
 }
 
-/* ── ConfirmDialog / InputDialog ─────────────────────────────── */
-ConfirmDialog, InputDialog {
+/* ── ConfirmDialog / InputDialog / SelectDialog ──────────────── */
+ConfirmDialog, InputDialog, SelectDialog {
     align: center middle;
 }
 
 #dialog-container {
-    background: #16213e;
-    border: thick #00d4aa 60%;
+    background: #1a2038;
+    border: round #4d8bff 40%;
     padding: 1 2;
     width: 80;
     max-width: 90%;
@@ -187,13 +187,13 @@ ConfirmDialog, InputDialog {
 
 #dialog-title {
     text-style: bold;
-    color: #00d4aa;
+    color: #4d8bff;
     text-align: center;
     margin-bottom: 1;
 }
 
 #dialog-body {
-    color: #ccccdd;
+    color: #d0d4e0;
     margin-bottom: 1;
 }
 
@@ -221,44 +221,49 @@ XiNASProgressBar {
 /* ── Welcome Screen ──────────────────────────────────────────── */
 WelcomeScreen {
     align: center middle;
-    background: #0a0e1a;
+    background: #0c0e14;
 }
 
 #welcome-box {
-    background: #0f1729;
-    border: thick #00d4aa 50%;
+    background: #141824;
+    border: round #4d8bff 40%;
     padding: 2 4;
-    width: 74;
+    width: 78;
     height: auto;
     align: center top;
 }
 
 #welcome-art {
-    color: #00d4aa;
+    color: #4d8bff;
     text-style: bold;
     text-align: center;
 }
 
+#welcome-rule {
+    color: #2a3454;
+    text-align: center;
+}
+
 #welcome-subtitle {
-    color: #8888aa;
+    color: #6b7394;
     text-align: center;
 }
 
 #welcome-status {
     margin-top: 1;
-    color: #ccccdd;
+    color: #d0d4e0;
 }
 
 #welcome-hint {
-    color: #555577;
+    color: #3d4566;
     text-align: center;
     margin-top: 1;
 }
 
 /* ── Main Menu (no sidebar on root menu) ─────────────────────── */
 #main-prompt {
-    background: #16213e;
-    color: #00d4aa;
+    background: #1a2038;
+    color: #4d8bff;
     text-style: bold;
     padding: 0 2;
     height: 1;
@@ -267,15 +272,15 @@ WelcomeScreen {
 
 /* ── RAID screen ──────────────────────────────────────────────── */
 .raid-array-card {
-    background: $surface;
-    border: solid #2a3a5a;
+    background: #141824;
+    border: round #2a3454;
     margin: 0 0 1 0;
     padding: 1;
 }
 
 .raid-array-title {
     text-style: bold;
-    color: #00d4aa;
+    color: #4d8bff;
 }
 
 .raid-healthy {
@@ -283,17 +288,17 @@ WelcomeScreen {
 }
 
 .raid-degraded {
-    color: #ccaa00;
+    color: #e6a817;
 }
 
 .raid-failed {
-    color: #ff4444;
+    color: #e85555;
 }
 
 /* ── NFS screen ────────────────────────────────────────────────── */
 .share-card {
-    background: $surface;
-    border: solid #2a3a5a;
+    background: #141824;
+    border: round #2a3454;
     margin: 0 0 1 0;
     padding: 1;
 }
@@ -304,25 +309,25 @@ WelcomeScreen {
 }
 
 .health-warn {
-    color: #ccaa00;
+    color: #e6a817;
 }
 
 .health-fail {
-    color: #ff4444;
+    color: #e85555;
 }
 
 .health-skip {
-    color: #555577;
+    color: #3d4566;
 }
 
 /* ── Playbook stream ────────────────────────────────────────────── */
 #playbook-log {
-    background: #0a0e1a;
-    border: solid #2a3a5a;
+    background: #0c0e14;
+    border: round #2a3454;
     height: 1fr;
     overflow-y: auto;
     padding: 0 1;
-    color: $text;
+    color: #d0d4e0;
 }
 
 .playbook-ok {
@@ -330,24 +335,24 @@ WelcomeScreen {
 }
 
 .playbook-changed {
-    color: #ccaa00;
+    color: #e6a817;
 }
 
 .playbook-failed {
-    color: #ff4444;
+    color: #e85555;
 }
 
 /* ── Footer ──────────────────────────────────────────────────── */
 Footer {
-    background: #1a1a2e;
+    background: #111520;
 }
 
 FooterKey > .footer-key--key {
-    color: #00d4aa;
+    color: #4d8bff;
     text-style: bold;
-    background: #16213e;
+    background: #1a2038;
 }
 
 FooterKey > .footer-key--description {
-    color: #8888aa;
+    color: #6b7394;
 }

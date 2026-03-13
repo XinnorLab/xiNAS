@@ -6,15 +6,15 @@ import asyncio
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import Label, Footer
+from textual.widgets import Label, Footer, Rule
 
 from xinas_menu.version import XINAS_MENU_VERSION
 
 _ART = r"""
- __  _  _ _  _   _   ___
- \ \/ || | \| | /_\ / __|
-  >  < | | .` |/ _ \\__ \
- /_/\_\|_|_|\_/_/ \_\___/
+        _ _  _   _   ___
+  __ __(_) \| | /_\ / __|
+  \ \ /| | .` |/ _ \\__ \
+  /_\_\|_|_|\_/_/ \_\___/
 """
 
 
@@ -31,13 +31,13 @@ class WelcomeScreen(Screen):
         from textual.containers import Vertical
         with Vertical(id="welcome-box"):
             yield Label(_ART, id="welcome-art")
+            yield Rule(id="welcome-rule")
             yield Label(
-                f"  xiNAS Management Console  v{XINAS_MENU_VERSION}\n"
-                "  High-Performance NAS Storage Node\n",
+                f"v{XINAS_MENU_VERSION}  \u2502  High-Performance NAS Storage",
                 id="welcome-subtitle",
             )
-            yield Label("  Probing services...", id="welcome-status")
-            yield Label("  Press Enter to continue", id="welcome-hint")
+            yield Label("  Probing services \u2026", id="welcome-status")
+            yield Label("\u23ce  Press Enter to continue", id="welcome-hint")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -50,16 +50,16 @@ class WelcomeScreen(Screen):
 
         ok, _data, err = await app.grpc.get_server_info()
         if ok:
-            status_lines.append("  * xiRAID gRPC -- connected")
+            status_lines.append("  \u25cf xiRAID gRPC \u2014 connected")
         else:
-            status_lines.append(f"  ! xiRAID gRPC -- {err[:60]}")
+            status_lines.append(f"  \u25cb xiRAID gRPC \u2014 {err[:60]}")
 
         loop = asyncio.get_running_loop()
         nfs_ok, _, nfs_err = await loop.run_in_executor(None, app.nfs.list_exports)
         if nfs_ok:
-            status_lines.append("  * NFS helper  -- connected")
+            status_lines.append("  \u25cf NFS helper  \u2014 connected")
         else:
-            status_lines.append(f"  ! NFS helper  -- {nfs_err[:60]}")
+            status_lines.append(f"  \u25cb NFS helper  \u2014 {nfs_err[:60]}")
 
         try:
             lbl = self.query_one("#welcome-status", Label)

@@ -9,10 +9,10 @@ from textual.widgets import Label
 from xinas_menu.version import XINAS_MENU_VERSION
 
 _BANNER = r"""
- __  _  _ _  _   _   ___
- \ \/ || | \| | /_\ / __|
-  >  < | | .` |/ _ \\__ \
- /_/\_\|_|_|\_/_/ \_\___/"""
+        _ _  _   _   ___
+  __ __(_) \| | /_\ / __|
+  \ \ /| | .` |/ _ \\__ \
+  /_\_\|_|_|\_/_/ \_\___/"""
 
 
 class XiNASHeader(Widget):
