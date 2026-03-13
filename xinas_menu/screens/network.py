@@ -24,6 +24,8 @@ _MENU = [
     MenuItem("2", "Edit Interface IP Address"),
     MenuItem("3", "Apply Network Changes"),
     MenuItem("4", "View Netplan Config File"),
+    MenuItem("", "", separator=True),
+    MenuItem("5", "IP Pool Configuration"),
     MenuItem("0", "Back"),
 ]
 
@@ -58,6 +60,9 @@ class NetworkScreen(Screen):
             self._apply_netplan()
         elif key == "4":
             self._view_netplan_file()
+        elif key == "5":
+            from xinas_menu.screens.ip_pool import IPPoolScreen
+            self.app.push_screen(IPPoolScreen())
 
     @work(exclusive=True)
     async def _show_network_info(self) -> None:
