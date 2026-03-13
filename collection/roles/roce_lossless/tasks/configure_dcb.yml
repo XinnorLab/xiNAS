@@ -15,6 +15,41 @@
       The doca_ofed role should run before roce_lossless.
   when: mlnx_qos_check.rc != 0
 
+# Step 1b: Preflight — validate PFC/ETS consistency before applying
+- name: Validate PFC priority matches traffic class
+  ansible.builtin.fail:
+    msg: >-
+      Configuration error: roce_pfc_priority ({{ roce_pfc_priority }})
+      does not match roce_traffic_class ({{ roce_traffic_class }}).
+      PFC must be enabled on the same priority as the RoCE traffic class,
+      otherwise RoCE traffic will NOT be lossless.
+  when: roce_pfc_priority | int != roce_traffic_class | int
+  tags: [roce_lossless, preflight]
+
+- name: Validate ETS bandwidth sums to 100
+  ansible.builtin.set_fact:
+    _ets_bw_sum: "{{ roce_ets_tc_bw.split(',') | map('int') | sum }}"
+  tags: [roce_lossless, preflight]
+
+- name: Fail if ETS bandwidth does not sum to 100
+  ansible.builtin.fail:
+    msg: >-
+      Configuration error: roce_ets_tc_bw values sum to {{ _ets_bw_sum }},
+      but must sum to exactly 100. Current value: "{{ roce_ets_tc_bw }}".
+      Adjust the bandwidth allocation so all 8 traffic classes total 100%.
+  when: _ets_bw_sum | int != 100
+  tags: [roce_lossless, preflight]
+
+- name: Validate PFC priority has non-zero ETS bandwidth
+  ansible.builtin.fail:
+    msg: >-
+      Configuration error: Traffic class {{ roce_traffic_class }} (PFC priority
+      {{ roce_pfc_priority }}) has 0% ETS bandwidth. RoCE traffic will be
+      starved. Allocate bandwidth to TC{{ roce_traffic_class }} in
+      roce_ets_tc_bw: "{{ roce_ets_tc_bw }}"
+  when: (roce_ets_tc_bw.split(',') | map('int') | list)[roce_traffic_class | int] | int == 0
+  tags: [roce_lossless, preflight]
+
 # Step 2: Build PFC string (e.g., "0,0,0,1,0,0,0,0" for priority 3)
 - name: Build PFC priority string
   ansible.builtin.set_fact:

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="doca-ofed-network-tuning" tests="20" failures="0" errors="0">
+  <testsuite name="doca_ofed" tests="3" failures="0" errors="0">
+    <testcase classname="doca_ofed" name="TC-001: Verify DOCA-OFED happy path installs packages and loads kernel modules" />
+    <testcase classname="doca_ofed" name="TC-006: Verify DOCA-OFED fails gracefully when repository is unreachable" />
+    <testcase classname="doca_ofed" name="TC-007: Verify UDEV rules correctly rename InfiniBand interfaces" />
+  </testsuite>
+  <testsuite name="net_controllers" tests="3" failures="0" errors="0">
+    <testcase classname="net_controllers" name="TC-004: Verify network interface IP allocation from pool" />
+    <testcase classname="net_controllers" name="TC-008: Verify MTU auto-detection assigns 4092 for IB and 9000 for RoCE" />
+    <testcase classname="net_controllers" name="TC-009: Verify manual IP override takes precedence over pool allocation" />
+  </testsuite>
+  <testsuite name="roce_lossless" tests="9" failures="0" errors="0">
+    <testcase classname="roce_lossless" name="TC-002: Verify RoCE NIC auto-detection correctly identifies IB vs RoCE mode" />
+    <testcase classname="roce_lossless" name="TC-003: Verify PFC/ETS configured correctly for lossless RoCE" />
+    <testcase classname="roce_lossless" name="TC-010: Verify roce_lossless disabled skips all configuration" />
+    <testcase classname="roce_lossless" name="TC-011: Verify mlnx_qos not found fails with clear error message" />
+    <testcase classname="roce_lossless" name="TC-012: Verify RoCE validation detects ToS mismatch" />
+    <testcase classname="roce_lossless" name="TC-013: Verify boot persistence service applies settings after reboot" />
+    <testcase classname="roce_lossless" name="TC-014: Verify InfiniBand mode skips PFC/ETS and only configures ToS" />
+    <testcase classname="roce_lossless" name="TC-016: Verify ETS bandwidth allocation enforcement by mlnx_qos" />
+    <testcase classname="roce_lossless" name="TC-019: Verify DSCP/PCP graceful degradation when not supported by firmware" />
+  </testsuite>
+  <testsuite name="perf_tuning" tests="4" failures="0" errors="0">
+    <testcase classname="perf_tuning" name="TC-005: Verify perf tuning sysctl values applied for 400Gbit throughput" />
+    <testcase classname="perf_tuning" name="TC-015: Verify kernel boot parameters include mitigations-off flags" />
+    <testcase classname="perf_tuning" name="TC-018: Verify NVMe tuning applied to all NVMe devices" />
+    <testcase classname="perf_tuning" name="TC-020: Verify TuneD profile throughput-performance active after playbook" />
+  </testsuite>
+  <testsuite name="All" tests="1" failures="0" errors="0">
+    <testcase classname="All" name="TC-017: Verify idempotency - run all 4 roles twice with no drift" />
+  </testsuite>
+</testsuites>

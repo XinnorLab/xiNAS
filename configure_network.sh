@@ -122,11 +122,47 @@ configure_ip_pool() {
         fi
     done
 
+    # Validate pool capacity: check third-octet range won't overflow
+    IFS=. read -r s1 s2 s3 s4 <<< "$new_start"
+    IFS=. read -r e1 e2 e3 e4 <<< "$new_end"
+    local pool_slots=$(( e3 - s3 + 1 ))
+    [[ $pool_slots -le 0 ]] && pool_slots=1
+
+    # Count detected high-speed interfaces
+    local iface_count=0
+    for iface_path in /sys/class/net/*; do
+        [ -d "$iface_path" ] || continue
+        local iname
+        iname=$(basename "$iface_path")
+        [ "$iname" = "lo" ] && continue
+        [ -e "$iface_path/device" ] || continue
+        local itype idriver
+        itype=$(cat "$iface_path/type" 2>/dev/null || echo "0")
+        idriver=$(basename "$(readlink -f "$iface_path/device/driver" 2>/dev/null)" 2>/dev/null || echo "")
+        if [ "$itype" = "32" ] || [ "$idriver" = "mlx5_core" ]; then
+            ((iface_count++)) || true
+        fi
+    done
+
+    # Warn if pool can't accommodate all interfaces
+    if [[ $iface_count -gt 0 && $iface_count -gt $pool_slots ]]; then
+        msg_box "WARNING: Pool Too Small" "Detected $iface_count high-speed interfaces but\npool only has $pool_slots subnet slots\n(third octet: $s3 to $e3).\n\nInterfaces beyond slot $pool_slots will get\ninvalid IPs. Expand the pool range or use\nmanual IP configuration."
+    fi
+
+    # Warn if start octet + interface count would overflow 255
+    if [[ $iface_count -gt 0 ]] && [[ $(( s3 + iface_count - 1 )) -gt 255 ]]; then
+        msg_box "WARNING: IP Overflow" "Starting at third octet $s3 with $iface_count\ninterfaces would produce IPs with\nthird octet > 255 (invalid).\n\nUse a lower start address or fewer interfaces."
+    fi
+
     # Save settings
     save_pool_settings "$new_start" "$new_end" "$new_prefix"
 
-    # Show summary
-    msg_box "IP Pool Configured" "IP Pool configured:\n\nRange: $new_start - $new_end\nPrefix: /$new_prefix\n\nInterfaces will be auto-assigned:\n  Interface 1: ${new_start}/${new_prefix}\n  Interface 2: next subnet\n  etc.\n\nSaved to: $ROLE_DEFAULTS"
+    # Build summary with capacity info
+    local capacity_note=""
+    if [[ $iface_count -gt 0 ]]; then
+        capacity_note="\n\nDetected interfaces: $iface_count\nPool capacity: $pool_slots subnets"
+    fi
+    msg_box "IP Pool Configured" "IP Pool configured:\n\nRange: $new_start - $new_end\nPrefix: /$new_prefix\n\nInterfaces will be auto-assigned:\n  Interface 1: ${new_start}/${new_prefix}\n  Interface 2: next subnet\n  etc.${capacity_note}\n\nSaved to: $ROLE_DEFAULTS"
 }
 
 # Configure interfaces manually (legacy mode)

@@ -106,6 +106,22 @@
   when: net_ip_pool_enabled | bool and (net_allocated_ips | length > 0)
   tags: [network]
 
+# Step 2b: Validate allocated IPs have valid octets (prevent third-octet overflow)
+- name: Validate allocated IPs are valid IPv4 addresses
+  ansible.builtin.fail:
+    msg: >-
+      IP pool overflow: interface {{ item.key }} was assigned {{ item.value }}
+      which contains an invalid octet (> 255). The pool starting at
+      {{ net_ip_pool_start }} cannot accommodate {{ net_allocated_ips | length }}
+      interfaces. Either use a lower starting third-octet, reduce the number
+      of interfaces, or use net_manual_ips overrides.
+  loop: "{{ net_allocated_ips | dict2items }}"
+  when:
+    - net_ip_pool_enabled | bool
+    - net_allocated_ips | length > 0
+    - (item.value.split('/')[0].split('.')[2] | int) > 255
+  tags: [network]
+
 # Step 3: Deploy netplan configuration
 - name: Deploy netplan configuration for network controllers
   ansible.builtin.template:

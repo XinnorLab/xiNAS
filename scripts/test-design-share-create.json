@@ -1,0 +1,285 @@
+{
+  "testPlan": {
+    "title": "TP: Verify share.create NFS export creation across MCP → daemon → kernel stack",
+    "scope": "Full share.create flow — Zod schema validation, plan/apply middleware, preflight checks (path existence, duplicate detection), NFS option building (security, async, RDMA), Unix socket delegation to nfs-helper daemon, /etc/exports file manipulation with fcntl locking, exportfs -r kernel reload. Excludes: share.delete, share.update_policy, share.set_quota, Ansible exports role, shell menu scripts.",
+    "risks": [
+      {"description": "Silent data exposure — incorrect NFS options (missing sync, wrong sec=) could expose data without encryption or allow async writes that lose data on crash", "severity": "high"},
+      {"description": "/etc/exports corruption — concurrent writes or parse failures could make all NFS exports unavailable", "severity": "high"},
+      {"description": "Daemon unavailability — if nfs-helper socket is down, share.create fails with opaque timeout instead of actionable error", "severity": "medium"},
+      {"description": "Idempotency violation — overwriting an existing export without warning could silently change access policy for active clients", "severity": "medium"},
+      {"description": "exportfs -r failure — export written to file but not loaded into kernel means share appears created but is not mountable", "severity": "medium"},
+      {"description": "Path traversal — exporting sensitive system paths (e.g., /etc, /root) without guardrails", "severity": "low"}
+    ],
+    "strategy": ["functional", "negative", "boundary", "resilience"],
+    "environment": "Ubuntu 22.04/24.04 LTS, nfs-kernel-server installed, xinas-nfs-helper.service running, at least one XFS filesystem mounted at /mnt/data, RDMA-capable NIC for TC-006",
+    "entryCriteria": "xiNAS-MCP server running with valid config, nfs-helper daemon listening on Unix socket, target export directory exists on filesystem",
+    "exitCriteria": "All P0 and P1 test cases pass. No exports file corruption observed. Every created export is mountable from a client.",
+    "traceability": {"pr": null, "commit": "5fac762", "components": ["NFS", "MCP"]}
+  },
+  "testCases": [
+    {
+      "id": "TC-001",
+      "title": "Verify share.create happy path creates mountable NFS export",
+      "component": "NFS",
+      "priority": "P0",
+      "type": "functional",
+      "preconditions": "/mnt/data/share1 exists, nfs-helper daemon running, no existing export for this path",
+      "inputData": "{ path: \"/mnt/data/share1\", clients: [{ host: \"*\", options: [\"rw\",\"no_root_squash\"] }], security: \"sys\", mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Call share.create with input data in mode: apply", "expected": "Returns { created: true, path: \"/mnt/data/share1\" }"},
+        {"step": 2, "action": "Read /etc/exports", "expected": "Contains line: /mnt/data/share1  *(rw,no_root_squash,sync)"},
+        {"step": 3, "action": "Run exportfs -v", "expected": "Shows /mnt/data/share1 as active export"},
+        {"step": 4, "action": "From NFS client, run mount -t nfs server:/mnt/data/share1 /mnt/test", "expected": "Mount succeeds, directory is accessible"}
+      ],
+      "expectedResult": "Export is written to /etc/exports, loaded into kernel via exportfs -r, and mountable by NFS clients",
+      "observability": "journalctl -u xinas-nfs-helper, exportfs -v, /etc/exports content",
+      "references": ["xiNAS-MCP/src/tools/share.ts:105-177", "xiNAS-MCP/nfs-helper/nfs_exports.py:88-102"]
+    },
+    {
+      "id": "TC-002",
+      "title": "Verify plan mode returns preflight result without side effects",
+      "component": "MCP",
+      "priority": "P0",
+      "type": "functional",
+      "preconditions": "/mnt/data/share_plan exists, no export for this path",
+      "inputData": "{ path: \"/mnt/data/share_plan\", clients: [{ host: \"10.0.0.0/24\", options: [\"rw\"] }], mode: \"plan\" }",
+      "steps": [
+        {"step": 1, "action": "Call share.create with mode: plan", "expected": "Returns PlanResult with mode: plan, preflight_passed: true"},
+        {"step": 2, "action": "Inspect changes[0]", "expected": "Has action: create, resource_type: nfs_export, after.path matches input"},
+        {"step": 3, "action": "Read /etc/exports", "expected": "Does NOT contain /mnt/data/share_plan"},
+        {"step": 4, "action": "Run exportfs -v", "expected": "Does NOT show /mnt/data/share_plan"}
+      ],
+      "expectedResult": "PlanResult returned with accurate description; no changes to filesystem or kernel export table",
+      "observability": "PlanResult JSON structure, /etc/exports unchanged",
+      "references": ["xiNAS-MCP/src/middleware/planApply.ts:16-36", "xiNAS-MCP/src/tools/share.ts:109-156"]
+    },
+    {
+      "id": "TC-003",
+      "title": "Verify share.create blocks when path does not exist",
+      "component": "NFS",
+      "priority": "P0",
+      "type": "negative",
+      "preconditions": "/mnt/data/nonexistent does NOT exist on filesystem",
+      "inputData": "{ path: \"/mnt/data/nonexistent\", clients: [{ host: \"*\", options: [\"rw\"] }], mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Call share.create with mode: plan for nonexistent path", "expected": "Returns PlanResult with preflight_passed: false, blocking_resources includes 'Path does not exist'"},
+        {"step": 2, "action": "Call share.create with mode: apply", "expected": "Throws McpToolError with PRECONDITION_FAILED code"},
+        {"step": 3, "action": "Read /etc/exports", "expected": "Does NOT contain /mnt/data/nonexistent"}
+      ],
+      "expectedResult": "Apply mode throws preflight error; no export is created for nonexistent path",
+      "observability": "Error message contains 'Path does not exist', /etc/exports unchanged",
+      "references": ["xiNAS-MCP/src/tools/share.ts:114-117", "xiNAS-MCP/src/middleware/planApply.ts:27-33"]
+    },
+    {
+      "id": "TC-004",
+      "title": "Verify duplicate export overwrites with warning",
+      "component": "NFS",
+      "priority": "P0",
+      "type": "functional",
+      "preconditions": "/mnt/data/existing exists, already exported with *(ro,sync)",
+      "inputData": "{ path: \"/mnt/data/existing\", clients: [{ host: \"10.0.0.0/24\", options: [\"rw\",\"no_root_squash\"] }], mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Call share.create with mode: plan for existing export", "expected": "PlanResult warnings include 'already exists — will be overwritten'"},
+        {"step": 2, "action": "Call share.create with mode: apply", "expected": "Returns { created: true }"},
+        {"step": 3, "action": "Read /etc/exports", "expected": "Old *(ro,sync) replaced by 10.0.0.0/24(rw,no_root_squash,sync)"},
+        {"step": 4, "action": "Count entries for /mnt/data/existing in exports file", "expected": "Exactly 1 entry"}
+      ],
+      "expectedResult": "Existing export replaced atomically; warning surfaced in plan; only one entry in exports file",
+      "observability": "Plan warnings array, /etc/exports diff before/after",
+      "references": ["xiNAS-MCP/src/tools/share.ts:119-127", "xiNAS-MCP/nfs-helper/nfs_exports.py:96-97"]
+    },
+    {
+      "id": "TC-005",
+      "title": "Verify buildNfsOptions applies security mode correctly",
+      "component": "NFS",
+      "priority": "P0",
+      "type": "functional",
+      "preconditions": "/mnt/data/secure exists",
+      "inputData": "{ path: \"/mnt/data/secure\", clients: [{ host: \"*\", options: [\"rw\"] }], security: \"krb5i\", mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Call share.create with security: krb5i", "expected": "Returns { created: true }"},
+        {"step": 2, "action": "Read /etc/exports options for this export", "expected": "Options include sec=krb5i"},
+        {"step": 3, "action": "Create another export with security: sys (default)", "expected": "Options do NOT include sec= prefix"}
+      ],
+      "expectedResult": "Non-default security modes append sec=<mode>; sys mode omits sec= parameter",
+      "observability": "/etc/exports content, exportfs -v output",
+      "references": ["xiNAS-MCP/src/tools/share.ts:79-81"]
+    },
+    {
+      "id": "TC-006",
+      "title": "Verify RDMA option is appended when rdma=true",
+      "component": "NFS",
+      "priority": "P1",
+      "type": "functional",
+      "preconditions": "/mnt/data/rdma_share exists, RDMA-capable NIC present",
+      "inputData": "{ path: \"/mnt/data/rdma_share\", clients: [{ host: \"*\", options: [\"rw\"] }], rdma: true, mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Call share.create with rdma: true", "expected": "Returns { created: true }"},
+        {"step": 2, "action": "Read /etc/exports options", "expected": "Options include rdma"},
+        {"step": 3, "action": "Create export with rdma: false (default) on different path", "expected": "Options do NOT include rdma"}
+      ],
+      "expectedResult": "RDMA option present in exports only when explicitly enabled",
+      "observability": "/etc/exports options string",
+      "references": ["xiNAS-MCP/src/tools/share.ts:87-89"]
+    },
+    {
+      "id": "TC-007",
+      "title": "Verify async_commit=true sets async instead of sync",
+      "component": "NFS",
+      "priority": "P1",
+      "type": "functional",
+      "preconditions": "/mnt/data/async_share exists",
+      "inputData": "{ path: \"/mnt/data/async_share\", clients: [{ host: \"*\", options: [\"rw\"] }], async_commit: true, mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Call share.create with async_commit: true", "expected": "Returns { created: true }"},
+        {"step": 2, "action": "Read /etc/exports options", "expected": "Options include async, do NOT include sync"},
+        {"step": 3, "action": "Create export with async_commit: false (default)", "expected": "Options include sync, do NOT include async"}
+      ],
+      "expectedResult": "Mutually exclusive async/sync option applied based on async_commit boolean",
+      "observability": "/etc/exports options string",
+      "references": ["xiNAS-MCP/src/tools/share.ts:82-86"]
+    },
+    {
+      "id": "TC-008",
+      "title": "Verify Zod rejects empty clients array",
+      "component": "MCP",
+      "priority": "P1",
+      "type": "negative",
+      "preconditions": "MCP server running",
+      "inputData": "{ path: \"/mnt/data/test\", clients: [], mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Call share.create with empty clients array", "expected": "Zod validation error thrown before handler executes"},
+        {"step": 2, "action": "Inspect error message", "expected": "Indicates array must have at least 1 element"},
+        {"step": 3, "action": "Check /etc/exports", "expected": "Unchanged — no export created"}
+      ],
+      "expectedResult": "Zod .min(1) constraint rejects empty clients; no side effects",
+      "observability": "Error response with validation details",
+      "references": ["xiNAS-MCP/src/tools/share.ts:34"]
+    },
+    {
+      "id": "TC-009",
+      "title": "Verify share.create fails gracefully when daemon is down",
+      "component": "NFS",
+      "priority": "P1",
+      "type": "resilience",
+      "preconditions": "/mnt/data/test exists, xinas-nfs-helper.service is STOPPED",
+      "inputData": "{ path: \"/mnt/data/test\", clients: [{ host: \"*\", options: [\"rw\"] }], mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Stop nfs-helper: systemctl stop xinas-nfs-helper", "expected": "Service stopped"},
+        {"step": 2, "action": "Call share.create with mode: apply", "expected": "Fails with McpToolError containing 'Cannot connect to nfs-helper' and 'Is xinas-nfs-helper.service running?'"},
+        {"step": 3, "action": "Verify error occurs within 5 seconds", "expected": "Timeout is CONNECT_TIMEOUT_MS = 5000"},
+        {"step": 4, "action": "Check /etc/exports", "expected": "Unchanged — no partial write"}
+      ],
+      "expectedResult": "Actionable error message with service hint; fails within timeout; no partial state",
+      "observability": "Error message text, elapsed time",
+      "references": ["xiNAS-MCP/src/os/nfsClient.ts:52-61", "xiNAS-MCP/src/os/nfsClient.ts:12"]
+    },
+    {
+      "id": "TC-010",
+      "title": "Verify /etc/exports is written atomically with fcntl lock",
+      "component": "NFS",
+      "priority": "P1",
+      "type": "resilience",
+      "preconditions": "nfs-helper daemon running, 2 concurrent MCP clients",
+      "inputData": "Two simultaneous share.create calls: /mnt/data/share_a and /mnt/data/share_b",
+      "steps": [
+        {"step": 1, "action": "Send two share.create requests concurrently for different paths", "expected": "Both return { created: true }"},
+        {"step": 2, "action": "Read /etc/exports", "expected": "Contains BOTH exports, properly formatted"},
+        {"step": 3, "action": "Verify no truncated or malformed lines", "expected": "File parses cleanly with _parse_exports()"},
+        {"step": 4, "action": "Check lock file /run/xinas-exports.lock exists", "expected": "Lock file present"}
+      ],
+      "expectedResult": "Concurrent writes serialize correctly via fcntl locking; no data loss or corruption",
+      "observability": "/etc/exports content, /run/xinas-exports.lock, daemon logs",
+      "references": ["xiNAS-MCP/nfs-helper/nfs_exports.py:66-73"]
+    },
+    {
+      "id": "TC-011",
+      "title": "Verify exportfs -r failure does not leave stale export file entry",
+      "component": "NFS",
+      "priority": "P1",
+      "type": "negative",
+      "preconditions": "/mnt/data/test exists, exportfs binary temporarily renamed",
+      "inputData": "{ path: \"/mnt/data/test\", clients: [{ host: \"*\", options: [\"rw\"] }], mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Rename exportfs binary: mv /usr/sbin/exportfs /usr/sbin/exportfs.bak", "expected": "Binary unavailable"},
+        {"step": 2, "action": "Call share.create with mode: apply", "expected": "Fails with RuntimeError 'exportfs not found'"},
+        {"step": 3, "action": "Read /etc/exports", "expected": "Entry IS written (file written before reload — design gap)"},
+        {"step": 4, "action": "Restore binary and run exportfs -r manually", "expected": "Export now active in kernel"}
+      ],
+      "expectedResult": "Error indicates missing nfs-kernel-server. Note: file is written before kernel reload, leaving inconsistent state on failure — known design gap.",
+      "observability": "daemon stderr logs, /etc/exports vs exportfs -v comparison",
+      "references": ["xiNAS-MCP/nfs-helper/nfs_helper.py:103-116"]
+    },
+    {
+      "id": "TC-012",
+      "title": "Verify multi-client export renders correctly in /etc/exports",
+      "component": "NFS",
+      "priority": "P1",
+      "type": "boundary",
+      "preconditions": "/mnt/data/multi exists",
+      "inputData": "{ path: \"/mnt/data/multi\", clients: [{ host: \"10.0.0.0/24\", options: [\"rw\"] }, { host: \"192.168.1.0/24\", options: [\"ro\"] }], mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Call share.create with two clients having different options", "expected": "Returns { created: true }"},
+        {"step": 2, "action": "Read /etc/exports", "expected": "Single line with both clients space-separated, each with own options"},
+        {"step": 3, "action": "Run exportfs -v", "expected": "Shows both client networks with respective permissions"}
+      ],
+      "expectedResult": "Multiple clients rendered correctly. Note: buildNfsOptions uses clients[0].options for all clients — second client's ro option may be overridden. Verify actual behavior.",
+      "observability": "/etc/exports format, exportfs -v",
+      "references": ["xiNAS-MCP/src/tools/share.ts:78", "xiNAS-MCP/nfs-helper/nfs_exports.py:54-61"]
+    },
+    {
+      "id": "TC-013",
+      "title": "Verify idempotency — creating same export twice yields single entry",
+      "component": "NFS",
+      "priority": "P1",
+      "type": "functional",
+      "preconditions": "/mnt/data/idem exists",
+      "inputData": "Same params twice: { path: \"/mnt/data/idem\", clients: [{ host: \"*\", options: [\"rw\"] }], mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Call share.create first time", "expected": "Returns { created: true }"},
+        {"step": 2, "action": "Call share.create second time with identical params", "expected": "Returns { created: true } (no error)"},
+        {"step": 3, "action": "Read /etc/exports", "expected": "Exactly ONE entry for /mnt/data/idem"},
+        {"step": 4, "action": "Run exportfs -v", "expected": "Shows single export"}
+      ],
+      "expectedResult": "Repeated creation is idempotent — replaces existing entry rather than duplicating",
+      "observability": "grep -c /mnt/data/idem /etc/exports equals 1",
+      "references": ["xiNAS-MCP/nfs-helper/nfs_exports.py:96-97"]
+    },
+    {
+      "id": "TC-014",
+      "title": "Verify share.create with all four Kerberos security modes",
+      "component": "NFS",
+      "priority": "P1",
+      "type": "functional",
+      "preconditions": "/mnt/data/kerberos exists",
+      "inputData": "Four calls with security: sys, krb5, krb5i, krb5p respectively, mode: plan",
+      "steps": [
+        {"step": 1, "action": "Call share.create with security: sys in plan mode", "expected": "PlanResult options do NOT include sec= prefix"},
+        {"step": 2, "action": "Call with security: krb5", "expected": "PlanResult options include sec=krb5"},
+        {"step": 3, "action": "Call with security: krb5i", "expected": "PlanResult options include sec=krb5i"},
+        {"step": 4, "action": "Call with security: krb5p", "expected": "PlanResult options include sec=krb5p"}
+      ],
+      "expectedResult": "All four security modes accepted by Zod; only non-sys values produce sec= option in export options",
+      "observability": "PlanResult after field inspection",
+      "references": ["xiNAS-MCP/src/tools/share.ts:35", "xiNAS-MCP/src/tools/share.ts:79-81"]
+    },
+    {
+      "id": "TC-015",
+      "title": "Verify path with spaces is handled correctly in exports file",
+      "component": "NFS",
+      "priority": "P2",
+      "type": "boundary",
+      "preconditions": "/mnt/data/my share directory exists (mkdir -p '/mnt/data/my share')",
+      "inputData": "{ path: \"/mnt/data/my share\", clients: [{ host: \"*\", options: [\"rw\"] }], mode: \"apply\" }",
+      "steps": [
+        {"step": 1, "action": "Call share.create with path containing spaces", "expected": "Returns { created: true }"},
+        {"step": 2, "action": "Read /etc/exports", "expected": "Path is properly formatted (quoted or escaped)"},
+        {"step": 3, "action": "Run exportfs -r", "expected": "No parse errors"},
+        {"step": 4, "action": "Run showmount -e localhost", "expected": "Export visible with correct path"}
+      ],
+      "expectedResult": "Paths with spaces serialized correctly. Note: current _serialize_exports does NOT quote paths — this test likely reveals a bug.",
+      "observability": "/etc/exports format, exportfs stderr",
+      "references": ["xiNAS-MCP/nfs-helper/nfs_exports.py:24-28", "xiNAS-MCP/nfs-helper/nfs_exports.py:62"]
+    }
+  ]
+}

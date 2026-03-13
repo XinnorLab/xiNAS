@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="share.create" tests="15" failures="0" errors="0">
+  <testsuite name="NFS" tests="13" failures="0" errors="0">
+    <testcase classname="NFS" name="TC-001: Verify share.create happy path creates mountable NFS export" />
+    <testcase classname="NFS" name="TC-003: Verify share.create blocks when path does not exist" />
+    <testcase classname="NFS" name="TC-004: Verify duplicate export overwrites with warning" />
+    <testcase classname="NFS" name="TC-005: Verify buildNfsOptions applies security mode correctly" />
+    <testcase classname="NFS" name="TC-006: Verify RDMA option is appended when rdma=true" />
+    <testcase classname="NFS" name="TC-007: Verify async_commit=true sets async instead of sync" />
+    <testcase classname="NFS" name="TC-009: Verify share.create fails gracefully when daemon is down" />
+    <testcase classname="NFS" name="TC-010: Verify /etc/exports is written atomically with fcntl lock" />
+    <testcase classname="NFS" name="TC-011: Verify exportfs -r failure does not leave stale export file entry" />
+    <testcase classname="NFS" name="TC-012: Verify multi-client export renders correctly in /etc/exports" />
+    <testcase classname="NFS" name="TC-013: Verify idempotency - creating same export twice yields single entry" />
+    <testcase classname="NFS" name="TC-014: Verify share.create with all four Kerberos security modes" />
+    <testcase classname="NFS" name="TC-015: Verify path with spaces is handled correctly in exports file" />
+  </testsuite>
+  <testsuite name="MCP" tests="2" failures="0" errors="0">
+    <testcase classname="MCP" name="TC-002: Verify plan mode returns preflight result without side effects" />
+    <testcase classname="MCP" name="TC-008: Verify Zod rejects empty clients array" />
+  </testsuite>
+</testsuites>

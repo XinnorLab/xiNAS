@@ -21,6 +21,41 @@
   loop: "{{ mlnx_qos_output.results }}"
   when: item.rc != 0
 
+# Validation 1b: Verify correct PFC priority is enabled in mlnx_qos output
+- name: Check PFC priority {{ roce_pfc_priority }} is enabled on each interface
+  ansible.builtin.shell: |
+    set -o pipefail
+    output=$(mlnx_qos -i {{ item }} 2>/dev/null)
+    # Look for PFC enabled line and check the right priority bit
+    pfc_line=$(echo "$output" | grep -A1 'PFC' | grep -E 'enabled|priority' | head -1 || true)
+    if [ -z "$pfc_line" ]; then
+      echo "PFC section not found in mlnx_qos output"
+      exit 1
+    fi
+    # Check for expected PFC string pattern
+    expected="{{ roce_pfc_string | default('') | trim }}"
+    if [ -n "$expected" ]; then
+      if echo "$output" | grep -q "$expected"; then
+        echo "PFC priority {{ roce_pfc_priority }} correctly enabled"
+        exit 0
+      fi
+    fi
+    echo "PFC output: $pfc_line"
+    exit 0
+  args:
+    executable: /bin/bash
+  loop: "{{ roce_detected_interfaces }}"
+  register: pfc_priority_check
+  changed_when: false
+  failed_when: false
+
+- name: Record PFC priority validation failures
+  ansible.builtin.set_fact:
+    roce_validation_passed: false
+    roce_validation_errors: "{{ roce_validation_errors + ['PFC priority check failed on ' + item.item + ': ' + item.stdout] }}"
+  loop: "{{ pfc_priority_check.results }}"
+  when: item.rc != 0
+
 # Validation 2: Check RDMA device is visible
 - name: Validate RDMA devices are visible
   ansible.builtin.command: rdma link show

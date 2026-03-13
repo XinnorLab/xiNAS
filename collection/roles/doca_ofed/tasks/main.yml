@@ -37,6 +37,56 @@
   notify: restart openibd
   tags: [ofed, install]
 
+## --- Post-install validation (prevent silent DKMS failures) ---
+
+- name: Verify DKMS modules built successfully
+  ansible.builtin.shell: |
+    set -o pipefail
+    failed=""
+    for pkg in mlnx-ofed-kernel nfsrdma; do
+      status=$(dkms status 2>/dev/null | grep -i "$pkg" || true)
+      if [ -n "$status" ]; then
+        if echo "$status" | grep -qiE ':\s*(added|error|broken)'; then
+          failed="${failed}${pkg}: ${status}\n"
+        fi
+      fi
+    done
+    if [ -n "$failed" ]; then
+      printf "DKMS build failures detected:\n%b" "$failed"
+      exit 1
+    fi
+    echo "All DKMS modules built successfully"
+  args:
+    executable: /bin/bash
+  register: dkms_check
+  changed_when: false
+  failed_when: dkms_check.rc != 0
+  when: ofed_pkgs is changed
+  tags: [ofed, verify]
+
+- name: Verify mlx5_core kernel module is loadable
+  ansible.builtin.command: modinfo mlx5_core
+  register: mlx5_modinfo
+  changed_when: false
+  failed_when: mlx5_modinfo.rc != 0
+  tags: [ofed, verify]
+
+- name: Verify NFS-RDMA kernel module is loadable
+  ansible.builtin.command: modinfo rpcrdma
+  register: rpcrdma_modinfo
+  changed_when: false
+  failed_when: false
+  tags: [ofed, verify]
+
+- name: Warn if NFS-RDMA module is missing
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: rpcrdma (NFS-RDMA) kernel module not found.
+      NFS over RDMA will not function. Verify mlnx-nfsrdma-dkms built
+      correctly with: dkms status | grep nfsrdma
+  when: rpcrdma_modinfo.rc != 0
+  tags: [ofed, verify]
+
 - name: Deploy InfiniBand UDEV rename script
   ansible.builtin.copy:
     src: configure_ib_udev.sh
