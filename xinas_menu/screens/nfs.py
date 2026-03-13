@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -256,6 +259,7 @@ class NFSScreen(Screen):
 def _format_exports(data: Any) -> str:
     """Format NFS exports — uses socket data if available, falls back to /etc/exports."""
     import os
+    import shlex
     import subprocess
 
     GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
@@ -264,20 +268,26 @@ def _format_exports(data: Any) -> str:
 
     def _run(cmd: str) -> str:
         try:
-            return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL,
-                                           text=True).strip()
+            return subprocess.check_output(
+                shlex.split(cmd), stderr=subprocess.DEVNULL, text=True,
+            ).strip()
         except Exception:
+            _log.debug("command failed: %s", cmd, exc_info=True)
             return ""
 
     def _share_usage(path: str) -> str:
         try:
-            r = _run(f"df -h '{path}' 2>/dev/null | tail -1")
-            if r:
-                p = r.split()
-                if len(p) >= 5:
-                    return f"{p[2]} used of {p[1]} ({p[4]})"
+            r = subprocess.run(
+                ["df", "-h", path], capture_output=True, text=True,
+            )
+            if r.returncode == 0 and r.stdout:
+                lines = r.stdout.strip().splitlines()
+                if len(lines) >= 2:
+                    p = lines[-1].split()
+                    if len(p) >= 5:
+                        return f"{p[2]} used of {p[1]} ({p[4]})"
         except Exception:
-            pass
+            _log.debug("df failed for %s", path, exc_info=True)
         return "N/A"
 
     def _explain_client(spec: str) -> str:
@@ -413,9 +423,16 @@ def _format_exports(data: Any) -> str:
                                 if ip and ip not in clients:
                                     clients.append(ip)
                 except Exception:
-                    pass
+                    _log.debug("failed to read NFS client info %s", entry, exc_info=True)
     if not clients:
-        result = _run("ss -tn state established '( dport = :2049 )' 2>/dev/null")
+        try:
+            result = subprocess.run(
+                ["ss", "-tn", "state", "established", "( dport = :2049 )"],
+                capture_output=True, text=True,
+            ).stdout.strip()
+        except Exception:
+            _log.debug("ss command failed for NFS session check", exc_info=True)
+            result = ""
         for ln in result.splitlines()[1:]:
             p = ln.split()
             if len(p) >= 4:

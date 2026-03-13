@@ -26,7 +26,10 @@ class HostnameConfigScreen(Screen[bool]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-set":
-            asyncio.create_task(self._set_hostname())
+            task = asyncio.create_task(self._set_hostname())
+            task.add_done_callback(
+                lambda t: t.exception() if not t.cancelled() and t.exception() else None
+            )
         else:
             self.dismiss(False)
 

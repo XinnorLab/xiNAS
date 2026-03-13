@@ -44,27 +44,35 @@ _REMEDIATION_MAP: dict[str, RemediationAction] = {
 }
 
 
-def _parse_fix_hint(hint: str) -> list[str] | None:
-    """Try to parse a fix_hint string into a shell command list.
+# Allowlisted command prefixes for automated remediation
+_SAFE_COMMAND_PREFIXES = (
+    "systemctl", "sysctl", "modprobe", "ethtool", "ip",
+    "nmcli", "exportfs", "apt", "dnf", "yum",
+)
 
-    Returns None if the hint is not a runnable command (e.g. instructions
-    like 'Add mitigations=off to GRUB_CMDLINE_LINUX...').
+
+def _parse_fix_hint(hint: str) -> list[str] | None:
+    """Try to parse a fix_hint string into a safe shell command list.
+
+    Only commands starting with allowlisted binaries are accepted.
+    Returns None if the hint is not a runnable command or is not in the allowlist.
     """
     if not hint:
         return None
-    # Skip hints that are clearly instructions, not commands
-    skip_prefixes = ("Add ", "Edit ", "Check ", "Install ", "Modify ", "Update ")
-    if any(hint.startswith(p) for p in skip_prefixes):
-        # But allow "Install" if it starts with apt/dnf/yum
-        if not any(hint.lower().startswith(f"{pkg} ") for pkg in ("apt", "dnf", "yum", "pip")):
-            return None
     try:
         parts = shlex.split(hint)
-        if parts:
-            return parts
     except ValueError:
-        pass
-    return None
+        return None
+    if not parts:
+        return None
+    # Only allow commands that start with known-safe binaries
+    binary = parts[0].split("/")[-1]  # handle absolute paths
+    if binary not in _SAFE_COMMAND_PREFIXES:
+        return None
+    # Reject commands with shell metacharacters
+    if any(c in hint for c in (";", "&&", "||", "|", "`", "$(")):
+        return None
+    return parts
 
 
 class RemediationWizard:

@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import socket
+import shlex
 import subprocess
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -147,9 +151,11 @@ class NetworkScreen(Screen):
 
 def _run_cmd(cmd: str) -> str:
     try:
-        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL,
-                                       text=True).strip()
+        return subprocess.check_output(
+            shlex.split(cmd), stderr=subprocess.DEVNULL, text=True,
+        ).strip()
     except Exception:
+        _log.debug("command failed: %s", cmd, exc_info=True)
         return ""
 
 
@@ -184,6 +190,7 @@ def _collect_network_info() -> str:
     try:
         fqdn = socket.getfqdn()
     except Exception:
+        _log.debug("getfqdn failed", exc_info=True)
         fqdn = hostname
 
     lines.append(f"{BLD}{CYN}NETWORK CONFIGURATION{NC}")
@@ -207,7 +214,7 @@ def _collect_network_info() -> str:
             if line.strip().startswith("nameserver"):
                 dns_servers.append(line.split()[1])
     except Exception:
-        pass
+        _log.debug("failed to read /etc/resolv.conf", exc_info=True)
     if dns_servers:
         lines.append(f"  {DIM}DNS:{NC}       {', '.join(dns_servers[:3])}")
 
@@ -222,6 +229,7 @@ def _collect_network_info() -> str:
     try:
         names = sorted(os.listdir(net_path))
     except Exception:
+        _log.debug("failed to list /sys/class/net", exc_info=True)
         names = []
 
     for iface in names:
@@ -231,9 +239,9 @@ def _collect_network_info() -> str:
         if not os.path.isdir(iface_path):
             continue
 
-        def _read(rel: str) -> str:
+        def _read(rel: str, _base: str = iface_path) -> str:
             try:
-                with open(os.path.join(iface_path, rel)) as f:
+                with open(os.path.join(_base, rel)) as f:
                     return f.read().strip()
             except Exception:
                 return ""
@@ -322,14 +330,14 @@ def _read_netplan_file() -> tuple[str, str]:
         search += sorted(Path("/etc/netplan").glob("*.yaml"))
         search += sorted(Path("/etc/netplan").glob("*.yml"))
     except Exception:
-        pass
+        _log.debug("failed to glob /etc/netplan", exc_info=True)
     for p in search:
         p = Path(p)
         if p.exists():
             try:
                 return str(p), p.read_text()
             except Exception:
-                pass
+                _log.debug("failed to read netplan file %s", p, exc_info=True)
     return "", ""
 
 

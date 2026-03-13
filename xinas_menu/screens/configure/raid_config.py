@@ -65,7 +65,10 @@ class RAIDConfigScreen(Screen[bool]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-save":
-            asyncio.create_task(self._save())
+            task = asyncio.create_task(self._save())
+            task.add_done_callback(
+                lambda t: t.exception() if not t.cancelled() and t.exception() else None
+            )
         else:
             self.dismiss(False)
 
@@ -87,13 +90,23 @@ class RAIDConfigScreen(Screen[bool]):
 
 
 def _write_yaml(path: Path, content: str) -> tuple[bool, str]:
+    import os
+    import tempfile
+
     try:
         import yaml
         yaml.safe_load(content)  # validate
     except Exception as exc:
         return False, f"YAML parse error: {exc}"
     try:
-        path.write_text(content)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(content)
+            os.replace(tmp, str(path))
+        except Exception:
+            os.unlink(tmp)
+            raise
         return True, ""
     except Exception as exc:
         return False, str(exc)

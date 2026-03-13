@@ -15,6 +15,7 @@ import contextlib
 import sys
 import os
 import json
+import shlex
 import subprocess
 import re
 import time
@@ -479,7 +480,7 @@ def check_network(exp, checks):
         expected_rx = exp.get("net_ring_rx", 8192)
         expected_tx = exp.get("net_ring_tx", 8192)
         for iface in check_ifaces:
-            output = run_cmd(f"ethtool -g {iface} 2>/dev/null")
+            output = run_cmd(f"ethtool -g {shlex.quote(iface)} 2>/dev/null")
             if output is None:
                 results.append(CheckResult("Network", f"ring_buffers ({iface})", "SKIP",
                     "N/A", f"RX:{expected_rx} TX:{expected_tx}",
@@ -573,7 +574,7 @@ def check_rdma(exp, checks):
 
     if "pfc" in checks or "trust_mode" in checks or "ecn" in checks:
         for iface in get_mlx_interfaces():
-            output = run_cmd(f"mlnx_qos -i {iface} 2>/dev/null")
+            output = run_cmd(f"mlnx_qos -i {shlex.quote(iface)} 2>/dev/null")
             if output is None:
                 if "pfc" in checks:
                     results.append(CheckResult("RDMA", f"pfc ({iface})", "SKIP",
@@ -754,7 +755,7 @@ def check_nvme_health(exp, checks):
 
     for ctrl in sorted(controllers):
         ctrl_name = os.path.basename(ctrl)
-        output = run_cmd(f"nvme smart-log {ctrl} -o json 2>/dev/null")
+        output = run_cmd(f"nvme smart-log {shlex.quote(ctrl)} -o json 2>/dev/null")
         if output is None:
             continue
         try:
@@ -821,7 +822,7 @@ def check_filesystem(exp, checks):
         mount_opts = mount_info[3] if len(mount_info) > 3 else ""
 
         if "disk_usage" in checks:
-            output = run_cmd(f"df --output=pcent '{mount_path}' 2>/dev/null | tail -1")
+            output = run_cmd(f"df --output=pcent {shlex.quote(mount_path)} 2>/dev/null | tail -1")
             if output:
                 pct = int(output.strip().rstrip("%"))
                 warn = exp.get("fs_usage_warn", 80)
@@ -839,7 +840,7 @@ def check_filesystem(exp, checks):
                         f"{pct}%", f"<{warn}%"))
 
         if "inode_usage" in checks:
-            output = run_cmd(f"df --output=ipcent '{mount_path}' 2>/dev/null | tail -1")
+            output = run_cmd(f"df --output=ipcent {shlex.quote(mount_path)} 2>/dev/null | tail -1")
             if output:
                 stripped = output.strip().rstrip("%")
                 if stripped != "-":
@@ -975,13 +976,13 @@ def check_services(exp, checks):
         if check_name not in service_map:
             continue
         unit, desc = service_map[check_name]
-        output = run_cmd(f"systemctl is-active {unit} 2>/dev/null")
+        output = run_cmd(f"systemctl is-active {shlex.quote(unit)} 2>/dev/null")
         if output == "active":
             results.append(CheckResult("Services", check_name, "PASS",
                 "active", "active"))
         elif output == "inactive":
             # Check if the unit exists at all
-            unit_state = run_cmd(f"systemctl list-unit-files {unit} 2>/dev/null")
+            unit_state = run_cmd(f"systemctl list-unit-files {shlex.quote(unit)} 2>/dev/null")
             if unit and unit_state:
                 results.append(CheckResult("Services", check_name, "FAIL",
                     "inactive", "active",

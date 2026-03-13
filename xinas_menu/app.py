@@ -2,18 +2,24 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import ClassVar
+
+_log = logging.getLogger(__name__)
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
+from textual import work
 
 from xinas_menu.api.grpc_client import XiRAIDClient
 from xinas_menu.api.nfs_client import NFSHelperClient
 from xinas_menu.utils.audit import AuditLogger
 from xinas_menu.utils.update_check import UpdateChecker
 from xinas_menu.widgets.header import XiNASHeader
+
+__all__ = ["XiNASApp"]
 
 
 class XiNASApp(App):
@@ -58,7 +64,8 @@ class XiNASApp(App):
             await self.push_screen(WelcomeScreen())
 
         # Background update check
-        asyncio.create_task(self._bg_update_check())
+        task = asyncio.create_task(self._bg_update_check())
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
 
     async def _bg_update_check(self) -> None:
         try:
@@ -68,14 +75,14 @@ class XiNASApp(App):
                 header = self.query_one(XiNASHeader)
                 header.update_available = True
         except Exception:
-            pass
+            _log.debug("background update check failed", exc_info=True)
 
     def watch_update_available(self, value: bool) -> None:
         try:
             header = self.query_one(XiNASHeader)
             header.update_available = value
         except Exception:
-            pass
+            _log.debug("could not update header badge", exc_info=True)
 
     async def action_check_update(self) -> None:
         if self.update_available:
@@ -102,14 +109,17 @@ class XiNASApp(App):
         """Copy the visible content panel text to clipboard (Ctrl+Y)."""
         from xinas_menu.widgets.text_view import ScrollableTextView
         try:
-            screen = self.screen
-            view = screen.query_one(ScrollableTextView)
+            view = self.screen.query_one(ScrollableTextView)
             text = view.get_text()
             if text:
-                msg = _copy_text(text)
-                self.notify(msg, timeout=3)
+                self._do_copy(text)
         except Exception:
-            pass
+            _log.debug("copy content failed (no text view on screen?)", exc_info=True)
+
+    @work(exclusive=True, thread=True)
+    def _do_copy(self, text: str) -> None:
+        msg = _copy_text(text)
+        self.call_from_thread(self.notify, msg, timeout=3)
 
     def action_scroll_up(self) -> None:
         """Scroll the content panel up."""
@@ -119,7 +129,7 @@ class XiNASApp(App):
             log = view.query_one("#text-view-area")
             log.scroll_page_up()
         except Exception:
-            pass
+            _log.debug("scroll up failed (no text view on screen?)", exc_info=True)
 
     def action_scroll_down(self) -> None:
         """Scroll the content panel down."""
@@ -129,7 +139,7 @@ class XiNASApp(App):
             log = view.query_one("#text-view-area")
             log.scroll_page_down()
         except Exception:
-            pass
+            _log.debug("scroll down failed (no text view on screen?)", exc_info=True)
 
     def action_help(self) -> None:
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -179,7 +189,7 @@ def _copy_text(text: str) -> str:
             if r.returncode == 0:
                 return "Copied to tmux buffer  (paste with prefix + ])"
         except Exception:
-            pass
+            _log.debug("tmux set-buffer failed", exc_info=True)
         # fallback: load-buffer via stdin (tmux ≥ 2.0)
         try:
             r = subprocess.run(
@@ -189,7 +199,7 @@ def _copy_text(text: str) -> str:
             if r.returncode == 0:
                 return "Copied to tmux buffer  (paste with prefix + ])"
         except Exception:
-            pass
+            _log.debug("tmux load-buffer failed", exc_info=True)
 
     # ── xclip ─────────────────────────────────────────────────────────────
     try:
@@ -202,7 +212,7 @@ def _copy_text(text: str) -> str:
     except FileNotFoundError:
         pass
     except Exception:
-        pass
+        _log.debug("xclip failed", exc_info=True)
 
     # ── xsel ──────────────────────────────────────────────────────────────
     try:
@@ -215,7 +225,7 @@ def _copy_text(text: str) -> str:
     except FileNotFoundError:
         pass
     except Exception:
-        pass
+        _log.debug("xsel failed", exc_info=True)
 
     # ── wl-copy (Wayland) ─────────────────────────────────────────────────
     try:
@@ -227,7 +237,7 @@ def _copy_text(text: str) -> str:
     except FileNotFoundError:
         pass
     except Exception:
-        pass
+        _log.debug("wl-copy failed", exc_info=True)
 
     # ── last resort: write to temp file ───────────────────────────────────
     try:
@@ -236,6 +246,6 @@ def _copy_text(text: str) -> str:
             f.write(text)
         return f"Saved to {path}  (cat {path} | xclip)"
     except Exception:
-        pass
+        _log.debug("writing to temp file failed", exc_info=True)
 
     return "Copy failed — no clipboard tool available"

@@ -570,10 +570,13 @@ class RemoteAccessScreen(Screen):
             "",
         ]
         if first_token:
+            masked = f"{first_token[:8]}...{first_token[-4:]}"
             lines.append(f"  claude mcp add \\")
             lines.append(f"    --transport http \\")
-            lines.append(f'    --header "Authorization: Bearer {first_token}" \\')
+            lines.append(f'    --header "Authorization: Bearer {masked}" \\')
             lines.append(f"    xinas {proto}://{ip}:{port}/mcp")
+            lines.append(f"")
+            lines.append(f"  {DIM}(Replace masked token with full value from Token Management){NC}")
         else:
             lines.append(f"  claude mcp add \\")
             lines.append(f"    --transport http \\")
@@ -586,7 +589,7 @@ class RemoteAccessScreen(Screen):
             f"  curl -X POST {proto}://{ip}:{port}/mcp \\",
         ])
         if first_token:
-            lines.append(f'    -H "Authorization: Bearer {first_token}" \\')
+            lines.append(f'    -H "Authorization: Bearer {masked}" \\')
         lines.extend([
             '    -H "Content-Type: application/json" \\',
             """    -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test"}}}'""",
@@ -643,7 +646,7 @@ class TokenManagementScreen(Screen):
         for tv, role in tokens.items():
             name = labels.get(tv, tv[:12] + "…")
             lines.append(f"  {GRN}●{NC} {name}  {DIM}[{role}]{NC}")
-            lines.append(f"    {DIM}{tv[:16]}…{NC}")
+            lines.append(f"    {DIM}{tv[:8]}…{NC}")
             lines.append("")
         if not tokens:
             lines.append(f"  {DIM}No tokens. Press A to add one.{NC}")

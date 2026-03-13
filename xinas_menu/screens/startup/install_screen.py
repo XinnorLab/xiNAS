@@ -26,7 +26,7 @@ def _repo_root() -> Path:
     return _REPO_ROOT_CANDIDATES[0]
 
 
-def _preset_items() -> list[MenuItem]:
+def _preset_items() -> tuple[list[MenuItem], list[str]]:
     presets_dir = _repo_root() / "presets"
     presets = [p.name for p in sorted(presets_dir.iterdir()) if p.is_dir()] if presets_dir.exists() else ["default"]
     items = [MenuItem(str(i + 1), p) for i, p in enumerate(presets)]

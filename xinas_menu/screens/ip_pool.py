@@ -96,9 +96,9 @@ def _detect_interfaces() -> list[dict]:
         if not os.path.exists(os.path.join(iface_path, "device")):
             continue
 
-        def _read(rel: str) -> str:
+        def _read(rel: str, _base: str = iface_path) -> str:
             try:
-                with open(os.path.join(iface_path, rel)) as f:
+                with open(os.path.join(_base, rel)) as f:
                     return f.read().strip()
             except Exception:
                 return ""

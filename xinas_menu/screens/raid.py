@@ -1,9 +1,12 @@
 """RAIDScreen — Quick Overview, Extended Details, Physical Drives, Spare Pools, CRUD."""
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -12,12 +15,14 @@ from textual.screen import Screen
 from textual.widgets import Label, Footer
 from textual import work
 
+from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
+_ARRAY_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]
 _STRIP_SIZES = ["16", "32", "64", "128", "256"]
 _MODIFY_PARAMS = [
@@ -118,7 +123,7 @@ class RAIDScreen(Screen):
         ok, data, err = await self.app.grpc.raid_show()
         view.set_content(
             _format_raid_overview(data, extended=False) if ok
-            else f"Could not load RAID info: {_grpc_short_error(err)}"
+            else f"Could not load RAID info: {grpc_short_error(err)}"
         )
 
     @work(exclusive=True)
@@ -128,7 +133,7 @@ class RAIDScreen(Screen):
         ok, data, err = await self.app.grpc.raid_show(extended=True)
         view.set_content(
             _format_raid_overview(data, extended=True) if ok
-            else f"Could not load RAID info: {_grpc_short_error(err)}"
+            else f"Could not load RAID info: {grpc_short_error(err)}"
         )
 
     @work(exclusive=True)
@@ -138,7 +143,7 @@ class RAIDScreen(Screen):
         ok, data, err = await self.app.grpc.raid_show(extended=True)
         view.set_content(
             _format_physical_drives(data) if ok
-            else f"Could not load drive info: {_grpc_short_error(err)}"
+            else f"Could not load drive info: {grpc_short_error(err)}"
         )
 
     @work(exclusive=True)
@@ -148,7 +153,7 @@ class RAIDScreen(Screen):
         ok, data, err = await self.app.grpc.pool_show()
         view.set_content(
             _format_spare_pools(data) if ok
-            else f"Could not load pool info: {_grpc_short_error(err)}"
+            else f"Could not load pool info: {grpc_short_error(err)}"
         )
 
     # ── Create Array Wizard ──────────────────────────────────────────────────
@@ -156,12 +161,23 @@ class RAIDScreen(Screen):
     @work(exclusive=True)
     async def _create_array_wizard(self) -> None:
         """Multi-step wizard: name -> level -> drives -> strip -> group_size -> spare -> confirm."""
-        # Step 1: Array name
-        name = await self.app.push_screen_wait(
-            InputDialog("Array name:", "Create Array — Step 1", placeholder="data0")
-        )
-        if not name:
-            return
+        # Step 1: Array name (with validation)
+        while True:
+            name = await self.app.push_screen_wait(
+                InputDialog("Array name:", "Create Array — Step 1", placeholder="data0")
+            )
+            if not name:
+                return
+            if len(name) > 64:
+                self.app.notify("Array name must be 64 characters or fewer.", severity="error")
+                continue
+            if not _ARRAY_NAME_RE.match(name):
+                self.app.notify(
+                    "Array name must contain only letters, digits, hyphens, and underscores.",
+                    severity="error",
+                )
+                continue
+            break
 
         # Step 2: RAID level
         level = await self.app.push_screen_wait(
@@ -258,7 +274,7 @@ class RAIDScreen(Screen):
             self._show_quick()
         else:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Create failed.\n{_grpc_short_error(err)}", "Error")
+                ConfirmDialog(f"Create failed.\n{grpc_short_error(err)}", "Error")
             )
 
     # ── Modify Array ─────────────────────────────────────────────────────────
@@ -270,7 +286,7 @@ class RAIDScreen(Screen):
         if not ok or not data:
             await self.app.push_screen_wait(
                 ConfirmDialog(
-                    f"No arrays available.\n{_grpc_short_error(err)}" if not ok
+                    f"No arrays available.\n{grpc_short_error(err)}" if not ok
                     else "No RAID arrays configured.",
                     "Modify Array",
                 )
@@ -332,7 +348,7 @@ class RAIDScreen(Screen):
             self._show_quick()
         else:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Modify failed.\n{_grpc_short_error(err)}", "Error")
+                ConfirmDialog(f"Modify failed.\n{grpc_short_error(err)}", "Error")
             )
 
     # ── Delete Array ─────────────────────────────────────────────────────────
@@ -344,7 +360,7 @@ class RAIDScreen(Screen):
         if not ok or not data:
             await self.app.push_screen_wait(
                 ConfirmDialog(
-                    f"No arrays available.\n{_grpc_short_error(err)}" if not ok
+                    f"No arrays available.\n{grpc_short_error(err)}" if not ok
                     else "No RAID arrays configured.",
                     "Delete Array",
                 )
@@ -388,7 +404,7 @@ class RAIDScreen(Screen):
             self._show_quick()
         else:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Delete failed.\n{_grpc_short_error(err)}", "Error")
+                ConfirmDialog(f"Delete failed.\n{grpc_short_error(err)}", "Error")
             )
 
 
@@ -597,7 +613,7 @@ def _get_drive_size(path: str) -> str:
                 return f"{b / 1_073_741_824:.0f} GB"
             return f"{b // 1_048_576} MB"
     except Exception:
-        pass
+        _log.debug("failed to read drive size for %s", path, exc_info=True)
     return "N/A"
 
 
@@ -609,14 +625,16 @@ def _get_numa_node(path: str) -> str:
             ctrl = m.group(1)
             p = f"/sys/class/nvme/{ctrl}/numa_node"
             if os.path.exists(p):
-                node = open(p).read().strip()
+                with open(p) as f:
+                    node = f.read().strip()
                 return node if node != "-1" else "-"
         p = f"/sys/block/{dev_name}/device/numa_node"
         if os.path.exists(p):
-            node = open(p).read().strip()
+            with open(p) as f:
+                node = f.read().strip()
             return node if node != "-1" else "-"
     except Exception:
-        pass
+        _log.debug("failed to read NUMA node for %s", path, exc_info=True)
     return "-"
 
 
@@ -756,23 +774,3 @@ def _format_spare_pools(data: Any) -> str:
     lines.append(f"  Total: {len(pools)} pool(s)")
     lines.append(bs("="))
     return "\n".join(lines)
-
-
-# ── Error helper ───────────────────────────────────────────────────────────────
-
-def _grpc_short_error(err: str) -> str:
-    if not err:
-        return "not connected"
-    if "UNAVAILABLE" in err or "Connection refused" in err or "failed to connect" in err.lower():
-        return "xiRAID service unavailable"
-    if "UNAUTHENTICATED" in err:
-        return "authentication failed"
-    if "DEADLINE_EXCEEDED" in err or "Deadline" in err:
-        return "timed out"
-    if "stubs not available" in err:
-        return err
-    m = re.search(r'details\s*=\s*["\']([^"\']{1,120})', err)
-    if m:
-        return m.group(1)
-    first = err.splitlines()[0] if err else err
-    return first[:100]

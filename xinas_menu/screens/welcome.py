@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+
+_log = logging.getLogger(__name__)
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -41,8 +44,13 @@ class WelcomeScreen(Screen):
         yield Footer()
 
     async def on_mount(self) -> None:
-        asyncio.create_task(self._probe_services())
-        asyncio.create_task(self._auto_proceed())
+        def _log_exc(t: asyncio.Task) -> None:
+            if not t.cancelled() and t.exception():
+                import logging
+                logging.getLogger("xinas").debug("Task failed: %s", t.exception())
+
+        asyncio.create_task(self._probe_services()).add_done_callback(_log_exc)
+        asyncio.create_task(self._auto_proceed()).add_done_callback(_log_exc)
 
     async def _probe_services(self) -> None:
         app = self.app
@@ -65,7 +73,7 @@ class WelcomeScreen(Screen):
             lbl = self.query_one("#welcome-status", Label)
             lbl.update("\n".join(status_lines))
         except Exception:
-            pass
+            _log.debug("could not update welcome status label", exc_info=True)
 
     async def _auto_proceed(self) -> None:
         await asyncio.sleep(2)
@@ -73,5 +81,7 @@ class WelcomeScreen(Screen):
             self.action_proceed()
 
     def action_proceed(self) -> None:
+        if not self.is_current:
+            return
         from xinas_menu.screens.main_menu import MainMenuScreen
         self.app.switch_screen(MainMenuScreen())

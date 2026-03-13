@@ -36,7 +36,6 @@ class MainMenuScreen(Screen):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._screen_cache: dict[str, Screen] = {}
 
     def compose(self) -> ComposeResult:
         yield Label("  xiNAS Management Console", id="main-prompt")
@@ -44,42 +43,35 @@ class MainMenuScreen(Screen):
         yield Footer()
 
     def _get_screen(self, key: str) -> Screen | None:
-        """Return a cached screen instance, creating it on first access."""
-        if key in self._screen_cache:
-            return self._screen_cache[key]
-
-        screen = None
+        """Create a fresh screen instance for the given menu key."""
         if key == "1":
             from xinas_menu.screens.quick_actions import QuickActionsScreen
-            screen = QuickActionsScreen(show_status=True)
+            return QuickActionsScreen(show_status=True)
         elif key == "2":
             from xinas_menu.screens.raid import RAIDScreen
-            screen = RAIDScreen()
+            return RAIDScreen()
         elif key == "3":
             from xinas_menu.screens.network import NetworkScreen
-            screen = NetworkScreen()
+            return NetworkScreen()
         elif key == "4":
             from xinas_menu.screens.nfs import NFSScreen
-            screen = NFSScreen()
+            return NFSScreen()
         elif key == "5":
             from xinas_menu.screens.users import UsersScreen
-            screen = UsersScreen()
+            return UsersScreen()
         elif key == "6":
             from xinas_menu.screens.exporter import ExporterScreen
-            screen = ExporterScreen()
+            return ExporterScreen()
         elif key == "7":
             from xinas_menu.screens.quick_actions import QuickActionsScreen
-            screen = QuickActionsScreen()
+            return QuickActionsScreen()
         elif key == "8":
             from xinas_menu.screens.health import HealthScreen
-            screen = HealthScreen()
+            return HealthScreen()
         elif key == "A":
             from xinas_menu.screens.mcp import MCPScreen
-            screen = MCPScreen()
-
-        if screen is not None:
-            self._screen_cache[key] = screen
-        return screen
+            return MCPScreen()
+        return None
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         self._handle(event.key)

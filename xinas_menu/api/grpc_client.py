@@ -23,6 +23,8 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+__all__ = ["XiRAIDClient"]
+
 _GRPC_ADDRESS = "localhost:6066"
 # Cert paths in priority order — must match xiNAS-MCP/src/grpc/client.ts
 _TLS_FALLBACK_PATHS = [
@@ -157,6 +159,11 @@ class XiRAIDClient:
         self._address = address
         self._channel = None
         self._stub = None
+        self._msg_raid = None
+        self._msg_drive = None
+        self._msg_pool = None
+        self._msg_license = None
+        self._msg_settings = None
 
     def _ensure_channel(self):
         if self._stub is not None:
@@ -165,6 +172,11 @@ class XiRAIDClient:
         pb2_grpc, grpc = stubs[0], stubs[1]
         if pb2_grpc is None:
             return False
+        self._msg_raid = stubs[2]
+        self._msg_drive = stubs[3]
+        self._msg_pool = stubs[4]
+        self._msg_license = stubs[5]
+        self._msg_settings = stubs[6]
         creds = _load_channel_credentials()
         opts = [
             ("grpc.initial_reconnect_backoff_ms", 500),
@@ -195,75 +207,57 @@ class XiRAIDClient:
     async def raid_show(self, units: str = "g", name: str = "",
                         extended: bool = False) -> tuple[bool, Any, str]:
         """Show RAID arrays. Returns parsed JSON list of array dicts."""
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_raid = stubs[2]
         kwargs: dict = {"units": units}
         if name:
             kwargs["name"] = name
         if extended:
             kwargs["extended"] = extended
-        return await self._call("raid_show", msg_raid.RaidShow(**kwargs))
+        return await self._call("raid_show", self._msg_raid.RaidShow(**kwargs))
 
     async def raid_create(self, name: str, level: str, drives: list,
                           **kwargs) -> tuple[bool, Any, str]:
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_raid = stubs[2]
-        return await self._call("raid_create", msg_raid.RaidCreate(
+        return await self._call("raid_create", self._msg_raid.RaidCreate(
             name=name, level=level, drives=drives, **kwargs))
 
     async def raid_destroy(self, name: str, force: bool = False) -> tuple[bool, Any, str]:
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_raid = stubs[2]
-        return await self._call("raid_destroy", msg_raid.RaidDestroy(
+        return await self._call("raid_destroy", self._msg_raid.RaidDestroy(
             name=name, force=force))
 
     async def raid_unload(self, name: str) -> tuple[bool, Any, str]:
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_raid = stubs[2]
-        return await self._call("raid_unload", msg_raid.RaidUnload(name=name))
+        return await self._call("raid_unload", self._msg_raid.RaidUnload(name=name))
 
     async def raid_modify(self, name: str, **kwargs) -> tuple[bool, Any, str]:
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_raid = stubs[2]
-        return await self._call("raid_modify", msg_raid.RaidModify(name=name, **kwargs))
+        return await self._call("raid_modify", self._msg_raid.RaidModify(name=name, **kwargs))
 
     async def raid_init_start(self, name: str) -> tuple[bool, Any, str]:
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_raid = stubs[2]
-        return await self._call("raid_init_start", msg_raid.RaidInitStart(name=name))
+        return await self._call("raid_init_start", self._msg_raid.RaidInitStart(name=name))
 
     async def raid_init_stop(self, name: str) -> tuple[bool, Any, str]:
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_raid = stubs[2]
-        return await self._call("raid_init_stop", msg_raid.RaidInitStop(name=name))
+        return await self._call("raid_init_stop", self._msg_raid.RaidInitStop(name=name))
 
     async def raid_recon_start(self, name: str) -> tuple[bool, Any, str]:
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_raid = stubs[2]
-        return await self._call("raid_recon_start", msg_raid.RaidReconStart(name=name))
+        return await self._call("raid_recon_start", self._msg_raid.RaidReconStart(name=name))
 
     async def raid_recon_stop(self, name: str) -> tuple[bool, Any, str]:
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_raid = stubs[2]
-        return await self._call("raid_recon_stop", msg_raid.RaidReconStop(name=name))
+        return await self._call("raid_recon_stop", self._msg_raid.RaidReconStop(name=name))
 
     # ── Drives ─────────────────────────────────────────────────────────────
     # xiRAID gRPC has no generic disk_list RPC. Drive enumeration uses lsblk
@@ -290,37 +284,31 @@ class XiRAIDClient:
 
     async def drive_faulty_count_show(self, drives: list | None = None,
                                       name: str = "") -> tuple[bool, Any, str]:
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_drive = stubs[3]
         kwargs: dict = {}
         if drives:
             kwargs["drives"] = drives
         if name:
             kwargs["name"] = name
         return await self._call("drive_faulty_count_show",
-                                msg_drive.DriveFaultyCountShow(**kwargs))
+                                self._msg_drive.DriveFaultyCountShow(**kwargs))
 
     async def drive_locate(self, drives: list) -> tuple[bool, Any, str]:
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_drive = stubs[3]
-        return await self._call("drive_locate", msg_drive.DriveLocate(drives=drives))
+        return await self._call("drive_locate", self._msg_drive.DriveLocate(drives=drives))
 
     # ── Pools ──────────────────────────────────────────────────────────────
 
     async def pool_show(self, name: str = "", units: str = "g") -> tuple[bool, Any, str]:
         """List/show spare pools."""
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_pool = stubs[4]
         kwargs: dict = {"units": units}
         if name:
             kwargs["name"] = name
-        return await self._call("pool_show", msg_pool.PoolShow(**kwargs))
+        return await self._call("pool_show", self._msg_pool.PoolShow(**kwargs))
 
     # backward-compat alias used by raid.py
     async def pool_list(self) -> tuple[bool, Any, str]:
@@ -329,19 +317,15 @@ class XiRAIDClient:
     # ── License ────────────────────────────────────────────────────────────
 
     async def license_show(self) -> tuple[bool, Any, str]:
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_license = stubs[5]
-        return await self._call("license_show", msg_license.LicenseShow())
+        return await self._call("license_show", self._msg_license.LicenseShow())
 
     async def set_license(self, path: str) -> tuple[bool, Any, str]:
         """Install license from file path."""
-        stubs = _import_stubs()
-        if stubs[0] is None:
+        if not self._ensure_channel():
             return _no_stubs_error()
-        msg_license = stubs[5]
-        return await self._call("license_update", msg_license.LicenseUpdate(path=path))
+        return await self._call("license_update", self._msg_license.LicenseUpdate(path=path))
 
     # backward-compat alias
     async def get_license_info(self) -> tuple[bool, Any, str]:

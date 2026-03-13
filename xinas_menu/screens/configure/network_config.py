@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -91,7 +92,7 @@ def _save_netplan(path: Path, content: str, apply: bool) -> tuple[bool, str]:
     tmp = path.with_suffix(".tmp")
     try:
         tmp.write_text(content)
-        tmp.rename(path)
+        shutil.move(str(tmp), str(path))
     except Exception as exc:
         return False, str(exc)
 
