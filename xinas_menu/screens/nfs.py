@@ -14,6 +14,7 @@ from textual import work
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
+from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
 _MENU = [
@@ -71,6 +72,14 @@ class NFSScreen(Screen):
             self._show_sessions()
         elif key == "6":
             self._configure_idmapd()
+
+    async def _get_export_paths(self) -> list[str]:
+        """Fetch current export paths from the NFS helper."""
+        loop = asyncio.get_running_loop()
+        ok, data, _ = await loop.run_in_executor(None, self.app.nfs.list_exports)
+        if not ok or not isinstance(data, list):
+            return []
+        return [e["path"] for e in data if isinstance(e, dict) and e.get("path")]
 
     # ── Wizard: Add Share (5 steps) ─────────────────────────────────────────
 
@@ -139,8 +148,13 @@ class NFSScreen(Screen):
 
     @work(exclusive=True)
     async def _edit_share(self) -> None:
+        paths = await self._get_export_paths()
+        if not paths:
+            await self.app.push_screen_wait(
+                ConfirmDialog("No shares configured.", "Edit Share"))
+            return
         path = await self.app.push_screen_wait(
-            InputDialog("Export path to edit:", "Edit Share")
+            SelectDialog(paths, title="Edit Share", prompt="Select export to edit:")
         )
         if not path:
             return
@@ -172,8 +186,13 @@ class NFSScreen(Screen):
 
     @work(exclusive=True)
     async def _remove_share(self) -> None:
+        paths = await self._get_export_paths()
+        if not paths:
+            await self.app.push_screen_wait(
+                ConfirmDialog("No shares configured.", "Remove Share"))
+            return
         path = await self.app.push_screen_wait(
-            InputDialog("Export path to remove:", "Remove Share")
+            SelectDialog(paths, title="Remove Share", prompt="Select export to remove:")
         )
         if not path:
             return
