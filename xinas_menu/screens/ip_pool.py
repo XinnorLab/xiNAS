@@ -157,6 +157,7 @@ def _allocate_ips(cfg: dict, interfaces: list[dict]) -> tuple[list[dict], str]:
     If error_string is non-empty, allocation failed.
     """
     start = cfg["pool_start"]
+    end = cfg.get("pool_end", "")
     prefix = cfg["pool_prefix"]
 
     try:
@@ -165,6 +166,16 @@ def _allocate_ips(cfg: dict, interfaces: list[dict]) -> tuple[list[dict], str]:
             raise ValueError("not 4 octets")
     except Exception:
         return [], f"Invalid start IP: {start}"
+
+    # Parse end IP for bounds checking
+    end_third = 255
+    if end:
+        try:
+            end_octets = list(map(int, end.split(".")))
+            if len(end_octets) == 4:
+                end_third = end_octets[2]
+        except Exception:
+            pass
 
     allocations: list[dict] = []
     for i, iface in enumerate(interfaces):
@@ -175,6 +186,13 @@ def _allocate_ips(cfg: dict, interfaces: list[dict]) -> tuple[list[dict], str]:
                 f"{octets[0]}.{octets[1]}.{third}.{octets[3]} "
                 f"(third octet {third} > 255). "
                 f"Use a lower starting address or fewer interfaces."
+            )
+        if third > end_third:
+            return [], (
+                f"Pool exhausted: interface {iface['name']} would get "
+                f"{octets[0]}.{octets[1]}.{third}.{octets[3]} "
+                f"which exceeds pool end ({end}). "
+                f"Expand the pool range or reduce the number of interfaces."
             )
         ip = f"{octets[0]}.{octets[1]}.{third}.{octets[3]}"
         allocations.append({
