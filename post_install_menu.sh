@@ -2825,6 +2825,322 @@ MCP_AUDIT_LOG="/var/log/xinas/mcp-audit.jsonl"
 MCP_NFS_HELPER_SVC="xinas-nfs-helper"
 MCP_SSHD_DROPIN="/etc/ssh/sshd_config.d/10-xinas-root-access.conf"
 
+# ── MCP config helpers (jq-based) ───────────────────────────────────────────
+
+_mcp_config_get() {
+    jq -r "$1" "$MCP_CONFIG" 2>/dev/null
+}
+
+_mcp_config_set() {
+    local tmp
+    tmp=$(jq "$1" "$MCP_CONFIG") && echo "$tmp" > "$MCP_CONFIG"
+}
+
+_mcp_config_apply() {
+    _mcp_config_set "$1" || return 1
+    systemctl restart "$MCP_NFS_HELPER_SVC" 2>/dev/null || true
+}
+
+# ── MCP token management sub-menu ──────────────────────────────────────────
+
+mcp_tokens_menu() {
+    local choice
+
+    while true; do
+        show_header
+
+        # List current tokens
+        local token_list token_count
+        token_count=$(_mcp_config_get '.tokens | length')
+        [[ "$token_count" == "null" ]] && token_count=0
+
+        if [[ "$token_count" -gt 0 ]]; then
+            echo -e "  ${WHITE}Configured tokens:${NC}"
+            local _name _role
+            while IFS=$'\t' read -r _name _role; do
+                local _label
+                _label=$(jq -r ".token_labels[\"$_name\"] // \"${_name:0:16}…\"" "$MCP_CONFIG" 2>/dev/null)
+                echo -e "    ${GREEN}●${NC} ${_label}  ${DIM}[${_role}]${NC}"
+            done < <(jq -r '.tokens | to_entries[] | [.key, .value] | @tsv' "$MCP_CONFIG" 2>/dev/null)
+        else
+            echo -e "  ${DIM}No tokens configured${NC}"
+        fi
+        echo ""
+
+        choice=$(menu_select "🔑 API Tokens" "Manage authentication tokens" \
+            "1" "➕ Add Token" \
+            "2" "➖ Remove Token" \
+            "0" "🔙 Back") || return
+
+        case "$choice" in
+            1)
+                audit_log "MCP > Tokens > Add"
+                local token_name
+                token_name=$(input_box "Token Name" \
+                    "Enter a name for the new token\n(e.g. remote-claude, monitoring):" \
+                    "") || continue
+                [[ -z "$token_name" ]] && continue
+
+                # Check if name already exists in token_labels
+                local name_exists
+                name_exists=$(jq -r ".token_labels | to_entries[] | select(.value == \"$token_name\") | .key" "$MCP_CONFIG" 2>/dev/null)
+                if [[ -n "$name_exists" ]]; then
+                    msg_box "❌ Exists" "Token '${token_name}' already exists.\nRemove it first to regenerate."
+                    continue
+                fi
+
+                local role
+                role=$(menu_select "Token Role" "Select role for '${token_name}':" \
+                    "1" "admin    – Full access (create/delete/manage)" \
+                    "2" "operator – Read + execute operations" \
+                    "3" "viewer   – Read-only access") || continue
+                case "$role" in
+                    1) role="admin" ;;
+                    2) role="operator" ;;
+                    3) role="viewer" ;;
+                esac
+
+                local token_value
+                token_value=$(openssl rand -hex 32)
+
+                # Store token_value→role in tokens map and name→value in token_labels
+                _mcp_config_set '.tokens //= {}' || true
+                _mcp_config_set '.token_labels //= {}' || true
+                _mcp_config_set ".tokens[\"$token_value\"] = \"$role\"" || true
+                _mcp_config_apply ".token_labels[\"$token_value\"] = \"$token_name\"" || {
+                    msg_box "❌ Error" "Failed to save token."
+                    continue
+                }
+
+                audit_log "MCP > Tokens > Add" "$token_name ($role)"
+                msg_box "✅ Token Created" \
+                    "Name:  ${token_name}\nRole:  ${role}\n\n${BOLD}Token (copy now — shown once):${NC}\n\n${token_value}\n\nUse as Bearer token in Authorization header."
+                ;;
+            2)
+                audit_log "MCP > Tokens > Remove"
+                if [[ "$token_count" -eq 0 ]]; then
+                    msg_box "ℹ️  No Tokens" "No tokens to remove."
+                    continue
+                fi
+
+                # Build selection list
+                local -a sel_args=()
+                local idx=1
+                local -a token_keys=()
+                while IFS=$'\t' read -r _tk _rl; do
+                    local _label
+                    _label=$(jq -r ".token_labels[\"$_tk\"] // \"${_tk:0:12}…\"" "$MCP_CONFIG" 2>/dev/null)
+                    sel_args+=("$idx" "${_label}  [${_rl}]")
+                    token_keys+=("$_tk")
+                    ((idx++))
+                done < <(jq -r '.tokens | to_entries[] | [.key, .value] | @tsv' "$MCP_CONFIG" 2>/dev/null)
+
+                local sel
+                sel=$(menu_select "Remove Token" "Select token to remove:" \
+                    "${sel_args[@]}" \
+                    "0" "🔙 Cancel") || continue
+                [[ "$sel" == "0" ]] && continue
+
+                local rm_idx=$((sel - 1))
+                local rm_key="${token_keys[$rm_idx]}"
+                local rm_label
+                rm_label=$(jq -r ".token_labels[\"$rm_key\"] // \"${rm_key:0:12}…\"" "$MCP_CONFIG" 2>/dev/null)
+
+                if yes_no "Confirm Remove" "Remove token '${rm_label}'?"; then
+                    _mcp_config_set "del(.tokens[\"$rm_key\"])" || true
+                    _mcp_config_apply "del(.token_labels[\"$rm_key\"])" || true
+                    audit_log "MCP > Tokens > Remove" "$rm_label"
+                    msg_box "✅ Removed" "Token '${rm_label}' has been removed."
+                fi
+                ;;
+        esac
+    done
+}
+
+# ── MCP remote access (HTTP) sub-menu ──────────────────────────────────────
+
+mcp_remote_access_menu() {
+    local choice
+
+    while true; do
+        show_header
+
+        # Read current state
+        local http_on http_port tls_cert token_count
+        http_on=$(_mcp_config_get '.http_enabled')
+        http_port=$(_mcp_config_get '.http_port // 8080')
+        tls_cert=$(_mcp_config_get '.tls.cert // empty')
+        token_count=$(_mcp_config_get '.tokens | length')
+        [[ "$token_count" == "null" ]] && token_count=0
+
+        local http_color http_label
+        if [[ "$http_on" == "true" ]]; then
+            http_color="$GREEN"; http_label="● Enabled (port ${http_port})"
+        else
+            http_color="$RED"; http_label="○ Disabled"
+        fi
+
+        local tls_label
+        if [[ -n "$tls_cert" && "$tls_cert" != "null" ]]; then
+            tls_label="${GREEN}● Configured${NC}"
+        else
+            tls_label="${DIM}○ Not configured${NC}"
+        fi
+
+        echo -e "  ${WHITE}HTTP Transport:${NC}  ${http_color}${http_label}${NC}"
+        echo -e "  ${WHITE}TLS:${NC}             ${tls_label}"
+        echo -e "  ${WHITE}Tokens:${NC}          ${token_count} configured"
+        echo ""
+
+        local toggle_label
+        [[ "$http_on" == "true" ]] \
+            && toggle_label="⏹  Disable HTTP Transport" \
+            || toggle_label="▶  Enable HTTP Transport"
+
+        choice=$(menu_select "🌐 Remote Access (HTTP)" "Streamable HTTP transport" \
+            "1" "$toggle_label" \
+            "2" "🔌 Set Port (current: ${http_port})" \
+            "3" "🔑 Manage Tokens (${token_count})" \
+            "4" "🔒 Configure TLS" \
+            "5" "📋 Show Connection Command" \
+            "0" "🔙 Back") || return
+
+        case "$choice" in
+            1)
+                if [[ "$http_on" == "true" ]]; then
+                    audit_log "MCP > HTTP > Disable"
+                    _mcp_config_apply '.http_enabled = false'
+                    msg_box "⏹  HTTP Disabled" "HTTP transport has been disabled.\nThe MCP server is now stdio-only."
+                else
+                    audit_log "MCP > HTTP > Enable"
+                    if [[ "$token_count" -eq 0 ]]; then
+                        if yes_no "⚠️  No Tokens" \
+                            "No auth tokens are configured.\nEnabling HTTP without tokens allows\nunauthenticated access.\n\nAdd a token first?"; then
+                            mcp_tokens_menu
+                            continue
+                        fi
+                    fi
+                    _mcp_config_apply '.http_enabled = true'
+                    msg_box "▶  HTTP Enabled" "HTTP transport enabled on port ${http_port}.\n\nRemote clients can connect at:\n  http://$(hostname -I | awk '{print $1}'):${http_port}/mcp"
+                fi
+                ;;
+            2)
+                audit_log "MCP > HTTP > Set Port"
+                local new_port
+                new_port=$(input_box "HTTP Port" \
+                    "Enter port number for HTTP transport:" \
+                    "$http_port") || continue
+                # Validate port number
+                if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [[ "$new_port" -lt 1 ]] || [[ "$new_port" -gt 65535 ]]; then
+                    msg_box "❌ Invalid Port" "Port must be a number between 1 and 65535."
+                    continue
+                fi
+                _mcp_config_apply ".http_port = $new_port"
+                audit_log "MCP > HTTP > Set Port" "$new_port"
+                msg_box "✅ Port Updated" "HTTP port set to ${new_port}."
+                ;;
+            3)
+                audit_log "MCP > HTTP > Manage Tokens"
+                mcp_tokens_menu
+                ;;
+            4)
+                audit_log "MCP > HTTP > Configure TLS"
+                local cert_path key_path ca_path
+
+                cert_path=$(input_box "TLS Certificate" \
+                    "Path to TLS certificate file (.crt/.pem):\n\n(Leave empty to disable TLS)" \
+                    "$(_mcp_config_get '.tls.cert // empty')") || continue
+
+                if [[ -z "$cert_path" ]]; then
+                    if yes_no "Disable TLS?" "Remove TLS configuration?\nHTTP will use plain (unencrypted) connections."; then
+                        _mcp_config_apply 'del(.tls)'
+                        msg_box "🔓 TLS Disabled" "TLS configuration removed."
+                    fi
+                    continue
+                fi
+
+                if [[ ! -f "$cert_path" ]]; then
+                    msg_box "❌ File Not Found" "Certificate file not found:\n${cert_path}"
+                    continue
+                fi
+
+                key_path=$(input_box "TLS Private Key" \
+                    "Path to TLS private key file (.key/.pem):" \
+                    "$(_mcp_config_get '.tls.key // empty')") || continue
+
+                if [[ ! -f "$key_path" ]]; then
+                    msg_box "❌ File Not Found" "Key file not found:\n${key_path}"
+                    continue
+                fi
+
+                ca_path=$(input_box "CA Certificate (optional)" \
+                    "Path to CA certificate for mTLS (optional):\n\n(Leave empty to skip client cert verification)" \
+                    "$(_mcp_config_get '.tls.ca // empty')") || continue
+
+                if [[ -n "$ca_path" && ! -f "$ca_path" ]]; then
+                    msg_box "❌ File Not Found" "CA file not found:\n${ca_path}"
+                    continue
+                fi
+
+                local tls_json
+                tls_json=$(jq -n \
+                    --arg cert "$cert_path" \
+                    --arg key "$key_path" \
+                    '{cert: $cert, key: $key}')
+                if [[ -n "$ca_path" ]]; then
+                    tls_json=$(echo "$tls_json" | jq --arg ca "$ca_path" '. + {ca: $ca}')
+                fi
+                _mcp_config_apply ".tls = $tls_json"
+                audit_log "MCP > HTTP > TLS" "cert=$cert_path"
+                msg_box "🔒 TLS Configured" "TLS enabled with:\n  Cert: ${cert_path}\n  Key:  ${key_path}${ca_path:+\n  CA:   ${ca_path}}"
+                ;;
+            5)
+                audit_log "MCP > HTTP > Connection Command"
+                local _ip proto
+                _ip=$(hostname -I | awk '{print $1}')
+                [[ -n "$tls_cert" && "$tls_cert" != "null" ]] && proto="https" || proto="http"
+
+                local _first_token _first_label
+                _first_token=$(jq -r '.tokens | keys[0] // empty' "$MCP_CONFIG" 2>/dev/null)
+                _first_label=""
+                if [[ -n "$_first_token" ]]; then
+                    _first_label=$(jq -r ".token_labels[\"$_first_token\"] // \"token\"" "$MCP_CONFIG" 2>/dev/null)
+                fi
+
+                local out="$TMP_DIR/mcp_connect_cmd"
+                {
+                    echo "=== MCP Remote Connection ==="
+                    echo ""
+                    echo "Endpoint: ${proto}://${_ip}:${http_port}/mcp"
+                    echo ""
+                    echo "--- Claude Code (CLI) ---"
+                    echo ""
+                    if [[ -n "$_first_token" ]]; then
+                        echo "  claude mcp add \\"
+                        echo "    --transport http \\"
+                        echo "    --header \"Authorization: Bearer ${_first_token}\" \\"
+                        echo "    xinas ${proto}://${_ip}:${http_port}/mcp"
+                    else
+                        echo "  claude mcp add \\"
+                        echo "    --transport http \\"
+                        echo "    xinas ${proto}://${_ip}:${http_port}/mcp"
+                    fi
+                    echo ""
+                    echo "--- curl test ---"
+                    echo ""
+                    echo "  curl -X POST ${proto}://${_ip}:${http_port}/mcp \\"
+                    if [[ -n "$_first_token" ]]; then
+                        echo "    -H \"Authorization: Bearer ${_first_token}\" \\"
+                    fi
+                    echo "    -H \"Content-Type: application/json\" \\"
+                    echo "    -d '{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1,\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\"}}}'"
+                } > "$out"
+                text_box "📋 Connection Command" "$out"
+                ;;
+        esac
+    done
+}
+
 # ── Root SSH access sub-menu ──────────────────────────────────────────────────
 
 mcp_ssh_access_menu() {
@@ -3014,6 +3330,16 @@ mcp_menu() {
             [[ "$mcp_built" == "yes" ]] && echo "Ready (stdio)" || echo "Not built"
         )${NC}"
         echo -e "  ${WHITE}🔧 NFS Helper:${NC}  ${nfs_color}● ${nfs_status}${NC}"
+        local http_status http_color_ra _http_on
+        _http_on=$(_mcp_config_get '.http_enabled')
+        if [[ "$_http_on" == "true" ]]; then
+            local _hp
+            _hp=$(_mcp_config_get '.http_port // 8080')
+            http_color_ra="$GREEN"; http_status="● Enabled (port ${_hp})"
+        else
+            http_color_ra="$DIM"; http_status="○ Disabled"
+        fi
+        echo -e "  ${WHITE}🌐 HTTP Remote:${NC}  ${http_color_ra}${http_status}${NC}"
         echo ""
 
         local toggle_label
@@ -3030,6 +3356,7 @@ mcp_menu() {
             "6" "📜 View Audit Log" \
             "7" "📋 NFS Helper Logs" \
             "8" "🔄 Check & Install Updates" \
+            "9" "🌐 Remote Access (HTTP)" \
             "0" "🔙 Back") || return
 
         case "$choice" in
@@ -3207,6 +3534,7 @@ mcp_menu() {
                     fi
                 fi
                 ;;
+            9) audit_log "MCP > Remote Access"; mcp_remote_access_menu ;;
             0) return ;;
         esac
     done
@@ -3306,9 +3634,15 @@ main_menu() {
         local mcp_text="🤖 AI / MCP Server"
         local _mcp_nfs_state
         _mcp_nfs_state=$(_service_state "$MCP_NFS_HELPER_SVC")
+        local _http_flag
+        _http_flag=$(_mcp_config_get '.http_enabled' 2>/dev/null)
         if [[ -f "$MCP_DIST" ]]; then
             if [[ "$_mcp_nfs_state" == "active" ]]; then
-                mcp_text="🤖 AI / MCP Server [Ready]"
+                if [[ "$_http_flag" == "true" ]]; then
+                    mcp_text="🤖 AI / MCP Server [Ready + HTTP]"
+                else
+                    mcp_text="🤖 AI / MCP Server [Ready]"
+                fi
             else
                 mcp_text="🤖 AI / MCP Server [NFS Helper Stopped]"
             fi
