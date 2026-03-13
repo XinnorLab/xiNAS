@@ -149,6 +149,22 @@ class NavigableMenu(Widget, can_focus=True):
             self.mount(lbl)
 
     def on_key(self, event) -> None:
+        # Forward PgUp/PgDn to sibling ScrollableTextView (if any)
+        if event.key in ("pageup", "pagedown"):
+            from xinas_menu.widgets.text_view import ScrollableTextView
+            try:
+                for sibling in self.parent.children:
+                    if isinstance(sibling, ScrollableTextView):
+                        if event.key == "pageup":
+                            sibling.scroll_page_up()
+                        else:
+                            sibling.scroll_page_down()
+                        event.stop()
+                        return
+            except Exception:
+                pass
+            return
+
         key = event.character or ""
         if not key:
             return

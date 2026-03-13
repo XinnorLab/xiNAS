@@ -40,6 +40,8 @@ class ScrollableTextView(Widget):
 
     Use set_content() / append() to update.
     Call get_text() to retrieve plain text for clipboard operations.
+    Scroll with scroll_page_up() / scroll_page_down() — wired to
+    PgUp/PgDn (fn+↑/↓ on Mac) via on_key in screens.
     """
 
     DEFAULT_CSS = """
@@ -106,3 +108,19 @@ class ScrollableTextView(Widget):
     def get_text(self) -> str:
         """Return plain text content (for clipboard operations)."""
         return self._plain_text
+
+    def scroll_page_up(self) -> None:
+        """Scroll content up by one page."""
+        try:
+            log = self.query_one("#text-view-area", _DisplayLog)
+            log.scroll_page_up(animate=False)
+        except Exception:
+            pass
+
+    def scroll_page_down(self) -> None:
+        """Scroll content down by one page."""
+        try:
+            log = self.query_one("#text-view-area", _DisplayLog)
+            log.scroll_page_down(animate=False)
+        except Exception:
+            pass
