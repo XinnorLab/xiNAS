@@ -48,20 +48,12 @@ class QuickActionsScreen(Screen):
         Binding("0", "app.pop_screen", "Back", show=False),
     ]
 
-    def __init__(self, show_status: bool = False, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._show_status = show_status
-
     def compose(self) -> ComposeResult:
         yield Label("  Quick Actions", id="screen-title")
         with Horizontal(id="split-layout"):
             yield NavigableMenu(_MENU, id="qa-nav")
             yield ScrollableTextView(id="qa-content")
         yield Footer()
-
-    def on_mount(self) -> None:
-        if self._show_status:
-            self._system_status()
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
