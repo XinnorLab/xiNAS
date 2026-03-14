@@ -129,22 +129,34 @@ class SettingsScreen(Screen):
             self._show_overview()
             return
 
-        host = await self.app.push_screen_wait(
-            InputDialog("SMTP Host:", "Email Setup", default=email.get("smtp_host", ""))
-        )
-        if host is None:
-            return
+        while True:
+            host = await self.app.push_screen_wait(
+                InputDialog("SMTP Host:", "Email Setup",
+                            default=email.get("smtp_host", ""),
+                            placeholder="smtp.example.com")
+            )
+            if host is None:
+                return
+            if host.strip():
+                host = host.strip()
+                break
+            self.app.notify("SMTP host cannot be empty", severity="error")
 
-        port_str = await self.app.push_screen_wait(
-            InputDialog("SMTP Port:", "Email Setup", default=str(email.get("smtp_port", 587)))
-        )
-        if port_str is None:
-            return
-        try:
-            port = int(port_str)
-        except ValueError:
-            self.app.notify("Invalid port number", severity="error")
-            return
+        while True:
+            port_str = await self.app.push_screen_wait(
+                InputDialog("SMTP Port:", "Email Setup",
+                            default=str(email.get("smtp_port", 587)),
+                            placeholder="587")
+            )
+            if port_str is None:
+                return
+            try:
+                port = int(port_str)
+                if 1 <= port <= 65535:
+                    break
+                raise ValueError("out of range")
+            except ValueError:
+                self.app.notify("Port must be 1-65535", severity="error")
 
         tls_choice = await self.app.push_screen_wait(
             SelectDialog(["Yes", "No"], title="Email Setup", prompt="Use STARTTLS?")
@@ -165,25 +177,37 @@ class SettingsScreen(Screen):
         if password is None:
             return
 
-        from_addr = await self.app.push_screen_wait(
-            InputDialog("From Address:", "Email Setup", default=email.get("from_addr", user))
-        )
-        if from_addr is None:
-            return
-
-        to_str = await self.app.push_screen_wait(
-            InputDialog(
-                "To Addresses (comma-separated):", "Email Setup",
-                default=", ".join(email.get("to_addrs", [])),
+        while True:
+            from_addr = await self.app.push_screen_wait(
+                InputDialog("From Address:", "Email Setup",
+                            default=email.get("from_addr", user),
+                            placeholder="alerts@example.com")
             )
-        )
-        if to_str is None:
-            return
-        to_addrs = [a.strip() for a in to_str.split(",") if a.strip()]
+            if from_addr is None:
+                return
+            if "@" in from_addr:
+                break
+            self.app.notify("Invalid email address (must contain @)", severity="error")
 
-        if not to_addrs:
-            self.app.notify("At least one recipient required", severity="error")
-            return
+        while True:
+            to_str = await self.app.push_screen_wait(
+                InputDialog(
+                    "To Addresses (comma-separated):", "Email Setup",
+                    default=", ".join(email.get("to_addrs", [])),
+                    placeholder="admin@example.com, ops@example.com",
+                )
+            )
+            if to_str is None:
+                return
+            to_addrs = [a.strip() for a in to_str.split(",") if a.strip()]
+            if not to_addrs:
+                self.app.notify("At least one recipient required", severity="error")
+                continue
+            invalid = [a for a in to_addrs if "@" not in a]
+            if invalid:
+                self.app.notify(f"Invalid address(es): {', '.join(invalid)}", severity="error")
+                continue
+            break
 
         cfg["email"] = {
             "enabled": True,
@@ -249,6 +273,7 @@ class SettingsScreen(Screen):
             InputDialog(
                 "Run interval in hours (1-168):", "HC Scheduler",
                 default=str(sched.get("interval_hours", 24)),
+                placeholder="24",
             )
         )
         if interval_str is None:
