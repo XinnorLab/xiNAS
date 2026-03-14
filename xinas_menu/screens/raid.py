@@ -92,7 +92,18 @@ class RAIDScreen(Screen):
         yield Label("  RAID Management", id="screen-title")
         with Horizontal(id="split-layout"):
             yield NavigableMenu(_MENU, id="raid-nav")
-            yield ScrollableTextView(id="raid-content")
+            yield ScrollableTextView(
+                "\033[1m\033[36mRAID Management\033[0m\n"
+                "\n"
+                "  \033[1m1\033[0m  \033[36mQuick Overview\033[0m    \033[2mSummary of all arrays\033[0m\n"
+                "  \033[1m2\033[0m  \033[36mExtended Details\033[0m  \033[2mDetailed array info (capacity, state, devices)\033[0m\n"
+                "  \033[1m3\033[0m  \033[36mPhysical Drives\033[0m   \033[2mDrive list with health and membership\033[0m\n"
+                "  \033[1m4\033[0m  \033[36mSpare Pools\033[0m       \033[2mView spare pool configuration\033[0m\n"
+                "  \033[1m5\033[0m  \033[36mCreate Array\033[0m      \033[2mCreate a new RAID array (wizard)\033[0m\n"
+                "  \033[1m6\033[0m  \033[36mModify Array\033[0m      \033[2mChange array parameters\033[0m\n"
+                "  \033[1m7\033[0m  \033[36mDelete Array\033[0m      \033[2mDestroy an existing array\033[0m\n",
+                id="raid-content",
+            )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -205,14 +216,18 @@ class RAIDScreen(Screen):
             return
 
         if group_choice == "Manual entry":
-            drives_str = await self.app.push_screen_wait(
-                InputDialog("Drive names (comma-separated):",
-                            "Create Array — Drives",
-                            placeholder="nvme0n1,nvme1n1,nvme2n1")
-            )
-            if not drives_str:
-                return
-            drives = [d.strip() for d in drives_str.split(",") if d.strip()]
+            while True:
+                drives_str = await self.app.push_screen_wait(
+                    InputDialog("Drive names (comma-separated):",
+                                "Create Array — Drives",
+                                placeholder="nvme0n1,nvme1n1,nvme2n1")
+                )
+                if not drives_str:
+                    return
+                drives = [d.strip() for d in drives_str.split(",") if d.strip()]
+                if drives:
+                    break
+                self.app.notify("At least one drive name is required.", severity="error")
         else:
             drives = groups.get(group_choice, [])
 
@@ -233,13 +248,22 @@ class RAIDScreen(Screen):
         # Step 5: Group size (mandatory for RAID 50/60)
         kwargs: dict[str, Any] = {"strip_size": int(strip)}
         if level in ("50", "60"):
-            group_size = await self.app.push_screen_wait(
-                InputDialog("Group size (required for RAID 50/60):",
-                            "Create Array — Step 5", placeholder="4")
-            )
-            if not group_size:
-                return
-            kwargs["group_size"] = int(group_size)
+            while True:
+                group_size = await self.app.push_screen_wait(
+                    InputDialog("Group size (required for RAID 50/60):",
+                                "Create Array — Step 5", placeholder="4")
+                )
+                if not group_size:
+                    return
+                try:
+                    gs = int(group_size)
+                    if gs <= 0:
+                        raise ValueError
+                except ValueError:
+                    self.app.notify("Group size must be a positive integer.", severity="error")
+                    continue
+                kwargs["group_size"] = gs
+                break
 
         # Step 6: Spare pool (optional)
         sparepool = await self.app.push_screen_wait(

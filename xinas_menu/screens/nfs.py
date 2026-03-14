@@ -43,7 +43,17 @@ class NFSScreen(Screen):
         yield Label("  NFS Access Rights", id="screen-title")
         with Horizontal(id="split-layout"):
             yield NavigableMenu(_MENU, id="nfs-nav")
-            yield ScrollableTextView(id="nfs-content")
+            yield ScrollableTextView(
+                "\033[1m\033[36mNFS Access Rights\033[0m\n"
+                "\n"
+                "  \033[1m1\033[0m  \033[36mShow Exports\033[0m      \033[2mList all NFS exports with options\033[0m\n"
+                "  \033[1m2\033[0m  \033[36mAdd Share\033[0m         \033[2mCreate a new NFS export (wizard)\033[0m\n"
+                "  \033[1m3\033[0m  \033[36mEdit Share\033[0m        \033[2mModify an existing export\033[0m\n"
+                "  \033[1m4\033[0m  \033[36mRemove Share\033[0m      \033[2mDelete an NFS export\033[0m\n"
+                "  \033[1m5\033[0m  \033[36mActive Sessions\033[0m   \033[2mView connected NFS clients\033[0m\n"
+                "  \033[1m6\033[0m  \033[36mConfigure idmapd\033[0m  \033[2mSet NFS4 ID mapping domain\033[0m\n",
+                id="nfs-content",
+            )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -90,27 +100,36 @@ class NFSScreen(Screen):
     async def _add_share_wizard(self) -> None:
         """5-step share creation wizard."""
         # Step 1: Export path
-        path = await self.app.push_screen_wait(
-            InputDialog("Export path (e.g. /mnt/data/share1):", "Add Share — Step 1/5",
-                        default="/mnt/data/")
-        )
-        if not path:
-            return
+        while True:
+            path = await self.app.push_screen_wait(
+                InputDialog("Export path (e.g. /mnt/data/share1):", "Add Share — Step 1/5",
+                            default="/mnt/data/")
+            )
+            if not path:
+                return
+            if path.startswith("/"):
+                break
+            self.app.notify("Export path must start with '/'.", severity="error")
 
         # Step 2: Client spec
         clients = await self.app.push_screen_wait(
             InputDialog("Client spec (e.g. 192.168.1.0/24 or *):", "Add Share — Step 2/5",
-                        default="*")
+                        default="*", placeholder="192.168.1.0/24")
         )
         if clients is None:
             return
 
         # Step 3: Access mode
-        access = await self.app.push_screen_wait(
-            InputDialog("Access mode (rw / ro):", "Add Share — Step 3/5", default="rw")
-        )
-        if access is None:
-            return
+        while True:
+            access = await self.app.push_screen_wait(
+                InputDialog("Access mode (rw / ro):", "Add Share — Step 3/5", default="rw")
+            )
+            if access is None:
+                return
+            if access.strip().lower() in ("rw", "ro"):
+                access = access.strip().lower()
+                break
+            self.app.notify("Access mode must be 'rw' or 'ro'.", severity="error")
 
         # Step 4: Extra NFS options
         extra_opts = await self.app.push_screen_wait(
@@ -226,12 +245,20 @@ class NFSScreen(Screen):
 
     @work(exclusive=True)
     async def _configure_idmapd(self) -> None:
-        domain = await self.app.push_screen_wait(
-            InputDialog("NFS4 idmapd domain:", "Configure idmapd Domain",
-                        placeholder="example.com")
-        )
-        if not domain:
-            return
+        while True:
+            domain = await self.app.push_screen_wait(
+                InputDialog("NFS4 idmapd domain:", "Configure idmapd Domain",
+                            placeholder="example.com")
+            )
+            if domain is None:
+                return
+            domain = domain.strip()
+            if domain and "." in domain:
+                break
+            self.app.notify(
+                "Domain must not be empty and must contain at least one '.' (e.g. example.com).",
+                severity="error",
+            )
         from xinas_menu.utils.subprocess_utils import run_cmd
         loop = asyncio.get_running_loop()
 
