@@ -426,20 +426,20 @@ class RemoteAccessScreen(Screen):
         cfg = await loop.run_in_executor(None, _cfg_read)
         current = str(cfg.get("http_port", 8080))
 
-        new_port = await self.app.push_screen_wait(
-            InputDialog("Enter port number for HTTP transport:", "HTTP Port", default=current)
-        )
-        if not new_port:
-            return
-        try:
-            port = int(new_port)
-            if not 1 <= port <= 65535:
-                raise ValueError
-        except ValueError:
-            await self.app.push_screen_wait(
-                ConfirmDialog("Port must be a number between 1 and 65535.", "Invalid Port")
+        while True:
+            new_port = await self.app.push_screen_wait(
+                InputDialog("Enter port number for HTTP transport:", "HTTP Port", default=current, placeholder="8080")
             )
-            return
+            if not new_port:
+                return
+            try:
+                port = int(new_port)
+                if not 1 <= port <= 65535:
+                    raise ValueError
+            except ValueError:
+                self.app.notify("Port must be a number between 1 and 65535.", severity="error")
+                continue
+            break
 
         cfg["http_port"] = port
         await loop.run_in_executor(None, _cfg_write, cfg)
@@ -461,6 +461,7 @@ class RemoteAccessScreen(Screen):
                 "Path to TLS certificate (.crt/.pem):\n\n(Leave empty to disable TLS)",
                 "TLS Certificate",
                 default=tls.get("cert", ""),
+                placeholder="/etc/ssl/certs/server.crt",
             )
         )
         if cert_path is None:
@@ -485,7 +486,7 @@ class RemoteAccessScreen(Screen):
             return
 
         key_path = await self.app.push_screen_wait(
-            InputDialog("Path to TLS private key (.key/.pem):", "TLS Private Key", default=tls.get("key", ""))
+            InputDialog("Path to TLS private key (.key/.pem):", "TLS Private Key", default=tls.get("key", ""), placeholder="/etc/ssl/private/server.key")
         )
         if not key_path:
             return
@@ -498,6 +499,7 @@ class RemoteAccessScreen(Screen):
                 "Path to CA certificate for mTLS (optional):\n\n(Leave empty to skip client verification)",
                 "CA Certificate",
                 default=tls.get("ca", ""),
+                placeholder="/etc/ssl/certs/ca.crt",
             )
         )
         if ca_path is None:
@@ -638,20 +640,29 @@ class TokenManagementScreen(Screen):
     async def _add_token(self) -> None:
         loop = asyncio.get_running_loop()
 
-        token_name = await self.app.push_screen_wait(
-            InputDialog("Enter a name for the new token\n(e.g. remote-claude, monitoring):", "Token Name")
-        )
-        if not token_name:
-            return
+        import re
+        _TOKEN_NAME_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
-        # Check duplicate name
-        cfg = await loop.run_in_executor(None, _cfg_read)
-        labels = cfg.get("token_labels", {})
-        if token_name in labels.values():
-            await self.app.push_screen_wait(
-                ConfirmDialog(f"Token '{token_name}' already exists.\nRemove it first to regenerate.", "Duplicate Name")
+        while True:
+            token_name = await self.app.push_screen_wait(
+                InputDialog("Enter a name for the new token\n(e.g. remote-claude, monitoring):", "Token Name", placeholder="remote-claude")
             )
-            return
+            if not token_name:
+                return
+            if not token_name.strip():
+                self.app.notify("Token name must not be empty.", severity="error")
+                continue
+            token_name = token_name.strip()
+            if not _TOKEN_NAME_RE.match(token_name):
+                self.app.notify("Token name must be alphanumeric, dash, or underscore only.", severity="error")
+                continue
+            # Check duplicate name
+            cfg = await loop.run_in_executor(None, _cfg_read)
+            labels = cfg.get("token_labels", {})
+            if token_name in labels.values():
+                self.app.notify(f"Token '{token_name}' already exists. Remove it first to regenerate.", severity="error")
+                continue
+            break
 
         # Select role
         role_key = await self.app.push_screen_wait(
@@ -884,11 +895,16 @@ class SSHAccessScreen(Screen):
 
     @work(exclusive=True)
     async def _add_key(self) -> None:
-        key = await self.app.push_screen_wait(
-            InputDialog("Paste public key:", "Add Authorized Key")
-        )
-        if not key:
-            return
+        while True:
+            key = await self.app.push_screen_wait(
+                InputDialog("Paste public key:", "Add Authorized Key", placeholder="ssh-rsa AAAA... user@host")
+            )
+            if not key:
+                return
+            if not (key.strip().startswith("ssh-") or key.strip().startswith("ecdsa-")):
+                self.app.notify("Public key must start with 'ssh-' or 'ecdsa-'.", severity="error")
+                continue
+            break
         try:
             ak = Path("/root/.ssh/authorized_keys")
             ak.parent.mkdir(mode=0o700, exist_ok=True)

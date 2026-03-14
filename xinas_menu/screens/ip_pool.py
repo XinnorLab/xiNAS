@@ -298,7 +298,15 @@ class IPPoolScreen(Screen):
         yield Label("  IP Pool Configuration", id="screen-title")
         with Horizontal(id="split-layout"):
             yield NavigableMenu(_MENU, id="pool-nav")
-            yield ScrollableTextView(id="pool-content")
+            yield ScrollableTextView(
+                "\033[1m\033[36mIP Pool Configuration\033[0m\n"
+                "\n"
+                "  \033[1m1\033[0m  \033[36mConfigure Pool\033[0m      \033[2mSet IP range and subnet prefix\033[0m\n"
+                "  \033[1m2\033[0m  \033[36mPreview Allocation\033[0m  \033[2mPreview IP assignments to interfaces\033[0m\n"
+                "  \033[1m3\033[0m  \033[36mApply Configuration\033[0m \033[2mWrite netplan and activate pool\033[0m\n"
+                "  \033[1m4\033[0m  \033[36mShow Settings\033[0m       \033[2mView current IP pool settings\033[0m\n",
+                id="pool-content",
+            )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -322,50 +330,56 @@ class IPPoolScreen(Screen):
         loop = asyncio.get_running_loop()
         cfg = await loop.run_in_executor(None, _cfg_read)
 
-        start = await self.app.push_screen_wait(
-            InputDialog(
-                "Pool start IP address:",
-                "Configure IP Pool",
-                default=cfg["pool_start"],
-                placeholder="10.10.1.1",
+        while True:
+            start = await self.app.push_screen_wait(
+                InputDialog(
+                    "Pool start IP address:",
+                    "Configure IP Pool",
+                    default=cfg["pool_start"],
+                    placeholder="10.10.1.1",
+                )
             )
-        )
-        if start is None:
-            return
-        err = _validate_ipv4(start)
-        if err:
-            await self.app.push_screen_wait(ConfirmDialog(err, "Validation Error"))
-            return
+            if start is None:
+                return
+            err = _validate_ipv4(start)
+            if err:
+                self.app.notify(err, severity="error")
+                continue
+            break
 
-        end = await self.app.push_screen_wait(
-            InputDialog(
-                "Pool end IP address:",
-                "Configure IP Pool",
-                default=cfg["pool_end"],
-                placeholder="10.10.255.1",
+        while True:
+            end = await self.app.push_screen_wait(
+                InputDialog(
+                    "Pool end IP address:",
+                    "Configure IP Pool",
+                    default=cfg["pool_end"],
+                    placeholder="10.10.255.1",
+                )
             )
-        )
-        if end is None:
-            return
-        err = _validate_ipv4(end)
-        if err:
-            await self.app.push_screen_wait(ConfirmDialog(err, "Validation Error"))
-            return
+            if end is None:
+                return
+            err = _validate_ipv4(end)
+            if err:
+                self.app.notify(err, severity="error")
+                continue
+            break
 
-        prefix_str = await self.app.push_screen_wait(
-            InputDialog(
-                "Subnet prefix (CIDR):",
-                "Configure IP Pool",
-                default=str(cfg["pool_prefix"]),
-                placeholder="24",
+        while True:
+            prefix_str = await self.app.push_screen_wait(
+                InputDialog(
+                    "Subnet prefix (CIDR):",
+                    "Configure IP Pool",
+                    default=str(cfg["pool_prefix"]),
+                    placeholder="24",
+                )
             )
-        )
-        if prefix_str is None:
-            return
-        prefix, err = _validate_prefix(prefix_str)
-        if err:
-            await self.app.push_screen_wait(ConfirmDialog(err, "Validation Error"))
-            return
+            if prefix_str is None:
+                return
+            prefix, err = _validate_prefix(prefix_str)
+            if err:
+                self.app.notify(err, severity="error")
+                continue
+            break
 
         cfg["pool_start"] = start
         cfg["pool_end"] = end

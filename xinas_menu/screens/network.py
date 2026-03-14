@@ -46,7 +46,16 @@ class NetworkScreen(Screen):
         yield Label("  Network Settings", id="screen-title")
         with Horizontal(id="split-layout"):
             yield NavigableMenu(_MENU, id="net-nav")
-            yield ScrollableTextView(id="net-content")
+            yield ScrollableTextView(
+                "\033[1m\033[36mNetwork Settings\033[0m\n"
+                "\n"
+                "  \033[1m1\033[0m  \033[36mShow Interfaces\033[0m     \033[2mView network interfaces and IP addresses\033[0m\n"
+                "  \033[1m2\033[0m  \033[36mEdit Interface IP\033[0m   \033[2mChange interface IP address (CIDR)\033[0m\n"
+                "  \033[1m3\033[0m  \033[36mApply Netplan\033[0m       \033[2mApply netplan changes\033[0m\n"
+                "  \033[1m4\033[0m  \033[36mShow Netplan\033[0m        \033[2mDisplay current netplan configuration\033[0m\n"
+                "  \033[1m5\033[0m  \033[36mIP Pool\033[0m             \033[2mConfigure IP pool for high-speed interfaces\033[0m\n",
+                id="net-content",
+            )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -77,18 +86,33 @@ class NetworkScreen(Screen):
 
     @work(exclusive=True)
     async def _edit_interface_ip(self) -> None:
-        iface = await self.app.push_screen_wait(
-            InputDialog("Interface name:", "Edit Interface IP", placeholder="eth0")
-        )
-        if not iface:
-            return
+        while True:
+            iface = await self.app.push_screen_wait(
+                InputDialog("Interface name:", "Edit Interface IP", placeholder="eth0")
+            )
+            if iface is None:
+                return
+            if not iface.strip():
+                self.app.notify("Interface name must not be empty.", severity="error")
+                continue
+            iface = iface.strip()
+            break
 
-        ip = await self.app.push_screen_wait(
-            InputDialog(f"New IP address/prefix for {iface} (CIDR):",
-                        "Edit Interface IP", placeholder="192.168.1.10/24")
-        )
-        if not ip:
-            return
+        while True:
+            ip = await self.app.push_screen_wait(
+                InputDialog(f"New IP address/prefix for {iface} (CIDR):",
+                            "Edit Interface IP", placeholder="192.168.1.10/24")
+            )
+            if ip is None:
+                return
+            if not ip.strip():
+                self.app.notify("IP address must not be empty.", severity="error")
+                continue
+            if "/" not in ip:
+                self.app.notify("IP address must be in CIDR format (e.g. 192.168.1.10/24).", severity="error")
+                continue
+            ip = ip.strip()
+            break
 
         gw = await self.app.push_screen_wait(
             InputDialog("Default gateway (leave blank to keep):",

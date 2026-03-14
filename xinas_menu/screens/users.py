@@ -43,7 +43,16 @@ class UsersScreen(Screen):
         yield Label("  User Management", id="screen-title")
         with Horizontal(id="split-layout"):
             yield NavigableMenu(_MENU, id="users-nav")
-            yield ScrollableTextView(id="users-content")
+            yield ScrollableTextView(
+                "\033[1m\033[36mUser Management\033[0m\n"
+                "\n"
+                "  \033[1m1\033[0m  \033[36mList Users\033[0m         \033[2mShow all system users\033[0m\n"
+                "  \033[1m2\033[0m  \033[36mCreate User\033[0m        \033[2mAdd a new user with home directory\033[0m\n"
+                "  \033[1m3\033[0m  \033[36mDelete User\033[0m        \033[2mRemove a user from the system\033[0m\n"
+                "  \033[1m4\033[0m  \033[36mSet Disk Quota\033[0m     \033[2mConfigure storage limits per user\033[0m\n"
+                "  \033[1m5\033[0m  \033[36mShow Quotas\033[0m        \033[2mDisplay current disk quota report\033[0m\n",
+                id="users-content",
+            )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -73,11 +82,26 @@ class UsersScreen(Screen):
 
     @work(exclusive=True)
     async def _create_user(self) -> None:
-        username = await self.app.push_screen_wait(
-            InputDialog("New username:", "Create User")
-        )
-        if not username:
-            return
+        import re
+        _USERNAME_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+
+        while True:
+            username = await self.app.push_screen_wait(
+                InputDialog("New username:", "Create User", placeholder="john")
+            )
+            if not username:
+                return
+            username = username.strip()
+            if not username:
+                self.app.notify("Username must not be empty.", severity="error")
+                continue
+            if len(username) > 32:
+                self.app.notify("Username must be 32 characters or fewer.", severity="error")
+                continue
+            if not _USERNAME_RE.match(username):
+                self.app.notify("Username must contain only alphanumeric, underscore, or dash characters.", severity="error")
+                continue
+            break
 
         password = await self.app.push_screen_wait(
             InputDialog("Password (leave blank for no password):", "Create User",
@@ -111,11 +135,17 @@ class UsersScreen(Screen):
 
     @work(exclusive=True)
     async def _delete_user(self) -> None:
-        username = await self.app.push_screen_wait(
-            InputDialog("Username to delete:", "Delete User")
-        )
-        if not username:
-            return
+        while True:
+            username = await self.app.push_screen_wait(
+                InputDialog("Username to delete:", "Delete User", placeholder="john")
+            )
+            if username is None:
+                return
+            if not username.strip():
+                self.app.notify("Username must not be empty.", severity="error")
+                continue
+            username = username.strip()
+            break
 
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(f"Delete user '{username}'? Home directory will be kept.", "Confirm")
@@ -135,36 +165,58 @@ class UsersScreen(Screen):
 
     @work(exclusive=True)
     async def _set_quota(self) -> None:
-        username = await self.app.push_screen_wait(
-            InputDialog("Username:", "Set Disk Quota")
-        )
-        if not username:
-            return
+        while True:
+            username = await self.app.push_screen_wait(
+                InputDialog("Username:", "Set Disk Quota", placeholder="john")
+            )
+            if username is None:
+                return
+            if not username.strip():
+                self.app.notify("Username must not be empty.", severity="error")
+                continue
+            username = username.strip()
+            break
 
-        export_path = await self.app.push_screen_wait(
-            InputDialog("Export path:", "Set Disk Quota", placeholder="/mnt/data/")
-        )
-        if not export_path:
-            return
+        while True:
+            export_path = await self.app.push_screen_wait(
+                InputDialog("Export path:", "Set Disk Quota", placeholder="/mnt/data/share1")
+            )
+            if export_path is None:
+                return
+            if not export_path.strip():
+                self.app.notify("Export path must not be empty.", severity="error")
+                continue
+            if not export_path.strip().startswith("/"):
+                self.app.notify("Export path must start with '/'.", severity="error")
+                continue
+            export_path = export_path.strip()
+            break
 
-        soft_str = await self.app.push_screen_wait(
-            InputDialog("Soft limit (GB, 0=none):", "Set Disk Quota", default="0")
-        )
-        if soft_str is None:
-            return
+        while True:
+            soft_str = await self.app.push_screen_wait(
+                InputDialog("Soft limit (GB, 0=none):", "Set Disk Quota", default="0", placeholder="10")
+            )
+            if soft_str is None:
+                return
+            try:
+                soft_kb = int(float(soft_str) * 1024 * 1024)
+            except ValueError:
+                self.app.notify("Soft limit must be a valid number.", severity="error")
+                continue
+            break
 
-        hard_str = await self.app.push_screen_wait(
-            InputDialog("Hard limit (GB, 0=none):", "Set Disk Quota", default="0")
-        )
-        if hard_str is None:
-            return
-
-        try:
-            soft_kb = int(float(soft_str) * 1024 * 1024)
-            hard_kb = int(float(hard_str) * 1024 * 1024)
-        except ValueError:
-            await self.app.push_screen_wait(ConfirmDialog("Invalid quota value.", "Error"))
-            return
+        while True:
+            hard_str = await self.app.push_screen_wait(
+                InputDialog("Hard limit (GB, 0=none):", "Set Disk Quota", default="0", placeholder="20")
+            )
+            if hard_str is None:
+                return
+            try:
+                hard_kb = int(float(hard_str) * 1024 * 1024)
+            except ValueError:
+                self.app.notify("Hard limit must be a valid number.", severity="error")
+                continue
+            break
 
         loop = asyncio.get_running_loop()
         ok, _, err = await loop.run_in_executor(
