@@ -39,6 +39,17 @@ class StorageScreen(Screen):
             yield ScrollableTextView(id="storage-content")
         yield Footer()
 
+    def on_mount(self) -> None:
+        BLD, DIM, CYN, NC = "\033[1m", "\033[2m", "\033[36m", "\033[0m"
+        view = self.query_one("#storage-content", ScrollableTextView)
+        view.set_content(
+            f"{BLD}{CYN}Storage Management{NC}\n"
+            f"\n"
+            f"  {BLD}1{NC}  {CYN}RAID Management{NC}    {DIM}Manage xiRAID arrays (create, modify, delete){NC}\n"
+            f"  {BLD}2{NC}  {CYN}NFS Access Rights{NC}  {DIM}Configure NFS exports and shares{NC}\n"
+            f"  {BLD}3{NC}  {CYN}Physical Drives{NC}    {DIM}View drive inventory and RAID membership{NC}\n"
+        )
+
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
         if key == "0":

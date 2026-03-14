@@ -44,7 +44,16 @@ class HealthScreen(Screen):
         yield Label("  Health Check", id="screen-title")
         with Horizontal(id="split-layout"):
             yield NavigableMenu(_MENU, id="health-nav")
-            yield ScrollableTextView("  Select a profile to run a health check.", id="health-content")
+            yield ScrollableTextView(
+                "\033[1m\033[36mHealth Check\033[0m\n"
+                "\n"
+                "  \033[1m1\033[0m  \033[36mQuick Check\033[0m       \033[2mFast scan of critical services\033[0m\n"
+                "  \033[1m2\033[0m  \033[36mStandard Check\033[0m    \033[2mComprehensive system health analysis\033[0m\n"
+                "  \033[1m3\033[0m  \033[36mDeep Check\033[0m        \033[2mFull check including performance tests\033[0m\n"
+                "  \033[1m4\033[0m  \033[36mView Last Report\033[0m  \033[2mDisplay most recent check results\033[0m\n"
+                "  \033[1m5\033[0m  \033[36mRemediation\033[0m       \033[2mReview and fix identified issues\033[0m\n",
+                id="health-content",
+            )
         yield Footer()
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:

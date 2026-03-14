@@ -55,6 +55,21 @@ class QuickActionsScreen(Screen):
             yield ScrollableTextView(id="qa-content")
         yield Footer()
 
+    def on_mount(self) -> None:
+        BLD, DIM, CYN, NC = "\033[1m", "\033[2m", "\033[36m", "\033[0m"
+        view = self.query_one("#qa-content", ScrollableTextView)
+        view.set_content(
+            f"{BLD}{CYN}Quick Actions{NC}\n"
+            f"\n"
+            f"  {BLD}1{NC}  {CYN}System Status{NC}     {DIM}Live system overview (xinas-status){NC}\n"
+            f"  {BLD}2{NC}  {CYN}Restart NFS{NC}       {DIM}Restart NFS server (disconnects clients){NC}\n"
+            f"  {BLD}3{NC}  {CYN}System Logs{NC}       {DIM}View recent journalctl entries{NC}\n"
+            f"  {BLD}4{NC}  {CYN}Disk Health{NC}       {DIM}Drive inventory with RAID status{NC}\n"
+            f"  {BLD}5{NC}  {CYN}Service Status{NC}    {DIM}Check all xiNAS service states{NC}\n"
+            f"  {BLD}6{NC}  {CYN}System Monitor{NC}    {DIM}Launch btop interactive monitor{NC}\n"
+            f"  {BLD}7{NC}  {CYN}Audit Log{NC}         {DIM}View xiNAS audit trail{NC}\n"
+        )
+
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
         if key == "0":
