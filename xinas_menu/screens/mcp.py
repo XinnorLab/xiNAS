@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import secrets
 import socket as _socket
 import subprocess
-import tempfile
 from pathlib import Path
 
 from textual.app import ComposeResult
@@ -20,36 +18,9 @@ from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
+from xinas_menu.utils.config import CONFIG_PATH as _MCP_CONFIG, cfg_read as _cfg_read, cfg_write as _cfg_write
 
-_MCP_CONFIG = Path("/etc/xinas-mcp/config.json")
 _MCP_AUDIT = Path("/var/log/xinas/mcp-audit.jsonl")
-
-
-# ── Config helpers ──────────────────────────────────────────────────────────
-
-def _cfg_read() -> dict:
-    """Read MCP config JSON, returning empty dict on failure."""
-    try:
-        return json.loads(_MCP_CONFIG.read_text())
-    except Exception:
-        return {}
-
-
-def _cfg_write(data: dict) -> None:
-    """Atomic write of MCP config JSON (mktemp + rename, mode 0600)."""
-    _MCP_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=_MCP_CONFIG.parent, suffix=".tmp")
-    try:
-        import os
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-            f.write("\n")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, str(_MCP_CONFIG))
-    except Exception:
-        import os
-        os.unlink(tmp)
-        raise
 
 
 def _cfg_restart_service() -> tuple[bool, str]:
