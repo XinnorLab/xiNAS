@@ -251,21 +251,30 @@ def _build_mini_status() -> str:
     lines.append("")
 
     lines.append(f"  {_DIM}Manual mount:{_NC}")
+    num_ips = len(server_ips) if server_ips else 1
+    nconn = max(1, 16 // num_ips)
     if has_rdma:
-        lines.append(
-            f"     {_GRN}mount -t nfs -o vers=4.2,proto=rdma,port=20049,"
-        )
-        lines.append(
-            f"       nconnect=16,rsize=1048576,wsize=1048576 \\{_NC}"
-        )
+        proto_opts = "proto=rdma,port=20049"
     else:
-        lines.append(
-            f"     {_GRN}mount -t nfs -o vers=4.2,proto=tcp,"
-        )
-        lines.append(
-            f"       nconnect=16,rsize=1048576,wsize=1048576 \\{_NC}"
-        )
+        proto_opts = "proto=tcp"
+    mount_opts = (
+        f"vers=4.2,{proto_opts},hard,"
+        f"max_connect=16,nconnect={nconn},"
+        f"rsize=1048576,wsize=1048576"
+    )
+    if num_ips > 1:
+        mount_opts += ",trunkdiscovery"
+    lines.append(
+        f"     {_GRN}mount -t nfs -o {mount_opts} \\{_NC}"
+    )
     lines.append(f"     {_GRN}  {server_ip}:{export_path} /mnt/nas{_NC}")
+    if num_ips > 1:
+        lines.append(f"     {_DIM}# repeat for each IP:{_NC}")
+        for ip in server_ips[1:]:
+            lines.append(
+                f"     {_GRN}mount -t nfs -o {mount_opts} \\{_NC}"
+            )
+            lines.append(f"     {_GRN}  {ip}:{export_path} /mnt/nas{_NC}")
 
     if len(server_ips) > 1:
         lines.append("")
