@@ -171,7 +171,7 @@ OpStatusWidget {
 }
 
 /* ── ConfirmDialog / InputDialog / SelectDialog ──────────────── */
-ConfirmDialog, InputDialog, SelectDialog {
+ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog {
     align: center middle;
 }
 
@@ -199,6 +199,19 @@ ConfirmDialog, InputDialog, SelectDialog {
 
 #dialog-input {
     margin-bottom: 1;
+}
+
+#dialog-textarea {
+    height: 16;
+    min-height: 8;
+    margin-bottom: 1;
+}
+
+TextAreaDialog #dialog-container {
+    width: 100;
+    max-width: 95%;
+    height: auto;
+    max-height: 85%;
 }
 
 #dialog-buttons {
