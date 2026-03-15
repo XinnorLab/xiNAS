@@ -20,6 +20,7 @@ from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.checklist_dialog import ChecklistDialog
+from xinas_menu.widgets.drive_picker import DrivePickerScreen
 from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -237,21 +238,9 @@ class RAIDScreen(Screen):
             return
 
         if group_choice == "Pick individual drives":
-            # Smart multi-select with drive details (name, size, model, NUMA)
-            drive_items = [
-                (_drive_label(d), d["name"], False)
-                for d in sorted(nvme, key=lambda x: (
-                    x.get("numa_node", 0),
-                    -(x.get("size_bytes") or x.get("size_raw") or 0),
-                    x.get("name", ""),
-                ))
-            ]
+            # Full-featured drive picker with filters, sort, detail view
             selected = await self.app.push_screen_wait(
-                ChecklistDialog(
-                    drive_items,
-                    title="Create Array — Select Drives",
-                    prompt="Toggle drives with Space, confirm with Enter:",
-                )
+                DrivePickerScreen(nvme, title="Create Array — Select Drives")
             )
             if not selected:
                 return
