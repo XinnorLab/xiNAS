@@ -103,11 +103,16 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     _SORT_KEYS = [None, "name", "size", "model", "numa"]
     _SORT_LABELS = ["default", "name", "size", "model", "NUMA"]
 
-    def __init__(self, drives: list[dict[str, Any]], title: str = "Select Drives") -> None:
+    def __init__(
+        self,
+        drives: list[dict[str, Any]],
+        title: str = "Select Drives",
+        preselected: set[str] | list[str] | None = None,
+    ) -> None:
         super().__init__()
         self._all_drives = list(drives)
         self._title = title
-        self._selected: set[str] = set()
+        self._selected: set[str] = set(preselected) if preselected else set()
         self._sort_idx = 0
         self._sort_reverse = False
         self._filter_text = ""

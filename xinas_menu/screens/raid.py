@@ -246,7 +246,23 @@ class RAIDScreen(Screen):
                 return
             drives = selected
         else:
-            drives = groups.get(group_choice, [])
+            # Show group drives in picker for review (all pre-selected)
+            group_drives = groups.get(group_choice, [])
+            group_names = {d if isinstance(d, str) else d.get("name", "") for d in group_drives}
+            # Filter full drive info for this group
+            group_drive_info = [d for d in nvme if d.get("name") in group_names]
+            if not group_drive_info:
+                group_drive_info = group_drives
+            selected = await self.app.push_screen_wait(
+                DrivePickerScreen(
+                    group_drive_info,
+                    title=f"Review — {group_choice}",
+                    preselected=group_names,
+                )
+            )
+            if not selected:
+                return
+            drives = selected
 
         if not drives:
             await self.app.push_screen_wait(
