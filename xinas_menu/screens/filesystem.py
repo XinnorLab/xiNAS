@@ -429,7 +429,7 @@ class FilesystemScreen(Screen):
 
         # ── Check for active NFS shares on this mountpoint ───────────────
         affected_shares: list[dict] = []
-        ok_nfs, exports, _ = await self.app.nfs.list_exports()
+        ok_nfs, exports, _ = self.app.nfs.list_exports()
         if ok_nfs and exports:
             for exp in exports:
                 exp_path = exp.get("path", "")
@@ -477,12 +477,12 @@ class FilesystemScreen(Screen):
         for share in affected_shares:
             path = share.get("path", "")
             view.set_content(f"  Removing NFS share: {path}...")
-            ok_rm, _, err_rm = await self.app.nfs.remove_export(path)
+            ok_rm, _, err_rm = self.app.nfs.remove_export(path)
             if not ok_rm:
                 # Rollback: re-add previously removed shares
                 for rs in removed_shares:
-                    await self.app.nfs.add_export(rs)
-                await self.app.nfs.reload()
+                    self.app.nfs.add_export(rs)
+                self.app.nfs.reload()
                 await self.app.push_screen_wait(
                     ConfirmDialog(
                         f"Failed to remove NFS share '{path}':\n{err_rm}\n\n"
@@ -496,7 +496,7 @@ class FilesystemScreen(Screen):
             self.app.audit.log("nfs.remove", f"share={path} (FS teardown)", "OK")
 
         if removed_shares:
-            await self.app.nfs.reload()
+            self.app.nfs.reload()
 
         # ── Step 2: Unmount filesystem ───────────────────────────────────
         view.set_content(f"  Unmounting {mountpoint}...")
@@ -504,9 +504,9 @@ class FilesystemScreen(Screen):
         if not ok_um:
             # Rollback: re-add shares
             for rs in removed_shares:
-                await self.app.nfs.add_export(rs)
+                self.app.nfs.add_export(rs)
             if removed_shares:
-                await self.app.nfs.reload()
+                self.app.nfs.reload()
             await self.app.push_screen_wait(
                 ConfirmDialog(
                     f"Failed to unmount '{mountpoint}':\n{err_um}\n\n"

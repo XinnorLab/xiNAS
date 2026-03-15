@@ -472,7 +472,7 @@ class RAIDScreen(Screen):
         # ── Check for active NFS shares on those mountpoints ─────────────
         affected_shares: list[dict] = []  # [{path, mountpoint}]
         if mounts:
-            ok_nfs, exports, _ = await self.app.nfs.list_exports()
+            ok_nfs, exports, _ = self.app.nfs.list_exports()
             if ok_nfs and exports:
                 for exp in exports:
                     exp_path = exp.get("path", "")
@@ -538,7 +538,7 @@ class RAIDScreen(Screen):
         removed_shares: list[dict] = []  # for rollback
         if affected_shares:
             # Save share details for potential rollback
-            ok_nfs, all_exports, _ = await self.app.nfs.list_exports()
+            ok_nfs, all_exports, _ = self.app.nfs.list_exports()
             export_map = {}
             if ok_nfs and all_exports:
                 export_map = {e.get("path", ""): e for e in all_exports}
@@ -546,12 +546,12 @@ class RAIDScreen(Screen):
             for share in affected_shares:
                 path = share["path"]
                 view.set_content(f"  Removing NFS share: {path}...")
-                ok_rm, _, err_rm = await self.app.nfs.remove_export(path)
+                ok_rm, _, err_rm = self.app.nfs.remove_export(path)
                 if not ok_rm:
                     # Rollback: re-add previously removed shares
                     for rs in removed_shares:
-                        await self.app.nfs.add_export(rs)
-                    await self.app.nfs.reload()
+                        self.app.nfs.add_export(rs)
+                    self.app.nfs.reload()
                     await self.app.push_screen_wait(
                         ConfirmDialog(
                             f"Failed to remove NFS share '{path}':\n{err_rm}\n\n"
@@ -567,7 +567,7 @@ class RAIDScreen(Screen):
                 self.app.audit.log("nfs.remove", f"share={path} (RAID teardown)", "OK")
 
             # Reload NFS exports after removal
-            await self.app.nfs.reload()
+            self.app.nfs.reload()
 
         # ── Step 2: Unmount filesystems ──────────────────────────────────
         unmounted_mounts: list[dict] = []  # for rollback
@@ -585,9 +585,9 @@ class RAIDScreen(Screen):
                         await mount_filesystem(um["mountpoint"])
                     # Rollback: re-add removed shares
                     for rs in removed_shares:
-                        await self.app.nfs.add_export(rs)
+                        self.app.nfs.add_export(rs)
                     if removed_shares:
-                        await self.app.nfs.reload()
+                        self.app.nfs.reload()
                     await self.app.push_screen_wait(
                         ConfirmDialog(
                             f"Failed to unmount '{mp}':\n{err_um}\n\n"
@@ -620,9 +620,9 @@ class RAIDScreen(Screen):
             for um in unmounted_mounts:
                 await mount_filesystem(um["mountpoint"])
             for rs in removed_shares:
-                await self.app.nfs.add_export(rs)
+                self.app.nfs.add_export(rs)
             if removed_shares:
-                await self.app.nfs.reload()
+                self.app.nfs.reload()
             await self.app.push_screen_wait(
                 ConfirmDialog(
                     f"RAID destroy failed:\n{grpc_short_error(err)}\n\n"
