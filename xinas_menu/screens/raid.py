@@ -325,6 +325,9 @@ class RAIDScreen(Screen):
         if not confirmed:
             return
 
+        # Ensure full device paths (e.g. /dev/nvme2n1, not nvme2n1)
+        drives = [d if d.startswith("/dev/") else f"/dev/{d}" for d in drives]
+
         ok, _, err = await self.app.grpc.raid_create(name, level, drives, **kwargs)
         if ok:
             self.app.audit.log("raid.create",
