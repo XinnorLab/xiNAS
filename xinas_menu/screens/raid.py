@@ -425,7 +425,16 @@ class RAIDScreen(Screen):
 
     @work(exclusive=True)
     async def _delete_array(self) -> None:
-        """Pick array -> confirm with warning -> destroy."""
+        """Pick array -> check dependencies -> ordered teardown -> destroy.
+
+        Teardown order: NFS shares -> filesystem (unmount + unit) -> RAID.
+        Rollback on failure at any step.
+        """
+        from xinas_menu.utils.xfs_helpers import (
+            find_mounts_using_raid,
+            unmount_filesystem,
+        )
+
         ok, data, err = await self.app.grpc.raid_show()
         if not ok or not data:
             await self.app.push_screen_wait(
@@ -456,26 +465,173 @@ class RAIDScreen(Screen):
         level = arr.get("level", "?") if isinstance(arr, dict) else "?"
         size = arr.get("size", "N/A") if isinstance(arr, dict) else "N/A"
         devs = arr.get("devices", []) if isinstance(arr, dict) else []
-        warning = (
-            f"RAID-{level}  |  {size}  |  {len(devs)} drive(s)\n\n"
+
+        # ── Check for active filesystems using this RAID array ───────────
+        mounts = await find_mounts_using_raid(arr_name)
+
+        # ── Check for active NFS shares on those mountpoints ─────────────
+        affected_shares: list[dict] = []  # [{path, mountpoint}]
+        if mounts:
+            ok_nfs, exports, _ = await self.app.nfs.list_exports()
+            if ok_nfs and exports:
+                for exp in exports:
+                    exp_path = exp.get("path", "")
+                    for m in mounts:
+                        mp = m.get("mountpoint", "")
+                        if mp and exp_path.startswith(mp):
+                            affected_shares.append({
+                                "path": exp_path,
+                                "mountpoint": mp,
+                            })
+
+        # ── Build warning message with dependency info ───────────────────
+        warning_parts = [
+            f"RAID-{level}  |  {size}  |  {len(devs)} drive(s)\n",
+        ]
+
+        if affected_shares:
+            share_list = "\n".join(f"  - {s['path']}" for s in affected_shares)
+            warning_parts.append(
+                f"ACTIVE NFS SHARES will be removed:\n{share_list}\n"
+            )
+
+        if mounts:
+            mount_list = "\n".join(
+                f"  - {m['mountpoint']} ({m.get('role', 'unknown')} device)"
+                for m in mounts
+            )
+            warning_parts.append(
+                f"ACTIVE FILESYSTEMS will be unmounted:\n{mount_list}\n"
+            )
+
+        warning_parts.append(
             f"WARNING: This will DESTROY array '{arr_name}' and all data on it!\n"
             f"This action cannot be undone."
         )
 
+        # ── First confirmation ───────────────────────────────────────────
         confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(warning, f"Delete {arr_name}?")
+            ConfirmDialog("\n".join(warning_parts), f"Delete {arr_name}?")
         )
         if not confirmed:
             return
 
+        # ── Double confirmation when dependencies exist ──────────────────
+        if mounts or affected_shares:
+            dep_count = len(affected_shares) + len(mounts)
+            confirmed2 = await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"Are you ABSOLUTELY sure?\n\n"
+                    f"This will remove {len(affected_shares)} NFS share(s) "
+                    f"and {len(mounts)} filesystem(s) before destroying "
+                    f"array '{arr_name}'.\n\n"
+                    f"ALL DATA WILL BE LOST.",
+                    "FINAL CONFIRMATION",
+                )
+            )
+            if not confirmed2:
+                return
+
+        view = self.query_one("#raid-content", ScrollableTextView)
+
+        # ── Step 1: Remove NFS shares ────────────────────────────────────
+        removed_shares: list[dict] = []  # for rollback
+        if affected_shares:
+            # Save share details for potential rollback
+            ok_nfs, all_exports, _ = await self.app.nfs.list_exports()
+            export_map = {}
+            if ok_nfs and all_exports:
+                export_map = {e.get("path", ""): e for e in all_exports}
+
+            for share in affected_shares:
+                path = share["path"]
+                view.set_content(f"  Removing NFS share: {path}...")
+                ok_rm, _, err_rm = await self.app.nfs.remove_export(path)
+                if not ok_rm:
+                    # Rollback: re-add previously removed shares
+                    for rs in removed_shares:
+                        await self.app.nfs.add_export(rs)
+                    await self.app.nfs.reload()
+                    await self.app.push_screen_wait(
+                        ConfirmDialog(
+                            f"Failed to remove NFS share '{path}':\n{err_rm}\n\n"
+                            f"Rolled back {len(removed_shares)} previously removed share(s).",
+                            "Error — Rollback Complete",
+                        )
+                    )
+                    view.set_content("  Delete cancelled (rollback complete).")
+                    return
+                # Save full export entry for rollback
+                saved = export_map.get(path, {"path": path})
+                removed_shares.append(saved)
+                self.app.audit.log("nfs.remove", f"share={path} (RAID teardown)", "OK")
+
+            # Reload NFS exports after removal
+            await self.app.nfs.reload()
+
+        # ── Step 2: Unmount filesystems ──────────────────────────────────
+        unmounted_mounts: list[dict] = []  # for rollback
+        if mounts:
+            for m in mounts:
+                mp = m.get("mountpoint", "")
+                if not mp:
+                    continue
+                view.set_content(f"  Unmounting filesystem: {mp}...")
+                ok_um, err_um = await unmount_filesystem(mp)
+                if not ok_um:
+                    # Rollback: re-mount unmounted filesystems
+                    from xinas_menu.utils.xfs_helpers import mount_filesystem
+                    for um in unmounted_mounts:
+                        await mount_filesystem(um["mountpoint"])
+                    # Rollback: re-add removed shares
+                    for rs in removed_shares:
+                        await self.app.nfs.add_export(rs)
+                    if removed_shares:
+                        await self.app.nfs.reload()
+                    await self.app.push_screen_wait(
+                        ConfirmDialog(
+                            f"Failed to unmount '{mp}':\n{err_um}\n\n"
+                            f"Rolled back {len(unmounted_mounts)} unmount(s) "
+                            f"and {len(removed_shares)} share(s).",
+                            "Error — Rollback Complete",
+                        )
+                    )
+                    view.set_content("  Delete cancelled (rollback complete).")
+                    return
+                unmounted_mounts.append(m)
+                self.app.audit.log("fs.unmount", f"mountpoint={mp} (RAID teardown)", "OK")
+
+        # ── Step 3: Destroy RAID array ───────────────────────────────────
+        view.set_content(f"  Destroying RAID array: {arr_name}...")
         ok, _, err = await self.app.grpc.raid_destroy(arr_name, force=True)
         if ok:
             self.app.audit.log("raid.destroy", arr_name, "OK")
-            self._show_quick()
+            GRN, BLD, NC = "\033[32m", "\033[1m", "\033[0m"
+            summary_parts = [f"{BLD}{GRN}Array '{arr_name}' deleted successfully.{NC}\n"]
+            if removed_shares:
+                summary_parts.append(f"  Removed {len(removed_shares)} NFS share(s)")
+            if unmounted_mounts:
+                summary_parts.append(f"  Unmounted {len(unmounted_mounts)} filesystem(s)")
+            view.set_content("\n".join(summary_parts))
+            self.app.notify(f"Array '{arr_name}' deleted.", severity="information")
         else:
+            # Rollback: re-mount filesystems and re-add shares
+            from xinas_menu.utils.xfs_helpers import mount_filesystem
+            for um in unmounted_mounts:
+                await mount_filesystem(um["mountpoint"])
+            for rs in removed_shares:
+                await self.app.nfs.add_export(rs)
+            if removed_shares:
+                await self.app.nfs.reload()
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Delete failed.\n{grpc_short_error(err)}", "Error")
+                ConfirmDialog(
+                    f"RAID destroy failed:\n{grpc_short_error(err)}\n\n"
+                    f"Rolled back {len(unmounted_mounts)} unmount(s) "
+                    f"and {len(removed_shares)} share(s).",
+                    "Error — Rollback Complete",
+                )
             )
+            view.set_content("  Delete failed (rollback complete).")
 
 
 # ── Formatters ────────────────────────────────────────────────────────────────

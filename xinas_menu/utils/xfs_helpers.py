@@ -290,3 +290,85 @@ async def mount_filesystem(mountpoint: str) -> tuple[bool, str]:
         return (False, f"Failed to enable mount: {err}")
 
     return (True, "")
+
+
+async def unmount_filesystem(mountpoint: str) -> tuple[bool, str]:
+    """Stop, disable, and remove the systemd mount unit.
+
+    Returns (ok, error_message).
+    """
+    unit_name = _path_to_unit_name(mountpoint) + ".mount"
+    unit_path = f"/etc/systemd/system/{unit_name}"
+
+    # Stop the mount
+    ok, _, err = await run_async_cmd("systemctl", "stop", unit_name, timeout=60)
+    if not ok:
+        return (False, f"Failed to stop mount: {err}")
+
+    # Disable the unit
+    ok, _, err = await run_async_cmd("systemctl", "disable", unit_name, timeout=30)
+    if not ok:
+        return (False, f"Failed to disable mount: {err}")
+
+    # Remove the unit file
+    try:
+        if os.path.isfile(unit_path):
+            os.unlink(unit_path)
+    except OSError as exc:
+        return (False, f"Failed to remove unit file: {exc}")
+
+    # Reload systemd
+    await run_async_cmd("systemctl", "daemon-reload", timeout=30)
+    return (True, "")
+
+
+async def find_mount_for_device(device: str) -> str | None:
+    """Find the mountpoint for a device, or None if not mounted.
+
+    Uses ``findmnt -n -o TARGET {device}``.
+    """
+    ok, out, _ = await run_async_cmd("findmnt", "-n", "-o", "TARGET", device, timeout=10)
+    if ok and out:
+        return out.strip()
+    return None
+
+
+async def find_mounts_using_raid(array_name: str) -> list[dict]:
+    """Find all mounted filesystems that use a given RAID array.
+
+    Checks both ``/dev/xi_{name}`` as data device and as log device
+    by scanning systemd mount units and findmnt output.
+
+    Returns list of dicts: [{mountpoint, data_device, log_device}].
+    """
+    import json as _json
+
+    device_path = f"/dev/xi_{array_name}"
+    results = []
+
+    # Check if this device is mounted directly (data device)
+    mount = await find_mount_for_device(device_path)
+    if mount:
+        results.append({
+            "mountpoint": mount,
+            "data_device": device_path,
+            "role": "data",
+        })
+
+    # Also scan all XFS mounts to find log device references
+    ok, out, _ = await run_async_cmd("findmnt", "-t", "xfs", "-n", "-o", "TARGET,OPTIONS", timeout=10)
+    if ok and out:
+        for line in out.splitlines():
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                target, opts = parts
+                if f"logdev={device_path}" in opts:
+                    # This mount uses our array as log device
+                    if not any(r["mountpoint"] == target for r in results):
+                        results.append({
+                            "mountpoint": target,
+                            "log_device": device_path,
+                            "role": "log",
+                        })
+
+    return results

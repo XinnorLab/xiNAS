@@ -24,6 +24,7 @@ _log = logging.getLogger(__name__)
 _MENU = [
     MenuItem("1", "Show Filesystems"),
     MenuItem("2", "Create Filesystem"),
+    MenuItem("3", "Delete Filesystem"),
     MenuItem("", "", separator=True),
     MenuItem("0", "Back"),
 ]
@@ -73,6 +74,7 @@ class FilesystemScreen(Screen):
             f"{BLD}{CYN}Filesystem Management{NC}\n\n"
             f"  {BLD}1{NC}  {CYN}Show Filesystems{NC}    {DIM}Display currently mounted XFS filesystems{NC}\n"
             f"  {BLD}2{NC}  {CYN}Create Filesystem{NC}   {DIM}Create optimized XFS on xiRAID arrays{NC}\n"
+            f"  {BLD}3{NC}  {CYN}Delete Filesystem{NC}   {DIM}Unmount and remove XFS filesystem{NC}\n"
         )
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
@@ -83,6 +85,8 @@ class FilesystemScreen(Screen):
             self._show_filesystems()
         elif key == "2":
             self._create_filesystem_wizard()
+        elif key == "3":
+            self._delete_filesystem()
 
     # ── Show Filesystems ──────────────────────────────────────────────────
 
@@ -133,6 +137,7 @@ class FilesystemScreen(Screen):
             calculate_stripe_width,
             check_existing_filesystem,
             create_mount_unit,
+            find_mount_for_device,
             mkfs_xfs,
             mount_filesystem,
         )
@@ -150,8 +155,19 @@ class FilesystemScreen(Screen):
             )
             return
 
-        # Parse arrays
-        arrays = _parse_arrays(data)
+        # Parse arrays and filter out those already in use by a filesystem
+        all_arrays = _parse_arrays(data)
+        arrays = []
+        in_use = []
+        for arr in all_arrays:
+            name = arr.get("name", "?")
+            device = f"/dev/xi_{name}"
+            mount = await find_mount_for_device(device)
+            if mount:
+                in_use.append(f"{name} → {mount}")
+            else:
+                arrays.append(arr)
+
         if len(arrays) < 2:
             await self.app.push_screen_wait(
                 ConfirmDialog(
@@ -351,6 +367,170 @@ class FilesystemScreen(Screen):
             f"  Mount opts:  {mount_opts}\n"
         )
         self.app.notify("Filesystem created and mounted successfully!", severity="information")
+
+    # ── Delete Filesystem ──────────────────────────────────────────────────
+
+    @work(exclusive=True)
+    async def _delete_filesystem(self) -> None:
+        """Delete a filesystem: check shares → remove shares → unmount → remove unit."""
+        from xinas_menu.utils.xfs_helpers import (
+            run_async_cmd,
+            unmount_filesystem,
+        )
+
+        view = self.query_one("#fs-content", ScrollableTextView)
+        view.set_content("  Scanning filesystems...")
+
+        # Find all XFS filesystems
+        ok, out, err = await run_async_cmd(
+            "findmnt", "-t", "xfs", "-J", timeout=10
+        )
+        if not ok or not out:
+            await self.app.push_screen_wait(
+                ConfirmDialog("No XFS filesystems found.", "Delete Filesystem")
+            )
+            return
+
+        try:
+            data = json.loads(out)
+            filesystems = data.get("filesystems", [])
+        except (json.JSONDecodeError, KeyError):
+            filesystems = []
+
+        if not filesystems:
+            await self.app.push_screen_wait(
+                ConfirmDialog("No XFS filesystems found.", "Delete Filesystem")
+            )
+            return
+
+        # Build selection list
+        fs_labels = []
+        fs_list = []
+        for fs in filesystems:
+            target = fs.get("target", "?")
+            source = fs.get("source", "?")
+            fs_labels.append(f"{target}  ({source})")
+            fs_list.append(fs)
+
+        choice = await self.app.push_screen_wait(
+            SelectDialog(
+                fs_labels,
+                title="Delete Filesystem",
+                prompt="Select filesystem to delete:",
+            )
+        )
+        if not choice:
+            return
+
+        idx = fs_labels.index(choice)
+        target_fs = fs_list[idx]
+        mountpoint = target_fs.get("target", "")
+        source_dev = target_fs.get("source", "")
+
+        # ── Check for active NFS shares on this mountpoint ───────────────
+        affected_shares: list[dict] = []
+        ok_nfs, exports, _ = await self.app.nfs.list_exports()
+        if ok_nfs and exports:
+            for exp in exports:
+                exp_path = exp.get("path", "")
+                if mountpoint and exp_path.startswith(mountpoint):
+                    affected_shares.append(exp)
+
+        # ── Build warning ────────────────────────────────────────────────
+        warning_parts = [
+            f"Filesystem: {mountpoint}\n"
+            f"Device:     {source_dev}\n",
+        ]
+
+        if affected_shares:
+            share_list = "\n".join(f"  - {s.get('path', '?')}" for s in affected_shares)
+            warning_parts.append(
+                f"ACTIVE NFS SHARES will be removed first:\n{share_list}\n"
+            )
+
+        warning_parts.append(
+            "WARNING: The filesystem will be unmounted and its systemd\n"
+            "mount unit will be removed. Data on disk is NOT erased."
+        )
+
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog("\n".join(warning_parts), "Delete Filesystem?")
+        )
+        if not confirmed:
+            return
+
+        # Double confirmation if shares are affected
+        if affected_shares:
+            confirmed2 = await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"Are you ABSOLUTELY sure?\n\n"
+                    f"This will remove {len(affected_shares)} NFS share(s) "
+                    f"and unmount '{mountpoint}'.",
+                    "FINAL CONFIRMATION",
+                )
+            )
+            if not confirmed2:
+                return
+
+        # ── Step 1: Remove NFS shares ────────────────────────────────────
+        removed_shares: list[dict] = []
+        for share in affected_shares:
+            path = share.get("path", "")
+            view.set_content(f"  Removing NFS share: {path}...")
+            ok_rm, _, err_rm = await self.app.nfs.remove_export(path)
+            if not ok_rm:
+                # Rollback: re-add previously removed shares
+                for rs in removed_shares:
+                    await self.app.nfs.add_export(rs)
+                await self.app.nfs.reload()
+                await self.app.push_screen_wait(
+                    ConfirmDialog(
+                        f"Failed to remove NFS share '{path}':\n{err_rm}\n\n"
+                        f"Rolled back {len(removed_shares)} previously removed share(s).",
+                        "Error — Rollback Complete",
+                    )
+                )
+                view.set_content("  Delete cancelled (rollback complete).")
+                return
+            removed_shares.append(share)
+            self.app.audit.log("nfs.remove", f"share={path} (FS teardown)", "OK")
+
+        if removed_shares:
+            await self.app.nfs.reload()
+
+        # ── Step 2: Unmount filesystem ───────────────────────────────────
+        view.set_content(f"  Unmounting {mountpoint}...")
+        ok_um, err_um = await unmount_filesystem(mountpoint)
+        if not ok_um:
+            # Rollback: re-add shares
+            for rs in removed_shares:
+                await self.app.nfs.add_export(rs)
+            if removed_shares:
+                await self.app.nfs.reload()
+            await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"Failed to unmount '{mountpoint}':\n{err_um}\n\n"
+                    f"Rolled back {len(removed_shares)} share(s).",
+                    "Error — Rollback Complete",
+                )
+            )
+            view.set_content("  Delete cancelled (rollback complete).")
+            return
+
+        # Success
+        self.app.audit.log(
+            "fs.delete",
+            f"mountpoint={mountpoint} device={source_dev}",
+            "OK",
+        )
+        GRN, BLD, NC = "\033[32m", "\033[1m", "\033[0m"
+        summary_parts = [f"{BLD}{GRN}Filesystem deleted successfully.{NC}\n"]
+        summary_parts.append(f"  Mountpoint:  {mountpoint}")
+        summary_parts.append(f"  Device:      {source_dev}")
+        if removed_shares:
+            summary_parts.append(f"  Removed {len(removed_shares)} NFS share(s)")
+        view.set_content("\n".join(summary_parts))
+        self.app.notify("Filesystem unmounted and removed.", severity="information")
 
 
 def _parse_arrays(data: Any) -> list[dict]:
