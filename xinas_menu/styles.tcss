@@ -171,7 +171,7 @@ OpStatusWidget {
 }
 
 /* ── ConfirmDialog / InputDialog / SelectDialog ──────────────── */
-ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog {
+ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog, ChecklistDialog {
     align: center middle;
 }
 
@@ -207,11 +207,18 @@ ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog {
     margin-bottom: 1;
 }
 
-TextAreaDialog #dialog-container {
+TextAreaDialog #dialog-container,
+ChecklistDialog #dialog-container {
     width: 100;
     max-width: 95%;
     height: auto;
     max-height: 85%;
+}
+
+#dialog-checklist {
+    height: 20;
+    min-height: 6;
+    margin-bottom: 1;
 }
 
 #dialog-buttons {

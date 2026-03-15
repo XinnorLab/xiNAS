@@ -19,6 +19,7 @@ from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
+from xinas_menu.widgets.checklist_dialog import ChecklistDialog
 from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -52,6 +53,26 @@ _MENU = [
     MenuItem("7", "Delete Array"),
     MenuItem("0", "Back"),
 ]
+
+
+def _fmt_size(size_bytes: int) -> str:
+    """Format byte count into human-readable string."""
+    if size_bytes <= 0:
+        return "N/A"
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}" if unit != "B" else f"{size_bytes} B"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} EB"
+
+
+def _drive_label(d: dict) -> str:
+    """Format a rich label for a drive: name | size | model | NUMA."""
+    name = d.get("name", "?")
+    size = _fmt_size(d.get("size_bytes") or d.get("size_raw") or 0)
+    model = d.get("model") or "unknown"
+    numa = d.get("numa_node", d.get("numa", "?"))
+    return f"{name:<14s}  {size:>8s}  {model:<20s}  NUMA {numa}"
 
 
 async def _get_drive_groups(grpc_client) -> tuple[dict[str, list[str]], list[dict]]:
@@ -207,7 +228,7 @@ class RAIDScreen(Screen):
             )
             return
 
-        choices = list(groups.keys()) + ["Manual entry"]
+        choices = list(groups.keys()) + ["Pick individual drives"]
         group_choice = await self.app.push_screen_wait(
             SelectDialog(choices, title="Create Array — Step 3",
                          prompt="Select drive group:")
@@ -215,19 +236,26 @@ class RAIDScreen(Screen):
         if not group_choice:
             return
 
-        if group_choice == "Manual entry":
-            while True:
-                drives_str = await self.app.push_screen_wait(
-                    InputDialog("Drive names (comma-separated):",
-                                "Create Array — Drives",
-                                placeholder="nvme0n1,nvme1n1,nvme2n1")
+        if group_choice == "Pick individual drives":
+            # Smart multi-select with drive details (name, size, model, NUMA)
+            drive_items = [
+                (_drive_label(d), d["name"], False)
+                for d in sorted(nvme, key=lambda x: (
+                    x.get("numa_node", 0),
+                    -(x.get("size_bytes") or x.get("size_raw") or 0),
+                    x.get("name", ""),
+                ))
+            ]
+            selected = await self.app.push_screen_wait(
+                ChecklistDialog(
+                    drive_items,
+                    title="Create Array — Select Drives",
+                    prompt="Toggle drives with Space, confirm with Enter:",
                 )
-                if not drives_str:
-                    return
-                drives = [d.strip() for d in drives_str.split(",") if d.strip()]
-                if drives:
-                    break
-                self.app.notify("At least one drive name is required.", severity="error")
+            )
+            if not selected:
+                return
+            drives = selected
         else:
             drives = groups.get(group_choice, [])
 

@@ -164,6 +164,24 @@ def _collect_disk_info_sync() -> list:
                         size_raw = int(f.read().strip()) * 512
             except Exception:
                 pass
+            # NUMA node detection (NVMe via parent controller, others via block device)
+            numa_node = -1
+            try:
+                # For NVMe: /sys/class/block/nvme0n1 -> ../../nvme0 -> ../../../<pci>/numa_node
+                numa_path = f"/sys/class/block/{name}/device/numa_node"
+                if os.path.isfile(numa_path):
+                    with open(numa_path) as f:
+                        numa_node = int(f.read().strip())
+                elif name.startswith("nvme"):
+                    # Try parent controller: nvme0n1 -> nvme0
+                    ctrl = name.split("n")[0]
+                    ctrl_numa = f"/sys/class/nvme/{ctrl}/device/numa_node"
+                    if os.path.isfile(ctrl_numa):
+                        with open(ctrl_numa) as f:
+                            numa_node = int(f.read().strip())
+            except Exception:
+                pass
+
             disks.append({
                 "name": name,
                 "size": d.get("size", ""),
@@ -172,6 +190,7 @@ def _collect_disk_info_sync() -> list:
                 "model": (d.get("model") or "").strip(),
                 "serial": (d.get("serial") or "").strip(),
                 "transport": d.get("tran") or "",
+                "numa_node": numa_node if numa_node >= 0 else 0,
                 "system": name in os_drives,
             })
         return disks
@@ -181,10 +200,19 @@ def _collect_disk_info_sync() -> list:
         try:
             for name in sorted(os.listdir("/sys/class/block")):
                 if name.startswith("nvme") and "p" not in name and "n" in name:
+                    numa = 0
+                    try:
+                        ctrl = name.split("n")[0]
+                        np = f"/sys/class/nvme/{ctrl}/device/numa_node"
+                        if os.path.isfile(np):
+                            with open(np) as f:
+                                numa = max(0, int(f.read().strip()))
+                    except Exception:
+                        pass
                     disks.append({
                         "name": name, "size": "", "size_bytes": 0, "size_raw": 0,
                         "model": "", "serial": "", "transport": "nvme",
-                        "system": name in os_drives,
+                        "numa_node": numa, "system": name in os_drives,
                     })
         except Exception:
             pass
