@@ -208,33 +208,112 @@ def _build_mini_status() -> str:
     # ── Client Connection Instructions ──────────────────────────
     lines.append(f"  {_BLD}{_CYN}Client Connection{_NC}")
 
-    # Detect hostname / first routable IP
-    hostname = platform.node() or "this-server"
-    server_ip = _first_routable_ip() or hostname
+    # Detect server IPs (all routable)
+    server_ips = _routable_ips()
+    server_ip = server_ips[0] if server_ips else (platform.node() or "<server-ip>")
 
-    lines.append(f"  {_DIM}To connect NFS clients, run on the client:{_NC}")
+    # Detect first export path
+    export_path = _first_export_path() or "/"
+
+    lines.append(f"  {_DIM}On the client machine:{_NC}")
     lines.append("")
-    lines.append(f"  {_BLD}1.{_NC} Install the client package:")
-    lines.append(f"     {_GRN}sudo apt install xinas-client{_NC}")
+    lines.append(f"  {_BLD}1.{_NC} Clone the client repo:")
+    lines.append(f"     {_GRN}git clone <repo-url> xinas-client{_NC}")
+    lines.append(f"     {_GRN}cd xinas-client{_NC}")
     lines.append("")
-    lines.append(f"  {_BLD}2.{_NC} Run the setup wizard:")
-    lines.append(f"     {_GRN}sudo xinas-client setup {server_ip}{_NC}")
+    lines.append(f"  {_BLD}2.{_NC} Run the interactive setup:")
+    lines.append(f"     {_GRN}sudo ./client_setup.sh{_NC}")
     lines.append("")
-    lines.append(f"  {_DIM}Or mount manually:{_NC}")
-    lines.append(f"     {_GRN}mount -t nfs -o vers=4.2,proto=rdma,port=20049 \\")
-    lines.append(f"       {server_ip}:/export /mnt/xinas{_NC}")
+    lines.append(f"  {_BLD}3.{_NC} Or quick-mount via CLI:")
+
+    # Show RDMA example if any RDMA interface is detected
+    has_rdma = _has_rdma_interfaces()
+    if has_rdma:
+        lines.append(f"     {_DIM}RDMA (high performance):{_NC}")
+        if len(server_ips) > 1:
+            ips_str = ",".join(server_ips[:2])
+            lines.append(
+                f"     {_GRN}sudo ./client_setup.sh -m "
+                f"{ips_str}:{export_path} /mnt/nas rdma{_NC}"
+            )
+        else:
+            lines.append(
+                f"     {_GRN}sudo ./client_setup.sh -m "
+                f"{server_ip}:{export_path} /mnt/nas rdma{_NC}"
+            )
+        lines.append("")
+
+    lines.append(f"     {_DIM}TCP (universal):{_NC}")
+    lines.append(
+        f"     {_GRN}sudo ./client_setup.sh -m "
+        f"{server_ip}:{export_path} /mnt/nas{_NC}"
+    )
+    lines.append("")
+
+    lines.append(f"  {_DIM}Manual mount:{_NC}")
+    if has_rdma:
+        lines.append(
+            f"     {_GRN}mount -t nfs -o vers=4.2,proto=rdma,port=20049,"
+        )
+        lines.append(
+            f"       nconnect=16,rsize=1048576,wsize=1048576 \\{_NC}"
+        )
+    else:
+        lines.append(
+            f"     {_GRN}mount -t nfs -o vers=4.2,proto=tcp,"
+        )
+        lines.append(
+            f"       nconnect=16,rsize=1048576,wsize=1048576 \\{_NC}"
+        )
+    lines.append(f"     {_GRN}  {server_ip}:{export_path} /mnt/nas{_NC}")
+
+    if len(server_ips) > 1:
+        lines.append("")
+        lines.append(f"  {_DIM}Server IPs for multi-IP trunking:{_NC}")
+        for ip in server_ips:
+            lines.append(f"    {_GRN}•{_NC} {ip}")
 
     return "\n".join(lines)
 
 
-def _first_routable_ip() -> str:
-    """Return the first non-loopback IPv4 address, or empty string."""
+def _routable_ips() -> list[str]:
+    """Return all non-loopback IPv4 addresses (global scope)."""
     try:
         r = subprocess.run(
             ["ip", "-4", "-o", "addr", "show", "scope", "global"],
             capture_output=True, text=True, timeout=2,
         )
-        m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", r.stdout)
-        return m.group(1) if m else ""
+        return re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)", r.stdout)
     except Exception:
-        return ""
+        return []
+
+
+def _first_export_path() -> str:
+    """Return the first NFS export path, or empty string."""
+    try:
+        r = subprocess.run(
+            ["exportfs", "-s"], capture_output=True, text=True, timeout=3,
+        )
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if parts:
+                return parts[0]
+    except Exception:
+        pass
+    return ""
+
+
+def _has_rdma_interfaces() -> bool:
+    """Check if any network interface has an RDMA-capable driver (mlx*)."""
+    try:
+        from pathlib import Path
+        for iface in Path("/sys/class/net").iterdir():
+            try:
+                driver = (iface / "device" / "driver").resolve().name
+                if "mlx" in driver:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
