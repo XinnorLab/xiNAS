@@ -217,9 +217,9 @@ def _build_mini_status() -> str:
 
     lines.append(f"  {_DIM}On the client machine:{_NC}")
     lines.append("")
-    lines.append(f"  {_BLD}1.{_NC} Clone the client repo:")
-    lines.append(f"     {_GRN}git clone <repo-url> xinas-client{_NC}")
-    lines.append(f"     {_GRN}cd xinas-client{_NC}")
+    lines.append(f"  {_BLD}1.{_NC} Install the client package:")
+    lines.append(f"     {_GRN}sudo ./client_install.sh{_NC}")
+    lines.append(f"     {_GRN}cd /opt/xinas-client{_NC}")
     lines.append("")
     lines.append(f"  {_BLD}2.{_NC} Run the interactive setup:")
     lines.append(f"     {_GRN}sudo ./client_setup.sh{_NC}")
@@ -233,19 +233,19 @@ def _build_mini_status() -> str:
         if len(server_ips) > 1:
             ips_str = ",".join(server_ips[:2])
             lines.append(
-                f"     {_GRN}sudo ./client_setup.sh -m "
+                f"     {_GRN}sudo ./client_install.sh -m "
                 f"{ips_str}:{export_path} /mnt/nas rdma{_NC}"
             )
         else:
             lines.append(
-                f"     {_GRN}sudo ./client_setup.sh -m "
+                f"     {_GRN}sudo ./client_install.sh -m "
                 f"{server_ip}:{export_path} /mnt/nas rdma{_NC}"
             )
         lines.append("")
 
     lines.append(f"     {_DIM}TCP (universal):{_NC}")
     lines.append(
-        f"     {_GRN}sudo ./client_setup.sh -m "
+        f"     {_GRN}sudo ./client_install.sh -m "
         f"{server_ip}:{export_path} /mnt/nas{_NC}"
     )
     lines.append("")
