@@ -276,8 +276,44 @@ def _build_mini_status() -> str:
     return "\n".join(lines)
 
 
+def _highperf_iface_names() -> list[str]:
+    """Return names of high-performance interfaces (RDMA-capable drivers)."""
+    names: list[str] = []
+    try:
+        from pathlib import Path
+        for iface in sorted(Path("/sys/class/net").iterdir()):
+            try:
+                driver = (iface / "device" / "driver").resolve().name
+                if "mlx" in driver:
+                    names.append(iface.name)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return names
+
+
 def _routable_ips() -> list[str]:
-    """Return all non-loopback IPv4 addresses (global scope)."""
+    """Return IPv4 addresses on high-performance interfaces only.
+
+    Falls back to all global-scope IPs if no RDMA interfaces are found.
+    """
+    hp_ifaces = _highperf_iface_names()
+    if hp_ifaces:
+        ips: list[str] = []
+        for iface in hp_ifaces:
+            try:
+                r = subprocess.run(
+                    ["ip", "-4", "-o", "addr", "show", iface],
+                    capture_output=True, text=True, timeout=2,
+                )
+                ips.extend(re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)", r.stdout))
+            except Exception:
+                continue
+        if ips:
+            return ips
+
+    # Fallback: all global-scope IPs
     try:
         r = subprocess.run(
             ["ip", "-4", "-o", "addr", "show", "scope", "global"],
@@ -305,15 +341,4 @@ def _first_export_path() -> str:
 
 def _has_rdma_interfaces() -> bool:
     """Check if any network interface has an RDMA-capable driver (mlx*)."""
-    try:
-        from pathlib import Path
-        for iface in Path("/sys/class/net").iterdir():
-            try:
-                driver = (iface / "device" / "driver").resolve().name
-                if "mlx" in driver:
-                    return True
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return False
+    return bool(_highperf_iface_names())
