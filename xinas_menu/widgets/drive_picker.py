@@ -16,6 +16,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Input, Label, Static
+from textual import work
 
 _log = logging.getLogger(__name__)
 
@@ -273,6 +274,7 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
         self._sort_reverse = not self._sort_reverse
         self._refresh_table()
 
+    @work(exclusive=True)
     async def action_filter_prompt(self) -> None:
         from xinas_menu.widgets.input_dialog import InputDialog
         text = await self.app.push_screen_wait(
@@ -288,6 +290,7 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
         self._filter_text = text.strip()
         self._refresh_table()
 
+    @work(exclusive=True)
     async def action_filter_numa(self) -> None:
         from xinas_menu.widgets.input_dialog import InputDialog
         # Detect available NUMA nodes
@@ -317,6 +320,7 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
                 return
         self._refresh_table()
 
+    @work(exclusive=True)
     async def action_show_detail(self) -> None:
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
         table = self.query_one("#picker-table", DataTable)
