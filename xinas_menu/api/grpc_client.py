@@ -116,32 +116,76 @@ def _parse_response(resp) -> Any:
         return getattr(resp, "message", None)
 
 
+def _get_os_drives() -> set[str]:
+    """Detect drives that host OS partitions (root, boot, EFI, swap)."""
+    os_drives: set[str] = set()
+    try:
+        r = subprocess.run(
+            ["lsblk", "-J", "-o", "NAME,MOUNTPOINT,TYPE"],
+            capture_output=True, text=True, timeout=10,
+        )
+        data = json.loads(r.stdout)
+        _OS_MOUNTS = ("/", "/boot", "/boot/efi", "[SWAP]")
+        for dev in data.get("blockdevices", []):
+            # Check children (partitions) for OS mount points
+            for child in dev.get("children") or []:
+                mp = child.get("mountpoint") or ""
+                if mp in _OS_MOUNTS:
+                    os_drives.add(dev.get("name", ""))
+                    break
+            # Also check the device itself (rare: whole-disk root)
+            mp = dev.get("mountpoint") or ""
+            if mp in _OS_MOUNTS:
+                os_drives.add(dev.get("name", ""))
+    except Exception:
+        pass
+    return os_drives
+
+
 def _collect_disk_info_sync() -> list:
     """Enumerate block drives via lsblk (no gRPC — xiRAID has no disk_list RPC)."""
+    os_drives = _get_os_drives()
     try:
         r = subprocess.run(
             ["lsblk", "-J", "-o", "NAME,SIZE,MODEL,SERIAL,TYPE,TRAN"],
             capture_output=True, text=True, timeout=10,
         )
         data = json.loads(r.stdout)
-        return [
-            {
-                "name": d.get("name", ""),
+        disks = []
+        for d in data.get("blockdevices", []):
+            if d.get("type") != "disk":
+                continue
+            name = d.get("name", "")
+            size_raw = 0
+            try:
+                sz_path = f"/sys/class/block/{name}/size"
+                if os.path.isfile(sz_path):
+                    with open(sz_path) as f:
+                        size_raw = int(f.read().strip()) * 512
+            except Exception:
+                pass
+            disks.append({
+                "name": name,
                 "size": d.get("size", ""),
+                "size_bytes": size_raw,
+                "size_raw": size_raw,
                 "model": (d.get("model") or "").strip(),
                 "serial": (d.get("serial") or "").strip(),
                 "transport": d.get("tran") or "",
-            }
-            for d in data.get("blockdevices", [])
-            if d.get("type") == "disk"
-        ]
+                "system": name in os_drives,
+            })
+        return disks
     except Exception:
         # Fallback: scan /sys/class/block for nvme controllers
         disks = []
         try:
             for name in sorted(os.listdir("/sys/class/block")):
                 if name.startswith("nvme") and "p" not in name and "n" in name:
-                    disks.append({"name": name, "size": "", "model": "", "serial": "", "transport": "nvme"})
+                    disks.append({
+                        "name": name, "size": "", "size_bytes": 0, "size_raw": 0,
+                        "model": "", "serial": "", "transport": "nvme",
+                        "system": name in os_drives,
+                    })
         except Exception:
             pass
         return disks
