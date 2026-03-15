@@ -31,7 +31,7 @@ class ConfirmDialog(ModalScreen[bool]):
         from textual.containers import Vertical, Horizontal
         with Vertical(id="dialog-container"):
             yield Label(self._title, id="dialog-title")
-            yield Label(self._message, id="dialog-body")
+            yield Label(self._message, id="dialog-body", markup=False)
             with Horizontal(id="dialog-buttons"):
                 yield Button("Yes [y]", variant="error", id="btn-yes", classes="dialog-btn")
                 yield Button("No [n]", variant="primary", id="btn-no", classes="dialog-btn")
