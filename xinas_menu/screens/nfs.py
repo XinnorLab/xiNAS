@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 _log = logging.getLogger(__name__)
@@ -155,7 +156,16 @@ class NFSScreen(Screen):
         if not confirmed:
             return
 
+        # Ensure export directory exists
         loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, lambda: os.makedirs(path, exist_ok=True))
+        except OSError as exc:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Cannot create directory:\n{exc}", "Error")
+            )
+            return
+
         ok, _, err = await loop.run_in_executor(
             None,
             lambda: self.app.nfs.add_export(
