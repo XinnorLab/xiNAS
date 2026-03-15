@@ -17,6 +17,7 @@ _MENU = [
     MenuItem("1", "RAID Management"),
     MenuItem("2", "NFS Access Rights"),
     MenuItem("3", "Physical Drives"),
+    MenuItem("4", "Filesystem"),
     MenuItem("0", "Back"),
 ]
 
@@ -45,6 +46,7 @@ class StorageScreen(Screen):
             f"  {BLD}1{NC}  {CYN}RAID Management{NC}    {DIM}Manage xiRAID arrays (create, modify, delete){NC}\n"
             f"  {BLD}2{NC}  {CYN}NFS Access Rights{NC}  {DIM}Configure NFS exports and shares{NC}\n"
             f"  {BLD}3{NC}  {CYN}Physical Drives{NC}    {DIM}View drive inventory and RAID membership{NC}\n"
+            f"  {BLD}4{NC}  {CYN}Filesystem{NC}         {DIM}Create and manage XFS filesystems{NC}\n"
         )
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
@@ -60,3 +62,6 @@ class StorageScreen(Screen):
         elif key == "3":
             from xinas_menu.screens.drives import PhysicalDrivesScreen
             self.app.push_screen(PhysicalDrivesScreen())
+        elif key == "4":
+            from xinas_menu.screens.filesystem import FilesystemScreen
+            self.app.push_screen(FilesystemScreen())
