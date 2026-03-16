@@ -1,0 +1,4 @@
+---
+# xiNAS Configuration History defaults
+xinas_history_store_path: /var/lib/xinas/config-history
+xinas_history_max_snapshots: 10

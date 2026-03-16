@@ -14,5 +14,6 @@
     - role: nfs_server    # configure kernel NFS server
     - role: xinas_mcp     # MCP server + NFS helper daemon (AI assistant bridge)
     - role: xinas_menu    # Python/Textual management console (replaces Bash menus)
+    - role: xinas_history # Configuration history snapshots and rollback
     - role: perf_tuning
     - role: motd          # fancy login banner with NAS status

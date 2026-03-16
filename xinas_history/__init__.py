@@ -12,13 +12,39 @@ from .models import (
     SnapshotStatus,
     SnapshotType,
 )
+from .store import FilesystemStore
+from .engine import SnapshotEngine
+from .runner import TransactionalRunner, RunResult
+from .lock import GlobalConfigLock, LockError
+from .classifier import RollbackClassifier
+from .gc import GarbageCollector
+from .drift import DriftDetector, DriftReport, DriftPolicy
+from .validator import PreflightValidator, PostApplyValidator
+from .grpc_inspector import GrpcInspector
+from .collector import ConfigCollector, RuntimeCollector
 
 __all__ = [
+    "ConfigCollector",
     "DiffResult",
+    "DriftDetector",
+    "DriftPolicy",
+    "DriftReport",
+    "FilesystemStore",
+    "GarbageCollector",
+    "GlobalConfigLock",
+    "GrpcInspector",
+    "LockError",
     "Manifest",
     "OperationSource",
     "OperationType",
+    "PostApplyValidator",
+    "PreflightValidator",
     "RollbackClass",
+    "RollbackClassifier",
+    "RunResult",
+    "RuntimeCollector",
+    "SnapshotEngine",
     "SnapshotStatus",
     "SnapshotType",
+    "TransactionalRunner",
 ]

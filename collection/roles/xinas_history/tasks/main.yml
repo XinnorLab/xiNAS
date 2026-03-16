@@ -1,0 +1,46 @@
+---
+# Deploy xiNAS Configuration History package
+- name: Create config-history store directory
+  ansible.builtin.file:
+    path: /var/lib/xinas/config-history
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Create config-history subdirectories
+  ansible.builtin.file:
+    path: "/var/lib/xinas/config-history/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop:
+    - snapshots
+    - state
+
+- name: Copy xinas_history package
+  ansible.builtin.copy:
+    src: "{{ xinas_history_src | default(playbook_dir + '/../xinas_history') }}"
+    dest: /opt/xiNAS/xinas_history
+    owner: root
+    group: root
+    mode: '0644'
+    directory_mode: '0755'
+
+- name: Install xinas_history into shared venv
+  ansible.builtin.pip:
+    name:
+      - pyyaml
+    virtualenv: /opt/xiNAS/venv
+    state: present
+
+- name: Create xinas-history CLI wrapper
+  ansible.builtin.copy:
+    dest: /usr/local/bin/xinas-history
+    content: |
+      #!/bin/bash
+      exec /opt/xiNAS/venv/bin/python3 -m xinas_history "$@"
+    owner: root
+    group: root
+    mode: '0755'
