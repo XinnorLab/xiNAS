@@ -1,4 +1,4 @@
-"""ManagementScreen — Management submenu (Users, Health Check, MCP, Updates)."""
+"""ManagementScreen — Management submenu (Users, Health, MCP, Config History, Updates)."""
 from __future__ import annotations
 
 from textual.app import ComposeResult
@@ -13,7 +13,8 @@ _MENU = [
     MenuItem("1", "User Management"),
     MenuItem("2", "Health Check"),
     MenuItem("3", "MCP Server"),
-    MenuItem("4", "Check for Updates"),
+    MenuItem("4", "Configuration History"),
+    MenuItem("5", "Check for Updates"),
     MenuItem("0", "Back"),
 ]
 
@@ -45,6 +46,9 @@ class ManagementScreen(Screen):
             from xinas_menu.screens.mcp import MCPScreen
             self.app.push_screen(MCPScreen())
         elif key == "4":
+            from xinas_menu.screens.config_history import ConfigHistoryScreen
+            self.app.push_screen(ConfigHistoryScreen())
+        elif key == "5":
             self._do_update_check()
 
     @work(exclusive=True)

@@ -10,4 +10,5 @@
     - role: raid_fs
     - role: exports       # manage /etc/exports
     - role: nfs_server    # configure kernel NFS server
+    - role: xinas_history # configuration history & rollback
     - role: perf_tuning
