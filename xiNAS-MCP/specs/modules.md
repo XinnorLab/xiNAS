@@ -34,22 +34,22 @@
                                         │
                    ┌────────────────────┼─────────────────┐
                    ▼                    ▼                   ▼
-      ┌──────────────────┐  ┌────────────────┐  ┌─────────────────┐
-      │   src/grpc/       │  │   src/os/       │  │  nfs-helper/    │
-      │   client.ts       │  │   systemInfo.ts │  │  (Python daemon)│
-      │   raid.ts         │  │   networkInfo.ts│  │  nfs_helper.py  │
-      │   drive.ts        │  │   diskInfo.ts   │  │  nfs_exports.py │
-      │   pool.ts         │  │   prometheusClient│  nfs_sessions.py│
-      │   settings.ts     │  │   nfsClient.ts  │  │  nfs_quota.py   │
-      │   license.ts      │  └────────────────┘  └────────┬────────┘
-      │   config.ts       │                               │
-      │   log.ts          │                      /run/xinas-nfs-helper.sock
-      │   responseParser.ts│
-      └────────┬──────────┘
-               │ TLS gRPC :6066
-      ┌────────▼──────────┐
-      │  xiRAID Daemon    │
-      │  XRAIDService     │
+      ┌──────────────────┐  ┌──────────────────┐  ┌─────────────────┐
+      │   src/grpc/       │  │   src/os/         │  │  nfs-helper/    │
+      │   client.ts       │  │   systemInfo.ts   │  │  (Python daemon)│
+      │   raid.ts         │  │   networkInfo.ts  │  │  nfs_helper.py  │
+      │   drive.ts        │  │   diskInfo.ts     │  │  nfs_exports.py │
+      │   pool.ts         │  │   prometheusClient│  │  nfs_sessions.py│
+      │   settings.ts     │  │   nfsClient.ts    │  │  nfs_quota.py   │
+      │   license.ts      │  │   configHistory.ts│  └────────┬────────┘
+      │   config.ts       │  └─────────┬────────┘           │
+      │   log.ts          │            │           /run/xinas-nfs-helper.sock
+      │   responseParser.ts│   python3 -m xinas_history
+      └────────┬──────────┘            │
+               │ TLS gRPC :6066  ┌─────▼─────────────┐
+      ┌────────▼──────────┐      │  xinas_history    │
+      │  xiRAID Daemon    │      │  (Python package)  │
+      │  XRAIDService     │      └───────────────────┘
       │  (localhost:6066) │
       └───────────────────┘
 ```
@@ -65,11 +65,13 @@
 6. [optional] arrayLocks.withLock(arrayId, ...) — serialize conflicting ops
 7. Handler executes:
    a. For plan mode: preflight() → return PlanResult
-   b. For apply mode: preflight() + execute()
+   b. For apply mode: preflight() + execute() + recordSnapshot()
    c. grpc ops: getClient() → withRetry(grpcFn) → parseResponse()
    d. OS ops: direct sysfs/procfs reads
    e. NFS ops: nfsClient.send() → Unix socket → nfs-helper daemon
-8. [optional] idempotencyStore.store(key, result)
+   f. Config-history ops: configHistory → subprocess → python3 -m xinas_history
+8. [apply mode] recordSnapshot(operation, description) — best-effort, never blocks
+9. [optional] idempotencyStore.store(key, result)
 9. audit.log(entry) — append to /var/log/xinas/mcp-audit.jsonl + syslog
 10. Return result as MCP text content
 ```
@@ -82,6 +84,9 @@
 | `tools/*` → `grpc/*` | function call | `getClient()` + typed request objects |
 | `grpc/*` → xiRAID | gRPC/TLS | `XRAIDService` proto |
 | `tools/share` → `os/nfsClient` | function call | `listExports()`, `addExport()` etc |
+| `tools/config` → `os/configHistory` | function call | `listSnapshots()`, `showSnapshot()` etc |
+| `middleware/planApply` → `os/configHistory` | function call | `recordSnapshot()` (best-effort) |
+| `os/configHistory` → `xinas_history` | subprocess | `python3 -m xinas_history <cmd> --format json` |
 | `os/nfsClient` → `nfs-helper` | Unix socket | Newline-delimited JSON |
 | `nfs-helper` → kernel NFS | `exportfs -r` | subprocess (daemon only) |
 | `os/prometheusClient` → exporter | HTTP GET | Prometheus text format |
@@ -95,10 +100,10 @@
 | `src/types/` | 3 | 120 |
 | `src/config/` | 1 | 80 |
 | `src/grpc/` | 8 | 350 |
-| `src/os/` | 5 | 400 |
-| `src/middleware/` | 5 | 200 |
-| `src/tools/` | 9 | 1050 |
-| `src/registry/` | 1 | 150 |
+| `src/os/` | 6 | 500 |
+| `src/middleware/` | 5 | 240 |
+| `src/tools/` | 9 | 1180 |
+| `src/registry/` | 1 | 160 |
 | `src/server/` | 2 | 80 |
 | `nfs-helper/` | 4 | 350 |
-| **Total** | **38** | **~2780** |
+| **Total** | **39** | **~3010** |

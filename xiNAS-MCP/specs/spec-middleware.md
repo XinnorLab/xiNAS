@@ -133,12 +133,34 @@ mode='apply':
   if !plan.preflight_passed:
     throw McpToolError(PRECONDITION_FAILED, blocking_resources)
   result = await ctx.execute()
+  // Auto-record config snapshot (best-effort, never blocks)
+  operation = inferOperation(plan)  // resource_type+action → OperationType
+  if operation:
+    await recordSnapshot(operation, plan.description)
   return result  // caller sees actual result
 ```
+
+### Auto-Snapshot on Apply
+
+After every successful `apply`, `planApply.ts` calls `recordSnapshot()` from `src/os/configHistory.ts`. The operation type is inferred from `PlanResult.changes[0]`:
+
+| `resource_type` | `action` | Operation |
+|---|---|---|
+| `raid_array` | create | `raid_create` |
+| `raid_array` | delete | `raid_delete` |
+| `raid_array` | modify | `raid_modify` |
+| `nfs_export` | create | `share_create` |
+| `nfs_export` | delete | `share_delete` |
+| `nfs_export` | modify | `share_modify` |
+| `network_config` | any | `network_modify` |
+| `configuration` | any | `rollback` |
+
+Snapshot recording is **best-effort** — errors are caught and discarded. The primary operation result is always returned.
 
 ### Error Behavior
 - Preflight failure in apply mode: `PRECONDITION_FAILED` with `{ plan }` in details
 - Execute failure: propagated as-is (no rollback)
+- Snapshot failure: silently ignored (never affects tool result)
 
 ### `PlanContext<T>`
 ```typescript

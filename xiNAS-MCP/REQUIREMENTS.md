@@ -158,6 +158,8 @@ The MCP server MUST implement per-array locking: a `raid.delete` MUST be rejecte
 
 `config.check_drift` detects out-of-band changes to managed configuration files (`/etc/exports`, `/etc/nfs.conf`, netplan configs) by comparing checksums against the last applied snapshot.
 
+**Auto-snapshot:** All mutating tools (`raid.create/modify/delete`, `share.create/update_policy/delete`, `network.configure`) automatically record a configuration snapshot after successful apply via the plan/apply middleware. This ensures the config-history timeline stays current regardless of which tool initiates the change.
+
 ---
 
 ## 5. Security Requirements
