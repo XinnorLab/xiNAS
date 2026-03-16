@@ -80,6 +80,10 @@ class RAIDConfigScreen(Screen[bool]):
         ok, err = await loop.run_in_executor(None, lambda: _write_yaml(self._cfg_path, content))
         if ok:
             self.app.audit.log("raid.config_save", str(self._cfg_path), "OK")
+            await self.app.snapshots.record(
+                "raid_modify",
+                diff_summary=f"Saved RAID/XFS config {self._cfg_path}",
+            )
             self.dismiss(True)
         else:
             from xinas_menu.widgets.confirm_dialog import ConfirmDialog

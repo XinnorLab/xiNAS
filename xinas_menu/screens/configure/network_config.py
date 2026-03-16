@@ -57,6 +57,10 @@ class NetworkConfigScreen(Screen[bool]):
         )
         if ok:
             self.app.audit.log("network.netplan_save", str(self._cfg_path), "OK")
+            await self.app.snapshots.record(
+                "network_modify",
+                diff_summary=f"Saved and applied netplan config {self._cfg_path}",
+            )
             self.dismiss(True)
         else:
             from xinas_menu.widgets.confirm_dialog import ConfirmDialog

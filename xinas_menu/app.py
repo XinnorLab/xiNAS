@@ -17,6 +17,7 @@ from xinas_menu.api.grpc_client import XiRAIDClient
 from xinas_menu.api.nfs_client import NFSHelperClient
 from xinas_menu.utils.audit import AuditLogger
 from xinas_menu.utils.update_check import UpdateChecker
+from xinas_menu.utils.snapshot_helper import SnapshotHelper
 from xinas_menu.widgets.header import XiNASHeader
 
 __all__ = ["XiNASApp"]
@@ -49,6 +50,7 @@ class XiNASApp(App):
         self.grpc = XiRAIDClient(grpc_address)
         self.nfs = NFSHelperClient()
         self.audit = AuditLogger()
+        self.snapshots = SnapshotHelper(grpc_address=grpc_address)
         self._update_checker = UpdateChecker()
 
     def compose(self) -> ComposeResult:

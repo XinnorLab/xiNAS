@@ -99,6 +99,7 @@ class InstallScreen(Screen):
             PlaybookRunScreen(cmd=cmd, title=f"Installing — {preset}", workdir=repo)
         )
         if exit_code == 0:
+            await self.app.snapshots.record_baseline(preset=preset)
             await self.app.push_screen_wait(
                 ConfirmDialog("Installation completed successfully!", "Success")
             )

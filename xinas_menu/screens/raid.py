@@ -332,6 +332,10 @@ class RAIDScreen(Screen):
         if ok:
             self.app.audit.log("raid.create",
                                f"{name} RAID-{level} ({len(drives)} drives)", "OK")
+            await self.app.snapshots.record(
+                "raid_create",
+                diff_summary=f"Created RAID-{level} array '{name}' with {len(drives)} drives",
+            )
             self._show_quick()
         else:
             await self.app.push_screen_wait(
@@ -415,6 +419,10 @@ class RAIDScreen(Screen):
         ok, _, err = await self.app.grpc.raid_modify(arr_name, **{key: value})
         if ok:
             self.app.audit.log("raid.modify", f"{arr_name} {key}={value}", "OK")
+            await self.app.snapshots.record(
+                "raid_modify",
+                diff_summary=f"Modified array '{arr_name}': {key}={value}",
+            )
             self._show_quick()
         else:
             await self.app.push_screen_wait(
@@ -606,6 +614,11 @@ class RAIDScreen(Screen):
         ok, _, err = await self.app.grpc.raid_destroy(arr_name, force=True)
         if ok:
             self.app.audit.log("raid.destroy", arr_name, "OK")
+            await self.app.snapshots.record(
+                "raid_delete",
+                diff_summary=f"Deleted array '{arr_name}' "
+                f"({len(removed_shares)} share(s), {len(unmounted_mounts)} mount(s) removed)",
+            )
             GRN, BLD, NC = "\033[32m", "\033[1m", "\033[0m"
             summary_parts = [f"{BLD}{GRN}Array '{arr_name}' deleted successfully.{NC}\n"]
             if removed_shares:

@@ -134,6 +134,10 @@ class NetworkScreen(Screen):
         ok, err = await loop.run_in_executor(None, lambda: _update_netplan(iface, ip, gw))
         if ok:
             self.app.audit.log("network.edit_ip", f"{iface}={ip}", "OK")
+            await self.app.snapshots.record(
+                "network_modify",
+                diff_summary=f"Set {iface} IP to {ip}" + (f" gw {gw}" if gw else ""),
+            )
             await self._show_network_info()
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
@@ -153,6 +157,9 @@ class NetworkScreen(Screen):
         ok, out, err = await loop.run_in_executor(None, lambda: _run("netplan", "apply"))
         if ok:
             self.app.audit.log("network.netplan_apply", "", "OK")
+            await self.app.snapshots.record(
+                "network_modify", diff_summary="Applied netplan configuration",
+            )
             await self.app.push_screen_wait(ConfirmDialog("Network configuration applied.", "Done"))
             await self._show_network_info()
         else:

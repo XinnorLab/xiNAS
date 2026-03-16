@@ -357,6 +357,10 @@ class FilesystemScreen(Screen):
             f"label={label} data={data_device} log={log_device} mount={mountpoint}",
             "OK",
         )
+        await self.app.snapshots.record(
+            "fs_create",
+            diff_summary=f"Created XFS filesystem '{label}' on {data_device}, mounted at {mountpoint}",
+        )
         GRN, BLD, NC = "\033[32m", "\033[1m", "\033[0m"
         view.set_content(
             f"{BLD}{GRN}Filesystem created successfully!{NC}\n\n"
@@ -522,6 +526,11 @@ class FilesystemScreen(Screen):
             "fs.delete",
             f"mountpoint={mountpoint} device={source_dev}",
             "OK",
+        )
+        await self.app.snapshots.record(
+            "fs_delete",
+            diff_summary=f"Deleted filesystem at {mountpoint} (device {source_dev})"
+            + (f", removed {len(removed_shares)} share(s)" if removed_shares else ""),
         )
         GRN, BLD, NC = "\033[32m", "\033[1m", "\033[0m"
         summary_parts = [f"{BLD}{GRN}Filesystem deleted successfully.{NC}\n"]

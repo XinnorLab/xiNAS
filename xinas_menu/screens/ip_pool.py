@@ -389,6 +389,10 @@ class IPPoolScreen(Screen):
         try:
             await loop.run_in_executor(None, _cfg_write, cfg)
             self.app.audit.log("network.pool_config", f"{start}-{end}/{prefix}", "OK")
+            await self.app.snapshots.record(
+                "network_modify",
+                diff_summary=f"Configured IP pool {start}-{end}/{prefix}",
+            )
             view = self.query_one("#pool-content", ScrollableTextView)
             view.set_content(
                 f"Pool configuration saved.\n\n"
@@ -519,6 +523,10 @@ class IPPoolScreen(Screen):
                 "network.pool_apply",
                 f"{len(allocations)} interfaces configured",
                 "OK",
+            )
+            await self.app.snapshots.record(
+                "network_modify",
+                diff_summary=f"Applied IP pool: {len(allocations)} interfaces configured",
             )
             await self.app.push_screen_wait(ConfirmDialog(msg, "Success"))
         else:

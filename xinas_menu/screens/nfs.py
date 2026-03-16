@@ -174,6 +174,9 @@ class NFSScreen(Screen):
         )
         if ok:
             self.app.audit.log("nfs.add_export", path, "OK")
+            await self.app.snapshots.record(
+                "share_create", diff_summary=f"Added NFS share {path}",
+            )
             self._load_exports()
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
@@ -212,6 +215,9 @@ class NFSScreen(Screen):
         )
         if ok:
             self.app.audit.log("nfs.update_export", path, "OK")
+            await self.app.snapshots.record(
+                "share_modify", diff_summary=f"Updated NFS share {path}",
+            )
             self._load_exports()
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
@@ -239,6 +245,9 @@ class NFSScreen(Screen):
         )
         if ok:
             self.app.audit.log("nfs.remove_export", path, "OK")
+            await self.app.snapshots.record(
+                "share_delete", diff_summary=f"Removed NFS share {path}",
+            )
             self._load_exports()
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
@@ -288,6 +297,9 @@ class NFSScreen(Screen):
         ok, err = await loop.run_in_executor(None, _set_domain)
         if ok:
             self.app.audit.log("nfs.idmapd_domain", domain, "OK")
+            await self.app.snapshots.record(
+                "nfs_modify", diff_summary=f"Set idmapd domain to {domain}",
+            )
             await self.app.push_screen_wait(ConfirmDialog("idmapd domain updated.", "Done"))
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
