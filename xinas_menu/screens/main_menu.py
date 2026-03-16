@@ -206,81 +206,31 @@ def _build_mini_status() -> str:
     lines.append("")
 
     # ── Client Connection Instructions ──────────────────────────
-    lines.append(f"  {_BLD}{_CYN}Client Connection{_NC}")
+    lines.append(f"  {_BLD}{_CYN}Quick Client Instructions{_NC}")
 
     # Detect server IPs (all routable)
     server_ips = _routable_ips()
     server_ip = server_ips[0] if server_ips else (platform.node() or "<server-ip>")
 
-    # Detect first export path
-    export_path = _first_export_path() or "/"
-
     lines.append(f"  {_DIM}On the client machine:{_NC}")
     lines.append("")
-    lines.append(f"  {_BLD}1.{_NC} Install the client package:")
-    lines.append(f"     {_GRN}sudo ./client_install.sh{_NC}")
-    lines.append(f"     {_GRN}cd /opt/xinas-client{_NC}")
-    lines.append("")
-    lines.append(f"  {_BLD}2.{_NC} Run the interactive setup:")
-    lines.append(f"     {_GRN}sudo ./client_setup.sh{_NC}")
-    lines.append("")
-    lines.append(f"  {_BLD}3.{_NC} Or quick-mount via CLI:")
-
-    # Show RDMA example if any RDMA interface is detected
-    has_rdma = _has_rdma_interfaces()
-    if has_rdma:
-        lines.append(f"     {_DIM}RDMA (high performance):{_NC}")
-        if len(server_ips) > 1:
-            ips_str = ",".join(server_ips[:2])
-            lines.append(
-                f"     {_GRN}sudo ./client_install.sh -m "
-                f"{ips_str}:{export_path} /mnt/nas rdma{_NC}"
-            )
-        else:
-            lines.append(
-                f"     {_GRN}sudo ./client_install.sh -m "
-                f"{server_ip}:{export_path} /mnt/nas rdma{_NC}"
-            )
-        lines.append("")
-
-    lines.append(f"     {_DIM}TCP (universal):{_NC}")
+    lines.append(f"  {_BLD}1.{_NC} Install the xiNAS client package:")
     lines.append(
-        f"     {_GRN}sudo ./client_install.sh -m "
-        f"{server_ip}:{export_path} /mnt/nas{_NC}"
+        f"     {_GRN}curl -fsSL https://raw.githubusercontent.com/"
+        f"XinnorLab/xiNAS/main/install_client.sh | sudo bash{_NC}"
     )
     lines.append("")
-
-    lines.append(f"  {_DIM}Manual mount:{_NC}")
-    num_ips = len(server_ips) if server_ips else 1
-    nconn = max(1, 16 // num_ips)
-    if has_rdma:
-        proto_opts = "proto=rdma,port=20049"
-    else:
-        proto_opts = "proto=tcp"
-    mount_opts = (
-        f"vers=4.2,{proto_opts},hard,"
-        f"max_connect=16,nconnect={nconn},"
-        f"rsize=1048576,wsize=1048576"
-    )
-    if num_ips > 1:
-        mount_opts += ",trunkdiscovery"
-    lines.append(
-        f"     {_GRN}mount -t nfs -o {mount_opts} \\{_NC}"
-    )
-    lines.append(f"     {_GRN}  {server_ip}:{export_path} /mnt/nas{_NC}")
-    if num_ips > 1:
-        lines.append(f"     {_DIM}# repeat for each IP:{_NC}")
-        for ip in server_ips[1:]:
-            lines.append(
-                f"     {_GRN}mount -t nfs -o {mount_opts} \\{_NC}"
-            )
-            lines.append(f"     {_GRN}  {ip}:{export_path} /mnt/nas{_NC}")
+    lines.append(f"  {_BLD}2.{_NC} Launch the client wizard:")
+    lines.append(f"     {_GRN}sudo xinas-client{_NC}")
+    lines.append("")
+    lines.append(f"  {_BLD}3.{_NC} Connect to the xiNAS server:")
 
     if len(server_ips) > 1:
-        lines.append("")
-        lines.append(f"  {_DIM}Server IPs for multi-IP trunking:{_NC}")
+        lines.append(f"     {_DIM}Server IPs for multi-IP trunking:{_NC}")
         for ip in server_ips:
-            lines.append(f"    {_GRN}•{_NC} {ip}")
+            lines.append(f"       {_GRN}•{_NC} {ip}")
+    else:
+        lines.append(f"     {_DIM}Server IP:{_NC} {_GRN}{server_ip}{_NC}")
 
     return "\n".join(lines)
 
