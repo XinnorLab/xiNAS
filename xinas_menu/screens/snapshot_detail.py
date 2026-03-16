@@ -20,6 +20,7 @@ _log = logging.getLogger(__name__)
 try:
     from xinas_history.engine import SnapshotEngine
     from xinas_history.store import FilesystemStore
+    from xinas_history.runner import TransactionalRunner
     from xinas_history.models import SnapshotStatus, SnapshotType, RollbackClass
     HAS_HISTORY = True
 except ImportError:
@@ -273,19 +274,110 @@ class SnapshotDetailScreen(Screen):
         if not confirmed:
             return
 
-        view.set_content(f"{_DIM}Rollback is not yet implemented.{_NC}\n\n"
-                         f"  {_DIM}Rollback execution requires the runner module "
-                         f"to re-apply Ansible playbooks.{_NC}\n"
-                         f"  {_DIM}Snapshot ID: {self._snapshot_id}{_NC}")
+        view.set_content(
+            f"{_DIM}Executing rollback to {self._snapshot_id}...{_NC}\n\n"
+            f"  {_DIM}This may take a few minutes while the configuration "
+            f"is re-applied.{_NC}"
+        )
 
         try:
             self.app.audit.log(
                 "history.rollback_attempt",
                 f"snapshot={self._snapshot_id}",
-                "PENDING",
+                "STARTED",
             )
         except Exception:
             pass
+
+        # Build a rollback apply_fn that restores config from the target snapshot
+        target_id = self._snapshot_id
+
+        try:
+            store = FilesystemStore()
+            runner = TransactionalRunner(
+                engine=SnapshotEngine(store=store),
+            )
+
+            # The rollback restores config files from the target snapshot
+            # then re-applies them via Ansible playbook
+            target_manifest = await loop.run_in_executor(
+                None, engine.get_snapshot, target_id,
+            )
+
+            preset = target_manifest.preset or "default"
+
+            run_result = await runner.execute_ansible(
+                operation="rollback",
+                source="xinas_menu",
+                preset=preset,
+                playbook=f"presets/{preset}/playbook.yml",
+                diff_summary=f"Rollback to snapshot {target_id}",
+            )
+
+            if run_result.success:
+                # Record the rollback snapshot
+                await self.app.snapshots.record(
+                    "rollback",
+                    diff_summary=f"Rolled back to snapshot {target_id}",
+                )
+                # Mark the target snapshot as rolled_back
+                try:
+                    store.update_manifest(
+                        target_id,
+                        {"status": SnapshotStatus.ROLLED_BACK.value},
+                    )
+                except Exception:
+                    pass
+
+                view.set_content(
+                    f"{_GRN}{_BLD}Rollback completed successfully!{_NC}\n\n"
+                    f"  {_DIM}Target:{_NC}    {target_id}\n"
+                    f"  {_DIM}Preset:{_NC}    {preset}\n"
+                    f"  {_DIM}Result:{_NC}    {_GRN}applied{_NC}\n"
+                )
+                self.app.notify("Rollback completed successfully.", severity="information")
+
+                try:
+                    self.app.audit.log(
+                        "history.rollback",
+                        f"snapshot={target_id}",
+                        "OK",
+                    )
+                except Exception:
+                    pass
+            else:
+                error_msg = run_result.error or "Unknown error"
+                rb_status = ""
+                if run_result.rollback_performed:
+                    if run_result.rollback_success:
+                        rb_status = f"\n  {_YLW}Auto-rollback succeeded — system restored to pre-change state.{_NC}"
+                    else:
+                        rb_status = f"\n  {_RED}Auto-rollback FAILED — system may be in inconsistent state!{_NC}"
+
+                view.set_content(
+                    f"{_RED}{_BLD}Rollback failed.{_NC}\n\n"
+                    f"  {_DIM}Target:{_NC}    {target_id}\n"
+                    f"  {_DIM}Error:{_NC}     {error_msg}\n"
+                    f"{rb_status}"
+                )
+                self.app.notify("Rollback failed.", severity="error")
+
+                try:
+                    self.app.audit.log(
+                        "history.rollback",
+                        f"snapshot={target_id} error={error_msg[:100]}",
+                        "FAIL",
+                    )
+                except Exception:
+                    pass
+
+        except Exception as exc:
+            _log.exception("Rollback failed: %s", exc)
+            view.set_content(
+                f"{_RED}Rollback failed: {exc}{_NC}\n\n"
+                f"  {_DIM}Snapshot ID: {target_id}{_NC}"
+            )
+            self.app.notify(f"Rollback error: {exc}", severity="error")
 
 
 # ---------------------------------------------------------------------------
