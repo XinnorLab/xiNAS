@@ -57,6 +57,15 @@ import { AuthGetSupportedModesSchema, handleAuthGetSupportedModes, AuthValidateK
 
 import { JobGetSchema, handleJobGet, JobListSchema, handleJobList, JobCancelSchema, handleJobCancel } from '../tools/job.js';
 
+import {
+  ConfigListSnapshotsSchema, handleConfigListSnapshots,
+  ConfigShowSnapshotSchema, handleConfigShowSnapshot,
+  ConfigDiffSnapshotsSchema, handleConfigDiffSnapshots,
+  ConfigCheckDriftSchema, handleConfigCheckDrift,
+  ConfigGetStatusSchema, handleConfigGetStatus,
+  ConfigRollbackSchema, handleConfigRollback,
+} from '../tools/config.js';
+
 // --- Tool definition ---
 
 interface ToolDef {
@@ -116,6 +125,14 @@ const TOOLS: ToolDef[] = [
   { name: 'job.get', description: 'Get status and progress of a long-running job', schema: JobGetSchema, handler: handleJobGet },
   { name: 'job.list', description: 'List all jobs for a controller', schema: JobListSchema, handler: handleJobList },
   { name: 'job.cancel', description: 'Cancel a running job', schema: JobCancelSchema, handler: handleJobCancel },
+
+  // Config History
+  { name: 'config.list_snapshots', description: 'List configuration snapshots with status and rollback class', schema: ConfigListSnapshotsSchema, handler: handleConfigListSnapshots },
+  { name: 'config.show_snapshot', description: 'Get full manifest and details for a specific snapshot', schema: ConfigShowSnapshotSchema, handler: handleConfigShowSnapshot },
+  { name: 'config.diff_snapshots', description: 'Compare two snapshots and show config/runtime changes', schema: ConfigDiffSnapshotsSchema, handler: handleConfigDiffSnapshots },
+  { name: 'config.check_drift', description: 'Detect out-of-band changes to managed config files', schema: ConfigCheckDriftSchema, handler: handleConfigCheckDrift },
+  { name: 'config.get_status', description: 'Get config-history status: baseline, counts, current effective', schema: ConfigGetStatusSchema, handler: handleConfigGetStatus },
+  { name: 'config.rollback', description: 'Roll back to a previous configuration snapshot (plan/apply, admin-only)', schema: ConfigRollbackSchema, handler: handleConfigRollback },
 ];
 
 /**

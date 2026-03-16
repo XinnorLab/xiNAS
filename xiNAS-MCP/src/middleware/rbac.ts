@@ -32,8 +32,13 @@ const TOOL_PERMISSIONS: Record<string, PermissionLevel> = {
   'job.get': 'viewer',
   'job.list': 'viewer',
   'network.list': 'viewer',
+  'config.list_snapshots': 'viewer',
+  'config.show_snapshot': 'viewer',
+  'config.diff_snapshots': 'viewer',
+  'config.get_status': 'viewer',
 
   // Operator tools
+  'config.check_drift': 'operator',
   'disk.run_selftest': 'operator',
   'disk.set_led': 'operator',
   'share.create': 'operator',
@@ -53,6 +58,7 @@ const TOOL_PERMISSIONS: Record<string, PermissionLevel> = {
   'disk.secure_erase': 'admin',
   'network.configure': 'admin',
   'auth.validate_kerberos': 'admin',
+  'config.rollback': 'admin',
 };
 
 /**
