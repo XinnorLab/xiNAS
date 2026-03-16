@@ -342,14 +342,31 @@ class XiRAIDClient:
             disks = await loop.run_in_executor(None, _collect_disk_info_sync)
             # Enrich with RAID membership
             ok, raids, _ = await self.raid_show(extended=True)
-            if ok and isinstance(raids, list):
-                for raid in raids:
-                    for member in (raid.get("members") or []):
-                        path = member.get("path", "")
+            if ok and raids:
+                # raid_show returns dict {name: array_dict} or list
+                raid_items: list[tuple[str, dict]] = []
+                if isinstance(raids, dict):
+                    raid_items = list(raids.items())
+                elif isinstance(raids, list):
+                    raid_items = [
+                        (r.get("name", ""), r) for r in raids if isinstance(r, dict)
+                    ]
+                for raid_name, raid in raid_items:
+                    # devices is list of [idx, "/dev/nvmeXnY", ["state"]]
+                    for dev in (raid.get("devices") or []):
+                        if isinstance(dev, list) and len(dev) >= 3:
+                            dev_path = dev[1] if len(dev) > 1 else ""
+                            dev_states = dev[2] if len(dev) > 2 else []
+                            dev_state = dev_states[0] if dev_states else "unknown"
+                        elif isinstance(dev, dict):
+                            dev_path = dev.get("path", "")
+                            dev_state = dev.get("state", "unknown")
+                        else:
+                            continue
                         for d in disks:
-                            if d["name"] and d["name"] in path:
-                                d["raid_name"] = raid.get("name", "")
-                                d["member_state"] = member.get("state", "")
+                            if d.get("name") and d["name"] in dev_path:
+                                d["raid_name"] = raid_name
+                                d["member_state"] = dev_state
             return True, disks, ""
         except Exception as exc:
             return False, None, str(exc)

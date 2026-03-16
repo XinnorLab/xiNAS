@@ -149,8 +149,12 @@ class PhysicalDrivesScreen(Screen):
     @staticmethod
     def _drive_role(d: dict) -> str:
         """Determine drive role string."""
+        name = d.get("name", "")
         if d.get("system"):
             return "OS Drive"
+        # xiRAID virtual block devices (e.g. xi_data, xi_log)
+        if name.startswith("xi_"):
+            return "xiRAID Array"
         raid = d.get("raid_name", "")
         if raid:
             state = d.get("member_state", "?")
