@@ -141,6 +141,23 @@ Both modes MUST be supported. Each controller MUST carry a stable, unique `contr
 
 The MCP server MUST implement per-array locking: a `raid.delete` MUST be rejected if a consistency check is actively running on the same array (`CONFLICT` error).
 
+### 4.9 Configuration History
+
+| Tool | Inputs | Output |
+|---|---|---|
+| `config.list_snapshots` | controller_id, include_baseline?, status_filter? | snapshot summaries (id, timestamp, operation, status, rollback_class) |
+| `config.show_snapshot` | controller_id, id | full manifest as JSON |
+| `config.diff_snapshots` | controller_id, from_id, to_id | DiffResult with config_changes, runtime_changes, rollback_class |
+| `config.check_drift` | controller_id | DriftReport with entries, clean flag, safety_impact |
+| `config.get_status` | controller_id | baseline_exists, snapshot_count, rollback_eligible_count, current_effective |
+| `config.rollback` | controller_id, target_id, reason, mode | plan: preflight result with rollback_class, blockers; apply: RunResult |
+
+**Backend:** Python subprocess (`python3 -m xinas_history <cmd> --format json`). See `specs/spec-config-history.md` for full protocol.
+
+`config.rollback` MUST support plan/apply discipline (§6.2). Plan mode returns rollback classification, affected resources, and preflight blockers. Apply mode executes only after preflight passes.
+
+`config.check_drift` detects out-of-band changes to managed configuration files (`/etc/exports`, `/etc/nfs.conf`, netplan configs) by comparing checksums against the last applied snapshot.
+
 ---
 
 ## 5. Security Requirements

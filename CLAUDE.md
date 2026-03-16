@@ -69,6 +69,34 @@ common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace �
 | `presets/` | Deployment profiles with role configs and templates |
 | `inventories/` | Ansible inventory (default: localhost) |
 | `client_repo/` | Standalone NFS client package |
+| `xinas_history/` | Configuration history & rollback library (Python) — snapshots, drift detection, transactional runner |
+| `docs/config-history/` | Config-history design docs: requirements, architecture, specs, gRPC API reference |
+
+### Configuration History (`xinas_history/`)
+
+Python library providing snapshot-based configuration tracking and rollback for xiNAS:
+
+- **Snapshots**: Captures config files + runtime state (RAID, mounts, exports, services) before/after changes
+- **Rollback classification**: Three risk levels — `destroying_data` > `changing_access` > `non_disruptive`
+- **Transactional runner**: 8-step sequence (lock → preflight → snapshot → execute → validate → mark → auto-rollback → release)
+- **Drift detection**: Checksum comparison of `/etc/exports`, `/etc/nfs.conf`, netplan against last applied snapshot
+- **Store**: `/var/lib/xinas/config-history/` with atomic writes, `baseline/` + `snapshots/{id}/`
+- **CLI**: `python3 -m xinas_history snapshot list|show|create|diff`, `gc run`, `status` (JSON output for MCP bridge)
+- **Consumers**: Textual TUI screens (`xinas_menu/screens/config_history.py`, `snapshot_detail.py`), MCP tools (`config.*`), installer hooks
+- **Deployment**: Ansible role `collection/roles/xinas_history/` — copies package, installs PyYAML, creates CLI wrapper
+
+### MCP Server Documentation
+
+The `xiNAS-MCP/` directory contains the MCP (Model Context Protocol) server specification and design docs:
+
+| File | Purpose |
+|------|---------|
+| `xiNAS-MCP/REQUIREMENTS.md` | Functional requirements — 9 tool namespaces (system, network, health, disk, RAID, share, auth, job, config) |
+| `xiNAS-MCP/specs/spec-tools.md` | Tool summary table (49 tools), preflight logic, health profiles, error scenarios |
+| `xiNAS-MCP/specs/spec-middleware.md` | RBAC permission matrix, audit logging, locking, idempotency, plan/apply |
+| `xiNAS-MCP/specs/spec-config-history.md` | Config-history tools spec (6 tools), subprocess protocol for `xinas_history` backend |
+| `xiNAS-MCP/specs/spec-core.md` | Core server architecture, transport, error model |
+| `xiNAS-MCP/specs/modules.md` | Module map, dependency graph, file count summary (38 files) |
 
 ### Preset Structure
 Each preset directory (`presets/default/`, `presets/xinnorVM/`) contains:

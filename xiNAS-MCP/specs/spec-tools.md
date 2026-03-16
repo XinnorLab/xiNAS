@@ -41,6 +41,12 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 | `job.get` | viewer | — | — | — | JobManager | — |
 | `job.list` | viewer | — | — | — | JobManager | — |
 | `job.cancel` | operator | — | — | — | JobManager | — |
+| `config.list_snapshots` | viewer | — | — | — | config-history subprocess | — |
+| `config.show_snapshot` | viewer | — | — | — | config-history subprocess | — |
+| `config.diff_snapshots` | viewer | — | — | — | config-history subprocess | — |
+| `config.check_drift` | operator | — | — | — | config-history subprocess | — |
+| `config.get_status` | viewer | — | — | — | config-history subprocess | — |
+| `config.rollback` | admin | plan/apply | — | — | config-history subprocess | — |
 
 ---
 
