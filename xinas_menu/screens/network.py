@@ -20,6 +20,7 @@ from textual import work
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
+from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -94,17 +95,25 @@ class NetworkScreen(Screen):
 
     @work(exclusive=True)
     async def _edit_interface_ip(self) -> None:
-        while True:
-            iface = await self.app.push_screen_wait(
-                InputDialog("Interface name:", "Edit Interface IP", placeholder="eth0")
+        # Enumerate available interfaces (exclude loopback)
+        try:
+            ifaces = sorted(
+                p.name for p in Path("/sys/class/net").iterdir()
+                if p.name != "lo"
             )
-            if iface is None:
-                return
-            if not iface.strip():
-                self.app.notify("Interface name must not be empty.", severity="error")
-                continue
-            iface = iface.strip()
-            break
+        except Exception:
+            ifaces = []
+
+        if not ifaces:
+            view = self.query_one("#net-content", ScrollableTextView)
+            view.set_content(f"{_RED}No network interfaces found.{_NC}")
+            return
+
+        iface = await self.app.push_screen_wait(
+            SelectDialog(ifaces, title="Edit Interface IP", prompt="Select interface:")
+        )
+        if iface is None:
+            return
 
         while True:
             ip = await self.app.push_screen_wait(
