@@ -146,7 +146,7 @@ class NetworkScreen(Screen):
                 "network_modify",
                 diff_summary=f"Set {iface} IP to {ip}" + (f" gw {gw}" if gw else ""),
             )
-            await self._show_network_info()
+            self._show_network_info()
         else:
             view = self.query_one("#net-content", ScrollableTextView)
             view.set_content(f"{_RED}Failed: {err}{_NC}")
@@ -171,7 +171,7 @@ class NetworkScreen(Screen):
             )
             view = self.query_one("#net-content", ScrollableTextView)
             view.set_content(f"{_GRN}Network configuration applied.{_NC}")
-            await self._show_network_info()
+            self._show_network_info()
         else:
             view = self.query_one("#net-content", ScrollableTextView)
             view.set_content(

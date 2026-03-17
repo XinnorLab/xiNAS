@@ -137,7 +137,7 @@ class UsersScreen(Screen):
         )
         if ok:
             self.app.audit.log("user.create", username, "OK")
-            await self._list_users()
+            self._list_users()
         else:
             view = self.query_one("#users-content", ScrollableTextView)
             view.set_content(f"{_RED}Failed: {err}{_NC}")
@@ -168,7 +168,7 @@ class UsersScreen(Screen):
         )
         if ok:
             self.app.audit.log("user.delete", username, "OK")
-            await self._list_users()
+            self._list_users()
         else:
             view = self.query_one("#users-content", ScrollableTextView)
             view.set_content(f"{_RED}Failed: {err}{_NC}")

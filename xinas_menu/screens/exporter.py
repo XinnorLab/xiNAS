@@ -154,7 +154,7 @@ class ExporterScreen(Screen):
             view.set_content(
                 f"{_RED}Failed: {err}{_NC}"
             )
-        await self._show_status()
+        self._show_status()
 
     @work(exclusive=True)
     async def _restart_service(self) -> None:
@@ -180,7 +180,7 @@ class ExporterScreen(Screen):
             view.set_content(f"{_GRN}Service restarted.{_NC}")
         else:
             view.set_content(f"{_RED}Failed: {err}{_NC}")
-        await self._show_status()
+        self._show_status()
 
     @work(exclusive=True)
     async def _uninstall(self) -> None:
@@ -210,7 +210,7 @@ class ExporterScreen(Screen):
             view.set_content(f"{_GRN}Exporter uninstalled.{_NC}")
         else:
             view.set_content(f"{_RED}Failed:\n{r.stderr[:200]}{_NC}")
-        await self._show_status()
+        self._show_status()
 
 
 def _get_installed_version() -> str | None:

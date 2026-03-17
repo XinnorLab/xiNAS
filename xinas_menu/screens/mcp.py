@@ -131,7 +131,7 @@ class MCPScreen(Screen):
             view.set_content(f"{_RED}{msg}{_NC}")
         else:
             view.set_content(f"{_GRN}{msg}{_NC}")
-        await self._show_status()
+        self._show_status()
 
     @work(exclusive=True)
     async def _show_status(self) -> None:
@@ -232,7 +232,7 @@ class MCPScreen(Screen):
         view.set_content(
             f"{_GRN}Services restarted:{_NC}\n\n" + "\n".join(results)
         )
-        await self._show_status()
+        self._show_status()
 
     @work(exclusive=True)
     async def _setup(self) -> None:
@@ -912,7 +912,7 @@ class SSHAccessScreen(Screen):
             view.set_content(f"{_GRN}Root SSH enabled.{_NC}")
         else:
             view.set_content(f"{_RED}Failed: {err}{_NC}")
-        await self._show_status()
+        self._show_status()
 
     @work(exclusive=True)
     async def _disable_root_ssh(self) -> None:
@@ -928,7 +928,7 @@ class SSHAccessScreen(Screen):
         except Exception as exc:
             view = self.query_one("#ssh-content", ScrollableTextView)
             view.set_content(f"{_RED}{exc}{_NC}")
-        await self._show_status()
+        self._show_status()
 
     @work(exclusive=True)
     async def _add_key(self) -> None:
@@ -955,7 +955,7 @@ class SSHAccessScreen(Screen):
         except Exception as exc:
             view = self.query_one("#ssh-content", ScrollableTextView)
             view.set_content(f"{_RED}{exc}{_NC}")
-        await self._show_status()
+        self._show_status()
 
 
 def _enable_root_ssh_sync() -> tuple[bool, str]:
