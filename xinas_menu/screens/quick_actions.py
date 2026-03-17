@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from pathlib import Path
 
 from textual import work
 from textual.app import ComposeResult
@@ -12,20 +11,16 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Label, Footer
 
-from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
-from xinas_menu.widgets.service_badge import ServiceBadge
 from xinas_menu.widgets.text_view import ScrollableTextView
 
 _MENU = [
-    MenuItem("1", "Show System Status"),
-    MenuItem("2", "Restart NFS Server"),
-    MenuItem("3", "View System Logs"),
-    MenuItem("4", "Check Disk Health"),
-    MenuItem("5", "Service Status"),
-    MenuItem("6", "System Monitor (btop)"),
-    MenuItem("7", "View Audit Log"),
+    MenuItem("1", "Restart NFS Server"),
+    MenuItem("2", "View System Logs"),
+    MenuItem("3", "Service Status"),
+    MenuItem("4", "System Monitor (btop)"),
+    MenuItem("5", "View Audit Log"),
     MenuItem("0", "Back"),
 ]
 
@@ -61,13 +56,11 @@ class QuickActionsScreen(Screen):
         view.set_content(
             f"{BLD}{CYN}Quick Actions{NC}\n"
             f"\n"
-            f"  {BLD}1{NC}  {CYN}System Status{NC}     {DIM}Live system overview (xinas-status){NC}\n"
-            f"  {BLD}2{NC}  {CYN}Restart NFS{NC}       {DIM}Restart NFS server (disconnects clients){NC}\n"
-            f"  {BLD}3{NC}  {CYN}System Logs{NC}       {DIM}View recent journalctl entries{NC}\n"
-            f"  {BLD}4{NC}  {CYN}Disk Health{NC}       {DIM}Drive inventory with RAID status{NC}\n"
-            f"  {BLD}5{NC}  {CYN}Service Status{NC}    {DIM}Check all xiNAS service states{NC}\n"
-            f"  {BLD}6{NC}  {CYN}System Monitor{NC}    {DIM}Launch btop interactive monitor{NC}\n"
-            f"  {BLD}7{NC}  {CYN}Audit Log{NC}         {DIM}View xiNAS audit trail{NC}\n"
+            f"  {BLD}1{NC}  {CYN}Restart NFS{NC}       {DIM}Restart NFS server (disconnects clients){NC}\n"
+            f"  {BLD}2{NC}  {CYN}System Logs{NC}       {DIM}View recent journalctl entries{NC}\n"
+            f"  {BLD}3{NC}  {CYN}Service Status{NC}    {DIM}Check all xiNAS service states{NC}\n"
+            f"  {BLD}4{NC}  {CYN}System Monitor{NC}    {DIM}Launch btop interactive monitor{NC}\n"
+            f"  {BLD}5{NC}  {CYN}Audit Log{NC}         {DIM}View xiNAS audit trail{NC}\n"
         )
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
@@ -75,37 +68,15 @@ class QuickActionsScreen(Screen):
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            self._system_status()
-        elif key == "2":
             self._restart_nfs()
-        elif key == "3":
+        elif key == "2":
             self._view_logs()
-        elif key == "4":
-            self._disk_health()
-        elif key == "5":
+        elif key == "3":
             self._service_status()
-        elif key == "6":
+        elif key == "4":
             self._system_monitor()
-        elif key == "7":
+        elif key == "5":
             self._view_audit_log()
-
-    @work(exclusive=True)
-    async def _system_status(self) -> None:
-        view = self.query_one("#qa-content", ScrollableTextView)
-        view.set_content("  Loading system status...")
-        loop = asyncio.get_running_loop()
-        text = await loop.run_in_executor(None, _collect_system_status)
-        view.set_content(text)
-        try:
-            ok, info, err = await asyncio.wait_for(
-                self.app.grpc.get_server_info(), timeout=5,
-            )
-        except asyncio.TimeoutError:
-            ok, info, err = False, None, "timed out"
-        if ok:
-            view.append(f"\n  xiRAID: connected\n{_format_server_info(info)}")
-        else:
-            view.append(f"\n  xiRAID: {grpc_short_error(err)}")
 
     @work(exclusive=True)
     async def _restart_nfs(self) -> None:
@@ -140,43 +111,6 @@ class QuickActionsScreen(Screen):
         view.set_content(text)
 
     @work(exclusive=True)
-    async def _disk_health(self) -> None:
-        view = self.query_one("#qa-content", ScrollableTextView)
-        view.set_content("  Scanning drives...")
-        ok, data, err = await self.app.grpc.disk_list()
-        if not ok:
-            view.set_content(f"\033[31m  Error: {err}\033[0m")
-            return
-
-        GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
-        lines = [f"{BLD}{CYN}Drive Summary{NC}\n"]
-        try:
-            disks = data if isinstance(data, list) else []
-            if not disks:
-                lines.append(f"  {DIM}(no drives found){NC}")
-            for d in disks:
-                name = d.get("name", "?") if isinstance(d, dict) else str(d)
-                model = (d.get("model", "") if isinstance(d, dict) else "").strip()
-                size = d.get("size", "?") if isinstance(d, dict) else "?"
-                raid_name = d.get("raid_name", "") if isinstance(d, dict) else ""
-                member_state = d.get("member_state", "") if isinstance(d, dict) else ""
-                transport = d.get("transport", "") if isinstance(d, dict) else ""
-                ms = member_state.lower()
-                if ms == "online":
-                    sc = GRN
-                elif ms in ("degraded", "rebuilding"):
-                    sc = YLW
-                elif ms in ("offline", "failed"):
-                    sc = RED
-                else:
-                    sc = ""
-                role = f"({raid_name}) {sc}{member_state}{NC}" if raid_name else f"{DIM}unassigned{NC}"
-                lines.append(f"  {GRN}{name}{NC}  {model}  {size}  {transport}  {role}")
-        except Exception as exc:
-            lines.append(f"  {RED}(parse error: {exc}){NC}")
-        view.set_content("\n".join(lines))
-
-    @work(exclusive=True)
     async def _service_status(self) -> None:
         view = self.query_one("#qa-content", ScrollableTextView)
         view.set_content("  Checking services...")
@@ -207,7 +141,6 @@ class QuickActionsScreen(Screen):
         if has_btop:
             view.set_content("Launching btop -- press q to return to menu.")
             await loop.run_in_executor(None, lambda: subprocess.run(["btop"]))
-            self._system_status()
         else:
             view.set_content("btop is not installed.\n\nInstall with: sudo apt-get install btop")
 
@@ -224,65 +157,3 @@ class QuickActionsScreen(Screen):
             view.set_content(f"  Error: {exc}")
 
 
-def _collect_system_status() -> str:
-    """Run xinas-status if available and return its output with colors preserved."""
-    import os
-    import shutil
-
-    xinas_status = shutil.which("xinas-status")
-    if xinas_status:
-        try:
-            env = {**os.environ}
-            env.setdefault("TERM", "xterm-256color")
-            r = subprocess.run(
-                ["bash", xinas_status],
-                capture_output=True, text=True, timeout=5,
-                env=env,
-            )
-            raw = r.stdout or r.stderr or ""
-            if raw.strip():
-                return raw
-        except Exception:
-            pass
-
-    GRN, CYN, BLD, DIM, NC = "\033[32m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
-    # Fallback — basic info
-    lines: list[str] = [f"{BLD}System Status{NC}\n{DIM}{'=' * 50}{NC}\n"]
-    try:
-        import platform
-        lines.append(f"  {DIM}Hostname:{NC}  {GRN}{platform.node()}{NC}")
-        lines.append(f"  {DIM}OS:{NC}        {platform.system()} {platform.release()}")
-    except Exception:
-        pass
-    try:
-        with open("/proc/uptime") as f:
-            secs = float(f.read().split()[0])
-        days, rem = divmod(int(secs), 86400)
-        hours, rem = divmod(rem, 3600)
-        lines.append(f"  {DIM}Uptime:{NC}    {days}d {hours}h {rem // 60}m")
-    except Exception:
-        pass
-    try:
-        total, used, _ = shutil.disk_usage("/")
-        lines.append(f"  {DIM}Root disk:{NC} {used // 2**30}G used / {total // 2**30}G total")
-    except Exception:
-        pass
-    try:
-        with open("/proc/loadavg") as f:
-            la = f.read().split()
-        lines.append(f"  {DIM}Load:{NC}      {la[0]}  {la[1]}  {la[2]}")
-    except Exception:
-        pass
-    return "\n".join(lines)
-
-
-def _format_server_info(info) -> str:
-    try:
-        if isinstance(info, dict):
-            lic = info.get("license")
-            if lic:
-                return f"  License: {lic}"
-            return ""
-        return f"  {info}"
-    except Exception:
-        return ""
