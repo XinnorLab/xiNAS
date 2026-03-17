@@ -240,9 +240,6 @@ def _build_fallback_status() -> str:
 def _format_server_info(info) -> str:
     try:
         if isinstance(info, dict):
-            lic = info.get("license")
-            if lic:
-                return f"  License: {lic}"
             return ""
         return f"  {info}"
     except Exception:
