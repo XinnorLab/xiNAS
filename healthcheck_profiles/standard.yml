@@ -5,13 +5,14 @@ sections:
   services: { enabled: true, checks: [xiraid, nfs_server, rpcbind, nfsdcld, chrony] }
   cpu: { enabled: true, checks: [governor, tuned_profile, numa_balance] }
   kernel: { enabled: true, checks: [thp, ksm, mitigations] }
-  vm: { enabled: true, checks: [swappiness, dirty_background_ratio, dirty_ratio, vfs_cache_pressure, zone_reclaim] }
-  network: { enabled: true, checks: [link_state, speed, mtu, sysctl_rmem, sysctl_wmem, sysctl_backlog, ring_rx_tx, errors_drops] }
+  vm: { enabled: true, checks: [swappiness, dirty_background_ratio, dirty_ratio, vfs_cache_pressure, zone_reclaim, lru_gen, lru_gen_ttl, watermark_scale] }
+  network: { enabled: true, checks: [link_state, speed, mtu, sysctl_rmem, sysctl_wmem, sysctl_backlog, sysctl_somaxconn, sysctl_sunrpc, ring_rx_tx, errors_drops] }
   storage: { enabled: true, checks: [raid_status, raid_devices, mount_status, nr_requests] }
   nfs: { enabled: true, checks: [service_running, threads, versions, rdma_enabled, exports_exist] }
   rdma: { enabled: true, checks: [rdma_devices, port_state] }
   nvme_health: { enabled: false }
-  filesystem: { enabled: false }
+  filesystem: { enabled: true, checks: [disk_usage, inode_usage, mount_opts, xfs_mount_opts] }
+  perf_tuning: { enabled: true, checks: [nvme_poll_queues, read_ahead_kb, cpu_cstate, io_scheduler] }
   kerberos: { enabled: false, checks: [krb5_conf, klist_ticket, idmapd_domain, time_sync] }
 expectations:
   cpu_governor: "performance"
@@ -33,3 +34,14 @@ expectations:
   ksm: 0
   mitigations_off: true
   numa_balance: 0
+  vm_lru_gen: 1
+  vm_lru_gen_ttl: 10000
+  vm_watermark_scale: 200
+  net_somaxconn: 65535
+  sunrpc_slots: 128
+  nvme_poll_queues: 4
+  read_ahead_kb: 65536
+  fs_usage_warn: 80
+  fs_usage_fail: 95
+  fs_inode_warn: 80
+  fs_inode_fail: 95

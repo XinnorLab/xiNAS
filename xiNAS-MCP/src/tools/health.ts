@@ -1,5 +1,9 @@
 /**
  * health.* MCP tools.
+ *
+ * Combines gRPC-based xiRAID checks (RAID, license, spares, faults) with
+ * the Python health engine (OS-level: services, CPU, kernel, VM, network,
+ * storage, NFS, RDMA, NVMe, filesystem, perf tuning, Kerberos) via subprocess.
  */
 
 import { z } from 'zod';
@@ -9,11 +13,8 @@ import { raidShow } from '../grpc/raid.js';
 import { poolShow } from '../grpc/pool.js';
 import { driveFaultyCountShow } from '../grpc/drive.js';
 import { licenseShow } from '../grpc/license.js';
-import { getSystemInfo, getServiceState } from '../os/systemInfo.js';
-import { listInterfaces } from '../os/networkInfo.js';
-import { listBlockDevices } from '../os/diskInfo.js';
 import { resolveController } from '../server/controllerResolver.js';
-import { loadConfig } from '../config/serverConfig.js';
+import { runEngineCheck, type EngineCheckResult } from '../os/healthEngine.js';
 
 export type CheckStatus = 'OK' | 'WARN' | 'CRIT' | 'UNKNOWN';
 export type CheckProfile = 'quick' | 'standard' | 'deep';
@@ -85,7 +86,7 @@ export const HealthGetAlertsSchema = z.object({
   severity_min: z.enum(['warn', 'crit']).default('warn'),
 });
 
-// --- Check implementations ---
+// --- gRPC-based checks (xiRAID-specific, not available in Python engine) ---
 
 async function checkRaidIntegrity(client: unknown): Promise<HealthCheckResult[]> {
   const results: HealthCheckResult[] = [];
@@ -152,65 +153,6 @@ async function checkRaidIntegrity(client: unknown): Promise<HealthCheckResult[]>
     });
   }
   return results;
-}
-
-async function checkNfsDaemons(): Promise<HealthCheckResult[]> {
-  const results: HealthCheckResult[] = [];
-  const services = ['nfs-kernel-server', 'nfsd'];
-  for (const svc of services) {
-    const state = getServiceState(svc);
-    results.push({
-      check_id: `nfs_daemon_${svc}`,
-      section: 'NFS',
-      name: `Service ${svc}`,
-      status: state.active ? 'OK' : 'CRIT',
-      actual: state.state,
-      expected: 'active',
-      impact: state.active ? undefined : 'NFS exports unavailable',
-      recommended_action: state.active ? undefined : `systemctl start ${svc}`,
-    });
-  }
-  return results;
-}
-
-function checkNetworkLinks(): HealthCheckResult[] {
-  const results: HealthCheckResult[] = [];
-  const ifaces = listInterfaces();
-  for (const iface of ifaces) {
-    if (iface.name.startsWith('lo')) continue;
-    const isUp = iface.operstate === 'up';
-    const hasErrors = (iface.rx_errors + iface.tx_errors) > 0;
-    let status: CheckStatus = isUp ? 'OK' : 'CRIT';
-    if (isUp && hasErrors) status = 'WARN';
-
-    results.push({
-      check_id: `network_link_${iface.name}`,
-      section: 'Network',
-      name: `Interface ${iface.name} link`,
-      status,
-      actual: `${iface.operstate}, errors: rx=${iface.rx_errors} tx=${iface.tx_errors}`,
-      expected: 'up, no errors',
-      impact: status !== 'OK' ? 'Network connectivity impaired' : undefined,
-      recommended_action: status !== 'OK' ? `Check cable and switch port for ${iface.name}` : undefined,
-    });
-  }
-  return results;
-}
-
-function checkMemoryPressure(): HealthCheckResult {
-  const sysInfo = getSystemInfo();
-  const { used_pct, available_kb, total_kb } = sysInfo.memory;
-  const status: CheckStatus = used_pct > 95 ? 'CRIT' : used_pct > 85 ? 'WARN' : 'OK';
-  return {
-    check_id: 'memory_pressure',
-    section: 'System',
-    name: 'Memory pressure',
-    status,
-    actual: `${used_pct}% used (${Math.round(available_kb / 1024)}MB available of ${Math.round(total_kb / 1024)}MB)`,
-    expected: '< 85% used',
-    impact: status !== 'OK' ? 'RAID performance degraded; potential OOM' : undefined,
-    recommended_action: status !== 'OK' ? 'Check RAID memory_limit settings; add RAM' : undefined,
-  };
 }
 
 async function checkLicense(client: unknown): Promise<HealthCheckResult> {
@@ -291,35 +233,28 @@ async function checkFaultyCounts(client: unknown): Promise<HealthCheckResult[]> 
   return results;
 }
 
-function checkDriveHealth(): HealthCheckResult[] {
-  const results: HealthCheckResult[] = [];
-  const devices = listBlockDevices();
-  for (const dev of devices) {
-    if (!dev.health) continue;
-    const { critical_warning, available_spare_pct, media_errors } = dev.health;
-    let status: CheckStatus = 'OK';
-    const issues: string[] = [];
+// --- Python engine result mapping ---
 
-    if (critical_warning && critical_warning > 0) { status = 'CRIT'; issues.push(`critical_warning=${critical_warning}`); }
-    if (available_spare_pct !== null && available_spare_pct < 10) { status = 'CRIT'; issues.push(`spare=${available_spare_pct}%`); }
-    else if (available_spare_pct !== null && available_spare_pct < 20) { if (status !== 'CRIT') status = 'WARN'; issues.push(`spare=${available_spare_pct}%`); }
-    if (media_errors !== null && media_errors > 0) { if (status !== 'CRIT') status = 'WARN'; issues.push(`media_errors=${media_errors}`); }
+const ENGINE_STATUS_MAP: Record<string, CheckStatus> = {
+  'PASS': 'OK',
+  'WARN': 'WARN',
+  'FAIL': 'CRIT',
+  'SKIP': 'UNKNOWN',
+};
 
-    if (status !== 'OK') {
-      results.push({
-        check_id: `drive_health_${dev.name}`,
-        section: 'Drives',
-        name: `NVMe health ${dev.path}`,
-        status,
-        actual: issues.join(', '),
-        expected: 'no issues',
-        impact: 'Drive may fail; data at risk',
-        recommended_action: `Check ${dev.path} and consider replacement`,
-        fix_hint: `disk.get_smart disk_id=${dev.path}`,
-      });
-    }
-  }
-  return results;
+function mapEngineCheck(c: EngineCheckResult): HealthCheckResult {
+  return {
+    check_id: `engine_${c.section.toLowerCase().replace(/[^a-z0-9]/gi, '_')}_${c.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`,
+    section: c.section,
+    name: c.name,
+    status: ENGINE_STATUS_MAP[c.status] ?? 'UNKNOWN',
+    actual: c.actual || undefined,
+    expected: c.expected || undefined,
+    impact: c.impact || undefined,
+    evidence: c.evidence || undefined,
+    recommended_action: c.fix_hint || undefined,
+    fix_hint: c.fix_hint || undefined,
+  };
 }
 
 // --- Main handlers ---
@@ -330,20 +265,35 @@ export async function handleHealthRunCheck(params: z.infer<typeof HealthRunCheck
   const profile = params.profile;
   const results: HealthCheckResult[] = [];
 
-  // Quick checks (all profiles)
+  // 1. gRPC-based checks (xiRAID-specific — not in Python engine)
   results.push(...await checkRaidIntegrity(client));
-  results.push(...await checkNfsDaemons());
-  results.push(...checkNetworkLinks());
-  results.push(checkMemoryPressure());
   results.push(await checkLicense(client));
 
   if (profile === 'standard' || profile === 'deep') {
     results.push(...await checkSpares(client));
     results.push(...await checkFaultyCounts(client));
-    results.push(...checkDriveHealth());
   }
 
-  // Update alert buffer
+  // 2. Python health engine checks (OS-level: services, CPU, kernel, VM,
+  //    network, storage, NFS, RDMA, NVMe, filesystem, perf tuning, Kerberos)
+  try {
+    const report = await runEngineCheck(profile);
+    const engineResults = report.checks
+      .filter(c => c.status !== 'SKIP')
+      .map(mapEngineCheck);
+    results.push(...engineResults);
+  } catch (err) {
+    // Engine failure is non-fatal — report as single UNKNOWN check
+    results.push({
+      check_id: 'engine_error',
+      section: 'System',
+      name: 'Health engine unavailable',
+      status: 'UNKNOWN',
+      evidence: String(err),
+    });
+  }
+
+  // 3. Update alert buffer
   for (const r of results) {
     addOrUpdateAlert(r);
   }

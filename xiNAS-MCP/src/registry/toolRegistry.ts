@@ -90,7 +90,7 @@ const TOOLS: ToolDef[] = [
   { name: 'network.configure', description: 'Configure network interface: static IP, VLAN, bonding, RDMA parameters (plan/apply)', schema: NetworkConfigureSchema, handler: handleNetworkConfigure },
 
   // Health
-  { name: 'health.run_check', description: 'Run health checks (quick/standard/deep): RAID integrity, drive health, NFS, network, memory, license', schema: HealthRunCheckSchema, handler: handleHealthRunCheck },
+  { name: 'health.run_check', description: 'Run health checks (quick/standard/deep): RAID, license, NFS, network, filesystem (XFS), sysctl, perf tuning, drives, memory, services', schema: HealthRunCheckSchema, handler: handleHealthRunCheck },
   { name: 'health.get_alerts', description: 'Get active alerts from last health check run', schema: HealthGetAlertsSchema, handler: handleHealthGetAlerts },
 
   // Disk

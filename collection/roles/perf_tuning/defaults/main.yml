@@ -39,3 +39,9 @@ perf_net_ring_tx: 8192
 perf_net_rmem_max: 1073741824         # 1 GiB
 perf_net_wmem_max: 1073741824
 perf_net_backlog: 250000
+perf_net_somaxconn: 65535             # TCP listen queue for NFS connections
+perf_net_tcp_rmem: "4096 1048576 16777216"   # TCP auto-tuning range (min default max)
+perf_net_tcp_wmem: "4096 1048576 16777216"
+
+# ===== SunRPC / NFS transport =====
+perf_sunrpc_slots: 128                # sunrpc.tcp_max_slot_table_entries

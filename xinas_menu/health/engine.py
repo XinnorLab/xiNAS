@@ -351,6 +351,9 @@ def check_vm(exp, checks):
         "dirty_ratio": ("vm.dirty_ratio", "vm_dirty_ratio", 15, None, "WARN"),
         "vfs_cache_pressure": ("vm.vfs_cache_pressure", "vm_vfs_cache_pressure", 200, 100, "WARN"),
         "zone_reclaim": ("vm.zone_reclaim_mode", "vm_zone_reclaim", 0, None, "WARN"),
+        "lru_gen": ("vm.lru_gen.enabled", "vm_lru_gen", 1, None, "WARN"),
+        "lru_gen_ttl": ("vm.lru_gen.min_ttl_ms", "vm_lru_gen_ttl", 10000, None, "WARN"),
+        "watermark_scale": ("vm.watermark_scale_factor", "vm_watermark_scale", 200, None, "WARN"),
     }
 
     for check_name, (sysctl_key, exp_key, default, threshold, severity) in vm_checks.items():
@@ -457,6 +460,10 @@ def check_network(exp, checks):
         sysctl_checks.append(("net.core.wmem_max", "net_wmem_max", 1073741824))
     if "sysctl_backlog" in checks:
         sysctl_checks.append(("net.core.netdev_max_backlog", "net_backlog", 250000))
+    if "sysctl_somaxconn" in checks:
+        sysctl_checks.append(("net.core.somaxconn", "net_somaxconn", 65535))
+    if "sysctl_sunrpc" in checks:
+        sysctl_checks.append(("sunrpc.tcp_max_slot_table_entries", "sunrpc_slots", 128))
 
     for sysctl_key, exp_key, default in sysctl_checks:
         expected = exp.get(exp_key, default)
@@ -868,6 +875,137 @@ def check_filesystem(exp, checks):
                     impact="Without noatime, every read updates metadata",
                     fix_hint=f"Add noatime to mount options in /etc/fstab"))
 
+        if "xfs_mount_opts" in checks:
+            xfs_required_opts = [
+                ("logdev=",    "No external log device — journal I/O contends with data"),
+                ("logbsize=",  "Suboptimal log buffer for large sequential writes"),
+                ("allocsize=", "Default preallocation may fragment large files"),
+                ("largeio",    "stat() won't report optimal I/O size for NFS"),
+                ("inode64",    "32-bit inodes limit filesystem to first 1 TB"),
+                ("swalloc",    "Allocations not stripe-aligned with RAID geometry"),
+                ("nodiratime", "Directory atime updates cause unnecessary metadata I/O"),
+            ]
+            missing = []
+            for pattern, impact in xfs_required_opts:
+                if pattern not in mount_opts:
+                    missing.append((pattern.rstrip("="), impact))
+            if missing:
+                missing_names = ", ".join(m[0] for m in missing)
+                results.append(CheckResult("Filesystem", f"xfs_mount_opts ({mount_path})", "WARN",
+                    f"missing: {missing_names}", "all XFS opts present",
+                    impact=missing[0][1],
+                    fix_hint=f"Add missing XFS mount options to systemd mount unit for {mount_path}"))
+            else:
+                results.append(CheckResult("Filesystem", f"xfs_mount_opts ({mount_path})", "PASS",
+                    "all present", "all XFS opts present"))
+
+        if "xfs_stripe_align" in checks:
+            output = run_cmd(f"xfs_info {shlex.quote(mount_path)} 2>/dev/null")
+            if output:
+                sunit_m = re.search(r'sunit=(\d+)', output)
+                swidth_m = re.search(r'swidth=(\d+)', output)
+                sunit = int(sunit_m.group(1)) if sunit_m else 0
+                swidth = int(swidth_m.group(1)) if swidth_m else 0
+                if sunit > 0 and swidth > 0:
+                    results.append(CheckResult("Filesystem", f"xfs_stripe_align ({mount_path})", "PASS",
+                        f"sunit={sunit} swidth={swidth}", "non-zero",
+                        evidence=f"Stripe unit={sunit*512}B, width={swidth*512}B"))
+                else:
+                    results.append(CheckResult("Filesystem", f"xfs_stripe_align ({mount_path})", "WARN",
+                        f"sunit={sunit} swidth={swidth}", "non-zero",
+                        impact="XFS not stripe-aligned with RAID geometry — causes read-modify-write penalties",
+                        fix_hint="Recreate filesystem with mkfs.xfs -d su=<strip_size>k,sw=<data_disks>"))
+            else:
+                results.append(CheckResult("Filesystem", f"xfs_stripe_align ({mount_path})", "SKIP",
+                    "N/A", "non-zero", evidence="xfs_info not available"))
+
+    return results
+
+def check_perf_tuning(exp, checks):
+    results = []
+
+    if "nvme_poll_queues" in checks:
+        expected = exp.get("nvme_poll_queues", 4)
+        actual = read_file("/sys/module/nvme/parameters/poll_queues")
+        if actual is None:
+            actual = read_file("/sys/module/nvme_core/parameters/poll_queues")
+        if actual is None:
+            results.append(CheckResult("PerfTuning", "nvme_poll_queues", "SKIP",
+                "N/A", str(expected), evidence="NVMe module parameter not found"))
+        elif int(actual) == expected:
+            results.append(CheckResult("PerfTuning", "nvme_poll_queues", "PASS",
+                actual, str(expected)))
+        else:
+            results.append(CheckResult("PerfTuning", "nvme_poll_queues", "WARN",
+                actual, str(expected),
+                impact="NVMe poll queues not set — higher per-I/O latency",
+                fix_hint="Set options nvme poll_queues=4 in /etc/modprobe.d/nvme.conf and rebuild initramfs"))
+
+    if "read_ahead_kb" in checks:
+        expected = exp.get("read_ahead_kb", 65536)
+        try:
+            devs = [d for d in os.listdir("/sys/block") if d.startswith("nvme")]
+        except OSError:
+            devs = []
+        if not devs:
+            results.append(CheckResult("PerfTuning", "read_ahead_kb", "SKIP",
+                "N/A", str(expected), evidence="No NVMe devices found"))
+        for dev in devs:
+            actual = read_file(f"/sys/block/{dev}/queue/read_ahead_kb")
+            if actual is None:
+                continue
+            actual_int = int(actual)
+            if actual_int >= expected:
+                results.append(CheckResult("PerfTuning", f"read_ahead_kb ({dev})", "PASS",
+                    actual, str(expected)))
+            else:
+                results.append(CheckResult("PerfTuning", f"read_ahead_kb ({dev})", "WARN",
+                    actual, str(expected),
+                    impact=f"Low read-ahead on {dev} limits sequential read throughput",
+                    fix_hint=f"blockdev --setra {expected} /dev/{dev}"))
+
+    if "cpu_cstate" in checks:
+        cmdline = read_file("/proc/cmdline") or ""
+        if "intel_idle.max_cstate=0" in cmdline:
+            results.append(CheckResult("PerfTuning", "cpu_cstate", "PASS",
+                "max_cstate=0", "max_cstate=0", evidence="intel_idle.max_cstate=0 in cmdline"))
+        else:
+            results.append(CheckResult("PerfTuning", "cpu_cstate", "WARN",
+                "default", "max_cstate=0",
+                impact="CPU C-state exit latency causes I/O jitter (10-100 us)",
+                fix_hint="Add intel_idle.max_cstate=0 to GRUB_CMDLINE_LINUX in /etc/default/grub"))
+
+    if "irqbalance" in checks:
+        output = run_cmd("systemctl is-active irqbalance 2>/dev/null")
+        if output and output.strip() == "active":
+            results.append(CheckResult("PerfTuning", "irqbalance", "WARN",
+                "active", "inactive",
+                impact="irqbalance causes IRQ migration jitter on dedicated NAS nodes",
+                fix_hint="systemctl stop irqbalance"))
+        else:
+            results.append(CheckResult("PerfTuning", "irqbalance", "PASS",
+                output.strip() if output else "inactive", "inactive"))
+
+    if "io_scheduler" in checks:
+        try:
+            devs = [d for d in os.listdir("/sys/block") if d.startswith("nvme")]
+        except OSError:
+            devs = []
+        for dev in devs:
+            sched = read_file(f"/sys/block/{dev}/queue/scheduler")
+            if sched is None:
+                continue
+            m = re.search(r'\[(\w+)\]', sched)
+            active = m.group(1) if m else sched.strip()
+            if active in ("none", "noop"):
+                results.append(CheckResult("PerfTuning", f"io_scheduler ({dev})", "PASS",
+                    active, "none/noop"))
+            else:
+                results.append(CheckResult("PerfTuning", f"io_scheduler ({dev})", "WARN",
+                    active, "none/noop",
+                    impact=f"Kernel I/O scheduler adds overhead for NVMe on {dev}",
+                    fix_hint=f"echo none > /sys/block/{dev}/queue/scheduler"))
+
     return results
 
 def check_nfs(exp, checks):
@@ -1188,6 +1326,7 @@ def main():
         "storage": check_storage,
         "nvme_health": check_nvme_health,
         "filesystem": check_filesystem,
+        "perf_tuning": check_perf_tuning,
         "nfs": check_nfs,
     }
 

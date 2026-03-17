@@ -16,7 +16,7 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 | `system.get_performance` | viewer | — | — | — | prometheusClient | — |
 | `network.list` | viewer | — | — | — | networkInfo | — |
 | `network.configure` | admin | plan/apply | — | — | networkInfo (preflight) | — |
-| `health.run_check` | viewer | — | — | raidShow, poolShow, driveFaultyCountShow, licenseShow | systemInfo, diskInfo, networkInfo | — |
+| `health.run_check` | viewer | — | — | raidShow, poolShow, driveFaultyCountShow, licenseShow | Python health engine (subprocess) | — |
 | `health.get_alerts` | viewer | — | — | — | — | — |
 | `disk.list` | viewer | — | — | raidShow | diskInfo | — |
 | `disk.get_smart` | viewer | — | — | — | diskInfo (NVMe sysfs) | — |

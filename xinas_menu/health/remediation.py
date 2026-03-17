@@ -47,7 +47,7 @@ _REMEDIATION_MAP: dict[str, RemediationAction] = {
 # Allowlisted command prefixes for automated remediation
 _SAFE_COMMAND_PREFIXES = (
     "systemctl", "sysctl", "modprobe", "ethtool", "ip",
-    "nmcli", "exportfs", "apt", "dnf", "yum",
+    "nmcli", "exportfs", "apt", "dnf", "yum", "blockdev",
 )
 
 

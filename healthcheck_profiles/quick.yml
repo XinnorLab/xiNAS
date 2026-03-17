@@ -5,13 +5,14 @@ sections:
   services: { enabled: true, checks: [xiraid, nfs_server, rpcbind] }
   cpu: { enabled: true, checks: [governor, tuned_profile] }
   kernel: { enabled: true, checks: [thp, ksm, mitigations] }
-  vm: { enabled: true, checks: [swappiness, dirty_background_ratio, dirty_ratio, vfs_cache_pressure] }
+  vm: { enabled: true, checks: [swappiness, dirty_background_ratio, dirty_ratio, vfs_cache_pressure, lru_gen, watermark_scale] }
   network: { enabled: true, checks: [link_state, mtu, sysctl_rmem, sysctl_wmem, sysctl_backlog] }
   storage: { enabled: true, checks: [raid_status, mount_status] }
   nfs: { enabled: true, checks: [service_running, threads, versions] }
   rdma: { enabled: false }
   nvme_health: { enabled: false }
   filesystem: { enabled: false }
+  perf_tuning: { enabled: true, checks: [nvme_poll_queues, read_ahead_kb] }
   kerberos: { enabled: false, checks: [krb5_conf, klist_ticket, idmapd_domain, time_sync] }
 expectations:
   cpu_governor: "performance"
@@ -31,3 +32,7 @@ expectations:
   thp: "never"
   ksm: 0
   mitigations_off: true
+  vm_lru_gen: 1
+  vm_watermark_scale: 200
+  nvme_poll_queues: 4
+  read_ahead_kb: 65536
