@@ -119,8 +119,8 @@ class NetworkScreen(Screen):
             return
         iface = choice.split()[0]
 
-        # Fetch current IP and gateway for pre-filling
-        cur_ip, cur_gw = await loop.run_in_executor(None, lambda: _iface_current(iface))
+        # Fetch current IP, gateway, and MTU for pre-filling
+        cur_ip, cur_gw, cur_mtu = await loop.run_in_executor(None, lambda: _iface_current(iface))
 
         while True:
             ip = await self.app.push_screen_wait(
@@ -149,22 +149,45 @@ class NetworkScreen(Screen):
         if gw is None:
             return
 
-        confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(
-                f"Set {iface} to {ip}" + (f" via {gw}" if gw else "") + "?",
-                "Confirm",
+        # MTU dialog — default depends on interface type (IB vs Ethernet)
+        default_mtu = cur_mtu or ("4092" if iface.startswith("ib") else "9000")
+        while True:
+            mtu_str = await self.app.push_screen_wait(
+                InputDialog(f"MTU for {iface}:",
+                            "Edit Interface IP",
+                            default=default_mtu,
+                            placeholder="9000")
             )
+            if mtu_str is None:
+                return
+            mtu_str = mtu_str.strip()
+            if not mtu_str.isdigit():
+                self.app.notify("MTU must be a number.", severity="error")
+                continue
+            mtu_val = int(mtu_str)
+            if mtu_val < 576 or mtu_val > 9216:
+                self.app.notify("MTU must be between 576 and 9216.", severity="error")
+                continue
+            break
+
+        summary = f"Set {iface} to {ip}"
+        if gw:
+            summary += f" via {gw}"
+        summary += f", MTU {mtu_str}"
+
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(summary + "?", "Confirm")
         )
         if not confirmed:
             return
 
         loop = asyncio.get_running_loop()
-        ok, err = await loop.run_in_executor(None, lambda: _update_netplan(iface, ip, gw))
+        ok, err = await loop.run_in_executor(None, lambda: _update_netplan(iface, ip, gw, mtu_val))
         if ok:
-            self.app.audit.log("network.edit_ip", f"{iface}={ip}", "OK")
+            self.app.audit.log("network.edit_ip", f"{iface}={ip} mtu={mtu_val}", "OK")
             await self.app.snapshots.record(
                 "network_modify",
-                diff_summary=f"Set {iface} IP to {ip}" + (f" gw {gw}" if gw else ""),
+                diff_summary=summary,
             )
             self._show_network_info()
         else:
@@ -337,9 +360,12 @@ def _collect_network_info() -> str:
                     ip6 = parts[i + 1]
                     break
 
+        mtu = _read("mtu") or "N/A"
+
         interfaces.append({
             "name": iface, "state": state, "speed": speed,
             "mac": mac, "driver": driver, "ip4": ip4, "ip6": ip6,
+            "mtu": mtu,
         })
 
     up_count = sum(1 for i in interfaces if i["state"] == "up")
@@ -366,7 +392,7 @@ def _collect_network_info() -> str:
         lines.append(f"      {DIM}IPv4:{NC}    {iface['ip4'] or f'{DIM}(not configured){NC}'}")
         if iface["ip6"]:
             lines.append(f"      {DIM}IPv6:{NC}    {iface['ip6']}")
-        lines.append(f"      {DIM}MAC:{NC}     {iface['mac']}")
+        lines.append(f"      {DIM}MAC:{NC}     {iface['mac']}    {DIM}MTU:{NC} {iface['mtu']}")
         if iface["driver"]:
             lines.append(f"      {DIM}Driver:{NC}  {iface['driver']}")
         lines.append("")
@@ -403,7 +429,7 @@ def _read_netplan_file() -> tuple[str, str]:
     return "", ""
 
 
-def _update_netplan(iface: str, ip_cidr: str, gateway: str) -> tuple[bool, str]:
+def _update_netplan(iface: str, ip_cidr: str, gateway: str, mtu: int | None = None) -> tuple[bool, str]:
     import yaml
     netplan_dir = Path("/etc/netplan")
     cfg_files = sorted(netplan_dir.glob("*.yaml")) + sorted(netplan_dir.glob("*.yml"))
@@ -418,6 +444,8 @@ def _update_netplan(iface: str, ip_cidr: str, gateway: str) -> tuple[bool, str]:
         iface_cfg["addresses"] = [ip_cidr]
         if gateway:
             iface_cfg["routes"] = [{"to": "default", "via": gateway}]
+        if mtu is not None:
+            iface_cfg["mtu"] = mtu
         with cfg_path.open("w") as f:
             yaml.dump(cfg, f, default_flow_style=False)
         return True, ""
@@ -443,8 +471,8 @@ def _iface_labels(names: list[str]) -> list[str]:
     return labels
 
 
-def _iface_current(name: str) -> tuple[str, str]:
-    """Return (current_ip_cidr, current_gateway) for an interface."""
+def _iface_current(name: str) -> tuple[str, str, str]:
+    """Return (current_ip_cidr, current_gateway, current_mtu) for an interface."""
     ip = ""
     out = _run_cmd(f"ip -o -4 addr show {name}")
     if out:
@@ -460,7 +488,14 @@ def _iface_current(name: str) -> tuple[str, str]:
             if line.startswith("default via "):
                 gw = line.split()[2]
                 break
-    return ip, gw
+    mtu = ""
+    try:
+        mtu_path = Path(f"/sys/class/net/{name}/mtu")
+        if mtu_path.exists():
+            mtu = mtu_path.read_text().strip()
+    except Exception:
+        pass
+    return ip, gw, mtu
 
 
 def _run(*args: str) -> tuple[bool, str, str]:
