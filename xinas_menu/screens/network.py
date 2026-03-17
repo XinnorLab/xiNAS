@@ -95,25 +95,29 @@ class NetworkScreen(Screen):
 
     @work(exclusive=True)
     async def _edit_interface_ip(self) -> None:
-        # Enumerate available interfaces (exclude loopback)
+        # Enumerate available interfaces (exclude loopback) with current IPs
         try:
-            ifaces = sorted(
+            iface_names = sorted(
                 p.name for p in Path("/sys/class/net").iterdir()
                 if p.name != "lo"
             )
         except Exception:
-            ifaces = []
+            iface_names = []
 
-        if not ifaces:
+        if not iface_names:
             view = self.query_one("#net-content", ScrollableTextView)
             view.set_content(f"{_RED}No network interfaces found.{_NC}")
             return
 
-        iface = await self.app.push_screen_wait(
-            SelectDialog(ifaces, title="Edit Interface IP", prompt="Select interface:")
+        loop = asyncio.get_running_loop()
+        labels = await loop.run_in_executor(None, lambda: _iface_labels(iface_names))
+
+        choice = await self.app.push_screen_wait(
+            SelectDialog(labels, title="Edit Interface IP", prompt="Select interface:")
         )
-        if iface is None:
+        if choice is None:
             return
+        iface = choice.split()[0]
 
         while True:
             ip = await self.app.push_screen_wait(
@@ -412,6 +416,24 @@ def _update_netplan(iface: str, ip_cidr: str, gateway: str) -> tuple[bool, str]:
         return True, ""
     except Exception as exc:
         return False, str(exc)
+
+
+def _iface_labels(names: list[str]) -> list[str]:
+    """Return display labels like 'eth0  192.168.1.10/24' for each interface."""
+    max_len = max((len(n) for n in names), default=0)
+    labels: list[str] = []
+    for name in names:
+        ip = ""
+        out = _run_cmd(f"ip -o -4 addr show {name}")
+        if out:
+            parts = out.split()
+            for i, p in enumerate(parts):
+                if p == "inet" and i + 1 < len(parts):
+                    ip = parts[i + 1]
+                    break
+        padded = name.ljust(max_len)
+        labels.append(f"{padded}  {ip}" if ip else padded)
+    return labels
 
 
 def _run(*args: str) -> tuple[bool, str, str]:
