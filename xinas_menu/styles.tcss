@@ -201,6 +201,29 @@ ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog, ChecklistDialog {
     margin-bottom: 1;
 }
 
+#dialog-select {
+    height: auto;
+    max-height: 12;
+    margin-bottom: 1;
+    background: #141824;
+    border: round #2a3454;
+    padding: 0;
+}
+
+#dialog-select:focus {
+    border: round #4d8bff 60%;
+}
+
+#dialog-select > .option-list--option-highlighted {
+    background: #4d8bff;
+    color: #ffffff;
+    text-style: bold;
+}
+
+#dialog-select > .option-list--option {
+    padding: 0 1;
+}
+
 #dialog-textarea {
     height: 16;
     min-height: 8;

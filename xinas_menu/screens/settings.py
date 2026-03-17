@@ -114,12 +114,12 @@ class SettingsScreen(Screen):
 
         choice = await self.app.push_screen_wait(
             SelectDialog(
-                ["Configure Email", "Disable Email", "Cancel"],
+                ["Configure Email", "Disable Email"],
                 title="Email Configuration",
                 prompt="Choose an action:",
             )
         )
-        if choice is None or choice == "Cancel":
+        if choice is None:
             return
 
         if choice == "Disable Email":
@@ -250,11 +250,11 @@ class SettingsScreen(Screen):
             lines.append(f"  Status:    {RED}disabled{NC}")
         view.set_content("\n".join(lines))
 
-        options = ["Enable/Update Scheduler", "Disable Scheduler", "Cancel"]
+        options = ["Enable/Update Scheduler", "Disable Scheduler"]
         choice = await self.app.push_screen_wait(
             SelectDialog(options, title="HC Scheduler", prompt="Choose an action:")
         )
-        if choice is None or choice == "Cancel":
+        if choice is None:
             return
 
         if choice == "Disable Scheduler":
