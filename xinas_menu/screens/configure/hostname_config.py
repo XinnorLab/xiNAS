@@ -43,8 +43,7 @@ class HostnameConfigScreen(Screen[bool]):
             self.app.audit.log("system.hostname", hostname, "OK")
             self.dismiss(True)
         else:
-            from xinas_menu.widgets.confirm_dialog import ConfirmDialog
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
+            self.app.notify(f"Failed: {err}", severity="error")
 
     def action_cancel(self) -> None:
         self.dismiss(False)

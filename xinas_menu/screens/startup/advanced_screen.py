@@ -15,6 +15,14 @@ from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
+_RED = "\033[31m"
+_GRN = "\033[32m"
+_YLW = "\033[33m"
+_CYN = "\033[36m"
+_BLD = "\033[1m"
+_DIM = "\033[2m"
+_NC = "\033[0m"
+
 _MENU = [
     MenuItem("1", "Configure Network"),
     MenuItem("2", "Set Hostname"),
@@ -107,10 +115,11 @@ class AdvancedScreen(Screen):
                     capture_output=True, text=True,
                 )
             )
+            view = self.query_one("#adv-content", ScrollableTextView)
             if r.returncode == 0:
-                await self.app.push_screen_wait(ConfirmDialog("Remote URL updated.", "Done", ok_only=True))
+                view.set_content(f"{_GRN}Remote URL updated.{_NC}")
             else:
-                await self.app.push_screen_wait(ConfirmDialog(r.stderr[:200], "Error", ok_only=True))
+                view.set_content(f"{_RED}{r.stderr[:200]}{_NC}")
 
     async def _check_updates(self) -> None:
         view = self.query_one("#adv-content", ScrollableTextView)

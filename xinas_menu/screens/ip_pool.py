@@ -21,6 +21,14 @@ from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
+_RED = "\033[31m"
+_GRN = "\033[32m"
+_YLW = "\033[33m"
+_CYN = "\033[36m"
+_BLD = "\033[1m"
+_DIM = "\033[2m"
+_NC = "\033[0m"
+
 _CFG_PATH = Path("/etc/xinas/network-pool.json")
 _NETPLAN_PATH = Path("/etc/netplan/99-xinas-pool.yaml")
 
@@ -402,8 +410,10 @@ class IPPoolScreen(Screen):
                 f"Use [bold]Preview[/bold] to see allocation, then [bold]Apply[/bold] to activate."
             )
         except Exception as exc:
-            await self.app.push_screen_wait(
-                ConfirmDialog(f"Failed to save config: {exc}", "Error", ok_only=True)
+            view = self.query_one("#pool-content", ScrollableTextView)
+            view.set_content(
+                f"{_RED}Failed to save config: {exc}{_NC}\n\n"
+                f"  {_DIM}Check file permissions on {_CFG_PATH}.{_NC}"
             )
 
     @work(exclusive=True)
@@ -486,18 +496,19 @@ class IPPoolScreen(Screen):
         interfaces = await loop.run_in_executor(None, _detect_interfaces)
 
         if not interfaces:
-            await self.app.push_screen_wait(
-                ConfirmDialog(
-                    "No high-speed interfaces detected.\nCannot apply pool configuration.",
-                    "Error",
-                    ok_only=True,
-                )
+            view = self.query_one("#pool-content", ScrollableTextView)
+            view.set_content(
+                f"{_YLW}No high-speed interfaces detected.{_NC}\n\n"
+                f"  {_DIM}Ensure DOCA-OFED is installed and interfaces are present.{_NC}"
             )
             return
 
         allocations, err = _allocate_ips(cfg, interfaces)
         if err:
-            await self.app.push_screen_wait(ConfirmDialog(f"Allocation error:\n{err}", "Error", ok_only=True))
+            view = self.query_one("#pool-content", ScrollableTextView)
+            view.set_content(
+                f"{_RED}Allocation error:{_NC}\n\n{err}"
+            )
             return
 
         summary = "\n".join(
@@ -529,10 +540,12 @@ class IPPoolScreen(Screen):
                 "network_modify",
                 diff_summary=f"Applied IP pool: {len(allocations)} interfaces configured",
             )
-            await self.app.push_screen_wait(ConfirmDialog(msg, "Success", ok_only=True))
+            view = self.query_one("#pool-content", ScrollableTextView)
+            view.set_content(f"{_GRN}{msg}{_NC}")
         else:
             self.app.audit.log("network.pool_apply", msg[:200], "FAIL")
-            await self.app.push_screen_wait(ConfirmDialog(msg, "Error", ok_only=True))
+            view = self.query_one("#pool-content", ScrollableTextView)
+            view.set_content(f"{_RED}{msg}{_NC}")
 
     @work(exclusive=True)
     async def _show_current_settings(self) -> None:

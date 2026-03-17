@@ -225,24 +225,18 @@ class SnapshotDetailScreen(Screen):
 
         # Check rollback eligibility
         if manifest.type == SnapshotType.BASELINE.value:
-            await self.app.push_screen_wait(
-                ConfirmDialog(
-                    "The baseline snapshot is immutable and cannot be used\n"
-                    "as a direct rollback target.",
-                    "Rollback Not Available",
-                    ok_only=True,
-                )
+            view.set_content(
+                f"{_YLW}The baseline snapshot is immutable and cannot be used "
+                f"as a direct rollback target.{_NC}\n\n"
+                f"  {_DIM}Select a rollback-eligible snapshot instead.{_NC}"
             )
             return
 
         if manifest.type != SnapshotType.ROLLBACK_ELIGIBLE.value:
-            await self.app.push_screen_wait(
-                ConfirmDialog(
-                    f"This snapshot is of type '{manifest.type}' and is not\n"
-                    f"eligible for rollback.",
-                    "Rollback Not Available",
-                    ok_only=True,
-                )
+            view.set_content(
+                f"{_YLW}This snapshot is of type '{manifest.type}' and is not "
+                f"eligible for rollback.{_NC}\n\n"
+                f"  {_DIM}Only rollback-eligible snapshots can be used as targets.{_NC}"
             )
             return
 

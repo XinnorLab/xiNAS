@@ -19,6 +19,14 @@ from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
+_RED = "\033[31m"
+_GRN = "\033[32m"
+_YLW = "\033[33m"
+_CYN = "\033[36m"
+_BLD = "\033[1m"
+_DIM = "\033[2m"
+_NC = "\033[0m"
+
 _MENU = [
     MenuItem("1", "List Users"),
     MenuItem("2", "Create User"),
@@ -131,7 +139,8 @@ class UsersScreen(Screen):
             self.app.audit.log("user.create", username, "OK")
             await self._list_users()
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
+            view = self.query_one("#users-content", ScrollableTextView)
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
 
     @work(exclusive=True)
     async def _delete_user(self) -> None:
@@ -161,7 +170,8 @@ class UsersScreen(Screen):
             self.app.audit.log("user.delete", username, "OK")
             await self._list_users()
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
+            view = self.query_one("#users-content", ScrollableTextView)
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
 
     @work(exclusive=True)
     async def _set_quota(self) -> None:
@@ -223,11 +233,12 @@ class UsersScreen(Screen):
             None,
             lambda: self.app.nfs.set_quota(export_path, soft_kb, hard_kb),
         )
+        view = self.query_one("#users-content", ScrollableTextView)
         if ok:
             self.app.audit.log("user.quota", f"{username}@{export_path}", "OK")
-            await self.app.push_screen_wait(ConfirmDialog("Quota set.", "Done", ok_only=True))
+            view.set_content(f"{_GRN}Quota set.{_NC}")
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
 
     @work(exclusive=True)
     async def _show_quotas(self) -> None:

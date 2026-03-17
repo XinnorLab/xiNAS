@@ -102,10 +102,7 @@ class XiNASApp(App):
             self.audit.log("system.update", "git pull succeeded — restarting")
             self._update_checker.restart_self()
         else:
-            from xinas_menu.widgets.confirm_dialog import ConfirmDialog
-            await self.push_screen_wait(
-                ConfirmDialog(f"Update failed: {msg}", "Update Error", ok_only=True)
-            )
+            self.notify(f"Update failed: {msg}", severity="error")
 
     def action_copy_content(self) -> None:
         """Copy the visible content panel text to clipboard (Ctrl+Y)."""

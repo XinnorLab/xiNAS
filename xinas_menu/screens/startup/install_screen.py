@@ -78,14 +78,7 @@ class InstallScreen(Screen):
 
         # Check license
         if not (Path("/tmp/license").exists()):
-            await self.app.push_screen_wait(
-                ConfirmDialog(
-                    "No license found at /tmp/license.\n"
-                    "Please enter your license first.",
-                    "License Required",
-                    ok_only=True,
-                )
-            )
+            self.app.notify("No license found at /tmp/license. Enter your license first.", severity="warning")
             return
 
         from xinas_menu.screens.startup.playbook_screen import PlaybookRunScreen
@@ -101,14 +94,6 @@ class InstallScreen(Screen):
         )
         if exit_code == 0:
             await self.app.snapshots.record_baseline(preset=preset)
-            await self.app.push_screen_wait(
-                ConfirmDialog("Installation completed successfully!", "Success", ok_only=True)
-            )
+            self.app.notify("Installation completed successfully!", severity="information")
         else:
-            await self.app.push_screen_wait(
-                ConfirmDialog(
-                    f"Installation failed (exit {exit_code}).\nCheck the log above.",
-                    "Failed",
-                    ok_only=True,
-                )
-            )
+            self.app.notify(f"Installation failed (exit {exit_code}). Check the log above.", severity="error")

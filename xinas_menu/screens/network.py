@@ -23,6 +23,14 @@ from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
+_RED = "\033[31m"
+_GRN = "\033[32m"
+_YLW = "\033[33m"
+_CYN = "\033[36m"
+_BLD = "\033[1m"
+_DIM = "\033[2m"
+_NC = "\033[0m"
+
 _MENU = [
     MenuItem("1", "View Current Configuration"),
     MenuItem("2", "Edit Interface IP Address"),
@@ -140,7 +148,8 @@ class NetworkScreen(Screen):
             )
             await self._show_network_info()
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
+            view = self.query_one("#net-content", ScrollableTextView)
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
 
     @work(exclusive=True)
     async def _apply_netplan(self) -> None:
@@ -160,11 +169,13 @@ class NetworkScreen(Screen):
             await self.app.snapshots.record(
                 "network_modify", diff_summary="Applied netplan configuration",
             )
-            await self.app.push_screen_wait(ConfirmDialog("Network configuration applied.", "Done", ok_only=True))
+            view = self.query_one("#net-content", ScrollableTextView)
+            view.set_content(f"{_GRN}Network configuration applied.{_NC}")
             await self._show_network_info()
         else:
-            await self.app.push_screen_wait(
-                ConfirmDialog(f"netplan apply failed:\n{(err or out)[:300]}", "Error", ok_only=True)
+            view = self.query_one("#net-content", ScrollableTextView)
+            view.set_content(
+                f"{_RED}netplan apply failed:{_NC}\n\n{(err or out)[:300]}"
             )
 
     @work(exclusive=True)

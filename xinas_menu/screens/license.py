@@ -14,7 +14,6 @@ from textual.widgets import Label, Footer
 from textual import work
 
 from xinas_menu.utils.formatting import grpc_short_error
-from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 from xinas_menu.widgets.textarea_dialog import TextAreaDialog
@@ -109,13 +108,7 @@ class LicenseScreen(Screen):
                 os.unlink(tmp)
                 raise
         except Exception as exc:
-            await self.app.push_screen_wait(
-                ConfirmDialog(
-                    f"Failed to write license file.\n{exc}",
-                    "Error",
-                    ok_only=True,
-                )
-            )
+            self.app.notify(f"Failed to write license file: {exc}", severity="error")
             return
 
         # Apply via gRPC
@@ -143,7 +136,7 @@ class LicenseScreen(Screen):
             err_msg = f"Failed to apply license.\n{grpc_short_error(err)}"
             if reverted:
                 err_msg += "\n\nPrevious license has been restored."
-            await self.app.push_screen_wait(ConfirmDialog(err_msg, "Error", ok_only=True))
+            self.app.notify(err_msg, severity="error")
 
 
 # ── Formatting helper ─────────────────────────────────────────────────────

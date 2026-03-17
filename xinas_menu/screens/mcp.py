@@ -20,6 +20,14 @@ from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 from xinas_menu.utils.config import CONFIG_PATH as _MCP_CONFIG, cfg_read as _cfg_read, cfg_write as _cfg_write
 
+_RED = "\033[31m"
+_GRN = "\033[32m"
+_YLW = "\033[33m"
+_CYN = "\033[36m"
+_BLD = "\033[1m"
+_DIM = "\033[2m"
+_NC = "\033[0m"
+
 _MCP_AUDIT = Path("/var/log/xinas/mcp-audit.jsonl")
 
 
@@ -118,7 +126,11 @@ class MCPScreen(Screen):
             msg = "xinas-nfs-helper started." if ok else f"Failed: {err}"
         if ok:
             self.app.audit.log("mcp.nfs_helper_toggle", "start" if not state.is_active else "stop", "OK")
-        await self.app.push_screen_wait(ConfirmDialog(msg, "NFS Helper", ok_only=True))
+        view = self.query_one("#mcp-content", ScrollableTextView)
+        if "Failed" in msg:
+            view.set_content(f"{_RED}{msg}{_NC}")
+        else:
+            view.set_content(f"{_GRN}{msg}{_NC}")
         await self._show_status()
 
     @work(exclusive=True)
@@ -216,8 +228,9 @@ class MCPScreen(Screen):
             ok, err = await loop.run_in_executor(None, lambda s=svc: ctl.restart(s))
             results.append(f"  {svc}: {'OK' if ok else err[:60]}")
         self.app.audit.log("mcp.restart", "both services", "OK")
-        await self.app.push_screen_wait(
-            ConfirmDialog("\n".join(results), "Restart Result", ok_only=True)
+        view = self.query_one("#mcp-content", ScrollableTextView)
+        view.set_content(
+            f"{_GRN}Services restarted:{_NC}\n\n" + "\n".join(results)
         )
         await self._show_status()
 
@@ -387,8 +400,10 @@ class RemoteAccessScreen(Screen):
             await loop.run_in_executor(None, _cfg_write, cfg)
             await loop.run_in_executor(None, _cfg_restart_service)
             self.app.audit.log("mcp.http_disable", "", "OK")
-            await self.app.push_screen_wait(
-                ConfirmDialog("HTTP transport disabled.\nMCP server is now stdio-only.", "HTTP Disabled", ok_only=True)
+            view = self.query_one("#ra-content", ScrollableTextView)
+            view.set_content(
+                f"{_GRN}HTTP transport disabled.{_NC}\n\n"
+                f"  {_DIM}MCP server is now stdio-only.{_NC}"
             )
         else:
             token_count = len(cfg.get("tokens", {}))
@@ -410,14 +425,11 @@ class RemoteAccessScreen(Screen):
             port = cfg.get("http_port", 8080)
             ip = _get_ip()
             self.app.audit.log("mcp.http_enable", f"port={port}", "OK")
-            await self.app.push_screen_wait(
-                ConfirmDialog(
-                    f"HTTP transport enabled on port {port}.\n\n"
-                    f"Remote clients can connect at:\n"
-                    f"  http://{ip}:{port}/mcp",
-                    "HTTP Enabled",
-                    ok_only=True,
-                )
+            view = self.query_one("#ra-content", ScrollableTextView)
+            view.set_content(
+                f"{_GRN}HTTP transport enabled on port {port}.{_NC}\n\n"
+                f"  {_DIM}Remote clients can connect at:{_NC}\n"
+                f"  http://{ip}:{port}/mcp"
             )
         self._refresh_menu()
 
@@ -446,9 +458,8 @@ class RemoteAccessScreen(Screen):
         await loop.run_in_executor(None, _cfg_write, cfg)
         await loop.run_in_executor(None, _cfg_restart_service)
         self.app.audit.log("mcp.http_port", str(port), "OK")
-        await self.app.push_screen_wait(
-            ConfirmDialog(f"HTTP port set to {port}.", "Port Updated", ok_only=True)
-        )
+        view = self.query_one("#ra-content", ScrollableTextView)
+        view.set_content(f"{_GRN}HTTP port set to {port}.{_NC}")
         self._refresh_menu()
 
     @work(exclusive=True)
@@ -478,12 +489,20 @@ class RemoteAccessScreen(Screen):
                 await loop.run_in_executor(None, _cfg_write, cfg)
                 await loop.run_in_executor(None, _cfg_restart_service)
                 self.app.audit.log("mcp.tls_disable", "", "OK")
-                await self.app.push_screen_wait(ConfirmDialog("TLS configuration removed.", "TLS Disabled", ok_only=True))
+                view = self.query_one("#ra-content", ScrollableTextView)
+                view.set_content(
+                    f"{_GRN}TLS configuration removed.{_NC}\n\n"
+                    f"  {_DIM}HTTP will use plain (unencrypted) connections.{_NC}"
+                )
             self._refresh_menu()
             return
 
         if not Path(cert_path).exists():
-            await self.app.push_screen_wait(ConfirmDialog(f"File not found:\n{cert_path}", "Error", ok_only=True))
+            view = self.query_one("#ra-content", ScrollableTextView)
+            view.set_content(
+                f"{_RED}File not found: {cert_path}{_NC}\n\n"
+                f"  {_DIM}Provide a valid path to the TLS certificate.{_NC}"
+            )
             return
 
         key_path = await self.app.push_screen_wait(
@@ -492,7 +511,11 @@ class RemoteAccessScreen(Screen):
         if not key_path:
             return
         if not Path(key_path).exists():
-            await self.app.push_screen_wait(ConfirmDialog(f"File not found:\n{key_path}", "Error", ok_only=True))
+            view = self.query_one("#ra-content", ScrollableTextView)
+            view.set_content(
+                f"{_RED}File not found: {key_path}{_NC}\n\n"
+                f"  {_DIM}Provide a valid path to the TLS private key.{_NC}"
+            )
             return
 
         ca_path = await self.app.push_screen_wait(
@@ -506,7 +529,11 @@ class RemoteAccessScreen(Screen):
         if ca_path is None:
             return
         if ca_path.strip() and not Path(ca_path).exists():
-            await self.app.push_screen_wait(ConfirmDialog(f"File not found:\n{ca_path}", "Error", ok_only=True))
+            view = self.query_one("#ra-content", ScrollableTextView)
+            view.set_content(
+                f"{_RED}File not found: {ca_path}{_NC}\n\n"
+                f"  {_DIM}Provide a valid path to the CA certificate.{_NC}"
+            )
             return
 
         new_tls: dict = {"cert": cert_path.strip(), "key": key_path.strip()}
@@ -517,10 +544,11 @@ class RemoteAccessScreen(Screen):
         await loop.run_in_executor(None, _cfg_restart_service)
         self.app.audit.log("mcp.tls_configure", f"cert={cert_path}", "OK")
 
-        msg = f"TLS configured:\n  Cert: {cert_path}\n  Key:  {key_path}"
+        msg = f"{_GRN}TLS configured:{_NC}\n\n  Cert: {cert_path}\n  Key:  {key_path}"
         if ca_path.strip():
             msg += f"\n  CA:   {ca_path}"
-        await self.app.push_screen_wait(ConfirmDialog(msg, "TLS Configured", ok_only=True))
+        view = self.query_one("#ra-content", ScrollableTextView)
+        view.set_content(msg)
         self._refresh_menu()
 
     @work(exclusive=True)
@@ -703,7 +731,11 @@ class TokenManagementScreen(Screen):
         labels = cfg.get("token_labels", {})
 
         if not tokens:
-            await self.app.push_screen_wait(ConfirmDialog("No tokens to remove.", "No Tokens", ok_only=True))
+            view = self.query_one("#tok-content", ScrollableTextView)
+            view.set_content(
+                f"{_YLW}No tokens to remove.{_NC}\n\n"
+                f"  {_DIM}Press A to add a token first.{_NC}"
+            )
             return
 
         # Build selection menu
@@ -738,7 +770,8 @@ class TokenManagementScreen(Screen):
         await loop.run_in_executor(None, _cfg_write, cfg)
         await loop.run_in_executor(None, _cfg_restart_service)
         self.app.audit.log("mcp.token_remove", rm_label, "OK")
-        await self.app.push_screen_wait(ConfirmDialog(f"Token '{rm_label}' removed.", "Removed", ok_only=True))
+        view = self.query_one("#tok-content", ScrollableTextView)
+        view.set_content(f"{_GRN}Token '{rm_label}' removed.{_NC}")
         self._refresh()
 
 
@@ -873,11 +906,12 @@ class SSHAccessScreen(Screen):
             return
         loop = asyncio.get_running_loop()
         ok, err = await loop.run_in_executor(None, _enable_root_ssh_sync)
+        view = self.query_one("#ssh-content", ScrollableTextView)
         if ok:
             self.app.audit.log("ssh.root_enable", "", "OK")
-            await self.app.push_screen_wait(ConfirmDialog("Root SSH enabled.", "Done", ok_only=True))
+            view.set_content(f"{_GRN}Root SSH enabled.{_NC}")
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
         await self._show_status()
 
     @work(exclusive=True)
@@ -892,7 +926,8 @@ class SSHAccessScreen(Screen):
             subprocess.run(["systemctl", "reload", "sshd"], capture_output=True)
             self.app.audit.log("ssh.root_disable", "", "OK")
         except Exception as exc:
-            await self.app.push_screen_wait(ConfirmDialog(str(exc), "Error", ok_only=True))
+            view = self.query_one("#ssh-content", ScrollableTextView)
+            view.set_content(f"{_RED}{exc}{_NC}")
         await self._show_status()
 
     @work(exclusive=True)
@@ -915,9 +950,11 @@ class SSHAccessScreen(Screen):
                 f.write(key.strip() + "\n")
             ak.chmod(0o600)
             self.app.audit.log("ssh.add_key", key[:30] + "…", "OK")
-            await self.app.push_screen_wait(ConfirmDialog("Key added.", "Done", ok_only=True))
+            view = self.query_one("#ssh-content", ScrollableTextView)
+            view.set_content(f"{_GRN}Key added.{_NC}")
         except Exception as exc:
-            await self.app.push_screen_wait(ConfirmDialog(str(exc), "Error", ok_only=True))
+            view = self.query_one("#ssh-content", ScrollableTextView)
+            view.set_content(f"{_RED}{exc}{_NC}")
         await self._show_status()
 
 

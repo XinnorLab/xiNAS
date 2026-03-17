@@ -63,8 +63,7 @@ class NetworkConfigScreen(Screen[bool]):
             )
             self.dismiss(True)
         else:
-            from xinas_menu.widgets.confirm_dialog import ConfirmDialog
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
+            self.app.notify(f"Failed: {err}", severity="error")
 
     async def _validate(self) -> None:
         if not self._cfg_path:
@@ -74,11 +73,10 @@ class NetworkConfigScreen(Screen[bool]):
         ok, err = await loop.run_in_executor(
             None, lambda: _save_netplan(self._cfg_path, content, apply=False)
         )
-        from xinas_menu.widgets.confirm_dialog import ConfirmDialog
         if ok:
-            await self.app.push_screen_wait(ConfirmDialog("Netplan config is valid.", "OK", ok_only=True))
+            self.app.notify("Netplan config is valid.", severity="information")
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Validation failed:\n{err}", "Error", ok_only=True))
+            self.app.notify(f"Validation failed: {err}", severity="error")
 
     def action_cancel(self) -> None:
         self.dismiss(False)

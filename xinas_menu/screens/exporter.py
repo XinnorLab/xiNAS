@@ -18,6 +18,14 @@ from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
+_RED = "\033[31m"
+_GRN = "\033[32m"
+_YLW = "\033[33m"
+_CYN = "\033[36m"
+_BLD = "\033[1m"
+_DIM = "\033[2m"
+_NC = "\033[0m"
+
 _GITHUB_RELEASES_API = "https://api.github.com/repos/xinnor/xiraid-exporter/releases/latest"
 _DEB_PATTERN = re.compile(r"xiraid.exporter.*\.deb", re.I)
 
@@ -111,14 +119,17 @@ class ExporterScreen(Screen):
         latest = await loop.run_in_executor(None, _get_latest_version)
 
         if not latest:
-            await self.app.push_screen_wait(
-                ConfirmDialog("Could not fetch latest version from GitHub.\nCheck internet connection.", "Error", ok_only=True)
+            view = self.query_one("#exp-content", ScrollableTextView)
+            view.set_content(
+                f"{_YLW}Could not fetch latest version from GitHub.{_NC}\n\n"
+                f"  {_DIM}Check internet connection.{_NC}"
             )
             return
 
         if installed and installed == latest:
-            await self.app.push_screen_wait(
-                ConfirmDialog(f"xiraid-exporter v{installed} is the latest version.", "Up to Date", ok_only=True)
+            view = self.query_one("#exp-content", ScrollableTextView)
+            view.set_content(
+                f"{_GRN}xiraid-exporter v{installed} is the latest version.{_NC}"
             )
             return
 
@@ -136,17 +147,25 @@ class ExporterScreen(Screen):
         ok, err = await loop.run_in_executor(None, lambda: _install_exporter(latest))
         if ok:
             self.app.audit.log("exporter.install", latest or "", "OK")
-            await self.app.push_screen_wait(ConfirmDialog(f"xiraid-exporter v{latest} installed.", "Done", ok_only=True))
+            view.set_content(
+                f"{_GRN}xiraid-exporter v{latest} installed.{_NC}"
+            )
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
+            view.set_content(
+                f"{_RED}Failed: {err}{_NC}"
+            )
         await self._show_status()
 
     @work(exclusive=True)
     async def _restart_service(self) -> None:
         loop = asyncio.get_running_loop()
         installed = await loop.run_in_executor(None, _get_installed_version)
+        view = self.query_one("#exp-content", ScrollableTextView)
         if not installed:
-            await self.app.push_screen_wait(ConfirmDialog("xiraid-exporter is not installed.", "Not Installed", ok_only=True))
+            view.set_content(
+                f"{_YLW}xiraid-exporter is not installed.{_NC}\n\n"
+                f"  {_DIM}Use 'Install / Update' to set it up.{_NC}"
+            )
             return
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog("Restart xiraid-exporter service?", "Confirm")
@@ -158,17 +177,21 @@ class ExporterScreen(Screen):
         ok, err = await loop.run_in_executor(None, lambda: ctl.restart("xiraid-exporter"))
         if ok:
             self.app.audit.log("exporter.restart", "", "OK")
-            await self.app.push_screen_wait(ConfirmDialog("Service restarted.", "Done", ok_only=True))
+            view.set_content(f"{_GRN}Service restarted.{_NC}")
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
         await self._show_status()
 
     @work(exclusive=True)
     async def _uninstall(self) -> None:
         loop = asyncio.get_running_loop()
         installed = await loop.run_in_executor(None, _get_installed_version)
+        view = self.query_one("#exp-content", ScrollableTextView)
         if not installed:
-            await self.app.push_screen_wait(ConfirmDialog("xiraid-exporter is not installed.", "Not Installed", ok_only=True))
+            view.set_content(
+                f"{_YLW}xiraid-exporter is not installed.{_NC}\n\n"
+                f"  {_DIM}Use 'Install / Update' to set it up.{_NC}"
+            )
             return
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog("Uninstall xiraid-exporter and stop the service?", "Confirm")
@@ -184,11 +207,9 @@ class ExporterScreen(Screen):
         )
         if r.returncode == 0:
             self.app.audit.log("exporter.uninstall", "", "OK")
-            await self.app.push_screen_wait(ConfirmDialog("Exporter uninstalled.", "Done", ok_only=True))
+            view.set_content(f"{_GRN}Exporter uninstalled.{_NC}")
         else:
-            await self.app.push_screen_wait(
-                ConfirmDialog(f"Failed:\n{r.stderr[:200]}", "Error", ok_only=True)
-            )
+            view.set_content(f"{_RED}Failed:\n{r.stderr[:200]}{_NC}")
         await self._show_status()
 
 

@@ -15,6 +15,14 @@ from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
+_RED = "\033[31m"
+_GRN = "\033[32m"
+_YLW = "\033[33m"
+_CYN = "\033[36m"
+_BLD = "\033[1m"
+_DIM = "\033[2m"
+_NC = "\033[0m"
+
 _MENU = [
     MenuItem("1", "Restart NFS Server"),
     MenuItem("2", "View System Logs"),
@@ -88,11 +96,12 @@ class QuickActionsScreen(Screen):
         loop = asyncio.get_running_loop()
         from xinas_menu.utils.service_ctl import service_restart
         ok, err = await loop.run_in_executor(None, lambda: service_restart("nfs-server"))
+        view = self.query_one("#qa-content", ScrollableTextView)
         if ok:
             self.app.audit.log("service.restart", "nfs-server", "OK")
-            await self.app.push_screen_wait(ConfirmDialog("NFS server restarted.", "Done", ok_only=True))
+            view.set_content(f"{_GRN}NFS server restarted.{_NC}")
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
 
     @work(exclusive=True)
     async def _view_logs(self) -> None:
