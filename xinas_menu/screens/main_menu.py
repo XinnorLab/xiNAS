@@ -129,20 +129,38 @@ def _build_mini_status() -> str:
     except Exception:
         pass
 
-    # NFS exports
+    lines.append("")
+
+    # ── NFS Shares ─────────────────────────────────────────────
+    lines.append(f"  {_BLD}{_CYN}NFS Shares{_NC}")
     try:
         r = subprocess.run(
             ["exportfs", "-s"], capture_output=True, text=True, timeout=3,
         )
-        exports = [l.split()[0] for l in r.stdout.splitlines() if l.strip()]
-        if exports:
-            lines.append(f"  {_DIM}Exports:{_NC}     {len(exports)}")
-            for exp in exports[:4]:
-                lines.append(f"    {_DIM}•{_NC} {exp}")
-            if len(exports) > 4:
-                lines.append(f"    {_DIM}  … +{len(exports) - 4} more{_NC}")
+        exports = list(dict.fromkeys(
+            l.split()[0] for l in r.stdout.splitlines() if l.strip()
+        ))
+        if not exports:
+            lines.append(f"  {_DIM}No exports configured{_NC}")
+        else:
+            for path in exports:
+                usage = _share_usage(path)
+                if usage:
+                    used, total, pct = usage
+                    color = _GRN if pct < 80 else (_YLW if pct < 90 else _RED)
+                    bar_w = 10
+                    filled = round(pct / 100 * bar_w)
+                    bar = f"{color}{'█' * filled}{'░' * (bar_w - filled)}{_NC}"
+                    lines.append(
+                        f"  {color}●{_NC} {path:<16} {bar}  {pct:>3}%  "
+                        f"{_DIM}({used} / {total}){_NC}"
+                    )
+                else:
+                    lines.append(
+                        f"  {_RED}●{_NC} {path:<16} {_RED}unavailable{_NC}"
+                    )
     except Exception:
-        pass
+        lines.append(f"  {_DIM}Could not read exports{_NC}")
 
     lines.append("")
 
@@ -233,6 +251,22 @@ def _build_mini_status() -> str:
         lines.append(f"     {_DIM}Server IP:{_NC} {_GRN}{server_ip}{_NC}")
 
     return "\n".join(lines)
+
+
+def _share_usage(path: str) -> tuple[str, str, int] | None:
+    """Return (used, total, percent_int) for a mount path, or None."""
+    try:
+        r = subprocess.run(
+            ["df", "-h", path], capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode == 0:
+            parts = r.stdout.strip().splitlines()[-1].split()
+            if len(parts) >= 5:
+                pct = int(parts[4].rstrip("%"))
+                return (parts[2], parts[1], pct)
+    except Exception:
+        pass
+    return None
 
 
 def _highperf_iface_names() -> list[str]:
