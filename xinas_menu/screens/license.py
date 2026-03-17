@@ -26,7 +26,7 @@ _LICENSE_BACKUP = "/tmp/license.bak"
 
 _MENU = [
     MenuItem("1", "Show License"),
-    MenuItem("2", "Set License"),
+    MenuItem("2", "Update License"),
     MenuItem("0", "Back"),
 ]
 
@@ -63,14 +63,7 @@ class LicenseScreen(Screen):
         view.set_content("  Loading license info...")
         ok, data, err = await self.app.grpc.license_show()
         if ok:
-            GRN, BLD, DIM, NC = "\033[32m", "\033[1m", "\033[2m", "\033[0m"
-            lines = [f"{BLD}License Information{NC}", ""]
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    lines.append(f"  {DIM}{k}:{NC}  {GRN}{v}{NC}")
-            else:
-                lines.append(f"  {data}")
-            view.set_content("\n".join(lines))
+            view.set_content(_format_license(data))
         else:
             view.set_content(f"\033[31m  Error: {grpc_short_error(err)}\033[0m")
 
@@ -89,7 +82,7 @@ class LicenseScreen(Screen):
         license_text = await self.app.push_screen_wait(
             TextAreaDialog(
                 "Paste the license text below:",
-                "Set License",
+                "Update License",
                 default=existing,
             )
         )
@@ -150,3 +143,91 @@ class LicenseScreen(Screen):
             if reverted:
                 err_msg += "\n\nPrevious license has been restored."
             await self.app.push_screen_wait(ConfirmDialog(err_msg, "Error"))
+
+
+# ── Formatting helper ─────────────────────────────────────────────────────
+
+_BLD = "\033[1m"
+_DIM = "\033[2m"
+_GRN = "\033[32m"
+_CYN = "\033[36m"
+_YLW = "\033[33m"
+_RED = "\033[31m"
+_NC = "\033[0m"
+
+# Display labels and grouping order for license fields
+_LICENSE_FIELDS = [
+    # (key, label, group)
+    ("status", "Status", "status"),
+    ("expired", "Expires", "status"),
+    ("created", "Created", "status"),
+    ("accepted", "Accepted", "status"),
+    ("version", "Version", "details"),
+    ("crypto_version", "Crypto version", "details"),
+    ("Kernel version", "Kernel", "details"),
+    ("type", "Type", "capacity"),
+    ("disks", "Disks (max)", "capacity"),
+    ("disks_in_use", "Disks in use", "capacity"),
+    ("levels", "RAID levels", "capacity"),
+]
+
+
+def _format_license(data) -> str:
+    """Format license data into a structured, readable view."""
+    if not isinstance(data, dict):
+        return f"  {data}"
+
+    lines: list[str] = []
+    sep = f"  {_DIM}{'─' * 50}{_NC}"
+
+    # Title
+    lines.append(f"  {_BLD}{_CYN}License Information{_NC}")
+    lines.append(sep)
+
+    # Status badge
+    status = str(data.get("status", "unknown")).lower()
+    if status == "valid":
+        badge = f"{_GRN}● VALID{_NC}"
+    elif status in ("expired", "invalid"):
+        badge = f"{_RED}● {status.upper()}{_NC}"
+    else:
+        badge = f"{_YLW}● {status.upper()}{_NC}"
+    lines.append(f"  {badge}")
+    lines.append("")
+
+    # Collect known fields by group, track what we've shown
+    shown: set[str] = set()
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for key, label, group in _LICENSE_FIELDS:
+        if key in data and key != "status":
+            val = data[key]
+            groups.setdefault(group, []).append((label, str(val)))
+            shown.add(key)
+
+    # Render groups
+    group_titles = {
+        "status": "Validity",
+        "details": "Details",
+        "capacity": "Capacity",
+    }
+    for gid in ("status", "details", "capacity"):
+        items = groups.get(gid)
+        if not items:
+            continue
+        lines.append(f"  {_BLD}{group_titles[gid]}{_NC}")
+        for label, val in items:
+            lines.append(f"    {_DIM}{label + ':':<20}{_NC} {val}")
+        lines.append("")
+
+    # Any remaining fields (except sensitive keys)
+    hidden_keys = {"hwkey", "license_key", "status"}
+    extra = {k: v for k, v in data.items() if k not in shown and k not in hidden_keys}
+    if extra:
+        lines.append(f"  {_BLD}Other{_NC}")
+        for k, v in extra.items():
+            lines.append(f"    {_DIM}{k + ':':<20}{_NC} {v}")
+        lines.append("")
+
+    lines.append(sep)
+
+    return "\n".join(lines)
