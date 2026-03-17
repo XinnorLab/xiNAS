@@ -1,7 +1,6 @@
 # OS Layer Specification
 
-All modules in `src/os/` read from sysfs/procfs or connect to local daemons.
-**No subprocesses are ever spawned from this layer.**
+All modules in `src/os/` read from sysfs/procfs, connect to local daemons, or bridge to Python subprocesses for complex operations.
 
 ---
 
@@ -108,6 +107,55 @@ SATA SMART returns `UNSUPPORTED` — smartctl is not called.
 
 ### Label conventions (xiraid-exporter)
 Labels used for filtering: `raid_name`, `drive`
+
+---
+
+## `src/os/healthEngine.ts`
+
+### Subprocess Bridge
+
+Invokes the Python health engine as a subprocess, following the same pattern as `configHistory.ts`.
+
+| Parameter | Value |
+|---|---|
+| Command | `python3 -m xinas_menu.health <profile_path> <log_dir> --json --no-save` |
+| Profile paths | `/opt/xiNAS/healthcheck_profiles/`, `/home/xinnor/xiNAS/healthcheck_profiles/` |
+| Timeout (quick) | 60,000 ms |
+| Timeout (standard) | 300,000 ms |
+| Timeout (deep) | 600,000 ms |
+
+### Output Format
+
+Parses JSON from stdout into `EngineReport`:
+
+```typescript
+interface EngineReport {
+  metadata: { profile: string; hostname: string; timestamp: string; duration: string; description: string };
+  overall: string;               // PASS, WARN, FAIL
+  summary: { pass: number; warn: number; fail: number; skip: number };
+  checks: EngineCheckResult[];   // individual check results
+}
+
+interface EngineCheckResult {
+  section: string;   // e.g. "PerfTuning", "VM", "Filesystem"
+  name: string;      // e.g. "nvme_poll_queues", "dirty_ratio"
+  status: string;    // PASS, WARN, FAIL, SKIP
+  actual: string;
+  expected: string;
+  evidence: string;
+  impact: string;
+  fix_hint: string;
+}
+```
+
+### Error Handling
+
+- Engine timeout → `McpToolError(TIMEOUT)`
+- Non-zero exit → `McpToolError(INTERNAL)` with stderr
+- JSON parse failure → `McpToolError(INTERNAL)`
+- Profile not found → `McpToolError(NOT_FOUND)`
+
+In `health.ts`, engine failure is **non-fatal** — reported as a single `UNKNOWN` check so gRPC-based results still return.
 
 ---
 

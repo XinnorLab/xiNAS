@@ -73,6 +73,8 @@ Both modes MUST be supported. Each controller MUST carry a stable, unique `contr
 | `health.run_check` | controller_id, profile (quick/standard/deep) | structured report per check: status (OK/WARN/CRIT), symptom, impact, evidence, recommended_action |
 | `health.get_alerts` | controller_id, since, severity_min | active/recent alerts with stable IDs |
 
+**Architecture:** `health.run_check` uses a hybrid approach. gRPC-based checks (RAID integrity, license, spare pools, faulty counts) run in TypeScript using the xiRAID API. All OS-level checks (services, network, VM/sysctl, filesystem, perf tuning, NVMe health, RDMA, Kerberos) are delegated to the Python health engine via subprocess bridge (`python3 -m xinas_menu.health`), following the same pattern as `config.*` tools. The Python engine is driven by YAML profile files (`healthcheck_profiles/`) that define which checks to run and their expected values per profile.
+
 ### 4.4 Disk Lifecycle
 
 | Tool | Inputs | Output |

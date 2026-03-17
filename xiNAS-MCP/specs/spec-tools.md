@@ -68,18 +68,46 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 
 ## Health Check Details
 
+### Architecture
+
+`health.run_check` uses a hybrid approach:
+
+1. **gRPC checks (TypeScript)** — xiRAID-specific checks that require the xiRAID gRPC API: RAID integrity, license validity, spare pools, faulty drive counts.
+2. **Python health engine (subprocess)** — OS-level checks delegated to `python3 -m xinas_menu.health` via subprocess bridge (`src/os/healthEngine.ts`). Follows the same subprocess pattern as `configHistory.ts`.
+
+The Python engine is the single source of truth for all OS-level health checks. Status mapping: `PASS`→`OK`, `WARN`→`WARN`, `FAIL`→`CRIT`, `SKIP`→filtered out.
+
+### Subprocess Protocol
+
+- Command: `python3 -m xinas_menu.health <profile_path> /tmp --json --no-save`
+- Timeout per profile: quick=60s, standard=300s, deep=600s
+- Success: exit 0, stdout = JSON report (`EngineReport`)
+- Error: exit non-zero — reported as single `UNKNOWN` check (non-fatal)
+
 ### Profile Coverage
+
+#### gRPC Checks (TypeScript)
 
 | Check | quick | standard | deep |
 |---|---|---|---|
 | RAID integrity (raidShow) | ✓ | ✓ | ✓ |
-| NFS daemons | ✓ | ✓ | ✓ |
-| Network links | ✓ | ✓ | ✓ |
-| Memory pressure | ✓ | ✓ | ✓ |
-| License validity | ✓ | ✓ | ✓ |
-| Spare pools | — | ✓ | ✓ |
-| Faulty counts | — | ✓ | ✓ |
-| Drive health (NVMe sysfs) | — | ✓ | ✓ |
+| License validity (licenseShow) | ✓ | ✓ | ✓ |
+| Spare pools (poolShow) | — | ✓ | ✓ |
+| Faulty drive counts (driveFaultyCountShow) | — | ✓ | ✓ |
+
+#### Python Engine Checks (subprocess)
+
+| Section | Check | quick | standard | deep |
+|---|---|---|---|---|
+| Services | NFS daemons, systemd units | ✓ | ✓ | ✓ |
+| Network | Link state, MTU, somaxconn, SunRPC slots | ✓ | ✓ | ✓ |
+| VM (sysctl) | dirty_ratio, swappiness, MGLRU, watermark_scale | ✓ | ✓ | ✓ |
+| NVMe Health | Temperature, spare, media errors | — | ✓ | ✓ |
+| Memory | Pressure, huge pages | ✓ | ✓ | ✓ |
+| Filesystem | XFS mount options, stripe alignment | — | ✓ | ✓ |
+| PerfTuning | NVMe poll_queues, read_ahead, CPU c-state, IRQ balance, I/O scheduler | ✓ | ✓ | ✓ |
+| RDMA | IB device state, GID table | — | — | ✓ |
+| Kerberos | Keytab, time sync, krb5.conf | — | — | ✓ |
 
 ### Alert Deduplication
 Alerts are keyed by `check_id`. A new check run updates `last_seen` if the alert already exists (same `check_id`, not acknowledged). New alerts are pushed to ring buffer (max 100).
