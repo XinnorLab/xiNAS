@@ -176,6 +176,7 @@ class FilesystemScreen(Screen):
                     f"Currently {len(arrays)} array(s) found.\n\n"
                     f"Please create RAID arrays first via Storage → RAID Management.",
                     "Cannot Create Filesystem",
+                    ok_only=True,
                 )
             )
             return
