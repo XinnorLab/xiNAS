@@ -118,7 +118,7 @@ class MCPScreen(Screen):
             msg = "xinas-nfs-helper started." if ok else f"Failed: {err}"
         if ok:
             self.app.audit.log("mcp.nfs_helper_toggle", "start" if not state.is_active else "stop", "OK")
-        await self.app.push_screen_wait(ConfirmDialog(msg, "NFS Helper"))
+        await self.app.push_screen_wait(ConfirmDialog(msg, "NFS Helper", ok_only=True))
         await self._show_status()
 
     @work(exclusive=True)
@@ -217,7 +217,7 @@ class MCPScreen(Screen):
             results.append(f"  {svc}: {'OK' if ok else err[:60]}")
         self.app.audit.log("mcp.restart", "both services", "OK")
         await self.app.push_screen_wait(
-            ConfirmDialog("\n".join(results), "Restart Result")
+            ConfirmDialog("\n".join(results), "Restart Result", ok_only=True)
         )
         await self._show_status()
 
@@ -388,7 +388,7 @@ class RemoteAccessScreen(Screen):
             await loop.run_in_executor(None, _cfg_restart_service)
             self.app.audit.log("mcp.http_disable", "", "OK")
             await self.app.push_screen_wait(
-                ConfirmDialog("HTTP transport disabled.\nMCP server is now stdio-only.", "HTTP Disabled")
+                ConfirmDialog("HTTP transport disabled.\nMCP server is now stdio-only.", "HTTP Disabled", ok_only=True)
             )
         else:
             token_count = len(cfg.get("tokens", {}))
@@ -416,6 +416,7 @@ class RemoteAccessScreen(Screen):
                     f"Remote clients can connect at:\n"
                     f"  http://{ip}:{port}/mcp",
                     "HTTP Enabled",
+                    ok_only=True,
                 )
             )
         self._refresh_menu()
@@ -446,7 +447,7 @@ class RemoteAccessScreen(Screen):
         await loop.run_in_executor(None, _cfg_restart_service)
         self.app.audit.log("mcp.http_port", str(port), "OK")
         await self.app.push_screen_wait(
-            ConfirmDialog(f"HTTP port set to {port}.", "Port Updated")
+            ConfirmDialog(f"HTTP port set to {port}.", "Port Updated", ok_only=True)
         )
         self._refresh_menu()
 
@@ -477,12 +478,12 @@ class RemoteAccessScreen(Screen):
                 await loop.run_in_executor(None, _cfg_write, cfg)
                 await loop.run_in_executor(None, _cfg_restart_service)
                 self.app.audit.log("mcp.tls_disable", "", "OK")
-                await self.app.push_screen_wait(ConfirmDialog("TLS configuration removed.", "TLS Disabled"))
+                await self.app.push_screen_wait(ConfirmDialog("TLS configuration removed.", "TLS Disabled", ok_only=True))
             self._refresh_menu()
             return
 
         if not Path(cert_path).exists():
-            await self.app.push_screen_wait(ConfirmDialog(f"File not found:\n{cert_path}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"File not found:\n{cert_path}", "Error", ok_only=True))
             return
 
         key_path = await self.app.push_screen_wait(
@@ -491,7 +492,7 @@ class RemoteAccessScreen(Screen):
         if not key_path:
             return
         if not Path(key_path).exists():
-            await self.app.push_screen_wait(ConfirmDialog(f"File not found:\n{key_path}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"File not found:\n{key_path}", "Error", ok_only=True))
             return
 
         ca_path = await self.app.push_screen_wait(
@@ -505,7 +506,7 @@ class RemoteAccessScreen(Screen):
         if ca_path is None:
             return
         if ca_path.strip() and not Path(ca_path).exists():
-            await self.app.push_screen_wait(ConfirmDialog(f"File not found:\n{ca_path}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"File not found:\n{ca_path}", "Error", ok_only=True))
             return
 
         new_tls: dict = {"cert": cert_path.strip(), "key": key_path.strip()}
@@ -519,7 +520,7 @@ class RemoteAccessScreen(Screen):
         msg = f"TLS configured:\n  Cert: {cert_path}\n  Key:  {key_path}"
         if ca_path.strip():
             msg += f"\n  CA:   {ca_path}"
-        await self.app.push_screen_wait(ConfirmDialog(msg, "TLS Configured"))
+        await self.app.push_screen_wait(ConfirmDialog(msg, "TLS Configured", ok_only=True))
         self._refresh_menu()
 
     @work(exclusive=True)
@@ -689,6 +690,7 @@ class TokenManagementScreen(Screen):
                 f"{token_value}\n\n"
                 f"Use as Bearer token in Authorization header.",
                 "Token Created",
+                ok_only=True,
             )
         )
         self._refresh()
@@ -701,7 +703,7 @@ class TokenManagementScreen(Screen):
         labels = cfg.get("token_labels", {})
 
         if not tokens:
-            await self.app.push_screen_wait(ConfirmDialog("No tokens to remove.", "No Tokens"))
+            await self.app.push_screen_wait(ConfirmDialog("No tokens to remove.", "No Tokens", ok_only=True))
             return
 
         # Build selection menu
@@ -736,7 +738,7 @@ class TokenManagementScreen(Screen):
         await loop.run_in_executor(None, _cfg_write, cfg)
         await loop.run_in_executor(None, _cfg_restart_service)
         self.app.audit.log("mcp.token_remove", rm_label, "OK")
-        await self.app.push_screen_wait(ConfirmDialog(f"Token '{rm_label}' removed.", "Removed"))
+        await self.app.push_screen_wait(ConfirmDialog(f"Token '{rm_label}' removed.", "Removed", ok_only=True))
         self._refresh()
 
 
@@ -873,9 +875,9 @@ class SSHAccessScreen(Screen):
         ok, err = await loop.run_in_executor(None, _enable_root_ssh_sync)
         if ok:
             self.app.audit.log("ssh.root_enable", "", "OK")
-            await self.app.push_screen_wait(ConfirmDialog("Root SSH enabled.", "Done"))
+            await self.app.push_screen_wait(ConfirmDialog("Root SSH enabled.", "Done", ok_only=True))
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
         await self._show_status()
 
     @work(exclusive=True)
@@ -890,7 +892,7 @@ class SSHAccessScreen(Screen):
             subprocess.run(["systemctl", "reload", "sshd"], capture_output=True)
             self.app.audit.log("ssh.root_disable", "", "OK")
         except Exception as exc:
-            await self.app.push_screen_wait(ConfirmDialog(str(exc), "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(str(exc), "Error", ok_only=True))
         await self._show_status()
 
     @work(exclusive=True)
@@ -913,9 +915,9 @@ class SSHAccessScreen(Screen):
                 f.write(key.strip() + "\n")
             ak.chmod(0o600)
             self.app.audit.log("ssh.add_key", key[:30] + "…", "OK")
-            await self.app.push_screen_wait(ConfirmDialog("Key added.", "Done"))
+            await self.app.push_screen_wait(ConfirmDialog("Key added.", "Done", ok_only=True))
         except Exception as exc:
-            await self.app.push_screen_wait(ConfirmDialog(str(exc), "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(str(exc), "Error", ok_only=True))
         await self._show_status()
 
 

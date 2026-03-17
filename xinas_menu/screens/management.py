@@ -65,5 +65,5 @@ class ManagementScreen(Screen):
         else:
             from xinas_menu.widgets.confirm_dialog import ConfirmDialog
             await self.app.push_screen_wait(
-                ConfirmDialog("xiNAS is up to date.", "Updates")
+                ConfirmDialog("xiNAS is up to date.", "Updates", ok_only=True)
             )

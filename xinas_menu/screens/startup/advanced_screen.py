@@ -108,9 +108,9 @@ class AdvancedScreen(Screen):
                 )
             )
             if r.returncode == 0:
-                await self.app.push_screen_wait(ConfirmDialog("Remote URL updated.", "Done"))
+                await self.app.push_screen_wait(ConfirmDialog("Remote URL updated.", "Done", ok_only=True))
             else:
-                await self.app.push_screen_wait(ConfirmDialog(r.stderr[:200], "Error"))
+                await self.app.push_screen_wait(ConfirmDialog(r.stderr[:200], "Error", ok_only=True))
 
     async def _check_updates(self) -> None:
         view = self.query_one("#adv-content", ScrollableTextView)

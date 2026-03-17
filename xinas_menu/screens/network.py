@@ -140,7 +140,7 @@ class NetworkScreen(Screen):
             )
             await self._show_network_info()
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
 
     @work(exclusive=True)
     async def _apply_netplan(self) -> None:
@@ -160,11 +160,11 @@ class NetworkScreen(Screen):
             await self.app.snapshots.record(
                 "network_modify", diff_summary="Applied netplan configuration",
             )
-            await self.app.push_screen_wait(ConfirmDialog("Network configuration applied.", "Done"))
+            await self.app.push_screen_wait(ConfirmDialog("Network configuration applied.", "Done", ok_only=True))
             await self._show_network_info()
         else:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"netplan apply failed:\n{(err or out)[:300]}", "Error")
+                ConfirmDialog(f"netplan apply failed:\n{(err or out)[:300]}", "Error", ok_only=True)
             )
 
     @work(exclusive=True)

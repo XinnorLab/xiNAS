@@ -113,6 +113,7 @@ class LicenseScreen(Screen):
                 ConfirmDialog(
                     f"Failed to write license file.\n{exc}",
                     "Error",
+                    ok_only=True,
                 )
             )
             return
@@ -142,7 +143,7 @@ class LicenseScreen(Screen):
             err_msg = f"Failed to apply license.\n{grpc_short_error(err)}"
             if reverted:
                 err_msg += "\n\nPrevious license has been restored."
-            await self.app.push_screen_wait(ConfirmDialog(err_msg, "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(err_msg, "Error", ok_only=True))
 
 
 # ── Formatting helper ─────────────────────────────────────────────────────

@@ -87,7 +87,7 @@ class RAIDConfigScreen(Screen[bool]):
             self.dismiss(True)
         else:
             from xinas_menu.widgets.confirm_dialog import ConfirmDialog
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
 
     def action_cancel(self) -> None:
         self.dismiss(False)

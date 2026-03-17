@@ -83,6 +83,7 @@ class InstallScreen(Screen):
                     "No license found at /tmp/license.\n"
                     "Please enter your license first.",
                     "License Required",
+                    ok_only=True,
                 )
             )
             return
@@ -101,12 +102,13 @@ class InstallScreen(Screen):
         if exit_code == 0:
             await self.app.snapshots.record_baseline(preset=preset)
             await self.app.push_screen_wait(
-                ConfirmDialog("Installation completed successfully!", "Success")
+                ConfirmDialog("Installation completed successfully!", "Success", ok_only=True)
             )
         else:
             await self.app.push_screen_wait(
                 ConfirmDialog(
                     f"Installation failed (exit {exit_code}).\nCheck the log above.",
                     "Failed",
+                    ok_only=True,
                 )
             )

@@ -56,7 +56,7 @@ class StartupApp(App):
             self._update_checker.restart_self()
         else:
             from xinas_menu.widgets.confirm_dialog import ConfirmDialog
-            await self.push_screen_wait(ConfirmDialog(f"Update failed: {msg}", "Error"))
+            await self.push_screen_wait(ConfirmDialog(f"Update failed: {msg}", "Error", ok_only=True))
 
     async def on_unmount(self) -> None:
         await self.grpc.close()

@@ -230,6 +230,7 @@ class SnapshotDetailScreen(Screen):
                     "The baseline snapshot is immutable and cannot be used\n"
                     "as a direct rollback target.",
                     "Rollback Not Available",
+                    ok_only=True,
                 )
             )
             return
@@ -240,6 +241,7 @@ class SnapshotDetailScreen(Screen):
                     f"This snapshot is of type '{manifest.type}' and is not\n"
                     f"eligible for rollback.",
                     "Rollback Not Available",
+                    ok_only=True,
                 )
             )
             return

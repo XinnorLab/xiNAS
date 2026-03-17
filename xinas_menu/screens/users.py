@@ -131,7 +131,7 @@ class UsersScreen(Screen):
             self.app.audit.log("user.create", username, "OK")
             await self._list_users()
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
 
     @work(exclusive=True)
     async def _delete_user(self) -> None:
@@ -161,7 +161,7 @@ class UsersScreen(Screen):
             self.app.audit.log("user.delete", username, "OK")
             await self._list_users()
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
 
     @work(exclusive=True)
     async def _set_quota(self) -> None:
@@ -225,9 +225,9 @@ class UsersScreen(Screen):
         )
         if ok:
             self.app.audit.log("user.quota", f"{username}@{export_path}", "OK")
-            await self.app.push_screen_wait(ConfirmDialog("Quota set.", "Done"))
+            await self.app.push_screen_wait(ConfirmDialog("Quota set.", "Done", ok_only=True))
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
 
     @work(exclusive=True)
     async def _show_quotas(self) -> None:

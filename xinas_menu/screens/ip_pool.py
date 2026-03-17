@@ -403,7 +403,7 @@ class IPPoolScreen(Screen):
             )
         except Exception as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Failed to save config: {exc}", "Error")
+                ConfirmDialog(f"Failed to save config: {exc}", "Error", ok_only=True)
             )
 
     @work(exclusive=True)
@@ -490,13 +490,14 @@ class IPPoolScreen(Screen):
                 ConfirmDialog(
                     "No high-speed interfaces detected.\nCannot apply pool configuration.",
                     "Error",
+                    ok_only=True,
                 )
             )
             return
 
         allocations, err = _allocate_ips(cfg, interfaces)
         if err:
-            await self.app.push_screen_wait(ConfirmDialog(f"Allocation error:\n{err}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Allocation error:\n{err}", "Error", ok_only=True))
             return
 
         summary = "\n".join(
@@ -528,10 +529,10 @@ class IPPoolScreen(Screen):
                 "network_modify",
                 diff_summary=f"Applied IP pool: {len(allocations)} interfaces configured",
             )
-            await self.app.push_screen_wait(ConfirmDialog(msg, "Success"))
+            await self.app.push_screen_wait(ConfirmDialog(msg, "Success", ok_only=True))
         else:
             self.app.audit.log("network.pool_apply", msg[:200], "FAIL")
-            await self.app.push_screen_wait(ConfirmDialog(msg, "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(msg, "Error", ok_only=True))
 
     @work(exclusive=True)
     async def _show_current_settings(self) -> None:

@@ -112,13 +112,13 @@ class ExporterScreen(Screen):
 
         if not latest:
             await self.app.push_screen_wait(
-                ConfirmDialog("Could not fetch latest version from GitHub.\nCheck internet connection.", "Error")
+                ConfirmDialog("Could not fetch latest version from GitHub.\nCheck internet connection.", "Error", ok_only=True)
             )
             return
 
         if installed and installed == latest:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"xiraid-exporter v{installed} is the latest version.", "Up to Date")
+                ConfirmDialog(f"xiraid-exporter v{installed} is the latest version.", "Up to Date", ok_only=True)
             )
             return
 
@@ -136,9 +136,9 @@ class ExporterScreen(Screen):
         ok, err = await loop.run_in_executor(None, lambda: _install_exporter(latest))
         if ok:
             self.app.audit.log("exporter.install", latest or "", "OK")
-            await self.app.push_screen_wait(ConfirmDialog(f"xiraid-exporter v{latest} installed.", "Done"))
+            await self.app.push_screen_wait(ConfirmDialog(f"xiraid-exporter v{latest} installed.", "Done", ok_only=True))
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
         await self._show_status()
 
     @work(exclusive=True)
@@ -146,7 +146,7 @@ class ExporterScreen(Screen):
         loop = asyncio.get_running_loop()
         installed = await loop.run_in_executor(None, _get_installed_version)
         if not installed:
-            await self.app.push_screen_wait(ConfirmDialog("xiraid-exporter is not installed.", "Not Installed"))
+            await self.app.push_screen_wait(ConfirmDialog("xiraid-exporter is not installed.", "Not Installed", ok_only=True))
             return
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog("Restart xiraid-exporter service?", "Confirm")
@@ -158,9 +158,9 @@ class ExporterScreen(Screen):
         ok, err = await loop.run_in_executor(None, lambda: ctl.restart("xiraid-exporter"))
         if ok:
             self.app.audit.log("exporter.restart", "", "OK")
-            await self.app.push_screen_wait(ConfirmDialog("Service restarted.", "Done"))
+            await self.app.push_screen_wait(ConfirmDialog("Service restarted.", "Done", ok_only=True))
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
         await self._show_status()
 
     @work(exclusive=True)
@@ -168,7 +168,7 @@ class ExporterScreen(Screen):
         loop = asyncio.get_running_loop()
         installed = await loop.run_in_executor(None, _get_installed_version)
         if not installed:
-            await self.app.push_screen_wait(ConfirmDialog("xiraid-exporter is not installed.", "Not Installed"))
+            await self.app.push_screen_wait(ConfirmDialog("xiraid-exporter is not installed.", "Not Installed", ok_only=True))
             return
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog("Uninstall xiraid-exporter and stop the service?", "Confirm")
@@ -184,10 +184,10 @@ class ExporterScreen(Screen):
         )
         if r.returncode == 0:
             self.app.audit.log("exporter.uninstall", "", "OK")
-            await self.app.push_screen_wait(ConfirmDialog("Exporter uninstalled.", "Done"))
+            await self.app.push_screen_wait(ConfirmDialog("Exporter uninstalled.", "Done", ok_only=True))
         else:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Failed:\n{r.stderr[:200]}", "Error")
+                ConfirmDialog(f"Failed:\n{r.stderr[:200]}", "Error", ok_only=True)
             )
         await self._show_status()
 

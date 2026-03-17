@@ -104,7 +104,7 @@ class XiNASApp(App):
         else:
             from xinas_menu.widgets.confirm_dialog import ConfirmDialog
             await self.push_screen_wait(
-                ConfirmDialog(f"Update failed: {msg}", "Update Error")
+                ConfirmDialog(f"Update failed: {msg}", "Update Error", ok_only=True)
             )
 
     def action_copy_content(self) -> None:
@@ -156,6 +156,7 @@ class XiNASApp(App):
                 "Ctrl+Y — copy output to clipboard\n"
                 "Ctrl+C — quit",
                 "Help",
+                ok_only=True,
             )
         )
 
