@@ -15,7 +15,7 @@ _log = logging.getLogger(__name__)
 
 _MENU = [
     MenuItem("1", "RAID Management"),
-    MenuItem("2", "NFS Access Rights"),
+    MenuItem("2", "NFS Management"),
     MenuItem("3", "Physical Drives"),
     MenuItem("4", "Filesystem"),
     MenuItem("0", "Back"),
@@ -44,7 +44,7 @@ class StorageScreen(Screen):
             f"{BLD}{CYN}Storage Management{NC}\n"
             f"\n"
             f"  {BLD}1{NC}  {CYN}RAID Management{NC}    {DIM}Manage xiRAID arrays (create, modify, delete){NC}\n"
-            f"  {BLD}2{NC}  {CYN}NFS Access Rights{NC}  {DIM}Configure NFS exports and shares{NC}\n"
+            f"  {BLD}2{NC}  {CYN}NFS Management{NC}  {DIM}Configure NFS exports and shares{NC}\n"
             f"  {BLD}3{NC}  {CYN}Physical Drives{NC}    {DIM}View drive inventory and RAID membership{NC}\n"
             f"  {BLD}4{NC}  {CYN}Filesystem{NC}         {DIM}Create and manage XFS filesystems{NC}\n"
         )
