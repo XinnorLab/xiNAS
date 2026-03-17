@@ -119,10 +119,15 @@ class NetworkScreen(Screen):
             return
         iface = choice.split()[0]
 
+        # Fetch current IP and gateway for pre-filling
+        cur_ip, cur_gw = await loop.run_in_executor(None, lambda: _iface_current(iface))
+
         while True:
             ip = await self.app.push_screen_wait(
-                InputDialog(f"New IP address/prefix for {iface} (CIDR):",
-                            "Edit Interface IP", placeholder="192.168.1.10/24")
+                InputDialog(f"IP address/prefix for {iface} (CIDR):",
+                            "Edit Interface IP",
+                            default=cur_ip,
+                            placeholder="192.168.1.10/24")
             )
             if ip is None:
                 return
@@ -137,7 +142,9 @@ class NetworkScreen(Screen):
 
         gw = await self.app.push_screen_wait(
             InputDialog("Default gateway (leave blank to keep):",
-                        "Edit Interface IP", placeholder="192.168.1.1")
+                        "Edit Interface IP",
+                        default=cur_gw,
+                        placeholder="192.168.1.1")
         )
         if gw is None:
             return
@@ -434,6 +441,26 @@ def _iface_labels(names: list[str]) -> list[str]:
         padded = name.ljust(max_len)
         labels.append(f"{padded}  {ip}" if ip else padded)
     return labels
+
+
+def _iface_current(name: str) -> tuple[str, str]:
+    """Return (current_ip_cidr, current_gateway) for an interface."""
+    ip = ""
+    out = _run_cmd(f"ip -o -4 addr show {name}")
+    if out:
+        parts = out.split()
+        for i, p in enumerate(parts):
+            if p == "inet" and i + 1 < len(parts):
+                ip = parts[i + 1]
+                break
+    gw = ""
+    routes = _run_cmd(f"ip -4 route show dev {name}")
+    if routes:
+        for line in routes.splitlines():
+            if line.startswith("default via "):
+                gw = line.split()[2]
+                break
+    return ip, gw
 
 
 def _run(*args: str) -> tuple[bool, str, str]:
