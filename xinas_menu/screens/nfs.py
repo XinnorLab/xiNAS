@@ -100,17 +100,47 @@ class NFSScreen(Screen):
     @work(exclusive=True)
     async def _add_share_wizard(self) -> None:
         """5-step share creation wizard."""
-        # Step 1: Export path
-        while True:
+        # Step 1: Export path — list mounted XFS filesystems + custom option
+        from xinas_menu.utils.xfs_helpers import run_async_cmd
+        import json as _json
+
+        mount_points: list[str] = []
+        ok, out, _ = await run_async_cmd("findmnt", "-t", "xfs", "-n", "-o", "TARGET", timeout=10)
+        if ok and out:
+            mount_points = [line.strip() for line in out.splitlines() if line.strip()]
+
+        _CUSTOM = "Custom path…"
+        if mount_points:
+            choices = mount_points + [_CUSTOM]
+            choice = await self.app.push_screen_wait(
+                SelectDialog(
+                    choices,
+                    title="Add Share — Step 1/5",
+                    prompt="Select filesystem to export (or choose custom for a subfolder):",
+                )
+            )
+            if not choice:
+                return
+            if choice == _CUSTOM:
+                path = await self.app.push_screen_wait(
+                    InputDialog("Export path:", "Add Share — Step 1/5",
+                                default="/mnt/data/", placeholder="/mnt/data/share1")
+                )
+                if not path:
+                    return
+            else:
+                path = choice
+        else:
             path = await self.app.push_screen_wait(
-                InputDialog("Export path (e.g. /mnt/data/share1):", "Add Share — Step 1/5",
-                            default="/mnt/data/")
+                InputDialog("Export path:", "Add Share — Step 1/5",
+                            default="/mnt/data/", placeholder="/mnt/data/share1")
             )
             if not path:
                 return
-            if path.startswith("/"):
-                break
+
+        if not path.startswith("/"):
             self.app.notify("Export path must start with '/'.", severity="error")
+            return
 
         # Step 2: Client spec
         clients = await self.app.push_screen_wait(
