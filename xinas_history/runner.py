@@ -467,6 +467,7 @@ class TransactionalRunner:
                     cmd,
                     capture_output=True,
                     text=True,
+                    cwd="/opt/xiNAS",
                     timeout=3600,  # 1 hour max
                 ),
             )
