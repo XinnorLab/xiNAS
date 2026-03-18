@@ -391,11 +391,13 @@ class TransactionalRunner:
         preset: str = "",
         target_resources: Optional[list[str]] = None,
         diff_summary: Optional[str] = None,
+        progress_cb: Optional[Callable[[str], None]] = None,
     ) -> RunResult:
         """Convenience: execute an Ansible playbook as a transactional operation.
 
         Builds the ``apply_fn`` from playbook/tags/extra_vars and delegates
-        to :meth:`execute`.
+        to :meth:`execute`.  If *progress_cb* is given, each Ansible
+        stdout line is forwarded for live UI updates.
         """
 
         result_holder: dict = {}
@@ -405,6 +407,7 @@ class TransactionalRunner:
                 playbook=playbook,
                 extra_vars=extra_vars,
                 tags=tags,
+                progress_cb=progress_cb,
             )
             result_holder["output"] = output
             return ok
@@ -431,12 +434,16 @@ class TransactionalRunner:
         playbook: str,
         extra_vars: Optional[dict] = None,
         tags: Optional[list[str]] = None,
+        progress_cb: Optional[Callable[[str], None]] = None,
     ) -> tuple[bool, Optional[str]]:
-        """Run an Ansible playbook as a subprocess.
+        """Run an Ansible playbook as an async subprocess with live output.
 
         Returns ``(True, None)`` on success, or ``(False, output_tail)``
         on failure where *output_tail* contains the last 2000 characters
         of combined stdout/stderr for diagnostics.
+
+        If *progress_cb* is provided it is called with each output line
+        so callers can stream progress to the UI.
         """
         cmd = ["ansible-playbook", playbook]
 
@@ -460,21 +467,48 @@ class TransactionalRunner:
 
             logger.info("Running Ansible: %s", " ".join(cmd))
 
-            loop = asyncio.get_running_loop()
-            proc_result = await loop.run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    cwd="/opt/xiNAS",
-                    timeout=3600,  # 1 hour max
-                ),
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd="/opt/xiNAS",
             )
 
-            if proc_result.returncode != 0:
-                stdout_tail = (proc_result.stdout or "")[-2000:]
-                stderr_tail = (proc_result.stderr or "")[-2000:]
+            # Collect output while streaming to callback
+            stdout_lines: list[str] = []
+            stderr_lines: list[str] = []
+
+            async def _read_stream(
+                stream: asyncio.StreamReader, buf: list[str], is_stderr: bool = False,
+            ) -> None:
+                async for raw in stream:
+                    line = raw.decode(errors="replace").rstrip("\n")
+                    buf.append(line)
+                    if progress_cb and not is_stderr:
+                        try:
+                            progress_cb(line)
+                        except Exception:
+                            pass
+
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        _read_stream(proc.stdout, stdout_lines),  # type: ignore[arg-type]
+                        _read_stream(proc.stderr, stderr_lines, is_stderr=True),
+                    ),
+                    timeout=3600,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                logger.error("Ansible playbook timed out after 3600s")
+                return False, "Ansible playbook timed out after 3600s"
+
+            await proc.wait()
+
+            if proc.returncode != 0:
+                stdout_tail = "\n".join(stdout_lines)[-2000:]
+                stderr_tail = "\n".join(stderr_lines)[-2000:]
                 combined = ""
                 if stdout_tail:
                     combined += stdout_tail
@@ -482,18 +516,15 @@ class TransactionalRunner:
                     combined += "\n--- stderr ---\n" + stderr_tail
                 logger.error(
                     "Ansible playbook failed (exit %d):\nstdout: %s\nstderr: %s",
-                    proc_result.returncode,
+                    proc.returncode,
                     stdout_tail,
                     stderr_tail,
                 )
-                return False, combined.strip() or "exit code {}".format(proc_result.returncode)
+                return False, combined.strip() or "exit code {}".format(proc.returncode)
 
             logger.info("Ansible playbook completed successfully")
             return True, None
 
-        except subprocess.TimeoutExpired:
-            logger.error("Ansible playbook timed out after 3600s")
-            return False, "Ansible playbook timed out after 3600s"
         except FileNotFoundError:
             logger.error("ansible-playbook not found in PATH")
             return False, "ansible-playbook not found in PATH"

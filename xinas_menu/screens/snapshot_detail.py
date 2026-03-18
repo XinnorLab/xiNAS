@@ -270,6 +270,18 @@ class SnapshotDetailScreen(Screen):
         if not confirmed:
             return
 
+        _progress_lines: list[str] = []
+
+        def _on_progress(line: str) -> None:
+            _progress_lines.append(line)
+            # Keep last 30 lines for display
+            tail = _progress_lines[-30:]
+            self.app.call_from_thread(
+                view.set_content,
+                f"{_DIM}Executing rollback to {self._snapshot_id}...{_NC}\n\n"
+                + "\n".join(tail),
+            )
+
         view.set_content(
             f"{_DIM}Executing rollback to {self._snapshot_id}...{_NC}\n\n"
             f"  {_DIM}This may take a few minutes while the configuration "
@@ -308,6 +320,7 @@ class SnapshotDetailScreen(Screen):
                 preset=preset,
                 playbook=f"presets/{preset}/playbook.yml",
                 diff_summary=f"Rollback to snapshot {target_id}",
+                progress_cb=_on_progress,
             )
 
             if run_result.success:
