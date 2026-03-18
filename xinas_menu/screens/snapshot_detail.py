@@ -319,7 +319,7 @@ class SnapshotDetailScreen(Screen):
                 source="xinas_menu",
                 preset=preset,
                 playbook=f"presets/{preset}/playbook.yml",
-                skip_tags=["hostname", "packages", "kernel", "ntp", "timezone", "security"],
+                skip_tags=["hostname", "packages", "kernel", "ntp", "timezone", "security", "eula"],
                 diff_summary=f"Rollback to snapshot {target_id}",
                 progress_cb=_on_progress,
             )
