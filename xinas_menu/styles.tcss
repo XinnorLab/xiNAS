@@ -177,7 +177,7 @@ ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog, ChecklistDialog {
 
 #dialog-container {
     background: #1a2038;
-    border: round #4d8bff 40%;
+    border: round #4d8bff;
     padding: 1 2;
     width: 80;
     max-width: 90%;
@@ -211,7 +211,7 @@ ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog, ChecklistDialog {
 }
 
 #dialog-select:focus {
-    border: round #4d8bff 60%;
+    border: round #4d8bff;
 }
 
 #dialog-select > .option-list--option-highlighted {
@@ -269,7 +269,7 @@ WelcomeScreen {
 
 #welcome-box {
     background: #141824;
-    border: round #4d8bff 40%;
+    border: round #4d8bff;
     padding: 2 4;
     width: 78;
     height: auto;

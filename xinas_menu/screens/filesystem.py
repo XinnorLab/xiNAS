@@ -137,7 +137,7 @@ class FilesystemScreen(Screen):
             calculate_stripe_width,
             check_existing_filesystem,
             create_mount_unit,
-            find_mount_for_device,
+            find_mounts_using_raid,
             mkfs_xfs,
             mount_filesystem,
         )
@@ -155,16 +155,16 @@ class FilesystemScreen(Screen):
             )
             return
 
-        # Parse arrays and filter out those already in use by a filesystem
+        # Parse arrays and filter out those already in use (as data OR log device)
         all_arrays = _parse_arrays(data)
         arrays = []
         in_use = []
         for arr in all_arrays:
             name = arr.get("name", "?")
-            device = f"/dev/xi_{name}"
-            mount = await find_mount_for_device(device)
-            if mount:
-                in_use.append(f"{name} → {mount}")
+            mounts = await find_mounts_using_raid(name)
+            if mounts:
+                roles = ", ".join(f"{m['mountpoint']} ({m['role']})" for m in mounts)
+                in_use.append(f"{name} → {roles}")
             else:
                 arrays.append(arr)
 

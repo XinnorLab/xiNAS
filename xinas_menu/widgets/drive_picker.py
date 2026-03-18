@@ -56,7 +56,7 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     }
     #picker-container {
         background: #0c0e14;
-        border: round #4d8bff 40%;
+        border: round #4d8bff;
         width: 110;
         max-width: 98%;
         height: 85%;
@@ -93,7 +93,7 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     #picker-detail {
         display: none;
         background: #1a2038;
-        border: round #4d8bff 40%;
+        border: round #4d8bff;
         padding: 1 2;
         height: auto;
         max-height: 60%;
