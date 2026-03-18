@@ -48,7 +48,7 @@ export const ConfigRollbackSchema = z.object({
 
 export async function handleConfigListSnapshots(params: z.infer<typeof ConfigListSnapshotsSchema>) {
   resolveController(params.controller_id);
-  return listSnapshots({ statusFilter: params.status_filter });
+  return listSnapshots(params.status_filter ? { statusFilter: params.status_filter } : {});
 }
 
 export async function handleConfigShowSnapshot(params: z.infer<typeof ConfigShowSnapshotSchema>) {
