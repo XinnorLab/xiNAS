@@ -388,6 +388,7 @@ class TransactionalRunner:
         playbook: str = "playbooks/site.yml",
         extra_vars: Optional[dict] = None,
         tags: Optional[list[str]] = None,
+        skip_tags: Optional[list[str]] = None,
         preset: str = "",
         target_resources: Optional[list[str]] = None,
         diff_summary: Optional[str] = None,
@@ -407,6 +408,7 @@ class TransactionalRunner:
                 playbook=playbook,
                 extra_vars=extra_vars,
                 tags=tags,
+                skip_tags=skip_tags,
                 progress_cb=progress_cb,
             )
             result_holder["output"] = output
@@ -434,6 +436,7 @@ class TransactionalRunner:
         playbook: str,
         extra_vars: Optional[dict] = None,
         tags: Optional[list[str]] = None,
+        skip_tags: Optional[list[str]] = None,
         progress_cb: Optional[Callable[[str], None]] = None,
     ) -> tuple[bool, Optional[str]]:
         """Run an Ansible playbook as an async subprocess with live output.
@@ -449,6 +452,9 @@ class TransactionalRunner:
 
         if tags:
             cmd.extend(["--tags", ",".join(tags)])
+
+        if skip_tags:
+            cmd.extend(["--skip-tags", ",".join(skip_tags)])
 
         # Write extra_vars to a temp JSON file for -e @file syntax.
         vars_file = None
