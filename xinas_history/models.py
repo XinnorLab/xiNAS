@@ -37,6 +37,7 @@ class OperationType(Enum):
     NETWORK_MODIFY = "network_modify"
     NFS_MODIFY = "nfs_modify"
     ROLLBACK = "rollback"
+    RESET_TO_BASELINE = "reset_to_baseline"
 
 
 class SnapshotStatus(Enum):

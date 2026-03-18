@@ -32,6 +32,8 @@ _OPERATION_CLASS: dict[OperationType, RollbackClass] = {
     # classify_rollback), but as a standalone operation default to
     # CHANGING_ACCESS since it restores a prior state.
     OperationType.ROLLBACK: RollbackClass.CHANGING_ACCESS,
+    # Reset to baseline — always destructive (reverts everything to initial state)
+    OperationType.RESET_TO_BASELINE: RollbackClass.DESTROYING_DATA,
 }
 
 # Sub-detail keys that refine RAID_MODIFY classification.

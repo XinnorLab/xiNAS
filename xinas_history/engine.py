@@ -301,6 +301,16 @@ class SnapshotEngine:
 
         return diff_result
 
+    def get_baseline_manifest(self) -> Manifest:
+        """Return the baseline manifest.
+
+        Raises ValueError if no baseline exists.
+        """
+        baseline = self._store.get_baseline()
+        if baseline is None:
+            raise ValueError("No baseline snapshot exists")
+        return baseline
+
     def get_history_summary(self) -> dict:
         """Get a summary dict suitable for UI display.
 

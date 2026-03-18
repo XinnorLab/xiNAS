@@ -5,7 +5,7 @@ Retention rules:
 2. Never delete the currently active/effective snapshot.
 3. Never delete a snapshot referenced by an in-progress rollback.
 4. Verify a snapshot is not locked before deletion.
-5. When a new rollback-eligible snapshot is created, purge the 11th oldest
+5. When a new rollback-eligible snapshot is created, purge the 41st oldest
    (excluding baseline).
 6. On startup, scan for stale ephemeral snapshots.
 """
@@ -18,9 +18,9 @@ from .store import FilesystemStore
 
 
 class GarbageCollector:
-    """Manages snapshot retention: baseline + 10 rollback-eligible + 1 ephemeral."""
+    """Manages snapshot retention: baseline + 40 rollback-eligible + 1 ephemeral."""
 
-    MAX_ROLLBACK_SNAPSHOTS = 10
+    MAX_ROLLBACK_SNAPSHOTS = 40
 
     def __init__(self, store: FilesystemStore) -> None:
         self._store = store

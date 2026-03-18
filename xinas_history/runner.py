@@ -427,6 +427,49 @@ class TransactionalRunner:
             run_result.output = result_holder["output"]
         return run_result
 
+    async def execute_reset_to_baseline(
+        self,
+        source: str,
+        reason: str,
+        progress_cb: Optional[Callable[[str], None]] = None,
+    ) -> RunResult:
+        """Reset system configuration to the initial baseline snapshot.
+
+        Re-applies the baseline's playbook with its original extra_vars,
+        skipping infrastructure-level tags that should not be re-run.
+
+        The full 8-step transactional sequence (including auto-rollback
+        on validation failure) is preserved.
+
+        Args:
+            source: OperationSource value (e.g., ``"xinas_menu"``).
+            reason: Audit reason for the reset.
+            progress_cb: Optional callback for live Ansible output.
+
+        Returns:
+            RunResult with operation outcome.
+        """
+        baseline = self._engine.get_baseline_manifest()
+
+        playbook = baseline.playbook or "playbooks/site.yml"
+        extra_vars = dict(baseline.extra_vars) if baseline.extra_vars else {}
+
+        skip_tags = [
+            "hostname", "packages", "kernel", "ntp", "timezone",
+            "security", "eula", "license", "xiraid", "raid",
+        ]
+
+        return await self.execute_ansible(
+            operation=OperationType.RESET_TO_BASELINE.value,
+            source=source,
+            playbook=playbook,
+            extra_vars=extra_vars,
+            skip_tags=skip_tags,
+            preset=baseline.preset,
+            diff_summary="Reset to baseline: {}".format(reason),
+            progress_cb=progress_cb,
+        )
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

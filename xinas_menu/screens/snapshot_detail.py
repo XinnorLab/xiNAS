@@ -11,7 +11,6 @@ from textual.screen import Screen
 from textual.widgets import Label, Footer
 from textual import work
 
-from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -20,8 +19,8 @@ _log = logging.getLogger(__name__)
 try:
     from xinas_history.engine import SnapshotEngine
     from xinas_history.store import FilesystemStore
-    from xinas_history.runner import TransactionalRunner
-    from xinas_history.models import SnapshotStatus, SnapshotType, RollbackClass
+    from xinas_history.models import SnapshotType
+    from xinas_history.collector import CONFIG_SOURCES
     HAS_HISTORY = True
 except ImportError:
     HAS_HISTORY = False
@@ -33,7 +32,8 @@ _BLD, _DIM, _NC = "\033[1m", "\033[2m", "\033[0m"
 _MENU = [
     MenuItem("1", "Manifest"),
     MenuItem("2", "Full Diff"),
-    MenuItem("3", "Rollback"),
+    MenuItem("3", "Config Files"),
+    MenuItem("4", "Runtime State"),
     MenuItem("0", "Back"),
 ]
 
@@ -44,15 +44,9 @@ class SnapshotDetailScreen(Screen):
     Shows:
     - Manifest metadata (ID, timestamp, user, source, operation, status, risk class)
     - Diff from parent snapshot
-    - Affected resources
+    - Config file contents captured in the snapshot
+    - Runtime state (RAID, exports, mounts, services)
     - Validation notes
-    - Rollback eligibility
-    - Dependency blockers (if any)
-
-    Actions:
-    - Rollback to this snapshot
-    - View full diff
-    - Back to history list
     """
 
     BINDINGS = [
@@ -86,7 +80,9 @@ class SnapshotDetailScreen(Screen):
         elif key == "2":
             self._show_diff()
         elif key == "3":
-            self._do_rollback()
+            self._show_config_files()
+        elif key == "4":
+            self._show_runtime_state()
 
     # -- Load manifest detail -----------------------------------------------
 
@@ -194,22 +190,23 @@ class SnapshotDetailScreen(Screen):
         text = _format_full_diff(diff_result)
         view.set_content(text)
 
-    # -- Rollback -----------------------------------------------------------
+    # -- Config files view ---------------------------------------------------
 
     @work(exclusive=True)
-    async def _do_rollback(self) -> None:
-        """Initiate rollback to this snapshot (with confirmation)."""
+    async def _show_config_files(self) -> None:
+        """Show config files captured in this snapshot."""
         view = self.query_one("#detail-content", ScrollableTextView)
 
         if not HAS_HISTORY:
-            view.set_content(
-                f"{_RED}xinas_history package not installed.{_NC}"
-            )
+            view.set_content(f"{_RED}xinas_history package not installed.{_NC}")
             return
+
+        view.set_content(f"{_DIM}Loading config files...{_NC}")
 
         loop = asyncio.get_running_loop()
         try:
-            engine = await loop.run_in_executor(None, _create_engine)
+            store = FilesystemStore()
+            engine = _create_engine(store)
             manifest = await loop.run_in_executor(
                 None, engine.get_snapshot, self._snapshot_id,
             )
@@ -218,186 +215,46 @@ class SnapshotDetailScreen(Screen):
             return
 
         if manifest is None:
-            view.set_content(
-                f"{_RED}Snapshot not found: {self._snapshot_id}{_NC}"
-            )
+            view.set_content(f"{_RED}Snapshot not found: {self._snapshot_id}{_NC}")
             return
 
-        # Check rollback eligibility
-        if manifest.type == SnapshotType.BASELINE.value:
-            view.set_content(
-                f"{_YLW}The baseline snapshot is immutable and cannot be used "
-                f"as a direct rollback target.{_NC}\n\n"
-                f"  {_DIM}Select a rollback-eligible snapshot instead.{_NC}"
-            )
-            return
-
-        if manifest.type != SnapshotType.ROLLBACK_ELIGIBLE.value:
-            view.set_content(
-                f"{_YLW}This snapshot is of type '{manifest.type}' and is not "
-                f"eligible for rollback.{_NC}\n\n"
-                f"  {_DIM}Only rollback-eligible snapshots can be used as targets.{_NC}"
-            )
-            return
-
-        # Build risk warning
-        risk = manifest.rollback_class
-        risk_warning = ""
-        if risk == RollbackClass.DESTROYING_DATA.value:
-            risk_warning = (
-                f"\n{_RED}WARNING: This rollback may result in DATA LOSS.{_NC}\n"
-                f"{_RED}Ensure you have backups before proceeding.{_NC}\n"
-            )
-        elif risk == RollbackClass.CHANGING_ACCESS.value:
-            risk_warning = (
-                f"\n{_YLW}NOTE: This rollback may change NFS access rules "
-                f"or network settings.{_NC}\n"
-            )
-
-        confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(
-                f"Roll back to snapshot?\n\n"
-                f"  ID:        {manifest.id}\n"
-                f"  Operation: {manifest.operation}\n"
-                f"  Timestamp: {manifest.timestamp}\n"
-                f"  Risk:      {risk}\n"
-                f"{risk_warning}\n"
-                f"This will create a new snapshot and re-apply the\n"
-                f"configuration from the selected snapshot.",
-                "Confirm Rollback",
-            )
+        text = await loop.run_in_executor(
+            None, _format_config_files, store, engine, manifest,
         )
-        if not confirmed:
+        view.set_content(text)
+
+    # -- Runtime state view -------------------------------------------------
+
+    @work(exclusive=True)
+    async def _show_runtime_state(self) -> None:
+        """Show runtime state captured in this snapshot."""
+        view = self.query_one("#detail-content", ScrollableTextView)
+
+        if not HAS_HISTORY:
+            view.set_content(f"{_RED}xinas_history package not installed.{_NC}")
             return
 
-        _progress_lines: list[str] = []
+        view.set_content(f"{_DIM}Loading runtime state...{_NC}")
 
-        def _on_progress(line: str) -> None:
-            _progress_lines.append(line)
-            # Keep last 30 lines for display
-            tail = _progress_lines[-30:]
-            self.app.call_from_thread(
-                view.set_content,
-                f"{_DIM}Executing rollback to {self._snapshot_id}...{_NC}\n\n"
-                + "\n".join(tail),
-            )
-
-        view.set_content(
-            f"{_DIM}Executing rollback to {self._snapshot_id}...{_NC}\n\n"
-            f"  {_DIM}This may take a few minutes while the configuration "
-            f"is re-applied.{_NC}"
-        )
-
-        try:
-            self.app.audit.log(
-                "history.rollback_attempt",
-                f"snapshot={self._snapshot_id}",
-                "STARTED",
-            )
-        except Exception:
-            pass
-
-        # Build a rollback apply_fn that restores config from the target snapshot
-        target_id = self._snapshot_id
-
+        loop = asyncio.get_running_loop()
         try:
             store = FilesystemStore()
-            runner = TransactionalRunner(
-                engine=SnapshotEngine(store=store),
+            engine = _create_engine(store)
+            manifest = await loop.run_in_executor(
+                None, engine.get_snapshot, self._snapshot_id,
             )
-
-            # The rollback restores config files from the target snapshot
-            # then re-applies them via Ansible playbook
-            target_manifest = await loop.run_in_executor(
-                None, engine.get_snapshot, target_id,
-            )
-
-            preset = target_manifest.preset or "default"
-
-            run_result = await runner.execute_ansible(
-                operation="rollback",
-                source="xinas_menu",
-                preset=preset,
-                playbook=f"presets/{preset}/playbook.yml",
-                skip_tags=["hostname", "packages", "kernel", "ntp", "timezone",
-                           "security", "eula", "license", "xiraid", "raid"],
-                diff_summary=f"Rollback to snapshot {target_id}",
-                progress_cb=_on_progress,
-            )
-
-            if run_result.success:
-                # Record the rollback snapshot
-                await self.app.snapshots.record(
-                    "rollback",
-                    diff_summary=f"Rolled back to snapshot {target_id}",
-                )
-                # Mark the target snapshot as rolled_back
-                try:
-                    store.update_manifest(
-                        target_id,
-                        {"status": SnapshotStatus.ROLLED_BACK.value},
-                    )
-                except Exception:
-                    pass
-
-                view.set_content(
-                    f"{_GRN}{_BLD}Rollback completed successfully!{_NC}\n\n"
-                    f"  {_DIM}Target:{_NC}    {target_id}\n"
-                    f"  {_DIM}Preset:{_NC}    {preset}\n"
-                    f"  {_DIM}Result:{_NC}    {_GRN}applied{_NC}\n"
-                )
-                self.app.notify("Rollback completed successfully.", severity="information")
-
-                try:
-                    self.app.audit.log(
-                        "history.rollback",
-                        f"snapshot={target_id}",
-                        "OK",
-                    )
-                except Exception:
-                    pass
-            else:
-                error_msg = run_result.error or "Unknown error"
-                rb_status = ""
-                if run_result.rollback_performed:
-                    if run_result.rollback_success:
-                        rb_status = f"\n  {_YLW}Auto-rollback succeeded — system restored to pre-change state.{_NC}"
-                    else:
-                        rb_status = f"\n  {_RED}Auto-rollback FAILED — system may be in inconsistent state!{_NC}"
-
-                output_section = ""
-                if run_result.output:
-                    output_section = (
-                        f"\n  {_DIM}{'─' * 60}{_NC}\n"
-                        f"  {_BLD}Ansible output:{_NC}\n\n"
-                        f"{run_result.output}\n"
-                    )
-
-                view.set_content(
-                    f"{_RED}{_BLD}Rollback failed.{_NC}\n\n"
-                    f"  {_DIM}Target:{_NC}    {target_id}\n"
-                    f"  {_DIM}Error:{_NC}     {error_msg}\n"
-                    f"{rb_status}"
-                    f"{output_section}"
-                )
-                self.app.notify("Rollback failed.", severity="error")
-
-                try:
-                    self.app.audit.log(
-                        "history.rollback",
-                        f"snapshot={target_id} error={error_msg[:100]}",
-                        "FAIL",
-                    )
-                except Exception:
-                    pass
-
         except Exception as exc:
-            _log.exception("Rollback failed: %s", exc)
-            view.set_content(
-                f"{_RED}Rollback failed: {exc}{_NC}\n\n"
-                f"  {_DIM}Snapshot ID: {target_id}{_NC}"
-            )
-            self.app.notify(f"Rollback error: {exc}", severity="error")
+            view.set_content(f"{_RED}Failed to load snapshot: {exc}{_NC}")
+            return
+
+        if manifest is None:
+            view.set_content(f"{_RED}Snapshot not found: {self._snapshot_id}{_NC}")
+            return
+
+        text = await loop.run_in_executor(
+            None, _format_runtime_state, store, engine, manifest,
+        )
+        view.set_content(text)
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +478,156 @@ def _format_full_diff(diff_result) -> str:
         lines.append(f"  {_GRN}No differences found.{_NC}")
 
     lines.append(f"  {_DIM}{'-' * 56}{_NC}")
+
+    return "\n".join(lines)
+
+
+def _format_config_files(store, engine, manifest) -> str:
+    """Format config file contents captured in the snapshot."""
+    import json as _json
+
+    lines: list[str] = []
+    lines.append(f"{_BLD}{_CYN}{'=' * 60}{_NC}")
+    lines.append(f"{_BLD}{_CYN}  CONFIG FILES — {manifest.id}{_NC}")
+    lines.append(f"{_BLD}{_CYN}{'=' * 60}{_NC}")
+    lines.append("")
+
+    is_baseline = manifest.type == SnapshotType.BASELINE.value
+    found_any = False
+
+    for filename, rel_path in sorted(CONFIG_SOURCES.items()):
+        if is_baseline:
+            path = store.baseline_path / filename
+            data = None
+            try:
+                if path.is_file():
+                    data = path.read_bytes()
+            except OSError:
+                pass
+        else:
+            data = store.read_file(manifest.id, filename)
+
+        if data is None:
+            lines.append(f"  {_DIM}{filename}  (not captured){_NC}")
+            continue
+
+        found_any = True
+        size = len(data)
+        if size < 1024:
+            size_str = f"{size} B"
+        else:
+            size_str = f"{size / 1024:.1f} KB"
+
+        lines.append(f"  {_BLD}{filename}{_NC}  {_DIM}({size_str} — {rel_path}){_NC}")
+
+        # Show a preview of the content (first 20 lines)
+        try:
+            text = data.decode("utf-8", errors="replace")
+            preview_lines = text.splitlines()[:20]
+            for pl in preview_lines:
+                lines.append(f"    {_DIM}{pl}{_NC}")
+            if len(text.splitlines()) > 20:
+                lines.append(f"    {_DIM}... ({len(text.splitlines())} lines total){_NC}")
+        except Exception:
+            lines.append(f"    {_DIM}(binary content){_NC}")
+
+        lines.append("")
+
+    if not found_any:
+        lines.append(f"  {_YLW}No config files captured in this snapshot.{_NC}")
+
+    return "\n".join(lines)
+
+
+def _format_runtime_state(store, engine, manifest) -> str:
+    """Format runtime state JSON files captured in the snapshot."""
+    import json as _json
+
+    lines: list[str] = []
+    lines.append(f"{_BLD}{_CYN}{'=' * 60}{_NC}")
+    lines.append(f"{_BLD}{_CYN}  RUNTIME STATE — {manifest.id}{_NC}")
+    lines.append(f"{_BLD}{_CYN}{'=' * 60}{_NC}")
+    lines.append("")
+
+    runtime_files = [
+        ("raid-show.json", "RAID Arrays"),
+        ("pool-show.json", "Storage Pools"),
+        ("config-show.json", "xiRAID Configuration"),
+        ("mounts.json", "Mount Units"),
+        ("exports.json", "NFS Exports"),
+        ("services.json", "Services"),
+    ]
+
+    is_baseline = manifest.type == SnapshotType.BASELINE.value
+    found_any = False
+
+    for filename, label in runtime_files:
+        if is_baseline:
+            path = store.baseline_path / "runtime" / filename
+            data = None
+            try:
+                if path.is_file():
+                    data = path.read_bytes()
+            except OSError:
+                pass
+        else:
+            data = store.read_runtime_file(manifest.id, filename)
+
+        if data is None:
+            lines.append(f"  {_DIM}{label}  (not captured){_NC}")
+            continue
+
+        found_any = True
+
+        try:
+            parsed = _json.loads(data)
+        except (_json.JSONDecodeError, ValueError):
+            lines.append(f"  {_BLD}{label}{_NC}  {_DIM}(invalid JSON){_NC}")
+            continue
+
+        # Show summary based on the type of runtime file
+        if isinstance(parsed, list):
+            count = len(parsed)
+            lines.append(f"  {_BLD}{label}{_NC}  {_GRN}{count}{_NC} entries")
+            for item in parsed[:8]:
+                if isinstance(item, dict):
+                    name = (
+                        item.get("name")
+                        or item.get("path")
+                        or item.get("unit")
+                        or item.get("id", "")
+                    )
+                    state = item.get("state", item.get("active", ""))
+                    if state:
+                        lines.append(f"    {_DIM}{name}  ({state}){_NC}")
+                    else:
+                        lines.append(f"    {_DIM}{name}{_NC}")
+                else:
+                    lines.append(f"    {_DIM}{item}{_NC}")
+            if count > 8:
+                lines.append(f"    {_DIM}... +{count - 8} more{_NC}")
+        elif isinstance(parsed, dict):
+            keys = list(parsed.keys())
+            lines.append(f"  {_BLD}{label}{_NC}  {_GRN}{len(keys)}{_NC} keys")
+            for k in keys[:10]:
+                v = parsed[k]
+                if isinstance(v, (str, int, float, bool)):
+                    lines.append(f"    {_DIM}{k}: {v}{_NC}")
+                elif isinstance(v, list):
+                    lines.append(f"    {_DIM}{k}: [{len(v)} items]{_NC}")
+                elif isinstance(v, dict):
+                    lines.append(f"    {_DIM}{k}: {{{len(v)} keys}}{_NC}")
+                else:
+                    lines.append(f"    {_DIM}{k}: ...{_NC}")
+            if len(keys) > 10:
+                lines.append(f"    {_DIM}... +{len(keys) - 10} more keys{_NC}")
+        else:
+            lines.append(f"  {_BLD}{label}{_NC}  {_DIM}{type(parsed).__name__}{_NC}")
+
+        lines.append("")
+
+    if not found_any:
+        lines.append(f"  {_YLW}No runtime state captured in this snapshot.{_NC}")
 
     return "\n".join(lines)
 

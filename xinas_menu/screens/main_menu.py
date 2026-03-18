@@ -96,6 +96,12 @@ def _build_mini_status() -> str:
     """Collect NFS status, network info, and client instructions."""
     lines: list[str] = []
 
+    # ── Drift Detection Banner ───────────────────────────────
+    drift_banner = _check_drift_banner()
+    if drift_banner:
+        lines.append(drift_banner)
+        lines.append("")
+
     # ── NFS Service Status ──────────────────────────────────────
     lines.append(f"  {_BLD}{_CYN}NFS Service{_NC}")
     try:
@@ -251,6 +257,32 @@ def _build_mini_status() -> str:
         lines.append(f"     {_DIM}Server IP:{_NC} {_GRN}{server_ip}{_NC}")
 
     return "\n".join(lines)
+
+
+def _check_drift_banner() -> str:
+    """Check for config drift and return a warning banner, or empty string."""
+    try:
+        from xinas_history.store import FilesystemStore
+        from xinas_history.engine import SnapshotEngine
+        from xinas_history.drift import DriftDetector
+
+        store = FilesystemStore()
+        engine = SnapshotEngine(store=store)
+        detector = DriftDetector(store=store, engine=engine)
+        report = detector.check()
+
+        if not report.clean:
+            n = len(report.entries)
+            safety = ""
+            if report.has_safety_impact:
+                safety = f"  {_RED}(safety-critical){_NC}"
+            return (
+                f"  {_YLW}{_BLD}\u26a0 Config drift detected: "
+                f"{n} file{'s' if n != 1 else ''}{_NC}{safety}"
+            )
+    except Exception:
+        _log.debug("mini-status: drift check failed", exc_info=True)
+    return ""
 
 
 def _share_usage(path: str) -> tuple[str, str, int] | None:

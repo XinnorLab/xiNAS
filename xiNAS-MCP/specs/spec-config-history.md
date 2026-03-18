@@ -5,7 +5,7 @@
 The config-history tools expose xiNAS configuration snapshot management
 through the MCP interface. They provide AI assistants and automation
 with the ability to inspect configuration history, detect drift, and
-initiate rollbacks.
+reset to the initial baseline configuration.
 
 **Backend**: Python subprocess — `python3 -m xinas_history <cmd> --format json`
 (matches the nfs-helper subprocess pattern)
@@ -59,18 +59,20 @@ initiate rollbacks.
 - **Output**: `{ baseline_exists, snapshot_count, rollback_eligible_count, current_effective }`
 - **Backend**: `python3 -m xinas_history status --format json`
 
-### `config.rollback`
+### `config.reset_to_baseline`
 - **Role**: admin
-- **Description**: Roll back to a previous configuration snapshot
-- **Mode**: plan/apply (preflight validation before execution)
+- **Description**: Reset system configuration to the initial baseline snapshot. Requires double confirmation via plan/apply pattern.
+- **Mode**: plan/apply (two separate calls required for double confirmation)
 - **Input Schema**:
   - `controller_id` (string, required)
-  - `target_id` (string, required): Snapshot ID to roll back to
-  - `reason` (string, required): Audit reason for rollback
+  - `reason` (string, required): Audit reason for reset
   - `mode` (string: `"plan"` | `"apply"`, default: `"plan"`)
-- **Output (plan)**: Preflight result with `rollback_class`, `affected_resources`, `blockers`, `warnings`
+  - `confirmation_token` (string, required when mode=`"apply"`): Token returned by plan call
+- **Output (plan)**: `{ "confirmation_token": "<uuid>", "baseline_id": "...", "baseline_timestamp": "...", "diff": {...}, "rollback_class": "destroying_data", "warning": "..." }`
 - **Output (apply)**: RunResult with `success`, `snapshot_id`, rollback details
-- **Backend**: `python3 -m xinas_history snapshot rollback <target_id> --reason <text> [--yes]`
+- **Backend**: `python3 -m xinas_history snapshot reset-to-baseline --reason <text> [--yes]`
+- **Timeout**: 300s (5 minutes)
+- **Notes**: Arbitrary snapshot rollback has been removed. Only resetting to the initial baseline (post-install) configuration is supported. The plan call returns a confirmation token (UUID, 5-minute TTL) that must be passed back in the apply call to prevent accidental execution.
 
 ---
 
@@ -83,7 +85,7 @@ initiate rollbacks.
 | `config.diff_snapshots` | viewer | Read-only comparison |
 | `config.check_drift` | operator | Reads system files, may trigger alerts |
 | `config.get_status` | viewer | Read-only status |
-| `config.rollback` | admin | Destructive/access-changing operation |
+| `config.reset_to_baseline` | admin | Destructive: resets all config to initial baseline |
 
 ---
 
@@ -92,8 +94,10 @@ initiate rollbacks.
 | Error | Code | When |
 |---|---|---|
 | Snapshot not found | `NOT_FOUND` | Snapshot ID doesn't exist |
+| No baseline exists | `PRECONDITION_FAILED` | No baseline snapshot to reset to |
+| Invalid/expired token | `PRECONDITION_FAILED` | Confirmation token invalid or expired (5-min TTL) |
 | Lock contention | `CONFLICT` | Another config operation in progress |
-| Preflight failed | `PRECONDITION_FAILED` | Blockers prevent rollback |
+| Preflight failed | `PRECONDITION_FAILED` | Blockers prevent reset |
 | Insufficient space | `RESOURCE_EXHAUSTION` | Not enough disk for snapshot |
 | Drift detected | `PRECONDITION_FAILED` | Drift blocks operation |
 | Backend error | `INTERNAL` | Python subprocess failed |
@@ -108,4 +112,4 @@ Invocation: `python3 -m xinas_history <command> [args] --format json`
 - **Stderr**: Error messages
 - **Exit 0**: Success (parse stdout)
 - **Exit 1**: Error (parse stderr as JSON `{ "error": "...", "code": "..." }`)
-- **Timeout**: 30s for reads, 300s for rollback
+- **Timeout**: 30s for reads, 300s for reset-to-baseline

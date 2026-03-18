@@ -5,6 +5,7 @@ Usage:
     python3 -m xinas_history snapshot show <id> [--format json|yaml]
     python3 -m xinas_history snapshot create --source <source> --operation <op> [--preset <name>]
     python3 -m xinas_history snapshot diff <id1> <id2> [--format json|unified]
+    python3 -m xinas_history snapshot reset-to-baseline --reason <text> [--yes] [--format json]
     python3 -m xinas_history gc run
     python3 -m xinas_history status
 """
@@ -75,6 +76,25 @@ def main() -> int:
         "--format", choices=["json", "unified"], default="unified",
     )
 
+    # snapshot reset-to-baseline
+    reset_parser = snap_sub.add_parser(
+        "reset-to-baseline", help="Reset to initial baseline configuration",
+    )
+    reset_parser.add_argument(
+        "--reason", required=True, help="Audit reason for the reset",
+    )
+    reset_parser.add_argument(
+        "--yes", action="store_true",
+        help="Execute the reset (without --yes, shows plan only)",
+    )
+    reset_parser.add_argument(
+        "--format", choices=["json", "text"], default="text",
+    )
+    reset_parser.add_argument(
+        "--source", default="api",
+        help="Operation source (default: api)",
+    )
+
     # -- gc subcommand ------------------------------------------------------
     gc_parser = subparsers.add_parser("gc", help="Garbage collection")
     gc_sub = gc_parser.add_subparsers(dest="action")
@@ -126,7 +146,10 @@ def main() -> int:
 
 def _dispatch_snapshot(args: argparse.Namespace, engine: SnapshotEngine) -> int:
     if args.action is None:
-        print("Error: specify an action: list, show, create, diff", file=sys.stderr)
+        print(
+            "Error: specify an action: list, show, create, diff, reset-to-baseline",
+            file=sys.stderr,
+        )
         return 1
 
     if args.action == "list":
@@ -137,6 +160,8 @@ def _dispatch_snapshot(args: argparse.Namespace, engine: SnapshotEngine) -> int:
         return _cmd_snapshot_create(args, engine)
     elif args.action == "diff":
         return _cmd_snapshot_diff(args, engine)
+    elif args.action == "reset-to-baseline":
+        return _cmd_snapshot_reset_to_baseline(args, engine)
     else:
         print(f"Error: unknown snapshot action: {args.action}", file=sys.stderr)
         return 1
@@ -242,6 +267,98 @@ def _cmd_snapshot_diff(args: argparse.Namespace, engine: SnapshotEngine) -> int:
         print("No differences found.")
 
     return 0
+
+
+def _cmd_snapshot_reset_to_baseline(
+    args: argparse.Namespace, engine: SnapshotEngine,
+) -> int:
+    """Handle ``snapshot reset-to-baseline`` — plan or execute baseline reset."""
+    from .runner import TransactionalRunner
+
+    # Verify baseline exists
+    try:
+        baseline = engine.get_baseline_manifest()
+    except ValueError as exc:
+        _error_output(args, str(exc))
+        return 1
+
+    if not args.yes:
+        # Plan mode — show what would happen
+        effective = engine.get_current_effective()
+        plan: dict = {
+            "mode": "plan",
+            "baseline_id": baseline.id,
+            "baseline_timestamp": baseline.timestamp,
+            "baseline_preset": baseline.preset,
+            "rollback_class": "destroying_data",
+            "warning": (
+                "This will reset ALL configuration to the initial baseline "
+                "state. RAID arrays, NFS exports, network settings, and all "
+                "managed services will be reverted."
+            ),
+        }
+        if effective:
+            try:
+                diff_result = engine.diff(effective.id, baseline.id)
+                plan["diff"] = diff_result.to_dict()
+                plan["current_effective_id"] = effective.id
+            except Exception:
+                plan["diff"] = None
+                plan["current_effective_id"] = effective.id
+
+        if args.format == "json":
+            print(json.dumps(plan, indent=2))
+        else:
+            print("Reset to Baseline — Plan")
+            print("=" * 40)
+            print(f"Baseline:  {baseline.id}")
+            print(f"Created:   {baseline.timestamp}")
+            print(f"Preset:    {baseline.preset}")
+            print(f"Risk:      DESTROYING_DATA")
+            print()
+            print("WARNING: {}\n".format(plan["warning"]))
+            if effective:
+                print(f"Current effective: {effective.id}")
+            print("\nRun with --yes to execute the reset.")
+        return 0
+
+    # Execute mode
+    runner = TransactionalRunner(engine=engine)
+
+    def _progress(line: str) -> None:
+        if args.format != "json":
+            print(line)
+
+    result = asyncio.run(
+        runner.execute_reset_to_baseline(
+            source=args.source,
+            reason=args.reason,
+            progress_cb=_progress,
+        )
+    )
+
+    if args.format == "json":
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        if result.success:
+            print(f"\nReset to baseline completed successfully.")
+            print(f"Snapshot: {result.snapshot_id}")
+        else:
+            print(f"\nReset to baseline FAILED: {result.error}")
+            if result.rollback_performed:
+                status = "succeeded" if result.rollback_success else "FAILED"
+                print(f"Auto-rollback: {status}")
+
+    return 0 if result.success else 1
+
+
+def _error_output(args: argparse.Namespace, message: str) -> None:
+    """Print an error in the requested format."""
+    fmt = getattr(args, "format", "text")
+    if fmt == "json":
+        print(json.dumps({"error": message}))
+    else:
+        print(f"Error: {message}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ from textual.widgets import Label, Footer
 from textual import work
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
+from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -23,6 +24,7 @@ try:
     from xinas_history.store import FilesystemStore
     from xinas_history.drift import DriftDetector
     from xinas_history.gc import GarbageCollector
+    from xinas_history.runner import TransactionalRunner
     HAS_HISTORY = True
 except ImportError:
     HAS_HISTORY = False
@@ -36,6 +38,8 @@ _MENU = [
     MenuItem("2", "View Snapshot"),
     MenuItem("3", "Drift Check"),
     MenuItem("4", "Garbage Collect"),
+    MenuItem("5", "Create Baseline"),
+    MenuItem("6", "Reset to Baseline"),
     MenuItem("0", "Back"),
 ]
 
@@ -45,13 +49,13 @@ class ConfigHistoryScreen(Screen):
 
     Shows:
     - Immutable baseline "First installed configuration"
-    - Last 10 rollback-eligible snapshots
+    - Last 40 rollback-eligible snapshots
     - Current effective snapshot
     - Per snapshot: timestamp, initiator, operation type, rollback class, status, diff summary
 
     Actions:
     - View snapshot detail (push SnapshotDetailScreen)
-    - Rollback to a snapshot
+    - Reset to baseline (double confirmation required)
     - Run drift check
     - Run GC
     """
@@ -71,7 +75,9 @@ class ConfigHistoryScreen(Screen):
                 f"  {_BLD}1{_NC}  {_CYN}View History{_NC}       {_DIM}Browse all snapshots{_NC}\n"
                 f"  {_BLD}2{_NC}  {_CYN}View Snapshot{_NC}      {_DIM}Detail view of a single snapshot{_NC}\n"
                 f"  {_BLD}3{_NC}  {_CYN}Drift Check{_NC}        {_DIM}Detect out-of-band configuration changes{_NC}\n"
-                f"  {_BLD}4{_NC}  {_CYN}Garbage Collect{_NC}    {_DIM}Purge old snapshots beyond retention{_NC}\n",
+                f"  {_BLD}4{_NC}  {_CYN}Garbage Collect{_NC}    {_DIM}Purge old snapshots beyond retention{_NC}\n"
+                f"  {_BLD}5{_NC}  {_CYN}Create Baseline{_NC}    {_DIM}Capture current state as initial baseline{_NC}\n"
+                f"  {_BLD}6{_NC}  {_CYN}Reset to Baseline{_NC}  {_DIM}Restore initial configuration (requires confirmation){_NC}\n",
                 id="history-content",
             )
         yield Footer()
@@ -91,6 +97,10 @@ class ConfigHistoryScreen(Screen):
             self._drift_check()
         elif key == "4":
             self._run_gc()
+        elif key == "5":
+            self._create_baseline()
+        elif key == "6":
+            self._reset_to_baseline()
 
     # -- History list -------------------------------------------------------
 
@@ -218,6 +228,247 @@ class ConfigHistoryScreen(Screen):
         except Exception:
             pass
 
+    # -- Create baseline ----------------------------------------------------
+
+    @work(exclusive=True)
+    async def _create_baseline(self) -> None:
+        """Capture current system state as the immutable baseline snapshot.
+
+        Useful for systems deployed before config-history was added.
+        """
+        view = self.query_one("#history-content", ScrollableTextView)
+
+        if not HAS_HISTORY:
+            view.set_content(
+                f"{_RED}xinas_history package not installed.{_NC}"
+            )
+            return
+
+        # Check if baseline already exists
+        loop = asyncio.get_running_loop()
+        try:
+            engine = await loop.run_in_executor(None, _create_engine)
+            summary = await loop.run_in_executor(None, engine.get_history_summary)
+        except Exception as exc:
+            view.set_content(f"{_RED}Failed to check history: {exc}{_NC}")
+            return
+
+        if summary.get("baseline"):
+            view.set_content(
+                f"{_YLW}Baseline already exists.{_NC}\n\n"
+                f"  {_DIM}A baseline snapshot was already captured during initial install.{_NC}\n"
+                f"  {_DIM}Only one baseline per system is allowed.{_NC}\n\n"
+                f"  Baseline ID: {_CYN}{summary['baseline'].get('id', '?')}{_NC}\n"
+                f"  Created:     {summary['baseline'].get('timestamp', '?')[:19].replace('T', ' ')}"
+            )
+            return
+
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(
+                "Create a baseline snapshot from current system state?\n\n"
+                "This captures all managed configuration files and runtime\n"
+                "state (RAID arrays, mounts, NFS exports, services) as the\n"
+                "immutable reference point for rollback and drift detection.\n\n"
+                "This action cannot be undone — only one baseline is allowed.",
+                "Create Baseline",
+            )
+        )
+        if not confirmed:
+            return
+
+        view.set_content(f"{_DIM}Creating baseline snapshot...{_NC}")
+
+        try:
+            snapshot_id = await self.app.snapshots.record_baseline()
+        except Exception as exc:
+            view.set_content(f"{_RED}Baseline creation failed: {exc}{_NC}")
+            return
+
+        if snapshot_id:
+            view.set_content(
+                f"{_GRN}Baseline snapshot created successfully.{_NC}\n\n"
+                f"  Snapshot ID: {_CYN}{snapshot_id}{_NC}\n\n"
+                f"  {_DIM}This baseline captures the current system configuration as the{_NC}\n"
+                f"  {_DIM}reference point. All future changes will be tracked relative to it.{_NC}\n"
+                f"  {_DIM}You can now use rollback to return to this state.{_NC}"
+            )
+            try:
+                self.app.audit.log("history.create_baseline", snapshot_id, "OK")
+            except Exception:
+                pass
+        else:
+            view.set_content(
+                f"{_RED}Baseline creation failed.{_NC}\n\n"
+                f"  {_DIM}Check logs for details. The xinas_history engine may{_NC}\n"
+                f"  {_DIM}not be properly configured.{_NC}"
+            )
+
+    # -- Reset to baseline --------------------------------------------------
+
+    @work(exclusive=True)
+    async def _reset_to_baseline(self) -> None:
+        """Reset system configuration to the initial baseline.
+
+        Requires double confirmation:
+        1. Warning dialog explaining the consequences
+        2. Typing 'RESET' to confirm
+        """
+        view = self.query_one("#history-content", ScrollableTextView)
+
+        if not HAS_HISTORY:
+            view.set_content(f"{_RED}xinas_history package not installed.{_NC}")
+            return
+
+        # Verify baseline exists
+        loop = asyncio.get_running_loop()
+        try:
+            engine = await loop.run_in_executor(None, _create_engine)
+            baseline = await loop.run_in_executor(
+                None, engine.get_baseline_manifest,
+            )
+        except ValueError:
+            view.set_content(
+                f"{_RED}No baseline snapshot exists.{_NC}\n\n"
+                f"  {_DIM}Use {_BLD}5 — Create Baseline{_NC}{_DIM} first to capture "
+                f"the initial system configuration.{_NC}"
+            )
+            return
+        except Exception as exc:
+            view.set_content(f"{_RED}Failed to load baseline: {exc}{_NC}")
+            return
+
+        # Step 1: Warning confirmation dialog
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(
+                "WARNING: Reset to Baseline\n\n"
+                "This will DISCARD all configuration changes made since\n"
+                "the initial installation and reset the system to its\n"
+                "original baseline configuration.\n\n"
+                "This may result in DATA LOSS.\n\n"
+                "RAID arrays, NFS exports, network settings, and all\n"
+                "managed services will be reverted to their initial state.\n\n"
+                f"Baseline: {baseline.id}\n"
+                f"Created:  {baseline.timestamp[:19].replace('T', ' ')}\n\n"
+                "Do you want to continue?",
+                "Reset to Baseline",
+            )
+        )
+        if not confirmed:
+            return
+
+        # Step 2: Type "RESET" confirmation
+        typed = await self.app.push_screen_wait(
+            InputDialog(
+                prompt=(
+                    "Type RESET to confirm restoring the initial baseline\n"
+                    "configuration. This action cannot be undone."
+                ),
+                title="Final Confirmation",
+                placeholder="RESET",
+            )
+        )
+        if typed != "RESET":
+            view.set_content(
+                f"{_YLW}Reset cancelled.{_NC}\n\n"
+                f"  {_DIM}Confirmation text did not match 'RESET'.{_NC}"
+            )
+            return
+
+        # Execute the reset
+        _progress_lines: list[str] = []
+
+        def _on_progress(line: str) -> None:
+            _progress_lines.append(line)
+            tail = _progress_lines[-30:]
+            self.app.call_from_thread(
+                view.set_content,
+                f"{_DIM}Resetting to baseline...{_NC}\n\n"
+                + "\n".join(tail),
+            )
+
+        view.set_content(
+            f"{_DIM}Resetting to baseline...{_NC}\n\n"
+            f"  {_DIM}This may take several minutes while the configuration "
+            f"is re-applied.{_NC}"
+        )
+
+        try:
+            self.app.audit.log(
+                "history.reset_to_baseline_attempt",
+                f"baseline={baseline.id}",
+                "STARTED",
+            )
+        except Exception:
+            pass
+
+        try:
+            store = FilesystemStore()
+            runner = TransactionalRunner(
+                engine=SnapshotEngine(store=store),
+            )
+
+            run_result = await runner.execute_reset_to_baseline(
+                source="xinas_menu",
+                reason="User-initiated reset to baseline",
+                progress_cb=_on_progress,
+            )
+
+            if run_result.success:
+                view.set_content(
+                    f"{_GRN}{_BLD}Reset to baseline completed successfully!{_NC}\n\n"
+                    f"  {_DIM}Baseline:{_NC}  {baseline.id}\n"
+                    f"  {_DIM}Snapshot:{_NC}  {run_result.snapshot_id}\n"
+                    f"  {_DIM}Result:{_NC}    {_GRN}applied{_NC}\n"
+                )
+                self.app.notify(
+                    "Reset to baseline completed.", severity="information",
+                )
+                try:
+                    self.app.audit.log(
+                        "history.reset_to_baseline",
+                        f"baseline={baseline.id}",
+                        "OK",
+                    )
+                except Exception:
+                    pass
+            else:
+                error_msg = run_result.error or "Unknown error"
+                rb_status = ""
+                if run_result.rollback_performed:
+                    if run_result.rollback_success:
+                        rb_status = (
+                            f"\n  {_YLW}Auto-rollback succeeded — "
+                            f"system restored to pre-change state.{_NC}"
+                        )
+                    else:
+                        rb_status = (
+                            f"\n  {_RED}Auto-rollback FAILED — "
+                            f"system may be in inconsistent state!{_NC}"
+                        )
+
+                view.set_content(
+                    f"{_RED}{_BLD}Reset to baseline failed.{_NC}\n\n"
+                    f"  {_DIM}Error:{_NC}  {error_msg}\n"
+                    f"{rb_status}"
+                )
+                self.app.notify("Reset to baseline failed.", severity="error")
+
+                try:
+                    self.app.audit.log(
+                        "history.reset_to_baseline",
+                        f"baseline={baseline.id} error={error_msg[:100]}",
+                        "FAIL",
+                    )
+                except Exception:
+                    pass
+
+        except Exception as exc:
+            _log.exception("Reset to baseline failed: %s", exc)
+            view.set_content(
+                f"{_RED}Reset to baseline failed: {exc}{_NC}"
+            )
+            self.app.notify(f"Reset error: {exc}", severity="error")
+
     # -- Garbage collection -------------------------------------------------
 
     @work(exclusive=True)
@@ -235,7 +486,7 @@ class ConfigHistoryScreen(Screen):
             ConfirmDialog(
                 "Run garbage collection?\n\n"
                 "This will remove snapshots beyond the retention limit\n"
-                "(keeps baseline + 10 most recent rollback-eligible).",
+                "(keeps baseline + 40 most recent rollback-eligible).",
                 "Garbage Collection",
             )
         )
@@ -352,6 +603,17 @@ def _format_history(summary: dict) -> str:
 
     if row == 0:
         lines.append(f"  {_DIM}(no snapshots found){_NC}")
+
+    # Hint if no baseline exists
+    if not baseline:
+        lines.append("")
+        lines.append(
+            f"  {_YLW}No baseline snapshot found.{_NC}  "
+            f"Use {_BLD}5 — Create Baseline{_NC} to capture current"
+        )
+        lines.append(
+            f"  system state as the reference point for rollback and drift detection."
+        )
 
     lines.append("")
     lines.append(f"  {_DIM}{'-' * 70}{_NC}")
