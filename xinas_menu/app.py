@@ -86,6 +86,7 @@ class XiNASApp(App):
         except Exception:
             _log.debug("could not update header badge", exc_info=True)
 
+    @work(exclusive=True)
     async def action_check_update(self) -> None:
         if self.update_available:
             from xinas_menu.widgets.confirm_dialog import ConfirmDialog
