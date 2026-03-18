@@ -164,5 +164,3 @@ class QuickActionsScreen(Screen):
             view.set_content("  Audit log not found.")
         except Exception as exc:
             view.set_content(f"  Error: {exc}")
-
-

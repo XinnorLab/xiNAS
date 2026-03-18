@@ -20,6 +20,7 @@ def run_cmd(
         r = subprocess.run(
             list(args),
             input=input,
+            stdin=subprocess.DEVNULL if input is None else None,
             capture_output=True,
             text=True,
             timeout=timeout,

@@ -178,7 +178,8 @@ def run_cmd(cmd, timeout=10):
     """Run a command, return stdout or None."""
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout
+            cmd, shell=True, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode == 0:
             return result.stdout.strip()

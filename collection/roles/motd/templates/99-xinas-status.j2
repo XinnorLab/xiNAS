@@ -190,7 +190,7 @@ echo -e "    ${WHITE}${BOLD}💾 RAID ARRAYS${NC}"
 echo -e "${CYAN}    ────────────────────────────────────────────────────────────────────────────${NC}"
 
 if command -v xicli &> /dev/null; then
-    raid_json=$(xicli raid show -f json 2>/dev/null)
+    raid_json=$(timeout 10 xicli raid show -f json </dev/null 2>/dev/null)
     if [[ -n "$raid_json" && "$raid_json" != "{}" && "$raid_json" != "null" ]]; then
         echo "$raid_json" | python3 -c "
 import sys, json
