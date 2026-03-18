@@ -350,11 +350,20 @@ class SnapshotDetailScreen(Screen):
                     else:
                         rb_status = f"\n  {_RED}Auto-rollback FAILED — system may be in inconsistent state!{_NC}"
 
+                output_section = ""
+                if run_result.output:
+                    output_section = (
+                        f"\n  {_DIM}{'─' * 60}{_NC}\n"
+                        f"  {_BLD}Ansible output:{_NC}\n\n"
+                        f"{run_result.output}\n"
+                    )
+
                 view.set_content(
                     f"{_RED}{_BLD}Rollback failed.{_NC}\n\n"
                     f"  {_DIM}Target:{_NC}    {target_id}\n"
                     f"  {_DIM}Error:{_NC}     {error_msg}\n"
                     f"{rb_status}"
+                    f"{output_section}"
                 )
                 self.app.notify("Rollback failed.", severity="error")
 

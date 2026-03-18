@@ -52,6 +52,7 @@ class RunResult:
     rollback_success: Optional[bool] = None
     rollback_class: str = ""
     error: Optional[str] = None
+    output: Optional[str] = None
     validation: Optional[dict] = None
     steps: list[str] = field(default_factory=list)
 
@@ -72,6 +73,8 @@ class RunResult:
             result["rollback_class"] = self.rollback_class
         if self.error is not None:
             result["error"] = self.error
+        if self.output is not None:
+            result["output"] = self.output
         if self.validation is not None:
             result["validation"] = self.validation
         if self.steps:
@@ -395,14 +398,18 @@ class TransactionalRunner:
         to :meth:`execute`.
         """
 
+        result_holder: dict = {}
+
         async def _apply() -> bool:
-            return await self._run_ansible_playbook(
+            ok, output = await self._run_ansible_playbook(
                 playbook=playbook,
                 extra_vars=extra_vars,
                 tags=tags,
             )
+            result_holder["output"] = output
+            return ok
 
-        return await self.execute(
+        run_result = await self.execute(
             operation=operation,
             source=source,
             apply_fn=_apply,
@@ -411,6 +418,9 @@ class TransactionalRunner:
             target_resources=target_resources,
             diff_summary=diff_summary,
         )
+        if result_holder.get("output"):
+            run_result.output = result_holder["output"]
+        return run_result
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -421,11 +431,12 @@ class TransactionalRunner:
         playbook: str,
         extra_vars: Optional[dict] = None,
         tags: Optional[list[str]] = None,
-    ) -> bool:
+    ) -> tuple[bool, Optional[str]]:
         """Run an Ansible playbook as a subprocess.
 
-        Returns ``True`` if the playbook exits with code 0, ``False``
-        otherwise.
+        Returns ``(True, None)`` on success, or ``(False, output_tail)``
+        on failure where *output_tail* contains the last 2000 characters
+        of combined stdout/stderr for diagnostics.
         """
         cmd = ["ansible-playbook", playbook]
 
@@ -461,26 +472,33 @@ class TransactionalRunner:
             )
 
             if proc_result.returncode != 0:
+                stdout_tail = (proc_result.stdout or "")[-2000:]
+                stderr_tail = (proc_result.stderr or "")[-2000:]
+                combined = ""
+                if stdout_tail:
+                    combined += stdout_tail
+                if stderr_tail:
+                    combined += "\n--- stderr ---\n" + stderr_tail
                 logger.error(
                     "Ansible playbook failed (exit %d):\nstdout: %s\nstderr: %s",
                     proc_result.returncode,
-                    proc_result.stdout[-2000:] if proc_result.stdout else "",
-                    proc_result.stderr[-2000:] if proc_result.stderr else "",
+                    stdout_tail,
+                    stderr_tail,
                 )
-                return False
+                return False, combined.strip() or "exit code {}".format(proc_result.returncode)
 
             logger.info("Ansible playbook completed successfully")
-            return True
+            return True, None
 
         except subprocess.TimeoutExpired:
             logger.error("Ansible playbook timed out after 3600s")
-            return False
+            return False, "Ansible playbook timed out after 3600s"
         except FileNotFoundError:
             logger.error("ansible-playbook not found in PATH")
-            return False
+            return False, "ansible-playbook not found in PATH"
         except Exception as exc:
             logger.exception("Ansible playbook execution error: %s", exc)
-            return False
+            return False, str(exc)
         finally:
             # Clean up vars temp file.
             if vars_file is not None:
@@ -521,7 +539,7 @@ class TransactionalRunner:
 
             # Re-run the playbook with the pre-change extra_vars.
             playbook = pre_manifest.playbook or "playbooks/site.yml"
-            ok = await self._run_ansible_playbook(
+            ok, output = await self._run_ansible_playbook(
                 playbook=playbook,
                 extra_vars=pre_manifest.extra_vars or None,
             )
@@ -540,6 +558,8 @@ class TransactionalRunner:
                 return True, None
             else:
                 msg = "Ansible playbook failed during rollback"
+                if output:
+                    msg += "\n" + output
                 logger.error("Auto-rollback failed: %s", msg)
                 return False, msg
 
