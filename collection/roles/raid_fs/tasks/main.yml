@@ -30,7 +30,7 @@
 - name: Apply xiRAID license
   ansible.builtin.command: "xicli license update -p {{ xiraid_license_path }}"
   changed_when: false
-  tags: [raid_fs, raid]
+  tags: [raid_fs, raid, license]
 
 - name: Build list of xiRAID device paths
   ansible.builtin.set_fact:
