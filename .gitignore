@@ -10,6 +10,9 @@ __pycache__/
 # Editor backups
 *~
 
+# Cached keys (machine-specific, never upload)
+keys/
+
 # Scripts dependencies
 scripts/node_modules/
 # End

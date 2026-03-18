@@ -60,20 +60,62 @@
   tags: [sysctl]
 
 
+- name: Ensure keys directory exists
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/../keys"
+    state: directory
+    mode: "0700"
+  when: xinas_hostname | length == 0
+  tags: [hostname]
+
 - name: Retrieve xiRAID hardware key
   ansible.builtin.command: ./hwkey
   args:
     chdir: "{{ playbook_dir }}/.."
   register: hwkey_result
   changed_when: false
-  failed_when: hwkey_result.rc != 0
+  failed_when: false
   when: xinas_hostname | length == 0
+  tags: [hostname]
+
+- name: Cache hardware key for future use
+  ansible.builtin.copy:
+    content: "{{ hwkey_result.stdout | trim }}"
+    dest: "{{ playbook_dir }}/../keys/hwkey"
+    mode: "0600"
+  when:
+    - xinas_hostname | length == 0
+    - hwkey_result.rc | default(1) == 0
+    - hwkey_result.stdout | default('') | trim | length > 0
+  tags: [hostname]
+
+- name: Fall back to cached hardware key
+  ansible.builtin.slurp:
+    src: "{{ playbook_dir }}/../keys/hwkey"
+  register: hwkey_cached
+  when:
+    - xinas_hostname | length == 0
+    - hwkey_result.rc | default(1) != 0
+  failed_when: hwkey_cached is failed
+  tags: [hostname]
+
+- name: Set hwkey fact from cache
+  ansible.builtin.set_fact:
+    hwkey_result:
+      stdout: "{{ hwkey_cached.content | b64decode | trim }}"
+      rc: 0
+  when:
+    - xinas_hostname | length == 0
+    - hwkey_result.rc | default(1) != 0
+    - hwkey_cached is not failed
   tags: [hostname]
 
 - name: Set default hostname fact
   ansible.builtin.set_fact:
     xinas_hostname: "xiNAS-{{ hwkey_result.stdout | trim | upper }}"
-  when: xinas_hostname | length == 0
+  when:
+    - xinas_hostname | length == 0
+    - hwkey_result.stdout | default('') | trim | length > 0
   tags: [hostname]
 
 - name: Set system hostname
