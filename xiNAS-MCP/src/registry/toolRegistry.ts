@@ -53,7 +53,15 @@ import {
   ShareDeleteSchema, handleShareDelete,
 } from '../tools/share.js';
 
-import { AuthGetSupportedModesSchema, handleAuthGetSupportedModes, AuthValidateKerberosSchema, handleAuthValidateKerberos } from '../tools/auth.js';
+import {
+  AuthGetSupportedModesSchema, handleAuthGetSupportedModes,
+  AuthValidateKerberosSchema, handleAuthValidateKerberos,
+  AuthListUsersSchema, handleAuthListUsers,
+  AuthCreateUserSchema, handleAuthCreateUser,
+  AuthDeleteUserSchema, handleAuthDeleteUser,
+  AuthSetQuotaSchema, handleAuthSetQuota,
+  AuthListQuotasSchema, handleAuthListQuotas,
+} from '../tools/auth.js';
 
 import { JobGetSchema, handleJobGet, JobListSchema, handleJobList, JobCancelSchema, handleJobCancel } from '../tools/job.js';
 
@@ -120,6 +128,11 @@ const TOOLS: ToolDef[] = [
   // Auth
   { name: 'auth.get_supported_modes', description: 'Get supported NFS authentication modes and Kerberos readiness', schema: AuthGetSupportedModesSchema, handler: handleAuthGetSupportedModes },
   { name: 'auth.validate_kerberos', description: 'Validate Kerberos configuration: keytab, time sync, krb5.conf', schema: AuthValidateKerberosSchema, handler: handleAuthValidateKerberos },
+  { name: 'auth.list_users', description: 'List system users (UID >= 1000) with username, uid, home, shell', schema: AuthListUsersSchema, handler: handleAuthListUsers },
+  { name: 'auth.create_user', description: 'Create a Linux user with home directory (plan/apply)', schema: AuthCreateUserSchema, handler: handleAuthCreateUser },
+  { name: 'auth.delete_user', description: 'Delete a Linux user, preserving home directory (plan/apply)', schema: AuthDeleteUserSchema, handler: handleAuthDeleteUser },
+  { name: 'auth.set_quota', description: 'Set disk quota for a user on an NFS export path', schema: AuthSetQuotaSchema, handler: handleAuthSetQuota },
+  { name: 'auth.list_quotas', description: 'List all disk quotas (repquota -a)', schema: AuthListQuotasSchema, handler: handleAuthListQuotas },
 
   // Jobs
   { name: 'job.get', description: 'Get status and progress of a long-running job', schema: JobGetSchema, handler: handleJobGet },

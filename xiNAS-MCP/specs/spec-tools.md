@@ -38,6 +38,11 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 | `share.delete` | operator | plan/apply | — | — | — | removeExport, getSessions, reload |
 | `auth.get_supported_modes` | viewer | — | — | settingsAuthShow | fs.existsSync | — |
 | `auth.validate_kerberos` | admin | — | — | — | fs.existsSync | — |
+| `auth.list_users` | viewer | — | — | — | getent passwd | — |
+| `auth.create_user` | admin | plan/apply | — | — | useradd, chpasswd | — |
+| `auth.delete_user` | admin | plan/apply | — | — | userdel | getSessions |
+| `auth.set_quota` | operator | — | — | — | — | setQuota |
+| `auth.list_quotas` | viewer | — | — | — | repquota -a | — |
 | `job.get` | viewer | — | — | — | JobManager | — |
 | `job.list` | viewer | — | — | — | JobManager | — |
 | `job.cancel` | operator | — | — | — | JobManager | — |
@@ -63,6 +68,20 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 1. Check `/proc/mounts` for `/dev/xi_<name>` — block if mounted
 2. Call `listExports()` — block if any export path under the array's mountpoint
 3. `dangerous=true` required — block if absent
+
+---
+
+## Auth User Management Preflight Logic
+
+### `auth.create_user` preflight
+1. Validate username matches `^[a-z_][a-z0-9_-]{0,31}$` — block if invalid (INVALID_ARGUMENT)
+2. Check `getent passwd <username>` — block if user already exists (CONFLICT)
+3. Check home_dir parent exists (`fs.existsSync`) — block if missing (PRECONDITION_FAILED)
+
+### `auth.delete_user` preflight
+1. Check `getent passwd <username>` — block if user doesn't exist (NOT_FOUND)
+2. Call `getSessions()` — warn if user has active NFS sessions
+3. Check UID >= 1000 — block if attempting to delete system user (PRECONDITION_FAILED)
 
 ---
 
@@ -140,6 +159,13 @@ Alerts are keyed by `check_id`. A new check run updates `last_seen` if the alert
 | `disk.get_smart` | device not found | NOT_FOUND |
 | `share.create` | path not found | PRECONDITION_FAILED (plan) |
 | `share.delete` | active sessions, dangerous=false | PRECONDITION_FAILED (plan) |
+| `auth.create_user` | invalid username | INVALID_ARGUMENT |
+| `auth.create_user` | user already exists | CONFLICT |
+| `auth.create_user` | home dir parent missing | PRECONDITION_FAILED (plan) |
+| `auth.delete_user` | user not found | NOT_FOUND |
+| `auth.delete_user` | system user (UID < 1000) | PRECONDITION_FAILED (plan) |
+| `auth.set_quota` | user not found | NOT_FOUND |
+| `auth.set_quota` | share path not found | NOT_FOUND |
 | Any | xiRAID gRPC UNAVAILABLE ×5 | INTERNAL |
 | Any | array locked by another operation | CONFLICT |
 | Any | insufficient role | PERMISSION_DENIED |

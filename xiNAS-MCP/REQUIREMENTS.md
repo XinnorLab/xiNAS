@@ -132,6 +132,17 @@ Both modes MUST be supported. Each controller MUST carry a stable, unique `contr
 |---|---|---|
 | `auth.get_supported_modes` | controller_id | sys, Kerberos, AD/LDAP readiness |
 | `auth.validate_kerberos` | controller_id, realm_config_ref | keytab validity, time sync status, DNS resolution |
+| `auth.list_users` | controller_id | username, uid, home, shell for each user (UID >= 1000) |
+| `auth.create_user` | controller_id, username, home_dir, mode | plan diff or result |
+| `auth.delete_user` | controller_id, username, mode | plan diff or result |
+| `auth.set_quota` | controller_id, username, share_id, soft_limit_gb, hard_limit_gb | result |
+| `auth.list_quotas` | controller_id | per-user/project quota report |
+
+`auth.create_user`: username must match `^[a-z_][a-z0-9_-]{0,31}$`. Home dir defaults to `/mnt/data/<username>`. Shell is always `/bin/bash`.
+
+`auth.delete_user` MUST NOT delete the home directory. Preflight MUST check for active NFS sessions from the user.
+
+`auth.set_quota` delegates to NFS helper daemon `set_quota` operation. Converts GB to KB internally.
 
 ### 4.8 Operational Jobs
 

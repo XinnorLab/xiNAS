@@ -13,9 +13,9 @@ viewer (0) < operator (1) < admin (2)
 
 | Role | Tools |
 |---|---|
-| `viewer` | `system.*`, `health.*`, `network.list`, `disk.list`, `disk.get_smart`, `raid.list`, `share.list`, `auth.get_supported_modes`, `job.get`, `job.list`, `config.list_snapshots`, `config.show_snapshot`, `config.diff_snapshots`, `config.get_status` |
-| `operator` | viewer + `disk.run_selftest`, `disk.set_led`, `share.create/update_policy/set_quota/delete/get_active_sessions`, `raid.lifecycle_control`, `job.cancel`, `config.check_drift` |
-| `admin` | operator + `raid.create/modify_performance/unload/restore/delete`, `disk.secure_erase`, `network.configure`, `auth.validate_kerberos`, `config.rollback` |
+| `viewer` | `system.*`, `health.*`, `network.list`, `disk.list`, `disk.get_smart`, `raid.list`, `share.list`, `auth.get_supported_modes`, `auth.list_users`, `auth.list_quotas`, `job.get`, `job.list`, `config.list_snapshots`, `config.show_snapshot`, `config.diff_snapshots`, `config.get_status` |
+| `operator` | viewer + `disk.run_selftest`, `disk.set_led`, `share.create/update_policy/set_quota/delete/get_active_sessions`, `auth.set_quota`, `raid.lifecycle_control`, `job.cancel`, `config.check_drift` |
+| `admin` | operator + `raid.create/modify_performance/unload/restore/delete`, `disk.secure_erase`, `network.configure`, `auth.validate_kerberos`, `auth.create_user`, `auth.delete_user`, `config.rollback` |
 
 Any tool not in the table defaults to `admin`.
 
@@ -152,6 +152,8 @@ After every successful `apply`, `planApply.ts` calls `recordSnapshot()` from `sr
 | `nfs_export` | create | `share_create` |
 | `nfs_export` | delete | `share_delete` |
 | `nfs_export` | modify | `share_modify` |
+| `linux_user` | create | `user_create` |
+| `linux_user` | delete | `user_delete` |
 | `network_config` | any | `network_modify` |
 | `configuration` | any | `rollback` |
 

@@ -33,6 +33,10 @@ function inferOperation(plan: PlanResult): string | null {
       return 'share_modify';
     case 'network_config':
       return 'network_modify';
+    case 'linux_user':
+      if (action === 'create') return 'user_create';
+      if (action === 'delete') return 'user_delete';
+      return null;
     case 'configuration':
       return 'rollback';
     default:

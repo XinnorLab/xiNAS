@@ -85,6 +85,7 @@
 | `tools/*` → `grpc/*` | function call | `getClient()` + typed request objects |
 | `grpc/*` → xiRAID | gRPC/TLS | `XRAIDService` proto |
 | `tools/share` → `os/nfsClient` | function call | `listExports()`, `addExport()` etc |
+| `tools/auth` → `os/nfsClient` | function call | `listSessions()`, `setQuota()` |
 | `tools/config` → `os/configHistory` | function call | `listSnapshots()`, `showSnapshot()` etc |
 | `tools/health` → `os/healthEngine` | function call | `runEngineCheck(profile)` |
 | `middleware/planApply` → `os/configHistory` | function call | `recordSnapshot()` (best-effort) |
@@ -105,8 +106,8 @@
 | `src/grpc/` | 8 | 350 |
 | `src/os/` | 7 | 610 |
 | `src/middleware/` | 5 | 240 |
-| `src/tools/` | 9 | 1180 |
-| `src/registry/` | 1 | 160 |
+| `src/tools/` | 9 | 2130 |
+| `src/registry/` | 1 | 240 |
 | `src/server/` | 2 | 80 |
 | `nfs-helper/` | 4 | 350 |
-| **Total** | **40** | **~3120** |
+| **Total** | **40** | **~4070** |
