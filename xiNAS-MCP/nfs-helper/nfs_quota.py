@@ -48,6 +48,17 @@ def set_project_quota(path: str, soft_kb: int, hard_kb: int, project_id: int) ->
     )
 
 
+def set_user_quota(mountpoint: str, username: str, soft_kb: int, hard_kb: int) -> None:
+    """Set XFS user quota for a given username on a mountpoint."""
+    limit_cmd = f"limit -u bsoft={soft_kb}k bhard={hard_kb}k {username}"
+    subprocess.run(
+        ["xfs_quota", "-x", "-c", limit_cmd, mountpoint],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _setup_project_files(path: str, project_id: int) -> None:
     """Ensure /etc/projects and /etc/projid contain entries for this project."""
     projects_path = "/etc/projects"

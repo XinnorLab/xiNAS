@@ -258,7 +258,7 @@ class UsersScreen(Screen):
         loop = asyncio.get_running_loop()
         ok, _, err = await loop.run_in_executor(
             None,
-            lambda: self.app.nfs.set_quota(export_path, soft_kb, hard_kb),
+            lambda: self.app.nfs.set_quota(export_path, soft_kb, hard_kb, username=username),
         )
         view = self.query_one("#users-content", ScrollableTextView)
         if ok:

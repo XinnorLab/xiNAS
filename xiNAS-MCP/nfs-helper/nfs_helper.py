@@ -20,7 +20,7 @@ import threading
 
 from nfs_exports import list_exports, add_export, remove_export, update_export
 from nfs_sessions import list_sessions, get_sessions_for_path
-from nfs_quota import set_project_quota
+from nfs_quota import set_project_quota, set_user_quota
 
 # --- Configuration ---
 
@@ -96,8 +96,13 @@ def handle_set_quota(req: dict) -> None:
         raise ValueError("quota.path is required")
     soft_kb = int(quota.get("soft_limit_kb", 0))
     hard_kb = int(quota.get("hard_limit_kb", 0))
-    project_id = int(quota.get("project_id", abs(hash(path)) % 65535 + 1))
-    set_project_quota(path, soft_kb, hard_kb, project_id)
+    username = quota.get("username")
+    if username:
+        mountpoint = path
+        set_user_quota(mountpoint, username, soft_kb, hard_kb)
+    else:
+        project_id = int(quota.get("project_id", abs(hash(path)) % 65535 + 1))
+        set_project_quota(path, soft_kb, hard_kb, project_id)
 
 
 def handle_reload(_req: dict) -> None:

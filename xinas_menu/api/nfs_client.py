@@ -89,14 +89,17 @@ class NFSHelperClient:
         soft_limit_kb: int,
         hard_limit_kb: int,
         project_id: int | None = None,
+        username: str | None = None,
     ) -> tuple[bool, None, str]:
-        quota = {
+        quota: dict = {
             "path": path,
             "soft_limit_kb": soft_limit_kb,
             "hard_limit_kb": hard_limit_kb,
         }
         if project_id is not None:
             quota["project_id"] = project_id
+        if username is not None:
+            quota["username"] = username
         return self._request("set_quota", quota=quota)
 
     def reload(self) -> tuple[bool, None, str]:
