@@ -37,14 +37,31 @@ class UpdateChecker:
             return False
 
     def apply_update(self) -> tuple[bool, str]:
-        """Run git pull. Call from a thread (blocking)."""
+        """Run git pull and redeploy changed components. Call from a thread (blocking)."""
         if self._repo is None:
             return False, "no repo found"
         try:
             out = _git_output(self._repo, "pull", "--ff-only")
+            self._sync_nfs_helper()
             return True, out
         except Exception as exc:
             return False, str(exc)
+
+    def _sync_nfs_helper(self) -> None:
+        """Copy nfs-helper sources to installed location and restart the service."""
+        if self._repo is None:
+            return
+        src = self._repo / "xiNAS-MCP" / "nfs-helper"
+        dest = Path("/usr/lib/xinas-mcp/nfs-helper")
+        if not src.is_dir() or not dest.is_dir():
+            return
+        import shutil
+        for py_file in src.glob("*.py"):
+            shutil.copy2(py_file, dest / py_file.name)
+        subprocess.run(
+            ["systemctl", "restart", "xinas-nfs-helper"],
+            capture_output=True, timeout=15,
+        )
 
     @staticmethod
     def restart_self() -> None:
