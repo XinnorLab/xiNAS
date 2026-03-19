@@ -140,10 +140,25 @@ Both modes MUST be supported. Each controller MUST carry a stable, unique `contr
 | `auth.delete_user` | controller_id, username, mode | plan diff or result |
 | `auth.set_quota` | controller_id, username, share_id, soft_limit_gb, hard_limit_gb | result |
 | `auth.list_quotas` | controller_id | per-user/project quota report |
+| `auth.change_password` | controller_id, username, password, password_confirm, mode | plan diff or result |
+| `auth.set_user_lock` | controller_id, username, locked (bool), mode | plan diff or result |
+| `auth.change_shell` | controller_id, username, shell, mode | plan diff or result |
+| `auth.add_to_group` | controller_id, username, group, mode | plan diff or result |
+| `auth.remove_from_group` | controller_id, username, group, mode | plan diff or result |
 
 `auth.create_user`: username must match `^[a-z_][a-z0-9_-]{0,31}$`. Home dir defaults to `/mnt/data/<username>`. Shell is always `/bin/bash`.
 
-`auth.delete_user` MUST NOT delete the home directory. Preflight MUST check for active NFS sessions from the user.
+`auth.delete_user`: removes user and home directory (`userdel -r`). Preflight MUST check for active NFS sessions from the user.
+
+`auth.change_password`: `password` and `password_confirm` MUST match. Uses `chpasswd` via stdin.
+
+`auth.set_user_lock`: locks (`usermod -L`) or unlocks (`usermod -U`) a user account. Preflight checks current state via `passwd -S`.
+
+`auth.change_shell`: validates shell binary exists on disk. Uses `chsh -s`.
+
+`auth.add_to_group`: adds user to a supplementary group via `usermod -aG`. Blocks if already a member.
+
+`auth.remove_from_group`: removes user from a group via `gpasswd -d`. MUST NOT remove user from their primary group.
 
 `auth.set_quota` delegates to NFS helper daemon `set_quota` operation. Converts GB to KB internally.
 

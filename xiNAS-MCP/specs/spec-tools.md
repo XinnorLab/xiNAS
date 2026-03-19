@@ -44,6 +44,11 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 | `auth.delete_user` | admin | plan/apply | — | — | userdel | getSessions |
 | `auth.set_quota` | operator | — | — | — | — | setQuota |
 | `auth.list_quotas` | viewer | — | — | — | repquota -a | — |
+| `auth.change_password` | admin | plan/apply | — | — | chpasswd | — |
+| `auth.set_user_lock` | admin | plan/apply | — | — | usermod -L/-U, passwd -S | — |
+| `auth.change_shell` | admin | plan/apply | — | — | chsh | — |
+| `auth.add_to_group` | admin | plan/apply | — | — | usermod -aG, getent group | — |
+| `auth.remove_from_group` | admin | plan/apply | — | — | gpasswd -d, getent group | — |
 | `job.get` | viewer | — | — | — | JobManager | — |
 | `job.list` | viewer | — | — | — | JobManager | — |
 | `job.cancel` | operator | — | — | — | JobManager | — |
@@ -91,6 +96,34 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 1. Check `getent passwd <username>` — block if user doesn't exist (NOT_FOUND)
 2. Call `getSessions()` — warn if user has active NFS sessions
 3. Check UID >= 1000 — block if attempting to delete system user (PRECONDITION_FAILED)
+
+### `auth.change_password` preflight
+1. Check user exists via `getent passwd` — block if not found (NOT_FOUND)
+2. Check UID >= 1000 — block if system user (PRECONDITION_FAILED)
+3. Validate `password === password_confirm` — block if mismatch (INVALID_ARGUMENT)
+
+### `auth.set_user_lock` preflight
+1. Check user exists via `getent passwd` — block if not found (NOT_FOUND)
+2. Check UID >= 1000 — block if system user (PRECONDITION_FAILED)
+3. Check current lock state via `passwd -S` — warn if already in requested state
+
+### `auth.change_shell` preflight
+1. Check user exists via `getent passwd` — block if not found (NOT_FOUND)
+2. Check UID >= 1000 — block if system user (PRECONDITION_FAILED)
+3. Check shell binary exists via `fs.existsSync` — block if not found (PRECONDITION_FAILED)
+
+### `auth.add_to_group` preflight
+1. Check user exists via `getent passwd` — block if not found (NOT_FOUND)
+2. Check UID >= 1000 — block if system user (PRECONDITION_FAILED)
+3. Check group exists via `getent group` — block if not found (NOT_FOUND)
+4. Check user not already a member — block if duplicate (CONFLICT)
+
+### `auth.remove_from_group` preflight
+1. Check user exists via `getent passwd` — block if not found (NOT_FOUND)
+2. Check UID >= 1000 — block if system user (PRECONDITION_FAILED)
+3. Check group exists via `getent group` — block if not found (NOT_FOUND)
+4. Check user IS a member — block if not a member (PRECONDITION_FAILED)
+5. Check group is not user's primary group — block if primary (PRECONDITION_FAILED)
 
 ---
 
@@ -200,6 +233,20 @@ Alerts are keyed by `check_id`. A new check run updates `last_seen` if the alert
 | `auth.delete_user` | system user (UID < 1000) | PRECONDITION_FAILED (plan) |
 | `auth.set_quota` | user not found | NOT_FOUND |
 | `auth.set_quota` | share path not found | NOT_FOUND |
+| `auth.change_password` | user not found | NOT_FOUND |
+| `auth.change_password` | system user (UID < 1000) | PRECONDITION_FAILED (plan) |
+| `auth.change_password` | passwords don't match | INVALID_ARGUMENT |
+| `auth.set_user_lock` | user not found | NOT_FOUND |
+| `auth.set_user_lock` | system user (UID < 1000) | PRECONDITION_FAILED (plan) |
+| `auth.change_shell` | user not found | NOT_FOUND |
+| `auth.change_shell` | shell binary not found | PRECONDITION_FAILED (plan) |
+| `auth.add_to_group` | user not found | NOT_FOUND |
+| `auth.add_to_group` | group not found | NOT_FOUND |
+| `auth.add_to_group` | user already in group | CONFLICT |
+| `auth.remove_from_group` | user not found | NOT_FOUND |
+| `auth.remove_from_group` | group not found | NOT_FOUND |
+| `auth.remove_from_group` | user not in group | PRECONDITION_FAILED (plan) |
+| `auth.remove_from_group` | is primary group | PRECONDITION_FAILED (plan) |
 | `system.get_logs` | journalctl not available | INTERNAL |
 | Any | xiRAID gRPC UNAVAILABLE ×5 | INTERNAL |
 | Any | array locked by another operation | CONFLICT |

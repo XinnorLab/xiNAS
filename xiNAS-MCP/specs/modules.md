@@ -87,7 +87,7 @@
 | `grpc/*` → xiRAID | gRPC/TLS | `XRAIDService` proto |
 | `tools/share` → `os/nfsClient` | function call | `listExports()`, `addExport()` etc |
 | `tools/auth` → `os/nfsClient` | function call | `listSessions()`, `setQuota()` |
-| `tools/auth` → OS | subprocess | `getent passwd`, `useradd`, `userdel`, `repquota` |
+| `tools/auth` → OS | subprocess | `getent passwd`, `useradd`, `userdel`, `chpasswd`, `usermod`, `passwd -S`, `chsh`, `gpasswd`, `getent group`, `repquota` |
 | `tools/system` → OS | subprocess | `journalctl --output=json` |
 | `tools/config` → `os/configHistory` | function call | `listSnapshots()`, `showSnapshot()` etc |
 | `tools/health` → `os/healthEngine` | function call | `runEngineCheck(profile)` |
@@ -109,8 +109,8 @@
 | `src/grpc/` | 9 | 590 |
 | `src/os/` | 7 | 910 |
 | `src/middleware/` | 5 | 340 |
-| `src/tools/` | 10 | 2440 |
-| `src/registry/` | 1 | 260 |
+| `src/tools/` | 10 | 2760 |
+| `src/registry/` | 1 | 295 |
 | `src/server/` | 3 | 240 |
 | `nfs-helper/` | 4 | 350 |
-| **Total** | **43** | **~5410** |
+| **Total** | **43** | **~5745** |
