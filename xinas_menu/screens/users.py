@@ -165,7 +165,7 @@ class UsersScreen(Screen):
             return
 
         loop = asyncio.get_running_loop()
-        ok, err = await loop.run_in_executor(
+        ok, _, err = await loop.run_in_executor(
             None, lambda: _run_cmd("userdel", username)
         )
         if ok:
