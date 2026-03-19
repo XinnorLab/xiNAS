@@ -1,29 +1,56 @@
 """Garbage collection for xiNAS configuration history snapshots.
 
-Retention rules:
+Retention rules (configurable via /etc/xinas-mcp/config.json):
 1. Never delete baseline.
 2. Never delete the currently active/effective snapshot.
 3. Never delete a snapshot referenced by an in-progress rollback.
-4. Verify a snapshot is not locked before deletion.
-5. When a new rollback-eligible snapshot is created, purge the 41st oldest
-   (excluding baseline).
+4. Purge rollback-eligible snapshots exceeding max_snapshots (oldest first).
+5. Purge rollback-eligible snapshots older than max_age_days (if > 0).
 6. On startup, scan for stale ephemeral snapshots.
 """
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import List, Optional, Set
 
 from .models import Manifest, SnapshotStatus, SnapshotType
 from .store import FilesystemStore
 
+CONFIG_PATH = Path("/etc/xinas-mcp/config.json")
+
+
+@dataclass(frozen=True)
+class RetentionPolicy:
+    """Configurable retention policy for GC."""
+    max_snapshots: int = 40
+    max_age_days: int = 0  # 0 = disabled
+
+
+def load_retention_policy() -> RetentionPolicy:
+    """Load retention policy from /etc/xinas-mcp/config.json.
+
+    Falls back to defaults if the file is missing or malformed.
+    """
+    try:
+        data = json.loads(CONFIG_PATH.read_text())
+        section = data.get("retention", {})
+        return RetentionPolicy(
+            max_snapshots=max(1, int(section.get("max_snapshots", 40))),
+            max_age_days=max(0, int(section.get("max_age_days", 0))),
+        )
+    except Exception:
+        return RetentionPolicy()
+
 
 class GarbageCollector:
-    """Manages snapshot retention: baseline + 40 rollback-eligible + 1 ephemeral."""
+    """Manages snapshot retention with configurable policy."""
 
-    MAX_ROLLBACK_SNAPSHOTS = 40
-
-    def __init__(self, store: FilesystemStore) -> None:
+    def __init__(self, store: FilesystemStore, policy: Optional[RetentionPolicy] = None) -> None:
         self._store = store
+        self._policy = policy or RetentionPolicy()
 
     # -- public API ---------------------------------------------------------
 
@@ -59,19 +86,25 @@ class GarbageCollector:
             rollback_eligible, current_effective_id, in_progress_ids
         )
 
-        # How many rollback-eligible snapshots exceed the limit?
-        protected_count = len(rollback_eligible) - len(purgeable)
-        excess = len(rollback_eligible) - self.MAX_ROLLBACK_SNAPSHOTS
-        if excess <= 0:
-            return purged
+        to_purge_ids: set[str] = set()
 
-        # We can only remove as many as are purgeable and needed.
-        to_remove = min(excess, len(purgeable))
+        # Rule 1: count-based
+        excess = len(rollback_eligible) - self._policy.max_snapshots
+        if excess > 0:
+            for m in purgeable[:excess]:
+                to_purge_ids.add(m.id)
 
-        # purgeable is oldest-first, so take from the front.
-        for m in purgeable[:to_remove]:
-            if self._store.delete_snapshot(m.id):
-                purged.append(m.id)
+        # Rule 2: age-based
+        if self._policy.max_age_days > 0:
+            for m in purgeable:
+                if self._is_expired(m, self._policy.max_age_days):
+                    to_purge_ids.add(m.id)
+
+        # Delete in oldest-first order
+        for m in purgeable:
+            if m.id in to_purge_ids:
+                if self._store.delete_snapshot(m.id):
+                    purged.append(m.id)
 
         return purged
 
@@ -152,3 +185,16 @@ class GarbageCollector:
             m for m in snapshots
             if not self._is_protected(m, current_effective_id, in_progress_ids)
         ]
+
+    @staticmethod
+    def _is_expired(manifest: Manifest, max_age_days: int) -> bool:
+        """Check if a snapshot is older than max_age_days."""
+        if max_age_days <= 0:
+            return False
+        try:
+            ts = manifest.timestamp.replace("Z", "+00:00")
+            snap_time = datetime.fromisoformat(ts)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+            return snap_time < cutoff
+        except (ValueError, TypeError):
+            return False
