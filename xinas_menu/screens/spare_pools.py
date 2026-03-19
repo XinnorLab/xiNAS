@@ -48,6 +48,27 @@ _YLW = "\033[33m"
 _NC = "\033[0m"
 
 
+def _pool_error(action: str, err: str) -> str:
+    """Format a pool operation error with short summary and full details."""
+    short = grpc_short_error(err)
+    lines = [
+        f"{_BLD}{_RED}ERROR:{_NC} {action}",
+        "",
+        f"  {_BLD}Reason:{_NC}  {short}",
+    ]
+    # Show full error if it contains more info than the short version
+    raw = err.strip() if err else ""
+    if raw and raw != short and len(raw) > len(short):
+        lines.append("")
+        lines.append(f"  {_DIM}Full error:{_NC}")
+        for raw_line in raw.splitlines():
+            while len(raw_line) > 72:
+                lines.append(f"    {raw_line[:72]}")
+                raw_line = raw_line[72:]
+            lines.append(f"    {raw_line}")
+    return "\n".join(lines)
+
+
 def _box_line(content: str = "", w: int = 66) -> str:
     visible = len(content.replace(_BLD, "").replace(_DIM, "").replace(_CYN, "")
                          .replace(_GRN, "").replace(_RED, "").replace(_YLW, "").replace(_NC, ""))
@@ -307,7 +328,7 @@ class SparePoolScreen(Screen):
             self.app.notify(f"Pool '{name}' created successfully.", severity="information")
             self._view_pools()
         else:
-            view.set_content(f"Failed to create pool: {grpc_short_error(err)}")
+            view.set_content(_pool_error("Failed to create pool", err))
 
     # ── Add Drives ───────────────────────────────────────────────────────────
 
@@ -356,7 +377,7 @@ class SparePoolScreen(Screen):
             self.app.notify(f"Drives added to pool '{pool}'.", severity="information")
             self._view_pools()
         else:
-            view.set_content(f"Failed to add drives: {grpc_short_error(err)}")
+            view.set_content(_pool_error("Failed to add drives", err))
 
     # ── Remove Drives ────────────────────────────────────────────────────────
 
@@ -411,7 +432,7 @@ class SparePoolScreen(Screen):
             self.app.notify(f"Drives removed from pool '{pool}'.", severity="information")
             self._view_pools()
         else:
-            view.set_content(f"Failed to remove drives: {grpc_short_error(err)}")
+            view.set_content(_pool_error("Failed to remove drives", err))
 
     # ── Activate ─────────────────────────────────────────────────────────────
 
@@ -435,7 +456,7 @@ class SparePoolScreen(Screen):
             self.app.notify(f"Pool '{pool}' activated.", severity="information")
             self._view_pools()
         else:
-            view.set_content(f"Failed to activate pool: {grpc_short_error(err)}")
+            view.set_content(_pool_error("Failed to activate pool", err))
 
     # ── Deactivate ───────────────────────────────────────────────────────────
 
@@ -469,7 +490,7 @@ class SparePoolScreen(Screen):
             self.app.notify(f"Pool '{pool}' deactivated.", severity="information")
             self._view_pools()
         else:
-            view.set_content(f"Failed to deactivate pool: {grpc_short_error(err)}")
+            view.set_content(_pool_error("Failed to deactivate pool", err))
 
     # ── Delete ───────────────────────────────────────────────────────────────
 
@@ -504,4 +525,4 @@ class SparePoolScreen(Screen):
             self.app.notify(f"Pool '{pool}' deleted.", severity="information")
             self._view_pools()
         else:
-            view.set_content(f"Failed to delete pool: {grpc_short_error(err)}")
+            view.set_content(_pool_error("Failed to delete pool", err))
