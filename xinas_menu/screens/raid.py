@@ -120,7 +120,7 @@ class RAIDScreen(Screen):
                 "  \033[1m1\033[0m  \033[36mQuick Overview\033[0m    \033[2mSummary of all arrays\033[0m\n"
                 "  \033[1m2\033[0m  \033[36mExtended Details\033[0m  \033[2mDetailed array info (capacity, state, devices)\033[0m\n"
                 "  \033[1m3\033[0m  \033[36mPhysical Drives\033[0m   \033[2mDrive list with health and membership\033[0m\n"
-                "  \033[1m4\033[0m  \033[36mSpare Pools\033[0m       \033[2mView spare pool configuration\033[0m\n"
+                "  \033[1m4\033[0m  \033[36mSpare Pools\033[0m       \033[2mManage spare drive pools\033[0m\n"
                 "  \033[1m5\033[0m  \033[36mCreate Array\033[0m      \033[2mCreate a new RAID array (wizard)\033[0m\n"
                 "  \033[1m6\033[0m  \033[36mModify Array\033[0m      \033[2mChange array parameters\033[0m\n"
                 "  \033[1m7\033[0m  \033[36mDelete Array\033[0m      \033[2mDestroy an existing array\033[0m\n",
@@ -142,7 +142,8 @@ class RAIDScreen(Screen):
         elif key == "3":
             self._show_drives()
         elif key == "4":
-            self._show_pools()
+            from xinas_menu.screens.spare_pools import SparePoolScreen
+            self.app.push_screen(SparePoolScreen())
         elif key == "5":
             self._create_array_wizard()
         elif key == "6":

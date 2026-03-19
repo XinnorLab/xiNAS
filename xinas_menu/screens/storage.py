@@ -18,6 +18,7 @@ _MENU = [
     MenuItem("2", "NFS Management"),
     MenuItem("3", "Physical Drives"),
     MenuItem("4", "Filesystem"),
+    MenuItem("5", "Spare Pools"),
     MenuItem("0", "Back"),
 ]
 
@@ -47,6 +48,7 @@ class StorageScreen(Screen):
             f"  {BLD}2{NC}  {CYN}NFS Management{NC}  {DIM}Configure NFS exports and shares{NC}\n"
             f"  {BLD}3{NC}  {CYN}Physical Drives{NC}    {DIM}View drive inventory and RAID membership{NC}\n"
             f"  {BLD}4{NC}  {CYN}Filesystem{NC}         {DIM}Create and manage XFS filesystems{NC}\n"
+            f"  {BLD}5{NC}  {CYN}Spare Pools{NC}        {DIM}Manage spare drive pools{NC}\n"
         )
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
@@ -65,3 +67,6 @@ class StorageScreen(Screen):
         elif key == "4":
             from xinas_menu.screens.filesystem import FilesystemScreen
             self.app.push_screen(FilesystemScreen())
+        elif key == "5":
+            from xinas_menu.screens.spare_pools import SparePoolScreen
+            self.app.push_screen(SparePoolScreen())

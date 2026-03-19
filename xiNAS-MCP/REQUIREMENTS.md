@@ -176,6 +176,33 @@ The MCP server MUST implement per-array locking: a `raid.delete` MUST be rejecte
 
 **Auto-snapshot:** All mutating tools (`raid.create/modify/delete`, `share.create/update_policy/delete`, `network.configure`) automatically record a configuration snapshot after successful apply via the plan/apply middleware. This ensures the config-history timeline stays current regardless of which tool initiates the change.
 
+### 4.10 Spare Pool Management
+
+| Tool | Inputs | Output |
+|---|---|---|
+| `pool.list` | controller_id | pool name, state, drive count, drive details (path, size, serial) |
+| `pool.create` | controller_id, name, drives, mode | plan diff or result |
+| `pool.delete` | controller_id, name, mode, dangerous=true | plan diff or result |
+| `pool.add_drives` | controller_id, name, drives, mode | plan diff or result |
+| `pool.remove_drives` | controller_id, name, drives, mode | plan diff or result |
+| `pool.activate` | controller_id, name | result |
+| `pool.deactivate` | controller_id, name | result |
+| `pool.acquire` | controller_id, name, size, discardable | result (acquired drive serial) |
+
+**Backend:** gRPC calls to xiRAID daemon (`pool_*` methods). See `src/grpc/pool.ts` for typed wrappers.
+
+**`pool.create` spec:** `name` must match `^[a-zA-Z0-9_-]+$`. `drives` must contain at least one block device path. Preflight MUST verify drives are not members of any existing RAID array or spare pool.
+
+**`pool.delete`** requires `dangerous=true`. Preflight MUST check the pool is not currently assigned to any RAID array.
+
+**`pool.add_drives` preflight:** drives MUST NOT be members of any RAID array or other spare pool.
+
+**`pool.remove_drives` preflight:** drives MUST be members of the specified pool.
+
+**`pool.acquire`** is an advanced operation for manual spare drive acquisition. Returns the serial number of the acquired drive. `size` is the minimum required capacity in bytes. `discardable` indicates whether RZAT-validated drives are acceptable.
+
+**Constraint:** RAID level 0 arrays cannot have spare pools assigned (enforced by xiRAID).
+
 ---
 
 ## 5. Security Requirements
@@ -188,9 +215,9 @@ The MCP server MUST implement per-array locking: a `raid.delete` MUST be rejecte
 
 | Role | Permissions |
 |---|---|
-| `viewer` | All read-only tools |
-| `operator` | viewer + share create/update/delete, quota management, non-destructive operations |
-| `admin` | operator + RAID create/delete, disk wipe, system configuration |
+| `viewer` | All read-only tools (incl. `pool.list`) |
+| `operator` | viewer + share create/update/delete, quota management, pool activate/deactivate, non-destructive operations |
+| `admin` | operator + RAID create/delete, pool create/delete/add/remove/acquire, disk wipe, system configuration |
 
 ### 5.3 Audit Logging
 

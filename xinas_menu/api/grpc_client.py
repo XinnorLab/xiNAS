@@ -403,6 +403,48 @@ class XiRAIDClient:
     async def pool_list(self) -> tuple[bool, Any, str]:
         return await self.pool_show()
 
+    async def pool_create(self, name: str, drives: list[str]) -> tuple[bool, Any, str]:
+        """Create a spare pool with the given drives."""
+        if not self._ensure_channel():
+            return _no_stubs_error()
+        return await self._call("pool_create",
+                                self._msg_pool.PoolCreate(name=name, drives=drives))
+
+    async def pool_delete(self, name: str) -> tuple[bool, Any, str]:
+        """Delete a spare pool."""
+        if not self._ensure_channel():
+            return _no_stubs_error()
+        return await self._call("pool_delete",
+                                self._msg_pool.PoolDelete(name=name))
+
+    async def pool_add(self, name: str, drives: list[str]) -> tuple[bool, Any, str]:
+        """Add drives to an existing spare pool."""
+        if not self._ensure_channel():
+            return _no_stubs_error()
+        return await self._call("pool_add",
+                                self._msg_pool.PoolAdd(name=name, drives=drives))
+
+    async def pool_remove(self, name: str, drives: list[str]) -> tuple[bool, Any, str]:
+        """Remove drives from a spare pool."""
+        if not self._ensure_channel():
+            return _no_stubs_error()
+        return await self._call("pool_remove",
+                                self._msg_pool.PoolRemove(name=name, drives=drives))
+
+    async def pool_activate(self, name: str) -> tuple[bool, Any, str]:
+        """Activate a spare pool (load into memory)."""
+        if not self._ensure_channel():
+            return _no_stubs_error()
+        return await self._call("pool_activate",
+                                self._msg_pool.PoolActivate(name=name))
+
+    async def pool_deactivate(self, name: str) -> tuple[bool, Any, str]:
+        """Deactivate a spare pool (unload from memory)."""
+        if not self._ensure_channel():
+            return _no_stubs_error()
+        return await self._call("pool_deactivate",
+                                self._msg_pool.PoolDeactivate(name=name))
+
     # ── License ────────────────────────────────────────────────────────────
 
     async def license_show(self) -> tuple[bool, Any, str]:

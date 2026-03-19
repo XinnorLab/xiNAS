@@ -13,9 +13,9 @@ viewer (0) < operator (1) < admin (2)
 
 | Role | Tools |
 |---|---|
-| `viewer` | `system.*`, `health.*`, `network.list`, `disk.list`, `disk.get_smart`, `raid.list`, `share.list`, `auth.get_supported_modes`, `auth.list_users`, `auth.list_quotas`, `job.get`, `job.list`, `config.list_snapshots`, `config.show_snapshot`, `config.diff_snapshots`, `config.get_status` |
-| `operator` | viewer + `disk.run_selftest`, `disk.set_led`, `share.create/update_policy/set_quota/delete/get_active_sessions`, `auth.set_quota`, `raid.lifecycle_control`, `job.cancel`, `config.check_drift` |
-| `admin` | operator + `raid.create/modify_performance/unload/restore/delete`, `disk.secure_erase`, `network.configure`, `auth.validate_kerberos`, `auth.create_user`, `auth.delete_user`, `config.rollback` |
+| `viewer` | `system.*`, `health.*`, `network.list`, `disk.list`, `disk.get_smart`, `raid.list`, `pool.list`, `share.list`, `auth.get_supported_modes`, `auth.list_users`, `auth.list_quotas`, `job.get`, `job.list`, `config.list_snapshots`, `config.show_snapshot`, `config.diff_snapshots`, `config.get_status` |
+| `operator` | viewer + `disk.run_selftest`, `disk.set_led`, `share.create/update_policy/set_quota/delete/get_active_sessions`, `auth.set_quota`, `raid.lifecycle_control`, `pool.activate`, `pool.deactivate`, `job.cancel`, `config.check_drift` |
+| `admin` | operator + `raid.create/modify_performance/unload/restore/delete`, `pool.create/delete/add_drives/remove_drives/acquire`, `disk.secure_erase`, `network.configure`, `auth.validate_kerberos`, `auth.create_user`, `auth.delete_user`, `config.rollback` |
 
 Any tool not in the table defaults to `admin`.
 

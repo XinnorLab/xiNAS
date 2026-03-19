@@ -53,6 +53,14 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 | `config.check_drift` | operator | — | — | — | config-history subprocess | — |
 | `config.get_status` | viewer | — | — | — | config-history subprocess | — |
 | `config.rollback` | admin | plan/apply | — | — | config-history subprocess | — |
+| `pool.list` | viewer | — | — | poolShow | — | — |
+| `pool.create` | admin | plan/apply | — | poolCreate | — | — |
+| `pool.delete` | admin | plan/apply | — | poolDelete | — | — |
+| `pool.add_drives` | admin | plan/apply | — | poolAdd | — | — |
+| `pool.remove_drives` | admin | plan/apply | — | poolRemove | — | — |
+| `pool.activate` | operator | — | — | poolActivate | — | — |
+| `pool.deactivate` | operator | — | — | poolDeactivate | — | — |
+| `pool.acquire` | admin | — | — | poolAcquire | — | — |
 
 ---
 
@@ -83,6 +91,31 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 1. Check `getent passwd <username>` — block if user doesn't exist (NOT_FOUND)
 2. Call `getSessions()` — warn if user has active NFS sessions
 3. Check UID >= 1000 — block if attempting to delete system user (PRECONDITION_FAILED)
+
+---
+
+## Pool Preflight Logic
+
+### `pool.create` preflight
+1. Validate `name` matches `^[a-zA-Z0-9_-]+$` — block if invalid (INVALID_ARGUMENT)
+2. `drives.length >= 1` — block if empty (INVALID_ARGUMENT)
+3. Cross-check drives against `raidShow()` — block if any drive is a RAID member (CONFLICT)
+4. Cross-check drives against `poolShow()` — block if any drive is in another pool (CONFLICT)
+
+### `pool.delete` preflight
+1. Verify pool exists via `poolShow(name)` — block if not found (NOT_FOUND)
+2. Cross-check against `raidShow()` — block if pool is assigned to any RAID array (PRECONDITION_FAILED)
+3. `dangerous=true` required — block if absent (PRECONDITION_FAILED)
+
+### `pool.add_drives` preflight
+1. Verify pool exists via `poolShow(name)` — block if not found (NOT_FOUND)
+2. `drives.length >= 1` — block if empty (INVALID_ARGUMENT)
+3. Cross-check drives against `raidShow()` — block if any drive is a RAID member (CONFLICT)
+4. Cross-check drives against `poolShow()` — block if any drive is in another pool (CONFLICT)
+
+### `pool.remove_drives` preflight
+1. Verify pool exists via `poolShow(name)` — block if not found (NOT_FOUND)
+2. Verify all specified drives are members of the pool — block if any are not (INVALID_ARGUMENT)
 
 ---
 
