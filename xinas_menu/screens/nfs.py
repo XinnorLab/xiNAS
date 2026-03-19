@@ -151,16 +151,14 @@ class NFSScreen(Screen):
             return
 
         # Step 3: Access mode
-        while True:
-            access = await self.app.push_screen_wait(
-                InputDialog("Access mode (rw / ro):", "Add Share — Step 3/5", default="rw")
-            )
-            if access is None:
-                return
-            if access.strip().lower() in ("rw", "ro"):
-                access = access.strip().lower()
-                break
-            self.app.notify("Access mode must be 'rw' or 'ro'.", severity="error")
+        access_choice = await self.app.push_screen_wait(
+            SelectDialog(["rw  (Read/Write)", "ro  (Read Only)"],
+                         title="Add Share — Step 3/5",
+                         prompt="Select access mode:")
+        )
+        if access_choice is None:
+            return
+        access = access_choice.split()[0]
 
         # Step 4: Extra NFS options
         extra_opts = await self.app.push_screen_wait(

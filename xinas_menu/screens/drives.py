@@ -222,31 +222,23 @@ class PhysicalDrivesScreen(Screen):
 
     @work(exclusive=True)
     async def action_filter_numa(self) -> None:
-        from xinas_menu.widgets.input_dialog import InputDialog
+        from xinas_menu.widgets.select_dialog import SelectDialog
         numa_nodes = sorted({
             d.get("numa_node", d.get("numa", 0))
             for d in self._all_drives
         })
-        current = str(self._filter_numa) if self._filter_numa is not None else ""
+        _CLEAR = "(clear filter)"
+        choices = [_CLEAR] + [str(n) for n in numa_nodes]
         val = await self.app.push_screen_wait(
-            InputDialog(
-                f"NUMA node filter (available: {', '.join(str(n) for n in numa_nodes)}, empty to clear):",
-                "NUMA Filter",
-                default=current,
-                placeholder="0, 1, ...",
-            )
+            SelectDialog(choices, title="NUMA Filter",
+                         prompt="Select NUMA node to filter by:")
         )
         if val is None:
             return
-        val = val.strip()
-        if not val:
+        if val == _CLEAR:
             self._filter_numa = None
         else:
-            try:
-                self._filter_numa = int(val)
-            except ValueError:
-                self.app.notify("Invalid NUMA node number.", severity="error")
-                return
+            self._filter_numa = int(val)
         self._refresh_table()
 
     # ── Drive Actions ─────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ from textual import work
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
+from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -144,17 +145,18 @@ class UsersScreen(Screen):
 
     @work(exclusive=True)
     async def _delete_user(self) -> None:
-        while True:
-            username = await self.app.push_screen_wait(
-                InputDialog("Username to delete:", "Delete User", placeholder="john")
-            )
-            if username is None:
-                return
-            if not username.strip():
-                self.app.notify("Username must not be empty.", severity="error")
-                continue
-            username = username.strip()
-            break
+        loop = asyncio.get_running_loop()
+        users = await loop.run_in_executor(None, _get_local_users)
+        if not users:
+            self.app.notify("No regular users found.", severity="warning")
+            return
+        user_labels = [f"{u.pw_name}  (UID {u.pw_uid})" for u in sorted(users, key=lambda x: x.pw_name)]
+        choice = await self.app.push_screen_wait(
+            SelectDialog(user_labels, title="Delete User", prompt="Select user to delete:")
+        )
+        if not choice:
+            return
+        username = choice.split()[0]
 
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(f"Delete user '{username}'? Home directory will be kept.", "Confirm")
@@ -175,32 +177,57 @@ class UsersScreen(Screen):
 
     @work(exclusive=True)
     async def _set_quota(self) -> None:
-        while True:
-            username = await self.app.push_screen_wait(
-                InputDialog("Username:", "Set Disk Quota", placeholder="john")
-            )
-            if username is None:
-                return
-            if not username.strip():
-                self.app.notify("Username must not be empty.", severity="error")
-                continue
-            username = username.strip()
-            break
+        loop = asyncio.get_running_loop()
+        users = await loop.run_in_executor(None, _get_local_users)
+        if not users:
+            self.app.notify("No regular users found.", severity="warning")
+            return
+        user_labels = [f"{u.pw_name}  (UID {u.pw_uid})" for u in sorted(users, key=lambda x: x.pw_name)]
+        choice = await self.app.push_screen_wait(
+            SelectDialog(user_labels, title="Set Disk Quota — User",
+                         prompt="Select user:")
+        )
+        if not choice:
+            return
+        username = choice.split()[0]
 
-        while True:
+        # Export path — list mounted XFS filesystems + custom option
+        from xinas_menu.utils.xfs_helpers import run_async_cmd
+        mount_points: list[str] = []
+        ok, out, _ = await run_async_cmd("findmnt", "-t", "xfs", "-n", "-o", "TARGET", timeout=10)
+        if ok and out:
+            mount_points = [line.strip() for line in out.splitlines() if line.strip()]
+
+        _CUSTOM = "Custom path…"
+        if mount_points:
+            choices = mount_points + [_CUSTOM]
+            path_choice = await self.app.push_screen_wait(
+                SelectDialog(choices, title="Set Disk Quota — Path",
+                             prompt="Select filesystem:")
+            )
+            if not path_choice:
+                return
+            if path_choice == _CUSTOM:
+                export_path = await self.app.push_screen_wait(
+                    InputDialog("Export path:", "Set Disk Quota",
+                                default="/mnt/data/", placeholder="/mnt/data/share1")
+                )
+                if not export_path or not export_path.strip().startswith("/"):
+                    self.app.notify("Export path must start with '/'.", severity="error")
+                    return
+                export_path = export_path.strip()
+            else:
+                export_path = path_choice
+        else:
             export_path = await self.app.push_screen_wait(
                 InputDialog("Export path:", "Set Disk Quota", placeholder="/mnt/data/share1")
             )
             if export_path is None:
                 return
-            if not export_path.strip():
-                self.app.notify("Export path must not be empty.", severity="error")
-                continue
-            if not export_path.strip().startswith("/"):
+            if not export_path.strip() or not export_path.strip().startswith("/"):
                 self.app.notify("Export path must start with '/'.", severity="error")
-                continue
+                return
             export_path = export_path.strip()
-            break
 
         while True:
             soft_str = await self.app.push_screen_wait(

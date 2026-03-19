@@ -298,13 +298,26 @@ class RAIDScreen(Screen):
                 kwargs["group_size"] = gs
                 break
 
-        # Step 6: Spare pool (optional)
-        sparepool = await self.app.push_screen_wait(
-            InputDialog("Spare pool name (leave blank for none):",
-                        "Create Array — Spare Pool")
-        )
-        if sparepool:
-            kwargs["sparepool"] = sparepool
+        # Step 6: Spare pool (optional) — pick from existing pools
+        _NONE_POOL = "(none)"
+        pool_names: list[str] = []
+        p_ok, p_data, _ = await self.app.grpc.pool_show()
+        if p_ok and p_data:
+            if isinstance(p_data, dict):
+                pool_names = list(p_data.keys())
+            elif isinstance(p_data, list):
+                pool_names = [p.get("name", "") for p in p_data if isinstance(p, dict) and p.get("name")]
+        if pool_names:
+            pool_choices = [_NONE_POOL] + sorted(pool_names)
+            sparepool = await self.app.push_screen_wait(
+                SelectDialog(pool_choices, title="Create Array — Spare Pool",
+                             prompt="Select spare pool (or none):")
+            )
+            if sparepool is None:
+                return
+            if sparepool != _NONE_POOL:
+                kwargs["sparepool"] = sparepool
+        # If no pools exist, skip silently (no spare pool assigned)
 
         # Confirm
         summary = (
@@ -385,7 +398,23 @@ class RAIDScreen(Screen):
         idx = param_labels.index(param_choice)
         key, label, kind, options, vtype = _MODIFY_PARAMS[idx]
 
-        if kind == "select" and options:
+        if key == "sparepool":
+            # Dynamic select: fetch available spare pools
+            pool_names: list[str] = []
+            p_ok, p_data, _ = await self.app.grpc.pool_show()
+            if p_ok and p_data:
+                if isinstance(p_data, dict):
+                    pool_names = list(p_data.keys())
+                elif isinstance(p_data, list):
+                    pool_names = [p.get("name", "") for p in p_data if isinstance(p, dict) and p.get("name")]
+            if not pool_names:
+                self.app.notify("No spare pools available.", severity="warning")
+                return
+            value = await self.app.push_screen_wait(
+                SelectDialog(sorted(pool_names), title=f"Set {label}",
+                             prompt=f"Select spare pool for {arr_name}:")
+            )
+        elif kind == "select" and options:
             value = await self.app.push_screen_wait(
                 SelectDialog(options, title=f"Set {label}",
                              prompt=f"New value for {label}:")
