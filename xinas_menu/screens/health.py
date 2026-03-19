@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 from textual.app import ComposeResult
@@ -130,6 +131,8 @@ class HealthScreen(Screen):
                 ConfirmDialog(
                     f"Found {summary}.\n\nRun Remediation Wizard to review and fix issues?",
                     "Remediation Wizard",
+                    yes_label="Check issues and run wizard",
+                    no_label="Just review full report",
                 )
             )
             if run_wiz:
@@ -277,11 +280,88 @@ class HealthScreen(Screen):
         if reports:
             try:
                 text = reports[0].read_text()
-                view.set_content(text)
+                view.set_content(_colorize_report(text))
             except Exception as exc:
                 view.set_content(f"[red]Cannot read report: {exc}[/red]")
         else:
             view.set_content("[dim]No health reports saved yet.[/dim]")
+
+
+def _colorize_report(text: str) -> str:
+    """Add ANSI colors to a plain-text health check report."""
+    _GRN = "\033[32m"
+    _YLW = "\033[33m"
+    _RED = "\033[31m"
+    _CYN = "\033[36m"
+    _BLU = "\033[34m"
+    _BLD = "\033[1m"
+    _DIM = "\033[2m"
+    _NC = "\033[0m"
+
+    out = []
+    for line in text.splitlines():
+        # Skip if already has ANSI codes
+        if "\x1b[" in line:
+            out.append(line)
+            continue
+
+        # Separator lines (═ or ─)
+        stripped = line.strip()
+        if stripped and all(c in "═─=-" for c in stripped):
+            out.append(f"{_DIM}{line}{_NC}")
+            continue
+
+        # Title line
+        if "HEALTH CHECK REPORT" in line:
+            out.append(f"{_BLD}{_CYN}{line}{_NC}")
+            continue
+
+        # REMEDIATION SUMMARY header
+        if "REMEDIATION SUMMARY" in line:
+            out.append(f"{_BLD}{_RED}{line}{_NC}")
+            continue
+
+        # Section headers like [SERVICES], [CPU], [STORAGE]
+        if re.match(r"^\s+\[[A-Z_]+\]\s*$", line):
+            out.append(f"{_BLD}{_CYN}{line}{_NC}")
+            continue
+
+        # Status icons
+        line = line.replace("[OK]", f"{_GRN}[OK]{_NC}")
+        line = line.replace("[!!]", f"{_YLW}[!!]{_NC}")
+        line = line.replace("[XX]", f"{_RED}[XX]{_NC}")
+        line = line.replace("[--]", f"{_DIM}[--]{_NC}")
+        line = line.replace("[PASS]", f"{_GRN}[PASS]{_NC}")
+        line = line.replace("[WARN]", f"{_YLW}[WARN]{_NC}")
+        line = line.replace("[FAIL]", f"{_RED}[FAIL]{_NC}")
+        line = line.replace("[SKIP]", f"{_DIM}[SKIP]{_NC}")
+
+        # Summary counts: PASS: N, WARN: N, FAIL: N, SKIP: N
+        line = re.sub(r"(PASS:\s*\d+)", rf"{_GRN}\1{_NC}", line)
+        line = re.sub(r"(WARN:\s*\d+)", rf"{_YLW}\1{_NC}", line)
+        line = re.sub(r"(FAIL:\s*\d+)", rf"{_RED}\1{_NC}", line)
+        line = re.sub(r"(SKIP:\s*\d+)", rf"{_DIM}\1{_NC}", line)
+
+        # Overall status value
+        if line.strip().startswith("Overall:"):
+            line = re.sub(r"\bPASS\b(?![:\]])", rf"{_GRN}{_BLD}PASS{_NC}", line)
+            line = re.sub(r"\bWARN\b(?![:\]])", rf"{_YLW}{_BLD}WARN{_NC}", line)
+            line = re.sub(r"\bFAIL\b(?![:\]])", rf"{_RED}{_BLD}FAIL{_NC}", line)
+
+        # Labels: Actual:, Expected:, Evidence:, Impact:, Fix:, Date:, etc.
+        line = re.sub(
+            r"((?:Actual|Expected|Evidence|Date|Hostname|Profile|Duration|Report):)",
+            rf"{_DIM}\1{_NC}",
+            line,
+        )
+        line = re.sub(r"(Impact:)", rf"{_YLW}\1{_NC}", line)
+        line = re.sub(r"(Fix:)", rf"{_BLU}\1{_NC}", line)
+
+        # Fix hint arrows in remediation summary
+        line = re.sub(r"(\s+)(->)(\s)", rf"\1{_BLU}\2{_NC}\3", line)
+
+        out.append(line)
+    return "\n".join(out)
 
 
 def _find_profile(name: str) -> Path | None:

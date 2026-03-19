@@ -42,11 +42,15 @@ class ConfirmDialog(ModalScreen[bool]):
         title: str = "Confirm",
         *,
         ok_only: bool = False,
+        yes_label: str | None = None,
+        no_label: str | None = None,
     ) -> None:
         super().__init__()
         self._message = message
         self._title = title
         self._ok_only = ok_only
+        self._yes_label = yes_label or "Yes [y]"
+        self._no_label = no_label or "No [n]"
 
     def compose(self) -> ComposeResult:
         from textual.containers import Vertical, Horizontal
@@ -57,8 +61,8 @@ class ConfirmDialog(ModalScreen[bool]):
                 if self._ok_only:
                     yield Button("OK", variant="primary", id="btn-ok", classes="dialog-btn")
                 else:
-                    yield Button("Yes [y]", variant="error", id="btn-yes", classes="dialog-btn")
-                    yield Button("No [n]", variant="primary", id="btn-no", classes="dialog-btn")
+                    yield Button(self._yes_label, variant="error", id="btn-yes", classes="dialog-btn")
+                    yield Button(self._no_label, variant="primary", id="btn-no", classes="dialog-btn")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-ok":
