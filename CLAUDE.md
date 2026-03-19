@@ -92,7 +92,7 @@ The `xiNAS-MCP/` directory contains the MCP (Model Context Protocol) server spec
 | File | Purpose |
 |------|---------|
 | `xiNAS-MCP/REQUIREMENTS.md` | Functional requirements — 9 tool namespaces (system, network, health, disk, RAID, share, auth, job, config) |
-| `xiNAS-MCP/specs/spec-tools.md` | Tool summary table (54 tools), preflight logic, health profiles, error scenarios |
+| `xiNAS-MCP/specs/spec-tools.md` | Tool summary table (55 tools), preflight logic, health profiles, error scenarios |
 | `xiNAS-MCP/specs/spec-middleware.md` | RBAC permission matrix, audit logging, locking, idempotency, plan/apply |
 | `xiNAS-MCP/specs/spec-config-history.md` | Config-history tools spec (6 tools), subprocess protocol for `xinas_history` backend |
 | `xiNAS-MCP/specs/spec-core.md` | Core server architecture, transport, error model |

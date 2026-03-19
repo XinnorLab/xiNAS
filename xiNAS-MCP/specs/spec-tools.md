@@ -14,6 +14,7 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 | `system.get_status` | viewer | — | — | settings, license | systemInfo, serviceState | — |
 | `system.get_inventory` | viewer | — | — | — | systemInfo, diskInfo, networkInfo | — |
 | `system.get_performance` | viewer | — | — | — | prometheusClient | — |
+| `system.get_logs` | viewer | — | — | — | journalctl | — |
 | `network.list` | viewer | — | — | — | networkInfo | — |
 | `network.configure` | admin | plan/apply | — | — | networkInfo (preflight) | — |
 | `health.run_check` | viewer | — | — | raidShow, poolShow, driveFaultyCountShow, licenseShow | Python health engine (subprocess) | — |
@@ -166,6 +167,7 @@ Alerts are keyed by `check_id`. A new check run updates `last_seen` if the alert
 | `auth.delete_user` | system user (UID < 1000) | PRECONDITION_FAILED (plan) |
 | `auth.set_quota` | user not found | NOT_FOUND |
 | `auth.set_quota` | share path not found | NOT_FOUND |
+| `system.get_logs` | journalctl not available | INTERNAL |
 | Any | xiRAID gRPC UNAVAILABLE ×5 | INTERNAL |
 | Any | array locked by another operation | CONFLICT |
 | Any | insufficient role | PERMISSION_DENIED |

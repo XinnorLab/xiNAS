@@ -20,6 +20,7 @@ import {
   GetStatusSchema, handleGetStatus,
   GetInventorySchema, handleGetInventory,
   GetPerformanceSchema, handleGetPerformance,
+  GetLogsSchema, handleGetLogs,
 } from '../tools/system.js';
 
 import { NetworkListSchema, handleNetworkList, NetworkConfigureSchema, handleNetworkConfigure } from '../tools/network.js';
@@ -92,6 +93,7 @@ const TOOLS: ToolDef[] = [
   { name: 'system.get_status', description: 'Get controller status: uptime, OS, kernel, service states, load, memory', schema: GetStatusSchema, handler: handleGetStatus },
   { name: 'system.get_inventory', description: 'Get hardware inventory: CPU, RAM, NICs, block devices', schema: GetInventorySchema, handler: handleGetInventory },
   { name: 'system.get_performance', description: 'Get performance metrics (IOPS, throughput, latency) from Prometheus', schema: GetPerformanceSchema, handler: handleGetPerformance },
+  { name: 'system.get_logs', description: 'Get systemd journal entries for a service (journalctl)', schema: GetLogsSchema, handler: handleGetLogs },
 
   // Network
   { name: 'network.list', description: 'List network interfaces with link state, MTU, speeds, RDMA capability', schema: NetworkListSchema, handler: handleNetworkList },

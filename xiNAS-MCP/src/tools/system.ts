@@ -3,8 +3,10 @@
  */
 
 import { z } from 'zod';
+import { execFile } from 'node:child_process';
 import { loadConfig, getHostname } from '../config/serverConfig.js';
 import { resolveController } from '../server/controllerResolver.js';
+import { McpToolError, ErrorCode } from '../types/common.js';
 import { getClient, withRetry } from '../grpc/client.js';
 import { settingsAuthShow, settingsScannerShow, settingsClusterShow } from '../grpc/settings.js';
 import { licenseShow } from '../grpc/license.js';
@@ -35,6 +37,14 @@ export const GetPerformanceSchema = z.object({
   controller_id: z.string().optional(),
   target: z.string().default('*').describe('RAID name, disk path, or * for global'),
   metrics: z.array(z.string()).default([]).describe('Metric names to filter (empty = all)'),
+});
+
+export const GetLogsSchema = z.object({
+  controller_id: z.string().optional(),
+  service: z.string().optional().describe('Systemd unit name (e.g. nfs-kernel-server, xiraid-server)'),
+  lines: z.number().int().min(1).max(500).default(50).describe('Number of journal lines to retrieve'),
+  since: z.string().optional().describe('Time filter: ISO 8601 timestamp or relative (e.g. "-1h", "-30m")'),
+  priority: z.number().int().min(0).max(7).optional().describe('Max syslog priority (0=emerg..7=debug)'),
 });
 
 // --- Handlers ---
@@ -164,4 +174,57 @@ export async function handleGetPerformance(params: z.infer<typeof GetPerformance
   }
 
   return getPerformanceSummary(params.target, params.metrics);
+}
+
+const JOURNAL_TIMEOUT_MS = 15_000;
+
+export async function handleGetLogs(params: z.infer<typeof GetLogsSchema>) {
+  resolveController(params.controller_id);
+
+  const args = ['--no-pager', '--output=json', '-n', params.lines.toString()];
+  if (params.service) args.push('-u', params.service);
+  if (params.since) args.push('--since', params.since);
+  if (params.priority !== undefined) args.push('-p', params.priority.toString());
+
+  const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve, reject) => {
+    execFile('journalctl', args, { timeout: JOURNAL_TIMEOUT_MS }, (err, stdout, stderr) => {
+      if (err && 'killed' in err && err.killed) {
+        reject(new McpToolError(ErrorCode.TIMEOUT, 'journalctl timed out'));
+        return;
+      }
+      const exitCode = err && 'code' in err ? (err.code as number) : 0;
+      resolve({ stdout: stdout ?? '', stderr: stderr ?? '', exitCode });
+    });
+  });
+
+  if (result.exitCode !== 0) {
+    throw new McpToolError(ErrorCode.INTERNAL, `journalctl failed: ${result.stderr.trim()}`);
+  }
+
+  // Parse JSON-formatted journal entries
+  const entries = result.stdout
+    .split('\n')
+    .filter(line => line.trim())
+    .map(line => {
+      try {
+        const entry = JSON.parse(line) as Record<string, string | undefined>;
+        return {
+          timestamp: entry['__REALTIME_TIMESTAMP']
+            ? new Date(parseInt(entry['__REALTIME_TIMESTAMP'], 10) / 1000).toISOString()
+            : undefined,
+          unit: entry['_SYSTEMD_UNIT'] ?? entry['SYSLOG_IDENTIFIER'],
+          priority: entry['PRIORITY'],
+          message: entry['MESSAGE'],
+        };
+      } catch {
+        return { message: line };
+      }
+    });
+
+  return {
+    service: params.service ?? 'all',
+    count: entries.length,
+    entries,
+    fetched_at: new Date().toISOString(),
+  };
 }

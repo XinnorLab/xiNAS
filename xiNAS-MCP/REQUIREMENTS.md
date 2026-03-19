@@ -54,8 +54,11 @@ Both modes MUST be supported. Each controller MUST carry a stable, unique `contr
 | `system.get_status` | controller_id | uptime, OS, kernel, xiNAS version, service states, load, memory pressure |
 | `system.get_inventory` | controller_id | CPU, RAM, NICs, PCI, enclosure/backplane |
 | `system.get_performance` | controller_id, target, metrics[], duration | time-series or current averages: IOPS, throughput, latency per array/share/disk/global |
+| `system.get_logs` | controller_id, service, lines, since, priority | structured journal entries: timestamp, unit, message, priority |
 
 **Source note:** `system.get_performance` SHOULD source data from the existing xiraid-exporter Prometheus endpoint (`:9827`) where metrics overlap. No new API surface is needed for this subset.
+
+`system.get_logs` retrieves systemd journal entries via `journalctl`. Service filter accepts unit names (e.g. `nfs-kernel-server`, `xiraid-server`). Priority maps to syslog levels (0=emerg..7=debug). Default: last 50 lines, all services.
 
 ### 4.2 Network Management
 
