@@ -64,6 +64,17 @@ import {
   AuthListQuotasSchema, handleAuthListQuotas,
 } from '../tools/auth.js';
 
+import {
+  PoolListSchema, handlePoolList,
+  PoolCreateSchema, handlePoolCreate,
+  PoolDeleteSchema, handlePoolDelete,
+  PoolAddDrivesSchema, handlePoolAddDrives,
+  PoolRemoveDrivesSchema, handlePoolRemoveDrives,
+  PoolActivateSchema, handlePoolActivate,
+  PoolDeactivateSchema, handlePoolDeactivate,
+  PoolAcquireSchema, handlePoolAcquire,
+} from '../tools/pool.js';
+
 import { JobGetSchema, handleJobGet, JobListSchema, handleJobList, JobCancelSchema, handleJobCancel } from '../tools/job.js';
 
 import {
@@ -73,6 +84,8 @@ import {
   ConfigCheckDriftSchema, handleConfigCheckDrift,
   ConfigGetStatusSchema, handleConfigGetStatus,
   ConfigRollbackSchema, handleConfigRollback,
+  ConfigGetRetentionSchema, handleConfigGetRetention,
+  ConfigSetRetentionSchema, handleConfigSetRetention,
 } from '../tools/config.js';
 
 // --- Tool definition ---
@@ -119,6 +132,16 @@ const TOOLS: ToolDef[] = [
   { name: 'raid.restore', description: 'Restore a RAID array from drive metadata or config backup', schema: RaidRestoreSchema, handler: handleRaidRestore },
   { name: 'raid.delete', description: 'Delete a RAID array permanently (DESTRUCTIVE, plan/apply, requires dangerous=true)', schema: RaidDeleteSchema, handler: handleRaidDelete },
 
+  // Pool
+  { name: 'pool.list', description: 'List spare pools with state, drives, and sizes', schema: PoolListSchema, handler: handlePoolList },
+  { name: 'pool.create', description: 'Create a spare pool from available drives (plan/apply)', schema: PoolCreateSchema, handler: handlePoolCreate },
+  { name: 'pool.delete', description: 'Delete a spare pool (DESTRUCTIVE, plan/apply, requires dangerous=true)', schema: PoolDeleteSchema, handler: handlePoolDelete },
+  { name: 'pool.add_drives', description: 'Add drives to an existing spare pool (plan/apply)', schema: PoolAddDrivesSchema, handler: handlePoolAddDrives },
+  { name: 'pool.remove_drives', description: 'Remove drives from a spare pool (plan/apply)', schema: PoolRemoveDrivesSchema, handler: handlePoolRemoveDrives },
+  { name: 'pool.activate', description: 'Activate a spare pool (load into memory)', schema: PoolActivateSchema, handler: handlePoolActivate },
+  { name: 'pool.deactivate', description: 'Deactivate a spare pool (unload from memory)', schema: PoolDeactivateSchema, handler: handlePoolDeactivate },
+  { name: 'pool.acquire', description: 'Manually acquire a drive from a spare pool (advanced)', schema: PoolAcquireSchema, handler: handlePoolAcquire },
+
   // Share
   { name: 'share.list', description: 'List NFS exports with paths, clients, and options', schema: ShareListSchema, handler: handleShareList },
   { name: 'share.get_active_sessions', description: 'Get active NFS sessions for an export', schema: ShareGetActiveSessionsSchema, handler: handleShareGetActiveSessions },
@@ -148,6 +171,8 @@ const TOOLS: ToolDef[] = [
   { name: 'config.check_drift', description: 'Detect out-of-band changes to managed config files', schema: ConfigCheckDriftSchema, handler: handleConfigCheckDrift },
   { name: 'config.get_status', description: 'Get config-history status: baseline, counts, current effective', schema: ConfigGetStatusSchema, handler: handleConfigGetStatus },
   { name: 'config.rollback', description: 'Roll back to a previous configuration snapshot (plan/apply, admin-only)', schema: ConfigRollbackSchema, handler: handleConfigRollback },
+  { name: 'config.get_retention', description: 'Get current snapshot retention policy (max_snapshots, max_age_days)', schema: ConfigGetRetentionSchema, handler: handleConfigGetRetention },
+  { name: 'config.set_retention', description: 'Update snapshot retention policy (admin, plan/apply)', schema: ConfigSetRetentionSchema, handler: handleConfigSetRetention },
 ];
 
 /**

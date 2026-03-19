@@ -108,3 +108,14 @@ export async function recordSnapshot(operation: string, diffSummary: string): Pr
     return null;
   }
 }
+
+export async function getRetentionPolicy(): Promise<unknown> {
+  return parseJsonOutput(await run(['gc', 'policy', '--format', 'json'], READ_TIMEOUT_MS));
+}
+
+export async function setRetentionPolicy(maxSnapshots?: number, maxAgeDays?: number): Promise<unknown> {
+  const args = ['gc', 'policy', '--set', '--format', 'json'];
+  if (maxSnapshots !== undefined) args.push('--max-snapshots', String(maxSnapshots));
+  if (maxAgeDays !== undefined) args.push('--max-age-days', String(maxAgeDays));
+  return parseJsonOutput(await run(args, WRITE_TIMEOUT_MS));
+}

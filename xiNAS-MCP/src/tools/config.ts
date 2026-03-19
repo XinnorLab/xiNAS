@@ -5,10 +5,10 @@
  */
 
 import { z } from 'zod';
-import { listSnapshots, showSnapshot, diffSnapshots, getStatus } from '../os/configHistory.js';
+import { listSnapshots, showSnapshot, diffSnapshots, getStatus, getRetentionPolicy, setRetentionPolicy } from '../os/configHistory.js';
 import { applyWithPlan } from '../middleware/planApply.js';
 import { resolveController } from '../server/controllerResolver.js';
-import type { PlanResult, Mode } from '../types/common.js';
+import type { PlanChange, PlanResult, Mode } from '../types/common.js';
 
 // --- Schemas ---
 
@@ -41,6 +41,19 @@ export const ConfigRollbackSchema = z.object({
   controller_id: z.string().optional(),
   target_id: z.string().describe('Snapshot ID to roll back to'),
   reason: z.string().describe('Audit reason for rollback'),
+  mode: z.enum(['plan', 'apply']).default('plan'),
+});
+
+export const ConfigGetRetentionSchema = z.object({
+  controller_id: z.string().optional(),
+});
+
+export const ConfigSetRetentionSchema = z.object({
+  controller_id: z.string().optional(),
+  max_snapshots: z.number().int().min(1).max(1000).optional()
+    .describe('Maximum rollback-eligible snapshots to retain'),
+  max_age_days: z.number().int().min(0).max(3650).optional()
+    .describe('Delete snapshots older than N days (0 = disabled)'),
   mode: z.enum(['plan', 'apply']).default('plan'),
 });
 
@@ -148,6 +161,55 @@ export async function handleConfigRollback(params: z.infer<typeof ConfigRollback
           }
         });
       });
+    },
+  });
+}
+
+export async function handleConfigGetRetention(params: z.infer<typeof ConfigGetRetentionSchema>) {
+  resolveController(params.controller_id);
+  return getRetentionPolicy();
+}
+
+export async function handleConfigSetRetention(params: z.infer<typeof ConfigSetRetentionSchema>) {
+  resolveController(params.controller_id);
+  const mode = params.mode as Mode;
+
+  return applyWithPlan(mode, {
+    preflight: async () => {
+      const current = await getRetentionPolicy() as Record<string, unknown>;
+      const changes: PlanChange[] = [];
+
+      if (params.max_snapshots !== undefined) {
+        changes.push({
+          action: 'modify' as const,
+          resource_type: 'retention_policy',
+          resource_id: 'max_snapshots',
+          before: { value: current.max_snapshots },
+          after: { value: params.max_snapshots },
+        });
+      }
+      if (params.max_age_days !== undefined) {
+        changes.push({
+          action: 'modify' as const,
+          resource_type: 'retention_policy',
+          resource_id: 'max_age_days',
+          before: { value: current.max_age_days },
+          after: { value: params.max_age_days },
+        });
+      }
+
+      return {
+        mode: 'plan' as const,
+        description: 'Update snapshot retention policy',
+        changes,
+        warnings: [] as string[],
+        preflight_passed: changes.length > 0,
+        ...(changes.length === 0 ? { blocking_resources: ['No changes specified'] } : {}),
+      } satisfies PlanResult;
+    },
+
+    execute: async () => {
+      return setRetentionPolicy(params.max_snapshots, params.max_age_days);
     },
   });
 }
