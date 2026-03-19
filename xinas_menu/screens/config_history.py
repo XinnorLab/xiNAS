@@ -23,7 +23,7 @@ try:
     from xinas_history.engine import SnapshotEngine
     from xinas_history.store import FilesystemStore
     from xinas_history.drift import DriftDetector
-    from xinas_history.gc import GarbageCollector
+    from xinas_history.gc import GarbageCollector, load_retention_policy
     from xinas_history.runner import TransactionalRunner
     HAS_HISTORY = True
 except ImportError:
@@ -486,7 +486,7 @@ class ConfigHistoryScreen(Screen):
             ConfirmDialog(
                 "Run garbage collection?\n\n"
                 "This will remove snapshots beyond the retention limit\n"
-                "(keeps baseline + 40 most recent rollback-eligible).",
+                "(configured in Retention Settings).",
                 "Garbage Collection",
             )
         )
@@ -498,7 +498,7 @@ class ConfigHistoryScreen(Screen):
         loop = asyncio.get_running_loop()
         try:
             store = FilesystemStore()
-            gc = GarbageCollector(store)
+            gc = GarbageCollector(store, load_retention_policy())
             engine = _create_engine(store=store)
             effective = await loop.run_in_executor(
                 None, engine.get_current_effective,

@@ -32,7 +32,7 @@ from .models import (
 )
 from .store import FilesystemStore
 from .validator import PreflightValidator, PostApplyValidator
-from .gc import GarbageCollector
+from .gc import GarbageCollector, load_retention_policy
 from .classifier import RollbackClassifier
 from .grpc_inspector import GrpcInspector
 
@@ -119,7 +119,7 @@ class TransactionalRunner:
         self._lock = GlobalConfigLock(str(self._store.state_path))
         self._preflight = PreflightValidator(self._store, self._inspector)
         self._post_apply = PostApplyValidator(self._inspector)
-        self._gc = GarbageCollector(self._store)
+        self._gc = GarbageCollector(self._store, load_retention_policy())
         self._classifier = RollbackClassifier()
 
     # ------------------------------------------------------------------

@@ -21,7 +21,7 @@ from .models import (
     generate_snapshot_id,
 )
 from .store import FilesystemStore
-from .gc import GarbageCollector
+from .gc import GarbageCollector, load_retention_policy
 from .classifier import RollbackClassifier
 from .collector import ConfigCollector, RuntimeCollector
 from .grpc_inspector import GrpcInspector
@@ -54,7 +54,7 @@ class SnapshotEngine:
         )
         self._config_collector = ConfigCollector(repo_root=repo_root)
         self._runtime_collector = RuntimeCollector(self._inspector)
-        self._gc = GarbageCollector(self._store)
+        self._gc = GarbageCollector(self._store, load_retention_policy())
         self._classifier = RollbackClassifier()
 
     # -- public API ---------------------------------------------------------

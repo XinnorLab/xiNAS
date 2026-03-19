@@ -99,6 +99,11 @@ def main() -> int:
     gc_parser = subparsers.add_parser("gc", help="Garbage collection")
     gc_sub = gc_parser.add_subparsers(dest="action")
     gc_sub.add_parser("run", help="Run GC")
+    policy_parser = gc_sub.add_parser("policy", help="Show or update retention policy")
+    policy_parser.add_argument("--format", choices=["json", "text"], default="text")
+    policy_parser.add_argument("--set", action="store_true", help="Update policy")
+    policy_parser.add_argument("--max-snapshots", type=int, default=None)
+    policy_parser.add_argument("--max-age-days", type=int, default=None)
 
     # -- status subcommand --------------------------------------------------
     status_parser = subparsers.add_parser("status", help="Show history status")
@@ -367,18 +372,26 @@ def _error_output(args: argparse.Namespace, message: str) -> None:
 
 
 def _dispatch_gc(args: argparse.Namespace, engine: SnapshotEngine) -> int:
-    if args.action is None or args.action != "run":
-        print("Error: specify action: run", file=sys.stderr)
+    if args.action is None:
+        print("Error: specify action: run, policy", file=sys.stderr)
         return 1
-
-    return _cmd_gc_run(engine)
+    if args.action == "run":
+        return _cmd_gc_run(engine)
+    if args.action == "policy":
+        return _cmd_gc_policy(args)
+    print(f"Error: unknown gc action: {args.action}", file=sys.stderr)
+    return 1
 
 
 def _cmd_gc_run(engine: SnapshotEngine) -> int:
+    from .gc import GarbageCollector, load_retention_policy
+
     effective = engine.get_current_effective()
     effective_id = effective.id if effective else None
 
-    purged = engine._gc.run(current_effective_id=effective_id)
+    policy = load_retention_policy()
+    gc = GarbageCollector(engine._store, policy)
+    purged = gc.run(current_effective_id=effective_id)
 
     if purged:
         print(f"Purged {len(purged)} snapshot(s):")
@@ -387,6 +400,51 @@ def _cmd_gc_run(engine: SnapshotEngine) -> int:
     else:
         print("No snapshots purged.")
 
+    return 0
+
+
+def _cmd_gc_policy(args: argparse.Namespace) -> int:
+    from .gc import load_retention_policy, CONFIG_PATH
+
+    if args.set:
+        import json as _json
+        import tempfile
+        import os
+        try:
+            data = _json.loads(CONFIG_PATH.read_text())
+        except Exception:
+            data = {}
+        section = data.get("retention", {})
+        if args.max_snapshots is not None:
+            section["max_snapshots"] = max(1, args.max_snapshots)
+        if args.max_age_days is not None:
+            section["max_age_days"] = max(0, args.max_age_days)
+        data["retention"] = section
+
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(CONFIG_PATH.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                _json.dump(data, f, indent=2)
+                f.write("\n")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, str(CONFIG_PATH))
+        except Exception:
+            os.unlink(tmp)
+            raise
+        print("Retention policy updated.")
+
+    policy = load_retention_policy()
+    if args.format == "json":
+        print(json.dumps({
+            "max_snapshots": policy.max_snapshots,
+            "max_age_days": policy.max_age_days,
+        }))
+    else:
+        print("Retention Policy")
+        print(f"  max_snapshots: {policy.max_snapshots}")
+        age_suffix = " (disabled)" if policy.max_age_days == 0 else ""
+        print(f"  max_age_days:  {policy.max_age_days}{age_suffix}")
     return 0
 
 
