@@ -16,6 +16,7 @@ from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
+from xinas_menu.utils.config import cfg_read, cfg_write
 
 _log = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ _MENU = [
     MenuItem("4", "Garbage Collect"),
     MenuItem("5", "Create Baseline"),
     MenuItem("6", "Reset to Baseline"),
+    MenuItem("7", "Retention Settings"),
     MenuItem("0", "Back"),
 ]
 
@@ -77,7 +79,8 @@ class ConfigHistoryScreen(Screen):
                 f"  {_BLD}3{_NC}  {_CYN}Drift Check{_NC}        {_DIM}Detect out-of-band configuration changes{_NC}\n"
                 f"  {_BLD}4{_NC}  {_CYN}Garbage Collect{_NC}    {_DIM}Purge old snapshots beyond retention{_NC}\n"
                 f"  {_BLD}5{_NC}  {_CYN}Create Baseline{_NC}    {_DIM}Capture current state as initial baseline{_NC}\n"
-                f"  {_BLD}6{_NC}  {_CYN}Reset to Baseline{_NC}  {_DIM}Restore initial configuration (requires confirmation){_NC}\n",
+                f"  {_BLD}6{_NC}  {_CYN}Reset to Baseline{_NC}  {_DIM}Restore initial configuration (requires confirmation){_NC}\n"
+                f"  {_BLD}7{_NC}  {_CYN}Retention Settings{_NC}  {_DIM}Configure snapshot retention policy{_NC}\n",
                 id="history-content",
             )
         yield Footer()
@@ -101,6 +104,8 @@ class ConfigHistoryScreen(Screen):
             self._create_baseline()
         elif key == "6":
             self._reset_to_baseline()
+        elif key == "7":
+            self._retention_settings()
 
     # -- History list -------------------------------------------------------
 
@@ -531,6 +536,106 @@ class ConfigHistoryScreen(Screen):
 
         try:
             self.app.audit.log("history.gc", f"purged={len(purged)}", "OK")
+        except Exception:
+            pass
+
+    # -- Retention settings ---------------------------------------------------
+
+    @work(exclusive=True)
+    async def _retention_settings(self) -> None:
+        """Show and edit retention policy settings."""
+        view = self.query_one("#history-content", ScrollableTextView)
+        loop = asyncio.get_running_loop()
+
+        cfg = await loop.run_in_executor(None, cfg_read)
+        retention = cfg.get("retention", {})
+        cur_max = retention.get("max_snapshots", 40)
+        cur_age = retention.get("max_age_days", 0)
+
+        age_note = f"  {_DIM}(0 = disabled){_NC}" if cur_age == 0 else ""
+        lines = [
+            f"{_BLD}{_CYN}Retention Policy{_NC}",
+            "",
+            f"  Max snapshots:  {_BLD}{cur_max}{_NC}",
+            f"  Max age (days): {_BLD}{cur_age}{_NC}{age_note}",
+            "",
+            f"  {_DIM}Snapshots exceeding either limit are purged by GC.{_NC}",
+            f"  {_DIM}Protected snapshots (baseline, effective, locked) are never removed.{_NC}",
+        ]
+        view.set_content("\n".join(lines))
+
+        choice = await self.app.push_screen_wait(
+            SelectDialog(
+                ["Edit Settings", "Keep Current"],
+                title="Retention Policy",
+                prompt="Choose an action:",
+            )
+        )
+        if choice is None or choice == "Keep Current":
+            return
+
+        # max_snapshots
+        while True:
+            val = await self.app.push_screen_wait(
+                InputDialog(
+                    "Max rollback-eligible snapshots (5\u20131000):",
+                    "Retention Settings",
+                    default=str(cur_max),
+                    placeholder="40",
+                )
+            )
+            if val is None:
+                return
+            try:
+                new_max = int(val.strip())
+                if 5 <= new_max <= 1000:
+                    break
+            except ValueError:
+                pass
+            self.app.notify("Enter a number between 5 and 1000", severity="error")
+
+        # max_age_days
+        while True:
+            val = await self.app.push_screen_wait(
+                InputDialog(
+                    "Max age in days (0 = disabled, 1\u20133650):",
+                    "Retention Settings",
+                    default=str(cur_age),
+                    placeholder="0",
+                )
+            )
+            if val is None:
+                return
+            try:
+                new_age = int(val.strip())
+                if 0 <= new_age <= 3650:
+                    break
+            except ValueError:
+                pass
+            self.app.notify("Enter a number between 0 and 3650", severity="error")
+
+        # Save
+        cfg["retention"] = {
+            "max_snapshots": new_max,
+            "max_age_days": new_age,
+        }
+        await loop.run_in_executor(None, cfg_write, cfg)
+
+        new_age_note = f"  {_DIM}(disabled){_NC}" if new_age == 0 else ""
+        lines = [
+            f"{_GRN}Retention policy updated.{_NC}",
+            "",
+            f"  Max snapshots:  {_BLD}{new_max}{_NC}",
+            f"  Max age (days): {_BLD}{new_age}{_NC}{new_age_note}",
+        ]
+        view.set_content("\n".join(lines))
+
+        try:
+            self.app.audit.log(
+                "history.retention_update",
+                f"max_snapshots={new_max} max_age_days={new_age}",
+                "OK",
+            )
         except Exception:
             pass
 
