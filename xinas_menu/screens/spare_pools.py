@@ -297,9 +297,12 @@ class SparePoolScreen(Screen):
         if not confirmed:
             return
 
+        # Normalize to /dev/ paths (drive picker returns bare names)
+        drives = [d if d.startswith("/dev/") else f"/dev/{d}" for d in selected]
+
         view = self.query_one("#pool-content", ScrollableTextView)
         view.set_content(f"Creating pool '{name}'…")
-        ok, data, err = await self.app.grpc.pool_create(name=name, drives=selected)
+        ok, data, err = await self.app.grpc.pool_create(name=name, drives=drives)
         if ok:
             self.app.notify(f"Pool '{name}' created successfully.", severity="information")
             self._view_pools()
@@ -343,9 +346,12 @@ class SparePoolScreen(Screen):
         if not confirmed:
             return
 
+        # Normalize to /dev/ paths (drive picker returns bare names)
+        drives = [d if d.startswith("/dev/") else f"/dev/{d}" for d in selected]
+
         view = self.query_one("#pool-content", ScrollableTextView)
         view.set_content(f"Adding drives to pool '{pool}'…")
-        ok, data, err = await self.app.grpc.pool_add(name=pool, drives=selected)
+        ok, data, err = await self.app.grpc.pool_add(name=pool, drives=drives)
         if ok:
             self.app.notify(f"Drives added to pool '{pool}'.", severity="information")
             self._view_pools()
