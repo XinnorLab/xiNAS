@@ -96,7 +96,7 @@ The `xiNAS-MCP/` directory contains the MCP (Model Context Protocol) server spec
 | `xiNAS-MCP/specs/spec-middleware.md` | RBAC permission matrix, audit logging, locking, idempotency, plan/apply |
 | `xiNAS-MCP/specs/spec-config-history.md` | Config-history tools spec (6 tools), subprocess protocol for `xinas_history` backend |
 | `xiNAS-MCP/specs/spec-core.md` | Core server architecture, transport, error model |
-| `xiNAS-MCP/specs/modules.md` | Module map, dependency graph, file count summary (38 files) |
+| `xiNAS-MCP/specs/modules.md` | Module map, dependency graph, file count summary (42 files) |
 
 ### Preset Structure
 Each preset directory (`presets/default/`, `presets/xinnorVM/`) contains:
