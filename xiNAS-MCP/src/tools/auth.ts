@@ -36,6 +36,8 @@ export const AuthCreateUserSchema = z.object({
   controller_id: z.string().optional(),
   username: z.string().describe('Linux username (lowercase, max 32 chars)'),
   home_dir: z.string().optional().describe('Home directory path (defaults to /mnt/data/<username>)'),
+  password: z.string().optional().describe('User password (optional, account locked if omitted)'),
+  password_confirm: z.string().optional().describe('Password confirmation (must match password)'),
   mode: z.enum(['plan', 'apply']).default('plan'),
 });
 
@@ -226,6 +228,14 @@ export async function handleAuthCreateUser(params: z.infer<typeof AuthCreateUser
         blockingResources.push(`Parent directory does not exist: ${parentDir}`);
       }
 
+      if (params.password || params.password_confirm) {
+        if (!params.password || !params.password_confirm) {
+          blockingResources.push('Both password and password_confirm must be provided');
+        } else if (params.password !== params.password_confirm) {
+          blockingResources.push('Passwords do not match');
+        }
+      }
+
       return {
         mode: 'plan' as const,
         description: `Create user '${params.username}' with home ${homeDir}`,
@@ -245,6 +255,23 @@ export async function handleAuthCreateUser(params: z.infer<typeof AuthCreateUser
       const result = await exec('useradd', ['-m', '-s', '/bin/bash', '-d', homeDir, params.username]);
       if (result.exitCode !== 0) {
         throw new McpToolError(ErrorCode.INTERNAL, `useradd failed: ${result.stderr.trim()}`);
+      }
+      if (params.password) {
+        const chpw = await new Promise<{ exitCode: number; stderr: string }>((resolve, reject) => {
+          const proc = execFile('chpasswd', { timeout: CMD_TIMEOUT_MS }, (err, _stdout, stderr) => {
+            if (err && 'killed' in err && err.killed) {
+              reject(new McpToolError(ErrorCode.TIMEOUT, 'chpasswd timed out'));
+              return;
+            }
+            const exitCode = err && 'code' in err ? (err.code as number) : 0;
+            resolve({ exitCode, stderr: stderr ?? '' });
+          });
+          proc.stdin?.write(`${params.username}:${params.password}\n`);
+          proc.stdin?.end();
+        });
+        if (chpw.exitCode !== 0) {
+          throw new McpToolError(ErrorCode.INTERNAL, `chpasswd failed: ${chpw.stderr.trim()}`);
+        }
       }
       const user = await lookupUser(params.username);
       return { created: true, username: params.username, uid: user?.uid, home: homeDir };
@@ -281,7 +308,7 @@ export async function handleAuthDeleteUser(params: z.infer<typeof AuthDeleteUser
 
       return {
         mode: 'plan' as const,
-        description: `Delete user '${params.username}' (home directory preserved)`,
+        description: `Delete user '${params.username}' (home directory removed)`,
         changes: [{
           action: 'delete',
           resource_type: 'linux_user',
@@ -295,11 +322,11 @@ export async function handleAuthDeleteUser(params: z.infer<typeof AuthDeleteUser
     },
 
     execute: async () => {
-      const result = await exec('userdel', [params.username]);
+      const result = await exec('userdel', ['-r', params.username]);
       if (result.exitCode !== 0) {
         throw new McpToolError(ErrorCode.INTERNAL, `userdel failed: ${result.stderr.trim()}`);
       }
-      return { deleted: true, username: params.username, home_preserved: true };
+      return { deleted: true, username: params.username, home_removed: true };
     },
   });
 }

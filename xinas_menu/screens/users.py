@@ -112,12 +112,24 @@ class UsersScreen(Screen):
                 continue
             break
 
-        password = await self.app.push_screen_wait(
-            InputDialog("Password (leave blank for no password):", "Create User",
-                        password=True)
-        )
-        if password is None:
-            return
+        while True:
+            password = await self.app.push_screen_wait(
+                InputDialog("Password (leave blank for no password):", "Create User",
+                            password=True)
+            )
+            if password is None:
+                return
+            if not password:
+                break
+            password2 = await self.app.push_screen_wait(
+                InputDialog("Confirm password:", "Create User",
+                            password=True)
+            )
+            if password2 is None:
+                return
+            if password == password2:
+                break
+            self.app.notify("Passwords do not match. Please try again.", severity="error")
 
         home = await self.app.push_screen_wait(
             InputDialog("Home directory:", "Create User",
@@ -159,14 +171,14 @@ class UsersScreen(Screen):
         username = choice.split()[0]
 
         confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(f"Delete user '{username}'? Home directory will be kept.", "Confirm")
+            ConfirmDialog(f"Delete user '{username}'? Home directory will be removed.", "Confirm")
         )
         if not confirmed:
             return
 
         loop = asyncio.get_running_loop()
         ok, _, err = await loop.run_in_executor(
-            None, lambda: _run_cmd("userdel", username)
+            None, lambda: _run_cmd("userdel", "-r", username)
         )
         if ok:
             self.app.audit.log("user.delete", username, "OK")
