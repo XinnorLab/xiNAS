@@ -31,7 +31,7 @@ _NC = "\033[0m"
 _MENU = [
     MenuItem("1", "List Users"),
     MenuItem("2", "Create User"),
-    MenuItem("3", "Delete User"),
+    MenuItem("3", "Manage User"),
     MenuItem("4", "Set Disk Quota"),
     MenuItem("5", "Show Quotas"),
     MenuItem("0", "Back"),
@@ -57,7 +57,7 @@ class UsersScreen(Screen):
                 "\n"
                 "  \033[1m1\033[0m  \033[36mList Users\033[0m         \033[2mShow all system users\033[0m\n"
                 "  \033[1m2\033[0m  \033[36mCreate User\033[0m        \033[2mAdd a new user with home directory\033[0m\n"
-                "  \033[1m3\033[0m  \033[36mDelete User\033[0m        \033[2mRemove a user from the system\033[0m\n"
+                "  \033[1m3\033[0m  \033[36mManage User\033[0m        \033[2mPassword, lock, shell, groups, delete\033[0m\n"
                 "  \033[1m4\033[0m  \033[36mSet Disk Quota\033[0m     \033[2mConfigure storage limits per user\033[0m\n"
                 "  \033[1m5\033[0m  \033[36mShow Quotas\033[0m        \033[2mDisplay current disk quota report\033[0m\n",
                 id="users-content",
@@ -76,7 +76,7 @@ class UsersScreen(Screen):
         elif key == "2":
             self._create_user()
         elif key == "3":
-            self._delete_user()
+            self._manage_user()
         elif key == "4":
             self._set_quota()
         elif key == "5":
@@ -156,7 +156,7 @@ class UsersScreen(Screen):
             view.set_content(f"{_RED}Failed: {err}{_NC}")
 
     @work(exclusive=True)
-    async def _delete_user(self) -> None:
+    async def _manage_user(self) -> None:
         loop = asyncio.get_running_loop()
         users = await loop.run_in_executor(None, _get_local_users)
         if not users:
@@ -164,28 +164,201 @@ class UsersScreen(Screen):
             return
         user_labels = [f"{u.pw_name}  (UID {u.pw_uid})" for u in sorted(users, key=lambda x: x.pw_name)]
         choice = await self.app.push_screen_wait(
-            SelectDialog(user_labels, title="Delete User", prompt="Select user to delete:")
+            SelectDialog(user_labels, title="Manage User", prompt="Select user:")
         )
         if not choice:
             return
         username = choice.split()[0]
 
-        confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(f"Delete user '{username}'? Home directory will be removed.", "Confirm")
+        while True:
+            locked = await loop.run_in_executor(None, lambda: _get_lock_status(username))
+            lock_label = "Unlock Account" if locked else "Lock Account"
+            actions = [
+                "Change Password",
+                lock_label,
+                "Change Shell",
+                "Manage Groups",
+                "Delete User",
+            ]
+            action = await self.app.push_screen_wait(
+                SelectDialog(actions, title=f"Manage: {username}", prompt="Select action:")
+            )
+            if not action:
+                break
+
+            if action == "Change Password":
+                await self._change_password(username)
+            elif action in ("Lock Account", "Unlock Account"):
+                await self._lock_unlock(username, locked)
+            elif action == "Change Shell":
+                await self._change_shell(username)
+            elif action == "Manage Groups":
+                await self._manage_groups(username)
+            elif action == "Delete User":
+                confirmed = await self.app.push_screen_wait(
+                    ConfirmDialog(f"Delete user '{username}'? Home directory will be removed.", "Confirm")
+                )
+                if confirmed:
+                    ok, _, err = await loop.run_in_executor(
+                        None, lambda: _run_cmd("userdel", "-r", username)
+                    )
+                    if ok:
+                        self.app.audit.log("user.delete", username, "OK")
+                        self._list_users()
+                    else:
+                        view = self.query_one("#users-content", ScrollableTextView)
+                        view.set_content(f"{_RED}Failed: {err}{_NC}")
+                break
+
+    async def _change_password(self, username: str) -> None:
+        while True:
+            password = await self.app.push_screen_wait(
+                InputDialog("New password:", f"Change Password: {username}", password=True)
+            )
+            if password is None:
+                return
+            if not password:
+                self.app.notify("Password must not be empty.", severity="error")
+                continue
+            password2 = await self.app.push_screen_wait(
+                InputDialog("Confirm password:", f"Change Password: {username}", password=True)
+            )
+            if password2 is None:
+                return
+            if password == password2:
+                break
+            self.app.notify("Passwords do not match. Please try again.", severity="error")
+
+        loop = asyncio.get_running_loop()
+        ok, err = await loop.run_in_executor(
+            None, lambda: _change_password_sync(username, password)
         )
-        if not confirmed:
+        view = self.query_one("#users-content", ScrollableTextView)
+        if ok:
+            self.app.audit.log("user.change_password", username, "OK")
+            view.set_content(f"{_GRN}Password changed for '{username}'.{_NC}")
+        else:
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
+
+    async def _lock_unlock(self, username: str, currently_locked: bool) -> None:
+        if currently_locked:
+            cmd_args = ("usermod", "-U", username)
+            action_word, audit_action = "Unlocked", "user.unlock"
+        else:
+            cmd_args = ("usermod", "-L", username)
+            action_word, audit_action = "Locked", "user.lock"
+
+        loop = asyncio.get_running_loop()
+        ok, _, err = await loop.run_in_executor(None, lambda: _run_cmd(*cmd_args))
+        view = self.query_one("#users-content", ScrollableTextView)
+        if ok:
+            self.app.audit.log(audit_action, username, "OK")
+            view.set_content(f"{_GRN}{action_word} account '{username}'.{_NC}")
+        else:
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
+
+    async def _change_shell(self, username: str) -> None:
+        _CUSTOM = "Custom\u2026"
+        shells = ["/bin/bash", "/bin/sh", "/usr/sbin/nologin", "/bin/false", _CUSTOM]
+        choice = await self.app.push_screen_wait(
+            SelectDialog(shells, title=f"Change Shell: {username}", prompt="Select shell:")
+        )
+        if not choice:
             return
+        if choice == _CUSTOM:
+            shell = await self.app.push_screen_wait(
+                InputDialog("Shell path:", f"Change Shell: {username}",
+                            placeholder="/usr/bin/zsh")
+            )
+            if not shell or not shell.strip():
+                return
+            shell = shell.strip()
+        else:
+            shell = choice
 
         loop = asyncio.get_running_loop()
         ok, _, err = await loop.run_in_executor(
-            None, lambda: _run_cmd("userdel", "-r", username)
+            None, lambda: _run_cmd("chsh", "-s", shell, username)
         )
+        view = self.query_one("#users-content", ScrollableTextView)
         if ok:
-            self.app.audit.log("user.delete", username, "OK")
-            self._list_users()
+            self.app.audit.log("user.change_shell", f"{username} -> {shell}", "OK")
+            view.set_content(f"{_GRN}Shell changed to '{shell}' for '{username}'.{_NC}")
         else:
-            view = self.query_one("#users-content", ScrollableTextView)
             view.set_content(f"{_RED}Failed: {err}{_NC}")
+
+    async def _manage_groups(self, username: str) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            current = await loop.run_in_executor(None, lambda: _get_user_groups(username))
+            view = self.query_one("#users-content", ScrollableTextView)
+            view.set_content(
+                f"{_BLD}{_CYN}Groups for '{username}':{_NC}\n\n"
+                f"  {', '.join(current) if current else '(none)'}\n"
+            )
+
+            action = await self.app.push_screen_wait(
+                SelectDialog(
+                    ["Add to group", "Remove from group"],
+                    title=f"Groups: {username}",
+                    prompt="Select action:",
+                )
+            )
+            if not action:
+                break
+
+            if action == "Add to group":
+                all_groups = await loop.run_in_executor(None, _get_all_groups)
+                available = [g for g, _ in all_groups if g not in current]
+                if not available:
+                    self.app.notify("No additional groups available.", severity="warning")
+                    continue
+                group = await self.app.push_screen_wait(
+                    SelectDialog(available, title="Add to Group", prompt="Select group:")
+                )
+                if not group:
+                    continue
+                ok, _, err = await loop.run_in_executor(
+                    None, lambda: _run_cmd("usermod", "-aG", group, username)
+                )
+                if ok:
+                    self.app.audit.log("user.add_to_group", f"{username} -> {group}", "OK")
+                    self.app.notify(f"Added '{username}' to group '{group}'.", severity="information")
+                else:
+                    view.set_content(f"{_RED}Failed: {err}{_NC}")
+
+            elif action == "Remove from group":
+                # Get primary group to exclude it
+                try:
+                    import pwd as _pwd
+                    pw = _pwd.getpwnam(username)
+                    primary_gid = pw.pw_gid
+                except KeyError:
+                    primary_gid = -1
+                removable = []
+                for g in current:
+                    try:
+                        gi = grp.getgrnam(g)
+                        if gi.gr_gid != primary_gid:
+                            removable.append(g)
+                    except KeyError:
+                        pass
+                if not removable:
+                    self.app.notify("No removable groups (primary group cannot be removed).", severity="warning")
+                    continue
+                group = await self.app.push_screen_wait(
+                    SelectDialog(removable, title="Remove from Group", prompt="Select group:")
+                )
+                if not group:
+                    continue
+                ok, _, err = await loop.run_in_executor(
+                    None, lambda: _run_cmd("gpasswd", "-d", username, group)
+                )
+                if ok:
+                    self.app.audit.log("user.remove_from_group", f"{username} <- {group}", "OK")
+                    self.app.notify(f"Removed '{username}' from group '{group}'.", severity="information")
+                else:
+                    view.set_content(f"{_RED}Failed: {err}{_NC}")
 
     @work(exclusive=True)
     async def _set_quota(self) -> None:
@@ -362,3 +535,48 @@ def _create_user_sync(username: str, home: str, password: str) -> tuple[bool, st
         if p.returncode != 0:
             return False, p.stderr.strip()
     return True, ""
+
+
+def _change_password_sync(username: str, password: str) -> tuple[bool, str]:
+    p = subprocess.run(
+        ["chpasswd"],
+        input=f"{username}:{password}\n",
+        capture_output=True, text=True,
+    )
+    if p.returncode != 0:
+        return False, p.stderr.strip()
+    return True, ""
+
+
+def _get_lock_status(username: str) -> bool:
+    """Return True if account is locked."""
+    r = subprocess.run(
+        ["passwd", "-S", username],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        return False
+    fields = r.stdout.split()
+    return len(fields) >= 2 and fields[1] == "L"
+
+
+def _get_user_groups(username: str) -> list[str]:
+    r = subprocess.run(
+        ["id", "-Gn", username],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        return []
+    return r.stdout.strip().split()
+
+
+def _get_all_groups() -> list[tuple[str, int]]:
+    """Return (name, gid) for groups with GID >= 1000."""
+    result: list[tuple[str, int]] = []
+    try:
+        for g in grp.getgrall():
+            if g.gr_gid >= _UID_MIN:
+                result.append((g.gr_name, g.gr_gid))
+    except Exception:
+        pass
+    return sorted(result)

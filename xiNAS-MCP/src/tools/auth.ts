@@ -59,6 +59,42 @@ export const AuthListQuotasSchema = z.object({
   controller_id: z.string().optional(),
 });
 
+export const AuthChangePasswordSchema = z.object({
+  controller_id: z.string().optional(),
+  username: z.string().describe('Linux username'),
+  password: z.string().describe('New password'),
+  password_confirm: z.string().describe('Password confirmation (must match password)'),
+  mode: z.enum(['plan', 'apply']).default('plan'),
+});
+
+export const AuthSetUserLockSchema = z.object({
+  controller_id: z.string().optional(),
+  username: z.string().describe('Linux username'),
+  locked: z.boolean().describe('true to lock the account, false to unlock'),
+  mode: z.enum(['plan', 'apply']).default('plan'),
+});
+
+export const AuthChangeShellSchema = z.object({
+  controller_id: z.string().optional(),
+  username: z.string().describe('Linux username'),
+  shell: z.string().describe('Absolute path to login shell (e.g. /bin/bash, /usr/sbin/nologin)'),
+  mode: z.enum(['plan', 'apply']).default('plan'),
+});
+
+export const AuthAddToGroupSchema = z.object({
+  controller_id: z.string().optional(),
+  username: z.string().describe('Linux username'),
+  group: z.string().describe('Group name to add the user to'),
+  mode: z.enum(['plan', 'apply']).default('plan'),
+});
+
+export const AuthRemoveFromGroupSchema = z.object({
+  controller_id: z.string().optional(),
+  username: z.string().describe('Linux username'),
+  group: z.string().describe('Group name to remove the user from'),
+  mode: z.enum(['plan', 'apply']).default('plan'),
+});
+
 // --- Handlers ---
 
 export async function handleAuthGetSupportedModes(params: z.infer<typeof AuthGetSupportedModesSchema>) {
@@ -364,4 +400,288 @@ export async function handleAuthListQuotas(params: z.infer<typeof AuthListQuotas
   }
 
   return { raw_report: result.stdout };
+}
+
+// --- Group helper ---
+
+function parseGroupLine(line: string): { name: string; gid: number; members: string[] } | null {
+  const parts = line.split(':');
+  if (parts.length < 4) return null;
+  const name = parts[0]!;
+  const gid = parseInt(parts[2]!, 10);
+  const memberStr = parts[3] ?? '';
+  return {
+    name,
+    gid,
+    members: memberStr ? memberStr.split(',').filter(Boolean) : [],
+  };
+}
+
+// --- Lock status helper ---
+
+async function isUserLocked(username: string): Promise<boolean> {
+  const result = await exec('passwd', ['-S', username]);
+  if (result.exitCode !== 0) return false;
+  const fields = result.stdout.trim().split(/\s+/);
+  return fields.length >= 2 && fields[1] === 'L';
+}
+
+// --- New user management handlers ---
+
+export async function handleAuthChangePassword(params: z.infer<typeof AuthChangePasswordSchema>) {
+  resolveController(params.controller_id);
+  const mode = params.mode as Mode;
+
+  return applyWithPlan(mode, {
+    preflight: async () => {
+      const blockingResources: string[] = [];
+      const warnings: string[] = [];
+
+      const existing = await lookupUser(params.username);
+      if (!existing) {
+        blockingResources.push(`User '${params.username}' not found`);
+      } else if (existing.uid < 1000) {
+        blockingResources.push(`Cannot modify system user '${params.username}' (UID ${existing.uid})`);
+      }
+
+      if (params.password !== params.password_confirm) {
+        blockingResources.push('Passwords do not match');
+      }
+
+      return {
+        mode: 'plan' as const,
+        description: `Change password for '${params.username}'`,
+        changes: [{
+          action: 'modify',
+          resource_type: 'linux_user',
+          resource_id: params.username,
+          after: { password: '(changed)' },
+        }],
+        warnings,
+        preflight_passed: blockingResources.length === 0,
+        ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
+      } satisfies PlanResult;
+    },
+
+    execute: async () => {
+      const chpw = await new Promise<{ exitCode: number; stderr: string }>((resolve, reject) => {
+        const proc = execFile('chpasswd', { timeout: CMD_TIMEOUT_MS }, (err, _stdout, stderr) => {
+          if (err && 'killed' in err && err.killed) {
+            reject(new McpToolError(ErrorCode.TIMEOUT, 'chpasswd timed out'));
+            return;
+          }
+          const exitCode = err && 'code' in err ? (err.code as number) : 0;
+          resolve({ exitCode, stderr: stderr ?? '' });
+        });
+        proc.stdin?.write(`${params.username}:${params.password}\n`);
+        proc.stdin?.end();
+      });
+      if (chpw.exitCode !== 0) {
+        throw new McpToolError(ErrorCode.INTERNAL, `chpasswd failed: ${chpw.stderr.trim()}`);
+      }
+      return { changed: true, username: params.username };
+    },
+  });
+}
+
+export async function handleAuthSetUserLock(params: z.infer<typeof AuthSetUserLockSchema>) {
+  resolveController(params.controller_id);
+  const mode = params.mode as Mode;
+
+  return applyWithPlan(mode, {
+    preflight: async () => {
+      const blockingResources: string[] = [];
+      const warnings: string[] = [];
+
+      const existing = await lookupUser(params.username);
+      if (!existing) {
+        blockingResources.push(`User '${params.username}' not found`);
+      } else if (existing.uid < 1000) {
+        blockingResources.push(`Cannot modify system user '${params.username}' (UID ${existing.uid})`);
+      }
+
+      const currentlyLocked = await isUserLocked(params.username);
+      if (currentlyLocked === params.locked) {
+        warnings.push(`User '${params.username}' is already ${params.locked ? 'locked' : 'unlocked'}`);
+      }
+
+      const action_desc = params.locked ? 'Lock' : 'Unlock';
+      return {
+        mode: 'plan' as const,
+        description: `${action_desc} user '${params.username}'`,
+        changes: [{
+          action: 'modify',
+          resource_type: 'linux_user',
+          resource_id: params.username,
+          before: { locked: currentlyLocked },
+          after: { locked: params.locked },
+        }],
+        warnings,
+        preflight_passed: blockingResources.length === 0,
+        ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
+      } satisfies PlanResult;
+    },
+
+    execute: async () => {
+      const flag = params.locked ? '-L' : '-U';
+      const result = await exec('usermod', [flag, params.username]);
+      if (result.exitCode !== 0) {
+        throw new McpToolError(ErrorCode.INTERNAL, `usermod failed: ${result.stderr.trim()}`);
+      }
+      return { username: params.username, locked: params.locked };
+    },
+  });
+}
+
+export async function handleAuthChangeShell(params: z.infer<typeof AuthChangeShellSchema>) {
+  resolveController(params.controller_id);
+  const mode = params.mode as Mode;
+
+  return applyWithPlan(mode, {
+    preflight: async () => {
+      const blockingResources: string[] = [];
+      const warnings: string[] = [];
+
+      const existing = await lookupUser(params.username);
+      if (!existing) {
+        blockingResources.push(`User '${params.username}' not found`);
+      } else if (existing.uid < 1000) {
+        blockingResources.push(`Cannot modify system user '${params.username}' (UID ${existing.uid})`);
+      }
+
+      if (!fs.existsSync(params.shell)) {
+        blockingResources.push(`Shell not found: ${params.shell}`);
+      }
+
+      return {
+        mode: 'plan' as const,
+        description: `Change shell for '${params.username}' to ${params.shell}`,
+        changes: [{
+          action: 'modify',
+          resource_type: 'linux_user',
+          resource_id: params.username,
+          before: existing ? { shell: existing.shell } : undefined,
+          after: { shell: params.shell },
+        }],
+        warnings,
+        preflight_passed: blockingResources.length === 0,
+        ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
+      } satisfies PlanResult;
+    },
+
+    execute: async () => {
+      const result = await exec('chsh', ['-s', params.shell, params.username]);
+      if (result.exitCode !== 0) {
+        throw new McpToolError(ErrorCode.INTERNAL, `chsh failed: ${result.stderr.trim()}`);
+      }
+      return { username: params.username, shell: params.shell };
+    },
+  });
+}
+
+export async function handleAuthAddToGroup(params: z.infer<typeof AuthAddToGroupSchema>) {
+  resolveController(params.controller_id);
+  const mode = params.mode as Mode;
+
+  return applyWithPlan(mode, {
+    preflight: async () => {
+      const blockingResources: string[] = [];
+      const warnings: string[] = [];
+
+      const existing = await lookupUser(params.username);
+      if (!existing) {
+        blockingResources.push(`User '${params.username}' not found`);
+      } else if (existing.uid < 1000) {
+        blockingResources.push(`Cannot modify system user '${params.username}' (UID ${existing.uid})`);
+      }
+
+      const groupResult = await exec('getent', ['group', params.group]);
+      if (groupResult.exitCode !== 0) {
+        blockingResources.push(`Group '${params.group}' not found`);
+      } else {
+        const groupInfo = parseGroupLine(groupResult.stdout.trim());
+        if (groupInfo && groupInfo.members.includes(params.username)) {
+          blockingResources.push(`User '${params.username}' is already a member of group '${params.group}'`);
+        }
+      }
+
+      return {
+        mode: 'plan' as const,
+        description: `Add '${params.username}' to group '${params.group}'`,
+        changes: [{
+          action: 'modify',
+          resource_type: 'linux_user',
+          resource_id: params.username,
+          after: { added_to_group: params.group },
+        }],
+        warnings,
+        preflight_passed: blockingResources.length === 0,
+        ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
+      } satisfies PlanResult;
+    },
+
+    execute: async () => {
+      const result = await exec('usermod', ['-aG', params.group, params.username]);
+      if (result.exitCode !== 0) {
+        throw new McpToolError(ErrorCode.INTERNAL, `usermod failed: ${result.stderr.trim()}`);
+      }
+      return { username: params.username, group: params.group, action: 'added' };
+    },
+  });
+}
+
+export async function handleAuthRemoveFromGroup(params: z.infer<typeof AuthRemoveFromGroupSchema>) {
+  resolveController(params.controller_id);
+  const mode = params.mode as Mode;
+
+  return applyWithPlan(mode, {
+    preflight: async () => {
+      const blockingResources: string[] = [];
+      const warnings: string[] = [];
+
+      const existing = await lookupUser(params.username);
+      if (!existing) {
+        blockingResources.push(`User '${params.username}' not found`);
+      } else if (existing.uid < 1000) {
+        blockingResources.push(`Cannot modify system user '${params.username}' (UID ${existing.uid})`);
+      }
+
+      const groupResult = await exec('getent', ['group', params.group]);
+      if (groupResult.exitCode !== 0) {
+        blockingResources.push(`Group '${params.group}' not found`);
+      } else {
+        const groupInfo = parseGroupLine(groupResult.stdout.trim());
+        if (groupInfo) {
+          if (!groupInfo.members.includes(params.username)) {
+            blockingResources.push(`User '${params.username}' is not a member of group '${params.group}'`);
+          }
+          if (existing && groupInfo.gid === existing.gid) {
+            blockingResources.push(`Cannot remove user from primary group '${params.group}'`);
+          }
+        }
+      }
+
+      return {
+        mode: 'plan' as const,
+        description: `Remove '${params.username}' from group '${params.group}'`,
+        changes: [{
+          action: 'modify',
+          resource_type: 'linux_user',
+          resource_id: params.username,
+          after: { removed_from_group: params.group },
+        }],
+        warnings,
+        preflight_passed: blockingResources.length === 0,
+        ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
+      } satisfies PlanResult;
+    },
+
+    execute: async () => {
+      const result = await exec('gpasswd', ['-d', params.username, params.group]);
+      if (result.exitCode !== 0) {
+        throw new McpToolError(ErrorCode.INTERNAL, `gpasswd failed: ${result.stderr.trim()}`);
+      }
+      return { username: params.username, group: params.group, action: 'removed' };
+    },
+  });
 }

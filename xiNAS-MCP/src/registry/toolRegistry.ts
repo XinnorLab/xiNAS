@@ -62,6 +62,11 @@ import {
   AuthDeleteUserSchema, handleAuthDeleteUser,
   AuthSetQuotaSchema, handleAuthSetQuota,
   AuthListQuotasSchema, handleAuthListQuotas,
+  AuthChangePasswordSchema, handleAuthChangePassword,
+  AuthSetUserLockSchema, handleAuthSetUserLock,
+  AuthChangeShellSchema, handleAuthChangeShell,
+  AuthAddToGroupSchema, handleAuthAddToGroup,
+  AuthRemoveFromGroupSchema, handleAuthRemoveFromGroup,
 } from '../tools/auth.js';
 
 import {
@@ -158,6 +163,36 @@ const TOOLS: ToolDef[] = [
   { name: 'auth.delete_user', description: 'Delete a Linux user, preserving home directory (plan/apply)', schema: AuthDeleteUserSchema, handler: handleAuthDeleteUser },
   { name: 'auth.set_quota', description: 'Set disk quota for a user on an NFS export path', schema: AuthSetQuotaSchema, handler: handleAuthSetQuota },
   { name: 'auth.list_quotas', description: 'List all disk quotas (repquota -a)', schema: AuthListQuotasSchema, handler: handleAuthListQuotas },
+  {
+    name: 'auth.change_password',
+    description: "Change a user's password (plan/apply). Requires password and password_confirm fields to match.",
+    schema: AuthChangePasswordSchema,
+    handler: handleAuthChangePassword,
+  },
+  {
+    name: 'auth.set_user_lock',
+    description: 'Lock or unlock a user account (plan/apply). Set locked=true to lock, false to unlock.',
+    schema: AuthSetUserLockSchema,
+    handler: handleAuthSetUserLock,
+  },
+  {
+    name: 'auth.change_shell',
+    description: "Change a user's login shell (plan/apply). Shell path must exist on the system.",
+    schema: AuthChangeShellSchema,
+    handler: handleAuthChangeShell,
+  },
+  {
+    name: 'auth.add_to_group',
+    description: 'Add a user to a group (plan/apply). User must not already be a member.',
+    schema: AuthAddToGroupSchema,
+    handler: handleAuthAddToGroup,
+  },
+  {
+    name: 'auth.remove_from_group',
+    description: 'Remove a user from a group (plan/apply). Cannot remove from primary group.',
+    schema: AuthRemoveFromGroupSchema,
+    handler: handleAuthRemoveFromGroup,
+  },
 
   // Jobs
   { name: 'job.get', description: 'Get status and progress of a long-running job', schema: JobGetSchema, handler: handleJobGet },
