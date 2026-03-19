@@ -12,7 +12,7 @@ reset to the initial baseline configuration.
 
 ---
 
-## Tools (6 new tools)
+## Tools (8 tools)
 
 ### `config.list_snapshots`
 - **Role**: viewer
@@ -74,6 +74,27 @@ reset to the initial baseline configuration.
 - **Timeout**: 300s (5 minutes)
 - **Notes**: Arbitrary snapshot rollback has been removed. Only resetting to the initial baseline (post-install) configuration is supported. The plan call returns a confirmation token (UUID, 5-minute TTL) that must be passed back in the apply call to prevent accidental execution.
 
+### `config.get_retention`
+- **Role**: viewer
+- **Description**: Get current snapshot retention policy
+- **Input Schema**:
+  - `controller_id` (string, optional)
+- **Output**: `{ "max_snapshots": 40, "max_age_days": 0 }`
+- **Backend**: `python3 -m xinas_history gc policy --format json`
+
+### `config.set_retention`
+- **Role**: admin
+- **Description**: Update snapshot retention policy
+- **Mode**: plan/apply
+- **Input Schema**:
+  - `controller_id` (string, optional)
+  - `max_snapshots` (integer, optional, 1–1000): Max rollback-eligible snapshots
+  - `max_age_days` (integer, optional, 0–3650): Max age in days (0 = disabled)
+  - `mode` (string: `"plan"` | `"apply"`, default: `"plan"`)
+- **Output (plan)**: Change preview with before/after values
+- **Output (apply)**: Updated policy values
+- **Backend**: `python3 -m xinas_history gc policy --set --max-snapshots <n> --max-age-days <n> --format json`
+
 ---
 
 ## RBAC Permissions
@@ -86,6 +107,8 @@ reset to the initial baseline configuration.
 | `config.check_drift` | operator | Reads system files, may trigger alerts |
 | `config.get_status` | viewer | Read-only status |
 | `config.reset_to_baseline` | admin | Destructive: resets all config to initial baseline |
+| `config.get_retention` | viewer | Read-only policy inspection |
+| `config.set_retention` | admin | Modifies retention limits |
 
 ---
 

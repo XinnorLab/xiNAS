@@ -361,22 +361,32 @@ When the config-history subsystem initializes, it performs the following recover
 
 ### 7.1 Retention Policy
 
+Retention is configurable via `/etc/xinas-mcp/config.json` (key: `retention`):
+
+| Parameter | Default | Range | Description |
+|---|---|---|---|
+| `max_snapshots` | 40 | 1–1000 | Maximum rollback-eligible snapshots retained |
+| `max_age_days` | 0 | 0–3650 | Delete snapshots older than N days (0 = disabled) |
+
 | Snapshot Type | Retention Rule |
 |---|---|
 | `baseline` | Always retained (immutable) |
-| `rollback_eligible` | Last 10 retained |
+| `rollback_eligible` | Oldest purged when count > `max_snapshots` OR age > `max_age_days` |
 | `ephemeral` | 1 per active transaction, cleaned up after completion |
-| Currently effective | Always retained, even if it would be the 11th rollback-eligible snapshot |
+| Currently effective | Always retained regardless of policy |
+
+Settings can be changed via TUI (Config History → Retention Settings) or MCP (`config.set_retention`).
 
 ### 7.2 Purge Trigger
 
 After every successful snapshot creation:
 
 1. Count `rollback_eligible` snapshots (excluding baseline).
-2. If count exceeds 10: identify the oldest `rollback_eligible` snapshot.
-3. Verify the candidate is not locked, not the currently effective snapshot, and not referenced by an in-progress rollback.
-4. Remove the snapshot directory (manifest and all collected files).
-5. Log the purge event to `audit.log`.
+2. If count exceeds `max_snapshots`: mark oldest excess snapshots for purging.
+3. If `max_age_days` > 0: mark snapshots older than the cutoff for purging.
+4. For each candidate: verify not protected (not locked, not currently effective, not in-progress).
+5. Remove the snapshot directory (manifest and all collected files).
+6. Log the purge event to `audit.log`.
 
 ### 7.3 Stale Ephemeral Cleanup (on startup)
 

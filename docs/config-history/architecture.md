@@ -150,17 +150,17 @@ alerts in automation workflows.
 
 ### gc.py -- GarbageCollector
 
-Retention policy:
+Retention policy (configurable via `/etc/xinas-mcp/config.json`):
 
-| Category | Retained |
-|----------|----------|
+| Category | Rule |
+|----------|------|
 | `baseline` | 1 (immutable, never deleted) |
-| `rollback_eligible` | 10 most recent |
+| `rollback_eligible` | Purge when count > `max_snapshots` (default 40) or age > `max_age_days` (default 0 = off) |
 | `ephemeral` | 1 most recent (pre-change recovery only) |
 
-On every snapshot creation the GC runs and purges the oldest snapshots that
-exceed the retention limits. It also cleans up incomplete directories left
-behind by crashes (detected via missing `manifest.yml`).
+On every snapshot creation the GC runs and purges snapshots that exceed the
+configured limits. It also cleans up incomplete directories left behind by
+crashes (detected via missing `manifest.yml`).
 
 ### classifier.py -- RollbackClassifier
 
