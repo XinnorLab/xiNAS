@@ -226,11 +226,24 @@ def _generate_netplan(allocations: list[dict]) -> str:
         "  renderer: networkd",
         "  ethernets:",
     ]
-    for alloc in allocations:
+    multi = len(allocations) > 1
+    for i, alloc in enumerate(allocations):
         lines.append(f"    {alloc['name']}:")
         lines.append("      dhcp4: no")
         lines.append(f"      addresses: [{alloc['ip']}/{alloc['prefix']}]")
         lines.append(f"      mtu: {alloc['mtu']}")
+        if multi:
+            table_id = 100 + i
+            octets = alloc['ip'].split('.')
+            subnet = f"{octets[0]}.{octets[1]}.{octets[2]}.0/{alloc['prefix']}"
+            lines.append("      routes:")
+            lines.append(f"        - to: {subnet}")
+            lines.append("          scope: link")
+            lines.append(f"          table: {table_id}")
+            lines.append("      routing-policy:")
+            lines.append(f"        - from: {alloc['ip']}")
+            lines.append(f"          table: {table_id}")
+            lines.append(f"          priority: {table_id}")
     lines.append("")
     return "\n".join(lines)
 
@@ -451,7 +464,8 @@ class IPPoolScreen(Screen):
             "",
         ]
 
-        for alloc, iface in zip(allocations, interfaces):
+        multi = len(allocations) > 1
+        for i, (alloc, iface) in enumerate(zip(allocations, interfaces)):
             state_color = GRN if iface["state"] == "up" else "\033[33m"
             lines.append(
                 f"  {BLD}{alloc['name']}{NC}  "
@@ -463,6 +477,11 @@ class IPPoolScreen(Screen):
             lines.append(
                 f"      {DIM}MTU:{NC}     {alloc['mtu']}"
             )
+            if multi:
+                table_id = 100 + i
+                lines.append(
+                    f"      {DIM}Policy:{NC}  table {table_id} (src-based routing)"
+                )
             if iface["ip4"]:
                 lines.append(
                     f"      {DIM}Current:{NC} {iface['ip4']}"

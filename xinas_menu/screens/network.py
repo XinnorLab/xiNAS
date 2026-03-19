@@ -408,6 +408,42 @@ def _collect_network_info() -> str:
     else:
         lines.append(f"  {DIM}No routes configured{NC}")
     lines.append("")
+
+    lines.append(f"{DIM}{'-' * W}{NC}")
+    lines.append(f"  {BLD}{CYN}POLICY ROUTING{NC}")
+    lines.append(f"{DIM}{'-' * W}{NC}")
+    lines.append("")
+
+    rules = _run_cmd("ip rule show")
+    custom_tables: list[int] = []
+    if rules:
+        for line in rules.splitlines():
+            if "lookup" in line:
+                parts = line.split()
+                try:
+                    idx = parts.index("lookup")
+                    table = int(parts[idx + 1])
+                    if 100 <= table < 200:
+                        lines.append(f"  {line.strip()}")
+                        if table not in custom_tables:
+                            custom_tables.append(table)
+                except (ValueError, IndexError):
+                    pass
+
+    if custom_tables:
+        lines.append("")
+        for table in sorted(custom_tables):
+            table_routes = _run_cmd(f"ip route show table {table}")
+            if table_routes:
+                lines.append(f"  {DIM}Table {table}:{NC}")
+                for rt_line in table_routes.splitlines()[:5]:
+                    lines.append(f"    {rt_line}")
+                lines.append("")
+    else:
+        lines.append(f"  {DIM}No policy routing rules configured{NC}")
+        lines.append(f"  {DIM}(PBR is auto-configured when multiple high-speed interfaces exist){NC}")
+        lines.append("")
+
     lines.append(f"{DIM}{'=' * W}{NC}")
     return "\n".join(lines)
 
@@ -446,6 +482,26 @@ def _update_netplan(iface: str, ip_cidr: str, gateway: str, mtu: int | None = No
             iface_cfg["routes"] = [{"to": "default", "via": gateway}]
         if mtu is not None:
             iface_cfg["mtu"] = mtu
+
+        # Policy-based routing for multi-interface configs
+        if len(ethernets) > 1:
+            iface_names = sorted(ethernets.keys())
+            table_id = 100 + iface_names.index(iface)
+            ip_addr = ip_cidr.split("/")[0]
+            prefix = ip_cidr.split("/")[1]
+            octets = ip_addr.split(".")
+            subnet = f"{octets[0]}.{octets[1]}.{octets[2]}.0/{prefix}"
+
+            existing_routes = iface_cfg.get("routes", [])
+            # Remove old PBR routes (those with a "table" key)
+            existing_routes = [r for r in existing_routes if "table" not in r]
+            existing_routes.append({"to": subnet, "scope": "link", "table": table_id})
+            iface_cfg["routes"] = existing_routes
+
+            iface_cfg["routing-policy"] = [
+                {"from": ip_addr, "table": table_id, "priority": table_id}
+            ]
+
         with cfg_path.open("w") as f:
             yaml.dump(cfg, f, default_flow_style=False)
         return True, ""

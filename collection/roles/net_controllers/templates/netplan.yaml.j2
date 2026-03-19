@@ -12,6 +12,22 @@ network:
 {% elif net_iface_mtus is defined and iface in net_iface_mtus %}
       mtu: {{ net_iface_mtus[iface] }}
 {% endif %}
+{% if net_allocated_ips | length > 1 %}
+{# Policy-based routing: ensure replies egress via the correct interface #}
+{% set ip_addr = ip.split('/')[0] %}
+{% set prefix = ip.split('/')[1] %}
+{% set table_id = 100 + loop.index0 %}
+{% set octets = ip_addr.split('.') %}
+{% set subnet = octets[0] ~ '.' ~ octets[1] ~ '.' ~ octets[2] ~ '.0/' ~ prefix %}
+      routes:
+        - to: {{ subnet }}
+          scope: link
+          table: {{ table_id }}
+      routing-policy:
+        - from: {{ ip_addr }}
+          table: {{ table_id }}
+          priority: {{ table_id }}
+{% endif %}
 {% endfor %}
 {% else %}
     # No interfaces detected - add manual configuration below
