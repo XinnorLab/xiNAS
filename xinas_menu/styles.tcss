@@ -385,6 +385,25 @@ WelcomeScreen {
     color: #e85555;
 }
 
+/* ── AlertBar (persistent critical alerts) ───────────────────── */
+AlertBar {
+    height: auto;
+    dock: top;
+    display: none;
+    background: #2a1118;
+    padding: 0 2;
+    border-bottom: solid #e85555;
+}
+
+AlertBar.has-alerts {
+    display: block;
+}
+
+#alert-content {
+    color: #e85555;
+    text-style: bold;
+}
+
 /* ── Footer ──────────────────────────────────────────────────── */
 Footer {
     background: #111520;

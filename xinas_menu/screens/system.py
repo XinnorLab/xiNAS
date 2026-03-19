@@ -1,4 +1,4 @@
-"""SystemScreen — System submenu (Status, License, Settings, Exporter, Quick Actions)."""
+"""SystemScreen — System submenu (Status, License, Users, Health, Quick Actions, Config History)."""
 from __future__ import annotations
 
 from textual.app import ComposeResult
@@ -11,9 +11,10 @@ from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 _MENU = [
     MenuItem("1", "Status"),
     MenuItem("2", "License"),
-    MenuItem("3", "Settings"),
-    MenuItem("4", "xiRAID Exporter"),
+    MenuItem("3", "User Management"),
+    MenuItem("4", "Health Check"),
     MenuItem("5", "Quick Actions"),
+    MenuItem("6", "Configuration History"),
     MenuItem("0", "Back"),
 ]
 
@@ -42,11 +43,14 @@ class SystemScreen(Screen):
             from xinas_menu.screens.license import LicenseScreen
             self.app.push_screen(LicenseScreen())
         elif key == "3":
-            from xinas_menu.screens.settings import SettingsScreen
-            self.app.push_screen(SettingsScreen())
+            from xinas_menu.screens.users import UsersScreen
+            self.app.push_screen(UsersScreen())
         elif key == "4":
-            from xinas_menu.screens.exporter import ExporterScreen
-            self.app.push_screen(ExporterScreen())
+            from xinas_menu.screens.health import HealthScreen
+            self.app.push_screen(HealthScreen())
         elif key == "5":
             from xinas_menu.screens.quick_actions import QuickActionsScreen
             self.app.push_screen(QuickActionsScreen())
+        elif key == "6":
+            from xinas_menu.screens.config_history import ConfigHistoryScreen
+            self.app.push_screen(ConfigHistoryScreen())

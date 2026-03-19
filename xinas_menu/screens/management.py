@@ -1,4 +1,4 @@
-"""ManagementScreen — Management submenu (Users, Health, MCP, Config History, Updates)."""
+"""ManagementScreen — Management submenu (Settings, Integrations, Updates)."""
 from __future__ import annotations
 
 from textual.app import ComposeResult
@@ -10,11 +10,9 @@ from textual import work
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 
 _MENU = [
-    MenuItem("1", "User Management"),
-    MenuItem("2", "Health Check"),
-    MenuItem("3", "MCP Server"),
-    MenuItem("4", "Configuration History"),
-    MenuItem("5", "Check for Updates"),
+    MenuItem("1", "Settings"),
+    MenuItem("2", "Integrations"),
+    MenuItem("3", "Check for Updates"),
     MenuItem("0", "Back"),
 ]
 
@@ -37,18 +35,12 @@ class ManagementScreen(Screen):
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            from xinas_menu.screens.users import UsersScreen
-            self.app.push_screen(UsersScreen())
+            from xinas_menu.screens.settings import SettingsScreen
+            self.app.push_screen(SettingsScreen())
         elif key == "2":
-            from xinas_menu.screens.health import HealthScreen
-            self.app.push_screen(HealthScreen())
+            from xinas_menu.screens.integrations import IntegrationsScreen
+            self.app.push_screen(IntegrationsScreen())
         elif key == "3":
-            from xinas_menu.screens.mcp import MCPScreen
-            self.app.push_screen(MCPScreen())
-        elif key == "4":
-            from xinas_menu.screens.config_history import ConfigHistoryScreen
-            self.app.push_screen(ConfigHistoryScreen())
-        elif key == "5":
             self._do_update_check()
 
     @work(exclusive=True)

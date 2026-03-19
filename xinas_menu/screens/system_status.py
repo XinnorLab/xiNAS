@@ -70,7 +70,12 @@ class SystemStatusScreen(Screen):
                 self.app.grpc.get_server_info(), timeout=5,
             )
             if ok:
-                view.append(f"\n  xiRAID: connected\n{_format_server_info(info)}")
+                view.append(f"\n  xiRAID: connected")
+                # License section
+                lic = info.get("license") if isinstance(info, dict) else None
+                if isinstance(lic, dict):
+                    view.append(_format_license_summary(lic))
+                view.append(_format_server_info(info))
             else:
                 view.append(f"\n  xiRAID: {grpc_short_error(err)}")
         except asyncio.TimeoutError:
@@ -235,6 +240,31 @@ def _build_fallback_status() -> str:
         pass
 
     return "\n".join(lines)
+
+
+def _format_license_summary(data: dict) -> str:
+    """One-section license summary for the system status dashboard."""
+    GRN, RED, YLW, BLD, DIM, NC = (
+        "\033[32m", "\033[31m", "\033[33m",
+        "\033[1m", "\033[2m", "\033[0m",
+    )
+    status = str(data.get("status", "unknown")).lower()
+    if status == "valid":
+        badge = f"{GRN}\u25cf VALID{NC}"
+    elif status in ("expired", "invalid"):
+        badge = f"{RED}\u25cf {status.upper()}{NC}"
+    else:
+        badge = f"{YLW}\u25cf {status.upper()}{NC}"
+
+    expires = data.get("expired", "\u2014")
+    disks = data.get("disks", "\u2014")
+    in_use = data.get("disks_in_use", "\u2014")
+
+    return (
+        f"\n  {BLD}LICENSE{NC}\n"
+        f"  {badge}  {DIM}Expires:{NC} {expires}  "
+        f"{DIM}Disks:{NC} {in_use}/{disks}"
+    )
 
 
 def _format_server_info(info) -> str:

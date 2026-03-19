@@ -82,11 +82,45 @@ class MainMenuScreen(Screen):
         loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(None, _build_mini_status)
 
+        # Prepend license status (async gRPC call)
+        license_section = await _build_license_section(self.app.grpc)
+        if license_section:
+            text = license_section + "\n" + text
+
         try:
             view = self.query_one("#main-status", ScrollableTextView)
             view.set_content(text)
         except Exception:
             _log.debug("mini-status: view not available", exc_info=True)
+
+
+# ── License section (async) ──────────────────────────────────────────────
+
+
+async def _build_license_section(grpc) -> str:
+    """Return a license summary block, or empty string on failure."""
+    try:
+        ok, data, err = await asyncio.wait_for(grpc.license_show(), timeout=5)
+        if ok and isinstance(data, dict):
+            status = str(data.get("status", "")).lower()
+            if status == "valid":
+                line = f"  {_GRN}●{_NC} License: {_GRN}valid{_NC}"
+                expires = data.get("expired", "")
+                if expires:
+                    line += f"  {_DIM}(expires {expires}){_NC}"
+            elif status == "expired":
+                line = f"  {_RED}●{_NC} License: {_RED}EXPIRED{_NC}"
+            elif status == "invalid":
+                line = f"  {_RED}●{_NC} License: {_RED}INVALID{_NC}"
+            else:
+                line = f"  {_YLW}●{_NC} License: {_YLW}{status}{_NC}"
+        elif not ok:
+            line = f"  {_RED}○{_NC} License: {_DIM}check failed{_NC}"
+        else:
+            line = f"  {_DIM}○ License: unavailable{_NC}"
+    except Exception:
+        line = f"  {_DIM}○ License: unavailable{_NC}"
+    return f"  {_BLD}{_CYN}License{_NC}\n{line}\n"
 
 
 # ── Mini-status builder (runs in thread) ────────────────────────────────

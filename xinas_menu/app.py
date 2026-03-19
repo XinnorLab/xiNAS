@@ -18,6 +18,7 @@ from xinas_menu.api.nfs_client import NFSHelperClient
 from xinas_menu.utils.audit import AuditLogger
 from xinas_menu.utils.update_check import UpdateChecker
 from xinas_menu.utils.snapshot_helper import SnapshotHelper
+from xinas_menu.widgets.alert_bar import AlertBar
 from xinas_menu.widgets.header import XiNASHeader
 
 __all__ = ["XiNASApp"]
@@ -55,6 +56,7 @@ class XiNASApp(App):
 
     def compose(self) -> ComposeResult:
         yield XiNASHeader()
+        yield AlertBar()
 
     async def on_mount(self) -> None:
         from xinas_menu.screens.welcome import WelcomeScreen
@@ -69,6 +71,10 @@ class XiNASApp(App):
         task = asyncio.create_task(self._bg_update_check())
         task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
 
+        # Background license monitor
+        lic_task = asyncio.create_task(self._bg_license_check())
+        lic_task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+
     async def _bg_update_check(self) -> None:
         try:
             available = await self._update_checker.check()
@@ -78,6 +84,49 @@ class XiNASApp(App):
                 header.update_available = True
         except Exception:
             _log.debug("background update check failed", exc_info=True)
+
+    async def _bg_license_check(self) -> None:
+        """Periodically check license status and update AlertBar."""
+        alert_bar = self.query_one(AlertBar)
+        while True:
+            try:
+                ok, data, err = await asyncio.wait_for(
+                    self.grpc.license_show(), timeout=5,
+                )
+                if not ok:
+                    alert_bar.set_alert(
+                        "license", "error",
+                        "License check failed — xiRAID not reachable",
+                    )
+                elif isinstance(data, dict):
+                    status = str(data.get("status", "")).lower()
+                    if status == "valid":
+                        alert_bar.clear_alert("license")
+                    elif status == "expired":
+                        alert_bar.set_alert(
+                            "license", "error", "xiRAID license has expired",
+                        )
+                    elif status == "invalid":
+                        alert_bar.set_alert(
+                            "license", "error", "xiRAID license is invalid",
+                        )
+                    else:
+                        alert_bar.set_alert(
+                            "license", "warning",
+                            f"License status: {status}",
+                        )
+                else:
+                    alert_bar.set_alert(
+                        "license", "warning", "License status unknown",
+                    )
+            except asyncio.TimeoutError:
+                alert_bar.set_alert(
+                    "license", "warning", "License check timed out",
+                )
+            except Exception:
+                _log.debug("bg license check failed", exc_info=True)
+
+            await asyncio.sleep(60)
 
     def watch_update_available(self, value: bool) -> None:
         try:
