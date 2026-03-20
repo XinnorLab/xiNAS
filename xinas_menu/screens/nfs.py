@@ -109,10 +109,10 @@ class NFSScreen(Screen):
         total_steps: int,
         current: dict | None = None,
     ) -> dict | None:
-        """Run 4 structured access-control steps.
+        """Run 5 structured access-control steps.
 
-        Returns ``{"host", "access", "root_squash", "sec"}`` or *None* if
-        the user cancelled at any step.
+        Returns ``{"host", "access", "root_squash", "sync_mode", "sec"}``
+        or *None* if the user cancelled at any step.
         """
         cur = current or {}
 
@@ -212,8 +212,30 @@ class NFSScreen(Screen):
             return None
         root_squash = "no_root_squash" if admin_choice.startswith("Yes") else "root_squash"
 
-        # ── Step: Security Mode ──────────────────────────────────────────
+        # ── Step: Sync Mode ──────────────────────────────────────────────
         step = step_offset + 3
+        cur_sync = cur.get("sync_mode", "sync")
+        prompt = "When should the server confirm writes?"
+        if current:
+            label = "Sync (safer)" if cur_sync == "sync" else "Async (faster)"
+            prompt += f"\n(Current: {label})"
+
+        sync_choice = await self.app.push_screen_wait(
+            SelectDialog(
+                [
+                    "Sync - confirm after writing to disk (safer, recommended)",
+                    "Async - confirm immediately (faster, risk of data loss on crash)",
+                ],
+                title=f"{title_prefix} — Step {step}/{total_steps}",
+                prompt=prompt,
+            )
+        )
+        if sync_choice is None:
+            return None
+        sync_mode = "sync" if sync_choice.startswith("Sync") else "async"
+
+        # ── Step: Security Mode ──────────────────────────────────────────
+        step = step_offset + 4
         cur_sec = cur.get("sec", "sys")
         sec_labels = {
             "sys": "Standard UID/GID",
@@ -251,7 +273,8 @@ class NFSScreen(Screen):
                 sec = val
                 break
 
-        return {"host": host, "access": access, "root_squash": root_squash, "sec": sec}
+        return {"host": host, "access": access, "root_squash": root_squash,
+                "sync_mode": sync_mode, "sec": sec}
 
     # ── Wizard: Add Share ────────────────────────────────────────────────
 
@@ -272,7 +295,7 @@ class NFSScreen(Screen):
             choice = await self.app.push_screen_wait(
                 SelectDialog(
                     choices,
-                    title="Add Share — Step 1/6",
+                    title="Add Share — Step 1/7",
                     prompt="Select filesystem to export (or choose custom for a subfolder):",
                 )
             )
@@ -280,7 +303,7 @@ class NFSScreen(Screen):
                 return
             if choice == _CUSTOM:
                 path = await self.app.push_screen_wait(
-                    InputDialog("Export path:", "Add Share — Step 1/6",
+                    InputDialog("Export path:", "Add Share — Step 1/7",
                                 default="/mnt/data/", placeholder="/mnt/data/share1")
                 )
                 if not path:
@@ -289,7 +312,7 @@ class NFSScreen(Screen):
                 path = choice
         else:
             path = await self.app.push_screen_wait(
-                InputDialog("Export path:", "Add Share — Step 1/6",
+                InputDialog("Export path:", "Add Share — Step 1/7",
                             default="/mnt/data/", placeholder="/mnt/data/share1")
             )
             if not path:
@@ -299,22 +322,24 @@ class NFSScreen(Screen):
             self.app.notify("Export path must start with '/'.", severity="error")
             return
 
-        # Steps 2-5: Access control wizard (who / permissions / admin / security)
-        result = await self._access_wizard("Add Share", step_offset=2, total_steps=6)
+        # Steps 2-6: Access control wizard (who / permissions / admin / sync / security)
+        result = await self._access_wizard("Add Share", step_offset=2, total_steps=7)
         if result is None:
             return
 
-        # Step 6: Confirm
+        # Step 7: Confirm
         host = result["host"]
         access = result["access"]
         root_squash = result["root_squash"]
+        sync_mode = result["sync_mode"]
         sec = result["sec"]
-        options = [access, "sync", "no_subtree_check", root_squash]
+        options = [access, sync_mode, "no_subtree_check", root_squash]
         if sec != "sys":
             options.append(f"sec={sec}")
 
         access_label = "Read & Write" if access == "rw" else "Read Only"
         admin_label = "Yes (no_root_squash)" if root_squash == "no_root_squash" else "No (root_squash)"
+        sync_label = "Sync (safer)" if sync_mode == "sync" else "Async (faster)"
         sec_labels = {"sys": "Standard UID/GID", "krb5": "Kerberos",
                       "krb5i": "Kerberos + integrity", "krb5p": "Kerberos + encryption"}
         summary = (
@@ -322,11 +347,12 @@ class NFSScreen(Screen):
             f"Access:     {host}\n"
             f"Permission: {access_label}\n"
             f"Admin:      {admin_label}\n"
+            f"Sync:       {sync_label}\n"
             f"Security:   {sec_labels.get(sec, sec)}\n"
             f"Options:    {','.join(options)}"
         )
         confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(f"Create this export?\n\n{summary}", "Add Share — Step 6/6")
+            ConfirmDialog(f"Create this export?\n\n{summary}", "Add Share — Step 7/7")
         )
         if not confirmed:
             return
@@ -367,7 +393,7 @@ class NFSScreen(Screen):
             return
         paths = [e["path"] for e in exports]
         path = await self.app.push_screen_wait(
-            SelectDialog(paths, title="Edit Share — Step 1/6",
+            SelectDialog(paths, title="Edit Share — Step 1/7",
                          prompt="Select export to edit:")
         )
         if not path:
@@ -377,27 +403,29 @@ class NFSScreen(Screen):
         export = next((e for e in exports if e["path"] == path), {})
         current = _parse_current_export(export)
 
-        # Steps 2-5: Access control wizard with current values shown
+        # Steps 2-6: Access control wizard with current values shown
         result = await self._access_wizard(
-            "Edit Share", step_offset=2, total_steps=6, current=current,
+            "Edit Share", step_offset=2, total_steps=7, current=current,
         )
         if result is None:
             return
 
-        # Step 6: Confirm
+        # Step 7: Confirm
         host = result["host"]
         access = result["access"]
         root_squash = result["root_squash"]
+        sync_mode = result["sync_mode"]
         sec = result["sec"]
 
         # Assemble options: wizard-managed + preserved extras from original
-        options = [access, root_squash]
+        options = [access, sync_mode, root_squash]
         if sec != "sys":
             options.append(f"sec={sec}")
         options.extend(current["extra_opts"])
 
         access_label = "Read & Write" if access == "rw" else "Read Only"
         admin_label = "Yes (no_root_squash)" if root_squash == "no_root_squash" else "No (root_squash)"
+        sync_label = "Sync (safer)" if sync_mode == "sync" else "Async (faster)"
         sec_labels = {"sys": "Standard UID/GID", "krb5": "Kerberos",
                       "krb5i": "Kerberos + integrity", "krb5p": "Kerberos + encryption"}
         summary = (
@@ -405,11 +433,12 @@ class NFSScreen(Screen):
             f"Access:     {host}\n"
             f"Permission: {access_label}\n"
             f"Admin:      {admin_label}\n"
+            f"Sync:       {sync_label}\n"
             f"Security:   {sec_labels.get(sec, sec)}\n"
             f"Options:    {','.join(options)}"
         )
         confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(f"Update this export?\n\n{summary}", "Edit Share — Step 6/6")
+            ConfirmDialog(f"Update this export?\n\n{summary}", "Edit Share — Step 7/7")
         )
         if not confirmed:
             return
@@ -511,7 +540,7 @@ class NFSScreen(Screen):
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
 
 
-_WIZARD_MANAGED_OPTS = {"rw", "ro", "root_squash", "no_root_squash"}
+_WIZARD_MANAGED_OPTS = {"rw", "ro", "root_squash", "no_root_squash", "sync", "async"}
 
 
 def _parse_current_export(export: dict) -> dict:
@@ -519,13 +548,14 @@ def _parse_current_export(export: dict) -> dict:
     clients = export.get("clients", [])
     if not clients:
         return {"host": "*", "access": "rw", "root_squash": "no_root_squash",
-                "sec": "sys", "extra_opts": []}
+                "sync_mode": "sync", "sec": "sys", "extra_opts": []}
     client = clients[0] if isinstance(clients[0], dict) else {}
     host = client.get("host", "*") if client else "*"
     opts = client.get("options", []) if client else []
 
     access = "ro" if "ro" in opts else "rw"
     root_squash = "root_squash" if ("root_squash" in opts and "no_root_squash" not in opts) else "no_root_squash"
+    sync_mode = "async" if "async" in opts else "sync"
     sec = "sys"
     extra: list[str] = []
     for o in opts:
@@ -534,7 +564,7 @@ def _parse_current_export(export: dict) -> dict:
         elif o not in _WIZARD_MANAGED_OPTS:
             extra.append(o)
     return {"host": host, "access": access, "root_squash": root_squash,
-            "sec": sec, "extra_opts": extra}
+            "sync_mode": sync_mode, "sec": sec, "extra_opts": extra}
 
 
 def _format_exports(data: Any) -> str:
