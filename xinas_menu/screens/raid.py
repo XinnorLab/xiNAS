@@ -1,8 +1,7 @@
-"""RAIDScreen — Quick Overview, Extended Details, Physical Drives, Spare Pools, CRUD."""
+"""RAIDScreen — Quick Overview, Extended Details, Spare Pools, CRUD."""
 from __future__ import annotations
 
 import logging
-import os
 import re
 from typing import Any
 
@@ -46,12 +45,11 @@ _MODIFY_PARAMS = [
 _MENU = [
     MenuItem("1", "Quick Overview"),
     MenuItem("2", "Extended Details"),
-    MenuItem("3", "Physical Drives"),
-    MenuItem("4", "Spare Pools"),
+    MenuItem("3", "Spare Pools"),
     MenuItem("", "", separator=True),
-    MenuItem("5", "Create Array"),
-    MenuItem("6", "Edit Array"),
-    MenuItem("7", "Delete Array"),
+    MenuItem("4", "Create Array"),
+    MenuItem("5", "Edit Array"),
+    MenuItem("6", "Delete Array"),
     MenuItem("0", "Back"),
 ]
 
@@ -119,11 +117,10 @@ class RAIDScreen(Screen):
                 "\n"
                 "  \033[1m1\033[0m  \033[36mQuick Overview\033[0m    \033[2mSummary of all arrays\033[0m\n"
                 "  \033[1m2\033[0m  \033[36mExtended Details\033[0m  \033[2mDetailed array info (capacity, state, devices)\033[0m\n"
-                "  \033[1m3\033[0m  \033[36mPhysical Drives\033[0m   \033[2mDrive list with health and membership\033[0m\n"
-                "  \033[1m4\033[0m  \033[36mSpare Pools\033[0m       \033[2mManage spare drive pools\033[0m\n"
-                "  \033[1m5\033[0m  \033[36mCreate Array\033[0m      \033[2mCreate a new RAID array (wizard)\033[0m\n"
-                "  \033[1m6\033[0m  \033[36mEdit Array\033[0m      \033[2mChange array parameters\033[0m\n"
-                "  \033[1m7\033[0m  \033[36mDelete Array\033[0m      \033[2mDestroy an existing array\033[0m\n",
+                "  \033[1m3\033[0m  \033[36mSpare Pools\033[0m       \033[2mManage spare drive pools\033[0m\n"
+                "  \033[1m4\033[0m  \033[36mCreate Array\033[0m      \033[2mCreate a new RAID array (wizard)\033[0m\n"
+                "  \033[1m5\033[0m  \033[36mEdit Array\033[0m      \033[2mChange array parameters\033[0m\n"
+                "  \033[1m6\033[0m  \033[36mDelete Array\033[0m      \033[2mDestroy an existing array\033[0m\n",
                 id="raid-content",
             )
         yield Footer()
@@ -140,15 +137,13 @@ class RAIDScreen(Screen):
         elif key == "2":
             self._show_extended()
         elif key == "3":
-            self._show_drives()
-        elif key == "4":
             from xinas_menu.screens.spare_pools import SparePoolScreen
             self.app.push_screen(SparePoolScreen())
-        elif key == "5":
+        elif key == "4":
             self._create_array_wizard()
-        elif key == "6":
+        elif key == "5":
             self._modify_array()
-        elif key == "7":
+        elif key == "6":
             self._delete_array()
 
     @work(exclusive=True)
@@ -169,16 +164,6 @@ class RAIDScreen(Screen):
         view.set_content(
             _format_raid_overview(data, extended=True) if ok
             else f"Could not load RAID info: {grpc_short_error(err)}"
-        )
-
-    @work(exclusive=True)
-    async def _show_drives(self) -> None:
-        view = self.query_one("#raid-content", ScrollableTextView)
-        view.set_content("Loading physical drives…")
-        ok, data, err = await self.app.grpc.raid_show(extended=True)
-        view.set_content(
-            _format_physical_drives(data) if ok
-            else f"Could not load drive info: {grpc_short_error(err)}"
         )
 
     @work(exclusive=True)
@@ -863,119 +848,6 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
     hc = _GRN if healthy == len(arrays) else _YLW
     lines.append(f"  Summary: {len(arrays)} array(s), {hc}{healthy} healthy{_NC}")
     lines.append(_box_sep("="))
-    return "\n".join(lines)
-
-
-# ── Physical Drives ────────────────────────────────────────────────────────────
-
-def _get_drive_size(path: str) -> str:
-    try:
-        dev_name = os.path.basename(path)
-        size_path = f"/sys/block/{dev_name}/size"
-        if os.path.exists(size_path):
-            with open(size_path) as f:
-                sectors = int(f.read().strip())
-            b = sectors * 512
-            if b >= 1_099_511_627_776:
-                return f"{b / 1_099_511_627_776:.1f} TB"
-            if b >= 1_073_741_824:
-                return f"{b / 1_073_741_824:.0f} GB"
-            return f"{b // 1_048_576} MB"
-    except Exception:
-        _log.debug("failed to read drive size for %s", path, exc_info=True)
-    return "N/A"
-
-
-def _get_numa_node(path: str) -> str:
-    try:
-        dev_name = os.path.basename(path)
-        m = re.match(r"(nvme\d+)", dev_name)
-        if m:
-            ctrl = m.group(1)
-            p = f"/sys/class/nvme/{ctrl}/numa_node"
-            if os.path.exists(p):
-                with open(p) as f:
-                    node = f.read().strip()
-                return node if node != "-1" else "-"
-        p = f"/sys/block/{dev_name}/device/numa_node"
-        if os.path.exists(p):
-            with open(p) as f:
-                node = f.read().strip()
-            return node if node != "-1" else "-"
-    except Exception:
-        _log.debug("failed to read NUMA node for %s", path, exc_info=True)
-    return "-"
-
-
-def _format_physical_drives(data: Any) -> str:
-    arrays = _as_array_dict(data)
-    lines: list[str] = []
-
-    W2 = 75
-    lines.append(f"{_BLD}{_CYN}PHYSICAL DRIVES{_NC}")
-    lines.append(f"{_DIM}{'=' * W2}{_NC}")
-    lines.append("")
-
-    if not arrays:
-        lines.append(f"  {_DIM}(no RAID arrays configured){_NC}")
-        return "\n".join(lines)
-
-    all_drives: list[dict] = []
-    grouped: dict[str, list[dict]] = {}
-
-    for arr_name, arr in arrays.items():
-        if not isinstance(arr, dict):
-            continue
-        devices = arr.get("devices", [])
-        health = arr.get("devices_health") or []
-        wear = arr.get("devices_wear") or []
-        serials = arr.get("serials") or []
-        bucket: list[dict] = []
-
-        for i, dev in enumerate(devices):
-            path = (dev[1] if isinstance(dev, list) and len(dev) > 1 else str(dev))
-            state = (dev[2][0] if isinstance(dev, list) and len(dev) > 2 and dev[2]
-                     else "unknown")
-            h = health[i] if i < len(health) else "N/A"
-            w = wear[i] if i < len(wear) else "N/A"
-            serial = serials[i] if i < len(serials) else "N/A"
-            size = _get_drive_size(path)
-            numa = _get_numa_node(path)
-            entry = {
-                "path": path, "state": state, "health": h,
-                "wear": w, "serial": serial, "size": size, "numa": numa,
-            }
-            bucket.append(entry)
-            all_drives.append(entry)
-
-        grouped[arr_name] = bucket
-
-    for arr_name, drives in grouped.items():
-        online = sum(1 for d in drives if d["state"].lower() == "online")
-        total = len(drives)
-        lines.append(f"{_BLD}Array: {arr_name.upper()}{_NC}  ({_GRN}{online}{_NC}/{total} online)")
-        lines.append(f"{_DIM}{'-' * W2}{_NC}")
-        lines.append(f"  {_DIM}{'Device':<16}{'Size':<10}{'State':<12}{'NUMA':<6}{'Health':<9}{'Wear':<8}Serial{_NC}")
-        lines.append(f"{_DIM}{'-' * W2}{_NC}")
-        for d in drives:
-            short = d["path"].replace("/dev/", "")
-            icon = _state_icon(d["state"])
-            sc = _state_color(d["state"])
-            serial = str(d["serial"])[:16]
-            lines.append(
-                f"  {icon} {short:<14}{d['size']:<10}{sc}{d['state']:<12}{_NC}"
-                f"{d['numa']:<6}{str(d['health']):<9}{str(d['wear']):<8}{serial}"
-            )
-        lines.append("")
-
-    total_drives = len(all_drives)
-    online_drives = sum(1 for d in all_drives if d["state"].lower() == "online")
-    numa_nodes = sorted(set(d["numa"] for d in all_drives if d["numa"] != "-"))
-    lines.append(f"{_DIM}{'=' * W2}{_NC}")
-    summary = f"  Total: {total_drives} drive(s), {_GRN}{online_drives} online{_NC}"
-    if numa_nodes:
-        summary += f"  {_DIM}|{_NC}  NUMA nodes: {', '.join(numa_nodes)}"
-    lines.append(summary)
     return "\n".join(lines)
 
 
