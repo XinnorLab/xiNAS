@@ -26,7 +26,7 @@ _BLD = "\033[1m"
 _DIM = "\033[2m"
 _NC = "\033[0m"
 
-_GITHUB_RELEASES_API = "https://api.github.com/repos/xinnor/xiraid-exporter/releases/latest"
+_GITHUB_RELEASES_API = "https://api.github.com/repos/E4-Computer-Engineering/xiraid-exporter/releases/latest"
 _DEB_PATTERN = re.compile(r"xiraid.exporter.*\.deb", re.I)
 
 _MENU = [
