@@ -18,6 +18,7 @@ from textual import work
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
+from xinas_menu.screens.network import _flush_pbr_rules
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -269,6 +270,7 @@ def _write_and_apply_netplan(netplan_content: str) -> tuple[bool, str]:
     except Exception as exc:
         return False, f"Failed to write netplan file: {exc}"
 
+    _flush_pbr_rules()
     try:
         r = subprocess.run(
             ["netplan", "apply"],

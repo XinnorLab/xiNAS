@@ -1,4 +1,16 @@
 ---
-- name: apply netplan
+- name: flush stale PBR rules
+  ansible.builtin.shell: |
+    for table in $(ip rule show | grep -oP 'lookup \K(1[0-9]{2})'); do
+      ip rule show | grep "lookup $table" | while IFS=: read -r _ spec; do
+        ip rule del $spec 2>/dev/null || true
+      done
+      ip route flush table "$table" 2>/dev/null || true
+    done
+  become: true
+  listen: apply netplan
+
+- name: run netplan apply
   ansible.builtin.command: netplan apply  # NetPlan Apply
   become: true
+  listen: apply netplan

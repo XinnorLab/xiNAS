@@ -206,6 +206,7 @@ class NetworkScreen(Screen):
             return
 
         loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _flush_pbr_rules)
         ok, out, err = await loop.run_in_executor(None, lambda: _run("netplan", "apply"))
         if ok:
             self.app.audit.log("network.netplan_apply", "", "OK")
@@ -242,6 +243,29 @@ def _run_cmd(cmd: str) -> str:
     except Exception:
         _log.debug("command failed: %s", cmd, exc_info=True)
         return ""
+
+
+def _flush_pbr_rules() -> None:
+    """Remove all custom PBR ip-rules (tables 100-199) so netplan apply starts clean."""
+    out = _run_cmd("ip rule show")
+    if not out:
+        return
+    seen_tables: set[int] = set()
+    for line in out.splitlines():
+        if "lookup" not in line:
+            continue
+        parts = line.split()
+        try:
+            idx = parts.index("lookup")
+            table = int(parts[idx + 1])
+        except (ValueError, IndexError):
+            continue
+        if 100 <= table < 200:
+            spec = line.split(":", 1)[1].strip()
+            _run_cmd(f"ip rule del {spec}")
+            seen_tables.add(table)
+    for table in seen_tables:
+        _run_cmd(f"ip route flush table {table}")
 
 
 def _speed_bar(speed: int) -> str:
