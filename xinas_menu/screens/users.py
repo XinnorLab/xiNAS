@@ -455,14 +455,24 @@ class UsersScreen(Screen):
     @work(exclusive=True)
     async def _show_quotas(self) -> None:
         loop = asyncio.get_running_loop()
-        ok, stdout, stderr = await loop.run_in_executor(
-            None, lambda: _run_cmd("repquota", "-a")
+        # XFS quotas are managed via xfs_quota, not repquota
+        ok_u, out_u, err_u = await loop.run_in_executor(
+            None, lambda: _run_cmd("xfs_quota", "-x", "-c", "report -ubh")
+        )
+        ok_p, out_p, err_p = await loop.run_in_executor(
+            None, lambda: _run_cmd("xfs_quota", "-x", "-c", "report -pbh")
         )
         view = self.query_one("#users-content", ScrollableTextView)
-        if ok:
-            view.set_content(f"[bold]Disk Quotas[/bold]\n\n{stdout}")
+        sections: list[str] = []
+        if ok_u and out_u.strip():
+            sections.append(f"[bold]User Quotas[/bold]\n\n{out_u}")
+        if ok_p and out_p.strip():
+            sections.append(f"[bold]Project Quotas[/bold]\n\n{out_p}")
+        if sections:
+            view.set_content("\n\n".join(sections))
         else:
-            view.set_content(f"[dim]repquota not available or no quotas: {stderr}[/dim]")
+            err = err_u or err_p or "no quotas configured"
+            view.set_content(f"[dim]xfs_quota not available or no quotas: {err}[/dim]")
 
 
 def _get_local_users() -> list[pwd.struct_passwd]:
@@ -496,17 +506,25 @@ def _format_users(users: list[pwd.struct_passwd]) -> str:
         lines.append(f"{DIM}{'-' * W}{NC}")
 
     lines.append("")
-    # Quota status
+    # Quota status — XFS quotas are enabled via mount options, not quotaon
     try:
         r = subprocess.run(
-            ["quotaon", "-p", "/mnt/data"],
+            ["findmnt", "-t", "xfs", "-n", "-o", "TARGET,OPTIONS"],
             capture_output=True, text=True, timeout=5,
         )
-        if "is on" in r.stdout + r.stderr:
-            lines.append(f"  Disk Quotas: {GRN}ENABLED{NC} on /mnt/data")
+        quota_mounts = []
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                parts = line.split(None, 1)
+                if len(parts) == 2 and any(
+                    opt in parts[1] for opt in ("uquota", "usrquota", "pquota", "prjquota")
+                ):
+                    quota_mounts.append(parts[0])
+        if quota_mounts:
+            lines.append(f"  Disk Quotas: {GRN}ENABLED{NC} on {', '.join(quota_mounts)}")
         else:
             lines.append(f"  Disk Quotas: {YLW}Not enabled{NC}")
-            lines.append(f"  {DIM}(Enable with: sudo quotaon -v /mnt/data){NC}")
+            lines.append(f"  {DIM}(Mount XFS with uquota option to enable){NC}")
     except Exception:
         lines.append(f"  Disk Quotas: {DIM}status unknown{NC}")
     lines.append("")
