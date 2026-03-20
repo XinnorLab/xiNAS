@@ -297,11 +297,14 @@ class UsersScreen(Screen):
                 f"  {', '.join(current) if current else '(none)'}\n"
             )
 
+            groups_display = _format_groups_for_dialog(current)
+            prompt = f"Current groups: {groups_display}\n\nSelect action:"
+
             action = await self.app.push_screen_wait(
                 SelectDialog(
                     ["Add to group", "Remove from group"],
                     title=f"Groups: {username}",
-                    prompt="Select action:",
+                    prompt=prompt,
                 )
             )
             if not action:
@@ -481,7 +484,7 @@ def _get_local_users() -> list[pwd.struct_passwd]:
 
 def _format_users(users: list[pwd.struct_passwd]) -> str:
     GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
-    W = 70
+    W = 110
     lines: list[str] = []
     lines.append(f"{BLD}{CYN}USER ACCOUNTS{NC}")
     lines.append(f"{DIM}{'=' * W}{NC}")
@@ -495,14 +498,16 @@ def _format_users(users: list[pwd.struct_passwd]) -> str:
         lines.append(f"  Found {GRN}{len(users)}{NC} user account(s)")
         lines.append("")
         lines.append(f"{DIM}{'-' * W}{NC}")
-        lines.append(f"  {DIM}{'Username':<16} {'UID':<8} {'Group':<16} Home Directory{NC}")
+        lines.append(f"  {DIM}{'Username':<16} {'UID':<8} {'Group':<16} {'Groups':<36} Home Directory{NC}")
         lines.append(f"{DIM}{'-' * W}{NC}")
         for u in sorted(users, key=lambda x: x.pw_name):
             try:
                 group = grp.getgrgid(u.pw_gid).gr_name
             except Exception:
                 group = str(u.pw_gid)
-            lines.append(f"  {GRN}{u.pw_name:<16}{NC} {u.pw_uid:<8} {group:<16} {u.pw_dir}")
+            groups = [g for g in _get_user_groups(u.pw_name) if g != group]
+            groups_str = _format_group_list(groups, max_width=35)
+            lines.append(f"  {GRN}{u.pw_name:<16}{NC} {u.pw_uid:<8} {group:<16} {groups_str:<36} {u.pw_dir}")
         lines.append(f"{DIM}{'-' * W}{NC}")
 
     lines.append("")
@@ -598,3 +603,47 @@ def _get_all_groups() -> list[tuple[str, int]]:
     except Exception:
         pass
     return sorted(result)
+
+
+def _format_group_list(groups: list[str], max_width: int = 35) -> str:
+    """Format a group list, truncating with (+N more) if too long."""
+    if not groups:
+        return "(none)"
+    full = ", ".join(groups)
+    if len(full) <= max_width:
+        return full
+    # Fit as many groups as possible with (+N more) suffix
+    shown: list[str] = []
+    for g in groups:
+        candidate = ", ".join(shown + [g])
+        remaining = len(groups) - len(shown) - 1
+        suffix = f" (+{remaining})" if remaining > 0 else ""
+        if len(candidate + suffix) > max_width and shown:
+            break
+        shown.append(g)
+    remaining = len(groups) - len(shown)
+    result = ", ".join(shown)
+    if remaining > 0:
+        result += f" (+{remaining})"
+    return result
+
+
+def _format_groups_for_dialog(groups: list[str], line_width: int = 60) -> str:
+    """Format group list for dialog display, wrapping long lines."""
+    if not groups:
+        return "(none)"
+    lines: list[str] = []
+    current_line: list[str] = []
+    current_len = 0
+    for g in groups:
+        addition = len(g) + (2 if current_line else 0)  # ", " separator
+        if current_line and current_len + addition > line_width:
+            lines.append(", ".join(current_line))
+            current_line = [g]
+            current_len = len(g)
+        else:
+            current_line.append(g)
+            current_len += addition
+    if current_line:
+        lines.append(", ".join(current_line))
+    return "\n  ".join(lines)
