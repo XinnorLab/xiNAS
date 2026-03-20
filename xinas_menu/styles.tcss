@@ -201,11 +201,11 @@ ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog, ChecklistDialog {
 #dialog-input {
     margin-bottom: 1;
     background: #141414;
-    border: tall #3a3a3a;
+    border: round #3a3a3a;
 }
 
 #dialog-input:focus {
-    border: tall #d4a574;
+    border: round #d4a574;
 }
 
 #dialog-select {
@@ -236,11 +236,11 @@ ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog, ChecklistDialog {
     min-height: 8;
     margin-bottom: 1;
     background: #141414;
-    border: tall #3a3a3a;
+    border: round #3a3a3a;
 }
 
 #dialog-textarea:focus {
-    border: tall #d4a574;
+    border: round #d4a574;
 }
 
 TextAreaDialog #dialog-container,
@@ -301,6 +301,7 @@ ChecklistDialog #dialog-container {
     background: #d4635c;
 }
 
+#dialog-container Button.-default,
 #dialog-buttons #btn-cancel,
 #dialog-buttons #btn-no {
     background: #2a2a2a;
@@ -310,6 +311,8 @@ ChecklistDialog #dialog-container {
     margin: 0 1;
 }
 
+#dialog-container Button.-default:hover,
+#dialog-container Button.-default:focus,
 #dialog-buttons #btn-cancel:hover,
 #dialog-buttons #btn-no:hover,
 #dialog-buttons #btn-cancel:focus,
