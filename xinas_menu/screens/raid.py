@@ -50,7 +50,7 @@ _MENU = [
     MenuItem("4", "Spare Pools"),
     MenuItem("", "", separator=True),
     MenuItem("5", "Create Array"),
-    MenuItem("6", "Modify Array"),
+    MenuItem("6", "Edit Array"),
     MenuItem("7", "Delete Array"),
     MenuItem("0", "Back"),
 ]
@@ -122,7 +122,7 @@ class RAIDScreen(Screen):
                 "  \033[1m3\033[0m  \033[36mPhysical Drives\033[0m   \033[2mDrive list with health and membership\033[0m\n"
                 "  \033[1m4\033[0m  \033[36mSpare Pools\033[0m       \033[2mManage spare drive pools\033[0m\n"
                 "  \033[1m5\033[0m  \033[36mCreate Array\033[0m      \033[2mCreate a new RAID array (wizard)\033[0m\n"
-                "  \033[1m6\033[0m  \033[36mModify Array\033[0m      \033[2mChange array parameters\033[0m\n"
+                "  \033[1m6\033[0m  \033[36mEdit Array\033[0m      \033[2mChange array parameters\033[0m\n"
                 "  \033[1m7\033[0m  \033[36mDelete Array\033[0m      \033[2mDestroy an existing array\033[0m\n",
                 id="raid-content",
             )
@@ -356,7 +356,7 @@ class RAIDScreen(Screen):
                 ConfirmDialog(f"Create failed.\n{grpc_short_error(err)}", "Error")
             )
 
-    # ── Modify Array ─────────────────────────────────────────────────────────
+    # ── Edit Array ───────────────────────────────────────────────────────────
 
     @work(exclusive=True)
     async def _modify_array(self) -> None:
@@ -367,7 +367,7 @@ class RAIDScreen(Screen):
                 ConfirmDialog(
                     f"No arrays available.\n{grpc_short_error(err)}" if not ok
                     else "No RAID arrays configured.",
-                    "Modify Array",
+                    "Edit Array",
                 )
             )
             return
@@ -376,20 +376,20 @@ class RAIDScreen(Screen):
         names = list(arrays.keys())
         if not names:
             await self.app.push_screen_wait(
-                ConfirmDialog("No RAID arrays configured.", "Modify Array")
+                ConfirmDialog("No RAID arrays configured.", "Edit Array")
             )
             return
 
         arr_name = await self.app.push_screen_wait(
-            SelectDialog(names, title="Modify Array",
-                         prompt="Select array to modify:")
+            SelectDialog(names, title="Edit Array",
+                         prompt="Select array to edit:")
         )
         if not arr_name:
             return
 
         param_labels = [f"{label} ({key})" for key, label, _, _, _ in _MODIFY_PARAMS]
         param_choice = await self.app.push_screen_wait(
-            SelectDialog(param_labels, title="Modify Array — Parameter",
+            SelectDialog(param_labels, title="Edit Array — Parameter",
                          prompt=f"Select parameter for {arr_name}:")
         )
         if not param_choice:
@@ -430,8 +430,8 @@ class RAIDScreen(Screen):
 
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
-                f"Modify {arr_name}?\n\n{label}: {value}",
-                "Confirm Modify",
+                f"Edit {arr_name}?\n\n{label}: {value}",
+                "Confirm Edit",
             )
         )
         if not confirmed:
@@ -456,7 +456,7 @@ class RAIDScreen(Screen):
             self._show_quick()
         else:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Modify failed.\n{grpc_short_error(err)}", "Error")
+                ConfirmDialog(f"Edit failed.\n{grpc_short_error(err)}", "Error")
             )
 
     # ── Delete Array ─────────────────────────────────────────────────────────
