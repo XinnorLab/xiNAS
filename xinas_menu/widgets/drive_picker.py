@@ -53,10 +53,11 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     DEFAULT_CSS = """
     DrivePickerScreen {
         align: center middle;
+        background: rgba(0, 0, 0, 0.6);
     }
     #picker-container {
-        background: #0c0e14;
-        border: round #4d8bff;
+        background: #1c1c1c;
+        border: round #3a3a3a;
         width: 110;
         max-width: 98%;
         height: 85%;
@@ -64,12 +65,12 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     }
     #picker-title {
         text-style: bold;
-        color: #4d8bff;
-        text-align: center;
+        color: #e0e0e0;
+        text-align: left;
         margin-bottom: 1;
     }
     #picker-status {
-        color: #9aa0b0;
+        color: #999999;
         height: 1;
         margin-bottom: 0;
     }
@@ -92,8 +93,8 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     }
     #picker-detail {
         display: none;
-        background: #1a2038;
-        border: round #4d8bff;
+        background: #1c1c1c;
+        border: round #3a3a3a;
         padding: 1 2;
         height: auto;
         max-height: 60%;

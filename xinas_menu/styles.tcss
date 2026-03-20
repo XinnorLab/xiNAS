@@ -173,11 +173,12 @@ OpStatusWidget {
 /* ── ConfirmDialog / InputDialog / SelectDialog ──────────────── */
 ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog, ChecklistDialog {
     align: center middle;
+    background: rgba(0, 0, 0, 0.6);
 }
 
 #dialog-container {
-    background: #1a2038;
-    border: round #4d8bff;
+    background: #1c1c1c;
+    border: round #3a3a3a;
     padding: 1 2;
     width: 80;
     max-width: 90%;
@@ -187,36 +188,42 @@ ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog, ChecklistDialog {
 
 #dialog-title {
     text-style: bold;
-    color: #4d8bff;
-    text-align: center;
+    color: #e0e0e0;
+    text-align: left;
     margin-bottom: 1;
 }
 
 #dialog-body {
-    color: #d0d4e0;
+    color: #999999;
     margin-bottom: 1;
 }
 
 #dialog-input {
     margin-bottom: 1;
+    background: #141414;
+    border: tall #3a3a3a;
+}
+
+#dialog-input:focus {
+    border: tall #d4a574;
 }
 
 #dialog-select {
     height: auto;
     max-height: 12;
     margin-bottom: 1;
-    background: #141824;
-    border: round #2a3454;
+    background: #141414;
+    border: round #3a3a3a;
     padding: 0;
 }
 
 #dialog-select:focus {
-    border: round #4d8bff;
+    border: round #d4a574;
 }
 
 #dialog-select > .option-list--option-highlighted {
-    background: #4d8bff;
-    color: #ffffff;
+    background: #d4a574;
+    color: #1c1c1c;
     text-style: bold;
 }
 
@@ -228,6 +235,12 @@ ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog, ChecklistDialog {
     height: 16;
     min-height: 8;
     margin-bottom: 1;
+    background: #141414;
+    border: tall #3a3a3a;
+}
+
+#dialog-textarea:focus {
+    border: tall #d4a574;
 }
 
 TextAreaDialog #dialog-container,
@@ -242,12 +255,65 @@ ChecklistDialog #dialog-container {
     height: 20;
     min-height: 6;
     margin-bottom: 1;
+    background: #141414;
+    border: round #3a3a3a;
+}
+
+#dialog-checklist:focus {
+    border: round #d4a574;
 }
 
 #dialog-buttons {
     layout: horizontal;
     align: center middle;
     height: auto;
+    margin-top: 1;
+}
+
+#dialog-container Button.-primary {
+    background: #d4a574;
+    color: #1c1c1c;
+    text-style: bold;
+    border: none;
+    min-width: 12;
+    margin: 0 1;
+}
+
+#dialog-container Button.-primary:hover {
+    background: #e0b88a;
+}
+
+#dialog-container Button.-primary:focus {
+    background: #e0b88a;
+}
+
+#dialog-container Button.-error {
+    background: #c25750;
+    color: #ffffff;
+    text-style: bold;
+    border: none;
+    min-width: 12;
+    margin: 0 1;
+}
+
+#dialog-container Button.-error:hover,
+#dialog-container Button.-error:focus {
+    background: #d4635c;
+}
+
+#dialog-buttons #btn-cancel,
+#dialog-buttons #btn-no {
+    background: transparent;
+    border: tall #3a3a3a;
+    color: #999999;
+    min-width: 12;
+    margin: 0 1;
+}
+
+#dialog-buttons #btn-cancel:hover,
+#dialog-buttons #btn-no:hover {
+    background: #2a2a2a;
+    color: #e0e0e0;
 }
 
 .dialog-btn {
