@@ -15,6 +15,7 @@ _MENU = [
     MenuItem("4", "Health Check"),
     MenuItem("5", "Quick Actions"),
     MenuItem("6", "Configuration History"),
+    MenuItem("7", "Collect Logs"),
     MenuItem("0", "Back"),
 ]
 
@@ -54,3 +55,6 @@ class SystemScreen(Screen):
         elif key == "6":
             from xinas_menu.screens.config_history import ConfigHistoryScreen
             self.app.push_screen(ConfigHistoryScreen())
+        elif key == "7":
+            from xinas_menu.screens.collect_logs import CollectLogsScreen
+            self.app.push_screen(CollectLogsScreen())
