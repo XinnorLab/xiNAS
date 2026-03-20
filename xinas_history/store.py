@@ -209,6 +209,15 @@ class FilesystemStore:
     def snapshot_exists(self, snapshot_id: str) -> bool:
         return (self.snapshot_path(snapshot_id) / MANIFEST_FILE).is_file()
 
+    # -- purge --------------------------------------------------------------
+
+    def purge_all(self) -> None:
+        """Remove all snapshots, baseline, and state.  Recreate empty dirs."""
+        for d in (self.baseline_path, self.snapshots_path, self.state_path):
+            if d.is_dir():
+                shutil.rmtree(str(d))
+        self.ensure_dirs()
+
     # -- mutate / delete ----------------------------------------------------
 
     def delete_snapshot(self, snapshot_id: str) -> bool:

@@ -190,6 +190,28 @@ class SnapshotEngine:
             diff_summary="Initial baseline snapshot",
         )
 
+    async def purge_and_create_baseline(
+        self,
+        source: str,
+        preset: str = "",
+        extra_vars: Optional[dict] = None,
+    ) -> Manifest:
+        """Purge all existing history and create a fresh baseline.
+
+        Used by the installer to ensure a clean slate on reinstall.
+        """
+        self._store.purge_all()
+
+        return await self.create_snapshot(
+            source=source,
+            operation=OperationType.INSTALL.value,
+            preset=preset,
+            snapshot_type=SnapshotType.BASELINE.value,
+            parent_id=None,
+            extra_vars=extra_vars,
+            diff_summary="Initial baseline snapshot",
+        )
+
     def list_snapshots(
         self,
         include_baseline: bool = True,

@@ -72,12 +72,17 @@ class SnapshotHelper:
             return None
 
     async def record_baseline(self, preset: str = "") -> Optional[str]:
-        """Create the initial baseline snapshot after first install."""
+        """Purge existing history and create a fresh baseline snapshot.
+
+        Called after a successful install.  Any previous config history
+        (baseline, snapshots, state) is wiped so only the new baseline
+        remains.
+        """
         if not self._engine:
             _log.debug("baseline skipped: engine not available")
             return None
         try:
-            manifest = await self._engine.create_baseline(
+            manifest = await self._engine.purge_and_create_baseline(
                 source="installer",
                 preset=preset,
             )
