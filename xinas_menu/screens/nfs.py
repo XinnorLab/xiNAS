@@ -1,4 +1,4 @@
-"""NFSScreen — NFS export management with 5-step share wizard."""
+"""NFSScreen — NFS export management with structured share wizards."""
 from __future__ import annotations
 
 import asyncio
@@ -89,20 +89,177 @@ class NFSScreen(Screen):
 
     async def _get_export_paths(self) -> list[str]:
         """Fetch current export paths from the NFS helper."""
+        exports = await self._get_exports()
+        return [e["path"] for e in exports]
+
+    async def _get_exports(self) -> list[dict]:
+        """Fetch full export entries from the NFS helper."""
         loop = asyncio.get_running_loop()
         ok, data, _ = await loop.run_in_executor(None, self.app.nfs.list_exports)
         if not ok or not isinstance(data, list):
             return []
-        return [e["path"] for e in data if isinstance(e, dict) and e.get("path")]
+        return [e for e in data if isinstance(e, dict) and e.get("path")]
 
-    # ── Wizard: Add Share (5 steps) ─────────────────────────────────────────
+    # ── Shared access-control wizard (4 steps) ─────────────────────────────
+
+    async def _access_wizard(
+        self,
+        title_prefix: str,
+        step_offset: int,
+        total_steps: int,
+        current: dict | None = None,
+    ) -> dict | None:
+        """Run 4 structured access-control steps.
+
+        Returns ``{"host", "access", "root_squash", "sec"}`` or *None* if
+        the user cancelled at any step.
+        """
+        cur = current or {}
+
+        # ── Step: Who Can Access? ────────────────────────────────────────
+        step = step_offset
+        cur_host = cur.get("host", "*")
+        if cur_host == "*":
+            cur_hint = "Everyone"
+        elif "/" in cur_host:
+            cur_hint = f"Network {cur_host}"
+        else:
+            cur_hint = f"Host {cur_host}"
+        prompt = "Who should be able to connect?"
+        if current:
+            prompt += f"\n(Current: {cur_hint})"
+
+        who = await self.app.push_screen_wait(
+            SelectDialog(
+                [
+                    "Everyone (any host on the network)",
+                    "Specific network (e.g., 192.168.1.0/24)",
+                    "Single host (by IP address)",
+                ],
+                title=f"{title_prefix} — Step {step}/{total_steps}",
+                prompt=prompt,
+            )
+        )
+        if who is None:
+            return None
+
+        if who.startswith("Everyone"):
+            host = "*"
+        elif who.startswith("Specific"):
+            host = await self.app.push_screen_wait(
+                InputDialog(
+                    "Network address:",
+                    f"{title_prefix} — Step {step}/{total_steps}",
+                    default=cur_host if "/" in cur_host else "192.168.1.0/24",
+                    placeholder="192.168.1.0/24",
+                )
+            )
+            if not host:
+                return None
+        else:
+            host = await self.app.push_screen_wait(
+                InputDialog(
+                    "Host IP address:",
+                    f"{title_prefix} — Step {step}/{total_steps}",
+                    default=cur_host if cur_host != "*" and "/" not in cur_host else "",
+                    placeholder="192.168.1.100",
+                )
+            )
+            if not host:
+                return None
+
+        # ── Step: Access Permissions ─────────────────────────────────────
+        step = step_offset + 1
+        cur_access = cur.get("access", "rw")
+        prompt = "What can connected hosts do?"
+        if current:
+            label = "Read & Write" if cur_access == "rw" else "Read Only"
+            prompt += f"\n(Current: {label})"
+
+        access_choice = await self.app.push_screen_wait(
+            SelectDialog(
+                [
+                    "Read & Write (can add, edit, delete files)",
+                    "Read Only (can only view files)",
+                ],
+                title=f"{title_prefix} — Step {step}/{total_steps}",
+                prompt=prompt,
+            )
+        )
+        if access_choice is None:
+            return None
+        access = "rw" if access_choice.startswith("Read & Write") else "ro"
+
+        # ── Step: Admin Access ───────────────────────────────────────────
+        step = step_offset + 2
+        cur_root = cur.get("root_squash", "no_root_squash")
+        prompt = "Allow full administrator access?"
+        if current:
+            label = "Yes" if cur_root == "no_root_squash" else "No"
+            prompt += f"\n(Current: {label})"
+
+        admin_choice = await self.app.push_screen_wait(
+            SelectDialog(
+                [
+                    "Yes - Full admin access (recommended)",
+                    "No - Limited access (more secure)",
+                ],
+                title=f"{title_prefix} — Step {step}/{total_steps}",
+                prompt=prompt,
+            )
+        )
+        if admin_choice is None:
+            return None
+        root_squash = "no_root_squash" if admin_choice.startswith("Yes") else "root_squash"
+
+        # ── Step: Security Mode ──────────────────────────────────────────
+        step = step_offset + 3
+        cur_sec = cur.get("sec", "sys")
+        sec_labels = {
+            "sys": "Standard UID/GID",
+            "krb5": "Kerberos",
+            "krb5i": "Kerberos + integrity",
+            "krb5p": "Kerberos + encryption",
+        }
+        prompt = "Select authentication mode:"
+        if current:
+            prompt += f"\n(Current: {sec_labels.get(cur_sec, cur_sec)})"
+
+        sec_choice = await self.app.push_screen_wait(
+            SelectDialog(
+                [
+                    "Standard UID/GID (default)",
+                    "Kerberos authentication",
+                    "Kerberos + integrity",
+                    "Kerberos + encryption",
+                ],
+                title=f"{title_prefix} — Step {step}/{total_steps}",
+                prompt=prompt,
+            )
+        )
+        if sec_choice is None:
+            return None
+        sec_map = {
+            "Standard": "sys",
+            "Kerberos authentication": "krb5",
+            "Kerberos + integrity": "krb5i",
+            "Kerberos + encryption": "krb5p",
+        }
+        sec = "sys"
+        for key, val in sec_map.items():
+            if sec_choice.startswith(key):
+                sec = val
+                break
+
+        return {"host": host, "access": access, "root_squash": root_squash, "sec": sec}
+
+    # ── Wizard: Add Share ────────────────────────────────────────────────
 
     @work(exclusive=True)
     async def _add_share_wizard(self) -> None:
-        """5-step share creation wizard."""
+        """6-step share creation wizard."""
         # Step 1: Export path — list mounted XFS filesystems + custom option
         from xinas_menu.utils.xfs_helpers import run_async_cmd
-        import json as _json
 
         mount_points: list[str] = []
         ok, out, _ = await run_async_cmd("findmnt", "-t", "xfs", "-n", "-o", "TARGET", timeout=10)
@@ -115,7 +272,7 @@ class NFSScreen(Screen):
             choice = await self.app.push_screen_wait(
                 SelectDialog(
                     choices,
-                    title="Add Share — Step 1/5",
+                    title="Add Share — Step 1/6",
                     prompt="Select filesystem to export (or choose custom for a subfolder):",
                 )
             )
@@ -123,7 +280,7 @@ class NFSScreen(Screen):
                 return
             if choice == _CUSTOM:
                 path = await self.app.push_screen_wait(
-                    InputDialog("Export path:", "Add Share — Step 1/5",
+                    InputDialog("Export path:", "Add Share — Step 1/6",
                                 default="/mnt/data/", placeholder="/mnt/data/share1")
                 )
                 if not path:
@@ -132,7 +289,7 @@ class NFSScreen(Screen):
                 path = choice
         else:
             path = await self.app.push_screen_wait(
-                InputDialog("Export path:", "Add Share — Step 1/5",
+                InputDialog("Export path:", "Add Share — Step 1/6",
                             default="/mnt/data/", placeholder="/mnt/data/share1")
             )
             if not path:
@@ -142,44 +299,34 @@ class NFSScreen(Screen):
             self.app.notify("Export path must start with '/'.", severity="error")
             return
 
-        # Step 2: Client spec
-        clients = await self.app.push_screen_wait(
-            InputDialog("Client spec (e.g. 192.168.1.0/24 or *):", "Add Share — Step 2/5",
-                        default="*", placeholder="192.168.1.0/24")
-        )
-        if clients is None:
+        # Steps 2-5: Access control wizard (who / permissions / admin / security)
+        result = await self._access_wizard("Add Share", step_offset=2, total_steps=6)
+        if result is None:
             return
 
-        # Step 3: Access mode
-        access_choice = await self.app.push_screen_wait(
-            SelectDialog(["rw  (Read/Write)", "ro  (Read Only)"],
-                         title="Add Share — Step 3/5",
-                         prompt="Select access mode:")
-        )
-        if access_choice is None:
-            return
-        access = access_choice.split()[0]
+        # Step 6: Confirm
+        host = result["host"]
+        access = result["access"]
+        root_squash = result["root_squash"]
+        sec = result["sec"]
+        options = [access, "sync", "no_subtree_check", root_squash]
+        if sec != "sys":
+            options.append(f"sec={sec}")
 
-        # Step 4: Extra NFS options
-        extra_opts = await self.app.push_screen_wait(
-            InputDialog(
-                "Extra NFS options (comma-separated, leave blank for defaults):",
-                "Add Share — Step 4/5",
-                default="sync,no_subtree_check,no_root_squash",
-            )
-        )
-        if extra_opts is None:
-            return
-
-        # Step 5: Confirm
-        options = [o.strip() for o in (access + "," + extra_opts).split(",") if o.strip()]
+        access_label = "Read & Write" if access == "rw" else "Read Only"
+        admin_label = "Yes (no_root_squash)" if root_squash == "no_root_squash" else "No (root_squash)"
+        sec_labels = {"sys": "Standard UID/GID", "krb5": "Kerberos",
+                      "krb5i": "Kerberos + integrity", "krb5p": "Kerberos + encryption"}
         summary = (
-            f"Path:    {path}\n"
-            f"Clients: {clients}\n"
-            f"Options: {','.join(options)}"
+            f"Path:       {path}\n"
+            f"Access:     {host}\n"
+            f"Permission: {access_label}\n"
+            f"Admin:      {admin_label}\n"
+            f"Security:   {sec_labels.get(sec, sec)}\n"
+            f"Options:    {','.join(options)}"
         )
         confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(f"Create this export?\n\n{summary}", "Add Share — Step 5/5")
+            ConfirmDialog(f"Create this export?\n\n{summary}", "Add Share — Step 6/6")
         )
         if not confirmed:
             return
@@ -197,7 +344,7 @@ class NFSScreen(Screen):
         ok, _, err = await loop.run_in_executor(
             None,
             lambda: self.app.nfs.add_export(
-                {"path": path, "clients": [{"host": clients, "options": options}]}
+                {"path": path, "clients": [{"host": host, "options": options}]}
             ),
         )
         if ok:
@@ -211,32 +358,63 @@ class NFSScreen(Screen):
 
     @work(exclusive=True)
     async def _edit_share(self) -> None:
-        paths = await self._get_export_paths()
-        if not paths:
+        """6-step edit share wizard with structured access control."""
+        # Step 1: Select export to edit
+        exports = await self._get_exports()
+        if not exports:
             await self.app.push_screen_wait(
                 ConfirmDialog("No shares configured.", "Edit Share"))
             return
+        paths = [e["path"] for e in exports]
         path = await self.app.push_screen_wait(
-            SelectDialog(paths, title="Edit Share", prompt="Select export to edit:")
+            SelectDialog(paths, title="Edit Share — Step 1/6",
+                         prompt="Select export to edit:")
         )
         if not path:
             return
-        new_clients = await self.app.push_screen_wait(
-            InputDialog("New client spec (leave blank to keep):", "Edit Share — Clients")
-        )
-        new_opts = await self.app.push_screen_wait(
-            InputDialog("New options (leave blank to keep):", "Edit Share — Options")
-        )
-        if not new_clients and not new_opts:
-            return
-        opts = [o.strip() for o in new_opts.split(",") if o.strip()] if new_opts else []
-        patch: dict = {}
-        if new_clients or opts:
-            # Build proper client structure; when only one field is given,
-            # use sensible defaults for the other.
-            host = new_clients or "*"
-            patch["clients"] = [{"host": host, "options": opts}]
 
+        # Parse current values for pre-population
+        export = next((e for e in exports if e["path"] == path), {})
+        current = _parse_current_export(export)
+
+        # Steps 2-5: Access control wizard with current values shown
+        result = await self._access_wizard(
+            "Edit Share", step_offset=2, total_steps=6, current=current,
+        )
+        if result is None:
+            return
+
+        # Step 6: Confirm
+        host = result["host"]
+        access = result["access"]
+        root_squash = result["root_squash"]
+        sec = result["sec"]
+
+        # Assemble options: wizard-managed + preserved extras from original
+        options = [access, root_squash]
+        if sec != "sys":
+            options.append(f"sec={sec}")
+        options.extend(current["extra_opts"])
+
+        access_label = "Read & Write" if access == "rw" else "Read Only"
+        admin_label = "Yes (no_root_squash)" if root_squash == "no_root_squash" else "No (root_squash)"
+        sec_labels = {"sys": "Standard UID/GID", "krb5": "Kerberos",
+                      "krb5i": "Kerberos + integrity", "krb5p": "Kerberos + encryption"}
+        summary = (
+            f"Path:       {path}\n"
+            f"Access:     {host}\n"
+            f"Permission: {access_label}\n"
+            f"Admin:      {admin_label}\n"
+            f"Security:   {sec_labels.get(sec, sec)}\n"
+            f"Options:    {','.join(options)}"
+        )
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(f"Update this export?\n\n{summary}", "Edit Share — Step 6/6")
+        )
+        if not confirmed:
+            return
+
+        patch = {"clients": [{"host": host, "options": options}]}
         loop = asyncio.get_running_loop()
         ok, _, err = await loop.run_in_executor(
             None, lambda: self.app.nfs.update_export(path, patch)
@@ -331,6 +509,32 @@ class NFSScreen(Screen):
             await self.app.push_screen_wait(ConfirmDialog("idmapd domain updated.", "Done"))
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+
+
+_WIZARD_MANAGED_OPTS = {"rw", "ro", "root_squash", "no_root_squash"}
+
+
+def _parse_current_export(export: dict) -> dict:
+    """Extract structured wizard values from an export dict."""
+    clients = export.get("clients", [])
+    if not clients:
+        return {"host": "*", "access": "rw", "root_squash": "no_root_squash",
+                "sec": "sys", "extra_opts": []}
+    client = clients[0] if isinstance(clients[0], dict) else {}
+    host = client.get("host", "*") if client else "*"
+    opts = client.get("options", []) if client else []
+
+    access = "ro" if "ro" in opts else "rw"
+    root_squash = "root_squash" if ("root_squash" in opts and "no_root_squash" not in opts) else "no_root_squash"
+    sec = "sys"
+    extra: list[str] = []
+    for o in opts:
+        if o.startswith("sec="):
+            sec = o.split("=", 1)[1]
+        elif o not in _WIZARD_MANAGED_OPTS:
+            extra.append(o)
+    return {"host": host, "access": access, "root_squash": root_squash,
+            "sec": sec, "extra_opts": extra}
 
 
 def _format_exports(data: Any) -> str:
