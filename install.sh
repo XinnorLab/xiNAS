@@ -177,10 +177,14 @@ echo ""
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
-echo -e "  ${GREEN}╔═══════════════════════════════════════════════════════╗${NC}"
-echo -e "  ${GREEN}║${NC}  ${GREEN}${BOLD}✓  xiNAS installed successfully!${NC}                     ${GREEN}║${NC}"
-echo -e "  ${GREEN}║${NC}                                                       ${GREEN}║${NC}"
-echo -e "  ${GREEN}║${NC}  ${DIM}Directory :${NC}  ${WHITE}${INSTALL_DIR}${NC}                    ${GREEN}║${NC}"
-echo -e "  ${GREEN}║${NC}  ${DIM}Management:${NC}  ${CYAN}sudo xinas-menu${NC}                      ${GREEN}║${NC}"
-echo -e "  ${GREEN}╚═══════════════════════════════════════════════════════╝${NC}"
+_W=55
+_bar() { printf '═%.0s' $(seq 1 $_W); }
+_spc() { printf '%*s' "$1" ''; }
+_dir_len=${#INSTALL_DIR}
+echo -e "  ${GREEN}╔$(_bar)╗${NC}"
+echo -e "  ${GREEN}║${NC}  ${GREEN}${BOLD}✓  xiNAS installed successfully!${NC}$(_spc $((_W - 34)))${GREEN}║${NC}"
+echo -e "  ${GREEN}║${NC}$(_spc $_W)${GREEN}║${NC}"
+echo -e "  ${GREEN}║${NC}  ${DIM}Directory :${NC}  ${WHITE}${INSTALL_DIR}${NC}$(_spc $((_W - 15 - _dir_len)))${GREEN}║${NC}"
+echo -e "  ${GREEN}║${NC}  ${DIM}Management:${NC}  ${CYAN}sudo xinas-menu${NC}$(_spc $((_W - 29)))${GREEN}║${NC}"
+echo -e "  ${GREEN}╚$(_bar)╝${NC}"
 echo ""
