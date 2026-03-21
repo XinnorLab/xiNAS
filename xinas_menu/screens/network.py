@@ -246,7 +246,8 @@ def _run_cmd(cmd: str) -> str:
 
 
 def _flush_pbr_rules() -> None:
-    """Remove all custom PBR ip-rules (tables 100-199) so netplan apply starts clean."""
+    """Remove all custom PBR ip-rules (tables 100-199) and flush stale IPs
+    from RDMA-capable interfaces so netplan apply starts clean."""
     out = _run_cmd("ip rule show")
     if not out:
         return
@@ -266,6 +267,16 @@ def _flush_pbr_rules() -> None:
             seen_tables.add(table)
     for table in seen_tables:
         _run_cmd(f"ip route flush table {table}")
+    # Flush all IPs from RDMA-capable (mlx) interfaces to remove stale
+    # secondary addresses that netplan apply alone does not clean up.
+    from pathlib import Path
+    for iface_dir in sorted(Path("/sys/class/net").iterdir()):
+        try:
+            driver = (iface_dir / "device" / "driver").resolve().name
+            if "mlx" in driver:
+                _run_cmd(f"ip addr flush dev {iface_dir.name}")
+        except Exception:
+            continue
 
 
 def _speed_bar(speed: int) -> str:

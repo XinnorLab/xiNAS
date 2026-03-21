@@ -1,11 +1,20 @@
 ---
-- name: flush stale PBR rules
+- name: flush stale PBR rules and secondary IPs
   ansible.builtin.shell: |
+    # Flush PBR rules and routing tables (100-199)
     for table in $(ip rule show | grep -oP 'lookup \K(1[0-9]{2})'); do
       ip rule show | grep "lookup $table" | while IFS=: read -r _ spec; do
         ip rule del $spec 2>/dev/null || true
       done
       ip route flush table "$table" 2>/dev/null || true
+    done
+    # Flush all IPs from RDMA-capable (mlx) interfaces
+    for iface in /sys/class/net/*/device/driver; do
+      driver=$(readlink -f "$iface" 2>/dev/null | xargs basename 2>/dev/null)
+      if echo "$driver" | grep -q "mlx"; then
+        ifname=$(echo "$iface" | cut -d/ -f5)
+        ip addr flush dev "$ifname" 2>/dev/null || true
+      fi
     done
   become: true
   listen: apply netplan
