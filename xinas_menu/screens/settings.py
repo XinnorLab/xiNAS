@@ -25,6 +25,7 @@ _MENU = [
     MenuItem("1", "Email Configuration"),
     MenuItem("2", "Health Check Scheduler"),
     MenuItem("3", "Send Test Email"),
+    MenuItem("4", "xiRAID Notifications"),
     MenuItem("0", "Back"),
 ]
 
@@ -56,6 +57,8 @@ class SettingsScreen(Screen):
             self._hc_scheduler()
         elif event.key == "3":
             self._send_test_email()
+        elif event.key == "4":
+            self._xiraid_notifications()
 
     # ── Overview ───────────────────────────────────────────────────────────
 
@@ -87,6 +90,27 @@ class SettingsScreen(Screen):
             lines.append(f"  Last run:     {status.get('last_run', 'n/a')}")
         else:
             lines.append(f"  HC Scheduler: {DIM}not configured{NC}")
+
+        lines.append("")
+
+        from xinas_menu.utils.xicli_mail import grpc_available, mail_show, settings_mail_show
+
+        xicli_ok = await grpc_available()
+        if xicli_ok:
+            ok_r, receivers, _ = await mail_show()
+            ok_s, msettings, _ = await settings_mail_show()
+            if ok_r and receivers:
+                lines.append(f"  xiRAID Mail: {GRN}enabled{NC}  ({len(receivers)} recipient{'s' if len(receivers) != 1 else ''})")
+            elif ok_r:
+                lines.append(f"  xiRAID Mail: {DIM}no recipients{NC}")
+            else:
+                lines.append(f"  xiRAID Mail: {DIM}query failed{NC}")
+            if ok_s and msettings:
+                pi = msettings.get("polling_interval", "?")
+                ppi = msettings.get("progress_polling_interval", "?")
+                lines.append(f"  Polling:      {pi}s / {ppi}min")
+        else:
+            lines.append(f"  xiRAID Mail: {DIM}not available (gRPC unreachable){NC}")
 
         view.set_content("\n".join(lines))
 
@@ -349,3 +373,203 @@ class SettingsScreen(Screen):
         else:
             RED, NC = "\033[31m", "\033[0m"
             view.set_content(f"  {RED}Email send failed:{NC} {err}")
+
+    # ── xiRAID Notifications ────────────────────────────────────────────────
+
+    @work(exclusive=True)
+    async def _xiraid_notifications(self) -> None:
+        view = self.query_one("#settings-content", ScrollableTextView)
+
+        from xinas_menu.utils.xicli_mail import (
+            grpc_available, mail_show, settings_mail_show,
+        )
+
+        available = await grpc_available()
+        if not available:
+            view.set_content(
+                "\033[33m  xiRAID daemon is not reachable.\n\n"
+                "  Ensure xiRAID is installed and the gRPC service is running.\033[0m"
+            )
+            return
+
+        ok_r, receivers, err_r = await mail_show()
+        ok_s, settings, err_s = await settings_mail_show()
+
+        GRN, RED, BLD, DIM, NC = (
+            "\033[32m", "\033[31m", "\033[1m", "\033[2m", "\033[0m",
+        )
+        lines = [f"{BLD}xiRAID Notifications{NC}", ""]
+
+        if ok_r:
+            if receivers:
+                lines.append(f"  Recipients ({len(receivers)}):")
+                for r in receivers:
+                    lines.append(f"    {r['address']:30s}  {r['level']}")
+            else:
+                lines.append(f"  Recipients: {DIM}none configured{NC}")
+        else:
+            lines.append(f"  {RED}Failed to query recipients:{NC} {err_r}")
+
+        lines.append("")
+        if ok_s and settings:
+            pi = settings.get("polling_interval", "?")
+            ppi = settings.get("progress_polling_interval", "?")
+            lines.append(f"  Polling interval:          {pi}s")
+            lines.append(f"  Progress polling interval: {ppi}min")
+        elif not ok_s:
+            lines.append(f"  {RED}Failed to query settings:{NC} {err_s}")
+
+        view.set_content("\n".join(lines))
+
+        options = ["Add Recipient", "Modify Polling Intervals", "Send Test Notification"]
+        if receivers:
+            options.insert(1, "Remove Recipient")
+        choice = await self.app.push_screen_wait(
+            SelectDialog(options, title="xiRAID Notifications", prompt="Choose an action:")
+        )
+        if choice is None:
+            return
+
+        if choice == "Add Recipient":
+            await self._xiraid_notif_add_recipient()
+        elif choice == "Remove Recipient":
+            await self._xiraid_notif_remove_recipient(receivers)
+        elif choice == "Modify Polling Intervals":
+            await self._xiraid_notif_modify_intervals(settings)
+        elif choice == "Send Test Notification":
+            await self._xiraid_notif_send_test()
+
+    async def _xiraid_notif_add_recipient(self) -> None:
+        while True:
+            address = await self.app.push_screen_wait(
+                InputDialog(
+                    "Recipient email:", "Add Notification Recipient",
+                    placeholder="admin@example.com",
+                )
+            )
+            if address is None:
+                return
+            if "@" in address.strip():
+                address = address.strip()
+                break
+            self.app.notify("Invalid email address (must contain @)", severity="error")
+
+        level = await self.app.push_screen_wait(
+            SelectDialog(
+                ["error", "warning", "info"],
+                title="Notification Level",
+                prompt="Receive notifications at this level and above:",
+            )
+        )
+        if level is None:
+            return
+
+        from xinas_menu.utils.xicli_mail import mail_add
+
+        ok, err = await mail_add(address, level)
+        if ok:
+            self.app.audit.log("settings.xiraid_mail", f"add {address} level={level}", "OK")
+            self.app.notify(f"Added {address} ({level})")
+        else:
+            self.app.audit.log("settings.xiraid_mail", f"add {address} level={level}", "FAIL")
+            self.app.notify(f"Failed: {err}", severity="error")
+        self._xiraid_notifications()
+
+    async def _xiraid_notif_remove_recipient(
+        self, receivers: list[dict[str, str]],
+    ) -> None:
+        labels = [f"{r['address']} ({r['level']})" for r in receivers]
+        choice = await self.app.push_screen_wait(
+            SelectDialog(labels, title="Remove Recipient", prompt="Select recipient to remove:")
+        )
+        if choice is None:
+            return
+
+        idx = labels.index(choice)
+        address = receivers[idx]["address"]
+
+        confirm = await self.app.push_screen_wait(
+            ConfirmDialog(f"Remove {address} from xiRAID notifications?")
+        )
+        if not confirm:
+            return
+
+        from xinas_menu.utils.xicli_mail import mail_remove
+
+        ok, err = await mail_remove(address)
+        if ok:
+            self.app.audit.log("settings.xiraid_mail", f"remove {address}", "OK")
+            self.app.notify(f"Removed {address}")
+        else:
+            self.app.audit.log("settings.xiraid_mail", f"remove {address}", "FAIL")
+            self.app.notify(f"Failed: {err}", severity="error")
+        self._xiraid_notifications()
+
+    async def _xiraid_notif_modify_intervals(self, current: dict) -> None:
+        pi_str = await self.app.push_screen_wait(
+            InputDialog(
+                "RAID/drive polling interval (seconds):",
+                "Polling Intervals",
+                default=str(current.get("polling_interval", 10)),
+                placeholder="10",
+            )
+        )
+        if pi_str is None:
+            return
+        try:
+            pi = int(pi_str)
+            if pi < 1:
+                raise ValueError
+        except ValueError:
+            self.app.notify("Must be a positive integer", severity="error")
+            return
+
+        ppi_str = await self.app.push_screen_wait(
+            InputDialog(
+                "Progress polling interval (minutes):",
+                "Polling Intervals",
+                default=str(current.get("progress_polling_interval", 10)),
+                placeholder="10",
+            )
+        )
+        if ppi_str is None:
+            return
+        try:
+            ppi = int(ppi_str)
+            if ppi < 1:
+                raise ValueError
+        except ValueError:
+            self.app.notify("Must be a positive integer", severity="error")
+            return
+
+        from xinas_menu.utils.xicli_mail import settings_mail_modify
+
+        ok, err = await settings_mail_modify(pi, ppi)
+        if ok:
+            self.app.audit.log(
+                "settings.xiraid_mail", f"modify pi={pi} ppi={ppi}", "OK",
+            )
+            self.app.notify(f"Polling intervals updated: {pi}s / {ppi}min")
+        else:
+            self.app.audit.log(
+                "settings.xiraid_mail", f"modify pi={pi} ppi={ppi}", "FAIL",
+            )
+            self.app.notify(f"Failed: {err}", severity="error")
+        self._xiraid_notifications()
+
+    async def _xiraid_notif_send_test(self) -> None:
+        view = self.query_one("#settings-content", ScrollableTextView)
+
+        view.set_content("  Sending xiRAID test notification...")
+
+        from xinas_menu.utils.xicli_mail import mail_send_test
+
+        ok, err = await mail_send_test()
+        if ok:
+            GRN, NC = "\033[32m", "\033[0m"
+            view.set_content(f"  {GRN}xiRAID test notification sent!{NC}")
+            self.app.audit.log("settings.xiraid_mail", "test_send", "OK")
+        else:
+            RED, NC = "\033[31m", "\033[0m"
+            view.set_content(f"  {RED}Send failed:{NC} {err}")
+            self.app.audit.log("settings.xiraid_mail", "test_send", "FAIL")

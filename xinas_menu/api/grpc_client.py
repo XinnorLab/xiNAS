@@ -77,7 +77,7 @@ _STUBS_ERROR: str = ""
 
 
 def _import_stubs():
-    """Return (pb2_grpc, grpc, msg_raid, msg_drive, msg_pool, msg_license, msg_settings)
+    """Return (pb2_grpc, grpc, msg_raid, msg_drive, msg_pool, msg_license, msg_settings, msg_mail)
     or all-None tuple on failure.
 
     Request types live in message_*_pb2, NOT in service_xraid_pb2.
@@ -92,11 +92,12 @@ def _import_stubs():
         from xinas_menu.api.proto import message_pool_pb2 as msg_pool
         from xinas_menu.api.proto import message_license_pb2 as msg_license
         from xinas_menu.api.proto import message_settings_pb2 as msg_settings
+        from xinas_menu.api.proto import message_mail_pb2 as msg_mail
         _STUBS_ERROR = ""
-        return pb2_grpc, grpc, msg_raid, msg_drive, msg_pool, msg_license, msg_settings
+        return pb2_grpc, grpc, msg_raid, msg_drive, msg_pool, msg_license, msg_settings, msg_mail
     except Exception as exc:
         _STUBS_ERROR = str(exc)
-        return None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
 
 
 def _no_stubs_error() -> tuple:
@@ -236,6 +237,7 @@ class XiRAIDClient:
         self._msg_pool = None
         self._msg_license = None
         self._msg_settings = None
+        self._msg_mail = None
 
     def _ensure_channel(self):
         if self._stub is not None:
@@ -249,6 +251,7 @@ class XiRAIDClient:
         self._msg_pool = stubs[4]
         self._msg_license = stubs[5]
         self._msg_settings = stubs[6]
+        self._msg_mail = stubs[7]
         creds = _load_channel_credentials()
         opts = [
             ("grpc.initial_reconnect_backoff_ms", 500),
@@ -474,6 +477,51 @@ class XiRAIDClient:
     async def get_performance(self) -> tuple[bool, Any, str]:
         """No gRPC performance RPC — returns empty dict."""
         return True, {}, ""
+
+    # ── Mail Notifications ───────────────────────────────────────────────
+
+    async def mail_show(self) -> tuple[bool, Any, str]:
+        """List notification recipients. Returns parsed JSON list."""
+        if not self._ensure_channel():
+            return _no_stubs_error()
+        return await self._call("mail_show", self._msg_mail.MailShow())
+
+    async def mail_add(self, address: str, level: str) -> tuple[bool, Any, str]:
+        """Add notification recipient with level (info/warning/error)."""
+        if not self._ensure_channel():
+            return _no_stubs_error()
+        return await self._call("mail_add",
+                                self._msg_mail.MailAdd(address=address, level=level))
+
+    async def mail_remove(self, address: str) -> tuple[bool, Any, str]:
+        """Remove notification recipient."""
+        if not self._ensure_channel():
+            return _no_stubs_error()
+        return await self._call("mail_remove",
+                                self._msg_mail.MailRemove(address=address))
+
+    async def settings_mail_show(self) -> tuple[bool, Any, str]:
+        """Show mail polling settings."""
+        if not self._ensure_channel():
+            return _no_stubs_error()
+        return await self._call("settings_mail_show",
+                                self._msg_settings.SettingsMailShow())
+
+    async def settings_mail_modify(
+        self,
+        polling_interval: int | None = None,
+        progress_polling_interval: int | None = None,
+    ) -> tuple[bool, Any, str]:
+        """Modify mail polling intervals."""
+        if not self._ensure_channel():
+            return _no_stubs_error()
+        kwargs: dict = {}
+        if polling_interval is not None:
+            kwargs["polling_interval"] = polling_interval
+        if progress_polling_interval is not None:
+            kwargs["progress_polling_interval"] = progress_polling_interval
+        return await self._call("settings_mail_modify",
+                                self._msg_settings.SettingsMailModify(**kwargs))
 
     async def close(self) -> None:
         if self._channel is not None:
