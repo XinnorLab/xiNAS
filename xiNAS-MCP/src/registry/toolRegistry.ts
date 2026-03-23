@@ -80,6 +80,15 @@ import {
   PoolAcquireSchema, handlePoolAcquire,
 } from '../tools/pool.js';
 
+import {
+  MailListRecipientsSchema, handleMailListRecipients,
+  MailAddRecipientSchema, handleMailAddRecipient,
+  MailRemoveRecipientSchema, handleMailRemoveRecipient,
+  MailGetSettingsSchema, handleMailGetSettings,
+  MailUpdateSettingsSchema, handleMailUpdateSettings,
+  MailSendTestSchema, handleMailSendTest,
+} from '../tools/mail.js';
+
 import { JobGetSchema, handleJobGet, JobListSchema, handleJobList, JobCancelSchema, handleJobCancel } from '../tools/job.js';
 
 import {
@@ -193,6 +202,14 @@ const TOOLS: ToolDef[] = [
     schema: AuthRemoveFromGroupSchema,
     handler: handleAuthRemoveFromGroup,
   },
+
+  // Mail
+  { name: 'mail.list_recipients', description: 'List xiRAID notification recipients with severity levels', schema: MailListRecipientsSchema, handler: handleMailListRecipients },
+  { name: 'mail.add_recipient', description: 'Add a notification recipient at a severity level (plan/apply)', schema: MailAddRecipientSchema, handler: handleMailAddRecipient },
+  { name: 'mail.remove_recipient', description: 'Remove a notification recipient (plan/apply)', schema: MailRemoveRecipientSchema, handler: handleMailRemoveRecipient },
+  { name: 'mail.get_settings', description: 'Get mail polling intervals (RAID state check + progress reporting)', schema: MailGetSettingsSchema, handler: handleMailGetSettings },
+  { name: 'mail.update_settings', description: 'Update mail polling intervals (plan/apply)', schema: MailUpdateSettingsSchema, handler: handleMailUpdateSettings },
+  { name: 'mail.send_test', description: 'Send a test notification to all configured recipients', schema: MailSendTestSchema, handler: handleMailSendTest },
 
   // Jobs
   { name: 'job.get', description: 'Get status and progress of a long-running job', schema: JobGetSchema, handler: handleJobGet },

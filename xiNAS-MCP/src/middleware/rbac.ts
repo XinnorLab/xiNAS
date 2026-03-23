@@ -37,6 +37,14 @@ const TOOL_PERMISSIONS: Record<string, PermissionLevel> = {
   'config.diff_snapshots': 'viewer',
   'config.get_status': 'viewer',
 
+  // Mail tools
+  'mail.list_recipients': 'viewer',
+  'mail.get_settings': 'viewer',
+  'mail.send_test': 'operator',
+  'mail.add_recipient': 'admin',
+  'mail.remove_recipient': 'admin',
+  'mail.update_settings': 'admin',
+
   // Operator tools
   'config.check_drift': 'operator',
   'disk.run_selftest': 'operator',

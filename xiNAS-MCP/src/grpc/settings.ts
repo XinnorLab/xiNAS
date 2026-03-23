@@ -21,6 +21,14 @@ export const settingsLogShow = (client: GrpcClient): Promise<XRaidResponse> =>
 export const settingsMailShow = (client: GrpcClient): Promise<XRaidResponse> =>
   callRpc(client.settingsMailShow.bind(client), {});
 
+export interface SettingsMailModifyRequest {
+  polling_interval?: number;
+  progress_polling_interval?: number;
+}
+
+export const settingsMailModify = (client: GrpcClient, req: SettingsMailModifyRequest): Promise<XRaidResponse> =>
+  callRpc(client.settingsMailModify.bind(client), req);
+
 export const settingsPoolShow = (client: GrpcClient): Promise<XRaidResponse> =>
   callRpc(client.settingsPoolShow.bind(client), {});
 

@@ -49,6 +49,12 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 | `auth.change_shell` | admin | plan/apply | — | — | chsh | — |
 | `auth.add_to_group` | admin | plan/apply | — | — | usermod -aG, getent group | — |
 | `auth.remove_from_group` | admin | plan/apply | — | — | gpasswd -d, getent group | — |
+| `mail.list_recipients` | viewer | — | — | mailShow | — | — |
+| `mail.add_recipient` | admin | plan/apply | — | mailAdd | — | — |
+| `mail.remove_recipient` | admin | plan/apply | — | mailRemove | — | — |
+| `mail.get_settings` | viewer | — | — | settingsMailShow | — | — |
+| `mail.update_settings` | admin | plan/apply | — | settingsMailModify | — | — |
+| `mail.send_test` | operator | — | — | — | xicli mail send | — |
 | `job.get` | viewer | — | — | — | JobManager | — |
 | `job.list` | viewer | — | — | — | JobManager | — |
 | `job.cancel` | operator | — | — | — | JobManager | — |
