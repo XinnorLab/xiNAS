@@ -71,6 +71,7 @@ common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace �
 | `client_repo/` | Standalone NFS client package |
 | `xinas_history/` | Configuration history & rollback library (Python) — snapshots, drift detection, transactional runner |
 | `docs/config-history/` | Config-history design docs: requirements, architecture, specs, gRPC API reference |
+| `specs/` | Architecture specs (network management, etc.) |
 
 ### Configuration History (`xinas_history/`)
 
@@ -113,6 +114,8 @@ Each preset directory (`presets/default/`, `presets/xinnorVM/`) contains:
 - **Roles are idempotent** - Safe to re-run, except `xfs_force_mkfs: true` forces filesystem recreation
 - **License stored at `/tmp/license`** - Cleared on reboot; enter via menu before deployment
 - **DOCA-OFED version** - Configured in `collection/roles/doca_ofed/defaults/main.yml` (`doca_ofed_version` variable)
+- **Netplan file ownership** - All IB interface config MUST live in `/etc/netplan/99-xinas.yaml` only. Netplan merges all `*.yaml` files in `/etc/netplan/`, so duplicate interface definitions in other files (e.g. `50-cloud-init.yaml`) cause phantom IPs and conflicting PBR tables. Both TUI and Ansible auto-clean IB entries from non-xinas files. See `specs/spec-network-management.md` for full details.
+- **Netplan apply limitations** - `netplan apply` does NOT remove old IPs or PBR rules. The `net_controllers` role and TUI "Apply Network Changes" always flush PBR tables 100-199 and all IPs from mlx interfaces before applying. See apply sequence in `specs/spec-network-management.md`.
 
 ## Automatic NVMe Namespace Management
 
