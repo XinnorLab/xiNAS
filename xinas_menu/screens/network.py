@@ -503,45 +503,80 @@ def _read_netplan_file() -> tuple[str, str]:
 def _update_netplan(iface: str, ip_cidr: str, gateway: str, mtu: int | None = None) -> tuple[bool, str]:
     import yaml
     netplan_dir = Path("/etc/netplan")
-    cfg_files = sorted(netplan_dir.glob("*.yaml")) + sorted(netplan_dir.glob("*.yml"))
-    if not cfg_files:
-        return False, "no netplan config files found"
-    cfg_path = cfg_files[0]
+    # Always write to 99-xinas.yaml — the canonical xiNAS config file.
+    cfg_path = netplan_dir / "99-xinas.yaml"
     try:
-        with cfg_path.open() as f:
-            cfg = yaml.safe_load(f) or {}
+        if cfg_path.exists():
+            with cfg_path.open() as f:
+                cfg = yaml.safe_load(f) or {}
+        else:
+            cfg = {"network": {"version": 2, "renderer": "networkd", "ethernets": {}}}
         ethernets = cfg.setdefault("network", {}).setdefault("ethernets", {})
         iface_cfg = ethernets.setdefault(iface, {})
         iface_cfg["addresses"] = [ip_cidr]
+        iface_cfg["dhcp4"] = False
         if gateway:
             iface_cfg["routes"] = [{"to": "default", "via": gateway}]
         if mtu is not None:
             iface_cfg["mtu"] = mtu
 
         # Policy-based routing for multi-interface configs
-        if len(ethernets) > 1:
-            iface_names = sorted(ethernets.keys())
-            table_id = 100 + iface_names.index(iface)
-            ip_addr = ip_cidr.split("/")[0]
-            prefix = ip_cidr.split("/")[1]
-            octets = ip_addr.split(".")
-            subnet = f"{octets[0]}.{octets[1]}.{octets[2]}.0/{prefix}"
+        hp_ifaces = [k for k in ethernets if k != iface and not k.startswith("en")]
+        if hp_ifaces or not iface.startswith("en"):
+            # Count only high-perf (non-Ethernet) interfaces for table numbering
+            all_hp = sorted(k for k in ethernets if not k.startswith("en"))
+            if iface in all_hp:
+                table_id = 100 + all_hp.index(iface)
+                ip_addr = ip_cidr.split("/")[0]
+                prefix = ip_cidr.split("/")[1]
+                octets = ip_addr.split(".")
+                subnet = f"{octets[0]}.{octets[1]}.{octets[2]}.0/{prefix}"
 
-            existing_routes = iface_cfg.get("routes", [])
-            # Remove old PBR routes (those with a "table" key)
-            existing_routes = [r for r in existing_routes if "table" not in r]
-            existing_routes.append({"to": subnet, "scope": "link", "table": table_id})
-            iface_cfg["routes"] = existing_routes
+                existing_routes = iface_cfg.get("routes", [])
+                # Remove old PBR routes (those with a "table" key)
+                existing_routes = [r for r in existing_routes if "table" not in r]
+                existing_routes.append({"to": subnet, "scope": "link", "table": table_id})
+                iface_cfg["routes"] = existing_routes
 
-            iface_cfg["routing-policy"] = [
-                {"from": ip_addr, "table": table_id, "priority": table_id}
-            ]
+                iface_cfg["routing-policy"] = [
+                    {"from": ip_addr, "table": table_id, "priority": table_id}
+                ]
 
         with cfg_path.open("w") as f:
             yaml.dump(cfg, f, default_flow_style=False)
+
+        # Remove this interface from all OTHER netplan files to prevent
+        # netplan merge conflicts (e.g. stale IPs in 50-cloud-init.yaml).
+        _remove_iface_from_other_netplan_files(iface, cfg_path)
+
         return True, ""
     except Exception as exc:
         return False, str(exc)
+
+
+def _remove_iface_from_other_netplan_files(iface: str, exclude_path: Path) -> None:
+    """Remove an interface definition from all netplan files except *exclude_path*.
+
+    This prevents netplan from merging stale config (old IPs, PBR rules) from
+    files like 50-cloud-init.yaml when 99-xinas.yaml is the canonical source.
+    """
+    import yaml
+    netplan_dir = Path("/etc/netplan")
+    for path in sorted(netplan_dir.glob("*.yaml")) + sorted(netplan_dir.glob("*.yml")):
+        if path == exclude_path:
+            continue
+        try:
+            with path.open() as f:
+                cfg = yaml.safe_load(f) or {}
+            ethernets = cfg.get("network", {}).get("ethernets", {})
+            if iface not in ethernets:
+                continue
+            del ethernets[iface]
+            with path.open("w") as f:
+                yaml.dump(cfg, f, default_flow_style=False)
+            _log.info("removed stale %s config from %s", iface, path)
+        except Exception:
+            _log.debug("failed to clean %s from %s", iface, path, exc_info=True)
 
 
 def _iface_labels(names: list[str]) -> list[str]:

@@ -145,6 +145,44 @@
   changed_when: false
   tags: [network]
 
+# Step 3b: Remove managed interfaces from other netplan files to prevent merge conflicts
+- name: Remove managed IB interfaces from non-xinas netplan files
+  ansible.builtin.shell: |
+    python3 - <<'PYEOF'
+    import yaml, glob, os
+    managed_ifaces = set()
+    for iface in os.listdir("/sys/class/net"):
+        try:
+            driver = os.path.basename(os.readlink(f"/sys/class/net/{iface}/device/driver"))
+            if "mlx" in driver:
+                managed_ifaces.add(iface)
+        except Exception:
+            continue
+    if not managed_ifaces:
+        exit(0)
+    for path in sorted(glob.glob("/etc/netplan/*.yaml") + glob.glob("/etc/netplan/*.yml")):
+        if os.path.basename(path) == "99-xinas.yaml":
+            continue
+        try:
+            with open(path) as f:
+                cfg = yaml.safe_load(f) or {}
+            ethernets = cfg.get("network", {}).get("ethernets", {})
+            changed = False
+            for iface in managed_ifaces:
+                if iface in ethernets:
+                    del ethernets[iface]
+                    changed = True
+            if changed:
+                with open(path, "w") as f:
+                    yaml.dump(cfg, f, default_flow_style=False)
+                print(f"Cleaned IB interfaces from {path}")
+        except Exception as e:
+            print(f"Warning: could not clean {path}: {e}")
+    PYEOF
+  become: true
+  changed_when: false
+  tags: [network]
+
 # Step 4: Deploy netplan configuration
 - name: Deploy netplan configuration for network controllers
   ansible.builtin.template:
