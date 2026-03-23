@@ -475,6 +475,25 @@ AlertBar.has-alerts {
     text-style: bold;
 }
 
+/* ── StatusFooter (persistent bottom issues bar) ────────────── */
+StatusFooter {
+    height: 1;
+    dock: bottom;
+    display: none;
+    background: #2a1118;
+    padding: 0 2;
+    border-top: solid #e85555;
+}
+
+StatusFooter.has-issues {
+    display: block;
+}
+
+#status-footer-content {
+    color: #e85555;
+    text-style: bold;
+}
+
 /* ── Footer ──────────────────────────────────────────────────── */
 Footer {
     background: #111520;

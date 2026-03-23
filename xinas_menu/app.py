@@ -20,6 +20,7 @@ from xinas_menu.utils.update_check import UpdateChecker
 from xinas_menu.utils.snapshot_helper import SnapshotHelper
 from xinas_menu.widgets.alert_bar import AlertBar
 from xinas_menu.widgets.header import XiNASHeader
+from xinas_menu.widgets.status_footer import StatusFooter
 
 __all__ = ["XiNASApp"]
 
@@ -57,6 +58,7 @@ class XiNASApp(App):
     def compose(self) -> ComposeResult:
         yield XiNASHeader()
         yield AlertBar()
+        yield StatusFooter()
 
     async def on_mount(self) -> None:
         from xinas_menu.screens.welcome import WelcomeScreen
@@ -75,6 +77,10 @@ class XiNASApp(App):
         lic_task = asyncio.create_task(self._bg_license_check())
         lic_task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
 
+        # Background NFS service monitor
+        nfs_task = asyncio.create_task(self._bg_nfs_check())
+        nfs_task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+
     async def _bg_update_check(self) -> None:
         try:
             available = await self._update_checker.check()
@@ -86,8 +92,9 @@ class XiNASApp(App):
             _log.debug("background update check failed", exc_info=True)
 
     async def _bg_license_check(self) -> None:
-        """Periodically check license status and update AlertBar."""
+        """Periodically check license status and update AlertBar + StatusFooter."""
         alert_bar = self.query_one(AlertBar)
+        status_footer = self.query_one(StatusFooter)
         while True:
             try:
                 ok, data, err = await asyncio.wait_for(
@@ -98,35 +105,71 @@ class XiNASApp(App):
                         "license", "error",
                         "License check failed — xiRAID not reachable",
                     )
+                    status_footer.set_issue("license", "xiRAID not reachable")
                 elif isinstance(data, dict):
                     status = str(data.get("status", "")).lower()
                     if status == "valid":
                         alert_bar.clear_alert("license")
+                        status_footer.clear_issue("license")
                     elif status == "expired":
                         alert_bar.set_alert(
                             "license", "error", "xiRAID license has expired",
                         )
+                        status_footer.set_issue("license", "License expired")
                     elif status == "invalid":
                         alert_bar.set_alert(
                             "license", "error", "xiRAID license is invalid",
                         )
+                        status_footer.set_issue("license", "License invalid")
                     else:
                         alert_bar.set_alert(
                             "license", "warning",
                             f"License status: {status}",
                         )
+                        status_footer.set_issue("license", f"License: {status}")
                 else:
                     alert_bar.set_alert(
                         "license", "warning", "License status unknown",
                     )
+                    status_footer.set_issue("license", "License unknown")
             except asyncio.TimeoutError:
                 alert_bar.set_alert(
                     "license", "warning", "License check timed out",
                 )
+                status_footer.set_issue("license", "License check timed out")
             except Exception:
                 _log.debug("bg license check failed", exc_info=True)
 
             await asyncio.sleep(60)
+
+    async def _bg_nfs_check(self) -> None:
+        """Periodically check NFS service status and update AlertBar + StatusFooter."""
+        alert_bar = self.query_one(AlertBar)
+        status_footer = self.query_one(StatusFooter)
+        while True:
+            try:
+                loop = asyncio.get_running_loop()
+                state = await loop.run_in_executor(None, self._check_nfs_state)
+                if state.load != "loaded":
+                    # Service not installed — not an issue
+                    alert_bar.clear_alert("nfs")
+                    status_footer.clear_issue("nfs")
+                elif state.is_active:
+                    alert_bar.clear_alert("nfs")
+                    status_footer.clear_issue("nfs")
+                else:
+                    msg = f"NFS service {state.active}"
+                    alert_bar.set_alert("nfs", "error", msg)
+                    status_footer.set_issue("nfs", msg)
+            except Exception:
+                _log.debug("bg nfs check failed", exc_info=True)
+
+            await asyncio.sleep(30)
+
+    @staticmethod
+    def _check_nfs_state():
+        from xinas_menu.utils.service_ctl import ServiceController
+        return ServiceController().state("nfs-server")
 
     def watch_update_available(self, value: bool) -> None:
         try:
