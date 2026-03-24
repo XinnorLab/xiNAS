@@ -191,7 +191,32 @@ The MCP server MUST implement per-array locking: a `raid.delete` MUST be rejecte
 
 **Auto-snapshot:** All mutating tools (`raid.create/modify/delete`, `share.create/update_policy/delete`, `network.configure`) automatically record a configuration snapshot after successful apply via the plan/apply middleware. This ensures the config-history timeline stays current regardless of which tool initiates the change.
 
-### 4.10 Spare Pool Management
+### 4.10 Mail Notification Management
+
+| Tool | Inputs | Output |
+|---|---|---|
+| `mail.list_recipients` | controller_id | list of recipients with address and notification level |
+| `mail.add_recipient` | controller_id, address, level, mode | plan diff or result |
+| `mail.remove_recipient` | controller_id, address, mode | plan diff or result |
+| `mail.get_settings` | controller_id | polling_interval (seconds), progress_polling_interval (minutes) |
+| `mail.update_settings` | controller_id, polling_interval?, progress_polling_interval?, mode | plan diff or result |
+| `mail.send_test` | controller_id | result |
+
+**Backend:** gRPC calls to xiRAID daemon (`mail_show`, `mail_add`, `mail_remove`, `settings_mail_show`, `settings_mail_modify`). `mail.send_test` uses `xicli mail send` as no gRPC RPC exists for test delivery.
+
+**Notification levels:** `info` (all events), `warning` (warning + error), `error` (errors only). A recipient at level X receives all events at severity X and above.
+
+**Events covered:** RAID state changes (degraded, offline, unrecovered, online), reconstruction/initialization progress, license expiration/errors.
+
+**Polling intervals:** `polling_interval` controls how often xiRAID checks RAID/drive state (seconds). `progress_polling_interval` controls how often progress updates are sent during init/reconstruction (minutes). Notifications fire on state change, not every poll cycle.
+
+**`mail.add_recipient`** validates email format in preflight. Supports plan/apply discipline.
+
+**`mail.remove_recipient`** preflight verifies the address exists in the current recipient list before allowing apply.
+
+**`mail.update_settings`** requires at least one of the two interval fields. Preflight shows before/after values.
+
+### 4.11 Spare Pool Management
 
 | Tool | Inputs | Output |
 |---|---|---|
@@ -230,9 +255,9 @@ The MCP server MUST implement per-array locking: a `raid.delete` MUST be rejecte
 
 | Role | Permissions |
 |---|---|
-| `viewer` | All read-only tools (incl. `pool.list`) |
-| `operator` | viewer + share create/update/delete, quota management, pool activate/deactivate, non-destructive operations |
-| `admin` | operator + RAID create/delete, pool create/delete/add/remove/acquire, disk wipe, system configuration |
+| `viewer` | All read-only tools (incl. `pool.list`, `mail.list_recipients`, `mail.get_settings`) |
+| `operator` | viewer + share create/update/delete, quota management, pool activate/deactivate, `mail.send_test`, non-destructive operations |
+| `admin` | operator + RAID create/delete, pool create/delete/add/remove/acquire, disk wipe, mail recipient/settings management, system configuration |
 
 ### 5.3 Audit Logging
 
