@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 _log = logging.getLogger(__name__)
@@ -26,10 +27,10 @@ from xinas_menu.widgets.text_view import ScrollableTextView
 _ARRAY_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]
 _STRIP_SIZES = ["16", "32", "64", "128", "256"]
+_CPU_LIST_RE = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
 _MODIFY_PARAMS = [
     # (key, label, kind, options, value_type)
-    ("strip_size", "Strip Size (KB)", "select", _STRIP_SIZES, int),
-    ("group_size", "Group Size", "input", None, int),
+    ("cpu_allowed", "CPU Affinity", "cpu_affinity", None, str),
     ("sparepool", "Spare Pool", "input", None, str),
     ("init_prio", "Init Priority (0-100)", "input", None, int),
     ("recon_prio", "Recon Priority (0-100)", "input", None, int),
@@ -98,6 +99,41 @@ async def _get_drive_groups(grpc_client) -> tuple[dict[str, list[str]], list[dic
     if all_small:
         groups[f"All small NVMe ({len(all_small)} drives)"] = all_small
     return groups, nvme
+
+
+async def _get_numa_topology(grpc_client) -> list[dict]:
+    """Return NUMA topology: [{node: 0, cpulist: '0-15', drives: ['nvme0',...]}, ...]."""
+    nodes: list[dict] = []
+    node_base = Path("/sys/devices/system/node")
+    if not node_base.is_dir():
+        return nodes
+
+    # Discover NUMA nodes and their CPU lists
+    node_dirs = sorted(
+        (d for d in node_base.iterdir() if d.name.startswith("node") and d.name[4:].isdigit()),
+        key=lambda d: int(d.name[4:]),
+    )
+    for nd in node_dirs:
+        node_id = int(nd.name[4:])
+        cpulist_file = nd / "cpulist"
+        cpulist = cpulist_file.read_text().strip() if cpulist_file.is_file() else ""
+        nodes.append({"node": node_id, "cpulist": cpulist, "drives": []})
+
+    # Map NVMe drives to NUMA nodes
+    ok, disks, _ = await grpc_client.disk_list()
+    if ok and disks:
+        drive_list = disks if isinstance(disks, list) else []
+        for d in drive_list:
+            name = d.get("name", "")
+            if "nvme" not in name.lower():
+                continue
+            numa = d.get("numa_node", d.get("numa", 0))
+            for n in nodes:
+                if n["node"] == numa:
+                    n["drives"].append(name)
+                    break
+
+    return nodes
 
 
 class RAIDScreen(Screen):
@@ -384,7 +420,65 @@ class RAIDScreen(Screen):
         idx = param_labels.index(param_choice)
         key, label, kind, options, vtype = _MODIFY_PARAMS[idx]
 
-        if key == "sparepool":
+        if key == "cpu_allowed":
+            # Smart CPU affinity selector
+            current_cpu = arrays[arr_name].get("cpu_allowed") or "all"
+            mode = await self.app.push_screen_wait(
+                SelectDialog(
+                    ["NUMA Node", "Manual CPU List", "All CPUs (reset)"],
+                    title="CPU Affinity",
+                    prompt=f"Current: {current_cpu}\nSelect affinity mode:",
+                )
+            )
+            if not mode:
+                return
+
+            if mode == "All CPUs (reset)":
+                value = ""
+            elif mode == "NUMA Node":
+                topo = await _get_numa_topology(self.app.grpc)
+                if not topo:
+                    self.app.notify("Cannot detect NUMA topology.", severity="warning")
+                    return
+                node_labels = []
+                node_cpulists = []
+                for n in topo:
+                    drives_str = ", ".join(n["drives"]) if n["drives"] else "no drives"
+                    node_labels.append(
+                        f"NUMA {n['node']}  (CPUs {n['cpulist']})  — {drives_str}"
+                    )
+                    node_cpulists.append(n["cpulist"])
+                pick = await self.app.push_screen_wait(
+                    SelectDialog(node_labels, title="Select NUMA Node",
+                                 prompt="Pin array to CPUs of selected NUMA node:")
+                )
+                if not pick:
+                    return
+                value = node_cpulists[node_labels.index(pick)]
+            else:
+                # Manual CPU list
+                raw = await self.app.push_screen_wait(
+                    InputDialog(
+                        "CPU list (e.g. 0,2,4-7):",
+                        "Manual CPU Affinity",
+                        default=current_cpu if current_cpu != "all" else "",
+                    )
+                )
+                if raw is None:
+                    return
+                raw = raw.strip()
+                if not _CPU_LIST_RE.match(raw):
+                    await self.app.push_screen_wait(
+                        ConfirmDialog(
+                            f"Invalid CPU list format: '{raw}'\n"
+                            "Expected: comma-separated numbers or ranges (e.g. 0,2,4-7)",
+                            "Error",
+                        )
+                    )
+                    return
+                value = raw
+
+        elif key == "sparepool":
             # Dynamic select: fetch available spare pools
             pool_names: list[str] = []
             p_ok, p_data, _ = await self.app.grpc.pool_show()
@@ -413,9 +507,10 @@ class RAIDScreen(Screen):
         if value is None:
             return
 
+        display_val = value if value else "all (unrestricted)"
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
-                f"Edit {arr_name}?\n\n{label}: {value}",
+                f"Edit {arr_name}?\n\n{label}: {display_val}",
                 "Confirm Edit",
             )
         )
