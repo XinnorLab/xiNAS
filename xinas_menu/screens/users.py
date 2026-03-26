@@ -424,9 +424,12 @@ class UsersScreen(Screen):
             if soft_str is None:
                 return
             try:
-                soft_kb = int(float(soft_str) * 1024 * 1024)
+                soft_gb = float(soft_str)
+                if soft_gb < 0:
+                    raise ValueError("negative")
+                soft_kb = int(soft_gb * 1024 * 1024)
             except ValueError:
-                self.app.notify("Soft limit must be a valid number.", severity="error")
+                self.app.notify("Soft limit must be a non-negative number.", severity="error")
                 continue
             break
 
@@ -437,11 +440,35 @@ class UsersScreen(Screen):
             if hard_str is None:
                 return
             try:
-                hard_kb = int(float(hard_str) * 1024 * 1024)
+                hard_gb = float(hard_str)
+                if hard_gb < 0:
+                    raise ValueError("negative")
+                hard_kb = int(hard_gb * 1024 * 1024)
             except ValueError:
-                self.app.notify("Hard limit must be a valid number.", severity="error")
+                self.app.notify("Hard limit must be a non-negative number.", severity="error")
+                continue
+            if hard_kb > 0 and soft_kb > 0 and hard_kb < soft_kb:
+                self.app.notify("Hard limit must be >= soft limit.", severity="error")
                 continue
             break
+
+        # Confirmation with human-readable values
+        def _fmt_quota(gb: float) -> str:
+            if gb == 0:
+                return "none"
+            if gb >= 1024:
+                return f"{gb:,.1f} GB ({gb / 1024:,.2f} TB)"
+            return f"{gb:,.1f} GB"
+
+        confirm_msg = (
+            f"Set quota for user '{username}' on {export_path}?\n\n"
+            f"  Soft limit: {_fmt_quota(soft_gb)}\n"
+            f"  Hard limit: {_fmt_quota(hard_gb)}"
+        )
+        if not await self.app.push_screen_wait(
+            ConfirmDialog(confirm_msg, "Confirm Quota")
+        ):
+            return
 
         loop = asyncio.get_running_loop()
         ok, _, err = await loop.run_in_executor(

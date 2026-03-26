@@ -23,6 +23,14 @@ def _find_mountpoint(path: str) -> str:
         current = parent
 
 
+def _run_xfs_quota(args: list[str]) -> None:
+    """Run xfs_quota and raise RuntimeError with stderr on failure."""
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"exit code {result.returncode}"
+        raise RuntimeError(f"xfs_quota failed: {detail}")
+
+
 def set_project_quota(path: str, soft_kb: int, hard_kb: int, project_id: int) -> None:
     """Set XFS project quota for a given path."""
     mountpoint = _find_mountpoint(path)
@@ -31,32 +39,17 @@ def set_project_quota(path: str, soft_kb: int, hard_kb: int, project_id: int) ->
     _setup_project_files(path, project_id)
 
     # Initialize the project
-    subprocess.run(
-        ["xfs_quota", "-x", "-c", f"project -s {project_id}", mountpoint],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    _run_xfs_quota(["xfs_quota", "-x", "-c", f"project -s {project_id}", mountpoint])
 
     # Apply limits
     limit_cmd = f"limit -p bsoft={soft_kb}k bhard={hard_kb}k {project_id}"
-    subprocess.run(
-        ["xfs_quota", "-x", "-c", limit_cmd, mountpoint],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    _run_xfs_quota(["xfs_quota", "-x", "-c", limit_cmd, mountpoint])
 
 
 def set_user_quota(mountpoint: str, username: str, soft_kb: int, hard_kb: int) -> None:
     """Set XFS user quota for a given username on a mountpoint."""
     limit_cmd = f"limit -u bsoft={soft_kb}k bhard={hard_kb}k {username}"
-    subprocess.run(
-        ["xfs_quota", "-x", "-c", limit_cmd, mountpoint],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    _run_xfs_quota(["xfs_quota", "-x", "-c", limit_cmd, mountpoint])
 
 
 def _setup_project_files(path: str, project_id: int) -> None:
