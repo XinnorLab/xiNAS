@@ -811,10 +811,62 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
             lines.append(_box_line(f"  {_YLW}~ Initializing: {_progress_bar(init_progress)}{_NC}"))
 
         if extended:
-            lines.append(_box_line())
-            lines.append(_box_line(f"  {_DIM}Memory Usage{_NC}  |  {memory_mb} MB"))
-            lines.append(_box_line(f"  {_DIM}Block Size{_NC}    |  {block_size} bytes"))
+            _on_off = lambda v: f"{_GRN}Enabled{_NC}" if v else f"{_DIM}Disabled{_NC}"
 
+            # ── Priorities ──
+            lines.append(_box_line())
+            lines.append(_box_sep())
+            lines.append(_box_line(f" {_BLD}{_CYN}PRIORITIES{_NC}"))
+            lines.append(_box_sep())
+            init_p = arr.get("init_prio", "-")
+            recon_p = arr.get("recon_prio", "-")
+            restripe_p = arr.get("restripe_prio", "-")
+            lines.append(_box_line(f"  {_DIM}Init Priority{_NC}       |  {init_p}%"))
+            lines.append(_box_line(f"  {_DIM}Recon Priority{_NC}      |  {recon_p}%"))
+            lines.append(_box_line(f"  {_DIM}Restripe Priority{_NC}   |  {restripe_p}%"))
+
+            # ── Performance ──
+            lines.append(_box_line())
+            lines.append(_box_sep())
+            lines.append(_box_line(f" {_BLD}{_CYN}PERFORMANCE{_NC}"))
+            lines.append(_box_sep())
+            mem_limit = arr.get("memory_limit", 0)
+            mem_prealloc = arr.get("memory_prealloc", 0)
+            req_limit = arr.get("request_limit", 0)
+            cpu = arr.get("cpu_allowed") or "all"
+            lines.append(_box_line(f"  {_DIM}Memory Usage{_NC}        |  {memory_mb} MB"))
+            lines.append(_box_line(f"  {_DIM}Memory Limit{_NC}        |  {'unlimited' if not mem_limit else f'{mem_limit} MB'}"))
+            lines.append(_box_line(f"  {_DIM}Memory Pre-alloc{_NC}    |  {'disabled' if not mem_prealloc else f'{mem_prealloc} MB'}"))
+            lines.append(_box_line(f"  {_DIM}Block Size{_NC}          |  {block_size} bytes"))
+            lines.append(_box_line(f"  {_DIM}Request Limit{_NC}       |  {'unlimited' if not req_limit else req_limit}"))
+            lines.append(_box_line(f"  {_DIM}CPU Affinity{_NC}        |  {cpu}"))
+
+            # ── I/O Scheduler & Merge ──
+            lines.append(_box_line())
+            lines.append(_box_sep())
+            lines.append(_box_line(f" {_BLD}{_CYN}I/O SCHEDULER & MERGE{_NC}"))
+            lines.append(_box_sep())
+            sched = arr.get("sched_enabled", 0)
+            resync = arr.get("resync_enabled", 0)
+            mr_en = arr.get("merge_read_enabled", 0)
+            mw_en = arr.get("merge_write_enabled", 0)
+            adapt = arr.get("adaptive_merge", 0)
+            lines.append(_box_line(f"  {_DIM}Scheduler{_NC}           |  {_on_off(sched)}"))
+            lines.append(_box_line(f"  {_DIM}Resync{_NC}              |  {_on_off(resync)}"))
+            lines.append(_box_line(f"  {_DIM}Merge Read{_NC}          |  {_on_off(mr_en)}"))
+            lines.append(_box_line(f"  {_DIM}Merge Write{_NC}         |  {_on_off(mw_en)}"))
+            lines.append(_box_line(f"  {_DIM}Adaptive Merge{_NC}      |  {_on_off(adapt)}"))
+            mr_max = arr.get("merge_read_max")
+            mr_wait = arr.get("merge_read_wait")
+            mw_max = arr.get("merge_write_max")
+            mw_wait = arr.get("merge_write_wait")
+            if any(v is not None for v in (mr_max, mr_wait, mw_max, mw_wait)):
+                lines.append(_box_line(f"  {_DIM}Merge Read Max{_NC}      |  {mr_max or '-'} us"))
+                lines.append(_box_line(f"  {_DIM}Merge Read Wait{_NC}     |  {mr_wait or '-'} us"))
+                lines.append(_box_line(f"  {_DIM}Merge Write Max{_NC}     |  {mw_max or '-'} us"))
+                lines.append(_box_line(f"  {_DIM}Merge Write Wait{_NC}    |  {mw_wait or '-'} us"))
+
+            # ── Device Health & Wear ──
             health = arr.get("devices_health") or []
             wear = arr.get("devices_wear") or []
             if health or wear:
