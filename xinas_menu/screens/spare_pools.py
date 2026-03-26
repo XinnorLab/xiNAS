@@ -336,7 +336,7 @@ class SparePoolScreen(Screen):
     async def _add_drives(self) -> None:
         pool_names = await _get_pool_names(self.app.grpc)
         if not pool_names:
-            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error", ok_only=True))
             return
 
         pool = await self.app.push_screen_wait(
@@ -385,7 +385,7 @@ class SparePoolScreen(Screen):
     async def _remove_drives(self) -> None:
         pool_names = await _get_pool_names(self.app.grpc)
         if not pool_names:
-            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error", ok_only=True))
             return
 
         pool = await self.app.push_screen_wait(
@@ -440,7 +440,7 @@ class SparePoolScreen(Screen):
     async def _activate_pool(self) -> None:
         pool_names = await _get_pool_names(self.app.grpc)
         if not pool_names:
-            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error", ok_only=True))
             return
 
         pool = await self.app.push_screen_wait(
@@ -464,7 +464,7 @@ class SparePoolScreen(Screen):
     async def _deactivate_pool(self) -> None:
         pool_names = await _get_pool_names(self.app.grpc)
         if not pool_names:
-            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error", ok_only=True))
             return
 
         pool = await self.app.push_screen_wait(
@@ -498,7 +498,7 @@ class SparePoolScreen(Screen):
     async def _delete_pool(self) -> None:
         pool_names = await _get_pool_names(self.app.grpc)
         if not pool_names:
-            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error", ok_only=True))
             return
 
         pool = await self.app.push_screen_wait(
