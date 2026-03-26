@@ -58,6 +58,26 @@ message PoolRemove{
 }
 
 /**
+    * Activate the spare pool (load into memory).
+*/
+message PoolActivate{
+    /**
+        * The name of the spare pool.
+    */
+    string name = 1;
+}
+
+/**
+    * Deactivate the spare pool (unload from memory).
+*/
+message PoolDeactivate{
+    /**
+        * The name of the spare pool.
+    */
+    string name = 1;
+}
+
+/**
     * Show info on the spare pool.
 */
 message PoolShow{
