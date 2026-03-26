@@ -403,17 +403,17 @@ class SparePoolScreen(Screen):
 
         # Use checklist so user can pick which drives to remove
         drive_labels = [d.replace("/dev/", "") for d in drives]
-        selected_indices = await self.app.push_screen_wait(
+        selected_values = await self.app.push_screen_wait(
             ChecklistDialog(
-                drive_labels,
+                [(label, label, False) for label in drive_labels],
                 title=f"Remove Drives from '{pool}'",
                 prompt="Select drives to remove:",
             )
         )
-        if not selected_indices:
+        if not selected_values:
             return
 
-        selected_drives = [drives[i] for i in selected_indices]
+        selected_drives = [f"/dev/{v}" for v in selected_values]
 
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
