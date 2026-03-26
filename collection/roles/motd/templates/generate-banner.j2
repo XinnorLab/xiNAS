@@ -53,22 +53,6 @@ sparkline() {
 # Generate banner content
 generate_banner() {
     echo ""
-    echo ""
-
-    # Fancy header with gradient effect
-    echo -e "${BLUE}    ╔═══════════════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}    ║${NC}                                                                               ${BLUE}║${NC}"
-    echo -e "${BLUE}    ║${NC}    ${LIGHT_BLUE}██╗  ██╗${CYAN}██╗${LIGHT_CYAN}███╗   ██╗${GREEN} █████╗ ${LIGHT_GREEN}███████╗${NC}                                    ${BLUE}║${NC}"
-    echo -e "${BLUE}    ║${NC}    ${LIGHT_BLUE}╚██╗██╔╝${CYAN}██║${LIGHT_CYAN}████╗  ██║${GREEN}██╔══██╗${LIGHT_GREEN}██╔════╝${NC}                                    ${BLUE}║${NC}"
-    echo -e "${BLUE}    ║${NC}     ${LIGHT_BLUE}╚███╔╝ ${CYAN}██║${LIGHT_CYAN}██╔██╗ ██║${GREEN}███████║${LIGHT_GREEN}███████╗${NC}                                    ${BLUE}║${NC}"
-    echo -e "${BLUE}    ║${NC}     ${LIGHT_BLUE}██╔██╗ ${CYAN}██║${LIGHT_CYAN}██║╚██╗██║${GREEN}██╔══██║${LIGHT_GREEN}╚════██║${NC}                                    ${BLUE}║${NC}"
-    echo -e "${BLUE}    ║${NC}    ${LIGHT_BLUE}██╔╝ ██╗${CYAN}██║${LIGHT_CYAN}██║ ╚████║${GREEN}██║  ██║${LIGHT_GREEN}███████║${NC}                                    ${BLUE}║${NC}"
-    echo -e "${BLUE}    ║${NC}    ${LIGHT_BLUE}╚═╝  ╚═╝${CYAN}╚═╝${LIGHT_CYAN}╚═╝  ╚═══╝${GREEN}╚═╝  ╚═╝${LIGHT_GREEN}╚══════╝${NC}                                    ${BLUE}║${NC}"
-    echo -e "${BLUE}    ║${NC}                                                                               ${BLUE}║${NC}"
-    echo -e "${BLUE}    ║${NC}             ${WHITE}━━━━━ ${YELLOW}High-Performance NAS Server${WHITE} ━━━━━${NC}                        ${BLUE}║${NC}"
-    echo -e "${BLUE}    ║${NC}                                                                               ${BLUE}║${NC}"
-    echo -e "${BLUE}    ╚═══════════════════════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
 
     # Gather system info
     HOSTNAME=$(hostname -f 2>/dev/null || hostname)
