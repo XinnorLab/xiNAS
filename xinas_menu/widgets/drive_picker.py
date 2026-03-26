@@ -86,15 +86,19 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     #picker-buttons {
         layout: horizontal;
         align: center middle;
+        height: auto;
+        margin-top: 1;
+    }
+    #picker-buttons Button {
         height: 3;
+        border: none;
+        min-width: 12;
+        margin: 0 1;
     }
     #picker-buttons Button.-primary {
         background: #d4a574;
         color: #1c1c1c;
         text-style: bold;
-        border: none;
-        min-width: 12;
-        margin: 0 1;
     }
     #picker-buttons Button.-primary:hover,
     #picker-buttons Button.-primary:focus {
@@ -102,10 +106,7 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     }
     #picker-buttons Button.-default {
         background: #2a2a2a;
-        border: none;
         color: #999999;
-        min-width: 12;
-        margin: 0 1;
     }
     #picker-buttons Button.-default:hover,
     #picker-buttons Button.-default:focus {
