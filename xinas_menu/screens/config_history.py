@@ -284,29 +284,26 @@ class ConfigHistoryScreen(Screen):
         view.set_content(f"{_DIM}Creating baseline snapshot...{_NC}")
 
         try:
-            snapshot_id = await self.app.snapshots.record_baseline()
+            manifest = await engine.create_baseline(source="xinas_menu")
+            snapshot_id = manifest.id
         except Exception as exc:
-            view.set_content(f"{_RED}Baseline creation failed: {exc}{_NC}")
-            return
-
-        if snapshot_id:
-            view.set_content(
-                f"{_GRN}Baseline snapshot created successfully.{_NC}\n\n"
-                f"  Snapshot ID: {_CYN}{snapshot_id}{_NC}\n\n"
-                f"  {_DIM}This baseline captures the current system configuration as the{_NC}\n"
-                f"  {_DIM}reference point. All future changes will be tracked relative to it.{_NC}\n"
-                f"  {_DIM}You can now use rollback to return to this state.{_NC}"
-            )
-            try:
-                self.app.audit.log("history.create_baseline", snapshot_id, "OK")
-            except Exception:
-                pass
-        else:
             view.set_content(
                 f"{_RED}Baseline creation failed.{_NC}\n\n"
-                f"  {_DIM}Check logs for details. The xinas_history engine may{_NC}\n"
-                f"  {_DIM}not be properly configured.{_NC}"
+                f"  {_DIM}Error:{_NC} {exc}"
             )
+            return
+
+        view.set_content(
+            f"{_GRN}Baseline snapshot created successfully.{_NC}\n\n"
+            f"  Snapshot ID: {_CYN}{snapshot_id}{_NC}\n\n"
+            f"  {_DIM}This baseline captures the current system configuration as the{_NC}\n"
+            f"  {_DIM}reference point. All future changes will be tracked relative to it.{_NC}\n"
+            f"  {_DIM}You can now use rollback to return to this state.{_NC}"
+        )
+        try:
+            self.app.audit.log("history.create_baseline", snapshot_id, "OK")
+        except Exception:
+            pass
 
     # -- Reset to baseline --------------------------------------------------
 
