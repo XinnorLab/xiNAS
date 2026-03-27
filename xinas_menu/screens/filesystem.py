@@ -25,6 +25,7 @@ _MENU = [
     MenuItem("1", "Show Filesystems"),
     MenuItem("2", "Create Filesystem"),
     MenuItem("3", "Delete Filesystem"),
+    MenuItem("4", "Manage Quotas"),
     MenuItem("", "", separator=True),
     MenuItem("0", "Back"),
 ]
@@ -75,6 +76,7 @@ class FilesystemScreen(Screen):
             f"  {BLD}1{NC}  {CYN}Show Filesystems{NC}    {DIM}Display currently mounted XFS filesystems{NC}\n"
             f"  {BLD}2{NC}  {CYN}Create Filesystem{NC}   {DIM}Create optimized XFS on xiRAID arrays{NC}\n"
             f"  {BLD}3{NC}  {CYN}Delete Filesystem{NC}   {DIM}Unmount and remove XFS filesystem{NC}\n"
+            f"  {BLD}4{NC}  {CYN}Manage Quotas{NC}       {DIM}Enable/disable user & project quotas{NC}\n"
         )
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
@@ -87,6 +89,8 @@ class FilesystemScreen(Screen):
             self._create_filesystem_wizard()
         elif key == "3":
             self._delete_filesystem()
+        elif key == "4":
+            self._manage_quotas()
 
     # ── Show Filesystems ──────────────────────────────────────────────────
 
@@ -541,6 +545,179 @@ class FilesystemScreen(Screen):
             summary_parts.append(f"  Removed {len(removed_shares)} NFS share(s)")
         view.set_content("\n".join(summary_parts))
         self.app.notify("Filesystem unmounted and removed.", severity="information")
+
+    # ── Manage Quotas ──────────────────────────────────────────────────────
+
+    @work(exclusive=True)
+    async def _manage_quotas(self) -> None:
+        """Enable or disable XFS user/project quotas on a filesystem."""
+        from xinas_menu.utils.xfs_helpers import (
+            get_quota_status,
+            run_async_cmd,
+            update_mount_unit_quota,
+        )
+
+        view = self.query_one("#fs-content", ScrollableTextView)
+        view.set_content("  Scanning filesystems...")
+
+        GRN, RED, YLW, BLD, DIM, CYN, NC = (
+            "\033[32m", "\033[31m", "\033[33m", "\033[1m", "\033[2m", "\033[36m", "\033[0m",
+        )
+
+        # Discover XFS filesystems
+        ok, out, err = await run_async_cmd("findmnt", "-t", "xfs", "-J", timeout=10)
+        if not ok or not out:
+            view.set_content(f"  {DIM}No XFS filesystems found.{NC}")
+            return
+
+        try:
+            data = json.loads(out)
+            filesystems = data.get("filesystems", [])
+        except (json.JSONDecodeError, KeyError):
+            filesystems = []
+
+        if not filesystems:
+            view.set_content(f"  {DIM}No XFS filesystems found.{NC}")
+            return
+
+        # Build selection list with quota status
+        fs_labels = []
+        fs_list = []
+        for fs in filesystems:
+            target = fs.get("target", "?")
+            options = fs.get("options", "")
+            qs = get_quota_status(options)
+            status_parts = []
+            if qs["user"]:
+                status_parts.append(f"{GRN}user{NC}")
+            if qs["project"]:
+                status_parts.append(f"{GRN}project{NC}")
+            if not status_parts:
+                status_parts.append(f"{YLW}none{NC}")
+            label = f"{target}  [quotas: {', '.join(status_parts)}]"
+            fs_labels.append(label)
+            fs_list.append(fs)
+
+        # Show overview first
+        lines = [f"{BLD}{CYN}XFS Quota Status{NC}\n"]
+        for label in fs_labels:
+            lines.append(f"  {label}")
+        lines.append(f"\n  {DIM}Select a filesystem below to change quota settings.{NC}")
+        view.set_content("\n".join(lines))
+
+        # Select filesystem
+        # Use plain labels for SelectDialog (no ANSI)
+        plain_labels = []
+        for fs in fs_list:
+            target = fs.get("target", "?")
+            options = fs.get("options", "")
+            qs = get_quota_status(options)
+            parts = []
+            if qs["user"]:
+                parts.append("user")
+            if qs["project"]:
+                parts.append("project")
+            status = ", ".join(parts) if parts else "none"
+            plain_labels.append(f"{target}  (quotas: {status})")
+
+        choice = await self.app.push_screen_wait(
+            SelectDialog(
+                plain_labels,
+                title="Manage Quotas",
+                prompt="Select filesystem:",
+            )
+        )
+        if not choice:
+            return
+
+        idx = plain_labels.index(choice)
+        target_fs = fs_list[idx]
+        mountpoint = target_fs.get("target", "")
+        options = target_fs.get("options", "")
+        qs = get_quota_status(options)
+
+        # Show toggle options
+        actions = []
+        if not qs["user"]:
+            actions.append("Enable User Quotas (uquota)")
+        else:
+            actions.append("Disable User Quotas")
+        if not qs["project"]:
+            actions.append("Enable Project Quotas (pquota)")
+        else:
+            actions.append("Disable Project Quotas")
+        if not qs["user"] and not qs["project"]:
+            actions.append("Enable Both (user + project)")
+
+        action = await self.app.push_screen_wait(
+            SelectDialog(actions, title=f"Quotas — {mountpoint}", prompt="Select action:")
+        )
+        if not action:
+            return
+
+        # Determine what to toggle
+        enable_user: bool | None = None
+        enable_project: bool | None = None
+        if action.startswith("Enable User"):
+            enable_user = True
+        elif action.startswith("Disable User"):
+            enable_user = False
+        elif action.startswith("Enable Project"):
+            enable_project = True
+        elif action.startswith("Disable Project"):
+            enable_project = False
+        elif action.startswith("Enable Both"):
+            enable_user = True
+            enable_project = True
+
+        # Confirm
+        desc_parts = []
+        if enable_user is True:
+            desc_parts.append("enable user quotas")
+        elif enable_user is False:
+            desc_parts.append("disable user quotas")
+        if enable_project is True:
+            desc_parts.append("enable project quotas")
+        elif enable_project is False:
+            desc_parts.append("disable project quotas")
+
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(
+                f"Filesystem: {mountpoint}\n\n"
+                f"Action: {', '.join(desc_parts)}\n\n"
+                f"WARNING: XFS requires a full unmount/mount cycle to change\n"
+                f"quota settings. Active NFS clients may be briefly disconnected.",
+                "Confirm Quota Change",
+            )
+        )
+        if not confirmed:
+            return
+
+        view.set_content(f"  Updating quota settings on {mountpoint}...")
+
+        ok, err = await update_mount_unit_quota(
+            mountpoint, enable_user=enable_user, enable_project=enable_project,
+        )
+        if ok:
+            self.app.audit.log(
+                "fs.quota", f"{mountpoint}: {', '.join(desc_parts)}", "OK",
+            )
+            await self.app.snapshots.record(
+                "fs_modify",
+                diff_summary=f"Changed quotas on {mountpoint}: {', '.join(desc_parts)}",
+            )
+            view.set_content(
+                f"{BLD}{GRN}Quota settings updated.{NC}\n\n"
+                f"  Filesystem: {mountpoint}\n"
+                f"  Changed:    {', '.join(desc_parts)}\n\n"
+                f"  {DIM}Filesystem remounted. Quotas are now active.{NC}"
+            )
+            self.app.notify("Quota settings updated.", severity="information")
+        else:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Failed to update quotas:\n\n{err}", "Error", ok_only=True)
+            )
+            view.set_content(f"{RED}Failed to update quotas: {err}{NC}")
 
 
 def _parse_arrays(data: Any) -> list[dict]:

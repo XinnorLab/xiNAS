@@ -479,6 +479,20 @@ class UsersScreen(Screen):
         if ok:
             self.app.audit.log("user.quota", f"{username}@{export_path}", "OK")
             view.set_content(f"{_GRN}Quota set.{_NC}")
+        elif err and "not implemented" in err.lower():
+            await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"Quotas are not enabled on this filesystem.\n\n"
+                    f"Go to Storage → Filesystem → Manage Quotas\n"
+                    f"to enable user/project quotas on '{export_path}'.",
+                    "Quotas Not Enabled",
+                    ok_only=True,
+                )
+            )
+            view.set_content(
+                f"{_RED}Quotas not enabled on {export_path}.{_NC}\n\n"
+                f"  Enable via: Storage → Filesystem → Manage Quotas"
+            )
         else:
             view.set_content(f"{_RED}Failed: {err}{_NC}")
 

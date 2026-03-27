@@ -372,3 +372,107 @@ async def find_mounts_using_raid(array_name: str) -> list[dict]:
                         })
 
     return results
+
+
+# ── Quota management ─────────────────────────────────────────────────────
+
+def get_quota_status(mount_options: str) -> dict[str, bool]:
+    """Parse mount options string and return quota enablement flags.
+
+    Group quotas are parsed but not exposed in the TUI — XFS+NFS
+    setups use user and project quotas exclusively.
+    """
+    opts = {o.strip() for o in mount_options.split(",")}
+    return {
+        "user": bool(opts & {"uquota", "usrquota"}),
+        "project": bool(opts & {"pquota", "prjquota"}),
+        "group": bool(opts & {"gquota", "grpquota"}),
+    }
+
+
+async def update_mount_unit_quota(
+    mountpoint: str,
+    *,
+    enable_user: bool | None = None,
+    enable_project: bool | None = None,
+) -> tuple[bool, str]:
+    """Update quota mount options in the systemd mount unit and remount.
+
+    *enable_user*/*enable_project* — ``True`` to add, ``False`` to remove,
+    ``None`` to leave unchanged.
+
+    XFS cannot change quota options via ``mount -o remount`` — a full
+    unmount/mount cycle is required.  This function stops and restarts
+    the systemd mount unit.
+
+    Returns ``(ok, error_message)``.
+    """
+    unit_name = _path_to_unit_name(mountpoint) + ".mount"
+    unit_path = f"/etc/systemd/system/{unit_name}"
+
+    # Read existing unit
+    try:
+        with open(unit_path) as f:
+            content = f.read()
+    except FileNotFoundError:
+        return (False, f"Mount unit not found: {unit_path}")
+
+    # Parse Options= line
+    m = re.search(r"^Options=(.*)$", content, re.MULTILINE)
+    if not m:
+        return (False, "No Options= line found in mount unit")
+
+    opts = [o.strip() for o in m.group(1).split(",") if o.strip()]
+
+    # Always strip noquota when enabling any quota type (it conflicts with all)
+    if enable_user is True or enable_project is True:
+        opts = [o for o in opts if o != "noquota"]
+
+    # Remove quota options we're changing
+    if enable_user is not None:
+        opts = [o for o in opts if o not in ("uquota", "usrquota")]
+    if enable_project is not None:
+        opts = [o for o in opts if o not in ("pquota", "prjquota")]
+
+    # Add requested options
+    if enable_user is True:
+        opts.append("uquota")
+    if enable_project is True:
+        opts.append("pquota")
+
+    new_options = ",".join(opts)
+    new_content = re.sub(r"^Options=.*$", f"Options={new_options}", content, flags=re.MULTILINE)
+
+    # Write updated unit
+    try:
+        fd, tmp = tempfile.mkstemp(
+            dir="/etc/systemd/system", prefix=".xinas_mount_", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(new_content)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, unit_path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except Exception as exc:
+        return (False, f"Failed to write mount unit: {exc}")
+
+    # XFS requires full unmount/mount to change quota options (remount won't work)
+    ok, _, err = await run_async_cmd("systemctl", "daemon-reload", timeout=30)
+    if not ok:
+        return (False, f"daemon-reload failed: {err}")
+
+    ok, _, err = await run_async_cmd("systemctl", "stop", unit_name, timeout=60)
+    if not ok:
+        return (False, f"Failed to unmount: {err}")
+
+    ok, _, err = await run_async_cmd("systemctl", "start", unit_name, timeout=60)
+    if not ok:
+        return (False, f"Failed to remount: {err}")
+
+    return (True, "")
