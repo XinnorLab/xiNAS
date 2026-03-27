@@ -8,6 +8,15 @@
     group: root
     mode: '0700'
 
+- name: Purge existing config history on install
+  ansible.builtin.file:
+    path: "/var/lib/xinas/config-history/{{ item }}"
+    state: absent
+  loop:
+    - snapshots
+    - baseline
+    - state
+
 - name: Create config-history subdirectories
   ansible.builtin.file:
     path: "/var/lib/xinas/config-history/{{ item }}"
