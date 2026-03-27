@@ -105,6 +105,14 @@ service XRAIDService {
         * Show info on the spare pool.
     */
     rpc pool_show(PoolShow) returns (ResponseMessage) {};
+    /**
+        * Activate the spare pool (load into memory).
+    */
+    rpc pool_activate(PoolActivate) returns (ResponseMessage) {};
+    /**
+        * Deactivate the spare pool (unload from memory).
+    */
+    rpc pool_deactivate(PoolDeactivate) returns (ResponseMessage) {};
 
     /**
         * Create the RAID.
