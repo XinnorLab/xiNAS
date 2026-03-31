@@ -9,7 +9,8 @@ Ansible-based provisioning and management framework for high-performance NAS sto
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  User Interfaces                                         │
-│  • xinas_menu (Python Textual TUI) — post-deploy mgmt   │
+│  • xinas-menu (Python Textual TUI) — server management   │
+│  • xinas-client — NFS client setup and management         │
 │  • install.sh — one-command provisioning                  │
 ├──────────────────────────────────────────────────────────┤
 │  Configuration & History                                 │
