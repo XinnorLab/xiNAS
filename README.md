@@ -10,7 +10,7 @@ Ansible-based provisioning and management framework for high-performance NAS sto
 ┌──────────────────────────────────────────────────────────┐
 │  User Interfaces                                         │
 │  • xinas_menu (Python Textual TUI) — post-deploy mgmt   │
-│  • prepare_system.sh / simple_menu.sh — provisioning     │
+│  • install.sh — one-command provisioning                  │
 ├──────────────────────────────────────────────────────────┤
 │  Configuration & History                                 │
 │  • presets/ (YAML deployment profiles)                   │
