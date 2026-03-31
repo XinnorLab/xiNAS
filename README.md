@@ -30,44 +30,47 @@ Ansible-based provisioning and management framework for high-performance NAS sto
 
 ## Getting Started
 
-### 1. Prepare the Target Host
+### Server Installation
+
+Run on the target NAS server as root:
 
 ```bash
-./prepare_system.sh        # Installs dependencies (Ansible, yq v4, whiptail), opens simplified menu
-./prepare_system.sh -e     # Expert mode — full interactive menu
-./prepare_system.sh -u     # Update repository only (no menu)
+curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install.sh | sudo bash
 ```
 
-The simplified menu guides you through entering a license key and selecting a deployment preset.
-Expert mode (`-e`) opens the full menu with additional options: repository updates, data collection, preset management, and hostname configuration.
+This installs all dependencies (Ansible, yq, git), clones the repository to `/opt/xiNAS`, and launches the provisioning menu. The menu walks you through:
 
-### 2. Install
+1. **Collect system data** — gather hardware info and generate a hardware key
+2. **Enter license** — send the hardware key to `support@xinnor.io`, then enter the received license
+3. **Install** — choose a profile (Full NVMe / VM / Existing RAID) and deploy
 
-Choose **Install** from the menu. Ansible runs the `site.yml` playbook, executing all configured roles in order:
+Ansible runs the `site.yml` playbook, executing all configured roles in order:
 
 ```
 common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace
 → raid_fs → exports → nfs_server → xinas_history → perf_tuning → motd
 ```
 
-You can also run playbooks directly:
+### Client Installation
+
+Run on each NFS client machine as root:
 
 ```bash
-ansible-playbook playbooks/site.yml                          # Full deployment
-ansible-playbook playbooks/common.yml                        # Baseline only
-ansible-playbook playbooks/doca_ofed_install.yml             # NVIDIA OFED only
-ansible-playbook playbooks/site.yml --tags "nfs_server"      # Single role
+curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install_client.sh | sudo bash
 ```
 
-### 3. Post-Deployment Management
-
-After installation, the system is managed through the Python Textual TUI:
+This installs NFS tools and RDMA prerequisites, clones the client package, and registers the `xinas-client` command. The client setup wizard launches automatically. Run it again any time:
 
 ```bash
-python3 -m xinas_menu              # Management console
-python3 -m xinas_menu --setup      # Provisioning menu
-python3 -m xinas_menu --status     # Print system status (no TUI)
-python3 -m xinas_menu --no-welcome # Skip welcome screen
+sudo xinas-client
+```
+
+### Post-Deployment Management
+
+After installation, the server management console is always available:
+
+```bash
+sudo xinas-menu
 ```
 
 The TUI provides:
@@ -79,15 +82,7 @@ The TUI provides:
 - **Health** — Health check profiles, monitoring, alerts
 - **Config History** — Browse snapshots, diff versions, rollback
 
-## NFS Client Setup
-
-A standalone client package is available in `client_repo/`. It can be copied to a separate repository and used independently:
-
-```bash
-sudo ./client_setup.sh             # Interactive client configuration
-```
-
-Root privileges are required to install packages, create mount points, and mount exports. If DOCA OFED installation is selected, Ansible packages are installed automatically.
+See [install.MD](install.MD) for the full installation guide, settings reference, and troubleshooting.
 
 ## Key Directories
 
