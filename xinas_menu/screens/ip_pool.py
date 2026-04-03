@@ -31,7 +31,8 @@ _DIM = "\033[2m"
 _NC = "\033[0m"
 
 _CFG_PATH = Path("/etc/xinas/network-pool.json")
-_NETPLAN_PATH = Path("/etc/netplan/99-xinas-pool.yaml")
+_NETPLAN_PATH = Path("/etc/netplan/99-xinas.yaml")
+_OLD_POOL_PATH = Path("/etc/netplan/99-xinas-pool.yaml")
 
 _DEFAULTS = {
     "pool_enabled": True,
@@ -269,6 +270,13 @@ def _write_and_apply_netplan(netplan_content: str) -> tuple[bool, str]:
             raise
     except Exception as exc:
         return False, f"Failed to write netplan file: {exc}"
+
+    # Remove stale pool file from before the path was unified
+    try:
+        if _OLD_POOL_PATH.exists():
+            _OLD_POOL_PATH.unlink()
+    except OSError:
+        pass
 
     _flush_pbr_rules()
     try:

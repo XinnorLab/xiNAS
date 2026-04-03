@@ -16,3 +16,4 @@ keys/
 # Scripts dependencies
 scripts/node_modules/
 # End
+.worktrees/

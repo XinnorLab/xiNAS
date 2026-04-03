@@ -484,20 +484,13 @@ def _collect_network_info() -> str:
 
 
 def _read_netplan_file() -> tuple[str, str]:
-    search = ["/etc/netplan/99-xinas.yaml"]
-    try:
-        search += sorted(Path("/etc/netplan").glob("*.yaml"))
-        search += sorted(Path("/etc/netplan").glob("*.yml"))
-    except Exception:
-        _log.debug("failed to glob /etc/netplan", exc_info=True)
-    for p in search:
-        p = Path(p)
-        if p.exists():
-            try:
-                return str(p), p.read_text()
-            except Exception:
-                _log.debug("failed to read netplan file %s", p, exc_info=True)
-    return "", ""
+    cfg = Path("/etc/netplan/99-xinas.yaml")
+    if cfg.exists():
+        try:
+            return str(cfg), cfg.read_text()
+        except Exception:
+            _log.debug("failed to read %s", cfg, exc_info=True)
+    return str(cfg), "No xiNAS netplan configuration found.\nUse [2] Edit Interface IP Address to create one."
 
 
 def _update_netplan(iface: str, ip_cidr: str, gateway: str, mtu: int | None = None) -> tuple[bool, str]:

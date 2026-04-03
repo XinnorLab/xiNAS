@@ -15,6 +15,9 @@ _NETPLAN_DIR = Path("/etc/netplan")
 
 
 def _find_netplan_file() -> Path | None:
+    xinas_cfg = _NETPLAN_DIR / "99-xinas.yaml"
+    if xinas_cfg.exists():
+        return xinas_cfg
     files = sorted(_NETPLAN_DIR.glob("*.yaml")) + sorted(_NETPLAN_DIR.glob("*.yml"))
     return files[0] if files else None
 
