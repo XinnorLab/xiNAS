@@ -86,28 +86,28 @@ generate_banner() {
     fi
 
     # System section
-    echo -e "${CYAN}    ┌─────────────────────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${CYAN}    │${NC}  ${WHITE}${BOLD}⚙  SYSTEM${NC}                                                                    ${CYAN}│${NC}"
-    echo -e "${CYAN}    ├─────────────────────────────────────────────────────────────────────────────┤${NC}"
-    printf "${CYAN}    │${NC}  ${GRAY}Hostname${NC}    %-30b ${GRAY}Kernel${NC}  %-22b ${CYAN}│${NC}\n" "${GREEN}${HOSTNAME}${NC}" "${CYAN}${KERNEL}${NC}"
-    printf "${CYAN}    │${NC}  ${GRAY}Uptime${NC}      %-30b ${GRAY}NFS${NC}     %-22b ${CYAN}│${NC}\n" "${CYAN}${UPTIME}${NC}" "${NFSD_STATUS}"
-    echo -e "${CYAN}    └─────────────────────────────────────────────────────────────────────────────┘${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "      ${WHITE}${BOLD}⚙  SYSTEM${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
+    printf "      ${GRAY}Hostname${NC}    %-30b ${GRAY}Kernel${NC}  %-22b\n" "${GREEN}${HOSTNAME}${NC}" "${CYAN}${KERNEL}${NC}"
+    printf "      ${GRAY}Uptime${NC}      %-30b ${GRAY}NFS${NC}     %-22b\n" "${CYAN}${UPTIME}${NC}" "${NFSD_STATUS}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
     echo ""
 
     # Resources section
-    echo -e "${CYAN}    ┌─────────────────────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${CYAN}    │${NC}  ${WHITE}${BOLD}📊 RESOURCES${NC}                                                                  ${CYAN}│${NC}"
-    echo -e "${CYAN}    ├─────────────────────────────────────────────────────────────────────────────┤${NC}"
-    printf "${CYAN}    │${NC}  ${YELLOW}CPU${NC}  [$(progress_bar $CPU_USAGE 30)] %3d%%  ${GRAY}(${CPU_CORES} cores)${NC}                     ${CYAN}│${NC}\n" "$CPU_USAGE"
-    printf "${CYAN}    │${NC}  ${YELLOW}MEM${NC}  [$(progress_bar $MEM_PERCENT 30)] %3d%%  ${GRAY}(${MEM_USED_H} / ${MEM_TOTAL_H})${NC}                  ${CYAN}│${NC}\n" "$MEM_PERCENT"
-    printf "${CYAN}    │${NC}  ${YELLOW}LOAD${NC} ${CYAN}$(sparkline $LOAD1)$(sparkline $LOAD5)$(sparkline $LOAD15)${NC}  ${WHITE}${LOAD1}${NC} ${GRAY}/${NC} ${WHITE}${LOAD5}${NC} ${GRAY}/${NC} ${WHITE}${LOAD15}${NC}  ${GRAY}(1/5/15 min)${NC}                             ${CYAN}│${NC}\n"
-    echo -e "${CYAN}    └─────────────────────────────────────────────────────────────────────────────┘${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "      ${WHITE}${BOLD}📊 RESOURCES${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
+    printf "      ${YELLOW}CPU${NC}  [$(progress_bar $CPU_USAGE 30)] %3d%%  ${GRAY}(${CPU_CORES} cores)${NC}\n" "$CPU_USAGE"
+    printf "      ${YELLOW}MEM${NC}  [$(progress_bar $MEM_PERCENT 30)] %3d%%  ${GRAY}(${MEM_USED_H} / ${MEM_TOTAL_H})${NC}\n" "$MEM_PERCENT"
+    printf "      ${YELLOW}LOAD${NC} ${CYAN}$(sparkline $LOAD1)$(sparkline $LOAD5)$(sparkline $LOAD15)${NC}  ${WHITE}${LOAD1}${NC} ${GRAY}/${NC} ${WHITE}${LOAD5}${NC} ${GRAY}/${NC} ${WHITE}${LOAD15}${NC}  ${GRAY}(1/5/15 min)${NC}\n"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
     echo ""
 
     # Network section
-    echo -e "${CYAN}    ┌─────────────────────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${CYAN}    │${NC}  ${WHITE}${BOLD}🌐 NETWORK${NC}                                                                    ${CYAN}│${NC}"
-    echo -e "${CYAN}    ├─────────────────────────────────────────────────────────────────────────────┤${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "      ${WHITE}${BOLD}🌐 NETWORK${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
 
     net_count=0
     for iface in $(ls /sys/class/net/ 2>/dev/null | grep -v '^lo$' | sort); do
@@ -151,18 +151,18 @@ generate_banner() {
             state_icon="${RED}○${NC}"
         fi
 
-        printf "${CYAN}    │${NC}  ${state_icon} %-10b ${badge_icon} [${badge}]  %-18b  ${speed_str}                       ${CYAN}│${NC}\n" "$iface" "$ip_addr"
+        printf "      ${state_icon} %-10b ${badge_icon} [${badge}]  %-18b  ${speed_str}\n" "$iface" "$ip_addr"
         ((net_count++))
     done
 
-    [[ $net_count -eq 0 ]] && echo -e "${CYAN}    │${NC}  ${GRAY}No network interfaces configured${NC}                                          ${CYAN}│${NC}"
-    echo -e "${CYAN}    └─────────────────────────────────────────────────────────────────────────────┘${NC}"
+    [[ $net_count -eq 0 ]] && echo -e "      ${GRAY}No network interfaces configured${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
     echo ""
 
     # RAID section
-    echo -e "${CYAN}    ┌─────────────────────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${CYAN}    │${NC}  ${WHITE}${BOLD}💾 RAID ARRAYS${NC}                                                                ${CYAN}│${NC}"
-    echo -e "${CYAN}    ├─────────────────────────────────────────────────────────────────────────────┤${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "      ${WHITE}${BOLD}💾 RAID ARRAYS${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
 
     if command -v xicli &> /dev/null; then
         raid_json=$(xicli raid show -f json 2>/dev/null)
@@ -211,28 +211,28 @@ except Exception as e:
     print(f'ERROR|{e}')
 " 2>/dev/null | while IFS='|' read -r icon name level size state_color state; do
                 if [[ "$icon" == "EMPTY" ]]; then
-                    echo -e "${CYAN}    │${NC}  ${GRAY}No RAID arrays configured${NC}                                                  ${CYAN}│${NC}"
+                    echo -e "      ${GRAY}No RAID arrays configured${NC}"
                 elif [[ "$icon" == "ERROR" ]]; then
-                    echo -e "${CYAN}    │${NC}  ${RED}Error reading RAID status${NC}                                                  ${CYAN}│${NC}"
+                    echo -e "      ${RED}Error reading RAID status${NC}"
                 else
                     [[ "$icon" == "✓" ]] && icon_color="${GREEN}" || icon_color="${YELLOW}"
                     [[ "$icon" == "✗" ]] && icon_color="${RED}"
-                    printf "${CYAN}    │${NC}  ${icon_color}${icon}${NC}  %-12s ${GRAY}RAID${NC}${WHITE}%-2s${NC}   ${CYAN}%-10s${NC}  ${state_color}%-10s${NC}              ${CYAN}│${NC}\n" "$name" "$level" "$size" "$state"
+                    printf "      ${icon_color}${icon}${NC}  %-12s ${GRAY}RAID${NC}${WHITE}%-2s${NC}   ${CYAN}%-10s${NC}  ${state_color}%-10s${NC}\n" "$name" "$level" "$size" "$state"
                 fi
             done
         else
-            echo -e "${CYAN}    │${NC}  ${GRAY}No RAID arrays configured${NC}                                                  ${CYAN}│${NC}"
+            echo -e "      ${GRAY}No RAID arrays configured${NC}"
         fi
     else
-        echo -e "${CYAN}    │${NC}  ${GRAY}xiRAID not installed${NC}                                                        ${CYAN}│${NC}"
+        echo -e "      ${GRAY}xiRAID not installed${NC}"
     fi
-    echo -e "${CYAN}    └─────────────────────────────────────────────────────────────────────────────┘${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
     echo ""
 
     # NFS Shares section
-    echo -e "${CYAN}    ┌─────────────────────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${CYAN}    │${NC}  ${WHITE}${BOLD}📁 NFS SHARES${NC}                                                                 ${CYAN}│${NC}"
-    echo -e "${CYAN}    ├─────────────────────────────────────────────────────────────────────────────┤${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "      ${WHITE}${BOLD}📁 NFS SHARES${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
 
     share_count=0
     if [[ -f /etc/exports ]]; then
@@ -267,16 +267,16 @@ except Exception as e:
                 # Color based on usage
                 [[ $percent -ge 90 ]] && pct_color=$RED || { [[ $percent -ge 70 ]] && pct_color=$YELLOW || pct_color=$GREEN; }
 
-                printf "${CYAN}    │${NC}  ${GREEN}●${NC}  %-25s ${GRAY}${bar}${NC} ${pct_color}%3d%%${NC} ${GRAY}(${used}/${total})${NC}     ${CYAN}│${NC}\n" "$share_path" "$percent"
+                printf "      ${GREEN}●${NC}  %-25s ${GRAY}${bar}${NC} ${pct_color}%3d%%${NC} ${GRAY}(${used}/${total})${NC}\n" "$share_path" "$percent"
             else
-                printf "${CYAN}    │${NC}  ${RED}○${NC}  %-25s ${GRAY}not mounted${NC}                             ${CYAN}│${NC}\n" "$share_path"
+                printf "      ${RED}○${NC}  %-25s ${GRAY}not mounted${NC}\n" "$share_path"
             fi
             ((share_count++))
         done < /etc/exports
     fi
 
-    [[ $share_count -eq 0 ]] && echo -e "${CYAN}    │${NC}  ${GRAY}No NFS shares configured${NC}                                                  ${CYAN}│${NC}"
-    echo -e "${CYAN}    └─────────────────────────────────────────────────────────────────────────────┘${NC}"
+    [[ $share_count -eq 0 ]] && echo -e "      ${GRAY}No NFS shares configured${NC}"
+    echo -e "${CYAN}    ─────────────────────────────────────────────────────────────────────────────${NC}"
     echo ""
 
     # Footer
