@@ -73,7 +73,7 @@ echo -e "  ${DIM}─────────────────────
 echo ""
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
-read -p "  Ready to begin? [Y/n] " -n 1 -r
+read -p "  Ready to begin? [Y/n] " -n 1 -r </dev/tty
 echo ""
 if [[ $REPLY =~ ^[Nn]$ ]]; then
     echo ""
@@ -98,7 +98,7 @@ if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     if [[ "$ID" != "ubuntu" ]]; then
         warn "xiNAS is designed for Ubuntu — detected: ${BOLD}$PRETTY_NAME${NC}"
-        read -p "     Continue anyway? [y/N] " -n 1 -r
+        read -p "     Continue anyway? [y/N] " -n 1 -r </dev/tty
         echo ""
         [[ ! $REPLY =~ ^[Yy]$ ]] && exit 1
     else
