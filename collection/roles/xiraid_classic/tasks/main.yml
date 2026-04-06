@@ -28,8 +28,8 @@
         mode: '0644'
         force: no
       register: xiraid_repo_dl
-      retries: 3
-      delay: 5
+      retries: 5
+      delay: 10
       until: xiraid_repo_dl is succeeded
 
   rescue:
@@ -37,8 +37,8 @@
       ansible.builtin.command:
         cmd: "wget -q -O /tmp/{{ xiraid_repo_pkg }} {{ xiraid_repo_pkg_url }}"
       register: xiraid_repo_dl
-      retries: 3
-      delay: 5
+      retries: 5
+      delay: 10
       until: xiraid_repo_dl.rc == 0
 
   tags: [xiraid, download]
