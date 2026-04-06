@@ -20,12 +20,22 @@
   tags: [xiraid, cleanup]
 
 - name: Download xiRAID repo package
-  ansible.builtin.get_url:
-    url: "{{ xiraid_repo_pkg_url }}"
-    dest: "/tmp/{{ xiraid_repo_pkg }}"
-    mode: '0644'
-    force: no
-  register: xiraid_repo_dl
+  block:
+    - name: Download xiRAID repo package (get_url)
+      ansible.builtin.get_url:
+        url: "{{ xiraid_repo_pkg_url }}"
+        dest: "/tmp/{{ xiraid_repo_pkg }}"
+        mode: '0644'
+        force: no
+      register: xiraid_repo_dl
+
+  rescue:
+    - name: Download xiRAID repo package (wget fallback)
+      ansible.builtin.command:
+        cmd: "wget -q -O /tmp/{{ xiraid_repo_pkg }} {{ xiraid_repo_pkg_url }}"
+        creates: "/tmp/{{ xiraid_repo_pkg }}"
+      register: xiraid_repo_dl
+
   tags: [xiraid, download]
 
 - name: Install xiRAID repo package
