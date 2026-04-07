@@ -750,9 +750,16 @@ Esc = Back to previous step" "10.10.1.$i" ) || { ((step--)); ip_ok=false; break;
         4)  # Step 4: Share path (auto-discover via showmount)
             share_path=""
             local showmount_ok=false
-            if command -v showmount &>/dev/null; then
-                local sm_output
-                sm_output=$(timeout 10 showmount -e "${server_ips[0]}" 2>/dev/null) || true
+            if command -v showmount &>/dev/null && command -v timeout &>/dev/null; then
+                # Run showmount in background so Ctrl+C remains responsive
+                local sm_tmpfile="$TMP_DIR/.showmount_out"
+                timeout 5 showmount -e "${server_ips[0]}" > "$sm_tmpfile" 2>/dev/null &
+                local sm_pid=$!
+                wait "$sm_pid" 2>/dev/null || true
+                local sm_output=""
+                [[ -f "$sm_tmpfile" ]] && sm_output=$(cat "$sm_tmpfile") || true
+                rm -f "$sm_tmpfile"
+
                 if [[ -n "$sm_output" ]]; then
                     # Parse exports: skip header, extract path (first field)
                     local -a export_paths=()
