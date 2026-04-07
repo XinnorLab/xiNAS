@@ -3066,7 +3066,7 @@ Warning: This may briefly disrupt network connectivity."; then
             op_start "Apply Network Config (Manual)"
             op_step "backup + write netplan" 0
             info_box "Applying..." "Applying network configuration..."
-            op_run "netplan apply" netplan apply || true
+            op_run "netplan apply" timeout 30 netplan apply || true
             sleep 2
             local _iface_info=""
             _iface_info=$(ip -o -4 addr show 2>/dev/null | grep -v '127.0.0.1' | awk '{print $2, $4}' | tr '\n' ', ' || true)
@@ -3178,7 +3178,7 @@ EOF
 
         info_box "Applying..." "Applying network configuration..."
 
-        op_run "netplan apply" netplan apply || true
+        op_run "netplan apply" timeout 30 netplan apply || true
         sleep 2
         local _iface_info=""
         _iface_info=$(ip -o -4 addr show 2>/dev/null | grep -v '127.0.0.1' | awk '{print $2, $4}' | tr '\n' ', ' || true)
