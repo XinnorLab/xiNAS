@@ -133,6 +133,16 @@ fi
 # Initialize operation log
 _op_log_init
 
+# Fix netplan file permissions on first run (netplan warns if not 600)
+for _np_file in /etc/netplan/*.yaml; do
+    [[ -f "$_np_file" ]] || continue
+    _np_perms=$(stat -c '%a' "$_np_file" 2>/dev/null) || true
+    if [[ "$_np_perms" != "600" ]]; then
+        chmod 600 "$_np_file" 2>/dev/null || true
+    fi
+done
+unset _np_file _np_perms
+
 # Locate client_healthcheck.sh (check multiple locations)
 _find_client_healthcheck() {
     local paths=(
