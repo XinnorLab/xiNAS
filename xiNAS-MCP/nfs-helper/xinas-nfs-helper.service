@@ -2,7 +2,7 @@
 Description=xiNAS NFS Helper Daemon
 Documentation=https://github.com/xinnor/xiNAS
 After=network.target nfs-kernel-server.service
-Wants=nfs-kernel-server.service
+Requires=nfs-kernel-server.service
 
 [Service]
 Type=simple

@@ -129,6 +129,43 @@ export interface ServiceState {
   state: string;
 }
 
+export interface NfsReadiness {
+  ready: boolean;
+  blocking: string[];
+}
+
+/**
+ * Check that the NFS serving stack is operational:
+ * 1. nfs-kernel-server package installed (exportfs binary exists)
+ * 2. nfs-server.service active
+ * 3. xinas-nfs-helper.service active
+ */
+export function checkNfsReadiness(): NfsReadiness {
+  const blocking: string[] = [];
+
+  if (!fs.existsSync('/usr/sbin/exportfs')) {
+    blocking.push(
+      'nfs-kernel-server package is not installed (missing /usr/sbin/exportfs)'
+    );
+  }
+
+  const nfsServer = getServiceState('nfs-server');
+  if (!nfsServer.active) {
+    blocking.push(
+      `nfs-server.service is ${nfsServer.state} — NFS daemon is not running`
+    );
+  }
+
+  const helper = getServiceState('xinas-nfs-helper');
+  if (!helper.active) {
+    blocking.push(
+      `xinas-nfs-helper.service is ${helper.state} — NFS helper daemon is not running`
+    );
+  }
+
+  return { ready: blocking.length === 0, blocking };
+}
+
 /** Check if a systemd service is active by inspecting cgroup state */
 export function getServiceState(serviceName: string): ServiceState {
   // Check /sys/fs/cgroup for systemd slice

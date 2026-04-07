@@ -215,6 +215,24 @@ def run_server() -> None:
     os.chmod(SOCKET_PATH, 0o660)
     server.listen(64)
 
+    # Startup health check: warn if NFS server is not operational
+    if not os.path.isfile("/usr/sbin/exportfs"):
+        log.warning(
+            "nfs-kernel-server does not appear to be installed "
+            "(missing /usr/sbin/exportfs). Export operations will fail."
+        )
+    else:
+        try:
+            result = subprocess.run(
+                ["exportfs", "-s"], capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                log.warning("exportfs -s returned non-zero: %s", result.stderr.strip())
+            else:
+                log.info("exportfs -s OK — NFS server appears functional")
+        except Exception as e:
+            log.warning("exportfs startup check failed: %s", e)
+
     log.info("xinas-nfs-helper listening on %s", SOCKET_PATH)
 
     def shutdown(signum, frame):

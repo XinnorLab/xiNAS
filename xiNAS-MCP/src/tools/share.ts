@@ -11,6 +11,7 @@ import { resolveController } from '../server/controllerResolver.js';
 import type { ExportEntry, ClientSpec } from '../types/nfs.js';
 import type { PlanResult, Mode } from '../types/common.js';
 import { McpToolError, ErrorCode } from '../types/common.js';
+import { checkNfsReadiness } from '../os/systemInfo.js';
 
 // --- Schemas ---
 
@@ -111,6 +112,10 @@ export async function handleShareCreate(params: z.infer<typeof ShareCreateSchema
       const blockingResources: string[] = [];
       const warnings: string[] = [];
 
+      // Check NFS serving stack is operational
+      const nfs = checkNfsReadiness();
+      blockingResources.push(...nfs.blocking);
+
       // Check path exists
       if (!fs.existsSync(params.path)) {
         blockingResources.push(`Path does not exist: ${params.path}`);
@@ -182,31 +187,40 @@ export async function handleShareUpdatePolicy(params: z.infer<typeof ShareUpdate
 
   return applyWithPlan(mode, {
     preflight: async () => {
-      const existing = await listExports();
-      const exp = existing.find(e => e.path === params.share_id);
-      if (!exp) {
-        return {
-          mode: 'plan' as const,
-          description: `Update policy for '${params.share_id}'`,
-          changes: [],
-          warnings: [],
-          preflight_passed: false,
-          blocking_resources: [`Export '${params.share_id}' not found`],
-        } satisfies PlanResult;
+      const blockingResources: string[] = [];
+      const warnings: string[] = [];
+
+      // Check NFS serving stack is operational
+      const nfs = checkNfsReadiness();
+      blockingResources.push(...nfs.blocking);
+
+      // Check export exists
+      let exp: ExportEntry | undefined;
+      try {
+        const existing = await listExports();
+        exp = existing.find(e => e.path === params.share_id);
+        if (!exp) {
+          blockingResources.push(`Export '${params.share_id}' not found`);
+        }
+      } catch {
+        if (nfs.ready) {
+          blockingResources.push(`Cannot verify export '${params.share_id}' — nfs-helper unreachable`);
+        }
       }
 
       return {
         mode: 'plan' as const,
         description: `Update NFS export policy for '${params.share_id}'`,
-        changes: [{
-          action: 'modify',
+        changes: exp ? [{
+          action: 'modify' as const,
           resource_type: 'nfs_export',
           resource_id: params.share_id,
           before: exp,
           after: { ...exp, ...params },
-        }],
-        warnings: [],
-        preflight_passed: true,
+        }] : [],
+        warnings,
+        preflight_passed: blockingResources.length === 0,
+        ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
       } satisfies PlanResult;
     },
 
@@ -240,6 +254,10 @@ export async function handleShareDelete(params: z.infer<typeof ShareDeleteSchema
     preflight: async () => {
       const blockingResources: string[] = [];
       const warnings: string[] = [];
+
+      // Check NFS serving stack is operational
+      const nfs = checkNfsReadiness();
+      blockingResources.push(...nfs.blocking);
 
       if (!params.dangerous) {
         blockingResources.push('dangerous=true is required to delete an NFS export');
