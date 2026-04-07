@@ -791,11 +791,11 @@ Esc = Back to previous step" "10.10.1.$i" ) || { ((step--)); ip_ok=false; break;
                 fi
             fi
 
-            if [[ "$showmount_ok" != "true" || "$share_path" == "__manual__" ]]; then
-                local sm_note=""
-                [[ "$showmount_ok" != "true" ]] && sm_note="\n(Auto-discovery unavailable for ${server_ips[0]})\n"
+            if [[ "$showmount_ok" != "true" ]]; then
                 share_path=$(input_box "Step 4/7: Share Path" "\
-Enter the NFS export path on the server:${sm_note}
+Enter the NFS export path on the server:
+(Auto-discovery unavailable for ${server_ips[0]})
+
   /              - Root export (default, fsid=0)
   /mnt/data      - Specific data volume
 
@@ -803,6 +803,17 @@ Tip: Use / for the root export unless your
 server has multiple named exports.
 
 Esc = Back to previous step" "/" ) || { ((step--)); continue; }
+            elif [[ "$share_path" == "__manual__" ]]; then
+                share_path=$(input_box "Step 4/7: Share Path" "\
+Enter the NFS export path on the server:
+
+  /              - Root export (default, fsid=0)
+  /mnt/data      - Specific data volume
+
+Tip: Use / for the root export unless your
+server has multiple named exports.
+
+Esc = Back to export list" "/" ) || continue
             fi
 
             [[ -z "$share_path" ]] && share_path="/"
