@@ -747,10 +747,47 @@ Esc = Back to previous step" "10.10.1.$i" ) || { ((step--)); ip_ok=false; break;
             num_ips=${#server_ips[@]}
             ((step++))
             ;;
-        4)  # Step 4: Share path
-            share_path=$(input_box "Step 4/7: Share Path" "\
-Enter the NFS export path on the server:
+        4)  # Step 4: Share path (auto-discover via showmount)
+            share_path=""
+            local showmount_ok=false
+            if command -v showmount &>/dev/null; then
+                local sm_output
+                sm_output=$(timeout 10 showmount -e "${server_ips[0]}" 2>/dev/null)
+                if [[ $? -eq 0 && -n "$sm_output" ]]; then
+                    # Parse exports: skip header, extract path (first field)
+                    local -a export_paths=()
+                    local -a menu_args=()
+                    while IFS= read -r line; do
+                        [[ "$line" =~ ^Export\ list ]] && continue
+                        [[ -z "$line" ]] && continue
+                        local epath
+                        epath=$(echo "$line" | awk '{print $1}')
+                        [[ -n "$epath" ]] && export_paths+=("$epath")
+                    done <<< "$sm_output"
 
+                    if [[ ${#export_paths[@]} -gt 0 ]]; then
+                        # Build menu_select args: path + allowed-clients description
+                        for epath in "${export_paths[@]}"; do
+                            local edesc
+                            edesc=$(echo "$sm_output" | grep "^${epath}" | awk '{$1=""; print $0}' | sed 's/^ *//')
+                            [[ -z "$edesc" ]] && edesc="(no access restriction shown)"
+                            menu_args+=("$epath" "$edesc")
+                        done
+                        menu_args+=("__manual__" "Enter path manually...")
+
+                        share_path=$(menu_select "Step 4/7: Share Path" \
+                            "Exports discovered on ${server_ips[0]}: Esc=Back" \
+                            "${menu_args[@]}") || { ((step--)); continue; }
+                        showmount_ok=true
+                    fi
+                fi
+            fi
+
+            if [[ "$showmount_ok" != "true" || "$share_path" == "__manual__" ]]; then
+                local sm_note=""
+                [[ "$showmount_ok" != "true" ]] && sm_note="\n(Auto-discovery unavailable for ${server_ips[0]})\n"
+                share_path=$(input_box "Step 4/7: Share Path" "\
+Enter the NFS export path on the server:${sm_note}
   /              - Root export (default, fsid=0)
   /mnt/data      - Specific data volume
 
@@ -758,6 +795,7 @@ Tip: Use / for the root export unless your
 server has multiple named exports.
 
 Esc = Back to previous step" "/" ) || { ((step--)); continue; }
+            fi
 
             [[ -z "$share_path" ]] && share_path="/"
             ((step++))
