@@ -752,11 +752,12 @@ Esc = Back to previous step" "10.10.1.$i" ) || { ((step--)); ip_ok=false; break;
             local showmount_ok=false
             if command -v showmount &>/dev/null; then
                 local sm_output
-                sm_output=$(timeout 10 showmount -e "${server_ips[0]}" 2>/dev/null)
-                if [[ $? -eq 0 && -n "$sm_output" ]]; then
+                sm_output=$(timeout 10 showmount -e "${server_ips[0]}" 2>/dev/null) || true
+                if [[ -n "$sm_output" ]]; then
                     # Parse exports: skip header, extract path (first field)
                     local -a export_paths=()
                     local -a menu_args=()
+                    local line
                     while IFS= read -r line; do
                         [[ "$line" =~ ^Export\ list ]] && continue
                         [[ -z "$line" ]] && continue
@@ -769,7 +770,7 @@ Esc = Back to previous step" "10.10.1.$i" ) || { ((step--)); ip_ok=false; break;
                         # Build menu_select args: path + allowed-clients description
                         for epath in "${export_paths[@]}"; do
                             local edesc
-                            edesc=$(echo "$sm_output" | grep "^${epath}" | awk '{$1=""; print $0}' | sed 's/^ *//')
+                            edesc=$(echo "$sm_output" | grep "^${epath}" | awk '{$1=""; print $0}' | sed 's/^ *//') || true
                             [[ -z "$edesc" ]] && edesc="(no access restriction shown)"
                             menu_args+=("$epath" "$edesc")
                         done
