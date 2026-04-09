@@ -1073,6 +1073,27 @@ No = Go back and change settings"; then
     [[ "$add_to_fstab" == "yes" ]] && _mount_summary+=", persistent"
     op_end "$_mount_summary" "" "Protocol: $proto_desc\nConnections: $conn_desc" || true
 
+    # Show explicit error when all mounts failed
+    if [[ ${#successful_mounts[@]} -eq 0 ]]; then
+        local fail_detail=""
+        for fm in "${failed_mounts[@]}"; do
+            fail_detail+="  • $fm\n"
+        done
+        msg_box "Mount Failed" "\
+All ${num_ips} mount attempt(s) failed.
+
+${fail_detail}
+Possible causes:
+  - Server ACL does not allow this client
+  - Export path does not exist on the server
+  - Network/firewall blocking NFS traffic
+  - Wrong protocol (RDMA vs TCP)
+
+Check server-side export settings or contact
+your NAS administrator."
+        return 1
+    fi
+
     # Detect and inform about root_squash status
     if [[ ${#successful_mounts[@]} -gt 0 ]]; then
         local squash_status
