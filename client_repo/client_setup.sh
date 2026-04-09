@@ -1075,11 +1075,86 @@ No = Go back and change settings"; then
 
     # Show explicit error when all mounts failed
     if [[ ${#successful_mounts[@]} -eq 0 ]]; then
-        local fail_detail=""
+        # Detect "No such file or directory" — likely fsid=0 pseudo-root
+        local has_noent=false
         for fm in "${failed_mounts[@]}"; do
-            fail_detail+="  • $fm\n"
+            if [[ "$fm" == *"No such file or directory"* ]]; then
+                has_noent=true
+                break
+            fi
         done
-        msg_box "Mount Failed" "\
+
+        if [[ "$has_noent" == "true" && "$share_path" != "/" ]]; then
+            if yes_no "Mount Failed — Try Root Export?" "\
+Mount failed with 'No such file or directory'.
+
+This usually means the server uses fsid=0, which
+makes the export a pseudo-root. Your server likely
+exports ${share_path} as the NFSv4 root.
+
+Would you like to retry mounting with '/' instead
+of '${share_path}'?
+
+(This is the correct path for fsid=0 exports)"; then
+                # Retry with root export path
+                share_path="/"
+                mount_opts="${mount_opts//,share_path=*/}"
+                failed_mounts=()
+                successful_mounts=()
+
+                op_start "Mount NFS: / (fsid=0 retry)" "Protocol: $proto_desc, IPs: $num_ips"
+
+                for ((i=0; i<num_ips; i++)); do
+                    local current_ip="${server_ips[$i]}"
+                    info_box "Retrying..." "Connecting to $current_ip ($((i+1))/$num_ips) with /..."
+                    local mount_cmd="mount -t nfs -o $mount_opts $current_ip:/ $mount_point"
+                    if $mount_cmd > "$mount_log" 2>&1; then
+                        successful_mounts+=("$current_ip → $mount_point")
+                        op_step "mount $current_ip" 0
+                    else
+                        failed_mounts+=("$current_ip: $(cat "$mount_log")")
+                        op_step "mount $current_ip" 1 "$(cat "$mount_log" | head -1)"
+                    fi
+                done
+
+                # Add to fstab with corrected path
+                if [[ "$add_to_fstab" == "yes" && ${#successful_mounts[@]} -gt 0 ]]; then
+                    sed -i "\|^.*[[:space:]]${mount_point}[[:space:]]|d" /etc/fstab 2>/dev/null || true
+                    for ((i=0; i<${#successful_mounts[@]}; i++)); do
+                        local fstab_ip="${server_ips[$i]}"
+                        echo "$fstab_ip:/ $mount_point nfs $mount_opts 0 0" >> /etc/fstab
+                    done
+                    op_step "add to fstab" 0
+                fi
+
+                op_verify "mountpoint active" mountpoint -q "$mount_point" || true
+                local _retry_summary="${#successful_mounts[@]}/${num_ips} IP(s) mounted"
+                [[ "$add_to_fstab" == "yes" ]] && _retry_summary+=", persistent"
+                op_end "$_retry_summary" "" "Protocol: $proto_desc\nShare: / (fsid=0)" || true
+
+                if [[ ${#successful_mounts[@]} -eq 0 ]]; then
+                    local fail_detail=""
+                    for fm in "${failed_mounts[@]}"; do
+                        fail_detail+="  • $fm\n"
+                    done
+                    msg_box "Mount Failed" "\
+All ${num_ips} retry attempt(s) also failed.
+
+${fail_detail}
+Check server-side export settings or contact
+your NAS administrator."
+                    return 0
+                fi
+                # Retry succeeded — fall through to root_squash check
+            else
+                return 0
+            fi
+        else
+            local fail_detail=""
+            for fm in "${failed_mounts[@]}"; do
+                fail_detail+="  • $fm\n"
+            done
+            msg_box "Mount Failed" "\
 All ${num_ips} mount attempt(s) failed.
 
 ${fail_detail}
@@ -1091,7 +1166,8 @@ Possible causes:
 
 Check server-side export settings or contact
 your NAS administrator."
-        return 0
+            return 0
+        fi
     fi
 
     # Detect and inform about root_squash status
