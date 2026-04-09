@@ -1091,7 +1091,7 @@ Possible causes:
 
 Check server-side export settings or contact
 your NAS administrator."
-        return 1
+        return 0
     fi
 
     # Detect and inform about root_squash status
