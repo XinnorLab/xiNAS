@@ -638,6 +638,25 @@ IDMAPEOF" || true
     op_end "Domain: ${_domain_check}" "Domain Configured" || true
 }
 
+detect_root_squash() {
+    local mp="$1"
+    local test_file="$mp/.xinas_squash_test_$$"
+    if touch "$test_file" 2>/dev/null; then
+        local owner_uid
+        owner_uid=$(stat -c '%u' "$test_file" 2>/dev/null) || { rm -f "$test_file" 2>/dev/null; echo "unknown"; return; }
+        rm -f "$test_file" 2>/dev/null
+        if [[ "$owner_uid" == "65534" ]]; then
+            echo "root_squash"
+        elif [[ "$owner_uid" == "0" ]]; then
+            echo "no_root_squash"
+        else
+            echo "unknown"
+        fi
+    else
+        echo "unknown"
+    fi
+}
+
 configure_nfs_mount() {
     # Check if NFS tools are installed
     if ! command -v mount.nfs4 &>/dev/null; then
@@ -1053,6 +1072,29 @@ No = Go back and change settings"; then
     local _mount_summary="${#successful_mounts[@]}/${num_ips} IP(s) mounted"
     [[ "$add_to_fstab" == "yes" ]] && _mount_summary+=", persistent"
     op_end "$_mount_summary" "" "Protocol: $proto_desc\nConnections: $conn_desc" || true
+
+    # Detect and inform about root_squash status
+    if [[ ${#successful_mounts[@]} -gt 0 ]]; then
+        local squash_status
+        squash_status=$(detect_root_squash "$mount_point")
+        if [[ "$squash_status" == "root_squash" ]]; then
+            msg_box "Root Squash Detected" "\
+This server uses root_squash.
+
+Files created by root on this client will be owned
+by 'nobody' (UID 65534) on the server.
+
+Use a regular user account for file operations,
+or ask your NAS administrator to enable
+no_root_squash if full root access is needed."
+        elif [[ "$squash_status" == "no_root_squash" ]]; then
+            msg_box "No Root Squash" "\
+This server uses no_root_squash.
+
+Root on this client has full root access to
+files on the NFS share."
+        fi
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
