@@ -65,6 +65,13 @@
   register: xiraid_pkgs
   tags: [xiraid, install]
 
+- name: Ensure /etc/xiraid directory exists
+  ansible.builtin.file:
+    path: /etc/xiraid
+    state: directory
+    mode: '0755'
+  tags: [xiraid, install]
+
 - name: Accept xiRAID EULA
   ansible.builtin.command: xicli settings eula modify -s accepted
   when: xiraid_accept_eula | bool
