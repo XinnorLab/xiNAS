@@ -37,11 +37,22 @@
     mode: '0644'
     directory_mode: '0755'
 
+- name: Ensure python3-venv is installed
+  ansible.builtin.apt:
+    name: python3-venv
+    state: present
+
+- name: Create shared venv if absent
+  ansible.builtin.command:
+    cmd: python3 -m venv /opt/xiNAS/venv
+    creates: /opt/xiNAS/venv/bin/python
+
 - name: Install xinas_history into shared venv
   ansible.builtin.pip:
     name:
       - pyyaml
     virtualenv: /opt/xiNAS/venv
+    virtualenv_command: python3 -m venv
     state: present
 
 - name: Create xinas-history CLI wrapper
@@ -53,3 +64,16 @@
     owner: root
     group: root
     mode: '0755'
+
+- name: Create baseline snapshot
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/xinas-history
+      snapshot create
+      --source installer
+      --operation install
+      --type baseline
+      --preset "{{ preset | default('') }}"
+  register: baseline_result
+  changed_when: baseline_result.rc == 0
+  failed_when: false
