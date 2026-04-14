@@ -163,19 +163,12 @@ fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
-echo -e "  ${GREEN}╔═══════════════════════════════════════════════════════╗${NC}"
-echo -e "  ${GREEN}║${NC}  ${GREEN}${BOLD}✓  xiNAS client installed successfully!${NC}              ${GREEN}║${NC}"
-echo -e "  ${GREEN}║${NC}                                                       ${GREEN}║${NC}"
-echo -e "  ${GREEN}║${NC}  ${DIM}Directory :${NC}  ${WHITE}${INSTALL_DIR}${NC}              ${GREEN}║${NC}"
-echo -e "  ${GREEN}║${NC}  ${DIM}Command   :${NC}  ${CYAN}sudo xinas-client${NC}                    ${GREEN}║${NC}"
-echo -e "  ${GREEN}╚═══════════════════════════════════════════════════════╝${NC}"
+echo -e "  ${GREEN}═══════════════════════════════════════════════════════${NC}"
+echo -e "  ${GREEN}${BOLD}✓  xiNAS client installed successfully!${NC}"
 echo ""
-echo -e "  ${WHITE}${BOLD}Quick mount example:${NC}"
-echo -e "  ${DIM}───────────────────────────────────────────────────────${NC}"
-echo -e "     ${CYAN}sudo xinas-client${NC}  ${DIM}# interactive wizard${NC}"
-echo -e "     ${CYAN}mount -t nfs -o vers=4.1,proto=rdma,port=20049 \\${NC}"
-echo -e "           ${CYAN}<server-ip>:/mnt/data /mnt/nas${NC}  ${DIM}# manual mount${NC}"
-echo -e "  ${DIM}───────────────────────────────────────────────────────${NC}"
+echo -e "  ${DIM}Directory :${NC}  ${WHITE}${INSTALL_DIR}${NC}"
+echo -e "  ${DIM}Command   :${NC}  ${CYAN}sudo xinas-client${NC}"
+echo -e "  ${GREEN}═══════════════════════════════════════════════════════${NC}"
 echo ""
 
 # ── Launch wizard ─────────────────────────────────────────────────────────────
