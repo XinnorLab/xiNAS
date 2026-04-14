@@ -175,6 +175,38 @@ echo ""
 
 ./prepare_system.sh
 
+# ── Ensure xinas-menu wrapper exists ─────────────────────────────────────────
+# The xinas_menu Ansible role creates this during full provisioning (site.yml).
+# Bootstrap it here so the command works immediately, even if the user exited
+# the provisioning menu early.
+if [[ ! -x /usr/local/bin/xinas-menu ]]; then
+    step "Setting up management console"
+    apt-get install -y python3-venv -qq 2>/dev/null || true
+    if [[ ! -d "$INSTALL_DIR/venv/bin" ]]; then
+        python3 -m venv "$INSTALL_DIR/venv"
+    fi
+    "$INSTALL_DIR/venv/bin/pip" install -q "textual>=0.70.0" "pyyaml>=6.0" 2>/dev/null || true
+
+    cat > /usr/local/bin/xinas-menu <<WEOF
+#!/bin/sh
+# xiNAS Management Console wrapper
+# Managed by xinas_menu Ansible role — do not edit manually
+PYTHONPATH=$INSTALL_DIR \\
+  exec $INSTALL_DIR/venv/bin/python -m xinas_menu "\$@"
+WEOF
+    chmod 755 /usr/local/bin/xinas-menu
+
+    cat > /usr/local/bin/xinas-setup <<WEOF
+#!/bin/sh
+# xiNAS Setup (provisioning) wrapper
+# Managed by xinas_menu Ansible role — do not edit manually
+PYTHONPATH=$INSTALL_DIR \\
+  exec $INSTALL_DIR/venv/bin/python -m xinas_menu --setup "\$@"
+WEOF
+    chmod 755 /usr/local/bin/xinas-setup
+    ok "xinas-menu command installed"
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 _W=55
