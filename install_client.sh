@@ -148,7 +148,8 @@ fi
 
 chmod +x "$INSTALL_DIR/client_repo/client_setup.sh"
 
-ln -sf "$INSTALL_DIR/client_repo/client_setup.sh" /usr/local/bin/xinas-client 2>/dev/null || true
+mkdir -p /usr/local/bin
+ln -sf "$INSTALL_DIR/client_repo/client_setup.sh" /usr/local/bin/xinas-client
 ok "Command registered: ${WHITE}${BOLD}xinas-client${NC}"
 
 # ── Step 4: NFS tuning ────────────────────────────────────────────────────────
