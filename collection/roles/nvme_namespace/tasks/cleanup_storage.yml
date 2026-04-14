@@ -33,7 +33,7 @@
 
 - name: Extract unique VGs from PVs
   ansible.builtin.set_fact:
-    nvme_found_lvm_vgs: "{{ nvme_found_lvm_pvs | map('split', '|') | map('last') | select('ne', '') | unique | list }}"
+    nvme_found_lvm_vgs: "{{ nvme_found_lvm_pvs | map('regex_replace', '^.*\\|', '') | select('ne', '') | unique | list }}"
   when: nvme_found_lvm_pvs | length > 0
 
 # ============ DETECT MD RAID ============
