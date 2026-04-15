@@ -73,7 +73,10 @@ echo -e "  ${DIM}─────────────────────
 echo ""
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
-read -p "  Ready to begin? [Y/n] " -n 1 -r </dev/tty
+echo -e "  ${DIM}The installer will set up required packages${NC}"
+echo -e "  ${DIM}(git, Ansible, yq) and launch the provisioning menu.${NC}"
+echo ""
+read -p "  Ready to proceed? [Y/n] " -n 1 -r </dev/tty
 echo ""
 if [[ $REPLY =~ ^[Nn]$ ]]; then
     echo ""
