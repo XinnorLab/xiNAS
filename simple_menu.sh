@@ -7,6 +7,7 @@ TMP_DIR="$(mktemp -d)"
 REPO_DIR="$(pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 trap 'rm -rf "$TMP_DIR"' EXIT
+trap '' INT   # Ignore Ctrl+C — menus handle cancellation via Esc/Back
 
 # Source the menu library
 source "$SCRIPT_DIR/lib/menu_lib.sh"
@@ -545,7 +546,11 @@ show_welcome() {
     echo -e "    ${DIM}Need help?${NC} ${CYAN}support@xinnor.io${NC}"
     echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
     echo ""
-    read -p "    Press Enter to continue..." -r
+    read -p "    Press Enter to continue or Q to exit... " -n 1 -r </dev/tty
+    echo ""
+    if [[ $REPLY =~ ^[Qq]$ ]]; then
+        exit 2
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
