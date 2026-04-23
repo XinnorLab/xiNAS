@@ -1296,7 +1296,54 @@ Make sure no programs are using this mount."; then
 # DOCA OFED Installation
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Returns 0 if a Mellanox/NVIDIA NIC (PCI vendor 15b3) is present, 1 otherwise.
+# On success, prints a short description of the first match to stdout.
+detect_mellanox_nic() {
+    local match=""
+    if command -v lspci &>/dev/null; then
+        match=$(lspci -d 15b3: -nn 2>/dev/null | head -n1)
+        [[ -n "$match" ]] && { echo "$match"; return 0; }
+    fi
+    local v
+    for v in /sys/bus/pci/devices/*/vendor; do
+        [[ -r "$v" ]] || continue
+        if grep -qi '^0x15b3$' "$v" 2>/dev/null; then
+            echo "$(basename "$(dirname "$v")") (vendor 0x15b3)"
+            return 0
+        fi
+    done
+    local iface driver
+    for iface in /sys/class/net/*; do
+        [[ -L "$iface/device/driver" ]] || continue
+        driver=$(basename "$(readlink -f "$iface/device/driver")")
+        if [[ "$driver" == "mlx5_core" || "$driver" == "mlx4_core" ]]; then
+            echo "$(basename "$iface") (driver $driver)"
+            return 0
+        fi
+    done
+    if [[ -d /sys/class/infiniband ]] && [[ -n "$(ls /sys/class/infiniband/ 2>/dev/null)" ]]; then
+        echo "IB device(s): $(ls /sys/class/infiniband/ | tr '\n' ' ')"
+        return 0
+    fi
+    return 1
+}
+
 install_doca_ofed() {
+    # Hardware gate: only install if a Mellanox/NVIDIA NIC is detected
+    local _mlx_hw
+    if ! _mlx_hw=$(detect_mellanox_nic); then
+        msg_box "DOCA OFED — Skipped" "\
+No Mellanox / NVIDIA network adapter detected on this host.
+
+DOCA OFED provides drivers for Mellanox/NVIDIA ConnectX
+and BlueField cards. Installing it on a system without
+such hardware has no effect and is being skipped.
+
+If you believe a card is present but not detected,
+check 'lspci | grep -i mellanox' and re-run."
+        return 0
+    fi
+
     # Check if already installed
     if [[ -d /sys/class/infiniband ]] && command -v ibstat &>/dev/null; then
         local ib_devices
@@ -3459,7 +3506,9 @@ advanced_settings_menu() {
             nfs_indicator=" [OK]"
         fi
 
-        if [[ ! -d /sys/class/infiniband ]] || [[ -z "$(ls /sys/class/infiniband/ 2>/dev/null)" ]]; then
+        if ! detect_mellanox_nic >/dev/null 2>&1; then
+            doca_indicator=" [No Mellanox NIC]"
+        elif [[ ! -d /sys/class/infiniband ]] || [[ -z "$(ls /sys/class/infiniband/ 2>/dev/null)" ]]; then
             doca_indicator=" [Not Installed]"
         else
             doca_indicator=" [OK]"

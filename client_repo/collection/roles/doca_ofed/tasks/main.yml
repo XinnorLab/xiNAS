@@ -1,3 +1,27 @@
+- name: Detect Mellanox/NVIDIA NIC (PCI vendor 15b3)
+  ansible.builtin.shell: |
+    set -o pipefail
+    if command -v lspci >/dev/null 2>&1; then
+      lspci -d 15b3: -nn | grep -q . && exit 0
+    fi
+    for v in /sys/bus/pci/devices/*/vendor; do
+      [ -r "$v" ] && grep -qi '0x15b3' "$v" && exit 0
+    done
+    exit 1
+  args:
+    executable: /bin/bash
+  register: mlx_nic_check
+  changed_when: false
+  failed_when: false
+  check_mode: no
+  tags: [ofed, detect]
+
+- name: Report no Mellanox NIC — skipping DOCA OFED
+  ansible.builtin.debug:
+    msg: "No Mellanox/NVIDIA NIC detected (PCI vendor 15b3) — DOCA OFED install skipped."
+  when: mlx_nic_check.rc != 0
+  tags: [ofed, detect]
+
 - name: Ensure build dependencies are present
   ansible.builtin.apt:
     name:
@@ -6,12 +30,14 @@
       - linux-headers-{{ ansible_kernel }}
       - libelf-dev
     state: present
+  when: mlx_nic_check.rc == 0
   tags: [ofed, deps]
 
 - name: Add Mellanox GPG key
   ansible.builtin.apt_key:
     url: "{{ doca_repo_base }}/GPG-KEY-Mellanox.pub"
     state: present
+  when: mlx_nic_check.rc == 0
   tags: [ofed, repo]
 
 - name: Add DOCA-OFED APT repo
@@ -20,12 +46,15 @@
     filename: "mellanox-doca"
     state: present
   register: repo_added
+  when: mlx_nic_check.rc == 0
   tags: [ofed, repo]
 
 - name: Update APT cache (if repo added)
   ansible.builtin.apt:
     update_cache: yes
-  when: repo_added is changed
+  when:
+    - mlx_nic_check.rc == 0
+    - repo_added is changed
   tags: [ofed, repo]
 
 - name: Install DOCA-OFED packages
@@ -35,11 +64,15 @@
     update_cache: yes
   register: ofed_pkgs
   notify: restart openibd
+  when: mlx_nic_check.rc == 0
   tags: [ofed, install]
 
 - name: Reboot if kernel modules built and reboot requested
   ansible.builtin.reboot:
     msg: "Reboot after DOCA-OFED install (role doca_ofed)"
     reboot_timeout: 1200
-  when: ofed_pkgs is changed and doca_ofed_auto_reboot | bool
+  when:
+    - mlx_nic_check.rc == 0
+    - ofed_pkgs is changed
+    - doca_ofed_auto_reboot | bool
   tags: [ofed, reboot]
