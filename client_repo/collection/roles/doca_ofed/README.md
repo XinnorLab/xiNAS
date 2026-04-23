@@ -4,6 +4,25 @@ firmware updater (`mlnx-fw-updater`) from the official DOCA APT repository
 on Ubuntu. Defaults to the `latest` repo alias so each run pulls the most
 recent DOCA-Host release.
 
+### Hardware gate
+
+Every task in the role is gated on a Mellanox/NVIDIA NIC being present. The
+first task looks for PCI vendor `15b3` — via `lspci -d 15b3:` when `lspci`
+exists, otherwise by reading `/sys/bus/pci/devices/*/vendor` — and registers
+the result. When nothing matches, the role emits a single
+`No Mellanox/NVIDIA NIC detected … skipped` debug line and every subsequent
+task (build deps, signing key, APT repo, cache update, package install,
+reboot) is skipped. The detection task itself is `failed_when: false`, so a
+host without `lspci` and without a readable sysfs is treated as "no NIC"
+rather than a failure.
+
+Without the gate, a client with no ConnectX/BlueField card still added the
+DOCA repo, installed `doca-all`, built DKMS modules against the running
+kernel, and — with `doca_ofed_auto_reboot` — rebooted, all for drivers it
+has no hardware to drive. `client_setup.sh` applies the same gate at the
+menu level: the DOCA entry shows `[No Mellanox NIC]` and the action explains
+the skip instead of running the playbook.
+
 The repo's signing key is fetched from the component dir's `doca_keyring.gpg`
 (`<doca_repo_base>/<doca_repo_component>/doca_keyring.gpg`, a binary keyring) into
 `/etc/apt/trusted.gpg.d/mellanox-doca.gpg`. NVIDIA rotated the DOCA-Host key to
