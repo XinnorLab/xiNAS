@@ -280,6 +280,8 @@ reuse_existing_arrays() {
         while IFS='|' read -r name level dev_count strip state dev_list; do
             printf "%-12s %-8s %-8s %-10s %-10s\n" "$name" "RAID$level" "$dev_count" "${strip}KB" "$state"
         done < "$arrays_file"
+        echo ""
+        echo "(press Q to continue)"
     } > "$display_file"
     text_box "💾 Existing RAID Arrays" "$display_file"
 
