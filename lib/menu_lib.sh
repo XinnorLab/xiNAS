@@ -1003,14 +1003,48 @@ xinas_run_playbook() {
     fi
 
     if [ "$rc" -ne 0 ]; then
-        if declare -F msg_box >/dev/null 2>&1; then
-            msg_box "Installation Failed" \
-"Installation failed (exit ${rc}).\n\nPlease run 'Collect System Data' from the menu —\nthe diagnostic archive uploads automatically to\nsupport@xinnor.io.\n\nFull log: ${log_path}"
-        else
-            printf '\n  Installation failed (exit %s).\n' "$rc" >&2
-            printf '  Run ./collect_data.sh — the archive uploads automatically.\n' >&2
-            printf '  Full log: %s\n\n' "$log_path" >&2
-        fi
+        while true; do
+            local choice=""
+            if command -v whiptail >/dev/null 2>&1; then
+                choice=$(whiptail --title "Installation Failed" \
+                    --menu "Installation failed (exit ${rc}).\n\nFull log: ${log_path}" \
+                    16 70 3 \
+                    "collect" "Collect Logs (auto-uploads diagnostic archive)" \
+                    "view"    "View Log (opens less +G on full output)" \
+                    "close"   "Continue (return to menu)" \
+                    3>&1 1>&2 2>&3) || choice="close"
+            else
+                # No whiptail (very rare — e.g. very early bootstrap before
+                # prepare_system.sh installed it). Fall back to plain prompt.
+                printf '\n  Installation failed (exit %s).\n' "$rc" >&2
+                printf '  [c]ollect logs / [v]iew log / [q]uit: ' >&2
+                read -r ans
+                case "$ans" in
+                    c|C) choice="collect" ;;
+                    v|V) choice="view" ;;
+                    *)   choice="close" ;;
+                esac
+            fi
+
+            case "$choice" in
+                view)
+                    if [ -r "$log_path" ] && command -v less >/dev/null 2>&1; then
+                        less +G "$log_path"
+                    elif [ -r "$log_path" ]; then
+                        # less missing — fall back to whiptail textbox if available
+                        if command -v whiptail >/dev/null 2>&1; then
+                            whiptail --title "Install Log" --textbox "$log_path" 24 100
+                        else
+                            printf '\n  Log file: %s\n' "$log_path" >&2
+                        fi
+                    fi
+                    # Loop back to dialog
+                    ;;
+                collect|close|*)
+                    break
+                    ;;
+            esac
+        done
     fi
 
     # Restore caller's shell options before returning.
