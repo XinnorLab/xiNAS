@@ -894,6 +894,64 @@ print_status() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# _xinas_playbook_ticker — awk filter that compresses PLAY/TASK headers into a
+# single overwriting status line. Errors and warnings pass through verbatim so
+# they remain visible inline.
+# ═══════════════════════════════════════════════════════════════════════════════
+_xinas_playbook_ticker() {
+    awk '
+    BEGIN {
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        sp_n = 10
+        sp_i = 0
+        # ANSI: \r = carriage return; \033[K = clear to end of line
+        CR = "\r"
+        EL = "\033[K"
+    }
+    /^[[:space:]]*PLAY \[/ {
+        match($0, /PLAY \[[^]]*\]/)
+        play = substr($0, RSTART, RLENGTH)
+        sp_i = (sp_i + 1) % sp_n
+        glyph = substr(spinner, sp_i*3+1, 3)
+        printf "%s%s %s %s%s", CR, EL, glyph, play, EL
+        fflush()
+        next
+    }
+    /^[[:space:]]*TASK \[/ {
+        match($0, /TASK \[[^]]*\]/)
+        task = substr($0, RSTART, RLENGTH)
+        sp_i = (sp_i + 1) % sp_n
+        glyph = substr(spinner, sp_i*3+1, 3)
+        printf "%s%s %s %s%s", CR, EL, glyph, task, EL
+        fflush()
+        next
+    }
+    /^fatal:/ || /^failed:/ || /ERROR!/ {
+        printf "\n%s\n", $0
+        fflush()
+        next
+    }
+    /^PLAY RECAP/ {
+        printf "\n%s\n", $0
+        fflush()
+        in_recap = 1
+        next
+    }
+    in_recap == 1 {
+        # Pass recap host lines through verbatim
+        print
+        fflush()
+        next
+    }
+    # All other lines: swallow (full content is in the install log file)
+    { next }
+    END {
+        printf "\n"
+    }
+    '
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # xinas_run_playbook — wraps ansible-playbook with persistent log + failure prompt
 # ═══════════════════════════════════════════════════════════════════════════════
 #
@@ -930,7 +988,7 @@ xinas_run_playbook() {
             "$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')" "$*" "$PWD"
     } >>"$log_path" 2>/dev/null || true
 
-    ansible-playbook "$@" 2>&1 | tee -a "$log_path"
+    ansible-playbook "$@" 2>&1 | tee -a "$log_path" | _xinas_playbook_ticker
     rc=${PIPESTATUS[0]}
 
     if [ "$rc" -ne 0 ]; then
