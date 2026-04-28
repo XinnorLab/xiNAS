@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import os
+import shlex
 from pathlib import Path
 from typing import Sequence
 
@@ -10,6 +12,32 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Button, Label, RichLog
+
+_INSTALL_LOG_PRIMARY = "/var/log/xinas/install.log"
+_INSTALL_LOG_FALLBACK = "/tmp/xinas-install.log"
+
+
+def _open_install_log(cmd: list[str], workdir: str):
+    """Open the install-log file in append mode. Try primary, fall back to /tmp.
+
+    Returns (file_handle, path_used) or (None, None) if both paths fail.
+    """
+    for path in (_INSTALL_LOG_PRIMARY, _INSTALL_LOG_FALLBACK):
+        try:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, mode=0o755, exist_ok=True)
+            fh = open(path, "ab")
+            header = (
+                f"\n=== {datetime.datetime.now().isoformat(timespec='seconds')} "
+                f"| argv: {shlex.join(cmd)} | cwd: {workdir} ===\n"
+            )
+            fh.write(header.encode())
+            fh.flush()
+            return fh, path
+        except OSError:
+            continue
+    return None, None
 
 
 class PlaybookRunScreen(Screen[int]):
@@ -56,6 +84,15 @@ class PlaybookRunScreen(Screen[int]):
         env.setdefault("ANSIBLE_FORCE_COLOR", "1")
         env.setdefault("PYTHONUNBUFFERED", "1")
 
+        log_fh, log_path = _open_install_log(self._cmd, self._workdir)
+        if log_path is None:
+            log.write(
+                "[yellow]⚠ Could not open install log; "
+                "output will not be saved to disk.[/yellow]"
+            )
+        else:
+            log.write(f"[dim]Saving output to {log_path}[/dim]")
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *self._cmd,
@@ -66,6 +103,12 @@ class PlaybookRunScreen(Screen[int]):
             )
             assert proc.stdout is not None
             async for raw in proc.stdout:
+                if log_fh is not None:
+                    try:
+                        log_fh.write(raw)
+                        log_fh.flush()
+                    except OSError:
+                        pass
                 line = raw.decode(errors="replace").rstrip()
                 # Color-code Ansible output
                 if "PLAY RECAP" in line or "ok=" in line:
@@ -84,11 +127,19 @@ class PlaybookRunScreen(Screen[int]):
             log.write(f"[red]Failed to run playbook: {exc}[/red]")
             self._exit_code = 255
         finally:
+            if log_fh is not None:
+                try:
+                    log_fh.close()
+                except OSError:
+                    pass
             self._running = False
             if self._exit_code == 0:
                 status.update("  [green]✓ Playbook completed successfully.[/green]")
             else:
-                status.update(f"  [red]✗ Playbook failed (exit {self._exit_code}).[/red]")
+                status.update(
+                    f"  [red]✗ Playbook failed (exit {self._exit_code}). "
+                    f"Run Collect Logs and email to support@xinnor.io.[/red]"
+                )
             close_btn.disabled = False
             self.app.audit.log(
                 "playbook.run",
