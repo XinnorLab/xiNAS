@@ -275,6 +275,8 @@ reuse_existing_arrays() {
     # Display arrays to user
     local display_file="$TMP_DIR/array_display.txt"
     {
+        echo "I found existing RAID arrays on this system:"
+        echo ""
         printf "%-12s %-8s %-8s %-10s %-10s\n" "NAME" "LEVEL" "DRIVES" "STRIP" "STATE"
         printf "%-12s %-8s %-8s %-10s %-10s\n" "────" "─────" "──────" "─────" "─────"
         while IFS='|' read -r name level dev_count strip state dev_list; do
