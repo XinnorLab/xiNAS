@@ -96,4 +96,17 @@ class InstallScreen(Screen):
             await self.app.snapshots.record_baseline(preset=preset)
             self.app.notify("Installation completed successfully!", severity="information")
         else:
-            self.app.notify(f"Installation failed (exit {exit_code}). Check the log above.", severity="error")
+            go_collect = await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"Installation failed (exit {exit_code}).\n\n"
+                    "Please run Collect Logs -> Collect All, then email\n"
+                    "the resulting archive (/tmp/<host>-logs-*.tgz) to\n"
+                    "support@xinnor.io so we can investigate.",
+                    title="Installation Failed",
+                    yes_label="Go to Collect Logs",
+                    no_label="Close",
+                )
+            )
+            if go_collect:
+                from xinas_menu.screens.collect_logs import CollectLogsScreen
+                self.app.push_screen(CollectLogsScreen())
