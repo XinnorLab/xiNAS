@@ -40,6 +40,12 @@ main() {
     [ -x ./hwkey ] || chmod +x ./hwkey
     ./hwkey > "$tmp/hwkey.txt" 2>&1 || true
 
+    # Install logs (playbook output captured by xinas_run_playbook + bootstrap)
+    cp /var/log/xinas/install.log "$tmp/install-playbook.log" 2>/dev/null || \
+        echo "(file not found)" > "$tmp/install-playbook.log"
+    cp /tmp/xinas-install.log "$tmp/install-bootstrap.log" 2>/dev/null || \
+        echo "(file not found)" > "$tmp/install-bootstrap.log"
+
     # NUMA node for each disk
     for dev in $(lsblk -ndo NAME,TYPE | awk '$2=="disk"{print $1}'); do
         node_file="/sys/block/$dev/device/numa_node"

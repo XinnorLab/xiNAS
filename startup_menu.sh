@@ -315,7 +315,7 @@ configure_git_repo() {
 run_playbook() {
     local playbook="${1:-$REPO_DIR/playbooks/site.yml}"
     local inventory="${2:-inventories/lab.ini}"
-    ansible-playbook "$playbook" -i "$inventory" -v
+    xinas_run_playbook "$playbook" -i "$inventory" -v
     return $?
 }
 
@@ -325,9 +325,9 @@ run_playbook_with_vars() {
     local extra_vars="${2:-}"
     local inventory="inventories/lab.ini"
     if [[ -n "$extra_vars" ]]; then
-        ansible-playbook "$playbook" -i "$inventory" -v -e "$extra_vars"
+        xinas_run_playbook "$playbook" -i "$inventory" -v -e "$extra_vars"
     else
-        ansible-playbook "$playbook" -i "$inventory" -v
+        xinas_run_playbook "$playbook" -i "$inventory" -v
     fi
     return $?
 }

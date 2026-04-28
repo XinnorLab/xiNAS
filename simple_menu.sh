@@ -168,7 +168,7 @@ enter_license() {
 run_playbook() {
     local playbook="${1:-$REPO_DIR/playbooks/site.yml}"
     local inventory="${2:-inventories/lab.ini}"
-    ansible-playbook "$playbook" -i "$inventory" -v
+    xinas_run_playbook "$playbook" -i "$inventory" -v
     return $?
 }
 

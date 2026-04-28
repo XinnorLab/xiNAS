@@ -892,3 +892,45 @@ print_status() {
             ;;
     esac
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# xinas_run_playbook — wraps ansible-playbook with persistent log + failure prompt
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Tees ansible-playbook output to /var/log/xinas/install.log (falling back to
+# /tmp/xinas-install.log when the primary path is not writable). On non-zero
+# exit, shows a msg_box telling the operator to run "Collect System Data" and
+# email the archive to support@xinnor.io.
+#
+# Usage:  xinas_run_playbook <playbook> [args...]
+# Returns: ansible-playbook's exit code (not tee's).
+xinas_run_playbook() {
+    local log_path rc
+
+    if mkdir -p /var/log/xinas 2>/dev/null && touch /var/log/xinas/install.log 2>/dev/null; then
+        log_path=/var/log/xinas/install.log
+    else
+        log_path=/tmp/xinas-install.log
+        : >>"$log_path" 2>/dev/null || true
+    fi
+
+    {
+        printf '\n=== %s | argv: ansible-playbook %s | cwd: %s ===\n' \
+            "$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')" "$*" "$PWD"
+    } >>"$log_path" 2>/dev/null || true
+
+    ansible-playbook "$@" 2>&1 | tee -a "$log_path"
+    rc=${PIPESTATUS[0]}
+
+    if [ "$rc" -ne 0 ]; then
+        if declare -F msg_box >/dev/null 2>&1; then
+            msg_box "Installation Failed" \
+"Installation failed (exit ${rc}).\n\nPlease run 'Collect System Data' from the menu, then\nemail the resulting archive to support@xinnor.io\nso we can investigate.\n\nFull log: ${log_path}"
+        else
+            printf '\n  Installation failed (exit %s).\n' "$rc" >&2
+            printf '  Run ./collect_data.sh and email the archive to support@xinnor.io\n' >&2
+            printf '  Full log: %s\n\n' "$log_path" >&2
+        fi
+    fi
+    return "$rc"
+}
