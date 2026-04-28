@@ -899,7 +899,7 @@ print_status() {
 # they remain visible inline.
 # ═══════════════════════════════════════════════════════════════════════════════
 _xinas_playbook_ticker() {
-    awk '
+    LC_ALL=C awk '
     BEGIN {
         spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         sp_n = 10
@@ -914,6 +914,7 @@ _xinas_playbook_ticker() {
         sp_i = (sp_i + 1) % sp_n
         glyph = substr(spinner, sp_i*3+1, 3)
         printf "%s%s %s %s%s", CR, EL, glyph, play, EL
+        emitted = 1
         fflush()
         next
     }
@@ -923,16 +924,19 @@ _xinas_playbook_ticker() {
         sp_i = (sp_i + 1) % sp_n
         glyph = substr(spinner, sp_i*3+1, 3)
         printf "%s%s %s %s%s", CR, EL, glyph, task, EL
+        emitted = 1
         fflush()
         next
     }
     /^fatal:/ || /^failed:/ || /ERROR!/ {
         printf "\n%s\n", $0
+        emitted = 1
         fflush()
         next
     }
     /^PLAY RECAP/ {
         printf "\n%s\n", $0
+        emitted = 1
         fflush()
         in_recap = 1
         next
@@ -940,13 +944,14 @@ _xinas_playbook_ticker() {
     in_recap == 1 {
         # Pass recap host lines through verbatim
         print
+        emitted = 1
         fflush()
         next
     }
     # All other lines: swallow (full content is in the install log file)
     { next }
     END {
-        printf "\n"
+        if (emitted) printf "\n"
     }
     '
 }
