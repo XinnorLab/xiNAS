@@ -108,7 +108,10 @@ Each preset directory (`presets/default/`, `presets/xinnorVM/`) contains:
 
 ## Important Notes
 
-- **Shell menu scripts are OBSOLETE** - The legacy Bash/whiptail menu scripts (`startup_menu.sh`, `post_install_menu.sh`, `configure_*.sh`, `simple_menu.sh`) are deprecated. All new features, settings screens, and configuration UIs **must** be implemented in the Python-based `xinas_menu/` package (Textual TUI). Do NOT add functionality to shell `.sh` menu scripts.
+- **Shell vs. Python TUI scope** — There are two distinct user surfaces. Treat them differently:
+  - **Installer / bootstrap (bash, still active):** `prepare_system.sh`, `startup_menu.sh`, `simple_menu.sh`, and the shared `lib/menu_lib.sh`. These run before the Python TUI is installed and remain the supported install path. Bug fixes, polish, and improvements to the install flow itself are welcome here.
+  - **Post-install management (Python only):** `post_install_menu.sh`, `configure_*.sh`, and any other day-2 management/configuration UI. These are deprecated. Do NOT add new features, settings screens, or configuration UIs to these shell scripts — implement them in the Python-based `xinas_menu/` package (Textual TUI) instead.
+  - When a feature touches both surfaces (e.g. how `ansible-playbook` output is presented during install), it is acceptable — and expected — to update both the bash installer side and the Python TUI side so they stay in feel-parity.
 - **No build/test system** - This is infrastructure-as-code; validation occurs through Ansible modules
 - **yq v4 required** - Shell scripts use mikefarah/yq (not the Python jq wrapper). Ensure `/usr/local/bin/yq` is in PATH
 - **Roles are idempotent** - Safe to re-run, except `xfs_force_mkfs: true` forces filesystem recreation
