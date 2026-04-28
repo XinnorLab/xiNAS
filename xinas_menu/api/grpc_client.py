@@ -42,29 +42,29 @@ def _load_channel_credentials():
     except ImportError:
         return None
 
+    # Probe with try/except rather than Path.exists(): on Python 3.10
+    # exists() re-raises PermissionError when the parent directory denies
+    # stat (e.g. /etc/xinas-mcp/ at mode 0700 when running as non-root).
     cfg_path = Path("/etc/xinas-mcp/config.json")
-    if cfg_path.exists():
-        try:
-            cfg = json.loads(cfg_path.read_text())
-            crt_path = cfg.get("tls_cert") or cfg.get("cert_path")
-            if crt_path and Path(crt_path).exists():
-                import grpc
-                return grpc.ssl_channel_credentials(
-                    root_certificates=Path(crt_path).read_bytes()
-                )
-        except Exception:
-            pass
+    try:
+        cfg = json.loads(cfg_path.read_text())
+        crt_path = cfg.get("tls_cert") or cfg.get("cert_path")
+        if crt_path:
+            import grpc
+            return grpc.ssl_channel_credentials(
+                root_certificates=Path(crt_path).read_bytes()
+            )
+    except Exception:
+        pass
 
     for path in _TLS_FALLBACK_PATHS:
-        p = Path(path)
-        if p.exists():
-            try:
-                import grpc
-                return grpc.ssl_channel_credentials(
-                    root_certificates=p.read_bytes()
-                )
-            except Exception:
-                pass
+        try:
+            import grpc
+            return grpc.ssl_channel_credentials(
+                root_certificates=Path(path).read_bytes()
+            )
+        except Exception:
+            continue
 
     warnings.warn(
         "xiRAID TLS cert not found — using insecure gRPC channel (dev mode)",
