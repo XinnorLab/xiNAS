@@ -650,23 +650,22 @@ while true; do
     echo ""
 
     choice=$(menu_select "xiNAS Setup v${XINAS_SETUP_VERSION}" "Select an option:" \
-        "1" "📊 Collect System Data" \
-        "2" "$license_text" \
-        "3" "$install_text" \
-        "4" "$advanced_text" \
+        "1" "$license_text" \
+        "2" "$install_text" \
+        "3" "$advanced_text" \
+        "4" "📊 Collect System Data" \
         "0" "🚪 Exit") || { echo ""; exit 2; }
 
     case "$choice" in
-        1) ./collect_data.sh ;;
-        2) enter_license ;;
-        3)
+        1) enter_license ;;
+        2)
             if ! has_license; then
                 # Try to recover license from running xiRAID
                 if _xiraid_has_license; then
                     echo "$_XIRAID_LICENSE_OUTPUT" > /tmp/license
                     msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to /tmp/license"
                 else
-                    msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 2 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
+                    msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 1 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
                     continue
                 fi
             fi
@@ -694,7 +693,8 @@ while true; do
                 clean_install
             fi
             ;;
-        4) advanced_settings_menu ;;
+        3) advanced_settings_menu ;;
+        4) ./collect_data.sh ;;
         0)
             msg_box "See you soon!" "Thank you for choosing xiNAS!\n\nRun this menu again anytime:\n./simple_menu.sh\n\nQuestions? support@xinnor.io"
             exit 2
