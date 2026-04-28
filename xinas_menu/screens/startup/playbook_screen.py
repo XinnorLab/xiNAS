@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import os
+import re
 import shlex
 import time
 from pathlib import Path
@@ -43,6 +44,9 @@ def _open_install_log(cmd: list[str], workdir: str):
 
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+_TASK_RE = re.compile(r"^\s*TASK \[(.+?)\]\s*\*+\s*$")
+_PLAY_RE = re.compile(r"^\s*PLAY \[(.+?)\]\s*\*+\s*$")
 
 
 class _PlaybookStatusBar(Label):
@@ -132,6 +136,9 @@ class PlaybookRunScreen(Screen[int]):
         self._workdir = str(workdir) if workdir else _find_repo_root()
         self._exit_code: int = -1
         self._running = False
+        self._current_task: str = ""
+        self._current_play: str = ""
+        self._failure_seen: bool = False
 
     def compose(self) -> ComposeResult:
         yield Label(f"  ── {self._title} ──", id="pb-title")
@@ -145,6 +152,18 @@ class PlaybookRunScreen(Screen[int]):
     async def on_mount(self) -> None:
         self._running = True
         asyncio.create_task(self._run_playbook())
+
+    def _parse_status_line(self, line: str) -> None:
+        """Inspect a stdout line and update the StatusBar if it's a PLAY/TASK header."""
+        m = _TASK_RE.match(line)
+        if m:
+            self._current_task = m.group(1).strip()
+            self.query_one(_PlaybookStatusBar).set_task(self._current_task)
+            return
+        m = _PLAY_RE.match(line)
+        if m:
+            self._current_play = m.group(1).strip()
+            return
 
     async def _run_playbook(self) -> None:
         log = self.query_one("#playbook-log", RichLog)
@@ -180,6 +199,7 @@ class PlaybookRunScreen(Screen[int]):
                     except OSError:
                         pass
                 line = raw.decode(errors="replace").rstrip()
+                self._parse_status_line(line)
                 # Color-code Ansible output
                 if "PLAY RECAP" in line or "ok=" in line:
                     log.write(f"[bold]{line}[/bold]")
