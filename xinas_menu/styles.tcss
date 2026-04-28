@@ -508,3 +508,13 @@ FooterKey > .footer-key--key {
 FooterKey > .footer-key--description {
     color: #6b7394;
 }
+
+/* ── Playbook Run screen ─────────────────────────────────────── */
+#pb-log-panel {
+    height: 1fr;
+    display: none;
+}
+
+#pb-log-panel.visible {
+    display: block;
+}

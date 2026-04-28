@@ -10,6 +10,7 @@ from typing import Sequence
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Container
 from textual.screen import Screen
 from textual.widgets import Button, Label, RichLog
 
@@ -48,6 +49,7 @@ class PlaybookRunScreen(Screen[int]):
 
     BINDINGS = [
         Binding("escape", "dismiss_zero", "Close (when done)", show=True),
+        Binding("l", "toggle_log", "Toggle Log", show=True),
     ]
 
     def __init__(
@@ -67,8 +69,10 @@ class PlaybookRunScreen(Screen[int]):
     def compose(self) -> ComposeResult:
         yield Label(f"  ── {self._title} ──", id="pb-title")
         yield Label(f"  $ {' '.join(self._cmd)}", id="pb-cmd")
-        yield RichLog(highlight=True, markup=True, id="playbook-log")
+        with Container(id="pb-log-panel"):
+            yield RichLog(highlight=True, markup=True, id="playbook-log")
         yield Label("  Running…", id="pb-status")
+        yield Button("View Log", id="pb-toggle-log")
         yield Button("Close [Esc]", id="pb-close", disabled=True)
 
     async def on_mount(self) -> None:
@@ -150,10 +154,22 @@ class PlaybookRunScreen(Screen[int]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "pb-close" and not self._running:
             self.dismiss(self._exit_code)
+        elif event.button.id == "pb-toggle-log":
+            self.action_toggle_log()
 
     def action_dismiss_zero(self) -> None:
         if not self._running:
             self.dismiss(self._exit_code)
+
+    def action_toggle_log(self) -> None:
+        panel = self.query_one("#pb-log-panel", Container)
+        btn = self.query_one("#pb-toggle-log", Button)
+        if panel.has_class("visible"):
+            panel.remove_class("visible")
+            btn.label = "View Log"
+        else:
+            panel.add_class("visible")
+            btn.label = "Hide Log"
 
 
 def _find_repo_root() -> str:
