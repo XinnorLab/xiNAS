@@ -164,6 +164,10 @@ class PlaybookRunScreen(Screen[int]):
         if m:
             self._current_play = m.group(1).strip()
             return
+        if line.startswith("fatal:") or line.startswith("failed:") or "ERROR!" in line:
+            if not self._failure_seen:
+                self._failure_seen = True
+                self._auto_expand_log_on_failure()
 
     async def _run_playbook(self) -> None:
         log = self.query_one("#playbook-log", RichLog)
@@ -228,7 +232,10 @@ class PlaybookRunScreen(Screen[int]):
             if self._exit_code == 0:
                 statusbar.mark_success()
             else:
-                statusbar.mark_failure()
+                statusbar.mark_failure(task_name=self._current_task or "(unknown)")
+                # Ensure the log panel is open even if the failure marker
+                # was not in the stream (e.g. process killed externally).
+                self._auto_expand_log_on_failure()
             close_btn.disabled = False
             self.app.audit.log(
                 "playbook.run",
@@ -253,6 +260,14 @@ class PlaybookRunScreen(Screen[int]):
             panel.remove_class("visible")
             btn.label = "View Log"
         else:
+            panel.add_class("visible")
+            btn.label = "Hide Log"
+
+    def _auto_expand_log_on_failure(self) -> None:
+        """When a failure is first detected, open the log panel so the error is visible."""
+        panel = self.query_one("#pb-log-panel", Container)
+        btn = self.query_one("#pb-toggle-log", Button)
+        if not panel.has_class("visible"):
             panel.add_class("visible")
             btn.label = "Hide Log"
 
