@@ -905,7 +905,18 @@ print_status() {
 # Usage:  xinas_run_playbook <playbook> [args...]
 # Returns: ansible-playbook's exit code (not tee's).
 xinas_run_playbook() {
-    local log_path rc
+    # Both bash menus run under `set -euo pipefail`. Without disabling errexit
+    # and pipefail here, the moment ansible-playbook returns non-zero the
+    # pipeline `ansible-playbook ... | tee` propagates the failure (pipefail)
+    # and errexit aborts the entire script — before we can capture the exit
+    # code or show the support msg_box. Save the caller's options, disable
+    # ours for the run, restore on function exit.
+    local log_path rc=0
+    local _saved_e=0 _saved_pipefail=0
+    [[ $- == *e* ]] && _saved_e=1
+    shopt -qo pipefail && _saved_pipefail=1
+    set +e
+    set +o pipefail
 
     if mkdir -p /var/log/xinas 2>/dev/null && touch /var/log/xinas/install.log 2>/dev/null; then
         log_path=/var/log/xinas/install.log
@@ -932,5 +943,9 @@ xinas_run_playbook() {
             printf '  Full log: %s\n\n' "$log_path" >&2
         fi
     fi
+
+    # Restore caller's shell options before returning.
+    [[ $_saved_pipefail -eq 1 ]] && set -o pipefail
+    [[ $_saved_e -eq 1 ]] && set -e
     return "$rc"
 }
