@@ -164,7 +164,7 @@ class PlaybookRunScreen(Screen[int]):
         if m:
             self._current_play = m.group(1).strip()
             return
-        if line.startswith("fatal:") or line.startswith("failed:") or "ERROR!" in line:
+        if line.startswith("fatal:") or line.startswith("failed:") or line.startswith("unreachable:") or "ERROR!" in line:
             if not self._failure_seen:
                 self._failure_seen = True
                 self._auto_expand_log_on_failure()
@@ -235,7 +235,10 @@ class PlaybookRunScreen(Screen[int]):
                 statusbar.mark_failure(task_name=self._current_task or "(unknown)")
                 # Ensure the log panel is open even if the failure marker
                 # was not in the stream (e.g. process killed externally).
-                self._auto_expand_log_on_failure()
+                # If the parser already auto-expanded once, respect any
+                # subsequent manual close by the operator.
+                if not self._failure_seen:
+                    self._auto_expand_log_on_failure()
             close_btn.disabled = False
             self.app.audit.log(
                 "playbook.run",
