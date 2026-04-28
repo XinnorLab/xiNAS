@@ -993,8 +993,14 @@ xinas_run_playbook() {
             "$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')" "$*" "$PWD"
     } >>"$log_path" 2>/dev/null || true
 
-    ansible-playbook "$@" 2>&1 | tee -a "$log_path" | _xinas_playbook_ticker
-    rc=${PIPESTATUS[0]}
+    if [ -t 1 ]; then
+        ansible-playbook "$@" 2>&1 | tee -a "$log_path" | _xinas_playbook_ticker
+        rc=${PIPESTATUS[0]}
+    else
+        # Non-TTY (CI, redirected install): preserve verbose passthrough
+        ansible-playbook "$@" 2>&1 | tee -a "$log_path"
+        rc=${PIPESTATUS[0]}
+    fi
 
     if [ "$rc" -ne 0 ]; then
         if declare -F msg_box >/dev/null 2>&1; then
