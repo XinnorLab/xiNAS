@@ -28,19 +28,59 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${CYAN}xiNAS System Preparation${NC}"
-echo ""
+# Quiet mode (set by install.sh) hides verbose package output behind a spinner.
+QUIET_MODE="${XINAS_QUIET:-0}"
+LOG_FILE="${XINAS_LOG:-/tmp/xinas-install.log}"
+_SPIN=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+
+run_quiet() {
+    local label="$1"; shift
+    if [ "$QUIET_MODE" != "1" ]; then
+        echo -e "${YELLOW}${label}...${NC}"
+        "$@"
+        return $?
+    fi
+    local pid rc=0 i=0
+    {
+        printf '\n=== %s | %s ===\n' "$(date '+%H:%M:%S')" "$label"
+        "$@"
+    } >>"$LOG_FILE" 2>&1 &
+    pid=$!
+    tput civis 2>/dev/null || true
+    while kill -0 "$pid" 2>/dev/null; do
+        printf '\r     \033[0;36m%s\033[0m  %s' "${_SPIN[i % ${#_SPIN[@]}]}" "$label"
+        i=$((i + 1))
+        sleep 0.1
+    done
+    tput cnorm 2>/dev/null || true
+    wait "$pid" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        printf '\r     \033[0;32m✓\033[0m  %s\033[K\n' "$label"
+    else
+        printf '\r     \033[0;31m✗\033[0m  %s\033[K\n' "$label"
+        echo ""
+        echo "     Failed — last 20 lines of $LOG_FILE:"
+        tail -20 "$LOG_FILE" 2>/dev/null | sed 's/^/       /'
+        return "$rc"
+    fi
+}
+
+if [ "$QUIET_MODE" != "1" ]; then
+    echo -e "${CYAN}xiNAS System Preparation${NC}"
+    echo ""
+fi
 
 # Install required packages unless only updating the repository
 if [ "$UPDATE_ONLY" -eq 0 ]; then
-    echo -e "${YELLOW}Installing required packages...${NC}"
-    sudo apt-get update -y
-    sudo apt-get install -y ansible git dialog wget btop
+    run_quiet "Updating package lists" sudo apt-get update -y -qq
+    run_quiet "Installing dependencies (ansible, git, dialog, wget, btop)" \
+        sudo apt-get install -y -qq ansible git dialog wget btop
     # Install yq v4 for YAML processing used by configuration scripts
-    echo -e "${YELLOW}Installing yq...${NC}"
-    sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
-    sudo chmod +x /usr/local/bin/yq
-    echo -e "${GREEN}Packages installed successfully${NC}"
+    run_quiet "Installing yq (YAML processor)" bash -c '
+        sudo wget -qO /usr/local/bin/yq \
+            "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" \
+        && sudo chmod +x /usr/local/bin/yq'
+    [ "$QUIET_MODE" != "1" ] && echo -e "${GREEN}Packages installed successfully${NC}"
 fi
 
 REPO_URL="https://github.com/XinnorLab/xiNAS/"

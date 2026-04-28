@@ -29,6 +29,44 @@ info() { echo -e "     ${DIM}›${NC}  $*"; }
 warn() { echo -e "     ${YELLOW}⚠${NC}  $*"; }
 fail() { echo -e "     ${RED}✗${NC}  $*"; }
 
+# ── Quiet runner with spinner ─────────────────────────────────────────────────
+# Output goes to $LOG_FILE; spinner shows the label until the command exits.
+# On failure, the tail of the log is dumped so the user can see what happened.
+LOG_FILE="${XINAS_LOG:-/tmp/xinas-install.log}"
+: > "$LOG_FILE" 2>/dev/null || LOG_FILE="$(mktemp)"
+
+_SPIN=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+
+run_quiet() {
+    local label="$1"; shift
+    local pid rc=0 i=0
+
+    {
+        printf '\n=== %s | %s ===\n' "$(date '+%H:%M:%S')" "$label"
+        "$@"
+    } >>"$LOG_FILE" 2>&1 &
+    pid=$!
+
+    tput civis 2>/dev/null || true
+    while kill -0 "$pid" 2>/dev/null; do
+        printf '\r     %b%s%b  %s' "$CYAN" "${_SPIN[i % ${#_SPIN[@]}]}" "$NC" "$label"
+        i=$((i + 1))
+        sleep 0.1
+    done
+    tput cnorm 2>/dev/null || true
+
+    wait "$pid" || rc=$?
+    if [[ $rc -eq 0 ]]; then
+        printf '\r     %b✓%b  %s\033[K\n' "$GREEN" "$NC" "$label"
+    else
+        printf '\r     %b✗%b  %s\033[K\n' "$RED" "$NC" "$label"
+        echo ""
+        echo -e "     ${RED}Failed — last 20 lines of ${LOG_FILE}:${NC}"
+        tail -20 "$LOG_FILE" 2>/dev/null | sed 's/^/       /'
+        return "$rc"
+    fi
+}
+
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "${BLUE}"
 cat << 'EOF'
@@ -148,35 +186,28 @@ step "Setting up repository"
 info "Target: ${WHITE}${INSTALL_DIR}${NC}"
 
 if ! command -v git &>/dev/null; then
-    info "Installing git..."
-    apt-get update -qq
-    apt-get install -y git -qq
-    ok "git installed"
+    run_quiet "Installing git" bash -c 'apt-get update -qq && apt-get install -y -qq git'
 else
     ok "git found"
 fi
 
 if [[ -d "$INSTALL_DIR" ]]; then
-    info "Existing installation found — updating..."
     cd "$INSTALL_DIR"
-    git fetch origin -q
-    git reset --hard origin/main -q
-    ok "Repository updated"
+    run_quiet "Updating xiNAS repository at ${INSTALL_DIR}" \
+        bash -c 'git fetch origin -q && git reset --hard origin/main -q'
 else
-    info "Cloning repository..."
-    git clone -q "$REPO_URL" "$INSTALL_DIR"
+    run_quiet "Cloning xiNAS repository to ${INSTALL_DIR}" \
+        git clone -q "$REPO_URL" "$INSTALL_DIR"
     cd "$INSTALL_DIR"
-    ok "Repository cloned to ${WHITE}${INSTALL_DIR}${NC}"
 fi
 
 chmod +x ./*.sh 2>/dev/null || true
 
 # ── Step 3: System preparation ────────────────────────────────────────────────
-step "Launching setup wizard"
-info "Installing Ansible, yq, and launching the provisioning menu..."
-echo ""
+step "Preparing system"
+info "Detailed log: ${WHITE}${LOG_FILE}${NC}"
 
-./prepare_system.sh
+XINAS_QUIET=1 XINAS_LOG="$LOG_FILE" ./prepare_system.sh
 
 # ── Ensure xinas-menu wrapper exists ─────────────────────────────────────────
 # The xinas_menu Ansible role creates this during full provisioning (site.yml).
@@ -184,11 +215,13 @@ echo ""
 # the provisioning menu early.
 if [[ ! -x /usr/local/bin/xinas-menu ]]; then
     step "Setting up management console"
-    apt-get install -y python3-venv -qq 2>/dev/null || true
+    run_quiet "Installing python3-venv" \
+        bash -c 'apt-get install -y -qq python3-venv' || true
     if [[ ! -d "$INSTALL_DIR/venv/bin" ]]; then
-        python3 -m venv "$INSTALL_DIR/venv"
+        run_quiet "Creating Python virtualenv" python3 -m venv "$INSTALL_DIR/venv"
     fi
-    "$INSTALL_DIR/venv/bin/pip" install -q "textual>=0.70.0" "pyyaml>=6.0" 2>/dev/null || true
+    run_quiet "Installing Textual TUI dependencies" \
+        "$INSTALL_DIR/venv/bin/pip" install -q "textual>=0.70.0" "pyyaml>=6.0" || true
 
     cat > /usr/local/bin/xinas-menu <<WEOF
 #!/bin/sh
