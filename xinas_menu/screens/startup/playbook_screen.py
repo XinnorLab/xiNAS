@@ -5,6 +5,7 @@ import asyncio
 import datetime
 import os
 import shlex
+import time
 from pathlib import Path
 from typing import Sequence
 
@@ -60,7 +61,6 @@ class _PlaybookStatusBar(Label):
         self._tick_timer = None
 
     def on_mount(self) -> None:
-        import time
         self._started_at = time.monotonic()
         self._spin_timer = self.set_interval(0.1, self._advance_spinner)
         self._tick_timer = self.set_interval(1.0, self._refresh)
@@ -86,14 +86,16 @@ class _PlaybookStatusBar(Label):
         if self._spin_timer is not None:
             self._spin_timer.stop()
             self._spin_timer = None
+        if self._tick_timer is not None:
+            self._tick_timer.stop()
+            self._tick_timer = None
 
     def _advance_spinner(self) -> None:
         self._frame = (self._frame + 1) % len(_SPINNER_FRAMES)
         self._refresh()
 
     def _refresh(self) -> None:
-        import time
-        elapsed = max(0, int(time.monotonic() - self._started_at)) if self._started_at else 0
+        elapsed = max(0, int(time.monotonic() - self._started_at))
         h, rem = divmod(elapsed, 3600)
         m, s = divmod(rem, 60)
         clock = f"{h:02d}:{m:02d}:{s:02d}"
