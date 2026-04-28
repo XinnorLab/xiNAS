@@ -99,9 +99,9 @@ class InstallScreen(Screen):
             go_collect = await self.app.push_screen_wait(
                 ConfirmDialog(
                     f"Installation failed (exit {exit_code}).\n\n"
-                    "Please run Collect Logs -> Collect All, then email\n"
-                    "the resulting archive (/tmp/<host>-logs-*.tgz) to\n"
-                    "support@xinnor.io so we can investigate.",
+                    "Please run Collect Logs -> Collect All, then\n"
+                    "Upload Archive to send diagnostics to support\n"
+                    "at support@xinnor.io.",
                     title="Installation Failed",
                     yes_label="Go to Collect Logs",
                     no_label="Close",

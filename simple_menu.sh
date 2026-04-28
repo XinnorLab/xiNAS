@@ -434,12 +434,14 @@ reuse_existing_arrays() {
 clean_install() {
     if ! check_remove_xiraid; then return 1; fi
     if ! confirm_playbook; then return 1; fi
-    run_playbook "playbooks/site.yml" "inventories/lab.ini"
-    echo ""
-    echo "🎉 Deployment complete! System status:"
-    echo ""
-    xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
-    exit 0
+    if run_playbook "playbooks/site.yml" "inventories/lab.ini"; then
+        echo ""
+        echo "🎉 Deployment complete! System status:"
+        echo ""
+        xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
+        exit 0
+    fi
+    return 1
 }
 
 confirm_playbook() {
@@ -677,12 +679,13 @@ while true; do
                 if reuse_existing_arrays; then
                     # Reuse succeeded — run playbook
                     if confirm_playbook; then
-                        run_playbook "playbooks/site.yml" "inventories/lab.ini"
-                        echo ""
-                        echo "🎉 Deployment complete! System status:"
-                        echo ""
-                        xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
-                        exit 0
+                        if run_playbook "playbooks/site.yml" "inventories/lab.ini"; then
+                            echo ""
+                            echo "🎉 Deployment complete! System status:"
+                            echo ""
+                            xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
+                            exit 0
+                        fi
                     fi
                 else
                     # User declined reuse or not enough arrays — clean install

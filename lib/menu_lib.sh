@@ -936,10 +936,10 @@ xinas_run_playbook() {
     if [ "$rc" -ne 0 ]; then
         if declare -F msg_box >/dev/null 2>&1; then
             msg_box "Installation Failed" \
-"Installation failed (exit ${rc}).\n\nPlease run 'Collect System Data' from the menu, then\nemail the resulting archive to support@xinnor.io\nso we can investigate.\n\nFull log: ${log_path}"
+"Installation failed (exit ${rc}).\n\nPlease run 'Collect System Data' from the menu —\nthe diagnostic archive uploads automatically to\nsupport@xinnor.io.\n\nFull log: ${log_path}"
         else
             printf '\n  Installation failed (exit %s).\n' "$rc" >&2
-            printf '  Run ./collect_data.sh and email the archive to support@xinnor.io\n' >&2
+            printf '  Run ./collect_data.sh — the archive uploads automatically.\n' >&2
             printf '  Full log: %s\n\n' "$log_path" >&2
         fi
     fi

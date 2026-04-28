@@ -467,12 +467,13 @@ install_menu() {
             # Set skip flags for xiraid and namespace roles
             local extra_vars="xiraid_skip_install=true nvme_auto_namespace=false"
             if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
-                run_playbook_with_vars "playbooks/site.yml" "$extra_vars"
-                echo ""
-                echo "🎉 Deployment complete! System status:"
-                echo ""
-                xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
-                exit 0
+                if run_playbook_with_vars "playbooks/site.yml" "$extra_vars"; then
+                    echo ""
+                    echo "🎉 Deployment complete! System status:"
+                    echo ""
+                    xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
+                    exit 0
+                fi
             fi
             return
             ;;
@@ -480,12 +481,13 @@ install_menu() {
     esac
 
     if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
-        run_playbook "playbooks/site.yml"
-        echo ""
-        echo "🎉 Deployment complete! System status:"
-        echo ""
-        xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
-        exit 0
+        if run_playbook "playbooks/site.yml"; then
+            echo ""
+            echo "🎉 Deployment complete! System status:"
+            echo ""
+            xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
+            exit 0
+        fi
     fi
 }
 
