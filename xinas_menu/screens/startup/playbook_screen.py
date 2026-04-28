@@ -41,6 +41,71 @@ def _open_install_log(cmd: list[str], workdir: str):
     return None, None
 
 
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+class _PlaybookStatusBar(Label):
+    """Single-line live status: spinner + current task + elapsed timer.
+
+    States: 'running' (animated spinner), 'success' (green ✓), 'failure' (red ✗).
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__("", id="pb-statusbar", **kwargs)
+        self._frame = 0
+        self._task_name = "Starting…"
+        self._started_at: float = 0.0
+        self._state = "running"  # 'running' | 'success' | 'failure'
+        self._spin_timer = None
+        self._tick_timer = None
+
+    def on_mount(self) -> None:
+        import time
+        self._started_at = time.monotonic()
+        self._spin_timer = self.set_interval(0.1, self._advance_spinner)
+        self._tick_timer = self.set_interval(1.0, self._refresh)
+        self._refresh()
+
+    def set_task(self, name: str) -> None:
+        self._task_name = name
+        self._refresh()
+
+    def mark_success(self) -> None:
+        self._state = "success"
+        self._stop_timers()
+        self._refresh()
+
+    def mark_failure(self, task_name: str | None = None) -> None:
+        self._state = "failure"
+        if task_name:
+            self._task_name = task_name
+        self._stop_timers()
+        self._refresh()
+
+    def _stop_timers(self) -> None:
+        if self._spin_timer is not None:
+            self._spin_timer.stop()
+            self._spin_timer = None
+
+    def _advance_spinner(self) -> None:
+        self._frame = (self._frame + 1) % len(_SPINNER_FRAMES)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        import time
+        elapsed = max(0, int(time.monotonic() - self._started_at)) if self._started_at else 0
+        h, rem = divmod(elapsed, 3600)
+        m, s = divmod(rem, 60)
+        clock = f"{h:02d}:{m:02d}:{s:02d}"
+        if self._state == "success":
+            self.update(f"  [green]✓[/green]  Completed                              {clock}")
+        elif self._state == "failure":
+            self.update(f"  [red]✗[/red]  FAILED: TASK [{self._task_name}]    {clock}")
+        else:
+            spin = _SPINNER_FRAMES[self._frame]
+            self.update(f"  [cyan]{spin}[/cyan]  TASK [{self._task_name}]    {clock}")
+
+
 class PlaybookRunScreen(Screen[int]):
     """Streams ansible-playbook output in real-time.
 
@@ -71,7 +136,7 @@ class PlaybookRunScreen(Screen[int]):
         yield Label(f"  $ {' '.join(self._cmd)}", id="pb-cmd")
         with Container(id="pb-log-panel"):
             yield RichLog(highlight=True, markup=True, id="playbook-log")
-        yield Label("  Running…", id="pb-status")
+        yield _PlaybookStatusBar()
         yield Button("View Log", id="pb-toggle-log")
         yield Button("Close [Esc]", id="pb-close", disabled=True)
 
@@ -81,7 +146,6 @@ class PlaybookRunScreen(Screen[int]):
 
     async def _run_playbook(self) -> None:
         log = self.query_one("#playbook-log", RichLog)
-        status = self.query_one("#pb-status", Label)
         close_btn = self.query_one("#pb-close", Button)
 
         env = os.environ.copy()
@@ -137,13 +201,11 @@ class PlaybookRunScreen(Screen[int]):
                 except OSError:
                     pass
             self._running = False
+            statusbar = self.query_one(_PlaybookStatusBar)
             if self._exit_code == 0:
-                status.update("  [green]✓ Playbook completed successfully.[/green]")
+                statusbar.mark_success()
             else:
-                status.update(
-                    f"  [red]✗ Playbook failed (exit {self._exit_code}). "
-                    f"Run Collect Logs and email to support@xinnor.io.[/red]"
-                )
+                statusbar.mark_failure()
             close_btn.disabled = False
             self.app.audit.log(
                 "playbook.run",

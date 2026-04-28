@@ -518,3 +518,10 @@ FooterKey > .footer-key--description {
 #pb-log-panel.visible {
     display: block;
 }
+
+#pb-statusbar {
+    height: 1;
+    background: #111520;
+    color: $text;
+    padding: 0 1;
+}
