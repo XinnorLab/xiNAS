@@ -63,15 +63,20 @@ class _PlaybookStatusBar(Label):
         self._state = "running"  # 'running' | 'success' | 'failure'
         self._spin_timer = None
         self._tick_timer = None
+        self._task_seen: bool = False
+        self._task_set_at: float = 0.0
 
     def on_mount(self) -> None:
         self._started_at = time.monotonic()
+        self._task_set_at = self._started_at
         self._spin_timer = self.set_interval(0.1, self._advance_spinner)
         self._tick_timer = self.set_interval(1.0, self._refresh)
         self._refresh()
 
     def set_task(self, name: str) -> None:
         self._task_name = name
+        self._task_seen = True
+        self._task_set_at = time.monotonic()
         self._refresh()
 
     def mark_success(self) -> None:
@@ -103,13 +108,21 @@ class _PlaybookStatusBar(Label):
         h, rem = divmod(elapsed, 3600)
         m, s = divmod(rem, 60)
         clock = f"{h:02d}:{m:02d}:{s:02d}"
+        stall_suffix = ""
+        if self._state == "running" and self._task_set_at:
+            stall = time.monotonic() - self._task_set_at
+            if stall > 30:
+                stall_suffix = "  [dim]· still running[/dim]"
         if self._state == "success":
             self.update(f"  [green]✓[/green]  Completed                              {clock}")
         elif self._state == "failure":
             self.update(f"  [red]✗[/red]  FAILED: TASK [{self._task_name}]    {clock}")
         else:
             spin = _SPINNER_FRAMES[self._frame]
-            self.update(f"  [cyan]{spin}[/cyan]  TASK [{self._task_name}]    {clock}")
+            if not self._task_seen:
+                self.update(f"  [cyan]{spin}[/cyan]  Starting…{stall_suffix}    {clock}")
+            else:
+                self.update(f"  [cyan]{spin}[/cyan]  TASK [{self._task_name}]{stall_suffix}    {clock}")
 
 
 class PlaybookRunScreen(Screen[int]):
