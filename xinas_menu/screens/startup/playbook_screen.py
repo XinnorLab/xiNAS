@@ -172,6 +172,7 @@ class PlaybookRunScreen(Screen[int]):
         env = os.environ.copy()
         env.setdefault("ANSIBLE_FORCE_COLOR", "1")
         env.setdefault("PYTHONUNBUFFERED", "1")
+        env["ANSIBLE_STDOUT_CALLBACK"] = "default"
 
         log_fh, log_path = _open_install_log(self._cmd, self._workdir)
         if log_path is None:
