@@ -693,11 +693,11 @@ while true; do
                     fi
                 else
                     # User declined reuse or not enough arrays — clean install
-                    clean_install
+                    clean_install || true
                 fi
             else
                 # No arrays (or no xicli) — clean install
-                clean_install
+                clean_install || true
             fi
             ;;
         3) advanced_settings_menu ;;
