@@ -118,6 +118,8 @@ class CollectLogsScreen(Screen):
             ("Hardware key", lambda: _collect_hwkey(tmp)),
             ("NUMA topology", lambda: _collect_numa(tmp)),
             ("Audit log", lambda: _collect_file(tmp, "audit.log", "/var/log/xinas/audit.log")),
+            ("Install playbook log", lambda: _collect_file(tmp, "install-playbook.log", "/var/log/xinas/install.log")),
+            ("Install bootstrap log", lambda: _collect_file(tmp, "install-bootstrap.log", "/tmp/xinas-install.log")),
             ("System journal (last 1000)", lambda: _collect_cmd(tmp, "journalctl.txt", "journalctl", "-n", "1000", "--no-pager")),
             ("Kernel messages (dmesg)", lambda: _collect_cmd(tmp, "dmesg.txt", "dmesg", "--time-format", "iso")),
         ]
