@@ -44,6 +44,7 @@ def _open_install_log(cmd: list[str], workdir: str):
 
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_STALL_THRESHOLD_SEC = 30
 
 _TASK_RE = re.compile(r"^\s*TASK \[(.+?)\]\s*\*+\s*$")
 _PLAY_RE = re.compile(r"^\s*PLAY \[(.+?)\]\s*\*+\s*$")
@@ -109,9 +110,9 @@ class _PlaybookStatusBar(Label):
         m, s = divmod(rem, 60)
         clock = f"{h:02d}:{m:02d}:{s:02d}"
         stall_suffix = ""
-        if self._state == "running" and self._task_set_at:
+        if self._state == "running":
             stall = time.monotonic() - self._task_set_at
-            if stall > 30:
+            if stall > _STALL_THRESHOLD_SEC:
                 stall_suffix = "  [dim]· still running[/dim]"
         if self._state == "success":
             self.update(f"  [green]✓[/green]  Completed                              {clock}")
@@ -119,10 +120,8 @@ class _PlaybookStatusBar(Label):
             self.update(f"  [red]✗[/red]  FAILED: TASK [{self._task_name}]    {clock}")
         else:
             spin = _SPINNER_FRAMES[self._frame]
-            if not self._task_seen:
-                self.update(f"  [cyan]{spin}[/cyan]  Starting…{stall_suffix}    {clock}")
-            else:
-                self.update(f"  [cyan]{spin}[/cyan]  TASK [{self._task_name}]{stall_suffix}    {clock}")
+            label = "Starting…" if not self._task_seen else f"TASK [{self._task_name}]"
+            self.update(f"  [cyan]{spin}[/cyan]  {label}{stall_suffix}    {clock}")
 
 
 class PlaybookRunScreen(Screen[int]):
