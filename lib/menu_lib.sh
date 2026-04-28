@@ -928,7 +928,7 @@ _xinas_playbook_ticker() {
         fflush()
         next
     }
-    /^fatal:/ || /^failed:/ || /ERROR!/ {
+    /^fatal:/ || /^failed:/ || /^unreachable:/ || /ERROR!/ {
         printf "\n%s\n", $0
         emitted = 1
         fflush()

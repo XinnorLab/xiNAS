@@ -8,13 +8,13 @@ import re
 import shlex
 import time
 from pathlib import Path
-from typing import Sequence
 
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import Screen
 from textual.widgets import Button, Label, RichLog
+from rich.markup import escape as _rich_escape
 
 _INSTALL_LOG_PRIMARY = "/var/log/xinas/install.log"
 _INSTALL_LOG_FALLBACK = "/tmp/xinas-install.log"
@@ -117,10 +117,10 @@ class _PlaybookStatusBar(Label):
         if self._state == "success":
             self.update(f"  [green]✓[/green]  Completed                              {clock}")
         elif self._state == "failure":
-            self.update(f"  [red]✗[/red]  FAILED: TASK [{self._task_name}]    {clock}")
+            self.update(f"  [red]✗[/red]  FAILED: TASK [{_rich_escape(self._task_name)}]    {clock}")
         else:
             spin = _SPINNER_FRAMES[self._frame]
-            label = "Starting…" if not self._task_seen else f"TASK [{self._task_name}]"
+            label = "Starting…" if not self._task_seen else f"TASK [{_rich_escape(self._task_name)}]"
             self.update(f"  [cyan]{spin}[/cyan]  {label}{stall_suffix}    {clock}")
 
 
@@ -151,6 +151,7 @@ class PlaybookRunScreen(Screen[int]):
         self._current_task: str = ""
         self._current_play: str = ""
         self._failure_seen: bool = False
+        self._run_task: asyncio.Task | None = None
 
     def compose(self) -> ComposeResult:
         yield Label(f"  ── {self._title} ──", id="pb-title")
@@ -163,7 +164,7 @@ class PlaybookRunScreen(Screen[int]):
 
     async def on_mount(self) -> None:
         self._running = True
-        asyncio.create_task(self._run_playbook())
+        self._run_task = asyncio.create_task(self._run_playbook())
 
     def _parse_status_line(self, line: str) -> None:
         """Inspect a stdout line and update the StatusBar if it's a PLAY/TASK header."""
