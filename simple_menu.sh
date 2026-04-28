@@ -546,11 +546,6 @@ show_welcome() {
     echo -e "    ${DIM}Need help?${NC} ${CYAN}support@xinnor.io${NC}"
     echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
     echo ""
-    read -p "    Press Enter to continue or Q to exit... " -n 1 -r </dev/tty
-    echo ""
-    if [[ $REPLY =~ ^[Qq]$ ]]; then
-        exit 2
-    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
