@@ -643,21 +643,49 @@ text_area() {
 
     _menu_cursor_show
 
+    # Locally handle SIGINT so Ctrl-C cancels the input cleanly. The parent
+    # script may have installed `trap '' INT` to ignore SIGINT globally; that
+    # disposition is inherited by children, so cat would otherwise ignore
+    # Ctrl-C. Installing a non-empty trap here causes bash to reset signal
+    # handling to default for child processes — cat dies on Ctrl-C, and we
+    # catch the signal in the shell to return cleanly.
+    local _prev_int_trap
+    _prev_int_trap=$(trap -p INT)
+    local _sigint_caught=0
+    trap '_sigint_caught=1' INT
+
     # Read multi-line input
     local text=""
+    local status
     if [[ -n "$output_file" ]]; then
         cat </dev/tty > "$output_file" 2>/dev/null
-        local status=$?
-        echo "" >/dev/tty
+        status=$?
+    else
+        text=$(cat </dev/tty 2>/dev/null)
+        status=$?
+    fi
+
+    # Restore parent's previous SIGINT disposition.
+    if [[ -n "$_prev_int_trap" ]]; then
+        eval "$_prev_int_trap"
+    else
+        trap - INT
+    fi
+
+    echo "" >/dev/tty
+
+    if (( _sigint_caught )); then
+        [[ -n "$output_file" ]] && : > "$output_file" 2>/dev/null
+        return 1
+    fi
+
+    if [[ -n "$output_file" ]]; then
         if [[ $status -eq 0 ]] && [[ -s "$output_file" ]]; then
             return 0
         else
             return 1
         fi
     else
-        text=$(cat </dev/tty 2>/dev/null)
-        local status=$?
-        echo "" >/dev/tty
         if [[ $status -eq 0 ]] && [[ -n "$text" ]]; then
             echo "$text"
             return 0
