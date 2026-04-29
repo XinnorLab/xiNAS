@@ -703,7 +703,7 @@ while true; do
         3) advanced_settings_menu ;;
         4) ./collect_data.sh ;;
         0)
-            msg_box "See you soon!" "Thank you for choosing xiNAS!\n\nRun this menu again anytime:\n./simple_menu.sh\n\nQuestions? support@xinnor.io"
+            msg_box "See you soon!" "Thank you for choosing xiNAS!\n\nRun this menu again anytime:\nsudo xinas-menu\n\nQuestions? support@xinnor.io"
             exit 2
             ;;
     esac

@@ -3372,7 +3372,7 @@ main_menu() {
                 fi
                 ;;
             0)
-                msg_box "👋 See you soon!" "Thank you for using xiNAS!\n\nRun this menu again anytime:\n  xinas-menu\n\nOr view status with:\n  xinas-status\n\nQuestions? support@xinnor.io"
+                msg_box "👋 See you soon!" "Thank you for using xiNAS!\n\nRun this menu again anytime:\n  sudo xinas-menu\n\nOr view status with:\n  xinas-status\n\nQuestions? support@xinnor.io"
                 exit 0
                 ;;
         esac

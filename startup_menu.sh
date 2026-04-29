@@ -741,7 +741,7 @@ while true; do
         3) install_menu ;;
         4) advanced_settings_menu ;;
         0)
-            msg_box "See you soon!" "Thank you for choosing xiNAS!\n\nRun this menu again anytime:\n./startup_menu.sh\n\nQuestions? support@xinnor.io"
+            msg_box "See you soon!" "Thank you for choosing xiNAS!\n\nRun this menu again anytime:\nsudo xinas-menu\n\nQuestions? support@xinnor.io"
             exit 2
             ;;
     esac
