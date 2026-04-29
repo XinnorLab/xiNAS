@@ -321,13 +321,19 @@ show_status() {
 
     # CPU & Memory
     local cpu_cores=$(nproc 2>/dev/null || echo "?")
-    local cpu_idle=$(top -bn1 2>/dev/null | grep "Cpu(s)" | awk '{print $8}' | cut -d. -f1)
+    # Find "id" / "id," token and grab the number before it — robust to top's
+    # field-shifting when idle hits 100% (".. ni,100.0 id ..").
+    local cpu_idle
+    cpu_idle=$(top -bn1 2>/dev/null | awk '/Cpu\(s\)/ { for (i=1;i<=NF;i++) if ($i ~ /^id,?$/) { print int($(i-1)); exit } }')
     [[ -z "$cpu_idle" ]] && cpu_idle=$(awk '/^cpu / {print int($5*100/($2+$3+$4+$5+$6+$7+$8))}' /proc/stat 2>/dev/null)
-    local cpu_usage=$((100 - ${cpu_idle:-0}))
+    [[ "$cpu_idle" =~ ^[0-9]+$ ]] || cpu_idle=0
+    local cpu_usage=$((100 - cpu_idle))
 
     local mem_total=$(free -b 2>/dev/null | awk '/^Mem:/ {print $2}')
     local mem_used=$(free -b 2>/dev/null | awk '/^Mem:/ {print $3}')
-    local mem_percent=$(( ${mem_total:-1} > 0 ? mem_used * 100 / mem_total : 0 ))
+    [[ "$mem_total" =~ ^[0-9]+$ ]] || mem_total=0
+    [[ "$mem_used"  =~ ^[0-9]+$ ]] || mem_used=0
+    local mem_percent=$(( mem_total > 0 ? mem_used * 100 / mem_total : 0 ))
     local mem_total_h=$(free -h 2>/dev/null | awk '/^Mem:/ {print $2}')
     local mem_used_h=$(free -h 2>/dev/null | awk '/^Mem:/ {print $3}')
 
@@ -3559,7 +3565,7 @@ main_menu() {
    Thank you for using xiNAS Client Setup!
 
    Run this menu again anytime:
-     sudo ./client_setup.sh
+     sudo xinas-client
 
    Questions? support@xinnor.io
 "
