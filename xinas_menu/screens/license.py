@@ -77,10 +77,24 @@ class LicenseScreen(Screen):
         except Exception:
             _log.debug("Could not read existing license", exc_info=True)
 
+        # Fetch HW key from gRPC so the user can copy it when requesting a license
+        hwkey = ""
+        try:
+            ok, data, _ = await self.app.grpc.license_show()
+            if ok and isinstance(data, dict):
+                hwkey = str(data.get("hwkey") or "").strip()
+        except Exception:
+            _log.debug("Could not fetch hwkey", exc_info=True)
+
+        if hwkey:
+            prompt = f"HW key: {hwkey}\n\nPaste the license text below:"
+        else:
+            prompt = "HW key: (unavailable)\n\nPaste the license text below:"
+
         # Show multi-line text area for license input
         license_text = await self.app.push_screen_wait(
             TextAreaDialog(
-                "Paste the license text below:",
+                prompt,
                 "Update License",
                 default=existing,
             )
