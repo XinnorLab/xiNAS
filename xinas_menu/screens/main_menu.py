@@ -87,11 +87,44 @@ class MainMenuScreen(Screen):
         if license_section:
             text = license_section + "\n" + text
 
+        # Prepend subsystem health banner (only when something is wrong)
+        health_banner = await _build_health_banner(self.app.grpc, self.app.nfs)
+        if health_banner:
+            text = health_banner + "\n" + text
+
         try:
             view = self.query_one("#main-status", ScrollableTextView)
             view.set_content(text)
         except Exception:
             _log.debug("mini-status: view not available", exc_info=True)
+
+
+# ── Subsystem health banner (async) ──────────────────────────────────────
+
+
+async def _build_health_banner(grpc_client, nfs_client) -> str:
+    """Return a banner listing failed subsystem probes, or '' if all healthy."""
+    try:
+        from xinas_menu.utils.subsystem_probes import probe_all
+        results = await probe_all(grpc_client, nfs_client)
+    except Exception:
+        _log.debug("health banner: probe failed", exc_info=True)
+        return ""
+
+    failed = [r for r in results if not r.ok]
+    if not failed:
+        return ""
+
+    n = len(failed)
+    header = (
+        f"  {_YLW}{_BLD}⚠ Subsystem issue{'s' if n != 1 else ''} detected "
+        f"({n}){_NC}"
+    )
+    rows = [
+        f"  {_RED}○{_NC} {r.name:<11} {_DIM}{r.detail[:60]}{_NC}"
+        for r in failed
+    ]
+    return "\n".join([header, *rows])
 
 
 # ── License section (async) ──────────────────────────────────────────────

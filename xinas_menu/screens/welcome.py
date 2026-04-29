@@ -53,21 +53,13 @@ class WelcomeScreen(Screen):
         asyncio.create_task(self._auto_proceed()).add_done_callback(_log_exc)
 
     async def _probe_services(self) -> None:
-        app = self.app
+        from xinas_menu.utils.subsystem_probes import probe_all
+
+        results = await probe_all(self.app.grpc, self.app.nfs)
         status_lines = []
-
-        ok, _data, err = await app.grpc.get_server_info()
-        if ok:
-            status_lines.append("  \u25cf xiRAID gRPC \u2014 connected")
-        else:
-            status_lines.append(f"  \u25cb xiRAID gRPC \u2014 {err[:60]}")
-
-        loop = asyncio.get_running_loop()
-        nfs_ok, _, nfs_err = await loop.run_in_executor(None, app.nfs.list_exports)
-        if nfs_ok:
-            status_lines.append("  \u25cf NFS helper  \u2014 connected")
-        else:
-            status_lines.append(f"  \u25cb NFS helper  \u2014 {nfs_err[:60]}")
+        for r in results:
+            mark = "\u25cf" if r.ok else "\u25cb"
+            status_lines.append(f"  {mark} {r.name:<11} \u2014 {r.detail[:60]}")
 
         try:
             lbl = self.query_one("#welcome-status", Label)
