@@ -1716,9 +1716,10 @@ configure_cufile() {
         [[ -n "$server_ip" ]] && [[ -n "$mount_point" ]] && nfs_mounts+=("$server_ip:$mount_point")
     fi
 
-    # Backup existing config
+    # Plan backup path for existing config (actual cp runs as the first op step)
+    local backup_path=""
     if [[ -f "$CUFILE_JSON_PATH" ]]; then
-        cp "$CUFILE_JSON_PATH" "${CUFILE_JSON_PATH}.bak.$(date +%Y%m%d%H%M%S)"
+        backup_path="${CUFILE_JSON_PATH}.bak.$(date +%Y%m%d%H%M%S)"
     fi
 
     # Check for jq
@@ -1734,6 +1735,15 @@ configure_cufile() {
     # Build cufile.json
     op_start "Configure cuFile" "RDMA IPs: $rdma_ip_list"
     info_box "Configuring" "Writing cufile.json configuration..."
+
+    # Backup existing cufile.json BEFORE any modification. Abort if backup fails.
+    if [[ -n "$backup_path" ]]; then
+        if ! op_run "backup cufile.json -> $backup_path" cp -p "$CUFILE_JSON_PATH" "$backup_path"; then
+            op_end "Backup of $CUFILE_JSON_PATH failed; cufile.json was NOT changed." "Backup Failed" || true
+            msg_box "Backup Failed" "Could not back up $CUFILE_JSON_PATH to:\n$backup_path\n\nNo changes were made to cufile.json."
+            return 1
+        fi
+    fi
 
     # Convert IPs to JSON array
     local ip_array
@@ -1768,7 +1778,9 @@ configure_cufile() {
     chmod 644 "$CUFILE_JSON_PATH"
 
     op_verify "cufile.json valid" jq . "$CUFILE_JSON_PATH" || true
-    op_end "RDMA IPs: $rdma_ip_list\nNFS Mounts: ${#nfs_mounts[@]}\nConfig: $CUFILE_JSON_PATH" "Configuration Complete" || true
+    local _end_summary="RDMA IPs: $rdma_ip_list\nNFS Mounts: ${#nfs_mounts[@]}\nConfig: $CUFILE_JSON_PATH"
+    [[ -n "$backup_path" ]] && _end_summary+="\nBackup: $backup_path"
+    op_end "$_end_summary" "Configuration Complete" || true
 }
 
 # Verify GDS installation and configuration
