@@ -1,0 +1,175 @@
+"""NavigableMenu — numbered + arrow-key menu widget."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import ClassVar
+
+from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.message import Message
+from textual.reactive import reactive
+from textual.widget import Widget
+from textual.widgets import Label
+
+
+@dataclass
+class MenuItem:
+    key: str          # "1", "2", "0", "A", …
+    label: str
+    enabled: bool = True
+    separator: bool = False  # if True, renders as divider line
+
+
+class NavigableMenu(Widget, can_focus=True):
+    """Keyboard-navigable menu.
+
+    Emits a :class:`Selected` message when the user presses Enter or a
+    hotkey that matches a menu item key.
+
+    Must be focused to receive key events — call .focus() or set
+    auto_focus on the parent screen.
+    """
+
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("up", "move_up", "Navigate", show=True, key_display="↑↓"),
+        Binding("down", "move_down", "Navigate", show=False),
+        Binding("enter", "select", "Select", show=True),
+    ]
+
+    DEFAULT_CSS = """
+    NavigableMenu:focus {
+        border: solid $accent;
+    }
+    """
+
+    class Selected(Message):
+        """Emitted when an item is selected."""
+
+        def __init__(self, key: str, label: str) -> None:
+            super().__init__()
+            self.key = key
+            self.label = label
+
+    highlighted: reactive[int] = reactive(0)
+
+    def __init__(self, items: list[MenuItem], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._items = items
+        # Set highlighted to first non-separator item
+        for i, item in enumerate(items):
+            if not item.separator and item.enabled:
+                self.highlighted = i
+                break
+
+    @property
+    def _navigable(self) -> list[tuple[int, MenuItem]]:
+        return [
+            (i, it)
+            for i, it in enumerate(self._items)
+            if not it.separator and it.enabled
+        ]
+
+    def compose(self) -> ComposeResult:
+        for idx, item in enumerate(self._items):
+            if item.separator:
+                yield Label("  ─────────────────────────────", classes="menu-item-separator")
+            else:
+                label_text = f"  [{item.key}] {item.label}"
+                cls = "menu-item"
+                if idx == self.highlighted:
+                    cls += " --highlight"
+                yield Label(label_text, classes=cls, id=f"menu-item-{idx}")
+
+    def on_mount(self) -> None:
+        # Defer focus until after Textual's own focus restoration runs,
+        # otherwise the screen's focus management overrides our focus() call.
+        self.call_after_refresh(self.focus)
+
+    def watch_highlighted(self, _old: int, new: int) -> None:
+        for i, _item in enumerate(self._items):
+            try:
+                widget = self.query_one(f"#menu-item-{i}", Label)
+                if i == new:
+                    widget.add_class("--highlight")
+                else:
+                    widget.remove_class("--highlight")
+            except Exception:
+                pass
+
+    def action_move_up(self) -> None:
+        nav = self._navigable
+        if not nav:
+            return
+        positions = [i for i, _ in nav]
+        try:
+            cur_pos = positions.index(self.highlighted)
+        except ValueError:
+            self.highlighted = positions[0]
+            return
+        self.highlighted = positions[(cur_pos - 1) % len(positions)]
+
+    def action_move_down(self) -> None:
+        nav = self._navigable
+        if not nav:
+            return
+        positions = [i for i, _ in nav]
+        try:
+            cur_pos = positions.index(self.highlighted)
+        except ValueError:
+            self.highlighted = positions[0]
+            return
+        self.highlighted = positions[(cur_pos + 1) % len(positions)]
+
+    def action_select(self) -> None:
+        nav = self._navigable
+        for i, item in nav:
+            if i == self.highlighted:
+                self.post_message(NavigableMenu.Selected(item.key, item.label))
+                return
+
+    def update_items(self, items: list[MenuItem]) -> None:
+        """Replace menu items and re-render."""
+        self._items = items
+        # Reset highlight to first navigable item
+        for i, item in enumerate(items):
+            if not item.separator and item.enabled:
+                self.highlighted = i
+                break
+        # Remove all children and recompose
+        self.remove_children()
+        for idx, item in enumerate(self._items):
+            if item.separator:
+                lbl = Label("  ─────────────────────────────", classes="menu-item-separator")
+            else:
+                label_text = f"  [{item.key}] {item.label}"
+                cls = "menu-item"
+                if idx == self.highlighted:
+                    cls += " --highlight"
+                lbl = Label(label_text, classes=cls, id=f"menu-item-{idx}")
+            self.mount(lbl)
+
+    def on_key(self, event) -> None:
+        # Forward PgUp/PgDn to sibling ScrollableTextView (if any)
+        if event.key in ("pageup", "pagedown"):
+            from xinas_client.widgets.text_view import ScrollableTextView
+            try:
+                for sibling in self.parent.children:
+                    if isinstance(sibling, ScrollableTextView):
+                        if event.key == "pageup":
+                            sibling.scroll_page_up()
+                        else:
+                            sibling.scroll_page_down()
+                        event.stop()
+                        return
+            except Exception:
+                pass
+            return
+
+        key = event.character or ""
+        if not key:
+            return
+        for item in self._items:
+            if not item.separator and item.enabled and item.key.upper() == key.upper():
+                self.post_message(NavigableMenu.Selected(item.key, item.label))
+                event.stop()
+                return
