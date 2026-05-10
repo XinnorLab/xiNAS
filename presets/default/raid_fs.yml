@@ -23,9 +23,9 @@ nvme_auto_namespace: true
 # Set to FALSE to rebuild namespaces with proper 4KB blocks and shared flag
 nvme_use_existing_namespaces: false
 
-# Namespace format settings (4KB blocks, shared for multi-controller)
+# Namespace format settings (4KB blocks; non-shared for single-controller HW)
 nvme_namespace_block_size: 4096
-nvme_namespace_shared: true
+nvme_namespace_shared: false
 
 # RAID levels for auto-generated arrays
 nvme_raid_data_level: 5       # RAID 5 for large namespaces (data array)

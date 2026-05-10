@@ -285,7 +285,7 @@ The `nvme_namespace` role auto-detects system vs. data drives and builds RAID ar
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `nvme_namespace_block_size` | `4096` | Block size in bytes (512 or 4096) |
-| `nvme_namespace_shared` | `true` | Shared namespace flag for multi-controller access |
+| `nvme_namespace_shared` | `false` | Shared namespace flag (nmic=1). xiNAS targets non-HA single-controller hardware — leave `false`. Only set `true` if every drive supports CMIC and the deployment is genuinely multi-host. |
 
 #### Safety Settings
 
