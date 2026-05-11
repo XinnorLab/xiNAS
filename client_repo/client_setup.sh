@@ -1921,11 +1921,140 @@ configure_cufile() {
     op_end "$_end_summary" "Configuration Complete" || true
 }
 
-# Verify GDS installation and configuration
+# Map a parser-error message substring to a short fix hint.
+# Emits 0..N lines; each line is one hint.  Used only by verify_gds().
+_gds_fix_hint() {
+    local msg="$1"
+    case "$msg" in
+        *"NFS : Unsupported"*|*"NFS: Unsupported"*|*"NFS : compat only"*)
+            echo "Run client_repo/patches/apply-mlnx-nfsrdma-export-gpl.sh, then reboot."
+            echo "See docs/troubleshooting/mlnx-nfsrdma-export-symbol-gpl-bug.md"
+            ;;
+        *"proto=tcp"*|*"mounted with proto"*)
+            echo "Remount with proto=rdma,port=20049 — see /etc/fstab."
+            ;;
+        *"mount_table"*)
+            echo "Re-run 'GPUDirect Storage → Configure cuFile' to rewrite the schema."
+            ;;
+        *"compat mode disabled"*)
+            echo "Optional: set properties.allow_compat_mode = true in /etc/cufile.json."
+            ;;
+        *"cuFile init failure"*)
+            echo "Check gdscheck -p output below; usually fixed by reinstalling GDS."
+            ;;
+        *"gdscheck not installed"*|*"gdscheck produced no output"*|*"gdscheck did not report"*|*"gdscheck NFS line not recognised"*)
+            echo "Reinstall the GDS tools (nvidia-gds) — gdscheck is missing or broken."
+            ;;
+        *) echo "" ;;
+    esac
+}
+
+# Render a fixed-width panel (UTF-8 box-drawing) into stdout.
+# $1 = title  $2 = symbol used for each row (e.g. ✗ or ⚠)
+# stdin = lines of the form:
+#     M<message>
+#     H<hint>
+# where M marks a top-level message and H marks an indented hint line.
+_gds_render_panel() {
+    local title="$1"
+    local sym="$2"
+    local inner=63                        # inner width of the panel
+    local dashes
+    dashes=$(printf '─%.0s' $(seq 1 $((inner - ${#title} - 4))))
+    printf '┌─ %s %s┐\n' "$title" "$dashes"
+    local kind text pad
+    while IFS= read -r line; do
+        kind="${line:0:1}"
+        text="${line:1}"
+        if [[ "$kind" == "M" ]]; then
+            # "│  ✗ <text>" then pad to inner width
+            local s="  $sym $text"
+            pad=$(( inner - ${#s} ))
+            (( pad < 0 )) && pad=0
+            printf '│%s%*s│\n' "$s" "$pad" ""
+        else
+            # "│      → <text>"
+            local s="      → $text"
+            pad=$(( inner - ${#s} ))
+            (( pad < 0 )) && pad=0
+            printf '│%s%*s│\n' "$s" "$pad" ""
+        fi
+    done
+    printf '└'
+    printf '─%.0s' $(seq 1 $inner)
+    printf '┘\n'
+}
+
+# Verify GDS installation and configuration.
+#
+# Truth comes from /tmp/.xinas-gds-state.json, produced by
+# _gds_parse_state() in lib/gds_state.sh.  This function only renders
+# that JSON; it does NOT recompute pass/fail.
+#
+# Test knob: when XINAS_GDS_VERIFY_REUSE_STATE=1, skip the parser call
+# and consume whatever JSON already lives at $STATE_FILE.  This lets
+# unit tests inject a synthetic state without going through gdscheck.
 verify_gds() {
     if ! check_gds_installed; then
         msg_box "GDS Not Installed" "GPUDirect Storage is not installed.\n\nPlease install GDS first."
         return 1
+    fi
+
+    # Refresh the JSON envelope (unless the caller asked us to reuse it).
+    if [[ "${XINAS_GDS_VERIFY_REUSE_STATE:-0}" != "1" ]]; then
+        _gds_parse_state || true
+    fi
+
+    local state="${STATE_FILE:-/tmp/.xinas-gds-state.json}"
+    if [[ ! -s "$state" ]] || ! command -v jq &>/dev/null; then
+        msg_box "GDS State Unavailable" \
+            "Could not read $state (or jq is missing).\n\nVerification cannot proceed."
+        return 1
+    fi
+
+    # ── Pull fields out of the JSON envelope ────────────────────────────────
+    local overall nfs_state compat mount_table err_count warn_count
+    overall=$(jq -r '.overall      // "unknown"' "$state")
+    nfs_state=$(jq -r '.nfs_state  // "unknown"' "$state")
+    compat=$(jq -r '.compat        // "disabled"' "$state")
+    mount_table=$(jq -r '.mount_table // "absent"' "$state")
+    err_count=$(jq -r '.errors | length' "$state")
+    warn_count=$(jq -r '.warns  | length' "$state")
+
+    # Symbol + label for the Overall line
+    local sym label
+    case "$overall" in
+        OK)   sym="✓"; label="OK"   ;;
+        WARN) sym="⚠"; label="WARN" ;;
+        FAIL) sym="✗"; label="FAIL" ;;
+        *)    sym="?"; label="$overall" ;;
+    esac
+
+    # Pluralisation helper (small inline trick — keeps the header tidy)
+    local err_word="errors" warn_word="warnings"
+    [[ "$err_count"  == "1" ]] && err_word="error"
+    [[ "$warn_count" == "1" ]] && warn_word="warning"
+
+    # ── Capture raw gdscheck output for the bottom-of-screen dump ───────────
+    # The parser already ran gdscheck, but didn't save the raw text.  Re-run
+    # once for the dump.  Cost: ~1s.  The user is already waiting.
+    local gds_raw=""
+    local gdscheck_bin=""
+    if command -v gdscheck &>/dev/null; then
+        gdscheck_bin="gdscheck"
+    else
+        gdscheck_bin=$(find /usr/local/cuda*/gds/tools \
+                            \( -name 'gdscheck' -o -name 'gdscheck.py' \) \
+                            2>/dev/null | head -1 || true)
+    fi
+    if [[ -n "$gdscheck_bin" ]]; then
+        if [[ $EUID -eq 0 ]]; then
+            gds_raw=$("$gdscheck_bin" -p 2>&1 || true)
+        elif sudo -n true 2>/dev/null; then
+            gds_raw=$(sudo -n "$gdscheck_bin" -p 2>&1 || true)
+        else
+            gds_raw=$("$gdscheck_bin" -p 2>&1 || true)
+        fi
     fi
 
     local out="$TMP_DIR/gds_verify"
@@ -1934,21 +2063,55 @@ verify_gds() {
         echo "                    GDS Verification Results"
         echo "═══════════════════════════════════════════════════════════════"
         echo ""
+        printf '  Overall: %s %s    (%s %s, %s %s)\n' \
+            "$sym" "$label" "$err_count" "$err_word" "$warn_count" "$warn_word"
+        echo ""
 
-        local all_passed=true
+        # ── CRITICAL ERRORS panel (only when errors present) ────────────────
+        if [[ "$err_count" -gt 0 ]]; then
+            {
+                local emsg
+                while IFS= read -r emsg; do
+                    [[ -z "$emsg" ]] && continue
+                    printf 'M%s\n' "$emsg"
+                    local hint
+                    while IFS= read -r hint; do
+                        [[ -z "$hint" ]] && continue
+                        printf 'H%s\n' "$hint"
+                    done < <(_gds_fix_hint "$emsg")
+                done < <(jq -r '.errors[]' "$state")
+            } | _gds_render_panel "CRITICAL ERRORS" "✗"
+            echo ""
+        fi
 
-        # Check 1: nvidia-fs module
+        # ── WARNINGS panel (only when warnings present) ─────────────────────
+        if [[ "$warn_count" -gt 0 ]]; then
+            {
+                local wmsg
+                while IFS= read -r wmsg; do
+                    [[ -z "$wmsg" ]] && continue
+                    printf 'M%s\n' "$wmsg"
+                    local hint
+                    while IFS= read -r hint; do
+                        [[ -z "$hint" ]] && continue
+                        printf 'H%s\n' "$hint"
+                    done < <(_gds_fix_hint "$wmsg")
+                done < <(jq -r '.warns[]' "$state")
+            } | _gds_render_panel "WARNINGS" "⚠"
+            echo ""
+        fi
+
+        # ── Check 1: nvidia-fs Kernel Module ────────────────────────────────
         echo "▶ Check 1: nvidia-fs Kernel Module"
-        if lsmod | grep -q nvidia_fs; then
+        if lsmod 2>/dev/null | grep -q nvidia_fs; then
             echo "  ✓ PASS: nvidia-fs module is loaded"
         else
             echo "  ✗ FAIL: nvidia-fs module not loaded"
             echo "    Try: modprobe nvidia-fs"
-            all_passed=false
         fi
         echo ""
 
-        # Check 2: GDS libraries
+        # ── Check 2: GDS Libraries ──────────────────────────────────────────
         echo "▶ Check 2: GDS Libraries"
         local cuda_path
         cuda_path=$(get_cuda_path)
@@ -1956,7 +2119,6 @@ verify_gds() {
             echo "  ✓ PASS: libcufile.so found"
         else
             echo "  ✗ FAIL: libcufile.so not found"
-            all_passed=false
         fi
         if [[ -f "$cuda_path/lib64/libcufile_rdma.so" ]]; then
             echo "  ✓ PASS: libcufile_rdma.so found (RDMA support)"
@@ -1965,7 +2127,7 @@ verify_gds() {
         fi
         echo ""
 
-        # Check 3: /proc/driver/nvidia-fs
+        # ── Check 3: nvidia-fs Proc Interface ───────────────────────────────
         echo "▶ Check 3: nvidia-fs Proc Interface"
         if [[ -d /proc/driver/nvidia-fs ]]; then
             echo "  ✓ PASS: /proc/driver/nvidia-fs exists"
@@ -1974,75 +2136,111 @@ verify_gds() {
             fi
         else
             echo "  ✗ FAIL: /proc/driver/nvidia-fs not present"
-            all_passed=false
         fi
         echo ""
 
-        # Check 4: cufile.json
+        # ── Check 4: cuFile Configuration (schema + compat) ─────────────────
         echo "▶ Check 4: cuFile Configuration"
-        if [[ -f "$CUFILE_JSON_PATH" ]]; then
-            echo "  ✓ PASS: $CUFILE_JSON_PATH exists"
-            if command -v jq &>/dev/null; then
-                if jq -e '.fs.nfs.rdma_dev_addr_list' "$CUFILE_JSON_PATH" &>/dev/null; then
-                    echo "  ✓ PASS: NFS RDMA addresses configured"
-                else
-                    echo "  ⚠ WARN: NFS RDMA not configured"
-                fi
-            fi
-        else
-            echo "  ⚠ WARN: $CUFILE_JSON_PATH not found (defaults will be used)"
+        case "$mount_table" in
+            valid)
+                echo "  ✓ PASS: mount_table schema valid"
+                ;;
+            invalid)
+                echo "  ✗ FAIL: mount_table schema invalid (see CRITICAL ERRORS)"
+                ;;
+            absent)
+                echo "  ⚠ WARN: mount_table not configured"
+                echo "    Run: GPUDirect Storage → Configure cuFile"
+                ;;
+            *)
+                echo "  ⚠ WARN: mount_table state unknown ($mount_table)"
+                ;;
+        esac
+        case "$compat" in
+            enabled)
+                echo "  ✓ PASS: compat mode enabled"
+                ;;
+            disabled)
+                echo "  ⚠ WARN: compat mode disabled"
+                echo "    Optional: properties.allow_compat_mode = true in /etc/cufile.json"
+                ;;
+            *)
+                echo "  ⚠ WARN: compat mode state unknown ($compat)"
+                ;;
+        esac
+        echo ""
+
+        # ── Check 5: gdscheck Platform Verification ─────────────────────────
+        # Derived from nfs_state + whether the parser collected any errors
+        # that originated from gdscheck (NFS / cuFile init).
+        echo "▶ Check 5: gdscheck Platform Verification"
+        case "$nfs_state" in
+            "nvfs,compat")
+                echo "  ✓ PASS: NFS state = nvfs,compat"
+                ;;
+            "nvfs")
+                echo "  ⚠ WARN: NFS state = nvfs (compat disabled)"
+                ;;
+            "unsupported")
+                echo "  ✗ FAIL: NFS state = unsupported"
+                echo "    See CRITICAL ERRORS panel above for the fix."
+                ;;
+            "unknown")
+                echo "  ✗ FAIL: NFS state = unknown (gdscheck did not report)"
+                ;;
+            *)
+                echo "  ⚠ WARN: NFS state = $nfs_state (unrecognised)"
+                ;;
+        esac
+        # cuFile init failure shows up in errors[] independently of nfs_state
+        if jq -e '.errors | map(select(test("cuFile init failure"))) | length > 0' \
+            "$state" >/dev/null 2>&1; then
+            echo "  ✗ FAIL: gdscheck reports cuFile init failure"
         fi
         echo ""
 
-        # Check 5: gdscheck
-        echo "▶ Check 5: gdscheck Verification"
-        local gdscheck_path
-        gdscheck_path=$(find /usr/local/cuda*/gds/tools -name "gdscheck.py" 2>/dev/null | head -1 || true)
-        if [[ -n "$gdscheck_path" ]] && [[ -x "$gdscheck_path" ]]; then
-            echo "  Running: $gdscheck_path -p"
-            echo ""
-            local gds_out
-            gds_out=$(sudo "$gdscheck_path" -p 2>&1 || true)
-            echo "$gds_out" | while read -r line; do
-                echo "  $line"
-            done || true
-            echo ""
-
-            # Parse key results
-            if echo "$gds_out" | grep -q "Userspace RDMA : Supported" || false; then
-                echo "  ✓ PASS: Userspace RDMA supported"
-            fi
-            if echo "$gds_out" | grep -q "rdma library : Loaded" || false; then
-                echo "  ✓ PASS: RDMA library loaded"
-            fi
-            if echo "$gds_out" | grep -q "NFS : compat" || false; then
-                echo "  ✓ INFO: NFS in compatibility mode (expected)"
-            fi
+        # ── Check 6: NFS Mount Protocol ─────────────────────────────────────
+        echo "▶ Check 6: NFS Mount Protocol"
+        local mount_count
+        mount_count=$(jq -r '.mounts | length' "$state")
+        if [[ "$mount_count" == "0" ]]; then
+            echo "  ℹ INFO: no NFS mounts detected"
         else
-            echo "  ⚠ WARN: gdscheck not found"
-            echo "    Expected at: /usr/local/cuda/gds/tools/gdscheck.py"
+            local bad
+            bad=$(jq -r '.mounts[] | select(.proto != "rdma") | "\(.path) (proto=\(.proto))"' "$state")
+            if [[ -z "$bad" ]]; then
+                echo "  ✓ PASS: all NFS mounts use proto=rdma ($mount_count mount(s))"
+            else
+                echo "  ✗ FAIL: one or more NFS mounts not using proto=rdma:"
+                local line
+                while IFS= read -r line; do
+                    [[ -z "$line" ]] && continue
+                    echo "      • $line"
+                done <<< "$bad"
+            fi
         fi
         echo ""
 
-        # Check 6: GPU/NIC topology
-        echo "▶ Check 6: GPU/NIC Topology (for performance)"
+        # ── Check 7: GPU/NIC Topology (info only) ───────────────────────────
+        echo "▶ Check 7: GPU/NIC Topology (info)"
         if command -v nvidia-smi &>/dev/null; then
             echo "  GPU-NIC topology (nvidia-smi topo -mp):"
             nvidia-smi topo -mp 2>/dev/null | head -15 | while read -r line; do
                 echo "    $line"
             done || true
+        else
+            echo "  ⚠ nvidia-smi not available — topology check skipped"
         fi
         echo ""
 
-        # Summary
-        echo "═══════════════════════════════════════════════════════════════"
-        if $all_passed; then
-            echo "  ✓ All critical checks PASSED"
-            echo ""
-            echo "  GDS is ready for use with cuFile API applications."
-            echo "  Note: Regular read()/write() apps won't use GDS automatically."
+        # ── Full gdscheck -p output (raw, for context) ──────────────────────
+        echo "─── Full gdscheck -p output ──────────────────────────────────"
+        if [[ -n "$gds_raw" ]]; then
+            printf '%s\n' "$gds_raw" | while IFS= read -r line; do
+                echo "  $line"
+            done || true
         else
-            echo "  ⚠ Some checks FAILED - see above for details"
+            echo "  (gdscheck not available)"
         fi
         echo "═══════════════════════════════════════════════════════════════"
     } > "$out"
