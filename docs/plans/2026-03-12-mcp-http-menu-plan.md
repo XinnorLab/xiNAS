@@ -1,5 +1,7 @@
 # MCP HTTP Remote Access Menu — Implementation Plan
 
+> **Status:** Superseded — kept for historical context. The feature shipped in the Python Textual TUI instead of `post_install_menu.sh`. See [xinas_menu/screens/mcp.py](../../xinas_menu/screens/mcp.py) (`RemoteAccessScreen`, `TokenManagementScreen`) for the current implementation. Do not execute the bash tasks below — per CLAUDE.md, day-2 management UIs belong in the Python TUI.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add interactive menu options to `post_install_menu.sh` for enabling/configuring MCP Streamable HTTP transport, managing auth tokens, and setting TLS paths — replacing manual JSON editing.

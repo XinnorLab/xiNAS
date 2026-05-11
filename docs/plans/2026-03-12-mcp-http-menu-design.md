@@ -1,7 +1,9 @@
 # MCP HTTP Remote Access Menu — Design
 
 **Date:** 2026-03-12
-**Status:** Approved
+**Status:** Superseded — kept for historical context
+
+> **Current implementation:** The Remote Access (HTTP) flow now lives in the Python Textual TUI: `RemoteAccessScreen` and `TokenManagementScreen` in [xinas_menu/screens/mcp.py](../../xinas_menu/screens/mcp.py). The bash `post_install_menu.sh` flow described below is deprecated per CLAUDE.md ("Post-install management (Python only)"). The Python implementation preserves the menu structure and config schema described here; only the host TUI differs.
 
 ## Problem
 
