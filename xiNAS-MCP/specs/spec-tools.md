@@ -19,6 +19,7 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 | `network.configure` | admin | plan/apply | — | — | networkInfo (preflight) | — |
 | `health.run_check` | viewer | — | — | raidShow, poolShow, driveFaultyCountShow, licenseShow | Python health engine (subprocess) | — |
 | `health.get_alerts` | viewer | — | — | — | — | — |
+| `health.fix_nfs_conf` | admin | — | — | — | — | fixNfsConf (writes /etc/nfs.conf, restarts nfs-server) |
 | `disk.list` | viewer | — | — | raidShow | diskInfo | — |
 | `disk.get_smart` | viewer | — | — | — | diskInfo (NVMe sysfs) | — |
 | `disk.run_selftest` | operator | — | — | — | — | — |
@@ -203,6 +204,18 @@ The Python engine is the single source of truth for all OS-level health checks. 
 
 ### Alert Deduplication
 Alerts are keyed by `check_id`. A new check run updates `last_seen` if the alert already exists (same `check_id`, not acknowledged). New alerts are pushed to ring buffer (max 100).
+
+### `health.fix_nfs_conf`
+
+Targeted remediation for the NFS-related findings of `health.run_check`. Edits `/etc/nfs.conf` in place via `xinas-nfs-helper` (op: `fix_nfs_conf`), preserving Ansible blockinfile markers and unrelated keys, and optionally restarts `nfs-server`.
+
+Parameters (at least one of `threads`, `rdma`, or `updates` is required):
+- `threads`: `number | "auto"` — sets `[nfsd] threads` and `[exportd] threads`. `"auto"` resolves to the physical CPU core count (same calculation the `nfs_server` Ansible role uses).
+- `rdma`: `boolean | "y" | "n" | …` — sets `[nfsd] rdma`.
+- `updates`: `{ section: { key: value } }` — free-form additional settings.
+- `restart_service`: `boolean` (default `true`) — restarts `nfs-server` only when something changed.
+
+Typical use: the Textual TUI remediation wizard collapses the `NFS.threads_config` + `NFS.rdma_enabled` health findings into a single call to this tool.
 
 ---
 
