@@ -186,6 +186,23 @@ def run_cmd(cmd, timeout=10):
     except (subprocess.TimeoutExpired, OSError):
         return None
 
+def _dpkg_version(pkg):
+    """Return installed Debian package version string, or None if not installed."""
+    out = run_cmd(f"dpkg-query -W -f='${{Status}}|${{Version}}' {pkg} 2>/dev/null")
+    if not out or "|" not in out:
+        return None
+    status, version = out.split("|", 1)
+    if "installed" not in status:
+        return None
+    return version.strip() or None
+
+def _ofed_present():
+    """True if MLNX_OFED / DOCA-Host kernel stack is installed.
+    Mirrors the probe used by client_setup.sh:enable_nfs_rdma."""
+    if _dpkg_version("mlnx-ofed-kernel-dkms"):
+        return True
+    return run_cmd("ofed_info -s 2>/dev/null") is not None
+
 def get_interfaces():
     ifaces = []
     try:
