@@ -87,16 +87,23 @@ class LicenseScreen(Screen):
             _log.debug("Could not fetch hwkey", exc_info=True)
 
         if hwkey:
-            prompt = f"HW key: {hwkey}\n\nPaste the license text below:"
+            prompt = (
+                f"HW key: {hwkey}\n"
+                f"(Press Ctrl+Y to copy HW key)\n\n"
+                f"Paste the license text below:"
+            )
         else:
             prompt = "HW key: (unavailable)\n\nPaste the license text below:"
 
-        # Show multi-line text area for license input
+        # Show multi-line text area for license input. copy_text=hwkey
+        # makes Ctrl+Y copy the HW key (and releases mouse capture so
+        # the user can also drag-select the prompt).
         license_text = await self.app.push_screen_wait(
             TextAreaDialog(
                 prompt,
                 "Update License",
                 default=existing,
+                copy_text=hwkey or None,
             )
         )
         if not license_text or not license_text.strip():
