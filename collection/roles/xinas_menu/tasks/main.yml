@@ -28,6 +28,29 @@
     state: present
   tags: [xinas_menu, python]
 
+# Editable-install xinas_menu so `python -m xinas_menu.health` works from any
+# process using this venv (notably the xiNAS-MCP server). Without this, the
+# package only resolves via PYTHONPATH set by the wrapper scripts. Needs
+# setuptools >= 64 + pip >= 23 for PEP 660 editable installs against
+# pyproject.toml — the venv's bundled versions are too old on Ubuntu 22.04.
+- name: Upgrade pip + setuptools + wheel in venv (required for editable install)
+  ansible.builtin.pip:
+    name:
+      - "pip>=23"
+      - "setuptools>=64"
+      - "wheel"
+    virtualenv: "{{ xinas_menu_venv_path }}"
+    state: latest
+  tags: [xinas_menu, python]
+
+- name: Install xinas_menu package editable into venv
+  ansible.builtin.pip:
+    name: "{{ xinas_repo_path }}"
+    editable: true
+    virtualenv: "{{ xinas_menu_venv_path }}"
+    state: present
+  tags: [xinas_menu, python]
+
 # ─── 3. Verify xinas_menu package is present ─────────────────────────────────
 # The package lives inside the git repo at xinas_repo_path/xinas_menu/.
 # When the repo is deployed to xinas_menu_package_path/../ (e.g. /opt/xiNAS),
