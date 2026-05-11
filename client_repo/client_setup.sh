@@ -4035,10 +4035,23 @@ advanced_settings_menu() {
             doca_indicator=" [OK]"
         fi
 
+        # GDS indicator: three-state (OK/WARN/FAIL) driven by _gds_parse_state's
+        # JSON envelope. The parser's cache makes repeat calls essentially free,
+        # so menu re-renders don't pay the full gdscheck cost.
         if ! lsmod 2>/dev/null | grep -q nvidia_fs; then
             gds_indicator=""
         else
-            gds_indicator=" [OK]"
+            _gds_parse_state >/dev/null 2>&1 || true
+            local _gds_overall=""
+            if command -v jq &>/dev/null && [[ -s /tmp/.xinas-gds-state.json ]]; then
+                _gds_overall=$(jq -r '.overall // "unknown"' /tmp/.xinas-gds-state.json 2>/dev/null)
+            fi
+            case "$_gds_overall" in
+                OK)   gds_indicator=" [OK]" ;;
+                WARN) gds_indicator=" [WARN ⚠]" ;;
+                FAIL) gds_indicator=" [FAIL ✗]" ;;
+                *)    gds_indicator=" [OK]" ;;
+            esac
         fi
 
         # Highlight update item if available
