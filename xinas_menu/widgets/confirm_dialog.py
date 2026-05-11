@@ -34,6 +34,7 @@ class ConfirmDialog(ModalScreen[bool]):
         Binding("y", "dismiss_yes", "Yes", show=False),
         Binding("n", "dismiss_no", "No", show=False),
         Binding("enter", "dismiss_ok", "OK", show=False),
+        Binding("ctrl+y", "copy_message", "Copy", show=False),
     ]
 
     def __init__(
@@ -44,6 +45,7 @@ class ConfirmDialog(ModalScreen[bool]):
         ok_only: bool = False,
         yes_label: str | None = None,
         no_label: str | None = None,
+        copy_text: str | None = None,
     ) -> None:
         super().__init__()
         self._message = message
@@ -51,6 +53,7 @@ class ConfirmDialog(ModalScreen[bool]):
         self._ok_only = ok_only
         self._yes_label = yes_label or "Yes [y]"
         self._no_label = no_label or "No [n]"
+        self._copy_text = copy_text if copy_text is not None else message
 
     def compose(self) -> ComposeResult:
         from textual.containers import Vertical, Horizontal
@@ -83,3 +86,7 @@ class ConfirmDialog(ModalScreen[bool]):
     def action_dismiss_ok(self) -> None:
         if self._ok_only:
             self.dismiss(True)
+
+    def action_copy_message(self) -> None:
+        if self._copy_text:
+            self.app._do_copy(self._copy_text)

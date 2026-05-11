@@ -716,9 +716,11 @@ class TokenManagementScreen(Screen):
                 f"Role:  {role_key}\n\n"
                 f"Token (copy now — shown once):\n\n"
                 f"{token_value}\n\n"
+                f"Press Ctrl+Y to copy the token.\n"
                 f"Use as Bearer token in Authorization header.",
                 "Token Created",
                 ok_only=True,
+                copy_text=token_value,
             )
         )
         self._refresh()
