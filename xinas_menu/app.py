@@ -209,31 +209,71 @@ class XiNASApp(App):
             _log.debug("copy content failed (no text view on screen?)", exc_info=True)
 
     def _do_copy(self, text: str) -> None:
-        """Copy *text* to the user's clipboard.
+        """Send *text* to the user's clipboard, with a recovery file.
 
-        Tries OSC 52 first — an ANSI escape that the user's terminal
-        emulator interprets and writes to its own system clipboard.
-        This works through SSH (which is the common case for xiNAS, since
-        the server is headless and has no local clipboard backends).
+        Two paths run unconditionally:
 
-        Falls back to local subprocess backends (tmux/xclip/xsel/wl-copy/
-        temp file) only when OSC 52 isn't available — e.g. older Textual
-        versions before App.copy_to_clipboard was introduced (0.71.0).
+        1. OSC 52 escape via Textual — interpreted by the user's terminal
+           emulator on their workstation, so it works through SSH. Honored
+           by iTerm2 (with "Applications may access clipboard" enabled),
+           Ghostty, WezTerm, kitty, gnome-terminal, Windows Terminal,
+           Alacritty, etc. Silently dropped by Apple Terminal.app — which
+           has no setting to enable it, hence the second path.
+
+        2. A 0600 recovery file at ~/.xinas/clipboard.txt (the home of
+           whichever user runs xinas-menu). Users on terminals that don't
+           honor OSC 52 can always `cat` the file to retrieve the value.
         """
+        save_path = self._save_clipboard_recovery_file(text)
+
+        osc52_ok = False
         copy_to_clipboard = getattr(self, "copy_to_clipboard", None)
         if callable(copy_to_clipboard):
             try:
                 copy_to_clipboard(text)
-                self.notify("Copied to clipboard.", timeout=3)
-                return
+                osc52_ok = True
             except Exception:
                 _log.debug("OSC 52 copy_to_clipboard failed", exc_info=True)
-        self._do_copy_local(text)
 
-    @work(exclusive=True, thread=True)
-    def _do_copy_local(self, text: str) -> None:
-        msg = _copy_text(text)
-        self.call_from_thread(self.notify, msg, timeout=3)
+        if osc52_ok and save_path:
+            msg = f"Copied to clipboard (OSC 52). If paste fails, see {save_path}"
+        elif osc52_ok:
+            msg = "Copied to clipboard (OSC 52)."
+        elif save_path:
+            msg = f"Terminal doesn't accept clipboard escapes. Saved to {save_path} — cat the file to retrieve."
+        else:
+            msg = "Copy failed — clipboard and recovery file both unavailable."
+        self.notify(msg, timeout=8)
+
+    @staticmethod
+    def _save_clipboard_recovery_file(text: str) -> str | None:
+        """Write *text* to ~/.xinas/clipboard.txt with mode 0600.
+
+        Returns the path on success, None on failure. Atomically replaces
+        any previous content so only the most recent copy is retained.
+        """
+        import os
+        from pathlib import Path
+        try:
+            home = Path(os.path.expanduser("~"))
+            d = home / ".xinas"
+            d.mkdir(mode=0o700, exist_ok=True)
+            path = d / "clipboard.txt"
+            tmp = path.with_suffix(".tmp")
+            fd = os.open(
+                str(tmp),
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600,
+            )
+            try:
+                os.write(fd, text.encode("utf-8"))
+            finally:
+                os.close(fd)
+            os.replace(tmp, path)
+            return str(path)
+        except Exception:
+            _log.debug("recovery file save failed", exc_info=True)
+            return None
 
     def action_scroll_up(self) -> None:
         """Scroll the content panel up."""
@@ -266,6 +306,8 @@ class XiNASApp(App):
                 "PgUp / PgDn — scroll output panel\n"
                 "U — check for updates\n"
                 "Ctrl+Y — copy output to clipboard\n"
+                "         (also saved to ~/.xinas/clipboard.txt if your\n"
+                "         terminal doesn't support OSC 52 — e.g. Apple Terminal)\n"
                 "Ctrl+C — quit",
                 "Help",
                 ok_only=True,
@@ -274,93 +316,3 @@ class XiNASApp(App):
 
     async def on_unmount(self) -> None:
         await self.grpc.close()
-
-
-def _copy_text(text: str) -> str:
-    """Copy text to clipboard using the best available method.
-
-    Priority:
-      1. tmux set-buffer  (inside tmux — no extra config needed)
-      2. xclip -selection clipboard
-      3. xsel --clipboard --input
-      4. wl-copy  (Wayland)
-      5. write to /tmp/xinas_copy.txt as last resort
-    Returns a short status string for the notification.
-    """
-    import os
-    import subprocess
-    import tempfile
-
-    data = text.encode()
-
-    # ── tmux ──────────────────────────────────────────────────────────────
-    if os.environ.get("TMUX"):
-        # set-buffer passes text as argument — works on all tmux versions
-        try:
-            r = subprocess.run(
-                ["tmux", "set-buffer", "--", text],
-                capture_output=True, timeout=5,
-            )
-            if r.returncode == 0:
-                return "Copied to tmux buffer  (paste with prefix + ])"
-        except Exception:
-            _log.debug("tmux set-buffer failed", exc_info=True)
-        # fallback: load-buffer via stdin (tmux ≥ 2.0)
-        try:
-            r = subprocess.run(
-                ["tmux", "load-buffer", "-"],
-                input=data, capture_output=True, timeout=5,
-            )
-            if r.returncode == 0:
-                return "Copied to tmux buffer  (paste with prefix + ])"
-        except Exception:
-            _log.debug("tmux load-buffer failed", exc_info=True)
-
-    # ── xclip ─────────────────────────────────────────────────────────────
-    try:
-        r = subprocess.run(
-            ["xclip", "-selection", "clipboard"],
-            input=data, capture_output=True, timeout=5,
-        )
-        if r.returncode == 0:
-            return "Copied to clipboard (xclip)"
-    except FileNotFoundError:
-        pass
-    except Exception:
-        _log.debug("xclip failed", exc_info=True)
-
-    # ── xsel ──────────────────────────────────────────────────────────────
-    try:
-        r = subprocess.run(
-            ["xsel", "--clipboard", "--input"],
-            input=data, capture_output=True, timeout=5,
-        )
-        if r.returncode == 0:
-            return "Copied to clipboard (xsel)"
-    except FileNotFoundError:
-        pass
-    except Exception:
-        _log.debug("xsel failed", exc_info=True)
-
-    # ── wl-copy (Wayland) ─────────────────────────────────────────────────
-    try:
-        r = subprocess.run(
-            ["wl-copy"], input=data, capture_output=True, timeout=5,
-        )
-        if r.returncode == 0:
-            return "Copied to clipboard (wl-copy)"
-    except FileNotFoundError:
-        pass
-    except Exception:
-        _log.debug("wl-copy failed", exc_info=True)
-
-    # ── last resort: write to temp file ───────────────────────────────────
-    try:
-        path = "/tmp/xinas_copy.txt"
-        with open(path, "w") as f:
-            f.write(text)
-        return f"Saved to {path}  (cat {path} | xclip)"
-    except Exception:
-        _log.debug("writing to temp file failed", exc_info=True)
-
-    return "Copy failed — no clipboard tool available"
