@@ -1,17 +1,33 @@
 /**
  * Health-engine subprocess bridge.
  *
- * Invokes `python3 -m xinas_menu.health <profile> <log_dir> --json --no-save`
- * and parses the JSON output.  Follows the configHistory.ts subprocess pattern.
+ * Invokes `<python> -m xinas_menu.health <profile> <log_dir> --json --no-save`
+ * and parses the JSON output. The interpreter path comes from server config
+ * (health_engine_python), falling back to the venv created by the xinas_menu
+ * Ansible role at /opt/xiNAS/venv/bin/python, and finally to system python3.
+ * Follows the configHistory.ts subprocess pattern.
  */
 
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { McpToolError, ErrorCode } from '../types/common.js';
+import { loadConfig } from '../config/serverConfig.js';
 
-const PYTHON = 'python3';
 const MODULE = 'xinas_menu.health';
+// xinas_menu is installed into a venv by the Ansible role at this path; the
+// system python3 cannot import it. Operators can override via config.
+const DEFAULT_VENV_PYTHON = '/opt/xiNAS/venv/bin/python';
+
+function resolvePython(): string {
+  // Not cached on purpose: on fresh installs the xinas_mcp role starts the
+  // service before the xinas_menu role creates the venv. Re-checking each
+  // call lets the venv path get picked up automatically the moment it appears.
+  const override = loadConfig().health_engine_python;
+  if (override) return override;
+  if (existsSync(DEFAULT_VENV_PYTHON)) return DEFAULT_VENV_PYTHON;
+  return 'python3';
+}
 
 /** Profile-specific timeouts matching healthcheck_profiles/*.yml timeout_seconds */
 const PROFILE_TIMEOUT_MS: Record<string, number> = {
@@ -71,7 +87,7 @@ function findProfilePath(profile: string): string {
 
 function run(args: string[], timeoutMs: number): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
-    execFile(PYTHON, ['-m', MODULE, ...args], { timeout: timeoutMs }, (err, stdout, stderr) => {
+    execFile(resolvePython(), ['-m', MODULE, ...args], { timeout: timeoutMs }, (err, stdout, stderr) => {
       if (err && 'killed' in err && err.killed) {
         reject(new McpToolError(ErrorCode.TIMEOUT, `Health engine timed out after ${timeoutMs}ms`));
         return;

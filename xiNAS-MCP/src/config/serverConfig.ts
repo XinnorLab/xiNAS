@@ -29,6 +29,9 @@ export interface ServerConfig {
   http_enabled: boolean;
   http_port?: number;
   tls?: TlsConfig;
+  // Python interpreter for the xinas_menu.health subprocess. If unset,
+  // healthEngine.ts picks /opt/xiNAS/venv/bin/python when present, else 'python3'.
+  health_engine_python?: string;
 }
 
 const DEFAULTS: Omit<ServerConfig, 'controller_id'> = {
@@ -69,6 +72,7 @@ export function loadConfig(): ServerConfig {
     http_enabled: raw.http_enabled ?? DEFAULTS.http_enabled,
     ...(raw.http_port !== undefined ? { http_port: raw.http_port } : {}),
     ...(raw.tls ? { tls: raw.tls } : {}),
+    ...(raw.health_engine_python ? { health_engine_python: raw.health_engine_python } : {}),
   };
 
   // Persist if we generated a new controller_id
