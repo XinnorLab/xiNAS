@@ -83,9 +83,14 @@ Auto-created on first run. Generates UUID v4 `controller_id` and persists.
   "audit_log_path": "/var/log/xinas/mcp-audit.jsonl",
   "tokens": { "token-string": "viewer|operator|admin" },
   "sse_enabled": false,
-  "sse_port": 8080
+  "sse_port": 8080,
+  "health_engine_python": "/opt/xiNAS/venv/bin/python"
 }
 ```
+
+`health_engine_python` is optional. When unset, `healthEngine.ts` picks
+`/opt/xiNAS/venv/bin/python` if it exists (the venv created by the
+`xinas_menu` Ansible role), otherwise falls back to system `python3`.
 
 ### Key Functions
 - `loadConfig(): ServerConfig` — cached singleton
