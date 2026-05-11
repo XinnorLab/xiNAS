@@ -1945,6 +1945,9 @@ _gds_fix_hint() {
         *"gdscheck not installed"*|*"gdscheck produced no output"*|*"gdscheck did not report"*|*"gdscheck NFS line not recognised"*)
             echo "Reinstall the GDS tools (nvidia-gds) — gdscheck is missing or broken."
             ;;
+        *"jq not installed"*|*"jq is required"*)
+            echo "Install jq: apt-get install -y jq"
+            ;;
         *) echo "" ;;
     esac
 }
@@ -1960,21 +1963,34 @@ _gds_render_panel() {
     local sym="$2"
     local inner=63                        # inner width of the panel
     local dashes
-    dashes=$(printf '─%.0s' $(seq 1 $((inner - ${#title} - 4))))
+    # inner - 2 (corners) - 1 (leading ─) - 1 (leading space) - title - 1 (trailing space) = inner - title - 5
+    # We render `┌─ <title> <dashes>┐` so dashes count = inner - 2 (the corner glyphs are NOT counted in inner) - 3 (─, space-before-title, space-after-title) - title len = inner - title - 3.
+    dashes=$(printf '─%.0s' $(seq 1 $((inner - ${#title} - 3))))
     printf '┌─ %s %s┐\n' "$title" "$dashes"
     local kind text pad
     while IFS= read -r line; do
         kind="${line:0:1}"
         text="${line:1}"
         if [[ "$kind" == "M" ]]; then
-            # "│  ✗ <text>" then pad to inner width
+            # "│  ✗ <text>" then pad to inner width. Truncate text with `…`
+            # if the assembled line would overflow.
             local s="  $sym $text"
+            if (( ${#s} > inner )); then
+                local budget=$(( inner - 5 ))   # "  ✗ " is 4 chars + 1 for `…`
+                text="${text:0:$budget}…"
+                s="  $sym $text"
+            fi
             pad=$(( inner - ${#s} ))
             (( pad < 0 )) && pad=0
             printf '│%s%*s│\n' "$s" "$pad" ""
         else
             # "│      → <text>"
             local s="      → $text"
+            if (( ${#s} > inner )); then
+                local budget=$(( inner - 9 ))   # "      → " is 8 chars + 1 for `…`
+                text="${text:0:$budget}…"
+                s="      → $text"
+            fi
             pad=$(( inner - ${#s} ))
             (( pad < 0 )) && pad=0
             printf '│%s%*s│\n' "$s" "$pad" ""
@@ -1995,6 +2011,11 @@ _gds_render_panel() {
 # and consume whatever JSON already lives at $STATE_FILE.  This lets
 # unit tests inject a synthetic state without going through gdscheck.
 verify_gds() {
+    # Ensure ${#str} measures characters, not bytes — panel padding depends
+    # on this for UTF-8 box-drawing glyphs (✗, →, etc.). Only force when the
+    # caller hasn't explicitly set a locale.
+    local LC_ALL="${LC_ALL:-C.UTF-8}"
+
     if ! check_gds_installed; then
         msg_box "GDS Not Installed" "GPUDirect Storage is not installed.\n\nPlease install GDS first."
         return 1
@@ -2006,9 +2027,19 @@ verify_gds() {
     fi
 
     local state="${STATE_FILE:-/tmp/.xinas-gds-state.json}"
-    if [[ ! -s "$state" ]] || ! command -v jq &>/dev/null; then
+    if [[ ! -s "$state" ]]; then
         msg_box "GDS State Unavailable" \
-            "Could not read $state (or jq is missing).\n\nVerification cannot proceed."
+            "GDS state file missing at $state — parser may have failed."
+        return 1
+    fi
+    if ! command -v jq &>/dev/null; then
+        msg_box "GDS State Unavailable" \
+            "jq is required for verify_gds but is not installed.\n\nInstall it with: apt-get install -y jq"
+        return 1
+    fi
+    if ! jq empty "$state" 2>/dev/null; then
+        msg_box "GDS State Malformed" \
+            "GDS state file at $state is not valid JSON.\n\nRun verify_gds again to regenerate."
         return 1
     fi
 
@@ -2200,11 +2231,22 @@ verify_gds() {
         echo ""
 
         # ── Check 6: NFS Mount Protocol ─────────────────────────────────────
+        # Only meaningful when GDS is actually configured for NFS — otherwise
+        # we'd double-count Check 5's FAIL.  Matches the truth-table gate in
+        # lib/gds_state.sh that decides whether to push mount-proto errors
+        # into .errors[].
         echo "▶ Check 6: NFS Mount Protocol"
         local mount_count
         mount_count=$(jq -r '.mounts | length' "$state")
         if [[ "$mount_count" == "0" ]]; then
             echo "  ℹ INFO: no NFS mounts detected"
+        elif [[ "$nfs_state" != "nvfs" && "$nfs_state" != "nvfs,compat" ]]; then
+            echo "  ℹ INFO: GDS not configured (nfs_state=$nfs_state); mount protocol check N/A"
+            local line
+            while IFS= read -r line; do
+                [[ -z "$line" ]] && continue
+                echo "      • $line"
+            done < <(jq -r '.mounts[] | "\(.path) (proto=\(.proto))"' "$state")
         else
             local bad
             bad=$(jq -r '.mounts[] | select(.proto != "rdma") | "\(.path) (proto=\(.proto))"' "$state")
