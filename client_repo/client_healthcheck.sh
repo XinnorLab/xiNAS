@@ -192,7 +192,8 @@ def _dpkg_version(pkg):
     if not out or "|" not in out:
         return None
     status, version = out.split("|", 1)
-    if "installed" not in status:
+    fields = status.strip().split()
+    if not fields or fields[-1] != "installed":
         return None
     return version.strip() or None
 
