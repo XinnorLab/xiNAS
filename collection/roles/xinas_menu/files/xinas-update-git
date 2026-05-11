@@ -1,0 +1,30 @@
+#!/bin/bash
+# /usr/local/sbin/xinas-update-git
+#
+# Privileged helper for xinas-menu's update check. Runs as root via
+# sudo (granted by /etc/sudoers.d/xinas-update) so that xinas-menu,
+# running as the unprivileged xinnor user, can refresh and apply
+# git updates to the root-owned /opt/xiNAS clone.
+#
+# Whitelisted subcommands only — does not accept arbitrary arguments.
+# Hard-coded REPO path — never trusts caller input for which repo to
+# operate on.
+
+set -euo pipefail
+
+REPO=/opt/xiNAS
+export GIT_TERMINAL_PROMPT=0
+cd "$REPO"
+
+case "${1:-}" in
+    fetch)
+        exec git fetch origin --quiet
+        ;;
+    pull)
+        exec git pull --ff-only
+        ;;
+    *)
+        echo "Usage: $0 {fetch|pull}" >&2
+        exit 2
+        ;;
+esac

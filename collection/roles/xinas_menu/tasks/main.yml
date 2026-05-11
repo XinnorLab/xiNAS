@@ -113,6 +113,34 @@
     mode: '0755'
   tags: [xinas_menu, wrapper]
 
+# ─── 5b. Privileged update helper (sudo wrapper + sudoers) ────────────────────
+# /opt/xiNAS is owned by root, but xinas-menu runs as the unprivileged
+# xinnor user. To let the Update Check / Apply Update flow work without
+# granting xinnor blanket sudo on git, ship a tiny wrapper script that
+# only accepts `fetch` and `pull` on the hard-coded repo, and a
+# sudoers.d entry that grants xinnor passwordless sudo on just that
+# wrapper. Without these two files, the menu surfaces a permission-
+# denied error instead of silently lying about being up-to-date.
+
+- name: Install xinas-update-git sudo helper
+  ansible.builtin.copy:
+    src: xinas-update-git
+    dest: /usr/local/sbin/xinas-update-git
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [xinas_menu, update_helper]
+
+- name: Install sudoers entry for xinas-update-git
+  ansible.builtin.copy:
+    src: sudoers-xinas-update
+    dest: /etc/sudoers.d/xinas-update
+    owner: root
+    group: root
+    mode: '0440'
+    validate: '/usr/sbin/visudo -cf %s'
+  tags: [xinas_menu, update_helper, sudoers]
+
 # ─── 6. Log directory ─────────────────────────────────────────────────────────
 
 - name: Ensure log directory exists
