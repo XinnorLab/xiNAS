@@ -1,0 +1,11 @@
+# /etc/sudoers.d/xinas-update
+#
+# Allow the xinnor user to run the xinas-update-git helper as root
+# without a password, so xinas-menu (running as xinnor) can refresh
+# and apply updates to the root-owned /opt/xiNAS clone.
+#
+# This grants ONLY the wrapper script — not git in general — and the
+# wrapper itself only accepts `fetch` or `pull` on the hard-coded
+# /opt/xiNAS repo.
+
+xinnor ALL=(root) NOPASSWD: /usr/local/sbin/xinas-update-git
