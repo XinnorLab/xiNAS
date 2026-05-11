@@ -1761,13 +1761,15 @@ configure_cufile() {
         done
     fi
 
-    # Get current NFS mounts with RDMA
+    # Get current NFS mounts with RDMA.
+    # `mount` prints "<src> on <mountpoint> type <fs> (opts)" — the
+    # mountpoint is field $3, not $2 ($2 is the literal word "on").
     local nfs_mounts=()
     while read -r line; do
         if [[ "$line" == *"proto=rdma"* ]] || [[ "$line" == *"nfs"* ]]; then
             local server mp
             server=$(echo "$line" | awk '{print $1}' | cut -d: -f1)
-            mp=$(echo "$line" | awk '{print $2}')
+            mp=$(echo "$line" | awk '{print $3}')
             [[ -n "$server" ]] && [[ -n "$mp" ]] && nfs_mounts+=("$server:$mp")
         fi
     done < <(mount | grep nfs)
