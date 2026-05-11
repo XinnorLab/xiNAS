@@ -1851,12 +1851,20 @@ configure_cufile() {
 
     # Create or update cufile.json
     if [[ -f "$CUFILE_JSON_PATH" ]]; then
-        # Update existing
+        # NVIDIA's stock /etc/cufile.json contains // line comments and is not
+        # strict JSON, so jq cannot read it directly. Sanitize into a sibling
+        # temp (stripping // comments outside strings and trailing commas)
+        # before piping to jq.
+        local sanitized="${CUFILE_JSON_PATH}.sanitized"
+        sed -E 's@^([^"]*("[^"]*"[^"]*)*)//.*$@\1@; s@,([[:space:]]*[]}])@\1@g' \
+            "$CUFILE_JSON_PATH" > "$sanitized" 2>/dev/null || true
+
         op_run "update cufile.json" bash -c "jq --argjson ips '$ip_array' --argjson mounts '$mount_table' '
             .fs.nfs.rdma_dev_addr_list = \$ips |
             .fs.nfs.mount_table = \$mounts |
             .fs.nfs.use_pci_p2pdma = false
-        ' '$CUFILE_JSON_PATH' > '${CUFILE_JSON_PATH}.tmp' && mv '${CUFILE_JSON_PATH}.tmp' '$CUFILE_JSON_PATH'" || true
+        ' '$sanitized' > '${CUFILE_JSON_PATH}.tmp' && mv '${CUFILE_JSON_PATH}.tmp' '$CUFILE_JSON_PATH'" || true
+        rm -f "$sanitized"
     else
         # Create new
         op_run "create cufile.json" bash -c "jq -n --argjson ips '$ip_array' --argjson mounts '$mount_table' '{
