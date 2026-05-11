@@ -2434,12 +2434,27 @@ run_gdsio_benchmark() {
     fi
 
     # Benchmark parameters (gdsio: -i io_size, -w threads, -s per-thread size,
-    # -T duration cap, -x 0 = storage->GPU via cuFile, -I 0/1 = write/read)
+    # -T duration cap, -x 0 = storage->GPU via cuFile, -I 0=READ, 1=WRITE)
     local threads=8
     local blocksize="1M"
     local filesize="10G"
     local duration=30
     local gpu=0
+
+    # Ask which I/O direction(s) to exercise.
+    local io_mode
+    io_mode=$(menu_select "gdsio I/O Mode" \
+        "Which operation should the benchmark run?" \
+        "both"  "↔  Read + Write (default)" \
+        "read"  "⬇  Read only" \
+        "write" "⬆  Write only") || return 0
+
+    local mode_label
+    case "$io_mode" in
+        read)  mode_label="READ only" ;;
+        write) mode_label="WRITE only" ;;
+        both)  mode_label="READ then WRITE" ;;
+    esac
 
     local prompt="Run gdsio benchmark against ${#mounts[@]} NFS mount(s):\n\n"
     local mp
@@ -2447,12 +2462,13 @@ run_gdsio_benchmark() {
         prompt+="  • ${mp}\n"
     done
     prompt+="\nParameters:\n"
+    prompt+="  I/O mode:    ${mode_label}\n"
     prompt+="  Block size:  ${blocksize}\n"
     prompt+="  Threads:     ${threads}\n"
     prompt+="  Per-thread:  ${filesize} (capped at ${duration}s)\n"
     prompt+="  GPU:         ${gpu}\n"
     prompt+="  Transfer:    GDS (-x 0)\n\n"
-    prompt+="Each mount runs WRITE then READ. Test files are removed afterwards.\n\nProceed?"
+    prompt+="Test files are removed after each mount.\n\nProceed?"
 
     if ! yes_no "Run gdsio Benchmark" "$prompt"; then
         return 0
@@ -2464,6 +2480,7 @@ run_gdsio_benchmark() {
         echo "                  gdsio Benchmark Results"
         echo "═══════════════════════════════════════════════════════════════"
         echo "Binary:     $gdsio_bin"
+        echo "I/O mode:   $mode_label"
         echo "Block size: $blocksize"
         echo "Threads:    $threads"
         echo "Per-thread: $filesize  (duration cap: ${duration}s)"
@@ -2526,30 +2543,34 @@ run_gdsio_benchmark() {
         # own "IoType: READ/WRITE" label in its summary line).
 
         # READ pass (-I 0)
-        info_box "gdsio READ" "Running read benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
-        {
-            echo "▶ READ   (-I 0, real GDS via cuFile)"
-            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 0 -T $duration"
-            echo ""
-        } >> "$out"
-        local _rec=0
-        "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
-            -x 0 -I 0 -T "$duration" >> "$out" 2>&1 || _rec=$?
-        [[ $_rec -ne 0 ]] && echo "  [gdsio READ exited with status $_rec]" >> "$out"
-        echo "" >> "$out"
+        if [[ "$io_mode" == "read" || "$io_mode" == "both" ]]; then
+            info_box "gdsio READ" "Running read benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
+            {
+                echo "▶ READ   (-I 0, real GDS via cuFile)"
+                echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 0 -T $duration"
+                echo ""
+            } >> "$out"
+            local _rec=0
+            "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
+                -x 0 -I 0 -T "$duration" >> "$out" 2>&1 || _rec=$?
+            [[ $_rec -ne 0 ]] && echo "  [gdsio READ exited with status $_rec]" >> "$out"
+            echo "" >> "$out"
+        fi
 
         # WRITE pass (-I 1)
-        info_box "gdsio WRITE" "Running write benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
-        {
-            echo "▶ WRITE  (-I 1, real GDS via cuFile)"
-            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 1 -T $duration"
-            echo ""
-        } >> "$out"
-        local _wec=0
-        "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
-            -x 0 -I 1 -T "$duration" >> "$out" 2>&1 || _wec=$?
-        [[ $_wec -ne 0 ]] && echo "  [gdsio WRITE exited with status $_wec]" >> "$out"
-        echo "" >> "$out"
+        if [[ "$io_mode" == "write" || "$io_mode" == "both" ]]; then
+            info_box "gdsio WRITE" "Running write benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
+            {
+                echo "▶ WRITE  (-I 1, real GDS via cuFile)"
+                echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 1 -T $duration"
+                echo ""
+            } >> "$out"
+            local _wec=0
+            "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
+                -x 0 -I 1 -T "$duration" >> "$out" 2>&1 || _wec=$?
+            [[ $_wec -ne 0 ]] && echo "  [gdsio WRITE exited with status $_wec]" >> "$out"
+            echo "" >> "$out"
+        fi
 
         # Cleanup test files left behind by gdsio (gdsio.<tid>, gdsio.dat, etc.)
         rm -f "$mp"/gdsio.* 2>/dev/null || true
@@ -2595,7 +2616,7 @@ gds_menu() {
             "2" "📦 Install GDS" \
             "3" "🛠 Configure cuFile (NFS/RDMA)" \
             "4" "✅ Verify GDS" \
-            "5" "⏱  Run gdsio Benchmark (1M, 8 threads)" \
+            "5" "⏱  Run gdsio Benchmark (read/write/both)" \
             "6" "🔙 Back to Main Menu") || return
 
         case "$choice" in
