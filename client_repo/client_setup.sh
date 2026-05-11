@@ -1934,13 +1934,28 @@ configure_cufile() {
 
     if [[ "$write_mode" == "update" ]]; then
         # Sanitized existing file is valid JSON; merge our fields into it.
-        op_run "update cufile.json" bash -c "jq --argjson ips '$ip_array' --argjson mounts '$mount_table' '
+        if op_run "update cufile.json" bash -c "jq --argjson ips '$ip_array' --argjson mounts '$mount_table' '
             .fs.nfs.rdma_dev_addr_list = \$ips |
             .fs.nfs.mount_table = \$mounts |
             .fs.nfs.use_pci_p2pdma = false
-        ' '$sanitized' > '${CUFILE_JSON_PATH}.tmp' && mv '${CUFILE_JSON_PATH}.tmp' '$CUFILE_JSON_PATH'" || true
-        rm -f "$sanitized"
-    else
+        ' '$sanitized' > '${CUFILE_JSON_PATH}.tmp' && mv '${CUFILE_JSON_PATH}.tmp' '$CUFILE_JSON_PATH'"; then
+            rm -f "$sanitized"
+        else
+            # Sanitize-then-merge failed even though `jq empty` accepted the
+            # sanitized file.  The sed regex covers // line comments and
+            # trailing commas but not block comments, escaped quotes, or
+            # other JSONC quirks NVIDIA ships in some cufile.json variants;
+            # those can survive sanitization yet still trip jq on a stricter
+            # second pass.  Original is preserved at $backup_path — fall
+            # back to rebuilding from the xiNAS template so the user is not
+            # left without a working config.
+            rm -f "$sanitized" "${CUFILE_JSON_PATH}.tmp"
+            write_mode="create"
+            op_step "fall back to xiNAS template (existing config kept as backup)" 0 ""
+        fi
+    fi
+
+    if [[ "$write_mode" == "create" ]]; then
         # Create new (used both when no prior file and when user accepted
         # the recreate offer for a malformed file).
         #
