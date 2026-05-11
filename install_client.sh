@@ -223,6 +223,20 @@ enable_nfs_rdma_oneshot() {
         skip "mlnx-nfsrdma-dkms already installed"
     fi
 
+    # Auto-apply the EXPORT_SYMBOL_GPL fix if the buggy version is installed.
+    # See: docs/troubleshooting/mlnx-nfsrdma-export-symbol-gpl-bug.md
+    local applier="${INSTALL_DIR}/client_repo/patches/apply-mlnx-nfsrdma-export-gpl.sh"
+    if [[ -x "$applier" ]]; then
+        info "Checking for mlnx-nfsrdma GDS-hook export bug..."
+        if "$applier" 2>&1 | sed 's/^/     /'; then
+            ok "mlnx-nfsrdma GDS-hook check complete"
+        else
+            warn "mlnx-nfsrdma GDS-hook patch attempt failed — see output above"
+        fi
+    else
+        skip "patch applier not present at $applier"
+    fi
+
     if command -v dkms &>/dev/null; then
         dkms autoinstall -k "$(uname -r)" >/dev/null 2>&1 || true
     fi

@@ -591,6 +591,12 @@ enable_nfs_rdma() {
         op_step "modprobe rpcrdma (OFED build)" 0
         echo rpcrdma > /etc/modules-load.d/xinas-nfs-rdma.conf
         op_step "persist /etc/modules-load.d/xinas-nfs-rdma.conf" 0
+        # Auto-apply EXPORT_SYMBOL_GPL fix to mlnx-nfsrdma source if the bug is
+        # present. Idempotent: no-op when source is already correct.
+        local applier="$(dirname "$0")/patches/apply-mlnx-nfsrdma-export-gpl.sh"
+        if [[ -x "$applier" ]]; then
+            op_run "apply mlnx-nfsrdma EXPORT_SYMBOL_GPL fix" "$applier" || true
+        fi
         op_end "" "Success" "NFS-RDMA enabled (DKMS build matched OFED ABI)." || true
         return 0
     fi
