@@ -889,6 +889,80 @@ def check_rdma(exp, checks):
         except OSError:
             pass
 
+    if "nfs_rdma" in checks:
+        if not _ofed_present():
+            results.append(CheckResult("RDMA", "nfs_rdma", "INFO",
+                "OFED not detected", "N/A",
+                evidence="upstream rpcrdma path; mlnx-nfsrdma-dkms not required"))
+        else:
+            # Sub-check 1: mlnx-nfsrdma-dkms package presence (+ version visibility)
+            pkg_ver = _dpkg_version("mlnx-nfsrdma-dkms")
+            required_ver = exp.get("nfsrdma_required_version")
+            if pkg_ver is None:
+                results.append(CheckResult("RDMA", "nfsrdma_dkms_pkg", "FAIL",
+                    "not installed", required_ver or "installed",
+                    impact="Without mlnx-nfsrdma-dkms, mount.nfs proto=rdma fails with "
+                           "the misleading 'incorrect mount option' error",
+                    fix_hint="apt-get install mlnx-nfsrdma-dkms (or re-run installer "
+                             "'Install NFS Tools')"))
+            elif required_ver and pkg_ver != required_ver:
+                results.append(CheckResult("RDMA", "nfsrdma_dkms_pkg", "WARN",
+                    pkg_ver, required_ver,
+                    impact="Installed mlnx-nfsrdma-dkms version differs from profile pin",
+                    fix_hint=f"apt-get install --reinstall mlnx-nfsrdma-dkms={required_ver}"))
+            else:
+                results.append(CheckResult("RDMA", "nfsrdma_dkms_pkg", "PASS",
+                    pkg_ver, required_ver or "installed"))
+
+            # Sub-check 2: rpcrdma module loaded
+            loaded = read_file("/proc/modules") or ""
+            module_loaded = any(line.split()[:1] == ["rpcrdma"]
+                                for line in loaded.split("\n") if line.strip())
+            if module_loaded:
+                results.append(CheckResult("RDMA", "nfsrdma_module_loaded", "PASS",
+                    "loaded", "loaded"))
+            else:
+                results.append(CheckResult("RDMA", "nfsrdma_module_loaded", "FAIL",
+                    "not loaded", "loaded",
+                    impact="rpcrdma must be loaded for NFS-RDMA mounts",
+                    fix_hint="modprobe rpcrdma"))
+
+            # Sub-check 3: ABI build (DKMS path) — only meaningful if loaded
+            if module_loaded:
+                modinfo_out = run_cmd("modinfo rpcrdma 2>/dev/null") or ""
+                fname = ""
+                for line in modinfo_out.split("\n"):
+                    if line.startswith("filename:"):
+                        fname = line.split(":", 1)[1].strip()
+                        break
+                if "/updates/dkms/" in fname:
+                    results.append(CheckResult("RDMA", "nfsrdma_abi_build", "PASS",
+                        "OFED/DKMS build", "OFED/DKMS build",
+                        evidence=fname))
+                elif fname:
+                    results.append(CheckResult("RDMA", "nfsrdma_abi_build", "WARN",
+                        "upstream in-kernel build", "OFED/DKMS build",
+                        evidence=fname,
+                        impact="rpcrdma is the upstream copy; ABI mismatch with OFED "
+                               "ib_core/rdma_cm — mounts will likely fail",
+                        fix_hint="apt-get install mlnx-nfsrdma-dkms && "
+                                 "dkms autoinstall -k $(uname -r) && modprobe -r rpcrdma && "
+                                 "modprobe rpcrdma"))
+                else:
+                    results.append(CheckResult("RDMA", "nfsrdma_abi_build", "SKIP",
+                        "modinfo unavailable", "OFED/DKMS build"))
+
+            # Sub-check 4: persistence across reboot
+            persist_path = "/etc/modules-load.d/xinas-nfs-rdma.conf"
+            if os.path.isfile(persist_path):
+                results.append(CheckResult("RDMA", "nfsrdma_persisted", "PASS",
+                    persist_path, "present"))
+            else:
+                results.append(CheckResult("RDMA", "nfsrdma_persisted", "WARN",
+                    "missing", "present",
+                    impact="rpcrdma works now but will not auto-load after reboot",
+                    fix_hint=f"echo rpcrdma > {persist_path}"))
+
     return results
 
 # ─────────────────────────────────────────────────────────────────────────────
