@@ -2120,19 +2120,52 @@ run_gdsio_benchmark() {
             continue
         fi
 
-        # WRITE pass. The script runs under `set -euo pipefail`, so we must
-        # tolerate non-zero exits from gdsio here — otherwise gdsio's failure
-        # kills the script, the EXIT trap wipes $TMP_DIR, and the user sees
-        # only the info_box banner with no error context.
-        info_box "gdsio WRITE" "Running write benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
+        # gdsio with `-D <dir>` expects per-thread files named gdsio.0 ..
+        # gdsio.<N-1> to already exist — it does NOT auto-create them.
+        # Pre-allocate sparsely so the initial open() succeeds; the WRITE
+        # pass then fills the blocks.
+        info_box "Preparing" "Pre-allocating ${threads} test file(s) on ${mp}..."
         {
             echo ""
-            echo "▶ WRITE  (-I 0)"
-            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 0 -T $duration"
+            echo "▶ Pre-allocate gdsio.0..gdsio.$((threads-1)) (${filesize} sparse)"
+        } >> "$out"
+        local i prep_failed=0
+        for ((i=0; i<threads; i++)); do
+            if ! truncate -s "$filesize" "$mp/gdsio.$i" 2>>"$out"; then
+                prep_failed=1
+                echo "  truncate failed for $mp/gdsio.$i" >> "$out"
+                break
+            fi
+        done
+        echo "" >> "$out"
+
+        if [[ $prep_failed -ne 0 ]]; then
+            echo "  [skipping WRITE/READ — could not pre-allocate test files]" >> "$out"
+            echo "" >> "$out"
+            continue
+        fi
+
+        # NFS doesn't have a native nvidia-fs kernel-bypass path, so
+        # cuFileHandleRegister() rejects NFS files for the direct GDS path.
+        # Forcing cuFile compat mode routes the I/O through a CPU bounce
+        # buffer — the standard supported way to exercise GDS APIs over
+        # NFS-RDMA. (See NVIDIA GDS troubleshooting guide,
+        # CUFILE_FORCE_COMPAT_MODE.)
+        #
+        # The script also runs under `set -euo pipefail`, so each gdsio
+        # invocation must tolerate non-zero exits — otherwise the EXIT
+        # trap wipes $TMP_DIR before text_box renders the captured log.
+
+        # WRITE pass
+        info_box "gdsio WRITE" "Running write benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
+        {
+            echo "▶ WRITE  (-I 0, cuFile compat mode)"
+            echo "  cmd: CUFILE_FORCE_COMPAT_MODE=true $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 0 -T $duration"
             echo ""
         } >> "$out"
         local _wec=0
-        "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
+        CUFILE_FORCE_COMPAT_MODE=true "$gdsio_bin" \
+            -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
             -x 0 -I 0 -T "$duration" >> "$out" 2>&1 || _wec=$?
         [[ $_wec -ne 0 ]] && echo "  [gdsio WRITE exited with status $_wec]" >> "$out"
         echo "" >> "$out"
@@ -2140,12 +2173,13 @@ run_gdsio_benchmark() {
         # READ pass
         info_box "gdsio READ" "Running read benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
         {
-            echo "▶ READ   (-I 1)"
-            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 1 -T $duration"
+            echo "▶ READ   (-I 1, cuFile compat mode)"
+            echo "  cmd: CUFILE_FORCE_COMPAT_MODE=true $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 1 -T $duration"
             echo ""
         } >> "$out"
         local _rec=0
-        "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
+        CUFILE_FORCE_COMPAT_MODE=true "$gdsio_bin" \
+            -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
             -x 0 -I 1 -T "$duration" >> "$out" 2>&1 || _rec=$?
         [[ $_rec -ne 0 ]] && echo "  [gdsio READ exited with status $_rec]" >> "$out"
         echo "" >> "$out"
