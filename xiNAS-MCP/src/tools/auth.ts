@@ -383,7 +383,8 @@ export async function handleAuthSetQuota(params: z.infer<typeof AuthSetQuotaSche
 
   await setQuota({
     path: params.share_id,
-    type: 'project',
+    type: 'user',
+    username: params.username,
     soft_limit_kb: params.soft_limit_gb * 1024 * 1024,
     hard_limit_kb: params.hard_limit_gb * 1024 * 1024,
   });

@@ -25,6 +25,9 @@ export interface QuotaSpec {
   soft_limit_kb: number;
   hard_limit_kb: number;
   project_id?: number;
+  // When set, the helper takes the user-quota branch (xfs_quota -u <username>).
+  // Required for type='user'; ignored otherwise.
+  username?: string;
 }
 
 export type NfsOp =
