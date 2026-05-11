@@ -3,6 +3,10 @@
 __pycache__/
 *.pyc
 
+# Python build artefacts (from `pip install -e .`)
+*.egg-info/
+build/
+
 # Ansible artefacts
 *.retry
 *.log
