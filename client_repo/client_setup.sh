@@ -2011,6 +2011,136 @@ verify_gds() {
     text_box "GDS Verification" "$out"
 }
 
+# Locate gdsio binary (CUDA installs it under /usr/local/cuda*/gds/tools/)
+find_gdsio_bin() {
+    if command -v gdsio &>/dev/null; then
+        command -v gdsio
+        return 0
+    fi
+    local found
+    found=$(find /usr/local/cuda*/gds/tools -maxdepth 2 -name gdsio -type f 2>/dev/null | head -1 || true)
+    [[ -n "$found" ]] && { echo "$found"; return 0; }
+    return 1
+}
+
+# Run gdsio read/write benchmark (1MB block, 8 threads) against NFS mounts
+run_gdsio_benchmark() {
+    if ! check_gds_installed; then
+        msg_box "GDS Not Installed" "GPUDirect Storage is not installed.\n\nPlease install GDS first."
+        return 1
+    fi
+
+    if ! check_nvidia_driver; then
+        msg_box "No NVIDIA GPU" "gdsio requires an NVIDIA GPU with a working driver.\n\nnvidia-smi is not responding."
+        return 1
+    fi
+
+    local gdsio_bin
+    if ! gdsio_bin=$(find_gdsio_bin); then
+        msg_box "gdsio Not Found" "Could not locate the gdsio binary.\n\nExpected at: /usr/local/cuda/gds/tools/gdsio\n\nInstall GDS and the gds-tools package."
+        return 1
+    fi
+
+    # Discover NFS mount points
+    local -a mounts=()
+    while read -r mp; do
+        [[ -n "$mp" ]] && mounts+=("$mp")
+    done < <(mount -t nfs,nfs4 2>/dev/null | awk '{print $3}')
+
+    if [[ ${#mounts[@]} -eq 0 ]]; then
+        msg_box "No NFS Mounts" "No NFS mount points were detected.\n\nMount an NFS share before running the benchmark."
+        return 1
+    fi
+
+    # Benchmark parameters (gdsio: -i io_size, -w threads, -s per-thread size,
+    # -T duration cap, -x 0 = storage->GPU via cuFile, -I 0/1 = write/read)
+    local threads=8
+    local blocksize="1M"
+    local filesize="10G"
+    local duration=30
+    local gpu=0
+
+    local prompt="Run gdsio benchmark against ${#mounts[@]} NFS mount(s):\n\n"
+    local mp
+    for mp in "${mounts[@]}"; do
+        prompt+="  • ${mp}\n"
+    done
+    prompt+="\nParameters:\n"
+    prompt+="  Block size:  ${blocksize}\n"
+    prompt+="  Threads:     ${threads}\n"
+    prompt+="  Per-thread:  ${filesize} (capped at ${duration}s)\n"
+    prompt+="  GPU:         ${gpu}\n"
+    prompt+="  Transfer:    GDS (-x 0)\n\n"
+    prompt+="Each mount runs WRITE then READ. Test files are removed afterwards.\n\nProceed?"
+
+    if ! yes_no "Run gdsio Benchmark" "$prompt"; then
+        return 0
+    fi
+
+    local out="$TMP_DIR/gdsio_bench"
+    {
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "                  gdsio Benchmark Results"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "Binary:     $gdsio_bin"
+        echo "Block size: $blocksize"
+        echo "Threads:    $threads"
+        echo "Per-thread: $filesize  (duration cap: ${duration}s)"
+        echo "Transfer:   -x 0 (storage->GPU via cuFile)"
+        echo "GPU:        $gpu"
+        echo "Started:    $(date '+%Y-%m-%d %H:%M:%S')"
+        echo ""
+    } > "$out"
+
+    for mp in "${mounts[@]}"; do
+        {
+            echo "───────────────────────────────────────────────────────────────"
+            echo " Mount: $mp"
+            echo "───────────────────────────────────────────────────────────────"
+        } >> "$out"
+
+        if [[ ! -w "$mp" ]]; then
+            echo "  SKIP: mount is not writable by current user" >> "$out"
+            echo "" >> "$out"
+            continue
+        fi
+
+        # WRITE pass
+        info_box "gdsio WRITE" "Running write benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
+        {
+            echo ""
+            echo "▶ WRITE  (-I 0)"
+            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 0 -T $duration"
+            echo ""
+            "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
+                -x 0 -I 0 -T "$duration" 2>&1 | sed 's/^/  /'
+            echo ""
+        } >> "$out"
+
+        # READ pass
+        info_box "gdsio READ" "Running read benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
+        {
+            echo "▶ READ   (-I 1)"
+            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 1 -T $duration"
+            echo ""
+            "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
+                -x 0 -I 1 -T "$duration" 2>&1 | sed 's/^/  /'
+            echo ""
+        } >> "$out"
+
+        # Cleanup test files left behind by gdsio (gdsio.<tid>, gdsio.dat, etc.)
+        rm -f "$mp"/gdsio.* 2>/dev/null || true
+    done
+
+    {
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "Finished:   $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "═══════════════════════════════════════════════════════════════"
+    } >> "$out"
+
+    text_box "gdsio Benchmark Results" "$out"
+}
+
 # GDS Main Menu
 gds_menu() {
     while true; do
@@ -2042,14 +2172,16 @@ gds_menu() {
             "2" "📦 Install GDS" \
             "3" "🛠 Configure cuFile (NFS/RDMA)" \
             "4" "✅ Verify GDS" \
-            "5" "🔙 Back to Main Menu") || return
+            "5" "⏱  Run gdsio Benchmark (1M, 8 threads)" \
+            "6" "🔙 Back to Main Menu") || return
 
         case "$choice" in
             1) show_gds_status ;;
             2) install_gds ;;
             3) configure_cufile ;;
             4) verify_gds ;;
-            5) return ;;
+            5) run_gdsio_benchmark ;;
+            6) return ;;
         esac
     done
 }
