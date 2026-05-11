@@ -122,15 +122,27 @@ async function checkRaidIntegrity(client: unknown): Promise<HealthCheckResult[]>
       () => raidShow(client as never, { extended: true, units: 'g' }),
       'health.raid_integrity'
     );
-    const raids = resp.data as Array<{
-      name: string;
+    type RaidInfo = {
       state: string;
       degraded?: boolean;
       init_progress?: number;
       recon_progress?: number;
-    }> | null;
+    };
+    // xiRAID may return either an array of raids or a record keyed by raid
+    // name, depending on call parameters and version. Normalize to array
+    // with `name` attached (see src/tools/pool.ts:getPoolDrives for prior art).
+    const data = resp.data as
+      | Array<RaidInfo & { name: string }>
+      | Record<string, RaidInfo>
+      | null;
+    const raids: Array<RaidInfo & { name: string }> =
+      !data || typeof data !== 'object'
+        ? []
+        : Array.isArray(data)
+          ? data
+          : Object.entries(data).map(([name, r]) => ({ name, ...r }));
 
-    if (!raids || raids.length === 0) {
+    if (raids.length === 0) {
       results.push({
         check_id: 'raid_no_arrays',
         section: 'RAID',
