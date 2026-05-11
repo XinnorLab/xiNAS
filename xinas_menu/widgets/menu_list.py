@@ -135,18 +135,11 @@ class NavigableMenu(Widget, can_focus=True):
             if not item.separator and item.enabled:
                 self.highlighted = i
                 break
-        # Remove all children and recompose
-        self.remove_children()
-        for idx, item in enumerate(self._items):
-            if item.separator:
-                lbl = Label("  ─────────────────────────────", classes="menu-item-separator")
-            else:
-                label_text = f"  [{item.key}] {item.label}"
-                cls = "menu-item"
-                if idx == self.highlighted:
-                    cls += " --highlight"
-                lbl = Label(label_text, classes=cls, id=f"menu-item-{idx}")
-            self.mount(lbl)
+        # remove_children() returns an AwaitRemove (removal is scheduled,
+        # not synchronous), while mount() is immediate — so a manual
+        # remove+mount sequence races and raises DuplicateIds on the
+        # second call. refresh(recompose=True) sequences both correctly.
+        self.refresh(recompose=True)
 
     def on_key(self, event) -> None:
         # Forward PgUp/PgDn to sibling ScrollableTextView (if any)
