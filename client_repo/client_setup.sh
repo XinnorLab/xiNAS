@@ -3249,7 +3249,7 @@ NFS service availability." "10.10.1.1" ) || return
         printf -- '-%.0s' {1..60}; echo ""
         if command -v rpcinfo &>/dev/null; then
             local rpc_out
-            rpc_out=$(rpcinfo -p "$server_ip" 2>/dev/null | grep -E 'nfs|mountd' | head -5)
+            rpc_out=$(rpcinfo -p "$server_ip" 2>/dev/null | grep -E 'nfs|mountd' | head -5 || true)
             if [[ -n "$rpc_out" ]]; then
                 echo "   [OK] NFS services detected:"
                 echo "$rpc_out" | sed 's/^/       /'
@@ -3350,7 +3350,7 @@ xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg"
 
     if [[ -n "$client_update_available" ]]; then
         local changes
-        changes=$(git -C "$install_dir" log --oneline HEAD..origin/main 2>/dev/null | head -5)
+        changes=$(git -C "$install_dir" log -n 5 --oneline HEAD..origin/main 2>/dev/null) || changes=""
         update_msg+="xiNAS Client:\n"
         update_msg+="  Current: ${local_commit:0:8}\n"
         update_msg+="  Latest:  ${remote_commit:0:8}\n"
