@@ -31,6 +31,20 @@ _NC = "\033[0m"
 _MCP_AUDIT = Path("/var/log/xinas/mcp-audit.jsonl")
 
 
+def _safe_exists(p: Path) -> bool:
+    """Path.exists() that returns False on EACCES.
+
+    Python 3.12 changed Path.exists() to propagate non-ENOENT OSErrors, so a
+    plain `.exists()` on a root-owned file (e.g. /etc/xinas-mcp/config.json,
+    mode 0640 root:root) raises PermissionError when the TUI is run as a
+    non-root user. We treat "can't stat" the same as "not there" for display.
+    """
+    try:
+        return p.exists()
+    except OSError:
+        return False
+
+
 def _cfg_restart_service() -> tuple[bool, str]:
     """Restart xinas-mcp after a config write so port/tokens/TLS take effect."""
     r = subprocess.run(
@@ -180,7 +194,7 @@ class MCPScreen(Screen):
             lines.append(f"  {DIM}○{NC}  HTTP Remote   {DIM}Disabled{NC}")
         lines.append("")
 
-        if mcp_cfg.exists():
+        if _safe_exists(mcp_cfg):
             lines.append(f"  {GRN}*{NC}  Config        {mcp_cfg}")
             cid = cfg.get("controller_id", "")
             lines.append(f"     {DIM}Controller:{NC}   {(cid[:20] + '...') if len(cid) > 20 else cid or '(not set)'}")
@@ -189,7 +203,7 @@ class MCPScreen(Screen):
         lines.append("")
 
         ak = Path("/root/.ssh/authorized_keys")
-        if ak.exists():
+        if _safe_exists(ak):
             try:
                 n = sum(1 for l in ak.read_text().splitlines() if l.startswith("ssh-"))
             except Exception:
@@ -202,7 +216,7 @@ class MCPScreen(Screen):
         lines.append("")
 
         claude_cfg = Path("/root/.claude/mcp_servers.json")
-        if claude_cfg.exists():
+        if _safe_exists(claude_cfg):
             lines.append(f"  {GRN}*{NC}  Claude Code   {claude_cfg}")
         else:
             ip = _get_ip()
