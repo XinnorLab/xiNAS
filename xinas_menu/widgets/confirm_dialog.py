@@ -93,45 +93,18 @@ class ConfirmDialog(ModalScreen[bool]):
 
     # ── Terminal mouse-capture toggle ────────────────────────────────────
     # While this modal is open, release mouse tracking back to the terminal
-    # so the user can drag-select the dialog text (token hex, error
-    # messages, etc.) with native Terminal/iTerm/Ghostty selection — and
-    # copy via the terminal's own Cmd+C — without needing the modifier-drag
-    # trick to bypass Textual's mouse handling. Mouse is re-enabled on
-    # unmount so the rest of the TUI keeps working.
+    # so the user can drag-select the dialog text with native
+    # Terminal/iTerm/Ghostty selection — and copy via the terminal's own
+    # Cmd+C — without needing the modifier-drag trick to bypass Textual's
+    # mouse handling. Mouse is re-enabled on unmount.
     #
-    # The button still works via keyboard (Enter / y / n / Esc); only
+    # Buttons still work via keyboard (Enter / y / n / Esc); only
     # mouse-clicking the OK/Yes/No buttons is disabled inside this modal.
-    _MOUSE_DISABLE = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l"
-    _MOUSE_ENABLE = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h"
 
     def on_mount(self) -> None:
-        self._write_term(self._MOUSE_DISABLE)
+        from xinas_menu.widgets._terminal_io import release_mouse_capture
+        release_mouse_capture(self.app)
 
     def on_unmount(self) -> None:
-        self._write_term(self._MOUSE_ENABLE)
-
-    def _write_term(self, sequence: str) -> None:
-        """Write a raw escape sequence to the controlling terminal.
-
-        Prefers Textual's driver (so the write is serialized with the
-        render stream); falls back to direct stdout if the driver isn't
-        exposed in this Textual version.
-        """
-        driver = getattr(self.app, "_driver", None)
-        if driver is not None:
-            write = getattr(driver, "write", None)
-            if callable(write):
-                try:
-                    write(sequence)
-                    flush = getattr(driver, "flush", None)
-                    if callable(flush):
-                        flush()
-                    return
-                except Exception:
-                    pass
-        import sys
-        try:
-            sys.stdout.write(sequence)
-            sys.stdout.flush()
-        except Exception:
-            pass
+        from xinas_menu.widgets._terminal_io import restore_mouse_capture
+        restore_mouse_capture(self.app)
