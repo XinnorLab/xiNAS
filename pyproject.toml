@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xinas-menu"
+description = "xiNAS management TUI and health engine"
+requires-python = ">=3.10"
+dynamic = ["version"]
+
+[tool.setuptools.dynamic]
+version = {attr = "xinas_menu.version.XINAS_MENU_VERSION"}
+
+[tool.setuptools.packages.find]
+include = ["xinas_menu*"]
