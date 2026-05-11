@@ -482,16 +482,39 @@ input_box() {
 
     _menu_cursor_show
 
-    local input
-    if [[ -n "$default" ]]; then
-        read -r -e -i "$default" input </dev/tty
-    else
-        read -r input </dev/tty
-    fi
+    # Char-by-char editor so Esc actually cancels (bash `read` can't detect it).
+    local buffer="$default"
+    [[ -n "$buffer" ]] && printf '%s' "$buffer" >/dev/tty
 
-    echo "" >/dev/tty
-    echo "$input"
-    return 0
+    local key
+    while true; do
+        key=$(_menu_read_key)
+        case "$key" in
+            ESC)
+                printf '\n' >/dev/tty
+                return 1
+                ;;
+            ENTER)
+                printf '\n' >/dev/tty
+                printf '%s\n' "$buffer"
+                return 0
+                ;;
+            BACKSPACE)
+                if [[ -n "$buffer" ]]; then
+                    buffer="${buffer%?}"
+                    printf '\b \b' >/dev/tty
+                fi
+                ;;
+            UP|DOWN|LEFT|RIGHT)
+                ;;
+            *)
+                if [[ ${#key} -eq 1 && "$key" =~ [[:print:]] ]]; then
+                    buffer+="$key"
+                    printf '%s' "$key" >/dev/tty
+                fi
+                ;;
+        esac
+    done
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
