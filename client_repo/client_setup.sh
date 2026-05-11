@@ -2120,17 +2120,22 @@ run_gdsio_benchmark() {
             continue
         fi
 
-        # WRITE pass
+        # WRITE pass. The script runs under `set -euo pipefail`, so we must
+        # tolerate non-zero exits from gdsio here — otherwise gdsio's failure
+        # kills the script, the EXIT trap wipes $TMP_DIR, and the user sees
+        # only the info_box banner with no error context.
         info_box "gdsio WRITE" "Running write benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
         {
             echo ""
             echo "▶ WRITE  (-I 0)"
             echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 0 -T $duration"
             echo ""
-            "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
-                -x 0 -I 0 -T "$duration" 2>&1 | sed 's/^/  /'
-            echo ""
         } >> "$out"
+        local _wec=0
+        "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
+            -x 0 -I 0 -T "$duration" >> "$out" 2>&1 || _wec=$?
+        [[ $_wec -ne 0 ]] && echo "  [gdsio WRITE exited with status $_wec]" >> "$out"
+        echo "" >> "$out"
 
         # READ pass
         info_box "gdsio READ" "Running read benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
@@ -2138,10 +2143,12 @@ run_gdsio_benchmark() {
             echo "▶ READ   (-I 1)"
             echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 1 -T $duration"
             echo ""
-            "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
-                -x 0 -I 1 -T "$duration" 2>&1 | sed 's/^/  /'
-            echo ""
         } >> "$out"
+        local _rec=0
+        "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
+            -x 0 -I 1 -T "$duration" >> "$out" 2>&1 || _rec=$?
+        [[ $_rec -ne 0 ]] && echo "  [gdsio READ exited with status $_rec]" >> "$out"
+        echo "" >> "$out"
 
         # Cleanup test files left behind by gdsio (gdsio.<tid>, gdsio.dat, etc.)
         rm -f "$mp"/gdsio.* 2>/dev/null || true
