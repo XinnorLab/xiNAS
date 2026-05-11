@@ -237,6 +237,76 @@ def run_cmd(cmd, timeout=10):
     except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
         return None
 
+def nfs_conf_get(section, key):
+    """Effective value of `key` in `[section]` of /etc/nfs.conf (+ drop-ins).
+
+    Mirrors libnfsconf semantics used by nfs-utils itself: stripped
+    comments (# and ;), section-gated keys, last-assignment-wins across
+    /etc/nfs.conf and /etc/nfs.conf.d/*.conf (sorted). Returns the raw
+    value string, or None if unset.
+
+    Prefers `nfsconf --get` from nfs-utils when present (authoritative),
+    falls back to an in-process parse for hosts without it.
+    """
+    has_tool = run_cmd("command -v nfsconf 2>/dev/null")
+    if has_tool:
+        try:
+            result = subprocess.run(
+                ["nfsconf", "--get", section, key],
+                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip() or None
+            return None
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    paths = ["/etc/nfs.conf"]
+    try:
+        for name in sorted(os.listdir("/etc/nfs.conf.d")):
+            if name.endswith(".conf"):
+                paths.append(os.path.join("/etc/nfs.conf.d", name))
+    except OSError:
+        pass
+
+    target_section = section.strip().lower()
+    target_key = key.strip().lower()
+    value = None
+    for path in paths:
+        content = read_file(path)
+        if not content:
+            continue
+        current_section = None
+        for line in content.splitlines():
+            stripped = line.strip()
+            for cc in ("#", ";"):
+                idx = stripped.find(cc)
+                if idx >= 0:
+                    stripped = stripped[:idx].rstrip()
+            if not stripped:
+                continue
+            if stripped.startswith("[") and stripped.endswith("]"):
+                current_section = stripped[1:-1].strip().lower()
+                continue
+            if current_section != target_section or "=" not in stripped:
+                continue
+            k, _, v = stripped.partition("=")
+            if k.strip().lower() == target_key:
+                value = v.strip()
+    return value
+
+def nfs_conf_bool(value):
+    """Interpret an nfs.conf boolean string. Returns True, False, or None."""
+    if value is None:
+        return None
+    v = value.strip().lower()
+    if v in ("y", "yes", "true", "1", "on"):
+        return True
+    if v in ("n", "no", "false", "0", "off"):
+        return False
+    return None
+
 def get_interfaces():
     """Get non-loopback network interfaces."""
     ifaces = []
@@ -976,19 +1046,26 @@ def check_nfs(exp, checks):
                 "N/A", "v4.1, v4.2"))
 
     if "rdma_enabled" in checks:
-        nfs_conf = read_file("/etc/nfs.conf")
-        if nfs_conf and re.search(r'rdma\s*=\s*y', nfs_conf, re.IGNORECASE):
-            results.append(CheckResult("NFS", "rdma_enabled", "PASS",
-                "rdma=y", "rdma=y"))
-        elif nfs_conf:
-            results.append(CheckResult("NFS", "rdma_enabled", "WARN",
-                "rdma not enabled", "rdma=y",
-                impact="NFS-RDMA not enabled - falling back to TCP",
-                fix_hint="Add rdma=y under [nfsd] in /etc/nfs.conf"))
-        else:
+        if read_file("/etc/nfs.conf") is None:
             results.append(CheckResult("NFS", "rdma_enabled", "SKIP",
                 "N/A", "rdma=y",
                 evidence="/etc/nfs.conf not found"))
+        else:
+            raw = nfs_conf_get("nfsd", "rdma")
+            enabled = nfs_conf_bool(raw)
+            if enabled is True:
+                results.append(CheckResult("NFS", "rdma_enabled", "PASS",
+                    f"rdma={raw}", "rdma=y"))
+            elif enabled is False:
+                results.append(CheckResult("NFS", "rdma_enabled", "WARN",
+                    f"rdma={raw}", "rdma=y",
+                    impact="NFS-RDMA disabled - clients will fall back to TCP",
+                    fix_hint="Set rdma=y under [nfsd] in /etc/nfs.conf"))
+            else:
+                results.append(CheckResult("NFS", "rdma_enabled", "WARN",
+                    "rdma not set", "rdma=y",
+                    impact="NFS-RDMA not enabled - falling back to TCP",
+                    fix_hint="Add rdma=y under [nfsd] in /etc/nfs.conf"))
 
     if "exports_exist" in checks:
         exports = read_file("/etc/exports")
