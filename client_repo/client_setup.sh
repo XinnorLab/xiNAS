@@ -1888,16 +1888,41 @@ configure_cufile() {
         done
     fi
 
-    # Create or update cufile.json
+    # Decide between update-existing and create-from-scratch.
+    #
+    # NVIDIA's stock /etc/cufile.json is JSONC (line comments + trailing
+    # commas). The sanitizer strips that and produces strict JSON. If
+    # sanitization still doesn't yield valid JSON, the existing file is
+    # genuinely malformed (user edits, corrupted writes, etc.) — in which
+    # case offer to recreate from scratch rather than failing inscrutably.
+    local write_mode="update"   # "update" | "create"
+    local sanitized=""
     if [[ -f "$CUFILE_JSON_PATH" ]]; then
-        # NVIDIA's stock /etc/cufile.json contains // line comments and is not
-        # strict JSON, so jq cannot read it directly. Sanitize into a sibling
-        # temp (stripping // comments outside strings and trailing commas)
-        # before piping to jq.
-        local sanitized="${CUFILE_JSON_PATH}.sanitized"
+        sanitized="${CUFILE_JSON_PATH}.sanitized"
         sed -E 's@^([^"]*("[^"]*"[^"]*)*)//.*$@\1@; s@,([[:space:]]*[]}])@\1@g' \
             "$CUFILE_JSON_PATH" > "$sanitized" 2>/dev/null || true
+        if ! jq empty "$sanitized" 2>/dev/null; then
+            # Existing file is unparsable. Ask the user before clobbering.
+            rm -f "$sanitized"
+            sanitized=""
+            local parse_err
+            parse_err=$(jq empty "$CUFILE_JSON_PATH" 2>&1 | head -1)
+            if yes_no "cufile.json Malformed" \
+                "Existing $CUFILE_JSON_PATH cannot be parsed:\n\n  $parse_err\n\nThe update path requires valid JSON to merge into.\n\nRecreate from scratch (overwriting the broken file)?\n\nA backup is already saved at:\n  $backup_path"; then
+                write_mode="create"
+            else
+                op_end "Aborted: existing cufile.json is malformed and user declined recreate." \
+                       "Aborted" \
+                       "Restore from a backup under /etc/cufile.json.bak.* and re-run." || true
+                return 1
+            fi
+        fi
+    else
+        write_mode="create"
+    fi
 
+    if [[ "$write_mode" == "update" ]]; then
+        # Sanitized existing file is valid JSON; merge our fields into it.
         op_run "update cufile.json" bash -c "jq --argjson ips '$ip_array' --argjson mounts '$mount_table' '
             .fs.nfs.rdma_dev_addr_list = \$ips |
             .fs.nfs.mount_table = \$mounts |
@@ -1905,12 +1930,13 @@ configure_cufile() {
         ' '$sanitized' > '${CUFILE_JSON_PATH}.tmp' && mv '${CUFILE_JSON_PATH}.tmp' '$CUFILE_JSON_PATH'" || true
         rm -f "$sanitized"
     else
-        # Create new
+        # Create new (used both when no prior file and when user accepted
+        # the recreate offer for a malformed file).
         op_run "create cufile.json" bash -c "jq -n --argjson ips '$ip_array' --argjson mounts '$mount_table' '{
             \"logging\": {\"dir\": \"/var/log/cufile\", \"level\": \"ERROR\"},
             \"fs\": {\"nfs\": {\"rdma_dev_addr_list\": \$ips, \"mount_table\": \$mounts, \"use_pci_p2pdma\": false}},
             \"profile\": {\"nvtx\": false, \"cufile_stats\": 0}
-        }' > '$CUFILE_JSON_PATH'" || true
+        }' > '${CUFILE_JSON_PATH}.tmp' && mv '${CUFILE_JSON_PATH}.tmp' '$CUFILE_JSON_PATH'" || true
     fi
 
     chmod 644 "$CUFILE_JSON_PATH"
