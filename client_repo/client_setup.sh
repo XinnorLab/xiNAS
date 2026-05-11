@@ -520,8 +520,95 @@ show_status() {
 # NFS Mount Configuration
 # ═══════════════════════════════════════════════════════════════════════════════
 
+enable_nfs_rdma() {
+    # Ensure the NFS-RDMA transport module (rpcrdma) is loadable and persistent.
+    # When MLNX_OFED / DOCA-Host is installed, the in-kernel rpcrdma is built
+    # against the upstream ib_core/rdma_cm ABI and fails to load against the
+    # OFED-provided modules (CRC mismatch → mount.nfs returns the misleading
+    # "incorrect mount option" error). The fix is mlnx-nfsrdma-dkms, which
+    # rebuilds rpcrdma against the OFED ABI.
+    #
+    # Idempotent; safe to call on TCP-only clients (returns early if no RDMA HW).
+
+    if [[ ! -d /sys/class/infiniband ]] || ! ls /sys/class/infiniband/ 2>/dev/null | grep -q .; then
+        return 0
+    fi
+
+    op_start "Enable NFS-RDMA (rpcrdma)"
+
+    if lsmod 2>/dev/null | awk '{print $1}' | grep -qx rpcrdma; then
+        op_step "rpcrdma already loaded" 0
+        op_end "" "Success" || true
+        return 0
+    fi
+
+    if modprobe rpcrdma 2>/dev/null; then
+        op_step "modprobe rpcrdma" 0
+        echo rpcrdma > /etc/modules-load.d/xinas-nfs-rdma.conf
+        op_step "persist /etc/modules-load.d/xinas-nfs-rdma.conf" 0
+        op_end "" "Success" "NFS-RDMA enabled." || true
+        return 0
+    fi
+
+    # modprobe failed. Determine whether MLNX/DOCA-OFED is the cause.
+    local has_ofed=0
+    if dpkg -l mlnx-ofed-kernel-dkms 2>/dev/null | awk '$1=="ii"{f=1} END{exit !f}'; then
+        has_ofed=1
+    elif command -v ofed_info &>/dev/null && ofed_info -s &>/dev/null; then
+        has_ofed=1
+    fi
+
+    if [[ $has_ofed -eq 0 ]]; then
+        local err
+        err="$(dmesg 2>/dev/null | grep -E 'rpcrdma' | tail -1)"
+        op_step "modprobe rpcrdma" 1 "${err:-load failed; no MLNX/DOCA-OFED detected}"
+        op_end "" "Warning" "NFS-RDMA could not be enabled. TCP mounts still work." || true
+        return 1
+    fi
+
+    # Install mlnx-nfsrdma-dkms so rpcrdma is rebuilt against the OFED RDMA stack.
+    if ! dpkg -l mlnx-nfsrdma-dkms 2>/dev/null | awk '$1=="ii"{f=1} END{exit !f}'; then
+        if command -v apt-get &>/dev/null; then
+            if ! op_run "apt-get install mlnx-nfsrdma-dkms" \
+                bash -c "apt-get update -qq && apt-get install -y -qq mlnx-nfsrdma-dkms"; then
+                op_end "" "Warning" \
+                    "mlnx-nfsrdma-dkms not available. Verify the DOCA-Host apt source is enabled.\nTCP mounts still work." || true
+                return 1
+            fi
+        else
+            op_step "install mlnx-nfsrdma-dkms" 1 "apt-get not available on this OS"
+            op_end "" "Warning" "Cannot install NFS-RDMA DKMS package on this OS." || true
+            return 1
+        fi
+    fi
+
+    # Make sure the DKMS module is built for the running kernel.
+    if command -v dkms &>/dev/null; then
+        op_run "dkms autoinstall -k $(uname -r)" dkms autoinstall -k "$(uname -r)" || true
+    fi
+
+    if modprobe rpcrdma 2>/dev/null; then
+        op_step "modprobe rpcrdma (OFED build)" 0
+        echo rpcrdma > /etc/modules-load.d/xinas-nfs-rdma.conf
+        op_step "persist /etc/modules-load.d/xinas-nfs-rdma.conf" 0
+        op_end "" "Success" "NFS-RDMA enabled (DKMS build matched OFED ABI)." || true
+        return 0
+    fi
+
+    local err
+    err="$(dmesg 2>/dev/null | grep -E 'rpcrdma' | tail -1)"
+    op_step "modprobe rpcrdma" 1 "${err:-still failing after DKMS rebuild}"
+    op_end "" "Warning" "NFS-RDMA still not loadable. TCP mounts still work." || true
+    return 1
+}
+
 install_nfs_tools() {
     if command -v mount.nfs4 &>/dev/null; then
+        # NFS already installed — still ensure NFS-RDMA is wired up if RDMA
+        # hardware is present (covers the case where the user installed
+        # nfs-common before DOCA-OFED, or upgraded the kernel).
+        enable_nfs_rdma || true
+
         msg_box "Already Installed" "\
 NFS client tools are already installed.
 
@@ -536,7 +623,8 @@ Install them now?
 
 This will install:
   - nfs-common (Debian/Ubuntu)
-  - nfs-utils (RHEL/CentOS)"; then
+  - nfs-utils (RHEL/CentOS)
+  - mlnx-nfsrdma-dkms (only if DOCA-OFED is installed)"; then
 
         op_start "Install NFS Tools"
         info_box "Installing..." "Installing NFS client tools..."
@@ -581,6 +669,9 @@ EOF
 
         op_verify "mount.nfs4 available" command -v mount.nfs4 || true
         op_end "" "Success" "You can now mount NFS shares from your xiNAS server." || true
+
+        # Enable NFS-RDMA transport (no-op without RDMA hardware).
+        enable_nfs_rdma || true
     fi
 }
 
