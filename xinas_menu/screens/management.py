@@ -45,8 +45,15 @@ class ManagementScreen(Screen):
 
     @work(exclusive=True)
     async def _do_update_check(self) -> None:
-        available = await self.app._update_checker.check()
-        if available:
+        result = await self.app._update_checker.check()
+        if result.error:
+            self.app.notify(
+                f"Update check failed: {result.error}",
+                severity="error",
+                timeout=10,
+            )
+            return
+        if result.available:
             self.app.update_available = True
             from xinas_menu.widgets.confirm_dialog import ConfirmDialog
             confirmed = await self.app.push_screen_wait(
