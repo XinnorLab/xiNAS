@@ -1936,11 +1936,76 @@ configure_cufile() {
     else
         # Create new (used both when no prior file and when user accepted
         # the recreate offer for a malformed file).
-        op_run "create cufile.json" bash -c "jq -n --argjson ips '$ip_array' --argjson mounts '$mount_table' '{
-            \"logging\": {\"dir\": \"/var/log/cufile\", \"level\": \"ERROR\"},
-            \"fs\": {\"nfs\": {\"rdma_dev_addr_list\": \$ips, \"mount_table\": \$mounts, \"use_pci_p2pdma\": false}},
-            \"profile\": {\"nvtx\": false, \"cufile_stats\": 0}
-        }' > '${CUFILE_JSON_PATH}.tmp' && mv '${CUFILE_JSON_PATH}.tmp' '$CUFILE_JSON_PATH'" || true
+        #
+        # Template mirrors NVIDIA's stock cufile.json structure (logging,
+        # profile, execution, properties, fs, block, denylist, miscellaneous)
+        # with our three dynamic insertions wired through jq:
+        #   .properties.rdma_dev_addr_list = $ips
+        #   .fs.nfs.rdma_dev_addr_list     = $ips
+        #   .fs.nfs.mount_table            = $mounts
+        # `properties.allow_compat_mode: true` defaults new configs to the
+        # recommended `nvfs, compat` state so the parser's truth-table
+        # rolls up to OK rather than WARN.
+        local tmpl
+        tmpl=$(mktemp --tmpdir cufile-template.XXXXXX.json)
+        cat > "$tmpl" <<'CUFILE_TEMPLATE'
+{
+  "logging": {"level": "ERROR"},
+  "profile": {"nvtx": false, "cufile_stats": 0},
+  "execution": {
+    "max_io_queue_depth": 128,
+    "max_io_threads": 4,
+    "parallel_io": true,
+    "min_io_threshold_size_kb": 8192,
+    "max_request_parallelism": 4
+  },
+  "properties": {
+    "max_direct_io_size_kb": 16384,
+    "max_device_cache_size_kb": 131072,
+    "per_buffer_cache_size_kb": 1024,
+    "max_device_pinned_mem_size_kb": 33554432,
+    "posix_pool_slab_size_kb": [4, 1024, 16384],
+    "posix_pool_slab_count": [128, 64, 64],
+    "use_poll_mode": false,
+    "poll_mode_max_size_kb": 8,
+    "use_pci_p2pdma": true,
+    "allow_compat_mode": true,
+    "gds_rdma_write_support": true,
+    "io_batchsize": 128,
+    "io_priority": "default",
+    "rdma_dev_addr_list": [],
+    "rdma_load_balancing_policy": "RoundRobin",
+    "rdma_dynamic_routing": false,
+    "rdma_dynamic_routing_order": ["P2P"]
+  },
+  "fs": {
+    "generic": {"posix_unaligned_writes": false},
+    "beegfs": {"posix_gds_min_kb": 0},
+    "lustre": {"posix_gds_min_kb": 0},
+    "nfs": {
+      "use_pci_p2pdma": false,
+      "rdma_dev_addr_list": [],
+      "mount_table": {}
+    },
+    "gpfs": {"gds_write_support": false, "gds_async_support": true},
+    "weka": {"rdma_write_support": false}
+  },
+  "block": {
+    "nvme":   {"use_pci_p2pdma": false},
+    "nvmeof": {"use_pci_p2pdma": false},
+    "raid":   {"use_pci_p2pdma": false}
+  },
+  "denylist": {"drivers": [], "devices": [], "mounts": [], "filesystems": []},
+  "miscellaneous": {"api_check_aggressive": false}
+}
+CUFILE_TEMPLATE
+
+        op_run "create cufile.json" bash -c "jq --argjson ips '$ip_array' --argjson mounts '$mount_table' '
+            .properties.rdma_dev_addr_list = \$ips |
+            .fs.nfs.rdma_dev_addr_list     = \$ips |
+            .fs.nfs.mount_table            = \$mounts
+        ' '$tmpl' > '${CUFILE_JSON_PATH}.tmp' && mv '${CUFILE_JSON_PATH}.tmp' '$CUFILE_JSON_PATH'" || true
+        rm -f "$tmpl"
     fi
 
     chmod 644 "$CUFILE_JSON_PATH"
