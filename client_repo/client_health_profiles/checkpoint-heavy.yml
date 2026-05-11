@@ -7,7 +7,7 @@ sections:
   nfs_client: { enabled: true, checks: [modules_loaded, modprobe_conf, sysctl_conf, rpc_stats, dmesg_nfs] }
   mounts: { enabled: true, checks: [active_mounts, nfs_version, mount_options, persistence, mountstats] }
   network: { enabled: true, checks: [link_state, speed, mtu, errors_drops, tcp_retransmits, route_to_server] }
-  rdma: { enabled: true, checks: [rdma_devices, port_state] }
+  rdma: { enabled: true, checks: [rdma_devices, port_state, nfs_rdma] }
   gds: { enabled: true, checks: [nvidia_driver, nvidia_fs_module, cufile_config, gds_libraries] }
   runtime: { enabled: true, checks: [nfs_errors, cpu_iowait, memory_pressure, softirq_pressure] }
   kerberos: { enabled: false, checks: [krb5_conf, klist_ticket, idmapd_domain, time_sync] }
