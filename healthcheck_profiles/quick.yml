@@ -12,7 +12,7 @@ sections:
   rdma: { enabled: false }
   nvme_health: { enabled: false }
   filesystem: { enabled: false }
-  perf_tuning: { enabled: true, checks: [nvme_poll_queues, read_ahead_kb] }
+  perf_tuning: { enabled: true, checks: [nvme_poll_queues] }
   kerberos: { enabled: false, checks: [krb5_conf, klist_ticket, idmapd_domain, time_sync] }
 expectations:
   cpu_governor: "performance"
@@ -36,4 +36,3 @@ expectations:
   vm_lru_gen: 1
   vm_watermark_scale: 200
   nvme_poll_queues: 4
-  read_ahead_kb: 65536

@@ -1056,29 +1056,6 @@ def check_perf_tuning(exp, checks):
                 impact="NVMe poll queues not set — higher per-I/O latency",
                 fix_hint="Set options nvme poll_queues=4 in /etc/modprobe.d/nvme.conf and rebuild initramfs"))
 
-    if "read_ahead_kb" in checks:
-        expected = exp.get("read_ahead_kb", 65536)
-        try:
-            devs = [d for d in os.listdir("/sys/block") if d.startswith("nvme")]
-        except OSError:
-            devs = []
-        if not devs:
-            results.append(CheckResult("PerfTuning", "read_ahead_kb", "SKIP",
-                "N/A", str(expected), evidence="No NVMe devices found"))
-        for dev in devs:
-            actual = read_file(f"/sys/block/{dev}/queue/read_ahead_kb")
-            if actual is None:
-                continue
-            actual_int = int(actual)
-            if actual_int >= expected:
-                results.append(CheckResult("PerfTuning", f"read_ahead_kb ({dev})", "PASS",
-                    actual, str(expected)))
-            else:
-                results.append(CheckResult("PerfTuning", f"read_ahead_kb ({dev})", "WARN",
-                    actual, str(expected),
-                    impact=f"Low read-ahead on {dev} limits sequential read throughput",
-                    fix_hint=f"blockdev --setra {expected} /dev/{dev}"))
-
     if "cpu_cstate" in checks:
         cmdline = read_file("/proc/cmdline") or ""
         if "intel_idle.max_cstate=0" in cmdline:

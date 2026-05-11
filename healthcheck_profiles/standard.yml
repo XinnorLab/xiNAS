@@ -12,7 +12,7 @@ sections:
   rdma: { enabled: true, checks: [rdma_devices, port_state] }
   nvme_health: { enabled: false }
   filesystem: { enabled: true, checks: [disk_usage, inode_usage, mount_opts, xfs_mount_opts] }
-  perf_tuning: { enabled: true, checks: [nvme_poll_queues, read_ahead_kb, cpu_cstate, io_scheduler] }
+  perf_tuning: { enabled: true, checks: [nvme_poll_queues, cpu_cstate, io_scheduler] }
   kerberos: { enabled: false, checks: [krb5_conf, klist_ticket, idmapd_domain, time_sync] }
 expectations:
   cpu_governor: "performance"
@@ -41,7 +41,6 @@ expectations:
   net_somaxconn: 65535
   sunrpc_slots: 128
   nvme_poll_queues: 4
-  read_ahead_kb: 65536
   fs_usage_warn: 80
   fs_usage_fail: 95
   fs_inode_warn: 80
