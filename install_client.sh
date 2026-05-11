@@ -62,7 +62,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # ── Step 1: Requirements ──────────────────────────────────────────────────────
-step 1 4 "Checking system requirements"
+step 1 5 "Checking system requirements"
 
 if command -v apt-get &>/dev/null; then
     PKG_MGR="apt"
@@ -88,7 +88,7 @@ ok "Package manager: ${WHITE}${BOLD}${PKG_MGR}${NC}"
 ok "Running as root"
 
 # ── Step 2: Dependencies ──────────────────────────────────────────────────────
-step 2 4 "Installing dependencies"
+step 2 5 "Installing dependencies"
 
 info "Refreshing package index..."
 $PKG_UPDATE >/dev/null 2>&1 || true
@@ -126,7 +126,7 @@ else
 fi
 
 # ── Step 3: Client package ────────────────────────────────────────────────────
-step 3 4 "Downloading xiNAS client"
+step 3 5 "Downloading xiNAS client"
 
 if [[ -d "$INSTALL_DIR" ]]; then
     info "Existing installation found — updating..."
@@ -153,7 +153,7 @@ ln -sf "$INSTALL_DIR/client_repo/client_setup.sh" /usr/local/bin/xinas-client
 ok "Command registered: ${WHITE}${BOLD}xinas-client${NC}"
 
 # ── Step 4: NFS tuning ────────────────────────────────────────────────────────
-step 4 4 "Configuring NFS client"
+step 4 5 "Configuring NFS client"
 
 if [[ ! -f /etc/modprobe.d/nfsclient.conf ]]; then
     echo "options nfs max_session_slots=180" > /etc/modprobe.d/nfsclient.conf
@@ -161,6 +161,86 @@ if [[ ! -f /etc/modprobe.d/nfsclient.conf ]]; then
 else
     skip "NFS tuning already configured"
 fi
+
+# ── Step 5: NFS-RDMA transport ────────────────────────────────────────────────
+step 5 5 "Enabling NFS-RDMA transport"
+
+enable_nfs_rdma_oneshot() {
+    # Skip on TCP-only clients.
+    if [[ ! -d /sys/class/infiniband ]] || ! ls /sys/class/infiniband/ 2>/dev/null | grep -q . ; then
+        skip "RDMA hardware not present — skipping NFS-RDMA setup"
+        return 0
+    fi
+
+    # Persist load-on-boot regardless of current load state.
+    local persist=/etc/modules-load.d/xinas-nfs-rdma.conf
+    if [[ ! -f "$persist" ]] || ! grep -qx rpcrdma "$persist" 2>/dev/null; then
+        echo rpcrdma > "$persist"
+    fi
+
+    if lsmod 2>/dev/null | awk '{print $1}' | grep -qx rpcrdma; then
+        skip "rpcrdma already loaded"
+        return 0
+    fi
+
+    if modprobe rpcrdma 2>/dev/null; then
+        ok "rpcrdma loaded ${DIM}(persisted in ${persist})${NC}"
+        return 0
+    fi
+
+    # modprobe failed — most common cause is MLNX/DOCA-OFED ABI mismatch.
+    local has_ofed=0
+    if dpkg -l mlnx-ofed-kernel-dkms 2>/dev/null | awk '$1=="ii"{f=1} END{exit !f}'; then
+        has_ofed=1
+    elif command -v ofed_info &>/dev/null && ofed_info -s &>/dev/null; then
+        has_ofed=1
+    fi
+
+    if [[ $has_ofed -eq 0 ]]; then
+        local errline
+        errline="$(dmesg 2>/dev/null | grep -E 'rpcrdma' | tail -1 || true)"
+        warn "rpcrdma load failed; no MLNX/DOCA-OFED detected"
+        [[ -n "$errline" ]] && info "${DIM}${errline}${NC}"
+        info "TCP NFS mounts will still work"
+        return 0
+    fi
+
+    if [[ "$PKG_MGR" != "apt" ]]; then
+        warn "DOCA-OFED detected, but mlnx-nfsrdma-dkms is only installable via apt on this OS"
+        info "TCP NFS mounts will still work"
+        return 0
+    fi
+
+    if ! dpkg -l mlnx-nfsrdma-dkms 2>/dev/null | awk '$1=="ii"{f=1} END{exit !f}'; then
+        info "DOCA-OFED detected — installing mlnx-nfsrdma-dkms..."
+        if ! $PKG_INSTALL mlnx-nfsrdma-dkms >/dev/null 2>&1; then
+            warn "mlnx-nfsrdma-dkms unavailable — check the DOCA-Host apt source"
+            info "TCP NFS mounts will still work"
+            return 0
+        fi
+        ok "mlnx-nfsrdma-dkms installed"
+    else
+        skip "mlnx-nfsrdma-dkms already installed"
+    fi
+
+    if command -v dkms &>/dev/null; then
+        dkms autoinstall -k "$(uname -r)" >/dev/null 2>&1 || true
+    fi
+
+    if modprobe rpcrdma 2>/dev/null; then
+        ok "rpcrdma loaded ${DIM}(DKMS build matches OFED ABI; persisted in ${persist})${NC}"
+        return 0
+    fi
+
+    local errline
+    errline="$(dmesg 2>/dev/null | grep -E 'rpcrdma' | tail -1 || true)"
+    warn "rpcrdma still cannot be loaded after DKMS rebuild"
+    [[ -n "$errline" ]] && info "${DIM}${errline}${NC}"
+    info "TCP NFS mounts will still work"
+    return 0
+}
+
+enable_nfs_rdma_oneshot
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
