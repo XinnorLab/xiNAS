@@ -51,9 +51,29 @@ def handle_add_export(req: dict) -> None:
     if "path" not in entry:
         raise ValueError("entry.path is required")
     path = entry["path"]
+    if not os.path.isabs(path):
+        raise ValueError(f"entry.path must be absolute: {path}")
     if not os.path.isdir(path):
-        os.makedirs(path, exist_ok=True)
-        log.info("Created export directory: %s", path)
+        if not req.get("create_path"):
+            raise FileNotFoundError(
+                f"Path does not exist: {path} (set create_path=true to auto-create)"
+            )
+        parent = os.path.dirname(path)
+        if not os.path.isdir(parent):
+            raise FileNotFoundError(
+                f"Parent directory does not exist: {parent} (single-level mkdir only; create the parent first)"
+            )
+        mode_str = req.get("path_mode") or "0755"
+        try:
+            mode = int(str(mode_str), 8)
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid path_mode (must be octal string like '0755'): {mode_str}")
+        if mode < 0 or mode > 0o7777:
+            raise ValueError(f"path_mode out of range: {mode_str}")
+        os.mkdir(path, mode=mode)
+        # mkdir() is masked by umask; chmod to apply the requested mode exactly
+        os.chmod(path, mode)
+        log.info("Created export directory: %s (mode %s)", path, oct(mode))
     add_export(entry)
     _exportfs_reload()
 

@@ -127,6 +127,8 @@ Both modes MUST be supported. Each controller MUST carry a stable, unique `contr
 
 `share.create` spec MUST include: path, clients, policies (ro/rw, root_squash), security (sys, krb5, krb5i, krb5p), NFS versions, sync/async commit, RDMA transport enablement.
 
+`share.create` MAY accept `create_path` (default `false`) and `path_mode` (default `0755`). When `create_path=true`, the helper performs a single-level `mkdir` of the export path on apply — the parent directory MUST already exist; multi-level path creation is not permitted (typo safety).
+
 `share.delete` MUST leave underlying filesystem data intact unless `delete_data=true` is explicitly set.
 
 ### 4.7 Access Control / Identity

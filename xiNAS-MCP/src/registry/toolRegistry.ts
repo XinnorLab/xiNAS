@@ -164,7 +164,7 @@ const TOOLS: ToolDef[] = [
   // Share
   { name: 'share.list', description: 'List NFS exports with paths, clients, and options', schema: ShareListSchema, handler: handleShareList },
   { name: 'share.get_active_sessions', description: 'Get active NFS sessions for an export', schema: ShareGetActiveSessionsSchema, handler: handleShareGetActiveSessions },
-  { name: 'share.create', description: 'Create NFS export (plan/apply). Supports sys/krb5/rdma.', schema: ShareCreateSchema, handler: handleShareCreate },
+  { name: 'share.create', description: 'Create NFS export (plan/apply). Supports sys/krb5/rdma. Set create_path=true (with optional path_mode like "1777") to auto-create the export directory; parent must already exist.', schema: ShareCreateSchema, handler: handleShareCreate },
   { name: 'share.update_policy', description: 'Update NFS export policy (clients, security, options)', schema: ShareUpdatePolicySchema, handler: handleShareUpdatePolicy },
   { name: 'share.set_quota', description: 'Set XFS project quota on an export path', schema: ShareSetQuotaSchema, handler: handleShareSetQuota },
   { name: 'share.delete', description: 'Delete NFS export (plan/apply, requires dangerous=true)', schema: ShareDeleteSchema, handler: handleShareDelete },

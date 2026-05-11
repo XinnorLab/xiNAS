@@ -34,7 +34,7 @@ All tools are registered in `src/registry/toolRegistry.ts` and implemented in `s
 | `raid.delete` | admin | plan/apply | array_id | raidDestroy | /proc/mounts | listExports |
 | `share.list` | viewer | — | — | — | — | listExports |
 | `share.get_active_sessions` | operator | — | — | — | — | getSessions |
-| `share.create` | operator | plan/apply | — | — | fs.existsSync | addExport, reload |
+| `share.create` | operator | plan/apply | — | — | fs.existsSync (path or parent when create_path) | addExport, reload |
 | `share.update_policy` | operator | plan/apply | — | — | — | updateExport, reload |
 | `share.set_quota` | operator | — | — | — | — | setQuota |
 | `share.delete` | operator | plan/apply | — | — | — | removeExport, getSessions, reload |
@@ -243,7 +243,8 @@ Typical use: the Textual TUI remediation wizard collapses the `NFS.threads_confi
 | `raid.delete` | active NFS export | PRECONDITION_FAILED (plan) |
 | `disk.get_smart` | SATA drive | UNSUPPORTED |
 | `disk.get_smart` | device not found | NOT_FOUND |
-| `share.create` | path not found | PRECONDITION_FAILED (plan) |
+| `share.create` | path not found, create_path=false | PRECONDITION_FAILED (plan) |
+| `share.create` | create_path=true and parent missing | PRECONDITION_FAILED (plan) |
 | `share.delete` | active sessions, dangerous=false | PRECONDITION_FAILED (plan) |
 | `auth.create_user` | invalid username | INVALID_ARGUMENT |
 | `auth.create_user` | user already exists | CONFLICT |

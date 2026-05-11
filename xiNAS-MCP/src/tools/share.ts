@@ -4,6 +4,7 @@
 
 import { z } from 'zod';
 import * as fs from 'fs';
+import * as path from 'path';
 import { listExports, addExport, removeExport, updateExport,
          listSessions, getSessions, setQuota, reloadExports } from '../os/nfsClient.js';
 import { applyWithPlan } from '../middleware/planApply.js';
@@ -12,6 +13,8 @@ import type { ExportEntry, ClientSpec } from '../types/nfs.js';
 import type { PlanResult, Mode } from '../types/common.js';
 import { McpToolError, ErrorCode } from '../types/common.js';
 import { checkNfsReadiness } from '../os/systemInfo.js';
+
+const PATH_MODE_RE = /^[0-7]{3,4}$/;
 
 // --- Schemas ---
 
@@ -37,6 +40,12 @@ export const ShareCreateSchema = z.object({
   nfs_versions: z.array(z.string()).default(['4.2', '4.1', '4', '3']),
   async_commit: z.boolean().default(false),
   rdma: z.boolean().default(false).describe('Enable RDMA transport'),
+  create_path: z.boolean().default(false).describe(
+    'Create the export directory on apply if it does not exist. Parent directory must already exist (single-level mkdir).'
+  ),
+  path_mode: z.string().regex(PATH_MODE_RE, 'octal mode like "0755" or "1777"').default('0755').describe(
+    'Octal mode for the created directory (only used when create_path=true). Examples: "0755", "1777".'
+  ),
   mode: z.enum(['plan', 'apply']).default('plan'),
   idempotency_key: z.string().optional(),
 });
@@ -116,9 +125,31 @@ export async function handleShareCreate(params: z.infer<typeof ShareCreateSchema
       const nfs = checkNfsReadiness();
       blockingResources.push(...nfs.blocking);
 
-      // Check path exists
-      if (!fs.existsSync(params.path)) {
-        blockingResources.push(`Path does not exist: ${params.path}`);
+      // Reject relative paths up front
+      if (!path.isAbsolute(params.path)) {
+        blockingResources.push(`Export path must be absolute: ${params.path}`);
+      }
+
+      // Path existence: allow missing only when create_path=true and the parent exists
+      const pathExists = fs.existsSync(params.path);
+      if (!pathExists) {
+        if (!params.create_path) {
+          blockingResources.push(
+            `Path does not exist: ${params.path} — set create_path=true to auto-create it on apply`
+          );
+        } else {
+          const parent = path.dirname(params.path);
+          if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) {
+            blockingResources.push(
+              `Parent directory does not exist: ${parent} — create the parent first (single-level mkdir only)`
+            );
+          } else {
+            warnings.push(`Path will be created at ${params.path} with mode ${params.path_mode}`);
+          }
+        }
+      } else if (params.create_path) {
+        // Path already exists — create_path is a no-op, surface as a warning so users notice the mode hint is unused
+        warnings.push(`Path ${params.path} already exists — create_path/path_mode will be ignored`);
       }
 
       // Check for duplicate
@@ -174,9 +205,17 @@ export async function handleShareCreate(params: z.infer<typeof ShareCreateSchema
           }),
         })),
       };
-      await addExport(entry);
+      const pathPreexisted = fs.existsSync(params.path);
+      await addExport(entry, {
+        createPath: params.create_path,
+        pathMode: params.path_mode,
+      });
       await reloadExports();
-      return { created: true, path: params.path };
+      return {
+        created: true,
+        path: params.path,
+        path_created: params.create_path && !pathPreexisted,
+      };
     },
   });
 }

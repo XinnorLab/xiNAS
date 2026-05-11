@@ -83,8 +83,20 @@ export async function listExports(): Promise<ExportEntry[]> {
   return resp.result as ExportEntry[];
 }
 
-export async function addExport(entry: ExportEntry): Promise<void> {
-  const resp = await send({ op: 'add_export', request_id: uuidv4(), entry });
+export interface AddExportOptions {
+  /** When true, the helper will mkdir the export path if it does not exist (single level; parent must exist). */
+  createPath?: boolean;
+  /** Octal mode string (e.g. "0755", "1777") applied to the newly-created directory. Ignored when createPath is false. */
+  pathMode?: string;
+}
+
+export async function addExport(entry: ExportEntry, opts: AddExportOptions = {}): Promise<void> {
+  const req: NfsRequest = { op: 'add_export', request_id: uuidv4(), entry };
+  if (opts.createPath) {
+    req.create_path = true;
+    if (opts.pathMode) req.path_mode = opts.pathMode;
+  }
+  const resp = await send(req);
   checkResponse(resp);
 }
 

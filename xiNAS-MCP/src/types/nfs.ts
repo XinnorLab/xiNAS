@@ -74,6 +74,10 @@ export interface NfsRequest {
   rdma?: boolean | string;
   updates?: Record<string, Record<string, string | number | boolean>>;
   restart?: boolean;
+  // add_export: when true, mkdir the export path if missing (single level; parent must exist)
+  create_path?: boolean;
+  // add_export: octal mode string (e.g. "0755", "1777") for the created directory
+  path_mode?: string;
 }
 
 export interface NfsResponse {
