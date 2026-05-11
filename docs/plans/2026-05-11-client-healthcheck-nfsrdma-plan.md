@@ -66,7 +66,8 @@ def _dpkg_version(pkg):
     if not out or '|' not in out:
         return None
     status, version = out.split('|', 1)
-    if 'installed' not in status:
+    fields = status.strip().split()
+    if not fields or fields[-1] != 'installed':
         return None
     return version.strip() or None
 
@@ -83,12 +84,12 @@ If `bash:` prints `None`, the dpkg-query syntax is wrong — fix the escaping be
 **Step 3: Run the existing healthcheck to confirm we didn't break anything**
 
 ```bash
-sudo bash client_repo/client_healthcheck.sh --profile default --json /tmp/hc-task1.json
+sudo bash client_repo/client_healthcheck.sh --default --json --no-save > /tmp/hc-task1.json
 echo "Exit: $?"
-jq '.results | length' /tmp/hc-task1.json
+jq '.checks | length' /tmp/hc-task1.json
 ```
 
-Expected: exit 0 (or whatever it was before — record the baseline). `.results | length` should be unchanged from before this task.
+Expected: exit 0 (or whatever it was before — record the baseline). `.checks | length` should be unchanged from before this task.
 
 **Step 4: Commit**
 
@@ -200,8 +201,8 @@ Expected: exit 0, no output.
 **Step 3: Run healthcheck against `default.yml` (gating sanity check)**
 
 ```bash
-sudo bash client_repo/client_healthcheck.sh --profile default --json /tmp/hc-task2-default.json
-jq '[.results[] | select(.name | startswith("nfsrdma_") or . == "nfs_rdma")]' /tmp/hc-task2-default.json
+sudo bash client_repo/client_healthcheck.sh --default --json --no-save > /tmp/hc-task2-default.json
+jq '[.checks[] | select(.name | startswith("nfsrdma_") or . == "nfs_rdma")]' /tmp/hc-task2-default.json
 ```
 
 Expected: `[]` — `default.yml` does not enable the `rdma` section, so no `nfs_rdma` rows should appear.
@@ -209,8 +210,8 @@ Expected: `[]` — `default.yml` does not enable the `rdma` section, so no `nfs_
 **Step 4: Run healthcheck against an RDMA profile on a TCP-only dev box (no OFED)**
 
 ```bash
-sudo bash client_repo/client_healthcheck.sh --profile ai-training --json /tmp/hc-task2-ai.json 2>&1 || true
-jq '.results[] | select(.section == "RDMA")' /tmp/hc-task2-ai.json
+sudo bash client_repo/client_healthcheck.sh --ai-training --json --no-save > /tmp/hc-task2-ai.json 2>&1 || true
+jq '.checks[] | select(.section == "RDMA")' /tmp/hc-task2-ai.json
 ```
 
 Expected: still no `nfs_rdma` row at this stage (profile not yet updated in Task 3). Existing `rdma_devices` / `port_state` rows continue to behave as before. This step proves Task 2 is **inert** until Task 3 wires the profile.
@@ -260,8 +261,8 @@ The healthcheck has a fallback YAML parser; quickest sanity check is to actually
 ```bash
 for p in ai-training hpc-readmostly checkpoint-heavy; do
   echo "=== $p ==="
-  sudo bash client_repo/client_healthcheck.sh --profile "$p" --json "/tmp/hc-task3-$p.json" 2>&1 || true
-  jq '.results[] | select(.section == "RDMA") | "\(.name): \(.status) | \(.actual)"' \
+  sudo bash client_repo/client_healthcheck.sh --"$p" --json --no-save > "/tmp/hc-task3-$p.json" 2>&1 || true
+  jq '.checks[] | select(.section == "RDMA") | "\(.name): \(.status) | \(.actual)"' \
     "/tmp/hc-task3-$p.json"
 done
 ```
@@ -300,7 +301,7 @@ git commit -m "feat(client-healthcheck): enable nfs_rdma check in RDMA profiles"
 ```bash
 for p in default ai-training hpc-readmostly checkpoint-heavy; do
   echo "===== $p ====="
-  sudo bash client_repo/client_healthcheck.sh --profile "$p"
+  sudo bash client_repo/client_healthcheck.sh --"$p"
 done 2>&1 | tee /tmp/hc-task4-text.log
 ```
 
@@ -312,11 +313,11 @@ Scroll through `/tmp/hc-task4-text.log` and confirm:
 **Step 2: Inspect a JSON report for downstream consumers**
 
 ```bash
-sudo bash client_repo/client_healthcheck.sh --profile ai-training --json /tmp/hc-final.json
+sudo bash client_repo/client_healthcheck.sh --ai-training --json --no-save > /tmp/hc-final.json
 jq '{
-  rdma_section: [.results[] | select(.section == "RDMA")],
-  pass_count: [.results[] | select(.section == "RDMA" and .status == "PASS")] | length,
-  fail_count: [.results[] | select(.section == "RDMA" and .status == "FAIL")] | length
+  rdma_section: [.checks[] | select(.section == "RDMA")],
+  pass_count: [.checks[] | select(.section == "RDMA" and .status == "PASS")] | length,
+  fail_count: [.checks[] | select(.section == "RDMA" and .status == "FAIL")] | length
 }' /tmp/hc-final.json
 ```
 
