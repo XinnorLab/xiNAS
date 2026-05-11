@@ -178,6 +178,23 @@ enable_nfs_rdma_oneshot() {
         echo rpcrdma > "$persist"
     fi
 
+    # Auto-apply the EXPORT_SYMBOL_GPL fix BEFORE the load-state branches —
+    # otherwise a box that already has mlnx-nfsrdma-dkms installed and the
+    # (buggy) rpcrdma module loaded short-circuits at the lsmod check below
+    # and the patch never runs. The applier is idempotent and gates on
+    # mlnx-nfsrdma-dkms being installed, so it's safe to call here even on
+    # TCP-only / no-OFED systems (it exits 0 with "nothing to do").
+    # See: docs/troubleshooting/mlnx-nfsrdma-export-symbol-gpl-bug.md
+    local applier="${INSTALL_DIR}/client_repo/patches/apply-mlnx-nfsrdma-export-gpl.sh"
+    if [[ -x "$applier" ]]; then
+        info "Checking for mlnx-nfsrdma GDS-hook export bug..."
+        if "$applier" 2>&1 | sed 's/^/     /'; then
+            ok "mlnx-nfsrdma GDS-hook check complete"
+        else
+            warn "mlnx-nfsrdma GDS-hook patch attempt failed — see output above"
+        fi
+    fi
+
     if lsmod 2>/dev/null | awk '{print $1}' | grep -qx rpcrdma; then
         skip "rpcrdma already loaded"
         return 0
@@ -223,19 +240,9 @@ enable_nfs_rdma_oneshot() {
         skip "mlnx-nfsrdma-dkms already installed"
     fi
 
-    # Auto-apply the EXPORT_SYMBOL_GPL fix if the buggy version is installed.
-    # See: docs/troubleshooting/mlnx-nfsrdma-export-symbol-gpl-bug.md
-    local applier="${INSTALL_DIR}/client_repo/patches/apply-mlnx-nfsrdma-export-gpl.sh"
-    if [[ -x "$applier" ]]; then
-        info "Checking for mlnx-nfsrdma GDS-hook export bug..."
-        if "$applier" 2>&1 | sed 's/^/     /'; then
-            ok "mlnx-nfsrdma GDS-hook check complete"
-        else
-            warn "mlnx-nfsrdma GDS-hook patch attempt failed — see output above"
-        fi
-    else
-        skip "patch applier not present at $applier"
-    fi
+    # Applier already ran at the top of enable_nfs_rdma_oneshot — it
+    # handles the buggy-source detection + DKMS rebuild + reload (or "reboot
+    # to activate") on every reachable code path.
 
     if command -v dkms &>/dev/null; then
         dkms autoinstall -k "$(uname -r)" >/dev/null 2>&1 || true
