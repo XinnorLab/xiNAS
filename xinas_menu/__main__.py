@@ -9,7 +9,24 @@ Flags:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+
+
+def _require_root_or_exit(action: str) -> None:
+    """Exit with a clear message if not running as root.
+
+    The TUI reads/writes root-owned paths (/etc/xinas-mcp/config.json mode
+    0640, /root/.ssh/authorized_keys, etc.). On Python 3.12+ pathlib.Path.exists()
+    propagates EACCES instead of swallowing it, so non-root invocations crash
+    deep in the UI. Fail fast at the entrypoint instead.
+    """
+    if os.geteuid() != 0:
+        sys.stderr.write(
+            f"xinas_menu: the {action} must be run as root.\n"
+            "Run:  sudo xinas-menu\n"
+        )
+        sys.exit(1)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -66,12 +83,14 @@ def main() -> None:
         sys.exit(0)
 
     if args.setup:
+        _require_root_or_exit("setup menu")
         from xinas_menu.screens.startup.startup_menu import StartupApp
         app = StartupApp()
         app.run()
         sys.exit(0)
 
     # Default: main management menu
+    _require_root_or_exit("management console")
     from xinas_menu.app import XiNASApp
     app = XiNASApp(
         no_welcome=args.no_welcome,
