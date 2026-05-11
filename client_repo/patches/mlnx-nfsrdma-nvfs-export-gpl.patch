@@ -1,0 +1,46 @@
+# mlnx-nfsrdma: export NFS-GDS hooks GPL so nvidia_fs can register
+#
+# Symptom:
+#   `gdscheck -p` reports `NFS : Unsupported` and dmesg repeats:
+#     failing symbol_get of non-GPLONLY symbol rpcrdma_register_nvfs_dma_ops
+#   even with mlnx-nfsrdma-dkms + nvidia-fs installed and a working
+#   proto=rdma NFS mount. gdsio -x 0 then fails at cuFileHandleRegister.
+#
+# Root cause:
+#   nvidia_fs uses __symbol_get() to grab the two NFS-RDMA -> GDS hooks
+#   exported by the rpcrdma module. Modern Linux __symbol_get() resolves
+#   only EXPORT_SYMBOL_GPL symbols. mlnx-nfsrdma's nvfs_rpc_rdma.c
+#   exports them as plain EXPORT_SYMBOL, so the lookups silently fail.
+#
+# Fix:
+#   Two characters per export line: EXPORT_SYMBOL -> EXPORT_SYMBOL_GPL.
+#   The SPDX header on this file is "GPL-2.0 OR Linux-OpenIB", so
+#   GPL-only export is licence-compatible. No licence change required.
+#
+# Affected:
+#   mlnx-nfsrdma-dkms 26.01.OFED.26.01.1.0.0.1 (DOCA-Host 26.01) —
+#   confirmed in the field. Likely earlier 5.x releases too.
+#
+# This .patch file is kept for documentation and upstream submission;
+# xiNAS applies the change at install time via the idempotent sed-based
+# applier (see apply-mlnx-nfsrdma-export-gpl.sh in this directory).
+#
+# Full memo: docs/troubleshooting/mlnx-nfsrdma-export-symbol-gpl-bug.md
+
+--- a/nvfs_rpc_rdma.c
++++ b/nvfs_rpc_rdma.c
+@@ -28,7 +28,7 @@
+        } else
+              return -ENOTSUPP;
+ }
+-EXPORT_SYMBOL(REGISTER_FUNC);
++EXPORT_SYMBOL_GPL(REGISTER_FUNC);
+
+ // protected via nvfs_module_mutex
+ void UNREGISTER_FUNC (void)
+@@ -39,4 +39,4 @@
+        } while (nvfs_count_ops());
+        nvfs_ops = NULL;
+ }
+-EXPORT_SYMBOL(UNREGISTER_FUNC);
++EXPORT_SYMBOL_GPL(UNREGISTER_FUNC);
