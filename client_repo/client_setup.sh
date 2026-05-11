@@ -1853,6 +1853,13 @@ configure_cufile() {
     op_start "Configure cuFile" "RDMA IPs: $rdma_ip_list"
     info_box "Configuring" "Writing cufile.json configuration..."
 
+    # cuFile defaults logging.dir to /var/log/cufile when logging.level is
+    # set and the dir field is absent. If that directory does not exist,
+    # gdscheck reports `found invalid log directory name /var/log/cufile`
+    # and refuses to load the config. Create it idempotently so a fresh
+    # install never hits that error.
+    op_run "ensure /var/log/cufile exists" mkdir -p /var/log/cufile || true
+
     # Backup existing cufile.json BEFORE any modification. Abort if backup fails.
     if [[ -n "$backup_path" ]]; then
         if ! op_run "backup cufile.json -> $backup_path" cp -p "$CUFILE_JSON_PATH" "$backup_path"; then
