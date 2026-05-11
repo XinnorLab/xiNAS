@@ -3,6 +3,7 @@
  */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 export interface InterfaceInfo {
@@ -57,17 +58,23 @@ function parseNetDev(): Map<string, {
   return result;
 }
 
-/** Parse /proc/net/fib_trie for IPv4 addresses (simplified) */
-function parseIPv4Addresses(): Map<string, string[]> {
-  const result = new Map<string, string[]>();
-  // Use /proc/net/if_inet6 equivalent for IPv4: read from /proc/net/fib_trie
-  // Simpler: read ip addresses from /proc/net/tcp if available, but
-  // the most reliable source is /proc/net/fib_trie. For simplicity,
-  // we parse sysfs interface address files if they exist.
-  // Modern kernels: /sys/class/net/<iface>/address exists, but not IP.
-  // Best approach: parse ip addr output—but we can't run subprocesses.
-  // Fallback: attempt to read from /proc/net/fib_trie (complex)
-  // For v1, return empty — IPv4 will be enriched if available
+/** Per-interface IPv4 + IPv6 addresses via Node's built-in os.networkInterfaces(). */
+function collectAddresses(): Map<string, { ipv4: string[]; ipv6: string[] }> {
+  const result = new Map<string, { ipv4: string[]; ipv6: string[] }>();
+  const all = os.networkInterfaces();
+  for (const [iface, entries] of Object.entries(all)) {
+    if (!entries) continue;
+    const ipv4: string[] = [];
+    const ipv6: string[] = [];
+    for (const e of entries) {
+      // Node reports family as 'IPv4'|'IPv6' (string) on older versions and
+      // as 4|6 (number) on newer ones; accept both.
+      const fam = (e as { family: string | number }).family;
+      if (fam === 'IPv4' || fam === 4) ipv4.push(e.address);
+      else if (fam === 'IPv6' || fam === 6) ipv6.push(e.address);
+    }
+    result.set(iface, { ipv4, ipv6 });
+  }
   return result;
 }
 
@@ -107,6 +114,7 @@ export function listInterfaces(): InterfaceInfo[] {
   const netDir = '/sys/class/net';
   const interfaces = listDir(netDir);
   const netDevStats = parseNetDev();
+  const addresses = collectAddresses();
   const result: InterfaceInfo[] = [];
 
   for (const iface of interfaces) {
@@ -127,6 +135,7 @@ export function listInterfaces(): InterfaceInfo[] {
     };
 
     const bondInfo = parseBondInfo(iface);
+    const addrs = addresses.get(iface) ?? { ipv4: [], ipv6: [] };
 
     result.push({
       name: iface,
@@ -135,8 +144,8 @@ export function listInterfaces(): InterfaceInfo[] {
       operstate,
       speed_mbps,
       duplex,
-      ipv4_addresses: [], // enriched via other means
-      ipv6_addresses: [],
+      ipv4_addresses: addrs.ipv4,
+      ipv6_addresses: addrs.ipv6,
       rx_bytes: stats.rx_bytes,
       tx_bytes: stats.tx_bytes,
       rx_errors: stats.rx_errors,

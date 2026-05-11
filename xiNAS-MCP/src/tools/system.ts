@@ -157,6 +157,8 @@ export async function handleGetInventory(params: z.infer<typeof GetInventorySche
       mtu: i.mtu,
       speed_mbps: i.speed_mbps,
       is_rdma: i.is_rdma,
+      ipv4_addresses: i.ipv4_addresses,
+      ipv6_addresses: i.ipv6_addresses,
     })),
   };
 }
