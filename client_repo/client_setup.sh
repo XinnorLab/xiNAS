@@ -4050,7 +4050,9 @@ advanced_settings_menu() {
                 OK)   gds_indicator=" [OK]" ;;
                 WARN) gds_indicator=" [WARN ⚠]" ;;
                 FAIL) gds_indicator=" [FAIL ✗]" ;;
-                *)    gds_indicator=" [OK]" ;;
+                # Unknown state — never silently render as OK. That was the
+                # exact false-pass failure this whole change set is fixing.
+                *)    gds_indicator=" [?]" ;;
             esac
         fi
 
