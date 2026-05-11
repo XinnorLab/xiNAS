@@ -19,7 +19,7 @@
 - name: Install pip packages into venv
   ansible.builtin.pip:
     name:
-      - "textual>=0.70.0"
+      - "textual>=0.71.0"
       - "grpcio>=1.60.0"
       - "grpcio-tools>=1.60.0"
       - "protobuf>=4.25.0"

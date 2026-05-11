@@ -208,8 +208,30 @@ class XiNASApp(App):
         except Exception:
             _log.debug("copy content failed (no text view on screen?)", exc_info=True)
 
-    @work(exclusive=True, thread=True)
     def _do_copy(self, text: str) -> None:
+        """Copy *text* to the user's clipboard.
+
+        Tries OSC 52 first — an ANSI escape that the user's terminal
+        emulator interprets and writes to its own system clipboard.
+        This works through SSH (which is the common case for xiNAS, since
+        the server is headless and has no local clipboard backends).
+
+        Falls back to local subprocess backends (tmux/xclip/xsel/wl-copy/
+        temp file) only when OSC 52 isn't available — e.g. older Textual
+        versions before App.copy_to_clipboard was introduced (0.71.0).
+        """
+        copy_to_clipboard = getattr(self, "copy_to_clipboard", None)
+        if callable(copy_to_clipboard):
+            try:
+                copy_to_clipboard(text)
+                self.notify("Copied to clipboard.", timeout=3)
+                return
+            except Exception:
+                _log.debug("OSC 52 copy_to_clipboard failed", exc_info=True)
+        self._do_copy_local(text)
+
+    @work(exclusive=True, thread=True)
+    def _do_copy_local(self, text: str) -> None:
         msg = _copy_text(text)
         self.call_from_thread(self.notify, msg, timeout=3)
 
