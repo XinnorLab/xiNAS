@@ -1198,6 +1198,79 @@ def check_gds(exp, checks):
                         impact="Non-rdma NFS mounts cannot use GPUDirect Storage",
                         fix_hint="Remount with proto=rdma,port=20049 — see /etc/fstab"))
 
+    if "gdsio_smoke" in checks:
+        # Opt-in live benchmark: run a short gdsio READ then WRITE pass over
+        # the first proto=rdma NFS mount, record throughput, optionally WARN
+        # when throughput falls below a profile-supplied threshold.
+        smoke_cfg = (exp.get("gdsio_smoke") or {})
+        threads   = int(smoke_cfg.get("threads", 4))
+        duration  = int(smoke_cfg.get("duration_s", 5))
+        filesize  = smoke_cfg.get("file_size", "1G")
+        blocksize = smoke_cfg.get("block_size", "1M")
+        min_r     = float(smoke_cfg.get("min_read_gib_s", 0))
+        min_w     = float(smoke_cfg.get("min_write_gib_s", 0))
+
+        # Always reload state — the parser caches its envelope so the cost is
+        # ~8 ms.  Reusing the outer-scope `state` is fragile when the parser-
+        # backed keys are absent from the profile.
+        smoke_state = _gds_state()
+        if not smoke_state:
+            results.append(CheckResult("GDS", "gdsio_smoke", "WARN",
+                "Skipped: parser unavailable", "",
+                impact="Cannot run live gdsio benchmark without GDS state parser",
+                fix_hint="Ensure client_repo/lib/gds_state.sh is installed and jq is available"))
+        elif smoke_state.get("nfs_state") not in ("nvfs", "nvfs,compat"):
+            results.append(CheckResult("GDS", "gdsio_smoke", "INFO",
+                "Skipped: gdscheck reports GDS not available for NFS",
+                smoke_state.get("nfs_state", "unknown")))
+        else:
+            rdma_mounts = [m["path"] for m in smoke_state.get("mounts", [])
+                           if m.get("proto") == "rdma"]
+            if not rdma_mounts:
+                results.append(CheckResult("GDS", "gdsio_smoke", "INFO",
+                    "Skipped: no proto=rdma NFS mount detected", ""))
+            else:
+                mp = rdma_mounts[0]
+                gdsio = run_cmd("ls /usr/local/cuda*/gds/tools/gdsio 2>/dev/null "
+                                "| head -1") or "/usr/local/cuda/gds/tools/gdsio"
+
+                # Pre-allocate sparse test files (gdsio needs them to exist).
+                for i in range(threads):
+                    run_cmd(f"truncate -s {filesize} {mp}/gdsio.healthcheck.{i}")
+
+                def _gdsio(direction_flag):
+                    """Run gdsio once, return (rc, throughput_gib_s_or_None, raw_output)."""
+                    cmd = (f"{gdsio} -D {mp} -d 0 -w {threads} -s {filesize} "
+                           f"-i {blocksize} -x 0 -I {direction_flag} -T {duration} 2>&1")
+                    out = run_cmd(cmd, timeout=duration + 30) or ""
+                    rc = 0 if "Throughput:" in out else 1
+                    m = re.search(r'Throughput:\s*([\d.]+)\s*GiB/sec', out)
+                    return rc, (float(m.group(1)) if m else None), out
+
+                rc_r, gib_r, out_r = _gdsio(0)   # READ  (gdsio -I 0)
+                rc_w, gib_w, out_w = _gdsio(1)   # WRITE (gdsio -I 1)
+
+                # Cleanup test files regardless of outcome.
+                run_cmd(f"rm -f {mp}/gdsio.healthcheck.*")
+
+                if rc_r or rc_w or gib_r is None or gib_w is None:
+                    last = (out_w or out_r or "").splitlines()[-3:]
+                    results.append(CheckResult("GDS", "gdsio_smoke", "FAIL",
+                        "gdsio smoke benchmark failed", "",
+                        evidence=" | ".join(last),
+                        fix_hint=("Run 'GPUDirect Storage → Run gdsio Benchmark' "
+                                  "from the client menu for full diagnostics.")))
+                else:
+                    detail = f"READ {gib_r:.2f} GiB/s · WRITE {gib_w:.2f} GiB/s ({mp})"
+                    if (min_r and gib_r < min_r) or (min_w and gib_w < min_w):
+                        results.append(CheckResult("GDS", "gdsio_smoke", "WARN",
+                            "Throughput below profile threshold", detail,
+                            fix_hint=("Inspect topology (nvidia-smi topo -mp) "
+                                      "and NIC/GPU NUMA affinity.")))
+                    else:
+                        results.append(CheckResult("GDS", "gdsio_smoke", "PASS",
+                            "GDS write+read round-trip OK", detail))
+
     return results
 
 # ─────────────────────────────────────────────────────────────────────────────
