@@ -15,6 +15,8 @@ import { driveFaultyCountShow } from '../grpc/drive.js';
 import { licenseShow } from '../grpc/license.js';
 import { resolveController } from '../server/controllerResolver.js';
 import { runEngineCheck, type EngineCheckResult } from '../os/healthEngine.js';
+import { fixNfsConf } from '../os/nfsClient.js';
+import type { NfsConfFixResult } from '../types/nfs.js';
 
 export type CheckStatus = 'OK' | 'WARN' | 'CRIT' | 'UNKNOWN';
 export type CheckProfile = 'quick' | 'standard' | 'deep';
@@ -85,6 +87,31 @@ export const HealthGetAlertsSchema = z.object({
   since: z.string().optional().describe('ISO 8601 timestamp filter'),
   severity_min: z.enum(['warn', 'crit']).default('warn'),
 });
+
+export const HealthFixNfsConfSchema = z
+  .object({
+    controller_id: z.string().optional(),
+    threads: z
+      .union([z.number().int().positive(), z.literal('auto')])
+      .optional()
+      .describe('Thread count for [nfsd] and [exportd]; "auto" = physical CPU cores'),
+    rdma: z
+      .union([z.boolean(), z.enum(['y', 'n', 'yes', 'no', 'true', 'false', 'on', 'off'])])
+      .optional()
+      .describe('Set [nfsd] rdma to enable NFS-RDMA'),
+    updates: z
+      .record(z.string(), z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])))
+      .optional()
+      .describe('Free-form {section: {key: value}} updates beyond threads/rdma'),
+    restart_service: z
+      .boolean()
+      .default(true)
+      .describe('Restart nfs-server after writing (only if anything changed)'),
+  })
+  .refine(
+    (v) => v.threads !== undefined || v.rdma !== undefined || (v.updates && Object.keys(v.updates).length > 0),
+    { message: 'At least one of threads, rdma, or updates must be supplied' },
+  );
 
 // --- gRPC-based checks (xiRAID-specific, not available in Python engine) ---
 
@@ -299,6 +326,17 @@ export async function handleHealthRunCheck(params: z.infer<typeof HealthRunCheck
   }
 
   return results;
+}
+
+export async function handleHealthFixNfsConf(
+  params: z.infer<typeof HealthFixNfsConfSchema>,
+): Promise<NfsConfFixResult> {
+  resolveController(params.controller_id);
+  const req: Parameters<typeof fixNfsConf>[0] = { restart: params.restart_service };
+  if (params.threads !== undefined) req.threads = params.threads;
+  if (params.rdma !== undefined) req.rdma = params.rdma;
+  if (params.updates !== undefined) req.updates = params.updates;
+  return fixNfsConf(req);
 }
 
 export function handleHealthGetAlerts(params: z.infer<typeof HealthGetAlertsSchema>): Alert[] {

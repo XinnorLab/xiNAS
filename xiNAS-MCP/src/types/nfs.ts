@@ -38,7 +38,30 @@ export type NfsOp =
   | 'list_sessions'
   | 'get_sessions'
   | 'set_quota'
-  | 'reload';
+  | 'reload'
+  | 'fix_nfs_conf';
+
+export interface NfsConfFixRequest {
+  threads?: number | 'auto';
+  rdma?: boolean | string;
+  updates?: Record<string, Record<string, string | number | boolean>>;
+  restart?: boolean;
+}
+
+export interface NfsConfFixChange {
+  section: string;
+  key: string;
+  old: string;
+  new: string;
+  action: 'updated' | 'inserted' | 'unchanged';
+}
+
+export interface NfsConfFixResult {
+  applied: NfsConfFixChange[];
+  changed: boolean;
+  restarted: boolean;
+  restart_error: string;
+}
 
 export interface NfsRequest {
   op: NfsOp;
@@ -47,6 +70,10 @@ export interface NfsRequest {
   path?: string;
   patch?: Partial<ExportEntry>;
   quota?: QuotaSpec;
+  threads?: number | 'auto';
+  rdma?: boolean | string;
+  updates?: Record<string, Record<string, string | number | boolean>>;
+  restart?: boolean;
 }
 
 export interface NfsResponse {

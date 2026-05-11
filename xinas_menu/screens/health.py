@@ -187,8 +187,8 @@ class HealthScreen(Screen):
         )
 
         # Build summary display
-        auto_fixable = [a for a in actions if a.command]
-        manual_only = [a for a in actions if not a.command]
+        auto_fixable = [a for a in actions if a.command or a.nfs_conf_fix is not None]
+        manual_only = [a for a in actions if not (a.command or a.nfs_conf_fix is not None)]
 
         lines = [f"{BLD}{CYN}=== Remediation Wizard ==={NC}", ""]
         lines.append(f"  Report: {DIM}{json_path}{NC}")
@@ -199,12 +199,19 @@ class HealthScreen(Screen):
 
         for a in actions:
             sc = RED if a.status == "FAIL" else YLW
-            fix_icon = f"{GRN}*{NC}" if a.command else f"{DIM}#{NC}"
-            cmd_text = (
-                f"{DIM} -> {' '.join(a.command)}{NC}"
-                if a.command
-                else f"{DIM} (manual){NC}"
-            )
+            auto = a.command or a.nfs_conf_fix is not None
+            fix_icon = f"{GRN}*{NC}" if auto else f"{DIM}#{NC}"
+            if a.command:
+                cmd_text = f"{DIM} -> {' '.join(a.command)}{NC}"
+            elif a.nfs_conf_fix is not None:
+                fix_parts = []
+                if "threads" in a.nfs_conf_fix:
+                    fix_parts.append(f"threads={a.nfs_conf_fix['threads']}")
+                if "rdma" in a.nfs_conf_fix:
+                    fix_parts.append(f"rdma={'y' if a.nfs_conf_fix['rdma'] else 'n'}")
+                cmd_text = f"{DIM} -> nfs-helper fix_nfs_conf {' '.join(fix_parts)}{NC}"
+            else:
+                cmd_text = f"{DIM} (manual){NC}"
             lines.append(f"  {sc}[{a.status}]{NC} {fix_icon} {a.description}{cmd_text}")
             if a.evidence:
                 lines.append(f"         {DIM}current: {a.evidence}{NC}")
@@ -241,9 +248,18 @@ class HealthScreen(Screen):
                 return
 
         # Confirm before applying
-        cmd_summary = "\n".join(
-            f"  {' '.join(a.command)}" for a in to_apply if a.command
-        )
+        summary_lines = []
+        for a in to_apply:
+            if a.command:
+                summary_lines.append(f"  {' '.join(a.command)}")
+            elif a.nfs_conf_fix is not None:
+                bits = []
+                if "threads" in a.nfs_conf_fix:
+                    bits.append(f"threads={a.nfs_conf_fix['threads']}")
+                if "rdma" in a.nfs_conf_fix:
+                    bits.append(f"rdma={'y' if a.nfs_conf_fix['rdma'] else 'n'}")
+                summary_lines.append(f"  nfs-helper fix_nfs_conf {' '.join(bits)} (restart nfs-server)")
+        cmd_summary = "\n".join(summary_lines)
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
                 f"Apply {len(to_apply)} fix(es)?\n\n{cmd_summary}",

@@ -67,6 +67,7 @@ const TOOL_PERMISSIONS: Record<string, PermissionLevel> = {
   'network.configure': 'admin',
   'auth.validate_kerberos': 'admin',
   'config.rollback': 'admin',
+  'health.fix_nfs_conf': 'admin',
 };
 
 /**

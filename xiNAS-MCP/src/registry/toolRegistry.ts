@@ -25,7 +25,11 @@ import {
 
 import { NetworkListSchema, handleNetworkList, NetworkConfigureSchema, handleNetworkConfigure } from '../tools/network.js';
 
-import { HealthRunCheckSchema, handleHealthRunCheck, HealthGetAlertsSchema, handleHealthGetAlerts } from '../tools/health.js';
+import {
+  HealthRunCheckSchema, handleHealthRunCheck,
+  HealthGetAlertsSchema, handleHealthGetAlerts,
+  HealthFixNfsConfSchema, handleHealthFixNfsConf,
+} from '../tools/health.js';
 
 import {
   DiskListSchema, handleDiskList,
@@ -129,6 +133,7 @@ const TOOLS: ToolDef[] = [
   // Health
   { name: 'health.run_check', description: 'Run health checks (quick/standard/deep): RAID, license, NFS, network, filesystem (XFS), sysctl, perf tuning, drives, memory, services', schema: HealthRunCheckSchema, handler: handleHealthRunCheck },
   { name: 'health.get_alerts', description: 'Get active alerts from last health check run', schema: HealthGetAlertsSchema, handler: handleHealthGetAlerts },
+  { name: 'health.fix_nfs_conf', description: 'Apply /etc/nfs.conf fixes ([nfsd] threads/rdma or free-form section.key updates) and optionally restart nfs-server', schema: HealthFixNfsConfSchema, handler: handleHealthFixNfsConf },
 
   // Disk
   { name: 'disk.list', description: 'List block devices with RAID membership, health summary, and model info', schema: DiskListSchema, handler: handleDiskList },

@@ -21,6 +21,7 @@ import threading
 from nfs_exports import list_exports, add_export, remove_export, update_export
 from nfs_sessions import list_sessions, get_sessions_for_path
 from nfs_quota import set_project_quota, set_user_quota
+from nfs_conf import build_nfsd_updates, restart_nfs_server, set_nfs_conf
 
 # --- Configuration ---
 
@@ -109,6 +110,54 @@ def handle_reload(_req: dict) -> None:
     _exportfs_reload()
 
 
+def handle_fix_nfs_conf(req: dict) -> dict:
+    """Update /etc/nfs.conf settings, optionally restart nfs-server.
+
+    Request fields:
+      threads:  int | "auto" | null   — sets [nfsd] and [exportd] threads
+      rdma:     bool | str | null     — sets [nfsd] rdma
+      updates:  {section: {key: value}} — free-form additional updates
+      restart:  bool (default true)   — restart nfs-server after writing
+    """
+    threads = req.get("threads")
+    rdma = req.get("rdma")
+    free_form = req.get("updates") or {}
+    if not isinstance(free_form, dict):
+        raise ValueError("'updates' must be an object of {section: {key: value}}")
+
+    updates = build_nfsd_updates(threads, rdma)
+
+    for section, kvs in free_form.items():
+        if not isinstance(kvs, dict):
+            raise ValueError(f"updates.{section} must be an object")
+        for key, value in kvs.items():
+            if value is None:
+                continue
+            updates[(str(section), str(key))] = str(value)
+
+    if not updates:
+        raise ValueError("no updates requested (need threads, rdma, or updates)")
+
+    applied = set_nfs_conf(updates)
+
+    changed = any(a["action"] in ("updated", "inserted") for a in applied)
+    restart = req.get("restart", True)
+    restarted = False
+    restart_error = ""
+    if restart and changed:
+        ok, err = restart_nfs_server()
+        restarted = ok
+        if not ok:
+            restart_error = err
+
+    return {
+        "applied": applied,
+        "changed": changed,
+        "restarted": restarted,
+        "restart_error": restart_error,
+    }
+
+
 def _exportfs_reload() -> None:
     """Reload NFS exports via exportfs -r."""
     try:
@@ -141,6 +190,7 @@ HANDLERS = {
     "get_sessions": handle_get_sessions,
     "set_quota": handle_set_quota,
     "reload": handle_reload,
+    "fix_nfs_conf": handle_fix_nfs_conf,
 }
 
 

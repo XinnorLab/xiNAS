@@ -7,7 +7,15 @@ import * as net from 'net';
 import { v4 as uuidv4 } from 'uuid';
 import { loadConfig } from '../config/serverConfig.js';
 import { McpToolError, ErrorCode } from '../types/common.js';
-import type { NfsRequest, NfsResponse, ExportEntry, QuotaSpec, SessionInfo } from '../types/nfs.js';
+import type {
+  NfsRequest,
+  NfsResponse,
+  ExportEntry,
+  QuotaSpec,
+  SessionInfo,
+  NfsConfFixRequest,
+  NfsConfFixResult,
+} from '../types/nfs.js';
 
 const CONNECT_TIMEOUT_MS = 5000;
 
@@ -110,4 +118,14 @@ export async function setQuota(quota: QuotaSpec): Promise<void> {
 export async function reloadExports(): Promise<void> {
   const resp = await send({ op: 'reload', request_id: uuidv4() });
   checkResponse(resp);
+}
+
+export async function fixNfsConf(req: NfsConfFixRequest): Promise<NfsConfFixResult> {
+  const resp = await send({
+    op: 'fix_nfs_conf',
+    request_id: uuidv4(),
+    ...req,
+  });
+  checkResponse(resp);
+  return resp.result as NfsConfFixResult;
 }

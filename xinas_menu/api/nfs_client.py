@@ -105,3 +105,26 @@ class NFSHelperClient:
     def reload(self) -> tuple[bool, None, str]:
         """Force exportfs -r (reload all exports)."""
         return self._request("reload")
+
+    def fix_nfs_conf(
+        self,
+        threads: int | str | None = None,
+        rdma: bool | str | None = None,
+        updates: dict[str, dict[str, str]] | None = None,
+        restart: bool = True,
+    ) -> tuple[bool, dict, str]:
+        """Update /etc/nfs.conf and optionally restart nfs-server.
+
+        *threads* accepts int or the sentinel "auto" (resolved server-side
+        to the physical CPU core count). *rdma* accepts bool or y/n string.
+        *updates* lets callers set arbitrary `[section] key=value` entries
+        beyond the threads/rdma shortcuts.
+        """
+        payload: dict = {"restart": restart}
+        if threads is not None:
+            payload["threads"] = threads
+        if rdma is not None:
+            payload["rdma"] = rdma
+        if updates is not None:
+            payload["updates"] = updates
+        return self._request("fix_nfs_conf", **payload)
