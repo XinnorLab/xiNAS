@@ -56,7 +56,10 @@ export function loadConfig(): ServerConfig {
   }
 
   const config: ServerConfig = {
-    controller_id: raw.controller_id ?? uuidv4(),
+    // Use ||: the Ansible template writes "controller_id": "" on first deploy,
+    // and ?? would let that empty string through, leaving every audit/log entry
+    // tagged with an empty controller id.
+    controller_id: raw.controller_id || uuidv4(),
     nfs_helper_socket: raw.nfs_helper_socket ?? DEFAULTS.nfs_helper_socket,
     prometheus_url: raw.prometheus_url ?? DEFAULTS.prometheus_url,
     audit_log_path: raw.audit_log_path ?? DEFAULTS.audit_log_path,

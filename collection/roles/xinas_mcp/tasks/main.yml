@@ -162,6 +162,34 @@
     mode: '0750'
   tags: [xinas_mcp, config]
 
+# ─── 4b. MCP server daemon (Streamable HTTP / SSE / stdio) ───────────────────
+# Must run after config deploy: the daemon reads /etc/xinas-mcp/config.json
+# at startup. Placed before Claude Code config so the service is ready first.
+
+- name: Install xinas-mcp systemd unit
+  ansible.builtin.copy:
+    src: "{{ xinas_mcp_repo_path }}/xinas-mcp.service"
+    dest: /etc/systemd/system/xinas-mcp.service
+    owner: root
+    group: root
+    mode: '0644'
+    remote_src: true
+  notify:
+    - reload systemd
+    - restart xinas-mcp
+  tags: [xinas_mcp, service]
+
+- name: Force systemd daemon-reload before enabling xinas-mcp
+  ansible.builtin.meta: flush_handlers
+  tags: [xinas_mcp, service]
+
+- name: Enable and start xinas-mcp
+  ansible.builtin.service:
+    name: xinas-mcp
+    enabled: true
+    state: started
+  tags: [xinas_mcp, service]
+
 # ─── 5. Claude Code MCP integration ───────────────────────────────────────────
 
 - name: Create Claude Code config directory for root
