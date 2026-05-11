@@ -1931,6 +1931,28 @@ _gds_parse_state() {
     local STATE_FILE="/tmp/.xinas-gds-state.json"
     local TMP_FILE="${STATE_FILE}.tmp.$$"
 
+    # ── Hard dependency: jq ──────────────────────────────────────────────────
+    # jq is already required by configure_cufile and elsewhere in this script;
+    # silently degrading here would drop collected errors/warnings on the
+    # floor and let downstream consumers trust stale data.  Emit a definitive
+    # FAIL envelope and bail.
+    if ! command -v jq &>/dev/null; then
+        cat > "$STATE_FILE" <<'EOF'
+{
+  "overall": "FAIL",
+  "nfs_state": "unknown",
+  "compat": "disabled",
+  "mount_table": "absent",
+  "mounts": [],
+  "errors": ["jq is required by _gds_parse_state but is not installed"],
+  "warns": [],
+  "ts": "1970-01-01T00:00:00Z",
+  "cache_key": "no-jq"
+}
+EOF
+        return 0
+    fi
+
     # ── Cache key ────────────────────────────────────────────────────────────
     local cufile_mt nvfs_mt rpcrdma_sv cache_key
     if [[ -f /etc/cufile.json ]]; then
@@ -1958,11 +1980,14 @@ _gds_parse_state() {
         cache_key="nohash-$cufile_mt-$nvfs_mt-$rpcrdma_sv"
     fi
 
-    # Cache hit?
+    # Cache hit?  Also require the cached envelope's `.overall` to be present,
+    # so a partial/corrupted prior write with the right cache_key doesn't
+    # short-circuit and feed broken data to downstream consumers.
     if [[ -f "$STATE_FILE" ]] && command -v jq &>/dev/null; then
-        local prev_key
+        local prev_key prev_overall
         prev_key=$(jq -r '.cache_key // empty' "$STATE_FILE" 2>/dev/null || true)
-        if [[ -n "$prev_key" && "$prev_key" == "$cache_key" ]]; then
+        prev_overall=$(jq -r '.overall // empty' "$STATE_FILE" 2>/dev/null || true)
+        if [[ -n "$prev_key" && "$prev_key" == "$cache_key" && -n "$prev_overall" ]]; then
             return 0
         fi
     fi
@@ -2025,6 +2050,13 @@ _gds_parse_state() {
         nfs_state="nvfs"
         compat="disabled"
         warns+=("cuFile compat mode disabled")
+    elif [[ "$nfs_line" =~ ^[^:]*:[[:space:]]*compat([[:space:]]|,|$) ]]; then
+        # `NFS : compat` only — compat enabled in cufile.json but the kernel-
+        # side nvfs hook is not registered.  Semantically equivalent to
+        # "unsupported" (GDS unavailable), but the user needs the distinct
+        # explanation to know where to look.
+        nfs_state="unsupported"
+        errors+=("gdscheck reports NFS : compat only — kernel-side nvfs hook not registered")
     elif [[ "$nfs_line" =~ [Uu]nsupported ]]; then
         nfs_state="unsupported"
         errors+=("gdscheck reports NFS : Unsupported")
@@ -2061,22 +2093,24 @@ _gds_parse_state() {
                   | jq -r '.fs.nfs.mount_table | type' 2>/dev/null || echo "parse_error")
         case "$mt_type" in
             object)
-                # Every value must have an array .rdma_dev_addr_list
-                local mt_bad
-                mt_bad=$(printf '%s' "$sanitized_cufile" \
-                         | jq -r '[.fs.nfs.mount_table
-                                    | to_entries[]
-                                    | select((.value.rdma_dev_addr_list | type) != "array")
-                                    | .key] | length' \
-                           2>/dev/null || echo "x")
-                if [[ "$mt_bad" == "0" ]]; then
-                    mount_table="valid"
-                elif [[ "$mt_bad" =~ ^[0-9]+$ ]]; then
-                    mount_table="invalid"
-                    warns+=("fs.nfs.mount_table has $mt_bad entry without rdma_dev_addr_list")
-                else
+                # Every value must have an array .rdma_dev_addr_list.  Return
+                # the offending mount-path keys so the WARN message names
+                # them — a bare count is not actionable for the user.
+                local bad_keys
+                bad_keys=$(printf '%s' "$sanitized_cufile" \
+                           | jq -r '[.fs.nfs.mount_table
+                                      | to_entries[]
+                                      | select((.value.rdma_dev_addr_list | type) != "array")
+                                      | .key] | join(",")' \
+                             2>/dev/null || echo "__jq_error__")
+                if [[ "$bad_keys" == "__jq_error__" ]]; then
                     mount_table="invalid"
                     errors+=("fs.nfs.mount_table malformed")
+                elif [[ -z "$bad_keys" ]]; then
+                    mount_table="valid"
+                else
+                    mount_table="invalid"
+                    warns+=("fs.nfs.mount_table entries missing rdma_dev_addr_list: $bad_keys")
                 fi
                 ;;
             "null")
@@ -2154,30 +2188,24 @@ _gds_parse_state() {
     ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
     # ── Emit JSON ────────────────────────────────────────────────────────────
-    if ! command -v jq &>/dev/null; then
-        # Minimal fallback so callers still get a parseable file.
-        cat > "$TMP_FILE" <<EOF
-{"overall":"$overall","nfs_state":"$nfs_state","compat":"$compat","mount_table":"$mount_table","mounts":$mounts_json,"errors":[],"warns":[],"ts":"$ts","cache_key":"$cache_key"}
-EOF
-    else
-        local err_json warn_json
-        err_json=$(printf '%s\n' "${errors[@]:-}" | jq -R . | jq -s 'map(select(length>0))')
-        warn_json=$(printf '%s\n' "${warns[@]:-}" | jq -R . | jq -s 'map(select(length>0))')
-        jq -n \
-            --arg overall     "$overall"     \
-            --arg nfs_state   "$nfs_state"   \
-            --arg compat      "$compat"      \
-            --arg mount_table "$mount_table" \
-            --argjson mounts  "$mounts_json" \
-            --argjson errors  "$err_json"    \
-            --argjson warns   "$warn_json"   \
-            --arg ts          "$ts"          \
-            --arg cache_key   "$cache_key"   \
-            '{overall:$overall, nfs_state:$nfs_state, compat:$compat,
-              mount_table:$mount_table, mounts:$mounts, errors:$errors,
-              warns:$warns, ts:$ts, cache_key:$cache_key}' \
-            > "$TMP_FILE" 2>/dev/null
-    fi
+    # jq presence is guaranteed by the prerequisite check at function entry.
+    local err_json warn_json
+    err_json=$(printf '%s\n' "${errors[@]:-}" | jq -R . | jq -s 'map(select(length>0))')
+    warn_json=$(printf '%s\n' "${warns[@]:-}" | jq -R . | jq -s 'map(select(length>0))')
+    jq -n \
+        --arg overall     "$overall"     \
+        --arg nfs_state   "$nfs_state"   \
+        --arg compat      "$compat"      \
+        --arg mount_table "$mount_table" \
+        --argjson mounts  "$mounts_json" \
+        --argjson errors  "$err_json"    \
+        --argjson warns   "$warn_json"   \
+        --arg ts          "$ts"          \
+        --arg cache_key   "$cache_key"   \
+        '{overall:$overall, nfs_state:$nfs_state, compat:$compat,
+          mount_table:$mount_table, mounts:$mounts, errors:$errors,
+          warns:$warns, ts:$ts, cache_key:$cache_key}' \
+        > "$TMP_FILE" 2>/dev/null
 
     if [[ -s "$TMP_FILE" ]]; then
         mv -f "$TMP_FILE" "$STATE_FILE"
