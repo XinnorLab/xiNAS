@@ -541,7 +541,7 @@ enable_nfs_rdma() {
     # is already correct OR when mlnx-nfsrdma-dkms isn't installed.
     # Runs early so every exit path of enable_nfs_rdma() — including the
     # "rpcrdma already loaded" fast-return — has had the patch attempt.
-    local applier="$(dirname "$0")/patches/apply-mlnx-nfsrdma-export-gpl.sh"
+    local applier="$SCRIPT_DIR/patches/apply-mlnx-nfsrdma-export-gpl.sh"
     if [[ -x "$applier" ]]; then
         op_run "apply mlnx-nfsrdma EXPORT_SYMBOL_GPL fix" "$applier" || true
     fi

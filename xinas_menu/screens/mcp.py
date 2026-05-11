@@ -32,9 +32,9 @@ _MCP_AUDIT = Path("/var/log/xinas/mcp-audit.jsonl")
 
 
 def _cfg_restart_service() -> tuple[bool, str]:
-    """Restart xinas-nfs-helper after config change."""
+    """Restart xinas-mcp after a config write so port/tokens/TLS take effect."""
     r = subprocess.run(
-        ["systemctl", "restart", "xinas-nfs-helper"],
+        ["systemctl", "restart", "xinas-mcp"],
         capture_output=True, text=True,
     )
     if r.returncode != 0:

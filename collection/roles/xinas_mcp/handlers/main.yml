@@ -8,6 +8,11 @@
     name: xinas-nfs-helper
     state: restarted
 
+- name: restart xinas-mcp
+  ansible.builtin.service:
+    name: xinas-mcp
+    state: restarted
+
 - name: restart sshd
   ansible.builtin.service:
     name: ssh    # Ubuntu uses "ssh", not "sshd"
