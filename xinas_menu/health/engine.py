@@ -187,6 +187,50 @@ def run_cmd(cmd, timeout=10):
     except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
         return None
 
+def physical_cpu_count():
+    """Count physical cores (sockets × cores_per_socket).
+
+    Matches the Ansible nfs_server role's `ansible_processor_cores *
+    ansible_processor_count` derivation by counting unique
+    (physical id, core id) pairs in /proc/cpuinfo. Falls back to
+    os.cpu_count() in environments where those fields are absent
+    (some VMs, containers, non-x86 hosts).
+    """
+    content = read_file("/proc/cpuinfo")
+    if content:
+        pairs = set()
+        phys, core = None, None
+        for line in content.splitlines() + [""]:
+            stripped = line.strip()
+            if not stripped:
+                if phys is not None and core is not None:
+                    pairs.add((phys, core))
+                phys, core = None, None
+                continue
+            key, _, val = stripped.partition(":")
+            key = key.strip()
+            val = val.strip()
+            if key == "physical id":
+                phys = val
+            elif key == "core id":
+                core = val
+        if pairs:
+            return len(pairs)
+    return os.cpu_count() or 1
+
+def resolve_nfs_threads_target(exp):
+    """Resolve the nfs_threads expectation to an integer.
+
+    Accepts either an explicit integer override (legacy) or the
+    sentinel string "cpu_count"/"auto" (default), which resolves to
+    the live physical CPU core count — matching the Ansible default
+    `threads = ansible_processor_cores * ansible_processor_count`.
+    """
+    raw = exp.get("nfs_threads", "cpu_count")
+    if isinstance(raw, str):
+        return physical_cpu_count()
+    return int(raw)
+
 def nfs_conf_get(section, key):
     """Effective value of `key` in `[section]` of /etc/nfs.conf (+ drop-ins).
 
@@ -1094,7 +1138,7 @@ def check_nfs(exp, checks):
                 fix_hint="systemctl start nfs-server"))
 
     if "threads" in checks:
-        expected = exp.get("nfs_threads", 64)
+        expected = resolve_nfs_threads_target(exp)
         actual = read_file("/proc/fs/nfsd/threads")
         if actual is None:
             results.append(CheckResult("NFS", "threads", "SKIP",
@@ -1102,14 +1146,55 @@ def check_nfs(exp, checks):
                 evidence="NFS server not loaded"))
         else:
             actual_int = int(actual)
-            if actual_int >= expected:
+            if actual_int == expected:
                 results.append(CheckResult("NFS", "threads", "PASS",
                     actual, str(expected)))
+            elif actual_int < expected:
+                results.append(CheckResult("NFS", "threads", "WARN",
+                    actual, str(expected),
+                    impact="Fewer NFS threads than CPU cores - concurrent client performance limited",
+                    fix_hint=f"Set threads={expected} in /etc/nfs.conf [nfsd] section"))
             else:
                 results.append(CheckResult("NFS", "threads", "WARN",
                     actual, str(expected),
-                    impact="Too few NFS threads limits concurrent client performance",
-                    fix_hint=f"Set threads={expected} in /etc/nfs.conf [nfsd] section"))
+                    impact="More NFS threads than CPU cores - wasted scheduling overhead and context switches",
+                    fix_hint=f"Set threads={expected} in /etc/nfs.conf [nfsd] section to match CPU core count"))
+
+    if "threads_config" in checks:
+        expected = resolve_nfs_threads_target(exp)
+        if read_file("/etc/nfs.conf") is None:
+            results.append(CheckResult("NFS", "threads_config", "SKIP",
+                "N/A", f"threads={expected}",
+                evidence="/etc/nfs.conf not found"))
+        else:
+            raw = nfs_conf_get("nfsd", "threads")
+            if raw is None:
+                results.append(CheckResult("NFS", "threads_config", "WARN",
+                    "threads not set", f"threads={expected}",
+                    impact="Thread count not persisted - will revert to nfs-utils default after reboot",
+                    fix_hint=f"Add threads={expected} under [nfsd] in /etc/nfs.conf"))
+            else:
+                try:
+                    configured = int(raw)
+                except ValueError:
+                    results.append(CheckResult("NFS", "threads_config", "WARN",
+                        f"threads={raw}", f"threads={expected}",
+                        impact="Non-numeric threads value in /etc/nfs.conf",
+                        fix_hint=f"Set threads={expected} under [nfsd] in /etc/nfs.conf"))
+                else:
+                    if configured == expected:
+                        results.append(CheckResult("NFS", "threads_config", "PASS",
+                            f"threads={configured}", f"threads={expected}"))
+                    elif configured < expected:
+                        results.append(CheckResult("NFS", "threads_config", "WARN",
+                            f"threads={configured}", f"threads={expected}",
+                            impact="Configured thread count below CPU core count - will under-provision after reboot",
+                            fix_hint=f"Set threads={expected} under [nfsd] in /etc/nfs.conf"))
+                    else:
+                        results.append(CheckResult("NFS", "threads_config", "WARN",
+                            f"threads={configured}", f"threads={expected}",
+                            impact="Configured thread count exceeds CPU core count - wasted scheduling overhead after reboot",
+                            fix_hint=f"Set threads={expected} under [nfsd] in /etc/nfs.conf to match CPU core count"))
 
     if "versions" in checks:
         versions_file = read_file("/proc/fs/nfsd/versions")

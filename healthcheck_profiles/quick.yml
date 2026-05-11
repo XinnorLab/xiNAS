@@ -8,7 +8,7 @@ sections:
   vm: { enabled: true, checks: [swappiness, dirty_background_ratio, dirty_ratio, vfs_cache_pressure, lru_gen, watermark_scale] }
   network: { enabled: true, checks: [link_state, mtu, sysctl_rmem, sysctl_wmem, sysctl_backlog] }
   storage: { enabled: true, checks: [raid_status, mount_status] }
-  nfs: { enabled: true, checks: [service_running, threads, versions] }
+  nfs: { enabled: true, checks: [service_running, threads, threads_config, versions] }
   rdma: { enabled: false }
   nvme_health: { enabled: false }
   filesystem: { enabled: false }
@@ -28,7 +28,8 @@ expectations:
   net_ring_rx: 8192
   net_ring_tx: 8192
   nvme_nr_requests: 512
-  nfs_threads: 64
+  # nfs_threads: physical core count by default (matches Ansible nfs_server role). Override with an integer.
+  nfs_threads: cpu_count
   thp: "never"
   ksm: 0
   mitigations_off: true
