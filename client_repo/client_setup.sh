@@ -2145,12 +2145,12 @@ run_gdsio_benchmark() {
             continue
         fi
 
-        # NFS doesn't have a native nvidia-fs kernel-bypass path, so
-        # cuFileHandleRegister() rejects NFS files for the direct GDS path.
-        # Forcing cuFile compat mode routes the I/O through a CPU bounce
-        # buffer — the standard supported way to exercise GDS APIs over
-        # NFS-RDMA. (See NVIDIA GDS troubleshooting guide,
-        # CUFILE_FORCE_COMPAT_MODE.)
+        # Run gdsio against the real GDS path (-x 0, no compat fallback) so
+        # the bandwidth numbers reflect kernel-bypass storage→GPU transfers.
+        # If gdscheck -p reports the filesystem as Unsupported / Userspace
+        # RDMA Unsupported, cuFileHandleRegister() will reject the file and
+        # gdsio will exit non-zero — that error is the honest signal that
+        # the platform lacks GDS support for this mount.
         #
         # The script also runs under `set -euo pipefail`, so each gdsio
         # invocation must tolerate non-zero exits — otherwise the EXIT
@@ -2159,13 +2159,12 @@ run_gdsio_benchmark() {
         # WRITE pass
         info_box "gdsio WRITE" "Running write benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
         {
-            echo "▶ WRITE  (-I 0, cuFile compat mode)"
-            echo "  cmd: CUFILE_FORCE_COMPAT_MODE=true $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 0 -T $duration"
+            echo "▶ WRITE  (-I 0, real GDS via cuFile)"
+            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 0 -T $duration"
             echo ""
         } >> "$out"
         local _wec=0
-        CUFILE_FORCE_COMPAT_MODE=true "$gdsio_bin" \
-            -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
+        "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
             -x 0 -I 0 -T "$duration" >> "$out" 2>&1 || _wec=$?
         [[ $_wec -ne 0 ]] && echo "  [gdsio WRITE exited with status $_wec]" >> "$out"
         echo "" >> "$out"
@@ -2173,13 +2172,12 @@ run_gdsio_benchmark() {
         # READ pass
         info_box "gdsio READ" "Running read benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
         {
-            echo "▶ READ   (-I 1, cuFile compat mode)"
-            echo "  cmd: CUFILE_FORCE_COMPAT_MODE=true $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 1 -T $duration"
+            echo "▶ READ   (-I 1, real GDS via cuFile)"
+            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 1 -T $duration"
             echo ""
         } >> "$out"
         local _rec=0
-        CUFILE_FORCE_COMPAT_MODE=true "$gdsio_bin" \
-            -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
+        "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
             -x 0 -I 1 -T "$duration" >> "$out" 2>&1 || _rec=$?
         [[ $_rec -ne 0 ]] && echo "  [gdsio READ exited with status $_rec]" >> "$out"
         echo "" >> "$out"
