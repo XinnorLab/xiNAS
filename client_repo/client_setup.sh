@@ -2156,30 +2156,33 @@ run_gdsio_benchmark() {
         # invocation must tolerate non-zero exits — otherwise the EXIT
         # trap wipes $TMP_DIR before text_box renders the captured log.
 
-        # WRITE pass
-        info_box "gdsio WRITE" "Running write benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
-        {
-            echo "▶ WRITE  (-I 0, real GDS via cuFile)"
-            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 0 -T $duration"
-            echo ""
-        } >> "$out"
-        local _wec=0
-        "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
-            -x 0 -I 0 -T "$duration" >> "$out" 2>&1 || _wec=$?
-        [[ $_wec -ne 0 ]] && echo "  [gdsio WRITE exited with status $_wec]" >> "$out"
-        echo "" >> "$out"
+        # gdsio's -I flag: 0 = READ, 1 = WRITE (verified against gdsio's
+        # own "IoType: READ/WRITE" label in its summary line).
 
-        # READ pass
+        # READ pass (-I 0)
         info_box "gdsio READ" "Running read benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
         {
-            echo "▶ READ   (-I 1, real GDS via cuFile)"
-            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 1 -T $duration"
+            echo "▶ READ   (-I 0, real GDS via cuFile)"
+            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 0 -T $duration"
             echo ""
         } >> "$out"
         local _rec=0
         "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
-            -x 0 -I 1 -T "$duration" >> "$out" 2>&1 || _rec=$?
+            -x 0 -I 0 -T "$duration" >> "$out" 2>&1 || _rec=$?
         [[ $_rec -ne 0 ]] && echo "  [gdsio READ exited with status $_rec]" >> "$out"
+        echo "" >> "$out"
+
+        # WRITE pass (-I 1)
+        info_box "gdsio WRITE" "Running write benchmark on ${mp}\n(${threads} threads × ${blocksize}, up to ${duration}s)..."
+        {
+            echo "▶ WRITE  (-I 1, real GDS via cuFile)"
+            echo "  cmd: $gdsio_bin -D $mp -d $gpu -w $threads -s $filesize -i $blocksize -x 0 -I 1 -T $duration"
+            echo ""
+        } >> "$out"
+        local _wec=0
+        "$gdsio_bin" -D "$mp" -d "$gpu" -w "$threads" -s "$filesize" -i "$blocksize" \
+            -x 0 -I 1 -T "$duration" >> "$out" 2>&1 || _wec=$?
+        [[ $_wec -ne 0 ]] && echo "  [gdsio WRITE exited with status $_wec]" >> "$out"
         echo "" >> "$out"
 
         # Cleanup test files left behind by gdsio (gdsio.<tid>, gdsio.dat, etc.)
