@@ -258,33 +258,60 @@ class ConfigHistoryScreen(Screen):
             view.set_content(f"{_RED}Failed to check history: {exc}{_NC}")
             return
 
+        recreate = False
         if summary.get("baseline"):
-            view.set_content(
-                f"{_YLW}Baseline already exists.{_NC}\n\n"
-                f"  {_DIM}A baseline snapshot was already captured during initial install.{_NC}\n"
-                f"  {_DIM}Only one baseline per system is allowed.{_NC}\n\n"
-                f"  Baseline ID: {_CYN}{summary['baseline'].get('id', '?')}{_NC}\n"
-                f"  Created:     {summary['baseline'].get('timestamp', '?')[:19].replace('T', ' ')}"
-            )
-            return
+            baseline_id = summary["baseline"].get("id", "?")
+            baseline_ts = summary["baseline"].get("timestamp", "?")[:19].replace("T", " ")
+            snapshot_count = summary.get("total_count", 0)
 
-        confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(
-                "Create a baseline snapshot from current system state?\n\n"
-                "This captures all managed configuration files and runtime\n"
-                "state (RAID arrays, mounts, NFS exports, services) as the\n"
-                "immutable reference point for rollback and drift detection.\n\n"
-                "This action cannot be undone — only one baseline is allowed.",
-                "Create Baseline",
+            confirmed = await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"A baseline already exists.\n\n"
+                    f"  Baseline ID: {baseline_id}\n"
+                    f"  Created:     {baseline_ts}\n\n"
+                    "Do you want to replace it?\n"
+                    "This will permanently delete ALL configuration history.",
+                    "Replace Baseline",
+                )
             )
-        )
-        if not confirmed:
-            return
+            if not confirmed:
+                return
+
+            confirmed2 = await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"⚠ THIS CANNOT BE UNDONE ⚠\n\n"
+                    f"This will permanently delete the existing baseline\n"
+                    f"and all {snapshot_count} snapshot(s) in the history.\n\n"
+                    "Are you absolutely sure?",
+                    "Yes, Purge & Recreate",
+                )
+            )
+            if not confirmed2:
+                return
+            recreate = True
+        else:
+            confirmed = await self.app.push_screen_wait(
+                ConfirmDialog(
+                    "Create a baseline snapshot from current system state?\n\n"
+                    "This captures all managed configuration files and runtime\n"
+                    "state (RAID arrays, mounts, NFS exports, services) as the\n"
+                    "immutable reference point for rollback and drift detection.\n\n"
+                    "This action cannot be undone — only one baseline is allowed.",
+                    "Create Baseline",
+                )
+            )
+            if not confirmed:
+                return
 
         view.set_content(f"{_DIM}Creating baseline snapshot...{_NC}")
 
         try:
-            manifest = await engine.create_baseline(source="xinas_menu")
+            if recreate:
+                manifest = await engine.purge_and_create_baseline(
+                    source="xinas_menu"
+                )
+            else:
+                manifest = await engine.create_baseline(source="xinas_menu")
             snapshot_id = manifest.id
         except Exception as exc:
             view.set_content(

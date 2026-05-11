@@ -72,22 +72,24 @@ class SnapshotHelper:
             return None
 
     async def record_baseline(self, preset: str = "") -> Optional[str]:
-        """Purge existing history and create a fresh baseline snapshot.
+        """Create baseline snapshot if one doesn't already exist.
 
-        Called after a successful install.  Any previous config history
-        (baseline, snapshots, state) is wiped so only the new baseline
-        remains.
+        Called after a successful install.  If Ansible already created the
+        baseline during the xinas_history role, this is a no-op.
         """
         if not self._engine:
             _log.debug("baseline skipped: engine not available")
             return None
         try:
-            manifest = await self._engine.purge_and_create_baseline(
+            manifest = await self._engine.create_baseline(
                 source="installer",
                 preset=preset,
             )
             _log.info("baseline snapshot created: %s", manifest.id)
             return manifest.id
+        except ValueError:
+            _log.info("baseline already exists, skipping")
+            return None
         except Exception:
             _log.warning("baseline creation failed", exc_info=True)
             return None
