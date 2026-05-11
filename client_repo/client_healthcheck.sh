@@ -204,6 +204,34 @@ def _ofed_present():
         return True
     return run_cmd("ofed_info -s 2>/dev/null") is not None
 
+def _gds_state():
+    """Trigger the shared bash GDS parser, load /tmp/.xinas-gds-state.json,
+    return the dict (or None if the parser could not run / produced no file).
+
+    The parser is the single source of truth for GDS+NFS+cufile.json state —
+    same envelope consumed by client_setup.sh:verify_gds().  We locate
+    `lib/gds_state.sh` in the install tree (no client_setup.sh dependency)
+    and invoke `_gds_parse_state` in a fresh bash subshell.
+    """
+    lib = None
+    for p in (
+        "/opt/xinas-client/client_repo/lib/gds_state.sh",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib/gds_state.sh") if "__file__" in globals() else None,
+        "./client_repo/lib/gds_state.sh",
+        "./lib/gds_state.sh",
+    ):
+        if p and os.path.isfile(p):
+            lib = p
+            break
+    if not lib:
+        return None
+    run_cmd(f"bash -c 'source {lib} && _gds_parse_state'", timeout=30)
+    try:
+        with open("/tmp/.xinas-gds-state.json") as f:
+            return json.load(f)
+    except (IOError, OSError, ValueError):
+        return None
+
 def get_interfaces():
     ifaces = []
     try:
@@ -1058,6 +1086,117 @@ def check_gds(exp, checks):
             results.append(CheckResult("GDS", "libcufile_rdma", "WARN",
                 "not found", "present",
                 impact="GDS RDMA library missing - NFS/RDMA GDS path unavailable"))
+
+    # ── Parser-backed checks (gdscheck_nfs_state, cufile_mount_table_schema,
+    #    nfs_mount_proto) consume the shared /tmp/.xinas-gds-state.json
+    #    envelope produced by client_repo/lib/gds_state.sh.  We invoke the
+    #    parser once and reuse the dict across all three checks.
+    _parser_keys = ("gdscheck_nfs_state", "cufile_mount_table_schema",
+                    "nfs_mount_proto")
+    state = _gds_state() if any(k in checks for k in _parser_keys) else None
+
+    if "gdscheck_nfs_state" in checks:
+        if state is None:
+            results.append(CheckResult("GDS", "gdscheck_nfs_state", "WARN",
+                "parser unavailable", "nvfs,compat",
+                impact="Cannot determine kernel GDS/NFS readiness",
+                fix_hint="Ensure client_repo/lib/gds_state.sh is installed and jq is available"))
+        else:
+            nfs_state = state.get("nfs_state", "unknown")
+            compat = state.get("compat", "disabled")
+            if nfs_state == "nvfs,compat":
+                results.append(CheckResult("GDS", "gdscheck_nfs_state", "PASS",
+                    "nvfs,compat", "nvfs,compat",
+                    evidence=f"compat={compat}"))
+            elif nfs_state == "nvfs":
+                results.append(CheckResult("GDS", "gdscheck_nfs_state", "WARN",
+                    "nvfs (no compat)", "nvfs,compat",
+                    evidence=f"compat={compat}",
+                    impact="GDS works but cuFile compat mode is disabled — some workloads fall back to CPU",
+                    fix_hint="Enable compat_mode in /etc/cufile.json (GDS menu → Configure cuFile)"))
+            elif nfs_state == "unsupported":
+                results.append(CheckResult("GDS", "gdscheck_nfs_state", "FAIL",
+                    "unsupported", "nvfs,compat",
+                    impact="Kernel-side nvfs hook not registered — GDS over NFS is unavailable",
+                    fix_hint="Run client_repo/patches/apply-mlnx-nfsrdma-export-gpl.sh, then reboot. See docs/troubleshooting/mlnx-nfsrdma-export-symbol-gpl-bug.md"))
+            else:
+                # "unknown" — gdscheck missing / no NFS line / etc.
+                err_detail = "; ".join(state.get("errors", [])) or "gdscheck output not parseable"
+                results.append(CheckResult("GDS", "gdscheck_nfs_state", "WARN",
+                    nfs_state, "nvfs,compat",
+                    evidence=err_detail,
+                    impact="Cannot determine kernel GDS/NFS readiness",
+                    fix_hint="Install gdscheck (CUDA toolkit) and verify GPU/nvidia-fs are loaded"))
+
+    if "cufile_mount_table_schema" in checks:
+        if state is None:
+            results.append(CheckResult("GDS", "cufile_mount_table_schema", "WARN",
+                "parser unavailable", "valid",
+                impact="Cannot determine cufile.json mount_table state",
+                fix_hint="Ensure client_repo/lib/gds_state.sh is installed and jq is available"))
+        else:
+            mt = state.get("mount_table", "absent")
+            warns = state.get("warns", []) or []
+            errs = state.get("errors", []) or []
+            mt_warn_msg = next((w for w in warns if "mount_table" in w), "")
+            mt_err_msg = next((e for e in errs if "mount_table" in e), "")
+            if mt == "valid":
+                results.append(CheckResult("GDS", "cufile_mount_table_schema", "PASS",
+                    "valid", "valid"))
+            elif mt == "absent":
+                results.append(CheckResult("GDS", "cufile_mount_table_schema", "WARN",
+                    "absent", "valid",
+                    evidence=mt_warn_msg or "fs.nfs.mount_table not configured",
+                    fix_hint="Re-run 'GPUDirect Storage → Configure cuFile' to populate fs.nfs.mount_table"))
+            elif mt == "invalid":
+                # Disambiguate WARN (missing inner key — entries lack
+                # rdma_dev_addr_list) vs FAIL (wrong outer type / parse error).
+                if mt_err_msg and "malformed" in mt_err_msg.lower():
+                    results.append(CheckResult("GDS", "cufile_mount_table_schema", "FAIL",
+                        "malformed", "valid",
+                        evidence=mt_err_msg,
+                        impact="cufile.json mount_table has wrong outer type or parse error",
+                        fix_hint="Re-run 'GPUDirect Storage → Configure cuFile' to rewrite the schema"))
+                else:
+                    results.append(CheckResult("GDS", "cufile_mount_table_schema", "WARN",
+                        "missing rdma_dev_addr_list", "valid",
+                        evidence=mt_warn_msg or "one or more entries missing rdma_dev_addr_list",
+                        fix_hint="Re-run 'GPUDirect Storage → Configure cuFile' to rewrite the schema"))
+            else:
+                results.append(CheckResult("GDS", "cufile_mount_table_schema", "WARN",
+                    mt, "valid",
+                    evidence=mt_err_msg or mt_warn_msg or "unrecognised mount_table state",
+                    fix_hint="Re-run 'GPUDirect Storage → Configure cuFile' to rewrite the schema"))
+
+    if "nfs_mount_proto" in checks:
+        if state is None:
+            results.append(CheckResult("GDS", "nfs_mount_proto", "WARN",
+                "parser unavailable", "all rdma",
+                impact="Cannot determine NFS mount protocols",
+                fix_hint="Ensure client_repo/lib/gds_state.sh is installed and jq is available"))
+        else:
+            mounts = state.get("mounts", []) or []
+            if not mounts:
+                results.append(CheckResult("GDS", "nfs_mount_proto", "INFO",
+                    "no NFS mounts", "all rdma",
+                    evidence="No NFS mounts found on this client"))
+            else:
+                bad = [m for m in mounts if m.get("proto") != "rdma"]
+                if not bad:
+                    proto_list = ", ".join(sorted({m.get("proto", "?") for m in mounts}))
+                    results.append(CheckResult("GDS", "nfs_mount_proto", "PASS",
+                        f"{len(mounts)} mount(s) on rdma", "all rdma",
+                        evidence=f"protocols: {proto_list}"))
+                else:
+                    detail = "; ".join(
+                        f"{m.get('path', '?')} (proto={m.get('proto', '?')})"
+                        for m in bad
+                    )
+                    results.append(CheckResult("GDS", "nfs_mount_proto", "FAIL",
+                        f"{len(bad)}/{len(mounts)} not rdma", "all rdma",
+                        evidence=detail,
+                        impact="Non-rdma NFS mounts cannot use GPUDirect Storage",
+                        fix_hint="Remount with proto=rdma,port=20049 — see /etc/fstab"))
 
     return results
 
