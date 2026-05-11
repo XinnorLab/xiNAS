@@ -1842,21 +1842,25 @@ configure_cufile() {
     local ip_array
     ip_array=$(echo "$rdma_ip_list" | tr ',' '\n' | jq -R . | jq -s .)
 
-    # Build mount table as a JSON object keyed by server IPv4 → mount path.
-    # Per NVIDIA's cufile.json schema, fs.nfs.mount_table is "a dictionary
-    # of IPv4 mount addresses against a mount point" used by the cuFile
-    # dynamic-routing feature. Emitting an array (of objects or strings)
-    # trips "json type mismatch ... fs.nfs.mount_table" and stops cuFile
-    # from initializing.
+    # Build mount_table per NVIDIA's stock cufile.json schema (verified
+    # against the template shipped with gds-tools):
+    #   "mount_table": {
+    #       "<local-mount-path>": { "rdma_dev_addr_list": [<ip>, ...] },
+    #       ...
+    #   }
+    # The outer dict is keyed by local mount path; each value carries its
+    # own per-mount RDMA IP list for cuFile's dynamic-routing feature.
+    # Any other shape (array<*>, dict keyed by IP, ...) trips
+    # "json type mismatch ... fs.nfs.mount_table" and blocks cuFile init.
     local mount_table="{}"
     if [[ ${#nfs_mounts[@]} -gt 0 ]]; then
-        local entry srv mp
+        local entry mp
         for entry in "${nfs_mounts[@]}"; do
-            srv="${entry%%:*}"
             mp="${entry#*:}"
-            [[ -z "$srv" || -z "$mp" ]] && continue
+            [[ -z "$mp" ]] && continue
             mount_table=$(echo "$mount_table" \
-                | jq --arg s "$srv" --arg m "$mp" '. + {($s): $m}')
+                | jq --arg m "$mp" --argjson ips "$ip_array" \
+                    '. + {($m): {rdma_dev_addr_list: $ips}}')
         done
     fi
 
