@@ -119,7 +119,7 @@ async function checkRaidIntegrity(client: unknown): Promise<HealthCheckResult[]>
   const results: HealthCheckResult[] = [];
   try {
     const resp = await withRetry(
-      () => raidShow(client as never, { extended: true }),
+      () => raidShow(client as never, { extended: true, units: 'g' }),
       'health.raid_integrity'
     );
     const raids = resp.data as Array<{
@@ -210,7 +210,7 @@ async function checkLicense(client: unknown): Promise<HealthCheckResult> {
 async function checkSpares(client: unknown): Promise<HealthCheckResult[]> {
   const results: HealthCheckResult[] = [];
   try {
-    const resp = await withRetry(() => poolShow(client as never, {}), 'health.spares');
+    const resp = await withRetry(() => poolShow(client as never, { units: 'g' }), 'health.spares');
     const pools = resp.data as Array<{ name: string; active: boolean; drives: string[] }> | null;
     if (pools) {
       for (const pool of pools) {
