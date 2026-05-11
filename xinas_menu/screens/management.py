@@ -54,12 +54,8 @@ class ManagementScreen(Screen):
             )
             return
         if result.available:
+            self.app._last_check_result = result
             self.app.update_available = True
-            from xinas_menu.widgets.confirm_dialog import ConfirmDialog
-            confirmed = await self.app.push_screen_wait(
-                ConfirmDialog("An update is available. Apply now?", "Update Available")
-            )
-            if confirmed:
-                await self.app._apply_update()
+            await self.app.prompt_and_apply_update(result)
         else:
             self.app.notify("xiNAS is up to date.", severity="information")

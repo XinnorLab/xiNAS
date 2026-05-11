@@ -3,10 +3,43 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+
+_TRAILER_RE = re.compile(r"^Requires-Rebuild:\s*(.+)$", re.MULTILINE | re.IGNORECASE)
+
+
+def parse_rebuild_trailers(message_bodies: str) -> tuple[str, ...]:
+    """Extract Ansible tags from ``Requires-Rebuild:`` trailers.
+
+    The trailer is a free-form, comma-separated list of ansible-playbook
+    ``--tags`` values. The special value ``all`` means "run site.yml
+    without --tags" — it MUST short-circuit other tags so we don't pass
+    ``--tags all,foo`` which would silently skip ``foo``-only tasks.
+    """
+    tags: set[str] = set()
+    for m in _TRAILER_RE.finditer(message_bodies):
+        for tag in m.group(1).split(","):
+            tag = tag.strip()
+            if tag:
+                tags.add(tag)
+    if "all" in tags:
+        return ("all",)
+    return tuple(sorted(tags))
+
+
+def build_rebuild_cmd(tags: tuple[str, ...]) -> list[str]:
+    """Build the ansible-playbook argv for *tags*. Returns [] if no rebuild."""
+    if not tags:
+        return []
+    cmd = ["ansible-playbook", "playbooks/site.yml"]
+    if tags != ("all",):
+        cmd += ["--tags", ",".join(tags)]
+    return cmd
 
 
 @dataclass(frozen=True)
@@ -19,10 +52,17 @@ class CheckResult:
     git not installed, repo not found, …). Treating "error" as "no
     update available" is the silent-failure bug this class exists to
     prevent — callers must check ``error`` and surface it to the user.
+
+    ``required_rebuilds`` is the tuple of ansible-playbook ``--tags``
+    values extracted from ``Requires-Rebuild:`` trailers across the
+    incoming commits. Empty tuple means a code-only update — apply with
+    ``git pull`` + service restart, no ansible run needed. A single
+    ``("all",)`` entry means run ``site.yml`` without ``--tags``.
     """
 
     available: bool
     error: str | None = None
+    required_rebuilds: tuple[str, ...] = field(default_factory=tuple)
 
 
 class UpdateChecker:
@@ -56,7 +96,20 @@ class UpdateChecker:
             _privileged_git(self._repo, "fetch")
             local = _git_output(self._repo, "rev-parse", "HEAD")
             remote = _git_output(self._repo, "rev-parse", "origin/main")
-            return CheckResult(local != remote)
+            if local == remote:
+                return CheckResult(False)
+            rebuilds: tuple[str, ...] = ()
+            try:
+                log_body = _git_output(
+                    self._repo, "log", f"{local}..{remote}", "--format=%B"
+                )
+                rebuilds = parse_rebuild_trailers(log_body)
+            except subprocess.CalledProcessError:
+                # Trailer parse is best-effort — if `git log` fails we still
+                # report the update as available; the user can apply it
+                # without an ansible run (we just won't know to run one).
+                pass
+            return CheckResult(True, required_rebuilds=rebuilds)
         except subprocess.CalledProcessError as exc:
             return CheckResult(False, _short_git_error(exc))
         except FileNotFoundError:

@@ -10,7 +10,6 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Label
 
-from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -129,11 +128,7 @@ class AdvancedScreen(Screen):
             view.set_content(f"{_RED}Update check failed: {result.error}{_NC}")
             return
         if result.available:
-            confirmed = await self.app.push_screen_wait(
-                ConfirmDialog("Update available. Apply?", "Update")
-            )
-            if confirmed:
-                await self.app._apply_update()
+            await self.app.prompt_and_apply_update(result)
         else:
             view.set_content("[green]Repository is up to date.[/green]")
 

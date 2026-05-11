@@ -106,6 +106,49 @@ Each preset directory (`presets/default/`, `presets/xinnorVM/`) contains:
 - `nfs_exports.yml` - NFS export rules
 - `netplan.yaml.j2` - Network interface template
 
+## Update rebuild markers (`Requires-Rebuild:` trailer)
+
+The in-TUI update flow (`u` shortcut, Management → Check for Updates, MCP/Advanced "Check for Updates") does `git pull` + service restart by default. It does **not** re-run Ansible unless the incoming commits opt in.
+
+If a commit changes anything that requires an Ansible role to re-run on the host to take effect (systemd unit files, package installs, sysctl/perf tuning, kernel module config, NFS server flags, RAID layout, network config that needs `net_controllers` to re-apply, etc.), **add a Git trailer to the commit message**:
+
+```
+Requires-Rebuild: <ansible_tag>[, <ansible_tag>...]
+```
+
+- `<ansible_tag>` is a tag accepted by `ansible-playbook playbooks/site.yml --tags <tag>` — usually the role name (`nfs_server`, `perf_tuning`, `net_controllers`, `xinas_mcp`, `xinas_menu`, …).
+- Comma-separate multiple tags. Multiple trailers across multiple commits are aggregated by the TUI.
+- The special value `all` means run the full `site.yml` with no `--tags` filter; use it only when the change spans many roles.
+- **Do not add this trailer for code-only changes** (Python TUI logic, MCP server Python code, docs, plan/spec updates, test fixtures). The plain `git pull` + `xinas-nfs-helper` restart that already runs on every update is sufficient — adding a trailer here just trains users to click past an unnecessary Ansible warning.
+- Parsed case-insensitively, and only from commits in `local..origin/main` — backfilling old commits has no effect.
+
+Examples:
+
+```
+fix(nfs_server): bump RPC thread count to 64
+
+Requires-Rebuild: nfs_server
+```
+
+```
+feat(net): add lossless RoCE tuning
+
+Requires-Rebuild: net_controllers, perf_tuning
+```
+
+```
+chore: re-template every role after defaults overhaul
+
+Requires-Rebuild: all
+```
+
+Runtime behaviour of the update flow:
+1. When a rebuild is required, the confirm dialog names the role(s) that will run before the user accepts.
+2. When no trailer is present, the Ansible step is skipped entirely — no extra prompt.
+3. If the playbook fails, the new code stays in place, the menu is **not** auto-restarted, and the user is told to review the log.
+
+Parser + orchestration live in [xinas_menu/utils/update_check.py](xinas_menu/utils/update_check.py) (`parse_rebuild_trailers`, `build_rebuild_cmd`); both `XiNASApp` and `StartupApp` consume it via `prompt_and_apply_update(result)` / `_apply_update(result)`.
+
 ## Important Notes
 
 - **Shell vs. Python TUI scope** — There are two distinct user surfaces. Treat them differently:

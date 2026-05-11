@@ -16,7 +16,7 @@ from textual import work
 from xinas_menu.api.grpc_client import XiRAIDClient
 from xinas_menu.api.nfs_client import NFSHelperClient
 from xinas_menu.utils.audit import AuditLogger
-from xinas_menu.utils.update_check import UpdateChecker
+from xinas_menu.utils.update_check import CheckResult, UpdateChecker, build_rebuild_cmd
 from xinas_menu.utils.snapshot_helper import SnapshotHelper
 from xinas_menu.widgets.alert_bar import AlertBar
 from xinas_menu.widgets.header import XiNASHeader
@@ -54,6 +54,7 @@ class XiNASApp(App):
         self.audit = AuditLogger()
         self.snapshots = SnapshotHelper(grpc_address=grpc_address)
         self._update_checker = UpdateChecker()
+        self._last_check_result: CheckResult | None = None
 
     def compose(self) -> ComposeResult:
         yield XiNASHeader()
@@ -87,6 +88,7 @@ class XiNASApp(App):
             if result.error:
                 _log.debug("background update check failed: %s", result.error)
                 return
+            self._last_check_result = result
             if result.available:
                 self.update_available = True
                 header = self.query_one(XiNASHeader)
@@ -183,22 +185,67 @@ class XiNASApp(App):
 
     @work(exclusive=True)
     async def action_check_update(self) -> None:
-        if self.update_available:
-            from xinas_menu.widgets.confirm_dialog import ConfirmDialog
-            confirmed = await self.push_screen_wait(
-                ConfirmDialog("An update is available. Apply now and restart?", "Update Available")
-            )
-            if confirmed:
-                await self._apply_update()
+        if not self.update_available:
+            return
+        result = self._last_check_result
+        if result is None or not result.available:
+            return
+        await self.prompt_and_apply_update(result)
 
-    async def _apply_update(self) -> None:
+    async def prompt_and_apply_update(self, result: CheckResult) -> None:
+        """Confirm with the user, then run ``_apply_update(result)``.
+
+        The dialog message reflects whether the incoming commits include
+        a ``Requires-Rebuild:`` trailer — see CLAUDE.md "Update rebuild
+        markers". When no rebuild is required we promise the user a
+        zero-ansible update; when one is required we name the affected
+        roles so they know what is about to re-run.
+        """
+        from xinas_menu.widgets.confirm_dialog import ConfirmDialog
+
+        rebuilds = result.required_rebuilds
+        if rebuilds:
+            what = "the full site.yml" if rebuilds == ("all",) else ", ".join(rebuilds)
+            msg = (
+                "An update is available.\n\n"
+                f"⚠ This update requires re-applying Ansible: {what}\n\n"
+                "Apply update and run Ansible now?"
+            )
+        else:
+            msg = "An update is available (no system rebuild required). Apply now?"
+        confirmed = await self.push_screen_wait(
+            ConfirmDialog(msg, "Update Available")
+        )
+        if confirmed:
+            await self._apply_update(result)
+
+    async def _apply_update(self, result: CheckResult | None = None) -> None:
         loop = asyncio.get_running_loop()
         ok, msg = await loop.run_in_executor(None, self._update_checker.apply_update)
-        if ok:
-            self.audit.log("system.update", "git pull succeeded — restarting")
-            self._update_checker.restart_self()
-        else:
+        if not ok:
             self.notify(f"Update failed: {msg}", severity="error")
+            return
+        self.audit.log("system.update", "git pull succeeded")
+
+        rebuilds = result.required_rebuilds if result else ()
+        cmd = build_rebuild_cmd(rebuilds)
+        if cmd:
+            from xinas_menu.screens.startup.playbook_screen import PlaybookRunScreen
+            self.audit.log("system.update", f"rebuild required: {' '.join(cmd)}")
+            rc = await self.push_screen_wait(
+                PlaybookRunScreen(cmd=cmd, title="Applying update — Ansible rebuild")
+            )
+            if rc != 0:
+                self.notify(
+                    "Update applied but Ansible failed — not restarting. "
+                    "Review the log and re-run the role manually.",
+                    severity="error",
+                    timeout=15,
+                )
+                return
+
+        self.audit.log("system.update", "complete — restarting")
+        self._update_checker.restart_self()
 
     def action_copy_content(self) -> None:
         """Copy the visible content panel text to clipboard (Ctrl+Y)."""

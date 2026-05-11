@@ -307,12 +307,9 @@ class MCPScreen(Screen):
             view.set_content(f"{_RED}Update check failed: {result.error}{_NC}")
             return
         if result.available:
+            self.app._last_check_result = result
             self.app.update_available = True
-            confirmed = await self.app.push_screen_wait(
-                ConfirmDialog("Update available. Apply now?", "Update")
-            )
-            if confirmed:
-                await self.app._apply_update()
+            await self.app.prompt_and_apply_update(result)
         else:
             view.set_content("[green]MCP server is up to date.[/green]")
 
