@@ -1905,8 +1905,12 @@ configure_cufile() {
             # Existing file is unparsable. Ask the user before clobbering.
             rm -f "$sanitized"
             sanitized=""
+            # `jq empty` exits non-zero on parse error and pipefail then
+            # makes the whole pipeline non-zero — under `set -e` that would
+            # abort the script silently. Swallow with `|| true`.
             local parse_err
-            parse_err=$(jq empty "$CUFILE_JSON_PATH" 2>&1 | head -1)
+            parse_err=$(jq empty "$CUFILE_JSON_PATH" 2>&1 | head -1 || true)
+            [[ -z "$parse_err" ]] && parse_err="(parse error reported by jq)"
             if yes_no "cufile.json Malformed" \
                 "Existing $CUFILE_JSON_PATH cannot be parsed:\n\n  $parse_err\n\nThe update path requires valid JSON to merge into.\n\nRecreate from scratch (overwriting the broken file)?\n\nA backup is already saved at:\n  $backup_path"; then
                 write_mode="create"
