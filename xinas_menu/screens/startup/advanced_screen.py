@@ -124,8 +124,11 @@ class AdvancedScreen(Screen):
     async def _check_updates(self) -> None:
         view = self.query_one("#adv-content", ScrollableTextView)
         view.set_content("[dim]Checking…[/dim]")
-        available = await self.app._update_checker.check()
-        if available:
+        result = await self.app._update_checker.check()
+        if result.error:
+            view.set_content(f"{_RED}Update check failed: {result.error}{_NC}")
+            return
+        if result.available:
             confirmed = await self.app.push_screen_wait(
                 ConfirmDialog("Update available. Apply?", "Update")
             )

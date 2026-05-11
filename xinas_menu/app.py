@@ -83,8 +83,11 @@ class XiNASApp(App):
 
     async def _bg_update_check(self) -> None:
         try:
-            available = await self._update_checker.check()
-            if available:
+            result = await self._update_checker.check()
+            if result.error:
+                _log.debug("background update check failed: %s", result.error)
+                return
+            if result.available:
                 self.update_available = True
                 header = self.query_one(XiNASHeader)
                 header.update_available = True
