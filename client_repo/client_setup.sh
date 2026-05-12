@@ -2453,7 +2453,7 @@ run_gdsio_benchmark() {
     local threads=8
     local blocksize="1M"
     local filesize="10G"
-    local duration=30
+    local duration=8
     local gpu=0
 
     # Ask which I/O direction(s) to exercise.
