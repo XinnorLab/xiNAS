@@ -78,6 +78,7 @@
     cmd: npm run build
     chdir: "{{ xinas_mcp_repo_path }}"
   changed_when: true
+  notify: restart xinas-mcp
   tags: [xinas_mcp, build]
 
 # ─── 3. NFS helper daemon ──────────────────────────────────────────────────────

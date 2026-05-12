@@ -1,8 +1,11 @@
 /**
- * System info from procfs/sysfs — no subprocesses.
+ * System info from procfs/sysfs. The only subprocess is `systemctl is-active`
+ * in getServiceState — cgroup presence is unreliable for oneshot units
+ * (e.g. nfs-server.service), so systemd is the authoritative source for unit state.
  */
 
 import * as fs from 'fs';
+import { execFileSync } from 'child_process';
 
 export interface SystemInfo {
   uptime_seconds: number;
@@ -166,31 +169,32 @@ export function checkNfsReadiness(): NfsReadiness {
   return { ready: blocking.length === 0, blocking };
 }
 
-/** Check if a systemd service is active by inspecting cgroup state */
+/**
+ * Check systemd unit state via `systemctl is-active`.
+ *
+ * Earlier versions used cgroup-presence as a proxy, but oneshot units with
+ * RemainAfterExit=yes (notably nfs-server.service, whose ExecStart=rpc.nfsd
+ * just kicks kernel threads and exits) leave no persistent userspace cgroup
+ * and were falsely reported as inactive. `systemctl is-active` is the only
+ * authoritative read; it does not require root and is fast enough for
+ * preflight checks.
+ */
 export function getServiceState(serviceName: string): ServiceState {
-  // Check /sys/fs/cgroup for systemd slice
-  const cgroupPath = `/sys/fs/cgroup/system.slice/${serviceName}.service`;
-  let active = false;
   let state = 'unknown';
-
   try {
-    if (fs.existsSync(cgroupPath)) {
-      // cgroup exists = service is likely running
-      active = true;
-      state = 'active';
-    } else {
-      // Check /run/systemd/units/
-      const runPath = `/run/systemd/units/${serviceName}.service`;
-      if (fs.existsSync(runPath)) {
-        active = true;
-        state = 'active';
-      } else {
-        state = 'inactive';
-      }
+    state = execFileSync('systemctl', ['is-active', `${serviceName}.service`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2000,
+    }).trim();
+  } catch (err) {
+    // is-active exits non-zero when not active; the state word is still on stdout.
+    const stdout = (err as { stdout?: Buffer | string } | undefined)?.stdout;
+    if (stdout) {
+      state = (typeof stdout === 'string' ? stdout : stdout.toString('utf8')).trim();
     }
-  } catch {
-    state = 'unknown';
   }
-
+  if (!state) state = 'unknown';
+  const active = state === 'active' || state === 'reloading';
   return { name: serviceName, active, state };
 }
