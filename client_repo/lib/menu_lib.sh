@@ -91,6 +91,7 @@ _menu_repeat_char() {
     local char="$1"
     local count="$2"
     local result=""
+    local i
     for ((i=0; i<count; i++)); do
         result+="$char"
     done
@@ -150,6 +151,7 @@ menu_select() {
 
     local selected=0
     local width=60
+    local i _pi
 
     # Calculate width (account for emoji display width)
     for ((i=0; i<num_items; i++)); do
@@ -769,6 +771,7 @@ check_list() {
 
     local selected=0
     local width=60
+    local i _pi
 
     # Pre-split prompt into lines array (safe under set -euo pipefail)
     local -a _prompt_lines=()
