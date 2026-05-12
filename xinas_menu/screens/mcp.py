@@ -45,6 +45,41 @@ def _safe_exists(p: Path) -> bool:
         return False
 
 
+async def _probe_unix_socket(
+    sock_path: Path, *, attempts: int = 4, delay: float = 0.25
+) -> bool:
+    """Return True if a Unix socket is reachable, with brief retries.
+
+    xinas-nfs-helper.service is Type=simple, so systemd marks the unit
+    'active' the moment ExecStart forks — well before the daemon's
+    `server.bind()` recreates /run/xinas-nfs-helper.sock (the daemon
+    unlinks the stale socket at startup before rebinding). A naive
+    Path.exists() check during that window reports "missing" even
+    though the service is healthy. Probing with connect() and retrying
+    over ~1s closes the race and also catches the worse case where the
+    file exists but the daemon is not actually accepting.
+    """
+    loop = asyncio.get_running_loop()
+
+    def _try() -> bool:
+        s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        try:
+            s.settimeout(0.5)
+            s.connect(str(sock_path))
+            return True
+        except OSError:
+            return False
+        finally:
+            s.close()
+
+    for i in range(attempts):
+        if await loop.run_in_executor(None, _try):
+            return True
+        if i < attempts - 1:
+            await asyncio.sleep(delay)
+    return False
+
+
 def _cfg_restart_service() -> tuple[bool, str]:
     """Restart xinas-mcp after a config write so port/tokens/TLS take effect."""
     r = subprocess.run(
@@ -176,7 +211,11 @@ class MCPScreen(Screen):
             nfs_icon = f"{RED}!{NC}"
             nfs_status = f"{RED}{nfs_state.active}{NC}"
         lines.append(f"  {nfs_icon}  NFS Helper    {nfs_status}")
-        sock_status = f"{GRN}OK{NC}" if nfs_sock.exists() else f"{RED}missing{NC}"
+        if nfs_state.is_active:
+            sock_ok = await _probe_unix_socket(nfs_sock)
+        else:
+            sock_ok = nfs_sock.exists()
+        sock_status = f"{GRN}OK{NC}" if sock_ok else f"{RED}missing{NC}"
         lines.append(f"     {DIM}Socket:{NC}       {nfs_sock}  ({sock_status})")
         lines.append("")
 
