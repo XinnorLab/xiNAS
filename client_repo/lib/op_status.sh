@@ -93,9 +93,10 @@ op_verify() {
 # Borderless status frame
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Render an operation-status frame without side borders. Top/bottom rules
-# stay so the block is still framed, but body lines flow plainly — long
-# error details won't push a vertical border out of alignment.
+# Render an operation-status frame with a title bar only — no side borders
+# and no bottom rule. Long error/detail lines flow into the margin without
+# breaking any vertical alignment, and the "Press Enter…" prompt acts as
+# the natural end-of-block marker (no orphaned bottom corners).
 _op_msg_box() {
     local title="$1"
     local message="$2"
@@ -129,11 +130,6 @@ _op_msg_box() {
     while IFS= read -r _line; do
         printf "  ${WHITE}%s${NC}\n" "$_line" >/dev/tty
     done <<< "$message"
-
-    local inner_width=$((width - 2))
-    printf "${CYAN}${BOX_BL}" >/dev/tty
-    _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
-    printf "${BOX_BR}${NC}\n" >/dev/tty
 
     echo "" >/dev/tty
     printf "  ${DIM}Press Enter to continue...${NC}" >/dev/tty
