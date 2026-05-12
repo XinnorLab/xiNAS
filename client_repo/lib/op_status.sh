@@ -90,6 +90,58 @@ op_verify() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Borderless status frame
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Render an operation-status frame without side borders. Top/bottom rules
+# stay so the block is still framed, but body lines flow plainly — long
+# error details won't push a vertical border out of alignment.
+_op_msg_box() {
+    local title="$1"
+    local message="$2"
+
+    local newline=$'\n'
+    message="${message//\\n/$newline}"
+
+    local max_line=0 _line _dw
+    while IFS= read -r _line; do
+        _dw=$(_menu_display_width "$_line")
+        [[ $_dw -gt $max_line ]] && max_line=$_dw
+    done <<< "$message"
+
+    local title_len
+    title_len=$(_menu_display_width "$title")
+
+    local width=$max_line
+    [[ $((title_len + 8)) -gt $width ]] && width=$((title_len + 8))
+    [[ $width -lt 60 ]] && width=60
+
+    local cols=${COLUMNS:-0}
+    [[ $cols -eq 0 ]] && cols=$(tput cols 2>/dev/null || echo 100)
+    [[ $cols -lt 60 ]] && cols=60
+    local max_width=$((cols - 2))
+    [[ $width -gt $max_width ]] && width=$max_width
+
+    _menu_clear_screen
+    echo "" >/dev/tty
+    _menu_draw_box "$title" "$width"
+
+    while IFS= read -r _line; do
+        printf "  ${WHITE}%s${NC}\n" "$_line" >/dev/tty
+    done <<< "$message"
+
+    local inner_width=$((width - 2))
+    printf "${CYAN}${BOX_BL}" >/dev/tty
+    _menu_repeat_char "$BOX_H" "$inner_width" >/dev/tty
+    printf "${BOX_BR}${NC}\n" >/dev/tty
+
+    echo "" >/dev/tty
+    printf "  ${DIM}Press Enter to continue...${NC}" >/dev/tty
+    read -r </dev/tty
+    echo "" >/dev/tty
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Finish + display
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -143,7 +195,8 @@ op_end() {
     [[ -n "$after" ]] && body+="\n${after}\n"
     [[ -n "$extra_body" ]] && body+="\n${extra_body}\n"
 
-    # Display via msg_box
+    # Display in a borderless frame (side borders dropped so long
+    # error/detail lines don't break the box layout).
     local title=""
     case "$status" in
         SUCCESS)
@@ -156,7 +209,7 @@ op_end() {
             title="${custom_title:-Partial Success}"
             ;;
     esac
-    msg_box "$title" "$body"
+    _op_msg_box "$title" "$body"
 
     # Write to log
     _op_write_log "$status" "$after"
