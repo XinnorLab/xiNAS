@@ -328,6 +328,75 @@ def get_mlx_interfaces():
             pass
     return mlx
 
+def get_mlx_pci_devices():
+    """Enumerate mlx5_core PCI Physical Functions.
+
+    Returns a list of (pci_addr, label) tuples, where label combines the
+    InfiniBand verbs device name (e.g. ``mlx5_0``) and netdev name(s) for
+    user-friendly reporting. SR-IOV Virtual Functions are skipped — they
+    don't expose an ``infiniband/`` directory and inherit their parent's
+    PCIe link, so reporting them would only produce duplicate rows.
+    """
+    driver_dir = "/sys/bus/pci/drivers/mlx5_core"
+    if not os.path.isdir(driver_dir):
+        return []
+    devices = []
+    pci_addr_re = re.compile(r"^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$")
+    try:
+        entries = sorted(os.listdir(driver_dir))
+    except OSError:
+        return []
+    for name in entries:
+        if not pci_addr_re.match(name):
+            continue
+        dev_path = os.path.join(driver_dir, name)
+        ib_dir = os.path.join(dev_path, "infiniband")
+        ib_names = []
+        if os.path.isdir(ib_dir):
+            try:
+                ib_names = sorted(os.listdir(ib_dir))
+            except OSError:
+                ib_names = []
+        if not ib_names:
+            # VFs and partially-bound functions: skip.
+            continue
+        net_dir = os.path.join(dev_path, "net")
+        net_names = []
+        if os.path.isdir(net_dir):
+            try:
+                net_names = sorted(os.listdir(net_dir))
+            except OSError:
+                net_names = []
+        label = "/".join(ib_names)
+        if net_names:
+            label = f"{label} → {','.join(net_names)}"
+        devices.append((name, label))
+    return devices
+
+_PCIE_GEN_GTS = {
+    "2.5": 1,
+    "5.0": 2,
+    "8.0": 3,
+    "16.0": 4,
+    "32.0": 5,
+    "64.0": 6,
+}
+
+def _parse_pcie_speed(raw):
+    """Parse '<gts> GT/s PCIe' into (gen, gts_float). Returns None on failure."""
+    if not raw:
+        return None
+    m = re.match(r"\s*([\d.]+)\s*GT/s", raw)
+    if not m:
+        return None
+    gts_str = m.group(1)
+    try:
+        gts = float(gts_str)
+    except ValueError:
+        return None
+    key = gts_str if gts_str in _PCIE_GEN_GTS else f"{gts:.1f}"
+    return (_PCIE_GEN_GTS.get(key), gts)
+
 def get_iface_expected_mtu(iface, default_mtu=9000):
     """Return expected MTU: IB (type=32) = 4092, Ethernet/RoCE = default_mtu."""
     iface_type = read_file(f"/sys/class/net/{iface}/type")
@@ -650,6 +719,85 @@ def check_network(exp, checks):
             else:
                 results.append(CheckResult("Network", f"errors_drops ({iface})", "PASS",
                     "0", "0"))
+
+    if "pcie_link" in checks:
+        devices = get_mlx_pci_devices()
+        if not devices:
+            results.append(CheckResult("Network", "pcie_link", "SKIP",
+                "no mlx5 devices", "current == max",
+                evidence="/sys/bus/pci/drivers/mlx5_core not present or empty"))
+        else:
+            for addr, label in devices:
+                tag = f"pcie_link ({label} @ {addr})"
+                dev_root = f"/sys/bus/pci/devices/{addr}"
+                cur_speed_raw = read_file(f"{dev_root}/current_link_speed")
+                max_speed_raw = read_file(f"{dev_root}/max_link_speed")
+                cur_width_raw = read_file(f"{dev_root}/current_link_width")
+                max_width_raw = read_file(f"{dev_root}/max_link_width")
+
+                if not (cur_speed_raw and max_speed_raw and cur_width_raw and max_width_raw):
+                    results.append(CheckResult("Network", tag, "SKIP",
+                        "N/A", "current == max",
+                        evidence="sysfs PCIe link attributes not readable"))
+                    continue
+
+                cur_s = _parse_pcie_speed(cur_speed_raw)
+                max_s = _parse_pcie_speed(max_speed_raw)
+                try:
+                    cur_w = int(cur_width_raw)
+                    max_w = int(max_width_raw)
+                except ValueError:
+                    cur_w = max_w = None
+
+                if cur_s is None or max_s is None or cur_w is None or max_w is None:
+                    results.append(CheckResult("Network", tag, "SKIP",
+                        f"speed={cur_speed_raw}, width={cur_width_raw}", "current == max",
+                        evidence="could not parse link attributes"))
+                    continue
+
+                cur_gen, cur_gts = cur_s
+                max_gen, max_gts = max_s
+                cur_gen_str = f"Gen{cur_gen}" if cur_gen else "Gen?"
+                max_gen_str = f"Gen{max_gen}" if max_gen else "Gen?"
+                actual = f"{cur_gen_str} {cur_gts} GT/s x{cur_w}"
+                expected = f"{max_gen_str} {max_gts} GT/s x{max_w}"
+
+                width_downgrade = cur_w < max_w
+                if cur_gen is not None and max_gen is not None:
+                    gen_drop = max_gen - cur_gen
+                else:
+                    gen_drop = 1 if cur_gts < max_gts else 0
+
+                if width_downgrade:
+                    results.append(CheckResult("Network", tag, "FAIL",
+                        actual, expected,
+                        impact=(f"PCIe lane width downgraded — only {cur_w}/{max_w} "
+                                "lanes negotiated. NIC bandwidth is capped proportionally "
+                                "(x8 of x16 = half throughput)."),
+                        fix_hint=(f"Reseat the card; confirm the slot is electrically x{max_w} "
+                                  "and not just physically x{0}; check BIOS lane bifurcation "
+                                  "settings; look for 'PCIe Bus Error' or link retraining "
+                                  "messages in dmesg".format(max_w))))
+                elif gen_drop >= 2:
+                    results.append(CheckResult("Network", tag, "FAIL",
+                        actual, expected,
+                        impact=(f"PCIe link trained {gen_drop} generations below capability "
+                                f"({cur_gen_str} vs {max_gen_str}). Major bandwidth loss."),
+                        fix_hint=("Check BIOS for a PCIe slot speed override forcing a lower "
+                                  "generation; reseat the card; inspect dmesg for link "
+                                  "retraining errors")))
+                elif gen_drop == 1:
+                    results.append(CheckResult("Network", tag, "WARN",
+                        actual, expected,
+                        impact=(f"PCIe link trained one generation below capability "
+                                f"({cur_gen_str} vs {max_gen_str}). Roughly half the "
+                                "intended bandwidth."),
+                        fix_hint=("Check BIOS PCIe slot speed override; verify the slot "
+                                  "supports the card's max generation; reseat the card "
+                                  "and recheck")))
+                else:
+                    results.append(CheckResult("Network", tag, "PASS",
+                        actual, expected))
 
     return results
 

@@ -6,7 +6,7 @@ sections:
   cpu: { enabled: true, checks: [governor, tuned_profile] }
   kernel: { enabled: true, checks: [thp, ksm, mitigations] }
   vm: { enabled: true, checks: [swappiness, dirty_background_ratio, dirty_ratio, vfs_cache_pressure, lru_gen, watermark_scale] }
-  network: { enabled: true, checks: [link_state, mtu, sysctl_rmem, sysctl_wmem, sysctl_backlog] }
+  network: { enabled: true, checks: [link_state, mtu, sysctl_rmem, sysctl_wmem, sysctl_backlog, pcie_link] }
   storage: { enabled: true, checks: [raid_status, mount_status] }
   nfs: { enabled: true, checks: [service_running, threads, threads_config, versions] }
   rdma: { enabled: false }
