@@ -2,15 +2,15 @@
 
 This document describes everything the installer does to the host network: which roles run, in what order, what files they write, how IP addresses and MTU are chosen, how policy-based routing (PBR) is laid out, and what the system looks like when the install is finished.
 
-It is the install-time view. For the day-2 / TUI view (what the Network screen does when you edit IPs later), see [specs/spec-network-management.md](../specs/spec-network-management.md) — this spec deliberately stays focused on the deploy path so the two don't drift.
+It is the install-time view. For the day-2 / TUI view (what the Network screen does when you edit IPs later), see [Network/spec-network-management.md](../Network/spec-network-management.md) — this spec deliberately stays focused on the deploy path so the two don't drift.
 
 Sources this spec is derived from:
 
-- [collection/roles/doca_ofed/tasks/main.yml](../collection/roles/doca_ofed/tasks/main.yml) and [files/configure_ib_udev.sh](../collection/roles/doca_ofed/files/configure_ib_udev.sh)
-- [collection/roles/net_controllers/tasks/main.yml](../collection/roles/net_controllers/tasks/main.yml), [templates/netplan.yaml.j2](../collection/roles/net_controllers/templates/netplan.yaml.j2), [handlers/main.yml](../collection/roles/net_controllers/handlers/main.yml)
-- [collection/roles/perf_tuning/tasks/main.yml](../collection/roles/perf_tuning/tasks/main.yml) (network sysctl + per-NIC ethtool block)
-- [collection/roles/roce_lossless/defaults/main.yml](../collection/roles/roce_lossless/defaults/main.yml) (optional, off by default)
-- Preset overrides: [presets/default/network.yml](../presets/default/network.yml), [presets/xinnorVM/network.yml](../presets/xinnorVM/network.yml), [presets/*/netplan.yaml.j2](../presets/default/netplan.yaml.j2)
+- [collection/roles/doca_ofed/tasks/main.yml](../../collection/roles/doca_ofed/tasks/main.yml) and [files/configure_ib_udev.sh](../../collection/roles/doca_ofed/files/configure_ib_udev.sh)
+- [collection/roles/net_controllers/tasks/main.yml](../../collection/roles/net_controllers/tasks/main.yml), [templates/netplan.yaml.j2](../../collection/roles/net_controllers/templates/netplan.yaml.j2), [handlers/main.yml](../../collection/roles/net_controllers/handlers/main.yml)
+- [collection/roles/perf_tuning/tasks/main.yml](../../collection/roles/perf_tuning/tasks/main.yml) (network sysctl + per-NIC ethtool block)
+- [collection/roles/roce_lossless/defaults/main.yml](../../collection/roles/roce_lossless/defaults/main.yml) (optional, off by default)
+- Preset overrides: [presets/default/network.yml](../../presets/default/network.yml), [presets/xinnorVM/network.yml](../../presets/xinnorVM/network.yml), [presets/*/netplan.yaml.j2](../../presets/default/netplan.yaml.j2)
 
 ---
 
@@ -34,7 +34,7 @@ Two other places can touch the stack but **do not run by default**:
 
 ## 2. Stage 1 — `doca_ofed`: drivers + IB udev rename
 
-[collection/roles/doca_ofed/tasks/main.yml](../collection/roles/doca_ofed/tasks/main.yml)
+[collection/roles/doca_ofed/tasks/main.yml](../../collection/roles/doca_ofed/tasks/main.yml)
 
 ### What it does
 
@@ -45,7 +45,7 @@ Two other places can touch the stack but **do not run by default**:
 3. Installs `doca-all`, `mlnx-fw-updater`, `mlnx-nfsrdma-dkms`.
 4. Validates DKMS build succeeded for `mlnx-ofed-kernel` and `nfsrdma`; fails the play if anything is in `added`, `error`, or `broken` state.
 5. Verifies `modinfo mlx5_core` succeeds; warns (does not fail) if `modinfo rpcrdma` fails — that signals NFS-RDMA will be broken until the kernel module is loadable.
-6. Copies [configure_ib_udev.sh](../collection/roles/doca_ofed/files/configure_ib_udev.sh) to `/usr/local/sbin/` and runs it.
+6. Copies [configure_ib_udev.sh](../../collection/roles/doca_ofed/files/configure_ib_udev.sh) to `/usr/local/sbin/` and runs it.
 7. Reboots only if `doca_ofed_auto_reboot=true` (default is **off** — operator reboots manually after install).
 
 ### IB interface renaming (`configure_ib_udev.sh`)
@@ -76,7 +76,7 @@ Renames take effect on the next interface re-bind — i.e. after the reboot that
 
 ## 3. Stage 2 — `net_controllers`: detect, allocate, write netplan
 
-[collection/roles/net_controllers/tasks/main.yml](../collection/roles/net_controllers/tasks/main.yml)
+[collection/roles/net_controllers/tasks/main.yml](../../collection/roles/net_controllers/tasks/main.yml)
 
 This is the load-bearing role for installer networking. It runs five steps.
 
@@ -161,7 +161,7 @@ This is what prevents the most common installer surprise: cloud-init defined `ib
 
 ### 3.5 Write `99-xinas.yaml` and apply
 
-Template: [collection/roles/net_controllers/templates/netplan.yaml.j2](../collection/roles/net_controllers/templates/netplan.yaml.j2)
+Template: [collection/roles/net_controllers/templates/netplan.yaml.j2](../../collection/roles/net_controllers/templates/netplan.yaml.j2)
 
 The rendered file is written to `/etc/netplan/99-xinas.yaml`, mode `0600`, root:root. Two branches exist in the template:
 
@@ -234,7 +234,7 @@ Tables `100..199` are **reserved** for xiNAS. The flush logic in §3.4 only touc
 
 ## 5. Stage 3 — `perf_tuning`: 400 Gbit knobs
 
-[collection/roles/perf_tuning/tasks/main.yml](../collection/roles/perf_tuning/tasks/main.yml)
+[collection/roles/perf_tuning/tasks/main.yml](../../collection/roles/perf_tuning/tasks/main.yml)
 
 Network-relevant parts only (storage/CPU/memory knobs are documented in [spec.md §3.12](spec.md#312-perf_tuning--xinnor-recommended-performance-tuning)).
 
@@ -276,7 +276,7 @@ Caveat: `ip link set ... mtu 9000` on a native IB interface will fail (IB max is
 
 ## 6. Optional — `roce_lossless`
 
-[collection/roles/roce_lossless/defaults/main.yml](../collection/roles/roce_lossless/defaults/main.yml)
+[collection/roles/roce_lossless/defaults/main.yml](../../collection/roles/roce_lossless/defaults/main.yml)
 
 **Not in `site.yml`. Off by default.** Invoke explicitly: `ansible-playbook playbooks/site.yml --tags roce_lossless`.
 

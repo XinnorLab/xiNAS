@@ -6,14 +6,14 @@ The TUI never runs `xicli` directly. Every RAID operation is an RPC against the 
 
 Sources:
 
-- Screens: [xinas_menu/screens/storage.py](../xinas_menu/screens/storage.py), [raid.py](../xinas_menu/screens/raid.py), [spare_pools.py](../xinas_menu/screens/spare_pools.py), [drives.py](../xinas_menu/screens/drives.py)
-- gRPC helper: [xinas_menu/api/grpc_client.py](../xinas_menu/api/grpc_client.py)
-- NFS helper client: [xinas_menu/api/nfs_client.py](../xinas_menu/api/nfs_client.py)
-- XFS helpers: [xinas_menu/utils/xfs_helpers.py](../xinas_menu/utils/xfs_helpers.py)
-- Audit + snapshot helpers: [xinas_menu/utils/audit.py](../xinas_menu/utils/audit.py), [xinas_menu/utils/snapshot_helper.py](../xinas_menu/utils/snapshot_helper.py)
-- Drive picker widget: [xinas_menu/widgets/drive_picker.py](../xinas_menu/widgets/drive_picker.py)
-- gRPC service contract: [xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto](../xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto), [message_raid.proto](../xiNAS-MCP/proto/xraid/gRPC/protobuf/message_raid.proto), [message_pool.proto](../xiNAS-MCP/proto/xraid/gRPC/protobuf/message_pool.proto)
-- NFS helper daemon: [xiNAS-MCP/nfs-helper/nfs_helper.py](../xiNAS-MCP/nfs-helper/nfs_helper.py), [xinas-nfs-helper.service](../xiNAS-MCP/nfs-helper/xinas-nfs-helper.service)
+- Screens: [xinas_menu/screens/storage.py](../../xinas_menu/screens/storage.py), [raid.py](../../xinas_menu/screens/raid.py), [spare_pools.py](../../xinas_menu/screens/spare_pools.py), [drives.py](../../xinas_menu/screens/drives.py)
+- gRPC helper: [xinas_menu/api/grpc_client.py](../../xinas_menu/api/grpc_client.py)
+- NFS helper client: [xinas_menu/api/nfs_client.py](../../xinas_menu/api/nfs_client.py)
+- XFS helpers: [xinas_menu/utils/xfs_helpers.py](../../xinas_menu/utils/xfs_helpers.py)
+- Audit + snapshot helpers: [xinas_menu/utils/audit.py](../../xinas_menu/utils/audit.py), [xinas_menu/utils/snapshot_helper.py](../../xinas_menu/utils/snapshot_helper.py)
+- Drive picker widget: [xinas_menu/widgets/drive_picker.py](../../xinas_menu/widgets/drive_picker.py)
+- gRPC service contract: [xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto), [message_raid.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/message_raid.proto), [message_pool.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/message_pool.proto)
+- NFS helper daemon: [xiNAS-MCP/nfs-helper/nfs_helper.py](../../xiNAS-MCP/nfs-helper/nfs_helper.py), [xinas-nfs-helper.service](../../xiNAS-MCP/nfs-helper/xinas-nfs-helper.service)
 
 ---
 
@@ -28,7 +28,7 @@ Main Menu → Storage (StorageScreen) → 1 RAID Management (RAIDScreen)
                                     → 4 Filesystem      (FilesystemScreen, covered in storage/fs spec)
 ```
 
-`StorageScreen` is just a router — see [storage.py](../xinas_menu/screens/storage.py). All real work happens in the child screens.
+`StorageScreen` is just a router — see [storage.py](../../xinas_menu/screens/storage.py). All real work happens in the child screens.
 
 ### RAIDScreen menu
 
@@ -77,7 +77,7 @@ The third "helper" used during RAID **deletion** is `xinas_menu/utils/xfs_helper
 
 ### 2.1 `XiRAIDClient` — gRPC bridge to xiRAID
 
-Source: [xinas_menu/api/grpc_client.py](../xinas_menu/api/grpc_client.py).
+Source: [xinas_menu/api/grpc_client.py](../../xinas_menu/api/grpc_client.py).
 
 - **Address:** `localhost:6066` (hardcoded, `_GRPC_ADDRESS`).
 - **Transport:** `grpc.aio` channel. Secure by default — TLS root cert resolved in this order:
@@ -87,7 +87,7 @@ Source: [xinas_menu/api/grpc_client.py](../xinas_menu/api/grpc_client.py).
   4. `/etc/xiraid/server.crt` (legacy).
   5. `/etc/xinas-mcp/server.crt`.
   6. **Insecure channel** with a `UserWarning` (dev-mode only).
-- **Stub:** `XRAIDServiceStub` — generated at install time by the `xinas_menu` Ansible role from the protos at `/opt/xiNAS/xiNAS-MCP/proto/xraid/gRPC/protobuf/` (see [collection/roles/xinas_menu/defaults/main.yml](../collection/roles/xinas_menu/defaults/main.yml) `xinas_menu_proto_files`). Until stubs exist, every call returns `(False, None, "gRPC stubs not available: <ImportError>")`.
+- **Stub:** `XRAIDServiceStub` — generated at install time by the `xinas_menu` Ansible role from the protos at `/opt/xiNAS/xiNAS-MCP/proto/xraid/gRPC/protobuf/` (see [collection/roles/xinas_menu/defaults/main.yml](../../collection/roles/xinas_menu/defaults/main.yml) `xinas_menu_proto_files`). Until stubs exist, every call returns `(False, None, "gRPC stubs not available: <ImportError>")`.
 - **Channel options:** `initial_reconnect_backoff_ms=500`, `max_reconnect_backoff_ms=2000`, `enable_retries=0`. Reconnects are bounded; retries are off so the UI sees real failures instead of silent retransmits.
 - **Response convention:** every RPC returns `ResponseMessage { optional string message = 1 }`. The TUI parses `message` as JSON; if it isn't valid JSON, the raw string passes through. All public methods return the same shape:
   ```python
@@ -98,7 +98,7 @@ Source: [xinas_menu/api/grpc_client.py](../xinas_menu/api/grpc_client.py).
 
 ### 2.2 RAID RPCs the TUI uses
 
-Direct mapping from `XiRAIDClient` methods to the protos in [service_xraid.proto](../xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto):
+Direct mapping from `XiRAIDClient` methods to the protos in [service_xraid.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto):
 
 | Python method | RPC | Request message | Used by |
 |---|---|---|---|
@@ -121,11 +121,11 @@ For pools:
 | `pool_remove(name, drives)` | `pool_remove` | `PoolRemove` |
 | `pool_activate(name)` / `pool_deactivate(name)` | matching RPCs | matching messages |
 
-`RaidCreate` accepts the full Xinnor parameter surface — see [message_raid.proto](../xiNAS-MCP/proto/xraid/gRPC/protobuf/message_raid.proto). The TUI passes `strip_size`, optional `group_size` (RAID 50/60 only), and optional `sparepool`. `force_metadata` is **not** set from the TUI — that flag is reserved for Ansible re-creates where stale metadata is expected.
+`RaidCreate` accepts the full Xinnor parameter surface — see [message_raid.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/message_raid.proto). The TUI passes `strip_size`, optional `group_size` (RAID 50/60 only), and optional `sparepool`. `force_metadata` is **not** set from the TUI — that flag is reserved for Ansible re-creates where stale metadata is expected.
 
 ### 2.3 `NFSHelperClient` — Unix-socket bridge to xinas-nfs-helper
 
-Source: [xinas_menu/api/nfs_client.py](../xinas_menu/api/nfs_client.py).
+Source: [xinas_menu/api/nfs_client.py](../../xinas_menu/api/nfs_client.py).
 
 - **Socket:** `/run/xinas-nfs-helper.sock` (created by the systemd `RuntimeDirectory=xinas-nfs-helper`).
 - **Protocol:** newline-delimited JSON.
@@ -134,9 +134,9 @@ Source: [xinas_menu/api/nfs_client.py](../xinas_menu/api/nfs_client.py).
 - **Timeout:** `10.0 s` per call.
 - **Synchronous** — calls block; the TUI uses it from `@work(exclusive=True)` Textual workers which already run off the UI thread.
 
-The helper itself is a small Python daemon running as `root`, started by `xinas-nfs-helper.service` ([source](../xiNAS-MCP/nfs-helper/xinas-nfs-helper.service)). It is the **only** writer of `/etc/exports` and `/etc/nfs.conf` outside of Ansible — both the TUI and the MCP server go through it so the audit story stays consistent. It runs `After=network.target nfs-kernel-server.service`, `Requires=nfs-kernel-server.service`, and sets `ProtectHome=true` (but not `ProtectSystem=full` — see the comment in the unit file).
+The helper itself is a small Python daemon running as `root`, started by `xinas-nfs-helper.service` ([source](../../xiNAS-MCP/nfs-helper/xinas-nfs-helper.service)). It is the **only** writer of `/etc/exports` and `/etc/nfs.conf` outside of Ansible — both the TUI and the MCP server go through it so the audit story stays consistent. It runs `After=network.target nfs-kernel-server.service`, `Requires=nfs-kernel-server.service`, and sets `ProtectHome=true` (but not `ProtectSystem=full` — see the comment in the unit file).
 
-Ops it exposes (one Python handler each, from [nfs_helper.py](../xiNAS-MCP/nfs-helper/nfs_helper.py)):
+Ops it exposes (one Python handler each, from [nfs_helper.py](../../xiNAS-MCP/nfs-helper/nfs_helper.py)):
 
 | `op` | Behavior |
 |---|---|
@@ -153,7 +153,7 @@ In the RAID screen, only `list_exports`, `remove_export`, `add_export`, and `rel
 
 ### 2.4 `xfs_helpers` — async subprocess helpers
 
-Source: [xinas_menu/utils/xfs_helpers.py](../xinas_menu/utils/xfs_helpers.py). Pure Python, no daemon. Used by the RAID screen for two things during deletion:
+Source: [xinas_menu/utils/xfs_helpers.py](../../xinas_menu/utils/xfs_helpers.py). Pure Python, no daemon. Used by the RAID screen for two things during deletion:
 
 - `find_mounts_using_raid(array_name)` — finds every XFS mount whose **data** device is `/dev/xi_<name>` *or* whose mount options carry `logdev=/dev/xi_<name>`. The second case matters: the data array and the log array are separate xiRAID volumes, and `mnt-data.mount` references the log via `Options=…,logdev=/dev/xi_log,…`. Deleting `xi_log` without unmounting `/mnt/data` first would leave the XFS log dangling.
 - `unmount_filesystem(mountpoint)` and `mount_filesystem(mountpoint)` — wrap `systemctl stop/start <unit>` for the systemd `.mount` units (see [Installer/fs-exports-spec.md §1.8](../Installer/fs-exports-spec.md#18-mountpoint-and-systemd-mount-unit)). Both are used in the rollback path.
@@ -164,8 +164,8 @@ The geometry / mkfs / mount-unit helpers in the same file are used by the Filesy
 
 Every RAID write (create / modify / destroy) goes through two side-channel helpers:
 
-- **Audit log** ([utils/audit.py](../xinas_menu/utils/audit.py)) — appends one line per action to `/var/log/xinas/audit.log` in the format `YYYY-MM-DD HH:MM:SS | user | action | STATUS | detail`. `action` strings are stable identifiers like `raid.create`, `raid.modify`, `raid.destroy`, `nfs.remove`, `fs.unmount`. The logger never raises into the UI.
-- **Snapshot helper** ([utils/snapshot_helper.py](../xinas_menu/utils/snapshot_helper.py)) — best-effort `await app.snapshots.record("<operation>", diff_summary=…)`. Backed by `xinas_history.SnapshotEngine` (see [Installer/spec.md §3.11](../Installer/spec.md#311-xinas_history--config-snapshots--rollback)). Failures are logged but never propagate; snapshots are advisory, not transactional.
+- **Audit log** ([utils/audit.py](../../xinas_menu/utils/audit.py)) — appends one line per action to `/var/log/xinas/audit.log` in the format `YYYY-MM-DD HH:MM:SS | user | action | STATUS | detail`. `action` strings are stable identifiers like `raid.create`, `raid.modify`, `raid.destroy`, `nfs.remove`, `fs.unmount`. The logger never raises into the UI.
+- **Snapshot helper** ([utils/snapshot_helper.py](../../xinas_menu/utils/snapshot_helper.py)) — best-effort `await app.snapshots.record("<operation>", diff_summary=…)`. Backed by `xinas_history.SnapshotEngine` (see [Installer/spec.md §3.11](../Installer/spec.md#311-xinas_history--config-snapshots--rollback)). Failures are logged but never propagate; snapshots are advisory, not transactional.
 
 The audit line is written **after** the gRPC reports success. The snapshot is recorded **after** the audit line. Either can fail without affecting the user-visible result.
 
@@ -228,7 +228,7 @@ The user picks a **drive group**:
 - `All small NVMe, NUMA 0` (etc.) — pre-selected list, opens the `DrivePickerScreen` with `preselected=` so the operator can review.
 - `Pick individual drives` — opens `DrivePickerScreen` with all unassigned NVMe drives and no preselection.
 
-`DrivePickerScreen` ([widgets/drive_picker.py](../xinas_menu/widgets/drive_picker.py)) is the full-screen modal: filter by text/NUMA/size, sort by name/size/model/NUMA, multi-select with Space, `a` to select-all-visible, `d` for the detail dialog.
+`DrivePickerScreen` ([widgets/drive_picker.py](../../xinas_menu/widgets/drive_picker.py)) is the full-screen modal: filter by text/NUMA/size, sort by name/size/model/NUMA, multi-select with Space, `a` to select-all-visible, `d` for the detail dialog.
 
 Filters that exclude a drive from the picker:
 
@@ -341,7 +341,7 @@ Snapshots are taken **only** on the final RAID destroy step, since the share + m
 
 ## 7. Spare Pools (`SparePoolScreen`)
 
-Source: [xinas_menu/screens/spare_pools.py](../xinas_menu/screens/spare_pools.py). Reached from RAID Management → 3, or from Storage → 5.
+Source: [xinas_menu/screens/spare_pools.py](../../xinas_menu/screens/spare_pools.py). Reached from RAID Management → 3, or from Storage → 5.
 
 ### 7.1 Menu
 
@@ -395,7 +395,7 @@ Single confirmation (no two-stage gate — pools have no downstream FS / NFS dep
 
 ## 8. Physical Drives screen (read-only)
 
-Source: [xinas_menu/screens/drives.py](../xinas_menu/screens/drives.py).
+Source: [xinas_menu/screens/drives.py](../../xinas_menu/screens/drives.py).
 
 This is a read-only inventory view. It uses the same `disk_list()` enrichment (`lsblk` + `raid_show(extended=True)` membership join) as the wizards, plus the role classifier:
 

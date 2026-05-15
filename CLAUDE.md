@@ -70,8 +70,7 @@ common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace �
 | `inventories/` | Ansible inventory (default: localhost) |
 | `client_repo/` | Standalone NFS client package |
 | `xinas_history/` | Configuration history & rollback library (Python) — snapshots, drift detection, transactional runner |
-| `docs/config-history/` | Config-history design docs: requirements, architecture, specs, gRPC API reference |
-| `specs/` | Architecture specs (network management, etc.) |
+| `docs/` | Design docs and specs, organized by area: `Installer/`, `Storage/`, `MCP/`, `Network/`, `Notifications/`, `HealthCheck/`, `config-history/`, `healthcheck-tunables/`, `troubleshooting/`, `plans/` |
 
 ### Configuration History (`xinas_history/`)
 
@@ -88,16 +87,16 @@ Python library providing snapshot-based configuration tracking and rollback for 
 
 ### MCP Server Documentation
 
-The `xiNAS-MCP/` directory contains the MCP (Model Context Protocol) server specification and design docs:
+MCP (Model Context Protocol) server specification and design docs live under `docs/MCP/`. Server source remains in `xiNAS-MCP/`.
 
 | File | Purpose |
 |------|---------|
-| `xiNAS-MCP/REQUIREMENTS.md` | Functional requirements — 9 tool namespaces (system, network, health, disk, RAID, share, auth, job, config) |
-| `xiNAS-MCP/specs/spec-tools.md` | Tool summary table (55 tools), preflight logic, health profiles, error scenarios |
-| `xiNAS-MCP/specs/spec-middleware.md` | RBAC permission matrix, audit logging, locking, idempotency, plan/apply |
-| `xiNAS-MCP/specs/spec-config-history.md` | Config-history tools spec (6 tools), subprocess protocol for `xinas_history` backend |
-| `xiNAS-MCP/specs/spec-core.md` | Core server architecture, transport, error model |
-| `xiNAS-MCP/specs/modules.md` | Module map, dependency graph, file count summary (42 files) |
+| `docs/MCP/REQUIREMENTS.md` | Functional requirements — 9 tool namespaces (system, network, health, disk, RAID, share, auth, job, config) |
+| `docs/MCP/spec-tools.md` | Tool summary table (55 tools), preflight logic, health profiles, error scenarios |
+| `docs/MCP/spec-middleware.md` | RBAC permission matrix, audit logging, locking, idempotency, plan/apply |
+| `docs/MCP/spec-config-history.md` | Config-history tools spec (6 tools), subprocess protocol for `xinas_history` backend |
+| `docs/MCP/spec-core.md` | Core server architecture, transport, error model |
+| `docs/MCP/modules.md` | Module map, dependency graph, file count summary (42 files) |
 
 ### Preset Structure
 Each preset directory (`presets/default/`, `presets/xinnorVM/`) contains:
@@ -160,8 +159,8 @@ Parser + orchestration live in [xinas_menu/utils/update_check.py](xinas_menu/uti
 - **Roles are idempotent** - Safe to re-run, except `xfs_force_mkfs: true` forces filesystem recreation
 - **License stored at `/tmp/license`** - Cleared on reboot; enter via menu before deployment
 - **DOCA-OFED version** - Configured in `collection/roles/doca_ofed/defaults/main.yml` (`doca_ofed_version` variable)
-- **Netplan file ownership** - All IB interface config MUST live in `/etc/netplan/99-xinas.yaml` only. Netplan merges all `*.yaml` files in `/etc/netplan/`, so duplicate interface definitions in other files (e.g. `50-cloud-init.yaml`) cause phantom IPs and conflicting PBR tables. Both TUI and Ansible auto-clean IB entries from non-xinas files. See `specs/spec-network-management.md` for full details.
-- **Netplan apply limitations** - `netplan apply` does NOT remove old IPs or PBR rules. The `net_controllers` role and TUI "Apply Network Changes" always flush PBR tables 100-199 and all IPs from mlx interfaces before applying. See apply sequence in `specs/spec-network-management.md`.
+- **Netplan file ownership** - All IB interface config MUST live in `/etc/netplan/99-xinas.yaml` only. Netplan merges all `*.yaml` files in `/etc/netplan/`, so duplicate interface definitions in other files (e.g. `50-cloud-init.yaml`) cause phantom IPs and conflicting PBR tables. Both TUI and Ansible auto-clean IB entries from non-xinas files. See `docs/Network/spec-network-management.md` for full details.
+- **Netplan apply limitations** - `netplan apply` does NOT remove old IPs or PBR rules. The `net_controllers` role and TUI "Apply Network Changes" always flush PBR tables 100-199 and all IPs from mlx interfaces before applying. See apply sequence in `docs/Network/spec-network-management.md`.
 
 ## Automatic NVMe Namespace Management
 

@@ -10,11 +10,11 @@ The two screens share a common helper backbone with the RAID screen:
 
 Sources:
 
-- Screens: [xinas_menu/screens/filesystem.py](../xinas_menu/screens/filesystem.py), [nfs.py](../xinas_menu/screens/nfs.py), [storage.py](../xinas_menu/screens/storage.py)
-- XFS helpers: [xinas_menu/utils/xfs_helpers.py](../xinas_menu/utils/xfs_helpers.py)
-- NFS helper client: [xinas_menu/api/nfs_client.py](../xinas_menu/api/nfs_client.py)
-- NFS helper daemon: [xiNAS-MCP/nfs-helper/nfs_helper.py](../xiNAS-MCP/nfs-helper/nfs_helper.py), [nfs_exports.py](../xiNAS-MCP/nfs-helper/nfs_exports.py), [nfs_conf.py](../xiNAS-MCP/nfs-helper/nfs_conf.py), [nfs_quota.py](../xiNAS-MCP/nfs-helper/nfs_quota.py), [nfs_sessions.py](../xiNAS-MCP/nfs-helper/nfs_sessions.py)
-- Cross-cutting helpers: [utils/audit.py](../xinas_menu/utils/audit.py), [utils/snapshot_helper.py](../xinas_menu/utils/snapshot_helper.py)
+- Screens: [xinas_menu/screens/filesystem.py](../../xinas_menu/screens/filesystem.py), [nfs.py](../../xinas_menu/screens/nfs.py), [storage.py](../../xinas_menu/screens/storage.py)
+- XFS helpers: [xinas_menu/utils/xfs_helpers.py](../../xinas_menu/utils/xfs_helpers.py)
+- NFS helper client: [xinas_menu/api/nfs_client.py](../../xinas_menu/api/nfs_client.py)
+- NFS helper daemon: [xiNAS-MCP/nfs-helper/nfs_helper.py](../../xiNAS-MCP/nfs-helper/nfs_helper.py), [nfs_exports.py](../../xiNAS-MCP/nfs-helper/nfs_exports.py), [nfs_conf.py](../../xiNAS-MCP/nfs-helper/nfs_conf.py), [nfs_quota.py](../../xiNAS-MCP/nfs-helper/nfs_quota.py), [nfs_sessions.py](../../xiNAS-MCP/nfs-helper/nfs_sessions.py)
+- Cross-cutting helpers: [utils/audit.py](../../xinas_menu/utils/audit.py), [utils/snapshot_helper.py](../../xinas_menu/utils/snapshot_helper.py)
 - Installer counterpart: [Installer/fs-exports-spec.md](../Installer/fs-exports-spec.md)
 
 ---
@@ -26,7 +26,7 @@ Main Menu → Storage (StorageScreen) → 2 NFS Management   (NFSScreen)
                                     → 4 Filesystem       (FilesystemScreen)
 ```
 
-Both screens are pushed onto the Textual stack from `StorageScreen.on_navigable_menu_selected()` (see [storage.py](../xinas_menu/screens/storage.py)). Closing them with `0` / `Esc` returns to the Storage sub-menu.
+Both screens are pushed onto the Textual stack from `StorageScreen.on_navigable_menu_selected()` (see [storage.py](../../xinas_menu/screens/storage.py)). Closing them with `0` / `Esc` returns to the Storage sub-menu.
 
 Both are mounted on top of the same `app.grpc` (RAID gRPC client), `app.nfs` (helper socket client), `app.audit` (audit logger), `app.snapshots` (snapshot recorder) provided by the `XiNASApp` shell.
 
@@ -38,7 +38,7 @@ The screens never write to `/etc/exports`, `/etc/nfs.conf`, `/proc/fs/nfsd/*` or
 
 ### 2.1 `xfs_helpers` — in-process async subprocess
 
-[utils/xfs_helpers.py](../xinas_menu/utils/xfs_helpers.py). Every public function returns either `(ok: bool, stdout: str, stderr: str)` for raw subprocess calls or `(ok: bool, err: str)` for higher-level operations — exactly the same `(ok, …, error)` convention the gRPC and NFS clients use.
+[utils/xfs_helpers.py](../../xinas_menu/utils/xfs_helpers.py). Every public function returns either `(ok: bool, stdout: str, stderr: str)` for raw subprocess calls or `(ok: bool, err: str)` for higher-level operations — exactly the same `(ok, …, error)` convention the gRPC and NFS clients use.
 
 What the FS screen calls:
 
@@ -62,7 +62,7 @@ The mount/unmount helpers operate on systemd `.mount` units, not on `mount(2)` d
 
 ### 2.2 `xinas-nfs-helper` — Unix-socket daemon
 
-[xiNAS-MCP/nfs-helper/nfs_helper.py](../xiNAS-MCP/nfs-helper/nfs_helper.py). A single-threaded-accept, per-connection-thread daemon listening on `/run/xinas-nfs-helper.sock` (mode `0660`). One JSON request, one JSON response, then connection closes.
+[xiNAS-MCP/nfs-helper/nfs_helper.py](../../xiNAS-MCP/nfs-helper/nfs_helper.py). A single-threaded-accept, per-connection-thread daemon listening on `/run/xinas-nfs-helper.sock` (mode `0660`). One JSON request, one JSON response, then connection closes.
 
 Installed by the `xinas_mcp` Ansible role; runs `After=network.target nfs-kernel-server.service` with `Requires=nfs-kernel-server.service` and `ProtectHome=true` (full hardening is intentionally relaxed — see the comment in the unit). The `RuntimeDirectory=xinas-nfs-helper` directive makes systemd create `/run/xinas-nfs-helper/` for the socket on every start.
 
@@ -91,7 +91,7 @@ The daemon also runs a **startup health check** — it warns if `/usr/sbin/expor
 
 ### 2.3 Client side — `NFSHelperClient`
 
-[xinas_menu/api/nfs_client.py](../xinas_menu/api/nfs_client.py). Synchronous Unix-socket client. Newline-delimited JSON, one round-trip per call, `10.0 s` timeout.
+[xinas_menu/api/nfs_client.py](../../xinas_menu/api/nfs_client.py). Synchronous Unix-socket client. Newline-delimited JSON, one round-trip per call, `10.0 s` timeout.
 
 The TUI calls it from `loop.run_in_executor(None, …)` since the socket I/O is blocking. The screens never `await self.app.nfs.…` directly — every helper call is wrapped in an executor coroutine so the Textual event loop stays responsive.
 
@@ -111,7 +111,7 @@ The RAID-delete and FS-delete teardown paths use these short-circuits to refuse 
 
 ## 3. FilesystemScreen
 
-[xinas_menu/screens/filesystem.py](../xinas_menu/screens/filesystem.py).
+[xinas_menu/screens/filesystem.py](../../xinas_menu/screens/filesystem.py).
 
 ### 3.1 Menu
 
@@ -234,7 +234,7 @@ Group quotas (`gquota` / `grpquota`) are *parsed* by `get_quota_status` but neve
 
 ## 4. NFSScreen
 
-[xinas_menu/screens/nfs.py](../xinas_menu/screens/nfs.py).
+[xinas_menu/screens/nfs.py](../../xinas_menu/screens/nfs.py).
 
 ### 4.1 Menu
 

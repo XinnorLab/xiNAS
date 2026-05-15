@@ -10,16 +10,16 @@ Each section names the source file the behavior comes from. Where this spec over
 
 Sources:
 
-- [collection/roles/raid_fs/tasks/create_fs.yml](../collection/roles/raid_fs/tasks/create_fs.yml), [templates/mount.unit.j2](../collection/roles/raid_fs/templates/mount.unit.j2)
-- [collection/roles/exports/tasks/main.yml](../collection/roles/exports/tasks/main.yml), [templates/exports.j2](../collection/roles/exports/templates/exports.j2), [handlers/main.yml](../collection/roles/exports/handlers/main.yml), [defaults/main.yml](../collection/roles/exports/defaults/main.yml)
-- [collection/roles/nfs_server/tasks/main.yml](../collection/roles/nfs_server/tasks/main.yml), [handlers/main.yml](../collection/roles/nfs_server/handlers/main.yml), [defaults/main.yml](../collection/roles/nfs_server/defaults/main.yml)
-- Preset overrides: [presets/default/nfs_exports.yml](../presets/default/nfs_exports.yml), [presets/xinnorVM/nfs_exports.yml](../presets/xinnorVM/nfs_exports.yml)
+- [collection/roles/raid_fs/tasks/create_fs.yml](../../collection/roles/raid_fs/tasks/create_fs.yml), [templates/mount.unit.j2](../../collection/roles/raid_fs/templates/mount.unit.j2)
+- [collection/roles/exports/tasks/main.yml](../../collection/roles/exports/tasks/main.yml), [templates/exports.j2](../../collection/roles/exports/templates/exports.j2), [handlers/main.yml](../../collection/roles/exports/handlers/main.yml), [defaults/main.yml](../../collection/roles/exports/defaults/main.yml)
+- [collection/roles/nfs_server/tasks/main.yml](../../collection/roles/nfs_server/tasks/main.yml), [handlers/main.yml](../../collection/roles/nfs_server/handlers/main.yml), [defaults/main.yml](../../collection/roles/nfs_server/defaults/main.yml)
+- Preset overrides: [presets/default/nfs_exports.yml](../../presets/default/nfs_exports.yml), [presets/xinnorVM/nfs_exports.yml](../../presets/xinnorVM/nfs_exports.yml)
 
 ---
 
 ## 1. Filesystem layer — XFS on `/dev/xi_data` with external log
 
-Source: [raid_fs/tasks/create_fs.yml](../collection/roles/raid_fs/tasks/create_fs.yml). Driven entirely by the `xfs_filesystems` fact emitted by `nvme_namespace` (see [raid-spec.md §6.4](raid-spec.md#64-the-two-facts-that-get-handed-to-raid_fs)).
+Source: [raid_fs/tasks/create_fs.yml](../../collection/roles/raid_fs/tasks/create_fs.yml). Driven entirely by the `xfs_filesystems` fact emitted by `nvme_namespace` (see [raid-spec.md §6.4](raid-spec.md#64-the-two-facts-that-get-handed-to-raid_fs)).
 
 ### 1.1 Why XFS, why external log
 
@@ -108,7 +108,7 @@ defaults,logdev=/dev/xi_log,noatime,nodiratime,logbsize=256k,largeio,inode64,swa
 
 ### 1.8 Mountpoint and systemd .mount unit
 
-Source: [mount.unit.j2](../collection/roles/raid_fs/templates/mount.unit.j2).
+Source: [mount.unit.j2](../../collection/roles/raid_fs/templates/mount.unit.j2).
 
 - Mountpoint: `/mnt/data` (mode `0755`, root:root). Created if missing.
 - Unit name: derived from the mountpoint — `/mnt/data` → `mnt-data.mount`. Written to `/etc/systemd/system/`.
@@ -122,7 +122,7 @@ Source: [mount.unit.j2](../collection/roles/raid_fs/templates/mount.unit.j2).
 
 ## 2. Export rules — `/etc/exports`
 
-Source: [collection/roles/exports/](../collection/roles/exports). This role runs **after** `raid_fs` (mount is up) and **before** `nfs_server` (the server only re-reads exports when it starts or `exportfs -r` is called).
+Source: [collection/roles/exports/](../../collection/roles/exports). This role runs **after** `raid_fs` (mount is up) and **before** `nfs_server` (the server only re-reads exports when it starts or `exportfs -r` is called).
 
 ### 2.1 Inputs
 
@@ -200,7 +200,7 @@ No managed-section markers — the file is treated as fully owned by the role an
 
 ## 3. Server tuning — `/etc/nfs.conf` and `nfs-kernel-server`
 
-Source: [collection/roles/nfs_server/](../collection/roles/nfs_server).
+Source: [collection/roles/nfs_server/](../../collection/roles/nfs_server).
 
 ### 3.1 Packages
 

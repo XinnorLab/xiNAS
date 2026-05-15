@@ -4,15 +4,15 @@ This document describes the xiNAS installer surface area: deployment presets, An
 
 Source layout this spec is derived from:
 
-- Presets: [presets/default/](../presets/default), [presets/xinnorVM/](../presets/xinnorVM)
-- Playbooks: [playbooks/site.yml](../playbooks/site.yml), [playbooks/common.yml](../playbooks/common.yml), [playbooks/doca_ofed_install.yml](../playbooks/doca_ofed_install.yml)
-- Roles: [collection/roles/](../collection/roles)
+- Presets: [presets/default/](../../presets/default), [presets/xinnorVM/](../../presets/xinnorVM)
+- Playbooks: [playbooks/site.yml](../../playbooks/site.yml), [playbooks/common.yml](../../playbooks/common.yml), [playbooks/doca_ofed_install.yml](../../playbooks/doca_ofed_install.yml)
+- Roles: [collection/roles/](../../collection/roles)
 
 ---
 
 ## 1. Presets
 
-Presets live under [presets/](../presets) and are selected from the interactive installer (`prepare_system.sh` → `startup_menu.sh`). Each preset directory contains a `playbook.yml` that defines the role execution order plus a small set of YAML/J2 files that override role defaults.
+Presets live under [presets/](../../presets) and are selected from the interactive installer (`prepare_system.sh` → `startup_menu.sh`). Each preset directory contains a `playbook.yml` that defines the role execution order plus a small set of YAML/J2 files that override role defaults.
 
 ### 1.1 `presets/default/` — physical NVMe storage node
 
@@ -20,11 +20,11 @@ Target: a real server with NVMe drives that support namespace management. The `n
 
 | File | Contents (effective values) |
 |------|-----------------------------|
-| [playbook.yml](../presets/default/playbook.yml) | Roles, in order: `common` → `doca_ofed` → `net_controllers` → `xiraid_classic` → `raid_fs` → `exports` → `nfs_server` → `xinas_mcp` → `xinas_menu` → `xinas_history` → `perf_tuning` → `motd`. No preset-level vars. (Note: `nvme_namespace` is **not** listed in this preset's playbook — physical NVMe drives still get auto-detection via [playbooks/site.yml](../playbooks/site.yml), which is the path the menu actually invokes.) |
-| [raid_fs.yml](../presets/default/raid_fs.yml) | `xiraid_license_path=/tmp/license`, `xiraid_force_metadata=true`, `xfs_force_mkfs=true`, `nvme_auto_namespace=true`, `nvme_use_existing_namespaces=false`, `nvme_namespace_block_size=4096`, `nvme_namespace_shared=false`, `nvme_raid_data_level=5`, `nvme_raid_log_level=10`. |
-| [network.yml](../presets/default/network.yml) | IP pool `10.10.1.1` → `10.10.255.1` /24, `net_mtu=0` (auto: 4092 IB / 9000 Eth), no manual overrides. |
-| [nfs_exports.yml](../presets/default/nfs_exports.yml) | `/mnt/data → *  rw,sync,insecure,no_root_squash,no_subtree_check,no_wdelay,fsid=0`. |
-| [netplan.yaml.j2](../presets/default/netplan.yaml.j2) | Seed template only — `ib0 = 100.100.100.1/24`. The `net_controllers` role discovers IB/mlx interfaces at runtime and rewrites the netplan from the pool. |
+| [playbook.yml](../../presets/default/playbook.yml) | Roles, in order: `common` → `doca_ofed` → `net_controllers` → `xiraid_classic` → `raid_fs` → `exports` → `nfs_server` → `xinas_mcp` → `xinas_menu` → `xinas_history` → `perf_tuning` → `motd`. No preset-level vars. (Note: `nvme_namespace` is **not** listed in this preset's playbook — physical NVMe drives still get auto-detection via [playbooks/site.yml](../../playbooks/site.yml), which is the path the menu actually invokes.) |
+| [raid_fs.yml](../../presets/default/raid_fs.yml) | `xiraid_license_path=/tmp/license`, `xiraid_force_metadata=true`, `xfs_force_mkfs=true`, `nvme_auto_namespace=true`, `nvme_use_existing_namespaces=false`, `nvme_namespace_block_size=4096`, `nvme_namespace_shared=false`, `nvme_raid_data_level=5`, `nvme_raid_log_level=10`. |
+| [network.yml](../../presets/default/network.yml) | IP pool `10.10.1.1` → `10.10.255.1` /24, `net_mtu=0` (auto: 4092 IB / 9000 Eth), no manual overrides. |
+| [nfs_exports.yml](../../presets/default/nfs_exports.yml) | `/mnt/data → *  rw,sync,insecure,no_root_squash,no_subtree_check,no_wdelay,fsid=0`. |
+| [netplan.yaml.j2](../../presets/default/netplan.yaml.j2) | Seed template only — `ib0 = 100.100.100.1/24`. The `net_controllers` role discovers IB/mlx interfaces at runtime and rewrites the netplan from the pool. |
 
 Resulting storage layout (when ≥3 data drives are present):
 
@@ -38,12 +38,12 @@ Target: a Linux VM where the data drives are virtio or SCSI, **not** NVMe. Names
 
 | File | Contents (effective values) |
 |------|-----------------------------|
-| [playbook.yml](../presets/xinnorVM/playbook.yml) | Same role order as `default`, plus `nvme_namespace` is explicitly listed. Sets `perf_disable_cpupower: true` and `perf_nr_requests: 0` (VMs lack `cpupower` and tunable `nr_requests`). |
-| [nvme_namespace.yml](../presets/xinnorVM/nvme_namespace.yml) | `nvme_detect_mode="all"`, `nvme_log_drive_count=2`, `nvme_raid_data_level=5`, `nvme_raid_log_level=1`, `nvme_raid_data_strip_kb=128`, `nvme_raid_log_strip_kb=16`, `nvme_cleanup_existing_storage=true`, `nvme_skip_cleanup_confirmation=false`. |
-| [raid_fs.yml](../presets/xinnorVM/raid_fs.yml) | `xiraid_license_path=/tmp/license`, `xiraid_force_metadata=true`, `xfs_force_mkfs=true`. RAID/XFS topology is auto-generated by `nvme_namespace`. |
-| [network.yml](../presets/xinnorVM/network.yml) | Identical to default — IP pool `10.10.1.1` → `10.10.255.1` /24. |
-| [nfs_exports.yml](../presets/xinnorVM/nfs_exports.yml) | Identical to default — `/mnt/data → *` with `fsid=0`. |
-| [netplan.yaml.j2](../presets/xinnorVM/netplan.yaml.j2) | Same seed template as default. |
+| [playbook.yml](../../presets/xinnorVM/playbook.yml) | Same role order as `default`, plus `nvme_namespace` is explicitly listed. Sets `perf_disable_cpupower: true` and `perf_nr_requests: 0` (VMs lack `cpupower` and tunable `nr_requests`). |
+| [nvme_namespace.yml](../../presets/xinnorVM/nvme_namespace.yml) | `nvme_detect_mode="all"`, `nvme_log_drive_count=2`, `nvme_raid_data_level=5`, `nvme_raid_log_level=1`, `nvme_raid_data_strip_kb=128`, `nvme_raid_log_strip_kb=16`, `nvme_cleanup_existing_storage=true`, `nvme_skip_cleanup_confirmation=false`. |
+| [raid_fs.yml](../../presets/xinnorVM/raid_fs.yml) | `xiraid_license_path=/tmp/license`, `xiraid_force_metadata=true`, `xfs_force_mkfs=true`. RAID/XFS topology is auto-generated by `nvme_namespace`. |
+| [network.yml](../../presets/xinnorVM/network.yml) | Identical to default — IP pool `10.10.1.1` → `10.10.255.1` /24. |
+| [nfs_exports.yml](../../presets/xinnorVM/nfs_exports.yml) | Identical to default — `/mnt/data → *` with `fsid=0`. |
+| [netplan.yaml.j2](../../presets/xinnorVM/netplan.yaml.j2) | Same seed template as default. |
 
 Resulting storage layout (with ≥3 virtio drives):
 
@@ -65,9 +65,9 @@ Resulting storage layout (with ≥3 virtio drives):
 
 ## 2. Playbooks
 
-There are three top-level playbooks under [playbooks/](../playbooks). The interactive menus invoke them via `ansible-playbook` with the selected preset's variables merged in.
+There are three top-level playbooks under [playbooks/](../../playbooks). The interactive menus invoke them via `ansible-playbook` with the selected preset's variables merged in.
 
-### 2.1 [playbooks/site.yml](../playbooks/site.yml) — full deployment
+### 2.1 [playbooks/site.yml](../../playbooks/site.yml) — full deployment
 
 ```
 common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace
@@ -78,11 +78,11 @@ common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace
 - `xiraid_classic` is gated by `xiraid_skip_install` (default `false`).
 - The preset-specific `playbook.yml` files mirror this order. For the `default` preset, the menu still uses `site.yml`, so `nvme_namespace` runs even though the preset's own `playbook.yml` omits it.
 
-### 2.2 [playbooks/common.yml](../playbooks/common.yml) — baseline only
+### 2.2 [playbooks/common.yml](../../playbooks/common.yml) — baseline only
 
 Runs the `common` role with tag `common`. Used by `prepare_system.sh` and as a first-boot sanity check.
 
-### 2.3 [playbooks/doca_ofed_install.yml](../playbooks/doca_ofed_install.yml) — OFED only
+### 2.3 [playbooks/doca_ofed_install.yml](../../playbooks/doca_ofed_install.yml) — OFED only
 
 Runs only the `doca_ofed` role. Useful when re-installing/updating the NVIDIA DOCA-Host stack without touching storage.
 
@@ -96,7 +96,7 @@ ansible-playbook playbooks/site.yml --tags perf_tuning
 ansible-playbook playbooks/site.yml --tags net_controllers
 ```
 
-The TUI's update flow uses these tags via the `Requires-Rebuild:` commit trailer (see [CLAUDE.md](../CLAUDE.md)).
+The TUI's update flow uses these tags via the `Requires-Rebuild:` commit trailer (see [CLAUDE.md](../../CLAUDE.md)).
 
 ---
 
@@ -106,7 +106,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 ### 3.1 `common` — baseline OS
 
-[defaults](../collection/roles/common/defaults/main.yml) · [tasks](../collection/roles/common/tasks/main.yml)
+[defaults](../../collection/roles/common/defaults/main.yml) · [tasks](../../collection/roles/common/tasks/main.yml)
 
 - Packages installed (apt): `curl`, `vim`, `htop`, `chrony`, `unattended-upgrades`, `ca-certificates`, `quota`.
 - Timezone: `Europe/Amsterdam`.
@@ -118,7 +118,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 ### 3.2 `doca_ofed` — NVIDIA DOCA-Host / OFED
 
-[defaults](../collection/roles/doca_ofed/defaults/main.yml)
+[defaults](../../collection/roles/doca_ofed/defaults/main.yml)
 
 - Repo: `https://linux.mellanox.com/public/repo/doca/latest/ubuntu<ver>/x86_64`.
 - Packages: `doca-all`, `mlnx-fw-updater`, `mlnx-nfsrdma-dkms` (kernel module for NFS-RDMA).
@@ -127,17 +127,17 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 ### 3.3 `net_controllers` — network discovery + netplan
 
-[defaults](../collection/roles/net_controllers/defaults/main.yml)
+[defaults](../../collection/roles/net_controllers/defaults/main.yml)
 
 - Detects InfiniBand (`net_detect_infiniband=true`) and ConnectX-series Ethernet (`net_detect_mlx5=true`).
 - Allocates IPs from the pool `10.10.1.1` → `10.10.255.1` /24 — first detected interface gets `10.10.1.1/24`, second `10.10.2.1/24`, etc.
-- Writes the single netplan file `/etc/netplan/99-xinas.yaml` and removes IB entries from `50-cloud-init.yaml` and similar files. See [specs/spec-network-management.md](../specs/spec-network-management.md).
+- Writes the single netplan file `/etc/netplan/99-xinas.yaml` and removes IB entries from `50-cloud-init.yaml` and similar files. See [Network/spec-network-management.md](../Network/spec-network-management.md).
 - MTU: 0 (auto — 4092 for IB, 9000 for RoCE/Ethernet) unless overridden.
 - Flushes PBR tables 100–199 and per-link addresses before re-applying.
 
 ### 3.4 `xiraid_classic` — install xiRAID Classic
 
-[defaults](../collection/roles/xiraid_classic/defaults/main.yml)
+[defaults](../../collection/roles/xiraid_classic/defaults/main.yml)
 
 - Installs `xiraid-repo_1.3.0-1588.kver.6.8_amd64.deb` from `pkg.xinnor.io` and then `xiraid-core` (version `4.3.0`).
 - EULA accepted automatically (`xiraid_accept_eula=true`).
@@ -146,7 +146,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 ### 3.5 `nvme_namespace` — drive discovery / namespace rebuild
 
-[defaults](../collection/roles/nvme_namespace/defaults/main.yml)
+[defaults](../../collection/roles/nvme_namespace/defaults/main.yml)
 
 - Detection mode: `nvme` (default preset) or `all` (xinnorVM preset).
 - Rebuilds namespaces in `nvme` mode: `nvme_small_ns_size_mb=500` (n1, log), remaining capacity (n2, data), block size 4096, `nmic=0` (non-shared — required by single-controller hardware).
@@ -157,7 +157,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 ### 3.6 `raid_fs` — xiRAID arrays + XFS filesystems
 
-[defaults](../collection/roles/raid_fs/defaults/main.yml) · [tasks](../collection/roles/raid_fs/tasks/main.yml)
+[defaults](../../collection/roles/raid_fs/defaults/main.yml) · [tasks](../../collection/roles/raid_fs/tasks/main.yml)
 
 - Fails fast if `xiraid_arrays` / `xfs_filesystems` are undefined.
 - Applies the license: `xicli license update -p /tmp/license`.
@@ -167,7 +167,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 ### 3.7 `exports` — NFS export rules
 
-[defaults](../collection/roles/exports/defaults/main.yml) · [tasks](../collection/roles/exports/tasks/main.yml)
+[defaults](../../collection/roles/exports/defaults/main.yml) · [tasks](../../collection/roles/exports/tasks/main.yml)
 
 - Creates every `exports[*].path` (mode `0755`, root-owned).
 - Renders `/etc/exports` from `templates/exports.j2`; runs `exportfs -ra` via handler.
@@ -175,7 +175,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 ### 3.8 `nfs_server` — kernel NFS server + RDMA
 
-[defaults](../collection/roles/nfs_server/defaults/main.yml) · [tasks](../collection/roles/nfs_server/tasks/main.yml)
+[defaults](../../collection/roles/nfs_server/defaults/main.yml) · [tasks](../../collection/roles/nfs_server/tasks/main.yml)
 
 - Installs `nfs-kernel-server` and `nfs-common`.
 - Writes a managed block into `/etc/nfs.conf` enabling:
@@ -185,7 +185,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 ### 3.9 `xinas_mcp` — MCP server + NFS helper daemon
 
-[defaults](../collection/roles/xinas_mcp/defaults/main.yml)
+[defaults](../../collection/roles/xinas_mcp/defaults/main.yml)
 
 - Repo path: `/opt/xiNAS/xiNAS-MCP`. Audit log: `/var/log/xinas/mcp-audit.jsonl`.
 - NFS helper socket: `/run/xinas-nfs-helper.sock`.
@@ -195,7 +195,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 ### 3.10 `xinas_menu` — Textual TUI management console
 
-[defaults](../collection/roles/xinas_menu/defaults/main.yml)
+[defaults](../../collection/roles/xinas_menu/defaults/main.yml)
 
 - Package at `/opt/xiNAS/xinas_menu`, venv at `/opt/xiNAS/venv`.
 - Wrappers: `/usr/local/bin/xinas-menu`, `/usr/local/bin/xinas-setup`.
@@ -204,7 +204,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 ### 3.11 `xinas_history` — config snapshots + rollback
 
-[defaults](../collection/roles/xinas_history/defaults/main.yml)
+[defaults](../../collection/roles/xinas_history/defaults/main.yml)
 
 - Store: `/var/lib/xinas/config-history/` (baseline + per-change snapshots).
 - Retention: `xinas_history_max_snapshots=10` (older ones GC'd).
@@ -212,7 +212,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 ### 3.12 `perf_tuning` — Xinnor-recommended performance tuning
 
-[defaults](../collection/roles/perf_tuning/defaults/main.yml) · [tasks](../collection/roles/perf_tuning/tasks/main.yml)
+[defaults](../../collection/roles/perf_tuning/defaults/main.yml) · [tasks](../../collection/roles/perf_tuning/tasks/main.yml)
 
 Kernel + boot:
 
@@ -244,7 +244,7 @@ Profile:
 
 ### 3.13 `motd` — login banner
 
-[defaults](../collection/roles/motd/defaults/main.yml)
+[defaults](../../collection/roles/motd/defaults/main.yml)
 
 - Custom MOTD enabled; default Ubuntu MOTD components disabled.
 - Pre-login banner off by default (`banner_enabled=false`).
@@ -252,7 +252,7 @@ Profile:
 
 ### 3.14 Optional roles not in the default chain
 
-- `roce_lossless` — PFC/ETS/DSCP for lossless RoCE. [defaults](../collection/roles/roce_lossless/defaults/main.yml). Run with `--tags roce_lossless` when deploying on Ethernet rather than IB.
+- `roce_lossless` — PFC/ETS/DSCP for lossless RoCE. [defaults](../../collection/roles/roce_lossless/defaults/main.yml). Run with `--tags roce_lossless` when deploying on Ethernet rather than IB.
 - `xiraid_exporter` — Prometheus exporter `xiraid-exporter_1.1.0`, listens on `:9827`. Already referenced by `xinas_mcp`'s Prometheus URL; install via its tag if metrics scraping is needed standalone.
 
 ---
@@ -379,9 +379,9 @@ The health engine bundles many of the checks above (RAID state, mounts, exports,
 
 | Symptom | Likely cause | Where to look |
 |---------|--------------|----------------|
-| `raid_fs` fails with "xiraid_arrays not defined" | `nvme_namespace` did not run or detected zero data drives | [collection/roles/nvme_namespace/](../collection/roles/nvme_namespace), boot drive detection |
+| `raid_fs` fails with "xiraid_arrays not defined" | `nvme_namespace` did not run or detected zero data drives | [collection/roles/nvme_namespace/](../../collection/roles/nvme_namespace), boot drive detection |
 | `ibstat` empty after install | OFED installed but host not rebooted | `reboot`, then re-run §4.2 |
-| Phantom IPs / split tables | Old IB stanzas left in `50-cloud-init.yaml` | [specs/spec-network-management.md](../specs/spec-network-management.md) |
+| Phantom IPs / split tables | Old IB stanzas left in `50-cloud-init.yaml` | [Network/spec-network-management.md](../Network/spec-network-management.md) |
 | `xicli license` errors | `/tmp/license` cleared by reboot | Re-enter license in the menu before re-running `--tags raid_fs` |
 | NFS mounts but RDMA refused | `mlnx-nfsrdma-dkms` not loaded, or port 20049 blocked | `lsmod | grep rdma`, `ss -lntp | grep 20049` |
 | `xinas-nfs-helper.sock` missing at boot | Helper raced with NFS server start | `systemctl restart xinas-nfs-helper` (also tracked in commit `45ef0cc`) |

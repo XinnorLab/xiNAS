@@ -97,8 +97,7 @@ See [install.MD](install.MD) for the full installation guide, settings reference
 | `xiNAS-MCP/` | MCP server for AI-assisted management (55 tools) |
 | `client_repo/` | Standalone NFS client package |
 | `inventories/` | Ansible inventory (default: localhost) |
-| `specs/` | Architecture specifications |
-| `docs/` | Design documents and plans |
+| `docs/` | Design documents and specs (`Installer/`, `Storage/`, `MCP/`, `Network/`, `Notifications/`, `HealthCheck/`, `config-history/`, `plans/`, …) |
 
 ## Ansible Roles
 
@@ -157,7 +156,7 @@ The `xiNAS-MCP/` directory contains a Model Context Protocol server that exposes
 
 `system` · `health` · `disk` · `raid` · `share` · `auth` · `job` · `config` · `mail`
 
-Features include RBAC permissions, audit logging, idempotency guarantees, and plan/apply workflows. See `xiNAS-MCP/REQUIREMENTS.md` for the full specification.
+Features include RBAC permissions, audit logging, idempotency guarantees, and plan/apply workflows. See `docs/MCP/REQUIREMENTS.md` for the full specification.
 
 ## Data Collection
 
@@ -180,5 +179,5 @@ export TRANSFER_SERVER="http://your-server:8080"
 - **yq v4 required** — shell scripts use [mikefarah/yq](https://github.com/mikefarah/yq), not the Python jq wrapper. Ensure `/usr/local/bin/yq` is in PATH. Re-run `prepare_system.sh` if needed
 - **Roles are idempotent** — safe to re-run, except when `xfs_force_mkfs: true` forces filesystem recreation
 - **License** — stored at `/tmp/license` (cleared on reboot); enter via menu before deployment
-- **Netplan ownership** — all InfiniBand interface config must live in `/etc/netplan/99-xinas.yaml` only. See `specs/spec-network-management.md` for details
+- **Netplan ownership** — all InfiniBand interface config must live in `/etc/netplan/99-xinas.yaml` only. See `docs/Network/spec-network-management.md` for details
 - **Variable priority** — CLI/inventory (highest) → preset YAML → role `defaults/main.yml` (lowest)

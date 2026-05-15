@@ -12,13 +12,13 @@ nvme_namespace → raid_fs
 
 Sources this spec is derived from:
 
-- [collection/roles/nvme_namespace/tasks/main.yml](../collection/roles/nvme_namespace/tasks/main.yml) — phase orchestrator
-- [tasks/detect_drives.yml](../collection/roles/nvme_namespace/tasks/detect_drives.yml), [detect_all_drives.yml](../collection/roles/nvme_namespace/tasks/detect_all_drives.yml) — system-vs-data drive split
-- [tasks/cleanup_storage.yml](../collection/roles/nvme_namespace/tasks/cleanup_storage.yml) — LVM/MD/ZFS removal
-- [tasks/collect_topology.yml](../collection/roles/nvme_namespace/tasks/collect_topology.yml), [rebuild_namespaces.yml](../collection/roles/nvme_namespace/tasks/rebuild_namespaces.yml), [detect_existing_namespaces.yml](../collection/roles/nvme_namespace/tasks/detect_existing_namespaces.yml)
-- [tasks/generate_raid_config.yml](../collection/roles/nvme_namespace/tasks/generate_raid_config.yml) — produces `xiraid_arrays` + `xfs_filesystems`
-- [collection/roles/raid_fs/tasks/main.yml](../collection/roles/raid_fs/tasks/main.yml), [create_array.yml](../collection/roles/raid_fs/tasks/create_array.yml), [create_fs.yml](../collection/roles/raid_fs/tasks/create_fs.yml), [templates/mount.unit.j2](../collection/roles/raid_fs/templates/mount.unit.j2)
-- Preset overrides: [presets/default/raid_fs.yml](../presets/default/raid_fs.yml), [presets/xinnorVM/nvme_namespace.yml](../presets/xinnorVM/nvme_namespace.yml), [presets/xinnorVM/raid_fs.yml](../presets/xinnorVM/raid_fs.yml)
+- [collection/roles/nvme_namespace/tasks/main.yml](../../collection/roles/nvme_namespace/tasks/main.yml) — phase orchestrator
+- [tasks/detect_drives.yml](../../collection/roles/nvme_namespace/tasks/detect_drives.yml), [detect_all_drives.yml](../../collection/roles/nvme_namespace/tasks/detect_all_drives.yml) — system-vs-data drive split
+- [tasks/cleanup_storage.yml](../../collection/roles/nvme_namespace/tasks/cleanup_storage.yml) — LVM/MD/ZFS removal
+- [tasks/collect_topology.yml](../../collection/roles/nvme_namespace/tasks/collect_topology.yml), [rebuild_namespaces.yml](../../collection/roles/nvme_namespace/tasks/rebuild_namespaces.yml), [detect_existing_namespaces.yml](../../collection/roles/nvme_namespace/tasks/detect_existing_namespaces.yml)
+- [tasks/generate_raid_config.yml](../../collection/roles/nvme_namespace/tasks/generate_raid_config.yml) — produces `xiraid_arrays` + `xfs_filesystems`
+- [collection/roles/raid_fs/tasks/main.yml](../../collection/roles/raid_fs/tasks/main.yml), [create_array.yml](../../collection/roles/raid_fs/tasks/create_array.yml), [create_fs.yml](../../collection/roles/raid_fs/tasks/create_fs.yml), [templates/mount.unit.j2](../../collection/roles/raid_fs/templates/mount.unit.j2)
+- Preset overrides: [presets/default/raid_fs.yml](../../presets/default/raid_fs.yml), [presets/xinnorVM/nvme_namespace.yml](../../presets/xinnorVM/nvme_namespace.yml), [presets/xinnorVM/raid_fs.yml](../../presets/xinnorVM/raid_fs.yml)
 
 ---
 
@@ -39,7 +39,7 @@ If `nvme_auto_namespace: false`, the role prints a notice and does nothing — o
 
 Before touching anything, the role figures out which drives are off-limits.
 
-Source: [detect_drives.yml](../collection/roles/nvme_namespace/tasks/detect_drives.yml) (and the matching block in `detect_all_drives.yml`).
+Source: [detect_drives.yml](../../collection/roles/nvme_namespace/tasks/detect_drives.yml) (and the matching block in `detect_all_drives.yml`).
 
 It builds `nvme_system_drives` by collecting the parent device of:
 
@@ -57,7 +57,7 @@ Result: `nvme_system_drives` (protected list) and `nvme_data_drives` (everything
 
 ## 3. Pre-namespace cleanup — LVM / MD RAID / ZFS
 
-Source: [cleanup_storage.yml](../collection/roles/nvme_namespace/tasks/cleanup_storage.yml). Runs only if `nvme_cleanup_existing_storage=true` (the default) and at least one data drive was found.
+Source: [cleanup_storage.yml](../../collection/roles/nvme_namespace/tasks/cleanup_storage.yml). Runs only if `nvme_cleanup_existing_storage=true` (the default) and at least one data drive was found.
 
 ### 3.1 Discovery
 
@@ -98,7 +98,7 @@ The default preset path. Runs only after cleanup is done.
 
 ### 4.1 Topology collection
 
-Source: [collect_topology.yml](../collection/roles/nvme_namespace/tasks/collect_topology.yml). Hard-requires `nvme-cli` (`which nvme` must succeed; otherwise the play fails with a clear install hint).
+Source: [collect_topology.yml](../../collection/roles/nvme_namespace/tasks/collect_topology.yml). Hard-requires `nvme-cli` (`which nvme` must succeed; otherwise the play fails with a clear install hint).
 
 For every controller in `nvme_data_drives` the role records three numbers:
 
@@ -112,7 +112,7 @@ The list of dicts is stored as `nvme_topology`.
 
 ### 4.2 Skip path — `nvme_use_existing_namespaces: true`
 
-Source: [detect_existing_namespaces.yml](../collection/roles/nvme_namespace/tasks/detect_existing_namespaces.yml).
+Source: [detect_existing_namespaces.yml](../../collection/roles/nvme_namespace/tasks/detect_existing_namespaces.yml).
 
 If the operator opts to reuse what's already on the drives:
 
@@ -125,7 +125,7 @@ Default (`nvme_use_existing_namespaces=false`) falls through to §4.3.
 
 ### 4.3 Delete + recreate
 
-Source: [rebuild_namespaces.yml](../collection/roles/nvme_namespace/tasks/rebuild_namespaces.yml).
+Source: [rebuild_namespaces.yml](../../collection/roles/nvme_namespace/tasks/rebuild_namespaces.yml).
 
 For every controller in `nvme_topology`:
 
@@ -194,7 +194,7 @@ After rebuild with `nvme_small_ns_size_mb=500`, `nvme_namespace_block_size=4096`
 
 ## 5. Mode `all` — whole-drive (VM) path
 
-Used by `presets/xinnorVM/`. Source: [detect_all_drives.yml](../collection/roles/nvme_namespace/tasks/detect_all_drives.yml).
+Used by `presets/xinnorVM/`. Source: [detect_all_drives.yml](../../collection/roles/nvme_namespace/tasks/detect_all_drives.yml).
 
 Differences from mode `nvme`:
 
@@ -213,7 +213,7 @@ So in the VM preset with 5 virtio data drives, drives 1–2 become log members a
 
 ## 6. Generating `xiraid_arrays` and `xfs_filesystems`
 
-Source: [generate_raid_config.yml](../collection/roles/nvme_namespace/tasks/generate_raid_config.yml). Runs in both modes once `nvme_small_ns_devices` and `nvme_large_ns_devices` are populated.
+Source: [generate_raid_config.yml](../../collection/roles/nvme_namespace/tasks/generate_raid_config.yml). Runs in both modes once `nvme_small_ns_devices` and `nvme_large_ns_devices` are populated.
 
 ### 6.1 Capacity checks
 
@@ -279,7 +279,7 @@ These are pure facts — nothing is written to disk yet. `raid_fs` consumes them
 
 ## 7. `raid_fs` — license, arrays, filesystem, mount
 
-Source: [collection/roles/raid_fs/tasks/main.yml](../collection/roles/raid_fs/tasks/main.yml).
+Source: [collection/roles/raid_fs/tasks/main.yml](../../collection/roles/raid_fs/tasks/main.yml).
 
 ### 7.1 Variable validation
 
@@ -312,7 +312,7 @@ for each pool name that isn't already present. `already exists` in stderr is tre
 
 ### 7.5 Array creation
 
-Source: [create_array.yml](../collection/roles/raid_fs/tasks/create_array.yml). Loop body, runs once per array whose name isn't in `existing_array_names`:
+Source: [create_array.yml](../../collection/roles/raid_fs/tasks/create_array.yml). Loop body, runs once per array whose name isn't in `existing_array_names`:
 
 ```
 xicli raid create -n <name> -l <level> \
@@ -326,7 +326,7 @@ xicli raid create -n <name> -l <level> \
 
 ### 7.6 Filesystem creation
 
-Source: [create_fs.yml](../collection/roles/raid_fs/tasks/create_fs.yml). Per `xfs_filesystems` entry:
+Source: [create_fs.yml](../../collection/roles/raid_fs/tasks/create_fs.yml). Per `xfs_filesystems` entry:
 
 1. **Sniff existing state:** `blkid -s TYPE` and `blkid -s LABEL` against the data device.
 2. **Decide:** mkfs is performed if any of the following holds:
@@ -352,7 +352,7 @@ Source: [create_fs.yml](../collection/roles/raid_fs/tasks/create_fs.yml). Per `x
 
 ### 7.7 Mount unit (systemd, not fstab)
 
-Source: [mount.unit.j2](../collection/roles/raid_fs/templates/mount.unit.j2). A systemd `.mount` unit is rendered to `/etc/systemd/system/<mountpoint-as-unit-name>.mount`, e.g. `mnt-data.mount`:
+Source: [mount.unit.j2](../../collection/roles/raid_fs/templates/mount.unit.j2). A systemd `.mount` unit is rendered to `/etc/systemd/system/<mountpoint-as-unit-name>.mount`, e.g. `mnt-data.mount`:
 
 ```ini
 [Unit]
