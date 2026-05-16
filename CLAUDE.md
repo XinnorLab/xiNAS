@@ -72,6 +72,51 @@ common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace �
 | `xinas_history/` | Configuration history & rollback library (Python) — snapshots, drift detection, transactional runner |
 | `docs/` | Design docs and specs, organized by area: `Installer/`, `Storage/`, `MCP/`, `Network/`, `Notifications/`, `HealthCheck/`, `config-history/`, `healthcheck-tunables/`, `troubleshooting/`, `plans/` |
 
+### Specs and design docs (`docs/`)
+
+All design specs live under `docs/` in topic subfolders. There is no flat
+spec dump — every doc belongs to an area.
+
+| Subfolder | What goes here |
+|-----------|----------------|
+| `docs/Installer/` | Install-time / Ansible-driven behavior: `spec.md` (preset + playbook + role map), `network-spec.md`, `raid-spec.md`, `fs-exports-spec.md` |
+| `docs/Storage/` | Day-2 storage management surface (TUI screens, helpers, gRPC): `raid-management-spec.md`, `fs-shares-management-spec.md` |
+| `docs/MCP/` | MCP server spec set: `REQUIREMENTS.md`, `spec-core.md`, `spec-tools.md`, `spec-middleware.md`, `spec-config-history.md`, `spec-mail.md`, `spec-nfs-helper.md`, `spec-os.md`, `spec-server.md`, `modules.md` |
+| `docs/Network/` | Cross-cutting network management (netplan ownership, PBR, day-2 IP edits): `spec-network-management.md` |
+| `docs/Notifications/` | Email / alerting pipelines (xiNAS SMTP + xiRAID sendmail): `spec-email-notifications.md` |
+| `docs/HealthCheck/` | Individual health-check designs (one file per check, e.g. `pcie-link-check.md`) |
+| `docs/config-history/` | `xinas_history` library design (`requirements.md`, `architecture.md`, `specs.md`, `grpc-api-reference.md`) |
+| `docs/healthcheck-tunables/` | Reference docs for tunable parameters (sysctl, filesystem, perf) |
+| `docs/troubleshooting/` | Postmortems / known-issue writeups (one file per incident) |
+| `docs/plans/` | Dated implementation plans (`YYYY-MM-DD-<topic>-plan.md`, `-design.md`). Append-only history of intent — do **not** edit landed plans to reflect later changes; the live spec in the topic subfolder is the source of truth |
+
+#### Spec-first rule
+
+**Before writing code for any new function, screen, role, tool, or
+behavior change, the matching spec must exist and reflect the intended
+end state.**
+
+1. Locate the spec that owns the area (use the table above). If a doc
+   already covers it, **update the spec first** — change the behavior
+   description, add the new section, adjust the table, whatever the
+   change requires — and only then write the code.
+2. If no spec covers the area, **create one in the right subfolder**
+   before coding. Pick the filename in the style already used in that
+   subfolder (`<area>-spec.md`, `spec-<topic>.md`, etc.). If the work
+   doesn't fit any existing subfolder, create a new top-level area
+   under `docs/` (with a clear noun name like `Installer/`, `Storage/`)
+   rather than dropping the file flat into `docs/`.
+3. Keep the spec and the code in sync in the same change. A PR that
+   ships code without the matching spec update is incomplete; reviewers
+   should bounce it back.
+4. `docs/plans/` is for execution plans (sequenced work, milestones,
+   rollout), not for the durable behavior contract. Plans reference the
+   spec; the spec is what survives.
+
+The only exemptions are trivial code-only fixes that don't change
+externally observable behavior (typos, refactors, log-message tweaks,
+test-only changes). When in doubt, write the spec.
+
 ### Configuration History (`xinas_history/`)
 
 Python library providing snapshot-based configuration tracking and rollback for xiNAS:
