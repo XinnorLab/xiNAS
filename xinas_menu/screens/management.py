@@ -1,5 +1,7 @@
-"""ManagementScreen — Management submenu (Settings, Integrations, Updates)."""
+"""ManagementScreen — Management submenu (Settings, Integrations, Updates, Uninstall)."""
 from __future__ import annotations
+
+import os
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -9,10 +11,13 @@ from textual import work
 
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 
+_UNINSTALL_SCRIPT = "/opt/xiNAS/uninstall.sh"
+
 _MENU = [
     MenuItem("1", "Settings"),
     MenuItem("2", "Integrations"),
     MenuItem("3", "Check for Updates"),
+    MenuItem("4", "Uninstall xiNAS"),
     MenuItem("0", "Back"),
 ]
 
@@ -42,6 +47,25 @@ class ManagementScreen(Screen):
             self.app.push_screen(IntegrationsScreen())
         elif key == "3":
             self._do_update_check()
+        elif key == "4":
+            self._trigger_uninstall()
+
+    def _trigger_uninstall(self) -> None:
+        """Hand off to /opt/xiNAS/uninstall.sh.
+
+        Uninstall removes /opt/xiNAS while the TUI is still loaded from it,
+        so we cannot shell out and resume — we exit the app with a marker
+        result. The CLI entry point (xinas_menu.__main__.main) inspects
+        the result and execs the uninstall script.
+        """
+        if not os.path.isfile(_UNINSTALL_SCRIPT):
+            self.app.notify(
+                f"{_UNINSTALL_SCRIPT} not found. Run `git pull` in /opt/xiNAS first.",
+                severity="error",
+                timeout=10,
+            )
+            return
+        self.app.exit(result="uninstall")
 
     @work(exclusive=True)
     async def _do_update_check(self) -> None:

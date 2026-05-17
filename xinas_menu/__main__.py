@@ -98,6 +98,18 @@ def main() -> None:
     )
     app.run()
 
+    # Management screen can request a hand-off to the uninstaller. The TUI
+    # must be fully torn down first because the script removes /opt/xiNAS
+    # (the module we are executing from).
+    if getattr(app, "return_value", None) == "uninstall":
+        script = "/opt/xiNAS/uninstall.sh"
+        if not os.path.isfile(script):
+            sys.stderr.write(
+                f"xinas_menu: {script} not found — cannot launch uninstaller.\n"
+            )
+            sys.exit(1)
+        os.execvp("bash", ["bash", script])
+
 
 if __name__ == "__main__":
     main()

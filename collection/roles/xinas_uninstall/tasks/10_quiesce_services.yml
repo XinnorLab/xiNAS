@@ -1,0 +1,33 @@
+---
+# Phase A — quiesce xiNAS services so we can tear down mounts and storage
+# safely. nfs-server is intentionally left running here; it is stopped in
+# phase D after all mountpoints are gone.
+
+- name: "Quiesce | stop and disable xinas-mcp and xinas-nfs-helper"
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - xinas-mcp.service
+    - xinas-nfs-helper.service
+  register: _quiesce_stop
+  failed_when: false
+  changed_when: _quiesce_stop.changed | default(false)
+
+- name: "Quiesce | unexport all NFS shares"
+  ansible.builtin.command: exportfs -ua
+  register: _exportfs_ua
+  failed_when: false
+  changed_when: _exportfs_ua.rc == 0
+
+- name: "Quiesce | record stopped services"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'removed': uninstall_summary.removed + [
+            ['Services (stopped)', 'xinas-mcp, xinas-nfs-helper']
+          ]
+        })
+      }}

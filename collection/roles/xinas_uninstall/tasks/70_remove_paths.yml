@@ -1,0 +1,80 @@
+---
+# Phase G — remove xiNAS-owned directories and small per-file artifacts.
+
+- name: "Paths | remove xiNAS-owned directories"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ xinas_install_dir }}"          # /opt/xiNAS
+    - "{{ xinas_state_dir }}"            # /var/lib/xinas
+    - "{{ xinas_log_dir }}"              # /var/log/xinas
+    - "{{ xinas_mcp_etc_dir }}"          # /etc/xinas-mcp
+    - "{{ xinas_mcp_lib_dir }}"          # /usr/lib/xinas-mcp
+
+- name: "Paths | remove xiNAS-owned single files"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/netplan/99-xinas.yaml
+    - /etc/sudoers.d/xinas-update
+    - /etc/profile.d/99-xinas-menu.sh
+    - /etc/update-motd.d/99-xinas-status
+    - /etc/cron.d/xinas-banner
+    - /etc/ssh/sshd_config.d/10-xinas-root-access.conf
+
+- name: "Paths | check whether /etc/issue.net is xiNAS-managed"
+  ansible.builtin.command: grep -q 'Managed by xiNAS' /etc/issue.net
+  register: _issue_xinas
+  changed_when: false
+  failed_when: false
+
+- name: "Paths | remove xiNAS-managed /etc/issue.net"
+  ansible.builtin.file:
+    path: /etc/issue.net
+    state: absent
+  when: _issue_xinas.rc == 0
+
+- name: "Paths | strip xiNAS entry from /root/.claude/mcp_servers.json"
+  ansible.builtin.shell: |
+    set -e
+    f=/root/.claude/mcp_servers.json
+    [ -f "$f" ] || exit 0
+    python3 - <<'PY'
+    import json, os, sys
+    p = "/root/.claude/mcp_servers.json"
+    try:
+        with open(p) as fh:
+            data = json.load(fh)
+    except Exception:
+        sys.exit(0)
+    servers = data.get("mcpServers", {})
+    if isinstance(servers, dict) and "xinas-mcp" in servers:
+        del servers["xinas-mcp"]
+        data["mcpServers"] = servers
+    # If after cleanup the file is functionally empty, delete it.
+    if not data.get("mcpServers"):
+        os.remove(p)
+    else:
+        with open(p, "w") as fh:
+            json.dump(data, fh, indent=2)
+    PY
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+
+- name: "Paths | record removal"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'removed': uninstall_summary.removed + [
+            ['Paths', '/opt/xiNAS, /var/lib/xinas, /var/log/xinas, /etc/xinas-mcp, /usr/lib/xinas-mcp, /etc/netplan/99-xinas.yaml, /etc/sudoers.d/xinas-update, /etc/profile.d/99-xinas-menu.sh, /etc/update-motd.d/99-xinas-status, /etc/cron.d/xinas-banner, /etc/ssh/sshd_config.d/10-xinas-root-access.conf']
+          ],
+          'manual': uninstall_summary.manual + [
+            'Run `netplan apply` to release xiNAS-managed IPs from your NICs.'
+          ]
+        })
+      }}

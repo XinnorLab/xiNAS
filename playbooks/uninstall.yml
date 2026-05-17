@@ -1,0 +1,14 @@
+---
+# xiNAS uninstall playbook.
+#
+# See docs/Installer/uninstall-spec.md for the full contract.
+# This playbook is the back end of uninstall.sh and must not be invoked
+# without `-e uninstall_confirmed=true` (the role refuses to run
+# otherwise).
+
+- name: Remove xiNAS from this host
+  hosts: storage_nodes
+  gather_facts: true
+  any_errors_fatal: false
+  roles:
+    - role: xinas_uninstall

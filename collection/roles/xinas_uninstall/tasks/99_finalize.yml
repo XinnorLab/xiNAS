@@ -1,0 +1,70 @@
+---
+# Phase final — flush daemons, reload sysctls one last time, and write the
+# uninstall_summary fact to disk so uninstall.sh can render the report.
+
+- name: "Finalize | daemon-reload"
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: "Finalize | apt update so removed repos drop from cache"
+  ansible.builtin.apt:
+    update_cache: true
+  failed_when: false
+
+- name: "Finalize | write summary JSON for the bash wrapper"
+  ansible.builtin.copy:
+    content: "{{ uninstall_summary | to_nice_json }}\n"
+    dest: "{{ xinas_uninstall_summary_path }}"
+    mode: '0644'
+
+- name: "Finalize | also write a persistent uninstall log"
+  ansible.builtin.copy:
+    content: |
+      xiNAS uninstall report
+      ======================
+      timestamp: {{ uninstall_summary.timestamp }}
+      hostname:  {{ uninstall_summary.hostname }}
+      answers:
+        remove_xiraid: {{ uninstall_summary.answered.remove_xiraid }}
+        remove_ofed:   {{ uninstall_summary.answered.remove_ofed }}
+        revert_perf:   {{ uninstall_summary.answered.revert_perf }}
+
+      Removed
+      -------
+      {% for entry in uninstall_summary.removed %}
+        - {{ entry[0] }}: {{ entry[1] }}
+      {% endfor %}
+
+      Preserved
+      ---------
+      {% for entry in uninstall_summary.preserved %}
+        - {{ entry[0] }}: {{ entry[1] }}
+      {% endfor %}
+
+      Failed
+      ------
+      {% if uninstall_summary.failed | length == 0 %}
+        (none)
+      {% else %}
+      {% for entry in uninstall_summary.failed %}
+        - {{ entry[0] }}: {{ entry[1] }}
+      {% endfor %}
+      {% endif %}
+
+      Manual follow-up
+      ----------------
+      {% if uninstall_summary.manual | length == 0 %}
+        (none)
+      {% else %}
+      {% for item in uninstall_summary.manual %}
+        - {{ item }}
+      {% endfor %}
+      {% endif %}
+
+      Reboot recommended: {{ 'yes' if uninstall_summary.reboot else 'no' }}
+    dest: "{{ xinas_uninstall_log_dir }}/xinas-uninstall-{{ uninstall_summary.timestamp | regex_replace(':', '-') }}.log"
+    mode: '0644'
+
+- name: "Finalize | echo summary path"
+  ansible.builtin.debug:
+    msg: "Uninstall summary written to {{ xinas_uninstall_summary_path }}."

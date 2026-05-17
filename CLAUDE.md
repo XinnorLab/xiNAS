@@ -16,6 +16,7 @@ ansible-playbook playbooks/site.yml              # Full deployment
 ansible-playbook playbooks/common.yml            # Baseline only
 ansible-playbook playbooks/doca_ofed_install.yml # NVIDIA OFED only
 ansible-playbook playbooks/site.yml --tags "nfs_server"  # Run specific role
+./uninstall.sh                                   # Remove xiNAS (interactive)
 ```
 
 ### Interactive Menus
@@ -79,7 +80,7 @@ spec dump — every doc belongs to an area.
 
 | Subfolder | What goes here |
 |-----------|----------------|
-| `docs/Installer/` | Install-time / Ansible-driven behavior: `spec.md` (preset + playbook + role map), `network-spec.md`, `raid-spec.md`, `fs-exports-spec.md` |
+| `docs/Installer/` | Install-time / Ansible-driven behavior: `spec.md` (preset + playbook + role map), `network-spec.md`, `raid-spec.md`, `fs-exports-spec.md`, `uninstall-spec.md` (uninstaller contract) |
 | `docs/Storage/` | Day-2 storage management surface (TUI screens, helpers, gRPC): `raid-management-spec.md`, `fs-shares-management-spec.md` |
 | `docs/MCP/` | MCP server spec set: `REQUIREMENTS.md`, `spec-core.md`, `spec-tools.md`, `spec-middleware.md`, `spec-config-history.md`, `spec-mail.md`, `spec-nfs-helper.md`, `spec-os.md`, `spec-server.md`, `modules.md` |
 | `docs/Network/` | Cross-cutting network management (netplan ownership, PBR, day-2 IP edits): `spec-network-management.md` |

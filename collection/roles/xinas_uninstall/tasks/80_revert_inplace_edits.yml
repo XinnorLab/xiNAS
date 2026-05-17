@@ -1,0 +1,80 @@
+---
+# Phase H — revert files xiNAS edited but does not own outright.
+# Marker-bounded blocks are removed cleanly; for marker-less files we
+# only touch lines that match exactly what the install templates write,
+# and report divergence in the summary.
+
+# ── /etc/nfs.conf — Ansible blockinfile, marker-bounded ─────────────────
+- name: "Edits | strip Ansible-managed block from /etc/nfs.conf"
+  ansible.builtin.blockinfile:
+    path: /etc/nfs.conf
+    marker: "# {mark} ANSIBLE managed section – nfs_server role"
+    state: absent
+  register: _nfs_conf_revert
+  failed_when: false
+
+# ── /etc/ssh/sshd_config — match-only line removal ──────────────────────
+- name: "Edits | stat /etc/ssh/sshd_config"
+  ansible.builtin.stat:
+    path: /etc/ssh/sshd_config
+  register: _sshd_stat
+
+- name: "Edits | remove xiNAS Banner line from sshd_config"
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^\s*Banner\s+/etc/issue\.net\s*$'
+    state: absent
+  register: _sshd_banner_revert
+  when: _sshd_stat.stat.exists
+  failed_when: false
+
+- name: "Edits | remove xiNAS PrintMotd no from sshd_config"
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^\s*PrintMotd\s+no\s*$'
+    state: absent
+  when: _sshd_stat.stat.exists
+  failed_when: false
+
+# We do NOT remove `UsePAM yes` — that is the Ubuntu default and removing
+# it can break SSH logins.
+
+# ── /etc/pam.d/login — remove the xiNAS pam_motd hook ───────────────────
+- name: "Edits | remove xiNAS pam_motd hook from /etc/pam.d/login"
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/login
+    regexp: '^\s*session\s+optional\s+pam_motd\.so\s+motd=/run/motd\.dynamic\s*$'
+    state: absent
+  failed_when: false
+
+# ── /etc/sysctl.d/* — xiNAS-owned files only ────────────────────────────
+- name: "Edits | remove xiNAS-owned sysctl drop-ins (always — these are xiNAS files)"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    # 90-perf-vm.conf is conditional on phase 93; here we only remove
+    # drop-ins that are unconditionally xiNAS-owned. /etc/sysctl.d itself
+    # is shared system territory — do not delete the directory.
+    - /etc/sysctl.d/90-roce-lossless.conf
+
+# ── /etc/ssh: reload after revert ───────────────────────────────────────
+- name: "Edits | reload sshd"
+  ansible.builtin.service:
+    name: ssh
+    state: reloaded
+  register: _sshd_reload
+  failed_when: false
+  changed_when: _sshd_reload.changed | default(false)
+
+- name: "Edits | record reverts"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'removed': uninstall_summary.removed + [
+            ['Config edits reverted',
+             '/etc/nfs.conf block, /etc/ssh/sshd_config Banner/PrintMotd, /etc/pam.d/login pam_motd, /etc/sysctl.d/90-roce-lossless.conf']
+          ]
+        })
+      }}

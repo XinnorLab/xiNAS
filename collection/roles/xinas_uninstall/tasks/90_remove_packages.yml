@@ -1,0 +1,61 @@
+---
+# Phase I — purge xiNAS-deployed apt packages. Mandatory cleanup only
+# touches packages xiNAS itself put on the host. Anything else is
+# decided by the optional phases (91/92/93).
+
+- name: "Packages | purge xiNAS-deployed mandatory packages"
+  ansible.builtin.apt:
+    name: "{{ xinas_mandatory_apt_purge }}"
+    state: absent
+    purge: true
+    autoremove: false
+  register: _apt_mandatory
+  failed_when:
+    - _apt_mandatory.failed | default(false)
+    - "'is not installed' not in (_apt_mandatory.msg | default(''))"
+
+# Node.js: only purge if it came from the NodeSource repo xiNAS added.
+- name: "Packages | check for NodeSource APT source"
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list.d/nodesource.list
+  register: _nodesource_src
+
+- name: "Packages | purge Node.js when xiNAS-installed"
+  ansible.builtin.apt:
+    name: nodejs
+    state: absent
+    purge: true
+    autoremove: false
+  when: _nodesource_src.stat.exists
+  register: _apt_nodejs
+  failed_when:
+    - _apt_nodejs.failed | default(false)
+    - "'is not installed' not in (_apt_nodejs.msg | default(''))"
+
+- name: "Packages | remove NodeSource APT repo file"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/nodesource.list
+    - /etc/apt/keyrings/nodesource.gpg
+
+- name: "Packages | autoremove orphaned dependencies"
+  ansible.builtin.apt:
+    autoremove: true
+    purge: true
+  register: _autoremove
+  failed_when: false
+
+- name: "Packages | record purges"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'removed': uninstall_summary.removed + [
+            ['Packages purged',
+             (xinas_mandatory_apt_purge | join(', '))
+             + (', nodejs' if _nodesource_src.stat.exists else '')]
+          ]
+        })
+      }}

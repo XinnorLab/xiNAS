@@ -1,0 +1,97 @@
+---
+# Optional phase 93 — revert host performance tunings the perf_tuning role
+# applied. Gated by uninstall_revert_perf in tasks/main.yml.
+
+- name: "Perf | remove xiNAS sysctl drop-ins"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/sysctl.d/90-perf-vm.conf
+
+- name: "Perf | remove NVMe poll_queues modprobe drop-in"
+  ansible.builtin.file:
+    path: /etc/modprobe.d/nvme.conf
+    state: absent
+
+- name: "Perf | strip xiNAS kernel args from /etc/default/grub"
+  ansible.builtin.replace:
+    path: /etc/default/grub
+    regexp: '{{ item }}'
+    replace: ''
+  loop:
+    - 'intel_idle\.max_cstate=0\s*'
+    - 'transparent_hugepage=never\s*'
+    - 'mitigations=off\s+noibrs\s+noibpb\s+nopti\s+nospectre_v2\s+nospec_store_bypass_disable\s+no_stf_barrier\s+mds=off\s*'
+
+- name: "Perf | collapse double spaces and stray spaces inside GRUB_CMDLINE_LINUX"
+  ansible.builtin.replace:
+    path: /etc/default/grub
+    regexp: 'GRUB_CMDLINE_LINUX="\s+'
+    replace: 'GRUB_CMDLINE_LINUX="'
+
+- name: "Perf | tidy double spaces in GRUB_CMDLINE_LINUX"
+  ansible.builtin.replace:
+    path: /etc/default/grub
+    regexp: '  +'
+    replace: ' '
+
+- name: "Perf | update-grub"
+  ansible.builtin.command: update-grub
+  register: _update_grub
+  changed_when: _update_grub.rc == 0
+  failed_when: false
+
+- name: "Perf | update-initramfs"
+  ansible.builtin.command: update-initramfs -u -k all
+  register: _update_initramfs
+  changed_when: _update_initramfs.rc == 0
+  failed_when: false
+
+- name: "Perf | revert tuned profile to balanced"
+  ansible.builtin.command: tuned-adm profile balanced
+  register: _tuned_balanced
+  changed_when: _tuned_balanced.rc == 0
+  failed_when: false
+
+- name: "Perf | re-enable irqbalance"
+  ansible.builtin.systemd:
+    name: irqbalance.service
+    enabled: true
+    state: started
+  register: _irqbalance_start
+  failed_when: false
+  changed_when: _irqbalance_start.changed | default(false)
+
+- name: "Perf | purge perf_tuning apt packages"
+  ansible.builtin.apt:
+    name: "{{ xinas_perf_apt_purge }}"
+    state: absent
+    purge: true
+    autoremove: false
+  register: _apt_perf
+  failed_when:
+    - _apt_perf.failed | default(false)
+    - "'is not installed' not in (_apt_perf.msg | default(''))"
+
+- name: "Perf | reload sysctls from remaining /etc/sysctl.d files"
+  ansible.builtin.command: sysctl --system
+  register: _sysctl_system
+  changed_when: _sysctl_system.rc == 0
+  failed_when: false
+
+- name: "Perf | record revert + flag manual CPU-governor step"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'removed': uninstall_summary.removed + [
+            ['Perf tunings reverted',
+             '/etc/sysctl.d/90-perf-vm.conf, /etc/modprobe.d/nvme.conf, xiNAS kernel args; tuned=balanced; irqbalance re-enabled; cpufrequtils/linux-tools/tuned purged']
+          ],
+          'manual': uninstall_summary.manual + [
+            'CPU governor is still set to `performance`. Run `cpupower frequency-set -g ondemand` if you want the default.'
+          ],
+          'reboot': true
+        })
+      }}

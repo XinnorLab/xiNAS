@@ -1,0 +1,69 @@
+---
+# Optional phase 91 — remove the xiRAID package, repo, and DKMS module.
+# Gated by uninstall_remove_xiraid in tasks/main.yml.
+
+- name: "xiRAID | stop and disable xiraid-exporter"
+  ansible.builtin.systemd:
+    name: xiraid-exporter.service
+    state: stopped
+    enabled: false
+  register: _xiraid_exp_stop
+  failed_when: false
+  changed_when: _xiraid_exp_stop.changed | default(false)
+
+- name: "xiRAID | purge xiraid packages"
+  ansible.builtin.apt:
+    name: "{{ xinas_xiraid_apt_purge }}"
+    state: absent
+    purge: true
+    autoremove: false
+  register: _apt_xiraid
+  failed_when:
+    - _apt_xiraid.failed | default(false)
+    - "'is not installed' not in (_apt_xiraid.msg | default(''))"
+
+- name: "xiRAID | also purge xiraid-repo metadata package"
+  ansible.builtin.shell: |
+    set +e
+    dpkg -l | awk '/^ii.*xiraid-repo/ {print $2}' | xargs -r apt-get purge -y
+    exit 0
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: "xiRAID | dkms remove kernel module"
+  ansible.builtin.shell: |
+    set +e
+    dkms status 2>/dev/null | awk -F'[,/ ]' '/^xiraid/ {print $1}' | sort -u | while read mod; do
+      dkms remove "$mod" --all 2>/dev/null || true
+    done
+    exit 0
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: "xiRAID | remove /etc/xiraid"
+  ansible.builtin.file:
+    path: /etc/xiraid
+    state: absent
+
+- name: "xiRAID | remove Xinnor APT sources"
+  ansible.builtin.shell: |
+    set +e
+    grep -rl 'pkg\.xinnor\.io' /etc/apt/sources.list.d/ 2>/dev/null | xargs -r rm -f
+    exit 0
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: "xiRAID | record removal"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'removed': uninstall_summary.removed + [
+            ['xiRAID package', 'xiraid-core, xiraid-exporter purged; /etc/xiraid removed; Xinnor APT repo removed; DKMS module unregistered']
+          ],
+          'reboot': true
+        })
+      }}

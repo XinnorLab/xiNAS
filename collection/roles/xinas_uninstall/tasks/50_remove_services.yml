@@ -1,0 +1,32 @@
+---
+# Phase E — remove xiNAS systemd unit files. The services were stopped in
+# phase A; here we delete the unit files and the runtime directories
+# systemd would otherwise keep around.
+
+- name: "Services | delete xiNAS unit files"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/xinas-mcp.service
+    - /etc/systemd/system/xinas-nfs-helper.service
+
+- name: "Services | delete NFS-helper runtime directory"
+  ansible.builtin.file:
+    path: /run/xinas-nfs-helper
+    state: absent
+
+- name: "Services | daemon-reload"
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: "Services | record removal"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'removed': uninstall_summary.removed + [
+            ['Service units', 'xinas-mcp.service, xinas-nfs-helper.service']
+          ]
+        })
+      }}

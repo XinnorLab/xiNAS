@@ -1,0 +1,54 @@
+---
+# Phase B — remove the NFS exports xiNAS wrote. /etc/exports is entirely
+# xiNAS-templated, so it is safe to truncate to a header comment.
+
+- name: "Exports | check /etc/exports"
+  ansible.builtin.stat:
+    path: /etc/exports
+  register: _exports_stat
+
+- name: "Exports | truncate /etc/exports to header comment"
+  ansible.builtin.copy:
+    content: "# /etc/exports - cleared by xiNAS uninstall on {{ ansible_date_time.iso8601 }}\n"
+    dest: /etc/exports
+    owner: root
+    group: root
+    mode: '0644'
+  when: _exports_stat.stat.exists
+
+- name: "Exports | remove any /etc/exports.d/xinas-*.conf"
+  ansible.builtin.find:
+    paths: /etc/exports.d
+    patterns: "xinas-*.conf"
+    file_type: file
+  register: _exports_d_files
+  failed_when: false
+
+- name: "Exports | delete xiNAS export drop-ins"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _exports_d_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: _exports_d_files.files is defined
+
+- name: "Exports | reload exportfs"
+  ansible.builtin.command: exportfs -r
+  register: _exportfs_r
+  failed_when: false
+  changed_when: _exportfs_r.rc == 0
+
+- name: "Exports | record removal"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'removed': uninstall_summary.removed + [
+            ['NFS exports', '/etc/exports cleared'
+              + (', ' ~ (_exports_d_files.files | length) ~ ' drop-in(s) deleted'
+                 if (_exports_d_files.files | default([]) | length > 0) else '')
+            ]
+          ]
+        })
+      }}

@@ -1,0 +1,67 @@
+---
+- name: "Preflight | refuse to run without uninstall_confirmed=true"
+  ansible.builtin.fail:
+    msg: |
+      Refusing to run: uninstall_confirmed is not true.
+
+      The xinas_uninstall role must be invoked through uninstall.sh
+      (which handles the typed-hostname confirmation), or by passing
+      `-e uninstall_confirmed=true` after you have manually accepted
+      the destructive-action banner.
+  when: not (uninstall_confirmed | bool)
+
+- name: "Preflight | refuse to run when not root"
+  ansible.builtin.fail:
+    msg: "xinas_uninstall must run as root."
+  when: ansible_user_id != "root" and ansible_facts['user_id'] | default('') != 'root' and ansible_facts['effective_user_id'] | default(0) | int != 0
+
+- name: "Preflight | initialise summary fact"
+  ansible.builtin.set_fact:
+    uninstall_summary:
+      removed: []
+      preserved: []
+      failed: []
+      manual: []
+      reboot: false
+      timestamp: "{{ ansible_date_time.iso8601 }}"
+      hostname: "{{ ansible_hostname }}"
+      answered:
+        remove_xiraid: "{{ uninstall_remove_xiraid | bool }}"
+        remove_ofed: "{{ uninstall_remove_ofed | bool }}"
+        revert_perf: "{{ uninstall_revert_perf | bool }}"
+
+- name: "Preflight | record optional-component decisions"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'preserved': uninstall_summary.preserved + [
+            ['xiRAID package and /etc/xiraid', 'kept (user declined)']
+          ]
+        })
+      }}
+  when: not (uninstall_remove_xiraid | bool)
+
+- name: "Preflight | record OFED decision"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'preserved': uninstall_summary.preserved + [
+            ['Mellanox OFED / DOCA-Host', 'kept (user declined)']
+          ]
+        })
+      }}
+  when: not (uninstall_remove_ofed | bool)
+
+- name: "Preflight | record perf-revert decision"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'preserved': uninstall_summary.preserved + [
+            ['OS performance tunings', 'kept (user declined)']
+          ]
+        })
+      }}
+  when: not (uninstall_revert_perf | bool)

@@ -1,0 +1,29 @@
+---
+# Phase F — remove every wrapper binary xiNAS installs into /usr/local.
+# These are listed explicitly so unrelated /usr/local/bin contents are
+# never touched.
+
+- name: "Binaries | remove wrapper scripts"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /usr/local/bin/xinas-mcp
+    - /usr/local/bin/xinas-menu
+    - /usr/local/bin/xinas-setup
+    - /usr/local/bin/xinas-history
+    - /usr/local/bin/xinas-status
+    - /usr/local/bin/xinas-generate-banner
+    - /usr/local/sbin/xinas-update-git
+    - /usr/local/sbin/configure_ib_udev.sh
+
+- name: "Binaries | record removal"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'removed': uninstall_summary.removed + [
+            ['Wrappers', 'xinas-mcp, xinas-menu, xinas-setup, xinas-history, xinas-status, xinas-generate-banner, xinas-update-git']
+          ]
+        })
+      }}

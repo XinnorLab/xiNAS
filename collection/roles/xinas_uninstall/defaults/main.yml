@@ -1,0 +1,49 @@
+---
+# xinas_uninstall role — defaults.
+#
+# All three "remove this shared component too?" toggles default to false.
+# `uninstall_confirmed` must be set to true by uninstall.sh after the
+# typed-hostname gate; the role refuses to run otherwise.
+#
+# See docs/Installer/uninstall-spec.md for the full contract.
+
+uninstall_confirmed: false
+
+uninstall_remove_xiraid: false
+uninstall_remove_ofed: false
+uninstall_revert_perf: false
+
+# Paths the role expects to exist on this host. Override only for tests.
+xinas_install_dir: /opt/xiNAS
+xinas_state_dir: /var/lib/xinas
+xinas_log_dir: /var/log/xinas
+xinas_mcp_etc_dir: /etc/xinas-mcp
+xinas_mcp_lib_dir: /usr/lib/xinas-mcp
+xinas_uninstall_summary_path: /tmp/xinas-uninstall-summary.json
+xinas_uninstall_log_dir: /var/log
+
+# Apt packages the role considers "xiNAS-deployed" and therefore safe to
+# purge as part of the mandatory cleanup. Packages outside this list are
+# never touched.
+xinas_mandatory_apt_purge:
+  - nfs-kernel-server
+  - nfs-common
+
+xinas_xiraid_apt_purge:
+  - xiraid-core
+  - xiraid-exporter
+
+xinas_ofed_apt_purge:
+  - doca-all
+  - mlnx-fw-updater
+  - mlnx-nfsrdma-dkms
+
+xinas_perf_apt_purge:
+  - cpufrequtils
+  - linux-tools-common
+  - linux-tools-generic
+  - tuned
+
+# Systemd mount units we generated are identifiable by this Description prefix
+# (see collection/roles/raid_fs/templates/mount.unit.j2).
+xinas_mount_unit_signature: "xiRAID Classic "

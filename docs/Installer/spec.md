@@ -386,3 +386,39 @@ The health engine bundles many of the checks above (RAID state, mounts, exports,
 | NFS mounts but RDMA refused | `mlnx-nfsrdma-dkms` not loaded, or port 20049 blocked | `lsmod | grep rdma`, `ss -lntp | grep 20049` |
 | `xinas-nfs-helper.sock` missing at boot | Helper raced with NFS server start | `systemctl restart xinas-nfs-helper` (also tracked in commit `45ef0cc`) |
 | `cpupower` fails on VM | VM has no exposed scaling driver | Use the `xinnorVM` preset (`perf_disable_cpupower=true`) |
+
+---
+
+## 6. Uninstall
+
+Removing xiNAS from a host is described in
+[uninstall-spec.md](./uninstall-spec.md). The uninstaller is the inverse
+of [playbooks/site.yml](../../playbooks/site.yml): mandatory cleanup
+walks the install footprint in reverse-dependency order; xiRAID, OFED,
+and OS performance tunings are only removed on explicit `[y/N]`
+confirmation.
+
+Each install role maps to one uninstall phase:
+
+| Install role | Uninstall phase |
+|--------------|-----------------|
+| `xinas_mcp` | Phase A (quiesce), Phase E (unit removal), Phase G (paths) |
+| `nfs_server` | Phase B (exports), Phase D (server stop), Phase H (`/etc/nfs.conf`), Phase I (`nfs-kernel-server` purge) |
+| `exports` | Phase B (`/etc/exports`) |
+| `raid_fs` | Phase C (arrays + pools), Phase D (`*.mount` units) |
+| `nvme_namespace` | Phase C (drive clean) |
+| `xinas_menu` | Phase F (wrappers), Phase G (`/opt/xiNAS/venv`, `/etc/sudoers.d/xinas-update`) |
+| `xinas_history` | Phase F (`xinas-history` wrapper), Phase G (`/var/lib/xinas`) |
+| `motd` | Phase G (motd, banner, profile-d, cron), Phase H (`sshd_config`, `pam.d/login`) |
+| `common` | Phase J (`apt update`); the role's hostname change and `chrony.service` are intentionally not reverted |
+| `xiraid_classic` | Optional phase 91 (`uninstall_remove_xiraid`) |
+| `xiraid_exporter` | Optional phase 91 (`uninstall_remove_xiraid`) |
+| `doca_ofed` | Optional phase 92 (`uninstall_remove_ofed`) |
+| `perf_tuning` | Optional phase 93 (`uninstall_revert_perf`) |
+| `net_controllers` | Phase G removes `/etc/netplan/99-xinas.yaml`; the uninstaller does **not** run `netplan apply` (see uninstall-spec §6) |
+| `roce_lossless` | Phase H removes `/etc/sysctl.d/90-roce-lossless.conf` |
+
+When adding a new install role, extend the table above and update
+[uninstall-spec.md](./uninstall-spec.md) plus the matching phase task
+file under
+[collection/roles/xinas_uninstall/](../../collection/roles/xinas_uninstall).

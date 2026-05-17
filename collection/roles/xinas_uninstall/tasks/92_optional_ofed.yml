@@ -1,0 +1,75 @@
+---
+# Optional phase 92 — remove Mellanox DOCA-Host / OFED.
+# Gated by uninstall_remove_ofed in tasks/main.yml.
+
+- name: "OFED | check for mlnxofedinstall"
+  ansible.builtin.stat:
+    path: /usr/sbin/mlnxofedinstall
+  register: _mlnxofedinstall_stat
+
+- name: "OFED | run mlnxofedinstall --uninstall when available"
+  ansible.builtin.command: /usr/sbin/mlnxofedinstall --uninstall --force
+  when: _mlnxofedinstall_stat.stat.exists
+  register: _mlnxofedinstall_uninstall
+  changed_when: _mlnxofedinstall_uninstall.rc == 0
+  failed_when: false
+
+- name: "OFED | purge DOCA-Host meta packages"
+  ansible.builtin.apt:
+    name: "{{ xinas_ofed_apt_purge }}"
+    state: absent
+    purge: true
+    autoremove: false
+  register: _apt_ofed
+  failed_when:
+    - _apt_ofed.failed | default(false)
+    - "'is not installed' not in (_apt_ofed.msg | default(''))"
+
+- name: "OFED | remove DOCA APT sources file (mellanox-doca.list, written by doca_ofed role)"
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/mellanox-doca.list
+    state: absent
+
+- name: "OFED | sweep any other Mellanox apt sources"
+  ansible.builtin.shell: |
+    set +e
+    grep -rl 'linux\.mellanox\.com' /etc/apt/sources.list.d/ 2>/dev/null | xargs -r rm -f
+    exit 0
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: "OFED | remove Mellanox apt keys (legacy apt_key + keyring drop-ins)"
+  ansible.builtin.shell: |
+    set +e
+    # apt-key was the install method (collection/roles/doca_ofed/tasks/main.yml: apt_key url=...).
+    if command -v apt-key >/dev/null 2>&1; then
+      for key in $(apt-key list 2>/dev/null | awk '/Mellanox/{getline; print $2}'); do
+        apt-key del "$key" 2>/dev/null || true
+      done
+    fi
+    rm -f /etc/apt/keyrings/mellanox.gpg /etc/apt/trusted.gpg.d/mellanox.gpg 2>/dev/null
+    exit 0
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: "OFED | remove xiNAS-deployed IB udev / udev-helper artifacts"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/udev/rules.d/70-ib-names.rules
+    - /usr/local/sbin/configure_ib_udev.sh
+
+- name: "OFED | record removal"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'removed': uninstall_summary.removed + [
+            ['Mellanox OFED', 'doca-all, mlnx-fw-updater, mlnx-nfsrdma-dkms purged; DOCA APT source + GPG removed; IB udev rules removed']
+          ],
+          'reboot': true
+        })
+      }}

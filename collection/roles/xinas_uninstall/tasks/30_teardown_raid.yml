@@ -1,0 +1,127 @@
+---
+# Phase C — tear down xiNAS-created xiRAID arrays and spare pools. The
+# xiRAID *package* is left in place; only the arrays we built are
+# removed. If xicli is missing, the whole phase is a no-op.
+
+- name: "RAID | locate xicli"
+  ansible.builtin.command: which xicli
+  register: _xicli_path
+  changed_when: false
+  failed_when: false
+
+- name: "RAID | record skip if xicli missing"
+  ansible.builtin.set_fact:
+    uninstall_summary: >-
+      {{
+        uninstall_summary | combine({
+          'preserved': uninstall_summary.preserved + [
+            ['xiRAID arrays', 'xicli not present, nothing to tear down']
+          ]
+        })
+      }}
+  when: _xicli_path.rc != 0
+
+- name: "RAID | enumerate and tear down xiNAS-managed arrays/pools"
+  when: _xicli_path.rc == 0
+  block:
+    - name: "RAID | list current arrays"
+      ansible.builtin.command: xicli raid show -f json
+      register: _xicli_raid_show
+      changed_when: false
+      failed_when: false
+
+    - name: "RAID | list current pools"
+      ansible.builtin.command: xicli pool show -f json
+      register: _xicli_pool_show
+      changed_when: false
+      failed_when: false
+
+    - name: "RAID | parse array names"
+      ansible.builtin.set_fact:
+        _xinas_array_names: >-
+          {%- set parsed = (_xicli_raid_show.stdout | default('{}')) | from_json -%}
+          {%- if parsed is mapping -%}
+            {{ parsed.keys() | list }}
+          {%- elif parsed is iterable and parsed is not string -%}
+            {{ parsed | map(attribute='name') | list }}
+          {%- else -%}
+            []
+          {%- endif -%}
+      when: _xicli_raid_show.rc == 0
+
+    - name: "RAID | parse pool names"
+      ansible.builtin.set_fact:
+        _xinas_pool_names: >-
+          {%- set parsed = (_xicli_pool_show.stdout | default('{}')) | from_json -%}
+          {%- if parsed is mapping -%}
+            {{ parsed.keys() | list }}
+          {%- elif parsed is iterable and parsed is not string -%}
+            {{ parsed | map(attribute='name') | list }}
+          {%- else -%}
+            []
+          {%- endif -%}
+      when: _xicli_pool_show.rc == 0
+
+    - name: "RAID | stop systemd mount units before raid delete"
+      # xicli raid delete refuses if the array is mounted. The mount-unit
+      # cleanup in phase D will remove the units; here we just stop them.
+      ansible.builtin.shell: |
+        set +e
+        for unit in $(systemctl list-units --type=mount --no-legend --plain --all | awk '{print $1}'); do
+          desc=$(systemctl show -p Description --value "$unit" 2>/dev/null)
+          case "$desc" in
+            "{{ xinas_mount_unit_signature }}"*)
+              systemctl stop "$unit" 2>/dev/null
+              ;;
+          esac
+        done
+        exit 0
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: "RAID | delete xiNAS-named arrays"
+      ansible.builtin.command: "xicli raid delete -n {{ item }} --force"
+      loop: "{{ _xinas_array_names | default([]) }}"
+      register: _raid_delete
+      changed_when: _raid_delete.rc == 0
+      failed_when:
+        - _raid_delete.rc is defined
+        - _raid_delete.rc != 0
+        - "'not found' not in (_raid_delete.stderr | default(''))"
+        - "'does not exist' not in (_raid_delete.stderr | default(''))"
+
+    - name: "RAID | delete xiNAS-named spare pools"
+      ansible.builtin.command: "xicli pool delete -n {{ item }}"
+      loop: "{{ _xinas_pool_names | default([]) }}"
+      register: _pool_delete
+      changed_when: _pool_delete.rc == 0
+      failed_when:
+        - _pool_delete.rc is defined
+        - _pool_delete.rc != 0
+        - "'not found' not in (_pool_delete.stderr | default(''))"
+        - "'does not exist' not in (_pool_delete.stderr | default(''))"
+
+    - name: "RAID | clean every NVMe device once arrays are gone"
+      ansible.builtin.shell: |
+        set +e
+        for dev in /dev/nvme[0-9]*n[0-9]*; do
+          [ -e "$dev" ] || continue
+          xicli drive clean -d "$dev" 2>/dev/null || true
+        done
+        exit 0
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: "RAID | record tear-down"
+      ansible.builtin.set_fact:
+        uninstall_summary: >-
+          {{
+            uninstall_summary | combine({
+              'removed': uninstall_summary.removed + [
+                ['xiRAID arrays', (_xinas_array_names | default([])) | join(', ') if _xinas_array_names | default([]) | length else 'none found'],
+                ['xiRAID pools',  (_xinas_pool_names  | default([])) | join(', ') if _xinas_pool_names  | default([]) | length else 'none found']
+              ]
+            })
+          }}
