@@ -394,6 +394,8 @@ def _parse_pcie_speed(raw):
         gts = float(gts_str)
     except ValueError:
         return None
+    # Lookup by canonical key (e.g. "16.0"). Some kernels print "16" without
+    # the trailing zero — normalize.
     key = gts_str if gts_str in _PCIE_GEN_GTS else f"{gts:.1f}"
     return (_PCIE_GEN_GTS.get(key), gts)
 
@@ -1287,6 +1289,13 @@ def check_nfs(exp, checks):
 
     if "threads_config" in checks:
         expected = resolve_nfs_threads_target(exp)
+        runtime_raw = read_file("/proc/fs/nfsd/threads")
+        try:
+            runtime = int(runtime_raw) if runtime_raw is not None else None
+        except ValueError:
+            runtime = None
+        runtime_suffix = f" (runtime={runtime})" if runtime is not None else ""
+
         if read_file("/etc/nfs.conf") is None:
             results.append(CheckResult("NFS", "threads_config", "SKIP",
                 "N/A", f"threads={expected}",
@@ -1294,30 +1303,59 @@ def check_nfs(exp, checks):
         else:
             raw = nfs_conf_get("nfsd", "threads")
             if raw is None:
-                results.append(CheckResult("NFS", "threads_config", "WARN",
-                    "threads not set", f"threads={expected}",
-                    impact="Thread count not persisted - will revert to nfs-utils default after reboot",
-                    fix_hint=f"Add threads={expected} under [nfsd] in /etc/nfs.conf"))
+                if runtime is not None and runtime > 1:
+                    results.append(CheckResult("NFS", "threads_config", "FAIL",
+                        f"threads not set{runtime_suffix}", f"threads={expected}",
+                        impact=(f"Drift between /etc/nfs.conf and live state — "
+                                f"restart will drop from {runtime} threads to nfs-utils default"),
+                        fix_hint=f"Add threads={expected} under [nfsd] in /etc/nfs.conf"))
+                else:
+                    results.append(CheckResult("NFS", "threads_config", "WARN",
+                        f"threads not set{runtime_suffix}", f"threads={expected}",
+                        impact="Thread count not persisted - will revert to nfs-utils default after reboot",
+                        fix_hint=f"Add threads={expected} under [nfsd] in /etc/nfs.conf"))
             else:
                 try:
                     configured = int(raw)
                 except ValueError:
                     results.append(CheckResult("NFS", "threads_config", "WARN",
-                        f"threads={raw}", f"threads={expected}",
+                        f"threads={raw}{runtime_suffix}", f"threads={expected}",
                         impact="Non-numeric threads value in /etc/nfs.conf",
                         fix_hint=f"Set threads={expected} under [nfsd] in /etc/nfs.conf"))
                 else:
-                    if configured == expected:
+                    actual_disp = f"threads={configured}{runtime_suffix}"
+                    drift = runtime is not None and configured != runtime
+                    # A restart that drops thread count by half or more is
+                    # treated as critical drift — the persisted config does
+                    # not reflect the live tuning and a service restart will
+                    # tank concurrent client performance.
+                    critical_drift = drift and configured < runtime and (
+                        configured * 2 <= runtime or runtime - configured >= 16
+                    )
+
+                    if configured == expected and not drift:
                         results.append(CheckResult("NFS", "threads_config", "PASS",
-                            f"threads={configured}", f"threads={expected}"))
+                            actual_disp, f"threads={expected}"))
+                    elif critical_drift:
+                        results.append(CheckResult("NFS", "threads_config", "FAIL",
+                            actual_disp, f"threads={expected}",
+                            impact=(f"Drift between /etc/nfs.conf and live state — "
+                                    f"restart will drop from {runtime} to {configured} threads"),
+                            fix_hint=f"Set threads={expected} under [nfsd] in /etc/nfs.conf to match live state"))
+                    elif drift:
+                        results.append(CheckResult("NFS", "threads_config", "WARN",
+                            actual_disp, f"threads={expected}",
+                            impact=(f"Configured thread count differs from runtime "
+                                    f"({configured} vs {runtime}) — won't survive restart"),
+                            fix_hint=f"Set threads={expected} under [nfsd] in /etc/nfs.conf"))
                     elif configured < expected:
                         results.append(CheckResult("NFS", "threads_config", "WARN",
-                            f"threads={configured}", f"threads={expected}",
+                            actual_disp, f"threads={expected}",
                             impact="Configured thread count below CPU core count - will under-provision after reboot",
                             fix_hint=f"Set threads={expected} under [nfsd] in /etc/nfs.conf"))
                     else:
                         results.append(CheckResult("NFS", "threads_config", "WARN",
-                            f"threads={configured}", f"threads={expected}",
+                            actual_disp, f"threads={expected}",
                             impact="Configured thread count exceeds CPU core count - wasted scheduling overhead after reboot",
                             fix_hint=f"Set threads={expected} under [nfsd] in /etc/nfs.conf to match CPU core count"))
 
