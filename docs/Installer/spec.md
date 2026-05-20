@@ -1,18 +1,19 @@
 # xiNAS Installer Specification
 
-This document describes the xiNAS installer surface area: deployment presets, Ansible playbooks, the parameters each role applies, and the post-install checks that confirm a successful deployment.
+This document describes the xiNAS installer surface area: deployment presets, Ansible playbooks, the parameters each role applies, the post-install checks that confirm a successful deployment, and the non-interactive (unattended) install path (§7).
 
 Source layout this spec is derived from:
 
 - Presets: [presets/default/](../../presets/default), [presets/xinnorVM/](../../presets/xinnorVM)
 - Playbooks: [playbooks/site.yml](../../playbooks/site.yml), [playbooks/common.yml](../../playbooks/common.yml), [playbooks/doca_ofed_install.yml](../../playbooks/doca_ofed_install.yml)
 - Roles: [collection/roles/](../../collection/roles)
+- Install scripts: [install.sh](../../install.sh), [prepare_system.sh](../../prepare_system.sh), [autoinstall.sh](../../autoinstall.sh)
 
 ---
 
 ## 1. Presets
 
-Presets live under [presets/](../../presets) and are selected from the interactive installer (`prepare_system.sh` → `startup_menu.sh`). Each preset directory contains a `playbook.yml` that defines the role execution order plus a small set of YAML/J2 files that override role defaults.
+Presets live under [presets/](../../presets) and are selected from the interactive installer (`prepare_system.sh` → `startup_menu.sh`) or named non-interactively for unattended installs (§7). Each preset directory contains a `playbook.yml` that defines the role execution order plus a small set of YAML/J2 files that override role defaults.
 
 ### 1.1 `presets/default/` — physical NVMe storage node
 
@@ -143,6 +144,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 - EULA accepted automatically (`xiraid_accept_eula=true`).
 - No auto-reboot (`xiraid_auto_reboot=false`).
 - License file expected at `/tmp/license` (cleared on reboot — re-enter via the menu before deploying).
+- **Does not wipe `/etc/xiraid` on re-run.** The role ensures `/etc/xiraid`, `/etc/xiraid/raids`, and `/etc/xiraid/pools` exist (mode `0755`) but never deletes them. `apt`'s no-op install on an already-installed `xiraid-core` does not re-run the postinst that creates those subdirs, so the role must create them itself — otherwise `xicli raid create` fails with `ENOENT` on `/etc/xiraid/raids/*.conf.tmp.lock`. Re-running the role on a provisioned node preserves live array config (`raids/*.conf`); scrubbing config is the uninstaller's job (`purge_xiraid`), not this role's.
 
 ### 3.5 `nvme_namespace` — drive discovery / namespace rebuild
 
@@ -422,3 +424,136 @@ When adding a new install role, extend the table above and update
 [uninstall-spec.md](./uninstall-spec.md) plus the matching phase task
 file under
 [collection/roles/xinas_uninstall/](../../collection/roles/xinas_uninstall).
+
+---
+
+## 7. Non-interactive (unattended) install
+
+The interactive menus (`startup_menu.sh` / `simple_menu.sh`) are the
+default install path. For scripted server provisioning — kickstart,
+cloud-init, golden-image pipelines, fleet rollout — xiNAS also exposes
+a fully non-interactive path that performs the same work the "Install"
+menu entry does, with no TTY prompts.
+
+### 7.1 Entry points
+
+| Entry point | Use when |
+|-------------|----------|
+| [autoinstall.sh](../../autoinstall.sh) | The repo is already on the host (cloned/copied). Run `sudo ./autoinstall.sh ...` directly. |
+| [install.sh](../../install.sh) with `XINAS_UNATTENDED=1` | One-command remote bootstrap. Clones the repo to `/opt/xiNAS`, installs dependencies, then hands off to `autoinstall.sh`. |
+
+`autoinstall.sh` is the engine; `install.sh` unattended mode is a thin
+bootstrap wrapper around it. Both are bash — the install flow runs
+before the Python TUI exists, and an unattended path is inherently
+not a TUI surface.
+
+### 7.2 What it does
+
+`autoinstall.sh` reproduces the menu's `install_menu` → `apply_preset`
+→ `run_playbook` sequence without prompts:
+
+1. Resolve configuration (answer file → environment → CLI flags; later
+   wins).
+2. Validate: preset exists, the license file exists and is non-empty,
+   inventory exists. On any error nothing is applied (exit 1).
+3. Require root (skipped for `--check` / `--dry-run`).
+4. Ensure the xiRAID license file is in place at `/tmp/license`
+   (mode 0600) — copied from `--license-file` when that points
+   elsewhere.
+5. Bootstrap dependencies if `ansible-playbook` is missing — runs
+   `prepare_system.sh` in package-only mode — unless `--skip-prepare`.
+6. Apply the selected preset: identical file copies to the menu's
+   `apply_preset` (preset YAML/J2 → role `defaults/`, preset
+   `playbook.yml` → `playbooks/site.yml`).
+7. Purge any pre-existing xiRAID packages (unless `--no-purge-xiraid`;
+   see §7.3 for the `existing-raid` default).
+8. Run `ansible-playbook playbooks/site.yml -i <inventory> -v` with the
+   resolved extra-vars, teeing output to `/var/log/xinas/install.log`.
+9. Print `xinas-status` and exit with the playbook's exit code.
+
+### 7.3 Configuration
+
+Resolution precedence, lowest to highest:
+
+1. **Answer file** — a `KEY=VALUE` shell fragment. Default
+   `/etc/xinas/autoinstall.conf`; override with `--config PATH` or
+   `XINAS_AUTOINSTALL_CONFIG`. An explicitly named answer file that is
+   missing is a fatal error; the default path is silently skipped when
+   absent.
+2. **Environment variables** (`XINAS_*`).
+3. **CLI flags**.
+
+| Setting | Answer-file key | Env var | CLI flag | Default |
+|---------|-----------------|---------|----------|---------|
+| Preset | `preset` | `XINAS_PRESET` | `--preset` | `default` |
+| License file | `license_file` | `XINAS_LICENSE_FILE` | `--license-file` | `/tmp/license` |
+| Hostname | `hostname` | `XINAS_HOSTNAME` | `--hostname` | role default `xiNAS-<HWKEY>` |
+| Inventory | `inventory` | `XINAS_INVENTORY` | `--inventory` | `inventories/lab.ini` |
+| Extra Ansible vars | `extra_vars` | `XINAS_EXTRA_VARS` | `--extra-vars` | — |
+| Purge xiRAID first | `purge_xiraid` | `XINAS_PURGE_XIRAID` | `--no-purge-xiraid` | `yes` (`no` for `existing-raid`) |
+| Skip dep bootstrap | `skip_prepare` | `XINAS_SKIP_PREPARE` | `--skip-prepare` | `no` |
+
+**Presets:** `default`, `xinnorVM`, `existing-raid`. `existing-raid`
+applies the `default` preset files but adds
+`xiraid_skip_install=true nvme_auto_namespace=false` — the
+non-interactive equivalent of the menu's "Use Existing RAID Arrays"
+profile. For that preset xiRAID purge defaults to `no` (existing
+arrays need the running xiRAID); it is honoured only if explicitly
+requested.
+
+**License:** the license is read from a file only. When `license_file`
+is not set it defaults to `/tmp/license` — the path the TUI
+([license_screen.py](../../xinas_menu/screens/startup/license_screen.py))
+and the bash menus write to. The file must exist and be non-empty; a
+missing or empty license is a fatal error (there is no interactive
+fallback, and no inline-string or URL source). When `license_file`
+points somewhere other than `/tmp/license` it is copied there, where
+`raid_fs` applies it via `xicli license update`.
+
+**Hostname:** when set it is passed as `-e xinas_hostname=<NAME>`;
+otherwise the `common` role keeps its `xiNAS-<HWKEY>` default.
+
+### 7.4 Dry run / validation
+
+- `--dry-run` — resolve config, validate it, print the exact
+  `ansible-playbook` command, and exit `0` without changing the system.
+- `--check` — validate configuration only (no root needed, no license
+  write, no preset copy, no playbook run).
+
+### 7.5 Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Playbook completed successfully (or `--dry-run` / `--check` passed) |
+| 1 | Configuration / license error — nothing applied |
+| 2 | Dependency bootstrap failed |
+| other | `ansible-playbook` exit code (playbook failure) |
+
+### 7.6 Examples
+
+Remote one-command, default preset, license already placed at
+`/tmp/license`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install.sh \
+  | sudo XINAS_UNATTENDED=1 XINAS_PRESET=default bash
+```
+
+Local, repo already present, VM preset, license from a specific file:
+
+```bash
+sudo ./autoinstall.sh --preset xinnorVM --license-file /root/node.lic
+```
+
+Answer file (`/etc/xinas/autoinstall.conf`):
+
+```sh
+preset=default
+license_file=/root/node.lic
+hostname=xinas-rack1-node3
+```
+
+```bash
+sudo ./autoinstall.sh             # picks up the answer file automatically
+sudo ./autoinstall.sh --dry-run   # validate without touching the system
+```

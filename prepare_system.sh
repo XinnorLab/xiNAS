@@ -135,6 +135,14 @@ fi
 
 chmod +x startup_menu.sh simple_menu.sh
 
+# Unattended mode: dependencies are installed; skip the interactive menu.
+# install.sh / autoinstall.sh take over provisioning headlessly.
+if [ "${XINAS_UNATTENDED:-0}" = "1" ]; then
+    [ "$QUIET_MODE" != "1" ] && \
+        echo -e "${GREEN}System prepared (unattended mode — menu skipped)${NC}"
+    exit 0
+fi
+
 if [ "$EXPERT" -eq 1 ]; then
     ./startup_menu.sh
     status=$?

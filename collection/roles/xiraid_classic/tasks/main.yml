@@ -1,10 +1,4 @@
 ---
-- name: Remove legacy /etc/xiraid directory if present
-  ansible.builtin.file:
-    path: /etc/xiraid
-    state: absent
-  tags: [xiraid, cleanup]
-
 - name: Ensure kernel headers present (xiRAID DKMS needs them)
   ansible.builtin.apt:
     name: "linux-headers-{{ ansible_kernel }}"
@@ -65,11 +59,15 @@
   register: xiraid_pkgs
   tags: [xiraid, install]
 
-- name: Ensure /etc/xiraid directory exists
+- name: Ensure /etc/xiraid config directories exist
   ansible.builtin.file:
-    path: /etc/xiraid
+    path: "{{ item }}"
     state: directory
     mode: '0755'
+  loop:
+    - /etc/xiraid
+    - /etc/xiraid/raids
+    - /etc/xiraid/pools
   tags: [xiraid, install]
 
 - name: Accept xiRAID EULA

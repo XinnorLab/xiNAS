@@ -52,6 +52,23 @@ common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace
 → raid_fs → exports → nfs_server → xinas_history → perf_tuning → motd
 ```
 
+### Unattended Installation
+
+For scripted provisioning (kickstart, cloud-init, golden images, fleet rollout), xiNAS supports a fully non-interactive install path. Place the xiRAID license at `/tmp/license` (or pass `--license-file`), set `XINAS_UNATTENDED=1`, and choose a preset:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install.sh \
+  | sudo XINAS_UNATTENDED=1 XINAS_PRESET=default bash
+```
+
+If the repository is already on the host, run the provisioning engine directly:
+
+```bash
+sudo ./autoinstall.sh --preset xinnorVM --license-file /root/node.lic
+```
+
+Configuration can also come from an answer file (`/etc/xinas/autoinstall.conf`). `--dry-run` validates the configuration without touching the system. See [docs/Installer/spec.md](docs/Installer/spec.md) §7 for the full contract — config keys, the license file, and exit codes.
+
 ### Client Installation
 
 Run on each NFS client machine as root:

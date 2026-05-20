@@ -67,6 +67,12 @@ run_quiet() {
     fi
 }
 
+# ── Unattended (non-interactive) mode ─────────────────────────────────────────
+# Set XINAS_UNATTENDED=1 to provision without any TTY prompts. Provisioning is
+# driven by XINAS_PRESET / XINAS_LICENSE* and handed off to autoinstall.sh.
+# See docs/Installer/spec.md section 7.
+UNATTENDED="${XINAS_UNATTENDED:-0}"
+
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "${BLUE}"
 cat << 'EOF'
@@ -114,13 +120,17 @@ echo ""
 echo -e "  ${DIM}The installer will set up required packages${NC}"
 echo -e "  ${DIM}(git, Ansible, yq) and launch the provisioning menu.${NC}"
 echo ""
-read -p "  Ready to proceed? [Y/n] " -n 1 -r </dev/tty
-echo ""
-if [[ $REPLY =~ ^[Nn]$ ]]; then
+if [[ "$UNATTENDED" == "1" ]]; then
+    info "Unattended mode — proceeding without confirmation"
+else
+    read -p "  Ready to proceed? [Y/n] " -n 1 -r </dev/tty
     echo ""
-    warn "Installation cancelled. Run this script again when ready."
-    echo ""
-    exit 0
+    if [[ $REPLY =~ ^[Nn]$ ]]; then
+        echo ""
+        warn "Installation cancelled. Run this script again when ready."
+        echo ""
+        exit 0
+    fi
 fi
 
 # ── Step 1: Requirements ──────────────────────────────────────────────────────
@@ -139,9 +149,13 @@ if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     if [[ "$ID" != "ubuntu" ]]; then
         warn "xiNAS is designed for Ubuntu — detected: ${BOLD}$PRETTY_NAME${NC}"
-        read -p "     Continue anyway? [y/N] " -n 1 -r </dev/tty
-        echo ""
-        [[ ! $REPLY =~ ^[Yy]$ ]] && exit 1
+        if [[ "$UNATTENDED" == "1" ]]; then
+            warn "Unattended mode — continuing on unsupported OS"
+        else
+            read -p "     Continue anyway? [y/N] " -n 1 -r </dev/tty
+            echo ""
+            [[ ! $REPLY =~ ^[Yy]$ ]] && exit 1
+        fi
     else
         ok "OS: ${BOLD}$PRETTY_NAME${NC}"
     fi
@@ -207,7 +221,21 @@ chmod +x ./*.sh 2>/dev/null || true
 step "Preparing system"
 info "Detailed log: ${WHITE}${LOG_FILE}${NC}"
 
-XINAS_QUIET=1 XINAS_LOG="$LOG_FILE" ./prepare_system.sh
+XINAS_QUIET=1 XINAS_UNATTENDED="$UNATTENDED" XINAS_LOG="$LOG_FILE" ./prepare_system.sh
+
+# ── Unattended provisioning ───────────────────────────────────────────────────
+# prepare_system.sh installed the dependencies and (in unattended mode) skipped
+# the interactive menu. Hand off to autoinstall.sh, which applies the preset and
+# runs the playbook headlessly. autoinstall.sh reads its XINAS_* config from the
+# environment this script already inherited.
+if [[ "$UNATTENDED" == "1" ]]; then
+    step "Running unattended provisioning"
+    set +e
+    ./autoinstall.sh
+    rc=$?
+    set -e
+    exit "$rc"
+fi
 
 # ── Ensure xinas-menu wrapper exists ─────────────────────────────────────────
 # The xinas_menu Ansible role creates this during full provisioning (site.yml).
