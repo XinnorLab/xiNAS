@@ -1,0 +1,32 @@
+extends: ["spectral:oas"]
+rules:
+  envelope-required-on-responses:
+    severity: warn
+    description: |
+      Every non-stream JSON response must wrap with the Envelope schema,
+      either directly via $ref or via allOf containing an Envelope $ref.
+    given: $.paths[*][*].responses[*].content['application/json'].schema
+    resolved: false
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          oneOf:
+            - type: object
+              required: ["allOf"]
+              properties:
+                allOf:
+                  type: array
+                  contains:
+                    type: object
+                    required: ["$ref"]
+                    properties:
+                      "$ref":
+                        type: string
+                        pattern: "Envelope"
+            - type: object
+              required: ["$ref"]
+              properties:
+                "$ref":
+                  type: string
+                  pattern: "Envelope|PlanResponse|TaskAcceptedResponse"
