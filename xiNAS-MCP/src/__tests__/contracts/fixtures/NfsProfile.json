@@ -1,0 +1,54 @@
+{
+  "kind": "NfsProfile",
+  "id": "default",
+  "metadata": {
+    "revision": 1,
+    "created_at": "2026-05-26T16:00:00Z",
+    "modified_at": "2026-05-26T16:00:00Z",
+    "owner": "system:installer",
+    "source": "ansible:nfs_server",
+    "validation_status": "valid"
+  },
+  "spec": {
+    "versions": {
+      "v3":   { "enabled": false },
+      "v4_0": { "enabled": false },
+      "v4_1": { "enabled": true  },
+      "v4_2": { "enabled": true  }
+    },
+    "rdma": { "enabled": true, "port": 20049 },
+    "threads": { "count": 64 },
+    "v3_locking": {
+      "enabled": false,
+      "fixed_rpc_ports": {
+        "nfsd": 2049,
+        "mountd": 20048,
+        "lockd_udp": 32803,
+        "lockd_tcp": 32803,
+        "statd": 32765,
+        "statd_outgoing": 32766
+      }
+    },
+    "v4_recovery": {
+      "backend": "nfsdcltrack",
+      "recovery_root": "/var/lib/nfs/v4recovery",
+      "server_scope": ""
+    },
+    "service_policy": {
+      "on_thread_count_change": "reload",
+      "on_version_change":      "restart",
+      "on_rdma_change":         "restart",
+      "on_v3_settings_change":  "restart"
+    }
+  },
+  "status": {
+    "effective_files": {},
+    "running": {
+      "thread_count": 64,
+      "rdma_listening": true,
+      "rdma_port": 20049,
+      "active_versions": ["4.1", "4.2"]
+    },
+    "warnings": []
+  }
+}

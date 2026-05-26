@@ -1,0 +1,9 @@
+{
+  "request_id": "00000000-0000-0000-0000-000000000001",
+  "correlation_id": "fixture-envelope-1",
+  "state_revision": 1,
+  "warnings": [],
+  "errors": [],
+  "links": {},
+  "result": null
+}
