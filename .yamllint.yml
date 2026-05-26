@@ -1,0 +1,11 @@
+extends: default
+rules:
+  line-length:
+    max: 200
+  truthy:
+    check-keys: false
+  document-start: disable
+ignore: |
+  .claude/
+  node_modules/
+  xiNAS-MCP/node_modules/
