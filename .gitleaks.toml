@@ -1,0 +1,12 @@
+title = "gitleaks config for xiNAS"
+
+[extend]
+useDefault = true
+
+# Each [[allowlists]] entry is AND-evaluated: a finding is suppressed
+# only when ALL of paths/regexes/commits/stopwords match.
+
+[[allowlists]]
+description = "Bash assignment of git rev-parse HEAD in startup_menu.sh"
+paths = ['''^startup_menu\.sh$''']
+regexes = ['''local_commit=\$\(git ''']
