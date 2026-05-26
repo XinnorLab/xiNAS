@@ -65,7 +65,7 @@ PRs" anti-pattern while still surfacing every issue.
 |---|---|---|
 | `typescript-typecheck` (`tsc --noEmit`) | **Blocking** | n/a |
 | `typescript-lint` (`biome lint`, `correctness` rules only) | **Blocking** | n/a; raise rule categories incrementally |
-| `typescript-format` (`biome format --check`) | **Warn-only** | After backlog cleanup PR series |
+| `typescript-format` (`biome format src/` — Biome 1.9.4 uses no `--check` flag) | **Warn-only** | After backlog cleanup PR series |
 | `typescript-tests` (`vitest run`) | **Blocking** (one sanity test) | n/a |
 | `typescript-contracts` (vitest schema-fixture validation against `api-v1.yaml`) | **Blocking** | n/a; expands as real handlers and mock server land |
 | `python-lint` (`ruff check`) | **Warn-only** | After lint cleanup PR series |
@@ -101,11 +101,15 @@ Verified empirically against the current tree on 2026-05-26.
 - **`ruff format --check`**: would reformat **91 of 100** Python
   files. A single format pass PR replaces this with a one-time
   mechanical diff, after which the gate flips to blocking.
-- **`pyright`** in `basic` mode: reports **706 errors**, dominated
-  by `reportMissingImports` because runtime deps (`textual`,
-  `psutil`, etc.) are not declared in `pyproject.toml`. Adding
-  runtime deps is a separate, larger PR that belongs outside the
-  CI bootstrap.
+- **`pyright`** in `basic` mode with `reportMissingImports = "warning"`:
+  reports **199 errors, 249 warnings**. (An earlier draft of this
+  spec recorded 706; that was a run before the `[tool.pyright]`
+  config in `pyproject.toml` fully applied. Missing-imports
+  correctly downgrade to warnings under the real config, leaving
+  199 true type errors.) Adding the missing runtime deps
+  (`textual`, `psutil`, etc.) is a separate, larger PR; once that
+  lands the gate flips to blocking. Verified on CI run
+  [26475296230](https://github.com/XinnorLab/xiNAS/actions/runs/26475296230).
 - **`markdown`**: ~3,500 lines of existing markdown under `docs/`
   and the project README that would fail default
   `markdownlint-cli2` rules.
@@ -134,12 +138,22 @@ Verified empirically against the current tree on 2026-05-26.
   PR. The custom `envelope-required-on-responses` rule (warn-only)
   also passes against the current spec when run with `resolved:
   false` so it sees raw `$ref` rather than dereferenced schemas.
-- **`gitleaks`**: no existing secrets in the tree; the false
-  positives (demo IPs in user CLAUDE.md, xiRAID license fingerprint)
-  are accommodated by an allow-list in `.gitleaks.toml`.
-- **`ansible-lint`**: existing roles pass default `production`
-  profile rules with one documented skip (`risky-shell-pipe`) for
-  package-install idioms.
+- **`gitleaks`** via `gitleaks/gitleaks-action@v2`: no existing
+  secrets in the tree; the false positive (bash assignment of
+  `git rev-parse HEAD` in `startup_menu.sh`) is suppressed by a
+  narrow allow-list in `.gitleaks.toml`. **The action requires
+  `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` in the job env for
+  `pull_request` events** — without it the action errors out
+  before running any scan. The workflow passes the
+  automatically-provisioned token; no manual secret setup needed.
+- **`ansible-lint`** with `profile: min` and one documented skip
+  (`risky-shell-pipe`) for package-install idioms: passes with
+  **0 failures, 0 warnings**. An earlier draft of this spec
+  claimed `production` profile worked; the actual measurement
+  showed **463 failures** at `production`, dominated by
+  `var-naming` (355 of 463). The bootstrap ships at `min` to keep
+  the gate blocking from day 1; graduation to `basic` then
+  `production` is tracked in the backfill plan below.
 
 ### Biome version pinning
 
@@ -216,7 +230,7 @@ typescript-format:
         cache-dependency-path: xiNAS-MCP/package-lock.json
     - run: npm ci
       working-directory: xiNAS-MCP
-    - run: npx biome format --check src/
+    - run: npx biome format src/   # Biome 1.9.4 check-mode is the default; no --check flag
       working-directory: xiNAS-MCP
 ```
 
@@ -430,7 +444,7 @@ Add to `scripts`:
 
 ```json
 "lint": "biome lint src/",
-"format:check": "biome format --check src/",
+"format:check": "biome format src/",
 "format:write": "biome format --write src/",
 "test": "vitest run",
 "test:contracts": "vitest run src/__tests__/contracts"
@@ -570,9 +584,22 @@ by smallest-cost-first.
 9. **Pyright graduation** (per module, separate PRs):
    - Raise `xinas_history/` to `standard`, fix annotations, repeat
      for `xinas_menu/` and `xiNAS-MCP/nfs-helper/`.
+10. **Ansible-lint graduation** (`min` → `basic` → `production`):
+    - Start with `basic`: fix `var-naming` violations (355 of the 463
+      `production` failures). Likely a multi-PR series given the
+      breadth across roles.
+    - Then `production`: fix `name`, `jinja`, `yaml`, and
+      `no-changed-when` violations.
+11. **Ajv import cleanup** (1 PR):
+    - The contract test currently type-erases the Ajv import
+      (`as any`) because Ajv 8.x's CJS-style `export = Ajv` types
+      don't play nicely with `tsconfig module: Node16`. Switch to
+      `import Ajv from "ajv/dist/ajv.js"` (bypasses the package
+      exports map) or migrate to a TS-native validator like zod
+      (which is already a dependency).
 
-Steps 6, 7, and 8 are the largest single items; everything before
-them is small enough to land in one PR each.
+Steps 6, 7, 8, and 10 are the largest single items; everything else
+is small enough to land in one PR each.
 
 ## Contract test scaffold (lands in bootstrap)
 
@@ -614,9 +641,21 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename } from 'node:path';
 import yaml from 'js-yaml';
 import $RefParser from '@apidevtools/json-schema-ref-parser';
-import Ajv from 'ajv';
-import addFormats from 'ajv-formats';
+// Ajv 8.x publishes CJS-style `export = Ajv` types. Under tsconfig
+// `module: Node16`, the default import resolves to a namespace, not
+// a constructible class, so `new Ajv(...)` fails `tsc --noEmit`
+// even though vitest's esbuild loader runs it fine. The minimal fix
+// is to type-erase via `as any`; long-term, switch to
+// `import Ajv from "ajv/dist/ajv.js"` or migrate to a TS-native
+// validator (zod is the obvious candidate since it's already a dep).
+import AjvImport from 'ajv';
+import addFormatsImport from 'ajv-formats';
 import { describe, it, expect, beforeAll } from 'vitest';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const Ajv = AjvImport as any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const addFormats = addFormatsImport as any;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const specPath = resolve(here, '..', '..', '..', '..', 'docs', 'control-path', 'api-v1.yaml');
@@ -624,7 +663,8 @@ const fixturesDir = resolve(here, 'fixtures');
 
 describe('OpenAPI schema contract', () => {
   let schemas: Record<string, unknown> = {};
-  let ajv: Ajv;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let ajv: any;
 
   beforeAll(async () => {
     const raw = yaml.load(readFileSync(specPath, 'utf8')) as Record<string, unknown>;
