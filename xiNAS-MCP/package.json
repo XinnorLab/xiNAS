@@ -7,7 +7,12 @@
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "lint": "biome lint src/",
+    "format:check": "biome format --check src/",
+    "format:write": "biome format --write src/",
+    "test": "vitest run",
+    "test:contracts": "vitest run src/__tests__/contracts"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.10.0",
@@ -19,11 +24,18 @@
     "zod-to-json-schema": "^3.25.1"
   },
   "devDependencies": {
+    "@apidevtools/json-schema-ref-parser": "^11.7.0",
+    "@biomejs/biome": "~1.9.4",
     "@types/express": "^5.0.0",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.0.0",
     "@types/uuid": "^9.0.0",
+    "ajv": "^8.17.0",
+    "ajv-formats": "^3.0.1",
+    "js-yaml": "^4.1.0",
     "tsx": "^4.7.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^2.1.0"
   },
   "engines": {
     "node": ">=20.0.0"
