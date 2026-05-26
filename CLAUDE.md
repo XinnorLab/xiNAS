@@ -71,7 +71,7 @@ common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace �
 | `inventories/` | Ansible inventory (default: localhost) |
 | `client_repo/` | Standalone NFS client package |
 | `xinas_history/` | Configuration history & rollback library (Python) — snapshots, drift detection, transactional runner |
-| `docs/` | Design docs and specs, organized by area: `Installer/`, `Storage/`, `MCP/`, `Network/`, `Notifications/`, `HealthCheck/`, `config-history/`, `healthcheck-tunables/`, `troubleshooting/`, `plans/` |
+| `docs/` | Design docs and specs, organized by area: `Installer/`, `Storage/`, `MCP/`, `Network/`, `Notifications/`, `HealthCheck/`, `config-history/`, `control-path/`, `healthcheck-tunables/`, `troubleshooting/`, `plans/` |
 
 ### Specs and design docs (`docs/`)
 
@@ -87,6 +87,7 @@ spec dump — every doc belongs to an area.
 | `docs/Notifications/` | Email / alerting pipelines (xiNAS SMTP + xiRAID sendmail): `spec-email-notifications.md` |
 | `docs/HealthCheck/` | Individual health-check designs (one file per check, e.g. `pcie-link-check.md`) |
 | `docs/config-history/` | `xinas_history` library design (`requirements.md`, `architecture.md`, `specs.md`, `grpc-api-reference.md`) |
+| `docs/control-path/` | Phase 0 Control Path foundation: `phase0-requirements.md` (live contract) and `adr/` (architecture decision records — `0001-api-surface.md`, …). The companion implementation plan lives at `docs/plans/2026-05-26-phase0-control-path-plan.md`. ADRs supersede earlier plan/spec language where they conflict |
 | `docs/healthcheck-tunables/` | Reference docs for tunable parameters (sysctl, filesystem, perf) |
 | `docs/troubleshooting/` | Postmortems / known-issue writeups (one file per incident) |
 | `docs/plans/` | Dated implementation plans (`YYYY-MM-DD-<topic>-plan.md`, `-design.md`). Append-only history of intent — do **not** edit landed plans to reflect later changes; the live spec in the topic subfolder is the source of truth |
