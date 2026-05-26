@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "lint": "biome lint src/",
-    "format:check": "biome format --check src/",
+    "format:check": "biome format src/",
     "format:write": "biome format --write src/",
     "test": "vitest run",
     "test:contracts": "vitest run src/__tests__/contracts"
