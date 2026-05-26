@@ -1,0 +1,19 @@
+{
+  "kind": "Node",
+  "id": "00000000-0000-0000-0000-0000000000aa",
+  "metadata": {
+    "revision": 1,
+    "created_at": "2026-05-26T16:00:00Z",
+    "modified_at": "2026-05-26T16:00:00Z",
+    "owner": "system:installer",
+    "source": "ansible:common",
+    "validation_status": "valid"
+  },
+  "spec": {
+    "hostname": "fixture-node-1"
+  },
+  "status": {
+    "agent_state": "healthy",
+    "observation_age_seconds": 0
+  }
+}

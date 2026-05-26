@@ -1,0 +1,16 @@
+{
+  "task_id": "01902f25-7c54-7c10-b1f0-aaaabbbbcccc",
+  "kind": "share.create",
+  "state": "plan_only",
+  "principal": "admin:fixture",
+  "client_type": "rest",
+  "request_id": "00000000-0000-0000-0000-000000000010",
+  "correlation_id": "fixture-task-1",
+  "input_hash": "sha256:fixture-input",
+  "risk_level": "non_disruptive",
+  "affected_resources": [
+    { "kind": "Share", "id": "fixture-share-1", "revision": 0 }
+  ],
+  "created_at": "2026-05-26T16:00:00Z",
+  "updated_at": "2026-05-26T16:00:00Z"
+}
