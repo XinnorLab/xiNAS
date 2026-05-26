@@ -13,3 +13,35 @@ version = {attr = "xinas_menu.version.XINAS_MENU_VERSION"}
 
 [tool.setuptools.packages.find]
 include = ["xinas_menu*"]
+
+[project.optional-dependencies]
+dev = [
+  "pyright>=1.1.380",
+  "ruff>=0.6.0",
+  "pytest>=8.0",
+  "pyyaml",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [".claude", "node_modules", "xiNAS-MCP/node_modules"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pyright]
+include = ["xinas_menu", "xinas_history", "xiNAS-MCP/nfs-helper"]
+exclude = ["**/__pycache__", "**/.git", "**/node_modules", "**/.venv"]
+reportMissingImports = "warning"
+reportMissingTypeStubs = "none"
+typeCheckingMode = "basic"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
