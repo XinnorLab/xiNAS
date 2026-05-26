@@ -3,9 +3,18 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename } from 'node:path';
 import yaml from 'js-yaml';
 import $RefParser from '@apidevtools/json-schema-ref-parser';
-import Ajv from 'ajv';
-import addFormats from 'ajv-formats';
+// Ajv 8.x publishes CJS-style `export = Ajv` types. Under tsconfig
+// `module: Node16`, the default import is a namespace, not a constructible
+// class, so we use type assertions to bridge. Runtime behavior is
+// unaffected (vitest's esbuild loader handles it transparently).
+import AjvImport from 'ajv';
+import addFormatsImport from 'ajv-formats';
 import { describe, it, expect, beforeAll } from 'vitest';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const Ajv = AjvImport as any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const addFormats = addFormatsImport as any;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const specPath = resolve(
@@ -22,7 +31,8 @@ const fixturesDir = resolve(here, 'fixtures');
 
 describe('OpenAPI schema contract', () => {
   let schemas: Record<string, unknown> = {};
-  let ajv: Ajv;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let ajv: any;
 
   beforeAll(async () => {
     const raw = yaml.load(readFileSync(specPath, 'utf8')) as Record<string, unknown>;
