@@ -1,0 +1,208 @@
+# Phase 0 CI bootstrap.
+#
+# See docs/control-path/ci-bootstrap-design.md for the full design,
+# gate matrix, and backfill plan.
+#
+# Flip-to-blocking TODOs (in spec order):
+#   TODO: flip openapi-envelope rule to blocking after 3 clean PRs
+#   TODO: flip yamllint to blocking after backlog cleanup PR series
+#   TODO: flip markdownlint to blocking after backlog cleanup PR series
+#   TODO: flip typescript-format to blocking after `biome format --write` PR
+#   TODO: expand typescript-lint to style/suspicious rule categories
+#   TODO: flip python-lint to blocking after ruff cleanup PR series
+#   TODO: flip python-format to blocking after `ruff format` PR
+#   TODO: flip python-typecheck to blocking after runtime deps land in pyproject.toml
+#   TODO: graduate pyright basic -> standard -> strict per module
+#   TODO: graduate ansible-lint min -> basic -> production
+#   TODO: add oasdiff between consecutive api-v1.yaml versions (after v1 published)
+#   TODO: add pytest --cov coverage gate (after meaningful coverage exists)
+#   TODO: add MCP integration smoke test (after containerized harness exists)
+#   TODO: add live contract test against the WS1 mock server (after mock ships)
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  typescript-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: xiNAS-MCP/package-lock.json
+      - run: npm ci
+        working-directory: xiNAS-MCP
+      - run: npm run typecheck
+        working-directory: xiNAS-MCP
+
+  typescript-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: xiNAS-MCP/package-lock.json
+      - run: npm ci
+        working-directory: xiNAS-MCP
+      - run: npm run lint
+        working-directory: xiNAS-MCP
+
+  typescript-format:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # warn-only: flip after backlog cleanup
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: xiNAS-MCP/package-lock.json
+      - run: npm ci
+        working-directory: xiNAS-MCP
+      - run: npm run format:check
+        working-directory: xiNAS-MCP
+
+  typescript-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: xiNAS-MCP/package-lock.json
+      - run: npm ci
+        working-directory: xiNAS-MCP
+      - run: npx vitest run src/__tests__/sanity.test.ts
+        working-directory: xiNAS-MCP
+
+  typescript-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: xiNAS-MCP/package-lock.json
+      - run: npm ci
+        working-directory: xiNAS-MCP
+      - run: npm run test:contracts
+        working-directory: xiNAS-MCP
+
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e '.[dev]'
+      - run: pytest
+
+  python-lint:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # warn-only: flip after ruff cleanup PR series
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e '.[dev]'
+      - run: ruff check xinas_menu xinas_history xiNAS-MCP/nfs-helper
+
+  python-format:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # warn-only: flip after `ruff format` PR
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e '.[dev]'
+      - run: ruff format --check xinas_menu xinas_history xiNAS-MCP/nfs-helper
+
+  python-typecheck:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # warn-only: flip after runtime deps land
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e '.[dev]'
+      - run: pyright xinas_menu xinas_history xiNAS-MCP/nfs-helper
+
+  ansible:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install ansible-lint
+      - run: ansible-lint collection/roles/
+
+  yamllint:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # warn-only: flip after backlog cleanup
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install yamllint
+      - run: yamllint -c .yamllint.yml .
+
+  openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: |
+          npx --yes -p @stoplight/spectral-cli@latest spectral lint \
+            --ruleset .spectral.yaml \
+            docs/control-path/api-v1.yaml
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks scans history
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  markdown:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # warn-only: flip after backlog cleanup
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npx --yes markdownlint-cli2 'docs/**/*.md'
