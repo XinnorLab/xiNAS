@@ -1,0 +1,17 @@
+# Profile graduation:
+#   min   — what the existing roles pass today (current baseline)
+#   basic — next stop after var-naming + name + yaml cleanup
+#   production — long-term aspiration (tracked in
+#   docs/control-path/ci-bootstrap-design.md backfill plan)
+#
+# Recorded baseline on 2026-05-26: profile=production produces 463
+# failures, dominated by var-naming (355). Cleanup is its own PR
+# series; bootstrap uses 'min' to keep the gate blocking from day 1.
+profile: min
+skip_list:
+  - risky-shell-pipe
+exclude_paths:
+  - .claude/
+  - .github/
+  - node_modules/
+  - xiNAS-MCP/node_modules/
