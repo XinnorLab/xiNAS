@@ -1,0 +1,1923 @@
+openapi: 3.1.0
+info:
+  title: xiNAS Control API
+  version: 1.0.0-phase0
+  summary: Phase 0 single-node Control Path API.
+  description: |
+    Local versioned Control API for xiNAS Phase 0.
+
+    Phase 0 is **single-node** and **does not provide HA**. HA-shaped fields
+    in objects like `NfsProfile`, `Cluster`, and `ServiceIP` exist as
+    preparatory scaffolding for Phase 1+; writes to non-default values return
+    `UNSUPPORTED`.
+
+    All mutating endpoints follow the **plan/apply** contract:
+
+    1. Call with `mode=plan` to receive a deterministic plan, blast radius,
+       blockers, warnings, and `plan_id`.
+    2. Call again with `mode=apply`, the `plan_id`, the `expected_revision`,
+       and an `idempotency_key`. The server creates a durable task and
+       returns its `task_id`.
+
+    The same business logic backs both the REST transport described here and
+    the MCP transport (per ADR-0001). Authorization is identical across
+    transports for reads and plans; MCP applies a post-RBAC gate that
+    denies mutating tools unless `mcp.allow_apply: true` is configured.
+
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Xinnor-Internal
+  contact:
+    name: xiNAS Engineering
+
+servers:
+  - url: http+unix:///run/xinas/api.sock/api/v1
+    description: Loopback Unix socket (default; preferred for local clients).
+  - url: https://localhost:8443/api/v1
+    description: Localhost TCP. Used by MCP/automation when explicitly enabled.
+
+tags:
+  - name: system
+    description: Cluster mode, capabilities, time, controller identity.
+  - name: inventory
+    description: Hardware inventory snapshot.
+  - name: storage
+    description: Disks, xiRAID arrays, filesystems.
+  - name: nfs
+    description: Shares, NFS profile, export groups, session visibility.
+  - name: network
+    description: Interfaces, RDMA, netplan rendering, service IPs.
+  - name: tasks
+    description: Durable task lifecycle, plan/apply binding.
+  - name: events
+    description: Time-ordered events.
+  - name: audit
+    description: Append-only audit query API (read-only).
+  - name: config-history
+    description: Snapshots, diffs, rollback planning.
+  - name: support
+    description: Support bundle generation.
+  - name: health
+    description: Health profiles and check results.
+
+# ---------------------------------------------------------------------------
+# Security
+# ---------------------------------------------------------------------------
+security:
+  - bearerToken: []
+  - unixPeerCreds: []
+
+components:
+  securitySchemes:
+    bearerToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Local token. Mapped to a principal and role.
+    unixPeerCreds:
+      type: apiKey
+      in: header
+      name: X-Xinas-Peer-Cred
+      description: |
+        Resolved automatically from SO_PEERCRED when the connection is over a
+        local Unix socket. Clients do not set this header; the server derives
+        it from the socket peer.
+
+  # -------------------------------------------------------------------------
+  # Common
+  # -------------------------------------------------------------------------
+  schemas:
+    Envelope:
+      type: object
+      description: |
+        Common response wrapper. Every API response carries this envelope.
+      required:
+        - request_id
+        - correlation_id
+        - state_revision
+        - result
+      properties:
+        request_id:
+          type: string
+          format: uuid
+          description: Per-request UUID; echoed in audit and logs.
+        correlation_id:
+          type: string
+          description: Client-provided or server-generated trace ID.
+        operation_id:
+          type: string
+          description: Present when the call produced or referenced a task.
+        state_revision:
+          type: integer
+          format: int64
+          description: Highest object revision seen by this response.
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Warning'
+          default: []
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/Error'
+          default: []
+        links:
+          type: object
+          additionalProperties:
+            type: string
+            format: uri-reference
+          description: Hypermedia links (e.g., `self`, `next`, `task`).
+        result:
+          description: Endpoint-specific result.
+
+    Warning:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: AGENT_DEGRADED
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        remediation:
+          type: string
+          description: Human-readable remediation hint.
+
+    ErrorCode:
+      type: string
+      enum:
+        - INVALID_ARGUMENT
+        - NOT_FOUND
+        - PRECONDITION_FAILED
+        - PERMISSION_DENIED
+        - CONFLICT
+        - TIMEOUT
+        - UNSUPPORTED
+        - INTERNAL
+      description: Stable, machine-readable error code per reqs §1.
+
+    Metadata:
+      type: object
+      required: [revision, created_at, modified_at, owner, source, validation_status]
+      properties:
+        revision:
+          type: integer
+          format: int64
+          description: Monotonic, per-object.
+        created_at:
+          type: string
+          format: date-time
+        modified_at:
+          type: string
+          format: date-time
+        owner:
+          type: string
+          description: Principal that last wrote this object.
+        source:
+          type: string
+          description: Origin (e.g., `ansible:nfs_server`, `api:user:admin`).
+        validation_status:
+          type: string
+          enum: [valid, drift, invalid, pending]
+
+    # -----------------------------------------------------------------------
+    # Mutating operation contract (plan/apply)
+    # -----------------------------------------------------------------------
+    PlanRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          const: plan
+        spec:
+          description: Object spec under change (kind-specific).
+        idempotency_key:
+          type: string
+          description: Reserved for future use in plan mode.
+
+    Plan:
+      type: object
+      required:
+        - plan_id
+        - state_revision_expected
+        - affected_resources
+        - risk_level
+        - client_impact
+        - blockers
+        - warnings
+        - diff
+        - rollback_model
+      properties:
+        plan_id:
+          type: string
+          format: uuid
+        state_revision_expected:
+          type: integer
+          format: int64
+        plan_hash:
+          type: string
+          description: sha256 of canonical plan body.
+        affected_resources:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceRef'
+        risk_level:
+          type: string
+          enum: [non_disruptive, changing_access, destructive, unsupported_rollback]
+        client_impact:
+          type: string
+          description: Plain-language description of impact on NFS clients.
+        blockers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Blocker'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Warning'
+        diff:
+          type: object
+          additionalProperties: true
+          description: Kind-specific diff (managed-file before/after, object diff).
+        rollback_model:
+          type: string
+          enum: [non_disruptive, changing_access, destructive, unsupported]
+
+    Blocker:
+      type: object
+      required: [code, message, evidence]
+      properties:
+        code:
+          type: string
+          example: ACTIVE_NFS_SESSIONS
+        message:
+          type: string
+        evidence:
+          type: object
+          additionalProperties: true
+        related_resources:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceRef'
+
+    ApplyRequest:
+      type: object
+      required: [mode, plan_id, expected_revision, idempotency_key]
+      properties:
+        mode:
+          type: string
+          const: apply
+        plan_id:
+          type: string
+          format: uuid
+        expected_revision:
+          type: integer
+          format: int64
+        idempotency_key:
+          type: string
+        dangerous:
+          type: boolean
+          default: false
+          description: Required `true` for destructive operations.
+
+    MutatingRequest:
+      description: |
+        Every mutating operation accepts this body shape. Use `mode=plan` to
+        receive a `Plan` (and `plan_id`); follow up with `mode=apply` carrying
+        the `plan_id`, `expected_revision`, and `idempotency_key`.
+      oneOf:
+        - $ref: '#/components/schemas/PlanRequest'
+        - $ref: '#/components/schemas/ApplyRequest'
+      discriminator:
+        propertyName: mode
+        mapping:
+          plan: '#/components/schemas/PlanRequest'
+          apply: '#/components/schemas/ApplyRequest'
+
+    PlanResponse:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - type: object
+          properties:
+            result:
+              $ref: '#/components/schemas/Plan'
+
+    TaskAcceptedResponse:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - type: object
+          properties:
+            result:
+              $ref: '#/components/schemas/Task'
+
+    ResourceRef:
+      type: object
+      required: [kind, id]
+      properties:
+        kind:
+          type: string
+          enum:
+            - Cluster
+            - Node
+            - Controller
+            - Disk
+            - XiraidArray
+            - Filesystem
+            - Share
+            - NfsProfile
+            - NetworkInterface
+            - ServiceIP
+            - ExportGroup
+            - Task
+            - Event
+            - Policy
+            - HealthCheck
+            - ConfigSnapshot
+        id:
+          type: string
+        revision:
+          type: integer
+          format: int64
+
+    # -----------------------------------------------------------------------
+    # Object kinds — full schemas
+    # -----------------------------------------------------------------------
+    Cluster:
+      type: object
+      description: Singleton; Phase 0 always `mode=single_node`.
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind:
+          type: string
+          const: Cluster
+        id:
+          type: string
+          const: default
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        spec:
+          type: object
+          required: [display_name]
+          properties:
+            display_name:
+              type: string
+            locality:
+              type: string
+              description: Operator-assigned site/rack tag.
+        status:
+          type: object
+          required: [mode, capabilities, member_node_ids]
+          properties:
+            mode:
+              type: string
+              enum: [single_node]
+              description: HA modes (active_passive, active_active) are Phase 1+.
+            capabilities:
+              type: object
+              properties:
+                ha:
+                  type: string
+                  enum: [not_enabled]
+                quorum:
+                  type: string
+                  enum: [not_enabled]
+                witness:
+                  type: string
+                  enum: [not_enabled]
+                nfs.v3_locking_managed:
+                  type: boolean
+                  default: false
+                nfs.recovery_state_managed:
+                  type: boolean
+                  default: false
+                mcp.allow_apply:
+                  type: boolean
+            member_node_ids:
+              type: array
+              items:
+                type: string
+                format: uuid
+
+    Node:
+      type: object
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind:
+          type: string
+          const: Node
+        id:
+          type: string
+          format: uuid
+          description: Persisted `controller_id` (per ADR-0001/0002).
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        spec:
+          type: object
+          required: [hostname]
+          properties:
+            hostname:
+              type: string
+            roles:
+              type: array
+              items:
+                type: string
+                enum: [api, agent, nfs_helper, mcp, history]
+        status:
+          type: object
+          required: [agent_state, observation_age_seconds]
+          properties:
+            agent_state:
+              type: string
+              enum: [healthy, degraded, offline]
+            agent_last_heartbeat:
+              type: string
+              format: date-time
+            observation_age_seconds:
+              type: integer
+            uptime_seconds:
+              type: integer
+            kernel:
+              type: string
+            ubuntu_release:
+              type: string
+            installed_versions:
+              type: object
+              additionalProperties:
+                type: string
+
+    Disk:
+      type: object
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind: { type: string, const: Disk }
+        id: { type: string, description: "Stable ID: serial+namespace." }
+        metadata: { $ref: '#/components/schemas/Metadata' }
+        spec:
+          type: object
+          properties:
+            user_label:
+              type: string
+        status:
+          type: object
+          required: [device_path, serial, model, capacity_bytes, safe_for_use]
+          properties:
+            device_path: { type: string }
+            serial: { type: string }
+            model: { type: string }
+            firmware: { type: string }
+            capacity_bytes: { type: integer, format: int64 }
+            namespace: { type: integer }
+            numa_node: { type: integer }
+            health:
+              type: object
+              properties:
+                ok: { type: boolean }
+                wear_pct: { type: integer }
+                temperature_c: { type: integer }
+            xiraid_membership:
+              type: [object, "null"]
+              properties:
+                array_id: { type: string }
+                role: { type: string, enum: [data, parity, spare] }
+            safe_for_use: { type: boolean }
+
+    XiraidArray:
+      type: object
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind: { type: string, const: XiraidArray }
+        id: { type: string }
+        metadata: { $ref: '#/components/schemas/Metadata' }
+        spec:
+          type: object
+          required: [name, level, member_disk_ids]
+          properties:
+            name: { type: string }
+            level:
+              type: string
+              enum: [raid0, raid1, raid5, raid6, raid10, raid50, raid60, "n+m"]
+            strip_size_kib: { type: integer }
+            chunk_size_kib: { type: integer }
+            member_disk_ids:
+              type: array
+              items: { type: string }
+            spare_disk_ids:
+              type: array
+              items: { type: string }
+        status:
+          type: object
+          required: [state, volume_path]
+          properties:
+            state:
+              type: string
+              enum: [optimal, degraded, rebuilding, failed, importing, unknown]
+            volume_path: { type: string }
+            rebuild_progress_pct: { type: [integer, "null"] }
+            check_progress_pct: { type: [integer, "null"] }
+            usable_capacity_bytes: { type: integer, format: int64 }
+
+    Filesystem:
+      type: object
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind: { type: string, const: Filesystem }
+        id: { type: string }
+        metadata: { $ref: '#/components/schemas/Metadata' }
+        spec:
+          type: object
+          required: [fs_type, backing_device, mountpoint]
+          properties:
+            fs_type: { type: string, enum: [xfs] }
+            backing_device: { type: string }
+            mountpoint: { type: string }
+            mount_options:
+              type: array
+              items: { type: string }
+            quota_mode:
+              type: string
+              enum: [none, uquota, gquota, pquota]
+            owner_policy:
+              type: object
+              properties:
+                uid: { type: integer }
+                gid: { type: integer }
+                mode: { type: string }
+        status:
+          type: object
+          required: [mounted, uuid, size_bytes, free_bytes]
+          properties:
+            mounted: { type: boolean }
+            uuid: { type: string }
+            size_bytes: { type: integer, format: int64 }
+            free_bytes: { type: integer, format: int64 }
+            label: { type: string }
+            effective_mount_options:
+              type: array
+              items: { type: string }
+
+    Share:
+      type: object
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind: { type: string, const: Share }
+        id: { type: string }
+        metadata: { $ref: '#/components/schemas/Metadata' }
+        spec:
+          type: object
+          required: [path, clients, fsid]
+          properties:
+            path: { type: string }
+            export_group_id:
+              type: string
+              default: default
+            clients:
+              type: array
+              items:
+                $ref: '#/components/schemas/ShareClient'
+            nfs_versions:
+              type: array
+              items:
+                type: string
+                enum: ["3", "4.0", "4.1", "4.2"]
+            security_mode:
+              type: string
+              enum: [sys, krb5, krb5i, krb5p]
+              default: sys
+            rdma_enabled: { type: boolean, default: true }
+            fsid: { type: integer, description: "Stable per-share FSID." }
+            sync:
+              type: string
+              enum: [sync, async]
+              default: async
+            quota_policy:
+              type: object
+              properties:
+                soft_bytes: { type: integer, format: int64 }
+                hard_bytes: { type: integer, format: int64 }
+        status:
+          type: object
+          properties:
+            exported: { type: boolean }
+            client_mount_profile:
+              $ref: '#/components/schemas/ClientMountProfile'
+            sessions:
+              type: array
+              items:
+                $ref: '#/components/schemas/NfsSession'
+            effective_options:
+              type: string
+
+    ShareClient:
+      type: object
+      required: [pattern, options]
+      properties:
+        pattern: { type: string, description: "Hostname, IP, CIDR, or netgroup." }
+        options:
+          type: array
+          items: { type: string }
+
+    ClientMountProfile:
+      type: object
+      properties:
+        server: { type: string }
+        export_path: { type: string }
+        recommended_mount_options:
+          type: array
+          items: { type: string }
+        rdma_supported: { type: boolean }
+        sample_mount_cmd: { type: string }
+
+    NfsSession:
+      type: object
+      properties:
+        client_ip: { type: string }
+        nfs_version: { type: string }
+        export_path: { type: string }
+        active_locks: { type: integer }
+
+    NfsProfile:
+      description: Per ADR-0005. Singleton `default` in Phase 0.
+      type: object
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind: { type: string, const: NfsProfile }
+        id: { type: string, const: default }
+        metadata: { $ref: '#/components/schemas/Metadata' }
+        spec:
+          type: object
+          required: [versions, rdma, threads, v3_locking, v4_recovery, service_policy]
+          properties:
+            versions:
+              type: object
+              properties:
+                v3:   { type: object, properties: { enabled: { type: boolean } } }
+                v4_0: { type: object, properties: { enabled: { type: boolean } } }
+                v4_1: { type: object, properties: { enabled: { type: boolean } } }
+                v4_2: { type: object, properties: { enabled: { type: boolean } } }
+            rdma:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                port: { type: integer, default: 20049 }
+            threads:
+              type: object
+              properties:
+                count: { type: integer, minimum: 8, maximum: 1024 }
+            v3_locking:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                fixed_rpc_ports:
+                  type: object
+                  description: |
+                    Phase 0: read-only. Non-default writes return `UNSUPPORTED`.
+                    HA scaffolding for Phase 1+.
+                  properties:
+                    nfsd: { type: integer }
+                    mountd: { type: integer }
+                    lockd_udp: { type: integer }
+                    lockd_tcp: { type: integer }
+                    statd: { type: integer }
+                    statd_outgoing: { type: integer }
+                  readOnly: true
+            v4_recovery:
+              type: object
+              properties:
+                backend:
+                  type: string
+                  enum: [nfsdcltrack]
+                  readOnly: true
+                recovery_root:
+                  type: string
+                  description: |
+                    Phase 0: read-only. HA scaffolding for Phase 1+.
+                  readOnly: true
+                server_scope:
+                  type: string
+                  description: |
+                    Phase 0: read-only; must remain empty.
+                  readOnly: true
+            service_policy:
+              type: object
+              properties:
+                on_thread_count_change: { type: string, enum: [reload, restart, none] }
+                on_version_change:      { type: string, enum: [reload, restart, none] }
+                on_rdma_change:         { type: string, enum: [reload, restart, none] }
+                on_v3_settings_change:  { type: string, enum: [reload, restart, none] }
+        status:
+          type: object
+          properties:
+            effective_files:
+              type: object
+              additionalProperties:
+                type: string
+                description: sha256 of the file.
+            running:
+              type: object
+              properties:
+                thread_count: { type: integer }
+                rdma_listening: { type: boolean }
+                rdma_port: { type: integer }
+                active_versions:
+                  type: array
+                  items: { type: string }
+            warnings:
+              type: array
+              items: { $ref: '#/components/schemas/Warning' }
+
+    NetworkInterface:
+      type: object
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind: { type: string, const: NetworkInterface }
+        id: { type: string, description: "Interface name (e.g., ibp0s4)." }
+        metadata: { $ref: '#/components/schemas/Metadata' }
+        spec:
+          type: object
+          properties:
+            managed_by_xinas: { type: boolean }
+            addresses:
+              type: array
+              items:
+                type: string
+                description: CIDR.
+            mtu: { type: integer }
+            pbr_table_id: { type: integer }
+            enabled: { type: boolean }
+        status:
+          type: object
+          properties:
+            driver: { type: string }
+            rdma_capable: { type: boolean }
+            link_state: { type: string, enum: [up, down, unknown] }
+            current_addresses:
+              type: array
+              items: { type: string }
+            owning_netplan_file: { type: string }
+            duplicates_detected_in:
+              type: array
+              items: { type: string }
+
+    ServiceIP:
+      type: object
+      description: |
+        Phase 0 placeholder; Phase 1+ HA moves between nodes. Phase 0 may
+        manage IP pool entries; failover semantics are not implemented.
+      required: [kind, id, metadata, spec]
+      properties:
+        kind: { type: string, const: ServiceIP }
+        id: { type: string }
+        metadata: { $ref: '#/components/schemas/Metadata' }
+        spec:
+          type: object
+          properties:
+            address: { type: string }
+            interface_id: { type: string }
+            export_group_id: { type: string, default: default }
+        status:
+          type: object
+          properties:
+            assigned_node_id: { type: string, format: uuid }
+            reachable: { type: boolean }
+
+    ExportGroup:
+      type: object
+      description: |
+        Phase 0: singleton `default`. Phase 1+ HA splits shares into groups
+        that fail over together.
+      required: [kind, id, metadata, spec]
+      properties:
+        kind: { type: string, const: ExportGroup }
+        id: { type: string, const: default }
+        metadata: { $ref: '#/components/schemas/Metadata' }
+        spec:
+          type: object
+          properties:
+            display_name: { type: string }
+            nfs_profile_id: { type: string, default: default }
+            service_ip_ids:
+              type: array
+              items: { type: string }
+
+    Task:
+      description: |
+        Per ADR-0004. Required fields mirror the `NOT NULL` columns of
+        the durable `tasks` table; this keeps the audit/idempotency
+        guarantees from leaking at the API boundary.
+      type: object
+      required:
+        - task_id
+        - kind
+        - state
+        - principal
+        - client_type
+        - request_id
+        - correlation_id
+        - input_hash
+        - risk_level
+        - affected_resources
+        - created_at
+        - updated_at
+      properties:
+        task_id: { type: string, format: uuid }
+        kind: { type: string, example: "share.create" }
+        state:
+          type: string
+          enum: [queued, running, success, failed, cancelled, requires_manual_recovery, plan_only, imported]
+        plan_id: { type: [string, "null"], format: uuid }
+        idempotency_key: { type: [string, "null"] }
+        principal: { type: string }
+        client_type:
+          type: string
+          enum: [rest, mcp, tui, cli, automation, system]
+        request_id: { type: string, format: uuid }
+        correlation_id: { type: string }
+        input_hash: { type: string }
+        plan_hash: { type: [string, "null"] }
+        result_hash: { type: [string, "null"] }
+        state_revision_expected: { type: [integer, "null"], format: int64 }
+        state_revision_at_apply: { type: [integer, "null"], format: int64 }
+        risk_level:
+          type: string
+          enum: [non_disruptive, changing_access, destructive, unsupported_rollback]
+        affected_resources:
+          type: array
+          items: { $ref: '#/components/schemas/ResourceRef' }
+        snapshot_before: { type: [string, "null"] }
+        snapshot_after: { type: [string, "null"] }
+        cancel_requested_at: { type: [string, "null"], format: date-time }
+        cancel_refused_reason: { type: [string, "null"] }
+        error_code:
+          description: |
+            Set only when `state=failed`. Type is nullable via the
+            `[string, "null"]` union; the enum lists the value set.
+          type: [string, "null"]
+          enum:
+            - FAILED_BEFORE_CHANGE
+            - FAILED_PARTIAL_ROLLED_BACK
+            - FAILED_MANUAL_RECOVERY_REQUIRED
+            - FAILED_STATE_DESYNC
+        error_message: { type: [string, "null"] }
+        remediation_hint: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        terminal_at: { type: [string, "null"], format: date-time }
+        stages:
+          type: array
+          items: { $ref: '#/components/schemas/TaskStage' }
+
+    TaskStage:
+      type: object
+      required: [stage_index, name, status, output_size_bytes]
+      properties:
+        stage_index: { type: integer }
+        name: { type: string }
+        status:
+          type: string
+          enum: [pending, running, success, failed, skipped]
+        started_at: { type: [string, "null"], format: date-time }
+        ended_at: { type: [string, "null"], format: date-time }
+        output_inline:
+          type: [string, "null"]
+          description: Present when output size ≤ 64 KiB.
+        output_url:
+          type: [string, "null"]
+          format: uri-reference
+          description: Present when output spilled to disk.
+        output_size_bytes: { type: integer }
+        error_code: { type: [string, "null"] }
+        error_message: { type: [string, "null"] }
+
+    Event:
+      type: object
+      required: [event_id, ts, kind, severity]
+      properties:
+        event_id: { type: string }
+        ts: { type: string, format: date-time }
+        kind: { type: string }
+        severity:
+          type: string
+          enum: [info, warning, error, critical]
+        message: { type: string }
+        related_resources:
+          type: array
+          items: { $ref: '#/components/schemas/ResourceRef' }
+
+    HealthReport:
+      type: object
+      required: [profile, started_at, completed_at, checks, overall]
+      properties:
+        profile:
+          type: string
+          enum: [quick, standard, deep]
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        overall:
+          type: string
+          enum: [ok, warning, degraded, critical]
+        checks:
+          type: array
+          items: { $ref: '#/components/schemas/HealthCheck' }
+
+    HealthCheck:
+      type: object
+      required: [id, status, symptom, impact, evidence, recommended_action]
+      properties:
+        id: { type: string }
+        category:
+          type: string
+          enum: [api, agent, state_store, xiraid, filesystem, nfs, network, drift, systemd, tuning]
+        status:
+          type: string
+          enum: [ok, warning, degraded, critical, skipped]
+        symptom: { type: string }
+        impact: { type: string }
+        evidence:
+          type: object
+          additionalProperties: true
+        recommended_action: { type: string }
+        related_resources:
+          type: array
+          items: { $ref: '#/components/schemas/ResourceRef' }
+
+    ConfigSnapshot:
+      type: object
+      required: [snapshot_id, kind, created_at]
+      properties:
+        snapshot_id: { type: string }
+        kind:
+          type: string
+          enum: [baseline, before, after, imported]
+        created_at: { type: string, format: date-time }
+        task_id: { type: [string, "null"], format: uuid }
+        operation_id: { type: [string, "null"] }
+        principal: { type: [string, "null"] }
+        client_type:
+          type: [string, "null"]
+          enum: [rest, mcp, tui, cli, automation, system]
+        rollback_classification:
+          type: string
+          enum: [non_disruptive, changing_access, destroying_data, unsupported]
+        files_changed:
+          type: array
+          items: { type: string }
+
+  # -------------------------------------------------------------------------
+  # Reusable responses
+  # -------------------------------------------------------------------------
+  responses:
+    PlanReturned:
+      description: Plan returned (mode=plan). No system mutation occurred.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PlanResponse' }
+    TaskAccepted:
+      description: Task accepted (mode=apply). Poll via `/tasks/{id}`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TaskAcceptedResponse' }
+    InvalidArgument:
+      description: '`INVALID_ARGUMENT` — request body or query is malformed.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    NotFound:
+      description: '`NOT_FOUND` — referenced object does not exist.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    PermissionDenied:
+      description: '`PERMISSION_DENIED` — RBAC or transport gate refused.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    Conflict:
+      description: '`CONFLICT` — resource lease held by another task.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    PreconditionFailed:
+      description: '`PRECONDITION_FAILED` — stale `expected_revision` or preflight blocker.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    Unsupported:
+      description: '`UNSUPPORTED` — write to an inert Phase 0 field or unsupported operation.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    Internal:
+      description: '`INTERNAL` — server-side failure (incl. `EXECUTOR_UNAVAILABLE`, `AUDIT_WRITE_FAILED`).'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+
+  # -------------------------------------------------------------------------
+  # Reusable request bodies
+  # -------------------------------------------------------------------------
+  requestBodies:
+    Mutating:
+      description: Plan or apply request (see `MutatingRequest`).
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/MutatingRequest' }
+
+  # -------------------------------------------------------------------------
+  # Reusable parameters
+  # -------------------------------------------------------------------------
+  parameters:
+    PathId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+    PathTaskId:
+      in: path
+      name: task_id
+      required: true
+      schema: { type: string, format: uuid }
+    QueryLimit:
+      in: query
+      name: limit
+      schema: { type: integer, default: 100, minimum: 1, maximum: 1000 }
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # =========================================================================
+  # System / capabilities / inventory
+  # =========================================================================
+  /system:
+    get:
+      tags: [system]
+      operationId: getSystem
+      summary: Get cluster mode, node identity, capabilities.
+      description: Returns the singleton `Cluster` and the local `Node`.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: object
+                        required: [cluster, node]
+                        properties:
+                          cluster: { $ref: '#/components/schemas/Cluster' }
+                          node:    { $ref: '#/components/schemas/Node' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /capabilities:
+    get:
+      tags: [system]
+      operationId: getCapabilities
+      summary: Get the capability map (Phase 0 advertises HA disabled).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /inventory:
+    get:
+      tags: [inventory]
+      operationId: getInventory
+      summary: Get full hardware and software inventory snapshot.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /controllers:
+    get:
+      tags: [system]
+      operationId: listControllers
+      summary: List nodes (one in Phase 0; alias preserved for compatibility).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/Node' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # Storage — disks, arrays, filesystems
+  # =========================================================================
+  /disks:
+    get:
+      tags: [storage]
+      operationId: listDisks
+      summary: List disks visible to the controller.
+      parameters:
+        - in: query
+          name: safe_for_use
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/Disk' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /arrays:
+    get:
+      tags: [storage]
+      operationId: listArrays
+      summary: List xiRAID arrays.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/XiraidArray' }
+        '500': { $ref: '#/components/responses/Internal' }
+    post:
+      tags: [storage]
+      operationId: createOrImportArray
+      summary: Create or import an array (plan/apply).
+      description: |
+        Two-phase. `mode=plan` returns a `Plan` with `plan_id`, blockers,
+        risk classification, and client-impact estimate. `mode=apply`
+        requires the `plan_id`, `expected_revision`, and `idempotency_key`.
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unsupported' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /arrays/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [storage]
+      operationId: getArray
+      summary: Get a single array.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/XiraidArray' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+    patch:
+      tags: [storage]
+      operationId: updateArray
+      summary: Modify array (spare-pool changes; plan/apply).
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+    delete:
+      tags: [storage]
+      operationId: deleteArray
+      summary: Delete array (plan/apply; `dangerous=true` required to apply).
+      description: |
+        Destructive. Plan-mode reports dependent filesystems/exports as
+        blockers. Apply requires `dangerous: true` in the body.
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /filesystems:
+    get:
+      tags: [storage]
+      operationId: listFilesystems
+      summary: List filesystems.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/Filesystem' }
+        '500': { $ref: '#/components/responses/Internal' }
+    post:
+      tags: [storage]
+      operationId: createOrImportFilesystem
+      summary: Create or import an XFS filesystem (plan/apply).
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /filesystems/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [storage]
+      operationId: getFilesystem
+      summary: Get a single filesystem.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/Filesystem' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+    patch:
+      tags: [storage]
+      operationId: updateFilesystem
+      summary: Mount, unmount, grow, or change quota mode (plan/apply).
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+    delete:
+      tags: [storage]
+      operationId: deleteFilesystem
+      summary: Remove filesystem from management (data preserved by default; plan/apply).
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # NFS — shares, sessions, profile, export groups
+  # =========================================================================
+  /shares:
+    get:
+      tags: [nfs]
+      operationId: listShares
+      summary: List shares.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/Share' }
+        '500': { $ref: '#/components/responses/Internal' }
+    post:
+      tags: [nfs]
+      operationId: createShare
+      summary: Create a share (plan/apply).
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /shares/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [nfs]
+      operationId: getShare
+      summary: Get a single share.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/Share' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+    patch:
+      tags: [nfs]
+      operationId: updateShare
+      summary: Update share (clients, options, quotas) — plan/apply.
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+    delete:
+      tags: [nfs]
+      operationId: deleteShare
+      summary: Delete share (data preserved unless `delete_data=true` in spec; plan/apply).
+      description: |
+        Default behavior removes the export only; underlying directory and
+        data are preserved. Pass `delete_data: true` inside the plan spec
+        and `dangerous: true` on apply to destroy data.
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /shares/{id}/sessions:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [nfs]
+      operationId: getShareSessions
+      summary: Get active NFS session visibility for a share.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/NfsSession' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /nfs-profiles:
+    get:
+      tags: [nfs]
+      operationId: listNfsProfiles
+      summary: List NFS profiles (singleton `default` in Phase 0).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/NfsProfile' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /nfs-profiles/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [nfs]
+      operationId: getNfsProfile
+      summary: Get a single NFS profile.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/NfsProfile' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+    put:
+      tags: [nfs]
+      operationId: replaceNfsProfile
+      summary: Replace profile spec (plan/apply).
+      description: |
+        Writes to HA-shaped fields (`v3_locking.fixed_rpc_ports.*`,
+        `v4_recovery.recovery_root`, `v4_recovery.server_scope`) return
+        `UNSUPPORTED` in Phase 0 per ADR-0005.
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unsupported' }
+        '500': { $ref: '#/components/responses/Internal' }
+    patch:
+      tags: [nfs]
+      operationId: updateNfsProfile
+      summary: Partial update to profile spec (plan/apply).
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unsupported' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /export-groups:
+    get:
+      tags: [nfs]
+      operationId: listExportGroups
+      summary: List export groups (singleton `default` in Phase 0).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/ExportGroup' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # Network — interfaces, RDMA, service IPs
+  # =========================================================================
+  /network:
+    get:
+      tags: [network]
+      operationId: getNetworkSnapshot
+      summary: Get network snapshot (interfaces, RDMA, netplan ownership).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /network/interfaces:
+    get:
+      tags: [network]
+      operationId: listNetworkInterfaces
+      summary: List network interfaces.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/NetworkInterface' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /network/interfaces/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [network]
+      operationId: getNetworkInterface
+      summary: Get a single network interface.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/NetworkInterface' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+    patch:
+      tags: [network]
+      operationId: updateNetworkInterface
+      summary: Change IPs, MTU, or PBR (plan/apply).
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /service-ips:
+    get:
+      tags: [network]
+      operationId: listServiceIps
+      summary: List service IPs (Phase 0 placeholder; failover is Phase 1+).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/ServiceIP' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # Health
+  # =========================================================================
+  /health:
+    get:
+      tags: [health]
+      operationId: runHealthCheck
+      summary: Run a health profile and return the report.
+      parameters:
+        - in: query
+          name: profile
+          schema: { type: string, enum: [quick, standard, deep], default: quick }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/HealthReport' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # Tasks
+  # =========================================================================
+  /tasks:
+    get:
+      tags: [tasks]
+      operationId: listTasks
+      summary: List tasks (most recent first).
+      parameters:
+        - in: query
+          name: state
+          schema: { type: string }
+        - in: query
+          name: kind
+          schema: { type: string }
+        - $ref: '#/components/parameters/QueryLimit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/Task' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /tasks/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [tasks]
+      operationId: getTask
+      summary: Get a single task with stage details.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/Task' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /tasks/{id}/cancel:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [tasks]
+      operationId: cancelTask
+      summary: Request task cancellation (honored at safe checkpoints).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /tasks/{id}/watch:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [tasks]
+      operationId: watchTask
+      summary: Stream task progress as Server-Sent Events.
+      responses:
+        '200':
+          description: SSE stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # Events / audit
+  # =========================================================================
+  /events:
+    get:
+      tags: [events]
+      operationId: listEvents
+      summary: List events (most recent first).
+      parameters:
+        - in: query
+          name: since
+          schema: { type: string, format: date-time }
+        - in: query
+          name: severity
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/Event' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /audit:
+    get:
+      tags: [audit]
+      operationId: queryAudit
+      summary: Query audit entries (read-only).
+      parameters:
+        - in: query
+          name: request_id
+          schema: { type: string }
+        - in: query
+          name: principal
+          schema: { type: string }
+        - in: query
+          name: since
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # Config history / drift / rollback
+  # =========================================================================
+  /config-history/snapshots:
+    get:
+      tags: [config-history]
+      operationId: listConfigSnapshots
+      summary: List configuration snapshots.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/ConfigSnapshot' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /config-history/snapshots/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [config-history]
+      operationId: getConfigSnapshot
+      summary: Get a single configuration snapshot.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/ConfigSnapshot' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /config-history/diff:
+    get:
+      tags: [config-history]
+      operationId: diffConfigSnapshots
+      summary: Diff between two snapshots.
+      parameters:
+        - in: query
+          name: from
+          required: true
+          schema: { type: string }
+        - in: query
+          name: to
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /config-history/rollback:
+    post:
+      tags: [config-history]
+      operationId: planConfigRollback
+      summary: Plan a rollback to a snapshot (plan/apply).
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unsupported' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /config-history/drift:
+    get:
+      tags: [config-history]
+      operationId: getDriftReport
+      summary: Get current drift report.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # Support bundle
+  # =========================================================================
+  /support-bundle:
+    post:
+      tags: [support]
+      operationId: createSupportBundle
+      summary: Generate a support bundle (returns a task).
+      responses:
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /support-bundle/{task_id}:
+    parameters:
+      - $ref: '#/components/parameters/PathTaskId'
+    get:
+      tags: [support]
+      operationId: downloadSupportBundle
+      summary: Download a finished support bundle.
+      responses:
+        '200':
+          description: gzip stream.
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
