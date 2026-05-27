@@ -9,6 +9,7 @@ import { storageRouter } from './routes/storage.js';
 import { nfsRouter } from './routes/nfs.js';
 import { networkRouter } from './routes/network.js';
 import { healthRouter } from './routes/health.js';
+import { tasksRouter } from './routes/tasks.js';
 
 export function createApp(ctx: ApiContext): Express {
   const app = express();
@@ -24,6 +25,7 @@ export function createApp(ctx: ApiContext): Express {
   v1.use(nfsRouter(ctx));
   v1.use(networkRouter(ctx));
   v1.use(healthRouter(ctx));
+  v1.use(tasksRouter(ctx));
   app.use('/api/v1', v1);
 
   app.use(errorMiddleware());
