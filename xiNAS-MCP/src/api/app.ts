@@ -14,6 +14,8 @@ import { eventsRouter } from './routes/events.js';
 import { auditRouter } from './routes/audit-query.js';
 import { configHistoryRouter } from './routes/config-history.js';
 import { supportRouter } from './routes/support.js';
+import { inventoryRouter } from './routes/inventory.js';
+import { executorUnavailable } from './handlers/unsupported.js';
 
 export function createApp(ctx: ApiContext): Express {
   const app = express();
@@ -34,6 +36,30 @@ export function createApp(ctx: ApiContext): Express {
   v1.use(auditRouter(ctx));
   v1.use(configHistoryRouter(ctx));
   v1.use(supportRouter(ctx));
+  v1.use(inventoryRouter(ctx));
+
+  // Mutating verbs all route to the executor-unavailable stub until
+  // xinas-agent ships. Per ADR-0002 §Agent heartbeat, plan and apply
+  // both return INTERNAL/EXECUTOR_UNAVAILABLE. Each route gets its
+  // own real handler in a later PR.
+  const mutatingRoutes = [
+    '/arrays',
+    '/arrays/:id',
+    '/filesystems',
+    '/filesystems/:id',
+    '/shares',
+    '/shares/:id',
+    '/nfs-profiles/:id',
+    '/network/interfaces/:id',
+    '/config-history/rollback',
+  ];
+  for (const route of mutatingRoutes) {
+    v1.post(route, executorUnavailable);
+    v1.patch(route, executorUnavailable);
+    v1.put(route, executorUnavailable);
+    v1.delete(route, executorUnavailable);
+  }
+
   app.use('/api/v1', v1);
 
   app.use(errorMiddleware());
