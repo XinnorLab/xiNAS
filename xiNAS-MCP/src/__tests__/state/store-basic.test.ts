@@ -66,4 +66,38 @@ describe('SqliteKvStore — basic get/put', () => {
     expect(result.value.source).toBe('rest');
     expect(result.value.validation_status).toBe('pending');
   });
+
+  it('delete returns ok:true with the deleted revision', () => {
+    store.put('/k', { x: 1 });
+    const result = store.delete('/k');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.revision).toBe(1);
+    expect(store.get('/k')).toBeNull();
+  });
+
+  it('delete on missing key returns ok:false / not_found', () => {
+    const result = store.delete('/missing');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('not_found');
+    expect(result.current).toBeNull();
+  });
+
+  it('delete with stale expected_revision returns stale_revision', () => {
+    store.put('/k', { x: 1 });
+    store.put('/k', { x: 2 }); // rev 2
+    const result = store.delete('/k', 1);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('stale_revision');
+    expect(result.current?.revision).toBe(2);
+    expect(store.get('/k')).not.toBeNull();
+  });
+
+  it('delete with matching expected_revision succeeds', () => {
+    store.put('/k', { x: 1 });
+    const result = store.delete('/k', 1);
+    expect(result.ok).toBe(true);
+  });
 });
