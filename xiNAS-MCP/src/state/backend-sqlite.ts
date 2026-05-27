@@ -40,6 +40,7 @@ export class SqliteKvStore implements KvStore {
   private readonly getStmt: Statement;
   private readonly putExistingStmt: Statement;
   private readonly putNewStmt: Statement;
+  private readonly putCasStmt: Statement;
 
   constructor(db: Database) {
     this.db = db;
@@ -57,6 +58,12 @@ export class SqliteKvStore implements KvStore {
       `INSERT INTO kv (key, value, revision, created_at, modified_at, owner, source, validation_status)
        VALUES (?, ?, 1, ?, ?, ?, ?, ?)`,
     );
+    this.putCasStmt = db.prepare(
+      `UPDATE kv
+         SET value = ?, revision = revision + 1,
+             modified_at = ?, owner = ?, source = ?, validation_status = ?
+       WHERE key = ? AND revision = ?`,
+    );
   }
 
   get<T = unknown>(key: string): RevisionedValue<T> | null {
@@ -71,11 +78,49 @@ export class SqliteKvStore implements KvStore {
     const status: ValidationStatus = opts.validation_status ?? 'valid';
     const payload = Buffer.from(JSON.stringify(value), 'utf8');
 
-    const existing = this.getStmt.get(key) as KvRow | undefined;
-    if (existing) {
-      this.putExistingStmt.run(payload, now, owner, source, status, key);
-    } else {
-      this.putNewStmt.run(key, payload, now, now, owner, source, status);
+    // Last-writer-wins (no CAS): UPSERT-style.
+    if (opts.expected_revision === undefined) {
+      const existing = this.getStmt.get(key) as KvRow | undefined;
+      if (existing) {
+        this.putExistingStmt.run(payload, now, owner, source, status, key);
+      } else {
+        this.putNewStmt.run(key, payload, now, now, owner, source, status);
+      }
+      const updated = this.getStmt.get(key) as KvRow;
+      return { ok: true, value: rowToValue<T>(updated) };
+    }
+
+    // Create-only: try INSERT; UNIQUE conflict = already_exists.
+    if (opts.expected_revision === 0) {
+      try {
+        this.putNewStmt.run(key, payload, now, now, owner, source, status);
+      } catch (err) {
+        if (String(err).includes('UNIQUE')) {
+          const existing = this.getStmt.get(key) as KvRow;
+          return { ok: false, reason: 'already_exists', current: rowToValue<T>(existing) };
+        }
+        throw err;
+      }
+      const inserted = this.getStmt.get(key) as KvRow;
+      return { ok: true, value: rowToValue<T>(inserted) };
+    }
+
+    // CAS: UPDATE ... WHERE revision = ?. 0 changes = stale or missing.
+    const info = this.putCasStmt.run(
+      payload,
+      now,
+      owner,
+      source,
+      status,
+      key,
+      opts.expected_revision,
+    );
+    if (info.changes === 0) {
+      const existing = this.getStmt.get(key) as KvRow | undefined;
+      if (!existing) {
+        return { ok: false, reason: 'not_found', current: null };
+      }
+      return { ok: false, reason: 'stale_revision', current: rowToValue<T>(existing) };
     }
     const updated = this.getStmt.get(key) as KvRow;
     return { ok: true, value: rowToValue<T>(updated) };
