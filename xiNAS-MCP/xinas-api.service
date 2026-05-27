@@ -1,0 +1,61 @@
+# xinas-api.service — Phase 0 skeleton
+#
+# Unit for the new xinas-api process introduced by ADR-0001 and
+# ADR-0002. Runs alongside xinas-mcp.service (MCP untouched in
+# Phase 0; convergence is WS12).
+#
+# Per ADR-0002 §Hardening, xinas-api runs UNPRIVILEGED — no root,
+# no capabilities. The agent (a separate unit, separate PR) is the
+# only thing that runs as root. DynamicUser=yes gives the process a
+# transient user; StateDirectory/LogsDirectory give it writable
+# storage automatically.
+#
+# Full Ansible wiring (config.json templating, group setup for the
+# UDS, ReadWritePaths tuning) is a follow-up PR — this unit is the
+# minimum viable version that starts the service safely.
+
+[Unit]
+Description=xiNAS API (Phase 0 — REST + state store)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /opt/xinas-mcp/dist/api-server.js
+Environment=XINAS_API_CONFIG=/etc/xinas-api/config.json
+Restart=on-failure
+RestartSec=5s
+
+# Per ADR-0002 §Hardening: no root, no capabilities.
+DynamicUser=yes
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Writable storage — systemd creates these under /var/lib/private/
+# and /var/log/private/ with the DynamicUser as owner, then mounts
+# them at the standard paths inside the unit's namespace.
+StateDirectory=xinas-api
+LogsDirectory=xinas-api
+
+# Group that may connect to the UDS at /run/xinas/api.sock. The
+# Ansible role creates the xinas-admin group and adds operators to
+# it; the server.ts chmods the socket to 0660 root:xinas-admin.
+# For the skeleton, the unit doesn't create the group — the role does.
+RuntimeDirectory=xinas
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target
