@@ -4,6 +4,7 @@ import { requestIdMiddleware } from './middleware/request-id.js';
 import { authMiddleware } from './middleware/auth.js';
 import { auditMiddleware } from './middleware/audit.js';
 import { errorMiddleware } from './middleware/error.js';
+import { systemRouter } from './routes/system.js';
 
 export function createApp(ctx: ApiContext): Express {
   const app = express();
@@ -13,10 +14,8 @@ export function createApp(ctx: ApiContext): Express {
   app.use(authMiddleware(ctx.config));
   app.use(auditMiddleware(ctx.state));
 
-  // Routes are mounted by later tasks. The /api/v1 prefix is
-  // established here so the structure is in place.
   const v1 = Router();
-  // (route registrations land in subsequent tasks)
+  v1.use(systemRouter(ctx));
   app.use('/api/v1', v1);
 
   app.use(errorMiddleware());
