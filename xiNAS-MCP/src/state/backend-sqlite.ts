@@ -143,8 +143,16 @@ export class SqliteKvStore implements KvStore {
   watch(_prefix: string, _onChange: (event: WatchEvent) => void): WatchHandle {
     throw new Error('watch: not implemented in SS-6');
   }
-  transaction<R>(_fn: (tx: KvTransaction) => R): R {
-    throw new Error('transaction: not implemented in SS-6');
+  transaction<R>(fn: (tx: KvTransaction) => R): R {
+    const txFacade: KvTransaction = {
+      get: (key) => this.get(key),
+      put: (key, value, opts) => this.put(key, value, opts),
+      delete: (key, expected_revision) => this.delete(key, expected_revision),
+    };
+    // better-sqlite3 transactions are synchronous and propagate throws
+    // as rollback. The wrapper invokes fn and returns its result.
+    const run = this.db.transaction(() => fn(txFacade));
+    return run();
   }
   close(): void {
     this.db.close();
