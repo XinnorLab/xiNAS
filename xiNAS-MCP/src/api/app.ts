@@ -10,6 +10,10 @@ import { nfsRouter } from './routes/nfs.js';
 import { networkRouter } from './routes/network.js';
 import { healthRouter } from './routes/health.js';
 import { tasksRouter } from './routes/tasks.js';
+import { eventsRouter } from './routes/events.js';
+import { auditRouter } from './routes/audit-query.js';
+import { configHistoryRouter } from './routes/config-history.js';
+import { supportRouter } from './routes/support.js';
 
 export function createApp(ctx: ApiContext): Express {
   const app = express();
@@ -26,6 +30,10 @@ export function createApp(ctx: ApiContext): Express {
   v1.use(networkRouter(ctx));
   v1.use(healthRouter(ctx));
   v1.use(tasksRouter(ctx));
+  v1.use(eventsRouter(ctx));
+  v1.use(auditRouter(ctx));
+  v1.use(configHistoryRouter(ctx));
+  v1.use(supportRouter(ctx));
   app.use('/api/v1', v1);
 
   app.use(errorMiddleware());
