@@ -29,7 +29,11 @@ export interface SystemInfo {
 }
 
 function readFile(p: string): string {
-  try { return fs.readFileSync(p, 'utf8'); } catch { return ''; }
+  try {
+    return fs.readFileSync(p, 'utf8');
+  } catch {
+    return '';
+  }
 }
 
 function parseKeyValue(content: string): Record<string, string> {
@@ -89,10 +93,12 @@ export function getSystemInfo(): SystemInfo {
   try {
     const numaDir = '/sys/devices/system/node';
     if (fs.existsSync(numaDir)) {
-      const entries = fs.readdirSync(numaDir).filter(e => /^node\d+$/.test(e));
+      const entries = fs.readdirSync(numaDir).filter((e) => /^node\d+$/.test(e));
       if (entries.length > 0) numa_nodes = entries.length;
     }
-  } catch { /* */ }
+  } catch {
+    /* */
+  }
 
   // /etc/os-release
   const osRelease = parseOsRelease(readFile('/etc/os-release'));
@@ -147,23 +153,17 @@ export function checkNfsReadiness(): NfsReadiness {
   const blocking: string[] = [];
 
   if (!fs.existsSync('/usr/sbin/exportfs')) {
-    blocking.push(
-      'nfs-kernel-server package is not installed (missing /usr/sbin/exportfs)'
-    );
+    blocking.push('nfs-kernel-server package is not installed (missing /usr/sbin/exportfs)');
   }
 
   const nfsServer = getServiceState('nfs-server');
   if (!nfsServer.active) {
-    blocking.push(
-      `nfs-server.service is ${nfsServer.state} — NFS daemon is not running`
-    );
+    blocking.push(`nfs-server.service is ${nfsServer.state} — NFS daemon is not running`);
   }
 
   const helper = getServiceState('xinas-nfs-helper');
   if (!helper.active) {
-    blocking.push(
-      `xinas-nfs-helper.service is ${helper.state} — NFS helper daemon is not running`
-    );
+    blocking.push(`xinas-nfs-helper.service is ${helper.state} — NFS helper daemon is not running`);
   }
 
   return { ready: blocking.length === 0, blocking };

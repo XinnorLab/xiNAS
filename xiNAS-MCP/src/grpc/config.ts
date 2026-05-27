@@ -25,11 +25,15 @@ export interface ConfigApplyRequest {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type GrpcClient = any;
 
-export const configBackup = (client: GrpcClient, req: ConfigBackupRequest): Promise<XRaidResponse> =>
-  callRpc(client.configBackup.bind(client), req);
+export const configBackup = (
+  client: GrpcClient,
+  req: ConfigBackupRequest,
+): Promise<XRaidResponse> => callRpc(client.configBackup.bind(client), req);
 
-export const configRestore = (client: GrpcClient, req: ConfigRestoreRequest): Promise<XRaidResponse> =>
-  callRpc(client.configRestore.bind(client), req);
+export const configRestore = (
+  client: GrpcClient,
+  req: ConfigRestoreRequest,
+): Promise<XRaidResponse> => callRpc(client.configRestore.bind(client), req);
 
 export const configShow = (client: GrpcClient, req: ConfigShowRequest): Promise<XRaidResponse> =>
   callRpc(client.configShow.bind(client), req);

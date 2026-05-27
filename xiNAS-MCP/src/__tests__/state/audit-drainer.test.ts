@@ -66,7 +66,11 @@ describe('AuditDrainer', () => {
     audit.queue(entry());
     await drainer.drainNow();
 
-    const row = db.prepare('SELECT drain_state, durable_file, durable_offset FROM audit_outbox WHERE audit_seq = 1').get() as {
+    const row = db
+      .prepare(
+        'SELECT drain_state, durable_file, durable_offset FROM audit_outbox WHERE audit_seq = 1',
+      )
+      .get() as {
       drain_state: string;
       durable_file: string;
       durable_offset: number;
@@ -75,7 +79,9 @@ describe('AuditDrainer', () => {
     expect(row.durable_file).toBe('audit.jsonl');
     expect(typeof row.durable_offset).toBe('number');
 
-    const idx = db.prepare('SELECT durable_file, durable_offset FROM audit_index WHERE audit_seq = 1').get() as {
+    const idx = db
+      .prepare('SELECT durable_file, durable_offset FROM audit_index WHERE audit_seq = 1')
+      .get() as {
       durable_file: string;
       durable_offset: number;
     };
@@ -108,19 +114,20 @@ describe('AuditDrainer', () => {
     const e1 = audit.queue(entry({ kind: 'a' }));
     const e2 = audit.queue(entry({ kind: 'b' }));
 
-    const line2 = JSON.stringify({
-      audit_seq: e2.audit_seq,
-      prev_hash: e2.prev_hash.toString('hex'),
-      hash: e2.hash.toString('hex'),
-      kind: 'b',
-      timestamp: Date.now(),
-      node_id: 'node-1',
-      principal: 'p',
-      client_type: 'rest',
-      request_id: 'r',
-      parameters_hash: 'sha256:p',
-      result_hash: 'sha256:r',
-    }) + '\n';
+    const line2 =
+      JSON.stringify({
+        audit_seq: e2.audit_seq,
+        prev_hash: e2.prev_hash.toString('hex'),
+        hash: e2.hash.toString('hex'),
+        kind: 'b',
+        timestamp: Date.now(),
+        node_id: 'node-1',
+        principal: 'p',
+        client_type: 'rest',
+        request_id: 'r',
+        parameters_hash: 'sha256:p',
+        result_hash: 'sha256:r',
+      }) + '\n';
     writeFileSync(join(dir, 'audit-gap.jsonl'), line2);
 
     const gappedDrainer = new AuditDrainer(db, {

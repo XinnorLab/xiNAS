@@ -34,10 +34,10 @@ export { LeaseManager } from './leases.js';
 export { GcSweeper } from './gc.js';
 
 export interface OpenStateStoreOptions {
-  databasePath: string;       // e.g. /var/lib/xinas/state/xinas.db
-  auditJsonlPath: string;     // e.g. /var/log/xinas/audit.jsonl
-  nodeId: string;             // controller_id used in audit genesis hash
-  archiveDir?: string;        // passed to GcSweeper; default per gc.ts
+  databasePath: string; // e.g. /var/lib/xinas/state/xinas.db
+  auditJsonlPath: string; // e.g. /var/log/xinas/audit.jsonl
+  nodeId: string; // controller_id used in audit genesis hash
+  archiveDir?: string; // passed to GcSweeper; default per gc.ts
 }
 
 export interface OpenedStateStore {

@@ -29,11 +29,19 @@ export interface NvmeHealth {
 }
 
 function readFile(p: string): string {
-  try { return fs.readFileSync(p, 'utf8').trim(); } catch { return ''; }
+  try {
+    return fs.readFileSync(p, 'utf8').trim();
+  } catch {
+    return '';
+  }
 }
 
 function listDir(p: string): string[] {
-  try { return fs.readdirSync(p); } catch { return []; }
+  try {
+    return fs.readdirSync(p);
+  } catch {
+    return [];
+  }
 }
 
 function readNvmeHealth(ctrlName: string): NvmeHealth {
@@ -41,7 +49,7 @@ function readNvmeHealth(ctrlName: string): NvmeHealth {
 
   // Temperature from hwmon
   let temperature_celsius: number | null = null;
-  const hwmons = listDir(base).filter(e => e.startsWith('hwmon'));
+  const hwmons = listDir(base).filter((e) => e.startsWith('hwmon'));
   for (const hwmon of hwmons) {
     const tempRaw = readFile(path.join(base, hwmon, 'temp1_input'));
     if (tempRaw) {
@@ -51,8 +59,8 @@ function readNvmeHealth(ctrlName: string): NvmeHealth {
   }
 
   // NVMe health log fields from sysfs
-  const parseHex = (v: string) => v ? parseInt(v, 16) : null;
-  const parseInt10 = (v: string) => v ? parseInt(v, 10) : null;
+  const parseHex = (v: string) => (v ? parseInt(v, 16) : null);
+  const parseInt10 = (v: string) => (v ? parseInt(v, 10) : null);
 
   const availSpareRaw = readFile(path.join(base, 'available_spare'));
   const mediaErrorsRaw = readFile(path.join(base, 'media_errors'));
@@ -93,7 +101,12 @@ export function listBlockDevices(): BlockDeviceInfo[] {
 
   for (const dev of devices) {
     // Skip partitions and loop devices
-    if (/\d$/.test(dev) || dev.startsWith('loop') || dev.startsWith('dm-') || dev.startsWith('sr')) {
+    if (
+      /\d$/.test(dev) ||
+      dev.startsWith('loop') ||
+      dev.startsWith('dm-') ||
+      dev.startsWith('sr')
+    ) {
       continue;
     }
     // Include nvme namespaces and sata drives
@@ -102,11 +115,12 @@ export function listBlockDevices(): BlockDeviceInfo[] {
     const base = path.join(blockDir, dev);
     const devicePath = `/dev/${dev}`;
 
-    const model = readFile(path.join(base, 'device/model')) ||
-                  readFile(path.join(base, 'device/device/model'));
+    const model =
+      readFile(path.join(base, 'device/model')) || readFile(path.join(base, 'device/device/model'));
     const serial = readFile(path.join(base, 'device/serial'));
-    const firmware = readFile(path.join(base, 'device/firmware_rev')) ||
-                     readFile(path.join(base, 'device/firmware_version'));
+    const firmware =
+      readFile(path.join(base, 'device/firmware_rev')) ||
+      readFile(path.join(base, 'device/firmware_version'));
 
     const sizeRaw = readFile(path.join(base, 'size'));
     const size_bytes = sizeRaw ? parseInt(sizeRaw) * 512 : 0;

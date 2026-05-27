@@ -82,7 +82,7 @@ export function checkPermission(toolName: string, ctx: CallContext): void {
   if (principalRank < requiredRank) {
     throw new McpToolError(
       ErrorCode.PERMISSION_DENIED,
-      `Tool '${toolName}' requires role '${required}'. Principal '${ctx.principal}' has role '${ctx.role}'.`
+      `Tool '${toolName}' requires role '${required}'. Principal '${ctx.principal}' has role '${ctx.role}'.`,
     );
   }
 }

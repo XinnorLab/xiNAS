@@ -5,8 +5,16 @@
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
-import { listExports, addExport, removeExport, updateExport,
-         listSessions, getSessions, setQuota, reloadExports } from '../os/nfsClient.js';
+import {
+  listExports,
+  addExport,
+  removeExport,
+  updateExport,
+  listSessions,
+  getSessions,
+  setQuota,
+  reloadExports,
+} from '../os/nfsClient.js';
 import { applyWithPlan } from '../middleware/planApply.js';
 import { resolveController } from '../server/controllerResolver.js';
 import type { ExportEntry, ClientSpec } from '../types/nfs.js';
@@ -40,12 +48,19 @@ export const ShareCreateSchema = z.object({
   nfs_versions: z.array(z.string()).default(['4.2', '4.1', '4', '3']),
   async_commit: z.boolean().default(false),
   rdma: z.boolean().default(false).describe('Enable RDMA transport'),
-  create_path: z.boolean().default(false).describe(
-    'Create the export directory on apply if it does not exist. Parent directory must already exist (single-level mkdir).'
-  ),
-  path_mode: z.string().regex(PATH_MODE_RE, 'octal mode like "0755" or "1777"').default('0755').describe(
-    'Octal mode for the created directory (only used when create_path=true). Examples: "0755", "1777".'
-  ),
+  create_path: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Create the export directory on apply if it does not exist. Parent directory must already exist (single-level mkdir).',
+    ),
+  path_mode: z
+    .string()
+    .regex(PATH_MODE_RE, 'octal mode like "0755" or "1777"')
+    .default('0755')
+    .describe(
+      'Octal mode for the created directory (only used when create_path=true). Examples: "0755", "1777".',
+    ),
   mode: z.enum(['plan', 'apply']).default('plan'),
   idempotency_key: z.string().optional(),
 });
@@ -73,7 +88,10 @@ export const ShareDeleteSchema = z.object({
   share_id: z.string(),
   mode: z.enum(['plan', 'apply']).default('plan'),
   dangerous: z.boolean().default(false),
-  delete_data: z.boolean().default(false).describe('Also delete underlying filesystem data (DESTRUCTIVE)'),
+  delete_data: z
+    .boolean()
+    .default(false)
+    .describe('Also delete underlying filesystem data (DESTRUCTIVE)'),
 });
 
 // --- Helpers ---
@@ -107,7 +125,9 @@ export async function handleShareList(params: z.infer<typeof ShareListSchema>) {
   return listExports();
 }
 
-export async function handleShareGetActiveSessions(params: z.infer<typeof ShareGetActiveSessionsSchema>) {
+export async function handleShareGetActiveSessions(
+  params: z.infer<typeof ShareGetActiveSessionsSchema>,
+) {
   resolveController(params.controller_id);
   return getSessions(params.share_id);
 }
@@ -135,13 +155,13 @@ export async function handleShareCreate(params: z.infer<typeof ShareCreateSchema
       if (!pathExists) {
         if (!params.create_path) {
           blockingResources.push(
-            `Path does not exist: ${params.path} — set create_path=true to auto-create it on apply`
+            `Path does not exist: ${params.path} — set create_path=true to auto-create it on apply`,
           );
         } else {
           const parent = path.dirname(params.path);
           if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) {
             blockingResources.push(
-              `Parent directory does not exist: ${parent} — create the parent first (single-level mkdir only)`
+              `Parent directory does not exist: ${parent} — create the parent first (single-level mkdir only)`,
             );
           } else {
             warnings.push(`Path will be created at ${params.path} with mode ${params.path_mode}`);
@@ -155,7 +175,7 @@ export async function handleShareCreate(params: z.infer<typeof ShareCreateSchema
       // Check for duplicate
       try {
         const existing = await listExports();
-        if (existing.find(e => e.path === params.path)) {
+        if (existing.find((e) => e.path === params.path)) {
           warnings.push(`Export '${params.path}' already exists — will be overwritten`);
         }
       } catch {
@@ -164,7 +184,7 @@ export async function handleShareCreate(params: z.infer<typeof ShareCreateSchema
 
       const entry: ExportEntry = {
         path: params.path,
-        clients: params.clients.map(c => ({
+        clients: params.clients.map((c) => ({
           host: c.host,
           options: buildNfsOptions({
             clients: [c],
@@ -179,12 +199,14 @@ export async function handleShareCreate(params: z.infer<typeof ShareCreateSchema
       return {
         mode: 'plan' as const,
         description: `Create NFS export '${params.path}'`,
-        changes: [{
-          action: 'create',
-          resource_type: 'nfs_export',
-          resource_id: params.path,
-          after: entry,
-        }],
+        changes: [
+          {
+            action: 'create',
+            resource_type: 'nfs_export',
+            resource_id: params.path,
+            after: entry,
+          },
+        ],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -194,7 +216,7 @@ export async function handleShareCreate(params: z.infer<typeof ShareCreateSchema
     execute: async () => {
       const entry: ExportEntry = {
         path: params.path,
-        clients: params.clients.map(c => ({
+        clients: params.clients.map((c) => ({
           host: c.host,
           options: buildNfsOptions({
             clients: [c],
@@ -237,26 +259,32 @@ export async function handleShareUpdatePolicy(params: z.infer<typeof ShareUpdate
       let exp: ExportEntry | undefined;
       try {
         const existing = await listExports();
-        exp = existing.find(e => e.path === params.share_id);
+        exp = existing.find((e) => e.path === params.share_id);
         if (!exp) {
           blockingResources.push(`Export '${params.share_id}' not found`);
         }
       } catch {
         if (nfs.ready) {
-          blockingResources.push(`Cannot verify export '${params.share_id}' — nfs-helper unreachable`);
+          blockingResources.push(
+            `Cannot verify export '${params.share_id}' — nfs-helper unreachable`,
+          );
         }
       }
 
       return {
         mode: 'plan' as const,
         description: `Update NFS export policy for '${params.share_id}'`,
-        changes: exp ? [{
-          action: 'modify' as const,
-          resource_type: 'nfs_export',
-          resource_id: params.share_id,
-          before: exp,
-          after: { ...exp, ...params },
-        }] : [],
+        changes: exp
+          ? [
+              {
+                action: 'modify' as const,
+                resource_type: 'nfs_export',
+                resource_id: params.share_id,
+                before: exp,
+                after: { ...exp, ...params },
+              },
+            ]
+          : [],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -319,12 +347,14 @@ export async function handleShareDelete(params: z.infer<typeof ShareDeleteSchema
       return {
         mode: 'plan' as const,
         description: `Delete NFS export '${params.share_id}'`,
-        changes: [{
-          action: 'delete',
-          resource_type: 'nfs_export',
-          resource_id: params.share_id,
-          ...(params.delete_data ? {} : {}),
-        }],
+        changes: [
+          {
+            action: 'delete',
+            resource_type: 'nfs_export',
+            resource_id: params.share_id,
+            ...(params.delete_data ? {} : {}),
+          },
+        ],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),

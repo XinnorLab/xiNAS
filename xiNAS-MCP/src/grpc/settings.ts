@@ -26,8 +26,10 @@ export interface SettingsMailModifyRequest {
   progress_polling_interval?: number;
 }
 
-export const settingsMailModify = (client: GrpcClient, req: SettingsMailModifyRequest): Promise<XRaidResponse> =>
-  callRpc(client.settingsMailModify.bind(client), req);
+export const settingsMailModify = (
+  client: GrpcClient,
+  req: SettingsMailModifyRequest,
+): Promise<XRaidResponse> => callRpc(client.settingsMailModify.bind(client), req);
 
 export const settingsPoolShow = (client: GrpcClient): Promise<XRaidResponse> =>
   callRpc(client.settingsPoolShow.bind(client), {});

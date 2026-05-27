@@ -15,8 +15,10 @@ type GrpcClient = any;
 export const licenseShow = (client: GrpcClient): Promise<XRaidResponse> =>
   callRpc(client.licenseShow.bind(client), {});
 
-export const licenseUpdate = (client: GrpcClient, req: LicenseUpdateRequest): Promise<XRaidResponse> =>
-  callRpc(client.licenseUpdate.bind(client), req);
+export const licenseUpdate = (
+  client: GrpcClient,
+  req: LicenseUpdateRequest,
+): Promise<XRaidResponse> => callRpc(client.licenseUpdate.bind(client), req);
 
 export const licenseDelete = (client: GrpcClient): Promise<XRaidResponse> =>
   callRpc(client.licenseDelete.bind(client), {});

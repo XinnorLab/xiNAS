@@ -35,7 +35,10 @@ const USERNAME_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
 export const AuthCreateUserSchema = z.object({
   controller_id: z.string().optional(),
   username: z.string().describe('Linux username (lowercase, max 32 chars)'),
-  home_dir: z.string().optional().describe('Home directory path (defaults to /mnt/data/<username>)'),
+  home_dir: z
+    .string()
+    .optional()
+    .describe('Home directory path (defaults to /mnt/data/<username>)'),
   password: z.string().optional().describe('User password (optional, account locked if omitted)'),
   password_confirm: z.string().optional().describe('Password confirmation (must match password)'),
   mode: z.enum(['plan', 'apply']).default('plan'),
@@ -97,7 +100,9 @@ export const AuthRemoveFromGroupSchema = z.object({
 
 // --- Handlers ---
 
-export async function handleAuthGetSupportedModes(params: z.infer<typeof AuthGetSupportedModesSchema>) {
+export async function handleAuthGetSupportedModes(
+  params: z.infer<typeof AuthGetSupportedModesSchema>,
+) {
   resolveController(params.controller_id);
   const client = await getClient(params.controller_id);
 
@@ -113,14 +118,14 @@ export async function handleAuthGetSupportedModes(params: z.infer<typeof AuthGet
 
 function checkKerberosReady(): boolean {
   // Check if krb5.conf and keytab are present
-  return fs.existsSync('/etc/krb5.conf') && (
-    fs.existsSync('/etc/krb5.keytab') ||
-    fs.existsSync('/etc/nfs.keytab')
+  return (
+    fs.existsSync('/etc/krb5.conf') &&
+    (fs.existsSync('/etc/krb5.keytab') || fs.existsSync('/etc/nfs.keytab'))
   );
 }
 
 export async function handleAuthValidateKerberos(
-  params: z.infer<typeof AuthValidateKerberosSchema>
+  params: z.infer<typeof AuthValidateKerberosSchema>,
 ): Promise<{
   realm: string;
   kdc_reachable: boolean;
@@ -148,13 +153,16 @@ export async function handleAuthValidateKerberos(
     time_sync_ok = !adjtime.includes('UNSYNC');
   } catch {
     // Check if chrony/ntp service is active
-    const ntpState = ['chrony', 'ntpd', 'systemd-timesyncd']
-      .some(svc => fs.existsSync(`/sys/fs/cgroup/system.slice/${svc}.service`));
+    const ntpState = ['chrony', 'ntpd', 'systemd-timesyncd'].some((svc) =>
+      fs.existsSync(`/sys/fs/cgroup/system.slice/${svc}.service`),
+    );
     time_sync_ok = ntpState;
   }
 
   if (!time_sync_ok) {
-    issues.push('Time synchronization may not be active — Kerberos requires time sync within 5 minutes');
+    issues.push(
+      'Time synchronization may not be active — Kerberos requires time sync within 5 minutes',
+    );
   }
 
   // krb5.conf check
@@ -177,7 +185,10 @@ export async function handleAuthValidateKerberos(
 
 const CMD_TIMEOUT_MS = 15_000;
 
-function exec(cmd: string, args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+function exec(
+  cmd: string,
+  args: string[],
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, { timeout: CMD_TIMEOUT_MS }, (err, stdout, stderr) => {
       if (err && 'killed' in err && err.killed) {
@@ -251,7 +262,9 @@ export async function handleAuthCreateUser(params: z.infer<typeof AuthCreateUser
       const warnings: string[] = [];
 
       if (!USERNAME_RE.test(params.username)) {
-        blockingResources.push(`Invalid username '${params.username}': must match ${USERNAME_RE.source}`);
+        blockingResources.push(
+          `Invalid username '${params.username}': must match ${USERNAME_RE.source}`,
+        );
       }
 
       const existing = await lookupUser(params.username);
@@ -275,12 +288,14 @@ export async function handleAuthCreateUser(params: z.infer<typeof AuthCreateUser
       return {
         mode: 'plan' as const,
         description: `Create user '${params.username}' with home ${homeDir}`,
-        changes: [{
-          action: 'create',
-          resource_type: 'linux_user',
-          resource_id: params.username,
-          after: { username: params.username, home: homeDir, shell: '/bin/bash' },
-        }],
+        changes: [
+          {
+            action: 'create',
+            resource_type: 'linux_user',
+            resource_id: params.username,
+            after: { username: params.username, home: homeDir, shell: '/bin/bash' },
+          },
+        ],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -288,7 +303,14 @@ export async function handleAuthCreateUser(params: z.infer<typeof AuthCreateUser
     },
 
     execute: async () => {
-      const result = await exec('useradd', ['-m', '-s', '/bin/bash', '-d', homeDir, params.username]);
+      const result = await exec('useradd', [
+        '-m',
+        '-s',
+        '/bin/bash',
+        '-d',
+        homeDir,
+        params.username,
+      ]);
       if (result.exitCode !== 0) {
         throw new McpToolError(ErrorCode.INTERNAL, `useradd failed: ${result.stderr.trim()}`);
       }
@@ -328,7 +350,9 @@ export async function handleAuthDeleteUser(params: z.infer<typeof AuthDeleteUser
       if (!existing) {
         blockingResources.push(`User '${params.username}' not found`);
       } else if (existing.uid < 1000) {
-        blockingResources.push(`Cannot delete system user '${params.username}' (UID ${existing.uid})`);
+        blockingResources.push(
+          `Cannot delete system user '${params.username}' (UID ${existing.uid})`,
+        );
       }
 
       // Check active NFS sessions
@@ -336,7 +360,9 @@ export async function handleAuthDeleteUser(params: z.infer<typeof AuthDeleteUser
         const sessions = await listSessions();
         // Note: NFS sessions don't directly expose usernames, but we warn about activity
         if (sessions.length > 0) {
-          warnings.push(`${sessions.length} active NFS session(s) — verify none belong to '${params.username}'`);
+          warnings.push(
+            `${sessions.length} active NFS session(s) — verify none belong to '${params.username}'`,
+          );
         }
       } catch {
         warnings.push('Could not check active NFS sessions');
@@ -345,12 +371,14 @@ export async function handleAuthDeleteUser(params: z.infer<typeof AuthDeleteUser
       return {
         mode: 'plan' as const,
         description: `Delete user '${params.username}' (home directory removed)`,
-        changes: [{
-          action: 'delete',
-          resource_type: 'linux_user',
-          resource_id: params.username,
-          before: existing ?? undefined,
-        }],
+        changes: [
+          {
+            action: 'delete',
+            resource_type: 'linux_user',
+            resource_id: params.username,
+            before: existing ?? undefined,
+          },
+        ],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -442,7 +470,9 @@ export async function handleAuthChangePassword(params: z.infer<typeof AuthChange
       if (!existing) {
         blockingResources.push(`User '${params.username}' not found`);
       } else if (existing.uid < 1000) {
-        blockingResources.push(`Cannot modify system user '${params.username}' (UID ${existing.uid})`);
+        blockingResources.push(
+          `Cannot modify system user '${params.username}' (UID ${existing.uid})`,
+        );
       }
 
       if (params.password !== params.password_confirm) {
@@ -452,12 +482,14 @@ export async function handleAuthChangePassword(params: z.infer<typeof AuthChange
       return {
         mode: 'plan' as const,
         description: `Change password for '${params.username}'`,
-        changes: [{
-          action: 'modify',
-          resource_type: 'linux_user',
-          resource_id: params.username,
-          after: { password: '(changed)' },
-        }],
+        changes: [
+          {
+            action: 'modify',
+            resource_type: 'linux_user',
+            resource_id: params.username,
+            after: { password: '(changed)' },
+          },
+        ],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -498,25 +530,31 @@ export async function handleAuthSetUserLock(params: z.infer<typeof AuthSetUserLo
       if (!existing) {
         blockingResources.push(`User '${params.username}' not found`);
       } else if (existing.uid < 1000) {
-        blockingResources.push(`Cannot modify system user '${params.username}' (UID ${existing.uid})`);
+        blockingResources.push(
+          `Cannot modify system user '${params.username}' (UID ${existing.uid})`,
+        );
       }
 
       const currentlyLocked = await isUserLocked(params.username);
       if (currentlyLocked === params.locked) {
-        warnings.push(`User '${params.username}' is already ${params.locked ? 'locked' : 'unlocked'}`);
+        warnings.push(
+          `User '${params.username}' is already ${params.locked ? 'locked' : 'unlocked'}`,
+        );
       }
 
       const action_desc = params.locked ? 'Lock' : 'Unlock';
       return {
         mode: 'plan' as const,
         description: `${action_desc} user '${params.username}'`,
-        changes: [{
-          action: 'modify',
-          resource_type: 'linux_user',
-          resource_id: params.username,
-          before: { locked: currentlyLocked },
-          after: { locked: params.locked },
-        }],
+        changes: [
+          {
+            action: 'modify',
+            resource_type: 'linux_user',
+            resource_id: params.username,
+            before: { locked: currentlyLocked },
+            after: { locked: params.locked },
+          },
+        ],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -547,7 +585,9 @@ export async function handleAuthChangeShell(params: z.infer<typeof AuthChangeShe
       if (!existing) {
         blockingResources.push(`User '${params.username}' not found`);
       } else if (existing.uid < 1000) {
-        blockingResources.push(`Cannot modify system user '${params.username}' (UID ${existing.uid})`);
+        blockingResources.push(
+          `Cannot modify system user '${params.username}' (UID ${existing.uid})`,
+        );
       }
 
       if (!fs.existsSync(params.shell)) {
@@ -557,13 +597,15 @@ export async function handleAuthChangeShell(params: z.infer<typeof AuthChangeShe
       return {
         mode: 'plan' as const,
         description: `Change shell for '${params.username}' to ${params.shell}`,
-        changes: [{
-          action: 'modify',
-          resource_type: 'linux_user',
-          resource_id: params.username,
-          before: existing ? { shell: existing.shell } : undefined,
-          after: { shell: params.shell },
-        }],
+        changes: [
+          {
+            action: 'modify',
+            resource_type: 'linux_user',
+            resource_id: params.username,
+            before: existing ? { shell: existing.shell } : undefined,
+            after: { shell: params.shell },
+          },
+        ],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -593,7 +635,9 @@ export async function handleAuthAddToGroup(params: z.infer<typeof AuthAddToGroup
       if (!existing) {
         blockingResources.push(`User '${params.username}' not found`);
       } else if (existing.uid < 1000) {
-        blockingResources.push(`Cannot modify system user '${params.username}' (UID ${existing.uid})`);
+        blockingResources.push(
+          `Cannot modify system user '${params.username}' (UID ${existing.uid})`,
+        );
       }
 
       const groupResult = await exec('getent', ['group', params.group]);
@@ -602,19 +646,23 @@ export async function handleAuthAddToGroup(params: z.infer<typeof AuthAddToGroup
       } else {
         const groupInfo = parseGroupLine(groupResult.stdout.trim());
         if (groupInfo && groupInfo.members.includes(params.username)) {
-          blockingResources.push(`User '${params.username}' is already a member of group '${params.group}'`);
+          blockingResources.push(
+            `User '${params.username}' is already a member of group '${params.group}'`,
+          );
         }
       }
 
       return {
         mode: 'plan' as const,
         description: `Add '${params.username}' to group '${params.group}'`,
-        changes: [{
-          action: 'modify',
-          resource_type: 'linux_user',
-          resource_id: params.username,
-          after: { added_to_group: params.group },
-        }],
+        changes: [
+          {
+            action: 'modify',
+            resource_type: 'linux_user',
+            resource_id: params.username,
+            after: { added_to_group: params.group },
+          },
+        ],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -644,7 +692,9 @@ export async function handleAuthRemoveFromGroup(params: z.infer<typeof AuthRemov
       if (!existing) {
         blockingResources.push(`User '${params.username}' not found`);
       } else if (existing.uid < 1000) {
-        blockingResources.push(`Cannot modify system user '${params.username}' (UID ${existing.uid})`);
+        blockingResources.push(
+          `Cannot modify system user '${params.username}' (UID ${existing.uid})`,
+        );
       }
 
       const groupResult = await exec('getent', ['group', params.group]);
@@ -654,7 +704,9 @@ export async function handleAuthRemoveFromGroup(params: z.infer<typeof AuthRemov
         const groupInfo = parseGroupLine(groupResult.stdout.trim());
         if (groupInfo) {
           if (!groupInfo.members.includes(params.username)) {
-            blockingResources.push(`User '${params.username}' is not a member of group '${params.group}'`);
+            blockingResources.push(
+              `User '${params.username}' is not a member of group '${params.group}'`,
+            );
           }
           if (existing && groupInfo.gid === existing.gid) {
             blockingResources.push(`Cannot remove user from primary group '${params.group}'`);
@@ -665,12 +717,14 @@ export async function handleAuthRemoveFromGroup(params: z.infer<typeof AuthRemov
       return {
         mode: 'plan' as const,
         description: `Remove '${params.username}' from group '${params.group}'`,
-        changes: [{
-          action: 'modify',
-          resource_type: 'linux_user',
-          resource_id: params.username,
-          after: { removed_from_group: params.group },
-        }],
+        changes: [
+          {
+            action: 'modify',
+            resource_type: 'linux_user',
+            resource_id: params.username,
+            after: { removed_from_group: params.group },
+          },
+        ],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),

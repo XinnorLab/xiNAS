@@ -38,14 +38,17 @@ export class JobManager {
   }
 
   static list(controllerId: string): JobRecord[] {
-    return Array.from(jobs.values()).filter(j => j.controller_id === controllerId);
+    return Array.from(jobs.values()).filter((j) => j.controller_id === controllerId);
   }
 
   static cancel(jobId: string): void {
     const record = jobs.get(jobId);
     if (!record) throw new McpToolError(ErrorCode.NOT_FOUND, `Job not found: ${jobId}`);
     if (record.state === 'success' || record.state === 'failed') {
-      throw new McpToolError(ErrorCode.PRECONDITION_FAILED, `Job ${jobId} is already ${record.state}`);
+      throw new McpToolError(
+        ErrorCode.PRECONDITION_FAILED,
+        `Job ${jobId} is already ${record.state}`,
+      );
     }
     record.state = 'cancelled';
   }
@@ -75,7 +78,10 @@ export function handleJobList(params: z.infer<typeof JobListSchema>): JobRecord[
   return JobManager.list(params.controller_id);
 }
 
-export function handleJobCancel(params: z.infer<typeof JobCancelSchema>): { cancelled: true; job_id: string } {
+export function handleJobCancel(params: z.infer<typeof JobCancelSchema>): {
+  cancelled: true;
+  job_id: string;
+} {
   JobManager.cancel(params.job_id);
   return { cancelled: true, job_id: params.job_id };
 }

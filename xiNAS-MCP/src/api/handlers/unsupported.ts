@@ -13,22 +13,20 @@ import { errorStatus, makeError } from '../errors.js';
  */
 export function executorUnavailable(req: Request, res: Response): void {
   const ctx = req.context!;
-  res
-    .status(errorStatus('INTERNAL'))
-    .json(
-      buildEnvelope({
-        request_id: ctx.request_id,
-        correlation_id: ctx.correlation_id,
-        state_revision: 0,
-        errors: [
-          makeError(
-            'INTERNAL',
-            'mutating operations are unavailable: xinas-agent is not running',
-            { code: 'EXECUTOR_UNAVAILABLE' },
-            'start xinas-agent.service; mutating endpoints will return once the agent is healthy',
-          ),
-        ],
-        result: null,
-      }),
-    );
+  res.status(errorStatus('INTERNAL')).json(
+    buildEnvelope({
+      request_id: ctx.request_id,
+      correlation_id: ctx.correlation_id,
+      state_revision: 0,
+      errors: [
+        makeError(
+          'INTERNAL',
+          'mutating operations are unavailable: xinas-agent is not running',
+          { code: 'EXECUTOR_UNAVAILABLE' },
+          'start xinas-agent.service; mutating endpoints will return once the agent is healthy',
+        ),
+      ],
+      result: null,
+    }),
+  );
 }

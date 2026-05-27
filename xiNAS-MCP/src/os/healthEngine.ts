@@ -37,15 +37,12 @@ const PROFILE_TIMEOUT_MS: Record<string, number> = {
 };
 
 /** Directories to search for profile YAML files (same order as runner.py) */
-const PROFILE_DIRS = [
-  '/opt/xiNAS/healthcheck_profiles',
-  '/home/xinnor/xiNAS/healthcheck_profiles',
-];
+const PROFILE_DIRS = ['/opt/xiNAS/healthcheck_profiles', '/home/xinnor/xiNAS/healthcheck_profiles'];
 
 export interface EngineCheckResult {
   section: string;
   name: string;
-  status: string;  // PASS, WARN, FAIL, SKIP
+  status: string; // PASS, WARN, FAIL, SKIP
   actual: string;
   expected: string;
   evidence: string;
@@ -87,28 +84,34 @@ function findProfilePath(profile: string): string {
 
 function run(args: string[], timeoutMs: number): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
-    execFile(resolvePython(), ['-m', MODULE, ...args], { timeout: timeoutMs }, (err, stdout, stderr) => {
-      if (err && 'killed' in err && err.killed) {
-        reject(new McpToolError(ErrorCode.TIMEOUT, `Health engine timed out after ${timeoutMs}ms`));
-        return;
-      }
-      const exitCode = err && 'code' in err ? (err.code as number) : 0;
-      resolve({ stdout: stdout ?? '', stderr: stderr ?? '', exitCode });
-    });
+    execFile(
+      resolvePython(),
+      ['-m', MODULE, ...args],
+      { timeout: timeoutMs },
+      (err, stdout, stderr) => {
+        if (err && 'killed' in err && err.killed) {
+          reject(
+            new McpToolError(ErrorCode.TIMEOUT, `Health engine timed out after ${timeoutMs}ms`),
+          );
+          return;
+        }
+        const exitCode = err && 'code' in err ? (err.code as number) : 0;
+        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', exitCode });
+      },
+    );
   });
 }
 
 /**
  * Run the Python health engine with the given profile and return the parsed report.
  */
-export async function runEngineCheck(profile: 'quick' | 'standard' | 'deep'): Promise<EngineReport> {
+export async function runEngineCheck(
+  profile: 'quick' | 'standard' | 'deep',
+): Promise<EngineReport> {
   const profilePath = findProfilePath(profile);
   const timeoutMs = PROFILE_TIMEOUT_MS[profile] ?? 300_000;
 
-  const result = await run(
-    [profilePath, '/tmp', '--json', '--no-save'],
-    timeoutMs,
-  );
+  const result = await run([profilePath, '/tmp', '--json', '--no-save'], timeoutMs);
 
   if (result.exitCode !== 0) {
     throw new McpToolError(

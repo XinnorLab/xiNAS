@@ -18,12 +18,14 @@ export class ArrayLockManager {
       const existing = this.locks.get(arrayId)!;
       throw new McpToolError(
         ErrorCode.CONFLICT,
-        `Array '${arrayId}' is currently locked by '${existing.owner}'. Try again after it completes.`
+        `Array '${arrayId}' is currently locked by '${existing.owner}'. Try again after it completes.`,
       );
     }
 
     let resolve!: () => void;
-    const promise = new Promise<void>(r => { resolve = r; });
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
     this.locks.set(arrayId, { promise, owner: toolName, resolve });
 
     try {

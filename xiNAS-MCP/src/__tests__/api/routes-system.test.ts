@@ -16,9 +16,7 @@ describe('GET /api/v1/system', () => {
   });
 
   it('returns envelope-wrapped Cluster + Node', async () => {
-    const res = await request(setup.app)
-      .get('/api/v1/system')
-      .set('Authorization', ADMIN_TOKEN);
+    const res = await request(setup.app).get('/api/v1/system').set('Authorization', ADMIN_TOKEN);
     expect(res.status).toBe(200);
     expect(res.body.request_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(res.body.result.cluster.id).toBe('default');

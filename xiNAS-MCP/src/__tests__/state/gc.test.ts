@@ -6,7 +6,12 @@ import Database from 'better-sqlite3';
 import { runMigrations } from '../../state/migrations.js';
 import { GcSweeper } from '../../state/gc.js';
 
-function seedTask(db: Database.Database, task_id: string, state: string, terminal_at: number | null) {
+function seedTask(
+  db: Database.Database,
+  task_id: string,
+  state: string,
+  terminal_at: number | null,
+) {
   db.prepare(
     `INSERT INTO tasks (task_id, kind, state, principal, client_type, request_id, correlation_id,
                         input_hash, risk_level, affected_resources, created_at, updated_at, terminal_at)
@@ -14,7 +19,13 @@ function seedTask(db: Database.Database, task_id: string, state: string, termina
   ).run(task_id, state, `r-${task_id}`, `c-${task_id}`, Date.now(), Date.now(), terminal_at);
 }
 
-function seedLease(db: Database.Database, resource_id: string, task_id: string, heartbeat_at: number, ttl: number) {
+function seedLease(
+  db: Database.Database,
+  resource_id: string,
+  task_id: string,
+  heartbeat_at: number,
+  ttl: number,
+) {
   db.prepare(
     `INSERT INTO leases (lease_id, resource_kind, resource_id, task_id, acquired_at, ttl_seconds, heartbeat_at)
      VALUES (?, 'array', ?, ?, ?, ?, ?)`,
@@ -52,7 +63,9 @@ describe('GcSweeper', () => {
     expect(result.archived).toBe(1);
     expect(result.deleted).toBe(1);
 
-    const remaining = (db.prepare('SELECT task_id FROM tasks ORDER BY task_id').all() as { task_id: string }[]).map((r) => r.task_id);
+    const remaining = (
+      db.prepare('SELECT task_id FROM tasks ORDER BY task_id').all() as { task_id: string }[]
+    ).map((r) => r.task_id);
     expect(remaining).toEqual(['t-recent', 't-running']);
 
     const files = readdirSync(dir);
@@ -62,9 +75,14 @@ describe('GcSweeper', () => {
   it('does not remove non-terminal tasks regardless of age', async () => {
     const now = Date.now();
     seedTask(db, 't-old-running', 'running', null);
-    db.prepare('UPDATE tasks SET created_at = ? WHERE task_id = ?').run(now - 1000 * 86400, 't-old-running');
+    db.prepare('UPDATE tasks SET created_at = ? WHERE task_id = ?').run(
+      now - 1000 * 86400,
+      't-old-running',
+    );
     await gc.sweepTasks();
-    expect(db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE task_id = 't-old-running'").get()).toEqual({ n: 1 });
+    expect(
+      db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE task_id = 't-old-running'").get(),
+    ).toEqual({ n: 1 });
   });
 
   it('sweepLeases delegates to LeaseManager and returns its result shape', () => {

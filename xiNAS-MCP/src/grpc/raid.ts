@@ -93,12 +93,22 @@ export interface RaidRestoreRequest {
   service?: boolean;
 }
 
-export interface RaidInitStartRequest { name: string }
-export interface RaidInitStopRequest { name: string }
-export interface RaidInitResetRequest { name: string }
+export interface RaidInitStartRequest {
+  name: string;
+}
+export interface RaidInitStopRequest {
+  name: string;
+}
+export interface RaidInitResetRequest {
+  name: string;
+}
 
-export interface RaidReconStartRequest { name: string }
-export interface RaidReconStopRequest { name: string }
+export interface RaidReconStartRequest {
+  name: string;
+}
+export interface RaidReconStopRequest {
+  name: string;
+}
 
 export interface RaidRestripeStartRequest {
   name: string;
@@ -106,8 +116,12 @@ export interface RaidRestripeStartRequest {
   drives: string[];
   group_size?: number;
 }
-export interface RaidRestripeContinueRequest { name: string }
-export interface RaidRestripeStopRequest { name: string }
+export interface RaidRestripeContinueRequest {
+  name: string;
+}
+export interface RaidRestripeStopRequest {
+  name: string;
+}
 
 export interface RaidReplaceRequest {
   name: string;
@@ -115,7 +129,9 @@ export interface RaidReplaceRequest {
   drive: string;
 }
 
-export interface RaidResizeRequest { name: string }
+export interface RaidResizeRequest {
+  name: string;
+}
 
 export interface RaidImportShowRequest {
   drives?: string[];
@@ -150,26 +166,40 @@ export const raidUnload = (client: GrpcClient, req: RaidUnloadRequest): Promise<
 export const raidRestore = (client: GrpcClient, req: RaidRestoreRequest): Promise<XRaidResponse> =>
   callRpc(client.raidRestore.bind(client), req);
 
-export const raidInitStart = (client: GrpcClient, req: RaidInitStartRequest): Promise<XRaidResponse> =>
-  callRpc(client.raidInitStart.bind(client), req);
+export const raidInitStart = (
+  client: GrpcClient,
+  req: RaidInitStartRequest,
+): Promise<XRaidResponse> => callRpc(client.raidInitStart.bind(client), req);
 
-export const raidInitStop = (client: GrpcClient, req: RaidInitStopRequest): Promise<XRaidResponse> =>
-  callRpc(client.raidInitStop.bind(client), req);
+export const raidInitStop = (
+  client: GrpcClient,
+  req: RaidInitStopRequest,
+): Promise<XRaidResponse> => callRpc(client.raidInitStop.bind(client), req);
 
-export const raidReconStart = (client: GrpcClient, req: RaidReconStartRequest): Promise<XRaidResponse> =>
-  callRpc(client.raidReconStart.bind(client), req);
+export const raidReconStart = (
+  client: GrpcClient,
+  req: RaidReconStartRequest,
+): Promise<XRaidResponse> => callRpc(client.raidReconStart.bind(client), req);
 
-export const raidReconStop = (client: GrpcClient, req: RaidReconStopRequest): Promise<XRaidResponse> =>
-  callRpc(client.raidReconStop.bind(client), req);
+export const raidReconStop = (
+  client: GrpcClient,
+  req: RaidReconStopRequest,
+): Promise<XRaidResponse> => callRpc(client.raidReconStop.bind(client), req);
 
-export const raidRestripeStart = (client: GrpcClient, req: RaidRestripeStartRequest): Promise<XRaidResponse> =>
-  callRpc(client.raidRestripeStart.bind(client), req);
+export const raidRestripeStart = (
+  client: GrpcClient,
+  req: RaidRestripeStartRequest,
+): Promise<XRaidResponse> => callRpc(client.raidRestripeStart.bind(client), req);
 
-export const raidRestripeContinue = (client: GrpcClient, req: RaidRestripeContinueRequest): Promise<XRaidResponse> =>
-  callRpc(client.raidRestripeContinue.bind(client), req);
+export const raidRestripeContinue = (
+  client: GrpcClient,
+  req: RaidRestripeContinueRequest,
+): Promise<XRaidResponse> => callRpc(client.raidRestripeContinue.bind(client), req);
 
-export const raidRestripeStop = (client: GrpcClient, req: RaidRestripeStopRequest): Promise<XRaidResponse> =>
-  callRpc(client.raidRestripeStop.bind(client), req);
+export const raidRestripeStop = (
+  client: GrpcClient,
+  req: RaidRestripeStopRequest,
+): Promise<XRaidResponse> => callRpc(client.raidRestripeStop.bind(client), req);
 
 export const raidReplace = (client: GrpcClient, req: RaidReplaceRequest): Promise<XRaidResponse> =>
   callRpc(client.raidReplace.bind(client), req);
@@ -177,9 +207,13 @@ export const raidReplace = (client: GrpcClient, req: RaidReplaceRequest): Promis
 export const raidResize = (client: GrpcClient, req: RaidResizeRequest): Promise<XRaidResponse> =>
   callRpc(client.raidResize.bind(client), req);
 
-export const raidImportShow = (client: GrpcClient, req: RaidImportShowRequest): Promise<XRaidResponse> =>
-  callRpc(client.raidImportShow.bind(client), req);
+export const raidImportShow = (
+  client: GrpcClient,
+  req: RaidImportShowRequest,
+): Promise<XRaidResponse> => callRpc(client.raidImportShow.bind(client), req);
 
-export const raidImportApply = (client: GrpcClient, req: RaidImportApplyRequest): Promise<XRaidResponse> =>
-  callRpc(client.raidImportApply.bind(client), req);
+export const raidImportApply = (
+  client: GrpcClient,
+  req: RaidImportApplyRequest,
+): Promise<XRaidResponse> => callRpc(client.raidImportApply.bind(client), req);
 /* eslint-enable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */

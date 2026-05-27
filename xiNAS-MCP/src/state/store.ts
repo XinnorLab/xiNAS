@@ -30,11 +30,7 @@ import type {
 export interface KvStore {
   get<T = unknown>(key: string): RevisionedValue<T> | null;
 
-  put<T = unknown>(
-    key: string,
-    value: T,
-    opts?: PutOptions,
-  ): CasResult<T>;
+  put<T = unknown>(key: string, value: T, opts?: PutOptions): CasResult<T>;
 
   patch<T = unknown>(
     key: string,
@@ -61,11 +57,7 @@ export interface KvStore {
 export interface KvTransaction {
   get<T = unknown>(key: string): RevisionedValue<T> | null;
 
-  put<T = unknown>(
-    key: string,
-    value: T,
-    opts?: PutOptions,
-  ): CasResult<T>;
+  put<T = unknown>(key: string, value: T, opts?: PutOptions): CasResult<T>;
 
   delete(key: string, expected_revision?: number): DeleteResult;
 }

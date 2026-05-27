@@ -48,10 +48,7 @@ export function readNetConfig(): XRaidNetConfig {
 }
 
 function readCaCert(): Buffer {
-  const candidates = [
-    path.join(CRT_DIR, 'ca-cert.pem'),
-    path.join(CRT_DIR, 'ca-cert.crt'),
-  ];
+  const candidates = [path.join(CRT_DIR, 'ca-cert.pem'), path.join(CRT_DIR, 'ca-cert.crt')];
   for (const p of candidates) {
     if (fs.existsSync(p)) {
       return fs.readFileSync(p);
@@ -59,7 +56,7 @@ function readCaCert(): Buffer {
   }
   throw new McpToolError(
     ErrorCode.INTERNAL,
-    `xiRAID CA cert not found. Tried: ${candidates.join(', ')}. Is xiraid-server.service running?`
+    `xiRAID CA cert not found. Tried: ${candidates.join(', ')}. Is xiraid-server.service running?`,
   );
 }
 
@@ -108,10 +105,7 @@ export async function getClient(controllerId = 'default'): Promise<any> {
 /**
  * Execute a gRPC operation with retry on UNAVAILABLE errors.
  */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  toolName: string
-): Promise<T> {
+export async function withRetry<T>(fn: () => Promise<T>, toolName: string): Promise<T> {
   let lastError: Error | undefined;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
@@ -120,13 +114,13 @@ export async function withRetry<T>(
       const grpcErr = err as grpc.ServiceError & Error;
       if (grpcErr.code === grpc.status.UNAVAILABLE && attempt < MAX_RETRIES - 1) {
         lastError = grpcErr;
-        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
         continue;
       }
       throw mapGrpcError(grpcErr, toolName);
     }
   }
-  throw mapGrpcError(lastError as (grpc.ServiceError & Error), toolName);
+  throw mapGrpcError(lastError as grpc.ServiceError & Error, toolName);
 }
 
 function mapGrpcError(err: grpc.ServiceError & Error, context: string): McpToolError {

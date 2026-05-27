@@ -41,10 +41,28 @@ export const GetPerformanceSchema = z.object({
 
 export const GetLogsSchema = z.object({
   controller_id: z.string().optional(),
-  service: z.string().optional().describe('Systemd unit name (e.g. nfs-kernel-server, xiraid-server)'),
-  lines: z.number().int().min(1).max(500).default(50).describe('Number of journal lines to retrieve'),
-  since: z.string().optional().describe('Time filter: ISO 8601 timestamp or relative (e.g. "-1h", "-30m")'),
-  priority: z.number().int().min(0).max(7).optional().describe('Max syslog priority (0=emerg..7=debug)'),
+  service: z
+    .string()
+    .optional()
+    .describe('Systemd unit name (e.g. nfs-kernel-server, xiraid-server)'),
+  lines: z
+    .number()
+    .int()
+    .min(1)
+    .max(500)
+    .default(50)
+    .describe('Number of journal lines to retrieve'),
+  since: z
+    .string()
+    .optional()
+    .describe('Time filter: ISO 8601 timestamp or relative (e.g. "-1h", "-30m")'),
+  priority: z
+    .number()
+    .int()
+    .min(0)
+    .max(7)
+    .optional()
+    .describe('Max syslog priority (0=emerg..7=debug)'),
 });
 
 // --- Handlers ---
@@ -63,7 +81,7 @@ export function handleGetServerInfo(_params: z.infer<typeof GetServerInfoSchema>
       streamable_http: config.http_enabled,
       ...(config.sse_enabled || config.http_enabled ? { port } : {}),
       tls: !!config.tls,
-      mtls: !!(config.tls?.ca),
+      mtls: !!config.tls?.ca,
     },
   };
 }
@@ -71,16 +89,18 @@ export function handleGetServerInfo(_params: z.infer<typeof GetServerInfoSchema>
 export function handleListControllers(_params: z.infer<typeof ListControllersSchema>) {
   const config = loadConfig();
   const ctrlInfo = resolveController();
-  return [{
-    controller_id: config.controller_id,
-    hostname: getHostname(),
-    grpc_endpoint: ctrlInfo.grpc_endpoint,
-    nfs_socket: ctrlInfo.nfs_socket,
-  }];
+  return [
+    {
+      controller_id: config.controller_id,
+      hostname: getHostname(),
+      grpc_endpoint: ctrlInfo.grpc_endpoint,
+      nfs_socket: ctrlInfo.nfs_socket,
+    },
+  ];
 }
 
 export async function handleGetControllerCapabilities(
-  params: z.infer<typeof GetControllerCapabilitiesSchema>
+  params: z.infer<typeof GetControllerCapabilitiesSchema>,
 ) {
   resolveController(params.controller_id);
   const client = await getClient(params.controller_id);
@@ -113,8 +133,9 @@ export async function handleGetStatus(params: z.infer<typeof GetStatusSchema>) {
     withRetry(() => licenseShow(client), 'license_show'),
   ]);
 
-  const services = ['xiraid-server', 'nfs-server', 'nfs-kernel-server', 'xinas-nfs-helper']
-    .map(s => getServiceState(s));
+  const services = ['xiraid-server', 'nfs-server', 'nfs-kernel-server', 'xinas-nfs-helper'].map(
+    (s) => getServiceState(s),
+  );
 
   return {
     controller_id: loadConfig().controller_id,
@@ -142,7 +163,7 @@ export async function handleGetInventory(params: z.infer<typeof GetInventorySche
     hostname: getHostname(),
     cpu: sysInfo.cpu,
     memory: sysInfo.memory,
-    block_devices: blockDevices.map(d => ({
+    block_devices: blockDevices.map((d) => ({
       path: d.path,
       model: d.model,
       serial: d.serial,
@@ -150,7 +171,7 @@ export async function handleGetInventory(params: z.infer<typeof GetInventorySche
       rotational: d.rotational,
       nvme: !!d.nvme_ctrl,
     })),
-    network_interfaces: networkIfaces.map(i => ({
+    network_interfaces: networkIfaces.map((i) => ({
       name: i.name,
       mac: i.mac,
       operstate: i.operstate,
@@ -188,16 +209,18 @@ export async function handleGetLogs(params: z.infer<typeof GetLogsSchema>) {
   if (params.since) args.push('--since', params.since);
   if (params.priority !== undefined) args.push('-p', params.priority.toString());
 
-  const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve, reject) => {
-    execFile('journalctl', args, { timeout: JOURNAL_TIMEOUT_MS }, (err, stdout, stderr) => {
-      if (err && 'killed' in err && err.killed) {
-        reject(new McpToolError(ErrorCode.TIMEOUT, 'journalctl timed out'));
-        return;
-      }
-      const exitCode = err && 'code' in err ? (err.code as number) : 0;
-      resolve({ stdout: stdout ?? '', stderr: stderr ?? '', exitCode });
-    });
-  });
+  const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>(
+    (resolve, reject) => {
+      execFile('journalctl', args, { timeout: JOURNAL_TIMEOUT_MS }, (err, stdout, stderr) => {
+        if (err && 'killed' in err && err.killed) {
+          reject(new McpToolError(ErrorCode.TIMEOUT, 'journalctl timed out'));
+          return;
+        }
+        const exitCode = err && 'code' in err ? (err.code as number) : 0;
+        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', exitCode });
+      });
+    },
+  );
 
   if (result.exitCode !== 0) {
     throw new McpToolError(ErrorCode.INTERNAL, `journalctl failed: ${result.stderr.trim()}`);
@@ -206,8 +229,8 @@ export async function handleGetLogs(params: z.infer<typeof GetLogsSchema>) {
   // Parse JSON-formatted journal entries
   const entries = result.stdout
     .split('\n')
-    .filter(line => line.trim())
-    .map(line => {
+    .filter((line) => line.trim())
+    .map((line) => {
       try {
         const entry = JSON.parse(line) as Record<string, string | undefined>;
         return {

@@ -27,19 +27,37 @@ export interface InterfaceInfo {
 }
 
 function readFile(p: string): string {
-  try { return fs.readFileSync(p, 'utf8').trim(); } catch { return ''; }
+  try {
+    return fs.readFileSync(p, 'utf8').trim();
+  } catch {
+    return '';
+  }
 }
 
 function listDir(p: string): string[] {
-  try { return fs.readdirSync(p); } catch { return []; }
+  try {
+    return fs.readdirSync(p);
+  } catch {
+    return [];
+  }
 }
 
 /** Parse /proc/net/dev — returns map of iface -> {rx_bytes, tx_bytes, ...} */
-function parseNetDev(): Map<string, {
-  rx_bytes: number; rx_errors: number; rx_dropped: number;
-  tx_bytes: number; tx_errors: number; tx_dropped: number;
-}> {
-  const result = new Map<string, ReturnType<typeof parseNetDev> extends Map<string, infer V> ? V : never>();
+function parseNetDev(): Map<
+  string,
+  {
+    rx_bytes: number;
+    rx_errors: number;
+    rx_dropped: number;
+    tx_bytes: number;
+    tx_errors: number;
+    tx_dropped: number;
+  }
+> {
+  const result = new Map<
+    string,
+    ReturnType<typeof parseNetDev> extends Map<string, infer V> ? V : never
+  >();
   const content = readFile('/proc/net/dev');
   for (const line of content.split('\n').slice(2)) {
     const parts = line.trim().split(/\s+/);
@@ -130,8 +148,12 @@ export function listInterfaces(): InterfaceInfo[] {
     const duplex = duplexRaw || null;
 
     const stats = netDevStats.get(iface) ?? {
-      rx_bytes: 0, rx_errors: 0, rx_dropped: 0,
-      tx_bytes: 0, tx_errors: 0, tx_dropped: 0,
+      rx_bytes: 0,
+      rx_errors: 0,
+      rx_dropped: 0,
+      tx_bytes: 0,
+      tx_errors: 0,
+      tx_dropped: 0,
     };
 
     const bondInfo = parseBondInfo(iface);

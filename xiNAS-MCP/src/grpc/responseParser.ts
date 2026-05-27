@@ -44,7 +44,7 @@ export function parseResponse(response: { message?: string }): XRaidResponse {
 export function callRpc<TRequest, TResponse extends { message?: string }>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   rpcMethod: (req: TRequest, cb: (err: Error | null, res: TResponse) => void) => any,
-  request: TRequest
+  request: TRequest,
 ): Promise<XRaidResponse> {
   return new Promise((resolve, reject) => {
     rpcMethod(request, (err: Error | null, response: TResponse) => {

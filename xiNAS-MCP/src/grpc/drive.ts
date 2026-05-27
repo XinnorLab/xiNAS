@@ -25,11 +25,15 @@ export interface DriveCleanRequest {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type GrpcClient = any;
 
-export const driveFaultyCountShow = (client: GrpcClient, req: DriveFaultyCountShowRequest): Promise<XRaidResponse> =>
-  callRpc(client.driveFaultyCountShow.bind(client), req);
+export const driveFaultyCountShow = (
+  client: GrpcClient,
+  req: DriveFaultyCountShowRequest,
+): Promise<XRaidResponse> => callRpc(client.driveFaultyCountShow.bind(client), req);
 
-export const driveFaultyCountReset = (client: GrpcClient, req: DriveFaultyCountResetRequest): Promise<XRaidResponse> =>
-  callRpc(client.driveFaultyCountReset.bind(client), req);
+export const driveFaultyCountReset = (
+  client: GrpcClient,
+  req: DriveFaultyCountResetRequest,
+): Promise<XRaidResponse> => callRpc(client.driveFaultyCountReset.bind(client), req);
 
 export const driveLocate = (client: GrpcClient, req: DriveLocateRequest): Promise<XRaidResponse> =>
   callRpc(client.driveLocate.bind(client), req);

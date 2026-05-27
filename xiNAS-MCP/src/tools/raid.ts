@@ -5,8 +5,18 @@
 import { z } from 'zod';
 import * as fs from 'fs';
 import { getClient, withRetry } from '../grpc/client.js';
-import { raidShow, raidCreate, raidDestroy, raidModify, raidUnload,
-         raidRestore, raidInitStart, raidInitStop, raidReconStart, raidReconStop } from '../grpc/raid.js';
+import {
+  raidShow,
+  raidCreate,
+  raidDestroy,
+  raidModify,
+  raidUnload,
+  raidRestore,
+  raidInitStart,
+  raidInitStop,
+  raidReconStart,
+  raidReconStop,
+} from '../grpc/raid.js';
 import { arrayLocks } from '../middleware/locking.js';
 import { applyWithPlan } from '../middleware/planApply.js';
 import { resolveController } from '../server/controllerResolver.js';
@@ -74,7 +84,16 @@ export const RaidDeleteSchema = z.object({
 
 // --- Min drive counts per RAID level ---
 const MIN_DRIVES: Record<string, number> = {
-  '0': 2, '1': 2, '5': 3, '6': 4, '7': 4, '10': 4, '50': 6, '60': 8, '70': 8, 'N+M': 4,
+  '0': 2,
+  '1': 2,
+  '5': 3,
+  '6': 4,
+  '7': 4,
+  '10': 4,
+  '50': 6,
+  '60': 8,
+  '70': 8,
+  'N+M': 4,
 };
 
 function requiresGroupSize(level: string): boolean {
@@ -96,7 +115,9 @@ async function getMountedArrayPaths(): Promise<Map<string, string>> {
       const match = device.match(/^\/dev\/xi_(.+)$/);
       if (match) result.set(match[1] ?? '', mountpoint);
     }
-  } catch { /* */ }
+  } catch {
+    /* */
+  }
   return result;
 }
 
@@ -105,7 +126,10 @@ async function getMountedArrayPaths(): Promise<Map<string, string>> {
 export async function handleRaidList(params: z.infer<typeof RaidListSchema>) {
   resolveController(params.controller_id);
   const client = await getClient(params.controller_id);
-  const resp = await withRetry(() => raidShow(client, { extended: params.extended, units: 'g' }), 'raid.list');
+  const resp = await withRetry(
+    () => raidShow(client, { extended: params.extended, units: 'g' }),
+    'raid.list',
+  );
   return resp.data;
 }
 
@@ -116,12 +140,14 @@ export async function handleRaidCreate(params: z.infer<typeof RaidCreateSchema>)
   return applyWithPlan(mode, {
     preflight: async () => {
       const warnings: string[] = [];
-      const changes = [{
-        action: 'create' as const,
-        resource_type: 'raid_array',
-        resource_id: params.name,
-        after: { level: params.level, drives: params.drives },
-      }];
+      const changes = [
+        {
+          action: 'create' as const,
+          resource_type: 'raid_array',
+          resource_id: params.name,
+          after: { level: params.level, drives: params.drives },
+        },
+      ];
 
       // Memory check
       const memLimit = params.memory_limit ?? 1024;
@@ -145,7 +171,9 @@ export async function handleRaidCreate(params: z.infer<typeof RaidCreateSchema>)
           changes,
           warnings,
           preflight_passed: false,
-          blocking_resources: [`RAID ${params.level} requires at least ${minDrives} drives (got ${params.drives.length})`],
+          blocking_resources: [
+            `RAID ${params.level} requires at least ${minDrives} drives (got ${params.drives.length})`,
+          ],
         } satisfies PlanResult;
       }
 
@@ -164,12 +192,16 @@ export async function handleRaidCreate(params: z.infer<typeof RaidCreateSchema>)
       // group_size divisibility
       if (params.group_size) {
         if (params.drives.length % params.group_size !== 0) {
-          warnings.push(`group_size ${params.group_size} does not evenly divide drive count ${params.drives.length}`);
+          warnings.push(
+            `group_size ${params.group_size} does not evenly divide drive count ${params.drives.length}`,
+          );
         }
       }
 
       if (params.drives.length > 20 && params.level === '7') {
-        warnings.push('Level 7 arrays with > 20 drives: consider Level 7.3 (N+M) for better performance');
+        warnings.push(
+          'Level 7 arrays with > 20 drives: consider Level 7.3 (N+M) for better performance',
+        );
       }
 
       return {
@@ -184,24 +216,32 @@ export async function handleRaidCreate(params: z.infer<typeof RaidCreateSchema>)
     execute: async () => {
       const client = await getClient(params.controller_id);
       return arrayLocks.withLock(params.name, 'raid.create', async () => {
-        const resp = await withRetry(() => raidCreate(client, {
-          name: params.name,
-          level: params.level,
-          drives: params.drives,
-          ...(params.group_size !== undefined ? { group_size: params.group_size } : {}),
-          ...(params.synd_cnt !== undefined ? { synd_cnt: params.synd_cnt } : {}),
-          ...(params.strip_size !== undefined ? { strip_size: params.strip_size } : {}),
-          ...(params.block_size !== undefined ? { block_size: parseInt(params.block_size) } : {}),
-          ...(params.memory_limit !== undefined ? { memory_limit: params.memory_limit } : {}),
-          ...(params.sparepool !== undefined ? { sparepool: params.sparepool } : {}),
-        }), 'raid.create');
+        const resp = await withRetry(
+          () =>
+            raidCreate(client, {
+              name: params.name,
+              level: params.level,
+              drives: params.drives,
+              ...(params.group_size !== undefined ? { group_size: params.group_size } : {}),
+              ...(params.synd_cnt !== undefined ? { synd_cnt: params.synd_cnt } : {}),
+              ...(params.strip_size !== undefined ? { strip_size: params.strip_size } : {}),
+              ...(params.block_size !== undefined
+                ? { block_size: parseInt(params.block_size) }
+                : {}),
+              ...(params.memory_limit !== undefined ? { memory_limit: params.memory_limit } : {}),
+              ...(params.sparepool !== undefined ? { sparepool: params.sparepool } : {}),
+            }),
+          'raid.create',
+        );
         return resp.data;
       });
     },
   });
 }
 
-export async function handleRaidModifyPerformance(params: z.infer<typeof RaidModifyPerformanceSchema>) {
+export async function handleRaidModifyPerformance(
+  params: z.infer<typeof RaidModifyPerformanceSchema>,
+) {
   resolveController(params.controller_id);
   const mode = params.mode as Mode;
 
@@ -210,10 +250,10 @@ export async function handleRaidModifyPerformance(params: z.infer<typeof RaidMod
       const client = await getClient(params.controller_id);
       const showResp = await withRetry(
         () => raidShow(client, { name: params.array_id, extended: false, units: 'g' }),
-        'raid.modify_performance preflight'
+        'raid.modify_performance preflight',
       );
       const raids = showResp.data as Array<{ name: string; state: string }> | null;
-      const raid = raids?.find(r => r.name === params.array_id);
+      const raid = raids?.find((r) => r.name === params.array_id);
       if (!raid) {
         return {
           mode: 'plan' as const,
@@ -228,18 +268,20 @@ export async function handleRaidModifyPerformance(params: z.infer<typeof RaidMod
       return {
         mode: 'plan' as const,
         description: `Modify performance parameters of array '${params.array_id}'`,
-        changes: [{
-          action: 'modify',
-          resource_type: 'raid_array',
-          resource_id: params.array_id,
-          before: { state: raid.state },
-          after: {
-            merge_write_enabled: params.merge_write_enabled,
-            merge_read_enabled: params.merge_read_enabled,
-            sched_enabled: params.sched_enabled,
-            memory_limit: params.memory_limit,
+        changes: [
+          {
+            action: 'modify',
+            resource_type: 'raid_array',
+            resource_id: params.array_id,
+            before: { state: raid.state },
+            after: {
+              merge_write_enabled: params.merge_write_enabled,
+              merge_read_enabled: params.merge_read_enabled,
+              sched_enabled: params.sched_enabled,
+              memory_limit: params.memory_limit,
+            },
           },
-        }],
+        ],
         warnings: [],
         preflight_passed: true,
       } satisfies PlanResult;
@@ -248,13 +290,23 @@ export async function handleRaidModifyPerformance(params: z.infer<typeof RaidMod
     execute: async () => {
       const client = await getClient(params.controller_id);
       return arrayLocks.withLock(params.array_id, 'raid.modify_performance', async () => {
-        const resp = await withRetry(() => raidModify(client, {
-          name: params.array_id,
-          ...(params.merge_write_enabled !== undefined ? { merge_write_enabled: params.merge_write_enabled } : {}),
-          ...(params.merge_read_enabled !== undefined ? { merge_read_enabled: params.merge_read_enabled } : {}),
-          ...(params.sched_enabled !== undefined ? { sched_enabled: params.sched_enabled } : {}),
-          ...(params.memory_limit !== undefined ? { memory_limit: params.memory_limit } : {}),
-        }), 'raid.modify_performance');
+        const resp = await withRetry(
+          () =>
+            raidModify(client, {
+              name: params.array_id,
+              ...(params.merge_write_enabled !== undefined
+                ? { merge_write_enabled: params.merge_write_enabled }
+                : {}),
+              ...(params.merge_read_enabled !== undefined
+                ? { merge_read_enabled: params.merge_read_enabled }
+                : {}),
+              ...(params.sched_enabled !== undefined
+                ? { sched_enabled: params.sched_enabled }
+                : {}),
+              ...(params.memory_limit !== undefined ? { memory_limit: params.memory_limit } : {}),
+            }),
+          'raid.modify_performance',
+        );
         return resp.data;
       });
     },
@@ -262,7 +314,7 @@ export async function handleRaidModifyPerformance(params: z.infer<typeof RaidMod
 }
 
 export async function handleRaidLifecycleControl(
-  params: z.infer<typeof RaidLifecycleControlSchema>
+  params: z.infer<typeof RaidLifecycleControlSchema>,
 ): Promise<unknown> {
   resolveController(params.controller_id);
   const client = await getClient(params.controller_id);
@@ -270,13 +322,27 @@ export async function handleRaidLifecycleControl(
   return arrayLocks.withLock(params.array_id, 'raid.lifecycle_control', async () => {
     let resp;
     if (params.process === 'init') {
-      resp = params.action === 'start'
-        ? await withRetry(() => raidInitStart(client, { name: params.array_id }), 'raid_init_start')
-        : await withRetry(() => raidInitStop(client, { name: params.array_id }), 'raid_init_stop');
+      resp =
+        params.action === 'start'
+          ? await withRetry(
+              () => raidInitStart(client, { name: params.array_id }),
+              'raid_init_start',
+            )
+          : await withRetry(
+              () => raidInitStop(client, { name: params.array_id }),
+              'raid_init_stop',
+            );
     } else {
-      resp = params.action === 'start'
-        ? await withRetry(() => raidReconStart(client, { name: params.array_id }), 'raid_recon_start')
-        : await withRetry(() => raidReconStop(client, { name: params.array_id }), 'raid_recon_stop');
+      resp =
+        params.action === 'start'
+          ? await withRetry(
+              () => raidReconStart(client, { name: params.array_id }),
+              'raid_recon_start',
+            )
+          : await withRetry(
+              () => raidReconStop(client, { name: params.array_id }),
+              'raid_recon_stop',
+            );
     }
 
     // Create a polling job for 'start' actions
@@ -294,8 +360,13 @@ export async function handleRaidLifecycleControl(
         try {
           const c = await getClient(ctrlId);
           const r = await raidShow(c, { name: arrayId, extended: true, units: 'g' });
-          const raids = r.data as Array<{ name: string; init_progress?: number; recon_progress?: number; state?: string }> | null;
-          const info = raids?.find(x => x.name === arrayId);
+          const raids = r.data as Array<{
+            name: string;
+            init_progress?: number;
+            recon_progress?: number;
+            state?: string;
+          }> | null;
+          const info = raids?.find((x) => x.name === arrayId);
           if (info) {
             const pct = params.process === 'init' ? info.init_progress : info.recon_progress;
             if (pct !== undefined) JobManager.update(jobId, { progress_pct: pct });
@@ -324,7 +395,7 @@ export async function handleRaidUnload(params: z.infer<typeof RaidUnloadSchema>)
   return arrayLocks.withLock(params.array_id, 'raid.unload', async () => {
     const resp = await withRetry(
       () => raidUnload(client, { name: params.array_id }),
-      'raid.unload'
+      'raid.unload',
     );
     return resp.data;
   });
@@ -334,10 +405,14 @@ export async function handleRaidRestore(params: z.infer<typeof RaidRestoreSchema
   resolveController(params.controller_id);
   const client = await getClient(params.controller_id);
 
-  const resp = await withRetry(() => raidRestore(client, {
-    all: params.source === 'drives',
-    ...(params.array_id ? { name: params.array_id } : {}),
-  }), 'raid.restore');
+  const resp = await withRetry(
+    () =>
+      raidRestore(client, {
+        all: params.source === 'drives',
+        ...(params.array_id ? { name: params.array_id } : {}),
+      }),
+    'raid.restore',
+  );
   return resp.data;
 }
 
@@ -362,7 +437,7 @@ export async function handleRaidDelete(params: z.infer<typeof RaidDeleteSchema>)
         const exports = await listExports();
         const mountpoint = mountedArrays.get(params.array_id);
         if (mountpoint) {
-          const activeExports = exports.filter(e => e.path.startsWith(mountpoint));
+          const activeExports = exports.filter((e) => e.path.startsWith(mountpoint));
           for (const exp of activeExports) {
             blockingResources.push(`Active NFS export: ${exp.path}`);
           }
@@ -378,11 +453,13 @@ export async function handleRaidDelete(params: z.infer<typeof RaidDeleteSchema>)
       return {
         mode: 'plan' as const,
         description: `Delete RAID array '${params.array_id}'`,
-        changes: [{
-          action: 'delete',
-          resource_type: 'raid_array',
-          resource_id: params.array_id,
-        }],
+        changes: [
+          {
+            action: 'delete',
+            resource_type: 'raid_array',
+            resource_id: params.array_id,
+          },
+        ],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -391,13 +468,16 @@ export async function handleRaidDelete(params: z.infer<typeof RaidDeleteSchema>)
 
     execute: async () => {
       if (!params.dangerous) {
-        throw new McpToolError(ErrorCode.PRECONDITION_FAILED, 'dangerous=true is required for raid.delete');
+        throw new McpToolError(
+          ErrorCode.PRECONDITION_FAILED,
+          'dangerous=true is required for raid.delete',
+        );
       }
       const client = await getClient(params.controller_id);
       return arrayLocks.withLock(params.array_id, 'raid.delete', async () => {
         const resp = await withRetry(
           () => raidDestroy(client, { name: params.array_id, force: false }),
-          'raid.delete'
+          'raid.delete',
         );
         return resp.data;
       });

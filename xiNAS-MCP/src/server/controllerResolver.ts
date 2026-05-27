@@ -16,7 +16,7 @@ export function resolveController(controllerId?: string): ControllerInfo {
   if (controllerId && controllerId !== localId) {
     throw new McpToolError(
       ErrorCode.NOT_FOUND,
-      `Unknown controller_id: ${controllerId}. This server manages: ${localId}`
+      `Unknown controller_id: ${controllerId}. This server manages: ${localId}`,
     );
   }
 

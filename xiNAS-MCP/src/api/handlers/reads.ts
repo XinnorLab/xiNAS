@@ -21,10 +21,7 @@ export function sendOk<T>(req: Request, res: Response, result: T, revisions: num
 }
 
 /** Read all KV entries under a prefix, return as a typed array. */
-export function listByPrefix<T>(
-  state: OpenedStateStore,
-  prefix: string,
-): RevisionedValue<T>[] {
+export function listByPrefix<T>(state: OpenedStateStore, prefix: string): RevisionedValue<T>[] {
   return state.kv.list<T>({ prefix });
 }
 

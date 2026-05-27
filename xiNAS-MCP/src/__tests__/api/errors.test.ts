@@ -23,7 +23,12 @@ describe('errors', () => {
   });
 
   it('makeError accepts a remediation hint', () => {
-    const err = makeError('INTERNAL', 'audit write failed', undefined, 'check disk space on /var/log');
+    const err = makeError(
+      'INTERNAL',
+      'audit write failed',
+      undefined,
+      'check disk space on /var/log',
+    );
     expect(err.remediation).toBe('check disk space on /var/log');
   });
 });

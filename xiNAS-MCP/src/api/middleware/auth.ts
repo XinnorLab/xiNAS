@@ -85,16 +85,14 @@ export function authMiddleware(config: ApiConfig) {
         ? 'unknown bearer token'
         : 'authentication required (bearer token or Unix peer-creds)',
     );
-    res
-      .status(errorStatus('PERMISSION_DENIED'))
-      .json(
-        buildEnvelope({
-          request_id: ctx.request_id,
-          correlation_id: ctx.correlation_id,
-          state_revision: 0,
-          errors: [err],
-          result: null,
-        }),
-      );
+    res.status(errorStatus('PERMISSION_DENIED')).json(
+      buildEnvelope({
+        request_id: ctx.request_id,
+        correlation_id: ctx.correlation_id,
+        state_revision: 0,
+        errors: [err],
+        result: null,
+      }),
+    );
   };
 }
