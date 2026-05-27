@@ -41,6 +41,8 @@ export class SqliteKvStore implements KvStore {
   private readonly putExistingStmt: Statement;
   private readonly putNewStmt: Statement;
   private readonly putCasStmt: Statement;
+  private readonly deleteStmt: Statement;
+  private readonly deleteCasStmt: Statement;
 
   constructor(db: Database) {
     this.db = db;
@@ -64,6 +66,8 @@ export class SqliteKvStore implements KvStore {
              modified_at = ?, owner = ?, source = ?, validation_status = ?
        WHERE key = ? AND revision = ?`,
     );
+    this.deleteStmt = db.prepare('DELETE FROM kv WHERE key = ?');
+    this.deleteCasStmt = db.prepare('DELETE FROM kv WHERE key = ? AND revision = ?');
   }
 
   get<T = unknown>(key: string): RevisionedValue<T> | null {
@@ -134,8 +138,24 @@ export class SqliteKvStore implements KvStore {
   ): CasResult<T> {
     throw new Error('patch: not implemented in SS-6');
   }
-  delete(_key: string, _expected_revision?: number): DeleteResult {
-    throw new Error('delete: not implemented in SS-6');
+  delete(key: string, expected_revision?: number): DeleteResult {
+    if (expected_revision === undefined) {
+      const existing = this.getStmt.get(key) as KvRow | undefined;
+      if (!existing) {
+        return { ok: false, reason: 'not_found', current: null };
+      }
+      this.deleteStmt.run(key);
+      return { ok: true, revision: existing.revision };
+    }
+    const info = this.deleteCasStmt.run(key, expected_revision);
+    if (info.changes === 0) {
+      const existing = this.getStmt.get(key) as KvRow | undefined;
+      if (!existing) {
+        return { ok: false, reason: 'not_found', current: null };
+      }
+      return { ok: false, reason: 'stale_revision', current: rowToValue(existing) };
+    }
+    return { ok: true, revision: expected_revision };
   }
   list<T = unknown>(_opts?: ListOptions): RevisionedValue<T>[] {
     throw new Error('list: not implemented in SS-6');
