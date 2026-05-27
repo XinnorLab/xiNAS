@@ -16,6 +16,7 @@ import { configHistoryRouter } from './routes/config-history.js';
 import { supportRouter } from './routes/support.js';
 import { inventoryRouter } from './routes/inventory.js';
 import { executorUnavailable } from './handlers/unsupported.js';
+import { ApiException } from './errors.js';
 
 export function createApp(ctx: ApiContext): Express {
   const app = express();
@@ -73,6 +74,15 @@ export function createApp(ctx: ApiContext): Express {
     v1.put(route, executorUnavailable);
     v1.delete(route, executorUnavailable);
   }
+
+  // Catch-all for /api/v1/* paths that didn't match any router. Without
+  // this, unknown routes fall through to Express's default 404 which
+  // returns text/html — breaking the envelope contract documented in
+  // api-v1.yaml. ApiException is caught by errorMiddleware and emitted
+  // as a NOT_FOUND envelope.
+  v1.use((req, _res, next) => {
+    next(new ApiException('NOT_FOUND', `no such API route: ${req.method} /api/v1${req.path}`));
+  });
 
   app.use('/api/v1', v1);
 
