@@ -34,4 +34,21 @@ describe('errorMiddleware', () => {
     expect(res.body.errors[0].code).toBe('INTERNAL');
     expect(res.body.errors[0].message).toMatch(/boom/);
   });
+
+  it('translates express.json body-parse SyntaxError into INVALID_ARGUMENT/400 with a real request_id', async () => {
+    const app = express();
+    app.use(requestIdMiddleware());
+    app.use(express.json());
+    app.post('/echo', (req, res) => res.json({ body: req.body }));
+    app.use(errorMiddleware());
+    const res = await request(app)
+      .post('/echo')
+      .set('Content-Type', 'application/json')
+      .send('not-json {');
+    expect(res.status).toBe(400);
+    expect(res.body.errors?.[0]?.code).toBe('INVALID_ARGUMENT');
+    expect(res.body.errors[0].message).toMatch(/malformed JSON body/);
+    // Real UUID, not 'unknown' — requestId ran before json.
+    expect(res.body.request_id).toMatch(/^[0-9a-f-]{36}$/);
+  });
 });

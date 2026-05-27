@@ -30,6 +30,11 @@ export function auditMiddleware(state: OpenedStateStore) {
         // Conditional spread — exactOptionalPropertyTypes refuses
         // `operation_id: ctx.operation_id` when operation_id is optional
         // and may be undefined.
+        // Auth runs AFTER audit registers this finish hook, so on a
+        // 401 ctx.principal is whatever the requestId middleware
+        // seeded it with (default: 'anonymous'). Failed access
+        // attempts land in the audit sink as principal='anonymous'
+        // per reqs §14.
         const entry: Parameters<typeof state.audit.queue>[0] = {
           kind: `http.${req.method}.${req.path}`,
           principal: ctx.principal,
