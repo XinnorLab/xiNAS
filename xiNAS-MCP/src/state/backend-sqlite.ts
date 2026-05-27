@@ -132,11 +132,15 @@ export class SqliteKvStore implements KvStore {
 
   // Placeholders to satisfy the interface; later tasks fill these in.
   patch<T = unknown>(
-    _key: string,
-    _mutator: (current: T | null) => T,
-    _opts?: PutOptions,
+    key: string,
+    mutator: (current: T | null) => T,
+    opts: PutOptions = {},
   ): CasResult<T> {
-    throw new Error('patch: not implemented in SS-6');
+    return this.transaction((tx) => {
+      const current = tx.get<T>(key);
+      const next = mutator(current?.value ?? null);
+      return tx.put<T>(key, next, opts);
+    });
   }
   delete(key: string, expected_revision?: number): DeleteResult {
     if (expected_revision === undefined) {
