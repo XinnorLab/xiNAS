@@ -26,7 +26,14 @@ const StaticIpSchema = z.object({
 });
 
 const BondingSchema = z.object({
-  mode: z.enum(['active-backup', 'balance-rr', 'balance-xor', '802.3ad', 'balance-tlb', 'balance-alb']),
+  mode: z.enum([
+    'active-backup',
+    'balance-rr',
+    'balance-xor',
+    '802.3ad',
+    'balance-tlb',
+    'balance-alb',
+  ]),
   members: z.array(z.string()),
 });
 
@@ -50,11 +57,7 @@ export const NetworkConfigureSchema = z.object({
 
 function buildNetplanYaml(params: z.infer<typeof NetworkConfigureSchema>): string {
   const iface = params.interface_id;
-  const lines: string[] = [
-    'network:',
-    '  version: 2',
-    '  renderer: networkd',
-  ];
+  const lines: string[] = ['network:', '  version: 2', '  renderer: networkd'];
 
   if (params.bonding) {
     lines.push('  bonds:');
@@ -120,7 +123,7 @@ export async function handleNetworkConfigure(params: z.infer<typeof NetworkConfi
   return applyWithPlan(mode, {
     preflight: async () => {
       const ifaces = listInterfaces();
-      const iface = ifaces.find(i => i.name === params.interface_id);
+      const iface = ifaces.find((i) => i.name === params.interface_id);
       const warnings: string[] = [];
 
       if (!iface && !params.bonding) {
@@ -139,13 +142,15 @@ export async function handleNetworkConfigure(params: z.infer<typeof NetworkConfi
       return {
         mode: 'plan' as const,
         description: `Configure interface '${params.interface_id}'`,
-        changes: [{
-          action: existingYaml ? 'modify' : 'create',
-          resource_type: 'network_config',
-          resource_id: params.interface_id,
-          before: existingYaml,
-          after: yaml,
-        }],
+        changes: [
+          {
+            action: existingYaml ? 'modify' : 'create',
+            resource_type: 'network_config',
+            resource_id: params.interface_id,
+            before: existingYaml,
+            after: yaml,
+          },
+        ],
         warnings,
         preflight_passed: true,
       } satisfies PlanResult;

@@ -26,7 +26,10 @@ export function configHistoryRouter(_ctx: ApiContext): Router {
   const r = Router();
   r.get('/config-history/snapshots', (req, res) => emptyEnvelope(req, res, []));
   r.get('/config-history/snapshots/:id', (_req, _res) => {
-    throw new ApiException('NOT_FOUND', 'snapshot not found (config-history bridge not integrated)');
+    throw new ApiException(
+      'NOT_FOUND',
+      'snapshot not found (config-history bridge not integrated)',
+    );
   });
   r.get('/config-history/diff', (req, res) => {
     // Per api-v1.yaml, both from and to are required string params.

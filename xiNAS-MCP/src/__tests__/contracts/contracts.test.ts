@@ -17,16 +17,7 @@ const Ajv = AjvImport as any;
 const addFormats = addFormatsImport as any;
 
 const here = dirname(fileURLToPath(import.meta.url));
-const specPath = resolve(
-  here,
-  '..',
-  '..',
-  '..',
-  '..',
-  'docs',
-  'control-path',
-  'api-v1.yaml',
-);
+const specPath = resolve(here, '..', '..', '..', '..', 'docs', 'control-path', 'api-v1.yaml');
 const fixturesDir = resolve(here, 'fixtures');
 
 describe('OpenAPI schema contract', () => {

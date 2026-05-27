@@ -13,9 +13,9 @@ const CONFIG_PATH = '/etc/xinas-mcp/config.json';
 const CONFIG_DIR = '/etc/xinas-mcp';
 
 export interface TlsConfig {
-  cert: string;    // Path to server certificate
-  key: string;     // Path to server private key
-  ca?: string;     // Path to CA cert for client verification (enables mTLS)
+  cert: string; // Path to server certificate
+  key: string; // Path to server private key
+  ca?: string; // Path to CA cert for client verification (enables mTLS)
 }
 
 export interface ServerConfig {

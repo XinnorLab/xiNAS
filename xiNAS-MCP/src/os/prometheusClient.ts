@@ -89,18 +89,18 @@ export async function getPerformanceSummary(
     if (err instanceof McpToolError) throw err;
     throw new McpToolError(
       ErrorCode.INTERNAL,
-      `Failed to fetch Prometheus metrics from ${url}: ${String(err)}`
+      `Failed to fetch Prometheus metrics from ${url}: ${String(err)}`,
     );
   }
 
   const allMetrics = parsePrometheusText(text);
 
   // Filter by metric names and target (raid_name or drive label)
-  const filtered = allMetrics.filter(m => {
+  const filtered = allMetrics.filter((m) => {
     if (metricNames.length > 0 && !metricNames.includes(m.name)) return false;
     if (target && target !== '*') {
       // Check if any label value matches the target
-      return Object.values(m.labels).some(v => v === target);
+      return Object.values(m.labels).some((v) => v === target);
     }
     return true;
   });

@@ -36,11 +36,19 @@ describe('openStateStore factory', () => {
     const dbPath = join(dir, 'xinas.db');
     const auditPath = join(dir, 'audit.jsonl');
 
-    const s1 = await openStateStore({ databasePath: dbPath, auditJsonlPath: auditPath, nodeId: 'node-1' });
+    const s1 = await openStateStore({
+      databasePath: dbPath,
+      auditJsonlPath: auditPath,
+      nodeId: 'node-1',
+    });
     s1.kv.put('/k', { x: 1 });
     await s1.close();
 
-    const s2 = await openStateStore({ databasePath: dbPath, auditJsonlPath: auditPath, nodeId: 'node-1' });
+    const s2 = await openStateStore({
+      databasePath: dbPath,
+      auditJsonlPath: auditPath,
+      nodeId: 'node-1',
+    });
     expect(s2.kv.get<{ x: number }>('/k')?.value).toEqual({ x: 1 });
     await s2.close();
   });
@@ -63,9 +71,9 @@ describe('openStateStore factory', () => {
       parameters_hash: 'sha256:p',
       result_hash: 'sha256:r',
     });
-    const pendingBefore = seedDb.prepare(
-      "SELECT COUNT(*) AS n FROM audit_outbox WHERE drain_state = 'pending'",
-    ).get() as { n: number };
+    const pendingBefore = seedDb
+      .prepare("SELECT COUNT(*) AS n FROM audit_outbox WHERE drain_state = 'pending'")
+      .get() as { n: number };
     expect(pendingBefore.n).toBe(1);
     seedDb.close();
 
@@ -83,13 +91,13 @@ describe('openStateStore factory', () => {
       expect(JSON.parse(lines[0]!).kind).toBe('k');
 
       const readDb = new Database(dbPath, { readonly: true });
-      const pendingAfter = readDb.prepare(
-        "SELECT COUNT(*) AS n FROM audit_outbox WHERE drain_state = 'pending'",
-      ).get() as { n: number };
+      const pendingAfter = readDb
+        .prepare("SELECT COUNT(*) AS n FROM audit_outbox WHERE drain_state = 'pending'")
+        .get() as { n: number };
       expect(pendingAfter.n).toBe(0);
-      const durable = readDb.prepare(
-        "SELECT drain_state, durable_file, durable_offset FROM audit_outbox",
-      ).get() as { drain_state: string; durable_file: string; durable_offset: number };
+      const durable = readDb
+        .prepare('SELECT drain_state, durable_file, durable_offset FROM audit_outbox')
+        .get() as { drain_state: string; durable_file: string; durable_offset: number };
       expect(durable.drain_state).toBe('durable');
       expect(durable.durable_file).toBe('audit.jsonl');
       expect(durable.durable_offset).toBeGreaterThanOrEqual(0);

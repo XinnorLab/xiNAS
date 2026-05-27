@@ -5,9 +5,9 @@ import type { Database } from 'better-sqlite3';
 import { LeaseManager } from './leases.js';
 
 export interface GcOptions {
-  taskRetentionDays?: number;   // default 30
-  archiveDir?: string;          // default '/var/lib/xinas/state/archive'
-  leaseGraceMs?: number;        // additional grace beyond ttl_seconds, default 0
+  taskRetentionDays?: number; // default 30
+  archiveDir?: string; // default '/var/lib/xinas/state/archive'
+  leaseGraceMs?: number; // additional grace beyond ttl_seconds, default 0
 }
 
 export interface GcSweepResult {

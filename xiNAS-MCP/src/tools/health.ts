@@ -54,7 +54,7 @@ function makeAlertId(checkId: string, firstSeen: string): string {
 
 function addOrUpdateAlert(result: HealthCheckResult): void {
   if (result.status === 'OK' || result.status === 'UNKNOWN') return;
-  const existing = alertBuffer.find(a => a.check_id === result.check_id && !a.acknowledged);
+  const existing = alertBuffer.find((a) => a.check_id === result.check_id && !a.acknowledged);
   if (existing) {
     existing.last_seen = new Date().toISOString();
     existing.severity = result.status === 'CRIT' ? 'crit' : 'warn';
@@ -109,7 +109,10 @@ export const HealthFixNfsConfSchema = z
       .describe('Restart nfs-server after writing (only if anything changed)'),
   })
   .refine(
-    (v) => v.threads !== undefined || v.rdma !== undefined || (v.updates && Object.keys(v.updates).length > 0),
+    (v) =>
+      v.threads !== undefined ||
+      v.rdma !== undefined ||
+      (v.updates && Object.keys(v.updates).length > 0),
     { message: 'At least one of threads, rdma, or updates must be supplied' },
   );
 
@@ -120,7 +123,7 @@ async function checkRaidIntegrity(client: unknown): Promise<HealthCheckResult[]>
   try {
     const resp = await withRetry(
       () => raidShow(client as never, { extended: true, units: 'g' }),
-      'health.raid_integrity'
+      'health.raid_integrity',
     );
     type RaidInfo = {
       state: string;
@@ -131,10 +134,7 @@ async function checkRaidIntegrity(client: unknown): Promise<HealthCheckResult[]>
     // xiRAID may return either an array of raids or a record keyed by raid
     // name, depending on call parameters and version. Normalize to array
     // with `name` attached (see src/tools/pool.ts:getPoolDrives for prior art).
-    const data = resp.data as
-      | Array<RaidInfo & { name: string }>
-      | Record<string, RaidInfo>
-      | null;
+    const data = resp.data as Array<RaidInfo & { name: string }> | Record<string, RaidInfo> | null;
     const raids: Array<RaidInfo & { name: string }> =
       !data || typeof data !== 'object'
         ? []
@@ -164,7 +164,7 @@ async function checkRaidIntegrity(client: unknown): Promise<HealthCheckResult[]>
       }
 
       const badStates = ['failed', 'offline', 'error'];
-      if (badStates.some(s => raid.state?.toLowerCase().includes(s))) {
+      if (badStates.some((s) => raid.state?.toLowerCase().includes(s))) {
         status = 'CRIT';
         issues.push(`state=${raid.state}`);
       }
@@ -179,7 +179,10 @@ async function checkRaidIntegrity(client: unknown): Promise<HealthCheckResult[]>
         evidence: issues.join('; ') || undefined,
         impact: status !== 'OK' ? 'Data redundancy reduced or unavailable' : undefined,
         recommended_action: status !== 'OK' ? 'Check drive health and rebuild status' : undefined,
-        fix_hint: status !== 'OK' ? `raid.lifecycle_control array_id=${raid.name} action=start process=recon` : undefined,
+        fix_hint:
+          status !== 'OK'
+            ? `raid.lifecycle_control array_id=${raid.name} action=start process=recon`
+            : undefined,
       });
     }
   } catch (err) {
@@ -238,7 +241,9 @@ async function checkSpares(client: unknown): Promise<HealthCheckResult[]> {
         });
       }
     }
-  } catch { /* optional check */ }
+  } catch {
+    /* optional check */
+  }
   return results;
 }
 
@@ -247,7 +252,7 @@ async function checkFaultyCounts(client: unknown): Promise<HealthCheckResult[]> 
   try {
     const resp = await withRetry(
       () => driveFaultyCountShow(client as never, {}),
-      'health.faulty_counts'
+      'health.faulty_counts',
     );
     const counts = resp.data as Array<{ drive: string; count: number; threshold: number }> | null;
     if (counts) {
@@ -268,17 +273,19 @@ async function checkFaultyCounts(client: unknown): Promise<HealthCheckResult[]> 
         }
       }
     }
-  } catch { /* optional */ }
+  } catch {
+    /* optional */
+  }
   return results;
 }
 
 // --- Python engine result mapping ---
 
 const ENGINE_STATUS_MAP: Record<string, CheckStatus> = {
-  'PASS': 'OK',
-  'WARN': 'WARN',
-  'FAIL': 'CRIT',
-  'SKIP': 'UNKNOWN',
+  PASS: 'OK',
+  WARN: 'WARN',
+  FAIL: 'CRIT',
+  SKIP: 'UNKNOWN',
 };
 
 function mapEngineCheck(c: EngineCheckResult): HealthCheckResult {
@@ -298,28 +305,28 @@ function mapEngineCheck(c: EngineCheckResult): HealthCheckResult {
 
 // --- Main handlers ---
 
-export async function handleHealthRunCheck(params: z.infer<typeof HealthRunCheckSchema>): Promise<HealthCheckResult[]> {
+export async function handleHealthRunCheck(
+  params: z.infer<typeof HealthRunCheckSchema>,
+): Promise<HealthCheckResult[]> {
   resolveController(params.controller_id);
   const client = await getClient(params.controller_id);
   const profile = params.profile;
   const results: HealthCheckResult[] = [];
 
   // 1. gRPC-based checks (xiRAID-specific — not in Python engine)
-  results.push(...await checkRaidIntegrity(client));
+  results.push(...(await checkRaidIntegrity(client)));
   results.push(await checkLicense(client));
 
   if (profile === 'standard' || profile === 'deep') {
-    results.push(...await checkSpares(client));
-    results.push(...await checkFaultyCounts(client));
+    results.push(...(await checkSpares(client)));
+    results.push(...(await checkFaultyCounts(client)));
   }
 
   // 2. Python health engine checks (OS-level: services, CPU, kernel, VM,
   //    network, storage, NFS, RDMA, NVMe, filesystem, perf tuning, Kerberos)
   try {
     const report = await runEngineCheck(profile);
-    const engineResults = report.checks
-      .filter(c => c.status !== 'SKIP')
-      .map(mapEngineCheck);
+    const engineResults = report.checks.filter((c) => c.status !== 'SKIP').map(mapEngineCheck);
     results.push(...engineResults);
   } catch (err) {
     // Engine failure is non-fatal — report as single UNKNOWN check
@@ -358,11 +365,11 @@ export function handleHealthGetAlerts(params: z.infer<typeof HealthGetAlertsSche
 
   if (params.since) {
     const since = new Date(params.since).getTime();
-    alerts = alerts.filter(a => new Date(a.last_seen).getTime() >= since);
+    alerts = alerts.filter((a) => new Date(a.last_seen).getTime() >= since);
   }
 
   if (params.severity_min === 'crit') {
-    alerts = alerts.filter(a => a.severity === 'crit');
+    alerts = alerts.filter((a) => a.severity === 'crit');
   }
 
   return alerts.sort((a, b) => b.last_seen.localeCompare(a.last_seen));

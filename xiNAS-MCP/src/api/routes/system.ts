@@ -11,12 +11,10 @@ export function systemRouter(ctx: ApiContext): Router {
     if (!cluster) throw new ApiException('NOT_FOUND', 'cluster not initialized');
     const nodes = listByPrefix<Record<string, unknown>>(ctx.state, '/xinas/v1/nodes/');
     if (nodes.length === 0) throw new ApiException('NOT_FOUND', 'no node registered');
-    sendOk(
-      req,
-      res,
-      { cluster: cluster.value, node: nodes[0]!.value },
-      [cluster.revision, ...nodes.map((n) => n.revision)],
-    );
+    sendOk(req, res, { cluster: cluster.value, node: nodes[0]!.value }, [
+      cluster.revision,
+      ...nodes.map((n) => n.revision),
+    ]);
   });
 
   r.get('/capabilities', (req, res) => {
@@ -30,7 +28,12 @@ export function systemRouter(ctx: ApiContext): Router {
 
   r.get('/controllers', (req, res) => {
     const nodes = listByPrefix<Record<string, unknown>>(ctx.state, '/xinas/v1/nodes/');
-    sendOk(req, res, unwrapValues(nodes), nodes.map((n) => n.revision));
+    sendOk(
+      req,
+      res,
+      unwrapValues(nodes),
+      nodes.map((n) => n.revision),
+    );
   });
 
   return r;

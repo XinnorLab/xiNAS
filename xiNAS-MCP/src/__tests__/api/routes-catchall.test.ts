@@ -4,8 +4,12 @@ import { buildTestApp, ADMIN_TOKEN } from './_helpers.js';
 
 describe('/api/v1/* catch-all', () => {
   let setup: Awaited<ReturnType<typeof buildTestApp>>;
-  beforeEach(async () => { setup = await buildTestApp(); });
-  afterEach(async () => { await setup.cleanup(); });
+  beforeEach(async () => {
+    setup = await buildTestApp();
+  });
+  afterEach(async () => {
+    await setup.cleanup();
+  });
 
   it('unknown GET under /api/v1 returns 404 with NOT_FOUND envelope (not Express HTML)', async () => {
     const res = await request(setup.app)

@@ -66,9 +66,7 @@ export class AuditAppender {
       `INSERT INTO audit_index (request_id, operation_id, task_id, audit_seq, durable_file, durable_offset)
        VALUES (?, ?, ?, ?, NULL, NULL)`,
     );
-    this.tailHashStmt = db.prepare(
-      'SELECT hash FROM audit_outbox ORDER BY audit_seq DESC LIMIT 1',
-    );
+    this.tailHashStmt = db.prepare('SELECT hash FROM audit_outbox ORDER BY audit_seq DESC LIMIT 1');
   }
 
   /**

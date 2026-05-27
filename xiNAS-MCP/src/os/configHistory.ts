@@ -26,7 +26,12 @@ function run(args: string[], timeoutMs: number): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     execFile(PYTHON, ['-m', MODULE, ...args], { timeout: timeoutMs }, (err, stdout, stderr) => {
       if (err && 'killed' in err && err.killed) {
-        reject(new McpToolError(ErrorCode.TIMEOUT, `Config-history command timed out after ${timeoutMs}ms`));
+        reject(
+          new McpToolError(
+            ErrorCode.TIMEOUT,
+            `Config-history command timed out after ${timeoutMs}ms`,
+          ),
+        );
         return;
       }
       // execFile sets err for non-zero exit but we handle it ourselves
@@ -45,24 +50,35 @@ function parseJsonOutput(result: ExecResult): unknown {
       throw new McpToolError(code, errObj.error ?? result.stderr.trim());
     } catch (e) {
       if (e instanceof McpToolError) throw e;
-      throw new McpToolError(ErrorCode.INTERNAL, result.stderr.trim() || 'Config-history command failed');
+      throw new McpToolError(
+        ErrorCode.INTERNAL,
+        result.stderr.trim() || 'Config-history command failed',
+      );
     }
   }
 
   try {
     return JSON.parse(result.stdout);
   } catch {
-    throw new McpToolError(ErrorCode.INTERNAL, `Failed to parse config-history output: ${result.stdout.slice(0, 200)}`);
+    throw new McpToolError(
+      ErrorCode.INTERNAL,
+      `Failed to parse config-history output: ${result.stdout.slice(0, 200)}`,
+    );
   }
 }
 
 function mapErrorCode(code?: string): ErrorCode {
   switch (code) {
-    case 'NOT_FOUND': return ErrorCode.NOT_FOUND;
-    case 'CONFLICT': return ErrorCode.CONFLICT;
-    case 'PRECONDITION_FAILED': return ErrorCode.PRECONDITION_FAILED;
-    case 'RESOURCE_EXHAUSTION': return ErrorCode.RESOURCE_EXHAUSTION;
-    default: return ErrorCode.INTERNAL;
+    case 'NOT_FOUND':
+      return ErrorCode.NOT_FOUND;
+    case 'CONFLICT':
+      return ErrorCode.CONFLICT;
+    case 'PRECONDITION_FAILED':
+      return ErrorCode.PRECONDITION_FAILED;
+    case 'RESOURCE_EXHAUSTION':
+      return ErrorCode.RESOURCE_EXHAUSTION;
+    default:
+      return ErrorCode.INTERNAL;
   }
 }
 
@@ -79,7 +95,9 @@ export async function showSnapshot(id: string): Promise<unknown> {
 }
 
 export async function diffSnapshots(fromId: string, toId: string): Promise<unknown> {
-  return parseJsonOutput(await run(['snapshot', 'diff', fromId, toId, '--format', 'json'], READ_TIMEOUT_MS));
+  return parseJsonOutput(
+    await run(['snapshot', 'diff', fromId, toId, '--format', 'json'], READ_TIMEOUT_MS),
+  );
 }
 
 export async function checkDrift(): Promise<unknown> {
@@ -91,7 +109,16 @@ export async function getStatus(): Promise<unknown> {
 }
 
 export async function createSnapshot(operation: string, diffSummary?: string): Promise<unknown> {
-  const args = ['snapshot', 'create', '--source', 'mcp', '--operation', operation, '--format', 'json'];
+  const args = [
+    'snapshot',
+    'create',
+    '--source',
+    'mcp',
+    '--operation',
+    operation,
+    '--format',
+    'json',
+  ];
   if (diffSummary) args.push('--diff-summary', diffSummary);
   return parseJsonOutput(await run(args, WRITE_TIMEOUT_MS));
 }
@@ -100,7 +127,10 @@ export async function createSnapshot(operation: string, diffSummary?: string): P
  * Record a snapshot after a successful mutation.
  * Best-effort: errors are caught and returned as null.
  */
-export async function recordSnapshot(operation: string, diffSummary: string): Promise<unknown | null> {
+export async function recordSnapshot(
+  operation: string,
+  diffSummary: string,
+): Promise<unknown | null> {
   try {
     return await createSnapshot(operation, diffSummary);
   } catch {
@@ -113,7 +143,10 @@ export async function getRetentionPolicy(): Promise<unknown> {
   return parseJsonOutput(await run(['gc', 'policy', '--format', 'json'], READ_TIMEOUT_MS));
 }
 
-export async function setRetentionPolicy(maxSnapshots?: number, maxAgeDays?: number): Promise<unknown> {
+export async function setRetentionPolicy(
+  maxSnapshots?: number,
+  maxAgeDays?: number,
+): Promise<unknown> {
   const args = ['gc', 'policy', '--set', '--format', 'json'];
   if (maxSnapshots !== undefined) args.push('--max-snapshots', String(maxSnapshots));
   if (maxAgeDays !== undefined) args.push('--max-age-days', String(maxAgeDays));

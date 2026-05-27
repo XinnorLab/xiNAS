@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import request from 'supertest';
-import { buildTestApp, ADMIN_TOKEN, seedCluster, seedNode, seedShare, seedNfsProfile } from './_helpers.js';
+import {
+  buildTestApp,
+  ADMIN_TOKEN,
+  seedCluster,
+  seedNode,
+  seedShare,
+  seedNfsProfile,
+} from './_helpers.js';
 
 /**
  * All 30 GET operations from api-v1.yaml. Each entry: [path, expectedStatus].
@@ -74,28 +81,41 @@ describe('GET integration — envelope shape per endpoint', () => {
     seedShare(setup.state, 's1');
     seedNfsProfile(setup.state);
     setup.state.kv.put('/xinas/v1/observed/XiraidArray/seeded-array', {
-      kind: 'XiraidArray', id: 'seeded-array',
+      kind: 'XiraidArray',
+      id: 'seeded-array',
       spec: { name: 'seeded-array', level: 'raid5', member_disk_ids: [] },
       status: { state: 'optimal', volume_path: '/dev/x', usable_capacity_bytes: 0 },
     });
     setup.state.kv.put('/xinas/v1/observed/Filesystem/seeded-fs', {
-      kind: 'Filesystem', id: 'seeded-fs',
+      kind: 'Filesystem',
+      id: 'seeded-fs',
       spec: { fs_type: 'xfs', backing_device: '/dev/x', mountpoint: '/srv/fs' },
       status: { mounted: true, uuid: 'u', size_bytes: 1, free_bytes: 1 },
     });
     setup.state.kv.put('/xinas/v1/observed/NetworkInterface/seeded-if', {
-      kind: 'NetworkInterface', id: 'seeded-if',
+      kind: 'NetworkInterface',
+      id: 'seeded-if',
       spec: { managed_by_xinas: true },
       status: { driver: 'mlx5_ib', rdma_capable: true, link_state: 'up', current_addresses: [] },
     });
     setup.state.kv.put('/xinas/v1/tasks/01902f25-7c54-7c10-b1f0-aaaabbbbcccc', {
       task_id: '01902f25-7c54-7c10-b1f0-aaaabbbbcccc',
-      kind: 'k', state: 'running', principal: 'admin:test', client_type: 'rest',
-      request_id: 'r', correlation_id: 'c', input_hash: 'h', risk_level: 'non_disruptive',
-      affected_resources: [], created_at: '2026-05-27T11:00:00Z', updated_at: '2026-05-27T11:00:00Z',
+      kind: 'k',
+      state: 'running',
+      principal: 'admin:test',
+      client_type: 'rest',
+      request_id: 'r',
+      correlation_id: 'c',
+      input_hash: 'h',
+      risk_level: 'non_disruptive',
+      affected_resources: [],
+      created_at: '2026-05-27T11:00:00Z',
+      updated_at: '2026-05-27T11:00:00Z',
     });
   });
-  afterEach(async () => { await setup.cleanup(); });
+  afterEach(async () => {
+    await setup.cleanup();
+  });
 
   for (const [path, expectedStatus] of GET_OPS) {
     it(`${path} returns ${expectedStatus} with an Envelope-shaped response`, async () => {

@@ -21,18 +21,23 @@ const MUTATING_PATHS: Array<[string, string]> = [
 
 describe('mutating endpoints', () => {
   let setup: Awaited<ReturnType<typeof buildTestApp>>;
-  beforeEach(async () => { setup = await buildTestApp(); });
-  afterEach(async () => { await setup.cleanup(); });
+  beforeEach(async () => {
+    setup = await buildTestApp();
+  });
+  afterEach(async () => {
+    await setup.cleanup();
+  });
 
   for (const [method, path] of MUTATING_PATHS) {
     it(`${method} ${path} returns INTERNAL/EXECUTOR_UNAVAILABLE`, async () => {
-      const req = method === 'POST'
-        ? request(setup.app).post(path)
-        : method === 'PATCH'
-        ? request(setup.app).patch(path)
-        : method === 'PUT'
-        ? request(setup.app).put(path)
-        : request(setup.app).delete(path);
+      const req =
+        method === 'POST'
+          ? request(setup.app).post(path)
+          : method === 'PATCH'
+            ? request(setup.app).patch(path)
+            : method === 'PUT'
+              ? request(setup.app).put(path)
+              : request(setup.app).delete(path);
       const res = await req
         .set('Authorization', ADMIN_TOKEN)
         .set('Content-Type', 'application/json')

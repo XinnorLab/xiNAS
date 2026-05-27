@@ -5,14 +5,36 @@
 
 import { callRpc, type XRaidResponse } from './responseParser.js';
 
-export interface PoolCreateRequest { name: string; drives: string[] }
-export interface PoolDeleteRequest { name: string }
-export interface PoolAddRequest { name: string; drives: string[] }
-export interface PoolRemoveRequest { name: string; drives: string[] }
-export interface PoolShowRequest { name?: string; units?: string }
-export interface PoolActivateRequest { name: string }
-export interface PoolDeactivateRequest { name: string }
-export interface PoolAcquireRequest { name: string; size: number; discardable?: boolean }
+export interface PoolCreateRequest {
+  name: string;
+  drives: string[];
+}
+export interface PoolDeleteRequest {
+  name: string;
+}
+export interface PoolAddRequest {
+  name: string;
+  drives: string[];
+}
+export interface PoolRemoveRequest {
+  name: string;
+  drives: string[];
+}
+export interface PoolShowRequest {
+  name?: string;
+  units?: string;
+}
+export interface PoolActivateRequest {
+  name: string;
+}
+export interface PoolDeactivateRequest {
+  name: string;
+}
+export interface PoolAcquireRequest {
+  name: string;
+  size: number;
+  discardable?: boolean;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type GrpcClient = any;
@@ -32,11 +54,15 @@ export const poolRemove = (client: GrpcClient, req: PoolRemoveRequest): Promise<
 export const poolShow = (client: GrpcClient, req: PoolShowRequest): Promise<XRaidResponse> =>
   callRpc(client.poolShow.bind(client), req);
 
-export const poolActivate = (client: GrpcClient, req: PoolActivateRequest): Promise<XRaidResponse> =>
-  callRpc(client.poolActivate.bind(client), req);
+export const poolActivate = (
+  client: GrpcClient,
+  req: PoolActivateRequest,
+): Promise<XRaidResponse> => callRpc(client.poolActivate.bind(client), req);
 
-export const poolDeactivate = (client: GrpcClient, req: PoolDeactivateRequest): Promise<XRaidResponse> =>
-  callRpc(client.poolDeactivate.bind(client), req);
+export const poolDeactivate = (
+  client: GrpcClient,
+  req: PoolDeactivateRequest,
+): Promise<XRaidResponse> => callRpc(client.poolDeactivate.bind(client), req);
 
 export const poolAcquire = (client: GrpcClient, req: PoolAcquireRequest): Promise<XRaidResponse> =>
   callRpc(client.poolAcquire.bind(client), req);

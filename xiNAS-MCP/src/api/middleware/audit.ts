@@ -41,7 +41,8 @@ export function auditMiddleware(state: OpenedStateStore) {
           client_type: ctx.client_type,
           request_id: ctx.request_id,
           parameters_hash: parametersHash(req),
-          result_hash: 'sha256:' + createHash('sha256').update(String(res.statusCode)).digest('hex'),
+          result_hash:
+            'sha256:' + createHash('sha256').update(String(res.statusCode)).digest('hex'),
           ...(ctx.operation_id !== undefined ? { operation_id: ctx.operation_id } : {}),
         };
         state.audit.queue(entry);

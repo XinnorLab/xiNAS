@@ -57,7 +57,7 @@ export async function handleDiskList(params: z.infer<typeof DiskListSchema>) {
     const resp = await withRetry(() => raidShow(client, { extended: true }), 'disk.list raidShow');
     const raids = resp.data as Array<{
       name: string;
-      members?: Array<{ path: string; slot: number; state: string }>
+      members?: Array<{ path: string; slot: number; state: string }>;
     }> | null;
     if (raids) {
       for (const raid of raids) {
@@ -70,9 +70,11 @@ export async function handleDiskList(params: z.infer<typeof DiskListSchema>) {
         }
       }
     }
-  } catch { /* continue with unassigned info */ }
+  } catch {
+    /* continue with unassigned info */
+  }
 
-  const enriched = blockDevices.map(d => {
+  const enriched = blockDevices.map((d) => {
     const member = raidMembers.get(d.path);
     return {
       ...d,
@@ -84,7 +86,7 @@ export async function handleDiskList(params: z.infer<typeof DiskListSchema>) {
   });
 
   if (params.only_unassigned) {
-    return enriched.filter(d => d.role === 'unassigned');
+    return enriched.filter((d) => d.role === 'unassigned');
   }
   return enriched;
 }
@@ -92,7 +94,7 @@ export async function handleDiskList(params: z.infer<typeof DiskListSchema>) {
 export async function handleDiskGetSmart(params: z.infer<typeof DiskGetSmartSchema>) {
   resolveController(params.controller_id);
   const devices = listBlockDevices();
-  const dev = devices.find(d => d.path === params.disk_id);
+  const dev = devices.find((d) => d.path === params.disk_id);
 
   if (!dev) {
     throw new McpToolError(ErrorCode.NOT_FOUND, `Device not found: ${params.disk_id}`);
@@ -101,7 +103,7 @@ export async function handleDiskGetSmart(params: z.infer<typeof DiskGetSmartSche
   if (!dev.nvme_ctrl) {
     throw new McpToolError(
       ErrorCode.UNSUPPORTED,
-      `SATA SMART is not supported in v1. Only NVMe devices are supported. Device: ${params.disk_id}`
+      `SATA SMART is not supported in v1. Only NVMe devices are supported. Device: ${params.disk_id}`,
     );
   }
 
@@ -123,7 +125,7 @@ export async function handleDiskGetSmart(params: z.infer<typeof DiskGetSmartSche
 export async function handleDiskRunSelftest(params: z.infer<typeof DiskRunSelftestSchema>) {
   resolveController(params.controller_id);
   const devices = listBlockDevices();
-  const dev = devices.find(d => d.path === params.disk_id);
+  const dev = devices.find((d) => d.path === params.disk_id);
 
   if (!dev) {
     throw new McpToolError(ErrorCode.NOT_FOUND, `Device not found: ${params.disk_id}`);
@@ -132,7 +134,7 @@ export async function handleDiskRunSelftest(params: z.infer<typeof DiskRunSelfte
   if (!dev.nvme_ctrl) {
     throw new McpToolError(
       ErrorCode.UNSUPPORTED,
-      `Selftest is only supported for NVMe devices in v1. Device: ${params.disk_id}`
+      `Selftest is only supported for NVMe devices in v1. Device: ${params.disk_id}`,
     );
   }
 
@@ -145,7 +147,10 @@ export async function handleDiskRunSelftest(params: z.infer<typeof DiskRunSelfte
   const duration = params.test_type === 'short' ? 2 * 60 * 1000 : 30 * 60 * 1000;
 
   const timeout = setTimeout(() => {
-    JobManager.update(jobId, { state: 'success', result: { completed: true, test_type: params.test_type } });
+    JobManager.update(jobId, {
+      state: 'success',
+      result: { completed: true, test_type: params.test_type },
+    });
   }, duration);
   timeout.unref();
 
@@ -156,9 +161,7 @@ export async function handleDiskSetLed(params: z.infer<typeof DiskSetLedSchema>)
   resolveController(params.controller_id);
   const client = await getClient(params.controller_id);
 
-  const drives = params.state === 'identify_on' && params.disk_id
-    ? [params.disk_id]
-    : [];
+  const drives = params.state === 'identify_on' && params.disk_id ? [params.disk_id] : [];
 
   const resp = await withRetry(() => driveLocate(client, { drives }), 'disk.set_led');
   return { disk_id: params.disk_id, state: params.state, result: resp.data };
@@ -177,7 +180,7 @@ export async function handleDiskSecureErase(params: z.infer<typeof DiskSecureEra
       }
 
       const devices = listBlockDevices();
-      const dev = devices.find(d => d.path === params.disk_id);
+      const dev = devices.find((d) => d.path === params.disk_id);
       if (!dev) {
         blockingResources.push(`Device not found: ${params.disk_id}`);
       }
@@ -185,11 +188,13 @@ export async function handleDiskSecureErase(params: z.infer<typeof DiskSecureEra
       return {
         mode: 'plan' as const,
         description: `Secure erase ${params.disk_id} using ${params.mode}`,
-        changes: [{
-          action: 'delete',
-          resource_type: 'disk_data',
-          resource_id: params.disk_id,
-        }],
+        changes: [
+          {
+            action: 'delete',
+            resource_type: 'disk_data',
+            resource_id: params.disk_id,
+          },
+        ],
         warnings: ['This operation is IRREVERSIBLE and will destroy all data on the drive.'],
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -203,7 +208,7 @@ export async function handleDiskSecureErase(params: z.infer<typeof DiskSecureEra
       const client = await getClient(params.controller_id);
       const resp = await withRetry(
         () => driveClean(client, { drives: [params.disk_id] }),
-        'disk.secure_erase'
+        'disk.secure_erase',
       );
       return resp.data;
     },

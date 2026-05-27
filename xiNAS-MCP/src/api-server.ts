@@ -5,7 +5,10 @@ async function main(): Promise<void> {
   const handle = await startServer(configPath !== undefined ? { configPath } : {});
   const addr = handle.address;
   // eslint-disable-next-line no-console
-  console.log('xinas-api listening on', typeof addr === 'string' ? addr : `${addr.address}:${addr.port}`);
+  console.log(
+    'xinas-api listening on',
+    typeof addr === 'string' ? addr : `${addr.address}:${addr.port}`,
+  );
   const shutdown = async (signal: string) => {
     // eslint-disable-next-line no-console
     console.log(`received ${signal}, shutting down`);

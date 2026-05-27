@@ -61,10 +61,12 @@ async function send(req: NfsRequest): Promise<NfsResponse> {
       if (!done) {
         done = true;
         clearTimeout(timeout);
-        reject(new McpToolError(
-          ErrorCode.INTERNAL,
-          `Cannot connect to nfs-helper at ${socketPath}: ${err.message}. Is xinas-nfs-helper.service running?`
-        ));
+        reject(
+          new McpToolError(
+            ErrorCode.INTERNAL,
+            `Cannot connect to nfs-helper at ${socketPath}: ${err.message}. Is xinas-nfs-helper.service running?`,
+          ),
+        );
       }
     });
   });

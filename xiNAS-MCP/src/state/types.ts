@@ -7,22 +7,16 @@
 
 export type ValidationStatus = 'valid' | 'drift' | 'invalid' | 'pending';
 
-export type ClientType =
-  | 'rest'
-  | 'mcp'
-  | 'tui'
-  | 'cli'
-  | 'automation'
-  | 'system';
+export type ClientType = 'rest' | 'mcp' | 'tui' | 'cli' | 'automation' | 'system';
 
 export interface RevisionedValue<T = unknown> {
   key: string;
   value: T;
-  revision: number;          // monotonic per key; first write is 1
-  created_at: number;        // epoch ms; never changes after creation
-  modified_at: number;       // epoch ms; updated on each put/patch
-  owner: string;             // principal or source identifier
-  source: string;            // origin tag, e.g. 'ansible:nfs_server'
+  revision: number; // monotonic per key; first write is 1
+  created_at: number; // epoch ms; never changes after creation
+  modified_at: number; // epoch ms; updated on each put/patch
+  owner: string; // principal or source identifier
+  source: string; // origin tag, e.g. 'ansible:nfs_server'
   validation_status: ValidationStatus;
 }
 
@@ -39,9 +33,9 @@ export interface PutOptions {
 }
 
 export interface ListOptions {
-  prefix?: string;           // e.g., '/xinas/v1/desired/Share/'
-  limit?: number;            // default 1000
-  start_after?: string;      // pagination cursor (key string)
+  prefix?: string; // e.g., '/xinas/v1/desired/Share/'
+  limit?: number; // default 1000
+  start_after?: string; // pagination cursor (key string)
 }
 
 export type CasResult<T = unknown> =
@@ -73,14 +67,14 @@ export interface WatchHandle {
  * Required fields are non-optional; payload is free-form.
  */
 export interface AuditEntry {
-  kind: string;                        // operation/tool name, e.g. 'share.create'
-  timestamp: number;                   // epoch ms; set by AuditAppender at queue time
-  node_id: string;                     // controller_id; injected by AuditAppender
+  kind: string; // operation/tool name, e.g. 'share.create'
+  timestamp: number; // epoch ms; set by AuditAppender at queue time
+  node_id: string; // controller_id; injected by AuditAppender
   principal: string;
   client_type: ClientType;
   request_id: string;
-  parameters_hash: string;             // sha256 of canonicalized request input
-  result_hash: string;                 // sha256 of canonicalized result; '' on failure
+  parameters_hash: string; // sha256 of canonicalized request input
+  result_hash: string; // sha256 of canonicalized result; '' on failure
   operation_id?: string;
   task_id?: string;
   state_revision?: number;

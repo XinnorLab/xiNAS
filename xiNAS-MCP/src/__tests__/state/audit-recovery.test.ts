@@ -43,7 +43,9 @@ describe('AuditDrainer — crash recovery', () => {
 
     const content = readFileSync(join(dir, 'audit.jsonl'), 'utf8');
     expect(content.trim().split('\n')).toHaveLength(2);
-    const remaining = db.prepare("SELECT COUNT(*) AS n FROM audit_outbox WHERE drain_state = 'pending'").get() as { n: number };
+    const remaining = db
+      .prepare("SELECT COUNT(*) AS n FROM audit_outbox WHERE drain_state = 'pending'")
+      .get() as { n: number };
     expect(remaining.n).toBe(0);
   });
 
@@ -52,19 +54,20 @@ describe('AuditDrainer — crash recovery', () => {
     const queued = audit.queue(entry({ kind: 'a' }));
 
     // Simulate the crash-after-fsync-before-mark window.
-    const fakeLine = JSON.stringify({
-      audit_seq: queued.audit_seq,
-      prev_hash: queued.prev_hash.toString('hex'),
-      hash: queued.hash.toString('hex'),
-      kind: 'a',
-      timestamp: Date.now(),
-      node_id: 'node-1',
-      principal: 'p',
-      client_type: 'rest',
-      request_id: 'r',
-      parameters_hash: 'sha256:p',
-      result_hash: 'sha256:r',
-    }) + '\n';
+    const fakeLine =
+      JSON.stringify({
+        audit_seq: queued.audit_seq,
+        prev_hash: queued.prev_hash.toString('hex'),
+        hash: queued.hash.toString('hex'),
+        kind: 'a',
+        timestamp: Date.now(),
+        node_id: 'node-1',
+        principal: 'p',
+        client_type: 'rest',
+        request_id: 'r',
+        parameters_hash: 'sha256:p',
+        result_hash: 'sha256:r',
+      }) + '\n';
     writeFileSync(join(dir, 'audit.jsonl'), fakeLine);
 
     const drainer = new AuditDrainer(db, { path: join(dir, 'audit.jsonl') });
@@ -72,7 +75,9 @@ describe('AuditDrainer — crash recovery', () => {
 
     const content = readFileSync(join(dir, 'audit.jsonl'), 'utf8');
     expect(content.trim().split('\n')).toHaveLength(1);
-    const row = db.prepare("SELECT drain_state FROM audit_outbox WHERE audit_seq = ?").get(queued.audit_seq) as { drain_state: string };
+    const row = db
+      .prepare('SELECT drain_state FROM audit_outbox WHERE audit_seq = ?')
+      .get(queued.audit_seq) as { drain_state: string };
     expect(row.drain_state).toBe('durable');
   });
 

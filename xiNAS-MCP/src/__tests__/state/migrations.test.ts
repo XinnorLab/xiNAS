@@ -23,7 +23,9 @@ describe('migrations runner', () => {
       'tasks',
     ]);
 
-    const versions = db.prepare('SELECT version, filename FROM schema_version ORDER BY version').all();
+    const versions = db
+      .prepare('SELECT version, filename FROM schema_version ORDER BY version')
+      .all();
     expect(versions).toEqual([{ version: 1, filename: '001-initial.sql' }]);
   });
 

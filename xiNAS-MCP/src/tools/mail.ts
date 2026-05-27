@@ -30,7 +30,9 @@ export const MailListRecipientsSchema = z.object({
 export const MailAddRecipientSchema = z.object({
   controller_id: z.string().optional().describe('Controller UUID (defaults to local)'),
   address: z.string().min(1).describe('Recipient email address'),
-  level: z.enum(VALID_LEVELS).describe('Minimum notification level: info (all), warning (warn+error), error (errors only)'),
+  level: z
+    .enum(VALID_LEVELS)
+    .describe('Minimum notification level: info (all), warning (warn+error), error (errors only)'),
   mode: z.enum(['plan', 'apply']).default('plan'),
 });
 
@@ -46,8 +48,18 @@ export const MailGetSettingsSchema = z.object({
 
 export const MailUpdateSettingsSchema = z.object({
   controller_id: z.string().optional().describe('Controller UUID (defaults to local)'),
-  polling_interval: z.number().int().min(1).optional().describe('RAID/drive state polling interval in seconds'),
-  progress_polling_interval: z.number().int().min(1).optional().describe('Init/reconstruction progress polling interval in minutes'),
+  polling_interval: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe('RAID/drive state polling interval in seconds'),
+  progress_polling_interval: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe('Init/reconstruction progress polling interval in minutes'),
   mode: z.enum(['plan', 'apply']).default('plan'),
 });
 
@@ -80,12 +92,14 @@ export async function handleMailAddRecipient(
     preflight: async () => ({
       mode: 'plan' as const,
       description: `Add notification recipient ${params.address} at level '${params.level}'`,
-      changes: [{
-        action: 'create' as const,
-        resource_type: 'mail_recipient',
-        resource_id: params.address,
-        after: { address: params.address, level: params.level },
-      }],
+      changes: [
+        {
+          action: 'create' as const,
+          resource_type: 'mail_recipient',
+          resource_id: params.address,
+          after: { address: params.address, level: params.level },
+        },
+      ],
       warnings: [],
       preflight_passed: true,
     }),
@@ -113,9 +127,7 @@ export async function handleMailRemoveRecipient(
       const client = await getClient(params.controller_id);
       const resp = await withRetry(() => mailShow(client), 'mail.remove_recipient preflight');
       const recipients = resp.data as Array<{ address?: string; email?: string }> | null;
-      const found = recipients?.some(
-        r => (r.address ?? r.email) === params.address,
-      );
+      const found = recipients?.some((r) => (r.address ?? r.email) === params.address);
 
       const blockingResources: string[] = [];
       if (!found) {
@@ -125,12 +137,14 @@ export async function handleMailRemoveRecipient(
       return {
         mode: 'plan' as const,
         description: `Remove notification recipient ${params.address}`,
-        changes: [{
-          action: 'delete' as const,
-          resource_type: 'mail_recipient',
-          resource_id: params.address,
-          before: { address: params.address },
-        }],
+        changes: [
+          {
+            action: 'delete' as const,
+            resource_type: 'mail_recipient',
+            resource_id: params.address,
+            before: { address: params.address },
+          },
+        ],
         warnings: [],
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -173,10 +187,19 @@ export async function handleMailUpdateSettings(
   return applyWithPlan(mode, {
     preflight: async () => {
       const client = await getClient(params.controller_id);
-      const resp = await withRetry(() => settingsMailShow(client), 'mail.update_settings preflight');
+      const resp = await withRetry(
+        () => settingsMailShow(client),
+        'mail.update_settings preflight',
+      );
       const current = resp.data as Record<string, unknown> | null;
 
-      const changes: Array<{ action: 'modify'; resource_type: string; resource_id: string; before?: unknown; after?: unknown }> = [];
+      const changes: Array<{
+        action: 'modify';
+        resource_type: string;
+        resource_id: string;
+        before?: unknown;
+        after?: unknown;
+      }> = [];
       if (params.polling_interval != null) {
         changes.push({
           action: 'modify',
@@ -209,12 +232,10 @@ export async function handleMailUpdateSettings(
       const client = await getClient(params.controller_id);
       const req: { polling_interval?: number; progress_polling_interval?: number } = {};
       if (params.polling_interval != null) req.polling_interval = params.polling_interval;
-      if (params.progress_polling_interval != null) req.progress_polling_interval = params.progress_polling_interval;
+      if (params.progress_polling_interval != null)
+        req.progress_polling_interval = params.progress_polling_interval;
 
-      const resp = await withRetry(
-        () => settingsMailModify(client, req),
-        'mail.update_settings',
-      );
+      const resp = await withRetry(() => settingsMailModify(client, req), 'mail.update_settings');
       return resp.data ?? { ...req, status: 'updated' };
     },
   });

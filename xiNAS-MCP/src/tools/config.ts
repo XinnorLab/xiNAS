@@ -5,7 +5,14 @@
  */
 
 import { z } from 'zod';
-import { listSnapshots, showSnapshot, diffSnapshots, getStatus, getRetentionPolicy, setRetentionPolicy } from '../os/configHistory.js';
+import {
+  listSnapshots,
+  showSnapshot,
+  diffSnapshots,
+  getStatus,
+  getRetentionPolicy,
+  setRetentionPolicy,
+} from '../os/configHistory.js';
 import { applyWithPlan } from '../middleware/planApply.js';
 import { resolveController } from '../server/controllerResolver.js';
 import type { PlanChange, PlanResult, Mode } from '../types/common.js';
@@ -50,9 +57,19 @@ export const ConfigGetRetentionSchema = z.object({
 
 export const ConfigSetRetentionSchema = z.object({
   controller_id: z.string().optional(),
-  max_snapshots: z.number().int().min(1).max(1000).optional()
+  max_snapshots: z
+    .number()
+    .int()
+    .min(1)
+    .max(1000)
+    .optional()
     .describe('Maximum rollback-eligible snapshots to retain'),
-  max_age_days: z.number().int().min(0).max(3650).optional()
+  max_age_days: z
+    .number()
+    .int()
+    .min(0)
+    .max(3650)
+    .optional()
     .describe('Delete snapshots older than N days (0 = disabled)'),
   mode: z.enum(['plan', 'apply']).default('plan'),
 });
@@ -80,7 +97,9 @@ export async function handleConfigCheckDrift(params: z.infer<typeof ConfigCheckD
   // For a full drift check, we use a dedicated drift command
   const { execFile } = await import('node:child_process');
   return new Promise((resolve, reject) => {
-    execFile('python3', ['-m', 'xinas_history', 'drift', 'check', '--format', 'json'],
+    execFile(
+      'python3',
+      ['-m', 'xinas_history', 'drift', 'check', '--format', 'json'],
       { timeout: 30_000 },
       (err, stdout, stderr) => {
         if (err && 'killed' in err && err.killed) {
@@ -92,7 +111,8 @@ export async function handleConfigCheckDrift(params: z.infer<typeof ConfigCheckD
         } catch {
           reject(new Error(stderr || 'Drift check failed'));
         }
-      });
+      },
+    );
   });
 }
 
@@ -108,8 +128,8 @@ export async function handleConfigRollback(params: z.infer<typeof ConfigRollback
   return applyWithPlan(mode, {
     preflight: async () => {
       // Get target snapshot info for plan output
-      const target = await showSnapshot(params.target_id) as Record<string, unknown>;
-      const status = await getStatus() as Record<string, unknown>;
+      const target = (await showSnapshot(params.target_id)) as Record<string, unknown>;
+      const status = (await getStatus()) as Record<string, unknown>;
 
       const warnings: string[] = [];
       const blockingResources: string[] = [];
@@ -128,13 +148,15 @@ export async function handleConfigRollback(params: z.infer<typeof ConfigRollback
       return {
         mode: 'plan' as const,
         description: `Roll back configuration to snapshot '${params.target_id}'`,
-        changes: [{
-          action: 'modify' as const,
-          resource_type: 'configuration',
-          resource_id: params.target_id,
-          before: { current_effective: status?.current_effective },
-          after: { target: params.target_id, rollback_class: rollbackClass },
-        }],
+        changes: [
+          {
+            action: 'modify' as const,
+            resource_type: 'configuration',
+            resource_id: params.target_id,
+            before: { current_effective: status?.current_effective },
+            after: { target: params.target_id, rollback_class: rollbackClass },
+          },
+        ],
         warnings,
         preflight_passed: blockingResources.length === 0,
         ...(blockingResources.length > 0 ? { blocking_resources: blockingResources } : {}),
@@ -144,22 +166,33 @@ export async function handleConfigRollback(params: z.infer<typeof ConfigRollback
     execute: async () => {
       const { execFile } = await import('node:child_process');
       return new Promise((resolve, reject) => {
-        execFile('python3', [
-          '-m', 'xinas_history', 'snapshot', 'rollback', params.target_id,
-          '--reason', params.reason,
-          '--yes',
-          '--format', 'json',
-        ], { timeout: 300_000 }, (err, stdout, stderr) => {
-          if (err && 'killed' in err && err.killed) {
-            reject(new Error('Rollback timed out'));
-            return;
-          }
-          try {
-            resolve(JSON.parse(stdout));
-          } catch {
-            reject(new Error(stderr || 'Rollback failed'));
-          }
-        });
+        execFile(
+          'python3',
+          [
+            '-m',
+            'xinas_history',
+            'snapshot',
+            'rollback',
+            params.target_id,
+            '--reason',
+            params.reason,
+            '--yes',
+            '--format',
+            'json',
+          ],
+          { timeout: 300_000 },
+          (err, stdout, stderr) => {
+            if (err && 'killed' in err && err.killed) {
+              reject(new Error('Rollback timed out'));
+              return;
+            }
+            try {
+              resolve(JSON.parse(stdout));
+            } catch {
+              reject(new Error(stderr || 'Rollback failed'));
+            }
+          },
+        );
       });
     },
   });
@@ -176,7 +209,7 @@ export async function handleConfigSetRetention(params: z.infer<typeof ConfigSetR
 
   return applyWithPlan(mode, {
     preflight: async () => {
-      const current = await getRetentionPolicy() as Record<string, unknown>;
+      const current = (await getRetentionPolicy()) as Record<string, unknown>;
       const changes: PlanChange[] = [];
 
       if (params.max_snapshots !== undefined) {

@@ -40,8 +40,13 @@ function writeSyslog(message: string): void {
     const buf = Buffer.from(msg);
     // Best-effort connection to /dev/log Unix socket
     const conn = net.createConnection('/dev/log');
-    conn.on('connect', () => { conn.write(buf); conn.end(); });
-    conn.on('error', () => { /* ignore */ });
+    conn.on('connect', () => {
+      conn.write(buf);
+      conn.end();
+    });
+    conn.on('error', () => {
+      /* ignore */
+    });
   } catch {
     // Syslog is best-effort — never fail the main operation
   }

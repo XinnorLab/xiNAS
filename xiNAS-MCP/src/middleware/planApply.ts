@@ -44,10 +44,7 @@ function inferOperation(plan: PlanResult): string | null {
   }
 }
 
-export async function applyWithPlan<T>(
-  mode: Mode,
-  ctx: PlanContext<T>
-): Promise<PlanResult | T> {
+export async function applyWithPlan<T>(mode: Mode, ctx: PlanContext<T>): Promise<PlanResult | T> {
   const plan = await ctx.preflight();
 
   if (mode === 'plan') {
@@ -59,7 +56,7 @@ export async function applyWithPlan<T>(
     throw new McpToolError(
       ErrorCode.PRECONDITION_FAILED,
       `Preflight checks failed. Blocking resources: ${plan.blocking_resources?.join(', ') ?? 'unknown'}`,
-      { plan }
+      { plan },
     );
   }
 

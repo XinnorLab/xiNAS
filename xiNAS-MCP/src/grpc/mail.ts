@@ -5,8 +5,13 @@
 
 import { callRpc, type XRaidResponse } from './responseParser.js';
 
-export interface MailAddRequest { address: string; level: string }
-export interface MailRemoveRequest { address: string }
+export interface MailAddRequest {
+  address: string;
+  level: string;
+}
+export interface MailRemoveRequest {
+  address: string;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type GrpcClient = any;

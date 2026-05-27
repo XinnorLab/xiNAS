@@ -14,10 +14,16 @@ function parseLimit(raw: unknown): number {
   }
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || String(n) !== raw) {
-    throw new ApiException('INVALID_ARGUMENT', `query param 'limit' must be an integer, got '${raw}'`);
+    throw new ApiException(
+      'INVALID_ARGUMENT',
+      `query param 'limit' must be an integer, got '${raw}'`,
+    );
   }
   if (n < 1 || n > 1000) {
-    throw new ApiException('INVALID_ARGUMENT', `query param 'limit' must be in [1, 1000], got ${n}`);
+    throw new ApiException(
+      'INVALID_ARGUMENT',
+      `query param 'limit' must be in [1, 1000], got ${n}`,
+    );
   }
   return n;
 }
@@ -46,7 +52,12 @@ export function tasksRouter(ctx: ApiContext): Router {
       values = values.filter((v) => (v as { kind?: string }).kind === kindFilter);
     }
     if (values.length > limit) values = values.slice(0, limit);
-    sendOk(req, res, values, rows.map((x) => x.revision));
+    sendOk(
+      req,
+      res,
+      values,
+      rows.map((x) => x.revision),
+    );
   });
 
   r.get('/tasks/:id', (req, res) => {

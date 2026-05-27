@@ -13,13 +13,13 @@ export const ErrorCode = {
   INTERNAL: 'INTERNAL',
   RESOURCE_EXHAUSTION: 'RESOURCE_EXHAUSTION',
 } as const;
-export type ErrorCode = typeof ErrorCode[keyof typeof ErrorCode];
+export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
 export class McpToolError extends Error {
   constructor(
     public readonly code: ErrorCode,
     message: string,
-    public readonly details?: unknown
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = 'McpToolError';

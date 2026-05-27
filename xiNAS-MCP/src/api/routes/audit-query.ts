@@ -12,10 +12,12 @@ export function auditRouter(_ctx: ApiContext): Router {
         request_id: ctx.request_id,
         correlation_id: ctx.correlation_id,
         state_revision: 0,
-        warnings: [{
-          code: 'AUDIT_QUERY_NOT_IMPLEMENTED',
-          message: 'audit query against the JSONL is not implemented in this PR; result is empty',
-        }],
+        warnings: [
+          {
+            code: 'AUDIT_QUERY_NOT_IMPLEMENTED',
+            message: 'audit query against the JSONL is not implemented in this PR; result is empty',
+          },
+        ],
         result: [],
       }),
     );

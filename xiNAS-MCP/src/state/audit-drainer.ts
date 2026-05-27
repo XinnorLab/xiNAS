@@ -13,8 +13,8 @@ import type { AuditAppender } from './audit.js';
 
 export interface AuditDrainerOptions {
   path: string;
-  rotateBytes?: number;       // default 256 MiB (rotation lands in a later PR)
-  drainIntervalMs?: number;   // default 500
+  rotateBytes?: number; // default 256 MiB (rotation lands in a later PR)
+  drainIntervalMs?: number; // default 500
   /**
    * If set, the drainer calls audit.notifyJsonlAdvanced(lastHash)
    * after each successful batch so AuditAppender's currentTailHash

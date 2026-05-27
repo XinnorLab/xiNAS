@@ -4,8 +4,12 @@ import { buildTestApp, ADMIN_TOKEN } from './_helpers.js';
 
 describe('tasks routes', () => {
   let setup: Awaited<ReturnType<typeof buildTestApp>>;
-  beforeEach(async () => { setup = await buildTestApp(); });
-  afterEach(async () => { await setup.cleanup(); });
+  beforeEach(async () => {
+    setup = await buildTestApp();
+  });
+  afterEach(async () => {
+    await setup.cleanup();
+  });
 
   it('GET /tasks returns empty array on fresh install', async () => {
     const res = await request(setup.app).get('/api/v1/tasks').set('Authorization', ADMIN_TOKEN);

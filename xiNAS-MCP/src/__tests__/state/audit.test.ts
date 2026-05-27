@@ -51,7 +51,9 @@ describe('AuditAppender', () => {
   it('chains hashes: second prev_hash equals first hash', () => {
     const first = audit.queue(makeEntry({ request_id: 'r1' }));
     const second = audit.queue(makeEntry({ request_id: 'r2' }));
-    const secondRow = db.prepare('SELECT prev_hash FROM audit_outbox WHERE audit_seq = ?').get(2) as {
+    const secondRow = db
+      .prepare('SELECT prev_hash FROM audit_outbox WHERE audit_seq = ?')
+      .get(2) as {
       prev_hash: Buffer;
     };
     expect(secondRow.prev_hash).toEqual(first.hash);
@@ -90,7 +92,7 @@ describe('AuditAppender', () => {
     });
     expect(() => txn()).toThrow('boom');
 
-    const after = db.prepare("SELECT COUNT(*) AS n FROM audit_outbox").get() as { n: number };
+    const after = db.prepare('SELECT COUNT(*) AS n FROM audit_outbox').get() as { n: number };
     expect(after.n).toBe(0);
 
     const next = audit.queue(makeEntry({ request_id: 'survives' }));
