@@ -8,7 +8,21 @@ export interface TokenPrincipal {
 }
 
 export type ListenSpec =
-  | { kind: 'unix'; socket: string }
+  | {
+      kind: 'unix';
+      socket: string;
+      /**
+       * Optional numeric gid to chown the socket file to after binding.
+       * When set, server.ts runs `chown(socketPath, -1, socketGroup)`
+       * so members of that group can connect (combined with the 0o660
+       * mode set unconditionally). The Phase 0 Ansible role templates
+       * this from the xinas-admin group's gid. When unset, the socket
+       * keeps its default ownership (the process's primary group) and
+       * only the api process itself can connect — safe but unusable
+       * from operator tools, so production deployments MUST set this.
+       */
+      socketGroup?: number;
+    }
   | { kind: 'tcp'; host: string; port: number };
 
 export interface ApiConfig {

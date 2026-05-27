@@ -18,7 +18,10 @@ function appWith(config: ApiConfig) {
 const config: ApiConfig = {
   controller_id: '00000000-0000-0000-0000-0000000000aa',
   listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
-  tokens: { 'tok-admin': { principal: 'admin:alice', role: 'admin' } },
+  tokens: {
+    'tok-admin': { principal: 'admin:alice', role: 'admin' },
+    'tok-viewer': { principal: 'viewer:bob', role: 'viewer' },
+  },
   state: { databasePath: ':memory:', auditJsonlPath: '/tmp/audit.jsonl' },
 };
 
@@ -47,7 +50,7 @@ describe('authMiddleware', () => {
 });
 
 describe('authMiddleware — Unix socket trust', () => {
-  it('promotes UDS connections to admin without a token', async () => {
+  async function callOverUds(authHeader?: string): Promise<{ status: number; body: string }> {
     const { createServer } = await import('node:http');
     const { mkdtempSync, rmSync, chmodSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
@@ -65,23 +68,47 @@ describe('authMiddleware — Unix socket trust', () => {
           resolve();
         });
       });
-      const body = await new Promise<string>((resolve, reject) => {
-        const req = httpRequest({ socketPath: sockPath, path: '/whoami', method: 'GET' }, (res) => {
-          let buf = '';
-          res.on('data', (c) => {
-            buf += c;
-          });
-          res.on('end', () => resolve(buf));
-        });
+      return await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const headers: Record<string, string> = authHeader ? { Authorization: authHeader } : {};
+        const req = httpRequest(
+          { socketPath: sockPath, path: '/whoami', method: 'GET', headers },
+          (res) => {
+            let buf = '';
+            res.on('data', (c) => {
+              buf += c;
+            });
+            res.on('end', () => resolve({ status: res.statusCode ?? 0, body: buf }));
+          },
+        );
         req.on('error', reject);
         req.end();
       });
-      const parsed = JSON.parse(body);
-      expect(parsed.principal).toBe('local:uds');
-      expect(parsed.role).toBe('admin');
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  it('promotes UDS connections to admin when NO bearer is sent', async () => {
+    const { status, body } = await callOverUds();
+    expect(status).toBe(200);
+    const parsed = JSON.parse(body);
+    expect(parsed.principal).toBe('local:uds');
+    expect(parsed.role).toBe('admin');
+  });
+
+  it('UDS + viewer bearer uses the bearer role (does NOT promote to admin)', async () => {
+    const { status, body } = await callOverUds('Bearer tok-viewer');
+    expect(status).toBe(200);
+    const parsed = JSON.parse(body);
+    expect(parsed.principal).toBe('viewer:bob');
+    expect(parsed.role).toBe('viewer');
+  });
+
+  it('UDS + unknown bearer returns 401 (does not silently fall back to UDS admin)', async () => {
+    const { status, body } = await callOverUds('Bearer no-such-token');
+    expect(status).toBe(401);
+    const parsed = JSON.parse(body);
+    expect(parsed.errors?.[0]?.code).toBe('PERMISSION_DENIED');
   });
 });
