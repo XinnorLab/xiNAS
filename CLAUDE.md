@@ -32,9 +32,10 @@ ansible-playbook playbooks/site.yml --tags "nfs_server"  # Run specific role
 ### Test Design
 ```bash
 # Manual: invoke /test-designer in Claude Code conversation
-# Automated: triggers on PR via .github/workflows/test-designer.yml
 # Publish manually: node scripts/tq-publish.mjs --input <json> [--pr <num>] [--dry-run]
 ```
+(The automated PR-time workflow was removed in the Phase 0 CI bootstrap;
+the skill and publisher script remain for manual invocation.)
 
 ### Configuration Editors
 ```bash
