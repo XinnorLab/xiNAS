@@ -5,6 +5,7 @@ import { authMiddleware } from './middleware/auth.js';
 import { auditMiddleware } from './middleware/audit.js';
 import { errorMiddleware } from './middleware/error.js';
 import { systemRouter } from './routes/system.js';
+import { storageRouter } from './routes/storage.js';
 
 export function createApp(ctx: ApiContext): Express {
   const app = express();
@@ -16,6 +17,7 @@ export function createApp(ctx: ApiContext): Express {
 
   const v1 = Router();
   v1.use(systemRouter(ctx));
+  v1.use(storageRouter(ctx));
   app.use('/api/v1', v1);
 
   app.use(errorMiddleware());
