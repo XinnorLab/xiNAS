@@ -161,8 +161,30 @@ export class SqliteKvStore implements KvStore {
     }
     return { ok: true, revision: expected_revision };
   }
-  list<T = unknown>(_opts?: ListOptions): RevisionedValue<T>[] {
-    throw new Error('list: not implemented in SS-6');
+  list<T = unknown>(opts: ListOptions = {}): RevisionedValue<T>[] {
+    const prefix = opts.prefix ?? '';
+    const limit = opts.limit ?? 1000;
+    const startAfter = opts.start_after ?? '';
+
+    const params: (string | number)[] = [];
+    const clauses: string[] = ['1=1'];
+
+    if (prefix) {
+      // ESCAPE attaches to the LIKE expression, not the trailing
+      // ORDER BY clause. The pattern itself escapes %, _, \.
+      clauses.push("key LIKE ? ESCAPE '\\'");
+      params.push(`${prefix.replace(/[\\%_]/g, '\\$&')}%`);
+    }
+    if (startAfter) {
+      clauses.push('key > ?');
+      params.push(startAfter);
+    }
+
+    const sql = `SELECT * FROM kv WHERE ${clauses.join(' AND ')} ORDER BY key ASC LIMIT ?`;
+    params.push(limit);
+
+    const rows = this.db.prepare(sql).all(...params) as KvRow[];
+    return rows.map((row) => rowToValue<T>(row));
   }
   watch(_prefix: string, _onChange: (event: WatchEvent) => void): WatchHandle {
     throw new Error('watch: not implemented in SS-6');
