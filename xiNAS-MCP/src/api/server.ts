@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { unlinkSync, existsSync, chmodSync } from 'node:fs';
+import { unlinkSync, existsSync, chmodSync, chownSync } from 'node:fs';
 import { openStateStore, type OpenedStateStore } from '../state/index.js';
 import { createApp } from './app.js';
 import { loadConfig, type ApiConfig } from './config.js';
@@ -37,12 +37,23 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
     if (config.listen.kind === 'unix') {
       if (existsSync(config.listen.socket)) unlinkSync(config.listen.socket);
       const socketPath = config.listen.socket;
+      const socketGroup = config.listen.socketGroup;
       server.listen(socketPath, () => {
-        // 0660 — owner (root) + group (xinas-admin, set by the
-        // Ansible role) can connect; everyone else gets EACCES.
-        // The auth middleware's isUnixSocketConnection() trusts
-        // any caller who got past this gate as admin.
+        // 0660 — owner + group can connect; everyone else gets
+        // EACCES. The auth middleware trusts any UDS caller without
+        // a bearer header as admin (a viewer token, if presented,
+        // is still honored as viewer — see auth.ts).
         chmodSync(socketPath, 0o660);
+        if (socketGroup !== undefined) {
+          // chown to (-1, socketGroup): keep current owner, set group
+          // to the configured gid (e.g. xinas-admin). The process
+          // must be a member of that group (DynamicUser unit uses
+          // SupplementaryGroups=xinas-admin). When socketGroup is
+          // unset the socket keeps the process's primary group and
+          // is effectively only reachable by the api process — safe
+          // default, but production deployments MUST set it.
+          chownSync(socketPath, -1, socketGroup);
+        }
         server.off('error', onError);
         resolve();
       });

@@ -28,6 +28,14 @@ RestartSec=5s
 
 # Per ADR-0002 §Hardening: no root, no capabilities.
 DynamicUser=yes
+# The DynamicUser is added to xinas-admin as a supplementary group so
+# the api process can chown(2) the UDS to that group at startup. The
+# numeric gid is templated into /etc/xinas-api/config.json (listen.socketGroup)
+# by the Ansible role (deferred follow-up — see PR #201 'What's deferred').
+# Without that config value, the socket is owned by the dynamic user's
+# primary group and only the api process itself can connect — safe but
+# unreachable from operator tools.
+SupplementaryGroups=xinas-admin
 NoNewPrivileges=true
 CapabilityBoundingSet=
 ProtectSystem=strict

@@ -29,13 +29,25 @@ function isUnixSocketConnection(req: Request): boolean {
 }
 
 /**
- * Auth middleware. Tries:
- *   1. Unix peer-creds (trust UDS connections as admin; the socket
- *      file's mode + ownership is the actual gate).
- *   2. Bearer token in Authorization header → config.tokens lookup.
+ * Auth middleware. Resolves the request principal in this order:
  *
- * On match, fills req.context.principal + role and calls next().
- * On no match, responds 401 with PERMISSION_DENIED.
+ *   1. Bearer token in Authorization header → config.tokens lookup.
+ *      If a bearer header is present, the principal/role are taken
+ *      from the token — even on a UDS connection. This prevents a
+ *      viewer-token caller over UDS from getting silently promoted
+ *      to admin. An unknown bearer is a hard 401 (we do NOT fall
+ *      through to UDS trust — explicit-but-wrong creds are a worse
+ *      signal than no creds).
+ *
+ *   2. Unix peer-creds. If no bearer header was sent AND the
+ *      connection is UDS, trust the caller as admin. The socket
+ *      file's mode + ownership (0o660 root:xinas-admin, set by
+ *      server.ts chmod/chown) is the actual gate — anyone who got
+ *      this far has already passed the OS-level permission check.
+ *      Same trust-via-file-system pattern ADR-0002 uses for the
+ *      agent socket.
+ *
+ *   3. Otherwise 401 PERMISSION_DENIED.
  */
 export function authMiddleware(config: ApiConfig) {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -45,17 +57,11 @@ export function authMiddleware(config: ApiConfig) {
       return;
     }
 
-    // 1. Unix peer-creds (trust UDS as admin).
-    if (isUnixSocketConnection(req)) {
-      ctx.principal = 'local:uds';
-      ctx.role = 'admin';
-      next();
-      return;
-    }
-
-    // 2. Bearer token.
     const authHeader = req.header('Authorization') ?? req.header('authorization');
-    if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
+    const hasBearer = authHeader != null && authHeader.toLowerCase().startsWith('bearer ');
+
+    // 1. Bearer token wins, even on UDS.
+    if (hasBearer) {
       const token = authHeader.slice(7).trim();
       const principal = config.tokens[token];
       if (principal) {
@@ -64,11 +70,20 @@ export function authMiddleware(config: ApiConfig) {
         next();
         return;
       }
+      // Unknown bearer: do not fall through to UDS trust.
+    } else if (isUnixSocketConnection(req)) {
+      // 2. UDS without bearer → trust as admin.
+      ctx.principal = 'local:uds';
+      ctx.role = 'admin';
+      next();
+      return;
     }
 
     const err = makeError(
       'PERMISSION_DENIED',
-      'authentication required (bearer token or Unix peer-creds)',
+      hasBearer
+        ? 'unknown bearer token'
+        : 'authentication required (bearer token or Unix peer-creds)',
     );
     res
       .status(errorStatus('PERMISSION_DENIED'))
