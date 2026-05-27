@@ -84,7 +84,7 @@ jobs:
           cache-dependency-path: xiNAS-MCP/package-lock.json
       - run: npm ci
         working-directory: xiNAS-MCP
-      - run: npx vitest run src/__tests__/sanity.test.ts
+      - run: npm test
         working-directory: xiNAS-MCP
 
   typescript-contracts:
