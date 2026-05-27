@@ -20,10 +20,24 @@ import { executorUnavailable } from './handlers/unsupported.js';
 export function createApp(ctx: ApiContext): Express {
   const app = express();
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '1mb' }));
+  // Middleware order rationale:
+  //   1. requestId runs first so even body-parser SyntaxErrors and
+  //      auth failures carry a real request_id / correlation_id in
+  //      the envelope (otherwise errorMiddleware falls back to
+  //      "unknown" and the audit/correlation trail is lost).
+  //   2. audit registers its res.on('finish') hook next so every
+  //      response — including auth 401s — gets an audit entry per
+  //      reqs §14. The audit middleware uses 'unauthenticated' as
+  //      the principal fallback when auth never assigned one.
+  //   3. json comes after audit (its parse failures still surface
+  //      a 400 INVALID_ARGUMENT via errorMiddleware; the audit
+  //      finish hook fires regardless).
+  //   4. auth runs last; failed auth still triggers the audit
+  //      finish hook because audit registered before this.
   app.use(requestIdMiddleware());
-  app.use(authMiddleware(ctx.config));
   app.use(auditMiddleware(ctx.state));
+  app.use(express.json({ limit: '1mb' }));
+  app.use(authMiddleware(ctx.config));
 
   const v1 = Router();
   v1.use(systemRouter(ctx));
