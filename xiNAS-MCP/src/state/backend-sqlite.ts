@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import type { Database, Statement } from 'better-sqlite3';
 import type { KvStore, KvTransaction } from './store.js';
 import type {
@@ -43,6 +44,8 @@ export class SqliteKvStore implements KvStore {
   private readonly putCasStmt: Statement;
   private readonly deleteStmt: Statement;
   private readonly deleteCasStmt: Statement;
+  private readonly emitter = new EventEmitter();
+  private txBuffer: WatchEvent[] | null = null;
 
   constructor(db: Database) {
     this.db = db;
@@ -91,6 +94,7 @@ export class SqliteKvStore implements KvStore {
         this.putNewStmt.run(key, payload, now, now, owner, source, status);
       }
       const updated = this.getStmt.get(key) as KvRow;
+      this.fireEvent({ kind: 'put', key, value: rowToValue(updated) });
       return { ok: true, value: rowToValue<T>(updated) };
     }
 
@@ -106,6 +110,7 @@ export class SqliteKvStore implements KvStore {
         throw err;
       }
       const inserted = this.getStmt.get(key) as KvRow;
+      this.fireEvent({ kind: 'put', key, value: rowToValue(inserted) });
       return { ok: true, value: rowToValue<T>(inserted) };
     }
 
@@ -127,6 +132,7 @@ export class SqliteKvStore implements KvStore {
       return { ok: false, reason: 'stale_revision', current: rowToValue<T>(existing) };
     }
     const updated = this.getStmt.get(key) as KvRow;
+    this.fireEvent({ kind: 'put', key, value: rowToValue(updated) });
     return { ok: true, value: rowToValue<T>(updated) };
   }
 
@@ -149,6 +155,7 @@ export class SqliteKvStore implements KvStore {
         return { ok: false, reason: 'not_found', current: null };
       }
       this.deleteStmt.run(key);
+      this.fireEvent({ kind: 'delete', key, previous_revision: existing.revision });
       return { ok: true, revision: existing.revision };
     }
     const info = this.deleteCasStmt.run(key, expected_revision);
@@ -159,6 +166,7 @@ export class SqliteKvStore implements KvStore {
       }
       return { ok: false, reason: 'stale_revision', current: rowToValue(existing) };
     }
+    this.fireEvent({ kind: 'delete', key, previous_revision: expected_revision });
     return { ok: true, revision: expected_revision };
   }
   list<T = unknown>(opts: ListOptions = {}): RevisionedValue<T>[] {
@@ -186,8 +194,24 @@ export class SqliteKvStore implements KvStore {
     const rows = this.db.prepare(sql).all(...params) as KvRow[];
     return rows.map((row) => rowToValue<T>(row));
   }
-  watch(_prefix: string, _onChange: (event: WatchEvent) => void): WatchHandle {
-    throw new Error('watch: not implemented in SS-6');
+  watch(prefix: string, onChange: (event: WatchEvent) => void): WatchHandle {
+    const listener = (event: WatchEvent) => {
+      if (event.key.startsWith(prefix)) onChange(event);
+    };
+    this.emitter.on('event', listener);
+    return {
+      close: () => {
+        this.emitter.off('event', listener);
+      },
+    };
+  }
+
+  private fireEvent(event: WatchEvent): void {
+    if (this.txBuffer !== null) {
+      this.txBuffer.push(event);
+    } else {
+      this.emitter.emit('event', event);
+    }
   }
   transaction<R>(fn: (tx: KvTransaction) => R): R {
     const txFacade: KvTransaction = {
@@ -195,10 +219,20 @@ export class SqliteKvStore implements KvStore {
       put: (key, value, opts) => this.put(key, value, opts),
       delete: (key, expected_revision) => this.delete(key, expected_revision),
     };
-    // better-sqlite3 transactions are synchronous and propagate throws
-    // as rollback. The wrapper invokes fn and returns its result.
+    this.txBuffer = [];
     const run = this.db.transaction(() => fn(txFacade));
-    return run();
+    try {
+      const result = run();
+      // Commit succeeded → flush buffered events.
+      const buffer = this.txBuffer;
+      this.txBuffer = null;
+      for (const e of buffer) this.emitter.emit('event', e);
+      return result;
+    } catch (err) {
+      // Rollback → drop buffer.
+      this.txBuffer = null;
+      throw err;
+    }
   }
   close(): void {
     this.db.close();
