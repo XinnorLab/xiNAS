@@ -120,11 +120,17 @@ CREATE INDEX IF NOT EXISTS audit_outbox_pending_idx ON audit_outbox(drain_state,
 
 -- Audit index for fast lookup of entries by request_id / operation_id /
 -- task_id. Points into the JSONL once drained.
+--
+-- audit_seq is logically a reference to audit_outbox.audit_seq, but
+-- we do NOT use a SQL foreign key: the JSONL is the durable record,
+-- and audit_outbox rows can be pruned by retention long after the
+-- audit_index rows are still useful (they point at JSONL byte
+-- offsets that remain valid).
 CREATE TABLE IF NOT EXISTS audit_index (
   request_id      TEXT,
   operation_id    TEXT,
   task_id         TEXT,
-  audit_seq       INTEGER NOT NULL REFERENCES audit_outbox(audit_seq),
+  audit_seq       INTEGER NOT NULL,
   durable_file    TEXT,
   durable_offset  INTEGER
 );
