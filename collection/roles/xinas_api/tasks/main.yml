@@ -1,0 +1,81 @@
+---
+# xinas_api role — Phase 0 installer.
+# Spec: docs/Installer/xinas-api-role-spec.md
+
+# 1. Pre-flight: the xinas-mcp build artifacts must exist. The role
+#    deliberately does NOT meta-depend on xinas_mcp (which would
+#    drag in the MCP daemon, Claude config, SSE transport). The
+#    operator runs xinas_mcp first; this task fails fast with an
+#    actionable message if they haven't.
+- name: Pre-flight — verify xinas-mcp build artifacts are present
+  ansible.builtin.stat:
+    path: "{{ xinas_api_repo_path }}/dist/api-server.js"
+  register: _xinas_api_build_stat
+  tags: [xinas_api]
+
+- name: Fail with actionable message when build artifacts are missing
+  ansible.builtin.fail:
+    msg: |
+      xinas_api requires xinas-mcp build artifacts at
+      {{ xinas_api_repo_path }}/dist/api-server.js, which were not
+      found. Run the xinas_mcp role first — either include it in
+      the same playbook above xinas_api, or invoke it directly via
+      `ansible-playbook playbooks/site.yml --tags xinas_mcp`.
+  when: not _xinas_api_build_stat.stat.exists
+  tags: [xinas_api]
+
+# 2. Create the admin group (no-op if it already exists). gid is
+#    system-assigned; we look it up in the next step.
+- name: Create the {{ xinas_api_socket_group }} group
+  ansible.builtin.group:
+    name: "{{ xinas_api_socket_group }}"
+    state: present
+  tags: [xinas_api, group]
+
+# 3. Look up the gid. getent always returns the gid as the third
+#    colon-separated field; we register the whole row and parse it
+#    in the next step.
+- name: Look up {{ xinas_api_socket_group }} gid
+  ansible.builtin.getent:
+    database: group
+    key: "{{ xinas_api_socket_group }}"
+  tags: [xinas_api, group]
+
+- name: Cache the looked-up gid as _xinas_admin_gid
+  ansible.builtin.set_fact:
+    _xinas_admin_gid: "{{ ansible_facts.getent_group[xinas_api_socket_group][1] | int }}"
+  tags: [xinas_api, group]
+
+# 4. /etc/xinas-api/ — root:xinas-admin 0750. The DynamicUser+SupplementaryGroups
+#    api process gets read access via group membership.
+- name: Create config directory {{ xinas_api_config_dir }}
+  ansible.builtin.file:
+    path: "{{ xinas_api_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ xinas_api_socket_group }}"
+    mode: '0750'
+  tags: [xinas_api, config]
+
+# 5. Install the tmpfiles.d snippet. systemd-tmpfiles-setup.service
+#    re-runs this on every boot; we run it once at install time below
+#    so the dirs exist before the service starts.
+- name: Install /usr/lib/tmpfiles.d/xinas-api.conf
+  ansible.builtin.template:
+    src: xinas-api-tmpfiles.conf.j2
+    dest: /usr/lib/tmpfiles.d/xinas-api.conf
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [xinas_api, tmpfiles]
+
+# 6. Run systemd-tmpfiles once at install so /run/xinas,
+#    /var/lib/xinas/state, /var/log/xinas all exist before the unit
+#    starts. changed_when is unconditional: --create is itself
+#    idempotent (it adjusts perms in place) but Ansible can't tell
+#    whether anything actually changed.
+- name: Run systemd-tmpfiles to materialize the dirs
+  ansible.builtin.command:
+    cmd: systemd-tmpfiles --create /usr/lib/tmpfiles.d/xinas-api.conf
+  changed_when: false
+  tags: [xinas_api, tmpfiles]
