@@ -182,3 +182,34 @@
     mode: '0640'
   no_log: true
   tags: [xinas_api, config]
+
+# 8. Install the systemd unit verbatim from the source tree. Triggers
+#    'reload systemd' (via flush_handlers before enable) and 'restart
+#    xinas-api' (covered by config notification too).
+- name: Install /etc/systemd/system/xinas-api.service
+  ansible.builtin.copy:
+    src: "{{ xinas_api_repo_path }}/xinas-api.service"
+    dest: /etc/systemd/system/xinas-api.service
+    owner: root
+    group: root
+    mode: '0644'
+    remote_src: true
+  notify:
+    - reload systemd
+    - restart xinas-api
+  tags: [xinas_api, service]
+
+# 9. Force daemon-reload before enable so systemd picks up the new
+#    unit. Without this, the next `service` task can race the reload
+#    and fail with "Unit xinas-api.service not found."
+- name: Force systemd daemon-reload before enable
+  ansible.builtin.meta: flush_handlers
+  tags: [xinas_api, service]
+
+# 10. Enable + start. Idempotent.
+- name: Enable and start xinas-api
+  ansible.builtin.service:
+    name: xinas-api
+    enabled: true
+    state: started
+  tags: [xinas_api, service]
