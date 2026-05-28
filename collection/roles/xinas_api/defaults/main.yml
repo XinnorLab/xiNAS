@@ -1,0 +1,46 @@
+---
+# xinas_api role defaults — Phase 0 installer.
+# Spec: docs/Installer/xinas-api-role-spec.md
+
+# Source tree where the Node app is built (must match xinas_mcp_repo_path).
+xinas_api_repo_path: /opt/xiNAS/xiNAS-MCP
+
+# On-disk config + secret directory.
+xinas_api_config_dir: /etc/xinas-api
+
+# Canonical Phase 0 state + audit paths (per ADR-0003 §State store and
+# §Audit semantics). xinas-api is the sole writer of both per ADR-0002
+# — the future xinas-agent reports observations via the API's
+# /internal/v1/observed endpoint, not by writing these files directly.
+# The directories are pre-created by tmpfiles.d at install + boot
+# (DynamicUser's transient uid can't own a persistent dir); group-write
+# to xinas-admin is how the api process gains write access via its
+# SupplementaryGroups membership.
+xinas_api_state_dir: /var/lib/xinas/state
+xinas_api_log_dir:   /var/log/xinas
+
+# Unix-domain socket path. The parent directory /run/xinas is created
+# by the role's tmpfiles.d entry as root:xinas-admin 0750 so operators
+# in xinas-admin can traverse it; the socket file itself is chmod 0660
+# + chown :{{ xinas_api_socket_group }} by server.ts after binding.
+xinas_api_socket: /run/xinas/api.sock
+
+# Group that owns the UDS file (gid resolved at template time via
+# getent). The same name is used to create the group (task 2 of the
+# role's tasks/main.yml), to stamp the socket file, and to own the
+# role-managed directories.
+#
+# Phase 0 caveat: the systemd unit shipped in xiNAS-MCP/xinas-api.service
+# hardcodes `SupplementaryGroups=xinas-admin`. Overriding this variable
+# alone is NOT enough — you must also patch the unit (or ship your own
+# drop-in at /etc/systemd/system/xinas-api.service.d/) so the dynamic
+# user gains membership in your replacement group. The variable exists
+# for naming consistency across the role's tasks; full override support
+# lands when the unit is templated.
+xinas_api_socket_group: xinas-admin
+
+# Per-controller identity. UUIDv5 derivation from machine-id gives a
+# stable UUID-shaped string without an extra on-disk file. Operators
+# can override if they have a pre-assigned controller_id from a
+# control-plane registry.
+xinas_api_controller_id: "{{ ansible_machine_id | to_uuid }}"
