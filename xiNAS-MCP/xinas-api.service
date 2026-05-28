@@ -21,7 +21,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/node /opt/xinas-mcp/dist/api-server.js
+ExecStart=/usr/bin/node /opt/xiNAS/xiNAS-MCP/dist/api-server.js
 Environment=XINAS_API_CONFIG=/etc/xinas-api/config.json
 Restart=on-failure
 RestartSec=5s
@@ -52,18 +52,17 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 
-# Writable storage — systemd creates these under /var/lib/private/
-# and /var/log/private/ with the DynamicUser as owner, then mounts
-# them at the standard paths inside the unit's namespace.
-StateDirectory=xinas-api
-LogsDirectory=xinas-api
+# Writable storage — the xinas_api Ansible role pre-creates
+# /var/lib/xinas/state and /var/log/xinas as root:xinas-admin
+# 0770 via /usr/lib/tmpfiles.d/xinas-api.conf. ReadWritePaths
+# grants the DynamicUser write access under ProtectSystem=strict.
+ReadWritePaths=/var/lib/xinas/state /var/log/xinas
 
-# Group that may connect to the UDS at /run/xinas/api.sock. The
-# Ansible role creates the xinas-admin group and adds operators to
-# it; the server.ts chmods the socket to 0660 root:xinas-admin.
-# For the skeleton, the unit doesn't create the group — the role does.
-RuntimeDirectory=xinas
-RuntimeDirectoryMode=0750
+# /run/xinas is created by the xinas_api Ansible role's tmpfiles.d
+# entry as root:xinas-admin 0750 (NOT via RuntimeDirectory, which
+# under DynamicUser would assign ownership to the transient uid and
+# block xinas-admin traversal). systemd-tmpfiles-setup.service
+# recreates it on every boot.
 
 [Install]
 WantedBy=multi-user.target
