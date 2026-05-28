@@ -1,0 +1,16 @@
+# /usr/lib/tmpfiles.d/xinas-api.conf
+# Managed by the xiNAS xinas_api Ansible role. Do not edit by hand.
+#
+# Type 'd': create directory if absent; on every systemd-tmpfiles run,
+# fix owner/group/mode if drifted. Created on install via
+# `systemd-tmpfiles --create` and on every boot via
+# systemd-tmpfiles-setup.service.
+#
+# /run/xinas is on tmpfs and MUST be recreated each boot. The
+# persistent state + log dirs use the same mechanism for owner/mode
+# consistency.
+
+d /run/xinas             0750 root {{ xinas_api_socket_group }} -
+d /var/lib/xinas         0755 root root          -
+d {{ xinas_api_state_dir }}   0770 root {{ xinas_api_socket_group }} -
+d {{ xinas_api_log_dir }}     0770 root {{ xinas_api_socket_group }} -
