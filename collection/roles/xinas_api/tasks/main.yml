@@ -79,3 +79,106 @@
     cmd: systemd-tmpfiles --create /usr/lib/tmpfiles.d/xinas-api.conf
   changed_when: false
   tags: [xinas_api, tmpfiles]
+
+# 7. Token + config bootstrap.
+#
+# Lifecycle: config.json is the source of truth. admin-token is a
+# mirror operators can `cat` for remote tooling. Deleting just the
+# admin-token file re-derives it from config on the next run.
+# Deleting both forces a fresh token (rotation procedure).
+
+- name: stat {{ xinas_api_config_dir }}/config.json
+  ansible.builtin.stat:
+    path: "{{ xinas_api_config_dir }}/config.json"
+  register: _xinas_api_config_stat
+  tags: [xinas_api, config]
+
+# --- Bootstrap branch: config absent ---
+
+- name: Generate a fresh admin bearer token (first install only)
+  ansible.builtin.command:
+    cmd: openssl rand -hex 32
+  register: _xinas_api_token_gen
+  changed_when: true
+  no_log: true
+  when: not _xinas_api_config_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Cache the generated token as _xinas_api_admin_token (first install)
+  ansible.builtin.set_fact:
+    _xinas_api_admin_token: "{{ _xinas_api_token_gen.stdout }}"
+  no_log: true
+  when: not _xinas_api_config_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Template config.json with the fresh token (first install)
+  ansible.builtin.template:
+    src: xinas-api-config.json.j2
+    dest: "{{ xinas_api_config_dir }}/config.json"
+    owner: root
+    group: "{{ xinas_api_socket_group }}"
+    mode: '0640'
+    force: true
+  no_log: true
+  notify: restart xinas-api
+  when: not _xinas_api_config_stat.stat.exists
+  tags: [xinas_api, config]
+
+# --- Derive branch: config present, mirror the existing token ---
+
+- name: Slurp existing config.json to extract the bootstrap token
+  ansible.builtin.slurp:
+    src: "{{ xinas_api_config_dir }}/config.json"
+  register: _xinas_api_config_blob
+  no_log: true
+  when: _xinas_api_config_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Decode + parse existing config.json
+  ansible.builtin.set_fact:
+    _xinas_api_config_parsed: "{{ _xinas_api_config_blob.content | b64decode | from_json }}"
+  no_log: true
+  when: _xinas_api_config_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Find the entry with principal 'admin:bootstrap'
+  ansible.builtin.set_fact:
+    _xinas_api_admin_token: >-
+      {{ (_xinas_api_config_parsed.tokens
+           | dict2items
+           | selectattr('value.principal', 'equalto', 'admin:bootstrap')
+           | map(attribute='key')
+           | list
+           | first)
+         | default(None) }}
+  no_log: true
+  when: _xinas_api_config_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Fail if config exists but bootstrap token is missing (operator removed it)
+  ansible.builtin.fail:
+    msg: |
+      {{ xinas_api_config_dir }}/config.json exists but its tokens
+      map has no entry with principal 'admin:bootstrap'. This role
+      mirrors only the bootstrap token to admin-token; it won't
+      guess which other token to expose. To recover: delete both
+      {{ xinas_api_config_dir }}/config.json and
+      {{ xinas_api_config_dir }}/admin-token and re-run the role
+      (rotation procedure). To keep the existing config, re-add the
+      bootstrap entry by hand.
+  when:
+    - _xinas_api_config_stat.stat.exists
+    - _xinas_api_admin_token is none
+  tags: [xinas_api, config]
+
+# --- Both branches converge here: write/refresh admin-token mirror ---
+
+- name: Write/refresh {{ xinas_api_config_dir }}/admin-token
+  ansible.builtin.copy:
+    content: "{{ _xinas_api_admin_token }}\n"
+    dest: "{{ xinas_api_config_dir }}/admin-token"
+    owner: root
+    group: "{{ xinas_api_socket_group }}"
+    mode: '0640'
+  no_log: true
+  tags: [xinas_api, config]
