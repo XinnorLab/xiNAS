@@ -1,0 +1,19 @@
+{
+  "controller_id": "{{ xinas_api_controller_id }}",
+  "listen": {
+    "kind": "unix",
+    "socket": "{{ xinas_api_socket }}",
+    "socketGroup": {{ _xinas_admin_gid }}
+  },
+  "tokens": {
+    "{{ _xinas_api_admin_token }}": {
+      "principal": "admin:bootstrap",
+      "role": "admin"
+    }
+  },
+  "state": {
+    "databasePath": "{{ xinas_api_state_dir }}/xinas.db",
+    "auditJsonlPath": "{{ xinas_api_log_dir }}/audit.jsonl",
+    "archiveDir": "{{ xinas_api_state_dir }}/archive"
+  }
+}
