@@ -71,15 +71,19 @@ xinas_api_config_dir: /etc/xinas-api
 # database and the audit JSONL per ADR-0002 — the future xinas-agent
 # reports observations through the API's /internal/v1/observed endpoint,
 # not by writing state files directly. The directories are pre-created
-# by tmpfiles.d at install + boot (DynamicUser's transient uid can't
-# own a persistent dir); group-write to xinas-admin is how the api
-# process gains write access via its SupplementaryGroups membership.
+# by tmpfiles.d at install + boot as xinas-api:xinas-admin 0750. The
+# static system user owns the files so they persist with a stable
+# owner across restarts (earlier drafts used DynamicUser=yes, but
+# transient uid rotation broke write access to previously-written
+# state on the next start).
 xinas_api_state_dir: /var/lib/xinas/state
 xinas_api_log_dir:   /var/log/xinas
 
 # Unix-domain socket path. The parent directory /run/xinas is created
-# by the role's tmpfiles.d entry as root:xinas-admin 0750 so operators
-# in xinas-admin can traverse it; the socket file itself is chmod 0660
+# by the role's tmpfiles.d entry as root:xinas-admin 0770 so the api
+# process (primary group xinas-admin) can create the socket and
+# operators in xinas-admin can traverse + connect; the socket file
+# itself is chmod 0660
 # + chown :{{ xinas_api_socket_group }} by server.ts after binding.
 xinas_api_socket: /run/xinas/api.sock
 
@@ -121,18 +125,23 @@ corresponding feature ships.
     `getent group {{ xinas_api_socket_group }}`; register as fact
     _xinas_admin_gid for the template step.
 
+3b. Create the {{ xinas_api_user }} system user with primary group
+    {{ xinas_api_socket_group }}, no home directory, /usr/sbin/nologin
+    shell, system uid range. Owns the SQLite + audit JSONL so state
+    persists with a stable owner across restarts.
+
 4.  Create /etc/xinas-api/ directory: mode 0750, owner root,
     group {{ xinas_api_socket_group }}. (Group needs +x for traversal
-    so the DynamicUser+SupplementaryGroups api process can read its
-    config.)
+    so the api process — whose primary group is xinas-admin via the
+    unit's `Group=` — can read its config.)
 
 5.  Install tmpfiles.d snippet at /usr/lib/tmpfiles.d/xinas-api.conf
     (mode 0644 root:root) with these lines:
 
-        d /run/xinas             0750 root {{ xinas_api_socket_group }} -
+        d /run/xinas             0770 root {{ xinas_api_socket_group }} -
         d /var/lib/xinas         0755 root root          -
-        d /var/lib/xinas/state   0770 root {{ xinas_api_socket_group }} -
-        d /var/log/xinas         0770 root {{ xinas_api_socket_group }} -
+        d /var/lib/xinas/state   0750 {{ xinas_api_user }} {{ xinas_api_socket_group }} -
+        d /var/log/xinas         0750 {{ xinas_api_user }} {{ xinas_api_socket_group }} -
 
     Why tmpfiles.d instead of `ansible.builtin.file`:
       - /run/xinas is a runtime directory that must exist before
@@ -204,16 +213,16 @@ corresponding feature ships.
 /etc/xinas-api/config.json               0640  root:xinas-admin
 /etc/xinas-api/admin-token               0640  root:xinas-admin
 
-/var/lib/xinas/state/                    0770  root:xinas-admin
+/var/lib/xinas/state/                    0750  xinas-api:xinas-admin
 /var/lib/xinas/state/xinas.db            (created by api at first run)
 /var/lib/xinas/state/xinas.db-wal        (SQLite WAL)
 /var/lib/xinas/state/archive/            (created by GcSweeper as needed)
 
-/var/log/xinas/                          0770  root:xinas-admin
+/var/log/xinas/                          0750  xinas-api:xinas-admin
 /var/log/xinas/audit.jsonl               (created by api at first write)
 
-/run/xinas/                              0750  root:xinas-admin   (by tmpfiles.d)
-/run/xinas/api.sock                      0660  <dyn-user>:xinas-admin  (by server.ts)
+/run/xinas/                              0770  root:xinas-admin   (by tmpfiles.d)
+/run/xinas/api.sock                      0660  xinas-api:xinas-admin   (by server.ts)
 
 /etc/systemd/system/xinas-api.service    0644  root:root
 ```
@@ -254,7 +263,7 @@ public interface and should not be referenced from outside.
 
 ## Systemd unit — source-tree fix
 
-The current `xiNAS-MCP/xinas-api.service` (landed in PR #201) has four
+The current `xiNAS-MCP/xinas-api.service` (landed in PR #201) has five
 problems that this role PR fixes in the source tree, not by templating:
 
 - `ExecStart=/usr/bin/node /opt/xinas-mcp/dist/api-server.js` points at
@@ -265,8 +274,7 @@ problems that this role PR fixes in the source tree, not by templating:
   `/var/lib/xinas-api/` and `/var/log/xinas-api/`, which contradict
   ADR-0003's canonical `/var/lib/xinas/state/` and `/var/log/xinas/`.
   **Drop both lines.** The role's tmpfiles.d entry pre-creates the
-  canonical paths; the dynamic-user api process writes them via its
-  xinas-admin supplementary-group membership.
+  canonical paths; the static `xinas-api` user owns them.
 - `ProtectSystem=strict` makes the entire filesystem read-only except
   paths systemd has been told are writable. With StateDirectory and
   LogsDirectory dropped, the api can't open the SQLite database (EROFS).
@@ -278,14 +286,27 @@ problems that this role PR fixes in the source tree, not by templating:
   Mode 0750 then means xinas-admin members can't traverse the parent
   dir to reach the socket (EACCES on every UDS connection from an
   operator). **Drop both lines.** The role's tmpfiles.d entry creates
-  `/run/xinas/` as `root:xinas-admin 0750` before the unit starts (and
+  `/run/xinas/` as `root:xinas-admin 0770` before the unit starts (and
   systemd-tmpfiles-setup.service recreates it on every boot because
   /run is tmpfs).
+- **Switch from `DynamicUser=yes` + `SupplementaryGroups=xinas-admin`
+  to static `User=xinas-api Group=xinas-admin`.** DynamicUser allocates
+  a fresh transient uid on every start; SQLite creates xinas.db with
+  mode 0644 by default, so on the next restart the new uid would lose
+  write access to its own state files. ADR-0002 §Hardening doesn't
+  dictate DynamicUser — it dictates "no root, no caps, ProtectSystem=
+  strict, SystemCallFilter." All of those stay. The static user owns
+  the persistent files; xinas-admin is its primary group so files it
+  creates are group-readable to operators.
 
-After these fixes, the unit's hardening directives that came from
-PR #201's CR1 — `DynamicUser=yes`, `SupplementaryGroups=xinas-admin`,
-empty `CapabilityBoundingSet`, `ProtectSystem=strict`, the
-SystemCallFilter, etc. — are all kept as-is. The four changes above
+After these fixes, the rest of the unit's hardening — empty
+`CapabilityBoundingSet`, `NoNewPrivileges=true`, `ProtectSystem=strict`,
+`ProtectHome=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`,
+`ProtectKernelTunables=yes`, `ProtectKernelModules=yes`,
+`ProtectControlGroups=yes`, `RestrictNamespaces=yes`, `LockPersonality=
+yes`, `RestrictRealtime=yes`, `RestrictAddressFamilies=AF_UNIX AF_INET
+AF_INET6`, `SystemCallFilter=@system-service`,
+`SystemCallErrorNumber=EPERM` — is preserved. The five changes above
 adjust the filesystem-access plumbing to match the tmpfiles.d-based
 dir provisioning this role uses.
 
@@ -315,9 +336,8 @@ A successful install produces:
 # Service running:
 systemctl is-active xinas-api    # expect: active
 
-# Socket exists with correct perms (owner is the systemd DynamicUser —
-# shown as a transient name like 'xinas-api'; group is xinas-admin):
-ls -l /run/xinas/api.sock        # expect: srw-rw---- <dyn-user> xinas-admin
+# Socket exists with correct perms (owner is the static xinas-api user):
+ls -l /run/xinas/api.sock        # expect: srw-rw---- xinas-api xinas-admin
 
 # Token file readable to xinas-admin:
 ls -l /etc/xinas-api/admin-token # expect: -rw-r----- root xinas-admin
@@ -369,9 +389,11 @@ and notifies long-lived clients.
   transports; principal × transport table; basis for the bootstrap
   bearer + UDS trust model.
 - [ADR-0002](../control-path/adr/0002-agent-privilege-model.md)
-  §Hardening — the unprivileged-api requirement that drives
-  DynamicUser, empty CapabilityBoundingSet, the xinas-admin
-  group-membership trust model, and the agent-runs-as-root split.
+  §Hardening — the unprivileged-api requirement that drives the
+  empty CapabilityBoundingSet, ProtectSystem=strict, SystemCallFilter,
+  and the agent-runs-as-root split. The static `xinas-api` user and
+  the xinas-admin group-membership trust model are this role's
+  realization of "unprivileged but reachable from operator tools."
 - [ADR-0003](../control-path/adr/0003-state-store.md) §State store +
   §Audit semantics — canonical paths
   `/var/lib/xinas/state/xinas.db` and `/var/log/xinas/audit.jsonl`

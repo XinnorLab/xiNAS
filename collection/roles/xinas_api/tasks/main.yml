@@ -46,8 +46,23 @@
     _xinas_admin_gid: "{{ ansible_facts.getent_group[xinas_api_socket_group][1] | int }}"
   tags: [xinas_api, group]
 
-# 4. /etc/xinas-api/ — root:xinas-admin 0750. The DynamicUser+SupplementaryGroups
-#    api process gets read access via group membership.
+# 3b. Create the static system user the api process runs as. Uid is
+#     system-assigned. Primary group is the socket group (xinas-admin
+#     by default) so files the api creates default to that group, no
+#     setgid trickery needed.
+- name: Create the {{ xinas_api_user }} system user
+  ansible.builtin.user:
+    name: "{{ xinas_api_user }}"
+    group: "{{ xinas_api_socket_group }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+    comment: "xiNAS API service account"
+    state: present
+  tags: [xinas_api, user]
+
+# 4. /etc/xinas-api/ — root:xinas-admin 0750. The api process gets
+#    read access via its primary-group membership of xinas-admin.
 - name: Create config directory {{ xinas_api_config_dir }}
   ansible.builtin.file:
     path: "{{ xinas_api_config_dir }}"

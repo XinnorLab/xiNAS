@@ -6,16 +6,21 @@
 #
 # Per ADR-0002 §Hardening, xinas-api runs UNPRIVILEGED — no root,
 # no capabilities. The agent (a separate unit, separate PR) is the
-# only thing that runs as root. DynamicUser=yes gives the process a
-# transient user; the xinas_api Ansible role pre-creates the writable
-# paths (/var/lib/xinas/state, /var/log/xinas, /run/xinas) as
-# root:xinas-admin via /usr/lib/tmpfiles.d/xinas-api.conf, and
-# ReadWritePaths below grants the DynamicUser write access under
-# ProtectSystem=strict.
+# only thing that runs as root. A static system user (xinas-api,
+# primary group xinas-admin) owns the SQLite database and audit
+# JSONL so the files persist with a stable owner across restarts
+# — DynamicUser=yes would have rotated the uid on every start and
+# left previously-written state owned by a uid the next instance
+# couldn't write to. The rest of the hardening stack (empty
+# CapabilityBoundingSet, NoNewPrivileges, ProtectSystem=strict,
+# SystemCallFilter@system-service, etc.) is what ADR-0002 actually
+# requires and is preserved.
 #
-# Full Ansible wiring (config.json templating, xinas-admin group
-# setup) is the xinas_api role itself; this unit ships unchanged
-# and is copied verbatim by the role.
+# The xinas_api Ansible role creates the xinas-api user + xinas-admin
+# group, pre-creates the writable paths (/var/lib/xinas/state,
+# /var/log/xinas, /run/xinas) via /usr/lib/tmpfiles.d/xinas-api.conf,
+# templates config.json, and copies this unit verbatim. ReadWritePaths
+# below grants write access under ProtectSystem=strict.
 
 [Unit]
 Description=xiNAS API (Phase 0 — REST + state store)
@@ -30,15 +35,11 @@ Restart=on-failure
 RestartSec=5s
 
 # Per ADR-0002 §Hardening: no root, no capabilities.
-DynamicUser=yes
-# The DynamicUser is added to xinas-admin as a supplementary group so
-# the api process can chown(2) the UDS to that group at startup. The
-# numeric gid is templated into /etc/xinas-api/config.json (listen.socketGroup)
-# by the Ansible role (deferred follow-up — see PR #201 'What's deferred').
-# Without that config value, the socket is owned by the dynamic user's
-# primary group and only the api process itself can connect — safe but
-# unreachable from operator tools.
-SupplementaryGroups=xinas-admin
+# Static system user — see header comment. The Ansible role creates
+# the user with `useradd --system --no-create-home --shell /usr/sbin/nologin`
+# and the group with `groupadd --system`.
+User=xinas-api
+Group=xinas-admin
 NoNewPrivileges=true
 CapabilityBoundingSet=
 ProtectSystem=strict
@@ -56,16 +57,14 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 
 # Writable storage — the xinas_api Ansible role pre-creates
-# /var/lib/xinas/state and /var/log/xinas as root:xinas-admin
-# 0770 via /usr/lib/tmpfiles.d/xinas-api.conf. ReadWritePaths
-# grants the DynamicUser write access under ProtectSystem=strict.
+# /var/lib/xinas/state and /var/log/xinas as xinas-api:xinas-admin
+# 0750 via /usr/lib/tmpfiles.d/xinas-api.conf. ReadWritePaths
+# grants write access under ProtectSystem=strict.
 ReadWritePaths=/var/lib/xinas/state /var/log/xinas
 
 # /run/xinas is created by the xinas_api Ansible role's tmpfiles.d
-# entry as root:xinas-admin 0750 (NOT via RuntimeDirectory, which
-# under DynamicUser would assign ownership to the transient uid and
-# block xinas-admin traversal). systemd-tmpfiles-setup.service
-# recreates it on every boot.
+# entry as root:xinas-admin 0770. systemd-tmpfiles-setup.service
+# recreates it on every boot (/run is tmpfs).
 
 [Install]
 WantedBy=multi-user.target
