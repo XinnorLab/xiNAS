@@ -121,10 +121,25 @@ this with a runtime API call that swaps the token without a restart.
 
 ## Tags
 
-| Tag | Selects |
+The role's fine-grained tags are **post-full-install maintenance
+tools, not standalone first-install entry points.** A first install
+MUST run the role without tag filters (or with `--tags xinas_api`)
+so the xinas-admin group + xinas-api user exist, the `_xinas_admin_gid`
+fact is registered, and `/etc/xinas-api/` is created. After that,
+the per-area tags are safe for targeted reapplications.
+
+| Tag | Use case |
 |---|---|
-| `xinas_api` | All tasks. |
-| `group` | Group create + gid lookup. |
-| `config` | Dirs, tmpfiles, token + config bootstrap. |
-| `tmpfiles` | tmpfiles.d template + systemd-tmpfiles run. |
-| `service` | Unit install + enable + start. |
+| `xinas_api` | All tasks. Use for a fresh install or a full re-apply. |
+| `group` | Reapply the xinas-admin group + gid lookup if the group was deleted by hand. |
+| `user` | Reapply the xinas-api system user if it was deleted by hand. |
+| `config` | Reapply `/etc/xinas-api/`, the tmpfiles snippet, and the token/config bootstrap after manual edits. |
+| `tmpfiles` | Reapply `/usr/lib/tmpfiles.d/xinas-api.conf` + recreate the writable dirs. |
+| `service` | Reapply the systemd unit + restart. |
+
+Running `--tags config` or `--tags tmpfiles` on a host that has
+never run the role at all will fail: the config tasks reference
+`_xinas_admin_gid` (set by the group lookup under the `group` tag),
+and the tmpfiles template references the xinas-api user and
+xinas-admin group (both created under `group` + `user`). Reapply
+the whole role first, then use the targeted tags for follow-up work.
