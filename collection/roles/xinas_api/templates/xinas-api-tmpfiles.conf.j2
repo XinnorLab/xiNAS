@@ -10,7 +10,7 @@
 # persistent state + log dirs use the same mechanism for owner/mode
 # consistency.
 
-d /run/xinas             0750 root {{ xinas_api_socket_group }} -
+d /run/xinas             0770 root {{ xinas_api_socket_group }} -
 d /var/lib/xinas         0755 root root          -
 d {{ xinas_api_state_dir }}   0770 root {{ xinas_api_socket_group }} -
 d {{ xinas_api_log_dir }}     0770 root {{ xinas_api_socket_group }} -
