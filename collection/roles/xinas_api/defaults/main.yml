@@ -12,31 +12,45 @@ xinas_api_config_dir: /etc/xinas-api
 # §Audit semantics). xinas-api is the sole writer of both per ADR-0002
 # — the future xinas-agent reports observations via the API's
 # /internal/v1/observed endpoint, not by writing these files directly.
-# The directories are pre-created by tmpfiles.d at install + boot
-# (DynamicUser's transient uid can't own a persistent dir); group-write
-# to xinas-admin is how the api process gains write access via its
-# SupplementaryGroups membership.
+# The directories are pre-created by tmpfiles.d as
+# {{ xinas_api_user }}:{{ xinas_api_socket_group }} 0750; the static
+# system user owns the files so they persist across restarts.
 xinas_api_state_dir: /var/lib/xinas/state
 xinas_api_log_dir:   /var/log/xinas
 
 # Unix-domain socket path. The parent directory /run/xinas is created
-# by the role's tmpfiles.d entry as root:xinas-admin 0750 so operators
-# in xinas-admin can traverse it; the socket file itself is chmod 0660
-# + chown :{{ xinas_api_socket_group }} by server.ts after binding.
+# by the role's tmpfiles.d entry as root:xinas-admin 0770 so the api
+# process (primary group xinas-admin via the unit's `Group=`) can
+# create the socket and operators in xinas-admin can traverse + connect;
+# the socket file itself is chmod 0660 + chown :{{ xinas_api_socket_group }}
+# by server.ts after binding.
 xinas_api_socket: /run/xinas/api.sock
 
-# Group that owns the UDS file (gid resolved at template time via
-# getent). The same name is used to create the group (task 2 of the
-# role's tasks/main.yml), to stamp the socket file, and to own the
-# role-managed directories.
+# Static system user the api process runs as (the unit's `User=` line).
+# Owns SQLite + audit JSONL so files persist with a stable owner
+# across restarts. Created with `--system --no-create-home --shell
+# /usr/sbin/nologin`.
 #
 # Phase 0 caveat: the systemd unit shipped in xiNAS-MCP/xinas-api.service
-# hardcodes `SupplementaryGroups=xinas-admin`. Overriding this variable
-# alone is NOT enough — you must also patch the unit (or ship your own
-# drop-in at /etc/systemd/system/xinas-api.service.d/) so the dynamic
-# user gains membership in your replacement group. The variable exists
-# for naming consistency across the role's tasks; full override support
-# lands when the unit is templated.
+# hardcodes `User=xinas-api`. Overriding this variable alone is NOT
+# enough — you must also patch the unit (or ship your own drop-in at
+# /etc/systemd/system/xinas-api.service.d/) so the unit's User= matches.
+# The variable exists for naming consistency across the role's tasks +
+# tmpfiles.d snippet; full override support lands when the unit is
+# templated.
+xinas_api_user: xinas-api
+
+# Group that owns the UDS file + state/log dirs (gid resolved at
+# template time via getent). Also the primary group of the api process
+# at runtime (set by the unit's `Group=xinas-admin`). Members of this
+# group can connect to the socket and read state/log files; only the
+# {{ xinas_api_user }} user can write them.
+#
+# Phase 0 caveat: the unit hardcodes `Group=xinas-admin`. Overriding
+# this variable alone is NOT enough — see the same drop-in pattern noted
+# under `xinas_api_user`. The variable exists for naming consistency
+# across the role's tasks; full override support lands when the unit
+# is templated.
 xinas_api_socket_group: xinas-admin
 
 # Per-controller identity. UUIDv5 derivation from machine-id gives a

@@ -8,9 +8,12 @@ and the filesystem/group plumbing it depends on.
 
 ## What this role does
 
-- Creates the `xinas-admin` Unix group (system-assigned gid).
-- Pre-creates `/run/xinas/`, `/var/lib/xinas/state/`, and `/var/log/xinas/`
-  via `/usr/lib/tmpfiles.d/xinas-api.conf` as `root:xinas-admin 0770/0750`.
+- Creates the `xinas-admin` Unix group and the `xinas-api` system user
+  (no home dir, `/usr/sbin/nologin` shell, system-assigned uid/gid;
+  `xinas-api`'s primary group is `xinas-admin`).
+- Pre-creates `/run/xinas/` as `root:xinas-admin 0770` and
+  `/var/lib/xinas/state/` + `/var/log/xinas/` as `xinas-api:xinas-admin 0750`
+  via `/usr/lib/tmpfiles.d/xinas-api.conf`.
 - Templates `/etc/xinas-api/config.json` with a fresh 256-bit admin
   bearer token (first install) or with the existing token (re-run).
 - Writes `/etc/xinas-api/admin-token` as a mirror of the bootstrap
@@ -78,8 +81,8 @@ See `defaults/main.yml`. Highlights:
 # Service running:
 systemctl is-active xinas-api    # expect: active
 
-# Socket exists with correct perms (owner is the systemd DynamicUser):
-ls -l /run/xinas/api.sock        # expect: srw-rw---- <dyn-user> xinas-admin
+# Socket exists with correct perms:
+ls -l /run/xinas/api.sock        # expect: srw-rw---- xinas-api xinas-admin
 
 # UDS health probe as an xinas-admin member (no token needed over UDS):
 sudo -u $USER -g xinas-admin curl --unix-socket /run/xinas/api.sock \
