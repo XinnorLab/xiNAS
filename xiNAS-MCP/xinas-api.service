@@ -7,12 +7,15 @@
 # Per ADR-0002 §Hardening, xinas-api runs UNPRIVILEGED — no root,
 # no capabilities. The agent (a separate unit, separate PR) is the
 # only thing that runs as root. DynamicUser=yes gives the process a
-# transient user; StateDirectory/LogsDirectory give it writable
-# storage automatically.
+# transient user; the xinas_api Ansible role pre-creates the writable
+# paths (/var/lib/xinas/state, /var/log/xinas, /run/xinas) as
+# root:xinas-admin via /usr/lib/tmpfiles.d/xinas-api.conf, and
+# ReadWritePaths below grants the DynamicUser write access under
+# ProtectSystem=strict.
 #
-# Full Ansible wiring (config.json templating, group setup for the
-# UDS, ReadWritePaths tuning) is a follow-up PR — this unit is the
-# minimum viable version that starts the service safely.
+# Full Ansible wiring (config.json templating, xinas-admin group
+# setup) is the xinas_api role itself; this unit ships unchanged
+# and is copied verbatim by the role.
 
 [Unit]
 Description=xiNAS API (Phase 0 — REST + state store)
