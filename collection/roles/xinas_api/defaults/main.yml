@@ -15,6 +15,15 @@ xinas_api_config_dir: /etc/xinas-api
 # The directories are pre-created by tmpfiles.d as
 # {{ xinas_api_user }}:{{ xinas_api_socket_group }} 0750; the static
 # system user owns the files so they persist across restarts.
+#
+# Phase 0 caveat: the systemd unit hardcodes
+# `ReadWritePaths=/var/lib/xinas/state /var/log/xinas`. Overriding
+# these variables alone is NOT enough — you must also patch the unit
+# (or ship a drop-in at /etc/systemd/system/xinas-api.service.d/) so
+# ReadWritePaths covers your replacement paths, otherwise the api
+# hits EROFS under ProtectSystem=strict. Variables exist for naming
+# consistency across tasks + tmpfiles + config.json; full override
+# support lands when the unit is templated.
 xinas_api_state_dir: /var/lib/xinas/state
 xinas_api_log_dir:   /var/log/xinas
 
@@ -24,6 +33,14 @@ xinas_api_log_dir:   /var/log/xinas
 # create the socket and operators in xinas-admin can traverse + connect;
 # the socket file itself is chmod 0660 + chown :{{ xinas_api_socket_group }}
 # by server.ts after binding.
+#
+# Phase 0 caveat: the tmpfiles.d entry hardcodes /run/xinas as the
+# parent dir name, and operators expect the socket under /run/xinas/.
+# Overriding `xinas_api_socket` to e.g. /var/run/xinas-api/api.sock
+# WITHOUT also patching the tmpfiles template will leave the api
+# trying to bind a path whose parent doesn't exist. Variable exists
+# for naming consistency in the config template; full override support
+# lands when tmpfiles is templated through this variable.
 xinas_api_socket: /run/xinas/api.sock
 
 # Static system user the api process runs as (the unit's `User=` line).
