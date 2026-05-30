@@ -173,6 +173,106 @@
   when: xinas_api_controller_id | length == 0
   tags: [xinas_api, controller_id]
 
+# Phase 0 xinas-agent S0+S1 foundation: split-secret token store.
+# The internal-tokens.json file is readable only by the api process
+# (via the xinas-api supplementary group, added in A3) and root.
+# The agent-token file is readable only by root (the agent runs as
+# root per ADR-0002).
+#
+# Operators in xinas-admin can NEVER read the agent token, even
+# though they can read /etc/xinas-api/config.json (which contains
+# only the admin token, never the agent token).
+
+- name: stat /etc/xinas-api/internal-tokens.json
+  ansible.builtin.stat:
+    path: /etc/xinas-api/internal-tokens.json
+  register: _xinas_api_internal_tokens_stat
+  tags: [xinas_api, config]
+
+# --- Bootstrap branch: internal-tokens absent ---
+
+- name: Generate a fresh internal agent bearer token (first install only)
+  ansible.builtin.command:
+    cmd: openssl rand -hex 32
+  register: _xinas_api_internal_token_gen
+  changed_when: true
+  no_log: true
+  when: not _xinas_api_internal_tokens_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Cache the generated internal token as _xinas_api_internal_token (first install)
+  ansible.builtin.set_fact:
+    _xinas_api_internal_token: "{{ _xinas_api_internal_token_gen.stdout }}"
+  no_log: true
+  when: not _xinas_api_internal_tokens_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Write /etc/xinas-api/internal-tokens.json (first install)
+  ansible.builtin.copy:
+    content: |
+      {
+        "{{ _xinas_api_internal_token }}": {
+          "principal": "agent:root",
+          "role": "internal_agent"
+        }
+      }
+    dest: /etc/xinas-api/internal-tokens.json
+    owner: root
+    group: xinas-api
+    mode: '0640'
+  no_log: true
+  notify: restart xinas-api
+  when: not _xinas_api_internal_tokens_stat.stat.exists
+  tags: [xinas_api, config]
+
+# --- Derive branch: internal-tokens present ---
+
+- name: Slurp existing internal-tokens.json
+  ansible.builtin.slurp:
+    src: /etc/xinas-api/internal-tokens.json
+  register: _xinas_api_internal_tokens_blob
+  no_log: true
+  when: _xinas_api_internal_tokens_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Extract the internal_agent token from existing file
+  ansible.builtin.set_fact:
+    _xinas_api_internal_token: >-
+      {{ (_xinas_api_internal_tokens_blob.content | b64decode | from_json
+           | dict2items
+           | selectattr('value.role', 'equalto', 'internal_agent')
+           | map(attribute='key')
+           | list
+           | first)
+         | default(None) }}
+  no_log: true
+  when: _xinas_api_internal_tokens_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Fail if internal-tokens exists but has no internal_agent entry
+  ansible.builtin.fail:
+    msg: |
+      /etc/xinas-api/internal-tokens.json exists but contains no
+      entry with role 'internal_agent'. To recover: delete both
+      /etc/xinas-api/internal-tokens.json AND /etc/xinas-agent/agent-token
+      and re-run the xinas_api role.
+  when:
+    - _xinas_api_internal_tokens_stat.stat.exists
+    - _xinas_api_internal_token is none
+  tags: [xinas_api, config]
+
+# --- Both branches converge: write/refresh agent-token mirror ---
+
+- name: Write/refresh /etc/xinas-agent/agent-token (only root can read)
+  ansible.builtin.copy:
+    content: "{{ _xinas_api_internal_token }}\n"
+    dest: /etc/xinas-agent/agent-token
+    owner: root
+    group: root
+    mode: '0400'
+  no_log: true
+  tags: [xinas_api, config]
+
 # 7. Token + config bootstrap.
 #
 # Lifecycle: config.json is the source of truth. admin-token is a
