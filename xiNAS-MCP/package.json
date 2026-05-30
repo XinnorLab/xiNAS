@@ -15,7 +15,8 @@
     "format:check": "biome format src/",
     "format:write": "biome format --write src/",
     "test": "vitest run",
-    "test:contracts": "vitest run src/__tests__/contracts"
+    "test:contracts": "vitest run src/__tests__/contracts",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.10.0",
@@ -36,6 +37,7 @@
     "@types/node": "^20.0.0",
     "@types/supertest": "^6.0.2",
     "@types/uuid": "^9.0.0",
+    "@vitest/coverage-v8": "^2.1.9",
     "ajv": "^8.17.0",
     "ajv-formats": "^3.0.1",
     "js-yaml": "^4.1.0",
