@@ -127,15 +127,13 @@
 # /var/lib/xinas/ co-locates identity with state + audit so re-install
 # preserving the data disk preserves both controller_id and the audit
 # chain.
-- name: Ensure /var/lib/xinas/ directory exists (parent of controller-id)
-  ansible.builtin.file:
-    path: /var/lib/xinas
-    state: directory
-    owner: root
-    group: xinas-admin
-    mode: '0755'
-  tags: [xinas_api, controller_id]
-
+#
+# The parent dir /var/lib/xinas itself is materialized by the tmpfiles
+# `d /var/lib/xinas 0755 root root` entry, which the `systemd-tmpfiles
+# --create` task above runs before this block (and which boot re-applies
+# on every start). Do NOT add a second `file:` task for it here — two
+# authorities with different group ownership fight on every run and the
+# boot-time tmpfiles pass would silently revert it.
 - name: Generate /var/lib/xinas/controller-id on first install (UUIDv4)
   ansible.builtin.command:
     cmd: uuidgen
@@ -237,13 +235,16 @@
 
 - name: Extract the internal_agent token from existing file
   ansible.builtin.set_fact:
+    # Index [0] (not the `first` filter): on an empty match list Jinja2's
+    # getitem returns Undefined (caught by `default(None)` → the Fail task
+    # below fires with the recovery message), whereas `| first` raises an
+    # uncatchable "sequence was empty" error that bypasses default().
     _xinas_api_internal_token: >-
       {{ (_xinas_api_internal_tokens_blob.content | b64decode | from_json
            | dict2items
            | selectattr('value.role', 'equalto', 'internal_agent')
            | map(attribute='key')
-           | list
-           | first)
+           | list)[0]
          | default(None) }}
   no_log: true
   when: _xinas_api_internal_tokens_stat.stat.exists
@@ -336,13 +337,15 @@
 
 - name: Find the entry with principal 'admin:bootstrap'
   ansible.builtin.set_fact:
+    # Index [0] (not the `first` filter) so an empty match list yields
+    # Undefined → default(None) → the no-bootstrap-entry Fail fires, rather
+    # than `| first` raising an uncatchable "sequence was empty" error.
     _xinas_api_admin_token: >-
       {{ (_xinas_api_config_parsed.tokens
            | dict2items
            | selectattr('value.principal', 'equalto', 'admin:bootstrap')
            | map(attribute='key')
-           | list
-           | first)
+           | list)[0]
          | default(None) }}
   no_log: true
   when: _xinas_api_config_stat.stat.exists
