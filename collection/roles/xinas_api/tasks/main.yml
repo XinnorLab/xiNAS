@@ -121,6 +121,58 @@
   changed_when: false
   tags: [xinas_api, tmpfiles]
 
+# Phase 0 xinas-agent S0+S1 foundation: shared controller_id file.
+# Per phase0-requirements §3, controller_id must be unchanged across
+# reboot/upgrade and matched across api, audit, tasks, support bundle.
+# /var/lib/xinas/ co-locates identity with state + audit so re-install
+# preserving the data disk preserves both controller_id and the audit
+# chain.
+- name: Ensure /var/lib/xinas/ directory exists (parent of controller-id)
+  ansible.builtin.file:
+    path: /var/lib/xinas
+    state: directory
+    owner: root
+    group: xinas-admin
+    mode: '0755'
+  tags: [xinas_api, controller_id]
+
+- name: Generate /var/lib/xinas/controller-id on first install (UUIDv4)
+  ansible.builtin.command:
+    cmd: uuidgen
+    creates: /var/lib/xinas/controller-id
+  register: _xinas_api_uuidgen
+  tags: [xinas_api, controller_id]
+
+- name: Write the generated UUID to the controller-id file (first install)
+  ansible.builtin.copy:
+    content: "{{ _xinas_api_uuidgen.stdout | trim }}"
+    dest: /var/lib/xinas/controller-id
+    owner: root
+    group: root
+    mode: '0644'
+  when: _xinas_api_uuidgen is changed
+  tags: [xinas_api, controller_id]
+
+- name: Ensure controller-id permissions (idempotent on re-run)
+  ansible.builtin.file:
+    path: /var/lib/xinas/controller-id
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [xinas_api, controller_id]
+
+- name: Slurp controller-id from the REMOTE host
+  ansible.builtin.slurp:
+    src: /var/lib/xinas/controller-id
+  register: _xinas_api_controller_id_blob
+  tags: [xinas_api, controller_id]
+
+- name: Set working controller_id from the remote file (operator override wins)
+  ansible.builtin.set_fact:
+    xinas_api_controller_id: "{{ _xinas_api_controller_id_blob.content | b64decode | trim }}"
+  when: xinas_api_controller_id | length == 0
+  tags: [xinas_api, controller_id]
+
 # 7. Token + config bootstrap.
 #
 # Lifecycle: config.json is the source of truth. admin-token is a
