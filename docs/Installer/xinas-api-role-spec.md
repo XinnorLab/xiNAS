@@ -15,8 +15,18 @@ ADR-0001 'Migration scope' and WS12 — MCP transport convergence).
 ### In scope
 
 - Create the `xinas-admin` Unix group and look up its system-assigned gid.
+- Create the `xinas-api` Unix group (xinas-agent S0+S1 PR) — no human
+  members; it is purely the agent-socket gate. The `xinas-api` user joins
+  it as a supplementary member so the unit's `SupplementaryGroups=xinas-api`
+  grants the running api process the group without disturbing its primary
+  group (`xinas-admin`).
 - Create the on-disk config directory and write `config.json` + the
   bootstrap admin bearer token.
+- Generate `/var/lib/xinas/controller-id` (xinas-agent S0+S1 PR) — the
+  persistent per-controller identity, replacing the machine-id derivation.
+- Write the split-secret agent token store (xinas-agent S0+S1 PR):
+  `/etc/xinas-api/internal-tokens.json` (api-readable) and
+  `/etc/xinas-agent/agent-token` (root-only).
 - Pre-create the canonical state and audit-log directories per ADR-0003.
 - Install the `xinas-api.service` systemd unit shipped in the source tree.
 - Enable and start the service.
@@ -101,11 +111,20 @@ xinas_api_socket: /run/xinas/api.sock
 # this role into site.yml).
 xinas_api_socket_group: xinas-admin
 
-# Per-controller identity. UUIDv5 derivation from machine-id gives a
-# stable UUID-shaped string without an extra on-disk file. Operators
-# can override if they have a pre-assigned controller_id from a
-# control-plane registry.
-xinas_api_controller_id: "{{ ansible_machine_id | to_uuid }}"
+# Per-controller identity. Default is an EMPTY placeholder; the role
+# generates /var/lib/xinas/controller-id with `uuidgen` on first install,
+# then slurps it FROM THE MANAGED HOST and set_facts this variable from
+# the decoded value (guarded `when: xinas_api_controller_id | length == 0`
+# so an explicit operator override still wins). This default is
+# deliberately NOT `"{{ lookup('file', '/var/lib/xinas/controller-id') }}"`:
+# Ansible lookups run on the CONTROL NODE, not the managed host, so a
+# lookup would read the controller's filesystem (wrong id, or a hard error
+# when the path is absent there). PR #203's `ansible_machine_id | to_uuid`
+# derivation has been retired — it produced unstable IDs across machine-id
+# regeneration (cloned VMs) and did not co-locate identity with state for
+# OS-reinstall preservation. Operators with a pre-assigned controller_id
+# from a control-plane registry override this via extra-vars.
+xinas_api_controller_id: ""
 ```
 
 No further tunables in this PR. TCP listen, token policy, log
@@ -161,7 +180,45 @@ corresponding feature ships.
 
 6.  Run `systemd-tmpfiles --create /usr/lib/tmpfiles.d/xinas-api.conf`
     once at install time so the dirs exist before the unit's first
-    start. (At reboot, systemd-tmpfiles-setup.service re-runs.)
+    start. (At reboot, systemd-tmpfiles-setup.service re-runs.) The
+    snippet now also creates `/var/lib/xinas` (`0755 root:root`, the
+    sole authority for that dir — no separate `file:` task) and
+    `/etc/xinas-agent` (`0755 root:root`) so steps 6a and 6b can write
+    into them.
+
+6a. Controller identity (xinas-agent S0+S1 PR):
+    - `command: uuidgen` guarded by `creates: /var/lib/xinas/controller-id`,
+      then `copy:` the captured stdout to the file (`0644 root:root`). A
+      `creates:`-guarded command + copy, rather than a `shell:` redirect,
+      keeps it ansible-lint clean and idempotent; re-runs preserve the
+      existing UUID.
+    - `slurp` the file FROM THE MANAGED HOST and `set_fact`
+      `xinas_api_controller_id` from the decoded blob, guarded
+      `when: xinas_api_controller_id | length == 0` so an operator
+      extra-var override wins. The config.json template (step 7) renders
+      this value. No `lookup('file', ...)` — see the variable comment for
+      why a control-node lookup would read the wrong filesystem.
+
+6b. Split-secret agent token store (xinas-agent S0+S1 PR). The agent
+    posts observations to the api with a dedicated bearer
+    (principal `agent:root`, role `internal_agent`) that must NOT live in
+    the operator-readable config.json. Two files, every token-touching
+    task `no_log: true`:
+    - First install (internal-tokens.json absent): `openssl rand -hex 32`
+      → write `/etc/xinas-api/internal-tokens.json`
+      (`{ "<token>": { "principal": "agent:root", "role": "internal_agent" } }`,
+      mode `0640 root:xinas-api`).
+    - Re-run (present): slurp it and extract the `internal_agent` entry's
+      key via `... | map(attribute='key') | list)[0] | default(None)`
+      (index `[0]`, not the `first` filter, so an empty/corrupt file
+      yields Undefined and the actionable Fail fires instead of an
+      uncatchable Jinja error).
+    - Both branches converge to write/refresh `/etc/xinas-agent/agent-token`
+      (mode `0400 root:root`) with the same bearer. The api reads the JSON
+      to validate inbound requests (`loadConfig` merges it via
+      `internalTokensPath`; key collisions are a startup fatal); the agent
+      reads the raw token to set the bearer on outbound observation POSTs.
+      Operators in `xinas-admin` can read neither file.
 
 7.  Token + config bootstrap (the heart of the role):
 
@@ -212,7 +269,13 @@ corresponding feature ships.
 /etc/xinas-api/                          0750  root:xinas-admin
 /etc/xinas-api/config.json               0640  root:xinas-admin
 /etc/xinas-api/admin-token               0640  root:xinas-admin
+/etc/xinas-api/internal-tokens.json      0640  root:xinas-api    (agent bearer; api-readable)
 
+/etc/xinas-agent/                        0755  root:root         (by tmpfiles.d)
+/etc/xinas-agent/agent-token             0400  root:root         (agent bearer; agent-only)
+
+/var/lib/xinas/                          0755  root:root         (by tmpfiles.d)
+/var/lib/xinas/controller-id             0644  root:root         (uuidgen, first install)
 /var/lib/xinas/state/                    0750  xinas-api:xinas-admin
 /var/lib/xinas/state/xinas.db            (created by api at first run)
 /var/lib/xinas/state/xinas.db-wal        (SQLite WAL)
@@ -226,6 +289,13 @@ corresponding feature ships.
 
 /etc/systemd/system/xinas-api.service    0644  root:root
 ```
+
+`internal-tokens.json` (`root:xinas-api`) and `agent-token` (`root:root`)
+hold the same `internal_agent` bearer with different audiences: members of
+`xinas-admin` can read neither, so an operator cannot impersonate the agent
+to push poisoned observations. The `xinas-api` group has no human members;
+the api process holds it only as a supplementary group (unit
+`SupplementaryGroups=xinas-api`).
 
 The `/var/lib/xinas/config-history/` tree owned by `xinas_history`
 (mode `0700 root:root`) is unrelated and untouched by this role.
