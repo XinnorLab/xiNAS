@@ -46,6 +46,29 @@
     _xinas_admin_gid: "{{ ansible_facts.getent_group[xinas_api_socket_group][1] | int }}"
   tags: [xinas_api, group]
 
+# Phase 0 xinas-agent S0+S1 foundation: dedicated xinas-api group
+# (no human members) used as the agent socket gate. The xinas-api
+# user joins this group as a supplementary, so the api's effective
+# gid stays xinas-admin and operator readability of new state/audit
+# files is preserved.
+- name: Create the xinas-api system group (agent-socket gate)
+  ansible.builtin.group:
+    name: xinas-api
+    system: true
+    state: present
+  tags: [xinas_api, group]
+
+- name: Look up the xinas-api gid
+  ansible.builtin.getent:
+    database: group
+    key: xinas-api
+  tags: [xinas_api, group]
+
+- name: Cache the xinas-api gid as _xinas_api_gid
+  ansible.builtin.set_fact:
+    _xinas_api_gid: "{{ ansible_facts.getent_group['xinas-api'][1] | int }}"
+  tags: [xinas_api, group]
+
 # 3b. Create the static system user the api process runs as. Uid is
 #     system-assigned. Primary group is the socket group (xinas-admin
 #     by default) so files the api creates default to that group, no
@@ -54,6 +77,9 @@
   ansible.builtin.user:
     name: "{{ xinas_api_user }}"
     group: "{{ xinas_api_socket_group }}"
+    groups: # supplementary — NEW
+      - xinas-api
+    append: true # don't clobber operator-added supplementary groups
     system: true
     create_home: false
     shell: /usr/sbin/nologin
