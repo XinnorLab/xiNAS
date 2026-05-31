@@ -1,0 +1,34 @@
+# xinas-agent.service — privileged observation + execution agent
+#
+# This is the SKELETON unit for S0+S1 (boots and answers RPC).
+# Full hardening (CapabilityBoundingSet, SystemCallFilter, etc.) and
+# the Ansible role template that derives from this skeleton land in K5.
+#
+# Depends on: xinas-api.service (must be listening before the agent
+# POSTs /internal/v1/agent_started).
+
+[Unit]
+Description=xiNAS Agent (privileged observation and execution daemon)
+Documentation=https://github.com/xinnor/xiNAS
+After=network-online.target xinas-api.service
+Wants=network-online.target
+Requires=xinas-api.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/xinas-agent
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=xinas-agent
+
+# Runtime socket directory is created by the xinas_api role's
+# tmpfiles config (/run/xinas mode 0750 xinas-api:xinas-api).
+# The agent creates agent.sock itself and chowns it to root:xinas-api 0660.
+RuntimeDirectory=xinas
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target
