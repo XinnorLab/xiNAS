@@ -77,9 +77,11 @@
   ansible.builtin.user:
     name: "{{ xinas_api_user }}"
     group: "{{ xinas_api_socket_group }}"
-    groups: # supplementary — NEW
+    # Supplementary membership in xinas-api (the agent-socket gate).
+    # append:true so a re-run never clobbers operator-added groups.
+    groups:
       - xinas-api
-    append: true # don't clobber operator-added supplementary groups
+    append: true
     system: true
     create_home: false
     shell: /usr/sbin/nologin
