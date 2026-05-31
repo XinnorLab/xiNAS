@@ -95,6 +95,47 @@ describe('createAgentRpcServer', () => {
     expect((response as { error?: { code: number } }).error?.code).toBe(-32601);
   });
 
+  it('caps the per-connection read buffer and stays up for the next client', async () => {
+    const sockPath = tempSocketPath();
+    const dispatcher = createDispatcher({
+      'agent.health': () => ({
+        status: 'starting',
+        version: '0.0.0',
+        uptime_seconds: 0,
+        controller_id: 'test-id',
+        in_flight_tasks: 0,
+        collectors: {},
+      }),
+    });
+    const server = await createAgentRpcServer({
+      socketPath: sockPath,
+      dispatch: dispatcher,
+      socketGroupGid: process.getgid?.() ?? 0,
+    });
+    servers.push(server);
+
+    // Send ~2 MB with NO newline; the server must cap the buffer (1 MB) and
+    // close the connection rather than buffering unbounded.
+    await new Promise<void>((resolve, reject) => {
+      const client = createConnection(sockPath, () => {
+        client.write('x'.repeat(2 * 1024 * 1024));
+      });
+      client.on('close', () => resolve());
+      client.on('error', () => resolve()); // ECONNRESET on destroy is fine
+      setTimeout(() => reject(new Error('flood connection did not close')), 3000);
+    });
+
+    // The process/server must still be alive: a fresh connection gets a
+    // normal agent.health response.
+    const response = await roundtrip(sockPath, {
+      jsonrpc: '2.0',
+      id: 99,
+      method: 'agent.health',
+      params: {},
+    });
+    expect((response as { result?: { status: string } }).result?.status).toBe('starting');
+  });
+
   it('handles multiple sequential requests on the same connection', async () => {
     const sockPath = tempSocketPath();
     let callCount = 0;

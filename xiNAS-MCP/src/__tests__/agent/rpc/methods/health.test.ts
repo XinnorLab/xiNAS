@@ -58,6 +58,6 @@ describe('agent.health handler', () => {
     const result = handler({}) as Record<string, unknown>;
     // All present collectors are stubbed; no real collectors running.
     // Status is 'starting' because no real collectors are up yet.
-    expect(['starting', 'stubbed']).toContain(result['status']);
+    expect(result['status']).toBe('starting');
   });
 });

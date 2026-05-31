@@ -24,11 +24,14 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=xinas-agent
 
-# Runtime socket directory is created by the xinas_api role's
-# tmpfiles config (/run/xinas mode 0750 xinas-api:xinas-api).
-# The agent creates agent.sock itself and chowns it to root:xinas-api 0660.
-RuntimeDirectory=xinas
-RuntimeDirectoryMode=0750
+# /run/xinas is owned by the xinas_api role's tmpfiles.d config
+# (root:xinas-admin 0770) and recreated each boot by
+# systemd-tmpfiles-setup.service. The agent must NOT declare
+# RuntimeDirectory=xinas: systemd would re-own /run/xinas to root:root 0750
+# (breaking group traverse) and, worse, REMOVE the directory when this unit
+# stops — destroying the live api.sock on `systemctl restart xinas-agent`.
+# The agent only creates agent.sock inside /run/xinas and chowns that file
+# to root:xinas-api 0660.
 
 [Install]
 WantedBy=multi-user.target

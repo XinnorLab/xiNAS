@@ -18,6 +18,11 @@
 
 import { chmodSync, chownSync, existsSync, unlinkSync } from 'node:fs';
 import { type Server, type Socket, createServer } from 'node:net';
+import { log } from '../log.js';
+
+// Cap the per-connection read buffer. A client that never sends '\n' would
+// otherwise grow `buf` without bound and OOM the root daemon (DoS guard).
+const MAX_LINE_BYTES = 1024 * 1024; // 1 MB
 
 export interface AgentRpcServerOptions {
   socketPath: string;
@@ -43,6 +48,19 @@ export async function createAgentRpcServer(
     let buf = '';
     socket.on('data', (chunk: Buffer) => {
       buf += chunk.toString('utf8');
+      if (buf.length > MAX_LINE_BYTES) {
+        if (!socket.destroyed) {
+          socket.write(
+            `${JSON.stringify({
+              jsonrpc: '2.0',
+              id: null,
+              error: { code: -32600, message: 'Invalid Request: request too large' },
+            })}\n`,
+          );
+        }
+        socket.destroy();
+        return;
+      }
       let nl: number;
       while ((nl = buf.indexOf('\n')) !== -1) {
         const line = buf.slice(0, nl);
@@ -68,16 +86,41 @@ export async function createAgentRpcServer(
     socket.on('error', () => socket.destroy());
   });
 
+  // Tighten umask so the UDS is born 0660 (not 0755 / world-connectable)
+  // for the window between bind and the post-listen chmod. Restored inside
+  // the listen callback / on error — NOT in a synchronous finally, because
+  // listen is async and the socket is created after the call returns.
+  const prevUmask = process.umask(0o117); // socket born 0660
   await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
+    const onError = (err: Error) => {
+      process.umask(prevUmask);
+      reject(err);
+    };
+    server.once('error', onError);
     server.listen(socketPath, () => {
-      server.removeListener('error', reject);
+      process.umask(prevUmask); // restore right after bind
+      server.removeListener('error', onError);
       try {
         chmodSync(socketPath, 0o660);
         chownSync(socketPath, -1, socketGroupGid);
-      } catch {
-        // In test environments running without root, chown may fail if the gid
-        // is foreign; chmod is more likely to succeed and is the critical gate.
+      } catch (err) {
+        // The socket is the only auth gate. As root (production) a
+        // mis-permissioned socket must not serve — fail closed so systemd
+        // Restart=on-failure retries. As non-root (test/dev) chown to a
+        // foreign gid fails as expected; tolerate with a warn.
+        const isRoot = process.getuid?.() === 0;
+        if (isRoot) {
+          log('error', 'rpc', 'socket_perm_failed', {
+            socket: socketPath,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          reject(err instanceof Error ? err : new Error(String(err)));
+          return;
+        }
+        log('warn', 'rpc', 'socket_perm_skipped', {
+          socket: socketPath,
+          reason: 'not running as root (test/dev)',
+        });
       }
       resolve();
     });

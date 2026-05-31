@@ -39,6 +39,20 @@ describe('createDispatcher', () => {
     expect(parsed.result).toBeUndefined();
   });
 
+  it.each(['__proto__', 'constructor', 'toString', 'hasOwnProperty'])(
+    'returns -32601 for inherited Object.prototype key %s (own-property routing)',
+    async (method) => {
+      const dispatch = createDispatcher({ 'agent.health': echoHandler });
+      const response = await dispatch(
+        JSON.stringify({ jsonrpc: '2.0', id: 7, method, params: {} }),
+      );
+      const parsed = JSON.parse(response);
+      expect(parsed.id).toBe(7);
+      expect(parsed.error?.code).toBe(-32601);
+      expect(parsed.result).toBeUndefined();
+    },
+  );
+
   it('returns -32602 when the handler throws a params error', async () => {
     const dispatch = createDispatcher({
       'agent.health': () => {

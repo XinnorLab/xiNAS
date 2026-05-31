@@ -23,13 +23,6 @@ export interface RpcHandlerMap {
   [method: string]: RpcHandler;
 }
 
-interface RpcRequest {
-  jsonrpc: '2.0';
-  id: number | string | null;
-  method: string;
-  params?: unknown;
-}
-
 function errorEnvelope(
   id: number | string | null,
   code: number,
@@ -69,14 +62,17 @@ export function createDispatcher(handlers: RpcHandlerMap): (line: string) => Pro
     const params = req['params'] ?? {};
 
     // 3. Route.
-    const handler = handlers[method];
-    if (handler === undefined) {
+    // Own-property only: inherited Object.prototype keys (constructor,
+    // toString, __proto__, hasOwnProperty, …) must NOT resolve to inherited
+    // members — they are not part of the RPC surface and must return -32601.
+    if (!Object.prototype.hasOwnProperty.call(handlers, method)) {
       return errorEnvelope(
         id,
         -32601,
         `Method not found: "${method}" is not in the agent's RPC surface`,
       );
     }
+    const handler = handlers[method] as RpcHandler;
 
     // 4. Invoke.
     try {

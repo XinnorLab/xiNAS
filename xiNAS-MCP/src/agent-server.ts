@@ -14,7 +14,7 @@
  * collector registry is empty; agent.health reports status='starting'.
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { loadAgentConfig } from './agent/config.js';
 import { log } from './agent/log.js';
 import { createDispatcher } from './agent/rpc/dispatch.js';
@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   // xinas-api group; in tests it may be the process's own gid.
   let socketGroupGid: number;
   try {
-    const gidStr = execSync(`getent group "${config.socket_group}"`, {
+    const gidStr = execFileSync('getent', ['group', config.socket_group], {
       encoding: 'utf8',
     }).split(':')[2];
     socketGroupGid = parseInt(gidStr ?? '', 10);
@@ -84,10 +84,23 @@ async function main(): Promise<void> {
 
   log('info', 'core', 'listening', { socket: config.agent_socket });
 
-  // Clean shutdown on SIGINT / SIGTERM.
+  // Clean shutdown on SIGINT / SIGTERM. server.close() resolves only once
+  // all open connections close, so a held-open client would block teardown
+  // until systemd SIGKILLs. Race the close against a short timer and
+  // force-exit so we never hang past systemd's stop timeout.
   async function shutdown(signal: string): Promise<void> {
     log('info', 'core', 'shutdown', { signal });
-    await server.close();
+    const forced = setTimeout(() => {
+      log('warn', 'core', 'shutdown_forced', { signal });
+      process.exit(0);
+    }, 3000);
+    forced.unref?.();
+    try {
+      await server.close();
+    } catch {
+      /* ignore */
+    }
+    clearTimeout(forced);
     process.exit(0);
   }
 

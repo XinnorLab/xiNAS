@@ -28,7 +28,7 @@ export function makeHealthHandler(opts: HealthHandlerOptions): RpcHandler {
     const entries = Object.values(collectors);
     const uptimeSeconds = Math.floor((Date.now() - opts.startedAt) / 1000);
 
-    let status: 'starting' | 'healthy' | 'degraded' | 'stubbed';
+    let status: 'starting' | 'healthy' | 'degraded';
     if (entries.length === 0) {
       status = 'starting';
     } else if (entries.some((v) => v.startsWith('error:'))) {
