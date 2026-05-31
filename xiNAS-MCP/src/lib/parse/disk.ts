@@ -44,6 +44,9 @@ export function parseLsblkOutput(raw: string): ObservedDisk[] {
     .filter((d) => d.type === 'disk' || d.type === undefined)
     .map<ObservedDisk>((d) => ({
       kind: 'Disk',
+      // PROVISIONAL: id is the device name here; the Phase E (E2) collector
+      // replaces it with the stable serial+namespace key before the observation
+      // is published to the api-v1.yaml Disk schema.
       id: d.name,
       status: {
         name: d.name,

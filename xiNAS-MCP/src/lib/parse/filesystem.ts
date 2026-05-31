@@ -53,6 +53,8 @@ export function mountUnitToFilesystem(
       mountpoint: where,
       backing_device: what,
       ...(type !== undefined ? { fs_type: type } : {}),
+      // NOTE: `options` here is renamed to `mount_options` by the Phase E (E4)
+      // collector to match the public api-v1.yaml Filesystem schema.
       ...(options !== undefined ? { options } : {}),
     },
     status: {

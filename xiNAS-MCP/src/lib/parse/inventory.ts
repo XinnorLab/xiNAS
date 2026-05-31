@@ -24,7 +24,11 @@ export interface ParsedMeminfo {
 export function parseCpuinfo(raw: string, arch = 'x86_64'): ParsedCpuinfo {
   let processorCount = 0;
   let model: string | undefined;
-  let cores: number | undefined;
+  // Per-socket core count (from the `cpu cores` field, same value in every stanza of a socket)
+  let coresPerSocket: number | undefined;
+  // Track distinct physical socket IDs for multi-socket systems
+  const physicalIds = new Set<string>();
+  let hasPhysicalId = false;
 
   for (const rawLine of raw.split('\n')) {
     const line = rawLine.trim();
@@ -38,10 +42,25 @@ export function parseCpuinfo(raw: string, arch = 'x86_64'): ParsedCpuinfo {
       processorCount += 1;
     } else if (key === 'model name' && model === undefined) {
       model = value;
-    } else if (key === 'cpu cores' && cores === undefined) {
-      const n = parseInt(value, 10);
-      if (!isNaN(n)) cores = n;
+    } else if (key === 'cpu cores') {
+      if (coresPerSocket === undefined) {
+        const n = parseInt(value, 10);
+        if (!isNaN(n)) coresPerSocket = n;
+      }
+    } else if (key === 'physical id') {
+      hasPhysicalId = true;
+      physicalIds.add(value);
     }
+  }
+
+  // Compute total physical cores:
+  // - If physical_id lines are present: distinct socket count × cores-per-socket
+  // - If no physical_id (VMs, ARM, containers): treat as 1 socket → coresPerSocket
+  // - If cpu cores is absent: fall back to logical processor count
+  let cores: number | undefined;
+  if (coresPerSocket !== undefined) {
+    const socketCount = hasPhysicalId ? physicalIds.size : 1;
+    cores = socketCount * coresPerSocket;
   }
 
   return {

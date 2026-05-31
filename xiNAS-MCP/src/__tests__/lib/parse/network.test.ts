@@ -40,4 +40,19 @@ describe('parseIpJson', () => {
     expect(ifaces[0]?.status.ip6_addresses).toEqual([]);
     expect(ifaces[0]?.status.mac).toBeUndefined();
   });
+
+  it('emits bare address (no trailing slash) when prefixlen is absent', () => {
+    const raw = JSON.stringify([
+      {
+        ifname: 'ib0',
+        operstate: 'UP',
+        addr_info: [{ family: 'inet', local: '10.1.2.3' }],
+      },
+    ]);
+    const ifaces = parseIpJson(raw);
+    expect(ifaces).toHaveLength(1);
+    const addr = ifaces[0]?.status.ip4_addresses[0];
+    expect(addr).toBe('10.1.2.3');
+    expect(addr).not.toContain('/');
+  });
 });

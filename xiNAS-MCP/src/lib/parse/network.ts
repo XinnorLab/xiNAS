@@ -1,7 +1,10 @@
 /**
- * Pure parser for `ip -j addr show` output. Emits typed
- * ObservedNetworkInterface objects matching api-v1.yaml's
- * NetworkInterface schema.
+ * Pure parser for `ip -j addr show` output. Emits an INTERMEDIATE shape
+ * (ObservedNetworkInterface); the Phase E (E3) collector normalizes it to
+ * the public api-v1.yaml NetworkInterface schema — e.g. `operstate` →
+ * `link_state` enum, `ip4_addresses`+`ip6_addresses` → a single
+ * `current_addresses` array. Do NOT compare field names here against the
+ * public schema directly.
  *
  * No side effects. Safe to import from anywhere.
  */
@@ -50,10 +53,10 @@ export function parseIpJson(raw: string): ObservedNetworkInterface[] {
     const addrInfo = iface.addr_info ?? [];
     const ip4_addresses = addrInfo
       .filter((a) => a.family === 'inet' && a.local !== undefined)
-      .map((a) => `${a.local}/${a.prefixlen ?? ''}`);
+      .map((a) => (a.prefixlen !== undefined ? `${a.local}/${a.prefixlen}` : (a.local as string)));
     const ip6_addresses = addrInfo
       .filter((a) => a.family === 'inet6' && a.local !== undefined)
-      .map((a) => `${a.local}/${a.prefixlen ?? ''}`);
+      .map((a) => (a.prefixlen !== undefined ? `${a.local}/${a.prefixlen}` : (a.local as string)));
     return {
       kind: 'NetworkInterface',
       id: iface.ifname,

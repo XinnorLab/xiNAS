@@ -37,7 +37,30 @@ export function parseSystemdUnit(raw: string): ParsedSystemdUnit {
   let currentSection: SectionMap | null = null;
   let currentSectionName = '';
 
-  for (const rawLine of raw.split('\n')) {
+  // Pre-process: join backslash-continued lines (systemd trailing-\ continuation).
+  // A line ending with \ is joined to the next line with a space; this is done
+  // before section/key parsing so that continued ExecStart= values are handled
+  // correctly even when repeated-key → array folding applies.
+  const rawLines = raw.split('\n');
+  const lines: string[] = [];
+  let i = 0;
+  while (i < rawLines.length) {
+    let line = rawLines[i] ?? '';
+    i += 1;
+    // Join continuation lines
+    while (line.trimEnd().endsWith('\\')) {
+      // Strip trailing backslash AND any whitespace before it, then join
+      // the next line (trimmed of leading/trailing whitespace) with a single space.
+      line = line.trimEnd().slice(0, -1).trimEnd();
+      const next = rawLines[i];
+      if (next === undefined) break;
+      i += 1;
+      line = line + ' ' + next.trim();
+    }
+    lines.push(line);
+  }
+
+  for (const rawLine of lines) {
     const line = rawLine.trim();
     if (line === '' || line.startsWith('#') || line.startsWith(';')) continue;
 

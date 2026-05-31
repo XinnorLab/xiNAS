@@ -58,4 +58,25 @@ describe('parseSystemdUnit', () => {
     expect(result.service).toBeUndefined();
     expect(result.install).toBeUndefined();
   });
+
+  it('joins backslash-continued lines into a single value', () => {
+    const raw = ['[Service]', 'ExecStart=/usr/bin/foo \\', '  --flag bar'].join('\n');
+    const result = parseSystemdUnit(raw);
+    expect(result.service?.['ExecStart']).toBe('/usr/bin/foo --flag bar');
+  });
+
+  it('handles multi-line continuation and still folds repeated keys into arrays', () => {
+    const raw = [
+      '[Service]',
+      'ExecStart=/usr/bin/foo \\',
+      '  --flag bar',
+      'Environment=A=1',
+      'Environment=B=2',
+    ].join('\n');
+    const result = parseSystemdUnit(raw);
+    expect(result.service?.['ExecStart']).toBe('/usr/bin/foo --flag bar');
+    expect(Array.isArray(result.service?.['Environment'])).toBe(true);
+    expect(result.service?.['Environment']).toContain('A=1');
+    expect(result.service?.['Environment']).toContain('B=2');
+  });
 });

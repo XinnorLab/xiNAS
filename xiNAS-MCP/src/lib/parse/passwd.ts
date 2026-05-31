@@ -14,7 +14,10 @@ export interface ParsedPasswdLine {
   shell: string;
 }
 
-export function parsePasswdLine(line: string): ParsedPasswdLine {
+export function parsePasswdLine(rawLine: string): ParsedPasswdLine {
+  // Trim trailing CR so CRLF line endings (e.g. from getent on some systems) don't
+  // poison the last field.
+  const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
   const fields = line.split(':');
   if (fields.length < 7) {
     throw new Error(
@@ -30,6 +33,12 @@ export function parsePasswdLine(line: string): ParsedPasswdLine {
     string,
     string,
   ];
+  if (!/^\d+$/.test(uidStr)) {
+    throw new Error(`passwd line has non-numeric uid: ${JSON.stringify(rawLine)}`);
+  }
+  if (!/^\d+$/.test(gidStr)) {
+    throw new Error(`passwd line has non-numeric gid: ${JSON.stringify(rawLine)}`);
+  }
   return {
     name,
     uid: parseInt(uidStr, 10),

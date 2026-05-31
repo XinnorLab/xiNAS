@@ -19,4 +19,13 @@ describe('parseGroupLine', () => {
   it('throws a clear error for lines with fewer than 4 colon-separated fields', () => {
     expect(() => parseGroupLine('root:x:0')).toThrow(/4 fields/);
   });
+
+  it('trims trailing CR (CRLF) so the members field is clean', () => {
+    const result = parseGroupLine('xinas-admin:x:996:alice,bob\r');
+    expect(result.members).toEqual(['alice', 'bob']);
+  });
+
+  it('throws a clear error when gid is non-numeric', () => {
+    expect(() => parseGroupLine('bad:x:NaN:member')).toThrow(/non-numeric gid/);
+  });
 });

@@ -38,4 +38,19 @@ describe('parseMountinfo', () => {
     expect(parseMountinfo('')).toEqual([]);
     expect(parseMountinfo('\n\n')).toEqual([]);
   });
+
+  it('decodes \\040 octal escape in mountpoint to a space', () => {
+    // /proc/self/mountinfo encodes space as \040 in path fields
+    const raw = '123 22 253:1 / /srv/share\\040with\\040spaces rw shared:2 - xfs /dev/md/data rw';
+    const mounts = parseMountinfo(raw);
+    expect(mounts).toHaveLength(1);
+    expect(mounts[0]?.mountpoint).toBe('/srv/share with spaces');
+  });
+
+  it('decodes \\040 octal escape in mount source path', () => {
+    const raw = '124 22 253:2 / /mnt/data rw shared:3 - xfs /dev/disk/by-label/my\\040disk rw';
+    const mounts = parseMountinfo(raw);
+    expect(mounts).toHaveLength(1);
+    expect(mounts[0]?.source).toBe('/dev/disk/by-label/my disk');
+  });
 });

@@ -27,4 +27,21 @@ describe('parsePasswdLine', () => {
     expect(result.home).toBe('/root');
     expect(result.shell).toBe('/bin/bash');
   });
+
+  it('trims trailing CR (CRLF) so the last field is clean', () => {
+    const result = parsePasswdLine(
+      'xinas-api:x:999:997:xinas API:/var/lib/xinas:/usr/sbin/nologin\r',
+    );
+    expect(result.shell).toBe('/usr/sbin/nologin');
+  });
+
+  it('throws a clear error when uid is non-numeric', () => {
+    expect(() => parsePasswdLine('bad:x:NaN:0:gecos:/home/bad:/bin/sh')).toThrow(/non-numeric uid/);
+  });
+
+  it('throws a clear error when gid is non-numeric', () => {
+    expect(() => parsePasswdLine('bad:x:1000:NaN:gecos:/home/bad:/bin/sh')).toThrow(
+      /non-numeric gid/,
+    );
+  });
 });

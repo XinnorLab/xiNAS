@@ -1,0 +1,107 @@
+processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 85
+model name	: Intel(R) Xeon(R) Gold 6130 CPU @ 2.10GHz
+stepping	: 4
+microcode	: 0x2006e05
+cpu MHz		: 2100.000
+cache size	: 22528 KB
+physical id	: 0
+siblings	: 32
+core id		: 0
+cpu cores	: 16
+apicid		: 0
+initial apicid	: 0
+fpu		: yes
+fpu_exception	: yes
+cpuid level	: 22
+wp		: yes
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts
+bugs		:
+bogomips	: 4200.00
+clflush size	: 64
+cache_alignment	: 64
+address sizes	: 46 bits physical, 48 bits virtual
+power management:
+
+processor	: 1
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 85
+model name	: Intel(R) Xeon(R) Gold 6130 CPU @ 2.10GHz
+stepping	: 4
+microcode	: 0x2006e05
+cpu MHz		: 2100.000
+cache size	: 22528 KB
+physical id	: 0
+siblings	: 32
+core id		: 1
+cpu cores	: 16
+apicid		: 2
+initial apicid	: 2
+fpu		: yes
+fpu_exception	: yes
+cpuid level	: 22
+wp		: yes
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts
+bugs		:
+bogomips	: 4200.00
+clflush size	: 64
+cache_alignment	: 64
+address sizes	: 46 bits physical, 48 bits virtual
+power management:
+
+processor	: 2
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 85
+model name	: Intel(R) Xeon(R) Gold 6130 CPU @ 2.10GHz
+stepping	: 4
+microcode	: 0x2006e05
+cpu MHz		: 2100.000
+cache size	: 22528 KB
+physical id	: 1
+siblings	: 32
+core id		: 0
+cpu cores	: 16
+apicid		: 64
+initial apicid	: 64
+fpu		: yes
+fpu_exception	: yes
+cpuid level	: 22
+wp		: yes
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts
+bugs		:
+bogomips	: 4200.00
+clflush size	: 64
+cache_alignment	: 64
+address sizes	: 46 bits physical, 48 bits virtual
+power management:
+
+processor	: 3
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 85
+model name	: Intel(R) Xeon(R) Gold 6130 CPU @ 2.10GHz
+stepping	: 4
+microcode	: 0x2006e05
+cpu MHz		: 2100.000
+cache size	: 22528 KB
+physical id	: 1
+siblings	: 32
+core id		: 1
+cpu cores	: 16
+apicid		: 66
+initial apicid	: 66
+fpu		: yes
+fpu_exception	: yes
+cpuid level	: 22
+wp		: yes
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts
+bugs		:
+bogomips	: 4200.00
+clflush size	: 64
+cache_alignment	: 64
+address sizes	: 46 bits physical, 48 bits virtual
+power management:

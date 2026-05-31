@@ -31,6 +31,15 @@ describe('parseCpuinfo', () => {
     expect(result.cores).toBeUndefined();
     expect(result.threads).toBe(1);
   });
+
+  it('counts TOTAL physical cores across sockets on a dual-socket system', () => {
+    // Fixture: 2 distinct physical_id values (0 and 1), each with cpu cores: 16.
+    // Total physical cores = 2 sockets × 16 = 32 (not 16 as single-socket read would give).
+    const raw = readFileSync(join(fixtureDir, 'cpuinfo-dual-socket.txt'), 'utf8');
+    const result = parseCpuinfo(raw);
+    expect(result.cores).toBe(32); // 2 sockets × 16 cores per socket
+    expect(result.threads).toBe(4); // 4 processor stanzas in the fixture
+  });
 });
 
 describe('parseMeminfo', () => {

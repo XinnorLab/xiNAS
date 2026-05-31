@@ -11,7 +11,10 @@ export interface ParsedGroupLine {
   members: string[];
 }
 
-export function parseGroupLine(line: string): ParsedGroupLine {
+export function parseGroupLine(rawLine: string): ParsedGroupLine {
+  // Trim trailing CR so CRLF line endings (e.g. from getent on some systems) don't
+  // poison the last field.
+  const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
   const fields = line.split(':');
   if (fields.length < 4) {
     throw new Error(
@@ -19,6 +22,9 @@ export function parseGroupLine(line: string): ParsedGroupLine {
     );
   }
   const [name, , gidStr, membersStr] = fields as [string, string, string, string];
+  if (!/^\d+$/.test(gidStr)) {
+    throw new Error(`group line has non-numeric gid: ${JSON.stringify(rawLine)}`);
+  }
   const members =
     membersStr === ''
       ? []

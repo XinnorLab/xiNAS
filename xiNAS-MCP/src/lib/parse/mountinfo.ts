@@ -17,6 +17,15 @@ export interface MountEntry {
   source: string;
 }
 
+/**
+ * Decode octal escape sequences in /proc/self/mountinfo path fields.
+ * The kernel encodes space as \040, tab as \011, newline as \012,
+ * and backslash as \134 to avoid ambiguity in the space-delimited format.
+ */
+function decodeOctalEscapes(s: string): string {
+  return s.replace(/\\(\d{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)));
+}
+
 export function parseMountinfo(raw: string): MountEntry[] {
   const entries: MountEntry[] = [];
   for (const rawLine of raw.split('\n')) {
@@ -41,10 +50,11 @@ export function parseMountinfo(raw: string): MountEntry[] {
 
     const mount_id = parseInt(preFields[0] ?? '', 10);
     const parent_id = parseInt(preFields[1] ?? '', 10);
-    const mountpoint = preFields[4] ?? '';
+    // Decode octal escapes in path fields (mountpoint and source may contain spaces etc.)
+    const mountpoint = decodeOctalEscapes(preFields[4] ?? '');
     const mountOptionsRaw = preFields[5] ?? '';
     const fstype = postFields[0] ?? '';
-    const source = postFields[1] ?? '';
+    const source = decodeOctalEscapes(postFields[1] ?? '');
 
     if (isNaN(mount_id) || isNaN(parent_id) || mountpoint === '') continue;
 
