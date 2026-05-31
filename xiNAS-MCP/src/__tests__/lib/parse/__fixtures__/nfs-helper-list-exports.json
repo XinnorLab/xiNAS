@@ -1,0 +1,28 @@
+{
+  "op": "list_exports",
+  "status": "ok",
+  "exports": [
+    {
+      "path": "/srv/share01",
+      "clients": [
+        {
+          "host_pattern": "10.0.0.0/24",
+          "options": ["rw", "sync", "root_squash", "no_subtree_check", "anon_uid=65534", "anon_gid=65534"]
+        },
+        {
+          "host_pattern": "10.0.1.5",
+          "options": ["ro", "no_root_squash", "no_subtree_check"]
+        }
+      ]
+    },
+    {
+      "path": "/srv/share02",
+      "clients": [
+        {
+          "host_pattern": "*",
+          "options": ["rw", "sync", "all_squash", "anon_uid=1000", "anon_gid=1000"]
+        }
+      ]
+    }
+  ]
+}
