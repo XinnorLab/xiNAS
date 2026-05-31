@@ -25,7 +25,9 @@ describe('KvTransaction.list — atomic prefix scan inside a transaction', () =>
     state.kv.put('/test/Kind/a', { v: 1 });
     state.kv.put('/test/Kind/b', { v: 2 });
     state.kv.put('/test/Other/c', { v: 3 });
-    const result = state.kv.transaction((tx) => tx.list<{ v: number }>({ prefix: '/test/Kind/' }).map((r) => r.value));
+    const result = state.kv.transaction((tx) =>
+      tx.list<{ v: number }>({ prefix: '/test/Kind/' }).map((r) => r.value),
+    );
     expect(result).toHaveLength(2);
     expect(result).toContainEqual({ v: 1 });
     expect(result).toContainEqual({ v: 2 });

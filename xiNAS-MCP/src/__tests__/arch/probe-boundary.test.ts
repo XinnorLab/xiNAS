@@ -83,7 +83,10 @@ describe('probe-boundary', () => {
       }
     }
 
-    expect(violations, `Files outside src/agent/ must not import from agent/probe.\nViolations:\n${violations.join('\n\n')}`).toHaveLength(0);
+    expect(
+      violations,
+      `Files outside src/agent/ must not import from agent/probe.\nViolations:\n${violations.join('\n\n')}`,
+    ).toHaveLength(0);
 
     // Suppress unused-var warning when agent dir doesn't exist yet
     void agentExists;
