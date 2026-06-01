@@ -650,11 +650,67 @@ components:
 
     NfsSession:
       type: object
+      required: [kind, id, metadata, spec, status]
       properties:
-        client_ip: { type: string }
-        nfs_version: { type: string }
-        export_path: { type: string }
-        active_locks: { type: integer }
+        kind:
+          type: string
+          const: NfsSession
+        id:
+          type: string
+          description: "Composite: <client_addr>:<export_path>."
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        spec:
+          type: object
+          required: [client_addr, export_path]
+          properties:
+            client_addr:
+              type: string
+            client_hostname:
+              type: string
+            export_path:
+              type: string
+        status:
+          type: object
+          required: [proto_version, locked_files, observed_at]
+          properties:
+            proto_version:
+              type: string
+              enum: [v3, v4, v4.1, v4.2]
+            locked_files:
+              type: integer
+            observed_at:
+              type: string
+              format: date-time
+
+    NfsIdmap:
+      type: object
+      required: [kind, metadata, status]
+      properties:
+        kind:
+          type: string
+          const: NfsIdmap
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        status:
+          type: object
+          required: [conf_present, idmapd_active, method]
+          properties:
+            conf_present:
+              type: boolean
+            domain:
+              type: string
+            local_realms:
+              type: array
+              items:
+                type: string
+            method:
+              type: string
+              enum: [nsswitch, static, umich_ldap, unknown]
+            idmapd_active:
+              type: boolean
+            idmapd_unit_state:
+              type: string
 
     NfsProfile:
       description: Per ADR-0005. Singleton `default` in Phase 0.
@@ -2121,6 +2177,31 @@ paths:
                   - type: object
                     properties:
                       result: { $ref: '#/components/schemas/Group' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /nfs-idmap:
+    get:
+      tags: [nfs]
+      operationId: getNfsIdmap
+      summary: Get the observed NFS idmap daemon configuration (singleton).
+      description: >
+        Returns the singleton NfsIdmap object reflecting the current rpc.idmapd
+        configuration and daemon state. Observed-state segment is `nfs_idmap`;
+        public route is `/nfs-idmap` per ADR-0003.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/NfsIdmap' }
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
