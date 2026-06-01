@@ -1,20 +1,30 @@
 import type { Request, Response } from 'express';
 import type { OpenedStateStore, RevisionedValue } from '../../state/index.js';
 import { buildEnvelope } from '../envelope.js';
+import type { Warning } from '../envelope.js';
+import { mergeWarnings } from './merge-warnings.js';
 
 /**
  * Helper that wraps a value (or list) in the standard envelope and
  * sends it. Computes state_revision as the max revision in the
  * payload, or 0 if none.
  */
-export function sendOk<T>(req: Request, res: Response, result: T, revisions: number[] = []): void {
+export function sendOk<T>(
+  req: Request,
+  res: Response,
+  result: T,
+  revisions: number[] = [],
+  warnings: Warning[] = [],
+): void {
   const ctx = req.context!;
   const state_revision = revisions.length === 0 ? 0 : Math.max(...revisions);
+  const allWarnings = mergeWarnings(warnings, ctx.system_warnings ?? []);
   res.json(
     buildEnvelope({
       request_id: ctx.request_id,
       correlation_id: ctx.correlation_id,
       state_revision,
+      warnings: allWarnings,
       result,
     }),
   );

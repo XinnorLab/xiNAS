@@ -1,5 +1,6 @@
 import type { OpenedStateStore } from '../state/index.js';
 import type { ApiConfig, Role } from './config.js';
+import type { Warning } from './envelope.js';
 import type { HeartbeatTracker } from './heartbeat.js';
 
 /**
@@ -48,6 +49,8 @@ export interface RequestContext {
   client_type: 'rest';
   /** Set by handlers when they want the audit row to carry an operation_id (e.g. for tasks). */
   operation_id?: string;
+  /** Populated by systemWarningsMiddleware from HeartbeatTracker. */
+  system_warnings: Warning[];
 }
 
 /**

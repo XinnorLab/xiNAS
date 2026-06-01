@@ -66,7 +66,7 @@ export function tasksRouter(ctx: ApiContext): Router {
     sendOk(req, res, row.value, [row.revision]);
   });
 
-  r.post('/tasks/:id/cancel', executorUnavailable);
+  r.post('/tasks/:id/cancel', executorUnavailable(ctx));
 
   r.get('/tasks/:id/watch', (req, res) => {
     // Single-shot SSE: emit one snapshot event with the current state,

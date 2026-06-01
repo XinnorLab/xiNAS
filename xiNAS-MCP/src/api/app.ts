@@ -8,6 +8,7 @@ import { auditMiddleware } from './middleware/audit.js';
 import { authMiddleware } from './middleware/auth.js';
 import { errorMiddleware } from './middleware/error.js';
 import { requestIdMiddleware } from './middleware/request-id.js';
+import { systemWarningsMiddleware } from './middleware/system-warnings.js';
 import { auditRouter } from './routes/audit-query.js';
 import { configHistoryRouter } from './routes/config-history.js';
 import { eventsRouter } from './routes/events.js';
@@ -41,6 +42,7 @@ export function createApp(ctx: ApiContext): Express {
   app.use(auditMiddleware(ctx.state));
   app.use(express.json({ limit: '1mb' }));
   app.use(authMiddleware(ctx.config));
+  app.use(systemWarningsMiddleware(ctx)); // after auth (context populated), before routes
 
   // The agent's exclusive write surface. Mounted after authMiddleware so
   // req.context.role is resolved before requireInternalAgent (inside the
@@ -77,10 +79,10 @@ export function createApp(ctx: ApiContext): Express {
     '/config-history/rollback',
   ];
   for (const route of mutatingRoutes) {
-    v1.post(route, executorUnavailable);
-    v1.patch(route, executorUnavailable);
-    v1.put(route, executorUnavailable);
-    v1.delete(route, executorUnavailable);
+    v1.post(route, executorUnavailable(ctx));
+    v1.patch(route, executorUnavailable(ctx));
+    v1.put(route, executorUnavailable(ctx));
+    v1.delete(route, executorUnavailable(ctx));
   }
 
   // Catch-all for /api/v1/* paths that didn't match any router. Without

@@ -1,6 +1,7 @@
-import type { ErrorRequestHandler, Request, Response, NextFunction } from 'express';
-import { ApiException, errorStatus, makeError } from '../errors.js';
+import type { ErrorRequestHandler, NextFunction, Request, Response } from 'express';
 import { buildEnvelope } from '../envelope.js';
+import { ApiException, errorStatus, makeError } from '../errors.js';
+import { mergeWarnings } from '../handlers/merge-warnings.js';
 
 /**
  * Express body-parser (express.json) signals malformed JSON by
@@ -29,6 +30,7 @@ export function errorMiddleware(): ErrorRequestHandler {
           request_id: ctx?.request_id ?? 'unknown',
           correlation_id: ctx?.correlation_id ?? 'unknown',
           state_revision: 0,
+          warnings: mergeWarnings([], ctx?.system_warnings ?? []),
           errors: [makeError(err.code, err.message, err.details, err.remediation)],
           result: null,
         }),
@@ -42,6 +44,7 @@ export function errorMiddleware(): ErrorRequestHandler {
           request_id: ctx?.request_id ?? 'unknown',
           correlation_id: ctx?.correlation_id ?? 'unknown',
           state_revision: 0,
+          warnings: mergeWarnings([], ctx?.system_warnings ?? []),
           errors: [makeError('INVALID_ARGUMENT', `malformed JSON body: ${msg}`)],
           result: null,
         }),
@@ -54,6 +57,7 @@ export function errorMiddleware(): ErrorRequestHandler {
         request_id: ctx?.request_id ?? 'unknown',
         correlation_id: ctx?.correlation_id ?? 'unknown',
         state_revision: 0,
+        warnings: mergeWarnings([], ctx?.system_warnings ?? []),
         errors: [makeError('INTERNAL', msg)],
         result: null,
       }),
