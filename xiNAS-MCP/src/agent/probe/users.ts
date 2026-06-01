@@ -52,7 +52,12 @@ export function createUsersProbe(opts: UsersProbeOptions = {}): UsersProbe {
   const ef = opts.execFile ?? (nodeExecFile as unknown as ExecFileFn);
 
   async function runGetent(database: string): Promise<string> {
-    return execFilePromise(ef, 'getent', [database], {});
+    // 16 MiB: `getent passwd`/`getent group` against an LDAP/AD-backed NSS
+    // (which xiNAS supports) can far exceed Node's default 1 MiB maxBuffer
+    // on a large directory, which would reject with MAXBUFFER and fail the
+    // probe on exactly those deployments. lsblk/ip output is hardware-
+    // bounded so they keep the default.
+    return execFilePromise(ef, 'getent', [database], { maxBuffer: 16 * 1024 * 1024 });
   }
 
   return {

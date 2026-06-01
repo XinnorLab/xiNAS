@@ -75,15 +75,21 @@ export function startMonitor(opts: MonitorOptions): MonitorHandle {
           resolve();
           return;
         }
-        child.once('close', () => resolve());
-        child.kill('SIGTERM');
-        setTimeout(() => {
+        const killTimer = setTimeout(() => {
           try {
             child?.kill('SIGKILL');
           } catch {
             /* already dead */
           }
         }, 1000);
+        // Don't let the SIGKILL fallback keep the event loop alive after a
+        // clean SIGTERM close; clear it once the child is gone.
+        killTimer.unref?.();
+        child.once('close', () => {
+          clearTimeout(killTimer);
+          resolve();
+        });
+        child.kill('SIGTERM');
       });
       return stopPromise;
     },

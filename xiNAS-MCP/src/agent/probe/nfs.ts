@@ -19,6 +19,9 @@ import {
 
 export type SocketFactory = (path: string) => Socket;
 
+/** Max bytes buffered from the nfs-helper before a response is rejected. */
+const MAX_RESP_BYTES = 1024 * 1024; // 1 MiB
+
 interface NfsProbeOptions {
   helperSocket?: string;
   socketFactory?: SocketFactory;
@@ -51,6 +54,16 @@ export function createNfsProbe(opts: NfsProbeOptions = {}): NfsProbe {
       });
       conn.on('data', (chunk) => {
         buf += chunk.toString();
+        // Defense-in-depth: even though the helper is a trusted local
+        // process and the timeout bounds the wait, cap the buffer so a
+        // misbehaving/compromised helper streaming without a newline can't
+        // force a large allocation in the root agent.
+        if (buf.length > MAX_RESP_BYTES) {
+          clearTimeout(timer);
+          conn.destroy();
+          reject(new Error(`nfs-helper call '${op}' response exceeded ${MAX_RESP_BYTES} bytes`));
+          return;
+        }
         const nl = buf.indexOf('\n');
         if (nl >= 0) {
           clearTimeout(timer);
