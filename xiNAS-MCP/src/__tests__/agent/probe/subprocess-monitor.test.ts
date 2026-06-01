@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { type MonitorHandle, startMonitor } from './subprocess-monitor.js';
+import { type MonitorHandle, startMonitor } from '../../../agent/probe/subprocess-monitor.js';
 
 describe('startMonitor', () => {
   const handles: MonitorHandle[] = [];
@@ -38,7 +38,11 @@ describe('startMonitor', () => {
       backoffMs: [50, 50, 50],
     });
     handles.push(handle);
-    await new Promise((r) => setTimeout(r, 500));
+    // Generous window: needs >=2 real `node` cold-starts plus 50ms backoffs.
+    // 500ms is borderline (~507ms observed) and flakes under full-suite
+    // parallel CPU load; 1500ms gives comfortable margin without slowing
+    // the suite meaningfully (the assertion fires as soon as it's reached).
+    await new Promise((r) => setTimeout(r, 1500));
     expect(restartCount).toBeGreaterThanOrEqual(2);
   });
 

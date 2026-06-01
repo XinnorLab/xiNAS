@@ -4,13 +4,22 @@
  * Enforces the rule from docs/control-path/xinas-agent-s0s1-spec.md
  * §"Code layout — pure vs. probe boundary":
  *
- *   src/agent/probe/*  must NOT be imported from outside src/agent/.
+ *   src/agent/probe/*  must NOT be imported from PRODUCTION code outside
+ *   src/agent/.
+ *
+ * The boundary protects the production dependency graph — the pure/api
+ * layers must never couple to the privileged probe code. Test files are
+ * exempt: a probe's own unit test (which lives in src/__tests__/ by repo
+ * convention) legitimately imports the probe to exercise it, and test
+ * code is never part of the shipped dependency graph. So `.test.ts` files
+ * are excluded from the scan; everything else outside src/agent/ is checked.
  *
  * The biome noRestrictedImports rule (biome 1.9.4) only matches exact
  * specifiers, so sub-path imports like '../../agent/probe/disk.js' slip
- * past it. This test is the real gate: it scans every .ts file under
- * src/ that is NOT inside src/agent/ and fails loudly if any such file
- * contains a static or dynamic import whose specifier contains 'agent/probe'.
+ * past it. This test is the real gate: it scans every non-test .ts file
+ * under src/ that is NOT inside src/agent/ and fails loudly if any such
+ * file contains a static or dynamic import whose specifier contains
+ * 'agent/probe'.
  *
  * The test is vacuously green until agent code actually lands; once it
  * does, any attempt to break the boundary is caught immediately.
@@ -57,8 +66,13 @@ describe('probe-boundary', () => {
 
     const allFiles = collectTsFiles(srcDir);
 
-    // Keep only files that are NOT under src/agent/
-    const outsideAgent = allFiles.filter((f) => !f.startsWith(agentDir + '/') && f !== agentDir);
+    // Keep only PRODUCTION files that are NOT under src/agent/.
+    // Test files (*.test.ts) are exempt: a probe's own unit test imports
+    // the probe to exercise it, and tests are not part of the shipped
+    // dependency graph the boundary protects.
+    const outsideAgent = allFiles.filter(
+      (f) => !f.startsWith(agentDir + '/') && f !== agentDir && !f.endsWith('.test.ts'),
+    );
 
     const violations: string[] = [];
 
