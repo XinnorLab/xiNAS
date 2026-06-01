@@ -115,10 +115,7 @@ export function observedHandler(ctx: ApiContext) {
       for (let i = 0; i < deltas.length; i++) {
         const delta = deltas[i]!;
         if (!isValidObservedId(delta.id)) {
-          throw new ApiException(
-            'INVALID_ARGUMENT',
-            `delta[${i}]: invalid id '${delta.id}'`,
-          );
+          throw new ApiException('INVALID_ARGUMENT', `delta[${i}]: invalid id '${delta.id}'`);
         }
       }
 
