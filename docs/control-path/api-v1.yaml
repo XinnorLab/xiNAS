@@ -59,6 +59,10 @@ tags:
     description: Support bundle generation.
   - name: health
     description: Health profiles and check results.
+  - name: users
+    description: Observed local and NSS-resolved user accounts.
+  - name: groups
+    description: Observed local and NSS-resolved groups.
 
 # ---------------------------------------------------------------------------
 # Security
@@ -979,6 +983,78 @@ components:
           type: array
           items: { type: string }
 
+    User:
+      type: object
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind:
+          type: string
+          const: User
+        id:
+          type: string
+          description: "Decimal uid as string."
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        spec:
+          type: object
+          required: [name, uid, gid]
+          properties:
+            name:
+              type: string
+            uid:
+              type: integer
+            gid:
+              type: integer
+            gecos:
+              type: string
+            home:
+              type: string
+            shell:
+              type: string
+        status:
+          type: object
+          required: [resolvable, source]
+          properties:
+            resolvable:
+              type: boolean
+            source:
+              type: string
+              enum: [local, nss]
+
+    Group:
+      type: object
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind:
+          type: string
+          const: Group
+        id:
+          type: string
+          description: "Decimal gid as string."
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        spec:
+          type: object
+          required: [name, gid]
+          properties:
+            name:
+              type: string
+            gid:
+              type: integer
+            members:
+              type: array
+              items:
+                type: string
+        status:
+          type: object
+          required: [resolvable, source]
+          properties:
+            resolvable:
+              type: boolean
+            source:
+              type: string
+              enum: [local, nss]
+
   # -------------------------------------------------------------------------
   # Reusable responses
   # -------------------------------------------------------------------------
@@ -1025,6 +1101,11 @@ components:
           schema: { $ref: '#/components/schemas/Envelope' }
     Internal:
       description: '`INTERNAL` — server-side failure (incl. `EXECUTOR_UNAVAILABLE`, `AUDIT_WRITE_FAILED`).'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    Unauthorized:
+      description: '`UNAUTHENTICATED` — missing or invalid bearer token or peer credentials.'
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Envelope' }
@@ -1921,3 +2002,126 @@ paths:
               schema: { type: string, format: binary }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # Users / Groups (observed state from E8 collector)
+  # =========================================================================
+  /users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: List all observed local and NSS-resolved users.
+      description: >
+        Returns all User objects observed by the E8 users collector.
+        Filter by source to narrow to local (/etc/passwd) or NSS-resolved entries.
+      parameters:
+        - name: source
+          in: query
+          schema:
+            type: string
+            enum: [local, nss, all]
+            default: all
+        - $ref: '#/components/parameters/QueryLimit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/User' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /users/{uid}:
+    get:
+      tags: [users]
+      operationId: getUser
+      summary: Get a single user by numeric uid.
+      description: Returns the User object for the given numeric uid, or 404 if not found.
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/User' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /groups:
+    get:
+      tags: [groups]
+      operationId: listGroups
+      summary: List all observed local and NSS-resolved groups.
+      description: >
+        Returns all Group objects observed by the E8 users collector.
+        Filter by source to narrow to local (/etc/group) or NSS-resolved entries.
+      parameters:
+        - name: source
+          in: query
+          schema:
+            type: string
+            enum: [local, nss, all]
+            default: all
+        - $ref: '#/components/parameters/QueryLimit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/Group' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /groups/{gid}:
+    get:
+      tags: [groups]
+      operationId: getGroup
+      summary: Get a single group by numeric gid.
+      description: Returns the Group object for the given numeric gid, or 404 if not found.
+      parameters:
+        - name: gid
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/Group' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
