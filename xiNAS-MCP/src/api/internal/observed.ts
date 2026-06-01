@@ -1,0 +1,136 @@
+import type { NextFunction, Request, Response } from 'express';
+import type { Kind } from '../../agent/collectors/base.js';
+import { observedSegment } from '../../agent/collectors/base.js';
+import type { ApiContext } from '../context.js';
+import { ApiException } from '../errors.js';
+import { sendOk } from '../handlers/reads.js';
+
+interface ObservationDeltaBody {
+  kind: Kind;
+  id: string;
+  op: 'upsert' | 'delete';
+  value?: Record<string, unknown>;
+}
+
+interface ObservedBody {
+  observed_at: string;
+  controller_id: string;
+  deltas: ObservationDeltaBody[];
+  complete_snapshots: Kind[];
+}
+
+/**
+ * POST /internal/v1/observed — the xinas-agent's exclusive write path
+ * for observed state (spec §"Flow A"). Gated by requireInternalAgent
+ * on the parent sub-router (H2).
+ *
+ * Validates the request's controller_id matches the api's. Then opens a
+ * single KvTransaction that (1) applies every delta (upsert → tx.put,
+ * delete → tx.delete) and (2) for each kind in complete_snapshots,
+ * enumerates the current keys under that kind's prefix and deletes any
+ * not present in the batch's upserts (reconcile). Applies and reconcile
+ * deletes commit atomically. Finally notifies the heartbeat tracker that
+ * an observation push happened (does NOT update heartbeat state).
+ */
+export function observedHandler(ctx: ApiContext) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      const body = req.body as ObservedBody;
+
+      // Validate controller_id match.
+      if (body.controller_id !== ctx.config.controller_id) {
+        throw new ApiException(
+          'INVALID_ARGUMENT',
+          `controller_id mismatch: request has '${body.controller_id}', ` +
+            `api is configured with '${ctx.config.controller_id}'`,
+        );
+      }
+
+      const deltas = body.deltas ?? [];
+      const completeSnapshots: Kind[] = body.complete_snapshots ?? [];
+
+      // Per-delta schema validation BEFORE the transaction (fail-closed),
+      // but only when validators are wired into the context. Each upsert
+      // delta's `value` is validated against its kind's JSON Schema (the
+      // api-v1.yaml component schemas Phase G adds, compiled once at startup
+      // and keyed by kind). On the first failure, reject the WHOLE batch —
+      // nothing is written — with INVALID_ARGUMENT naming the failing delta's
+      // index + the Ajv error, so a malformed agent push can never poison
+      // observed state. Delete deltas carry no value and skip schema
+      // validation (only their key shape matters). This is the safety net
+      // that also catches a delta with an unknown/mis-cased kind (no schema →
+      // reject). When ctx.observedSchemas is absent (the H3 unit context, and
+      // until H6/J3 wire it), the loop is skipped entirely.
+      if (ctx.observedSchemas) {
+        for (let i = 0; i < deltas.length; i++) {
+          const delta = deltas[i]!;
+          if (delta.op !== 'upsert') continue;
+          const validate = ctx.observedSchemas[delta.kind];
+          if (!validate) {
+            throw new ApiException('INVALID_ARGUMENT', `delta[${i}]: unknown kind '${delta.kind}'`);
+          }
+          if (!validate(delta.value)) {
+            throw new ApiException(
+              'INVALID_ARGUMENT',
+              `delta[${i}] (kind=${delta.kind}, id=${delta.id}) failed schema: ` +
+                `${ctx.ajv?.errorsText(validate.errors) ?? 'invalid'}`,
+            );
+          }
+        }
+      }
+
+      let accepted = 0;
+      let deletedByReconcile = 0;
+      const revisions: number[] = [];
+
+      // Derive the KV path segment through observedSegment(kind) (base.ts) so
+      // writer and reader never disagree on singletons (NfsIdmap → nfs_idmap,
+      // inventory/managed_files stay lowercase). H3 stays kind-agnostic; no
+      // per-kind special-casing (the ExportRule→Share fold-in is a read-time
+      // join in I6, not a write-time merge here).
+      ctx.state.kv.transaction((tx) => {
+        // 1. Apply all deltas.
+        for (const delta of deltas) {
+          const key = `/xinas/v1/observed/${observedSegment(delta.kind)}/${delta.id}`;
+          if (delta.op === 'upsert') {
+            const result = tx.put(key, delta.value ?? {});
+            // No expected_revision → put always commits (ok: true). Guard
+            // anyway so a future CAS variant can't silently push undefined.
+            if (result.ok) revisions.push(result.value.revision);
+            accepted++;
+          } else if (delta.op === 'delete') {
+            tx.delete(key);
+            accepted++;
+          }
+        }
+
+        // 2. Reconcile complete snapshots: delete keys under the prefix
+        //    that were NOT in the batch.
+        const upsertedKeys = new Set(
+          deltas
+            .filter((d) => d.op === 'upsert')
+            .map((d) => `/xinas/v1/observed/${observedSegment(d.kind)}/${d.id}`),
+        );
+
+        for (const kind of completeSnapshots) {
+          const prefix = `/xinas/v1/observed/${observedSegment(kind)}/`;
+          const current = tx.list({ prefix });
+          for (const row of current) {
+            if (!upsertedKeys.has(row.key)) {
+              tx.delete(row.key);
+              deletedByReconcile++;
+            }
+          }
+        }
+      });
+
+      // 3. Notify the tracker that an observation push happened.
+      ctx.tracker?.recordObservationPush(new Date());
+
+      const stateRevision = revisions.length > 0 ? Math.max(...revisions) : 0;
+      sendOk(req, res, { accepted, deleted_by_reconcile: deletedByReconcile }, [stateRevision]);
+    } catch (err) {
+      next(err);
+    }
+  };
+}
