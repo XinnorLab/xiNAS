@@ -575,6 +575,30 @@ components:
             effective_mount_options:
               type: array
               items: { type: string }
+            currently_mounted:
+              type: boolean
+            mount_options:
+              type: array
+              items:
+                type: string
+            mount_unit_name:
+              type: string
+              description: "Name of the .mount unit, e.g. srv-share01.mount"
+            mount_unit_enabled:
+              type: boolean
+              description: "From `systemctl is-enabled` (B4). Whether the .mount unit is enabled (WantedBy=local-fs.target)."
+            mount_unit_state:
+              type: string
+              enum: [active, inactive, failed, activating, deactivating]
+              description: "systemd ActiveState of the .mount unit, from the dbus cross-reference in the Filesystem collector (E4). Distinct from mount_unit_enabled (enablement)."
+            owner_uid:
+              type: integer
+            owner_gid:
+              type: integer
+            owner_user_name:
+              type: [string, "null"]
+            owner_group_name:
+              type: [string, "null"]
 
     Share:
       type: object
@@ -627,6 +651,11 @@ components:
                 $ref: '#/components/schemas/NfsSession'
             effective_options:
               type: string
+            exports:
+              type: array
+              items:
+                $ref: '#/components/schemas/ExportRule'
+              description: "Per-host export entries observed from /etc/exports.d/ or helper output."
 
     ShareClient:
       type: object
@@ -711,6 +740,25 @@ components:
               type: boolean
             idmapd_unit_state:
               type: string
+
+    ExportRule:
+      type: object
+      required: [host_pattern, options]
+      properties:
+        host_pattern:
+          type: string
+          description: "Matches /etc/exports host field (CIDR, hostname, wildcard, netgroup)."
+        options:
+          type: array
+          items:
+            type: string
+        squash_mode:
+          type: string
+          enum: [root_squash, no_root_squash, all_squash]
+        anon_uid:
+          type: integer
+        anon_gid:
+          type: integer
 
     NfsProfile:
       description: Per ADR-0005. Singleton `default` in Phase 0.
