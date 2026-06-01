@@ -150,6 +150,51 @@ describe('POST /internal/v1/observed', () => {
     expect(res.status).toBe(401);
   });
 
+  it('rejects a delta with a traversal-looking id (../../events/x) with 400 INVALID_ARGUMENT', async () => {
+    const body = {
+      observed_at: new Date().toISOString(),
+      controller_id: CONTROLLER_ID,
+      deltas: [{ kind: 'Disk', id: '../../events/x', op: 'upsert', value: {} }],
+      complete_snapshots: [],
+    };
+
+    const res = await request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0]?.code).toBe('INVALID_ARGUMENT');
+    expect(res.body.errors[0]?.message).toMatch(/invalid id/);
+  });
+
+  it('accepts a delta with a colon+slash id (NfsSession 10.1.2.3:/srv/share01)', async () => {
+    // ctx.observedSchemas is unset in the test context → schema validation is
+    // skipped; only the id-shape check applies. The NfsSession kind key is
+    // 'nfs_session' via observedSegment, but the id itself is the address.
+    const body = {
+      observed_at: new Date().toISOString(),
+      controller_id: CONTROLLER_ID,
+      deltas: [
+        {
+          kind: 'NfsSession',
+          id: '10.1.2.3:/srv/share01',
+          op: 'upsert',
+          value: { client_addr: '10.1.2.3' },
+        },
+      ],
+      complete_snapshots: [],
+    };
+
+    const res = await request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.accepted).toBe(1);
+  });
+
   it('calls recordObservationPush on the tracker', async () => {
     let pushRecorded = false;
     const origRecord = setup.tracker.recordObservationPush.bind(setup.tracker);

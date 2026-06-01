@@ -1,9 +1,11 @@
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HeartbeatTracker } from '../../api/heartbeat.js';
+import { mergeWarnings } from '../../api/handlers/merge-warnings.js';
 import { type TestSetup, buildTestApp, seedCluster, seedNode } from './_helpers.js';
 
 const CONTROLLER_ID = '00000000-0000-0000-0000-0000000000aa';
+const AGENT_TOKEN = 'agent-tok-sw-h5';
 
 /**
  * Build a test app with a HeartbeatTracker that is already in the
@@ -18,6 +20,9 @@ async function buildDegradedApp(): Promise<
   const setup = await buildTestApp();
   seedCluster(setup.state);
   seedNode(setup.state);
+
+  // Wire an agent token so the /internal/v1/observed test can authenticate.
+  setup.config.tokens[AGENT_TOKEN] = { principal: 'agent:root', role: 'internal_agent' };
 
   const tracker = new HeartbeatTracker({
     intervalMs: 5_000,
@@ -43,6 +48,20 @@ async function buildDegradedApp(): Promise<
     },
   };
 }
+
+describe('mergeWarnings unit', () => {
+  it('deduplicates by code, keeping first occurrence', () => {
+    const handler = [{ code: 'FOO', message: 'handler foo' }];
+    const system = [
+      { code: 'FOO', message: 'system foo (duplicate)' },
+      { code: 'BAR', message: 'system bar' },
+    ];
+    const result = mergeWarnings(handler, system);
+    expect(result.map((w) => w.code)).toEqual(['FOO', 'BAR']);
+    // First occurrence of FOO is from the handler.
+    expect(result.find((w) => w.code === 'FOO')?.message).toBe('handler foo');
+  });
+});
 
 describe('systemWarningsMiddleware + mergeWarnings', () => {
   let setup: TestSetup & { cleanup(): Promise<void>; tracker: HeartbeatTracker };
@@ -91,5 +110,27 @@ describe('systemWarningsMiddleware + mergeWarnings', () => {
 
     const warnings = res.body.warnings as Array<{ code: string }>;
     expect(warnings.every((w) => w.code !== 'EXECUTOR_DEGRADED')).toBe(true);
+  });
+
+  it('degraded tracker: POST /internal/v1/observed does NOT receive EXECUTOR_DEGRADED warning', async () => {
+    // The agent's own observation push goes to /internal/v1/observed which is
+    // mounted BEFORE the /api/v1 sub-router that carries systemWarningsMiddleware.
+    // This verifies the middleware is scoped only to /api/v1/* (Fix H-review-2).
+    const body = {
+      observed_at: new Date().toISOString(),
+      controller_id: CONTROLLER_ID,
+      deltas: [],
+      complete_snapshots: [],
+    };
+
+    const res = await request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send(body);
+
+    // The response must be 200 (no auth error) and must carry no EXECUTOR_DEGRADED.
+    expect(res.status).toBe(200);
+    const warnings = (res.body.warnings ?? []) as Array<{ code: string }>;
+    expect(warnings.some((w) => w.code === 'EXECUTOR_DEGRADED')).toBe(false);
   });
 });

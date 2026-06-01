@@ -20,6 +20,36 @@ interface ObservedBody {
 }
 
 /**
+ * Validates an observed-delta id before it is embedded in a KV key.
+ *
+ * Rejects ids that could produce path-traversal-looking or malformed keys:
+ *   - empty string or whitespace-only
+ *   - any control character (charCode < 0x20 or === 0x7f)
+ *   - a `.` or `..` path segment (split on `/`)
+ *   - leading or trailing `/`, or consecutive `//` (empty segment)
+ *
+ * Allows `/` and `:` within the id — legitimate ids contain them (e.g.
+ * NfsSession id `10.1.2.3:/srv/share01`, mount paths like `/srv/share`).
+ *
+ * Full inbound-delta schema validation (kind + value shape) is wired in
+ * Phase J (J3). Until then this id-shape check is the sole inbound key
+ * guard running on every write, schema-validation is conditional on
+ * ctx.observedSchemas being present (see loop below).
+ */
+export function isValidObservedId(id: string): boolean {
+  if (id.trim().length === 0) return false;
+  if (id.startsWith('/') || id.endsWith('/') || id.includes('//')) return false;
+  for (let i = 0; i < id.length; i++) {
+    const c = id.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return false;
+  }
+  for (const segment of id.split('/')) {
+    if (segment === '..' || segment === '.') return false;
+  }
+  return true;
+}
+
+/**
  * POST /internal/v1/observed — the xinas-agent's exclusive write path
  * for observed state (spec §"Flow A"). Gated by requireInternalAgent
  * on the parent sub-router (H2).
@@ -76,6 +106,19 @@ export function observedHandler(ctx: ApiContext) {
                 `${ctx.ajv?.errorsText(validate.errors) ?? 'invalid'}`,
             );
           }
+        }
+      }
+
+      // Id-shape check BEFORE the transaction — reject any delta whose id could
+      // produce a path-traversal-looking or malformed KV key. This applies to
+      // both upsert and delete deltas since both construct a key from the id.
+      for (let i = 0; i < deltas.length; i++) {
+        const delta = deltas[i]!;
+        if (!isValidObservedId(delta.id)) {
+          throw new ApiException(
+            'INVALID_ARGUMENT',
+            `delta[${i}]: invalid id '${delta.id}'`,
+          );
         }
       }
 

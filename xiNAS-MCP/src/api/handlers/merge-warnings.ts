@@ -7,9 +7,17 @@ import type { Warning } from '../envelope.js';
  *
  * System warnings (e.g., EXECUTOR_DEGRADED) appear after handler
  * warnings so the handler's intent is first in the array.
+ *
+ * De-duplicates by `code`, keeping the first occurrence of each code
+ * so that a warning emitted by both a handler and the middleware
+ * appears only once in the envelope.
  */
 export function mergeWarnings(handlerWarnings: Warning[], systemWarnings: Warning[]): Warning[] {
-  if (systemWarnings.length === 0) return handlerWarnings;
-  if (handlerWarnings.length === 0) return systemWarnings;
-  return [...handlerWarnings, ...systemWarnings];
+  const combined = [...handlerWarnings, ...systemWarnings];
+  const seen = new Set<string>();
+  return combined.filter((w) => {
+    if (seen.has(w.code)) return false;
+    seen.add(w.code);
+    return true;
+  });
 }
