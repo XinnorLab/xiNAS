@@ -100,4 +100,91 @@ describe('CollectorRegistry', () => {
     expect(kinds).toContain('User');
     expect(kinds).toContain('Group');
   });
+
+  it('initialSweep: one failing collector does not blind the fleet', async () => {
+    const failing: Collector = {
+      kind: 'NfsSession',
+      initialSweep: async () => {
+        throw new Error('nfs-helper down');
+      },
+      start: async () => {},
+      stop: async () => {},
+      health: () => ({ state: 'error', reason: 'nfs-helper down' }),
+    };
+    registry.register(makeMockCollector('Disk'));
+    registry.register(failing);
+    registry.register(makeMockCollector('Group'));
+    const deltas = await registry.initialSweep();
+    // Healthy collectors' deltas still returned despite the failing one.
+    const kinds = deltas.map((d) => d.kind);
+    expect(kinds).toContain('Disk');
+    expect(kinds).toContain('Group');
+    expect(kinds).not.toContain('NfsSession');
+    // The failing collector still surfaces its error via healthSnapshot.
+    expect(registry.healthSnapshot()['NfsSession']).toBe('error: nfs-helper down');
+  });
+
+  it('stop: a failing stop() does not prevent stopping the rest', async () => {
+    const stopSpy = vi.fn().mockResolvedValue(undefined);
+    const failing: Collector = {
+      kind: 'NetworkInterface',
+      initialSweep: async () => [],
+      start: async () => {},
+      stop: async () => {
+        throw new Error('stop blew up');
+      },
+      health: () => ({ state: 'running' }),
+    };
+    const healthy: Collector = {
+      kind: 'Disk',
+      initialSweep: async () => [],
+      start: async () => {},
+      stop: stopSpy,
+      health: () => ({ state: 'running' }),
+    };
+    registry.register(failing);
+    registry.register(healthy);
+    await expect(registry.stop()).resolves.toBeUndefined();
+    // The healthy collector was still stopped (no leaked subscriptions).
+    expect(stopSpy).toHaveBeenCalledOnce();
+  });
+
+  it('start: a failing start() does not abort the fleet', async () => {
+    const startSpy = vi.fn().mockResolvedValue(undefined);
+    const failing: Collector = {
+      kind: 'NetworkInterface',
+      initialSweep: async () => [],
+      start: async () => {
+        throw new Error('start blew up');
+      },
+      stop: async () => {},
+      health: () => ({ state: 'running' }),
+    };
+    const healthy: Collector = {
+      kind: 'Disk',
+      initialSweep: async () => [],
+      start: startSpy,
+      stop: async () => {},
+      health: () => ({ state: 'running' }),
+    };
+    registry.register(failing);
+    registry.register(healthy);
+    await expect(registry.start(() => {})).resolves.toBeUndefined();
+    expect(startSpy).toHaveBeenCalledOnce();
+  });
+
+  it('healthSnapshot: a collector advertising healthKinds reports each kind', () => {
+    const usersLike: Collector = {
+      kind: 'User',
+      initialSweep: async () => [],
+      start: async () => {},
+      stop: async () => {},
+      health: () => ({ state: 'error', reason: 'getent failed' }),
+      healthKinds: () => ['User', 'Group'],
+    };
+    registry.register(usersLike);
+    const snap = registry.healthSnapshot();
+    expect(snap['User']).toBe('error: getent failed');
+    expect(snap['Group']).toBe('error: getent failed');
+  });
 });

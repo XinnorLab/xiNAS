@@ -56,6 +56,14 @@ export interface Collector<K extends Kind = Kind> {
   pollIntervalMs?: number;
   /** Current collector health for surfacing in agent.health. */
   health(): { state: 'running' | 'stubbed' | 'error'; reason?: string };
+  /**
+   * The observed kinds whose health this collector represents in
+   * agent.health. Defaults to [kind]. A collector that emits more than one
+   * kind (e.g. Users emits User + Group) returns all of them so each gets
+   * its own row in healthSnapshot(), matching the spec's collectors map.
+   * Internal-only kinds (e.g. ExportRule) are intentionally omitted.
+   */
+  healthKinds?(): Kind[];
 }
 
 /** Serialises a health() result to the string format returned by agent.health. */
@@ -77,20 +85,39 @@ export class CollectorRegistry {
     this.collectors.push(collector);
   }
 
-  /** Returns deltas from every registered collector's initialSweep(). */
+  /**
+   * Returns deltas from every registered collector's initialSweep().
+   * Uses allSettled so one failing collector (e.g. nfs-helper down) cannot
+   * blind the whole fleet: a rejected collector has already set its own
+   * health=error before rethrowing, so healthSnapshot() still surfaces it,
+   * while every healthy collector's deltas are returned. Per spec, one
+   * collector in error degrades the node — it does not lose all data.
+   */
   async initialSweep(): Promise<ObservationDelta[]> {
-    const results = await Promise.all(this.collectors.map((c) => c.initialSweep()));
-    return results.flat();
+    const results = await Promise.allSettled(this.collectors.map((c) => c.initialSweep()));
+    const deltas: ObservationDelta[] = [];
+    for (const r of results) {
+      if (r.status === 'fulfilled') deltas.push(...r.value);
+    }
+    return deltas;
   }
 
-  /** Starts all collectors, routing their emits through the shared emit callback. */
+  /**
+   * Starts all collectors, routing their emits through the shared emit
+   * callback. allSettled so a failing start() doesn't abort the fleet and
+   * leave later collectors unsubscribed.
+   */
   async start(emit: (delta: ObservationDelta) => void): Promise<void> {
-    await Promise.all(this.collectors.map((c) => c.start(emit)));
+    await Promise.allSettled(this.collectors.map((c) => c.start(emit)));
   }
 
-  /** Stops all collectors. */
+  /**
+   * Stops all collectors. allSettled is critical here: a failed stop() on
+   * one collector must not prevent stopping the rest, or their event
+   * subprocesses (udevadm/ip monitor) would survive shutdown.
+   */
   async stop(): Promise<void> {
-    await Promise.all(this.collectors.map((c) => c.stop()));
+    await Promise.allSettled(this.collectors.map((c) => c.stop()));
   }
 
   /**
@@ -100,7 +127,11 @@ export class CollectorRegistry {
   healthSnapshot(): Record<string, string> {
     const out: Record<string, string> = {};
     for (const col of this.collectors) {
-      out[col.kind] = healthString(col.health());
+      const h = healthString(col.health());
+      const kinds = col.healthKinds ? col.healthKinds() : [col.kind];
+      for (const k of kinds) {
+        out[k] = h;
+      }
     }
     return out;
   }

@@ -1,4 +1,4 @@
-import type { Collector, ObservationDelta } from './base.js';
+import type { Collector, Kind, ObservationDelta } from './base.js';
 
 interface PasswdEntry {
   uid: number;
@@ -92,6 +92,11 @@ export class UsersCollector implements Collector<'User'> {
 
   health(): { state: 'running' | 'stubbed' | 'error'; reason?: string } {
     return this._health;
+  }
+
+  /** This one collector observes both User and Group; report health for both. */
+  healthKinds(): Kind[] {
+    return ['User', 'Group'];
   }
 
   private async _buildDeltas(): Promise<ObservationDelta[]> {
