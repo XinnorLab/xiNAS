@@ -465,6 +465,59 @@ components:
               type: object
               additionalProperties:
                 type: string
+            agent:
+              type: object
+              required: [state, version]
+              description: "Agent-health surface populated by the HeartbeatTracker."
+              properties:
+                state:
+                  type: string
+                  enum: [healthy, degraded, offline]
+                last_heartbeat_at:
+                  type: [string, "null"]
+                  format: date-time
+                last_observed_push_at:
+                  type: [string, "null"]
+                  format: date-time
+                version:
+                  type: string
+                collectors:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: "Per-collector state: running | stubbed | error: <reason>"
+
+    SystemdUnit:
+      type: object
+      required: [kind, id, metadata, status]
+      description: "Observed systemd unit state collected by the E7 collector. Stored in the state-store only; no public REST path in this release."
+      properties:
+        kind:
+          type: string
+          const: SystemdUnit
+        id:
+          type: string
+          description: "Unit name including suffix, e.g. nfs-server.service or srv-share01.mount."
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        status:
+          type: object
+          required: [load_state, active_state, sub_state, observed_at]
+          properties:
+            load_state:
+              type: string
+              description: "loaded | not-found | error | masked"
+            active_state:
+              type: string
+              description: "active | reloading | inactive | failed | activating | deactivating"
+            sub_state:
+              type: string
+            unit_file_state:
+              type: string
+              description: "enabled | disabled | static | masked | ..."
+            observed_at:
+              type: string
+              format: date-time
 
     Disk:
       type: object
