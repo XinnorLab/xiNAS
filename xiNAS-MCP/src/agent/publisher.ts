@@ -76,7 +76,7 @@ export class Publisher {
   }
 
   async #doFlush(completeSnapshots: Kind[]): Promise<void> {
-    if (this.#queue.length === 0) return;
+    if (this.#queue.length === 0 && completeSnapshots.length === 0) return;
 
     const batch = this.#queue.splice(0);
     const kindsInBatch = new Set(batch.map((d) => d.kind));
