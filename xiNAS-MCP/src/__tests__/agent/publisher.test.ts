@@ -99,4 +99,30 @@ describe('Publisher — core enqueue + flush', () => {
     const body = receivedBodies[0] as { complete_snapshots: string[] };
     expect(body.complete_snapshots).toEqual(['Disk']);
   });
+
+  it('early-flushes when the batch byte ceiling is crossed (not just the count)', async () => {
+    const pub = new Publisher({
+      apiSocketPath: socketPath,
+      agentToken: 'test-agent-token',
+      controllerId: '00000000-0000-0000-0000-0000000000aa',
+      maxBatchSize: 10_000, // high, so the entry-count ceiling never fires
+      maxBatchBytes: 300, // low, so the byte ceiling fires first
+    });
+
+    // Each delta serializes to well over 100 bytes; a few cross 300 and
+    // trigger the fire-and-forget early flush inside enqueue().
+    for (let i = 0; i < 4; i++) {
+      pub.enqueue({
+        kind: 'Disk',
+        id: `nvme${i}n1`,
+        op: 'upsert',
+        value: { padding: 'x'.repeat(80) },
+      });
+    }
+
+    // Let the fire-and-forget early flush land on the UDS server.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(receivedBodies.length).toBeGreaterThanOrEqual(1);
+    expect((receivedBodies[0] as { deltas: unknown[] }).deltas.length).toBeGreaterThan(0);
+  });
 });

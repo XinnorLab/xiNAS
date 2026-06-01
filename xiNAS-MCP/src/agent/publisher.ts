@@ -36,6 +36,8 @@ interface PostResult {
 export class Publisher {
   readonly #opts: Required<PublisherOptions>;
   #queue: ObservationDelta[] = [];
+  /** Running serialized-byte estimate of #queue, for the maxBatchBytes cap. */
+  #queueBytes = 0;
 
   /** Public so collectors can read and tests can inspect. */
   readonly pendingReconcile: Set<Kind> = new Set();
@@ -52,9 +54,17 @@ export class Publisher {
 
   enqueue(delta: ObservationDelta): void {
     this.#queue.push(delta);
-    // Early flush if we've hit the batch ceiling.
-    if (this.#queue.length >= this.#opts.maxBatchSize) {
-      void this.flush();
+    this.#queueBytes += Buffer.byteLength(JSON.stringify(delta));
+    // Early flush at EITHER ceiling (spec: 256 entries or 1 MB). The
+    // .catch keeps this fire-and-forget flush from ever surfacing an
+    // unhandled rejection — #doFlush is written to resolve on every
+    // error path (5xx/network → pendingReconcile), but this guards a
+    // future change that could let it throw (e.g. a circular value).
+    if (
+      this.#queue.length >= this.#opts.maxBatchSize ||
+      this.#queueBytes >= this.#opts.maxBatchBytes
+    ) {
+      void this.flush().catch(() => {});
     }
   }
 
@@ -79,6 +89,7 @@ export class Publisher {
     if (this.#queue.length === 0 && completeSnapshots.length === 0) return;
 
     const batch = this.#queue.splice(0);
+    this.#queueBytes = 0;
     const kindsInBatch = new Set(batch.map((d) => d.kind));
 
     const body = JSON.stringify({
