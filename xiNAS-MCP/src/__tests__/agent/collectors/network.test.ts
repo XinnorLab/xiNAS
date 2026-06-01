@@ -23,20 +23,18 @@ function makeFakeNetworkProbe(
         },
       })),
     ),
-    startEventStream: vi
-      .fn()
-      .mockImplementation(
-        (
-          onEvent: (event: {
-            id: string;
-            op: 'upsert' | 'delete';
-            attrs: Record<string, unknown>;
-          }) => void,
-        ) => {
-          _onEvent = onEvent;
-          return { stop: vi.fn() };
-        },
-      ),
+    startEventStream: vi.fn().mockImplementation(
+      (
+        onEvent: (event: {
+          id: string;
+          op: 'upsert' | 'delete';
+          attrs: Record<string, unknown>;
+        }) => void,
+      ) => {
+        _onEvent = onEvent;
+        return { stop: vi.fn() };
+      },
+    ),
     _fireEvent(id: string, op: 'upsert' | 'delete', attrs: Record<string, unknown> = {}) {
       _onEvent?.({ id, op, attrs });
     },
