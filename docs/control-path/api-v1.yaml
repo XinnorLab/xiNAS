@@ -533,7 +533,7 @@ components:
               type: string
         status:
           type: object
-          required: [device_path, serial, model, capacity_bytes, safe_for_use]
+          required: [device_path, serial, model, capacity_bytes, safe_for_use, observed_at]
           properties:
             device_path: { type: string }
             serial: { type: string }
@@ -554,6 +554,10 @@ components:
                 array_id: { type: string }
                 role: { type: string, enum: [data, parity, spare] }
             safe_for_use: { type: boolean }
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     XiraidArray:
       type: object
@@ -580,7 +584,7 @@ components:
               items: { type: string }
         status:
           type: object
-          required: [state, volume_path]
+          required: [state, volume_path, observed_at]
           properties:
             state:
               type: string
@@ -589,6 +593,10 @@ components:
             rebuild_progress_pct: { type: [integer, "null"] }
             check_progress_pct: { type: [integer, "null"] }
             usable_capacity_bytes: { type: integer, format: int64 }
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     Filesystem:
       type: object
@@ -618,7 +626,7 @@ components:
                 mode: { type: string }
         status:
           type: object
-          required: [mounted, uuid, size_bytes, free_bytes]
+          required: [mounted, uuid, size_bytes, free_bytes, observed_at]
           properties:
             mounted: { type: boolean }
             uuid: { type: string }
@@ -652,6 +660,10 @@ components:
               type: [string, "null"]
             owner_group_name:
               type: [string, "null"]
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     Share:
       type: object
@@ -694,6 +706,7 @@ components:
                 hard_bytes: { type: integer, format: int64 }
         status:
           type: object
+          required: [observed_at]
           properties:
             exported: { type: boolean }
             client_mount_profile:
@@ -709,6 +722,10 @@ components:
               items:
                 $ref: '#/components/schemas/ExportRule'
               description: "Per-host export entries observed from /etc/exports.d/ or helper output."
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     ShareClient:
       type: object
@@ -776,7 +793,7 @@ components:
           $ref: '#/components/schemas/Metadata'
         status:
           type: object
-          required: [conf_present, idmapd_active, method]
+          required: [conf_present, idmapd_active, method, observed_at]
           properties:
             conf_present:
               type: boolean
@@ -793,6 +810,10 @@ components:
               type: boolean
             idmapd_unit_state:
               type: string
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     ExportRule:
       type: object
@@ -884,6 +905,7 @@ components:
                 on_v3_settings_change:  { type: string, enum: [reload, restart, none] }
         status:
           type: object
+          required: [observed_at]
           properties:
             effective_files:
               type: object
@@ -902,6 +924,10 @@ components:
             warnings:
               type: array
               items: { $ref: '#/components/schemas/Warning' }
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     NetworkInterface:
       type: object
@@ -924,6 +950,7 @@ components:
             enabled: { type: boolean }
         status:
           type: object
+          required: [observed_at]
           properties:
             driver: { type: string }
             rdma_capable: { type: boolean }
@@ -935,6 +962,10 @@ components:
             duplicates_detected_in:
               type: array
               items: { type: string }
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     ServiceIP:
       type: object
@@ -1170,13 +1201,17 @@ components:
               type: string
         status:
           type: object
-          required: [resolvable, source]
+          required: [resolvable, source, observed_at]
           properties:
             resolvable:
               type: boolean
             source:
               type: string
               enum: [local, nss]
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     Group:
       type: object
@@ -1204,13 +1239,17 @@ components:
                 type: string
         status:
           type: object
-          required: [resolvable, source]
+          required: [resolvable, source, observed_at]
           properties:
             resolvable:
               type: boolean
             source:
               type: string
               enum: [local, nss]
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
   # -------------------------------------------------------------------------
   # Reusable responses

@@ -49,6 +49,7 @@
       "rdma_port": 20049,
       "active_versions": ["4.1", "4.2"]
     },
-    "warnings": []
+    "warnings": [],
+    "observed_at": "2026-05-26T16:00:00Z"
   }
 }
