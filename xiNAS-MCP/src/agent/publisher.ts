@@ -16,6 +16,16 @@ export interface PublisherOptions {
   retryBaseMs?: number;
   /** Maximum retry attempts. Default: 5. */
   maxRetries?: number;
+  /**
+   * Debounced steady-state flush window in ms (spec §217/§249, ~50–100ms).
+   * Every enqueue that does NOT cross a ceiling arms a single timer; the queue
+   * flushes ~debounceMs after the FIRST event in the window (leading-arm, not
+   * reset-on-each — so a burst batches and a continuous stream can't starve).
+   * Without this a single event on a quiet node sits in the queue forever.
+   * Default: 75. Set to 0 to disable (used by boot/unit tests that flush
+   * explicitly).
+   */
+  debounceMs?: number;
 }
 
 interface PostResult {
@@ -38,6 +48,17 @@ export class Publisher {
   #queue: ObservationDelta[] = [];
   /** Running serialized-byte estimate of #queue, for the maxBatchBytes cap. */
   #queueBytes = 0;
+  /** Armed by enqueue in steady state; fires a debounced flush. */
+  #debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * While true (during the boot sweep), enqueue does NOT auto-flush at a
+   * ceiling or arm a debounce timer. The boot sequence flushes each kind
+   * explicitly with complete_snapshots:[kind]; suppressing the ceiling flush
+   * means a kind that exceeds 256/1MB on boot is sent as ONE reconcile batch
+   * rather than a partial complete_snapshots:[] flush (which the api would
+   * reconcile-delete) followed by the remainder — i.e. no boot data loss.
+   */
+  #bootMode = false;
 
   /** Public so collectors can read and tests can inspect. */
   readonly pendingReconcile: Set<Kind> = new Set();
@@ -48,6 +69,7 @@ export class Publisher {
       maxBatchBytes: 1_048_576,
       retryBaseMs: 250,
       maxRetries: 5,
+      debounceMs: 75,
       ...opts,
     };
   }
@@ -55,6 +77,9 @@ export class Publisher {
   enqueue(delta: ObservationDelta): void {
     this.#queue.push(delta);
     this.#queueBytes += Buffer.byteLength(JSON.stringify(delta));
+    // During the boot sweep, defer entirely to the explicit per-kind
+    // flushWithSnapshot — no ceiling flush, no debounce (see #bootMode).
+    if (this.#bootMode) return;
     // Early flush at EITHER ceiling (spec: 256 entries or 1 MB). The
     // .catch keeps this fire-and-forget flush from ever surfacing an
     // unhandled rejection — #doFlush is written to resolve on every
@@ -64,7 +89,40 @@ export class Publisher {
       this.#queue.length >= this.#opts.maxBatchSize ||
       this.#queueBytes >= this.#opts.maxBatchBytes
     ) {
+      this.#clearDebounce();
       void this.flush().catch(() => {});
+      return;
+    }
+    // Below the ceiling: arm a debounced flush so a single steady-state event
+    // doesn't sit in the queue forever on a quiet node.
+    this.#armDebounce();
+  }
+
+  /** Toggle boot mode (see #bootMode). Turning it off does NOT auto-flush —
+   *  the boot sequence has already flushed every kind explicitly. */
+  setBootMode(on: boolean): void {
+    this.#bootMode = on;
+  }
+
+  /** Clear the debounce timer (clean shutdown). Safe to call repeatedly. */
+  dispose(): void {
+    this.#clearDebounce();
+  }
+
+  #armDebounce(): void {
+    if (this.#opts.debounceMs <= 0) return;
+    if (this.#debounceTimer !== null) return; // leading-arm: don't reset
+    this.#debounceTimer = setTimeout(() => {
+      this.#debounceTimer = null;
+      void this.flush().catch(() => {});
+    }, this.#opts.debounceMs);
+    this.#debounceTimer.unref?.();
+  }
+
+  #clearDebounce(): void {
+    if (this.#debounceTimer !== null) {
+      clearTimeout(this.#debounceTimer);
+      this.#debounceTimer = null;
     }
   }
 
@@ -86,6 +144,9 @@ export class Publisher {
   }
 
   async #doFlush(completeSnapshots: Kind[]): Promise<void> {
+    // We're flushing now — cancel any pending debounce so it doesn't fire a
+    // redundant empty flush after the queue is drained below.
+    this.#clearDebounce();
     if (this.#queue.length === 0 && completeSnapshots.length === 0) return;
 
     const batch = this.#queue.splice(0);
