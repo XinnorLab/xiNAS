@@ -20,6 +20,7 @@ import { storageRouter } from './routes/storage.js';
 import { supportRouter } from './routes/support.js';
 import { systemRouter } from './routes/system.js';
 import { tasksRouter } from './routes/tasks.js';
+import { usersRouter } from './routes/users.js';
 
 export function createApp(ctx: ApiContext): Express {
   const app = express();
@@ -66,6 +67,7 @@ export function createApp(ctx: ApiContext): Express {
   v1.use(configHistoryRouter(ctx));
   v1.use(supportRouter(ctx));
   v1.use(inventoryRouter(ctx));
+  v1.use(usersRouter(ctx));
 
   // Mutating verbs all route to the executor-unavailable stub until
   // xinas-agent ships. Per ADR-0002 §Agent heartbeat, plan and apply
