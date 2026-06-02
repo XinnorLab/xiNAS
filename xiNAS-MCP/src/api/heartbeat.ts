@@ -1,8 +1,97 @@
 import { randomUUID } from 'node:crypto';
+import { connect } from 'node:net';
 import type { OpenedStateStore } from '../state/index.js';
 import type { Warning } from './envelope.js';
 
 type AgentState = 'healthy' | 'degraded' | 'offline';
+
+/** Result shape of a single agent.health probe (subset of the RPC result). */
+export interface AgentHealthResult {
+  version?: string;
+  collectors?: Record<string, string>;
+}
+
+/** Hard cap on a single agent.health round-trip so a hung agent never wedges a tick. */
+const HEALTH_PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * Build the production `healthProbe` for a HeartbeatTracker: a thin
+ * JSON-RPC-2.0-over-NDJSON client against the agent's UDS. Each call:
+ *   1. connects to `agentSocketPath`,
+ *   2. writes one NDJSON line `{"jsonrpc":"2.0","id":1,"method":"agent.health","params":{}}`,
+ *   3. reads one response line and JSON-parses it,
+ *   4. resolves `{ version, collectors }` from the JSON-RPC `result`, or
+ *   5. rejects on connect error (ECONNREFUSED/ENOENT), a JSON-RPC `error`,
+ *      a malformed response, or a timeout.
+ *
+ * A reject is how the tracker learns the agent is offline/degraded — the
+ * tick loop maps ECONNREFUSED/ENOENT → connect-refused (offline) and any
+ * other reject → a plain heartbeat failure. The socket is always destroyed
+ * on completion or error so no fd leaks across ticks.
+ *
+ * Production-usable (api-server.ts wires this) AND the client the J1
+ * mock-agent test drives.
+ */
+export function createAgentHealthProbe(agentSocketPath: string): () => Promise<AgentHealthResult> {
+  return () =>
+    new Promise<AgentHealthResult>((resolve, reject) => {
+      let settled = false;
+      let buf = '';
+      const socket = connect(agentSocketPath);
+
+      const finish = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        fn();
+      };
+      const fail = (err: Error): void => finish(() => reject(err));
+      const succeed = (value: AgentHealthResult): void => finish(() => resolve(value));
+
+      const timer = setTimeout(() => {
+        fail(new Error(`agent.health timed out after ${HEALTH_PROBE_TIMEOUT_MS}ms`));
+      }, HEALTH_PROBE_TIMEOUT_MS);
+      if (typeof timer.unref === 'function') timer.unref();
+
+      socket.on('connect', () => {
+        socket.write(
+          `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'agent.health', params: {} })}\n`,
+        );
+      });
+
+      socket.on('data', (chunk: Buffer) => {
+        buf += chunk.toString('utf8');
+        const nl = buf.indexOf('\n');
+        if (nl === -1) return; // wait for a full line
+        const line = buf.slice(0, nl);
+        let parsed: {
+          result?: AgentHealthResult;
+          error?: { message?: string };
+        };
+        try {
+          parsed = JSON.parse(line) as typeof parsed;
+        } catch {
+          fail(new Error('agent.health response was not valid JSON'));
+          return;
+        }
+        if (parsed.error) {
+          fail(new Error(`agent.health returned error: ${parsed.error.message ?? 'unknown'}`));
+          return;
+        }
+        // Map the JSON-RPC `result` (version + collectors) through. Passing
+        // the object straight avoids materializing explicit `undefined`
+        // properties, which exactOptionalPropertyTypes rejects.
+        succeed(parsed.result ?? {});
+      });
+
+      socket.on('error', (err: Error) => fail(err));
+      socket.on('end', () => {
+        // Connection closed before a full response line arrived.
+        fail(new Error('agent.health connection closed before response'));
+      });
+    });
+}
 
 export interface HeartbeatTrackerOptions {
   /** How often the api polls agent.health. Default: 5000ms. */
