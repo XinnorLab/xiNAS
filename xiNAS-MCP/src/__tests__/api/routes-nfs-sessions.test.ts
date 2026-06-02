@@ -11,12 +11,13 @@ describe('GET /api/v1/shares/{id}/sessions — populated from observed state', (
   beforeEach(async () => {
     setup = await buildTestApp();
 
+    // Real Share shape: only spec.path (the exported directory, no export_path).
+    // The sessions join keys share.spec.path against NfsSession.spec.export_path.
     setup.state.kv.put(`/xinas/v1/desired/Share/${SHARE_ID}`, {
       kind: 'Share',
       id: SHARE_ID,
       spec: {
-        path: '/data/share01',
-        export_path: EXPORT_PATH,
+        path: EXPORT_PATH,
         clients: [{ pattern: '10.0.0.0/8', options: ['rw', 'sync'] }],
         fsid: 42,
       },

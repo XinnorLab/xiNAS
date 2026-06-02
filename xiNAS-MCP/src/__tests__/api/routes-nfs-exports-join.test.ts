@@ -10,12 +10,14 @@ describe('Share read-join: status.exports[] populated from observed ExportRule',
 
   beforeEach(async () => {
     setup = await buildTestApp();
+    // Real Share shape: only spec.path (the exported directory). It has NO
+    // export_path — the join keys share.spec.path against the observed
+    // ExportRule's spec.export_path, which the agent stamps with that same dir.
     setup.state.kv.put(`/xinas/v1/desired/Share/${SHARE_ID}`, {
       kind: 'Share',
       id: SHARE_ID,
       spec: {
-        path: '/data/share01',
-        export_path: EXPORT_PATH,
+        path: EXPORT_PATH,
         clients: [{ pattern: '10.0.0.0/8', options: ['rw', 'sync'] }],
         fsid: 42,
       },

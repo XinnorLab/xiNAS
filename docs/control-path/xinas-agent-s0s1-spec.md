@@ -580,6 +580,8 @@ ExportRule:
 
 The existing `/api/v1/export-groups` endpoint stays as-is (still returns `[]` in S0+S1); ExportRule entries surface inside `Share.status.exports[]` where they naturally belong. No new public GET endpoint for ExportRule.
 
+**Join key (read time):** the fold-in matches `desired Share.spec.path` against the observed `ExportRule.spec.export_path` (and, for `/shares/{id}/sessions`, against `NfsSession.spec.export_path`). The Share has **no** `export_path` field — its `spec.path` IS the exported directory the agent stamps onto the observed rows. Keying the Share side off a non-existent `export_path` silently returns `[]` for every real Share.
+
 ### `SystemdUnit` resource (new public kind)
 
 ```yaml
