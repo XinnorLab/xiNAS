@@ -1,0 +1,333 @@
+/**
+ * Agent convergence wiring (J3 / deferred F3).
+ *
+ * Instantiates the real D-phase probes, injects each into its E-phase
+ * collector, registers them in a CollectorRegistry, and constructs the
+ * Publisher. The caller (agent-server.ts) reads registry.healthSnapshot()
+ * for agent.health and, AFTER the RPC server binds, kicks off
+ * runBootSequence + registry.start(emit -> publisher.enqueue) in the
+ * background.
+ *
+ * ## Probe <-> collector adapters
+ *
+ * The E-phase collectors each declare a *local* minimal probe interface in
+ * their own module. The D-phase probe factories were authored to their own
+ * (richer / differently-named) shapes, so several do not structurally match
+ * the collector's expectation. Rather than rewrite either side, this module
+ * supplies thin adapters that bridge real probe -> collector interface. Each
+ * adapter is documented with exactly what didn't line up:
+ *
+ *  - Disk:      real probe matches structurally; event-stream stop() is async
+ *               (MonitorHandle) vs the collector's sync EventStream.stop() —
+ *               wrapped to fire-and-forget the async stop.
+ *  - Network:   real startEventStream emits a parsed ObservedNetworkInterface;
+ *               the collector expects pre-diffed { id, op, attrs }. Adapter maps
+ *               iface -> { id, op:'upsert', attrs:{operstate,mac,mtu,...} }.
+ *  - Filesystem:real probe has snapshot() only, no watchMountUnits(). Adapter
+ *               adds a no-op watch handle; the collector then relies on its
+ *               boot sweep + poll backstop (pollIntervalMs) for reconcile.
+ *  - Nfs:       real probe matches (listSessions/listExports); status carries
+ *               no observed_at (the collector stamps it).
+ *  - NfsIdmap:  real probe exposes snapshot(); collector expects read() plus
+ *               two watch subscriptions. Adapter renames snapshot()->read()
+ *               and supplies no-op watch handles (poll backstop reconciles).
+ *  - Systemd:   real probe is dbus-shaped (isAllowed/start/mapDbusProperties)
+ *               and *requires* a connectDbus option; collector expects
+ *               { allowList, getUnitState, subscribeAllowListed }. dbus is
+ *               integration-only and unavailable on CI, so the adapter wires a
+ *               degraded probe: allowList = DEFAULT_ALLOWLIST, getUnitState
+ *               throws 'systemd dbus unavailable' (surfaced via collector
+ *               health on sweep), subscribeAllowListed is a no-op handle.
+ *  - Users:     real probe has getentPasswd/getentGroup but no watchPasswdFiles.
+ *               Adapter adds a no-op watch handle (poll backstop reconciles).
+ *  - Inventory: real probe.snapshot() returns a NESTED shape; collector expects
+ *               read() returning a FLAT { hostname, os_kernel, cpu_*, mem_* }.
+ *               Adapter renames snapshot()->read() and flattens.
+ */
+
+import { runBootSequence } from './boot.js';
+import { CollectorRegistry } from './collectors/base.js';
+import { DiskCollector } from './collectors/disk.js';
+import { FilesystemCollector } from './collectors/filesystem.js';
+import { InventoryCollector } from './collectors/inventory.js';
+import { NetworkInterfaceCollector } from './collectors/network.js';
+import { NfsIdmapCollector } from './collectors/nfs-idmap.js';
+import { NfsCollector } from './collectors/nfs.js';
+import { ManagedFilesStubCollector, XiraidArrayStubCollector } from './collectors/stubs.js';
+import { SystemdUnitCollector } from './collectors/systemd.js';
+import { UsersCollector } from './collectors/users.js';
+import type { AgentConfig } from './config.js';
+import { log } from './log.js';
+import { createDiskProbe } from './probe/disk.js';
+import { createFilesystemProbe } from './probe/filesystem.js';
+import { createIdmapProbe } from './probe/idmap.js';
+import { createInventoryProbe } from './probe/inventory.js';
+import { createNetworkProbe } from './probe/network.js';
+import { createNfsProbe } from './probe/nfs.js';
+import { DEFAULT_ALLOWLIST } from './probe/systemd.js';
+import { createUsersProbe } from './probe/users.js';
+import { Publisher } from './publisher.js';
+
+/** A synchronous-stop event handle (the shape collectors expect). */
+interface SyncStopHandle {
+  stop(): void;
+}
+
+/** No-op watch/subscription handle for collectors whose real probe has no
+ *  matching event source. The collector falls back to its poll backstop. */
+const NOOP_HANDLE: SyncStopHandle = { stop(): void {} };
+
+export interface Convergence {
+  registry: CollectorRegistry;
+  publisher: Publisher;
+  controllerId: string;
+}
+
+/**
+ * Build the real probes, collectors, registry, and publisher. Pure
+ * construction — does NOT run the boot sweep or start event streams; the
+ * caller does that in the background after the RPC server is up.
+ */
+export function buildConvergence(config: AgentConfig): Convergence {
+  const registry = new CollectorRegistry();
+
+  // --- Disk: real probe matches; bridge async stop -> sync stop. ---
+  const diskProbe = createDiskProbe();
+  registry.register(
+    new DiskCollector({
+      probe: {
+        snapshot: () =>
+          diskProbe
+            .snapshot()
+            .then((disks) =>
+              disks.map((d) => ({
+                ...d,
+                status: { ...d.status, observed_at: new Date().toISOString() },
+              })),
+            ),
+        startEventStream(onDelta) {
+          const handle = diskProbe.startEventStream(onDelta);
+          return {
+            stop(): void {
+              void handle.stop();
+            },
+          };
+        },
+      },
+    }),
+  );
+
+  // --- Network: map parsed iface -> { id, op, attrs }. ---
+  const networkProbe = createNetworkProbe();
+  registry.register(
+    new NetworkInterfaceCollector({
+      probe: {
+        snapshot: () =>
+          networkProbe.snapshot().then((ifaces) =>
+            ifaces.map((iface) => ({
+              kind: 'NetworkInterface' as const,
+              id: iface.id,
+              status: {
+                name: iface.status.name,
+                operstate: iface.status.operstate,
+                ...(iface.status.mac !== undefined ? { mac: iface.status.mac } : {}),
+                ...(iface.status.mtu !== undefined ? { mtu: iface.status.mtu } : {}),
+                ip4_addresses: iface.status.ip4_addresses,
+                ip6_addresses: iface.status.ip6_addresses,
+                observed_at: new Date().toISOString(),
+              },
+            })),
+          ),
+        startEventStream(onEvent) {
+          const handle = networkProbe.startEventStream((iface) => {
+            onEvent({
+              id: iface.id,
+              op: 'upsert',
+              attrs: {
+                operstate: iface.status.operstate,
+                ...(iface.status.mac !== undefined ? { mac: iface.status.mac } : {}),
+                ...(iface.status.mtu !== undefined ? { mtu: iface.status.mtu } : {}),
+                ip4_addresses: iface.status.ip4_addresses,
+                ip6_addresses: iface.status.ip6_addresses,
+              },
+            });
+          });
+          return {
+            stop(): void {
+              void handle.stop();
+            },
+          };
+        },
+      },
+    }),
+  );
+
+  // --- Filesystem: snapshot() only (no observed_at, no watcher). Stamp
+  //     observed_at and supply a no-op watch handle. ---
+  const filesystemProbe = createFilesystemProbe();
+  registry.register(
+    new FilesystemCollector({
+      probe: {
+        snapshot: () =>
+          filesystemProbe.snapshot().then((rows) =>
+            rows.map((r) => ({
+              kind: 'Filesystem' as const,
+              id: r.id,
+              status: { ...r.status, observed_at: new Date().toISOString() },
+            })),
+          ),
+        watchMountUnits(): SyncStopHandle {
+          return NOOP_HANDLE;
+        },
+      },
+    }),
+  );
+
+  // --- NFS: real probe matches listSessions/listExports; sessions carry no
+  //     observed_at (the collector stamps the delta's, but its local probe
+  //     type requires status.observed_at). Stamp it here. ---
+  const nfsProbe = createNfsProbe();
+  registry.register(
+    new NfsCollector({
+      probe: {
+        listSessions: () =>
+          nfsProbe.listSessions().then((sessions) =>
+            sessions.map((s) => ({
+              kind: 'NfsSession' as const,
+              id: s.id,
+              spec: s.spec,
+              status: { ...s.status, observed_at: new Date().toISOString() },
+            })),
+          ),
+        listExports: () => nfsProbe.listExports(),
+      },
+    }),
+  );
+
+  // --- NfsIdmap: snapshot() -> read(); no-op watch/dbus handles. ---
+  const idmapProbe = createIdmapProbe();
+  registry.register(
+    new NfsIdmapCollector({
+      probe: {
+        read: () => idmapProbe.snapshot(),
+        watchIdmapdConf(): SyncStopHandle {
+          return NOOP_HANDLE;
+        },
+        subscribeIdmapdUnit(): SyncStopHandle {
+          return NOOP_HANDLE;
+        },
+      },
+    }),
+  );
+
+  // --- Systemd: dbus is integration-only + requires connectDbus; wire a
+  //     degraded probe so the collector surfaces health=error rather than
+  //     spawning a dbus connection that isn't available off a real host. ---
+  registry.register(
+    new SystemdUnitCollector({
+      probe: {
+        allowList: DEFAULT_ALLOWLIST,
+        getUnitState: () =>
+          Promise.reject(new Error('systemd dbus probe unavailable (integration-only)')),
+        subscribeAllowListed(): SyncStopHandle {
+          return NOOP_HANDLE;
+        },
+      },
+    }),
+  );
+
+  // --- Users: getentPasswd/getentGroup return ParsedPasswd/GroupLine, which
+  //     carry no `source` discriminator. getent resolves through NSS (local
+  //     files + any directory backend), so tag everything 'nss'. No watcher
+  //     on the real probe -> no-op handle. ---
+  const usersProbe = createUsersProbe();
+  registry.register(
+    new UsersCollector({
+      probe: {
+        getentPasswd: () =>
+          usersProbe.getentPasswd().then((rows) =>
+            rows.map((u) => ({
+              uid: u.uid,
+              name: u.name,
+              gid: u.gid,
+              gecos: u.gecos,
+              home: u.home,
+              shell: u.shell,
+              source: 'nss' as const,
+            })),
+          ),
+        getentGroup: () =>
+          usersProbe.getentGroup().then((rows) =>
+            rows.map((g) => ({
+              gid: g.gid,
+              name: g.name,
+              members: g.members,
+              source: 'nss' as const,
+            })),
+          ),
+        watchPasswdFiles(): SyncStopHandle {
+          return NOOP_HANDLE;
+        },
+      },
+    }),
+  );
+
+  // --- Inventory: snapshot() (nested) -> read() (flat). ---
+  const inventoryProbe = createInventoryProbe();
+  registry.register(
+    new InventoryCollector({
+      probe: {
+        read: () =>
+          inventoryProbe.snapshot().then((s) => ({
+            hostname: s.hostname,
+            os_kernel: s.os.kernel,
+            ...(s.cpu.model !== undefined ? { cpu_model: s.cpu.model } : {}),
+            ...(s.cpu.cores !== undefined ? { cpu_cores: s.cpu.cores } : {}),
+            cpu_threads: s.cpu.threads,
+            mem_total_kb: s.memory.total_kb,
+            arch: s.cpu.arch,
+          })),
+      },
+    }),
+  );
+
+  // --- Deferred-capability stubs (XiraidArray, managed_files). ---
+  registry.register(new XiraidArrayStubCollector());
+  registry.register(new ManagedFilesStubCollector());
+
+  const publisher = new Publisher({
+    apiSocketPath: config.api_socket,
+    agentToken: config.agent_token,
+    controllerId: config.controller_id,
+  });
+
+  return { registry, publisher, controllerId: config.controller_id };
+}
+
+/**
+ * Background convergence: run the boot sweep, then start steady-state event
+ * streams routing emits into the publisher's queue. MUST NOT throw — boot
+ * failures (api briefly down, a tool missing on the host) are logged and
+ * absorbed; the publisher's retry/pendingReconcile path recovers later.
+ *
+ * Returns the publisher's pendingReconcile membership for nothing in
+ * particular; the function resolves regardless of partial failure so the
+ * caller's `void runConvergence()` never produces an unhandled rejection.
+ */
+export async function runConvergence(c: Convergence): Promise<void> {
+  const { registry, publisher, controllerId } = c;
+  try {
+    await runBootSequence({ publisher, registry, controllerId });
+  } catch (err) {
+    log('error', 'boot', 'boot_sequence_failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  try {
+    await registry.start((delta) => publisher.enqueue(delta));
+  } catch (err) {
+    log('error', 'boot', 'registry_start_failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
