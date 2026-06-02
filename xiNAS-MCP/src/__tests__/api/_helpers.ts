@@ -1,10 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openStateStore, type OpenedStateStore } from '../../state/index.js';
 import { createApp } from '../../api/app.js';
 import type { ApiConfig } from '../../api/config.js';
 import type { ApiContext } from '../../api/context.js';
+import { HeartbeatTracker } from '../../api/heartbeat.js';
+import { type OpenedStateStore, openStateStore } from '../../state/index.js';
 
 export interface TestSetup {
   dir: string;
@@ -36,7 +37,16 @@ export async function buildTestApp(): Promise<TestSetup & { cleanup(): Promise<v
     auditJsonlPath: config.state.auditJsonlPath,
     nodeId: NODE_ID,
   });
-  const ctx: ApiContext = { config, state };
+  // Wire an (unstarted, so always-offline) HeartbeatTracker so routes that
+  // surface agent state — e.g. /api/v1/system → node.status.agent — have a
+  // deterministic tracker. It never start()s, so no tick timer/probe runs.
+  const tracker = new HeartbeatTracker({
+    intervalMs: 5_000,
+    controllerId: NODE_ID,
+    state,
+    agentSocketPath: '/tmp/nonexistent.sock',
+  });
+  const ctx: ApiContext = { config, state, tracker };
   const app = createApp(ctx);
   return {
     dir,
