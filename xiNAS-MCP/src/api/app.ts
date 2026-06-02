@@ -16,6 +16,7 @@ import { groupsRouter } from './routes/groups.js';
 import { healthRouter } from './routes/health.js';
 import { inventoryRouter } from './routes/inventory.js';
 import { networkRouter } from './routes/network.js';
+import { nfsIdmapRouter } from './routes/nfs-idmap.js';
 import { nfsRouter } from './routes/nfs.js';
 import { storageRouter } from './routes/storage.js';
 import { supportRouter } from './routes/support.js';
@@ -70,6 +71,7 @@ export function createApp(ctx: ApiContext): Express {
   v1.use(inventoryRouter(ctx));
   v1.use(usersRouter(ctx));
   v1.use(groupsRouter(ctx));
+  v1.use(nfsIdmapRouter(ctx));
 
   // Mutating verbs all route to the executor-unavailable stub until
   // xinas-agent ships. Per ADR-0002 §Agent heartbeat, plan and apply
