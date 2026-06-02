@@ -97,14 +97,12 @@ export function buildConvergence(config: AgentConfig): Convergence {
     new DiskCollector({
       probe: {
         snapshot: () =>
-          diskProbe
-            .snapshot()
-            .then((disks) =>
-              disks.map((d) => ({
-                ...d,
-                status: { ...d.status, observed_at: new Date().toISOString() },
-              })),
-            ),
+          diskProbe.snapshot().then((disks) =>
+            disks.map((d) => ({
+              ...d,
+              status: { ...d.status, observed_at: new Date().toISOString() },
+            })),
+          ),
         startEventStream(onDelta) {
           const handle = diskProbe.startEventStream(onDelta);
           return {
