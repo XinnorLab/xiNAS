@@ -93,7 +93,7 @@ describe('POST /internal/v1/observed — schema enforcement (J3)', () => {
     expect(setup.observedLoaded).toBe(true);
   });
 
-  it('accepts a VALID Disk upsert (200, accepted: 1)', async () => {
+  it('accepts a VALID (full) Disk upsert (200, accepted: 1)', async () => {
     const body = {
       observed_at: new Date().toISOString(),
       controller_id: CONTROLLER_ID,
@@ -110,17 +110,57 @@ describe('POST /internal/v1/observed — schema enforcement (J3)', () => {
     expect(res.body.result.accepted).toBe(1);
   });
 
-  it('rejects an INVALID Disk upsert (missing required status fields) with 400 naming the delta index', async () => {
-    const broken = validDisk('nvme0n1');
-    // Drop required status fields so the kind schema fails.
-    (broken.status as Record<string, unknown>) = { device_path: '/dev/nvme0n1' };
+  it('accepts a PARTIAL Disk upsert (the real collector shape, missing required fields) — 200', async () => {
+    // This is the exact intermediate shape DiskCollector emits: no metadata,
+    // no spec, and status lacking device_path/capacity_bytes/safe_for_use.
+    // Under the full public schema this would 400; the inbound validator is
+    // TYPE-ONLY, so a partial-but-correctly-typed observation is accepted.
+    const partial = {
+      kind: 'Disk',
+      id: 'nvme0n1',
+      status: {
+        name: 'nvme0n1',
+        model: 'Test NVMe',
+        serial: 'SN-0001',
+        transport: 'nvme',
+        observed_at: new Date().toISOString(),
+      },
+    };
+
+    const body = {
+      observed_at: new Date().toISOString(),
+      controller_id: CONTROLLER_ID,
+      deltas: [{ kind: 'Disk', id: 'nvme0n1', op: 'upsert', value: partial }],
+      complete_snapshots: [],
+    };
+
+    const res = await request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.accepted).toBe(1);
+    expect(setup.state.kv.get('/xinas/v1/observed/Disk/nvme0n1')).not.toBeNull();
+  });
+
+  it('rejects a TYPE-VIOLATING Disk upsert with 400 naming the delta index', async () => {
+    // api-v1.yaml types Disk.status.safe_for_use as boolean and observed_at as
+    // a string. Sending a string for the boolean and a number for the string
+    // must fail TYPE validation even though required is stripped. (Completeness
+    // is not enforced; field TYPES still are.)
+    const typeViolating = {
+      kind: 'Disk',
+      id: 'nvme0n1',
+      status: { safe_for_use: 'not-a-boolean', observed_at: 123 },
+    };
 
     const body = {
       observed_at: new Date().toISOString(),
       controller_id: CONTROLLER_ID,
       deltas: [
         { kind: 'Disk', id: 'ok0', op: 'upsert', value: validDisk('ok0') },
-        { kind: 'Disk', id: 'nvme0n1', op: 'upsert', value: broken },
+        { kind: 'Disk', id: 'nvme0n1', op: 'upsert', value: typeViolating },
       ],
       complete_snapshots: [],
     };
@@ -136,6 +176,23 @@ describe('POST /internal/v1/observed — schema enforcement (J3)', () => {
     // Nothing written — the whole batch is rejected before the transaction.
     expect(setup.state.kv.get('/xinas/v1/observed/Disk/ok0')).toBeNull();
     expect(setup.state.kv.get('/xinas/v1/observed/Disk/nvme0n1')).toBeNull();
+  });
+
+  it('rejects a non-object value for a known kind with 400', async () => {
+    const body = {
+      observed_at: new Date().toISOString(),
+      controller_id: CONTROLLER_ID,
+      deltas: [{ kind: 'Disk', id: 'nvme0n1', op: 'upsert', value: 'not-an-object' }],
+      complete_snapshots: [],
+    };
+
+    const res = await request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0]?.code).toBe('INVALID_ARGUMENT');
   });
 
   it('rejects an upsert with an unknown kind with 400 "unknown kind"', async () => {

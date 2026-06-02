@@ -23,9 +23,10 @@ const addFormats = addFormatsImport as any;
 export type ValidateFn = ((data: unknown) => boolean) & { errors?: unknown };
 
 /**
- * Observed kinds the agent pushes through /internal/v1/observed whose full
- * kind-object schema (`{ kind, id, metadata, spec, status }`) is enforced on
- * inbound deltas. `inventory` is lowercase to match its observedSegment; its
+ * Observed kinds the agent pushes through /internal/v1/observed whose
+ * kind-object schema from api-v1.yaml is compiled into a TYPE-ONLY inbound
+ * validator (see stripRequired + loadObservedSchemas for why completeness is
+ * NOT enforced). `inventory` is lowercase to match its observedSegment; its
  * schema may not exist in api-v1.yaml, in which case it is silently skipped.
  */
 const OBSERVED_KINDS = [
@@ -58,14 +59,58 @@ function warn(msg: string, extra: Record<string, unknown>): void {
 }
 
 /**
+ * Recursively delete every `required` array anywhere in a JSON Schema object
+ * graph: at the top level, inside `properties` / `items` / `$defs` /
+ * `definitions`, and within every `allOf` / `anyOf` / `oneOf` branch.
+ *
+ * WHY: the agent emits PARTIAL "intermediate" observation shapes, not the full
+ * public kind objects. A real DiskCollector delta is
+ * `{ kind, id, status: { name, model, serial, transport, observed_at } }` —
+ * it has no `metadata`, no `spec`, and its `status` omits `device_path`,
+ * `capacity_bytes`, `safe_for_use`, etc. The full api-v1.yaml Disk schema
+ * marks all of those `required`, so compiling it as-is would 400 the agent's
+ * own observations. Inbound validation is a TYPE / garbage safety net — it
+ * verifies that the fields the agent DID send have the right types (and that
+ * the value is a structurally valid object for the kind, and the kind is
+ * known) — NOT a completeness gate. The full required-field guarantees belong
+ * to the public READ schemas (what clients GET back), not to inbound
+ * observations. Stripping `required` keeps the type checks while letting
+ * absent fields through.
+ *
+ * `additionalProperties` is intentionally left untouched (not tightened): an
+ * extra field the agent adds should not be rejected by the inbound net.
+ */
+function stripRequired(node: unknown): void {
+  if (Array.isArray(node)) {
+    for (const item of node) stripRequired(item);
+    return;
+  }
+  if (node === null || typeof node !== 'object') return;
+  const obj = node as Record<string, unknown>;
+  // Delete `required` only when it is the JSON-Schema keyword (an array of
+  // property-name strings). A `required` key nested under `properties` would
+  // be a real property NAMED "required" whose value is a subschema object —
+  // leave that alone and recurse into it like any other property.
+  if (Array.isArray(obj['required'])) delete obj['required'];
+  for (const value of Object.values(obj)) stripRequired(value);
+}
+
+/**
  * Compile per-kind inbound-observation validators from api-v1.yaml.
  *
  * Returns `{ schemas, ajv }` where `schemas` is keyed by observed kind name
- * (Disk, NetworkInterface, …) and each value validates a full kind object,
- * and `ajv` exposes `errorsText(errors)` for rendering a failed validator's
- * `.errors`. The /internal/v1/observed handler validates each upsert delta's
- * `value` against its kind's schema and fail-closes the whole batch on the
- * first failure.
+ * (Disk, NetworkInterface, …) and each value is a TYPE-ONLY validator for
+ * that kind, and `ajv` exposes `errorsText(errors)` for rendering a failed
+ * validator's `.errors`. The /internal/v1/observed handler validates each
+ * upsert delta's `value` against its kind's schema and fail-closes the whole
+ * batch on the first failure.
+ *
+ * TYPE-ONLY, not completeness: before compiling, the whole spec document's
+ * `components.schemas` is deep-cloned and every `required` array is stripped
+ * recursively (see stripRequired). The agent emits PARTIAL observations, so
+ * inbound validation must NOT demand the full set of fields the public READ
+ * schemas guarantee — it only rejects unknown kinds, non-object values, and
+ * fields whose TYPE is wrong (a string where the schema says boolean, etc.).
  *
  * Returns `null` when api-v1.yaml is not present (production hosts may not
  * ship docs/) or on any load/parse failure — callers then leave
@@ -105,13 +150,22 @@ export function loadObservedSchemas(): {
 
     const ajv = new Ajv({ allErrors: true, strict: false });
     addFormats(ajv);
-    // Register the full spec so internal `$ref: '#/components/schemas/...'`
-    // pointers (e.g. Metadata) resolve when each kind schema is compiled.
-    ajv.addSchema(doc, 'api-v1.yaml');
+
+    // Deep-clone the whole spec doc, then strip every `required` array from
+    // its component schemas so the registered subschemas — and any internal
+    // `$ref: '#/components/schemas/...'` (e.g. Metadata) they resolve through —
+    // are all type-only. We register the STRIPPED doc (not the original) so a
+    // ref from Disk → Metadata also lands on the required-stripped Metadata.
+    const strippedDoc = structuredClone(doc) as typeof doc;
+    if (strippedDoc.components?.schemas) stripRequired(strippedDoc.components.schemas);
+    // Register the stripped spec so internal `$ref` pointers resolve to the
+    // required-stripped subschemas when each kind schema is compiled.
+    ajv.addSchema(strippedDoc, 'api-v1.yaml');
 
     const schemas: Record<string, ValidateFn> = {};
     for (const kind of OBSERVED_KINDS) {
-      if (!allSchemas[kind]) continue; // kind has no schema (e.g. lowercase `inventory`) → skip
+      // Guard against a kind absent from the spec (e.g. lowercase `inventory`).
+      if (!strippedDoc.components?.schemas?.[kind]) continue;
       schemas[kind] = ajv.getSchema(`api-v1.yaml#/components/schemas/${kind}`) as ValidateFn;
     }
 
