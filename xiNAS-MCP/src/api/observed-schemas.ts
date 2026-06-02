@@ -23,11 +23,21 @@ const addFormats = addFormatsImport as any;
 export type ValidateFn = ((data: unknown) => boolean) & { errors?: unknown };
 
 /**
- * Observed kinds the agent pushes through /internal/v1/observed whose
- * kind-object schema from api-v1.yaml is compiled into a TYPE-ONLY inbound
+ * Observed kinds the agent pushes through /internal/v1/observed. This list MUST
+ * be kept exhaustively in sync with every `kind` the agent's collectors emit
+ * (see src/agent/collectors/base.ts `Kind`), because a delta whose kind is not
+ * here is rejected as an "unknown kind" 400 — which fail-closes the WHOLE batch
+ * and silently drops every co-batched real kind (e.g. an absent ExportRule
+ * would poison the NfsSession deltas it ships with). The independent S0+S1
+ * review found `XiraidArray` and `managed_files` missing here, and `inventory`
+ * present but schema-less (so it 400'd too), causing exactly that batch loss.
+ *
+ * Each kind WITH a kind-object schema in api-v1.yaml gets a TYPE-ONLY inbound
  * validator (see stripRequired + loadObservedSchemas for why completeness is
- * NOT enforced). `inventory` is lowercase to match its observedSegment; its
- * schema may not exist in api-v1.yaml, in which case it is silently skipped.
+ * NOT enforced). Each kind WITHOUT a schema (`inventory`, `managed_files` are
+ * lowercase intermediate/deferred kinds with no public schema) gets a
+ * permissive object-validator so it is still RECOGNIZED and accepted — inbound
+ * validation is a type/garbage net, not a completeness gate.
  */
 const OBSERVED_KINDS = [
   'Disk',
@@ -39,6 +49,8 @@ const OBSERVED_KINDS = [
   'User',
   'Group',
   'ExportRule',
+  'XiraidArray',
+  'managed_files',
   'inventory',
 ] as const;
 
@@ -162,11 +174,22 @@ export function loadObservedSchemas(): {
     // required-stripped subschemas when each kind schema is compiled.
     ajv.addSchema(strippedDoc, 'api-v1.yaml');
 
+    // Permissive validator for kinds with no api-v1.yaml schema: accept any
+    // structurally-valid (non-null) object. This is what makes a schema-less
+    // observed kind RECOGNIZED instead of 400'd as "unknown kind" (which would
+    // fail-close the batch). Type-completeness for these intermediate/deferred
+    // kinds is enforced by the public READ schema if/when one is added.
+    const acceptObject: ValidateFn = (data: unknown) => typeof data === 'object' && data !== null;
+
     const schemas: Record<string, ValidateFn> = {};
     for (const kind of OBSERVED_KINDS) {
-      // Guard against a kind absent from the spec (e.g. lowercase `inventory`).
-      if (!strippedDoc.components?.schemas?.[kind]) continue;
-      schemas[kind] = ajv.getSchema(`api-v1.yaml#/components/schemas/${kind}`) as ValidateFn;
+      // A kind in OBSERVED_KINDS is intended to be accepted. If it has a
+      // component schema, compile a TYPE-ONLY validator; otherwise (lowercase
+      // intermediate kinds like `inventory` / `managed_files`) register the
+      // permissive object-validator so the delta isn't rejected.
+      schemas[kind] = strippedDoc.components?.schemas?.[kind]
+        ? (ajv.getSchema(`api-v1.yaml#/components/schemas/${kind}`) as ValidateFn)
+        : acceptObject;
     }
 
     return {

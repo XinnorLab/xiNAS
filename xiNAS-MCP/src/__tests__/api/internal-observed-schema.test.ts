@@ -213,3 +213,137 @@ describe('POST /internal/v1/observed — schema enforcement (J3)', () => {
     expect(res.body.errors[0]?.message).toMatch(/unknown kind/);
   });
 });
+
+/**
+ * Regression for the independent-review E/J finding: the agent's OWN collectors
+ * emit XiraidArray, managed_files, and inventory deltas, but OBSERVED_KINDS
+ * omitted the first two and `inventory` was schema-less (so it 400'd). Each
+ * rejected kind fail-closes the whole batch and the publisher drops it as a
+ * non-retryable 4xx — so on a real node these (and any co-batched real kind)
+ * were silently lost. All three must now be ACCEPTED.
+ */
+describe('POST /internal/v1/observed — agent-emitted kinds are accepted (review E/J)', () => {
+  let setup: TestSetup & { cleanup(): Promise<void>; observedLoaded: boolean };
+
+  beforeEach(async () => {
+    setup = await buildAppWithSchemas();
+  });
+
+  afterEach(() => setup.cleanup());
+
+  /** The exact `_stub` deferral row the XiraidArray/managed_files stubs emit. */
+  function stubRow(kind: string, reason: string): Record<string, unknown> {
+    return {
+      kind,
+      id: '_stub',
+      status: { deferred: true, reason, observed_at: new Date().toISOString() },
+    };
+  }
+
+  it('accepts the XiraidArray _stub deferral row (200, stored)', async () => {
+    const res = await request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send({
+        observed_at: new Date().toISOString(),
+        controller_id: CONTROLLER_ID,
+        deltas: [
+          {
+            kind: 'XiraidArray',
+            id: '_stub',
+            op: 'upsert',
+            value: stubRow('XiraidArray', 'XIRAID_ADAPTER_DEFERRED'),
+          },
+        ],
+        complete_snapshots: ['XiraidArray'],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.result.accepted).toBe(1);
+    expect(setup.state.kv.get('/xinas/v1/observed/XiraidArray/_stub')).not.toBeNull();
+  });
+
+  it('accepts the managed_files _stub deferral row (schema-less kind, 200, stored)', async () => {
+    const res = await request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send({
+        observed_at: new Date().toISOString(),
+        controller_id: CONTROLLER_ID,
+        deltas: [
+          {
+            kind: 'managed_files',
+            id: '_stub',
+            op: 'upsert',
+            value: stubRow('managed_files', 'DRIFT_FRAMEWORK_DEFERRED'),
+          },
+        ],
+        complete_snapshots: ['managed_files'],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.result.accepted).toBe(1);
+    expect(setup.state.kv.get('/xinas/v1/observed/managed_files/_stub')).not.toBeNull();
+  });
+
+  it('accepts an inventory upsert (schema-less kind, 200, stored)', async () => {
+    const res = await request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send({
+        observed_at: new Date().toISOString(),
+        controller_id: CONTROLLER_ID,
+        deltas: [
+          {
+            kind: 'inventory',
+            id: 'node',
+            op: 'upsert',
+            value: { kind: 'inventory', id: 'node', status: { hostname: 'test-host' } },
+          },
+        ],
+        complete_snapshots: ['inventory'],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.result.accepted).toBe(1);
+    expect(setup.state.kv.get('/xinas/v1/observed/inventory/node')).not.toBeNull();
+  });
+
+  it('co-batch integrity: a previously-broken kind no longer fail-closes a real co-batched kind', async () => {
+    // The agent ships NfsSession + ExportRule in one batch, and the boot sweep
+    // mixes kinds. Before the fix, one rejected kind dropped the whole batch.
+    // Here XiraidArray (was broken) rides with a valid NfsSession; both persist.
+    const res = await request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send({
+        observed_at: new Date().toISOString(),
+        controller_id: CONTROLLER_ID,
+        deltas: [
+          {
+            kind: 'NfsSession',
+            id: '10.1.2.3:share01',
+            op: 'upsert',
+            value: {
+              kind: 'NfsSession',
+              id: '10.1.2.3:share01',
+              spec: { client_addr: '10.1.2.3', export_path: '/srv/nfs/share01' },
+              status: {
+                proto_version: 'v4.2',
+                locked_files: 0,
+                observed_at: new Date().toISOString(),
+              },
+            },
+          },
+          {
+            kind: 'XiraidArray',
+            id: '_stub',
+            op: 'upsert',
+            value: stubRow('XiraidArray', 'XIRAID_ADAPTER_DEFERRED'),
+          },
+        ],
+        complete_snapshots: [],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.result.accepted).toBe(2);
+    expect(setup.state.kv.get('/xinas/v1/observed/NfsSession/10.1.2.3:share01')).not.toBeNull();
+    expect(setup.state.kv.get('/xinas/v1/observed/XiraidArray/_stub')).not.toBeNull();
+  });
+});
