@@ -229,7 +229,13 @@ corresponding feature ships.
         - Template config.json from xinas-api-config.json.j2 with that
           token, the looked-up _xinas_admin_gid, and the
           controller_id. force: true (first write only because of the
-          enclosing condition). no_log: true.
+          enclosing condition). no_log: true. The template MUST emit
+          `internalTokensPath: {{ xinas_api_config_dir }}/internal-tokens.json`
+          — without it `loadConfig()` never merges the internal-tokens
+          file (there is no default/env fallback), so the agent's bearer
+          is unknown to the api and every `POST /internal/v1/observed`
+          401s. (Regression-guarded by the rendered-template contract
+          test `src/__tests__/agent/config-template.test.ts`.)
         - Write the token to /etc/xinas-api/admin-token, mode 0640,
           owner root, group {{ xinas_api_socket_group }}.
           no_log: true.
