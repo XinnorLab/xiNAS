@@ -1,37 +1,97 @@
-# xinas-agent.service — privileged observation + execution agent
-#
-# This is the SKELETON unit for S0+S1 (boots and answers RPC).
-# Full hardening (CapabilityBoundingSet, SystemCallFilter, etc.) and
-# the Ansible role template that derives from this skeleton land in K5.
-#
-# Depends on: xinas-api.service (must be listening before the agent
-# POSTs /internal/v1/agent_started).
-
 [Unit]
-Description=xiNAS Agent (privileged observation and execution daemon)
-Documentation=https://github.com/xinnor/xiNAS
+Description=xinas-agent — privileged observation and execution daemon (Phase 0)
+Documentation=https://github.com/Xinnor/xiNAS/blob/main/collection/roles/xinas_agent/README.md
 After=network-online.target xinas-api.service
-Wants=network-online.target
 Requires=xinas-api.service
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-ExecStart=/usr/local/bin/xinas-agent
+ExecStart=/usr/bin/node /opt/xiNAS/xiNAS-MCP/dist/agent-server.js
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=xinas-agent
 
-# /run/xinas is owned by the xinas_api role's tmpfiles.d config
-# (root:xinas-admin 0770) and recreated each boot by
-# systemd-tmpfiles-setup.service. The agent must NOT declare
-# RuntimeDirectory=xinas: systemd would re-own /run/xinas to root:root 0750
-# (breaking group traverse) and, worse, REMOVE the directory when this unit
-# stops — destroying the live api.sock on `systemctl restart xinas-agent`.
-# The agent only creates agent.sock inside /run/xinas and chowns that file
-# to root:xinas-api 0660.
+# Identity — runs as root per ADR-0002 §Privilege boundary.
+# The agent needs root to: chown /run/xinas/agent.sock, read /proc/*
+# directly, spawn udevadm/ip monitor, and call dbus as the system bus
+# client for unit state. Per-method privilege reduction (capabilities
+# drop after bind) is a future hardening step (see ADR-0002 open questions).
+User=root
+Group=root
+
+# Environment
+Environment=XINAS_AGENT_CONFIG=/etc/xinas-agent/config.json
+Environment=NODE_ENV=production
+
+# --- Filesystem isolation ---
+# ProtectSystem=strict makes / read-only except for explicit ReadWritePaths.
+ProtectSystem=strict
+PrivateTmp=true
+ProtectHome=true
+# Paths the agent must write:
+#   /run/xinas      — agent.sock creation + chgrp
+#   /var/log/xinas  — optional structured-log rotation (harmless to declare)
+# NOTE: /var/lib/xinas/state is deliberately NOT writable here. Per ADR-0002
+# the api is the SOLE SQLite writer; the agent reports observations via the
+# api's /internal/v1/observed. /var/lib/xinas is read-only below (the agent
+# only reads /var/lib/xinas/controller-id). Listing /var/lib/xinas/state in
+# both ReadWritePaths and under a ReadOnlyPaths parent was contradictory.
+ReadWritePaths=/run/xinas /var/log/xinas
+# Read-only paths the agent must read:
+#   /var/lib/xinas/controller-id — shared identity (0644 world-readable)
+#   /etc/xinas-agent             — config.json + agent-token (0640 / 0400)
+ReadOnlyPaths=/var/lib/xinas /etc/xinas-agent
+
+# --- Capability bounding ---
+NoNewPrivileges=true
+# CAP_CHOWN is required: the agent creates /run/xinas/agent.sock owned by
+# root:root, then chgrps it to root:xinas-api so the api (member of the
+# xinas-api group) can connect. With User=root + NoNewPrivileges, an EMPTY
+# CapabilityBoundingSet would mask CAP_CHOWN and the chgrp would fail with
+# EPERM, breaking the socket gate. We grant exactly CAP_CHOWN — nothing else.
+# (The udevadm/ip-monitor subprocesses read the kernel uevent/rtnetlink
+# multicast groups, which do not require CAP_NET_ADMIN for a read-only
+# listener. The final minimal capability + SystemCallFilter set is tuned
+# against real hardware in the L-phase validation / WS13 packaging pass.)
+CapabilityBoundingSet=CAP_CHOWN
+AmbientCapabilities=CAP_CHOWN
+
+# --- Process isolation ---
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+
+# --- Namespace restrictions ---
+# Allow PID + mount + UTS + IPC + net namespaces (inherited from the agent's
+# perspective) but prevent the agent from creating new namespaces itself.
+# The probe subprocesses (ip, udevadm) inherit the parent's namespace — this
+# is intentional: they observe the host, not a container namespace.
+RestrictNamespaces=~cgroup ~user
+
+# --- System call filter ---
+# @system-service  — baseline for a long-running service (read/write/open/mmap etc.)
+# @mount           — statfs() used by filesystem probe; NOT actual mount/umount
+# @network-io      — recvmsg/sendmsg for dbus client + unix socket I/O
+# @file-system     — open/read/stat on /proc, /sys, /etc for probes
+# @io-event        — inotify for filesystem + idmap + user/group change detection
+# @signal          — kill/sigaction for subprocess supervisor restart logic
+SystemCallFilter=@system-service @mount @network-io @file-system @io-event @signal
+SystemCallErrorNumber=EPERM
+
+# --- Address family restriction ---
+# AF_UNIX: agent socket, api socket, nfs-helper socket, dbus socket
+# AF_NETLINK: ip-monitor subprocess (netlink kernel interface for RTnetlink events)
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+
+# --- Misc ---
+# dbus is the system bus; the agent subscribes to systemd unit PropertiesChanged.
+# systemd's bus socket lives at /run/dbus/system_bus_socket (AF_UNIX, already allowed).
+# No additional capability needed — dbus client connections use regular sockets.
 
 [Install]
 WantedBy=multi-user.target
