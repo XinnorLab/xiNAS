@@ -85,21 +85,10 @@ async function main(): Promise<void> {
     ...STUB_METHODS,
   });
 
-  const server = await createAgentRpcServer({
-    socketPath: config.agent_socket,
-    dispatch,
-    socketGroupGid,
-  });
-
-  log('info', 'core', 'listening', { socket: config.agent_socket });
-
-  // Kick off the boot sequence + steady-state event streams in the
-  // BACKGROUND — never awaited before the server is up. runConvergence is
-  // written to absorb every failure (api briefly down, a host tool missing),
-  // so this fire-and-forget task cannot crash the agent or surface an
-  // unhandled rejection. agent.health already reflects per-collector health
-  // via the registry as the boot sweep progresses.
-  void runConvergence(convergence);
+  // The server handle is assigned once the UDS is bound; shutdown() captures
+  // it via this `let` so the signal handlers can be registered BEFORE the
+  // bind (see below).
+  let server: Awaited<ReturnType<typeof createAgentRpcServer>> | undefined;
 
   // Clean shutdown on SIGINT / SIGTERM. server.close() resolves only once
   // all open connections close, so a held-open client would block teardown
@@ -123,7 +112,7 @@ async function main(): Promise<void> {
       /* ignore — registry.stop is allSettled; this guards a sync throw */
     }
     try {
-      await server.close();
+      await server?.close();
     } catch {
       /* ignore */
     }
@@ -131,8 +120,31 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // Register the signal handlers BEFORE binding the socket. createAgentRpcServer
+  // creates the socket FILE during listen(), so a supervisor (or test) that
+  // waits for the socket to appear could deliver SIGTERM before main() reached
+  // a post-bind registration — the default signal action would then terminate
+  // the process with no exit code instead of running shutdown(). Registering
+  // first means SIGTERM always hits shutdown() (server may still be undefined,
+  // in which case the close is skipped and we exit 0 cleanly).
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
+
+  server = await createAgentRpcServer({
+    socketPath: config.agent_socket,
+    dispatch,
+    socketGroupGid,
+  });
+
+  log('info', 'core', 'listening', { socket: config.agent_socket });
+
+  // Kick off the boot sequence + steady-state event streams in the
+  // BACKGROUND — never awaited before the server is up. runConvergence is
+  // written to absorb every failure (api briefly down, a host tool missing),
+  // so this fire-and-forget task cannot crash the agent or surface an
+  // unhandled rejection. agent.health already reflects per-collector health
+  // via the registry as the boot sweep progresses.
+  void runConvergence(convergence);
 }
 
 main().catch((err: unknown) => {
