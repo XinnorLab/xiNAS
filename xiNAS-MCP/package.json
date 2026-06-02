@@ -17,6 +17,7 @@
     "format:check": "biome format src/",
     "format:write": "biome format --write src/",
     "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:contracts": "vitest run src/__tests__/contracts",
     "test:coverage": "vitest run --coverage"
   },

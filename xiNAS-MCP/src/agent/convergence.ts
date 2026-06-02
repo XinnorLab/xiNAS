@@ -60,6 +60,16 @@ import type { AgentConfig } from './config.js';
 import { log } from './log.js';
 import { createDiskProbe } from './probe/disk.js';
 import { createFilesystemProbe } from './probe/filesystem.js';
+import {
+  createFixtureDiskProbe,
+  createFixtureFilesystemProbe,
+  createFixtureIdmapProbe,
+  createFixtureInventoryProbe,
+  createFixtureNetworkProbe,
+  createFixtureNfsProbe,
+  createFixtureUsersProbe,
+  fixtureDir,
+} from './probe/fixture.js';
 import { createIdmapProbe } from './probe/idmap.js';
 import { createInventoryProbe } from './probe/inventory.js';
 import { createNetworkProbe } from './probe/network.js';
@@ -91,8 +101,17 @@ export interface Convergence {
 export function buildConvergence(config: AgentConfig): Convergence {
   const registry = new CollectorRegistry();
 
+  // Fixture probe mode (J3): when XINAS_AGENT_PROBE_MODE=fixture:<dir>, swap the
+  // real privileged probes for fixture-backed ones that read <dir>/<file>.json
+  // and spawn NO subprocesses. The collector adapters below are identical in
+  // both modes — only the probe object they wrap changes. disks/users/nfs-idmap
+  // are populated from fixtures; the rest return empty in fixture mode (the e2e
+  // suite asserts only those three kinds). When the env var is unset, fdir is
+  // null and the real-probe path is taken unchanged.
+  const fdir = fixtureDir();
+
   // --- Disk: real probe matches; bridge async stop -> sync stop. ---
-  const diskProbe = createDiskProbe();
+  const diskProbe = fdir !== null ? createFixtureDiskProbe(fdir) : createDiskProbe();
   registry.register(
     new DiskCollector({
       probe: {
@@ -116,7 +135,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
   );
 
   // --- Network: map parsed iface -> { id, op, attrs }. ---
-  const networkProbe = createNetworkProbe();
+  const networkProbe = fdir !== null ? createFixtureNetworkProbe() : createNetworkProbe();
   registry.register(
     new NetworkInterfaceCollector({
       probe: {
@@ -162,7 +181,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
 
   // --- Filesystem: snapshot() only (no observed_at, no watcher). Stamp
   //     observed_at and supply a no-op watch handle. ---
-  const filesystemProbe = createFilesystemProbe();
+  const filesystemProbe = fdir !== null ? createFixtureFilesystemProbe() : createFilesystemProbe();
   registry.register(
     new FilesystemCollector({
       probe: {
@@ -184,7 +203,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
   // --- NFS: real probe matches listSessions/listExports; sessions carry no
   //     observed_at (the collector stamps the delta's, but its local probe
   //     type requires status.observed_at). Stamp it here. ---
-  const nfsProbe = createNfsProbe();
+  const nfsProbe = fdir !== null ? createFixtureNfsProbe() : createNfsProbe();
   registry.register(
     new NfsCollector({
       probe: {
@@ -203,7 +222,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
   );
 
   // --- NfsIdmap: snapshot() -> read(); no-op watch/dbus handles. ---
-  const idmapProbe = createIdmapProbe();
+  const idmapProbe = fdir !== null ? createFixtureIdmapProbe(fdir) : createIdmapProbe();
   registry.register(
     new NfsIdmapCollector({
       probe: {
@@ -238,7 +257,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
   //     carry no `source` discriminator. getent resolves through NSS (local
   //     files + any directory backend), so tag everything 'nss'. No watcher
   //     on the real probe -> no-op handle. ---
-  const usersProbe = createUsersProbe();
+  const usersProbe = fdir !== null ? createFixtureUsersProbe(fdir) : createUsersProbe();
   registry.register(
     new UsersCollector({
       probe: {
@@ -271,7 +290,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
   );
 
   // --- Inventory: snapshot() (nested) -> read() (flat). ---
-  const inventoryProbe = createInventoryProbe();
+  const inventoryProbe = fdir !== null ? createFixtureInventoryProbe() : createInventoryProbe();
   registry.register(
     new InventoryCollector({
       probe: {

@@ -1,0 +1,18 @@
+[
+  {
+    "name": "e2e-alice",
+    "uid": 7001,
+    "gid": 7001,
+    "gecos": "E2E Test User",
+    "home": "/home/e2e-alice",
+    "shell": "/bin/bash"
+  },
+  {
+    "name": "e2e-bob",
+    "uid": 7002,
+    "gid": 7002,
+    "gecos": "",
+    "home": "/home/e2e-bob",
+    "shell": "/bin/sh"
+  }
+]
