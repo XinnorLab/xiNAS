@@ -12,14 +12,17 @@ import { systemWarningsMiddleware } from './middleware/system-warnings.js';
 import { auditRouter } from './routes/audit-query.js';
 import { configHistoryRouter } from './routes/config-history.js';
 import { eventsRouter } from './routes/events.js';
+import { groupsRouter } from './routes/groups.js';
 import { healthRouter } from './routes/health.js';
 import { inventoryRouter } from './routes/inventory.js';
 import { networkRouter } from './routes/network.js';
+import { nfsIdmapRouter } from './routes/nfs-idmap.js';
 import { nfsRouter } from './routes/nfs.js';
 import { storageRouter } from './routes/storage.js';
 import { supportRouter } from './routes/support.js';
 import { systemRouter } from './routes/system.js';
 import { tasksRouter } from './routes/tasks.js';
+import { usersRouter } from './routes/users.js';
 
 export function createApp(ctx: ApiContext): Express {
   const app = express();
@@ -66,6 +69,9 @@ export function createApp(ctx: ApiContext): Express {
   v1.use(configHistoryRouter(ctx));
   v1.use(supportRouter(ctx));
   v1.use(inventoryRouter(ctx));
+  v1.use(usersRouter(ctx));
+  v1.use(groupsRouter(ctx));
+  v1.use(nfsIdmapRouter(ctx));
 
   // Mutating verbs all route to the executor-unavailable stub until
   // xinas-agent ships. Per ADR-0002 §Agent heartbeat, plan and apply
