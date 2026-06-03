@@ -11,7 +11,13 @@
 import { Router } from 'express';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
-import { getOrNull, listByPrefix, sendOk, unwrapValues } from '../handlers/reads.js';
+import {
+  embedMetadata,
+  getOrNull,
+  listByPrefix,
+  sendOk,
+  unwrapResources,
+} from '../handlers/reads.js';
 
 export function usersRouter(ctx: ApiContext): Router {
   const r = Router();
@@ -23,7 +29,7 @@ export function usersRouter(ctx: ApiContext): Router {
       throw new ApiException('INVALID_ARGUMENT', `source must be local|nss|all, got '${source}'`);
     }
     const rows = listByPrefix<Record<string, unknown>>(ctx.state, '/xinas/v1/observed/User/');
-    let values = unwrapValues(rows);
+    let values = unwrapResources(rows);
     if (source !== 'all') {
       values = values.filter(
         (u) => (u.status as { source?: string } | undefined)?.source === source,
@@ -44,7 +50,7 @@ export function usersRouter(ctx: ApiContext): Router {
       `/xinas/v1/observed/User/${req.params.uid}`,
     );
     if (!row) throw new ApiException('NOT_FOUND', `user uid=${req.params.uid} not found`);
-    sendOk(req, res, row.value, [row.revision]);
+    sendOk(req, res, embedMetadata(row), [row.revision]);
   });
 
   return r;

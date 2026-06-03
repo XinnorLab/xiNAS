@@ -15,7 +15,7 @@
 import { Router } from 'express';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
-import { getOrNull, sendOk } from '../handlers/reads.js';
+import { embedMetadata, getOrNull, sendOk } from '../handlers/reads.js';
 
 const SNAPSHOT_KEY = '/xinas/v1/observed/nfs_idmap/snapshot';
 
@@ -31,7 +31,7 @@ export function nfsIdmapRouter(ctx: ApiContext): Router {
         'NfsIdmap snapshot not yet observed; agent may not be running',
       );
     }
-    sendOk(req, res, row.value, [row.revision]);
+    sendOk(req, res, embedMetadata(row), [row.revision]);
   });
 
   return r;

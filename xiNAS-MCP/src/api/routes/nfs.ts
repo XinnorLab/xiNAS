@@ -1,7 +1,13 @@
 import { Router } from 'express';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
-import { getOrNull, listByPrefix, sendOk, unwrapValues } from '../handlers/reads.js';
+import {
+  embedMetadata,
+  getOrNull,
+  listByPrefix,
+  sendOk,
+  unwrapResources,
+} from '../handlers/reads.js';
 
 /**
  * Read-time join: for a desired Share, look up the observed ExportRule
@@ -54,7 +60,7 @@ export function nfsRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(rows).map((s) => joinExports(ctx.state, s)),
+      unwrapResources(rows).map((s) => joinExports(ctx.state, s)),
       rows.map((x) => x.revision),
     );
   });
@@ -65,7 +71,7 @@ export function nfsRouter(ctx: ApiContext): Router {
       `/xinas/v1/desired/Share/${req.params.id}`,
     );
     if (!row) throw new ApiException('NOT_FOUND', `share ${req.params.id} not found`);
-    sendOk(req, res, joinExports(ctx.state, row.value), [row.revision]);
+    sendOk(req, res, joinExports(ctx.state, embedMetadata(row)), [row.revision]);
   });
 
   r.get('/shares/:id/sessions', (req, res) => {
@@ -95,7 +101,7 @@ export function nfsRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(sessions),
+      unwrapResources(sessions),
       sessions.map((row) => row.revision),
     );
   });
@@ -105,7 +111,7 @@ export function nfsRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(rows),
+      unwrapResources(rows),
       rows.map((x) => x.revision),
     );
   });
@@ -116,7 +122,7 @@ export function nfsRouter(ctx: ApiContext): Router {
       `/xinas/v1/desired/NfsProfile/${req.params.id}`,
     );
     if (!row) throw new ApiException('NOT_FOUND', `nfs profile ${req.params.id} not found`);
-    sendOk(req, res, row.value, [row.revision]);
+    sendOk(req, res, embedMetadata(row), [row.revision]);
   });
 
   r.get('/export-groups', (req, res) => {
@@ -124,7 +130,7 @@ export function nfsRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(rows),
+      unwrapResources(rows),
       rows.map((x) => x.revision),
     );
   });
