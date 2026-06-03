@@ -86,3 +86,13 @@ xinas_api_socket_group: xinas-admin
 # controller_id from a control-plane registry (it then wins over A5's
 # set_fact because extra-vars/play-vars outrank role defaults).
 xinas_api_controller_id: ""
+
+# Agent UDS socket the api's HeartbeatTracker connects to (config.agent.socket).
+# Wires the api↔agent heartbeat: MUST match the xinas_agent role's
+# xinas_agent_socket so the tracker can reach the agent.
+xinas_api_agent_socket: /run/xinas/agent.sock
+
+# Interval (ms) at which the api's HeartbeatTracker pings the agent
+# (config.agent.heartbeat_interval_ms). MUST match the xinas_agent role's
+# xinas_agent_heartbeat_interval_ms so both ends agree on the cadence.
+xinas_api_agent_heartbeat_interval_ms: 5000

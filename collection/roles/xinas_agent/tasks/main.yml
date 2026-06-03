@@ -1,0 +1,85 @@
+---
+# xinas_agent role tasks
+# Pre-condition: the xinas_api role must have run first (generates
+# /etc/xinas-agent/agent-token and /var/lib/xinas/controller-id).
+
+# --- Preflight checks ---
+
+- name: Preflight — verify /etc/xinas-agent/agent-token exists
+  ansible.builtin.stat:
+    path: "{{ xinas_agent_token_path }}"
+  register: _xinas_agent_token_stat
+  tags: [xinas_agent, preflight]
+
+- name: Preflight — fail if agent-token is absent (run xinas_api role first)
+  ansible.builtin.fail:
+    msg: >
+      /etc/xinas-agent/agent-token is absent. The agent-token is generated
+      by the xinas_api role (task A7 in the Phase 0 plan). Run the xinas_api
+      role before this role, or run the combined playbook that includes both.
+  when: not _xinas_agent_token_stat.stat.exists
+  tags: [xinas_agent, preflight]
+
+- name: Preflight — verify compiled agent binary exists
+  ansible.builtin.stat:
+    path: "{{ xinas_agent_repo_path }}/dist/agent-server.js"
+  register: _xinas_agent_binary_stat
+  tags: [xinas_agent, preflight]
+
+- name: Preflight — fail if agent binary is absent (run npm run build first)
+  ansible.builtin.fail:
+    msg: >
+      {{ xinas_agent_repo_path }}/dist/agent-server.js is absent.
+      Build the TypeScript source before deploying:
+        cd {{ xinas_agent_repo_path }} && npm run build
+  when: not _xinas_agent_binary_stat.stat.exists
+  tags: [xinas_agent, preflight]
+
+# --- Config directory ---
+
+- name: Ensure /etc/xinas-agent/ directory exists
+  ansible.builtin.file:
+    path: "{{ xinas_agent_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [xinas_agent, config]
+
+# --- Config file ---
+
+- name: Template xinas-agent config file
+  ansible.builtin.template:
+    src: xinas-agent-config.json.j2
+    dest: "{{ xinas_agent_config_dir }}/config.json"
+    owner: root
+    group: root
+    mode: '0640'
+  notify: restart xinas-agent
+  tags: [xinas_agent, config]
+
+# --- Systemd unit ---
+
+- name: Install xinas-agent.service systemd unit
+  ansible.builtin.copy:
+    src: "{{ xinas_agent_unit_src }}"
+    dest: /etc/systemd/system/xinas-agent.service
+    owner: root
+    group: root
+    mode: '0644'
+    remote_src: true
+  notify:
+    - reload systemd
+    - restart xinas-agent
+  tags: [xinas_agent, unit]
+
+- name: Force systemd reload before enabling (flush handlers now)
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start xinas-agent.service
+  ansible.builtin.systemd:
+    name: xinas-agent.service
+    state: started
+    enabled: true
+    daemon_reload: true
+  tags: [xinas_agent, unit]
