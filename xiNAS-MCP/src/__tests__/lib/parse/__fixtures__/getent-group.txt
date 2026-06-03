@@ -1,0 +1,5 @@
+root:x:0:
+daemon:x:1:
+xinas-admin:x:1000:alice
+xinas-api:x:999:
+alice:x:1001:

@@ -1,0 +1,13 @@
+processor	: 0
+vendor_id	: GenuineIntel
+model name	: Intel(R) Xeon(R) Gold 6230 CPU @ 2.10GHz
+cpu cores	: 20
+siblings	: 40
+physical id	: 0
+
+processor	: 1
+vendor_id	: GenuineIntel
+model name	: Intel(R) Xeon(R) Gold 6230 CPU @ 2.10GHz
+cpu cores	: 20
+siblings	: 40
+physical id	: 0
