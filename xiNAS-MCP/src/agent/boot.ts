@@ -33,7 +33,7 @@ export async function runBootSequence(opts: BootSequenceOptions): Promise<void> 
   publisher.setBootMode(true);
   try {
     for (const collector of registry.list()) {
-      let deltas: ObservationDelta[] = [];
+      let deltas: ObservationDelta[];
       try {
         deltas = await collector.initialSweep();
       } catch (err) {
@@ -47,7 +47,14 @@ export async function runBootSequence(opts: BootSequenceOptions): Promise<void> 
             error: err instanceof Error ? err.message : String(err),
           })}\n`,
         );
-        deltas = [];
+        // Do NOT reconcile on a FAILED sweep. An empty result here means
+        // "unknown", not "no entities" — sending flushWithSnapshot([kind])
+        // (complete_snapshots:[kind]) would make the api reconcile-DELETE every
+        // existing observed row for this kind, wiping good data on a transient
+        // probe failure. Skip this collector entirely: its health=error already
+        // surfaces the failure via agent.health, and the poll backstop
+        // (PollDriver) re-sweeps + reconciles once the probe recovers.
+        continue;
       }
       for (const delta of deltas) {
         publisher.enqueue(delta);
