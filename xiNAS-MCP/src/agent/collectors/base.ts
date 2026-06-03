@@ -85,6 +85,11 @@ export class CollectorRegistry {
     this.collectors.push(collector);
   }
 
+  /** Read-only view of registered collectors, for the boot sequence's per-collector sweep. */
+  list(): readonly Collector[] {
+    return this.collectors;
+  }
+
   /**
    * Returns deltas from every registered collector's initialSweep().
    * Uses allSettled so one failing collector (e.g. nfs-helper down) cannot
