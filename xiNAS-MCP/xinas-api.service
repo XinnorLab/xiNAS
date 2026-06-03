@@ -40,6 +40,11 @@ RestartSec=5s
 # and the group with `groupadd --system`.
 User=xinas-api
 Group=xinas-admin
+# Membership in xinas-api grants connect to /run/xinas/agent.sock (0660
+# root:xinas-api per ADR-0002). The group has no human members; the
+# api user joins it as supplementary so the effective gid stays
+# xinas-admin and files created by the api remain operator-readable.
+SupplementaryGroups=xinas-api
 NoNewPrivileges=true
 CapabilityBoundingSet=
 ProtectSystem=strict

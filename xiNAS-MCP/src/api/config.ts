@@ -1,6 +1,13 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
-export type Role = 'viewer' | 'operator' | 'admin' | 'local_admin';
+export type Role =
+  | 'viewer'
+  | 'operator'
+  | 'admin'
+  | 'local_admin'
+  // internal_agent: only the xinas-agent holds this; gates /internal/v1/observed
+  // (route guard lands in a later S1 task).
+  | 'internal_agent';
 
 export interface TokenPrincipal {
   principal: string;
@@ -34,6 +41,14 @@ export interface ApiConfig {
     auditJsonlPath: string;
     archiveDir?: string;
   };
+  /**
+   * Optional path to a second tokens file with stricter file permissions
+   * (0640 root:xinas-api). Keeps the agent bearer out of the operator-readable
+   * config.json. Entries are merged into the tokens map after config.json is
+   * parsed. Key collisions between the two files are fatal at startup — rotate
+   * the colliding token or remove one of the entries.
+   */
+  internalTokensPath?: string;
 }
 
 const DEFAULT_PATH = '/etc/xinas-api/config.json';
@@ -52,5 +67,21 @@ export function loadConfig(opts: { configPath?: string; inline?: ApiConfig } = {
     );
   }
   const raw = readFileSync(path, 'utf8');
-  return JSON.parse(raw) as ApiConfig;
+  const config = JSON.parse(raw) as ApiConfig;
+
+  if (config.internalTokensPath && existsSync(config.internalTokensPath)) {
+    const internalRaw = readFileSync(config.internalTokensPath, 'utf8');
+    const internal = JSON.parse(internalRaw) as Record<string, TokenPrincipal>;
+    for (const [key, principal] of Object.entries(internal)) {
+      if (key in config.tokens) {
+        throw new Error(
+          `token key collision: '${key}' appears in both ${path} and ${config.internalTokensPath}. ` +
+            'Rotate the colliding token or remove one of the entries.',
+        );
+      }
+      config.tokens[key] = principal;
+    }
+  }
+
+  return config;
 }

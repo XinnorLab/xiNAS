@@ -218,6 +218,7 @@ export class SqliteKvStore implements KvStore {
       get: (key) => this.get(key),
       put: (key, value, opts) => this.put(key, value, opts),
       delete: (key, expected_revision) => this.delete(key, expected_revision),
+      list: (opts) => this.list(opts),
     };
     this.txBuffer = [];
     const run = this.db.transaction(() => fn(txFacade));

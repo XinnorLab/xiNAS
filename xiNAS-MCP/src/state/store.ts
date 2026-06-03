@@ -60,4 +60,13 @@ export interface KvTransaction {
   put<T = unknown>(key: string, value: T, opts?: PutOptions): CasResult<T>;
 
   delete(key: string, expected_revision?: number): DeleteResult;
+
+  /**
+   * List committed-state values under a prefix at the transaction's
+   * snapshot. For atomic reconcile patterns that need the current key
+   * set inside the same tx as the deletes (complete-snapshot observation
+   * reconcile, xinas-agent S0+S1). Outer KvStore.list() is insufficient —
+   * it operates outside the transaction.
+   */
+  list<T = unknown>(opts?: ListOptions): RevisionedValue<T>[];
 }
