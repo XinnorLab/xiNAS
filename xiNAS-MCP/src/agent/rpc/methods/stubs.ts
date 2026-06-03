@@ -32,6 +32,20 @@ export function makeStubHandler(method: string): RpcHandler {
 }
 
 const STUB_METHOD_NAMES = [
+  // On-demand observation reads (deferred to WS12 convergence). The spec's RPC
+  // table once marked these "Real", but the LIVE data path in S0/S1 is the push
+  // model (Flow A: collectors -> publisher -> POST /internal/v1/observed); no
+  // S0/S1 caller uses the on-demand pull surface. Registering them here makes
+  // them enumerated-but-stubbed (EXECUTOR_UNSUPPORTED) instead of an unknown
+  // -32601, which is the correct contract signal until WS12 wires the reads.
+  'inventory.collect',
+  'disks.list',
+  'filesystems.list',
+  'mounts.list',
+  'network.snapshot',
+  'systemd.units_status',
+  'exports.list',
+  'nfs.sessions.list',
   // Arrays (xiRAID adapter — S3/WS5)
   'arrays.create',
   'arrays.delete',
