@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "start:api": "node dist/api-server.js",
+    "dev:agent": "tsx src/agent-server.ts",
+    "start:agent": "node dist/agent-server.js",
     "lint": "biome lint src/",
     "format:check": "biome format src/",
     "format:write": "biome format --write src/",
