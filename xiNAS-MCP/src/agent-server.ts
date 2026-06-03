@@ -101,7 +101,15 @@ async function main(): Promise<void> {
       process.exit(0);
     }, 3000);
     forced.unref?.();
-    // Stop collectors FIRST so their event subprocesses (udevadm / ip
+    // Stop the steady-state poll driver and the publisher's debounce timer
+    // FIRST so no new sweep/flush starts while collectors are being torn down.
+    try {
+      convergence.pollDriver.stop();
+      convergence.publisher.dispose();
+    } catch {
+      /* ignore — both are best-effort timer teardown */
+    }
+    // Stop collectors next so their event subprocesses (udevadm / ip
     // monitor) and the subprocess-monitor restart timers are torn down and
     // don't survive past shutdown. allSettled inside registry.stop() means
     // one stubborn collector can't block the rest; the 3s timer is the

@@ -61,7 +61,12 @@ AmbientCapabilities=CAP_CHOWN
 
 # --- Process isolation ---
 LockPersonality=true
-MemoryDenyWriteExecute=true
+# MemoryDenyWriteExecute is intentionally OMITTED (matches xinas-api.service).
+# V8's JIT must mprotect code pages PROT_EXEC; MDWE installs a seccomp filter
+# that EPERMs exactly that, so a default (non-jitless) Node runtime aborts or
+# is forced to degrade. systemd-analyze verify cannot catch this runtime JIT
+# abort. Re-enable only if proven safe on the exact target Node build with a
+# real start test.
 RestrictRealtime=true
 RestrictSUIDSGID=true
 RemoveIPC=true

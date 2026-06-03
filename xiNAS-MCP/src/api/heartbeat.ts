@@ -302,9 +302,34 @@ export class HeartbeatTracker {
     const elapsedMs = nowMs - this.#lastHeartbeatAt.getTime();
     const { intervalMs } = this.#opts;
 
-    if (elapsedMs <= 2 * intervalMs) return 'healthy';
-    if (elapsedMs <= 6 * intervalMs) return 'degraded';
-    return 'offline';
+    let timeState: AgentState;
+    if (elapsedMs <= 2 * intervalMs) timeState = 'healthy';
+    else if (elapsedMs <= 6 * intervalMs) timeState = 'degraded';
+    else timeState = 'offline';
+
+    // Spec §668: a collector reporting error degrades the node even when the
+    // heartbeat itself is on schedule. The agent computes status='degraded' in
+    // its agent.health result, but the api derives state independently, so the
+    // captured #collectors map (set on every successful heartbeat) must be
+    // consulted here — otherwise a fully-degraded agent reads as `healthy` and
+    // mutating routes never emit the EXECUTOR_DEGRADED warning (§312/§702).
+    // Only downgrade an otherwise-healthy node; an already degraded/offline
+    // (stale/unreachable) heartbeat is strictly worse and is preserved.
+    if (timeState === 'healthy' && this.#hasCollectorError()) return 'degraded';
+    return timeState;
+  }
+
+  /**
+   * True when any captured collector health string denotes an error. The
+   * registry serializes an errored collector as `error: <reason>` (see
+   * CollectorRegistry.healthSnapshot); `running` / `stubbed` do NOT degrade —
+   * a stubbed (deferred) collector is an expected state, not a fault.
+   */
+  #hasCollectorError(): boolean {
+    for (const health of Object.values(this.#collectors)) {
+      if (health.startsWith('error')) return true;
+    }
+    return false;
   }
 
   #emitStateChange(from: AgentState, to: AgentState): void {

@@ -147,4 +147,59 @@ describe('HeartbeatTracker — state transitions', () => {
     tracker.recordHeartbeatSuccess(new Date());
     expect(tracker.currentWarnings({ routeIsMutating: true })).toHaveLength(0);
   });
+
+  // Regression for the independent-review J finding: an on-schedule heartbeat
+  // whose agent.health reports a collector in error must read as `degraded`
+  // (spec §668), not `healthy`. The tracker previously ignored #collectors.
+  describe('collector-error → degraded (review J, spec §668)', () => {
+    it('downgrades a fresh heartbeat to degraded when a collector is in error', () => {
+      const tracker = makeTracker();
+      tracker.recordHeartbeatSuccess(new Date(), {
+        version: '1.0.0',
+        collectors: { Disk: 'running', SystemdUnit: 'error: systemd dbus probe unavailable' },
+      });
+      expect(tracker.currentState()).toBe('degraded');
+    });
+
+    it('stays healthy when all collectors are running/stubbed (stubbed is not a fault)', () => {
+      const tracker = makeTracker();
+      tracker.recordHeartbeatSuccess(new Date(), {
+        version: '1.0.0',
+        collectors: { Disk: 'running', XiraidArray: 'stubbed' },
+      });
+      expect(tracker.currentState()).toBe('healthy');
+    });
+
+    it('emits EXECUTOR_DEGRADED on mutating routes when a collector errors', () => {
+      const tracker = makeTracker();
+      tracker.recordHeartbeatSuccess(new Date(), {
+        collectors: { SystemdUnit: 'error: dbus unavailable' },
+      });
+      const warnings = tracker.currentWarnings({ routeIsMutating: true });
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.code).toBe('EXECUTOR_DEGRADED');
+    });
+
+    it('a collector error does NOT override offline (connect-refused wins)', () => {
+      const tracker = makeTracker();
+      tracker.recordHeartbeatSuccess(new Date(), {
+        collectors: { SystemdUnit: 'error: dbus unavailable' },
+      });
+      tracker.recordHeartbeatFailure(new Date(), { connectRefused: true });
+      expect(tracker.currentState()).toBe('offline');
+    });
+
+    it('clears back to healthy once the collector recovers', () => {
+      const tracker = makeTracker();
+      const t0 = new Date('2026-05-28T12:00:00.000Z');
+      vi.setSystemTime(t0);
+      tracker.recordHeartbeatSuccess(t0, { collectors: { SystemdUnit: 'error: boom' } });
+      expect(tracker.currentState()).toBe('degraded');
+      // Next heartbeat reports the collector running again.
+      tracker.recordHeartbeatSuccess(new Date(t0.getTime() + 1_000), {
+        collectors: { SystemdUnit: 'running' },
+      });
+      expect(tracker.currentState()).toBe('healthy');
+    });
+  });
 });

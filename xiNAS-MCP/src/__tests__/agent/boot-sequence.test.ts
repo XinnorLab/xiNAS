@@ -169,4 +169,56 @@ describe('Boot sequence — initial sweep + agent_started', () => {
     expect(body.complete_snapshots).toEqual(['User']);
     expect(body.deltas).toEqual([]);
   });
+
+  // Regression: a FAILED initial sweep must NOT reconcile. deltas=[] from a
+  // throw means "unknown", not "no entities"; a complete_snapshots:[kind] flush
+  // would make the api delete every existing observed row for that kind, wiping
+  // good data on a transient probe failure at agent restart.
+  it('a FAILED initial sweep does not POST a reconcile batch for that kind', async () => {
+    const pub = new Publisher({
+      apiSocketPath: socketPath,
+      agentToken: 'tok',
+      controllerId: '00000000-0000-0000-0000-0000000000aa',
+    });
+
+    const registry = new CollectorRegistry();
+    // A collector whose probe transiently fails at boot.
+    registry.register({
+      kind: 'Disk',
+      async initialSweep() {
+        throw new Error('probe transient failure');
+      },
+      async start() {
+        /* no-op */
+      },
+      async stop() {
+        /* no-op */
+      },
+      health() {
+        return { state: 'error', reason: 'probe transient failure' };
+      },
+    });
+    // A healthy collector in the same boot — its reconcile must still happen.
+    registry.register(makeStubCollector('User', []));
+
+    await runBootSequence({
+      publisher: pub,
+      registry,
+      controllerId: '00000000-0000-0000-0000-0000000000aa',
+    });
+
+    const observedPosts = requestLog.filter((r) => r.path === '/internal/v1/observed');
+    // No Disk reconcile — the failed sweep was skipped, preserving existing state.
+    const diskReconcile = observedPosts.find((r) =>
+      (r.body as { complete_snapshots?: string[] }).complete_snapshots?.includes('Disk'),
+    );
+    expect(diskReconcile).toBeUndefined();
+    // The healthy User collector still reconciled.
+    const userReconcile = observedPosts.find((r) =>
+      (r.body as { complete_snapshots?: string[] }).complete_snapshots?.includes('User'),
+    );
+    expect(userReconcile).toBeDefined();
+    // agent_started still posts (boot completes despite one failed collector).
+    expect(requestLog.filter((r) => r.path === '/internal/v1/agent_started')).toHaveLength(1);
+  });
 });

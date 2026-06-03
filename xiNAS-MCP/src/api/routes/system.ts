@@ -1,7 +1,13 @@
 import { Router } from 'express';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
-import { getOrNull, listByPrefix, sendOk, unwrapValues } from '../handlers/reads.js';
+import {
+  embedMetadata,
+  getOrNull,
+  listByPrefix,
+  sendOk,
+  unwrapResources,
+} from '../handlers/reads.js';
 
 export function systemRouter(ctx: ApiContext): Router {
   const r = Router();
@@ -18,16 +24,18 @@ export function systemRouter(ctx: ApiContext): Router {
     // without a fresh RPC. Omitted when no tracker is wired (the optional
     // agent sub-object in api-v1.yaml). The pre-existing node.status.agent_state
     // field is preserved alongside it.
-    const nodeValue = nodes[0]!.value as Record<string, unknown>;
+    // Embed the synthesized metadata (from each row's KV tracking) so the
+    // public Node/Cluster responses carry the schema-required `metadata`.
+    const nodeWithMeta = embedMetadata(nodes[0]!) as Record<string, unknown>;
     const agent = ctx.tracker?.currentSnapshot();
     const node = agent
       ? {
-          ...nodeValue,
-          status: { ...((nodeValue.status as Record<string, unknown>) ?? {}), agent },
+          ...nodeWithMeta,
+          status: { ...((nodeWithMeta.status as Record<string, unknown>) ?? {}), agent },
         }
-      : nodeValue;
+      : nodeWithMeta;
 
-    sendOk(req, res, { cluster: cluster.value, node }, [
+    sendOk(req, res, { cluster: embedMetadata(cluster), node }, [
       cluster.revision,
       ...nodes.map((n) => n.revision),
     ]);
@@ -47,7 +55,7 @@ export function systemRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(nodes),
+      unwrapResources(nodes),
       nodes.map((n) => n.revision),
     );
   });

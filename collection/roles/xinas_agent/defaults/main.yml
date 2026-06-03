@@ -16,6 +16,15 @@ xinas_agent_config_dir: /etc/xinas-agent
 # can connect.
 xinas_agent_socket: /run/xinas/agent.sock
 
+# Group the agent socket is chowned to so the (unprivileged) xinas-api
+# process can connect to it. MUST be a group the api process is a member
+# of — the xinas_api role creates `xinas-api` and adds the api user to it.
+# If this is wrong/undefined, agent-server.ts's getent lookup fails and
+# falls back to the process gid (0 under User=root), leaving the socket
+# root:root 0660 → the api gets EACCES on connect → the heartbeat never
+# succeeds and the agent is pinned `offline`.
+xinas_agent_socket_group: xinas-api
+
 # Path to the api's UDS socket. The agent POSTs observation batches
 # to the api over this socket.
 xinas_api_socket: /run/xinas/api.sock
