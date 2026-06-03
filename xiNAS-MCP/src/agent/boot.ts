@@ -25,28 +25,45 @@ export interface BootSequenceOptions {
 export async function runBootSequence(opts: BootSequenceOptions): Promise<void> {
   const { publisher, registry, controllerId } = opts;
 
-  for (const collector of registry.list()) {
-    let deltas: ObservationDelta[] = [];
-    try {
-      deltas = await collector.initialSweep();
-    } catch (err) {
-      process.stderr.write(
-        `${JSON.stringify({
-          time: new Date().toISOString(),
-          level: 'error',
-          subsystem: 'boot',
-          event: 'initial_sweep_failed',
-          kind: collector.kind,
-          error: err instanceof Error ? err.message : String(err),
-        })}\n`,
-      );
-      deltas = [];
+  // Boot mode: suppress enqueue's ceiling/debounce auto-flush so each kind is
+  // sent as exactly ONE flushWithSnapshot([kind]) reconcile batch below. Without
+  // this, a kind exceeding 256/1MB would early-flush a partial (no reconcile),
+  // then the trailing flushWithSnapshot would reconcile-delete it. Restored in
+  // the finally so steady-state debounce/ceiling resume after boot.
+  publisher.setBootMode(true);
+  try {
+    for (const collector of registry.list()) {
+      let deltas: ObservationDelta[];
+      try {
+        deltas = await collector.initialSweep();
+      } catch (err) {
+        process.stderr.write(
+          `${JSON.stringify({
+            time: new Date().toISOString(),
+            level: 'error',
+            subsystem: 'boot',
+            event: 'initial_sweep_failed',
+            kind: collector.kind,
+            error: err instanceof Error ? err.message : String(err),
+          })}\n`,
+        );
+        // Do NOT reconcile on a FAILED sweep. An empty result here means
+        // "unknown", not "no entities" — sending flushWithSnapshot([kind])
+        // (complete_snapshots:[kind]) would make the api reconcile-DELETE every
+        // existing observed row for this kind, wiping good data on a transient
+        // probe failure. Skip this collector entirely: its health=error already
+        // surfaces the failure via agent.health, and the poll backstop
+        // (PollDriver) re-sweeps + reconciles once the probe recovers.
+        continue;
+      }
+      for (const delta of deltas) {
+        publisher.enqueue(delta);
+      }
+      const kinds = new Set<Kind>([collector.kind, ...deltas.map((d) => d.kind)]);
+      await publisher.flushWithSnapshot([...kinds]);
     }
-    for (const delta of deltas) {
-      publisher.enqueue(delta);
-    }
-    const kinds = new Set<Kind>([collector.kind, ...deltas.map((d) => d.kind)]);
-    await publisher.flushWithSnapshot([...kinds]);
+  } finally {
+    publisher.setBootMode(false);
   }
 
   await publisher.postOnce('/internal/v1/agent_started', { controller_id: controllerId });

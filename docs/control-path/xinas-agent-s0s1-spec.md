@@ -230,7 +230,7 @@ Architecture rules:
 |---|---|---|
 | `agent.health` | Real | `{ status, version, uptime_seconds, controller_id, in_flight_tasks: 0, collectors: { <name>: 'running' \| 'stubbed' \| 'error: <reason>' } }` |
 | `agent.version` | Real | `{ version, git_sha, build_date }` |
-| `inventory.collect`, `disks.list`, `filesystems.list`, `mounts.list`, `network.snapshot`, `systemd.units_status`, `exports.list`, `nfs.sessions.list` | Real (callable on demand; same data the collectors push asynchronously) | Whatever the collector last computed; `INTERNAL` if the collector is in an error state |
+| `inventory.collect`, `disks.list`, `filesystems.list`, `mounts.list`, `network.snapshot`, `systemd.units_status`, `exports.list`, `nfs.sessions.list` | Stub (deferred to WS12 convergence) | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'`. **The LIVE data path in S0/S1 is the push model (Flow A)** — collectors push the same data asynchronously to `/internal/v1/observed`, which the api serves from its KV store; no S0/S1 caller uses the on-demand pull. These on-demand read methods are enumerated-but-stubbed now (so they return `EXECUTOR_UNSUPPORTED`, not an unknown `-32601`) and are wired to the collectors' last-computed snapshots in WS12. |
 | `arrays.list`, `managed_files.checksums` | Stub | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'` |
 | `arrays.create`, `arrays.delete`, `arrays.import`, `spare.set` | Stub | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'` |
 | `fs.create`, `fs.mount`, `fs.unmount`, `fs.grow`, `fs.set_quota_mode` | Stub | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'` |
@@ -579,6 +579,8 @@ ExportRule:
 ```
 
 The existing `/api/v1/export-groups` endpoint stays as-is (still returns `[]` in S0+S1); ExportRule entries surface inside `Share.status.exports[]` where they naturally belong. No new public GET endpoint for ExportRule.
+
+**Join key (read time):** the fold-in matches `desired Share.spec.path` against the observed `ExportRule.spec.export_path` (and, for `/shares/{id}/sessions`, against `NfsSession.spec.export_path`). The Share has **no** `export_path` field — its `spec.path` IS the exported directory the agent stamps onto the observed rows. Keying the Share side off a non-existent `export_path` silently returns `[]` for every real Share.
 
 ### `SystemdUnit` resource (new public kind)
 

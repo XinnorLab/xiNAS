@@ -40,7 +40,37 @@ export function getOrNull<T>(state: OpenedStateStore, key: string): RevisionedVa
   return state.kv.get<T>(key);
 }
 
-/** Unwrap an array of RevisionedValue to just the values. */
+/** Unwrap an array of RevisionedValue to just the values (raw — no metadata).
+ *  Use for non-resource records (events, audit) that have no Metadata schema. */
 export function unwrapValues<T>(rows: RevisionedValue<T>[]): T[] {
   return rows.map((r) => r.value);
+}
+
+/**
+ * Synthesize the api-v1.yaml `metadata` object from a RevisionedValue's row
+ * tracking and embed it into the value. The KV layer tracks revision +
+ * created_at/modified_at + owner/source/validation_status PER ROW, not inside
+ * the stored value — so a public resource read that returns the raw value omits
+ * the schema-required `metadata`. Every resource schema ($ref Metadata, required)
+ * needs this projection at read time. Non-object values are returned unchanged.
+ */
+export function embedMetadata<T>(row: RevisionedValue<T>): T {
+  const value = row.value;
+  if (value === null || typeof value !== 'object') return value;
+  return {
+    ...(value as Record<string, unknown>),
+    metadata: {
+      revision: row.revision,
+      created_at: new Date(row.created_at).toISOString(),
+      modified_at: new Date(row.modified_at).toISOString(),
+      owner: row.owner,
+      source: row.source,
+      validation_status: row.validation_status,
+    },
+  } as T;
+}
+
+/** Like unwrapValues, but embeds the synthesized metadata into each resource. */
+export function unwrapResources<T>(rows: RevisionedValue<T>[]): T[] {
+  return rows.map(embedMetadata);
 }

@@ -1,6 +1,12 @@
 import { Router } from 'express';
 import { ApiException } from '../errors.js';
-import { sendOk, getOrNull, listByPrefix, unwrapValues } from '../handlers/reads.js';
+import {
+  embedMetadata,
+  getOrNull,
+  listByPrefix,
+  sendOk,
+  unwrapResources,
+} from '../handlers/reads.js';
 import type { ApiContext } from '../context.js';
 
 /**
@@ -30,7 +36,7 @@ export function storageRouter(ctx: ApiContext): Router {
     // Per api-v1.yaml: optional safe_for_use boolean filter on
     // disk.status.safe_for_use.
     const safeForUse = parseBoolQuery(req.query.safe_for_use, 'safe_for_use');
-    let values = unwrapValues(rows);
+    let values = unwrapResources(rows);
     if (safeForUse !== undefined) {
       values = values.filter((v) => {
         const status = (v as { status?: { safe_for_use?: boolean } }).status;
@@ -53,7 +59,7 @@ export function storageRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(rows),
+      unwrapResources(rows),
       rows.map((x) => x.revision),
     );
   });
@@ -64,7 +70,7 @@ export function storageRouter(ctx: ApiContext): Router {
       `/xinas/v1/observed/XiraidArray/${req.params.id}`,
     );
     if (!row) throw new ApiException('NOT_FOUND', `array ${req.params.id} not found`);
-    sendOk(req, res, row.value, [row.revision]);
+    sendOk(req, res, embedMetadata(row), [row.revision]);
   });
 
   r.get('/filesystems', (req, res) => {
@@ -72,7 +78,7 @@ export function storageRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(rows),
+      unwrapResources(rows),
       rows.map((x) => x.revision),
     );
   });
@@ -83,7 +89,7 @@ export function storageRouter(ctx: ApiContext): Router {
       `/xinas/v1/observed/Filesystem/${req.params.id}`,
     );
     if (!row) throw new ApiException('NOT_FOUND', `filesystem ${req.params.id} not found`);
-    sendOk(req, res, row.value, [row.revision]);
+    sendOk(req, res, embedMetadata(row), [row.revision]);
   });
 
   return r;

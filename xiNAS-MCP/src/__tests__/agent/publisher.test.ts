@@ -125,4 +125,63 @@ describe('Publisher — core enqueue + flush', () => {
     expect(receivedBodies.length).toBeGreaterThanOrEqual(1);
     expect((receivedBodies[0] as { deltas: unknown[] }).deltas.length).toBeGreaterThan(0);
   });
+
+  // Regression for the independent-review F1 finding: a single steady-state
+  // delta on a quiet node must flush via the debounce timer — without an
+  // explicit flush and without crossing a ceiling. Previously it sat in the
+  // queue forever and observed state froze after the boot sweep.
+  it('debounces a sub-ceiling enqueue and flushes it within the debounce window', async () => {
+    const pub = new Publisher({
+      apiSocketPath: socketPath,
+      agentToken: 'tok',
+      controllerId: '00000000-0000-0000-0000-0000000000aa',
+      debounceMs: 20,
+    });
+    pub.enqueue({ kind: 'Disk', id: 'nvme0n1', op: 'upsert', value: { name: 'x' } });
+    // No explicit flush — the debounce timer fires on its own.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(receivedBodies).toHaveLength(1);
+    expect((receivedBodies[0] as { deltas: unknown[] }).deltas).toHaveLength(1);
+    pub.dispose();
+  });
+
+  it('debounceMs:0 disables the timed flush (delta waits for an explicit flush)', async () => {
+    const pub = new Publisher({
+      apiSocketPath: socketPath,
+      agentToken: 'tok',
+      controllerId: '00000000-0000-0000-0000-0000000000aa',
+      debounceMs: 0,
+    });
+    pub.enqueue({ kind: 'Disk', id: 'nvme0n1', op: 'upsert', value: { name: 'x' } });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(receivedBodies).toHaveLength(0);
+    pub.dispose();
+  });
+
+  // Regression for the independent-review F (boot data-loss) finding: in boot
+  // mode the ceiling auto-flush is suppressed so a kind exceeding the ceiling is
+  // sent as ONE flushWithSnapshot reconcile batch — not a partial flush (no
+  // reconcile) that the trailing reconcile batch would then delete.
+  it('boot mode suppresses the ceiling flush; the kind is sent as one reconcile batch', async () => {
+    const pub = new Publisher({
+      apiSocketPath: socketPath,
+      agentToken: 'tok',
+      controllerId: '00000000-0000-0000-0000-0000000000aa',
+      maxBatchSize: 3, // would normally early-flush after 3 entries
+      debounceMs: 0,
+    });
+    pub.setBootMode(true);
+    for (let i = 0; i < 5; i++) {
+      pub.enqueue({ kind: 'Disk', id: `d${i}`, op: 'upsert', value: {} });
+    }
+    // No early flush despite exceeding maxBatchSize=3.
+    expect(receivedBodies).toHaveLength(0);
+    await pub.flushWithSnapshot(['Disk']);
+    expect(receivedBodies).toHaveLength(1);
+    const body = receivedBodies[0] as { deltas: unknown[]; complete_snapshots: string[] };
+    expect(body.deltas).toHaveLength(5);
+    expect(body.complete_snapshots).toEqual(['Disk']);
+    pub.setBootMode(false);
+    pub.dispose();
+  });
 });

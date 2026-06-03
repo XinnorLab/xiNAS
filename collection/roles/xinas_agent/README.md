@@ -48,6 +48,7 @@ The `meta/main.yml` dependency declaration enforces step 2 before step 3.
 | `xinas_agent_repo_path` | `/opt/xiNAS/xiNAS-MCP` | Path to the MCP repo checkout containing `dist/agent-server.js`. |
 | `xinas_agent_config_dir` | `/etc/xinas-agent` | Directory for the agent config file. |
 | `xinas_agent_socket` | `/run/xinas/agent.sock` | UDS socket the agent binds. Must match the api's `agent.socket` config. |
+| `xinas_agent_socket_group` | `xinas-api` | Group the agent socket is chowned to so the unprivileged api can connect. MUST be a group the api process belongs to (the `xinas_api` role creates `xinas-api` and adds the api user). If wrong/undefined the socket ends up `root:root` and the api gets EACCES → agent pinned `offline`. Rendered into config.json's `socket_group`. |
 | `xinas_api_socket` | `/run/xinas/api.sock` | UDS socket the agent uses to POST observations to the api. |
 | `xinas_agent_controller_id_path` | `/var/lib/xinas/controller-id` | Shared identity file (read-only; written by `xinas_api`). |
 | `xinas_agent_token_path` | `/etc/xinas-agent/agent-token` | Token file (read-only; written by `xinas_api`). Mode `0400 root:root`. |

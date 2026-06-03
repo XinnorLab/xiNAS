@@ -1,6 +1,12 @@
 import { Router } from 'express';
 import { ApiException } from '../errors.js';
-import { sendOk, getOrNull, listByPrefix, unwrapValues } from '../handlers/reads.js';
+import {
+  embedMetadata,
+  getOrNull,
+  listByPrefix,
+  sendOk,
+  unwrapResources,
+} from '../handlers/reads.js';
 import type { ApiContext } from '../context.js';
 
 export function networkRouter(ctx: ApiContext): Router {
@@ -14,7 +20,7 @@ export function networkRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      { interfaces: unwrapValues(ifaces) },
+      { interfaces: unwrapResources(ifaces) },
       ifaces.map((x) => x.revision),
     );
   });
@@ -27,7 +33,7 @@ export function networkRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(rows),
+      unwrapResources(rows),
       rows.map((x) => x.revision),
     );
   });
@@ -38,7 +44,7 @@ export function networkRouter(ctx: ApiContext): Router {
       `/xinas/v1/observed/NetworkInterface/${req.params.id}`,
     );
     if (!row) throw new ApiException('NOT_FOUND', `interface ${req.params.id} not found`);
-    sendOk(req, res, row.value, [row.revision]);
+    sendOk(req, res, embedMetadata(row), [row.revision]);
   });
 
   r.get('/service-ips', (req, res) => {
@@ -46,7 +52,7 @@ export function networkRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(rows),
+      unwrapResources(rows),
       rows.map((x) => x.revision),
     );
   });

@@ -22,6 +22,15 @@ describe('makeStubHandler', () => {
 // ---- all ADR-0002 enumerated methods are in the stub list ----
 
 const REQUIRED_STUB_METHODS = [
+  // On-demand observation reads (deferred to WS12; push model is live in S0/S1).
+  'inventory.collect',
+  'disks.list',
+  'filesystems.list',
+  'mounts.list',
+  'network.snapshot',
+  'systemd.units_status',
+  'exports.list',
+  'nfs.sessions.list',
   'arrays.create',
   'arrays.delete',
   'arrays.import',

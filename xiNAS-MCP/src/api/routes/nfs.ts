@@ -1,22 +1,37 @@
 import { Router } from 'express';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
-import { getOrNull, listByPrefix, sendOk, unwrapValues } from '../handlers/reads.js';
+import {
+  embedMetadata,
+  getOrNull,
+  listByPrefix,
+  sendOk,
+  unwrapResources,
+} from '../handlers/reads.js';
 
 /**
  * Read-time join: for a desired Share, look up the observed ExportRule
- * whose spec.export_path matches the share's spec.export_path and set
+ * whose spec.export_path matches the share's spec.path and set
  * status.exports to that rule's status.rules[] (or [] if none). ExportRule
  * is an internal observed kind (no public endpoint of its own); this is the
  * only place it surfaces. Returns a new object — does not mutate the row,
  * and is safe when the desired Share has no status field.
+ *
+ * JOIN KEY: the desired Share has no `export_path` field — the api-v1.yaml
+ * Share schema requires [path, clients, fsid]; `path` IS the exported
+ * directory that lands in /etc/exports. The agent stamps that same directory
+ * onto the observed ExportRule/NfsSession as `spec.export_path`. So the
+ * correct join is `share.spec.path === exportRule.spec.export_path`. (The
+ * plan flagged this spec.path-vs-export_path trap twice; the original impl
+ * keyed off the non-existent `share.spec.export_path` and so returned [] for
+ * every real Share.)
  */
 function joinExports(
   state: ApiContext['state'],
   share: Record<string, unknown>,
 ): Record<string, unknown> {
   const shareSpec = share.spec as Record<string, unknown> | undefined;
-  const exportPath = shareSpec?.export_path as string | undefined;
+  const exportPath = shareSpec?.path as string | undefined;
 
   let exports: unknown[] = [];
   if (exportPath) {
@@ -45,7 +60,7 @@ export function nfsRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(rows).map((s) => joinExports(ctx.state, s)),
+      unwrapResources(rows).map((s) => joinExports(ctx.state, s)),
       rows.map((x) => x.revision),
     );
   });
@@ -56,7 +71,7 @@ export function nfsRouter(ctx: ApiContext): Router {
       `/xinas/v1/desired/Share/${req.params.id}`,
     );
     if (!row) throw new ApiException('NOT_FOUND', `share ${req.params.id} not found`);
-    sendOk(req, res, joinExports(ctx.state, row.value), [row.revision]);
+    sendOk(req, res, joinExports(ctx.state, embedMetadata(row)), [row.revision]);
   });
 
   r.get('/shares/:id/sessions', (req, res) => {
@@ -70,10 +85,11 @@ export function nfsRouter(ctx: ApiContext): Router {
 
     // Sessions are observed NfsSession entries (pushed by the agent). Filter
     // the full observed set to those whose spec.export_path matches this
-    // share's spec.export_path. A defensive client_addr type guard skips any
-    // malformed observed row.
+    // share's spec.path (the exported directory — see joinExports for why the
+    // Share side keys off `path`, not a non-existent `export_path`). A
+    // defensive client_addr type guard skips any malformed observed row.
     const shareSpec = shareRow.value.spec as Record<string, unknown> | undefined;
-    const exportPath = shareSpec?.export_path as string | undefined;
+    const exportPath = shareSpec?.path as string | undefined;
     const sessions = listByPrefix<Record<string, unknown>>(
       ctx.state,
       '/xinas/v1/observed/NfsSession/',
@@ -85,7 +101,7 @@ export function nfsRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(sessions),
+      unwrapResources(sessions),
       sessions.map((row) => row.revision),
     );
   });
@@ -95,7 +111,7 @@ export function nfsRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(rows),
+      unwrapResources(rows),
       rows.map((x) => x.revision),
     );
   });
@@ -106,7 +122,7 @@ export function nfsRouter(ctx: ApiContext): Router {
       `/xinas/v1/desired/NfsProfile/${req.params.id}`,
     );
     if (!row) throw new ApiException('NOT_FOUND', `nfs profile ${req.params.id} not found`);
-    sendOk(req, res, row.value, [row.revision]);
+    sendOk(req, res, embedMetadata(row), [row.revision]);
   });
 
   r.get('/export-groups', (req, res) => {
@@ -114,7 +130,7 @@ export function nfsRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapValues(rows),
+      unwrapResources(rows),
       rows.map((x) => x.revision),
     );
   });

@@ -58,6 +58,7 @@ import { SystemdUnitCollector } from './collectors/systemd.js';
 import { UsersCollector } from './collectors/users.js';
 import type { AgentConfig } from './config.js';
 import { log } from './log.js';
+import { PollDriver } from './poll.js';
 import { createDiskProbe } from './probe/disk.js';
 import { createFilesystemProbe } from './probe/filesystem.js';
 import {
@@ -90,6 +91,7 @@ const NOOP_HANDLE: SyncStopHandle = { stop(): void {} };
 export interface Convergence {
   registry: CollectorRegistry;
   publisher: Publisher;
+  pollDriver: PollDriver;
   controllerId: string;
 }
 
@@ -318,7 +320,12 @@ export function buildConvergence(config: AgentConfig): Convergence {
     controllerId: config.controller_id,
   });
 
-  return { registry, publisher, controllerId: config.controller_id };
+  // Steady-state poll/backstop driver (started in runConvergence after the
+  // boot sweep). Drives pollIntervalMs collectors + the 5-min reconcile
+  // backstop and consumes publisher.pendingReconcile.
+  const pollDriver = new PollDriver({ registry, publisher });
+
+  return { registry, publisher, pollDriver, controllerId: config.controller_id };
 }
 
 /**
@@ -332,7 +339,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
  * caller's `void runConvergence()` never produces an unhandled rejection.
  */
 export async function runConvergence(c: Convergence): Promise<void> {
-  const { registry, publisher, controllerId } = c;
+  const { registry, publisher, pollDriver, controllerId } = c;
   try {
     await runBootSequence({ publisher, registry, controllerId });
   } catch (err) {
@@ -344,6 +351,16 @@ export async function runConvergence(c: Convergence): Promise<void> {
     await registry.start((delta) => publisher.enqueue(delta));
   } catch (err) {
     log('error', 'boot', 'registry_start_failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  // Start the steady-state poll/backstop loop AFTER the boot sweep + event
+  // streams. Pure timer setup — never throws — but guard anyway so a future
+  // change can't break convergence startup.
+  try {
+    pollDriver.start();
+  } catch (err) {
+    log('error', 'boot', 'poll_driver_start_failed', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
