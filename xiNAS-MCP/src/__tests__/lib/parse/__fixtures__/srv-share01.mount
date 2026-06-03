@@ -1,0 +1,14 @@
+[Unit]
+Description=XFS mount for /srv/share01
+Documentation=https://xinnor.io/xinas
+After=local-fs.target
+DefaultDependencies=no
+
+[Mount]
+What=/dev/md/xinas-data
+Where=/srv/share01
+Type=xfs
+Options=defaults,noatime,nodiratime
+
+[Install]
+WantedBy=local-fs.target

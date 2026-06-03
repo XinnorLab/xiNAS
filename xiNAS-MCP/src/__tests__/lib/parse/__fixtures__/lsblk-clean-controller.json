@@ -1,0 +1,15 @@
+{
+  "blockdevices": [
+    { "name": "nvme0n1", "size": "1.5T", "type": "disk",
+      "model": "INTEL SSDPE2KX020T8", "serial": "BTLJ123456789", "tran": "nvme",
+      "wwn": "eui.0123456789abcdef" },
+    { "name": "nvme1n1", "size": "1.5T", "type": "disk",
+      "model": "INTEL SSDPE2KX020T8", "serial": "BTLJ987654321", "tran": "nvme" },
+    { "name": "sda", "size": "256G", "type": "disk",
+      "model": "Samsung SSD 870", "serial": "S5SUNF0R123456", "tran": "sata",
+      "children": [
+        { "name": "sda1", "size": "256G", "type": "part" }
+      ]
+    }
+  ]
+}
