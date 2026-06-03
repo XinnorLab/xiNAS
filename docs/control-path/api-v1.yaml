@@ -59,6 +59,10 @@ tags:
     description: Support bundle generation.
   - name: health
     description: Health profiles and check results.
+  - name: users
+    description: Observed local and NSS-resolved user accounts.
+  - name: groups
+    description: Observed local and NSS-resolved groups.
 
 # ---------------------------------------------------------------------------
 # Security
@@ -461,6 +465,59 @@ components:
               type: object
               additionalProperties:
                 type: string
+            agent:
+              type: object
+              required: [state, version]
+              description: "Agent-health surface populated by the HeartbeatTracker."
+              properties:
+                state:
+                  type: string
+                  enum: [healthy, degraded, offline]
+                last_heartbeat_at:
+                  type: [string, "null"]
+                  format: date-time
+                last_observed_push_at:
+                  type: [string, "null"]
+                  format: date-time
+                version:
+                  type: string
+                collectors:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: "Per-collector state: running | stubbed | error: <reason>"
+
+    SystemdUnit:
+      type: object
+      required: [kind, id, metadata, status]
+      description: "Observed systemd unit state collected by the E7 collector. Stored in the state-store only; no public REST path in this release."
+      properties:
+        kind:
+          type: string
+          const: SystemdUnit
+        id:
+          type: string
+          description: "Unit name including suffix, e.g. nfs-server.service or srv-share01.mount."
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        status:
+          type: object
+          required: [load_state, active_state, sub_state, observed_at]
+          properties:
+            load_state:
+              type: string
+              description: "loaded | not-found | error | masked"
+            active_state:
+              type: string
+              description: "active | reloading | inactive | failed | activating | deactivating"
+            sub_state:
+              type: string
+            unit_file_state:
+              type: string
+              description: "enabled | disabled | static | masked | ..."
+            observed_at:
+              type: string
+              format: date-time
 
     Disk:
       type: object
@@ -476,7 +533,7 @@ components:
               type: string
         status:
           type: object
-          required: [device_path, serial, model, capacity_bytes, safe_for_use]
+          required: [device_path, serial, model, capacity_bytes, safe_for_use, observed_at]
           properties:
             device_path: { type: string }
             serial: { type: string }
@@ -497,6 +554,10 @@ components:
                 array_id: { type: string }
                 role: { type: string, enum: [data, parity, spare] }
             safe_for_use: { type: boolean }
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     XiraidArray:
       type: object
@@ -523,7 +584,7 @@ components:
               items: { type: string }
         status:
           type: object
-          required: [state, volume_path]
+          required: [state, volume_path, observed_at]
           properties:
             state:
               type: string
@@ -532,6 +593,10 @@ components:
             rebuild_progress_pct: { type: [integer, "null"] }
             check_progress_pct: { type: [integer, "null"] }
             usable_capacity_bytes: { type: integer, format: int64 }
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     Filesystem:
       type: object
@@ -561,7 +626,7 @@ components:
                 mode: { type: string }
         status:
           type: object
-          required: [mounted, uuid, size_bytes, free_bytes]
+          required: [mounted, uuid, size_bytes, free_bytes, observed_at]
           properties:
             mounted: { type: boolean }
             uuid: { type: string }
@@ -571,6 +636,34 @@ components:
             effective_mount_options:
               type: array
               items: { type: string }
+            currently_mounted:
+              type: boolean
+            mount_options:
+              type: array
+              items:
+                type: string
+            mount_unit_name:
+              type: string
+              description: "Name of the .mount unit, e.g. srv-share01.mount"
+            mount_unit_enabled:
+              type: boolean
+              description: "From `systemctl is-enabled` (B4). Whether the .mount unit is enabled (WantedBy=local-fs.target)."
+            mount_unit_state:
+              type: string
+              enum: [active, inactive, failed, activating, deactivating]
+              description: "systemd ActiveState of the .mount unit, from the dbus cross-reference in the Filesystem collector (E4). Distinct from mount_unit_enabled (enablement)."
+            owner_uid:
+              type: integer
+            owner_gid:
+              type: integer
+            owner_user_name:
+              type: [string, "null"]
+            owner_group_name:
+              type: [string, "null"]
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     Share:
       type: object
@@ -613,6 +706,7 @@ components:
                 hard_bytes: { type: integer, format: int64 }
         status:
           type: object
+          required: [observed_at]
           properties:
             exported: { type: boolean }
             client_mount_profile:
@@ -623,6 +717,15 @@ components:
                 $ref: '#/components/schemas/NfsSession'
             effective_options:
               type: string
+            exports:
+              type: array
+              items:
+                $ref: '#/components/schemas/ExportRule'
+              description: "Per-host export entries observed from /etc/exports.d/ or helper output."
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     ShareClient:
       type: object
@@ -646,11 +749,90 @@ components:
 
     NfsSession:
       type: object
+      required: [kind, id, metadata, spec, status]
       properties:
-        client_ip: { type: string }
-        nfs_version: { type: string }
-        export_path: { type: string }
-        active_locks: { type: integer }
+        kind:
+          type: string
+          const: NfsSession
+        id:
+          type: string
+          description: "Composite: <client_addr>:<export_path>."
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        spec:
+          type: object
+          required: [client_addr, export_path]
+          properties:
+            client_addr:
+              type: string
+            client_hostname:
+              type: string
+            export_path:
+              type: string
+        status:
+          type: object
+          required: [proto_version, locked_files, observed_at]
+          properties:
+            proto_version:
+              type: string
+              enum: [v3, v4, v4.1, v4.2]
+            locked_files:
+              type: integer
+            observed_at:
+              type: string
+              format: date-time
+
+    NfsIdmap:
+      type: object
+      required: [kind, metadata, status]
+      properties:
+        kind:
+          type: string
+          const: NfsIdmap
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        status:
+          type: object
+          required: [conf_present, idmapd_active, method, observed_at]
+          properties:
+            conf_present:
+              type: boolean
+            domain:
+              type: string
+            local_realms:
+              type: array
+              items:
+                type: string
+            method:
+              type: string
+              enum: [nsswitch, static, umich_ldap, unknown]
+            idmapd_active:
+              type: boolean
+            idmapd_unit_state:
+              type: string
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
+
+    ExportRule:
+      type: object
+      required: [host_pattern, options]
+      properties:
+        host_pattern:
+          type: string
+          description: "Matches /etc/exports host field (CIDR, hostname, wildcard, netgroup)."
+        options:
+          type: array
+          items:
+            type: string
+        squash_mode:
+          type: string
+          enum: [root_squash, no_root_squash, all_squash]
+        anon_uid:
+          type: integer
+        anon_gid:
+          type: integer
 
     NfsProfile:
       description: Per ADR-0005. Singleton `default` in Phase 0.
@@ -723,6 +905,7 @@ components:
                 on_v3_settings_change:  { type: string, enum: [reload, restart, none] }
         status:
           type: object
+          required: [observed_at]
           properties:
             effective_files:
               type: object
@@ -741,6 +924,10 @@ components:
             warnings:
               type: array
               items: { $ref: '#/components/schemas/Warning' }
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     NetworkInterface:
       type: object
@@ -763,6 +950,7 @@ components:
             enabled: { type: boolean }
         status:
           type: object
+          required: [observed_at]
           properties:
             driver: { type: string }
             rdma_capable: { type: boolean }
@@ -774,6 +962,10 @@ components:
             duplicates_detected_in:
               type: array
               items: { type: string }
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
 
     ServiceIP:
       type: object
@@ -979,6 +1171,86 @@ components:
           type: array
           items: { type: string }
 
+    User:
+      type: object
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind:
+          type: string
+          const: User
+        id:
+          type: string
+          description: "Decimal uid as string."
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        spec:
+          type: object
+          required: [name, uid, gid]
+          properties:
+            name:
+              type: string
+            uid:
+              type: integer
+            gid:
+              type: integer
+            gecos:
+              type: string
+            home:
+              type: string
+            shell:
+              type: string
+        status:
+          type: object
+          required: [resolvable, source, observed_at]
+          properties:
+            resolvable:
+              type: boolean
+            source:
+              type: string
+              enum: [local, nss]
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
+
+    Group:
+      type: object
+      required: [kind, id, metadata, spec, status]
+      properties:
+        kind:
+          type: string
+          const: Group
+        id:
+          type: string
+          description: "Decimal gid as string."
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        spec:
+          type: object
+          required: [name, gid]
+          properties:
+            name:
+              type: string
+            gid:
+              type: integer
+            members:
+              type: array
+              items:
+                type: string
+        status:
+          type: object
+          required: [resolvable, source, observed_at]
+          properties:
+            resolvable:
+              type: boolean
+            source:
+              type: string
+              enum: [local, nss]
+            observed_at:
+              type: string
+              format: date-time
+              description: "When the agent's collector observed this entity. Agents stamp this at probe-time; api computes observation_age_seconds = now - observed_at on read."
+
   # -------------------------------------------------------------------------
   # Reusable responses
   # -------------------------------------------------------------------------
@@ -1025,6 +1297,11 @@ components:
           schema: { $ref: '#/components/schemas/Envelope' }
     Internal:
       description: '`INTERNAL` — server-side failure (incl. `EXECUTOR_UNAVAILABLE`, `AUDIT_WRITE_FAILED`).'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Envelope' }
+    Unauthorized:
+      description: '`UNAUTHENTICATED` — missing or invalid bearer token or peer credentials.'
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Envelope' }
@@ -1921,3 +2198,151 @@ paths:
               schema: { type: string, format: binary }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # Users / Groups (observed state from E8 collector)
+  # =========================================================================
+  /users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: List all observed local and NSS-resolved users.
+      description: >
+        Returns all User objects observed by the E8 users collector.
+        Filter by source to narrow to local (/etc/passwd) or NSS-resolved entries.
+      parameters:
+        - name: source
+          in: query
+          schema:
+            type: string
+            enum: [local, nss, all]
+            default: all
+        - $ref: '#/components/parameters/QueryLimit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/User' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /users/{uid}:
+    get:
+      tags: [users]
+      operationId: getUser
+      summary: Get a single user by numeric uid.
+      description: Returns the User object for the given numeric uid, or 404 if not found.
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/User' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /groups:
+    get:
+      tags: [groups]
+      operationId: listGroups
+      summary: List all observed local and NSS-resolved groups.
+      description: >
+        Returns all Group objects observed by the E8 users collector.
+        Filter by source to narrow to local (/etc/group) or NSS-resolved entries.
+      parameters:
+        - name: source
+          in: query
+          schema:
+            type: string
+            enum: [local, nss, all]
+            default: all
+        - $ref: '#/components/parameters/QueryLimit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/Group' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /groups/{gid}:
+    get:
+      tags: [groups]
+      operationId: getGroup
+      summary: Get a single group by numeric gid.
+      description: Returns the Group object for the given numeric gid, or 404 if not found.
+      parameters:
+        - name: gid
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/Group' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /nfs-idmap:
+    get:
+      tags: [nfs]
+      operationId: getNfsIdmap
+      summary: Get the observed NFS idmap daemon configuration (singleton).
+      description: >
+        Returns the singleton NfsIdmap object reflecting the current rpc.idmapd
+        configuration and daemon state. Observed-state segment is `nfs_idmap`;
+        public route is `/nfs-idmap` per ADR-0003.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/NfsIdmap' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
