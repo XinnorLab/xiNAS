@@ -11,6 +11,10 @@
       "role": "admin"
     }
   },
+  "agent": {
+    "socket": "{{ xinas_api_agent_socket }}",
+    "heartbeat_interval_ms": {{ xinas_api_agent_heartbeat_interval_ms }}
+  },
   "state": {
     "databasePath": "{{ xinas_api_state_dir }}/xinas.db",
     "auditJsonlPath": "{{ xinas_api_log_dir }}/audit.jsonl",
