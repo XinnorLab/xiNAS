@@ -21,6 +21,18 @@
       "recommended": false,
       "correctness": {
         "all": true
+      },
+      "nursery": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "@xinas/probe": "src/agent/probe/* is agent-only; import from src/lib/parse/* instead.",
+              "../agent/probe": "src/agent/probe/* is agent-only; import from src/lib/parse/* instead.",
+              "../../agent/probe": "src/agent/probe/* is agent-only; import from src/lib/parse/* instead."
+            }
+          }
+        }
       }
     }
   }

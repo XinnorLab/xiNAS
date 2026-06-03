@@ -46,6 +46,29 @@
     _xinas_admin_gid: "{{ ansible_facts.getent_group[xinas_api_socket_group][1] | int }}"
   tags: [xinas_api, group]
 
+# Phase 0 xinas-agent S0+S1 foundation: dedicated xinas-api group
+# (no human members) used as the agent socket gate. The xinas-api
+# user joins this group as a supplementary, so the api's effective
+# gid stays xinas-admin and operator readability of new state/audit
+# files is preserved.
+- name: Create the xinas-api system group (agent-socket gate)
+  ansible.builtin.group:
+    name: xinas-api
+    system: true
+    state: present
+  tags: [xinas_api, group]
+
+- name: Look up the xinas-api gid
+  ansible.builtin.getent:
+    database: group
+    key: xinas-api
+  tags: [xinas_api, group]
+
+- name: Cache the xinas-api gid as _xinas_api_gid
+  ansible.builtin.set_fact:
+    _xinas_api_gid: "{{ ansible_facts.getent_group['xinas-api'][1] | int }}"
+  tags: [xinas_api, group]
+
 # 3b. Create the static system user the api process runs as. Uid is
 #     system-assigned. Primary group is the socket group (xinas-admin
 #     by default) so files the api creates default to that group, no
@@ -54,6 +77,11 @@
   ansible.builtin.user:
     name: "{{ xinas_api_user }}"
     group: "{{ xinas_api_socket_group }}"
+    # Supplementary membership in xinas-api (the agent-socket gate).
+    # append:true so a re-run never clobbers operator-added groups.
+    groups:
+      - xinas-api
+    append: true
     system: true
     create_home: false
     shell: /usr/sbin/nologin
@@ -94,6 +122,159 @@
     cmd: systemd-tmpfiles --create /usr/lib/tmpfiles.d/xinas-api.conf
   changed_when: false
   tags: [xinas_api, tmpfiles]
+
+# Phase 0 xinas-agent S0+S1 foundation: shared controller_id file.
+# Per phase0-requirements §3, controller_id must be unchanged across
+# reboot/upgrade and matched across api, audit, tasks, support bundle.
+# /var/lib/xinas/ co-locates identity with state + audit so re-install
+# preserving the data disk preserves both controller_id and the audit
+# chain.
+#
+# The parent dir /var/lib/xinas itself is materialized by the tmpfiles
+# `d /var/lib/xinas 0755 root root` entry, which the `systemd-tmpfiles
+# --create` task above runs before this block (and which boot re-applies
+# on every start). Do NOT add a second `file:` task for it here — two
+# authorities with different group ownership fight on every run and the
+# boot-time tmpfiles pass would silently revert it.
+- name: Generate /var/lib/xinas/controller-id on first install (UUIDv4)
+  ansible.builtin.command:
+    cmd: uuidgen
+    creates: /var/lib/xinas/controller-id
+  register: _xinas_api_uuidgen
+  tags: [xinas_api, controller_id]
+
+- name: Write the generated UUID to the controller-id file (first install)
+  ansible.builtin.copy:
+    content: "{{ _xinas_api_uuidgen.stdout | trim }}"
+    dest: /var/lib/xinas/controller-id
+    owner: root
+    group: root
+    mode: '0644'
+  when: _xinas_api_uuidgen is changed
+  tags: [xinas_api, controller_id]
+
+- name: Ensure controller-id permissions (idempotent on re-run)
+  ansible.builtin.file:
+    path: /var/lib/xinas/controller-id
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [xinas_api, controller_id]
+
+- name: Slurp controller-id from the REMOTE host
+  ansible.builtin.slurp:
+    src: /var/lib/xinas/controller-id
+  register: _xinas_api_controller_id_blob
+  tags: [xinas_api, controller_id]
+
+- name: Set working controller_id from the remote file (operator override wins)
+  ansible.builtin.set_fact:
+    xinas_api_controller_id: "{{ _xinas_api_controller_id_blob.content | b64decode | trim }}"
+  when: xinas_api_controller_id | length == 0
+  tags: [xinas_api, controller_id]
+
+# Phase 0 xinas-agent S0+S1 foundation: split-secret token store.
+# The internal-tokens.json file is readable only by the api process
+# (via the xinas-api supplementary group, added in A3) and root.
+# The agent-token file is readable only by root (the agent runs as
+# root per ADR-0002).
+#
+# Operators in xinas-admin can NEVER read the agent token, even
+# though they can read /etc/xinas-api/config.json (which contains
+# only the admin token, never the agent token).
+
+- name: stat /etc/xinas-api/internal-tokens.json
+  ansible.builtin.stat:
+    path: /etc/xinas-api/internal-tokens.json
+  register: _xinas_api_internal_tokens_stat
+  tags: [xinas_api, config]
+
+# --- Bootstrap branch: internal-tokens absent ---
+
+- name: Generate a fresh internal agent bearer token (first install only)
+  ansible.builtin.command:
+    cmd: openssl rand -hex 32
+  register: _xinas_api_internal_token_gen
+  changed_when: true
+  no_log: true
+  when: not _xinas_api_internal_tokens_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Cache the generated internal token as _xinas_api_internal_token (first install)
+  ansible.builtin.set_fact:
+    _xinas_api_internal_token: "{{ _xinas_api_internal_token_gen.stdout }}"
+  no_log: true
+  when: not _xinas_api_internal_tokens_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Write /etc/xinas-api/internal-tokens.json (first install)
+  ansible.builtin.copy:
+    content: |
+      {
+        "{{ _xinas_api_internal_token }}": {
+          "principal": "agent:root",
+          "role": "internal_agent"
+        }
+      }
+    dest: /etc/xinas-api/internal-tokens.json
+    owner: root
+    group: xinas-api
+    mode: '0640'
+  no_log: true
+  notify: restart xinas-api
+  when: not _xinas_api_internal_tokens_stat.stat.exists
+  tags: [xinas_api, config]
+
+# --- Derive branch: internal-tokens present ---
+
+- name: Slurp existing internal-tokens.json
+  ansible.builtin.slurp:
+    src: /etc/xinas-api/internal-tokens.json
+  register: _xinas_api_internal_tokens_blob
+  no_log: true
+  when: _xinas_api_internal_tokens_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Extract the internal_agent token from existing file
+  ansible.builtin.set_fact:
+    # Index [0] (not the `first` filter): on an empty match list Jinja2's
+    # getitem returns Undefined (caught by `default(None)` → the Fail task
+    # below fires with the recovery message), whereas `| first` raises an
+    # uncatchable "sequence was empty" error that bypasses default().
+    _xinas_api_internal_token: >-
+      {{ (_xinas_api_internal_tokens_blob.content | b64decode | from_json
+           | dict2items
+           | selectattr('value.role', 'equalto', 'internal_agent')
+           | map(attribute='key')
+           | list)[0]
+         | default(None) }}
+  no_log: true
+  when: _xinas_api_internal_tokens_stat.stat.exists
+  tags: [xinas_api, config]
+
+- name: Fail if internal-tokens exists but has no internal_agent entry
+  ansible.builtin.fail:
+    msg: |
+      /etc/xinas-api/internal-tokens.json exists but contains no
+      entry with role 'internal_agent'. To recover: delete both
+      /etc/xinas-api/internal-tokens.json AND /etc/xinas-agent/agent-token
+      and re-run the xinas_api role.
+  when:
+    - _xinas_api_internal_tokens_stat.stat.exists
+    - _xinas_api_internal_token is none
+  tags: [xinas_api, config]
+
+# --- Both branches converge: write/refresh agent-token mirror ---
+
+- name: Write/refresh /etc/xinas-agent/agent-token (only root can read)
+  ansible.builtin.copy:
+    content: "{{ _xinas_api_internal_token }}\n"
+    dest: /etc/xinas-agent/agent-token
+    owner: root
+    group: root
+    mode: '0400'
+  no_log: true
+  tags: [xinas_api, config]
 
 # 7. Token + config bootstrap.
 #
@@ -158,13 +339,15 @@
 
 - name: Find the entry with principal 'admin:bootstrap'
   ansible.builtin.set_fact:
+    # Index [0] (not the `first` filter) so an empty match list yields
+    # Undefined → default(None) → the no-bootstrap-entry Fail fires, rather
+    # than `| first` raising an uncatchable "sequence was empty" error.
     _xinas_api_admin_token: >-
       {{ (_xinas_api_config_parsed.tokens
            | dict2items
            | selectattr('value.principal', 'equalto', 'admin:bootstrap')
            | map(attribute='key')
-           | list
-           | first)
+           | list)[0]
          | default(None) }}
   no_log: true
   when: _xinas_api_config_stat.stat.exists
