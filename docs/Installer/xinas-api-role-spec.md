@@ -90,10 +90,12 @@ xinas_api_state_dir: /var/lib/xinas/state
 xinas_api_log_dir:   /var/log/xinas
 
 # Unix-domain socket path. The parent directory /run/xinas is created
-# by the role's tmpfiles.d entry as root:xinas-admin 0770 so the api
-# process (primary group xinas-admin) can create the socket and
-# operators in xinas-admin can traverse + connect; the socket file
-# itself is chmod 0660
+# by the role's tmpfiles.d entry as root:xinas-api 1731 (sticky). The api
+# process creates api.sock via its xinas-api SUPPLEMENTARY membership, and
+# the agent (root) creates agent.sock; operators (xinas-admin, NOT in
+# xinas-api) can only traverse + connect — they cannot replace a socket
+# inode (the dir is not group-writable to them, and the sticky bit blocks
+# cross-owner unlink). The socket file itself is chmod 0660
 # + chown :{{ xinas_api_socket_group }} by server.ts after binding.
 xinas_api_socket: /run/xinas/api.sock
 
@@ -157,7 +159,7 @@ corresponding feature ships.
 5.  Install tmpfiles.d snippet at /usr/lib/tmpfiles.d/xinas-api.conf
     (mode 0644 root:root) with these lines:
 
-        d /run/xinas             0770 root {{ xinas_api_socket_group }} -
+        d /run/xinas             1731 root xinas-api -
         d /var/lib/xinas         0755 root root          -
         d /var/lib/xinas/state   0750 {{ xinas_api_user }} {{ xinas_api_socket_group }} -
         d /var/log/xinas         0750 {{ xinas_api_user }} {{ xinas_api_socket_group }} -
