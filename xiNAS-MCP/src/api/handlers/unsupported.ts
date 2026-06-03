@@ -1,32 +1,37 @@
 import type { Request, Response } from 'express';
-import { buildEnvelope } from '../envelope.js';
-import { errorStatus, makeError } from '../errors.js';
+import type { ApiContext } from '../context.js';
+import { ApiException } from '../errors.js';
 
 /**
- * Single stub used by every mutating endpoint in this PR. Per
- * ADR-0002 §Agent heartbeat, when the agent isn't reachable
- * mutating ops fail with INTERNAL/EXECUTOR_UNAVAILABLE.
+ * Factory that returns the stub used by every mutating endpoint.
+ * Per ADR-0002 §Agent heartbeat, behaviour depends on tracker state:
  *
- * In the xinas-api skeleton the agent doesn't exist at all, so
- * every mutating verb routes here. When the agent ships, this
- * handler gets replaced with real plan/apply dispatch per route.
+ *   - No tracker OR tracker state === 'offline':
+ *       INTERNAL / EXECUTOR_UNAVAILABLE (500). The executor can't be
+ *       reached; remediation: restart xinas-agent.service.
+ *
+ *   - Tracker state === 'healthy' OR 'degraded':
+ *       UNSUPPORTED / EXECUTOR_UNSUPPORTED (422). The executor is
+ *       reachable but the mutating method isn't implemented in this
+ *       S0+S1 build yet.
+ *
+ * The EXECUTOR_DEGRADED warning for the degraded case is injected
+ * separately by systemWarningsMiddleware into the envelope warnings[].
  */
-export function executorUnavailable(req: Request, res: Response): void {
-  const ctx = req.context!;
-  res.status(errorStatus('INTERNAL')).json(
-    buildEnvelope({
-      request_id: ctx.request_id,
-      correlation_id: ctx.correlation_id,
-      state_revision: 0,
-      errors: [
-        makeError(
-          'INTERNAL',
-          'mutating operations are unavailable: xinas-agent is not running',
-          { code: 'EXECUTOR_UNAVAILABLE' },
-          'start xinas-agent.service; mutating endpoints will return once the agent is healthy',
-        ),
-      ],
-      result: null,
-    }),
-  );
+export function executorUnavailable(ctx: ApiContext) {
+  return (_req: Request, _res: Response): void => {
+    const offline = ctx.tracker ? ctx.tracker.currentState() === 'offline' : true;
+    if (offline) {
+      throw new ApiException(
+        'INTERNAL',
+        'xinas-agent is offline',
+        { code: 'EXECUTOR_UNAVAILABLE' },
+        'restart xinas-agent.service',
+      );
+    }
+    // Executor reachable but the method isn't built yet in S0+S1.
+    throw new ApiException('UNSUPPORTED', 'this operation is not implemented in this build', {
+      code: 'EXECUTOR_UNSUPPORTED',
+    });
+  };
 }

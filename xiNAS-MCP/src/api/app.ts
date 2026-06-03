@@ -1,22 +1,25 @@
 import express, { type Express, Router } from 'express';
 import type { ApiContext } from './context.js';
-import { requestIdMiddleware } from './middleware/request-id.js';
-import { authMiddleware } from './middleware/auth.js';
+import { ApiException } from './errors.js';
+import { executorUnavailable } from './handlers/unsupported.js';
+import type { HeartbeatTracker } from './heartbeat.js';
+import { internalRouter } from './internal/router.js';
 import { auditMiddleware } from './middleware/audit.js';
+import { authMiddleware } from './middleware/auth.js';
 import { errorMiddleware } from './middleware/error.js';
-import { systemRouter } from './routes/system.js';
-import { storageRouter } from './routes/storage.js';
-import { nfsRouter } from './routes/nfs.js';
-import { networkRouter } from './routes/network.js';
-import { healthRouter } from './routes/health.js';
-import { tasksRouter } from './routes/tasks.js';
-import { eventsRouter } from './routes/events.js';
+import { requestIdMiddleware } from './middleware/request-id.js';
+import { systemWarningsMiddleware } from './middleware/system-warnings.js';
 import { auditRouter } from './routes/audit-query.js';
 import { configHistoryRouter } from './routes/config-history.js';
-import { supportRouter } from './routes/support.js';
+import { eventsRouter } from './routes/events.js';
+import { healthRouter } from './routes/health.js';
 import { inventoryRouter } from './routes/inventory.js';
-import { executorUnavailable } from './handlers/unsupported.js';
-import { ApiException } from './errors.js';
+import { networkRouter } from './routes/network.js';
+import { nfsRouter } from './routes/nfs.js';
+import { storageRouter } from './routes/storage.js';
+import { supportRouter } from './routes/support.js';
+import { systemRouter } from './routes/system.js';
+import { tasksRouter } from './routes/tasks.js';
 
 export function createApp(ctx: ApiContext): Express {
   const app = express();
@@ -40,7 +43,18 @@ export function createApp(ctx: ApiContext): Express {
   app.use(express.json({ limit: '1mb' }));
   app.use(authMiddleware(ctx.config));
 
+  // The agent's exclusive write surface. Mounted after authMiddleware so
+  // req.context.role is resolved before requireInternalAgent (inside the
+  // sub-router) reads it; before /api/v1 so /internal/v1/* never falls
+  // through to the public API's NOT_FOUND catch-all.
+  //
+  // systemWarningsMiddleware is intentionally NOT mounted at the top-level app
+  // so that /internal/v1/* requests are excluded — the agent's own observation
+  // push must not receive an EXECUTOR_DEGRADED self-warning (Fix H-review-2).
+  app.use('/internal/v1', internalRouter(ctx));
+
   const v1 = Router();
+  v1.use(systemWarningsMiddleware(ctx)); // after auth (context populated), before route handlers
   v1.use(systemRouter(ctx));
   v1.use(storageRouter(ctx));
   v1.use(nfsRouter(ctx));
@@ -69,10 +83,10 @@ export function createApp(ctx: ApiContext): Express {
     '/config-history/rollback',
   ];
   for (const route of mutatingRoutes) {
-    v1.post(route, executorUnavailable);
-    v1.patch(route, executorUnavailable);
-    v1.put(route, executorUnavailable);
-    v1.delete(route, executorUnavailable);
+    v1.post(route, executorUnavailable(ctx));
+    v1.patch(route, executorUnavailable(ctx));
+    v1.put(route, executorUnavailable(ctx));
+    v1.delete(route, executorUnavailable(ctx));
   }
 
   // Catch-all for /api/v1/* paths that didn't match any router. Without
@@ -88,4 +102,14 @@ export function createApp(ctx: ApiContext): Express {
 
   app.use(errorMiddleware());
   return app;
+}
+
+/**
+ * Variant of createApp that requires a HeartbeatTracker in context.
+ * Identical wiring to createApp; the narrowed type just documents that
+ * callers building the production app (and the H3+ internal tests) supply
+ * a tracker so /internal/v1/observed can call recordObservationPush.
+ */
+export function createAppWithTracker(ctx: ApiContext & { tracker: HeartbeatTracker }): Express {
+  return createApp(ctx);
 }
