@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Request, Response, NextFunction } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 
 /**
  * Middleware that ensures every request has a request_id (server-
@@ -21,6 +21,7 @@ export function requestIdMiddleware() {
       principal: 'anonymous',
       role: 'viewer',
       client_type: 'rest',
+      system_warnings: [],
     };
     res.setHeader('X-Request-ID', request_id);
     res.setHeader('X-Correlation-ID', correlation_id);
