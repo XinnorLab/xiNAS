@@ -1,0 +1,76 @@
+/**
+ * Stub handlers for every ADR-0002 enumerated method that is not yet
+ * implemented in S0+S1.
+ *
+ * Each stub throws an error with:
+ *   err.code   = 'EXECUTOR_UNSUPPORTED'
+ *   err.rpcMethod = <the method name>
+ *
+ * The dispatcher (dispatch.ts) catches this sentinel and emits a
+ * JSON-RPC -32000 envelope with data.code = 'EXECUTOR_UNSUPPORTED'.
+ *
+ * Why a throw and not a direct return?  The handler's return type is
+ * `unknown`; a throw keeps the dispatch path symmetric (all errors go
+ * through the catch block, which formats them consistently per spec).
+ *
+ * STUB_METHODS is exported as a plain map; merge it into the full
+ * handler map in the process entry point alongside the real handlers.
+ */
+
+import type { RpcHandler } from '../dispatch.js';
+
+export function makeStubHandler(method: string): RpcHandler {
+  return function stubHandler(_params: unknown): never {
+    const err = new Error('method not implemented in this build') as Error & {
+      code: string;
+      rpcMethod: string;
+    };
+    err.code = 'EXECUTOR_UNSUPPORTED';
+    err.rpcMethod = method;
+    throw err;
+  };
+}
+
+const STUB_METHOD_NAMES = [
+  // Arrays (xiRAID adapter — S3/WS5)
+  'arrays.create',
+  'arrays.delete',
+  'arrays.import',
+  'arrays.list',
+  // Spare (xiRAID — S3/WS5)
+  'spare.set',
+  // Filesystem (S4/WS6)
+  'fs.create',
+  'fs.mount',
+  'fs.unmount',
+  'fs.grow',
+  'fs.set_quota_mode',
+  // NFS exports (S5/WS7)
+  'nfs.exports.add',
+  'nfs.exports.update',
+  'nfs.exports.remove',
+  // NFS profile (S5/WS7)
+  'nfs.profile.render',
+  'nfs.profile.apply',
+  'nfs.profile.observe',
+  // Network (S6/WS8)
+  'network.render_netplan',
+  'network.flush_managed',
+  'network.apply',
+  // Systemd (S4/WS6)
+  'systemd.reload',
+  'systemd.restart',
+  // Task envelope (S2/WS4)
+  'task.begin',
+  'task.stage_report',
+  'task.cancel',
+  'task.list_inflight',
+  // Managed files drift (WS9)
+  'managed_files.checksums',
+] as const;
+
+export type StubMethodName = (typeof STUB_METHOD_NAMES)[number];
+
+export const STUB_METHODS: Record<string, RpcHandler> = Object.fromEntries(
+  STUB_METHOD_NAMES.map((m) => [m, makeStubHandler(m)]),
+);
