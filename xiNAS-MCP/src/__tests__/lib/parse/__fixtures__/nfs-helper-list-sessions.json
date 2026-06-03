@@ -1,0 +1,25 @@
+{
+  "op": "list_sessions",
+  "status": "ok",
+  "sessions": [
+    {
+      "client_addr": "10.0.0.10",
+      "client_hostname": "compute-01.local",
+      "export_path": "/srv/share01",
+      "proto_version": "v4.1",
+      "locked_files": 3
+    },
+    {
+      "client_addr": "10.0.0.11",
+      "export_path": "/srv/share01",
+      "proto_version": "v3",
+      "locked_files": 0
+    },
+    {
+      "client_addr": "10.0.0.12",
+      "export_path": "/srv/share02",
+      "proto_version": "v4.2",
+      "locked_files": 12
+    }
+  ]
+}

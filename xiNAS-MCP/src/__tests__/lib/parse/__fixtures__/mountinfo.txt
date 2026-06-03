@@ -1,0 +1,6 @@
+22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw,errors=remount-ro
+23 22 0:21 / /proc rw,nosuid,nodev,noexec,relatime shared:12 - proc proc rw
+24 22 0:22 / /sys rw,nosuid,nodev,noexec,relatime shared:2 - sysfs sysfs rw
+25 22 0:23 / /dev rw,nosuid shared:8 - devtmpfs udev rw,size=8192k,nr_inodes=4096
+100 22 259:1 / /srv/share01 rw,noatime,nodiratime shared:50 - xfs /dev/md/xinas-data rw,attr2,inode64,logbufs=8,noquota
+101 22 259:2 / /srv/share02 rw,noatime shared:51 - xfs /dev/md/xinas-log rw,attr2,inode64

@@ -1,0 +1,40 @@
+[
+  {
+    "ifindex": 1,
+    "ifname": "lo",
+    "flags": ["LOOPBACK", "UP", "LOWER_UP"],
+    "mtu": 65536,
+    "operstate": "UNKNOWN",
+    "link_type": "loopback",
+    "address": "00:00:00:00:00:00",
+    "addr_info": [
+      { "family": "inet",  "local": "127.0.0.1", "prefixlen": 8 },
+      { "family": "inet6", "local": "::1",       "prefixlen": 128 }
+    ]
+  },
+  {
+    "ifindex": 2,
+    "ifname": "enp3s0",
+    "flags": ["BROADCAST", "MULTICAST", "UP", "LOWER_UP"],
+    "mtu": 1500,
+    "operstate": "UP",
+    "link_type": "ether",
+    "address": "d8:5e:d3:0a:1b:2c",
+    "addr_info": [
+      { "family": "inet",  "local": "10.0.0.5",  "prefixlen": 24 },
+      { "family": "inet6", "local": "fe80::da5e:d3ff:fe0a:1b2c", "prefixlen": 64, "scope": "link" }
+    ]
+  },
+  {
+    "ifindex": 5,
+    "ifname": "ibp0s4",
+    "flags": ["BROADCAST", "MULTICAST", "UP", "LOWER_UP"],
+    "mtu": 4092,
+    "operstate": "UP",
+    "link_type": "infiniband",
+    "address": "80:00:02:08:fe:80:00:00:00:00:00:00:e4:1d:2d:ff:fe:a2:3b:4c",
+    "addr_info": [
+      { "family": "inet",  "local": "192.168.100.1", "prefixlen": 24 }
+    ]
+  }
+]
