@@ -1,0 +1,8 @@
+{
+  "conf_present": true,
+  "domain": "e2e-test.local",
+  "local_realms": ["E2E-TEST.LOCAL"],
+  "method": "nsswitch",
+  "idmapd_active": false,
+  "idmapd_unit_state": "inactive"
+}

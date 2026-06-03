@@ -1,9 +1,12 @@
+import { chmodSync, chownSync, existsSync, unlinkSync } from 'node:fs';
 import http from 'node:http';
-import { unlinkSync, existsSync, chmodSync, chownSync } from 'node:fs';
-import { openStateStore, type OpenedStateStore } from '../state/index.js';
-import { createApp } from './app.js';
-import { loadConfig, type ApiConfig } from './config.js';
 import type { AddressInfo } from 'node:net';
+import { type OpenedStateStore, openStateStore } from '../state/index.js';
+import { createApp } from './app.js';
+import { type ApiConfig, loadConfig } from './config.js';
+import type { ApiContext } from './context.js';
+import { HeartbeatTracker, createAgentHealthProbe } from './heartbeat.js';
+import { loadObservedSchemas } from './observed-schemas.js';
 
 export interface StartServerOptions {
   configPath?: string;
@@ -28,7 +31,33 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   });
   state.drainer.start();
 
-  const app = createApp({ config, state });
+  // Compile inbound-observation validators from api-v1.yaml once. Returns null
+  // (validation skipped) when the spec isn't shipped — the graceful default.
+  const observed = loadObservedSchemas();
+
+  // When the api is configured to track a xinas-agent, poll its UDS for
+  // agent.health on an interval and surface the derived state to routes.
+  let tracker: HeartbeatTracker | undefined;
+  if (config.agent) {
+    tracker = new HeartbeatTracker({
+      intervalMs: config.agent.heartbeat_interval_ms ?? 5000,
+      controllerId: config.controller_id,
+      state,
+      agentSocketPath: config.agent.socket,
+      healthProbe: createAgentHealthProbe(config.agent.socket),
+    });
+    tracker.start();
+  }
+
+  // Conditional spread for the optionals — exactOptionalPropertyTypes refuses
+  // an explicit `tracker: undefined` / `observedSchemas: undefined`.
+  const ctx: ApiContext = {
+    config,
+    state,
+    ...(tracker ? { tracker } : {}),
+    ...(observed ? { observedSchemas: observed.schemas, ajv: observed.ajv } : {}),
+  };
+  const app = createApp(ctx);
   const server = http.createServer(app);
 
   await new Promise<void>((resolve, reject) => {
@@ -72,6 +101,8 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
     address,
     state,
     async close() {
+      // Clear the heartbeat tick timer first so no probe fires mid-shutdown.
+      tracker?.stop();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });

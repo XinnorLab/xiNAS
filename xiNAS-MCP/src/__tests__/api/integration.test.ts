@@ -1,16 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import request from 'supertest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  buildTestApp,
   ADMIN_TOKEN,
+  buildTestApp,
   seedCluster,
+  seedNfsProfile,
   seedNode,
   seedShare,
-  seedNfsProfile,
 } from './_helpers.js';
 
 /**
- * All 30 GET operations from api-v1.yaml. Each entry: [path, expectedStatus].
+ * All 35 GET operations from api-v1.yaml. Each entry: [path, expectedStatus].
  * 200 = success against a seeded store; 404 = item-by-id that we don't seed
  * (verifies the NOT_FOUND envelope path).
  *
@@ -26,7 +26,8 @@ import {
  *   events: 1; audit: 1
  *   config-history: 4 (snapshots, snapshots/{id}, diff, drift)
  *   support-bundle: 1 (GET /{task_id})
- * Total: 30
+ *   Phase I: 5 (users, users/{uid}, groups, groups/{gid}, nfs-idmap)
+ * Total: 35
  */
 const GET_OPS: Array<[string, number]> = [
   // system
@@ -69,7 +70,21 @@ const GET_OPS: Array<[string, number]> = [
   ['/api/v1/config-history/drift', 200],
   // support-bundle download (404s because no bundle exists)
   ['/api/v1/support-bundle/01902f25-7c54-7c10-b1f0-aaaabbbbcccc', 404],
+  // Phase I: identity + idmap
+  ['/api/v1/users', 200],
+  ['/api/v1/users/42', 200],
+  ['/api/v1/groups', 200],
+  ['/api/v1/groups/42', 200],
+  ['/api/v1/nfs-idmap', 200],
 ];
+
+// Safety-check: the count must be exact so regressions are caught.
+if (GET_OPS.length !== 35) {
+  throw new Error(
+    `GET_OPS length is ${GET_OPS.length}, expected exactly 35. ` +
+      'Update this constant when adding or removing public GET routes.',
+  );
+}
 
 describe('GET integration — envelope shape per endpoint', () => {
   let setup: Awaited<ReturnType<typeof buildTestApp>>;
@@ -112,6 +127,34 @@ describe('GET integration — envelope shape per endpoint', () => {
       created_at: '2026-05-27T11:00:00Z',
       updated_at: '2026-05-27T11:00:00Z',
     });
+    // Phase I seeds — users, groups, nfs-idmap
+    setup.state.kv.put('/xinas/v1/observed/User/42', {
+      kind: 'User',
+      id: '42',
+      metadata: { modified_at: new Date().toISOString() },
+      spec: { name: 'integ-user', uid: 42, gid: 42 },
+      status: { resolvable: true, source: 'local', observed_at: new Date().toISOString() },
+    });
+    setup.state.kv.put('/xinas/v1/observed/Group/42', {
+      kind: 'Group',
+      id: '42',
+      metadata: { modified_at: new Date().toISOString() },
+      spec: { name: 'integ-group', gid: 42, members: [] },
+      status: { resolvable: true, source: 'local', observed_at: new Date().toISOString() },
+    });
+    setup.state.kv.put('/xinas/v1/observed/nfs_idmap/snapshot', {
+      kind: 'NfsIdmap',
+      metadata: { modified_at: new Date().toISOString() },
+      status: {
+        conf_present: true,
+        domain: 'integ-test.local',
+        local_realms: [],
+        method: 'nsswitch',
+        idmapd_active: true,
+        idmapd_unit_state: 'active',
+        observed_at: new Date().toISOString(),
+      },
+    });
   });
   afterEach(async () => {
     await setup.cleanup();
@@ -136,6 +179,10 @@ describe('GET integration — envelope shape per endpoint', () => {
       expect(typeof res.body.request_id).toBe('string');
       expect(Array.isArray(res.body.warnings ?? [])).toBe(true);
       expect(Array.isArray(res.body.errors ?? [])).toBe(true);
+      // /system must carry node.status.agent (Phase I agent sub-object).
+      if (path === '/api/v1/system' && expectedStatus === 200) {
+        expect(res.body.result?.node?.status?.agent).toBeDefined();
+      }
     });
   }
 });

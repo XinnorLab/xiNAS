@@ -49,6 +49,8 @@ export interface ApiConfig {
    * the colliding token or remove one of the entries.
    */
   internalTokensPath?: string;
+  /** When set, the api polls the agent's UDS for agent.health and tracks its state. */
+  agent?: { socket: string; heartbeat_interval_ms?: number };
 }
 
 const DEFAULT_PATH = '/etc/xinas-api/config.json';
