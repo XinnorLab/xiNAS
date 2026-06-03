@@ -1,0 +1,12 @@
+{
+  "blockdevices": [
+    {
+      "name": "nvme0n1",
+      "size": "1.5T",
+      "type": "disk",
+      "model": "E2E-TEST-NVME",
+      "serial": "E2ETST0001",
+      "tran": "nvme"
+    }
+  ]
+}
