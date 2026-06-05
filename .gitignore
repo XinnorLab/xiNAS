@@ -17,6 +17,9 @@ build/
 # Cached keys (machine-specific, never upload)
 keys/
 
+# Node dependencies (root-level and any nested workspace, e.g. xiNAS-MCP)
+node_modules/
+
 # Scripts dependencies
 scripts/node_modules/
 # End
