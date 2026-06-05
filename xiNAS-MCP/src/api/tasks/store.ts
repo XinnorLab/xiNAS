@@ -174,6 +174,7 @@ export class TaskStore {
 
   private readonly insertTaskStmt: Statement;
   private readonly getTaskStmt: Statement;
+  private readonly getByIdempotencyStmt: Statement;
   private readonly getStagesStmt: Statement;
   private readonly findStageStmt: Statement;
   private readonly insertStageStmt: Statement;
@@ -186,6 +187,9 @@ export class TaskStore {
 
     this.insertTaskStmt = this.db.prepare(INSERT_TASK_SQL);
     this.getTaskStmt = this.db.prepare('SELECT * FROM tasks WHERE task_id = ?');
+    this.getByIdempotencyStmt = this.db.prepare(
+      'SELECT * FROM tasks WHERE idempotency_key = ? AND principal = ?',
+    );
     this.getStagesStmt = this.db.prepare(
       `SELECT stage_index, name, status, started_at, ended_at, output_inline, output_path,
               output_size_bytes, error_code, error_message
@@ -247,6 +251,20 @@ export class TaskStore {
     const row = this.getTaskStmt.get(taskId) as TaskRow | undefined;
     if (!row) return null;
     const stages = (this.getStagesStmt.all(taskId) as StageRow[]).map(rowToStage);
+    return rowToTask(row, stages);
+  }
+
+  /**
+   * Look up the task that holds `(idempotency_key, principal)` — the pair the
+   * `UNIQUE(idempotency_key, principal)` index guards. Returns null when no
+   * task has claimed this key. The apply transaction (engine.ts) uses this to
+   * resolve a duplicate apply: same key + same `input_hash` → idempotent
+   * replay (return the original); different `input_hash` → CONFLICT.
+   */
+  getByIdempotency(idempotencyKey: string, principal: string): Task | null {
+    const row = this.getByIdempotencyStmt.get(idempotencyKey, principal) as TaskRow | undefined;
+    if (!row) return null;
+    const stages = (this.getStagesStmt.all(row.task_id) as StageRow[]).map(rowToStage);
     return rowToTask(row, stages);
   }
 
