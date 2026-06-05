@@ -19,14 +19,17 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { loadAgentConfig } from './agent/config.js';
 import { buildConvergence, runConvergence } from './agent/convergence.js';
 import { log } from './agent/log.js';
 import { createDispatcher } from './agent/rpc/dispatch.js';
 import { makeHealthHandler } from './agent/rpc/methods/health.js';
 import { STUB_METHODS } from './agent/rpc/methods/stubs.js';
+import { makeTaskHandlers } from './agent/rpc/methods/task.js';
 import { makeVersionHandler } from './agent/rpc/methods/version.js';
 import { createAgentRpcServer } from './agent/rpc/server.js';
+import { buildTaskSubsystem } from './agent/task/wiring.js';
 
 const VERSION = process.env['XINAS_AGENT_VERSION'] ?? '0.0.0-dev';
 const GIT_SHA = process.env['XINAS_AGENT_GIT_SHA'];
@@ -79,10 +82,25 @@ async function main(): Promise<void> {
     ...(BUILD_DATE !== undefined ? { buildDate: BUILD_DATE } : {}),
   });
 
+  // Task subsystem (S2 T7): the ExecutorRegistry (seeded with the reference
+  // executor), the xinas_history-backed TaskRunner, and the progress publisher
+  // that POSTs progress events to the api. The three task.* RPC handlers below
+  // dispatch api→agent `task.begin`/`task.cancel`/`task.list_inflight` into it.
+  // T0 removed the four task.* from STUB_METHODS, so registering the real
+  // handlers after the ...STUB_METHODS spread shadows nothing.
+  const taskSubsystem = buildTaskSubsystem(config);
+  const taskHandlers = makeTaskHandlers({
+    runner: taskSubsystem.runner,
+    registry: taskSubsystem.registry,
+    publish: taskSubsystem.publish,
+    newAcceptanceId: () => randomUUID(),
+  });
+
   const dispatch = createDispatcher({
     'agent.health': healthHandler,
     'agent.version': versionHandler,
     ...STUB_METHODS,
+    ...taskHandlers,
   });
 
   // The server handle is assigned once the UDS is bound; shutdown() captures
@@ -109,6 +127,13 @@ async function main(): Promise<void> {
     } catch {
       /* ignore — both are best-effort timer teardown */
     }
+    // The task subsystem (T7) is intentionally NOT torn down here: it holds no
+    // long-lived timers or handles — the TaskRunner is in-memory maps, the
+    // xinas_history bridge only spawns execFile during an active task, and the
+    // progress publisher's only timer is a transient retry backoff that
+    // self-clears (the 3s forced-exit backstop above covers one mid-retry). An
+    // in-flight task at shutdown is recovered by the api reconciler (T9), not by
+    // a graceful agent-side drain.
     // Stop collectors next so their event subprocesses (udevadm / ip
     // monitor) and the subprocess-monitor restart timers are torn down and
     // don't survive past shutdown. allSettled inside registry.stop() means
