@@ -99,6 +99,26 @@ const DEFAULT_LEASE_TTL_SECONDS = 60;
 /** Hard cap on a single `task.begin` round-trip. */
 const TASK_BEGIN_TIMEOUT_MS = 5_000;
 
+/** Hard cap on the single task.list_inflight reconcile RPC. */
+const TASK_LIST_INFLIGHT_TIMEOUT_MS = 5_000;
+
+/**
+ * Outcome of one `TaskEngine.reconcile()` pass (s2-task-envelope-spec §9).
+ * `leases_removed` / `tasks_recovered` come from the always-first
+ * `LeaseManager.sweepExpired()`; the rest count the per-task recovery actions.
+ */
+export interface ReconcileSummary {
+  leases_removed: number;
+  tasks_recovered: number;
+  acceptances_adopted: number;
+  redispatched: number;
+  failed: number;
+  /** false when the in-flight fetch failed or no agent client was available. */
+  agent_reachable: boolean;
+  /** true when a concurrent reconcile was already running (re-entrancy guard). */
+  skipped: boolean;
+}
+
 /** One stale-resource entry in a PRECONDITION_FAILED `details.stale[]`. */
 interface StaleEntry {
   kind: string;
@@ -112,6 +132,8 @@ export class TaskEngine {
   private readonly store: TaskStore;
   private readonly leases: LeaseManager;
   private readonly kv: KvStore;
+  /** Re-entrancy guard: true while a reconcile() pass is in flight. */
+  private reconciling = false;
 
   constructor(deps: TaskEngineDeps) {
     this.db = deps.db;
@@ -356,6 +378,167 @@ export class TaskEngine {
   }
 
   /**
+   * Crash/restart recovery (s2-task-envelope-spec §9). Runs on api startup
+   * and on the agent offline→healthy reconnect edge. Idempotent and
+   * re-entrancy-guarded.
+   *
+   * 1. ALWAYS sweep expired leases first (non-terminal tasks with an expired
+   *    lease → `requires_manual_recovery`), even when the agent is down.
+   * 2. Fetch the agent in-flight set once via `task.list_inflight`. If the
+   *    agent is unreachable (no client / connect-refused / timeout / reject)
+   *    → STOP after the sweep, leaving queued + running tasks untouched; the
+   *    offline→healthy reconnect trigger retries once the agent is back. A
+   *    `queued` task is NEVER failed just because the agent was momentarily
+   *    down.
+   * 3. With the in-flight set, walk non-terminal (`queued` + `running`) tasks:
+   *    - `running` + no acceptance + inflight → adopt the in-flight acceptance.
+   *    - `running` + (any acceptance) + not inflight → no-op (lease/sweep owns
+   *      running-task recovery; reconcile never re-dispatches a running task).
+   *    - `queued` → no host change yet → apply `queuedPolicy` (`redispatch`
+   *      default, idempotent `task.begin` by task_id; or `fail`).
+   */
+  async reconcile(args: {
+    agentClient: AgentRpcClient | undefined;
+    queuedPolicy?: 'redispatch' | 'fail';
+  }): Promise<ReconcileSummary> {
+    if (this.reconciling) {
+      return {
+        leases_removed: 0,
+        tasks_recovered: 0,
+        acceptances_adopted: 0,
+        redispatched: 0,
+        failed: 0,
+        agent_reachable: false,
+        skipped: true,
+      };
+    }
+    this.reconciling = true;
+    try {
+      const { agentClient } = args;
+      const queuedPolicy = args.queuedPolicy ?? 'redispatch';
+
+      // 1. Sweep first, always — runs even when the agent is unreachable.
+      const sweep = this.leases.sweepExpired();
+
+      // 2. Fetch the agent in-flight set once (best-effort, hard-capped). Any
+      //    failure (no client / connect-refused / timeout / reject) → undefined.
+      let inflight: Map<string, string | null> | undefined;
+      if (agentClient) {
+        try {
+          const res = await agentClient.call(
+            'task.list_inflight',
+            {},
+            TASK_LIST_INFLIGHT_TIMEOUT_MS,
+          );
+          inflight = parseInflight(res);
+        } catch {
+          inflight = undefined;
+        }
+      }
+
+      // Agent unreachable → stop after the sweep; the reconnect trigger retries.
+      if (inflight === undefined) {
+        return {
+          leases_removed: sweep.leases_removed,
+          tasks_recovered: sweep.tasks_recovered,
+          acceptances_adopted: 0,
+          redispatched: 0,
+          failed: 0,
+          agent_reachable: false,
+          skipped: false,
+        };
+      }
+
+      let acceptancesAdopted = 0;
+      let redispatched = 0;
+      let failed = 0;
+
+      // 3. Walk non-terminal tasks (queued + running only). plan_only /
+      //    imported / terminal are excluded by construction.
+      const tasks = [
+        ...this.store.list({ state: 'queued' }),
+        ...this.store.list({ state: 'running' }),
+      ];
+      for (const task of tasks) {
+        const isInflight = inflight.has(task.task_id);
+
+        if (task.state === 'running') {
+          if (
+            (task.agent_acceptance_id === null || task.agent_acceptance_id === undefined) &&
+            isInflight
+          ) {
+            // Adopt the acceptance the api lost across a restart; keep running.
+            const acceptance = inflight.get(task.task_id);
+            if (typeof acceptance === 'string') {
+              this.store.transition(task.task_id, { agent_acceptance_id: acceptance });
+              acceptancesAdopted += 1;
+            }
+          }
+          // All other running cases are a no-op: lease/sweep owns running-task
+          // recovery, and reconcile never re-dispatches a running task.
+          continue;
+        }
+
+        // state === 'queued' → never accepted → no host change → apply policy.
+        if (queuedPolicy === 'fail') {
+          this.store.transition(task.task_id, {
+            state: 'failed',
+            error_code: 'FAILED_BEFORE_CHANGE',
+            error_message: 'queued task never dispatched; reconciled to failed',
+          });
+          this.leases.releaseByTask(task.task_id);
+          failed += 1;
+          continue;
+        }
+
+        // 'redispatch' (default): idempotent task.begin by task_id. Wrap each so
+        // one begin-failure (dispatch's failBeforeChange already fails the task
+        // + releases its leases, then THROWS) doesn't abort the rest of the sweep.
+        try {
+          await this.dispatch({ task, agentClient, ...this.rebuildDispatchInputs(task) });
+          redispatched += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+
+      return {
+        leases_removed: sweep.leases_removed,
+        tasks_recovered: sweep.tasks_recovered,
+        acceptances_adopted: acceptancesAdopted,
+        redispatched,
+        failed,
+        agent_reachable: true,
+        skipped: false,
+      };
+    } finally {
+      this.reconciling = false;
+    }
+  }
+
+  /**
+   * Rebuild the `{ spec, plan }` dispatch inputs for a re-dispatch from the
+   * apply task's OWN columns (no plan_only refetch). `plan` is an `ApplyPlan`
+   * projected from the apply task; `spec` follows the S2 reference.echo
+   * convention — the agent ignores `spec`, so the echoed spec IS the task's
+   * `affected_resources`. S3+ real executors must persist an explicit spec
+   * blob on the task (a follow-up migration) rather than relying on this.
+   */
+  private rebuildDispatchInputs(task: Task): { spec: unknown; plan: ApplyPlan } {
+    const plan: ApplyPlan = {
+      plan_id: task.plan_id ?? task.task_id,
+      kind: task.kind,
+      risk_level: task.risk_level,
+      affected_resources: task.affected_resources,
+      ...(task.plan_hash !== undefined ? { plan_hash: task.plan_hash } : {}),
+      ...(task.state_revision_expected !== undefined
+        ? { state_revision_expected: task.state_revision_expected }
+        : {}),
+    };
+    return { spec: task.affected_resources, plan };
+  }
+
+  /**
    * Current revision of a resource row in the state store, or undefined
    * when the row is absent. `space` selects the desired vs observed
    * projection (`/xinas/v1/<space>/<Kind>/<id>`).
@@ -368,4 +551,25 @@ export class TaskEngine {
     const row = this.kv.get(`/xinas/v1/${space}/${kind}/${id}`);
     return row?.revision;
   }
+}
+
+/**
+ * Defensively parse a `task.list_inflight` result into a
+ * `task_id → agent_acceptance_id ?? null` map. Reads `{ tasks: [{ task_id,
+ * agent_acceptance_id }] }`; ignores malformed entries (missing/non-string
+ * `task_id`). A task is "inflight" iff the returned map `.has(task_id)`.
+ */
+function parseInflight(res: unknown): Map<string, string | null> {
+  const map = new Map<string, string | null>();
+  if (res === null || typeof res !== 'object') return map;
+  const tasks = (res as { tasks?: unknown }).tasks;
+  if (!Array.isArray(tasks)) return map;
+  for (const entry of tasks) {
+    if (entry === null || typeof entry !== 'object') continue;
+    const taskId = (entry as { task_id?: unknown }).task_id;
+    if (typeof taskId !== 'string') continue;
+    const acceptance = (entry as { agent_acceptance_id?: unknown }).agent_acceptance_id;
+    map.set(taskId, typeof acceptance === 'string' ? acceptance : null);
+  }
+  return map;
 }

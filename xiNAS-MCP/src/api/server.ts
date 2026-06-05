@@ -38,23 +38,10 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   // (validation skipped) when the spec isn't shipped — the graceful default.
   const observed = loadObservedSchemas();
 
-  // When the api is configured to track a xinas-agent, poll its UDS for
-  // agent.health on an interval and surface the derived state to routes.
-  let tracker: HeartbeatTracker | undefined;
-  if (config.agent) {
-    tracker = new HeartbeatTracker({
-      intervalMs: config.agent.heartbeat_interval_ms ?? 5000,
-      controllerId: config.controller_id,
-      state,
-      agentSocketPath: config.agent.socket,
-      healthProbe: createAgentHealthProbe(config.agent.socket),
-    });
-    tracker.start();
-  }
-
   // S2 task engine: plan/apply/task engines over the shared SQLite handle,
   // plus an api→agent RPC client (when an agent socket is configured) the
-  // mutating routes dispatch task.begin through.
+  // mutating routes dispatch task.begin through. Built BEFORE the heartbeat
+  // tracker so the tracker's onReconnect hook (T9) can trigger reconcile().
   const tasks = buildTaskEngines({
     state,
     ...(config.agent ? { agentClient: createAgentRpcClient(config.agent.socket) } : {}),
@@ -65,6 +52,38 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   // /tasks/{id}/watch stream sees it; replay-on-reconnect is served from the
   // durable task_stages rows by the watch route.
   const taskWatch = new TaskWatch();
+
+  // When the api is configured to track a xinas-agent, poll its UDS for
+  // agent.health on an interval and surface the derived state to routes.
+  let tracker: HeartbeatTracker | undefined;
+  if (config.agent) {
+    tracker = new HeartbeatTracker({
+      intervalMs: config.agent.heartbeat_interval_ms ?? 5000,
+      controllerId: config.controller_id,
+      state,
+      agentSocketPath: config.agent.socket,
+      healthProbe: createAgentHealthProbe(config.agent.socket),
+      // T9 (s2-task-envelope-spec §9): on the offline→healthy edge (incl. the
+      // agent's first appearance), reconcile — sweep expired leases and
+      // adopt/redispatch in-flight work. Fire-and-forget; the engine's
+      // re-entrancy guard makes any overlap with the startup reconcile a no-op.
+      onReconnect: () => {
+        void tasks.taskEngine.reconcile({ agentClient: tasks.agentClient }).catch(() => {
+          /* best-effort: a reconcile-trigger failure is non-fatal */
+        });
+      },
+    });
+    tracker.start();
+  }
+
+  // Startup reconciliation (s2-task-envelope-spec §9): sweep expired leases and
+  // adopt/redispatch in-flight work left by a prior api/agent restart.
+  // Best-effort and fire-and-forget — a failure (e.g. agent not up yet) is
+  // recovered by the offline→healthy reconnect trigger. The engine's
+  // re-entrancy guard makes any overlap with the immediate heartbeat tick a no-op.
+  void tasks.taskEngine.reconcile({ agentClient: tasks.agentClient }).catch(() => {
+    /* best-effort */
+  });
 
   // Conditional spread for the optionals — exactOptionalPropertyTypes refuses
   // an explicit `tracker: undefined` / `observedSchemas: undefined`.

@@ -158,6 +158,24 @@ On api startup + on agent reconnect: `LeaseManager.sweepExpired()` first (expire
 
 `task.begin` is **idempotent by `task_id`** (agent returns the same `agent_acceptance_id`), so re-dispatch never double-executes.
 
+### S2 `TaskEngine.reconcile()` algorithm
+
+`reconcile({ agentClient, queuedPolicy })` (an idempotent, re-entrancy-guarded method on `TaskEngine`) runs:
+
+1. **Sweep first, always.** `LeaseManager.sweepExpired()` — expired-lease non-terminal tasks → `requires_manual_recovery (FAILED_STATE_DESYNC)`, expired leases of terminal tasks deleted. Runs even when the agent is unreachable.
+2. **Fetch the agent in-flight set once** via `task.list_inflight` (a single best-effort RPC). **If the agent is unreachable** (no `agentClient`, connect-refused, or timeout) → **stop after the sweep**: leave `queued` tasks `queued` and `running` tasks untouched. They are recovered by the next reconcile — the **offline→healthy reconnect trigger** re-runs `reconcile()` once the agent is back, which is exactly when re-dispatch can succeed. Never fail a `queued` task just because the agent was momentarily down.
+3. **With the in-flight set in hand**, walk the non-terminal tasks (states `queued` + `running`):
+   - `running` + `agent_acceptance_id = null` + **inflight** → **adopt** the acceptance: store the `agent_acceptance_id` from the in-flight entry, keep `running`. (The agent accepted and is emitting progress; the api lost the dispatch ack across a restart.)
+   - `running` + (any acceptance) + **not inflight** → **no-op in reconcile.** Running-task recovery is owned by the lease/sweep mechanism: lease still live → grace (a later sweep handles it if it expires); lease already expired → step 1 already moved it to `requires_manual_recovery`. reconcile never re-dispatches a `running` task (it may have already mutated host state).
+   - `running` + acceptance set + inflight → live; leave running.
+   - `queued` → never accepted, so **no host change happened** → apply `queuedPolicy`:
+     - `'redispatch'` (**default**) → call `dispatch()` again. `task.begin` is idempotent by `task_id`, so a duplicate that the agent already has returns the same acceptance. Each re-dispatch is wrapped so one task's begin-failure (which `dispatch()`'s `failBeforeChange` already turns into `failed (FAILED_BEFORE_CHANGE)` + lease release) doesn't abort the rest of the sweep.
+     - `'fail'` → mark `failed (FAILED_BEFORE_CHANGE)` + release leases directly; the client re-applies.
+
+**Re-dispatch input reconstruction (S2 reference convention).** `dispatch()` needs `{ task, agentClient, spec, plan }`. Both are rebuilt from the **apply task's own columns** — no plan_only refetch: `plan` = an `ApplyPlan` projected from the apply task (`plan_id`, `kind`, `risk_level`, `affected_resources`, `plan_hash?`, `state_revision_expected?`), and `spec` = the apply task's `affected_resources` (the `reference.echo` echo convention — the agent ignores it). **S3+ real executors must persist an explicit `spec` blob on the task** (a follow-up migration) rather than relying on this echo convention; reconcile re-dispatch reads it from there.
+
+**Triggers.** `reconcile()` is called (a) once at **api startup** after the task engine + heartbeat tracker are built (best-effort; a failure is logged, never fatal), and (b) on the **offline→healthy** edge of the `HeartbeatTracker` (including the agent's first appearance), wired via an optional `onReconnect` callback the tracker invokes when `currentState()` transitions into `healthy` from a non-healthy state. Both call the same `reconcile()`; the engine's re-entrancy guard makes an overlap a no-op.
+
 ---
 
 ## 10. SSE watch (resumable)
