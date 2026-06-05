@@ -3,7 +3,8 @@
 Usage:
     python3 -m xinas_history snapshot list [--format json|table]
     python3 -m xinas_history snapshot show <id> [--format json|yaml]
-    python3 -m xinas_history snapshot create --source <source> --operation <op> [--preset <name>]
+    python3 -m xinas_history snapshot create --source <source> --operation <op>
+        [--preset <name>] [--format json|text]
     python3 -m xinas_history snapshot diff <id1> <id2> [--format json|unified]
     python3 -m xinas_history snapshot reset-to-baseline --reason <text> [--yes] [--format json]
     python3 -m xinas_history gc run
@@ -66,6 +67,10 @@ def main() -> int:
     )
     create_parser.add_argument(
         "--summary", default=None, help="Diff summary",
+    )
+    create_parser.add_argument(
+        "--format", choices=["json", "text"], default="text",
+        help="Output format (json prints {\"id\": ...} for machine consumers)",
     )
 
     # snapshot diff
@@ -235,7 +240,12 @@ def _cmd_snapshot_create(args: argparse.Namespace, engine: SnapshotEngine) -> in
             )
         )
 
-    print(manifest.id)
+    if getattr(args, "format", "text") == "json":
+        # Machine-readable shape consumed by the agent xinas_history bridge
+        # (S2 T6): a single object with the new snapshot id.
+        print(json.dumps({"id": manifest.id}))
+    else:
+        print(manifest.id)
     return 0
 
 
