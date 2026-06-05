@@ -1,0 +1,52 @@
+import { randomUUID } from 'node:crypto';
+import type { OpenedStateStore } from '../../state/index.js';
+import type { AgentRpcClient } from '../agent-client.js';
+import type { TaskEngines } from '../context.js';
+import { PlanEngine } from '../plan/engine.js';
+import { referencePlanProvider } from '../plan/providers/reference.js';
+import { TaskEngine } from './engine.js';
+import { TaskStore } from './store.js';
+
+export interface BuildTaskEnginesOptions {
+  state: OpenedStateStore;
+  /** Injected to dispatch `task.begin`; omit in contexts with no agent. */
+  agentClient?: AgentRpcClient;
+  /** Overridable for deterministic tests. Default: Date.now / randomUUID. */
+  now?: () => number;
+  newId?: () => string;
+}
+
+/**
+ * Construct the S2 task-engine bundle (s2-task-envelope-spec §2) from an
+ * opened state store. Builds the `TaskStore` over the shared SQLite handle,
+ * the apply-side `TaskEngine`, and the `PlanEngine` with the built-in
+ * `reference.echo` provider registered. The `LeaseManager` is reused from
+ * `state.leases` (NOT re-created) so the apply txn and any sweep share the
+ * same prepared statements over one db.
+ *
+ * Hung off ApiContext.tasks by startServer() / the test helpers; consumed by
+ * the mutating engine routes (T4 reference route, later real executors).
+ */
+export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
+  const { state } = opts;
+  const now = opts.now ?? (() => Date.now());
+  const newId = opts.newId ?? (() => randomUUID());
+
+  const store = new TaskStore({ db: state.db, now, newId });
+  const taskEngine = new TaskEngine({
+    db: state.db,
+    store,
+    leases: state.leases,
+    kv: state.kv,
+  });
+  const planEngine = new PlanEngine({ store, ctx: { kv: state.kv } });
+  planEngine.register(referencePlanProvider);
+
+  return {
+    planEngine,
+    taskEngine,
+    store,
+    leases: state.leases,
+    ...(opts.agentClient ? { agentClient: opts.agentClient } : {}),
+  };
+}

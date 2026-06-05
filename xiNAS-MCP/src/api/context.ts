@@ -1,7 +1,11 @@
-import type { OpenedStateStore } from '../state/index.js';
+import type { LeaseManager, OpenedStateStore } from '../state/index.js';
+import type { AgentRpcClient } from './agent-client.js';
 import type { ApiConfig, Role } from './config.js';
 import type { Warning } from './envelope.js';
 import type { HeartbeatTracker } from './heartbeat.js';
+import type { PlanEngine } from './plan/engine.js';
+import type { TaskEngine } from './tasks/engine.js';
+import type { TaskStore } from './tasks/store.js';
 
 /**
  * A compiled Ajv validator for one observed kind. The handler only
@@ -17,6 +21,24 @@ export interface ObservedValidateFn {
 }
 
 /**
+ * The S2 task-engine bundle: the plan/apply engines, the durable task
+ * store, the lease manager, and the api→agent RPC client the mutating
+ * routes (T4: POST /api/v1/reference) dispatch `task.begin` through.
+ * Built once at startup from the SQLite handle + the agent socket and
+ * hung off ApiContext so route factories reach it without re-deriving it
+ * per request. Optional: absent in the read-only test contexts that never
+ * mount a mutating engine route.
+ */
+export interface TaskEngines {
+  planEngine: PlanEngine;
+  taskEngine: TaskEngine;
+  store: TaskStore;
+  leases: LeaseManager;
+  /** api→agent JSON-RPC client; undefined when no agent socket is configured. */
+  agentClient?: AgentRpcClient;
+}
+
+/**
  * Shared per-process context. Built once at startup and passed into
  * createApp(); route modules receive it through their factory.
  */
@@ -25,6 +47,8 @@ export interface ApiContext {
   state: OpenedStateStore;
   /** Optional; absent until HeartbeatTracker is wired (H1+). */
   tracker?: HeartbeatTracker;
+  /** Optional; the S2 plan/apply/task engines (T4+). Absent in read-only contexts. */
+  tasks?: TaskEngines;
   /**
    * Optional per-kind Ajv validators for inbound observation deltas
    * (wired in a later task — H6/J3). When present, the /internal/v1/observed

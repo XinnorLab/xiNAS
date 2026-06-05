@@ -18,6 +18,7 @@ import { inventoryRouter } from './routes/inventory.js';
 import { networkRouter } from './routes/network.js';
 import { nfsIdmapRouter } from './routes/nfs-idmap.js';
 import { nfsRouter } from './routes/nfs.js';
+import { referenceRouter } from './routes/reference.js';
 import { storageRouter } from './routes/storage.js';
 import { supportRouter } from './routes/support.js';
 import { systemRouter } from './routes/system.js';
@@ -72,6 +73,11 @@ export function createApp(ctx: ApiContext): Express {
   v1.use(usersRouter(ctx));
   v1.use(groupsRouter(ctx));
   v1.use(nfsIdmapRouter(ctx));
+
+  // S2 reference plan/apply route — the first REAL mutating route, wired to
+  // the task engine (ctx.tasks). Mounted before the executorUnavailable stub
+  // loop below; /reference is not in that list, so there is no shadowing.
+  v1.use(referenceRouter(ctx));
 
   // Mutating verbs all route to the executor-unavailable stub until
   // xinas-agent ships. Per ADR-0002 §Agent heartbeat, plan and apply

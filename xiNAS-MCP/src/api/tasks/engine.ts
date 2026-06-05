@@ -1,6 +1,7 @@
 import type { Database } from 'better-sqlite3';
 import type { KvStore } from '../../state/index.js';
 import type { LeaseManager } from '../../state/leases.js';
+import { AgentRpcError, type AgentRpcClient } from '../agent-client.js';
 import { ApiException } from '../errors.js';
 import type { TaskStore } from './store.js';
 import type { ResourceRef, Task } from './types.js';
@@ -94,6 +95,9 @@ export interface TaskEngineDeps {
 
 /** Default lease TTL (seconds). Heartbeats extend it during execution. */
 const DEFAULT_LEASE_TTL_SECONDS = 60;
+
+/** Hard cap on a single `task.begin` round-trip. */
+const TASK_BEGIN_TIMEOUT_MS = 5_000;
 
 /** One stale-resource entry in a PRECONDITION_FAILED `details.stale[]`. */
 interface StaleEntry {
@@ -238,6 +242,117 @@ export class TaskEngine {
     });
 
     return run();
+  }
+
+  /**
+   * Dispatch a `queued` apply task to the agent (s2-task-envelope-spec §5.2
+   * step 3). This is the minimal inline dispatch for S2 (the full worker pool
+   * + reconcile is T9): send `task.begin(task_id, kind, spec, plan)` over the
+   * agent RPC client, then —
+   *   - **accepted** → transition the task to `running` + store the
+   *     `agent_acceptance_id`; return the running Task.
+   *   - **unavailable** (agent offline / connect-refused / timeout) → transition
+   *     to `failed (FAILED_BEFORE_CHANGE)`, RELEASE the task's leases, and throw
+   *     `INTERNAL`/`EXECUTOR_UNAVAILABLE` (→ 503).
+   *   - **rejected** (JSON-RPC error, e.g. `EXECUTOR_UNSUPPORTED`) → transition
+   *     to `failed (FAILED_BEFORE_CHANGE)`, RELEASE leases, and throw
+   *     `UNSUPPORTED`/`EXECUTOR_UNSUPPORTED` (→ 422).
+   * Never leaves a `queued` task holding leases with no in-flight begin.
+   *
+   * @param plan the public plan envelope rendered for the agent (diff etc.)
+   */
+  async dispatch(args: {
+    task: Task;
+    agentClient: AgentRpcClient | undefined;
+    spec: unknown;
+    plan: unknown;
+  }): Promise<Task> {
+    const { task, agentClient, spec, plan } = args;
+
+    // No agent configured (read-only/test context) is just one more flavor of
+    // "begin couldn't reach an executor" — route it through the single
+    // begin-unavailable cleanup path (fail task + release leases + 503).
+    if (!agentClient) {
+      return this.failBeforeChange(
+        task,
+        new AgentRpcError(
+          -32000,
+          'no agent RPC client configured to dispatch task.begin',
+          undefined,
+        ),
+      );
+    }
+
+    let result: unknown;
+    try {
+      result = await agentClient.call(
+        'task.begin',
+        { task_id: task.task_id, kind: task.kind, spec, plan },
+        TASK_BEGIN_TIMEOUT_MS,
+      );
+    } catch (err) {
+      return this.failBeforeChange(task, err);
+    }
+
+    const accepted =
+      result !== null &&
+      typeof result === 'object' &&
+      (result as { accepted?: unknown }).accepted === true;
+    if (!accepted) {
+      // A well-formed-but-not-accepted response is treated as a rejection.
+      return this.failBeforeChange(
+        task,
+        new AgentRpcError(-32000, 'agent did not accept task.begin', undefined),
+      );
+    }
+
+    const acceptanceId = (result as { agent_acceptance_id?: unknown }).agent_acceptance_id;
+    return this.store.transition(task.task_id, {
+      state: 'running',
+      ...(typeof acceptanceId === 'string' ? { agent_acceptance_id: acceptanceId } : {}),
+    });
+  }
+
+  /**
+   * Begin-failure cleanup: mark the task `failed (FAILED_BEFORE_CHANGE)`,
+   * release its leases (so no orphan queued/failed task holds a resource),
+   * and throw the api error the route surfaces. A `task.begin` that never
+   * reached an accept means NO host change happened — safe to fail clean.
+   */
+  private failBeforeChange(task: Task, err: unknown): never {
+    const unsupported =
+      err instanceof AgentRpcError &&
+      typeof err.data === 'object' &&
+      err.data !== null &&
+      (err.data as { code?: unknown }).code === 'EXECUTOR_UNSUPPORTED';
+
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    this.store.transition(task.task_id, {
+      state: 'failed',
+      error_code: 'FAILED_BEFORE_CHANGE',
+      error_message: errorMessage,
+    });
+    this.leases.releaseByTask(task.task_id);
+
+    if (unsupported) {
+      // Executor reachable but operation unbuilt → UNSUPPORTED/422 (default map).
+      throw new ApiException(
+        'UNSUPPORTED',
+        'this operation is not implemented by the executor',
+        { code: 'EXECUTOR_UNSUPPORTED' },
+        'the agent is reachable but does not implement this operation in this build',
+      );
+    }
+    // Agent offline / connect-refused / timeout → INTERNAL/EXECUTOR_UNAVAILABLE
+    // envelope, surfaced as HTTP 503 (the mutating-route contract for an
+    // unreachable executor; INTERNAL alone would map to 500). No new ErrorCode.
+    throw new ApiException(
+      'INTERNAL',
+      'xinas-agent did not accept the task',
+      { code: 'EXECUTOR_UNAVAILABLE' },
+      'restart xinas-agent.service and retry',
+      503,
+    );
   }
 
   /**

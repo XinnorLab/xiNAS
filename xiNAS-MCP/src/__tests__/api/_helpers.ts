@@ -1,13 +1,16 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { type Server, createServer } from 'node:net';
+import { type Server, type Socket, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { Express } from 'express';
 import request from 'supertest';
+import { createAgentRpcClient } from '../../api/agent-client.js';
 import { createApp } from '../../api/app.js';
 import type { ApiConfig } from '../../api/config.js';
 import type { ApiContext } from '../../api/context.js';
 import { HeartbeatTracker, createAgentHealthProbe } from '../../api/heartbeat.js';
+import { buildTaskEngines } from '../../api/tasks/build.js';
 import { type OpenedStateStore, openStateStore } from '../../state/index.js';
 
 export interface TestSetup {
@@ -165,6 +168,11 @@ interface ObservationBody {
   complete_snapshots: string[];
 }
 
+/** A canned `task.begin` reply: accept (with an acceptance id) or error. */
+export type MockTaskBeginReply =
+  | { kind: 'accept'; agent_acceptance_id?: string }
+  | { kind: 'error'; code: number; message: string; data?: unknown };
+
 export interface MockAgentHandle {
   /**
    * Set the payload the mock agent returns for subsequent `agent.health`
@@ -172,6 +180,14 @@ export interface MockAgentHandle {
    * picks this up and drives the tracker to the matching state.
    */
   respondToHealth(payload: MockAgentHealth): void;
+  /**
+   * Set how the mock agent answers `task.begin`. Default: accept with a
+   * fresh `agent_acceptance_id`. The T4 reference-route dispatch test drives
+   * this to exercise accept (→ running/202) vs error (→ failed/422-503).
+   */
+  respondToTaskBegin(reply: MockTaskBeginReply): void;
+  /** Number of `task.begin` RPCs the mock agent has received so far. */
+  taskBeginCallCount(): number;
   /**
    * POST an observation batch to /internal/v1/observed with the internal
    * agent bearer so observed state becomes readable via the public GET
@@ -244,13 +260,25 @@ export async function buildTestAppWithMockAgent(): Promise<MockAgentSetup> {
     healthProbe: createAgentHealthProbe(agentSockPath),
   });
 
-  const ctx: ApiContext = { config, state, tracker };
+  // Wire the S2 task engines + an agent RPC client pointed at the mock UDS so
+  // the reference route (T4) can dispatch task.begin end-to-end.
+  const tasks = buildTaskEngines({ state, agentClient: createAgentRpcClient(agentSockPath) });
+
+  const ctx: ApiContext = { config, state, tracker, tasks };
   const app = createApp(ctx);
 
   // Boot the mock agent UDS server. It answers agent.health with the
-  // configured payload (empty/offline-ish until respondToHealth is called).
+  // configured payload (empty/offline-ish until respondToHealth is called)
+  // and task.begin per the configured reply (default: accept).
   let currentHealthPayload: MockAgentHealth | null = null;
+  let taskBeginReply: MockTaskBeginReply = { kind: 'accept' };
+  let taskBeginCalls = 0;
+  // Track live server-side connections so teardown can force-destroy them; a
+  // half-open UDS conn the client destroyed keeps server.close() from resolving.
+  const agentConns = new Set<Socket>();
   let agentServer: Server | null = createServer((conn) => {
+    agentConns.add(conn);
+    conn.on('close', () => agentConns.delete(conn));
     let buf = '';
     conn.on('data', (chunk: Buffer) => {
       buf += chunk.toString('utf8');
@@ -267,6 +295,32 @@ export async function buildTestAppWithMockAgent(): Promise<MockAgentSetup> {
         const id = req.id ?? null;
         if (req.method === 'agent.health' && currentHealthPayload) {
           conn.write(`${JSON.stringify({ jsonrpc: '2.0', id, result: currentHealthPayload })}\n`);
+        } else if (req.method === 'task.begin') {
+          taskBeginCalls += 1;
+          if (taskBeginReply.kind === 'accept') {
+            conn.write(
+              `${JSON.stringify({
+                jsonrpc: '2.0',
+                id,
+                result: {
+                  accepted: true,
+                  agent_acceptance_id: taskBeginReply.agent_acceptance_id ?? randomUUID(),
+                },
+              })}\n`,
+            );
+          } else {
+            conn.write(
+              `${JSON.stringify({
+                jsonrpc: '2.0',
+                id,
+                error: {
+                  code: taskBeginReply.code,
+                  message: taskBeginReply.message,
+                  ...(taskBeginReply.data !== undefined ? { data: taskBeginReply.data } : {}),
+                },
+              })}\n`,
+            );
+          }
         } else {
           conn.write(
             `${JSON.stringify({
@@ -293,6 +347,12 @@ export async function buildTestAppWithMockAgent(): Promise<MockAgentSetup> {
     respondToHealth(payload) {
       currentHealthPayload = payload;
     },
+    respondToTaskBegin(reply) {
+      taskBeginReply = reply;
+    },
+    taskBeginCallCount() {
+      return taskBeginCalls;
+    },
     async postObservation(body) {
       await request(app)
         .post('/internal/v1/observed')
@@ -304,6 +364,7 @@ export async function buildTestAppWithMockAgent(): Promise<MockAgentSetup> {
       if (agentServer) {
         const server = agentServer;
         agentServer = null;
+        for (const c of agentConns) c.destroy();
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
       // Wait for a tick to fire against the now-closed socket so the probe
@@ -327,6 +388,7 @@ export async function buildTestAppWithMockAgent(): Promise<MockAgentSetup> {
       if (agentServer) {
         const server = agentServer;
         agentServer = null;
+        for (const c of agentConns) c.destroy();
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
       await state.close();
