@@ -67,7 +67,7 @@ Columns per ADR-0004 §`tasks table` / `001-initial.sql`: `task_id` (uuid), `kin
 **S2 adds one column** (ADR-0004 permits minor additions) via migration `002`: `agent_acceptance_id TEXT` — the idempotent-begin correlation token (null until the agent accepts). This + `state` is all reconcile needs (§9); **no separate dispatch state machine**.
 
 ### 3.2 `task_stages` (existing) — hybrid log spill
-Per ADR-0004: `stage_id`, `task_id`, `stage_index`, `name` (`preflight`/`snapshot_before`/`apply`/`verify`/`rollback`/`snapshot_after`), `status`, `started_at`, `ended_at`, `output_inline` (BLOB, ≤64 KiB), `output_path` (relative, when spilled), `output_size_bytes` (**required**), `error_code`, `error_message`. The progress push (§6) writes/updates these rows; SSE resume replays them. This **replaces** the KV "event log" from the pre-review draft.
+Per ADR-0004: `stage_id`, `task_id`, `stage_index`, `name` (`preflight`/`snapshot_before`/`apply`/`verify`/`rollback`/`snapshot_after`), `status`, `started_at`, `ended_at`, `output_inline` (BLOB, ≤64 KiB), `output_path` (relative, when spilled), `output_size_bytes` (**required**), `error_code`, `error_message`. The progress push (§6) writes/updates these rows; SSE resume **resyncs** from the rolled-up Task snapshot built over them (§10), not from a per-event log. This **replaces** the KV "event log" from the pre-review draft.
 
 ### 3.3 `leases` (existing) — via `LeaseManager`
 Per ADR-0004 / `leases.ts`: `lease_id`, `resource_kind`, `resource_id`, `task_id`, `acquired_at`, `ttl_seconds`, `heartbeat_at`, `UNIQUE(resource_kind, resource_id)`. **No global serialize lease** — the worker pool cap=1 + per-resource leases are the serialization. Acquisition is `LeaseManager.acquire()` (INSERT-on-conflict → `held_by_other` with the holder `task_id`). Stale recovery is `LeaseManager.sweepExpired()` (already → `requires_manual_recovery`).
@@ -162,7 +162,11 @@ On api startup + on agent reconnect: `LeaseManager.sweepExpired()` first (expire
 
 ## 10. SSE watch (resumable)
 
-`GET /tasks/{id}/watch`: first send the current Task snapshot, then live events via an in-memory fan-out. Reconnect with `Last-Event-ID: <sequence>` **replays** from the `task_stages` rows + task state past that sequence before attaching to the live stream. Tasks reads (`/tasks`, `/tasks/{id}`) get the S0/S1 `embedMetadata` fold-in.
+`GET /tasks/{id}/watch`: first send the current Task snapshot, then live events via an in-memory fan-out (`tasks/watch.ts`). Both the snapshot frame and every live frame carry the event `sequence` as the SSE `id`, so the id space is a **single, coherent event-sequence space**.
+
+Reconnect uses a **resync**, not an event replay. The durable record is the rolled-up `task_stages` rows + `tasks` row — there is no per-event log to replay past an arbitrary sequence. So a reconnect with `Last-Event-ID: <sequence>` is handled as: if that sequence is **behind** the task's current `last_event_sequence`, re-send the current Task snapshot (which already carries every stage's latest state) keyed at `last_event_sequence`, then attach live; if it is **at/ahead of** the current sequence, send nothing and attach live directly. Reading the task and subscribing happen synchronously so no live event slips through the gap. A client that misses intermediate events still converges, because the snapshot is the full current state — it just does not see each missed transition individually.
+
+Tasks reads (`/tasks`, `/tasks/{id}`) get the S0/S1 `embedMetadata` fold-in.
 
 ---
 
@@ -210,7 +214,7 @@ Task-internal `FAILED_*` codes (ADR-0004) are persisted on the task and surfaced
 | **T5** | `tasks/progress.ts` — `/internal/v1/task_progress` receiver (taxonomy + monotonic + apply to `task_stages`/`tasks` + spill). *Before* the agent work so the contract target is stable. |
 | **T6** | `task/runner.ts` + `task/reference-executor.ts` (with `rollback()`) + `task/xinas-history-bridge.ts`; **add `--format json` to `xinas_history snapshot create`** (Python + test). |
 | **T7** | `rpc/methods/task.ts` (`begin`/`cancel`/`list_inflight`, idempotent begin) wired into `agent-server.ts` — and the four `task.*` already removed from `STUB_METHODS` in T0, so no shadowing. + `task/progress-publisher.ts`. |
-| **T8** | `tasks/watch.ts` resumable SSE (replay from `task_stages`) + tasks metadata fold-in. |
+| **T8** | `tasks/watch.ts` resumable SSE (resync from the current Task snapshot; single event-sequence id space) + tasks metadata fold-in. |
 | **T9** | `tasks/engine.ts` reconcile + wire `LeaseManager.sweepExpired()` on startup/reconnect (§9 table). |
 | **T10** | e2e: success · failure→rollback · idempotency-conflict (`CONFLICT`) · crash/reconcile + sweep. |
 

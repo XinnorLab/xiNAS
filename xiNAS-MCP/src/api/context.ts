@@ -6,6 +6,7 @@ import type { HeartbeatTracker } from './heartbeat.js';
 import type { PlanEngine } from './plan/engine.js';
 import type { TaskEngine } from './tasks/engine.js';
 import type { TaskStore } from './tasks/store.js';
+import type { TaskWatch } from './tasks/watch.js';
 
 /**
  * A compiled Ajv validator for one observed kind. The handler only
@@ -68,12 +69,13 @@ export interface ApiContext {
    */
   taskProgressSpillDir?: string;
   /**
-   * Resumable-SSE fan-out (s2-task-envelope-spec §10). Built in T8; until then
-   * absent. The task_progress receiver (T5) calls `notify` after applying each
-   * event so a live `/tasks/{id}/watch` stream sees it; guarded with `?.` so
-   * the receiver works before the watch surface exists.
+   * Resumable-SSE fan-out (s2-task-envelope-spec §10). Built in T8 by
+   * server.ts / the test harness. The task_progress receiver (T5) calls
+   * `notify` after applying each event so a live `/tasks/{id}/watch` stream
+   * sees it; the watch route calls `subscribe` to attach a client. Optional
+   * (guarded with `?.`) so the receiver and read-only contexts work without it.
    */
-  taskWatch?: { notify(taskId: string, event: unknown): void };
+  taskWatch?: TaskWatch;
 }
 
 /**
