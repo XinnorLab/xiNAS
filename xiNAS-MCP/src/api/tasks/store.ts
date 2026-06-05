@@ -40,6 +40,7 @@ export interface CreatePlanOnlyInput {
   input_hash: string;
   risk_level: string;
   affected_resources: ResourceRef[];
+  spec?: unknown;
   idempotency_key?: string;
   plan_hash?: string;
   state_revision_expected?: number;
@@ -55,6 +56,7 @@ export interface CreateApplyInput {
   input_hash: string;
   risk_level: string;
   affected_resources: ResourceRef[];
+  spec?: unknown;
   plan_id?: string;
   idempotency_key?: string;
   plan_hash?: string;
@@ -115,6 +117,7 @@ interface TaskRow {
   state_revision_at_apply: number | null;
   risk_level: string;
   affected_resources: string;
+  spec: string | null;
   snapshot_before: string | null;
   snapshot_after: string | null;
   agent_acceptance_id: string | null;
@@ -147,14 +150,14 @@ const INSERT_TASK_SQL = `INSERT INTO tasks (
   task_id, kind, state, plan_id, idempotency_key, principal, client_type,
   request_id, correlation_id, input_hash, plan_hash, result_hash,
   state_revision_expected, state_revision_at_apply, risk_level,
-  affected_resources, snapshot_before, snapshot_after, agent_acceptance_id,
+  affected_resources, spec, snapshot_before, snapshot_after, agent_acceptance_id,
   last_event_sequence, cancel_requested_at, cancel_refused_reason,
   error_code, error_message, remediation_hint, created_at, updated_at, terminal_at
 ) VALUES (
   @task_id, @kind, @state, @plan_id, @idempotency_key, @principal, @client_type,
   @request_id, @correlation_id, @input_hash, @plan_hash, @result_hash,
   @state_revision_expected, @state_revision_at_apply, @risk_level,
-  @affected_resources, @snapshot_before, @snapshot_after, @agent_acceptance_id,
+  @affected_resources, @spec, @snapshot_before, @snapshot_after, @agent_acceptance_id,
   @last_event_sequence, @cancel_requested_at, @cancel_refused_reason,
   @error_code, @error_message, @remediation_hint, @created_at, @updated_at, @terminal_at
 )`;
@@ -220,6 +223,7 @@ export class TaskStore {
       input_hash: input.input_hash,
       risk_level: input.risk_level,
       affected_resources: input.affected_resources,
+      spec: input.spec,
       plan_id: undefined,
       idempotency_key: input.idempotency_key,
       plan_hash: input.plan_hash,
@@ -239,6 +243,7 @@ export class TaskStore {
       input_hash: input.input_hash,
       risk_level: input.risk_level,
       affected_resources: input.affected_resources,
+      spec: input.spec,
       plan_id: input.plan_id,
       idempotency_key: input.idempotency_key,
       plan_hash: input.plan_hash,
@@ -388,6 +393,9 @@ export class TaskStore {
     input_hash: string;
     risk_level: string;
     affected_resources: ResourceRef[];
+    // `unknown` already admits undefined; the `=== undefined` guard in the
+    // `.run({...})` below normalizes an absent spec to a NULL column.
+    spec: unknown;
     // `| undefined` (not `?`) so callers may pass an explicitly-undefined
     // optional through without tripping exactOptionalPropertyTypes; the
     // `?? null` below normalizes either form.
@@ -416,6 +424,10 @@ export class TaskStore {
       state_revision_at_apply: fields.state_revision_at_apply ?? null,
       risk_level: fields.risk_level,
       affected_resources: JSON.stringify(fields.affected_resources),
+      // Guard on `=== undefined` only: JSON.stringify(undefined) returns the JS
+      // value undefined (rejected by better-sqlite3), whereas a legitimate JSON
+      // null spec stringifies to "null" and persists fine.
+      spec: fields.spec !== undefined ? JSON.stringify(fields.spec) : null,
       snapshot_before: null,
       snapshot_after: null,
       agent_acceptance_id: null,
@@ -486,6 +498,7 @@ function rowToTask(row: TaskRow, stages: TaskStage[]): Task {
     ...(row.state_revision_at_apply !== null
       ? { state_revision_at_apply: row.state_revision_at_apply }
       : {}),
+    ...(row.spec !== null ? { spec: JSON.parse(row.spec) as unknown } : {}),
     ...(row.snapshot_before !== null ? { snapshot_before: row.snapshot_before } : {}),
     ...(row.snapshot_after !== null ? { snapshot_after: row.snapshot_after } : {}),
     ...(row.agent_acceptance_id !== null ? { agent_acceptance_id: row.agent_acceptance_id } : {}),

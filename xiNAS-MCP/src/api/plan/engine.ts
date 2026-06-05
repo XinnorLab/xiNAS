@@ -157,6 +157,9 @@ export class PlanEngine {
       plan_hash: planHash,
       // Spread conditionally — under exactOptionalPropertyTypes the
       // `?:` optionals on CreatePlanOnlyInput reject an explicit undefined.
+      // Persist the raw request spec so apply/dispatch can forward it verbatim
+      // to the executor (s2-task-envelope-spec §5.1).
+      ...(args.spec !== undefined ? { spec: args.spec } : {}),
       ...(args.idempotency_key !== undefined ? { idempotency_key: args.idempotency_key } : {}),
       ...(result.state_revision_expected !== undefined
         ? { state_revision_expected: result.state_revision_expected }

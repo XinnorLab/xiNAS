@@ -100,12 +100,15 @@ function fakeAgent(opts: {
   inflight?: Array<{ task_id: string; agent_acceptance_id: string | null }>;
   beginAcceptanceId?: string;
   unreachable?: boolean;
+  /** Captures the params of every `task.begin` the engine dispatches. */
+  beginParams?: Array<Record<string, unknown>>;
 }): AgentRpcClient {
   return {
-    async call(method: string): Promise<unknown> {
+    async call(method: string, params?: unknown): Promise<unknown> {
       if (opts.unreachable) throw new Error('connect ECONNREFUSED');
       if (method === 'task.list_inflight') return { tasks: opts.inflight ?? [] };
       if (method === 'task.begin') {
+        opts.beginParams?.push((params ?? {}) as Record<string, unknown>);
         return { accepted: true, agent_acceptance_id: opts.beginAcceptanceId ?? 'acc-redispatch' };
       }
       throw new Error(`unexpected method ${method}`);
@@ -144,6 +147,26 @@ describe('TaskEngine.reconcile', () => {
     expect(task?.state).toBe('running');
     expect(task?.agent_acceptance_id).toBe('acc-rd');
     expect(summary.redispatched).toBe(1);
+  });
+
+  it("redispatch forwards the task's persisted spec (NOT affected_resources) as task.begin spec", async () => {
+    const id = h.seedQueued();
+    h.acquireLease(id);
+    // Persist a raw executor spec on the queued task (what plan/apply stored).
+    const spec = { fail_at_stage: 'apply', message: 'redispatch me' };
+    h.db.prepare('UPDATE tasks SET spec = ? WHERE task_id = ?').run(JSON.stringify(spec), id);
+
+    const beginParams: Array<Record<string, unknown>> = [];
+    const summary = await h.engine.reconcile({
+      agentClient: fakeAgent({ inflight: [], beginAcceptanceId: 'acc-rd', beginParams }),
+    });
+
+    expect(summary.redispatched).toBe(1);
+    expect(beginParams).toHaveLength(1);
+    // §9: reconcile forwards the persisted task.spec verbatim.
+    expect(beginParams[0]?.spec).toEqual(spec);
+    // And it is NOT the affected_resources lock set (the old stopgap).
+    expect(beginParams[0]?.spec).not.toEqual(h.store.get(id)?.affected_resources);
   });
 
   it("queued + queuedPolicy:'fail' → failed FAILED_BEFORE_CHANGE + leases released", async () => {

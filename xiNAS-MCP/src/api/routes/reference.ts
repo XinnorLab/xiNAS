@@ -120,7 +120,7 @@ export function referenceRouter(ctx: ApiContext): Router {
       const dispatched = await tasks.taskEngine.dispatch({
         task,
         agentClient: tasks.agentClient,
-        spec: planTask.affected_resources, // S2 reference: spec is echoed; agent ignores
+        spec: planTask.spec, // the raw executor input (reference.echo: { message?, fail_at_stage? })
         plan: applyPlan,
       });
 
@@ -147,6 +147,7 @@ function toApplyPlan(planTask: Task): ApplyPlan {
     kind: planTask.kind,
     risk_level: planTask.risk_level,
     affected_resources: planTask.affected_resources,
+    ...(planTask.spec !== undefined ? { spec: planTask.spec } : {}),
     ...(planTask.plan_hash !== undefined ? { plan_hash: planTask.plan_hash } : {}),
     ...(planTask.state_revision_expected !== undefined
       ? { state_revision_expected: planTask.state_revision_expected }

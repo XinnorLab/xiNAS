@@ -107,6 +107,23 @@ describe('TaskStore', () => {
     expect(got?.affected_resources).toEqual([{ kind: 'Share', id: 's1', revision: 7 }]);
   });
 
+  it('spec round-trips through JSON on plan_only and apply tasks (migration 003)', () => {
+    const spec = { message: 'hi', fail_at_stage: 'apply' };
+    const plan = h.store.createPlanOnly({ ...PLAN_INPUT, spec });
+    expect(h.store.get(plan.task_id)?.spec).toEqual(spec);
+
+    const apply = h.store.createApplyTask({ ...APPLY_INPUT_NO_PLAN, spec });
+    expect(h.store.get(apply.task_id)?.spec).toEqual(spec);
+  });
+
+  it('a task created WITHOUT a spec has spec === undefined (NULL → omitted)', () => {
+    const plan = h.store.createPlanOnly(PLAN_INPUT); // no spec
+    expect(h.store.get(plan.task_id)?.spec).toBeUndefined();
+
+    const apply = h.store.createApplyTask(APPLY_INPUT_NO_PLAN); // no spec
+    expect(h.store.get(apply.task_id)?.spec).toBeUndefined();
+  });
+
   it('get returns null for an unknown id', () => {
     expect(h.store.get('nope')).toBeNull();
   });

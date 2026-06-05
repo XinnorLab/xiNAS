@@ -29,7 +29,29 @@ describe('migrations runner', () => {
     expect(versions).toEqual([
       { version: 1, filename: '001-initial.sql' },
       { version: 2, filename: '002-task-dispatch.sql' },
+      { version: 3, filename: '003-task-spec.sql' },
     ]);
+  });
+
+  it('003 adds the spec column to tasks (nullable)', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+
+    const columns = (db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(columns).toContain('spec');
+
+    // spec is nullable (NULL for tasks created before 003 / without a spec).
+    db.prepare(
+      `INSERT INTO tasks (task_id, kind, state, principal, client_type, request_id, correlation_id,
+                          input_hash, risk_level, affected_resources, created_at, updated_at)
+       VALUES ('t-003', 'test', 'queued', 'sys', 'system', 'r', 'c', 'h', 'non_disruptive', '[]', 0, 0)`,
+    ).run();
+    const row = db.prepare('SELECT spec FROM tasks WHERE task_id = ?').get('t-003') as {
+      spec: string | null;
+    };
+    expect(row.spec).toBeNull();
   });
 
   it('002 adds the dispatch-tracking columns to tasks', () => {

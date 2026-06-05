@@ -114,6 +114,23 @@ describe('TaskEngine.apply', () => {
     expect(h.leaseHolder('Share', 's1')).toBe(task.task_id);
   });
 
+  it('copies the plan spec onto the apply task; a plan without a spec leaves it undefined', () => {
+    const spec = { message: 'hi', fail_at_stage: 'apply' };
+    const withSpec = h.engine.apply({ plan: makePlan({ spec }), applyReq: makeApplyReq() });
+    expect(withSpec.spec).toEqual(spec);
+    expect(h.store.get(withSpec.task_id)?.spec).toEqual(spec);
+
+    // A second apply against a DIFFERENT resource (s1's lease is still held by
+    // the apply above) with no spec → the column stays NULL → spec undefined.
+    h.kv.put('/xinas/v1/desired/Share/s2', { id: 's2', name: 'second' });
+    const noSpec = h.engine.apply({
+      plan: makePlan({ affected_resources: [{ kind: 'Share', id: 's2', revision: 1 }] }),
+      applyReq: makeApplyReq({ idempotency_key: 'idem-2' }),
+    });
+    expect(noSpec.spec).toBeUndefined();
+    expect(h.store.get(noSpec.task_id)?.spec).toBeUndefined();
+  });
+
   it('idempotency: same key + same input_hash returns the ORIGINAL task, one row', () => {
     const first = h.engine.apply({ plan: makePlan(), applyReq: makeApplyReq() });
     const second = h.engine.apply({ plan: makePlan(), applyReq: makeApplyReq() });
