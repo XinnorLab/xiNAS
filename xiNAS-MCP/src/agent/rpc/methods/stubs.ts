@@ -74,11 +74,10 @@ const STUB_METHOD_NAMES = [
   // Systemd (S4/WS6)
   'systemd.reload',
   'systemd.restart',
-  // Task envelope (S2/WS4)
-  'task.begin',
-  'task.stage_report',
-  'task.cancel',
-  'task.list_inflight',
+  // Task envelope (S2/WS4): task.begin/cancel/list_inflight get real handlers
+  // in a later S2 task; task.stage_report is removed entirely and replaced by
+  // the agent→api push (POST /internal/v1/task_progress). None are api→agent
+  // stubs — they MUST NOT be enumerated here.
   // Managed files drift (WS9)
   'managed_files.checksums',
 ] as const;
