@@ -2,11 +2,13 @@ import { chmodSync, chownSync, existsSync, unlinkSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { type OpenedStateStore, openStateStore } from '../state/index.js';
+import { createAgentRpcClient } from './agent-client.js';
 import { createApp } from './app.js';
 import { type ApiConfig, loadConfig } from './config.js';
 import type { ApiContext } from './context.js';
 import { HeartbeatTracker, createAgentHealthProbe } from './heartbeat.js';
 import { loadObservedSchemas } from './observed-schemas.js';
+import { buildTaskEngines } from './tasks/build.js';
 
 export interface StartServerOptions {
   configPath?: string;
@@ -49,11 +51,20 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
     tracker.start();
   }
 
+  // S2 task engine: plan/apply/task engines over the shared SQLite handle,
+  // plus an api→agent RPC client (when an agent socket is configured) the
+  // mutating routes dispatch task.begin through.
+  const tasks = buildTaskEngines({
+    state,
+    ...(config.agent ? { agentClient: createAgentRpcClient(config.agent.socket) } : {}),
+  });
+
   // Conditional spread for the optionals — exactOptionalPropertyTypes refuses
   // an explicit `tracker: undefined` / `observedSchemas: undefined`.
   const ctx: ApiContext = {
     config,
     state,
+    tasks,
     ...(tracker ? { tracker } : {}),
     ...(observed ? { observedSchemas: observed.schemas, ajv: observed.ajv } : {}),
   };

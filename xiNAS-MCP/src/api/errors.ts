@@ -55,12 +55,23 @@ export class ApiException extends Error {
   readonly code: ErrorCode;
   readonly details?: Record<string, unknown>;
   readonly remediation?: string;
+  /**
+   * Optional HTTP status override. When set, the error middleware uses this
+   * status instead of the default `STATUS_MAP[code]` while keeping the
+   * envelope error `code` unchanged (no new ErrorCode). Used by the task
+   * engine's dispatch path: an agent-offline begin-failure reports the
+   * `INTERNAL`/`EXECUTOR_UNAVAILABLE` envelope but surfaces HTTP 503 (the
+   * api-v1.yaml mutating-route contract for an unreachable executor), since
+   * `INTERNAL` would otherwise map to 500.
+   */
+  readonly httpStatusOverride?: number;
 
   constructor(
     code: ErrorCode,
     message: string,
     details?: Record<string, unknown>,
     remediation?: string,
+    httpStatusOverride?: number,
   ) {
     super(message);
     this.code = code;
@@ -69,5 +80,6 @@ export class ApiException extends Error {
     // undefined and the field is declared `details?: ...`.
     if (details !== undefined) this.details = details;
     if (remediation !== undefined) this.remediation = remediation;
+    if (httpStatusOverride !== undefined) this.httpStatusOverride = httpStatusOverride;
   }
 }

@@ -23,6 +23,7 @@ export class LeaseManager {
   private readonly findHolderStmt: Statement;
   private readonly heartbeatStmt: Statement;
   private readonly releaseStmt: Statement;
+  private readonly releaseByTaskStmt: Statement;
   private readonly findExpiredHoldersStmt: Statement;
   private readonly recoverTaskStmt: Statement;
   private readonly deleteExpiredStmt: Statement;
@@ -38,6 +39,7 @@ export class LeaseManager {
     );
     this.heartbeatStmt = db.prepare('UPDATE leases SET heartbeat_at = ? WHERE lease_id = ?');
     this.releaseStmt = db.prepare('DELETE FROM leases WHERE lease_id = ?');
+    this.releaseByTaskStmt = db.prepare('DELETE FROM leases WHERE task_id = ?');
     this.findExpiredHoldersStmt = db.prepare(
       `SELECT l.task_id
          FROM leases l
@@ -96,6 +98,18 @@ export class LeaseManager {
 
   release(lease_id: string): void {
     this.releaseStmt.run(lease_id);
+  }
+
+  /**
+   * Release every lease held by a task, by `task_id`. Used by the dispatch
+   * path (s2-task-envelope-spec §5.2) when `task.begin` is rejected/unavailable:
+   * the apply txn acquired one lease per affected resource and the caller only
+   * has the `task_id`, so this DELETEs them all at once rather than tracking
+   * each `lease_id`. Returns the number of leases removed. Idempotent — a task
+   * with no leases removes nothing.
+   */
+  releaseByTask(task_id: string): number {
+    return this.releaseByTaskStmt.run(task_id).changes;
   }
 
   /**

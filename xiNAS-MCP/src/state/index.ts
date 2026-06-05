@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
+import type { Database as BetterSqliteDatabase } from 'better-sqlite3';
 import { runMigrations } from './migrations.js';
 import { SqliteKvStore } from './backend-sqlite.js';
 import { LeaseManager } from './leases.js';
@@ -51,6 +52,16 @@ export interface OpenedStateStore {
   audit: AuditAppender;
   drainer: AuditDrainer;
   gc: GcSweeper;
+  /**
+   * The raw better-sqlite3 handle. Exposed for the S2 task engine
+   * (TaskStore / TaskEngine need a `db.transaction` over the same
+   * `xinas.db` — api is the sole writer per ADR-0002). This is the ONE
+   * place the SQLite-specific handle leaks past the KvStore abstraction;
+   * a Phase-2 etcd backend would not populate it, and the task engine
+   * (SQLite-only by ADR-0004) would not be wired there. Public read
+   * routes still bind to `kv` (the interface) and never touch `db`.
+   */
+  db: BetterSqliteDatabase;
   close(): Promise<void>;
 }
 
@@ -95,6 +106,7 @@ export async function openStateStore(opts: OpenStateStoreOptions): Promise<Opene
     audit,
     drainer,
     gc,
+    db,
     async close() {
       await drainer.stop();
       kv.close();
