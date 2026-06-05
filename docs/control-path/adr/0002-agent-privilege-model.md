@@ -128,12 +128,13 @@ The agent **does not own task state**. It owns *in-flight execution
 state* keyed by `task_id`: which stage is running, the live subprocess
 or socket handle, partial stdout/stderr buffers, and a cancel flag.
 
-Four envelope methods govern the lifecycle:
+Envelope methods govern the lifecycle (in S2, progress reporting **moves off
+the api↔agent RPC channel** — see "Task engine (S2)" below: `task.stage_report`
+is removed and replaced by the agent→api `POST /internal/v1/task_progress` push):
 
 | Method                                               | Direction       | Purpose                                                                                                  |
 |------------------------------------------------------|-----------------|----------------------------------------------------------------------------------------------------------|
 | `task.begin(envelope, kind, input)`                  | API → agent     | Agent acknowledges and starts the stage. Returns either `running` with a stage handle, or a synchronous result for fast operations. |
-| `task.stage_report(task_id, stage_index, ...)`       | agent → API     | Agent reports stage status, progress fraction (optional), and an output chunk. API persists into `task_stages` (ADR-0004). |
 | `task.cancel(task_id)`                               | API → agent     | API requests cancellation. Agent responds `cancelled`, `cancel_refused` with reason, or `not_found`.     |
 | `task.list_inflight()`                               | API → agent     | API calls this on startup. Agent returns `[{task_id, stage_index, started_at, ...}, ...]` for live work. |
 
@@ -145,8 +146,8 @@ On `xinas-api` start (per ADR-0004's "API restart finds tasks in
 1. API loads all tasks where `state = running` from SQLite.
 2. API calls `agent.task.list_inflight()`.
 3. For each running task in SQLite:
-   - If the agent reports it in-flight: API resumes consuming
-     `stage_report` callbacks; task continues normally.
+   - If the agent reports it in-flight: API resumes consuming the agent's
+     `POST /internal/v1/task_progress` push events; task continues normally.
    - If the agent does **not** report it in-flight: API transitions the
      task to `requires_manual_recovery` with
      `error_code = FAILED_STATE_DESYNC` (per ADR-0004's failure recovery
@@ -181,6 +182,31 @@ handles, partial output buffers). Long-running monitoring operations
 (e.g. RAID rebuild progress) are an exception that may use a "watch"
 RPC pattern, defined per-operation when implemented; they are not part
 of Phase 0's default execution model.
+
+#### Task engine (S2)
+
+The S2 task engine refines the lifecycle above. The split of authority is:
+
+- **api owns** the durable SQLite DB (`tasks` / `task_stages` / `leases`,
+  per [ADR-0004](0004-task-engine.md)), task dispatch, and startup/reconnect
+  reconciliation. It is the sole writer of task state and of the facts the
+  agent reports.
+- **agent owns** in-flight execution state keyed by `task_id` and executes
+  the typed methods. It **does not** write task rows.
+
+Progress reporting moves off the api↔agent RPC channel: `task.stage_report` is
+**removed** as an api→agent RPC (its direction was already agent→api in the
+table above; only the transport changes). Instead the agent
+**pushes** progress facts to the api via `POST /internal/v1/task_progress`
+(internal-agent bearer, gated by `requireInternalAgent`, mirroring
+`/internal/v1/observed`). Events are per-task monotonic by `sequence`, so a
+replayed event is an idempotent 200 no-op. The remaining envelope methods —
+`task.begin`, `task.cancel`, `task.list_inflight` — stay api→agent and gain
+real handlers in S2 (they are not enumerated api→agent stubs).
+
+See [ADR-0004](0004-task-engine.md) for the persistence model and
+[`s2-task-envelope-spec.md`](../s2-task-envelope-spec.md) for the full
+plan/apply, progress-push, and reconciliation design.
 
 ### Hardening
 

@@ -19,6 +19,17 @@ describe('makeStubHandler', () => {
   });
 });
 
+// ---- task.* methods are NOT api→agent stubs (real handlers later / push) ----
+
+describe('task.* methods are not enumerated stubs', () => {
+  it.each(['task.begin', 'task.cancel', 'task.list_inflight', 'task.stage_report'])(
+    '%s is NOT in STUB_METHODS (real handler later / push)',
+    (m) => {
+      expect(STUB_METHODS).not.toHaveProperty(m);
+    },
+  );
+});
+
 // ---- all ADR-0002 enumerated methods are in the stub list ----
 
 const REQUIRED_STUB_METHODS = [
@@ -52,10 +63,10 @@ const REQUIRED_STUB_METHODS = [
   'network.apply',
   'systemd.reload',
   'systemd.restart',
-  'task.begin',
-  'task.stage_report',
-  'task.cancel',
-  'task.list_inflight',
+  // task.begin/cancel/list_inflight/stage_report are intentionally NOT here:
+  // the first three get real handlers in a later S2 task; stage_report becomes
+  // the agent→api push (POST /internal/v1/task_progress). See the
+  // "task.* methods are not enumerated stubs" describe block above.
   'managed_files.checksums',
 ];
 

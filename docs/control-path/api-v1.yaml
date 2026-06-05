@@ -235,6 +235,19 @@ components:
         state_revision_expected:
           type: integer
           format: int64
+        observed_revision_expected:
+          type: [integer, "null"]
+          description: |
+            Observed-state revision the plan was computed against. On apply,
+            an observed snapshot stale beyond the plan's freshness rule yields
+            `CONFLICT` with `details.reason: plan_stale` (per the S2 task
+            engine). Null when the plan does not depend on observed state.
+        observed_at:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            Timestamp of the observed snapshot the plan was computed against.
+            Companion to `observed_revision_expected` for plan-freshness checks.
         plan_hash:
           type: string
           description: sha256 of canonical plan body.
@@ -1035,6 +1048,14 @@ components:
           enum: [queued, running, success, failed, cancelled, requires_manual_recovery, plan_only, imported]
         plan_id: { type: [string, "null"], format: uuid }
         idempotency_key: { type: [string, "null"] }
+        agent_acceptance_id:
+          type: [string, "null"]
+          description: |
+            Opaque token the agent returns from `task.begin` when it accepts
+            and starts executing the task. Stored by the api and used by the
+            S2 reconciler to distinguish "begin landed" from "begin never
+            took" after a restart (per ADR-0004 / s2-task-envelope-spec §9).
+            Null until the agent accepts.
         principal: { type: string }
         client_type:
           type: string
@@ -1096,6 +1117,56 @@ components:
         output_size_bytes: { type: integer }
         error_code: { type: [string, "null"] }
         error_message: { type: [string, "null"] }
+
+    TaskProgressEvent:
+      description: |
+        A single agent→api progress fact pushed via
+        `POST /internal/v1/task_progress` (per s2-task-envelope-spec §6). The
+        agent reports facts only; the api is the sole writer of `task_stages`
+        and `tasks` rows. `sequence` is per-task monotonic — an event with
+        `sequence ≤` the task's high-water mark is a 200 no-op (idempotent
+        replay). This schema **replaces** the removed `task.stage_report` RPC.
+      type: object
+      required: [task_id, sequence, event_type]
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          description: Per-task monotonic sequence number; drives idempotent replay.
+        event_type:
+          type: string
+          enum:
+            - accepted
+            - stage_started
+            - stage_succeeded
+            - stage_failed
+            - rollback_started
+            - rollback_succeeded
+            - rollback_failed
+            - terminal
+        stage_index:
+          type: integer
+        stage_name:
+          type: string
+        status:
+          type: string
+        output_inline:
+          type: string
+          description: Present when stage output ≤ 64 KiB; larger output spills to disk.
+        output_size_bytes:
+          type: integer
+        error_code:
+          type: string
+        error_message:
+          type: string
+        snapshot_id:
+          type: string
+          description: xinas_history snapshot id captured by the executor (before/after).
+        observed_at:
+          type: string
+          format: date-time
 
     Event:
       type: object
@@ -1281,7 +1352,21 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Envelope' }
     Conflict:
-      description: '`CONFLICT` — resource lease held by another task.'
+      description: |
+        `CONFLICT` — a mutating/task operation could not proceed because of a
+        concurrency or freshness conflict. The `error.details.reason`
+        discriminator (no new top-level error code is added) is one of:
+
+        - `lease_held` — a required resource lease is held by another task.
+          `details.holder_task_id` names the holding task.
+        - `idempotency_key_reused` — the same `idempotency_key`+`principal`
+          was reused for a different `input_hash`/`plan_hash`.
+        - `plan_stale` — the observed snapshot the plan was computed against
+          is stale beyond the plan's freshness rule (see
+          `Plan.observed_revision_expected` / `Plan.observed_at`).
+
+        (Stale `expected_revision` on apply is reported as
+        `PRECONDITION_FAILED`, not here.)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Envelope' }
@@ -2018,6 +2103,45 @@ paths:
           content:
             text/event-stream:
               schema: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # Internal (agent → api) — not part of the public client surface
+  # =========================================================================
+  /internal/v1/task_progress:
+    post:
+      tags: [tasks]
+      operationId: pushTaskProgress
+      summary: Agent→api task progress push (internal; mirrors /internal/v1/observed).
+      description: |
+        Internal route, **not** for client use. The xinas-agent pushes task
+        progress facts here as a typed event; the api is the sole writer of
+        the durable `task_stages` / `tasks` rows (per ADR-0002 and
+        s2-task-envelope-spec §6). This route **replaces** the removed
+        `task.stage_report` api→agent RPC.
+
+        Auth mirrors `/internal/v1/observed`: gated by `requireInternalAgent`
+        and accepts only the internal-agent bearer token (the agent principal).
+        Unix-peer-cred promotion does not apply to internal routes.
+
+        Idempotent: `sequence` is per-task monotonic; an event with
+        `sequence ≤` the task's high-water mark is a 200 no-op.
+      security:
+        - bearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskProgressEvent' }
+      responses:
+        '200':
+          description: Event applied (or accepted as an idempotent no-op).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/Internal' }
 
