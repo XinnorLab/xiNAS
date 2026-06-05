@@ -59,6 +59,21 @@ export interface ApiContext {
   observedSchemas?: Record<string, ObservedValidateFn>;
   /** Companion to observedSchemas; renders an Ajv validator's errors as text. */
   ajv?: { errorsText(errors: unknown): string };
+  /**
+   * Base directory the task_progress receiver (T5) spills oversized stage
+   * output to (`<dir>/<task_id>/stage-<n>.log[.zst]`). Defaults to
+   * `/var/log/xinas/tasks` in production; tests inject a temp dir so the
+   * spill path is assertable and self-contained. Injectable here (not
+   * hardcoded in the handler) per s2-task-envelope-spec §6 / T5.
+   */
+  taskProgressSpillDir?: string;
+  /**
+   * Resumable-SSE fan-out (s2-task-envelope-spec §10). Built in T8; until then
+   * absent. The task_progress receiver (T5) calls `notify` after applying each
+   * event so a live `/tasks/{id}/watch` stream sees it; guarded with `?.` so
+   * the receiver works before the watch surface exists.
+   */
+  taskWatch?: { notify(taskId: string, event: unknown): void };
 }
 
 /**
