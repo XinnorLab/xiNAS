@@ -86,6 +86,13 @@ function renderTask(task: Task): Record<string, unknown> {
   if (task.cancel_requested_at !== undefined) {
     out.cancel_requested_at = new Date(task.cancel_requested_at).toISOString();
   }
+  // `spec` (migration 003) is the raw requester-submitted executor INPUT — an
+  // internal-only column (s2-task-envelope-spec §3.1), NOT part of the public
+  // Task surface in api-v1.yaml. Strip it so a read endpoint never echoes the
+  // operation input back (harmless for reference.echo, an exposure surface once
+  // S3+ executors carry real/sensitive specs). The SSE watch snapshot strips it
+  // the same way (see watchTask).
+  delete out.spec;
   return out;
 }
 
@@ -214,7 +221,12 @@ function watchTask(ctx: ApiContext, req: Request, res: Response, id: string): vo
   // attaches live with no re-send. Reading the task and subscribing happen
   // synchronously below, so no live event can slip through the gap.
   if (lastEventId === undefined || lastEventId < task.last_event_sequence) {
-    res.write(formatFrame(task.last_event_sequence, task));
+    // Strip the internal-only `spec` (raw executor input) before it crosses the
+    // wire — it is not part of the public Task surface on REST or SSE (mirrors
+    // renderTask). The rest of the raw store shape is kept as-is for the frame.
+    const snapshot: Record<string, unknown> = { ...task };
+    delete snapshot.spec;
+    res.write(formatFrame(task.last_event_sequence, snapshot));
   }
 
   // Attach to the live stream. If no TaskWatch is wired (should not happen once

@@ -60,6 +60,14 @@ export class LeaseManager {
         WHERE task_id = ?
           AND state IN ('queued', 'running')`,
     );
+    // INVARIANT (do not add a task-state filter): this deletes ALL expired
+    // leases regardless of their task's state. That is what self-heals the one
+    // non-atomic failure path in the engine — TaskEngine.failBeforeChange()
+    // transitions a task to `failed` then releases its leases OUTSIDE a single
+    // db.transaction, so a crash in between orphans a lease on a `failed` task.
+    // Because this sweep is state-agnostic, that orphan is reclaimed after TTL.
+    // Tightening this to "only leases of non-terminal tasks" would turn that
+    // crash window into a permanent leak.
     this.deleteExpiredStmt = db.prepare(
       'DELETE FROM leases WHERE heartbeat_at + (ttl_seconds * 1000) < ?',
     );
