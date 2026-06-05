@@ -22,6 +22,7 @@ export class LeaseManager {
   private readonly insertStmt: Statement;
   private readonly findHolderStmt: Statement;
   private readonly heartbeatStmt: Statement;
+  private readonly heartbeatByTaskStmt: Statement;
   private readonly releaseStmt: Statement;
   private readonly releaseByTaskStmt: Statement;
   private readonly findExpiredHoldersStmt: Statement;
@@ -38,6 +39,7 @@ export class LeaseManager {
       'SELECT task_id FROM leases WHERE resource_kind = ? AND resource_id = ?',
     );
     this.heartbeatStmt = db.prepare('UPDATE leases SET heartbeat_at = ? WHERE lease_id = ?');
+    this.heartbeatByTaskStmt = db.prepare('UPDATE leases SET heartbeat_at = ? WHERE task_id = ?');
     this.releaseStmt = db.prepare('DELETE FROM leases WHERE lease_id = ?');
     this.releaseByTaskStmt = db.prepare('DELETE FROM leases WHERE task_id = ?');
     this.findExpiredHoldersStmt = db.prepare(
@@ -94,6 +96,18 @@ export class LeaseManager {
 
   heartbeat(lease_id: string): void {
     this.heartbeatStmt.run(Date.now(), lease_id);
+  }
+
+  /**
+   * Bump `heartbeat_at` on every lease a task holds, by `task_id`. The
+   * task_progress receiver (s2-task-envelope-spec §6) calls this on each
+   * applied stage event: the agent reports progress but does not know its
+   * `lease_id`s, so the api keeps the task's leases fresh by task_id rather
+   * than tracking each id. Returns the number of leases bumped; idempotent —
+   * a task with no leases bumps nothing.
+   */
+  heartbeatByTask(task_id: string): number {
+    return this.heartbeatByTaskStmt.run(Date.now(), task_id).changes;
   }
 
   release(lease_id: string): void {
