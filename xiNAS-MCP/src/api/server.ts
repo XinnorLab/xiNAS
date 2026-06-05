@@ -9,6 +9,7 @@ import type { ApiContext } from './context.js';
 import { HeartbeatTracker, createAgentHealthProbe } from './heartbeat.js';
 import { loadObservedSchemas } from './observed-schemas.js';
 import { buildTaskEngines } from './tasks/build.js';
+import { TaskWatch } from './tasks/watch.js';
 
 export interface StartServerOptions {
   configPath?: string;
@@ -59,12 +60,19 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
     ...(config.agent ? { agentClient: createAgentRpcClient(config.agent.socket) } : {}),
   });
 
+  // S2 resumable SSE fan-out (s2-task-envelope-spec §10). The task_progress
+  // receiver (T5) calls taskWatch.notify() after applying each event so a live
+  // /tasks/{id}/watch stream sees it; replay-on-reconnect is served from the
+  // durable task_stages rows by the watch route.
+  const taskWatch = new TaskWatch();
+
   // Conditional spread for the optionals — exactOptionalPropertyTypes refuses
   // an explicit `tracker: undefined` / `observedSchemas: undefined`.
   const ctx: ApiContext = {
     config,
     state,
     tasks,
+    taskWatch,
     ...(tracker ? { tracker } : {}),
     ...(observed ? { observedSchemas: observed.schemas, ajv: observed.ajv } : {}),
   };
