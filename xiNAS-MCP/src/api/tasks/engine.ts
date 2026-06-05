@@ -58,6 +58,8 @@ export interface ApplyPlan {
   kind: string;
   risk_level: RiskLevel | string;
   plan_hash?: string;
+  /** Raw executor spec, persisted on the apply task + forwarded at dispatch. */
+  spec?: unknown;
   /** {kind,id,revision?} pinned at plan time. */
   affected_resources: ResourceRef[];
   /** Highest expected desired revision across affected resources. */
@@ -231,6 +233,9 @@ export class TaskEngine {
         affected_resources: plan.affected_resources,
         plan_id: plan.plan_id,
         idempotency_key: applyReq.idempotency_key,
+        // Carry the raw executor spec onto the apply task so dispatch + reconcile
+        // re-dispatch forward it verbatim (s2-task-envelope-spec §5.2/§9).
+        ...(plan.spec !== undefined ? { spec: plan.spec } : {}),
         ...(plan.plan_hash !== undefined ? { plan_hash: plan.plan_hash } : {}),
         ...(plan.state_revision_expected !== undefined
           ? { state_revision_expected: plan.state_revision_expected }
@@ -519,10 +524,9 @@ export class TaskEngine {
   /**
    * Rebuild the `{ spec, plan }` dispatch inputs for a re-dispatch from the
    * apply task's OWN columns (no plan_only refetch). `plan` is an `ApplyPlan`
-   * projected from the apply task; `spec` follows the S2 reference.echo
-   * convention — the agent ignores `spec`, so the echoed spec IS the task's
-   * `affected_resources`. S3+ real executors must persist an explicit spec
-   * blob on the task (a follow-up migration) rather than relying on this.
+   * projected from the apply task; `spec` is the task's persisted `spec` column
+   * (migration 003) — the same executor input the original dispatch forwarded,
+   * NOT the `affected_resources` echo stopgap. This works for any executor.
    */
   private rebuildDispatchInputs(task: Task): { spec: unknown; plan: ApplyPlan } {
     const plan: ApplyPlan = {
@@ -535,7 +539,7 @@ export class TaskEngine {
         ? { state_revision_expected: task.state_revision_expected }
         : {}),
     };
-    return { spec: task.affected_resources, plan };
+    return { spec: task.spec, plan };
   }
 
   /**

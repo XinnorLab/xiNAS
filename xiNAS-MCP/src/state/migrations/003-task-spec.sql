@@ -1,0 +1,12 @@
+-- S2 T9b: persist the raw executor `spec` on `tasks` (s2-task-envelope-spec
+-- §3.1/§5/§9). Additive only.
+--
+-- The plan/apply path stores the requester's raw operation spec (the executor
+-- INPUT, e.g. reference.echo's { message?, fail_at_stage? }) here, distinct from
+-- `affected_resources` (the lock set). dispatch + reconcile re-dispatch forward
+-- it verbatim as the agent `task.begin` spec. NULL for tasks created before 003.
+--
+-- Idempotency: the migrations runner (state/migrations.ts) gates by
+-- schema_version, so this ALTER runs exactly once (SQLite has no
+-- ADD COLUMN IF NOT EXISTS).
+ALTER TABLE tasks ADD COLUMN spec TEXT;

@@ -189,6 +189,12 @@ export interface MockAgentHandle {
   /** Number of `task.begin` RPCs the mock agent has received so far. */
   taskBeginCallCount(): number;
   /**
+   * Params of the LAST `task.begin` the mock agent received (`{ task_id, kind,
+   * spec, plan }`), or undefined if none yet. Lets a test assert the api
+   * forwarded the raw executor spec end-to-end (T9b).
+   */
+  lastTaskBeginParams(): Record<string, unknown> | undefined;
+  /**
    * POST an observation batch to /internal/v1/observed with the internal
    * agent bearer so observed state becomes readable via the public GET
    * routes. Driven through supertest against the in-process app (the app is
@@ -273,6 +279,7 @@ export async function buildTestAppWithMockAgent(): Promise<MockAgentSetup> {
   let currentHealthPayload: MockAgentHealth | null = null;
   let taskBeginReply: MockTaskBeginReply = { kind: 'accept' };
   let taskBeginCalls = 0;
+  let lastTaskBeginParams: Record<string, unknown> | undefined;
   // Track live server-side connections so teardown can force-destroy them; a
   // half-open UDS conn the client destroyed keeps server.close() from resolving.
   const agentConns = new Set<Socket>();
@@ -286,7 +293,7 @@ export async function buildTestAppWithMockAgent(): Promise<MockAgentSetup> {
       while ((nl = buf.indexOf('\n')) !== -1) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
-        let req: { id?: number | string | null; method?: string };
+        let req: { id?: number | string | null; method?: string; params?: unknown };
         try {
           req = JSON.parse(line) as typeof req;
         } catch {
@@ -297,6 +304,10 @@ export async function buildTestAppWithMockAgent(): Promise<MockAgentSetup> {
           conn.write(`${JSON.stringify({ jsonrpc: '2.0', id, result: currentHealthPayload })}\n`);
         } else if (req.method === 'task.begin') {
           taskBeginCalls += 1;
+          lastTaskBeginParams =
+            req.params !== null && typeof req.params === 'object'
+              ? (req.params as Record<string, unknown>)
+              : {};
           if (taskBeginReply.kind === 'accept') {
             conn.write(
               `${JSON.stringify({
@@ -352,6 +363,9 @@ export async function buildTestAppWithMockAgent(): Promise<MockAgentSetup> {
     },
     taskBeginCallCount() {
       return taskBeginCalls;
+    },
+    lastTaskBeginParams() {
+      return lastTaskBeginParams;
     },
     async postObservation(body) {
       await request(app)

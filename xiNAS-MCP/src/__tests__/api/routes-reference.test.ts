@@ -84,6 +84,23 @@ describe('POST /api/v1/reference', () => {
         'running',
       ),
     ).toBe(1);
+
+    // T9b: the api forwarded the RAW executor spec (not affected_resources) to
+    // the agent's task.begin, end-to-end over the UDS.
+    expect(setup.mockAgent.lastTaskBeginParams()?.spec).toEqual({ id: 'r1', message: 'go' });
+  });
+
+  it('mode=apply forwards spec.fail_at_stage to the agent task.begin (T9b)', async () => {
+    setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-fail' });
+
+    const spec = { id: 'r5', message: 'boom', fail_at_stage: 'apply' };
+    const planned = await plan(spec);
+    const planId = planned.body.result.plan_id as string;
+
+    const res = await apply(planId, 'idem-apply-fail');
+    expect(res.status).toBe(202);
+    // The whole spec — including fail_at_stage — reaches the executor over HTTP.
+    expect(setup.mockAgent.lastTaskBeginParams()?.spec).toEqual(spec);
   });
 
   it('agent unavailable → task failed (FAILED_BEFORE_CHANGE), leases released, 503', async () => {

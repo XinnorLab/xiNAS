@@ -75,6 +75,10 @@ export interface Task {
   state_revision_at_apply?: number;
   risk_level: string;
   affected_resources: ResourceRef[];
+  /** Raw operation spec the requester submitted (the executor INPUT), JSON.
+   *  Distinct from `affected_resources` (the lock set). Undefined for tasks
+   *  created before migration 003. */
+  spec?: unknown;
   snapshot_before?: string;
   snapshot_after?: string;
   agent_acceptance_id?: string;
