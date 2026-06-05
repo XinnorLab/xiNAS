@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { canonicalize } from '../../lib/canonical-json.js';
 import type { KvStore } from '../../state/index.js';
 import { ApiException } from '../errors.js';
 import type { TaskStore } from '../tasks/store.js';
@@ -22,8 +23,9 @@ import type { ResourceRef, Task } from '../tasks/types.js';
  * (recursively key-sorted, whitespace-free) JSON so two callers that
  * pass the same content in a different key order get the same hash —
  * apply replays compare hashes (§5.2), so a key-order flip must not
- * read as a different request. `stableStringify` below is the
- * canonical form (mirrors state/audit.ts::canonicalize).
+ * read as a different request. The canonical form is the shared
+ * `lib/canonical-json.ts::canonicalize` (the same helper the audit hash
+ * chain uses); determinism across key orders is proven by engine.test.ts.
  */
 
 /**
@@ -132,10 +134,10 @@ export class PlanEngine {
     // additionally pins what preflight resolved (affected_resources, diff,
     // the revision pins) so apply can detect a divergent re-plan.
     const inputHash = sha256(
-      stableStringify({ operation_kind: args.operation_kind, spec: args.spec }),
+      canonicalize({ operation_kind: args.operation_kind, spec: args.spec }),
     );
     const planHash = sha256(
-      stableStringify({
+      canonicalize({
         operation_kind: args.operation_kind,
         spec: args.spec,
         affected_resources: result.affected_resources,
@@ -172,29 +174,4 @@ export class PlanEngine {
 
 function sha256(data: string): string {
   return createHash('sha256').update(data, 'utf8').digest('hex');
-}
-
-/**
- * JCS-style canonical JSON: recursive key sort, no whitespace. Mirrors
- * state/audit.ts::canonicalize — kept local so the plan engine does not
- * reach across into the state layer for a pure helper. Determinism
- * across key orders is proven by engine.test.ts.
- *
- * The two copies intentionally differ in one way: audit's version guards
- * `Buffer` values (audit payloads can carry binary), whereas plan inputs are
- * always JSON specs + resolved revisions, so no Buffer case is needed here.
- * If a third caller appears, promote this to a layer-neutral shared helper
- * (e.g. lib/canonical-json.ts) that both the api and state layers import.
- */
-function stableStringify(value: unknown): string {
-  return JSON.stringify(value, (_key, v) => {
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      const sorted: Record<string, unknown> = {};
-      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-        sorted[k] = (v as Record<string, unknown>)[k];
-      }
-      return sorted;
-    }
-    return v;
-  });
 }
