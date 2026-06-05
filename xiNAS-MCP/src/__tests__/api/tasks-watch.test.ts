@@ -192,7 +192,8 @@ describe('GET /tasks/{id}/watch — resumable SSE', () => {
   });
 
   it('no Last-Event-ID: sends the current Task snapshot first, then a live event', async () => {
-    const taskId = setup.seedTask();
+    // Seed a raw spec so the snapshot frame's internal-spec strip is exercised.
+    const taskId = setup.seedTask({ spec: { fail_at_stage: 'apply', secret: 'do-not-echo' } });
 
     const out = await readSse(setup, `/api/v1/tasks/${taskId}/watch`, {
       minFrames: 2,
@@ -211,6 +212,8 @@ describe('GET /tasks/{id}/watch — resumable SSE', () => {
     const snapshot = JSON.parse(dataOf(out.frames[0]!));
     expect(snapshot.task_id).toBe(taskId);
     expect(snapshot.state).toBe('queued');
+    // The internal-only raw `spec` must NOT cross the wire on the SSE snapshot.
+    expect(snapshot.spec).toBeUndefined();
 
     // A later frame is the live 'accepted' event the receiver applied.
     const live = out.frames.slice(1).map((f) => JSON.parse(dataOf(f)));
@@ -392,6 +395,26 @@ describe('tasks metadata fold-in (engine-backed reads)', () => {
       .get('/api/v1/tasks/01902f25-7c54-7c10-b1f0-deadbeefdead')
       .set('Authorization', ADMIN_TOKEN);
     expect(res.status).toBe(404);
+  });
+
+  it('GET /tasks and /tasks/{id} do NOT leak the internal raw spec', async () => {
+    const taskId = setup.seedTask({ spec: { fail_at_stage: 'apply', secret: 'do-not-echo' } });
+
+    const one = await request(setup.app)
+      .get(`/api/v1/tasks/${taskId}`)
+      .set('Authorization', ADMIN_TOKEN);
+    expect(one.status).toBe(200);
+    expect(one.body.result.task_id).toBe(taskId);
+    // `spec` is an internal-only column — never part of the public Task read.
+    expect(one.body.result.spec).toBeUndefined();
+
+    const list = await request(setup.app).get('/api/v1/tasks').set('Authorization', ADMIN_TOKEN);
+    expect(list.status).toBe(200);
+    const seeded = (list.body.result as Array<{ task_id: string; spec?: unknown }>).find(
+      (t) => t.task_id === taskId,
+    );
+    expect(seeded).toBeDefined();
+    expect(seeded?.spec).toBeUndefined();
   });
 });
 
