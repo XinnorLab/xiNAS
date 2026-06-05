@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import type { Database, Statement } from 'better-sqlite3';
+import { canonicalize } from '../lib/canonical-json.js';
 import type { AuditEntry, AuditEntryInput, QueuedAuditEntry } from './types.js';
+
+// The JCS-style canonical JSON the hash chain depends on now lives in the
+// layer-neutral `lib/canonical-json.ts` (shared with the plan engine's
+// input_hash/plan_hash). Re-exported here so audit.ts stays its public home for
+// existing importers.
+export { canonicalize };
 
 /**
  * Compute the genesis hash for a node. The first audit entry's prev_hash
@@ -9,25 +16,6 @@ import type { AuditEntry, AuditEntryInput, QueuedAuditEntry } from './types.js';
  */
 export function genesisHash(node_id: string): Buffer {
   return createHash('sha256').update(`xinas-audit-genesis-v1-${node_id}`).digest();
-}
-
-/**
- * JCS-style canonical JSON: recursive key sort + no whitespace + UTF-8.
- * The hash chain must be deterministic across processes; naive
- * Object.keys(entry).sort() loses nesting and silently breaks the chain
- * on payload changes.
- */
-export function canonicalize(value: unknown): string {
-  return JSON.stringify(value, (_key, v) => {
-    if (v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Buffer)) {
-      const sorted: Record<string, unknown> = {};
-      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-        sorted[k] = (v as Record<string, unknown>)[k];
-      }
-      return sorted;
-    }
-    return v;
-  });
 }
 
 function chainHash(prev_hash: Buffer, entry: AuditEntry): Buffer {
