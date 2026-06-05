@@ -61,6 +61,12 @@ export interface HeartbeatTrackerOptions {
   healthProbe?: () => Promise<{ version?: string; collectors?: Record<string, string> }>;
   /** Path to the agent's UDS socket (used by the production healthProbe). */
   agentSocketPath: string;
+  /**
+   * Fired on the transition INTO 'healthy' from any non-healthy state (incl.
+   * the agent's first appearance). Used by T9 to trigger reconcile.
+   * Best-effort; throwing is swallowed.
+   */
+  onReconnect?: () => void;
 }
 
 interface FailureOpts {
@@ -155,6 +161,15 @@ export class HeartbeatTracker {
         this.#emitStateChange(prev, newState);
       } else {
         this.#bootstrapped = true;
+      }
+      // Reconnect hook (T9): fire on the edge INTO healthy from any non-healthy
+      // state, including the bootstrap first-appearance offline→healthy.
+      if (prev !== 'healthy' && newState === 'healthy') {
+        try {
+          this.#opts.onReconnect?.();
+        } catch {
+          /* best-effort: a reconcile-trigger failure must not perturb the tracker */
+        }
       }
     }
     return this.#knownState;
