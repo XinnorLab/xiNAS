@@ -30,7 +30,31 @@ describe('migrations runner', () => {
       { version: 1, filename: '001-initial.sql' },
       { version: 2, filename: '002-task-dispatch.sql' },
       { version: 3, filename: '003-task-spec.sql' },
+      { version: 4, filename: '004-task-plan-binding.sql' },
     ]);
+  });
+
+  it('004 adds plan_binding + desired_rollback columns to tasks (nullable)', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+
+    const columns = (db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(columns).toContain('plan_binding');
+    expect(columns).toContain('desired_rollback');
+
+    // Both are nullable (NULL for tasks created before 004 / without them).
+    db.prepare(
+      `INSERT INTO tasks (task_id, kind, state, principal, client_type, request_id, correlation_id,
+                          input_hash, risk_level, affected_resources, created_at, updated_at)
+       VALUES ('t-004', 'test', 'queued', 'sys', 'system', 'r', 'c', 'h', 'non_disruptive', '[]', 0, 0)`,
+    ).run();
+    const row = db
+      .prepare('SELECT plan_binding, desired_rollback FROM tasks WHERE task_id = ?')
+      .get('t-004') as { plan_binding: string | null; desired_rollback: string | null };
+    expect(row.plan_binding).toBeNull();
+    expect(row.desired_rollback).toBeNull();
   });
 
   it('003 adds the spec column to tasks (nullable)', () => {

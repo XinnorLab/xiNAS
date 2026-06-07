@@ -124,6 +124,41 @@ describe('TaskStore', () => {
     expect(h.store.get(apply.task_id)?.spec).toBeUndefined();
   });
 
+  it('plan_binding + desired_rollback round-trip through JSON on apply tasks (migration 004)', () => {
+    const plan_binding = {
+      observed_freshness_ref: { kind: 'ExportRule', id: 'mnt/data', revision: 3 },
+    };
+    const desired_rollback = [{ key: '/xinas/v1/desired/Share/s1', prior_value: null }];
+    const apply = h.store.createApplyTask({
+      ...APPLY_INPUT_NO_PLAN,
+      plan_binding,
+      desired_rollback,
+    });
+    const got = h.store.get(apply.task_id);
+    expect(got?.plan_binding).toEqual(plan_binding);
+    expect(got?.desired_rollback).toEqual(desired_rollback);
+  });
+
+  it('a task created WITHOUT plan_binding/desired_rollback has both === undefined', () => {
+    const apply = h.store.createApplyTask(APPLY_INPUT_NO_PLAN);
+    const got = h.store.get(apply.task_id);
+    expect(got?.plan_binding).toBeUndefined();
+    expect(got?.desired_rollback).toBeUndefined();
+  });
+
+  it('transition patches desired_rollback (JSON) without disturbing plan_binding', () => {
+    const plan_binding = {
+      observed_freshness_ref: { kind: 'ExportRule', id: 'mnt/data', revision: 3 },
+    };
+    const apply = h.store.createApplyTask({ ...APPLY_INPUT_NO_PLAN, plan_binding });
+    const desired_rollback = [{ key: '/x', prior_value: { a: 1 } }];
+    h.store.transition(apply.task_id, { desired_rollback });
+    const got = h.store.get(apply.task_id);
+    expect(got?.desired_rollback).toEqual(desired_rollback);
+    // plan_binding set at create time is left untouched by the patch.
+    expect(got?.plan_binding).toEqual(plan_binding);
+  });
+
   it('get returns null for an unknown id', () => {
     expect(h.store.get('nope')).toBeNull();
   });
