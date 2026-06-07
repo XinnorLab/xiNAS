@@ -1,3 +1,4 @@
+import { encExportId } from '../../lib/nfs-export-id.js';
 import type { Collector, ObservationDelta } from './base.js';
 
 interface ObservedNfsSession {
@@ -124,13 +125,27 @@ export class NfsCollector implements Collector<'NfsSession'> {
       byPath.set(entry.export_path, list);
     }
     for (const [exportPath, rules] of byPath) {
+      // The observed-id is the ENCODED export path (encExportId strips the
+      // leading slash + canonicalizes) so it passes isValidObservedId — the raw
+      // absolute path has a leading `/` and is rejected, which silently drops the
+      // upsert and leaves Share.status.exports[] empty (s3-nfs-executor-spec §3).
+      // The real absolute path stays in value.spec.export_path for the
+      // Share→ExportRule read-time join. A pathological path (e.g. bare `/`)
+      // makes encExportId throw — skip just that one delta so the rest of the
+      // sweep (sessions + other exports) still emits.
+      let id: string;
+      try {
+        id = encExportId(exportPath);
+      } catch {
+        continue;
+      }
       deltas.push({
         kind: 'ExportRule', // internal observed kind (no public REST endpoint).
-        id: exportPath, // KV: /xinas/v1/observed/ExportRule/<export_path>
+        id, // KV: /xinas/v1/observed/ExportRule/<encExportId(export_path)>
         op: 'upsert',
         value: {
           kind: 'ExportRule',
-          id: exportPath,
+          id,
           spec: { export_path: exportPath },
           status: {
             rules: rules.map((r) => ({

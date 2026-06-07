@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { encExportId } from '../../lib/nfs-export-id.js';
 import { ADMIN_TOKEN, buildTestApp } from './_helpers.js';
 
 describe('Share read-join: status.exports[] populated from observed ExportRule', () => {
@@ -7,6 +8,10 @@ describe('Share read-join: status.exports[] populated from observed ExportRule',
 
   const SHARE_ID = 'share01';
   const EXPORT_PATH = '/srv/nfs/share01';
+  // The agent keys the observed ExportRule by encExportId(export_path) (N0b.2 —
+  // the raw absolute path fails isValidObservedId), so the read-time join looks
+  // it up by that same encoding. Seed at the encoded key, NOT the share id.
+  const EXPORT_RULE_KEY = `/xinas/v1/observed/ExportRule/${encExportId(EXPORT_PATH)}`;
 
   beforeEach(async () => {
     setup = await buildTestApp();
@@ -37,9 +42,9 @@ describe('Share read-join: status.exports[] populated from observed ExportRule',
   });
 
   it('GET /shares list: status.exports populated when a matching ExportRule exists', async () => {
-    setup.state.kv.put('/xinas/v1/observed/ExportRule/share01', {
+    setup.state.kv.put(EXPORT_RULE_KEY, {
       kind: 'ExportRule',
-      id: 'share01',
+      id: encExportId(EXPORT_PATH),
       spec: { export_path: EXPORT_PATH },
       status: {
         rules: [
@@ -56,9 +61,9 @@ describe('Share read-join: status.exports[] populated from observed ExportRule',
   });
 
   it('GET /shares/{id}: status.exports populated for a matching ExportRule', async () => {
-    setup.state.kv.put('/xinas/v1/observed/ExportRule/share01', {
+    setup.state.kv.put(EXPORT_RULE_KEY, {
       kind: 'ExportRule',
-      id: 'share01',
+      id: encExportId(EXPORT_PATH),
       spec: { export_path: EXPORT_PATH },
       status: {
         rules: [{ client: '10.0.0.0/8', options: ['rw', 'sync'] }],
@@ -74,10 +79,11 @@ describe('Share read-join: status.exports[] populated from observed ExportRule',
   });
 
   it('GET /shares/{id}: status.exports is [] when the only ExportRule is for a different path', async () => {
-    setup.state.kv.put('/xinas/v1/observed/ExportRule/other', {
+    const otherPath = '/srv/nfs/other';
+    setup.state.kv.put(`/xinas/v1/observed/ExportRule/${encExportId(otherPath)}`, {
       kind: 'ExportRule',
-      id: 'other',
-      spec: { export_path: '/srv/nfs/other' },
+      id: encExportId(otherPath),
+      spec: { export_path: otherPath },
       status: { rules: [{ client: '*', options: ['ro'] }], observed_at: new Date().toISOString() },
     });
     const res = await request(setup.app)
