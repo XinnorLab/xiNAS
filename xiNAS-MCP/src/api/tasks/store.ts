@@ -41,6 +41,7 @@ export interface CreatePlanOnlyInput {
   risk_level: string;
   affected_resources: ResourceRef[];
   spec?: unknown;
+  plan_binding?: unknown;
   idempotency_key?: string;
   plan_hash?: string;
   state_revision_expected?: number;
@@ -57,6 +58,8 @@ export interface CreateApplyInput {
   risk_level: string;
   affected_resources: ResourceRef[];
   spec?: unknown;
+  plan_binding?: unknown;
+  desired_rollback?: unknown;
   plan_id?: string;
   idempotency_key?: string;
   plan_hash?: string;
@@ -70,6 +73,8 @@ export interface TaskPatch {
   plan_hash?: string;
   result_hash?: string;
   state_revision_at_apply?: number;
+  plan_binding?: unknown;
+  desired_rollback?: unknown;
   snapshot_before?: string;
   snapshot_after?: string;
   agent_acceptance_id?: string;
@@ -118,6 +123,8 @@ interface TaskRow {
   risk_level: string;
   affected_resources: string;
   spec: string | null;
+  plan_binding: string | null;
+  desired_rollback: string | null;
   snapshot_before: string | null;
   snapshot_after: string | null;
   agent_acceptance_id: string | null;
@@ -150,14 +157,16 @@ const INSERT_TASK_SQL = `INSERT INTO tasks (
   task_id, kind, state, plan_id, idempotency_key, principal, client_type,
   request_id, correlation_id, input_hash, plan_hash, result_hash,
   state_revision_expected, state_revision_at_apply, risk_level,
-  affected_resources, spec, snapshot_before, snapshot_after, agent_acceptance_id,
+  affected_resources, spec, plan_binding, desired_rollback, snapshot_before,
+  snapshot_after, agent_acceptance_id,
   last_event_sequence, cancel_requested_at, cancel_refused_reason,
   error_code, error_message, remediation_hint, created_at, updated_at, terminal_at
 ) VALUES (
   @task_id, @kind, @state, @plan_id, @idempotency_key, @principal, @client_type,
   @request_id, @correlation_id, @input_hash, @plan_hash, @result_hash,
   @state_revision_expected, @state_revision_at_apply, @risk_level,
-  @affected_resources, @spec, @snapshot_before, @snapshot_after, @agent_acceptance_id,
+  @affected_resources, @spec, @plan_binding, @desired_rollback, @snapshot_before,
+  @snapshot_after, @agent_acceptance_id,
   @last_event_sequence, @cancel_requested_at, @cancel_refused_reason,
   @error_code, @error_message, @remediation_hint, @created_at, @updated_at, @terminal_at
 )`;
@@ -224,6 +233,8 @@ export class TaskStore {
       risk_level: input.risk_level,
       affected_resources: input.affected_resources,
       spec: input.spec,
+      plan_binding: input.plan_binding,
+      desired_rollback: undefined,
       plan_id: undefined,
       idempotency_key: input.idempotency_key,
       plan_hash: input.plan_hash,
@@ -244,6 +255,8 @@ export class TaskStore {
       risk_level: input.risk_level,
       affected_resources: input.affected_resources,
       spec: input.spec,
+      plan_binding: input.plan_binding,
+      desired_rollback: input.desired_rollback,
       plan_id: input.plan_id,
       idempotency_key: input.idempotency_key,
       plan_hash: input.plan_hash,
@@ -319,6 +332,7 @@ export class TaskStore {
         `UPDATE tasks SET
             state = @state, plan_hash = @plan_hash, result_hash = @result_hash,
             state_revision_at_apply = @state_revision_at_apply,
+            plan_binding = @plan_binding, desired_rollback = @desired_rollback,
             snapshot_before = @snapshot_before, snapshot_after = @snapshot_after,
             agent_acceptance_id = @agent_acceptance_id, last_event_sequence = @last_event_sequence,
             cancel_requested_at = @cancel_requested_at, cancel_refused_reason = @cancel_refused_reason,
@@ -332,6 +346,13 @@ export class TaskStore {
         plan_hash: merged.plan_hash ?? null,
         result_hash: merged.result_hash ?? null,
         state_revision_at_apply: merged.state_revision_at_apply ?? null,
+        // JSON columns: `merged` holds the parsed object (from rowToTask or the
+        // patch), so re-serialize. `=== undefined` guard mirrors insertTask —
+        // a JSON `null` value stringifies to "null" and persists.
+        plan_binding:
+          merged.plan_binding !== undefined ? JSON.stringify(merged.plan_binding) : null,
+        desired_rollback:
+          merged.desired_rollback !== undefined ? JSON.stringify(merged.desired_rollback) : null,
         snapshot_before: merged.snapshot_before ?? null,
         snapshot_after: merged.snapshot_after ?? null,
         agent_acceptance_id: merged.agent_acceptance_id ?? null,
@@ -396,6 +417,9 @@ export class TaskStore {
     // `unknown` already admits undefined; the `=== undefined` guard in the
     // `.run({...})` below normalizes an absent spec to a NULL column.
     spec: unknown;
+    // Same treatment as `spec`: JSON columns, `=== undefined` → NULL below.
+    plan_binding: unknown;
+    desired_rollback: unknown;
     // `| undefined` (not `?`) so callers may pass an explicitly-undefined
     // optional through without tripping exactOptionalPropertyTypes; the
     // `?? null` below normalizes either form.
@@ -428,6 +452,9 @@ export class TaskStore {
       // value undefined (rejected by better-sqlite3), whereas a legitimate JSON
       // null spec stringifies to "null" and persists fine.
       spec: fields.spec !== undefined ? JSON.stringify(fields.spec) : null,
+      plan_binding: fields.plan_binding !== undefined ? JSON.stringify(fields.plan_binding) : null,
+      desired_rollback:
+        fields.desired_rollback !== undefined ? JSON.stringify(fields.desired_rollback) : null,
       snapshot_before: null,
       snapshot_after: null,
       agent_acceptance_id: null,
@@ -499,6 +526,10 @@ function rowToTask(row: TaskRow, stages: TaskStage[]): Task {
       ? { state_revision_at_apply: row.state_revision_at_apply }
       : {}),
     ...(row.spec !== null ? { spec: JSON.parse(row.spec) as unknown } : {}),
+    ...(row.plan_binding !== null ? { plan_binding: JSON.parse(row.plan_binding) as unknown } : {}),
+    ...(row.desired_rollback !== null
+      ? { desired_rollback: JSON.parse(row.desired_rollback) as unknown }
+      : {}),
     ...(row.snapshot_before !== null ? { snapshot_before: row.snapshot_before } : {}),
     ...(row.snapshot_after !== null ? { snapshot_after: row.snapshot_after } : {}),
     ...(row.agent_acceptance_id !== null ? { agent_acceptance_id: row.agent_acceptance_id } : {}),

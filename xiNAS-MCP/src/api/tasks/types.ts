@@ -42,6 +42,9 @@ export interface ResourceRef {
   revision?: number;
 }
 
+/** A desired-KV mutation an apply performs (S3 §5.3). */
+export type DesiredMutation = { key: string; value: unknown } | { key: string; delete: true };
+
 export interface TaskStage {
   stage_index: number;
   name: string;
@@ -79,6 +82,12 @@ export interface Task {
    *  Distinct from `affected_resources` (the lock set). Undefined for tasks
    *  created before migration 003. */
   spec?: unknown;
+  /** Plan-time data the apply step needs (e.g. the freshness ref the plan
+   *  observed), JSON. Undefined for tasks created before migration 004. */
+  plan_binding?: unknown;
+  /** Prior desired-KV values to revert on apply failure — an array of
+   *  DesiredMutation, JSON. Undefined for tasks created before migration 004. */
+  desired_rollback?: unknown;
   snapshot_before?: string;
   snapshot_after?: string;
   agent_acceptance_id?: string;
