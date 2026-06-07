@@ -245,6 +245,156 @@ describe('TaskEngine.apply', () => {
     expect(h.countLeases()).toBe(0);
   });
 
+  // ── N0.3: desired_mutations + desired_rollback ──────────────────────────
+  it('desired_mutations: writes the KV key and records prior_value:null for an absent key', () => {
+    const task = h.engine.apply({
+      plan: makePlan({
+        desired_mutations: [{ key: '/xinas/v1/desired/Share/s1n', value: { id: 's1n' } }],
+      }),
+      applyReq: makeApplyReq(),
+    });
+
+    // The desired KV key was written by the apply txn.
+    expect(h.kv.get('/xinas/v1/desired/Share/s1n')?.value).toEqual({ id: 's1n' });
+    // The prior value (absent) was recorded as null into desired_rollback.
+    expect(h.store.get(task.task_id)?.desired_rollback).toEqual([
+      { key: '/xinas/v1/desired/Share/s1n', prior_value: null },
+    ]);
+  });
+
+  it('desired_mutations: records the PRIOR value when the key already exists', () => {
+    // Seed the desired key first; put() with no expected_revision creates it.
+    h.kv.put('/xinas/v1/desired/Share/s1n', { id: 's1n', name: 'old' });
+
+    const task = h.engine.apply({
+      plan: makePlan({
+        desired_mutations: [
+          { key: '/xinas/v1/desired/Share/s1n', value: { id: 's1n', name: 'new' } },
+        ],
+      }),
+      applyReq: makeApplyReq(),
+    });
+
+    // The value was overwritten with the new one.
+    expect(h.kv.get('/xinas/v1/desired/Share/s1n')?.value).toEqual({ id: 's1n', name: 'new' });
+    // The OLD value is captured for revert.
+    expect(h.store.get(task.task_id)?.desired_rollback).toEqual([
+      { key: '/xinas/v1/desired/Share/s1n', prior_value: { id: 's1n', name: 'old' } },
+    ]);
+  });
+
+  it('desired_mutations: a delete mutation removes the key and records its prior value', () => {
+    h.kv.put('/xinas/v1/desired/Share/s1n', { id: 's1n', name: 'doomed' });
+
+    const task = h.engine.apply({
+      plan: makePlan({
+        desired_mutations: [{ key: '/xinas/v1/desired/Share/s1n', delete: true }],
+      }),
+      applyReq: makeApplyReq(),
+    });
+
+    expect(h.kv.get('/xinas/v1/desired/Share/s1n')).toBeNull();
+    expect(h.store.get(task.task_id)?.desired_rollback).toEqual([
+      { key: '/xinas/v1/desired/Share/s1n', prior_value: { id: 's1n', name: 'doomed' } },
+    ]);
+  });
+
+  it('desired_mutations: empty/absent → desired_rollback stays unset (unchanged behavior)', () => {
+    const task = h.engine.apply({ plan: makePlan(), applyReq: makeApplyReq() });
+    expect(h.store.get(task.task_id)?.desired_rollback).toBeUndefined();
+  });
+
+  // ── N0.3: observed_freshness_ref (preferred TOCTOU pin) ─────────────────
+  it('observed_freshness_ref: a matching pinned revision applies OK', () => {
+    // Seed an observed row → its revision becomes 1.
+    h.kv.put('/xinas/v1/observed/Reference/r1', { id: 'r1', state: 'ok' });
+
+    const task = h.engine.apply({
+      plan: makePlan({ observed_freshness_ref: { kind: 'Reference', id: 'r1', revision: 1 } }),
+      applyReq: makeApplyReq(),
+    });
+    expect(task.state).toBe('queued');
+  });
+
+  it('observed_freshness_ref: a stale pinned revision throws CONFLICT {plan_stale} and rolls back', () => {
+    h.kv.put('/xinas/v1/observed/Reference/r1', { id: 'r1', state: 'ok' }); // revision 1
+
+    let thrown: unknown;
+    try {
+      h.engine.apply({
+        plan: makePlan({ observed_freshness_ref: { kind: 'Reference', id: 'r1', revision: 0 } }),
+        applyReq: makeApplyReq(),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ApiException);
+    expect((thrown as ApiException).code).toBe('CONFLICT');
+    expect((thrown as ApiException).details?.reason).toBe('plan_stale');
+
+    // Full rollback.
+    expect(h.countTasks()).toBe(0);
+    expect(h.countLeases()).toBe(0);
+  });
+
+  // ── N0.3: lease_resources override ──────────────────────────────────────
+  it('lease_resources: leases the override resource, NOT the affected one', () => {
+    const task = h.engine.apply({
+      plan: makePlan({ lease_resources: [{ kind: 'Reference', id: 'lockme' }] }),
+      applyReq: makeApplyReq(),
+    });
+
+    expect(task.state).toBe('queued');
+    // The lease is on the override resource.
+    expect(h.leaseHolder('Reference', 'lockme')).toBe(task.task_id);
+    // NOT on the public affected resource.
+    expect(h.leaseHolder('Share', 's1')).toBeUndefined();
+    expect(h.countLeases()).toBe(1);
+  });
+
+  // ── N0.3: atomicity — a lease conflict rolls back the desired KV write ───
+  it('atomicity: a lease conflict AFTER the desired write rolls the KV write back', () => {
+    // Pre-acquire the affected resource's lease so apply's lease loop conflicts.
+    const holder = h.store.createApplyTask({
+      kind: 'reference.echo',
+      principal: 'admin:other',
+      client_type: 'rest',
+      request_id: '55555555-5555-5555-5555-555555555555',
+      correlation_id: 'corr-atomic',
+      input_hash: 'ihash-atomic',
+      risk_level: 'non_disruptive',
+      affected_resources: [{ kind: 'Share', id: 's1', revision: 1 }],
+    });
+    const pre = h.leases.acquire({
+      resource_kind: 'Share',
+      resource_id: 's1',
+      task_id: holder.task_id,
+      ttl_seconds: 60,
+    });
+    expect(pre.ok).toBe(true);
+
+    let thrown: unknown;
+    try {
+      h.engine.apply({
+        plan: makePlan({
+          desired_mutations: [{ key: '/xinas/v1/desired/Share/s1n', value: { id: 's1n' } }],
+        }),
+        applyReq: makeApplyReq(),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ApiException);
+    expect((thrown as ApiException).code).toBe('CONFLICT');
+    // The desired KV write rolled back with the aborted txn — key was never written.
+    expect(h.kv.get('/xinas/v1/desired/Share/s1n')).toBeNull();
+    // Only the holder task + its lease remain.
+    expect(h.countTasks()).toBe(1);
+    expect(h.countLeases()).toBe(1);
+  });
+
   it('multi-resource: all leases acquired atomically; partial lease conflict rolls all back', () => {
     h.kv.put('/xinas/v1/desired/Share/s2', { id: 's2', name: 'second' });
 

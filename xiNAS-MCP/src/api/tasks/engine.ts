@@ -1,7 +1,7 @@
 import type { Database } from 'better-sqlite3';
 import type { KvStore } from '../../state/index.js';
 import type { LeaseManager } from '../../state/leases.js';
-import { AgentRpcError, type AgentRpcClient } from '../agent-client.js';
+import { type AgentRpcClient, AgentRpcError } from '../agent-client.js';
 import { ApiException } from '../errors.js';
 import type { TaskStore } from './store.js';
 import type { DesiredMutation, ResourceRef, Task } from './types.js';
@@ -219,14 +219,33 @@ export class TaskEngine {
       // Observation drift → plan is stale (a separate, coarser signal than
       // a desired-revision bump: the world the plan observed has moved on).
       //
-      // CONTRACT (T3 must uphold): `observed_revision_expected` is a single
-      // plan-level scalar, so it is checked against the plan's PRIMARY affected
-      // resource — `affected_resources[0]`. The PlanProvider that populates a
-      // plan MUST therefore place the resource whose observed projection backs
-      // the freshness pin first in `affected_resources`. (S2's reference plan is
-      // single-resource, so this is trivially satisfied; revisit if a future
-      // multi-resource plan needs per-resource observed freshness.)
-      if (plan.observed_revision_expected !== undefined) {
+      // N0.3 (S3 §5.2): prefer the explicit `observed_freshness_ref`. When the
+      // plan carries one (desired≠observed identity — e.g. desired `Share`,
+      // observed `ExportRule`), pin THAT observed row: re-read its revision and
+      // reject on ANY divergence (defined and !== the pinned revision). This
+      // replaces — does not stack with — the legacy `observed_revision_expected`
+      // vs `affected_resources[0]` check.
+      if (plan.observed_freshness_ref !== undefined) {
+        const ref = plan.observed_freshness_ref;
+        const observedNow = this.currentRevision('observed', ref.kind, ref.id);
+        if (observedNow !== undefined && observedNow !== ref.revision) {
+          throw new ApiException(
+            'CONFLICT',
+            'plan is stale',
+            { reason: 'plan_stale' },
+            'Re-run plan; the observed system state changed since this plan was computed.',
+          );
+        }
+      } else if (plan.observed_revision_expected !== undefined) {
+        // Legacy S2 path (reference tasks, no `observed_freshness_ref`).
+        //
+        // CONTRACT (T3 must uphold): `observed_revision_expected` is a single
+        // plan-level scalar, so it is checked against the plan's PRIMARY affected
+        // resource — `affected_resources[0]`. The PlanProvider that populates a
+        // plan MUST therefore place the resource whose observed projection backs
+        // the freshness pin first in `affected_resources`. (S2's reference plan is
+        // single-resource, so this is trivially satisfied; revisit if a future
+        // multi-resource plan needs per-resource observed freshness.)
         const first = plan.affected_resources[0];
         if (first) {
           const observedNow = this.currentRevision('observed', first.kind, first.id);
@@ -238,6 +257,25 @@ export class TaskEngine {
               'Re-run plan; the observed system state changed since this plan was computed.',
             );
           }
+        }
+      }
+
+      // N0.3 (S3 §5.3, Model R): apply the plan-declared desired_mutations to
+      // KV, capturing each key's PRIOR value into `desiredRollback` so a failed
+      // task can revert the intent. `this.kv` is built over the SAME db handle as
+      // this transaction, so these put/delete participate in it — they roll back
+      // atomically with the task+lease insert if a later step throws. No nested
+      // kv.transaction; the freshness check above already guarded, so plain
+      // put/delete (no expected-revision CAS).
+      const desiredRollback: { key: string; prior_value: unknown }[] = [];
+      for (const m of plan.desired_mutations ?? []) {
+        const prior = this.kv.get(m.key);
+        const prior_value = prior !== null ? prior.value : null;
+        desiredRollback.push({ key: m.key, prior_value });
+        if ('delete' in m) {
+          this.kv.delete(m.key);
+        } else {
+          this.kv.put(m.key, m.value);
         }
       }
 
@@ -265,12 +303,19 @@ export class TaskEngine {
         ...(stateRevisionAtApply !== undefined
           ? { state_revision_at_apply: stateRevisionAtApply }
           : {}),
+        // Record the captured prior values so Model R can revert the intent.
+        // Empty (no desired_mutations) → omit → column stays NULL (unchanged).
+        ...(desiredRollback.length > 0 ? { desired_rollback: desiredRollback } : {}),
       });
 
-      // 4. Acquire a lease per affected resource. A conflict throws →
-      //    rolls back the insert above. (LeaseManager.acquire catches the
-      //    UNIQUE(resource_kind,resource_id) violation internally.)
-      for (const r of plan.affected_resources) {
+      // 4. Acquire a lease per resource in the lease set. N0.3 (S3 §5.2): the
+      //    lease set is `lease_resources` when the plan overrides it (only
+      //    `nfs-idmap.set` does — it locks a resource that is not a public
+      //    affected resource), else `affected_resources` (S2 behavior). A
+      //    conflict throws → rolls back the insert + the KV mutations above.
+      //    (LeaseManager.acquire catches the UNIQUE(resource_kind,resource_id)
+      //    violation internally.)
+      for (const r of plan.lease_resources ?? plan.affected_resources) {
         const res = this.leases.acquire({
           resource_kind: r.kind,
           resource_id: r.id,

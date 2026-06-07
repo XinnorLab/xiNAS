@@ -3,7 +3,7 @@ import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import { sendOk } from '../handlers/reads.js';
 import type { ApplyPlan } from '../tasks/engine.js';
-import type { Task } from '../tasks/types.js';
+import type { DesiredMutation, ResourceRef, Task } from '../tasks/types.js';
 
 /**
  * T4 — the first MUTATING route, `POST /api/v1/reference`, over the S2
@@ -140,8 +140,20 @@ export function referenceRouter(ctx: ApiContext): Router {
   return r;
 }
 
-/** Map a stored `plan_only` Task to the apply transaction's ApplyPlan. */
+/**
+ * Map a stored `plan_only` Task to the apply transaction's ApplyPlan.
+ *
+ * N0.3 (S3 §5.1): the N0 plan-side outputs (`observed_freshness_ref`,
+ * `lease_resources`, `desired_mutations`) live in the `plan_binding` JSON blob,
+ * not in dedicated columns — reconstruct them here so they survive plan→apply.
+ * A reference plan has no `plan_binding` → all three absent → unchanged.
+ */
 function toApplyPlan(planTask: Task): ApplyPlan {
+  const binding = (planTask.plan_binding ?? {}) as {
+    observed_freshness_ref?: { kind: string; id: string; revision: number };
+    lease_resources?: ResourceRef[];
+    desired_mutations?: DesiredMutation[];
+  };
   return {
     plan_id: planTask.task_id,
     kind: planTask.kind,
@@ -151,6 +163,13 @@ function toApplyPlan(planTask: Task): ApplyPlan {
     ...(planTask.plan_hash !== undefined ? { plan_hash: planTask.plan_hash } : {}),
     ...(planTask.state_revision_expected !== undefined
       ? { state_revision_expected: planTask.state_revision_expected }
+      : {}),
+    ...(binding.observed_freshness_ref !== undefined
+      ? { observed_freshness_ref: binding.observed_freshness_ref }
+      : {}),
+    ...(binding.lease_resources !== undefined ? { lease_resources: binding.lease_resources } : {}),
+    ...(binding.desired_mutations !== undefined
+      ? { desired_mutations: binding.desired_mutations }
       : {}),
   };
 }
