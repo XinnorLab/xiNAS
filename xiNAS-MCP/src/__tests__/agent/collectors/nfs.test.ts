@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ObservationDelta } from '../../../agent/collectors/base.js';
 import { NfsCollector } from '../../../agent/collectors/nfs.js';
+import { isValidObservedId } from '../../../api/internal/observed.js';
+import { encExportId } from '../../../lib/nfs-export-id.js';
 
 function makeFakeNfsProbe(
   options: {
@@ -76,12 +78,12 @@ describe('NfsCollector', () => {
     );
   });
 
-  it('initialSweep: emits a real ExportRule delta keyed by export_path', async () => {
+  it('initialSweep: emits a real ExportRule delta keyed by encExportId(export_path)', async () => {
     const probe = makeFakeNfsProbe({
       sessions: [],
       exports: [
         {
-          export_path: '/srv/share01',
+          export_path: '/mnt/data',
           host_pattern: '10.1.0.0/16',
           options: ['rw', 'root_squash'],
         },
@@ -90,21 +92,47 @@ describe('NfsCollector', () => {
     const col = new NfsCollector({ probe });
     const deltas = await col.initialSweep();
     const exportDelta = deltas.find((d) => d.kind === 'ExportRule');
+    // N0b.2: the delta id is the ENCODED export path (no leading slash), not the
+    // raw absolute path — otherwise isValidObservedId rejects it and the upsert
+    // is silently dropped. The real absolute path stays in value.spec.export_path.
     expect(exportDelta).toMatchObject({
       kind: 'ExportRule',
-      id: '/srv/share01',
+      id: encExportId('/mnt/data'),
       op: 'upsert',
     });
-    const status = (exportDelta?.value as Record<string, unknown>).status as Record<
-      string,
-      unknown
-    >;
+    expect(exportDelta?.id).toBe('mnt/data');
+    expect(isValidObservedId(exportDelta!.id)).toBe(true);
+    const value = exportDelta?.value as Record<string, unknown>;
+    expect((value.spec as Record<string, unknown>).export_path).toBe('/mnt/data');
+    expect((value as Record<string, unknown>).id).toBe('mnt/data');
+    const status = value.status as Record<string, unknown>;
     expect(status.rules).toHaveLength(1);
     expect((status.rules as Array<{ host_pattern: string }>)[0]?.host_pattern).toBe('10.1.0.0/16');
     expect(typeof status.observed_at).toBe('string');
     // The collector implements Collector<'NfsSession'> but emits a second kind
     // (ExportRule) — same dual-kind pattern as E8 (User+Group). No Share rows touched.
     expect(deltas.find((d) => d.kind === 'NfsSession')).toBeUndefined();
+  });
+
+  it('initialSweep: skips an ExportRule whose path cannot be encoded but still emits sessions', async () => {
+    const probe = makeFakeNfsProbe({
+      sessions: [
+        {
+          client_addr: '10.9.9.9',
+          export_path: '/mnt/data',
+          proto_version: 'v4.1',
+          locked_files: 0,
+        },
+      ],
+      // A pathological export path (`/` encodes to an empty id → encExportId throws).
+      exports: [{ export_path: '/', host_pattern: '*', options: ['rw'] }],
+    });
+    const col = new NfsCollector({ probe });
+    const deltas = await col.initialSweep();
+    // The bad ExportRule is skipped, not crashed on...
+    expect(deltas.find((d) => d.kind === 'ExportRule')).toBeUndefined();
+    // ...and the session delta still lands.
+    expect(deltas.find((d) => d.kind === 'NfsSession')).toBeDefined();
   });
 
   it('start: polls every 30 s (pollIntervalMs = 30000)', () => {

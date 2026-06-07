@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { encExportId } from '../../lib/nfs-export-id.js';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import {
@@ -25,6 +26,13 @@ import {
  * plan flagged this spec.path-vs-export_path trap twice; the original impl
  * keyed off the non-existent `share.spec.export_path` and so returned [] for
  * every real Share.)
+ *
+ * LOOKUP: the observed ExportRule is keyed by encExportId(export_path) (N0b.2 —
+ * the raw absolute path has a leading `/` and fails isValidObservedId), so we
+ * resolve it with a single keyed getOrNull using the SAME encoding applied to
+ * the share's path. Encoding both sides canonicalizes them, so this is robust to
+ * `//` / trailing-slash skew. If the share path can't be encoded (e.g. the bare
+ * root `/`), treat it as no exports rather than throwing the read.
  */
 function joinExports(
   state: ApiContext['state'],
@@ -35,13 +43,13 @@ function joinExports(
 
   let exports: unknown[] = [];
   if (exportPath) {
-    const match = listByPrefix<Record<string, unknown>>(
-      state,
-      '/xinas/v1/observed/ExportRule/',
-    ).find((row) => {
-      const spec = row.value.spec as Record<string, unknown> | undefined;
-      return spec?.export_path === exportPath;
-    });
+    let key: string | null = null;
+    try {
+      key = `/xinas/v1/observed/ExportRule/${encExportId(exportPath)}`;
+    } catch {
+      key = null; // unencodable share path → no exports.
+    }
+    const match = key ? getOrNull<Record<string, unknown>>(state, key) : null;
     if (match) {
       const ruleStatus = match.value.status as Record<string, unknown> | undefined;
       exports = (ruleStatus?.rules as unknown[]) ?? [];
