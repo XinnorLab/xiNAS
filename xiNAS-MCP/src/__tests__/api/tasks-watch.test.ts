@@ -192,8 +192,14 @@ describe('GET /tasks/{id}/watch — resumable SSE', () => {
   });
 
   it('no Last-Event-ID: sends the current Task snapshot first, then a live event', async () => {
-    // Seed a raw spec so the snapshot frame's internal-spec strip is exercised.
-    const taskId = setup.seedTask({ spec: { fail_at_stage: 'apply', secret: 'do-not-echo' } });
+    // Seed the internal-only columns so the snapshot frame's strip is exercised.
+    const taskId = setup.seedTask({
+      spec: { fail_at_stage: 'apply', secret: 'do-not-echo' },
+      plan_binding: {
+        observed_freshness_ref: { kind: 'ExportRule', id: 'mnt/data', revision: 1 },
+      },
+      desired_rollback: [{ key: '/xinas/v1/desired/Share/s1', prior_value: null }],
+    });
 
     const out = await readSse(setup, `/api/v1/tasks/${taskId}/watch`, {
       minFrames: 2,
@@ -212,8 +218,10 @@ describe('GET /tasks/{id}/watch — resumable SSE', () => {
     const snapshot = JSON.parse(dataOf(out.frames[0]!));
     expect(snapshot.task_id).toBe(taskId);
     expect(snapshot.state).toBe('queued');
-    // The internal-only raw `spec` must NOT cross the wire on the SSE snapshot.
+    // The internal-only columns must NOT cross the wire on the SSE snapshot.
     expect(snapshot.spec).toBeUndefined();
+    expect(snapshot.plan_binding).toBeUndefined();
+    expect(snapshot.desired_rollback).toBeUndefined();
 
     // A later frame is the live 'accepted' event the receiver applied.
     const live = out.frames.slice(1).map((f) => JSON.parse(dataOf(f)));
@@ -397,24 +405,40 @@ describe('tasks metadata fold-in (engine-backed reads)', () => {
     expect(res.status).toBe(404);
   });
 
-  it('GET /tasks and /tasks/{id} do NOT leak the internal raw spec', async () => {
-    const taskId = setup.seedTask({ spec: { fail_at_stage: 'apply', secret: 'do-not-echo' } });
+  it('GET /tasks and /tasks/{id} do NOT leak the internal columns (spec, plan_binding, desired_rollback)', async () => {
+    const taskId = setup.seedTask({
+      spec: { fail_at_stage: 'apply', secret: 'do-not-echo' },
+      plan_binding: {
+        observed_freshness_ref: { kind: 'ExportRule', id: 'mnt/data', revision: 1 },
+      },
+      desired_rollback: [{ key: '/xinas/v1/desired/Share/s1', prior_value: null }],
+    });
 
     const one = await request(setup.app)
       .get(`/api/v1/tasks/${taskId}`)
       .set('Authorization', ADMIN_TOKEN);
     expect(one.status).toBe(200);
     expect(one.body.result.task_id).toBe(taskId);
-    // `spec` is an internal-only column — never part of the public Task read.
+    // spec/plan_binding/desired_rollback are internal-only columns — never part
+    // of the public Task read.
     expect(one.body.result.spec).toBeUndefined();
+    expect(one.body.result.plan_binding).toBeUndefined();
+    expect(one.body.result.desired_rollback).toBeUndefined();
 
     const list = await request(setup.app).get('/api/v1/tasks').set('Authorization', ADMIN_TOKEN);
     expect(list.status).toBe(200);
-    const seeded = (list.body.result as Array<{ task_id: string; spec?: unknown }>).find(
-      (t) => t.task_id === taskId,
-    );
+    const seeded = (
+      list.body.result as Array<{
+        task_id: string;
+        spec?: unknown;
+        plan_binding?: unknown;
+        desired_rollback?: unknown;
+      }>
+    ).find((t) => t.task_id === taskId);
     expect(seeded).toBeDefined();
     expect(seeded?.spec).toBeUndefined();
+    expect(seeded?.plan_binding).toBeUndefined();
+    expect(seeded?.desired_rollback).toBeUndefined();
   });
 });
 
