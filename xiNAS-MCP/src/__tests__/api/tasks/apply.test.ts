@@ -434,3 +434,68 @@ describe('TaskEngine.apply', () => {
     expect(h.countTasks()).toBe(1); // only the holder task
   });
 });
+
+// ── N0.4: Model R desired-state revert on begin-failure (failBeforeChange) ──
+describe('TaskEngine.dispatch begin-failure reverts desired_mutations (Model R)', () => {
+  let h: ReturnType<typeof makeHarness>;
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  it('begin-failure (no agent) reverts a desired write whose prior was absent → key deleted', async () => {
+    // Apply commits the desired write + records desired_rollback[{prior_value:null}].
+    const task = h.engine.apply({
+      plan: makePlan({
+        desired_mutations: [{ key: '/xinas/v1/desired/Share/sX', value: { id: 'sX' } }],
+      }),
+      applyReq: makeApplyReq(),
+    });
+    // Precondition: the key is present and rollback recorded prior absence.
+    expect(h.kv.get('/xinas/v1/desired/Share/sX')?.value).toEqual({ id: 'sX' });
+    expect(h.store.get(task.task_id)?.desired_rollback).toEqual([
+      { key: '/xinas/v1/desired/Share/sX', prior_value: null },
+    ]);
+
+    // No agent client → dispatch routes through failBeforeChange (begin-failure).
+    let thrown: unknown;
+    try {
+      await h.engine.dispatch({ task, agentClient: undefined, spec: {}, plan: {} });
+    } catch (err) {
+      thrown = err;
+    }
+
+    // The dispatch rejects with EXECUTOR_UNAVAILABLE (503), the task is failed…
+    expect(thrown).toBeInstanceOf(ApiException);
+    expect((thrown as ApiException).httpStatusOverride).toBe(503);
+    expect((thrown as ApiException).details).toMatchObject({ code: 'EXECUTOR_UNAVAILABLE' });
+    expect(h.store.get(task.task_id)?.state).toBe('failed');
+    // …and the desired write is reverted — prior was absent, so the key is gone.
+    expect(h.kv.get('/xinas/v1/desired/Share/sX')).toBeNull();
+  });
+
+  it('begin-failure restores a PRE-EXISTING key to its OLD value (not deleted)', async () => {
+    // Seed a pre-existing desired key; the apply overwrites it with a new value.
+    h.kv.put('/xinas/v1/desired/Share/sX', { id: 'sX', name: 'old' });
+
+    const task = h.engine.apply({
+      plan: makePlan({
+        desired_mutations: [
+          { key: '/xinas/v1/desired/Share/sX', value: { id: 'sX', name: 'new' } },
+        ],
+      }),
+      applyReq: makeApplyReq(),
+    });
+    expect(h.kv.get('/xinas/v1/desired/Share/sX')?.value).toEqual({ id: 'sX', name: 'new' });
+
+    let thrown: unknown;
+    try {
+      await h.engine.dispatch({ task, agentClient: undefined, spec: {}, plan: {} });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(ApiException);
+    expect(h.store.get(task.task_id)?.state).toBe('failed');
+    // Prior value existed → restored, NOT deleted.
+    expect(h.kv.get('/xinas/v1/desired/Share/sX')?.value).toEqual({ id: 'sX', name: 'old' });
+  });
+});

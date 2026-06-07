@@ -346,6 +346,49 @@ describe('POST /internal/v1/task_progress', () => {
     }
   });
 
+  // ── N0.4: Model R desired-state revert on terminal-failed ─────────────────
+  it('terminal{state:failed} reverts the task desired_mutations (prior absent → key deleted)', async () => {
+    const taskId = setup.seedTask({
+      desired_rollback: [{ key: '/xinas/v1/desired/Share/sY', prior_value: null }],
+    });
+    // The apply would have written this desired key; seed it directly here.
+    setup.state.kv.put('/xinas/v1/desired/Share/sY', { id: 'sY' });
+    expect(setup.state.kv.get('/xinas/v1/desired/Share/sY')?.value).toEqual({ id: 'sY' });
+
+    await post(setup, { task_id: taskId, sequence: 1, event_type: 'accepted' });
+    const res = await post(setup, {
+      task_id: taskId,
+      sequence: 2,
+      event_type: 'terminal',
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+      error_message: 'apply failed, rolled back',
+    });
+    expect(res.status).toBe(200);
+    expect(getTask(taskId)?.state).toBe('failed');
+    // Prior was absent → the desired write is reverted (key deleted).
+    expect(setup.state.kv.get('/xinas/v1/desired/Share/sY')).toBeNull();
+  });
+
+  it('terminal{state:success} KEEPS the task desired_mutations (no revert)', async () => {
+    const taskId = setup.seedTask({
+      desired_rollback: [{ key: '/xinas/v1/desired/Share/sZ', prior_value: null }],
+    });
+    setup.state.kv.put('/xinas/v1/desired/Share/sZ', { id: 'sZ' });
+
+    await post(setup, { task_id: taskId, sequence: 1, event_type: 'accepted' });
+    const res = await post(setup, {
+      task_id: taskId,
+      sequence: 2,
+      event_type: 'terminal',
+      status: 'success',
+    });
+    expect(res.status).toBe(200);
+    expect(getTask(taskId)?.state).toBe('success');
+    // Terminal-success keeps the desired write intact.
+    expect(setup.state.kv.get('/xinas/v1/desired/Share/sZ')?.value).toEqual({ id: 'sZ' });
+  });
+
   it('rejects without the internal-agent bearer with 401', async () => {
     const taskId = setup.seedTask();
     const res = await request(setup.app)

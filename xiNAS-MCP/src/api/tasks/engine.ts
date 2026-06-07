@@ -408,10 +408,32 @@ export class TaskEngine {
   }
 
   /**
+   * Model R (§5.3): undo a task's desired-KV mutations using its
+   * `desired_rollback` (the `[{ key, prior_value }]` array recorded at apply,
+   * `prior_value:null` = key was absent). For each entry: prior absent → delete
+   * the key; else → restore the prior value. Idempotent + safe to call when
+   * `desired_rollback` is null/absent (no-op). The api is the sole writer of
+   * desired KV (ADR-0002), so this is the intent-side half of revert; the
+   * executor owns undoing the host side.
+   */
+  revertDesired(task: Task): void {
+    const rollback = task.desired_rollback;
+    if (!Array.isArray(rollback)) return;
+    for (const entry of rollback) {
+      const { key, prior_value } = entry as { key: string; prior_value: unknown };
+      if (typeof key !== 'string') continue;
+      if (prior_value === null) this.kv.delete(key);
+      else this.kv.put(key, prior_value);
+    }
+  }
+
+  /**
    * Begin-failure cleanup: mark the task `failed (FAILED_BEFORE_CHANGE)`,
    * release its leases (so no orphan queued/failed task holds a resource),
    * and throw the api error the route surfaces. A `task.begin` that never
-   * reached an accept means NO host change happened — safe to fail clean.
+   * reached an accept means NO host change happened — so the desired write the
+   * apply txn committed is the only residue: revert it (Model R, §5.3) BEFORE
+   * the fail+release so a failed task leaves no trace.
    */
   private failBeforeChange(task: Task, err: unknown): never {
     const unsupported =
@@ -419,6 +441,9 @@ export class TaskEngine {
       typeof err.data === 'object' &&
       err.data !== null &&
       (err.data as { code?: unknown }).code === 'EXECUTOR_UNSUPPORTED';
+
+    // Revert the desired-KV write first; no host change happened on this path.
+    this.revertDesired(task);
 
     const errorMessage = err instanceof Error ? err.message : String(err);
     this.store.transition(task.task_id, {
