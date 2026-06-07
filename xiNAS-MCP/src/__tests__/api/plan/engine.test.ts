@@ -5,6 +5,7 @@ import { PlanEngine } from '../../../api/plan/engine.js';
 import type { PlanContext, PlanProvider } from '../../../api/plan/engine.js';
 import { referencePlanProvider } from '../../../api/plan/providers/reference.js';
 import { TaskStore } from '../../../api/tasks/store.js';
+import type { DesiredMutation, ResourceRef } from '../../../api/tasks/types.js';
 import { SqliteKvStore } from '../../../state/backend-sqlite.js';
 import { runMigrations } from '../../../state/migrations.js';
 
@@ -173,5 +174,100 @@ describe('PlanEngine.plan', () => {
     expect(task.kind).toBe('custom.op');
     expect(task.risk_level).toBe('changing_access');
     expect(planResult.warnings).toEqual([{ code: 'W', message: 'heads up' }]);
+  });
+
+  // ── N0.2: plan-binding persistence + plan_hash fold ────────────────────────
+
+  it('plan_binding: a provider emitting the three N0 fields persists them on the row', async () => {
+    const observed_freshness_ref = { kind: 'ExportRule', id: 'mnt/data', revision: 7 };
+    const lease_resources: ResourceRef[] = [{ kind: 'NfsIdmap', id: 'snapshot' }];
+    const desired_mutations: DesiredMutation[] = [
+      { key: '/xinas/v1/desired/Share/s1', value: { id: 's1', path: '/mnt/data' } },
+      { key: '/xinas/v1/desired/Share/old', delete: true },
+    ];
+    const provider: PlanProvider = {
+      operation_kind: 'binding.full',
+      async preflight() {
+        return {
+          affected_resources: [{ kind: 'Share', id: 's1' }],
+          blockers: [],
+          warnings: [],
+          diff: { changed: true },
+          risk_level: 'non_disruptive',
+          rollback_model: 'reversible',
+          observed_freshness_ref,
+          lease_resources,
+          desired_mutations,
+        };
+      },
+    };
+    h.engine.register(provider);
+
+    const { task } = await h.engine.plan({ ...makePlanArgs(), operation_kind: 'binding.full' });
+
+    // Re-read from the store: plan_binding holds exactly the three fields.
+    expect(h.store.get(task.task_id)?.plan_binding).toEqual({
+      observed_freshness_ref,
+      lease_resources,
+      desired_mutations,
+    });
+  });
+
+  it('plan_binding: two plans differing only in observed_freshness_ref.revision get different plan_hash', async () => {
+    const makeProvider = (revision: number): PlanProvider => ({
+      operation_kind: 'binding.freshness',
+      async preflight() {
+        return {
+          affected_resources: [{ kind: 'Share', id: 's1' }],
+          blockers: [],
+          warnings: [],
+          diff: { same: true },
+          risk_level: 'non_disruptive',
+          rollback_model: 'reversible',
+          observed_freshness_ref: { kind: 'ExportRule', id: 'mnt/data', revision },
+        };
+      },
+    });
+
+    h.engine.register(makeProvider(1));
+    const a = await h.engine.plan({ ...makePlanArgs(), operation_kind: 'binding.freshness' });
+    h.engine.register(makeProvider(2));
+    const b = await h.engine.plan({ ...makePlanArgs(), operation_kind: 'binding.freshness' });
+
+    // input_hash pins only operation_kind + spec → unchanged across the two.
+    expect(a.task.input_hash).toBe(b.task.input_hash);
+    // plan_hash folds observed_freshness_ref → divergent re-plan is detectable.
+    expect(a.task.plan_hash).not.toBe(b.task.plan_hash);
+  });
+
+  it('plan_binding: a provider emitting NONE of the three leaves plan_binding undefined (reference-like)', async () => {
+    const bare: PlanProvider = {
+      operation_kind: 'binding.none',
+      async preflight() {
+        return {
+          affected_resources: [{ kind: 'Custom', id: 'c1' }],
+          blockers: [],
+          warnings: [],
+          diff: { x: 1 },
+          risk_level: 'non_disruptive',
+          rollback_model: 'reversible',
+        };
+      },
+    };
+    h.engine.register(bare);
+
+    const { task } = await h.engine.plan({ ...makePlanArgs(), operation_kind: 'binding.none' });
+    expect(h.store.get(task.task_id)?.plan_binding).toBeUndefined();
+  });
+
+  it('plan_hash: the reference provider (emits none) keeps a stable plan_hash across replans', async () => {
+    // Folding the three undefined fields into the canonicalized hash input must
+    // NOT change the reference provider's plan_hash — JSON.stringify drops
+    // undefined object properties, so reference plans hash identically.
+    const a = await h.engine.plan(makePlanArgs({ id: 'r1', a: 1, b: 2 }));
+    const b = await h.engine.plan(makePlanArgs({ id: 'r1', a: 1, b: 2 }));
+    expect(a.task.plan_hash).toBe(b.task.plan_hash);
+    // The reference provider sets no binding fields → plan_binding stays unset.
+    expect(a.task.plan_binding).toBeUndefined();
   });
 });

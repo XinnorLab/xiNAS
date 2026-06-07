@@ -4,7 +4,7 @@ import type { LeaseManager } from '../../state/leases.js';
 import { AgentRpcError, type AgentRpcClient } from '../agent-client.js';
 import { ApiException } from '../errors.js';
 import type { TaskStore } from './store.js';
-import type { ResourceRef, Task } from './types.js';
+import type { DesiredMutation, ResourceRef, Task } from './types.js';
 
 /**
  * S2 task engine — the apply transaction (ADR-0004 §Plan/apply binding,
@@ -70,6 +70,28 @@ export interface ApplyPlan {
    * and rejects with CONFLICT(plan_stale) if it drifted forward.
    */
   observed_revision_expected?: number;
+  // ── N0 plan-side outputs (S3 §5.1), reconstructed from tasks.plan_binding.
+  //    Mirror PlanResult exactly so the apply step (N0.3) can consume them. ──
+  /**
+   * The OBSERVED resource to TOCTOU-pin when its identity differs from the
+   * desired `affected_resources[0]`. When set, the apply txn reads
+   * `/xinas/v1/observed/<kind>/<id>` and rejects CONFLICT(plan_stale) on drift,
+   * instead of the S2 default `observed_revision_expected` vs
+   * `affected_resources[0]` (§5.2). Consumed in N0.3.
+   */
+  observed_freshness_ref?: { kind: string; id: string; revision: number };
+  /**
+   * Overrides the lease set when it differs from `affected_resources` (only
+   * `nfs-idmap.set` needs this; §5.2). When set, this is the lease set; else
+   * lease `affected_resources` (S2 behavior). Consumed in N0.3.
+   */
+  lease_resources?: ResourceRef[];
+  /**
+   * Desired-KV mutations the apply txn applies atomically with the task +
+   * lease insert, recording prior values into `tasks.desired_rollback` for
+   * Model R revert (§5.3). Consumed in N0.3.
+   */
+  desired_mutations?: DesiredMutation[];
 }
 
 /** The apply-call request envelope (the `mode=apply` HTTP body fields). */

@@ -3,7 +3,7 @@ import { canonicalize } from '../../lib/canonical-json.js';
 import type { KvStore } from '../../state/index.js';
 import { ApiException } from '../errors.js';
 import type { TaskStore } from '../tasks/store.js';
-import type { ResourceRef, Task } from '../tasks/types.js';
+import type { DesiredMutation, ResourceRef, Task } from '../tasks/types.js';
 
 /**
  * S2 plan engine (s2-task-envelope-spec §5.1, ADR-0004 §Plan/apply
@@ -59,6 +59,28 @@ export interface PlanResult {
   observed_revision_expected?: number;
   /** ISO-8601 stamp of the observation backing the freshness pin. */
   observed_at?: string;
+  // ── N0 plan-side outputs (S3 §5.1) — PROVIDER outputs persisted in
+  //    tasks.plan_binding and bound into plan_hash. The reference provider
+  //    sets none of these (stays backward-compatible). ──────────────────────
+  /**
+   * The OBSERVED resource to TOCTOU-pin when its identity differs from the
+   * desired `affected_resources[0]` (e.g. desired `Share` vs observed
+   * `ExportRule/enc(path)`). Replaces S2's implicit "pin
+   * `observed_revision_expected` against `affected_resources[0]`" (§5.2).
+   */
+  observed_freshness_ref?: { kind: string; id: string; revision: number };
+  /**
+   * Overrides the lease set when it differs from `affected_resources` (only
+   * `nfs-idmap.set` needs this — it locks a resource that is not a public
+   * affected resource; §5.2).
+   */
+  lease_resources?: ResourceRef[];
+  /**
+   * Desired-KV mutations the apply txn applies atomically with the task +
+   * lease insert (§5.3). Consumed in N0.3; persisted here so it survives
+   * plan→apply.
+   */
+  desired_mutations?: DesiredMutation[];
 }
 
 /** A pluggable preflight for one operation kind (keyed in the registry). */
@@ -130,9 +152,25 @@ export class PlanEngine {
 
     const result = await provider.preflight(this.ctx, args.spec);
 
+    // The N0 plan-side outputs (S3 §5.1), assembled from the provider result.
+    // Only present fields are included (conditional-spread) so a provider that
+    // emits none — like reference.echo — yields `{}` and leaves the column null.
+    const planBinding = {
+      ...(result.observed_freshness_ref !== undefined
+        ? { observed_freshness_ref: result.observed_freshness_ref }
+        : {}),
+      ...(result.lease_resources !== undefined ? { lease_resources: result.lease_resources } : {}),
+      ...(result.desired_mutations !== undefined
+        ? { desired_mutations: result.desired_mutations }
+        : {}),
+    };
+
     // input_hash pins the request inputs (operation_kind + spec). plan_hash
     // additionally pins what preflight resolved (affected_resources, diff,
-    // the revision pins) so apply can detect a divergent re-plan.
+    // the revision pins, and the N0 plan-side outputs §5.1) so apply can detect
+    // a divergent re-plan. `canonicalize` (JSON.stringify) drops undefined
+    // object properties, so a provider that emits none of the three hashes
+    // byte-identically to the pre-N0 plan_hash (reference stays unchanged).
     const inputHash = sha256(
       canonicalize({ operation_kind: args.operation_kind, spec: args.spec }),
     );
@@ -144,6 +182,9 @@ export class PlanEngine {
         diff: result.diff,
         state_revision_expected: result.state_revision_expected,
         observed_revision_expected: result.observed_revision_expected,
+        observed_freshness_ref: result.observed_freshness_ref,
+        lease_resources: result.lease_resources,
+        desired_mutations: result.desired_mutations,
       }),
     );
 
@@ -162,6 +203,10 @@ export class PlanEngine {
       // Persist the raw request spec so apply/dispatch can forward it verbatim
       // to the executor (s2-task-envelope-spec §5.1).
       ...(args.spec !== undefined ? { spec: args.spec } : {}),
+      // Persist the N0 plan-side outputs only when the provider emitted any —
+      // an empty binding stays unset (null column), keeping reference tasks and
+      // other binding-free providers byte-identical to pre-N0 (§5.1).
+      ...(Object.keys(planBinding).length > 0 ? { plan_binding: planBinding } : {}),
       ...(args.idempotency_key !== undefined ? { idempotency_key: args.idempotency_key } : {}),
       ...(result.state_revision_expected !== undefined
         ? { state_revision_expected: result.state_revision_expected }
