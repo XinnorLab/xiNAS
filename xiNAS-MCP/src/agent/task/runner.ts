@@ -84,6 +84,10 @@ export class TaskRunner {
     this.#inflight.set(begin.task_id, inflight);
 
     const outputs: string[] = [];
+    // Fresh per-run scratch; the SAME object flows to every stage and to
+    // rollback() (ctx is a single instance), so a preflight stage can stash
+    // prior state for the executor's rollback to read.
+    const stash: Record<string, unknown> = {};
     const ctx: ExecutorContext = {
       spec: begin.spec,
       emitOutput(line: string): void {
@@ -92,6 +96,7 @@ export class TaskRunner {
       isCancelRequested(): boolean {
         return inflight.cancelRequested;
       },
+      stash,
     };
 
     // Drain the output accumulated since the last drain into an inline string.

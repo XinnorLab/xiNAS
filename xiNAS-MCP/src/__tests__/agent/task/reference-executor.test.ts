@@ -13,6 +13,7 @@ function makeCtx(spec: unknown): ExecutorContext & { output: string[] } {
     isCancelRequested(): boolean {
       return false;
     },
+    stash: {},
   };
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { referenceExecutor } from '../../../agent/task/reference-executor.js';
 import { TaskRunner } from '../../../agent/task/runner.js';
-import type { Executor } from '../../../agent/task/types.js';
+import type { Executor, ExecutorContext } from '../../../agent/task/types.js';
 import type { TaskProgressEvent } from '../../../agent/task/types.js';
 import { XinasHistoryBridge } from '../../../agent/task/xinas-history-bridge.js';
 
@@ -187,5 +187,40 @@ describe('TaskRunner.run — failure → rollback path', () => {
     expect(terminal?.status).toBe('requires_manual_recovery');
     expect(terminal?.error_code).toBe('FAILED_MANUAL_RECOVERY_REQUIRED');
     expect(events.map((e) => e.sequence)).toEqual(events.map((_e, i) => i + 1));
+  });
+});
+
+describe('TaskRunner.run — ctx.stash threads a stage into rollback', () => {
+  it('makes a value stashed in a stage visible to rollback (same ctx instance)', async () => {
+    const publish = vi.fn(async () => {});
+    const runner = makeRunner(makeBridge(['snap-before']));
+
+    // A fake executor: its apply stage stashes a value then throws; rollback
+    // reads the stashed value back. The runner must pass the SAME ctx (with the
+    // same `stash`) to both the stage and rollback for this to work.
+    let rollbackSawPrior: unknown;
+    const stashingExecutor: Executor = {
+      operation_kind: 'reference.echo',
+      stages: [
+        {
+          name: 'apply',
+          async run(ctx: ExecutorContext): Promise<void> {
+            ctx.stash.priorThing = 'captured-at-stage';
+            throw new Error('forced failure after stash');
+          },
+        },
+      ],
+      async rollback(ctx: ExecutorContext): Promise<void> {
+        rollbackSawPrior = ctx.stash.priorThing;
+      },
+    };
+
+    await runner.run(
+      { task_id: 't-stash', operation_kind: 'reference.echo', spec: {} },
+      stashingExecutor,
+      publish,
+    );
+
+    expect(rollbackSawPrior).toBe('captured-at-stage');
   });
 });
