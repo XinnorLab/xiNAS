@@ -28,6 +28,9 @@ export interface ExecutorContext {
   emitOutput(line: string): void;
   /** True once a cancel has been requested for this task (cooperative check). */
   isCancelRequested(): boolean;
+  /** Per-run mutable scratch for an executor to carry state from a stage into
+   *  rollback() (e.g. prior export rules captured at preflight). Fresh per task. */
+  readonly stash: Record<string, unknown>;
 }
 
 /** A single named stage of an {@link Executor} (e.g. preflight/apply/verify). */

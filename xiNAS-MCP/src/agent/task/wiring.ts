@@ -11,7 +11,11 @@
  * without booting the whole agent.
  */
 import { type ExecFileOptions, execFile as nodeExecFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import type { AgentConfig } from '../config.js';
+import { parseIdmapConf } from '../../lib/parse/idmap.js';
+import { buildNfsExecutors, type NfsExecutorDeps } from './nfs-executor.js';
+import { createNfsHelperClientFromProbe } from './nfs-helper-client.js';
 import { createProgressPublisher } from './progress-publisher.js';
 import { ExecutorRegistry } from './registry.js';
 import { TaskRunner } from './runner.js';
@@ -21,6 +25,36 @@ import {
   type SubprocessResult,
   XinasHistoryBridge,
 } from './xinas-history-bridge.js';
+
+/** Default nfs-helper UDS path (matches the read-path probe + convergence). */
+const DEFAULT_NFS_HELPER_SOCKET = '/run/xinas-nfs-helper.sock';
+/** Default round-trip timeout for nfs-helper write ops, in milliseconds. */
+const DEFAULT_NFS_HELPER_TIMEOUT_MS = 5000;
+/** idmapd config file the `readIdmapDomain` reader parses. */
+const IDMAPD_CONF_PATH = '/etc/idmapd.conf';
+
+/**
+ * Production {@link NfsExecutorDeps}: the typed helper write client over the
+ * same UDS the read-path probe uses, plus a `readIdmapDomain` that parses
+ * `/etc/idmapd.conf` (the prior-domain rollback target for `nfs-idmap.set`).
+ * On ENOENT / read / parse error the domain is reported as unset (undefined),
+ * so a fresh install with no idmapd.conf yields a prior-unset (no-op) rollback.
+ */
+function buildNfsExecutorDeps(): NfsExecutorDeps {
+  const helper = createNfsHelperClientFromProbe({
+    helperSocket: DEFAULT_NFS_HELPER_SOCKET,
+    timeoutMs: DEFAULT_NFS_HELPER_TIMEOUT_MS,
+  });
+  const readIdmapDomain = async (): Promise<string | undefined> => {
+    try {
+      const raw = await readFile(IDMAPD_CONF_PATH, 'utf8');
+      return parseIdmapConf(raw).domain;
+    } catch {
+      return undefined;
+    }
+  };
+  return { helper, readIdmapDomain };
+}
 
 /** What the task RPC handlers need from the wiring. */
 export interface TaskSubsystem {
@@ -72,9 +106,15 @@ export function execFileRunSubprocess(argv: string[]): Promise<SubprocessResult>
  */
 export function buildTaskSubsystem(
   config: AgentConfig,
-  opts: { runSubprocess?: RunSubprocess } = {},
+  opts: { runSubprocess?: RunSubprocess; nfsDeps?: NfsExecutorDeps } = {},
 ): TaskSubsystem {
   const registry = new ExecutorRegistry();
+  // Register the real NFS executors (share.* + nfs-idmap.set) over the helper
+  // client; tests may inject `nfsDeps` to override the helper/idmap reader.
+  const nfsDeps = opts.nfsDeps ?? buildNfsExecutorDeps();
+  for (const ex of buildNfsExecutors(nfsDeps)) {
+    registry.register(ex);
+  }
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
   });
