@@ -99,6 +99,7 @@ auto_detected: bool      # Whether nvme_auto_namespace was used
 checksums:
   etc_exports: string    # sha256:<hex>
   nfs_conf: string       # sha256:<hex>
+  idmapd_conf: string    # sha256:<hex>  (/etc/idmapd.conf — NFSv4 id mapping; S3)
   netplan: string        # sha256:<hex>
 
 validation:
@@ -444,6 +445,7 @@ Drift occurs when a managed artifact on disk no longer matches the last applied 
 |---|---|---|
 | `/etc/exports` | sha256 checksum + semantic parse | Detect, warn, confirm |
 | `/etc/nfs.conf` | sha256 checksum | Detect, warn, confirm |
+| `/etc/idmapd.conf` | sha256 checksum | Detect, warn, confirm |
 | `/etc/netplan/99-xinas.yaml` | sha256 checksum | Detect, warn, confirm |
 | systemd mount units (xiNAS-managed) | Unit file checksum + enabled state | Detect, warn, confirm |
 | Role defaults YAML files | sha256 checksum | Adopt into snapshot |
