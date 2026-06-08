@@ -79,6 +79,7 @@ class Checksums:
 
     etc_exports: str = ""  # sha256:<hex>
     nfs_conf: str = ""
+    idmapd_conf: str = ""
     netplan: str = ""
 
     def to_dict(self) -> dict:
@@ -87,6 +88,8 @@ class Checksums:
             result["etc_exports"] = self.etc_exports
         if self.nfs_conf:
             result["nfs_conf"] = self.nfs_conf
+        if self.idmapd_conf:
+            result["idmapd_conf"] = self.idmapd_conf
         if self.netplan:
             result["netplan"] = self.netplan
         return result
@@ -98,6 +101,7 @@ class Checksums:
         return cls(
             etc_exports=data.get("etc_exports", ""),
             nfs_conf=data.get("nfs_conf", ""),
+            idmapd_conf=data.get("idmapd_conf", ""),
             netplan=data.get("netplan", ""),
         )
 

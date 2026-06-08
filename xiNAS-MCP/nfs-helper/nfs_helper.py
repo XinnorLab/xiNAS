@@ -22,6 +22,7 @@ from nfs_exports import list_exports, add_export, remove_export, update_export
 from nfs_sessions import list_sessions, get_sessions_for_path
 from nfs_quota import set_project_quota, set_user_quota
 from nfs_conf import build_nfsd_updates, restart_nfs_server, set_nfs_conf
+from nfs_idmap import set_idmapd_domain
 
 # --- Configuration ---
 
@@ -178,6 +179,14 @@ def handle_fix_nfs_conf(req: dict) -> dict:
     }
 
 
+def handle_set_idmapd_domain(req: dict) -> None:
+    """Set the [General] Domain line in /etc/idmapd.conf (atomic, locked, no restart)."""
+    domain = req.get("domain")
+    if domain is None:
+        raise ValueError("Missing 'domain' field")
+    set_idmapd_domain(domain)
+
+
 def _exportfs_reload() -> None:
     """Reload NFS exports via exportfs -r."""
     try:
@@ -211,6 +220,7 @@ HANDLERS = {
     "set_quota": handle_set_quota,
     "reload": handle_reload,
     "fix_nfs_conf": handle_fix_nfs_conf,
+    "set_idmapd_domain": handle_set_idmapd_domain,
 }
 
 

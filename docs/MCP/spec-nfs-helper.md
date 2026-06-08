@@ -108,12 +108,40 @@ Project ID auto-assigned from `abs(hash(path)) % 65535 + 1` if not specified.
 
 Calls `exportfs -r`. Returns error if `exportfs` is not installed.
 
+### `set_idmapd_domain`
+**Input:** `{ "op": "set_idmapd_domain", "request_id": string, "domain": string }`
+**Output:** null
+
+Sets the `Domain = <domain>` line under the `[General]` section of
+`/etc/idmapd.conf`. The rest of the file (comments, other keys, other sections)
+is preserved verbatim:
+
+* an existing `Domain` line under `[General]` is rewritten in place (its
+  indentation and key spelling are kept);
+* if `[General]` exists without a `Domain` key, the line is appended to that
+  section;
+* if `[General]` is absent, the section is created at the top of the file.
+
+Atomic + locked (`fcntl.LOCK_EX` on `/run/xinas-nfs-idmap.lock`, write via
+`mkstemp` + `os.replace`). **No service restart** — `nfs-idmapd` re-reads the
+file on demand.
+
+Error `INVALID_ARGUMENT` if `domain` is missing, empty, not a string, or does
+not contain a `.`.
+
+```json
+{"ok": true, "result": null, "request_id": "set-idmap-1"}
+```
+
 ---
 
 ## File Locking
 
 `/etc/exports` modifications use `fcntl.flock(LOCK_EX)` via `/run/xinas-exports.lock`.
-This prevents concurrent writes from multiple daemon threads.
+`/etc/nfs.conf` edits (`fix_nfs_conf`) lock `/run/xinas-nfs-conf.lock`, and
+`/etc/idmapd.conf` edits (`set_idmapd_domain`) lock `/run/xinas-nfs-idmap.lock`.
+Each file has its own lock, preventing concurrent writes from multiple daemon
+threads.
 
 ---
 

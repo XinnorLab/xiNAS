@@ -30,6 +30,7 @@ CONFIG_SOURCES: dict[str, str] = {
 CHECKSUM_TARGETS: dict[str, str] = {
     "etc_exports": "/etc/exports",
     "nfs_conf": "/etc/nfs.conf",
+    "idmapd_conf": "/etc/idmapd.conf",
     "netplan": "/etc/netplan/99-xinas.yaml",
 }
 
@@ -164,6 +165,7 @@ class RuntimeCollector:
         return Checksums(
             etc_exports=results.get("etc_exports", ""),
             nfs_conf=results.get("nfs_conf", ""),
+            idmapd_conf=results.get("idmapd_conf", ""),
             netplan=results.get("netplan", ""),
         )
 
