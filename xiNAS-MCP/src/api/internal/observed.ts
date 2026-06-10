@@ -26,10 +26,17 @@ interface ObservedBody {
  *   - empty string or whitespace-only
  *   - any control character (charCode < 0x20 or === 0x7f)
  *   - a `.` or `..` path segment (split on `/`)
- *   - leading or trailing `/`, or consecutive `//` (empty segment)
+ *   - trailing `/`, or consecutive `//` (empty segment)
  *
- * Allows `/` and `:` within the id — legitimate ids contain them (e.g.
- * NfsSession id `10.1.2.3:/srv/share01`, mount paths like `/srv/share`).
+ * Allows `/` and `:` within the id, INCLUDING one leading `/` — legitimate
+ * ids are absolute paths (ExportRule ids ARE export paths like
+ * `/mnt/share/proj`, per the NfsCollector's documented key design) and
+ * NfsSession ids like `10.1.2.3:/srv/share01`. A leading slash yields a
+ * `//` inside the KV key, which every consumer tolerates: writes construct
+ * the key from the id, reads list by prefix (never reconstruct), and the
+ * complete-snapshot reconcile compares keys built the same way. (S5 T12
+ * fix: the old leading-`/` rejection bounced the WHOLE observation batch
+ * the moment any export existed, contradicting this comment's own claim.)
  *
  * Full inbound-delta schema validation (kind + value shape) is wired in
  * Phase J (J3). Until then this id-shape check is the sole inbound key
@@ -38,12 +45,17 @@ interface ObservedBody {
  */
 export function isValidObservedId(id: string): boolean {
   if (id.trim().length === 0) return false;
-  if (id.startsWith('/') || id.endsWith('/') || id.includes('//')) return false;
+  // one leading '/' is legitimate (absolute-path ids); strip it, then any
+  // remaining leading '/' (i.e. '//...') or trailing '/' or interior '//'
+  // is malformed.
+  const body = id.startsWith('/') ? id.slice(1) : id;
+  if (body.length === 0) return false;
+  if (body.startsWith('/') || body.endsWith('/') || body.includes('//')) return false;
   for (let i = 0; i < id.length; i++) {
     const c = id.charCodeAt(i);
     if (c < 0x20 || c === 0x7f) return false;
   }
-  for (const segment of id.split('/')) {
+  for (const segment of body.split('/')) {
     if (segment === '..' || segment === '.') return false;
   }
   return true;

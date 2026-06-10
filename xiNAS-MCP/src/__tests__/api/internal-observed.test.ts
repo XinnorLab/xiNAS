@@ -195,6 +195,32 @@ describe('POST /internal/v1/observed', () => {
     expect(res.body.result.accepted).toBe(1);
   });
 
+  it('accepts an absolute-path id (ExportRule /mnt/share/proj); still rejects // and trailing /', async () => {
+    // S5 T12: ExportRule ids ARE export paths (NfsCollector key design).
+    // The old leading-'/' rejection bounced the WHOLE batch the moment any
+    // export existed.
+    const send = (id: string) =>
+      request(setup.app)
+        .post('/internal/v1/observed')
+        .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+        .send({
+          observed_at: new Date().toISOString(),
+          controller_id: CONTROLLER_ID,
+          deltas: [{ kind: 'ExportRule', id, op: 'upsert', value: { export_path: id } }],
+          complete_snapshots: [],
+        });
+
+    const ok = await send('/mnt/share/proj');
+    expect(ok.status).toBe(200);
+    expect(ok.body.result.accepted).toBe(1);
+
+    for (const bad of ['//mnt/share', '/mnt//share', '/mnt/share/', '/mnt/../etc']) {
+      const res = await send(bad);
+      expect(res.status, bad).toBe(400);
+      expect(res.body.errors[0]?.message).toMatch(/invalid id/);
+    }
+  });
+
   it('calls recordObservationPush on the tracker', async () => {
     let pushRecorded = false;
     const origRecord = setup.tracker.recordObservationPush.bind(setup.tracker);
