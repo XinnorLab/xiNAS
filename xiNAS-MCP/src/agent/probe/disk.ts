@@ -62,7 +62,9 @@ export function createDiskProbe(opts: DiskProbeOptions = {}): DiskProbe {
       const { stdout } = await execFilePromise(
         ef,
         'lsblk',
-        ['--json', '--output', 'NAME,SIZE,TYPE,MODEL,SERIAL,TRAN,WWN'],
+        // --bytes: numeric SIZE so the parser derives capacity_bytes;
+        // MOUNTPOINTS: system-disk/mounted/safe_for_use derivation (S3 T2).
+        ['--json', '--bytes', '--output', 'NAME,SIZE,TYPE,MODEL,SERIAL,TRAN,WWN,MOUNTPOINTS'],
         {},
       );
       return parseLsblkOutput(stdout);

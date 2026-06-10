@@ -1,0 +1,22 @@
+{
+  "blockdevices": [
+    { "name": "nvme0n1", "size": 512110190592, "type": "disk",
+      "model": "Samsung SSD 980", "serial": "S649NX0T123456", "tran": "nvme",
+      "wwn": "eui.0025385b21406566", "mountpoints": [null],
+      "children": [
+        { "name": "nvme0n1p1", "size": 536870912, "type": "part", "mountpoints": ["/boot/efi"] },
+        { "name": "nvme0n1p2", "size": 511558156288, "type": "part", "mountpoints": ["/"] }
+      ]
+    },
+    { "name": "nvme1n1", "size": 1920383410176, "type": "disk",
+      "model": "INTEL SSDPE2KX020T8", "serial": "BTLJ123456789", "tran": "nvme",
+      "wwn": "eui.0123456789abcdef", "mountpoints": [null] },
+    { "name": "nvme2n1", "size": 1920383410176, "type": "disk",
+      "model": "INTEL SSDPE2KX020T8", "serial": "BTLJ987654321", "tran": "nvme",
+      "mountpoints": [null],
+      "children": [
+        { "name": "nvme2n1p1", "size": 1920382000000, "type": "part", "mountpoints": ["/data"] }
+      ]
+    }
+  ]
+}
