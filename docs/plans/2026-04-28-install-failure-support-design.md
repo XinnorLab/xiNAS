@@ -56,7 +56,7 @@ Replace the lone `self.app.notify(...)` at
 > **Installation failed (exit N)**
 >
 > Please run **Collect Logs → Collect All**, then email the resulting
-> archive (`/tmp/<host>-logs-*.tgz`) to **support@xinnor.io** so we can
+> archive (`/tmp/<host>-logs-*.tgz`) to **<support@xinnor.io>** so we can
 > investigate.
 >
 > [ Go to Collect Logs ] [ Close ]

@@ -2,10 +2,30 @@ extends: default
 rules:
   line-length:
     max: 200
+    # Warning, not error: a handful of role lines (grub cmdline, download
+    # URLs, uninstall summaries) are single unbreakable strings. Keep the
+    # signal visible in lint output without failing CI.
+    level: warning
   truthy:
     check-keys: false
+    # Ansible's conventional yes/no module args are house style.
+    allowed-values: ['true', 'false', 'yes', 'no']
   document-start: disable
+  braces:
+    # House style: flow mappings are padded — `{ enabled: true, ... }` —
+    # throughout healthcheck profiles and role loop items.
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  colons:
+    # Allow column-aligned values (`xinas_api_log_dir:   /var/log/xinas`).
+    max-spaces-after: -1
+  commas:
+    # Allow column-aligned flow-mapping entries in role loop items.
+    max-spaces-after: -1
 ignore: |
   .claude/
   node_modules/
   xiNAS-MCP/node_modules/
+  # The OpenAPI contract is machine-validated by the blocking spectral CI
+  # job; yamllint style checks add nothing there.
+  docs/control-path/api-v1.yaml

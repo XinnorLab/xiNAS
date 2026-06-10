@@ -267,7 +267,7 @@ note in the summary.
 ### 4.4 Phase D — remove xiNAS mounts
 
 1. For every `*.mount` unit in `/etc/systemd/system/` whose
-   `Description=` starts with `xiRAID Classic ` (the template signature
+   `Description=` starts with `xiRAID Classic` plus a trailing space (the template signature
    from
    [raid_fs/templates/mount.unit.j2](../../collection/roles/raid_fs/templates/mount.unit.j2)):
    - `systemctl stop <unit>`
@@ -499,14 +499,14 @@ After a successful `uninstall.sh` run, the following must be true:
 | Property | Status |
 |----------|--------|
 | `systemctl list-units --all 'xinas-*'` returns no units | ✓ |
-| `dpkg -l | grep -E 'xinas\|xiraid-exporter'` returns nothing | ✓ |
+| `dpkg -l \| grep -E 'xinas\|xiraid-exporter'` returns nothing | ✓ |
 | `ls /opt/xiNAS` returns "no such file or directory" | ✓ |
 | `ls /etc/xinas-mcp /usr/lib/xinas-mcp /var/lib/xinas /var/log/xinas` returns "no such file or directory" | ✓ |
 | `which xinas-menu xinas-mcp xinas-history` returns nothing | ✓ |
 | `cat /etc/exports` is empty / single comment line | ✓ |
 | `xicli raid show -f json` lists no xiNAS-named arrays | ✓ |
 | `xicli` is present iff `uninstall_remove_xiraid=false` | ✓ |
-| `lsmod | grep mlx5_core` returns iff `uninstall_remove_ofed=false` | ✓ |
+| `lsmod \| grep mlx5_core` returns iff `uninstall_remove_ofed=false` | ✓ |
 | `/etc/sysctl.d/90-perf-vm.conf` exists iff `uninstall_revert_perf=false` | ✓ |
 | `/etc/default/grub` xiNAS args removed iff `uninstall_revert_perf=true` | ✓ |
 

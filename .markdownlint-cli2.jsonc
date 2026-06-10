@@ -1,0 +1,37 @@
+{
+  // Codifies the established house style of the xiNAS design docs
+  // (docs/**). Rules are disabled only where the docs deliberately
+  // diverge from markdownlint defaults; real content problems
+  // (broken syntax, tabs in prose, etc.) still fail.
+  "config": {
+    // Design docs wrap at varied widths; content matters over column count.
+    "MD013": false,
+    // Tables use compact pipe style throughout.
+    "MD060": false,
+    // Blank-line cosmetics around fences/headings/lists — not enforced.
+    "MD031": false,
+    "MD032": false,
+    "MD022": false,
+    // Bold pseudo-headings are deliberate in these docs.
+    "MD036": false,
+    // Many fences are ASCII diagrams / wire traces where a language tag is noise.
+    "MD040": false,
+    // Tabs allowed inside fenced blocks (pasted terminal output); still flagged in prose.
+    "MD010": { "code_blocks": false },
+    // Mixed emphasis/strong styles across docs (MD050 is the strong-marker
+    // sibling of MD049).
+    "MD049": false,
+    "MD050": false,
+    // docs/plans template opens with h3 metadata/task sections directly
+    // under the h1 title — recurring by design.
+    "MD001": false,
+    // Tilde fences deliberately wrap example blocks that contain backtick
+    // fences (e.g. test-designer plan).
+    "MD048": false,
+    // Tables sit directly under their section heading throughout the docs —
+    // same blank-line cosmetic class as MD022/MD031/MD032.
+    "MD058": false,
+    // Repeated section names under different parents are fine (e.g. "Errors" per tool).
+    "MD024": { "siblings_only": true }
+  }
+}

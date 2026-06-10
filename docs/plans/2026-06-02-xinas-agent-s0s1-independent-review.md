@@ -4,7 +4,7 @@ _24-agent separated review of PRs #205-#215 vs the plan + spec + ADRs + api-v1.y
 
 I'll synthesize the per-phase review data into a decisive final report. The data is already verified, so my job is to weight confirmed findings and present a clear cross-check. Let me produce the report directly.
 
-# xiNAS xinas-agent S0+S1 — Lead Review Report
+## xiNAS xinas-agent S0+S1 — Lead Review Report
 
 **Scope:** Phases A–K/L, PRs #205–#215 (~90 commits), reviewed against `docs/plans/2026-05-28-xinas-agent-s0s1-plan.md`, `docs/control-path/xinas-agent-s0s1-spec.md`, the ADRs, and `api-v1.yaml`. All findings below carry an adversarial verification verdict; refuted findings are dropped.
 

@@ -205,9 +205,7 @@ document closes some and tracks the rest.
 | 5 | Milestones not equal weight                   | **Closed** by §1 above.                                                                                |
 | 14| Role dependency map                           | **Closed** by §2 above.                                                                                |
 | 15| Rollback the API itself                       | **Closed** by §3 above.                                                                                |
-| — | Audit format spec referenced by ADR-0003      | **Open.** ADR-0003's "Audit storage and semantics" defines the contract; the
-detailed JCS canonicalization rules + worked example belong in
-`docs/control-path/audit-format.md`, to be written alongside implementation. |
+| — | Audit format spec referenced by ADR-0003      | **Open.** ADR-0003's "Audit storage and semantics" defines the contract; the detailed JCS canonicalization rules + worked example belong in `docs/control-path/audit-format.md`, to be written alongside implementation. |
 
 ## 5. Workstream-level entry/exit gates
 

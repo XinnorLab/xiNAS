@@ -427,8 +427,8 @@ not yet in scope, the executor's prior-state rollback is the sole undo (noted pe
 - **N6** — e2e (stub helper): share lifecycle · rollback · idmap.
 - **N7 — `nfs-profile.update` (the ADR-0005 phase, §3.4/§6.2):** helper `render_nfs_profile`
   (four-file renderer) + the **`status.effective_files` producer** (observed-NfsProfile
-  collector or helper-returned checksums, §3.4) + provider (desired-revision pin) + executor
-  + route (PATCH/PUT already exist) + tests. **Sequenced last and splittable** (§12) — the
+  collector or helper-returned checksums, §3.4) + provider (desired-revision pin) +
+  executor + route (PATCH/PUT already exist) + tests. **Sequenced last and splittable** (§12) — the
   heavy piece; the shares + idmap surface above is independently shippable without it.
 
 ---

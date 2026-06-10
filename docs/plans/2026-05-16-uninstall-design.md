@@ -112,7 +112,7 @@ Three layers of identification, in order of confidence:
 
 There is no marker in `/etc/exports` today — the entire file is
 xiNAS-templated. The role truncates the file to a one-line comment
-("cleared by xiNAS uninstall on <ts>") rather than deleting it,
+("cleared by xiNAS uninstall on `<ts>`") rather than deleting it,
 because `nfs-kernel-server` expects the file to exist while it is
 still installed.
 

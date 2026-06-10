@@ -3,7 +3,7 @@
 > **Status:** Draft, brainstorm-approved 2026-05-28.
 > **Workstream:** WS3 (xinas-agent), first sub-project (S0 — skeleton & boundary, S1 — observation).
 >
-> **S↔WS notation.** S0–S7 are sub-projects **inside WS3**, not equivalents of WS4-WS8. Where the spec writes "S<n> / WS<m>" (e.g., "S3 / WS5") it means "the S<n> sub-project inside WS3 unblocks the WS<m> downstream workstream"; the numbers are NOT interchangeable. Per `docs/control-path/phase0-sequencing.md:226`, WS5/WS6/WS7 start *after* WS3 completes (including S2's task envelope, which is itself a WS3 sub-project but corresponds to WS4-engine integration work).
+> **S↔WS notation.** S0–S7 are sub-projects **inside WS3**, not equivalents of WS4-WS8. Where the spec writes `S<n> / WS<m>` (e.g., "S3 / WS5") it means "the `S<n>` sub-project inside WS3 unblocks the `WS<m>` downstream workstream"; the numbers are NOT interchangeable. Per `docs/control-path/phase0-sequencing.md:226`, WS5/WS6/WS7 start *after* WS3 completes (including S2's task envelope, which is itself a WS3 sub-project but corresponds to WS4-engine integration work).
 > **Depends on:** [ADR-0001](adr/0001-api-surface.md), [ADR-0002](adr/0002-agent-privilege-model.md), [ADR-0003](adr/0003-state-store.md), [phase0-requirements.md](phase0-requirements.md) §3.
 > **Companion plan:** `docs/plans/2026-05-28-xinas-agent-s0s1-plan.md` (to be written via `superpowers:writing-plans` after this spec is approved).
 
