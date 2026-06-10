@@ -3,6 +3,7 @@ import type { OpenedStateStore } from '../../state/index.js';
 import type { AgentRpcClient } from '../agent-client.js';
 import type { TaskEngines } from '../context.js';
 import { PlanEngine } from '../plan/engine.js';
+import { buildNfsPlanProviders } from '../plan/providers/nfs.js';
 import { referencePlanProvider } from '../plan/providers/reference.js';
 import { TaskEngine } from './engine.js';
 import { TaskStore } from './store.js';
@@ -41,6 +42,8 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   });
   const planEngine = new PlanEngine({ store, ctx: { kv: state.kv } });
   planEngine.register(referencePlanProvider);
+  // The four real NFS providers (S3 N4.1) — share.* + nfs-idmap.set.
+  for (const provider of buildNfsPlanProviders()) planEngine.register(provider);
 
   return {
     planEngine,
