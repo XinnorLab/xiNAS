@@ -17,6 +17,8 @@ export interface RaidCreateRequest {
   init_prio?: number;
   recon_prio?: number;
   restripe_prio?: number;
+  // message_raid.proto field 12 (was missing from this wrapper)
+  resync_enabled?: number;
   sched_enabled?: number;
   merge_read_enabled?: number;
   merge_write_enabled?: number;
