@@ -1,17 +1,15 @@
 import { Router } from 'express';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
-import { sendOk } from '../handlers/reads.js';
-import type { ApplyPlan } from '../tasks/engine.js';
-import type { DesiredMutation, ResourceRef, Task } from '../tasks/types.js';
+import { applyMode, planMode, requireTasks } from './apply-helpers.js';
 
 /**
  * T4 — the first MUTATING route, `POST /api/v1/reference`, over the S2
  * plan/apply + task engine (s2-task-envelope-spec §5.2). It proves the engine
  * end-to-end against the built-in inert `reference.echo` executor without
- * touching any real OS state. Real executors (arrays/fs/nfs/network) register
- * their own providers and mount their own routes in S3–S6; their routes stay
- * `executorUnavailable` until then.
+ * touching any real OS state. The shared two-mode flow lives in
+ * `apply-helpers.ts` (extracted in S3 N5, when the first REAL mutating routes
+ * — nfs-mutate.ts — landed); this route is now the thinnest consumer of it.
  *
  * Body:
  *   - `{ mode: 'plan', spec }`  → PlanEngine.plan → 200 + the rendered Plan.
@@ -25,107 +23,23 @@ export function referenceRouter(ctx: ApiContext): Router {
   const r = Router();
 
   r.post('/reference', async (req, res) => {
-    const tasks = ctx.tasks;
-    if (!tasks) {
-      // No engines wired (read-only context) — there is nothing to plan/apply.
-      throw new ApiException(
-        'INTERNAL',
-        'task engine is not available in this build',
-        { code: 'EXECUTOR_UNAVAILABLE' },
-        'the api was started without a task engine',
-      );
-    }
-
-    const rc = req.context!;
+    const tasks = requireTasks(ctx);
     const body = (req.body ?? {}) as Record<string, unknown>;
     const mode = body.mode;
 
     if (mode === 'plan') {
-      const { task, planResult } = await tasks.planEngine.plan({
-        operation_kind: 'reference.echo',
-        spec: body.spec,
-        principal: rc.principal,
-        client_type: rc.client_type,
-        request_id: rc.request_id,
-        correlation_id: rc.correlation_id,
-      });
-      rc.operation_id = task.task_id;
-      const revision = task.state_revision_expected ?? 0;
-      sendOk(
-        req,
-        res,
-        {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
-          state_revision_expected: revision,
-          observed_revision_expected: planResult.observed_revision_expected ?? null,
-          observed_at: planResult.observed_at ?? null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
-        },
-        [revision],
-      );
+      await planMode(req, res, tasks, 'reference.echo', body.spec);
       return;
     }
 
     if (mode === 'apply') {
-      const planId = requireString(body.plan_id, 'plan_id');
-      const idempotencyKey = requireString(body.idempotency_key, 'idempotency_key');
-
-      // Resolve the plan_only task this apply binds against.
-      const planTask = tasks.store.get(planId);
-      if (!planTask || planTask.state !== 'plan_only') {
-        throw new ApiException(
-          'NOT_FOUND',
-          `no plan_only task with plan_id ${planId}`,
-          undefined,
-          'Re-run mode=plan to obtain a fresh plan_id.',
-        );
-      }
-
-      const applyPlan = toApplyPlan(planTask);
-
-      // Atomic: idempotency + freshness + leases + queued task. Throws
-      // (CONFLICT/PRECONDITION_FAILED) on every conflict; the route lets the
-      // error middleware render those. Returns the original on a true replay.
-      const task = tasks.taskEngine.apply({
-        plan: applyPlan,
-        applyReq: {
-          input_hash: planTask.input_hash,
-          idempotency_key: idempotencyKey,
-          principal: rc.principal,
-          client_type: rc.client_type,
-          request_id: rc.request_id,
-          correlation_id: rc.correlation_id,
-        },
+      // expected_revision stays optional here: /reference is the S2
+      // engine-proof route (absent from api-v1.yaml), predating the
+      // ApplyRequest contract the real mutating routes enforce.
+      await applyMode(req, res, tasks, body, {
+        operationKind: 'reference.echo',
+        requireExpectedRevision: false,
       });
-      rc.operation_id = task.task_id;
-
-      // Idempotent replay: apply returned an EXISTING task (already dispatched).
-      // Do NOT re-dispatch — return it as-is with 202.
-      if (task.state !== 'queued') {
-        res.status(202);
-        sendOk(req, res, taskEnvelope(task), [task.state_revision_at_apply ?? 0]);
-        return;
-      }
-
-      // Fresh queued task → dispatch task.begin. The engine treats an absent
-      // agent client as a begin-unavailable failure, so the fail-task +
-      // release-leases + 503 contract lives in exactly one place (the engine).
-      const dispatched = await tasks.taskEngine.dispatch({
-        task,
-        agentClient: tasks.agentClient,
-        spec: planTask.spec, // the raw executor input (reference.echo: { message?, fail_at_stage? })
-        plan: applyPlan,
-      });
-
-      res.status(202);
-      sendOk(req, res, taskEnvelope(dispatched), [dispatched.state_revision_at_apply ?? 0]);
       return;
     }
 
@@ -138,72 +52,4 @@ export function referenceRouter(ctx: ApiContext): Router {
   });
 
   return r;
-}
-
-/**
- * Map a stored `plan_only` Task to the apply transaction's ApplyPlan.
- *
- * N0.3 (S3 §5.1): the N0 plan-side outputs (`observed_freshness_ref`,
- * `lease_resources`, `desired_mutations`) live in the `plan_binding` JSON blob,
- * not in dedicated columns — reconstruct them here so they survive plan→apply.
- * A reference plan has no `plan_binding` → all three absent → unchanged.
- */
-function toApplyPlan(planTask: Task): ApplyPlan {
-  const binding = (planTask.plan_binding ?? {}) as {
-    observed_freshness_ref?: { kind: string; id: string; revision: number };
-    lease_resources?: ResourceRef[];
-    desired_mutations?: DesiredMutation[];
-  };
-  return {
-    plan_id: planTask.task_id,
-    kind: planTask.kind,
-    risk_level: planTask.risk_level,
-    affected_resources: planTask.affected_resources,
-    ...(planTask.spec !== undefined ? { spec: planTask.spec } : {}),
-    ...(planTask.plan_hash !== undefined ? { plan_hash: planTask.plan_hash } : {}),
-    ...(planTask.state_revision_expected !== undefined
-      ? { state_revision_expected: planTask.state_revision_expected }
-      : {}),
-    ...(binding.observed_freshness_ref !== undefined
-      ? { observed_freshness_ref: binding.observed_freshness_ref }
-      : {}),
-    ...(binding.lease_resources !== undefined ? { lease_resources: binding.lease_resources } : {}),
-    ...(binding.desired_mutations !== undefined
-      ? { desired_mutations: binding.desired_mutations }
-      : {}),
-  };
-}
-
-/** The Task envelope shape the 202 returns (subset the route needs to surface). */
-function taskEnvelope(task: Task): Record<string, unknown> {
-  return {
-    task_id: task.task_id,
-    state: task.state,
-    kind: task.kind,
-    risk_level: task.risk_level,
-    affected_resources: task.affected_resources,
-    ...(task.plan_id !== undefined ? { plan_id: task.plan_id } : {}),
-    ...(task.agent_acceptance_id !== undefined
-      ? { agent_acceptance_id: task.agent_acceptance_id }
-      : {}),
-    ...(task.error_code !== undefined ? { error_code: task.error_code } : {}),
-    ...(task.error_message !== undefined ? { error_message: task.error_message } : {}),
-  };
-}
-
-function requireString(v: unknown, name: string): string {
-  if (typeof v !== 'string' || v.length === 0) {
-    throw new ApiException(
-      'INVALID_ARGUMENT',
-      `'${name}' is required and must be a non-empty string`,
-    );
-  }
-  return v;
-}
-
-/** Plain-language NFS-client impact for the Plan envelope (reference = none). */
-function clientImpact(riskLevel: string): string {
-  return riskLevel === 'non_disruptive'
-    ? 'No impact on NFS clients.'
-    : 'May affect NFS clients; review the diff.';
 }
