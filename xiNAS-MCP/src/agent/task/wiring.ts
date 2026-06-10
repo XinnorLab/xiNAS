@@ -12,10 +12,12 @@
  */
 import { type ExecFileOptions, execFile as nodeExecFile } from 'node:child_process';
 import type { AgentConfig } from '../config.js';
+import type { XiraidClient } from '../xiraid/client.js';
 import { createProgressPublisher } from './progress-publisher.js';
 import { ExecutorRegistry } from './registry.js';
 import { TaskRunner } from './runner.js';
 import type { PublishProgress } from './types.js';
+import { makeXiraidArrayCreateExecutor } from './xiraid-array-executor.js';
 import {
   type RunSubprocess,
   type SubprocessResult,
@@ -72,9 +74,14 @@ export function execFileRunSubprocess(argv: string[]): Promise<SubprocessResult>
  */
 export function buildTaskSubsystem(
   config: AgentConfig,
-  opts: { runSubprocess?: RunSubprocess } = {},
+  opts: { runSubprocess?: RunSubprocess; xiraidClient?: XiraidClient } = {},
 ): TaskSubsystem {
   const registry = new ExecutorRegistry();
+  // S3 T9: the create executor shares the convergence-built xiRAID client
+  // with the observe collector (one daemon connection for both).
+  if (opts.xiraidClient) {
+    registry.register(makeXiraidArrayCreateExecutor({ client: opts.xiraidClient }));
+  }
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
   });
