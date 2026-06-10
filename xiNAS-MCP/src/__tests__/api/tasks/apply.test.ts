@@ -499,3 +499,59 @@ describe('TaskEngine.dispatch begin-failure reverts desired_mutations (Model R)'
     expect(h.kv.get('/xinas/v1/desired/Share/sX')?.value).toEqual({ id: 'sX', name: 'old' });
   });
 });
+
+// ---- S4 T1: the central dangerous gate (reqs §14, ADR-0006 §Delete) ----
+
+describe('TaskEngine.apply — dangerous gate', () => {
+  let h: ReturnType<typeof makeHarness>;
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  it('destructive plan without dangerous → PRECONDITION_FAILED dangerous_flag_required, nothing written', () => {
+    expect(() =>
+      h.engine.apply({
+        plan: makePlan({ risk_level: 'destructive' }),
+        applyReq: makeApplyReq(),
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'PRECONDITION_FAILED',
+        details: expect.objectContaining({ reason: 'dangerous_flag_required' }),
+      }),
+    );
+    expect(h.countTasks()).toBe(0);
+    expect(h.countLeases()).toBe(0);
+  });
+
+  it('destructive plan with dangerous: false → same rejection', () => {
+    expect(() =>
+      h.engine.apply({
+        plan: makePlan({ risk_level: 'destructive' }),
+        applyReq: makeApplyReq({ dangerous: false }),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'PRECONDITION_FAILED' }));
+  });
+
+  it('destructive plan with dangerous: true → proceeds to a queued task', () => {
+    const task = h.engine.apply({
+      plan: makePlan({ risk_level: 'destructive' }),
+      applyReq: makeApplyReq({ dangerous: true }),
+    });
+    expect(task.state).toBe('queued');
+    expect(h.countLeases()).toBe(1);
+  });
+
+  it('non-destructive plan without the flag proceeds (gate only guards destructive)', () => {
+    const task = h.engine.apply({ plan: makePlan(), applyReq: makeApplyReq() });
+    expect(task.state).toBe('queued');
+  });
+
+  it('non-destructive plan with dangerous: true also proceeds (flag is ignored)', () => {
+    const task = h.engine.apply({
+      plan: makePlan(),
+      applyReq: makeApplyReq({ dangerous: true }),
+    });
+    expect(task.state).toBe('queued');
+  });
+});
