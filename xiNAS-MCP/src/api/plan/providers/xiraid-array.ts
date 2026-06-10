@@ -22,6 +22,7 @@
  * deliberately spec-only).
  */
 
+import { NAME_RE } from '../../../lib/xiraid/schema.js';
 import { toRaidCreateRequest, toRaidModifyRequest } from '../../../lib/xiraid/translate.js';
 import {
   type CreateFacts,
@@ -246,6 +247,68 @@ export const xiraidArrayModifyProvider: PlanProvider = {
       risk_level: 'non_disruptive',
       rollback_model: 'non_disruptive',
       enriched_spec: { id, ...change, device_by_id: deviceById },
+    };
+  },
+};
+
+/**
+ * xiraid.array.import plan provider (S4 T7, ADR-0006 §Import as amended).
+ *
+ * Plan-mode validates what the api can know from KV alone: spec shape and
+ * target-name validity + availability. The candidate UUID itself is
+ * validated at EXECUTOR preflight via a live raid_import_show — the
+ * privilege split makes a plan-time daemon call impossible (PlanContext is
+ * KV-only); see the S4 spec §6 conformance amendment.
+ */
+export const xiraidArrayImportProvider: PlanProvider = {
+  operation_kind: 'xiraid.array.import',
+
+  async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
+    const o = (typeof rawSpec === 'object' && rawSpec !== null ? rawSpec : {}) as Record<
+      string,
+      unknown
+    >;
+    if (typeof o.uuid !== 'string' || o.uuid.length === 0) {
+      throw new ApiException(
+        'INVALID_ARGUMENT',
+        'import spec must carry a non-empty uuid',
+        undefined,
+        'Send { uuid, new_name? } per ADR-0006 §Import.',
+      );
+    }
+    if (o.new_name !== undefined && typeof o.new_name !== 'string') {
+      throw new ApiException('INVALID_ARGUMENT', 'new_name must be a string when present');
+    }
+    const targetName = (o.new_name as string | undefined) ?? o.uuid;
+
+    const blockers: Array<{ code: string; message: string }> = [];
+    if (!NAME_RE.test(targetName)) {
+      blockers.push({
+        code: 'name_invalid',
+        message: `target name '${targetName}' must match ${NAME_RE} — pass new_name when the uuid is not a usable array name`,
+      });
+    }
+    const { existingArrayNames } = gatherFacts(ctx);
+    if (existingArrayNames.includes(targetName)) {
+      blockers.push({
+        code: 'name_taken',
+        message: `an array named '${targetName}' already exists`,
+      });
+    }
+
+    return {
+      // No disk leases: the foreign array's disks are not free disks; the
+      // array-name lease serializes competing adopts.
+      affected_resources: [{ kind: 'XiraidArray', id: targetName }],
+      blockers,
+      warnings: [],
+      diff: {
+        adopt: { uuid: o.uuid, as: targetName },
+        validated_at: 'apply (agent raid_import_show preflight)',
+      },
+      risk_level: 'non_disruptive',
+      rollback_model: 'non_disruptive',
+      enriched_spec: { uuid: o.uuid, new_name: targetName },
     };
   },
 };

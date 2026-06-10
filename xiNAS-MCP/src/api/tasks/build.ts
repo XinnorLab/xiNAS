@@ -6,6 +6,7 @@ import { PlanEngine } from '../plan/engine.js';
 import { referencePlanProvider } from '../plan/providers/reference.js';
 import {
   xiraidArrayCreateProvider,
+  xiraidArrayImportProvider,
   xiraidArrayModifyProvider,
 } from '../plan/providers/xiraid-array.js';
 import { TaskEngine } from './engine.js';
@@ -47,6 +48,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   planEngine.register(referencePlanProvider);
   planEngine.register(xiraidArrayCreateProvider);
   planEngine.register(xiraidArrayModifyProvider);
+  planEngine.register(xiraidArrayImportProvider);
 
   return {
     planEngine,

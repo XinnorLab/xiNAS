@@ -148,10 +148,23 @@ describe('POST /api/v1/arrays', () => {
     expect(count('SELECT COUNT(*) AS n FROM tasks WHERE state = ? AND error_code = ?', 'failed', 'FAILED_BEFORE_CHANGE')).toBe(1);
   });
 
-  it('import-shaped spec → 422 EXECUTOR_UNSUPPORTED (deferred)', async () => {
-    const res = await plan({ uuid: 'abcd-1234' });
-    expect(res.status).toBe(422);
-    expect(res.body.errors[0].details?.code).toBe('EXECUTOR_UNSUPPORTED');
+  it('import-shaped spec → 200 plan (xiraid.array.import) and 202 apply (S4 T7)', async () => {
+    setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-imp' });
+    const planned = await plan({ uuid: 'u-route-1', new_name: 'adopted' });
+    expect(planned.status).toBe(200);
+    const p = planned.body.result;
+    expect(p.blockers).toEqual([]);
+    expect(p.affected_resources).toEqual([{ kind: 'XiraidArray', id: 'adopted' }]);
+
+    const applied = await apply({ plan_id: p.plan_id, idempotency_key: 'idem-imp' });
+    expect(applied.status).toBe(202);
+    expect(applied.body.result.kind).toBe('xiraid.array.import');
+    expect(applied.body.result.state).toBe('running');
+    // the forwarded spec is the normalized adopt order
+    expect(setup.mockAgent.lastTaskBeginParams()?.spec).toEqual({
+      uuid: 'u-route-1',
+      new_name: 'adopted',
+    });
   });
 
   it('DELETE /arrays/:id keeps the unsupported-stub envelope (until S4 T9)', async () => {
