@@ -529,6 +529,7 @@ describe('xiraid.array.import executor', () => {
       const outputs: string[] = [];
       await executor.rollback({
         spec: { uuid: 'u-2', new_name: 'oops' },
+        stash: {},
         emitOutput: (l) => outputs.push(l),
         isCancelRequested: () => false,
       });

@@ -84,13 +84,13 @@ describe('systemWarningsMiddleware + mergeWarnings', () => {
   });
 
   it('mutating endpoint: degraded tracker DOES inject EXECUTOR_DEGRADED warning', async () => {
-    // The mutating stub (POST /api/v1/shares — /arrays became the real S3
-    // create route, /filesystems the real S5 one) returns UNSUPPORTED (422)
-    // because the tracker is online (degraded, not offline) but the method
-    // isn't built yet. The envelope should carry EXECUTOR_DEGRADED in
-    // warnings.
+    // The mutating stub (POST /api/v1/config-history/rollback — /arrays,
+    // /filesystems, and /shares all have real routes now) returns
+    // UNSUPPORTED (422) because the tracker is online (degraded, not
+    // offline) but the method isn't built yet. The envelope should carry
+    // EXECUTOR_DEGRADED in warnings.
     const res = await request(setup.app)
-      .post('/api/v1/shares')
+      .post('/api/v1/config-history/rollback')
       .set('Authorization', 'Bearer tok-admin')
       .send({});
 
@@ -106,7 +106,7 @@ describe('systemWarningsMiddleware + mergeWarnings', () => {
     setup.tracker.recordHeartbeatSuccess(new Date());
 
     const res = await request(setup.app)
-      .post('/api/v1/shares')
+      .post('/api/v1/config-history/rollback')
       .set('Authorization', 'Bearer tok-admin')
       .send({});
 

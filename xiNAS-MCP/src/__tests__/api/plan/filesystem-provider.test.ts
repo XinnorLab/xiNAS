@@ -220,10 +220,12 @@ describe('fsMountProvider / fsUnmountProvider', () => {
       spec: { client_addr: '10.0.0.1', export_path: '/mnt/data/share' },
       status: { proto_version: 'v4.2', locked_files: 0 },
     });
-    h.kv.put('/xinas/v1/observed/ExportRule/exp1', {
+    // N0b shape: the observed id is encExportId(path); the real path lives
+    // in spec.export_path (what the provider reads).
+    h.kv.put('/xinas/v1/observed/ExportRule/mnt-data-share', {
       kind: 'ExportRule',
-      id: '/mnt/data/share',
-      spec: {},
+      id: 'mnt-data-share',
+      spec: { export_path: '/mnt/data/share' },
       status: {},
     });
     h.kv.put('/xinas/v1/desired/Share/share01', {

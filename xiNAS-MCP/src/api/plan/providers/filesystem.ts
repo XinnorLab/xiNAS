@@ -56,7 +56,9 @@ export interface FsFacts {
   arraysByVolume: Map<string, BackingArraySpec & { name: string; state?: string }>;
   filesystems: Array<{ id: string; mountpoint?: string; backing_device?: string; mounted?: boolean }>;
   sessions: Array<{ id: string; export_path: string }>;
-  /** observed ExportRule ids ARE export paths. */
+  /** Real absolute export paths from observed ExportRule rows. The OBSERVED
+   *  id is encExportId(path) (N0b — the raw path would fail the id guard);
+   *  the real path lives in spec.export_path, which is what we read. */
   exportPaths: string[];
   desiredShares: Array<{ id: string; path: string }>;
 }
@@ -101,8 +103,11 @@ export function gatherFsFacts(ctx: PlanContext): FsFacts {
   }
 
   const exportPaths: string[] = [];
-  for (const row of ctx.kv.list<{ id?: string }>({ prefix: '/xinas/v1/observed/ExportRule/' })) {
-    if (typeof row.value.id === 'string') exportPaths.push(row.value.id);
+  for (const row of ctx.kv.list<{ spec?: { export_path?: string } }>({
+    prefix: '/xinas/v1/observed/ExportRule/',
+  })) {
+    const path = row.value.spec?.export_path;
+    if (typeof path === 'string') exportPaths.push(path);
   }
 
   const desiredShares: FsFacts['desiredShares'] = [];

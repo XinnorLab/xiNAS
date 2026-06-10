@@ -19,6 +19,7 @@ function makeCtx(spec: unknown): ExecutorContext & { lines: string[] } {
   return {
     spec,
     lines,
+    stash: {},
     emitOutput(line: string): void {
       lines.push(line);
     },
