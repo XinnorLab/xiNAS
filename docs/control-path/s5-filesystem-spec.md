@@ -103,3 +103,15 @@ Blocker codes: ADR-0007's set (`mountpoint_invalid`, `mountpoint_taken`, `backin
 - **blkid exit codes** — blkid exits 2 on "no filesystem"; the adapter must distinguish that from real failures (T5 golden).
 - **`systemctl is-enabled` vs ActiveState** — the probe's current `mount_unit_state` source predates this work; the enrichment's mountinfo cross-ref becomes the authoritative `mounted` regardless.
 - **Owner policy at create** — applied once after first mount (`chown`/`chmod` via the adapter); failure degrades to a stage failure (rollback unmounts + unmanages), not a partial half-owned state worth special-casing.
+
+### Ubuntu hardware smoke checklist (the T4 residual — run on a lab node before WS6 is declared shipped)
+
+On an Ubuntu 22.04/24.04 node with xiRAID + the rebuilt `xinas_agent` role (`Requires-Rebuild` from the T4 commit):
+
+1. `POST /filesystems` (backing + log array volumes, `log_size` larger than the log array) → task `success`; `systemctl cat <unit>` matches the rendered template; `xfs_info` shows the day-1 geometry (su/sw, external log, **clamped** log size); the mountpoint directory was created by PID1 (no agent mkdir in the journal).
+2. `systemctl is-enabled <unit>` → `enabled` (the enable symlink was written under `/etc/systemd/system` by the sandboxed agent).
+3. Export a path + open a client session → unmount apply → 412 with `dependent_share_active`/`mountpoint_exported`; tear down → unmount succeeds.
+4. `PATCH {grow:true}` after growing the backing array → `xfs_growfs` reflected in `statfs`.
+5. `PATCH {quota_mode:'pquota'}` → unit `Options=` rewritten, remount visible to a connected client (expected disruption), `mount | grep prjquota`.
+6. `DELETE` → unit gone, `daemon-reload` clean, data intact (`blkid` still shows the fs).
+7. Journal shows no EACCES/EPERM from the agent throughout (sandbox sufficiency).
