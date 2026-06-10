@@ -3,7 +3,11 @@ import type { OpenedStateStore } from '../../state/index.js';
 import type { AgentRpcClient } from '../agent-client.js';
 import type { TaskEngines } from '../context.js';
 import { PlanEngine } from '../plan/engine.js';
-import { fsCreateProvider } from '../plan/providers/filesystem.js';
+import {
+  fsCreateProvider,
+  fsMountProvider,
+  fsUnmountProvider,
+} from '../plan/providers/filesystem.js';
 import { buildNfsPlanProviders } from '../plan/providers/nfs.js';
 import { referencePlanProvider } from '../plan/providers/reference.js';
 import {
@@ -60,6 +64,8 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   planEngine.register(xiraidArrayImportProvider);
   planEngine.register(xiraidArrayDeleteProvider);
   planEngine.register(fsCreateProvider);
+  planEngine.register(fsMountProvider);
+  planEngine.register(fsUnmountProvider);
 
   return {
     planEngine,

@@ -1,7 +1,11 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { PlanEngine } from '../../../api/plan/engine.js';
-import { fsCreateProvider } from '../../../api/plan/providers/filesystem.js';
+import {
+  fsCreateProvider,
+  fsMountProvider,
+  fsUnmountProvider,
+} from '../../../api/plan/providers/filesystem.js';
 import { TaskStore } from '../../../api/tasks/store.js';
 import { SqliteKvStore } from '../../../state/backend-sqlite.js';
 import { runMigrations } from '../../../state/migrations.js';
@@ -18,6 +22,8 @@ function makeHarness() {
   });
   const engine = new PlanEngine({ store, ctx: { kv } });
   engine.register(fsCreateProvider);
+  engine.register(fsMountProvider);
+  engine.register(fsUnmountProvider);
   return { kv, store, engine };
 }
 
@@ -131,6 +137,111 @@ describe('fsCreateProvider', () => {
   it('junk spec → INVALID_ARGUMENT', async () => {
     await expect(h.engine.plan(planArgs({ mountpoint: '/x' }))).rejects.toMatchObject({
       code: 'INVALID_ARGUMENT',
+    });
+  });
+});
+
+// ---- T9: mount / unmount providers ----
+
+function seedFs(
+  kv: SqliteKvStore,
+  id: string,
+  status: Record<string, unknown>,
+): void {
+  kv.put(`/xinas/v1/observed/Filesystem/${id}`, { kind: 'Filesystem', id, status });
+}
+
+describe('fsMountProvider / fsUnmountProvider', () => {
+  let h: ReturnType<typeof makeHarness>;
+  beforeEach(() => {
+    h = makeHarness();
+    seedArray(h.kv, 'data');
+    seedFs(h.kv, 'mnt-data.mount', {
+      mountpoint: '/mnt/data',
+      backing_device: '/dev/xi_data',
+      mounted: false,
+      observed_at: 'x',
+    });
+  });
+
+  const args = (kind: string, spec: Record<string, unknown>) => ({
+    ...planArgs(spec),
+    operation_kind: kind,
+  });
+
+  it('mount: fs + backing array leased; enriched spec carries the mountpoint', async () => {
+    const { task, planResult } = await h.engine.plan(args('fs.mount', { id: 'mnt-data.mount' }));
+    expect(planResult.blockers).toEqual([]);
+    expect(planResult.risk_level).toBe('non_disruptive');
+    expect(task.affected_resources).toEqual([
+      { kind: 'Filesystem', id: 'mnt-data.mount' },
+      { kind: 'XiraidArray', id: 'data' },
+    ]);
+    const persisted = h.store.get(task.task_id)?.spec as Record<string, unknown>;
+    expect(persisted).toMatchObject({ id: 'mnt-data.mount', mounted: true, mountpoint: '/mnt/data' });
+  });
+
+  it('mount: failed backing array → backing_array_unhealthy; already mounted → warning', async () => {
+    h.kv.put('/xinas/v1/observed/XiraidArray/data', {
+      kind: 'XiraidArray',
+      id: 'data',
+      spec: { name: 'data', level: 'raid5', member_disk_ids: ['d1', 'd2', 'd3', 'd4'] },
+      status: { state: 'failed', volume_path: '/dev/xi_data', observed_at: 'x' },
+    });
+    const { planResult } = await h.engine.plan(args('fs.mount', { id: 'mnt-data.mount' }));
+    expect(planResult.blockers.map((b) => b.code)).toEqual(['backing_array_unhealthy']);
+
+    seedFs(h.kv, 'mnt-up.mount', {
+      mountpoint: '/mnt/up',
+      backing_device: '/dev/none',
+      mounted: true,
+      observed_at: 'x',
+    });
+    const up = await h.engine.plan(args('fs.mount', { id: 'mnt-up.mount' }));
+    expect(up.planResult.warnings.map((w) => w.code)).toContain('fs_already_mounted');
+  });
+
+  it('unmount: sessions + exports under the mountpoint block; shares are blast radius', async () => {
+    seedFs(h.kv, 'mnt-data.mount', {
+      mountpoint: '/mnt/data',
+      backing_device: '/dev/xi_data',
+      mounted: true,
+      observed_at: 'x',
+    });
+    h.kv.put('/xinas/v1/observed/NfsSession/s1', {
+      kind: 'NfsSession',
+      id: 's1',
+      spec: { client_addr: '10.0.0.1', export_path: '/mnt/data/share' },
+      status: { proto_version: 'v4.2', locked_files: 0 },
+    });
+    h.kv.put('/xinas/v1/observed/ExportRule/exp1', {
+      kind: 'ExportRule',
+      id: '/mnt/data/share',
+      spec: {},
+      status: {},
+    });
+    h.kv.put('/xinas/v1/desired/Share/share01', {
+      kind: 'Share',
+      id: 'share01',
+      spec: { path: '/mnt/data/share' },
+    });
+
+    const { planResult } = await h.engine.plan(args('fs.unmount', { id: 'mnt-data.mount' }));
+    expect(planResult.blockers.map((b) => b.code).sort()).toEqual([
+      'dependent_share_active',
+      'mountpoint_exported',
+    ]);
+    expect(planResult.risk_level).toBe('disruptive');
+    expect((planResult.diff as { blast_radius?: unknown[] }).blast_radius).toEqual([
+      { kind: 'Share', id: 'share01', path: '/mnt/data/share' },
+    ]);
+  });
+
+  it('unmount of a quiet fs → no blockers; unknown id → NOT_FOUND', async () => {
+    const { planResult } = await h.engine.plan(args('fs.unmount', { id: 'mnt-data.mount' }));
+    expect(planResult.blockers).toEqual([]);
+    await expect(h.engine.plan(args('fs.unmount', { id: 'ghost.mount' }))).rejects.toMatchObject({
+      code: 'NOT_FOUND',
     });
   });
 });

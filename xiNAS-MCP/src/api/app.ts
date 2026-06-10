@@ -122,8 +122,11 @@ export function createApp(ctx: ApiContext): Express {
   for (const route of mutatingRoutes) {
     // POST /arrays is the real S3 create/import route mounted above.
     if (route !== '/arrays' && route !== '/filesystems') v1.post(route, executorUnavailable(ctx));
-    // PATCH + DELETE /arrays/:id are the real S4 modify/delete routes.
-    if (route !== '/arrays/:id') v1.patch(route, executorUnavailable(ctx));
+    // PATCH + DELETE /arrays/:id are the real S4 modify/delete routes;
+    // PATCH /filesystems/:id is the real S5 one-intent route.
+    if (route !== '/arrays/:id' && route !== '/filesystems/:id') {
+      v1.patch(route, executorUnavailable(ctx));
+    }
     v1.put(route, executorUnavailable(ctx));
     if (route !== '/arrays/:id') v1.delete(route, executorUnavailable(ctx));
   }

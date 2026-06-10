@@ -13,8 +13,11 @@ import { buildMkfsArgs, humanToBytes } from '../../../lib/fs/mkfs.js';
 import { renderMountUnit, unitNameForMountpoint } from '../../../lib/fs/unit.js';
 import {
   type FsCreateFacts,
+  isUnderPath,
   parseFsCreateSpec,
   validateFsCreate,
+  validateFsMount,
+  validateFsUnmount,
 } from '../../../lib/fs/validate.js';
 import { ApiException } from '../../errors.js';
 import type { ResourceRef } from '../../tasks/types.js';
@@ -208,6 +211,135 @@ export const fsCreateProvider: PlanProvider = {
         ...(resolved !== undefined ? { resolved } : {}),
         unit_text: unitText,
       },
+    };
+  },
+};
+
+// ---- shared helpers for the id-addressed ops (T9–T11) ----
+
+interface FsRowFacts {
+  facts: FsFacts;
+  row: { id: string; mountpoint?: string; backing_device?: string; mounted?: boolean };
+  mountpoint: string;
+  backingArray: (BackingArraySpec & { name: string; state?: string }) | undefined;
+}
+
+/**
+ * Resolve the target observed Filesystem row for an id-addressed op.
+ * Absent row → NOT_FOUND; a pre-normalization row without a mountpoint
+ * cannot be operated on → FAILED_PRECONDITION (resolves on the next
+ * collector sweep).
+ */
+function requireFsRow(ctx: PlanContext, rawSpec: unknown, op: string): FsRowFacts {
+  if (
+    typeof rawSpec !== 'object' ||
+    rawSpec === null ||
+    typeof (rawSpec as { id?: unknown }).id !== 'string'
+  ) {
+    throw new ApiException(
+      'INVALID_ARGUMENT',
+      `${op} spec must carry the target filesystem id`,
+      undefined,
+      'PATCH/DELETE /filesystems/{id} injects the id from the path.',
+    );
+  }
+  const id = (rawSpec as { id: string }).id;
+  const facts = gatherFsFacts(ctx);
+  const row = facts.filesystems.find((f) => f.id === id);
+  if (!row) {
+    throw new ApiException(
+      'NOT_FOUND',
+      `filesystem ${id} not found in observed state`,
+      undefined,
+      'GET /filesystems lists the observed mount units.',
+    );
+  }
+  if (row.mountpoint === undefined) {
+    throw new ApiException(
+      'PRECONDITION_FAILED',
+      `observed row for ${id} carries no mountpoint yet (pre-normalization sweep)`,
+      { reason: 'fs_observation_incomplete' },
+      'Wait for the next agent observation sweep, then re-plan.',
+    );
+  }
+  const backingArray =
+    row.backing_device !== undefined ? facts.arraysByVolume.get(row.backing_device) : undefined;
+  return { facts, row, mountpoint: row.mountpoint, backingArray };
+}
+
+function fsAffected(row: FsRowFacts): ResourceRef[] {
+  return [
+    { kind: 'Filesystem', id: row.row.id },
+    ...(row.backingArray
+      ? [{ kind: 'XiraidArray', id: row.backingArray.name } as ResourceRef]
+      : []),
+  ];
+}
+
+/**
+ * fs.mount (PATCH {mounted:true}) — enable --now the existing unit.
+ * Blocked only by a FAILED backing array; mounting an already-mounted
+ * filesystem is an idempotent no-op (warning, not blocker).
+ */
+export const fsMountProvider: PlanProvider = {
+  operation_kind: 'fs.mount',
+
+  async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
+    const r = requireFsRow(ctx, rawSpec, 'fs.mount');
+    const blockers = validateFsMount({ arrayState: r.backingArray?.state });
+    const warnings =
+      r.row.mounted === true
+        ? [{ code: 'fs_already_mounted', message: `${r.row.id} is already mounted (no-op apply)` }]
+        : [];
+    return {
+      affected_resources: fsAffected(r),
+      blockers,
+      warnings,
+      diff: { summary: `systemctl enable --now ${r.row.id} (${r.mountpoint})` },
+      risk_level: 'non_disruptive',
+      rollback_model: 'non_disruptive',
+      enriched_spec: { id: r.row.id, mounted: true, mountpoint: r.mountpoint },
+    };
+  },
+};
+
+/**
+ * fs.unmount (PATCH {mounted:false}) — stop + disable the unit. The WS6
+ * milestone blockers live here: active NFS sessions under the
+ * mountpoint AND exported paths under it both block; dependent desired
+ * Shares are surfaced as the blast radius.
+ */
+export const fsUnmountProvider: PlanProvider = {
+  operation_kind: 'fs.unmount',
+
+  async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
+    const r = requireFsRow(ctx, rawSpec, 'fs.unmount');
+    const sessionsUnder = r.facts.sessions.filter((s) =>
+      isUnderPath(s.export_path, r.mountpoint),
+    );
+    const exportsUnder = r.facts.exportPaths.filter((p) => isUnderPath(p, r.mountpoint));
+    const blockers = validateFsUnmount({ sessionsUnder, exportsUnder });
+    const blastRadius = r.facts.desiredShares.filter((s) => isUnderPath(s.path, r.mountpoint));
+    const warnings =
+      r.row.mounted === false
+        ? [
+            {
+              code: 'fs_already_unmounted',
+              message: `${r.row.id} is already unmounted (apply only disables the unit)`,
+            },
+          ]
+        : [];
+    return {
+      affected_resources: fsAffected(r),
+      blockers,
+      warnings,
+      diff: {
+        summary: `systemctl stop+disable ${r.row.id} (${r.mountpoint})`,
+        blast_radius: blastRadius.map((s) => ({ kind: 'Share', id: s.id, path: s.path })),
+      },
+      risk_level: 'disruptive',
+      rollback_model: 'non_disruptive',
+      enriched_spec: { id: r.row.id, mounted: false, mountpoint: r.mountpoint },
     };
   },
 };

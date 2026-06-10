@@ -103,14 +103,132 @@ describe('POST /api/v1/filesystems', () => {
     expect((res.body.errors[0].details?.blockers as Array<{ code: string }>).length).toBeGreaterThan(0);
   });
 
-  it('PATCH/DELETE /filesystems/:id keep the unsupported-stub envelope (until T9-T11)', async () => {
-    for (const method of ['patch', 'delete'] as const) {
-      const res = await request(setup.app)
-        [method]('/api/v1/filesystems/mnt-data.mount')
-        .set('Authorization', ADMIN_TOKEN)
-        .send({ mode: 'plan' });
-      expect(res.status).toBeGreaterThanOrEqual(422);
-      expect(String(res.body.errors[0].details?.code)).toMatch(/^EXECUTOR_/);
-    }
+  it('DELETE /filesystems/:id keeps the unsupported-stub envelope (until T11)', async () => {
+    const res = await request(setup.app)
+      .delete('/api/v1/filesystems/mnt-data.mount')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({ mode: 'plan' });
+    expect(res.status).toBeGreaterThanOrEqual(422);
+    expect(String(res.body.errors[0].details?.code)).toMatch(/^EXECUTOR_/);
+  });
+});
+
+// ---- T9: PATCH /filesystems/:id (one-intent mount/unmount) ----
+
+describe('PATCH /api/v1/filesystems/:id', () => {
+  let setup: MockAgentSetup;
+
+  beforeEach(async () => {
+    setup = await buildTestAppWithMockAgent();
+    setup.state.kv.put('/xinas/v1/observed/XiraidArray/data', {
+      kind: 'XiraidArray',
+      id: 'data',
+      spec: { name: 'data', level: 'raid5', member_disk_ids: ['d1', 'd2', 'd3', 'd4'] },
+      status: { state: 'optimal', volume_path: '/dev/xi_data', observed_at: 'x' },
+    });
+    setup.state.kv.put('/xinas/v1/observed/Filesystem/mnt-data.mount', {
+      kind: 'Filesystem',
+      id: 'mnt-data.mount',
+      status: {
+        mountpoint: '/mnt/data',
+        backing_device: '/dev/xi_data',
+        mounted: true,
+        observed_at: 'x',
+      },
+    });
+  });
+  afterEach(async () => {
+    await setup.teardown();
+  });
+
+  function fsRevision(): number {
+    return setup.state.kv.get('/xinas/v1/observed/Filesystem/mnt-data.mount')?.revision ?? 0;
+  }
+
+  async function patchPlan(spec: Record<string, unknown>) {
+    return request(setup.app)
+      .patch('/api/v1/filesystems/mnt-data.mount')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({ mode: 'plan', spec });
+  }
+
+  it('identity keys → 422 fs_identity_immutable before any plan', async () => {
+    const res = await patchPlan({ mountpoint: '/elsewhere' });
+    expect(res.status).toBe(422);
+    expect(res.body.errors[0].details?.reason).toBe('fs_identity_immutable');
+    expect(res.body.errors[0].details?.field).toBe('mountpoint');
+  });
+
+  it('multi-intent → 400 INVALID_ARGUMENT', async () => {
+    const res = await patchPlan({ mounted: false, grow: true });
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0].code).toBe('INVALID_ARGUMENT');
+  });
+
+  it('unmount plan → 200 disruptive; apply with stale revision → 412; fresh → 202', async () => {
+    setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-um' });
+    const planned = await patchPlan({ mounted: false });
+    expect(planned.status).toBe(200);
+    expect(planned.body.result.risk_level).toBe('disruptive');
+    expect(planned.body.result.observed_revision_expected).toBe(fsRevision());
+
+    const stale = await request(setup.app)
+      .patch('/api/v1/filesystems/mnt-data.mount')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({
+        mode: 'apply',
+        plan_id: planned.body.result.plan_id,
+        expected_revision: fsRevision() + 7,
+        idempotency_key: 'idem-um-stale',
+      });
+    expect(stale.status).toBe(412);
+    expect(stale.body.errors[0].details?.reason).toBe('observed_revision_stale');
+
+    const res = await request(setup.app)
+      .patch('/api/v1/filesystems/mnt-data.mount')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({
+        mode: 'apply',
+        plan_id: planned.body.result.plan_id,
+        expected_revision: fsRevision(),
+        idempotency_key: 'idem-um',
+      });
+    expect(res.status).toBe(202);
+    expect(res.body.result.kind).toBe('fs.unmount');
+    expect(res.body.result.state).toBe('running');
+    const begin = setup.mockAgent.lastTaskBeginParams();
+    expect((begin?.spec as Record<string, unknown>)?.mountpoint).toBe('/mnt/data');
+  });
+
+  it('apply re-check: a session appearing after plan blocks the unmount apply', async () => {
+    const planned = await patchPlan({ mounted: false });
+    expect(planned.body.result.blockers).toEqual([]);
+    setup.state.kv.put('/xinas/v1/observed/NfsSession/s1', {
+      kind: 'NfsSession',
+      id: 's1',
+      spec: { client_addr: '10.0.0.9', export_path: '/mnt/data/x' },
+      status: { proto_version: 'v4.2', locked_files: 1 },
+    });
+    const res = await request(setup.app)
+      .patch('/api/v1/filesystems/mnt-data.mount')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({
+        mode: 'apply',
+        plan_id: planned.body.result.plan_id,
+        expected_revision: fsRevision(),
+        idempotency_key: 'idem-recheck',
+      });
+    expect(res.status).toBe(412);
+    expect(
+      (res.body.errors[0].details?.blockers as Array<{ code: string }>).map((b) => b.code),
+    ).toContain('dependent_share_active');
+  });
+
+  it('mount plan on an unknown id → 404', async () => {
+    const res = await request(setup.app)
+      .patch('/api/v1/filesystems/ghost.mount')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({ mode: 'plan', spec: { mounted: true } });
+    expect(res.status).toBe(404);
   });
 });
