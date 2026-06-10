@@ -672,8 +672,32 @@ components:
           required: [fs_type, backing_device, mountpoint]
           properties:
             fs_type: { type: string, enum: [xfs] }
-            backing_device: { type: string }
+            backing_device:
+              type: string
+              description: "MUST be an observed XiraidArray volume_path (ADR-0007)."
             mountpoint: { type: string }
+            label:
+              type: [string, "null"]
+              description: "mkfs.xfs -L; defaults to the escaped mountpoint leaf."
+            log_device:
+              type: [string, "null"]
+              description: "External XFS log device (mkfs -l logdev= + mount Options logdev=). MUST be an observed XiraidArray volume_path when set."
+            log_size:
+              type: [string, "null"]
+              description: "Log size cap (e.g. 1G); clamped at mkfs time to the log device's actual size (the day-1 _effective_log_size formula)."
+            sector_size:
+              type: [integer, "null"]
+              description: "mkfs -s size=; default 4096."
+            su_kb:
+              type: [integer, "null"]
+              description: "Stripe unit override; auto-derived from the backing array's observed geometry when omitted."
+            sw:
+              type: [integer, "null"]
+              description: "Stripe width override; auto-derived (data drives = members - parity) when omitted."
+            force:
+              type: boolean
+              default: false
+              description: "Overwrite an existing filesystem on the device (destructive — the apply must carry dangerous: true)."
             mount_options:
               type: array
               items: { type: string }
@@ -690,7 +714,17 @@ components:
           type: object
           required: [mounted, uuid, size_bytes, free_bytes, observed_at]
           properties:
+            # `mounted` is THE canonical observed mount flag (ADR-0007
+            # §Observation normalization; the former duplicate
+            # `currently_mounted` was removed from the contract in S5).
             mounted: { type: boolean }
+            fs_type: { type: string }
+            backing_device:
+              type: string
+              description: "From the .mount unit's What= (observed)."
+            mountpoint:
+              type: string
+              description: "From the .mount unit's Where= (observed)."
             uuid: { type: string }
             size_bytes: { type: integer, format: int64 }
             free_bytes: { type: integer, format: int64 }
@@ -698,8 +732,6 @@ components:
             effective_mount_options:
               type: array
               items: { type: string }
-            currently_mounted:
-              type: boolean
             mount_options:
               type: array
               items:
@@ -1741,6 +1773,15 @@ paths:
       tags: [storage]
       operationId: updateFilesystem
       summary: Mount, unmount, grow, or change quota mode (plan/apply).
+      description: |
+        ONE intent key per PATCH spec — exactly one of `mounted` (boolean →
+        fs.mount/fs.unmount), `grow: true` (→ fs.grow), or `quota_mode`
+        (→ fs.set_quota_mode, a client-visible remount). Multiple intent
+        keys → `INVALID_ARGUMENT`. Identity fields (`mountpoint`,
+        `backing_device`, `log_device`, `label`, `su_kb`, `sw`,
+        `sector_size`, `log_size`, `fs_type`) → per-field `UNSUPPORTED`
+        with `reason: fs_identity_immutable` (re-create to change,
+        ADR-0007 writability matrix).
       requestBody: { $ref: '#/components/requestBodies/Mutating' }
       responses:
         '200': { $ref: '#/components/responses/PlanReturned' }

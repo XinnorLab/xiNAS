@@ -41,6 +41,17 @@ describe('arrays mutation methods are not enumerated stubs (superseded by task e
   );
 });
 
+// ---- fs mutation methods are NOT api→agent stubs (superseded, S5) ----
+
+describe('fs mutation methods are not enumerated stubs (superseded by task envelope, S5)', () => {
+  it.each(['fs.create', 'fs.mount', 'fs.unmount', 'fs.grow', 'fs.set_quota_mode'])(
+    '%s is NOT in STUB_METHODS (mutations dispatch via task.begin)',
+    (m) => {
+      expect(STUB_METHODS).not.toHaveProperty(m);
+    },
+  );
+});
+
 // ---- all ADR-0002 enumerated methods are in the stub list ----
 
 const REQUIRED_STUB_METHODS = [
@@ -56,11 +67,8 @@ const REQUIRED_STUB_METHODS = [
   // arrays.create/delete/import + spare.set: superseded by the task envelope
   // (S3, ADR-0006) — see the describe block above. Only the read stub remains.
   'arrays.list',
-  'fs.create',
-  'fs.mount',
-  'fs.unmount',
-  'fs.grow',
-  'fs.set_quota_mode',
+  // fs.create/mount/unmount/grow/set_quota_mode: superseded by the task
+  // envelope (S5, ADR-0007) — see the describe block above.
   'nfs.exports.add',
   'nfs.exports.update',
   'nfs.exports.remove',

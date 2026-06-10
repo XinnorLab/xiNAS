@@ -1,0 +1,43 @@
+{
+  "kind": "Filesystem",
+  "id": "mnt-data.mount",
+  "metadata": {
+    "revision": 3,
+    "created_at": "2026-06-10T16:00:00Z",
+    "modified_at": "2026-06-10T16:42:11Z",
+    "owner": "system:installer",
+    "source": "ansible:raid_fs",
+    "validation_status": "valid"
+  },
+  "spec": {
+    "fs_type": "xfs",
+    "backing_device": "/dev/xi_data",
+    "mountpoint": "/mnt/data",
+    "label": "data",
+    "log_device": "/dev/xi_log",
+    "log_size": "1G",
+    "sector_size": 4096,
+    "su_kb": null,
+    "sw": null,
+    "force": false,
+    "mount_options": ["noatime", "nodiratime", "logbsize=256k", "largeio", "inode64"],
+    "quota_mode": "uquota",
+    "owner_policy": { "uid": 0, "gid": 0, "mode": "0755" }
+  },
+  "status": {
+    "mounted": true,
+    "fs_type": "xfs",
+    "backing_device": "/dev/xi_data",
+    "mountpoint": "/mnt/data",
+    "uuid": "3f1f8a52-1111-2222-3333-444455556666",
+    "size_bytes": 15360000000000,
+    "free_bytes": 15300000000000,
+    "label": "data",
+    "effective_mount_options": ["rw", "noatime", "logdev=/dev/xi_log", "usrquota"],
+    "mount_options": ["noatime", "nodiratime"],
+    "mount_unit_name": "mnt-data.mount",
+    "mount_unit_enabled": true,
+    "mount_unit_state": "active",
+    "observed_at": "2026-06-10T16:42:11Z"
+  }
+}

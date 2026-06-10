@@ -51,12 +51,10 @@ const STUB_METHOD_NAMES = [
   // envelope in S3 (ADR-0006): mutations dispatch via task.begin + the
   // executor registry, so those names left the enumerated RPC surface.
   'arrays.list',
-  // Filesystem (S4/WS6)
-  'fs.create',
-  'fs.mount',
-  'fs.unmount',
-  'fs.grow',
-  'fs.set_quota_mode',
+  // Filesystem: fs.create/mount/unmount/grow/set_quota_mode were superseded
+  // by the task envelope in S5 (ADR-0007): mutations dispatch via task.begin
+  // + the executor registry, so those names left the enumerated RPC surface.
+  // (The on-demand reads filesystems.list/mounts.list above remain WS12.)
   // NFS exports (S5/WS7)
   'nfs.exports.add',
   'nfs.exports.update',
