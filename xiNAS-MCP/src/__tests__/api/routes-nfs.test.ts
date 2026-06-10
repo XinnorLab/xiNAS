@@ -173,6 +173,54 @@ describe('NFS routes', () => {
     });
   });
 
+  it('GET /nfs-profiles/{id} folds observed status.running alongside effective_files', async () => {
+    seedNfsProfile(setup.state);
+    const running = {
+      thread_count: 64,
+      rdma_listening: true,
+      rdma_port: 20049,
+      active_versions: ['3', '4.1', '4.2'],
+    };
+    setup.state.kv.put('/xinas/v1/observed/NfsProfile/default', {
+      kind: 'NfsProfile',
+      id: 'default',
+      status: {
+        effective_files: {
+          '/etc/nfs/nfsd.conf':
+            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        },
+        running,
+        observed_at: '2026-06-10T12:00:00.000Z',
+      },
+    });
+    const res = await request(setup.app)
+      .get('/api/v1/nfs-profiles/default')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(res.status).toBe(200);
+    expect(res.body.result.status.running).toEqual(running);
+    expect(res.body.result.status.effective_files).toEqual({
+      '/etc/nfs/nfsd.conf':
+        'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    });
+  });
+
+  it('GET /nfs-profiles/{id} observed row without running → no running key', async () => {
+    seedNfsProfile(setup.state);
+    setup.state.kv.put('/xinas/v1/observed/NfsProfile/default', {
+      kind: 'NfsProfile',
+      id: 'default',
+      status: {
+        effective_files: {},
+        observed_at: '2026-06-10T12:00:00.000Z',
+      },
+    });
+    const res = await request(setup.app)
+      .get('/api/v1/nfs-profiles/default')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(res.status).toBe(200);
+    expect(res.body.result.status).not.toHaveProperty('running');
+  });
+
   it('GET /nfs-profiles/{id} without an observed row leaves status untouched', async () => {
     seedNfsProfile(setup.state);
     const res = await request(setup.app)

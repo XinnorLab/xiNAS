@@ -59,4 +59,78 @@ describe('nfs-profile probe', () => {
     const snap = await probe.snapshot();
     expect(snap.effective_files).toEqual({});
   });
+
+  describe('status.running (/proc/fs/nfsd)', () => {
+    async function seedNfsdProc(files: Record<string, string>): Promise<void> {
+      await mkdir(join(root, 'proc/fs/nfsd'), { recursive: true });
+      for (const [name, content] of Object.entries(files)) {
+        await writeFile(join(root, 'proc/fs/nfsd', name), content);
+      }
+    }
+
+    it('nfsd up: parses threads, versions, and portlist into running', async () => {
+      await seedNfsdProc({
+        threads: '64\n',
+        versions: '-2 +3 +4 +4.1 +4.2\n',
+        portlist: 'rdma 20049\ntcp 2049\nudp 2049\n',
+      });
+      const snap = await createNfsProfileProbe({ root }).snapshot();
+      expect(snap.running).toEqual({
+        thread_count: 64,
+        rdma_listening: true,
+        rdma_port: 20049,
+        active_versions: ['3', '4.0', '4.1', '4.2'],
+      });
+    });
+
+    it('no rdma listener: rdma_listening false, rdma_port omitted', async () => {
+      await seedNfsdProc({
+        threads: '8\n',
+        versions: '+3 +4 +4.1 +4.2\n',
+        portlist: 'tcp 2049\nudp 2049\n',
+      });
+      const snap = await createNfsProfileProbe({ root }).snapshot();
+      expect(snap.running).toEqual({
+        thread_count: 8,
+        rdma_listening: false,
+        active_versions: ['3', '4.0', '4.1', '4.2'],
+      });
+      expect(snap.running).not.toHaveProperty('rdma_port');
+    });
+
+    it('threads file absent (nfsd down) → running omitted entirely', async () => {
+      // versions/portlist present without threads should still be treated
+      // as down — threads is the anchor.
+      await seedNfsdProc({ versions: '+3 +4\n', portlist: 'tcp 2049\n' });
+      await rm(join(root, 'proc/fs/nfsd/threads'), { force: true });
+      const snap = await createNfsProfileProbe({ root }).snapshot();
+      expect(snap).not.toHaveProperty('running');
+    });
+
+    it('threads present with junk content → running omitted', async () => {
+      await seedNfsdProc({ threads: 'garbage\n' });
+      const snap = await createNfsProfileProbe({ root }).snapshot();
+      expect(snap).not.toHaveProperty('running');
+    });
+
+    it('threads readable but versions/portlist absent → degraded running', async () => {
+      await seedNfsdProc({ threads: '16\n' });
+      const snap = await createNfsProfileProbe({ root }).snapshot();
+      expect(snap.running).toEqual({
+        thread_count: 16,
+        rdma_listening: false,
+        active_versions: [],
+      });
+    });
+
+    it('conf files are still checksummed independently of running', async () => {
+      const nfsdConf = '[nfsd]\nthreads=64\n';
+      await mkdir(join(root, 'etc/nfs'), { recursive: true });
+      await writeFile(join(root, '/etc/nfs/nfsd.conf'), nfsdConf);
+      await seedNfsdProc({ threads: '64\n', versions: '+3\n', portlist: 'tcp 2049\n' });
+      const snap = await createNfsProfileProbe({ root }).snapshot();
+      expect(snap.effective_files['/etc/nfs/nfsd.conf']).toBe(sha256(nfsdConf));
+      expect(snap.running?.thread_count).toBe(64);
+    });
+  });
 });

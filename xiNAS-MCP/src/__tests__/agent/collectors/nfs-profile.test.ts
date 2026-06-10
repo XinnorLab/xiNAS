@@ -8,13 +8,27 @@ const FILES = {
     'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
 };
 
+const RUNNING = {
+  thread_count: 64,
+  rdma_listening: true,
+  rdma_port: 20049,
+  active_versions: ['3', '4.1', '4.2'],
+};
+
 function makeFakeNfsProfileProbe(
-  options: { effective_files?: Record<string, string>; error?: Error } = {},
+  options: {
+    effective_files?: Record<string, string>;
+    running?: typeof RUNNING;
+    error?: Error;
+  } = {},
 ) {
   return {
     read: options.error
       ? vi.fn().mockRejectedValue(options.error)
-      : vi.fn().mockResolvedValue({ effective_files: options.effective_files ?? FILES }),
+      : vi.fn().mockResolvedValue({
+          effective_files: options.effective_files ?? FILES,
+          ...(options.running !== undefined ? { running: options.running } : {}),
+        }),
   };
 }
 
@@ -29,6 +43,23 @@ describe('NfsProfileCollector', () => {
     const status = deltas[0]?.value?.status as Record<string, unknown>;
     expect(status?.effective_files).toEqual(FILES);
     expect(typeof status?.observed_at).toBe('string');
+  });
+
+  it('initialSweep: probe running → status.running emitted verbatim', async () => {
+    const probe = makeFakeNfsProfileProbe({ running: RUNNING });
+    const col = new NfsProfileCollector({ probe });
+    const deltas = await col.initialSweep();
+    const status = deltas[0]?.value?.status as Record<string, unknown>;
+    expect(status?.running).toEqual(RUNNING);
+    expect(status?.effective_files).toEqual(FILES);
+  });
+
+  it('initialSweep: probe without running → status has no running key', async () => {
+    const probe = makeFakeNfsProfileProbe();
+    const col = new NfsProfileCollector({ probe });
+    const deltas = await col.initialSweep();
+    const status = deltas[0]?.value?.status as Record<string, unknown>;
+    expect(status).not.toHaveProperty('running');
   });
 
   it('id "default" passes the observed-id key guard', () => {
