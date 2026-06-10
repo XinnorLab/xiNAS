@@ -19,7 +19,9 @@
 - `src/api/handlers/plan-apply.ts` — shared envelope helpers (S3 T8); routes reuse.
 - `src/agent/xiraid/{client,fake-transport}.ts` — extend, don't fork.
 - `src/grpc/{raid,pool}.ts` — `raidModify`, `raidImportShow`, `raidImportApply`, `poolCreate/Delete/Add/Remove` wrappers all EXIST (verified).
-- Dep-walk sources (verified shapes): observed `Filesystem` (`spec.backing_device`, `spec.mountpoint`, `status.currently_mounted`), desired `Share` (`spec.path`), observed `NfsSession` (`spec.export_path`).
+- Dep-walk sources (verified shapes): observed `Filesystem` rows have **no `spec`** — `backing_device`, `mountpoint`, `currently_mounted` all live under **`status`** (`collectors/filesystem.ts` `_fsToUpsert`); desired `Share` (`spec.path`); observed `NfsSession` (`spec.export_path`).
+- `lib/parse/mountinfo.ts` (`parseMountinfo`, `MountEntry`) — the delete executor's host-level mount guard reads `/proc/self/mountinfo` through it.
+- Pool lifecycle (analyst doc §3.8): `create → activate → [auto-replace armed]`; `deactivate → delete`. `poolActivate`/`poolDeactivate` wrappers exist in `src/grpc/pool.ts`.
 
 ## File structure
 
@@ -88,11 +90,14 @@ poolCreate(req: { name: string; drives: string[] }): Promise<void>;
 poolDelete(req: { name: string }): Promise<void>;
 poolAdd(req: { name: string; drives: string[] }): Promise<void>;
 poolRemove(req: { name: string; drives: string[] }): Promise<void>;
+poolActivate(req: { name: string }): Promise<void>;
+poolDeactivate(req: { name: string }): Promise<void>;
+poolShow(): Promise<unknown>;
 raidImportShow(): Promise<unknown>;
 raidImportApply(req: { uuid: string; new_name?: string }): Promise<void>;
 raidDestroy(req: { name: string; force?: boolean; config_only?: boolean }): Promise<void>;
 ```
-Fake tests: pool create/dup/add/remove/delete round-trip persisted; `raidModify` sets `sparepool` + echoes tuning fields onto the array entry; `raidImportShow` returns seeded `import_candidates`; `raidImportApply` known-uuid moves it into `arrays` under `new_name ?? name` / unknown-uuid rejects; `raidDestroy({config_only:true})` removes the entry but leaves a `data_wiped` marker UNSET (plain destroy sets `data_wiped:true` on a tombstone list — the e2e asserts un-adopt ≠ wipe); every mutating verb on a name ending `-fail` rejects.
+Fake tests: pool create/dup/add/remove/activate/deactivate/delete round-trip persisted (`pools: [{name, drives, active}]`; **deleting an ACTIVE pool rejects** — forces deactivate-first); `raidModify` sets `sparepool` + echoes tuning fields onto the array entry; `raidImportShow` returns seeded `import_candidates`; `raidImportApply` known-uuid moves it into `arrays` under `new_name ?? name` / unknown-uuid rejects; `raidDestroy({config_only:true})` removes the entry WITHOUT a `data_wiped` tombstone (plain destroy records `data_wiped:true` — the e2e asserts un-adopt ≠ wipe); failure hooks: every mutating verb on a name ending `-fail` rejects, AND `raidModify` carrying tuning keys (any field beyond `name`/`sparepool`) on a name ending `-fail-tuning` rejects (targets the tuning stage; pool ops on `xnsp_<name>` still succeed — a plain `-fail` name would trip the pool ops first).
 - [ ] **Step 3: Run — fails. Implement** client delegations (same `#track` availability wrapper) + fake state `{ arrays, pools, import_candidates, tombstones }`.
 - [ ] **Step 4: Run — passes** (+ `npx tsc --noEmit`). **Commit:** `feat(agent): T2 — xiraid client verbs (modify/pool/import) + fake transport state`
 
@@ -103,15 +108,15 @@ Fake tests: pool create/dup/add/remove/delete round-trip persisted; `raidModify`
 - [ ] **Step 1: Failing tests.**
   - validate: `spare_pool_deferred` is GONE (create spec with spares + valid spare disks → `[]`); spare disks get the member checks (`disk_not_found`/`disk_not_safe`/`disk_is_system`/`disk_in_use`), with `ownSpareDiskIds: Set<string>` in facts exempting this array's current spares from `disk_in_use`; `validateModifySpec({spare_disk_ids?, tuning?}, facts)` reuses the tuning ranges; derived pool name guard: `xnsp_<name>` length > 63 → blocker `name_invalid`.
   - translate: create spec with spares → `sparepool: 'xnsp_<name>'` in the request and spare drives are NOT in `drives`; `toRaidModifyRequest({name, tuning})` golden (boolean→0/1, null dropped, never `force`); `toRaidModifyRequest({name, sparepool})` attach/detach (`''`).
-- [ ] **Step 2: Run — fails. Implement.** `parseModifySpec` (narrowing: only `spare_disk_ids`/`tuning` keys allowed — topology keys present is the ROUTE's 422, but the parser throws on them too as defense).
+- [ ] **Step 2: Run — fails. Implement.** `parseModifySpec` is **tolerant** (mirrors `parseCreateSpec`): narrows `spare_disk_ids`/`tuning` when present and **ignores unknown keys** — the persisted enriched spec (`id`, `device_by_id`, `current_*`) must re-parse cleanly for the route's apply re-check (§8 of the spec). Topology-key rejection is the ROUTE's job against the raw PATCH body only. Test: `parseModifySpec({spare_disk_ids:['d'], tuning:{}, id:'x', device_by_id:{}, current_sparepool:''})` parses.
 - [ ] **Step 3: Run — passes.** **Commit:** `feat(lib): T3 — modify validation + raid_modify/sparepool translation (spare un-deferral)`
 
 ## Task T4: Create-with-spares (provider + executor)
 
 **Files:** Modify `xiNAS-MCP/src/api/plan/providers/xiraid-array.ts`, `xiNAS-MCP/src/agent/task/xiraid-array-executor.ts`; extend both test files.
 
-- [ ] **Step 1: Failing tests.** Provider: create spec with `spare_disk_ids` → no blockers (safe spares), `affected_resources` = [array, …members, …spares], `device_by_id` includes spares, diff request carries `sparepool`. Executor (fake transport): create-with-spares → `pool_create('xnsp_data', spareDevices)` happened BEFORE `raid_create` (fake records op order) and the array entry has `sparepool: 'xnsp_data'`; create failure after pool creation → rollback deletes BOTH the array (if present) and `xnsp_data`.
-- [ ] **Step 2: Run — fails. Implement.** Provider: spares resolved+leased exactly like members. Executor `create` stage: when spares present → `client.poolCreate({name: poolName, drives: spareDrives})` then `raidCreate({..., sparepool: poolName})`; `rollback`: after the existing array-destroy logic, `poolDelete` `xnsp_<name>` if the fake/live pool list has it (add `poolExists` via a `poolShow`-free read: keep a `raidShow`-style `poolList()` on the transport? NO — reuse `poolDelete` tolerating missing? Cleaner: transport gains `poolShow(): Promise<unknown>` in T2 if this lands awkwardly; decide in-code, prefer `poolDelete` + swallow not-found from the fake with a `missing_ok` flag on the FAKE only being wrong — implement `poolShow()` properly: add it to T2's interface while executing T2).
+- [ ] **Step 1: Failing tests.** Provider: create spec with `spare_disk_ids` → no blockers (safe spares), `affected_resources` = [array, …members, …spares], `device_by_id` includes spares, diff request carries `sparepool`. Executor (fake transport): create-with-spares → op order is `pool_create('xnsp_data', spareDevices)` → `pool_activate('xnsp_data')` → `raid_create` (fake records op order); the array entry has `sparepool: 'xnsp_data'` and the pool is `active: true`; create failure after pool creation → rollback destroys the array (if present) AND `pool_deactivate` + `pool_delete` `xnsp_data`.
+- [ ] **Step 2: Run — fails. Implement.** Provider: spares resolved+leased exactly like members. Executor `create` stage: when spares present → `poolCreate` → `poolActivate` → `raidCreate({..., sparepool})`. `rollback`: after the existing array-destroy logic, read `poolShow()` (added in T2) and, when `xnsp_<name>` is listed, `poolDeactivate` (tolerate already-inactive) + `poolDelete`.
 - [ ] **Step 3: Run — passes** (+ S3 e2e still green later in T11). **Commit:** `feat(xiraid): T4 — create-with-spares (pool provisioning + rollback cleanup)`
 
 ## Task T5: Modify provider + PATCH route
@@ -129,13 +134,13 @@ Fake tests: pool create/dup/add/remove/delete round-trip persisted; `raidModify`
 **Files:** Modify `xiNAS-MCP/src/agent/task/xiraid-array-executor.ts`, `xiNAS-MCP/src/agent/task/wiring.ts` (register); extend the executor test file.
 
 - [ ] **Step 1: Failing tests** (TaskRunner + fake transport; array `data` pre-seeded):
-  - attach: spec `{id:'data', spare_disk_ids:['d5'], device_by_id:{d5:'/dev/nvme5n1'}, current_sparepool:'', current_spare_disk_ids:[]}` → stages `preflight`/`apply_spares`/`verify` (no `apply_tuning` when tuning absent) → success; fake pools has `xnsp_data` and the array's `sparepool === 'xnsp_data'`.
-  - membership change (current pool `xnsp_data` exists): `pool_add`/`pool_remove` deltas only — no pool re-create.
-  - detach: `spare_disk_ids: []` → `raid_modify {sparepool:''}` + `pool_delete`.
-  - tuning-only: single `raid_modify`, no pool calls, stage list `preflight`/`apply_tuning`/`verify`.
+  - attach: spec `{id:'data', spare_disk_ids:['d5'], device_by_id:{d5:'/dev/nvme5n1'}, current_sparepool:'', current_spare_disk_ids:[]}` → stages `preflight`/`apply_spares`/`verify` (`apply_tuning` emits `skipped`) → success; op order `pool_create` → `pool_activate` → `raid_modify{sparepool}`; fake pools has `xnsp_data` with `active: true` and the array's `sparepool === 'xnsp_data'`.
+  - membership change (current ACTIVE pool `xnsp_data` exists): `pool_add`/`pool_remove` deltas only — no re-create, no activation churn.
+  - detach: `spare_disk_ids: []` → `raid_modify {sparepool:''}` → `pool_deactivate` → `pool_delete` (the fake rejects deleting an active pool, so wrong ordering fails the test).
+  - tuning-only: single `raid_modify`, no pool calls, `apply_spares` emits `skipped`.
   - foreign pool: array's `sparepool` is `legacy0` → `preflight` fails, terminal failed, no pool calls.
-  - rollback: `apply_tuning` forced to fail (name `tune-fail` hook? — tuning applies to the existing array name; use the `-fail` name on the ARRAY: seed array `mod-fail`… the fake rejects mutating verbs on `-fail` names, so `raid_modify` on `mod-fail` rejects) after a successful attach → rollback removes `xnsp_mod-fail` + clears sparepool; terminal `failed (FAILED_PARTIAL_ROLLED_BACK)`.
-- [ ] **Step 2: Run — fails. Implement** `makeXiraidArrayModifyExecutor({client})`: stage construction is dynamic per spec (compose the stage array from which keys are present — the Executor interface takes a fixed `stages` list, so include both and make each a no-op when its key is absent, emitting `skipped (no <key> change)`); rollback computes inverse pool ops from `current_*` vs live pool/array state. Register in `wiring.ts`.
+  - rollback: seed array **`arr-fail-tuning`** with spec attaching a spare + tuning — pool ops on `xnsp_arr-fail-tuning` succeed (only the `-fail-tuning` + tuning-keys `raidModify` hook rejects), `apply_spares` succeeds (its `raid_modify` carries only `sparepool`), then `apply_tuning`'s tuning-carrying `raid_modify` rejects → rollback deactivates+deletes `xnsp_arr-fail-tuning` + clears `sparepool`; terminal `failed (FAILED_PARTIAL_ROLLED_BACK)`.
+- [ ] **Step 2: Run — fails. Implement** `makeXiraidArrayModifyExecutor({client})`: the Executor interface takes a fixed `stages` list, so both `apply_spares` and `apply_tuning` are always present and each no-ops with `skipped (no <key> change)` when its key is absent; attach/detach follow the activation ordering above; rollback computes inverse pool ops (incl. activation state) from `current_*` vs live pool/array state. Register in `wiring.ts`.
 - [ ] **Step 3: Run — passes.** **Commit:** `feat(agent): T6 — xiraid.array.modify executor (pool lifecycle, tuning last, inverse rollback)`
 
 ## Task T7: Import provider + POST import-shape
@@ -162,7 +167,7 @@ Fake tests: pool create/dup/add/remove/delete round-trip persisted; `raidModify`
 **Files:** Modify `xiNAS-MCP/src/api/plan/providers/xiraid-array.ts`, `xiNAS-MCP/src/api/routes/arrays.ts`, `xiNAS-MCP/src/api/app.ts` (drop the DELETE stub), `build.ts`; extend provider + route tests.
 
 - [ ] **Step 1: Failing tests.**
-  - Provider (seed observed array `data` w/ volume_path `/dev/xi_data`; observed Filesystem `fs1 {spec:{backing_device:'/dev/xi_data', mountpoint:'/mnt/d'}, status:{currently_mounted:true}}`; desired Share `s1 {spec:{path:'/mnt/d/share'}}`; observed NfsSession `{spec:{export_path:'/mnt/d/share'}}`): blockers contain `dangerous_flag_required` + `dependent_filesystem_mounted` + `dependent_share_active`; `affected_resources` = [array, fs1, s1]; `risk_level 'destructive'`, `rollback_model 'unsupported'`; diff blast radius lists all three groups. Clean array (no deps) → blockers = exactly `[dangerous_flag_required]`. Unknown id → NOT_FOUND.
+  - Provider (seed observed array `data` w/ volume_path `/dev/xi_data`; observed Filesystem `fs1` in the **live collector shape — status-only, NO spec**: `{kind:'Filesystem', id:'fs1', status:{backing_device:'/dev/xi_data', mountpoint:'/mnt/d', currently_mounted:true, observed_at:…}}`; desired Share `s1 {spec:{path:'/mnt/d/share'}}`; observed NfsSession `{spec:{export_path:'/mnt/d/share'}}`): blockers contain `dangerous_flag_required` + `dependent_filesystem_mounted` + `dependent_share_active`; `affected_resources` = [array, fs1, s1]; `risk_level 'destructive'`, `rollback_model 'unsupported'`; diff blast radius lists all three groups. Clean array (no deps) → blockers = exactly `[dangerous_flag_required]`. Unknown id → NOT_FOUND. (The walk reads `status.backing_device`/`status.mountpoint`/`status.currently_mounted` — observed Filesystem rows carry no `spec`.)
   - Route: plan → 200 with the blockers; apply clean array + `dangerous:false` → **412 `dangerous_flag_required`** (engine); + `dangerous:true` + fresh `expected_revision` + mock accept → 202; with deps present → 412 with `dependent_filesystem_mounted` in `details.blockers` (the re-check filters only the dangerous code); stale revision → 412 `observed_revision_stale`.
 - [ ] **Step 2: Run — fails. Implement** delete provider (dep walk per spec §7; KV prefixes `/xinas/v1/observed/Filesystem/`, `/xinas/v1/desired/Share/`, `/xinas/v1/observed/NfsSession/`) + DELETE route (no spec body; route injects `{id}`; passes `dangerous` to applyReq; §8 filtered re-check); drop the DELETE stub for `/arrays/:id`.
 - [ ] **Step 3: Run — passes.** **Commit:** `feat(api): T9 — xiraid.array.delete provider (dep walk + blast radius) + DELETE route`
@@ -171,11 +176,12 @@ Fake tests: pool create/dup/add/remove/delete round-trip persisted; `raidModify`
 
 **Files:** Modify `xiNAS-MCP/src/agent/task/xiraid-array-executor.ts`, `wiring.ts`; extend executor tests.
 
-- [ ] **Step 1: Failing tests.**
-  - happy: array `data` (+ pool `xnsp_data`) seeded → stages `preflight`/`destroy`/`verify` → success; array gone, `xnsp_data` gone, tombstone has `data_wiped: true`.
-  - array vanished before begin → `preflight` fails → rollback **throws** → `rollback_failed` → terminal `requires_manual_recovery (FAILED_MANUAL_RECOVERY_REQUIRED)`.
-  - destroy rejected (array named `del-fail`… the `-fail` hook rejects `raidDestroy`) → `destroy` stage fails → rollback throws → `requires_manual_recovery`.
-- [ ] **Step 2: Run — fails. Implement** `makeXiraidArrayDeleteExecutor({client})` per spec §7 (`rollback()` always throws); register.
+- [ ] **Step 1: Failing tests** (`makeXiraidArrayDeleteExecutor({client, readMounts})` — `readMounts` injected, default impl reads `/proc/self/mountinfo` through `lib/parse/mountinfo.ts`):
+  - happy: array `data` (+ ACTIVE pool `xnsp_data`) seeded, `readMounts` → `[]` → stages `preflight`/`destroy`/`verify` → success; array gone, pool deactivated+gone, tombstone `data_wiped: true`.
+  - **mount guard:** `readMounts` returns an entry whose source device is `/dev/xi_data` → `preflight` fails; rollback sees the array STILL PRESENT → **no-op** → terminal `failed (FAILED_PARTIAL_ROLLED_BACK)` (clean, retryable — nothing was destroyed); no destroy call recorded.
+  - array vanished before begin → `preflight` fails; rollback sees the array GONE → **throws** → `rollback_failed` → terminal `requires_manual_recovery (FAILED_MANUAL_RECOVERY_REQUIRED)` (state unknowable).
+  - destroy rejected (array named `del-fail` — the `-fail` hook rejects `raidDestroy`) → `destroy` stage fails; the array still exists → rollback no-op → clean `failed`. Then the inverse: destroy SUCCEEDED but `verify` forced to fail (fake left a ghost? — simulate by making `verify` strict against a tombstone-only state) → array gone → rollback throws → `requires_manual_recovery`.
+- [ ] **Step 2: Run — fails. Implement** per spec §7: preflight = exists + not-mounted (match `MountEntry`'s source-device field against `/dev/xi_<name>` — confirm the exact field name in `lib/parse/mountinfo.ts` while wiring); `rollback()` is **live-state decided**: array present → no-op (nothing destroyed), array absent or `raid_show` unreachable → throw. Register in `wiring.ts` with the real `readMounts` built from `node:fs` + `parseMountinfo`.
 - [ ] **Step 3: Run — passes** (+ full `npm test`). **Commit:** `feat(agent): T10 — xiraid.array.delete executor (rollback-unsupported → manual recovery)`
 
 ## Task T11: e2e + full verification gate
@@ -199,4 +205,5 @@ Fake tests: pool create/dup/add/remove/delete round-trip persisted; `raidModify`
 - **Confirm-first steps:** T2 Step 1 pins the `raid_import_show` candidate shape (the one external unknown).
 - **Known wrinkle, decided in-plan:** the Executor interface has a fixed `stages` list → modify's conditional stages are present-but-skipping (emit `skipped`), not dynamically composed.
 - **Resolved during plan self-review:** T4's pool-existence read → add `poolShow()` to the transport interface in T2; T11's dependent-fs seeding → a KV pre-seed would be wiped by the fixture-mode Filesystem collector's empty complete-snapshot sweep, so T11 Step 4a extends the fixture probe to read `filesystems.json` instead.
+- **Resolved by independent review (2026-06-10):** the dep walk + T9 seeds use the LIVE observed Filesystem shape (status-only, no spec); the delete executor gains the injected `readMounts` host guard (closes the route-recheck→destroy TOCTOU) and its rollback is live-state decided (array present → clean `failed`; gone → `requires_manual_recovery`); the pool lifecycle includes `pool_activate`/`pool_deactivate` (analyst §3.8 — unactivated pools never auto-replace; the fake rejects deleting an active pool to force the ordering); `parseModifySpec` tolerates enrichment keys so the apply re-check accepts its own plan; the modify rollback test uses the `-fail-tuning` hook (a plain `-fail` array name would trip the `xnsp_*-fail` pool ops first).
 - **No `Requires-Rebuild`** anywhere (pure TS/docs).
