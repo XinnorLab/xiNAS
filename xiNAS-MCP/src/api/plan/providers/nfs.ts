@@ -1,6 +1,6 @@
 /**
- * The four NFS PlanProviders (S3 N4.1, s3-nfs-executor-spec §3.1–3.3, §3.5) —
- * the first REAL producers of the N0 plan-binding contract:
+ * The five NFS PlanProviders (S3 N4.1 + N7.3, s3-nfs-executor-spec §3.1–3.5)
+ * — the first REAL producers of the N0 plan-binding contract:
  *
  * - `affected_resources` — the DESIRED resource (`Share/{id}`), revision-pinned
  *   when the desired row exists (update/delete); empty for the observed-only
@@ -34,10 +34,13 @@
  */
 import { decExportId, encExportId } from '../../../lib/nfs-export-id.js';
 import { compileShareToExportEntry, type ShareCompileInput } from '../../../lib/nfs-exports.js';
+import { deriveProfileServiceAction, type NfsProfileSpec } from '../../../lib/nfs-profile.js';
 import { ApiException } from '../../errors.js';
 import type { PlanContext, PlanProvider, PlanResult } from '../engine.js';
 
 const DESIRED_SHARE_PREFIX = '/xinas/v1/desired/Share/';
+/** Desired NfsProfile singleton — id 'default' per ADR-0005 Phase 0. */
+const DESIRED_NFS_PROFILE_KEY = '/xinas/v1/desired/NfsProfile/default';
 const OBSERVED_EXPORT_RULE_PREFIX = '/xinas/v1/observed/ExportRule/';
 const OBSERVED_NFS_SESSION_PREFIX = '/xinas/v1/observed/NfsSession/';
 /** Observed idmap singleton — snake_case segment per ADR-0003. */
@@ -349,7 +352,102 @@ const nfsIdmapSetProvider: PlanProvider = {
   },
 };
 
-/** The four NFS plan providers, for registration on the PlanEngine. */
+/** OpenAPI bounds for NfsProfile spec.threads.count (api-v1.yaml). */
+const PROFILE_THREADS_MIN = 8;
+const PROFILE_THREADS_MAX = 1024;
+
+/** A non-array record, or INVALID_ARGUMENT naming the field. */
+function requireRecordField(op: string, name: string, v: unknown): Record<string, unknown> {
+  if (!isRecord(v) || Array.isArray(v)) {
+    throw invalid(op, `${name} must be an object`);
+  }
+  return v;
+}
+
+/**
+ * Light shape check of the `nfs-profile.update` operation spec
+ * (`{ profile, prior_profile }`): `profile` must carry a `threads.count`
+ * integer in [8, 1024] plus `rdma` / `service_policy` records;
+ * `prior_profile` must be a record (the route built it from the current
+ * desired spec or the ADR-0005 defaults). The route's mergeProfilePatch
+ * already rejected readOnly/unknown sections; the helper re-validates the
+ * full spec at render time.
+ */
+function validateProfileOperationSpec(
+  op: string,
+  spec: unknown,
+): { profile: NfsProfileSpec; prior_profile: NfsProfileSpec } {
+  if (!isRecord(spec)) throw invalid(op, 'spec must be an object');
+  const profile = requireRecordField(op, 'spec.profile', spec.profile);
+  const priorProfile = requireRecordField(op, 'spec.prior_profile', spec.prior_profile);
+
+  const threads = requireRecordField(op, 'spec.profile.threads', profile.threads);
+  const count = threads.count;
+  if (
+    typeof count !== 'number' ||
+    !Number.isInteger(count) ||
+    count < PROFILE_THREADS_MIN ||
+    count > PROFILE_THREADS_MAX
+  ) {
+    throw invalid(
+      op,
+      `spec.profile.threads.count must be an integer in [${PROFILE_THREADS_MIN}, ${PROFILE_THREADS_MAX}]`,
+    );
+  }
+  requireRecordField(op, 'spec.profile.rdma', profile.rdma);
+  requireRecordField(op, 'spec.profile.service_policy', profile.service_policy);
+
+  return { profile, prior_profile: priorProfile };
+}
+
+/**
+ * §3.4 — update the singleton NfsProfile. The spec arrives as
+ * `{ profile, prior_profile }`, both built by the route (profile = the PATCH
+ * merged over the current desired spec or the ADR-0005 defaults). The
+ * freshness pin is the DESIRED `NfsProfile/default` revision — there is no
+ * observed pin (the N7.2 observed NfsProfile row is a read-time status fold,
+ * §3.4 explicitly pins desired); an ABSENT desired row pins revision 0
+ * (create-on-first-update) and the desired mutation creates it. Risk is
+ * derived through the shared lib: `changing_access` iff a changed dimension's
+ * service policy demands a restart, else `non_disruptive`.
+ */
+const nfsProfileUpdateProvider: PlanProvider = {
+  operation_kind: 'nfs-profile.update',
+
+  async preflight(ctx: PlanContext, spec: unknown): Promise<PlanResult> {
+    const { profile, prior_profile } = validateProfileOperationSpec('nfs-profile.update', spec);
+
+    const desired = ctx.kv.get(DESIRED_NFS_PROFILE_KEY);
+    const { restart, changed } = deriveProfileServiceAction(prior_profile, profile);
+
+    return {
+      // Present row → its revision; absent → ABSENCE pin (revision 0): the
+      // apply txn reads an absent desired row as 0, so a profile row created
+      // between plan and apply reads >= 1 and fails PRECONDITION_FAILED.
+      affected_resources: [{ kind: 'NfsProfile', id: 'default', revision: desired?.revision ?? 0 }],
+      blockers: [],
+      warnings: [],
+      diff: { action: 'update', changed, restart, profile },
+      risk_level: restart ? 'changing_access' : 'non_disruptive',
+      rollback_model: 'reversible',
+      ...(desired ? { state_revision_expected: desired.revision } : {}),
+      desired_mutations: [
+        {
+          key: DESIRED_NFS_PROFILE_KEY,
+          value: { kind: 'NfsProfile', id: 'default', spec: profile },
+        },
+      ],
+    };
+  },
+};
+
+/** The five NFS plan providers, for registration on the PlanEngine. */
 export function buildNfsPlanProviders(): PlanProvider[] {
-  return [shareCreateProvider, shareUpdateProvider, shareDeleteProvider, nfsIdmapSetProvider];
+  return [
+    shareCreateProvider,
+    shareUpdateProvider,
+    shareDeleteProvider,
+    nfsProfileUpdateProvider,
+    nfsIdmapSetProvider,
+  ];
 }

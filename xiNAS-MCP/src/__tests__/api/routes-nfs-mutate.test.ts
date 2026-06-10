@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DEFAULT_NFS_PROFILE_SPEC } from '../../lib/nfs-profile.js';
 import {
   ADMIN_TOKEN,
   type MockAgentSetup,
@@ -8,12 +9,13 @@ import {
 } from './_helpers.js';
 
 /**
- * N5.2 — the real NFS mutating routes (s3-nfs-executor-spec §7, §3.1–3.3, §3.5):
- * POST /shares, PATCH/DELETE /shares/{id}, PATCH /nfs-idmap, all plan/apply over
- * the N4 providers + the N0 engine. Drives the full path against the mock-agent
- * UDS (buildTestAppWithMockAgent), like routes-reference.test.ts, and asserts
- * the N0 effects the reference route never exercised: desired-KV writes,
- * Model-R revert, the fsid CONFLICT, and expected_revision echo validation.
+ * N5.2 + N7.3 — the real NFS mutating routes (s3-nfs-executor-spec §7,
+ * §3.1–3.5): POST /shares, PATCH/DELETE /shares/{id}, PATCH
+ * /nfs-profiles/{id}, PATCH /nfs-idmap, all plan/apply over the N4 providers
+ * + the N0 engine. Drives the full path against the mock-agent UDS
+ * (buildTestAppWithMockAgent), like routes-reference.test.ts, and asserts the
+ * N0 effects the reference route never exercised: desired-KV writes, Model-R
+ * revert, the fsid CONFLICT, and expected_revision echo validation.
  */
 describe('NFS mutating routes (N5)', () => {
   let setup: MockAgentSetup;
@@ -298,6 +300,124 @@ describe('NFS mutating routes (N5)', () => {
         'snapshot',
       ),
     ).toBe(1);
+  });
+
+  it('nfs-profile.update first-update plan→apply: no desired row → absence pin 0, row created, executor gets {profile, prior_profile}', async () => {
+    setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-prof' });
+
+    // No desired NfsProfile row exists — the merge base is the ADR-0005
+    // default spec (create-on-first-update, §3.4).
+    const planRes = await patch('/api/v1/nfs-profiles/default', {
+      mode: 'plan',
+      spec: { threads: { count: 128 } },
+    });
+    expect(planRes.status).toBe(200);
+    const plan = planRes.body.result;
+    expect(plan.state_revision_expected).toBe(0); // absence pin
+    expect(plan.affected_resources).toEqual([{ kind: 'NfsProfile', id: 'default', revision: 0 }]);
+    // Thread change under the ADR default on_thread_count_change: reload.
+    expect(plan.risk_level).toBe('non_disruptive');
+    const expectedProfile = { ...DEFAULT_NFS_PROFILE_SPEC, threads: { count: 128 } };
+    expect(plan.diff).toEqual({
+      action: 'update',
+      changed: ['thread_count'],
+      restart: false,
+      profile: expectedProfile,
+    });
+    expect(plan.blockers).toEqual([]);
+
+    const applyRes = await patch('/api/v1/nfs-profiles/default', {
+      mode: 'apply',
+      plan_id: plan.plan_id,
+      idempotency_key: 'idem-prof-1',
+      expected_revision: 0, // first update: nothing to pin yet
+    });
+    expect(applyRes.status).toBe(202);
+    const task = applyRes.body.result;
+    expect(task.state).toBe('running');
+    expect(task.kind).toBe('nfs-profile.update');
+    expect(task.agent_acceptance_id).toBe('acc-prof');
+
+    // The desired NfsProfile row was CREATED by the apply txn's mutation.
+    const row = setup.state.kv.get<Record<string, unknown>>('/xinas/v1/desired/NfsProfile/default');
+    expect(row).not.toBeNull();
+    expect(row?.value).toEqual({ kind: 'NfsProfile', id: 'default', spec: expectedProfile });
+
+    // Lease held on NfsProfile/default (no lease_resources override, §3.4).
+    expect(
+      count(
+        'SELECT COUNT(*) AS n FROM leases WHERE task_id = ? AND resource_kind = ? AND resource_id = ?',
+        task.task_id,
+        'NfsProfile',
+        'default',
+      ),
+    ).toBe(1);
+
+    // The executor received the {profile, prior_profile} operation spec (T9b)
+    // — the restart flag is NOT in it (derived on both sides, never stored).
+    expect(setup.mockAgent.lastTaskBeginParams()?.kind).toBe('nfs-profile.update');
+    expect(setup.mockAgent.lastTaskBeginParams()?.spec).toEqual({
+      profile: expectedProfile,
+      prior_profile: DEFAULT_NFS_PROFILE_SPEC,
+    });
+  });
+
+  it('nfs-profile.update plan: thread change under a restart policy → changing_access', async () => {
+    // Seed a desired profile whose service_policy demands restart on thread
+    // changes; the merge base is now this stored spec (revision 1).
+    setup.state.kv.put('/xinas/v1/desired/NfsProfile/default', {
+      kind: 'NfsProfile',
+      id: 'default',
+      spec: {
+        ...DEFAULT_NFS_PROFILE_SPEC,
+        service_policy: {
+          on_thread_count_change: 'restart',
+          on_version_change: 'restart',
+          on_rdma_change: 'restart',
+          on_v3_settings_change: 'restart',
+        },
+      },
+    });
+
+    const planRes = await patch('/api/v1/nfs-profiles/default', {
+      mode: 'plan',
+      spec: { threads: { count: 256 } },
+    });
+    expect(planRes.status).toBe(200);
+    const plan = planRes.body.result;
+    expect(plan.state_revision_expected).toBe(1);
+    expect(plan.risk_level).toBe('changing_access');
+    expect(plan.diff).toMatchObject({ changed: ['thread_count'], restart: true });
+  });
+
+  it('nfs-profile.update plan: a readOnly-section PATCH (v4_recovery) → 400 INVALID_ARGUMENT', async () => {
+    const res = await patch('/api/v1/nfs-profiles/default', {
+      mode: 'plan',
+      spec: { v4_recovery: { server_scope: 'ha-scope' } },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0].code).toBe('INVALID_ARGUMENT');
+    expect(res.body.errors[0].message).toContain('v4_recovery');
+  });
+
+  it('PATCH /nfs-profiles/{id≠default} → 404 (Phase-0 singleton); PUT stays stubbed', async () => {
+    const res = await patch('/api/v1/nfs-profiles/other', {
+      mode: 'plan',
+      spec: { threads: { count: 128 } },
+    });
+    expect(res.status).toBe(404);
+    expect(res.body.errors[0].code).toBe('NOT_FOUND');
+
+    // PUT (full replace) is NOT built in S3 — it must still hit the
+    // executorUnavailable stub (422/500 depending on tracker state), not the
+    // real route and not the 404 catch-all.
+    const put = await request(setup.app)
+      .put('/api/v1/nfs-profiles/default')
+      .set('Authorization', ADMIN_TOKEN)
+      .set('Content-Type', 'application/json')
+      .send({ mode: 'plan', spec: {} });
+    expect([422, 500]).toContain(put.status);
+    expect(put.body.errors[0].details?.code).toMatch(/^EXECUTOR_UN(AVAILABLE|SUPPORTED)$/);
   });
 
   it('begin-unavailable apply → 503; desired Share REVERTED (Model R), task failed (FAILED_BEFORE_CHANGE)', async () => {

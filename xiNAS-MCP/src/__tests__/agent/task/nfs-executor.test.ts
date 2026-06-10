@@ -1,6 +1,6 @@
 /**
- * Unit tests for the four real NFS executors (S3 N3.2,
- * s3-nfs-executor-spec §3.1–3.3, §3.5).
+ * Unit tests for the five real NFS executors (S3 N3.2 + N7.3,
+ * s3-nfs-executor-spec §3.1–3.5).
  *
  * Drives each executor exactly as the {@link TaskRunner} does — call each
  * `stage.run(ctx)` in order, then `executor.rollback(ctx)`, sharing the one
@@ -16,12 +16,19 @@ import {
   type HelperExportEntry,
   NfsHelperError,
   type NfsHelperClient,
+  type RenderNfsProfileResult,
 } from '../../../agent/task/nfs-helper-client.js';
 import type { Executor, ExecutorContext } from '../../../agent/task/types.js';
 
 /** A recorded call against the fake helper (op name + the call arguments). */
 interface RecordedCall {
-  op: 'listExports' | 'addExport' | 'removeExport' | 'updateExport' | 'setIdmapDomain';
+  op:
+    | 'listExports'
+    | 'addExport'
+    | 'removeExport'
+    | 'updateExport'
+    | 'setIdmapDomain'
+    | 'renderNfsProfile';
   args: unknown[];
 }
 
@@ -29,6 +36,8 @@ interface FakeHelper extends NfsHelperClient {
   calls: RecordedCall[];
   /** Canned result returned by listExports(). */
   listResult: HelperExportEntry[];
+  /** Canned result returned by renderNfsProfile(). */
+  renderResult: RenderNfsProfileResult;
   /** When set, the next call to this op throws the given error (one-shot). */
   throwOn: { op: RecordedCall['op']; error: Error } | undefined;
   /** Honor a scripted one-shot throw, then record the call. */
@@ -40,6 +49,11 @@ function makeFakeHelper(listResult: HelperExportEntry[] = []): FakeHelper {
   const fake: FakeHelper = {
     calls,
     listResult,
+    renderResult: {
+      effective_files: { '/etc/nfs/nfsd.conf': 'sha256:abc' },
+      restarted: false,
+      reloaded: true,
+    },
     throwOn: undefined,
     record(op: RecordedCall['op'], args: unknown[]): void {
       // Honor a scripted one-shot throw before recording the (failed) call.
@@ -69,6 +83,13 @@ function makeFakeHelper(listResult: HelperExportEntry[] = []): FakeHelper {
     },
     async setIdmapDomain(domain: string): Promise<void> {
       fake.record('setIdmapDomain', [domain]);
+    },
+    async renderNfsProfile(
+      spec: Record<string, unknown>,
+      restart: boolean,
+    ): Promise<RenderNfsProfileResult> {
+      fake.record('renderNfsProfile', [spec, restart]);
+      return fake.renderResult;
     },
   };
   return fake;
@@ -107,10 +128,16 @@ function makeDeps(
 }
 
 describe('buildNfsExecutors — registration', () => {
-  it('returns exactly the four expected operation kinds', () => {
+  it('returns exactly the five expected operation kinds', () => {
     const list = buildNfsExecutors(makeDeps(makeFakeHelper()));
     expect(list.map((e) => e.operation_kind).sort()).toEqual(
-      ['nfs-idmap.set', 'share.create', 'share.delete', 'share.update'].sort(),
+      [
+        'nfs-idmap.set',
+        'nfs-profile.update',
+        'share.create',
+        'share.delete',
+        'share.update',
+      ].sort(),
     );
   });
 });
@@ -342,6 +369,107 @@ describe('share.delete', () => {
     helper.calls.length = 0;
     await ex.rollback(ctx);
     expect(helper.calls.some((c) => c.op === 'addExport')).toBe(false);
+  });
+});
+
+describe('nfs-profile.update', () => {
+  /** A full NfsProfile spec (the ADR-0005 shape the route merges to). */
+  function profileSpec(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      versions: {
+        v3: { enabled: false },
+        v4_0: { enabled: false },
+        v4_1: { enabled: true },
+        v4_2: { enabled: true },
+      },
+      rdma: { enabled: true, port: 20049 },
+      threads: { count: 64 },
+      service_policy: {
+        on_thread_count_change: 'reload',
+        on_version_change: 'restart',
+        on_rdma_change: 'restart',
+        on_v3_settings_change: 'restart',
+      },
+      ...overrides,
+    };
+  }
+
+  it('apply renders the merged profile with restart=false (thread change, reload policy)', async () => {
+    const helper = makeFakeHelper();
+    const ex = getExecutor(makeDeps(helper), 'nfs-profile.update');
+    const prior = profileSpec();
+    const profile = profileSpec({ threads: { count: 128 } }); // policy: reload
+    const ctx = makeCtx({ profile, prior_profile: prior });
+
+    await stage(ex, 'preflight').run(ctx);
+    await stage(ex, 'apply').run(ctx);
+
+    const render = helper.calls.find((c) => c.op === 'renderNfsProfile');
+    expect(render).toBeDefined();
+    expect(render?.args[0]).toEqual(profile); // the FULL merged spec, verbatim
+    expect(render?.args[1]).toBe(false); // on_thread_count_change: reload → no restart
+  });
+
+  it('apply derives restart=true when the changed dimension policy is restart', async () => {
+    const helper = makeFakeHelper();
+    const ex = getExecutor(makeDeps(helper), 'nfs-profile.update');
+    const restartPolicy = {
+      on_thread_count_change: 'restart',
+      on_version_change: 'restart',
+      on_rdma_change: 'restart',
+      on_v3_settings_change: 'restart',
+    };
+    const prior = profileSpec({ service_policy: restartPolicy });
+    const profile = profileSpec({ threads: { count: 256 }, service_policy: restartPolicy });
+    const ctx = makeCtx({ profile, prior_profile: prior });
+
+    await stage(ex, 'preflight').run(ctx);
+    await stage(ex, 'apply').run(ctx);
+
+    const render = helper.calls.find((c) => c.op === 'renderNfsProfile');
+    expect(render?.args).toEqual([profile, true]);
+  });
+
+  it('apply derives restart=false when nothing changed', async () => {
+    const helper = makeFakeHelper();
+    const ex = getExecutor(makeDeps(helper), 'nfs-profile.update');
+    const spec = profileSpec();
+    const ctx = makeCtx({ profile: spec, prior_profile: profileSpec() });
+
+    await stage(ex, 'apply').run(ctx);
+
+    const render = helper.calls.find((c) => c.op === 'renderNfsProfile');
+    expect(render?.args[1]).toBe(false);
+  });
+
+  it('rollback re-renders the PRIOR profile with the SAME derived restart flag', async () => {
+    const helper = makeFakeHelper();
+    const ex = getExecutor(makeDeps(helper), 'nfs-profile.update');
+    // rdma change with on_rdma_change: restart → forward restart=true.
+    const prior = profileSpec();
+    const profile = profileSpec({ rdma: { enabled: false, port: 20049 } });
+    const ctx = makeCtx({ profile, prior_profile: prior });
+
+    await stage(ex, 'preflight').run(ctx);
+    await stage(ex, 'apply').run(ctx);
+    helper.calls.length = 0; // isolate rollback calls
+    await ex.rollback(ctx);
+
+    const render = helper.calls.find((c) => c.op === 'renderNfsProfile');
+    expect(render).toBeDefined();
+    expect(render?.args).toEqual([prior, true]); // prior spec, same flag
+  });
+
+  it('preflight throws a clear error when profile/prior_profile is missing', async () => {
+    const helper = makeFakeHelper();
+    const ex = getExecutor(makeDeps(helper), 'nfs-profile.update');
+    await expect(stage(ex, 'preflight').run(makeCtx({ profile: profileSpec() }))).rejects.toThrow(
+      /prior_profile/,
+    );
+    await expect(
+      stage(ex, 'preflight').run(makeCtx({ prior_profile: profileSpec() })),
+    ).rejects.toThrow(/spec\.profile/);
+    expect(helper.calls.some((c) => c.op === 'renderNfsProfile')).toBe(false);
   });
 });
 

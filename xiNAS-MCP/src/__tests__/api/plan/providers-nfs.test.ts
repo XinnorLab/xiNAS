@@ -8,7 +8,7 @@ import { TaskStore } from '../../../api/tasks/store.js';
 import { SqliteKvStore } from '../../../state/backend-sqlite.js';
 import { runMigrations } from '../../../state/migrations.js';
 
-// N4.1 — the four NFS PlanProviders (s3-nfs-executor-spec §3.1–3.3, §3.5).
+// N4.1 + N7.3 — the five NFS PlanProviders (s3-nfs-executor-spec §3.1–3.5).
 // Real in-memory SqliteKvStore (mirrors apply.test.ts's harness) so revision
 // pins come from genuine KV reads, not fakes.
 function makeHarness() {
@@ -405,6 +405,162 @@ describe('nfs-idmap.set plan provider', () => {
 
     expect(result.observed_freshness_ref?.revision).toBe(1);
     expect((result.diff as { prior_domain: unknown }).prior_domain).toBeNull();
+  });
+});
+
+describe('nfs-profile.update plan provider', () => {
+  let h: ReturnType<typeof makeHarness>;
+  const provider = providerFor('nfs-profile.update');
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  /** A full NfsProfile spec (the route's merge output shape). */
+  function profileSpec(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      versions: {
+        v3: { enabled: false },
+        v4_0: { enabled: false },
+        v4_1: { enabled: true },
+        v4_2: { enabled: true },
+      },
+      rdma: { enabled: true, port: 20049 },
+      threads: { count: 64 },
+      service_policy: {
+        on_thread_count_change: 'reload',
+        on_version_change: 'restart',
+        on_rdma_change: 'restart',
+        on_v3_settings_change: 'restart',
+      },
+      ...overrides,
+    };
+  }
+
+  it('registration: buildNfsPlanProviders returns exactly the five expected kinds', () => {
+    expect(
+      buildNfsPlanProviders()
+        .map((p) => p.operation_kind)
+        .sort(),
+    ).toEqual(
+      [
+        'nfs-idmap.set',
+        'nfs-profile.update',
+        'share.create',
+        'share.delete',
+        'share.update',
+      ].sort(),
+    );
+  });
+
+  it('absent desired row → ABSENCE pin (revision 0), mutation creates the row (§3.4)', async () => {
+    const profile = profileSpec({ threads: { count: 128 } });
+    const prior = profileSpec();
+    const result = await provider.preflight(h.ctx, { profile, prior_profile: prior });
+
+    // Create-on-first-update: a fresh install has no desired profile row.
+    expect(result.affected_resources).toEqual([{ kind: 'NfsProfile', id: 'default', revision: 0 }]);
+    expect(result.state_revision_expected).toBeUndefined();
+    // Desired pin IS the freshness (§3.4): no observed pin, no lease override.
+    expect(result.observed_freshness_ref).toBeUndefined();
+    expect(result.lease_resources).toBeUndefined();
+    // The mutation doc matches the GET-route / seedNfsProfile shape.
+    expect(result.desired_mutations).toEqual([
+      {
+        key: '/xinas/v1/desired/NfsProfile/default',
+        value: { kind: 'NfsProfile', id: 'default', spec: profile },
+      },
+    ]);
+    expect(result.diff).toEqual({
+      action: 'update',
+      changed: ['thread_count'],
+      restart: false, // on_thread_count_change: reload
+      profile,
+    });
+    expect(result.risk_level).toBe('non_disruptive');
+    expect(result.rollback_model).toBe('reversible');
+    expect(result.blockers).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('present desired row → pins its revision', async () => {
+    h.kv.put('/xinas/v1/desired/NfsProfile/default', {
+      kind: 'NfsProfile',
+      id: 'default',
+      spec: profileSpec(),
+    }); // revision 1
+
+    const result = await provider.preflight(h.ctx, {
+      profile: profileSpec({ threads: { count: 32 } }),
+      prior_profile: profileSpec(),
+    });
+
+    expect(result.affected_resources).toEqual([{ kind: 'NfsProfile', id: 'default', revision: 1 }]);
+    expect(result.state_revision_expected).toBe(1);
+  });
+
+  it('restart-classed change → changing_access; reload-classed → non_disruptive', async () => {
+    // rdma change with the default on_rdma_change: restart.
+    const rdmaChange = await provider.preflight(h.ctx, {
+      profile: profileSpec({ rdma: { enabled: false, port: 20049 } }),
+      prior_profile: profileSpec(),
+    });
+    expect(rdmaChange.risk_level).toBe('changing_access');
+    expect(rdmaChange.diff).toMatchObject({ changed: ['rdma'], restart: true });
+
+    // Same thread change, but the NEXT spec demands restart on thread changes.
+    const threadRestart = await provider.preflight(h.ctx, {
+      profile: profileSpec({
+        threads: { count: 16 },
+        service_policy: {
+          on_thread_count_change: 'restart',
+          on_version_change: 'restart',
+          on_rdma_change: 'restart',
+          on_v3_settings_change: 'restart',
+        },
+      }),
+      prior_profile: profileSpec(),
+    });
+    expect(threadRestart.risk_level).toBe('changing_access');
+
+    // Thread change under the default reload policy → non_disruptive.
+    const threadReload = await provider.preflight(h.ctx, {
+      profile: profileSpec({ threads: { count: 16 } }),
+      prior_profile: profileSpec(),
+    });
+    expect(threadReload.risk_level).toBe('non_disruptive');
+    expect(threadReload.diff).toMatchObject({ restart: false });
+  });
+
+  it('validation: missing profile / prior_profile → INVALID_ARGUMENT', async () => {
+    await expectInvalidArgument(provider.preflight(h.ctx, { profile: profileSpec() }));
+    await expectInvalidArgument(provider.preflight(h.ctx, { prior_profile: profileSpec() }));
+    await expectInvalidArgument(provider.preflight(h.ctx, 'garbage'));
+  });
+
+  it('validation: threads.count out of [8,1024] or non-integer → INVALID_ARGUMENT', async () => {
+    for (const bad of [7, 1025, 64.5, '64', undefined]) {
+      await expectInvalidArgument(
+        provider.preflight(h.ctx, {
+          profile: profileSpec({ threads: { count: bad } }),
+          prior_profile: profileSpec(),
+        }),
+      );
+    }
+  });
+
+  it('validation: rdma / service_policy must be records → INVALID_ARGUMENT', async () => {
+    await expectInvalidArgument(
+      provider.preflight(h.ctx, {
+        profile: profileSpec({ rdma: 'on' }),
+        prior_profile: profileSpec(),
+      }),
+    );
+    await expectInvalidArgument(
+      provider.preflight(h.ctx, {
+        profile: profileSpec({ service_policy: ['restart'] }),
+        prior_profile: profileSpec(),
+      }),
+    );
   });
 });
 

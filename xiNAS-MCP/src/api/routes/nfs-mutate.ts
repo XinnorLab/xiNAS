@@ -1,19 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
+import { DEFAULT_NFS_PROFILE_SPEC, mergeProfilePatch } from '../../lib/nfs-profile.js';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import type { Task } from '../tasks/types.js';
 import { applyMode, planMode, requireTasks } from './apply-helpers.js';
 
 /**
- * S3 N5.2 — the REAL NFS mutating routes (s3-nfs-executor-spec §7, §3.1–3.3,
- * §3.5), replacing the API-19 `executorUnavailable` stubs for exactly these
- * five verbs:
+ * S3 N5.2 + N7.3 — the REAL NFS mutating routes (s3-nfs-executor-spec §7,
+ * §3.1–3.5), replacing the API-19 `executorUnavailable` stubs for exactly
+ * these five verbs:
  *
- *   POST   /shares          → share.create   (server-assigned id, fsid unique)
- *   PATCH  /shares/{id}     → share.update   (route merges the PATCH → FULL spec)
- *   DELETE /shares/{id}     → share.delete   (spec = { id, path })
- *   PATCH  /nfs-idmap       → nfs-idmap.set  (spec = { domain })
+ *   POST   /shares             → share.create       (server-assigned id, fsid unique)
+ *   PATCH  /shares/{id}        → share.update       (route merges the PATCH → FULL spec)
+ *   DELETE /shares/{id}        → share.delete       (spec = { id, path })
+ *   PATCH  /nfs-profiles/{id}  → nfs-profile.update (spec = { profile, prior_profile })
+ *   PATCH  /nfs-idmap          → nfs-idmap.set      (spec = { domain })
  *
  * Each follows the shared two-mode flow (apply-helpers.ts): `mode=plan` runs
  * the N4 PlanProvider and renders the Plan envelope; `mode=apply` resolves the
@@ -23,6 +25,8 @@ import { applyMode, planMode, requireTasks } from './apply-helpers.js';
  */
 
 const DESIRED_SHARE_PREFIX = '/xinas/v1/desired/Share/';
+/** Desired NfsProfile singleton key — id 'default' per ADR-0005 Phase 0. */
+const DESIRED_NFS_PROFILE_KEY = '/xinas/v1/desired/NfsProfile/default';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
@@ -183,6 +187,55 @@ export function nfsMutateRouter(ctx: ApiContext): Router {
         operationKind: 'share.delete',
         planTaskMatches: planTargetsShare(id),
       });
+      return;
+    }
+    throw badMode(body.mode);
+  });
+
+  // ── PATCH /nfs-profiles/:id — nfs-profile.update (§3.4) ────────────────────
+  // Phase-0 singleton: only id 'default' exists. PUT (full replace) stays on
+  // the executorUnavailable stub — only the PATCH path is built in S3.
+  r.patch('/nfs-profiles/:id', async (req, res) => {
+    const tasks = requireTasks(ctx);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const id = req.params.id;
+    if (id !== 'default') {
+      throw new ApiException('NOT_FOUND', `nfs profile ${id} not found`);
+    }
+
+    if (body.mode === 'plan') {
+      // The merge base is the current desired spec, or the ADR-0005 defaults
+      // when no desired row exists yet (create-on-first-update, §3.4 — a
+      // fresh install has no desired profile row; the provider pins
+      // revision 0 and the apply's desired mutation creates it).
+      const row = ctx.state.kv.get<Record<string, unknown>>(DESIRED_NFS_PROFILE_KEY);
+      const value = row && isRecord(row.value) ? row.value : undefined;
+      const prior =
+        value && isRecord(value.spec)
+          ? (value.spec as Record<string, unknown>)
+          : DEFAULT_NFS_PROFILE_SPEC;
+      const patch: Record<string, unknown> = isRecord(body.spec) ? body.spec : {};
+      // Per-section merge of the MUTABLE sections (threads/rdma/
+      // service_policy); a readOnly (versions/v3_locking/v4_recovery) or
+      // unknown section throws → 400 INVALID_ARGUMENT.
+      let profile: Record<string, unknown>;
+      try {
+        profile = mergeProfilePatch(prior, patch);
+      } catch (err) {
+        throw new ApiException(
+          'INVALID_ARGUMENT',
+          err instanceof Error ? err.message : 'invalid NfsProfile PATCH spec',
+          undefined,
+          'A Phase-0 PATCH may set only the threads, rdma, and service_policy sections.',
+        );
+      }
+      // The operation spec carries BOTH sides; the restart decision is
+      // derived (api for risk, agent for the helper flag), never stored.
+      await planMode(req, res, tasks, 'nfs-profile.update', { profile, prior_profile: prior });
+      return;
+    }
+    if (body.mode === 'apply') {
+      await applyMode(req, res, tasks, body, { operationKind: 'nfs-profile.update' });
       return;
     }
     throw badMode(body.mode);
