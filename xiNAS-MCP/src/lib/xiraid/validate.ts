@@ -26,6 +26,7 @@ import {
   STRIP_SIZES_KIB,
   SYND_CNT_MAX,
   SYND_CNT_MIN,
+  type Tuning,
   type XiraidArraySpec,
 } from './schema.js';
 
@@ -148,7 +149,93 @@ export function validateCreateSpec(spec: XiraidArraySpec, facts: CreateFacts): B
   }
 
   // --- tuning ranges (api_behavior_doc §3.4) ---
-  const t = spec.tuning ?? {};
+  checkTuning(spec.tuning ?? {}, push);
+
+  // --- member disks (one blocker per offending disk) ---
+  checkDisks(spec.member_disk_ids, facts.disks, facts.existingMemberDiskIds, push);
+
+  // --- spares (S4: validated like members — ADR-0006 §Spare pools) ---
+  const spares = spec.spare_disk_ids ?? [];
+  if (spares.length > 0) {
+    // a spare that is also a member of this very spec is double-booked
+    const memberSet = new Set(spec.member_disk_ids);
+    const claimed = new Set([...facts.existingMemberDiskIds, ...memberSet]);
+    checkDisks(spares, facts.disks, claimed, push);
+    checkDerivedPoolName(spec.name, push);
+  }
+
+  return blockers;
+}
+
+/** Live-modify writable subset (ADR-0006 matrix: spares + tuning). */
+export interface XiraidArrayModifySpec {
+  spare_disk_ids?: string[];
+  tuning?: Tuning;
+}
+
+export interface ModifyFacts {
+  /** The target array's name (derives the xnsp_ pool name). */
+  arrayName: string;
+  disks: ResolvedDisk[];
+  /** Disk ids claimed as member/spare by ANY array (incl. this one). */
+  existingMemberDiskIds: Set<string>;
+  /** This array's OWN current spares — exempt from disk_in_use. */
+  ownSpareDiskIds: Set<string>;
+}
+
+/**
+ * Narrow an unknown payload to a structurally valid modify spec. TOLERANT:
+ * unknown keys (the api's enrichment — `id`, `device_by_id`, `current_*`)
+ * are ignored, NOT rejected — the route's apply re-check re-parses the
+ * persisted enriched spec and must accept its own plan (S4 spec §8).
+ * Topology-key rejection is the ROUTE's job against the raw PATCH body.
+ */
+export function parseModifySpec(input: unknown): XiraidArrayModifySpec {
+  if (typeof input !== 'object' || input === null) {
+    throw new TypeError('modify spec must be an object');
+  }
+  const o = input as Record<string, unknown>;
+  if (
+    o.spare_disk_ids !== undefined &&
+    (!Array.isArray(o.spare_disk_ids) || o.spare_disk_ids.some((m) => typeof m !== 'string'))
+  ) {
+    throw new TypeError('spec.spare_disk_ids must be an array of strings');
+  }
+  if (o.tuning !== undefined && (typeof o.tuning !== 'object' || o.tuning === null)) {
+    throw new TypeError('spec.tuning must be an object');
+  }
+  return {
+    ...(o.spare_disk_ids !== undefined ? { spare_disk_ids: o.spare_disk_ids as string[] } : {}),
+    ...(o.tuning !== undefined ? { tuning: o.tuning as Tuning } : {}),
+  };
+}
+
+/** Validate a structurally valid modify spec against the facts. */
+export function validateModifySpec(spec: XiraidArrayModifySpec, facts: ModifyFacts): Blocker[] {
+  const blockers: Blocker[] = [];
+  const push = (code: string, message: string): void => {
+    blockers.push({ code, message });
+  };
+
+  checkTuning(spec.tuning ?? {}, push);
+
+  if (spec.spare_disk_ids !== undefined && spec.spare_disk_ids.length > 0) {
+    // this array's own current spares are not "in use" — re-listing keeps them
+    const claimedByOthers = new Set(
+      [...facts.existingMemberDiskIds].filter((id) => !facts.ownSpareDiskIds.has(id)),
+    );
+    checkDisks(spec.spare_disk_ids, facts.disks, claimedByOthers, push);
+    checkDerivedPoolName(facts.arrayName, push);
+  }
+
+  return blockers;
+}
+
+// ---- shared rule helpers ----
+
+type Push = (code: string, message: string) => void;
+
+function checkTuning(t: Tuning, push: Push): void {
   const range = (
     field: string,
     value: number | null | undefined,
@@ -175,16 +262,23 @@ export function validateCreateSpec(spec: XiraidArraySpec, facts: CreateFacts): B
       push('param_out_of_range', `tuning.${field} must be >= 0`);
     }
   }
+}
 
-  // --- disks (one blocker per offending disk) ---
-  const byId = new Map(facts.disks.map((d) => [d.id, d]));
-  for (const id of spec.member_disk_ids) {
+/** One blocker per offending disk (member or spare, create or modify). */
+function checkDisks(
+  ids: string[],
+  disks: ResolvedDisk[],
+  claimedIds: ReadonlySet<string>,
+  push: Push,
+): void {
+  const byId = new Map(disks.map((d) => [d.id, d]));
+  for (const id of ids) {
     const d = byId.get(id);
     if (!d) {
       push('disk_not_found', `disk '${id}' is not present in observed state`);
       continue;
     }
-    if (facts.existingMemberDiskIds.has(id)) {
+    if (claimedIds.has(id)) {
       push('disk_in_use', `disk '${id}' is already a member/spare of another array`);
       continue;
     }
@@ -196,14 +290,18 @@ export function validateCreateSpec(spec: XiraidArraySpec, facts: CreateFacts): B
       push('disk_not_safe', `disk '${id}' (${d.device_path}) is not safe for use (mounted or in use)`);
     }
   }
+}
 
-  // --- spares: deferred from the S3 create build (ADR-0006 §Spare pools) ---
-  if ((spec.spare_disk_ids ?? []).length > 0) {
+/** The executor-owned pool is named xnsp_<array>; it must fit the namespace. */
+export function derivedPoolName(arrayName: string): string {
+  return `xnsp_${arrayName}`;
+}
+
+function checkDerivedPoolName(arrayName: string, push: Push): void {
+  if (derivedPoolName(arrayName).length > 63) {
     push(
-      'spare_pool_deferred',
-      'create-with-spares is deferred in S3; create the array without spares, then attach them via modify once the pool lifecycle lands',
+      'name_invalid',
+      `array name '${arrayName}' is too long for a spare pool: 'xnsp_' + name must fit 63 chars`,
     );
   }
-
-  return blockers;
 }

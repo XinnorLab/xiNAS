@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { XiraidArraySpec } from '../../../lib/xiraid/schema.js';
 import {
   type CreateFacts,
+  type ModifyFacts,
   type ResolvedDisk,
   parseCreateSpec,
+  parseModifySpec,
   validateCreateSpec,
+  validateModifySpec,
 } from '../../../lib/xiraid/validate.js';
 
 function disk(id: string, over: Partial<ResolvedDisk> = {}): ResolvedDisk {
@@ -20,9 +23,19 @@ function disk(id: string, over: Partial<ResolvedDisk> = {}): ResolvedDisk {
 
 function facts(over: Partial<CreateFacts> = {}): CreateFacts {
   return {
-    disks: [disk('d1'), disk('d2'), disk('d3'), disk('d4'), disk('d5'), disk('d6')],
+    disks: [disk('d1'), disk('d2'), disk('d3'), disk('d4'), disk('d5'), disk('d6'), disk('claimed')],
     existingArrayNames: ['taken'],
     existingMemberDiskIds: new Set(['claimed']),
+    ...over,
+  };
+}
+
+function modifyFacts(over: Partial<ModifyFacts> = {}): ModifyFacts {
+  return {
+    arrayName: 'data',
+    disks: [disk('d5'), disk('own-spare'), disk('claimed')],
+    existingMemberDiskIds: new Set(['claimed']),
+    ownSpareDiskIds: new Set(),
     ...over,
   };
 }
@@ -123,8 +136,85 @@ describe('validateCreateSpec', () => {
     expect(blockers.filter((b) => b.code.startsWith('disk_')).length).toBe(4);
   });
 
-  it('spare_disk_ids non-empty → spare_pool_deferred (S3)', () => {
-    expect(codes(spec({ spare_disk_ids: ['d5'] }))).toContain('spare_pool_deferred');
+  // ---- S4 T3: spares un-deferred — validated like members ----
+
+  it('create-with-spares: safe spare disks → no blockers (spare_pool_deferred is gone)', () => {
+    const blockers = validateCreateSpec(spec({ spare_disk_ids: ['d5'] }), facts());
+    expect(blockers).toEqual([]);
+  });
+
+  it('spare disks get the member disk checks', () => {
+    const f = facts({
+      disks: [disk('d1'), disk('d2'), disk('d3'), disk('d4'), disk('bad', { safe_for_use: false, mounted: true })],
+    });
+    expect(validateCreateSpec(spec({ spare_disk_ids: ['bad'] }), f).map((b) => b.code)).toContain(
+      'disk_not_safe',
+    );
+    expect(codes(spec({ spare_disk_ids: ['ghost'] }))).toContain('disk_not_found');
+    expect(codes(spec({ spare_disk_ids: ['claimed'] }))).toContain('disk_in_use');
+    // a spare that is ALSO a member of this very spec is double-booked
+    expect(codes(spec({ spare_disk_ids: ['d1'] }))).toContain('disk_in_use');
+  });
+
+  it('derived pool name xnsp_<name> must fit the 63-char namespace', () => {
+    const longName = 'a'.repeat(60); // valid alone, xnsp_+60 = 65 > 63
+    expect(
+      codes(spec({ name: longName, spare_disk_ids: ['d5'] })),
+    ).toContain('name_invalid');
+    // without spares the same name is fine (no pool derived)
+    expect(codes(spec({ name: longName }))).toEqual([]);
+  });
+});
+
+describe('validateModifySpec', () => {
+  it('tuning ranges reuse the create rules', () => {
+    const out = validateModifySpec({ tuning: { init_prio: 0, memory_limit: 512 } }, modifyFacts());
+    expect(out.map((b) => b.code)).toEqual(['param_out_of_range', 'param_out_of_range']);
+    expect(validateModifySpec({ tuning: { init_prio: 50 } }, modifyFacts())).toEqual([]);
+  });
+
+  it('spare disks checked like members; own current spares exempt from disk_in_use', () => {
+    const f = modifyFacts({
+      existingMemberDiskIds: new Set(['claimed', 'own-spare']),
+      ownSpareDiskIds: new Set(['own-spare']),
+    });
+    expect(validateModifySpec({ spare_disk_ids: ['claimed'] }, f).map((b) => b.code)).toContain(
+      'disk_in_use',
+    );
+    // keeping (or re-listing) this array's own spare is NOT "in use"
+    expect(validateModifySpec({ spare_disk_ids: ['own-spare'] }, f)).toEqual([]);
+    expect(validateModifySpec({ spare_disk_ids: ['ghost'] }, f).map((b) => b.code)).toContain(
+      'disk_not_found',
+    );
+  });
+
+  it('pool-name length guard applies via the target array name', () => {
+    const out = validateModifySpec(
+      { spare_disk_ids: ['d5'] },
+      modifyFacts({ arrayName: 'a'.repeat(60) }),
+    );
+    expect(out.map((b) => b.code)).toContain('name_invalid');
+  });
+});
+
+describe('parseModifySpec', () => {
+  it('narrows spare_disk_ids/tuning and tolerates enrichment keys', () => {
+    const parsed = parseModifySpec({
+      spare_disk_ids: ['d5'],
+      tuning: { init_prio: 10 },
+      id: 'data',
+      device_by_id: { d5: '/dev/nvme5n1' },
+      current_sparepool: '',
+      current_spare_disk_ids: [],
+    });
+    expect(parsed.spare_disk_ids).toEqual(['d5']);
+    expect(parsed.tuning?.init_prio).toBe(10);
+  });
+
+  it('throws on structural junk', () => {
+    expect(() => parseModifySpec(null)).toThrow(/spec/);
+    expect(() => parseModifySpec({ spare_disk_ids: 'nope' })).toThrow(/spare_disk_ids/);
+    expect(() => parseModifySpec({ tuning: 7 })).toThrow(/tuning/);
   });
 });
 
