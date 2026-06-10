@@ -126,6 +126,77 @@ describe('NFS routes', () => {
     expect(res.body.result.spec.threads.count).toBe(64);
   });
 
+  it('GET /nfs-profiles/{id} folds observed effective_files + observed_at into status', async () => {
+    seedNfsProfile(setup.state);
+    const effectiveFiles = {
+      '/etc/nfs/nfsd.conf':
+        'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      '/etc/default/nfs-kernel-server':
+        'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    };
+    const observedAt = '2026-06-10T12:00:00.000Z';
+    setup.state.kv.put('/xinas/v1/observed/NfsProfile/default', {
+      kind: 'NfsProfile',
+      id: 'default',
+      status: { effective_files: effectiveFiles, observed_at: observedAt },
+    });
+    const res = await request(setup.app)
+      .get('/api/v1/nfs-profiles/default')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(res.status).toBe(200);
+    expect(res.body.result.status.effective_files).toEqual(effectiveFiles);
+    expect(res.body.result.status.observed_at).toBe(observedAt);
+    // Desired fields remain intact under the fold.
+    expect(res.body.result.spec.threads.count).toBe(64);
+  });
+
+  it('GET /nfs-profiles folds the observed status into the listed profile', async () => {
+    seedNfsProfile(setup.state);
+    setup.state.kv.put('/xinas/v1/observed/NfsProfile/default', {
+      kind: 'NfsProfile',
+      id: 'default',
+      status: {
+        effective_files: {
+          '/etc/default/nfs-common':
+            'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        },
+        observed_at: '2026-06-10T12:00:00.000Z',
+      },
+    });
+    const res = await request(setup.app)
+      .get('/api/v1/nfs-profiles')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(res.status).toBe(200);
+    expect(res.body.result[0].status.effective_files).toEqual({
+      '/etc/default/nfs-common':
+        'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    });
+  });
+
+  it('GET /nfs-profiles/{id} without an observed row leaves status untouched', async () => {
+    seedNfsProfile(setup.state);
+    const res = await request(setup.app)
+      .get('/api/v1/nfs-profiles/default')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(res.status).toBe(200);
+    expect(res.body.result.status?.effective_files).toBeUndefined();
+    expect(res.body.result.status?.observed_at).toBeUndefined();
+  });
+
+  it('GET /nfs-profiles/{id} ignores a malformed observed row', async () => {
+    seedNfsProfile(setup.state);
+    setup.state.kv.put('/xinas/v1/observed/NfsProfile/default', {
+      kind: 'NfsProfile',
+      id: 'default',
+      status: 'not-an-object',
+    });
+    const res = await request(setup.app)
+      .get('/api/v1/nfs-profiles/default')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(res.status).toBe(200);
+    expect(res.body.result.status?.effective_files).toBeUndefined();
+  });
+
   it('GET /export-groups returns empty on fresh install', async () => {
     const res = await request(setup.app)
       .get('/api/v1/export-groups')

@@ -14,6 +14,7 @@ export type Kind =
   | 'ExportRule' // internal observed kind; no public REST endpoint.
   // Joined into Share.status.exports[] at read time (see I6).
   | 'NfsIdmap'
+  | 'NfsProfile' // observed singleton (id 'default'); folded into GET /nfs-profiles at read time (N7.2).
   | 'SystemdUnit'
   | 'User'
   | 'Group'
@@ -35,7 +36,11 @@ export interface ObservationDelta {
  * singletons store under a different segment: kinds whose const is already
  * lowercase (`inventory`, `managed_files`) store as-is, and `NfsIdmap`
  * stores under `nfs_idmap` to match ADR-0003's locked path + the public
- * /api/v1/nfs-idmap route. Both the write path (H3 observed handler) and
+ * /api/v1/nfs-idmap route. Kinds WITH a desired counterpart (e.g.
+ * `NfsProfile`) take the default: ADR-0003 says /observed/<kind>/<id>
+ * MIRRORS /desired/<kind>/<id>, and desired keys use the PascalCase kind
+ * const — so observed NfsProfile lives at /xinas/v1/observed/NfsProfile/default,
+ * no mapping entry. Both the write path (H3 observed handler) and
  * every read path (I3, I6, etc.) MUST derive the segment through this
  * function so writer and reader never disagree.
  */

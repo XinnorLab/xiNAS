@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { observedSegment } from '../../agent/collectors/base.js';
 import { encExportId } from '../../lib/nfs-export-id.js';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
@@ -60,6 +61,47 @@ function joinExports(
   return { ...share, status: { ...existingStatus, exports } };
 }
 
+/**
+ * Read-time status fold (N7.2): merge the observed NfsProfile row's
+ * status.effective_files + status.observed_at into the rendered desired
+ * profile's status. The observed row is the NfsProfileCollector's singleton —
+ * same id as the desired profile ('default'), keyed at
+ * /xinas/v1/observed/<segment>/<id> where the segment is derived through
+ * observedSegment('NfsProfile') so this reader can never disagree with the
+ * H3 observed write path. status.running stays deferred beyond S3.
+ *
+ * Absent or malformed observed row → the profile is returned unchanged
+ * (existing desired-only behavior). When both sides carry one of the two
+ * folded keys, observed wins; all other desired status fields are preserved.
+ */
+function foldObservedProfileStatus(
+  state: ApiContext['state'],
+  profile: Record<string, unknown>,
+): Record<string, unknown> {
+  const id = profile.id;
+  if (typeof id !== 'string') return profile;
+
+  const row = getOrNull<Record<string, unknown>>(
+    state,
+    `/xinas/v1/observed/${observedSegment('NfsProfile')}/${id}`,
+  );
+  if (!row || row.value === null || typeof row.value !== 'object') return profile;
+
+  const observedStatus = (row.value as Record<string, unknown>).status;
+  if (observedStatus === null || typeof observedStatus !== 'object') return profile;
+  const s = observedStatus as Record<string, unknown>;
+
+  const fold: Record<string, unknown> = {};
+  if (s.effective_files !== null && typeof s.effective_files === 'object') {
+    fold.effective_files = s.effective_files;
+  }
+  if (typeof s.observed_at === 'string') fold.observed_at = s.observed_at;
+  if (Object.keys(fold).length === 0) return profile;
+
+  const existingStatus = (profile.status ?? {}) as Record<string, unknown>;
+  return { ...profile, status: { ...existingStatus, ...fold } };
+}
+
 export function nfsRouter(ctx: ApiContext): Router {
   const r = Router();
 
@@ -119,7 +161,7 @@ export function nfsRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      unwrapResources(rows),
+      unwrapResources(rows).map((p) => foldObservedProfileStatus(ctx.state, p)),
       rows.map((x) => x.revision),
     );
   });
@@ -130,7 +172,7 @@ export function nfsRouter(ctx: ApiContext): Router {
       `/xinas/v1/desired/NfsProfile/${req.params.id}`,
     );
     if (!row) throw new ApiException('NOT_FOUND', `nfs profile ${req.params.id} not found`);
-    sendOk(req, res, embedMetadata(row), [row.revision]);
+    sendOk(req, res, foldObservedProfileStatus(ctx.state, embedMetadata(row)), [row.revision]);
   });
 
   r.get('/export-groups', (req, res) => {
