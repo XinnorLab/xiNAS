@@ -87,7 +87,7 @@ A future migration may persist the observed pin and let the engine's `plan_stale
 3. `affected_resources = [ XiraidArray#id (primary, first), …added/removed spare Disks ]`.
 4. `risk_level: non_disruptive`, `rollback_model: non_disruptive`.
 5. `diff = { before: { spare_disk_ids, tuning? }, after: { spare_disk_ids, tuning }, raid_modify_request, pool_ops: [...] }`.
-6. **`enriched_spec`** embeds: the modify spec + `device_by_id` (for spare disks) + `current_sparepool` (pool name or `''`) + `current_spare_disk_ids` — everything the executor's rollback needs, since observed state carries **no tuning values** (the collector does not parse them) and the executor has no KV.
+6. **`enriched_spec`** embeds: `{ id, spare_disk_ids?, tuning?, device_by_id }`. *(Implementation refinement over the first draft: the executor captures the pool pre-state — live sparepool linkage, pool existence/membership/activation — at its own `preflight` via `raid_show` + `pool_show` under the held leases, keyed per-run on the spec object. That is strictly fresher than plan-time observed state, so the api does NOT ship `current_*` fields.)*
 
 **Executor (`xiraid.array.modify`).** Stages ordered so the non-restorable part goes **last**:
 

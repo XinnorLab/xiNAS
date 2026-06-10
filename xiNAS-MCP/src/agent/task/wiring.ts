@@ -21,7 +21,10 @@ import { createProgressPublisher } from './progress-publisher.js';
 import { ExecutorRegistry } from './registry.js';
 import { TaskRunner } from './runner.js';
 import type { PublishProgress } from './types.js';
-import { makeXiraidArrayCreateExecutor } from './xiraid-array-executor.js';
+import {
+  makeXiraidArrayCreateExecutor,
+  makeXiraidArrayModifyExecutor,
+} from './xiraid-array-executor.js';
 import {
   type RunSubprocess,
   type SubprocessResult,
@@ -134,6 +137,7 @@ export function buildTaskSubsystem(
   // client with the observe collector (one daemon connection for both).
   if (opts.xiraidClient) {
     registry.register(makeXiraidArrayCreateExecutor({ client: opts.xiraidClient }));
+    registry.register(makeXiraidArrayModifyExecutor({ client: opts.xiraidClient }));
   }
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
