@@ -24,7 +24,9 @@ import { getOrNull, sendOk } from '../handlers/reads.js';
 import type { PlanProvider } from '../plan/engine.js';
 import {
   fsCreateProvider,
+  fsGrowProvider,
   fsMountProvider,
+  fsSetQuotaModeProvider,
   fsUnmountProvider,
 } from '../plan/providers/filesystem.js';
 
@@ -52,11 +54,12 @@ function observedFsRevision(ctx: ApiContext, id: string): number | undefined {
   return row?.revision;
 }
 
-/** PATCH intent → operation kind + the apply-recheck provider (T10 adds
- *  fs.grow / fs.set_quota_mode). */
+/** PATCH intent → operation kind + the apply-recheck provider. */
 const PATCH_PROVIDERS: Record<string, PlanProvider> = {
   'fs.mount': fsMountProvider,
   'fs.unmount': fsUnmountProvider,
+  'fs.grow': fsGrowProvider,
+  'fs.set_quota_mode': fsSetQuotaModeProvider,
 };
 
 export function filesystemsRouter(ctx: ApiContext): Router {

@@ -5,7 +5,9 @@ import type { TaskEngines } from '../context.js';
 import { PlanEngine } from '../plan/engine.js';
 import {
   fsCreateProvider,
+  fsGrowProvider,
   fsMountProvider,
+  fsSetQuotaModeProvider,
   fsUnmountProvider,
 } from '../plan/providers/filesystem.js';
 import { buildNfsPlanProviders } from '../plan/providers/nfs.js';
@@ -66,6 +68,8 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   planEngine.register(fsCreateProvider);
   planEngine.register(fsMountProvider);
   planEngine.register(fsUnmountProvider);
+  planEngine.register(fsGrowProvider);
+  planEngine.register(fsSetQuotaModeProvider);
 
   return {
     planEngine,

@@ -16,6 +16,7 @@ import {
   isUnderPath,
   parseFsCreateSpec,
   validateFsCreate,
+  validateFsGrow,
   validateFsMount,
   validateFsUnmount,
 } from '../../../lib/fs/validate.js';
@@ -340,6 +341,66 @@ export const fsUnmountProvider: PlanProvider = {
       risk_level: 'disruptive',
       rollback_model: 'non_disruptive',
       enriched_spec: { id: r.row.id, mounted: false, mountpoint: r.mountpoint },
+    };
+  },
+};
+
+/**
+ * fs.grow (PATCH {grow:true}) — xfs_growfs to the (already grown)
+ * backing device. Requires the filesystem mounted; irreversible (XFS
+ * cannot shrink) → rollback_model 'unsupported', risk non_disruptive
+ * (online grow).
+ */
+export const fsGrowProvider: PlanProvider = {
+  operation_kind: 'fs.grow',
+
+  async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
+    const r = requireFsRow(ctx, rawSpec, 'fs.grow');
+    const blockers = validateFsGrow({ mounted: r.row.mounted === true });
+    return {
+      affected_resources: fsAffected(r),
+      blockers,
+      warnings: [],
+      diff: { summary: `xfs_growfs ${r.mountpoint}` },
+      risk_level: 'non_disruptive',
+      rollback_model: 'unsupported',
+      enriched_spec: { id: r.row.id, grow: true, mountpoint: r.mountpoint },
+    };
+  },
+};
+
+/**
+ * fs.set_quota_mode (PATCH {quota_mode}) — rewrite the unit's Options=
+ * quota flag and remount. Client-visible (the remount) → 'disruptive';
+ * rollback restores the captured pre-task unit text.
+ */
+export const fsSetQuotaModeProvider: PlanProvider = {
+  operation_kind: 'fs.set_quota_mode',
+
+  async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
+    const r = requireFsRow(ctx, rawSpec, 'fs.set_quota_mode');
+    const mode = (rawSpec as { quota_mode?: unknown }).quota_mode;
+    if (mode !== 'none' && mode !== 'uquota' && mode !== 'gquota' && mode !== 'pquota') {
+      throw new ApiException(
+        'INVALID_ARGUMENT',
+        `quota_mode must be one of none, uquota, gquota, pquota (got ${String(mode)})`,
+        undefined,
+        'Send PATCH { spec: { quota_mode: "pquota" } }.',
+      );
+    }
+    return {
+      affected_resources: fsAffected(r),
+      blockers: [],
+      warnings: [
+        {
+          code: 'remount_required',
+          message: `${r.row.id} will be remounted to apply ${mode} — connected clients see a pause`,
+        },
+      ],
+      diff: { summary: `rewrite ${r.row.id} Options= quota flag to ${mode}, remount` },
+      risk_level: 'disruptive',
+      rollback_model: 'non_disruptive',
+      enriched_spec: { id: r.row.id, quota_mode: mode, mountpoint: r.mountpoint },
     };
   },
 };

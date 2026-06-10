@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFakeFsHost } from '../../../agent/fs/fake-host.js';
-import { makeFsCreateExecutor } from '../../../agent/task/fs-executor.js';
+import {
+  makeFsCreateExecutor,
+  makeFsMountExecutor,
+  makeFsUnmountExecutor,
+} from '../../../agent/task/fs-executor.js';
 import type { ExecutorContext } from '../../../agent/task/types.js';
 
 function makeCtx(spec: unknown): ExecutorContext & { lines: string[] } {
@@ -161,5 +165,74 @@ describe('fs.create executor', () => {
     await expect(executor.stages[0]?.run(makeCtx(bad))).rejects.toThrow(
       /missing the plan-resolved mkfs inputs/,
     );
+  });
+});
+
+// ---- T10: fs.mount / fs.unmount executors ----
+
+describe('fs.mount / fs.unmount executors', () => {
+  let dir: string;
+  let host: ReturnType<typeof createFakeFsHost>;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'xinas-fs-mu-'));
+    host = createFakeFsHost(dir);
+    await host.writeUnit('mnt-data.mount', '[Mount]\nWhat=/dev/xi_data\nWhere=/mnt/data\nType=xfs\n');
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const SPEC = { id: 'mnt-data.mount', mounted: true, mountpoint: '/mnt/data' };
+
+  it('mount: enableNow + verify; rollback stops only when live', async () => {
+    const executor = makeFsMountExecutor({ host });
+    const ctx = makeCtx(SPEC);
+    for (const stage of executor.stages) await stage.run(ctx);
+    expect(await host.readMounts()).toEqual([{ source: '/dev/xi_data', mountpoint: '/mnt/data' }]);
+
+    await executor.rollback(ctx);
+    expect(await host.readMounts()).toEqual([]);
+    // unit file kept — it predates the task
+    expect(await host.readUnit('mnt-data.mount')).not.toBeNull();
+  });
+
+  it('mount preflight: missing unit aborts', async () => {
+    const executor = makeFsMountExecutor({ host });
+    await expect(
+      executor.stages[0]?.run(makeCtx({ id: 'ghost.mount', mountpoint: '/g' })),
+    ).rejects.toThrow(/does not exist on disk/);
+  });
+
+  it('unmount: stop + disable; verify confirms gone', async () => {
+    await host.enableNow('mnt-data.mount');
+    const executor = makeFsUnmountExecutor({ host });
+    const ctx = makeCtx({ id: 'mnt-data.mount', mounted: false, mountpoint: '/mnt/data' });
+    for (const stage of executor.stages) await stage.run(ctx);
+    expect(await host.readMounts()).toEqual([]);
+    expect(host.ops()).toContain('disable:mnt-data.mount');
+  });
+
+  it('unmount EBUSY (busy unit) → stop throws; rollback restores enablement', async () => {
+    await host.writeUnit('mnt-b-busy.mount', '[Mount]\nWhat=/dev/xi_b\nWhere=/mnt/b\nType=xfs\n');
+    await host.enableNow('mnt-b-busy.mount');
+    const executor = makeFsUnmountExecutor({ host });
+    const ctx = makeCtx({ id: 'mnt-b-busy.mount', mounted: false, mountpoint: '/mnt/b' });
+    await executor.stages[0]?.run(ctx);
+    await expect(executor.stages[1]?.run(ctx)).rejects.toThrow(/EBUSY/);
+
+    await executor.rollback(ctx);
+    // still mounted (stop never succeeded) and enablement restored
+    expect(await host.readMounts()).toContainEqual({ source: '/dev/xi_b', mountpoint: '/mnt/b' });
+    expect(ctx.lines.some((l) => l.includes('enablement restored'))).toBe(true);
+  });
+
+  it('unmount rollback after a crash between stop and disable remounts', async () => {
+    await host.enableNow('mnt-data.mount');
+    await host.stop('mnt-data.mount'); // simulate: stop landed, disable never ran
+    const executor = makeFsUnmountExecutor({ host });
+    const ctx = makeCtx({ id: 'mnt-data.mount', mounted: false, mountpoint: '/mnt/data' });
+    await executor.rollback(ctx);
+    expect(await host.readMounts()).toEqual([{ source: '/dev/xi_data', mountpoint: '/mnt/data' }]);
   });
 });

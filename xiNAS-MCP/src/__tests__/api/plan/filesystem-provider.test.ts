@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { PlanEngine } from '../../../api/plan/engine.js';
 import {
   fsCreateProvider,
+  fsGrowProvider,
   fsMountProvider,
+  fsSetQuotaModeProvider,
   fsUnmountProvider,
 } from '../../../api/plan/providers/filesystem.js';
 import { TaskStore } from '../../../api/tasks/store.js';
@@ -24,6 +26,8 @@ function makeHarness() {
   engine.register(fsCreateProvider);
   engine.register(fsMountProvider);
   engine.register(fsUnmountProvider);
+  engine.register(fsGrowProvider);
+  engine.register(fsSetQuotaModeProvider);
   return { kv, store, engine };
 }
 
@@ -243,5 +247,57 @@ describe('fsMountProvider / fsUnmountProvider', () => {
     await expect(h.engine.plan(args('fs.unmount', { id: 'ghost.mount' }))).rejects.toMatchObject({
       code: 'NOT_FOUND',
     });
+  });
+});
+
+// ---- T10: grow / quota providers ----
+
+describe('fsGrowProvider / fsSetQuotaModeProvider', () => {
+  let h: ReturnType<typeof makeHarness>;
+  beforeEach(() => {
+    h = makeHarness();
+    seedArray(h.kv, 'data');
+    seedFs(h.kv, 'mnt-data.mount', {
+      mountpoint: '/mnt/data',
+      backing_device: '/dev/xi_data',
+      mounted: true,
+      observed_at: 'x',
+    });
+  });
+
+  const args = (kind: string, spec: Record<string, unknown>) => ({
+    ...planArgs(spec),
+    operation_kind: kind,
+  });
+
+  it('grow: mounted → ok (rollback unsupported); unmounted → fs_not_mounted', async () => {
+    const ok = await h.engine.plan(args('fs.grow', { id: 'mnt-data.mount', grow: true }));
+    expect(ok.planResult.blockers).toEqual([]);
+    expect(ok.planResult.rollback_model).toBe('unsupported');
+    const persisted = h.store.get(ok.task.task_id)?.spec as Record<string, unknown>;
+    expect(persisted).toMatchObject({ id: 'mnt-data.mount', grow: true, mountpoint: '/mnt/data' });
+
+    seedFs(h.kv, 'mnt-down.mount', {
+      mountpoint: '/mnt/down',
+      backing_device: '/dev/none',
+      mounted: false,
+      observed_at: 'x',
+    });
+    const down = await h.engine.plan(args('fs.grow', { id: 'mnt-down.mount', grow: true }));
+    expect(down.planResult.blockers.map((b) => b.code)).toEqual(['fs_not_mounted']);
+  });
+
+  it('quota: disruptive with the remount warning; bad mode → INVALID_ARGUMENT', async () => {
+    const { task, planResult } = await h.engine.plan(
+      args('fs.set_quota_mode', { id: 'mnt-data.mount', quota_mode: 'pquota' }),
+    );
+    expect(planResult.risk_level).toBe('disruptive');
+    expect(planResult.warnings.map((w) => w.code)).toContain('remount_required');
+    const persisted = h.store.get(task.task_id)?.spec as Record<string, unknown>;
+    expect(persisted).toMatchObject({ quota_mode: 'pquota', mountpoint: '/mnt/data' });
+
+    await expect(
+      h.engine.plan(args('fs.set_quota_mode', { id: 'mnt-data.mount', quota_mode: 'bogus' })),
+    ).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
   });
 });

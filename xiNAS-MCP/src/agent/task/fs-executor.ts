@@ -210,3 +210,145 @@ export function makeFsCreateExecutor(opts: FsCreateExecutorOptions): Executor {
     },
   };
 }
+
+// ---- fs.mount / fs.unmount (S5 T10, ADR-0007 §Mount/§Unmount) ----
+
+interface IdSpec {
+  id: string;
+  mountpoint: string;
+}
+
+function narrowIdSpec(ctx: ExecutorContext, op: string): IdSpec {
+  const raw = ctx.spec as Record<string, unknown> | null;
+  if (
+    typeof raw !== 'object' ||
+    raw === null ||
+    typeof raw.id !== 'string' ||
+    typeof raw.mountpoint !== 'string'
+  ) {
+    throw new Error(`${op}: spec is missing the plan-resolved id/mountpoint`);
+  }
+  return { id: raw.id, mountpoint: raw.mountpoint };
+}
+
+/**
+ * fs.mount: preflight (unit exists on disk) → mount (enable --now) →
+ * verify (mountpoint live). Rollback: live-state — if the mountpoint is
+ * live, stop the unit (the unit file predates this task and is kept).
+ */
+export function makeFsMountExecutor(opts: { host: FsHost }): Executor {
+  const host = opts.host;
+  return {
+    operation_kind: 'fs.mount',
+    stages: [
+      {
+        name: 'preflight',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { id } = narrowIdSpec(ctx, 'fs.mount');
+          if ((await host.readUnit(id)) === null) {
+            throw new Error(`preflight: unit ${id} does not exist on disk`);
+          }
+          ctx.emitOutput(`preflight ok: ${id} present`);
+        },
+      },
+      {
+        name: 'mount',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { id, mountpoint } = narrowIdSpec(ctx, 'fs.mount');
+          const mounts = await host.readMounts();
+          if (mounts.some((m) => m.mountpoint === mountpoint)) {
+            ctx.emitOutput(`${mountpoint} already mounted — enable only (idempotent)`);
+          }
+          await host.enableNow(id);
+          ctx.emitOutput(`enabled --now ${id}`);
+        },
+      },
+      {
+        name: 'verify',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { mountpoint } = narrowIdSpec(ctx, 'fs.mount');
+          const mounts = await host.readMounts();
+          if (!mounts.some((m) => m.mountpoint === mountpoint)) {
+            throw new Error(`verify: ${mountpoint} is not mounted after enableNow`);
+          }
+          ctx.emitOutput(`verified: ${mountpoint} mounted`);
+        },
+      },
+    ],
+    async rollback(ctx: ExecutorContext): Promise<void> {
+      const { id, mountpoint } = narrowIdSpec(ctx, 'fs.mount');
+      const mounts = await host.readMounts();
+      if (mounts.some((m) => m.mountpoint === mountpoint)) {
+        await host.stop(id);
+        ctx.emitOutput(`rollback: stopped ${id}`);
+      }
+      // The unit file predates this task — never removed here.
+    },
+  };
+}
+
+/**
+ * fs.unmount: preflight (unit exists) → unmount (stop, then disable) →
+ * verify (mountpoint gone). Rollback: live-state — the mountpoint NOT
+ * live → enable --now to restore the pre-task state (covers both an
+ * EBUSY stop, where nothing changed, and a crash between stop and
+ * disable).
+ */
+export function makeFsUnmountExecutor(opts: { host: FsHost }): Executor {
+  const host = opts.host;
+  return {
+    operation_kind: 'fs.unmount',
+    stages: [
+      {
+        name: 'preflight',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { id } = narrowIdSpec(ctx, 'fs.unmount');
+          if ((await host.readUnit(id)) === null) {
+            throw new Error(`preflight: unit ${id} does not exist on disk`);
+          }
+          ctx.emitOutput(`preflight ok: ${id} present`);
+        },
+      },
+      {
+        name: 'unmount',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { id, mountpoint } = narrowIdSpec(ctx, 'fs.unmount');
+          const mounts = await host.readMounts();
+          if (mounts.some((m) => m.mountpoint === mountpoint)) {
+            await host.stop(id); // EBUSY (open files) throws here → rollback
+          } else {
+            ctx.emitOutput(`${mountpoint} already unmounted — disable only (idempotent)`);
+          }
+          await host.disable(id);
+          ctx.emitOutput(`stopped + disabled ${id}`);
+        },
+      },
+      {
+        name: 'verify',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { mountpoint } = narrowIdSpec(ctx, 'fs.unmount');
+          const mounts = await host.readMounts();
+          if (mounts.some((m) => m.mountpoint === mountpoint)) {
+            throw new Error(`verify: ${mountpoint} is still mounted after stop`);
+          }
+          ctx.emitOutput(`verified: ${mountpoint} unmounted`);
+        },
+      },
+    ],
+    async rollback(ctx: ExecutorContext): Promise<void> {
+      const { id, mountpoint } = narrowIdSpec(ctx, 'fs.unmount');
+      const mounts = await host.readMounts();
+      if (!mounts.some((m) => m.mountpoint === mountpoint)) {
+        if ((await host.readUnit(id)) !== null) {
+          await host.enableNow(id);
+          ctx.emitOutput(`rollback: re-enabled ${id} (remounted ${mountpoint})`);
+        }
+      } else {
+        // EBUSY stop: nothing actually changed; re-enable is a no-op-safe
+        // restore of enablement in case disable raced the failure.
+        await host.enableNow(id);
+        ctx.emitOutput(`rollback: ${mountpoint} still mounted — enablement restored`);
+      }
+    },
+  };
+}

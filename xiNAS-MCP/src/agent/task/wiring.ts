@@ -20,7 +20,11 @@ import { createFakeFsHost } from '../fs/fake-host.js';
 import { type FsHost, createRealFsHost } from '../fs/host.js';
 import { fixtureDir } from '../probe/fixture.js';
 import type { XiraidClient } from '../xiraid/client.js';
-import { makeFsCreateExecutor } from './fs-executor.js';
+import {
+  makeFsCreateExecutor,
+  makeFsMountExecutor,
+  makeFsUnmountExecutor,
+} from './fs-executor.js';
 import { buildNfsExecutors, type NfsExecutorDeps } from './nfs-executor.js';
 import { createNfsHelperClientFromProbe } from './nfs-helper-client.js';
 import { createProgressPublisher } from './progress-publisher.js';
@@ -197,6 +201,8 @@ export function buildTaskSubsystem(
   // file-backed fake in fixture mode (e2e), subprocess-backed otherwise.
   const fsHost = opts.fsHost ?? (fdir !== null ? createFakeFsHost(fdir) : createRealFsHost());
   registry.register(makeFsCreateExecutor({ host: fsHost }));
+  registry.register(makeFsMountExecutor({ host: fsHost }));
+  registry.register(makeFsUnmountExecutor({ host: fsHost }));
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
   });
