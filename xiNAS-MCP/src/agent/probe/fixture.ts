@@ -14,6 +14,7 @@
  *   - disk  → disks.json     (lsblk --json shape) via parseLsblkOutput
  *   - users → users.json     (array of passwd-ish records) → ParsedPasswdLine[]
  *   - idmap → nfs-idmap.json  (IdmapSnapshot shape) returned directly
+ *   - nfs-profile → nfs-profile.json (NfsProfileSnapshot shape) returned directly
  *
  * All OTHER probes (network, filesystem, nfs, inventory) return empty/minimal
  * snapshots in fixture mode; the e2e suite only asserts users, disks, and
@@ -33,6 +34,7 @@ import { join } from 'node:path';
 import { type ObservedDisk, parseLsblkOutput } from '../../lib/parse/disk.js';
 import type { ParsedPasswdLine } from '../../lib/parse/passwd.js';
 import type { IdmapSnapshot } from './idmap.js';
+import type { NfsProfileSnapshot } from './nfs-profile.js';
 import type { MonitorHandle } from './subprocess-monitor.js';
 
 /** A no-op MonitorHandle for fixture mode (no subprocess to stop). */
@@ -71,6 +73,10 @@ interface FixtureUsersProbe {
 
 interface FixtureIdmapProbe {
   snapshot(): Promise<IdmapSnapshot>;
+}
+
+interface FixtureNfsProfileProbe {
+  snapshot(): Promise<NfsProfileSnapshot>;
 }
 
 interface FixtureNetworkProbe {
@@ -154,6 +160,18 @@ export function createFixtureIdmapProbe(dir: string): FixtureIdmapProbe {
           idmapd_active: false,
           idmapd_unit_state: 'unknown',
         }),
+      );
+    },
+  };
+}
+
+/** NfsProfile: return nfs-profile.json directly (NfsProfileSnapshot shape);
+ *  absent fixture → empty effective_files (the boot sweep must not crash). */
+export function createFixtureNfsProfileProbe(dir: string): FixtureNfsProfileProbe {
+  return {
+    snapshot(): Promise<NfsProfileSnapshot> {
+      return Promise.resolve(
+        readFixture<NfsProfileSnapshot>(dir, 'nfs-profile.json', { effective_files: {} }),
       );
     },
   };

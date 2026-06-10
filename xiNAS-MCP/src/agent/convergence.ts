@@ -52,6 +52,7 @@ import { FilesystemCollector } from './collectors/filesystem.js';
 import { InventoryCollector } from './collectors/inventory.js';
 import { NetworkInterfaceCollector } from './collectors/network.js';
 import { NfsIdmapCollector } from './collectors/nfs-idmap.js';
+import { NfsProfileCollector } from './collectors/nfs-profile.js';
 import { NfsCollector } from './collectors/nfs.js';
 import { ManagedFilesStubCollector, XiraidArrayStubCollector } from './collectors/stubs.js';
 import { SystemdUnitCollector } from './collectors/systemd.js';
@@ -68,12 +69,14 @@ import {
   createFixtureInventoryProbe,
   createFixtureNetworkProbe,
   createFixtureNfsProbe,
+  createFixtureNfsProfileProbe,
   createFixtureUsersProbe,
   fixtureDir,
 } from './probe/fixture.js';
 import { createIdmapProbe } from './probe/idmap.js';
 import { createInventoryProbe } from './probe/inventory.js';
 import { createNetworkProbe } from './probe/network.js';
+import { createNfsProfileProbe } from './probe/nfs-profile.js';
 import { createNfsProbe } from './probe/nfs.js';
 import { DEFAULT_ALLOWLIST } from './probe/systemd.js';
 import { createUsersProbe } from './probe/users.js';
@@ -235,6 +238,17 @@ export function buildConvergence(config: AgentConfig): Convergence {
         subscribeIdmapdUnit(): SyncStopHandle {
           return NOOP_HANDLE;
         },
+      },
+    }),
+  );
+
+  // --- NfsProfile: snapshot() -> read(); poll-only (60 s), no watchers in v1. ---
+  const nfsProfileProbe =
+    fdir !== null ? createFixtureNfsProfileProbe(fdir) : createNfsProfileProbe();
+  registry.register(
+    new NfsProfileCollector({
+      probe: {
+        read: () => nfsProfileProbe.snapshot(),
       },
     }),
   );

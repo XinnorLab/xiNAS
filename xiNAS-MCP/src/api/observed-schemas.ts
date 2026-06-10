@@ -45,6 +45,7 @@ const OBSERVED_KINDS = [
   'Filesystem',
   'NfsSession',
   'NfsIdmap',
+  'NfsProfile',
   'SystemdUnit',
   'User',
   'Group',
