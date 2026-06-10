@@ -9,7 +9,7 @@ _log = logging.getLogger(__name__)
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import Label, Footer, Rule
+from textual.widgets import Footer, Label, Rule
 
 from xinas_menu.version import XINAS_MENU_VERSION
 

@@ -1,10 +1,9 @@
 """Rollback risk classification logic for xiNAS configuration changes."""
 from __future__ import annotations
 
-from typing import Optional
+import contextlib
 
 from .models import DiffResult, Manifest, OperationType, RollbackClass
-
 
 # ---------------------------------------------------------------------------
 # Internal classification tables
@@ -106,7 +105,7 @@ class RollbackClassifier:
     def classify_operation(
         self,
         operation: OperationType,
-        details: Optional[dict] = None,
+        details: dict | None = None,
     ) -> RollbackClass:
         """Classify a single operation.
 
@@ -151,10 +150,8 @@ class RollbackClassifier:
 
         # Honour any pre-set class on the diff itself.
         if diff.rollback_class:
-            try:
+            with contextlib.suppress(ValueError):
                 overall = _higher_risk(overall, RollbackClass(diff.rollback_class))
-            except ValueError:
-                pass
 
         for change in diff.config_changes:
             cls = self._classify_change_entry(change)
@@ -180,10 +177,8 @@ class RollbackClassifier:
 
         for manifest in (current_manifest, target_manifest):
             if manifest.rollback_class:
-                try:
+                with contextlib.suppress(ValueError):
                     overall = _higher_risk(overall, RollbackClass(manifest.rollback_class))
-                except ValueError:
-                    pass
 
             if manifest.operation:
                 try:
@@ -200,7 +195,7 @@ class RollbackClassifier:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _classify_raid_modify(details: Optional[dict]) -> RollbackClass:
+    def _classify_raid_modify(details: dict | None) -> RollbackClass:
         """Refine classification for RAID_MODIFY based on sub-details."""
         if not details:
             # No details provided — assume worst case.
@@ -226,7 +221,7 @@ class RollbackClassifier:
         return RollbackClass.DESTROYING_DATA
 
     @staticmethod
-    def _classify_fs_modify(details: Optional[dict]) -> RollbackClass:
+    def _classify_fs_modify(details: dict | None) -> RollbackClass:
         """Refine classification for FS_MODIFY based on sub-details."""
         if not details:
             return RollbackClass.DESTROYING_DATA

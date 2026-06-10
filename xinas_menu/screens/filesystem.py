@@ -5,12 +5,12 @@ import json
 import logging
 from typing import Any
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
 from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -333,7 +333,7 @@ class FilesystemScreen(Screen):
             await self.app.push_screen_wait(
                 ConfirmDialog(f"mkfs.xfs failed:\n\n{err}", "Error")
             )
-            view.set_content(f"\033[31m  mkfs.xfs failed.\033[0m")
+            view.set_content("\033[31m  mkfs.xfs failed.\033[0m")
             return
 
         # Create systemd mount unit
@@ -343,7 +343,7 @@ class FilesystemScreen(Screen):
             await self.app.push_screen_wait(
                 ConfirmDialog(f"Failed to create mount unit:\n\n{err}", "Error")
             )
-            view.set_content(f"\033[31m  Mount unit creation failed.\033[0m")
+            view.set_content("\033[31m  Mount unit creation failed.\033[0m")
             return
 
         # Enable and start mount
@@ -353,7 +353,7 @@ class FilesystemScreen(Screen):
             await self.app.push_screen_wait(
                 ConfirmDialog(f"Failed to mount filesystem:\n\n{err}", "Error")
             )
-            view.set_content(f"\033[31m  Mount failed.\033[0m")
+            view.set_content("\033[31m  Mount failed.\033[0m")
             return
 
         # Success

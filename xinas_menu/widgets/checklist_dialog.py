@@ -37,7 +37,7 @@ class ChecklistDialog(ModalScreen[list[str] | None]):
         self._prompt = prompt
 
     def compose(self) -> ComposeResult:
-        from textual.containers import Vertical, Horizontal
+        from textual.containers import Horizontal, Vertical
         with Vertical(id="dialog-container"):
             yield Label(self._title, id="dialog-title")
             if self._prompt:

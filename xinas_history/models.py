@@ -4,8 +4,6 @@ from __future__ import annotations
 import datetime
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -154,16 +152,16 @@ class Manifest:
     rollback_class: str = ""  # RollbackClass value
     status: str = "pending"  # SnapshotStatus value
     type: str = "rollback_eligible"  # SnapshotType value
-    parent_id: Optional[str] = None
+    parent_id: str | None = None
     repo_commit: str = ""
     playbook: str = "playbooks/site.yml"
     extra_vars: dict = field(default_factory=dict)
     hostname: str = ""
-    hardware_id: Optional[str] = None
+    hardware_id: str | None = None
     auto_detected: bool = False
     checksums: dict = field(default_factory=dict)
     validation: dict = field(default_factory=dict)
-    diff_summary: Optional[str] = None
+    diff_summary: str | None = None
 
     def to_dict(self) -> dict:
         """Convert to a plain dict suitable for YAML serialization.

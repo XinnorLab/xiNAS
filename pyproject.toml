@@ -29,7 +29,21 @@ extend-exclude = [".claude", "node_modules", "xiNAS-MCP/node_modules"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
-ignore = []
+# E501: line WRAPPING is enforced by `ruff format` (a separate blocking CI job);
+# E501 at >100 cols remains only in long strings/comments where rewrapping is
+# churn without value.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Deliberate TUI pattern: `_log = logging.getLogger(__name__)` sits between the
+# stdlib imports and the heavyweight textual/widget imports, so everything after
+# it trips E402. Keeping the pattern; scoped to the files that use it.
+"xinas_menu/app.py" = ["E402"]
+"xinas_menu/screens/network.py" = ["E402"]
+"xinas_menu/screens/nfs.py" = ["E402"]
+"xinas_menu/screens/raid.py" = ["E402"]
+"xinas_menu/screens/spare_pools.py" = ["E402"]
+"xinas_menu/screens/welcome.py" = ["E402"]
 
 [tool.ruff.format]
 quote-style = "double"

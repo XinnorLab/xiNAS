@@ -44,7 +44,7 @@ class NFSHelperClient:
             return False, None, f"NFS helper socket not found: {self._path}"
         except ConnectionRefusedError:
             return False, None, "NFS helper is not running (connection refused)"
-        except socket.timeout:
+        except TimeoutError:
             return False, None, "NFS helper timed out"
         except OSError as exc:
             return False, None, str(exc)

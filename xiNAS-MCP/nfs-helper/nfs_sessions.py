@@ -4,7 +4,6 @@ Falls back to nfsstat if /proc data is insufficient.
 """
 
 import os
-import subprocess
 
 
 def _parse_nfsd_clients() -> list[dict]:
@@ -17,7 +16,8 @@ def _parse_nfsd_clients() -> list[dict]:
     for client_id in os.listdir(clients_dir):
         info_path = os.path.join(clients_dir, client_id, "info")
         try:
-            info_text = open(info_path).read()
+            with open(info_path) as f:
+                info_text = f.read()
         except OSError:
             continue
 
@@ -41,7 +41,8 @@ def _parse_nfsd_rpc_stats() -> dict:
     """Parse /proc/net/rpc/nfsd for high-level stats."""
     stats = {}
     try:
-        text = open("/proc/net/rpc/nfsd").read()
+        with open("/proc/net/rpc/nfsd") as f:
+            text = f.read()
         for line in text.splitlines():
             parts = line.split()
             if not parts:
@@ -59,7 +60,8 @@ def list_sessions() -> list[dict]:
     if not sessions:
         # Try to get connected clients from /proc/net/rpc/auth.unix.ip
         try:
-            text = open("/proc/net/rpc/auth.unix.ip").read()
+            with open("/proc/net/rpc/auth.unix.ip") as f:
+                text = f.read()
             for line in text.splitlines():
                 if line.startswith("#"):
                     continue

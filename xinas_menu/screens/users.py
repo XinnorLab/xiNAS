@@ -5,19 +5,18 @@ import asyncio
 import grp
 import pwd
 import subprocess
-from typing import Any
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
-from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
+from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
 _RED = "\033[31m"
@@ -322,7 +321,7 @@ class UsersScreen(Screen):
                 if not group:
                     continue
                 ok, _, err = await loop.run_in_executor(
-                    None, lambda: _run_cmd("usermod", "-aG", group, username)
+                    None, lambda group=group: _run_cmd("usermod", "-aG", group, username)
                 )
                 if ok:
                     self.app.audit.log("user.add_to_group", f"{username} -> {group}", "OK")
@@ -355,7 +354,7 @@ class UsersScreen(Screen):
                 if not group:
                     continue
                 ok, _, err = await loop.run_in_executor(
-                    None, lambda: _run_cmd("gpasswd", "-d", username, group)
+                    None, lambda group=group: _run_cmd("gpasswd", "-d", username, group)
                 )
                 if ok:
                     self.app.audit.log("user.remove_from_group", f"{username} <- {group}", "OK")
@@ -524,7 +523,7 @@ def _get_local_users() -> list[pwd.struct_passwd]:
 
 
 def _format_users(users: list[pwd.struct_passwd]) -> str:
-    GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+    GRN, YLW, _RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
     W = 110
     lines: list[str] = []
     lines.append(f"{BLD}{CYN}USER ACCOUNTS{NC}")

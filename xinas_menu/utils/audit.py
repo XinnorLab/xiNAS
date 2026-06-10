@@ -1,6 +1,7 @@
 """AuditLogger — writes user actions to /var/log/xinas/audit.log."""
 from __future__ import annotations
 
+import contextlib
 import os
 import pwd
 import time
@@ -17,10 +18,8 @@ class AuditLogger:
         self._ensure_log_dir()
 
     def _ensure_log_dir(self) -> None:
-        try:
+        with contextlib.suppress(OSError):
             self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
-        except OSError:
-            pass
 
     @staticmethod
     def _current_user() -> str:

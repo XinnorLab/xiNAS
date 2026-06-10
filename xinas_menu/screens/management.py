@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import os
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 

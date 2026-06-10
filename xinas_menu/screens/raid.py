@@ -8,19 +8,18 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
 from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
+from xinas_menu.widgets.drive_picker import DrivePickerScreen
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
-from xinas_menu.widgets.checklist_dialog import ChecklistDialog
-from xinas_menu.widgets.drive_picker import DrivePickerScreen
 from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -636,7 +635,6 @@ class RAIDScreen(Screen):
 
         # ── Double confirmation when dependencies exist ──────────────────
         if mounts or affected_shares:
-            dep_count = len(affected_shares) + len(mounts)
             confirmed2 = await self.app.push_screen_wait(
                 ConfirmDialog(
                     f"Are you ABSOLUTELY sure?\n\n"
@@ -906,7 +904,8 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
             lines.append(_box_line(f"  {_YLW}~ Initializing: {_progress_bar(init_progress)}{_NC}"))
 
         if extended:
-            _on_off = lambda v: f"{_GRN}Enabled{_NC}" if v else f"{_DIM}Disabled{_NC}"
+            def _on_off(v):
+                return f"{_GRN}Enabled{_NC}" if v else f"{_DIM}Disabled{_NC}"
 
             # ── Priorities ──
             lines.append(_box_line())
@@ -933,7 +932,7 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
             lines.append(_box_line(f"  {_DIM}Memory Limit{_NC}        |  {'unlimited' if not mem_limit else f'{mem_limit} MB'}"))
             lines.append(_box_line(f"  {_DIM}Memory Pre-alloc{_NC}    |  {'disabled' if not mem_prealloc else f'{mem_prealloc} MB'}"))
             lines.append(_box_line(f"  {_DIM}Block Size{_NC}          |  {block_size} bytes"))
-            lines.append(_box_line(f"  {_DIM}Request Limit{_NC}       |  {'unlimited' if not req_limit else req_limit}"))
+            lines.append(_box_line(f"  {_DIM}Request Limit{_NC}       |  {req_limit if req_limit else 'unlimited'}"))
             lines.append(_box_line(f"  {_DIM}CPU Affinity{_NC}        |  {cpu}"))
 
             # ── I/O Scheduler & Merge ──

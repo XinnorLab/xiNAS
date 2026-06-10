@@ -8,16 +8,14 @@ Update healthcheck.sh and re-extract if changes are needed.
 """
 from __future__ import annotations
 
-import io
 import contextlib
-
-
-import sys
-import os
+import io
 import json
+import os
+import re
 import shlex
 import subprocess
-import re
+import sys
 import time
 from datetime import datetime
 
@@ -29,7 +27,6 @@ def _parse_yaml_simple(text):
     """Minimal YAML parser for profile files - handles flat keys and section maps."""
     result = {}
     current_section = None
-    current_section_name = None
 
     for raw_line in text.split("\n"):
         stripped = raw_line.strip()
@@ -49,13 +46,11 @@ def _parse_yaml_simple(text):
         if indent == 0:
             # Top-level key
             if not value:
-                current_section_name = key
                 current_section = {}
                 result[key] = current_section
             else:
                 result[key] = _yaml_val(value)
                 current_section = None
-                current_section_name = None
         elif indent > 0 and current_section is not None:
             # Inside a section
             if value.startswith("{"):
@@ -166,7 +161,7 @@ def read_file(path):
     try:
         with open(path) as f:
             return f.read().strip()
-    except (IOError, OSError):
+    except OSError:
         return None
 
 def read_sysctl(key):
@@ -814,7 +809,7 @@ def check_rdma(exp, checks):
                 evidence="rdma command not found",
                 fix_hint="Install rdma-core: apt install rdma-core"))
         elif output:
-            dev_count = len([l for l in output.split("\n") if l.strip()])
+            dev_count = len([line for line in output.split("\n") if line.strip()])
             results.append(CheckResult("RDMA", "rdma_devices", "PASS",
                 f"{dev_count} device(s)", "present"))
         else:
@@ -1138,7 +1133,7 @@ def check_filesystem(exp, checks):
                 results.append(CheckResult("Filesystem", f"mount_opts ({mount_path})", "WARN",
                     mount_opts[:40], "noatime present",
                     impact="Without noatime, every read updates metadata",
-                    fix_hint=f"Add noatime to mount options in /etc/fstab"))
+                    fix_hint="Add noatime to mount options in /etc/fstab"))
 
         if "xfs_mount_opts" in checks:
             xfs_required_opts = [
@@ -1406,8 +1401,8 @@ def check_nfs(exp, checks):
     if "exports_exist" in checks:
         exports = read_file("/etc/exports")
         if exports:
-            lines = [l for l in exports.split("\n")
-                     if l.strip() and not l.strip().startswith("#")]
+            lines = [line for line in exports.split("\n")
+                     if line.strip() and not line.strip().startswith("#")]
             if lines:
                 results.append(CheckResult("NFS", "exports_exist", "PASS",
                     f"{len(lines)} export(s)", "non-empty"))

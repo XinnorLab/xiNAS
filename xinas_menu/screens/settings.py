@@ -5,12 +5,12 @@ import asyncio
 import logging
 import socket
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
 from xinas_menu.utils.config import cfg_read, cfg_write
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -68,7 +68,7 @@ class SettingsScreen(Screen):
         loop = asyncio.get_running_loop()
         cfg = await loop.run_in_executor(None, cfg_read)
 
-        GRN, RED, BLD, DIM, NC = "\033[32m", "\033[31m", "\033[1m", "\033[2m", "\033[0m"
+        GRN, _RED, BLD, DIM, NC = "\033[32m", "\033[31m", "\033[1m", "\033[2m", "\033[0m"
         lines = [f"{BLD}Settings Overview{NC}", ""]
 
         email = cfg.get("email", {})
@@ -123,7 +123,7 @@ class SettingsScreen(Screen):
         cfg = await loop.run_in_executor(None, cfg_read)
         email = cfg.get("email", {})
 
-        GRN, BLD, DIM, NC = "\033[32m", "\033[1m", "\033[2m", "\033[0m"
+        _GRN, BLD, _DIM, NC = "\033[32m", "\033[1m", "\033[2m", "\033[0m"
         lines = [f"{BLD}Email Configuration{NC}", ""]
         lines.append(f"  Enabled:   {email.get('enabled', False)}")
         lines.append(f"  SMTP Host: {email.get('smtp_host', '(not set)')}")
@@ -258,11 +258,13 @@ class SettingsScreen(Screen):
         sched = cfg.get("healthcheck_schedule", {})
 
         from xinas_menu.utils.hc_scheduler import (
-            scheduler_status, scheduler_enable, scheduler_disable,
+            scheduler_disable,
+            scheduler_enable,
+            scheduler_status,
         )
         status = await loop.run_in_executor(None, scheduler_status)
 
-        GRN, RED, BLD, DIM, NC = "\033[32m", "\033[31m", "\033[1m", "\033[2m", "\033[0m"
+        GRN, RED, BLD, _DIM, NC = "\033[32m", "\033[31m", "\033[1m", "\033[2m", "\033[0m"
         lines = [f"{BLD}Health Check Scheduler{NC}", ""]
         if status["enabled"]:
             lines.append(f"  Status:    {GRN}enabled{NC}")
@@ -381,7 +383,9 @@ class SettingsScreen(Screen):
         view = self.query_one("#settings-content", ScrollableTextView)
 
         from xinas_menu.utils.xicli_mail import (
-            grpc_available, mail_show, settings_mail_show,
+            grpc_available,
+            mail_show,
+            settings_mail_show,
         )
 
         available = await grpc_available()
@@ -395,7 +399,7 @@ class SettingsScreen(Screen):
         ok_r, receivers, err_r = await mail_show()
         ok_s, settings, err_s = await settings_mail_show()
 
-        GRN, RED, BLD, DIM, NC = (
+        _GRN, RED, BLD, DIM, NC = (
             "\033[32m", "\033[31m", "\033[1m", "\033[2m", "\033[0m",
         )
         lines = [f"{BLD}xiRAID Notifications{NC}", ""]

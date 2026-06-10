@@ -5,11 +5,10 @@ import datetime
 import hashlib
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .engine import SnapshotEngine
@@ -178,7 +177,7 @@ class DriftDetector:
     def __init__(
         self,
         store: FilesystemStore,
-        engine: Optional[SnapshotEngine] = None,
+        engine: SnapshotEngine | None = None,
         repo_root: str = "/opt/xiNAS",
     ) -> None:
         """
@@ -194,7 +193,7 @@ class DriftDetector:
     # -- public API ---------------------------------------------------------
 
     def check(
-        self, reference_snapshot_id: Optional[str] = None,
+        self, reference_snapshot_id: str | None = None,
     ) -> DriftReport:
         """Run full drift detection against a reference snapshot.
 
@@ -250,7 +249,7 @@ class DriftDetector:
 
     # -- private: resolve reference -----------------------------------------
 
-    def _resolve_reference(self, snapshot_id: Optional[str]):
+    def _resolve_reference(self, snapshot_id: str | None):
         """Resolve the reference manifest.  Returns ``None`` if unavailable."""
         if snapshot_id is not None:
             # Try regular snapshot first, then baseline.
@@ -420,12 +419,9 @@ class DriftDetector:
             previous_cksum = self._sha256(previous_repr)
 
             # Check current state of the unit file.
+            # Empty checksum means the unit file was removed — drift.
             current_bytes = self._read_file_bytes(unit_file)
-            if current_bytes is not None:
-                current_cksum = self._sha256(current_bytes)
-            else:
-                # Unit file removed — drift.
-                current_cksum = ""
+            current_cksum = self._sha256(current_bytes) if current_bytes is not None else ""
 
             # We also check the live systemd state for semantic comparison.
             live_state = self._get_live_mount_state(unit_name)
@@ -438,13 +434,10 @@ class DriftDetector:
                 is_semantic = True
             else:
                 # Cannot query live state; fall back to unit-file check.
-                if current_cksum and current_bytes is not None:
-                    # Unit file exists — we cannot do semantic comparison
-                    # without live state; skip this unit.
-                    is_semantic = False
-                else:
-                    # Unit file gone — clear drift.
-                    is_semantic = False
+                # Either the unit file still exists (no semantic comparison
+                # possible without live state) or it is gone (clear drift) —
+                # in both cases this is not a semantic-level finding.
+                is_semantic = False
 
             # If unit file is missing entirely, that is definite drift.
             if not current_cksum and not live_state:
@@ -502,20 +495,20 @@ class DriftDetector:
                 for chunk in iter(lambda: f.read(8192), b""):
                     h.update(chunk)
             return f"sha256:{h.hexdigest()}"
-        except (OSError, IOError):
+        except OSError:
             return ""
 
     @staticmethod
-    def _read_file_bytes(path: str) -> Optional[bytes]:
+    def _read_file_bytes(path: str) -> bytes | None:
         """Read a file from disk.  Returns ``None`` if missing or unreadable."""
         try:
             return Path(path).read_bytes()
-        except (OSError, IOError):
+        except OSError:
             return None
 
     def _read_snapshot_config(
         self, snapshot_id: str, manifest, filename: str,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         """Read a config file from a snapshot, handling baseline directory."""
         from .models import SnapshotType
 
@@ -531,7 +524,7 @@ class DriftDetector:
 
     def _read_snapshot_runtime(
         self, snapshot_id: str, manifest, filename: str,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         """Read a runtime file from a snapshot, handling baseline directory."""
         from .models import SnapshotType
 
@@ -546,7 +539,7 @@ class DriftDetector:
         return self._store.read_runtime_file(snapshot_id, filename)
 
     @staticmethod
-    def _get_live_mount_state(unit_name: str) -> Optional[dict]:
+    def _get_live_mount_state(unit_name: str) -> dict | None:
         """Query systemd for the current state of a mount unit.
 
         Returns a dict with ``unit``, ``active``, ``sub``, ``description``

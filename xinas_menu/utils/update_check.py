@@ -9,7 +9,6 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-
 _TRAILER_RE = re.compile(r"^Requires-Rebuild:\s*(.+)$", re.MULTILINE | re.IGNORECASE)
 
 

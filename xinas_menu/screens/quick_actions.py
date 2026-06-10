@@ -9,7 +9,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
+from textual.widgets import Footer, Label
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -126,7 +126,7 @@ class QuickActionsScreen(Screen):
         loop = asyncio.get_running_loop()
         from xinas_menu.utils.service_ctl import ServiceController
         ctl = ServiceController()
-        GRN, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+        GRN, RED, CYN, BLD, _DIM, NC = "\033[32m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
         lines = [f"{BLD}{CYN}=== Service Status ==={NC}", ""]
         for svc in _SERVICES:
             state = await loop.run_in_executor(None, lambda s=svc: ctl.state(s))

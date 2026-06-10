@@ -77,6 +77,7 @@ async def mail_send_test() -> tuple[bool, str]:
     No gRPC RPC exists for this — falls back to ``xicli mail send``.
     """
     import asyncio
+
     from xinas_menu.utils.subprocess_utils import run_cmd
 
     loop = asyncio.get_running_loop()

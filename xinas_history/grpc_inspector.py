@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
-from typing import Any, Optional, Tuple
+from typing import Any
 
 
 class GrpcInspector:
@@ -38,7 +38,7 @@ class GrpcInspector:
     # Public query methods
     # ------------------------------------------------------------------
 
-    async def raid_show(self, extended: bool = True) -> Tuple[bool, Optional[dict], str]:
+    async def raid_show(self, extended: bool = True) -> tuple[bool, dict | None, str]:
         """Get RAID array topology.
 
         Returns (ok, data, error) tuple. data is a dict keyed by array name.
@@ -60,7 +60,7 @@ class GrpcInspector:
             return False, None, err
         return self._parse_json(stdout)
 
-    async def pool_show(self) -> Tuple[bool, Optional[dict], str]:
+    async def pool_show(self) -> tuple[bool, dict | None, str]:
         """Get spare pool information."""
         if self._client is not None:
             try:
@@ -76,7 +76,7 @@ class GrpcInspector:
             return False, None, err
         return self._parse_json(stdout)
 
-    async def config_show(self) -> Tuple[bool, Optional[dict], str]:
+    async def config_show(self) -> tuple[bool, dict | None, str]:
         """Get xiRAID stored configuration from drives."""
         if self._client is not None:
             # XiRAIDClient does not have a config_show method;
@@ -90,7 +90,7 @@ class GrpcInspector:
             return False, None, err
         return self._parse_json(stdout)
 
-    async def config_backup(self) -> Tuple[bool, Optional[dict], str]:
+    async def config_backup(self) -> tuple[bool, dict | None, str]:
         """Trigger xiRAID config backup.
 
         This is a mutation — uses a longer timeout.
@@ -136,7 +136,7 @@ class GrpcInspector:
 
     def _run_cli(
         self, args: list[str], timeout: int | None = None,
-    ) -> Tuple[bool, Optional[str], str]:
+    ) -> tuple[bool, str | None, str]:
         """Fallback: run xicli command and return (ok, stdout, error).
 
         Uses subprocess with timeout handling.
@@ -168,7 +168,7 @@ class GrpcInspector:
 
     async def _run_cli_async(
         self, args: list[str], timeout: int | None = None,
-    ) -> Tuple[bool, Optional[str], str]:
+    ) -> tuple[bool, str | None, str]:
         """Run CLI command in a thread to avoid blocking the event loop."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -180,7 +180,7 @@ class GrpcInspector:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _parse_json(raw: Optional[str]) -> Tuple[bool, Optional[Any], str]:
+    def _parse_json(raw: str | None) -> tuple[bool, Any | None, str]:
         """Parse a JSON string, returning (ok, data, error)."""
         if not raw or not raw.strip():
             return True, None, ""

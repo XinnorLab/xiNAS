@@ -1,16 +1,15 @@
 """Global configuration lock and transaction journal."""
 from __future__ import annotations
 
+import contextlib
+import datetime
 import fcntl
 import getpass
 import json
 import os
 import tempfile
-import time
-import datetime
 import uuid
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -56,7 +55,7 @@ class GlobalConfigLock:
 
     def __init__(self, state_dir: str) -> None:
         self._state_dir = Path(state_dir)
-        self._lock_fd: Optional[int] = None
+        self._lock_fd: int | None = None
         self._locked = False
 
     # ------------------------------------------------------------------
@@ -89,7 +88,7 @@ class GlobalConfigLock:
         )
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        except OSError as err:
             os.close(fd)
             # Try to give a helpful error message.
             info = self.get_lock_info()
@@ -101,9 +100,9 @@ class GlobalConfigLock:
                     "pid", "operation", "user", "source", "started",
                 )})
                 raise LockError(
-                    "Configuration lock held by another process: {}".format(holder)
-                )
-            raise LockError("Configuration lock held by another process")
+                    f"Configuration lock held by another process: {holder}"
+                ) from err
+            raise LockError("Configuration lock held by another process") from err
 
         self._lock_fd = fd
         self._locked = True
@@ -138,14 +137,10 @@ class GlobalConfigLock:
     def release(self) -> None:
         """Release the lock, clean up metadata and journal."""
         if self._lock_fd is not None:
-            try:
+            with contextlib.suppress(OSError):
                 fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
-            try:
+            with contextlib.suppress(OSError):
                 os.close(self._lock_fd)
-            except OSError:
-                pass
             self._lock_fd = None
 
         self._locked = False
@@ -156,24 +151,24 @@ class GlobalConfigLock:
         """Return True if this instance currently holds the lock."""
         return self._locked
 
-    def get_lock_info(self) -> Optional[dict]:
+    def get_lock_info(self) -> dict | None:
         """Read lock metadata.  Returns None if no lock held."""
         meta_path = self._state_dir / self.LOCK_META_FILE
         if not meta_path.is_file():
             return None
         try:
-            with open(str(meta_path), "r") as fh:
+            with open(str(meta_path)) as fh:
                 return json.load(fh)
         except (json.JSONDecodeError, OSError):
             return None
 
-    def get_journal(self) -> Optional[dict]:
+    def get_journal(self) -> dict | None:
         """Read the current transaction journal.  Returns None if absent."""
         journal_path = self._state_dir / self.JOURNAL_FILE
         if not journal_path.is_file():
             return None
         try:
-            with open(str(journal_path), "r") as fh:
+            with open(str(journal_path)) as fh:
                 data = yaml.safe_load(fh)
             if isinstance(data, dict):
                 return data
@@ -183,12 +178,12 @@ class GlobalConfigLock:
 
     def update_journal(
         self,
-        phase: Optional[str] = None,
-        step_completed: Optional[str] = None,
-        step_remaining: Optional[str] = None,
-        error: Optional[str] = None,
-        target_snapshot: Optional[str] = None,
-        pre_change_snapshot: Optional[str] = None,
+        phase: str | None = None,
+        step_completed: str | None = None,
+        step_remaining: str | None = None,
+        error: str | None = None,
+        target_snapshot: str | None = None,
+        pre_change_snapshot: str | None = None,
     ) -> None:
         """Update the transaction journal atomically.
 
@@ -222,7 +217,7 @@ class GlobalConfigLock:
     # Stale lock detection & recovery
     # ------------------------------------------------------------------
 
-    def check_stale_lock(self) -> Optional[dict]:
+    def check_stale_lock(self) -> dict | None:
         """Check for a stale lock from a crashed process.
 
         Returns lock info dict if a stale lock is found, None otherwise.
@@ -358,10 +353,8 @@ class GlobalConfigLock:
             os.chmod(tmp, 0o600)
             os.replace(tmp, str(path))
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
             raise
 
     @staticmethod
@@ -375,8 +368,6 @@ class GlobalConfigLock:
             os.chmod(tmp, 0o600)
             os.replace(tmp, str(path))
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
             raise

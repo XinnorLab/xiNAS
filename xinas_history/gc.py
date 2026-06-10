@@ -14,7 +14,6 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional, Set
 
 from .models import Manifest, SnapshotStatus, SnapshotType
 from .store import FilesystemStore
@@ -48,7 +47,7 @@ def load_retention_policy() -> RetentionPolicy:
 class GarbageCollector:
     """Manages snapshot retention with configurable policy."""
 
-    def __init__(self, store: FilesystemStore, policy: Optional[RetentionPolicy] = None) -> None:
+    def __init__(self, store: FilesystemStore, policy: RetentionPolicy | None = None) -> None:
         self._store = store
         self._policy = policy or RetentionPolicy()
 
@@ -56,9 +55,9 @@ class GarbageCollector:
 
     def run(
         self,
-        current_effective_id: Optional[str] = None,
-        in_progress_ids: Optional[Set[str]] = None,
-    ) -> List[str]:
+        current_effective_id: str | None = None,
+        in_progress_ids: set[str] | None = None,
+    ) -> list[str]:
         """Run garbage collection.
 
         Returns list of purged snapshot IDs.
@@ -73,7 +72,7 @@ class GarbageCollector:
             in_progress_ids = set()
 
         snapshots = self._store.list_snapshots()  # sorted by timestamp asc
-        purged: List[str] = []
+        purged: list[str] = []
 
         # Separate rollback-eligible snapshots from others.
         rollback_eligible = [
@@ -102,15 +101,14 @@ class GarbageCollector:
 
         # Delete in oldest-first order
         for m in purgeable:
-            if m.id in to_purge_ids:
-                if self._store.delete_snapshot(m.id):
-                    purged.append(m.id)
+            if m.id in to_purge_ids and self._store.delete_snapshot(m.id):
+                purged.append(m.id)
 
         return purged
 
     def cleanup_stale_ephemeral(
-        self, active_transaction_ids: Optional[Set[str]] = None
-    ) -> List[str]:
+        self, active_transaction_ids: set[str] | None = None
+    ) -> list[str]:
         """Find and clean up orphaned ephemeral snapshots.
 
         Called on startup.  Returns list of cleaned-up snapshot IDs.
@@ -126,7 +124,7 @@ class GarbageCollector:
             active_transaction_ids = set()
 
         snapshots = self._store.list_snapshots()
-        cleaned: List[str] = []
+        cleaned: list[str] = []
 
         for m in snapshots:
             if m.type != SnapshotType.EPHEMERAL.value:
@@ -153,8 +151,8 @@ class GarbageCollector:
     def _is_protected(
         self,
         manifest: Manifest,
-        current_effective_id: Optional[str],
-        in_progress_ids: Optional[Set[str]],
+        current_effective_id: str | None,
+        in_progress_ids: set[str] | None,
     ) -> bool:
         """Check if a snapshot is protected from deletion."""
         # Baseline is always protected.
@@ -166,17 +164,14 @@ class GarbageCollector:
             return True
 
         # Snapshots involved in in-progress transactions are protected.
-        if in_progress_ids and manifest.id in in_progress_ids:
-            return True
-
-        return False
+        return bool(in_progress_ids and manifest.id in in_progress_ids)
 
     def _get_purgeable_snapshots(
         self,
-        snapshots: List[Manifest],
-        current_effective_id: Optional[str],
-        in_progress_ids: Optional[Set[str]],
-    ) -> List[Manifest]:
+        snapshots: list[Manifest],
+        current_effective_id: str | None,
+        in_progress_ids: set[str] | None,
+    ) -> list[Manifest]:
         """Get list of snapshots eligible for purging, oldest first.
 
         The input *snapshots* should already be sorted by timestamp ascending.

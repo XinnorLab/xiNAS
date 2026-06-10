@@ -4,24 +4,24 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import socket
 import shlex
+import socket
 import subprocess
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
-from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
+from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
 _RED = "\033[31m"
@@ -330,9 +330,10 @@ def _collect_network_info() -> str:
 
     dns_servers: list[str] = []
     try:
-        for line in open("/etc/resolv.conf"):
-            if line.strip().startswith("nameserver"):
-                dns_servers.append(line.split()[1])
+        with open("/etc/resolv.conf") as f:
+            for line in f:
+                if line.strip().startswith("nameserver"):
+                    dns_servers.append(line.split()[1])
     except Exception:
         _log.debug("failed to read /etc/resolv.conf", exc_info=True)
     if dns_servers:

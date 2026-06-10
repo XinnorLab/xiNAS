@@ -55,10 +55,11 @@ def _print_version(setup_mode: bool = False) -> None:
 
 def _print_status() -> None:
     """Print a brief system status without launching the TUI."""
-    import socket
     import platform
-    from xinas_menu.version import XINAS_MENU_VERSION
+    import socket
+
     from xinas_menu.utils.service_ctl import ServiceController
+    from xinas_menu.version import XINAS_MENU_VERSION
 
     print(f"xiNAS Management Console v{XINAS_MENU_VERSION}")
     print(f"Hostname:  {socket.gethostname()}")

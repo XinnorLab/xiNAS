@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -17,10 +18,10 @@ from xinas_menu.widgets.text_view import ScrollableTextView
 _log = logging.getLogger(__name__)
 
 try:
-    from xinas_history.engine import SnapshotEngine
-    from xinas_history.store import FilesystemStore
-    from xinas_history.models import SnapshotType
     from xinas_history.collector import CONFIG_SOURCES
+    from xinas_history.engine import SnapshotEngine
+    from xinas_history.models import SnapshotType
+    from xinas_history.store import FilesystemStore
     HAS_HISTORY = True
 except ImportError:
     HAS_HISTORY = False
@@ -132,12 +133,10 @@ class SnapshotDetailScreen(Screen):
 
         view.set_content(text)
 
-        try:
+        with contextlib.suppress(Exception):
             self.app.audit.log(
                 "history.view", f"snapshot={self._snapshot_id}", "OK",
             )
-        except Exception:
-            pass
 
     # -- Full diff view -----------------------------------------------------
 
@@ -262,7 +261,7 @@ class SnapshotDetailScreen(Screen):
 # ---------------------------------------------------------------------------
 
 
-def _create_engine(store: "FilesystemStore | None" = None) -> "SnapshotEngine":
+def _create_engine(store: FilesystemStore | None = None) -> SnapshotEngine:
     """Create a SnapshotEngine with default settings."""
     s = store or FilesystemStore()
     return SnapshotEngine(store=s)
@@ -484,7 +483,6 @@ def _format_full_diff(diff_result) -> str:
 
 def _format_config_files(store, engine, manifest) -> str:
     """Format config file contents captured in the snapshot."""
-    import json as _json
 
     lines: list[str] = []
     lines.append(f"{_BLD}{_CYN}{'=' * 60}{_NC}")
@@ -513,10 +511,7 @@ def _format_config_files(store, engine, manifest) -> str:
 
         found_any = True
         size = len(data)
-        if size < 1024:
-            size_str = f"{size} B"
-        else:
-            size_str = f"{size / 1024:.1f} KB"
+        size_str = f"{size} B" if size < 1024 else f"{size / 1024:.1f} KB"
 
         lines.append(f"  {_BLD}{filename}{_NC}  {_DIM}({size_str} — {rel_path}){_NC}")
 

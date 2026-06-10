@@ -8,12 +8,12 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -513,7 +513,6 @@ class NFSScreen(Screen):
                 "Domain must not be empty and must contain at least one '.' (e.g. example.com).",
                 severity="error",
             )
-        from xinas_menu.utils.subprocess_utils import run_cmd
         loop = asyncio.get_running_loop()
 
         def _set_domain():
@@ -573,7 +572,7 @@ def _format_exports(data: Any) -> str:
     import shlex
     import subprocess
 
-    GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+    GRN, _YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
     W = 65
     lines: list[str] = []
 

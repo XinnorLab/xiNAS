@@ -56,7 +56,7 @@ class ConfirmDialog(ModalScreen[bool]):
         self._copy_text = copy_text if copy_text is not None else message
 
     def compose(self) -> ComposeResult:
-        from textual.containers import Vertical, Horizontal
+        from textual.containers import Horizontal, Vertical
         with Vertical(id="dialog-container"):
             yield Label(self._title, id="dialog-title")
             yield Label(self._message, id="dialog-body", markup=False)
