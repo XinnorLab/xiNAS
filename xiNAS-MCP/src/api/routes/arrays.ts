@@ -34,6 +34,7 @@ import {
 import { getOrNull, sendOk } from '../handlers/reads.js';
 import {
   xiraidArrayCreateProvider,
+  xiraidArrayDeleteProvider,
   xiraidArrayImportProvider,
   xiraidArrayModifyProvider,
 } from '../plan/providers/xiraid-array.js';
@@ -362,6 +363,149 @@ export function arraysRouter(ctx: ApiContext): Router {
       `unknown mode '${String(mode)}'; expected 'plan' or 'apply'`,
       undefined,
       "Send { mode: 'plan', spec } or { mode: 'apply', plan_id, expected_revision, idempotency_key }.",
+    );
+  });
+
+  // ---- S4 T9: DELETE /arrays/:id — xiraid.array.delete plan/apply ----
+  r.delete('/arrays/:id', async (req, res) => {
+    const tasks = ctx.tasks;
+    if (!tasks) {
+      throw new ApiException(
+        'INTERNAL',
+        'task engine is not available in this build',
+        { code: 'EXECUTOR_UNAVAILABLE' },
+        'the api was started without a task engine',
+      );
+    }
+
+    const rc = req.context!;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const mode = body.mode;
+    const id = req.params.id as string;
+
+    if (mode === 'plan') {
+      const { task, planResult } = await tasks.planEngine.plan({
+        operation_kind: 'xiraid.array.delete',
+        spec: { id },
+        principal: rc.principal,
+        client_type: rc.client_type,
+        request_id: rc.request_id,
+        correlation_id: rc.correlation_id,
+      });
+      rc.operation_id = task.task_id;
+      const revision = observedArrayRevision(ctx, id) ?? 0;
+      sendOk(
+        req,
+        res,
+        {
+          plan_id: task.task_id,
+          plan_hash: task.plan_hash,
+          state_revision_expected: revision,
+          observed_revision_expected: revision,
+          observed_at: null,
+          affected_resources: task.affected_resources,
+          risk_level: planResult.risk_level,
+          client_impact: clientImpact(planResult.risk_level),
+          blockers: planResult.blockers,
+          warnings: planResult.warnings,
+          diff: planResult.diff,
+          rollback_model: planResult.rollback_model,
+        },
+        [revision],
+      );
+      return;
+    }
+
+    if (mode === 'apply') {
+      const planId = requireString(body.plan_id, 'plan_id');
+      const idempotencyKey = requireString(body.idempotency_key, 'idempotency_key');
+      const expectedRevision = requireInteger(body.expected_revision, 'expected_revision');
+
+      const planTask = tasks.store.get(planId);
+      if (
+        !planTask ||
+        planTask.state !== 'plan_only' ||
+        planTask.kind !== 'xiraid.array.delete' ||
+        (planTask.spec as { id?: string } | undefined)?.id !== id
+      ) {
+        throw new ApiException(
+          'NOT_FOUND',
+          `no xiraid.array.delete plan_only task with plan_id ${planId} for array ${id}`,
+          undefined,
+          'Re-run mode=plan to obtain a fresh plan_id.',
+        );
+      }
+
+      // S4 §4 freshness binding (same as modify): expected_revision must
+      // equal the CURRENT observed revision.
+      const current = observedArrayRevision(ctx, id);
+      if (current === undefined) {
+        throw new ApiException('NOT_FOUND', `array ${id} not found in observed state`);
+      }
+      if (expectedRevision !== current) {
+        throw new ApiException(
+          'PRECONDITION_FAILED',
+          'observed revision changed since plan',
+          { reason: 'observed_revision_stale', expected: expectedRevision, current },
+          'Re-run plan against the current state, then apply the fresh plan.',
+        );
+      }
+
+      // S4 §8: re-check filters ONLY the engine-owned dangerous code — the
+      // dependency blockers must be clear at apply time.
+      const recheck = await xiraidArrayDeleteProvider.preflight(
+        { kv: ctx.state.kv },
+        planTask.spec,
+      );
+      const blocking = recheck.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+      if (blocking.length > 0) {
+        throw new ApiException(
+          'PRECONDITION_FAILED',
+          'the plan has unresolved blockers',
+          { blockers: blocking },
+          'Tear down the dependents (unmount filesystems, disconnect clients), re-plan, then apply.',
+        );
+      }
+
+      const applyPlan = toApplyPlan(planTask);
+      // The engine enforces dangerous (risk_level destructive, S4 §3).
+      const task = tasks.taskEngine.apply({
+        plan: applyPlan,
+        applyReq: {
+          input_hash: planTask.input_hash,
+          idempotency_key: idempotencyKey,
+          principal: rc.principal,
+          client_type: rc.client_type,
+          request_id: rc.request_id,
+          correlation_id: rc.correlation_id,
+          ...(body.dangerous === true ? { dangerous: true } : {}),
+        },
+      });
+      rc.operation_id = task.task_id;
+
+      if (task.state !== 'queued') {
+        res.status(202);
+        sendOk(req, res, taskEnvelope(task), [task.state_revision_at_apply ?? 0]);
+        return;
+      }
+
+      const dispatched = await tasks.taskEngine.dispatch({
+        task,
+        agentClient: tasks.agentClient,
+        spec: planTask.spec,
+        plan: applyPlan,
+      });
+
+      res.status(202);
+      sendOk(req, res, taskEnvelope(dispatched), [dispatched.state_revision_at_apply ?? 0]);
+      return;
+    }
+
+    throw new ApiException(
+      'INVALID_ARGUMENT',
+      `unknown mode '${String(mode)}'; expected 'plan' or 'apply'`,
+      undefined,
+      "Send { mode: 'plan' } or { mode: 'apply', plan_id, expected_revision, idempotency_key, dangerous }.",
     );
   });
 
