@@ -59,6 +59,15 @@ export interface PlanResult {
   observed_revision_expected?: number;
   /** ISO-8601 stamp of the observation backing the freshness pin. */
   observed_at?: string;
+  /**
+   * Optional preflight-enriched spec to persist on the plan_only task
+   * INSTEAD of the raw request spec (e.g. xiraid.array.create embeds the
+   * resolved `device_by_id` map so the agent executor needs no KV access —
+   * ADR-0006 §Disk references). `plan_hash` covers the enriched spec (the
+   * resolution is pinned); `input_hash` stays over the RAW request spec so
+   * a client retry of the same request still matches.
+   */
+  enriched_spec?: unknown;
 }
 
 /** A pluggable preflight for one operation kind (keyed in the registry). */
@@ -130,16 +139,21 @@ export class PlanEngine {
 
     const result = await provider.preflight(this.ctx, args.spec);
 
-    // input_hash pins the request inputs (operation_kind + spec). plan_hash
-    // additionally pins what preflight resolved (affected_resources, diff,
-    // the revision pins) so apply can detect a divergent re-plan.
+    // The spec persisted (and forwarded to the executor) is the provider's
+    // enriched spec when present, else the raw request spec.
+    const specToPersist = result.enriched_spec !== undefined ? result.enriched_spec : args.spec;
+
+    // input_hash pins the request inputs (operation_kind + RAW spec) so a
+    // client retry matches. plan_hash additionally pins what preflight
+    // resolved (enriched spec, affected_resources, diff, the revision
+    // pins) so apply can detect a divergent re-plan.
     const inputHash = sha256(
       canonicalize({ operation_kind: args.operation_kind, spec: args.spec }),
     );
     const planHash = sha256(
       canonicalize({
         operation_kind: args.operation_kind,
-        spec: args.spec,
+        spec: specToPersist,
         affected_resources: result.affected_resources,
         diff: result.diff,
         state_revision_expected: result.state_revision_expected,
@@ -159,9 +173,9 @@ export class PlanEngine {
       plan_hash: planHash,
       // Spread conditionally — under exactOptionalPropertyTypes the
       // `?:` optionals on CreatePlanOnlyInput reject an explicit undefined.
-      // Persist the raw request spec so apply/dispatch can forward it verbatim
-      // to the executor (s2-task-envelope-spec §5.1).
-      ...(args.spec !== undefined ? { spec: args.spec } : {}),
+      // Persist the (possibly enriched) spec so apply/dispatch forward it
+      // verbatim to the executor (s2-task-envelope-spec §5.1).
+      ...(specToPersist !== undefined ? { spec: specToPersist } : {}),
       ...(args.idempotency_key !== undefined ? { idempotency_key: args.idempotency_key } : {}),
       ...(result.state_revision_expected !== undefined
         ? { state_revision_expected: result.state_revision_expected }
