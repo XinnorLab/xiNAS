@@ -81,6 +81,13 @@ export interface ApplyRequest {
   client_type: string;
   request_id: string;
   correlation_id: string;
+  /**
+   * The OpenAPI ApplyRequest `dangerous` flag (default false). A plan with
+   * `risk_level: 'destructive'` is rejected unless this is exactly `true`
+   * — the central reqs-§14 gate (S4 T1), enforced here so every transport
+   * is blocked at the same place. Ignored for non-destructive plans.
+   */
+  dangerous?: boolean;
 }
 
 export interface ApplyArgs {
@@ -166,6 +173,19 @@ export class TaskEngine {
           'idempotency key reused with a different request',
           { reason: 'idempotency_key_reused' },
           'Use a fresh idempotency_key for a different request, or re-send the original request.',
+        );
+      }
+
+      // 1b. Dangerous gate (reqs §14, ADR-0006 §Delete; S4 T1). Central:
+      //     every transport that reaches apply is blocked at this one place.
+      //     After idempotency (a true replay of an already-accepted apply
+      //     returns the original above), before any write.
+      if (plan.risk_level === 'destructive' && applyReq.dangerous !== true) {
+        throw new ApiException(
+          'PRECONDITION_FAILED',
+          'destructive operation requires dangerous: true',
+          { reason: 'dangerous_flag_required' },
+          'Review the plan blast radius (diff), then re-send the apply with dangerous: true.',
         );
       }
 
