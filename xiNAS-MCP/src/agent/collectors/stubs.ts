@@ -50,19 +50,9 @@ abstract class StubCollector<K extends 'XiraidArray' | 'managed_files'> implemen
   }
 }
 
-/**
- * XiraidArray stub collector.
- *
- * Deferred: xiRAID gRPC client moves from api → agent in S3/WS5.
- * Until then, the state store carries a _stub entry so the api's
- * /api/v1/arrays endpoint can report the deferral rather than 404.
- *
- * Reason code: XIRAID_ADAPTER_DEFERRED
- */
-export class XiraidArrayStubCollector extends StubCollector<'XiraidArray'> {
-  readonly kind = 'XiraidArray' as const;
-  readonly _reasonCode = 'XIRAID_ADAPTER_DEFERRED';
-}
+// XiraidArrayStubCollector was removed in S3 T6: the real
+// XiraidArrayCollector (collectors/xiraid.ts) observes arrays over the
+// shared xiRAID gRPC client. XIRAID_ADAPTER_DEFERRED no longer exists.
 
 /**
  * ManagedFiles stub collector.

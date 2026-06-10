@@ -54,9 +54,10 @@ import { NetworkInterfaceCollector } from './collectors/network.js';
 import { NfsIdmapCollector } from './collectors/nfs-idmap.js';
 import { NfsProfileCollector } from './collectors/nfs-profile.js';
 import { NfsCollector } from './collectors/nfs.js';
-import { ManagedFilesStubCollector, XiraidArrayStubCollector } from './collectors/stubs.js';
+import { ManagedFilesStubCollector } from './collectors/stubs.js';
 import { SystemdUnitCollector } from './collectors/systemd.js';
 import { UsersCollector } from './collectors/users.js';
+import { XiraidArrayCollector } from './collectors/xiraid.js';
 import type { AgentConfig } from './config.js';
 import { log } from './log.js';
 import { PollDriver } from './poll.js';
@@ -81,6 +82,8 @@ import { createNfsProbe } from './probe/nfs.js';
 import { DEFAULT_ALLOWLIST } from './probe/systemd.js';
 import { createUsersProbe } from './probe/users.js';
 import { Publisher } from './publisher.js';
+import { XiraidClient, createGrpcTransport } from './xiraid/client.js';
+import { createFakeXiraidTransport } from './xiraid/fake-transport.js';
 
 /** A synchronous-stop event handle (the shape collectors expect). */
 interface SyncStopHandle {
@@ -95,6 +98,8 @@ export interface Convergence {
   registry: CollectorRegistry;
   publisher: Publisher;
   pollDriver: PollDriver;
+  /** Shared xiRAID gRPC client (collector + create executor, S3). */
+  xiraidClient: XiraidClient;
   controllerId: string;
 }
 
@@ -324,8 +329,21 @@ export function buildConvergence(config: AgentConfig): Convergence {
     }),
   );
 
-  // --- Deferred-capability stubs (XiraidArray, managed_files). ---
-  registry.register(new XiraidArrayStubCollector());
+  // --- XiraidArray: real collector over the shared xiRAID client (S3 T6).
+  // Fixture mode swaps the gRPC transport for the file-backed fake, same
+  // pattern as the probes above. The client is exported so the agent
+  // process can hand it to the create executor (one connection for both).
+  const xiraidClient = new XiraidClient(
+    fdir !== null ? createFakeXiraidTransport(fdir) : createGrpcTransport(),
+  );
+  registry.register(
+    new XiraidArrayCollector({
+      client: xiraidClient,
+      diskSnapshot: () => diskProbe.snapshot(),
+    }),
+  );
+
+  // --- Deferred-capability stubs (managed_files). ---
   registry.register(new ManagedFilesStubCollector());
 
   const publisher = new Publisher({
@@ -339,7 +357,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
   // backstop and consumes publisher.pendingReconcile.
   const pollDriver = new PollDriver({ registry, publisher });
 
-  return { registry, publisher, pollDriver, controllerId: config.controller_id };
+  return { registry, publisher, pollDriver, xiraidClient, controllerId: config.controller_id };
 }
 
 /**
