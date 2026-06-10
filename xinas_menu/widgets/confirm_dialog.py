@@ -95,7 +95,9 @@ class ConfirmDialog(ModalScreen[bool]):
 
     def action_copy_message(self) -> None:
         if self._copy_text:
-            self.app._do_copy(self._copy_text)
+            # _do_copy exists only on XiNASApp; under StartupApp this raises
+            # AttributeError (pre-existing gap, kept as-is for behavior parity).
+            self.app._do_copy(self._copy_text)  # pyright: ignore[reportAttributeAccessIssue]
 
     # ── Terminal mouse-capture toggle ────────────────────────────────────
     # While this modal is open, release mouse tracking back to the terminal

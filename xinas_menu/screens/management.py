@@ -10,6 +10,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 
 _UNINSTALL_SCRIPT = "/opt/xiNAS/uninstall.sh"
@@ -23,7 +24,7 @@ _MENU = [
 ]
 
 
-class ManagementScreen(Screen):
+class ManagementScreen(XiNASAppMixin, Screen):
     """Management submenu — routes to management-related screens."""
 
     BINDINGS = [

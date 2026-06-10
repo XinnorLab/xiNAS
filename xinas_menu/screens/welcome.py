@@ -12,6 +12,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Footer, Label, Rule
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.version import XINAS_MENU_VERSION
 
 _ART = r"""
@@ -22,7 +23,7 @@ _ART = r"""
 """
 
 
-class WelcomeScreen(Screen):
+class WelcomeScreen(XiNASAppMixin, Screen):
     """Shows ASCII art + system status, then auto-advances to MainMenuScreen."""
 
     BINDINGS = [

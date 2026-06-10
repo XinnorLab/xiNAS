@@ -544,10 +544,13 @@ class TransactionalRunner:
                         with contextlib.suppress(Exception):
                             progress_cb(line)
 
+            # Both pipes exist: the process was created with stdout/stderr=PIPE.
+            assert proc.stdout is not None and proc.stderr is not None
+
             try:
                 await asyncio.wait_for(
                     asyncio.gather(
-                        _read_stream(proc.stdout, stdout_lines),  # type: ignore[arg-type]
+                        _read_stream(proc.stdout, stdout_lines),
                         _read_stream(proc.stderr, stderr_lines, is_stderr=True),
                     ),
                     timeout=3600,

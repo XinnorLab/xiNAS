@@ -10,6 +10,8 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Button, Label, TextArea
 
+from xinas_menu.apptype import XiNASAppMixin
+
 _PRESETS_DIR_CANDIDATES = [
     Path("/opt/xiNAS/presets"),
     Path("/home/xinnor/xiNAS/presets"),
@@ -24,7 +26,7 @@ def _find_nfs_exports_file(preset: str = "default") -> Path | None:
     return None
 
 
-class NFSConfigScreen(Screen[bool]):
+class NFSConfigScreen(XiNASAppMixin, Screen[bool]):
     """Edit the NFS exports YAML for the selected preset."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=True)]
@@ -54,11 +56,12 @@ class NFSConfigScreen(Screen[bool]):
             self.dismiss(False)
 
     async def _save(self) -> None:
-        if not self._cfg_path:
+        cfg_path = self._cfg_path
+        if not cfg_path:
             return
         content = self.query_one("#nfs-config-editor", TextArea).text
         loop = asyncio.get_running_loop()
-        ok, err = await loop.run_in_executor(None, lambda: _write_yaml(self._cfg_path, content))
+        ok, err = await loop.run_in_executor(None, lambda: _write_yaml(cfg_path, content))
         if ok:
             self.app.audit.log("nfs.config_save", str(self._cfg_path), "OK")
             await self.app.snapshots.record(

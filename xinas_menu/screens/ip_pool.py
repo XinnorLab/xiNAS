@@ -18,6 +18,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.screens.network import _flush_pbr_rules
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -329,7 +330,7 @@ def _validate_prefix(prefix_str: str) -> tuple[int | None, str | None]:
 # ── Screen ────────────────────────────────────────────────────────────────────
 
 
-class IPPoolScreen(Screen):
+class IPPoolScreen(XiNASAppMixin, Screen):
     """IP Pool configuration — detect interfaces, allocate IPs, apply via netplan."""
 
     BINDINGS = [

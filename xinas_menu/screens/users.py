@@ -14,6 +14,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -40,7 +41,7 @@ _MENU = [
 _UID_MIN = 1000
 
 
-class UsersScreen(Screen):
+class UsersScreen(XiNASAppMixin, Screen):
     """User account management."""
 
     BINDINGS = [

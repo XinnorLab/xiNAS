@@ -16,6 +16,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.drive_picker import DrivePickerScreen
@@ -55,7 +56,7 @@ _MENU = [
 ]
 
 
-def _fmt_size(size_bytes: int) -> str:
+def _fmt_size(size_bytes: float) -> str:
     """Format byte count into human-readable string."""
     if size_bytes <= 0:
         return "N/A"
@@ -147,7 +148,7 @@ async def _get_numa_topology(grpc_client) -> list[dict]:
     return nodes
 
 
-class RAIDScreen(Screen):
+class RAIDScreen(XiNASAppMixin, Screen):
     """RAID management — views and CRUD operations for arrays."""
 
     BINDINGS = [
@@ -285,9 +286,14 @@ class RAIDScreen(Screen):
             group_drives = groups.get(group_choice, [])
             group_names = {d if isinstance(d, str) else d.get("name", "") for d in group_drives}
             # Filter full drive info for this group
-            group_drive_info = [d for d in nvme if d.get("name") in group_names]
+            group_drive_info: list[dict[str, Any]] = [
+                d for d in nvme if d.get("name") in group_names
+            ]
             if not group_drive_info:
-                group_drive_info = group_drives
+                # Fallback: bare name strings, not the dict shape DrivePicker
+                # expects. Unreachable in practice (groups are built from
+                # nvme), kept as-is for behavior parity.
+                group_drive_info = group_drives  # pyright: ignore[reportAssignmentType]
             selected = await self.app.push_screen_wait(
                 DrivePickerScreen(
                     group_drive_info,

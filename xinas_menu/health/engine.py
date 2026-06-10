@@ -1968,6 +1968,7 @@ def check_nfs(exp, checks):
                     # tank concurrent client performance.
                     critical_drift = (
                         drift
+                        and runtime is not None  # implied by drift; narrows for the type checker
                         and configured < runtime
                         and (configured * 2 <= runtime or runtime - configured >= 16)
                     )

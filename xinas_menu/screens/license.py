@@ -14,6 +14,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -31,7 +32,7 @@ _MENU = [
 ]
 
 
-class LicenseScreen(Screen):
+class LicenseScreen(XiNASAppMixin, Screen):
     """License management screen."""
 
     BINDINGS = [

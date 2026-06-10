@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from textual import work
@@ -19,6 +20,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -42,7 +44,7 @@ _MENU = [
 _ARCHIVE_GLOB = "*-logs-*.tgz"
 
 
-class CollectLogsScreen(Screen):
+class CollectLogsScreen(XiNASAppMixin, Screen):
     """Collect system data, audit log, and journal into a .tgz archive."""
 
     BINDINGS = [
@@ -109,7 +111,7 @@ class CollectLogsScreen(Screen):
         loop = asyncio.get_running_loop()
         tmp = await loop.run_in_executor(None, tempfile.mkdtemp)
 
-        steps: list[tuple[str, object]] = [
+        steps: list[tuple[str, Callable[[], None]]] = [
             ("System info", lambda: _collect_sysinfo(tmp, config_name, email)),
             (
                 "Block devices (lsblk)",
@@ -204,7 +206,9 @@ class CollectLogsScreen(Screen):
             self.app.audit.log("collect_logs.upload", archive, "OK")
         else:
             view.set_content(f"  {_RED}Upload failed:{_NC} {msg}")
-            self.app.audit.log("collect_logs.upload", archive, "FAIL", msg)
+            # AuditLogger.log takes (action, detail, status) — fold the error
+            # message into detail (the old 4-arg call raised TypeError).
+            self.app.audit.log("collect_logs.upload", f"{archive}: {msg}", "FAIL")
 
     # ── View Last Archive ────────────────────────────────────────────────
 
@@ -358,7 +362,7 @@ def _list_archive(archive_path: str) -> str:
     return "\n".join(lines)
 
 
-def _human_size(nbytes: int) -> str:
+def _human_size(nbytes: float) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if nbytes < 1024:
             return f"{nbytes:.1f} {unit}" if unit != "B" else f"{nbytes} {unit}"

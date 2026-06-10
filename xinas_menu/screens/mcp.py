@@ -15,6 +15,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.utils.config import CONFIG_PATH as _MCP_CONFIG
 from xinas_menu.utils.config import cfg_read as _cfg_read
 from xinas_menu.utils.config import cfg_write as _cfg_write
@@ -117,7 +118,7 @@ _MENU = [
 ]
 
 
-class MCPScreen(Screen):
+class MCPScreen(XiNASAppMixin, Screen):
     """MCP server management."""
 
     BINDINGS = [
@@ -380,7 +381,7 @@ class MCPScreen(Screen):
 # ── Remote Access (HTTP) sub-screen ─────────────────────────────────────────
 
 
-class RemoteAccessScreen(Screen):
+class RemoteAccessScreen(XiNASAppMixin, Screen):
     """Configure Streamable HTTP transport, tokens, and TLS."""
 
     BINDINGS = [
@@ -698,7 +699,7 @@ class RemoteAccessScreen(Screen):
 # ── Token Management sub-screen ─────────────────────────────────────────────
 
 
-class TokenManagementScreen(Screen):
+class TokenManagementScreen(XiNASAppMixin, Screen):
     """Add / remove API tokens for HTTP authentication."""
 
     BINDINGS = [
@@ -946,7 +947,7 @@ class _SelectionDialog(Screen[str | None]):
 # ── SSH Access sub-screen ───────────────────────────────────────────────────
 
 
-class SSHAccessScreen(Screen):
+class SSHAccessScreen(XiNASAppMixin, Screen):
     """Configure root SSH access for Claude Code."""
 
     BINDINGS = [

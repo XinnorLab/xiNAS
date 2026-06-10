@@ -11,12 +11,13 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Label, Static
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.drive_picker import _fmt_size
 
 _log = logging.getLogger(__name__)
 
 
-class PhysicalDrivesScreen(Screen):
+class PhysicalDrivesScreen(XiNASAppMixin, Screen):
     """Full-featured physical drives browser (read-only).
 
     Shows all drives in a sortable/filterable DataTable with actions

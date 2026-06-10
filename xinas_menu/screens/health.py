@@ -13,6 +13,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.select_dialog import SelectDialog
@@ -30,7 +31,7 @@ _MENU = [
 ]
 
 
-class HealthScreen(Screen):
+class HealthScreen(XiNASAppMixin, Screen):
     """Health check management screen."""
 
     BINDINGS = [

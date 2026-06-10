@@ -15,6 +15,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -34,7 +35,7 @@ _GRN, _YLW, _RED, _CYN = "\033[32m", "\033[33m", "\033[31m", "\033[36m"
 _BLD, _DIM, _NC = "\033[1m", "\033[2m", "\033[0m"
 
 
-class MainMenuScreen(Screen):
+class MainMenuScreen(XiNASAppMixin, Screen):
     """Root navigation screen — routes to group submenus."""
 
     BINDINGS = [
@@ -51,7 +52,9 @@ class MainMenuScreen(Screen):
 
     def on_mount(self) -> None:
         self._refresh_status()
-        self._auto_refresh = self.set_interval(15, self._refresh_status)
+        # Named _refresh_timer (not _auto_refresh) to avoid clobbering
+        # textual's internal DOMNode._auto_refresh (float | None).
+        self._refresh_timer = self.set_interval(15, self._refresh_status)
 
     def on_screen_resume(self) -> None:
         """Refresh status when returning from a submenu."""

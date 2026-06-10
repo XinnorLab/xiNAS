@@ -75,7 +75,7 @@ def _load_channel_credentials():
 _STUBS_ERROR: str = ""
 
 
-def _import_stubs():
+def _import_stubs() -> tuple[Any, ...]:
     """Return (pb2_grpc, grpc, msg_raid, msg_drive, msg_pool, msg_license, msg_settings, msg_mail)
     or all-None tuple on failure.
 
@@ -86,13 +86,30 @@ def _import_stubs():
     try:
         import grpc
 
-        from xinas_menu.api.proto import message_drive_pb2 as msg_drive
-        from xinas_menu.api.proto import message_license_pb2 as msg_license
-        from xinas_menu.api.proto import message_mail_pb2 as msg_mail
-        from xinas_menu.api.proto import message_pool_pb2 as msg_pool
-        from xinas_menu.api.proto import message_raid_pb2 as msg_raid
-        from xinas_menu.api.proto import message_settings_pb2 as msg_settings
-        from xinas_menu.api.proto import service_xraid_pb2_grpc as pb2_grpc
+        # The *_pb2 modules are generated into api/proto/ at deploy time by
+        # the xinas_menu Ansible role (grpc_tools.protoc); they do not exist
+        # in the repo, so pyright cannot resolve them.
+        from xinas_menu.api.proto import (
+            message_drive_pb2 as msg_drive,  # pyright: ignore[reportAttributeAccessIssue]
+        )
+        from xinas_menu.api.proto import (
+            message_license_pb2 as msg_license,  # pyright: ignore[reportAttributeAccessIssue]
+        )
+        from xinas_menu.api.proto import (
+            message_mail_pb2 as msg_mail,  # pyright: ignore[reportAttributeAccessIssue]
+        )
+        from xinas_menu.api.proto import (
+            message_pool_pb2 as msg_pool,  # pyright: ignore[reportAttributeAccessIssue]
+        )
+        from xinas_menu.api.proto import (
+            message_raid_pb2 as msg_raid,  # pyright: ignore[reportAttributeAccessIssue]
+        )
+        from xinas_menu.api.proto import (
+            message_settings_pb2 as msg_settings,  # pyright: ignore[reportAttributeAccessIssue]
+        )
+        from xinas_menu.api.proto import (
+            service_xraid_pb2_grpc as pb2_grpc,  # pyright: ignore[reportAttributeAccessIssue]
+        )
 
         _STUBS_ERROR = ""
         return pb2_grpc, grpc, msg_raid, msg_drive, msg_pool, msg_license, msg_settings, msg_mail
@@ -245,14 +262,17 @@ class XiRAIDClient:
 
     def __init__(self, address: str = _GRPC_ADDRESS) -> None:
         self._address = address
-        self._channel = None
-        self._stub = None
-        self._msg_raid = None
-        self._msg_drive = None
-        self._msg_pool = None
-        self._msg_license = None
-        self._msg_settings = None
-        self._msg_mail = None
+        # All stub/message-module attributes hold dynamically generated
+        # protobuf objects (or None until _ensure_channel succeeds) — typed
+        # Any because the generated modules are not importable statically.
+        self._channel: Any = None
+        self._stub: Any = None
+        self._msg_raid: Any = None
+        self._msg_drive: Any = None
+        self._msg_pool: Any = None
+        self._msg_license: Any = None
+        self._msg_settings: Any = None
+        self._msg_mail: Any = None
 
     def _ensure_channel(self):
         if self._stub is not None:

@@ -15,6 +15,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.checklist_dialog import ChecklistDialog
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -224,7 +225,7 @@ async def _get_free_nvme_drives(grpc_client) -> list[dict]:
     return free
 
 
-class SparePoolScreen(Screen):
+class SparePoolScreen(XiNASAppMixin, Screen):
     """Spare pool management — view, create, modify, and delete spare pools."""
 
     BINDINGS = [

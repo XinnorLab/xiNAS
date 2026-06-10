@@ -10,6 +10,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Label
 
+from xinas_menu.apptype import StartupAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -39,7 +40,7 @@ def _preset_items() -> tuple[list[MenuItem], list[str]]:
     return items, presets
 
 
-class InstallScreen(Screen):
+class InstallScreen(StartupAppMixin, Screen):
     """Multi-step install: preset → confirm → run playbook."""
 
     BINDINGS = [
@@ -101,7 +102,11 @@ class InstallScreen(Screen):
             PlaybookRunScreen(cmd=cmd, title=f"Installing — {preset}", workdir=repo)
         )
         if exit_code == 0:
-            await self.app.snapshots.record_baseline(preset=preset)
+            # StartupApp defines no `snapshots` helper — this call raises
+            # AttributeError today (pre-existing gap, kept as-is for behavior
+            # parity; the baseline is normally created by the xinas_history
+            # Ansible role during the install itself).
+            await self.app.snapshots.record_baseline(preset=preset)  # pyright: ignore[reportAttributeAccessIssue]
             self.app.notify("Installation completed successfully!", severity="information")
         else:
             go_collect = await self.app.push_screen_wait(

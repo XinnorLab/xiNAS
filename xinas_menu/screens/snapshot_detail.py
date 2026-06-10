@@ -13,6 +13,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -41,7 +42,7 @@ _MENU = [
 ]
 
 
-class SnapshotDetailScreen(Screen):
+class SnapshotDetailScreen(XiNASAppMixin, Screen):
     """Full detail view of a single snapshot.
 
     Shows:
@@ -119,11 +120,12 @@ class SnapshotDetailScreen(Screen):
         text = _format_manifest(manifest)
 
         # If there is a parent, show a brief diff summary
-        if manifest.parent_id:
+        parent_id = manifest.parent_id
+        if parent_id:
             try:
                 diff_result = await loop.run_in_executor(
                     None,
-                    lambda: engine.diff(manifest.parent_id, manifest.id),
+                    lambda: engine.diff(parent_id, manifest.id),
                 )
                 text += "\n" + _format_diff_summary(diff_result)
             except Exception as exc:
@@ -167,7 +169,8 @@ class SnapshotDetailScreen(Screen):
             view.set_content(f"{_RED}Snapshot not found: {self._snapshot_id}{_NC}")
             return
 
-        if not manifest.parent_id:
+        parent_id = manifest.parent_id
+        if not parent_id:
             view.set_content(
                 f"{_YLW}No parent snapshot.{_NC}\n\n"
                 f"  {_DIM}This is a baseline or the first snapshot; "
@@ -178,7 +181,7 @@ class SnapshotDetailScreen(Screen):
         try:
             diff_result = await loop.run_in_executor(
                 None,
-                lambda: engine.diff(manifest.parent_id, manifest.id),
+                lambda: engine.diff(parent_id, manifest.id),
             )
         except Exception as exc:
             view.set_content(f"{_RED}Diff failed: {exc}{_NC}")
