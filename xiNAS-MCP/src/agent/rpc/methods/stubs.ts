@@ -46,13 +46,11 @@ const STUB_METHOD_NAMES = [
   'systemd.units_status',
   'exports.list',
   'nfs.sessions.list',
-  // Arrays (xiRAID adapter — S3/WS5)
-  'arrays.create',
-  'arrays.delete',
-  'arrays.import',
+  // Arrays: only the on-demand read remains a stub (WS12 family).
+  // arrays.create/delete/import + spare.set were superseded by the task
+  // envelope in S3 (ADR-0006): mutations dispatch via task.begin + the
+  // executor registry, so those names left the enumerated RPC surface.
   'arrays.list',
-  // Spare (xiRAID — S3/WS5)
-  'spare.set',
   // Filesystem (S4/WS6)
   'fs.create',
   'fs.mount',

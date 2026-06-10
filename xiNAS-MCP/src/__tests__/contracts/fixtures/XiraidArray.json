@@ -1,0 +1,56 @@
+{
+  "kind": "XiraidArray",
+  "id": "data",
+  "metadata": {
+    "revision": 4,
+    "created_at": "2026-06-07T16:00:00Z",
+    "modified_at": "2026-06-07T16:42:11Z",
+    "owner": "system:installer",
+    "source": "ansible:raid_fs",
+    "validation_status": "valid"
+  },
+  "spec": {
+    "name": "data",
+    "level": "raid6",
+    "member_disk_ids": ["disk-nvme2", "disk-nvme3", "disk-nvme4", "disk-nvme5"],
+    "spare_disk_ids": [],
+    "group_size": null,
+    "synd_cnt": null,
+    "strip_size_kib": 64,
+    "block_size": 4096,
+    "force_metadata": false,
+    "tuning": {
+      "init_prio": null,
+      "recon_prio": null,
+      "restripe_prio": null,
+      "resync_enabled": null,
+      "sched_enabled": null,
+      "merge_read_enabled": null,
+      "merge_write_enabled": null,
+      "merge_read_max": null,
+      "merge_read_wait": null,
+      "merge_write_max": null,
+      "merge_write_wait": null,
+      "memory_limit": null,
+      "request_limit": null,
+      "memory_prealloc": null,
+      "adaptive_merge": null,
+      "cpu_allowed": null,
+      "max_sectors_kb": null,
+      "sdc_prio": null,
+      "single_run": null,
+      "discard": null,
+      "drive_trim": null
+    }
+  },
+  "status": {
+    "state": "optimal",
+    "volume_path": "/dev/xi_data",
+    "chunk_size_kib": 256,
+    "rebuild_progress_pct": null,
+    "check_progress_pct": null,
+    "usable_capacity_bytes": 15360000000000,
+    "member_states": [],
+    "observed_at": "2026-06-07T16:42:11Z"
+  }
+}

@@ -162,7 +162,7 @@ describe('PlanEngine.plan', () => {
           warnings: [{ code: 'W', message: 'heads up' }],
           diff: { changed: true },
           risk_level: 'changing_access',
-          rollback_model: 'reversible',
+          rollback_model: 'changing_access',
         };
       },
     };
