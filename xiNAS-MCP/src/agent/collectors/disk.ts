@@ -2,11 +2,16 @@ import type { Collector, ObservationDelta } from './base.js';
 
 interface DiskStatus {
   name: string;
+  device_path?: string;
   model?: string;
   serial?: string;
   transport?: string;
   wwn?: string;
   size_text?: string;
+  capacity_bytes?: number;
+  system_disk?: boolean;
+  mounted?: boolean;
+  safe_for_use?: boolean;
   observed_at: string;
 }
 
@@ -120,11 +125,20 @@ export class DiskCollector implements Collector<'Disk'> {
         status: {
           name: disk.status.name,
           observed_at: observedAt,
+          ...(disk.status.device_path !== undefined ? { device_path: disk.status.device_path } : {}),
           ...(disk.status.model !== undefined ? { model: disk.status.model } : {}),
           ...(disk.status.serial !== undefined ? { serial: disk.status.serial } : {}),
           ...(disk.status.transport !== undefined ? { transport: disk.status.transport } : {}),
           ...(disk.status.wwn !== undefined ? { wwn: disk.status.wwn } : {}),
           ...(disk.status.size_text !== undefined ? { size_text: disk.status.size_text } : {}),
+          ...(disk.status.capacity_bytes !== undefined
+            ? { capacity_bytes: disk.status.capacity_bytes }
+            : {}),
+          ...(disk.status.system_disk !== undefined ? { system_disk: disk.status.system_disk } : {}),
+          ...(disk.status.mounted !== undefined ? { mounted: disk.status.mounted } : {}),
+          ...(disk.status.safe_for_use !== undefined
+            ? { safe_for_use: disk.status.safe_for_use }
+            : {}),
         },
       },
     };
