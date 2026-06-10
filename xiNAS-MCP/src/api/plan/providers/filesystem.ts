@@ -1,0 +1,213 @@
+/**
+ * S5 filesystem plan providers (ADR-0007 / s5-filesystem-spec §4):
+ * fs.create here in T7; mount/unmount/grow/set_quota_mode/delete join in
+ * T9–T11 sharing `gatherFsFacts`.
+ *
+ * The route injects the path id into PATCH/DELETE specs (the S4 modify
+ * pattern); create derives its own id from the mountpoint. Enriched specs
+ * carry the fully-resolved executor inputs so the agent needs no KV.
+ */
+
+import { type BackingArraySpec, deriveStripe } from '../../../lib/fs/derive.js';
+import { buildMkfsArgs, humanToBytes } from '../../../lib/fs/mkfs.js';
+import { renderMountUnit, unitNameForMountpoint } from '../../../lib/fs/unit.js';
+import {
+  type FsCreateFacts,
+  parseFsCreateSpec,
+  validateFsCreate,
+} from '../../../lib/fs/validate.js';
+import { ApiException } from '../../errors.js';
+import type { ResourceRef } from '../../tasks/types.js';
+import type { PlanContext, PlanProvider, PlanResult } from '../engine.js';
+
+interface ObservedArrayRow {
+  spec?: {
+    name?: string;
+    level?: string;
+    member_disk_ids?: string[];
+    strip_size_kib?: number | null;
+    group_size?: number | null;
+    synd_cnt?: number | null;
+  };
+  status?: { volume_path?: string; state?: string };
+}
+
+interface ObservedFsRow {
+  id?: string;
+  status?: { mountpoint?: string; backing_device?: string; mounted?: boolean };
+}
+
+interface DesiredShareRow {
+  id?: string;
+  spec?: { path?: string };
+}
+
+interface ObservedSessionRow {
+  id?: string;
+  spec?: { export_path?: string };
+}
+
+export interface FsFacts {
+  arraysByVolume: Map<string, BackingArraySpec & { name: string; state?: string }>;
+  filesystems: Array<{ id: string; mountpoint?: string; backing_device?: string; mounted?: boolean }>;
+  sessions: Array<{ id: string; export_path: string }>;
+  /** observed ExportRule ids ARE export paths. */
+  exportPaths: string[];
+  desiredShares: Array<{ id: string; path: string }>;
+}
+
+export function gatherFsFacts(ctx: PlanContext): FsFacts {
+  const arraysByVolume = new Map<string, BackingArraySpec & { name: string; state?: string }>();
+  for (const row of ctx.kv.list<ObservedArrayRow>({ prefix: '/xinas/v1/observed/XiraidArray/' })) {
+    const s = row.value.spec;
+    const volume = row.value.status?.volume_path;
+    if (typeof s?.name !== 'string' || typeof volume !== 'string') continue;
+    arraysByVolume.set(volume, {
+      name: s.name,
+      level: s.level ?? 'unknown',
+      member_disk_ids: s.member_disk_ids ?? [],
+      ...(s.strip_size_kib !== undefined ? { strip_size_kib: s.strip_size_kib } : {}),
+      ...(s.group_size !== undefined ? { group_size: s.group_size } : {}),
+      ...(s.synd_cnt !== undefined ? { synd_cnt: s.synd_cnt } : {}),
+      ...(row.value.status?.state !== undefined ? { state: row.value.status.state } : {}),
+    });
+  }
+
+  const filesystems: FsFacts['filesystems'] = [];
+  for (const row of ctx.kv.list<ObservedFsRow>({ prefix: '/xinas/v1/observed/Filesystem/' })) {
+    if (typeof row.value.id !== 'string') continue;
+    filesystems.push({
+      id: row.value.id,
+      ...(row.value.status?.mountpoint !== undefined
+        ? { mountpoint: row.value.status.mountpoint }
+        : {}),
+      ...(row.value.status?.backing_device !== undefined
+        ? { backing_device: row.value.status.backing_device }
+        : {}),
+      ...(row.value.status?.mounted !== undefined ? { mounted: row.value.status.mounted } : {}),
+    });
+  }
+
+  const sessions: FsFacts['sessions'] = [];
+  for (const row of ctx.kv.list<ObservedSessionRow>({ prefix: '/xinas/v1/observed/NfsSession/' })) {
+    const exportPath = row.value.spec?.export_path;
+    if (typeof row.value.id !== 'string' || typeof exportPath !== 'string') continue;
+    sessions.push({ id: row.value.id, export_path: exportPath });
+  }
+
+  const exportPaths: string[] = [];
+  for (const row of ctx.kv.list<{ id?: string }>({ prefix: '/xinas/v1/observed/ExportRule/' })) {
+    if (typeof row.value.id === 'string') exportPaths.push(row.value.id);
+  }
+
+  const desiredShares: FsFacts['desiredShares'] = [];
+  for (const row of ctx.kv.list<DesiredShareRow>({ prefix: '/xinas/v1/desired/Share/' })) {
+    const path = row.value.spec?.path;
+    if (typeof row.value.id !== 'string' || typeof path !== 'string') continue;
+    desiredShares.push({ id: row.value.id, path });
+  }
+
+  return { arraysByVolume, filesystems, sessions, exportPaths, desiredShares };
+}
+
+export const fsCreateProvider: PlanProvider = {
+  operation_kind: 'fs.create',
+
+  async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
+    let spec: ReturnType<typeof parseFsCreateSpec>;
+    try {
+      spec = parseFsCreateSpec(rawSpec);
+    } catch (err) {
+      throw new ApiException(
+        'INVALID_ARGUMENT',
+        err instanceof Error ? err.message : String(err),
+        undefined,
+        'Send a create-shaped spec: { backing_device, mountpoint, ... } per ADR-0007.',
+      );
+    }
+
+    const facts = gatherFsFacts(ctx);
+    const createFacts: FsCreateFacts = {
+      arraysByVolume: facts.arraysByVolume,
+      filesystems: facts.filesystems,
+    };
+    const blockers = validateFsCreate(spec, createFacts);
+
+    // --- resolve the executor inputs (ADR-0007 §Schema extension) ---
+    const unitName = unitNameForMountpoint(spec.mountpoint);
+    const leaf = spec.mountpoint.split('/').filter(Boolean).pop() ?? 'fs';
+    const label = spec.label ?? leaf;
+    const backing = facts.arraysByVolume.get(spec.backing_device);
+    const derived = backing ? deriveStripe(backing) : undefined;
+    const suKb = spec.su_kb ?? derived?.su_kb;
+    const sw = spec.sw ?? derived?.sw;
+    const sectorSize = spec.sector_size ?? 4096;
+    const logSizeBytes =
+      spec.log_size !== undefined && spec.log_size !== null
+        ? humanToBytes(spec.log_size)
+        : undefined;
+
+    const resolved =
+      suKb !== undefined && sw !== undefined
+        ? {
+            device: spec.backing_device,
+            label,
+            su_kb: suKb,
+            sw,
+            sector_size: sectorSize,
+            ...(spec.log_device !== undefined && spec.log_device !== null
+              ? { log_device: spec.log_device }
+              : {}),
+            ...(logSizeBytes !== undefined ? { log_size_bytes: logSizeBytes } : {}),
+          }
+        : undefined;
+
+    const affected: ResourceRef[] = [
+      { kind: 'Filesystem', id: unitName },
+      ...(backing ? [{ kind: 'XiraidArray', id: backing.name } as ResourceRef] : []),
+      ...(spec.log_device !== undefined && spec.log_device !== null
+        ? (() => {
+            const logArray = facts.arraysByVolume.get(spec.log_device);
+            return logArray ? [{ kind: 'XiraidArray', id: logArray.name } as ResourceRef] : [];
+          })()
+        : []),
+    ];
+
+    const unitText = renderMountUnit({
+      what: spec.backing_device,
+      where: spec.mountpoint,
+      ...(spec.log_device !== undefined && spec.log_device !== null
+        ? { log_device: spec.log_device }
+        : {}),
+      ...(spec.mount_options !== undefined ? { mount_options: spec.mount_options } : {}),
+      ...(spec.quota_mode !== undefined ? { quota_mode: spec.quota_mode } : {}),
+    });
+
+    const destructive = spec.force === true;
+    return {
+      affected_resources: affected,
+      blockers,
+      warnings: [],
+      diff: {
+        summary: `mkfs.xfs on ${spec.backing_device}, mounted at ${spec.mountpoint} via ${unitName}`,
+        ...(resolved !== undefined
+          ? {
+              // The executor clamps log size to blockdev --getsize64 at run
+              // time (the day-1 _effective_log_size formula); this preview
+              // shows the UNCLAMPED request.
+              mkfs_argv_preview: buildMkfsArgs(resolved),
+            }
+          : {}),
+        mount_unit: unitText,
+      },
+      risk_level: destructive ? 'destructive' : 'non_disruptive',
+      rollback_model: destructive ? 'unsupported' : 'non_disruptive',
+      enriched_spec: {
+        ...spec,
+        unit_name: unitName,
+        ...(resolved !== undefined ? { resolved } : {}),
+        unit_text: unitText,
+      },
+    };
+  },
+};

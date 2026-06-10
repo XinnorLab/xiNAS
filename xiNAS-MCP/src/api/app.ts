@@ -20,6 +20,7 @@ import { nfsIdmapRouter } from './routes/nfs-idmap.js';
 import { nfsMutateRouter } from './routes/nfs-mutate.js';
 import { nfsRouter } from './routes/nfs.js';
 import { arraysRouter } from './routes/arrays.js';
+import { filesystemsRouter } from './routes/filesystems.js';
 import { referenceRouter } from './routes/reference.js';
 import { storageRouter } from './routes/storage.js';
 import { supportRouter } from './routes/support.js';
@@ -98,6 +99,11 @@ export function createApp(ctx: ApiContext): Express {
   // (ADR-0006).
   v1.use(arraysRouter(ctx));
 
+  // S5: POST /filesystems (fs.create) is real — mounted before the stub
+  // loop; POST /filesystems is excluded from it below. PATCH/DELETE join
+  // in T9-T11.
+  v1.use(filesystemsRouter(ctx));
+
   // Remaining mutating verbs route to the executor-unavailable stub until
   // their executor ships. Per ADR-0002 §Agent heartbeat, plan and apply
   // both return INTERNAL/EXECUTOR_UNAVAILABLE. Each route gets its
@@ -115,7 +121,7 @@ export function createApp(ctx: ApiContext): Express {
   ];
   for (const route of mutatingRoutes) {
     // POST /arrays is the real S3 create/import route mounted above.
-    if (route !== '/arrays') v1.post(route, executorUnavailable(ctx));
+    if (route !== '/arrays' && route !== '/filesystems') v1.post(route, executorUnavailable(ctx));
     // PATCH + DELETE /arrays/:id are the real S4 modify/delete routes.
     if (route !== '/arrays/:id') v1.patch(route, executorUnavailable(ctx));
     v1.put(route, executorUnavailable(ctx));
