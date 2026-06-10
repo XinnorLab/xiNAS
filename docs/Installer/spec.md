@@ -99,6 +99,28 @@ ansible-playbook playbooks/site.yml --tags net_controllers
 
 The TUI's update flow uses these tags via the `Requires-Rebuild:` commit trailer (see [CLAUDE.md](../../CLAUDE.md)).
 
+### 2.5 Playbook output presentation (status ticker)
+
+Both surfaces hide the raw `-v` stream behind a compact status indicator and tee
+the unfiltered output to `/var/log/xinas/install.log`:
+
+- **Bash installer** — `xinas_run_playbook` ([lib/menu_lib.sh](../../lib/menu_lib.sh))
+  pipes `ansible-playbook` through `_xinas_playbook_ticker`, an awk filter that
+  collapses `PLAY [...]` / `TASK [...]` banners into a single overwriting spinner
+  line (errors and the `PLAY RECAP` pass through verbatim).
+- **Python TUI** — `PlaybookRunScreen` ([xinas_menu/screens/startup/playbook_screen.py](../../xinas_menu/screens/startup/playbook_screen.py))
+  parses the same banners to drive its `StatusBar`.
+
+**Callback contract:** both status displays only recognize the **default** stdout
+callback's `PLAY [...]` / `TASK [...]` banners. [ansible.cfg](../../ansible.cfg)
+pins `stdout_callback = minimal` so the non-interactive/unattended path (§7) gets
+compact per-host logs — but `minimal` emits **no** banners. Each interactive
+surface therefore **forces `ANSIBLE_STDOUT_CALLBACK=default`** for its own run so
+the ticker/StatusBar has banners to show; without it the status area renders blank
+("status is not shown"). The bash side applies the override only on the TTY branch
+(`[ -t 1 ]`); the non-TTY passthrough keeps `minimal`. The override must **not**
+force color — ANSI codes ahead of `PLAY`/`TASK` would break the ticker's anchors.
+
 ---
 
 ## 3. Parameters set by each playbook / role

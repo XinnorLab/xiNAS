@@ -1048,10 +1048,22 @@ xinas_run_playbook() {
     } >>"$log_path" 2>/dev/null || true
 
     if [ -t 1 ]; then
-        ansible-playbook "$@" 2>&1 | tee -a "$log_path" | _xinas_playbook_ticker
+        # The ticker only recognizes the *default* stdout callback's
+        # "PLAY [...]" / "TASK [...]" banners. ansible.cfg pins
+        # stdout_callback=minimal (compact logs for the unattended path, §7),
+        # whose output carries none of those tokens — the ticker would swallow
+        # 100% of it and the operator would stare at a blank screen ("status is
+        # not shown"). Force the default callback for the interactive run so the
+        # banners exist. Do NOT also force color: ANSI codes emitted before
+        # "PLAY"/"TASK" would break the ticker's `^…PLAY \[` anchors. The Python
+        # TUI does the identical override in
+        # xinas_menu/screens/startup/playbook_screen.py.
+        ANSIBLE_STDOUT_CALLBACK=default ansible-playbook "$@" 2>&1 \
+            | tee -a "$log_path" | _xinas_playbook_ticker
         rc=${PIPESTATUS[0]}
     else
-        # Non-TTY (CI, redirected install): preserve verbose passthrough
+        # Non-TTY (CI, redirected install): preserve verbose passthrough and
+        # honor ansible.cfg's stdout_callback (minimal) for compact logs.
         ansible-playbook "$@" 2>&1 | tee -a "$log_path"
         rc=${PIPESTATUS[0]}
     fi
