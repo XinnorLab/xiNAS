@@ -4,9 +4,18 @@ interface FilesystemStatus {
   mountpoint?: string;
   fs_type?: string;
   backing_device?: string;
-  currently_mounted?: boolean;
+  /** Canonical runtime mount flag (ADR-0007 §Observation normalization,
+   *  S5 T1; the former `currently_mounted` was removed from the contract). */
+  mounted?: boolean;
   mount_options?: string[];
+  /** Enrichment fields (S5 T6 — blkid/statfs). */
+  uuid?: string;
+  label?: string;
+  size_bytes?: number;
+  free_bytes?: number;
+  effective_mount_options?: string[];
   mount_unit_name?: string;
+  mount_unit_enabled?: boolean;
   mount_unit_state?: string;
   observed_at: string;
 }
@@ -24,7 +33,7 @@ interface WatchHandle {
 interface FilesystemProbe {
   /**
    * Snapshot: reads /etc/systemd/system/*.mount + cross-references
-   * /proc/self/mountinfo to fill currently_mounted + mount_options.
+   * /proc/self/mountinfo to fill `mounted` + mount_options (S5 T6).
    */
   snapshot(): Promise<ObservedFilesystem[]>;
   /**
@@ -135,14 +144,24 @@ export class FilesystemCollector implements Collector<'Filesystem'> {
           ...(fs.status.backing_device !== undefined
             ? { backing_device: fs.status.backing_device }
             : {}),
-          ...(fs.status.currently_mounted !== undefined
-            ? { currently_mounted: fs.status.currently_mounted }
-            : {}),
+          // `mounted` is the canonical flag (ADR-0007 §Observation
+          // normalization); `currently_mounted` left the contract in S5 T0.
+          ...(fs.status.mounted !== undefined ? { mounted: fs.status.mounted } : {}),
           ...(fs.status.mount_options !== undefined
             ? { mount_options: fs.status.mount_options }
             : {}),
+          ...(fs.status.uuid !== undefined ? { uuid: fs.status.uuid } : {}),
+          ...(fs.status.label !== undefined ? { label: fs.status.label } : {}),
+          ...(fs.status.size_bytes !== undefined ? { size_bytes: fs.status.size_bytes } : {}),
+          ...(fs.status.free_bytes !== undefined ? { free_bytes: fs.status.free_bytes } : {}),
+          ...(fs.status.effective_mount_options !== undefined
+            ? { effective_mount_options: fs.status.effective_mount_options }
+            : {}),
           ...(fs.status.mount_unit_name !== undefined
             ? { mount_unit_name: fs.status.mount_unit_name }
+            : {}),
+          ...(fs.status.mount_unit_enabled !== undefined
+            ? { mount_unit_enabled: fs.status.mount_unit_enabled }
             : {}),
           ...(fs.status.mount_unit_state !== undefined
             ? { mount_unit_state: fs.status.mount_unit_state }

@@ -48,8 +48,9 @@ describe('FilesystemProbe', () => {
     const fses = await probe.snapshot();
     expect(fses).toHaveLength(1);
     expect(fses[0]?.id).toBe('srv-share01.mount');
-    expect(fses[0]?.spec?.mountpoint).toBe('/srv/share01');
-    expect(fses[0]?.spec?.fs_type).toBe('xfs');
+    // S5 T1: status-only rows (ADR-0007 §Observation normalization)
+    expect(fses[0]?.status?.mountpoint).toBe('/srv/share01');
+    expect(fses[0]?.status?.fs_type).toBe('xfs');
     expect(fses[0]?.status?.mount_unit_name).toBe('srv-share01.mount');
   });
 

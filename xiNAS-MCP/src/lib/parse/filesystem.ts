@@ -2,6 +2,16 @@
  * Pure converter from a parsed systemd .mount unit (output of
  * parseSystemdUnit) + unit metadata into an ObservedFilesystem.
  *
+ * STATUS-ONLY (S5 T1, ADR-0007 §Observation normalization): observed
+ * Filesystem rows carry every fact under `status` — the earlier `spec`
+ * block was silently DROPPED by the convergence adapter's
+ * `{kind, id, status}` passthrough, leaving real-host rows with nothing
+ * but the unit name/enablement (and the S4 array-delete dependency walk
+ * blind outside fixtures). The canonical mounted flag is `mounted`
+ * (filled by the probe's mountinfo cross-reference, S5 T6); enablement
+ * (`mount_unit_enabled`, from `systemctl is-enabled`) remains a distinct
+ * fact from runtime state.
+ *
  * No side effects. Safe to import from anywhere.
  */
 
@@ -10,21 +20,15 @@ import type { ParsedSystemdUnit } from './systemd-unit.js';
 export interface ObservedFilesystem {
   kind: 'Filesystem';
   id: string;
-  spec: {
+  status: {
     mountpoint: string;
     backing_device: string;
     fs_type?: string;
-    options?: string[];
-  };
-  status: {
+    mount_options?: string[];
     mount_unit_name: string;
-    // Enablement from `systemctl is-enabled` (a boolean here). The systemd
-    // runtime ActiveState (active/inactive/failed/…) is a DIFFERENT field,
-    // `mount_unit_state`, populated by the dbus cross-reference in the
-    // Filesystem collector (E4) — NOT derivable from is-enabled. B4 sets
-    // only what it knows (enablement); E4 fills mount_unit_state +
-    // currently_mounted from /proc/self/mountinfo + dbus.
     mount_unit_enabled: boolean;
+    /** Canonical runtime flag; absent until the mountinfo cross-ref fills it. */
+    mounted?: boolean;
   };
 }
 
@@ -49,15 +53,11 @@ export function mountUnitToFilesystem(
   return {
     kind: 'Filesystem',
     id: unitName,
-    spec: {
+    status: {
       mountpoint: where,
       backing_device: what,
       ...(type !== undefined ? { fs_type: type } : {}),
-      // NOTE: `options` here is renamed to `mount_options` by the Phase E (E4)
-      // collector to match the public api-v1.yaml Filesystem schema.
-      ...(options !== undefined ? { options } : {}),
-    },
-    status: {
+      ...(options !== undefined ? { mount_options: options } : {}),
       mount_unit_name: unitName,
       mount_unit_enabled: isEnabled,
     },

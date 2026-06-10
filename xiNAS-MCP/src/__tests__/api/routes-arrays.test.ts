@@ -234,7 +234,7 @@ describe('POST /api/v1/arrays', () => {
         status: {
           backing_device: '/dev/xi_doomed',
           mountpoint: '/mnt/doomed',
-          currently_mounted: true,
+          mounted: true,
           observed_at: '2026-06-10T12:00:00Z',
         },
       });

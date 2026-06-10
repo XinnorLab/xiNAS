@@ -303,7 +303,7 @@ describe('xiraidArrayDeleteProvider', () => {
       status: {
         backing_device: '/dev/xi_data',
         mountpoint: '/mnt/d',
-        currently_mounted: true,
+        mounted: true,
         observed_at: '2026-06-10T12:00:00Z',
       },
     });
@@ -355,7 +355,7 @@ describe('xiraidArrayDeleteProvider', () => {
       status: {
         backing_device: '/dev/xi_data',
         mountpoint: '/mnt/d2',
-        currently_mounted: false,
+        mounted: false,
         observed_at: '2026-06-10T12:00:00Z',
       },
     });

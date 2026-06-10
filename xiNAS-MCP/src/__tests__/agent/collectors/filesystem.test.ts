@@ -4,7 +4,7 @@ import { FilesystemCollector } from '../../../agent/collectors/filesystem.js';
 
 function makeFakeFsProbe(
   options: {
-    snapshotResult?: Array<{ id: string; mountpoint: string; currently_mounted?: boolean }>;
+    snapshotResult?: Array<{ id: string; mountpoint: string; mounted?: boolean }>;
   } = {},
 ) {
   let _watchCallback: ((eventType: string, filename: string) => void) | null = null;
@@ -13,14 +13,14 @@ function makeFakeFsProbe(
     snapshot: vi.fn().mockResolvedValue(
       (
         options.snapshotResult ?? [
-          { id: 'srv-share01.mount', mountpoint: '/srv/share01', currently_mounted: true },
+          { id: 'srv-share01.mount', mountpoint: '/srv/share01', mounted: true },
         ]
       ).map((fs) => ({
         kind: 'Filesystem' as const,
         id: fs.id,
         status: {
           mountpoint: fs.mountpoint,
-          currently_mounted: fs.currently_mounted ?? false,
+          mounted: fs.mounted ?? false,
           observed_at: new Date().toISOString(),
         },
       })),
@@ -38,11 +38,11 @@ function makeFakeFsProbe(
 }
 
 describe('FilesystemCollector', () => {
-  it('initialSweep: snapshot → upsert deltas with currently_mounted and observed_at', async () => {
+  it('initialSweep: snapshot → upsert deltas with mounted and observed_at', async () => {
     const probe = makeFakeFsProbe({
       snapshotResult: [
-        { id: 'srv-share01.mount', mountpoint: '/srv/share01', currently_mounted: true },
-        { id: 'srv-share02.mount', mountpoint: '/srv/share02', currently_mounted: false },
+        { id: 'srv-share01.mount', mountpoint: '/srv/share01', mounted: true },
+        { id: 'srv-share02.mount', mountpoint: '/srv/share02', mounted: false },
       ],
     });
     const col = new FilesystemCollector({ probe });
@@ -50,13 +50,13 @@ describe('FilesystemCollector', () => {
     expect(deltas).toHaveLength(2);
     const delta0 = deltas[0];
     expect(delta0).toMatchObject({ kind: 'Filesystem', id: 'srv-share01.mount', op: 'upsert' });
-    expect((delta0?.value?.status as Record<string, unknown>)?.currently_mounted).toBe(true);
+    expect((delta0?.value?.status as Record<string, unknown>)?.mounted).toBe(true);
     expect(typeof (delta0?.value?.status as Record<string, unknown>)?.observed_at).toBe('string');
   });
 
   it('start: new .mount file → re-snapshot → emit upsert', async () => {
     const probe = makeFakeFsProbe({
-      snapshotResult: [{ id: 'srv-new.mount', mountpoint: '/srv/new', currently_mounted: false }],
+      snapshotResult: [{ id: 'srv-new.mount', mountpoint: '/srv/new', mounted: false }],
     });
     const col = new FilesystemCollector({ probe });
     const received: ObservationDelta[] = [];

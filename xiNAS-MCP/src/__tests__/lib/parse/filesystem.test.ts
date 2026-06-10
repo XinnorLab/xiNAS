@@ -15,9 +15,13 @@ describe('mountUnitToFilesystem', () => {
 
     expect(fs.kind).toBe('Filesystem');
     expect(fs.id).toBe('srv-share01.mount');
-    expect(fs.spec.mountpoint).toBe('/srv/share01');
-    expect(fs.spec.fs_type).toBe('xfs');
-    expect(fs.spec.backing_device).toBe('/dev/md/xinas-data');
+    // S5 T1 (ADR-0007): STATUS-ONLY — every fact under status, no spec
+    // block (the convergence adapter forwards only status, so a spec
+    // block never reached the api on real hosts).
+    expect('spec' in fs).toBe(false);
+    expect(fs.status.mountpoint).toBe('/srv/share01');
+    expect(fs.status.fs_type).toBe('xfs');
+    expect(fs.status.backing_device).toBe('/dev/md/xinas-data');
     expect(fs.status.mount_unit_name).toBe('srv-share01.mount');
     expect(fs.status.mount_unit_enabled).toBe(true);
   });
@@ -35,8 +39,16 @@ describe('mountUnitToFilesystem', () => {
   it('handles a minimal .mount unit with only [Mount] What/Where', () => {
     const parsed = parseSystemdUnit('[Mount]\nWhat=/dev/sdb1\nWhere=/data');
     const fs = mountUnitToFilesystem(parsed, 'data.mount', true);
-    expect(fs.spec.mountpoint).toBe('/data');
-    expect(fs.spec.backing_device).toBe('/dev/sdb1');
-    expect(fs.spec.fs_type).toBeUndefined();
+    expect(fs.status.mountpoint).toBe('/data');
+    expect(fs.status.backing_device).toBe('/dev/sdb1');
+    expect(fs.status.fs_type).toBeUndefined();
+  });
+
+  it('Options= map to status.mount_options', () => {
+    const parsed = parseSystemdUnit(
+      '[Mount]\nWhat=/dev/xi_data\nWhere=/mnt/data\nType=xfs\nOptions=defaults,noatime,logdev=/dev/xi_log',
+    );
+    const fs = mountUnitToFilesystem(parsed, 'mnt-data.mount', true);
+    expect(fs.status.mount_options).toEqual(['defaults', 'noatime', 'logdev=/dev/xi_log']);
   });
 });

@@ -197,7 +197,7 @@ export function createFixtureNetworkProbe(): FixtureNetworkProbe {
 /**
  * Filesystem: reads <dir>/filesystems.json (entries in the collector's
  * observed shape: { kind:'Filesystem', id, status: { backing_device,
- * mountpoint, currently_mounted, ... } }), defaulting to empty — S4 T11
+ * mountpoint, mounted, ... } }), defaulting to empty — S4 T11
  * so the e2e can seed a dependent filesystem that the collector's
  * complete-snapshot sweep will NOT wipe.
  */

@@ -219,7 +219,7 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
           status: {
             backing_device: '/dev/xi_data',
             mountpoint: '/mnt/data',
-            currently_mounted: true,
+            mounted: true,
             fs_type: 'xfs',
           },
         },

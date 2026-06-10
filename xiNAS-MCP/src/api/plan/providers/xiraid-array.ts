@@ -317,7 +317,7 @@ interface ObservedFilesystemRow {
   id?: string;
   // LIVE collector shape: status-only — there is NO spec on observed
   // Filesystem rows (collectors/filesystem.ts _fsToUpsert; S4 review P1).
-  status?: { backing_device?: string; mountpoint?: string; currently_mounted?: boolean };
+  status?: { backing_device?: string; mountpoint?: string; mounted?: boolean };
 }
 
 interface DesiredShareRow {
@@ -398,7 +398,7 @@ export const xiraidArrayDeleteProvider: PlanProvider = {
       const fs = {
         id: row.value.id,
         mountpoint: s.mountpoint ?? '',
-        mounted: s.currently_mounted === true,
+        mounted: s.mounted === true,
       };
       dependentFs.push(fs);
       if (fs.mounted) {
