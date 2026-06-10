@@ -1,11 +1,21 @@
 import type { Collector, ObservationDelta } from './base.js';
 
+interface NfsProfileRunning {
+  thread_count: number;
+  rdma_listening: boolean;
+  rdma_port?: number;
+  active_versions: string[];
+}
+
 interface NfsProfileResult {
   effective_files: Record<string, string>;
+  /** Live nfsd runtime; absent when nfsd is down (probe omits it). */
+  running?: NfsProfileRunning;
 }
 
 interface NfsProfileProbe {
-  /** Checksums the four ADR-0005 effective files (D-layer nfs-profile probe). */
+  /** Checksums the four ADR-0005 effective files + reads the nfsd runtime
+   *  from /proc/fs/nfsd (D-layer nfs-profile probe). */
   read(): Promise<NfsProfileResult>;
 }
 
@@ -22,8 +32,9 @@ interface NfsProfileCollectorOptions {
  * Path: /xinas/v1/observed/NfsProfile/default
  *
  * Scope: status.effective_files (sha256 checksums of the four ADR-0005
- * files) + observed_at. status.running (live thread count / rdma listening /
- * active versions) stays deferred beyond S3.
+ * files) + status.running (live nfsd runtime from /proc/fs/nfsd — thread
+ * count, rdma listening/port, active versions; omitted when nfsd is down)
+ * + observed_at.
  *
  * POLL-ONLY for v1: no inotify watchers on the four files — start() registers
  * no event sources and the 60 s pollIntervalMs backstop (PollDriver) re-sweeps,
@@ -73,6 +84,7 @@ export class NfsProfileCollector implements Collector<'NfsProfile'> {
         id: 'default',
         status: {
           effective_files: result.effective_files,
+          ...(result.running !== undefined ? { running: result.running } : {}),
           observed_at: new Date().toISOString(),
         },
       },

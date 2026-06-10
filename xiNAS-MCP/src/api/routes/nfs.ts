@@ -62,16 +62,17 @@ function joinExports(
 }
 
 /**
- * Read-time status fold (N7.2): merge the observed NfsProfile row's
- * status.effective_files + status.observed_at into the rendered desired
- * profile's status. The observed row is the NfsProfileCollector's singleton —
- * same id as the desired profile ('default'), keyed at
- * /xinas/v1/observed/<segment>/<id> where the segment is derived through
- * observedSegment('NfsProfile') so this reader can never disagree with the
- * H3 observed write path. status.running stays deferred beyond S3.
+ * Read-time status fold (N7.2 + S3 §3.4): merge the observed NfsProfile
+ * row's status.effective_files + status.running + status.observed_at into
+ * the rendered desired profile's status. The observed row is the
+ * NfsProfileCollector's singleton — same id as the desired profile
+ * ('default'), keyed at /xinas/v1/observed/<segment>/<id> where the segment
+ * is derived through observedSegment('NfsProfile') so this reader can never
+ * disagree with the H3 observed write path. `running` is absent from the
+ * observed row when nfsd is down — the fold then leaves it out.
  *
  * Absent or malformed observed row → the profile is returned unchanged
- * (existing desired-only behavior). When both sides carry one of the two
+ * (existing desired-only behavior). When both sides carry one of the
  * folded keys, observed wins; all other desired status fields are preserved.
  */
 function foldObservedProfileStatus(
@@ -94,6 +95,9 @@ function foldObservedProfileStatus(
   const fold: Record<string, unknown> = {};
   if (s.effective_files !== null && typeof s.effective_files === 'object') {
     fold.effective_files = s.effective_files;
+  }
+  if (s.running !== null && typeof s.running === 'object') {
+    fold.running = s.running;
   }
   if (typeof s.observed_at === 'string') fold.observed_at = s.observed_at;
   if (Object.keys(fold).length === 0) return profile;

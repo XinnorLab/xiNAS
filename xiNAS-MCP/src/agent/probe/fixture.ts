@@ -165,8 +165,10 @@ export function createFixtureIdmapProbe(dir: string): FixtureIdmapProbe {
   };
 }
 
-/** NfsProfile: return nfs-profile.json directly (NfsProfileSnapshot shape);
- *  absent fixture → empty effective_files (the boot sweep must not crash). */
+/** NfsProfile: return nfs-profile.json directly (NfsProfileSnapshot shape,
+ *  including the optional `running` section when the fixture carries one);
+ *  absent fixture → empty effective_files, no running (the boot sweep must
+ *  not crash). */
 export function createFixtureNfsProfileProbe(dir: string): FixtureNfsProfileProbe {
   return {
     snapshot(): Promise<NfsProfileSnapshot> {
