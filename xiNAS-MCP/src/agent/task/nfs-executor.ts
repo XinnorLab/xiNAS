@@ -25,7 +25,7 @@
  * `readIdmapDomain`; production wires the real helper client + the idmapd.conf
  * reader in `wiring.ts`.
  */
-import { compileShareToExportEntry, type ShareCompileInput } from '../../lib/nfs-exports.js';
+import { compileShareToExportEntry, shareSpecToCompileInput } from '../../lib/nfs-exports.js';
 import { deriveProfileServiceAction, type NfsProfileSpec } from '../../lib/nfs-profile.js';
 import {
   type HelperExportEntry,
@@ -74,6 +74,15 @@ interface RawProfileSpec {
 const STASH_PRIOR_ENTRY = 'priorEntry';
 /** Stash key under which preflight captures the prior idmap domain (or undefined). */
 const STASH_PRIOR_DOMAIN = 'priorDomain';
+/**
+ * Stash marker `share.create`'s apply sets IMMEDIATELY before issuing
+ * `add_export`. The TaskRunner invokes `rollback()` on ANY failed stage —
+ * including preflight — so without this marker a preflight failure (e.g.
+ * `EXPORT_PATH_IN_USE`: the path is ALREADY exported by someone else) would
+ * roll back by deleting an export the task never created. Rollback only
+ * issues `remove_export` when this marker is present.
+ */
+const STASH_ADD_EXPORT_ISSUED = 'addExportIssued';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
@@ -137,16 +146,6 @@ function readProfileSpec(spec: unknown): RawProfileSpec {
   return spec as unknown as RawProfileSpec;
 }
 
-/** Map a RawShareSpec onto the shared compiler's input (Share-level fields fold per-client). */
-function toCompileInput(spec: RawShareSpec): ShareCompileInput {
-  return {
-    path: spec.path,
-    clients: spec.clients.map((c) => ({ pattern: c.pattern, options: c.options })),
-    ...(spec.sync !== undefined ? { sync: spec.sync } : {}),
-    ...(spec.security_mode !== undefined ? { security_mode: spec.security_mode } : {}),
-  };
-}
-
 /** Find the live export entry for `path` in a `list_exports` result, or null. */
 function findEntry(entries: HelperExportEntry[], path: string): HelperExportEntry | null {
   return entries.find((e) => e.path === path) ?? null;
@@ -196,8 +195,11 @@ function buildShareCreate(deps: NfsExecutorDeps): Executor {
         name: 'apply',
         async run(ctx: ExecutorContext): Promise<void> {
           const spec = readShareSpec(ctx.spec);
-          const entry = compileShareToExportEntry(toCompileInput(spec));
+          const entry = compileShareToExportEntry(shareSpecToCompileInput(spec));
           ctx.emitOutput(`share.create: apply — add_export ${spec.path}`);
+          // Mark BEFORE issuing the op: if add_export itself fails midway the
+          // export may still have landed, so rollback must attempt removal.
+          ctx.stash[STASH_ADD_EXPORT_ISSUED] = true;
           await deps.helper.addExport(entry, { create_path: true, path_mode: '0755' });
         },
       },
@@ -215,6 +217,16 @@ function buildShareCreate(deps: NfsExecutorDeps): Executor {
     ],
     async rollback(ctx: ExecutorContext): Promise<void> {
       const spec = readShareSpec(ctx.spec);
+      // The runner rolls back on ANY failed stage, including preflight. If
+      // apply never issued add_export there is NOTHING this task created —
+      // removing here would delete a PRE-EXISTING export (e.g. the
+      // EXPORT_PATH_IN_USE preflight failure means someone else exports it).
+      if (ctx.stash[STASH_ADD_EXPORT_ISSUED] !== true) {
+        ctx.emitOutput(
+          `share.create: rollback — apply never issued add_export for ${spec.path}; nothing to roll back`,
+        );
+        return;
+      }
       ctx.emitOutput(`share.create: rollback — remove_export ${spec.path}`);
       try {
         await deps.helper.removeExport(spec.path);
@@ -263,7 +275,7 @@ function buildShareUpdate(deps: NfsExecutorDeps): Executor {
         name: 'apply',
         async run(ctx: ExecutorContext): Promise<void> {
           const spec = readShareSpec(ctx.spec);
-          const entry = compileShareToExportEntry(toCompileInput(spec));
+          const entry = compileShareToExportEntry(shareSpecToCompileInput(spec));
           ctx.emitOutput(`share.update: apply — update_export ${spec.path}`);
           await deps.helper.updateExport(spec.path, { clients: entry.clients });
         },
@@ -390,7 +402,21 @@ function buildNfsIdmapSet(deps: NfsExecutorDeps): Executor {
       const prior = ctx.stash[STASH_PRIOR_DOMAIN];
       if (typeof prior === 'string') {
         ctx.emitOutput(`nfs-idmap.set: rollback — restore domain '${prior}'`);
-        await deps.helper.setIdmapDomain(prior);
+        try {
+          await deps.helper.setIdmapDomain(prior);
+        } catch (err) {
+          // The helper rejects any domain without a '.' (INVALID_ARGUMENT) —
+          // e.g. a stock `Domain = localdomain`. Rollback only runs when
+          // preflight/apply FAILED, so the domain was never successfully
+          // changed: leaving it as-is is harmless, not manual-recovery.
+          if (err instanceof NfsHelperError && err.code === 'INVALID_ARGUMENT') {
+            ctx.emitOutput(
+              `nfs-idmap.set: rollback — prior domain '${prior}' is not restorable via the helper (no dot) — left as-is`,
+            );
+            return;
+          }
+          throw err;
+        }
       } else {
         // The prior domain was unset; there is nothing to restore to. Leave the
         // new domain in place and emit a note (manual recovery if operators want
@@ -452,7 +478,17 @@ function buildNfsProfileUpdate(deps: NfsExecutorDeps): Executor {
       },
     ],
     async rollback(ctx: ExecutorContext): Promise<void> {
-      const { profile, prior_profile } = readProfileSpec(ctx.spec);
+      // A malformed spec means preflight already failed on the narrowing and
+      // NOTHING was rendered — re-throwing here would only escalate a zero-
+      // host-change failure to FAILED_MANUAL_RECOVERY_REQUIRED. Note + return.
+      let narrowed: RawProfileSpec;
+      try {
+        narrowed = readProfileSpec(ctx.spec);
+      } catch {
+        ctx.emitOutput('nfs-profile.update: rollback — spec unreadable — nothing to re-render');
+        return;
+      }
+      const { profile, prior_profile } = narrowed;
       // Same derived flag as the forward render: if the change warranted a
       // restart, restoring the prior set does too (§3.4).
       const { restart } = deriveProfileServiceAction(prior_profile, profile);

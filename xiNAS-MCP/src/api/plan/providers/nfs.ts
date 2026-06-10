@@ -33,7 +33,7 @@
  * (`ACTIVE_NFS_SESSIONS`), per the spec's "warning, not blocker" decision.
  */
 import { decExportId, encExportId } from '../../../lib/nfs-export-id.js';
-import { compileShareToExportEntry, type ShareCompileInput } from '../../../lib/nfs-exports.js';
+import { compileShareToExportEntry, shareSpecToCompileInput } from '../../../lib/nfs-exports.js';
 import { deriveProfileServiceAction, type NfsProfileSpec } from '../../../lib/nfs-profile.js';
 import { ApiException } from '../../errors.js';
 import type { PlanContext, PlanProvider, PlanResult } from '../engine.js';
@@ -156,16 +156,6 @@ function encodeExportIdOrThrow(op: string, path: string): string {
   }
 }
 
-/** Map the raw spec onto the shared compiler's input (mirrors the agent executor). */
-function toCompileInput(spec: RawShareSpec): ShareCompileInput {
-  return {
-    path: spec.path,
-    clients: spec.clients.map((c) => ({ pattern: c.pattern, options: c.options })),
-    ...(spec.sync !== undefined ? { sync: spec.sync } : {}),
-    ...(spec.security_mode !== undefined ? { security_mode: spec.security_mode } : {}),
-  };
-}
-
 /**
  * Build the desired Share KV document from the raw operation spec: hoist `id`
  * to the top level, everything else becomes `spec` — exactly the shape the GET
@@ -237,7 +227,10 @@ const shareCreateProvider: PlanProvider = {
       affected_resources: [{ kind: 'Share', id: share.id, revision: 0 }],
       blockers,
       warnings: [],
-      diff: { action: 'create', export_entry: compileShareToExportEntry(toCompileInput(share)) },
+      diff: {
+        action: 'create',
+        export_entry: compileShareToExportEntry(shareSpecToCompileInput(share)),
+      },
       risk_level: 'non_disruptive',
       rollback_model: 'reversible',
       observed_freshness_ref: freshness,
@@ -270,7 +263,10 @@ const shareUpdateProvider: PlanProvider = {
       affected_resources: [{ kind: 'Share', id: share.id, revision: desired.revision }],
       blockers: [],
       warnings: warning ? [warning] : [],
-      diff: { action: 'update', export_entry: compileShareToExportEntry(toCompileInput(share)) },
+      diff: {
+        action: 'update',
+        export_entry: compileShareToExportEntry(shareSpecToCompileInput(share)),
+      },
       risk_level: 'changing_access',
       rollback_model: 'reversible',
       state_revision_expected: desired.revision,

@@ -211,25 +211,57 @@ describe('share.create', () => {
     expect(rm?.args[0]).toBe('/mnt/data');
   });
 
-  it('rollback swallows NOT_FOUND (apply never wrote the export) — idempotent', async () => {
+  it('rollback swallows NOT_FOUND (apply issued add_export but the line never committed) — idempotent', async () => {
     const helper = makeFakeHelper([]);
+    const ex = getExecutor(makeDeps(helper), 'share.create');
+    const ctx = makeCtx(spec);
+    await stage(ex, 'preflight').run(ctx);
+    await stage(ex, 'apply').run(ctx);
+    // Arm the throw AFTER apply so only rollback's removeExport hits it.
     helper.throwOn = {
       op: 'removeExport',
       error: new NfsHelperError('NOT_FOUND', 'no such export'),
     };
-    const ex = getExecutor(makeDeps(helper), 'share.create');
     // rollback must NOT throw — the line was never committed, so undo is complete.
-    await expect(ex.rollback(makeCtx(spec))).resolves.toBeUndefined();
+    await expect(ex.rollback(ctx)).resolves.toBeUndefined();
   });
 
   it('rollback rethrows a non-NOT_FOUND helper error', async () => {
     const helper = makeFakeHelper([]);
+    const ex = getExecutor(makeDeps(helper), 'share.create');
+    const ctx = makeCtx(spec);
+    await stage(ex, 'preflight').run(ctx);
+    await stage(ex, 'apply').run(ctx);
     helper.throwOn = {
       op: 'removeExport',
       error: new NfsHelperError('INTERNAL', 'exportfs failed'),
     };
+    await expect(ex.rollback(ctx)).rejects.toThrow(/exportfs failed/);
+  });
+
+  it('rollback after a preflight EXPORT_PATH_IN_USE failure does NOT delete the pre-existing export', async () => {
+    // The path is ALREADY exported (by someone else) — preflight fails, the
+    // runner still calls rollback with the same ctx, and rollback must NOT
+    // issue remove_export (apply never ran, so the task created nothing).
+    const helper = makeFakeHelper([{ path: '/mnt/data', clients: [] }]);
     const ex = getExecutor(makeDeps(helper), 'share.create');
-    await expect(ex.rollback(makeCtx(spec))).rejects.toThrow(/exportfs failed/);
+    const ctx = makeCtx(spec);
+    await expect(stage(ex, 'preflight').run(ctx)).rejects.toThrow(/EXPORT_PATH_IN_USE/);
+    await expect(ex.rollback(ctx)).resolves.toBeUndefined();
+    expect(helper.calls.some((c) => c.op === 'removeExport')).toBe(false);
+  });
+
+  it('rollback after a helper-unreachable preflight failure does NOT call removeExport', async () => {
+    const helper = makeFakeHelper([]);
+    helper.throwOn = {
+      op: 'listExports',
+      error: new NfsHelperError('INTERNAL', 'helper unreachable'),
+    };
+    const ex = getExecutor(makeDeps(helper), 'share.create');
+    const ctx = makeCtx(spec);
+    await expect(stage(ex, 'preflight').run(ctx)).rejects.toThrow(/helper unreachable/);
+    await expect(ex.rollback(ctx)).resolves.toBeUndefined();
+    expect(helper.calls.some((c) => c.op === 'removeExport')).toBe(false);
   });
 });
 
@@ -460,6 +492,16 @@ describe('nfs-profile.update', () => {
     expect(render?.args).toEqual([prior, true]); // prior spec, same flag
   });
 
+  it('rollback degrades gracefully on an unreadable spec — resolves, no render', async () => {
+    // A garbage spec means preflight already failed on the narrowing and
+    // nothing was rendered; rollback must note-and-return, not escalate a
+    // zero-host-change failure to manual recovery.
+    const helper = makeFakeHelper();
+    const ex = getExecutor(makeDeps(helper), 'nfs-profile.update');
+    await expect(ex.rollback(makeCtx({ garbage: true }))).resolves.toBeUndefined();
+    expect(helper.calls.some((c) => c.op === 'renderNfsProfile')).toBe(false);
+  });
+
   it('preflight throws a clear error when profile/prior_profile is missing', async () => {
     const helper = makeFakeHelper();
     const ex = getExecutor(makeDeps(helper), 'nfs-profile.update');
@@ -515,6 +557,25 @@ describe('nfs-idmap.set', () => {
     const set = helper.calls.find((c) => c.op === 'setIdmapDomain');
     expect(set).toBeDefined();
     expect(set?.args[0]).toBe('old.example.com');
+  });
+
+  it('rollback tolerates a dot-less prior domain (helper INVALID_ARGUMENT) — left as-is, no throw', async () => {
+    // A stock `Domain = localdomain` has no '.' — the helper would reject the
+    // restore with INVALID_ARGUMENT. Rollback only runs when the change never
+    // succeeded, so leaving the domain as-is is harmless: resolve, don't throw.
+    const helper = makeFakeHelper();
+    const ex = getExecutor(
+      makeDeps(helper, async () => 'localdomain'),
+      'nfs-idmap.set',
+    );
+    const ctx = makeCtx(spec);
+    await stage(ex, 'preflight').run(ctx);
+    await stage(ex, 'apply').run(ctx);
+    helper.throwOn = {
+      op: 'setIdmapDomain',
+      error: new NfsHelperError('INVALID_ARGUMENT', 'no dot'),
+    };
+    await expect(ex.rollback(ctx)).resolves.toBeUndefined();
   });
 
   it('rollback is a no-op when the prior domain was unset', async () => {

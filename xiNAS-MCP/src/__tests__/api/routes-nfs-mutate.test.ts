@@ -242,6 +242,19 @@ describe('NFS mutating routes (N5)', () => {
     expect(row?.revision).toBe(2);
   });
 
+  it('share.update plan with a changed path → 400 (spec.path is immutable)', async () => {
+    seedShare(setup.state, 's1'); // path /srv/nfs/s1
+    const res = await patch('/api/v1/shares/s1', {
+      mode: 'plan',
+      spec: { path: '/srv/nfs/elsewhere' },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0].code).toBe('INVALID_ARGUMENT');
+    expect(res.body.errors[0].message).toBe(
+      'spec.path is immutable; delete and re-create the share to move it',
+    );
+  });
+
   it('share.delete plan→apply: desired row removed; spec is {id, path}', async () => {
     setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-del' });
     seedShare(setup.state, 's2');

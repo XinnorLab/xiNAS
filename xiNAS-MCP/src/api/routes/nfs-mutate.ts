@@ -149,6 +149,15 @@ export function nfsMutateRouter(ctx: ApiContext): Router {
       // any body spec.id is dropped. The provider receives the FULL merged
       // Share spec (the providers never merge — §3.2).
       const patchFields = Object.fromEntries(Object.entries(patch).filter(([k]) => k !== 'id'));
+      // The export path is IMMUTABLE: nothing renames an export, so a changed
+      // path could only fail late (the executor's update_export(new path) is
+      // guaranteed NOT_FOUND). Reject it up front instead.
+      if (patchFields.path !== undefined && patchFields.path !== existingSpec.path) {
+        throw new ApiException(
+          'INVALID_ARGUMENT',
+          'spec.path is immutable; delete and re-create the share to move it',
+        );
+      }
       const mergedSpec = { ...existingSpec, ...patchFields };
       if (
         patchFields.fsid !== undefined &&
