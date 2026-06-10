@@ -99,7 +99,7 @@ describe('xiraidArrayCreateProvider', () => {
     });
   });
 
-  it('blockers: name taken / system disk / unknown disk / claimed disk / spares deferred', async () => {
+  it('blockers: name taken / system disk / unknown disk / claimed disk / double-booked spare', async () => {
     h.kv.put('/xinas/v1/observed/XiraidArray/taken', {
       kind: 'XiraidArray',
       id: 'taken',
@@ -113,7 +113,9 @@ describe('xiraidArrayCreateProvider', () => {
       [{ ...GOOD_SPEC, member_disk_ids: ['sysdisk', 'nvme1n1', 'nvme2n1', 'nvme3n1'] }, 'disk_is_system'],
       [{ ...GOOD_SPEC, member_disk_ids: ['ghost', 'nvme1n1', 'nvme2n1', 'nvme3n1'] }, 'disk_not_found'],
       [{ ...GOOD_SPEC, member_disk_ids: ['nvme4n1', 'nvme1n1', 'nvme2n1', 'nvme3n1'] }, 'disk_in_use'],
-      [{ ...GOOD_SPEC, spare_disk_ids: ['nvme1n1'] }, 'spare_pool_deferred'],
+      // S4: spare_pool_deferred is gone — a spare double-booked with a
+      // member of this very spec reads as disk_in_use instead.
+      [{ ...GOOD_SPEC, spare_disk_ids: ['nvme1n1'] }, 'disk_in_use'],
     ];
     for (const [spec, code] of cases) {
       const { planResult } = await h.engine.plan(planArgs(spec));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { XiraidArraySpec } from '../../../lib/xiraid/schema.js';
-import { toRaidCreateRequest } from '../../../lib/xiraid/translate.js';
+import { toRaidCreateRequest, toRaidModifyRequest } from '../../../lib/xiraid/translate.js';
 
 const DEVICES = new Map([
   ['d1', '/dev/nvme1n1'],
@@ -108,5 +108,56 @@ describe('toRaidCreateRequest', () => {
     expect(() =>
       toRaidCreateRequest({ name: 'x', level: 'raid0', member_disk_ids: ['nope'] }, DEVICES),
     ).toThrow(/nope/);
+  });
+
+  // ---- S4 T3: create-with-spares renders the derived sparepool ----
+
+  it('spares render as sparepool xnsp_<name>; spare drives are NOT in drives', () => {
+    const req = toRaidCreateRequest(
+      { name: 'data', level: 'raid0', member_disk_ids: ['d1', 'd2'], spare_disk_ids: ['d3'] },
+      DEVICES,
+    );
+    expect(req.sparepool).toBe('xnsp_data');
+    expect(req.drives).toEqual(['/dev/nvme1n1', '/dev/nvme2n1']); // no /dev/nvme3n1
+    // no spares → no sparepool key at all
+    const bare = toRaidCreateRequest(
+      { name: 'data', level: 'raid0', member_disk_ids: ['d1', 'd2'] },
+      DEVICES,
+    );
+    expect('sparepool' in bare).toBe(false);
+  });
+});
+
+describe('toRaidModifyRequest', () => {
+  it('tuning golden: boolean→0/1, null dropped, never force; resync_enabled is create-only (dropped)', () => {
+    const req = toRaidModifyRequest('data', {
+      tuning: {
+        init_prio: 50,
+        resync_enabled: true, // create-time knob — RaidModify has no field for it
+        merge_read_enabled: false,
+        cpu_allowed: '0-3',
+        memory_limit: null,
+        single_run: true,
+      },
+    });
+    expect(req).toEqual({
+      name: 'data',
+      init_prio: 50,
+      merge_read_enabled: 0,
+      cpu_allowed: '0-3',
+      single_run: true,
+    });
+    expect('force' in req).toBe(false);
+  });
+
+  it('sparepool attach + detach', () => {
+    expect(toRaidModifyRequest('data', { sparepool: 'xnsp_data' })).toEqual({
+      name: 'data',
+      sparepool: 'xnsp_data',
+    });
+    expect(toRaidModifyRequest('data', { sparepool: '' })).toEqual({
+      name: 'data',
+      sparepool: '',
+    });
   });
 });
