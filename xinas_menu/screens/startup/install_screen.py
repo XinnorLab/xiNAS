@@ -102,11 +102,15 @@ class InstallScreen(StartupAppMixin, Screen):
             PlaybookRunScreen(cmd=cmd, title=f"Installing — {preset}", workdir=repo)
         )
         if exit_code == 0:
-            # StartupApp defines no `snapshots` helper — this call raises
-            # AttributeError today (pre-existing gap, kept as-is for behavior
-            # parity; the baseline is normally created by the xinas_history
-            # Ansible role during the install itself).
-            await self.app.snapshots.record_baseline(preset=preset)  # pyright: ignore[reportAttributeAccessIssue]
+            # Record a baseline snapshot when the running app provides the
+            # helper (XiNASApp). StartupApp does not — and does not need to:
+            # the xinas_history Ansible role creates the baseline during the
+            # install itself. The old unconditional call crashed the SUCCESS
+            # path under StartupApp with AttributeError before the
+            # notification below could ever show.
+            snapshots = getattr(self.app, "snapshots", None)
+            if snapshots is not None:
+                await snapshots.record_baseline(preset=preset)
             self.app.notify("Installation completed successfully!", severity="information")
         else:
             go_collect = await self.app.push_screen_wait(
