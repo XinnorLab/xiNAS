@@ -156,17 +156,23 @@ service config is **not** `/etc/nfs.conf`; the effective targets are `/etc/nfs/n
 `/etc/default/nfs-kernel-server`, `/etc/modprobe.d/lockd.conf`, and `/etc/default/nfs-common`,
 each checksummed into `status.effective_files`. The legacy helper `fix_nfs_conf`
 (→`/etc/nfs.conf`) is **wrong here** and is not used.
-- **Plan:** read desired `NfsProfile/default`; the PATCH may set `threads.count`,
-  `rdma.enabled`, `service_policy.*`. **restart iff any *changed* dimension's policy is
-  `restart`** (e.g. `on_thread_count_change:'restart'` and `threads` changed); `reload`/`none`
-  → no restart. risk = `changing_access` iff a restart is implied, else `non_disruptive`.
-  **Freshness pins the *desired* `NfsProfile/default` revision** (a normal
-  desired-revision-check) — there is **no observed `NfsProfile`** today (review P1-4).
-- **N7 must add the `status.effective_files` producer.** Two options, decided in N7: (a) a
-  new **observed `NfsProfile` collector** that reads + checksums the four ADR-0005 files, or
-  (b) the helper's `render_nfs_profile` **returns** the per-file checksums and the agent
-  reports them via a progress/observed push. Until that lands, `status.effective_files` and
-  `status.running` are unpopulated; the executor's prior-spec rollback is the sole undo.
+- **Plan:** read desired `NfsProfile/default`; **absent → plan against the ADR-0005
+  default spec with an absence pin (`revision: 0`)** and the desired mutation creates the
+  row (create-on-first-update — a fresh install has no desired profile row). The PATCH may
+  set `threads.count`, `rdma.enabled`, `service_policy.*`. **restart iff any *changed*
+  dimension's policy is `restart`** (e.g. `on_thread_count_change:'restart'` and `threads`
+  changed); `reload`/`none` → no restart. risk = `changing_access` iff a restart is implied,
+  else `non_disruptive`. **Freshness pins the *desired* `NfsProfile/default` revision** (a
+  normal desired-revision-check) — there is **no observed `NfsProfile`** today (review P1-4).
+- **`status.effective_files` producer — DECIDED (N7.2): option (a), an observed
+  `NfsProfile` collector**, scoped to `effective_files` checksums (+ `observed_at`) of the
+  four ADR-0005 files. Rationale: matches the architecture every other observed kind uses
+  (collector → `/internal/v1/observed` → KV → read-time fold), and catches **manual** edits
+  to the effective files — ADR-0005's stated drift-detection intent — which helper-returned
+  checksums (option b) never could. `status.running` (live thread count / rdma listening /
+  active versions) stays **deferred** beyond S3; the executor's prior-spec rollback is the
+  sole undo until then. Only `nfs-profile.update` via **PATCH** is built in S3; the OpenAPI
+  `PUT /nfs-profiles/default` (full replace) stays stubbed.
 - **Apply:** patch desired NfsProfile (prior recorded); **`spec`** = the patched NfsProfile
   spec (the executor renders from it).
 - **Executor:** `render_nfs_profile(spec, restart)` (§6.2) — the helper renders the four

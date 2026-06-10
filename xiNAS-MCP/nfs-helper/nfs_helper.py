@@ -23,6 +23,7 @@ from nfs_sessions import list_sessions, get_sessions_for_path
 from nfs_quota import set_project_quota, set_user_quota
 from nfs_conf import build_nfsd_updates, restart_nfs_server, set_nfs_conf
 from nfs_idmap import set_idmapd_domain
+from nfs_profile import render_nfs_profile
 
 # --- Configuration ---
 
@@ -187,6 +188,22 @@ def handle_set_idmapd_domain(req: dict) -> None:
     set_idmapd_domain(domain)
 
 
+def handle_render_nfs_profile(req: dict) -> dict:
+    """Render the four ADR-0005 effective NFS files from a full NfsProfile spec.
+
+    Request fields:
+      spec:    object (required) — the NfsProfile spec (ADR-0005 schema)
+      restart: bool (default false) — true → `systemctl restart nfs-server`,
+               false → `systemctl reload nfs-server`
+    Returns {effective_files: {path: "sha256:..."}, restarted, reloaded}.
+    """
+    spec = req.get("spec")
+    if not spec or not isinstance(spec, dict):
+        raise ValueError("Missing or invalid 'spec' field")
+    restart = bool(req.get("restart", False))
+    return render_nfs_profile(spec, restart)
+
+
 def _exportfs_reload() -> None:
     """Reload NFS exports via exportfs -r."""
     try:
@@ -221,6 +238,7 @@ HANDLERS = {
     "reload": handle_reload,
     "fix_nfs_conf": handle_fix_nfs_conf,
     "set_idmapd_domain": handle_set_idmapd_domain,
+    "render_nfs_profile": handle_render_nfs_profile,
 }
 
 

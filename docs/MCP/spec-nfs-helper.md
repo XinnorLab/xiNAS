@@ -133,13 +133,57 @@ not contain a `.`.
 {"ok": true, "result": null, "request_id": "set-idmap-1"}
 ```
 
+### `render_nfs_profile`
+**Input:** `{ "op": "render_nfs_profile", "request_id": string, "spec": object, "restart?": bool }`
+**Output:** `{ "effective_files": { "<abs path>": "sha256:<hex>", ... }, "restarted": bool, "reloaded": bool }`
+
+Renders the **four ADR-0005 effective NFS service-config files** on Ubuntu
+22.04/24.04 from a full `NfsProfile` spec (`docs/control-path/adr/0005-nfs-profile.md`,
+s3-nfs-executor-spec §6.2). This op — not the legacy `fix_nfs_conf` /
+`/etc/nfs.conf` path — owns the NFS profile rendering:
+
+| File | Contents |
+|------|----------|
+| `/etc/nfs/nfsd.conf` | `[nfsd]`: `vers3`, `vers4` (y iff any v4_* enabled), `vers4.0/4.1/4.2`, `rdma` (+ `rdma-port` when enabled), `threads` |
+| `/etc/default/nfs-kernel-server` | `RPCNFSDCOUNT=<threads.count>`, `RPCMOUNTDOPTS="--manage-gids"` |
+| `/etc/modprobe.d/lockd.conf` | `options lockd nlm_udpport=<n> nlm_tcpport=<n>` when `v3_locking.enabled` AND `versions.v3.enabled`; otherwise a managed comment-only form |
+| `/etc/default/nfs-common` | `NEED_STATD=yes\|no` per `versions.v3.enabled`, `STATDOPTS=""` (fixed statd ports are Phase 1+) |
+
+Rendering is **deterministic** (same spec → byte-identical files); every file
+starts with a `# Managed by xiNAS (render_nfs_profile) — do not edit` header,
+is written atomically (`mkstemp` + `os.replace`, mode 0644) under one
+`fcntl.LOCK_EX` on `/run/xinas-nfs-profile.lock`, and is checksummed —
+`effective_files` keys are the absolute paths, values `sha256:<hex>` (feeds
+`NfsProfile.status.effective_files`).
+
+Service action after a successful render: `restart: true` → `systemctl restart
+nfs-server`; `restart: false` (default) → `systemctl reload nfs-server`
+(ADR-0005 apply stage `reload_or_restart`). A systemctl failure returns
+`INTERNAL` — the files were already rendered at that point and the error says
+so.
+
+A mid-render write failure can leave a PARTIAL set (earlier files already
+replaced, later ones untouched; each individual write is atomic). Accepted:
+the S3 executor's rollback re-renders all four files from the prior spec,
+restoring a coherent set.
+
+Error `INVALID_ARGUMENT` if `spec` is missing/not an object, `threads.count`
+is not an integer in `[8, 1024]`, or `rdma.port` is not a valid port when
+RDMA is enabled.
+
+```json
+{"ok": true, "result": {"effective_files": {"/etc/nfs/nfsd.conf": "sha256:ab12..."}, "restarted": false, "reloaded": true}, "request_id": "render-1"}
+```
+
 ---
 
 ## File Locking
 
 `/etc/exports` modifications use `fcntl.flock(LOCK_EX)` via `/run/xinas-exports.lock`.
-`/etc/nfs.conf` edits (`fix_nfs_conf`) lock `/run/xinas-nfs-conf.lock`, and
-`/etc/idmapd.conf` edits (`set_idmapd_domain`) lock `/run/xinas-nfs-idmap.lock`.
+`/etc/nfs.conf` edits (`fix_nfs_conf`) lock `/run/xinas-nfs-conf.lock`,
+`/etc/idmapd.conf` edits (`set_idmapd_domain`) lock `/run/xinas-nfs-idmap.lock`,
+and the ADR-0005 profile files (`render_nfs_profile`) lock
+`/run/xinas-nfs-profile.lock`.
 Each file has its own lock, preventing concurrent writes from multiple daemon
 threads.
 
