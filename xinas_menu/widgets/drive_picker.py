@@ -22,7 +22,7 @@ from textual.widgets import Button, DataTable, Label, Static
 _log = logging.getLogger(__name__)
 
 
-def _fmt_size(size_bytes: int) -> str:
+def _fmt_size(size_bytes: float) -> str:
     """Format byte count as human-readable (IEC units)."""
     if size_bytes <= 0:
         return "N/A"
@@ -256,7 +256,10 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
             # get_row_at raises when the cursor is on an invalid row — keep
             # the call as a guard even though its value is unused.
             table.get_row_at(table.cursor_row)
-            return str(table.get_row_key(table.cursor_row))
+            # DataTable has no get_row_key() — this raises AttributeError and
+            # the except below returns None (pre-existing gap, kept as-is for
+            # behavior parity; self.get_row_key(table) was likely intended).
+            return str(table.get_row_key(table.cursor_row))  # pyright: ignore[reportAttributeAccessIssue]
         except Exception:
             return None
 

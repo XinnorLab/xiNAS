@@ -12,6 +12,8 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Button, Label, TextArea
 
+from xinas_menu.apptype import XiNASAppMixin
+
 _NETPLAN_DIR = Path("/etc/netplan")
 
 
@@ -23,7 +25,7 @@ def _find_netplan_file() -> Path | None:
     return files[0] if files else None
 
 
-class NetworkConfigScreen(Screen[bool]):
+class NetworkConfigScreen(XiNASAppMixin, Screen[bool]):
     """Edit netplan YAML configuration."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=True)]
@@ -52,12 +54,13 @@ class NetworkConfigScreen(Screen[bool]):
             self.dismiss(False)
 
     async def _save_and_apply(self) -> None:
-        if not self._cfg_path:
+        cfg_path = self._cfg_path
+        if not cfg_path:
             return
         content = self.query_one("#netplan-editor", TextArea).text
         loop = asyncio.get_running_loop()
         ok, err = await loop.run_in_executor(
-            None, lambda: _save_netplan(self._cfg_path, content, apply=True)
+            None, lambda: _save_netplan(cfg_path, content, apply=True)
         )
         if ok:
             self.app.audit.log("network.netplan_save", str(self._cfg_path), "OK")
@@ -70,12 +73,13 @@ class NetworkConfigScreen(Screen[bool]):
             self.app.notify(f"Failed: {err}", severity="error")
 
     async def _validate(self) -> None:
-        if not self._cfg_path:
+        cfg_path = self._cfg_path
+        if not cfg_path:
             return
         content = self.query_one("#netplan-editor", TextArea).text
         loop = asyncio.get_running_loop()
         ok, err = await loop.run_in_executor(
-            None, lambda: _save_netplan(self._cfg_path, content, apply=False)
+            None, lambda: _save_netplan(cfg_path, content, apply=False)
         )
         if ok:
             self.app.notify("Netplan config is valid.", severity="information")

@@ -16,6 +16,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -33,7 +34,7 @@ _MENU = [
 ]
 
 
-class NFSScreen(Screen):
+class NFSScreen(XiNASAppMixin, Screen):
     """NFS access rights management."""
 
     BINDINGS = [
@@ -713,7 +714,8 @@ def _format_exports(data: Any) -> str:
                 continue
             # clients may be [{"host": "*", "options": [...]}] or ["host(opts)"]
             raw: list[str] = []
-            for c in clients or [{"host": "*", "options": []}]:
+            client_specs: list = clients or [{"host": "*", "options": []}]
+            for c in client_specs:
                 if isinstance(c, dict):
                     host = c.get("host", "*")
                     opts = c.get("options", [])
@@ -789,9 +791,9 @@ def _format_exports(data: Any) -> str:
                     with open(info_file) as f:
                         for ln in f:
                             if "address:" in ln:
-                                raw = ln.split("address:")[1].strip().strip('"').strip("'")
+                                addr = ln.split("address:")[1].strip().strip('"').strip("'")
                                 # strip port (last :N component)
-                                ip = raw.rsplit(":", 1)[0] if ":" in raw else raw
+                                ip = addr.rsplit(":", 1)[0] if ":" in addr else addr
                                 if ip and ip not in clients:
                                     clients.append(ip)
                 except Exception:

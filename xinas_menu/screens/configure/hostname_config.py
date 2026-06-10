@@ -11,8 +11,10 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 
-class HostnameConfigScreen(Screen[bool]):
+
+class HostnameConfigScreen(XiNASAppMixin, Screen[bool]):
     """Set system hostname."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=True)]

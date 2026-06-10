@@ -13,6 +13,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -54,7 +55,7 @@ def _array_label(arr: dict) -> str:
     return f"{name}  (RAID-{level}, {dev_count} drives, {strip}KB strip)  [{role_hint}]"
 
 
-class FilesystemScreen(Screen):
+class FilesystemScreen(XiNASAppMixin, Screen):
     """Filesystem management — show existing and create new XFS filesystems."""
 
     BINDINGS = [

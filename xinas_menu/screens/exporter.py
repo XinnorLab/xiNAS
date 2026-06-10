@@ -15,6 +15,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -41,7 +42,7 @@ _MENU = [
 ]
 
 
-class ExporterScreen(Screen):
+class ExporterScreen(XiNASAppMixin, Screen):
     """xiRAID Prometheus exporter management."""
 
     BINDINGS = [

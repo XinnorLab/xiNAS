@@ -143,8 +143,11 @@ class NavigableMenu(Widget, can_focus=True):
         if event.key in ("pageup", "pagedown"):
             from xinas_menu.widgets.text_view import ScrollableTextView
 
+            parent = self.parent
+            if parent is None:
+                return
             try:
-                for sibling in self.parent.children:
+                for sibling in parent.children:
                     if isinstance(sibling, ScrollableTextView):
                         if event.key == "pageup":
                             sibling.scroll_page_up()

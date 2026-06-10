@@ -8,6 +8,7 @@ best-effort and must not block the primary operation).
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 _log = logging.getLogger(__name__)
 
@@ -28,7 +29,9 @@ class SnapshotHelper:
         grpc_address: str = "localhost:6066",
         repo_root: str = "/opt/xiNAS",
     ) -> None:
-        self._engine: object | None = None
+        # Any: SnapshotEngine may be unimportable on dev machines, so the
+        # attribute cannot reference the class statically.
+        self._engine: Any = None
         if _HAS_ENGINE:
             try:
                 self._engine = SnapshotEngine(

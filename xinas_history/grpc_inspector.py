@@ -39,10 +39,11 @@ class GrpcInspector:
     # Public query methods
     # ------------------------------------------------------------------
 
-    async def raid_show(self, extended: bool = True) -> tuple[bool, dict | None, str]:
+    async def raid_show(self, extended: bool = True) -> tuple[bool, dict | list | None, str]:
         """Get RAID array topology.
 
-        Returns (ok, data, error) tuple. data is a dict keyed by array name.
+        Returns (ok, data, error) tuple. data is usually a dict keyed by
+        array name, but some xicli/gRPC versions return a JSON list.
         """
         if self._client is not None:
             try:
@@ -62,8 +63,8 @@ class GrpcInspector:
             return False, None, err
         return self._parse_json(stdout)
 
-    async def pool_show(self) -> tuple[bool, dict | None, str]:
-        """Get spare pool information."""
+    async def pool_show(self) -> tuple[bool, dict | list | None, str]:
+        """Get spare pool information (dict keyed by pool name, or JSON list)."""
         if self._client is not None:
             try:
                 ok, data, err = await self._client.pool_show()

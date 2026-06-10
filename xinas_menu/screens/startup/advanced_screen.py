@@ -11,6 +11,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Label
 
+from xinas_menu.apptype import StartupAppMixin
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -37,7 +38,7 @@ _MENU = [
 _REPO_ROOT = Path("/opt/xiNAS")
 
 
-class AdvancedScreen(Screen):
+class AdvancedScreen(StartupAppMixin, Screen):
     """Advanced settings for pre-deployment configuration."""
 
     BINDINGS = [

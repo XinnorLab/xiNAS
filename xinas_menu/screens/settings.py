@@ -13,6 +13,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.utils.config import cfg_read, cfg_write
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -31,7 +32,7 @@ _MENU = [
 ]
 
 
-class SettingsScreen(Screen):
+class SettingsScreen(XiNASAppMixin, Screen):
     """Application settings — email and health-check scheduler."""
 
     BINDINGS = [

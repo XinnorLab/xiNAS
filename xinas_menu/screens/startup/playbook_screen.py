@@ -18,6 +18,8 @@ from textual.containers import Container
 from textual.screen import Screen
 from textual.widgets import Button, Label, RichLog
 
+from xinas_menu.apptype import StartupAppMixin
+
 _INSTALL_LOG_PRIMARY = "/var/log/xinas/install.log"
 _INSTALL_LOG_FALLBACK = "/tmp/xinas-install.log"
 
@@ -133,7 +135,7 @@ class _PlaybookStatusBar(Label):
             self.update(f"  [cyan]{spin}[/cyan]  {label}{stall_suffix}    {clock}")
 
 
-class PlaybookRunScreen(Screen[int]):
+class PlaybookRunScreen(StartupAppMixin, Screen[int]):
     """Streams ansible-playbook output in real-time.
 
     Returns the playbook exit code when closed.
@@ -242,8 +244,8 @@ class PlaybookRunScreen(Screen[int]):
                     log.write(f"[green]{line}[/green]")
                 else:
                     log.write(line)
-            await proc.wait()
-            self._exit_code = proc.returncode
+            # wait() returns the exit code (int) once the process has finished.
+            self._exit_code = await proc.wait()
         except Exception as exc:
             log.write(f"[red]Failed to run playbook: {exc}[/red]")
             self._exit_code = 255
