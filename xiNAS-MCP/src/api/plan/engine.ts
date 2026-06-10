@@ -59,7 +59,7 @@ export interface PlanResult {
   observed_revision_expected?: number;
   /** ISO-8601 stamp of the observation backing the freshness pin. */
   observed_at?: string;
-  // ── N0 plan-side outputs (S3 §5.1) — PROVIDER outputs persisted in
+  // ── N0 plan-side outputs (S3-NFS §5.1) — PROVIDER outputs persisted in
   //    tasks.plan_binding and bound into plan_hash. The reference provider
   //    sets none of these (stays backward-compatible). ──────────────────────
   /**
@@ -81,6 +81,15 @@ export interface PlanResult {
    * plan→apply.
    */
   desired_mutations?: DesiredMutation[];
+  /**
+   * Optional preflight-enriched spec to persist on the plan_only task
+   * INSTEAD of the raw request spec (e.g. xiraid.array.create embeds the
+   * resolved `device_by_id` map so the agent executor needs no KV access —
+   * ADR-0006 §Disk references). `plan_hash` covers the enriched spec (the
+   * resolution is pinned); `input_hash` stays over the RAW request spec so
+   * a client retry of the same request still matches.
+   */
+  enriched_spec?: unknown;
 }
 
 /** A pluggable preflight for one operation kind (keyed in the registry). */
@@ -152,9 +161,10 @@ export class PlanEngine {
 
     const result = await provider.preflight(this.ctx, args.spec);
 
-    // The N0 plan-side outputs (S3 §5.1), assembled from the provider result.
-    // Only present fields are included (conditional-spread) so a provider that
-    // emits none — like reference.echo — yields `{}` and leaves the column null.
+    // The N0 plan-side outputs (S3-NFS §5.1), assembled from the provider
+    // result. Only present fields are included (conditional-spread) so a
+    // provider that emits none — like reference.echo — yields `{}` and leaves
+    // the column null.
     const planBinding = {
       ...(result.observed_freshness_ref !== undefined
         ? { observed_freshness_ref: result.observed_freshness_ref }
@@ -165,11 +175,17 @@ export class PlanEngine {
         : {}),
     };
 
-    // input_hash pins the request inputs (operation_kind + spec). plan_hash
-    // additionally pins what preflight resolved (affected_resources, diff,
-    // the revision pins, and the N0 plan-side outputs §5.1) so apply can detect
-    // a divergent re-plan. `canonicalize` (JSON.stringify) drops undefined
-    // object properties, so a provider that emits none of the three hashes
+    // The spec persisted (and forwarded to the executor) is the provider's
+    // enriched spec when present, else the raw request spec (S3-xiraid T7,
+    // ADR-0006 §Disk references).
+    const specToPersist = result.enriched_spec !== undefined ? result.enriched_spec : args.spec;
+
+    // input_hash pins the request inputs (operation_kind + RAW spec) so a
+    // client retry matches. plan_hash additionally pins what preflight
+    // resolved (the enriched spec, affected_resources, diff, the revision
+    // pins, and the N0 plan-side outputs §5.1) so apply can detect a
+    // divergent re-plan. `canonicalize` (JSON.stringify) drops undefined
+    // object properties, so a provider that emits none of the N0 trio hashes
     // byte-identically to the pre-N0 plan_hash (reference stays unchanged).
     const inputHash = sha256(
       canonicalize({ operation_kind: args.operation_kind, spec: args.spec }),
@@ -177,7 +193,7 @@ export class PlanEngine {
     const planHash = sha256(
       canonicalize({
         operation_kind: args.operation_kind,
-        spec: args.spec,
+        spec: specToPersist,
         affected_resources: result.affected_resources,
         diff: result.diff,
         state_revision_expected: result.state_revision_expected,
@@ -200,9 +216,9 @@ export class PlanEngine {
       plan_hash: planHash,
       // Spread conditionally — under exactOptionalPropertyTypes the
       // `?:` optionals on CreatePlanOnlyInput reject an explicit undefined.
-      // Persist the raw request spec so apply/dispatch can forward it verbatim
-      // to the executor (s2-task-envelope-spec §5.1).
-      ...(args.spec !== undefined ? { spec: args.spec } : {}),
+      // Persist the (possibly enriched) spec so apply/dispatch forward it
+      // verbatim to the executor (s2-task-envelope-spec §5.1).
+      ...(specToPersist !== undefined ? { spec: specToPersist } : {}),
       // Persist the N0 plan-side outputs only when the provider emitted any —
       // an empty binding stays unset (null column), keeping reference tasks and
       // other binding-free providers byte-identical to pre-N0 (§5.1).

@@ -5,6 +5,7 @@ import type { TaskEngines } from '../context.js';
 import { PlanEngine } from '../plan/engine.js';
 import { buildNfsPlanProviders } from '../plan/providers/nfs.js';
 import { referencePlanProvider } from '../plan/providers/reference.js';
+import { xiraidArrayCreateProvider } from '../plan/providers/xiraid-array.js';
 import { TaskEngine } from './engine.js';
 import { TaskStore } from './store.js';
 
@@ -48,6 +49,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   // The five real NFS providers (S3 N4.1 + N7.3) — share.* +
   // nfs-profile.update + nfs-idmap.set.
   for (const provider of buildNfsPlanProviders()) planEngine.register(provider);
+  planEngine.register(xiraidArrayCreateProvider);
 
   return {
     planEngine,
