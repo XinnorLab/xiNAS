@@ -6,7 +6,7 @@
 
 **Authoritative prior art.** ADR-0007 (this design's contract — identity, schema extension, writability, per-op contracts, the `force` destruction gate); ADR-0006 + the landed S3/S4 adapter (providers/executors/fake-transport patterns, the engine dangerous gate, route freshness binding §S4-4, apply re-check §S4-8); the S0/S1 filesystem collector (id = mount-unit name, status-only rows); the `raid_fs` role (the mkfs command + `.mount` template this spec reproduces).
 
-**Verified integration facts:** observed Filesystem rows are status-only with id = unit name; the probe reads `/etc/systemd/system/*.mount` + `systemctl is-enabled`; `lib/parse/systemd-unit.ts` parses units and `lib/parse/mountinfo.ts` parses mounts; ExportRule observed rows are keyed by export path (`/xinas/v1/observed/ExportRule/<path>`); Shares live in desired state (`spec.path`); NfsSessions observed (`spec.export_path`); no legacy fs tool exists; the agent has no generic host-command runner yet (the probes' `execFile` pattern is the precedent).
+**Verified integration facts (revised after the S5 review):** observed Filesystem rows have id = unit name, BUT on real hosts they currently carry only `mount_unit_name`/`mount_unit_enabled` — the parser emits `mountpoint`/`backing_device` under a `spec` block that the convergence adapter drops (`{kind, id, status}` passthrough), and no mounted flag is produced anywhere outside fixtures; the S4 array-delete dep walk is therefore fixture-only today (**the ADR-0007 §Observation-normalization prerequisite fixes this first**). The api-v1.yaml schema duplicates `mounted` (required) and `currently_mounted` (optional) — `mounted` becomes canonical, `currently_mounted` is removed. `lib/parse/systemd-unit.ts` parses units and `lib/parse/mountinfo.ts` parses mounts; ExportRule observed rows are keyed by export path; Shares live in desired state (`spec.path`); NfsSessions observed (`spec.export_path`); the **fixture NFS probe returns empty sessions AND exports today** (T4 adds `nfs-sessions.json` + `nfs-exports.json` passthrough so the e2e can prove both unmount blockers); day-1 clamps `log_size` to `blockdev --getsize64 <log_device>` (`_effective_log_size`); the agent unit runs `ProtectSystem=strict` + `ReadWritePaths=/run/xinas /var/log/xinas` + `CapabilityBoundingSet=CAP_CHOWN` — see ADR-0007's audited compatibility table (the one delta: `ReadWritePaths=/etc/systemd/system`, `Requires-Rebuild: xinas_agent`).
 
 ---
 
@@ -52,7 +52,7 @@ Engine, leases, dangerous gate, SSE — all unchanged S2/S4 machinery.
 
 Engine-side flow per op = S4 verbatim (plan → blockers listed → apply with `expected_revision` binding (`0` for create, current observed otherwise) → filtered re-check → leases → dispatch). The per-op specifics (blockers, risk, stages, rollback) are ADR-0007's §Per-operation contracts — this spec adds only implementation detail:
 
-- **create**: `enriched_spec` carries the fully-resolved mkfs inputs (`label` defaulted, derived `su_kb`/`sw`, `unit_name`, rendered-unit preview in the diff) so the executor needs no KV. Executor `preflight` runs `blkid` on the data device: existing filesystem + `force !== true` → fail before change (the host-side teeth of the gate; the engine already required `dangerous` for `force` plans). Rollback is live-state: stop/disable if active, remove the unit if present, `daemon-reload`; mkfs is never reverted (device left formatted, unmanaged).
+- **create**: `enriched_spec` carries the fully-resolved mkfs inputs (`label` defaulted, derived `su_kb`/`sw`, `unit_name`, rendered-unit preview in the diff) so the executor needs no KV. Executor `preflight` runs `blkid` on the data device: existing filesystem + `force !== true` → fail before change (the host-side teeth of the gate; the engine already required `dangerous` for `force` plans). The `mkfs` stage resolves the **effective log size** = `min(log_size, blockdev --getsize64 <log_device>)` — the day-1 `_effective_log_size` clamp (host adapter `blockdevSize`; fake host seeds device sizes; a clamped-case golden is mandatory). Rollback is live-state: stop/disable if active, remove the unit if present, `daemon-reload`; mkfs is never reverted (device left formatted, unmanaged).
 - **mount/unmount**: thin executors over `enableNow`/`stop`+`disable` with mountinfo verification; unmount's rollback restarts the unit. The dependency walk (sessions + ExportRules at/under the mountpoint, shares in blast radius) lives in the provider; the host-level guard is the umount `EBUSY` failure itself.
 - **grow**: `xfs_growfs <mountpoint>`; verify via `statfs` (size not smaller than before — captured in preflight); rollback no-op.
 - **set_quota_mode**: preflight captures the current unit text (per-run WeakMap, the S4-T6 pattern); rewrite `Options=` quota flag → `daemon-reload` → `systemctl restart` → verify mounted with the flag in effective options. Rollback: write back the captured unit + `daemon-reload` + restart.
@@ -60,7 +60,7 @@ Engine-side flow per op = S4 verbatim (plan → blockers listed → apply with `
 
 ## 5. Observe enrichment
 
-`probe/filesystem.ts` additionally, per unit: `blkid <What=>` → `uuid`, `label` (absent cleanly when the device has no fs); when mountinfo lists the mountpoint → `currently_mounted: true`, `effective_mount_options`, `statfs` → `size_bytes`/`free_bytes`. Fixture probe: `filesystems.json` entries may now carry these fields (passthrough). Failures of individual enrichment commands degrade that field, not the row.
+`probe/filesystem.ts` additionally, per unit: `blkid <What=>` → `uuid`, `label` (absent cleanly when the device has no fs); when mountinfo lists the mountpoint → **`mounted: true`** (the canonical schema flag, post-T1 normalization), `effective_mount_options`, `statfs` → `size_bytes`/`free_bytes`. Fixture probes: `filesystems.json` entries may carry these fields (passthrough), and the NFS fixture probe gains **`nfs-sessions.json` + `nfs-exports.json`** passthrough in the collector's real shapes — without it the fixture NFS probe always returns empty and the e2e could pass with the milestone's active-share blockers untested. Failures of individual enrichment commands degrade that field, not the row.
 
 ## 6. Error model — reuse only
 
@@ -83,23 +83,23 @@ Blocker codes: ADR-0007's set (`mountpoint_invalid`, `mountpoint_taken`, `backin
 
 | # | Task |
 |---|------|
-| T0 | Contracts: spec extension + fixture + `fs.*` stub supersession + s0s1 table + PATCH one-intent docs. |
-| T1 | `lib/fs/unit.ts` — escaping + render + (re)parse helpers. TDD vs systemd-escape goldens + the day-1 template. |
-| T2 | `lib/fs/derive.ts` + `lib/fs/schema.ts` + `lib/fs/validate.ts` (per-op rules). TDD. |
-| T3 | `agent/fs/host.ts` + `fake-host.ts` (command goldens, op log, failure hooks, fixture-dir state). TDD. |
-| T4 | Observe enrichment (`probe/filesystem.ts` + fixture passthrough): blkid/statfs/mountinfo → uuid/size/free/currently_mounted/effective options. TDD. |
-| T5 | Create provider + `POST /filesystems` route (stub-loop exit). TDD. |
-| T6 | Create executor (blkid gate, mkfs, unit, mount, owner_policy; live-state rollback). TDD. |
-| T7 | Mount/unmount providers + PATCH route skeleton (one-intent dispatch + binding + re-check). TDD. |
-| T8 | Mount/unmount executors (EBUSY rollback). TDD. |
-| T9 | Grow + quota providers (PATCH intents) . TDD. |
-| T10 | Grow + quota executors (unit-capture rollback for quota). TDD. |
-| T11 | Unmanage provider + DELETE route + executor (unit-capture rollback). TDD. |
-| T12 | e2e + the full verification gate. |
+| T0 | Contracts: spec extension + `mounted` canonicalization (drop `currently_mounted` from the schema) + fixture + `fs.*` stub supersession + s0s1 table + PATCH one-intent docs. |
+| T1 | **Observation normalization** (ADR-0007 prerequisite): parser → status-only (mountpoint/backing_device/fs_type/mount_options under `status`), convergence passthrough fixed, collector emits the full set incl. `mounted`; the S4 delete provider + its tests/e2e fixtures migrate `currently_mounted` → `mounted`. TDD. |
+| T2 | `lib/fs/unit.ts` — escaping + render. TDD vs systemd-escape goldens + the day-1 template. |
+| T3 | `lib/fs/derive.ts` + `lib/fs/schema.ts` + `lib/fs/validate.ts` (per-op rules). TDD. |
+| T4 | **Agent-unit compatibility delta** (ADR-0007 table): `ReadWritePaths=/etc/systemd/system` in its own commit with `Requires-Rebuild: xinas_agent`; the Ubuntu hardware smoke checklist lands in the plan/spec. |
+| T5 | `agent/fs/host.ts` (+`blockdevSize`) + `fake-host.ts` (command goldens incl. the clamped-log case, op log, failure hooks, device sizes). TDD. |
+| T6 | Observe enrichment (`probe/filesystem.ts`): blkid/statfs/mountinfo → uuid/size/free/`mounted`/effective options; fixture passthrough for `filesystems.json` extras + **`nfs-sessions.json` + `nfs-exports.json`** (the e2e's blocker seeds). TDD. |
+| T7 | Create provider + `POST /filesystems` route (stub-loop exit). TDD. |
+| T8 | Create executor (blkid gate, mkfs with the log clamp, unit, mount, owner_policy; live-state rollback). TDD. |
+| T9 | Mount/unmount providers + PATCH route skeleton (one-intent dispatch + binding + re-check). TDD. |
+| T10 | Mount/unmount executors (EBUSY rollback) + grow/quota providers. TDD. |
+| T11 | Grow + quota executors (unit-capture rollback) + unmanage (provider + DELETE route + executor). TDD. |
+| T12 | e2e (incl. BOTH unmount blockers: `dependent_share_active` via seeded sessions AND `mountpoint_exported` via seeded exports; clamped-log mkfs asserted via the fake op log) + the full verification gate. |
 
 ## 10. Open questions / risks
 
-- **systemctl under the agent sandbox** — `systemctl` talks to systemd over its private UNIX socket/dbus (AF_UNIX — already allowed); `daemon-reload`/`enable` also need write access under `/etc/systemd/system` (the unit's `ProtectSystem=strict` documented deviation already grants the agent its write paths — VERIFY the unit's `ReadWritePaths` covers `/etc/systemd/system` during T3; if not, that one-line unit change carries `Requires-Rebuild: xinas_agent`).
-- **blkid exit codes** — blkid exits 2 on "no filesystem"; the adapter must distinguish that from real failures (T3 golden).
-- **`systemctl is-enabled` vs ActiveState** — the probe's current `mount_unit_state` source predates this work; the enrichment's mountinfo cross-ref becomes the authoritative `currently_mounted` regardless.
+- **Agent-unit compatibility** — RESOLVED into ADR-0007's audited table + plan T4 (`ReadWritePaths=/etc/systemd/system`, `Requires-Rebuild: xinas_agent`; mountpoint dirs are PID1-created; `/dev` writable under `strict` with `PrivateDevices` unset; `CAP_CHOWN` suffices). **Residual:** no systemd in dev/CI — the delta is proven by the audit + fake-host coverage + a written Ubuntu hardware smoke checklist (create→mount→grow→quota→unmount→unmanage) to run on a lab node before WS6 is declared shipped.
+- **blkid exit codes** — blkid exits 2 on "no filesystem"; the adapter must distinguish that from real failures (T5 golden).
+- **`systemctl is-enabled` vs ActiveState** — the probe's current `mount_unit_state` source predates this work; the enrichment's mountinfo cross-ref becomes the authoritative `mounted` regardless.
 - **Owner policy at create** — applied once after first mount (`chown`/`chmod` via the adapter); failure degrades to a stage failure (rollback unmounts + unmanages), not a partial half-owned state worth special-casing.

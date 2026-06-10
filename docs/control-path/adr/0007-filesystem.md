@@ -30,6 +30,12 @@ Decisions taken during brainstorming (2026-06-10), which this ADR records:
 
 **`id == the systemd mount-unit name`** derived from the mountpoint by systemd path escaping (`/mnt/data` → `mnt-data.mount`) — exactly what the observe collector already uses, so created filesystems and observed rows share one identity with zero mapping. The control path implements systemd's escaping rules (slash→dash, leading slash stripped, non-alphanumerics → `\xNN`) in the shared lib and unit-tests them against `systemd-escape -p` semantics. One filesystem per mountpoint follows for free (unit names are unique).
 
+### Observation normalization (prerequisite — S5 review P0)
+
+The contract everything below depends on — observed Filesystem rows carrying `mountpoint`, `backing_device`, and a mounted flag under **`status`** — is today true **only for fixture rows**. On a real host the parser emits `mountpoint`/`backing_device` under a `spec` block that the convergence adapter then DROPS (it forwards `{kind, id, status}` only), so live observed rows carry nothing but `mount_unit_name`/`mount_unit_enabled`. This also means ADR-0006's array-delete dependency walk (which reads `status.backing_device`/`status.mountpoint`) is currently blind on real hosts — a latent S4 defect this ADR's prerequisite fixes.
+
+**Decision:** the observed Filesystem object is **status-only** with these facts canonical under `status`: `mountpoint`, `backing_device`, `fs_type`, `mount_options`, **`mounted`** (the api-v1.yaml schema-required flag; the duplicate `currently_mounted` property is REMOVED from the contract), `mount_unit_name`, `mount_unit_enabled`, `mount_unit_state`, plus the §Observe-enrichment fields. S5's first code task reshapes the parser to status-only, fixes the convergence passthrough, makes the collector emit the full set, migrates the S4 delete provider + its fixtures from `currently_mounted` to `mounted`, and updates the schema/fixture — one normalization, all consumers together.
+
 ### Schema extension (spec — create-time fields added to api-v1.yaml)
 
 `Filesystem.spec` (existing: `fs_type: xfs`, `backing_device`, `mountpoint`, `mount_options[]`, `quota_mode`, `owner_policy`) gains:
@@ -38,7 +44,7 @@ Decisions taken during brainstorming (2026-06-10), which this ADR records:
 |-------|------|---------|
 | `label` | string? | `mkfs.xfs -L`; defaults to the escaped mountpoint leaf. |
 | `log_device` | string? | External XFS log device (`-l logdev=`); MUST be an observed `XiraidArray` volume when set. Also appended to mount `Options=` as `logdev=…` and `Requires=`'d by the unit. |
-| `log_size` | string? | Log size cap (e.g. `1G`); only with `log_device`. |
+| `log_size` | string? | Log size cap (e.g. `1G`); only with `log_device`. At mkfs time the executor clamps it to the log device's actual size (`blockdev --getsize64`) — the day-1 `_effective_log_size` formula, so small log arrays cannot re-trigger the failure the role already fixed. |
 | `sector_size` | integer? | `-s size=`; default 4096. |
 | `su_kb` | integer? | Stripe unit override; **auto-derived** from the backing array's observed `strip_size_kib` when omitted. |
 | `sw` | integer? | Stripe width override; **auto-derived** as data-drive count (members − parity, parity by level: raid5→1, raid6→2, raid7→3, raid50/60/70 → per-group parity × groups, raid10 → members/2, raid0 → 0... see the lib table) when omitted. |
@@ -84,9 +90,23 @@ All on the S2 engine; freshness binds at the route as in S4 (`expected_revision 
 
 The probe gains: `blkid` on the unit's `What=` device → `uuid` + `label` (+ fs presence), `statfs` on the mountpoint when mounted → `size_bytes`/`free_bytes`, and a `/proc/self/mountinfo` cross-reference → authoritative `currently_mounted` + `effective_mount_options`. This makes the contract's required `status.uuid/size_bytes/free_bytes` real and gives "drift reported" its observable substance (desired-vs-observed comparison machinery itself remains WS9).
 
-### Host-command execution
+### Host-command execution and the agent-unit compatibility delta
 
-The executors run host commands (`mkfs.xfs`, `xfs_growfs`, `blkid`, `systemctl`, unit-file writes) through one **`agent/fs/host.ts` adapter** with an injectable `runCommand` + injectable unit-dir/file I/O — the subprocess analog of ADR-0006's injectable gRPC transport. A file-backed **fake host** (fixture mode + e2e, like the fake xiRAID transport) simulates blkid results, written units, mounted state, and an op log; `-fail`-style deterministic hooks drive the failure paths. The agent's existing root privileges suffice; no new daemon and no sandbox change (`systemctl` talks over the already-allowed dbus/private socket paths — verified against the unit's `RestrictAddressFamilies` in implementation, flagged as a risk item).
+The executors run host commands (`mkfs.xfs`, `xfs_growfs`, `blkid`, `blockdev`, `systemctl`, unit-file writes) through one **`agent/fs/host.ts` adapter** with an injectable `runCommand` + injectable unit-dir/file I/O — the subprocess analog of ADR-0006's injectable gRPC transport. A file-backed **fake host** (fixture mode + e2e, like the fake xiRAID transport) simulates blkid results, device sizes, written units, mounted state, and an op log; deterministic hooks drive the failure paths.
+
+**The sandbox does NOT suffice as-is** (S5 review P0). The live unit runs `ProtectSystem=strict` with `ReadWritePaths=/run/xinas /var/log/xinas` only, `NoNewPrivileges`, `CapabilityBoundingSet=CAP_CHOWN`, namespace and syscall restrictions. The audited compatibility delta:
+
+| Need | Verdict under the current unit | Delta |
+|------|-------------------------------|-------|
+| Write/remove `.mount` units + `systemctl enable` symlinks under `/etc/systemd/system` | **blocked** (`ProtectSystem=strict`) | `ReadWritePaths=/etc/systemd/system` — **the one unit change**, shipped in its own commit with `Requires-Rebuild: xinas_agent`. |
+| Mountpoint directory creation | not needed by the agent | systemd (PID1, unconfined) creates `Where=` directories itself when starting a `.mount`. |
+| Raw block writes for `mkfs.xfs`/`blkid`/`blockdev` on `/dev/xi_*` | allowed | `strict` leaves `/dev` writable; `PrivateDevices` is NOT set; uid 0 owns the nodes (no extra capability needed). |
+| `mount`/`umount` themselves | not performed by the agent | delegated to PID1 via `systemctl start/stop` over the already-allowed `AF_UNIX` dbus socket. |
+| `xfs_growfs` (ioctl on the mounted fs) / `statfs` | allowed | new mounts propagate rw into the agent's namespace; `ioctl` is in the `@system-service` filter. |
+| `owner_policy` chown/chmod on the fresh fs root | allowed | `CAP_CHOWN` is retained; root owns the fresh root inode. |
+| Spawning `mkfs.xfs`/`xfs_growfs`/`blkid`/`blockdev` | allowed | the agent already execs `lsblk`/`udevadm` under the same filter. |
+
+Because the dev/CI environment has no systemd, the delta is **proven by**: (a) the audit table above against the unit text, (b) unit/e2e coverage over the fake host, and (c) a written Ubuntu hardware smoke checklist (create→mount→grow→quota→unmount→unmanage on a lab node) attached to the plan — an explicitly tracked residual until run.
 
 ## Consequences
 
@@ -105,4 +125,4 @@ The executors run host commands (`mkfs.xfs`, `xfs_growfs`, `blkid`, `systemctl`,
 
 ## Implementation notes (S5 plan)
 
-Shared `lib/fs/{schema,validate,unit}.ts` (escape + render + parse already partially exists in `lib/parse/systemd-unit.ts`); `lib/fs/derive.ts` (su/sw table); `agent/fs/host.ts` + `fake-host.ts`; providers in `api/plan/providers/filesystem.ts`; routes `api/routes/filesystems.ts` (POST/PATCH/DELETE leave the stub loop); executors in `agent/task/filesystem-executor.ts`; probe enrichment in `agent/probe/filesystem.ts`; stub supersession for the five `fs.*` names (S2-T0 pattern: `stubs.ts` + `stubs.test.ts` + the s0s1 RPC table); contract fixture `Filesystem.json`. Testing mirrors S4 (unit per layer, route suites, e2e against the fake host + fake xiRAID).
+The **observation normalization** (§above) is the first code task — parser/convergence/collector/schema/S4-consumer migration together. Then: shared `lib/fs/{schema,validate,unit}.ts` (escape + render + parse already partially exists in `lib/parse/systemd-unit.ts`); `lib/fs/derive.ts` (su/sw table); `agent/fs/host.ts` (+`blockdevSize` for the log clamp) + `fake-host.ts`; providers in `api/plan/providers/filesystem.ts`; routes `api/routes/filesystems.ts` (POST/PATCH/DELETE leave the stub loop); executors in `agent/task/filesystem-executor.ts`; probe enrichment in `agent/probe/filesystem.ts`; stub supersession for the five `fs.*` names (S2-T0 pattern); contract fixture `Filesystem.json`; the agent-unit delta commit (`Requires-Rebuild: xinas_agent`). Testing mirrors S4, and the e2e must PROVE both unmount blockers: the fixture NFS probe gains `nfs-sessions.json` **and** `nfs-exports.json` passthrough (it returns empty today, which would let the milestone's active-share blocker go untested) so `dependent_share_active` and `mountpoint_exported` both fire against seeded state.
