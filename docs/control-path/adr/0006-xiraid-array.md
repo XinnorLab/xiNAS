@@ -122,7 +122,7 @@ The gRPC client dials the xiRAID daemon over **TCP with TLS** (`host:port` from 
 | `spec.strip_size_kib` | ✅ | ❌ `UNSUPPORTED` | From the xiRAID `STRIP_SIZES_KB` set (powers of two; `{16,32,64,128,256}`). |
 | `spec.block_size` | ✅ | ❌ `UNSUPPORTED` | `512` or `4096`. |
 | `spec.force_metadata` | ✅ | ❌ `UNSUPPORTED` | Create-only override; overwrites stale metadata on members. |
-| `spec.spare_disk_ids` | ✅ in the model; **deferred from the S3 create build** (plan blocker `spare_pool_deferred`) | ✅ | Spare pool lifecycle below. Lands with the modify plan. |
+| `spec.spare_disk_ids` | ✅ (since S4 — create provisions + activates the pool) | ✅ | Spare pool lifecycle below. |
 | `spec.tuning.*` | ✅ | ✅ | Priorities `[1,100]`; `memory_limit` `0` or `[1024,1048576]` MiB; merge timings in microseconds; booleans map to xiRAID `0/1`. |
 | `status.*` | server-managed | server-managed | Computed by the agent from `raid_show`. |
 
@@ -141,12 +141,11 @@ Writes to a `Modify=UNSUPPORTED` (topology) field on `PATCH /arrays/{id}` fail a
 
 xiRAID models spares as **pool objects** with their own lifecycle (`pool_create {name, drives}` / `pool_add` / `pool_remove` / `pool_delete`); `RaidCreate.sparepool` / `RaidModify.sparepool` reference a pool **by name**. The control path does **not** expose pools as a first-class object in Phase 0; it models them via `spec.spare_disk_ids`, and the **executor owns the pool lifecycle**:
 
-- Attach (modify, `spare_disk_ids` ∅→non-∅): `pool_create { name: "xnsp_<array>", drives }` → `raid_modify { sparepool: "xnsp_<array>" }`. Rollback: detach + `pool_delete`.
-- Change membership: `pool_add` / `pool_remove` on `xnsp_<array>`.
-- Detach (non-∅→∅): `raid_modify { sparepool: "" }` → `pool_delete`.
+- Attach (modify, `spare_disk_ids` ∅→non-∅): `pool_create { name: "xnsp_<array>", drives }` → **`pool_activate`** (xiRAID arms auto-replace only for *activated* pools — analyst doc §3.8) → `raid_modify { sparepool: "xnsp_<array>" }`. Rollback: detach + `pool_deactivate` + `pool_delete`.
+- Change membership: `pool_add` / `pool_remove` on `xnsp_<array>` (pool stays active).
+- Detach (non-∅→∅): `raid_modify { sparepool: "" }` → `pool_deactivate` → `pool_delete`.
+- Create-with-spares: `pool_create` → `pool_activate` → `raid_create { …, sparepool }` (since S4 — the S3 build briefly deferred this behind a `spare_pool_deferred` blocker, removed in S4).
 - Day-1 Ansible-created pools with other names are surfaced read-only in `status` (observe maps the array's current sparepool to disk ids); the executor only manages pools it named `xnsp_<array>`.
-
-Because create-with-spares requires this pool lifecycle (and its rollback), the **S3 create build defers it**: a create spec with non-empty `spare_disk_ids` gets a plan blocker `spare_pool_deferred` until the modify plan lands. The matrix above stays the locked end-state.
 
 ### Validation and translation (shared module)
 
@@ -181,8 +180,8 @@ All `risk_level` / `rollback_model` values below use the api-v1.yaml enums (`ris
 **Modify** (`xiraid.array.modify`, `PATCH /arrays/{id}`).
 - Writable: `spare_disk_ids` (pool lifecycle above) + `spec.tuning.*`. Topology fields → `UNSUPPORTED` (matrix). Maps to `raid_modify` (+ pool ops). `risk_level: non_disruptive`, `rollback_model: non_disruptive` (re-apply prior values / inverse pool ops).
 
-**Import** (`xiraid.array.import`, `POST /arrays` with an import-shaped spec).
-- Two-phase. **Discovery:** `mode=plan` calls `raid_import_show(drives)` → candidate foreign arrays (`uuid`, name, level, members, recoverability). **Adopt:** `mode=apply` calls `raid_import_apply(uuid, new_name?)`. Result task/array state `imported`. `risk_level: non_disruptive`; `rollback_model: non_disruptive` (un-adopt = config-only removal, `raid_destroy { config_only: true }` — data untouched).
+**Import** (`xiraid.array.import`, `POST /arrays` with an import-shaped spec `{ uuid, new_name? }`).
+- *(Amended by the S4 spec, 2026-06-10.)* Plan-mode validates what the api can know from KV alone: spec shape, target-name validity + availability. The candidate UUID is validated **at executor preflight** via a live `raid_import_show()` — the privilege split makes a plan-time daemon call impossible (only the agent reaches xiRAID; `PlanContext` is KV-only). A plan-time discovery surface (an observed import-candidates annex or an on-demand agent RPC) is follow-on work; until then clients learn candidate UUIDs from xiRAID tooling. **Adopt:** `mode=apply` → the executor runs `raid_import_apply(uuid, new_name?)`. The apply task terminates `success`; the adopted array surfaces through the normal observe path. `risk_level: non_disruptive`; `rollback_model: non_disruptive` (un-adopt = config-only removal, `raid_destroy { config_only: true }` — data untouched). See `docs/control-path/s4-xiraid-array-mutations-spec.md` §6.
 
 **Delete** (`xiraid.array.delete`, `DELETE /arrays/{id}`).
 - **Dangerous gate (§14), enforced in the engine.** The OpenAPI `ApplyRequest` already carries `dangerous` (default `false`). The delete plan extends the S2 `TaskEngine.apply` input with `dangerous` and enforces **centrally in the apply transaction**: `plan.risk_level == 'destructive' && !dangerous` → `PRECONDITION_FAILED { details.reason: "dangerous_flag_required" }`. Plan-mode always lists a `dangerous_flag_required` blocker on destructive plans, advising that apply must carry `dangerous: true` — so every client renders the gate, and the enforcement point is the engine, not a route ("blocked at the same place" for API/CLI/TUI/MCP).
@@ -192,7 +191,7 @@ All `risk_level` / `rollback_model` values below use the api-v1.yaml enums (`ris
 
 ### Preflight blockers (codes)
 
-Harvested from the xiRAID error taxonomy into `lib/xiraid/validate`: `min_drives` (level minimum not met), `group_size_required` / `group_size_range` / `members_not_divisible_by_group` (raid50/60/70), `synd_cnt_required` / `synd_cnt_range` (n+m), `strip_size_invalid`, `block_size_invalid`, `param_out_of_range` (priorities/memory/timings), `name_invalid` / `name_taken`, `disk_not_found` / `disk_not_safe` / `disk_is_system` / `disk_in_use` (per offending disk), `spare_pool_deferred` (S3 create). Delete adds `dangerous_flag_required`, `dependent_filesystem_mounted`, `dependent_share_active`.
+Harvested from the xiRAID error taxonomy into `lib/xiraid/validate`: `min_drives` (level minimum not met), `group_size_required` / `group_size_range` / `members_not_divisible_by_group` (raid50/60/70), `synd_cnt_required` / `synd_cnt_range` (n+m), `strip_size_invalid`, `block_size_invalid`, `param_out_of_range` (priorities/memory/timings), `name_invalid` / `name_taken`, `disk_not_found` / `disk_not_safe` / `disk_is_system` / `disk_in_use` (per offending disk). Delete adds `dangerous_flag_required`, `dependent_filesystem_mounted`, `dependent_share_active`.
 
 ### Relationship to other objects
 

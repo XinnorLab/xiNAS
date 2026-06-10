@@ -1420,7 +1420,22 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Envelope' }
     PreconditionFailed:
-      description: '`PRECONDITION_FAILED` — stale `expected_revision` or preflight blocker.'
+      description: |
+        `PRECONDITION_FAILED` — stale `expected_revision` or preflight blocker.
+        The `error.details.reason` discriminator (no new top-level error code
+        is added) is one of:
+
+        - `dangerous_flag_required` — the plan is destructive and the apply
+          body did not carry `dangerous: true` (enforced centrally in the
+          task engine, reqs §14).
+        - `observed_revision_stale` — the apply's `expected_revision` no
+          longer matches the resource's current observed revision
+          (`details.expected` / `details.current`).
+        - `create_expects_revision_zero` — a create apply sent a non-zero
+          `expected_revision` (the object must not exist; send `0`).
+
+        Unresolved preflight blockers are reported with `details.blockers`
+        (the plan `Blocker` list) and no `reason` discriminator.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Envelope' }
