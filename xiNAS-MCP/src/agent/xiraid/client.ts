@@ -14,10 +14,23 @@
 
 import { getClient } from '../../grpc/client.js';
 import {
+  poolActivate,
+  poolAdd,
+  poolCreate,
+  poolDeactivate,
+  poolDelete,
+  poolRemove,
+  poolShow,
+} from '../../grpc/pool.js';
+import {
   type RaidCreateRequest,
   type RaidDestroyRequest,
+  type RaidModifyRequest,
   raidCreate,
   raidDestroy,
+  raidImportApply,
+  raidImportShow,
+  raidModify,
   raidShow,
 } from '../../grpc/raid.js';
 
@@ -26,6 +39,19 @@ export interface XiraidTransport {
   raidShow(): Promise<unknown>;
   raidCreate(req: RaidCreateRequest): Promise<void>;
   raidDestroy(req: RaidDestroyRequest): Promise<void>;
+  // --- S4 verbs ---
+  raidModify(req: RaidModifyRequest): Promise<void>;
+  poolCreate(req: { name: string; drives: string[] }): Promise<void>;
+  poolDelete(req: { name: string }): Promise<void>;
+  poolAdd(req: { name: string; drives: string[] }): Promise<void>;
+  poolRemove(req: { name: string; drives: string[] }): Promise<void>;
+  poolActivate(req: { name: string }): Promise<void>;
+  poolDeactivate(req: { name: string }): Promise<void>;
+  /** Parsed pool_show payload (an array of per-pool objects). */
+  poolShow(): Promise<unknown>;
+  /** Parsed raid_import_show payload (an array of candidate objects). */
+  raidImportShow(): Promise<unknown>;
+  raidImportApply(req: { uuid: string; new_name?: string }): Promise<void>;
 }
 
 export type XiraidAvailability = 'unknown' | 'available' | 'unavailable';
@@ -57,6 +83,46 @@ export class XiraidClient {
 
   async raidDestroy(req: RaidDestroyRequest): Promise<void> {
     await this.#track(() => this.#transport.raidDestroy(req));
+  }
+
+  async raidModify(req: RaidModifyRequest): Promise<void> {
+    await this.#track(() => this.#transport.raidModify(req));
+  }
+
+  async poolCreate(req: { name: string; drives: string[] }): Promise<void> {
+    await this.#track(() => this.#transport.poolCreate(req));
+  }
+
+  async poolDelete(req: { name: string }): Promise<void> {
+    await this.#track(() => this.#transport.poolDelete(req));
+  }
+
+  async poolAdd(req: { name: string; drives: string[] }): Promise<void> {
+    await this.#track(() => this.#transport.poolAdd(req));
+  }
+
+  async poolRemove(req: { name: string; drives: string[] }): Promise<void> {
+    await this.#track(() => this.#transport.poolRemove(req));
+  }
+
+  async poolActivate(req: { name: string }): Promise<void> {
+    await this.#track(() => this.#transport.poolActivate(req));
+  }
+
+  async poolDeactivate(req: { name: string }): Promise<void> {
+    await this.#track(() => this.#transport.poolDeactivate(req));
+  }
+
+  async poolShow(): Promise<unknown> {
+    return this.#track(() => this.#transport.poolShow());
+  }
+
+  async raidImportShow(): Promise<unknown> {
+    return this.#track(() => this.#transport.raidImportShow());
+  }
+
+  async raidImportApply(req: { uuid: string; new_name?: string }): Promise<void> {
+    await this.#track(() => this.#transport.raidImportApply(req));
   }
 
   async #track<T>(call: () => Promise<T>): Promise<T> {
@@ -91,6 +157,50 @@ export function createGrpcTransport(): XiraidTransport {
     async raidDestroy(req: RaidDestroyRequest): Promise<void> {
       const client = await getClient();
       await raidDestroy(client, req);
+    },
+    async raidModify(req: RaidModifyRequest): Promise<void> {
+      const client = await getClient();
+      await raidModify(client, req);
+    },
+    async poolCreate(req: { name: string; drives: string[] }): Promise<void> {
+      const client = await getClient();
+      await poolCreate(client, req);
+    },
+    async poolDelete(req: { name: string }): Promise<void> {
+      const client = await getClient();
+      await poolDelete(client, req);
+    },
+    async poolAdd(req: { name: string; drives: string[] }): Promise<void> {
+      const client = await getClient();
+      await poolAdd(client, req);
+    },
+    async poolRemove(req: { name: string; drives: string[] }): Promise<void> {
+      const client = await getClient();
+      await poolRemove(client, req);
+    },
+    async poolActivate(req: { name: string }): Promise<void> {
+      const client = await getClient();
+      await poolActivate(client, req);
+    },
+    async poolDeactivate(req: { name: string }): Promise<void> {
+      const client = await getClient();
+      await poolDeactivate(client, req);
+    },
+    async poolShow(): Promise<unknown> {
+      const client = await getClient();
+      const res = await poolShow(client, {});
+      return res.data ?? [];
+    },
+    async raidImportShow(): Promise<unknown> {
+      // No drives filter: scan all (confirm exact daemon semantics for an
+      // unset `drives` list on real hardware — fixture/e2e use the fake).
+      const client = await getClient();
+      const res = await raidImportShow(client, {});
+      return res.data ?? [];
+    },
+    async raidImportApply(req: { uuid: string; new_name?: string }): Promise<void> {
+      const client = await getClient();
+      await raidImportApply(client, req);
     },
   };
 }
