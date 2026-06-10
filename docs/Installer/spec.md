@@ -385,7 +385,7 @@ The health engine bundles many of the checks above (RAID state, mounts, exports,
 | `ibstat` empty after install | OFED installed but host not rebooted | `reboot`, then re-run §4.2 |
 | Phantom IPs / split tables | Old IB stanzas left in `50-cloud-init.yaml` | [Network/spec-network-management.md](../Network/spec-network-management.md) |
 | `xicli license` errors | `/tmp/license` cleared by reboot | Re-enter license in the menu before re-running `--tags raid_fs` |
-| NFS mounts but RDMA refused | `mlnx-nfsrdma-dkms` not loaded, or port 20049 blocked | `lsmod | grep rdma`, `ss -lntp | grep 20049` |
+| NFS mounts but RDMA refused | `mlnx-nfsrdma-dkms` not loaded, or port 20049 blocked | `lsmod \| grep rdma`, `ss -lntp \| grep 20049` |
 | `xinas-nfs-helper.sock` missing at boot | Helper raced with NFS server start | `systemctl restart xinas-nfs-helper` (also tracked in commit `45ef0cc`) |
 | `cpupower` fails on VM | VM has no exposed scaling driver | Use the `xinnorVM` preset (`perf_disable_cpupower=true`) |
 

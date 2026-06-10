@@ -86,7 +86,7 @@ git commit -m "docs(troubleshooting): memo on mlnx-nfsrdma EXPORT_SYMBOL_GPL bug
 
 **Step 1: Write the patch file**
 
-Unified-diff format with a long `# ` comment header documenting symptom, root cause, affected version, and a link to `docs/troubleshooting/mlnx-nfsrdma-export-symbol-gpl-bug.md`. Body:
+Unified-diff format with a long `#`-prefixed comment header documenting symptom, root cause, affected version, and a link to `docs/troubleshooting/mlnx-nfsrdma-export-symbol-gpl-bug.md`. Body:
 
 ```diff
 --- a/nvfs_rpc_rdma.c

@@ -3807,7 +3807,7 @@ Expected: overall `completed/success` (warn-only failures don't block); 8 blocki
 
 Print to the operator:
 
-> PR #<NUM> is green. 8 blocking jobs pass, 6 warn-only fail by design (same shape as the CI bootstrap PR). State store: ~2.5k lines TS + tests across `xiNAS-MCP/src/state/` and `xiNAS-MCP/src/__tests__/state/`. Ready to merge via `gh pr merge --rebase`. Approve?
+> PR `#<NUM>` is green. 8 blocking jobs pass, 6 warn-only fail by design (same shape as the CI bootstrap PR). State store: ~2.5k lines TS + tests across `xiNAS-MCP/src/state/` and `xiNAS-MCP/src/__tests__/state/`. Ready to merge via `gh pr merge --rebase`. Approve?
 
 DO NOT proceed to the next step without an explicit "merge" / "yes" from the operator.
 

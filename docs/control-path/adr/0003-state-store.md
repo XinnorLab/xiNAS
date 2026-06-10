@@ -30,8 +30,8 @@ Without a clear decision, two natural temptations create problems:
 1. **Conflate them.** Extend `xinas_history` to hold live, mutable state.
    Tempting because the on-disk layout is proven and the library ships
    today. But `xinas_history` is **snapshot-first** by design — its
-   Manifest is a frozen record of a change. Retrofitting CRUD + revisioning
-   + CAS + watch on top is more code than starting clean for the live path,
+   Manifest is a frozen record of a change. Retrofitting CRUD + revisioning +
+   CAS + watch on top is more code than starting clean for the live path,
    and it muddles "what is true now" with "what changed and when."
 
 2. **Build two parallel desired-state representations.** The new store
@@ -412,8 +412,8 @@ Swallowing write failures, as in the current implementation, is
 
 ### Option B — Extend `xinas_history` to be the live state store
 
-Rejected: the library was designed snapshot-first. Adding CRUD + revisioning
-+ CAS + watch is more code than starting clean for the live path, and it
+Rejected: the library was designed snapshot-first. Adding CRUD + revisioning +
+CAS + watch is more code than starting clean for the live path, and it
 muddles two distinct responsibilities. The duplication-risk critique stays
 unresolved.
 
