@@ -12,8 +12,11 @@
  */
 import { type ExecFileOptions, execFile as nodeExecFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import type { AgentConfig } from '../config.js';
+import { join } from 'node:path';
 import { parseIdmapConf } from '../../lib/parse/idmap.js';
+import { parseMountinfo } from '../../lib/parse/mountinfo.js';
+import type { AgentConfig } from '../config.js';
+import { fixtureDir } from '../probe/fixture.js';
 import type { XiraidClient } from '../xiraid/client.js';
 import { buildNfsExecutors, type NfsExecutorDeps } from './nfs-executor.js';
 import { createNfsHelperClientFromProbe } from './nfs-helper-client.js';
@@ -23,9 +26,43 @@ import { TaskRunner } from './runner.js';
 import type { PublishProgress } from './types.js';
 import {
   makeXiraidArrayCreateExecutor,
+  makeXiraidArrayDeleteExecutor,
   makeXiraidArrayImportExecutor,
   makeXiraidArrayModifyExecutor,
 } from './xiraid-array-executor.js';
+
+/**
+ * Host mount reader for the delete executor's TOCTOU guard. FAIL-CLOSED:
+ * an unreadable /proc/self/mountinfo throws → delete preflight refuses
+ * (better no destruction than an unverified one).
+ */
+async function readProcMounts(): Promise<Array<{ source: string; mountpoint: string }>> {
+  const raw = await readFile('/proc/self/mountinfo', 'utf8');
+  return parseMountinfo(raw).map((m) => ({ source: m.source, mountpoint: m.mountpoint }));
+}
+
+/**
+ * Fixture-mode mount reader (XINAS_AGENT_PROBE_MODE=fixture:<dir> — e2e and
+ * dev hosts without /proc): reads <dir>/mounts.json, defaulting to "nothing
+ * mounted". Same pattern as the probe/xiraid fixtures.
+ */
+function makeFixtureMounts(
+  dir: string,
+): () => Promise<Array<{ source: string; mountpoint: string }>> {
+  return async () => {
+    try {
+      const raw = await readFile(join(dir, 'mounts.json'), 'utf8');
+      const parsed = JSON.parse(raw) as Array<{ source?: string; mountpoint?: string }>;
+      return Array.isArray(parsed)
+        ? parsed
+            .filter((m) => typeof m.source === 'string' && typeof m.mountpoint === 'string')
+            .map((m) => ({ source: m.source as string, mountpoint: m.mountpoint as string }))
+        : [];
+    } catch {
+      return [];
+    }
+  };
+}
 import {
   type RunSubprocess,
   type SubprocessResult,
@@ -124,6 +161,8 @@ export function buildTaskSubsystem(
     runSubprocess?: RunSubprocess;
     nfsDeps?: NfsExecutorDeps;
     xiraidClient?: XiraidClient;
+    /** Mount-guard override (fixture/e2e); default reads /proc/self/mountinfo. */
+    readMounts?: () => Promise<Array<{ source: string; mountpoint: string }>>;
   } = {},
 ): TaskSubsystem {
   const registry = new ExecutorRegistry();
@@ -140,6 +179,14 @@ export function buildTaskSubsystem(
     registry.register(makeXiraidArrayCreateExecutor({ client: opts.xiraidClient }));
     registry.register(makeXiraidArrayModifyExecutor({ client: opts.xiraidClient }));
     registry.register(makeXiraidArrayImportExecutor({ client: opts.xiraidClient }));
+    const fdir = fixtureDir();
+    registry.register(
+      makeXiraidArrayDeleteExecutor({
+        client: opts.xiraidClient,
+        readMounts:
+          opts.readMounts ?? (fdir !== null ? makeFixtureMounts(fdir) : readProcMounts),
+      }),
+    );
   }
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
