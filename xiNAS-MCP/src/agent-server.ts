@@ -83,12 +83,14 @@ async function main(): Promise<void> {
   });
 
   // Task subsystem (S2 T7): the ExecutorRegistry (seeded with the reference
-  // executor), the xinas_history-backed TaskRunner, and the progress publisher
-  // that POSTs progress events to the api. The three task.* RPC handlers below
-  // dispatch api→agent `task.begin`/`task.cancel`/`task.list_inflight` into it.
-  // T0 removed the four task.* from STUB_METHODS, so registering the real
-  // handlers after the ...STUB_METHODS spread shadows nothing.
-  const taskSubsystem = buildTaskSubsystem(config);
+  // executor + the S3 xiraid.array.create executor over the convergence's
+  // shared xiRAID client), the xinas_history-backed TaskRunner, and the
+  // progress publisher that POSTs progress events to the api. The three
+  // task.* RPC handlers below dispatch api→agent `task.begin`/`task.cancel`/
+  // `task.list_inflight` into it. T0 removed the four task.* from
+  // STUB_METHODS, so registering the real handlers after the
+  // ...STUB_METHODS spread shadows nothing.
+  const taskSubsystem = buildTaskSubsystem(config, { xiraidClient: convergence.xiraidClient });
   const taskHandlers = makeTaskHandlers({
     runner: taskSubsystem.runner,
     registry: taskSubsystem.registry,
