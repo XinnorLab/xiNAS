@@ -25,13 +25,13 @@
 - **Contract revisions (T0):** extend `XiraidArray.spec` in `api-v1.yaml` (incl. `raid7`/`raid70`); wire `POST /arrays` to the plan/apply contract; add the `XiraidArray.json` fixture; stub supersession (S2-T0 pattern, §10); normalize the reference provider's off-enum `rollback_model`.
 
 ### Out of scope (deferred — designed in ADR-0006, built later)
-- **Modify** (`PATCH /arrays/{id}` + `raid_modify` + the pool lifecycle), **import** (two-phase `raid_import_*`), **delete** (`DELETE /arrays/{id}` + the engine `dangerous` gate + dependency guard + `raid_destroy`).
-- **Create-with-spares:** non-empty `spare_disk_ids` on create → plan blocker `spare_pool_deferred` (the pool lifecycle lands with the modify plan).
+- **Modify**, **import**, **delete** — *superseded (2026-06-10): built by the **S4 spec** (`s4-xiraid-array-mutations-spec.md`).*
+- **Create-with-spares:** non-empty `spare_disk_ids` on create → plan blocker `spare_pool_deferred` — *superseded: the S4 spec removes the blocker (create provisions + activates the pool).*
 - **Online reshape / capacity expansion**, **first-class pool objects** (ADR-0006 *does NOT decide*).
 - **xiRAID daemon transport hardening** (`xiraid_classic`/packaging concern).
 
 ### Deferred-route behavior while deferred
-`PATCH /arrays/{id}` and `DELETE /arrays/{id}` keep the **existing** `handlers/unsupported.ts` mutating-stub semantics until their plans land: `UNSUPPORTED`/`EXECUTOR_UNSUPPORTED` (422) while the agent is online, `INTERNAL`/`EXECUTOR_UNAVAILABLE` (503) while it is offline. S3 replaces only the `POST /arrays` stub with the real route.
+*(Historical — S4 replaces the PATCH/DELETE stubs with real routes.)* `PATCH /arrays/{id}` and `DELETE /arrays/{id}` keep the **existing** `handlers/unsupported.ts` mutating-stub semantics until their plans land: `UNSUPPORTED`/`EXECUTOR_UNSUPPORTED` (422) while the agent is online, `INTERNAL`/`EXECUTOR_UNAVAILABLE` (503) while it is offline. S3 replaces only the `POST /arrays` stub with the real route.
 
 ---
 
