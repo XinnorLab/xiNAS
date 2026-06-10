@@ -249,20 +249,6 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
         )
         self.query_one("#picker-filter-bar", Static).update(filter_bar)
 
-    def _current_drive_name(self) -> str | None:
-        """Get the drive name at the current cursor row."""
-        table = self.query_one("#picker-table", DataTable)
-        try:
-            # get_row_at raises when the cursor is on an invalid row — keep
-            # the call as a guard even though its value is unused.
-            table.get_row_at(table.cursor_row)
-            # DataTable has no get_row_key() — this raises AttributeError and
-            # the except below returns None (pre-existing gap, kept as-is for
-            # behavior parity; self.get_row_key(table) was likely intended).
-            return str(table.get_row_key(table.cursor_row))  # pyright: ignore[reportAttributeAccessIssue]
-        except Exception:
-            return None
-
     def get_row_key(self, table: DataTable) -> str | None:
         """Get the key of the row at cursor."""
         try:

@@ -99,6 +99,8 @@ class TextAreaDialog(ModalScreen[str | None]):
 
     def action_copy_message(self) -> None:
         if self._copy_text:
-            # _do_copy exists only on XiNASApp; under StartupApp this raises
-            # AttributeError (pre-existing gap, kept as-is for behavior parity).
-            self.app._do_copy(self._copy_text)  # pyright: ignore[reportAttributeAccessIssue]
+            # App-generic: works under both XiNASApp and StartupApp (the old
+            # self.app._do_copy crashed with AttributeError under StartupApp).
+            from xinas_menu.clipboard import copy_with_recovery
+
+            copy_with_recovery(self.app, self._copy_text)
