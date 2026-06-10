@@ -1,17 +1,35 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TaskRunner } from '../../../agent/task/runner.js';
 import type { TaskProgressEvent } from '../../../agent/task/types.js';
-import { makeXiraidArrayCreateExecutor } from '../../../agent/task/xiraid-array-executor.js';
+import {
+  makeXiraidArrayCreateExecutor,
+  makeXiraidArrayModifyExecutor,
+} from '../../../agent/task/xiraid-array-executor.js';
 import { XinasHistoryBridge } from '../../../agent/task/xinas-history-bridge.js';
 import { XiraidClient, type XiraidTransport } from '../../../agent/xiraid/client.js';
 import { makeUnimplementedTransport } from '../../../agent/xiraid/fake-transport.js';
 
-/** In-memory fake xiRAID with injectable failure modes (+ pool state, S4 T4). */
-function makeFake(opts: { failCreate?: 'clean' | 'partial'; downAfterCreate?: boolean } = {}) {
-  const arrays: Array<{ name: string; level: string; devices: string[]; state: string[] }> = [];
+/** In-memory fake xiRAID with injectable failure modes (+ pool state + op log, S4). */
+function makeFake(
+  opts: {
+    failCreate?: 'clean' | 'partial';
+    downAfterCreate?: boolean;
+    /** Reject any raidModify that carries tuning keys (targets apply_tuning). */
+    failTuningModify?: boolean;
+  } = {},
+) {
+  const arrays: Array<{
+    name: string;
+    level: string;
+    devices: string[];
+    state: string[];
+    sparepool?: string;
+    [key: string]: unknown;
+  }> = [];
   const pools: Array<{ name: string; drives: string[]; active: boolean }> = [];
   let down = false;
   const destroyCalls: string[] = [];
+  const ops: string[] = [];
   const transport: XiraidTransport = {
     ...makeUnimplementedTransport(),
     async raidShow() {
@@ -19,45 +37,81 @@ function makeFake(opts: { failCreate?: 'clean' | 'partial'; downAfterCreate?: bo
       return arrays.map((a) => ({ ...a }));
     },
     async raidCreate(req) {
+      ops.push(`raidCreate:${req.name}`);
       if (opts.failCreate === 'partial') {
         arrays.push({ name: req.name, level: req.level, devices: req.drives, state: ['online'] });
         if (opts.downAfterCreate) down = true;
         throw new Error('create failed after registering the array');
       }
       if (opts.failCreate === 'clean') throw new Error('create rejected');
-      arrays.push({ name: req.name, level: req.level, devices: req.drives, state: ['online'] });
+      arrays.push({
+        name: req.name,
+        level: req.level,
+        devices: req.drives,
+        state: ['online'],
+        ...(req.sparepool !== undefined ? { sparepool: req.sparepool } : {}),
+      });
     },
     async raidDestroy(req) {
       if (down) throw new Error('connect ECONNREFUSED 127.0.0.1:6066');
       destroyCalls.push(req.name ?? '');
+      ops.push(`raidDestroy:${req.name}`);
       const i = arrays.findIndex((a) => a.name === req.name);
       if (i >= 0) arrays.splice(i, 1);
     },
+    async raidModify(req) {
+      const { name, ...rest } = req;
+      const tuningKeys = Object.keys(rest).filter((k) => k !== 'sparepool');
+      ops.push(`raidModify:${name}:${Object.keys(rest).sort().join(',')}`);
+      if (opts.failTuningModify && tuningKeys.length > 0) {
+        throw new Error('forced tuning-modify failure');
+      }
+      const arr = arrays.find((a) => a.name === name);
+      if (!arr) throw new Error(`no RAID named '${name}'`);
+      Object.assign(arr, rest);
+    },
     async poolCreate(req) {
+      ops.push(`poolCreate:${req.name}`);
+      if (pools.some((p) => p.name === req.name)) throw new Error(`pool ${req.name} exists`);
       pools.push({ name: req.name, drives: [...req.drives], active: false });
     },
     async poolActivate(req) {
+      ops.push(`poolActivate:${req.name}`);
       const p = pools.find((x) => x.name === req.name);
       if (!p) throw new Error(`no pool ${req.name}`);
       p.active = true;
     },
     async poolDeactivate(req) {
+      ops.push(`poolDeactivate:${req.name}`);
       const p = pools.find((x) => x.name === req.name);
       if (!p) throw new Error(`no pool ${req.name}`);
       p.active = false;
     },
     async poolDelete(req) {
+      ops.push(`poolDelete:${req.name}`);
       const i = pools.findIndex((x) => x.name === req.name);
       if (i < 0) throw new Error(`no pool ${req.name}`);
       if (pools[i]?.active) throw new Error(`pool ${req.name} is active`);
       pools.splice(i, 1);
+    },
+    async poolAdd(req) {
+      ops.push(`poolAdd:${req.name}:${req.drives.join(',')}`);
+      const p = pools.find((x) => x.name === req.name);
+      if (!p) throw new Error(`no pool ${req.name}`);
+      p.drives = [...new Set([...p.drives, ...req.drives])];
+    },
+    async poolRemove(req) {
+      ops.push(`poolRemove:${req.name}:${req.drives.join(',')}`);
+      const p = pools.find((x) => x.name === req.name);
+      if (!p) throw new Error(`no pool ${req.name}`);
+      p.drives = p.drives.filter((d) => !req.drives.includes(d));
     },
     async poolShow() {
       if (down) throw new Error('connect ECONNREFUSED 127.0.0.1:6066');
       return pools.map((p) => ({ ...p }));
     },
   };
-  return { arrays, pools, destroyCalls, transport, setDown: (v: boolean) => (down = v) };
+  return { arrays, pools, destroyCalls, ops, transport, setDown: (v: boolean) => (down = v) };
 }
 
 function makeRunner(): TaskRunner {
@@ -270,5 +324,129 @@ describe('xiraid.array.create executor', () => {
     expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
     expect(fake.arrays).toHaveLength(0);
     expect(fake.destroyCalls).toEqual([]);
+  });
+});
+
+// ---- S4 T6: xiraid.array.modify executor ----
+
+describe('xiraid.array.modify executor', () => {
+  function seedArray(
+    fake: ReturnType<typeof makeFake>,
+    over: Record<string, unknown> = {},
+  ): void {
+    fake.arrays.push({
+      name: 'data',
+      level: '6',
+      devices: ['/dev/nvme1n1', '/dev/nvme2n1'],
+      state: ['online'],
+      ...over,
+    });
+  }
+
+  async function runModify(
+    fake: ReturnType<typeof makeFake>,
+    spec: Record<string, unknown>,
+  ): Promise<TaskProgressEvent[]> {
+    const events: TaskProgressEvent[] = [];
+    const executor = makeXiraidArrayModifyExecutor({ client: new XiraidClient(fake.transport) });
+    await makeRunner().run(
+      { task_id: 't-mod', operation_kind: 'xiraid.array.modify', spec },
+      executor,
+      async (e) => {
+        events.push(e);
+      },
+    );
+    return events;
+  }
+
+  it('attach: pool_create → pool_activate → raid_modify{sparepool}; tuning stage skips', async () => {
+    const fake = makeFake();
+    seedArray(fake);
+    const events = await runModify(fake, {
+      id: 'data',
+      spare_disk_ids: ['d5'],
+      device_by_id: { d5: '/dev/nvme5n1' },
+    });
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.ops).toEqual([
+      'poolCreate:xnsp_data',
+      'poolActivate:xnsp_data',
+      'raidModify:data:sparepool',
+    ]);
+    expect(fake.pools).toEqual([{ name: 'xnsp_data', drives: ['/dev/nvme5n1'], active: true }]);
+    expect(fake.arrays[0]?.sparepool).toBe('xnsp_data');
+  });
+
+  it('membership change: pool_add/pool_remove deltas only, no re-create or activation churn', async () => {
+    const fake = makeFake();
+    seedArray(fake, { sparepool: 'xnsp_data' });
+    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/nvme5n1'], active: true });
+    const events = await runModify(fake, {
+      id: 'data',
+      spare_disk_ids: ['d6'],
+      device_by_id: { d6: '/dev/nvme6n1' },
+    });
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.ops).toEqual([
+      'poolAdd:xnsp_data:/dev/nvme6n1',
+      'poolRemove:xnsp_data:/dev/nvme5n1',
+    ]);
+    expect(fake.pools[0]?.drives).toEqual(['/dev/nvme6n1']);
+  });
+
+  it('detach: raid_modify("") → pool_deactivate → pool_delete', async () => {
+    const fake = makeFake();
+    seedArray(fake, { sparepool: 'xnsp_data' });
+    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/nvme5n1'], active: true });
+    const events = await runModify(fake, { id: 'data', spare_disk_ids: [] });
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.ops).toEqual([
+      'raidModify:data:sparepool',
+      'poolDeactivate:xnsp_data',
+      'poolDelete:xnsp_data',
+    ]);
+    expect(fake.pools).toEqual([]);
+    expect(fake.arrays[0]?.sparepool).toBe('');
+  });
+
+  it('tuning-only: single raid_modify, no pool calls; spares stage skips', async () => {
+    const fake = makeFake();
+    seedArray(fake);
+    const events = await runModify(fake, { id: 'data', tuning: { init_prio: 42 } });
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.ops).toEqual(['raidModify:data:init_prio']);
+    expect(fake.arrays[0]?.init_prio).toBe(42);
+  });
+
+  it('foreign sparepool → preflight fails, no pool calls', async () => {
+    const fake = makeFake();
+    seedArray(fake, { sparepool: 'legacy0' });
+    const events = await runModify(fake, {
+      id: 'data',
+      spare_disk_ids: ['d5'],
+      device_by_id: { d5: '/dev/nvme5n1' },
+    });
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(terminal(events)?.status).toBe('failed');
+    expect(fake.ops).toEqual([]);
+  });
+
+  it('tuning fails after a successful attach → rollback inverts the pool ops', async () => {
+    const fake = makeFake({ failTuningModify: true });
+    seedArray(fake);
+    const events = await runModify(fake, {
+      id: 'data',
+      spare_disk_ids: ['d5'],
+      device_by_id: { d5: '/dev/nvme5n1' },
+      tuning: { init_prio: 9 },
+    });
+    expect(shape(events)).toContainEqual(['stage_failed', 'apply_tuning']);
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
+    // pool gone again, sparepool detached — back to the pre-state
+    expect(fake.pools).toEqual([]);
+    expect(fake.arrays[0]?.sparepool ?? '').toBe('');
   });
 });

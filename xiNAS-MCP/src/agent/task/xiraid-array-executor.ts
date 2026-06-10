@@ -17,7 +17,7 @@
  */
 
 import { derivedPoolName, parseCreateSpec } from '../../lib/xiraid/validate.js';
-import { toRaidCreateRequest } from '../../lib/xiraid/translate.js';
+import { toRaidCreateRequest, toRaidModifyRequest } from '../../lib/xiraid/translate.js';
 import type { XiraidClient } from '../xiraid/client.js';
 import type { Executor, ExecutorContext, ExecutorStage } from './types.js';
 
@@ -228,6 +228,258 @@ export function makeXiraidArrayCreateExecutor(opts: XiraidArrayCreateExecutorOpt
         await client.poolDelete({ name: poolName });
         ctx.emitOutput(`rollback: spare pool '${poolName}' removed`);
       }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// xiraid.array.modify executor (S4 T6, ADR-0006 §Modify / §Spare pools)
+// ---------------------------------------------------------------------------
+
+interface ModifyExecSpec {
+  id: string;
+  spare_disk_ids?: string[];
+  tuning?: Record<string, unknown>;
+  device_by_id: Map<string, string>;
+}
+
+/** Pool/array pre-state captured LIVE at preflight; keyed by ctx.spec object
+ *  identity (the runner hands the same spec object to every stage and to
+ *  rollback within one run), so the singleton executor carries no cross-task
+ *  state. After an agent crash the map is empty — but the runner only calls
+ *  rollback in-process, so that path cannot observe a missing entry. */
+interface ModifyPreState {
+  arraySparepool: string;
+  poolExisted: boolean;
+  poolDrives: string[];
+  poolActive: boolean;
+}
+
+function narrowModifySpec(ctx: ExecutorContext): ModifyExecSpec {
+  const o = ctx.spec as Record<string, unknown> | null;
+  if (typeof o !== 'object' || o === null || typeof o.id !== 'string') {
+    throw new Error('xiraid.array.modify: spec is missing the target array id');
+  }
+  const deviceById = new Map<string, string>();
+  if (typeof o.device_by_id === 'object' && o.device_by_id !== null) {
+    for (const [id, path] of Object.entries(o.device_by_id as Record<string, unknown>)) {
+      if (typeof path === 'string') deviceById.set(id, path);
+    }
+  }
+  return {
+    id: o.id,
+    ...(Array.isArray(o.spare_disk_ids)
+      ? { spare_disk_ids: o.spare_disk_ids.filter((s): s is string => typeof s === 'string') }
+      : {}),
+    ...(typeof o.tuning === 'object' && o.tuning !== null
+      ? { tuning: o.tuning as Record<string, unknown> }
+      : {}),
+    device_by_id: deviceById,
+  };
+}
+
+function readPoolEntry(
+  pools: unknown,
+  name: string,
+): { drives: string[]; active: boolean } | undefined {
+  if (!Array.isArray(pools)) return undefined;
+  for (const entry of pools) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const o = entry as Record<string, unknown>;
+    if (o.name !== name) continue;
+    return {
+      drives: Array.isArray(o.drives)
+        ? o.drives.filter((d): d is string => typeof d === 'string')
+        : [],
+      active: o.active === true,
+    };
+  }
+  return undefined;
+}
+
+export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): Executor {
+  const client = opts.client;
+  const preStates = new WeakMap<object, ModifyPreState>();
+
+  /** Target spare DEVICE paths from the spec (throws on unresolved ids). */
+  function targetDrives(spec: ModifyExecSpec): string[] {
+    return (spec.spare_disk_ids ?? []).map((id) => {
+      const path = spec.device_by_id.get(id);
+      if (path === undefined) {
+        throw new Error(`modify: no resolved device path for spare disk '${id}'`);
+      }
+      return path;
+    });
+  }
+
+  const preflight: ExecutorStage = {
+    name: 'preflight',
+    async run(ctx: ExecutorContext): Promise<void> {
+      checkCancelled(ctx, 'preflight');
+      const spec = narrowModifySpec(ctx);
+      const poolName = derivedPoolName(spec.id);
+
+      const shown = readShow(await client.raidShow());
+      const arr = shown.find((a) => a.name === spec.id);
+      if (!arr) throw new Error(`preflight: array '${spec.id}' does not exist on the daemon`);
+
+      // The live sparepool name comes from the raw payload (readShow strips it).
+      const raw = (await client.raidShow()) as Array<Record<string, unknown>>;
+      const rawEntry = Array.isArray(raw) ? raw.find((a) => a?.name === spec.id) : undefined;
+      const liveSparepool =
+        typeof rawEntry?.sparepool === 'string' ? (rawEntry.sparepool as string) : '';
+
+      // Foreign-pool guard: the control path only manages xnsp_<array>.
+      if (spec.spare_disk_ids !== undefined && liveSparepool !== '' && liveSparepool !== poolName) {
+        throw new Error(
+          `preflight: sparepool '${liveSparepool}' is not managed by the control path (expected '' or '${poolName}')`,
+        );
+      }
+
+      const pool = readPoolEntry(await client.poolShow(), poolName);
+      preStates.set(ctx.spec as object, {
+        arraySparepool: liveSparepool,
+        poolExisted: pool !== undefined,
+        poolDrives: pool?.drives ?? [],
+        poolActive: pool?.active ?? false,
+      });
+      ctx.emitOutput(
+        `preflight ok: '${spec.id}' sparepool='${liveSparepool}' pool ${pool ? 'exists' : 'absent'}`,
+      );
+    },
+  };
+
+  const applySpares: ExecutorStage = {
+    name: 'apply_spares',
+    async run(ctx: ExecutorContext): Promise<void> {
+      checkCancelled(ctx, 'apply_spares');
+      const spec = narrowModifySpec(ctx);
+      if (spec.spare_disk_ids === undefined) {
+        ctx.emitOutput('skipped (no spare_disk_ids change)');
+        return;
+      }
+      const poolName = derivedPoolName(spec.id);
+      const pre = preStates.get(ctx.spec as object);
+      const target = targetDrives(spec);
+
+      if (target.length > 0) {
+        if (!pre?.poolExisted) {
+          ctx.emitOutput(`pool_create ${poolName} drives=${target.join(',')}`);
+          await client.poolCreate({ name: poolName, drives: target });
+          await client.poolActivate({ name: poolName });
+        } else {
+          const current = new Set(pre.poolDrives);
+          const wanted = new Set(target);
+          const toAdd = target.filter((d) => !current.has(d));
+          const toRemove = pre.poolDrives.filter((d) => !wanted.has(d));
+          if (toAdd.length > 0) await client.poolAdd({ name: poolName, drives: toAdd });
+          if (toRemove.length > 0) await client.poolRemove({ name: poolName, drives: toRemove });
+          if (!pre.poolActive) await client.poolActivate({ name: poolName });
+        }
+        if (pre?.arraySparepool !== poolName) {
+          await client.raidModify(toRaidModifyRequest(spec.id, { sparepool: poolName }));
+        }
+        ctx.emitOutput(`spares applied: ${target.join(',')} via ${poolName}`);
+      } else {
+        // detach: raid_modify('') → deactivate → delete
+        if (pre?.arraySparepool === poolName) {
+          await client.raidModify(toRaidModifyRequest(spec.id, { sparepool: '' }));
+        }
+        if (pre?.poolExisted) {
+          if (pre.poolActive) await client.poolDeactivate({ name: poolName });
+          await client.poolDelete({ name: poolName });
+        }
+        ctx.emitOutput('spares detached');
+      }
+    },
+  };
+
+  const applyTuning: ExecutorStage = {
+    name: 'apply_tuning',
+    async run(ctx: ExecutorContext): Promise<void> {
+      checkCancelled(ctx, 'apply_tuning');
+      const spec = narrowModifySpec(ctx);
+      if (spec.tuning === undefined) {
+        ctx.emitOutput('skipped (no tuning change)');
+        return;
+      }
+      // LAST stage by construction: tuning is not restorable (observed state
+      // carries no tuning), so nothing may run after it that could fail and
+      // demand its rollback. The single raid_modify is atomic daemon-side.
+      await client.raidModify(toRaidModifyRequest(spec.id, { tuning: spec.tuning }));
+      ctx.emitOutput(`tuning applied: ${Object.keys(spec.tuning).join(',')}`);
+    },
+  };
+
+  const verify: ExecutorStage = {
+    name: 'verify',
+    async run(ctx: ExecutorContext): Promise<void> {
+      const spec = narrowModifySpec(ctx);
+      const raw = (await client.raidShow()) as Array<Record<string, unknown>>;
+      const entry = Array.isArray(raw) ? raw.find((a) => a?.name === spec.id) : undefined;
+      if (!entry) throw new Error(`verify: array '${spec.id}' vanished`);
+      if (spec.spare_disk_ids !== undefined) {
+        const expected = spec.spare_disk_ids.length > 0 ? derivedPoolName(spec.id) : '';
+        const live = typeof entry.sparepool === 'string' ? entry.sparepool : '';
+        if (live !== expected) {
+          throw new Error(`verify: sparepool is '${live}', expected '${expected}'`);
+        }
+      }
+      ctx.emitOutput('verify ok');
+    },
+  };
+
+  return {
+    operation_kind: 'xiraid.array.modify',
+    stages: [preflight, applySpares, applyTuning, verify],
+
+    /** Inverse POOL ops only, from the preflight-captured pre-state vs live
+     *  state. Tuning needs no rollback by construction (last stage, atomic).
+     *  No pre-state captured (preflight threw first) → nothing changed. */
+    async rollback(ctx: ExecutorContext): Promise<void> {
+      const pre = preStates.get(ctx.spec as object);
+      if (!pre) {
+        ctx.emitOutput('rollback: no pre-state captured — nothing was changed');
+        return;
+      }
+      const spec = narrowModifySpec(ctx);
+      const poolName = derivedPoolName(spec.id);
+
+      const raw = (await client.raidShow()) as Array<Record<string, unknown>>;
+      const entry = Array.isArray(raw) ? raw.find((a) => a?.name === spec.id) : undefined;
+      const liveSparepool = typeof entry?.sparepool === 'string' ? entry.sparepool : '';
+      const livePool = readPoolEntry(await client.poolShow(), poolName);
+
+      // 1. Restore the array's sparepool linkage.
+      if (liveSparepool !== pre.arraySparepool) {
+        await client.raidModify(
+          toRaidModifyRequest(spec.id, { sparepool: pre.arraySparepool }),
+        );
+      }
+
+      // 2. Restore the pool itself.
+      if (!pre.poolExisted) {
+        if (livePool) {
+          if (livePool.active) await client.poolDeactivate({ name: poolName });
+          await client.poolDelete({ name: poolName });
+        }
+      } else if (livePool) {
+        const wanted = new Set(pre.poolDrives);
+        const current = new Set(livePool.drives);
+        const toAdd = pre.poolDrives.filter((d) => !current.has(d));
+        const toRemove = livePool.drives.filter((d) => !wanted.has(d));
+        if (toAdd.length > 0) await client.poolAdd({ name: poolName, drives: toAdd });
+        if (toRemove.length > 0) await client.poolRemove({ name: poolName, drives: toRemove });
+        if (livePool.active !== pre.poolActive) {
+          await (pre.poolActive
+            ? client.poolActivate({ name: poolName })
+            : client.poolDeactivate({ name: poolName }));
+        }
+      } else {
+        await client.poolCreate({ name: poolName, drives: pre.poolDrives });
+        if (pre.poolActive) await client.poolActivate({ name: poolName });
+      }
+      ctx.emitOutput('rollback: pool state restored to the preflight capture');
     },
   };
 }
