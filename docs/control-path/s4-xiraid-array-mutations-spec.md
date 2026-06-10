@@ -7,7 +7,7 @@
 **Authoritative prior art (this spec conforms to it).**
 - **ADR-0006** — writability matrix (topology immutable; spares + tuning live), spare-pool lifecycle (`xnsp_<array>`, executor-owned), per-operation contracts, the engine-enforced dangerous gate, `rollback_model` enums.
 - **S2 engine + S3 adapter (landed)** — `PlanEngine` (+`enriched_spec`), `TaskEngine.apply` (idempotency + freshness + leases, one txn), the shared `lib/xiraid`, `agent/xiraid/client.ts` (+fake transport), `routes/arrays.ts`, the create executor, the observe collector.
-- Verified integration facts this spec is written against: `ApplyPlan.observed_revision_expected` exists and the engine enforces `CONFLICT(plan_stale)` against `affected_resources[0]` — but it is **not persisted** on the plan row; `src/grpc/` already exports `raidModify`, `raidImportShow`, `raidImportApply`, and the full `pool*` verb set; observed `Filesystem` rows carry `spec.backing_device`/`spec.mountpoint` + `status.currently_mounted`; `Share`s live in **desired** state (`spec.path` is the export path); `NfsSession`s are observed with `spec.export_path`.
+- Verified integration facts this spec is written against: `ApplyPlan.observed_revision_expected` exists and the engine enforces `CONFLICT(plan_stale)` against `affected_resources[0]` — but it is **not persisted** on the plan row; `src/grpc/` already exports `raidModify`, `raidImportShow`, `raidImportApply`, and the full `pool*` verb set (incl. `poolActivate`/`poolDeactivate`); observed `Filesystem` rows have **no `spec`** — the collector emits `{ kind, id, status }` with `backing_device`, `mountpoint`, `currently_mounted` all under **`status`** (`collectors/filesystem.ts` `_fsToUpsert`); `Share`s live in **desired** state (`spec.path` is the export path); `NfsSession`s are observed with `spec.export_path`; `lib/parse/mountinfo.ts` provides `parseMountinfo` for host-level mount checks; the xiRAID pool lifecycle is `create → activate → [auto-replace armed]` / `deactivate → delete` (analyst doc §3.8 — an unactivated pool does NOT auto-replace).
 
 **This spec does NOT** add error codes, new top-level objects, or a desired-state projection for arrays. It extends the S2 `ApplyRequest` with the contract-locked `dangerous` field and adds three operation kinds to the existing registries.
 
@@ -94,13 +94,15 @@ A future migration may persist the observed pin and let the engine's `plan_stale
 | Stage | Action |
 |-------|--------|
 | `preflight` | Array exists in live `raid_show`; spare device paths exist and are not members of another array. |
-| `apply_spares` | Pool lifecycle (only when `spare_disk_ids` changed): attach (∅→S): `pool_create { name: "xnsp_<array>", drives }` → `raid_modify { sparepool }`; membership change: `pool_add`/`pool_remove` deltas; detach (S→∅): `raid_modify { sparepool: '' }` → `pool_delete`. Pools named other than `xnsp_<array>` (day-1 Ansible pools) are never touched: a modify on an array with a foreign sparepool gets a `preflight` failure (`foreign sparepool '<name>' is not managed by the control path`). |
+| `apply_spares` | Pool lifecycle (only when `spare_disk_ids` changed): attach (∅→S): `pool_create { name: "xnsp_<array>", drives }` → **`pool_activate`** (analyst §3.8 — without activation auto-replace never arms) → `raid_modify { sparepool }`; membership change: `pool_add`/`pool_remove` deltas (pool stays active); detach (S→∅): `raid_modify { sparepool: '' }` → **`pool_deactivate`** → `pool_delete`. Pools named other than `xnsp_<array>` (day-1 Ansible pools) are never touched: a modify on an array with a foreign sparepool gets a `preflight` failure (`foreign sparepool '<name>' is not managed by the control path`). |
 | `apply_tuning` | One tuning-only `raid_modify` (only when `tuning` present). Last: if it throws, the single call did not apply, and the pool rollback below restores structure. |
 | `verify` | `raid_show` reflects the expected sparepool linkage. |
 
-`rollback`: inverse **pool ops only**, computed from `enriched_spec.current_*` vs live `raid_show`/pool state (re-attach the prior pool, undo `pool_add`/`pool_remove`, re-create or delete `xnsp_<array>` as needed). Tuning needs no rollback by construction (it is the last stage and atomic). A rollback failure → `requires_manual_recovery` (S2 runner).
+`rollback`: inverse **pool ops only** (incl. the activation state), computed from `enriched_spec.current_*` vs live `raid_show`/pool state (re-attach the prior pool, undo `pool_add`/`pool_remove`, re-create+activate or deactivate+delete `xnsp_<array>` as needed). Tuning needs no rollback by construction (it is the last stage and atomic). A rollback failure → `requires_manual_recovery` (S2 runner).
 
-**Create-with-spares un-deferral.** `validateCreateSpec` drops `spare_pool_deferred`; spare disks get the same disk checks as members; the create provider leases spares + resolves them into `device_by_id`; `translate.toRaidCreateRequest` gains `sparepool: "xnsp_<name>"` when spares are present; the **create executor** gains a pool step inside `create` (pool_create before `raid_create`) and its `rollback` deletes `xnsp_<name>` if present (after the array destroy).
+**Apply-time re-check compatibility.** The route's §8 re-check runs the provider preflight on the **persisted (enriched) spec**, so `parseModifySpec` is **tolerant**: it narrows `spare_disk_ids`/`tuning` and *ignores* unknown keys (`id`, `device_by_id`, `current_*` — the enrichment) rather than whitelisting. The **route** owns topology rejection, checking the **raw PATCH body** for topology keys before any plan (the parser never sees a raw body with topology keys on the plan path, and the enriched spec never contains them). Provider preflight is idempotent over its own enriched output: re-enrichment simply recomputes `device_by_id`/`current_*` fresh.
+
+**Create-with-spares un-deferral.** `validateCreateSpec` drops `spare_pool_deferred`; spare disks get the same disk checks as members; the create provider leases spares + resolves them into `device_by_id`; `translate.toRaidCreateRequest` gains `sparepool: "xnsp_<name>"` when spares are present; the **create executor** gains a pool step inside `create` (`pool_create` → **`pool_activate`** before `raid_create`) and its `rollback` deactivates + deletes `xnsp_<name>` if present (after the array destroy).
 
 ## 6. Import (`xiraid.array.import`, `POST /arrays` import-shaped spec)
 
@@ -120,9 +122,9 @@ ADR-0006 §Import sketched *"Discovery: `mode=plan` calls `raid_import_show(driv
 
 **Provider preflight.**
 1. Array exists in observed state (else `NOT_FOUND`); capture observed `spec` + revision.
-2. **Dependency walk** (observed/desired state):
-   - `Filesystem`s (observed) with `spec.backing_device == /dev/xi_<id>` → each with `status.currently_mounted == true` → blocker `dependent_filesystem_mounted`.
-   - `Share`s (desired, `spec.path` under a dependent filesystem's `spec.mountpoint`) → listed in blast radius; each with an observed `NfsSession` whose `spec.export_path` is at/under the share path → blocker `dependent_share_active`.
+2. **Dependency walk** (observed/desired state — field locations per the verified collector shapes, NOT the public read schema):
+   - `Filesystem`s (observed) with **`status.backing_device`** `== /dev/xi_<id>` → each with **`status.currently_mounted`** `== true` → blocker `dependent_filesystem_mounted`. (Observed Filesystem rows carry no `spec`; the collector emits everything under `status`.)
+   - `Share`s (desired, `spec.path` under a dependent filesystem's **`status.mountpoint`**) → listed in blast radius; each with an observed `NfsSession` whose `spec.export_path` is at/under the share path → blocker `dependent_share_active`.
 3. **Always** the advisory blocker `dangerous_flag_required` (§3).
 4. `affected_resources = [ XiraidArray#id (primary, first), …dependent Filesystems, …dependent Shares ]` — dependents leased so a concurrent fs/share op cannot race the delete.
 5. `risk_level: 'destructive'`, `rollback_model: 'unsupported'`.
@@ -130,7 +132,14 @@ ADR-0006 §Import sketched *"Discovery: `mode=plan` calls `raid_import_show(driv
 
 **Route apply.** Re-runs preflight against current state and rejects on any blocker **except `dangerous_flag_required`** (the engine owns that one, §3); binds `expected_revision` per §4; passes `dangerous` into `applyReq`.
 
-**Executor (`xiraid.array.delete`).** `preflight` (the array exists in live `raid_show` — vanished → fail before change) → `destroy` (`raid_destroy { name, force: true }`; if the array had an `xnsp_<id>` pool, `pool_delete` it after) → `verify` (gone from `raid_show`). **`rollback()` throws unconditionally** (`'destructive operation: rollback unsupported'`): per the S2 runner that yields `rollback_failed` → terminal `requires_manual_recovery (FAILED_MANUAL_RECOVERY_REQUIRED)` — exactly ADR-0006's "a failed destroy → requires_manual_recovery (no rollback for a destructive op)". A destroy that *succeeded* but failed `verify` ends the same way (honest: state unknown).
+**Executor (`xiraid.array.delete`).**
+- `preflight` — two live host-level guards, closing the route-recheck→destroy TOCTOU window the api cannot close (the executor has only `spec`, no KV — but it runs as root on the host):
+  1. the array exists in live `raid_show` (vanished → fail before change);
+  2. **the volume is not mounted**: an injected `readMounts()` (real impl: read `/proc/self/mountinfo` + the existing `lib/parse/mountinfo.ts`) must show no mount whose source device is `/dev/xi_<name>` — a mount that appeared after the route re-check fails the preflight here. Active NFS sessions on a dependent share require that share's filesystem to be mounted, so the mount guard subsumes the session race for data safety; the api-side blockers remain the richer, user-facing signal.
+- `destroy` — `raid_destroy { name, force: true }`; if the array had an `xnsp_<id>` pool, `pool_deactivate` + `pool_delete` it after.
+- `verify` — gone from `raid_show`.
+
+**`rollback()` is live-state decided** (NOT an unconditional throw): if the array **still exists** in `raid_show`, nothing destructive happened (a `preflight` failure — busy volume, vanished-then-reappeared race) → rollback is a **no-op** → terminal `failed (FAILED_PARTIAL_ROLLED_BACK)`, a clean retryable failure. If the array is **gone or `raid_show` is unreachable**, the destroy started and its effects are unknowable → **throw** (`'destructive operation: rollback unsupported'`) → `rollback_failed` → terminal `requires_manual_recovery (FAILED_MANUAL_RECOVERY_REQUIRED)` — ADR-0006's "no rollback for a destructive op" applies to *attempted destruction*, not to a preflight that touched nothing.
 
 ## 8. Apply-time blocker re-check (generalized from S3 T8)
 
@@ -139,13 +148,13 @@ The S3 route re-runs the create provider's preflight at apply. S4 generalizes: e
 ## 9. Client adapter + fake transport extensions
 
 `agent/xiraid/client.ts` (+ availability tracking, unchanged pattern) gains:
-`raidModify(req)`, `poolCreate({name, drives})`, `poolDelete({name})`, `poolAdd({name, drives})`, `poolRemove({name, drives})`, `raidImportShow()`, `raidImportApply({uuid, new_name?})` — thin delegations to the existing `src/grpc/` wrappers.
+`raidModify(req)`, `poolCreate({name, drives})`, `poolDelete({name})`, `poolAdd({name, drives})`, `poolRemove({name, drives})`, `poolActivate({name})`, `poolDeactivate({name})`, `poolShow()`, `raidImportShow()`, `raidImportApply({uuid, new_name?})` — thin delegations to the existing `src/grpc/` wrappers.
 
-`fake-transport.ts` state file gains `pools: [{name, drives}]` and `import_candidates: [{uuid, name, level, devices, recoverable}]` (seedable by the e2e):
-- `raidModify` updates the named array's `sparepool`/tuning echo; `pool*` mutate `pools` (duplicate name / missing pool → reject).
+`fake-transport.ts` state file gains `pools: [{name, drives, active}]`, `import_candidates: [{uuid, name, level, devices, recoverable}]`, and `tombstones: [{name, data_wiped}]` (seedable by the e2e):
+- `raidModify` updates the named array's `sparepool`/tuning echo; `pool*` mutate `pools` (duplicate name / missing pool → reject; `pool_delete` of an **active** pool → reject, forcing the deactivate-first order; activate/deactivate flip `active`).
 - `raidImportShow` returns `import_candidates`; `raidImportApply` moves a candidate into `arrays` (state `['online']`) under `new_name ?? name`; unknown uuid → reject.
-- `raidDestroy { config_only }` removes from `arrays` without touching a `wiped` marker (the e2e asserts un-adopt ≠ data wipe via the marker's absence).
-- Failure hooks stay name-deterministic: any mutating verb against a name ending `-fail` rejects (`roll-fail` pattern, extended to modify/import/delete).
+- `raidDestroy` appends a tombstone: `data_wiped: true` for a plain destroy, and removal **without** a wipe marker for `{ config_only: true }` (the e2e asserts un-adopt ≠ data wipe).
+- Failure hooks stay name-deterministic: any mutating verb against a name ending `-fail` rejects (the S3 `roll-fail` pattern, extended to every new verb); additionally a `raidModify` carrying **tuning keys** (any field beyond `name`/`sparepool`) against a name ending `-fail-tuning` rejects — this targets the tuning stage specifically while pool ops on `xnsp_<name>-…` still succeed (a plain `-fail` name would trip the pool ops first).
 
 ## 10. Error model — reuse existing codes (no additions)
 
@@ -160,7 +169,7 @@ New **blocker codes** (plan `blockers[]`, not `ErrorCode`s): `dangerous_flag_req
 
 ## 12. Testing strategy
 
-- **Unit:** engine dangerous gate (destructive+flag absent → 412 `dangerous_flag_required`, nothing written; flag true → proceeds; non-destructive ignores); `validateModifySpec` (topology rejection is route-level — validator covers tuning ranges + spare disk rules incl. own-pool exemption); modify/import/delete providers (blockers, `affected_resources` ordering + dependent leasing, enriched_spec contents incl. `current_*` capture); the three executors over the in-memory fake (modify: attach/changemembers/detach + tuning-last ordering + pool rollback inverse; import: adopt/unknown-uuid/un-adopt rollback; delete: destroy/vanished-array/verify-fail + rollback-throws → `requires_manual_recovery`); create-with-spares (pool before raid_create; rollback deletes pool); fake-transport pool/import/`config_only` behaviors.
+- **Unit:** engine dangerous gate (destructive+flag absent → 412 `dangerous_flag_required`, nothing written; flag true → proceeds; non-destructive ignores); `validateModifySpec` (topology rejection is route-level — validator covers tuning ranges + spare disk rules incl. own-pool exemption; the parser tolerates enrichment keys so the apply re-check accepts its own plan); modify/import/delete providers (blockers, `affected_resources` ordering + dependent leasing, enriched_spec contents incl. `current_*` capture, the **status-shaped** Filesystem dep walk); the three executors over the in-memory fake (modify: attach-with-activation/changemembers/detach-with-deactivation + tuning-last ordering + pool rollback inverse; import: adopt/unknown-uuid/un-adopt rollback; delete: destroy + pool cleanup / **mounted-volume preflight guard** / vanished-array → clean `failed` via no-op rollback / destroy-failure → rollback-throws → `requires_manual_recovery`); create-with-spares (pool_create→pool_activate before raid_create; rollback deactivates+deletes the pool); fake-transport pool-activation/import/`config_only`/`-fail-tuning` behaviors.
 - **Route:** PATCH topology field → 422 per-field; PATCH/DELETE plan+apply happy paths; `expected_revision` binding (`observed_revision_stale`); delete apply without `dangerous` → 412 `dangerous_flag_required` (the engine, through the route); blocker re-check filters `dangerous_flag_required` but enforces the rest; import-shaped POST now plans instead of 422.
 - **e2e** (extends the S3 suite's fixture pattern): **modify** — attach spares to the created array + set tuning → success → observed `spec.spare_disk_ids` updated; **import** — seed an `import_candidate`, plan+apply adopt → success → array observable; **delete** — apply without `dangerous` → 412; with a seeded dependent mounted filesystem → 412 `dependent_filesystem_mounted`; clean array + `dangerous: true` → success → gone from `GET /arrays`; `-fail` hooks exercise one rollback path.
 - **Gate:** `npm test` · `npm run test:e2e` · `npm run test:contracts` · `npx tsc --noEmit` · `npm run lint` all green.
@@ -187,4 +196,5 @@ New **blocker codes** (plan `blockers[]`, not `ErrorCode`s): `dangerous_flag_req
 - **`raid_import_show` candidate shape** — pin the field names (uuid/name/recoverability) against `proto/xraid` + the analyst doc in T2 before the fake transport mimics them (the S3 "confirm-first" pattern).
 - **Pool/array name collision space** — `xnsp_<array>` assumes pool and array names don't share a namespace constraint tighter than `NAME_RE` length 63 (`xnsp_` + 63 may overflow a daemon limit); cap the derived pool name or validate combined length in T3.
 - **Tuning observe gap** — modify's `before` diff for tuning is only what observed state knows (nothing today). The diff shows `before.tuning: null` honestly; a later parse/raid extension can enrich it.
-- **`status.currently_mounted` population** — the dep walk trusts the Filesystem collector's E4 field; verify it is populated in fixture mode for the e2e dependent-fs scenario (seed it explicitly in the fixture if not).
+- **Observed-vs-public Filesystem shape divergence** — observed rows are status-only while the api-v1.yaml `Filesystem` schema has `spec.backing_device`; the dep walk reads the live observed shape (§7). The read-path projection (or a collector reshape) reconciling the two is pre-existing WS6 territory, not S4's.
+- **`/proc/self/mountinfo` field for the mount guard** — implement the device match against `lib/parse/mountinfo.ts`'s `MountEntry` source-device field (confirm the exact field name in T10 when wiring `readMounts()`).
