@@ -232,7 +232,7 @@ Architecture rules:
 | `agent.version` | Real | `{ version, git_sha, build_date }` |
 | `inventory.collect`, `disks.list`, `filesystems.list`, `mounts.list`, `network.snapshot`, `systemd.units_status`, `exports.list`, `nfs.sessions.list` | Stub (deferred to WS12 convergence) | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'`. **The LIVE data path in S0/S1 is the push model (Flow A)** — collectors push the same data asynchronously to `/internal/v1/observed`, which the api serves from its KV store; no S0/S1 caller uses the on-demand pull. These on-demand read methods are enumerated-but-stubbed now (so they return `EXECUTOR_UNSUPPORTED`, not an unknown `-32601`) and are wired to the collectors' last-computed snapshots in WS12. |
 | `arrays.list`, `managed_files.checksums` | Stub | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'` |
-| `arrays.create`, `arrays.delete`, `arrays.import`, `spare.set` | Stub | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'` |
+| `arrays.create`, `arrays.delete`, `arrays.import`, `spare.set` | **Superseded by the task envelope (S3, ADR-0006)** | Mutations dispatch via `task.begin` + the executor registry; these names left the enumerated RPC surface in S3 and now return `-32601` like any unknown method (no longer a contract violation for these names). |
 | `fs.create`, `fs.mount`, `fs.unmount`, `fs.grow`, `fs.set_quota_mode` | Stub | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'` |
 | `nfs.exports.add`, `nfs.exports.update`, `nfs.exports.remove` | Stub | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'` |
 | `nfs.profile.render`, `nfs.profile.apply`, `nfs.profile.observe` | Stub | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'` |

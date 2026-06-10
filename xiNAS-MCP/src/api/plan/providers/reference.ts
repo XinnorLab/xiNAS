@@ -5,8 +5,8 @@ import type { PlanContext, PlanProvider, PlanResult } from '../engine.js';
  * The built-in, inert reference plan provider (s2-task-envelope-spec §8).
  * It proves the plan/apply engine end-to-end without touching any real
  * OS state: `diff` is the echoed spec, `risk_level` is `non_disruptive`,
- * and it declares a reversible rollback (its executor's rollback is a
- * trivial inverse — T6).
+ * and its rollback class is `non_disruptive` (its executor's rollback is
+ * a trivial inverse — T6).
  *
  * Freshness is REAL: the provider reads the desired + observed
  * projections of its single `Reference/<id>` resource from KV and stamps
@@ -41,7 +41,9 @@ export const referencePlanProvider: PlanProvider = {
       warnings: [],
       diff: spec,
       risk_level: 'non_disruptive',
-      rollback_model: 'reversible',
+      // api-v1.yaml Plan.rollback_model enum value; the earlier 'reversible'
+      // was off-contract (normalized in S3 T0).
+      rollback_model: 'non_disruptive',
       ...(desired ? { state_revision_expected: desired.revision } : {}),
       ...(observed ? { observed_revision_expected: observed.revision } : {}),
       ...(observed ? { observed_at: new Date(observed.modified_at).toISOString() } : {}),

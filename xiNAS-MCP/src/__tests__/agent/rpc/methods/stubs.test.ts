@@ -30,6 +30,17 @@ describe('task.* methods are not enumerated stubs', () => {
   );
 });
 
+// ---- arrays mutation methods are NOT api→agent stubs (superseded, S3) ----
+
+describe('arrays mutation methods are not enumerated stubs (superseded by task envelope, S3)', () => {
+  it.each(['arrays.create', 'arrays.delete', 'arrays.import', 'spare.set'])(
+    '%s is NOT in STUB_METHODS (mutations dispatch via task.begin)',
+    (m) => {
+      expect(STUB_METHODS).not.toHaveProperty(m);
+    },
+  );
+});
+
 // ---- all ADR-0002 enumerated methods are in the stub list ----
 
 const REQUIRED_STUB_METHODS = [
@@ -42,11 +53,9 @@ const REQUIRED_STUB_METHODS = [
   'systemd.units_status',
   'exports.list',
   'nfs.sessions.list',
-  'arrays.create',
-  'arrays.delete',
-  'arrays.import',
+  // arrays.create/delete/import + spare.set: superseded by the task envelope
+  // (S3, ADR-0006) — see the describe block above. Only the read stub remains.
   'arrays.list',
-  'spare.set',
   'fs.create',
   'fs.mount',
   'fs.unmount',
@@ -93,12 +102,12 @@ describe('dispatcher integration with stubs', () => {
   it('stubbed method returns -32000 EXECUTOR_UNSUPPORTED (not -32601)', async () => {
     const response = JSON.parse(
       await dispatch(
-        JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'arrays.create', params: {} }),
+        JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'arrays.list', params: {} }),
       ),
     );
     expect(response.error?.code).toBe(-32000);
     expect(response.error?.data?.code).toBe('EXECUTOR_UNSUPPORTED');
-    expect(response.error?.data?.method).toBe('arrays.create');
+    expect(response.error?.data?.method).toBe('arrays.list');
   });
 
   it('truly unknown method returns -32601 not -32000', async () => {

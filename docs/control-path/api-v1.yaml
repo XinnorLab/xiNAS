@@ -566,6 +566,12 @@ components:
               properties:
                 array_id: { type: string }
                 role: { type: string, enum: [data, parity, spare] }
+            system_disk:
+              type: boolean
+              description: "Any descendant partition mounted at /, /boot, or /boot/efi."
+            mounted:
+              type: boolean
+              description: "Any non-null mountpoint on the disk or a descendant."
             safe_for_use: { type: boolean }
             observed_at:
               type: string
@@ -583,18 +589,54 @@ components:
           type: object
           required: [name, level, member_disk_ids]
           properties:
-            name: { type: string }
+            name: { type: string, pattern: "^[A-Za-z0-9_-]{1,63}$" }
             level:
               type: string
-              enum: [raid0, raid1, raid5, raid6, raid10, raid50, raid60, "n+m"]
-            strip_size_kib: { type: integer }
-            chunk_size_kib: { type: integer }
+              enum: [raid0, raid1, raid5, raid6, raid7, raid10, raid50, raid60, raid70, "n+m"]
+            strip_size_kib: { type: [integer, "null"] }
+            block_size: { type: [integer, "null"], enum: [512, 4096, null] }
+            group_size:
+              type: [integer, "null"]
+              description: "Drives per group. Required for raid50/60/70; 2-32; member count must divide evenly."
+            synd_cnt:
+              type: [integer, "null"]
+              description: "Syndrome count (the m of n+m). Required for level n+m; 4-32."
+            force_metadata:
+              type: boolean
+              default: false
+              description: "Create-only: overwrite stale xiRAID metadata on member disks."
             member_disk_ids:
               type: array
               items: { type: string }
             spare_disk_ids:
               type: array
               items: { type: string }
+              description: "Spare pool members (ADR-0006 pool lifecycle). Non-empty on create is deferred in S3 (blocker spare_pool_deferred)."
+            tuning:
+              type: object
+              description: "ADR-0006 approved Phase-0 create surface. null/absent = use the xiRAID default (omitted from the gRPC call)."
+              properties:
+                init_prio: { type: [integer, "null"] }
+                recon_prio: { type: [integer, "null"] }
+                restripe_prio: { type: [integer, "null"] }
+                resync_enabled: { type: [boolean, "null"] }
+                sched_enabled: { type: [boolean, "null"] }
+                merge_read_enabled: { type: [boolean, "null"] }
+                merge_write_enabled: { type: [boolean, "null"] }
+                merge_read_max: { type: [integer, "null"] }
+                merge_read_wait: { type: [integer, "null"] }
+                merge_write_max: { type: [integer, "null"] }
+                merge_write_wait: { type: [integer, "null"] }
+                memory_limit: { type: [integer, "null"] }
+                request_limit: { type: [integer, "null"] }
+                memory_prealloc: { type: [integer, "null"] }
+                adaptive_merge: { type: [boolean, "null"] }
+                cpu_allowed: { type: [string, "null"] }
+                max_sectors_kb: { type: [integer, "null"] }
+                sdc_prio: { type: [integer, "null"] }
+                single_run: { type: [boolean, "null"] }
+                discard: { type: [boolean, "null"] }
+                drive_trim: { type: [boolean, "null"] }
         status:
           type: object
           required: [state, volume_path, observed_at]
@@ -603,9 +645,16 @@ components:
               type: string
               enum: [optimal, degraded, rebuilding, failed, importing, unknown]
             volume_path: { type: string }
+            chunk_size_kib:
+              type: [integer, "null"]
+              description: "Observe-only/derived (full-stripe width reported by xiRAID)."
             rebuild_progress_pct: { type: [integer, "null"] }
             check_progress_pct: { type: [integer, "null"] }
             usable_capacity_bytes: { type: integer, format: int64 }
+            member_states:
+              type: array
+              items: { type: object, additionalProperties: true }
+              description: "Per-member device state as reported by raid_show."
             observed_at:
               type: string
               format: date-time
@@ -1553,6 +1602,12 @@ paths:
         Two-phase. `mode=plan` returns a `Plan` with `plan_id`, blockers,
         risk classification, and client-impact estimate. `mode=apply`
         requires the `plan_id`, `expected_revision`, and `idempotency_key`.
+
+        Create vs import is discriminated by the spec shape: a create-shaped
+        spec carries `name`/`level`/`member_disk_ids` (S3, ADR-0006); an
+        import-shaped spec carries the foreign array `uuid` (deferred).
+        For create, `expected_revision` MUST be `0` — the array must not
+        exist at apply time (ADR-0006 freshness convention).
       requestBody: { $ref: '#/components/requestBodies/Mutating' }
       responses:
         '200': { $ref: '#/components/responses/PlanReturned' }
