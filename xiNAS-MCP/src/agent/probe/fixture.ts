@@ -84,8 +84,15 @@ interface FixtureNetworkProbe {
   startEventStream(onDelta: (iface: never) => void): MonitorHandle;
 }
 
+/** An entry in <dir>/filesystems.json — the collector's observed shape. */
+export interface FixtureFilesystem {
+  kind: 'Filesystem';
+  id: string;
+  status: Record<string, unknown>;
+}
+
 interface FixtureFilesystemProbe {
-  snapshot(): Promise<never[]>;
+  snapshot(): Promise<FixtureFilesystem[]>;
 }
 
 interface FixtureNfsProbe {
@@ -187,10 +194,19 @@ export function createFixtureNetworkProbe(): FixtureNetworkProbe {
   };
 }
 
-/** Filesystem: empty snapshot. */
-export function createFixtureFilesystemProbe(): FixtureFilesystemProbe {
+/**
+ * Filesystem: reads <dir>/filesystems.json (entries in the collector's
+ * observed shape: { kind:'Filesystem', id, status: { backing_device,
+ * mountpoint, currently_mounted, ... } }), defaulting to empty — S4 T11
+ * so the e2e can seed a dependent filesystem that the collector's
+ * complete-snapshot sweep will NOT wipe.
+ */
+export function createFixtureFilesystemProbe(dir?: string): FixtureFilesystemProbe {
   return {
-    snapshot: () => Promise.resolve([]),
+    snapshot: () =>
+      Promise.resolve(
+        dir !== undefined ? readFixture<FixtureFilesystem[]>(dir, 'filesystems.json', []) : [],
+      ),
   };
 }
 

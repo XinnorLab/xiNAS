@@ -191,7 +191,8 @@ export function buildConvergence(config: AgentConfig): Convergence {
 
   // --- Filesystem: snapshot() only (no observed_at, no watcher). Stamp
   //     observed_at and supply a no-op watch handle. ---
-  const filesystemProbe = fdir !== null ? createFixtureFilesystemProbe() : createFilesystemProbe();
+  const filesystemProbe =
+    fdir !== null ? createFixtureFilesystemProbe(fdir) : createFilesystemProbe();
   registry.register(
     new FilesystemCollector({
       probe: {
