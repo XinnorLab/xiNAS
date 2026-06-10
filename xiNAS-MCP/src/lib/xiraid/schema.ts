@@ -73,12 +73,12 @@ export const LEVEL_CONSTRAINTS: Record<Level, LevelConstraints> = {
   raid1: { minDrives: 2, needsGroupSize: false, needsSyndCnt: false },
   raid5: { minDrives: 3, needsGroupSize: false, needsSyndCnt: false },
   raid6: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
-  raid7: { minDrives: 5, needsGroupSize: false, needsSyndCnt: false },
+  raid7: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
   raid10: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
   raid50: { minDrives: 6, needsGroupSize: true, needsSyndCnt: false },
   raid60: { minDrives: 8, needsGroupSize: true, needsSyndCnt: false },
-  raid70: { minDrives: 10, needsGroupSize: true, needsSyndCnt: false },
-  'n+m': { minDrives: 5, needsGroupSize: false, needsSyndCnt: true },
+  raid70: { minDrives: 8, needsGroupSize: true, needsSyndCnt: false },
+  'n+m': { minDrives: 4, needsGroupSize: false, needsSyndCnt: true },
 };
 
 export const STRIP_SIZES_KIB = [16, 32, 64, 128, 256] as const;
