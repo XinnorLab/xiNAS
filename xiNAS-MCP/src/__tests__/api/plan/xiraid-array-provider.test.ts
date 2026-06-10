@@ -4,6 +4,7 @@ import { ApiException } from '../../../api/errors.js';
 import { PlanEngine } from '../../../api/plan/engine.js';
 import {
   xiraidArrayCreateProvider,
+  xiraidArrayImportProvider,
   xiraidArrayModifyProvider,
 } from '../../../api/plan/providers/xiraid-array.js';
 import { TaskStore } from '../../../api/tasks/store.js';
@@ -23,6 +24,7 @@ function makeHarness() {
   const engine = new PlanEngine({ store, ctx: { kv } });
   engine.register(xiraidArrayCreateProvider);
   engine.register(xiraidArrayModifyProvider);
+  engine.register(xiraidArrayImportProvider);
   return { kv, store, engine };
 }
 
@@ -233,5 +235,49 @@ describe('xiraidArrayModifyProvider', () => {
     const persisted = h.store.get(first.task.task_id)?.spec as Record<string, unknown>;
     const again = await h.engine.plan(modifyArgs(persisted));
     expect(again.planResult.blockers).toEqual([]);
+  });
+});
+
+describe('xiraidArrayImportProvider', () => {
+  let h: ReturnType<typeof makeHarness>;
+  beforeEach(() => {
+    h = makeHarness();
+    seedArray(h.kv, 'taken');
+  });
+
+  function importArgs(spec: Record<string, unknown>) {
+    return { ...planArgs(spec), operation_kind: 'xiraid.array.import' };
+  }
+
+  it('adopt plan: target name = new_name ?? uuid; single array resource; enriched spec', async () => {
+    const { task, planResult } = await h.engine.plan(
+      importArgs({ uuid: 'u-1', new_name: 'adopted' }),
+    );
+    expect(planResult.blockers).toEqual([]);
+    expect(planResult.risk_level).toBe('non_disruptive');
+    expect(task.affected_resources).toEqual([{ kind: 'XiraidArray', id: 'adopted' }]);
+    const persisted = h.store.get(task.task_id)?.spec as Record<string, unknown>;
+    expect(persisted).toEqual({ uuid: 'u-1', new_name: 'adopted' });
+    expect((planResult.diff as Record<string, unknown>).adopt).toEqual({
+      uuid: 'u-1',
+      as: 'adopted',
+    });
+  });
+
+  it('blockers: name_taken; name_invalid when the uuid itself is not a usable name', async () => {
+    const taken = await h.engine.plan(importArgs({ uuid: 'u-2', new_name: 'taken' }));
+    expect(taken.planResult.blockers.map((b) => b.code)).toContain('name_taken');
+    // no new_name → the uuid becomes the target id; uuids with dots fail NAME_RE
+    const bad = await h.engine.plan(importArgs({ uuid: 'uuid.with.dots' }));
+    expect(bad.planResult.blockers.map((b) => b.code)).toContain('name_invalid');
+  });
+
+  it('empty/missing uuid → INVALID_ARGUMENT', async () => {
+    await expect(h.engine.plan(importArgs({ new_name: 'x' }))).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT',
+    });
+    await expect(h.engine.plan(importArgs({ uuid: '' }))).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT',
+    });
   });
 });

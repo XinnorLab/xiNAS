@@ -34,6 +34,7 @@ import {
 import { getOrNull, sendOk } from '../handlers/reads.js';
 import {
   xiraidArrayCreateProvider,
+  xiraidArrayImportProvider,
   xiraidArrayModifyProvider,
 } from '../plan/providers/xiraid-array.js';
 
@@ -92,9 +93,13 @@ export function arraysRouter(ctx: ApiContext): Router {
     const mode = body.mode;
 
     if (mode === 'plan') {
-      rejectImportShaped(body.spec);
+      // Create vs import is discriminated by the spec shape (ADR-0006):
+      // an import-shaped spec carries the foreign array's uuid.
+      const operationKind = isImportShaped(body.spec)
+        ? 'xiraid.array.import'
+        : 'xiraid.array.create';
       const { task, planResult } = await tasks.planEngine.plan({
-        operation_kind: 'xiraid.array.create',
+        operation_kind: operationKind,
         spec: body.spec,
         principal: rc.principal,
         client_type: rc.client_type,
@@ -131,35 +136,40 @@ export function arraysRouter(ctx: ApiContext): Router {
       const expectedRevision = requireInteger(body.expected_revision, 'expected_revision');
 
       const planTask = tasks.store.get(planId);
-      if (!planTask || planTask.state !== 'plan_only' || planTask.kind !== 'xiraid.array.create') {
+      const planKind = planTask?.kind;
+      if (
+        !planTask ||
+        planTask.state !== 'plan_only' ||
+        (planKind !== 'xiraid.array.create' && planKind !== 'xiraid.array.import')
+      ) {
         throw new ApiException(
           'NOT_FOUND',
-          `no xiraid.array.create plan_only task with plan_id ${planId}`,
+          `no xiraid array create/import plan_only task with plan_id ${planId}`,
           undefined,
           'Re-run mode=plan to obtain a fresh plan_id.',
         );
       }
 
-      // ADR-0006 create-freshness convention: the array must not exist, so
-      // the only valid expected_revision is 0.
+      // ADR-0006 freshness convention for create AND import: the target
+      // control-path id must not exist, so the only valid expected_revision
+      // is 0.
       if (expectedRevision !== 0) {
         throw new ApiException(
           'PRECONDITION_FAILED',
-          'create applies against a non-existent array; expected_revision must be 0',
+          'create/import applies against a non-existent array; expected_revision must be 0',
           { reason: 'create_expects_revision_zero', expected_revision: expectedRevision },
-          'Send expected_revision: 0 for array creation.',
+          'Send expected_revision: 0 for array creation/adoption.',
         );
       }
 
-      // Blockers are not persisted on the plan row — re-run preflight against
-      // CURRENT observed state. This both enforces the plan's blockers and
-      // catches drift since plan time (a disk claimed meanwhile, the name
-      // taken, ...). The persisted (enriched) spec is structurally a valid
-      // create spec, so it re-validates as-is.
-      const recheck = await xiraidArrayCreateProvider.preflight(
-        { kv: ctx.state.kv },
-        planTask.spec,
-      );
+      // Blockers are not persisted on the plan row — re-run the MATCHING
+      // provider's preflight against CURRENT observed state. This both
+      // enforces the plan's blockers and catches drift since plan time (a
+      // disk claimed meanwhile, the name taken, ...). The persisted
+      // (enriched) spec re-validates as-is.
+      const provider =
+        planKind === 'xiraid.array.import' ? xiraidArrayImportProvider : xiraidArrayCreateProvider;
+      const recheck = await provider.preflight({ kv: ctx.state.kv }, planTask.spec);
       if (recheck.blockers.length > 0) {
         throw new ApiException(
           'PRECONDITION_FAILED',
@@ -358,14 +368,7 @@ export function arraysRouter(ctx: ApiContext): Router {
   return r;
 }
 
-/** Import-shaped specs (foreign-array uuid) are a follow-on plan (ADR-0006). */
-function rejectImportShaped(spec: unknown): void {
-  if (typeof spec === 'object' && spec !== null && 'uuid' in spec) {
-    throw new ApiException(
-      'UNSUPPORTED',
-      'array import is not built yet (S3 ships create only)',
-      { code: 'EXECUTOR_UNSUPPORTED' },
-      'Import (raid_import_show/apply) lands in a follow-on plan per ADR-0006.',
-    );
-  }
+/** Import-shaped specs carry the foreign array's uuid (ADR-0006). */
+function isImportShaped(spec: unknown): boolean {
+  return typeof spec === 'object' && spec !== null && 'uuid' in spec;
 }

@@ -7,6 +7,7 @@ import { buildNfsPlanProviders } from '../plan/providers/nfs.js';
 import { referencePlanProvider } from '../plan/providers/reference.js';
 import {
   xiraidArrayCreateProvider,
+  xiraidArrayImportProvider,
   xiraidArrayModifyProvider,
 } from '../plan/providers/xiraid-array.js';
 import { TaskEngine } from './engine.js';
@@ -54,6 +55,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   for (const provider of buildNfsPlanProviders()) planEngine.register(provider);
   planEngine.register(xiraidArrayCreateProvider);
   planEngine.register(xiraidArrayModifyProvider);
+  planEngine.register(xiraidArrayImportProvider);
 
   return {
     planEngine,
