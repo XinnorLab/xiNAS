@@ -352,3 +352,251 @@ export function makeFsUnmountExecutor(opts: { host: FsHost }): Executor {
     },
   };
 }
+
+// ---- fs.grow / fs.set_quota_mode / fs.unmanage (S5 T11) ----
+
+/**
+ * fs.grow: preflight (mountpoint live) → grow (xfs_growfs) → verify
+ * (statfs size did not shrink). Nothing is undoable — growfs either
+ * applied (irreversible, rollback_model 'unsupported' at plan time) or
+ * changed nothing; rollback only records that.
+ */
+export function makeFsGrowExecutor(opts: { host: FsHost }): Executor {
+  const host = opts.host;
+  const sizeBefore = new WeakMap<object, number>();
+  return {
+    operation_kind: 'fs.grow',
+    stages: [
+      {
+        name: 'preflight',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { mountpoint } = narrowIdSpec(ctx, 'fs.grow');
+          const mounts = await host.readMounts();
+          if (!mounts.some((m) => m.mountpoint === mountpoint)) {
+            throw new Error(`preflight: ${mountpoint} is not mounted (xfs_growfs needs it live)`);
+          }
+          const before = await host.statfs(mountpoint);
+          sizeBefore.set(ctx.spec as object, before.size_bytes);
+          ctx.emitOutput(`preflight ok: ${mountpoint} mounted, ${before.size_bytes} bytes`);
+        },
+      },
+      {
+        name: 'grow',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { mountpoint } = narrowIdSpec(ctx, 'fs.grow');
+          await host.growfs(mountpoint);
+          ctx.emitOutput(`xfs_growfs ${mountpoint}`);
+        },
+      },
+      {
+        name: 'verify',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { mountpoint } = narrowIdSpec(ctx, 'fs.grow');
+          const after = await host.statfs(mountpoint);
+          const before = sizeBefore.get(ctx.spec as object);
+          if (before !== undefined && after.size_bytes < before) {
+            throw new Error(`verify: size shrank (${before} → ${after.size_bytes})`);
+          }
+          ctx.emitOutput(`verified: ${after.size_bytes} bytes`);
+        },
+      },
+    ],
+    async rollback(ctx: ExecutorContext): Promise<void> {
+      ctx.emitOutput('rollback: xfs_growfs is irreversible — nothing undone');
+    },
+  };
+}
+
+const QUOTA_OPTION_FLAGS = new Set([
+  'uquota',
+  'gquota',
+  'pquota',
+  'usrquota',
+  'grpquota',
+  'prjquota',
+  'noquota',
+]);
+
+/** Rewrite the unit text's Options= quota flag (none removes it). */
+export function rewriteQuotaFlag(text: string, mode: string): string {
+  return text.replace(/^Options=(.*)$/m, (_match, opts: string) => {
+    const kept = opts.split(',').filter((o) => !QUOTA_OPTION_FLAGS.has(o.trim()));
+    if (mode !== 'none') kept.push(mode);
+    return `Options=${kept.join(',')}`;
+  });
+}
+
+interface QuotaSpec extends IdSpec {
+  quota_mode: string;
+}
+
+function narrowQuotaSpec(ctx: ExecutorContext): QuotaSpec {
+  const base = narrowIdSpec(ctx, 'fs.set_quota_mode');
+  const mode = (ctx.spec as Record<string, unknown>).quota_mode;
+  if (typeof mode !== 'string') {
+    throw new Error('fs.set_quota_mode: spec is missing quota_mode');
+  }
+  return { ...base, quota_mode: mode };
+}
+
+/**
+ * fs.set_quota_mode: preflight captures the CURRENT unit text (per-run
+ * WeakMap, the S4 pre-state pattern) → apply rewrites the Options=
+ * quota flag + daemon-reload, remounting (stop + enable --now) when the
+ * filesystem is live so the flag takes effect → verify re-reads the
+ * unit. Rollback restores the captured text + daemon-reload and
+ * remounts if the filesystem was mounted pre-task.
+ */
+export function makeFsSetQuotaModeExecutor(opts: { host: FsHost }): Executor {
+  const host = opts.host;
+  const preState = new WeakMap<object, { text: string; wasMounted: boolean }>();
+  return {
+    operation_kind: 'fs.set_quota_mode',
+    stages: [
+      {
+        name: 'preflight',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { id, mountpoint } = narrowQuotaSpec(ctx);
+          const text = await host.readUnit(id);
+          if (text === null) {
+            throw new Error(`preflight: unit ${id} does not exist on disk`);
+          }
+          const mounts = await host.readMounts();
+          preState.set(ctx.spec as object, {
+            text,
+            wasMounted: mounts.some((m) => m.mountpoint === mountpoint),
+          });
+          ctx.emitOutput(`preflight ok: captured ${id}`);
+        },
+      },
+      {
+        name: 'apply',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { id, quota_mode } = narrowQuotaSpec(ctx);
+          const pre = preState.get(ctx.spec as object);
+          if (!pre) throw new Error('fs.set_quota_mode: preflight pre-state missing');
+          await host.writeUnit(id, rewriteQuotaFlag(pre.text, quota_mode));
+          await host.daemonReload();
+          if (pre.wasMounted) {
+            await host.stop(id);
+            await host.enableNow(id);
+            ctx.emitOutput(`remounted ${id} with ${quota_mode}`);
+          } else {
+            ctx.emitOutput(`rewrote ${id} Options= (${quota_mode}); not mounted — no remount`);
+          }
+        },
+      },
+      {
+        name: 'verify',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { id, mountpoint, quota_mode } = narrowQuotaSpec(ctx);
+          const text = await host.readUnit(id);
+          const optionsLine = /^Options=(.*)$/m.exec(text ?? '')?.[1] ?? '';
+          const options = optionsLine.split(',');
+          if (quota_mode !== 'none' && !options.includes(quota_mode)) {
+            throw new Error(`verify: ${id} Options= does not carry ${quota_mode}`);
+          }
+          if (quota_mode === 'none' && options.some((o) => QUOTA_OPTION_FLAGS.has(o.trim()))) {
+            throw new Error(`verify: ${id} Options= still carries a quota flag`);
+          }
+          const pre = preState.get(ctx.spec as object);
+          if (pre?.wasMounted === true) {
+            const mounts = await host.readMounts();
+            if (!mounts.some((m) => m.mountpoint === mountpoint)) {
+              throw new Error(`verify: ${mountpoint} did not come back after the remount`);
+            }
+          }
+          ctx.emitOutput(`verified: ${id} quota flag → ${quota_mode}`);
+        },
+      },
+    ],
+    async rollback(ctx: ExecutorContext): Promise<void> {
+      const { id, mountpoint } = narrowQuotaSpec(ctx);
+      const pre = preState.get(ctx.spec as object);
+      if (!pre) {
+        ctx.emitOutput('rollback: no pre-state captured (preflight failed) — nothing changed');
+        return;
+      }
+      await host.writeUnit(id, pre.text);
+      await host.daemonReload();
+      if (pre.wasMounted) {
+        const mounts = await host.readMounts();
+        if (!mounts.some((m) => m.mountpoint === mountpoint)) {
+          await host.enableNow(id);
+        }
+      }
+      ctx.emitOutput(`rollback: restored ${id} unit text${pre.wasMounted ? ' + remounted' : ''}`);
+    },
+  };
+}
+
+/**
+ * fs.unmanage (DELETE): remove the .mount unit WITHOUT touching data.
+ * Preflight refuses if the mountpoint is live (the provider's fs_mounted
+ * blocker re-checked at the privilege boundary — unmount first) and
+ * captures the unit text. Rollback re-installs the captured unit file
+ * (enablement is NOT restored — restoring it would mount; the unit
+ * returns disabled, noted in the output).
+ */
+export function makeFsUnmanageExecutor(opts: { host: FsHost }): Executor {
+  const host = opts.host;
+  const preText = new WeakMap<object, string>();
+  return {
+    operation_kind: 'fs.unmanage',
+    stages: [
+      {
+        name: 'preflight',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { id, mountpoint } = narrowIdSpec(ctx, 'fs.unmanage');
+          const text = await host.readUnit(id);
+          if (text === null) {
+            throw new Error(`preflight: unit ${id} does not exist on disk`);
+          }
+          const mounts = await host.readMounts();
+          if (mounts.some((m) => m.mountpoint === mountpoint)) {
+            throw new Error(`preflight: ${mountpoint} is still mounted — unmount first`);
+          }
+          preText.set(ctx.spec as object, text);
+          ctx.emitOutput(`preflight ok: ${id} present, ${mountpoint} not mounted`);
+        },
+      },
+      {
+        name: 'remove',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { id } = narrowIdSpec(ctx, 'fs.unmanage');
+          try {
+            await host.disable(id);
+          } catch {
+            /* already disabled — fine */
+          }
+          await host.removeUnit(id);
+          await host.daemonReload();
+          ctx.emitOutput(`removed ${id} (data untouched)`);
+        },
+      },
+      {
+        name: 'verify',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { id } = narrowIdSpec(ctx, 'fs.unmanage');
+          if ((await host.readUnit(id)) !== null) {
+            throw new Error(`verify: ${id} still present after removal`);
+          }
+          ctx.emitOutput(`verified: ${id} gone`);
+        },
+      },
+    ],
+    async rollback(ctx: ExecutorContext): Promise<void> {
+      const { id } = narrowIdSpec(ctx, 'fs.unmanage');
+      const text = preText.get(ctx.spec as object);
+      if (text === undefined) {
+        ctx.emitOutput('rollback: no pre-state captured (preflight failed) — nothing changed');
+        return;
+      }
+      if ((await host.readUnit(id)) === null) {
+        await host.writeUnit(id, text);
+        await host.daemonReload();
+      }
+      ctx.emitOutput(`rollback: re-installed ${id} (left disabled — re-enable to remount)`);
+    },
+  };
+}

@@ -22,7 +22,10 @@ import { fixtureDir } from '../probe/fixture.js';
 import type { XiraidClient } from '../xiraid/client.js';
 import {
   makeFsCreateExecutor,
+  makeFsGrowExecutor,
   makeFsMountExecutor,
+  makeFsSetQuotaModeExecutor,
+  makeFsUnmanageExecutor,
   makeFsUnmountExecutor,
 } from './fs-executor.js';
 import { buildNfsExecutors, type NfsExecutorDeps } from './nfs-executor.js';
@@ -203,6 +206,9 @@ export function buildTaskSubsystem(
   registry.register(makeFsCreateExecutor({ host: fsHost }));
   registry.register(makeFsMountExecutor({ host: fsHost }));
   registry.register(makeFsUnmountExecutor({ host: fsHost }));
+  registry.register(makeFsGrowExecutor({ host: fsHost }));
+  registry.register(makeFsSetQuotaModeExecutor({ host: fsHost }));
+  registry.register(makeFsUnmanageExecutor({ host: fsHost }));
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
   });

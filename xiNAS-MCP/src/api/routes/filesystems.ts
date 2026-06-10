@@ -27,6 +27,7 @@ import {
   fsGrowProvider,
   fsMountProvider,
   fsSetQuotaModeProvider,
+  fsUnmanageProvider,
   fsUnmountProvider,
 } from '../plan/providers/filesystem.js';
 
@@ -351,6 +352,141 @@ export function filesystemsRouter(ctx: ApiContext): Router {
       `unknown mode '${String(mode)}'; expected 'plan' or 'apply'`,
       undefined,
       "Send { mode: 'plan', spec } or { mode: 'apply', plan_id, expected_revision, idempotency_key }.",
+    );
+  });
+
+  // DELETE = fs.unmanage (ADR-0007): config-only removal, data untouched,
+  // so NO dangerous flag — the only destruction path is create force:true.
+  r.delete('/filesystems/:id', async (req, res) => {
+    const tasks = ctx.tasks;
+    if (!tasks) {
+      throw new ApiException(
+        'INTERNAL',
+        'task engine is not available in this build',
+        { code: 'EXECUTOR_UNAVAILABLE' },
+        'the api was started without a task engine',
+      );
+    }
+
+    const rc = req.context!;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const mode = body.mode;
+    const id = req.params.id as string;
+
+    if (mode === 'plan') {
+      const { task, planResult } = await tasks.planEngine.plan({
+        operation_kind: 'fs.unmanage',
+        spec: { id },
+        principal: rc.principal,
+        client_type: rc.client_type,
+        request_id: rc.request_id,
+        correlation_id: rc.correlation_id,
+      });
+      rc.operation_id = task.task_id;
+      const revision = observedFsRevision(ctx, id) ?? 0;
+      sendOk(
+        req,
+        res,
+        {
+          plan_id: task.task_id,
+          plan_hash: task.plan_hash,
+          state_revision_expected: revision,
+          observed_revision_expected: revision,
+          observed_at: null,
+          affected_resources: task.affected_resources,
+          risk_level: planResult.risk_level,
+          client_impact: clientImpact(planResult.risk_level),
+          blockers: planResult.blockers,
+          warnings: planResult.warnings,
+          diff: planResult.diff,
+          rollback_model: planResult.rollback_model,
+        },
+        [revision],
+      );
+      return;
+    }
+
+    if (mode === 'apply') {
+      const planId = requireString(body.plan_id, 'plan_id');
+      const idempotencyKey = requireString(body.idempotency_key, 'idempotency_key');
+      const expectedRevision = requireInteger(body.expected_revision, 'expected_revision');
+
+      const planTask = tasks.store.get(planId);
+      if (
+        !planTask ||
+        planTask.state !== 'plan_only' ||
+        planTask.kind !== 'fs.unmanage' ||
+        (planTask.spec as { id?: string } | undefined)?.id !== id
+      ) {
+        throw new ApiException(
+          'NOT_FOUND',
+          `no fs.unmanage plan_only task with plan_id ${planId} for ${id}`,
+          undefined,
+          'Re-run mode=plan to obtain a fresh plan_id.',
+        );
+      }
+
+      const current = observedFsRevision(ctx, id);
+      if (current === undefined) {
+        throw new ApiException('NOT_FOUND', `filesystem ${id} not found in observed state`);
+      }
+      if (expectedRevision !== current) {
+        throw new ApiException(
+          'PRECONDITION_FAILED',
+          'observed revision changed since plan',
+          { reason: 'observed_revision_stale', expected: expectedRevision, current },
+          'Re-run plan against the current state, then apply the fresh plan.',
+        );
+      }
+
+      const recheck = await fsUnmanageProvider.preflight({ kv: ctx.state.kv }, planTask.spec);
+      const blocking = recheck.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+      if (blocking.length > 0) {
+        throw new ApiException(
+          'PRECONDITION_FAILED',
+          'the plan has unresolved blockers',
+          { blockers: blocking },
+          'Resolve every blocker, re-plan, then apply the fresh plan.',
+        );
+      }
+
+      const applyPlan = toApplyPlan(planTask);
+      const task = tasks.taskEngine.apply({
+        plan: applyPlan,
+        applyReq: {
+          input_hash: planTask.input_hash,
+          idempotency_key: idempotencyKey,
+          principal: rc.principal,
+          client_type: rc.client_type,
+          request_id: rc.request_id,
+          correlation_id: rc.correlation_id,
+        },
+      });
+      rc.operation_id = task.task_id;
+
+      if (task.state !== 'queued') {
+        res.status(202);
+        sendOk(req, res, taskEnvelope(task), [task.state_revision_at_apply ?? 0]);
+        return;
+      }
+
+      const dispatched = await tasks.taskEngine.dispatch({
+        task,
+        agentClient: tasks.agentClient,
+        spec: planTask.spec,
+        plan: applyPlan,
+      });
+
+      res.status(202);
+      sendOk(req, res, taskEnvelope(dispatched), [dispatched.state_revision_at_apply ?? 0]);
+      return;
+    }
+
+    throw new ApiException(
+      'INVALID_ARGUMENT',
+      `unknown mode '${String(mode)}'; expected 'plan' or 'apply'`,
+      undefined,
+      "Send { mode: 'plan' } or { mode: 'apply', plan_id, expected_revision, idempotency_key }.",
     );
   });
 

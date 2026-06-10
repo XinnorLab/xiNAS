@@ -103,9 +103,9 @@ describe('POST /api/v1/filesystems', () => {
     expect((res.body.errors[0].details?.blockers as Array<{ code: string }>).length).toBeGreaterThan(0);
   });
 
-  it('DELETE /filesystems/:id keeps the unsupported-stub envelope (until T11)', async () => {
+  it('PUT /filesystems/:id keeps the unsupported-stub envelope (no PUT op)', async () => {
     const res = await request(setup.app)
-      .delete('/api/v1/filesystems/mnt-data.mount')
+      .put('/api/v1/filesystems/mnt-data.mount')
       .set('Authorization', ADMIN_TOKEN)
       .send({ mode: 'plan' });
     expect(res.status).toBeGreaterThanOrEqual(422);
@@ -230,5 +230,94 @@ describe('PATCH /api/v1/filesystems/:id', () => {
       .set('Authorization', ADMIN_TOKEN)
       .send({ mode: 'plan', spec: { mounted: true } });
     expect(res.status).toBe(404);
+  });
+});
+
+// ---- T11: DELETE /filesystems/:id (fs.unmanage) ----
+
+describe('DELETE /api/v1/filesystems/:id', () => {
+  let setup: MockAgentSetup;
+
+  beforeEach(async () => {
+    setup = await buildTestAppWithMockAgent();
+    setup.state.kv.put('/xinas/v1/observed/Filesystem/mnt-data.mount', {
+      kind: 'Filesystem',
+      id: 'mnt-data.mount',
+      status: {
+        mountpoint: '/mnt/data',
+        backing_device: '/dev/xi_data',
+        mounted: false,
+        observed_at: 'x',
+      },
+    });
+  });
+  afterEach(async () => {
+    await setup.teardown();
+  });
+
+  function fsRevision(): number {
+    return setup.state.kv.get('/xinas/v1/observed/Filesystem/mnt-data.mount')?.revision ?? 0;
+  }
+
+  it('plan (non-destructive, data warning) → apply 202 WITHOUT dangerous', async () => {
+    setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-un' });
+    const planned = await request(setup.app)
+      .delete('/api/v1/filesystems/mnt-data.mount')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({ mode: 'plan' });
+    expect(planned.status).toBe(200);
+    expect(planned.body.result.risk_level).toBe('non_disruptive');
+    expect(planned.body.result.blockers).toEqual([]);
+    expect(
+      planned.body.result.warnings.map((w: { code: string }) => w.code),
+    ).toContain('data_left_in_place');
+
+    const res = await request(setup.app)
+      .delete('/api/v1/filesystems/mnt-data.mount')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({
+        mode: 'apply',
+        plan_id: planned.body.result.plan_id,
+        expected_revision: fsRevision(),
+        idempotency_key: 'idem-unmanage',
+      });
+    expect(res.status).toBe(202);
+    expect(res.body.result.kind).toBe('fs.unmanage');
+    expect(res.body.result.state).toBe('running');
+  });
+
+  it('mounted fs: plan lists fs_mounted; apply re-check 412s after remount', async () => {
+    const planned = await request(setup.app)
+      .delete('/api/v1/filesystems/mnt-data.mount')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({ mode: 'plan' });
+    expect(planned.body.result.blockers).toEqual([]);
+
+    // fs becomes mounted between plan and apply → the re-check blocks,
+    // and the revision bump alone would 412 too; send the fresh revision
+    // to prove the BLOCKER path (not the stale-revision path) fires.
+    setup.state.kv.put('/xinas/v1/observed/Filesystem/mnt-data.mount', {
+      kind: 'Filesystem',
+      id: 'mnt-data.mount',
+      status: {
+        mountpoint: '/mnt/data',
+        backing_device: '/dev/xi_data',
+        mounted: true,
+        observed_at: 'x',
+      },
+    });
+    const res = await request(setup.app)
+      .delete('/api/v1/filesystems/mnt-data.mount')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({
+        mode: 'apply',
+        plan_id: planned.body.result.plan_id,
+        expected_revision: fsRevision(),
+        idempotency_key: 'idem-unmanage-blocked',
+      });
+    expect(res.status).toBe(412);
+    expect(
+      (res.body.errors[0].details?.blockers as Array<{ code: string }>).map((b) => b.code),
+    ).toContain('fs_mounted');
   });
 });

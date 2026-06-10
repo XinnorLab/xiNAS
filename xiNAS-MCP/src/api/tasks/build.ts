@@ -8,6 +8,7 @@ import {
   fsGrowProvider,
   fsMountProvider,
   fsSetQuotaModeProvider,
+  fsUnmanageProvider,
   fsUnmountProvider,
 } from '../plan/providers/filesystem.js';
 import { buildNfsPlanProviders } from '../plan/providers/nfs.js';
@@ -70,6 +71,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   planEngine.register(fsUnmountProvider);
   planEngine.register(fsGrowProvider);
   planEngine.register(fsSetQuotaModeProvider);
+  planEngine.register(fsUnmanageProvider);
 
   return {
     planEngine,

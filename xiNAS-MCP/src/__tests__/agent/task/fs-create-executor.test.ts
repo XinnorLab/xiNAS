@@ -5,8 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFakeFsHost } from '../../../agent/fs/fake-host.js';
 import {
   makeFsCreateExecutor,
+  makeFsGrowExecutor,
   makeFsMountExecutor,
+  makeFsSetQuotaModeExecutor,
+  makeFsUnmanageExecutor,
   makeFsUnmountExecutor,
+  rewriteQuotaFlag,
 } from '../../../agent/task/fs-executor.js';
 import type { ExecutorContext } from '../../../agent/task/types.js';
 
@@ -234,5 +238,96 @@ describe('fs.mount / fs.unmount executors', () => {
     const ctx = makeCtx({ id: 'mnt-data.mount', mounted: false, mountpoint: '/mnt/data' });
     await executor.rollback(ctx);
     expect(await host.readMounts()).toEqual([{ source: '/dev/xi_data', mountpoint: '/mnt/data' }]);
+  });
+});
+
+// ---- T11: grow / quota / unmanage executors ----
+
+describe('fs.grow / fs.set_quota_mode / fs.unmanage executors', () => {
+  let dir: string;
+  let host: ReturnType<typeof createFakeFsHost>;
+  const UNIT_TEXT =
+    '[Mount]\nWhat=/dev/xi_data\nWhere=/mnt/data\nOptions=defaults,noatime,uquota\nType=xfs\n';
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'xinas-fs-gqu-'));
+    host = createFakeFsHost(dir);
+    await host.writeUnit('mnt-data.mount', UNIT_TEXT);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('grow: statfs grows; preflight refuses unmounted', async () => {
+    const executor = makeFsGrowExecutor({ host });
+    const spec = { id: 'mnt-data.mount', grow: true, mountpoint: '/mnt/data' };
+    await expect(executor.stages[0]?.run(makeCtx(spec))).rejects.toThrow(/not mounted/);
+
+    await host.enableNow('mnt-data.mount');
+    const before = (await host.statfs('/mnt/data')).size_bytes;
+    const ctx = makeCtx(spec);
+    for (const stage of executor.stages) await stage.run(ctx);
+    expect((await host.statfs('/mnt/data')).size_bytes).toBeGreaterThan(before);
+    expect(host.ops()).toContain('xfs_growfs /mnt/data');
+  });
+
+  it('quota: rewrites the Options flag, remounts when live, rollback restores text', async () => {
+    await host.enableNow('mnt-data.mount');
+    const executor = makeFsSetQuotaModeExecutor({ host });
+    const spec = { id: 'mnt-data.mount', quota_mode: 'pquota', mountpoint: '/mnt/data' };
+    const ctx = makeCtx(spec);
+    for (const stage of executor.stages) await stage.run(ctx);
+
+    const text = await host.readUnit('mnt-data.mount');
+    expect(text).toContain('Options=defaults,noatime,pquota');
+    expect(text).not.toContain('uquota');
+    expect(host.ops()).toContain('stop:mnt-data.mount'); // the remount
+    expect(await host.readMounts()).toContainEqual({
+      source: '/dev/xi_data',
+      mountpoint: '/mnt/data',
+    });
+
+    await executor.rollback(ctx);
+    expect(await host.readUnit('mnt-data.mount')).toBe(UNIT_TEXT);
+    expect(await host.readMounts()).toContainEqual({
+      source: '/dev/xi_data',
+      mountpoint: '/mnt/data',
+    });
+  });
+
+  it('quota none strips the flag; unmounted fs skips the remount', async () => {
+    const executor = makeFsSetQuotaModeExecutor({ host });
+    const spec = { id: 'mnt-data.mount', quota_mode: 'none', mountpoint: '/mnt/data' };
+    const ctx = makeCtx(spec);
+    for (const stage of executor.stages) await stage.run(ctx);
+    expect(await host.readUnit('mnt-data.mount')).toContain('Options=defaults,noatime\n');
+    expect(host.ops().filter((o) => o.startsWith('stop:'))).toEqual([]);
+    expect(ctx.lines.some((l) => l.includes('no remount'))).toBe(true);
+  });
+
+  it('unmanage: removes the unit; mounted preflight refuses; rollback re-installs', async () => {
+    const executor = makeFsUnmanageExecutor({ host });
+    const spec = { id: 'mnt-data.mount', mountpoint: '/mnt/data' };
+
+    await host.enableNow('mnt-data.mount');
+    await expect(executor.stages[0]?.run(makeCtx(spec))).rejects.toThrow(/still mounted/);
+    await host.stop('mnt-data.mount');
+
+    const ctx = makeCtx(spec);
+    for (const stage of executor.stages) await stage.run(ctx);
+    expect(await host.readUnit('mnt-data.mount')).toBeNull();
+    expect(host.ops()).toContain('removeUnit:mnt-data.mount');
+
+    await executor.rollback(ctx);
+    expect(await host.readUnit('mnt-data.mount')).toBe(UNIT_TEXT);
+    expect(ctx.lines.some((l) => l.includes('left disabled'))).toBe(true);
+  });
+
+  it('rewriteQuotaFlag goldens', async () => {
+    expect(rewriteQuotaFlag('Options=defaults,uquota\n', 'pquota')).toBe(
+      'Options=defaults,pquota\n',
+    );
+    expect(rewriteQuotaFlag('Options=defaults\n', 'gquota')).toBe('Options=defaults,gquota\n');
+    expect(rewriteQuotaFlag('Options=defaults,prjquota\n', 'none')).toBe('Options=defaults\n');
   });
 });

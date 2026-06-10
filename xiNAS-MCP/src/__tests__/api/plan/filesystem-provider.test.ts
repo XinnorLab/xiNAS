@@ -6,6 +6,7 @@ import {
   fsGrowProvider,
   fsMountProvider,
   fsSetQuotaModeProvider,
+  fsUnmanageProvider,
   fsUnmountProvider,
 } from '../../../api/plan/providers/filesystem.js';
 import { TaskStore } from '../../../api/tasks/store.js';
@@ -28,6 +29,7 @@ function makeHarness() {
   engine.register(fsUnmountProvider);
   engine.register(fsGrowProvider);
   engine.register(fsSetQuotaModeProvider);
+  engine.register(fsUnmanageProvider);
   return { kv, store, engine };
 }
 
@@ -299,5 +301,43 @@ describe('fsGrowProvider / fsSetQuotaModeProvider', () => {
     await expect(
       h.engine.plan(args('fs.set_quota_mode', { id: 'mnt-data.mount', quota_mode: 'bogus' })),
     ).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+  });
+});
+
+// ---- T11: unmanage provider ----
+
+describe('fsUnmanageProvider', () => {
+  let h: ReturnType<typeof makeHarness>;
+  beforeEach(() => {
+    h = makeHarness();
+    seedArray(h.kv, 'data');
+  });
+
+  it('mounted → fs_mounted blocker; unmounted → non-destructive plan with the data warning', async () => {
+    seedFs(h.kv, 'mnt-data.mount', {
+      mountpoint: '/mnt/data',
+      backing_device: '/dev/xi_data',
+      mounted: true,
+      observed_at: 'x',
+    });
+    const planArgsFor = (spec: Record<string, unknown>) => ({
+      ...planArgs(spec),
+      operation_kind: 'fs.unmanage',
+    });
+    const mounted = await h.engine.plan(planArgsFor({ id: 'mnt-data.mount' }));
+    expect(mounted.planResult.blockers.map((b) => b.code)).toEqual(['fs_mounted']);
+
+    seedFs(h.kv, 'mnt-data.mount', {
+      mountpoint: '/mnt/data',
+      backing_device: '/dev/xi_data',
+      mounted: false,
+      observed_at: 'x',
+    });
+    const { task, planResult } = await h.engine.plan(planArgsFor({ id: 'mnt-data.mount' }));
+    expect(planResult.blockers).toEqual([]);
+    expect(planResult.risk_level).toBe('non_disruptive');
+    expect(planResult.warnings.map((w) => w.code)).toContain('data_left_in_place');
+    const persisted = h.store.get(task.task_id)?.spec as Record<string, unknown>;
+    expect(persisted).toEqual({ id: 'mnt-data.mount', mountpoint: '/mnt/data' });
   });
 });

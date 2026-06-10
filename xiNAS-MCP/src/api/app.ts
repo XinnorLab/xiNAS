@@ -128,7 +128,10 @@ export function createApp(ctx: ApiContext): Express {
       v1.patch(route, executorUnavailable(ctx));
     }
     v1.put(route, executorUnavailable(ctx));
-    if (route !== '/arrays/:id') v1.delete(route, executorUnavailable(ctx));
+    // DELETE /arrays/:id (S4) and /filesystems/:id (S5 unmanage) are real.
+    if (route !== '/arrays/:id' && route !== '/filesystems/:id') {
+      v1.delete(route, executorUnavailable(ctx));
+    }
   }
 
   // Catch-all for /api/v1/* paths that didn't match any router. Without

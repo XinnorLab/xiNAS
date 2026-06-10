@@ -18,6 +18,7 @@ import {
   validateFsCreate,
   validateFsGrow,
   validateFsMount,
+  validateFsUnmanage,
   validateFsUnmount,
 } from '../../../lib/fs/validate.js';
 import { ApiException } from '../../errors.js';
@@ -401,6 +402,35 @@ export const fsSetQuotaModeProvider: PlanProvider = {
       risk_level: 'disruptive',
       rollback_model: 'non_disruptive',
       enriched_spec: { id: r.row.id, quota_mode: mode, mountpoint: r.mountpoint },
+    };
+  },
+};
+
+/**
+ * fs.unmanage (DELETE /filesystems/{id}) — remove the .mount unit, data
+ * untouched (ADR-0007: DELETE never destroys; the only destruction path
+ * is create force:true). Blocked while mounted; non-destructive, so the
+ * dangerous flag is NOT required.
+ */
+export const fsUnmanageProvider: PlanProvider = {
+  operation_kind: 'fs.unmanage',
+
+  async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
+    const r = requireFsRow(ctx, rawSpec, 'fs.unmanage');
+    const blockers = validateFsUnmanage({ mounted: r.row.mounted === true });
+    return {
+      affected_resources: fsAffected(r),
+      blockers,
+      warnings: [
+        {
+          code: 'data_left_in_place',
+          message: `${r.row.id} is removed from management only — the filesystem on ${r.row.backing_device ?? 'the device'} is untouched and re-adoptable via observe`,
+        },
+      ],
+      diff: { summary: `remove ${r.row.id} (disable + rm + daemon-reload); data untouched` },
+      risk_level: 'non_disruptive',
+      rollback_model: 'non_disruptive',
+      enriched_spec: { id: r.row.id, mountpoint: r.mountpoint },
     };
   },
 };
