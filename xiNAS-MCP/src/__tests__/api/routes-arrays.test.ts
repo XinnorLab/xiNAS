@@ -154,15 +154,124 @@ describe('POST /api/v1/arrays', () => {
     expect(res.body.errors[0].details?.code).toBe('EXECUTOR_UNSUPPORTED');
   });
 
-  it('PATCH /arrays/:id keeps the unsupported-stub envelope', async () => {
+  it('DELETE /arrays/:id keeps the unsupported-stub envelope (until S4 T9)', async () => {
     const res = await request(setup.app)
-      .patch('/api/v1/arrays/data')
+      .delete('/api/v1/arrays/data')
       .set('Authorization', ADMIN_TOKEN)
-      .send({ mode: 'plan', spec: {} });
+      .send({ mode: 'plan' });
     // handlers/unsupported.ts semantics (422 online / 503 offline / 500 while
     // the tracker is still 'unknown' in this harness) — the point is that the
     // deferred verb did NOT fall through to the real arrays route.
     expect(res.status).toBeGreaterThanOrEqual(422);
     expect(String(res.body.errors[0].details?.code)).toMatch(/^EXECUTOR_/);
+  });
+
+  // ---- S4 T5: PATCH /arrays/:id (xiraid.array.modify) ----
+
+  describe('PATCH /arrays/:id', () => {
+    function seedObservedArray(spares: string[] = []): void {
+      setup.state.kv.put('/xinas/v1/observed/XiraidArray/data', {
+        kind: 'XiraidArray',
+        id: 'data',
+        spec: {
+          name: 'data',
+          level: 'raid6',
+          member_disk_ids: ['nvme1n1', 'nvme2n1', 'nvme3n1', 'nvme4n1'],
+          spare_disk_ids: spares,
+        },
+        status: {
+          state: 'optimal',
+          volume_path: '/dev/xi_data',
+          observed_at: '2026-06-10T12:00:00Z',
+        },
+      });
+    }
+
+    function currentRevision(): number {
+      const row = setup.state.kv.get('/xinas/v1/observed/XiraidArray/data');
+      return (row as { revision: number }).revision;
+    }
+
+    async function patchPlan(spec: Record<string, unknown>) {
+      return request(setup.app)
+        .patch('/api/v1/arrays/data')
+        .set('Authorization', ADMIN_TOKEN)
+        .send({ mode: 'plan', spec });
+    }
+
+    it('topology key in the raw body → 422 per-field UNSUPPORTED, no plan row', async () => {
+      seedObservedArray();
+      const res = await patchPlan({ level: 'raid5' });
+      expect(res.status).toBe(422);
+      expect(res.body.errors[0].details?.field).toBe('spec.level');
+      expect(res.body.errors[0].details?.reason).toBe('topology_immutable');
+      expect(count('SELECT COUNT(*) AS n FROM tasks')).toBe(0);
+    });
+
+    it('plan + apply happy path: 202 running, array + spare leased', async () => {
+      seedObservedArray();
+      setup.state.kv.put('/xinas/v1/observed/Disk/nvme5n1', {
+        kind: 'Disk',
+        id: 'nvme5n1',
+        status: {
+          name: 'nvme5n1',
+          device_path: '/dev/nvme5n1',
+          safe_for_use: true,
+          system_disk: false,
+          mounted: false,
+          observed_at: '2026-06-10T12:00:00Z',
+        },
+      });
+      setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-mod' });
+
+      const planned = await patchPlan({ spare_disk_ids: ['nvme5n1'], tuning: { init_prio: 20 } });
+      expect(planned.status).toBe(200);
+      expect(planned.body.result.blockers).toEqual([]);
+
+      // seed the spare disk the plan referenced
+      const res = await request(setup.app)
+        .patch('/api/v1/arrays/data')
+        .set('Authorization', ADMIN_TOKEN)
+        .send({
+          mode: 'apply',
+          plan_id: planned.body.result.plan_id,
+          expected_revision: currentRevision(),
+          idempotency_key: 'idem-mod-1',
+        });
+      expect(res.status).toBe(202);
+      expect(res.body.result.state).toBe('running');
+      expect(res.body.result.kind).toBe('xiraid.array.modify');
+      // leases: the array + the touched spare disk
+      expect(
+        count('SELECT COUNT(*) AS n FROM leases WHERE task_id = ?', res.body.result.task_id),
+      ).toBe(2);
+      // the forwarded spec carries id + device_by_id
+      const begin = setup.mockAgent.lastTaskBeginParams();
+      expect((begin?.spec as Record<string, unknown>)?.id).toBe('data');
+    });
+
+    it('stale expected_revision → 412 observed_revision_stale', async () => {
+      seedObservedArray();
+      const planned = await patchPlan({ tuning: { init_prio: 5 } });
+      const res = await request(setup.app)
+        .patch('/api/v1/arrays/data')
+        .set('Authorization', ADMIN_TOKEN)
+        .send({
+          mode: 'apply',
+          plan_id: planned.body.result.plan_id,
+          expected_revision: currentRevision() + 7,
+          idempotency_key: 'idem-mod-2',
+        });
+      expect(res.status).toBe(412);
+      expect(res.body.errors[0].details?.reason).toBe('observed_revision_stale');
+    });
+
+    it('unknown array → 404 on plan', async () => {
+      const res = await request(setup.app)
+        .patch('/api/v1/arrays/ghost')
+        .set('Authorization', ADMIN_TOKEN)
+        .send({ mode: 'plan', spec: { tuning: { init_prio: 5 } } });
+      expect(res.status).toBe(404);
+    });
   });
 });

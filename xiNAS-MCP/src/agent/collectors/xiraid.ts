@@ -51,13 +51,19 @@ export class XiraidArrayCollector implements Collector<'XiraidArray'> {
 
   async initialSweep(): Promise<ObservationDelta[]> {
     try {
-      const [payload, disks] = await Promise.all([this.#client.raidShow(), this.#diskSnapshot()]);
+      const [payload, pools, disks] = await Promise.all([
+        this.#client.raidShow(),
+        // S4 T5: pool membership joins the array's sparepool name to its
+        // member drives so spec.spare_disk_ids is real in observed state.
+        this.#client.poolShow(),
+        this.#diskSnapshot(),
+      ]);
       const diskIdByPath = new Map<string, string>();
       for (const d of disks) {
         if (d.status.device_path !== undefined) diskIdByPath.set(d.status.device_path, d.id);
       }
       const observedAt = this.#now();
-      const deltas = parseRaidShow(payload, diskIdByPath).map<ObservationDelta>((a) => ({
+      const deltas = parseRaidShow(payload, diskIdByPath, pools).map<ObservationDelta>((a) => ({
         kind: 'XiraidArray',
         id: a.id,
         op: 'upsert',

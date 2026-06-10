@@ -10,10 +10,11 @@ const DISKS = [
   { id: 'disk-2', status: { device_path: '/dev/nvme2n1' } },
 ];
 
-function transportShowing(arrays: unknown): XiraidTransport {
+function transportShowing(arrays: unknown, pools: unknown = []): XiraidTransport {
   return {
     ...makeUnimplementedTransport(),
     raidShow: async () => arrays,
+    poolShow: async () => pools,
     raidCreate: async () => {},
     raidDestroy: async () => {},
   };
@@ -71,6 +72,7 @@ describe('XiraidArrayCollector', () => {
         if (fail) throw new Error('down');
         return [];
       },
+      poolShow: async () => [],
       raidCreate: async () => {},
       raidDestroy: async () => {},
     };

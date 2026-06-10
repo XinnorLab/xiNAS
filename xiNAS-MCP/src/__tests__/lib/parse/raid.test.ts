@@ -97,4 +97,43 @@ describe('parseRaidShow', () => {
     expect(parseRaidShow(null, DISK_IDS)).toEqual([]);
     expect(parseRaidShow({ message: 'no raids' }, DISK_IDS)).toEqual([]);
   });
+
+  // ---- S4 T5: sparepool membership observed via pool_show ----
+
+  it('maps the array sparepool through the pools payload to spare disk ids', () => {
+    const [a] = parseRaidShow(
+      [
+        {
+          name: 'data',
+          level: '6',
+          devices: ['/dev/nvme1n1', '/dev/nvme2n1'],
+          state: ['online'],
+          sparepool: 'xnsp_data',
+        },
+      ],
+      DISK_IDS,
+      [{ name: 'xnsp_data', drives: ['/dev/nvme3n1', '/dev/unknown9'] }],
+    );
+    expect(a?.spec.spare_disk_ids).toEqual(['disk-3', '/dev/unknown9']); // raw-path fallback
+  });
+
+  it('no sparepool, unknown pool, or absent pools payload → spare_disk_ids []', () => {
+    const noPool = parseRaidShow(
+      [{ name: 'a', level: '0', devices: [], state: ['online'] }],
+      DISK_IDS,
+      [{ name: 'x', drives: ['/dev/y'] }],
+    );
+    expect(noPool[0]?.spec.spare_disk_ids).toEqual([]);
+    const ghostPool = parseRaidShow(
+      [{ name: 'a', level: '0', devices: [], state: ['online'], sparepool: 'ghost' }],
+      DISK_IDS,
+      [],
+    );
+    expect(ghostPool[0]?.spec.spare_disk_ids).toEqual([]);
+    const noPayload = parseRaidShow(
+      [{ name: 'a', level: '0', devices: [], state: ['online'], sparepool: 'p' }],
+      DISK_IDS,
+    );
+    expect(noPayload[0]?.spec.spare_disk_ids).toEqual([]);
+  });
 });

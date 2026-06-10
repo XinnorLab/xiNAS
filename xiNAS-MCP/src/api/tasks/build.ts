@@ -4,7 +4,10 @@ import type { AgentRpcClient } from '../agent-client.js';
 import type { TaskEngines } from '../context.js';
 import { PlanEngine } from '../plan/engine.js';
 import { referencePlanProvider } from '../plan/providers/reference.js';
-import { xiraidArrayCreateProvider } from '../plan/providers/xiraid-array.js';
+import {
+  xiraidArrayCreateProvider,
+  xiraidArrayModifyProvider,
+} from '../plan/providers/xiraid-array.js';
 import { TaskEngine } from './engine.js';
 import { TaskStore } from './store.js';
 
@@ -43,6 +46,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   const planEngine = new PlanEngine({ store, ctx: { kv: state.kv } });
   planEngine.register(referencePlanProvider);
   planEngine.register(xiraidArrayCreateProvider);
+  planEngine.register(xiraidArrayModifyProvider);
 
   return {
     planEngine,
