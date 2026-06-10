@@ -19,6 +19,7 @@ import { networkRouter } from './routes/network.js';
 import { nfsIdmapRouter } from './routes/nfs-idmap.js';
 import { nfsMutateRouter } from './routes/nfs-mutate.js';
 import { nfsRouter } from './routes/nfs.js';
+import { arraysRouter } from './routes/arrays.js';
 import { referenceRouter } from './routes/reference.js';
 import { storageRouter } from './routes/storage.js';
 import { supportRouter } from './routes/support.js';
@@ -80,16 +81,22 @@ export function createApp(ctx: ApiContext): Express {
   // loop below; /reference is not in that list, so there is no shadowing.
   v1.use(referenceRouter(ctx));
 
-  // S3 N5 + N7.3 — the real NFS mutating routes (share.create/update/delete +
-  // nfs-profile.update + nfs-idmap.set) over the N4 plan providers. Mounted
-  // BEFORE the executorUnavailable stub loop so the five real verbs (POST
-  // /shares, PATCH/DELETE /shares/:id, PATCH /nfs-profiles/:id, PATCH
+  // S3-NFS N5 + N7.3 — the real NFS mutating routes (share.create/update/
+  // delete + nfs-profile.update + nfs-idmap.set) over the N4 plan providers.
+  // Mounted BEFORE the executorUnavailable stub loop so the five real verbs
+  // (POST /shares, PATCH/DELETE /shares/:id, PATCH /nfs-profiles/:id, PATCH
   // /nfs-idmap) take precedence over the '/shares' + '/shares/:id' +
   // '/nfs-profiles/:id' stub registrations below; the verbs this router does
   // not register (e.g. PUT /shares/:id, PUT /nfs-profiles/:id — the full
-  // replace stays stubbed in S3) and every other resource still fall through
+  // replace stays stubbed) and every other resource still fall through
   // to the stubs.
   v1.use(nfsMutateRouter(ctx));
+
+  // S3-xiraid: POST /arrays (xiraid.array.create) is real — mounted before
+  // the stub loop, and POST /arrays is excluded from it below. PATCH/DELETE
+  // /arrays/:id (modify/delete) stay stubbed until their plans land
+  // (ADR-0006).
+  v1.use(arraysRouter(ctx));
 
   // Remaining mutating verbs route to the executor-unavailable stub until
   // their executor ships. Per ADR-0002 §Agent heartbeat, plan and apply
@@ -107,7 +114,8 @@ export function createApp(ctx: ApiContext): Express {
     '/config-history/rollback',
   ];
   for (const route of mutatingRoutes) {
-    v1.post(route, executorUnavailable(ctx));
+    // POST /arrays is the real S3 create route mounted above.
+    if (route !== '/arrays') v1.post(route, executorUnavailable(ctx));
     v1.patch(route, executorUnavailable(ctx));
     v1.put(route, executorUnavailable(ctx));
     v1.delete(route, executorUnavailable(ctx));
