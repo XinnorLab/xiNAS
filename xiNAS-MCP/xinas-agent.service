@@ -91,7 +91,13 @@ SystemCallErrorNumber=EPERM
 # --- Address family restriction ---
 # AF_UNIX: agent socket, api socket, nfs-helper socket, dbus socket
 # AF_NETLINK: ip-monitor subprocess (netlink kernel interface for RTnetlink events)
-RestrictAddressFamilies=AF_UNIX AF_NETLINK
+# AF_INET/AF_INET6: xiRAID daemon gRPC client (TLS-TCP, localhost:6066 per
+# /etc/xraid/net.conf) — ADR-0006 §Agent sandbox prerequisite. Pinned to
+# loopback by the IPAddress* pair below so the new families cannot reach
+# off-host addresses.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+IPAddressAllow=localhost
+IPAddressDeny=any
 
 # --- Misc ---
 # dbus is the system bus; the agent subscribes to systemd unit PropertiesChanged.
