@@ -29,21 +29,24 @@ export interface XiraidArrayCollectorOptions {
   /** The disk probe's snapshot — shared with DiskCollector for path→id mapping. */
   diskSnapshot: () => Promise<DiskForMapping[]>;
   now?: () => string;
+  /** Poll cadence override (default 30 s; e2e shortens it via env). */
+  pollIntervalMs?: number;
 }
 
 export class XiraidArrayCollector implements Collector<'XiraidArray'> {
   readonly kind = 'XiraidArray' as const;
-  readonly pollIntervalMs = 30_000;
+  readonly pollIntervalMs: number;
 
   readonly #client: XiraidClient;
   readonly #diskSnapshot: () => Promise<DiskForMapping[]>;
   readonly #now: () => string;
   #health: { state: 'running' | 'stubbed' | 'error'; reason?: string } = { state: 'running' };
 
-  constructor({ client, diskSnapshot, now }: XiraidArrayCollectorOptions) {
+  constructor({ client, diskSnapshot, now, pollIntervalMs }: XiraidArrayCollectorOptions) {
     this.#client = client;
     this.#diskSnapshot = diskSnapshot;
     this.#now = now ?? ((): string => new Date().toISOString());
+    this.pollIntervalMs = pollIntervalMs ?? 30_000;
   }
 
   async initialSweep(): Promise<ObservationDelta[]> {

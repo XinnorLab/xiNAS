@@ -322,10 +322,16 @@ export function buildConvergence(config: AgentConfig): Convergence {
   const xiraidClient = new XiraidClient(
     fdir !== null ? createFakeXiraidTransport(fdir) : createGrpcTransport(),
   );
+  // Poll cadence override for tests (e2e shortens 30 s → ~500 ms so the
+  // observe assertion after a create doesn't wait a full cycle).
+  const xiraidPollMs = Number(process.env.XINAS_AGENT_XIRAID_POLL_MS ?? '');
   registry.register(
     new XiraidArrayCollector({
       client: xiraidClient,
       diskSnapshot: () => diskProbe.snapshot(),
+      ...(Number.isFinite(xiraidPollMs) && xiraidPollMs > 0
+        ? { pollIntervalMs: xiraidPollMs }
+        : {}),
     }),
   );
 
