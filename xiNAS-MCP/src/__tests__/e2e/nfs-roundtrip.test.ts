@@ -12,7 +12,7 @@
  * the config-pointed socket (the new AgentConfig.nfs_helper_socket — Part 1
  * of N6), and progress flows back to the api's durable task rows.
  *
- * Three scenarios:
+ * Four scenarios:
  *   1. share.create success — plan → apply → execute → success; the stub
  *      received the COMPILED entry (rw,async,no_subtree_check) and holds the
  *      path; the desired row is live (GET /shares/{id} → 200); both task
@@ -24,6 +24,11 @@
  *      GET /shares/{id} → 404. Model R proven over the full stack.
  *   3. nfs-idmap.set — plan/apply PATCH /nfs-idmap; the stub's idmapDomain
  *      flips and a set_idmapd_domain call is logged.
+ *   4. nfs-profile.update (N7.4) — plan/apply PATCH /nfs-profiles/default
+ *      with a thread-count change: non_disruptive (ADR-0005 default
+ *      on_thread_count_change: reload), the stub's render_nfs_profile sees
+ *      the MERGED full profile + restart=false, and the desired NfsProfile
+ *      row is created on first update (GET → 200).
  *
  * The stub runs IN-PROCESS (same vitest worker), so the forced-failure
  * control is direct field assignment (`stub.failNext = {...}`) — no control
@@ -214,10 +219,25 @@ interface StubFailNext {
 interface StubNfsHelper {
   exports: Map<string, StubExportEntry>;
   idmapDomain: string | undefined;
+  /** The last `render_nfs_profile` spec (the merged FULL profile) received. */
+  lastRenderedProfile: Record<string, unknown> | undefined;
+  /** The last `render_nfs_profile` restart flag received. */
+  lastRenderRestart: boolean | undefined;
   calls: StubCall[];
   failNext: StubFailNext | null;
   close(): Promise<void>;
 }
+
+/** The four ADR-0005 effective files the real helper renders (nfs_profile.py). */
+const STUB_EFFECTIVE_FILES: Record<string, string> = {
+  '/etc/nfs/nfsd.conf': 'sha256:aaaa000000000000000000000000000000000000000000000000000000000001',
+  '/etc/default/nfs-kernel-server':
+    'sha256:aaaa000000000000000000000000000000000000000000000000000000000002',
+  '/etc/modprobe.d/lockd.conf':
+    'sha256:aaaa000000000000000000000000000000000000000000000000000000000003',
+  '/etc/default/nfs-common':
+    'sha256:aaaa000000000000000000000000000000000000000000000000000000000004',
+};
 
 /**
  * Start a tiny in-test UDS server speaking the spec-nfs-helper protocol:
@@ -231,6 +251,8 @@ function startStubNfsHelper(socketPath: string): Promise<StubNfsHelper> {
   const stub: StubNfsHelper = {
     exports: new Map(),
     idmapDomain: undefined,
+    lastRenderedProfile: undefined,
+    lastRenderRestart: undefined,
     calls: [],
     failNext: null,
     close: () => Promise.resolve(),
@@ -276,6 +298,18 @@ function startStubNfsHelper(socketPath: string): Promise<StubNfsHelper> {
       case 'set_idmapd_domain': {
         stub.idmapDomain = String(req.domain ?? '');
         return { ok: true, result: null };
+      }
+      case 'render_nfs_profile': {
+        stub.lastRenderedProfile = req.spec as Record<string, unknown>;
+        stub.lastRenderRestart = Boolean(req.restart);
+        return {
+          ok: true,
+          result: {
+            effective_files: STUB_EFFECTIVE_FILES,
+            restarted: Boolean(req.restart),
+            reloaded: !req.restart,
+          },
+        };
       }
       default:
         return { ok: false, code: 'UNSUPPORTED', error: `unknown op '${op}'` };
@@ -617,5 +651,67 @@ describe.sequential('e2e: NFS round-trip via stub nfs-helper (S3 N6)', () => {
     expect(
       stub.calls.some((c) => c.op === 'set_idmapd_domain' && c.req.domain === 'e2e.example.com'),
     ).toBe(true);
+  }, 20_000);
+
+  it('nfs-profile.update: plan → apply → execute → success; merged profile + restart=false at the stub; desired row created', async () => {
+    // First update — no desired NfsProfile row exists yet, so the plan pins
+    // ABSENCE (revision 0) and the merge base is the ADR-0005 default spec.
+    const planned = await requestJson(
+      apiSockPath,
+      'PATCH',
+      '/api/v1/nfs-profiles/default',
+      ADMIN_TOKEN,
+      { mode: 'plan', spec: { threads: { count: 128 } } },
+    );
+    expect(planned.status).toBe(200);
+    const plan = planned.body.result as {
+      plan_id?: string;
+      state_revision_expected?: number;
+      risk_level?: string;
+      diff?: { restart?: boolean };
+    };
+    expect(typeof plan.plan_id).toBe('string');
+    expect(plan.state_revision_expected).toBe(0); // first update: absence pin
+    // Thread-count change under the ADR-0005 default service policy
+    // (on_thread_count_change: reload) — a reload, not a restart.
+    expect(plan.risk_level).toBe('non_disruptive');
+    expect(plan.diff?.restart).toBe(false);
+
+    const applied = await requestJson(
+      apiSockPath,
+      'PATCH',
+      '/api/v1/nfs-profiles/default',
+      ADMIN_TOKEN,
+      {
+        mode: 'apply',
+        plan_id: plan.plan_id,
+        expected_revision: 0,
+        idempotency_key: 'K-e2e-profile',
+      },
+    );
+    expect(applied.status).toBe(202);
+    const taskId = (applied.body.result as { task_id?: string }).task_id as string;
+
+    let task: TaskResult;
+    try {
+      task = await waitForTaskState(apiSockPath, ADMIN_TOKEN, taskId);
+    } catch (err) {
+      throw withProcStderr(err);
+    }
+    expect(task.state).toBe('success');
+
+    // The stub's render_nfs_profile saw the merged FULL profile (defaults +
+    // the thread-count patch) and the DERIVED restart=false (reload policy).
+    expect(stub.calls.some((c) => c.op === 'render_nfs_profile')).toBe(true);
+    expect((stub.lastRenderedProfile?.threads as { count?: number } | undefined)?.count).toBe(128);
+    expect(stub.lastRenderRestart).toBe(false);
+
+    // Create-on-first-update over the full stack: the apply txn created the
+    // desired NfsProfile row. (The observed effective_files fold only lands
+    // after the collector's next 60s poll — desired side only here.)
+    const got = await getJson(apiSockPath, '/api/v1/nfs-profiles/default', ADMIN_TOKEN);
+    expect(got.status).toBe(200);
+    const profile = got.body.result as { spec?: { threads?: { count?: number } } };
+    expect(profile.spec?.threads?.count).toBe(128);
   }, 20_000);
 });
