@@ -18,11 +18,11 @@ Layout::
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import yaml
 
@@ -87,8 +87,8 @@ class FilesystemStore:
         self,
         snapshot_id: str,
         manifest: Manifest,
-        config_files: Dict[str, bytes],
-        runtime_files: Dict[str, bytes],
+        config_files: dict[str, bytes],
+        runtime_files: dict[str, bytes],
         is_baseline: bool = False,
     ) -> Path:
         """Write a complete snapshot to disk atomically.
@@ -109,14 +109,11 @@ class FilesystemStore:
             FileExistsError: If *snapshot_id* (or baseline) already exists.
             OSError: If the write fails for any other reason.
         """
-        if is_baseline:
-            target = self.baseline_path
-        else:
-            target = self.snapshot_path(snapshot_id)
+        target = self.baseline_path if is_baseline else self.snapshot_path(snapshot_id)
 
         if target.exists():
             raise FileExistsError(
-                "Snapshot path already exists: {}".format(target)
+                f"Snapshot path already exists: {target}"
             )
 
         # Ensure parent directories exist.
@@ -125,7 +122,7 @@ class FilesystemStore:
         # Write into a temporary directory on the *same* filesystem so that
         # os.rename() is atomic.
         tmp_dir = tempfile.mkdtemp(
-            dir=str(target.parent), prefix=".tmp-{}-".format(snapshot_id)
+            dir=str(target.parent), prefix=f".tmp-{snapshot_id}-"
         )
         try:
             tmp = Path(tmp_dir)
@@ -158,34 +155,34 @@ class FilesystemStore:
 
     # -- read ---------------------------------------------------------------
 
-    def read_manifest(self, snapshot_id: str) -> Optional[Manifest]:
+    def read_manifest(self, snapshot_id: str) -> Manifest | None:
         """Read manifest for a snapshot.  Returns ``None`` if not found."""
         manifest_path = self.snapshot_path(snapshot_id) / MANIFEST_FILE
         return self._load_manifest(manifest_path)
 
-    def read_baseline_manifest(self) -> Optional[Manifest]:
+    def read_baseline_manifest(self) -> Manifest | None:
         """Read the baseline manifest.  Returns ``None`` if no baseline."""
         manifest_path = self.baseline_path / MANIFEST_FILE
         return self._load_manifest(manifest_path)
 
-    def read_file(self, snapshot_id: str, filename: str) -> Optional[bytes]:
+    def read_file(self, snapshot_id: str, filename: str) -> bytes | None:
         """Read a specific file from a snapshot."""
         path = self.snapshot_path(snapshot_id) / filename
         return self._read_bytes(path)
 
     def read_runtime_file(
         self, snapshot_id: str, filename: str
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         """Read a file from the ``runtime/`` subdirectory of a snapshot."""
         path = self.snapshot_path(snapshot_id) / RUNTIME_DIR / filename
         return self._read_bytes(path)
 
     # -- listing / queries --------------------------------------------------
 
-    def list_snapshots(self) -> List[Manifest]:
+    def list_snapshots(self) -> list[Manifest]:
         """List all snapshots (excluding baseline), sorted by timestamp
         ascending."""
-        manifests: List[Manifest] = []
+        manifests: list[Manifest] = []
         if not self.snapshots_path.is_dir():
             return manifests
 
@@ -199,7 +196,7 @@ class FilesystemStore:
         manifests.sort(key=lambda m: m.timestamp)
         return manifests
 
-    def get_baseline(self) -> Optional[Manifest]:
+    def get_baseline(self) -> Manifest | None:
         """Get the baseline manifest, or ``None``."""
         return self.read_baseline_manifest()
 
@@ -255,7 +252,7 @@ class FilesystemStore:
         manifest_path = snap_dir / MANIFEST_FILE
         if not snap_dir.is_dir():
             raise FileNotFoundError(
-                "Snapshot directory not found: {}".format(snap_dir)
+                f"Snapshot directory not found: {snap_dir}"
             )
         self._write_yaml_atomic(manifest_path, manifest.to_dict())
 
@@ -268,10 +265,8 @@ class FilesystemStore:
         for dirpath, _dirnames, filenames in os.walk(str(snap_dir)):
             for f in filenames:
                 fp = os.path.join(dirpath, f)
-                try:
+                with contextlib.suppress(OSError):
                     total += os.path.getsize(fp)
-                except OSError:
-                    pass
         return total
 
     # -- private helpers ----------------------------------------------------
@@ -308,18 +303,16 @@ class FilesystemStore:
             os.chmod(tmp, _FILE_MODE)
             os.replace(tmp, str(path))
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
             raise
 
     @staticmethod
-    def _load_manifest(path: Path) -> Optional[Manifest]:
+    def _load_manifest(path: Path) -> Manifest | None:
         if not path.is_file():
             return None
         try:
-            with open(str(path), "r") as fh:
+            with open(str(path)) as fh:
                 data = yaml.safe_load(fh)
             if not isinstance(data, dict):
                 return None
@@ -328,7 +321,7 @@ class FilesystemStore:
             return None
 
     @staticmethod
-    def _read_bytes(path: Path) -> Optional[bytes]:
+    def _read_bytes(path: Path) -> bytes | None:
         if not path.is_file():
             return None
         try:

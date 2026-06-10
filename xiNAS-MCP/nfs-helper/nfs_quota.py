@@ -4,8 +4,8 @@ The daemon is allowed to call xfs_quota — the CLI prohibition applies
 only to the MCP server itself.
 """
 
-import subprocess
 import os
+import subprocess
 
 
 def _find_mountpoint(path: str) -> str:
@@ -74,7 +74,7 @@ def _upsert_line(filepath: str, match_str: str, new_line: str) -> None:
         lines = []
 
     # Remove existing matching line
-    lines = [l for l in lines if match_str not in l]
+    lines = [line for line in lines if match_str not in line]
     lines.append(new_line + "\n")
 
     with open(filepath, "w") as f:

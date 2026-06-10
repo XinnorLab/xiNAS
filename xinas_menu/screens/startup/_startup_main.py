@@ -10,7 +10,6 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Label
 
-from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 

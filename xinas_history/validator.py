@@ -4,13 +4,10 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
-from pathlib import Path
-from typing import Optional
 
-from .models import Manifest, ValidationResult, RollbackClass
 from .grpc_inspector import GrpcInspector
+from .models import Manifest, ValidationResult
 from .store import FilesystemStore
-
 
 # Minimum free space in MB for snapshot operations.
 MIN_FREE_SPACE_MB = 50
@@ -39,8 +36,8 @@ class PreflightValidator:
     async def validate(
         self,
         operation: str,
-        target_resources: Optional[list[str]] = None,
-        rollback_class: Optional[str] = None,
+        target_resources: list[str] | None = None,
+        rollback_class: str | None = None,
     ) -> ValidationResult:
         """Run all preflight checks.
 
@@ -61,7 +58,7 @@ class PreflightValidator:
             if not ok:
                 blockers.append(msg)
         except Exception as exc:
-            warnings.append("Disk space check failed: {}".format(exc))
+            warnings.append(f"Disk space check failed: {exc}")
 
         # 2. Dependency checks (only for destructive operations)
         resources = target_resources or []
@@ -70,21 +67,21 @@ class PreflightValidator:
                 raid_blockers = await self.check_raid_dependencies(resources)
                 blockers.extend(raid_blockers)
         except Exception as exc:
-            warnings.append("RAID dependency check failed: {}".format(exc))
+            warnings.append(f"RAID dependency check failed: {exc}")
 
         try:
             if operation in ("fs_delete", "fs_modify"):
                 fs_blockers = await self.check_fs_dependencies(resources)
                 blockers.extend(fs_blockers)
         except Exception as exc:
-            warnings.append("FS dependency check failed: {}".format(exc))
+            warnings.append(f"FS dependency check failed: {exc}")
 
         # 3. Service state (advisory only)
         try:
             svc_warnings = await self.check_service_state()
             warnings.extend(svc_warnings)
         except Exception as exc:
-            warnings.append("Service state check failed: {}".format(exc))
+            warnings.append(f"Service state check failed: {exc}")
 
         passed = len(blockers) == 0
         return ValidationResult(passed=passed, blockers=blockers, warnings=warnings)
@@ -112,11 +109,8 @@ class PreflightValidator:
         if free_mb < required_mb:
             return (
                 False,
-                "Insufficient disk space: {:.1f} MB free, {:.1f} MB required "
-                "({}MB safety + {:.1f}MB estimated snapshot)".format(
-                    free_mb, required_mb, MIN_FREE_SPACE_MB,
-                    self._estimate_snapshot_size_mb(),
-                ),
+                f"Insufficient disk space: {free_mb:.1f} MB free, {required_mb:.1f} MB required "
+                f"({MIN_FREE_SPACE_MB}MB safety + {self._estimate_snapshot_size_mb():.1f}MB estimated snapshot)",
             )
         return True, ""
 
@@ -146,14 +140,14 @@ class PreflightValidator:
             if dev:
                 raid_devices.add(dev)
             # Also match by array name in /dev/xi/ convention.
-            raid_devices.add("/dev/xi/{}".format(name))
+            raid_devices.add(f"/dev/xi/{name}")
 
         if not raid_devices:
             return []
 
         # Check /proc/mounts for any filesystem mounted on these devices.
         try:
-            with open("/proc/mounts", "r") as fh:
+            with open("/proc/mounts") as fh:
                 for line in fh:
                     parts = line.split()
                     if len(parts) >= 2:
@@ -161,8 +155,8 @@ class PreflightValidator:
                         mountpoint = parts[1]
                         if device in raid_devices:
                             blockers.append(
-                                "RAID array device {} is mounted at {}; "
-                                "unmount first".format(device, mountpoint)
+                                f"RAID array device {device} is mounted at {mountpoint}; "
+                                "unmount first"
                             )
         except OSError:
             pass
@@ -187,8 +181,8 @@ class PreflightValidator:
                 # is equal to or nested inside the mountpoint.
                 if export_path == mp or export_path.startswith(mp.rstrip("/") + "/"):
                     blockers.append(
-                        "NFS export '{}' depends on mountpoint '{}'; "
-                        "remove export first".format(export_path, mp)
+                        f"NFS export '{export_path}' depends on mountpoint '{mp}'; "
+                        "remove export first"
                     )
 
         return blockers
@@ -211,18 +205,18 @@ class PreflightValidator:
                 )
                 if result.returncode != 0:
                     warnings.append(
-                        "Service '{}' is not active".format(svc)
+                        f"Service '{svc}' is not active"
                     )
             except FileNotFoundError:
                 # systemctl not available (e.g. container, macOS dev).
                 break
             except subprocess.TimeoutExpired:
                 warnings.append(
-                    "Timed out checking service '{}'".format(svc)
+                    f"Timed out checking service '{svc}'"
                 )
             except OSError as exc:
                 warnings.append(
-                    "Could not check service '{}': {}".format(svc, exc)
+                    f"Could not check service '{svc}': {exc}"
                 )
 
         return warnings
@@ -262,7 +256,7 @@ class PostApplyValidator:
     async def validate(
         self,
         target_manifest: Manifest,
-        expected_state: Optional[dict] = None,
+        expected_state: dict | None = None,
     ) -> ValidationResult:
         """Run all post-apply validation checks.
 
@@ -284,7 +278,7 @@ class PostApplyValidator:
             )
             blockers.extend(raid_issues)
         except Exception as exc:
-            warnings.append("RAID state check failed: {}".format(exc))
+            warnings.append(f"RAID state check failed: {exc}")
 
         # 2. Mount state
         try:
@@ -293,7 +287,7 @@ class PostApplyValidator:
             )
             blockers.extend(mount_issues)
         except Exception as exc:
-            warnings.append("Mount state check failed: {}".format(exc))
+            warnings.append(f"Mount state check failed: {exc}")
 
         # 3. NFS exports
         try:
@@ -302,7 +296,7 @@ class PostApplyValidator:
             )
             blockers.extend(export_issues)
         except Exception as exc:
-            warnings.append("Export state check failed: {}".format(exc))
+            warnings.append(f"Export state check failed: {exc}")
 
         # 4. Services
         try:
@@ -311,13 +305,13 @@ class PostApplyValidator:
             )
             blockers.extend(svc_issues)
         except Exception as exc:
-            warnings.append("Service check failed: {}".format(exc))
+            warnings.append(f"Service check failed: {exc}")
 
         passed = len(blockers) == 0
         return ValidationResult(passed=passed, blockers=blockers, warnings=warnings)
 
     async def check_raid_state(
-        self, expected_arrays: Optional[dict] = None,
+        self, expected_arrays: dict | None = None,
     ) -> list[str]:
         """Verify RAID arrays match expected state via gRPC.
 
@@ -341,7 +335,7 @@ class PostApplyValidator:
         for name, expected in expected_arrays.items():
             if name not in actual:
                 issues.append(
-                    "Expected RAID array '{}' not found in runtime state".format(name)
+                    f"Expected RAID array '{name}' not found in runtime state"
                 )
                 continue
 
@@ -350,15 +344,13 @@ class PostApplyValidator:
             actual_level = str(arr.get("level", arr.get("raid_level", "")))
             if expected_level and actual_level and expected_level != actual_level:
                 issues.append(
-                    "RAID array '{}' level mismatch: expected {}, got {}".format(
-                        name, expected_level, actual_level,
-                    )
+                    f"RAID array '{name}' level mismatch: expected {expected_level}, got {actual_level}"
                 )
 
         return issues
 
     async def check_mount_state(
-        self, expected_mounts: Optional[list[dict]] = None,
+        self, expected_mounts: list[dict] | None = None,
     ) -> list[str]:
         """Verify filesystem mounts are active and correct.
 
@@ -373,7 +365,7 @@ class PostApplyValidator:
         # Read /proc/mounts (or use mount command as fallback).
         active_mounts: dict[str, dict] = {}
         try:
-            with open("/proc/mounts", "r") as fh:
+            with open("/proc/mounts") as fh:
                 for line in fh:
                     parts = line.split()
                     if len(parts) >= 3:
@@ -409,22 +401,20 @@ class PostApplyValidator:
                 continue
             if mp not in active_mounts:
                 issues.append(
-                    "Expected mountpoint '{}' is not mounted".format(mp)
+                    f"Expected mountpoint '{mp}' is not mounted"
                 )
                 continue
             expected_fs = entry.get("fstype", "")
             actual_fs = active_mounts[mp].get("fstype", "")
             if expected_fs and actual_fs and expected_fs != actual_fs:
                 issues.append(
-                    "Mountpoint '{}' fstype mismatch: expected {}, got {}".format(
-                        mp, expected_fs, actual_fs,
-                    )
+                    f"Mountpoint '{mp}' fstype mismatch: expected {expected_fs}, got {actual_fs}"
                 )
 
         return issues
 
     async def check_export_state(
-        self, expected_exports: Optional[list[dict]] = None,
+        self, expected_exports: list[dict] | None = None,
     ) -> list[str]:
         """Verify NFS exports are present and correct.
 
@@ -442,15 +432,13 @@ class PostApplyValidator:
                 continue
             if path not in current_exports:
                 issues.append(
-                    "Expected NFS export '{}' not found in {}".format(
-                        path, _EXPORTS_PATH,
-                    )
+                    f"Expected NFS export '{path}' not found in {_EXPORTS_PATH}"
                 )
 
         return issues
 
     async def check_service_active(
-        self, services: Optional[list[str]] = None,
+        self, services: list[str] | None = None,
     ) -> list[str]:
         """Verify named services are active."""
         if not services:
@@ -469,18 +457,18 @@ class PostApplyValidator:
                 )
                 if result.returncode != 0:
                     issues.append(
-                        "Service '{}' is not active after apply".format(svc)
+                        f"Service '{svc}' is not active after apply"
                     )
             except FileNotFoundError:
                 # systemctl not available — skip silently.
                 break
             except subprocess.TimeoutExpired:
                 issues.append(
-                    "Timed out checking service '{}'".format(svc)
+                    f"Timed out checking service '{svc}'"
                 )
             except OSError as exc:
                 issues.append(
-                    "Could not check service '{}': {}".format(svc, exc)
+                    f"Could not check service '{svc}': {exc}"
                 )
 
         return issues
@@ -495,7 +483,7 @@ def _parse_exports_file(path: str) -> set[str]:
     """Parse /etc/exports and return the set of exported paths."""
     exported: set[str] = set()
     try:
-        with open(path, "r") as fh:
+        with open(path) as fh:
             for line in fh:
                 line = line.strip()
                 if not line or line.startswith("#"):

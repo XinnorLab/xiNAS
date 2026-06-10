@@ -33,7 +33,7 @@ class InputDialog(ModalScreen[str | None]):
         self._placeholder = placeholder
 
     def compose(self) -> ComposeResult:
-        from textual.containers import Vertical, Horizontal
+        from textual.containers import Horizontal, Vertical
         with Vertical(id="dialog-container"):
             yield Label(self._title, id="dialog-title")
             yield Label(self._prompt, id="dialog-body")

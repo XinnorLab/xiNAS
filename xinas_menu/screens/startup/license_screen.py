@@ -1,7 +1,6 @@
 """LicenseScreen — enter or display the xiRAID license."""
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from textual.app import ComposeResult

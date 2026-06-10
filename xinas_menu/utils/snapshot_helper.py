@@ -7,13 +7,12 @@ best-effort and must not block the primary operation).
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 _log = logging.getLogger(__name__)
 
 # Guard: xinas_history may not be installed on dev machines.
 try:
-    from xinas_history import SnapshotEngine, FilesystemStore
+    from xinas_history import FilesystemStore, SnapshotEngine
     _HAS_ENGINE = True
 except ImportError:
     _HAS_ENGINE = False
@@ -27,7 +26,7 @@ class SnapshotHelper:
         grpc_address: str = "localhost:6066",
         repo_root: str = "/opt/xiNAS",
     ) -> None:
-        self._engine: Optional[object] = None
+        self._engine: object | None = None
         if _HAS_ENGINE:
             try:
                 self._engine = SnapshotEngine(
@@ -48,8 +47,8 @@ class SnapshotHelper:
         source: str = "xinas_menu",
         preset: str = "",
         snapshot_type: str = "rollback_eligible",
-        diff_summary: Optional[str] = None,
-    ) -> Optional[str]:
+        diff_summary: str | None = None,
+    ) -> str | None:
         """Create a snapshot, return its ID or None on failure.
 
         This is the only method screens need to call.
@@ -71,7 +70,7 @@ class SnapshotHelper:
             _log.warning("snapshot creation failed", exc_info=True)
             return None
 
-    async def record_baseline(self, preset: str = "") -> Optional[str]:
+    async def record_baseline(self, preset: str = "") -> str | None:
         """Create baseline snapshot if one doesn't already exist.
 
         Called after a successful install.  If Ansible already created the

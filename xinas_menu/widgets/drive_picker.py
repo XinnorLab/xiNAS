@@ -11,12 +11,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Input, Label, Static
-from textual import work
+from textual.widgets import Button, DataTable, Label, Static
 
 _log = logging.getLogger(__name__)
 
@@ -245,8 +245,9 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
         """Get the drive name at the current cursor row."""
         table = self.query_one("#picker-table", DataTable)
         try:
-            row_key = table.get_row_at(table.cursor_row)
-            # row_key is the tuple of cell values; the key is the drive name
+            # get_row_at raises when the cursor is on an invalid row — keep
+            # the call as a guard even though its value is unused.
+            table.get_row_at(table.cursor_row)
             return str(table.get_row_key(table.cursor_row))
         except Exception:
             return None

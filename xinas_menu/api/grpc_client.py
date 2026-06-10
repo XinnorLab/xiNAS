@@ -86,13 +86,14 @@ def _import_stubs():
     global _STUBS_ERROR
     try:
         import grpc
-        from xinas_menu.api.proto import service_xraid_pb2_grpc as pb2_grpc
-        from xinas_menu.api.proto import message_raid_pb2 as msg_raid
+
         from xinas_menu.api.proto import message_drive_pb2 as msg_drive
-        from xinas_menu.api.proto import message_pool_pb2 as msg_pool
         from xinas_menu.api.proto import message_license_pb2 as msg_license
-        from xinas_menu.api.proto import message_settings_pb2 as msg_settings
         from xinas_menu.api.proto import message_mail_pb2 as msg_mail
+        from xinas_menu.api.proto import message_pool_pb2 as msg_pool
+        from xinas_menu.api.proto import message_raid_pb2 as msg_raid
+        from xinas_menu.api.proto import message_settings_pb2 as msg_settings
+        from xinas_menu.api.proto import service_xraid_pb2_grpc as pb2_grpc
         _STUBS_ERROR = ""
         return pb2_grpc, grpc, msg_raid, msg_drive, msg_pool, msg_license, msg_settings, msg_mail
     except Exception as exc:

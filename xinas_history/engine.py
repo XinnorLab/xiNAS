@@ -2,29 +2,27 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import getpass
 import json
 import socket
-from typing import Optional
 
+from .classifier import RollbackClassifier
+from .collector import ConfigCollector, RuntimeCollector
+from .gc import GarbageCollector, load_retention_policy
+from .grpc_inspector import GrpcInspector
 from .models import (
     Checksums,
     DiffResult,
     Manifest,
     OperationType,
-    OperationSource,
     RollbackClass,
     SnapshotStatus,
     SnapshotType,
-    ValidationResult,
     generate_snapshot_id,
 )
 from .store import FilesystemStore
-from .gc import GarbageCollector, load_retention_policy
-from .classifier import RollbackClassifier
-from .collector import ConfigCollector, RuntimeCollector
-from .grpc_inspector import GrpcInspector
 
 
 class SnapshotEngine:
@@ -42,7 +40,7 @@ class SnapshotEngine:
 
     def __init__(
         self,
-        store: Optional[FilesystemStore] = None,
+        store: FilesystemStore | None = None,
         repo_root: str = "/opt/xiNAS",
         grpc_address: str = "localhost:6066",
         grpc_client=None,
@@ -65,9 +63,9 @@ class SnapshotEngine:
         operation: str,
         preset: str = "",
         snapshot_type: str = SnapshotType.ROLLBACK_ELIGIBLE.value,
-        parent_id: Optional[str] = None,
-        extra_vars: Optional[dict] = None,
-        diff_summary: Optional[str] = None,
+        parent_id: str | None = None,
+        extra_vars: dict | None = None,
+        diff_summary: str | None = None,
     ) -> Manifest:
         """Create a new configuration snapshot from current system state.
 
@@ -160,10 +158,8 @@ class SnapshotEngine:
         # 9. Run garbage collection (non-baseline only)
         if not is_baseline:
             effective_id = snapshot_id  # this one is now the effective
-            try:
+            with contextlib.suppress(Exception):  # GC failures are non-fatal
                 self._gc.run(current_effective_id=effective_id)
-            except Exception:
-                pass  # GC failures are non-fatal
 
         return manifest
 
@@ -171,7 +167,7 @@ class SnapshotEngine:
         self,
         source: str,
         preset: str = "",
-        extra_vars: Optional[dict] = None,
+        extra_vars: dict | None = None,
     ) -> Manifest:
         """Create the immutable baseline snapshot (first install).
 
@@ -194,7 +190,7 @@ class SnapshotEngine:
         self,
         source: str,
         preset: str = "",
-        extra_vars: Optional[dict] = None,
+        extra_vars: dict | None = None,
     ) -> Manifest:
         """Purge all existing history and create a fresh baseline.
 
@@ -215,8 +211,8 @@ class SnapshotEngine:
     def list_snapshots(
         self,
         include_baseline: bool = True,
-        status_filter: Optional[str] = None,
-        type_filter: Optional[str] = None,
+        status_filter: str | None = None,
+        type_filter: str | None = None,
     ) -> list:
         """List snapshots with optional filtering.
 
@@ -242,7 +238,7 @@ class SnapshotEngine:
 
         return manifests
 
-    def get_snapshot(self, snapshot_id: str) -> Optional[Manifest]:
+    def get_snapshot(self, snapshot_id: str) -> Manifest | None:
         """Get manifest for a specific snapshot.
 
         Checks both the snapshots directory and baseline.
@@ -259,7 +255,7 @@ class SnapshotEngine:
 
         return None
 
-    def get_current_effective(self) -> Optional[Manifest]:
+    def get_current_effective(self) -> Manifest | None:
         """Get the most recent applied snapshot.
 
         Walks snapshots newest-first, returns first with status=applied.
@@ -436,9 +432,8 @@ class SnapshotEngine:
             from_data = _try_parse_json(from_bytes)
             to_data = _try_parse_json(to_bytes)
 
-            if from_data is not None and to_data is not None:
-                if from_data == to_data:
-                    continue  # JSON-equivalent despite byte differences
+            if from_data is not None and to_data is not None and from_data == to_data:
+                continue  # JSON-equivalent despite byte differences
 
             resource = filename.replace(".json", "").replace("-", "_")
 
@@ -479,7 +474,7 @@ class SnapshotEngine:
 
     def _read_snapshot_file(
         self, snapshot_id: str, manifest: Manifest, filename: str,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         """Read a config file from a snapshot, handling baseline specially."""
         if manifest.type == SnapshotType.BASELINE.value:
             # Baseline files live in the baseline directory
@@ -494,7 +489,7 @@ class SnapshotEngine:
 
     def _read_snapshot_runtime_file(
         self, snapshot_id: str, manifest: Manifest, filename: str,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         """Read a runtime file from a snapshot, handling baseline specially."""
         if manifest.type == SnapshotType.BASELINE.value:
             path = self._store.baseline_path / "runtime" / filename
@@ -506,7 +501,7 @@ class SnapshotEngine:
             return None
         return self._store.read_runtime_file(snapshot_id, filename)
 
-    async def _get_hardware_id(self) -> Optional[str]:
+    async def _get_hardware_id(self) -> str | None:
         """Try to get hardware ID from gRPC license_show, return None on failure."""
         try:
             # license_show is not exposed on GrpcInspector; try config_show
@@ -542,7 +537,7 @@ def _get_hostname() -> str:
         return "unknown"
 
 
-def _try_parse_json(data: Optional[bytes]) -> Optional[object]:
+def _try_parse_json(data: bytes | None) -> object | None:
     """Try to parse bytes as JSON, return None on failure."""
     if data is None:
         return None

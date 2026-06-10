@@ -12,30 +12,28 @@ Wraps all configuration-changing operations with:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
-import subprocess
 import tempfile
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Optional
 
+from .classifier import RollbackClassifier
 from .engine import SnapshotEngine
+from .gc import GarbageCollector, load_retention_policy
+from .grpc_inspector import GrpcInspector
 from .lock import GlobalConfigLock, LockError
 from .models import (
     Manifest,
     OperationType,
-    OperationSource,
     RollbackClass,
     SnapshotStatus,
     SnapshotType,
     ValidationResult,
 )
 from .store import FilesystemStore
-from .validator import PreflightValidator, PostApplyValidator
-from .gc import GarbageCollector, load_retention_policy
-from .classifier import RollbackClassifier
-from .grpc_inspector import GrpcInspector
-
+from .validator import PostApplyValidator, PreflightValidator
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +44,14 @@ class RunResult:
 
     success: bool = False
     operation: str = ""
-    snapshot_id: Optional[str] = None
-    pre_change_snapshot_id: Optional[str] = None
+    snapshot_id: str | None = None
+    pre_change_snapshot_id: str | None = None
     rollback_performed: bool = False
-    rollback_success: Optional[bool] = None
+    rollback_success: bool | None = None
     rollback_class: str = ""
-    error: Optional[str] = None
-    output: Optional[str] = None
-    validation: Optional[dict] = None
+    error: str | None = None
+    output: str | None = None
+    validation: dict | None = None
     steps: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -110,8 +108,8 @@ class TransactionalRunner:
     def __init__(
         self,
         engine: SnapshotEngine,
-        store: Optional[FilesystemStore] = None,
-        grpc_inspector: Optional[GrpcInspector] = None,
+        store: FilesystemStore | None = None,
+        grpc_inspector: GrpcInspector | None = None,
     ) -> None:
         self._engine = engine
         self._store = store or engine._store
@@ -132,9 +130,9 @@ class TransactionalRunner:
         source: str,
         apply_fn: Callable[[], Awaitable[bool]],
         preset: str = "",
-        extra_vars: Optional[dict] = None,
-        target_resources: Optional[list[str]] = None,
-        diff_summary: Optional[str] = None,
+        extra_vars: dict | None = None,
+        target_resources: list[str] | None = None,
+        diff_summary: str | None = None,
         skip_preflight: bool = False,
     ) -> RunResult:
         """Execute a configuration change with full transactional guarantees.
@@ -169,11 +167,11 @@ class TransactionalRunner:
             self._lock.acquire(operation=operation, source=source)
             result.steps.append("lock_acquired")
         except LockError as exc:
-            result.error = "Failed to acquire lock: {}".format(exc)
+            result.error = f"Failed to acquire lock: {exc}"
             logger.error("Lock acquisition failed for %s: %s", operation, exc)
             return result
         except Exception as exc:
-            result.error = "Unexpected error acquiring lock: {}".format(exc)
+            result.error = f"Unexpected error acquiring lock: {exc}"
             logger.exception("Lock acquisition error for %s", operation)
             return result
 
@@ -198,7 +196,7 @@ class TransactionalRunner:
                         return result
                     result.steps.append("preflight_passed")
                 except Exception as exc:
-                    result.error = "Preflight validation error: {}".format(exc)
+                    result.error = f"Preflight validation error: {exc}"
                     logger.exception("Preflight error for %s", operation)
                     return result
 
@@ -210,7 +208,7 @@ class TransactionalRunner:
                     preset=preset,
                     snapshot_type=SnapshotType.EPHEMERAL.value,
                     extra_vars=extra_vars,
-                    diff_summary="Pre-change snapshot for {}".format(operation),
+                    diff_summary=f"Pre-change snapshot for {operation}",
                 )
                 result.pre_change_snapshot_id = pre_manifest.id
                 self._lock.update_journal(
@@ -220,7 +218,7 @@ class TransactionalRunner:
                 )
                 result.steps.append("pre_snapshot_created")
             except Exception as exc:
-                result.error = "Failed to create pre-change snapshot: {}".format(exc)
+                result.error = f"Failed to create pre-change snapshot: {exc}"
                 logger.exception("Pre-change snapshot failed for %s", operation)
                 return result
 
@@ -237,7 +235,7 @@ class TransactionalRunner:
                 result.steps.append("apply_failed")
                 apply_ok = False
                 logger.exception("Apply function raised for %s", operation)
-                result.error = "Apply failed with exception: {}".format(exc)
+                result.error = f"Apply failed with exception: {exc}"
 
             # Step 6: Post-apply validation (only if apply succeeded).
             if apply_ok:
@@ -259,7 +257,7 @@ class TransactionalRunner:
                     # Validation itself errored — treat as failure.
                     post_result = ValidationResult(
                         passed=False,
-                        blockers=["Post-apply validation error: {}".format(exc)],
+                        blockers=[f"Post-apply validation error: {exc}"],
                     )
                     result.validation = post_result.to_dict()
                     logger.exception(
@@ -300,7 +298,7 @@ class TransactionalRunner:
                             )
                     except Exception as exc:
                         result.error = (
-                            "Failed to create applied snapshot: {}".format(exc)
+                            f"Failed to create applied snapshot: {exc}"
                         )
                         logger.exception(
                             "Applied snapshot creation failed for %s", operation,
@@ -313,11 +311,11 @@ class TransactionalRunner:
                     val_errors = "; ".join(post_result.blockers)
                     if result.error is None:
                         result.error = (
-                            "Post-apply validation failed: {}".format(val_errors)
+                            f"Post-apply validation failed: {val_errors}"
                         )
                     self._lock.update_journal(
                         phase="failed",
-                        error="Post-apply validation failed: {}".format(val_errors),
+                        error=f"Post-apply validation failed: {val_errors}",
                     )
                     logger.warning(
                         "Post-apply validation failed for %s: %s",
@@ -377,7 +375,7 @@ class TransactionalRunner:
                 logger.error("Failed to release lock: %s", exc)
                 # Do not overwrite a pre-existing error.
                 if result.error is None:
-                    result.error = "Failed to release lock: {}".format(exc)
+                    result.error = f"Failed to release lock: {exc}"
 
         return result
 
@@ -386,13 +384,13 @@ class TransactionalRunner:
         operation: str,
         source: str,
         playbook: str = "playbooks/site.yml",
-        extra_vars: Optional[dict] = None,
-        tags: Optional[list[str]] = None,
-        skip_tags: Optional[list[str]] = None,
+        extra_vars: dict | None = None,
+        tags: list[str] | None = None,
+        skip_tags: list[str] | None = None,
         preset: str = "",
-        target_resources: Optional[list[str]] = None,
-        diff_summary: Optional[str] = None,
-        progress_cb: Optional[Callable[[str], None]] = None,
+        target_resources: list[str] | None = None,
+        diff_summary: str | None = None,
+        progress_cb: Callable[[str], None] | None = None,
     ) -> RunResult:
         """Convenience: execute an Ansible playbook as a transactional operation.
 
@@ -431,7 +429,7 @@ class TransactionalRunner:
         self,
         source: str,
         reason: str,
-        progress_cb: Optional[Callable[[str], None]] = None,
+        progress_cb: Callable[[str], None] | None = None,
     ) -> RunResult:
         """Reset system configuration to the initial baseline snapshot.
 
@@ -466,7 +464,7 @@ class TransactionalRunner:
             extra_vars=extra_vars,
             skip_tags=skip_tags,
             preset=baseline.preset,
-            diff_summary="Reset to baseline: {}".format(reason),
+            diff_summary=f"Reset to baseline: {reason}",
             progress_cb=progress_cb,
         )
 
@@ -477,11 +475,11 @@ class TransactionalRunner:
     async def _run_ansible_playbook(
         self,
         playbook: str,
-        extra_vars: Optional[dict] = None,
-        tags: Optional[list[str]] = None,
-        skip_tags: Optional[list[str]] = None,
-        progress_cb: Optional[Callable[[str], None]] = None,
-    ) -> tuple[bool, Optional[str]]:
+        extra_vars: dict | None = None,
+        tags: list[str] | None = None,
+        skip_tags: list[str] | None = None,
+        progress_cb: Callable[[str], None] | None = None,
+    ) -> tuple[bool, str | None]:
         """Run an Ansible playbook as an async subprocess with live output.
 
         Returns ``(True, None)`` on success, or ``(False, output_tail)``
@@ -511,7 +509,7 @@ class TransactionalRunner:
                     _os.write(fd, json.dumps(extra_vars).encode())
                 finally:
                     _os.close(fd)
-                cmd.extend(["-e", "@{}".format(vars_path)])
+                cmd.extend(["-e", f"@{vars_path}"])
                 vars_file = vars_path
 
             logger.info("Running Ansible: %s", " ".join(cmd))
@@ -534,10 +532,8 @@ class TransactionalRunner:
                     line = raw.decode(errors="replace").rstrip("\n")
                     buf.append(line)
                     if progress_cb and not is_stderr:
-                        try:
+                        with contextlib.suppress(Exception):
                             progress_cb(line)
-                        except Exception:
-                            pass
 
             try:
                 await asyncio.wait_for(
@@ -569,7 +565,7 @@ class TransactionalRunner:
                     stdout_tail,
                     stderr_tail,
                 )
-                return False, combined.strip() or "exit code {}".format(proc.returncode)
+                return False, combined.strip() or f"exit code {proc.returncode}"
 
             logger.info("Ansible playbook completed successfully")
             return True, None
@@ -593,7 +589,7 @@ class TransactionalRunner:
         self,
         pre_change_id: str,
         failed_operation: str,
-    ) -> tuple[bool, Optional[str]]:
+    ) -> tuple[bool, str | None]:
         """Attempt automatic rollback to pre-change snapshot.
 
         Returns ``(success, error_message)``.
@@ -614,7 +610,7 @@ class TransactionalRunner:
             # Read the pre-change snapshot manifest to get its config.
             pre_manifest = self._store.read_manifest(pre_change_id)
             if pre_manifest is None:
-                msg = "Pre-change snapshot {} not found".format(pre_change_id)
+                msg = f"Pre-change snapshot {pre_change_id} not found"
                 logger.error("Auto-rollback failed: %s", msg)
                 return False, msg
 
@@ -645,7 +641,7 @@ class TransactionalRunner:
                 return False, msg
 
         except Exception as exc:
-            msg = "Auto-rollback exception: {}".format(exc)
+            msg = f"Auto-rollback exception: {exc}"
             logger.exception(msg)
             return False, msg
 
@@ -653,14 +649,14 @@ class TransactionalRunner:
     # Startup recovery
     # ------------------------------------------------------------------
 
-    def recover_on_startup(self) -> Optional[dict]:
+    def recover_on_startup(self) -> dict | None:
         """Check for and recover from interrupted transactions.
 
         Called on daemon/service startup.  Returns a recovery report
         dict if recovery was performed, or ``None`` if no recovery
         was needed.
         """
-        report: Optional[dict] = None
+        report: dict | None = None
 
         # Check for stale locks from crashed processes.
         try:
@@ -676,7 +672,7 @@ class TransactionalRunner:
             logger.exception("Error during stale lock check: %s", exc)
             report = {
                 "recovered": False,
-                "error": "Stale lock check failed: {}".format(exc),
+                "error": f"Stale lock check failed: {exc}",
             }
 
         # Clean up stale ephemeral snapshots.

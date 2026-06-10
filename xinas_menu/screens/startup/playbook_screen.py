@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import os
 import re
@@ -9,12 +10,12 @@ import shlex
 import time
 from pathlib import Path
 
+from rich.markup import escape as _rich_escape
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import Screen
 from textual.widgets import Button, Label, RichLog
-from rich.markup import escape as _rich_escape
 
 _INSTALL_LOG_PRIMARY = "/var/log/xinas/install.log"
 _INSTALL_LOG_FALLBACK = "/tmp/xinas-install.log"
@@ -30,7 +31,10 @@ def _open_install_log(cmd: list[str], workdir: str):
             parent = os.path.dirname(path)
             if parent:
                 os.makedirs(parent, mode=0o755, exist_ok=True)
-            fh = open(path, "ab")
+            # The handle is intentionally long-lived: it is returned to the
+            # caller, written to for the duration of the playbook run, and
+            # closed in _run_playbook's finally block.
+            fh = open(path, "ab")  # noqa: SIM115
             header = (
                 f"\n=== {datetime.datetime.now().isoformat(timespec='seconds')} "
                 f"| argv: {shlex.join(cmd)} | cwd: {workdir} ===\n"
@@ -177,10 +181,15 @@ class PlaybookRunScreen(Screen[int]):
         if m:
             self._current_play = m.group(1).strip()
             return
-        if line.startswith("fatal:") or line.startswith("failed:") or line.startswith("unreachable:") or "ERROR!" in line:
-            if not self._failure_seen:
-                self._failure_seen = True
-                self._auto_expand_log_on_failure()
+        is_failure_line = (
+            line.startswith("fatal:")
+            or line.startswith("failed:")
+            or line.startswith("unreachable:")
+            or "ERROR!" in line
+        )
+        if is_failure_line and not self._failure_seen:
+            self._failure_seen = True
+            self._auto_expand_log_on_failure()
 
     async def _run_playbook(self) -> None:
         log = self.query_one("#playbook-log", RichLog)
@@ -236,10 +245,8 @@ class PlaybookRunScreen(Screen[int]):
             self._exit_code = 255
         finally:
             if log_fh is not None:
-                try:
+                with contextlib.suppress(OSError):
                     log_fh.close()
-                except OSError:
-                    pass
             self._running = False
             statusbar = self.query_one(_PlaybookStatusBar)
             if self._exit_code == 0:

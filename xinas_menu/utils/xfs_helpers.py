@@ -7,6 +7,7 @@ external log device, and high-performance mount options.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -169,10 +170,9 @@ async def mkfs_xfs(
     # Cap log size to device capacity (matching create_fs.yml lines 69-82)
     requested_bytes = _parse_size_to_bytes(log_size)
     ok, dev_bytes, err = await get_device_size_bytes(log_device)
-    if ok and dev_bytes > 0:
-        effective_log_size = str(min(requested_bytes, dev_bytes))
-    else:
-        effective_log_size = log_size
+    effective_log_size = (
+        str(min(requested_bytes, dev_bytes)) if ok and dev_bytes > 0 else log_size
+    )
 
     return await run_async_cmd(
         "mkfs.xfs", "-f",
@@ -261,10 +261,8 @@ async def create_mount_unit(
             os.chmod(tmp, 0o644)
             os.replace(tmp, unit_path)
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
             raise
     except Exception as exc:
         return (False, f"Failed to write mount unit: {exc}")
@@ -341,7 +339,6 @@ async def find_mounts_using_raid(array_name: str) -> list[dict]:
 
     Returns list of dicts: [{mountpoint, data_device, log_device}].
     """
-    import json as _json
 
     device_path = f"/dev/xi_{array_name}"
     results = []
@@ -362,14 +359,15 @@ async def find_mounts_using_raid(array_name: str) -> list[dict]:
             parts = line.split(None, 1)
             if len(parts) == 2:
                 target, opts = parts
-                if f"logdev={device_path}" in opts:
-                    # This mount uses our array as log device
-                    if not any(r["mountpoint"] == target for r in results):
-                        results.append({
-                            "mountpoint": target,
-                            "log_device": device_path,
-                            "role": "log",
-                        })
+                # logdev match ⇒ this mount uses our array as log device
+                if f"logdev={device_path}" in opts and not any(
+                    r["mountpoint"] == target for r in results
+                ):
+                    results.append({
+                        "mountpoint": target,
+                        "log_device": device_path,
+                        "role": "log",
+                    })
 
     return results
 
@@ -454,10 +452,8 @@ async def update_mount_unit_quota(
             os.chmod(tmp, 0o644)
             os.replace(tmp, unit_path)
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
             raise
     except Exception as exc:
         return (False, f"Failed to write mount unit: {exc}")

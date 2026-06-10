@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import json
 import os
@@ -9,16 +10,16 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
+from xinas_menu.screens.network import _flush_pbr_rules
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
-from xinas_menu.screens.network import _flush_pbr_rules
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -75,10 +76,8 @@ def _cfg_write(cfg: dict) -> None:
         os.chmod(tmp, 0o600)
         os.replace(tmp, str(_CFG_PATH))
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 
@@ -263,10 +262,8 @@ def _write_and_apply_netplan(netplan_content: str) -> tuple[bool, str]:
             os.chmod(tmp, 0o644)
             os.replace(tmp, str(_NETPLAN_PATH))
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
             raise
     except Exception as exc:
         return False, f"Failed to write netplan file: {exc}"
@@ -298,7 +295,7 @@ def _write_and_apply_netplan(netplan_content: str) -> tuple[bool, str]:
 def _validate_ipv4(ip: str) -> str | None:
     """Return error message or None if valid IPv4."""
     try:
-        addr = ipaddress.IPv4Address(ip)
+        ipaddress.IPv4Address(ip)  # raises on invalid input
         return None
     except Exception:
         return f"Invalid IPv4 address: {ip}"
@@ -475,7 +472,7 @@ class IPPoolScreen(Screen):
         ]
 
         multi = len(allocations) > 1
-        for i, (alloc, iface) in enumerate(zip(allocations, interfaces)):
+        for i, (alloc, iface) in enumerate(zip(allocations, interfaces, strict=False)):
             state_color = GRN if iface["state"] == "up" else "\033[33m"
             lines.append(
                 f"  {BLD}{alloc['name']}{NC}  "
@@ -582,7 +579,7 @@ class IPPoolScreen(Screen):
         loop = asyncio.get_running_loop()
         cfg = await loop.run_in_executor(None, _cfg_read)
 
-        GRN, CYN, BLD, DIM, NC = "\033[32m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+        _GRN, CYN, BLD, DIM, NC = "\033[32m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
         W = 68
         lines = [
             f"{BLD}{CYN}IP POOL SETTINGS{NC}",

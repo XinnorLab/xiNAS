@@ -1,6 +1,7 @@
 """hc_scheduler.py — manage systemd timer for health check scheduling."""
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import subprocess
@@ -64,10 +65,8 @@ def scheduler_status() -> dict:
         for line in timer_path.read_text().splitlines():
             if line.strip().startswith("OnUnitActiveSec="):
                 val = line.split("=", 1)[1].strip().rstrip("h")
-                try:
+                with contextlib.suppress(ValueError):
                     interval = int(val)
-                except ValueError:
-                    pass
 
     r = subprocess.run(
         ["systemctl", "show", _TIMER_NAME,

@@ -7,12 +7,12 @@ import platform
 import re
 import subprocess
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
@@ -197,7 +197,9 @@ def _build_mini_status() -> str:
             ["ss", "-tn", "state", "established", "( dport = :2049 )"],
             capture_output=True, text=True, timeout=3,
         )
-        client_lines = [l for l in r.stdout.splitlines() if l.strip() and not l.startswith("State")]
+        client_lines = [
+            line for line in r.stdout.splitlines() if line.strip() and not line.startswith("State")
+        ]
         lines.append(f"  {_DIM}Clients:{_NC}     {len(client_lines)}")
     except Exception:
         pass
@@ -211,7 +213,7 @@ def _build_mini_status() -> str:
             ["exportfs", "-s"], capture_output=True, text=True, timeout=3,
         )
         exports = list(dict.fromkeys(
-            l.split()[0] for l in r.stdout.splitlines() if l.strip()
+            line.split()[0] for line in r.stdout.splitlines() if line.strip()
         ))
         if not exports:
             lines.append(f"  {_DIM}No exports configured{_NC}")
@@ -329,9 +331,9 @@ def _build_mini_status() -> str:
 def _check_drift_banner() -> str:
     """Check for config drift and return a warning banner, or empty string."""
     try:
-        from xinas_history.store import FilesystemStore
-        from xinas_history.engine import SnapshotEngine
         from xinas_history.drift import DriftDetector
+        from xinas_history.engine import SnapshotEngine
+        from xinas_history.store import FilesystemStore
 
         store = FilesystemStore()
         engine = SnapshotEngine(store=store)

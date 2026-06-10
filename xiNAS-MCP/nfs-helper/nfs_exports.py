@@ -5,7 +5,6 @@ Parses and serializes the exports file format:
 """
 
 import fcntl
-import os
 import re
 
 EXPORTS_PATH = "/etc/exports"
@@ -77,7 +76,8 @@ def list_exports() -> list[dict]:
     """Read and parse /etc/exports."""
     def _read():
         try:
-            text = open(EXPORTS_PATH).read()
+            with open(EXPORTS_PATH) as f:
+                text = f.read()
         except FileNotFoundError:
             return []
         return _parse_exports(text)
@@ -89,7 +89,8 @@ def add_export(entry: dict) -> None:
     """Add or replace an export entry. Idempotent."""
     def _update():
         try:
-            text = open(EXPORTS_PATH).read()
+            with open(EXPORTS_PATH) as f:
+                text = f.read()
         except FileNotFoundError:
             text = ""
         entries = _parse_exports(text)
@@ -106,9 +107,10 @@ def remove_export(path: str) -> None:
     """Remove an export entry by path."""
     def _update():
         try:
-            text = open(EXPORTS_PATH).read()
+            with open(EXPORTS_PATH) as f:
+                text = f.read()
         except FileNotFoundError:
-            raise FileNotFoundError(f"Export not found: {path}")
+            raise FileNotFoundError(f"Export not found: {path}") from None
         entries = _parse_exports(text)
         new_entries = [e for e in entries if e["path"] != path]
         if len(new_entries) == len(entries):
@@ -123,9 +125,10 @@ def update_export(path: str, patch: dict) -> None:
     """Merge-patch an existing export entry."""
     def _update():
         try:
-            text = open(EXPORTS_PATH).read()
+            with open(EXPORTS_PATH) as f:
+                text = f.read()
         except FileNotFoundError:
-            raise FileNotFoundError(f"Export not found: {path}")
+            raise FileNotFoundError(f"Export not found: {path}") from None
         entries = _parse_exports(text)
         found = False
         for entry in entries:

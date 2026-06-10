@@ -8,12 +8,12 @@ import re
 import shutil
 import subprocess
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
 from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -70,7 +70,7 @@ class SystemStatusScreen(Screen):
                 self.app.grpc.get_server_info(), timeout=5,
             )
             if ok:
-                view.append(f"\n  xiRAID: connected")
+                view.append("\n  xiRAID: connected")
                 # License section
                 lic = info.get("license") if isinstance(info, dict) else None
                 if isinstance(lic, dict):

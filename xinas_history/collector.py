@@ -8,11 +8,9 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 from .grpc_inspector import GrpcInspector
 from .models import Checksums
-
 
 # Source paths for configuration files to collect (relative to repo root)
 CONFIG_SOURCES: dict[str, str] = {
@@ -52,7 +50,7 @@ class ConfigCollector:
             full_path = self._repo_root / rel_path
             try:
                 collected[snapshot_name] = full_path.read_bytes()
-            except (OSError, IOError):
+            except OSError:
                 # Missing files are silently skipped
                 continue
         return collected
@@ -226,7 +224,7 @@ class RuntimeCollector:
         exports_path = "/etc/exports"
         try:
             content = Path(exports_path).read_text()
-        except (OSError, IOError):
+        except OSError:
             return {"checksum": "", "exports": []}
 
         checksum = RuntimeCollector._sha256_file(exports_path)
@@ -291,7 +289,7 @@ class RuntimeCollector:
                 for chunk in iter(lambda: f.read(8192), b""):
                     h.update(chunk)
             return f"sha256:{h.hexdigest()}"
-        except (OSError, IOError):
+        except OSError:
             return ""
 
     @staticmethod

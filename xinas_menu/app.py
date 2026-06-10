@@ -8,16 +8,16 @@ from typing import ClassVar
 
 _log = logging.getLogger(__name__)
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
-from textual import work
 
 from xinas_menu.api.grpc_client import XiRAIDClient
 from xinas_menu.api.nfs_client import NFSHelperClient
 from xinas_menu.utils.audit import AuditLogger
-from xinas_menu.utils.update_check import CheckResult, UpdateChecker, build_rebuild_cmd
 from xinas_menu.utils.snapshot_helper import SnapshotHelper
+from xinas_menu.utils.update_check import CheckResult, UpdateChecker, build_rebuild_cmd
 from xinas_menu.widgets.alert_bar import AlertBar
 from xinas_menu.widgets.header import XiNASHeader
 from xinas_menu.widgets.status_footer import StatusFooter
@@ -62,8 +62,8 @@ class XiNASApp(App):
         yield StatusFooter()
 
     async def on_mount(self) -> None:
-        from xinas_menu.screens.welcome import WelcomeScreen
         from xinas_menu.screens.main_menu import MainMenuScreen
+        from xinas_menu.screens.welcome import WelcomeScreen
 
         if self._no_welcome:
             await self.push_screen(MainMenuScreen())

@@ -27,17 +27,17 @@ _MOUSE_DISABLE = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l"
 _MOUSE_ENABLE = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h"
 
 
-def release_mouse_capture(app: "App") -> None:
+def release_mouse_capture(app: App) -> None:
     """Tell the terminal to stop forwarding mouse events to the app."""
     _write(app, _MOUSE_DISABLE)
 
 
-def restore_mouse_capture(app: "App") -> None:
+def restore_mouse_capture(app: App) -> None:
     """Re-enable Textual's normal mouse tracking."""
     _write(app, _MOUSE_ENABLE)
 
 
-def _write(app: "App", sequence: str) -> None:
+def _write(app: App, sequence: str) -> None:
     driver = getattr(app, "_driver", None)
     if driver is not None:
         write = getattr(driver, "write", None)

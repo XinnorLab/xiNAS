@@ -16,12 +16,10 @@ import argparse
 import asyncio
 import json
 import sys
-from typing import Optional
 
 import yaml
 
 from .engine import SnapshotEngine
-from .models import SnapshotStatus, SnapshotType
 from .store import FilesystemStore
 
 
@@ -329,7 +327,7 @@ def _cmd_snapshot_reset_to_baseline(
             print(f"Baseline:  {baseline.id}")
             print(f"Created:   {baseline.timestamp}")
             print(f"Preset:    {baseline.preset}")
-            print(f"Risk:      DESTROYING_DATA")
+            print("Risk:      DESTROYING_DATA")
             print()
             print("WARNING: {}\n".format(plan["warning"]))
             if effective:
@@ -356,7 +354,7 @@ def _cmd_snapshot_reset_to_baseline(
         print(json.dumps(result.to_dict(), indent=2))
     else:
         if result.success:
-            print(f"\nReset to baseline completed successfully.")
+            print("\nReset to baseline completed successfully.")
             print(f"Snapshot: {result.snapshot_id}")
         else:
             print(f"\nReset to baseline FAILED: {result.error}")
@@ -414,12 +412,12 @@ def _cmd_gc_run(engine: SnapshotEngine) -> int:
 
 
 def _cmd_gc_policy(args: argparse.Namespace) -> int:
-    from .gc import load_retention_policy, CONFIG_PATH
+    from .gc import CONFIG_PATH, load_retention_policy
 
     if args.set:
         import json as _json
-        import tempfile
         import os
+        import tempfile
         try:
             data = _json.loads(CONFIG_PATH.read_text())
         except Exception:
@@ -501,13 +499,7 @@ def _dispatch_status(args: argparse.Namespace, engine: SnapshotEngine) -> int:
 
 def _change_marker(change_type: str) -> str:
     """Return a visual marker for a change type."""
-    if change_type == "added":
-        return "+"
-    elif change_type == "removed":
-        return "-"
-    elif change_type == "modified":
-        return "~"
-    return "?"
+    return {"added": "+", "removed": "-", "modified": "~"}.get(change_type, "?")
 
 
 if __name__ == "__main__":

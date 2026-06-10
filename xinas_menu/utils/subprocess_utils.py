@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 
 def run_cmd(

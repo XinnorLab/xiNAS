@@ -16,7 +16,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
+from textual.widgets import Footer, Label
 
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -132,7 +132,7 @@ class CollectLogsScreen(Screen):
             await loop.run_in_executor(None, fn)
             lines[-1] = f"  {_GRN}*{_NC} [{i}/{total}] {label}"
 
-        lines.append(f"\n  Creating archive...")
+        lines.append("\n  Creating archive...")
         view.set_content("\n".join(lines))
 
         hostname = socket.gethostname()

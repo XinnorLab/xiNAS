@@ -18,12 +18,12 @@ import subprocess
 import sys
 import threading
 
-from nfs_exports import list_exports, add_export, remove_export, update_export
-from nfs_sessions import list_sessions, get_sessions_for_path
-from nfs_quota import set_project_quota, set_user_quota
 from nfs_conf import build_nfsd_updates, restart_nfs_server, set_nfs_conf
+from nfs_exports import add_export, list_exports, remove_export, update_export
 from nfs_idmap import set_idmapd_domain
 from nfs_profile import render_nfs_profile
+from nfs_quota import set_project_quota, set_user_quota
+from nfs_sessions import get_sessions_for_path, list_sessions
 
 # --- Configuration ---
 
@@ -68,8 +68,10 @@ def handle_add_export(req: dict) -> None:
         mode_str = req.get("path_mode") or "0755"
         try:
             mode = int(str(mode_str), 8)
-        except (TypeError, ValueError):
-            raise ValueError(f"Invalid path_mode (must be octal string like '0755'): {mode_str}")
+        except (TypeError, ValueError) as err:
+            raise ValueError(
+                f"Invalid path_mode (must be octal string like '0755'): {mode_str}"
+            ) from err
         if mode < 0 or mode > 0o7777:
             raise ValueError(f"path_mode out of range: {mode_str}")
         os.mkdir(path, mode=mode)
@@ -221,8 +223,8 @@ def _exportfs_reload() -> None:
             log.warning("exportfs -r: %s", stderr)
         else:
             log.info("exportfs -r succeeded")
-    except FileNotFoundError:
-        raise RuntimeError("exportfs not found — is nfs-kernel-server installed?")
+    except FileNotFoundError as err:
+        raise RuntimeError("exportfs not found — is nfs-kernel-server installed?") from err
 
 
 # --- Dispatch table ---

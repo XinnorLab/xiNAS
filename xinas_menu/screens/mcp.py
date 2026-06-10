@@ -7,18 +7,20 @@ import socket as _socket
 import subprocess
 from pathlib import Path
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
+from xinas_menu.utils.config import CONFIG_PATH as _MCP_CONFIG
+from xinas_menu.utils.config import cfg_read as _cfg_read
+from xinas_menu.utils.config import cfg_write as _cfg_write
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
-from xinas_menu.utils.config import CONFIG_PATH as _MCP_CONFIG, cfg_read as _cfg_read, cfg_write as _cfg_write
 
 _RED = "\033[31m"
 _GRN = "\033[32m"
@@ -244,7 +246,7 @@ class MCPScreen(Screen):
         ak = Path("/root/.ssh/authorized_keys")
         if _safe_exists(ak):
             try:
-                n = sum(1 for l in ak.read_text().splitlines() if l.startswith("ssh-"))
+                n = sum(1 for line in ak.read_text().splitlines() if line.startswith("ssh-"))
             except Exception:
                 n = 0
             lines.append(f"  {DIM}SSH keys for root:{NC} {GRN}{n}{NC} key(s) in {ak}")
@@ -615,7 +617,7 @@ class RemoteAccessScreen(Screen):
         tokens = cfg.get("tokens", {})
         first_token = next(iter(tokens), None)
 
-        GRN, CYN, BLD, DIM, NC = "\033[32m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+        _GRN, CYN, BLD, DIM, NC = "\033[32m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
         lines = [
             f"{BLD}{CYN}=== MCP Remote Connection ==={NC}",
             "",
@@ -626,15 +628,15 @@ class RemoteAccessScreen(Screen):
         ]
         if first_token:
             masked = f"{first_token[:8]}...{first_token[-4:]}"
-            lines.append(f"  claude mcp add \\")
-            lines.append(f"    --transport http \\")
+            lines.append("  claude mcp add \\")
+            lines.append("    --transport http \\")
             lines.append(f'    --header "Authorization: Bearer {masked}" \\')
             lines.append(f"    xinas {proto}://{ip}:{port}/mcp")
-            lines.append(f"")
+            lines.append("")
             lines.append(f"  {DIM}(Replace masked token with full value from Token Management){NC}")
         else:
-            lines.append(f"  claude mcp add \\")
-            lines.append(f"    --transport http \\")
+            lines.append("  claude mcp add \\")
+            lines.append("    --transport http \\")
             lines.append(f"    xinas {proto}://{ip}:{port}/mcp")
 
         lines.extend([
@@ -947,7 +949,11 @@ class SSHAccessScreen(Screen):
         # Check authorized_keys
         ak = Path("/root/.ssh/authorized_keys")
         if ak.exists():
-            keys = [l for l in ak.read_text().splitlines() if l.strip() and not l.startswith("#")]
+            keys = [
+                line
+                for line in ak.read_text().splitlines()
+                if line.strip() and not line.startswith("#")
+            ]
             lines.append(f"\n  Authorized keys: {len(keys)}")
         view = self.query_one("#ssh-content", ScrollableTextView)
         view.set_content("\n".join(lines))

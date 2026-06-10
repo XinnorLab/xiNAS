@@ -2,30 +2,31 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Label, Footer
-from textual import work
+from textual.widgets import Footer, Label
 
+from xinas_menu.utils.config import cfg_read, cfg_write
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
-from xinas_menu.utils.config import cfg_read, cfg_write
 
 _log = logging.getLogger(__name__)
 
 try:
-    from xinas_history.engine import SnapshotEngine
-    from xinas_history.store import FilesystemStore
     from xinas_history.drift import DriftDetector
+    from xinas_history.engine import SnapshotEngine
     from xinas_history.gc import GarbageCollector, load_retention_policy
     from xinas_history.runner import TransactionalRunner
+    from xinas_history.store import FilesystemStore
     HAS_HISTORY = True
 except ImportError:
     HAS_HISTORY = False
@@ -136,10 +137,8 @@ class ConfigHistoryScreen(Screen):
         text = _format_history(summary)
         view.set_content(text)
 
-        try:
+        with contextlib.suppress(Exception):
             self.app.audit.log("history.view", "list", "OK")
-        except Exception:
-            pass
 
     # -- View single snapshot -----------------------------------------------
 
@@ -327,10 +326,8 @@ class ConfigHistoryScreen(Screen):
             f"  {_DIM}reference point. All future changes will be tracked relative to it.{_NC}\n"
             f"  {_DIM}You can now use rollback to return to this state.{_NC}"
         )
-        try:
+        with contextlib.suppress(Exception):
             self.app.audit.log("history.create_baseline", snapshot_id, "OK")
-        except Exception:
-            pass
 
     # -- Reset to baseline --------------------------------------------------
 
@@ -421,14 +418,12 @@ class ConfigHistoryScreen(Screen):
             f"is re-applied.{_NC}"
         )
 
-        try:
+        with contextlib.suppress(Exception):
             self.app.audit.log(
                 "history.reset_to_baseline_attempt",
                 f"baseline={baseline.id}",
                 "STARTED",
             )
-        except Exception:
-            pass
 
         try:
             store = FilesystemStore()
@@ -452,14 +447,12 @@ class ConfigHistoryScreen(Screen):
                 self.app.notify(
                     "Reset to baseline completed.", severity="information",
                 )
-                try:
+                with contextlib.suppress(Exception):
                     self.app.audit.log(
                         "history.reset_to_baseline",
                         f"baseline={baseline.id}",
                         "OK",
                     )
-                except Exception:
-                    pass
             else:
                 error_msg = run_result.error or "Unknown error"
                 rb_status = ""
@@ -482,14 +475,12 @@ class ConfigHistoryScreen(Screen):
                 )
                 self.app.notify("Reset to baseline failed.", severity="error")
 
-                try:
+                with contextlib.suppress(Exception):
                     self.app.audit.log(
                         "history.reset_to_baseline",
                         f"baseline={baseline.id} error={error_msg[:100]}",
                         "FAIL",
                     )
-                except Exception:
-                    pass
 
         except Exception as exc:
             _log.exception("Reset to baseline failed: %s", exc)
@@ -558,10 +549,8 @@ class ConfigHistoryScreen(Screen):
 
         view.set_content("\n".join(lines))
 
-        try:
+        with contextlib.suppress(Exception):
             self.app.audit.log("history.gc", f"purged={len(purged)}", "OK")
-        except Exception:
-            pass
 
     # -- Retention settings ---------------------------------------------------
 
@@ -654,14 +643,12 @@ class ConfigHistoryScreen(Screen):
         ]
         view.set_content("\n".join(lines))
 
-        try:
+        with contextlib.suppress(Exception):
             self.app.audit.log(
                 "history.retention_update",
                 f"max_snapshots={new_max} max_age_days={new_age}",
                 "OK",
             )
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +656,7 @@ class ConfigHistoryScreen(Screen):
 # ---------------------------------------------------------------------------
 
 
-def _create_engine(store: "FilesystemStore | None" = None) -> "SnapshotEngine":
+def _create_engine(store: FilesystemStore | None = None) -> SnapshotEngine:
     """Create a SnapshotEngine with default settings."""
     s = store or FilesystemStore()
     return SnapshotEngine(store=s)
@@ -741,7 +728,7 @@ def _format_history(summary: dict) -> str:
             f"Use {_BLD}5 — Create Baseline{_NC} to capture current"
         )
         lines.append(
-            f"  system state as the reference point for rollback and drift detection."
+            "  system state as the reference point for rollback and drift detection."
         )
 
     lines.append("")
