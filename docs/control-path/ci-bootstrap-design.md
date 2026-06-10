@@ -65,19 +65,19 @@ PRs" anti-pattern while still surfacing every issue.
 |---|---|---|
 | `typescript-typecheck` (`tsc --noEmit`) | **Blocking** | n/a |
 | `typescript-lint` (`biome lint`, `correctness` rules only) | **Blocking** | n/a; raise rule categories incrementally |
-| `typescript-format` (`biome format src/` — Biome 1.9.4 uses no `--check` flag) | **Warn-only** | After backlog cleanup PR series |
+| `typescript-format` (`biome format src/` — Biome 1.9.4 uses no `--check` flag) | **Blocking** (flipped 2026-06-10 — backlog clean) | satisfied |
 | `typescript-tests` (`vitest run`) | **Blocking** (one sanity test) | n/a |
 | `typescript-contracts` (vitest schema-fixture validation against `api-v1.yaml`) | **Blocking** | n/a; expands as real handlers and mock server land |
-| `python-lint` (`ruff check`) | **Warn-only** | After lint cleanup PR series |
-| `python-format` (`ruff format --check`) | **Warn-only** | After format pass PR |
-| `python-typecheck` (`pyright`, `basic` mode) | **Warn-only** | After runtime deps land in `pyproject.toml` |
+| `python-lint` (`ruff check`) | **Blocking** (flipped 2026-06-10 — ruff cleanup PR) | satisfied |
+| `python-format` (`ruff format --check`) | **Blocking** (flipped 2026-06-10 — format pass PR) | satisfied |
+| `python-typecheck` (`pyright`, `basic` mode) | **Blocking** (flipped 2026-06-10 — runtime deps + typing tail landed) | satisfied |
 | `python-tests` (`pytest`) | **Blocking** (one sanity test) | n/a |
 | `ansible` (`ansible-lint`) | **Blocking** | n/a |
-| `yamllint` | **Warn-only** | After backlog cleanup PR series |
+| `yamllint` | **Blocking** (flipped 2026-06-10 — house style codified in `.yamllint.yml`) | satisfied |
 | `openapi` (`spectral lint`, ruleset `spectral:oas`) | **Blocking** | n/a |
 | `openapi-envelope` (custom Spectral rule, loaded via `.spectral.yaml`) | **Warn-only** | After 3 production PRs land without violation |
 | `secrets` (`gitleaks`) | **Blocking** | n/a |
-| `markdown` (`markdownlint-cli2`) | **Warn-only** | After backlog cleanup PR series |
+| `markdown` (`markdownlint-cli2`) | **Blocking** (flipped 2026-06-10 — house style codified in `.markdownlint-cli2.jsonc`) | satisfied |
 
 ### Evidence behind warn-only choices
 
