@@ -96,6 +96,55 @@ describe('NfsHelperClient', () => {
     expect(calls).toEqual([{ op: 'set_idmapd_domain', domain: 'x.example.com' }]);
   });
 
+  it('renderNfsProfile sends render_nfs_profile with the spec and restart flag', async () => {
+    const result = {
+      effective_files: {
+        '/etc/nfs/nfsd.conf': 'sha256:aa',
+        '/etc/default/nfs-kernel-server': 'sha256:bb',
+        '/etc/modprobe.d/lockd.conf': 'sha256:cc',
+        '/etc/default/nfs-common': 'sha256:dd',
+      },
+      restarted: true,
+      reloaded: false,
+    };
+    const { roundTrip, calls } = fakeRoundTrip({ ok: true, result });
+    const client = createNfsHelperClient(roundTrip);
+
+    const spec = { threads: { count: 128 }, rdma: { enabled: true, port: 20049 } };
+    await expect(client.renderNfsProfile(spec, true)).resolves.toEqual(result);
+    expect(calls).toEqual([{ op: 'render_nfs_profile', spec, restart: true }]);
+  });
+
+  it('renderNfsProfile forwards restart:false and parses the reload result', async () => {
+    const result = { effective_files: {}, restarted: false, reloaded: true };
+    const { roundTrip, calls } = fakeRoundTrip({ ok: true, result });
+    const client = createNfsHelperClient(roundTrip);
+
+    await expect(client.renderNfsProfile({ threads: { count: 64 } }, false)).resolves.toEqual(
+      result,
+    );
+    expect(calls).toEqual([
+      { op: 'render_nfs_profile', spec: { threads: { count: 64 } }, restart: false },
+    ]);
+  });
+
+  it('renderNfsProfile maps {ok:false} to a typed NfsHelperError', async () => {
+    const { roundTrip } = fakeRoundTrip({
+      ok: false,
+      code: 'INVALID_ARGUMENT',
+      error: 'spec.threads.count must be >= 8',
+    });
+    const client = createNfsHelperClient(roundTrip);
+
+    await expect(client.renderNfsProfile({ threads: { count: 1 } }, false)).rejects.toMatchObject({
+      name: 'NfsHelperError',
+      code: 'INVALID_ARGUMENT',
+    });
+    await expect(client.renderNfsProfile({ threads: { count: 1 } }, false)).rejects.toThrow(
+      /must be >= 8/,
+    );
+  });
+
   it('listExports sends list_exports and returns the parsed result array', async () => {
     const result: HelperExportEntry[] = [
       { path: '/mnt/data', clients: [{ host: '*', options: ['rw'] }] },

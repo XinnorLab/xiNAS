@@ -80,13 +80,15 @@ export function createApp(ctx: ApiContext): Express {
   // loop below; /reference is not in that list, so there is no shadowing.
   v1.use(referenceRouter(ctx));
 
-  // S3 N5 — the real NFS mutating routes (share.create/update/delete +
-  // nfs-idmap.set) over the N4 plan providers. Mounted BEFORE the
-  // executorUnavailable stub loop so the four real verbs (POST /shares,
-  // PATCH/DELETE /shares/:id, PATCH /nfs-idmap) take precedence over the
-  // '/shares' + '/shares/:id' stub registrations below; the verbs this
-  // router does not register (e.g. PUT /shares/:id) and every other
-  // resource still fall through to the stubs.
+  // S3 N5 + N7.3 — the real NFS mutating routes (share.create/update/delete +
+  // nfs-profile.update + nfs-idmap.set) over the N4 plan providers. Mounted
+  // BEFORE the executorUnavailable stub loop so the five real verbs (POST
+  // /shares, PATCH/DELETE /shares/:id, PATCH /nfs-profiles/:id, PATCH
+  // /nfs-idmap) take precedence over the '/shares' + '/shares/:id' +
+  // '/nfs-profiles/:id' stub registrations below; the verbs this router does
+  // not register (e.g. PUT /shares/:id, PUT /nfs-profiles/:id — the full
+  // replace stays stubbed in S3) and every other resource still fall through
+  // to the stubs.
   v1.use(nfsMutateRouter(ctx));
 
   // Remaining mutating verbs route to the executor-unavailable stub until

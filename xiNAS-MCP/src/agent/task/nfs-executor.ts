@@ -1,5 +1,6 @@
 /**
- * The four real NFS executors (S3 N3.2, s3-nfs-executor-spec §3.1–3.3, §3.5).
+ * The five real NFS executors (S3 N3.2 + N7.3, s3-nfs-executor-spec
+ * §3.1–3.5).
  *
  * Replaces the inert `reference.echo` proof with imperative, per-verb NFS
  * export management driving the privileged `xinas-nfs-helper` via the typed
@@ -7,7 +8,10 @@
  * RAW request spec through the shared, layer-neutral
  * {@link compileShareToExportEntry} (N1.1) — one compile, two importers (the
  * api PlanProvider previews the same diff; this executor authoritatively
- * applies it).
+ * applies it). `nfs-profile.update` (N7.3) follows the same principle with
+ * the shared {@link deriveProfileServiceAction}: the restart flag is DERIVED
+ * from the `{ profile, prior_profile }` operation spec, never stored — the
+ * api derived the identical answer for the plan's risk preview.
  *
  * Each executor defines ONLY its domain stages (preflight/apply/verify) plus a
  * `rollback()`; the {@link TaskRunner} wraps them with the snapshot_before/after
@@ -22,6 +26,7 @@
  * reader in `wiring.ts`.
  */
 import { compileShareToExportEntry, type ShareCompileInput } from '../../lib/nfs-exports.js';
+import { deriveProfileServiceAction, type NfsProfileSpec } from '../../lib/nfs-profile.js';
 import {
   type HelperExportEntry,
   NfsHelperError,
@@ -52,6 +57,17 @@ interface RawShareSpec {
 /** The raw idmap spec the api forwards for `nfs-idmap.set`. */
 interface RawDomainSpec {
   domain: string;
+}
+
+/**
+ * The raw `nfs-profile.update` spec the api forwards (§3.4): the FULL merged
+ * NfsProfile spec to render plus the pre-patch spec (the current desired or
+ * the ADR-0005 defaults), from which the restart flag and the rollback render
+ * are both derived.
+ */
+interface RawProfileSpec {
+  profile: NfsProfileSpec;
+  prior_profile: NfsProfileSpec;
 }
 
 /** Stash key under which preflight captures the prior export entry (or null). */
@@ -101,6 +117,24 @@ function readDomainSpec(spec: unknown): RawDomainSpec {
     throw new Error('nfs-executor: spec.domain must be a string');
   }
   return spec as unknown as RawDomainSpec;
+}
+
+/**
+ * Narrow the opaque `ctx.spec` to `{ profile, prior_profile }` (both plain
+ * objects), throwing a clear error if either is missing/malformed.
+ */
+function readProfileSpec(spec: unknown): RawProfileSpec {
+  if (!isRecord(spec)) {
+    throw new Error('nfs-executor: spec is not an object');
+  }
+  const { profile, prior_profile } = spec as { profile?: unknown; prior_profile?: unknown };
+  if (!isRecord(profile) || Array.isArray(profile)) {
+    throw new Error('nfs-executor: spec.profile must be an object (the FULL merged spec)');
+  }
+  if (!isRecord(prior_profile) || Array.isArray(prior_profile)) {
+    throw new Error('nfs-executor: spec.prior_profile must be an object (the pre-patch spec)');
+  }
+  return spec as unknown as RawProfileSpec;
 }
 
 /** Map a RawShareSpec onto the shared compiler's input (Share-level fields fold per-client). */
@@ -370,7 +404,68 @@ function buildNfsIdmapSet(deps: NfsExecutorDeps): Executor {
 }
 
 /**
- * Build the four real NFS executors over the injected deps. Returned as a flat
+ * `nfs-profile.update` — render the four ADR-0005 effective NFS service files
+ * from the FULL merged profile spec (§3.4, §6.2).
+ *
+ * preflight narrows the `{ profile, prior_profile }` spec (shape check, a
+ * fail-before-change on garbage); apply derives the restart flag via the
+ * shared {@link deriveProfileServiceAction} (restart iff a CHANGED dimension's
+ * policy is 'restart' — the SAME derivation the api used for the plan's risk)
+ * and `render_nfs_profile`s the merged spec, emitting the returned per-file
+ * checksums. There is no verify stage: the render returns its own checksums
+ * and the N7.2 observed NfsProfile collector confirms the effective files on
+ * its next sweep. Rollback re-renders the PRIOR spec with the same derived
+ * flag — if the forward change warranted a restart, restoring it does too.
+ */
+function buildNfsProfileUpdate(deps: NfsExecutorDeps): Executor {
+  return {
+    operation_kind: 'nfs-profile.update',
+    stages: [
+      {
+        name: 'preflight',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { profile, prior_profile } = readProfileSpec(ctx.spec);
+          const { restart, changed } = deriveProfileServiceAction(prior_profile, profile);
+          ctx.emitOutput(
+            `nfs-profile.update: preflight — spec ok (changed: ${
+              changed.length > 0 ? changed.join(', ') : 'none'
+            }; service action: ${restart ? 'restart' : 'reload'})`,
+          );
+        },
+      },
+      {
+        name: 'apply',
+        async run(ctx: ExecutorContext): Promise<void> {
+          const { profile, prior_profile } = readProfileSpec(ctx.spec);
+          const { restart } = deriveProfileServiceAction(prior_profile, profile);
+          ctx.emitOutput(
+            `nfs-profile.update: apply — render_nfs_profile (restart=${String(restart)})`,
+          );
+          const result = await deps.helper.renderNfsProfile(profile, restart);
+          for (const [file, checksum] of Object.entries(result.effective_files)) {
+            ctx.emitOutput(`nfs-profile.update: rendered ${file} ${checksum}`);
+          }
+          ctx.emitOutput(
+            `nfs-profile.update: nfs-server ${result.restarted ? 'restarted' : 'reloaded'}`,
+          );
+        },
+      },
+    ],
+    async rollback(ctx: ExecutorContext): Promise<void> {
+      const { profile, prior_profile } = readProfileSpec(ctx.spec);
+      // Same derived flag as the forward render: if the change warranted a
+      // restart, restoring the prior set does too (§3.4).
+      const { restart } = deriveProfileServiceAction(prior_profile, profile);
+      ctx.emitOutput(
+        `nfs-profile.update: rollback — re-render prior profile (restart=${String(restart)})`,
+      );
+      await deps.helper.renderNfsProfile(prior_profile, restart);
+    },
+  };
+}
+
+/**
+ * Build the five real NFS executors over the injected deps. Returned as a flat
  * list so `wiring.ts` can register each on the {@link ExecutorRegistry}.
  */
 export function buildNfsExecutors(deps: NfsExecutorDeps): Executor[] {
@@ -378,6 +473,7 @@ export function buildNfsExecutors(deps: NfsExecutorDeps): Executor[] {
     buildShareCreate(deps),
     buildShareUpdate(deps),
     buildShareDelete(deps),
+    buildNfsProfileUpdate(deps),
     buildNfsIdmapSet(deps),
   ];
 }

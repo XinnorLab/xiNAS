@@ -111,8 +111,9 @@ export function buildTaskSubsystem(
   opts: { runSubprocess?: RunSubprocess; nfsDeps?: NfsExecutorDeps } = {},
 ): TaskSubsystem {
   const registry = new ExecutorRegistry();
-  // Register the real NFS executors (share.* + nfs-idmap.set) over the helper
-  // client; tests may inject `nfsDeps` to override the helper/idmap reader.
+  // Register the real NFS executors (share.* + nfs-profile.update +
+  // nfs-idmap.set) over the helper client; tests may inject `nfsDeps` to
+  // override the helper/idmap reader.
   const nfsDeps = opts.nfsDeps ?? buildNfsExecutorDeps(config);
   for (const ex of buildNfsExecutors(nfsDeps)) {
     registry.register(ex);

@@ -5,8 +5,9 @@
  * {@link createNfsProbe} (`callHelper(op, params)` — connect, write one
  * JSON line, read one line, parse). This module wraps that one-request /
  * one-response round-trip with typed *write* methods the NFS executor calls
- * (`add_export` / `remove_export` / `update_export` / `set_idmapd_domain`,
- * plus a typed `list_exports` read used by preflight/verify).
+ * (`add_export` / `remove_export` / `update_export` / `set_idmapd_domain` /
+ * `render_nfs_profile`, plus a typed `list_exports` read used by
+ * preflight/verify).
  *
  * The transport is injected as a single `roundTrip(req) -> envelope` function
  * so the client is test-hermetic (tests pass a fake that records the request).
@@ -36,6 +37,17 @@ export interface AddExportOptions {
   path_mode?: string;
 }
 
+/**
+ * What `render_nfs_profile` returns (S3 §6.2): per-file sha256 checksums keyed
+ * by the absolute production path (feeds `status.effective_files`) plus which
+ * post-render service action ran.
+ */
+export interface RenderNfsProfileResult {
+  effective_files: Record<string, string>;
+  restarted: boolean;
+  reloaded: boolean;
+}
+
 /** Typed write/read surface over the nfs-helper, called by the NFS executor. */
 export interface NfsHelperClient {
   listExports(): Promise<HelperExportEntry[]>;
@@ -43,6 +55,11 @@ export interface NfsHelperClient {
   removeExport(path: string): Promise<void>;
   updateExport(path: string, patch: { clients: HelperExportEntry['clients'] }): Promise<void>;
   setIdmapDomain(domain: string): Promise<void>;
+  /** Render the four ADR-0005 effective files from a FULL NfsProfile spec (§6.2). */
+  renderNfsProfile(
+    spec: Record<string, unknown>,
+    restart: boolean,
+  ): Promise<RenderNfsProfileResult>;
 }
 
 /** The nfs-helper response envelope (newline-delimited JSON, one per request). */
@@ -121,6 +138,18 @@ export function createNfsHelperClient(roundTrip: HelperRoundTrip): NfsHelperClie
 
     async setIdmapDomain(domain: string): Promise<void> {
       await call(roundTrip, { op: 'set_idmapd_domain', domain });
+    },
+
+    async renderNfsProfile(
+      spec: Record<string, unknown>,
+      restart: boolean,
+    ): Promise<RenderNfsProfileResult> {
+      const result = await call(roundTrip, { op: 'render_nfs_profile', spec, restart });
+      return (result ?? {
+        effective_files: {},
+        restarted: restart,
+        reloaded: !restart,
+      }) as RenderNfsProfileResult;
     },
   };
 }

@@ -42,7 +42,8 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   });
   const planEngine = new PlanEngine({ store, ctx: { kv: state.kv } });
   planEngine.register(referencePlanProvider);
-  // The four real NFS providers (S3 N4.1) — share.* + nfs-idmap.set.
+  // The five real NFS providers (S3 N4.1 + N7.3) — share.* +
+  // nfs-profile.update + nfs-idmap.set.
   for (const provider of buildNfsPlanProviders()) planEngine.register(provider);
 
   return {
