@@ -2,7 +2,10 @@ import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ApiException } from '../../../api/errors.js';
 import { PlanEngine } from '../../../api/plan/engine.js';
-import { xiraidArrayCreateProvider } from '../../../api/plan/providers/xiraid-array.js';
+import {
+  xiraidArrayCreateProvider,
+  xiraidArrayModifyProvider,
+} from '../../../api/plan/providers/xiraid-array.js';
 import { TaskStore } from '../../../api/tasks/store.js';
 import { SqliteKvStore } from '../../../state/backend-sqlite.js';
 import { runMigrations } from '../../../state/migrations.js';
@@ -19,7 +22,26 @@ function makeHarness() {
   });
   const engine = new PlanEngine({ store, ctx: { kv } });
   engine.register(xiraidArrayCreateProvider);
+  engine.register(xiraidArrayModifyProvider);
   return { kv, store, engine };
+}
+
+function seedArray(
+  kv: SqliteKvStore,
+  name: string,
+  over: { member_disk_ids?: string[]; spare_disk_ids?: string[] } = {},
+): void {
+  kv.put(`/xinas/v1/observed/XiraidArray/${name}`, {
+    kind: 'XiraidArray',
+    id: name,
+    spec: {
+      name,
+      level: 'raid6',
+      member_disk_ids: over.member_disk_ids ?? ['nvme1n1', 'nvme2n1', 'nvme3n1', 'nvme4n1'],
+      spare_disk_ids: over.spare_disk_ids ?? [],
+    },
+    status: { state: 'optimal', volume_path: `/dev/xi_${name}`, observed_at: '2026-06-10T12:00:00Z' },
+  });
 }
 
 function seedDisk(
@@ -143,5 +165,73 @@ describe('xiraidArrayCreateProvider', () => {
     await expect(h.engine.plan(planArgs({ name: 'x' }))).rejects.toMatchObject({
       code: 'INVALID_ARGUMENT',
     });
+  });
+});
+
+describe('xiraidArrayModifyProvider', () => {
+  let h: ReturnType<typeof makeHarness>;
+  beforeEach(() => {
+    h = makeHarness();
+    for (const d of ['nvme1n1', 'nvme2n1', 'nvme3n1', 'nvme4n1', 'nvme5n1', 'nvme6n1']) {
+      seedDisk(h.kv, d);
+    }
+    seedArray(h.kv, 'data');
+  });
+
+  function modifyArgs(spec: Record<string, unknown>) {
+    return { ...planArgs(spec), operation_kind: 'xiraid.array.modify' };
+  }
+
+  it('attach spares + tuning → no blockers, array first + touched spare leased, enriched spec', async () => {
+    const { task, planResult } = await h.engine.plan(
+      modifyArgs({ id: 'data', spare_disk_ids: ['nvme5n1'], tuning: { init_prio: 10 } }),
+    );
+    expect(planResult.blockers).toEqual([]);
+    expect(planResult.risk_level).toBe('non_disruptive');
+    expect(planResult.rollback_model).toBe('non_disruptive');
+    expect(planResult.observed_revision_expected).toBeUndefined(); // route binds freshness (S4 §4)
+    expect(task.affected_resources[0]).toEqual({ kind: 'XiraidArray', id: 'data' });
+    expect(task.affected_resources).toContainEqual({ kind: 'Disk', id: 'nvme5n1' });
+
+    const persisted = h.store.get(task.task_id)?.spec as Record<string, unknown>;
+    expect(persisted.id).toBe('data');
+    expect((persisted.device_by_id as Record<string, string>).nvme5n1).toBe('/dev/nvme5n1');
+
+    const diff = planResult.diff as Record<string, Record<string, unknown>>;
+    expect(diff.before?.spare_disk_ids).toEqual([]);
+    expect(diff.after?.spare_disk_ids).toEqual(['nvme5n1']);
+  });
+
+  it('detach: current spares are leased too (pool ops touch them)', async () => {
+    seedArray(h.kv, 'data', { spare_disk_ids: ['nvme5n1'] });
+    const { task } = await h.engine.plan(modifyArgs({ id: 'data', spare_disk_ids: [] }));
+    expect(task.affected_resources).toContainEqual({ kind: 'Disk', id: 'nvme5n1' });
+  });
+
+  it('re-listing this array own spare is not in use; a spare claimed elsewhere is', async () => {
+    seedArray(h.kv, 'data', { spare_disk_ids: ['nvme5n1'] });
+    seedArray(h.kv, 'other', { member_disk_ids: ['nvme6n1'], spare_disk_ids: [] });
+    const ok = await h.engine.plan(modifyArgs({ id: 'data', spare_disk_ids: ['nvme5n1'] }));
+    expect(ok.planResult.blockers).toEqual([]);
+    const clash = await h.engine.plan(modifyArgs({ id: 'data', spare_disk_ids: ['nvme6n1'] }));
+    expect(clash.planResult.blockers.map((b) => b.code)).toContain('disk_in_use');
+  });
+
+  it('unknown array id → NOT_FOUND; junk spec → INVALID_ARGUMENT', async () => {
+    await expect(h.engine.plan(modifyArgs({ id: 'ghost', tuning: {} }))).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(
+      h.engine.plan(modifyArgs({ id: 'data', spare_disk_ids: 'nope' })),
+    ).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+  });
+
+  it('re-parses its own enriched spec (apply re-check contract)', async () => {
+    const first = await h.engine.plan(
+      modifyArgs({ id: 'data', spare_disk_ids: ['nvme5n1'], tuning: { init_prio: 10 } }),
+    );
+    const persisted = h.store.get(first.task.task_id)?.spec as Record<string, unknown>;
+    const again = await h.engine.plan(modifyArgs(persisted));
+    expect(again.planResult.blockers).toEqual([]);
   });
 });

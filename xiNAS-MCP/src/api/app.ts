@@ -116,7 +116,8 @@ export function createApp(ctx: ApiContext): Express {
   for (const route of mutatingRoutes) {
     // POST /arrays is the real S3 create route mounted above.
     if (route !== '/arrays') v1.post(route, executorUnavailable(ctx));
-    v1.patch(route, executorUnavailable(ctx));
+    // PATCH /arrays/:id is the real S4 modify route mounted above.
+    if (route !== '/arrays/:id') v1.patch(route, executorUnavailable(ctx));
     v1.put(route, executorUnavailable(ctx));
     v1.delete(route, executorUnavailable(ctx));
   }

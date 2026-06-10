@@ -47,11 +47,29 @@ const REBUILDING_STATES = new Set([
 ]);
 const DEGRADED_STATES = new Set(['degraded', 'need_recon', 'need_resync']);
 
+/** Tolerant read of the pool_show payload: name + member drives. */
+function readPools(pools: unknown): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  if (!Array.isArray(pools)) return out;
+  for (const entry of pools) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const o = entry as Record<string, unknown>;
+    if (typeof o.name !== 'string') continue;
+    const drives = Array.isArray(o.drives)
+      ? o.drives.filter((d): d is string => typeof d === 'string')
+      : [];
+    out.set(o.name, drives);
+  }
+  return out;
+}
+
 export function parseRaidShow(
   payload: unknown,
   diskIdByPath: ReadonlyMap<string, string>,
+  pools?: unknown,
 ): ObservedXiraidArray[] {
   if (!Array.isArray(payload)) return [];
+  const poolDrives = readPools(pools);
   const out: ObservedXiraidArray[] = [];
   for (const entry of payload) {
     if (typeof entry !== 'object' || entry === null) continue;
@@ -63,6 +81,12 @@ export function parseRaidShow(
       : [];
     const states = normalizeStates(o.state);
     const reconProgress = numberOrNull(o.recon_progress) ?? numberOrNull(o.init_progress);
+    // S4 T5: the array's sparepool NAME (raid_show) joins to its member
+    // DRIVES (pool_show) → control-path disk ids. Absent/unknown → [].
+    const spareDrives =
+      typeof o.sparepool === 'string' && o.sparepool.length > 0
+        ? (poolDrives.get(o.sparepool) ?? [])
+        : [];
 
     out.push({
       kind: 'XiraidArray',
@@ -71,9 +95,7 @@ export function parseRaidShow(
         name: o.name,
         level: normalizeLevel(o.level),
         member_disk_ids: devices.map((d) => diskIdByPath.get(d) ?? d),
-        // Pool-membership observe lands with the modify plan (ADR-0006
-        // §Spare pools); S3 reports no spares rather than guessing.
-        spare_disk_ids: [],
+        spare_disk_ids: spareDrives.map((d) => diskIdByPath.get(d) ?? d),
         ...(numberOrNull(o.strip_size) !== null ? { strip_size_kib: o.strip_size as number } : {}),
         ...(numberOrNull(o.block_size) !== null ? { block_size: o.block_size as number } : {}),
         ...(numberOrNull(o.group_size) !== null ? { group_size: o.group_size as number } : {}),

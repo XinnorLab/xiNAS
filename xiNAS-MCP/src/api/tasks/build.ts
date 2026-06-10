@@ -5,7 +5,10 @@ import type { TaskEngines } from '../context.js';
 import { PlanEngine } from '../plan/engine.js';
 import { buildNfsPlanProviders } from '../plan/providers/nfs.js';
 import { referencePlanProvider } from '../plan/providers/reference.js';
-import { xiraidArrayCreateProvider } from '../plan/providers/xiraid-array.js';
+import {
+  xiraidArrayCreateProvider,
+  xiraidArrayModifyProvider,
+} from '../plan/providers/xiraid-array.js';
 import { TaskEngine } from './engine.js';
 import { TaskStore } from './store.js';
 
@@ -50,6 +53,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   // nfs-profile.update + nfs-idmap.set.
   for (const provider of buildNfsPlanProviders()) planEngine.register(provider);
   planEngine.register(xiraidArrayCreateProvider);
+  planEngine.register(xiraidArrayModifyProvider);
 
   return {
     planEngine,

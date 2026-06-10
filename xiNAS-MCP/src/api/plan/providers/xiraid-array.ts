@@ -22,12 +22,15 @@
  * deliberately spec-only).
  */
 
-import { toRaidCreateRequest } from '../../../lib/xiraid/translate.js';
+import { toRaidCreateRequest, toRaidModifyRequest } from '../../../lib/xiraid/translate.js';
 import {
   type CreateFacts,
+  type ModifyFacts,
   type ResolvedDisk,
   parseCreateSpec,
+  parseModifySpec,
   validateCreateSpec,
+  validateModifySpec,
 } from '../../../lib/xiraid/validate.js';
 import { ApiException } from '../../errors.js';
 import type { ResourceRef } from '../../tasks/types.js';
@@ -47,6 +50,56 @@ interface ObservedArrayRow {
   spec?: { name?: string; member_disk_ids?: string[]; spare_disk_ids?: string[] };
 }
 
+/** Observed Disk + XiraidArray facts every array provider needs. */
+interface GatheredFacts {
+  disks: ResolvedDisk[];
+  existingArrayNames: string[];
+  existingMemberDiskIds: Set<string>;
+  /** name → that array's observed spare disk ids. */
+  sparesByArray: Map<string, string[]>;
+  deviceByDiskId: Map<string, string>;
+}
+
+function gatherFacts(ctx: PlanContext): GatheredFacts {
+  const diskRows = ctx.kv.list<ObservedDiskRow>({ prefix: '/xinas/v1/observed/Disk/' });
+  const disks: ResolvedDisk[] = [];
+  for (const row of diskRows) {
+    const v = row.value;
+    const id = v.id;
+    const path = v.status?.device_path;
+    if (typeof id !== 'string' || typeof path !== 'string') continue;
+    disks.push({
+      id,
+      device_path: path,
+      safe_for_use: v.status?.safe_for_use === true,
+      system_disk: v.status?.system_disk === true,
+      mounted: v.status?.mounted === true,
+    });
+  }
+
+  const arrayRows = ctx.kv.list<ObservedArrayRow>({ prefix: '/xinas/v1/observed/XiraidArray/' });
+  const existingArrayNames: string[] = [];
+  const existingMemberDiskIds = new Set<string>();
+  const sparesByArray = new Map<string, string[]>();
+  for (const row of arrayRows) {
+    const s = row.value.spec;
+    if (typeof s?.name === 'string') {
+      existingArrayNames.push(s.name);
+      sparesByArray.set(s.name, [...(s.spare_disk_ids ?? [])]);
+    }
+    for (const id of s?.member_disk_ids ?? []) existingMemberDiskIds.add(id);
+    for (const id of s?.spare_disk_ids ?? []) existingMemberDiskIds.add(id);
+  }
+
+  return {
+    disks,
+    existingArrayNames,
+    existingMemberDiskIds,
+    sparesByArray,
+    deviceByDiskId: new Map(disks.map((d) => [d.id, d.device_path])),
+  };
+}
+
 export const xiraidArrayCreateProvider: PlanProvider = {
   operation_kind: 'xiraid.array.create',
 
@@ -63,33 +116,7 @@ export const xiraidArrayCreateProvider: PlanProvider = {
       );
     }
 
-    // --- facts from observed state ---
-    const diskRows = ctx.kv.list<ObservedDiskRow>({ prefix: '/xinas/v1/observed/Disk/' });
-    const disks: ResolvedDisk[] = [];
-    for (const row of diskRows) {
-      const v = row.value;
-      const id = v.id;
-      const path = v.status?.device_path;
-      if (typeof id !== 'string' || typeof path !== 'string') continue;
-      disks.push({
-        id,
-        device_path: path,
-        safe_for_use: v.status?.safe_for_use === true,
-        system_disk: v.status?.system_disk === true,
-        mounted: v.status?.mounted === true,
-      });
-    }
-
-    const arrayRows = ctx.kv.list<ObservedArrayRow>({ prefix: '/xinas/v1/observed/XiraidArray/' });
-    const existingArrayNames: string[] = [];
-    const existingMemberDiskIds = new Set<string>();
-    for (const row of arrayRows) {
-      const s = row.value.spec;
-      if (typeof s?.name === 'string') existingArrayNames.push(s.name);
-      for (const id of s?.member_disk_ids ?? []) existingMemberDiskIds.add(id);
-      for (const id of s?.spare_disk_ids ?? []) existingMemberDiskIds.add(id);
-    }
-
+    const { disks, existingArrayNames, existingMemberDiskIds } = gatherFacts(ctx);
     const facts: CreateFacts = { disks, existingArrayNames, existingMemberDiskIds };
     const blockers = validateCreateSpec(spec, facts);
 
@@ -124,6 +151,101 @@ export const xiraidArrayCreateProvider: PlanProvider = {
       risk_level: 'non_disruptive',
       rollback_model: 'non_disruptive',
       enriched_spec: { ...spec, device_by_id: deviceById },
+    };
+  },
+};
+
+/**
+ * xiraid.array.modify plan provider (S4 T5, ADR-0006 §Modify).
+ *
+ * The route injects the path id into the spec ({ id, spare_disk_ids?,
+ * tuning? }). Topology rejection (per-field UNSUPPORTED) is the ROUTE's
+ * job against the raw PATCH body — parseModifySpec here is tolerant so
+ * the apply-time re-check accepts the persisted enriched spec.
+ *
+ * The executor captures pool pre-state LIVE at its preflight (raid_show +
+ * pool_show under the held leases) — more accurate than plan-time observed
+ * state — so the enriched spec carries only { id, change, device_by_id }.
+ */
+export const xiraidArrayModifyProvider: PlanProvider = {
+  operation_kind: 'xiraid.array.modify',
+
+  async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
+    if (typeof rawSpec !== 'object' || rawSpec === null || typeof (rawSpec as { id?: unknown }).id !== 'string') {
+      throw new ApiException(
+        'INVALID_ARGUMENT',
+        'modify spec must carry the target array id',
+        undefined,
+        'PATCH /arrays/{id} injects the id; send { spec: { spare_disk_ids?, tuning? } }.',
+      );
+    }
+    const id = (rawSpec as { id: string }).id;
+
+    let change: ReturnType<typeof parseModifySpec>;
+    try {
+      change = parseModifySpec(rawSpec);
+    } catch (err) {
+      throw new ApiException(
+        'INVALID_ARGUMENT',
+        err instanceof Error ? err.message : String(err),
+        undefined,
+        'Send a modify-shaped spec: { spare_disk_ids?, tuning? } per ADR-0006.',
+      );
+    }
+
+    const facts = gatherFacts(ctx);
+    const observed = ctx.kv.get(`/xinas/v1/observed/XiraidArray/${id}`);
+    if (!observed || !facts.existingArrayNames.includes(id)) {
+      throw new ApiException(
+        'NOT_FOUND',
+        `array ${id} not found in observed state`,
+        undefined,
+        'List arrays via GET /api/v1/arrays; modify targets an existing array.',
+      );
+    }
+    const currentSpares = facts.sparesByArray.get(id) ?? [];
+
+    const modifyFacts: ModifyFacts = {
+      arrayName: id,
+      disks: facts.disks,
+      existingMemberDiskIds: facts.existingMemberDiskIds,
+      ownSpareDiskIds: new Set(currentSpares),
+    };
+    const blockers = validateModifySpec(change, modifyFacts);
+
+    // Disks touched by pool ops: the target set ∪ the current set (adds,
+    // removes, and keeps all ride the lease).
+    const targetSpares = change.spare_disk_ids;
+    const touchedSpares =
+      targetSpares !== undefined ? [...new Set([...targetSpares, ...currentSpares])] : [];
+    const deviceById: Record<string, string> = {};
+    for (const diskId of touchedSpares) {
+      const path = facts.deviceByDiskId.get(diskId);
+      if (path !== undefined) deviceById[diskId] = path;
+    }
+
+    const affected: ResourceRef[] = [
+      { kind: 'XiraidArray', id },
+      ...touchedSpares.map((d): ResourceRef => ({ kind: 'Disk', id: d })),
+    ];
+
+    return {
+      affected_resources: affected,
+      blockers,
+      warnings: [],
+      diff: {
+        before: { spare_disk_ids: currentSpares, tuning: null /* not observed */ },
+        after: {
+          ...(targetSpares !== undefined ? { spare_disk_ids: targetSpares } : {}),
+          ...(change.tuning !== undefined ? { tuning: change.tuning } : {}),
+        },
+        raid_modify_request: toRaidModifyRequest(id, {
+          ...(change.tuning !== undefined ? { tuning: change.tuning } : {}),
+        }),
+      },
+      risk_level: 'non_disruptive',
+      rollback_model: 'non_disruptive',
+      enriched_spec: { id, ...change, device_by_id: deviceById },
     };
   },
 };
