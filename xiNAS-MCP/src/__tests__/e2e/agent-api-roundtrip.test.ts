@@ -306,16 +306,17 @@ describe.sequential('e2e: agent -> api round-trip (fixture probe mode)', () => {
   it('slow: mutating stub returns EXECUTOR_UNSUPPORTED while the agent is ONLINE', async () => {
     // The agent is up + healthy (fixture mode), so the api's heartbeat tick has
     // recorded a successful agent.health within 2x interval -> tracker state is
-    // 'healthy'/'degraded' (NOT offline). The executor is reachable but no
-    // mutating method is implemented in S0+S1, so the tracker-aware stub returns
-    // UNSUPPORTED (422 / EXECUTOR_UNSUPPORTED), not UNAVAILABLE. Guard against
-    // the offline gate hollowly always returning UNAVAILABLE.
+    // 'healthy'/'degraded' (NOT offline). The executor is reachable but the
+    // filesystem mutating method isn't built yet (POST /arrays became the real
+    // S3 create route), so the tracker-aware stub returns UNSUPPORTED
+    // (422 / EXECUTOR_UNSUPPORTED), not UNAVAILABLE. Guard against the offline
+    // gate hollowly always returning UNAVAILABLE.
     // Give one heartbeat tick time to land.
     await sleep(HEARTBEAT_INTERVAL_MS * 3);
-    const res = await postJson(apiSockPath, '/api/v1/arrays', ADMIN_TOKEN, {
-      name: 'x',
-      level: 'raid5',
-      member_disk_ids: [],
+    const res = await postJson(apiSockPath, '/api/v1/filesystems', ADMIN_TOKEN, {
+      fs_type: 'xfs',
+      backing_device: '/dev/xi_x',
+      mountpoint: '/mnt/x',
     });
     expect(res.status).toBe(422);
     expect(res.body.errors?.[0]?.details?.code).toBe('EXECUTOR_UNSUPPORTED');
@@ -339,10 +340,10 @@ describe.sequential('e2e: agent -> api round-trip (fixture probe mode)', () => {
     expect(agent?.state).toBe('offline');
 
     // And the mutating stub now reports the executor unavailable.
-    const res = await postJson(apiSockPath, '/api/v1/arrays', ADMIN_TOKEN, {
-      name: 'x',
-      level: 'raid5',
-      member_disk_ids: [],
+    const res = await postJson(apiSockPath, '/api/v1/filesystems', ADMIN_TOKEN, {
+      fs_type: 'xfs',
+      backing_device: '/dev/xi_x',
+      mountpoint: '/mnt/x',
     });
     expect(res.status).toBe(500);
     expect(res.body.errors?.[0]?.details?.code).toBe('EXECUTOR_UNAVAILABLE');
