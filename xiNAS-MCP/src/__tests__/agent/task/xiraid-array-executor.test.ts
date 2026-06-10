@@ -4,6 +4,7 @@ import type { TaskProgressEvent } from '../../../agent/task/types.js';
 import { makeXiraidArrayCreateExecutor } from '../../../agent/task/xiraid-array-executor.js';
 import { XinasHistoryBridge } from '../../../agent/task/xinas-history-bridge.js';
 import { XiraidClient, type XiraidTransport } from '../../../agent/xiraid/client.js';
+import { makeUnimplementedTransport } from '../../../agent/xiraid/fake-transport.js';
 
 /** In-memory fake xiRAID with injectable failure modes. */
 function makeFake(opts: { failCreate?: 'clean' | 'partial'; downAfterCreate?: boolean } = {}) {
@@ -11,6 +12,7 @@ function makeFake(opts: { failCreate?: 'clean' | 'partial'; downAfterCreate?: bo
   let down = false;
   const destroyCalls: string[] = [];
   const transport: XiraidTransport = {
+    ...makeUnimplementedTransport(),
     async raidShow() {
       if (down) throw new Error('connect ECONNREFUSED 127.0.0.1:6066');
       return arrays.map((a) => ({ ...a }));

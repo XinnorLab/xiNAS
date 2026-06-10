@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { XiraidArrayCollector } from '../../../agent/collectors/xiraid.js';
 import { XiraidClient, type XiraidTransport } from '../../../agent/xiraid/client.js';
+import { makeUnimplementedTransport } from '../../../agent/xiraid/fake-transport.js';
 
 const NOW = '2026-06-10T12:00:00.000Z';
 
@@ -11,6 +12,7 @@ const DISKS = [
 
 function transportShowing(arrays: unknown): XiraidTransport {
   return {
+    ...makeUnimplementedTransport(),
     raidShow: async () => arrays,
     raidCreate: async () => {},
     raidDestroy: async () => {},
@@ -48,6 +50,7 @@ describe('XiraidArrayCollector', () => {
 
   it('daemon down → health error XIRAID_DAEMON_UNAVAILABLE and the sweep rethrows', async () => {
     const down: XiraidTransport = {
+      ...makeUnimplementedTransport(),
       raidShow: async () => {
         throw new Error('connect ECONNREFUSED 127.0.0.1:6066');
       },
@@ -63,6 +66,7 @@ describe('XiraidArrayCollector', () => {
   it('recovers: a later successful sweep flips health back to running', async () => {
     let fail = true;
     const flaky: XiraidTransport = {
+      ...makeUnimplementedTransport(),
       raidShow: async () => {
         if (fail) throw new Error('down');
         return [];
