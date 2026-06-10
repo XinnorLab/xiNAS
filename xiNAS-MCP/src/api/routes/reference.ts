@@ -1,9 +1,8 @@
 import { Router } from 'express';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
+import { clientImpact, requireString, taskEnvelope, toApplyPlan } from '../handlers/plan-apply.js';
 import { sendOk } from '../handlers/reads.js';
-import type { ApplyPlan } from '../tasks/engine.js';
-import type { Task } from '../tasks/types.js';
 
 /**
  * T4 — the first MUTATING route, `POST /api/v1/reference`, over the S2
@@ -140,51 +139,5 @@ export function referenceRouter(ctx: ApiContext): Router {
   return r;
 }
 
-/** Map a stored `plan_only` Task to the apply transaction's ApplyPlan. */
-function toApplyPlan(planTask: Task): ApplyPlan {
-  return {
-    plan_id: planTask.task_id,
-    kind: planTask.kind,
-    risk_level: planTask.risk_level,
-    affected_resources: planTask.affected_resources,
-    ...(planTask.spec !== undefined ? { spec: planTask.spec } : {}),
-    ...(planTask.plan_hash !== undefined ? { plan_hash: planTask.plan_hash } : {}),
-    ...(planTask.state_revision_expected !== undefined
-      ? { state_revision_expected: planTask.state_revision_expected }
-      : {}),
-  };
-}
-
-/** The Task envelope shape the 202 returns (subset the route needs to surface). */
-function taskEnvelope(task: Task): Record<string, unknown> {
-  return {
-    task_id: task.task_id,
-    state: task.state,
-    kind: task.kind,
-    risk_level: task.risk_level,
-    affected_resources: task.affected_resources,
-    ...(task.plan_id !== undefined ? { plan_id: task.plan_id } : {}),
-    ...(task.agent_acceptance_id !== undefined
-      ? { agent_acceptance_id: task.agent_acceptance_id }
-      : {}),
-    ...(task.error_code !== undefined ? { error_code: task.error_code } : {}),
-    ...(task.error_message !== undefined ? { error_message: task.error_message } : {}),
-  };
-}
-
-function requireString(v: unknown, name: string): string {
-  if (typeof v !== 'string' || v.length === 0) {
-    throw new ApiException(
-      'INVALID_ARGUMENT',
-      `'${name}' is required and must be a non-empty string`,
-    );
-  }
-  return v;
-}
-
-/** Plain-language NFS-client impact for the Plan envelope (reference = none). */
-function clientImpact(riskLevel: string): string {
-  return riskLevel === 'non_disruptive'
-    ? 'No impact on NFS clients.'
-    : 'May affect NFS clients; review the diff.';
-}
+// toApplyPlan/taskEnvelope/requireString/clientImpact moved to
+// handlers/plan-apply.ts (shared with routes/arrays.ts, S3 T8).

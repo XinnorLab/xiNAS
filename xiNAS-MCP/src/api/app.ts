@@ -18,6 +18,7 @@ import { inventoryRouter } from './routes/inventory.js';
 import { networkRouter } from './routes/network.js';
 import { nfsIdmapRouter } from './routes/nfs-idmap.js';
 import { nfsRouter } from './routes/nfs.js';
+import { arraysRouter } from './routes/arrays.js';
 import { referenceRouter } from './routes/reference.js';
 import { storageRouter } from './routes/storage.js';
 import { supportRouter } from './routes/support.js';
@@ -79,9 +80,14 @@ export function createApp(ctx: ApiContext): Express {
   // loop below; /reference is not in that list, so there is no shadowing.
   v1.use(referenceRouter(ctx));
 
-  // Mutating verbs all route to the executor-unavailable stub until
-  // xinas-agent ships. Per ADR-0002 §Agent heartbeat, plan and apply
-  // both return INTERNAL/EXECUTOR_UNAVAILABLE. Each route gets its
+  // S3: POST /arrays (xiraid.array.create) is real — mounted before the stub
+  // loop, and POST /arrays is excluded from it below. PATCH/DELETE /arrays/:id
+  // (modify/delete) stay stubbed until their plans land (ADR-0006).
+  v1.use(arraysRouter(ctx));
+
+  // Mutating verbs all route to the executor-unavailable stub until their
+  // real plan/apply routes ship. Per ADR-0002 §Agent heartbeat, plan and
+  // apply both return INTERNAL/EXECUTOR_UNAVAILABLE. Each route gets its
   // own real handler in a later PR.
   const mutatingRoutes = [
     '/arrays',
@@ -95,7 +101,8 @@ export function createApp(ctx: ApiContext): Express {
     '/config-history/rollback',
   ];
   for (const route of mutatingRoutes) {
-    v1.post(route, executorUnavailable(ctx));
+    // POST /arrays is the real S3 create route mounted above.
+    if (route !== '/arrays') v1.post(route, executorUnavailable(ctx));
     v1.patch(route, executorUnavailable(ctx));
     v1.put(route, executorUnavailable(ctx));
     v1.delete(route, executorUnavailable(ctx));
