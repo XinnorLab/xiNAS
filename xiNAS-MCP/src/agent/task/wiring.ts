@@ -16,8 +16,11 @@ import { join } from 'node:path';
 import { parseIdmapConf } from '../../lib/parse/idmap.js';
 import { parseMountinfo } from '../../lib/parse/mountinfo.js';
 import type { AgentConfig } from '../config.js';
+import { createFakeFsHost } from '../fs/fake-host.js';
+import { type FsHost, createRealFsHost } from '../fs/host.js';
 import { fixtureDir } from '../probe/fixture.js';
 import type { XiraidClient } from '../xiraid/client.js';
+import { makeFsCreateExecutor } from './fs-executor.js';
 import { buildNfsExecutors, type NfsExecutorDeps } from './nfs-executor.js';
 import { createNfsHelperClientFromProbe } from './nfs-helper-client.js';
 import { createProgressPublisher } from './progress-publisher.js';
@@ -163,9 +166,12 @@ export function buildTaskSubsystem(
     xiraidClient?: XiraidClient;
     /** Mount-guard override (fixture/e2e); default reads /proc/self/mountinfo. */
     readMounts?: () => Promise<Array<{ source: string; mountpoint: string }>>;
+    /** Host-command seam override; default: fake in fixture mode, real otherwise. */
+    fsHost?: FsHost;
   } = {},
 ): TaskSubsystem {
   const registry = new ExecutorRegistry();
+  const fdir = fixtureDir();
   // Register the real NFS executors (share.* + nfs-profile.update +
   // nfs-idmap.set) over the helper client; tests may inject `nfsDeps` to
   // override the helper/idmap reader.
@@ -179,7 +185,6 @@ export function buildTaskSubsystem(
     registry.register(makeXiraidArrayCreateExecutor({ client: opts.xiraidClient }));
     registry.register(makeXiraidArrayModifyExecutor({ client: opts.xiraidClient }));
     registry.register(makeXiraidArrayImportExecutor({ client: opts.xiraidClient }));
-    const fdir = fixtureDir();
     registry.register(
       makeXiraidArrayDeleteExecutor({
         client: opts.xiraidClient,
@@ -188,6 +193,10 @@ export function buildTaskSubsystem(
       }),
     );
   }
+  // S5 T8: filesystem executors run against the host-command seam — the
+  // file-backed fake in fixture mode (e2e), subprocess-backed otherwise.
+  const fsHost = opts.fsHost ?? (fdir !== null ? createFakeFsHost(fdir) : createRealFsHost());
+  registry.register(makeFsCreateExecutor({ host: fsHost }));
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
   });
