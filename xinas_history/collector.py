@@ -1,4 +1,5 @@
 """Collect configuration and runtime state for snapshot creation."""
+
 from __future__ import annotations
 
 import asyncio
@@ -100,8 +101,12 @@ class RuntimeCollector:
         services_task = self._collect_services()
 
         results = await asyncio.gather(
-            raid_task, pool_task, config_task,
-            mounts_task, exports_task, services_task,
+            raid_task,
+            pool_task,
+            config_task,
+            mounts_task,
+            exports_task,
+            services_task,
             return_exceptions=True,
         )
 
@@ -114,7 +119,8 @@ class RuntimeCollector:
         for filename, result in grpc_mapping:
             if isinstance(result, BaseException):
                 collected[filename] = json.dumps(
-                    {"error": str(result)}, indent=2,
+                    {"error": str(result)},
+                    indent=2,
                 ).encode()
             else:
                 ok, data, err = result
@@ -122,7 +128,8 @@ class RuntimeCollector:
                     collected[filename] = json.dumps(data, indent=2).encode()
                 else:
                     collected[filename] = json.dumps(
-                        {"error": err or "no data"}, indent=2,
+                        {"error": err or "no data"},
+                        indent=2,
                     ).encode()
 
         # System inspection results: plain dicts
@@ -134,13 +141,15 @@ class RuntimeCollector:
         for filename, result in system_mapping:
             if isinstance(result, BaseException):
                 collected[filename] = json.dumps(
-                    {"error": str(result)}, indent=2,
+                    {"error": str(result)},
+                    indent=2,
                 ).encode()
             elif isinstance(result, dict):
                 collected[filename] = json.dumps(result, indent=2).encode()
             else:
                 collected[filename] = json.dumps(
-                    {"error": "unexpected result type"}, indent=2,
+                    {"error": "unexpected result type"},
+                    indent=2,
                 ).encode()
 
         return collected
@@ -152,10 +161,7 @@ class RuntimeCollector:
         async def _checksum(path: str) -> str:
             return await loop.run_in_executor(None, self._sha256_file, path)
 
-        tasks = {
-            name: _checksum(path)
-            for name, path in CHECKSUM_TARGETS.items()
-        }
+        tasks = {name: _checksum(path) for name, path in CHECKSUM_TARGETS.items()}
         results: dict[str, str] = {}
         for name, task in tasks.items():
             results[name] = await task
@@ -178,8 +184,11 @@ class RuntimeCollector:
         try:
             result = subprocess.run(
                 [
-                    "systemctl", "list-units", "*.mount",
-                    "--output=json", "--no-pager",
+                    "systemctl",
+                    "list-units",
+                    "*.mount",
+                    "--output=json",
+                    "--no-pager",
                 ],
                 capture_output=True,
                 text=True,
@@ -200,12 +209,14 @@ class RuntimeCollector:
                 # Check if unit file is in /etc/systemd/system/ (xiNAS-managed)
                 unit_file_path = f"/etc/systemd/system/{unit_name}"
                 if os.path.isfile(unit_file_path):
-                    xinas_mounts.append({
-                        "unit": unit_name,
-                        "active": unit.get("active", ""),
-                        "sub": unit.get("sub", ""),
-                        "description": unit.get("description", ""),
-                    })
+                    xinas_mounts.append(
+                        {
+                            "unit": unit_name,
+                            "active": unit.get("active", ""),
+                            "sub": unit.get("sub", ""),
+                            "description": unit.get("description", ""),
+                        }
+                    )
 
             return {"units": xinas_mounts}
         except subprocess.TimeoutExpired:
@@ -246,7 +257,9 @@ class RuntimeCollector:
             try:
                 result = subprocess.run(
                     [
-                        "systemctl", "show", svc,
+                        "systemctl",
+                        "show",
+                        svc,
                         "--property=ActiveState,SubState,LoadState",
                         "--no-pager",
                     ],
@@ -316,22 +329,28 @@ class RuntimeCollector:
 
             for part in parts[1:]:
                 # Match patterns like: *(rw,sync), 10.0.0.0/24(rw,sync), hostname(opts)
-                match = re.match(r'^([^\(]+)\(([^)]*)\)$', part)
+                match = re.match(r"^([^\(]+)\(([^)]*)\)$", part)
                 if match:
-                    clients.append({
-                        "host": match.group(1),
-                        "options": match.group(2),
-                    })
+                    clients.append(
+                        {
+                            "host": match.group(1),
+                            "options": match.group(2),
+                        }
+                    )
                 else:
                     # Client spec without explicit options
-                    clients.append({
-                        "host": part,
-                        "options": "",
-                    })
+                    clients.append(
+                        {
+                            "host": part,
+                            "options": "",
+                        }
+                    )
 
-            exports.append({
-                "path": export_path,
-                "clients": clients,
-            })
+            exports.append(
+                {
+                    "path": export_path,
+                    "clients": clients,
+                }
+            )
 
         return exports

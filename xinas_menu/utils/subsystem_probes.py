@@ -3,6 +3,7 @@
 Used by both the splash screen (full status lines) and the main menu
 (banner shown only when something is wrong).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -19,7 +20,8 @@ class ProbeResult:
 async def probe_grpc(grpc_client, timeout: float = 5.0) -> ProbeResult:
     try:
         ok, _data, err = await asyncio.wait_for(
-            grpc_client.get_server_info(), timeout=timeout,
+            grpc_client.get_server_info(),
+            timeout=timeout,
         )
     except asyncio.TimeoutError:
         return ProbeResult("xiRAID gRPC", False, "timed out")
@@ -43,7 +45,9 @@ async def probe_nfs_helper(nfs_client) -> ProbeResult:
 
 async def probe_all(grpc_client, nfs_client) -> list[ProbeResult]:
     """Run all subsystem probes in parallel."""
-    return list(await asyncio.gather(
-        probe_grpc(grpc_client),
-        probe_nfs_helper(nfs_client),
-    ))
+    return list(
+        await asyncio.gather(
+            probe_grpc(grpc_client),
+            probe_nfs_helper(nfs_client),
+        )
+    )

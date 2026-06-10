@@ -1,4 +1,5 @@
 """Rollback risk classification logic for xiNAS configuration changes."""
+
 from __future__ import annotations
 
 import contextlib
@@ -36,40 +37,50 @@ _OPERATION_CLASS: dict[OperationType, RollbackClass] = {
 }
 
 # Sub-detail keys that refine RAID_MODIFY classification.
-_RAID_MODIFY_DESTRUCTIVE_KEYS = frozenset({
-    "level_change",
-    "device_change",
-    "parity_change",
-})
+_RAID_MODIFY_DESTRUCTIVE_KEYS = frozenset(
+    {
+        "level_change",
+        "device_change",
+        "parity_change",
+    }
+)
 
-_RAID_MODIFY_NON_DISRUPTIVE_KEYS = frozenset({
-    "restripe",
-    "parameter_change",
-})
+_RAID_MODIFY_NON_DISRUPTIVE_KEYS = frozenset(
+    {
+        "restripe",
+        "parameter_change",
+    }
+)
 
 # Sub-detail keys that refine FS_MODIFY classification.
-_FS_MODIFY_DESTRUCTIVE_KEYS = frozenset({
-    "reformat",
-    "device_change",
-    "label_change_reformat",
-})
+_FS_MODIFY_DESTRUCTIVE_KEYS = frozenset(
+    {
+        "reformat",
+        "device_change",
+        "label_change_reformat",
+    }
+)
 
-_FS_MODIFY_ACCESS_KEYS = frozenset({
-    "mountpoint_change",
-    "mount_option_change",
-    "unit_enable",
-    "unit_disable",
-})
+_FS_MODIFY_ACCESS_KEYS = frozenset(
+    {
+        "mountpoint_change",
+        "mount_option_change",
+        "unit_enable",
+        "unit_disable",
+    }
+)
 
 # Metadata-only changes — always non-disruptive.
-_METADATA_KEYS = frozenset({
-    "label",
-    "comment",
-    "annotation",
-    "labels",
-    "comments",
-    "annotations",
-})
+_METADATA_KEYS = frozenset(
+    {
+        "label",
+        "comment",
+        "annotation",
+        "labels",
+        "comments",
+        "annotations",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -201,15 +212,11 @@ class RollbackClassifier:
             # No details provided — assume worst case.
             return RollbackClass.DESTROYING_DATA
 
-        has_destructive = any(
-            details.get(k) for k in _RAID_MODIFY_DESTRUCTIVE_KEYS
-        )
+        has_destructive = any(details.get(k) for k in _RAID_MODIFY_DESTRUCTIVE_KEYS)
         if has_destructive:
             return RollbackClass.DESTROYING_DATA
 
-        has_non_disruptive = any(
-            details.get(k) for k in _RAID_MODIFY_NON_DISRUPTIVE_KEYS
-        )
+        has_non_disruptive = any(details.get(k) for k in _RAID_MODIFY_NON_DISRUPTIVE_KEYS)
         if has_non_disruptive:
             return RollbackClass.NON_DISRUPTIVE
 
@@ -226,15 +233,11 @@ class RollbackClassifier:
         if not details:
             return RollbackClass.DESTROYING_DATA
 
-        has_destructive = any(
-            details.get(k) for k in _FS_MODIFY_DESTRUCTIVE_KEYS
-        )
+        has_destructive = any(details.get(k) for k in _FS_MODIFY_DESTRUCTIVE_KEYS)
         if has_destructive:
             return RollbackClass.DESTROYING_DATA
 
-        has_access = any(
-            details.get(k) for k in _FS_MODIFY_ACCESS_KEYS
-        )
+        has_access = any(details.get(k) for k in _FS_MODIFY_ACCESS_KEYS)
         if has_access:
             return RollbackClass.CHANGING_ACCESS
 

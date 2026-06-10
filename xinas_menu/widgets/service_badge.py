@@ -1,4 +1,5 @@
 """ServiceBadge — colored active/inactive pill label."""
+
 from __future__ import annotations
 
 from textual.widgets import Label

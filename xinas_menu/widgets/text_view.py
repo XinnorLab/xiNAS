@@ -9,6 +9,7 @@ To copy content:
   Ctrl+Y (or 'Y' from the menu)   — copies the full panel text to clipboard
   Terminal Shift+drag              — standard terminal selection still works
 """
+
 from __future__ import annotations
 
 import re
@@ -23,7 +24,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 def _strip_for_clipboard(text: str) -> str:
     """Remove ANSI escape codes and Rich markup tags for plain-text clipboard copy."""
     text = _ANSI_RE.sub("", text)
-    text = re.sub(r'\[/?[^\[\]\n]{1,40}\]', '', text)
+    text = re.sub(r"\[/?[^\[\]\n]{1,40}\]", "", text)
     return text
 
 

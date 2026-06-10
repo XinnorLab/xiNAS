@@ -1,4 +1,5 @@
 """RAIDScreen — Quick Overview, Extended Details, Spare Pools, CRUD."""
+
 from __future__ import annotations
 
 import logging
@@ -80,8 +81,11 @@ async def _get_drive_groups(grpc_client) -> tuple[dict[str, list[str]], list[dic
     if not ok or not disks:
         return {}, []
     SMALL_THRESHOLD = 1_000_000_000  # 1 GB
-    nvme = [d for d in disks if "nvme" in d.get("name", "").lower()
-            and not d.get("system") and not d.get("raid_name")]
+    nvme = [
+        d
+        for d in disks
+        if "nvme" in d.get("name", "").lower() and not d.get("system") and not d.get("raid_name")
+    ]
     if not nvme:
         return {}, nvme
     groups: dict[str, list[str]] = {}
@@ -91,8 +95,16 @@ async def _get_drive_groups(grpc_client) -> tuple[dict[str, list[str]], list[dic
         size_cat = "small" if size_bytes < SMALL_THRESHOLD else "large"
         key = f"All {size_cat} NVMe, NUMA {numa}"
         groups.setdefault(key, []).append(d["name"])
-    all_large = [d["name"] for d in nvme if (d.get("size_bytes", d.get("size_raw", 0)) or 0) >= SMALL_THRESHOLD]
-    all_small = [d["name"] for d in nvme if (d.get("size_bytes", d.get("size_raw", 0)) or 0) < SMALL_THRESHOLD]
+    all_large = [
+        d["name"]
+        for d in nvme
+        if (d.get("size_bytes", d.get("size_raw", 0)) or 0) >= SMALL_THRESHOLD
+    ]
+    all_small = [
+        d["name"]
+        for d in nvme
+        if (d.get("size_bytes", d.get("size_raw", 0)) or 0) < SMALL_THRESHOLD
+    ]
     if all_large:
         groups[f"All large NVMe ({len(all_large)} drives)"] = all_large
     if all_small:
@@ -173,6 +185,7 @@ class RAIDScreen(Screen):
             self._show_extended()
         elif key == "3":
             from xinas_menu.screens.spare_pools import SparePoolScreen
+
             self.app.push_screen(SparePoolScreen())
         elif key == "4":
             self._create_array_wizard()
@@ -187,7 +200,8 @@ class RAIDScreen(Screen):
         view.set_content("Loading RAID arrays…")
         ok, data, err = await self.app.grpc.raid_show()
         view.set_content(
-            _format_raid_overview(data, extended=False) if ok
+            _format_raid_overview(data, extended=False)
+            if ok
             else f"Could not load RAID info: {grpc_short_error(err)}"
         )
 
@@ -197,7 +211,8 @@ class RAIDScreen(Screen):
         view.set_content("Loading RAID arrays (extended)…")
         ok, data, err = await self.app.grpc.raid_show(extended=True)
         view.set_content(
-            _format_raid_overview(data, extended=True) if ok
+            _format_raid_overview(data, extended=True)
+            if ok
             else f"Could not load RAID info: {grpc_short_error(err)}"
         )
 
@@ -207,7 +222,8 @@ class RAIDScreen(Screen):
         view.set_content("Loading spare pools…")
         ok, data, err = await self.app.grpc.pool_show()
         view.set_content(
-            _format_spare_pools(data) if ok
+            _format_spare_pools(data)
+            if ok
             else f"Could not load pool info: {grpc_short_error(err)}"
         )
 
@@ -236,8 +252,7 @@ class RAIDScreen(Screen):
 
         # Step 2: RAID level
         level = await self.app.push_screen_wait(
-            SelectDialog(_RAID_LEVELS, title="Create Array — Step 2",
-                         prompt="Select RAID level:")
+            SelectDialog(_RAID_LEVELS, title="Create Array — Step 2", prompt="Select RAID level:")
         )
         if not level:
             return
@@ -252,8 +267,7 @@ class RAIDScreen(Screen):
 
         choices = list(groups.keys()) + ["Pick individual drives"]
         group_choice = await self.app.push_screen_wait(
-            SelectDialog(choices, title="Create Array — Step 3",
-                         prompt="Select drive group:")
+            SelectDialog(choices, title="Create Array — Step 3", prompt="Select drive group:")
         )
         if not group_choice:
             return
@@ -286,15 +300,14 @@ class RAIDScreen(Screen):
             drives = selected
 
         if not drives:
-            await self.app.push_screen_wait(
-                ConfirmDialog("No drives selected.", "Error")
-            )
+            await self.app.push_screen_wait(ConfirmDialog("No drives selected.", "Error"))
             return
 
         # Step 4: Strip size
         strip = await self.app.push_screen_wait(
-            SelectDialog(_STRIP_SIZES, title="Create Array — Step 4",
-                         prompt="Strip size (KB), default 64:")
+            SelectDialog(
+                _STRIP_SIZES, title="Create Array — Step 4", prompt="Strip size (KB), default 64:"
+            )
         )
         if not strip:
             strip = "64"
@@ -304,8 +317,11 @@ class RAIDScreen(Screen):
         if level in ("50", "60"):
             while True:
                 group_size = await self.app.push_screen_wait(
-                    InputDialog("Group size (required for RAID 50/60):",
-                                "Create Array — Step 5", placeholder="4")
+                    InputDialog(
+                        "Group size (required for RAID 50/60):",
+                        "Create Array — Step 5",
+                        placeholder="4",
+                    )
                 )
                 if not group_size:
                     return
@@ -327,12 +343,17 @@ class RAIDScreen(Screen):
             if isinstance(p_data, dict):
                 pool_names = list(p_data.keys())
             elif isinstance(p_data, list):
-                pool_names = [p.get("name", "") for p in p_data if isinstance(p, dict) and p.get("name")]
+                pool_names = [
+                    p.get("name", "") for p in p_data if isinstance(p, dict) and p.get("name")
+                ]
         if pool_names:
             pool_choices = [_NONE_POOL] + sorted(pool_names)
             sparepool = await self.app.push_screen_wait(
-                SelectDialog(pool_choices, title="Create Array — Spare Pool",
-                             prompt="Select spare pool (or none):")
+                SelectDialog(
+                    pool_choices,
+                    title="Create Array — Spare Pool",
+                    prompt="Select spare pool (or none):",
+                )
             )
             if sparepool is None:
                 return
@@ -353,8 +374,7 @@ class RAIDScreen(Screen):
             summary += f"\nSpare Pool: {kwargs['sparepool']}"
 
         confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(f"Create this RAID array?\n\n{summary}",
-                          "Confirm Create")
+            ConfirmDialog(f"Create this RAID array?\n\n{summary}", "Confirm Create")
         )
         if not confirmed:
             return
@@ -364,8 +384,7 @@ class RAIDScreen(Screen):
 
         ok, _, err = await self.app.grpc.raid_create(name, level, drives, **kwargs)
         if ok:
-            self.app.audit.log("raid.create",
-                               f"{name} RAID-{level} ({len(drives)} drives)", "OK")
+            self.app.audit.log("raid.create", f"{name} RAID-{level} ({len(drives)} drives)", "OK")
             await self.app.snapshots.record(
                 "raid_create",
                 diff_summary=f"Created RAID-{level} array '{name}' with {len(drives)} drives",
@@ -385,7 +404,8 @@ class RAIDScreen(Screen):
         if not ok or not data:
             await self.app.push_screen_wait(
                 ConfirmDialog(
-                    f"No arrays available.\n{grpc_short_error(err)}" if not ok
+                    f"No arrays available.\n{grpc_short_error(err)}"
+                    if not ok
                     else "No RAID arrays configured.",
                     "Edit Array",
                 )
@@ -401,16 +421,18 @@ class RAIDScreen(Screen):
             return
 
         arr_name = await self.app.push_screen_wait(
-            SelectDialog(names, title="Edit Array",
-                         prompt="Select array to edit:")
+            SelectDialog(names, title="Edit Array", prompt="Select array to edit:")
         )
         if not arr_name:
             return
 
         param_labels = [f"{label} ({key})" for key, label, _, _, _ in _MODIFY_PARAMS]
         param_choice = await self.app.push_screen_wait(
-            SelectDialog(param_labels, title="Edit Array — Parameter",
-                         prompt=f"Select parameter for {arr_name}:")
+            SelectDialog(
+                param_labels,
+                title="Edit Array — Parameter",
+                prompt=f"Select parameter for {arr_name}:",
+            )
         )
         if not param_choice:
             return
@@ -443,13 +465,14 @@ class RAIDScreen(Screen):
                 node_cpulists = []
                 for n in topo:
                     drives_str = ", ".join(n["drives"]) if n["drives"] else "no drives"
-                    node_labels.append(
-                        f"NUMA {n['node']}  (CPUs {n['cpulist']})  — {drives_str}"
-                    )
+                    node_labels.append(f"NUMA {n['node']}  (CPUs {n['cpulist']})  — {drives_str}")
                     node_cpulists.append(n["cpulist"])
                 pick = await self.app.push_screen_wait(
-                    SelectDialog(node_labels, title="Select NUMA Node",
-                                 prompt="Pin array to CPUs of selected NUMA node:")
+                    SelectDialog(
+                        node_labels,
+                        title="Select NUMA Node",
+                        prompt="Pin array to CPUs of selected NUMA node:",
+                    )
                 )
                 if not pick:
                     return
@@ -485,18 +508,22 @@ class RAIDScreen(Screen):
                 if isinstance(p_data, dict):
                     pool_names = list(p_data.keys())
                 elif isinstance(p_data, list):
-                    pool_names = [p.get("name", "") for p in p_data if isinstance(p, dict) and p.get("name")]
+                    pool_names = [
+                        p.get("name", "") for p in p_data if isinstance(p, dict) and p.get("name")
+                    ]
             if not pool_names:
                 self.app.notify("No spare pools available.", severity="warning")
                 return
             value = await self.app.push_screen_wait(
-                SelectDialog(sorted(pool_names), title=f"Set {label}",
-                             prompt=f"Select spare pool for {arr_name}:")
+                SelectDialog(
+                    sorted(pool_names),
+                    title=f"Set {label}",
+                    prompt=f"Select spare pool for {arr_name}:",
+                )
             )
         elif kind == "select" and options:
             value = await self.app.push_screen_wait(
-                SelectDialog(options, title=f"Set {label}",
-                             prompt=f"New value for {label}:")
+                SelectDialog(options, title=f"Set {label}", prompt=f"New value for {label}:")
             )
         else:
             value = await self.app.push_screen_wait(
@@ -556,7 +583,8 @@ class RAIDScreen(Screen):
         if not ok or not data:
             await self.app.push_screen_wait(
                 ConfirmDialog(
-                    f"No arrays available.\n{grpc_short_error(err)}" if not ok
+                    f"No arrays available.\n{grpc_short_error(err)}"
+                    if not ok
                     else "No RAID arrays configured.",
                     "Delete Array",
                 )
@@ -572,8 +600,7 @@ class RAIDScreen(Screen):
             return
 
         arr_name = await self.app.push_screen_wait(
-            SelectDialog(names, title="Delete Array",
-                         prompt="Select array to delete:")
+            SelectDialog(names, title="Delete Array", prompt="Select array to delete:")
         )
         if not arr_name:
             return
@@ -596,10 +623,12 @@ class RAIDScreen(Screen):
                     for m in mounts:
                         mp = m.get("mountpoint", "")
                         if mp and exp_path.startswith(mp):
-                            affected_shares.append({
-                                "path": exp_path,
-                                "mountpoint": mp,
-                            })
+                            affected_shares.append(
+                                {
+                                    "path": exp_path,
+                                    "mountpoint": mp,
+                                }
+                            )
 
         # ── Build warning message with dependency info ───────────────────
         warning_parts = [
@@ -608,18 +637,13 @@ class RAIDScreen(Screen):
 
         if affected_shares:
             share_list = "\n".join(f"  - {s['path']}" for s in affected_shares)
-            warning_parts.append(
-                f"ACTIVE NFS SHARES will be removed:\n{share_list}\n"
-            )
+            warning_parts.append(f"ACTIVE NFS SHARES will be removed:\n{share_list}\n")
 
         if mounts:
             mount_list = "\n".join(
-                f"  - {m['mountpoint']} ({m.get('role', 'unknown')} device)"
-                for m in mounts
+                f"  - {m['mountpoint']} ({m.get('role', 'unknown')} device)" for m in mounts
             )
-            warning_parts.append(
-                f"ACTIVE FILESYSTEMS will be unmounted:\n{mount_list}\n"
-            )
+            warning_parts.append(f"ACTIVE FILESYSTEMS will be unmounted:\n{mount_list}\n")
 
         warning_parts.append(
             f"WARNING: This will DESTROY array '{arr_name}' and all data on it!\n"
@@ -697,6 +721,7 @@ class RAIDScreen(Screen):
                 if not ok_um:
                     # Rollback: re-mount unmounted filesystems
                     from xinas_menu.utils.xfs_helpers import mount_filesystem
+
                     for um in unmounted_mounts:
                         await mount_filesystem(um["mountpoint"])
                     # Rollback: re-add removed shares
@@ -738,6 +763,7 @@ class RAIDScreen(Screen):
         else:
             # Rollback: re-mount filesystems and re-add shares
             from xinas_menu.utils.xfs_helpers import mount_filesystem
+
             for um in unmounted_mounts:
                 await mount_filesystem(um["mountpoint"])
             for rs in removed_shares:
@@ -760,7 +786,15 @@ class RAIDScreen(Screen):
 _W = 70  # inner box width (between borders)
 
 # ANSI color codes for RAID display
-_GRN, _YLW, _RED, _CYN, _BLD, _DIM, _NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+_GRN, _YLW, _RED, _CYN, _BLD, _DIM, _NC = (
+    "\033[32m",
+    "\033[33m",
+    "\033[31m",
+    "\033[36m",
+    "\033[1m",
+    "\033[2m",
+    "\033[0m",
+)
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -824,8 +858,7 @@ def _format_state(state_list: Any) -> str:
 def _count_states(devices: list) -> tuple[int, int, int]:
     online = degraded = offline = 0
     for dev in devices:
-        raw = (dev[2][0] if (isinstance(dev, list) and len(dev) > 2 and dev[2])
-               else "unknown")
+        raw = dev[2][0] if (isinstance(dev, list) and len(dev) > 2 and dev[2]) else "unknown"
         s = (raw or "unknown").lower()
         if s == "online":
             online += 1
@@ -841,12 +874,15 @@ def _as_array_dict(data: Any) -> dict:
     if isinstance(data, dict):
         return data
     if isinstance(data, list):
-        return {(a.get("name", str(i)) if isinstance(a, dict) else str(i)): a
-                for i, a in enumerate(data)}
+        return {
+            (a.get("name", str(i)) if isinstance(a, dict) else str(i)): a
+            for i, a in enumerate(data)
+        }
     return {}
 
 
 # ── Quick / Extended overview ──────────────────────────────────────────────────
+
 
 def _format_raid_overview(data: Any, extended: bool = False) -> str:
     arrays = _as_array_dict(data)
@@ -855,7 +891,9 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
     title = "RAID ARRAYS — EXTENDED" if extended else "RAID ARRAYS — QUICK OVERVIEW"
     lines.append(_box_sep("="))
     pad = (_W - len(title)) // 2
-    lines.append(f"{_DIM}|{_NC}{' ' * pad}{_BLD}{_CYN}{title}{_NC}{' ' * (_W - pad - len(title) + 1)}{_DIM}|{_NC}")
+    lines.append(
+        f"{_DIM}|{_NC}{' ' * pad}{_BLD}{_CYN}{title}{_NC}{' ' * (_W - pad - len(title) + 1)}{_DIM}|{_NC}"
+    )
     lines.append(_box_sep("="))
     lines.append("")
 
@@ -904,6 +942,7 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
             lines.append(_box_line(f"  {_YLW}~ Initializing: {_progress_bar(init_progress)}{_NC}"))
 
         if extended:
+
             def _on_off(v):
                 return f"{_GRN}Enabled{_NC}" if v else f"{_DIM}Disabled{_NC}"
 
@@ -929,10 +968,22 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
             req_limit = arr.get("request_limit", 0)
             cpu = arr.get("cpu_allowed") or "all"
             lines.append(_box_line(f"  {_DIM}Memory Usage{_NC}        |  {memory_mb} MB"))
-            lines.append(_box_line(f"  {_DIM}Memory Limit{_NC}        |  {'unlimited' if not mem_limit else f'{mem_limit} MB'}"))
-            lines.append(_box_line(f"  {_DIM}Memory Pre-alloc{_NC}    |  {'disabled' if not mem_prealloc else f'{mem_prealloc} MB'}"))
+            lines.append(
+                _box_line(
+                    f"  {_DIM}Memory Limit{_NC}        |  {'unlimited' if not mem_limit else f'{mem_limit} MB'}"
+                )
+            )
+            lines.append(
+                _box_line(
+                    f"  {_DIM}Memory Pre-alloc{_NC}    |  {'disabled' if not mem_prealloc else f'{mem_prealloc} MB'}"
+                )
+            )
             lines.append(_box_line(f"  {_DIM}Block Size{_NC}          |  {block_size} bytes"))
-            lines.append(_box_line(f"  {_DIM}Request Limit{_NC}       |  {req_limit if req_limit else 'unlimited'}"))
+            lines.append(
+                _box_line(
+                    f"  {_DIM}Request Limit{_NC}       |  {req_limit if req_limit else 'unlimited'}"
+                )
+            )
             lines.append(_box_line(f"  {_DIM}CPU Affinity{_NC}        |  {cpu}"))
 
             # ── I/O Scheduler & Merge ──
@@ -969,26 +1020,31 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
                 lines.append(_box_line(f" {_BLD}{_CYN}DEVICE HEALTH & WEAR{_NC}"))
                 lines.append(_box_sep())
                 for i, dev in enumerate(devices):
-                    dev_path = (dev[1] if isinstance(dev, list) and len(dev) > 1
-                                else str(dev)).replace("/dev/", "")
-                    dev_state = (dev[2][0] if isinstance(dev, list) and len(dev) > 2
-                                 and dev[2] else "?")
+                    dev_path = (
+                        dev[1] if isinstance(dev, list) and len(dev) > 1 else str(dev)
+                    ).replace("/dev/", "")
+                    dev_state = (
+                        dev[2][0] if isinstance(dev, list) and len(dev) > 2 and dev[2] else "?"
+                    )
                     h = health[i] if i < len(health) else "N/A"
                     w = wear[i] if i < len(wear) else "N/A"
                     icon = _state_icon(dev_state)
                     sc = _state_color(dev_state)
-                    lines.append(_box_line(f"  {icon} {sc}{dev_path:<16}{_NC} {_DIM}Health:{_NC} {h:<8} {_DIM}Wear:{_NC} {w}"))
+                    lines.append(
+                        _box_line(
+                            f"  {icon} {sc}{dev_path:<16}{_NC} {_DIM}Health:{_NC} {h:<8} {_DIM}Wear:{_NC} {w}"
+                        )
+                    )
 
         lines.append(_box_line())
         lines.append(_box_sep("-"))
         lines.append("")
 
     healthy = sum(
-        1 for a in arrays.values()
-        if isinstance(a, dict) and all(
-            (s or "").lower() in ("online", "initialized")
-            for s in (a.get("state") or [])
-        )
+        1
+        for a in arrays.values()
+        if isinstance(a, dict)
+        and all((s or "").lower() in ("online", "initialized") for s in (a.get("state") or []))
     )
     lines.append(_box_sep("="))
     hc = _GRN if healthy == len(arrays) else _YLW
@@ -998,6 +1054,7 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
 
 
 # ── Spare Pools ────────────────────────────────────────────────────────────────
+
 
 def _format_spare_pools(data: Any) -> str:
     W3 = 66
@@ -1011,7 +1068,9 @@ def _format_spare_pools(data: Any) -> str:
 
     lines.append(bs("="))
     pad = (W3 - len("SPARE POOLS")) // 2
-    lines.append(f"{_DIM}|{_NC}{' ' * pad}{_BLD}{_CYN}SPARE POOLS{_NC}{' ' * (W3 - pad - len('SPARE POOLS') + 1)}{_DIM}|{_NC}")
+    lines.append(
+        f"{_DIM}|{_NC}{' ' * pad}{_BLD}{_CYN}SPARE POOLS{_NC}{' ' * (W3 - pad - len('SPARE POOLS') + 1)}{_DIM}|{_NC}"
+    )
     lines.append(bs("="))
     lines.append("")
 
@@ -1049,8 +1108,9 @@ def _format_spare_pools(data: Any) -> str:
             lines.append(bl(f"  {'Device':<22}{'Size':<16}Serial"))
             lines.append(bs())
             for i, dev in enumerate(devices):
-                dev_path = (dev[1] if isinstance(dev, list) and len(dev) > 1
-                            else str(dev)).replace("/dev/", "")
+                dev_path = (dev[1] if isinstance(dev, list) and len(dev) > 1 else str(dev)).replace(
+                    "/dev/", ""
+                )
                 sz = sizes[i] if i < len(sizes) else "N/A"
                 serial = str(serials[i])[:16] if i < len(serials) and serials[i] else "N/A"
                 lines.append(bl(f"  {dev_path:<22}{sz:<16}{serial}"))

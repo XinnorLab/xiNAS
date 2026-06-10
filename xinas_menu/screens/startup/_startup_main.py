@@ -1,4 +1,5 @@
 """StartupMainScreen — main menu for xinas-setup."""
+
 from __future__ import annotations
 
 import asyncio
@@ -54,9 +55,11 @@ class StartupMainScreen(Screen):
             self._enter_license()
         elif key == "3":
             from xinas_menu.screens.startup.install_screen import InstallScreen
+
             self.app.push_screen(InstallScreen())
         elif key == "4":
             from xinas_menu.screens.startup.advanced_screen import AdvancedScreen
+
             self.app.push_screen(AdvancedScreen())
 
     async def _collect_data(self) -> None:
@@ -68,10 +71,7 @@ class StartupMainScreen(Screen):
             return
         loop = asyncio.get_running_loop()
         r = await loop.run_in_executor(
-            None,
-            lambda: subprocess.run(
-                [str(collect_script)], capture_output=True, text=True
-            )
+            None, lambda: subprocess.run([str(collect_script)], capture_output=True, text=True)
         )
         if r.returncode == 0:
             view.set_content(f"[green]Done.[/green]\n{r.stdout}")
@@ -80,4 +80,5 @@ class StartupMainScreen(Screen):
 
     def _enter_license(self) -> None:
         from xinas_menu.screens.startup.license_screen import LicenseScreen
+
         self.app.push_screen(LicenseScreen())

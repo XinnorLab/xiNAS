@@ -1,4 +1,5 @@
 """PlaybookRunScreen — live ansible-playbook output streamer."""
+
 from __future__ import annotations
 
 import asyncio
@@ -121,10 +122,14 @@ class _PlaybookStatusBar(Label):
         if self._state == "success":
             self.update(f"  [green]✓[/green]  Completed                              {clock}")
         elif self._state == "failure":
-            self.update(f"  [red]✗[/red]  FAILED: TASK [{_rich_escape(self._task_name)}]    {clock}")
+            self.update(
+                f"  [red]✗[/red]  FAILED: TASK [{_rich_escape(self._task_name)}]    {clock}"
+            )
         else:
             spin = _SPINNER_FRAMES[self._frame]
-            label = "Starting…" if not self._task_seen else f"TASK [{_rich_escape(self._task_name)}]"
+            label = (
+                "Starting…" if not self._task_seen else f"TASK [{_rich_escape(self._task_name)}]"
+            )
             self.update(f"  [cyan]{spin}[/cyan]  {label}{stall_suffix}    {clock}")
 
 
@@ -203,8 +208,7 @@ class PlaybookRunScreen(Screen[int]):
         log_fh, log_path = _open_install_log(self._cmd, self._workdir)
         if log_path is None:
             log.write(
-                "[yellow]⚠ Could not open install log; "
-                "output will not be saved to disk.[/yellow]"
+                "[yellow]⚠ Could not open install log; output will not be saved to disk.[/yellow]"
             )
         else:
             log.write(f"[dim]Saving output to {log_path}[/dim]")

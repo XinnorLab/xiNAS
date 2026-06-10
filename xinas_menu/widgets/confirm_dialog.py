@@ -1,4 +1,5 @@
 """ConfirmDialog — modal yes/no or OK-only dialog."""
+
 from __future__ import annotations
 
 from textual.app import ComposeResult
@@ -57,6 +58,7 @@ class ConfirmDialog(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         from textual.containers import Horizontal, Vertical
+
         with Vertical(id="dialog-container"):
             yield Label(self._title, id="dialog-title")
             yield Label(self._message, id="dialog-body", markup=False)
@@ -64,8 +66,12 @@ class ConfirmDialog(ModalScreen[bool]):
                 if self._ok_only:
                     yield Button("OK", variant="primary", id="btn-ok", classes="dialog-btn")
                 else:
-                    yield Button(self._yes_label, variant="error", id="btn-yes", classes="dialog-btn")
-                    yield Button(self._no_label, variant="primary", id="btn-no", classes="dialog-btn")
+                    yield Button(
+                        self._yes_label, variant="error", id="btn-yes", classes="dialog-btn"
+                    )
+                    yield Button(
+                        self._no_label, variant="primary", id="btn-no", classes="dialog-btn"
+                    )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-ok":
@@ -103,8 +109,10 @@ class ConfirmDialog(ModalScreen[bool]):
 
     def on_mount(self) -> None:
         from xinas_menu.widgets._terminal_io import release_mouse_capture
+
         release_mouse_capture(self.app)
 
     def on_unmount(self) -> None:
         from xinas_menu.widgets._terminal_io import restore_mouse_capture
+
         restore_mouse_capture(self.app)

@@ -1,4 +1,5 @@
 """LicenseScreen — show and set xiRAID license."""
+
 from __future__ import annotations
 
 import logging
@@ -88,9 +89,7 @@ class LicenseScreen(Screen):
 
         if hwkey:
             prompt = (
-                f"HW key: {hwkey}\n"
-                f"(Press Ctrl+Y to copy HW key)\n\n"
-                f"Paste the license text below:"
+                f"HW key: {hwkey}\n(Press Ctrl+Y to copy HW key)\n\nPaste the license text below:"
             )
         else:
             prompt = "HW key: (unavailable)\n\nPaste the license text below:"

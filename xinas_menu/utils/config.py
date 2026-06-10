@@ -1,4 +1,5 @@
 """config.py — shared config read/write for /etc/xinas-mcp/config.json."""
+
 from __future__ import annotations
 
 import json

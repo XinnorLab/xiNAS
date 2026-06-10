@@ -5,6 +5,7 @@ Invoked by the systemd timer: python3 -m xinas_menu.health.runner
 Runs the health engine with the configured profile, then emails the results
 if email is enabled in /etc/xinas-mcp/config.json.
 """
+
 from __future__ import annotations
 
 import json
@@ -58,9 +59,7 @@ def main() -> None:
     from xinas_menu.health.engine import run_health_check
 
     try:
-        text_report, json_path = run_health_check(
-            str(profile_path), _LOG_DIR, []
-        )
+        text_report, json_path = run_health_check(str(profile_path), _LOG_DIR, [])
     except Exception as exc:
         _log.error("Health check failed: %s", exc)
         sys.exit(1)
@@ -84,6 +83,7 @@ def main() -> None:
             pass
 
     from xinas_menu.utils.config import cfg_read
+
     config = cfg_read()
     email_cfg = config.get("email", {})
 

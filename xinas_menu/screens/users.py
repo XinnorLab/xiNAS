@@ -1,4 +1,5 @@
 """UsersScreen — user management and disk quota."""
+
 from __future__ import annotations
 
 import asyncio
@@ -91,7 +92,8 @@ class UsersScreen(Screen):
     @work(exclusive=True)
     async def _create_user(self) -> None:
         import re
-        _USERNAME_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+
+        _USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
         while True:
             username = await self.app.push_screen_wait(
@@ -107,22 +109,23 @@ class UsersScreen(Screen):
                 self.app.notify("Username must be 32 characters or fewer.", severity="error")
                 continue
             if not _USERNAME_RE.match(username):
-                self.app.notify("Username must contain only alphanumeric, underscore, or dash characters.", severity="error")
+                self.app.notify(
+                    "Username must contain only alphanumeric, underscore, or dash characters.",
+                    severity="error",
+                )
                 continue
             break
 
         while True:
             password = await self.app.push_screen_wait(
-                InputDialog("Password (leave blank for no password):", "Create User",
-                            password=True)
+                InputDialog("Password (leave blank for no password):", "Create User", password=True)
             )
             if password is None:
                 return
             if not password:
                 break
             password2 = await self.app.push_screen_wait(
-                InputDialog("Confirm password:", "Create User",
-                            password=True)
+                InputDialog("Confirm password:", "Create User", password=True)
             )
             if password2 is None:
                 return
@@ -131,8 +134,7 @@ class UsersScreen(Screen):
             self.app.notify("Passwords do not match. Please try again.", severity="error")
 
         home = await self.app.push_screen_wait(
-            InputDialog("Home directory:", "Create User",
-                        default=f"/home/{username}")
+            InputDialog("Home directory:", "Create User", default=f"/home/{username}")
         )
         if home is None:
             return
@@ -161,7 +163,9 @@ class UsersScreen(Screen):
         if not users:
             self.app.notify("No regular users found.", severity="warning")
             return
-        user_labels = [f"{u.pw_name}  (UID {u.pw_uid})" for u in sorted(users, key=lambda x: x.pw_name)]
+        user_labels = [
+            f"{u.pw_name}  (UID {u.pw_uid})" for u in sorted(users, key=lambda x: x.pw_name)
+        ]
         choice = await self.app.push_screen_wait(
             SelectDialog(user_labels, title="Manage User", prompt="Select user:")
         )
@@ -195,7 +199,9 @@ class UsersScreen(Screen):
                 await self._manage_groups(username)
             elif action == "Delete User":
                 confirmed = await self.app.push_screen_wait(
-                    ConfirmDialog(f"Delete user '{username}'? Home directory will be removed.", "Confirm")
+                    ConfirmDialog(
+                        f"Delete user '{username}'? Home directory will be removed.", "Confirm"
+                    )
                 )
                 if confirmed:
                     ok, _, err = await loop.run_in_executor(
@@ -266,8 +272,7 @@ class UsersScreen(Screen):
             return
         if choice == _CUSTOM:
             shell = await self.app.push_screen_wait(
-                InputDialog("Shell path:", f"Change Shell: {username}",
-                            placeholder="/usr/bin/zsh")
+                InputDialog("Shell path:", f"Change Shell: {username}", placeholder="/usr/bin/zsh")
             )
             if not shell or not shell.strip():
                 return
@@ -325,7 +330,9 @@ class UsersScreen(Screen):
                 )
                 if ok:
                     self.app.audit.log("user.add_to_group", f"{username} -> {group}", "OK")
-                    self.app.notify(f"Added '{username}' to group '{group}'.", severity="information")
+                    self.app.notify(
+                        f"Added '{username}' to group '{group}'.", severity="information"
+                    )
                 else:
                     view.set_content(f"{_RED}Failed: {err}{_NC}")
 
@@ -333,6 +340,7 @@ class UsersScreen(Screen):
                 # Get primary group to exclude it
                 try:
                     import pwd as _pwd
+
                     pw = _pwd.getpwnam(username)
                     primary_gid = pw.pw_gid
                 except KeyError:
@@ -346,7 +354,9 @@ class UsersScreen(Screen):
                     except KeyError:
                         pass
                 if not removable:
-                    self.app.notify("No removable groups (primary group cannot be removed).", severity="warning")
+                    self.app.notify(
+                        "No removable groups (primary group cannot be removed).", severity="warning"
+                    )
                     continue
                 group = await self.app.push_screen_wait(
                     SelectDialog(removable, title="Remove from Group", prompt="Select group:")
@@ -358,7 +368,9 @@ class UsersScreen(Screen):
                 )
                 if ok:
                     self.app.audit.log("user.remove_from_group", f"{username} <- {group}", "OK")
-                    self.app.notify(f"Removed '{username}' from group '{group}'.", severity="information")
+                    self.app.notify(
+                        f"Removed '{username}' from group '{group}'.", severity="information"
+                    )
                 else:
                     view.set_content(f"{_RED}Failed: {err}{_NC}")
 
@@ -369,10 +381,11 @@ class UsersScreen(Screen):
         if not users:
             self.app.notify("No regular users found.", severity="warning")
             return
-        user_labels = [f"{u.pw_name}  (UID {u.pw_uid})" for u in sorted(users, key=lambda x: x.pw_name)]
+        user_labels = [
+            f"{u.pw_name}  (UID {u.pw_uid})" for u in sorted(users, key=lambda x: x.pw_name)
+        ]
         choice = await self.app.push_screen_wait(
-            SelectDialog(user_labels, title="Set Disk Quota — User",
-                         prompt="Select user:")
+            SelectDialog(user_labels, title="Set Disk Quota — User", prompt="Select user:")
         )
         if not choice:
             return
@@ -380,6 +393,7 @@ class UsersScreen(Screen):
 
         # Export path — list mounted XFS filesystems + custom option
         from xinas_menu.utils.xfs_helpers import run_async_cmd
+
         mount_points: list[str] = []
         ok, out, _ = await run_async_cmd("findmnt", "-t", "xfs", "-n", "-o", "TARGET", timeout=10)
         if ok and out:
@@ -389,15 +403,18 @@ class UsersScreen(Screen):
         if mount_points:
             choices = mount_points + [_CUSTOM]
             path_choice = await self.app.push_screen_wait(
-                SelectDialog(choices, title="Set Disk Quota — Path",
-                             prompt="Select filesystem:")
+                SelectDialog(choices, title="Set Disk Quota — Path", prompt="Select filesystem:")
             )
             if not path_choice:
                 return
             if path_choice == _CUSTOM:
                 export_path = await self.app.push_screen_wait(
-                    InputDialog("Export path:", "Set Disk Quota",
-                                default="/mnt/data/", placeholder="/mnt/data/share1")
+                    InputDialog(
+                        "Export path:",
+                        "Set Disk Quota",
+                        default="/mnt/data/",
+                        placeholder="/mnt/data/share1",
+                    )
                 )
                 if not export_path or not export_path.strip().startswith("/"):
                     self.app.notify("Export path must start with '/'.", severity="error")
@@ -418,7 +435,9 @@ class UsersScreen(Screen):
 
         while True:
             soft_str = await self.app.push_screen_wait(
-                InputDialog("Soft limit (GB, 0=none):", "Set Disk Quota", default="0", placeholder="10")
+                InputDialog(
+                    "Soft limit (GB, 0=none):", "Set Disk Quota", default="0", placeholder="10"
+                )
             )
             if soft_str is None:
                 return
@@ -434,7 +453,9 @@ class UsersScreen(Screen):
 
         while True:
             hard_str = await self.app.push_screen_wait(
-                InputDialog("Hard limit (GB, 0=none):", "Set Disk Quota", default="0", placeholder="20")
+                InputDialog(
+                    "Hard limit (GB, 0=none):", "Set Disk Quota", default="0", placeholder="20"
+                )
             )
             if hard_str is None:
                 return
@@ -464,9 +485,7 @@ class UsersScreen(Screen):
             f"  Soft limit: {_fmt_quota(soft_gb)}\n"
             f"  Hard limit: {_fmt_quota(hard_gb)}"
         )
-        if not await self.app.push_screen_wait(
-            ConfirmDialog(confirm_msg, "Confirm Quota")
-        ):
+        if not await self.app.push_screen_wait(ConfirmDialog(confirm_msg, "Confirm Quota")):
             return
 
         loop = asyncio.get_running_loop()
@@ -523,7 +542,15 @@ def _get_local_users() -> list[pwd.struct_passwd]:
 
 
 def _format_users(users: list[pwd.struct_passwd]) -> str:
-    GRN, YLW, _RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+    GRN, YLW, _RED, CYN, BLD, DIM, NC = (
+        "\033[32m",
+        "\033[33m",
+        "\033[31m",
+        "\033[36m",
+        "\033[1m",
+        "\033[2m",
+        "\033[0m",
+    )
     W = 110
     lines: list[str] = []
     lines.append(f"{BLD}{CYN}USER ACCOUNTS{NC}")
@@ -538,7 +565,9 @@ def _format_users(users: list[pwd.struct_passwd]) -> str:
         lines.append(f"  Found {GRN}{len(users)}{NC} user account(s)")
         lines.append("")
         lines.append(f"{DIM}{'-' * W}{NC}")
-        lines.append(f"  {DIM}{'Username':<16} {'UID':<8} {'Group':<16} {'Groups':<36} Home Directory{NC}")
+        lines.append(
+            f"  {DIM}{'Username':<16} {'UID':<8} {'Group':<16} {'Groups':<36} Home Directory{NC}"
+        )
         lines.append(f"{DIM}{'-' * W}{NC}")
         for u in sorted(users, key=lambda x: x.pw_name):
             try:
@@ -547,7 +576,9 @@ def _format_users(users: list[pwd.struct_passwd]) -> str:
                 group = str(u.pw_gid)
             groups = [g for g in _get_user_groups(u.pw_name) if g != group]
             groups_str = _format_group_list(groups, max_width=35)
-            lines.append(f"  {GRN}{u.pw_name:<16}{NC} {u.pw_uid:<8} {group:<16} {groups_str:<36} {u.pw_dir}")
+            lines.append(
+                f"  {GRN}{u.pw_name:<16}{NC} {u.pw_uid:<8} {group:<16} {groups_str:<36} {u.pw_dir}"
+            )
         lines.append(f"{DIM}{'-' * W}{NC}")
 
     lines.append("")
@@ -555,7 +586,9 @@ def _format_users(users: list[pwd.struct_passwd]) -> str:
     try:
         r = subprocess.run(
             ["findmnt", "-t", "xfs", "-n", "-o", "TARGET,OPTIONS"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         quota_mounts = []
         if r.returncode == 0:
@@ -585,7 +618,8 @@ def _run_cmd(*args: str) -> tuple[bool, str, str]:
 def _create_user_sync(username: str, home: str, password: str) -> tuple[bool, str]:
     r = subprocess.run(
         ["useradd", "-m", "-d", home, "-s", "/bin/bash", username],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if r.returncode != 0:
         return False, r.stderr.strip()
@@ -593,7 +627,8 @@ def _create_user_sync(username: str, home: str, password: str) -> tuple[bool, st
         p = subprocess.run(
             ["chpasswd"],
             input=f"{username}:{password}\n",
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if p.returncode != 0:
             return False, p.stderr.strip()
@@ -604,7 +639,8 @@ def _change_password_sync(username: str, password: str) -> tuple[bool, str]:
     p = subprocess.run(
         ["chpasswd"],
         input=f"{username}:{password}\n",
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if p.returncode != 0:
         return False, p.stderr.strip()
@@ -615,7 +651,8 @@ def _get_lock_status(username: str) -> bool:
     """Return True if account is locked."""
     r = subprocess.run(
         ["passwd", "-S", username],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if r.returncode != 0:
         return False
@@ -626,7 +663,8 @@ def _get_lock_status(username: str) -> bool:
 def _get_user_groups(username: str) -> list[str]:
     r = subprocess.run(
         ["id", "-Gn", username],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if r.returncode != 0:
         return []

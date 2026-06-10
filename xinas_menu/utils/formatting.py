@@ -1,4 +1,5 @@
 """formatting.py — shared display helpers."""
+
 from __future__ import annotations
 
 import re

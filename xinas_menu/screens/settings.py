@@ -1,4 +1,5 @@
 """SettingsScreen — email config, HC scheduler, test email."""
+
 from __future__ import annotations
 
 import asyncio
@@ -73,7 +74,9 @@ class SettingsScreen(Screen):
 
         email = cfg.get("email", {})
         if email.get("enabled"):
-            lines.append(f"  Email:     {GRN}enabled{NC}  ({email.get('smtp_host', '?')}:{email.get('smtp_port', '?')})")
+            lines.append(
+                f"  Email:     {GRN}enabled{NC}  ({email.get('smtp_host', '?')}:{email.get('smtp_port', '?')})"
+            )
             lines.append(f"  Recipients: {', '.join(email.get('to_addrs', []))}")
         else:
             lines.append(f"  Email:     {DIM}not configured{NC}")
@@ -83,8 +86,11 @@ class SettingsScreen(Screen):
         sched = cfg.get("healthcheck_schedule", {})
         if sched.get("enabled"):
             from xinas_menu.utils.hc_scheduler import scheduler_status
+
             status = await loop.run_in_executor(None, scheduler_status)
-            lines.append(f"  HC Scheduler: {GRN}enabled{NC}  (every {status.get('interval_hours', '?')}h)")
+            lines.append(
+                f"  HC Scheduler: {GRN}enabled{NC}  (every {status.get('interval_hours', '?')}h)"
+            )
             lines.append(f"  Profile:      {sched.get('profile', 'standard')}")
             lines.append(f"  Next run:     {status.get('next_run', 'n/a')}")
             lines.append(f"  Last run:     {status.get('last_run', 'n/a')}")
@@ -100,7 +106,9 @@ class SettingsScreen(Screen):
             ok_r, receivers, _ = await mail_show()
             ok_s, msettings, _ = await settings_mail_show()
             if ok_r and receivers:
-                lines.append(f"  xiRAID Mail: {GRN}enabled{NC}  ({len(receivers)} recipient{'s' if len(receivers) != 1 else ''})")
+                lines.append(
+                    f"  xiRAID Mail: {GRN}enabled{NC}  ({len(receivers)} recipient{'s' if len(receivers) != 1 else ''})"
+                )
             elif ok_r:
                 lines.append(f"  xiRAID Mail: {DIM}no recipients{NC}")
             else:
@@ -155,9 +163,12 @@ class SettingsScreen(Screen):
 
         while True:
             host = await self.app.push_screen_wait(
-                InputDialog("SMTP Host:", "Email Setup",
-                            default=email.get("smtp_host", ""),
-                            placeholder="smtp.example.com")
+                InputDialog(
+                    "SMTP Host:",
+                    "Email Setup",
+                    default=email.get("smtp_host", ""),
+                    placeholder="smtp.example.com",
+                )
             )
             if host is None:
                 return
@@ -168,9 +179,12 @@ class SettingsScreen(Screen):
 
         while True:
             port_str = await self.app.push_screen_wait(
-                InputDialog("SMTP Port:", "Email Setup",
-                            default=str(email.get("smtp_port", 587)),
-                            placeholder="587")
+                InputDialog(
+                    "SMTP Port:",
+                    "Email Setup",
+                    default=str(email.get("smtp_port", 587)),
+                    placeholder="587",
+                )
             )
             if port_str is None:
                 return
@@ -203,9 +217,12 @@ class SettingsScreen(Screen):
 
         while True:
             from_addr = await self.app.push_screen_wait(
-                InputDialog("From Address:", "Email Setup",
-                            default=email.get("from_addr", user),
-                            placeholder="alerts@example.com")
+                InputDialog(
+                    "From Address:",
+                    "Email Setup",
+                    default=email.get("from_addr", user),
+                    placeholder="alerts@example.com",
+                )
             )
             if from_addr is None:
                 return
@@ -216,7 +233,8 @@ class SettingsScreen(Screen):
         while True:
             to_str = await self.app.push_screen_wait(
                 InputDialog(
-                    "To Addresses (comma-separated):", "Email Setup",
+                    "To Addresses (comma-separated):",
+                    "Email Setup",
                     default=", ".join(email.get("to_addrs", [])),
                     placeholder="admin@example.com, ops@example.com",
                 )
@@ -262,6 +280,7 @@ class SettingsScreen(Screen):
             scheduler_enable,
             scheduler_status,
         )
+
         status = await loop.run_in_executor(None, scheduler_status)
 
         GRN, RED, BLD, _DIM, NC = "\033[32m", "\033[31m", "\033[1m", "\033[2m", "\033[0m"
@@ -297,7 +316,8 @@ class SettingsScreen(Screen):
 
         interval_str = await self.app.push_screen_wait(
             InputDialog(
-                "Run interval in hours (1-168):", "HC Scheduler",
+                "Run interval in hours (1-168):",
+                "HC Scheduler",
                 default=str(sched.get("interval_hours", 24)),
                 placeholder="24",
             )
@@ -322,9 +342,7 @@ class SettingsScreen(Screen):
         if profile is None:
             return
 
-        ok, err = await loop.run_in_executor(
-            None, lambda: scheduler_enable(interval, profile)
-        )
+        ok, err = await loop.run_in_executor(None, lambda: scheduler_enable(interval, profile))
         if ok:
             cfg["healthcheck_schedule"] = {
                 "enabled": True,
@@ -350,8 +368,7 @@ class SettingsScreen(Screen):
 
         if not cfg.get("email", {}).get("enabled"):
             view.set_content(
-                "\033[33m  Email is not configured.\n\n"
-                "  Use 'Email Configuration' first.\033[0m"
+                "\033[33m  Email is not configured.\n\n  Use 'Email Configuration' first.\033[0m"
             )
             return
 
@@ -400,7 +417,11 @@ class SettingsScreen(Screen):
         ok_s, settings, err_s = await settings_mail_show()
 
         _GRN, RED, BLD, DIM, NC = (
-            "\033[32m", "\033[31m", "\033[1m", "\033[2m", "\033[0m",
+            "\033[32m",
+            "\033[31m",
+            "\033[1m",
+            "\033[2m",
+            "\033[0m",
         )
         lines = [f"{BLD}xiRAID Notifications{NC}", ""]
 
@@ -447,7 +468,8 @@ class SettingsScreen(Screen):
         while True:
             address = await self.app.push_screen_wait(
                 InputDialog(
-                    "Recipient email:", "Add Notification Recipient",
+                    "Recipient email:",
+                    "Add Notification Recipient",
                     placeholder="admin@example.com",
                 )
             )
@@ -480,7 +502,8 @@ class SettingsScreen(Screen):
         self._xiraid_notifications()
 
     async def _xiraid_notif_remove_recipient(
-        self, receivers: list[dict[str, str]],
+        self,
+        receivers: list[dict[str, str]],
     ) -> None:
         labels = [f"{r['address']} ({r['level']})" for r in receivers]
         choice = await self.app.push_screen_wait(
@@ -551,12 +574,16 @@ class SettingsScreen(Screen):
         ok, err = await settings_mail_modify(pi, ppi)
         if ok:
             self.app.audit.log(
-                "settings.xiraid_mail", f"modify pi={pi} ppi={ppi}", "OK",
+                "settings.xiraid_mail",
+                f"modify pi={pi} ppi={ppi}",
+                "OK",
             )
             self.app.notify(f"Polling intervals updated: {pi}s / {ppi}min")
         else:
             self.app.audit.log(
-                "settings.xiraid_mail", f"modify pi={pi} ppi={ppi}", "FAIL",
+                "settings.xiraid_mail",
+                f"modify pi={pi} ppi={ppi}",
+                "FAIL",
             )
             self.app.notify(f"Failed: {err}", severity="error")
         self._xiraid_notifications()

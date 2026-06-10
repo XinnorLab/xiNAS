@@ -103,7 +103,9 @@ def _key_of(line: str) -> str | None:
     return k.strip().lower() or None
 
 
-def _apply_updates(lines: list[str], updates: Mapping[tuple[str, str], str]) -> tuple[list[str], list[dict]]:
+def _apply_updates(
+    lines: list[str], updates: Mapping[tuple[str, str], str]
+) -> tuple[list[str], list[dict]]:
     """Apply (section, key) -> value updates to a copy of *lines*.
 
     Returns (new_lines, applied) where applied is a list of dicts with
@@ -134,13 +136,15 @@ def _apply_updates(lines: list[str], updates: Mapping[tuple[str, str], str]) -> 
             leading = line[: len(line) - len(line.lstrip())]
             out[idx] = f"{leading}{k} = {new_val}"
             seen.add(target_key)
-            applied.append({
-                "section": current_section,
-                "key": k,
-                "old": old_raw,
-                "new": new_val,
-                "action": "updated" if old_raw != new_val else "unchanged",
-            })
+            applied.append(
+                {
+                    "section": current_section,
+                    "key": k,
+                    "old": old_raw,
+                    "new": new_val,
+                    "action": "updated" if old_raw != new_val else "unchanged",
+                }
+            )
 
     # Second pass: insert remaining keys at end of their section, or create
     # the section at EOF if it does not exist.
@@ -171,11 +175,15 @@ def _apply_updates(lines: list[str], updates: Mapping[tuple[str, str], str]) -> 
             new_block = [f"{k} = {targets[(sec, k)][2]}" for _, k in keys]
             out[insert_at:insert_at] = new_block
             for _, k in keys:
-                applied.append({
-                    "section": sec, "key": k,
-                    "old": "", "new": targets[(sec, k)][2],
-                    "action": "inserted",
-                })
+                applied.append(
+                    {
+                        "section": sec,
+                        "key": k,
+                        "old": "",
+                        "new": targets[(sec, k)][2],
+                        "action": "inserted",
+                    }
+                )
             # Shift section_end for later sections to keep ordering consistent.
             shift = len(new_block)
             for s, end in section_end.items():
@@ -187,11 +195,15 @@ def _apply_updates(lines: list[str], updates: Mapping[tuple[str, str], str]) -> 
             out.append(f"[{sec}]")
             for _, k in keys:
                 out.append(f"{k} = {targets[(sec, k)][2]}")
-                applied.append({
-                    "section": sec, "key": k,
-                    "old": "", "new": targets[(sec, k)][2],
-                    "action": "inserted",
-                })
+                applied.append(
+                    {
+                        "section": sec,
+                        "key": k,
+                        "old": "",
+                        "new": targets[(sec, k)][2],
+                        "action": "inserted",
+                    }
+                )
 
     return out, applied
 
@@ -225,6 +237,7 @@ def set_nfs_conf(updates: Mapping[tuple[str, str], str]) -> list[dict]:
 
     Returns a list of change descriptors for audit/return.
     """
+
     def _do():
         original = _read_lines(NFS_CONF_PATH)
         new_lines, applied = _apply_updates(original, updates)
@@ -241,7 +254,9 @@ def restart_nfs_server(timeout: int = 30) -> tuple[bool, str]:
     try:
         r = subprocess.run(
             ["systemctl", "restart", "nfs-server"],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
         if r.returncode != 0:
             return False, (r.stderr.strip() or r.stdout.strip() or "restart failed")

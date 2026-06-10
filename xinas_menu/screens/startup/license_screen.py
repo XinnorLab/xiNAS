@@ -1,4 +1,5 @@
 """LicenseScreen — enter or display the xiRAID license."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,10 +30,12 @@ class LicenseScreen(Screen[bool]):
             "  and cleared on reboot. Re-enter after each reboot.\n"
         )
         if existing:
-            yield Label(f"  Current license: {existing[:20]}…" if len(existing) > 20
-                        else f"  Current license: {existing}")
-        yield Input(placeholder="Paste license key here…", id="license-input",
-                    value=existing)
+            yield Label(
+                f"  Current license: {existing[:20]}…"
+                if len(existing) > 20
+                else f"  Current license: {existing}"
+            )
+        yield Input(placeholder="Paste license key here…", id="license-input", value=existing)
         yield Button("Save", id="btn-save", variant="primary")
         yield Button("Cancel", id="btn-cancel")
 

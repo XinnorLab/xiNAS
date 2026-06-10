@@ -11,6 +11,7 @@ sequences that Textual uses internally. Not a documented Textual API,
 but stable in practice. If a future Textual upgrade changes its mouse
 init handshake, the on-unmount restore call may need a matching tweak.
 """
+
 from __future__ import annotations
 
 import sys

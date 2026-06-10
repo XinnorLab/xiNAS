@@ -6,6 +6,7 @@ Flags:
   --no-welcome     Skip welcome splash screen
   --setup          Launch startup/provisioning app (xinas-setup)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,10 +23,7 @@ def _require_root_or_exit(action: str) -> None:
     deep in the UI. Fail fast at the entrypoint instead.
     """
     if os.geteuid() != 0:
-        sys.stderr.write(
-            f"xinas_menu: the {action} must be run as root.\n"
-            "Run:  sudo xinas-menu\n"
-        )
+        sys.stderr.write(f"xinas_menu: the {action} must be run as root.\nRun:  sudo xinas-menu\n")
         sys.exit(1)
 
 
@@ -49,6 +47,7 @@ def _parse_args() -> argparse.Namespace:
 
 def _print_version(setup_mode: bool = False) -> None:
     from xinas_menu.version import XINAS_MENU_VERSION
+
     name = "xinas_setup" if setup_mode else "xinas_menu"
     print(f"{name} {XINAS_MENU_VERSION}")
 
@@ -86,6 +85,7 @@ def main() -> None:
     if args.setup:
         _require_root_or_exit("setup menu")
         from xinas_menu.screens.startup.startup_menu import StartupApp
+
         app = StartupApp()
         app.run()
         sys.exit(0)
@@ -93,6 +93,7 @@ def main() -> None:
     # Default: main management menu
     _require_root_or_exit("management console")
     from xinas_menu.app import XiNASApp
+
     app = XiNASApp(
         no_welcome=args.no_welcome,
         grpc_address=args.grpc_address,
@@ -105,9 +106,7 @@ def main() -> None:
     if getattr(app, "return_value", None) == "uninstall":
         script = "/opt/xiNAS/uninstall.sh"
         if not os.path.isfile(script):
-            sys.stderr.write(
-                f"xinas_menu: {script} not found — cannot launch uninstaller.\n"
-            )
+            sys.stderr.write(f"xinas_menu: {script} not found — cannot launch uninstaller.\n")
             sys.exit(1)
         os.execvp("bash", ["bash", script])
 

@@ -1,4 +1,5 @@
 """Subprocess helpers: run_cmd (sync) and run_cmd_stream (async generator)."""
+
 from __future__ import annotations
 
 import asyncio

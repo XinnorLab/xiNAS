@@ -1,4 +1,5 @@
 """IPPoolScreen — IP Pool configuration for high-speed interfaces."""
+
 from __future__ import annotations
 
 import asyncio
@@ -54,6 +55,7 @@ _MENU = [
 
 # ── Config helpers ────────────────────────────────────────────────────────────
 
+
 def _cfg_read() -> dict:
     """Read pool config from JSON file, returning defaults if missing."""
     try:
@@ -82,6 +84,7 @@ def _cfg_write(cfg: dict) -> None:
 
 
 # ── Interface detection ───────────────────────────────────────────────────────
+
 
 def _detect_interfaces() -> list[dict]:
     """Detect high-speed network interfaces (InfiniBand + mlx5_core).
@@ -132,7 +135,8 @@ def _detect_interfaces() -> list[dict]:
         try:
             out = subprocess.check_output(
                 ["ip", "-o", "-4", "addr", "show", iface],
-                text=True, stderr=subprocess.DEVNULL,
+                text=True,
+                stderr=subprocess.DEVNULL,
             ).strip()
             if out:
                 parts = out.split()
@@ -143,20 +147,23 @@ def _detect_interfaces() -> list[dict]:
         except Exception:
             pass
 
-        result.append({
-            "name": iface,
-            "iface_type": "InfiniBand" if is_ib else "Ethernet",
-            "driver": driver,
-            "mtu_default": 4092 if is_ib else 9000,
-            "state": state,
-            "ip4": ip4,
-            "mac": mac,
-        })
+        result.append(
+            {
+                "name": iface,
+                "iface_type": "InfiniBand" if is_ib else "Ethernet",
+                "driver": driver,
+                "mtu_default": 4092 if is_ib else 9000,
+                "state": state,
+                "ip4": ip4,
+                "mac": mac,
+            }
+        )
 
     return result
 
 
 # ── IP allocation ─────────────────────────────────────────────────────────────
+
 
 def _allocate_ips(cfg: dict, interfaces: list[dict]) -> tuple[list[dict], str]:
     """Allocate IPs from pool to interfaces.
@@ -204,18 +211,21 @@ def _allocate_ips(cfg: dict, interfaces: list[dict]) -> tuple[list[dict], str]:
                 f"Expand the pool range or reduce the number of interfaces."
             )
         ip = f"{octets[0]}.{octets[1]}.{third}.{octets[3]}"
-        allocations.append({
-            "name": iface["name"],
-            "ip": ip,
-            "prefix": prefix,
-            "mtu": iface["mtu_default"],
-            "iface_type": iface["iface_type"],
-        })
+        allocations.append(
+            {
+                "name": iface["name"],
+                "ip": ip,
+                "prefix": prefix,
+                "mtu": iface["mtu_default"],
+                "iface_type": iface["iface_type"],
+            }
+        )
 
     return allocations, ""
 
 
 # ── Netplan generation ────────────────────────────────────────────────────────
+
 
 def _generate_netplan(allocations: list[dict]) -> str:
     """Generate netplan YAML string from allocations."""
@@ -235,7 +245,7 @@ def _generate_netplan(allocations: list[dict]) -> str:
         lines.append(f"      mtu: {alloc['mtu']}")
         if multi:
             table_id = 100 + i
-            octets = alloc['ip'].split('.')
+            octets = alloc["ip"].split(".")
             subnet = f"{octets[0]}.{octets[1]}.{octets[2]}.0/{alloc['prefix']}"
             lines.append("      routes:")
             lines.append(f"        - to: {subnet}")
@@ -254,7 +264,8 @@ def _write_and_apply_netplan(netplan_content: str) -> tuple[bool, str]:
     try:
         _NETPLAN_PATH.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(
-            dir=str(_NETPLAN_PATH.parent), suffix=".tmp",
+            dir=str(_NETPLAN_PATH.parent),
+            suffix=".tmp",
         )
         try:
             with os.fdopen(fd, "w") as f:
@@ -279,7 +290,9 @@ def _write_and_apply_netplan(netplan_content: str) -> tuple[bool, str]:
     try:
         r = subprocess.run(
             ["netplan", "apply"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if r.returncode != 0:
             return False, f"netplan apply failed:\n{(r.stderr or r.stdout)[:500]}"
@@ -291,6 +304,7 @@ def _write_and_apply_netplan(netplan_content: str) -> tuple[bool, str]:
 
 
 # ── Validation ────────────────────────────────────────────────────────────────
+
 
 def _validate_ipv4(ip: str) -> str | None:
     """Return error message or None if valid IPv4."""
@@ -313,6 +327,7 @@ def _validate_prefix(prefix_str: str) -> tuple[int | None, str | None]:
 
 
 # ── Screen ────────────────────────────────────────────────────────────────────
+
 
 class IPPoolScreen(Screen):
     """IP Pool configuration — detect interfaces, allocate IPs, apply via netplan."""
@@ -474,25 +489,14 @@ class IPPoolScreen(Screen):
         multi = len(allocations) > 1
         for i, (alloc, iface) in enumerate(zip(allocations, interfaces, strict=False)):
             state_color = GRN if iface["state"] == "up" else "\033[33m"
-            lines.append(
-                f"  {BLD}{alloc['name']}{NC}  "
-                f"{DIM}({alloc['iface_type']}){NC}"
-            )
-            lines.append(
-                f"      {DIM}Assign:{NC}  {GRN}{alloc['ip']}/{alloc['prefix']}{NC}"
-            )
-            lines.append(
-                f"      {DIM}MTU:{NC}     {alloc['mtu']}"
-            )
+            lines.append(f"  {BLD}{alloc['name']}{NC}  {DIM}({alloc['iface_type']}){NC}")
+            lines.append(f"      {DIM}Assign:{NC}  {GRN}{alloc['ip']}/{alloc['prefix']}{NC}")
+            lines.append(f"      {DIM}MTU:{NC}     {alloc['mtu']}")
             if multi:
                 table_id = 100 + i
-                lines.append(
-                    f"      {DIM}Policy:{NC}  table {table_id} (src-based routing)"
-                )
+                lines.append(f"      {DIM}Policy:{NC}  table {table_id} (src-based routing)")
             if iface["ip4"]:
-                lines.append(
-                    f"      {DIM}Current:{NC} {iface['ip4']}"
-                )
+                lines.append(f"      {DIM}Current:{NC} {iface['ip4']}")
             lines.append(
                 f"      {DIM}State:{NC}   {state_color}{iface['state']}{NC}  "
                 f"{DIM}MAC:{NC} {iface['mac']}"
@@ -532,14 +536,11 @@ class IPPoolScreen(Screen):
         allocations, err = _allocate_ips(cfg, interfaces)
         if err:
             view = self.query_one("#pool-content", ScrollableTextView)
-            view.set_content(
-                f"{_RED}Allocation error:{_NC}\n\n{err}"
-            )
+            view.set_content(f"{_RED}Allocation error:{_NC}\n\n{err}")
             return
 
         summary = "\n".join(
-            f"  {a['name']}: {a['ip']}/{a['prefix']} (MTU {a['mtu']})"
-            for a in allocations
+            f"  {a['name']}: {a['ip']}/{a['prefix']} (MTU {a['mtu']})" for a in allocations
         )
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
@@ -554,7 +555,9 @@ class IPPoolScreen(Screen):
 
         netplan = _generate_netplan(allocations)
         ok, msg = await loop.run_in_executor(
-            None, _write_and_apply_netplan, netplan,
+            None,
+            _write_and_apply_netplan,
+            netplan,
         )
         if ok:
             self.app.audit.log(

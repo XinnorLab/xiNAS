@@ -1,4 +1,5 @@
 """Global configuration lock and transaction journal."""
+
 from __future__ import annotations
 
 import contextlib
@@ -16,6 +17,7 @@ import yaml
 
 class LockError(Exception):
     """Raised when lock cannot be acquired."""
+
     pass
 
 
@@ -96,12 +98,19 @@ class GlobalConfigLock:
                 holder = (
                     "pid={pid}, operation={operation}, user={user}, "
                     "source={source}, started={started}"
-                ).format(**{k: info.get(k, "?") for k in (
-                    "pid", "operation", "user", "source", "started",
-                )})
-                raise LockError(
-                    f"Configuration lock held by another process: {holder}"
-                ) from err
+                ).format(
+                    **{
+                        k: info.get(k, "?")
+                        for k in (
+                            "pid",
+                            "operation",
+                            "user",
+                            "source",
+                            "started",
+                        )
+                    }
+                )
+                raise LockError(f"Configuration lock held by another process: {holder}") from err
             raise LockError("Configuration lock held by another process") from err
 
         self._lock_fd = fd
@@ -302,7 +311,10 @@ class GlobalConfigLock:
     # ------------------------------------------------------------------
 
     def _write_lock_meta(
-        self, operation: str, source: str, pre_change_snapshot: str,
+        self,
+        operation: str,
+        source: str,
+        pre_change_snapshot: str,
     ) -> None:
         """Write lock metadata as JSON."""
         try:
@@ -363,7 +375,10 @@ class GlobalConfigLock:
         try:
             with os.fdopen(fd, "w") as fh:
                 yaml.safe_dump(
-                    data, fh, default_flow_style=False, sort_keys=False,
+                    data,
+                    fh,
+                    default_flow_style=False,
+                    sort_keys=False,
                 )
             os.chmod(tmp, 0o600)
             os.replace(tmp, str(path))

@@ -27,12 +27,14 @@ def _parse_nfsd_clients() -> list[dict]:
                 k, _, v = line.partition(":")
                 client_info[k.strip()] = v.strip()
 
-        clients.append({
-            "client_ip": client_info.get("address", "unknown").split(":")[0],
-            "nfs_version": client_info.get("version", "unknown"),
-            "export_path": "unknown",  # per-client, not per-export in this file
-            "active_locks": 0,
-        })
+        clients.append(
+            {
+                "client_ip": client_info.get("address", "unknown").split(":")[0],
+                "nfs_version": client_info.get("version", "unknown"),
+                "export_path": "unknown",  # per-client, not per-export in this file
+                "active_locks": 0,
+            }
+        )
 
     return clients
 
@@ -67,12 +69,14 @@ def list_sessions() -> list[dict]:
                     continue
                 parts = line.split()
                 if len(parts) >= 1:
-                    sessions.append({
-                        "client_ip": parts[0] if parts else "unknown",
-                        "nfs_version": "unknown",
-                        "export_path": "unknown",
-                        "active_locks": 0,
-                    })
+                    sessions.append(
+                        {
+                            "client_ip": parts[0] if parts else "unknown",
+                            "nfs_version": "unknown",
+                            "export_path": "unknown",
+                            "active_locks": 0,
+                        }
+                    )
         except OSError:
             pass
     return sessions
@@ -82,4 +86,6 @@ def get_sessions_for_path(export_path: str) -> list[dict]:
     """Filter sessions by export path."""
     all_sessions = list_sessions()
     # Without per-session export tracking, return all sessions as potential users
-    return [s for s in all_sessions if s["export_path"] == export_path or s["export_path"] == "unknown"]
+    return [
+        s for s in all_sessions if s["export_path"] == export_path or s["export_path"] == "unknown"
+    ]

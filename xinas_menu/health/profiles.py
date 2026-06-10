@@ -1,4 +1,5 @@
 """ProfileLoader — discovers and loads health check profile YAML files."""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,4 +1,5 @@
 """Snapshot engine — core orchestrator for configuration history."""
+
 from __future__ import annotations
 
 import asyncio
@@ -48,7 +49,8 @@ class SnapshotEngine:
         self._store = store or FilesystemStore()
         self._repo_root = repo_root
         self._inspector = GrpcInspector(
-            grpc_address=grpc_address, grpc_client=grpc_client,
+            grpc_address=grpc_address,
+            grpc_client=grpc_client,
         )
         self._config_collector = ConfigCollector(repo_root=repo_root)
         self._runtime_collector = RuntimeCollector(self._inspector)
@@ -313,8 +315,7 @@ class SnapshotEngine:
         # Build a human-readable summary
         total = len(config_changes) + len(runtime_changes)
         diff_result.summary = (
-            f"{total} change(s): {len(config_changes)} config, "
-            f"{len(runtime_changes)} runtime"
+            f"{total} change(s): {len(config_changes)} config, {len(runtime_changes)} runtime"
         )
 
         return diff_result
@@ -345,10 +346,7 @@ class SnapshotEngine:
         snapshots = self._store.list_snapshots()
         current = self.get_current_effective()
 
-        rollback_eligible = [
-            m for m in snapshots
-            if m.type == SnapshotType.ROLLBACK_ELIGIBLE.value
-        ]
+        rollback_eligible = [m for m in snapshots if m.type == SnapshotType.ROLLBACK_ELIGIBLE.value]
 
         total_count = len(snapshots)
         if baseline is not None:
@@ -391,11 +389,13 @@ class SnapshotEngine:
             else:
                 change_type = "modified"
 
-            changes.append({
-                "file": filename,
-                "change_type": change_type,
-                "summary": f"{filename}: {change_type}",
-            })
+            changes.append(
+                {
+                    "file": filename,
+                    "change_type": change_type,
+                    "summary": f"{filename}: {change_type}",
+                }
+            )
 
         return changes
 
@@ -419,10 +419,14 @@ class SnapshotEngine:
 
         for filename in runtime_filenames:
             from_bytes = self._read_snapshot_runtime_file(
-                from_id, from_manifest, filename,
+                from_id,
+                from_manifest,
+                filename,
             )
             to_bytes = self._read_snapshot_runtime_file(
-                to_id, to_manifest, filename,
+                to_id,
+                to_manifest,
+                filename,
             )
 
             if from_bytes == to_bytes:
@@ -444,16 +448,20 @@ class SnapshotEngine:
             else:
                 change_type = "modified"
 
-            changes.append({
-                "resource": resource,
-                "change_type": change_type,
-                "summary": f"{resource}: {change_type}",
-            })
+            changes.append(
+                {
+                    "resource": resource,
+                    "change_type": change_type,
+                    "summary": f"{resource}: {change_type}",
+                }
+            )
 
         return changes
 
     def _diff_checksums(
-        self, from_manifest: Manifest, to_manifest: Manifest,
+        self,
+        from_manifest: Manifest,
+        to_manifest: Manifest,
     ) -> list:
         """Compare checksums between two manifests."""
         changes = []
@@ -464,16 +472,21 @@ class SnapshotEngine:
             from_val = getattr(from_ck, field_name, "")
             to_val = getattr(to_ck, field_name, "")
             if from_val != to_val:
-                changes.append({
-                    "file": f"checksum:{field_name}",
-                    "change_type": "modified",
-                    "summary": f"Checksum changed for {field_name}",
-                })
+                changes.append(
+                    {
+                        "file": f"checksum:{field_name}",
+                        "change_type": "modified",
+                        "summary": f"Checksum changed for {field_name}",
+                    }
+                )
 
         return changes
 
     def _read_snapshot_file(
-        self, snapshot_id: str, manifest: Manifest, filename: str,
+        self,
+        snapshot_id: str,
+        manifest: Manifest,
+        filename: str,
     ) -> bytes | None:
         """Read a config file from a snapshot, handling baseline specially."""
         if manifest.type == SnapshotType.BASELINE.value:
@@ -488,7 +501,10 @@ class SnapshotEngine:
         return self._store.read_file(snapshot_id, filename)
 
     def _read_snapshot_runtime_file(
-        self, snapshot_id: str, manifest: Manifest, filename: str,
+        self,
+        snapshot_id: str,
+        manifest: Manifest,
+        filename: str,
     ) -> bytes | None:
         """Read a runtime file from a snapshot, handling baseline specially."""
         if manifest.type == SnapshotType.BASELINE.value:

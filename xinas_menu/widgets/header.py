@@ -1,4 +1,5 @@
 """XiNASHeader — ASCII banner with optional update badge."""
+
 from __future__ import annotations
 
 from textual.app import ComposeResult

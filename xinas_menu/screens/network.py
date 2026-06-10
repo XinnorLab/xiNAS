@@ -1,4 +1,5 @@
 """NetworkScreen — show and edit network interfaces."""
+
 from __future__ import annotations
 
 import asyncio
@@ -84,6 +85,7 @@ class NetworkScreen(Screen):
             self._view_netplan_file()
         elif key == "5":
             from xinas_menu.screens.ip_pool import IPPoolScreen
+
             self.app.push_screen(IPPoolScreen())
 
     @work(exclusive=True)
@@ -97,10 +99,7 @@ class NetworkScreen(Screen):
     async def _edit_interface_ip(self) -> None:
         # Enumerate available interfaces (exclude loopback) with current IPs
         try:
-            iface_names = sorted(
-                p.name for p in Path("/sys/class/net").iterdir()
-                if p.name != "lo"
-            )
+            iface_names = sorted(p.name for p in Path("/sys/class/net").iterdir() if p.name != "lo")
         except Exception:
             iface_names = []
 
@@ -124,10 +123,12 @@ class NetworkScreen(Screen):
 
         while True:
             ip = await self.app.push_screen_wait(
-                InputDialog(f"IP address/prefix for {iface} (CIDR):",
-                            "Edit Interface IP",
-                            default=cur_ip,
-                            placeholder="192.168.1.10/24")
+                InputDialog(
+                    f"IP address/prefix for {iface} (CIDR):",
+                    "Edit Interface IP",
+                    default=cur_ip,
+                    placeholder="192.168.1.10/24",
+                )
             )
             if ip is None:
                 return
@@ -135,16 +136,20 @@ class NetworkScreen(Screen):
                 self.app.notify("IP address must not be empty.", severity="error")
                 continue
             if "/" not in ip:
-                self.app.notify("IP address must be in CIDR format (e.g. 192.168.1.10/24).", severity="error")
+                self.app.notify(
+                    "IP address must be in CIDR format (e.g. 192.168.1.10/24).", severity="error"
+                )
                 continue
             ip = ip.strip()
             break
 
         gw = await self.app.push_screen_wait(
-            InputDialog("Default gateway (leave blank to keep):",
-                        "Edit Interface IP",
-                        default=cur_gw,
-                        placeholder="192.168.1.1")
+            InputDialog(
+                "Default gateway (leave blank to keep):",
+                "Edit Interface IP",
+                default=cur_gw,
+                placeholder="192.168.1.1",
+            )
         )
         if gw is None:
             return
@@ -153,10 +158,12 @@ class NetworkScreen(Screen):
         default_mtu = cur_mtu or ("4092" if iface.startswith("ib") else "9000")
         while True:
             mtu_str = await self.app.push_screen_wait(
-                InputDialog(f"MTU for {iface}:",
-                            "Edit Interface IP",
-                            default=default_mtu,
-                            placeholder="9000")
+                InputDialog(
+                    f"MTU for {iface}:",
+                    "Edit Interface IP",
+                    default=default_mtu,
+                    placeholder="9000",
+                )
             )
             if mtu_str is None:
                 return
@@ -175,9 +182,7 @@ class NetworkScreen(Screen):
             summary += f" via {gw}"
         summary += f", MTU {mtu_str}"
 
-        confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(summary + "?", "Confirm")
-        )
+        confirmed = await self.app.push_screen_wait(ConfirmDialog(summary + "?", "Confirm"))
         if not confirmed:
             return
 
@@ -211,16 +216,15 @@ class NetworkScreen(Screen):
         if ok:
             self.app.audit.log("network.netplan_apply", "", "OK")
             await self.app.snapshots.record(
-                "network_modify", diff_summary="Applied netplan configuration",
+                "network_modify",
+                diff_summary="Applied netplan configuration",
             )
             view = self.query_one("#net-content", ScrollableTextView)
             view.set_content(f"{_GRN}Network configuration applied.{_NC}")
             self._show_network_info()
         else:
             view = self.query_one("#net-content", ScrollableTextView)
-            view.set_content(
-                f"{_RED}netplan apply failed:{_NC}\n\n{(err or out)[:300]}"
-            )
+            view.set_content(f"{_RED}netplan apply failed:{_NC}\n\n{(err or out)[:300]}")
 
     @work(exclusive=True)
     async def _view_netplan_file(self) -> None:
@@ -235,10 +239,13 @@ class NetworkScreen(Screen):
 
 # ── Formatter ─────────────────────────────────────────────────────────────────
 
+
 def _run_cmd(cmd: str) -> str:
     try:
         return subprocess.check_output(
-            shlex.split(cmd), stderr=subprocess.DEVNULL, text=True,
+            shlex.split(cmd),
+            stderr=subprocess.DEVNULL,
+            text=True,
         ).strip()
     except Exception:
         _log.debug("command failed: %s", cmd, exc_info=True)
@@ -270,6 +277,7 @@ def _flush_pbr_rules() -> None:
     # Flush all IPs from RDMA-capable (mlx) interfaces to remove stale
     # secondary addresses that netplan apply alone does not clean up.
     from pathlib import Path
+
     for iface_dir in sorted(Path("/sys/class/net").iterdir()):
         try:
             driver = (iface_dir / "device" / "driver").resolve().name
@@ -302,7 +310,15 @@ def _format_speed(speed: int) -> str:
 
 
 def _collect_network_info() -> str:
-    GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+    GRN, YLW, RED, CYN, BLD, DIM, NC = (
+        "\033[32m",
+        "\033[33m",
+        "\033[31m",
+        "\033[36m",
+        "\033[1m",
+        "\033[2m",
+        "\033[0m",
+    )
     W = 72
     lines: list[str] = []
 
@@ -398,11 +414,18 @@ def _collect_network_info() -> str:
 
         mtu = _read("mtu") or "N/A"
 
-        interfaces.append({
-            "name": iface, "state": state, "speed": speed,
-            "mac": mac, "driver": driver, "ip4": ip4, "ip6": ip6,
-            "mtu": mtu,
-        })
+        interfaces.append(
+            {
+                "name": iface,
+                "state": state,
+                "speed": speed,
+                "mac": mac,
+                "driver": driver,
+                "ip4": ip4,
+                "ip6": ip6,
+                "mtu": mtu,
+            }
+        )
 
     up_count = sum(1 for i in interfaces if i["state"] == "up")
     lines.append(f"  Found {len(interfaces)} interface(s), {GRN}{up_count} active{NC}")
@@ -424,7 +447,9 @@ def _collect_network_info() -> str:
         bar = _speed_bar(speed)
 
         lines.append(f"  {icon} {BLD}{iface['name']}{NC}")
-        lines.append(f"      {DIM}State:{NC}   {sc}{state:<10}{NC} {DIM}Speed:{NC} {bar} {speed_str}")
+        lines.append(
+            f"      {DIM}State:{NC}   {sc}{state:<10}{NC} {DIM}Speed:{NC} {bar} {speed_str}"
+        )
         lines.append(f"      {DIM}IPv4:{NC}    {iface['ip4'] or f'{DIM}(not configured){NC}'}")
         if iface["ip6"]:
             lines.append(f"      {DIM}IPv6:{NC}    {iface['ip6']}")
@@ -477,7 +502,9 @@ def _collect_network_info() -> str:
                 lines.append("")
     else:
         lines.append(f"  {DIM}No policy routing rules configured{NC}")
-        lines.append(f"  {DIM}(PBR is auto-configured when multiple high-speed interfaces exist){NC}")
+        lines.append(
+            f"  {DIM}(PBR is auto-configured when multiple high-speed interfaces exist){NC}"
+        )
         lines.append("")
 
     lines.append(f"{DIM}{'=' * W}{NC}")
@@ -491,11 +518,16 @@ def _read_netplan_file() -> tuple[str, str]:
             return str(cfg), cfg.read_text()
         except Exception:
             _log.debug("failed to read %s", cfg, exc_info=True)
-    return str(cfg), "No xiNAS netplan configuration found.\nUse [2] Edit Interface IP Address to create one."
+    return str(
+        cfg
+    ), "No xiNAS netplan configuration found.\nUse [2] Edit Interface IP Address to create one."
 
 
-def _update_netplan(iface: str, ip_cidr: str, gateway: str, mtu: int | None = None) -> tuple[bool, str]:
+def _update_netplan(
+    iface: str, ip_cidr: str, gateway: str, mtu: int | None = None
+) -> tuple[bool, str]:
     import yaml
+
     netplan_dir = Path("/etc/netplan")
     # Always write to 99-xinas.yaml — the canonical xiNAS config file.
     cfg_path = netplan_dir / "99-xinas.yaml"
@@ -555,6 +587,7 @@ def _remove_iface_from_other_netplan_files(iface: str, exclude_path: Path) -> No
     files like 50-cloud-init.yaml when 99-xinas.yaml is the canonical source.
     """
     import yaml
+
     netplan_dir = Path("/etc/netplan")
     for path in sorted(netplan_dir.glob("*.yaml")) + sorted(netplan_dir.glob("*.yml")):
         if path == exclude_path:

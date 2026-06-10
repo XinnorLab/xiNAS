@@ -9,6 +9,7 @@ Wraps all configuration-changing operations with:
 6. Auto-rollback on validation failure
 7. Durable state recording via journal
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -191,7 +192,8 @@ class TransactionalRunner:
                         result.validation = preflight_result.to_dict()
                         logger.warning(
                             "Preflight blocked %s: %s",
-                            operation, preflight_result.blockers,
+                            operation,
+                            preflight_result.blockers,
                         )
                         return result
                     result.steps.append("preflight_passed")
@@ -247,7 +249,10 @@ class TransactionalRunner:
                     # engine state.
                     current_effective = self._engine.get_current_effective()
                     target_manifest = current_effective or Manifest(
-                        id="", timestamp="", user="", source=source,
+                        id="",
+                        timestamp="",
+                        user="",
+                        source=source,
                     )
                     post_result = await self._post_apply.validate(
                         target_manifest=target_manifest,
@@ -261,7 +266,8 @@ class TransactionalRunner:
                     )
                     result.validation = post_result.to_dict()
                     logger.exception(
-                        "Post-apply validation error for %s", operation,
+                        "Post-apply validation error for %s",
+                        operation,
                     )
 
                 if post_result.passed:
@@ -294,14 +300,14 @@ class TransactionalRunner:
                             result.steps.append("gc_completed")
                         except Exception:
                             logger.warning(
-                                "GC failed after %s (non-fatal)", operation,
+                                "GC failed after %s (non-fatal)",
+                                operation,
                             )
                     except Exception as exc:
-                        result.error = (
-                            f"Failed to create applied snapshot: {exc}"
-                        )
+                        result.error = f"Failed to create applied snapshot: {exc}"
                         logger.exception(
-                            "Applied snapshot creation failed for %s", operation,
+                            "Applied snapshot creation failed for %s",
+                            operation,
                         )
                         # Still a success in terms of system state change,
                         # but we failed to record it — mark as error.
@@ -310,16 +316,15 @@ class TransactionalRunner:
                     # Step 7b: Validation failed — auto-rollback.
                     val_errors = "; ".join(post_result.blockers)
                     if result.error is None:
-                        result.error = (
-                            f"Post-apply validation failed: {val_errors}"
-                        )
+                        result.error = f"Post-apply validation failed: {val_errors}"
                     self._lock.update_journal(
                         phase="failed",
                         error=f"Post-apply validation failed: {val_errors}",
                     )
                     logger.warning(
                         "Post-apply validation failed for %s: %s",
-                        operation, val_errors,
+                        operation,
+                        val_errors,
                     )
 
                     # Attempt auto-rollback.
@@ -336,12 +341,8 @@ class TransactionalRunner:
                                     rb_err or "unknown"
                                 )
                             else:
-                                result.error = "Rollback failed: {}".format(
-                                    rb_err or "unknown"
-                                )
-                        result.steps.append(
-                            "rollback_succeeded" if rb_ok else "rollback_failed"
-                        )
+                                result.error = "Rollback failed: {}".format(rb_err or "unknown")
+                        result.steps.append("rollback_succeeded" if rb_ok else "rollback_failed")
             else:
                 # Apply itself failed — mark and attempt rollback.
                 self._lock.update_journal(
@@ -359,12 +360,8 @@ class TransactionalRunner:
                     result.rollback_performed = True
                     result.rollback_success = rb_ok
                     if not rb_ok:
-                        result.error += "; Rollback also failed: {}".format(
-                            rb_err or "unknown"
-                        )
-                    result.steps.append(
-                        "rollback_succeeded" if rb_ok else "rollback_failed"
-                    )
+                        result.error += "; Rollback also failed: {}".format(rb_err or "unknown")
+                    result.steps.append("rollback_succeeded" if rb_ok else "rollback_failed")
 
         finally:
             # Step 8: Always release the lock.
@@ -453,8 +450,16 @@ class TransactionalRunner:
         extra_vars = dict(baseline.extra_vars) if baseline.extra_vars else {}
 
         skip_tags = [
-            "hostname", "packages", "kernel", "ntp", "timezone",
-            "security", "eula", "license", "xiraid", "raid",
+            "hostname",
+            "packages",
+            "kernel",
+            "ntp",
+            "timezone",
+            "security",
+            "eula",
+            "license",
+            "xiraid",
+            "raid",
         ]
 
         return await self.execute_ansible(
@@ -502,8 +507,10 @@ class TransactionalRunner:
         try:
             if extra_vars:
                 import os as _os
+
                 fd, vars_path = tempfile.mkstemp(
-                    suffix=".json", prefix="xinas-vars-",
+                    suffix=".json",
+                    prefix="xinas-vars-",
                 )
                 try:
                     _os.write(fd, json.dumps(extra_vars).encode())
@@ -526,7 +533,9 @@ class TransactionalRunner:
             stderr_lines: list[str] = []
 
             async def _read_stream(
-                stream: asyncio.StreamReader, buf: list[str], is_stderr: bool = False,
+                stream: asyncio.StreamReader,
+                buf: list[str],
+                is_stderr: bool = False,
             ) -> None:
                 async for raw in stream:
                     line = raw.decode(errors="replace").rstrip("\n")
@@ -581,6 +590,7 @@ class TransactionalRunner:
             if vars_file is not None:
                 try:
                     import os as _os
+
                     _os.unlink(vars_file)
                 except OSError:
                     pass
@@ -599,9 +609,9 @@ class TransactionalRunner:
         pre-change configuration if possible.
         """
         logger.warning(
-            "Initiating auto-rollback for failed operation %s "
-            "to pre-change snapshot %s",
-            failed_operation, pre_change_id,
+            "Initiating auto-rollback for failed operation %s to pre-change snapshot %s",
+            failed_operation,
+            pre_change_id,
         )
 
         self._lock.update_journal(phase="rolling_back")
@@ -623,7 +633,8 @@ class TransactionalRunner:
 
             if ok:
                 logger.info(
-                    "Auto-rollback succeeded for %s", failed_operation,
+                    "Auto-rollback succeeded for %s",
+                    failed_operation,
                 )
                 # Update the pre-change snapshot status to indicate it was
                 # used for rollback.
@@ -683,14 +694,16 @@ class TransactionalRunner:
             if cleaned:
                 logger.info(
                     "Cleaned up %d stale ephemeral snapshot(s): %s",
-                    len(cleaned), cleaned,
+                    len(cleaned),
+                    cleaned,
                 )
                 if report is None:
                     report = {}
                 report["stale_ephemeral_cleaned"] = cleaned
         except Exception as exc:
             logger.exception(
-                "Error during ephemeral snapshot cleanup: %s", exc,
+                "Error during ephemeral snapshot cleanup: %s",
+                exc,
             )
             if report is None:
                 report = {}

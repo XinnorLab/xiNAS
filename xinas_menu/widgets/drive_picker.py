@@ -6,6 +6,7 @@ Inspired by xiTools/block-info interactive TUI. Provides:
 - Multi-select with Space, select-all with 'a', detail view with Enter
 - Status bar showing selected count and active filters
 """
+
 from __future__ import annotations
 
 import logging
@@ -188,13 +189,16 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
         if sort_key == "name":
             result.sort(key=lambda d: d.get("name", ""), reverse=self._sort_reverse)
         elif sort_key == "size":
-            result.sort(key=lambda d: d.get("size_bytes") or d.get("size_raw") or 0,
-                        reverse=self._sort_reverse)
+            result.sort(
+                key=lambda d: d.get("size_bytes") or d.get("size_raw") or 0,
+                reverse=self._sort_reverse,
+            )
         elif sort_key == "model":
             result.sort(key=lambda d: d.get("model", ""), reverse=self._sort_reverse)
         elif sort_key == "numa":
-            result.sort(key=lambda d: d.get("numa_node", d.get("numa", -1)),
-                        reverse=self._sort_reverse)
+            result.sort(
+                key=lambda d: d.get("numa_node", d.get("numa", -1)), reverse=self._sort_reverse
+            )
         elif self._sort_reverse:
             result.reverse()
 
@@ -238,7 +242,11 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
         if self._filter_size_max:
             filters.append(f"max={_fmt_size(self._filter_size_max)}")
 
-        filter_bar = "  Filters: " + ", ".join(filters) if filters else "  Filters: none  (f=text  n=NUMA  s=sort  a=all  Space=toggle  d=detail)"
+        filter_bar = (
+            "  Filters: " + ", ".join(filters)
+            if filters
+            else "  Filters: none  (f=text  n=NUMA  s=sort  a=all  Space=toggle  d=detail)"
+        )
         self.query_one("#picker-filter-bar", Static).update(filter_bar)
 
     def _current_drive_name(self) -> str | None:
@@ -306,6 +314,7 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     @work(exclusive=True)
     async def action_filter_prompt(self) -> None:
         from xinas_menu.widgets.input_dialog import InputDialog
+
         text = await self.app.push_screen_wait(
             InputDialog(
                 "Filter by name/model (empty to clear):",
@@ -322,11 +331,9 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     @work(exclusive=True)
     async def action_filter_numa(self) -> None:
         from xinas_menu.widgets.input_dialog import InputDialog
+
         # Detect available NUMA nodes
-        numa_nodes = sorted({
-            d.get("numa_node", d.get("numa", 0))
-            for d in self._all_drives
-        })
+        numa_nodes = sorted({d.get("numa_node", d.get("numa", 0)) for d in self._all_drives})
         current = str(self._filter_numa) if self._filter_numa is not None else ""
         val = await self.app.push_screen_wait(
             InputDialog(
@@ -352,6 +359,7 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     @work(exclusive=True)
     async def action_show_detail(self) -> None:
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
+
         table = self.query_one("#picker-table", DataTable)
         name = self.get_row_key(table)
         if not name:
@@ -375,9 +383,7 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
         if drive.get("system"):
             lines.append("Role:       OS Drive (system)")
 
-        await self.app.push_screen_wait(
-            ConfirmDialog("\n".join(lines), f"Drive Detail — {name}")
-        )
+        await self.app.push_screen_wait(ConfirmDialog("\n".join(lines), f"Drive Detail — {name}"))
 
     def action_confirm(self) -> None:
         if not self._selected:

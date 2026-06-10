@@ -1,4 +1,5 @@
 """SparePoolScreen — Spare pool lifecycle management (create, delete, add/remove drives, activate/deactivate)."""
+
 from __future__ import annotations
 
 import logging
@@ -70,8 +71,15 @@ def _pool_error(action: str, err: str) -> str:
 
 
 def _box_line(content: str = "", w: int = 66) -> str:
-    visible = len(content.replace(_BLD, "").replace(_DIM, "").replace(_CYN, "")
-                         .replace(_GRN, "").replace(_RED, "").replace(_YLW, "").replace(_NC, ""))
+    visible = len(
+        content.replace(_BLD, "")
+        .replace(_DIM, "")
+        .replace(_CYN, "")
+        .replace(_GRN, "")
+        .replace(_RED, "")
+        .replace(_YLW, "")
+        .replace(_NC, "")
+    )
     pad = max(0, w - visible)
     return f"{_DIM}|{_NC}{content}{' ' * pad}{_DIM}|{_NC}"
 
@@ -87,7 +95,9 @@ def _format_spare_pools(data: Any) -> str:
 
     lines.append(_box_sep("="))
     pad = (W3 - len("SPARE POOLS")) // 2
-    lines.append(f"{_DIM}|{_NC}{' ' * pad}{_BLD}{_CYN}SPARE POOLS{_NC}{' ' * (W3 - pad - len('SPARE POOLS') + 1)}{_DIM}|{_NC}")
+    lines.append(
+        f"{_DIM}|{_NC}{' ' * pad}{_BLD}{_CYN}SPARE POOLS{_NC}{' ' * (W3 - pad - len('SPARE POOLS') + 1)}{_DIM}|{_NC}"
+    )
     lines.append(_box_sep("="))
     lines.append("")
 
@@ -128,8 +138,9 @@ def _format_spare_pools(data: Any) -> str:
             lines.append(_box_line(f"  {'Device':<22}{'Size':<16}Serial"))
             lines.append(_box_sep())
             for i, dev in enumerate(devices):
-                dev_path = (dev[1] if isinstance(dev, list) and len(dev) > 1
-                            else str(dev)).replace("/dev/", "")
+                dev_path = (dev[1] if isinstance(dev, list) and len(dev) > 1 else str(dev)).replace(
+                    "/dev/", ""
+                )
                 sz = sizes[i] if i < len(sizes) else "N/A"
                 serial = str(serials[i])[:16] if i < len(serials) and serials[i] else "N/A"
                 lines.append(_box_line(f"  {dev_path:<22}{sz:<16}{serial}"))
@@ -269,7 +280,8 @@ class SparePoolScreen(Screen):
         view.set_content("Loading spare pools…")
         ok, data, err = await self.app.grpc.pool_show()
         view.set_content(
-            _format_spare_pools(data) if ok
+            _format_spare_pools(data)
+            if ok
             else f"Could not load pool info: {grpc_short_error(err)}"
         )
 
@@ -296,7 +308,10 @@ class SparePoolScreen(Screen):
         free_drives = await _get_free_nvme_drives(self.app.grpc)
         if not free_drives:
             await self.app.push_screen_wait(
-                ConfirmDialog("No available drives found.\nAll drives are assigned to RAID arrays or other pools.", "Error")
+                ConfirmDialog(
+                    "No available drives found.\nAll drives are assigned to RAID arrays or other pools.",
+                    "Error",
+                )
             )
             return
 
@@ -308,13 +323,9 @@ class SparePoolScreen(Screen):
 
         # Confirm
         summary = (
-            f"Pool Name:  {name}\n"
-            f"Drives:     {', '.join(selected)}\n"
-            f"Count:      {len(selected)}"
+            f"Pool Name:  {name}\nDrives:     {', '.join(selected)}\nCount:      {len(selected)}"
         )
-        confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(summary, "Create Pool — Confirm")
-        )
+        confirmed = await self.app.push_screen_wait(ConfirmDialog(summary, "Create Pool — Confirm"))
         if not confirmed:
             return
 
@@ -336,7 +347,9 @@ class SparePoolScreen(Screen):
     async def _add_drives(self) -> None:
         pool_names = await _get_pool_names(self.app.grpc)
         if not pool_names:
-            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error", ok_only=True))
+            await self.app.push_screen_wait(
+                ConfirmDialog("No spare pools exist.", "Error", ok_only=True)
+            )
             return
 
         pool = await self.app.push_screen_wait(
@@ -347,9 +360,7 @@ class SparePoolScreen(Screen):
 
         free_drives = await _get_free_nvme_drives(self.app.grpc)
         if not free_drives:
-            await self.app.push_screen_wait(
-                ConfirmDialog("No available drives found.", "Error")
-            )
+            await self.app.push_screen_wait(ConfirmDialog("No available drives found.", "Error"))
             return
 
         selected = await self.app.push_screen_wait(
@@ -385,7 +396,9 @@ class SparePoolScreen(Screen):
     async def _remove_drives(self) -> None:
         pool_names = await _get_pool_names(self.app.grpc)
         if not pool_names:
-            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error", ok_only=True))
+            await self.app.push_screen_wait(
+                ConfirmDialog("No spare pools exist.", "Error", ok_only=True)
+            )
             return
 
         pool = await self.app.push_screen_wait(
@@ -396,9 +409,7 @@ class SparePoolScreen(Screen):
 
         drives = await _get_pool_drives(self.app.grpc, pool)
         if not drives:
-            await self.app.push_screen_wait(
-                ConfirmDialog(f"Pool '{pool}' has no drives.", "Error")
-            )
+            await self.app.push_screen_wait(ConfirmDialog(f"Pool '{pool}' has no drives.", "Error"))
             return
 
         # Use checklist so user can pick which drives to remove
@@ -440,11 +451,15 @@ class SparePoolScreen(Screen):
     async def _activate_pool(self) -> None:
         pool_names = await _get_pool_names(self.app.grpc)
         if not pool_names:
-            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error", ok_only=True))
+            await self.app.push_screen_wait(
+                ConfirmDialog("No spare pools exist.", "Error", ok_only=True)
+            )
             return
 
         pool = await self.app.push_screen_wait(
-            SelectDialog(sorted(pool_names), title="Activate Pool", prompt="Select pool to activate:")
+            SelectDialog(
+                sorted(pool_names), title="Activate Pool", prompt="Select pool to activate:"
+            )
         )
         if not pool:
             return
@@ -464,11 +479,15 @@ class SparePoolScreen(Screen):
     async def _deactivate_pool(self) -> None:
         pool_names = await _get_pool_names(self.app.grpc)
         if not pool_names:
-            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error", ok_only=True))
+            await self.app.push_screen_wait(
+                ConfirmDialog("No spare pools exist.", "Error", ok_only=True)
+            )
             return
 
         pool = await self.app.push_screen_wait(
-            SelectDialog(sorted(pool_names), title="Deactivate Pool", prompt="Select pool to deactivate:")
+            SelectDialog(
+                sorted(pool_names), title="Deactivate Pool", prompt="Select pool to deactivate:"
+            )
         )
         if not pool:
             return
@@ -498,7 +517,9 @@ class SparePoolScreen(Screen):
     async def _delete_pool(self) -> None:
         pool_names = await _get_pool_names(self.app.grpc)
         if not pool_names:
-            await self.app.push_screen_wait(ConfirmDialog("No spare pools exist.", "Error", ok_only=True))
+            await self.app.push_screen_wait(
+                ConfirmDialog("No spare pools exist.", "Error", ok_only=True)
+            )
             return
 
         pool = await self.app.push_screen_wait(

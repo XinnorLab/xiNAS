@@ -1,4 +1,5 @@
 """SelectDialog — modal list selection dialog."""
+
 from __future__ import annotations
 
 from textual.app import ComposeResult
@@ -31,6 +32,7 @@ class SelectDialog(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         from textual.containers import Horizontal, Vertical
+
         with Vertical(id="dialog-container"):
             yield Label(self._title, id="dialog-title")
             if self._prompt:

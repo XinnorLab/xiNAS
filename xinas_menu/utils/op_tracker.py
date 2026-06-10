@@ -1,4 +1,5 @@
 """OpTracker — structured operation tracking, port of lib/op_status.sh."""
+
 from __future__ import annotations
 
 import time

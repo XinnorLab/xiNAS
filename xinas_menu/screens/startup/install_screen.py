@@ -1,4 +1,5 @@
 """InstallScreen — preset selection + Ansible playbook execution."""
+
 from __future__ import annotations
 
 import asyncio
@@ -28,7 +29,11 @@ def _repo_root() -> Path:
 
 def _preset_items() -> tuple[list[MenuItem], list[str]]:
     presets_dir = _repo_root() / "presets"
-    presets = [p.name for p in sorted(presets_dir.iterdir()) if p.is_dir()] if presets_dir.exists() else ["default"]
+    presets = (
+        [p.name for p in sorted(presets_dir.iterdir()) if p.is_dir()]
+        if presets_dir.exists()
+        else ["default"]
+    )
     items = [MenuItem(str(i + 1), p) for i, p in enumerate(presets)]
     items.append(MenuItem("0", "Back"))
     return items, presets
@@ -49,9 +54,7 @@ class InstallScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Label("  ── Install — Select Preset ──")
         yield NavigableMenu(self._preset_menu_items, id="install-nav")
-        yield ScrollableTextView(
-            "  Select a preset to begin installation.", id="install-content"
-        )
+        yield ScrollableTextView("  Select a preset to begin installation.", id="install-content")
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         if event.key == "0":
@@ -78,16 +81,21 @@ class InstallScreen(Screen):
 
         # Check license
         if not (Path("/tmp/license").exists()):
-            self.app.notify("No license found at /tmp/license. Enter your license first.", severity="warning")
+            self.app.notify(
+                "No license found at /tmp/license. Enter your license first.", severity="warning"
+            )
             return
 
         from xinas_menu.screens.startup.playbook_screen import PlaybookRunScreen
+
         repo = _repo_root()
         cmd = [
             "ansible-playbook",
             str(repo / "presets" / preset / "playbook.yml"),
-            "-i", str(repo / "inventories" / "hosts"),
-            "--extra-vars", f"preset={preset}",
+            "-i",
+            str(repo / "inventories" / "hosts"),
+            "--extra-vars",
+            f"preset={preset}",
         ]
         exit_code = await self.app.push_screen_wait(
             PlaybookRunScreen(cmd=cmd, title=f"Installing — {preset}", workdir=repo)
@@ -109,4 +117,5 @@ class InstallScreen(Screen):
             )
             if go_collect:
                 from xinas_menu.screens.collect_logs import CollectLogsScreen
+
                 self.app.push_screen(CollectLogsScreen())

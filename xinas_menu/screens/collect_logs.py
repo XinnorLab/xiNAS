@@ -1,4 +1,5 @@
 """CollectLogsScreen — gather system info, audit log, and journal into a .tgz archive."""
+
 from __future__ import annotations
 
 import asyncio
@@ -110,18 +111,38 @@ class CollectLogsScreen(Screen):
 
         steps: list[tuple[str, object]] = [
             ("System info", lambda: _collect_sysinfo(tmp, config_name, email)),
-            ("Block devices (lsblk)", lambda: _collect_cmd(tmp, "lsblk.txt", "lsblk", "-o", "NAME,SIZE,TYPE,MOUNTPOINT")),
-            ("RAID status (/proc/mdstat)", lambda: _collect_file(tmp, "mdstat.txt", "/proc/mdstat")),
+            (
+                "Block devices (lsblk)",
+                lambda: _collect_cmd(tmp, "lsblk.txt", "lsblk", "-o", "NAME,SIZE,TYPE,MOUNTPOINT"),
+            ),
+            (
+                "RAID status (/proc/mdstat)",
+                lambda: _collect_file(tmp, "mdstat.txt", "/proc/mdstat"),
+            ),
             ("LVM (pvs)", lambda: _collect_cmd(tmp, "pvs.txt", "pvs")),
             ("NVMe devices", lambda: _collect_cmd(tmp, "nvme_list.txt", "nvme", "list")),
             ("PCI devices", lambda: _collect_cmd(tmp, "lspci.txt", "lspci")),
             ("Hardware key", lambda: _collect_hwkey(tmp)),
             ("NUMA topology", lambda: _collect_numa(tmp)),
             ("Audit log", lambda: _collect_file(tmp, "audit.log", "/var/log/xinas/audit.log")),
-            ("Install playbook log", lambda: _collect_file(tmp, "install-playbook.log", "/var/log/xinas/install.log")),
-            ("Install bootstrap log", lambda: _collect_file(tmp, "install-bootstrap.log", "/tmp/xinas-install.log")),
-            ("System journal (last 1000)", lambda: _collect_cmd(tmp, "journalctl.txt", "journalctl", "-n", "1000", "--no-pager")),
-            ("Kernel messages (dmesg)", lambda: _collect_cmd(tmp, "dmesg.txt", "dmesg", "--time-format", "iso")),
+            (
+                "Install playbook log",
+                lambda: _collect_file(tmp, "install-playbook.log", "/var/log/xinas/install.log"),
+            ),
+            (
+                "Install bootstrap log",
+                lambda: _collect_file(tmp, "install-bootstrap.log", "/tmp/xinas-install.log"),
+            ),
+            (
+                "System journal (last 1000)",
+                lambda: _collect_cmd(
+                    tmp, "journalctl.txt", "journalctl", "-n", "1000", "--no-pager"
+                ),
+            ),
+            (
+                "Kernel messages (dmesg)",
+                lambda: _collect_cmd(tmp, "dmesg.txt", "dmesg", "--time-format", "iso"),
+            ),
         ]
 
         lines = [f"{_BLD}{_CYN}Collecting Logs{_NC}", ""]
@@ -136,9 +157,7 @@ class CollectLogsScreen(Screen):
         view.set_content("\n".join(lines))
 
         hostname = socket.gethostname()
-        archive_path = await loop.run_in_executor(
-            None, lambda: _create_archive(tmp, hostname)
-        )
+        archive_path = await loop.run_in_executor(None, lambda: _create_archive(tmp, hostname))
 
         size = os.path.getsize(archive_path)
         size_str = _human_size(size)
@@ -181,10 +200,7 @@ class CollectLogsScreen(Screen):
         ok, msg = await loop.run_in_executor(None, lambda: _upload(archive))
 
         if ok:
-            view.set_content(
-                f"  {_GRN}Upload successful.{_NC}\n\n"
-                f"  {_DIM}{msg}{_NC}"
-            )
+            view.set_content(f"  {_GRN}Upload successful.{_NC}\n\n  {_DIM}{msg}{_NC}")
             self.app.audit.log("collect_logs.upload", archive, "OK")
         else:
             view.set_content(f"  {_RED}Upload failed:{_NC} {msg}")
@@ -236,7 +252,10 @@ def _collect_sysinfo(tmp: str, config_name: str, email: str) -> None:
 def _collect_cmd(tmp: str, filename: str, *args: str) -> None:
     try:
         r = subprocess.run(
-            list(args), capture_output=True, text=True, timeout=30,
+            list(args),
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         Path(tmp, filename).write_text(r.stdout or r.stderr or "(no output)\n")
     except Exception as exc:
@@ -258,7 +277,10 @@ def _collect_hwkey(tmp: str) -> None:
         if p.is_file():
             try:
                 r = subprocess.run(
-                    [str(p)], capture_output=True, text=True, timeout=10,
+                    [str(p)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 Path(tmp, "hwkey.txt").write_text(r.stdout or r.stderr or "(no output)\n")
                 return
@@ -299,7 +321,9 @@ def _upload(archive_path: str) -> tuple[bool, str]:
     try:
         r = subprocess.run(
             ["curl", "--fail", "--upload-file", archive_path, f"{server}/{basename}"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         if r.returncode == 0:
             return True, r.stdout.strip() or "Upload complete."

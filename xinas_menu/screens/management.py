@@ -1,4 +1,5 @@
 """ManagementScreen — Management submenu (Settings, Integrations, Updates, Uninstall)."""
+
 from __future__ import annotations
 
 import os
@@ -41,9 +42,11 @@ class ManagementScreen(Screen):
             self.app.pop_screen()
         elif key == "1":
             from xinas_menu.screens.settings import SettingsScreen
+
             self.app.push_screen(SettingsScreen())
         elif key == "2":
             from xinas_menu.screens.integrations import IntegrationsScreen
+
             self.app.push_screen(IntegrationsScreen())
         elif key == "3":
             self._do_update_check()

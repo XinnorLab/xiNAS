@@ -1,4 +1,5 @@
 """StartupApp — provisioning/Ansible menu (replaces startup_menu.sh)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -45,10 +46,12 @@ class StartupApp(App):
 
     async def on_mount(self) -> None:
         from xinas_menu.screens.startup._startup_main import StartupMainScreen
+
         await self.push_screen(StartupMainScreen())
 
     async def prompt_and_apply_update(self, result: CheckResult) -> None:
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
+
         rebuilds = result.required_rebuilds
         if rebuilds:
             what = "the full site.yml" if rebuilds == ("all",) else ", ".join(rebuilds)
@@ -64,6 +67,7 @@ class StartupApp(App):
 
     async def _apply_update(self, result: CheckResult | None = None) -> None:
         import asyncio
+
         loop = asyncio.get_running_loop()
         ok, msg = await loop.run_in_executor(None, self._update_checker.apply_update)
         if not ok:
@@ -74,6 +78,7 @@ class StartupApp(App):
         cmd = build_rebuild_cmd(rebuilds)
         if cmd:
             from xinas_menu.screens.startup.playbook_screen import PlaybookRunScreen
+
             self.audit.log("system.update", f"rebuild required: {' '.join(cmd)}")
             rc = await self.push_screen_wait(
                 PlaybookRunScreen(cmd=cmd, title="Applying update — Ansible rebuild")

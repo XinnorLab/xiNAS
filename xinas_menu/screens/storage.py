@@ -1,4 +1,5 @@
 """StorageScreen — Storage submenu (RAID, NFS, Physical Drives)."""
+
 from __future__ import annotations
 
 import logging
@@ -58,16 +59,21 @@ class StorageScreen(Screen):
             self.app.pop_screen()
         elif key == "1":
             from xinas_menu.screens.raid import RAIDScreen
+
             self.app.push_screen(RAIDScreen())
         elif key == "2":
             from xinas_menu.screens.nfs import NFSScreen
+
             self.app.push_screen(NFSScreen())
         elif key == "3":
             from xinas_menu.screens.drives import PhysicalDrivesScreen
+
             self.app.push_screen(PhysicalDrivesScreen())
         elif key == "4":
             from xinas_menu.screens.filesystem import FilesystemScreen
+
             self.app.push_screen(FilesystemScreen())
         elif key == "5":
             from xinas_menu.screens.spare_pools import SparePoolScreen
+
             self.app.push_screen(SparePoolScreen())

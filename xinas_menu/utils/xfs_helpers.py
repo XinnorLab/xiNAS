@@ -4,6 +4,7 @@ Replicates the XFS optimization parameters from the Ansible raid_fs role
 (collection/roles/raid_fs/tasks/create_fs.yml) including stripe alignment,
 external log device, and high-performance mount options.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,9 +21,7 @@ _DEVICE_RE = re.compile(r"^/dev/[a-zA-Z0-9_]+$")
 # ── Async subprocess wrapper ─────────────────────────────────────────────
 
 
-async def run_async_cmd(
-    *args: str, timeout: int = 120
-) -> tuple[bool, str, str]:
+async def run_async_cmd(*args: str, timeout: int = 120) -> tuple[bool, str, str]:
     """Run a command asynchronously and return (ok, stdout, stderr)."""
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -170,16 +169,19 @@ async def mkfs_xfs(
     # Cap log size to device capacity (matching create_fs.yml lines 69-82)
     requested_bytes = _parse_size_to_bytes(log_size)
     ok, dev_bytes, err = await get_device_size_bytes(log_device)
-    effective_log_size = (
-        str(min(requested_bytes, dev_bytes)) if ok and dev_bytes > 0 else log_size
-    )
+    effective_log_size = str(min(requested_bytes, dev_bytes)) if ok and dev_bytes > 0 else log_size
 
     return await run_async_cmd(
-        "mkfs.xfs", "-f",
-        "-L", label,
-        "-d", f"su={su_kb}k,sw={sw}",
-        "-l", f"logdev={log_device},size={effective_log_size}",
-        "-s", f"size={sector_size}",
+        "mkfs.xfs",
+        "-f",
+        "-L",
+        label,
+        "-d",
+        f"su={su_kb}k,sw={sw}",
+        "-l",
+        f"logdev={log_device},size={effective_log_size}",
+        "-s",
+        f"size={sector_size}",
         data_device,
         timeout=300,
     )
@@ -252,9 +254,7 @@ async def create_mount_unit(
 
     # Write unit file atomically
     try:
-        fd, tmp = tempfile.mkstemp(
-            dir="/etc/systemd/system", prefix=".xinas_mount_", suffix=".tmp"
-        )
+        fd, tmp = tempfile.mkstemp(dir="/etc/systemd/system", prefix=".xinas_mount_", suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as f:
                 f.write(unit_content)
@@ -281,9 +281,7 @@ async def mount_filesystem(mountpoint: str) -> tuple[bool, str]:
     if not ok:
         return (False, f"systemctl daemon-reload failed: {err}")
 
-    ok, _, err = await run_async_cmd(
-        "systemctl", "enable", "--now", unit_name, timeout=60
-    )
+    ok, _, err = await run_async_cmd("systemctl", "enable", "--now", unit_name, timeout=60)
     if not ok:
         return (False, f"Failed to enable mount: {err}")
 
@@ -346,14 +344,18 @@ async def find_mounts_using_raid(array_name: str) -> list[dict]:
     # Check if this device is mounted directly (data device)
     mount = await find_mount_for_device(device_path)
     if mount:
-        results.append({
-            "mountpoint": mount,
-            "data_device": device_path,
-            "role": "data",
-        })
+        results.append(
+            {
+                "mountpoint": mount,
+                "data_device": device_path,
+                "role": "data",
+            }
+        )
 
     # Also scan all XFS mounts to find log device references
-    ok, out, _ = await run_async_cmd("findmnt", "-t", "xfs", "-n", "-o", "TARGET,OPTIONS", timeout=10)
+    ok, out, _ = await run_async_cmd(
+        "findmnt", "-t", "xfs", "-n", "-o", "TARGET,OPTIONS", timeout=10
+    )
     if ok and out:
         for line in out.splitlines():
             parts = line.split(None, 1)
@@ -363,16 +365,19 @@ async def find_mounts_using_raid(array_name: str) -> list[dict]:
                 if f"logdev={device_path}" in opts and not any(
                     r["mountpoint"] == target for r in results
                 ):
-                    results.append({
-                        "mountpoint": target,
-                        "log_device": device_path,
-                        "role": "log",
-                    })
+                    results.append(
+                        {
+                            "mountpoint": target,
+                            "log_device": device_path,
+                            "role": "log",
+                        }
+                    )
 
     return results
 
 
 # ── Quota management ─────────────────────────────────────────────────────
+
 
 def get_quota_status(mount_options: str) -> dict[str, bool]:
     """Parse mount options string and return quota enablement flags.
@@ -443,9 +448,7 @@ async def update_mount_unit_quota(
 
     # Write updated unit
     try:
-        fd, tmp = tempfile.mkstemp(
-            dir="/etc/systemd/system", prefix=".xinas_mount_", suffix=".tmp"
-        )
+        fd, tmp = tempfile.mkstemp(dir="/etc/systemd/system", prefix=".xinas_mount_", suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as f:
                 f.write(new_content)

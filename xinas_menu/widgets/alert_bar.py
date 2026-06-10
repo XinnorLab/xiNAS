@@ -1,4 +1,5 @@
 """AlertBar — persistent notification strip for critical system alerts."""
+
 from __future__ import annotations
 
 import logging

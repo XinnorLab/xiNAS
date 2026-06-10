@@ -1,4 +1,5 @@
 """HealthScreen — runs health engine, displays report, offers remediation wizard."""
+
 from __future__ import annotations
 
 import asyncio
@@ -80,12 +81,11 @@ class HealthScreen(Screen):
         # Resolve profile path
         profile_path = _find_profile(profile)
         if profile_path is None:
-            view.set_content(
-                f"[red]Profile '{profile}' not found in {_PROFILES_DIR}[/red]"
-            )
+            view.set_content(f"[red]Profile '{profile}' not found in {_PROFILES_DIR}[/red]")
             return
 
         from xinas_menu.health.engine import run_health_check
+
         loop = asyncio.get_running_loop()
         try:
             text, json_path = await loop.run_in_executor(
@@ -113,6 +113,7 @@ class HealthScreen(Screen):
         """Check if the report has failures and offer to run the remediation wizard."""
         try:
             from xinas_menu.health.remediation import RemediationWizard
+
             wiz = RemediationWizard(json_path)
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, wiz.load)
@@ -146,6 +147,7 @@ class HealthScreen(Screen):
         json_path = self._last_json_path
         if not json_path or not Path(json_path).exists():
             from xinas_menu.health.remediation import RemediationWizard
+
             found = RemediationWizard.latest_json_report()
             if found:
                 json_path = str(found)
@@ -162,6 +164,7 @@ class HealthScreen(Screen):
     async def _run_remediation(self, json_path: str) -> None:
         """Core remediation logic: load report, show issues, let user pick fixes."""
         from xinas_menu.health.remediation import RemediationWizard
+
         view = self.query_one("#health-content", ScrollableTextView)
         view.set_content("[dim]Loading remediation data…[/dim]")
 
@@ -175,15 +178,18 @@ class HealthScreen(Screen):
             return
 
         if not actions:
-            view.set_content(
-                "[green]All checks passed — no remediation needed.[/green]"
-            )
+            view.set_content("[green]All checks passed — no remediation needed.[/green]")
             return
 
         # ANSI color codes
         GRN, YLW, RED, CYN, BLD, DIM, NC = (
-            "\033[32m", "\033[33m", "\033[31m", "\033[36m",
-            "\033[1m", "\033[2m", "\033[0m",
+            "\033[32m",
+            "\033[33m",
+            "\033[31m",
+            "\033[36m",
+            "\033[1m",
+            "\033[2m",
+            "\033[0m",
         )
 
         # Build summary display
@@ -219,9 +225,7 @@ class HealthScreen(Screen):
         view.set_content("\n".join(lines))
 
         if not auto_fixable:
-            view.append(
-                f"\n{YLW}No auto-fixable issues. Review the manual items above.{NC}"
-            )
+            view.append(f"\n{YLW}No auto-fixable issues. Review the manual items above.{NC}")
             return
 
         # Let user choose which fixes to apply
@@ -258,7 +262,9 @@ class HealthScreen(Screen):
                     bits.append(f"threads={a.nfs_conf_fix['threads']}")
                 if "rdma" in a.nfs_conf_fix:
                     bits.append(f"rdma={'y' if a.nfs_conf_fix['rdma'] else 'n'}")
-                summary_lines.append(f"  nfs-helper fix_nfs_conf {' '.join(bits)} (restart nfs-server)")
+                summary_lines.append(
+                    f"  nfs-helper fix_nfs_conf {' '.join(bits)} (restart nfs-server)"
+                )
         cmd_summary = "\n".join(summary_lines)
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
@@ -272,17 +278,13 @@ class HealthScreen(Screen):
         # Apply fixes
         results_lines = [f"\n{BLD}{CYN}=== Remediation Results ==={NC}", ""]
         for a in to_apply:
-            ok, output = await loop.run_in_executor(
-                None, lambda act=a: wiz.apply(act)
-            )
+            ok, output = await loop.run_in_executor(None, lambda act=a: wiz.apply(act))
             if ok:
                 results_lines.append(f"  {GRN}OK{NC} {a.description}")
                 self.app.audit.log("health.remediate", a.check_name, "OK")
             else:
                 results_lines.append(f"  {RED}FAIL{NC} {a.description}: {output}")
-                self.app.audit.log(
-                    "health.remediate", a.check_name, f"FAIL: {output}"
-                )
+                self.app.audit.log("health.remediate", a.check_name, f"FAIL: {output}")
             if output:
                 results_lines.append(f"    {DIM}{output}{NC}")
 

@@ -1,4 +1,5 @@
 """hc_scheduler.py — manage systemd timer for health check scheduling."""
+
 from __future__ import annotations
 
 import contextlib
@@ -69,9 +70,9 @@ def scheduler_status() -> dict:
                     interval = int(val)
 
     r = subprocess.run(
-        ["systemctl", "show", _TIMER_NAME,
-         "--property=NextElapseUSecRealtime,LastTriggerUSec"],
-        capture_output=True, text=True,
+        ["systemctl", "show", _TIMER_NAME, "--property=NextElapseUSecRealtime,LastTriggerUSec"],
+        capture_output=True,
+        text=True,
     )
     props: dict[str, str] = {}
     for line in r.stdout.splitlines():

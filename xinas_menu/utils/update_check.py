@@ -1,4 +1,5 @@
 """UpdateChecker — background git fetch; triggers reactive flag in the app."""
+
 from __future__ import annotations
 
 import asyncio
@@ -99,9 +100,7 @@ class UpdateChecker:
                 return CheckResult(False)
             rebuilds: tuple[str, ...] = ()
             try:
-                log_body = _git_output(
-                    self._repo, "log", f"{local}..{remote}", "--format=%B"
-                )
+                log_body = _git_output(self._repo, "log", f"{local}..{remote}", "--format=%B")
                 rebuilds = parse_rebuild_trailers(log_body)
             except subprocess.CalledProcessError:
                 # Trailer parse is best-effort — if `git log` fails we still
@@ -138,11 +137,13 @@ class UpdateChecker:
         if not src.is_dir() or not dest.is_dir():
             return
         import shutil
+
         for py_file in src.glob("*.py"):
             shutil.copy2(py_file, dest / py_file.name)
         subprocess.run(
             ["systemctl", "restart", "xinas-nfs-helper"],
-            capture_output=True, timeout=15,
+            capture_output=True,
+            timeout=15,
         )
 
     @staticmethod
@@ -218,7 +219,7 @@ def _privileged_git(repo: Path, action: str) -> str:
 
 def _short_git_error(exc: subprocess.CalledProcessError) -> str:
     """Extract a single readable error line from a failed git invocation."""
-    stderr = (exc.stderr or b"")
+    stderr = exc.stderr or b""
     if isinstance(stderr, bytes):
         stderr = stderr.decode("utf-8", "replace")
     stderr = stderr.strip()

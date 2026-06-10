@@ -1,4 +1,5 @@
 """NFSScreen — NFS export management with structured share wizards."""
+
 from __future__ import annotations
 
 import asyncio
@@ -273,8 +274,13 @@ class NFSScreen(Screen):
                 sec = val
                 break
 
-        return {"host": host, "access": access, "root_squash": root_squash,
-                "sync_mode": sync_mode, "sec": sec}
+        return {
+            "host": host,
+            "access": access,
+            "root_squash": root_squash,
+            "sync_mode": sync_mode,
+            "sec": sec,
+        }
 
     # ── Wizard: Add Share ────────────────────────────────────────────────
 
@@ -303,8 +309,12 @@ class NFSScreen(Screen):
                 return
             if choice == _CUSTOM:
                 path = await self.app.push_screen_wait(
-                    InputDialog("Export path:", "Add Share — Step 1/7",
-                                default="/mnt/data/", placeholder="/mnt/data/share1")
+                    InputDialog(
+                        "Export path:",
+                        "Add Share — Step 1/7",
+                        default="/mnt/data/",
+                        placeholder="/mnt/data/share1",
+                    )
                 )
                 if not path:
                     return
@@ -312,8 +322,12 @@ class NFSScreen(Screen):
                 path = choice
         else:
             path = await self.app.push_screen_wait(
-                InputDialog("Export path:", "Add Share — Step 1/7",
-                            default="/mnt/data/", placeholder="/mnt/data/share1")
+                InputDialog(
+                    "Export path:",
+                    "Add Share — Step 1/7",
+                    default="/mnt/data/",
+                    placeholder="/mnt/data/share1",
+                )
             )
             if not path:
                 return
@@ -338,10 +352,16 @@ class NFSScreen(Screen):
             options.append(f"sec={sec}")
 
         access_label = "Read & Write" if access == "rw" else "Read Only"
-        admin_label = "Yes (no_root_squash)" if root_squash == "no_root_squash" else "No (root_squash)"
+        admin_label = (
+            "Yes (no_root_squash)" if root_squash == "no_root_squash" else "No (root_squash)"
+        )
         sync_label = "Sync (safer)" if sync_mode == "sync" else "Async (faster)"
-        sec_labels = {"sys": "Standard UID/GID", "krb5": "Kerberos",
-                      "krb5i": "Kerberos + integrity", "krb5p": "Kerberos + encryption"}
+        sec_labels = {
+            "sys": "Standard UID/GID",
+            "krb5": "Kerberos",
+            "krb5i": "Kerberos + integrity",
+            "krb5p": "Kerberos + encryption",
+        }
         summary = (
             f"Path:       {path}\n"
             f"Access:     {host}\n"
@@ -376,7 +396,8 @@ class NFSScreen(Screen):
         if ok:
             self.app.audit.log("nfs.add_export", path, "OK")
             await self.app.snapshots.record(
-                "share_create", diff_summary=f"Added NFS share {path}",
+                "share_create",
+                diff_summary=f"Added NFS share {path}",
             )
             self._load_exports()
         else:
@@ -388,13 +409,11 @@ class NFSScreen(Screen):
         # Step 1: Select export to edit
         exports = await self._get_exports()
         if not exports:
-            await self.app.push_screen_wait(
-                ConfirmDialog("No shares configured.", "Edit Share"))
+            await self.app.push_screen_wait(ConfirmDialog("No shares configured.", "Edit Share"))
             return
         paths = [e["path"] for e in exports]
         path = await self.app.push_screen_wait(
-            SelectDialog(paths, title="Edit Share — Step 1/7",
-                         prompt="Select export to edit:")
+            SelectDialog(paths, title="Edit Share — Step 1/7", prompt="Select export to edit:")
         )
         if not path:
             return
@@ -405,7 +424,10 @@ class NFSScreen(Screen):
 
         # Steps 2-6: Access control wizard with current values shown
         result = await self._access_wizard(
-            "Edit Share", step_offset=2, total_steps=7, current=current,
+            "Edit Share",
+            step_offset=2,
+            total_steps=7,
+            current=current,
         )
         if result is None:
             return
@@ -424,10 +446,16 @@ class NFSScreen(Screen):
         options.extend(current["extra_opts"])
 
         access_label = "Read & Write" if access == "rw" else "Read Only"
-        admin_label = "Yes (no_root_squash)" if root_squash == "no_root_squash" else "No (root_squash)"
+        admin_label = (
+            "Yes (no_root_squash)" if root_squash == "no_root_squash" else "No (root_squash)"
+        )
         sync_label = "Sync (safer)" if sync_mode == "sync" else "Async (faster)"
-        sec_labels = {"sys": "Standard UID/GID", "krb5": "Kerberos",
-                      "krb5i": "Kerberos + integrity", "krb5p": "Kerberos + encryption"}
+        sec_labels = {
+            "sys": "Standard UID/GID",
+            "krb5": "Kerberos",
+            "krb5i": "Kerberos + integrity",
+            "krb5p": "Kerberos + encryption",
+        }
         summary = (
             f"Path:       {path}\n"
             f"Access:     {host}\n"
@@ -451,7 +479,8 @@ class NFSScreen(Screen):
         if ok:
             self.app.audit.log("nfs.update_export", path, "OK")
             await self.app.snapshots.record(
-                "share_modify", diff_summary=f"Updated NFS share {path}",
+                "share_modify",
+                diff_summary=f"Updated NFS share {path}",
             )
             self._load_exports()
         else:
@@ -461,8 +490,7 @@ class NFSScreen(Screen):
     async def _remove_share(self) -> None:
         paths = await self._get_export_paths()
         if not paths:
-            await self.app.push_screen_wait(
-                ConfirmDialog("No shares configured.", "Remove Share"))
+            await self.app.push_screen_wait(ConfirmDialog("No shares configured.", "Remove Share"))
             return
         path = await self.app.push_screen_wait(
             SelectDialog(paths, title="Remove Share", prompt="Select export to remove:")
@@ -475,13 +503,12 @@ class NFSScreen(Screen):
         if not confirmed:
             return
         loop = asyncio.get_running_loop()
-        ok, _, err = await loop.run_in_executor(
-            None, lambda: self.app.nfs.remove_export(path)
-        )
+        ok, _, err = await loop.run_in_executor(None, lambda: self.app.nfs.remove_export(path))
         if ok:
             self.app.audit.log("nfs.remove_export", path, "OK")
             await self.app.snapshots.record(
-                "share_delete", diff_summary=f"Removed NFS share {path}",
+                "share_delete",
+                diff_summary=f"Removed NFS share {path}",
             )
             self._load_exports()
         else:
@@ -501,8 +528,9 @@ class NFSScreen(Screen):
     async def _configure_idmapd(self) -> None:
         while True:
             domain = await self.app.push_screen_wait(
-                InputDialog("NFS4 idmapd domain:", "Configure idmapd Domain",
-                            placeholder="example.com")
+                InputDialog(
+                    "NFS4 idmapd domain:", "Configure idmapd Domain", placeholder="example.com"
+                )
             )
             if domain is None:
                 return
@@ -517,6 +545,7 @@ class NFSScreen(Screen):
 
         def _set_domain():
             import re
+
             cfg = "/etc/idmapd.conf"
             try:
                 with open(cfg) as f:
@@ -532,7 +561,8 @@ class NFSScreen(Screen):
         if ok:
             self.app.audit.log("nfs.idmapd_domain", domain, "OK")
             await self.app.snapshots.record(
-                "nfs_modify", diff_summary=f"Set idmapd domain to {domain}",
+                "nfs_modify",
+                diff_summary=f"Set idmapd domain to {domain}",
             )
             await self.app.push_screen_wait(ConfirmDialog("idmapd domain updated.", "Done"))
         else:
@@ -546,14 +576,24 @@ def _parse_current_export(export: dict) -> dict:
     """Extract structured wizard values from an export dict."""
     clients = export.get("clients", [])
     if not clients:
-        return {"host": "*", "access": "rw", "root_squash": "no_root_squash",
-                "sync_mode": "sync", "sec": "sys", "extra_opts": []}
+        return {
+            "host": "*",
+            "access": "rw",
+            "root_squash": "no_root_squash",
+            "sync_mode": "sync",
+            "sec": "sys",
+            "extra_opts": [],
+        }
     client = clients[0] if isinstance(clients[0], dict) else {}
     host = client.get("host", "*") if client else "*"
     opts = client.get("options", []) if client else []
 
     access = "ro" if "ro" in opts else "rw"
-    root_squash = "root_squash" if ("root_squash" in opts and "no_root_squash" not in opts) else "no_root_squash"
+    root_squash = (
+        "root_squash"
+        if ("root_squash" in opts and "no_root_squash" not in opts)
+        else "no_root_squash"
+    )
     sync_mode = "async" if "async" in opts else "sync"
     sec = "sys"
     extra: list[str] = []
@@ -562,8 +602,14 @@ def _parse_current_export(export: dict) -> dict:
             sec = o.split("=", 1)[1]
         elif o not in _WIZARD_MANAGED_OPTS:
             extra.append(o)
-    return {"host": host, "access": access, "root_squash": root_squash,
-            "sync_mode": sync_mode, "sec": sec, "extra_opts": extra}
+    return {
+        "host": host,
+        "access": access,
+        "root_squash": root_squash,
+        "sync_mode": sync_mode,
+        "sec": sec,
+        "extra_opts": extra,
+    }
 
 
 def _format_exports(data: Any) -> str:
@@ -572,14 +618,24 @@ def _format_exports(data: Any) -> str:
     import shlex
     import subprocess
 
-    GRN, _YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+    GRN, _YLW, RED, CYN, BLD, DIM, NC = (
+        "\033[32m",
+        "\033[33m",
+        "\033[31m",
+        "\033[36m",
+        "\033[1m",
+        "\033[2m",
+        "\033[0m",
+    )
     W = 65
     lines: list[str] = []
 
     def _run(cmd: str) -> str:
         try:
             return subprocess.check_output(
-                shlex.split(cmd), stderr=subprocess.DEVNULL, text=True,
+                shlex.split(cmd),
+                stderr=subprocess.DEVNULL,
+                text=True,
             ).strip()
         except Exception:
             _log.debug("command failed: %s", cmd, exc_info=True)
@@ -588,7 +644,9 @@ def _format_exports(data: Any) -> str:
     def _share_usage(path: str) -> str:
         try:
             r = subprocess.run(
-                ["df", "-h", path], capture_output=True, text=True,
+                ["df", "-h", path],
+                capture_output=True,
+                text=True,
             )
             if r.returncode == 0 and r.stdout:
                 lines = r.stdout.strip().splitlines()
@@ -628,8 +686,12 @@ def _format_exports(data: Any) -> str:
         for o in opts:
             if o.startswith("sec="):
                 s = o.split("=", 1)[1]
-                return {"sys": "Standard (UID/GID)", "krb5": "Kerberos",
-                        "krb5i": "Kerberos+integrity", "krb5p": "Kerberos+encryption"}.get(s, s)
+                return {
+                    "sys": "Standard (UID/GID)",
+                    "krb5": "Kerberos",
+                    "krb5i": "Kerberos+integrity",
+                    "krb5p": "Kerberos+encryption",
+                }.get(s, s)
         return "Standard (UID/GID)"
 
     lines.append(f"{BLD}{CYN}NFS SHARED FOLDERS{NC}")
@@ -651,7 +713,7 @@ def _format_exports(data: Any) -> str:
                 continue
             # clients may be [{"host": "*", "options": [...]}] or ["host(opts)"]
             raw: list[str] = []
-            for c in (clients or [{"host": "*", "options": []}]):
+            for c in clients or [{"host": "*", "options": []}]:
                 if isinstance(c, dict):
                     host = c.get("host", "*")
                     opts = c.get("options", [])
@@ -738,7 +800,8 @@ def _format_exports(data: Any) -> str:
         try:
             result = subprocess.run(
                 ["ss", "-tn", "state", "established", "( dport = :2049 )"],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             ).stdout.strip()
         except Exception:
             _log.debug("ss command failed for NFS session check", exc_info=True)

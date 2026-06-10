@@ -1,4 +1,5 @@
 """Pre-flight and post-apply validation for configuration changes."""
+
 from __future__ import annotations
 
 import asyncio
@@ -204,20 +205,14 @@ class PreflightValidator:
                     ),
                 )
                 if result.returncode != 0:
-                    warnings.append(
-                        f"Service '{svc}' is not active"
-                    )
+                    warnings.append(f"Service '{svc}' is not active")
             except FileNotFoundError:
                 # systemctl not available (e.g. container, macOS dev).
                 break
             except subprocess.TimeoutExpired:
-                warnings.append(
-                    f"Timed out checking service '{svc}'"
-                )
+                warnings.append(f"Timed out checking service '{svc}'")
             except OSError as exc:
-                warnings.append(
-                    f"Could not check service '{svc}': {exc}"
-                )
+                warnings.append(f"Could not check service '{svc}': {exc}")
 
         return warnings
 
@@ -311,7 +306,8 @@ class PostApplyValidator:
         return ValidationResult(passed=passed, blockers=blockers, warnings=warnings)
 
     async def check_raid_state(
-        self, expected_arrays: dict | None = None,
+        self,
+        expected_arrays: dict | None = None,
     ) -> list[str]:
         """Verify RAID arrays match expected state via gRPC.
 
@@ -325,18 +321,14 @@ class PostApplyValidator:
 
         ok, data, err = await self._inspector.raid_show(extended=True)
         if not ok:
-            issues.append(
-                "Unable to query RAID state: {}".format(err or "unknown error")
-            )
+            issues.append("Unable to query RAID state: {}".format(err or "unknown error"))
             return issues
 
         actual = data if isinstance(data, dict) else {}
 
         for name, expected in expected_arrays.items():
             if name not in actual:
-                issues.append(
-                    f"Expected RAID array '{name}' not found in runtime state"
-                )
+                issues.append(f"Expected RAID array '{name}' not found in runtime state")
                 continue
 
             arr = actual[name]
@@ -350,7 +342,8 @@ class PostApplyValidator:
         return issues
 
     async def check_mount_state(
-        self, expected_mounts: list[dict] | None = None,
+        self,
+        expected_mounts: list[dict] | None = None,
     ) -> list[str]:
         """Verify filesystem mounts are active and correct.
 
@@ -379,7 +372,10 @@ class PostApplyValidator:
                 result = await asyncio.get_running_loop().run_in_executor(
                     None,
                     lambda: subprocess.run(
-                        ["mount"], capture_output=True, text=True, timeout=5,
+                        ["mount"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
                     ),
                 )
                 if result.returncode == 0 and result.stdout:
@@ -400,9 +396,7 @@ class PostApplyValidator:
             if not mp:
                 continue
             if mp not in active_mounts:
-                issues.append(
-                    f"Expected mountpoint '{mp}' is not mounted"
-                )
+                issues.append(f"Expected mountpoint '{mp}' is not mounted")
                 continue
             expected_fs = entry.get("fstype", "")
             actual_fs = active_mounts[mp].get("fstype", "")
@@ -414,7 +408,8 @@ class PostApplyValidator:
         return issues
 
     async def check_export_state(
-        self, expected_exports: list[dict] | None = None,
+        self,
+        expected_exports: list[dict] | None = None,
     ) -> list[str]:
         """Verify NFS exports are present and correct.
 
@@ -431,14 +426,13 @@ class PostApplyValidator:
             if not path:
                 continue
             if path not in current_exports:
-                issues.append(
-                    f"Expected NFS export '{path}' not found in {_EXPORTS_PATH}"
-                )
+                issues.append(f"Expected NFS export '{path}' not found in {_EXPORTS_PATH}")
 
         return issues
 
     async def check_service_active(
-        self, services: list[str] | None = None,
+        self,
+        services: list[str] | None = None,
     ) -> list[str]:
         """Verify named services are active."""
         if not services:
@@ -456,20 +450,14 @@ class PostApplyValidator:
                     ),
                 )
                 if result.returncode != 0:
-                    issues.append(
-                        f"Service '{svc}' is not active after apply"
-                    )
+                    issues.append(f"Service '{svc}' is not active after apply")
             except FileNotFoundError:
                 # systemctl not available — skip silently.
                 break
             except subprocess.TimeoutExpired:
-                issues.append(
-                    f"Timed out checking service '{svc}'"
-                )
+                issues.append(f"Timed out checking service '{svc}'")
             except OSError as exc:
-                issues.append(
-                    f"Could not check service '{svc}': {exc}"
-                )
+                issues.append(f"Could not check service '{svc}': {exc}")
 
         return issues
 
