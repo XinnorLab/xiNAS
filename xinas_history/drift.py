@@ -604,6 +604,11 @@ class DriftDetector:
         safety_critical_paths = {
             "/etc/exports",
             "/etc/nfs.conf",
+            # ADR-0005: the EFFECTIVE NFS service config on Ubuntu 22.04/24.04 —
+            # these, not /etc/nfs.conf, control the running service (nfs.conf is
+            # kept above conservatively for back-compat).
+            "/etc/nfs/nfsd.conf",
+            "/etc/default/nfs-kernel-server",
             "/etc/netplan/99-xinas.yaml",
         }
 

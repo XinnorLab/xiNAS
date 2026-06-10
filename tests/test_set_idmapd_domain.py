@@ -205,3 +205,41 @@ def test_idmapd_conf_in_checksum_targets():
     from xinas_history.collector import CHECKSUM_TARGETS
 
     assert CHECKSUM_TARGETS.get("idmapd_conf") == "/etc/idmapd.conf"
+
+
+def test_adr0005_effective_files_in_checksum_targets():
+    """Config-history tracks the four ADR-0005 effective NFS files (S3.1);
+    nfs_conf stays for back-compat and residual drift signal."""
+    from xinas_history.collector import CHECKSUM_TARGETS
+
+    assert CHECKSUM_TARGETS.get("nfsd_conf") == "/etc/nfs/nfsd.conf"
+    assert CHECKSUM_TARGETS.get("nfs_kernel_server_defaults") == "/etc/default/nfs-kernel-server"
+    assert CHECKSUM_TARGETS.get("lockd_conf") == "/etc/modprobe.d/lockd.conf"
+    assert CHECKSUM_TARGETS.get("nfs_common_defaults") == "/etc/default/nfs-common"
+    # back-compat: the superseded profile target is still drift-tracked
+    assert CHECKSUM_TARGETS.get("nfs_conf") == "/etc/nfs.conf"
+
+
+def test_checksums_model_back_compat_round_trip():
+    """Old snapshot dicts (pre-ADR-0005 fields) load unchanged, and the new
+    fields are omitted from to_dict when empty — so old manifests round-trip
+    byte-identical."""
+    from xinas_history.models import Checksums
+
+    old_snapshot = {
+        "etc_exports": "sha256:aaa",
+        "nfs_conf": "sha256:bbb",
+        "idmapd_conf": "sha256:ccc",
+        "netplan": "sha256:ddd",
+    }
+    loaded = Checksums.from_dict(old_snapshot)
+    assert loaded.nfsd_conf == ""
+    assert loaded.nfs_kernel_server_defaults == ""
+    assert loaded.lockd_conf == ""
+    assert loaded.nfs_common_defaults == ""
+    # empty new fields are omitted — old snapshots serialize unchanged
+    assert loaded.to_dict() == old_snapshot
+
+    # and the new fields do round-trip when present
+    populated = Checksums(nfsd_conf="sha256:eee", lockd_conf="sha256:fff")
+    assert Checksums.from_dict(populated.to_dict()) == populated
