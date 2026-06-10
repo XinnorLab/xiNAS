@@ -28,8 +28,14 @@ import {
 
 /** Default nfs-helper UDS path (matches the read-path probe + convergence). */
 const DEFAULT_NFS_HELPER_SOCKET = '/run/xinas-nfs-helper.sock';
-/** Default round-trip timeout for nfs-helper write ops, in milliseconds. */
-const DEFAULT_NFS_HELPER_TIMEOUT_MS = 5000;
+/**
+ * Default round-trip timeout for nfs-helper write ops, in milliseconds. Must
+ * exceed the helper's own worst-case op budgets: `render_nfs_profile` runs
+ * `systemctl restart nfs-server` with a 60s budget and the exports ops run
+ * `exportfs -r` with 30s — a client-side timeout mid-restart would report a
+ * spurious failure and fire a rollback racing the still-finishing restart.
+ */
+const DEFAULT_NFS_HELPER_TIMEOUT_MS = 90_000;
 /** idmapd config file the `readIdmapDomain` reader parses. */
 const IDMAPD_CONF_PATH = '/etc/idmapd.conf';
 

@@ -173,11 +173,14 @@ each checksummed into `status.effective_files`. The legacy helper `fix_nfs_conf`
   active versions) stays **deferred** beyond S3; the executor's prior-spec rollback is the
   sole undo until then. Only `nfs-profile.update` via **PATCH** is built in S3; the OpenAPI
   `PUT /nfs-profiles/default` (full replace) stays stubbed.
-- **Apply:** patch desired NfsProfile (prior recorded); **`spec`** = the patched NfsProfile
-  spec (the executor renders from it).
-- **Executor:** `render_nfs_profile(spec, restart)` (§6.2) — the helper renders the four
-  ADR-0005 files atomically + reloads/restarts per `restart`; **rollback**
-  `render_nfs_profile(prior_spec, restart)`.
+- **Apply:** patch desired NfsProfile (prior recorded); **`spec`** =
+  `{ profile: <the merged full spec>, prior_profile: <the pre-patch spec> }` — the restart
+  flag is **derived** (never stored) by the shared `deriveProfileServiceAction` in both
+  layers (api for the plan's risk, agent for the helper flag).
+- **Executor:** `render_nfs_profile(profile, <derived restart>)` (§6.2) — the helper renders
+  the four ADR-0005 files atomically + reloads/restarts per the flag; **rollback**
+  `render_nfs_profile(prior_profile, <same derived restart>)` (the prior spec rides IN the
+  operation spec, not refetched).
 
 ### 3.5 `nfs-idmap.set`
 - **Imperative against observed** (no desired row — idmapd is observed-only).
@@ -230,6 +233,10 @@ client `options[]` are authoritative, Share-level fields are defaults that never
 contradict an explicit client token, and the output is deterministic. There is **no
 "wizard-managed vs extra_opts" split** (that was a TUI concept; the OpenAPI model already
 carries the full raw option list, so an update's `options[]` is taken as-is).
+
+Note: `fsid` is validated (integer) and uniqueness-enforced at plan time but is **not yet
+rendered** into the compiled export entry — deferred, because emitting `fsid=` would change
+host behavior vs the installer baseline; revisit with Phase-1 HA (see §11).
 
 ---
 
@@ -354,7 +361,8 @@ Reuses the S2 error codes — no new ones.
 
 | condition | outcome |
 |---|---|
-| helper unreachable / refused / timeout (preflight) | `FAILED_BEFORE_CHANGE`, leases released, **desired reverted**, route 503/`EXECUTOR_UNAVAILABLE` |
+| `task.begin` rejected / agent unreachable (dispatch) | `FAILED_BEFORE_CHANGE`, leases released, **desired reverted**, route 503/`EXECUTOR_UNAVAILABLE` |
+| helper unreachable / refused / timeout (preflight) | `FAILED_PARTIAL_ROLLED_BACK` — the runner has no fail-before-change path for stage failures; rollback runs and **no-ops** (the stash markers show nothing was changed), leases released, **desired reverted** on terminal-failed |
 | helper `INVALID_ARGUMENT` (bad path/domain) | plan → 400; preflight → `FAILED_BEFORE_CHANGE` |
 | helper `INTERNAL` mid-`apply` (e.g. `exportfs -r` hard error) | executor rollback → `FAILED_PARTIAL_ROLLED_BACK`; api reverts desired |
 | `exportfs -s` "Failed to stat" warning | non-fatal — emit a stage warning, continue |
@@ -441,6 +449,9 @@ not yet in scope, the executor's prior-state rollback is the sole undo (noted pe
 - **Active-session on update/delete** kept a **warning**, not a blocker — revisit if
   operators want a hard gate.
 - **Share `id`/`fsid` assignment** on `POST /shares` — N5.
+- **`fsid` not rendered into the export entry** (§4): validated + uniqueness-enforced only;
+  emitting `fsid=` would change host behavior vs the installer baseline — revisit with
+  Phase-1 HA.
 
 ---
 

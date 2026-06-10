@@ -106,3 +106,25 @@ export function compileShareToExportEntry(share: ShareCompileInput): ExportEntry
     clients: share.clients.map((client) => compileClient(client, share)),
   };
 }
+
+/**
+ * Project a raw Share operation spec (the shape the route forwards — a
+ * superset of the compile inputs) onto {@link ShareCompileInput}. One
+ * projection, two importers: the api PlanProvider (preview `diff`) and the
+ * agent Executor (authoritative apply) both call this, so the compiled entry
+ * is byte-identical on both sides. Conditional spread keeps absent optional
+ * fields ABSENT (not `undefined`-valued) for canonical-JSON determinism.
+ */
+export function shareSpecToCompileInput(spec: {
+  path: string;
+  clients: Array<{ pattern: string; options: string[] }>;
+  sync?: 'sync' | 'async';
+  security_mode?: string;
+}): ShareCompileInput {
+  return {
+    path: spec.path,
+    clients: spec.clients.map((c) => ({ pattern: c.pattern, options: c.options })),
+    ...(spec.sync !== undefined ? { sync: spec.sync } : {}),
+    ...(spec.security_mode !== undefined ? { security_mode: spec.security_mode } : {}),
+  };
+}
