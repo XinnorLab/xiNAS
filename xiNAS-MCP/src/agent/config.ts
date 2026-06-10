@@ -6,6 +6,7 @@ export interface AgentConfig {
   socket_group: string; // group to chown the agent socket to (xinas-api)
   controller_id: string; // resolved from controller_id_path
   agent_token: string; // internal bearer, resolved from agent_token_path
+  nfs_helper_socket?: string; // nfs-helper UDS override (default /run/xinas-nfs-helper.sock)
 }
 
 interface AgentConfigFile {
@@ -14,6 +15,7 @@ interface AgentConfigFile {
   controller_id_path: string;
   agent_token_path: string;
   socket_group: string;
+  nfs_helper_socket?: string;
 }
 
 const DEFAULT_PATH = '/etc/xinas-agent/config.json';
@@ -39,5 +41,10 @@ export function loadAgentConfig(
     socket_group: file.socket_group,
     controller_id: readFileSync(file.controller_id_path, 'utf8').trim(),
     agent_token: readFileSync(file.agent_token_path, 'utf8').trim(),
+    // Optional nfs-helper UDS override (tests point it at a stub helper);
+    // omitted (not undefined) when absent, per exactOptionalPropertyTypes.
+    ...(typeof file.nfs_helper_socket === 'string'
+      ? { nfs_helper_socket: file.nfs_helper_socket }
+      : {}),
   };
 }

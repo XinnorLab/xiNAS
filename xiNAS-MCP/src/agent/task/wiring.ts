@@ -35,14 +35,16 @@ const IDMAPD_CONF_PATH = '/etc/idmapd.conf';
 
 /**
  * Production {@link NfsExecutorDeps}: the typed helper write client over the
- * same UDS the read-path probe uses, plus a `readIdmapDomain` that parses
- * `/etc/idmapd.conf` (the prior-domain rollback target for `nfs-idmap.set`).
- * On ENOENT / read / parse error the domain is reported as unset (undefined),
- * so a fresh install with no idmapd.conf yields a prior-unset (no-op) rollback.
+ * same UDS the read-path probe uses (the config's `nfs_helper_socket` when
+ * set — e2e points it at a stub helper — else the production default), plus a
+ * `readIdmapDomain` that parses `/etc/idmapd.conf` (the prior-domain rollback
+ * target for `nfs-idmap.set`). On ENOENT / read / parse error the domain is
+ * reported as unset (undefined), so a fresh install with no idmapd.conf
+ * yields a prior-unset (no-op) rollback.
  */
-function buildNfsExecutorDeps(): NfsExecutorDeps {
+function buildNfsExecutorDeps(config: AgentConfig): NfsExecutorDeps {
   const helper = createNfsHelperClientFromProbe({
-    helperSocket: DEFAULT_NFS_HELPER_SOCKET,
+    helperSocket: config.nfs_helper_socket ?? DEFAULT_NFS_HELPER_SOCKET,
     timeoutMs: DEFAULT_NFS_HELPER_TIMEOUT_MS,
   });
   const readIdmapDomain = async (): Promise<string | undefined> => {
@@ -111,7 +113,7 @@ export function buildTaskSubsystem(
   const registry = new ExecutorRegistry();
   // Register the real NFS executors (share.* + nfs-idmap.set) over the helper
   // client; tests may inject `nfsDeps` to override the helper/idmap reader.
-  const nfsDeps = opts.nfsDeps ?? buildNfsExecutorDeps();
+  const nfsDeps = opts.nfsDeps ?? buildNfsExecutorDeps(config);
   for (const ex of buildNfsExecutors(nfsDeps)) {
     registry.register(ex);
   }
