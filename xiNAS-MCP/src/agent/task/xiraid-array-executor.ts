@@ -16,7 +16,7 @@
  * deliberately spec-only).
  */
 
-import { parseCreateSpec } from '../../lib/xiraid/validate.js';
+import { derivedPoolName, parseCreateSpec } from '../../lib/xiraid/validate.js';
 import { toRaidCreateRequest } from '../../lib/xiraid/translate.js';
 import type { XiraidClient } from '../xiraid/client.js';
 import type { Executor, ExecutorContext, ExecutorStage } from './types.js';
@@ -124,6 +124,26 @@ export function makeXiraidArrayCreateExecutor(opts: XiraidArrayCreateExecutorOpt
     async run(ctx: ExecutorContext): Promise<void> {
       checkCancelled(ctx, 'create');
       const { spec, deviceById } = narrowSpec(ctx);
+
+      // S4 T4: spares ride an executor-provisioned pool — created AND
+      // activated before raid_create (an unactivated pool never
+      // auto-replaces; analyst doc §3.8).
+      const spares = spec.spare_disk_ids ?? [];
+      if (spares.length > 0) {
+        const poolName = derivedPoolName(spec.name);
+        const spareDrives = spares.map((id) => {
+          const path = deviceById.get(id);
+          if (path === undefined) {
+            throw new Error(`create: no resolved device path for spare disk '${id}'`);
+          }
+          return path;
+        });
+        ctx.emitOutput(`pool_create ${poolName} drives=${spareDrives.join(',')}`);
+        await client.poolCreate({ name: poolName, drives: spareDrives });
+        await client.poolActivate({ name: poolName });
+        ctx.emitOutput(`pool ${poolName} active`);
+      }
+
       const req = toRaidCreateRequest(spec, deviceById);
       ctx.emitOutput(`raid_create ${req.name} level=${req.level} drives=${req.drives.join(',')}`);
       await client.raidCreate(req);
@@ -185,13 +205,29 @@ export function makeXiraidArrayCreateExecutor(opts: XiraidArrayCreateExecutorOpt
       // raid_show says exists. A show/destroy failure here propagates → the
       // runner emits rollback_failed → requires_manual_recovery.
       const exists = readShow(await client.raidShow()).some((a) => a.name === name);
-      if (!exists) {
+      if (exists) {
+        ctx.emitOutput(`rollback: destroying partially created array '${name}'`);
+        await client.raidDestroy({ name, force: true });
+        ctx.emitOutput(`rollback: '${name}' destroyed`);
+      } else {
         ctx.emitOutput(`rollback: array '${name}' was never created — nothing to undo`);
-        return;
       }
-      ctx.emitOutput(`rollback: destroying partially created array '${name}'`);
-      await client.raidDestroy({ name, force: true });
-      ctx.emitOutput(`rollback: '${name}' destroyed`);
+
+      // S4 T4: clean a pool this run may have provisioned (pool_create
+      // happens BEFORE raid_create, so a clean create failure can leave the
+      // pool behind). Live poolShow decides — same crash-safe principle.
+      const poolName = derivedPoolName(name);
+      const pools = (await client.poolShow()) as unknown;
+      const pool = Array.isArray(pools)
+        ? (pools as Array<Record<string, unknown>>).find((p) => p.name === poolName)
+        : undefined;
+      if (pool) {
+        if (pool.active === true) {
+          await client.poolDeactivate({ name: poolName });
+        }
+        await client.poolDelete({ name: poolName });
+        ctx.emitOutput(`rollback: spare pool '${poolName}' removed`);
+      }
     },
   };
 }

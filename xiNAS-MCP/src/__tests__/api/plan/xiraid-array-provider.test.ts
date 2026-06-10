@@ -123,6 +123,21 @@ describe('xiraidArrayCreateProvider', () => {
     }
   });
 
+  it('create-with-spares: spares leased + resolved into device_by_id (S4 T4)', async () => {
+    seedDisk(h.kv, 'nvme5n1');
+    const { task, planResult } = await h.engine.plan(
+      planArgs({ ...GOOD_SPEC, spare_disk_ids: ['nvme5n1'] }),
+    );
+    expect(planResult.blockers).toEqual([]);
+    expect(task.affected_resources).toContainEqual({ kind: 'Disk', id: 'nvme5n1' });
+    const persisted = h.store.get(task.task_id)?.spec as Record<string, unknown>;
+    expect((persisted.device_by_id as Record<string, string>).nvme5n1).toBe('/dev/nvme5n1');
+    expect(
+      (planResult.diff as { raid_create_request?: { sparepool?: string } }).raid_create_request
+        ?.sparepool,
+    ).toBe('xnsp_data');
+  });
+
   it('structural junk → INVALID_ARGUMENT ApiException', async () => {
     await expect(h.engine.plan(planArgs({ name: 'x' }))).rejects.toThrowError(ApiException);
     await expect(h.engine.plan(planArgs({ name: 'x' }))).rejects.toMatchObject({

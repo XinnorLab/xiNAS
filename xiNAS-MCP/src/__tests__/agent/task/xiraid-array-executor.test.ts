@@ -6,9 +6,10 @@ import { XinasHistoryBridge } from '../../../agent/task/xinas-history-bridge.js'
 import { XiraidClient, type XiraidTransport } from '../../../agent/xiraid/client.js';
 import { makeUnimplementedTransport } from '../../../agent/xiraid/fake-transport.js';
 
-/** In-memory fake xiRAID with injectable failure modes. */
+/** In-memory fake xiRAID with injectable failure modes (+ pool state, S4 T4). */
 function makeFake(opts: { failCreate?: 'clean' | 'partial'; downAfterCreate?: boolean } = {}) {
   const arrays: Array<{ name: string; level: string; devices: string[]; state: string[] }> = [];
+  const pools: Array<{ name: string; drives: string[]; active: boolean }> = [];
   let down = false;
   const destroyCalls: string[] = [];
   const transport: XiraidTransport = {
@@ -32,8 +33,31 @@ function makeFake(opts: { failCreate?: 'clean' | 'partial'; downAfterCreate?: bo
       const i = arrays.findIndex((a) => a.name === req.name);
       if (i >= 0) arrays.splice(i, 1);
     },
+    async poolCreate(req) {
+      pools.push({ name: req.name, drives: [...req.drives], active: false });
+    },
+    async poolActivate(req) {
+      const p = pools.find((x) => x.name === req.name);
+      if (!p) throw new Error(`no pool ${req.name}`);
+      p.active = true;
+    },
+    async poolDeactivate(req) {
+      const p = pools.find((x) => x.name === req.name);
+      if (!p) throw new Error(`no pool ${req.name}`);
+      p.active = false;
+    },
+    async poolDelete(req) {
+      const i = pools.findIndex((x) => x.name === req.name);
+      if (i < 0) throw new Error(`no pool ${req.name}`);
+      if (pools[i]?.active) throw new Error(`pool ${req.name} is active`);
+      pools.splice(i, 1);
+    },
+    async poolShow() {
+      if (down) throw new Error('connect ECONNREFUSED 127.0.0.1:6066');
+      return pools.map((p) => ({ ...p }));
+    },
   };
-  return { arrays, destroyCalls, transport, setDown: (v: boolean) => (down = v) };
+  return { arrays, pools, destroyCalls, transport, setDown: (v: boolean) => (down = v) };
 }
 
 function makeRunner(): TaskRunner {
@@ -177,6 +201,65 @@ describe('xiraid.array.create executor', () => {
     expect(shape(events)).toContainEqual(['stage_failed', 'wait_online']);
     expect(fake.destroyCalls).toEqual(['data']);
     expect(terminal(events)?.status).toBe('failed');
+  });
+
+  it('create-with-spares: pool created+activated BEFORE raid_create; rollback cleans the pool (S4 T4)', async () => {
+    // success path — use the file-backed fake (records pools + order via state)
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { createFakeXiraidTransport } = await import('../../../agent/xiraid/fake-transport.js');
+
+    const dir = mkdtempSync(join(tmpdir(), 'xinas-exec-spares-'));
+    try {
+      const t = createFakeXiraidTransport(dir);
+      const spec = {
+        ...SPEC,
+        spare_disk_ids: ['d5'],
+        device_by_id: { ...SPEC.device_by_id, d5: '/dev/nvme5n1' },
+      };
+      const events: TaskProgressEvent[] = [];
+      const executor = makeXiraidArrayCreateExecutor({
+        client: new XiraidClient(t),
+        pollIntervalMs: 1,
+        timeoutMs: 20,
+        sleep: async () => {},
+      });
+      await makeRunner().run(
+        { task_id: 't-sp', operation_kind: 'xiraid.array.create', spec },
+        executor,
+        async (e) => {
+          events.push(e);
+        },
+      );
+      expect(terminal(events)?.status).toBe('success');
+      const pools = (await t.poolShow()) as Array<Record<string, unknown>>;
+      expect(pools).toEqual([{ name: 'xnsp_data', drives: ['/dev/nvme5n1'], active: true }]);
+      const [arr] = (await t.raidShow()) as Array<Record<string, unknown>>;
+      // raid_create carried the sparepool → the pool existed (and was active) first
+      expect(arr?.sparepool).toBe('xnsp_data');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('create-with-spares rollback: raid_create rejects AFTER the pool exists → pool cleaned up', async () => {
+    // In-memory fake: pool ops succeed, raidCreate rejects cleanly. (A
+    // '-fail' name would trip the file-backed fake's POOL hook first — the
+    // same trap the S4 review caught for the modify rollback test.)
+    const fake = makeFake({ failCreate: 'clean' });
+    const events = await run(fake, {
+      ...SPEC,
+      spare_disk_ids: ['d5'],
+      device_by_id: { ...SPEC.device_by_id, d5: '/dev/nvme5n1' },
+    });
+    expect(shape(events)).toContainEqual(['stage_failed', 'create']);
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
+    expect(fake.pools).toEqual([]); // xnsp_data deactivated + deleted by rollback
+    expect(fake.destroyCalls).toEqual([]); // array never existed
   });
 
   it('spec without device_by_id → preflight fails before any change', async () => {

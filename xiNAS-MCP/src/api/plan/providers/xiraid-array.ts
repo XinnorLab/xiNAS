@@ -93,18 +93,22 @@ export const xiraidArrayCreateProvider: PlanProvider = {
     const facts: CreateFacts = { disks, existingArrayNames, existingMemberDiskIds };
     const blockers = validateCreateSpec(spec, facts);
 
-    // --- device resolution (only meaningful when the disks all resolved) ---
+    // --- device resolution (members + spares, S4 T4) ---
     const byId = new Map(disks.map((d) => [d.id, d.device_path]));
+    const spares = spec.spare_disk_ids ?? [];
+    const allDiskIds = [...spec.member_disk_ids, ...spares];
     const deviceById: Record<string, string> = {};
-    for (const id of spec.member_disk_ids) {
+    for (const id of allDiskIds) {
       const path = byId.get(id);
       if (path !== undefined) deviceById[id] = path;
     }
-    const fullyResolved = spec.member_disk_ids.every((id) => deviceById[id] !== undefined);
+    const fullyResolved = allDiskIds.every((id) => deviceById[id] !== undefined);
 
+    // Spares are leased like members: a concurrent create/modify competing
+    // for the same spare disk serializes on the Disk lease.
     const affected: ResourceRef[] = [
       { kind: 'XiraidArray', id: spec.name },
-      ...spec.member_disk_ids.map((id): ResourceRef => ({ kind: 'Disk', id })),
+      ...allDiskIds.map((id): ResourceRef => ({ kind: 'Disk', id })),
     ];
 
     return {
