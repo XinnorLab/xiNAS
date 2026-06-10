@@ -1,4 +1,5 @@
 """MCPScreen — MCP server management + SSH access + HTTP remote access."""
+
 from __future__ import annotations
 
 import asyncio
@@ -47,9 +48,7 @@ def _safe_exists(p: Path) -> bool:
         return False
 
 
-async def _probe_unix_socket(
-    sock_path: Path, *, attempts: int = 4, delay: float = 0.25
-) -> bool:
+async def _probe_unix_socket(sock_path: Path, *, attempts: int = 4, delay: float = 0.25) -> bool:
     """Return True if a Unix socket is reachable, with brief retries.
 
     xinas-nfs-helper.service is Type=simple, so systemd marks the unit
@@ -86,7 +85,8 @@ def _cfg_restart_service() -> tuple[bool, str]:
     """Restart xinas-mcp after a config write so port/tokens/TLS take effect."""
     r = subprocess.run(
         ["systemctl", "restart", "xinas-mcp"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if r.returncode != 0:
         return False, r.stderr.strip()
@@ -161,12 +161,16 @@ class MCPScreen(Screen):
     @work(exclusive=True)
     async def _toggle_nfs_helper(self) -> None:
         from xinas_menu.utils.service_ctl import ServiceController
+
         loop = asyncio.get_running_loop()
         ctl = ServiceController()
         state = await loop.run_in_executor(None, lambda: ctl.state("xinas-nfs-helper"))
         if state.is_active:
             confirmed = await self.app.push_screen_wait(
-                ConfirmDialog("Stop xinas-nfs-helper?\n\nThis prevents MCP from managing NFS exports until restarted.", "Stop NFS Helper")
+                ConfirmDialog(
+                    "Stop xinas-nfs-helper?\n\nThis prevents MCP from managing NFS exports until restarted.",
+                    "Stop NFS Helper",
+                )
             )
             if not confirmed:
                 return
@@ -176,7 +180,9 @@ class MCPScreen(Screen):
             ok, err = await loop.run_in_executor(None, lambda: ctl.start("xinas-nfs-helper"))
             msg = "xinas-nfs-helper started." if ok else f"Failed: {err}"
         if ok:
-            self.app.audit.log("mcp.nfs_helper_toggle", "start" if not state.is_active else "stop", "OK")
+            self.app.audit.log(
+                "mcp.nfs_helper_toggle", "start" if not state.is_active else "stop", "OK"
+            )
         view = self.query_one("#mcp-content", ScrollableTextView)
         if "Failed" in msg:
             view.set_content(f"{_RED}{msg}{_NC}")
@@ -187,6 +193,7 @@ class MCPScreen(Screen):
     @work(exclusive=True)
     async def _show_status(self) -> None:
         from xinas_menu.utils.service_ctl import ServiceController
+
         loop = asyncio.get_running_loop()
         ctl = ServiceController()
 
@@ -196,7 +203,15 @@ class MCPScreen(Screen):
 
         nfs_state = await loop.run_in_executor(None, lambda: ctl.state("xinas-nfs-helper"))
 
-        GRN, YLW, RED, CYN, BLD, DIM, NC = "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+        GRN, YLW, RED, CYN, BLD, DIM, NC = (
+            "\033[32m",
+            "\033[33m",
+            "\033[31m",
+            "\033[36m",
+            "\033[1m",
+            "\033[2m",
+            "\033[0m",
+        )
         lines = [f"{BLD}{CYN}=== MCP Server Status ==={NC}", ""]
         if mcp_dist.exists():
             lines.append(f"  {GRN}*{NC}  MCP server    {GRN}Ready (stdio){NC}")
@@ -229,7 +244,9 @@ class MCPScreen(Screen):
         token_count = len(cfg.get("tokens", {}))
         if http_on:
             proto = "https" if tls else "http"
-            lines.append(f"  {GRN}*{NC}  HTTP Remote   {GRN}Enabled ({proto}://…:{http_port}/mcp){NC}")
+            lines.append(
+                f"  {GRN}*{NC}  HTTP Remote   {GRN}Enabled ({proto}://…:{http_port}/mcp){NC}"
+            )
             lines.append(f"     {DIM}Tokens:{NC}       {token_count} configured")
         else:
             lines.append(f"  {DIM}○{NC}  HTTP Remote   {DIM}Disabled{NC}")
@@ -238,7 +255,9 @@ class MCPScreen(Screen):
         if _safe_exists(mcp_cfg):
             lines.append(f"  {GRN}*{NC}  Config        {mcp_cfg}")
             cid = cfg.get("controller_id", "")
-            lines.append(f"     {DIM}Controller:{NC}   {(cid[:20] + '...') if len(cid) > 20 else cid or '(not set)'}")
+            lines.append(
+                f"     {DIM}Controller:{NC}   {(cid[:20] + '...') if len(cid) > 20 else cid or '(not set)'}"
+            )
         else:
             lines.append(f"  {RED}!{NC}  Config        {RED}Missing: {mcp_cfg}{NC}")
         lines.append("")
@@ -263,7 +282,9 @@ class MCPScreen(Screen):
             ip = _get_ip()
             lines.append(f"  {DIM}[ ]{NC} Claude Code   {YLW}Not configured locally{NC}")
             lines.append(f"     {DIM}Register with:{NC}")
-            lines.append(f"       claude mcp add --transport stdio xinas -- ssh -T root@{ip} xinas-mcp")
+            lines.append(
+                f"       claude mcp add --transport stdio xinas -- ssh -T root@{ip} xinas-mcp"
+            )
 
         view = self.query_one("#mcp-content", ScrollableTextView)
         view.set_content("\n".join(lines))
@@ -276,6 +297,7 @@ class MCPScreen(Screen):
         if not confirmed:
             return
         from xinas_menu.utils.service_ctl import ServiceController
+
         loop = asyncio.get_running_loop()
         ctl = ServiceController()
         results = []
@@ -284,9 +306,7 @@ class MCPScreen(Screen):
             results.append(f"  {svc}: {'OK' if ok else err[:60]}")
         self.app.audit.log("mcp.restart", "both services", "OK")
         view = self.query_one("#mcp-content", ScrollableTextView)
-        view.set_content(
-            f"{_GRN}Services restarted:{_NC}\n\n" + "\n".join(results)
-        )
+        view.set_content(f"{_GRN}Services restarted:{_NC}\n\n" + "\n".join(results))
         self._show_status()
 
     @work(exclusive=True)
@@ -297,6 +317,7 @@ class MCPScreen(Screen):
         if not confirmed:
             return
         from xinas_menu.screens.startup.playbook_screen import PlaybookRunScreen
+
         await self.app.push_screen_wait(
             PlaybookRunScreen(
                 cmd=["ansible-playbook", "playbooks/site.yml", "--tags", "xinas_mcp"],
@@ -333,8 +354,9 @@ class MCPScreen(Screen):
             None,
             lambda: subprocess.run(
                 ["journalctl", "-n", "200", "--no-pager", "-u", "xinas-nfs-helper"],
-                capture_output=True, text=True,
-            )
+                capture_output=True,
+                text=True,
+            ),
         )
         view = self.query_one("#mcp-content", ScrollableTextView)
         view.set_content(r.stdout or "[dim]No NFS helper log entries.[/dim]")
@@ -356,6 +378,7 @@ class MCPScreen(Screen):
 
 
 # ── Remote Access (HTTP) sub-screen ─────────────────────────────────────────
+
 
 class RemoteAccessScreen(Screen):
     """Configure Streamable HTTP transport, tokens, and TLS."""
@@ -457,8 +480,7 @@ class RemoteAccessScreen(Screen):
             self.app.audit.log("mcp.http_disable", "", "OK")
             view = self.query_one("#ra-content", ScrollableTextView)
             view.set_content(
-                f"{_GRN}HTTP transport disabled.{_NC}\n\n"
-                f"  {_DIM}MCP server is now stdio-only.{_NC}"
+                f"{_GRN}HTTP transport disabled.{_NC}\n\n  {_DIM}MCP server is now stdio-only.{_NC}"
             )
         else:
             token_count = len(cfg.get("tokens", {}))
@@ -496,7 +518,12 @@ class RemoteAccessScreen(Screen):
 
         while True:
             new_port = await self.app.push_screen_wait(
-                InputDialog("Enter port number for HTTP transport:", "HTTP Port", default=current, placeholder="8080")
+                InputDialog(
+                    "Enter port number for HTTP transport:",
+                    "HTTP Port",
+                    default=current,
+                    placeholder="8080",
+                )
             )
             if not new_port:
                 return
@@ -537,7 +564,10 @@ class RemoteAccessScreen(Screen):
         if not cert_path.strip():
             # Disable TLS
             confirmed = await self.app.push_screen_wait(
-                ConfirmDialog("Remove TLS configuration?\nHTTP will use plain (unencrypted) connections.", "Disable TLS?")
+                ConfirmDialog(
+                    "Remove TLS configuration?\nHTTP will use plain (unencrypted) connections.",
+                    "Disable TLS?",
+                )
             )
             if confirmed:
                 cfg.pop("tls", None)
@@ -561,7 +591,12 @@ class RemoteAccessScreen(Screen):
             return
 
         key_path = await self.app.push_screen_wait(
-            InputDialog("Path to TLS private key (.key/.pem):", "TLS Private Key", default=tls.get("key", ""), placeholder="/etc/ssl/private/server.key")
+            InputDialog(
+                "Path to TLS private key (.key/.pem):",
+                "TLS Private Key",
+                default=tls.get("key", ""),
+                placeholder="/etc/ssl/private/server.key",
+            )
         )
         if not key_path:
             return
@@ -639,24 +674,29 @@ class RemoteAccessScreen(Screen):
             lines.append("    --transport http \\")
             lines.append(f"    xinas {proto}://{ip}:{port}/mcp")
 
-        lines.extend([
-            "",
-            f"{BLD}--- curl test ---{NC}",
-            "",
-            f"  curl -X POST {proto}://{ip}:{port}/mcp \\",
-        ])
+        lines.extend(
+            [
+                "",
+                f"{BLD}--- curl test ---{NC}",
+                "",
+                f"  curl -X POST {proto}://{ip}:{port}/mcp \\",
+            ]
+        )
         if first_token:
             lines.append(f'    -H "Authorization: Bearer {masked}" \\')
-        lines.extend([
-            '    -H "Content-Type: application/json" \\',
-            """    -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test"}}}'""",
-        ])
+        lines.extend(
+            [
+                '    -H "Content-Type: application/json" \\',
+                """    -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test"}}}'""",
+            ]
+        )
 
         view = self.query_one("#ra-content", ScrollableTextView)
         view.set_content("\n".join(lines))
 
 
 # ── Token Management sub-screen ─────────────────────────────────────────────
+
 
 class TokenManagementScreen(Screen):
     """Add / remove API tokens for HTTP authentication."""
@@ -725,11 +765,16 @@ class TokenManagementScreen(Screen):
         loop = asyncio.get_running_loop()
 
         import re
-        _TOKEN_NAME_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+
+        _TOKEN_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
         while True:
             token_name = await self.app.push_screen_wait(
-                InputDialog("Enter a name for the new token\n(e.g. remote-claude, monitoring):", "Token Name", placeholder="remote-claude")
+                InputDialog(
+                    "Enter a name for the new token\n(e.g. remote-claude, monitoring):",
+                    "Token Name",
+                    placeholder="remote-claude",
+                )
             )
             if not token_name:
                 return
@@ -738,20 +783,23 @@ class TokenManagementScreen(Screen):
                 continue
             token_name = token_name.strip()
             if not _TOKEN_NAME_RE.match(token_name):
-                self.app.notify("Token name must be alphanumeric, dash, or underscore only.", severity="error")
+                self.app.notify(
+                    "Token name must be alphanumeric, dash, or underscore only.", severity="error"
+                )
                 continue
             # Check duplicate name
             cfg = await loop.run_in_executor(None, _cfg_read)
             labels = cfg.get("token_labels", {})
             if token_name in labels.values():
-                self.app.notify(f"Token '{token_name}' already exists. Remove it first to regenerate.", severity="error")
+                self.app.notify(
+                    f"Token '{token_name}' already exists. Remove it first to regenerate.",
+                    severity="error",
+                )
                 continue
             break
 
         # Select role
-        role_key = await self.app.push_screen_wait(
-            _RoleSelectDialog()
-        )
+        role_key = await self.app.push_screen_wait(_RoleSelectDialog())
         if not role_key:
             return
 
@@ -790,8 +838,7 @@ class TokenManagementScreen(Screen):
         if not tokens:
             view = self.query_one("#tok-content", ScrollableTextView)
             view.set_content(
-                f"{_YLW}No tokens to remove.{_NC}\n\n"
-                f"  {_DIM}Press A to add a token first.{_NC}"
+                f"{_YLW}No tokens to remove.{_NC}\n\n  {_DIM}Press A to add a token first.{_NC}"
             )
             return
 
@@ -833,6 +880,7 @@ class TokenManagementScreen(Screen):
 
 
 # ── Helper modal screens ────────────────────────────────────────────────────
+
 
 class _RoleSelectDialog(Screen[str | None]):
     """Modal screen to select a token role."""
@@ -896,6 +944,7 @@ class _SelectionDialog(Screen[str | None]):
 
 
 # ── SSH Access sub-screen ───────────────────────────────────────────────────
+
 
 class SSHAccessScreen(Screen):
     """Configure root SSH access for Claude Code."""
@@ -995,7 +1044,11 @@ class SSHAccessScreen(Screen):
     async def _add_key(self) -> None:
         while True:
             key = await self.app.push_screen_wait(
-                InputDialog("Paste public key:", "Add Authorized Key", placeholder="ssh-rsa AAAA... user@host")
+                InputDialog(
+                    "Paste public key:",
+                    "Add Authorized Key",
+                    placeholder="ssh-rsa AAAA... user@host",
+                )
             )
             if not key:
                 return

@@ -1,4 +1,5 @@
 """SystemStatusScreen — dashboard mirroring xinas-status MOTD."""
+
 from __future__ import annotations
 
 import asyncio
@@ -67,7 +68,8 @@ class SystemStatusScreen(Screen):
 
         try:
             ok, info, err = await asyncio.wait_for(
-                self.app.grpc.get_server_info(), timeout=5,
+                self.app.grpc.get_server_info(),
+                timeout=5,
             )
             if ok:
                 view.append("\n  xiRAID: connected")
@@ -94,7 +96,9 @@ def _run_xinas_status() -> str:
         env.setdefault("TERM", "xterm-256color")
         r = subprocess.run(
             ["bash", xinas_status],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
             env=env,
         )
         raw = r.stdout or r.stderr or ""
@@ -108,14 +112,20 @@ def _run_xinas_status() -> str:
 def _build_fallback_status() -> str:
     """Build status from /proc, sysfs, etc. when xinas-status is not installed."""
     GRN, YLW, RED, CYN, BLD, DIM, NC = (
-        "\033[32m", "\033[33m", "\033[31m", "\033[36m",
-        "\033[1m", "\033[2m", "\033[0m",
+        "\033[32m",
+        "\033[33m",
+        "\033[31m",
+        "\033[36m",
+        "\033[1m",
+        "\033[2m",
+        "\033[0m",
     )
     lines: list[str] = [f"{BLD}{CYN}System Status{NC}\n"]
 
     # System info
     try:
         import platform
+
         lines.append(f"  {DIM}Hostname:{NC}  {GRN}{platform.node()}{NC}")
         lines.append(f"  {DIM}Kernel:{NC}    {platform.release()}")
     except Exception:
@@ -178,6 +188,7 @@ def _build_fallback_status() -> str:
     lines.append(f"  {BLD}NETWORK{NC}")
     try:
         from pathlib import Path as _Path
+
         net_dir = _Path("/sys/class/net")
         for iface in sorted(net_dir.iterdir()):
             name = iface.name
@@ -198,7 +209,9 @@ def _build_fallback_status() -> str:
             try:
                 r = subprocess.run(
                     ["ip", "-4", "-o", "addr", "show", name],
-                    capture_output=True, text=True, timeout=2,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
                 )
                 m = re.search(r"inet\s+(\S+)", r.stdout)
                 ip_str = m.group(1) if m else "no IP"
@@ -229,6 +242,7 @@ def _build_fallback_status() -> str:
     lines.append(f"  {BLD}SERVICES{NC}")
     try:
         from xinas_menu.utils.service_ctl import ServiceController
+
         ctl = ServiceController()
         for svc in ("xiraid-server", "nfs-server", "xinas-nfs-helper", "xinas-mcp"):
             st = ctl.state(svc)
@@ -245,8 +259,12 @@ def _build_fallback_status() -> str:
 def _format_license_summary(data: dict) -> str:
     """One-section license summary for the system status dashboard."""
     GRN, RED, YLW, BLD, DIM, NC = (
-        "\033[32m", "\033[31m", "\033[33m",
-        "\033[1m", "\033[2m", "\033[0m",
+        "\033[32m",
+        "\033[31m",
+        "\033[33m",
+        "\033[1m",
+        "\033[2m",
+        "\033[0m",
     )
     status = str(data.get("status", "unknown")).lower()
     if status == "valid":

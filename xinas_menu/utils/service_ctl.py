@@ -1,4 +1,5 @@
 """ServiceController — thin wrapper around systemctl."""
+
 from __future__ import annotations
 
 import subprocess
@@ -9,8 +10,8 @@ from dataclasses import dataclass
 class ServiceState:
     name: str
     active: str  # "active", "inactive", "failed", "unknown"
-    sub: str     # "running", "dead", …
-    load: str    # "loaded", "not-found", …
+    sub: str  # "running", "dead", …
+    load: str  # "loaded", "not-found", …
 
     @property
     def is_active(self) -> bool:
@@ -34,8 +35,7 @@ class ServiceController:
         )
 
     def state(self, name: str) -> ServiceState:
-        r = self._run("show", name, "--property=ActiveState,SubState,LoadState",
-                      "--no-pager")
+        r = self._run("show", name, "--property=ActiveState,SubState,LoadState", "--no-pager")
         props: dict[str, str] = {}
         for line in r.stdout.splitlines():
             if "=" in line:

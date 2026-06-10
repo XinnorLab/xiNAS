@@ -1,4 +1,5 @@
 """Query xiRAID runtime state via gRPC for snapshot capture."""
+
 from __future__ import annotations
 
 import asyncio
@@ -46,7 +47,8 @@ class GrpcInspector:
         if self._client is not None:
             try:
                 ok, data, err = await self._client.raid_show(
-                    units="g", extended=extended,
+                    units="g",
+                    extended=extended,
                 )
                 return ok, data, err
             except Exception as exc:
@@ -135,7 +137,9 @@ class GrpcInspector:
     # ------------------------------------------------------------------
 
     def _run_cli(
-        self, args: list[str], timeout: int | None = None,
+        self,
+        args: list[str],
+        timeout: int | None = None,
     ) -> tuple[bool, str | None, str]:
         """Fallback: run xicli command and return (ok, stdout, error).
 
@@ -167,12 +171,17 @@ class GrpcInspector:
             return False, None, f"CLI transport error: {exc}"
 
     async def _run_cli_async(
-        self, args: list[str], timeout: int | None = None,
+        self,
+        args: list[str],
+        timeout: int | None = None,
     ) -> tuple[bool, str | None, str]:
         """Run CLI command in a thread to avoid blocking the event loop."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
-            None, self._run_cli, args, timeout,
+            None,
+            self._run_cli,
+            args,
+            timeout,
         )
 
     # ------------------------------------------------------------------

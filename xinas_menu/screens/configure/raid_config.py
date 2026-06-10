@@ -1,4 +1,5 @@
 """RAIDConfigScreen — replaces configure_raid.sh (pyyaml-based editor)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -97,6 +98,7 @@ def _write_yaml(path: Path, content: str) -> tuple[bool, str]:
 
     try:
         import yaml
+
         yaml.safe_load(content)  # validate
     except Exception as exc:
         return False, f"YAML parse error: {exc}"

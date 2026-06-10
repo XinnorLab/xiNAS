@@ -1,4 +1,5 @@
 """WelcomeScreen — splash screen shown at startup."""
+
 from __future__ import annotations
 
 import asyncio
@@ -32,6 +33,7 @@ class WelcomeScreen(Screen):
 
     def compose(self) -> ComposeResult:
         from textual.containers import Vertical
+
         with Vertical(id="welcome-box"):
             yield Label(_ART, id="welcome-art")
             yield Rule(id="welcome-rule")
@@ -47,6 +49,7 @@ class WelcomeScreen(Screen):
         def _log_exc(t: asyncio.Task) -> None:
             if not t.cancelled() and t.exception():
                 import logging
+
                 logging.getLogger("xinas").debug("Task failed: %s", t.exception())
 
         asyncio.create_task(self._probe_services()).add_done_callback(_log_exc)
@@ -76,4 +79,5 @@ class WelcomeScreen(Screen):
         if not self.is_current:
             return
         from xinas_menu.screens.main_menu import MainMenuScreen
+
         self.app.switch_screen(MainMenuScreen())

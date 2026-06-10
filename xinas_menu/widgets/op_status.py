@@ -1,4 +1,5 @@
 """OpStatusWidget — inline step progress display."""
+
 from __future__ import annotations
 
 from textual.app import ComposeResult

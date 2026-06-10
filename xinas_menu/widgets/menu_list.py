@@ -1,4 +1,5 @@
 """NavigableMenu — numbered + arrow-key menu widget."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from textual.widgets import Label
 
 @dataclass
 class MenuItem:
-    key: str          # "1", "2", "0", "A", …
+    key: str  # "1", "2", "0", "A", …
     label: str
     enabled: bool = True
     separator: bool = False  # if True, renders as divider line
@@ -63,11 +64,7 @@ class NavigableMenu(Widget, can_focus=True):
 
     @property
     def _navigable(self) -> list[tuple[int, MenuItem]]:
-        return [
-            (i, it)
-            for i, it in enumerate(self._items)
-            if not it.separator and it.enabled
-        ]
+        return [(i, it) for i, it in enumerate(self._items) if not it.separator and it.enabled]
 
     def compose(self) -> ComposeResult:
         for idx, item in enumerate(self._items):
@@ -145,6 +142,7 @@ class NavigableMenu(Widget, can_focus=True):
         # Forward PgUp/PgDn to sibling ScrollableTextView (if any)
         if event.key in ("pageup", "pagedown"):
             from xinas_menu.widgets.text_view import ScrollableTextView
+
             try:
                 for sibling in self.parent.children:
                     if isinstance(sibling, ScrollableTextView):

@@ -1,4 +1,5 @@
 """Snapshot detail screen — full view of a configuration snapshot."""
+
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +23,7 @@ try:
     from xinas_history.engine import SnapshotEngine
     from xinas_history.models import SnapshotType
     from xinas_history.store import FilesystemStore
+
     HAS_HISTORY = True
 except ImportError:
     HAS_HISTORY = False
@@ -93,9 +95,7 @@ class SnapshotDetailScreen(Screen):
         view = self.query_one("#detail-content", ScrollableTextView)
 
         if not HAS_HISTORY:
-            view.set_content(
-                f"{_RED}xinas_history package not installed.{_NC}"
-            )
+            view.set_content(f"{_RED}xinas_history package not installed.{_NC}")
             return
 
         view.set_content(f"{_DIM}Loading snapshot...{_NC}")
@@ -104,16 +104,16 @@ class SnapshotDetailScreen(Screen):
         try:
             engine = await loop.run_in_executor(None, _create_engine)
             manifest = await loop.run_in_executor(
-                None, engine.get_snapshot, self._snapshot_id,
+                None,
+                engine.get_snapshot,
+                self._snapshot_id,
             )
         except Exception as exc:
             view.set_content(f"{_RED}Failed to load snapshot: {exc}{_NC}")
             return
 
         if manifest is None:
-            view.set_content(
-                f"{_RED}Snapshot not found: {self._snapshot_id}{_NC}"
-            )
+            view.set_content(f"{_RED}Snapshot not found: {self._snapshot_id}{_NC}")
             return
 
         text = _format_manifest(manifest)
@@ -127,15 +127,15 @@ class SnapshotDetailScreen(Screen):
                 )
                 text += "\n" + _format_diff_summary(diff_result)
             except Exception as exc:
-                text += (
-                    f"\n\n  {_DIM}Could not compute diff from parent: {exc}{_NC}"
-                )
+                text += f"\n\n  {_DIM}Could not compute diff from parent: {exc}{_NC}"
 
         view.set_content(text)
 
         with contextlib.suppress(Exception):
             self.app.audit.log(
-                "history.view", f"snapshot={self._snapshot_id}", "OK",
+                "history.view",
+                f"snapshot={self._snapshot_id}",
+                "OK",
             )
 
     # -- Full diff view -----------------------------------------------------
@@ -146,9 +146,7 @@ class SnapshotDetailScreen(Screen):
         view = self.query_one("#detail-content", ScrollableTextView)
 
         if not HAS_HISTORY:
-            view.set_content(
-                f"{_RED}xinas_history package not installed.{_NC}"
-            )
+            view.set_content(f"{_RED}xinas_history package not installed.{_NC}")
             return
 
         view.set_content(f"{_DIM}Computing diff...{_NC}")
@@ -157,16 +155,16 @@ class SnapshotDetailScreen(Screen):
         try:
             engine = await loop.run_in_executor(None, _create_engine)
             manifest = await loop.run_in_executor(
-                None, engine.get_snapshot, self._snapshot_id,
+                None,
+                engine.get_snapshot,
+                self._snapshot_id,
             )
         except Exception as exc:
             view.set_content(f"{_RED}Failed to load snapshot: {exc}{_NC}")
             return
 
         if manifest is None:
-            view.set_content(
-                f"{_RED}Snapshot not found: {self._snapshot_id}{_NC}"
-            )
+            view.set_content(f"{_RED}Snapshot not found: {self._snapshot_id}{_NC}")
             return
 
         if not manifest.parent_id:
@@ -207,7 +205,9 @@ class SnapshotDetailScreen(Screen):
             store = FilesystemStore()
             engine = _create_engine(store)
             manifest = await loop.run_in_executor(
-                None, engine.get_snapshot, self._snapshot_id,
+                None,
+                engine.get_snapshot,
+                self._snapshot_id,
             )
         except Exception as exc:
             view.set_content(f"{_RED}Failed to load snapshot: {exc}{_NC}")
@@ -218,7 +218,11 @@ class SnapshotDetailScreen(Screen):
             return
 
         text = await loop.run_in_executor(
-            None, _format_config_files, store, engine, manifest,
+            None,
+            _format_config_files,
+            store,
+            engine,
+            manifest,
         )
         view.set_content(text)
 
@@ -240,7 +244,9 @@ class SnapshotDetailScreen(Screen):
             store = FilesystemStore()
             engine = _create_engine(store)
             manifest = await loop.run_in_executor(
-                None, engine.get_snapshot, self._snapshot_id,
+                None,
+                engine.get_snapshot,
+                self._snapshot_id,
             )
         except Exception as exc:
             view.set_content(f"{_RED}Failed to load snapshot: {exc}{_NC}")
@@ -251,7 +257,11 @@ class SnapshotDetailScreen(Screen):
             return
 
         text = await loop.run_in_executor(
-            None, _format_runtime_state, store, engine, manifest,
+            None,
+            _format_runtime_state,
+            store,
+            engine,
+            manifest,
         )
         view.set_content(text)
 
@@ -456,9 +466,7 @@ def _format_full_diff(diff_result) -> str:
         lines.append(f"  {_DIM}{'-' * 56}{_NC}")
         for change in diff_result.config_changes:
             icon = _change_icon(change.get("change_type", ""))
-            lines.append(
-                f"    {icon} {change.get('summary', change.get('file', '?'))}"
-            )
+            lines.append(f"    {icon} {change.get('summary', change.get('file', '?'))}")
         lines.append("")
 
     # Runtime changes
@@ -467,9 +475,7 @@ def _format_full_diff(diff_result) -> str:
         lines.append(f"  {_DIM}{'-' * 56}{_NC}")
         for change in diff_result.runtime_changes:
             icon = _change_icon(change.get("change_type", ""))
-            lines.append(
-                f"    {icon} {change.get('summary', change.get('resource', '?'))}"
-            )
+            lines.append(f"    {icon} {change.get('summary', change.get('resource', '?'))}")
         lines.append("")
 
     total = len(diff_result.config_changes) + len(diff_result.runtime_changes)

@@ -1,4 +1,5 @@
 """PhysicalDrivesScreen — read-only drive inventory with SMART and LED locate."""
+
 from __future__ import annotations
 
 import logging
@@ -117,13 +118,16 @@ class PhysicalDrivesScreen(Screen):
         if sort_key == "name":
             result.sort(key=lambda d: d.get("name", ""), reverse=self._sort_reverse)
         elif sort_key == "size":
-            result.sort(key=lambda d: d.get("size_bytes") or d.get("size_raw") or 0,
-                        reverse=self._sort_reverse)
+            result.sort(
+                key=lambda d: d.get("size_bytes") or d.get("size_raw") or 0,
+                reverse=self._sort_reverse,
+            )
         elif sort_key == "model":
             result.sort(key=lambda d: d.get("model", ""), reverse=self._sort_reverse)
         elif sort_key == "numa":
-            result.sort(key=lambda d: d.get("numa_node", d.get("numa", -1)),
-                        reverse=self._sort_reverse)
+            result.sort(
+                key=lambda d: d.get("numa_node", d.get("numa", -1)), reverse=self._sort_reverse
+            )
         elif self._sort_reverse:
             result.reverse()
         return result
@@ -206,6 +210,7 @@ class PhysicalDrivesScreen(Screen):
     @work(exclusive=True)
     async def action_filter_prompt(self) -> None:
         from xinas_menu.widgets.input_dialog import InputDialog
+
         text = await self.app.push_screen_wait(
             InputDialog(
                 "Filter by name/model (empty to clear):",
@@ -222,15 +227,12 @@ class PhysicalDrivesScreen(Screen):
     @work(exclusive=True)
     async def action_filter_numa(self) -> None:
         from xinas_menu.widgets.select_dialog import SelectDialog
-        numa_nodes = sorted({
-            d.get("numa_node", d.get("numa", 0))
-            for d in self._all_drives
-        })
+
+        numa_nodes = sorted({d.get("numa_node", d.get("numa", 0)) for d in self._all_drives})
         _CLEAR = "(clear filter)"
         choices = [_CLEAR] + [str(n) for n in numa_nodes]
         val = await self.app.push_screen_wait(
-            SelectDialog(choices, title="NUMA Filter",
-                         prompt="Select NUMA node to filter by:")
+            SelectDialog(choices, title="NUMA Filter", prompt="Select NUMA node to filter by:")
         )
         if val is None:
             return
@@ -246,6 +248,7 @@ class PhysicalDrivesScreen(Screen):
     async def action_show_detail(self) -> None:
         """Show full detail for the drive under cursor."""
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
+
         drive = self._get_current_drive()
         if not drive:
             return
@@ -264,9 +267,7 @@ class PhysicalDrivesScreen(Screen):
         if drive.get("raid_name"):
             lines.append(f"RAID:       {drive['raid_name']} ({drive.get('member_state', '?')})")
 
-        await self.app.push_screen_wait(
-            ConfirmDialog("\n".join(lines), f"Drive Detail — {name}")
-        )
+        await self.app.push_screen_wait(ConfirmDialog("\n".join(lines), f"Drive Detail — {name}"))
 
     @work(exclusive=True)
     async def action_locate_drive(self) -> None:
@@ -285,12 +286,14 @@ class PhysicalDrivesScreen(Screen):
             self.app.notify(f"LED locate started for {name}", severity="information")
         else:
             from xinas_menu.utils.formatting import grpc_short_error
+
             self.app.notify(f"Locate failed: {grpc_short_error(err)}", severity="error")
 
     @work(exclusive=True)
     async def action_smart_summary(self) -> None:
         """Show SMART summary (temperature, wear, critical) for the drive under cursor."""
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
+
         drive = self._get_current_drive()
         if not drive:
             return
@@ -298,10 +301,13 @@ class PhysicalDrivesScreen(Screen):
         name = drive.get("name", "")
         tran = (drive.get("transport") or "").lower()
         if "nvme" not in tran and not name.startswith("nvme"):
-            self.app.notify("SMART via nvme-cli is only available for NVMe drives.", severity="warning")
+            self.app.notify(
+                "SMART via nvme-cli is only available for NVMe drives.", severity="warning"
+            )
             return
 
         from xinas_menu.utils.nvme_smart import smart_summary
+
         self.app.notify(f"Reading SMART for {name}...", severity="information", timeout=2)
         result = await smart_summary(name)
         if not result.get("ok"):
@@ -338,14 +344,13 @@ class PhysicalDrivesScreen(Screen):
             f"Wear Level:       {wear_status}",
             f"Critical Warning: {crit_status}",
         ]
-        await self.app.push_screen_wait(
-            ConfirmDialog("\n".join(lines), f"SMART Summary — {name}")
-        )
+        await self.app.push_screen_wait(ConfirmDialog("\n".join(lines), f"SMART Summary — {name}"))
 
     @work(exclusive=True)
     async def action_smart_full(self) -> None:
         """Show full SMART log for the drive under cursor."""
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
+
         drive = self._get_current_drive()
         if not drive:
             return
@@ -353,10 +358,13 @@ class PhysicalDrivesScreen(Screen):
         name = drive.get("name", "")
         tran = (drive.get("transport") or "").lower()
         if "nvme" not in tran and not name.startswith("nvme"):
-            self.app.notify("SMART via nvme-cli is only available for NVMe drives.", severity="warning")
+            self.app.notify(
+                "SMART via nvme-cli is only available for NVMe drives.", severity="warning"
+            )
             return
 
         from xinas_menu.utils.nvme_smart import smart_full
+
         self.app.notify(f"Reading full SMART log for {name}...", severity="information", timeout=2)
         result = await smart_full(name)
         if not result.get("ok"):
@@ -372,6 +380,4 @@ class PhysicalDrivesScreen(Screen):
                 continue
             lines.append(f"  {key}: {val}")
 
-        await self.app.push_screen_wait(
-            ConfirmDialog("\n".join(lines), f"Full SMART Log — {name}")
-        )
+        await self.app.push_screen_wait(ConfirmDialog("\n".join(lines), f"Full SMART Log — {name}"))

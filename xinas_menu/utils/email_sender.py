@@ -1,4 +1,5 @@
 """email_sender.py — send email via SMTP using xiNAS config."""
+
 from __future__ import annotations
 
 import logging

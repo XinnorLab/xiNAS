@@ -1,4 +1,5 @@
 """Core data models for the xiNAS Configuration History subsystem."""
+
 from __future__ import annotations
 
 import datetime

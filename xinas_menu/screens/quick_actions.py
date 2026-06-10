@@ -1,4 +1,5 @@
 """QuickActionsScreen — system status, restart NFS, logs, disk health, services."""
+
 from __future__ import annotations
 
 import asyncio
@@ -95,6 +96,7 @@ class QuickActionsScreen(Screen):
             return
         loop = asyncio.get_running_loop()
         from xinas_menu.utils.service_ctl import service_restart
+
         ok, err = await loop.run_in_executor(None, lambda: service_restart("nfs-server"))
         view = self.query_one("#qa-content", ScrollableTextView)
         if ok:
@@ -112,8 +114,9 @@ class QuickActionsScreen(Screen):
             None,
             lambda: subprocess.run(
                 ["journalctl", "-n", "50", "--no-pager"],
-                capture_output=True, text=True,
-            )
+                capture_output=True,
+                text=True,
+            ),
         )
         BLD, CYN, NC = "\033[1m", "\033[36m", "\033[0m"
         text = f"{BLD}{CYN}=== Recent System Messages ==={NC}\n\n" + (r.stdout or "(no entries)")
@@ -125,8 +128,16 @@ class QuickActionsScreen(Screen):
         view.set_content("  Checking services...")
         loop = asyncio.get_running_loop()
         from xinas_menu.utils.service_ctl import ServiceController
+
         ctl = ServiceController()
-        GRN, RED, CYN, BLD, _DIM, NC = "\033[32m", "\033[31m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
+        GRN, RED, CYN, BLD, _DIM, NC = (
+            "\033[32m",
+            "\033[31m",
+            "\033[36m",
+            "\033[1m",
+            "\033[2m",
+            "\033[0m",
+        )
         lines = [f"{BLD}{CYN}=== Service Status ==={NC}", ""]
         for svc in _SERVICES:
             state = await loop.run_in_executor(None, lambda s=svc: ctl.state(s))
@@ -156,6 +167,7 @@ class QuickActionsScreen(Screen):
     @work(exclusive=True)
     async def _view_audit_log(self) -> None:
         from xinas_menu.utils.audit import AUDIT_LOG
+
         view = self.query_one("#qa-content", ScrollableTextView)
         try:
             lines = AUDIT_LOG.read_text().splitlines()[-200:]

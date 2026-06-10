@@ -10,6 +10,7 @@ Usage:
     python3 -m xinas_history gc run
     python3 -m xinas_history status
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,7 +32,9 @@ def main() -> int:
     parser.add_argument("--store-path", default=None, help="Override store path")
     parser.add_argument("--repo-root", default="/opt/xiNAS", help="xiNAS repo root")
     parser.add_argument(
-        "--grpc-address", default="localhost:6066", help="gRPC address",
+        "--grpc-address",
+        default="localhost:6066",
+        help="gRPC address",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -43,14 +46,18 @@ def main() -> int:
     # snapshot list
     list_parser = snap_sub.add_parser("list", help="List snapshots")
     list_parser.add_argument(
-        "--format", choices=["json", "table"], default="table",
+        "--format",
+        choices=["json", "table"],
+        default="table",
     )
 
     # snapshot show
     show_parser = snap_sub.add_parser("show", help="Show snapshot details")
     show_parser.add_argument("id", help="Snapshot ID")
     show_parser.add_argument(
-        "--format", choices=["json", "yaml"], default="yaml",
+        "--format",
+        choices=["json", "yaml"],
+        default="yaml",
     )
 
     # snapshot create
@@ -64,11 +71,15 @@ def main() -> int:
         choices=["baseline", "rollback_eligible", "ephemeral"],
     )
     create_parser.add_argument(
-        "--summary", default=None, help="Diff summary",
+        "--summary",
+        default=None,
+        help="Diff summary",
     )
     create_parser.add_argument(
-        "--format", choices=["json", "text"], default="text",
-        help="Output format (json prints {\"id\": ...} for machine consumers)",
+        "--format",
+        choices=["json", "text"],
+        default="text",
+        help='Output format (json prints {"id": ...} for machine consumers)',
     )
 
     # snapshot diff
@@ -76,25 +87,34 @@ def main() -> int:
     diff_parser.add_argument("from_id")
     diff_parser.add_argument("to_id")
     diff_parser.add_argument(
-        "--format", choices=["json", "unified"], default="unified",
+        "--format",
+        choices=["json", "unified"],
+        default="unified",
     )
 
     # snapshot reset-to-baseline
     reset_parser = snap_sub.add_parser(
-        "reset-to-baseline", help="Reset to initial baseline configuration",
+        "reset-to-baseline",
+        help="Reset to initial baseline configuration",
     )
     reset_parser.add_argument(
-        "--reason", required=True, help="Audit reason for the reset",
+        "--reason",
+        required=True,
+        help="Audit reason for the reset",
     )
     reset_parser.add_argument(
-        "--yes", action="store_true",
+        "--yes",
+        action="store_true",
         help="Execute the reset (without --yes, shows plan only)",
     )
     reset_parser.add_argument(
-        "--format", choices=["json", "text"], default="text",
+        "--format",
+        choices=["json", "text"],
+        default="text",
     )
     reset_parser.add_argument(
-        "--source", default="api",
+        "--source",
+        default="api",
         help="Operation source (default: api)",
     )
 
@@ -111,7 +131,9 @@ def main() -> int:
     # -- status subcommand --------------------------------------------------
     status_parser = subparsers.add_parser("status", help="Show history status")
     status_parser.add_argument(
-        "--format", choices=["json", "table"], default="table",
+        "--format",
+        choices=["json", "table"],
+        default="table",
     )
 
     args = parser.parse_args()
@@ -193,10 +215,7 @@ def _cmd_snapshot_list(args: argparse.Namespace, engine: SnapshotEngine) -> int:
     print("-" * len(header))
 
     for m in manifests:
-        print(
-            f"{m.id:<45} {m.timestamp:<25} {m.operation:<18} "
-            f"{m.status:<12} {m.rollback_class}"
-        )
+        print(f"{m.id:<45} {m.timestamp:<25} {m.operation:<18} {m.status:<12} {m.rollback_class}")
 
     return 0
 
@@ -271,9 +290,7 @@ def _cmd_snapshot_diff(args: argparse.Namespace, engine: SnapshotEngine) -> int:
         print("Runtime changes:")
         for change in diff_result.runtime_changes:
             marker = _change_marker(change.get("change_type", ""))
-            print(
-                f"  {marker} {change.get('resource', change.get('summary', ''))}"
-            )
+            print(f"  {marker} {change.get('resource', change.get('summary', ''))}")
         print()
 
     if not diff_result.config_changes and not diff_result.runtime_changes:
@@ -283,7 +300,8 @@ def _cmd_snapshot_diff(args: argparse.Namespace, engine: SnapshotEngine) -> int:
 
 
 def _cmd_snapshot_reset_to_baseline(
-    args: argparse.Namespace, engine: SnapshotEngine,
+    args: argparse.Namespace,
+    engine: SnapshotEngine,
 ) -> int:
     """Handle ``snapshot reset-to-baseline`` — plan or execute baseline reset."""
     from .runner import TransactionalRunner
@@ -418,6 +436,7 @@ def _cmd_gc_policy(args: argparse.Namespace) -> int:
         import json as _json
         import os
         import tempfile
+
         try:
             data = _json.loads(CONFIG_PATH.read_text())
         except Exception:
@@ -444,10 +463,14 @@ def _cmd_gc_policy(args: argparse.Namespace) -> int:
 
     policy = load_retention_policy()
     if args.format == "json":
-        print(json.dumps({
-            "max_snapshots": policy.max_snapshots,
-            "max_age_days": policy.max_age_days,
-        }))
+        print(
+            json.dumps(
+                {
+                    "max_snapshots": policy.max_snapshots,
+                    "max_age_days": policy.max_age_days,
+                }
+            )
+        )
     else:
         print("Retention Policy")
         print(f"  max_snapshots: {policy.max_snapshots}")

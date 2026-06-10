@@ -23,7 +23,7 @@ def _parse_exports(text: str) -> list[dict]:
         if line.startswith('"'):
             end = line.index('"', 1)
             path = line[1:end]
-            rest = line[end + 1:].strip()
+            rest = line[end + 1 :].strip()
         else:
             parts = line.split(None, 1)
             path = parts[0]
@@ -31,7 +31,7 @@ def _parse_exports(text: str) -> list[dict]:
 
         clients = []
         # Parse: host(opt1,opt2) host2(opt3)
-        for match in re.finditer(r'(\S+?)(?:\(([^)]*)\))?(?:\s|$)', rest):
+        for match in re.finditer(r"(\S+?)(?:\(([^)]*)\))?(?:\s|$)", rest):
             host = match.group(1)
             opts_str = match.group(2) or ""
             if not host:
@@ -55,10 +55,10 @@ def _serialize_exports(entries: list[dict]) -> str:
             host = client["host"]
             opts = client.get("options", [])
             if opts:
-                client_strs.append(f'{host}({",".join(opts)})')
+                client_strs.append(f"{host}({','.join(opts)})")
             else:
                 client_strs.append(host)
-        lines.append(f'{path}  {" ".join(client_strs)}')
+        lines.append(f"{path}  {' '.join(client_strs)}")
     return "\n".join(lines) + "\n"
 
 
@@ -74,6 +74,7 @@ def _with_lock(fn):
 
 def list_exports() -> list[dict]:
     """Read and parse /etc/exports."""
+
     def _read():
         try:
             with open(EXPORTS_PATH) as f:
@@ -87,6 +88,7 @@ def list_exports() -> list[dict]:
 
 def add_export(entry: dict) -> None:
     """Add or replace an export entry. Idempotent."""
+
     def _update():
         try:
             with open(EXPORTS_PATH) as f:
@@ -105,6 +107,7 @@ def add_export(entry: dict) -> None:
 
 def remove_export(path: str) -> None:
     """Remove an export entry by path."""
+
     def _update():
         try:
             with open(EXPORTS_PATH) as f:
@@ -123,6 +126,7 @@ def remove_export(path: str) -> None:
 
 def update_export(path: str, patch: dict) -> None:
     """Merge-patch an existing export entry."""
+
     def _update():
         try:
             with open(EXPORTS_PATH) as f:

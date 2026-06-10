@@ -4,6 +4,7 @@ All public functions are async and return the same (ok, data, error) tuples
 used elsewhere in xinas_menu.  ``mail_send_test`` is the only CLI fallback
 (no gRPC RPC exists for it).
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,6 +24,7 @@ def _get_client():
     global _client
     if _client is None:
         from xinas_menu.api.grpc_client import XiRAIDClient
+
         _client = XiRAIDClient()
     return _client
 
@@ -30,6 +32,7 @@ def _get_client():
 # ---------------------------------------------------------------------------
 # Availability
 # ---------------------------------------------------------------------------
+
 
 async def grpc_available() -> bool:
     """Return *True* if the xiRAID gRPC daemon is reachable."""
@@ -41,6 +44,7 @@ async def grpc_available() -> bool:
 # ---------------------------------------------------------------------------
 # mail show / add / remove / send
 # ---------------------------------------------------------------------------
+
 
 async def mail_show() -> tuple[bool, list[dict[str, str]], str]:
     """Return the list of notification recipients.
@@ -82,7 +86,8 @@ async def mail_send_test() -> tuple[bool, str]:
 
     loop = asyncio.get_running_loop()
     ok, _out, err = await loop.run_in_executor(
-        None, lambda: run_cmd("xicli", "mail", "send"),
+        None,
+        lambda: run_cmd("xicli", "mail", "send"),
     )
     return ok, err
 
@@ -90,6 +95,7 @@ async def mail_send_test() -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # settings mail show / modify
 # ---------------------------------------------------------------------------
+
 
 async def settings_mail_show() -> tuple[bool, dict[str, Any], str]:
     """Return mail polling settings.
@@ -124,14 +130,17 @@ async def settings_mail_modify(
 # Response extractors
 # ---------------------------------------------------------------------------
 
+
 def _extract_receivers(data: Any) -> list[dict[str, str]]:
     """Extract receivers from gRPC ResponseMessage JSON payload."""
     if data is None:
         return []
     if isinstance(data, list):
-        return [{"address": r.get("address", r.get("email", "")),
-                 "level": r.get("level", "unknown")}
-                for r in data if isinstance(r, dict)]
+        return [
+            {"address": r.get("address", r.get("email", "")), "level": r.get("level", "unknown")}
+            for r in data
+            if isinstance(r, dict)
+        ]
     if isinstance(data, dict):
         for key in ("receivers", "data", "result"):
             if isinstance(data.get(key), list):

@@ -1,4 +1,5 @@
 """StatusFooter — compact bottom bar showing critical system issues."""
+
 from __future__ import annotations
 
 import logging

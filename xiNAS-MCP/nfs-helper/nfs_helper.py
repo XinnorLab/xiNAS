@@ -42,6 +42,7 @@ log = logging.getLogger("nfs_helper")
 
 # --- Operations ---
 
+
 def handle_list_exports(_req: dict) -> list:
     return list_exports()
 
@@ -246,35 +247,63 @@ HANDLERS = {
 
 # --- Request handling ---
 
+
 def process_request(data: str) -> str:
     """Process one JSON request line and return a JSON response line."""
     try:
         req = json.loads(data)
     except json.JSONDecodeError as e:
-        return json.dumps({"ok": False, "error": f"Invalid JSON: {e}", "code": "INVALID_ARGUMENT", "request_id": ""})
+        return json.dumps(
+            {
+                "ok": False,
+                "error": f"Invalid JSON: {e}",
+                "code": "INVALID_ARGUMENT",
+                "request_id": "",
+            }
+        )
 
     request_id = req.get("request_id", "")
     op = req.get("op")
 
     if not op:
-        return json.dumps({"ok": False, "error": "Missing 'op' field", "code": "INVALID_ARGUMENT", "request_id": request_id})
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "Missing 'op' field",
+                "code": "INVALID_ARGUMENT",
+                "request_id": request_id,
+            }
+        )
 
     handler = HANDLERS.get(op)
     if not handler:
-        return json.dumps({"ok": False, "error": f"Unknown op: {op}", "code": "UNSUPPORTED", "request_id": request_id})
+        return json.dumps(
+            {
+                "ok": False,
+                "error": f"Unknown op: {op}",
+                "code": "UNSUPPORTED",
+                "request_id": request_id,
+            }
+        )
 
     try:
         result = handler(req)
         return json.dumps({"ok": True, "result": result, "request_id": request_id})
     except (KeyError, FileNotFoundError) as e:
         log.warning("NOT_FOUND in op=%s: %s", op, e)
-        return json.dumps({"ok": False, "error": str(e), "code": "NOT_FOUND", "request_id": request_id})
+        return json.dumps(
+            {"ok": False, "error": str(e), "code": "NOT_FOUND", "request_id": request_id}
+        )
     except (ValueError, TypeError) as e:
         log.warning("INVALID_ARGUMENT in op=%s: %s", op, e)
-        return json.dumps({"ok": False, "error": str(e), "code": "INVALID_ARGUMENT", "request_id": request_id})
+        return json.dumps(
+            {"ok": False, "error": str(e), "code": "INVALID_ARGUMENT", "request_id": request_id}
+        )
     except Exception as e:
         log.error("INTERNAL error in op=%s: %s", op, e, exc_info=True)
-        return json.dumps({"ok": False, "error": str(e), "code": "INTERNAL", "request_id": request_id})
+        return json.dumps(
+            {"ok": False, "error": str(e), "code": "INTERNAL", "request_id": request_id}
+        )
 
 
 def handle_client(conn: socket.socket) -> None:
@@ -300,6 +329,7 @@ def handle_client(conn: socket.socket) -> None:
 
 # --- Server ---
 
+
 def run_server() -> None:
     """Start the Unix socket server."""
     # Remove stale socket
@@ -323,9 +353,7 @@ def run_server() -> None:
         )
     else:
         try:
-            result = subprocess.run(
-                ["exportfs", "-s"], capture_output=True, text=True, timeout=10
-            )
+            result = subprocess.run(["exportfs", "-s"], capture_output=True, text=True, timeout=10)
             if result.returncode != 0:
                 log.warning("exportfs -s returned non-zero: %s", result.stderr.strip())
             else:

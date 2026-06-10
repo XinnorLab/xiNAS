@@ -1,4 +1,5 @@
 """SystemScreen — System submenu (Status, License, Users, Health, Quick Actions, Config History)."""
+
 from __future__ import annotations
 
 from textual.app import ComposeResult
@@ -39,22 +40,29 @@ class SystemScreen(Screen):
             self.app.pop_screen()
         elif key == "1":
             from xinas_menu.screens.system_status import SystemStatusScreen
+
             self.app.push_screen(SystemStatusScreen())
         elif key == "2":
             from xinas_menu.screens.license import LicenseScreen
+
             self.app.push_screen(LicenseScreen())
         elif key == "3":
             from xinas_menu.screens.users import UsersScreen
+
             self.app.push_screen(UsersScreen())
         elif key == "4":
             from xinas_menu.screens.health import HealthScreen
+
             self.app.push_screen(HealthScreen())
         elif key == "5":
             from xinas_menu.screens.quick_actions import QuickActionsScreen
+
             self.app.push_screen(QuickActionsScreen())
         elif key == "6":
             from xinas_menu.screens.config_history import ConfigHistoryScreen
+
             self.app.push_screen(ConfigHistoryScreen())
         elif key == "7":
             from xinas_menu.screens.collect_logs import CollectLogsScreen
+
             self.app.push_screen(CollectLogsScreen())

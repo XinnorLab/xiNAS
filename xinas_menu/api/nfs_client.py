@@ -6,6 +6,7 @@ Protocol:
 
 All public methods return (ok: bool, data: Any, error: str).
 """
+
 from __future__ import annotations
 
 import json

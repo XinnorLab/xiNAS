@@ -7,6 +7,7 @@ Parses health check JSON reports and builds remediation actions from:
 
 Used by HealthScreen to offer a post-check wizard for fixing issues.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,8 +26,8 @@ class RemediationAction:
     # If set, the wizard applies via xinas-nfs-helper instead of subprocess.
     # Keys map directly onto NFSHelperClient.fix_nfs_conf kwargs.
     nfs_conf_fix: dict | None = None
-    status: str = ""                  # FAIL or WARN
-    evidence: str = ""                # current observed value
+    status: str = ""  # FAIL or WARN
+    evidence: str = ""  # current observed value
 
 
 # Map check names to known remediation actions (service-level fixes)
@@ -51,8 +52,17 @@ _REMEDIATION_MAP: dict[str, RemediationAction] = {
 
 # Allowlisted command prefixes for automated remediation
 _SAFE_COMMAND_PREFIXES = (
-    "systemctl", "sysctl", "modprobe", "ethtool", "ip",
-    "nmcli", "exportfs", "apt", "dnf", "yum", "blockdev",
+    "systemctl",
+    "sysctl",
+    "modprobe",
+    "ethtool",
+    "ip",
+    "nmcli",
+    "exportfs",
+    "apt",
+    "dnf",
+    "yum",
+    "blockdev",
 )
 
 
@@ -122,9 +132,7 @@ def _build_nfs_conf_action(
             consumed.add(rdma_idx)
 
     description = (
-        "Update /etc/nfs.conf [nfsd]: "
-        + ", ".join(descriptions)
-        + " (restart nfs-server)"
+        "Update /etc/nfs.conf [nfsd]: " + ", ".join(descriptions) + " (restart nfs-server)"
     )
 
     return RemediationAction(
@@ -156,7 +164,8 @@ def _apply_nfs_conf_fix(fix: dict) -> tuple[bool, str]:
         applied = data.get("applied") or []
         changed = [
             f"[{a.get('section')}] {a.get('key')}={a.get('new')}"
-            for a in applied if a.get("action") in ("updated", "inserted")
+            for a in applied
+            if a.get("action") in ("updated", "inserted")
         ]
         msg_parts: list[str] = []
         if changed:

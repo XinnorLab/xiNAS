@@ -4,6 +4,7 @@ Provides fire-and-forget snapshot creation so screen code stays simple.
 All errors are logged but never propagated to the UI (snapshots are
 best-effort and must not block the primary operation).
 """
+
 from __future__ import annotations
 
 import logging
@@ -13,6 +14,7 @@ _log = logging.getLogger(__name__)
 # Guard: xinas_history may not be installed on dev machines.
 try:
     from xinas_history import FilesystemStore, SnapshotEngine
+
     _HAS_ENGINE = True
 except ImportError:
     _HAS_ENGINE = False

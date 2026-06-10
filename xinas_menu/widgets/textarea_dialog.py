@@ -1,4 +1,5 @@
 """TextAreaDialog — modal multi-line text input dialog."""
+
 from __future__ import annotations
 
 from textual.app import ComposeResult
@@ -59,6 +60,7 @@ class TextAreaDialog(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         from textual.containers import Horizontal, Vertical
+
         with Vertical(id="dialog-container"):
             yield Label(self._title, id="dialog-title")
             yield Label(self._prompt, id="dialog-body")
@@ -76,11 +78,13 @@ class TextAreaDialog(ModalScreen[str | None]):
         ta.focus()
         if self._copy_text is not None:
             from xinas_menu.widgets._terminal_io import release_mouse_capture
+
             release_mouse_capture(self.app)
 
     def on_unmount(self) -> None:
         if self._copy_text is not None:
             from xinas_menu.widgets._terminal_io import restore_mouse_capture
+
             restore_mouse_capture(self.app)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

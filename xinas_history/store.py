@@ -16,6 +16,7 @@ Layout::
             lock.meta
             journal.yml
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -76,8 +77,7 @@ class FilesystemStore:
     def ensure_dirs(self) -> None:
         """Create the store directory structure if missing.  Directories are
         created with mode 0o700."""
-        for d in (self._root, self.baseline_path, self.snapshots_path,
-                  self.state_path):
+        for d in (self._root, self.baseline_path, self.snapshots_path, self.state_path):
             d.mkdir(parents=True, exist_ok=True)
             os.chmod(str(d), _DIR_MODE)
 
@@ -112,18 +112,14 @@ class FilesystemStore:
         target = self.baseline_path if is_baseline else self.snapshot_path(snapshot_id)
 
         if target.exists():
-            raise FileExistsError(
-                f"Snapshot path already exists: {target}"
-            )
+            raise FileExistsError(f"Snapshot path already exists: {target}")
 
         # Ensure parent directories exist.
         target.parent.mkdir(parents=True, exist_ok=True)
 
         # Write into a temporary directory on the *same* filesystem so that
         # os.rename() is atomic.
-        tmp_dir = tempfile.mkdtemp(
-            dir=str(target.parent), prefix=f".tmp-{snapshot_id}-"
-        )
+        tmp_dir = tempfile.mkdtemp(dir=str(target.parent), prefix=f".tmp-{snapshot_id}-")
         try:
             tmp = Path(tmp_dir)
 
@@ -170,9 +166,7 @@ class FilesystemStore:
         path = self.snapshot_path(snapshot_id) / filename
         return self._read_bytes(path)
 
-    def read_runtime_file(
-        self, snapshot_id: str, filename: str
-    ) -> bytes | None:
+    def read_runtime_file(self, snapshot_id: str, filename: str) -> bytes | None:
         """Read a file from the ``runtime/`` subdirectory of a snapshot."""
         path = self.snapshot_path(snapshot_id) / RUNTIME_DIR / filename
         return self._read_bytes(path)
@@ -251,9 +245,7 @@ class FilesystemStore:
         snap_dir = self.snapshot_path(snapshot_id)
         manifest_path = snap_dir / MANIFEST_FILE
         if not snap_dir.is_dir():
-            raise FileNotFoundError(
-                f"Snapshot directory not found: {snap_dir}"
-            )
+            raise FileNotFoundError(f"Snapshot directory not found: {snap_dir}")
         self._write_yaml_atomic(manifest_path, manifest.to_dict())
 
     def get_snapshot_size_bytes(self, snapshot_id: str) -> int:
@@ -294,9 +286,7 @@ class FilesystemStore:
     @staticmethod
     def _write_yaml_atomic(path: Path, data: dict) -> None:
         """Atomic overwrite of an existing YAML file."""
-        fd, tmp = tempfile.mkstemp(
-            dir=str(path.parent), suffix=".tmp"
-        )
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as fh:
                 yaml.safe_dump(data, fh, default_flow_style=False, sort_keys=False)

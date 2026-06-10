@@ -1,4 +1,5 @@
 """Configuration History screen — browse and manage snapshots."""
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +28,7 @@ try:
     from xinas_history.gc import GarbageCollector, load_retention_policy
     from xinas_history.runner import TransactionalRunner
     from xinas_history.store import FilesystemStore
+
     HAS_HISTORY = True
 except ImportError:
     HAS_HISTORY = False
@@ -129,9 +131,7 @@ class ConfigHistoryScreen(Screen):
             engine = await loop.run_in_executor(None, _create_engine)
             summary = await loop.run_in_executor(None, engine.get_history_summary)
         except Exception as exc:
-            view.set_content(
-                f"{_RED}Failed to load history: {exc}{_NC}"
-            )
+            view.set_content(f"{_RED}Failed to load history: {exc}{_NC}")
             return
 
         text = _format_history(summary)
@@ -148,9 +148,7 @@ class ConfigHistoryScreen(Screen):
         view = self.query_one("#history-content", ScrollableTextView)
 
         if not HAS_HISTORY:
-            view.set_content(
-                f"{_RED}xinas_history package not installed.{_NC}"
-            )
+            view.set_content(f"{_RED}xinas_history package not installed.{_NC}")
             return
 
         loop = asyncio.get_running_loop()
@@ -196,6 +194,7 @@ class ConfigHistoryScreen(Screen):
         snapshot_id = id_map.get(chosen, "")
         if snapshot_id:
             from xinas_menu.screens.snapshot_detail import SnapshotDetailScreen
+
             self.app.push_screen(SnapshotDetailScreen(snapshot_id))
 
     # -- Drift check --------------------------------------------------------
@@ -206,9 +205,7 @@ class ConfigHistoryScreen(Screen):
         view = self.query_one("#history-content", ScrollableTextView)
 
         if not HAS_HISTORY:
-            view.set_content(
-                f"{_RED}xinas_history package not installed.{_NC}"
-            )
+            view.set_content(f"{_RED}xinas_history package not installed.{_NC}")
             return
 
         view.set_content(f"{_DIM}Running drift detection...{_NC}")
@@ -243,9 +240,7 @@ class ConfigHistoryScreen(Screen):
         view = self.query_one("#history-content", ScrollableTextView)
 
         if not HAS_HISTORY:
-            view.set_content(
-                f"{_RED}xinas_history package not installed.{_NC}"
-            )
+            view.set_content(f"{_RED}xinas_history package not installed.{_NC}")
             return
 
         # Check if baseline already exists
@@ -306,17 +301,12 @@ class ConfigHistoryScreen(Screen):
 
         try:
             if recreate:
-                manifest = await engine.purge_and_create_baseline(
-                    source="xinas_menu"
-                )
+                manifest = await engine.purge_and_create_baseline(source="xinas_menu")
             else:
                 manifest = await engine.create_baseline(source="xinas_menu")
             snapshot_id = manifest.id
         except Exception as exc:
-            view.set_content(
-                f"{_RED}Baseline creation failed.{_NC}\n\n"
-                f"  {_DIM}Error:{_NC} {exc}"
-            )
+            view.set_content(f"{_RED}Baseline creation failed.{_NC}\n\n  {_DIM}Error:{_NC} {exc}")
             return
 
         view.set_content(
@@ -350,7 +340,8 @@ class ConfigHistoryScreen(Screen):
         try:
             engine = await loop.run_in_executor(None, _create_engine)
             baseline = await loop.run_in_executor(
-                None, engine.get_baseline_manifest,
+                None,
+                engine.get_baseline_manifest,
             )
         except ValueError:
             view.set_content(
@@ -408,8 +399,7 @@ class ConfigHistoryScreen(Screen):
             tail = _progress_lines[-30:]
             self.app.call_from_thread(
                 view.set_content,
-                f"{_DIM}Resetting to baseline...{_NC}\n\n"
-                + "\n".join(tail),
+                f"{_DIM}Resetting to baseline...{_NC}\n\n" + "\n".join(tail),
             )
 
         view.set_content(
@@ -445,7 +435,8 @@ class ConfigHistoryScreen(Screen):
                     f"  {_DIM}Result:{_NC}    {_GRN}applied{_NC}\n"
                 )
                 self.app.notify(
-                    "Reset to baseline completed.", severity="information",
+                    "Reset to baseline completed.",
+                    severity="information",
                 )
                 with contextlib.suppress(Exception):
                     self.app.audit.log(
@@ -484,9 +475,7 @@ class ConfigHistoryScreen(Screen):
 
         except Exception as exc:
             _log.exception("Reset to baseline failed: %s", exc)
-            view.set_content(
-                f"{_RED}Reset to baseline failed: {exc}{_NC}"
-            )
+            view.set_content(f"{_RED}Reset to baseline failed: {exc}{_NC}")
             self.app.notify(f"Reset error: {exc}", severity="error")
 
     # -- Garbage collection -------------------------------------------------
@@ -497,9 +486,7 @@ class ConfigHistoryScreen(Screen):
         view = self.query_one("#history-content", ScrollableTextView)
 
         if not HAS_HISTORY:
-            view.set_content(
-                f"{_RED}xinas_history package not installed.{_NC}"
-            )
+            view.set_content(f"{_RED}xinas_history package not installed.{_NC}")
             return
 
         confirmed = await self.app.push_screen_wait(
@@ -521,7 +508,8 @@ class ConfigHistoryScreen(Screen):
             gc = GarbageCollector(store, load_retention_policy())
             engine = _create_engine(store=store)
             effective = await loop.run_in_executor(
-                None, engine.get_current_effective,
+                None,
+                engine.get_current_effective,
             )
             effective_id = effective.id if effective else None
             purged = await loop.run_in_executor(
@@ -684,22 +672,20 @@ def _format_history(summary: dict) -> str:
     lines.append(f"{_BLD}{_CYN}{'=' * 72}{_NC}")
     lines.append("")
     lines.append(
-        f"  {_DIM}Total snapshots:{_NC} {total}    "
-        f"{_DIM}Rollback-eligible:{_NC} {rb_count}"
+        f"  {_DIM}Total snapshots:{_NC} {total}    {_DIM}Rollback-eligible:{_NC} {rb_count}"
     )
 
     if current:
-        lines.append(
-            f"  {_DIM}Current effective:{_NC} "
-            f"{_GRN}{current.get('id', '?')}{_NC}"
-        )
+        lines.append(f"  {_DIM}Current effective:{_NC} {_GRN}{current.get('id', '?')}{_NC}")
     else:
         lines.append(f"  {_DIM}Current effective:{_NC} {_YLW}(none){_NC}")
 
     lines.append("")
 
     # Table header
-    lines.append(f"  {_BLD}{_DIM}{'#':<4}{'Timestamp':<22}{'Operation':<18}{'Status':<12}{'Risk Class':<18}ID{_NC}")
+    lines.append(
+        f"  {_BLD}{_DIM}{'#':<4}{'Timestamp':<22}{'Operation':<18}{'Status':<12}{'Risk Class':<18}ID{_NC}"
+    )
     lines.append(f"  {_DIM}{'-' * 70}{_NC}")
 
     row = 0
@@ -708,7 +694,9 @@ def _format_history(summary: dict) -> str:
     baseline = summary.get("baseline")
     if baseline:
         row += 1
-        _append_snapshot_row(lines, row, baseline, is_baseline=True, current_id=current.get("id") if current else "")
+        _append_snapshot_row(
+            lines, row, baseline, is_baseline=True, current_id=current.get("id") if current else ""
+        )
 
     # Regular snapshots (newest first for display)
     snapshots = list(summary.get("snapshots", []))
@@ -727,9 +715,7 @@ def _format_history(summary: dict) -> str:
             f"  {_YLW}No baseline snapshot found.{_NC}  "
             f"Use {_BLD}5 — Create Baseline{_NC} to capture current"
         )
-        lines.append(
-            "  system state as the reference point for rollback and drift detection."
-        )
+        lines.append("  system state as the reference point for rollback and drift detection.")
 
     lines.append("")
     lines.append(f"  {_DIM}{'-' * 70}{_NC}")
@@ -779,7 +765,7 @@ def _append_snapshot_row(
         risk_str = f"{_DIM}{risk or '-'}{_NC}"
 
     # Current effective marker
-    is_current = (sid == current_id)
+    is_current = sid == current_id
     marker = f"{_GRN}*{_NC}" if is_current else " "
 
     # Baseline marker

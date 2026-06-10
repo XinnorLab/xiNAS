@@ -1,4 +1,5 @@
 """AdvancedScreen — pre-install configuration menu."""
+
 from __future__ import annotations
 
 import asyncio
@@ -54,21 +55,13 @@ class AdvancedScreen(Screen):
         if key == "0":
             self.app.pop_screen()
         elif key == "1":
-            self.app.push_screen(
-                _SubprocessScreen("configure_network.sh", "Configure Network")
-            )
+            self.app.push_screen(_SubprocessScreen("configure_network.sh", "Configure Network"))
         elif key == "2":
-            self.app.push_screen(
-                _SubprocessScreen("configure_hostname.sh", "Set Hostname")
-            )
+            self.app.push_screen(_SubprocessScreen("configure_hostname.sh", "Set Hostname"))
         elif key == "3":
-            self.app.push_screen(
-                _SubprocessScreen("configure_raid.sh", "Configure RAID")
-            )
+            self.app.push_screen(_SubprocessScreen("configure_raid.sh", "Configure RAID"))
         elif key == "4":
-            self.app.push_screen(
-                _SubprocessScreen("configure_nfs_exports.sh", "Edit NFS Exports")
-            )
+            self.app.push_screen(_SubprocessScreen("configure_nfs_exports.sh", "Edit NFS Exports"))
         elif key == "5":
             asyncio.create_task(self._preset_menu())
         elif key == "6":
@@ -78,6 +71,7 @@ class AdvancedScreen(Screen):
 
     async def _preset_menu(self) -> None:
         from xinas_menu.screens.configure.raid_config import list_presets
+
         presets = list_presets()
         preset = await self.app.push_screen_wait(
             InputDialog(
@@ -98,10 +92,13 @@ class AdvancedScreen(Screen):
             loop = asyncio.get_running_loop()
             out = await loop.run_in_executor(
                 None,
-                lambda: subprocess.run(
-                    ["git", "-C", str(_REPO_ROOT), "remote", "-v"],
-                    capture_output=True, text=True,
-                ).stdout
+                lambda: (
+                    subprocess.run(
+                        ["git", "-C", str(_REPO_ROOT), "remote", "-v"],
+                        capture_output=True,
+                        text=True,
+                    ).stdout
+                ),
             )
             view = self.query_one("#adv-content", ScrollableTextView)
             view.set_content(out or "[dim]No remotes.[/dim]")
@@ -111,8 +108,9 @@ class AdvancedScreen(Screen):
                 None,
                 lambda: subprocess.run(
                     ["git", "-C", str(_REPO_ROOT), "remote", "set-url", "origin", url],
-                    capture_output=True, text=True,
-                )
+                    capture_output=True,
+                    text=True,
+                ),
             )
             view = self.query_one("#adv-content", ScrollableTextView)
             if r.returncode == 0:

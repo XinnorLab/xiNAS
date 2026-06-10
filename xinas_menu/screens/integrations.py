@@ -1,4 +1,5 @@
 """IntegrationsScreen — Integrations submenu (MCP Server, xiRAID Exporter)."""
+
 from __future__ import annotations
 
 from textual.app import ComposeResult
@@ -34,7 +35,9 @@ class IntegrationsScreen(Screen):
             self.app.pop_screen()
         elif key == "1":
             from xinas_menu.screens.mcp import MCPScreen
+
             self.app.push_screen(MCPScreen())
         elif key == "2":
             from xinas_menu.screens.exporter import ExporterScreen
+
             self.app.push_screen(ExporterScreen())

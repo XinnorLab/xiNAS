@@ -1,4 +1,5 @@
 """NetworkConfigScreen — replaces configure_network.sh (netplan YAML editor)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -89,6 +90,7 @@ def _save_netplan(path: Path, content: str, apply: bool) -> tuple[bool, str]:
     # Validate YAML first
     try:
         import yaml
+
         yaml.safe_load(content)
     except Exception as exc:
         return False, f"YAML parse error: {exc}"
@@ -106,8 +108,7 @@ def _save_netplan(path: Path, content: str, apply: bool) -> tuple[bool, str]:
         if r.returncode != 0:
             return False, r.stderr[:300]
     else:
-        r = subprocess.run(["netplan", "try", "--timeout=0"],
-                           capture_output=True, text=True)
+        r = subprocess.run(["netplan", "try", "--timeout=0"], capture_output=True, text=True)
         if r.returncode not in (0, 1):
             return False, r.stderr[:300]
     return True, ""

@@ -1,4 +1,5 @@
 """HostnameConfigScreen — replaces configure_hostname.sh."""
+
 from __future__ import annotations
 
 import asyncio
@@ -52,18 +53,18 @@ class HostnameConfigScreen(Screen[bool]):
 def _apply_hostname(hostname: str) -> tuple[bool, str]:
     r = subprocess.run(
         ["hostnamectl", "set-hostname", hostname],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if r.returncode != 0:
         return False, r.stderr.strip()
     # Also update /etc/hosts
     try:
         import re
+
         with open("/etc/hosts") as f:
             text = f.read()
-        text = re.sub(
-            r"(127\.0\.1\.1\s+)\S+", f"\\g<1>{hostname}", text
-        )
+        text = re.sub(r"(127\.0\.1\.1\s+)\S+", f"\\g<1>{hostname}", text)
         with open("/etc/hosts", "w") as f:
             f.write(text)
     except Exception:

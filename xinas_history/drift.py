@@ -1,4 +1,5 @@
 """Out-of-band drift detection for managed xiNAS artifacts."""
+
 from __future__ import annotations
 
 import datetime
@@ -109,16 +110,11 @@ class DriftReport:
         parts = [f"{n} drifted artifact{'s' if n != 1 else ''}"]
 
         if self.has_blocking_drift:
-            blocking = sum(
-                1 for e in self.entries if e.policy == DriftPolicy.BLOCK.value
-            )
+            blocking = sum(1 for e in self.entries if e.policy == DriftPolicy.BLOCK.value)
             parts.append(f"{blocking} blocking")
 
         if self.has_safety_impact:
-            safety = sum(
-                1 for e in self.entries
-                if e.safety_impact == "affects_rollback_safety"
-            )
+            safety = sum(1 for e in self.entries if e.safety_impact == "affects_rollback_safety")
             parts.append(f"{safety} safety-critical")
 
         return "; ".join(parts) + f" (vs {self.snapshot_id})."
@@ -145,9 +141,7 @@ ARTIFACT_POLICIES: dict[str, DriftPolicy] = {
 }
 
 # Map of checksum keys to their system file paths (mirrors collector.CHECKSUM_TARGETS).
-_CHECKSUM_KEY_TO_PATH: dict[str, str] = {
-    key: path for key, path in CHECKSUM_TARGETS.items()
-}
+_CHECKSUM_KEY_TO_PATH: dict[str, str] = {key: path for key, path in CHECKSUM_TARGETS.items()}
 
 # Classify CONFIG_SOURCES snapshot filenames into artifact classes.
 _CONFIG_ARTIFACT_CLASS: dict[str, str] = {}
@@ -193,7 +187,8 @@ class DriftDetector:
     # -- public API ---------------------------------------------------------
 
     def check(
-        self, reference_snapshot_id: str | None = None,
+        self,
+        reference_snapshot_id: str | None = None,
     ) -> DriftReport:
         """Run full drift detection against a reference snapshot.
 
@@ -238,8 +233,7 @@ class DriftDetector:
         if report.entries:
             report.clean = False
             report.has_safety_impact = any(
-                e.safety_impact == "affects_rollback_safety"
-                for e in report.entries
+                e.safety_impact == "affects_rollback_safety" for e in report.entries
             )
             report.has_blocking_drift = any(
                 e.policy == DriftPolicy.BLOCK.value for e in report.entries
@@ -267,15 +261,14 @@ class DriftDetector:
         if self._engine is not None:
             return self._engine.get_current_effective()
 
-        logger.warning(
-            "No reference snapshot ID provided and no engine available."
-        )
+        logger.warning("No reference snapshot ID provided and no engine available.")
         return None
 
     # -- private: system file checksums -------------------------------------
 
     def _check_system_files(
-        self, snapshot_checksums: dict,
+        self,
+        snapshot_checksums: dict,
     ) -> list[DriftEntry]:
         """Compare system file checksums against snapshot.
 
@@ -301,23 +294,27 @@ class DriftDetector:
 
             detail = self._describe_system_drift(key, sys_path, previous, current)
 
-            entries.append(DriftEntry(
-                artifact=sys_path,
-                artifact_class="system_config",
-                previous_checksum=previous,
-                current_checksum=current,
-                is_semantic=False,
-                safety_impact=safety,
-                policy=policy.value,
-                detail=detail,
-            ))
+            entries.append(
+                DriftEntry(
+                    artifact=sys_path,
+                    artifact_class="system_config",
+                    previous_checksum=previous,
+                    current_checksum=current,
+                    is_semantic=False,
+                    safety_impact=safety,
+                    policy=policy.value,
+                    detail=detail,
+                )
+            )
 
         return entries
 
     # -- private: config / role files ---------------------------------------
 
     def _check_config_files(
-        self, snapshot_id: str, manifest,
+        self,
+        snapshot_id: str,
+        manifest,
     ) -> list[DriftEntry]:
         """Compare role default / template / playbook files in repo against
         snapshot copies.
@@ -337,7 +334,9 @@ class DriftDetector:
 
             # Read snapshot copy.
             snapshot_bytes = self._read_snapshot_config(
-                snapshot_id, manifest, snapshot_name,
+                snapshot_id,
+                manifest,
+                snapshot_name,
             )
 
             previous_cksum = self._sha256(snapshot_bytes) if snapshot_bytes is not None else ""
@@ -361,23 +360,27 @@ class DriftDetector:
             else:
                 detail = f"{rel_path}: content changed since last snapshot"
 
-            entries.append(DriftEntry(
-                artifact=rel_path,
-                artifact_class=artifact_class,
-                previous_checksum=previous_cksum,
-                current_checksum=current_cksum,
-                is_semantic=False,
-                safety_impact=safety,
-                policy=policy.value,
-                detail=detail,
-            ))
+            entries.append(
+                DriftEntry(
+                    artifact=rel_path,
+                    artifact_class=artifact_class,
+                    previous_checksum=previous_cksum,
+                    current_checksum=current_cksum,
+                    is_semantic=False,
+                    safety_impact=safety,
+                    policy=policy.value,
+                    detail=detail,
+                )
+            )
 
         return entries
 
     # -- private: mount units -----------------------------------------------
 
     def _check_mount_units(
-        self, snapshot_id: str, manifest,
+        self,
+        snapshot_id: str,
+        manifest,
     ) -> list[DriftEntry]:
         """Check xiNAS-managed systemd mount units for drift.
 
@@ -388,7 +391,9 @@ class DriftDetector:
 
         # Read snapshot mounts data.
         snapshot_mounts = self._read_snapshot_runtime(
-            snapshot_id, manifest, "mounts.json",
+            snapshot_id,
+            manifest,
+            "mounts.json",
         )
         if snapshot_mounts is None:
             return entries
@@ -397,7 +402,8 @@ class DriftDetector:
             mounts_data = json.loads(snapshot_mounts)
         except (json.JSONDecodeError, ValueError):
             logger.warning(
-                "Could not parse mounts.json from snapshot %s", snapshot_id,
+                "Could not parse mounts.json from snapshot %s",
+                snapshot_id,
             )
             return entries
 
@@ -460,18 +466,21 @@ class DriftDetector:
             policy = self._get_policy("systemd_mount")
             safety = self._determine_safety_impact(unit_file, policy)
 
-            entries.append(DriftEntry(
-                artifact=unit_file,
-                artifact_class="service",
-                previous_checksum=previous_cksum,
-                current_checksum=current_cksum or self._sha256(
-                    live_repr if live_state else b"",
-                ),
-                is_semantic=is_semantic,
-                safety_impact=safety,
-                policy=policy.value,
-                detail=detail,
-            ))
+            entries.append(
+                DriftEntry(
+                    artifact=unit_file,
+                    artifact_class="service",
+                    previous_checksum=previous_cksum,
+                    current_checksum=current_cksum
+                    or self._sha256(
+                        live_repr if live_state else b"",
+                    ),
+                    is_semantic=is_semantic,
+                    safety_impact=safety,
+                    policy=policy.value,
+                    detail=detail,
+                )
+            )
 
         return entries
 
@@ -507,7 +516,10 @@ class DriftDetector:
             return None
 
     def _read_snapshot_config(
-        self, snapshot_id: str, manifest, filename: str,
+        self,
+        snapshot_id: str,
+        manifest,
+        filename: str,
     ) -> bytes | None:
         """Read a config file from a snapshot, handling baseline directory."""
         from .models import SnapshotType
@@ -523,7 +535,10 @@ class DriftDetector:
         return self._store.read_file(snapshot_id, filename)
 
     def _read_snapshot_runtime(
-        self, snapshot_id: str, manifest, filename: str,
+        self,
+        snapshot_id: str,
+        manifest,
+        filename: str,
     ) -> bytes | None:
         """Read a runtime file from a snapshot, handling baseline directory."""
         from .models import SnapshotType
@@ -550,7 +565,9 @@ class DriftDetector:
         try:
             result = subprocess.run(
                 [
-                    "systemctl", "show", unit_name,
+                    "systemctl",
+                    "show",
+                    unit_name,
                     "--property=ActiveState,SubState,Description",
                     "--no-pager",
                 ],
@@ -618,12 +635,10 @@ class DriftDetector:
             return ARTIFACT_POLICIES[artifact]
 
         # Systemd mount units.
-        if (
-            artifact.startswith("/etc/systemd/system/")
-            and artifact.endswith(".mount")
-        ):
+        if artifact.startswith("/etc/systemd/system/") and artifact.endswith(".mount"):
             return ARTIFACT_POLICIES.get(
-                "systemd_mount", DriftPolicy.WARN_AND_CONFIRM,
+                "systemd_mount",
+                DriftPolicy.WARN_AND_CONFIRM,
             )
 
         # Artifact class lookup (role_default, playbook, template).
@@ -635,7 +650,10 @@ class DriftDetector:
 
     @staticmethod
     def _describe_system_drift(
-        key: str, sys_path: str, previous: str, current: str,
+        key: str,
+        sys_path: str,
+        previous: str,
+        current: str,
     ) -> str:
         """Build a human-readable description for system-file drift."""
         if not current:

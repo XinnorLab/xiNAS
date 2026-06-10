@@ -1,4 +1,5 @@
 """XiNASApp — root Textual application for xinas-menu."""
+
 from __future__ import annotations
 
 import asyncio
@@ -72,15 +73,21 @@ class XiNASApp(App):
 
         # Background update check
         task = asyncio.create_task(self._bg_update_check())
-        task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+        task.add_done_callback(
+            lambda t: t.exception() if not t.cancelled() and t.exception() else None
+        )
 
         # Background license monitor
         lic_task = asyncio.create_task(self._bg_license_check())
-        lic_task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+        lic_task.add_done_callback(
+            lambda t: t.exception() if not t.cancelled() and t.exception() else None
+        )
 
         # Background NFS service monitor
         nfs_task = asyncio.create_task(self._bg_nfs_check())
-        nfs_task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+        nfs_task.add_done_callback(
+            lambda t: t.exception() if not t.cancelled() and t.exception() else None
+        )
 
     async def _bg_update_check(self) -> None:
         try:
@@ -103,11 +110,13 @@ class XiNASApp(App):
         while True:
             try:
                 ok, data, err = await asyncio.wait_for(
-                    self.grpc.license_show(), timeout=5,
+                    self.grpc.license_show(),
+                    timeout=5,
                 )
                 if not ok:
                     alert_bar.set_alert(
-                        "license", "error",
+                        "license",
+                        "error",
                         "License check failed — xiRAID not reachable",
                     )
                     status_footer.set_issue("license", "xiRAID not reachable")
@@ -118,28 +127,37 @@ class XiNASApp(App):
                         status_footer.clear_issue("license")
                     elif status == "expired":
                         alert_bar.set_alert(
-                            "license", "error", "xiRAID license has expired",
+                            "license",
+                            "error",
+                            "xiRAID license has expired",
                         )
                         status_footer.set_issue("license", "License expired")
                     elif status == "invalid":
                         alert_bar.set_alert(
-                            "license", "error", "xiRAID license is invalid",
+                            "license",
+                            "error",
+                            "xiRAID license is invalid",
                         )
                         status_footer.set_issue("license", "License invalid")
                     else:
                         alert_bar.set_alert(
-                            "license", "warning",
+                            "license",
+                            "warning",
                             f"License status: {status}",
                         )
                         status_footer.set_issue("license", f"License: {status}")
                 else:
                     alert_bar.set_alert(
-                        "license", "warning", "License status unknown",
+                        "license",
+                        "warning",
+                        "License status unknown",
                     )
                     status_footer.set_issue("license", "License unknown")
             except asyncio.TimeoutError:
                 alert_bar.set_alert(
-                    "license", "warning", "License check timed out",
+                    "license",
+                    "warning",
+                    "License check timed out",
                 )
                 status_footer.set_issue("license", "License check timed out")
             except Exception:
@@ -174,6 +192,7 @@ class XiNASApp(App):
     @staticmethod
     def _check_nfs_state():
         from xinas_menu.utils.service_ctl import ServiceController
+
         return ServiceController().state("nfs-server")
 
     def watch_update_available(self, value: bool) -> None:
@@ -213,9 +232,7 @@ class XiNASApp(App):
             )
         else:
             msg = "An update is available (no system rebuild required). Apply now?"
-        confirmed = await self.push_screen_wait(
-            ConfirmDialog(msg, "Update Available")
-        )
+        confirmed = await self.push_screen_wait(ConfirmDialog(msg, "Update Available"))
         if confirmed:
             await self._apply_update(result)
 
@@ -231,6 +248,7 @@ class XiNASApp(App):
         cmd = build_rebuild_cmd(rebuilds)
         if cmd:
             from xinas_menu.screens.startup.playbook_screen import PlaybookRunScreen
+
             self.audit.log("system.update", f"rebuild required: {' '.join(cmd)}")
             rc = await self.push_screen_wait(
                 PlaybookRunScreen(cmd=cmd, title="Applying update — Ansible rebuild")
@@ -250,6 +268,7 @@ class XiNASApp(App):
     def action_copy_content(self) -> None:
         """Copy the visible content panel text to clipboard (Ctrl+Y)."""
         from xinas_menu.widgets.text_view import ScrollableTextView
+
         try:
             view = self.screen.query_one(ScrollableTextView)
             text = view.get_text()
@@ -304,6 +323,7 @@ class XiNASApp(App):
         """
         import os
         from pathlib import Path
+
         try:
             home = Path(os.path.expanduser("~"))
             d = home / ".xinas"
@@ -328,6 +348,7 @@ class XiNASApp(App):
     def action_scroll_up(self) -> None:
         """Scroll the content panel up."""
         from xinas_menu.widgets.text_view import ScrollableTextView
+
         try:
             view = self.screen.query_one(ScrollableTextView)
             log = view.query_one("#text-view-area")
@@ -338,6 +359,7 @@ class XiNASApp(App):
     def action_scroll_down(self) -> None:
         """Scroll the content panel down."""
         from xinas_menu.widgets.text_view import ScrollableTextView
+
         try:
             view = self.screen.query_one(ScrollableTextView)
             log = view.query_one("#text-view-area")
@@ -347,6 +369,7 @@ class XiNASApp(App):
 
     def action_help(self) -> None:
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
+
         self.push_screen(
             ConfirmDialog(
                 "xiNAS Management Console\n\n"

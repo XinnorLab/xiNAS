@@ -1,4 +1,5 @@
 """FilesystemScreen — Create and manage XFS filesystems on xiRAID arrays."""
+
 from __future__ import annotations
 
 import json
@@ -102,9 +103,7 @@ class FilesystemScreen(Screen):
         view = self.query_one("#fs-content", ScrollableTextView)
         view.set_content("  Scanning filesystems...")
 
-        ok, out, err = await run_async_cmd(
-            "findmnt", "-t", "xfs", "-J", timeout=10
-        )
+        ok, out, err = await run_async_cmd("findmnt", "-t", "xfs", "-J", timeout=10)
         GRN, BLD, DIM, CYN, NC = "\033[32m", "\033[1m", "\033[2m", "\033[36m", "\033[0m"
         lines = [f"{BLD}{CYN}XFS Filesystems{NC}\n"]
 
@@ -187,7 +186,9 @@ class FilesystemScreen(Screen):
 
         # ── Step 1: Select DATA array ─────────────────────────────────────
         # Sort: data-suggested arrays first
-        sorted_arrays = sorted(arrays, key=lambda a: 0 if _classify_role(a.get("level", "")) == "data" else 1)
+        sorted_arrays = sorted(
+            arrays, key=lambda a: 0 if _classify_role(a.get("level", "")) == "data" else 1
+        )
         labels = [_array_label(a) for a in sorted_arrays]
 
         data_choice = await self.app.push_screen_wait(
@@ -206,7 +207,9 @@ class FilesystemScreen(Screen):
 
         # ── Step 2: Select LOG array ──────────────────────────────────────
         remaining = [a for a in sorted_arrays if a.get("name") != data_name]
-        remaining_sorted = sorted(remaining, key=lambda a: 0 if _classify_role(a.get("level", "")) == "log" else 1)
+        remaining_sorted = sorted(
+            remaining, key=lambda a: 0 if _classify_role(a.get("level", "")) == "log" else 1
+        )
         remaining_labels = [_array_label(a) for a in remaining_sorted]
 
         if len(remaining_labels) == 1:
@@ -330,9 +333,7 @@ class FilesystemScreen(Screen):
             log_size="1G",
         )
         if not ok:
-            await self.app.push_screen_wait(
-                ConfirmDialog(f"mkfs.xfs failed:\n\n{err}", "Error")
-            )
+            await self.app.push_screen_wait(ConfirmDialog(f"mkfs.xfs failed:\n\n{err}", "Error"))
             view.set_content("\033[31m  mkfs.xfs failed.\033[0m")
             return
 
@@ -391,9 +392,7 @@ class FilesystemScreen(Screen):
         view.set_content("  Scanning filesystems...")
 
         # Find all XFS filesystems
-        ok, out, err = await run_async_cmd(
-            "findmnt", "-t", "xfs", "-J", timeout=10
-        )
+        ok, out, err = await run_async_cmd("findmnt", "-t", "xfs", "-J", timeout=10)
         if not ok or not out:
             await self.app.push_screen_wait(
                 ConfirmDialog("No XFS filesystems found.", "Delete Filesystem")
@@ -447,15 +446,12 @@ class FilesystemScreen(Screen):
 
         # ── Build warning ────────────────────────────────────────────────
         warning_parts = [
-            f"Filesystem: {mountpoint}\n"
-            f"Device:     {source_dev}\n",
+            f"Filesystem: {mountpoint}\nDevice:     {source_dev}\n",
         ]
 
         if affected_shares:
             share_list = "\n".join(f"  - {s.get('path', '?')}" for s in affected_shares)
-            warning_parts.append(
-                f"ACTIVE NFS SHARES will be removed first:\n{share_list}\n"
-            )
+            warning_parts.append(f"ACTIVE NFS SHARES will be removed first:\n{share_list}\n")
 
         warning_parts.append(
             "WARNING: The filesystem will be unmounted and its systemd\n"
@@ -561,7 +557,13 @@ class FilesystemScreen(Screen):
         view.set_content("  Scanning filesystems...")
 
         GRN, RED, YLW, BLD, DIM, CYN, NC = (
-            "\033[32m", "\033[31m", "\033[33m", "\033[1m", "\033[2m", "\033[36m", "\033[0m",
+            "\033[32m",
+            "\033[31m",
+            "\033[33m",
+            "\033[1m",
+            "\033[2m",
+            "\033[36m",
+            "\033[0m",
         )
 
         # Discover XFS filesystems
@@ -696,11 +698,15 @@ class FilesystemScreen(Screen):
         view.set_content(f"  Updating quota settings on {mountpoint}...")
 
         ok, err = await update_mount_unit_quota(
-            mountpoint, enable_user=enable_user, enable_project=enable_project,
+            mountpoint,
+            enable_user=enable_user,
+            enable_project=enable_project,
         )
         if ok:
             self.app.audit.log(
-                "fs.quota", f"{mountpoint}: {', '.join(desc_parts)}", "OK",
+                "fs.quota",
+                f"{mountpoint}: {', '.join(desc_parts)}",
+                "OK",
             )
             await self.app.snapshots.record(
                 "fs_modify",

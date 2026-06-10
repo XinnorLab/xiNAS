@@ -1,4 +1,5 @@
 """NVMe SMART data helpers — async wrappers around nvme-cli."""
+
 from __future__ import annotations
 
 import asyncio
@@ -22,7 +23,11 @@ async def _run_smart_log(device: str) -> dict:
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "nvme", "smart-log", f"/dev/{device}", "-o", "json",
+            "nvme",
+            "smart-log",
+            f"/dev/{device}",
+            "-o",
+            "json",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

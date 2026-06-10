@@ -1,4 +1,5 @@
 """MainMenuScreen — top-level navigation (4 groups + Exit) with mini-status."""
+
 from __future__ import annotations
 
 import asyncio
@@ -62,15 +63,19 @@ class MainMenuScreen(Screen):
             self.app.exit()
         elif key == "1":
             from xinas_menu.screens.system import SystemScreen
+
             self.app.push_screen(SystemScreen())
         elif key == "2":
             from xinas_menu.screens.storage import StorageScreen
+
             self.app.push_screen(StorageScreen())
         elif key == "3":
             from xinas_menu.screens.network import NetworkScreen
+
             self.app.push_screen(NetworkScreen())
         elif key == "4":
             from xinas_menu.screens.management import ManagementScreen
+
             self.app.push_screen(ManagementScreen())
 
     def action_exit_app(self) -> None:
@@ -106,6 +111,7 @@ async def _build_health_banner(grpc_client, nfs_client) -> str:
     """Return a banner listing failed subsystem probes, or '' if all healthy."""
     try:
         from xinas_menu.utils.subsystem_probes import probe_all
+
         results = await probe_all(grpc_client, nfs_client)
     except Exception:
         _log.debug("health banner: probe failed", exc_info=True)
@@ -116,14 +122,8 @@ async def _build_health_banner(grpc_client, nfs_client) -> str:
         return ""
 
     n = len(failed)
-    header = (
-        f"  {_YLW}{_BLD}⚠ Subsystem issue{'s' if n != 1 else ''} detected "
-        f"({n}){_NC}"
-    )
-    rows = [
-        f"  {_RED}○{_NC} {r.name:<11} {_DIM}{r.detail[:60]}{_NC}"
-        for r in failed
-    ]
+    header = f"  {_YLW}{_BLD}⚠ Subsystem issue{'s' if n != 1 else ''} detected ({n}){_NC}"
+    rows = [f"  {_RED}○{_NC} {r.name:<11} {_DIM}{r.detail[:60]}{_NC}" for r in failed]
     return "\n".join([header, *rows])
 
 
@@ -173,6 +173,7 @@ def _build_mini_status() -> str:
     lines.append(f"  {_BLD}{_CYN}NFS Service{_NC}")
     try:
         from xinas_menu.utils.service_ctl import ServiceController
+
         ctl = ServiceController()
         st = ctl.state("nfs-server")
         if st.is_active:
@@ -195,7 +196,9 @@ def _build_mini_status() -> str:
     try:
         r = subprocess.run(
             ["ss", "-tn", "state", "established", "( dport = :2049 )"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
         client_lines = [
             line for line in r.stdout.splitlines() if line.strip() and not line.startswith("State")
@@ -210,11 +213,14 @@ def _build_mini_status() -> str:
     lines.append(f"  {_BLD}{_CYN}NFS Shares{_NC}")
     try:
         r = subprocess.run(
-            ["exportfs", "-s"], capture_output=True, text=True, timeout=3,
+            ["exportfs", "-s"],
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
-        exports = list(dict.fromkeys(
-            line.split()[0] for line in r.stdout.splitlines() if line.strip()
-        ))
+        exports = list(
+            dict.fromkeys(line.split()[0] for line in r.stdout.splitlines() if line.strip())
+        )
         if not exports:
             lines.append(f"  {_DIM}No exports configured{_NC}")
         else:
@@ -231,9 +237,7 @@ def _build_mini_status() -> str:
                         f"{_DIM}({used} / {total}){_NC}"
                     )
                 else:
-                    lines.append(
-                        f"  {_RED}●{_NC} {path:<16} {_RED}unavailable{_NC}"
-                    )
+                    lines.append(f"  {_RED}●{_NC} {path:<16} {_RED}unavailable{_NC}")
     except Exception:
         lines.append(f"  {_DIM}Could not read exports{_NC}")
 
@@ -243,6 +247,7 @@ def _build_mini_status() -> str:
     lines.append(f"  {_BLD}{_CYN}Network Interfaces{_NC}")
     try:
         from pathlib import Path
+
         net_dir = Path("/sys/class/net")
         for iface in sorted(net_dir.iterdir()):
             name = iface.name
@@ -267,7 +272,9 @@ def _build_mini_status() -> str:
             try:
                 r = subprocess.run(
                     ["ip", "-4", "-o", "addr", "show", name],
-                    capture_output=True, text=True, timeout=2,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
                 )
                 m = re.search(r"inet\s+(\S+)", r.stdout)
                 ip_str = m.group(1) if m else "no IP"
@@ -289,10 +296,7 @@ def _build_mini_status() -> str:
             except Exception:
                 pass
 
-            lines.append(
-                f"  {icon} {name:<14} {_DIM}{badge:>4}{_NC}  "
-                f"{ip_str:<20} {speed_str}"
-            )
+            lines.append(f"  {icon} {name:<14} {_DIM}{badge:>4}{_NC}  {ip_str:<20} {speed_str}")
     except Exception:
         _log.debug("mini-status: network scan failed", exc_info=True)
 
@@ -358,7 +362,10 @@ def _share_usage(path: str) -> tuple[str, str, int] | None:
     """Return (used, total, percent_int) for a mount path, or None."""
     try:
         r = subprocess.run(
-            ["df", "-h", path], capture_output=True, text=True, timeout=3,
+            ["df", "-h", path],
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
         if r.returncode == 0:
             parts = r.stdout.strip().splitlines()[-1].split()
@@ -375,6 +382,7 @@ def _highperf_iface_names() -> list[str]:
     names: list[str] = []
     try:
         from pathlib import Path
+
         for iface in sorted(Path("/sys/class/net").iterdir()):
             try:
                 driver = (iface / "device" / "driver").resolve().name
@@ -399,7 +407,9 @@ def _routable_ips() -> list[str]:
             try:
                 r = subprocess.run(
                     ["ip", "-4", "-o", "addr", "show", iface],
-                    capture_output=True, text=True, timeout=2,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
                 )
                 ips.extend(re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)", r.stdout))
             except Exception:
@@ -411,7 +421,9 @@ def _routable_ips() -> list[str]:
     try:
         r = subprocess.run(
             ["ip", "-4", "-o", "addr", "show", "scope", "global"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True,
+            text=True,
+            timeout=2,
         )
         return re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)", r.stdout)
     except Exception:
@@ -422,7 +434,10 @@ def _first_export_path() -> str:
     """Return the first NFS export path, or empty string."""
     try:
         r = subprocess.run(
-            ["exportfs", "-s"], capture_output=True, text=True, timeout=3,
+            ["exportfs", "-s"],
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
         for line in r.stdout.splitlines():
             parts = line.split()

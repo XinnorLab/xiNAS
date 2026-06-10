@@ -1,4 +1,5 @@
 """InputDialog — modal text/password input dialog."""
+
 from __future__ import annotations
 
 from textual.app import ComposeResult
@@ -34,6 +35,7 @@ class InputDialog(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         from textual.containers import Horizontal, Vertical
+
         with Vertical(id="dialog-container"):
             yield Label(self._title, id="dialog-title")
             yield Label(self._prompt, id="dialog-body")

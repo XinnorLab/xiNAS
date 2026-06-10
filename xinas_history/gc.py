@@ -8,6 +8,7 @@ Retention rules (configurable via /etc/xinas-mcp/config.json):
 5. Purge rollback-eligible snapshots older than max_age_days (if > 0).
 6. On startup, scan for stale ephemeral snapshots.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,6 +25,7 @@ CONFIG_PATH = Path("/etc/xinas-mcp/config.json")
 @dataclass(frozen=True)
 class RetentionPolicy:
     """Configurable retention policy for GC."""
+
     max_snapshots: int = 40
     max_age_days: int = 0  # 0 = disabled
 
@@ -75,10 +77,7 @@ class GarbageCollector:
         purged: list[str] = []
 
         # Separate rollback-eligible snapshots from others.
-        rollback_eligible = [
-            m for m in snapshots
-            if m.type == SnapshotType.ROLLBACK_ELIGIBLE.value
-        ]
+        rollback_eligible = [m for m in snapshots if m.type == SnapshotType.ROLLBACK_ELIGIBLE.value]
 
         # Determine which ones can be purged.
         purgeable = self._get_purgeable_snapshots(
@@ -106,9 +105,7 @@ class GarbageCollector:
 
         return purged
 
-    def cleanup_stale_ephemeral(
-        self, active_transaction_ids: set[str] | None = None
-    ) -> list[str]:
+    def cleanup_stale_ephemeral(self, active_transaction_ids: set[str] | None = None) -> list[str]:
         """Find and clean up orphaned ephemeral snapshots.
 
         Called on startup.  Returns list of cleaned-up snapshot IDs.
@@ -177,8 +174,7 @@ class GarbageCollector:
         The input *snapshots* should already be sorted by timestamp ascending.
         """
         return [
-            m for m in snapshots
-            if not self._is_protected(m, current_effective_id, in_progress_ids)
+            m for m in snapshots if not self._is_protected(m, current_effective_id, in_progress_ids)
         ]
 
     @staticmethod

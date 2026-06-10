@@ -13,6 +13,7 @@ gRPC stubs are generated at deploy time into api/proto/ by the xinas_menu
 Ansible role. Until stubs exist, every call returns (False, None, "stubs not
 installed").
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -28,9 +29,9 @@ __all__ = ["XiRAIDClient"]
 _GRPC_ADDRESS = "localhost:6066"
 # Cert paths in priority order — must match xiNAS-MCP/src/grpc/client.ts
 _TLS_FALLBACK_PATHS = [
-    "/etc/xraid/crt/ca-cert.pem",   # primary (matches MCP TS client)
-    "/etc/xraid/crt/ca-cert.crt",   # alternate extension
-    "/etc/xiraid/server.crt",        # legacy fallback
+    "/etc/xraid/crt/ca-cert.pem",  # primary (matches MCP TS client)
+    "/etc/xraid/crt/ca-cert.crt",  # alternate extension
+    "/etc/xiraid/server.crt",  # legacy fallback
     "/etc/xinas-mcp/server.crt",
 ]
 
@@ -51,18 +52,16 @@ def _load_channel_credentials():
         crt_path = cfg.get("tls_cert") or cfg.get("cert_path")
         if crt_path:
             import grpc
-            return grpc.ssl_channel_credentials(
-                root_certificates=Path(crt_path).read_bytes()
-            )
+
+            return grpc.ssl_channel_credentials(root_certificates=Path(crt_path).read_bytes())
     except Exception:
         pass
 
     for path in _TLS_FALLBACK_PATHS:
         try:
             import grpc
-            return grpc.ssl_channel_credentials(
-                root_certificates=Path(path).read_bytes()
-            )
+
+            return grpc.ssl_channel_credentials(root_certificates=Path(path).read_bytes())
         except Exception:
             continue
 
@@ -94,6 +93,7 @@ def _import_stubs():
         from xinas_menu.api.proto import message_raid_pb2 as msg_raid
         from xinas_menu.api.proto import message_settings_pb2 as msg_settings
         from xinas_menu.api.proto import service_xraid_pb2_grpc as pb2_grpc
+
         _STUBS_ERROR = ""
         return pb2_grpc, grpc, msg_raid, msg_drive, msg_pool, msg_license, msg_settings, msg_mail
     except Exception as exc:
@@ -124,7 +124,9 @@ def _get_os_drives() -> set[str]:
     try:
         r = subprocess.run(
             ["lsblk", "-J", "-o", "NAME,MOUNTPOINT,TYPE"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         data = json.loads(r.stdout)
         _OS_MOUNTS = ("/", "/boot", "/boot/efi", "[SWAP]")
@@ -150,7 +152,9 @@ def _collect_disk_info_sync() -> list:
     try:
         r = subprocess.run(
             ["lsblk", "-J", "-o", "NAME,SIZE,MODEL,SERIAL,TYPE,TRAN"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         data = json.loads(r.stdout)
         disks = []
@@ -184,17 +188,19 @@ def _collect_disk_info_sync() -> list:
             except Exception:
                 pass
 
-            disks.append({
-                "name": name,
-                "size": d.get("size", ""),
-                "size_bytes": size_raw,
-                "size_raw": size_raw,
-                "model": (d.get("model") or "").strip(),
-                "serial": (d.get("serial") or "").strip(),
-                "transport": d.get("tran") or "",
-                "numa_node": numa_node if numa_node >= 0 else 0,
-                "system": name in os_drives,
-            })
+            disks.append(
+                {
+                    "name": name,
+                    "size": d.get("size", ""),
+                    "size_bytes": size_raw,
+                    "size_raw": size_raw,
+                    "model": (d.get("model") or "").strip(),
+                    "serial": (d.get("serial") or "").strip(),
+                    "transport": d.get("tran") or "",
+                    "numa_node": numa_node if numa_node >= 0 else 0,
+                    "system": name in os_drives,
+                }
+            )
         return disks
     except Exception:
         # Fallback: scan /sys/class/block for nvme controllers
@@ -211,11 +217,19 @@ def _collect_disk_info_sync() -> list:
                                 numa = max(0, int(f.read().strip()))
                     except Exception:
                         pass
-                    disks.append({
-                        "name": name, "size": "", "size_bytes": 0, "size_raw": 0,
-                        "model": "", "serial": "", "transport": "nvme",
-                        "numa_node": numa, "system": name in os_drives,
-                    })
+                    disks.append(
+                        {
+                            "name": name,
+                            "size": "",
+                            "size_bytes": 0,
+                            "size_raw": 0,
+                            "model": "",
+                            "serial": "",
+                            "transport": "nvme",
+                            "numa_node": numa,
+                            "system": name in os_drives,
+                        }
+                    )
         except Exception:
             pass
         return disks
@@ -280,8 +294,9 @@ class XiRAIDClient:
 
     # ── RAID ────────────────────────────────────────────────────────────────
 
-    async def raid_show(self, units: str = "g", name: str = "",
-                        extended: bool = False) -> tuple[bool, Any, str]:
+    async def raid_show(
+        self, units: str = "g", name: str = "", extended: bool = False
+    ) -> tuple[bool, Any, str]:
         """Show RAID arrays. Returns parsed JSON list of array dicts."""
         if not self._ensure_channel():
             return _no_stubs_error()
@@ -292,18 +307,20 @@ class XiRAIDClient:
             kwargs["extended"] = extended
         return await self._call("raid_show", self._msg_raid.RaidShow(**kwargs))
 
-    async def raid_create(self, name: str, level: str, drives: list,
-                          **kwargs) -> tuple[bool, Any, str]:
+    async def raid_create(
+        self, name: str, level: str, drives: list, **kwargs
+    ) -> tuple[bool, Any, str]:
         if not self._ensure_channel():
             return _no_stubs_error()
-        return await self._call("raid_create", self._msg_raid.RaidCreate(
-            name=name, level=level, drives=drives, **kwargs))
+        return await self._call(
+            "raid_create",
+            self._msg_raid.RaidCreate(name=name, level=level, drives=drives, **kwargs),
+        )
 
     async def raid_destroy(self, name: str, force: bool = False) -> tuple[bool, Any, str]:
         if not self._ensure_channel():
             return _no_stubs_error()
-        return await self._call("raid_destroy", self._msg_raid.RaidDestroy(
-            name=name, force=force))
+        return await self._call("raid_destroy", self._msg_raid.RaidDestroy(name=name, force=force))
 
     async def raid_unload(self, name: str) -> tuple[bool, Any, str]:
         if not self._ensure_channel():
@@ -352,12 +369,10 @@ class XiRAIDClient:
                 if isinstance(raids, dict):
                     raid_items = list(raids.items())
                 elif isinstance(raids, list):
-                    raid_items = [
-                        (r.get("name", ""), r) for r in raids if isinstance(r, dict)
-                    ]
+                    raid_items = [(r.get("name", ""), r) for r in raids if isinstance(r, dict)]
                 for raid_name, raid in raid_items:
                     # devices is list of [idx, "/dev/nvmeXnY", ["state"]]
-                    for dev in (raid.get("devices") or []):
+                    for dev in raid.get("devices") or []:
                         if isinstance(dev, list) and len(dev) >= 3:
                             dev_path = dev[1] if len(dev) > 1 else ""
                             dev_states = dev[2] if len(dev) > 2 else []
@@ -375,8 +390,9 @@ class XiRAIDClient:
         except Exception as exc:
             return False, None, str(exc)
 
-    async def drive_faulty_count_show(self, drives: list | None = None,
-                                      name: str = "") -> tuple[bool, Any, str]:
+    async def drive_faulty_count_show(
+        self, drives: list | None = None, name: str = ""
+    ) -> tuple[bool, Any, str]:
         if not self._ensure_channel():
             return _no_stubs_error()
         kwargs: dict = {}
@@ -384,8 +400,9 @@ class XiRAIDClient:
             kwargs["drives"] = drives
         if name:
             kwargs["name"] = name
-        return await self._call("drive_faulty_count_show",
-                                self._msg_drive.DriveFaultyCountShow(**kwargs))
+        return await self._call(
+            "drive_faulty_count_show", self._msg_drive.DriveFaultyCountShow(**kwargs)
+        )
 
     async def drive_locate(self, drives: list) -> tuple[bool, Any, str]:
         if not self._ensure_channel():
@@ -411,43 +428,37 @@ class XiRAIDClient:
         """Create a spare pool with the given drives."""
         if not self._ensure_channel():
             return _no_stubs_error()
-        return await self._call("pool_create",
-                                self._msg_pool.PoolCreate(name=name, drives=drives))
+        return await self._call("pool_create", self._msg_pool.PoolCreate(name=name, drives=drives))
 
     async def pool_delete(self, name: str) -> tuple[bool, Any, str]:
         """Delete a spare pool."""
         if not self._ensure_channel():
             return _no_stubs_error()
-        return await self._call("pool_delete",
-                                self._msg_pool.PoolDelete(name=name))
+        return await self._call("pool_delete", self._msg_pool.PoolDelete(name=name))
 
     async def pool_add(self, name: str, drives: list[str]) -> tuple[bool, Any, str]:
         """Add drives to an existing spare pool."""
         if not self._ensure_channel():
             return _no_stubs_error()
-        return await self._call("pool_add",
-                                self._msg_pool.PoolAdd(name=name, drives=drives))
+        return await self._call("pool_add", self._msg_pool.PoolAdd(name=name, drives=drives))
 
     async def pool_remove(self, name: str, drives: list[str]) -> tuple[bool, Any, str]:
         """Remove drives from a spare pool."""
         if not self._ensure_channel():
             return _no_stubs_error()
-        return await self._call("pool_remove",
-                                self._msg_pool.PoolRemove(name=name, drives=drives))
+        return await self._call("pool_remove", self._msg_pool.PoolRemove(name=name, drives=drives))
 
     async def pool_activate(self, name: str) -> tuple[bool, Any, str]:
         """Activate a spare pool (load into memory)."""
         if not self._ensure_channel():
             return _no_stubs_error()
-        return await self._call("pool_activate",
-                                self._msg_pool.PoolActivate(name=name))
+        return await self._call("pool_activate", self._msg_pool.PoolActivate(name=name))
 
     async def pool_deactivate(self, name: str) -> tuple[bool, Any, str]:
         """Deactivate a spare pool (unload from memory)."""
         if not self._ensure_channel():
             return _no_stubs_error()
-        return await self._call("pool_deactivate",
-                                self._msg_pool.PoolDeactivate(name=name))
+        return await self._call("pool_deactivate", self._msg_pool.PoolDeactivate(name=name))
 
     # ── License ────────────────────────────────────────────────────────────
 
@@ -491,22 +502,19 @@ class XiRAIDClient:
         """Add notification recipient with level (info/warning/error)."""
         if not self._ensure_channel():
             return _no_stubs_error()
-        return await self._call("mail_add",
-                                self._msg_mail.MailAdd(address=address, level=level))
+        return await self._call("mail_add", self._msg_mail.MailAdd(address=address, level=level))
 
     async def mail_remove(self, address: str) -> tuple[bool, Any, str]:
         """Remove notification recipient."""
         if not self._ensure_channel():
             return _no_stubs_error()
-        return await self._call("mail_remove",
-                                self._msg_mail.MailRemove(address=address))
+        return await self._call("mail_remove", self._msg_mail.MailRemove(address=address))
 
     async def settings_mail_show(self) -> tuple[bool, Any, str]:
         """Show mail polling settings."""
         if not self._ensure_channel():
             return _no_stubs_error()
-        return await self._call("settings_mail_show",
-                                self._msg_settings.SettingsMailShow())
+        return await self._call("settings_mail_show", self._msg_settings.SettingsMailShow())
 
     async def settings_mail_modify(
         self,
@@ -521,8 +529,9 @@ class XiRAIDClient:
             kwargs["polling_interval"] = polling_interval
         if progress_polling_interval is not None:
             kwargs["progress_polling_interval"] = progress_polling_interval
-        return await self._call("settings_mail_modify",
-                                self._msg_settings.SettingsMailModify(**kwargs))
+        return await self._call(
+            "settings_mail_modify", self._msg_settings.SettingsMailModify(**kwargs)
+        )
 
     async def close(self) -> None:
         if self._channel is not None:

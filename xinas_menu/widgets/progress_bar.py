@@ -1,4 +1,5 @@
 """XiNASProgressBar — RAID init / job progress display."""
+
 from __future__ import annotations
 
 from textual.app import ComposeResult
