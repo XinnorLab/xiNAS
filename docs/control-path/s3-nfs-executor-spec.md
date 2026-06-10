@@ -163,16 +163,19 @@ each checksummed into `status.effective_files`. The legacy helper `fix_nfs_conf`
   dimension's policy is `restart`** (e.g. `on_thread_count_change:'restart'` and `threads`
   changed); `reload`/`none` → no restart. risk = `changing_access` iff a restart is implied,
   else `non_disruptive`. **Freshness pins the *desired* `NfsProfile/default` revision** (a
-  normal desired-revision-check) — there is **no observed `NfsProfile`** today (review P1-4).
+  normal desired-revision-check) — there was no observed `NfsProfile` at design time
+  (review P1-4); the N7.2 collector later added one, but the §3.4 desired-pin rule stands.
 - **`status.effective_files` producer — DECIDED (N7.2): option (a), an observed
   `NfsProfile` collector**, scoped to `effective_files` checksums (+ `observed_at`) of the
   four ADR-0005 files. Rationale: matches the architecture every other observed kind uses
   (collector → `/internal/v1/observed` → KV → read-time fold), and catches **manual** edits
   to the effective files — ADR-0005's stated drift-detection intent — which helper-returned
   checksums (option b) never could. `status.running` (live thread count / rdma listening /
-  active versions) stays **deferred** beyond S3; the executor's prior-spec rollback is the
-  sole undo until then. Only `nfs-profile.update` via **PATCH** is built in S3; the OpenAPI
-  `PUT /nfs-profiles/default` (full replace) stays stubbed.
+  active versions) was deferred beyond S3 and **landed in the S3.1 follow-up**: the same
+  observed `NfsProfile` collector also reads the nfsd runtime via `/proc/fs/nfsd/`
+  (`threads`, `versions`, `portlist` — absent when nfsd is down → `running` omitted) and the
+  GET fold surfaces it alongside `effective_files`. Only `nfs-profile.update` via **PATCH**
+  is built in S3; the OpenAPI `PUT /nfs-profiles/default` (full replace) stays stubbed.
 - **Apply:** patch desired NfsProfile (prior recorded); **`spec`** =
   `{ profile: <the merged full spec>, prior_profile: <the pre-patch spec> }` — the restart
   flag is **derived** (never stored) by the shared `deriveProfileServiceAction` in both
@@ -435,13 +438,14 @@ not yet in scope, the executor's prior-state rollback is the sole undo (noted pe
 
 ## 11. Open items / risks
 
-- **N7 `status.effective_files` producer** — collector vs helper-returned checksums (§3.4);
-  decide in N7. Until then NfsProfile `status.effective_files`/`status.running` stay empty.
+- **N7 `status.effective_files` producer** — RESOLVED: decided + built in N7.2 (collector);
+  `status.running` RESOLVED in the S3.1 follow-up (§3.4).
 - **N0b ExportRule id encoding blast radius** — confirm no other consumer relies on the raw
   absolute-path `ExportRule` id before switching to `enc(path)` (grep collector + join + any
   test fixtures; the kind has no public REST endpoint, so the surface is small).
-- **config-history `/etc/nfs.conf` → ADR-0005 targets:** the current `CHECKSUM_TARGETS`
-  tracks the wrong NFS service file; reconcile to the ADR-0005 set (with/after N7).
+- **config-history `/etc/nfs.conf` → ADR-0005 targets:** RESOLVED in the S3.1 follow-up —
+  the four ADR-0005 effective files added to `CHECKSUM_TARGETS` (additively; `nfs_conf`
+  kept for backward-compat and residual drift signal on hosts that still carry the file).
 - **Synthetic `NfsIdmap/snapshot` lease:** confirm `LeaseManager.acquire` tolerates a
   `(resource_kind, resource_id)` with no backing desired row (it keys on strings — verify N3/N4).
 - **observedSegment casing:** observed singleton is `/xinas/v1/observed/nfs_idmap/snapshot`

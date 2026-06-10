@@ -468,7 +468,12 @@ class SnapshotEngine:
         from_ck = Checksums.from_dict(from_manifest.checksums)
         to_ck = Checksums.from_dict(to_manifest.checksums)
 
-        for field_name in ("etc_exports", "nfs_conf", "netplan"):
+        # Iterate every tracked checksum target so newly added files (idmapd,
+        # the ADR-0005 effective set) are diffed too — a hardcoded tuple here
+        # silently ignored checksums the collector had started recording.
+        from .collector import CHECKSUM_TARGETS
+
+        for field_name in CHECKSUM_TARGETS:
             from_val = getattr(from_ck, field_name, "")
             to_val = getattr(to_ck, field_name, "")
             if from_val != to_val:

@@ -98,9 +98,17 @@ auto_detected: bool      # Whether nvme_auto_namespace was used
 
 checksums:
   etc_exports: string    # sha256:<hex>
-  nfs_conf: string       # sha256:<hex>
+  nfs_conf: string       # sha256:<hex>  (kept for back-compat; ADR-0005 superseded
+                         #  it as the NFS profile target, but manual edits to the
+                         #  file remain drift-worthy)
   idmapd_conf: string    # sha256:<hex>  (/etc/idmapd.conf — NFSv4 id mapping; S3)
   netplan: string        # sha256:<hex>
+  # ADR-0005 effective NFS files (docs/control-path/adr/0005-nfs-profile.md);
+  # empty/omitted when the file is absent or the snapshot predates these fields
+  nfsd_conf: string                  # sha256:<hex>  (/etc/nfs/nfsd.conf)
+  nfs_kernel_server_defaults: string # sha256:<hex>  (/etc/default/nfs-kernel-server)
+  lockd_conf: string                 # sha256:<hex>  (/etc/modprobe.d/lockd.conf)
+  nfs_common_defaults: string        # sha256:<hex>  (/etc/default/nfs-common)
 
 validation:
   passed: bool
@@ -446,6 +454,10 @@ Drift occurs when a managed artifact on disk no longer matches the last applied 
 | `/etc/exports` | sha256 checksum + semantic parse | Detect, warn, confirm |
 | `/etc/nfs.conf` | sha256 checksum | Detect, warn, confirm |
 | `/etc/idmapd.conf` | sha256 checksum | Detect, warn, confirm |
+| `/etc/nfs/nfsd.conf` (ADR-0005 effective file) | sha256 checksum | Detect, warn, confirm |
+| `/etc/default/nfs-kernel-server` (ADR-0005 effective file) | sha256 checksum | Detect, warn, confirm |
+| `/etc/modprobe.d/lockd.conf` (ADR-0005 effective file) | sha256 checksum | Detect, warn, confirm |
+| `/etc/default/nfs-common` (ADR-0005 effective file) | sha256 checksum | Detect, warn, confirm |
 | `/etc/netplan/99-xinas.yaml` | sha256 checksum | Detect, warn, confirm |
 | systemd mount units (xiNAS-managed) | Unit file checksum + enabled state | Detect, warn, confirm |
 | Role defaults YAML files | sha256 checksum | Adopt into snapshot |

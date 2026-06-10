@@ -28,9 +28,18 @@ CONFIG_SOURCES: dict[str, str] = {
 # System files to checksum
 CHECKSUM_TARGETS: dict[str, str] = {
     "etc_exports": "/etc/exports",
+    # ADR-0005 superseded /etc/nfs.conf as the NFS profile target (the
+    # effective files below are what the services actually read on
+    # Ubuntu 22.04/24.04), but the file still exists on hosts and manual
+    # edits remain drift-worthy; kept for back-compat.
     "nfs_conf": "/etc/nfs.conf",
     "idmapd_conf": "/etc/idmapd.conf",
     "netplan": "/etc/netplan/99-xinas.yaml",
+    # ADR-0005 effective NFS files (docs/control-path/adr/0005-nfs-profile.md)
+    "nfsd_conf": "/etc/nfs/nfsd.conf",
+    "nfs_kernel_server_defaults": "/etc/default/nfs-kernel-server",
+    "lockd_conf": "/etc/modprobe.d/lockd.conf",
+    "nfs_common_defaults": "/etc/default/nfs-common",
 }
 
 
@@ -171,6 +180,10 @@ class RuntimeCollector:
             nfs_conf=results.get("nfs_conf", ""),
             idmapd_conf=results.get("idmapd_conf", ""),
             netplan=results.get("netplan", ""),
+            nfsd_conf=results.get("nfsd_conf", ""),
+            nfs_kernel_server_defaults=results.get("nfs_kernel_server_defaults", ""),
+            lockd_conf=results.get("lockd_conf", ""),
+            nfs_common_defaults=results.get("nfs_common_defaults", ""),
         )
 
     async def _collect_mounts(self) -> dict:

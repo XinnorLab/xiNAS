@@ -80,6 +80,12 @@ class Checksums:
     nfs_conf: str = ""
     idmapd_conf: str = ""
     netplan: str = ""
+    # ADR-0005 effective NFS files (empty when the file is absent or
+    # the snapshot predates these fields)
+    nfsd_conf: str = ""
+    nfs_kernel_server_defaults: str = ""
+    lockd_conf: str = ""
+    nfs_common_defaults: str = ""
 
     def to_dict(self) -> dict:
         result: dict = {}
@@ -91,6 +97,14 @@ class Checksums:
             result["idmapd_conf"] = self.idmapd_conf
         if self.netplan:
             result["netplan"] = self.netplan
+        if self.nfsd_conf:
+            result["nfsd_conf"] = self.nfsd_conf
+        if self.nfs_kernel_server_defaults:
+            result["nfs_kernel_server_defaults"] = self.nfs_kernel_server_defaults
+        if self.lockd_conf:
+            result["lockd_conf"] = self.lockd_conf
+        if self.nfs_common_defaults:
+            result["nfs_common_defaults"] = self.nfs_common_defaults
         return result
 
     @classmethod
@@ -102,6 +116,10 @@ class Checksums:
             nfs_conf=data.get("nfs_conf", ""),
             idmapd_conf=data.get("idmapd_conf", ""),
             netplan=data.get("netplan", ""),
+            nfsd_conf=data.get("nfsd_conf", ""),
+            nfs_kernel_server_defaults=data.get("nfs_kernel_server_defaults", ""),
+            lockd_conf=data.get("lockd_conf", ""),
+            nfs_common_defaults=data.get("nfs_common_defaults", ""),
         )
 
 
