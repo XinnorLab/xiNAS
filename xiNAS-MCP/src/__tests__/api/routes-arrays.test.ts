@@ -167,16 +167,105 @@ describe('POST /api/v1/arrays', () => {
     });
   });
 
-  it('DELETE /arrays/:id keeps the unsupported-stub envelope (until S4 T9)', async () => {
-    const res = await request(setup.app)
-      .delete('/api/v1/arrays/data')
-      .set('Authorization', ADMIN_TOKEN)
-      .send({ mode: 'plan' });
-    // handlers/unsupported.ts semantics (422 online / 503 offline / 500 while
-    // the tracker is still 'unknown' in this harness) — the point is that the
-    // deferred verb did NOT fall through to the real arrays route.
-    expect(res.status).toBeGreaterThanOrEqual(422);
-    expect(String(res.body.errors[0].details?.code)).toMatch(/^EXECUTOR_/);
+  // ---- S4 T9: DELETE /arrays/:id (xiraid.array.delete) ----
+
+  describe('DELETE /arrays/:id', () => {
+    function seedTarget(): void {
+      setup.state.kv.put('/xinas/v1/observed/XiraidArray/doomed', {
+        kind: 'XiraidArray',
+        id: 'doomed',
+        spec: { name: 'doomed', level: 'raid5', member_disk_ids: ['nvme1n1', 'nvme2n1', 'nvme3n1'] },
+        status: {
+          state: 'optimal',
+          volume_path: '/dev/xi_doomed',
+          observed_at: '2026-06-10T12:00:00Z',
+        },
+      });
+    }
+
+    function revisionOf(): number {
+      const row = setup.state.kv.get('/xinas/v1/observed/XiraidArray/doomed');
+      return (row as { revision: number }).revision;
+    }
+
+    async function delPlan() {
+      return request(setup.app)
+        .delete('/api/v1/arrays/doomed')
+        .set('Authorization', ADMIN_TOKEN)
+        .send({ mode: 'plan' });
+    }
+
+    async function delApply(body: Record<string, unknown>) {
+      return request(setup.app)
+        .delete('/api/v1/arrays/doomed')
+        .set('Authorization', ADMIN_TOKEN)
+        .send({ mode: 'apply', idempotency_key: 'idem-del', ...body });
+    }
+
+    it('plan lists the advisory dangerous blocker + blast radius', async () => {
+      seedTarget();
+      const res = await delPlan();
+      expect(res.status).toBe(200);
+      const p = res.body.result;
+      expect(p.risk_level).toBe('destructive');
+      expect(p.rollback_model).toBe('unsupported');
+      expect(p.blockers.map((b: { code: string }) => b.code)).toEqual([
+        'dangerous_flag_required',
+      ]);
+      expect(p.diff.destroys.volume_path).toBe('/dev/xi_doomed');
+    });
+
+    it('apply without dangerous → 412 dangerous_flag_required (the engine gate)', async () => {
+      seedTarget();
+      const planned = await delPlan();
+      const res = await delApply({
+        plan_id: planned.body.result.plan_id,
+        expected_revision: revisionOf(),
+      });
+      expect(res.status).toBe(412);
+      expect(res.body.errors[0].details?.reason).toBe('dangerous_flag_required');
+    });
+
+    it('mounted dependent filesystem → 412 with the dependency blocker (dangerous filtered)', async () => {
+      seedTarget();
+      setup.state.kv.put('/xinas/v1/observed/Filesystem/fsd', {
+        kind: 'Filesystem',
+        id: 'fsd',
+        status: {
+          backing_device: '/dev/xi_doomed',
+          mountpoint: '/mnt/doomed',
+          currently_mounted: true,
+          observed_at: '2026-06-10T12:00:00Z',
+        },
+      });
+      const planned = await delPlan();
+      const res = await delApply({
+        plan_id: planned.body.result.plan_id,
+        expected_revision: revisionOf(),
+        dangerous: true,
+      });
+      expect(res.status).toBe(412);
+      const codes = (res.body.errors[0].details?.blockers as Array<{ code: string }>).map(
+        (b) => b.code,
+      );
+      expect(codes).toContain('dependent_filesystem_mounted');
+      expect(codes).not.toContain('dangerous_flag_required');
+    });
+
+    it('clean array + dangerous:true + fresh revision → 202 running delete task', async () => {
+      seedTarget();
+      setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-del' });
+      const planned = await delPlan();
+      const res = await delApply({
+        plan_id: planned.body.result.plan_id,
+        expected_revision: revisionOf(),
+        dangerous: true,
+      });
+      expect(res.status).toBe(202);
+      expect(res.body.result.kind).toBe('xiraid.array.delete');
+      expect(res.body.result.state).toBe('running');
+      expect(setup.mockAgent.lastTaskBeginParams()?.spec).toEqual({ id: 'doomed' });
+    });
   });
 
   // ---- S4 T5: PATCH /arrays/:id (xiraid.array.modify) ----

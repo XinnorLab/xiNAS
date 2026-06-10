@@ -312,3 +312,157 @@ export const xiraidArrayImportProvider: PlanProvider = {
     };
   },
 };
+
+interface ObservedFilesystemRow {
+  id?: string;
+  // LIVE collector shape: status-only — there is NO spec on observed
+  // Filesystem rows (collectors/filesystem.ts _fsToUpsert; S4 review P1).
+  status?: { backing_device?: string; mountpoint?: string; currently_mounted?: boolean };
+}
+
+interface DesiredShareRow {
+  id?: string;
+  spec?: { path?: string };
+}
+
+interface ObservedSessionRow {
+  id?: string;
+  spec?: { client_addr?: string; export_path?: string };
+}
+
+/** True when `path` is at or under `root` (path-segment aware). */
+function isUnder(path: string, root: string): boolean {
+  if (path === root) return true;
+  const prefix = root.endsWith('/') ? root : `${root}/`;
+  return path.startsWith(prefix);
+}
+
+/**
+ * xiraid.array.delete plan provider (S4 T9, ADR-0006 §Delete).
+ *
+ * Dependency walk + blast radius: observed Filesystems whose
+ * status.backing_device is the array volume → desired Shares under their
+ * mountpoints → observed NfsSessions under those share paths. Mounted
+ * filesystems / active sessions are blockers; the FULL dependent set is
+ * always in the diff. The advisory `dangerous_flag_required` blocker is
+ * always present on this destructive plan — the engine enforces the flag
+ * at apply (S4 §3) and the route's re-check filters this one code out.
+ */
+export const xiraidArrayDeleteProvider: PlanProvider = {
+  operation_kind: 'xiraid.array.delete',
+
+  async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
+    const o = (typeof rawSpec === 'object' && rawSpec !== null ? rawSpec : {}) as Record<
+      string,
+      unknown
+    >;
+    if (typeof o.id !== 'string' || o.id.length === 0) {
+      throw new ApiException(
+        'INVALID_ARGUMENT',
+        'delete spec must carry the target array id',
+        undefined,
+        'DELETE /arrays/{id} injects the id.',
+      );
+    }
+    const id = o.id;
+
+    const observed = ctx.kv.get<{
+      spec?: { member_disk_ids?: string[] };
+      status?: { volume_path?: string };
+    }>(`/xinas/v1/observed/XiraidArray/${id}`);
+    if (!observed) {
+      throw new ApiException(
+        'NOT_FOUND',
+        `array ${id} not found in observed state`,
+        undefined,
+        'List arrays via GET /api/v1/arrays; delete targets an existing array.',
+      );
+    }
+    const volumePath = observed.value.status?.volume_path ?? `/dev/xi_${id}`;
+
+    const blockers: Array<{ code: string; message: string }> = [
+      {
+        code: 'dangerous_flag_required',
+        message: 'destroying the array is irreversible; apply must carry dangerous: true',
+      },
+    ];
+
+    // --- dependency walk ---
+    const fsRows = ctx.kv.list<ObservedFilesystemRow>({
+      prefix: '/xinas/v1/observed/Filesystem/',
+    });
+    const dependentFs: Array<{ id: string; mountpoint: string; mounted: boolean }> = [];
+    for (const row of fsRows) {
+      const s = row.value.status;
+      if (typeof row.value.id !== 'string' || s?.backing_device !== volumePath) continue;
+      const fs = {
+        id: row.value.id,
+        mountpoint: s.mountpoint ?? '',
+        mounted: s.currently_mounted === true,
+      };
+      dependentFs.push(fs);
+      if (fs.mounted) {
+        blockers.push({
+          code: 'dependent_filesystem_mounted',
+          message: `filesystem '${fs.id}' on ${volumePath} is mounted at ${fs.mountpoint} — unmount it first`,
+        });
+      }
+    }
+
+    const shareRows = ctx.kv.list<DesiredShareRow>({ prefix: '/xinas/v1/desired/Share/' });
+    const dependentShares: Array<{ id: string; path: string }> = [];
+    for (const row of shareRows) {
+      const path = row.value.spec?.path;
+      if (typeof row.value.id !== 'string' || typeof path !== 'string') continue;
+      if (dependentFs.some((fs) => fs.mountpoint !== '' && isUnder(path, fs.mountpoint))) {
+        dependentShares.push({ id: row.value.id, path });
+      }
+    }
+
+    const sessionRows = ctx.kv.list<ObservedSessionRow>({
+      prefix: '/xinas/v1/observed/NfsSession/',
+    });
+    const activeSessions: Array<{ id: string; export_path: string }> = [];
+    for (const row of sessionRows) {
+      const exportPath = row.value.spec?.export_path;
+      if (typeof row.value.id !== 'string' || typeof exportPath !== 'string') continue;
+      const share = dependentShares.find((s) => isUnder(exportPath, s.path));
+      if (share) {
+        activeSessions.push({ id: row.value.id, export_path: exportPath });
+      }
+    }
+    if (activeSessions.length > 0) {
+      const shareIds = [...new Set(dependentShares.map((s) => s.id))].join(', ');
+      blockers.push({
+        code: 'dependent_share_active',
+        message: `${activeSessions.length} active NFS session(s) on dependent share(s) ${shareIds} — disconnect clients first`,
+      });
+    }
+
+    return {
+      // Dependents are leased so a concurrent fs/share op cannot race the
+      // delete under us.
+      affected_resources: [
+        { kind: 'XiraidArray', id },
+        ...dependentFs.map((fs): ResourceRef => ({ kind: 'Filesystem', id: fs.id })),
+        ...dependentShares.map((s): ResourceRef => ({ kind: 'Share', id: s.id })),
+      ],
+      blockers,
+      warnings: [],
+      // Blast radius is ALWAYS reported, blocking or not (reqs §14).
+      diff: {
+        destroys: {
+          array: id,
+          volume_path: volumePath,
+          member_disk_ids: observed.value.spec?.member_disk_ids ?? [],
+        },
+        dependent_filesystems: dependentFs,
+        dependent_shares: dependentShares,
+        active_sessions: activeSessions,
+      },
+      risk_level: 'destructive',
+      rollback_model: 'unsupported',
+      enriched_spec: { id },
+    };
+  },
+};

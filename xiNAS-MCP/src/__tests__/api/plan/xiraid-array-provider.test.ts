@@ -4,6 +4,7 @@ import { ApiException } from '../../../api/errors.js';
 import { PlanEngine } from '../../../api/plan/engine.js';
 import {
   xiraidArrayCreateProvider,
+  xiraidArrayDeleteProvider,
   xiraidArrayImportProvider,
   xiraidArrayModifyProvider,
 } from '../../../api/plan/providers/xiraid-array.js';
@@ -25,6 +26,7 @@ function makeHarness() {
   engine.register(xiraidArrayCreateProvider);
   engine.register(xiraidArrayModifyProvider);
   engine.register(xiraidArrayImportProvider);
+  engine.register(xiraidArrayDeleteProvider);
   return { kv, store, engine };
 }
 
@@ -278,6 +280,93 @@ describe('xiraidArrayImportProvider', () => {
     });
     await expect(h.engine.plan(importArgs({ uuid: '' }))).rejects.toMatchObject({
       code: 'INVALID_ARGUMENT',
+    });
+  });
+});
+
+describe('xiraidArrayDeleteProvider', () => {
+  let h: ReturnType<typeof makeHarness>;
+  beforeEach(() => {
+    h = makeHarness();
+    seedArray(h.kv, 'data');
+  });
+
+  function deleteArgs(spec: Record<string, unknown>) {
+    return { ...planArgs(spec), operation_kind: 'xiraid.array.delete' };
+  }
+
+  function seedDeps(): void {
+    // LIVE collector shape: status-only, NO spec (S4 review P1).
+    h.kv.put('/xinas/v1/observed/Filesystem/fs1', {
+      kind: 'Filesystem',
+      id: 'fs1',
+      status: {
+        backing_device: '/dev/xi_data',
+        mountpoint: '/mnt/d',
+        currently_mounted: true,
+        observed_at: '2026-06-10T12:00:00Z',
+      },
+    });
+    h.kv.put('/xinas/v1/desired/Share/s1', {
+      kind: 'Share',
+      id: 's1',
+      spec: { path: '/mnt/d/share', clients: [], fsid: 1 },
+    });
+    h.kv.put('/xinas/v1/observed/NfsSession/10.0.0.1:s1', {
+      kind: 'NfsSession',
+      id: '10.0.0.1:s1',
+      spec: { client_addr: '10.0.0.1', export_path: '/mnt/d/share' },
+      status: { observed_at: '2026-06-10T12:00:00Z' },
+    });
+  }
+
+  it('clean array → blockers = exactly [dangerous_flag_required]; destructive/unsupported', async () => {
+    const { task, planResult } = await h.engine.plan(deleteArgs({ id: 'data' }));
+    expect(planResult.blockers.map((b) => b.code)).toEqual(['dangerous_flag_required']);
+    expect(planResult.risk_level).toBe('destructive');
+    expect(planResult.rollback_model).toBe('unsupported');
+    expect(task.affected_resources).toEqual([{ kind: 'XiraidArray', id: 'data' }]);
+    const diff = planResult.diff as Record<string, unknown>;
+    expect((diff.destroys as Record<string, unknown>).volume_path).toBe('/dev/xi_data');
+  });
+
+  it('dependents: mounted fs + active share session → blockers + leases + blast radius', async () => {
+    seedDeps();
+    const { task, planResult } = await h.engine.plan(deleteArgs({ id: 'data' }));
+    const codes = planResult.blockers.map((b) => b.code);
+    expect(codes).toContain('dangerous_flag_required');
+    expect(codes).toContain('dependent_filesystem_mounted');
+    expect(codes).toContain('dependent_share_active');
+    expect(task.affected_resources).toEqual([
+      { kind: 'XiraidArray', id: 'data' },
+      { kind: 'Filesystem', id: 'fs1' },
+      { kind: 'Share', id: 's1' },
+    ]);
+    const diff = planResult.diff as Record<string, unknown[]>;
+    expect(diff.dependent_filesystems).toHaveLength(1);
+    expect(diff.dependent_shares).toHaveLength(1);
+    expect(diff.active_sessions).toHaveLength(1);
+  });
+
+  it('unmounted dependent fs is blast radius but not a blocker', async () => {
+    h.kv.put('/xinas/v1/observed/Filesystem/fs2', {
+      kind: 'Filesystem',
+      id: 'fs2',
+      status: {
+        backing_device: '/dev/xi_data',
+        mountpoint: '/mnt/d2',
+        currently_mounted: false,
+        observed_at: '2026-06-10T12:00:00Z',
+      },
+    });
+    const { planResult } = await h.engine.plan(deleteArgs({ id: 'data' }));
+    expect(planResult.blockers.map((b) => b.code)).toEqual(['dangerous_flag_required']);
+    expect((planResult.diff as Record<string, unknown[]>).dependent_filesystems).toHaveLength(1);
+  });
+
+  it('unknown array → NOT_FOUND', async () => {
+    await expect(h.engine.plan(deleteArgs({ id: 'ghost' }))).rejects.toMatchObject({
+      code: 'NOT_FOUND',
     });
   });
 });

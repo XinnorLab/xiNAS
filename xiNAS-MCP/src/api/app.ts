@@ -114,12 +114,12 @@ export function createApp(ctx: ApiContext): Express {
     '/config-history/rollback',
   ];
   for (const route of mutatingRoutes) {
-    // POST /arrays is the real S3 create route mounted above.
+    // POST /arrays is the real S3 create/import route mounted above.
     if (route !== '/arrays') v1.post(route, executorUnavailable(ctx));
-    // PATCH /arrays/:id is the real S4 modify route mounted above.
+    // PATCH + DELETE /arrays/:id are the real S4 modify/delete routes.
     if (route !== '/arrays/:id') v1.patch(route, executorUnavailable(ctx));
     v1.put(route, executorUnavailable(ctx));
-    v1.delete(route, executorUnavailable(ctx));
+    if (route !== '/arrays/:id') v1.delete(route, executorUnavailable(ctx));
   }
 
   // Catch-all for /api/v1/* paths that didn't match any router. Without
