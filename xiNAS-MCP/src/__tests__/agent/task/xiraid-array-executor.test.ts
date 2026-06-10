@@ -3,6 +3,7 @@ import { TaskRunner } from '../../../agent/task/runner.js';
 import type { TaskProgressEvent } from '../../../agent/task/types.js';
 import {
   makeXiraidArrayCreateExecutor,
+  makeXiraidArrayDeleteExecutor,
   makeXiraidArrayImportExecutor,
   makeXiraidArrayModifyExecutor,
 } from '../../../agent/task/xiraid-array-executor.js';
@@ -17,6 +18,8 @@ function makeFake(
     downAfterCreate?: boolean;
     /** Reject any raidModify that carries tuning keys (targets apply_tuning). */
     failTuningModify?: boolean;
+    /** Reject raidDestroy BEFORE removing the array (delete-failure path). */
+    failDestroy?: boolean;
   } = {},
 ) {
   const arrays: Array<{
@@ -57,6 +60,7 @@ function makeFake(
       if (down) throw new Error('connect ECONNREFUSED 127.0.0.1:6066');
       destroyCalls.push(req.name ?? '');
       ops.push(`raidDestroy:${req.name}`);
+      if (opts.failDestroy) throw new Error('destroy rejected');
       const i = arrays.findIndex((a) => a.name === req.name);
       if (i >= 0) arrays.splice(i, 1);
     },
@@ -544,5 +548,96 @@ describe('xiraid.array.import executor', () => {
       expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
       expect(terminal(events)?.status).toBe('failed');
     });
+  });
+});
+
+// ---- S4 T10: xiraid.array.delete executor ----
+
+describe('xiraid.array.delete executor', () => {
+  async function runDelete(
+    fake: ReturnType<typeof makeFake>,
+    mounts: Array<{ source: string; mountpoint: string }>,
+    spec: Record<string, unknown> = { id: 'data' },
+  ): Promise<TaskProgressEvent[]> {
+    const events: TaskProgressEvent[] = [];
+    const executor = makeXiraidArrayDeleteExecutor({
+      client: new XiraidClient(fake.transport),
+      readMounts: async () => mounts,
+    });
+    await makeRunner().run(
+      { task_id: 't-del', operation_kind: 'xiraid.array.delete', spec },
+      executor,
+      async (e) => {
+        events.push(e);
+      },
+    );
+    return events;
+  }
+
+  function seedDoomed(fake: ReturnType<typeof makeFake>): void {
+    fake.arrays.push({ name: 'data', level: '5', devices: ['/dev/a'], state: ['online'] });
+  }
+
+  it('happy: destroy + spare-pool cleanup → success', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
+    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/s'], active: true });
+    const events = await runDelete(fake, []);
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.destroyCalls).toEqual(['data']);
+    expect(fake.arrays).toEqual([]);
+    expect(fake.pools).toEqual([]);
+  });
+
+  it('mount guard: volume mounted → preflight fails → clean failed (no destroy, no manual recovery)', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
+    const events = await runDelete(fake, [{ source: '/dev/xi_data', mountpoint: '/mnt/d' }]);
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(shape(events)).toContainEqual(['rollback_succeeded', 'rollback']);
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
+    expect(fake.destroyCalls).toEqual([]);
+    expect(fake.arrays).toHaveLength(1); // untouched
+  });
+
+  it('array vanished before begin → rollback throws → requires_manual_recovery', async () => {
+    const fake = makeFake(); // no array seeded
+    const events = await runDelete(fake, []);
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(shape(events)).toContainEqual(['rollback_failed', 'rollback']);
+    expect(terminal(events)).toMatchObject({
+      status: 'requires_manual_recovery',
+      error_code: 'FAILED_MANUAL_RECOVERY_REQUIRED',
+    });
+  });
+
+  it('destroy rejected with the array intact → clean failed via no-op rollback', async () => {
+    const fake = makeFake({ failDestroy: true });
+    seedDoomed(fake);
+    const events = await runDelete(fake, []);
+    expect(shape(events)).toContainEqual(['stage_failed', 'destroy']);
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
+    expect(fake.arrays).toHaveLength(1);
+  });
+
+  it('pool cleanup fails AFTER the destroy → rollback throws → manual recovery', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
+    // an active pool whose deactivate explodes: simulate by replacing poolDeactivate
+    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/s'], active: true });
+    fake.transport.poolDeactivate = async () => {
+      throw new Error('daemon hiccup');
+    };
+    const events = await runDelete(fake, []);
+    expect(shape(events)).toContainEqual(['stage_failed', 'destroy']);
+    expect(shape(events)).toContainEqual(['rollback_failed', 'rollback']);
+    expect(terminal(events)?.status).toBe('requires_manual_recovery');
+    expect(fake.arrays).toEqual([]); // the array IS gone — manual recovery is honest
   });
 });

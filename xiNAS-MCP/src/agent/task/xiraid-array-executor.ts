@@ -585,3 +585,119 @@ export function makeXiraidArrayImportExecutor(opts: { client: XiraidClient }): E
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// xiraid.array.delete executor (S4 T10, ADR-0006 §Delete / S4 spec §7)
+// ---------------------------------------------------------------------------
+
+export interface XiraidArrayDeleteExecutorOptions {
+  client: XiraidClient;
+  /**
+   * Host-level mount reader (the route-recheck→destroy TOCTOU guard): the
+   * real wiring reads /proc/self/mountinfo through lib/parse/mountinfo.
+   * FAIL-CLOSED: if mounts cannot be read, preflight throws and nothing is
+   * destroyed.
+   */
+  readMounts: () => Promise<Array<{ source: string; mountpoint: string }>>;
+}
+
+function narrowDeleteSpec(ctx: ExecutorContext): { id: string } {
+  const o = ctx.spec as Record<string, unknown> | null;
+  if (typeof o !== 'object' || o === null || typeof o.id !== 'string' || o.id.length === 0) {
+    throw new Error('xiraid.array.delete: spec is missing the target array id');
+  }
+  return { id: o.id };
+}
+
+export function makeXiraidArrayDeleteExecutor(opts: XiraidArrayDeleteExecutorOptions): Executor {
+  const client = opts.client;
+  const readMounts = opts.readMounts;
+
+  const preflight: ExecutorStage = {
+    name: 'preflight',
+    async run(ctx: ExecutorContext): Promise<void> {
+      checkCancelled(ctx, 'preflight');
+      const { id } = narrowDeleteSpec(ctx);
+
+      if (!readShow(await client.raidShow()).some((a) => a.name === id)) {
+        throw new Error(`preflight: array '${id}' does not exist on the daemon`);
+      }
+
+      // Host-level guard: a mount that appeared AFTER the api's re-check
+      // fails the delete here, before any destruction. Active NFS sessions
+      // require their filesystem to be mounted, so this subsumes the
+      // session race for data safety (S4 spec §7).
+      const volume = `/dev/xi_${id}`;
+      const mounts = await readMounts();
+      const busy = mounts.find((m) => m.source === volume);
+      if (busy) {
+        throw new Error(
+          `preflight: ${volume} is mounted at ${busy.mountpoint} — unmount it before deleting`,
+        );
+      }
+      ctx.emitOutput(`preflight ok: '${id}' exists and ${volume} is not mounted`);
+    },
+  };
+
+  const destroy: ExecutorStage = {
+    name: 'destroy',
+    async run(ctx: ExecutorContext): Promise<void> {
+      checkCancelled(ctx, 'destroy');
+      const { id } = narrowDeleteSpec(ctx);
+      ctx.emitOutput(`raid_destroy ${id} (force)`);
+      await client.raidDestroy({ name: id, force: true });
+
+      // Clean the executor-owned spare pool, if any.
+      const poolName = derivedPoolName(id);
+      const pool = readPoolEntry(await client.poolShow(), poolName);
+      if (pool) {
+        if (pool.active) await client.poolDeactivate({ name: poolName });
+        await client.poolDelete({ name: poolName });
+        ctx.emitOutput(`spare pool '${poolName}' removed`);
+      }
+      ctx.emitOutput(`'${id}' destroyed`);
+    },
+  };
+
+  const verify: ExecutorStage = {
+    name: 'verify',
+    async run(ctx: ExecutorContext): Promise<void> {
+      const { id } = narrowDeleteSpec(ctx);
+      if (readShow(await client.raidShow()).some((a) => a.name === id)) {
+        throw new Error(`verify: array '${id}' still present after destroy`);
+      }
+      ctx.emitOutput('verify ok: array gone');
+    },
+  };
+
+  return {
+    operation_kind: 'xiraid.array.delete',
+    stages: [preflight, destroy, verify],
+
+    /**
+     * Live-state decided (S4 spec §7, post-review semantics): the array
+     * still exists → nothing destructive happened (preflight/early-destroy
+     * failure) → no-op, terminal `failed` (clean, retryable). The array is
+     * gone or its state is unknowable → THROW → rollback_failed →
+     * requires_manual_recovery — "no rollback for a destructive op" applies
+     * to attempted destruction, not to a preflight that touched nothing.
+     */
+    async rollback(ctx: ExecutorContext): Promise<void> {
+      let id: string;
+      try {
+        id = narrowDeleteSpec(ctx).id;
+      } catch {
+        ctx.emitOutput('rollback: spec unparsable — nothing was destroyed');
+        return;
+      }
+      const exists = readShow(await client.raidShow()).some((a) => a.name === id);
+      if (exists) {
+        ctx.emitOutput(`rollback: array '${id}' is intact — nothing was destroyed`);
+        return;
+      }
+      throw new Error(
+        `destructive operation: rollback unsupported — array '${id}' is gone or partially destroyed`,
+      );
+    },
+  };
+}
