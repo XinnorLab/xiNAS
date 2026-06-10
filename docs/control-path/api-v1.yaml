@@ -2470,3 +2470,25 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [nfs]
+      operationId: setNfsIdmap
+      summary: Set the NFS idmapd domain (plan/apply).
+      description: |
+        Two-phase like every mutating operation. `mode=plan` carries the new
+        domain — `{ mode: plan, domain }` (or nested as `spec: { domain }`),
+        a DNS domain containing a `.` — and returns a `Plan`. NfsIdmap is
+        observed-only (no desired row), so the plan's
+        `state_revision_expected` is the observed `nfs_idmap/snapshot`
+        revision (0 on a fresh install); echo it back as `expected_revision`
+        on apply. `mode=apply` requires `plan_id`, `expected_revision`, and
+        `idempotency_key`.
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }

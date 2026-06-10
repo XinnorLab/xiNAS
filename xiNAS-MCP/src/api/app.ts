@@ -17,6 +17,7 @@ import { healthRouter } from './routes/health.js';
 import { inventoryRouter } from './routes/inventory.js';
 import { networkRouter } from './routes/network.js';
 import { nfsIdmapRouter } from './routes/nfs-idmap.js';
+import { nfsMutateRouter } from './routes/nfs-mutate.js';
 import { nfsRouter } from './routes/nfs.js';
 import { referenceRouter } from './routes/reference.js';
 import { storageRouter } from './routes/storage.js';
@@ -79,8 +80,17 @@ export function createApp(ctx: ApiContext): Express {
   // loop below; /reference is not in that list, so there is no shadowing.
   v1.use(referenceRouter(ctx));
 
-  // Mutating verbs all route to the executor-unavailable stub until
-  // xinas-agent ships. Per ADR-0002 §Agent heartbeat, plan and apply
+  // S3 N5 — the real NFS mutating routes (share.create/update/delete +
+  // nfs-idmap.set) over the N4 plan providers. Mounted BEFORE the
+  // executorUnavailable stub loop so the four real verbs (POST /shares,
+  // PATCH/DELETE /shares/:id, PATCH /nfs-idmap) take precedence over the
+  // '/shares' + '/shares/:id' stub registrations below; the verbs this
+  // router does not register (e.g. PUT /shares/:id) and every other
+  // resource still fall through to the stubs.
+  v1.use(nfsMutateRouter(ctx));
+
+  // Remaining mutating verbs route to the executor-unavailable stub until
+  // their executor ships. Per ADR-0002 §Agent heartbeat, plan and apply
   // both return INTERNAL/EXECUTOR_UNAVAILABLE. Each route gets its
   // own real handler in a later PR.
   const mutatingRoutes = [
