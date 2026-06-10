@@ -214,7 +214,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
   // --- NFS: real probe matches listSessions/listExports; sessions carry no
   //     observed_at (the collector stamps the delta's, but its local probe
   //     type requires status.observed_at). Stamp it here. ---
-  const nfsProbe = fdir !== null ? createFixtureNfsProbe() : createNfsProbe();
+  const nfsProbe = fdir !== null ? createFixtureNfsProbe(fdir) : createNfsProbe();
   registry.register(
     new NfsCollector({
       probe: {

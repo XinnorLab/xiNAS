@@ -76,3 +76,69 @@ describe('FilesystemProbe', () => {
     expect(fses).toHaveLength(0);
   });
 });
+
+// ---- S5 T6: enrichment (blkid + statfs + mountinfo cross-ref) ----
+
+describe('snapshot enrichment', () => {
+  const mountContent = readFileSync(join(fixtureDir, 'srv-share01.mount'), 'utf8');
+  const MOUNTINFO_LINE =
+    '36 25 0:32 / /srv/share01 rw,noatime shared:5 - xfs /dev/md/xinas-data rw,logdev=/dev/xi_log\n';
+
+  function enrichedProbe(over: Partial<Parameters<typeof createFilesystemProbe>[0]> = {}) {
+    return createFilesystemProbe({
+      systemdDir: '/etc/systemd/system',
+      readdir: fakeReaddir(mountContent) as any,
+      readFile: fakeReadFile(mountContent) as any,
+      execFile: fakeExecFile('enabled') as any,
+      enrich: {
+        blkid: async () => ({ fstype: 'xfs', label: 'share01', uuid: 'uuid-1' }),
+        statfs: async () => ({ size_bytes: 1000, free_bytes: 900 }),
+        readMountinfo: async () => MOUNTINFO_LINE,
+      },
+      ...over,
+    });
+  }
+
+  it('mounted via mountinfo + uuid/label via blkid + sizes via statfs', async () => {
+    const [fs] = await enrichedProbe().snapshot();
+    expect(fs?.status.mounted).toBe(true);
+    expect(fs?.status.effective_mount_options).toEqual(['rw', 'noatime']);
+    expect(fs?.status.uuid).toBe('uuid-1');
+    expect(fs?.status.label).toBe('share01');
+    expect(fs?.status.size_bytes).toBe(1000);
+    expect(fs?.status.free_bytes).toBe(900);
+  });
+
+  it('not in mountinfo → mounted false, no statfs call', async () => {
+    const [fs] = await enrichedProbe({
+      enrich: {
+        blkid: async () => null,
+        statfs: async () => {
+          throw new Error('must not be called');
+        },
+        readMountinfo: async () => '',
+      },
+    }).snapshot();
+    expect(fs?.status.mounted).toBe(false);
+    expect(fs?.status.uuid).toBeUndefined();
+    expect(fs?.status.size_bytes).toBeUndefined();
+  });
+
+  it('individual enrichment failures degrade the field, not the row', async () => {
+    const [fs] = await enrichedProbe({
+      enrich: {
+        blkid: async () => {
+          throw new Error('blkid exploded');
+        },
+        statfs: async () => {
+          throw new Error('statfs exploded');
+        },
+        readMountinfo: async () => MOUNTINFO_LINE,
+      },
+    }).snapshot();
+    expect(fs?.status.mounted).toBe(true); // mountinfo still worked
+    expect(fs?.status.uuid).toBeUndefined();
+    expect(fs?.status.size_bytes).toBeUndefined();
+    expect(fs?.status.mountpoint).toBe('/srv/share01'); // row intact
+  });
+});

@@ -95,9 +95,24 @@ interface FixtureFilesystemProbe {
   snapshot(): Promise<FixtureFilesystem[]>;
 }
 
+/** Entries for <dir>/nfs-sessions.json (parse/nfs ObservedNfsSession shape). */
+export interface FixtureNfsSession {
+  kind: 'NfsSession';
+  id: string;
+  spec: { client_addr: string; export_path: string; client_hostname?: string };
+  status: { proto_version: string; locked_files: number };
+}
+
+/** Entries for <dir>/nfs-exports.json (parse/nfs ObservedExportRule shape). */
+export interface FixtureExportRule {
+  export_path: string;
+  host_pattern: string;
+  options: string[];
+}
+
 interface FixtureNfsProbe {
-  listSessions(): Promise<never[]>;
-  listExports(): Promise<never[]>;
+  listSessions(): Promise<FixtureNfsSession[]>;
+  listExports(): Promise<FixtureExportRule[]>;
 }
 
 interface FixtureInventoryProbe {
@@ -210,11 +225,23 @@ export function createFixtureFilesystemProbe(dir?: string): FixtureFilesystemPro
   };
 }
 
-/** NFS: empty exports + sessions. */
-export function createFixtureNfsProbe(): FixtureNfsProbe {
+/**
+ * NFS: reads <dir>/nfs-sessions.json + <dir>/nfs-exports.json (the
+ * collectors' real shapes), defaulting to empty — S5 T6 so the e2e can
+ * PROVE the unmount blockers (`dependent_share_active` +
+ * `mountpoint_exported`) against seeded state; an always-empty fixture
+ * would let the milestone blockers pass untested.
+ */
+export function createFixtureNfsProbe(dir?: string): FixtureNfsProbe {
   return {
-    listSessions: () => Promise.resolve([]),
-    listExports: () => Promise.resolve([]),
+    listSessions: () =>
+      Promise.resolve(
+        dir !== undefined ? readFixture<FixtureNfsSession[]>(dir, 'nfs-sessions.json', []) : [],
+      ),
+    listExports: () =>
+      Promise.resolve(
+        dir !== undefined ? readFixture<FixtureExportRule[]>(dir, 'nfs-exports.json', []) : [],
+      ),
   };
 }
 
