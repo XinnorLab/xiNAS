@@ -483,3 +483,105 @@ export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): E
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// xiraid.array.import executor (S4 T8, ADR-0006 §Import as amended)
+// ---------------------------------------------------------------------------
+
+function narrowImportSpec(ctx: ExecutorContext): { uuid: string; new_name: string } {
+  const o = ctx.spec as Record<string, unknown> | null;
+  if (typeof o !== 'object' || o === null || typeof o.uuid !== 'string' || o.uuid.length === 0) {
+    throw new Error('xiraid.array.import: spec is missing the foreign array uuid');
+  }
+  const newName = typeof o.new_name === 'string' && o.new_name.length > 0 ? o.new_name : o.uuid;
+  return { uuid: o.uuid, new_name: newName };
+}
+
+/** Tolerant read of the raid_import_show candidate list. */
+function readImportCandidates(
+  payload: unknown,
+): Array<{ uuid: string; recoverable: boolean }> {
+  if (!Array.isArray(payload)) return [];
+  const out: Array<{ uuid: string; recoverable: boolean }> = [];
+  for (const entry of payload) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const o = entry as Record<string, unknown>;
+    if (typeof o.uuid !== 'string') continue;
+    // Tolerate either `recoverable` or an inverse `offline`-style flag being
+    // absent: missing recoverability info reads as recoverable.
+    out.push({ uuid: o.uuid, recoverable: o.recoverable !== false });
+  }
+  return out;
+}
+
+export function makeXiraidArrayImportExecutor(opts: { client: XiraidClient }): Executor {
+  const client = opts.client;
+
+  const preflight: ExecutorStage = {
+    name: 'preflight',
+    async run(ctx: ExecutorContext): Promise<void> {
+      checkCancelled(ctx, 'preflight');
+      const { uuid, new_name } = narrowImportSpec(ctx);
+
+      // The S4 §6 amendment: THIS is where the uuid gets validated (the api
+      // cannot reach the daemon at plan time).
+      const candidates = readImportCandidates(await client.raidImportShow());
+      const candidate = candidates.find((c) => c.uuid === uuid);
+      if (!candidate) {
+        throw new Error(`preflight: no importable array with uuid '${uuid}' on this node`);
+      }
+      if (!candidate.recoverable) {
+        throw new Error(`preflight: array uuid '${uuid}' is not recoverable`);
+      }
+      if (readShow(await client.raidShow()).some((a) => a.name === new_name)) {
+        throw new Error(`preflight: an array named '${new_name}' already exists on the daemon`);
+      }
+      ctx.emitOutput(`preflight ok: uuid '${uuid}' importable as '${new_name}'`);
+    },
+  };
+
+  const adopt: ExecutorStage = {
+    name: 'adopt',
+    async run(ctx: ExecutorContext): Promise<void> {
+      checkCancelled(ctx, 'adopt');
+      const { uuid, new_name } = narrowImportSpec(ctx);
+      await client.raidImportApply({ uuid, new_name });
+      ctx.emitOutput(`raid_import_apply: '${uuid}' adopted as '${new_name}'`);
+    },
+  };
+
+  const verify: ExecutorStage = {
+    name: 'verify',
+    async run(ctx: ExecutorContext): Promise<void> {
+      const { new_name } = narrowImportSpec(ctx);
+      if (!readShow(await client.raidShow()).some((a) => a.name === new_name)) {
+        throw new Error(`verify: adopted array '${new_name}' is not visible in raid_show`);
+      }
+      ctx.emitOutput(`verify ok: '${new_name}' adopted`);
+    },
+  };
+
+  return {
+    operation_kind: 'xiraid.array.import',
+    stages: [preflight, adopt, verify],
+
+    /** Un-adopt = CONFIG-ONLY removal (data untouched, ADR-0006); live-state
+     *  decided like the create rollback. An unparsable spec adopted nothing. */
+    async rollback(ctx: ExecutorContext): Promise<void> {
+      let name: string;
+      try {
+        name = narrowImportSpec(ctx).new_name;
+      } catch {
+        ctx.emitOutput('rollback: spec unparsable — nothing was adopted, nothing to undo');
+        return;
+      }
+      const exists = readShow(await client.raidShow()).some((a) => a.name === name);
+      if (!exists) {
+        ctx.emitOutput(`rollback: '${name}' was never adopted — nothing to undo`);
+        return;
+      }
+      ctx.emitOutput(`rollback: un-adopting '${name}' (config-only, data untouched)`);
+      await client.raidDestroy({ name, config_only: true });
+    },
+  };
+}

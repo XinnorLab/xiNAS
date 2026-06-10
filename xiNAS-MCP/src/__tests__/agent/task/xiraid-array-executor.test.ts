@@ -3,6 +3,7 @@ import { TaskRunner } from '../../../agent/task/runner.js';
 import type { TaskProgressEvent } from '../../../agent/task/types.js';
 import {
   makeXiraidArrayCreateExecutor,
+  makeXiraidArrayImportExecutor,
   makeXiraidArrayModifyExecutor,
 } from '../../../agent/task/xiraid-array-executor.js';
 import { XinasHistoryBridge } from '../../../agent/task/xinas-history-bridge.js';
@@ -448,5 +449,100 @@ describe('xiraid.array.modify executor', () => {
     // pool gone again, sparepool detached — back to the pre-state
     expect(fake.pools).toEqual([]);
     expect(fake.arrays[0]?.sparepool ?? '').toBe('');
+  });
+});
+
+// ---- S4 T8: xiraid.array.import executor ----
+
+describe('xiraid.array.import executor', () => {
+  async function withFakeDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'xinas-exec-import-'));
+    try {
+      return await fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  async function runImport(
+    transport: XiraidTransport,
+    spec: Record<string, unknown>,
+  ): Promise<TaskProgressEvent[]> {
+    const events: TaskProgressEvent[] = [];
+    const executor = makeXiraidArrayImportExecutor({ client: new XiraidClient(transport) });
+    await makeRunner().run(
+      { task_id: 't-imp', operation_kind: 'xiraid.array.import', spec },
+      executor,
+      async (e) => {
+        events.push(e);
+      },
+    );
+    return events;
+  }
+
+  it('adopt happy path: preflight/adopt/verify → success; candidate consumed', async () => {
+    await withFakeDir(async (dir) => {
+      const { createFakeXiraidTransport } = await import('../../../agent/xiraid/fake-transport.js');
+      const t = createFakeXiraidTransport(dir);
+      t.seedImportCandidates([
+        { uuid: 'u-1', name: 'foreign', level: '5', devices: ['/dev/x'], recoverable: true },
+      ]);
+      const events = await runImport(t, { uuid: 'u-1', new_name: 'adopted' });
+      expect(terminal(events)?.status).toBe('success');
+      const arrays = (await t.raidShow()) as Array<Record<string, unknown>>;
+      expect(arrays[0]).toMatchObject({ name: 'adopted', state: ['online'] });
+      expect(await t.raidImportShow()).toEqual([]);
+    });
+  });
+
+  it('unknown uuid → preflight fails, rollback no-op, terminal failed', async () => {
+    await withFakeDir(async (dir) => {
+      const { createFakeXiraidTransport } = await import('../../../agent/xiraid/fake-transport.js');
+      const t = createFakeXiraidTransport(dir);
+      const events = await runImport(t, { uuid: 'ghost' });
+      expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+      expect(terminal(events)).toMatchObject({
+        status: 'failed',
+        error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+      });
+      expect(await t.raidShow()).toEqual([]);
+      expect(t.tombstones()).toEqual([]); // nothing destroyed
+    });
+  });
+
+  it('direct rollback after adopt: config-only un-adopt (no data wipe)', async () => {
+    await withFakeDir(async (dir) => {
+      const { createFakeXiraidTransport } = await import('../../../agent/xiraid/fake-transport.js');
+      const t = createFakeXiraidTransport(dir);
+      t.seedImportCandidates([
+        { uuid: 'u-2', name: 'foreign', level: '5', devices: ['/dev/x'], recoverable: true },
+      ]);
+      await t.raidImportApply({ uuid: 'u-2', new_name: 'oops' });
+      const executor = makeXiraidArrayImportExecutor({ client: new XiraidClient(t) });
+      const outputs: string[] = [];
+      await executor.rollback({
+        spec: { uuid: 'u-2', new_name: 'oops' },
+        emitOutput: (l) => outputs.push(l),
+        isCancelRequested: () => false,
+      });
+      expect(await t.raidShow()).toEqual([]);
+      expect(t.tombstones()).toContainEqual({ name: 'oops', data_wiped: false });
+    });
+  });
+
+  it('non-recoverable candidate → preflight fails', async () => {
+    await withFakeDir(async (dir) => {
+      const { createFakeXiraidTransport } = await import('../../../agent/xiraid/fake-transport.js');
+      const t = createFakeXiraidTransport(dir);
+      t.seedImportCandidates([
+        { uuid: 'u-3', name: 'broken', level: '5', devices: ['/dev/x'], recoverable: false },
+      ]);
+      const events = await runImport(t, { uuid: 'u-3' });
+      expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+      expect(terminal(events)?.status).toBe('failed');
+    });
   });
 });

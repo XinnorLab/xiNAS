@@ -23,6 +23,7 @@ import { TaskRunner } from './runner.js';
 import type { PublishProgress } from './types.js';
 import {
   makeXiraidArrayCreateExecutor,
+  makeXiraidArrayImportExecutor,
   makeXiraidArrayModifyExecutor,
 } from './xiraid-array-executor.js';
 import {
@@ -138,6 +139,7 @@ export function buildTaskSubsystem(
   if (opts.xiraidClient) {
     registry.register(makeXiraidArrayCreateExecutor({ client: opts.xiraidClient }));
     registry.register(makeXiraidArrayModifyExecutor({ client: opts.xiraidClient }));
+    registry.register(makeXiraidArrayImportExecutor({ client: opts.xiraidClient }));
   }
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
