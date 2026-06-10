@@ -21,7 +21,7 @@
 - The resource-agnostic **plan engine** (deterministic preflight → a `plan_only` task row) with a `PlanProvider` registry.
 - The **Task engine** over the existing `tasks` + `task_stages` SQLite tables: lifecycle state machine, stage rows with **hybrid log spill** (inline ≤64 KiB / `/var/log/xinas/tasks/<id>/stage-<n>.log.zst`).
 - **Leases** via the existing `LeaseManager`; **idempotency** via the existing `UNIQUE(idempotency_key, principal)` constraint.
-- A **bounded worker pool** (ADR-0004 model; S2 runs **cap=1**; leases serialize contended resources).
+- A **bounded worker pool** (ADR-0004 model; S2 shipped an uncapped inline dispatcher; **S2.1 graduates it to the hybrid-admission pool in §5.3** — default cap 4, configurable; leases serialize contended resources).
 - The **agent task executor** + **reference executor** (with an executor-provided `rollback()`) + the **xinas_history snapshot bridge** for real `snapshot_before/after` capture.
 - The agent↔api **progress push** (`POST /internal/v1/task_progress`) applied to `tasks`/`task_stages`; **resumable SSE** `/tasks/{id}/watch`; tasks **metadata fold-in**; **startup reconciliation**.
 - **Contract revisions** to `api-v1.yaml`, `ADR-0002`, and this spec (incl. removing the `task.*` methods from `STUB_METHODS`).
@@ -29,7 +29,7 @@
 ### Out of scope (deferred)
 - **Real OS executors** — xiRAID `arrays.*` (S3/WS5), `fs.*` (S4/WS6), `nfs.*` (S5/WS7), `network.*` (S6/WS8). They register their own `Executor` (incl. operation-specific `rollback()`) into this engine later; their mutating routes stay `executorUnavailable` until then.
 - **Arbitrary snapshot-restore** in xinas_history. The engine only has `reset-to-baseline` + an internal auto-rollback; S2 captures `snapshot_before/after` for audit/diff and relies on **executor-provided rollback**. File-level snapshot-rollback lands when the first file-based executor (S5 nfs) needs it.
-- **Worker pool cap > 1.** The pool + leases support it; S2 fixes cap=1.
+- ~~**Worker pool cap > 1.**~~ Graduated in **S2.1** (§5.3): hybrid-admission pool, default cap 4. **Per-kind quotas remain deferred** (no second executor family needs them yet; the admission point in §5.3 is where they slot in).
 
 ---
 
@@ -109,8 +109,19 @@ A `PlanProvider.preflight` computes `affected_resources`, `blockers`, `warnings`
    - Freshness (TOCTOU guard, ADR-0004 §Plan/apply binding): for each affected resource, current revision == `state_revision_expected` else `PRECONDITION_FAILED` (stale list in details); observed snapshot stale beyond the plan rule → `CONFLICT` (`details.reason: "plan_stale"`).
    - Leases: `LeaseManager.acquire()` each affected resource; `held_by_other` → `CONFLICT` (`details.reason: "lease_held"`, `holder_task_id`).
    - Insert the Task (`state: queued`, `state_revision_at_apply`, and the `spec` copied from the `plan_only` task).
-3. **Dispatch** (`tasks/engine.ts`, worker pool cap=1): send api→agent `task.begin(task_id, kind, spec, plan)` — `spec` is the task's persisted raw spec (the executor input, e.g. `reference.echo`'s `{ message?, fail_at_stage? }`), NOT `affected_resources`. Accept → `running` + `agent_acceptance_id`, return **202 + Task**; unavailable/`EXECUTOR_UNSUPPORTED` → `failed (FAILED_BEFORE_CHANGE)` + release leases, return `503`/`422`. Never an orphan.
+3. **Pool admission + dispatch** (`tasks/engine.ts`, §5.3): if an in-flight slot is free, send api→agent `task.begin(task_id, kind, spec, plan)` — `spec` is the task's persisted raw spec (the executor input, e.g. `reference.echo`'s `{ message?, fail_at_stage? }`), NOT `affected_resources`. Accept → `running` + `agent_acceptance_id`, return **202 + Task**; unavailable/`EXECUTOR_UNSUPPORTED` → `failed (FAILED_BEFORE_CHANGE)` + release leases, return `503`/`422`. Never an orphan. **Pool full → no dispatch**: return **202 + Task in `state: queued`**; the drainer (§5.3) dispatches it FIFO when a slot frees. A pool-queued task already holds its leases, so conflicting applies still get `CONFLICT lease_held`.
 4. The **reconciler** (§9) is the durable backstop for a crash before a recorded outcome.
+
+### 5.3 Worker pool (S2.1 graduation — hybrid admission, ADR-0004 §Concurrency model)
+
+The pool bounds **concurrently in-flight tasks end-to-end** (dispatch → terminal), not just concurrent `task.begin` RPCs. It is an api-side admission gate in `tasks/engine.ts`; the agent stays cap-unaware.
+
+- **Cap.** `ApiConfig.tasks?: { max_inflight?: number }`, default **4** (ADR-0004). Values `< 1` are a config error (reject at load, same as other `ApiConfig` validation). Per-kind quotas: deferred (see §1).
+- **In-flight accounting (stateless + reservation).** in_flight = `COUNT(tasks WHERE state = 'running')` (the api is the DB's single writer) **plus** an in-memory *dispatch-reservation* counter covering the async window where `task.begin` is awaited while the row is still `queued`. The reservation is incremented **synchronously at admission** (before any `await`, so concurrent applies cannot double-admit past the cap in Node's single thread) and released when the dispatch settles (accepted → the row is `running` and counted by the query; rejected → `failBeforeChange` already recorded). Reservations are not persisted: on crash they vanish and DB truth + reconcile (§9) recover.
+- **Admission (hybrid).** `applyMode` runs the apply transaction exactly as in §5.2, then: slot free → reserve + dispatch inline (unchanged fast path, 202 `running`); pool full → skip dispatch, return 202 `queued`. No HTTP request ever blocks waiting for a slot.
+- **Drainer.** `drainQueued()`: while a slot is free, pick the oldest never-dispatched `queued` task (`created_at` ASC, `task_id` tiebreak; `agent_acceptance_id IS NULL`) and dispatch it via the reconciler's `rebuildDispatchInputs` mechanic. A dispatch failure (`failBeforeChange` fails the task + releases leases) does not abort the drain — continue to the next queued task. Triggered after (a) any terminal transition recorded by the progress path, (b) any `failBeforeChange`, and (c) the end of a `reconcile()` pass (which agent reconnect already triggers). No timer: a queued task waits at most until the next slot-freeing event or reconcile.
+- **Reconcile interplay (§9).** With the pool, `queued` is a *legitimate steady state*, not only crash residue. The default `redispatch` policy therefore drains queued tasks oldest-first **up to the available slots** and leaves the remainder `queued` (counted in the reconcile outcome, not failed). The explicit `fail` policy keeps its existing semantics (fail **all** queued tasks) as an operator escape hatch.
+- **Observability.** No schema change and no new public fields: clients see `state: queued` in the 202 body and the `queued → running` transition on `/tasks/{id}/watch` like any other state change.
 
 ---
 
@@ -151,7 +162,7 @@ On api startup + on agent reconnect: `LeaseManager.sweepExpired()` first (expire
 
 | state | agent_acceptance_id | inflight? | Action |
 |-------|---------------------|-----------|--------|
-| `queued` | null | n/a | never dispatched → re-dispatch (or `failed FAILED_BEFORE_CHANGE` per policy) |
+| `queued` | null | n/a | never dispatched → re-dispatch oldest-first **up to free pool slots** (§5.3); remainder stays `queued` (or `failed FAILED_BEFORE_CHANGE` under the explicit `fail` policy, which fails all) |
 | `running` | null | yes (task_id) | begin landed; confirm → store acceptance, keep running |
 | `running` | null | no | begin never took → re-dispatch (safe: `task.begin` is idempotent by `task_id`) |
 | `running` | set | yes | live → resume watching |
@@ -244,5 +255,5 @@ Task-internal `FAILED_*` codes (ADR-0004) are persisted on the task and surfaced
 ## 15. Open questions / risks
 
 - **xinas_history `snapshot create` JSON output** is a real (small) Python change in T6; confirm the manifest-id field name (`Manifest.to_dict()`/`.id`).
-- **Worker pool** is a thin cap=1 sequencer in S2 (`tasks/engine.ts`); the ADR-0004 default-4 + per-kind quotas are deferred (config).
+- **Worker pool** graduated in S2.1 to the §5.3 hybrid-admission pool (default-4, `tasks.max_inflight`); per-kind quotas remain deferred until a second executor family exists.
 - **`002` migration** must be additive + idempotent (`ALTER TABLE tasks ADD COLUMN agent_acceptance_id TEXT`) and respect the existing `schema_version` mechanism.
