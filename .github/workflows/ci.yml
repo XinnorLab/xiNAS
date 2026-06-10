@@ -5,13 +5,7 @@
 #
 # Flip-to-blocking TODOs (in spec order):
 #   TODO: flip openapi-envelope rule to blocking after 3 clean PRs
-#   TODO: flip yamllint to blocking after backlog cleanup PR series
-#   TODO: flip markdownlint to blocking after backlog cleanup PR series
-#   TODO: flip typescript-format to blocking after `biome format --write` PR
 #   TODO: expand typescript-lint to style/suspicious rule categories
-#   TODO: flip python-lint to blocking after ruff cleanup PR series
-#   TODO: flip python-format to blocking after `ruff format` PR
-#   TODO: flip python-typecheck to blocking after runtime deps land in pyproject.toml
 #   TODO: graduate pyright basic -> standard -> strict per module
 #   TODO: graduate ansible-lint min -> basic -> production
 #   TODO: add oasdiff between consecutive api-v1.yaml versions (after v1 published)
@@ -60,7 +54,6 @@ jobs:
 
   typescript-format:
     runs-on: ubuntu-latest
-    continue-on-error: true   # warn-only: flip after backlog cleanup
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -115,7 +108,6 @@ jobs:
 
   python-lint:
     runs-on: ubuntu-latest
-    continue-on-error: true   # warn-only: flip after ruff cleanup PR series
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -128,7 +120,6 @@ jobs:
 
   python-format:
     runs-on: ubuntu-latest
-    continue-on-error: true   # warn-only: flip after `ruff format` PR
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -141,7 +132,6 @@ jobs:
 
   python-typecheck:
     runs-on: ubuntu-latest
-    continue-on-error: true   # warn-only: flip after runtime deps land
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -165,7 +155,6 @@ jobs:
 
   yamllint:
     runs-on: ubuntu-latest
-    continue-on-error: true   # warn-only: flip after backlog cleanup
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -200,7 +189,6 @@ jobs:
 
   markdown:
     runs-on: ubuntu-latest
-    continue-on-error: true   # warn-only: flip after backlog cleanup
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
