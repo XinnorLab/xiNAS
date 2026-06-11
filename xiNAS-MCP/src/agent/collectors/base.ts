@@ -20,6 +20,7 @@ export type Kind =
   | 'Group'
   | 'XiraidArray'
   | 'NetworkConfig' // internal observed singleton (id 'default'); netplan file-set summary (ADR-0008).
+  | 'Tuning' // internal observed singleton (id 'default'); sysctl expected-vs-actual (ADR-0009).
   | 'managed_files'
   | 'inventory';
 

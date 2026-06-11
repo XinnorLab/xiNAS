@@ -2145,6 +2145,11 @@ paths:
       tags: [health]
       operationId: runHealthCheck
       summary: Run a health profile and return the report.
+      description: |
+        Profiles nest (standard ⊇ quick, deep ⊇ standard; ADR-0009).
+        quick is KV-derived and always answers; standard/deep add
+        agent-probe-backed checks which degrade with EXECUTOR_UNAVAILABLE
+        evidence when the agent is unreachable.
       parameters:
         - in: query
           name: profile

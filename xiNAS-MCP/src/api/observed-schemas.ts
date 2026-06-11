@@ -52,6 +52,7 @@ const OBSERVED_KINDS = [
   'ExportRule',
   'XiraidArray',
   'NetworkConfig',
+  'Tuning',
   'managed_files',
   'inventory',
 ] as const;
