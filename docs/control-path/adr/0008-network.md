@@ -85,13 +85,19 @@ collector additionally emits one row summarizing the netplan file set:
 { "kind": "NetworkConfig", "id": "default",
   "status": {
     "files": { "/etc/netplan/99-xinas.yaml": "<sha256>", ... },
-    "config_hash": "<sha256 over the sorted (path,hash) list>",
+    "world_config_hash": "<sha256 over the sorted (path,hash) list — ALL files>",
+    "xinas_file_hash": "<sha256 of 99-xinas.yaml alone ('' when absent)>",
     "duplicates": { "ibp65s0": ["/etc/netplan/50-cloud-init.yaml"] },
     "observed_at": "..." } }
 ```
 
-`config_hash` is the content-addressed world-state pin (§Freshness) and
-the WS9 drift anchor (`config_hash != hash(render(desired))` ⇒ drift).
+The two hashes serve DIFFERENT contracts and must not be conflated
+(foreign files like 50-cloud-init.yaml legitimately exist and change):
+`world_config_hash` is the content-addressed world-state freshness pin
+(§Freshness — ANY netplan edit invalidates in-flight plans);
+`xinas_file_hash` is the WS9 drift anchor
+(`xinas_file_hash != sha256(render(desired))` ⇒ drift in the file xiNAS
+owns, regardless of foreign-file churn).
 
 ## Decision — public read model (review P0)
 
@@ -161,16 +167,26 @@ first.
 
 Two layers, neither using observed-row revisions (they churn ~30 s):
 
-1. **Desired state**: the apply body's `expected_revision` binds the
-   TARGET's desired row revision (0 when not yet adopted — the create
-   convention). Desired KV is api-written only, so these revisions are
-   stable. Drift → `412 { reason: 'desired_revision_stale' }`.
+1. **Desired state — per-resource revision pins.** The provider pins the
+   CURRENT desired-row revision on EVERY affected `ResourceRef`
+   (`{kind, id, revision}`; `revision: 0` for rows that do not exist yet
+   — pre-adoption). The ENGINE's existing apply-txn freshness check
+   (`r.revision ?? state_revision_expected` per resource, against
+   desired revisions) then enforces all of them — this is what makes
+   `net.pool.apply` safe across a MIXED pool (iface A at desired rev 3,
+   iface B at rev 7): a scalar pin would false-stale one of them.
+   `state_revision_expected` is set to the PRIMARY's revision and the
+   route requires the apply body's `expected_revision` to echo it (the
+   shared convention). Desired KV is api-written only, so these
+   revisions are stable.
 2. **World state**: the plan records `NetworkConfig/default`'s
-   `config_hash` in the enriched spec. The route's apply re-check
-   compares it against the CURRENT observed `config_hash`
+   `world_config_hash` in the enriched spec. The route's apply re-check
+   compares it against the CURRENT observed `world_config_hash`
    (→ `412 { reason: 'netplan_changed' }`), and the EXECUTOR preflight
    re-hashes the live files at the privilege boundary (closing the
-   observe-lag TOCTOU the route check cannot).
+   observe-lag TOCTOU the route check cannot). The network routes are
+   CUSTOM S4-style routes (the arrays/filesystems pattern) — the shared
+   `applyMode` helper has no pre-apply hook for this re-check.
 
 ## Decision — duplicate netplan definitions (review P1)
 
@@ -236,7 +252,8 @@ Observed enrichment supplies the evidence (`rdma_capable`,
 `rdma_link_state` via `rdma link show -j`, addresses). `GET /health`
 gains its first two real KV-derived checks:
 
-- `network.duplicate-netplan` — error when any
+- `network.duplicate-netplan` — status `critical` (the HealthCheck enum
+  has no `error`) when any
   `duplicates_detected_in`/`NetworkConfig.duplicates` is non-empty;
   evidence lists files; remediation names `cleanup: true`.
 - `network.rdma-readiness` — per managed interface: rdma-capable ∧ rdma

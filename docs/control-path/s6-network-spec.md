@@ -28,6 +28,15 @@ health checks — all e2e-proven against a fake NetHost.
 **Verified integration facts (truth-checked this session).**
 - Engine leases `lease_resources ?? affected_resources`
   (`tasks/engine.ts:338`) — the singleton lease is expressible today.
+- The engine's apply-txn freshness check is PER affected resource:
+  `r.revision ?? plan.state_revision_expected` vs the current DESIRED
+  revision (`tasks/engine.ts:218`) — pool plans pin every target's
+  revision individually (mixed-revision pools would false-stale under a
+  single scalar).
+- The shared `applyMode` helper (`routes/apply-helpers.ts`) validates only
+  the scalar expected revision and has no pre-apply hook — the network
+  routes are custom S4-style routes so the `world_config_hash` re-check
+  can run before `TaskEngine.apply`.
 - `PollDriver` full-sweeps every collector on its interval and `kv.put`
   bumps revisions unconditionally → observed revisions churn ~30 s on
   live hosts. S6 freshness is therefore desired-revision + `config_hash`
@@ -53,8 +62,11 @@ health checks — all e2e-proven against a fake NetHost.
   `NetworkInterface.spec` optional + merged-read description,
   `POST /network/ip-pool` (`applyIpPool`), `updateNetworkInterface`
   writability notes, `NetworkConfig` internal observed kind registered in
-  `OBSERVED_KINDS`; the S5 `risk_level` drift fix; stub supersession for
-  the network mutating route.
+  BOTH registries — api `OBSERVED_KINDS` (observed-schemas.ts) AND the
+  agent `Kind` union (`collectors/base.ts`, plus its `observedSegment`
+  passthrough) — the collector emission will not compile otherwise; the
+  S5 `risk_level` drift fix; stub supersession for the network mutating
+  route.
 - **Sandbox delta (T1):** CAP_NET_ADMIN + netplan/run write paths
   (`Requires-Rebuild: xinas_agent`) + hardware smoke checklist.
 - **lib (T2–T3):** `lib/parse/netplan.ts` (file→stanzas, duplicates,
@@ -109,8 +121,10 @@ NFS-RDMA enable gating, the observed-revision churn fix for S4/S5.
   Tolerant of foreign-file shapes (cloud-init etc.); unparsable YAML in a
   foreign file → that file is reported in
   `unparsable_files[]` (surfaces as a warning, never a crash).
-- `netplanConfigHash(files)` → sha256 over the sorted `(path, sha256(text))`
-  list — the ADR-0008 `config_hash`.
+- `netplanHashes(files)` → `{ world_config_hash, xinas_file_hash }` —
+  sha256 over the sorted `(path, sha256(text))` list for ALL files
+  (freshness pin) and sha256 of `99-xinas.yaml` alone, `''` when absent
+  (the WS9 drift anchor) — ADR-0008's two-hash split.
 
 ### 3.2 `lib/net/render.ts`
 - `renderNetplan(rows: DesiredIfaceSpec[])` → full `99-xinas.yaml` text.
@@ -153,20 +167,25 @@ Plan:
    empty) overlaid with the PATCH keys; `pbr_table_id` kept or allocated.
 5. Blockers per §3.3; `desired_mutations` = adoption seeds + target row;
    `lease_resources` = `[NetworkConfig/99-xinas, target, ...adopted]`;
-   `affected_resources` = `[target]`.
+   `affected_resources` = `[{kind, id: target, revision: <current desired
+   revision, 0 pre-adoption>}]` — per-resource pins, engine-enforced;
+   `state_revision_expected` = the target's pinned revision.
 6. `enriched_spec` = `{ id, desired: <full target spec>, render: <full
-   file text>, config_hash, cleanup_files: {...}, surgical: {addresses,
-   pbr_table_id} }` — the executor needs no KV.
+   file text>, world_config_hash, cleanup_files: {...},
+   surgical: {addresses, pbr_table_id} }` — the executor needs no KV.
 7. `risk_level: 'changing_access'`, `rollback_model: 'non_disruptive'`,
    diff = stanza-level before/after + cleanup list.
 
-Apply (route): `expected_revision` === the TARGET's desired row revision
-(0 pre-adoption) → else `412 desired_revision_stale`; re-check provider
-preflight (filtered per the S4 §8 pattern); current observed
-`config_hash` === plan's → else `412 netplan_changed`.
+Apply (custom S4-style route — NOT the shared `applyMode`, which has no
+pre-apply hook): `expected_revision` must echo the plan's
+`state_revision_expected` (the primary's pinned revision; per-resource
+staleness itself is enforced inside the engine txn from the
+`affected_resources[].revision` pins); re-check provider preflight
+(filtered per the S4 §8 pattern); current observed `world_config_hash`
+=== plan's → else `412 netplan_changed`.
 
-Executor stages (ADR-0008): preflight (live re-hash, duplicate re-scan,
-stash prior files) → render_write (atomic write + planned cleanups +
+Executor stages (ADR-0008): preflight (live re-hash vs
+`world_config_hash`, duplicate re-scan, stash prior files) → render_write (atomic write + planned cleanups +
 `netplan generate`) → flush_target (surgical) → apply → verify.
 Rollback: restore stashed files, `netplan generate`, surgical flush,
 `netplan apply` — host back to pre-task; the api reverts desired rows
@@ -177,10 +196,13 @@ Rollback: restore stashed files, `netplan generate`, surgical flush,
 Same skeleton; differences: targets = ALL managed interfaces (adopted as
 needed); addresses from `allocatePool`; **existing `pbr_table_id`s are
 never reallocated** (ADR-0008); `lease_resources` = singleton + every
-managed iface; `affected_resources` = every managed iface (primary =
-first sorted); executor uses the GLOBAL flush (tables 100–199 + all mlx
-addresses); `expected_revision` binds the FIRST sorted target's desired
-revision (0 pre-adoption) — the singleton lease serializes the rest.
+managed iface; `affected_resources` = every managed iface as
+`{kind, id, revision: <its own current desired revision, 0 pre-adoption>}`
+(primary = first sorted) — the engine enforces EACH pin, so a
+mixed-revision pool (A at rev 3, B at rev 7) applies cleanly;
+`state_revision_expected` = the primary's revision and the body's
+`expected_revision` echoes it; executor uses the GLOBAL flush (tables
+100–199 + all mlx addresses).
 
 ### 4.3 Merged reads (T6)
 
@@ -231,13 +253,18 @@ singleton (compare-and-skip: re-emit only when `config_hash` or the
 duplicate map changes, so the singleton's revision moves only on real
 change). Fixture passthroughs: `netplan-files.json`
 (`{path: text}`), `sys-class-net.json`, `rdma-links.json` — the fixture
-probe runs the SAME parse/hash code as the real one.
+probe runs the SAME parse/hash code as the real one. The collector honors
+`XINAS_AGENT_NETWORK_POLL_MS` (the `XINAS_AGENT_XIRAID_POLL_MS` pattern)
+so the e2e can shorten the 30 s sweep for the `netplan_changed`
+scenario.
 
 ## 7. Health checks (T9)
 
 `GET /health` becomes KV-backed for two checks (quick profile, no agent
-round-trip): `network.duplicate-netplan` (error; evidence = duplicate map
-+ files; remediation names `cleanup: true`) and `network.rdma-readiness`
+round-trip): `network.duplicate-netplan` (status `critical` — the
+HealthCheck enum is [ok, warning, degraded, critical, skipped]; evidence
+= duplicate map + files; remediation names `cleanup: true`) and
+`network.rdma-readiness`
 (ok/degraded; per-iface evidence `{rdma_capable, rdma_link_state,
 has_address}`). The stub `xinas-api.alive` check stays.
 
@@ -248,7 +275,8 @@ two managed stanzas, 50-cloud-init.yaml duplicating `ibp65s0` + the mgmt
 ethernet), `sys-class-net.json` (2× mlx + 1 ethernet), `rdma-links.json`,
 `net-host-state.json` mirroring the files. Scenarios:
 1. Duplicate blocker: PATCH `ibp65s0` plan → `duplicate_netplan_definition`
-   listing 50-cloud-init.yaml; `GET /health` shows the check error.
+   listing 50-cloud-init.yaml; `GET /health` shows the check at
+   `critical`.
 2. Cleanup + update: re-plan `{addresses, cleanup: true}` → warning +
    diff lists the planned removal → apply (expected_revision 0,
    pre-adoption) → success; fake host: 99-xinas re-rendered with BOTH
@@ -258,7 +286,7 @@ ethernet), `sys-class-net.json` (2× mlx + 1 ethernet), `rdma-links.json`,
 3. Identity 422 + unmanaged 422: PATCH `pbr_table_id` → `net_identity_immutable`;
    PATCH the ethernet → `iface_not_managed`.
 4. `netplan_changed` gate: mutate `netplan-files.json` (collector
-   re-hashes) after plan → apply → 412.
+   re-hashes `world_config_hash`) after plan → apply → 412.
 5. Pool apply: POST ip-pool → both ifaces re-addressed
    (day-1 formula), table ids UNCHANGED, global flush ops, health
    rdma-readiness ok.
