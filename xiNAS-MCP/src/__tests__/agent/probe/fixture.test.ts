@@ -42,3 +42,44 @@ describe('createFixtureNfsProbe(dir)', () => {
     }
   });
 });
+
+// ---- S6 T5: fixture network probe over the fake NetHost state ----
+
+describe('createFixtureNetworkProbe(dir) over net-host-state.json', () => {
+  it('builds enriched rows + the summary from the fake host state', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'xinas-fixture-net-'));
+    try {
+      writeFileSync(
+        join(dir, 'net-host-state.json'),
+        JSON.stringify({
+          netplan_files: {
+            '/etc/netplan/99-xinas.yaml':
+              'network:\n  version: 2\n  ethernets:\n    ibp65s0:\n      addresses: [10.10.1.1/24]\n      routing-policy:\n        - {from: 10.10.1.1, table: 100, priority: 100}\n',
+          },
+          kernel: { addrs: { ibp65s0: ['10.10.1.1/24'] }, rules: [], tables: {} },
+          sys_class_net: [{ name: 'ibp65s0', driver: 'mlx5_core' }],
+          rdma_links: [{ ifname: 'mlx5_0', netdev: 'ibp65s0', state: 'ACTIVE', physical_state: 'LINK_UP' }],
+          ops: [],
+        }),
+      );
+      const { createFixtureNetworkProbe } = await import('../../../agent/probe/fixture.js');
+      const probe = createFixtureNetworkProbe(dir);
+      const rows = await probe.snapshot();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).toBe('ibp65s0');
+      expect(rows[0]?.status.rdma_capable).toBe(true);
+      expect(rows[0]?.status.netplan?.pbr_table_id).toBe(100);
+      const summary = await probe.netplanSummary();
+      expect(summary?.world_config_hash).toMatch(/^[0-9a-f]{64}$/);
+
+      // no dir → empty (non-fixture callers unaffected)
+      const bare = createFixtureNetworkProbe();
+      expect(await bare.snapshot()).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

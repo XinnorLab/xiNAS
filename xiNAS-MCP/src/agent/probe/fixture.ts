@@ -32,8 +32,16 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type ObservedDisk, parseLsblkOutput } from '../../lib/parse/disk.js';
+import { parseIpJson } from '../../lib/parse/network.js';
 import type { ParsedPasswdLine } from '../../lib/parse/passwd.js';
+import { createFakeNetHost } from '../net/fake-host.js';
 import type { IdmapSnapshot } from './idmap.js';
+import {
+  type NetplanSummary,
+  type NetworkSnapshotRow,
+  enrichNetworkRows,
+  summarizeNetplan,
+} from './network.js';
 import type { NfsProfileSnapshot } from './nfs-profile.js';
 import type { MonitorHandle } from './subprocess-monitor.js';
 
@@ -80,7 +88,8 @@ interface FixtureNfsProfileProbe {
 }
 
 interface FixtureNetworkProbe {
-  snapshot(): Promise<never[]>;
+  snapshot(): Promise<NetworkSnapshotRow[]>;
+  netplanSummary(): Promise<NetplanSummary | undefined>;
   startEventStream(onDelta: (iface: never) => void): MonitorHandle;
 }
 
@@ -201,10 +210,38 @@ export function createFixtureNfsProfileProbe(dir: string): FixtureNfsProfileProb
   };
 }
 
-/** Network: empty snapshot, no-op event stream. */
-export function createFixtureNetworkProbe(): FixtureNetworkProbe {
+/**
+ * Network: reads the FAKE NetHost state (<dir>/net-host-state.json) so
+ * observe and the S6 executors share ONE source of truth — executor
+ * effects (flushes, applies) become visible to the collector in e2e.
+ * Runs the SAME parse/enrich code as the real probe. No dir → empty.
+ */
+export function createFixtureNetworkProbe(dir?: string): FixtureNetworkProbe {
+  if (dir === undefined) {
+    return {
+      snapshot: () => Promise.resolve([]),
+      netplanSummary: () => Promise.resolve(undefined),
+      startEventStream: () => NOOP_MONITOR,
+    };
+  }
+  const host = createFakeNetHost(dir);
   return {
-    snapshot: () => Promise.resolve([]),
+    snapshot: async () => {
+      const base = parseIpJson(await host.ipAddrShow());
+      return enrichNetworkRows(
+        base,
+        await host.listSysClassNet(),
+        await host.readNetplanDir(),
+        await host.rdmaLinkShow(),
+      );
+    },
+    netplanSummary: async () => {
+      try {
+        return summarizeNetplan(await host.readNetplanDir());
+      } catch {
+        return undefined;
+      }
+    },
     startEventStream: () => NOOP_MONITOR,
   };
 }

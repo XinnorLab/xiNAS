@@ -144,23 +144,27 @@ export function buildConvergence(config: AgentConfig): Convergence {
     }),
   );
 
-  // --- Network: map parsed iface -> { id, op, attrs }. ---
-  const networkProbe = fdir !== null ? createFixtureNetworkProbe() : createNetworkProbe();
+  // --- Network: pass the (S6-enriched) status through + the NetworkConfig
+  //     summary; poll override for e2e (XINAS_AGENT_NETWORK_POLL_MS). ---
+  const networkProbe = fdir !== null ? createFixtureNetworkProbe(fdir) : createNetworkProbe();
+  const networkPollMs = Number(process.env.XINAS_AGENT_NETWORK_POLL_MS ?? '');
   registry.register(
     new NetworkInterfaceCollector({
+      ...(Number.isFinite(networkPollMs) && networkPollMs > 0
+        ? { pollIntervalMs: networkPollMs }
+        : {}),
       probe: {
+        netplanSummary: () =>
+          networkProbe.netplanSummary().then(
+            (s) => s as Record<string, unknown> | undefined,
+          ),
         snapshot: () =>
           networkProbe.snapshot().then((ifaces) =>
             ifaces.map((iface) => ({
               kind: 'NetworkInterface' as const,
               id: iface.id,
               status: {
-                name: iface.status.name,
-                operstate: iface.status.operstate,
-                ...(iface.status.mac !== undefined ? { mac: iface.status.mac } : {}),
-                ...(iface.status.mtu !== undefined ? { mtu: iface.status.mtu } : {}),
-                ip4_addresses: iface.status.ip4_addresses,
-                ip6_addresses: iface.status.ip6_addresses,
+                ...iface.status,
                 observed_at: new Date().toISOString(),
               },
             })),

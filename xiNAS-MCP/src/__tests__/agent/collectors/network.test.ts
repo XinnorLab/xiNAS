@@ -93,3 +93,51 @@ describe('NetworkInterfaceCollector', () => {
     expect(new NetworkInterfaceCollector({ probe }).pollIntervalMs).toBe(30_000);
   });
 });
+
+// ---- S6 T5: the NetworkConfig/default singleton (compare-and-skip) ----
+
+describe('NetworkConfig singleton emission', () => {
+  function probeWith(summary: Record<string, unknown> | undefined) {
+    return {
+      snapshot: async () => [],
+      startEventStream: () => ({ stop() {} }),
+      netplanSummary: async () => summary,
+      _set(next: Record<string, unknown> | undefined) {
+        summary = next;
+      },
+    };
+  }
+
+  const SUMMARY = {
+    files: { '/etc/netplan/99-xinas.yaml': 'h1' },
+    world_config_hash: 'w1',
+    xinas_file_hash: 'x1',
+    duplicates: {},
+  };
+
+  it('initialSweep emits the singleton once; identical re-sweep skips; change re-emits', async () => {
+    const probe = probeWith(SUMMARY);
+    const collector = new NetworkInterfaceCollector({ probe });
+    const first = await collector.initialSweep();
+    const single = first.find((d) => d.kind === 'NetworkConfig');
+    expect(single).toMatchObject({ id: 'default', op: 'upsert' });
+    expect((single?.value as { status?: { world_config_hash?: string } }).status?.world_config_hash).toBe('w1');
+
+    const second = await collector.initialSweep();
+    expect(second.find((d) => d.kind === 'NetworkConfig')).toBeUndefined();
+
+    probe._set({ ...SUMMARY, world_config_hash: 'w2' });
+    const third = await collector.initialSweep();
+    expect(third.find((d) => d.kind === 'NetworkConfig')).toBeDefined();
+  });
+
+  it('no summary (degraded probe) → no singleton, sweep still works', async () => {
+    const collector = new NetworkInterfaceCollector({ probe: probeWith(undefined) });
+    expect((await collector.initialSweep()).find((d) => d.kind === 'NetworkConfig')).toBeUndefined();
+  });
+
+  it('pollIntervalMs override is honored', () => {
+    const collector = new NetworkInterfaceCollector({ probe: probeWith(undefined), pollIntervalMs: 500 });
+    expect(collector.pollIntervalMs).toBe(500);
+  });
+});
