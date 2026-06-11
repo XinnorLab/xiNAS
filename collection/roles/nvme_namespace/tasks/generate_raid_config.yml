@@ -33,8 +33,8 @@
 # Trim device list for RAID 10 if odd count (use first N-1 devices)
 - name: Adjust log devices for RAID 10 (odd count uses N-1)
   ansible.builtin.set_fact:
-    _log_devices_adjusted: "{{ nvme_small_ns_devices[:_log_device_count | int] }}"
-    _log_device_dropped: "{{ nvme_small_ns_devices[_log_device_count | int:] }}"
+    _log_devices_adjusted: "{{ nvme_small_ns_devices[: _log_device_count | int] }}"
+    _log_device_dropped: "{{ nvme_small_ns_devices[_log_device_count | int :] }}"
   when:
     - nvme_raid_log_level | int == 10
     - nvme_small_ns_count | int % 2 == 1

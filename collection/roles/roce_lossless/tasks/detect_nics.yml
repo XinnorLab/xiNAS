@@ -73,8 +73,7 @@
       {%- if rdma_mode == 'auto' -%}
       {%- if detected_roce_devices | length > 0 -%}roce{%- elif detected_ib_devices | length > 0 -%}ib{%- else -%}none{%- endif -%}
       {%- else -%}
-      {{ rdma_mode }}
-      {%- endif -%}
+      {{ rdma_mode }}{%- endif -%}
 
 # Step 6: Get RDMA-capable network interfaces
 - name: Get RDMA-capable interfaces via rdma link

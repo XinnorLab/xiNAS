@@ -1,19 +1,19 @@
 ---
-- name: reload systemd
+- name: Reload systemd
   ansible.builtin.systemd:
     daemon_reload: true
 
-- name: restart xinas-nfs-helper
+- name: Restart xinas-nfs-helper
   ansible.builtin.service:
     name: xinas-nfs-helper
     state: restarted
 
-- name: restart xinas-mcp
+- name: Restart xinas-mcp
   ansible.builtin.service:
     name: xinas-mcp
     state: restarted
 
-- name: restart sshd
+- name: Restart sshd
   ansible.builtin.service:
     name: ssh    # Ubuntu uses "ssh", not "sshd"
     state: restarted

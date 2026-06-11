@@ -24,7 +24,7 @@
       vers4.2=y
       rdma=y
       rdma-port={{ nfs_rdma_port }}
-  notify: restart nfs
+  notify: Restart nfs
   tags: [nfs_server, config]
 
 - name: Enable and start nfs-server service

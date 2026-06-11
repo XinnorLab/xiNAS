@@ -62,7 +62,7 @@
     - not nvme_skip_failed_devices | bool
 
 # Create small namespace (500MB) on each drive
-- name: Create small namespace ({{ nvme_small_ns_size_mb }}MB)
+- name: Create small namespace, size MB {{ nvme_small_ns_size_mb }}
   ansible.builtin.shell: |
     set -e
     controller="{{ item.controller }}"

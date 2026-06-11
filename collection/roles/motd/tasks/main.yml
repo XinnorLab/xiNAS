@@ -41,7 +41,7 @@
     regexp: "^#?PrintMotd"
     line: "PrintMotd no"
     state: present
-  notify: reload sshd
+  notify: Reload sshd
   failed_when: false
   tags: [motd]
 
@@ -51,7 +51,7 @@
     regexp: "^#?UsePAM"
     line: "UsePAM yes"
     state: present
-  notify: reload sshd
+  notify: Reload sshd
   failed_when: false
   tags: [motd]
 
@@ -98,7 +98,7 @@
     regexp: "^#?Banner"
     line: "Banner /etc/issue.net"
     state: present
-  notify: reload sshd
+  notify: Reload sshd
   when: banner_enabled | bool
   tags: [motd, banner]
 
@@ -107,7 +107,7 @@
     path: /etc/ssh/sshd_config
     regexp: "^Banner"
     state: absent
-  notify: reload sshd
+  notify: Reload sshd
   when: not (banner_enabled | bool)
   tags: [motd, banner]
 

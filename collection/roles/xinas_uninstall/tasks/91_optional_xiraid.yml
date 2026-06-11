@@ -2,7 +2,7 @@
 # Optional phase 91 — remove the xiRAID package, repo, and DKMS module.
 # Gated by uninstall_remove_xiraid in tasks/main.yml.
 
-- name: "xiRAID | stop and disable xiraid-exporter"
+- name: "XiRAID | stop and disable xiraid-exporter"
   ansible.builtin.systemd:
     name: xiraid-exporter.service
     state: stopped
@@ -11,7 +11,7 @@
   failed_when: false
   changed_when: _xiraid_exp_stop.changed | default(false)
 
-- name: "xiRAID | purge xiraid packages"
+- name: "XiRAID | purge xiraid packages"
   ansible.builtin.apt:
     name: "{{ xinas_xiraid_apt_purge }}"
     state: absent
@@ -22,7 +22,7 @@
     - _apt_xiraid.failed | default(false)
     - "'is not installed' not in (_apt_xiraid.msg | default(''))"
 
-- name: "xiRAID | also purge xiraid-repo metadata package"
+- name: "XiRAID | also purge xiraid-repo metadata package"
   ansible.builtin.shell: |
     set +e
     dpkg -l | awk '/^ii.*xiraid-repo/ {print $2}' | xargs -r apt-get purge -y
@@ -31,7 +31,7 @@
     executable: /bin/bash
   changed_when: false
 
-- name: "xiRAID | dkms remove kernel module"
+- name: "XiRAID | dkms remove kernel module"
   ansible.builtin.shell: |
     set +e
     dkms status 2>/dev/null | awk -F'[,/ ]' '/^xiraid/ {print $1}' | sort -u | while read mod; do
@@ -42,12 +42,12 @@
     executable: /bin/bash
   changed_when: false
 
-- name: "xiRAID | remove /etc/xiraid"
+- name: "XiRAID | remove /etc/xiraid"
   ansible.builtin.file:
     path: /etc/xiraid
     state: absent
 
-- name: "xiRAID | remove Xinnor APT sources"
+- name: "XiRAID | remove Xinnor APT sources"
   ansible.builtin.shell: |
     set +e
     grep -rl 'pkg\.xinnor\.io' /etc/apt/sources.list.d/ 2>/dev/null | xargs -r rm -f
@@ -56,7 +56,7 @@
     executable: /bin/bash
   changed_when: false
 
-- name: "xiRAID | record removal"
+- name: "XiRAID | record removal"
   ansible.builtin.set_fact:
     uninstall_summary: >-
       {{

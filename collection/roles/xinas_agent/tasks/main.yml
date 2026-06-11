@@ -55,7 +55,7 @@
     owner: root
     group: root
     mode: '0640'
-  notify: restart xinas-agent
+  notify: Restart xinas-agent
   tags: [xinas_agent, config]
 
 # --- Systemd unit ---
@@ -69,8 +69,8 @@
     mode: '0644'
     remote_src: true
   notify:
-    - reload systemd
-    - restart xinas-agent
+    - Reload systemd
+    - Restart xinas-agent
   tags: [xinas_agent, unit]
 
 - name: Force systemd reload before enabling (flush handlers now)

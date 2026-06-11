@@ -28,7 +28,9 @@
         state: directory
         mode: '0755'
 
-    - name: Import NodeSource GPG key
+    # curl pipes into `gpg --dearmor`; get_url cannot dearmor, and the
+    # task is already guarded by creates:.
+    - name: Import NodeSource GPG key  # noqa: command-instead-of-module
       ansible.builtin.shell: >
         curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
         | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
@@ -78,7 +80,7 @@
     cmd: npm run build
     chdir: "{{ xinas_mcp_repo_path }}"
   changed_when: true
-  notify: restart xinas-mcp
+  notify: Restart xinas-mcp
   tags: [xinas_mcp, build]
 
 # ─── 3. NFS helper daemon ──────────────────────────────────────────────────────
@@ -100,7 +102,7 @@
     group: root
     mode: '0644'
     remote_src: true
-  notify: restart xinas-nfs-helper
+  notify: Restart xinas-nfs-helper
   tags: [xinas_mcp, nfs_helper]
 
 - name: Make nfs_helper.py executable
@@ -118,8 +120,8 @@
     mode: '0644'
     remote_src: true
   notify:
-    - reload systemd
-    - restart xinas-nfs-helper
+    - Reload systemd
+    - Restart xinas-nfs-helper
   tags: [xinas_mcp, nfs_helper]
 
 - name: Force systemd daemon-reload before enabling service
@@ -176,8 +178,8 @@
     mode: '0644'
     remote_src: true
   notify:
-    - reload systemd
-    - restart xinas-mcp
+    - Reload systemd
+    - Restart xinas-mcp
   tags: [xinas_mcp, service]
 
 - name: Force systemd daemon-reload before enabling xinas-mcp
@@ -228,7 +230,7 @@
     group: root
     mode: '0644'
   when: xinas_mcp_allow_root_ssh
-  notify: restart sshd
+  notify: Restart sshd
   tags: [xinas_mcp, ssh]
 
 - name: Create xinas-mcp wrapper script

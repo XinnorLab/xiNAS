@@ -71,7 +71,8 @@
       {{
         uninstall_summary | combine({
           'removed': uninstall_summary.removed + [
-            ['Paths', '/opt/xiNAS, /var/lib/xinas, /var/log/xinas, /etc/xinas-mcp, /usr/lib/xinas-mcp, /etc/netplan/99-xinas.yaml, /etc/sudoers.d/xinas-update, /etc/profile.d/99-xinas-menu.sh, /etc/update-motd.d/99-xinas-status, /etc/cron.d/xinas-banner, /etc/ssh/sshd_config.d/10-xinas-root-access.conf']
+            ['Paths', '/opt/xiNAS, /var/lib/xinas, /var/log/xinas, /etc/xinas-mcp, /usr/lib/xinas-mcp, /etc/netplan/99-xinas.yaml, /etc/sudoers.d/xinas-update, '
+              + '/etc/profile.d/99-xinas-menu.sh, /etc/update-motd.d/99-xinas-status, /etc/cron.d/xinas-banner, /etc/ssh/sshd_config.d/10-xinas-root-access.conf']
           ],
           'manual': uninstall_summary.manual + [
             'Run `netplan apply` to release xiNAS-managed IPs from your NICs.'

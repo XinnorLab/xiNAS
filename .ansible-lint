@@ -1,15 +1,24 @@
 # Profile graduation:
-#   min   — what the existing roles pass today (current baseline)
-#   basic — next stop after var-naming + name + yaml cleanup
+#   min   — Phase 0 bootstrap baseline (2026-05-26)
+#   basic — current gate (graduated 2026-06-11): name/jinja/yaml/command
+#           findings fixed; var-naming[no-role-prefix] skipped (see below)
 #   production — long-term aspiration (tracked in
 #   docs/control-path/ci-bootstrap-design.md backfill plan)
 #
-# Recorded baseline on 2026-05-26: profile=production produces 463
-# failures, dominated by var-naming (355). Cleanup is its own PR
-# series; bootstrap uses 'min' to keep the gate blocking from day 1.
-profile: min
+# Recorded baseline on 2026-05-26: profile=production produced 463
+# failures, dominated by var-naming (355). On 2026-06-11 the gate
+# graduated to 'basic' at 0 failures.
+profile: basic
 skip_list:
   - risky-shell-pipe
+  # var-naming[no-role-prefix]: role variables (xfs_filesystems,
+  # xiraid_arrays, nvme_auto_namespace, ...) are the repo's PUBLIC preset
+  # contract — preset YAML under presets/, the whiptail menu scripts, the
+  # Python TUI, and the docs all reference them by name, and user-maintained
+  # presets in the field rely on them. Renaming to add role prefixes is a
+  # breaking change. Revisit only with an explicit deprecation path
+  # (aliases + migration window), not as a lint cleanup.
+  - var-naming[no-role-prefix]
 exclude_paths:
   - .claude/
   - .github/

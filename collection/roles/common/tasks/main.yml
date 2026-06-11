@@ -46,7 +46,7 @@
     owner: root
     group: root
     mode: '0644'
-  notify: restart unattended-upgrades
+  notify: Restart unattended-upgrades
   tags: [security]
 
 - name: Apply sysctl parameters
@@ -56,7 +56,7 @@
     state: present
     reload: yes
   loop: "{{ common_sysctl | dict2items }}"
-  notify: reload sysctl
+  notify: Reload sysctl
   tags: [sysctl]
 
 

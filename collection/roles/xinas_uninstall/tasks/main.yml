@@ -5,47 +5,61 @@
 # Every phase appends entries to `uninstall_summary` (removed / preserved /
 # failed / manual / reboot) so the final fact carries the full report.
 
-- ansible.builtin.import_tasks: 00_preflight.yml
+- name: Phase 00 — preflight checks
+  ansible.builtin.import_tasks: 00_preflight.yml
   tags: [xinas_uninstall, preflight]
 
-- ansible.builtin.import_tasks: 10_quiesce_services.yml
+- name: Phase 10 — quiesce services
+  ansible.builtin.import_tasks: 10_quiesce_services.yml
   tags: [xinas_uninstall, services]
 
-- ansible.builtin.import_tasks: 20_remove_exports.yml
+- name: Phase 20 — remove NFS exports
+  ansible.builtin.import_tasks: 20_remove_exports.yml
   tags: [xinas_uninstall, exports]
 
-- ansible.builtin.import_tasks: 30_teardown_raid.yml
+- name: Phase 30 — tear down RAID
+  ansible.builtin.import_tasks: 30_teardown_raid.yml
   tags: [xinas_uninstall, raid]
 
-- ansible.builtin.import_tasks: 40_remove_mounts.yml
+- name: Phase 40 — remove mounts
+  ansible.builtin.import_tasks: 40_remove_mounts.yml
   tags: [xinas_uninstall, mounts]
 
-- ansible.builtin.import_tasks: 50_remove_services.yml
+- name: Phase 50 — remove services
+  ansible.builtin.import_tasks: 50_remove_services.yml
   tags: [xinas_uninstall, services]
 
-- ansible.builtin.import_tasks: 60_remove_binaries.yml
+- name: Phase 60 — remove binaries
+  ansible.builtin.import_tasks: 60_remove_binaries.yml
   tags: [xinas_uninstall, binaries]
 
-- ansible.builtin.import_tasks: 70_remove_paths.yml
+- name: Phase 70 — remove paths
+  ansible.builtin.import_tasks: 70_remove_paths.yml
   tags: [xinas_uninstall, paths]
 
-- ansible.builtin.import_tasks: 80_revert_inplace_edits.yml
+- name: Phase 80 — revert in-place edits
+  ansible.builtin.import_tasks: 80_revert_inplace_edits.yml
   tags: [xinas_uninstall, edits]
 
-- ansible.builtin.import_tasks: 90_remove_packages.yml
+- name: Phase 90 — remove packages
+  ansible.builtin.import_tasks: 90_remove_packages.yml
   tags: [xinas_uninstall, packages]
 
-- ansible.builtin.import_tasks: 91_optional_xiraid.yml
+- name: Phase 91 — optionally remove xiRAID
+  ansible.builtin.import_tasks: 91_optional_xiraid.yml
   when: uninstall_remove_xiraid | bool
   tags: [xinas_uninstall, optional, xiraid]
 
-- ansible.builtin.import_tasks: 92_optional_ofed.yml
+- name: Phase 92 — optionally remove OFED
+  ansible.builtin.import_tasks: 92_optional_ofed.yml
   when: uninstall_remove_ofed | bool
   tags: [xinas_uninstall, optional, ofed]
 
-- ansible.builtin.import_tasks: 93_optional_perf.yml
+- name: Phase 93 — optionally revert perf tuning
+  ansible.builtin.import_tasks: 93_optional_perf.yml
   when: uninstall_revert_perf | bool
   tags: [xinas_uninstall, optional, perf]
 
-- ansible.builtin.import_tasks: 99_finalize.yml
+- name: Phase 99 — finalize and report
+  ansible.builtin.import_tasks: 99_finalize.yml
   tags: [xinas_uninstall, finalize]

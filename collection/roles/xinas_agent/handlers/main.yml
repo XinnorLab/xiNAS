@@ -1,12 +1,12 @@
 ---
 # xinas_agent role handlers
 
-- name: reload systemd
+- name: Reload systemd
   ansible.builtin.systemd:
     daemon_reload: true
   listen: reload systemd
 
-- name: restart xinas-agent
+- name: Restart xinas-agent
   ansible.builtin.systemd:
     name: xinas-agent.service
     state: restarted
