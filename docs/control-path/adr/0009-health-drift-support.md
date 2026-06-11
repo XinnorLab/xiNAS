@@ -65,10 +65,11 @@ ignored). Category values come from the existing HealthCheck enum.
 | id | category | logic |
 |---|---|---|
 | `api.alive` | api | constant ok (exists) |
-| `agent.connectivity` | agent | heartbeat tracker state: online→ok, degraded→degraded, offline→critical |
+| `agent.connectivity` | agent | heartbeat tracker state: healthy→ok, degraded→degraded, offline→critical (the tracker's actual vocabulary) |
 | `xiraid.arrays` | xiraid | any observed array: initializing/rebuilding→degraded; degraded/failed/offline→critical; none→skipped |
+| `disk.health` | xiraid | observed Disk.status.health: `ok === false`→critical; `wear_pct > 90`→warning; disks without a health block→skipped individually (review P1: the reqs' disks/NVMe coverage) |
 | `filesystem.mounts` | filesystem | observed Filesystem with `mount_unit_enabled && !mounted` → degraded |
-| `nfs.server` | nfs | observed SystemdUnit `nfs-server.service` not active → critical |
+| `nfs.server` | nfs | observed SystemdUnit `nfs-server.service` not active → critical (depends on §Systemd promotion below) |
 | `nfs.exports` | nfs | desired Share whose `spec.path` has no observed ExportRule (`spec.export_path` match) → degraded |
 | `network.duplicate-netplan` | network | (exists, S6) critical |
 | `network.rdma-readiness` | network | (exists, S6) |
@@ -82,6 +83,7 @@ ignored). Category values come from the existing HealthCheck enum.
 | id | category | logic |
 |---|---|---|
 | `xiraid.license` | xiraid | parsed license: expired→critical, <30 days→warning; xicli absent→skipped |
+| `xiraid.service` | xiraid | the agent's xiraid collector reporting `error` (daemon unreachable) → critical (review P1: explicit service/API coverage, distinct from `agent.collectors`) |
 | `network.rdma-live` | network | fresh `rdma link show` vs observed (a link that went down since the sweep) |
 | `agent.collectors` | agent | any collector reporting `error` → degraded with reasons |
 | `drift.nfs-conf` | drift | §Drift below (helper dry-render — standard-only by construction) |
@@ -92,6 +94,20 @@ ignored). Category values come from the existing HealthCheck enum.
 |---|---|---|
 | `filesystem.io` | filesystem | write/read/delete `/<mountpoint>/.xinas-health-probe` per mounted managed fs; failure → critical for that fs |
 | `nfs.loopback` | nfs | PID1-delegated `systemd-mount localhost:<first export>` at `/run/xinas/health-probe/mnt`, list, `systemd-umount`; no exports → skipped |
+
+## Decision — systemd observation promotion (review P1)
+
+The live agent wiring registers a DELIBERATELY-FAILING systemd probe
+(dbus integration-only), so observed `SystemdUnit` rows exist on no
+host — `nfs.server` and `systemd.units` would be permanently empty. S7
+promotes the probe to a **subprocess implementation**: per allow-listed
+unit, `systemctl show -p ActiveState,SubState,UnitFileState <unit>`
+behind an injectable execFile seam (CI-fakeable; fixture passthrough
+`systemd-units.json`), polled on the collector's existing backstop. The
+allow-list grows by `xinas-api.service` and `xinas-agent.service`;
+xiRAID's unit names are confirmed on hardware (runbook item) before
+being added. The dbus event subscription remains future work — the poll
+backstop is the only refresh path for now, documented.
 
 ## Decision — drift (review P1 locks)
 
@@ -109,14 +125,30 @@ operation; absent desired state → `skipped` (fresh installs are not
    lists missing/extra/changed entries.
 2. **`drift.nfs-conf` — same-renderer checksums, standard profile.**
    The api passes the desired NfsProfile spec inside `health.probe`;
-   the agent asks the helper for a **dry render** (no write) and
-   returns the rendered checksums; the check compares them against
-   observed `effective_files`. Both sides come from the ONE renderer —
-   no duplication, no byte coupling. In `quick` this check is
-   `skipped (requires standard)`.
+   the agent asks the helper for a **dry render** and returns the
+   rendered checksums; the check compares them against observed
+   `effective_files`. Both sides come from the ONE renderer — no
+   duplication, no byte coupling. **Helper contract change (review
+   P0):** today's `render_nfs_profile` ALWAYS writes the four files and
+   reload/restarts nfs-server — S7 adds a `dry_run: true` parameter
+   (render → checksums, NO file writes, NO service action) to the
+   helper op, with python-side tests proving a dry call leaves the
+   filesystem and the service untouched, BEFORE `health.probe` may call
+   it. In `quick` this check is `skipped (requires standard)`.
 3. **`drift.netplan` — pure KV.** `sha256(renderNetplan(desired
    NetworkInterface rows))` vs `NetworkConfig.xinas_file_hash` (the S6
    anchor; both sides from the same TS renderer).
+
+## Decision — drift API surface (review P1)
+
+WS9 reads "drift visible in health AND API". The existing API surface
+is `GET /config-history/drift` (today an empty placeholder). S7 wires
+the SAME drift engine into it: the route runs the KV drift checks
+(`nfs-exports`, `netplan`) and reports `drift.nfs-conf` as
+`not_evaluated` with a pointer to `GET /health?profile=standard`
+(its oracle needs the agent round-trip). Response shape:
+`{ drift: [{ artifact, status, evidence, recommended_action }] }` —
+one entry per non-ok drift check, empty when clean.
 
 ## Decision — tuning (review P1 lock)
 

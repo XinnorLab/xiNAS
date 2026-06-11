@@ -14,9 +14,19 @@ downloadable archive through the task envelope.
 **Verified integration facts (truth-checked this session).**
 - `effective_files` = the four ADR-0005 paths only (`probe/nfs-profile.ts`)
   — `/etc/exports` drift is therefore the SEMANTIC ExportRule compare.
-- No TS renderer for profile files; the helper's `render_nfs_profile`
-  dry render is the drift oracle (reached via `health.probe`, which
-  carries the desired spec from the api — the agent reads no KV).
+- No TS renderer for profile files; the helper's renderer is the drift
+  oracle — but today's `render_nfs_profile` ALWAYS writes + restarts
+  (verified `nfs-helper/nfs_profile.py`): **S7 adds `dry_run: true` to
+  the helper op** (python + tests: dry call touches nothing) before
+  `health.probe` may call it. The probe carries the desired spec from
+  the api — the agent reads no KV.
+- The live convergence wires a deliberately-failing systemd probe —
+  observed SystemdUnit rows exist on NO host today. **S7 promotes it to
+  a `systemctl show` subprocess probe** (seam + fixture) and extends
+  the allow-list with the xinas units; without this, `nfs.server` and
+  `systemd.units` would be hollow.
+- `GET /config-history/drift` is an empty placeholder — S7 wires the
+  same drift engine into it (ADR-0009 §drift API surface).
 - `xicli license show` output is recoverable license material
   (`simple_menu.sh:129`) — parsed-only in bundles and probe results.
 - Task creation/idempotency/leases live in `TaskEngine.apply`;
@@ -42,8 +52,14 @@ downloadable archive through the task envelope.
   `GET /health` profile semantics.
 - **T1:** Tuning probe (drop-in parse + /proc/sys reads) + collector
   emission (singleton, compare-and-skip) + fixture passthrough.
+- **T1b:** systemd observation promotion — `systemctl show` subprocess
+  probe (seam + `systemd-units.json` fixture), allow-list +xinas units,
+  convergence wiring; the S0/S1 collector consumes it unchanged.
+- **T1c:** helper `dry_run` — `render_nfs_profile(dry_run=true)` renders
+  checksums with NO writes and NO service action; python tests assert
+  an untouched tree + no systemctl calls.
 - **T2:** `lib/health/` check engine — types, registry, `overall`
-  fold; the twelve quick checks as pure functions over injected facts.
+  fold; the thirteen quick checks as pure functions over injected facts.
 - **T3:** `lib/health/drift.ts` — the ExportRule semantic compare and
   the netplan hash compare (+ their checks); nfs-conf drift check shell
   (consumes probe results).
@@ -56,7 +72,10 @@ downloadable archive through the task envelope.
   file-backed fakes + `-fail` hooks); wired into `health.probe
   level=deep`.
 - **T6:** `GET /health` integration — profile dispatch, facts
-  gathering, probe call with timeouts, agent-down degradation.
+  gathering, probe call with timeouts, agent-down degradation — AND
+  `GET /config-history/drift` wired to the same drift engine
+  (`{drift: [...]}`, nfs-conf reported `not_evaluated` pointing at
+  standard health).
 - **T7:** support bundle — `support.bundle` plan provider (lease
   override, empty public affected), the route composite
   (api-side staging file with task history/audit/state/deep-report →
@@ -180,11 +199,13 @@ patterns) → prune to 3. Rollback: delete the workdir + partial archive.
 ## 7. e2e (T8)
 
 Fixture-mode api+agent (fake NetHost/FsHost/xiraid + fixture probes):
-1. Healthy baseline: `quick` → all ok/skipped, `overall: ok`.
+1. Healthy baseline: `quick` → all ok/skipped, `overall: ok`;
+   `GET /config-history/drift` → `{drift: []}`; observed SystemdUnit
+   rows present from the fixture (`systemd-units.json`).
 2. Drift trio: mutate the fake netplan file out-of-band, remove an
    ExportRule fixture row vs a desired Share, and feed a divergent
    profile checksum → all three drift checks `degraded` in the right
-   profiles; fix → ok.
+   profiles AND the two KV ones in `/config-history/drift`; fix → ok.
 3. `standard`: fake xicli seam returns a 10-days license → warning;
    collector error surfaces.
 4. `deep`: fake ProbeHost happy path; `-fail` touch hook → critical for
