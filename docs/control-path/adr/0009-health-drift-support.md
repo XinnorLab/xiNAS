@@ -64,7 +64,7 @@ ignored). Category values come from the existing HealthCheck enum.
 
 | id | category | logic |
 |---|---|---|
-| `api.alive` | api | constant ok (exists) |
+| `xinas-api.alive` | api | constant ok (exists) |
 | `agent.connectivity` | agent | heartbeat tracker state: healthy→ok, degraded→degraded, offline→critical (the tracker's actual vocabulary) |
 | `xiraid.arrays` | xiraid | any observed array: initializing/rebuilding→degraded; degraded/failed/offline→critical; none→skipped |
 | `disk.health` | xiraid | observed Disk.status.health: `ok === false`→critical; `wear_pct > 90`→warning; disks without a health block→skipped individually (review P1: the reqs' disks/NVMe coverage) |

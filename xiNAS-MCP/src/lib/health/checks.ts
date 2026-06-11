@@ -37,10 +37,15 @@ const skipped = (
 });
 
 export const apiAlive: QuickCheck = () =>
-  ok('api.alive', 'api', 'xinas-api is responding');
+  ok('xinas-api.alive', 'api', 'xinas-api is responding');
 
 export const agentConnectivity: QuickCheck = (facts) => {
   // The tracker's actual vocabulary: healthy | degraded | offline.
+  // 'untracked' = no HeartbeatTracker wired (read-only contexts) —
+  // that is "not measured", not "agent down".
+  if (facts.agentState === 'untracked') {
+    return skipped('agent.connectivity', 'agent', 'heartbeat tracker not wired');
+  }
   if (facts.agentState === 'healthy') {
     return ok('agent.connectivity', 'agent', 'xinas-agent heartbeat healthy');
   }
@@ -217,27 +222,37 @@ export const networkRdmaReadiness: QuickCheck = (facts) => {
   if (managed.length === 0) {
     return skipped('network.rdma-readiness', 'network', 'no RDMA-capable interfaces observed');
   }
-  const notReady = managed.filter(
-    (i) => i.rdma_link_state !== 'up' || (i.current_addresses ?? []).length === 0,
-  );
+  // Evidence shape preserved from the S6 route implementation: ALL
+  // managed interfaces with `name`/state/address (the NFS-RDMA enable
+  // gate consumes this list).
+  const perIface = managed.map((i) => ({
+    name: i.id,
+    rdma_link_state: i.rdma_link_state ?? 'unknown',
+    has_address: (i.current_addresses ?? []).length > 0,
+  }));
+  const notReady = perIface.filter((e) => e.rdma_link_state !== 'up' || !e.has_address);
   if (notReady.length > 0) {
     return {
       id: 'network.rdma-readiness',
       category: 'network',
       status: 'degraded',
-      symptom: `${notReady.length} RDMA interface(s) not ready: ${notReady.map((i) => i.id).join(', ')}`,
-      impact: 'NFS-RDMA mounts via those interfaces will fail',
-      evidence: {
-        interfaces: notReady.map((i) => ({
-          id: i.id,
-          rdma_link_state: i.rdma_link_state,
-          has_address: (i.current_addresses ?? []).length > 0,
-        })),
-      },
+      symptom: `${notReady.length} of ${perIface.length} RDMA interface(s) not ready: ${notReady
+        .map((e) => e.name)
+        .join(', ')}`,
+      impact: 'NFS-RDMA mounts via the unready interfaces will fail or fall back to TCP',
+      evidence: { interfaces: perIface },
       recommended_action: 'check cabling/SM and interface addressing',
     };
   }
-  return ok('network.rdma-readiness', 'network', `${managed.length} RDMA interface(s) ready`);
+  return {
+    id: 'network.rdma-readiness',
+    category: 'network',
+    status: 'ok',
+    symptom: `${perIface.length} RDMA interface(s) up and addressed`,
+    impact: 'none',
+    evidence: { interfaces: perIface },
+    recommended_action: 'no action required',
+  };
 };
 
 export const systemdUnits: QuickCheck = (facts) => {

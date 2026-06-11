@@ -59,7 +59,12 @@ describe('GET /api/v1/health (S6 network checks)', () => {
     expect(res.body.result.profile).toBe('quick');
     expect(res.body.result.checks[0].id).toBe('xinas-api.alive');
     expect(res.body.result.checks[0].status).toBe('ok');
-    expect(res.body.result.checks).toHaveLength(3);
+    const ids = res.body.result.checks.map((c: { id: string }) => c.id);
+    expect(ids).toContain('network.duplicate-netplan');
+    expect(ids).toContain('network.rdma-readiness');
+    expect(ids).toContain('drift.nfs-exports');
+    expect(ids).toContain('drift.netplan');
+    expect(ids).toContain('drift.nfs-conf');
 
     const bad = await request(setup.app)
       .get('/api/v1/health?profile=bogus')
@@ -72,7 +77,11 @@ describe('GET /api/v1/health (S6 network checks)', () => {
     const byId = new Map(result.checks.map((c) => [c.id, c]));
     expect(byId.get('network.duplicate-netplan')?.status).toBe('skipped');
     expect(byId.get('network.rdma-readiness')?.status).toBe('skipped');
-    expect(result.overall).toBe('ok');
+    // S7: the test tracker never starts → agent offline IS critical now;
+    // everything else on an empty store is ok/skipped.
+    expect(byId.get('agent.connectivity')?.status).toBe('critical');
+    const nonAgent = result.checks.filter((c) => c.id !== 'agent.connectivity');
+    expect(nonAgent.every((c) => c.status === 'ok' || c.status === 'skipped')).toBe(true);
   });
 
   it('duplicates → critical with file evidence; overall critical', async () => {
@@ -94,7 +103,6 @@ describe('GET /api/v1/health (S6 network checks)', () => {
     seedIface('ibp9s0f0');
     let result = await health();
     expect(result.checks.find((c) => c.id === 'network.rdma-readiness')?.status).toBe('ok');
-    expect(result.overall).toBe('ok');
 
     seedIface('ibp9s0f0', { rdma_link_state: 'down' });
     result = await health();
@@ -105,7 +113,9 @@ describe('GET /api/v1/health (S6 network checks)', () => {
         (e) => e.name === 'ibp9s0f0',
       )?.rdma_link_state,
     ).toBe('down');
-    expect(result.overall).toBe('degraded');
+    // overall is critical in this app (S7: the never-started tracker
+    // reports the agent offline); the rdma check itself is the degraded.
+    expect(result.overall).toBe('critical');
   });
 
   it('unaddressed rdma iface → degraded (has_address leg)', async () => {
@@ -113,5 +123,103 @@ describe('GET /api/v1/health (S6 network checks)', () => {
     seedIface('ibp65s0', { current_addresses: [] });
     const result = await health();
     expect(result.checks.find((c) => c.id === 'network.rdma-readiness')?.status).toBe('degraded');
+  });
+});
+
+// ---- S7 T6: profiles + the drift API surface ----
+
+describe('GET /health profiles + /config-history/drift (S7 T6)', () => {
+  let setup: Awaited<ReturnType<typeof buildTestApp>>;
+
+  beforeEach(async () => {
+    setup = await buildTestApp();
+  });
+  afterEach(async () => {
+    await setup.cleanup();
+  });
+
+  it('standard without an agent client → probe-backed checks degraded EXECUTOR_UNAVAILABLE, KV checks intact', async () => {
+    const res = await request(setup.app)
+      .get('/api/v1/health?profile=standard')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(res.status).toBe(200);
+    const checks = res.body.result.checks as Array<{
+      id: string;
+      status: string;
+      evidence: Record<string, unknown>;
+    }>;
+    const byId = new Map(checks.map((c) => [c.id, c]));
+    for (const id of [
+      'xiraid.license',
+      'xiraid.service',
+      'network.rdma-live',
+      'agent.collectors',
+      'drift.nfs-conf',
+    ]) {
+      expect(byId.get(id)?.status).toBe('degraded');
+      expect(byId.get(id)?.evidence.code).toBe('EXECUTOR_UNAVAILABLE');
+    }
+    // deep-only checks are NOT in a standard report
+    expect(byId.has('filesystem.io')).toBe(false);
+    // KV checks still answered
+    expect(byId.get('xinas-api.alive')?.status).toBe('ok');
+  });
+
+  it('quick reports drift.nfs-conf skipped pointing at standard when a profile is desired', async () => {
+    setup.state.kv.put('/xinas/v1/desired/NfsProfile/default', {
+      kind: 'NfsProfile',
+      id: 'default',
+      spec: { versions: {} },
+    });
+    const res = await request(setup.app)
+      .get('/api/v1/health?profile=quick')
+      .set('Authorization', ADMIN_TOKEN);
+    const check = (res.body.result.checks as Array<{ id: string; status: string; recommended_action: string }>).find(
+      (c) => c.id === 'drift.nfs-conf',
+    );
+    expect(check?.status).toBe('skipped');
+    expect(check?.recommended_action).toContain('standard');
+  });
+
+  it('drift API: empty when clean; entries for drifted exports; not_evaluated for nfs-conf', async () => {
+    const clean = await request(setup.app)
+      .get('/api/v1/config-history/drift')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(clean.status).toBe(200);
+    expect(clean.body.result.drift).toEqual([]);
+
+    // a desired share with NO observed ExportRule → drift.nfs-exports
+    setup.state.kv.put('/xinas/v1/desired/Share/s1', {
+      kind: 'Share',
+      id: 's1',
+      spec: { path: '/mnt/a', clients: [{ pattern: '*', options: ['rw'] }] },
+    });
+    setup.state.kv.put('/xinas/v1/desired/NfsProfile/default', {
+      kind: 'NfsProfile',
+      id: 'default',
+      spec: { versions: {} },
+    });
+    const drifted = await request(setup.app)
+      .get('/api/v1/config-history/drift')
+      .set('Authorization', ADMIN_TOKEN);
+    const entries = drifted.body.result.drift as Array<{ artifact: string; status: string }>;
+    expect(entries.find((e) => e.artifact === 'drift.nfs-exports')?.status).toBe('degraded');
+    expect(entries.find((e) => e.artifact === 'drift.nfs-conf')?.status).toBe('not_evaluated');
+  });
+
+  it('drift.nfs-exports + nfs.exports fire in /health for the same seeded drift', async () => {
+    setup.state.kv.put('/xinas/v1/desired/Share/s1', {
+      kind: 'Share',
+      id: 's1',
+      spec: { path: '/mnt/a', clients: [{ pattern: '*', options: ['rw'] }] },
+    });
+    const res = await request(setup.app)
+      .get('/api/v1/health?profile=quick')
+      .set('Authorization', ADMIN_TOKEN);
+    const byId = new Map(
+      (res.body.result.checks as Array<{ id: string; status: string }>).map((c) => [c.id, c]),
+    );
+    expect(byId.get('drift.nfs-exports')?.status).toBe('degraded');
+    expect(byId.get('nfs.exports')?.status).toBe('degraded');
   });
 });

@@ -23,7 +23,8 @@ describe('startServer', () => {
         });
         expect(res.status).toBe(200);
         const body = await res.json();
-        expect(body.result.overall).toBe('ok');
+        expect(typeof body.result.overall).toBe('string');
+        expect(Array.isArray(body.result.checks)).toBe(true);
       } finally {
         await handle.close();
       }

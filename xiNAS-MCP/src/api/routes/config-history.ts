@@ -3,6 +3,9 @@ import { ApiException } from '../errors.js';
 import { buildEnvelope } from '../envelope.js';
 import type { Request, Response } from 'express';
 import type { ApiContext } from '../context.js';
+import { driftNetplanCheck, driftNfsExportsCheck } from '../../lib/health/drift.js';
+import { gatherHealthFacts } from '../handlers/health-facts.js';
+import { sendOk } from '../handlers/reads.js';
 
 const WARN = {
   code: 'CONFIG_HISTORY_NOT_INTEGRATED',
@@ -22,7 +25,7 @@ function emptyEnvelope(req: Request, res: Response, result: unknown) {
   );
 }
 
-export function configHistoryRouter(_ctx: ApiContext): Router {
+export function configHistoryRouter(ctx: ApiContext): Router {
   const r = Router();
   r.get('/config-history/snapshots', (req, res) => emptyEnvelope(req, res, []));
   r.get('/config-history/snapshots/:id', (_req, _res) => {
@@ -43,6 +46,36 @@ export function configHistoryRouter(_ctx: ApiContext): Router {
     }
     emptyEnvelope(req, res, { from, to, changes: [] });
   });
-  r.get('/config-history/drift', (req, res) => emptyEnvelope(req, res, { drift: [] }));
+  // S7 T6 (ADR-0009 §drift API surface): the SAME drift engine health
+  // uses. The two KV-anchored comparisons run here; drift.nfs-conf needs
+  // the agent's dry-render oracle, so it is reported not_evaluated with
+  // a pointer at the standard health profile. One entry per NON-OK
+  // check; a clean system returns { drift: [] }.
+  r.get('/config-history/drift', (req, res) => {
+    const gathered = gatherHealthFacts(ctx);
+    const results = [
+      driftNfsExportsCheck(gathered.desiredEntries, gathered.observedRules),
+      driftNetplanCheck(gathered.desiredNetRows, gathered.xinasFileHash),
+    ];
+    const drift: Array<Record<string, unknown>> = results
+      .filter((c) => c.status !== 'ok' && c.status !== 'skipped')
+      .map((c) => ({
+        artifact: c.id,
+        status: c.status,
+        symptom: c.symptom,
+        evidence: c.evidence,
+        recommended_action: c.recommended_action,
+      }));
+    if (gathered.desiredProfileSpec !== null) {
+      drift.push({
+        artifact: 'drift.nfs-conf',
+        status: 'not_evaluated',
+        symptom: 'requires the helper dry-render oracle',
+        evidence: {},
+        recommended_action: 'GET /health?profile=standard',
+      });
+    }
+    sendOk(req, res, { drift });
+  });
   return r;
 }
