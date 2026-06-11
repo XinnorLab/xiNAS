@@ -201,7 +201,7 @@ export function arraysRouter(ctx: ApiContext): Router {
         return;
       }
 
-      const dispatched = await tasks.taskEngine.dispatch({
+      const dispatched = await tasks.taskEngine.admitAndDispatch({
         task,
         agentClient: tasks.agentClient,
         spec: planTask.spec, // enriched spec incl. device_by_id (T7)
@@ -346,7 +346,7 @@ export function arraysRouter(ctx: ApiContext): Router {
         return;
       }
 
-      const dispatched = await tasks.taskEngine.dispatch({
+      const dispatched = await tasks.taskEngine.admitAndDispatch({
         task,
         agentClient: tasks.agentClient,
         spec: planTask.spec,
@@ -489,7 +489,7 @@ export function arraysRouter(ctx: ApiContext): Router {
         return;
       }
 
-      const dispatched = await tasks.taskEngine.dispatch({
+      const dispatched = await tasks.taskEngine.admitAndDispatch({
         task,
         agentClient: tasks.agentClient,
         spec: planTask.spec,

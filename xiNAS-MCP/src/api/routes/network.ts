@@ -278,7 +278,7 @@ export function networkRouter(ctx: ApiContext): Router {
         return;
       }
 
-      const dispatched = await tasks.taskEngine.dispatch({
+      const dispatched = await tasks.taskEngine.admitAndDispatch({
         task,
         agentClient: tasks.agentClient,
         spec: planTask.spec,
@@ -415,7 +415,7 @@ export function networkRouter(ctx: ApiContext): Router {
         return;
       }
 
-      const dispatched = await tasks.taskEngine.dispatch({
+      const dispatched = await tasks.taskEngine.admitAndDispatch({
         task,
         agentClient: tasks.agentClient,
         spec: planTask.spec,

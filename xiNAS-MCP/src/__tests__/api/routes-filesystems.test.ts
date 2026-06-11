@@ -321,3 +321,52 @@ describe('DELETE /api/v1/filesystems/:id', () => {
     ).toContain('fs_mounted');
   });
 });
+
+// ---- ci-graduation integration: custom routes go through the pool ----
+// The S2.1 worker pool admits via admitAndDispatch; the custom S4/S5/S6
+// routes (arrays/filesystems/network) must NOT bypass it by calling
+// dispatch() directly — a full pool leaves the task queued for the
+// drainer instead of dispatching inline.
+
+describe('POST /filesystems respects the worker-pool cap (admitAndDispatch)', () => {
+  let setup: MockAgentSetup;
+
+  beforeEach(async () => {
+    setup = await buildTestAppWithMockAgent({ maxInflight: 0 }); // pool always full
+    setup.state.kv.put('/xinas/v1/observed/XiraidArray/data', {
+      kind: 'XiraidArray',
+      id: 'data',
+      spec: {
+        name: 'data',
+        level: 'raid5',
+        member_disk_ids: ['d1', 'd2', 'd3', 'd4'],
+        strip_size_kib: 128,
+      },
+      status: { state: 'optimal', volume_path: '/dev/xi_data', observed_at: 'x' },
+    });
+  });
+  afterEach(async () => {
+    await setup.teardown();
+  });
+
+  it('apply with a full pool → 202 queued, NO task.begin dispatched', async () => {
+    const planned = await request(setup.app)
+      .post('/api/v1/filesystems')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({ mode: 'plan', spec: { backing_device: '/dev/xi_data', mountpoint: '/mnt/p' } });
+    expect(planned.status).toBe(200);
+
+    const res = await request(setup.app)
+      .post('/api/v1/filesystems')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({
+        mode: 'apply',
+        plan_id: planned.body.result.plan_id,
+        expected_revision: 0,
+        idempotency_key: 'idem-pool-full',
+      });
+    expect(res.status).toBe(202);
+    expect(res.body.result.state).toBe('queued'); // not running — pool full
+    expect(setup.mockAgent.lastTaskBeginParams()).toBeUndefined();
+  });
+});

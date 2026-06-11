@@ -230,7 +230,9 @@ export interface MockAgentSetup {
  * doesn't hang), closes the mock server, closes the state store, and removes
  * the temp dir.
  */
-export async function buildTestAppWithMockAgent(): Promise<MockAgentSetup> {
+export async function buildTestAppWithMockAgent(
+  opts: { maxInflight?: number } = {},
+): Promise<MockAgentSetup> {
   const dir = mkdtempSync(join(tmpdir(), 'xinas-mock-agent-'));
   const agentSockPath = join(dir, 'agent.sock');
 
@@ -268,7 +270,11 @@ export async function buildTestAppWithMockAgent(): Promise<MockAgentSetup> {
 
   // Wire the S2 task engines + an agent RPC client pointed at the mock UDS so
   // the reference route (T4) can dispatch task.begin end-to-end.
-  const tasks = buildTaskEngines({ state, agentClient: createAgentRpcClient(agentSockPath) });
+  const tasks = buildTaskEngines({
+    state,
+    agentClient: createAgentRpcClient(agentSockPath),
+    ...(opts.maxInflight !== undefined ? { maxInflight: opts.maxInflight } : {}),
+  });
 
   const ctx: ApiContext = { config, state, tracker, tasks };
   const app = createApp(ctx);
