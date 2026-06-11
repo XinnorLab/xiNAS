@@ -70,12 +70,13 @@ PRs" anti-pattern while still surfacing every issue.
 | `typescript-contracts` (vitest schema-fixture validation against `api-v1.yaml`) | **Blocking** | n/a; expands as real handlers and mock server land |
 | `python-lint` (`ruff check`) | **Blocking** (flipped 2026-06-10 — ruff cleanup PR) | satisfied |
 | `python-format` (`ruff format --check`) | **Blocking** (flipped 2026-06-10 — format pass PR) | satisfied |
-| `python-typecheck` (`pyright`, `basic` mode) | **Blocking** (flipped 2026-06-10 — runtime deps + typing tail landed) | satisfied |
-| `python-tests` (`pytest`) | **Blocking** (one sanity test) | n/a |
-| `ansible` (`ansible-lint`) | **Blocking** | n/a |
+| `python-typecheck` (`pyright`, `standard` mode) | **Blocking** (graduated `basic` → `standard` 2026-06-11 — 28 possibly-unbound/override errors fixed) | next: `strict` per module |
+| `python-tests` (`pytest --cov=xinas_history --cov-fail-under=20`) | **Blocking** (coverage floor added 2026-06-11 at measured 22%) | ratchet the floor as coverage grows |
+| `ansible` (`ansible-lint`, profile `basic`) | **Blocking** (graduated `min` → `basic` 2026-06-11 — 67 findings fixed; `var-naming[no-role-prefix]` skipped: role vars are the public preset contract, renaming is breaking) | next: profile `production` |
 | `yamllint` | **Blocking** (flipped 2026-06-10 — house style codified in `.yamllint.yml`) | satisfied |
 | `openapi` (`spectral lint`, ruleset `spectral:oas`) | **Blocking** | n/a |
-| `openapi-envelope` (custom Spectral rule, loaded via `.spectral.yaml`) | **Warn-only** | After 3 production PRs land without violation |
+| `openapi-envelope` (custom Spectral rule, loaded via `.spectral.yaml`) | **Blocking** (flipped 2026-06-11 — far more than 3 clean PRs landed; 0 violations at `error`) | satisfied |
+| `openapi-compat` (`oasdiff breaking` vs the PR base's `api-v1.yaml`; PR-only) | **Blocking** (added 2026-06-11) | n/a |
 | `secrets` (`gitleaks`) | **Blocking** | n/a |
 | `markdown` (`markdownlint-cli2`) | **Blocking** (flipped 2026-06-10 — house style codified in `.markdownlint-cli2.jsonc`) | satisfied |
 
@@ -117,6 +118,8 @@ Verified empirically against the current tree on 2026-05-26.
   current `api-v1.yaml` (all 38 `application/json` response uses
   correctly wrap with the `Envelope`), but kept warn-only for the
   first three PRs as a guardrail while the spec expands.
+  *(Flipped to `severity: error` 2026-06-11 — the guardrail period is
+  long past and the rule still reports 0 violations.)*
 
 ### Evidence behind blocking choices
 
@@ -284,9 +287,9 @@ real envelope-missing cases.
 extends: ["spectral:oas"]
 rules:
   # Custom: every non-stream response must reference the envelope.
-  # WARN-ONLY initially; see ci-bootstrap-design.md gate matrix.
+  # Blocking since 2026-06-11; see ci-bootstrap-design.md gate matrix.
   envelope-required-on-responses:
-    severity: warn
+    severity: error
     description: |
       Every non-stream JSON response must wrap with the Envelope schema,
       either directly via $ref or via allOf containing an Envelope $ref.
@@ -731,9 +734,14 @@ schema-conformance backbone, not just a fixture validator.
 
 ## Future work (tracked in workflow comments)
 
-- Add `oasdiff` between consecutive `api-v1.yaml` versions (after v1
-  is published).
-- Add `pytest --cov` coverage gate (after real tests exist).
+- ~~Add `oasdiff`~~ — done 2026-06-11: the `openapi-compat` job runs
+  `oasdiff breaking` against the PR base's `api-v1.yaml` (PR-only).
+- ~~Add `pytest --cov` coverage gate~~ — done 2026-06-11:
+  `--cov=xinas_history --cov-fail-under=20`; ratchet as coverage grows.
+- Expand `typescript-lint` beyond `correctness` (measured 2026-06-11
+  with biome 1.9.4, `style`+`suspicious` at `all` on `src/`: ~3.7k
+  diagnostics, 233 errors + ~3.5k warnings — its own debt package;
+  start from `recommended`).
 - Add MCP integration smoke test (after a containerized test harness
   exists).
 - Add a live contract test against the WS1 mock server (after the
