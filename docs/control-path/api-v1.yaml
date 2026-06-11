@@ -594,7 +594,7 @@ components:
               type: string
               enum: [raid0, raid1, raid5, raid6, raid7, raid10, raid50, raid60, raid70, "n+m"]
             strip_size_kib: { type: [integer, "null"] }
-            block_size: { type: [integer, "null"], enum: [512, 4096, null] }
+            block_size: { type: [integer, "null"], description: "512 or 4096 when known; null when not yet probed." }
             group_size:
               type: [integer, "null"]
               description: "Drives per group. Required for raid50/60/70; 2-32; member count must divide evenly."
