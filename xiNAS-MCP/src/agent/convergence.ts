@@ -72,6 +72,7 @@ import {
   createFixtureNetworkProbe,
   createFixtureNfsProbe,
   createFixtureNfsProfileProbe,
+  createFixtureSystemdProbe,
   createFixtureTuningProbe,
   createFixtureUsersProbe,
   fixtureDir,
@@ -82,7 +83,7 @@ import { createNetworkProbe } from './probe/network.js';
 import { createNfsProfileProbe } from './probe/nfs-profile.js';
 import { createNfsProbe } from './probe/nfs.js';
 import { createTuningProbe } from './probe/tuning.js';
-import { DEFAULT_ALLOWLIST } from './probe/systemd.js';
+import { createSystemctlProbe } from './probe/systemd.js';
 import { createUsersProbe } from './probe/users.js';
 import { Publisher } from './publisher.js';
 import { XiraidClient, createGrpcTransport } from './xiraid/client.js';
@@ -264,15 +265,16 @@ export function buildConvergence(config: AgentConfig): Convergence {
     }),
   );
 
-  // --- Systemd: dbus is integration-only + requires connectDbus; wire a
-  //     degraded probe so the collector surfaces health=error rather than
-  //     spawning a dbus connection that isn't available off a real host. ---
+  // --- Systemd (S7 T1b promotion, ADR-0009): real unit state via the
+  //     systemctl-show subprocess probe (the dbus subscription stays
+  //     deferred — the 30 s poll backstop refreshes). Fixture mode reads
+  //     systemd-units.json rows verbatim. ---
+  const systemdProbe = fdir !== null ? createFixtureSystemdProbe(fdir) : createSystemctlProbe();
   registry.register(
     new SystemdUnitCollector({
       probe: {
-        allowList: DEFAULT_ALLOWLIST,
-        getUnitState: () =>
-          Promise.reject(new Error('systemd dbus probe unavailable (integration-only)')),
+        allowList: systemdProbe.allowList,
+        getUnitState: (name) => systemdProbe.getUnitState(name),
         subscribeAllowListed(): SyncStopHandle {
           return NOOP_HANDLE;
         },

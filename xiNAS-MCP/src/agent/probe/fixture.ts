@@ -35,6 +35,7 @@ import { type ObservedDisk, parseLsblkOutput } from '../../lib/parse/disk.js';
 import { parseIpJson } from '../../lib/parse/network.js';
 import type { ParsedPasswdLine } from '../../lib/parse/passwd.js';
 import { createFakeNetHost } from '../net/fake-host.js';
+import { createSystemctlProbe } from './systemd.js';
 import type { IdmapSnapshot } from './idmap.js';
 import {
   type NetplanSummary,
@@ -147,6 +148,51 @@ export function createFixtureTuningProbe(dir: string): {
           { entries: [] },
         ),
       ),
+  };
+}
+
+/**
+ * Systemd: reads <dir>/systemd-units.json
+ * (`{ "<unit>": {load_state, active_state, sub_state, unit_file_state?} }`);
+ * unlisted units degrade to not-found/unknown like the real probe. The
+ * allow-list mirrors the real probe's (DEFAULT + the S7 xinas units).
+ */
+export function createFixtureSystemdProbe(dir: string): {
+  allowList: string[];
+  getUnitState(name: string): Promise<{
+    load_state: string;
+    active_state: string;
+    sub_state: string;
+    unit_file_state?: string;
+  }>;
+} {
+  const real = createSystemctlProbe({
+    execFile: ((_f: string, _a: string[], _o: unknown, cb: (e: Error) => void) =>
+      cb(new Error('fixture mode'))) as never,
+  });
+  return {
+    allowList: real.allowList,
+    getUnitState: (name: string) => {
+      const rows = readFixture<Record<string, Record<string, string>>>(
+        dir,
+        'systemd-units.json',
+        {},
+      );
+      const row = rows[name];
+      if (row === undefined) {
+        return Promise.resolve({
+          load_state: 'not-found',
+          active_state: 'unknown',
+          sub_state: 'unknown',
+        });
+      }
+      return Promise.resolve({
+        load_state: row.load_state ?? 'loaded',
+        active_state: row.active_state ?? 'unknown',
+        sub_state: row.sub_state ?? 'unknown',
+        ...(row.unit_file_state !== undefined ? { unit_file_state: row.unit_file_state } : {}),
+      });
+    },
   };
 }
 
