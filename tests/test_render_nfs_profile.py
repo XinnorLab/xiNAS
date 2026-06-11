@@ -286,3 +286,59 @@ def test_failed_systemctl_raises_after_render(env):
 
     for prod in PROD_PATHS:
         assert os.path.isfile(_rooted(root, prod)), f"{prod} not rendered before failure"
+
+
+# ---- S7 T1c: dry_run (ADR-0009 — the drift oracle must not write) ----
+
+
+def _tree_snapshot(root):
+    out = {}
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            p = os.path.join(dirpath, f)
+            with open(p, "rb") as fh:
+                out[p] = hashlib.sha256(fh.read()).hexdigest()
+    return out
+
+
+def test_dry_run_touches_nothing_and_matches_wet_checksums(tmp_path):
+    spec = full_spec()
+    calls = []
+
+    def recorder(argv):
+        calls.append(argv)
+
+    root = str(tmp_path / "root")
+    os.makedirs(root)
+
+    # Wet render first → the reference checksums + a populated tree.
+    wet = nfs_profile.render_nfs_profile(
+        spec,
+        False,
+        root=root,
+        lock_path=str(tmp_path / "lock"),
+        run_systemctl=recorder,
+    )
+    assert len(calls) == 1  # the reload
+    before = _tree_snapshot(root)
+
+    # Dry render: same checksums, untouched tree, zero systemctl calls.
+    dry = nfs_profile.render_nfs_profile(
+        spec,
+        True,  # restart=True must STILL be ignored in dry mode
+        root=root,
+        lock_path=str(tmp_path / "lock"),
+        run_systemctl=recorder,
+        dry_run=True,
+    )
+    assert dry["dry_run"] is True
+    assert dry["restarted"] is False and dry["reloaded"] is False
+    assert dry["effective_files"] == wet["effective_files"]
+    assert _tree_snapshot(root) == before
+    assert len(calls) == 1  # unchanged — no reload/restart from the dry call
+
+
+def test_dry_run_invalid_spec_still_raises(tmp_path):
+    # {} normalizes to all-defaults; a wrong-typed field is what raises.
+    with pytest.raises(ValueError):
+        nfs_profile.render_nfs_profile({"versions": "nope"}, False, dry_run=True)

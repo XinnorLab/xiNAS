@@ -249,12 +249,20 @@ def render_nfs_profile(
     root: str = "/",
     lock_path: str = LOCK_PATH,
     run_systemctl=None,
+    dry_run: bool = False,
 ) -> dict:
     """Render the four ADR-0005 effective files from the NfsProfile spec.
 
     Returns ``{"effective_files": {"<abs path>": "sha256:<hex>", ...},
     "restarted": bool, "reloaded": bool}``. Checksums are keyed by the
     absolute production path even when *root* relocates the writes.
+
+    ``dry_run=True`` (S7, ADR-0009): render ENTIRELY IN MEMORY — no file is
+    written, no lock is taken, and NO systemctl action runs; the return
+    carries the would-be checksums plus ``"dry_run": True`` with
+    ``restarted``/``reloaded`` both false. This is the drift oracle for
+    ``health.probe`` — the same renderer that produces the live files
+    produces the expected checksums, so a checksum mismatch is real drift.
 
     Raises ValueError on an invalid spec (→ INVALID_ARGUMENT) and
     RuntimeError if the post-render service action fails (→ INTERNAL; the
@@ -275,6 +283,23 @@ def render_nfs_profile(
         LOCKD_CONF_PATH: _render_lockd_conf,
         NFS_COMMON_PATH: _render_nfs_common,
     }
+
+    if dry_run:
+        effective_files: dict[str, str] = {}
+        for prod_path, renderer in renderers.items():
+            # EXACTLY the bytes _atomic_write would produce (join + trailing
+            # newline) so dry checksums byte-match a wet render's.
+            body = "\n".join(renderer(normalized))
+            if not body.endswith("\n"):
+                body += "\n"
+            digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            effective_files[prod_path] = f"sha256:{digest}"
+        return {
+            "effective_files": effective_files,
+            "restarted": False,
+            "reloaded": False,
+            "dry_run": True,
+        }
 
     def _do() -> dict:
         effective_files: dict[str, str] = {}

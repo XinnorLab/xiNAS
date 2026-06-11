@@ -204,7 +204,8 @@ def handle_render_nfs_profile(req: dict) -> dict:
     if not spec or not isinstance(spec, dict):
         raise ValueError("Missing or invalid 'spec' field")
     restart = bool(req.get("restart", False))
-    return render_nfs_profile(spec, restart)
+    dry_run = bool(req.get("dry_run", False))
+    return render_nfs_profile(spec, restart, dry_run=dry_run)
 
 
 def _exportfs_reload() -> None:
