@@ -75,13 +75,11 @@
   changed_when: "'added' in _npm_ci.stdout or 'updated' in _npm_ci.stdout"
   tags: [xinas_mcp, build]
 
-- name: Build TypeScript → dist/
-  ansible.builtin.command:
-    cmd: npm run build
-    chdir: "{{ xinas_mcp_repo_path }}"
-  changed_when: true
-  notify: Restart xinas-mcp
-  tags: [xinas_mcp, build]
+# NOTE: the TypeScript build lives in section 4b, next to the xinas-mcp unit
+# install and (re)start — dist/ must exist before the service starts. Daemon
+# lifecycle is driven by explicit per-service systemd tasks (no handlers /
+# flush_handlers), because this role provisions two independent daemons and a
+# global flush would fire one daemon's restart before the other's unit exists.
 
 # ─── 3. NFS helper daemon ──────────────────────────────────────────────────────
 
@@ -102,7 +100,7 @@
     group: root
     mode: '0644'
     remote_src: true
-  notify: Restart xinas-nfs-helper
+  register: _nfs_helper_src
   tags: [xinas_mcp, nfs_helper]
 
 - name: Make nfs_helper.py executable
@@ -119,20 +117,19 @@
     group: root
     mode: '0644'
     remote_src: true
-  notify:
-    - Reload systemd
-    - Restart xinas-nfs-helper
+  register: _nfs_helper_unit
   tags: [xinas_mcp, nfs_helper]
 
-- name: Force systemd daemon-reload before enabling service
-  ansible.builtin.meta: flush_handlers
-  tags: [xinas_mcp, nfs_helper]
-
-- name: Enable and start xinas-nfs-helper
-  ansible.builtin.service:
+# Self-contained lifecycle: daemon_reload runs before the state action, so a
+# freshly-copied unit is reloaded before start. No handlers / flush_handlers —
+# this role provisions two independent daemons, and a global flush would fire
+# the *other* daemon's restart before its unit exists.
+- name: Reload systemd, enable and (re)start xinas-nfs-helper
+  ansible.builtin.systemd:
     name: xinas-nfs-helper
+    daemon_reload: true
     enabled: true
-    state: started
+    state: "{{ 'restarted' if (_nfs_helper_src is changed or _nfs_helper_unit is changed) else 'started' }}"
   tags: [xinas_mcp, nfs_helper, service]
 
 # ─── 4. Directories and configuration ─────────────────────────────────────────
@@ -168,6 +165,18 @@
 # ─── 4b. MCP server daemon (Streamable HTTP / SSE / stdio) ───────────────────
 # Must run after config deploy: the daemon reads /etc/xinas-mcp/config.json
 # at startup. Placed before Claude Code config so the service is ready first.
+#
+# Build → install unit → (re)start are kept together here: dist/ must exist
+# before the service starts, and the unit lifecycle is driven by an explicit
+# systemd task (no handlers / flush_handlers — see the nfs-helper task above).
+
+- name: Build TypeScript → dist/
+  ansible.builtin.command:
+    cmd: npm run build
+    chdir: "{{ xinas_mcp_repo_path }}"
+  changed_when: true
+  register: _mcp_build
+  tags: [xinas_mcp, build]
 
 - name: Install xinas-mcp systemd unit
   ansible.builtin.copy:
@@ -177,20 +186,18 @@
     group: root
     mode: '0644'
     remote_src: true
-  notify:
-    - Reload systemd
-    - Restart xinas-mcp
+  register: _mcp_unit
   tags: [xinas_mcp, service]
 
-- name: Force systemd daemon-reload before enabling xinas-mcp
-  ansible.builtin.meta: flush_handlers
-  tags: [xinas_mcp, service]
-
-- name: Enable and start xinas-mcp
-  ansible.builtin.service:
+# Self-contained lifecycle (see the matching nfs-helper task above). The build
+# reports changed on every run, so xinas-mcp restarts each role run to pick up
+# the rebuilt dist/.
+- name: Reload systemd, enable and (re)start xinas-mcp
+  ansible.builtin.systemd:
     name: xinas-mcp
+    daemon_reload: true
     enabled: true
-    state: started
+    state: "{{ 'restarted' if (_mcp_build is changed or _mcp_unit is changed) else 'started' }}"
   tags: [xinas_mcp, service]
 
 # ─── 5. Claude Code MCP integration ───────────────────────────────────────────

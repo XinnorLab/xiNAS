@@ -1,17 +1,9 @@
 ---
-- name: Reload systemd
-  ansible.builtin.systemd:
-    daemon_reload: true
-
-- name: Restart xinas-nfs-helper
-  ansible.builtin.service:
-    name: xinas-nfs-helper
-    state: restarted
-
-- name: Restart xinas-mcp
-  ansible.builtin.service:
-    name: xinas-mcp
-    state: restarted
+# Daemon lifecycle (xinas-nfs-helper, xinas-mcp) is driven by explicit
+# ansible.builtin.systemd tasks in tasks/main.yml, NOT by handlers. This role
+# provisions two independent daemons, and a global `meta: flush_handlers` would
+# fire one daemon's restart before the other's unit is installed. Only the
+# independent sshd restart remains a handler.
 
 - name: Restart sshd
   ansible.builtin.service:
