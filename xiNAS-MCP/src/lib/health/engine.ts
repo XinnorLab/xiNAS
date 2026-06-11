@@ -81,9 +81,7 @@ const SEVERITY: Record<Exclude<HealthStatus, 'skipped'>, number> = {
 };
 
 /** Worst non-skipped status; an all-skipped/empty report is 'ok'. */
-export function overallOf(
-  checks: HealthCheckResult[],
-): 'ok' | 'warning' | 'degraded' | 'critical' {
+export function overallOf(checks: HealthCheckResult[]): 'ok' | 'warning' | 'degraded' | 'critical' {
   let worst: Exclude<HealthStatus, 'skipped'> = 'ok';
   for (const check of checks) {
     if (check.status === 'skipped') continue;

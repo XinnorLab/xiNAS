@@ -30,9 +30,9 @@ describe('parseXicliLicense', () => {
 
   it('expired / invalid / empty', () => {
     expect(parseXicliLicense('status: expired\n', NOW).status).toBe('expired');
-    expect(
-      parseXicliLicense('status: valid\nexpiration date: 2026-06-01\n', NOW).status,
-    ).toBe('expired');
+    expect(parseXicliLicense('status: valid\nexpiration date: 2026-06-01\n', NOW).status).toBe(
+      'expired',
+    );
     expect(parseXicliLicense('', NOW).status).toBe('absent');
     expect(parseXicliLicense('garbage text\n', NOW).status).toBe('absent');
   });

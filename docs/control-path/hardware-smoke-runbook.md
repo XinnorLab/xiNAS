@@ -104,6 +104,38 @@ On a scratch node (or after `./uninstall.sh`):
    (`mount -o rdma` + I/O) — `network.rdma-readiness: ok`.
 6. [ ] Journal clean of EPERM (CAP_NET_ADMIN sufficiency proven).
 
+## 5a. S7 — health, drift, support bundle
+
+- [ ] `GET /health?profile=quick` on a converged node: every catalog
+  check ok/skipped; `agent.connectivity` ok; `nfs.server` ok via the
+  PROMOTED systemctl-show probe (observed SystemdUnit rows exist —
+  `GET /api/v1/system` shows the systemd collector running).
+- [ ] **Confirm xiRAID's real unit names** (`systemctl list-units
+  'xiraid*'`) and add them to the observation allow-list
+  (`src/agent/probe/systemd.ts` S7_ALLOWLIST_ADDITIONS) — deferred from
+  S7 T1b on purpose.
+- [ ] `profile=standard`: `xiraid.license` reflects the real license
+  (verify days_left); the response carries NO raw `xicli license show`
+  text; `drift.nfs-conf` ok on a freshly applied profile (the helper
+  dry render runs with `dry_run: true` — confirm zero writes:
+  `inotifywait -m /etc/nfs` stays silent during the GET).
+- [ ] `profile=deep`: `filesystem.io` touches every mounted managed fs
+  (probe file appears/disappears); `nfs.loopback` performs a REAL
+  PID1-delegated `systemd-mount localhost:<export>` at
+  `/run/xinas/health-probe/mnt` and unmounts (check `systemd-mount
+  --list` empty afterwards) — the agent has no CAP_SYS_ADMIN, so this
+  validates the delegation end to end.
+- [ ] Drift: edit `/etc/netplan/99-xinas.yaml` by hand → `drift.netplan`
+  degraded in `GET /health` AND `GET /config-history/drift`; re-apply →
+  clean. Remove an export via `exportfs -u` → `drift.nfs-exports`
+  degraded with the missing path in evidence.
+- [ ] `POST /support-bundle` → task success → download; extract and
+  verify: journals scrubbed (`grep -ri bearer` shows only `***`),
+  `xiraid/license.json` is the PARSED struct, no `/etc/xinas-api` or
+  `/etc/xinas-agent` content anywhere, `api/api.json` carries tasks +
+  audit + the health report. Run it twice concurrently → the second
+  queues behind the SupportBundle/default lease.
+
 ## 6. Cross-cutting
 
 1. [ ] **Plan→pause→apply:** plan an array modify, wait 2+ minutes,

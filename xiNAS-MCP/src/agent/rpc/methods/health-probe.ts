@@ -68,8 +68,7 @@ export function makeHealthProbeHandler(deps: HealthProbeDeps) {
       const parsed = raw.trim().length > 0 ? (JSON.parse(raw) as unknown) : [];
       if (Array.isArray(parsed)) {
         rdmaLinks = parsed.filter(
-          (e): e is HealthProbeResult['rdma_links'][number] =>
-            typeof e === 'object' && e !== null,
+          (e): e is HealthProbeResult['rdma_links'][number] => typeof e === 'object' && e !== null,
         );
       }
     } catch {

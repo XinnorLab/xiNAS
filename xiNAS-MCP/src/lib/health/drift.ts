@@ -105,7 +105,8 @@ export function driftNfsExportsCheck(
     };
   }
   const drift = compareExports(desired, observed);
-  const clean = drift.missing.length === 0 && drift.extra.length === 0 && drift.changed.length === 0;
+  const clean =
+    drift.missing.length === 0 && drift.extra.length === 0 && drift.changed.length === 0;
   if (clean) {
     return {
       id: 'drift.nfs-exports',

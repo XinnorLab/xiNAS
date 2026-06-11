@@ -174,9 +174,9 @@ describe('GET /health profiles + /config-history/drift (S7 T6)', () => {
     const res = await request(setup.app)
       .get('/api/v1/health?profile=quick')
       .set('Authorization', ADMIN_TOKEN);
-    const check = (res.body.result.checks as Array<{ id: string; status: string; recommended_action: string }>).find(
-      (c) => c.id === 'drift.nfs-conf',
-    );
+    const check = (
+      res.body.result.checks as Array<{ id: string; status: string; recommended_action: string }>
+    ).find((c) => c.id === 'drift.nfs-conf');
     expect(check?.status).toBe('skipped');
     expect(check?.recommended_action).toContain('standard');
   });

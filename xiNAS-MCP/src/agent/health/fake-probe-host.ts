@@ -24,9 +24,7 @@ export function createFakeProbeHost(dir: string): ProbeHost {
   const statePath = join(dir, 'probe-host-state.json');
 
   const load = (): ProbeHostState =>
-    existsSync(statePath)
-      ? (JSON.parse(readFileSync(statePath, 'utf8')) as ProbeHostState)
-      : {};
+    existsSync(statePath) ? (JSON.parse(readFileSync(statePath, 'utf8')) as ProbeHostState) : {};
 
   const record = (op: string): ProbeHostState => {
     const state = load();

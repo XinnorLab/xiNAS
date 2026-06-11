@@ -85,10 +85,8 @@ export function makeSupportBundleExecutor(opts: { host: BundleHost }): Executor 
   const { host } = opts;
 
   const workDirOf = (spec: BundleSpec): string => join(spec.bundle_dir, `work-${spec.task_id}`);
-  const archiveOf = (spec: BundleSpec): string =>
-    join(spec.bundle_dir, `${spec.task_id}.tar.gz`);
-  const stagingOf = (spec: BundleSpec): string =>
-    join(spec.bundle_dir, `${spec.task_id}.api.json`);
+  const archiveOf = (spec: BundleSpec): string => join(spec.bundle_dir, `${spec.task_id}.tar.gz`);
+  const stagingOf = (spec: BundleSpec): string => join(spec.bundle_dir, `${spec.task_id}.api.json`);
 
   const stages: ExecutorStage[] = [
     {
@@ -217,7 +215,9 @@ export function makeSupportBundleExecutor(opts: { host: BundleHost }): Executor 
         for (const { f } of stale) {
           await rm(join(spec.bundle_dir, f), { force: true });
         }
-        ctx.emitOutput(`retention: kept ${Math.min(withTimes.length, spec.retention)}, pruned ${stale.length}`);
+        ctx.emitOutput(
+          `retention: kept ${Math.min(withTimes.length, spec.retention)}, pruned ${stale.length}`,
+        );
       },
     },
   ];

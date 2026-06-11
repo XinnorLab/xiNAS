@@ -37,7 +37,10 @@ async function stageApiHalf(ctx: ApiContext, bundleDir: string, taskId: string):
   let auditTail: string[] = [];
   try {
     const raw = await readFile(ctx.config.state.auditJsonlPath, 'utf8');
-    auditTail = raw.split('\n').filter((l) => l.length > 0).slice(-STAGED_AUDIT_LINES);
+    auditTail = raw
+      .split('\n')
+      .filter((l) => l.length > 0)
+      .slice(-STAGED_AUDIT_LINES);
   } catch {
     /* audit log absent: staged as empty */
   }
@@ -152,10 +155,7 @@ export function supportRouter(ctx: ApiContext): Router {
         throw new ApiException('NOT_FOUND', 'no bundle for that task');
       }
       res.setHeader('Content-Type', 'application/gzip');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="xinas-support-${taskId}.tar.gz"`,
-      );
+      res.setHeader('Content-Disposition', `attachment; filename="xinas-support-${taskId}.tar.gz"`);
       createReadStream(archive).on('error', next).pipe(res);
     } catch (err) {
       next(err);

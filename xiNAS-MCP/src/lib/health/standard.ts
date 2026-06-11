@@ -237,9 +237,7 @@ export function filesystemIoCheck(fsIo: ProbeDeepResults['fs_io']): HealthCheckR
   };
 }
 
-export function nfsLoopbackCheck(
-  loopback: ProbeDeepResults['nfs_loopback'],
-): HealthCheckResult {
+export function nfsLoopbackCheck(loopback: ProbeDeepResults['nfs_loopback']): HealthCheckResult {
   const base = { id: 'nfs.loopback', category: 'nfs' as const };
   if (loopback === null || !loopback.attempted) {
     return {

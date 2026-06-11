@@ -22,7 +22,10 @@ describe('compareExports (semantic)', () => {
         export_path: '/mnt/a',
         rules: [
           // reordered + exportfs noise — still clean
-          { host_pattern: '*', options: ['no_subtree_check', 'wdelay', 'rw', 'no_root_squash', 'hide'] },
+          {
+            host_pattern: '*',
+            options: ['no_subtree_check', 'wdelay', 'rw', 'no_root_squash', 'hide'],
+          },
         ],
       },
     ]);
@@ -31,10 +34,7 @@ describe('compareExports (semantic)', () => {
 
   it('detects missing, extra, and changed (options + hosts)', () => {
     const drift = compareExports(
-      [
-        ...DESIRED,
-        { path: '/mnt/b', clients: [{ host: '10.0.0.0/24', options: ['ro'] }] },
-      ],
+      [...DESIRED, { path: '/mnt/b', clients: [{ host: '10.0.0.0/24', options: ['ro'] }] }],
       [
         {
           export_path: '/mnt/a',
@@ -81,9 +81,7 @@ describe('drift checks', () => {
   });
 
   it('netplan: hash equality via the real renderer; skipped without desired/observed', () => {
-    const rows = [
-      { name: 'ibp0', addresses: ['10.10.1.1/24'], enabled: true, pbr_table_id: 100 },
-    ];
+    const rows = [{ name: 'ibp0', addresses: ['10.10.1.1/24'], enabled: true, pbr_table_id: 100 }];
     const hash = createHash('sha256').update(renderNetplan(rows), 'utf8').digest('hex');
     expect(driftNetplanCheck([], hash).status).toBe('skipped');
     expect(driftNetplanCheck(rows, undefined).status).toBe('skipped');
@@ -101,9 +99,7 @@ describe('drift checks', () => {
     expect(driftNfsConfCheck({ versions: {} }, null, {}).status).toBe('degraded');
 
     const render = { '/etc/nfs/nfsd.conf': 'sha256:aaa', '/etc/default/nfs-common': 'sha256:bbb' };
-    expect(
-      driftNfsConfCheck({ versions: {} }, render, { ...render }).status,
-    ).toBe('ok');
+    expect(driftNfsConfCheck({ versions: {} }, render, { ...render }).status).toBe('ok');
     const drifted = driftNfsConfCheck({ versions: {} }, render, {
       '/etc/nfs/nfsd.conf': 'sha256:zzz',
     });

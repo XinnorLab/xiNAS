@@ -59,14 +59,17 @@ describe('quick checks (table)', () => {
 
   it('xiraid.arrays: optimal ok, rebuild degraded, failed critical, none skipped', () => {
     expect(xiraidArrays(emptyFacts()).status).toBe('skipped');
-    expect(
-      xiraidArrays(emptyFacts({ arrays: [{ id: 'a', state: 'online' }] })).status,
-    ).toBe('ok');
-    expect(
-      xiraidArrays(emptyFacts({ arrays: [{ id: 'a', state: 'rebuilding' }] })).status,
-    ).toBe('degraded');
+    expect(xiraidArrays(emptyFacts({ arrays: [{ id: 'a', state: 'online' }] })).status).toBe('ok');
+    expect(xiraidArrays(emptyFacts({ arrays: [{ id: 'a', state: 'rebuilding' }] })).status).toBe(
+      'degraded',
+    );
     const critical = xiraidArrays(
-      emptyFacts({ arrays: [{ id: 'a', state: 'degraded' }, { id: 'b', state: 'online' }] }),
+      emptyFacts({
+        arrays: [
+          { id: 'a', state: 'degraded' },
+          { id: 'b', state: 'online' },
+        ],
+      }),
     );
     expect(critical.status).toBe('critical');
     expect(critical.symptom).toContain('a=degraded');
@@ -80,9 +83,9 @@ describe('quick checks (table)', () => {
     expect(
       diskHealth(emptyFacts({ disks: [{ id: 'd1', health: { ok: true, wear_pct: 95 } }] })).status,
     ).toBe('warning');
-    expect(
-      diskHealth(emptyFacts({ disks: [{ id: 'd1', health: { ok: false } }] })).status,
-    ).toBe('critical');
+    expect(diskHealth(emptyFacts({ disks: [{ id: 'd1', health: { ok: false } }] })).status).toBe(
+      'critical',
+    );
   });
 
   it('filesystem.mounts: enabled-but-unmounted degraded', () => {
@@ -128,9 +131,9 @@ describe('quick checks (table)', () => {
 
   it('network checks mirror the S6 logic over facts', () => {
     expect(networkDuplicateNetplan(emptyFacts()).status).toBe('skipped');
-    expect(
-      networkDuplicateNetplan(emptyFacts({ networkConfig: { duplicates: {} } })).status,
-    ).toBe('ok');
+    expect(networkDuplicateNetplan(emptyFacts({ networkConfig: { duplicates: {} } })).status).toBe(
+      'ok',
+    );
     expect(
       networkDuplicateNetplan(
         emptyFacts({ networkConfig: { duplicates: { ibp0: ['/etc/netplan/50-x.yaml'] } } }),
@@ -142,7 +145,12 @@ describe('quick checks (table)', () => {
       networkRdmaReadiness(
         emptyFacts({
           networkIfaces: [
-            { id: 'ib0', rdma_capable: true, rdma_link_state: 'up', current_addresses: ['10.0.0.1/24'] },
+            {
+              id: 'ib0',
+              rdma_capable: true,
+              rdma_link_state: 'up',
+              current_addresses: ['10.0.0.1/24'],
+            },
           ],
         }),
       ).status,
@@ -150,7 +158,14 @@ describe('quick checks (table)', () => {
     expect(
       networkRdmaReadiness(
         emptyFacts({
-          networkIfaces: [{ id: 'ib0', rdma_capable: true, rdma_link_state: 'down', current_addresses: ['10.0.0.1/24'] }],
+          networkIfaces: [
+            {
+              id: 'ib0',
+              rdma_capable: true,
+              rdma_link_state: 'down',
+              current_addresses: ['10.0.0.1/24'],
+            },
+          ],
         }),
       ).status,
     ).toBe('degraded');

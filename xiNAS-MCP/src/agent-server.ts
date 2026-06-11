@@ -104,9 +104,7 @@ async function main(): Promise<void> {
   const healthProbeHandler = makeHealthProbeHandler(
     makeHealthProbeDeps({
       getCollectorHealth,
-      ...(config.nfs_helper_socket !== undefined
-        ? { helperSocket: config.nfs_helper_socket }
-        : {}),
+      ...(config.nfs_helper_socket !== undefined ? { helperSocket: config.nfs_helper_socket } : {}),
     }),
   );
 

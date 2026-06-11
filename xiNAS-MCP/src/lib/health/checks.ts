@@ -36,8 +36,7 @@ const skipped = (
   recommended_action: 'no action required',
 });
 
-export const apiAlive: QuickCheck = () =>
-  ok('xinas-api.alive', 'api', 'xinas-api is responding');
+export const apiAlive: QuickCheck = () => ok('xinas-api.alive', 'api', 'xinas-api is responding');
 
 export const agentConnectivity: QuickCheck = (facts) => {
   // The tracker's actual vocabulary: healthy | degraded | offline.
@@ -63,8 +62,21 @@ export const agentConnectivity: QuickCheck = (facts) => {
   };
 };
 
-const ARRAY_DEGRADED_STATES = new Set(['initializing', 'init', 'rebuilding', 'reconstructing', 'restriping']);
-const ARRAY_CRITICAL_STATES = new Set(['degraded', 'failed', 'offline', 'unknown', 'need_recon', 'read_only']);
+const ARRAY_DEGRADED_STATES = new Set([
+  'initializing',
+  'init',
+  'rebuilding',
+  'reconstructing',
+  'restriping',
+]);
+const ARRAY_CRITICAL_STATES = new Set([
+  'degraded',
+  'failed',
+  'offline',
+  'unknown',
+  'need_recon',
+  'read_only',
+]);
 
 export const xiraidArrays: QuickCheck = (facts) => {
   if (facts.arrays.length === 0) {
@@ -107,9 +119,7 @@ export const diskHealth: QuickCheck = (facts) => {
     return skipped('disk.health', 'xiraid', 'no disks report a health block');
   }
   const failed = withHealth.filter((d) => d.health?.ok === false);
-  const worn = withHealth.filter(
-    (d) => d.health?.ok !== false && (d.health?.wear_pct ?? 0) > 90,
-  );
+  const worn = withHealth.filter((d) => d.health?.ok !== false && (d.health?.wear_pct ?? 0) > 90);
   if (failed.length > 0) {
     return {
       id: 'disk.health',
@@ -153,7 +163,11 @@ export const filesystemMounts: QuickCheck = (facts) => {
       recommended_action: 'PATCH /filesystems/{id} {mounted: true} or inspect journalctl',
     };
   }
-  return ok('filesystem.mounts', 'filesystem', `${facts.filesystems.length} filesystem(s) consistent`);
+  return ok(
+    'filesystem.mounts',
+    'filesystem',
+    `${facts.filesystems.length} filesystem(s) consistent`,
+  );
 };
 
 export const nfsServer: QuickCheck = (facts) => {
