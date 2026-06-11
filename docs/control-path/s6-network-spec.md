@@ -37,12 +37,13 @@ health checks — all e2e-proven against a fake NetHost.
   the scalar expected revision and has no pre-apply hook — the network
   routes are custom S4-style routes so the `world_config_hash` re-check
   can run before `TaskEngine.apply`.
-- `PollDriver` full-sweeps every collector on its interval and `kv.put`
-  bumps revisions unconditionally → observed revisions churn ~30 s on
-  live hosts. S6 freshness is therefore desired-revision + `config_hash`
-  (ADR-0008 §Freshness). *Known repo-wide issue:* the landed S4/S5 route
-  bindings pin observed revisions and inherit the ≤1-sweep apply window;
-  out of S6 scope, tracked separately.
+- `PollDriver` full-sweeps every collector on its interval; the observed
+  handler dedupes unchanged re-pushes (the churn fix, landed before S6 —
+  s0s1 spec Flow A step 3), so observed revisions move only on content
+  change and the S4/S5 bindings are sweep-stable. S6 freshness remains
+  desired-revision + `world_config_hash` (ADR-0008 §Freshness): netplan
+  world state is multi-file and partly foreign-owned, the wrong
+  granularity for one observed-row revision regardless of churn.
 - The public `NetworkInterface` schema requires `spec` while the live
   route returns observed (spec-less) rows — fixed by the T0 merged read
   model.

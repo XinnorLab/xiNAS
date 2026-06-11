@@ -25,12 +25,14 @@ Verified integration facts this ADR is designed against:
 - The engine leases `plan.lease_resources ?? plan.affected_resources`
   (`tasks/engine.ts`); `lease_resources` is the N-stream's override
   mechanism and is REQUIRED here (see §Concurrency).
-- `PollDriver` re-sweeps every collector on its interval and every sweep
-  re-puts rows (fresh `observed_at`), so **observed revisions churn ~every
-  30 s on live hosts**. Revision-pinned observed freshness only holds
-  within one sweep window; this ADR therefore uses content-addressed
-  freshness for world state (see §Freshness) and pins revisions only on
-  DESIRED rows (api-written, sweep-free, stable).
+- `PollDriver` re-sweeps every collector on its interval with fresh
+  `observed_at` stamps. The observed handler DEDUPES unchanged re-pushes
+  (the churn fix, landed before S6 — s0s1 spec Flow A step 3), so
+  observed revisions move only on content change. This ADR still pins
+  revisions only on DESIRED rows and uses content-addressed freshness
+  for world state (see §Freshness) — netplan files are multi-file,
+  partly foreign-owned state for which a single observed-row revision is
+  the wrong granularity regardless of churn.
 - Model R contract (verified in `tasks/progress.ts`): on a terminal
   non-success the EXECUTOR has already rolled back the HOST; the API then
   reverts the INTENT by replaying `desired_rollback`. S6 encodes exactly
