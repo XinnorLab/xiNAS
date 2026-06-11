@@ -51,6 +51,8 @@ export interface ApiConfig {
   internalTokensPath?: string;
   /** When set, the api polls the agent's UDS for agent.health and tracks its state. */
   agent?: { socket: string; heartbeat_interval_ms?: number };
+  /** Support-bundle directory (S7); default /var/log/xinas/bundles. */
+  support_bundle_dir?: string;
   /**
    * S2.1 worker pool (s2-task-envelope-spec §5.3). `max_inflight` caps the
    * tasks concurrently in flight end-to-end (dispatch → terminal); the

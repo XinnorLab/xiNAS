@@ -18,6 +18,9 @@ import { parseMountinfo } from '../../lib/parse/mountinfo.js';
 import type { AgentConfig } from '../config.js';
 import { createFakeFsHost } from '../fs/fake-host.js';
 import { createFakeNetHost } from '../net/fake-host.js';
+import { createRealBundleHost } from '../support/bundle-host.js';
+import { createFakeBundleHost } from '../support/fake-bundle-host.js';
+import { makeSupportBundleExecutor } from './support-executor.js';
 import { type NetHost, createRealNetHost } from '../net/host.js';
 import { type FsHost, createRealFsHost } from '../fs/host.js';
 import { fixtureDir } from '../probe/fixture.js';
@@ -216,6 +219,10 @@ export function buildTaskSubsystem(
   const netHost = opts.netHost ?? (fdir !== null ? createFakeNetHost(fdir) : createRealNetHost());
   registry.register(makeNetIfaceUpdateExecutor({ host: netHost }));
   registry.register(makeNetPoolApplyExecutor({ host: netHost }));
+  // S7 T7: the support-bundle executor (BundleHost: fixture-backed in
+  // fixture mode, journalctl/xicli/fs-backed otherwise).
+  const bundleHost = fdir !== null ? createFakeBundleHost(fdir) : createRealBundleHost();
+  registry.register(makeSupportBundleExecutor({ host: bundleHost }));
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
   });

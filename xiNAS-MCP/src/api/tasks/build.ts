@@ -12,6 +12,7 @@ import {
   fsUnmountProvider,
 } from '../plan/providers/filesystem.js';
 import { netIfaceUpdateProvider, netPoolApplyProvider } from '../plan/providers/network.js';
+import { supportBundleProvider } from '../plan/providers/support.js';
 import { buildNfsPlanProviders } from '../plan/providers/nfs.js';
 import { referencePlanProvider } from '../plan/providers/reference.js';
 import {
@@ -74,6 +75,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   planEngine.register(fsSetQuotaModeProvider);
   planEngine.register(fsUnmanageProvider);
   planEngine.register(netIfaceUpdateProvider);
+  planEngine.register(supportBundleProvider);
   planEngine.register(netPoolApplyProvider);
 
   return {
