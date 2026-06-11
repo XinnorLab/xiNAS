@@ -17,18 +17,22 @@
   ansible.builtin.lineinfile:
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX="(.*)"'
-    line: 'GRUB_CMDLINE_LINUX="intel_idle.max_cstate=0 {{ "transparent_hugepage=never" if perf_disable_thp else "" }} {{ "mitigations=off noibrs noibpb nopti nospectre_v2 nospec_store_bypass_disable no_stf_barrier mds=off" if perf_disable_mitigations else "" }} $1"'
+    line: >-
+      GRUB_CMDLINE_LINUX="intel_idle.max_cstate=0
+      {{ "transparent_hugepage=never" if perf_disable_thp else "" }}
+      {{ "mitigations=off noibrs noibpb nopti nospectre_v2 nospec_store_bypass_disable no_stf_barrier mds=off"
+      if perf_disable_mitigations else "" }} $1"
     backrefs: yes
-  notify: update grub
+  notify: Update grub
   when: ansible_facts['cmdline'] is defined
   tags: [kernel]
 
-- name: Configure NVMe polling mode ({{ perf_nvme_poll_queues }} queues)
+- name: Configure NVMe polling mode, poll queues {{ perf_nvme_poll_queues }}
   ansible.builtin.lineinfile:
     path: /etc/modprobe.d/nvme.conf
     create: yes
     line: "options nvme poll_queues={{ perf_nvme_poll_queues }}"
-  notify: rebuild initramfs
+  notify: Rebuild initramfs
   tags: [nvme]
 
 # ===== CPU governor & irqbalance =====
@@ -99,7 +103,7 @@
 # ===== I/O scheduler & queue depth =====
 # noop scheduler configuration removed
 
-- name: Increase nr_requests queue depth to {{ perf_nr_requests }} on NVMe devices
+- name: Increase NVMe nr_requests queue depth to {{ perf_nr_requests }}
   ansible.builtin.shell: |
     for dev in /sys/block/nvme*/queue/nr_requests; do
       [ -e "$dev" ] || continue
@@ -110,7 +114,7 @@
   changed_when: false
   tags: [io]
 
-- name: Set read-ahead to {{ perf_read_ahead_kb }} KB for NVMe devices
+- name: Set NVMe device read-ahead KB to {{ perf_read_ahead_kb }}
   ansible.builtin.shell: |
     for blk in /dev/nvme*n*; do
       [ -e "$blk" ] || continue
@@ -145,7 +149,7 @@
     ignoreerrors: yes
   tags: [network, nfs]
 
-- name: Configure MTU {{ perf_net_mtu }} on high-speed interfaces
+- name: Configure high-speed interface MTU to {{ perf_net_mtu }}
   ansible.builtin.command: "ip link set dev {{ item }} mtu {{ perf_net_mtu }}"
   loop: "{{ perf_net_ifaces }}"
   when: perf_net_ifaces | length > 0

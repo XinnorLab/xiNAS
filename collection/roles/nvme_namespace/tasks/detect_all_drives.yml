@@ -69,10 +69,10 @@
          | list }}
 
 # Step 7: Split drives into log and data groups
-- name: Assign log drives (first {{ nvme_log_drive_count }} non-OS drives)
+- name: Assign log drives (first non-OS drives), count {{ nvme_log_drive_count }}
   ansible.builtin.set_fact:
-    nvme_small_ns_devices: "{{ nvme_data_drives[:nvme_log_drive_count | int] }}"
-    nvme_large_ns_devices: "{{ nvme_data_drives[nvme_log_drive_count | int:] }}"
+    nvme_small_ns_devices: "{{ nvme_data_drives[: nvme_log_drive_count | int] }}"
+    nvme_large_ns_devices: "{{ nvme_data_drives[nvme_log_drive_count | int :] }}"
 
 # Step 8: Display detection results
 - name: Display detected drives

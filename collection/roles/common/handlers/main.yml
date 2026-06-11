@@ -2,10 +2,10 @@
 # handlers/main.yml
 # -------------------------------------------------------------
 ---
-- name: reload sysctl
+- name: Reload sysctl
   ansible.builtin.command: sysctl --system
 
-- name: restart unattended-upgrades
+- name: Restart unattended-upgrades
   ansible.builtin.service:
     name: unattended-upgrades
     state: restarted

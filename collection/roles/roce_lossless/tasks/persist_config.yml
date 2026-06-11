@@ -31,7 +31,7 @@
 
       [Install]
       WantedBy=multi-user.target
-  notify: reload systemd
+  notify: Reload systemd
   tags: [roce_lossless, persist]
 
 # Step 3: Enable and start the service

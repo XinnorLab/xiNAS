@@ -1,4 +1,4 @@
-- name: restart openibd
+- name: Restart openibd
   service:
     name: openibd
     state: restarted

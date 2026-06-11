@@ -1,11 +1,11 @@
 ---
 # xinas_api role handlers.
 
-- name: reload systemd
+- name: Reload systemd
   ansible.builtin.systemd:
     daemon_reload: true
 
-- name: restart xinas-api
+- name: Restart xinas-api
   ansible.builtin.service:
     name: xinas-api
     state: restarted

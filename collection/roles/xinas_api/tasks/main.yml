@@ -26,7 +26,7 @@
 
 # 2. Create the admin group (no-op if it already exists). gid is
 #    system-assigned; we look it up in the next step.
-- name: Create the {{ xinas_api_socket_group }} group
+- name: Create the socket group {{ xinas_api_socket_group }}
   ansible.builtin.group:
     name: "{{ xinas_api_socket_group }}"
     state: present
@@ -35,7 +35,7 @@
 # 3. Look up the gid. getent always returns the gid as the third
 #    colon-separated field; we register the whole row and parse it
 #    in the next step.
-- name: Look up {{ xinas_api_socket_group }} gid
+- name: Look up the gid of {{ xinas_api_socket_group }}
   ansible.builtin.getent:
     database: group
     key: "{{ xinas_api_socket_group }}"
@@ -73,7 +73,7 @@
 #     system-assigned. Primary group is the socket group (xinas-admin
 #     by default) so files the api creates default to that group, no
 #     setgid trickery needed.
-- name: Create the {{ xinas_api_user }} system user
+- name: Create the api system user {{ xinas_api_user }}
   ansible.builtin.user:
     name: "{{ xinas_api_user }}"
     group: "{{ xinas_api_socket_group }}"
@@ -183,7 +183,7 @@
 # though they can read /etc/xinas-api/config.json (which contains
 # only the admin token, never the agent token).
 
-- name: stat /etc/xinas-api/internal-tokens.json
+- name: Stat /etc/xinas-api/internal-tokens.json
   ansible.builtin.stat:
     path: /etc/xinas-api/internal-tokens.json
   register: _xinas_api_internal_tokens_stat
@@ -221,7 +221,7 @@
     group: xinas-api
     mode: '0640'
   no_log: true
-  notify: restart xinas-api
+  notify: Restart xinas-api
   when: not _xinas_api_internal_tokens_stat.stat.exists
   tags: [xinas_api, config]
 
@@ -283,7 +283,7 @@
 # admin-token file re-derives it from config on the next run.
 # Deleting both forces a fresh token (rotation procedure).
 
-- name: stat {{ xinas_api_config_dir }}/config.json
+- name: Stat config.json under {{ xinas_api_config_dir }}
   ansible.builtin.stat:
     path: "{{ xinas_api_config_dir }}/config.json"
   register: _xinas_api_config_stat
@@ -316,7 +316,7 @@
     mode: '0640'
     force: true
   no_log: true
-  notify: restart xinas-api
+  notify: Restart xinas-api
   when: not _xinas_api_config_stat.stat.exists
   tags: [xinas_api, config]
 
@@ -371,7 +371,7 @@
 
 # --- Both branches converge here: write/refresh admin-token mirror ---
 
-- name: Write/refresh {{ xinas_api_config_dir }}/admin-token
+- name: Write/refresh the admin-token mirror in {{ xinas_api_config_dir }}
   ansible.builtin.copy:
     content: "{{ _xinas_api_admin_token }}\n"
     dest: "{{ xinas_api_config_dir }}/admin-token"
@@ -393,8 +393,8 @@
     mode: '0644'
     remote_src: true
   notify:
-    - reload systemd
-    - restart xinas-api
+    - Reload systemd
+    - Restart xinas-api
   tags: [xinas_api, service]
 
 # 9. Force daemon-reload before enable so systemd picks up the new

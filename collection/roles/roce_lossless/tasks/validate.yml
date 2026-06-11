@@ -22,7 +22,7 @@
   when: item.rc != 0
 
 # Validation 1b: Verify correct PFC priority is enabled in mlnx_qos output
-- name: Check PFC priority {{ roce_pfc_priority }} is enabled on each interface
+- name: Check each interface has enabled PFC priority {{ roce_pfc_priority }}
   ansible.builtin.shell: |
     set -o pipefail
     output=$(mlnx_qos -i {{ item }} 2>/dev/null)

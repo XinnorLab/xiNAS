@@ -8,7 +8,11 @@ xiraid_exporter_arch: "amd64"
 xiraid_exporter_github_repo: "E4-Computer-Engineering/xiraid-exporter"
 
 # Download URL of the .deb package
-xiraid_exporter_download_url: "https://github.com/{{ xiraid_exporter_github_repo }}/releases/download/v{{ xiraid_exporter_version }}/xiraid-exporter_{{ xiraid_exporter_version }}_linux_{{ xiraid_exporter_arch }}.deb"
+# (Folded scalar broken inside the Jinja braces, where whitespace is
+# insignificant — the rendered URL is identical.)
+xiraid_exporter_download_url: >-
+  https://github.com/{{ xiraid_exporter_github_repo }}/releases/download/v{{
+  xiraid_exporter_version }}/xiraid-exporter_{{ xiraid_exporter_version }}_linux_{{ xiraid_exporter_arch }}.deb
 
 # Metrics listen port
 xiraid_exporter_port: 9827

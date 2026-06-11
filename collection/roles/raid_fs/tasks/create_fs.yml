@@ -28,14 +28,16 @@
     _fs_sw: "{{ item.sw }}"
   when: item.su_kb is defined and item.sw is defined
 
-- name: Check if {{ item.data_device }} is currently mounted
+- name: Check current mount state of {{ item.data_device }}
   ansible.builtin.command: findmnt -n -o TARGET {{ item.data_device }}
   register: _current_mount
   failed_when: false
   changed_when: false
   tags: [raid_fs, fs, mkfs]
 
-- name: Check if nfs-server is active before unmount
+# Read-only state probe: we need the `is-active` exit code, which the
+# systemd module does not expose.
+- name: Check if nfs-server is active before unmount  # noqa: command-instead-of-module
   ansible.builtin.command: systemctl is-active nfs-server
   register: _nfs_was_active
   failed_when: false
@@ -58,7 +60,7 @@
     - _nfs_was_active.rc == 0
   tags: [raid_fs, fs, mkfs]
 
-- name: Unmount {{ item.data_device }} before mkfs
+- name: Unmount data device before mkfs of {{ item.data_device }}
   ansible.builtin.command: umount {{ item.data_device }}
   when:
     - _current_mount.rc == 0
@@ -81,7 +83,7 @@
   when: (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
   tags: [raid_fs, fs, mkfs]
 
-- name: Make filesystem {{ item.label }} on {{ item.data_device }}
+- name: Make XFS filesystem on {{ item.data_device }}
   ansible.builtin.command: >-
     mkfs.xfs -f -L {{ item.label }} -d su={{ _fs_su_kb }}k,sw={{ _fs_sw }}
     -l logdev={{ item.log_device }},size={{ _effective_log_size }}
@@ -104,13 +106,13 @@
 - name: Compute mount unit parameters for {{ item.label }}
   ansible.builtin.set_fact:
     block_device_unit: >-
-      {{ item.data_device | regex_replace('^/','') | replace('/', '-') }}.device
+      {{ item.data_device | regex_replace('^/', '') | replace('/', '-') }}.device
     log_device_unit: >-
-      {{ item.log_device | regex_replace('^/','') | replace('/', '-') }}.device
+      {{ item.log_device | regex_replace('^/', '') | replace('/', '-') }}.device
     unit_opts: >-
       {{ 'defaults' + (',' + item.mount_opts if (item.mount_opts | default('') | length > 0) else '') }}
     mount_unit: >-
-      {{ item.mountpoint | regex_replace('^/','') | replace('/', '-') }}.mount
+      {{ item.mountpoint | regex_replace('^/', '') | replace('/', '-') }}.mount
   tags: [raid_fs, fs]
 
 - name: Deploy systemd mount unit for {{ item.label }}
@@ -118,7 +120,7 @@
     src: mount.unit.j2
     dest: "/etc/systemd/system/{{ mount_unit }}"
     mode: '0644'
-  notify: reload systemd
+  notify: Reload systemd
   tags: [raid_fs, fs]
 
 - name: Reload systemd before enabling mount unit

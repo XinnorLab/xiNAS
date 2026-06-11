@@ -1,4 +1,4 @@
-- name: reload xiraid_exporter
+- name: Reload xiraid_exporter
   ansible.builtin.systemd:
     daemon_reload: yes
     name: xiraid-exporter

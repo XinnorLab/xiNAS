@@ -25,7 +25,7 @@
 
 - name: "Mounts | parse mount unit list"
   ansible.builtin.set_fact:
-    _xinas_mount_units: "{{ (_xinas_mounts.stdout_lines | default([])) | reject('equalto','') | list }}"
+    _xinas_mount_units: "{{ (_xinas_mounts.stdout_lines | default([])) | reject('equalto', '') | list }}"
 
 - name: "Mounts | stop xiNAS mount units"
   ansible.builtin.systemd:
