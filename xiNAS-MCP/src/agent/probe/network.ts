@@ -11,11 +11,7 @@
  */
 import { type ExecFileOptions, execFile as nodeExecFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import {
-  type NetplanStanza,
-  netplanHashes,
-  parseNetplanFiles,
-} from '../../lib/parse/netplan.js';
+import { type NetplanStanza, netplanHashes, parseNetplanFiles } from '../../lib/parse/netplan.js';
 import { type ObservedNetworkInterface, parseIpJson } from '../../lib/parse/network.js';
 import { createRealNetHost } from '../net/host.js';
 import { type MonitorHandle, type MonitorOptions, startMonitor } from './subprocess-monitor.js';
@@ -92,7 +88,9 @@ export function enrichNetworkRows(
       rdmaByIfname = new Map(
         entries
           .filter(
-            (e): e is { ifname?: string; netdev?: string; state?: string; physical_state?: string } =>
+            (
+              e,
+            ): e is { ifname?: string; netdev?: string; state?: string; physical_state?: string } =>
               typeof e === 'object' && e !== null,
           )
           .map((e) => [(e.netdev ?? e.ifname ?? '') as string, e]),
@@ -129,9 +127,7 @@ export function enrichNetworkRows(
               netplan: {
                 addresses: stanza.addresses,
                 ...(stanza.mtu !== undefined ? { mtu: stanza.mtu } : {}),
-                ...(stanza.pbr_table_id !== undefined
-                  ? { pbr_table_id: stanza.pbr_table_id }
-                  : {}),
+                ...(stanza.pbr_table_id !== undefined ? { pbr_table_id: stanza.pbr_table_id } : {}),
               },
             }
           : {}),

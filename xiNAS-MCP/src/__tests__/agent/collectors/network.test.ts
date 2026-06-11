@@ -121,7 +121,9 @@ describe('NetworkConfig singleton emission', () => {
     const first = await collector.initialSweep();
     const single = first.find((d) => d.kind === 'NetworkConfig');
     expect(single).toMatchObject({ id: 'default', op: 'upsert' });
-    expect((single?.value as { status?: { world_config_hash?: string } }).status?.world_config_hash).toBe('w1');
+    expect(
+      (single?.value as { status?: { world_config_hash?: string } }).status?.world_config_hash,
+    ).toBe('w1');
 
     const second = await collector.initialSweep();
     expect(second.find((d) => d.kind === 'NetworkConfig')).toBeUndefined();
@@ -133,11 +135,16 @@ describe('NetworkConfig singleton emission', () => {
 
   it('no summary (degraded probe) → no singleton, sweep still works', async () => {
     const collector = new NetworkInterfaceCollector({ probe: probeWith(undefined) });
-    expect((await collector.initialSweep()).find((d) => d.kind === 'NetworkConfig')).toBeUndefined();
+    expect(
+      (await collector.initialSweep()).find((d) => d.kind === 'NetworkConfig'),
+    ).toBeUndefined();
   });
 
   it('pollIntervalMs override is honored', () => {
-    const collector = new NetworkInterfaceCollector({ probe: probeWith(undefined), pollIntervalMs: 500 });
+    const collector = new NetworkInterfaceCollector({
+      probe: probeWith(undefined),
+      pollIntervalMs: 500,
+    });
     expect(collector.pollIntervalMs).toBe(500);
   });
 });

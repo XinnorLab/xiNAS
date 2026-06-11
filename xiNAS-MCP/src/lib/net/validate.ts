@@ -84,7 +84,12 @@ export function parsePoolSpec(input: unknown): PoolSpec {
   if (typeof o.start !== 'string' || !isValidIpv4(o.start)) {
     throw new TypeError('spec.start must be an IPv4 address');
   }
-  if (typeof o.prefix !== 'number' || !Number.isInteger(o.prefix) || o.prefix < 8 || o.prefix > 30) {
+  if (
+    typeof o.prefix !== 'number' ||
+    !Number.isInteger(o.prefix) ||
+    o.prefix < 8 ||
+    o.prefix > 30
+  ) {
     throw new TypeError('spec.prefix must be an integer in [8, 30]');
   }
   if (o.mtu !== undefined && typeof o.mtu !== 'number') {
@@ -223,7 +228,13 @@ export function validatePool(spec: PoolSpec, facts: NetFacts): Blocker[] {
       spec.cleanup,
     ),
   );
-  if (allocatePool(spec.start, spec.prefix, facts.managed.map((m) => m.name)) === null) {
+  if (
+    allocatePool(
+      spec.start,
+      spec.prefix,
+      facts.managed.map((m) => m.name),
+    ) === null
+  ) {
     blockers.push({
       code: 'pool_overflow',
       message: `pool starting at ${spec.start} overflows the third octet for ${facts.managed.length} interface(s)`,

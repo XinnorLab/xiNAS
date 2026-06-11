@@ -172,7 +172,11 @@ export const xiraidArrayModifyProvider: PlanProvider = {
   operation_kind: 'xiraid.array.modify',
 
   async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
-    if (typeof rawSpec !== 'object' || rawSpec === null || typeof (rawSpec as { id?: unknown }).id !== 'string') {
+    if (
+      typeof rawSpec !== 'object' ||
+      rawSpec === null ||
+      typeof (rawSpec as { id?: unknown }).id !== 'string'
+    ) {
       throw new ApiException(
         'INVALID_ARGUMENT',
         'modify spec must carry the target array id',

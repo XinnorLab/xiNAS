@@ -112,7 +112,12 @@ describe('network routes (S6 merged reads + PATCH)', () => {
     const put = setup.state.kv.put('/xinas/v1/desired/NetworkInterface/ibp65s0', {
       kind: 'NetworkInterface',
       id: 'ibp65s0',
-      spec: { managed_by_xinas: true, addresses: ['10.10.1.1/24'], enabled: true, pbr_table_id: 100 },
+      spec: {
+        managed_by_xinas: true,
+        addresses: ['10.10.1.1/24'],
+        enabled: true,
+        pbr_table_id: 100,
+      },
     });
     const rev = put.ok ? put.value.revision : 0;
 
@@ -283,7 +288,12 @@ describe('POST /api/v1/network/ip-pool (S6 T8)', () => {
     setup.state.kv.put('/xinas/v1/desired/NetworkInterface/ibp9s0f0', {
       kind: 'NetworkInterface',
       id: 'ibp9s0f0',
-      spec: { managed_by_xinas: true, addresses: ['10.10.2.1/24'], enabled: true, pbr_table_id: 105 },
+      spec: {
+        managed_by_xinas: true,
+        addresses: ['10.10.2.1/24'],
+        enabled: true,
+        pbr_table_id: 105,
+      },
     });
 
     const stale = await pool({

@@ -27,9 +27,7 @@ describe('createFixtureNfsProbe(dir)', () => {
       );
       writeFileSync(
         join(dir, 'nfs-exports.json'),
-        JSON.stringify([
-          { export_path: '/mnt/data/share', host_pattern: '*', options: ['rw'] },
-        ]),
+        JSON.stringify([{ export_path: '/mnt/data/share', host_pattern: '*', options: ['rw'] }]),
       );
       const seeded = createFixtureNfsProbe(dir);
       expect((await seeded.listSessions())[0]?.spec.export_path).toBe('/mnt/data/share');
@@ -61,7 +59,9 @@ describe('createFixtureNetworkProbe(dir) over net-host-state.json', () => {
           },
           kernel: { addrs: { ibp65s0: ['10.10.1.1/24'] }, rules: [], tables: {} },
           sys_class_net: [{ name: 'ibp65s0', driver: 'mlx5_core' }],
-          rdma_links: [{ ifname: 'mlx5_0', netdev: 'ibp65s0', state: 'ACTIVE', physical_state: 'LINK_UP' }],
+          rdma_links: [
+            { ifname: 'mlx5_0', netdev: 'ibp65s0', state: 'ACTIVE', physical_state: 'LINK_UP' },
+          ],
           ops: [],
         }),
       );

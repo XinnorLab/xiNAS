@@ -125,7 +125,9 @@ export class DiskCollector implements Collector<'Disk'> {
         status: {
           name: disk.status.name,
           observed_at: observedAt,
-          ...(disk.status.device_path !== undefined ? { device_path: disk.status.device_path } : {}),
+          ...(disk.status.device_path !== undefined
+            ? { device_path: disk.status.device_path }
+            : {}),
           ...(disk.status.model !== undefined ? { model: disk.status.model } : {}),
           ...(disk.status.serial !== undefined ? { serial: disk.status.serial } : {}),
           ...(disk.status.transport !== undefined ? { transport: disk.status.transport } : {}),
@@ -134,7 +136,9 @@ export class DiskCollector implements Collector<'Disk'> {
           ...(disk.status.capacity_bytes !== undefined
             ? { capacity_bytes: disk.status.capacity_bytes }
             : {}),
-          ...(disk.status.system_disk !== undefined ? { system_disk: disk.status.system_disk } : {}),
+          ...(disk.status.system_disk !== undefined
+            ? { system_disk: disk.status.system_disk }
+            : {}),
           ...(disk.status.mounted !== undefined ? { mounted: disk.status.mounted } : {}),
           ...(disk.status.safe_for_use !== undefined
             ? { safe_for_use: disk.status.safe_for_use }

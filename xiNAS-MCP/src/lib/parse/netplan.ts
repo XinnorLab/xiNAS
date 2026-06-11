@@ -50,7 +50,9 @@ function toStanza(file: string, raw: RawStanza): NetplanStanza {
     : [];
   const policy = Array.isArray(raw['routing-policy']) ? raw['routing-policy'][0] : undefined;
   const table =
-    typeof policy === 'object' && policy !== null && typeof (policy as { table?: unknown }).table === 'number'
+    typeof policy === 'object' &&
+    policy !== null &&
+    typeof (policy as { table?: unknown }).table === 'number'
       ? ((policy as { table: number }).table as number)
       : undefined;
   return {
@@ -77,7 +79,8 @@ export function parseNetplanFiles(files: Record<string, string>): ParsedNetplan 
     }
     const ethernets =
       typeof doc === 'object' && doc !== null
-        ? ((doc as { network?: { ethernets?: Record<string, RawStanza> } }).network?.ethernets ?? {})
+        ? ((doc as { network?: { ethernets?: Record<string, RawStanza> } }).network?.ethernets ??
+          {})
         : {};
     const names = Object.keys(ethernets).sort();
     perFileIfaces[file] = names;

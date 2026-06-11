@@ -1,7 +1,10 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { PlanEngine } from '../../../api/plan/engine.js';
-import { netIfaceUpdateProvider, netPoolApplyProvider } from '../../../api/plan/providers/network.js';
+import {
+  netIfaceUpdateProvider,
+  netPoolApplyProvider,
+} from '../../../api/plan/providers/network.js';
 import { TaskStore } from '../../../api/tasks/store.js';
 import { SqliteKvStore } from '../../../state/backend-sqlite.js';
 import { runMigrations } from '../../../state/migrations.js';
@@ -135,7 +138,12 @@ describe('netIfaceUpdateProvider', () => {
     const put = h.kv.put('/xinas/v1/desired/NetworkInterface/ibp65s0', {
       kind: 'NetworkInterface',
       id: 'ibp65s0',
-      spec: { managed_by_xinas: true, addresses: ['10.10.1.1/24'], enabled: true, pbr_table_id: 100 },
+      spec: {
+        managed_by_xinas: true,
+        addresses: ['10.10.1.1/24'],
+        enabled: true,
+        pbr_table_id: 100,
+      },
     });
     const rev = put.ok ? put.value.revision : 0;
 
@@ -144,7 +152,9 @@ describe('netIfaceUpdateProvider', () => {
       { kind: 'NetworkInterface', id: 'ibp65s0', revision: rev },
     ]);
     // ibp9s0f0 still unadopted → still seeded + leased
-    expect((planResult.desired_mutations ?? []).some((m) => m.key.endsWith('/ibp9s0f0'))).toBe(true);
+    expect((planResult.desired_mutations ?? []).some((m) => m.key.endsWith('/ibp9s0f0'))).toBe(
+      true,
+    );
   });
 
   it('duplicates: blocked without cleanup; cleanup → warning + cleanup_files', async () => {
@@ -221,13 +231,16 @@ describe('netPoolApplyProvider', () => {
     const put = h.kv.put('/xinas/v1/desired/NetworkInterface/ibp65s0', {
       kind: 'NetworkInterface',
       id: 'ibp65s0',
-      spec: { managed_by_xinas: true, addresses: ['10.10.1.1/24'], enabled: true, pbr_table_id: 100 },
+      spec: {
+        managed_by_xinas: true,
+        addresses: ['10.10.1.1/24'],
+        enabled: true,
+        pbr_table_id: 100,
+      },
     });
     const rev = put.ok ? put.value.revision : 0;
 
-    const { task, planResult } = await h.engine.plan(
-      poolArgs({ start: '10.20.1.1', prefix: 24 }),
-    );
+    const { task, planResult } = await h.engine.plan(poolArgs({ start: '10.20.1.1', prefix: 24 }));
     expect(planResult.blockers).toEqual([]);
     expect(task.affected_resources).toEqual([
       { kind: 'NetworkInterface', id: 'ibp65s0', revision: rev },
@@ -257,7 +270,12 @@ describe('netPoolApplyProvider', () => {
     h.kv.put('/xinas/v1/desired/NetworkInterface/ibp9s0f0', {
       kind: 'NetworkInterface',
       id: 'ibp9s0f0',
-      spec: { managed_by_xinas: true, addresses: ['10.10.2.1/24'], enabled: true, pbr_table_id: 105 },
+      spec: {
+        managed_by_xinas: true,
+        addresses: ['10.10.2.1/24'],
+        enabled: true,
+        pbr_table_id: 105,
+      },
     });
     const { TaskEngine } = await import('../../../api/tasks/engine.js');
     const { LeaseManager } = await import('../../../state/leases.js');

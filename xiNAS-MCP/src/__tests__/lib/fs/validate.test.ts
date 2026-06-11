@@ -41,12 +41,21 @@ describe('deriveStripe', () => {
 function facts(over: Partial<FsCreateFacts> = {}): FsCreateFacts {
   return {
     arraysByVolume: new Map([
-      ['/dev/xi_data', { name: 'data', level: 'raid5', member_disk_ids: ['a', 'b', 'c', 'd'], strip_size_kib: 128 }],
-      ['/dev/xi_log', { name: 'log', level: 'raid10', member_disk_ids: ['e', 'f'], strip_size_kib: 16 }],
+      [
+        '/dev/xi_data',
+        {
+          name: 'data',
+          level: 'raid5',
+          member_disk_ids: ['a', 'b', 'c', 'd'],
+          strip_size_kib: 128,
+        },
+      ],
+      [
+        '/dev/xi_log',
+        { name: 'log', level: 'raid10', member_disk_ids: ['e', 'f'], strip_size_kib: 16 },
+      ],
     ]),
-    filesystems: [
-      { id: 'srv-old.mount', mountpoint: '/srv/old', backing_device: '/dev/xi_old' },
-    ],
+    filesystems: [{ id: 'srv-old.mount', mountpoint: '/srv/old', backing_device: '/dev/xi_old' }],
     ...over,
   };
 }
@@ -65,7 +74,9 @@ describe('validateFsCreate', () => {
   });
 
   it('blocker table', () => {
-    expect(codes(validateFsCreate(parseFsCreateSpec({ ...GOOD, mountpoint: 'rel/path' }), facts()))).toContain('mountpoint_invalid');
+    expect(
+      codes(validateFsCreate(parseFsCreateSpec({ ...GOOD, mountpoint: 'rel/path' }), facts())),
+    ).toContain('mountpoint_invalid');
     expect(
       codes(validateFsCreate(parseFsCreateSpec({ ...GOOD, mountpoint: '/srv/old' }), facts())),
     ).toContain('mountpoint_taken');
@@ -77,9 +88,7 @@ describe('validateFsCreate', () => {
         validateFsCreate(
           parseFsCreateSpec(GOOD),
           facts({
-            filesystems: [
-              { id: 'x.mount', mountpoint: '/x', backing_device: '/dev/xi_data' },
-            ],
+            filesystems: [{ id: 'x.mount', mountpoint: '/x', backing_device: '/dev/xi_data' }],
           }),
         ),
       ),
@@ -95,7 +104,10 @@ describe('validateFsCreate', () => {
           facts({
             arraysByVolume: new Map([
               ['/dev/xi_data', { name: 'data', level: 'raid5', member_disk_ids: ['a', 'b', 'c'] }],
-              ['/dev/xi_log', { name: 'log', level: 'raid10', member_disk_ids: ['e', 'f'], strip_size_kib: 16 }],
+              [
+                '/dev/xi_log',
+                { name: 'log', level: 'raid10', member_disk_ids: ['e', 'f'], strip_size_kib: 16 },
+              ],
             ]),
           }),
         ),
@@ -108,7 +120,10 @@ describe('validateFsCreate', () => {
         facts({
           arraysByVolume: new Map([
             ['/dev/xi_data', { name: 'data', level: 'raid5', member_disk_ids: ['a', 'b', 'c'] }],
-            ['/dev/xi_log', { name: 'log', level: 'raid10', member_disk_ids: ['e', 'f'], strip_size_kib: 16 }],
+            [
+              '/dev/xi_log',
+              { name: 'log', level: 'raid10', member_disk_ids: ['e', 'f'], strip_size_kib: 16 },
+            ],
           ]),
         }),
       ),

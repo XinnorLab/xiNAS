@@ -15,10 +15,7 @@
  *    `world_config_hash` pin the route/executor re-verify.
  */
 
-import {
-  type DesiredIfaceSpec,
-  renderNetplan,
-} from '../../../lib/net/render.js';
+import { type DesiredIfaceSpec, renderNetplan } from '../../../lib/net/render.js';
 import {
   type IfaceUpdateSpec,
   type NetFacts,
@@ -210,9 +207,7 @@ export function toNetFacts(facts: NetGathered, finalRows: DesiredIfaceSpec[]): N
     managed: facts.managed.map((m) => ({
       name: m.name,
       ...(m.desired !== undefined ? { desired: m.desired } : {}),
-      ...(m.stanza !== undefined
-        ? { stanza: { file: XINAS_NETPLAN, ...m.stanza } }
-        : {}),
+      ...(m.stanza !== undefined ? { stanza: { file: XINAS_NETPLAN, ...m.stanza } } : {}),
     })),
     duplicates: facts.duplicates,
     usedTableIds: used,
@@ -321,9 +316,7 @@ export const netIfaceUpdateProvider: PlanProvider = {
       spec.cleanup === true && targetDuplicates.length > 0 ? { [id]: targetDuplicates } : {};
 
     return {
-      affected_resources: [
-        { kind: 'NetworkInterface', id, revision: target.desiredRevision },
-      ],
+      affected_resources: [{ kind: 'NetworkInterface', id, revision: target.desiredRevision }],
       blockers,
       warnings,
       diff: {
@@ -382,10 +375,15 @@ export const netPoolApplyProvider: PlanProvider = {
 
     // Address reallocation over the SORTED managed set (day-1 formula).
     const allocation =
-      allocatePool(spec.start, spec.prefix, facts.managed.map((m) => m.name)) ?? {};
+      allocatePool(
+        spec.start,
+        spec.prefix,
+        facts.managed.map((m) => m.name),
+      ) ?? {};
     const rows: DesiredIfaceSpec[] = baseRows.map((row) => ({
       ...row,
-      addresses: allocation[row.name] !== undefined ? [allocation[row.name] as string] : row.addresses,
+      addresses:
+        allocation[row.name] !== undefined ? [allocation[row.name] as string] : row.addresses,
       ...(spec.mtu !== undefined ? { mtu: spec.mtu } : {}),
       enabled: true,
     }));

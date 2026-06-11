@@ -26,11 +26,7 @@
 
 import { renderNetplan } from '../../lib/net/render.js';
 import { PBR_TABLE_MAX, PBR_TABLE_MIN } from '../../lib/net/validate.js';
-import {
-  XINAS_NETPLAN,
-  netplanHashes,
-  parseNetplanFiles,
-} from '../../lib/parse/netplan.js';
+import { XINAS_NETPLAN, netplanHashes, parseNetplanFiles } from '../../lib/parse/netplan.js';
 import type { NetHost } from '../net/host.js';
 import type { Executor, ExecutorContext, ExecutorStage } from './types.js';
 import yaml from 'js-yaml';
@@ -99,9 +95,7 @@ async function netPreflight(
 
 /** Remove iface keys from a foreign netplan file's text (audited cleanup). */
 function cleanForeignFile(text: string, ifaces: string[]): { text: string; removed: string[] } {
-  const doc = yaml.load(text) as
-    | { network?: { ethernets?: Record<string, unknown> } }
-    | undefined;
+  const doc = yaml.load(text) as { network?: { ethernets?: Record<string, unknown> } } | undefined;
   const ethernets = doc?.network?.ethernets;
   if (ethernets === undefined) return { text, removed: [] };
   const removed: string[] = [];
@@ -227,7 +221,9 @@ async function verifyDev(
   if (!enabled) return; // disabled iface: flushed is the desired end state
   for (const cidr of addresses) {
     if (!live.includes(cidr)) {
-      throw new Error(`verify: ${dev} is missing ${cidr} after apply (live: ${live.join(', ') || 'none'})`);
+      throw new Error(
+        `verify: ${dev} is missing ${cidr} after apply (live: ${live.join(', ') || 'none'})`,
+      );
     }
   }
   if (addresses.length > 0) {
@@ -245,14 +241,9 @@ export function makeNetIfaceUpdateExecutor(opts: { host: NetHost }): Executor {
     name: 'preflight',
     async run(ctx: ExecutorContext): Promise<void> {
       const spec = narrowUpdateSpec(ctx);
-      await netPreflight(
-        ctx,
-        host,
-        'net.iface.update',
-        spec.world_config_hash,
-        spec.cleanup,
-        [spec.id],
-      );
+      await netPreflight(ctx, host, 'net.iface.update', spec.world_config_hash, spec.cleanup, [
+        spec.id,
+      ]);
     },
   };
 

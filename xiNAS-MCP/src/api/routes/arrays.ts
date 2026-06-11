@@ -68,10 +68,7 @@ function rejectTopologyKeys(spec: unknown): void {
 
 /** Current observed revision of an array, or undefined when absent. */
 function observedArrayRevision(ctx: ApiContext, id: string): number | undefined {
-  const row = getOrNull<Record<string, unknown>>(
-    ctx.state,
-    `/xinas/v1/observed/XiraidArray/${id}`,
-  );
+  const row = getOrNull<Record<string, unknown>>(ctx.state, `/xinas/v1/observed/XiraidArray/${id}`);
   return row?.revision;
 }
 

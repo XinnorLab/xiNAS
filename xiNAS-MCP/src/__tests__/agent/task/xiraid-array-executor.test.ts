@@ -124,7 +124,10 @@ function makeRunner(): TaskRunner {
     runSubprocess: async () => ({ stdout: JSON.stringify({ id: 'snap-x' }), code: 0 }),
   });
   let n = 0;
-  return new TaskRunner({ bridge, now: () => new Date(1_700_000_000_000 + n++ * 1000).toISOString() });
+  return new TaskRunner({
+    bridge,
+    now: () => new Date(1_700_000_000_000 + n++ * 1000).toISOString(),
+  });
 }
 
 const SPEC = {
@@ -335,10 +338,7 @@ describe('xiraid.array.create executor', () => {
 // ---- S4 T6: xiraid.array.modify executor ----
 
 describe('xiraid.array.modify executor', () => {
-  function seedArray(
-    fake: ReturnType<typeof makeFake>,
-    over: Record<string, unknown> = {},
-  ): void {
+  function seedArray(fake: ReturnType<typeof makeFake>, over: Record<string, unknown> = {}): void {
     fake.arrays.push({
       name: 'data',
       level: '6',

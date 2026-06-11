@@ -99,7 +99,10 @@ export function validateFsCreate(spec: FsCreateSpec, facts: FsCreateFacts): Bloc
       (f) => f.id === unitName || f.mountpoint === spec.mountpoint,
     );
     if (clash) {
-      push('mountpoint_taken', `a managed filesystem already exists at ${spec.mountpoint} (${clash.id})`);
+      push(
+        'mountpoint_taken',
+        `a managed filesystem already exists at ${spec.mountpoint} (${clash.id})`,
+      );
     }
   }
 

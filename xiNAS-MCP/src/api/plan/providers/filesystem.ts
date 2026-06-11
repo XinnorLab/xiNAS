@@ -54,7 +54,12 @@ interface ObservedSessionRow {
 
 export interface FsFacts {
   arraysByVolume: Map<string, BackingArraySpec & { name: string; state?: string }>;
-  filesystems: Array<{ id: string; mountpoint?: string; backing_device?: string; mounted?: boolean }>;
+  filesystems: Array<{
+    id: string;
+    mountpoint?: string;
+    backing_device?: string;
+    mounted?: boolean;
+  }>;
   sessions: Array<{ id: string; export_path: string }>;
   /** Real absolute export paths from observed ExportRule rows. The OBSERVED
    *  id is encExportId(path) (N0b — the raw path would fail the id guard);
@@ -321,9 +326,7 @@ export const fsUnmountProvider: PlanProvider = {
 
   async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
     const r = requireFsRow(ctx, rawSpec, 'fs.unmount');
-    const sessionsUnder = r.facts.sessions.filter((s) =>
-      isUnderPath(s.export_path, r.mountpoint),
-    );
+    const sessionsUnder = r.facts.sessions.filter((s) => isUnderPath(s.export_path, r.mountpoint));
     const exportsUnder = r.facts.exportPaths.filter((p) => isUnderPath(p, r.mountpoint));
     const blockers = validateFsUnmount({ sessionsUnder, exportsUnder });
     const blastRadius = r.facts.desiredShares.filter((s) => isUnderPath(s.path, r.mountpoint));

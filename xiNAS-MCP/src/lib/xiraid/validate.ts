@@ -256,7 +256,13 @@ function checkTuning(t: Tuning, push: Push): void {
   range('memory_limit', t.memory_limit, MEMORY_LIMIT_MIN, MEMORY_LIMIT_MAX, true);
   range('memory_prealloc', t.memory_prealloc, MEMORY_PREALLOC_MIN, MEMORY_PREALLOC_MAX, true);
   range('max_sectors_kb', t.max_sectors_kb, MAX_SECTORS_KB_MIN, MAX_SECTORS_KB_MAX, true);
-  for (const field of ['merge_read_max', 'merge_read_wait', 'merge_write_max', 'merge_write_wait', 'request_limit'] as const) {
+  for (const field of [
+    'merge_read_max',
+    'merge_read_wait',
+    'merge_write_max',
+    'merge_write_wait',
+    'request_limit',
+  ] as const) {
     const value = t[field];
     if (value !== undefined && value !== null && value < 0) {
       push('param_out_of_range', `tuning.${field} must be >= 0`);
@@ -287,7 +293,10 @@ function checkDisks(
       continue;
     }
     if (!d.safe_for_use) {
-      push('disk_not_safe', `disk '${id}' (${d.device_path}) is not safe for use (mounted or in use)`);
+      push(
+        'disk_not_safe',
+        `disk '${id}' (${d.device_path}) is not safe for use (mounted or in use)`,
+      );
     }
   }
 }

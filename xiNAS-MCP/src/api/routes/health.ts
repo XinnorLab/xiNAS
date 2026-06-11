@@ -65,7 +65,7 @@ function duplicateNetplanCheck(ctx: ApiContext): HealthCheck {
       'netplan merges duplicate stanzas: phantom IPs and conflicting PBR rules survive applies',
     evidence: { duplicates },
     recommended_action:
-      "re-plan the next network change with cleanup: true (the audited repair), or remove the foreign stanzas manually",
+      're-plan the next network change with cleanup: true (the audited repair), or remove the foreign stanzas manually',
   };
 }
 
@@ -83,9 +83,7 @@ function rdmaReadinessCheck(ctx: ApiContext): HealthCheck {
       current_addresses?: string[];
     };
   }>(ctx.state, '/xinas/v1/observed/NetworkInterface/');
-  const managed = rows
-    .map((r) => r.value)
-    .filter((v) => v.status?.rdma_capable === true);
+  const managed = rows.map((r) => r.value).filter((v) => v.status?.rdma_capable === true);
   if (managed.length === 0) {
     return {
       id: 'network.rdma-readiness',

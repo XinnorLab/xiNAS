@@ -375,9 +375,7 @@ describe.sequential('e2e: S5 filesystem adapter (fixture mode + fake FsHost)', (
       const fsRes = await requestJson(apiSockPath, '/api/v1/filesystems', ADMIN_TOKEN, 'GET');
       const arrRes = await requestJson(apiSockPath, '/api/v1/arrays', ADMIN_TOKEN, 'GET');
       const fsOk =
-        fsRes.status === 200 &&
-        Array.isArray(fsRes.body.result) &&
-        fsRes.body.result.length >= 3;
+        fsRes.status === 200 && Array.isArray(fsRes.body.result) && fsRes.body.result.length >= 3;
       const arrOk =
         arrRes.status === 200 &&
         Array.isArray(arrRes.body.result) &&

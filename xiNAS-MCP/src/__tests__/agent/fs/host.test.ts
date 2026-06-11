@@ -122,9 +122,7 @@ describe('createFakeFsHost', () => {
     await expect(host.enableNow('mnt-data.mount')).rejects.toThrow(/no unit/);
     await host.writeUnit('mnt-data.mount', '[Mount]\nWhat=/dev/xi_data\nWhere=/mnt/data\n');
     await host.enableNow('mnt-data.mount');
-    expect(await host.readMounts()).toEqual([
-      { source: '/dev/xi_data', mountpoint: '/mnt/data' },
-    ]);
+    expect(await host.readMounts()).toEqual([{ source: '/dev/xi_data', mountpoint: '/mnt/data' }]);
     const before = await host.statfs('/mnt/data');
     await host.growfs('/mnt/data');
     const after = await host.statfs('/mnt/data');

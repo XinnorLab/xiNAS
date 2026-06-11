@@ -115,7 +115,7 @@ EOF
 **Files:**
 - Modify: `xiNAS-MCP/xinas-agent.service`
 
-- [ ] **Step 1: edit the unit.** `CapabilityBoundingSet=CAP_CHOWN` → `CapabilityBoundingSet=CAP_CHOWN CAP_NET_ADMIN`; same for `AmbientCapabilities`. `ReadWritePaths=/run/xinas /var/log/xinas /etc/systemd/system` → append ` /etc/netplan /run/netplan /run/systemd`. Add a comment block mirroring the ADR-0008 sandbox table (why each path/cap: netplan render+cleanup writes; `netplan generate/apply` writes /run/netplan + /run/systemd/network; `ip rule/route/addr` + kernel programming need CAP_NET_ADMIN; AF_NETLINK already allowed).
+- [ ] **Step 1: edit the unit.** `CapabilityBoundingSet=CAP_CHOWN` → `CapabilityBoundingSet=CAP_CHOWN CAP_NET_ADMIN`; same for `AmbientCapabilities`. `ReadWritePaths=/run/xinas /var/log/xinas /etc/systemd/system` → append `/etc/netplan /run/netplan /run/systemd`. Add a comment block mirroring the ADR-0008 sandbox table (why each path/cap: netplan render+cleanup writes; `netplan generate/apply` writes /run/netplan + /run/systemd/network; `ip rule/route/addr` + kernel programming need CAP_NET_ADMIN; AF_NETLINK already allowed).
 
 - [ ] **Step 2: commit with the trailer.**
 

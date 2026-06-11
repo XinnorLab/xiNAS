@@ -52,9 +52,7 @@ export function renderNetplan(rows: DesiredIfaceSpec[]): string {
       ...(row.mtu !== undefined ? { mtu: row.mtu } : {}),
       ...(first !== undefined
         ? {
-            routes: [
-              { to: connectedSubnet(first), scope: 'link', table: row.pbr_table_id },
-            ],
+            routes: [{ to: connectedSubnet(first), scope: 'link', table: row.pbr_table_id }],
             'routing-policy': row.addresses.map((cidr) => ({
               from: cidr.split('/')[0],
               table: row.pbr_table_id,

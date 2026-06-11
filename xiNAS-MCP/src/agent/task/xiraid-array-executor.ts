@@ -452,9 +452,7 @@ export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): E
 
       // 1. Restore the array's sparepool linkage.
       if (liveSparepool !== pre.arraySparepool) {
-        await client.raidModify(
-          toRaidModifyRequest(spec.id, { sparepool: pre.arraySparepool }),
-        );
+        await client.raidModify(toRaidModifyRequest(spec.id, { sparepool: pre.arraySparepool }));
       }
 
       // 2. Restore the pool itself.
@@ -498,9 +496,7 @@ function narrowImportSpec(ctx: ExecutorContext): { uuid: string; new_name: strin
 }
 
 /** Tolerant read of the raid_import_show candidate list. */
-function readImportCandidates(
-  payload: unknown,
-): Array<{ uuid: string; recoverable: boolean }> {
+function readImportCandidates(payload: unknown): Array<{ uuid: string; recoverable: boolean }> {
   if (!Array.isArray(payload)) return [];
   const out: Array<{ uuid: string; recoverable: boolean }> = [];
   for (const entry of payload) {

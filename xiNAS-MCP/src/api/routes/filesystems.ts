@@ -48,10 +48,7 @@ function rejectIdentityKeys(spec: unknown): void {
 
 /** Current observed revision of a filesystem row, or undefined when absent. */
 function observedFsRevision(ctx: ApiContext, id: string): number | undefined {
-  const row = getOrNull<Record<string, unknown>>(
-    ctx.state,
-    `/xinas/v1/observed/Filesystem/${id}`,
-  );
+  const row = getOrNull<Record<string, unknown>>(ctx.state, `/xinas/v1/observed/Filesystem/${id}`);
   return row?.revision;
 }
 

@@ -132,9 +132,7 @@ describe('POST /api/v1/arrays', () => {
     expect(second.status).toBe(202);
     expect(second.body.result.task_id).toBe(first.body.result.task_id);
     // Replay returns the SAME task (no second row); one apply task exists.
-    expect(
-      count('SELECT COUNT(*) AS n FROM tasks WHERE state != ?', 'plan_only'),
-    ).toBe(1);
+    expect(count('SELECT COUNT(*) AS n FROM tasks WHERE state != ?', 'plan_only')).toBe(1);
   });
 
   it('agent unavailable → 503, task failed FAILED_BEFORE_CHANGE, leases released', async () => {
@@ -145,7 +143,13 @@ describe('POST /api/v1/arrays', () => {
     expect(res.status).toBe(503);
     expect(res.body.errors[0].details?.code).toBe('EXECUTOR_UNAVAILABLE');
     expect(count('SELECT COUNT(*) AS n FROM leases')).toBe(0);
-    expect(count('SELECT COUNT(*) AS n FROM tasks WHERE state = ? AND error_code = ?', 'failed', 'FAILED_BEFORE_CHANGE')).toBe(1);
+    expect(
+      count(
+        'SELECT COUNT(*) AS n FROM tasks WHERE state = ? AND error_code = ?',
+        'failed',
+        'FAILED_BEFORE_CHANGE',
+      ),
+    ).toBe(1);
   });
 
   it('import-shaped spec → 200 plan (xiraid.array.import) and 202 apply (S4 T7)', async () => {
@@ -174,7 +178,11 @@ describe('POST /api/v1/arrays', () => {
       setup.state.kv.put('/xinas/v1/observed/XiraidArray/doomed', {
         kind: 'XiraidArray',
         id: 'doomed',
-        spec: { name: 'doomed', level: 'raid5', member_disk_ids: ['nvme1n1', 'nvme2n1', 'nvme3n1'] },
+        spec: {
+          name: 'doomed',
+          level: 'raid5',
+          member_disk_ids: ['nvme1n1', 'nvme2n1', 'nvme3n1'],
+        },
         status: {
           state: 'optimal',
           volume_path: '/dev/xi_doomed',
@@ -209,9 +217,7 @@ describe('POST /api/v1/arrays', () => {
       const p = res.body.result;
       expect(p.risk_level).toBe('destructive');
       expect(p.rollback_model).toBe('unsupported');
-      expect(p.blockers.map((b: { code: string }) => b.code)).toEqual([
-        'dangerous_flag_required',
-      ]);
+      expect(p.blockers.map((b: { code: string }) => b.code)).toEqual(['dangerous_flag_required']);
       expect(p.diff.destroys.volume_path).toBe('/dev/xi_doomed');
     });
 

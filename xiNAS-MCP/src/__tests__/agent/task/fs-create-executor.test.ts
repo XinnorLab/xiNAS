@@ -87,9 +87,7 @@ describe('fs.create executor', () => {
     );
     expect(ops).toContain('writeUnit:mnt-data.mount');
     expect(ops).toContain('enableNow:mnt-data.mount');
-    expect(await host.readMounts()).toEqual([
-      { source: '/dev/xi_data', mountpoint: '/mnt/data' },
-    ]);
+    expect(await host.readMounts()).toEqual([{ source: '/dev/xi_data', mountpoint: '/mnt/data' }]);
     expect(ctx.lines.some((l) => l.includes('clamped'))).toBe(false);
   });
 
@@ -99,9 +97,7 @@ describe('fs.create executor', () => {
     const ctx = makeCtx(enrichedSpec());
     await runAllStages(executor, ctx);
 
-    expect(
-      host.ops().some((op) => op.includes('logdev=/dev/xi_log,size=536870912')),
-    ).toBe(true);
+    expect(host.ops().some((op) => op.includes('logdev=/dev/xi_log,size=536870912'))).toBe(true);
     expect(ctx.lines.some((l) => l.includes('log size clamped'))).toBe(true);
   });
 
@@ -182,7 +178,10 @@ describe('fs.mount / fs.unmount executors', () => {
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'xinas-fs-mu-'));
     host = createFakeFsHost(dir);
-    await host.writeUnit('mnt-data.mount', '[Mount]\nWhat=/dev/xi_data\nWhere=/mnt/data\nType=xfs\n');
+    await host.writeUnit(
+      'mnt-data.mount',
+      '[Mount]\nWhat=/dev/xi_data\nWhere=/mnt/data\nType=xfs\n',
+    );
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });

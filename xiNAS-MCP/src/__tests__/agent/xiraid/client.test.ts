@@ -145,7 +145,13 @@ describe('createFakeXiraidTransport', () => {
   it('import: show returns seeded candidates; apply adopts under new_name; unknown uuid rejects', async () => {
     const t = createFakeXiraidTransport(dir);
     t.seedImportCandidates?.([
-      { uuid: 'u-1', name: 'foreign', level: '5', devices: ['/dev/x', '/dev/y'], recoverable: true },
+      {
+        uuid: 'u-1',
+        name: 'foreign',
+        level: '5',
+        devices: ['/dev/x', '/dev/y'],
+        recoverable: true,
+      },
     ]);
     expect(((await t.raidImportShow()) as unknown[]).length).toBe(1);
     await t.raidImportApply({ uuid: 'u-1', new_name: 'adopted' });
@@ -172,9 +178,7 @@ describe('createFakeXiraidTransport', () => {
     // sparepool-only modify on the -fail-tuning name SUCCEEDS…
     await t.raidModify({ name: 'arr-fail-tuning', sparepool: 'xnsp_arr-fail-tuning' });
     // …a tuning-carrying modify REJECTS…
-    await expect(t.raidModify({ name: 'arr-fail-tuning', init_prio: 5 })).rejects.toThrow(
-      /tuning/,
-    );
+    await expect(t.raidModify({ name: 'arr-fail-tuning', init_prio: 5 })).rejects.toThrow(/tuning/);
     // …and pool ops on the derived pool name are NOT tripped by -fail-tuning.
     await t.poolCreate({ name: 'xnsp_arr-fail-tuning', drives: ['/dev/s'] });
   });

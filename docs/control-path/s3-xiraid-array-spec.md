@@ -190,7 +190,7 @@ Connection lifecycle (connect on start, reconnect on drop, availability flag) li
 | **T5** | `agent/xiraid/client.ts` — gRPC adapter over `src/grpc/` with injectable transport; `raidShow/raidCreate/raidDestroy`; availability state. TDD with fake transport. |
 | **T6** | `lib/parse/raid.ts` + `agent/collectors/xiraid.ts` — real observe collector (replaces the stub; device→Disk-id mapping; daemon-down → degraded); wire into the collector registry/convergence. TDD. |
 | **T7** | `api/plan/providers/xiraid-array.ts` — create provider (resolution + validate + `device_by_id` embedding + `affected_resources` + diff); register in `PlanEngine`. TDD. |
-| **T8** | `api/routes/arrays.ts` — `POST /arrays` `mode=plan|apply` (full `ApplyRequest`, `expected_revision=0` convention); replace the POST stub in `app.ts` (PATCH/DELETE stay stubbed per §1). Route tests incl. idempotency + agent-unavailable. |
+| **T8** | `api/routes/arrays.ts` — `POST /arrays` `mode=plan\|apply` (full `ApplyRequest`,`expected_revision=0` convention); replace the POST stub in `app.ts` (PATCH/DELETE stay stubbed per §1). Route tests incl. idempotency + agent-unavailable. |
 | **T9** | `agent/task/xiraid-array-executor.ts` — stages `preflight/create/wait_online/verify` + `rollback`; register in `ExecutorRegistry`; wire the shared client in `agent-server.ts`. TDD. |
 | **T10** | e2e (fake xiRAID transport): create success + create-fail→rollback; run the full verification gate. |
 

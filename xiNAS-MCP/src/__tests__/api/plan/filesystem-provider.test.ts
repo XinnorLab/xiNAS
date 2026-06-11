@@ -44,7 +44,11 @@ function seedArray(kv: SqliteKvStore, name: string, over: Record<string, unknown
       strip_size_kib: 128,
       ...over,
     },
-    status: { state: 'optimal', volume_path: `/dev/xi_${name}`, observed_at: '2026-06-10T12:00:00Z' },
+    status: {
+      state: 'optimal',
+      volume_path: `/dev/xi_${name}`,
+      observed_at: '2026-06-10T12:00:00Z',
+    },
   });
 }
 
@@ -149,11 +153,7 @@ describe('fsCreateProvider', () => {
 
 // ---- T9: mount / unmount providers ----
 
-function seedFs(
-  kv: SqliteKvStore,
-  id: string,
-  status: Record<string, unknown>,
-): void {
+function seedFs(kv: SqliteKvStore, id: string, status: Record<string, unknown>): void {
   kv.put(`/xinas/v1/observed/Filesystem/${id}`, { kind: 'Filesystem', id, status });
 }
 
@@ -184,7 +184,11 @@ describe('fsMountProvider / fsUnmountProvider', () => {
       { kind: 'XiraidArray', id: 'data' },
     ]);
     const persisted = h.store.get(task.task_id)?.spec as Record<string, unknown>;
-    expect(persisted).toMatchObject({ id: 'mnt-data.mount', mounted: true, mountpoint: '/mnt/data' });
+    expect(persisted).toMatchObject({
+      id: 'mnt-data.mount',
+      mounted: true,
+      mountpoint: '/mnt/data',
+    });
   });
 
   it('mount: failed backing array → backing_array_unhealthy; already mounted → warning', async () => {

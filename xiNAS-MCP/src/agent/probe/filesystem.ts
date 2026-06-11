@@ -10,7 +10,11 @@ import { type ExecFileOptions, execFile as nodeExecFile } from 'node:child_proce
  * Injectable dependencies for test isolation. Do NOT import from outside
  * src/agent/.
  */
-import { readFile as nodeReadFile, readdir as nodeReaddir, statfs as nodeStatfs } from 'node:fs/promises';
+import {
+  readFile as nodeReadFile,
+  readdir as nodeReaddir,
+  statfs as nodeStatfs,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { type ObservedFilesystem, mountUnitToFilesystem } from '../../lib/parse/filesystem.js';
 import { type MountEntry, parseMountinfo } from '../../lib/parse/mountinfo.js';
@@ -80,40 +84,39 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
   const rd: ReaddirFn = opts.readdir ?? ((p) => nodeReaddir(p));
   const rf = opts.readFile ?? ((p, e) => nodeReadFile(p, e as BufferEncoding));
   const ef: ExecFileFn = opts.execFile ?? (nodeExecFile as unknown as ExecFileFn);
-  const enrich: FsEnrichDeps =
-    opts.enrich ?? {
-      async blkid(device) {
-        const res = await new Promise<{ stdout: string; code: number }>((resolve) => {
-          ef('blkid', ['-o', 'export', device], {}, (err, stdout) => {
-            const code =
-              err === null
-                ? 0
-                : typeof (err as Error & { code?: unknown }).code === 'number'
-                  ? ((err as Error & { code: number }).code as number)
-                  : 127;
-            resolve({ stdout: stdout ?? '', code });
-          });
+  const enrich: FsEnrichDeps = opts.enrich ?? {
+    async blkid(device) {
+      const res = await new Promise<{ stdout: string; code: number }>((resolve) => {
+        ef('blkid', ['-o', 'export', device], {}, (err, stdout) => {
+          const code =
+            err === null
+              ? 0
+              : typeof (err as Error & { code?: unknown }).code === 'number'
+                ? ((err as Error & { code: number }).code as number)
+                : 127;
+          resolve({ stdout: stdout ?? '', code });
         });
-        if (res.code === 2) return null; // no recognizable filesystem
-        if (res.code !== 0) throw new Error(`blkid ${device} exited ${res.code}`);
-        const info: { fstype?: string; label?: string; uuid?: string } = {};
-        for (const line of res.stdout.split('\n')) {
-          const eq = line.indexOf('=');
-          if (eq <= 0) continue;
-          const key = line.slice(0, eq).trim();
-          const value = line.slice(eq + 1).trim();
-          if (key === 'TYPE') info.fstype = value;
-          if (key === 'LABEL') info.label = value;
-          if (key === 'UUID') info.uuid = value;
-        }
-        return info;
-      },
-      async statfs(mountpoint) {
-        const s = await nodeStatfs(mountpoint);
-        return { size_bytes: s.blocks * s.bsize, free_bytes: s.bfree * s.bsize };
-      },
-      readMountinfo: () => nodeReadFile('/proc/self/mountinfo', 'utf8'),
-    };
+      });
+      if (res.code === 2) return null; // no recognizable filesystem
+      if (res.code !== 0) throw new Error(`blkid ${device} exited ${res.code}`);
+      const info: { fstype?: string; label?: string; uuid?: string } = {};
+      for (const line of res.stdout.split('\n')) {
+        const eq = line.indexOf('=');
+        if (eq <= 0) continue;
+        const key = line.slice(0, eq).trim();
+        const value = line.slice(eq + 1).trim();
+        if (key === 'TYPE') info.fstype = value;
+        if (key === 'LABEL') info.label = value;
+        if (key === 'UUID') info.uuid = value;
+      }
+      return info;
+    },
+    async statfs(mountpoint) {
+      const s = await nodeStatfs(mountpoint);
+      return { size_bytes: s.blocks * s.bsize, free_bytes: s.bfree * s.bsize };
+    },
+    readMountinfo: () => nodeReadFile('/proc/self/mountinfo', 'utf8'),
+  };
 
   return {
     async snapshot(): Promise<FilesystemSnapshot[]> {
@@ -147,8 +150,7 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
 
         // --- S5 T6 enrichment (each field degrades independently) ---
         const mountEntry = mounts.find(
-          (m) =>
-            m.mountpoint === fs.status.mountpoint || m.source === fs.status.backing_device,
+          (m) => m.mountpoint === fs.status.mountpoint || m.source === fs.status.backing_device,
         );
         const mounted = mountEntry !== undefined;
         let blkidInfo: { fstype?: string; label?: string; uuid?: string } | null = null;
@@ -171,9 +173,7 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
           status: {
             ...fs.status,
             mounted,
-            ...(mountEntry !== undefined
-              ? { effective_mount_options: mountEntry.options }
-              : {}),
+            ...(mountEntry !== undefined ? { effective_mount_options: mountEntry.options } : {}),
             ...(blkidInfo?.uuid !== undefined ? { uuid: blkidInfo.uuid } : {}),
             ...(blkidInfo?.label !== undefined ? { label: blkidInfo.label } : {}),
             ...(sizes !== undefined ? { size_bytes: sizes.size_bytes } : {}),

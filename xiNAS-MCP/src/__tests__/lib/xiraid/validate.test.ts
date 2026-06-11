@@ -23,7 +23,15 @@ function disk(id: string, over: Partial<ResolvedDisk> = {}): ResolvedDisk {
 
 function facts(over: Partial<CreateFacts> = {}): CreateFacts {
   return {
-    disks: [disk('d1'), disk('d2'), disk('d3'), disk('d4'), disk('d5'), disk('d6'), disk('claimed')],
+    disks: [
+      disk('d1'),
+      disk('d2'),
+      disk('d3'),
+      disk('d4'),
+      disk('d5'),
+      disk('d6'),
+      disk('claimed'),
+    ],
     existingArrayNames: ['taken'],
     existingMemberDiskIds: new Set(['claimed']),
     ...over,
@@ -59,28 +67,24 @@ describe('validateCreateSpec', () => {
 
   it('level minimums', () => {
     expect(codes(spec({ member_disk_ids: ['d1', 'd2', 'd3'] }))).toContain('min_drives');
-    expect(
-      codes(spec({ level: 'raid5', member_disk_ids: ['d1', 'd2', 'd3'] })),
-    ).toEqual([]);
+    expect(codes(spec({ level: 'raid5', member_disk_ids: ['d1', 'd2', 'd3'] }))).toEqual([]);
   });
 
   it('raid50/60/70 group_size rules', () => {
     const six = ['d1', 'd2', 'd3', 'd4', 'd5', 'd6'];
-    expect(codes(spec({ level: 'raid50', member_disk_ids: six }))).toContain(
-      'group_size_required',
+    expect(codes(spec({ level: 'raid50', member_disk_ids: six }))).toContain('group_size_required');
+    expect(codes(spec({ level: 'raid50', member_disk_ids: six, group_size: 1 }))).toContain(
+      'group_size_range',
     );
-    expect(
-      codes(spec({ level: 'raid50', member_disk_ids: six, group_size: 1 })),
-    ).toContain('group_size_range');
-    expect(
-      codes(spec({ level: 'raid50', member_disk_ids: six, group_size: 4 })),
-    ).toContain('members_not_divisible_by_group');
+    expect(codes(spec({ level: 'raid50', member_disk_ids: six, group_size: 4 }))).toContain(
+      'members_not_divisible_by_group',
+    );
     // 6 % 3 == 0 and 6/3 = 2 groups → valid
     expect(codes(spec({ level: 'raid50', member_disk_ids: six, group_size: 3 }))).toEqual([]);
     // group_size == member count → only 1 group → compound level needs >= 2
-    expect(
-      codes(spec({ level: 'raid50', member_disk_ids: six, group_size: 6 })),
-    ).toContain('members_not_divisible_by_group');
+    expect(codes(spec({ level: 'raid50', member_disk_ids: six, group_size: 6 }))).toContain(
+      'members_not_divisible_by_group',
+    );
   });
 
   it('n+m synd_cnt rules', () => {
@@ -145,7 +149,13 @@ describe('validateCreateSpec', () => {
 
   it('spare disks get the member disk checks', () => {
     const f = facts({
-      disks: [disk('d1'), disk('d2'), disk('d3'), disk('d4'), disk('bad', { safe_for_use: false, mounted: true })],
+      disks: [
+        disk('d1'),
+        disk('d2'),
+        disk('d3'),
+        disk('d4'),
+        disk('bad', { safe_for_use: false, mounted: true }),
+      ],
     });
     expect(validateCreateSpec(spec({ spare_disk_ids: ['bad'] }), f).map((b) => b.code)).toContain(
       'disk_not_safe',
@@ -158,9 +168,7 @@ describe('validateCreateSpec', () => {
 
   it('derived pool name xnsp_<name> must fit the 63-char namespace', () => {
     const longName = 'a'.repeat(60); // valid alone, xnsp_+60 = 65 > 63
-    expect(
-      codes(spec({ name: longName, spare_disk_ids: ['d5'] })),
-    ).toContain('name_invalid');
+    expect(codes(spec({ name: longName, spare_disk_ids: ['d5'] }))).toContain('name_invalid');
     // without spares the same name is fine (no pool derived)
     expect(codes(spec({ name: longName }))).toEqual([]);
   });

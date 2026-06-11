@@ -155,9 +155,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
         : {}),
       probe: {
         netplanSummary: () =>
-          networkProbe.netplanSummary().then(
-            (s) => s as Record<string, unknown> | undefined,
-          ),
+          networkProbe.netplanSummary().then((s) => s as Record<string, unknown> | undefined),
         snapshot: () =>
           networkProbe.snapshot().then((ifaces) =>
             ifaces.map((iface) => ({

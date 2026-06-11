@@ -114,9 +114,10 @@ describe('createFakeNetHost', () => {
   it('ipRuleShow renders the flushable format; ipAddrShow is ip -j shaped', async () => {
     await host.netplanApply();
     expect(await host.ipRuleShow()).toContain('from 10.10.1.1 lookup 100');
-    const state = JSON.parse(
-      readFileSync(join(dir, 'net-host-state.json'), 'utf8'),
-    ) as Record<string, unknown>;
+    const state = JSON.parse(readFileSync(join(dir, 'net-host-state.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
     (state.sys_class_net as unknown[]) = [{ name: 'ibp65s0', driver: 'mlx5_core' }];
     const { writeFileSync } = await import('node:fs');
     writeFileSync(join(dir, 'net-host-state.json'), JSON.stringify(state));

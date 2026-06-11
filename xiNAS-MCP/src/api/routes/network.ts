@@ -10,12 +10,7 @@ import {
   toApplyPlan,
 } from '../handlers/plan-apply.js';
 import type { RevisionedValue } from '../../state/index.js';
-import {
-  embedMetadata,
-  getOrNull,
-  listByPrefix,
-  sendOk,
-} from '../handlers/reads.js';
+import { embedMetadata, getOrNull, listByPrefix, sendOk } from '../handlers/reads.js';
 import type { PlanProvider } from '../plan/engine.js';
 import { netIfaceUpdateProvider, netPoolApplyProvider } from '../plan/providers/network.js';
 
@@ -41,10 +36,7 @@ function mergeIface(
   const id = (observedRow.value as { id?: string }).id;
   const desired =
     typeof id === 'string'
-      ? getOrNull<Record<string, unknown>>(
-          ctx.state,
-          `/xinas/v1/desired/NetworkInterface/${id}`,
-        )
+      ? getOrNull<Record<string, unknown>>(ctx.state, `/xinas/v1/desired/NetworkInterface/${id}`)
       : null;
   const base = embedMetadata(observedRow) as Record<string, unknown>;
   if (!desired) return base;

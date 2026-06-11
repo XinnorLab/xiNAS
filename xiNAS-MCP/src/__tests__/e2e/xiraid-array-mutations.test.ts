@@ -375,7 +375,10 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
 
     let task: TaskResult;
     try {
-      task = await waitForTaskState(apiSockPath, (applied.body.result as { task_id: string }).task_id);
+      task = await waitForTaskState(
+        apiSockPath,
+        (applied.body.result as { task_id: string }).task_id,
+      );
     } catch (err) {
       throw withAgentStderr(err);
     }
@@ -413,7 +416,10 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
 
     let task: TaskResult;
     try {
-      task = await waitForTaskState(apiSockPath, (applied.body.result as { task_id: string }).task_id);
+      task = await waitForTaskState(
+        apiSockPath,
+        (applied.body.result as { task_id: string }).task_id,
+      );
     } catch (err) {
       throw withAgentStderr(err);
     }
@@ -449,7 +455,10 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
 
     let task: TaskResult;
     try {
-      task = await waitForTaskState(apiSockPath, (applied.body.result as { task_id: string }).task_id);
+      task = await waitForTaskState(
+        apiSockPath,
+        (applied.body.result as { task_id: string }).task_id,
+      );
     } catch (err) {
       throw withAgentStderr(err);
     }
@@ -464,9 +473,15 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
 
   it('4. delete gates: missing dangerous → 412; mounted dependent fs → 412', async () => {
     // 4a: the engine dangerous gate
-    const planned = await requestJson(apiSockPath, '/api/v1/arrays/adopted', ADMIN_TOKEN, 'DELETE', {
-      mode: 'plan',
-    });
+    const planned = await requestJson(
+      apiSockPath,
+      '/api/v1/arrays/adopted',
+      ADMIN_TOKEN,
+      'DELETE',
+      {
+        mode: 'plan',
+      },
+    );
     expect(planned.status).toBe(200);
     expect(
       (planned.body.result as { blockers: Array<{ code: string }> }).blockers.map((b) => b.code),
@@ -497,9 +512,15 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
       await sleep(200);
     }
 
-    const plannedData = await requestJson(apiSockPath, '/api/v1/arrays/data', ADMIN_TOKEN, 'DELETE', {
-      mode: 'plan',
-    });
+    const plannedData = await requestJson(
+      apiSockPath,
+      '/api/v1/arrays/data',
+      ADMIN_TOKEN,
+      'DELETE',
+      {
+        mode: 'plan',
+      },
+    );
     expect(plannedData.status).toBe(200);
     const blocked = await requestJson(apiSockPath, '/api/v1/arrays/data', ADMIN_TOKEN, 'DELETE', {
       mode: 'apply',
@@ -516,23 +537,38 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
   }, 40_000);
 
   it('5. delete success: adopted array + dangerous:true → gone', async () => {
-    const planned = await requestJson(apiSockPath, '/api/v1/arrays/adopted', ADMIN_TOKEN, 'DELETE', {
-      mode: 'plan',
-    });
+    const planned = await requestJson(
+      apiSockPath,
+      '/api/v1/arrays/adopted',
+      ADMIN_TOKEN,
+      'DELETE',
+      {
+        mode: 'plan',
+      },
+    );
     expect(planned.status).toBe(200);
 
-    const applied = await requestJson(apiSockPath, '/api/v1/arrays/adopted', ADMIN_TOKEN, 'DELETE', {
-      mode: 'apply',
-      plan_id: (planned.body.result as { plan_id: string }).plan_id,
-      expected_revision: await arrayRevision('adopted'),
-      idempotency_key: 'K-del-ok',
-      dangerous: true,
-    });
+    const applied = await requestJson(
+      apiSockPath,
+      '/api/v1/arrays/adopted',
+      ADMIN_TOKEN,
+      'DELETE',
+      {
+        mode: 'apply',
+        plan_id: (planned.body.result as { plan_id: string }).plan_id,
+        expected_revision: await arrayRevision('adopted'),
+        idempotency_key: 'K-del-ok',
+        dangerous: true,
+      },
+    );
     expect(applied.status).toBe(202);
 
     let task: TaskResult;
     try {
-      task = await waitForTaskState(apiSockPath, (applied.body.result as { task_id: string }).task_id);
+      task = await waitForTaskState(
+        apiSockPath,
+        (applied.body.result as { task_id: string }).task_id,
+      );
     } catch (err) {
       throw withAgentStderr(err);
     }

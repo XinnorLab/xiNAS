@@ -81,7 +81,10 @@ describe('net.iface.update executor', () => {
     };
   }
 
-  async function runAll(executor: ReturnType<typeof makeNetIfaceUpdateExecutor>, ctx: ExecutorContext) {
+  async function runAll(
+    executor: ReturnType<typeof makeNetIfaceUpdateExecutor>,
+    ctx: ExecutorContext,
+  ) {
     for (const stage of executor.stages) await stage.run(ctx);
   }
 
@@ -117,7 +120,12 @@ describe('net.iface.update executor', () => {
     const executor = makeNetIfaceUpdateExecutor({ host });
     await expect(executor.stages[0]?.run(makeCtx(spec()))).rejects.toThrow(/changed since plan/);
     // no writes beyond the rogue file itself
-    expect(host.ops().slice(opsBefore).filter((o) => o.startsWith('writeNetplanFile'))).toEqual([]);
+    expect(
+      host
+        .ops()
+        .slice(opsBefore)
+        .filter((o) => o.startsWith('writeNetplanFile')),
+    ).toEqual([]);
   });
 
   it('preflight duplicate re-scan (no cleanup) aborts', async () => {
@@ -133,7 +141,9 @@ describe('net.iface.update executor', () => {
     await host.writeNetplanFile('/etc/netplan/60-extra.yaml', '# fine for now\n');
     const hash = netplanHashes(await host.readNetplanDir()).world_config_hash;
     const executor = makeNetIfaceUpdateExecutor({ host });
-    const ctx = makeCtx(spec({ world_config_hash: hash, render: `${NEW_RENDER}# INVALID-NETPLAN\n` }));
+    const ctx = makeCtx(
+      spec({ world_config_hash: hash, render: `${NEW_RENDER}# INVALID-NETPLAN\n` }),
+    );
 
     await executor.stages[0]?.run(ctx); // preflight stashes
     await expect(executor.stages[1]?.run(ctx)).rejects.toThrow(/INVALID-NETPLAN/);

@@ -21,7 +21,11 @@ describe('POST /api/v1/filesystems', () => {
         member_disk_ids: ['d1', 'd2', 'd3', 'd4'],
         strip_size_kib: 128,
       },
-      status: { state: 'optimal', volume_path: '/dev/xi_data', observed_at: '2026-06-10T12:00:00Z' },
+      status: {
+        state: 'optimal',
+        volume_path: '/dev/xi_data',
+        observed_at: '2026-06-10T12:00:00Z',
+      },
     });
   });
   afterEach(async () => {
@@ -62,17 +66,24 @@ describe('POST /api/v1/filesystems', () => {
     expect(res.status).toBe(202);
     expect(res.body.result.kind).toBe('fs.create');
     expect(res.body.result.state).toBe('running');
-    expect(count('SELECT COUNT(*) AS n FROM leases WHERE task_id = ?', res.body.result.task_id)).toBe(2);
+    expect(
+      count('SELECT COUNT(*) AS n FROM leases WHERE task_id = ?', res.body.result.task_id),
+    ).toBe(2);
 
     const begin = setup.mockAgent.lastTaskBeginParams();
     expect((begin?.spec as Record<string, unknown>)?.unit_name).toBe('mnt-data.mount');
-    expect(((begin?.spec as Record<string, unknown>)?.resolved as Record<string, unknown>)?.sw).toBe(3);
+    expect(
+      ((begin?.spec as Record<string, unknown>)?.resolved as Record<string, unknown>)?.sw,
+    ).toBe(3);
   });
 
   it('force:true apply without dangerous → 412 dangerous_flag_required (engine)', async () => {
     const planned = await plan({ ...SPEC, force: true });
     expect(planned.status).toBe(200);
-    const res = await apply({ plan_id: planned.body.result.plan_id, idempotency_key: 'idem-force' });
+    const res = await apply({
+      plan_id: planned.body.result.plan_id,
+      idempotency_key: 'idem-force',
+    });
     expect(res.status).toBe(412);
     expect(res.body.errors[0].details?.reason).toBe('dangerous_flag_required');
   });
@@ -100,7 +111,9 @@ describe('POST /api/v1/filesystems', () => {
     );
     const res = await apply({ plan_id: planned.body.result.plan_id, idempotency_key: 'idem-blk' });
     expect(res.status).toBe(412);
-    expect((res.body.errors[0].details?.blockers as Array<{ code: string }>).length).toBeGreaterThan(0);
+    expect(
+      (res.body.errors[0].details?.blockers as Array<{ code: string }>).length,
+    ).toBeGreaterThan(0);
   });
 
   it('PUT /filesystems/:id keeps the unsupported-stub envelope (no PUT op)', async () => {
@@ -268,9 +281,9 @@ describe('DELETE /api/v1/filesystems/:id', () => {
     expect(planned.status).toBe(200);
     expect(planned.body.result.risk_level).toBe('non_disruptive');
     expect(planned.body.result.blockers).toEqual([]);
-    expect(
-      planned.body.result.warnings.map((w: { code: string }) => w.code),
-    ).toContain('data_left_in_place');
+    expect(planned.body.result.warnings.map((w: { code: string }) => w.code)).toContain(
+      'data_left_in_place',
+    );
 
     const res = await request(setup.app)
       .delete('/api/v1/filesystems/mnt-data.mount')

@@ -44,15 +44,15 @@ function seedArray(
       member_disk_ids: over.member_disk_ids ?? ['nvme1n1', 'nvme2n1', 'nvme3n1', 'nvme4n1'],
       spare_disk_ids: over.spare_disk_ids ?? [],
     },
-    status: { state: 'optimal', volume_path: `/dev/xi_${name}`, observed_at: '2026-06-10T12:00:00Z' },
+    status: {
+      state: 'optimal',
+      volume_path: `/dev/xi_${name}`,
+      observed_at: '2026-06-10T12:00:00Z',
+    },
   });
 }
 
-function seedDisk(
-  kv: SqliteKvStore,
-  id: string,
-  over: Record<string, unknown> = {},
-): void {
+function seedDisk(kv: SqliteKvStore, id: string, over: Record<string, unknown> = {}): void {
   kv.put(`/xinas/v1/observed/Disk/${id}`, {
     kind: 'Disk',
     id,
@@ -136,16 +136,28 @@ describe('xiraidArrayCreateProvider', () => {
 
     const cases: Array<[Record<string, unknown>, string]> = [
       [{ ...GOOD_SPEC, name: 'taken' }, 'name_taken'],
-      [{ ...GOOD_SPEC, member_disk_ids: ['sysdisk', 'nvme1n1', 'nvme2n1', 'nvme3n1'] }, 'disk_is_system'],
-      [{ ...GOOD_SPEC, member_disk_ids: ['ghost', 'nvme1n1', 'nvme2n1', 'nvme3n1'] }, 'disk_not_found'],
-      [{ ...GOOD_SPEC, member_disk_ids: ['nvme4n1', 'nvme1n1', 'nvme2n1', 'nvme3n1'] }, 'disk_in_use'],
+      [
+        { ...GOOD_SPEC, member_disk_ids: ['sysdisk', 'nvme1n1', 'nvme2n1', 'nvme3n1'] },
+        'disk_is_system',
+      ],
+      [
+        { ...GOOD_SPEC, member_disk_ids: ['ghost', 'nvme1n1', 'nvme2n1', 'nvme3n1'] },
+        'disk_not_found',
+      ],
+      [
+        { ...GOOD_SPEC, member_disk_ids: ['nvme4n1', 'nvme1n1', 'nvme2n1', 'nvme3n1'] },
+        'disk_in_use',
+      ],
       // S4: spare_pool_deferred is gone — a spare double-booked with a
       // member of this very spec reads as disk_in_use instead.
       [{ ...GOOD_SPEC, spare_disk_ids: ['nvme1n1'] }, 'disk_in_use'],
     ];
     for (const [spec, code] of cases) {
       const { planResult } = await h.engine.plan(planArgs(spec));
-      expect(planResult.blockers.map((b) => b.code), `expected ${code}`).toContain(code);
+      expect(
+        planResult.blockers.map((b) => b.code),
+        `expected ${code}`,
+      ).toContain(code);
     }
   });
 

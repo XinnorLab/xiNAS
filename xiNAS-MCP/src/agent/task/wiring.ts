@@ -30,10 +30,7 @@ import {
   makeFsUnmanageExecutor,
   makeFsUnmountExecutor,
 } from './fs-executor.js';
-import {
-  makeNetIfaceUpdateExecutor,
-  makeNetPoolApplyExecutor,
-} from './net-executor.js';
+import { makeNetIfaceUpdateExecutor, makeNetPoolApplyExecutor } from './net-executor.js';
 import { buildNfsExecutors, type NfsExecutorDeps } from './nfs-executor.js';
 import { createNfsHelperClientFromProbe } from './nfs-helper-client.js';
 import { createProgressPublisher } from './progress-publisher.js';
@@ -202,8 +199,7 @@ export function buildTaskSubsystem(
     registry.register(
       makeXiraidArrayDeleteExecutor({
         client: opts.xiraidClient,
-        readMounts:
-          opts.readMounts ?? (fdir !== null ? makeFixtureMounts(fdir) : readProcMounts),
+        readMounts: opts.readMounts ?? (fdir !== null ? makeFixtureMounts(fdir) : readProcMounts),
       }),
     );
   }

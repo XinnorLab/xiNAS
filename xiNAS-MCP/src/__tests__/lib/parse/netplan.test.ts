@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  XINAS_NETPLAN,
-  netplanHashes,
-  parseNetplanFiles,
-} from '../../../lib/parse/netplan.js';
+import { XINAS_NETPLAN, netplanHashes, parseNetplanFiles } from '../../../lib/parse/netplan.js';
 
 const XINAS = `
 network:
@@ -69,9 +65,7 @@ describe('parseNetplanFiles', () => {
     expect(parsed.duplicates).toEqual({
       ibp65s0: ['/etc/netplan/50-cloud-init.yaml'],
     });
-    expect(parsed.perFileIfaces['/etc/netplan/50-cloud-init.yaml']).toEqual(
-      ['eno1', 'ibp65s0'],
-    );
+    expect(parsed.perFileIfaces['/etc/netplan/50-cloud-init.yaml']).toEqual(['eno1', 'ibp65s0']);
   });
 
   it('unparsable foreign YAML is reported, never thrown', () => {

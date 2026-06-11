@@ -109,9 +109,7 @@ describe('dispatcher integration with stubs', () => {
 
   it('stubbed method returns -32000 EXECUTOR_UNSUPPORTED (not -32601)', async () => {
     const response = JSON.parse(
-      await dispatch(
-        JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'arrays.list', params: {} }),
-      ),
+      await dispatch(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'arrays.list', params: {} })),
     );
     expect(response.error?.code).toBe(-32000);
     expect(response.error?.data?.code).toBe('EXECUTOR_UNSUPPORTED');

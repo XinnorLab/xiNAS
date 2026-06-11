@@ -151,7 +151,9 @@ export function createFakeNetHost(dir: string): NetHost & FakeNetHostHandle {
         if (stanza.pbr_table_id !== undefined) {
           for (const cidr of stanza.addresses) {
             const from = cidr.split('/')[0] as string;
-            if (!state.kernel.rules.some((r) => r.from === from && r.table === stanza.pbr_table_id)) {
+            if (
+              !state.kernel.rules.some((r) => r.from === from && r.table === stanza.pbr_table_id)
+            ) {
               state.kernel.rules.push({
                 from,
                 table: stanza.pbr_table_id,

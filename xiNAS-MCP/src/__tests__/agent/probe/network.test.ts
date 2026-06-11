@@ -3,7 +3,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { createNetworkProbe, enrichNetworkRows, summarizeNetplan } from '../../../agent/probe/network.js';
+import {
+  createNetworkProbe,
+  enrichNetworkRows,
+  summarizeNetplan,
+} from '../../../agent/probe/network.js';
 
 // ESM __dirname shim
 const __filename = fileURLToPath(import.meta.url);
@@ -90,7 +94,12 @@ describe('network probe enrichment (S6)', () => {
     {
       kind: 'NetworkInterface' as const,
       id: 'eno1',
-      status: { name: 'eno1', operstate: 'UP', ip4_addresses: ['192.168.1.5/24'], ip6_addresses: [] },
+      status: {
+        name: 'eno1',
+        operstate: 'UP',
+        ip4_addresses: ['192.168.1.5/24'],
+        ip6_addresses: [],
+      },
     },
   ];
   const SYS = [

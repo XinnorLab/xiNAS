@@ -335,7 +335,12 @@ describe.sequential('e2e: S6 network adapter (fixture mode + fake NetHost)', () 
     // observed interfaces + the NetworkConfig singleton must land first
     const deadline = Date.now() + 10_000;
     for (;;) {
-      const ifaces = await requestJson(apiSockPath, '/api/v1/network/interfaces', ADMIN_TOKEN, 'GET');
+      const ifaces = await requestJson(
+        apiSockPath,
+        '/api/v1/network/interfaces',
+        ADMIN_TOKEN,
+        'GET',
+      );
       const health = await requestJson(apiSockPath, '/api/v1/health', ADMIN_TOKEN, 'GET');
       const dup = (
         (health.body.result as { checks?: Array<{ id: string; status: string }> }).checks ?? []
@@ -383,8 +388,13 @@ describe.sequential('e2e: S6 network adapter (fixture mode + fake NetHost)', () 
     expect(blockers[0]?.message).toContain('50-cloud-init.yaml');
 
     const health = await requestJson(apiSockPath, '/api/v1/health', ADMIN_TOKEN, 'GET');
-    const checks = (health.body.result as { overall: string; checks: Array<{ id: string; status: string }> });
-    expect(checks.checks.find((c) => c.id === 'network.duplicate-netplan')?.status).toBe('critical');
+    const checks = health.body.result as {
+      overall: string;
+      checks: Array<{ id: string; status: string }>;
+    };
+    expect(checks.checks.find((c) => c.id === 'network.duplicate-netplan')?.status).toBe(
+      'critical',
+    );
     expect(checks.overall).toBe('critical');
   });
 
@@ -510,8 +520,7 @@ describe.sequential('e2e: S6 network adapter (fixture mode + fake NetHost)', () 
     const deadline = Date.now() + 10_000;
     for (;;) {
       const sibling = await ifaceRow('ibp9s0f0');
-      const dups = (sibling.status as { duplicates_detected_in?: string[] })
-        .duplicates_detected_in;
+      const dups = (sibling.status as { duplicates_detected_in?: string[] }).duplicates_detected_in;
       if ((dups ?? []).length > 0) break;
       if (Date.now() > deadline) throw withAgentStderr(new Error('rogue file never observed'));
       await sleep(200);
@@ -540,8 +549,7 @@ describe.sequential('e2e: S6 network adapter (fixture mode + fake NetHost)', () 
     const deadline2 = Date.now() + 10_000;
     for (;;) {
       const sibling = await ifaceRow('ibp9s0f0');
-      const dups = (sibling.status as { duplicates_detected_in?: string[] })
-        .duplicates_detected_in;
+      const dups = (sibling.status as { duplicates_detected_in?: string[] }).duplicates_detected_in;
       if ((dups ?? []).length === 0) break;
       if (Date.now() > deadline2) throw withAgentStderr(new Error('rogue file never cleared'));
       await sleep(200);

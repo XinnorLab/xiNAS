@@ -26,11 +26,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type {
-  RaidCreateRequest,
-  RaidDestroyRequest,
-  RaidModifyRequest,
-} from '../../grpc/raid.js';
+import type { RaidCreateRequest, RaidDestroyRequest, RaidModifyRequest } from '../../grpc/raid.js';
 import type { XiraidTransport } from './client.js';
 
 interface FakeArray {

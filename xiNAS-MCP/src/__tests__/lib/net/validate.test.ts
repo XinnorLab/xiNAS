@@ -23,7 +23,14 @@ function facts(over: Partial<NetFacts> = {}): NetFacts {
           pbr_table_id: 100,
         },
       },
-      { name: 'ibp9s0f0', stanza: { file: '/etc/netplan/99-xinas.yaml', addresses: ['10.10.2.1/24'], pbr_table_id: 101 } },
+      {
+        name: 'ibp9s0f0',
+        stanza: {
+          file: '/etc/netplan/99-xinas.yaml',
+          addresses: ['10.10.2.1/24'],
+          pbr_table_id: 101,
+        },
+      },
     ],
     duplicates: {},
     usedTableIds: new Set([100, 101]),
@@ -34,8 +41,9 @@ function facts(over: Partial<NetFacts> = {}): NetFacts {
 
 describe('parseIfaceUpdateSpec / parsePoolSpec', () => {
   it('tolerant narrowing; junk throws; at least one writable key required', () => {
-    expect(parseIfaceUpdateSpec({ addresses: ['10.10.5.1/24'], extra_enrichment: 1 }).addresses)
-      .toEqual(['10.10.5.1/24']);
+    expect(
+      parseIfaceUpdateSpec({ addresses: ['10.10.5.1/24'], extra_enrichment: 1 }).addresses,
+    ).toEqual(['10.10.5.1/24']);
     expect(parseIfaceUpdateSpec({ mtu: 4092 }).mtu).toBe(4092);
     expect(parseIfaceUpdateSpec({ enabled: false }).enabled).toBe(false);
     expect(() => parseIfaceUpdateSpec(null)).toThrow(/object/);
@@ -80,9 +88,9 @@ describe('validateIfaceUpdate', () => {
 
   it('duplicate without cleanup blocks; with cleanup it does not', () => {
     const f = facts({ duplicates: { ibp65s0: ['/etc/netplan/50-cloud-init.yaml'] } });
-    expect(
-      codes(validateIfaceUpdate('ibp65s0', parseIfaceUpdateSpec(SPEC), f)),
-    ).toContain('duplicate_netplan_definition');
+    expect(codes(validateIfaceUpdate('ibp65s0', parseIfaceUpdateSpec(SPEC), f))).toContain(
+      'duplicate_netplan_definition',
+    );
     expect(
       validateIfaceUpdate('ibp65s0', parseIfaceUpdateSpec({ ...SPEC, cleanup: true }), f),
     ).toEqual([]);
@@ -90,7 +98,9 @@ describe('validateIfaceUpdate', () => {
 
   it('blocker table: addresses_invalid, mtu_invalid, address_conflict, pbr_table_exhausted', () => {
     expect(
-      codes(validateIfaceUpdate('ibp65s0', parseIfaceUpdateSpec({ addresses: ['bogus'] }), facts())),
+      codes(
+        validateIfaceUpdate('ibp65s0', parseIfaceUpdateSpec({ addresses: ['bogus'] }), facts()),
+      ),
     ).toContain('addresses_invalid');
     expect(
       codes(validateIfaceUpdate('ibp65s0', parseIfaceUpdateSpec({ mtu: 1279 }), facts())),
@@ -98,13 +108,17 @@ describe('validateIfaceUpdate', () => {
     expect(
       codes(validateIfaceUpdate('ibp65s0', parseIfaceUpdateSpec({ mtu: 65521 }), facts())),
     ).toContain('mtu_invalid');
-    expect(
-      validateIfaceUpdate('ibp65s0', parseIfaceUpdateSpec({ mtu: 65520 }), facts()),
-    ).toEqual([]);
+    expect(validateIfaceUpdate('ibp65s0', parseIfaceUpdateSpec({ mtu: 65520 }), facts())).toEqual(
+      [],
+    );
     // 10.10.1.1/24 is ibp65s0's own address — updating ibp9s0f0 to it conflicts
     expect(
       codes(
-        validateIfaceUpdate('ibp9s0f0', parseIfaceUpdateSpec({ addresses: ['10.10.1.1/24'] }), facts()),
+        validateIfaceUpdate(
+          'ibp9s0f0',
+          parseIfaceUpdateSpec({ addresses: ['10.10.1.1/24'] }),
+          facts(),
+        ),
       ),
     ).toContain('address_conflict');
     // a NEW iface (no table yet) with the pool exhausted
@@ -113,9 +127,9 @@ describe('validateIfaceUpdate', () => {
       managed: [{ name: 'ibpNew' }],
       desiredAddressByIface: {},
     });
-    expect(
-      codes(validateIfaceUpdate('ibpNew', parseIfaceUpdateSpec(SPEC), exhausted)),
-    ).toContain('pbr_table_exhausted');
+    expect(codes(validateIfaceUpdate('ibpNew', parseIfaceUpdateSpec(SPEC), exhausted))).toContain(
+      'pbr_table_exhausted',
+    );
   });
 });
 
@@ -126,7 +140,9 @@ describe('validatePool', () => {
       codes(validatePool(parsePoolSpec({ start: '10.10.255.1', prefix: 24 }), facts())),
     ).toContain('pool_overflow');
     expect(
-      codes(validatePool(parsePoolSpec({ start: '10.10.1.1', prefix: 24 }), facts({ managed: [] }))),
+      codes(
+        validatePool(parsePoolSpec({ start: '10.10.1.1', prefix: 24 }), facts({ managed: [] })),
+      ),
     ).toContain('no_managed_interfaces');
   });
 

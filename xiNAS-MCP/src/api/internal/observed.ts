@@ -180,8 +180,7 @@ export function observedHandler(ctx: ApiContext) {
             const current = tx.get(key);
             if (
               current !== null &&
-              canonicalize(stripObservedAt(current.value)) ===
-                canonicalize(stripObservedAt(value))
+              canonicalize(stripObservedAt(current.value)) === canonicalize(stripObservedAt(value))
             ) {
               skippedUnchanged++;
               revisions.push(current.revision);
