@@ -465,6 +465,15 @@ export class TaskEngine {
     spec: unknown;
     plan: unknown;
   }): Promise<Task> {
+    if (this.dispatchReservations.has(args.task.task_id)) {
+      // Idempotent replay while the original dispatch is mid-flight: the
+      // apply txn returned the existing still-`queued` task and the route
+      // re-entered admission. Return it as-is (202 queued, §5.2 "read &
+      // return the existing task") — admitting again would share the ONE
+      // reservation (Set.add is a no-op) and a losing duplicate dispatch
+      // could fail/release-leases on a task the winner just set running.
+      return args.task;
+    }
     if (this.inFlightCount() >= this.maxInflight) {
       return args.task; // pool full → stays queued, leases held; no dispatch
     }
@@ -711,6 +720,10 @@ export class TaskEngine {
 
         // state === 'queued' → never accepted → no host change → apply policy.
         if (queuedPolicy === 'fail') {
+          // A reservation-held task has its `task.begin` in flight on a
+          // concurrent dispatch — leave it untouched; failing it here would
+          // flip a soon-to-be-running task and release leases mid-execution.
+          if (this.dispatchReservations.has(task.task_id)) continue;
           // Operator escape hatch: fail ALL queued tasks, pool slots or not.
           this.store.transition(task.task_id, {
             state: 'failed',
@@ -733,13 +746,22 @@ export class TaskEngine {
       redispatched += drain.dispatched;
       failed += drain.failed;
 
+      // A skipped drain (another drain in flight) reports zero counts, so its
+      // left_queued would understate a non-empty queue. Recount from the store
+      // (minus reservation-held tasks, which are mid-dispatch) instead.
+      const leftQueued = drain.skipped
+        ? this.store
+            .listQueuedNeverDispatched()
+            .filter((t) => !this.dispatchReservations.has(t.task_id)).length
+        : drain.left_queued;
+
       return {
         leases_removed: sweep.leases_removed,
         tasks_recovered: sweep.tasks_recovered,
         acceptances_adopted: acceptancesAdopted,
         redispatched,
         failed,
-        left_queued: drain.left_queued,
+        left_queued: leftQueued,
         agent_reachable: true,
         skipped: false,
       };

@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRpcClient } from '../../../api/agent-client.js';
 import { createApp } from '../../../api/app.js';
 import type { ApiContext } from '../../../api/context.js';
@@ -205,6 +205,72 @@ describe('TaskEngine.admitAndDispatch — hybrid admission (§5.3)', () => {
     const states = [ra.state, rb.state].sort();
     expect(states).toEqual(['queued', 'running']);
   });
+
+  it('idempotent replay while the dispatch is mid-flight does NOT issue a second begin', async () => {
+    const h = makeHarness(2);
+    // Deferred task.begin: the original dispatch hangs while the replay lands.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const beginParams: Array<Record<string, unknown>> = [];
+    const agent = fakeAgent({
+      beginParams,
+      beginImpl: async (p) => {
+        await gate;
+        return { accepted: true, agent_acceptance_id: `acc-${String(p.task_id)}` };
+      },
+    });
+
+    const plan: ApplyPlan = {
+      plan_id: 'plan-replay',
+      kind: 'reference.echo',
+      risk_level: 'non_disruptive',
+      affected_resources: [{ kind: 'Share', id: 's1', revision: 1 }],
+      state_revision_expected: 1,
+      spec: { message: 's1' },
+    };
+    const applyReq: ApplyRequest = {
+      input_hash: 'ihash-replay',
+      idempotency_key: 'idem-replay',
+      principal: 'admin:test',
+      client_type: 'rest',
+      request_id: 'req-1',
+      correlation_id: 'corr-1',
+    };
+
+    const original = h.engine.apply({ plan, applyReq });
+    const inflight = h.engine.admitAndDispatch({
+      task: original,
+      agentClient: agent,
+      spec: plan.spec,
+      plan,
+    });
+
+    // Replay (same key + input_hash) returns the SAME still-queued task…
+    const replayed = h.engine.apply({ plan, applyReq });
+    expect(replayed.task_id).toBe(original.task_id);
+    expect(replayed.state).toBe('queued');
+
+    // …and re-admission returns it as-is: no second task.begin (202 queued).
+    const readmitted = await h.engine.admitAndDispatch({
+      task: replayed,
+      agentClient: agent,
+      spec: plan.spec,
+      plan,
+    });
+    expect(readmitted.state).toBe('queued');
+    expect(beginParams).toHaveLength(1);
+
+    release();
+    const settled = await inflight;
+    expect(settled.state).toBe('running');
+    expect(beginParams).toHaveLength(1);
+    // The winner's reservation settled cleanly: the task is running with its
+    // lease intact (no losing duplicate flipped it to failed / dropped leases).
+    expect(h.store.get(original.task_id)?.state).toBe('running');
+    expect(h.leaseCount(original.task_id)).toBe(1);
+  });
 });
 
 describe('TaskEngine.drainQueued — FIFO drainer (§5.3)', () => {
@@ -312,6 +378,47 @@ describe('TaskEngine.reconcile — cap-aware redispatch (§5.3/§9)', () => {
       expect(h.store.get(id)?.state).toBe('failed');
       expect(h.store.get(id)?.error_code).toBe('FAILED_BEFORE_CHANGE');
     }
+  });
+
+  it("queuedPolicy:'fail' skips a reservation-held task whose begin is in flight", async () => {
+    const h = makeHarness(2);
+    // Deferred task.begin: the inline dispatch holds its reservation while
+    // reconcile's fail walk runs.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const agent = fakeAgent({
+      inflight: [],
+      beginImpl: async (p) => {
+        await gate;
+        return { accepted: true, agent_acceptance_id: `acc-${String(p.task_id)}` };
+      },
+    });
+
+    const a = h.applyOn('s1');
+    const inflightDispatch = h.engine.admitAndDispatch({
+      task: a.task,
+      agentClient: agent,
+      spec: a.plan.spec,
+      plan: a.plan,
+    });
+    const b = h.applyOn('s2'); // plain queued, no reservation
+
+    const summary = await h.engine.reconcile({ agentClient: agent, queuedPolicy: 'fail' });
+
+    // Only the un-reserved task was failed; the mid-dispatch one was left alone.
+    expect(summary.failed).toBe(1);
+    expect(h.store.get(b.task.task_id)?.state).toBe('failed');
+    expect(h.store.get(a.task.task_id)?.state).toBe('queued');
+    expect(h.leaseCount(a.task.task_id)).toBe(1);
+
+    // The in-flight dispatch settles normally afterwards.
+    release();
+    const settled = await inflightDispatch;
+    expect(settled.state).toBe('running');
+    expect(h.store.get(a.task.task_id)?.state).toBe('running');
+    expect(h.leaseCount(a.task.task_id)).toBe(1);
   });
 });
 
