@@ -15,6 +15,8 @@ export interface BuildTaskEnginesOptions {
   /** Overridable for deterministic tests. Default: Date.now / randomUUID. */
   now?: () => number;
   newId?: () => string;
+  /** Worker-pool cap (§5.3), from `ApiConfig.tasks?.max_inflight`. Default 4. */
+  maxInflight?: number;
 }
 
 /**
@@ -39,6 +41,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
     store,
     leases: state.leases,
     kv: state.kv,
+    ...(opts.maxInflight !== undefined ? { maxInflight: opts.maxInflight } : {}),
   });
   const planEngine = new PlanEngine({ store, ctx: { kv: state.kv } });
   planEngine.register(referencePlanProvider);

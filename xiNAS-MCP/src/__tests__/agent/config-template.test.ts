@@ -78,6 +78,7 @@ describe('xinas-api config template (collection/roles/xinas_api)', () => {
     'tokens',
     'agent',
     'internalTokensPath',
+    'tasks',
     'state',
   ];
 
@@ -89,5 +90,9 @@ describe('xinas-api config template (collection/roles/xinas_api)', () => {
 
   it('internalTokensPath points at internal-tokens.json', () => {
     expect(String(cfg['internalTokensPath'])).toContain('internal-tokens.json');
+  });
+
+  it('tasks emits the worker-pool cap (s2-task-envelope-spec §5.3)', () => {
+    expect(cfg['tasks']).toHaveProperty('max_inflight');
   });
 });

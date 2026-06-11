@@ -96,3 +96,8 @@ xinas_api_agent_socket: /run/xinas/agent.sock
 # (config.agent.heartbeat_interval_ms). MUST match the xinas_agent role's
 # xinas_agent_heartbeat_interval_ms so both ends agree on the cadence.
 xinas_api_agent_heartbeat_interval_ms: 5000
+
+# Worker-pool cap (config.tasks.max_inflight): max tasks concurrently in
+# flight end-to-end (dispatch -> terminal). Integer >= 1; the api rejects
+# anything else at startup. See s2-task-envelope-spec §5.3.
+xinas_api_tasks_max_inflight: 4

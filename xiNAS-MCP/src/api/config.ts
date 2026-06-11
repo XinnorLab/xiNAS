@@ -51,6 +51,13 @@ export interface ApiConfig {
   internalTokensPath?: string;
   /** When set, the api polls the agent's UDS for agent.health and tracks its state. */
   agent?: { socket: string; heartbeat_interval_ms?: number };
+  /**
+   * S2.1 worker pool (s2-task-envelope-spec §5.3). `max_inflight` caps the
+   * tasks concurrently in flight end-to-end (dispatch → terminal); the
+   * default (4) is applied where consumed (TaskEngine), so the whole section
+   * may be omitted.
+   */
+  tasks?: { max_inflight?: number };
 }
 
 const DEFAULT_PATH = '/etc/xinas-api/config.json';
@@ -61,7 +68,10 @@ const DEFAULT_PATH = '/etc/xinas-api/config.json';
  * doesn't exist and we want to inject a config directly.
  */
 export function loadConfig(opts: { configPath?: string; inline?: ApiConfig } = {}): ApiConfig {
-  if (opts.inline) return opts.inline;
+  if (opts.inline) {
+    validateTasksSection(opts.inline);
+    return opts.inline;
+  }
   const path = opts.configPath ?? DEFAULT_PATH;
   if (!existsSync(path)) {
     throw new Error(
@@ -70,6 +80,7 @@ export function loadConfig(opts: { configPath?: string; inline?: ApiConfig } = {
   }
   const raw = readFileSync(path, 'utf8');
   const config = JSON.parse(raw) as ApiConfig;
+  validateTasksSection(config);
 
   if (config.internalTokensPath && existsSync(config.internalTokensPath)) {
     const internalRaw = readFileSync(config.internalTokensPath, 'utf8');
@@ -86,4 +97,20 @@ export function loadConfig(opts: { configPath?: string; inline?: ApiConfig } = {
   }
 
   return config;
+}
+
+/**
+ * Reject a present-but-invalid `tasks.max_inflight` at load
+ * (s2-task-envelope-spec §5.3): when set it must be an integer >= 1.
+ * Absent is fine — the TaskEngine applies the default (4).
+ */
+function validateTasksSection(config: ApiConfig): void {
+  const cap = config.tasks?.max_inflight;
+  if (cap === undefined) return;
+  if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 1) {
+    throw new Error(
+      `tasks.max_inflight must be an integer >= 1, got ${JSON.stringify(cap)}; ` +
+        'remove the key to use the default (4)',
+    );
+  }
 }
