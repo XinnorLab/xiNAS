@@ -45,17 +45,10 @@ def test_rewrites_existing_domain(paths):
     conf_path, lock_path = paths
     _write(
         conf_path,
-        "[General]\n"
-        "Verbosity = 0\n"
-        "Domain = old.com\n"
-        "\n"
-        "[Mapping]\n"
-        "Nobody-User = nobody\n",
+        "[General]\nVerbosity = 0\nDomain = old.com\n\n[Mapping]\nNobody-User = nobody\n",
     )
 
-    nfs_idmap.set_idmapd_domain(
-        "new.example.com", conf_path=conf_path, lock_path=lock_path
-    )
+    nfs_idmap.set_idmapd_domain("new.example.com", conf_path=conf_path, lock_path=lock_path)
 
     out = _read(conf_path)
     assert "Domain = new.example.com" in out
@@ -72,16 +65,10 @@ def test_inserts_domain_under_existing_general(paths):
     conf_path, lock_path = paths
     _write(
         conf_path,
-        "[General]\n"
-        "Verbosity = 0\n"
-        "\n"
-        "[Mapping]\n"
-        "Nobody-User = nobody\n",
+        "[General]\nVerbosity = 0\n\n[Mapping]\nNobody-User = nobody\n",
     )
 
-    nfs_idmap.set_idmapd_domain(
-        "new.example.com", conf_path=conf_path, lock_path=lock_path
-    )
+    nfs_idmap.set_idmapd_domain("new.example.com", conf_path=conf_path, lock_path=lock_path)
 
     out = _read(conf_path)
     lines = out.splitlines()
@@ -99,9 +86,7 @@ def test_creates_general_when_absent(paths):
     conf_path, lock_path = paths
     _write(conf_path, "[Mapping]\nNobody-User = nobody\n")
 
-    nfs_idmap.set_idmapd_domain(
-        "new.example.com", conf_path=conf_path, lock_path=lock_path
-    )
+    nfs_idmap.set_idmapd_domain("new.example.com", conf_path=conf_path, lock_path=lock_path)
 
     out = _read(conf_path)
     assert "[General]" in out
@@ -118,9 +103,7 @@ def test_creates_file_when_empty(paths):
     conf_path, lock_path = paths
     _write(conf_path, "")
 
-    nfs_idmap.set_idmapd_domain(
-        "new.example.com", conf_path=conf_path, lock_path=lock_path
-    )
+    nfs_idmap.set_idmapd_domain("new.example.com", conf_path=conf_path, lock_path=lock_path)
 
     out = _read(conf_path)
     lines = out.splitlines()
@@ -133,9 +116,7 @@ def test_creates_file_when_missing(paths):
     # conf_path does not exist yet.
     assert not os.path.exists(conf_path)
 
-    nfs_idmap.set_idmapd_domain(
-        "new.example.com", conf_path=conf_path, lock_path=lock_path
-    )
+    nfs_idmap.set_idmapd_domain("new.example.com", conf_path=conf_path, lock_path=lock_path)
 
     out = _read(conf_path)
     assert "[General]" in out
@@ -147,13 +128,10 @@ def test_preserves_indented_domain_style(paths):
     conf_path, lock_path = paths
     _write(
         conf_path,
-        "[General]\n"
-        "  domain = old.com\n",
+        "[General]\n  domain = old.com\n",
     )
 
-    nfs_idmap.set_idmapd_domain(
-        "new.example.com", conf_path=conf_path, lock_path=lock_path
-    )
+    nfs_idmap.set_idmapd_domain("new.example.com", conf_path=conf_path, lock_path=lock_path)
 
     out = _read(conf_path)
     assert "new.example.com" in out
@@ -166,9 +144,7 @@ def test_rejects_domain_without_dot(paths):
     _write(conf_path, "[General]\nDomain = old.com\n")
 
     with pytest.raises(ValueError):
-        nfs_idmap.set_idmapd_domain(
-            "localdomain", conf_path=conf_path, lock_path=lock_path
-        )
+        nfs_idmap.set_idmapd_domain("localdomain", conf_path=conf_path, lock_path=lock_path)
     # File untouched on validation failure.
     assert "old.com" in _read(conf_path)
 

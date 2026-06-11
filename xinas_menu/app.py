@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import ClassVar
 
 _log = logging.getLogger(__name__)
 
@@ -29,9 +28,9 @@ __all__ = ["XiNASApp"]
 class XiNASApp(App):
     """Main management application (post-deploy xinas-menu)."""
 
-    CSS_PATH: ClassVar[Path] = Path(__file__).parent / "styles.tcss"
+    CSS_PATH = Path(__file__).parent / "styles.tcss"
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS = [
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
         Binding("ctrl+y", "copy_content", "Copy output", show=True),
         Binding("u", "check_update", "Check updates", show=True),

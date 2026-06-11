@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -31,7 +30,7 @@ class NavigableMenu(Widget, can_focus=True):
     auto_focus on the parent screen.
     """
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS = [
         Binding("up", "move_up", "Navigate", show=True, key_display="↑↓"),
         Binding("down", "move_down", "Navigate", show=False),
         Binding("enter", "select", "Select", show=True),

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -27,9 +26,9 @@ _MENU_ITEMS_MAIN = [
 class StartupApp(App):
     """Provisioning app (xinas-setup / startup_menu.sh replacement)."""
 
-    CSS_PATH: ClassVar[Path] = Path(__file__).parent.parent.parent / "styles.tcss"
+    CSS_PATH = Path(__file__).parent.parent.parent / "styles.tcss"
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS = [
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
     ]
 

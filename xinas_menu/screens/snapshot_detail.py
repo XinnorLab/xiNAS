@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from typing import TYPE_CHECKING
 
 from textual import work
 from textual.app import ComposeResult
@@ -19,11 +20,15 @@ from xinas_menu.widgets.text_view import ScrollableTextView
 
 _log = logging.getLogger(__name__)
 
-try:
-    from xinas_history.collector import CONFIG_SOURCES
+if TYPE_CHECKING:
     from xinas_history.engine import SnapshotEngine
-    from xinas_history.models import SnapshotType
     from xinas_history.store import FilesystemStore
+
+# Availability probe only — the package __init__ imports every submodule we
+# use, so a successful import guarantees the deferred per-method imports
+# below succeed too. xinas_history may not be installed on dev machines.
+try:
+    import xinas_history  # noqa: F401
 
     HAS_HISTORY = True
 except ImportError:
@@ -205,6 +210,8 @@ class SnapshotDetailScreen(XiNASAppMixin, Screen):
 
         loop = asyncio.get_running_loop()
         try:
+            from xinas_history.store import FilesystemStore
+
             store = FilesystemStore()
             engine = _create_engine(store)
             manifest = await loop.run_in_executor(
@@ -244,6 +251,8 @@ class SnapshotDetailScreen(XiNASAppMixin, Screen):
 
         loop = asyncio.get_running_loop()
         try:
+            from xinas_history.store import FilesystemStore
+
             store = FilesystemStore()
             engine = _create_engine(store)
             manifest = await loop.run_in_executor(
@@ -276,6 +285,9 @@ class SnapshotDetailScreen(XiNASAppMixin, Screen):
 
 def _create_engine(store: FilesystemStore | None = None) -> SnapshotEngine:
     """Create a SnapshotEngine with default settings."""
+    from xinas_history.engine import SnapshotEngine
+    from xinas_history.store import FilesystemStore
+
     s = store or FilesystemStore()
     return SnapshotEngine(store=s)
 
@@ -492,6 +504,8 @@ def _format_full_diff(diff_result) -> str:
 
 def _format_config_files(store, engine, manifest) -> str:
     """Format config file contents captured in the snapshot."""
+    from xinas_history.collector import CONFIG_SOURCES
+    from xinas_history.models import SnapshotType
 
     lines: list[str] = []
     lines.append(f"{_BLD}{_CYN}{'=' * 60}{_NC}")
@@ -546,6 +560,8 @@ def _format_config_files(store, engine, manifest) -> str:
 def _format_runtime_state(store, engine, manifest) -> str:
     """Format runtime state JSON files captured in the snapshot."""
     import json as _json
+
+    from xinas_history.models import SnapshotType
 
     lines: list[str] = []
     lines.append(f"{_BLD}{_CYN}{'=' * 60}{_NC}")

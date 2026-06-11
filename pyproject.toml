@@ -58,13 +58,12 @@ indent-style = "space"
 [tool.pyright]
 include = ["xinas_menu", "xinas_history", "xiNAS-MCP/nfs-helper"]
 exclude = ["**/__pycache__", "**/.git", "**/node_modules", "**/.venv"]
-reportMissingTypeStubs = "none"
 # textual's screen/mount APIs (push_screen, mount, recompose, ...) return
 # optionally-awaitable objects; the fire-and-forget call is the framework's
 # documented idiom, so an unawaited result is not a bug in this codebase.
 # Warning keeps the signal visible without failing CI.
 reportUnusedCoroutine = "warning"
-typeCheckingMode = "basic"
+typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

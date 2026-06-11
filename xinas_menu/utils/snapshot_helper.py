@@ -12,14 +12,6 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
-# Guard: xinas_history may not be installed on dev machines.
-try:
-    from xinas_history import FilesystemStore, SnapshotEngine
-
-    _HAS_ENGINE = True
-except ImportError:
-    _HAS_ENGINE = False
-
 
 class SnapshotHelper:
     """Convenience wrapper exposed as ``app.snapshots``."""
@@ -32,15 +24,20 @@ class SnapshotHelper:
         # Any: SnapshotEngine may be unimportable on dev machines, so the
         # attribute cannot reference the class statically.
         self._engine: Any = None
-        if _HAS_ENGINE:
-            try:
-                self._engine = SnapshotEngine(
-                    store=FilesystemStore(),
-                    repo_root=repo_root,
-                    grpc_address=grpc_address,
-                )
-            except Exception:
-                _log.warning("Failed to init SnapshotEngine", exc_info=True)
+        try:
+            # Guard: xinas_history may not be installed on dev machines, so
+            # the import happens here and ImportError means "no engine".
+            from xinas_history import FilesystemStore, SnapshotEngine
+
+            self._engine = SnapshotEngine(
+                store=FilesystemStore(),
+                repo_root=repo_root,
+                grpc_address=grpc_address,
+            )
+        except ImportError:
+            _log.debug("snapshot engine unavailable: xinas_history not installed")
+        except Exception:
+            _log.warning("Failed to init SnapshotEngine", exc_info=True)
 
     @property
     def available(self) -> bool:

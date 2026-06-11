@@ -430,6 +430,7 @@ class DriftDetector:
             current_cksum = self._sha256(current_bytes) if current_bytes is not None else ""
 
             # We also check the live systemd state for semantic comparison.
+            live_repr = b""
             live_state = self._get_live_mount_state(unit_name)
             if live_state is not None:
                 live_repr = json.dumps(live_state, sort_keys=True).encode()
