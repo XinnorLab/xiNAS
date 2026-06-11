@@ -124,7 +124,12 @@ export function createApp(ctx: ApiContext): Express {
     if (route !== '/arrays' && route !== '/filesystems') v1.post(route, executorUnavailable(ctx));
     // PATCH + DELETE /arrays/:id are the real S4 modify/delete routes;
     // PATCH /filesystems/:id is the real S5 one-intent route.
-    if (route !== '/arrays/:id' && route !== '/filesystems/:id') {
+    if (
+      route !== '/arrays/:id' &&
+      route !== '/filesystems/:id' &&
+      // PATCH /network/interfaces/:id is the real S6 update route.
+      route !== '/network/interfaces/:id'
+    ) {
       v1.patch(route, executorUnavailable(ctx));
     }
     v1.put(route, executorUnavailable(ctx));

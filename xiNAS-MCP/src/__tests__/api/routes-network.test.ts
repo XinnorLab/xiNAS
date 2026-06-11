@@ -57,3 +57,165 @@ describe('network routes', () => {
     expect(res.body.result).toEqual([]);
   });
 });
+
+// ---- S6 T6: merged reads + PATCH /network/interfaces/:id ----
+
+import { type MockAgentSetup, buildTestAppWithMockAgent } from './_helpers.js';
+
+describe('network routes (S6 merged reads + PATCH)', () => {
+  let setup: MockAgentSetup;
+
+  beforeEach(async () => {
+    setup = await buildTestAppWithMockAgent();
+    setup.state.kv.put('/xinas/v1/observed/NetworkInterface/ibp65s0', {
+      kind: 'NetworkInterface',
+      id: 'ibp65s0',
+      status: {
+        name: 'ibp65s0',
+        driver: 'mlx5_core',
+        rdma_capable: true,
+        netplan: { addresses: ['10.10.1.1/24'], pbr_table_id: 100 },
+        duplicates_detected_in: [],
+        observed_at: 'x',
+      },
+    });
+    setup.state.kv.put('/xinas/v1/observed/NetworkConfig/default', {
+      kind: 'NetworkConfig',
+      id: 'default',
+      status: {
+        files: {},
+        world_config_hash: 'w-1',
+        xinas_file_hash: 'x-1',
+        duplicates: {},
+        observed_at: 'x',
+      },
+    });
+  });
+  afterEach(async () => {
+    await setup.teardown();
+  });
+
+  async function patchIface(body: Record<string, unknown>) {
+    return request(setup.app)
+      .patch('/api/v1/network/interfaces/ibp65s0')
+      .set('Authorization', ADMIN_TOKEN)
+      .send(body);
+  }
+
+  it('merged reads: spec-less before adoption; desired spec + revision after', async () => {
+    const before = await request(setup.app)
+      .get('/api/v1/network/interfaces/ibp65s0')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(before.status).toBe(200);
+    expect(before.body.result.spec).toBeUndefined();
+
+    const put = setup.state.kv.put('/xinas/v1/desired/NetworkInterface/ibp65s0', {
+      kind: 'NetworkInterface',
+      id: 'ibp65s0',
+      spec: { managed_by_xinas: true, addresses: ['10.10.1.1/24'], enabled: true, pbr_table_id: 100 },
+    });
+    const rev = put.ok ? put.value.revision : 0;
+
+    const after = await request(setup.app)
+      .get('/api/v1/network/interfaces/ibp65s0')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(after.body.result.spec).toMatchObject({ pbr_table_id: 100 });
+    expect(after.body.result.metadata.revision).toBe(rev);
+
+    const list = await request(setup.app)
+      .get('/api/v1/network/interfaces')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(list.body.result[0]?.spec).toMatchObject({ pbr_table_id: 100 });
+  });
+
+  it('identity keys → 422 net_identity_immutable before any plan', async () => {
+    const res = await patchIface({ mode: 'plan', spec: { pbr_table_id: 105 } });
+    expect(res.status).toBe(422);
+    expect(res.body.errors[0].details?.reason).toBe('net_identity_immutable');
+    expect(res.body.errors[0].details?.field).toBe('pbr_table_id');
+  });
+
+  it('plan → apply happy path: adoption mutations land, singleton leased, render dispatched', async () => {
+    setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-net' });
+    const planned = await patchIface({ mode: 'plan', spec: { addresses: ['10.10.5.1/24'] } });
+    expect(planned.status).toBe(200);
+    expect(planned.body.result.blockers).toEqual([]);
+    expect(planned.body.result.state_revision_expected).toBe(0);
+
+    const res = await patchIface({
+      mode: 'apply',
+      plan_id: planned.body.result.plan_id,
+      expected_revision: 0,
+      idempotency_key: 'idem-net-1',
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+    expect(res.body.result.kind).toBe('net.iface.update');
+    expect(res.body.result.state).toBe('running');
+
+    const desired = setup.state.kv.get('/xinas/v1/desired/NetworkInterface/ibp65s0');
+    expect((desired?.value as { spec?: { addresses?: string[] } }).spec?.addresses).toEqual([
+      '10.10.5.1/24',
+    ]);
+
+    const leases = setup.state.db
+      .prepare('SELECT resource_kind, resource_id FROM leases WHERE task_id = ?')
+      .all(res.body.result.task_id) as Array<{ resource_kind: string; resource_id: string }>;
+    expect(leases).toContainEqual({ resource_kind: 'NetworkConfig', resource_id: '99-xinas' });
+
+    const begin = setup.mockAgent.lastTaskBeginParams();
+    expect((begin?.spec as { render?: string }).render).toContain('ibp65s0');
+    expect((begin?.spec as { world_config_hash?: string }).world_config_hash).toBe('w-1');
+  });
+
+  it('netplan_changed gate: world hash drift between plan and apply → 412', async () => {
+    const planned = await patchIface({ mode: 'plan', spec: { addresses: ['10.10.5.1/24'] } });
+    expect(planned.status).toBe(200);
+
+    setup.state.kv.put('/xinas/v1/observed/NetworkConfig/default', {
+      kind: 'NetworkConfig',
+      id: 'default',
+      status: {
+        files: {},
+        world_config_hash: 'w-2',
+        xinas_file_hash: 'x-1',
+        duplicates: {},
+        observed_at: 'x',
+      },
+    });
+
+    const res = await patchIface({
+      mode: 'apply',
+      plan_id: planned.body.result.plan_id,
+      expected_revision: 0,
+      idempotency_key: 'idem-net-stale',
+    });
+    expect(res.status).toBe(412);
+    expect(res.body.errors[0].details?.reason).toBe('netplan_changed');
+  });
+
+  it('apply re-check: duplicates appearing after plan block the apply (hash unchanged)', async () => {
+    const planned = await patchIface({ mode: 'plan', spec: { addresses: ['10.10.5.1/24'] } });
+    expect(planned.body.result.blockers).toEqual([]);
+    setup.state.kv.put('/xinas/v1/observed/NetworkConfig/default', {
+      kind: 'NetworkConfig',
+      id: 'default',
+      status: {
+        files: {},
+        world_config_hash: 'w-1',
+        xinas_file_hash: 'x-1',
+        duplicates: { ibp65s0: ['/etc/netplan/50-cloud-init.yaml'] },
+        observed_at: 'x',
+      },
+    });
+    const res = await patchIface({
+      mode: 'apply',
+      plan_id: planned.body.result.plan_id,
+      expected_revision: 0,
+      idempotency_key: 'idem-net-dup',
+    });
+    expect(res.status).toBe(412);
+    expect(
+      (res.body.errors[0].details?.blockers as Array<{ code: string }>).map((b) => b.code),
+    ).toContain('duplicate_netplan_definition');
+  });
+});

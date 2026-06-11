@@ -9,20 +9,14 @@ import { ApiException } from '../errors.js';
 import type { ApplyPlan } from '../tasks/engine.js';
 import type { Task } from '../tasks/types.js';
 
-/** Map a stored `plan_only` Task to the apply transaction's ApplyPlan. */
-export function toApplyPlan(planTask: Task): ApplyPlan {
-  return {
-    plan_id: planTask.task_id,
-    kind: planTask.kind,
-    risk_level: planTask.risk_level,
-    affected_resources: planTask.affected_resources,
-    ...(planTask.spec !== undefined ? { spec: planTask.spec } : {}),
-    ...(planTask.plan_hash !== undefined ? { plan_hash: planTask.plan_hash } : {}),
-    ...(planTask.state_revision_expected !== undefined
-      ? { state_revision_expected: planTask.state_revision_expected }
-      : {}),
-  };
-}
+/**
+ * Map a stored `plan_only` Task to the apply transaction's ApplyPlan.
+ *
+ * DELEGATES to routes/apply-helpers.ts — the single plan_binding-aware
+ * reconstruction (S6: a binding-blind copy here silently dropped
+ * lease_resources/desired_mutations for any plan that carried them).
+ */
+export { toApplyPlan } from '../routes/apply-helpers.js';
 
 /** The Task envelope shape the 202 returns (subset the route needs to surface). */
 export function taskEnvelope(task: Task): Record<string, unknown> {
