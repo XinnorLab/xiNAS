@@ -17,7 +17,7 @@ import {
   sendOk,
 } from '../handlers/reads.js';
 import type { PlanProvider } from '../plan/engine.js';
-import { netIfaceUpdateProvider } from '../plan/providers/network.js';
+import { netIfaceUpdateProvider, netPoolApplyProvider } from '../plan/providers/network.js';
 
 /**
  * Network routes (S6, ADR-0008).
@@ -94,6 +94,7 @@ function observedWorldHash(ctx: ApiContext): string | undefined {
 /** apply-recheck providers by plan kind (T8 adds net.pool.apply). */
 const NET_PROVIDERS: Record<string, PlanProvider> = {
   'net.iface.update': netIfaceUpdateProvider,
+  'net.pool.apply': netPoolApplyProvider,
 };
 
 export function networkRouter(ctx: ApiContext): Router {
@@ -246,6 +247,143 @@ export function networkRouter(ctx: ApiContext): Router {
       // ADR-0008 world-state gate: ANY netplan file change since plan
       // invalidates it (content-addressed; observed revisions are pinned
       // on desired rows only).
+      const plannedHash = (planTask.spec as { world_config_hash?: string }).world_config_hash;
+      const currentHash = observedWorldHash(ctx);
+      if (plannedHash !== undefined && currentHash !== undefined && plannedHash !== currentHash) {
+        throw new ApiException(
+          'PRECONDITION_FAILED',
+          'the netplan file set changed since this plan was computed',
+          { reason: 'netplan_changed', planned: plannedHash, current: currentHash },
+          'Re-run plan against the current netplan state, then apply the fresh plan.',
+        );
+      }
+
+      const applyPlan = toApplyPlan(planTask);
+      const task = tasks.taskEngine.apply({
+        plan: applyPlan,
+        applyReq: {
+          input_hash: planTask.input_hash,
+          idempotency_key: idempotencyKey,
+          principal: rc.principal,
+          client_type: rc.client_type,
+          request_id: rc.request_id,
+          correlation_id: rc.correlation_id,
+        },
+      });
+      rc.operation_id = task.task_id;
+
+      if (task.state !== 'queued') {
+        res.status(202);
+        sendOk(req, res, taskEnvelope(task), [task.state_revision_at_apply ?? 0]);
+        return;
+      }
+
+      const dispatched = await tasks.taskEngine.dispatch({
+        task,
+        agentClient: tasks.agentClient,
+        spec: planTask.spec,
+        plan: applyPlan,
+      });
+
+      res.status(202);
+      sendOk(req, res, taskEnvelope(dispatched), [dispatched.state_revision_at_apply ?? 0]);
+      return;
+    }
+
+    throw new ApiException(
+      'INVALID_ARGUMENT',
+      `unknown mode '${String(mode)}'; expected 'plan' or 'apply'`,
+      undefined,
+      "Send { mode: 'plan', spec } or { mode: 'apply', plan_id, expected_revision, idempotency_key }.",
+    );
+  });
+
+  // POST /network/ip-pool — net.pool.apply (addresses-only reallocation;
+  // same custom apply pipeline as the PATCH route).
+  r.post('/network/ip-pool', async (req, res) => {
+    const tasks = ctx.tasks;
+    if (!tasks) {
+      throw new ApiException(
+        'INTERNAL',
+        'task engine is not available in this build',
+        { code: 'EXECUTOR_UNAVAILABLE' },
+        'the api was started without a task engine',
+      );
+    }
+
+    const rc = req.context!;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const mode = body.mode;
+
+    if (mode === 'plan') {
+      const { task, planResult } = await tasks.planEngine.plan({
+        operation_kind: 'net.pool.apply',
+        spec: body.spec,
+        principal: rc.principal,
+        client_type: rc.client_type,
+        request_id: rc.request_id,
+        correlation_id: rc.correlation_id,
+      });
+      rc.operation_id = task.task_id;
+      const revision = task.state_revision_expected ?? 0;
+      sendOk(
+        req,
+        res,
+        {
+          plan_id: task.task_id,
+          plan_hash: task.plan_hash,
+          state_revision_expected: revision,
+          observed_revision_expected: null,
+          observed_at: planResult.observed_at ?? null,
+          affected_resources: task.affected_resources,
+          risk_level: planResult.risk_level,
+          client_impact: clientImpact(planResult.risk_level),
+          blockers: planResult.blockers,
+          warnings: planResult.warnings,
+          diff: planResult.diff,
+          rollback_model: planResult.rollback_model,
+        },
+        [revision],
+      );
+      return;
+    }
+
+    if (mode === 'apply') {
+      const planId = requireString(body.plan_id, 'plan_id');
+      const idempotencyKey = requireString(body.idempotency_key, 'idempotency_key');
+      const expectedRevision = requireInteger(body.expected_revision, 'expected_revision');
+
+      const planTask = tasks.store.get(planId);
+      if (!planTask || planTask.state !== 'plan_only' || planTask.kind !== 'net.pool.apply') {
+        throw new ApiException(
+          'NOT_FOUND',
+          `no net.pool.apply plan_only task with plan_id ${planId}`,
+          undefined,
+          'Re-run mode=plan to obtain a fresh plan_id.',
+        );
+      }
+
+      const planRevision = planTask.state_revision_expected ?? 0;
+      if (expectedRevision !== planRevision) {
+        throw new ApiException(
+          'PRECONDITION_FAILED',
+          `expected_revision ${expectedRevision} does not match the plan's state_revision_expected ${planRevision}`,
+          { expected_revision: expectedRevision, plan_revision: planRevision },
+          "Echo the plan's state_revision_expected, or re-run plan.",
+        );
+      }
+
+      const recheck = await netPoolApplyProvider.preflight({ kv: ctx.state.kv }, planTask.spec);
+      const blocking = recheck.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+      if (blocking.length > 0) {
+        throw new ApiException(
+          'PRECONDITION_FAILED',
+          'the plan has unresolved blockers',
+          { blockers: blocking },
+          'Resolve every blocker, re-plan, then apply the fresh plan.',
+        );
+      }
+
       const plannedHash = (planTask.spec as { world_config_hash?: string }).world_config_hash;
       const currentHash = observedWorldHash(ctx);
       if (plannedHash !== undefined && currentHash !== undefined && plannedHash !== currentHash) {

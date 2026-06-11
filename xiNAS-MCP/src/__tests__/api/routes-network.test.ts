@@ -219,3 +219,101 @@ describe('network routes (S6 merged reads + PATCH)', () => {
     ).toContain('duplicate_netplan_definition');
   });
 });
+
+// ---- T8: POST /network/ip-pool ----
+
+describe('POST /api/v1/network/ip-pool (S6 T8)', () => {
+  let setup: MockAgentSetup;
+
+  beforeEach(async () => {
+    setup = await buildTestAppWithMockAgent();
+    for (const [name, table] of [
+      ['ibp65s0', 100],
+      ['ibp9s0f0', 105],
+    ] as const) {
+      setup.state.kv.put(`/xinas/v1/observed/NetworkInterface/${name}`, {
+        kind: 'NetworkInterface',
+        id: name,
+        status: {
+          name,
+          driver: 'mlx5_core',
+          rdma_capable: true,
+          netplan: { addresses: ['10.10.1.1/24'], pbr_table_id: table },
+          duplicates_detected_in: [],
+          observed_at: 'x',
+        },
+      });
+    }
+    setup.state.kv.put('/xinas/v1/observed/NetworkConfig/default', {
+      kind: 'NetworkConfig',
+      id: 'default',
+      status: {
+        files: {},
+        world_config_hash: 'w-1',
+        xinas_file_hash: 'x-1',
+        duplicates: {},
+        observed_at: 'x',
+      },
+    });
+  });
+  afterEach(async () => {
+    await setup.teardown();
+  });
+
+  function pool(body: Record<string, unknown>) {
+    return request(setup.app)
+      .post('/api/v1/network/ip-pool')
+      .set('Authorization', ADMIN_TOKEN)
+      .send(body);
+  }
+
+  it('plan → apply: per-resource pins enforced by the ENGINE (one bumped row stales the pool apply)', async () => {
+    const planned = await pool({ mode: 'plan', spec: { start: '10.20.1.1', prefix: 24 } });
+    expect(planned.status).toBe(200);
+    expect(planned.body.result.blockers).toEqual([]);
+    expect(planned.body.result.affected_resources).toEqual([
+      { kind: 'NetworkInterface', id: 'ibp65s0', revision: 0 },
+      { kind: 'NetworkInterface', id: 'ibp9s0f0', revision: 0 },
+    ]);
+
+    // Bump ONE target's desired row post-plan: the route's scalar echo
+    // still matches (primary's revision is unchanged), so this is the
+    // ENGINE's per-resource stale check firing — a scalar-only design
+    // would have let it through.
+    setup.state.kv.put('/xinas/v1/desired/NetworkInterface/ibp9s0f0', {
+      kind: 'NetworkInterface',
+      id: 'ibp9s0f0',
+      spec: { managed_by_xinas: true, addresses: ['10.10.2.1/24'], enabled: true, pbr_table_id: 105 },
+    });
+
+    const stale = await pool({
+      mode: 'apply',
+      plan_id: planned.body.result.plan_id,
+      expected_revision: 0,
+      idempotency_key: 'idem-pool-stale',
+    });
+    expect(stale.status).toBe(412);
+    expect(JSON.stringify(stale.body.errors[0].details)).toContain('ibp9s0f0');
+  });
+
+  it('fresh pool apply dispatches with addresses-only reallocation', async () => {
+    setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-pool' });
+    const planned = await pool({ mode: 'plan', spec: { start: '10.20.1.1', prefix: 24 } });
+    const res = await pool({
+      mode: 'apply',
+      plan_id: planned.body.result.plan_id,
+      expected_revision: 0,
+      idempotency_key: 'idem-pool',
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+    expect(res.body.result.kind).toBe('net.pool.apply');
+
+    const begin = setup.mockAgent.lastTaskBeginParams();
+    const targets = (begin?.spec as { targets?: Array<{ dev: string; pbr_table_id: number }> })
+      .targets;
+    expect(targets).toEqual([
+      { dev: 'ibp65s0', addresses: ['10.20.1.1/24'], pbr_table_id: 100 },
+      { dev: 'ibp9s0f0', addresses: ['10.20.2.1/24'], pbr_table_id: 105 },
+    ]);
+  });
+});

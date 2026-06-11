@@ -22,9 +22,12 @@ import {
 import {
   type IfaceUpdateSpec,
   type NetFacts,
+  allocatePool,
   allocateTableId,
   parseIfaceUpdateSpec,
+  parsePoolSpec,
   validateIfaceUpdate,
+  validatePool,
 } from '../../../lib/net/validate.js';
 import { XINAS_NETPLAN } from '../../../lib/parse/netplan.js';
 import { ApiException } from '../../errors.js';
@@ -344,6 +347,114 @@ export const netIfaceUpdateProvider: PlanProvider = {
           : {}),
         cleanup_files: cleanupFiles,
         surgical: { dev: id, pbr_table_id: targetRow?.pbr_table_id ?? 0 },
+      },
+    };
+  },
+};
+
+/**
+ * net.pool.apply (POST /network/ip-pool, S6 T8): re-allocate ADDRESSES
+ * over every managed interface with the day-1 third-octet formula.
+ * Existing pbr_table_ids persist (ADR-0008) — only adoption-fresh
+ * interfaces get a new allocation. Every affected ResourceRef carries
+ * its OWN desired revision (mixed-revision pools apply cleanly).
+ */
+export const netPoolApplyProvider: PlanProvider = {
+  operation_kind: 'net.pool.apply',
+
+  async preflight(ctx: PlanContext, rawSpec: unknown): Promise<PlanResult> {
+    let spec: ReturnType<typeof parsePoolSpec>;
+    try {
+      spec = parsePoolSpec(rawSpec);
+    } catch (err) {
+      throw new ApiException(
+        'INVALID_ARGUMENT',
+        err instanceof Error ? err.message : String(err),
+        undefined,
+        'Send { start, prefix, mtu?, cleanup? } per ADR-0008.',
+      );
+    }
+
+    const facts = gatherNetFacts(ctx);
+    // Base rows = adoption-resolved current state (no overlay target).
+    const { rows: baseRows, adopted } = resolveDesiredRows(facts, null, {});
+    const blockers = validatePool(spec, toNetFacts(facts, baseRows));
+
+    // Address reallocation over the SORTED managed set (day-1 formula).
+    const allocation =
+      allocatePool(spec.start, spec.prefix, facts.managed.map((m) => m.name)) ?? {};
+    const rows: DesiredIfaceSpec[] = baseRows.map((row) => ({
+      ...row,
+      addresses: allocation[row.name] !== undefined ? [allocation[row.name] as string] : row.addresses,
+      ...(spec.mtu !== undefined ? { mtu: spec.mtu } : {}),
+      enabled: true,
+    }));
+
+    const warnings: Array<{ code: string; message: string }> = [];
+    const cleanupFiles: Record<string, string[]> = {};
+    if (spec.cleanup === true) {
+      for (const m of facts.managed) {
+        const files = facts.duplicates[m.name];
+        if (files !== undefined && files.length > 0) cleanupFiles[m.name] = files;
+      }
+      if (Object.keys(cleanupFiles).length > 0) {
+        warnings.push({
+          code: 'netplan_cleanup_planned',
+          message: `managed stanzas will be removed from ${[...new Set(Object.values(cleanupFiles).flat())].join(', ')} (audited repair)`,
+        });
+      }
+    }
+    if (facts.hasNfsSessions) {
+      warnings.push({
+        code: 'nfs_sessions_may_drop',
+        message:
+          'active NFS sessions exist; re-addressing every managed interface will interrupt connected clients',
+      });
+    }
+
+    const desiredMutations: DesiredMutation[] = rows.map((row) => ({
+      key: desiredKey(row.name),
+      value: { kind: 'NetworkInterface', id: row.name, spec: { managed_by_xinas: true, ...row } },
+    }));
+
+    // EVERY target pinned with its OWN desired revision (engine-enforced).
+    const affected: ResourceRef[] = facts.managed.map((m) => ({
+      kind: 'NetworkInterface',
+      id: m.name,
+      revision: m.desiredRevision,
+    }));
+
+    const leaseResources: ResourceRef[] = [
+      { kind: 'NetworkConfig', id: '99-xinas' },
+      ...facts.managed.map((m): ResourceRef => ({ kind: 'NetworkInterface', id: m.name })),
+    ];
+
+    const render = renderNetplan(rows);
+    return {
+      affected_resources: affected,
+      blockers,
+      warnings,
+      diff: {
+        summary: `pool ${spec.start}/${spec.prefix} over ${facts.managed.length} managed interface(s); tables preserved`,
+        allocation,
+        adopted,
+        ...(Object.keys(cleanupFiles).length > 0 ? { cleanup_files: cleanupFiles } : {}),
+      },
+      risk_level: 'changing_access',
+      rollback_model: 'non_disruptive',
+      state_revision_expected: affected[0]?.revision ?? 0,
+      lease_resources: leaseResources,
+      desired_mutations: desiredMutations,
+      enriched_spec: {
+        ...spec,
+        render,
+        ...(facts.world_config_hash !== undefined
+          ? { world_config_hash: facts.world_config_hash }
+          : {}),
+        cleanup_files: cleanupFiles,
+        targets: rows
+          .filter((r) => r.enabled)
+          .map((r) => ({ dev: r.name, addresses: r.addresses, pbr_table_id: r.pbr_table_id })),
       },
     };
   },
