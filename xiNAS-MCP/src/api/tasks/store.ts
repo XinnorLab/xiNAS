@@ -191,6 +191,8 @@ export class TaskStore {
   private readonly findStageStmt: Statement;
   private readonly insertStageStmt: Statement;
   private readonly updateStageStmt: Statement;
+  private readonly countByStateStmt: Statement;
+  private readonly queuedNeverDispatchedStmt: Statement;
 
   constructor(deps: TaskStoreDeps) {
     this.db = deps.db;
@@ -218,6 +220,12 @@ export class TaskStore {
               output_size_bytes = @output_size_bytes, error_code = @error_code,
               error_message = @error_message
         WHERE task_id = @task_id AND stage_index = @stage_index`,
+    );
+    this.countByStateStmt = this.db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE state = ?');
+    this.queuedNeverDispatchedStmt = this.db.prepare(
+      `SELECT * FROM tasks
+        WHERE state = 'queued' AND agent_acceptance_id IS NULL
+        ORDER BY created_at ASC, task_id ASC`,
     );
   }
 
@@ -284,6 +292,24 @@ export class TaskStore {
     if (!row) return null;
     const stages = (this.getStagesStmt.all(row.task_id) as StageRow[]).map(rowToStage);
     return rowToTask(row, stages);
+  }
+
+  /** Number of tasks currently in `state` — the worker pool's DB-truth side. */
+  countByState(state: TaskState): number {
+    return (this.countByStateStmt.get(state) as { n: number }).n;
+  }
+
+  /**
+   * The pool drainer's pick list (s2-task-envelope-spec §5.3): every
+   * never-dispatched queued task (`state='queued' AND agent_acceptance_id IS
+   * NULL`), oldest first (`created_at` ASC, `task_id` ASC tiebreak).
+   */
+  listQueuedNeverDispatched(): Task[] {
+    const rows = this.queuedNeverDispatchedStmt.all() as TaskRow[];
+    return rows.map((row) => {
+      const stages = (this.getStagesStmt.all(row.task_id) as StageRow[]).map(rowToStage);
+      return rowToTask(row, stages);
+    });
   }
 
   list(filter: TaskListFilter): Task[] {

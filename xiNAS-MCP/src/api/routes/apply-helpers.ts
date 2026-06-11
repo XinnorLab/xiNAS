@@ -251,11 +251,13 @@ export async function applyMode(
     return;
   }
 
-  // Fresh queued task → dispatch task.begin. The engine treats an absent
-  // agent client as a begin-unavailable failure, so the fail-task +
-  // Model-R desired revert + release-leases + 503 contract lives in exactly
-  // one place (the engine).
-  const dispatched = await tasks.taskEngine.dispatch({
+  // Fresh queued task → hybrid pool admission (§5.3): slot free → inline
+  // dispatch exactly as before (202 running, or failBeforeChange's 503/422);
+  // pool full → no dispatch, 202 with the task still queued (the drainer
+  // dispatches it FIFO when a slot frees). The engine treats an absent agent
+  // client as a begin-unavailable failure, so the fail-task + Model-R desired
+  // revert + release-leases + 503 contract lives in exactly one place.
+  const admitted = await tasks.taskEngine.admitAndDispatch({
     task,
     agentClient: tasks.agentClient,
     spec: planTask.spec, // the RAW executor input, forwarded verbatim (T9b)
@@ -263,5 +265,5 @@ export async function applyMode(
   });
 
   res.status(202);
-  sendOk(req, res, taskEnvelope(dispatched), [dispatched.state_revision_at_apply ?? 0]);
+  sendOk(req, res, taskEnvelope(admitted), [admitted.state_revision_at_apply ?? 0]);
 }

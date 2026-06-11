@@ -16,6 +16,9 @@
     "heartbeat_interval_ms": {{ xinas_api_agent_heartbeat_interval_ms }}
   },
   "internalTokensPath": "{{ xinas_api_config_dir }}/internal-tokens.json",
+  "tasks": {
+    "max_inflight": {{ xinas_api_tasks_max_inflight }}
+  },
   "state": {
     "databasePath": "{{ xinas_api_state_dir }}/xinas.db",
     "auditJsonlPath": "{{ xinas_api_log_dir }}/audit.jsonl",

@@ -8,10 +8,10 @@ import type { DesiredMutation, ResourceRef, Task } from './types.js';
 
 /**
  * S2 task engine — the apply transaction (ADR-0004 §Plan/apply binding,
- * s2-task-envelope-spec §5.2). This file owns ONLY the atomic
- * `apply()` step: idempotency + freshness + lease acquisition + task
- * insert, all inside one `db.transaction`. Dispatch / the worker pool /
- * the reconciler are later S2 tasks and land in this same file.
+ * s2-task-envelope-spec §5.2), dispatch, the S2.1 hybrid-admission worker
+ * pool (§5.3: admitAndDispatch + drainQueued), and the reconciler (§9).
+ * The atomic `apply()` step — idempotency + freshness + lease acquisition +
+ * task insert — runs inside one `db.transaction`.
  *
  * ## Why one `db.transaction`
  *
@@ -115,10 +115,15 @@ export interface TaskEngineDeps {
   store: TaskStore;
   leases: LeaseManager;
   kv: KvStore;
+  /** Worker-pool cap (§5.3): max tasks in flight end-to-end. Default 4. */
+  maxInflight?: number;
 }
 
 /** Default lease TTL (seconds). Heartbeats extend it during execution. */
 const DEFAULT_LEASE_TTL_SECONDS = 60;
+
+/** Default worker-pool cap (ADR-0004 / s2-task-envelope-spec §5.3). */
+const DEFAULT_MAX_INFLIGHT = 4;
 
 /** Hard cap on a single `task.begin` round-trip. */
 const TASK_BEGIN_TIMEOUT_MS = 5_000;
@@ -137,9 +142,28 @@ export interface ReconcileSummary {
   acceptances_adopted: number;
   redispatched: number;
   failed: number;
+  /**
+   * Queued tasks the pass left queued (§5.3): the cap-aware redispatch only
+   * drains up to the free pool slots; the remainder is legitimate steady
+   * state, not a failure. Also counts queued tasks left by an unreachable
+   * agent (sweep-only pass).
+   */
+  left_queued: number;
   /** false when the in-flight fetch failed or no agent client was available. */
   agent_reachable: boolean;
   /** true when a concurrent reconcile was already running (re-entrancy guard). */
+  skipped: boolean;
+}
+
+/** Outcome of one `drainQueued()` pass (s2-task-envelope-spec §5.3). */
+export interface DrainOutcome {
+  /** Queued tasks dispatched into a free slot (now `running`). */
+  dispatched: number;
+  /** Queued tasks whose `task.begin` failed (`failed FAILED_BEFORE_CHANGE`). */
+  failed: number;
+  /** Never-dispatched queued tasks remaining after the pass. */
+  left_queued: number;
+  /** true when a concurrent drain was already running (re-entrancy guard). */
   skipped: boolean;
 }
 
@@ -156,14 +180,32 @@ export class TaskEngine {
   private readonly store: TaskStore;
   private readonly leases: LeaseManager;
   private readonly kv: KvStore;
+  /** Worker-pool cap (§5.3). */
+  private readonly maxInflight: number;
   /** Re-entrancy guard: true while a reconcile() pass is in flight. */
   private reconciling = false;
+  /** Re-entrancy guard: true while a drainQueued() pass is in flight. */
+  private draining = false;
+  /**
+   * Dispatch reservations (§5.3): task_ids whose `task.begin` is currently
+   * awaited while the row is still `queued`. Counted as in-flight so
+   * concurrent admissions can't double-admit past the cap, and excluded from
+   * the drainer's pick list so a mid-dispatch task isn't dispatched twice.
+   * In-memory only — on crash, DB truth + reconcile recover.
+   */
+  private readonly dispatchReservations = new Set<string>();
 
   constructor(deps: TaskEngineDeps) {
     this.db = deps.db;
     this.store = deps.store;
     this.leases = deps.leases;
     this.kv = deps.kv;
+    this.maxInflight = deps.maxInflight ?? DEFAULT_MAX_INFLIGHT;
+  }
+
+  /** in_flight = COUNT(state='running') + live dispatch reservations (§5.3). */
+  private inFlightCount(): number {
+    return this.store.countByState('running') + this.dispatchReservations.size;
   }
 
   /**
@@ -408,6 +450,92 @@ export class TaskEngine {
   }
 
   /**
+   * Hybrid pool admission (s2-task-envelope-spec §5.3): the apply path calls
+   * this instead of `dispatch()` directly. Slot free → reserve + dispatch
+   * inline (unchanged fast path: 202 `running`, or `failBeforeChange`'s
+   * 503/422). Pool full → skip dispatch entirely and return the task still
+   * `queued` (202); the drainer picks it up FIFO when a slot frees. The check
+   * and the reservation are one synchronous step — no `await` in between — so
+   * concurrent applies cannot double-admit past the cap on Node's single
+   * thread.
+   */
+  async admitAndDispatch(args: {
+    task: Task;
+    agentClient: AgentRpcClient | undefined;
+    spec: unknown;
+    plan: unknown;
+  }): Promise<Task> {
+    if (this.inFlightCount() >= this.maxInflight) {
+      return args.task; // pool full → stays queued, leases held; no dispatch
+    }
+    this.dispatchReservations.add(args.task.task_id);
+    try {
+      return await this.dispatch(args);
+    } catch (err) {
+      // failBeforeChange already failed the task + released its leases; the
+      // freed reservation may admit a waiting task → drain trigger (§5.3 b).
+      // Release the reservation BEFORE the drain so the slot is visible to it.
+      this.dispatchReservations.delete(args.task.task_id);
+      void this.drainQueued(args.agentClient).catch(() => {
+        /* best-effort: a drain-trigger failure is non-fatal */
+      });
+      throw err;
+    } finally {
+      this.dispatchReservations.delete(args.task.task_id);
+    }
+  }
+
+  /**
+   * The pool drainer (s2-task-envelope-spec §5.3): while a slot is free,
+   * dispatch the oldest never-dispatched `queued` task via the same
+   * `rebuildDispatchInputs` mechanic reconcile's re-dispatch uses. A dispatch
+   * failure (failBeforeChange fails the task + releases leases + throws)
+   * does NOT abort the drain — catch and continue to the next queued task;
+   * the per-task `dispatch()` (not `admitAndDispatch()`) means a
+   * failBeforeChange inside the loop never recursively re-triggers a drain.
+   * Triggered after (a) a terminal progress event, (b) any inline-dispatch
+   * failBeforeChange, (c) the end of a reconcile() pass. No timer.
+   *
+   * Without an agent client there is nothing to dispatch through — queued
+   * tasks are left queued (mirrors reconcile's agent-unreachable rule, §9)
+   * rather than mass-failed.
+   */
+  async drainQueued(agentClient: AgentRpcClient | undefined): Promise<DrainOutcome> {
+    if (this.draining) {
+      return { dispatched: 0, failed: 0, left_queued: 0, skipped: true };
+    }
+    this.draining = true;
+    try {
+      let dispatched = 0;
+      let failed = 0;
+      while (agentClient && this.inFlightCount() < this.maxInflight) {
+        // Re-pick each iteration: dispatched/failed tasks left the queued set,
+        // and a task reserved by a concurrent inline dispatch must be skipped.
+        const next = this.store
+          .listQueuedNeverDispatched()
+          .find((t) => !this.dispatchReservations.has(t.task_id));
+        if (!next) break;
+        this.dispatchReservations.add(next.task_id);
+        try {
+          await this.dispatch({ task: next, agentClient, ...this.rebuildDispatchInputs(next) });
+          dispatched += 1;
+        } catch {
+          // failBeforeChange already recorded the failure; keep draining.
+          failed += 1;
+        } finally {
+          this.dispatchReservations.delete(next.task_id);
+        }
+      }
+      const left_queued = this.store
+        .listQueuedNeverDispatched()
+        .filter((t) => !this.dispatchReservations.has(t.task_id)).length;
+      return { dispatched, failed, left_queued, skipped: false };
+    } finally {
+      this.draining = false;
+    }
+  }
+
+  /**
    * Model R (§5.3): undo a task's desired-KV mutations using its
    * `desired_rollback` (the `[{ key, prior_value }]` array recorded at apply,
    * `prior_value:null` = key was absent). For each entry: prior absent → delete
@@ -491,8 +619,10 @@ export class TaskEngine {
    *    - `running` + no acceptance + inflight → adopt the in-flight acceptance.
    *    - `running` + (any acceptance) + not inflight → no-op (lease/sweep owns
    *      running-task recovery; reconcile never re-dispatches a running task).
-   *    - `queued` → no host change yet → apply `queuedPolicy` (`redispatch`
-   *      default, idempotent `task.begin` by task_id; or `fail`).
+   *    - `queued` → no host change yet → apply `queuedPolicy`: `redispatch`
+   *      (default) drains oldest-first up to the free pool slots and LEAVES
+   *      the remainder queued (§5.3 — queued is legitimate steady state);
+   *      `fail` fails ALL queued tasks (operator escape hatch).
    */
   async reconcile(args: {
     agentClient: AgentRpcClient | undefined;
@@ -505,6 +635,7 @@ export class TaskEngine {
         acceptances_adopted: 0,
         redispatched: 0,
         failed: 0,
+        left_queued: 0,
         agent_reachable: false,
         skipped: true,
       };
@@ -541,6 +672,8 @@ export class TaskEngine {
           acceptances_adopted: 0,
           redispatched: 0,
           failed: 0,
+          // Queued tasks are left queued, never failed for a momentary outage.
+          left_queued: this.store.countByState('queued'),
           agent_reachable: false,
           skipped: false,
         };
@@ -578,6 +711,7 @@ export class TaskEngine {
 
         // state === 'queued' → never accepted → no host change → apply policy.
         if (queuedPolicy === 'fail') {
+          // Operator escape hatch: fail ALL queued tasks, pool slots or not.
           this.store.transition(task.task_id, {
             state: 'failed',
             error_code: 'FAILED_BEFORE_CHANGE',
@@ -585,19 +719,19 @@ export class TaskEngine {
           });
           this.leases.releaseByTask(task.task_id);
           failed += 1;
-          continue;
         }
-
-        // 'redispatch' (default): idempotent task.begin by task_id. Wrap each so
-        // one begin-failure (dispatch's failBeforeChange already fails the task
-        // + releases its leases, then THROWS) doesn't abort the rest of the sweep.
-        try {
-          await this.dispatch({ task, agentClient, ...this.rebuildDispatchInputs(task) });
-          redispatched += 1;
-        } catch {
-          failed += 1;
-        }
+        // 'redispatch' (default): handled below by the cap-aware drain —
+        // oldest-first, up to the free pool slots, remainder LEFT queued
+        // (§5.3 reconcile interplay). task.begin stays idempotent by task_id.
       }
+
+      // End-of-pass drain (§5.3 trigger c). Under 'redispatch' this IS the
+      // queued-task recovery; under 'fail' the walk emptied the queue and the
+      // drain is a no-op. Per-task begin-failures are absorbed by the drain
+      // loop, never aborting the pass.
+      const drain = await this.drainQueued(agentClient);
+      redispatched += drain.dispatched;
+      failed += drain.failed;
 
       return {
         leases_removed: sweep.leases_removed,
@@ -605,6 +739,7 @@ export class TaskEngine {
         acceptances_adopted: acceptancesAdopted,
         redispatched,
         failed,
+        left_queued: drain.left_queued,
         agent_reachable: true,
         skipped: false,
       };

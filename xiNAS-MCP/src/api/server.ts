@@ -45,6 +45,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   const tasks = buildTaskEngines({
     state,
     ...(config.agent ? { agentClient: createAgentRpcClient(config.agent.socket) } : {}),
+    ...(config.tasks?.max_inflight !== undefined ? { maxInflight: config.tasks.max_inflight } : {}),
   });
 
   // S2 resumable SSE fan-out (s2-task-envelope-spec §10). The task_progress

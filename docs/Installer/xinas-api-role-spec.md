@@ -326,6 +326,14 @@ The `/var/lib/xinas/config-history/` tree owned by `xinas_history`
       "role": "admin"
     }
   },
+  "agent": {
+    "socket": "{{ xinas_api_agent_socket }}",
+    "heartbeat_interval_ms": {{ xinas_api_agent_heartbeat_interval_ms }}
+  },
+  "internalTokensPath": "{{ xinas_api_config_dir }}/internal-tokens.json",
+  "tasks": {
+    "max_inflight": {{ xinas_api_tasks_max_inflight }}
+  },
   "state": {
     "databasePath": "{{ xinas_api_state_dir }}/xinas.db",
     "auditJsonlPath": "{{ xinas_api_log_dir }}/audit.jsonl",
@@ -333,6 +341,13 @@ The `/var/lib/xinas/config-history/` tree owned by `xinas_history`
   }
 }
 ```
+
+`tasks.max_inflight` is the S2.1 worker-pool cap
+(`docs/control-path/s2-task-envelope-spec.md` §5.3): max tasks concurrently
+in flight end-to-end, templated from `xinas_api_tasks_max_inflight`
+(default 4). The api rejects anything that is not an integer >= 1 at
+startup; omitting the section entirely falls back to the in-engine
+default (4).
 
 The `_xinas_admin_gid` and `_xinas_api_admin_token` are role-internal
 facts produced by tasks 3 and 7 respectively. Naming convention: a
