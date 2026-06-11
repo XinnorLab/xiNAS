@@ -17,6 +17,8 @@ import { parseIdmapConf } from '../../lib/parse/idmap.js';
 import { parseMountinfo } from '../../lib/parse/mountinfo.js';
 import type { AgentConfig } from '../config.js';
 import { createFakeFsHost } from '../fs/fake-host.js';
+import { createFakeNetHost } from '../net/fake-host.js';
+import { type NetHost, createRealNetHost } from '../net/host.js';
 import { type FsHost, createRealFsHost } from '../fs/host.js';
 import { fixtureDir } from '../probe/fixture.js';
 import type { XiraidClient } from '../xiraid/client.js';
@@ -28,6 +30,10 @@ import {
   makeFsUnmanageExecutor,
   makeFsUnmountExecutor,
 } from './fs-executor.js';
+import {
+  makeNetIfaceUpdateExecutor,
+  makeNetPoolApplyExecutor,
+} from './net-executor.js';
 import { buildNfsExecutors, type NfsExecutorDeps } from './nfs-executor.js';
 import { createNfsHelperClientFromProbe } from './nfs-helper-client.js';
 import { createProgressPublisher } from './progress-publisher.js';
@@ -175,6 +181,7 @@ export function buildTaskSubsystem(
     readMounts?: () => Promise<Array<{ source: string; mountpoint: string }>>;
     /** Host-command seam override; default: fake in fixture mode, real otherwise. */
     fsHost?: FsHost;
+    netHost?: NetHost;
   } = {},
 ): TaskSubsystem {
   const registry = new ExecutorRegistry();
@@ -209,6 +216,10 @@ export function buildTaskSubsystem(
   registry.register(makeFsGrowExecutor({ host: fsHost }));
   registry.register(makeFsSetQuotaModeExecutor({ host: fsHost }));
   registry.register(makeFsUnmanageExecutor({ host: fsHost }));
+  // S6 T7/T8: network executors over the NetHost seam (fake in fixture mode).
+  const netHost = opts.netHost ?? (fdir !== null ? createFakeNetHost(fdir) : createRealNetHost());
+  registry.register(makeNetIfaceUpdateExecutor({ host: netHost }));
+  registry.register(makeNetPoolApplyExecutor({ host: netHost }));
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
   });
