@@ -51,6 +51,7 @@ const OBSERVED_KINDS = [
   'Group',
   'ExportRule',
   'XiraidArray',
+  'NetworkConfig',
   'managed_files',
   'inventory',
 ] as const;

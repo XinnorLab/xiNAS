@@ -1,0 +1,30 @@
+{
+  "kind": "NetworkInterface",
+  "id": "ibp65s0",
+  "metadata": {
+    "revision": 2,
+    "created_at": "2026-06-11T10:00:00Z",
+    "modified_at": "2026-06-11T10:05:00Z",
+    "owner": "system:installer",
+    "source": "ansible:net_controllers",
+    "validation_status": "valid"
+  },
+  "spec": {
+    "managed_by_xinas": true,
+    "addresses": ["10.10.1.1/24"],
+    "mtu": 4092,
+    "enabled": true,
+    "pbr_table_id": 100
+  },
+  "status": {
+    "driver": "mlx5_core",
+    "rdma_capable": true,
+    "link_state": "up",
+    "rdma_link_state": "up",
+    "current_addresses": ["10.10.1.1/24"],
+    "owning_netplan_file": "/etc/netplan/99-xinas.yaml",
+    "duplicates_detected_in": [],
+    "netplan": { "addresses": ["10.10.1.1/24"], "mtu": 4092, "pbr_table_id": 100 },
+    "observed_at": "2026-06-11T10:05:00Z"
+  }
+}

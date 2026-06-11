@@ -169,7 +169,7 @@ describe('PATCH /api/v1/filesystems/:id', () => {
     setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-um' });
     const planned = await patchPlan({ mounted: false });
     expect(planned.status).toBe(200);
-    expect(planned.body.result.risk_level).toBe('disruptive');
+    expect(planned.body.result.risk_level).toBe('changing_access');
     expect(planned.body.result.observed_revision_expected).toBe(fsRevision());
 
     const stale = await request(setup.app)

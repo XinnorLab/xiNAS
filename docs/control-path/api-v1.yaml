@@ -1025,7 +1025,13 @@ components:
 
     NetworkInterface:
       type: object
-      required: [kind, id, metadata, spec, status]
+      description: |
+        MERGED read model (ADR-0008): when a desired row exists (managed +
+        adopted), `spec` is the desired spec verbatim and metadata.revision
+        is the DESIRED row revision (the one mutations bind). Unmanaged or
+        not-yet-adopted interfaces carry no `spec`. `spec.pbr_table_id` is
+        allocated once at first manage and never renumbered.
+      required: [kind, id, metadata, status]
       properties:
         kind: { type: string, const: NetworkInterface }
         id: { type: string, description: "Interface name (e.g., ibp0s4)." }
@@ -1040,8 +1046,10 @@ components:
                 type: string
                 description: CIDR.
             mtu: { type: integer }
-            pbr_table_id: { type: integer }
-            enabled: { type: boolean }
+            pbr_table_id:
+              type: integer
+              description: "PBR table in [100,199]; allocated once, immutable (ADR-0008)."
+            enabled: { type: boolean, default: true }
         status:
           type: object
           required: [observed_at]
@@ -1049,6 +1057,7 @@ components:
             driver: { type: string }
             rdma_capable: { type: boolean }
             link_state: { type: string, enum: [up, down, unknown] }
+            rdma_link_state: { type: string, enum: [up, down, unknown] }
             current_addresses:
               type: array
               items: { type: string }
@@ -1056,6 +1065,13 @@ components:
             duplicates_detected_in:
               type: array
               items: { type: string }
+            netplan:
+              type: object
+              description: "Parsed 99-xinas.yaml stanza for this interface (the adoption source, ADR-0008)."
+              properties:
+                addresses: { type: array, items: { type: string } }
+                mtu: { type: integer }
+                pbr_table_id: { type: integer }
             observed_at:
               type: string
               format: date-time
@@ -2067,13 +2083,36 @@ paths:
     patch:
       tags: [network]
       operationId: updateNetworkInterface
-      summary: Change IPs, MTU, or PBR (plan/apply).
+      summary: Change IPs, MTU, or enablement (plan/apply).
+      description: |
+        Writable: addresses, mtu, enabled, cleanup (any combination).
+        Immutable per-field 422 net_identity_immutable: pbr_table_id,
+        managed_by_xinas, name. Non-mlx targets → 422 iface_not_managed
+        (management ethernet is not writable through this surface).
       requestBody: { $ref: '#/components/requestBodies/Mutating' }
       responses:
         '200': { $ref: '#/components/responses/PlanReturned' }
         '202': { $ref: '#/components/responses/TaskAccepted' }
         '400': { $ref: '#/components/responses/InvalidArgument' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /network/ip-pool:
+    post:
+      tags: [network]
+      operationId: applyIpPool
+      summary: Re-allocate the managed-interface IP pool (plan/apply).
+      description: |
+        Day-1 pool formula (incrementing third octet over sorted managed
+        interfaces). Reallocates ADDRESSES ONLY — existing pbr_table_ids
+        persist (ADR-0008). spec: { start, prefix, mtu?, cleanup? }.
+      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      responses:
+        '200': { $ref: '#/components/responses/PlanReturned' }
+        '202': { $ref: '#/components/responses/TaskAccepted' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
         '409': { $ref: '#/components/responses/Conflict' }
         '412': { $ref: '#/components/responses/PreconditionFailed' }
         '500': { $ref: '#/components/responses/Internal' }

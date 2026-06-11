@@ -344,7 +344,7 @@ export const fsUnmountProvider: PlanProvider = {
         summary: `systemctl stop+disable ${r.row.id} (${r.mountpoint})`,
         blast_radius: blastRadius.map((s) => ({ kind: 'Share', id: s.id, path: s.path })),
       },
-      risk_level: 'disruptive',
+      risk_level: 'changing_access',
       rollback_model: 'non_disruptive',
       enriched_spec: { id: r.row.id, mounted: false, mountpoint: r.mountpoint },
     };
@@ -377,7 +377,7 @@ export const fsGrowProvider: PlanProvider = {
 
 /**
  * fs.set_quota_mode (PATCH {quota_mode}) — rewrite the unit's Options=
- * quota flag and remount. Client-visible (the remount) → 'disruptive';
+ * quota flag and remount. Client-visible (the remount) → 'changing_access';
  * rollback restores the captured pre-task unit text.
  */
 export const fsSetQuotaModeProvider: PlanProvider = {
@@ -404,7 +404,7 @@ export const fsSetQuotaModeProvider: PlanProvider = {
         },
       ],
       diff: { summary: `rewrite ${r.row.id} Options= quota flag to ${mode}, remount` },
-      risk_level: 'disruptive',
+      risk_level: 'changing_access',
       rollback_model: 'non_disruptive',
       enriched_spec: { id: r.row.id, quota_mode: mode, mountpoint: r.mountpoint },
     };

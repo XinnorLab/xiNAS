@@ -239,7 +239,7 @@ describe('fsMountProvider / fsUnmountProvider', () => {
       'dependent_share_active',
       'mountpoint_exported',
     ]);
-    expect(planResult.risk_level).toBe('disruptive');
+    expect(planResult.risk_level).toBe('changing_access');
     expect((planResult.diff as { blast_radius?: unknown[] }).blast_radius).toEqual([
       { kind: 'Share', id: 'share01', path: '/mnt/data/share' },
     ]);
@@ -295,7 +295,7 @@ describe('fsGrowProvider / fsSetQuotaModeProvider', () => {
     const { task, planResult } = await h.engine.plan(
       args('fs.set_quota_mode', { id: 'mnt-data.mount', quota_mode: 'pquota' }),
     );
-    expect(planResult.risk_level).toBe('disruptive');
+    expect(planResult.risk_level).toBe('changing_access');
     expect(planResult.warnings.map((w) => w.code)).toContain('remount_required');
     const persisted = h.store.get(task.task_id)?.spec as Record<string, unknown>;
     expect(persisted).toMatchObject({ quota_mode: 'pquota', mountpoint: '/mnt/data' });

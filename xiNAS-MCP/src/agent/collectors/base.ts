@@ -19,6 +19,7 @@ export type Kind =
   | 'User'
   | 'Group'
   | 'XiraidArray'
+  | 'NetworkConfig' // internal observed singleton (id 'default'); netplan file-set summary (ADR-0008).
   | 'managed_files'
   | 'inventory';
 

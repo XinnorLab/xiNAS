@@ -482,7 +482,7 @@ describe.sequential('e2e: S5 filesystem adapter (fixture mode + fake FsHost)', (
     expect(planned.status).toBe(200);
     const plan = planned.body.result as Record<string, unknown>;
     expect(plan.blockers).toEqual([]);
-    expect(plan.risk_level).toBe('disruptive');
+    expect(plan.risk_level).toBe('changing_access');
 
     const applied = await requestJson(
       apiSockPath,
@@ -585,7 +585,7 @@ describe.sequential('e2e: S5 filesystem adapter (fixture mode + fake FsHost)', (
     );
     expect(planned.status).toBe(200);
     const plan = planned.body.result as Record<string, unknown>;
-    expect(plan.risk_level).toBe('disruptive');
+    expect(plan.risk_level).toBe('changing_access');
     expect((plan.warnings as Array<{ code: string }>).map((w) => w.code)).toContain(
       'remount_required',
     );

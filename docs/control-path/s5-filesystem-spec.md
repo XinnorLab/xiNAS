@@ -97,6 +97,12 @@ Blocker codes: ADR-0007's set (`mountpoint_invalid`, `mountpoint_taken`, `backin
 | T11 | Grow + quota executors (unit-capture rollback) + unmanage (provider + DELETE route + executor). TDD. |
 | T12 | e2e (incl. BOTH unmount blockers: `dependent_share_active` via seeded sessions AND `mountpoint_exported` via seeded exports; clamped-log mkfs asserted via the fake op log) + the full verification gate. |
 
+## 9a. Risk-level note (post-S6-T0)
+
+`fs.unmount` and `fs.set_quota_mode` report `risk_level:
+'changing_access'` — the api enum has no `disruptive` (S6-T0 fixed the
+off-enum value this spec originally shipped).
+
 ## 9b. Freshness binding note (post-churn-fix)
 
 The PATCH/DELETE routes bind `expected_revision` to the CURRENT observed
