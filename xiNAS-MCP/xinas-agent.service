@@ -45,7 +45,15 @@ ProtectHome=true
 # api's /internal/v1/observed. /var/lib/xinas is read-only below (the agent
 # only reads /var/lib/xinas/controller-id). Listing /var/lib/xinas/state in
 # both ReadWritePaths and under a ReadOnlyPaths parent was contradictory.
-ReadWritePaths=/run/xinas /var/log/xinas /etc/systemd/system
+ReadWritePaths=/run/xinas /var/log/xinas /etc/systemd/system /etc/netplan /run/netplan /run/systemd
+#   /etc/netplan         — S6 network executors (ADR-0008 §Sandbox): the
+#                          full-file 99-xinas.yaml render + the audited
+#                          cleanup of managed-iface stanzas in foreign files.
+#   /run/netplan,
+#   /run/systemd         — `netplan generate/apply` write their generated
+#                          backend configs under /run/netplan and
+#                          /run/systemd/network; networkd reload itself goes
+#                          over dbus (AF_UNIX, already allowed).
 # Read-only paths the agent must read:
 #   /var/lib/xinas/controller-id — shared identity (0644 world-readable)
 #   /etc/xinas-agent             — config.json + agent-token (0640 / 0400)
@@ -62,8 +70,12 @@ NoNewPrivileges=true
 # multicast groups, which do not require CAP_NET_ADMIN for a read-only
 # listener. The final minimal capability + SystemCallFilter set is tuned
 # against real hardware in the L-phase validation / WS13 packaging pass.)
-CapabilityBoundingSet=CAP_CHOWN
-AmbientCapabilities=CAP_CHOWN
+# CAP_NET_ADMIN (S6, ADR-0008 §Sandbox): `ip rule del`, `ip route flush`,
+# `ip addr flush` and netplan's kernel programming all require it; the
+# observe-side `ip -j`/`ip monitor` reads ride AF_NETLINK (already allowed)
+# without it, but the network executors mutate kernel state.
+CapabilityBoundingSet=CAP_CHOWN CAP_NET_ADMIN
+AmbientCapabilities=CAP_CHOWN CAP_NET_ADMIN
 
 # --- Process isolation ---
 LockPersonality=true
