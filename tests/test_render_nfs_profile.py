@@ -227,8 +227,11 @@ def test_rejects_non_dict_spec(env):
     root, lock_path, _calls, run_systemctl = env
     with pytest.raises(ValueError):
         nfs_profile.render_nfs_profile(
-            ["not", "a", "dict"], False,
-            root=root, lock_path=lock_path, run_systemctl=run_systemctl,
+            ["not", "a", "dict"],
+            False,
+            root=root,
+            lock_path=lock_path,
+            run_systemctl=run_systemctl,
         )
 
 
@@ -250,7 +253,8 @@ def test_rdma_disabled_renders_no_rdma_port(env):
     nfs_profile.render_nfs_profile(
         spec, False, root=root, lock_path=lock_path, run_systemctl=run_systemctl
     )
-    nfsd = open(os.path.join(root, "etc/nfs/nfsd.conf")).read()
+    with open(os.path.join(root, "etc/nfs/nfsd.conf")) as f:
+        nfsd = f.read()
     assert "rdma=n" in nfsd
     assert "rdma-port" not in nfsd
 

@@ -1,4 +1,5 @@
 """First-green sanity test for the Python toolchain."""
+
 import re
 
 from xinas_menu.version import XINAS_MENU_VERSION

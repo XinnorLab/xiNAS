@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 
 from rich.text import Text
+from textual.types import AnimationLevel, CallbackType, EasingFunction
 from textual.widget import Widget
 from textual.widgets import RichLog
 
@@ -110,18 +111,57 @@ class ScrollableTextView(Widget):
         """Return plain text content (for clipboard operations)."""
         return self._plain_text
 
-    def scroll_page_up(self) -> None:
-        """Scroll content up by one page."""
+    # Signature mirrors Widget.scroll_page_up/down so the override stays
+    # compatible with framework-driven calls; the TUI's own no-arg calls keep
+    # the instant (animate=False) scroll they always had.
+    def scroll_page_up(
+        self,
+        *,
+        animate: bool = False,
+        speed: float | None = None,
+        duration: float | None = None,
+        easing: EasingFunction | str | None = None,
+        force: bool = False,
+        on_complete: CallbackType | None = None,
+        level: AnimationLevel = "basic",
+    ) -> None:
+        """Scroll content up by one page (instant unless animate=True)."""
         try:
             log = self.query_one("#text-view-area", _DisplayLog)
-            log.scroll_page_up(animate=False)
+            log.scroll_page_up(
+                animate=animate,
+                speed=speed,
+                duration=duration,
+                easing=easing,
+                force=force,
+                on_complete=on_complete,
+                level=level,
+            )
         except Exception:
             pass
 
-    def scroll_page_down(self) -> None:
-        """Scroll content down by one page."""
+    def scroll_page_down(
+        self,
+        *,
+        animate: bool = False,
+        speed: float | None = None,
+        duration: float | None = None,
+        easing: EasingFunction | str | None = None,
+        force: bool = False,
+        on_complete: CallbackType | None = None,
+        level: AnimationLevel = "basic",
+    ) -> None:
+        """Scroll content down by one page (instant unless animate=True)."""
         try:
             log = self.query_one("#text-view-area", _DisplayLog)
-            log.scroll_page_down(animate=False)
+            log.scroll_page_down(
+                animate=animate,
+                speed=speed,
+                duration=duration,
+                easing=easing,
+                force=force,
+                on_complete=on_complete,
+                level=level,
+            )
         except Exception:
             pass

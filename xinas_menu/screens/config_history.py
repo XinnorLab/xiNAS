@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from typing import TYPE_CHECKING
 
 from textual import work
 from textual.app import ComposeResult
@@ -23,12 +24,15 @@ from xinas_menu.widgets.text_view import ScrollableTextView
 
 _log = logging.getLogger(__name__)
 
-try:
-    from xinas_history.drift import DriftDetector
+if TYPE_CHECKING:
     from xinas_history.engine import SnapshotEngine
-    from xinas_history.gc import GarbageCollector, load_retention_policy
-    from xinas_history.runner import TransactionalRunner
     from xinas_history.store import FilesystemStore
+
+# Availability probe only — the package __init__ imports every submodule we
+# use, so a successful import guarantees the deferred per-method imports
+# below succeed too. xinas_history may not be installed on dev machines.
+try:
+    import xinas_history  # noqa: F401
 
     HAS_HISTORY = True
 except ImportError:
@@ -213,6 +217,9 @@ class ConfigHistoryScreen(XiNASAppMixin, Screen):
 
         loop = asyncio.get_running_loop()
         try:
+            from xinas_history.drift import DriftDetector
+            from xinas_history.store import FilesystemStore
+
             store = FilesystemStore()
             engine = _create_engine(store=store)
             detector = DriftDetector(store=store, engine=engine)
@@ -417,6 +424,10 @@ class ConfigHistoryScreen(XiNASAppMixin, Screen):
             )
 
         try:
+            from xinas_history.engine import SnapshotEngine
+            from xinas_history.runner import TransactionalRunner
+            from xinas_history.store import FilesystemStore
+
             store = FilesystemStore()
             runner = TransactionalRunner(
                 engine=SnapshotEngine(store=store),
@@ -505,6 +516,9 @@ class ConfigHistoryScreen(XiNASAppMixin, Screen):
 
         loop = asyncio.get_running_loop()
         try:
+            from xinas_history.gc import GarbageCollector, load_retention_policy
+            from xinas_history.store import FilesystemStore
+
             store = FilesystemStore()
             gc = GarbageCollector(store, load_retention_policy())
             engine = _create_engine(store=store)
@@ -647,6 +661,9 @@ class ConfigHistoryScreen(XiNASAppMixin, Screen):
 
 def _create_engine(store: FilesystemStore | None = None) -> SnapshotEngine:
     """Create a SnapshotEngine with default settings."""
+    from xinas_history.engine import SnapshotEngine
+    from xinas_history.store import FilesystemStore
+
     s = store or FilesystemStore()
     return SnapshotEngine(store=s)
 

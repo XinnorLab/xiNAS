@@ -652,6 +652,7 @@ class RemoteAccessScreen(XiNASAppMixin, Screen):
         proto = "https" if tls else "http"
         tokens = cfg.get("tokens", {})
         first_token = next(iter(tokens), None)
+        masked = f"{first_token[:8]}...{first_token[-4:]}" if first_token else ""
 
         _GRN, CYN, BLD, DIM, NC = "\033[32m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
         lines = [
@@ -663,7 +664,6 @@ class RemoteAccessScreen(XiNASAppMixin, Screen):
             "",
         ]
         if first_token:
-            masked = f"{first_token[:8]}...{first_token[-4:]}"
             lines.append("  claude mcp add \\")
             lines.append("    --transport http \\")
             lines.append(f'    --header "Authorization: Bearer {masked}" \\')
