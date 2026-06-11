@@ -377,3 +377,90 @@ describe('POST /api/v1/arrays', () => {
     });
   });
 });
+
+// ---- regression: observed-revision churn must not stale plans ----
+// PollDriver re-sweeps collectors every ~30 s and re-pushes complete
+// snapshots with fresh observed_at stamps. Before the observed-handler
+// dedupe, every sweep bumped every observed revision, so the S4 §4
+// freshness binding (expected_revision === CURRENT observed revision)
+// gave users a ≤1-sweep window between plan and apply — any pause >30 s
+// produced a spurious 412 observed_revision_stale on live hosts.
+
+describe('plan → identical sweep → apply (churn regression)', () => {
+  let setup: MockAgentSetup;
+  const AGENT_TOKEN = 'internal-agent-tok-test'; // _helpers MOCK_AGENT_TOKEN
+  const ARRAY_VALUE = {
+    kind: 'XiraidArray',
+    id: 'data',
+    spec: {
+      name: 'data',
+      level: 'raid6',
+      member_disk_ids: ['nvme1n1', 'nvme2n1', 'nvme3n1', 'nvme4n1'],
+      spare_disk_ids: [],
+    },
+    status: { state: 'optimal', volume_path: '/dev/xi_data', observed_at: '2026-06-11T10:00:00Z' },
+  };
+
+  beforeEach(async () => {
+    setup = await buildTestAppWithMockAgent();
+  });
+  afterEach(async () => {
+    await setup.teardown();
+  });
+
+  function sweep(observedAt: string) {
+    return request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send({
+        observed_at: observedAt,
+        controller_id: setup.controllerId,
+        deltas: [
+          {
+            kind: 'XiraidArray',
+            id: 'data',
+            op: 'upsert',
+            value: {
+              ...ARRAY_VALUE,
+              status: { ...ARRAY_VALUE.status, observed_at: observedAt },
+            },
+          },
+        ],
+        complete_snapshots: ['XiraidArray'],
+      });
+  }
+
+  it('an idle sweep between plan and apply does not 412 the apply', async () => {
+    setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-churn' });
+
+    const first = await sweep('2026-06-11T10:00:00Z');
+    expect(first.status).toBe(200);
+    const revAtPlan = setup.state.kv.get('/xinas/v1/observed/XiraidArray/data')?.revision;
+    expect(revAtPlan).toBeDefined();
+
+    const planned = await request(setup.app)
+      .patch('/api/v1/arrays/data')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({ mode: 'plan', spec: { tuning: { init_prio: 10 } } });
+    expect(planned.status).toBe(200);
+    expect(planned.body.result.blockers).toEqual([]);
+
+    // The "user pauses for a sweep" moment: identical content, new stamp.
+    const second = await sweep('2026-06-11T10:00:30Z');
+    expect(second.status).toBe(200);
+    expect(second.body.result.skipped_unchanged).toBe(1);
+    expect(setup.state.kv.get('/xinas/v1/observed/XiraidArray/data')?.revision).toBe(revAtPlan);
+
+    const applied = await request(setup.app)
+      .patch('/api/v1/arrays/data')
+      .set('Authorization', ADMIN_TOKEN)
+      .send({
+        mode: 'apply',
+        plan_id: planned.body.result.plan_id,
+        expected_revision: revAtPlan,
+        idempotency_key: 'idem-churn',
+      });
+    expect(applied.status, JSON.stringify(applied.body)).toBe(202);
+    expect(applied.body.result.state).toBe('running');
+  });
+});

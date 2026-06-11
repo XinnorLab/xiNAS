@@ -243,3 +243,103 @@ describe('POST /internal/v1/observed', () => {
     expect(pushRecorded).toBe(true);
   });
 });
+
+// ---- sweep dedupe: identical re-pushes must not bump revisions ----
+// PollDriver full-sweeps every collector on its interval and collectors
+// stamp a fresh observed_at each sweep; without value-dedupe every sweep
+// bumped every observed revision, giving plan→apply a ≤1-sweep window
+// (spurious observed_revision_stale 412s on live hosts).
+
+describe('observed sweep dedupe (skip-unchanged)', () => {
+  let setup: Awaited<ReturnType<typeof buildAppWithAgent>>;
+  beforeEach(async () => {
+    setup = await buildAppWithAgent();
+  });
+  afterEach(() => setup.cleanup());
+
+  const DISK = (observedAt: string, model = 'T') => ({
+    kind: 'Disk',
+    id: 'nvme0n1',
+    op: 'upsert',
+    value: { kind: 'Disk', id: 'nvme0n1', status: { model, observed_at: observedAt } },
+  });
+
+  function push(deltas: unknown[], completeSnapshots: string[] = []) {
+    return request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send({
+        observed_at: new Date().toISOString(),
+        controller_id: CONTROLLER_ID,
+        deltas,
+        complete_snapshots: completeSnapshots,
+      });
+  }
+
+  it('re-push identical apart from observed_at → revision unchanged, counted skipped', async () => {
+    const first = await push([DISK('2026-06-11T10:00:00Z')]);
+    expect(first.status).toBe(200);
+    expect(first.body.result.accepted).toBe(1);
+    const rev1 = setup.state.kv.get('/xinas/v1/observed/Disk/nvme0n1')?.revision;
+
+    const second = await push([DISK('2026-06-11T10:00:30Z')]); // only the stamp moved
+    expect(second.status).toBe(200);
+    expect(second.body.result.skipped_unchanged).toBe(1);
+    const rev2 = setup.state.kv.get('/xinas/v1/observed/Disk/nvme0n1')?.revision;
+    expect(rev2).toBe(rev1);
+  });
+
+  it('real content change still bumps the revision', async () => {
+    await push([DISK('2026-06-11T10:00:00Z', 'OLD')]);
+    const rev1 = setup.state.kv.get('/xinas/v1/observed/Disk/nvme0n1')?.revision;
+    const res = await push([DISK('2026-06-11T10:00:30Z', 'NEW')]);
+    expect(res.body.result.accepted).toBe(1);
+    const rev2 = setup.state.kv.get('/xinas/v1/observed/Disk/nvme0n1')?.revision;
+    expect(rev2).toBe((rev1 ?? 0) + 1);
+  });
+
+  it('complete-snapshot reconcile keeps skipped-unchanged rows (not deleted as absent)', async () => {
+    await push([DISK('2026-06-11T10:00:00Z')], ['Disk']);
+    const res = await push([DISK('2026-06-11T10:00:30Z')], ['Disk']);
+    expect(res.status).toBe(200);
+    expect(res.body.result.deleted_by_reconcile).toBe(0);
+    expect(setup.state.kv.get('/xinas/v1/observed/Disk/nvme0n1')).not.toBeNull();
+  });
+
+  it('key-order differences do not defeat the dedupe (canonical compare)', async () => {
+    await push([
+      {
+        kind: 'Disk',
+        id: 'nvme0n1',
+        op: 'upsert',
+        value: { id: 'nvme0n1', kind: 'Disk', status: { observed_at: 'x', a: 1, b: 2 } },
+      },
+    ]);
+    const rev1 = setup.state.kv.get('/xinas/v1/observed/Disk/nvme0n1')?.revision;
+    const res = await push([
+      {
+        kind: 'Disk',
+        id: 'nvme0n1',
+        op: 'upsert',
+        value: { kind: 'Disk', id: 'nvme0n1', status: { b: 2, a: 1, observed_at: 'y' } },
+      },
+    ]);
+    expect(res.body.result.skipped_unchanged).toBe(1);
+    expect(setup.state.kv.get('/xinas/v1/observed/Disk/nvme0n1')?.revision).toBe(rev1);
+  });
+
+  it('top-level observed_at (singleton shapes) is also ignored in the compare', async () => {
+    const inv = (stamp: string) => ({
+      kind: 'inventory',
+      id: 'snapshot',
+      op: 'upsert',
+      value: { hostname: 'h', observed_at: stamp },
+    });
+    await push([inv('t1')]);
+    const key = '/xinas/v1/observed/inventory/snapshot';
+    const rev1 = setup.state.kv.get(key)?.revision;
+    const res = await push([inv('t2')]);
+    expect(res.body.result.skipped_unchanged).toBe(1);
+    expect(setup.state.kv.get(key)?.revision).toBe(rev1);
+  });
+});

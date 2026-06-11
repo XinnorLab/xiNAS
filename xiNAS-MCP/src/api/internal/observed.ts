@@ -1,9 +1,26 @@
 import type { NextFunction, Request, Response } from 'express';
 import type { Kind } from '../../agent/collectors/base.js';
 import { observedSegment } from '../../agent/collectors/base.js';
+import { canonicalize } from '../../lib/canonical-json.js';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import { sendOk } from '../handlers/reads.js';
+
+/**
+ * Strip the sweep-churning observed_at stamps (top-level for singleton
+ * shapes like inventory, and status.observed_at for resource shapes)
+ * before the unchanged-value compare. Shallow clones only — the compare
+ * runs through canonicalize (JSON.stringify), which drops `undefined`.
+ */
+function stripObservedAt(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return value;
+  const v = { ...(value as Record<string, unknown>) };
+  if ('observed_at' in v) v.observed_at = undefined;
+  if (typeof v.status === 'object' && v.status !== null) {
+    v.status = { ...(v.status as Record<string, unknown>), observed_at: undefined };
+  }
+  return v;
+}
 
 interface ObservationDeltaBody {
   kind: Kind;
@@ -133,6 +150,7 @@ export function observedHandler(ctx: ApiContext) {
 
       let accepted = 0;
       let deletedByReconcile = 0;
+      let skippedUnchanged = 0;
       const revisions: number[] = [];
 
       // Derive the KV path segment through observedSegment(kind) (base.ts) so
@@ -141,11 +159,35 @@ export function observedHandler(ctx: ApiContext) {
       // per-kind special-casing (the ExportRule→Share fold-in is a read-time
       // join in I6, not a write-time merge here).
       ctx.state.kv.transaction((tx) => {
-        // 1. Apply all deltas.
+        // 1. Apply all deltas — SKIPPING upserts whose value is unchanged
+        //    apart from the observed_at stamp. PollDriver full-sweeps every
+        //    collector on its interval and collectors re-stamp observed_at
+        //    each sweep; without this dedupe every sweep bumped every
+        //    observed revision, so revision-pinned freshness (the S4/S5
+        //    route bindings, observed_freshness_ref) only held for one
+        //    sweep window (~30 s) on live hosts — any human pause between
+        //    plan and apply produced a spurious 412. With the dedupe,
+        //    observed revisions move only when CONTENT changes, which is
+        //    exactly what the freshness pins mean to detect. The stored
+        //    observed_at consequently records when the current content was
+        //    last WRITTEN, not the latest sweep; system-level liveness is
+        //    the heartbeat tracker's job (recordObservationPush below fires
+        //    on every push regardless).
         for (const delta of deltas) {
           const key = `/xinas/v1/observed/${observedSegment(delta.kind)}/${delta.id}`;
           if (delta.op === 'upsert') {
-            const result = tx.put(key, delta.value ?? {});
+            const value = delta.value ?? {};
+            const current = tx.get(key);
+            if (
+              current !== null &&
+              canonicalize(stripObservedAt(current.value)) ===
+                canonicalize(stripObservedAt(value))
+            ) {
+              skippedUnchanged++;
+              revisions.push(current.revision);
+              continue;
+            }
+            const result = tx.put(key, value);
             // No expected_revision → put always commits (ok: true). Guard
             // anyway so a future CAS variant can't silently push undefined.
             if (result.ok) revisions.push(result.value.revision);
@@ -180,7 +222,16 @@ export function observedHandler(ctx: ApiContext) {
       ctx.tracker?.recordObservationPush(new Date());
 
       const stateRevision = revisions.length > 0 ? Math.max(...revisions) : 0;
-      sendOk(req, res, { accepted, deleted_by_reconcile: deletedByReconcile }, [stateRevision]);
+      sendOk(
+        req,
+        res,
+        {
+          accepted,
+          deleted_by_reconcile: deletedByReconcile,
+          skipped_unchanged: skippedUnchanged,
+        },
+        [stateRevision],
+      );
     } catch (err) {
       next(err);
     }

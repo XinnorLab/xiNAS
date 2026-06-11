@@ -97,6 +97,15 @@ Blocker codes: ADR-0007's set (`mountpoint_invalid`, `mountpoint_taken`, `backin
 | T11 | Grow + quota executors (unit-capture rollback) + unmanage (provider + DELETE route + executor). TDD. |
 | T12 | e2e (incl. BOTH unmount blockers: `dependent_share_active` via seeded sessions AND `mountpoint_exported` via seeded exports; clamped-log mkfs asserted via the fake op log) + the full verification gate. |
 
+## 9b. Freshness binding note (post-churn-fix)
+
+The PATCH/DELETE routes bind `expected_revision` to the CURRENT observed
+Filesystem row revision (the S4 §4 convention). This is sweep-stable only
+because the observed handler dedupes unchanged re-pushes (s0s1 spec, Flow
+A step 3) — without that dedupe every ~60 s filesystem sweep bumped the
+revision and staled in-flight plans. Observed revisions now move only on
+content change.
+
 ## 10. Open questions / risks
 
 - **Agent-unit compatibility** — RESOLVED into ADR-0007's audited table + plan T4 (`ReadWritePaths=/etc/systemd/system`, `Requires-Rebuild: xinas_agent`; mountpoint dirs are PID1-created; `/dev` writable under `strict` with `PrivateDevices` unset; `CAP_CHOWN` suffices). **Residual:** no systemd in dev/CI — the delta is proven by the audit + fake-host coverage + a written Ubuntu hardware smoke checklist (create→mount→grow→quota→unmount→unmanage) to run on a lab node before WS6 is declared shipped.

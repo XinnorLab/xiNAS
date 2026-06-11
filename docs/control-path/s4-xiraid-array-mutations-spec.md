@@ -75,6 +75,8 @@ The OpenAPI `ApplyRequest` requires `expected_revision`. The plan row does not p
 
 A future migration may persist the observed pin and let the engine's `plan_stale` path take over; until then the route check is the single freshness gate for arrays, and providers do **not** set `observed_revision_expected` in their `PlanResult` (it would be checked at plan-task-build time against `affected_resources[0]` and then lost — setting it without persistence buys nothing and risks confusion).
 
+**Sweep-stability note (post-churn-fix):** this binding is only usable because the observed handler dedupes sweep re-pushes (s0s1 spec, Flow A step 3): `PollDriver` re-pushes complete snapshots every ~30 s with fresh `observed_at` stamps, and before the dedupe every sweep bumped every observed revision — giving plan→apply a ≤1-sweep window and spurious `observed_revision_stale` 412s after any human pause. With the dedupe, the observed revision moves only when array content actually changes, which is exactly the staleness this check is meant to detect. Regression: `routes-arrays.test.ts` "plan → identical sweep → apply".
+
 ## 5. Modify (`xiraid.array.modify`, `PATCH /arrays/{id}`)
 
 **Request shape.** `{ mode, spec: { spare_disk_ids?, tuning? } }` (+ `plan_id`/`expected_revision`/`idempotency_key` on apply). The array id comes from the path; `spec.name` is not accepted.
