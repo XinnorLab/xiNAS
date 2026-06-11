@@ -24,3 +24,6 @@ node_modules/
 scripts/node_modules/
 # End
 .worktrees/
+
+# pytest-cov data file (the CI coverage gate regenerates it on every run)
+.coverage
