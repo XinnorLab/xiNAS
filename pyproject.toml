@@ -19,6 +19,7 @@ dev = [
   "pyright>=1.1.380",
   "ruff>=0.6.0",
   "pytest>=8.0",
+  "pytest-cov>=5.0",
   # TUI runtime deps, mirrored from collection/roles/xinas_menu/tasks/main.yml
   # (the deployment venv) so pyright resolves imports in CI. Keep the version
   # floors in sync with the role.

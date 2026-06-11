@@ -1,7 +1,7 @@
 extends: ["spectral:oas"]
 rules:
   envelope-required-on-responses:
-    severity: warn
+    severity: error
     description: |
       Every non-stream JSON response must wrap with the Envelope schema,
       either directly via $ref or via allOf containing an Envelope $ref.

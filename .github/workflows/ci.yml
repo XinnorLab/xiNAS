@@ -4,12 +4,13 @@
 # gate matrix, and backfill plan.
 #
 # Flip-to-blocking TODOs (in spec order):
-#   TODO: flip openapi-envelope rule to blocking after 3 clean PRs
 #   TODO: expand typescript-lint to style/suspicious rule categories
-#   TODO: graduate pyright basic -> standard -> strict per module
-#   TODO: graduate ansible-lint min -> basic -> production
-#   TODO: add oasdiff between consecutive api-v1.yaml versions (after v1 published)
-#   TODO: add pytest --cov coverage gate (after meaningful coverage exists)
+#         (measured 2026-06-11, biome 1.9.4, style+suspicious "all" on src/:
+#         ~3.7k diagnostics (233 errors + ~3.5k warnings) — needs its own
+#         debt package, likely "recommended" first)
+#   TODO: graduate pyright standard -> strict per module
+#   TODO: graduate ansible-lint basic -> production
+#   TODO: ratchet the pytest --cov floor upward as xinas_history coverage grows
 #   TODO: add MCP integration smoke test (after containerized harness exists)
 #   TODO: add live contract test against the WS1 mock server (after mock ships)
 
@@ -104,7 +105,9 @@ jobs:
           cache: 'pip'
           cache-dependency-path: pyproject.toml
       - run: pip install -e '.[dev]'
-      - run: pytest
+      # Coverage floor measured at 22% on 2026-06-11; floor set just below.
+      # Ratchet upward when meaningful xinas_history coverage lands.
+      - run: pytest --cov=xinas_history --cov-fail-under=20
 
   python-lint:
     runs-on: ubuntu-latest
@@ -175,6 +178,22 @@ jobs:
           npx --yes -p @stoplight/spectral-cli@latest spectral lint \
             --ruleset .spectral.yaml \
             docs/control-path/api-v1.yaml
+
+  # Breaking-change gate between the PR's api-v1.yaml and the base branch's.
+  # PR-only: on push to main there is no base to diff against.
+  # The action runs in a Docker container that cannot see the runner's /tmp,
+  # so the base spec is passed as a git ref (the action's documented pattern).
+  openapi-compat:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git fetch --depth=1 origin "$GITHUB_BASE_REF"
+      - uses: oasdiff/oasdiff-action/breaking@v0.0.57
+        with:
+          base: 'origin/${{ github.base_ref }}:docs/control-path/api-v1.yaml'
+          revision: docs/control-path/api-v1.yaml
+          fail-on: ERR
 
   secrets:
     runs-on: ubuntu-latest
