@@ -56,6 +56,7 @@ import { NfsProfileCollector } from './collectors/nfs-profile.js';
 import { NfsCollector } from './collectors/nfs.js';
 import { ManagedFilesStubCollector } from './collectors/stubs.js';
 import { SystemdUnitCollector } from './collectors/systemd.js';
+import { TuningCollector } from './collectors/tuning.js';
 import { UsersCollector } from './collectors/users.js';
 import { XiraidArrayCollector } from './collectors/xiraid.js';
 import type { AgentConfig } from './config.js';
@@ -71,6 +72,7 @@ import {
   createFixtureNetworkProbe,
   createFixtureNfsProbe,
   createFixtureNfsProfileProbe,
+  createFixtureTuningProbe,
   createFixtureUsersProbe,
   fixtureDir,
 } from './probe/fixture.js';
@@ -79,6 +81,7 @@ import { createInventoryProbe } from './probe/inventory.js';
 import { createNetworkProbe } from './probe/network.js';
 import { createNfsProfileProbe } from './probe/nfs-profile.js';
 import { createNfsProbe } from './probe/nfs.js';
+import { createTuningProbe } from './probe/tuning.js';
 import { DEFAULT_ALLOWLIST } from './probe/systemd.js';
 import { createUsersProbe } from './probe/users.js';
 import { Publisher } from './publisher.js';
@@ -351,6 +354,10 @@ export function buildConvergence(config: AgentConfig): Convergence {
         : {}),
     }),
   );
+
+  // --- Tuning (S7): sysctl expected-vs-actual singleton. ---
+  const tuningProbe = fdir !== null ? createFixtureTuningProbe(fdir) : createTuningProbe();
+  registry.register(new TuningCollector({ probe: tuningProbe }));
 
   // --- Deferred-capability stubs (managed_files). ---
   registry.register(new ManagedFilesStubCollector());

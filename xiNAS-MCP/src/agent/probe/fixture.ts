@@ -134,6 +134,22 @@ interface FixtureInventoryProbe {
   }>;
 }
 
+/** Tuning: reads <dir>/tuning.json ({entries: [{key, expected, actual}]}); absent → empty. */
+export function createFixtureTuningProbe(dir: string): {
+  snapshot(): Promise<{ entries: Array<{ key: string; expected: string; actual: string | null }> }>;
+} {
+  return {
+    snapshot: () =>
+      Promise.resolve(
+        readFixture<{ entries: Array<{ key: string; expected: string; actual: string | null }> }>(
+          dir,
+          'tuning.json',
+          { entries: [] },
+        ),
+      ),
+  };
+}
+
 /** Disk: parse disks.json (lsblk shape) through the same parser the real probe uses. */
 export function createFixtureDiskProbe(dir: string): FixtureDiskProbe {
   return {

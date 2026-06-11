@@ -148,3 +148,21 @@ describe('NetworkConfig singleton emission', () => {
     expect(collector.pollIntervalMs).toBe(500);
   });
 });
+
+// ---- S7 T1: the Tuning singleton (same compare-and-skip family) ----
+
+describe('TuningCollector singleton', () => {
+  it('emits once, skips identical, re-emits on change; degraded probe errors', async () => {
+    const { TuningCollector } = await import('../../../agent/collectors/tuning.js');
+    let entries = [{ key: 'vm.swappiness', expected: '1', actual: '60' }];
+    const collector = new TuningCollector({
+      probe: { snapshot: async () => ({ entries }) },
+    });
+    const first = await collector.initialSweep();
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({ kind: 'Tuning', id: 'default', op: 'upsert' });
+    expect(await collector.initialSweep()).toEqual([]);
+    entries = [{ key: 'vm.swappiness', expected: '1', actual: '1' }];
+    expect(await collector.initialSweep()).toHaveLength(1);
+  });
+});
