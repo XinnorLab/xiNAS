@@ -91,6 +91,9 @@ function makeFakeHelper(listResult: HelperExportEntry[] = []): FakeHelper {
       fake.record('renderNfsProfile', [spec, restart]);
       return fake.renderResult;
     },
+    async renderNfsProfileDry(): Promise<Record<string, string>> {
+      return fake.renderResult.effective_files;
+    },
   };
   return fake;
 }

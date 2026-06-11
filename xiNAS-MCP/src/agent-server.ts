@@ -25,6 +25,7 @@ import { buildConvergence, runConvergence } from './agent/convergence.js';
 import { log } from './agent/log.js';
 import { createDispatcher } from './agent/rpc/dispatch.js';
 import { makeHealthHandler } from './agent/rpc/methods/health.js';
+import { makeHealthProbeDeps, makeHealthProbeHandler } from './agent/rpc/methods/health-probe.js';
 import { STUB_METHODS } from './agent/rpc/methods/stubs.js';
 import { makeTaskHandlers } from './agent/rpc/methods/task.js';
 import { makeVersionHandler } from './agent/rpc/methods/version.js';
@@ -98,9 +99,21 @@ async function main(): Promise<void> {
     newAcceptanceId: () => randomUUID(),
   });
 
+  // health.probe (S7 T4, ADR-0009): the enumerated read-style diagnostic
+  // behind the standard/deep health profiles. Fixture-aware deps.
+  const healthProbeHandler = makeHealthProbeHandler(
+    makeHealthProbeDeps({
+      getCollectorHealth,
+      ...(config.nfs_helper_socket !== undefined
+        ? { helperSocket: config.nfs_helper_socket }
+        : {}),
+    }),
+  );
+
   const dispatch = createDispatcher({
     'agent.health': healthHandler,
     'agent.version': versionHandler,
+    'health.probe': healthProbeHandler,
     ...STUB_METHODS,
     ...taskHandlers,
   });

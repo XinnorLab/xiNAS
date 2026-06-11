@@ -60,6 +60,8 @@ export interface NfsHelperClient {
     spec: Record<string, unknown>,
     restart: boolean,
   ): Promise<RenderNfsProfileResult>;
+  /** DRY render (S7 T1c, ADR-0009): checksums only — no writes, no service action. */
+  renderNfsProfileDry(spec: Record<string, unknown>): Promise<Record<string, string>>;
 }
 
 /** The nfs-helper response envelope (newline-delimited JSON, one per request). */
@@ -150,6 +152,17 @@ export function createNfsHelperClient(roundTrip: HelperRoundTrip): NfsHelperClie
         restarted: restart,
         reloaded: !restart,
       }) as RenderNfsProfileResult;
+    },
+
+    async renderNfsProfileDry(spec: Record<string, unknown>): Promise<Record<string, string>> {
+      const result = await call(roundTrip, {
+        op: 'render_nfs_profile',
+        spec,
+        restart: false,
+        dry_run: true,
+      });
+      return ((result as { effective_files?: Record<string, string> })?.effective_files ??
+        {}) as Record<string, string>;
     },
   };
 }
