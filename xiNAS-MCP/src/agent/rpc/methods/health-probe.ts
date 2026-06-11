@@ -177,6 +177,10 @@ export function makeHealthProbeDeps(wiring: HealthProbeWiring): HealthProbeDeps 
           return Promise.resolve(null);
         }
       },
+      runDeepProbes: makeDeepProbeRunner({
+        probeHost: createFakeProbeHost(fdir),
+        listMountedManaged: makeListMountedManaged(fdir),
+      }),
     };
   }
 
@@ -195,5 +199,83 @@ export function makeHealthProbeDeps(wiring: HealthProbeWiring): HealthProbeDeps 
         return null;
       }
     },
+    runDeepProbes: makeDeepProbeRunner({
+      probeHost: createRealProbeHost(),
+      listMountedManaged: makeListMountedManaged(null),
+    }),
+  };
+}
+
+// ---- Deep probe runner (T5) ----
+
+import { createFakeProbeHost } from '../../health/fake-probe-host.js';
+import { type ProbeHost, createRealProbeHost } from '../../health/probe-host.js';
+import { createFilesystemProbe } from '../../probe/filesystem.js';
+
+/**
+ * Run the deep probes: a touch test per mounted managed filesystem and
+ * one loopback mount of the first export (skipped when none exists).
+ */
+export function makeDeepProbeRunner(opts: {
+  probeHost: ProbeHost;
+  listMountedManaged(): Promise<string[]>;
+}): (firstExportPath: string | null) => Promise<DeepProbeResults> {
+  return async (firstExportPath) => {
+    let mountpoints: string[] = [];
+    try {
+      mountpoints = await opts.listMountedManaged();
+    } catch {
+      mountpoints = [];
+    }
+
+    const fsIo: DeepProbeResults['fs_io'] = [];
+    for (const mountpoint of mountpoints) {
+      const r = await opts.probeHost.touchProbe(mountpoint);
+      fsIo.push({ mountpoint, ok: r.ok, ...(r.error !== undefined ? { error: r.error } : {}) });
+    }
+
+    let loopback: DeepProbeResults['nfs_loopback'] = null;
+    if (firstExportPath !== null) {
+      const r = await opts.probeHost.loopbackMount(firstExportPath);
+      loopback = {
+        attempted: true,
+        export: firstExportPath,
+        ok: r.ok,
+        ...(r.error !== undefined ? { error: r.error } : {}),
+      };
+    }
+
+    return { fs_io: fsIo, nfs_loopback: loopback };
+  };
+}
+
+interface FixtureFsRow {
+  status?: { mounted?: boolean; mountpoint?: string };
+}
+
+/** Mounted managed mountpoints — fixture: filesystems.json; prod: the fs probe. */
+function makeListMountedManaged(fdir: string | null): () => Promise<string[]> {
+  if (fdir !== null) {
+    return () => {
+      try {
+        const rows = JSON.parse(
+          readFileSync(join(fdir, 'filesystems.json'), 'utf8'),
+        ) as FixtureFsRow[];
+        return Promise.resolve(
+          rows
+            .filter((r) => r.status?.mounted === true && typeof r.status?.mountpoint === 'string')
+            .map((r) => r.status?.mountpoint as string),
+        );
+      } catch {
+        return Promise.resolve([]);
+      }
+    };
+  }
+  const probe = createFilesystemProbe();
+  return async () => {
+    const rows = await probe.snapshot();
+    return rows
+      .filter((r) => r.status.mounted === true && typeof r.status.mountpoint === 'string')
+      .map((r) => r.status.mountpoint as string);
   };
 }
