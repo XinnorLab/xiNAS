@@ -62,6 +62,7 @@ import { XinasHistoryBridge } from './task/xinas-history-bridge.js';
 import { execFileRunSubprocess } from './task/wiring.js';
 import { UsersCollector } from './collectors/users.js';
 import { XiraidArrayCollector } from './collectors/xiraid.js';
+import { PoolCollector } from './collectors/pool.js';
 import type { AgentConfig } from './config.js';
 import { log } from './log.js';
 import { PollDriver } from './poll.js';
@@ -360,6 +361,9 @@ export function buildConvergence(config: AgentConfig): Convergence {
         : {}),
     }),
   );
+
+  // --- Pool (S9, ADR-0011): spare pools via the same xiRAID client. ---
+  registry.register(new PoolCollector({ source: { poolShow: () => xiraidClient.poolShow() } }));
 
   // --- Tuning (S7): sysctl expected-vs-actual singleton. ---
   const tuningProbe = fdir !== null ? createFixtureTuningProbe(fdir) : createTuningProbe();

@@ -11,7 +11,6 @@ const LIVE_SEAMS: ReadSeams = {
     '*** Report for user quotas on device /dev/xi_data\n' +
     'root      --       0       0       0              4     0     0\n' +
     'alice     --  102400  204800  256000             12     0     0\n',
-  grpcPoolShow: async () => ({ pools: [{ name: 'spare1' }] }),
   grpcMailShow: async () => ({ recipients: ['ops@example.com'] }),
   grpcSettingsMailShow: async () => ({ relay: 'smtp.local' }),
   grpcSettingsAuthShow: async () => ({ modes: ['sys', 'krb5'] }),
@@ -21,7 +20,6 @@ const DEAD_SEAMS: ReadSeams = {
   journalTail: async () => null,
   prometheusMetrics: async () => null,
   repquota: async () => null,
-  grpcPoolShow: async () => null,
   grpcMailShow: async () => null,
   grpcSettingsMailShow: async () => null,
   grpcSettingsAuthShow: async () => null,
@@ -57,7 +55,6 @@ describe('promoted read routes (S8 T5)', () => {
         { name: 'alice', block_used_kib: 102400, block_soft_kib: 204800, block_hard_kib: 256000 },
       ]);
 
-      expect((await get('/pools')).body.result.pools.pools).toHaveLength(1);
       expect((await get('/mail/recipients')).body.result.recipients.recipients).toContain(
         'ops@example.com',
       );
@@ -94,7 +91,6 @@ describe('promoted read routes (S8 T5)', () => {
       ['/system/logs', 'lines'],
       ['/system/performance', 'metrics'],
       ['/quotas', 'quotas'],
-      ['/pools', 'pools'],
       ['/mail/recipients', 'recipients'],
       ['/mail/settings', 'settings'],
       ['/auth/modes', 'modes'],
@@ -109,5 +105,40 @@ describe('promoted read routes (S8 T5)', () => {
 describe('parseRepquota', () => {
   it('ignores headers and non-quota lines', () => {
     expect(parseRepquota('garbage\n#comment\n')).toEqual([]);
+  });
+});
+
+describe('GET /pools from observed rows (S9 T7)', () => {
+  let setup: Awaited<ReturnType<typeof buildTestApp>>;
+  beforeEach(async () => {
+    setup = await buildTestApp();
+  });
+  afterEach(async () => {
+    await setup.cleanup();
+  });
+
+  it('serves pools with referenced_by joined from observed arrays', async () => {
+    setup.state.kv.put('/xinas/v1/observed/Pool/spare1', {
+      kind: 'Pool',
+      id: 'spare1',
+      status: { name: 'spare1', drives: ['/dev/nvme9n1'], active: true, observed_at: 'x' },
+    });
+    setup.state.kv.put('/xinas/v1/observed/XiraidArray/data1', {
+      kind: 'XiraidArray',
+      id: 'data1',
+      status: { state: 'optimal', volume_path: '/dev/xi_data1', spare_pool: 'spare1' },
+    });
+    const res = await request(setup.app).get('/api/v1/pools').set('Authorization', ADMIN_TOKEN);
+    expect(res.status).toBe(200);
+    expect(res.body.result).toEqual([
+      { name: 'spare1', drives: ['/dev/nvme9n1'], active: true, referenced_by: ['data1'] },
+    ]);
+  });
+
+  it('empty store → empty list (no gRPC, no warning)', async () => {
+    const res = await request(setup.app).get('/api/v1/pools').set('Authorization', ADMIN_TOKEN);
+    expect(res.status).toBe(200);
+    expect(res.body.result).toEqual([]);
+    expect(res.body.warnings).toEqual([]);
   });
 });

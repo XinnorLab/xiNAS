@@ -28,6 +28,8 @@ export interface ObservedXiraidArray {
   status: {
     state: 'optimal' | 'degraded' | 'rebuilding' | 'failed' | 'importing' | 'unknown';
     volume_path: string;
+    /** S9 (ADR-0011): the raw sparepool NAME — drives Pool.referenced_by. */
+    spare_pool?: string;
     rebuild_progress_pct: number | null;
     check_progress_pct: number | null;
     usable_capacity_bytes?: number;
@@ -103,6 +105,9 @@ export function parseRaidShow(
       status: {
         state: deriveState(states),
         volume_path: `/dev/xi_${o.name}`,
+        ...(typeof o.sparepool === 'string' && o.sparepool.length > 0
+          ? { spare_pool: o.sparepool }
+          : {}),
         rebuild_progress_pct: reconProgress,
         check_progress_pct: null,
         ...(numberOrNull(o.size) !== null ? { usable_capacity_bytes: o.size as number } : {}),

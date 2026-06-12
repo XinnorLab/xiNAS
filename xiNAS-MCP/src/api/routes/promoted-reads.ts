@@ -13,7 +13,7 @@
 import { Router } from 'express';
 import type { ApiContext } from '../context.js';
 import { type ReadSeams, createReadSeams } from '../handlers/read-seams.js';
-import { sendOk } from '../handlers/reads.js';
+import { listByPrefix, sendOk } from '../handlers/reads.js';
 
 const DEGRADED = (what: string, hint: string) => ({
   code: 'DEGRADED_BACKEND_UNAVAILABLE',
@@ -149,7 +149,37 @@ export function promotedReadsRouter(ctx: ApiContext): Router {
     undefined
   );
 
-  grpcRoute('/pools', 'pool list', () => seamsOf().grpcPoolShow(), 'pools');
+  // S9 T7 (ADR-0011): pools are first-class observed rows now — the
+  // deprecated in-api gRPC pool read is RETIRED. referenced_by joins
+  // the observed arrays' spare_pool names at read time.
+  r.get('/pools', (req, res) => {
+    const poolRows = listByPrefix<{ status?: Record<string, unknown> }>(
+      ctx.state,
+      '/xinas/v1/observed/Pool/',
+    );
+    const arrayRows = listByPrefix<{
+      id?: string;
+      status?: { spare_pool?: string };
+    }>(ctx.state, '/xinas/v1/observed/XiraidArray/');
+    const referencedBy = new Map<string, string[]>();
+    for (const row of arrayRows) {
+      const pool = row.value.status?.spare_pool;
+      if (typeof pool === 'string' && pool.length > 0) {
+        referencedBy.set(pool, [...(referencedBy.get(pool) ?? []), row.value.id ?? 'unknown']);
+      }
+    }
+    sendOk(
+      req,
+      res,
+      poolRows.map((row) => {
+        const { observed_at: _dropped, ...fields } = row.value.status ?? {};
+        const name = (fields.name as string) ?? '';
+        return { ...fields, referenced_by: referencedBy.get(name) ?? [] };
+      }),
+      poolRows.map((row) => row.revision),
+    );
+  });
+
   grpcRoute('/mail/recipients', 'mail recipients', () => seamsOf().grpcMailShow(), 'recipients');
   grpcRoute('/mail/settings', 'mail settings', () => seamsOf().grpcSettingsMailShow(), 'settings');
   grpcRoute('/auth/modes', 'auth modes', () => seamsOf().grpcSettingsAuthShow(), 'modes');

@@ -25,7 +25,6 @@ export interface ReadSeams {
   /** Raw `repquota -a` output; null = unavailable (often needs privilege). */
   repquota(): Promise<string | null>;
   /** xiRAID gRPC reads (parsed payloads); null = daemon unreachable. */
-  grpcPoolShow(): Promise<unknown | null>;
   grpcMailShow(): Promise<unknown | null>;
   grpcSettingsMailShow(): Promise<unknown | null>;
   grpcSettingsAuthShow(): Promise<unknown | null>;
@@ -93,13 +92,6 @@ export function createReadSeams(opts: { prometheusUrl?: string } = {}): ReadSeam
 
     repquota() {
       return execText('repquota', ['-a']);
-    },
-
-    grpcPoolShow() {
-      return grpcRead(async (client) => {
-        const { poolShow } = await import('../../grpc/pool.js');
-        return poolShow(client as never, {});
-      });
     },
 
     grpcMailShow() {
