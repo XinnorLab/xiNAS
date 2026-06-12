@@ -49,7 +49,7 @@ function isUnixSocketConnection(req: Request): boolean {
  *
  *   3. Otherwise 401 PERMISSION_DENIED.
  */
-export function authMiddleware(config: ApiConfig) {
+export function authMiddleware(config: ApiConfig, getLoopbackToken?: () => string | undefined) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const ctx = req.context;
     if (!ctx) {
@@ -59,6 +59,36 @@ export function authMiddleware(config: ApiConfig) {
 
     const authHeader = req.header('Authorization') ?? req.header('authorization');
     const hasBearer = authHeader != null && authHeader.toLowerCase().startsWith('bearer ');
+
+    // 0. Loopback identity forwarding (S8 T4, ADR-0010): ONLY under
+    //    the process-ephemeral loopback bearer do the X-Xinas-Forwarded
+    //    headers carry identity (the MCP dispatcher replaying a tool
+    //    call). From any other caller they are ignored (warn-logged) —
+    //    the request then authenticates normally.
+    const fwdPrincipal = req.header('x-xinas-forwarded-principal');
+    const fwdRole = req.header('x-xinas-forwarded-role');
+    const fwdClient = req.header('x-xinas-client-type');
+    const loopback = getLoopbackToken?.();
+    if (hasBearer && loopback !== undefined && authHeader.slice(7).trim() === loopback) {
+      if (
+        typeof fwdPrincipal === 'string' &&
+        fwdPrincipal.length > 0 &&
+        (fwdRole === 'viewer' || fwdRole === 'operator' || fwdRole === 'admin')
+      ) {
+        ctx.principal = fwdPrincipal;
+        ctx.role = fwdRole;
+        if (fwdClient === 'mcp') ctx.client_type = 'mcp';
+        next();
+        return;
+      }
+      next(new Error('loopback request missing forwarded identity headers'));
+      return;
+    }
+    if (fwdPrincipal !== undefined || fwdRole !== undefined) {
+      console.warn(
+        `auth: ignoring X-Xinas-Forwarded-* headers from non-loopback caller (principal hint: ${fwdPrincipal ?? '?'})`,
+      );
+    }
 
     // 1. Bearer token wins, even on UDS.
     if (hasBearer) {

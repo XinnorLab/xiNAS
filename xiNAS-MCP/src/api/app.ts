@@ -3,6 +3,7 @@ import type { ApiContext } from './context.js';
 import { ApiException } from './errors.js';
 import { executorUnavailable } from './handlers/unsupported.js';
 import { rbacMiddleware } from './middleware/rbac.js';
+import { randomBytes } from 'node:crypto';
 import type { HeartbeatTracker } from './heartbeat.js';
 import { internalRouter } from './internal/router.js';
 import { auditMiddleware } from './middleware/audit.js';
@@ -46,10 +47,13 @@ export function createApp(ctx: ApiContext): Express {
   //      finish hook fires regardless).
   //   4. auth runs last; failed auth still triggers the audit
   //      finish hook because audit registered before this.
+  // S8 T4: the loopback token is minted per process start (ADR-0010).
+  ctx.loopback_token ??= randomBytes(32).toString('hex');
+
   app.use(requestIdMiddleware());
   app.use(auditMiddleware(ctx.state));
   app.use(express.json({ limit: '1mb' }));
-  app.use(authMiddleware(ctx.config));
+  app.use(authMiddleware(ctx.config, () => ctx.loopback_token));
 
   // The agent's exclusive write surface. Mounted after authMiddleware so
   // req.context.role is resolved before requireInternalAgent (inside the

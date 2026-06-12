@@ -23,6 +23,13 @@ function parametersHash(req: Request): string {
  */
 export function auditMiddleware(state: OpenedStateStore) {
   return (req: Request, res: Response, next: NextFunction): void => {
+    // S8 T4 (ADR-0010 review P1): the /mcp transport frame is not an
+    // operation — the loopback /api/v1 request it triggers is THE
+    // audit record. Skipping here keeps exactly one row per tool call.
+    if (req.path === '/mcp' || req.path.startsWith('/mcp/')) {
+      next();
+      return;
+    }
     res.on('finish', () => {
       const ctx = req.context;
       if (!ctx) return;

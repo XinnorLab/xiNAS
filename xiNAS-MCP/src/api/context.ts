@@ -51,6 +51,13 @@ export interface ApiContext {
   /** Optional; the S2 plan/apply/task engines (T4+). Absent in read-only contexts. */
   tasks?: TaskEngines;
   /**
+   * Ephemeral in-process loopback bearer (S8 T4, ADR-0010): minted by
+   * createApp, never persisted; the ONLY bearer under which the auth
+   * middleware honors X-Xinas-Forwarded-* identity headers (the MCP
+   * dispatcher's path back into the api).
+   */
+  loopback_token?: string;
+  /**
    * Optional per-kind Ajv validators for inbound observation deltas
    * (wired in a later task — H6/J3). When present, the /internal/v1/observed
    * handler fail-closes: every upsert delta is validated against its kind's
