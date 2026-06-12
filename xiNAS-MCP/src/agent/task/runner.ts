@@ -143,10 +143,17 @@ export class TaskRunner {
         snapshot_id: before.snapshot_id,
       });
 
-      // 3. Run each stage in order; stop at the first failure.
+      // 3. Run each stage in order; stop at the first failure — or at a
+      //    requested cancel. Safe points are BEFORE each executor stage
+      //    (S10, ADR-0012 §2); deliberately no checkpoint after the loop, so
+      //    a cancel landing after the last stage is ignored (→ success).
       for (let i = 0; i < executor.stages.length; i++) {
         const stage = executor.stages[i];
         if (!stage) continue;
+        if (inflight.cancelRequested) {
+          await this.#runRollback(executor, ctx, emit, drainOutput, nextStageIndex(), 'cancelled');
+          return;
+        }
         const stageIndex = nextStageIndex();
         await emit('stage_started', {
           stage_index: stageIndex,
@@ -156,7 +163,11 @@ export class TaskRunner {
         try {
           await stage.run(ctx);
         } catch (err) {
-          // Stage failed → report, run executor rollback, terminate.
+          // Stage failed → report, run executor rollback, terminate. A throw
+          // while cancel is requested is ATTRIBUTED to the cancel (ADR-0012
+          // §3): same rollback, but the terminal is `cancelled`, not `failed`
+          // — this is what makes the executors' own isCancelRequested()
+          // throws (fs/xiraid checkCancelled) report the right state.
           await emit('stage_failed', {
             stage_index: stageIndex,
             stage_name: stage.name,
@@ -164,7 +175,14 @@ export class TaskRunner {
             error_message: err instanceof Error ? err.message : String(err),
             ...drainOutput(),
           });
-          await this.#runRollback(executor, ctx, emit, drainOutput, nextStageIndex());
+          await this.#runRollback(
+            executor,
+            ctx,
+            emit,
+            drainOutput,
+            nextStageIndex(),
+            inflight.cancelRequested ? 'cancelled' : 'failed',
+          );
           return;
         }
         await emit('stage_succeeded', {
@@ -190,9 +208,11 @@ export class TaskRunner {
   }
 
   /**
-   * Run the executor's rollback after a stage failure and emit the rollback +
-   * terminal events. Rollback success → `terminal(failed,
-   * FAILED_PARTIAL_ROLLED_BACK)`; rollback throwing →
+   * Run the executor's rollback after a stage failure OR an honored cancel
+   * and emit the rollback + terminal events. Rollback success →
+   * `terminal(terminalStatus)` — `failed` carries
+   * `FAILED_PARTIAL_ROLLED_BACK`; `cancelled` carries NO error_code (S10,
+   * ADR-0012 §7). Rollback throwing →
    * `terminal(requires_manual_recovery, FAILED_MANUAL_RECOVERY_REQUIRED)`.
    */
   async #runRollback(
@@ -201,6 +221,7 @@ export class TaskRunner {
     emit: (event_type: TaskProgressEventType, extra?: Partial<TaskProgressEvent>) => Promise<void>,
     drainOutput: () => { output_inline?: string; output_size_bytes?: number },
     rollbackIndex: number,
+    terminalStatus: 'failed' | 'cancelled' = 'failed',
   ): Promise<void> {
     await emit('rollback_started', {
       stage_index: rollbackIndex,
@@ -229,6 +250,9 @@ export class TaskRunner {
       status: 'succeeded',
       ...drainOutput(),
     });
-    await emit('terminal', { status: 'failed', error_code: 'FAILED_PARTIAL_ROLLED_BACK' });
+    await emit('terminal', {
+      status: terminalStatus,
+      ...(terminalStatus === 'failed' ? { error_code: 'FAILED_PARTIAL_ROLLED_BACK' } : {}),
+    });
   }
 }

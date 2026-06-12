@@ -224,3 +224,166 @@ describe('TaskRunner.run — ctx.stash threads a stage into rollback', () => {
     expect(rollbackSawPrior).toBe('captured-at-stage');
   });
 });
+
+// ── S10 T2 (ADR-0012 §2/§3): cancel at boundaries + stage-throw attribution ──
+
+/** A 2-stage executor whose stages call back so tests can flip the flag. */
+function makeTwoStage(opts: {
+  stage1?: (ctx: ExecutorContext) => void | Promise<void>;
+  stage2?: (ctx: ExecutorContext) => void | Promise<void>;
+  rollbackThrows?: boolean;
+}): { executor: Executor; rollbackRan: () => boolean } {
+  let rolledBack = false;
+  const executor: Executor = {
+    operation_kind: 'reference.echo',
+    stages: [
+      {
+        name: 's1',
+        run: async (ctx) => {
+          await opts.stage1?.(ctx);
+        },
+      },
+      {
+        name: 's2',
+        run: async (ctx) => {
+          await opts.stage2?.(ctx);
+        },
+      },
+    ],
+    async rollback(): Promise<void> {
+      rolledBack = true;
+      if (opts.rollbackThrows) throw new Error('rollback exploded');
+    },
+  };
+  return { executor, rollbackRan: () => rolledBack };
+}
+
+describe('TaskRunner.run — cancel (S10)', () => {
+  async function run(executor: Executor, runnerRef: { runner?: TaskRunner } = {}) {
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+    });
+    const runner = makeRunner(makeBridge(['snap-before', 'snap-after']));
+    runnerRef.runner = runner;
+    await runner.run({ task_id: 'tc', operation_kind: 'reference.echo', spec: {} }, executor, publish);
+    return events;
+  }
+
+  it('cancel during stage 1 → boundary stop before stage 2, rollback, terminal(cancelled)', async () => {
+    const ref: { runner?: TaskRunner } = {};
+    const { executor, rollbackRan } = makeTwoStage({
+      stage1: () => ref.runner?.requestCancel('tc'),
+    });
+    const events = await run(executor, ref);
+    expect(shape(events)).toEqual([
+      ['accepted', undefined],
+      ['stage_succeeded', 'snapshot_before'],
+      ['stage_started', 's1'],
+      ['stage_succeeded', 's1'],
+      ['rollback_started', 'rollback'],
+      ['rollback_succeeded', 'rollback'],
+      ['terminal', undefined],
+    ]);
+    const terminal = events.at(-1);
+    expect(terminal?.status).toBe('cancelled');
+    expect(terminal?.error_code).toBeUndefined();
+    expect(rollbackRan()).toBe(true);
+  });
+
+  it('cancel before stage 0 (flag set pre-run) → no stages run, rollback, cancelled', async () => {
+    // Set the flag from stage 1 of a PRIOR... simpler: a stage1 callback is
+    // never reached because the flag is set via requestCancel between accept
+    // and the loop — emulate by flipping inside snapshotCreate via the bridge?
+    // The runner registers inflight at run() start, so requestCancel works
+    // immediately; fire it on the microtask queue before stage 0 starts.
+    const ref: { runner?: TaskRunner } = {};
+    let stage1Ran = false;
+    const { executor, rollbackRan } = makeTwoStage({
+      stage1: () => {
+        stage1Ran = true;
+      },
+    });
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+      // Cancel lands while snapshot_before is being reported — before stage 0.
+      if (e.stage_name === 'snapshot_before') ref.runner?.requestCancel('tc');
+    });
+    const runner = makeRunner(makeBridge(['snap-before']));
+    ref.runner = runner;
+    await runner.run({ task_id: 'tc', operation_kind: 'reference.echo', spec: {} }, executor, publish);
+    expect(stage1Ran).toBe(false);
+    expect(shape(events)).toEqual([
+      ['accepted', undefined],
+      ['stage_succeeded', 'snapshot_before'],
+      ['rollback_started', 'rollback'],
+      ['rollback_succeeded', 'rollback'],
+      ['terminal', undefined],
+    ]);
+    expect(events.at(-1)?.status).toBe('cancelled');
+    expect(rollbackRan()).toBe(true);
+  });
+
+  it('stage throws while flag set → stage_failed + rollback + terminal(cancelled)', async () => {
+    const ref: { runner?: TaskRunner } = {};
+    const { executor } = makeTwoStage({
+      stage1: () => {
+        ref.runner?.requestCancel('tc');
+        throw new Error('cancelled mid-stage');
+      },
+    });
+    const events = await run(executor, ref);
+    expect(shape(events)).toEqual([
+      ['accepted', undefined],
+      ['stage_succeeded', 'snapshot_before'],
+      ['stage_started', 's1'],
+      ['stage_failed', 's1'],
+      ['rollback_started', 'rollback'],
+      ['rollback_succeeded', 'rollback'],
+      ['terminal', undefined],
+    ]);
+    const failed = events.find((e) => e.event_type === 'stage_failed');
+    expect(failed?.error_message).toBe('cancelled mid-stage');
+    const terminal = events.at(-1);
+    expect(terminal?.status).toBe('cancelled');
+    expect(terminal?.error_code).toBeUndefined();
+  });
+
+  it('stage throws while flag set + rollback throws → requires_manual_recovery', async () => {
+    const ref: { runner?: TaskRunner } = {};
+    const { executor } = makeTwoStage({
+      stage1: () => {
+        ref.runner?.requestCancel('tc');
+        throw new Error('boom');
+      },
+      rollbackThrows: true,
+    });
+    const events = await run(executor, ref);
+    const terminal = events.at(-1);
+    expect(terminal?.status).toBe('requires_manual_recovery');
+    expect(terminal?.error_code).toBe('FAILED_MANUAL_RECOVERY_REQUIRED');
+  });
+
+  it('cancel after the LAST stage completed is ignored → success', async () => {
+    const ref: { runner?: TaskRunner } = {};
+    const { executor, rollbackRan } = makeTwoStage({
+      stage2: () => ref.runner?.requestCancel('tc'),
+    });
+    const events = await run(executor, ref);
+    expect(events.at(-1)?.status).toBe('success');
+    expect(rollbackRan()).toBe(false);
+  });
+
+  it('plain stage failure with NO flag stays terminal(failed)/FAILED_PARTIAL_ROLLED_BACK', async () => {
+    const { executor } = makeTwoStage({
+      stage1: () => {
+        throw new Error('real failure');
+      },
+    });
+    const events = await run(executor);
+    const terminal = events.at(-1);
+    expect(terminal?.status).toBe('failed');
+    expect(terminal?.error_code).toBe('FAILED_PARTIAL_ROLLED_BACK');
+  });
+});

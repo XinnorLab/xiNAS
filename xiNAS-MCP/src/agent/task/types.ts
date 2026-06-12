@@ -96,7 +96,7 @@ export interface TaskBegin {
 }
 
 /** Terminal task states the runner reports (subset of the ADR-0004 lifecycle). */
-export type TaskTerminalState = 'success' | 'failed' | 'requires_manual_recovery';
+export type TaskTerminalState = 'success' | 'failed' | 'cancelled' | 'requires_manual_recovery';
 
 /**
  * Task-internal failure codes (ADR-0004 / s2-task-envelope-spec §4). Persisted
