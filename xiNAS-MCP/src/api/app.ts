@@ -137,7 +137,6 @@ export function createApp(ctx: ApiContext): Express {
     '/shares/:id',
     '/nfs-profiles/:id',
     '/network/interfaces/:id',
-    '/config-history/rollback',
   ];
   for (const route of mutatingRoutes) {
     // POST /arrays is the real S3 create/import route mounted above.

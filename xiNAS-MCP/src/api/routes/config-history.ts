@@ -5,6 +5,7 @@ import type { Request, Response } from 'express';
 import type { ApiContext } from '../context.js';
 import { driftNetplanCheck, driftNfsExportsCheck } from '../../lib/health/drift.js';
 import { getOrNull, listByPrefix } from '../handlers/reads.js';
+import { applyMode, planMode, requireTasks } from './apply-helpers.js';
 import { gatherHealthFacts } from '../handlers/health-facts.js';
 import { sendOk } from '../handlers/reads.js';
 
@@ -101,6 +102,27 @@ export function configHistoryRouter(ctx: ApiContext): Router {
       next(err);
     }
   });
+  // S9 T5 (ADR-0011): baseline-only rollback as a destructive
+  // plan/apply operation (replaces the executorUnavailable stub).
+  r.post('/config-history/rollback', async (req, res, next) => {
+    try {
+      const tasks = requireTasks(ctx);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (body.mode === 'plan') {
+        const spec = typeof body.spec === 'object' && body.spec !== null ? body.spec : {};
+        await planMode(req, res, tasks, 'config.rollback', spec);
+        return;
+      }
+      if (body.mode === 'apply') {
+        await applyMode(req, res, tasks, body, { operationKind: 'config.rollback' });
+        return;
+      }
+      throw new ApiException('INVALID_ARGUMENT', "mode must be 'plan' or 'apply'");
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // S7 T6 (ADR-0009 §drift API surface): the SAME drift engine health
   // uses. The two KV-anchored comparisons run here; drift.nfs-conf needs
   // the agent's dry-render oracle, so it is reported not_evaluated with

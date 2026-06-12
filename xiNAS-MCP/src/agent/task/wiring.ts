@@ -21,6 +21,7 @@ import { createFakeNetHost } from '../net/fake-host.js';
 import { createRealBundleHost } from '../support/bundle-host.js';
 import { createFakeBundleHost } from '../support/fake-bundle-host.js';
 import { makeSupportBundleExecutor } from './support-executor.js';
+import { makeConfigRollbackExecutor } from './config-rollback-executor.js';
 import { type NetHost, createRealNetHost } from '../net/host.js';
 import { type FsHost, createRealFsHost } from '../fs/host.js';
 import { fixtureDir } from '../probe/fixture.js';
@@ -226,6 +227,8 @@ export function buildTaskSubsystem(
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
   });
+  // S9 T5: the baseline-reset executor shares the runner's bridge.
+  registry.register(makeConfigRollbackExecutor({ bridge }));
   const runner = new TaskRunner({ bridge });
   const publish = createProgressPublisher({
     apiSocketPath: config.api_socket,

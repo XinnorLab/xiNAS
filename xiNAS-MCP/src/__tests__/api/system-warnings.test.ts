@@ -84,13 +84,12 @@ describe('systemWarningsMiddleware + mergeWarnings', () => {
   });
 
   it('mutating endpoint: degraded tracker DOES inject EXECUTOR_DEGRADED warning', async () => {
-    // The mutating stub (POST /api/v1/config-history/rollback — /arrays,
-    // /filesystems, and /shares all have real routes now) returns
-    // UNSUPPORTED (422) because the tracker is online (degraded, not
-    // offline) but the method isn't built yet. The envelope should carry
-    // EXECUTOR_DEGRADED in warnings.
+    // PUT /shares stays on the executorUnavailable stub (rollback went
+    // real in S9 T5) — it returns UNSUPPORTED (422) because the tracker
+    // is online (degraded, not offline) but the method isn't built. The
+    // envelope should carry EXECUTOR_DEGRADED in warnings.
     const res = await request(setup.app)
-      .post('/api/v1/config-history/rollback')
+      .put('/api/v1/shares')
       .set('Authorization', 'Bearer tok-admin')
       .send({});
 
