@@ -4,6 +4,7 @@ import { ApiException } from './errors.js';
 import { executorUnavailable } from './handlers/unsupported.js';
 import { rbacMiddleware } from './middleware/rbac.js';
 import { promotedReadsRouter } from './routes/promoted-reads.js';
+import { mountMcpTransport } from './mcp/transport.js';
 import { randomBytes } from 'node:crypto';
 import type { HeartbeatTracker } from './heartbeat.js';
 import { internalRouter } from './internal/router.js';
@@ -48,6 +49,13 @@ export function createApp(ctx: ApiContext): Express {
   //      finish hook fires regardless).
   //   4. auth runs last; failed auth still triggers the audit
   //      finish hook because audit registered before this.
+  // S8 T7: the MCP transport endpoint (ADR-0010) — mounted BEFORE the
+  // json body-parser limit applies to /api/v1 (express.json below also
+  // parses /mcp bodies, which the transport consumes pre-parsed).
+  // Audit skips /mcp (T4); auth does not run for /mcp (the transport
+  // resolves identity itself and replays through the loopback).
+  mountMcpTransport(app, ctx);
+
   // S8 T4: the loopback token is minted per process start (ADR-0010).
   ctx.loopback_token ??= randomBytes(32).toString('hex');
 

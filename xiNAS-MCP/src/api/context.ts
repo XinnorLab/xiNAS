@@ -60,6 +60,12 @@ export interface ApiContext {
   /** Injectable read seams for the promoted legacy read routes (S8 T5). */
   read_seams?: import('./handlers/read-seams.js').ReadSeams;
   /**
+   * Loopback request fn (S8 T7): set by server.ts AFTER the primary
+   * listener binds (it targets the api's own address); /mcp answers
+   * 503 until present.
+   */
+  loopback_fn?: import('./mcp/dispatch.js').LoopbackFn;
+  /**
    * Optional per-kind Ajv validators for inbound observation deltas
    * (wired in a later task — H6/J3). When present, the /internal/v1/observed
    * handler fail-closes: every upsert delta is validated against its kind's

@@ -53,6 +53,13 @@ export interface ApiConfig {
   agent?: { socket: string; heartbeat_interval_ms?: number };
   /** Support-bundle directory (S7); default /var/log/xinas/bundles. */
   support_bundle_dir?: string;
+  /** MCP transport (S8, ADR-0010). allow_apply default FALSE — the
+   *  WS12 exit criterion is the default posture. `http` adds a
+   *  dedicated TCP listener serving the same app. */
+  mcp?: {
+    allow_apply?: boolean;
+    http?: { host: string; port: number };
+  };
   /**
    * S2.1 worker pool (s2-task-envelope-spec §5.3). `max_inflight` caps the
    * tasks concurrently in flight end-to-end (dispatch → terminal); the
