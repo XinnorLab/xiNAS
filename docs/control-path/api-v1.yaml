@@ -2140,6 +2140,13 @@ paths:
   # =========================================================================
   # Health
   # =========================================================================
+  # MCP transport gate (ADR-0010): tool calls arriving via the MCP
+  # transport replay through these same routes with client_type=mcp.
+  # Reads and mode=plan always pass; mode=apply requires
+  # mcp.allow_apply=true in the api config (default false — the WS12
+  # exit criterion). Exemptions with rationale: POST /support-bundle
+  # (read-style diagnostic) and POST /tasks/{id}/cancel (emergency
+  # stop cannot apply new state). REST callers are never gated here.
   /health:
     get:
       tags: [health]

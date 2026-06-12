@@ -87,7 +87,7 @@ export interface RequestContext {
   correlation_id: string;
   principal: string;
   role: Role;
-  client_type: 'rest';
+  client_type: 'rest' | 'mcp';
   /** Set by handlers when they want the audit row to carry an operation_id (e.g. for tasks). */
   operation_id?: string;
   /** Populated by systemWarningsMiddleware from HeartbeatTracker. */
