@@ -2140,6 +2140,124 @@ paths:
   # =========================================================================
   # Health
   # =========================================================================
+  # ── S8 T5 (ADR-0010 §read-route promotion): the read-only tools the
+  # legacy MCP served from in-process adapters, as real API routes.
+  # Each degrades to an empty result + a DEGRADED_BACKEND_UNAVAILABLE
+  # warning instead of failing.
+  /disks/{id}:
+    get:
+      tags: [storage]
+      operationId: getDisk
+      summary: Get one disk (status.health covers the legacy SMART read where reported).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /system/logs:
+    get:
+      tags: [system]
+      operationId: getSystemLogs
+      summary: Tail the systemd journal (secret-scrubbed).
+      description: Degrades with a warning when the journal is unreadable (service user not in systemd-journal).
+      parameters:
+        - { name: unit, in: query, required: false, schema: { type: string } }
+        - { name: lines, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 2000, default: 200 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /system/performance:
+    get:
+      tags: [system]
+      operationId: getSystemPerformance
+      summary: Prometheus exporter metrics (raw text payload).
+      description: Degrades with a warning when the exporter is unreachable.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /quotas:
+    get:
+      tags: [system]
+      operationId: listQuotas
+      summary: User block quotas (repquota).
+      description: Degrades with a warning when repquota is unavailable.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /pools:
+    get:
+      tags: [storage]
+      operationId: listPools
+      summary: xiRAID spare pools (deprecated read-only gRPC path, ADR-0010).
+      description: Degrades with a warning when the xiRAID daemon is unreachable. Removed when pools observe via the agent.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /mail/recipients:
+    get:
+      tags: [system]
+      operationId: listMailRecipients
+      summary: xiRAID mail recipients (deprecated read-only gRPC path).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /mail/settings:
+    get:
+      tags: [system]
+      operationId: getMailSettings
+      summary: xiRAID mail settings (deprecated read-only gRPC path).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /auth/modes:
+    get:
+      tags: [system]
+      operationId: getAuthModes
+      summary: Supported NFS auth modes (deprecated read-only gRPC path).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   # MCP transport gate (ADR-0010): tool calls arriving via the MCP
   # transport replay through these same routes with client_type=mcp.
   # Reads and mode=plan always pass; mode=apply requires

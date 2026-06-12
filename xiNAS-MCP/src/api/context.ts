@@ -57,6 +57,8 @@ export interface ApiContext {
    * dispatcher's path back into the api).
    */
   loopback_token?: string;
+  /** Injectable read seams for the promoted legacy read routes (S8 T5). */
+  read_seams?: import('./handlers/read-seams.js').ReadSeams;
   /**
    * Optional per-kind Ajv validators for inbound observation deltas
    * (wired in a later task — H6/J3). When present, the /internal/v1/observed

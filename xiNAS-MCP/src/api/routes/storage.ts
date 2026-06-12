@@ -51,6 +51,20 @@ export function storageRouter(ctx: ApiContext): Router {
     );
   });
 
+  // S8 T5 (ADR-0010): single-disk read — covers the legacy
+  // disk.get_smart (status.health is the S7 field; absent on hosts
+  // whose probe does not report it).
+  r.get('/disks/:id', (req, res) => {
+    const row = getOrNull<Record<string, unknown>>(
+      ctx.state,
+      `/xinas/v1/observed/Disk/${req.params.id}`,
+    );
+    if (row === null) {
+      throw new ApiException('NOT_FOUND', `no such disk: ${req.params.id}`);
+    }
+    sendOk(req, res, row.value, [row.revision]);
+  });
+
   r.get('/arrays', (req, res) => {
     const rows = listByPrefix<Record<string, unknown>>(
       ctx.state,

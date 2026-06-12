@@ -118,6 +118,7 @@ export const CATALOG: CatalogEntry[] = [
 
   // ── disks ──
   read('disks.list', 'GET', '/disks', 'List disks (observed state incl. health where reported).'),
+  read('disks.get', 'GET', '/disks/{id}', 'Get one disk (status.health covers the legacy SMART read where the probe reports it).'),
 
   // ── filesystems ──
   read('filesystems.list', 'GET', '/filesystems', 'List managed filesystems.'),
@@ -210,6 +211,25 @@ export const CATALOG: CatalogEntry[] = [
   read('system.controllers', 'GET', '/controllers', 'List controllers.'),
   read('system.inventory', 'GET', '/inventory', 'Hardware/OS inventory.'),
   read('audit.query', 'GET', '/audit', 'Query audit records. DEGRADED: returns an empty stub with a warning until the audit query backend lands.', { status: 'degraded' }),
+
+  // ── promoted legacy reads (S8 T5; ADR-0010 §read-route promotion) ──
+  {
+    ...read('system.logs', 'GET', '/system/logs', 'Tail the systemd journal (scrubbed). Degrades with a warning when the journal group is missing.'),
+    input_schema: {
+      type: 'object',
+      properties: {
+        unit: { type: 'string', description: 'systemd unit filter' },
+        lines: { type: 'integer', minimum: 1, maximum: 2000, default: 200 },
+      },
+      additionalProperties: false,
+    },
+  },
+  read('system.performance', 'GET', '/system/performance', 'Prometheus exporter metrics (raw text). Degrades when the exporter is unreachable.'),
+  read('quotas.list', 'GET', '/quotas', 'User block quotas (repquota). Degrades when unavailable.'),
+  read('pools.list', 'GET', '/pools', 'xiRAID spare pools (deprecated read-only gRPC path, ADR-0010).'),
+  read('mail.recipients', 'GET', '/mail/recipients', 'xiRAID mail recipients (deprecated read-only gRPC path).'),
+  read('mail.settings', 'GET', '/mail/settings', 'xiRAID mail settings (deprecated read-only gRPC path).'),
+  read('auth.modes', 'GET', '/auth/modes', 'Supported NFS auth modes (deprecated read-only gRPC path).'),
 
   // ── users / groups ──
   read('users.list', 'GET', '/users', 'List system users (NSS).'),
