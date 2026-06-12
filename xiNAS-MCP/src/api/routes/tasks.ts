@@ -2,7 +2,7 @@ import { type Request, type Response, Router } from 'express';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import { getOrNull, listByPrefix, sendOk, unwrapValues } from '../handlers/reads.js';
-import { executorUnavailable } from '../handlers/unsupported.js';
+import { requireTasks } from './apply-helpers.js';
 import type { TaskListFilter } from '../tasks/store.js';
 import type { Task, TaskState } from '../tasks/types.js';
 import { formatFrame } from '../tasks/watch.js';
@@ -158,7 +158,24 @@ export function tasksRouter(ctx: ApiContext): Router {
     sendOk(req, res, row.value, [row.revision]);
   });
 
-  r.post('/tasks/:id/cancel', executorUnavailable(ctx));
+  // S10 (ADR-0012, s2 spec §16.1): real cancel. The engine owns the state
+  // branching; this route maps args + stamps the audit operation_id so
+  // /audit?task_id= finds the cancel row.
+  r.post('/tasks/:id/cancel', async (req, res, next) => {
+    try {
+      const tasks = requireTasks(ctx);
+      const task = await tasks.taskEngine.cancel({
+        taskId: req.params.id as string,
+        agentClient: ctx.tasks?.agentClient,
+        trackerOffline: ctx.tracker ? ctx.tracker.currentState() === 'offline' : true,
+      });
+      const rc = req.context;
+      if (rc) rc.operation_id = task.task_id;
+      sendOk(req, res, renderTask(task), [task.last_event_sequence]);
+    } catch (err) {
+      next(err);
+    }
+  });
 
   r.get('/tasks/:id/watch', (req, res) => watchTask(ctx, req, res, req.params.id));
 

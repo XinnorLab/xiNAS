@@ -11,6 +11,7 @@ import type { ApiConfig } from '../../api/config.js';
 import type { ApiContext } from '../../api/context.js';
 import { HeartbeatTracker, createAgentHealthProbe } from '../../api/heartbeat.js';
 import { buildTaskEngines } from '../../api/tasks/build.js';
+import type { TaskEngines } from '../../api/context.js';
 import { type OpenedStateStore, openStateStore } from '../../state/index.js';
 
 export interface TestSetup {
@@ -222,6 +223,8 @@ export interface MockAgentSetup {
   controllerId: string;
   heartbeatIntervalMs: number;
   mockAgent: MockAgentHandle;
+  /** The wired S2 engines — exposed so tests can seed/inspect tasks directly (S10). */
+  tasks: TaskEngines;
   teardown(): Promise<void>;
 }
 
@@ -247,6 +250,8 @@ export async function buildTestAppWithMockAgent(
     listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
     tokens: {
       'tok-admin': { principal: 'admin:test', role: 'admin' },
+      'tok-operator': { principal: 'operator:test', role: 'operator' },
+      'tok-viewer': { principal: 'viewer:test', role: 'viewer' },
       [MOCK_AGENT_TOKEN]: { principal: 'agent:root', role: 'internal_agent' },
     },
     state: {
@@ -408,6 +413,7 @@ export async function buildTestAppWithMockAgent(
     config,
     controllerId: MOCK_CONTROLLER_ID,
     heartbeatIntervalMs: MOCK_HEARTBEAT_INTERVAL_MS,
+    tasks,
     mockAgent,
     async teardown() {
       tracker.stop();
