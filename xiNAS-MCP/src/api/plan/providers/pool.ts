@@ -92,7 +92,10 @@ function referencedBy(ctx: PlanContext, name: string): string[] {
   return out;
 }
 
-const base = (name: string, revision: number): Pick<
+const base = (
+  name: string,
+  revision: number,
+): Pick<
   PlanResult,
   'affected_resources' | 'observed_freshness_ref' | 'lease_resources' | 'warnings'
 > => ({

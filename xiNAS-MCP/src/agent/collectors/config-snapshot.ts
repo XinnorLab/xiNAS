@@ -2,15 +2,17 @@
  * ConfigSnapshot collector (S9 T2, ADR-0011): polls the xinas_history
  * bridge (`snapshot list`) and pushes one observed `ConfigSnapshot`
  * row per manifest, PROJECTED onto the public shape (typed top-level
- * fields — the route serves rows as-is). Vanished snapshot ids (GC)
- * emit deletes. Compare-and-skip per row keeps unchanged sweeps off
- * the wire (the api-side dedupe would drop them anyway).
+ * fields — the route serves rows as-is).
+ *
+ * Re-emits EVERY row on EVERY sweep: PollDriver flushes with
+ * complete-snapshot semantics, so a suppressed unchanged row would be
+ * reconcile-DELETED api-side (vanished snapshot ids — GC — are handled
+ * by that same reconcile; no delete tracking needed here). Unchanged
+ * content does not churn revisions — the api-side dedupe strips
+ * observed_at before comparing.
  */
 
-import {
-  type HistoryManifest,
-  projectSnapshot,
-} from '../task/xinas-history-bridge.js';
+import { type HistoryManifest, projectSnapshot } from '../task/xinas-history-bridge.js';
 import type { Collector, ObservationDelta } from './base.js';
 
 interface SnapshotSource {
@@ -19,15 +21,14 @@ interface SnapshotSource {
 
 export class ConfigSnapshotCollector implements Collector<'ConfigSnapshot'> {
   readonly kind = 'ConfigSnapshot' as const;
-  readonly pollIntervalMs = 60_000;
+  readonly pollIntervalMs: number;
 
   readonly #source: SnapshotSource;
   #health: { state: 'running' | 'stubbed' | 'error'; reason?: string } = { state: 'running' };
-  /** id → serialized projected row from the previous sweep. */
-  #last = new Map<string, string>();
 
-  constructor({ source }: { source: SnapshotSource }) {
+  constructor({ source, pollIntervalMs }: { source: SnapshotSource; pollIntervalMs?: number }) {
     this.#source = source;
+    this.pollIntervalMs = pollIntervalMs ?? 60_000;
   }
 
   async initialSweep(): Promise<ObservationDelta[]> {
@@ -40,17 +41,10 @@ export class ConfigSnapshotCollector implements Collector<'ConfigSnapshot'> {
       throw err;
     }
 
-    const deltas: ObservationDelta[] = [];
-    const seen = new Set<string>();
     const observedAt = new Date().toISOString();
-
-    for (const manifest of manifests) {
+    return manifests.map((manifest) => {
       const projected = projectSnapshot(manifest);
-      seen.add(projected.snapshot_id);
-      const key = JSON.stringify(projected);
-      if (this.#last.get(projected.snapshot_id) === key) continue;
-      this.#last.set(projected.snapshot_id, key);
-      deltas.push({
+      return {
         kind: 'ConfigSnapshot',
         id: projected.snapshot_id,
         op: 'upsert',
@@ -59,16 +53,8 @@ export class ConfigSnapshotCollector implements Collector<'ConfigSnapshot'> {
           id: projected.snapshot_id,
           status: { ...projected, observed_at: observedAt },
         },
-      });
-    }
-
-    for (const id of this.#last.keys()) {
-      if (!seen.has(id)) {
-        this.#last.delete(id);
-        deltas.push({ kind: 'ConfigSnapshot', id, op: 'delete' });
-      }
-    }
-    return deltas;
+      };
+    });
   }
 
   async start(): Promise<void> {

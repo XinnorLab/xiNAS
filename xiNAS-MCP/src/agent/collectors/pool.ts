@@ -1,8 +1,15 @@
 /**
  * Pool collector (S9 T7, ADR-0011): observes xiRAID spare pools via
- * the shared gRPC client's poolShow. One row per pool (id = name),
- * compare-and-skip, deletes for vanished pools. `referenced_by` is
- * joined api-side at read time (the arrays' spare_pool names).
+ * the shared gRPC client's poolShow. One row per pool (id = name).
+ * `referenced_by` is joined api-side at read time (the arrays'
+ * spare_pool names).
+ *
+ * Re-emits EVERY row on EVERY sweep: PollDriver flushes with
+ * complete-snapshot semantics, so a suppressed unchanged row would be
+ * reconcile-DELETED api-side (vanished pools are handled by that same
+ * reconcile; no delete tracking needed here). Unchanged content does
+ * not churn revisions — the api-side dedupe strips observed_at before
+ * comparing.
  */
 
 import { type ObservedPool, parsePoolShow } from '../../lib/parse/pool.js';
@@ -14,14 +21,14 @@ interface PoolSource {
 
 export class PoolCollector implements Collector<'Pool'> {
   readonly kind = 'Pool' as const;
-  readonly pollIntervalMs = 30_000;
+  readonly pollIntervalMs: number;
 
   readonly #source: PoolSource;
   #health: { state: 'running' | 'stubbed' | 'error'; reason?: string } = { state: 'running' };
-  #last = new Map<string, string>();
 
-  constructor({ source }: { source: PoolSource }) {
+  constructor({ source, pollIntervalMs }: { source: PoolSource; pollIntervalMs?: number }) {
     this.#source = source;
+    this.pollIntervalMs = pollIntervalMs ?? 30_000;
   }
 
   async initialSweep(): Promise<ObservationDelta[]> {
@@ -34,28 +41,13 @@ export class PoolCollector implements Collector<'Pool'> {
       throw err;
     }
 
-    const deltas: ObservationDelta[] = [];
-    const seen = new Set<string>();
     const observedAt = new Date().toISOString();
-    for (const pool of pools) {
-      seen.add(pool.name);
-      const key = JSON.stringify(pool);
-      if (this.#last.get(pool.name) === key) continue;
-      this.#last.set(pool.name, key);
-      deltas.push({
-        kind: 'Pool',
-        id: pool.name,
-        op: 'upsert',
-        value: { kind: 'Pool', id: pool.name, status: { ...pool, observed_at: observedAt } },
-      });
-    }
-    for (const name of this.#last.keys()) {
-      if (!seen.has(name)) {
-        this.#last.delete(name);
-        deltas.push({ kind: 'Pool', id: name, op: 'delete' });
-      }
-    }
-    return deltas;
+    return pools.map((pool) => ({
+      kind: 'Pool',
+      id: pool.name,
+      op: 'upsert',
+      value: { kind: 'Pool', id: pool.name, status: { ...pool, observed_at: observedAt } },
+    }));
   }
 
   async start(): Promise<void> {

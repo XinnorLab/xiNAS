@@ -77,24 +77,36 @@ export function configHistoryRouter(ctx: ApiContext): Router {
       }
       const agentClient = ctx.tasks?.agentClient;
       if (agentClient === undefined) {
-        sendOk(req, res, { from, to, diff: null }, [], [
-          {
-            code: 'EXECUTOR_UNAVAILABLE',
-            message: 'no agent connection — the snapshot store is agent-readable only',
-          },
-        ]);
+        sendOk(
+          req,
+          res,
+          { from, to, diff: null },
+          [],
+          [
+            {
+              code: 'EXECUTOR_UNAVAILABLE',
+              message: 'no agent connection — the snapshot store is agent-readable only',
+            },
+          ],
+        );
         return;
       }
       let diff: unknown;
       try {
         diff = await agentClient.call('config.diff', { from, to }, 5_000);
       } catch (err) {
-        sendOk(req, res, { from, to, diff: null }, [], [
-          {
-            code: 'EXECUTOR_UNAVAILABLE',
-            message: `config.diff failed: ${err instanceof Error ? err.message : String(err)}`,
-          },
-        ]);
+        sendOk(
+          req,
+          res,
+          { from, to, diff: null },
+          [],
+          [
+            {
+              code: 'EXECUTOR_UNAVAILABLE',
+              message: `config.diff failed: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          ],
+        );
         return;
       }
       sendOk(req, res, { from, to, diff });

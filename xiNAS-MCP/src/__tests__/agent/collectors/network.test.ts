@@ -152,7 +152,7 @@ describe('NetworkConfig singleton emission', () => {
 // ---- S7 T1: the Tuning singleton (same compare-and-skip family) ----
 
 describe('TuningCollector singleton', () => {
-  it('emits once, skips identical, re-emits on change; degraded probe errors', async () => {
+  it('re-emits the singleton on EVERY sweep (complete-snapshot semantics)', async () => {
     const { TuningCollector } = await import('../../../agent/collectors/tuning.js');
     let entries = [{ key: 'vm.swappiness', expected: '1', actual: '60' }];
     const collector = new TuningCollector({
@@ -161,8 +161,17 @@ describe('TuningCollector singleton', () => {
     const first = await collector.initialSweep();
     expect(first).toHaveLength(1);
     expect(first[0]).toMatchObject({ kind: 'Tuning', id: 'default', op: 'upsert' });
-    expect(await collector.initialSweep()).toEqual([]);
-    entries = [{ key: 'vm.swappiness', expected: '1', actual: '1' }];
+    // Unchanged sweep → SAME row again, never []: PollDriver flushes poll
+    // sweeps with complete-snapshot semantics, so a suppressed row would be
+    // reconcile-deleted api-side one interval after agent start (the S9
+    // bridge-pools e2e regression). The api-side dedupe absorbs the re-push.
     expect(await collector.initialSweep()).toHaveLength(1);
+    entries = [{ key: 'vm.swappiness', expected: '1', actual: '1' }];
+    const changed = await collector.initialSweep();
+    expect(changed).toHaveLength(1);
+    expect(
+      (changed[0]?.value as { status: { entries: Array<{ actual: string }> } }).status.entries[0]
+        ?.actual,
+    ).toBe('1');
   });
 });

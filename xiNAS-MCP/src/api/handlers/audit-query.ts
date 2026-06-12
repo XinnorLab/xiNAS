@@ -164,6 +164,11 @@ export async function queryAudit(ctx: ApiContext, q: AuditQuery): Promise<AuditR
   }
 
   // ── tail filters ──
+  try {
+    await ctx.state.drainer.drainNow(); // freshness: queued rows become visible
+  } catch {
+    /* a drain failure only delays visibility of the newest rows */
+  }
   const rows = readTail(jsonlPath);
   const filtered: AuditRow[] = [];
   for (let i = rows.length - 1; i >= 0 && filtered.length < q.limit; i -= 1) {

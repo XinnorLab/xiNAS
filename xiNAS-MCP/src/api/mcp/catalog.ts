@@ -393,7 +393,13 @@ export const CATALOG: CatalogEntry[] = [
     '/pools',
     'xiRAID spare pools (observed state; referenced_by lists arrays using each pool).',
   ),
-  planApply('pools.create', 'POST', '/pools', 'Create a spare pool (plan/apply; spec = {name, drives}).', 'admin'),
+  planApply(
+    'pools.create',
+    'POST',
+    '/pools',
+    'Create a spare pool (plan/apply; spec = {name, drives}).',
+    'admin',
+  ),
   planApply(
     'pools.modify',
     'PATCH',

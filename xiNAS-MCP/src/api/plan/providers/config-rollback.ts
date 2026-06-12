@@ -31,7 +31,7 @@ export const configRollbackProvider: PlanProvider = {
       throw new ApiException('INVALID_ARGUMENT', 'config.rollback: spec.reason is required');
     }
     if (typeof spec.to !== 'string' || spec.to.length === 0) {
-      throw new ApiException('INVALID_ARGUMENT', "config.rollback: spec.to is required");
+      throw new ApiException('INVALID_ARGUMENT', 'config.rollback: spec.to is required');
     }
 
     const blockers: PlanResult['blockers'] = [

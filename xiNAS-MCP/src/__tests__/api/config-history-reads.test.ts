@@ -68,3 +68,31 @@ describe('config-history reads (S9 T4)', () => {
     expect(bad.status).toBe(400);
   });
 });
+
+// ── S9 T12 regression: observed-channel validation must ACCEPT the new
+//    kinds' row envelopes (ConfigSnapshot's flat public schema carries a
+//    kind ENUM that would otherwise poison whole observation batches). ──
+
+import { loadObservedSchemas } from '../../api/observed-schemas.js';
+
+describe('observed-schema validators for S9 kinds', () => {
+  it('ConfigSnapshot + Pool row envelopes pass inbound validation', () => {
+    const loaded = loadObservedSchemas();
+    expect(loaded).not.toBeNull();
+    const schemas = (loaded as NonNullable<typeof loaded>).schemas;
+    expect(
+      schemas.ConfigSnapshot?.({
+        kind: 'ConfigSnapshot',
+        id: 'base-1',
+        status: { snapshot_id: 'base-1', kind: 'baseline', created_at: 'x' },
+      }),
+    ).toBe(true);
+    expect(
+      schemas.Pool?.({
+        kind: 'Pool',
+        id: 'sp1',
+        status: { name: 'sp1', drives: [], active: false },
+      }),
+    ).toBe(true);
+  });
+});

@@ -22,7 +22,11 @@ export function auditRouter(ctx: ApiContext): Router {
     void (async () => {
       const limitRaw = str(req.query.limit);
       const limit = Math.min(Math.max(Number.parseInt(limitRaw ?? '100', 10) || 100, 1), 1000);
-      const exact = [str(req.query.request_id), str(req.query.operation_id), str(req.query.task_id)];
+      const exact = [
+        str(req.query.request_id),
+        str(req.query.operation_id),
+        str(req.query.task_id),
+      ];
       if (exact.filter((v) => v !== undefined).length > 1) {
         throw new ApiException(
           'INVALID_ARGUMENT',

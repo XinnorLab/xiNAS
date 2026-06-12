@@ -186,15 +186,25 @@ export function loadObservedSchemas(): {
     // kinds is enforced by the public READ schema if/when one is added.
     const acceptObject: ValidateFn = (data: unknown) => typeof data === 'object' && data !== null;
 
+    // Kinds whose api-v1.yaml schema describes the ROUTE response shape,
+    // not the observed-row envelope (S9, ADR-0011): ConfigSnapshot's
+    // public schema is FLAT with a `kind: [baseline|before|after|imported]`
+    // ENUM — an observed row's `kind: 'ConfigSnapshot'` would fail it and
+    // poison the whole batch (the exact S0/S1-review failure mode; enums
+    // survive stripRequired). These get the permissive validator; their
+    // public shape is enforced at the READ routes.
+    const FLAT_SCHEMA_KINDS = new Set(['ConfigSnapshot', 'Pool']);
+
     const schemas: Record<string, ValidateFn> = {};
     for (const kind of OBSERVED_KINDS) {
       // A kind in OBSERVED_KINDS is intended to be accepted. If it has a
       // component schema, compile a TYPE-ONLY validator; otherwise (lowercase
       // intermediate kinds like `inventory` / `managed_files`) register the
       // permissive object-validator so the delta isn't rejected.
-      schemas[kind] = strippedDoc.components?.schemas?.[kind]
-        ? (ajv.getSchema(`api-v1.yaml#/components/schemas/${kind}`) as ValidateFn)
-        : acceptObject;
+      schemas[kind] =
+        strippedDoc.components?.schemas?.[kind] && !FLAT_SCHEMA_KINDS.has(kind)
+          ? (ajv.getSchema(`api-v1.yaml#/components/schemas/${kind}`) as ValidateFn)
+          : acceptObject;
     }
 
     return {

@@ -239,6 +239,9 @@ export async function applyMode(
       client_type: rc.client_type,
       request_id: rc.request_id,
       correlation_id: rc.correlation_id,
+      // S9: destructive ops (config.rollback) ride the generic helper —
+      // the engine enforces the flag (risk_level destructive).
+      ...(body.dangerous === true ? { dangerous: true } : {}),
     },
   });
   rc.operation_id = task.task_id;

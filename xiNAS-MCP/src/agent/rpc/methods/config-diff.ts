@@ -27,10 +27,10 @@ export function makeConfigDiffHandler(deps: ConfigDiffDeps) {
   return async (params: unknown): Promise<unknown> => {
     const p = (params ?? {}) as { from?: unknown; to?: unknown };
     if (typeof p.from !== 'string' || p.from.length === 0) {
-      throw new Error("config.diff: params.from must be a non-empty string");
+      throw new Error('config.diff: params.from must be a non-empty string');
     }
     if (typeof p.to !== 'string' || p.to.length === 0) {
-      throw new Error("config.diff: params.to must be a non-empty string");
+      throw new Error('config.diff: params.to must be a non-empty string');
     }
     return deps.snapshotDiff(p.from, p.to);
   };

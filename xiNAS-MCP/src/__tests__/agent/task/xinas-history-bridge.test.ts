@@ -67,10 +67,7 @@ describe('XinasHistoryBridge.snapshotCreate', () => {
 
 // ── S9 T1 (ADR-0011): read + reset verbs + the projection table ──────────────
 
-import {
-  type HistoryManifest,
-  projectSnapshot,
-} from '../../../agent/task/xinas-history-bridge.js';
+import { type HistoryManifest, projectSnapshot } from '../../../agent/task/xinas-history-bridge.js';
 
 const MANIFESTS: HistoryManifest[] = [
   {

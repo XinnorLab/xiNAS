@@ -11,8 +11,7 @@ import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import { applyMode, planMode, requireTasks } from './apply-helpers.js';
 
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null;
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
 export function poolsRouter(ctx: ApiContext): Router {
   const r = Router();

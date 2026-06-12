@@ -53,9 +53,7 @@ describe('GET /audit (S9 T6)', () => {
 
   it('exact request_id lookup finds an entry EVEN before a drain (outbox fallback)', async () => {
     // generate one request and capture its request_id WITHOUT draining
-    const probe = await request(setup.app)
-      .get('/api/v1/arrays')
-      .set('Authorization', ADMIN_TOKEN);
+    const probe = await request(setup.app).get('/api/v1/arrays').set('Authorization', ADMIN_TOKEN);
     const requestId = probe.body.request_id as string;
     expect(requestId).toBeTruthy();
 

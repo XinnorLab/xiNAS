@@ -4,11 +4,7 @@ import { configRollbackProvider } from '../../api/plan/providers/config-rollback
 import { makeConfigRollbackExecutor } from '../../agent/task/config-rollback-executor.js';
 import { XinasHistoryBridge } from '../../agent/task/xinas-history-bridge.js';
 import type { ExecutorContext } from '../../agent/task/types.js';
-import {
-  ADMIN_TOKEN,
-  type MockAgentSetup,
-  buildTestAppWithMockAgent,
-} from './_helpers.js';
+import { ADMIN_TOKEN, type MockAgentSetup, buildTestAppWithMockAgent } from './_helpers.js';
 
 const BASELINE_ROW = {
   kind: 'ConfigSnapshot',
@@ -32,7 +28,9 @@ describe('config.rollback provider (S9 T5)', () => {
 
   it('baseline target with an observed baseline → clean destructive plan', async () => {
     const result = await configRollbackProvider.preflight(
-      ctxWith([{ key: '/xinas/v1/observed/ConfigSnapshot/base-1', value: BASELINE_ROW, revision: 4 }]),
+      ctxWith([
+        { key: '/xinas/v1/observed/ConfigSnapshot/base-1', value: BASELINE_ROW, revision: 4 },
+      ]),
       { to: 'baseline', reason: 'lab reset' },
     );
     expect(result.blockers.map((b) => b.code)).toEqual(['dangerous_flag_required']);
@@ -53,9 +51,7 @@ describe('config.rollback provider (S9 T5)', () => {
       ctxWith([{ key: 'x', value: BASELINE_ROW, revision: 1 }]),
       { to: 'snap-9', reason: 'r' },
     );
-    expect(targeted.blockers.map((b) => b.code)).toContain(
-      'targeted_rollback_not_implemented',
-    );
+    expect(targeted.blockers.map((b) => b.code)).toContain('targeted_rollback_not_implemented');
 
     const noBaseline = await configRollbackProvider.preflight(ctxWith([]), {
       to: 'baseline',
@@ -66,12 +62,12 @@ describe('config.rollback provider (S9 T5)', () => {
   });
 
   it('missing reason / to are 422s', async () => {
-    await expect(
-      configRollbackProvider.preflight(ctxWith([]), { to: 'baseline' }),
-    ).rejects.toThrow(/reason/);
-    await expect(
-      configRollbackProvider.preflight(ctxWith([]), { reason: 'r' }),
-    ).rejects.toThrow(/spec.to/);
+    await expect(configRollbackProvider.preflight(ctxWith([]), { to: 'baseline' })).rejects.toThrow(
+      /reason/,
+    );
+    await expect(configRollbackProvider.preflight(ctxWith([]), { reason: 'r' })).rejects.toThrow(
+      /spec.to/,
+    );
   });
 });
 
@@ -104,9 +100,9 @@ describe('config.rollback executor', () => {
         }),
       }),
     });
-    await expect(
-      failing.stages[0]?.run(ctxFor({ reason: 'r' })),
-    ).rejects.toThrow(/reset-to-baseline failed/);
+    await expect(failing.stages[0]?.run(ctxFor({ reason: 'r' }))).rejects.toThrow(
+      /reset-to-baseline failed/,
+    );
   });
 });
 

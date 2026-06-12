@@ -51,6 +51,10 @@ export function auditMiddleware(state: OpenedStateStore) {
           result_hash:
             'sha256:' + createHash('sha256').update(String(res.statusCode)).digest('hex'),
           ...(ctx.operation_id !== undefined ? { operation_id: ctx.operation_id } : {}),
+          // Phase 0: operation_id IS the task id (plan/apply tasks). Mirror
+          // it into task_id so /audit?task_id= exact lookups (S9, ADR-0011)
+          // resolve via the audit_index task_id column.
+          ...(ctx.operation_id !== undefined ? { task_id: ctx.operation_id } : {}),
         };
         state.audit.queue(entry);
       } catch (err) {

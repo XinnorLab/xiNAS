@@ -31,7 +31,11 @@ function narrowSpec(ctx: ExecutorContext, expected: string[]): PoolSpec {
   if (!expected.includes(s.intent)) {
     throw new Error(`pool executor: unexpected intent '${s.intent}'`);
   }
-  return { intent: s.intent, name: s.name, ...(s.drives !== undefined ? { drives: s.drives } : {}) };
+  return {
+    intent: s.intent,
+    name: s.name,
+    ...(s.drives !== undefined ? { drives: s.drives } : {}),
+  };
 }
 
 function requireDrives(spec: PoolSpec): string[] {

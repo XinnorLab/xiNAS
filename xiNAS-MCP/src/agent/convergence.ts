@@ -363,7 +363,13 @@ export function buildConvergence(config: AgentConfig): Convergence {
   );
 
   // --- Pool (S9, ADR-0011): spare pools via the same xiRAID client. ---
-  registry.register(new PoolCollector({ source: { poolShow: () => xiraidClient.poolShow() } }));
+  const poolPollMs = Number(process.env.XINAS_AGENT_POOL_POLL_MS ?? '');
+  registry.register(
+    new PoolCollector({
+      source: { poolShow: () => xiraidClient.poolShow() },
+      ...(Number.isFinite(poolPollMs) && poolPollMs > 0 ? { pollIntervalMs: poolPollMs } : {}),
+    }),
+  );
 
   // --- Tuning (S7): sysctl expected-vs-actual singleton. ---
   const tuningProbe = fdir !== null ? createFixtureTuningProbe(fdir) : createTuningProbe();
@@ -376,7 +382,15 @@ export function buildConvergence(config: AgentConfig): Convergence {
     fdir !== null
       ? createFixtureSnapshotSource(fdir)
       : new XinasHistoryBridge({ runSubprocess: execFileRunSubprocess });
-  registry.register(new ConfigSnapshotCollector({ source: snapshotSource }));
+  const configPollMs = Number(process.env.XINAS_AGENT_CONFIG_POLL_MS ?? '');
+  registry.register(
+    new ConfigSnapshotCollector({
+      source: snapshotSource,
+      ...(Number.isFinite(configPollMs) && configPollMs > 0
+        ? { pollIntervalMs: configPollMs }
+        : {}),
+    }),
+  );
 
   // --- Deferred-capability stubs (managed_files). ---
   registry.register(new ManagedFilesStubCollector());

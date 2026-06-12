@@ -11,7 +11,7 @@ const M = (id: string, type: string, extra: Partial<HistoryManifest> = {}): Hist
 });
 
 describe('ConfigSnapshotCollector (S9 T2)', () => {
-  it('emits projected rows, skips unchanged, deletes vanished ids', async () => {
+  it('emits ALL projected rows on EVERY sweep (complete-snapshot semantics)', async () => {
     let manifests = [M('base-1', 'baseline'), M('snap-2', 'rollback_eligible')];
     const collector = new ConfigSnapshotCollector({
       source: { snapshotList: async () => manifests },
@@ -25,13 +25,21 @@ describe('ConfigSnapshotCollector (S9 T2)', () => {
     expect(status.kind).toBe('baseline');
     expect(status.snapshot_id).toBe('base-1');
 
-    // unchanged sweep → nothing
-    expect(await collector.initialSweep()).toEqual([]);
+    // unchanged sweep → SAME full row set, never []: PollDriver flushes with
+    // complete-snapshot semantics, so suppressed rows would be
+    // reconcile-deleted api-side (the bridge-pools e2e regression).
+    const second = await collector.initialSweep();
+    expect(second.map((d) => [d.id, d.op])).toEqual([
+      ['base-1', 'upsert'],
+      ['snap-2', 'upsert'],
+    ]);
 
-    // GC removes snap-2; a new snapshot appears
+    // GC removes snap-2; a new snapshot appears. No delete delta — the
+    // api-side reconcile drops vanished ids.
     manifests = [M('base-1', 'baseline'), M('snap-3', 'ephemeral')];
     const third = await collector.initialSweep();
-    expect(third.find((d) => d.id === 'snap-2')?.op).toBe('delete');
+    expect(third.map((d) => d.id).sort()).toEqual(['base-1', 'snap-3']);
+    expect(third.every((d) => d.op === 'upsert')).toBe(true);
     const added = third.find((d) => d.id === 'snap-3');
     expect((added?.value as { status: { kind: string } }).status.kind).toBe('before');
   });

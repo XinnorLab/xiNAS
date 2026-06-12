@@ -22,9 +22,7 @@ function seed(state: Record<string, unknown>): void {
 }
 
 function load(): { pools: Array<{ name: string; drives: string[]; active: boolean }> } {
-  return JSON.parse(
-    require('node:fs').readFileSync(join(dir, 'xiraid-state.json'), 'utf8'),
-  );
+  return JSON.parse(require('node:fs').readFileSync(join(dir, 'xiraid-state.json'), 'utf8'));
 }
 
 const ctxFor = (spec: unknown): ExecutorContext => ({
@@ -65,17 +63,17 @@ describe('pool executors (S9 T9, fake transport)', () => {
   it('delete preflight: live ACTIVE and live REFERENCE both fail before mutation', async () => {
     seed({ pools: [{ name: 'p2', drives: ['/dev/a'], active: true }] });
     const del = makePoolDeleteExecutor({ client: client() });
-    await expect(
-      del.stages[0]?.run(ctxFor({ intent: 'delete', name: 'p2' })),
-    ).rejects.toThrow(/ACTIVE/);
+    await expect(del.stages[0]?.run(ctxFor({ intent: 'delete', name: 'p2' }))).rejects.toThrow(
+      /ACTIVE/,
+    );
 
     seed({
       pools: [{ name: 'p2', drives: ['/dev/a'], active: false }],
       arrays: [{ name: 'data1', level: 5, devices: ['/dev/c'], state: 'online', sparepool: 'p2' }],
     });
-    await expect(
-      del.stages[0]?.run(ctxFor({ intent: 'delete', name: 'p2' })),
-    ).rejects.toThrow(/spare pool of: data1/);
+    await expect(del.stages[0]?.run(ctxFor({ intent: 'delete', name: 'p2' }))).rejects.toThrow(
+      /spare pool of: data1/,
+    );
     expect(load().pools).toHaveLength(1); // nothing mutated
   });
 

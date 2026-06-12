@@ -5,11 +5,7 @@ import {
   poolDeleteProvider,
   poolModifyProvider,
 } from '../../api/plan/providers/pool.js';
-import {
-  ADMIN_TOKEN,
-  type MockAgentSetup,
-  buildTestAppWithMockAgent,
-} from './_helpers.js';
+import { ADMIN_TOKEN, type MockAgentSetup, buildTestAppWithMockAgent } from './_helpers.js';
 
 type Row = { key: string; value: unknown; revision: number };
 const ctxWith = (rows: Row[]) =>
@@ -51,10 +47,10 @@ describe('pool providers (S9 T8) — the S4 imperative freshness pattern', () =>
     expect(clean.observed_freshness_ref).toEqual({ kind: 'Pool', id: 'spare1', revision: 0 });
     expect(clean.lease_resources).toEqual([{ kind: 'Pool', id: 'spare1' }]);
 
-    const dup = await poolCreateProvider.preflight(
-      ctxWith([POOL('spare1', false)]),
-      { name: 'spare1', drives: ['/dev/a'] },
-    );
+    const dup = await poolCreateProvider.preflight(ctxWith([POOL('spare1', false)]), {
+      name: 'spare1',
+      drives: ['/dev/a'],
+    });
     expect(dup.blockers.map((b) => b.code)).toContain('pool_already_exists');
     expect(dup.observed_freshness_ref?.revision).toBe(3);
 
@@ -67,7 +63,11 @@ describe('pool providers (S9 T8) — the S4 imperative freshness pattern', () =>
 
   it('modify: exactly one intent; absent pool blocks', async () => {
     await expect(
-      poolModifyProvider.preflight(ctxWith([]), { name: 'p', add_drives: ['/dev/a'], active: true }),
+      poolModifyProvider.preflight(ctxWith([]), {
+        name: 'p',
+        add_drives: ['/dev/a'],
+        active: true,
+      }),
     ).rejects.toThrow(/exactly ONE/);
 
     const absent = await poolModifyProvider.preflight(ctxWith([]), { name: 'p', active: true });

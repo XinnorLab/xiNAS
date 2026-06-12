@@ -1,9 +1,12 @@
 /**
  * Tuning collector (S7 T1, ADR-0009 §Tuning): emits the internal
- * observed singleton `Tuning/default` from the tuning probe on sweeps,
- * compare-and-skip on content (the NetworkConfig pattern — the api-side
- * sweep dedupe would skip identical re-pushes anyway; this keeps them
- * off the wire). No event source; the poll backstop is the refresh.
+ * observed singleton `Tuning/default` from the tuning probe on EVERY
+ * sweep. No compare-and-skip: PollDriver flushes poll sweeps with
+ * complete-snapshot semantics, so an unchanged sweep that returned []
+ * would reconcile-DELETE the row api-side (the S9 bridge-pools e2e
+ * regression — the NetworkConfig skip pattern is only safe for
+ * event-driven plain flushes). The api-side sweep dedupe keeps
+ * identical re-pushes from churning revisions.
  */
 
 import type { TuningSnapshot } from '../probe/tuning.js';
@@ -20,7 +23,6 @@ export class TuningCollector implements Collector<'Tuning'> {
   private readonly probe: TuningProbe;
   private _state: 'running' | 'stubbed' | 'error' = 'running';
   private _reason: string | undefined = undefined;
-  private _lastKey: string | null = null;
 
   constructor({ probe }: { probe: TuningProbe }) {
     this.probe = probe;
@@ -29,9 +31,6 @@ export class TuningCollector implements Collector<'Tuning'> {
   async initialSweep(): Promise<ObservationDelta[]> {
     try {
       const snap = await this.probe.snapshot();
-      const key = JSON.stringify(snap.entries);
-      if (key === this._lastKey) return [];
-      this._lastKey = key;
       return [
         {
           kind: 'Tuning',
