@@ -32,7 +32,11 @@ export async function buildTestApp(): Promise<TestSetup & { cleanup(): Promise<v
   const config: ApiConfig = {
     controller_id: NODE_ID,
     listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
-    tokens: { 'tok-admin': { principal: 'admin:test', role: 'admin' } },
+    tokens: {
+      'tok-admin': { principal: 'admin:test', role: 'admin' },
+      'tok-operator': { principal: 'operator:test', role: 'operator' },
+      'tok-viewer': { principal: 'viewer:test', role: 'viewer' },
+    },
     state: {
       databasePath: join(dir, 'xinas.db'),
       auditJsonlPath: join(dir, 'audit.jsonl'),
@@ -69,6 +73,8 @@ export async function buildTestApp(): Promise<TestSetup & { cleanup(): Promise<v
 
 /** Standard admin Authorization header for supertest calls. */
 export const ADMIN_TOKEN = 'Bearer tok-admin';
+export const OPERATOR_TOKEN = 'Bearer tok-operator';
+export const VIEWER_TOKEN = 'Bearer tok-viewer';
 
 /** Seed a singleton Cluster object. */
 export function seedCluster(state: OpenedStateStore): void {

@@ -2,6 +2,7 @@ import express, { type Express, Router } from 'express';
 import type { ApiContext } from './context.js';
 import { ApiException } from './errors.js';
 import { executorUnavailable } from './handlers/unsupported.js';
+import { rbacMiddleware } from './middleware/rbac.js';
 import type { HeartbeatTracker } from './heartbeat.js';
 import { internalRouter } from './internal/router.js';
 import { auditMiddleware } from './middleware/audit.js';
@@ -61,6 +62,10 @@ export function createApp(ctx: ApiContext): Express {
   app.use('/internal/v1', internalRouter(ctx));
 
   const v1 = Router();
+  // S8 T3 (ADR-0010 review P0): the FIRST role enforcement on public
+  // routes — auth resolves ctx.role, this ranks it against the
+  // catalog's min_role (unmatched routes require admin).
+  v1.use(rbacMiddleware());
   v1.use(systemWarningsMiddleware(ctx)); // after auth (context populated), before route handlers
   v1.use(systemRouter(ctx));
   v1.use(storageRouter(ctx));
