@@ -3,8 +3,7 @@
 **Status:** design (2026-06-12; conforms to **ADR-0010**). Closes WS12
 ("same operation through CLI/TUI/MCP produces the same plan and task;
 MCP cannot apply by default"). Implementation plan:
-`docs/plans/2026-06-12-s8-clients-plan.md` (to be written via
-writing-plans after this spec is approved).
+`docs/plans/2026-06-12-s8-clients-plan.md`.
 
 **Goal.** The MCP transport rehosts inside `xinas-api.service` as a
 loopback dispatcher over the api's own middleware spine; `xinasctl`
