@@ -24,12 +24,13 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
-from xinas_menu.api.control_client import ControlPathError, TaskFailed
+from xinas_menu.api.control_client import ControlPathError, TaskCancelled, TaskFailed
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.select_dialog import SelectDialog
+from xinas_menu.widgets.task_wait_dialog import TaskWaitDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
 _log = logging.getLogger(__name__)
@@ -455,15 +456,25 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             "mount_options": list(_DEFAULT_MOUNT_OPTIONS),
             "quota_mode": "uquota",
         }
+        create_dialog = TaskWaitDialog(f"Creating filesystem on {data_device}…", "Create Filesystem")
+        self.app.push_screen(create_dialog)
         try:
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "POST",
                 "/api/v1/filesystems",
                 spec,
-                on_progress=self._task_progress("Create Filesystem"),
+                on_progress=create_dialog.progress_from_thread(self.app),
+                cancel_check=create_dialog.cancel_requested,
             )
+        except TaskCancelled:
+            # MUST precede TaskFailed (subclass): a cancel is not a
+            # create-failure and must not offer the force retry.
+            create_dialog.dismiss(None)
+            view.set_content("  Filesystem creation cancelled — partial work rolled back.")
+            return
         except TaskFailed as exc:
+            create_dialog.dismiss(None)
             # The executor's destruction gate: an existing filesystem on
             # the device fails a non-force create. Offer the force retry
             # (the legacy "existing filesystem" consent, post-task).
@@ -496,6 +507,7 @@ class FilesystemScreen(XiNASAppMixin, Screen):
                 view.set_content("\033[31m  Filesystem creation failed.\033[0m")
                 return
         except ControlPathError as exc:
+            create_dialog.dismiss(None)
             # PlanBlocked carries the plan's blocker text; ApiError /
             # TransportError carry the envelope/socket failure.
             await self.app.push_screen_wait(
@@ -503,6 +515,9 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             )
             view.set_content("\033[31m  Filesystem creation failed.\033[0m")
             return
+        else:
+            # Happy path: the try completed without an exception.
+            create_dialog.dismiss(None)
 
         # Success
         self.app.audit.log(

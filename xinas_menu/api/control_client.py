@@ -13,6 +13,7 @@ subprocess fallbacks).
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
 import socket
@@ -60,6 +61,13 @@ class TaskFailed(ControlPathError):
         self.task_id = task_id
         self.state = state
         self.error_code = error_code
+
+
+class TaskCancelled(TaskFailed):
+    """The apply task ended ``cancelled`` (S10, ADR-0012) — partial work was
+    rolled back. Subclass of TaskFailed so existing handlers keep working;
+    screens catch it FIRST to message "operation cancelled" instead of a
+    failure."""
 
 
 class _UDSConnection(http.client.HTTPConnection):
@@ -133,6 +141,12 @@ class ControlClient:
         """GET → the envelope's result field."""
         return self.get(path).get("result")
 
+    def cancel_task(self, task_id: str) -> dict[str, Any]:
+        """POST /tasks/{id}/cancel (S10) → the task row from the envelope."""
+        envelope = self.request("POST", f"/api/v1/tasks/{task_id}/cancel")
+        result = envelope.get("result")
+        return result if isinstance(result, dict) else {}
+
     # -- plan/apply --------------------------------------------------------
 
     def plan(
@@ -170,9 +184,15 @@ class ControlClient:
         on_progress: Callable[[str], None] | None = None,
         poll_s: float = 0.5,
         timeout_s: float = 600.0,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """plan → apply → poll the task to terminal. Returns the final task
-        result; raises PlanBlocked / TaskFailed / ApiError."""
+        result; raises PlanBlocked / TaskFailed / TaskCancelled / ApiError.
+
+        ``cancel_check`` (S10): polled each loop; on its first True the
+        client sends ONE ``POST /tasks/{id}/cancel`` and keeps polling to
+        the terminal state. A ``cancelled`` terminal raises
+        :class:`TaskCancelled` (whether or not this caller requested it)."""
         plan_result = self.plan(method, path, spec, dangerous=dangerous)
         plan_id = plan_result.get("plan_id")
         if not isinstance(plan_id, str):
@@ -197,6 +217,7 @@ class ControlClient:
 
         deadline = time.monotonic() + timeout_s
         last_state = ""
+        cancel_sent = False
         while True:
             current = self.result(f"/api/v1/tasks/{task_id}") or {}
             state = str(current.get("state", "unknown"))
@@ -205,9 +226,17 @@ class ControlClient:
                     on_progress(state)
                 last_state = state
             if state in TERMINAL_STATES:
+                if state == "cancelled":
+                    raise TaskCancelled(task_id, state, current.get("error_code"))
                 if state != "success":
                     raise TaskFailed(task_id, state, current.get("error_code"))
                 return current
+            if cancel_check is not None and not cancel_sent and cancel_check():
+                cancel_sent = True
+                # not_cancellable / agent_not_found etc. — the poll loop
+                # reads the actual terminal either way.
+                with contextlib.suppress(ApiError):
+                    self.cancel_task(task_id)
             if time.monotonic() > deadline:
                 raise TaskFailed(task_id, f"timeout after {timeout_s}s (last: {state})", None)
             time.sleep(poll_s)

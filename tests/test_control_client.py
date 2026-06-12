@@ -266,3 +266,89 @@ def test_plan_apply_wait_failed_task_raises(stub_socket):
     with pytest.raises(TaskFailed) as err:
         client(stub_socket).plan_apply_wait("POST", "/api/v1/shares", {}, poll_s=0.01)
     assert err.value.error_code == "BOOM"
+
+
+# -- S10 (ADR-0012 §16.5): cancel_task + cancel_check + TaskCancelled --------
+
+
+def test_cancel_task_posts_the_cancel_route(stub_socket):
+    ROUTES[("POST", "/api/v1/tasks/t9/cancel")] = (
+        200,
+        {"result": {"task_id": "t9", "state": "cancelled"}},
+    )
+    result = client(stub_socket).cancel_task("t9")
+    assert result["state"] == "cancelled"
+
+
+def test_plan_apply_wait_cancel_check_sends_once_and_raises_task_cancelled(stub_socket):
+    from xinas_menu.api.control_client import TaskCancelled
+
+    states = iter(["queued", "running", "running", "cancelled"])
+    posts = {"plan": 0, "cancels": 0}
+
+    def share_post():
+        posts["plan"] += 1
+        if posts["plan"] == 1:
+            return (
+                200,
+                {"result": {"plan_id": "p1", "state_revision_expected": 1, "blockers": []}},
+            )
+        return (202, {"result": {"task_id": "t1", "state": "queued"}})
+
+    def task_get():
+        return (200, {"result": {"task_id": "t1", "state": next(states, "cancelled")}})
+
+    def cancel_post():
+        posts["cancels"] += 1
+        return (200, {"result": {"task_id": "t1", "state": "running"}})
+
+    ROUTES[("POST", "/api/v1/shares")] = share_post
+    ROUTES[("GET", "/api/v1/tasks/t1")] = task_get
+    ROUTES[("POST", "/api/v1/tasks/t1/cancel")] = cancel_post
+
+    with pytest.raises(TaskCancelled) as exc:
+        client(stub_socket).plan_apply_wait(
+            "POST",
+            "/api/v1/shares",
+            {"path": "/mnt/a"},
+            poll_s=0.01,
+            cancel_check=lambda: True,
+        )
+    assert exc.value.task_id == "t1"
+    assert exc.value.state == "cancelled"
+    # Sent exactly ONCE despite multiple poll iterations.
+    assert posts["cancels"] == 1
+
+
+def test_plan_apply_wait_without_cancel_check_unchanged(stub_socket):
+    from xinas_menu.api.control_client import TaskCancelled, TaskFailed
+
+    states = iter(["running", "cancelled"])
+
+    def share_post():
+        if not BODIES or BODIES[-1][2].get("mode") == "plan":
+            pass
+        return (202, {"result": {"task_id": "t1", "state": "queued"}})
+
+    posts = {"n": 0}
+
+    def post():
+        posts["n"] += 1
+        if posts["n"] == 1:
+            return (
+                200,
+                {"result": {"plan_id": "p1", "state_revision_expected": 1, "blockers": []}},
+            )
+        return (202, {"result": {"task_id": "t1", "state": "queued"}})
+
+    ROUTES[("POST", "/api/v1/shares")] = post
+    ROUTES[("GET", "/api/v1/tasks/t1")] = lambda: (
+        200,
+        {"result": {"task_id": "t1", "state": next(states, "cancelled")}},
+    )
+
+    # An EXTERNAL cancel (no cancel_check) still surfaces as TaskCancelled —
+    # a subclass of TaskFailed, so existing handlers keep working.
+    with pytest.raises(TaskFailed) as exc:
+        client(stub_socket).plan_apply_wait("POST", "/api/v1/shares", {}, poll_s=0.01)
+    assert isinstance(exc.value, TaskCancelled)

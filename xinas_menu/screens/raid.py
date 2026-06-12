@@ -27,13 +27,14 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
-from xinas_menu.api.control_client import ControlClient, ControlPathError
+from xinas_menu.api.control_client import ControlClient, ControlPathError, TaskCancelled
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.drive_picker import DrivePickerScreen
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.select_dialog import SelectDialog
+from xinas_menu.widgets.task_wait_dialog import TaskWaitDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
 _ARRAY_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -571,16 +572,34 @@ class RAIDScreen(XiNASAppMixin, Screen):
         if not confirmed:
             return
 
+        dialog = TaskWaitDialog(f"Creating RAID array '{name}'…", "Create Array")
+        self.app.push_screen(dialog)
+        cancelled = False
+        error: ControlPathError | None = None
         try:
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "POST",
                 "/api/v1/arrays",
                 spec,
-                on_progress=self._task_progress("Create Array"),
+                on_progress=dialog.progress_from_thread(self.app),
+                cancel_check=dialog.cancel_requested,
             )
+        except TaskCancelled:
+            cancelled = True
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Create failed.\n{exc}", "Error"))
+            error = exc
+        finally:
+            dialog.dismiss(None)
+        if cancelled:
+            await self.app.push_screen_wait(
+                ConfirmDialog(
+                    "Create cancelled — partial work rolled back.", "Cancelled", ok_only=True
+                )
+            )
+            return
+        if error is not None:
+            await self.app.push_screen_wait(ConfirmDialog(f"Create failed.\n{error}", "Error"))
             return
         self.app.audit.log("raid.create", f"{name} RAID-{level} ({len(drives)} drives)", "OK")
         await self.app.snapshots.record(
@@ -1009,6 +1028,16 @@ class RAIDScreen(XiNASAppMixin, Screen):
 
         # ── Step 3: Destroy the array (dangerous consent given above) ────
         self._teardown_append(lines, f"  Destroying RAID array: {arr_name} ...")
+        destroy_dialog = TaskWaitDialog(f"Destroying RAID array '{arr_name}'…", "Destroy Array")
+        self.app.push_screen(destroy_dialog)
+        dialog_cb = destroy_dialog.progress_from_thread(self.app)
+
+        def _destroy_progress(state: str) -> None:
+            progress(state)
+            dialog_cb(state)
+
+        destroy_cancelled = False
+        destroy_error: ControlPathError | None = None
         try:
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
@@ -1016,10 +1045,27 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 f"/api/v1/arrays/{arr_name}",
                 {},
                 dangerous=True,
-                on_progress=progress,
+                on_progress=_destroy_progress,
+                cancel_check=destroy_dialog.cancel_requested,
             )
+        except TaskCancelled:
+            destroy_cancelled = True
         except ControlPathError as exc:
-            await self._teardown_failed(lines, f"RAID destroy failed for '{arr_name}'", exc)
+            destroy_error = exc
+        finally:
+            destroy_dialog.dismiss(None)
+        if destroy_cancelled:
+            self._teardown_append(
+                lines,
+                "  Destroy CANCELLED — partial work rolled back "
+                "(shares/filesystems already removed stay removed).",
+            )
+            self.app.notify(f"Destroy of '{arr_name}' cancelled.", severity="warning")
+            return
+        if destroy_error is not None:
+            await self._teardown_failed(
+                lines, f"RAID destroy failed for '{arr_name}'", destroy_error
+            )
             return
 
         self.app.audit.log("raid.destroy", arr_name, "OK")
