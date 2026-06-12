@@ -22,6 +22,11 @@ import { createRealBundleHost } from '../support/bundle-host.js';
 import { createFakeBundleHost } from '../support/fake-bundle-host.js';
 import { makeSupportBundleExecutor } from './support-executor.js';
 import { makeConfigRollbackExecutor } from './config-rollback-executor.js';
+import {
+  makePoolCreateExecutor,
+  makePoolDeleteExecutor,
+  makePoolModifyExecutor,
+} from './pool-executor.js';
 import { type NetHost, createRealNetHost } from '../net/host.js';
 import { type FsHost, createRealFsHost } from '../fs/host.js';
 import { fixtureDir } from '../probe/fixture.js';
@@ -227,6 +232,13 @@ export function buildTaskSubsystem(
   const bridge = new XinasHistoryBridge({
     runSubprocess: opts.runSubprocess ?? execFileRunSubprocess,
   });
+  // S9 T9: pool executors over the shared xiRAID client (only when the
+  // client is available — same condition as the S3/S4 executors).
+  if (opts.xiraidClient !== undefined) {
+    registry.register(makePoolCreateExecutor({ client: opts.xiraidClient }));
+    registry.register(makePoolModifyExecutor({ client: opts.xiraidClient }));
+    registry.register(makePoolDeleteExecutor({ client: opts.xiraidClient }));
+  }
   // S9 T5: the baseline-reset executor shares the runner's bridge.
   registry.register(makeConfigRollbackExecutor({ bridge }));
   const runner = new TaskRunner({ bridge });
