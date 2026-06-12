@@ -13,6 +13,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
 
+from xinas_menu.api.control_client import ControlClient
 from xinas_menu.api.grpc_client import XiRAIDClient
 from xinas_menu.api.nfs_client import NFSHelperClient
 from xinas_menu.utils.audit import AuditLogger
@@ -51,6 +52,9 @@ class XiNASApp(App):
         self._no_welcome = no_welcome
         self.grpc = XiRAIDClient(grpc_address)
         self.nfs = NFSHelperClient()
+        # S8 (ADR-0010): the control-path API client — the retargeted
+        # screens drive ALL mutations through it (plan/apply tasks).
+        self.control = ControlClient()
         self.audit = AuditLogger()
         self.snapshots = SnapshotHelper(grpc_address=grpc_address)
         self._update_checker = UpdateChecker()

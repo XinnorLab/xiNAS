@@ -26,6 +26,10 @@ from xinas_menu.api.control_client import (
 # callable returning one (for stateful task polling).
 ROUTES: dict[tuple[str, str], object] = {}
 
+# Captured request bodies: (method, path, parsed_json) per non-GET request,
+# so tests can pin the ApplyRequest contract (idempotency_key etc.).
+BODIES: list[tuple[str, str, dict]] = []
+
 
 class _Handler(BaseHTTPRequestHandler):
     def _serve(self, method: str) -> None:
@@ -51,7 +55,11 @@ class _Handler(BaseHTTPRequestHandler):
         self._serve("GET")
 
     def do_POST(self) -> None:  # noqa: N802
-        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        try:
+            BODIES.append(("POST", self.path, json.loads(raw) if raw else {}))
+        except ValueError:
+            BODIES.append(("POST", self.path, {}))
         self._serve("POST")
 
     def log_message(self, *_args: object) -> None:
@@ -70,6 +78,7 @@ class _UDSServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 @pytest.fixture
 def stub_socket():
     ROUTES.clear()
+    BODIES.clear()
     tmp = tempfile.mkdtemp(prefix="xinas-ctl-test-")
     path = os.path.join(tmp, "api.sock")
     server = _UDSServer(path, _Handler)
@@ -125,7 +134,10 @@ def test_plan_apply_wait_happy_path_reports_progress(stub_socket):
     def share_post():
         posts["n"] += 1
         if posts["n"] == 1:
-            return (200, {"result": {"plan_id": "p1", "blockers": []}})
+            return (
+                200,
+                {"result": {"plan_id": "p1", "state_revision_expected": 7, "blockers": []}},
+            )
         return (202, {"result": {"task_id": "t1", "state": "queued"}})
 
     def task_get():
@@ -146,6 +158,15 @@ def test_plan_apply_wait_happy_path_reports_progress(stub_socket):
     assert result["state"] == "success"
     assert seen[0] == "queued"
     assert "success" in seen
+
+    # The apply body must satisfy the ApplyRequest contract: echo the plan's
+    # state_revision_expected and carry a fresh non-empty idempotency_key.
+    apply_bodies = [b for (_, _, b) in BODIES if b.get("mode") == "apply"]
+    assert len(apply_bodies) == 1
+    assert apply_bodies[0]["plan_id"] == "p1"
+    assert apply_bodies[0]["expected_revision"] == 7
+    assert isinstance(apply_bodies[0]["idempotency_key"], str)
+    assert apply_bodies[0]["idempotency_key"]
 
 
 def test_plan_apply_wait_failed_task_raises(stub_socket):

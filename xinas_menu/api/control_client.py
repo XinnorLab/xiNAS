@@ -17,6 +17,7 @@ import http.client
 import json
 import socket
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -161,7 +162,15 @@ class ControlClient:
         if not isinstance(plan_id, str):
             raise TransportError("plan response carried no plan_id")
 
-        apply_body: dict[str, Any] = {"mode": "apply", "plan_id": plan_id}
+        apply_body: dict[str, Any] = {
+            "mode": "apply",
+            "plan_id": plan_id,
+            # ApplyRequest contract (routes/apply-helpers.ts): applyMode
+            # hard-requires a fresh idempotency_key and the plan's
+            # state_revision_expected echoed back as expected_revision.
+            "idempotency_key": str(uuid.uuid4()),
+            "expected_revision": int(plan_result.get("state_revision_expected") or 0),
+        }
         if dangerous:
             apply_body["dangerous"] = True
         apply_envelope = self.request(method, path, apply_body)

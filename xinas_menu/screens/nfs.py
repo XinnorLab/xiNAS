@@ -16,6 +16,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.api.control_client import ControlPathError
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -64,13 +65,13 @@ class NFSScreen(XiNASAppMixin, Screen):
 
     @work(exclusive=True)
     async def _load_exports(self) -> None:
-        loop = asyncio.get_running_loop()
-        ok, data, err = await loop.run_in_executor(None, self.app.nfs.list_exports)
         view = self.query_one("#nfs-content", ScrollableTextView)
-        if ok:
-            view.set_content(_format_exports(data))
-        else:
-            view.set_content(f"[yellow]NFS helper: {err}[/yellow]")
+        try:
+            shares = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
+        except ControlPathError as exc:
+            view.set_content(f"[yellow]Control API: {exc}[/yellow]")
+            return
+        view.set_content(_format_exports(_rows_from_api(shares)))
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
@@ -90,17 +91,29 @@ class NFSScreen(XiNASAppMixin, Screen):
             self._configure_idmapd()
 
     async def _get_export_paths(self) -> list[str]:
-        """Fetch current export paths from the NFS helper."""
+        """Fetch current export paths from the control-path API."""
         exports = await self._get_exports()
         return [e["path"] for e in exports]
 
     async def _get_exports(self) -> list[dict]:
-        """Fetch full export entries from the NFS helper."""
-        loop = asyncio.get_running_loop()
-        ok, data, _ = await loop.run_in_executor(None, self.app.nfs.list_exports)
-        if not ok or not isinstance(data, list):
+        """Fetch shares from the control-path API, adapted to legacy rows."""
+        try:
+            shares = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
+        except ControlPathError:
             return []
-        return [e for e in data if isinstance(e, dict) and e.get("path")]
+        return [e for e in _rows_from_api(shares) if e.get("path") and e.get("id")]
+
+    def _task_progress(self, label: str):
+        """Build an ``on_progress`` callback for ``plan_apply_wait``.
+
+        ``plan_apply_wait`` runs in a worker thread, so the callback hops
+        back to the UI thread before raising the toast.
+        """
+
+        def _cb(state: str) -> None:
+            self.app.call_from_thread(self.app.notify, f"{label}: task {state}", timeout=4)
+
+        return _cb
 
     # ── Shared access-control wizard (4 steps) ─────────────────────────────
 
@@ -336,6 +349,9 @@ class NFSScreen(XiNASAppMixin, Screen):
         if not path.startswith("/"):
             self.app.notify("Export path must start with '/'.", severity="error")
             return
+        # The API requires a canonical export path — trim trailing slashes
+        # here; deeper canonicalization errors surface from the plan.
+        path = path.rstrip("/") or "/"
 
         # Steps 2-6: Access control wizard (who / permissions / admin / sync / security)
         result = await self._access_wizard("Add Share", step_offset=2, total_steps=7)
@@ -388,21 +404,44 @@ class NFSScreen(XiNASAppMixin, Screen):
             )
             return
 
-        ok, _, err = await loop.run_in_executor(
-            None,
-            lambda: self.app.nfs.add_export(
-                {"path": path, "clients": [{"host": host, "options": options}]}
-            ),
-        )
-        if ok:
-            self.app.audit.log("nfs.add_export", path, "OK")
-            await self.app.snapshots.record(
-                "share_create",
-                diff_summary=f"Added NFS share {path}",
+        # The API requires a unique integer fsid per share (the legacy
+        # nfs-helper flow never carried one): derive max(existing)+1 so a
+        # freed fsid is not immediately reused under clients that still
+        # cache filehandles. fsid 0 stays reserved (NFSv4 pseudo-root).
+        used: set[int] = set()
+        for row in await self._get_exports():
+            fsid = row.get("fsid")
+            if isinstance(fsid, int):
+                used.add(fsid)
+            elif isinstance(fsid, str) and fsid.strip().lstrip("-").isdigit():
+                used.add(int(fsid))
+        spec: dict[str, Any] = {
+            "path": path,
+            "fsid": max(used, default=0) + 1,
+            # sync and security_mode are share-level API fields; the
+            # remaining legacy option tokens stay per-client.
+            "clients": [{"pattern": host, "options": [access, root_squash, "no_subtree_check"]}],
+            "sync": sync_mode,
+        }
+        if sec != "sys":
+            spec["security_mode"] = sec
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "POST",
+                "/api/v1/shares",
+                spec,
+                on_progress=self._task_progress("Add Share"),
             )
-            self._load_exports()
-        else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error"))
+            return
+        self.app.audit.log("nfs.add_export", path, "OK")
+        await self.app.snapshots.record(
+            "share_create",
+            diff_summary=f"Added NFS share {path}",
+        )
+        self._load_exports()
 
     @work(exclusive=True)
     async def _edit_share(self) -> None:
@@ -421,6 +460,10 @@ class NFSScreen(XiNASAppMixin, Screen):
 
         # Parse current values for pre-population
         export = next((e for e in exports if e["path"] == path), {})
+        share_id = str(export.get("id", ""))
+        if not share_id:
+            await self.app.push_screen_wait(ConfirmDialog("Share not found.", "Edit Share"))
+            return
         current = _parse_current_export(export)
 
         # Steps 2-6: Access control wizard with current values shown
@@ -472,48 +515,75 @@ class NFSScreen(XiNASAppMixin, Screen):
         if not confirmed:
             return
 
-        patch = {"clients": [{"host": host, "options": options}]}
-        loop = asyncio.get_running_loop()
-        ok, _, err = await loop.run_in_executor(
-            None, lambda: self.app.nfs.update_export(path, patch)
-        )
-        if ok:
-            self.app.audit.log("nfs.update_export", path, "OK")
-            await self.app.snapshots.record(
-                "share_modify",
-                diff_summary=f"Updated NFS share {path}",
+        # PATCH is a top-level merge on the server: clients are replaced
+        # wholesale; sync/security_mode ride in their share-level fields;
+        # path and fsid are left untouched (path is immutable server-side).
+        patch: dict[str, Any] = {
+            "clients": [
+                {"pattern": host, "options": [access, root_squash, *current["extra_opts"]]}
+            ],
+            "sync": sync_mode,
+            "security_mode": sec,
+        }
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "PATCH",
+                f"/api/v1/shares/{share_id}",
+                patch,
+                on_progress=self._task_progress("Edit Share"),
             )
-            self._load_exports()
-        else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error"))
+            return
+        self.app.audit.log("nfs.update_export", path, "OK")
+        await self.app.snapshots.record(
+            "share_modify",
+            diff_summary=f"Updated NFS share {path}",
+        )
+        self._load_exports()
 
     @work(exclusive=True)
     async def _remove_share(self) -> None:
-        paths = await self._get_export_paths()
-        if not paths:
+        exports = await self._get_exports()
+        if not exports:
             await self.app.push_screen_wait(ConfirmDialog("No shares configured.", "Remove Share"))
             return
+        paths = [e["path"] for e in exports]
         path = await self.app.push_screen_wait(
             SelectDialog(paths, title="Remove Share", prompt="Select export to remove:")
         )
         if not path:
+            return
+        share = next((e for e in exports if e["path"] == path), {})
+        share_id = str(share.get("id", ""))
+        if not share_id:
+            await self.app.push_screen_wait(ConfirmDialog("Share not found.", "Remove Share"))
             return
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(f"Remove export {path}?", "Confirm Removal")
         )
         if not confirmed:
             return
-        loop = asyncio.get_running_loop()
-        ok, _, err = await loop.run_in_executor(None, lambda: self.app.nfs.remove_export(path))
-        if ok:
-            self.app.audit.log("nfs.remove_export", path, "OK")
-            await self.app.snapshots.record(
-                "share_delete",
-                diff_summary=f"Removed NFS share {path}",
+        # The delete plan spec is built server-side from the desired share
+        # ({id, path}); risk is changing_access, so no dangerous flag.
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "DELETE",
+                f"/api/v1/shares/{share_id}",
+                {},
+                on_progress=self._task_progress("Remove Share"),
             )
-            self._load_exports()
-        else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error"))
+            return
+        self.app.audit.log("nfs.remove_export", path, "OK")
+        await self.app.snapshots.record(
+            "share_delete",
+            diff_summary=f"Removed NFS share {path}",
+        )
+        self._load_exports()
 
     @work(exclusive=True)
     async def _show_sessions(self) -> None:
@@ -568,6 +638,57 @@ class NFSScreen(XiNASAppMixin, Screen):
             await self.app.push_screen_wait(ConfirmDialog("idmapd domain updated.", "Done"))
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+
+
+def _rows_from_api(shares: Any) -> list[dict]:
+    """Adapt GET /api/v1/shares docs to the legacy export-row shape.
+
+    The API returns ``{id, spec: {path, clients: [{pattern, options}],
+    fsid, sync?, security_mode?}, status: {...}}`` per share; the renderer
+    and the edit wizard parse ``{path, clients: [{host, options}]}``. The
+    share-level ``sync``/``security_mode`` fields are folded into each
+    client's option list (mirroring the server's exports compile) so
+    ``_parse_current_export`` and the display keep working unchanged.
+    """
+    rows: list[dict] = []
+    if not isinstance(shares, list):
+        return rows
+    for doc in shares:
+        if not isinstance(doc, dict):
+            continue
+        spec = doc.get("spec")
+        if not isinstance(spec, dict):
+            continue
+        path = spec.get("path")
+        if not path:
+            continue
+        sync = spec.get("sync")
+        sec = spec.get("security_mode")
+        clients: list[dict] = []
+        raw_clients = spec.get("clients")
+        for c in raw_clients if isinstance(raw_clients, list) else []:
+            if not isinstance(c, dict):
+                continue
+            raw_opts = c.get("options")
+            opts = [o for o in raw_opts if isinstance(o, str)] if isinstance(raw_opts, list) else []
+            if sync in ("sync", "async") and not any(o in ("sync", "async") for o in opts):
+                opts.append(sync)
+            if (
+                isinstance(sec, str)
+                and sec != "sys"
+                and not any(o.startswith("sec=") for o in opts)
+            ):
+                opts.append(f"sec={sec}")
+            clients.append({"host": str(c.get("pattern", "*")), "options": opts})
+        rows.append(
+            {
+                "id": doc.get("id"),
+                "path": path,
+                "fsid": spec.get("fsid"),
+                "clients": clients,
+            }
+        )
+    return rows
 
 
 _WIZARD_MANAGED_OPTS = {"rw", "ro", "root_squash", "no_root_squash", "sync", "async"}
