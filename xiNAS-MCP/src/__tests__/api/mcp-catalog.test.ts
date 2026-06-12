@@ -33,10 +33,17 @@ describe('client catalog (S8 T2)', () => {
     expect(byName.get('support.bundle')?.requires_mcp_apply).toBe(false);
     expect(byName.get('tasks.cancel')?.requires_mcp_apply).toBe(false);
     expect(byName.get('shares.create')?.requires_mcp_apply).toBe(true);
-    // degraded honesty
-    expect(byName.get('audit.query')?.status).toBe('degraded');
-    expect(byName.get('config_history.snapshots')?.status).toBe('degraded');
+    // S9: config-history/audit went LIVE; tasks.cancel is the one
+    // remaining degraded entry (cancel wiring is a later slice).
+    expect(byName.get('audit.query')?.status).toBe('live');
+    expect(byName.get('config_history.snapshots')?.status).toBe('live');
+    expect(byName.get('config_history.rollback')?.status).toBe('live');
+    expect(byName.get('tasks.cancel')?.status).toBe('degraded');
     expect(byName.get('drift.report')?.status).toBe('live');
+    // S9 pools entries
+    expect(byName.get('pools.create')?.min_role).toBe('admin');
+    expect(byName.get('pools.modify')?.min_role).toBe('operator');
+    expect(byName.get('pools.delete')?.requires_mcp_apply).toBe(true);
     expect(ROLE_RANK.admin).toBeGreaterThan(ROLE_RANK.operator);
   });
 

@@ -267,28 +267,20 @@ export const CATALOG: CatalogEntry[] = [
     'Desired-vs-observed drift report (S7 engine).',
   ),
 
-  // ── config history (bridge pending — degraded; review P1) ──
+  // ── config history (live since S9, ADR-0011) ──
   read(
     'config_history.snapshots',
     'GET',
     '/config-history/snapshots',
-    'List config snapshots. DEGRADED: the xinas_history bridge is not integrated yet; returns an empty stub with a warning.',
-    { status: 'degraded' },
+    'List config snapshots (observed xinas_history manifests, projected).',
   ),
-  read(
-    'config_history.show',
-    'GET',
-    '/config-history/snapshots/{id}',
-    'Show one config snapshot. DEGRADED: bridge not integrated.',
-    { status: 'degraded' },
-  ),
+  read('config_history.show', 'GET', '/config-history/snapshots/{id}', 'Show one config snapshot.'),
   {
     ...read(
       'config_history.diff',
       'GET',
       '/config-history/diff',
-      'Diff two snapshots. DEGRADED: bridge not integrated.',
-      { status: 'degraded' },
+      'Diff two snapshots (agent round-trip; degrades with EXECUTOR_UNAVAILABLE when the agent is down).',
     ),
     input_schema: {
       type: 'object',
@@ -301,9 +293,8 @@ export const CATALOG: CatalogEntry[] = [
     'config_history.rollback',
     'POST',
     '/config-history/rollback',
-    'Roll back to a snapshot. DEGRADED: returns EXECUTOR_UNAVAILABLE until the bridge lands.',
+    'Roll back to the BASELINE snapshot (plan/apply; destructive — dangerous:true at apply). Targeted rollback is a later slice; spec = {to: "baseline", reason}.',
     'admin',
-    { status: 'degraded' },
   ),
 
   // ── tasks ──
@@ -348,13 +339,29 @@ export const CATALOG: CatalogEntry[] = [
   read('system.capabilities', 'GET', '/capabilities', 'API capability matrix.'),
   read('system.controllers', 'GET', '/controllers', 'List controllers.'),
   read('system.inventory', 'GET', '/inventory', 'Hardware/OS inventory.'),
-  read(
-    'audit.query',
-    'GET',
-    '/audit',
-    'Query audit records. DEGRADED: returns an empty stub with a warning until the audit query backend lands.',
-    { status: 'degraded' },
-  ),
+  {
+    ...read(
+      'audit.query',
+      'GET',
+      '/audit',
+      'Query audit records: tail filters (kind/principal/client_type/since/until/limit) or ONE exact lookup (request_id|operation_id|task_id).',
+    ),
+    input_schema: {
+      type: 'object',
+      properties: {
+        request_id: { type: 'string' },
+        operation_id: { type: 'string' },
+        task_id: { type: 'string' },
+        kind: { type: 'string' },
+        principal: { type: 'string' },
+        client_type: { type: 'string' },
+        since: { type: 'string' },
+        until: { type: 'string' },
+        limit: { type: 'integer', minimum: 1, maximum: 1000, default: 100 },
+      },
+      additionalProperties: false,
+    },
+  },
 
   // ── promoted legacy reads (S8 T5; ADR-0010 §read-route promotion) ──
   {
@@ -384,7 +391,22 @@ export const CATALOG: CatalogEntry[] = [
     'pools.list',
     'GET',
     '/pools',
-    'xiRAID spare pools (deprecated read-only gRPC path, ADR-0010).',
+    'xiRAID spare pools (observed state; referenced_by lists arrays using each pool).',
+  ),
+  planApply('pools.create', 'POST', '/pools', 'Create a spare pool (plan/apply; spec = {name, drives}).', 'admin'),
+  planApply(
+    'pools.modify',
+    'PATCH',
+    '/pools/{name}',
+    'Modify a spare pool — ONE intent per call: add_drives | remove_drives | active (plan/apply).',
+    'operator',
+  ),
+  planApply(
+    'pools.delete',
+    'DELETE',
+    '/pools/{name}',
+    'Delete a spare pool (plan/apply; blocked while active or referenced by an array).',
+    'admin',
   ),
   read(
     'mail.recipients',
