@@ -3,8 +3,7 @@
 **Status:** design (2026-06-12; conforms to **ADR-0011**). Brings the
 config-history/audit `degraded` catalog entries live and retires the
 in-api gRPC pool read. Implementation plan:
-`docs/plans/2026-06-12-s9-bridge-pools-plan.md` (to be written via
-writing-plans after this spec is approved).
+`docs/plans/2026-06-12-s9-bridge-pools-plan.md`.
 
 **Goal.** The config-history/audit `degraded` catalog entries go live
 (`tasks.cancel` stays degraded until cancel wiring — a separate
