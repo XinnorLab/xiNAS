@@ -107,10 +107,8 @@ export function parseArgs(entry: CatalogEntry, rest: string[]): ParsedArgs {
     } else if (tok === '--token') {
       const v = rest[(i += 1)];
       if (v !== undefined) conn.token = v;
-    }
-    else if (tok === '--spec') args.spec = JSON.parse(rest[(i += 1)] as string);
-    else if (tok === '-f')
-      args.spec = JSON.parse(readFileSync(rest[(i += 1)] as string, 'utf8'));
+    } else if (tok === '--spec') args.spec = JSON.parse(rest[(i += 1)] as string);
+    else if (tok === '-f') args.spec = JSON.parse(readFileSync(rest[(i += 1)] as string, 'utf8'));
     else if (tok.startsWith('--')) {
       // --plan-id → plan_id; --profile deep
       const key = tok.slice(2).replaceAll('-', '_');
@@ -274,7 +272,11 @@ export async function runCli(
     return 2;
   }
 
-  const res = await io.request(conn, { method: entry.method, path: req.path, ...(req.body !== undefined ? { body: req.body } : {}) });
+  const res = await io.request(conn, {
+    method: entry.method,
+    path: req.path,
+    ...(req.body !== undefined ? { body: req.body } : {}),
+  });
 
   if (entry.binary === true) {
     // binary downloads stream raw to stdout (callers redirect)

@@ -9,9 +9,8 @@ import {
   waitForTask,
 } from '../../cli/xinasctl.js';
 
-const entry = (name: string) => CATALOG.find((e) => e.name === name) as NonNullable<
-  ReturnType<typeof CATALOG.find>
->;
+const entry = (name: string) =>
+  CATALOG.find((e) => e.name === name) as NonNullable<ReturnType<typeof CATALOG.find>>;
 
 describe('resolveCommand', () => {
   it('maps dotted catalog names to command paths (longest match)', () => {

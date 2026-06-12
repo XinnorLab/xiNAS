@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CATALOG } from '../../api/mcp/catalog.js';
-import {
-  LEGACY_TOOL_MAP,
-  buildRequest,
-  gateVerdict,
-} from '../../api/mcp/dispatch.js';
+import { LEGACY_TOOL_MAP, buildRequest, gateVerdict } from '../../api/mcp/dispatch.js';
 
 const entry = (name: string) => {
   const e = CATALOG.find((c) => c.name === name);
@@ -34,10 +30,9 @@ describe('gateVerdict (S8 T6 — the WS12 exit criterion)', () => {
 
   it('every other plan_apply mutator is gated (no silent holes)', () => {
     for (const e of CATALOG.filter((c) => c.mutability === 'plan_apply')) {
-      expect(
-        gateVerdict(e, { mode: 'apply' }, false).allowed,
-        `${e.name} must gate apply`,
-      ).toBe(false);
+      expect(gateVerdict(e, { mode: 'apply' }, false).allowed, `${e.name} must gate apply`).toBe(
+        false,
+      );
     }
   });
 });

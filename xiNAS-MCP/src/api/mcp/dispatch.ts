@@ -19,10 +19,7 @@
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { CATALOG, type CatalogEntry } from './catalog.js';
 
 export interface LoopbackRequest {
@@ -155,8 +152,7 @@ export function buildMcpServer(opts: DispatcherOptions): Server {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: CATALOG.filter((e) => e.binary !== true).map((e) => ({
       name: e.name,
-      description:
-        e.status === 'degraded' ? `${e.description} [DEGRADED backend]` : e.description,
+      description: e.status === 'degraded' ? `${e.description} [DEGRADED backend]` : e.description,
       inputSchema: e.input_schema as { type: 'object'; [k: string]: unknown },
     })),
   }));

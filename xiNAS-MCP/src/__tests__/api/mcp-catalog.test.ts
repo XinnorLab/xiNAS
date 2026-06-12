@@ -74,8 +74,7 @@ describe('client catalog (S8 T2)', () => {
                 : req.delete(path);
         const res = await r.set('Authorization', ADMIN_TOKEN).send({});
         const unknownRoute =
-          res.status === 404 &&
-          JSON.stringify(res.body).includes('no such API route');
+          res.status === 404 && JSON.stringify(res.body).includes('no such API route');
         expect(unknownRoute, `${entry.name}: ${entry.method} ${path} is not mounted`).toBe(false);
       }
     }, 30_000);

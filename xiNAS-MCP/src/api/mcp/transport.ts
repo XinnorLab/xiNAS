@@ -68,11 +68,7 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
 
       const sessionId = req.header('mcp-session-id');
       if (sessionId !== undefined && sessions.has(sessionId)) {
-        await (sessions.get(sessionId) as McpSession).transport.handleRequest(
-          req,
-          res,
-          req.body,
-        );
+        await (sessions.get(sessionId) as McpSession).transport.handleRequest(req, res, req.body);
         return;
       }
 

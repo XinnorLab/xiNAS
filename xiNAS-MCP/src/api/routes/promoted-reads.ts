@@ -69,9 +69,13 @@ export function promotedReadsRouter(ctx: ApiContext): Router {
       );
       const out = await seamsOf().journalTail(unit, lines);
       if (out === null) {
-        sendOk(req, res, { lines: [] }, [], [
-          DEGRADED('journal', 'journalctl failed — is the service user in systemd-journal?'),
-        ]);
+        sendOk(
+          req,
+          res,
+          { lines: [] },
+          [],
+          [DEGRADED('journal', 'journalctl failed — is the service user in systemd-journal?')],
+        );
         return;
       }
       sendOk(req, res, { lines: out.split('\n').filter((l) => l.length > 0) });
@@ -84,9 +88,13 @@ export function promotedReadsRouter(ctx: ApiContext): Router {
     try {
       const metrics = await seamsOf().prometheusMetrics();
       if (metrics === null) {
-        sendOk(req, res, { available: false, metrics: null }, [], [
-          DEGRADED('performance metrics', 'the Prometheus exporter is unreachable'),
-        ]);
+        sendOk(
+          req,
+          res,
+          { available: false, metrics: null },
+          [],
+          [DEGRADED('performance metrics', 'the Prometheus exporter is unreachable')],
+        );
         return;
       }
       sendOk(req, res, { available: true, metrics });
@@ -99,9 +107,13 @@ export function promotedReadsRouter(ctx: ApiContext): Router {
     try {
       const raw = await seamsOf().repquota();
       if (raw === null) {
-        sendOk(req, res, { quotas: [] }, [], [
-          DEGRADED('quota report', 'repquota failed (may require privilege or quota mounts)'),
-        ]);
+        sendOk(
+          req,
+          res,
+          { quotas: [] },
+          [],
+          [DEGRADED('quota report', 'repquota failed (may require privilege or quota mounts)')],
+        );
         return;
       }
       sendOk(req, res, { quotas: parseRepquota(raw) });
@@ -110,15 +122,23 @@ export function promotedReadsRouter(ctx: ApiContext): Router {
     }
   });
 
-  const grpcRoute =
-    (path: string, what: string, call: () => Promise<unknown | null>, key: string) =>
-    (r.get(path, async (req, res, next) => {
+  const grpcRoute = (
+    path: string,
+    what: string,
+    call: () => Promise<unknown | null>,
+    key: string,
+  ) => (
+    r.get(path, async (req, res, next) => {
       try {
         const data = await call();
         if (data === null) {
-          sendOk(req, res, { [key]: null }, [], [
-            DEGRADED(what, 'the xiRAID daemon is unreachable (deprecated read path, ADR-0010)'),
-          ]);
+          sendOk(
+            req,
+            res,
+            { [key]: null },
+            [],
+            [DEGRADED(what, 'the xiRAID daemon is unreachable (deprecated read path, ADR-0010)')],
+          );
           return;
         }
         sendOk(req, res, { [key]: data });
@@ -126,7 +146,8 @@ export function promotedReadsRouter(ctx: ApiContext): Router {
         next(err);
       }
     }),
-    undefined);
+    undefined
+  );
 
   grpcRoute('/pools', 'pool list', () => seamsOf().grpcPoolShow(), 'pools');
   grpcRoute('/mail/recipients', 'mail recipients', () => seamsOf().grpcMailShow(), 'recipients');

@@ -99,9 +99,7 @@ describe('promoted read routes (S8 T5)', () => {
       ['/mail/settings', 'settings'],
       ['/auth/modes', 'modes'],
     ])('%s → 200 + DEGRADED warning', async (path) => {
-      const res = await request(setup.app)
-        .get(`/api/v1${path}`)
-        .set('Authorization', ADMIN_TOKEN);
+      const res = await request(setup.app).get(`/api/v1${path}`).set('Authorization', ADMIN_TOKEN);
       expect(res.status).toBe(200);
       expect(JSON.stringify(res.body.warnings)).toContain('DEGRADED_BACKEND_UNAVAILABLE');
     });

@@ -155,9 +155,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
           method: lreq.method,
           headers: {
             ...lreq.headers,
-            ...(payload !== undefined
-              ? { 'content-length': Buffer.byteLength(payload) }
-              : {}),
+            ...(payload !== undefined ? { 'content-length': Buffer.byteLength(payload) } : {}),
           },
         },
         (res2) => {

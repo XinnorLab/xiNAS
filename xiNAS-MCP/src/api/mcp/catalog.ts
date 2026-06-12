@@ -35,7 +35,11 @@ export interface CatalogEntry {
   binary?: boolean;
 }
 
-const NO_INPUT: Record<string, unknown> = { type: 'object', properties: {}, additionalProperties: false };
+const NO_INPUT: Record<string, unknown> = {
+  type: 'object',
+  properties: {},
+  additionalProperties: false,
+};
 
 const idInput = (name: string, description: string): Record<string, unknown> => ({
   type: 'object',
@@ -46,8 +50,15 @@ const idInput = (name: string, description: string): Record<string, unknown> => 
 
 /** The generic plan/apply mutation body (api-v1 plan/apply contract). */
 const MUTATE_PROPS: Record<string, unknown> = {
-  mode: { type: 'string', enum: ['plan', 'apply'], description: 'plan computes a diff; apply executes a previously returned plan_id' },
-  spec: { type: 'object', description: 'operation spec (see api-v1.yaml for the per-resource schema)' },
+  mode: {
+    type: 'string',
+    enum: ['plan', 'apply'],
+    description: 'plan computes a diff; apply executes a previously returned plan_id',
+  },
+  spec: {
+    type: 'object',
+    description: 'operation spec (see api-v1.yaml for the per-resource schema)',
+  },
   plan_id: { type: 'string', description: 'required for mode=apply' },
   idempotency_key: { type: 'string' },
   dangerous: { type: 'boolean', description: 'required true for destructive operations' },
@@ -112,61 +123,173 @@ export const CATALOG: CatalogEntry[] = [
   read('arrays.list', 'GET', '/arrays', 'List xiRAID arrays (observed state).'),
   read('arrays.get', 'GET', '/arrays/{id}', 'Get one xiRAID array.'),
   planApply('arrays.create', 'POST', '/arrays', 'Create a xiRAID array (plan/apply).', 'admin'),
-  planApply('arrays.import', 'POST', '/arrays', 'Import an existing xiRAID array (plan/apply; spec.import).', 'admin'),
-  planApply('arrays.modify', 'PATCH', '/arrays/{id}', 'Modify a xiRAID array (plan/apply).', 'admin'),
-  planApply('arrays.delete', 'DELETE', '/arrays/{id}', 'Delete a xiRAID array (plan/apply; dangerous).', 'admin'),
+  planApply(
+    'arrays.import',
+    'POST',
+    '/arrays',
+    'Import an existing xiRAID array (plan/apply; spec.import).',
+    'admin',
+  ),
+  planApply(
+    'arrays.modify',
+    'PATCH',
+    '/arrays/{id}',
+    'Modify a xiRAID array (plan/apply).',
+    'admin',
+  ),
+  planApply(
+    'arrays.delete',
+    'DELETE',
+    '/arrays/{id}',
+    'Delete a xiRAID array (plan/apply; dangerous).',
+    'admin',
+  ),
 
   // ── disks ──
   read('disks.list', 'GET', '/disks', 'List disks (observed state incl. health where reported).'),
-  read('disks.get', 'GET', '/disks/{id}', 'Get one disk (status.health covers the legacy SMART read where the probe reports it).'),
+  read(
+    'disks.get',
+    'GET',
+    '/disks/{id}',
+    'Get one disk (status.health covers the legacy SMART read where the probe reports it).',
+  ),
 
   // ── filesystems ──
   read('filesystems.list', 'GET', '/filesystems', 'List managed filesystems.'),
   read('filesystems.get', 'GET', '/filesystems/{id}', 'Get one managed filesystem.'),
-  planApply('filesystems.create', 'POST', '/filesystems', 'Create an XFS filesystem (plan/apply).', 'admin'),
-  planApply('filesystems.update', 'PATCH', '/filesystems/{id}', 'Mount/unmount/grow/quota (one intent per call; plan/apply).', 'admin'),
-  planApply('filesystems.delete', 'DELETE', '/filesystems/{id}', 'Unmanage a filesystem (plan/apply; dangerous).', 'admin'),
+  planApply(
+    'filesystems.create',
+    'POST',
+    '/filesystems',
+    'Create an XFS filesystem (plan/apply).',
+    'admin',
+  ),
+  planApply(
+    'filesystems.update',
+    'PATCH',
+    '/filesystems/{id}',
+    'Mount/unmount/grow/quota (one intent per call; plan/apply).',
+    'admin',
+  ),
+  planApply(
+    'filesystems.delete',
+    'DELETE',
+    '/filesystems/{id}',
+    'Unmanage a filesystem (plan/apply; dangerous).',
+    'admin',
+  ),
 
   // ── shares (NFS) — share operations are operator (legacy matrix) ──
   read('shares.list', 'GET', '/shares', 'List NFS shares (desired + observed exports).'),
   read('shares.get', 'GET', '/shares/{id}', 'Get one NFS share.'),
   read('nfs_sessions.list', 'GET', '/shares/{id}/sessions', 'Active NFS sessions for a share.'),
   planApply('shares.create', 'POST', '/shares', 'Create an NFS share (plan/apply).', 'operator'),
-  planApply('shares.update', 'PATCH', '/shares/{id}', 'Update an NFS share (plan/apply).', 'operator'),
-  planApply('shares.delete', 'DELETE', '/shares/{id}', 'Delete an NFS share (plan/apply; dangerous).', 'operator'),
+  planApply(
+    'shares.update',
+    'PATCH',
+    '/shares/{id}',
+    'Update an NFS share (plan/apply).',
+    'operator',
+  ),
+  planApply(
+    'shares.delete',
+    'DELETE',
+    '/shares/{id}',
+    'Delete an NFS share (plan/apply; dangerous).',
+    'operator',
+  ),
   read('export_groups.list', 'GET', '/export-groups', 'List export groups.'),
   read('service_ips.list', 'GET', '/service-ips', 'List service IPs.'),
 
   // ── NFS profile / idmap ──
   read('nfs_profiles.list', 'GET', '/nfs-profiles', 'List NFS server profiles.'),
   read('nfs_profiles.get', 'GET', '/nfs-profiles/{id}', 'Get an NFS server profile.'),
-  planApply('nfs_profiles.update', 'PATCH', '/nfs-profiles/{id}', 'Update the NFS server profile (plan/apply).', 'admin'),
+  planApply(
+    'nfs_profiles.update',
+    'PATCH',
+    '/nfs-profiles/{id}',
+    'Update the NFS server profile (plan/apply).',
+    'admin',
+  ),
   read('nfs_idmap.get', 'GET', '/nfs-idmap', 'Get the NFSv4 idmap configuration.'),
-  planApply('nfs_idmap.set', 'PATCH', '/nfs-idmap', 'Set the NFSv4 idmap domain (plan/apply).', 'operator'),
+  planApply(
+    'nfs_idmap.set',
+    'PATCH',
+    '/nfs-idmap',
+    'Set the NFSv4 idmap domain (plan/apply).',
+    'operator',
+  ),
 
   // ── network ──
   read('network.list', 'GET', '/network', 'List network interfaces (summary).'),
   read('network.interfaces.list', 'GET', '/network/interfaces', 'List managed network interfaces.'),
-  read('network.interfaces.get', 'GET', '/network/interfaces/{id}', 'Get one managed network interface.'),
-  planApply('network.interfaces.update', 'PATCH', '/network/interfaces/{id}', 'Update interface addresses/MTU/state (plan/apply).', 'admin'),
-  planApply('network.pool.apply', 'POST', '/network/ip-pool', 'Re-address all managed interfaces from a pool (plan/apply).', 'admin'),
+  read(
+    'network.interfaces.get',
+    'GET',
+    '/network/interfaces/{id}',
+    'Get one managed network interface.',
+  ),
+  planApply(
+    'network.interfaces.update',
+    'PATCH',
+    '/network/interfaces/{id}',
+    'Update interface addresses/MTU/state (plan/apply).',
+    'admin',
+  ),
+  planApply(
+    'network.pool.apply',
+    'POST',
+    '/network/ip-pool',
+    'Re-address all managed interfaces from a pool (plan/apply).',
+    'admin',
+  ),
 
   // ── health / drift ──
   {
-    ...read('health.check', 'GET', '/health', 'Run a health profile (quick KV-only; standard/deep add agent probes).'),
+    ...read(
+      'health.check',
+      'GET',
+      '/health',
+      'Run a health profile (quick KV-only; standard/deep add agent probes).',
+    ),
     input_schema: {
       type: 'object',
-      properties: { profile: { type: 'string', enum: ['quick', 'standard', 'deep'], default: 'quick' } },
+      properties: {
+        profile: { type: 'string', enum: ['quick', 'standard', 'deep'], default: 'quick' },
+      },
       additionalProperties: false,
     },
   },
-  read('drift.report', 'GET', '/config-history/drift', 'Desired-vs-observed drift report (S7 engine).'),
+  read(
+    'drift.report',
+    'GET',
+    '/config-history/drift',
+    'Desired-vs-observed drift report (S7 engine).',
+  ),
 
   // ── config history (bridge pending — degraded; review P1) ──
-  read('config_history.snapshots', 'GET', '/config-history/snapshots', 'List config snapshots. DEGRADED: the xinas_history bridge is not integrated yet; returns an empty stub with a warning.', { status: 'degraded' }),
-  read('config_history.show', 'GET', '/config-history/snapshots/{id}', 'Show one config snapshot. DEGRADED: bridge not integrated.', { status: 'degraded' }),
+  read(
+    'config_history.snapshots',
+    'GET',
+    '/config-history/snapshots',
+    'List config snapshots. DEGRADED: the xinas_history bridge is not integrated yet; returns an empty stub with a warning.',
+    { status: 'degraded' },
+  ),
+  read(
+    'config_history.show',
+    'GET',
+    '/config-history/snapshots/{id}',
+    'Show one config snapshot. DEGRADED: bridge not integrated.',
+    { status: 'degraded' },
+  ),
   {
-    ...read('config_history.diff', 'GET', '/config-history/diff', 'Diff two snapshots. DEGRADED: bridge not integrated.', { status: 'degraded' }),
+    ...read(
+      'config_history.diff',
+      'GET',
+      '/config-history/diff',
+      'Diff two snapshots. DEGRADED: bridge not integrated.',
+      { status: 'degraded' },
+    ),
     input_schema: {
       type: 'object',
       properties: { from: { type: 'string' }, to: { type: 'string' } },
@@ -174,14 +297,22 @@ export const CATALOG: CatalogEntry[] = [
       additionalProperties: false,
     },
   },
-  planApply('config_history.rollback', 'POST', '/config-history/rollback', 'Roll back to a snapshot. DEGRADED: returns EXECUTOR_UNAVAILABLE until the bridge lands.', 'admin', { status: 'degraded' }),
+  planApply(
+    'config_history.rollback',
+    'POST',
+    '/config-history/rollback',
+    'Roll back to a snapshot. DEGRADED: returns EXECUTOR_UNAVAILABLE until the bridge lands.',
+    'admin',
+    { status: 'degraded' },
+  ),
 
   // ── tasks ──
   read('tasks.list', 'GET', '/tasks', 'List tasks.'),
   read('tasks.get', 'GET', '/tasks/{id}', 'Get one task (state, stages, error).'),
   {
     name: 'tasks.cancel',
-    description: 'Request cooperative cancellation of a running task. DEGRADED: the route is a stub until cancel wiring lands. Allowed via MCP without allow_apply — an emergency stop cannot apply new state (ADR-0010).',
+    description:
+      'Request cooperative cancellation of a running task. DEGRADED: the route is a stub until cancel wiring lands. Allowed via MCP without allow_apply — an emergency stop cannot apply new state (ADR-0010).',
     method: 'POST',
     path: '/tasks/{id}/cancel',
     input_schema: idInput('id', 'task id'),
@@ -194,7 +325,8 @@ export const CATALOG: CatalogEntry[] = [
   // ── support bundle ──
   {
     name: 'support.bundle',
-    description: 'Create a redacted support bundle (read-style diagnostic; runs as a task). Allowed via MCP without allow_apply (ADR-0010 rationale).',
+    description:
+      'Create a redacted support bundle (read-style diagnostic; runs as a task). Allowed via MCP without allow_apply (ADR-0010 rationale).',
     method: 'POST',
     path: '/support-bundle',
     input_schema: NO_INPUT,
@@ -203,18 +335,35 @@ export const CATALOG: CatalogEntry[] = [
     min_role: 'operator',
     status: 'live',
   },
-  read('support.download', 'GET', '/support-bundle/{task_id}', 'Download a finished support bundle archive (binary; CLI only).', { binary: true }),
+  read(
+    'support.download',
+    'GET',
+    '/support-bundle/{task_id}',
+    'Download a finished support bundle archive (binary; CLI only).',
+    { binary: true },
+  ),
 
   // ── system / audit ──
   read('system.get', 'GET', '/system', 'Node status (agent state, observation age).'),
   read('system.capabilities', 'GET', '/capabilities', 'API capability matrix.'),
   read('system.controllers', 'GET', '/controllers', 'List controllers.'),
   read('system.inventory', 'GET', '/inventory', 'Hardware/OS inventory.'),
-  read('audit.query', 'GET', '/audit', 'Query audit records. DEGRADED: returns an empty stub with a warning until the audit query backend lands.', { status: 'degraded' }),
+  read(
+    'audit.query',
+    'GET',
+    '/audit',
+    'Query audit records. DEGRADED: returns an empty stub with a warning until the audit query backend lands.',
+    { status: 'degraded' },
+  ),
 
   // ── promoted legacy reads (S8 T5; ADR-0010 §read-route promotion) ──
   {
-    ...read('system.logs', 'GET', '/system/logs', 'Tail the systemd journal (scrubbed). Degrades with a warning when the journal group is missing.'),
+    ...read(
+      'system.logs',
+      'GET',
+      '/system/logs',
+      'Tail the systemd journal (scrubbed). Degrades with a warning when the journal group is missing.',
+    ),
     input_schema: {
       type: 'object',
       properties: {
@@ -224,12 +373,37 @@ export const CATALOG: CatalogEntry[] = [
       additionalProperties: false,
     },
   },
-  read('system.performance', 'GET', '/system/performance', 'Prometheus exporter metrics (raw text). Degrades when the exporter is unreachable.'),
+  read(
+    'system.performance',
+    'GET',
+    '/system/performance',
+    'Prometheus exporter metrics (raw text). Degrades when the exporter is unreachable.',
+  ),
   read('quotas.list', 'GET', '/quotas', 'User block quotas (repquota). Degrades when unavailable.'),
-  read('pools.list', 'GET', '/pools', 'xiRAID spare pools (deprecated read-only gRPC path, ADR-0010).'),
-  read('mail.recipients', 'GET', '/mail/recipients', 'xiRAID mail recipients (deprecated read-only gRPC path).'),
-  read('mail.settings', 'GET', '/mail/settings', 'xiRAID mail settings (deprecated read-only gRPC path).'),
-  read('auth.modes', 'GET', '/auth/modes', 'Supported NFS auth modes (deprecated read-only gRPC path).'),
+  read(
+    'pools.list',
+    'GET',
+    '/pools',
+    'xiRAID spare pools (deprecated read-only gRPC path, ADR-0010).',
+  ),
+  read(
+    'mail.recipients',
+    'GET',
+    '/mail/recipients',
+    'xiRAID mail recipients (deprecated read-only gRPC path).',
+  ),
+  read(
+    'mail.settings',
+    'GET',
+    '/mail/settings',
+    'xiRAID mail settings (deprecated read-only gRPC path).',
+  ),
+  read(
+    'auth.modes',
+    'GET',
+    '/auth/modes',
+    'Supported NFS auth modes (deprecated read-only gRPC path).',
+  ),
 
   // ── users / groups ──
   read('users.list', 'GET', '/users', 'List system users (NSS).'),

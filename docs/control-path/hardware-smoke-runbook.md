@@ -136,6 +136,32 @@ On a scratch node (or after `./uninstall.sh`):
   audit + the health report. Run it twice concurrently → the second
   queues behind the SupportBundle/default lease.
 
+## 5b. S8 — MCP / CLI / TUI clients
+
+- [ ] After the rebuild (`Requires-Rebuild: all` from the role
+  decomposition): `systemctl status xinas-mcp` shows the LEGACY unit
+  gone (stopped/disabled/removed by the shim); `xinas-api` serves
+  `/mcp`; `/usr/local/bin/xinas-mcp-stdio` and `/usr/local/bin/xinasctl`
+  exist.
+- [ ] **Demo re-point:** the remote MCP endpoint moves to the api's
+  `mcp.http` listener (set `mcp: { http: { host, port } }` in
+  `/etc/xinas-api/config.json` — e.g. the old :8080); re-point the
+  demo client config and re-create any remote bearer tokens in the
+  api token store (legacy /etc/xinas-mcp tokens do NOT migrate
+  automatically).
+- [ ] `xinasctl arrays list`, `xinasctl health check --profile quick`
+  over the UDS as root (peer trust, no token).
+- [ ] MCP exit criterion on hardware: a tool call with `mode=apply`
+  → `MCP_APPLY_DISABLED`; flip `mcp.allow_apply: true`, restart the
+  api, same call plans→applies→task success; flip back.
+- [ ] TUI parity: create a share, edit an interface IP, and run the
+  RAID delete teardown from the TUI — every step should appear as
+  tasks in `xinasctl tasks list` with plan/apply audit rows
+  (`client_type` rest), and NO direct netplan/mkfs/exportfs calls
+  from the TUI (check `ps`/journals during the operations).
+- [ ] One audit row per MCP tool call (`/var/log/xinas/audit.jsonl` —
+  no `http.POST./mcp` frames).
+
 ## 6. Cross-cutting
 
 1. [ ] **Plan→pause→apply:** plan an array modify, wait 2+ minutes,

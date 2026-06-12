@@ -106,9 +106,13 @@ describe.sequential('e2e: S8 xinasctl (fixture mode)', () => {
     // shim it like the other e2e harnesses so snapshots no-op cleanly.
     const shimBin = join(tmpDir, 'bin');
     mkdirSync(shimBin, { recursive: true });
-    writeFileSync(join(shimBin, 'python3'), '#!/bin/sh\necho "{\\"id\\": \\"snap-$$\\"}"\nexit 0\n', {
-      mode: 0o755,
-    });
+    writeFileSync(
+      join(shimBin, 'python3'),
+      '#!/bin/sh\necho "{\\"id\\": \\"snap-$$\\"}"\nexit 0\n',
+      {
+        mode: 0o755,
+      },
+    );
 
     const seedStore = await openStateStore({
       databasePath: dbPath,
@@ -161,7 +165,11 @@ describe.sequential('e2e: S8 xinasctl (fixture mode)', () => {
       try {
         await new Promise<void>((resolveP, reject) => {
           const req = http.get(
-            { socketPath: apiSockPath, path: '/api/v1/arrays', headers: { authorization: `Bearer ${ADMIN_TOKEN}` } },
+            {
+              socketPath: apiSockPath,
+              path: '/api/v1/arrays',
+              headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+            },
             (res) => {
               res.resume();
               res.statusCode === 200 ? resolveP() : reject(new Error(`status ${res.statusCode}`));
@@ -217,7 +225,11 @@ describe.sequential('e2e: S8 xinasctl (fixture mode)', () => {
         'create',
         '--plan',
         '--spec',
-        JSON.stringify({ path: '/mnt/data', fsid: 1, clients: [{ pattern: '*', options: ['rw'] }] }),
+        JSON.stringify({
+          path: '/mnt/data',
+          fsid: 1,
+          clients: [{ pattern: '*', options: ['rw'] }],
+        }),
         '--json',
       ],
       apiSockPath,
@@ -227,23 +239,35 @@ describe.sequential('e2e: S8 xinasctl (fixture mode)', () => {
     expect(env.result.plan_id).toBeTruthy();
   });
 
-  it('apply + --wait: support bundle to success; download streams gzip', { timeout: 60_000 }, async () => {
-    const bundle = await ctl(['support', 'bundle', '--json', '--wait'], apiSockPath);
-    expect(bundle.code, bundle.stderr).toBe(0);
-    const env = JSON.parse(bundle.stdout) as { result: { task_id: string } };
-    expect(bundle.stderr).toContain('success');
+  it(
+    'apply + --wait: support bundle to success; download streams gzip',
+    { timeout: 60_000 },
+    async () => {
+      const bundle = await ctl(['support', 'bundle', '--json', '--wait'], apiSockPath);
+      expect(bundle.code, bundle.stderr).toBe(0);
+      const env = JSON.parse(bundle.stdout) as { result: { task_id: string } };
+      expect(bundle.stderr).toContain('success');
 
-    const dl = await ctl(['support', 'download', env.result.task_id], apiSockPath);
-    expect(dl.code, dl.stderr).toBe(0);
-    expect(dl.stdout.length).toBeGreaterThan(0);
-  });
+      const dl = await ctl(['support', 'download', env.result.task_id], apiSockPath);
+      expect(dl.code, dl.stderr).toBe(0);
+      expect(dl.stdout.length).toBeGreaterThan(0);
+    },
+  );
 
   it('viewer token reads but cannot plan', async () => {
     const list = await ctl(['arrays', 'list', '--token', VIEWER_TOKEN, '--json'], apiSockPath);
     expect(list.code, list.stderr).toBe(0);
 
     const plan = await ctl(
-      ['shares', 'create', '--plan', '--spec', '{"path":"/mnt/data","clients":[]}', '--token', VIEWER_TOKEN],
+      [
+        'shares',
+        'create',
+        '--plan',
+        '--spec',
+        '{"path":"/mnt/data","clients":[]}',
+        '--token',
+        VIEWER_TOKEN,
+      ],
       apiSockPath,
     );
     expect(plan.code).toBe(1);
