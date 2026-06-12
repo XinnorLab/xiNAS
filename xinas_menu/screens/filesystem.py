@@ -1,8 +1,19 @@
-"""FilesystemScreen — Create and manage XFS filesystems on xiRAID arrays."""
+"""FilesystemScreen — Create and manage XFS filesystems on xiRAID arrays.
+
+S8 T14b (ADR-0010, s8-clients-spec §1 T13b): the screen rides the
+control-path API. List reads come from ``GET /api/v1/filesystems``;
+create is ONE plan→apply ``POST /api/v1/filesystems`` (the fs.create
+task runs mkfs + mount unit + mount); quota changes are one-intent
+``PATCH`` calls; delete is a stop-on-failure SEQUENCE (shares delete →
+unmount PATCH → unmanage DELETE) with NO cross-step rollback — each
+step's task carries its own rollback. The direct mkfs.xfs / findmnt /
+mount-unit / unmount helpers left the screen; the device picker reads
+``GET /api/v1/arrays`` instead of gRPC ``raid_show``.
+"""
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
 from typing import Any
 
@@ -13,8 +24,8 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.api.control_client import ControlPathError, TaskFailed
 from xinas_menu.apptype import XiNASAppMixin
-from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -36,12 +47,30 @@ _MENU = [
 _DATA_LEVELS = {"5", "6", "50", "60"}
 _LOG_LEVELS = {"0", "1", "10"}
 
+# Day-1 raid_fs mount options (logdev + quota flag ride the structured
+# spec fields — log_device / quota_mode — per the fs.create contract).
+_DEFAULT_MOUNT_OPTIONS = [
+    "noatime",
+    "nodiratime",
+    "logbsize=256k",
+    "largeio",
+    "inode64",
+    "swalloc",
+    "allocsize=131072k",
+]
+
 
 def _classify_role(level: str) -> str:
     """Suggest 'data' or 'log' based on RAID level."""
     if str(level) in _DATA_LEVELS:
         return "data"
     return "log"
+
+
+def _level_label(level: Any) -> str:
+    """API level ('raid5' / 'n+m') → display label ('5' / 'n+m')."""
+    text = str(level or "?")
+    return text[4:] if text.startswith("raid") and len(text) > 4 else text
 
 
 def _array_label(arr: dict) -> str:
@@ -53,6 +82,110 @@ def _array_label(arr: dict) -> str:
     strip = arr.get("strip_size", "?")
     role_hint = _classify_role(level)
     return f"{name}  (RAID-{level}, {dev_count} drives, {strip}KB strip)  [{role_hint}]"
+
+
+def _arrays_from_api(rows: Any) -> list[dict[str, Any]]:
+    """Adapt GET /api/v1/arrays docs to the wizard's array dict shape."""
+    arrays: list[dict[str, Any]] = []
+    for doc in rows if isinstance(rows, list) else []:
+        if not isinstance(doc, dict):
+            continue
+        spec = doc.get("spec")
+        spec = spec if isinstance(spec, dict) else {}
+        status = doc.get("status")
+        status = status if isinstance(status, dict) else {}
+        name = str(doc.get("id") or spec.get("name") or "")
+        if not name:
+            continue
+        arrays.append(
+            {
+                "name": name,
+                "level": _level_label(spec.get("level")),
+                "devices": [str(m) for m in spec.get("member_disk_ids") or []],
+                "strip_size": spec.get("strip_size_kib", "?"),
+                "volume_path": str(status.get("volume_path") or f"/dev/xi_{name}"),
+            }
+        )
+    return arrays
+
+
+def _fs_rows_from_api(rows: Any) -> list[dict[str, Any]]:
+    """Adapt GET /api/v1/filesystems docs to the screen's row shape.
+
+    API rows are ``{id (mount-unit name), spec?, status: {mountpoint,
+    backing_device, mounted, mount_options, effective_mount_options,
+    size_bytes, free_bytes, label, uuid, ...}}``.
+    """
+    out: list[dict[str, Any]] = []
+    for doc in rows if isinstance(rows, list) else []:
+        if not isinstance(doc, dict):
+            continue
+        fid = doc.get("id")
+        if fid is None:
+            continue
+        status = doc.get("status")
+        status = status if isinstance(status, dict) else {}
+        options = status.get("effective_mount_options") or status.get("mount_options") or []
+        options = [str(o) for o in options] if isinstance(options, list) else []
+        out.append(
+            {
+                "id": str(fid),
+                "mountpoint": str(status.get("mountpoint") or ""),
+                "backing_device": str(status.get("backing_device") or ""),
+                "mounted": status.get("mounted") is True,
+                "options": options,
+                "size_bytes": status.get("size_bytes"),
+                "free_bytes": status.get("free_bytes"),
+                "label": str(status.get("label") or ""),
+            }
+        )
+    return out
+
+
+def _volumes_in_use(fs_rows: list[dict[str, Any]]) -> set[str]:
+    """Volume paths consumed by managed filesystems (data OR log device)."""
+    used: set[str] = set()
+    for fs in fs_rows:
+        if fs.get("backing_device"):
+            used.add(str(fs["backing_device"]))
+        for opt in fs.get("options") or []:
+            if isinstance(opt, str) and opt.startswith("logdev="):
+                used.add(opt[len("logdev=") :])
+    return used
+
+
+def _is_under(path: str, root: str) -> bool:
+    """True when ``path`` is at or under ``root`` (path-segment aware)."""
+    if path == root:
+        return True
+    prefix = root if root.endswith("/") else root + "/"
+    return path.startswith(prefix)
+
+
+def _fmt_size(size_bytes: Any) -> str:
+    """Format byte count into human-readable string."""
+    if not isinstance(size_bytes, int | float) or size_bytes <= 0:
+        return "N/A"
+    value = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if value < 1024:
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+    return f"{value:.1f} EB"
+
+
+def _quota_flags(options: list[str]) -> dict[str, bool]:
+    """Quota enablement flags from a mount-options list.
+
+    Group quotas are parsed but not exposed in the TUI — XFS+NFS
+    setups use user and project quotas exclusively.
+    """
+    opts = {o.strip() for o in options}
+    return {
+        "user": bool(opts & {"uquota", "usrquota"}),
+        "project": bool(opts & {"pquota", "prjquota"}),
+        "group": bool(opts & {"gquota", "grpquota"}),
+    }
 
 
 class FilesystemScreen(XiNASAppMixin, Screen):
@@ -94,40 +227,66 @@ class FilesystemScreen(XiNASAppMixin, Screen):
         elif key == "4":
             self._manage_quotas()
 
+    # ── Task progress plumbing ────────────────────────────────────────────
+
+    def _task_progress(self, label: str):
+        """Build an ``on_progress`` callback for ``plan_apply_wait``.
+
+        ``plan_apply_wait`` runs in a worker thread, so the callback hops
+        back to the UI thread before raising the toast.
+        """
+
+        def _cb(state: str) -> None:
+            self.app.call_from_thread(self.app.notify, f"{label}: task {state}", timeout=4)
+
+        return _cb
+
+    async def _list_filesystems(self) -> list[dict[str, Any]]:
+        """GET /api/v1/filesystems adapted to the screen's row shape."""
+        rows = await asyncio.to_thread(self.app.control.result, "/api/v1/filesystems")
+        return _fs_rows_from_api(rows)
+
     # ── Show Filesystems ──────────────────────────────────────────────────
 
     @work(exclusive=True)
     async def _show_filesystems(self) -> None:
-        """Display currently mounted XFS filesystems."""
-        from xinas_menu.utils.xfs_helpers import run_async_cmd
-
+        """Display managed XFS filesystems (GET /api/v1/filesystems)."""
         view = self.query_one("#fs-content", ScrollableTextView)
         view.set_content("  Scanning filesystems...")
 
-        ok, out, err = await run_async_cmd("findmnt", "-t", "xfs", "-J", timeout=10)
-        GRN, BLD, DIM, CYN, NC = "\033[32m", "\033[1m", "\033[2m", "\033[36m", "\033[0m"
+        GRN, BLD, DIM, YLW, CYN, NC = (
+            "\033[32m",
+            "\033[1m",
+            "\033[2m",
+            "\033[33m",
+            "\033[36m",
+            "\033[0m",
+        )
         lines = [f"{BLD}{CYN}XFS Filesystems{NC}\n"]
 
-        if not ok or not out:
+        try:
+            fs_rows = await self._list_filesystems()
+        except ControlPathError as exc:
+            lines.append(f"  {DIM}Could not load filesystems: {exc}{NC}")
+            view.set_content("\n".join(lines))
+            return
+
+        if not fs_rows:
             lines.append(f"  {DIM}No XFS filesystems found.{NC}")
             view.set_content("\n".join(lines))
             return
 
-        try:
-            data = json.loads(out)
-            filesystems = data.get("filesystems", [])
-            if not filesystems:
-                lines.append(f"  {DIM}No XFS filesystems found.{NC}")
-            for fs in filesystems:
-                target = fs.get("target", "?")
-                source = fs.get("source", "?")
-                options = fs.get("options", "")
-                lines.append(f"  {GRN}{target}{NC}")
-                lines.append(f"    Device:  {source}")
-                lines.append(f"    Options: {DIM}{options}{NC}")
-                lines.append("")
-        except (json.JSONDecodeError, KeyError) as exc:
-            lines.append(f"  {DIM}(parse error: {exc}){NC}")
+        for fs in fs_rows:
+            target = fs["mountpoint"] or fs["id"]
+            mounted = f" {YLW}(not mounted){NC}" if not fs["mounted"] else ""
+            lines.append(f"  {GRN}{target}{NC}{mounted}")
+            lines.append(f"    Device:  {fs['backing_device'] or '?'}")
+            lines.append(f"    Options: {DIM}{','.join(fs['options'])}{NC}")
+            if fs.get("size_bytes") is not None:
+                size = _fmt_size(fs.get("size_bytes"))
+                free = _fmt_size(fs.get("free_bytes"))
+                lines.append(f"    Size:    {size} total, {free} free")
+            lines.append("")
 
         view.set_content("\n".join(lines))
 
@@ -135,42 +294,26 @@ class FilesystemScreen(XiNASAppMixin, Screen):
 
     @work(exclusive=True)
     async def _create_filesystem_wizard(self) -> None:
-        """Multi-step wizard: validate arrays → pick data → pick log → label → mount → confirm → execute."""
-        from xinas_menu.utils.xfs_helpers import (
-            build_mount_options,
-            calculate_stripe_width,
-            check_existing_filesystem,
-            create_mount_unit,
-            find_mounts_using_raid,
-            mkfs_xfs,
-            mount_filesystem,
-        )
-
+        """Multi-step wizard: validate arrays → pick data → pick log → label → mount → confirm → plan/apply."""
         view = self.query_one("#fs-content", ScrollableTextView)
 
-        # ── Pre-check: fetch RAID arrays ──────────────────────────────────
-        ok, data, err = await self.app.grpc.raid_show(extended=True)
-        if not ok:
+        # ── Pre-check: fetch RAID arrays (GET /api/v1/arrays) ─────────────
+        try:
+            arr_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
+        except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(
-                    f"Failed to query RAID arrays.\n{grpc_short_error(err)}",
-                    "Error",
-                )
+                ConfirmDialog(f"Failed to query RAID arrays.\n{exc}", "Error")
             )
             return
 
-        # Parse arrays and filter out those already in use (as data OR log device)
-        all_arrays = _parse_arrays(data)
-        arrays = []
-        in_use = []
-        for arr in all_arrays:
-            name = arr.get("name", "?")
-            mounts = await find_mounts_using_raid(name)
-            if mounts:
-                roles = ", ".join(f"{m['mountpoint']} ({m['role']})" for m in mounts)
-                in_use.append(f"{name} → {roles}")
-            else:
-                arrays.append(arr)
+        # Filter out arrays already in use as a data OR log device of a
+        # managed filesystem (GET /api/v1/filesystems).
+        try:
+            fs_rows = await self._list_filesystems()
+        except ControlPathError:
+            fs_rows = []
+        used = _volumes_in_use(fs_rows)
+        arrays = [a for a in _arrays_from_api(arr_rows) if a["volume_path"] not in used]
 
         if len(arrays) < 2:
             await self.app.push_screen_wait(
@@ -265,33 +408,28 @@ class FilesystemScreen(XiNASAppMixin, Screen):
                 self.app.notify("Mount point must be an absolute path.", severity="error")
             return
 
-        # ── Calculate XFS parameters ──────────────────────────────────────
-        data_device = f"/dev/xi_{data_name}"
-        log_device = f"/dev/xi_{log_name}"
-
-        data_devices = data_array.get("devices", [])
-        data_dev_count = len(data_devices) if isinstance(data_devices, list) else 0
+        # ── XFS parameters (stripe geometry is derived server-side) ──────
+        data_device = data_array["volume_path"]
+        log_device = log_array["volume_path"]
         data_level = str(data_array.get("level", "5"))
         strip_size = data_array.get("strip_size", 128)
         try:
             su_kb = int(strip_size)
         except (ValueError, TypeError):
             su_kb = 128
-
-        sw = calculate_stripe_width(data_dev_count, data_level)
-        mount_opts = build_mount_options(log_device)
+        mount_opts = f"defaults,{','.join(_DEFAULT_MOUNT_OPTIONS)},logdev={log_device},uquota"
 
         # ── Step 5: Confirmation ──────────────────────────────────────────
         summary = (
             f"Create XFS Filesystem?\n\n"
             f"  Label:          {label}\n"
-            f"  Data Array:     {data_name} (RAID-{data_level}, /dev/xi_{data_name})\n"
-            f"  Log Array:      {log_name} (RAID-{log_array.get('level', '?')}, /dev/xi_{log_name})\n"
+            f"  Data Array:     {data_name} (RAID-{data_level}, {data_device})\n"
+            f"  Log Array:      {log_name} (RAID-{log_array.get('level', '?')}, {log_device})\n"
             f"  Mount Point:    {mountpoint}\n"
             f"\n"
             f"  XFS Parameters:\n"
             f"    su (strip unit):   {su_kb} KB\n"
-            f"    sw (stripe width): {sw}\n"
+            f"    sw (stripe width): derived from array geometry\n"
             f"    sector size:       4k\n"
             f"    log size:          1G (capped to device)\n"
             f"\n"
@@ -304,58 +442,66 @@ class FilesystemScreen(XiNASAppMixin, Screen):
         if not confirmed:
             return
 
-        # ── Execute ───────────────────────────────────────────────────────
-        view.set_content("  Creating filesystem...")
-
-        # Check existing filesystem
-        fs_type, fs_label = await check_existing_filesystem(data_device)
-        if fs_type:
+        # ── Execute: ONE plan→apply POST (mkfs + mount unit + mount) ─────
+        view.set_content(f"  Creating filesystem on {data_device} (plan → apply)...")
+        spec: dict[str, Any] = {
+            "backing_device": data_device,
+            "mountpoint": mountpoint,
+            "fs_type": "xfs",
+            "label": label,
+            "log_device": log_device,
+            "log_size": "1G",
+            "sector_size": 4096,
+            "mount_options": list(_DEFAULT_MOUNT_OPTIONS),
+            "quota_mode": "uquota",
+        }
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "POST",
+                "/api/v1/filesystems",
+                spec,
+                on_progress=self._task_progress("Create Filesystem"),
+            )
+        except TaskFailed as exc:
+            # The executor's destruction gate: an existing filesystem on
+            # the device fails a non-force create. Offer the force retry
+            # (the legacy "existing filesystem" consent, post-task).
             warn_confirmed = await self.app.push_screen_wait(
                 ConfirmDialog(
-                    f"WARNING: {data_device} already has a {fs_type} filesystem"
-                    f"{f' labeled {chr(34)}{fs_label}{chr(34)}' if fs_label else ''}.\n\n"
-                    f"This will DESTROY all existing data.\n\nContinue?",
-                    "⚠ Existing Filesystem",
+                    f"Filesystem creation failed:\n{exc}\n\n"
+                    f"If {data_device} already carries a filesystem, retrying\n"
+                    f"with force will DESTROY all existing data.\n\n"
+                    f"Retry with force?",
+                    "⚠ Create Failed",
                 )
             )
             if not warn_confirmed:
-                view.set_content("  Filesystem creation cancelled.")
+                view.set_content("\033[31m  Filesystem creation failed.\033[0m")
                 return
-
-        # Run mkfs.xfs
-        view.set_content(f"  Running mkfs.xfs on {data_device}...")
-        ok, out, err = await mkfs_xfs(
-            label=label,
-            data_device=data_device,
-            log_device=log_device,
-            su_kb=su_kb,
-            sw=sw,
-            sector_size="4k",
-            log_size="1G",
-        )
-        if not ok:
-            await self.app.push_screen_wait(ConfirmDialog(f"mkfs.xfs failed:\n\n{err}", "Error"))
-            view.set_content("\033[31m  mkfs.xfs failed.\033[0m")
-            return
-
-        # Create systemd mount unit
-        view.set_content(f"  Creating mount unit for {mountpoint}...")
-        ok, err = await create_mount_unit(mountpoint, data_device, log_device, mount_opts)
-        if not ok:
+            view.set_content(f"  Re-creating with force on {data_device}...")
+            try:
+                await asyncio.to_thread(
+                    self.app.control.plan_apply_wait,
+                    "POST",
+                    "/api/v1/filesystems",
+                    {**spec, "force": True},
+                    dangerous=True,
+                    on_progress=self._task_progress("Create Filesystem"),
+                )
+            except ControlPathError as exc2:
+                await self.app.push_screen_wait(
+                    ConfirmDialog(f"Filesystem creation failed:\n\n{exc2}", "Error")
+                )
+                view.set_content("\033[31m  Filesystem creation failed.\033[0m")
+                return
+        except ControlPathError as exc:
+            # PlanBlocked carries the plan's blocker text; ApiError /
+            # TransportError carry the envelope/socket failure.
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Failed to create mount unit:\n\n{err}", "Error")
+                ConfirmDialog(f"Filesystem creation failed:\n\n{exc}", "Error")
             )
-            view.set_content("\033[31m  Mount unit creation failed.\033[0m")
-            return
-
-        # Enable and start mount
-        view.set_content(f"  Mounting {mountpoint}...")
-        ok, err = await mount_filesystem(mountpoint)
-        if not ok:
-            await self.app.push_screen_wait(
-                ConfirmDialog(f"Failed to mount filesystem:\n\n{err}", "Error")
-            )
-            view.set_content("\033[31m  Mount failed.\033[0m")
+            view.set_content("\033[31m  Filesystem creation failed.\033[0m")
             return
 
         # Success
@@ -381,32 +527,57 @@ class FilesystemScreen(XiNASAppMixin, Screen):
 
     # ── Delete Filesystem ──────────────────────────────────────────────────
 
-    @work(exclusive=True)
-    async def _delete_filesystem(self) -> None:
-        """Delete a filesystem: check shares → remove shares → unmount → remove unit."""
-        from xinas_menu.utils.xfs_helpers import (
-            run_async_cmd,
-            unmount_filesystem,
+    def _teardown_append(self, lines: list[str], line: str) -> None:
+        """Append a step line to the teardown progress view."""
+        lines.append(line)
+        self.query_one("#fs-content", ScrollableTextView).set_content("\n".join(lines))
+
+    def _teardown_progress(self, lines: list[str]):
+        """``on_progress`` callback rendering task states as step lines.
+
+        ``plan_apply_wait`` runs in a worker thread, so the callback hops
+        back to the UI thread before touching the view.
+        """
+
+        def _cb(state: str) -> None:
+            self.app.call_from_thread(self._teardown_append, lines, f"      task {state}")
+
+        return _cb
+
+    async def _teardown_failed(self, lines: list[str], step: str, exc: Exception) -> None:
+        """Render a stop-on-failure halt (s8-clients-spec §6: no cross-step
+        rollback — each step's task carries its own rollback)."""
+        self._teardown_append(lines, f"  FAILED: {exc}")
+        self._teardown_append(lines, "  Teardown stopped — remaining steps were not run.")
+        await self.app.push_screen_wait(
+            ConfirmDialog(
+                f"{step}:\n{exc}\n\n"
+                "Teardown stopped at this step. No cross-step rollback; the "
+                "failed task rolled itself back where supported.",
+                "Delete Filesystem — Stopped",
+            )
         )
 
+    @work(exclusive=True)
+    async def _delete_filesystem(self) -> None:
+        """Delete a filesystem: shares delete → unmount PATCH → unmanage DELETE.
+
+        Stop-on-failure SEQUENCE of control-path API operations (the
+        s8-clients-spec §6 teardown shape) — a step failure stops the
+        sequence with the task/plan error surfaced; no cross-step rollback.
+        """
         view = self.query_one("#fs-content", ScrollableTextView)
         view.set_content("  Scanning filesystems...")
 
-        # Find all XFS filesystems
-        ok, out, err = await run_async_cmd("findmnt", "-t", "xfs", "-J", timeout=10)
-        if not ok or not out:
+        try:
+            fs_rows = await self._list_filesystems()
+        except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog("No XFS filesystems found.", "Delete Filesystem")
+                ConfirmDialog(f"Could not load filesystems.\n{exc}", "Delete Filesystem")
             )
             return
 
-        try:
-            data = json.loads(out)
-            filesystems = data.get("filesystems", [])
-        except (json.JSONDecodeError, KeyError):
-            filesystems = []
-
-        if not filesystems:
+        if not fs_rows:
             await self.app.push_screen_wait(
                 ConfirmDialog("No XFS filesystems found.", "Delete Filesystem")
             )
@@ -414,12 +585,10 @@ class FilesystemScreen(XiNASAppMixin, Screen):
 
         # Build selection list
         fs_labels = []
-        fs_list = []
-        for fs in filesystems:
-            target = fs.get("target", "?")
-            source = fs.get("source", "?")
+        for fs in fs_rows:
+            target = fs["mountpoint"] or fs["id"]
+            source = fs["backing_device"] or "?"
             fs_labels.append(f"{target}  ({source})")
-            fs_list.append(fs)
 
         choice = await self.app.push_screen_wait(
             SelectDialog(
@@ -432,26 +601,36 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             return
 
         idx = fs_labels.index(choice)
-        target_fs = fs_list[idx]
-        mountpoint = target_fs.get("target", "")
-        source_dev = target_fs.get("source", "")
+        target_fs = fs_rows[idx]
+        fs_id = target_fs["id"]
+        mountpoint = target_fs["mountpoint"]
+        source_dev = target_fs["backing_device"]
 
         # ── Check for active NFS shares on this mountpoint ───────────────
-        affected_shares: list[dict] = []
-        ok_nfs, exports, _ = self.app.nfs.list_exports()
-        if ok_nfs and exports:
-            for exp in exports:
-                exp_path = exp.get("path", "")
-                if mountpoint and exp_path.startswith(mountpoint):
-                    affected_shares.append(exp)
+        affected_shares: list[dict] = []  # [{id, path}]
+        if mountpoint:
+            try:
+                share_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
+            except ControlPathError:
+                share_rows = []
+            for doc in share_rows if isinstance(share_rows, list) else []:
+                if not isinstance(doc, dict):
+                    continue
+                doc_spec = doc.get("spec")
+                path = doc_spec.get("path") if isinstance(doc_spec, dict) else None
+                sid = doc.get("id")
+                if not path or sid is None:
+                    continue
+                if _is_under(str(path), mountpoint):
+                    affected_shares.append({"id": str(sid), "path": str(path)})
 
         # ── Build warning ────────────────────────────────────────────────
         warning_parts = [
-            f"Filesystem: {mountpoint}\nDevice:     {source_dev}\n",
+            f"Filesystem: {mountpoint or fs_id}\nDevice:     {source_dev}\n",
         ]
 
         if affected_shares:
-            share_list = "\n".join(f"  - {s.get('path', '?')}" for s in affected_shares)
+            share_list = "\n".join(f"  - {s['path']}" for s in affected_shares)
             warning_parts.append(f"ACTIVE NFS SHARES will be removed first:\n{share_list}\n")
 
         warning_parts.append(
@@ -478,49 +657,57 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             if not confirmed2:
                 return
 
-        # ── Step 1: Remove NFS shares ────────────────────────────────────
-        removed_shares: list[dict] = []
+        lines: list[str] = []
+        self._teardown_append(lines, f"Teardown sequence for filesystem '{mountpoint or fs_id}':")
+        progress = self._teardown_progress(lines)
+
+        # ── Step 1: Remove NFS shares (API delete; stop on failure) ──────
+        removed_shares = 0
         for share in affected_shares:
-            path = share.get("path", "")
-            view.set_content(f"  Removing NFS share: {path}...")
-            ok_rm, _, err_rm = self.app.nfs.remove_export(path)
-            if not ok_rm:
-                # Rollback: re-add previously removed shares
-                for rs in removed_shares:
-                    self.app.nfs.add_export(rs)
-                self.app.nfs.reload()
-                await self.app.push_screen_wait(
-                    ConfirmDialog(
-                        f"Failed to remove NFS share '{path}':\n{err_rm}\n\n"
-                        f"Rolled back {len(removed_shares)} previously removed share(s).",
-                        "Error — Rollback Complete",
-                    )
+            path = share["path"]
+            self._teardown_append(lines, f"  Removing NFS share: {path} ...")
+            try:
+                await asyncio.to_thread(
+                    self.app.control.plan_apply_wait,
+                    "DELETE",
+                    f"/api/v1/shares/{share['id']}",
+                    {},
+                    on_progress=progress,
                 )
-                view.set_content("  Delete cancelled (rollback complete).")
+            except ControlPathError as exc:
+                await self._teardown_failed(lines, f"Failed to remove NFS share '{path}'", exc)
                 return
-            removed_shares.append(share)
+            removed_shares += 1
             self.app.audit.log("nfs.remove", f"share={path} (FS teardown)", "OK")
 
-        if removed_shares:
-            self.app.nfs.reload()
-
-        # ── Step 2: Unmount filesystem ───────────────────────────────────
-        view.set_content(f"  Unmounting {mountpoint}...")
-        ok_um, err_um = await unmount_filesystem(mountpoint)
-        if not ok_um:
-            # Rollback: re-add shares
-            for rs in removed_shares:
-                self.app.nfs.add_export(rs)
-            if removed_shares:
-                self.app.nfs.reload()
-            await self.app.push_screen_wait(
-                ConfirmDialog(
-                    f"Failed to unmount '{mountpoint}':\n{err_um}\n\n"
-                    f"Rolled back {len(removed_shares)} share(s).",
-                    "Error — Rollback Complete",
+        # ── Step 2: Unmount filesystem (one-intent PATCH) ────────────────
+        if target_fs["mounted"]:
+            self._teardown_append(lines, f"  Unmounting {mountpoint} ...")
+            try:
+                await asyncio.to_thread(
+                    self.app.control.plan_apply_wait,
+                    "PATCH",
+                    f"/api/v1/filesystems/{fs_id}",
+                    {"mounted": False},
+                    on_progress=progress,
                 )
+            except ControlPathError as exc:
+                await self._teardown_failed(lines, f"Failed to unmount '{mountpoint}'", exc)
+                return
+            self.app.audit.log("fs.unmount", f"mountpoint={mountpoint} (FS teardown)", "OK")
+
+        # ── Step 3: Unmanage (DELETE removes the unit; data untouched) ───
+        self._teardown_append(lines, f"  Removing mount unit: {fs_id} ...")
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "DELETE",
+                f"/api/v1/filesystems/{fs_id}",
+                {},
+                on_progress=progress,
             )
-            view.set_content("  Delete cancelled (rollback complete).")
+        except ControlPathError as exc:
+            await self._teardown_failed(lines, f"Failed to remove mount unit '{fs_id}'", exc)
             return
 
         # Success
@@ -532,28 +719,22 @@ class FilesystemScreen(XiNASAppMixin, Screen):
         await self.app.snapshots.record(
             "fs_delete",
             diff_summary=f"Deleted filesystem at {mountpoint} (device {source_dev})"
-            + (f", removed {len(removed_shares)} share(s)" if removed_shares else ""),
+            + (f", removed {removed_shares} share(s)" if removed_shares else ""),
         )
         GRN, BLD, NC = "\033[32m", "\033[1m", "\033[0m"
-        summary_parts = [f"{BLD}{GRN}Filesystem deleted successfully.{NC}\n"]
-        summary_parts.append(f"  Mountpoint:  {mountpoint}")
-        summary_parts.append(f"  Device:      {source_dev}")
+        self._teardown_append(lines, "")
+        self._teardown_append(lines, f"{BLD}{GRN}Filesystem deleted successfully.{NC}")
+        self._teardown_append(lines, f"  Mountpoint:  {mountpoint}")
+        self._teardown_append(lines, f"  Device:      {source_dev}")
         if removed_shares:
-            summary_parts.append(f"  Removed {len(removed_shares)} NFS share(s)")
-        view.set_content("\n".join(summary_parts))
+            self._teardown_append(lines, f"  Removed {removed_shares} NFS share(s)")
         self.app.notify("Filesystem unmounted and removed.", severity="information")
 
     # ── Manage Quotas ──────────────────────────────────────────────────────
 
     @work(exclusive=True)
     async def _manage_quotas(self) -> None:
-        """Enable or disable XFS user/project quotas on a filesystem."""
-        from xinas_menu.utils.xfs_helpers import (
-            get_quota_status,
-            run_async_cmd,
-            update_mount_unit_quota,
-        )
-
+        """Set the XFS quota mode on a filesystem (one-intent PATCH)."""
         view = self.query_one("#fs-content", ScrollableTextView)
         view.set_content("  Scanning filesystems...")
 
@@ -567,29 +748,22 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             "\033[0m",
         )
 
-        # Discover XFS filesystems
-        ok, out, err = await run_async_cmd("findmnt", "-t", "xfs", "-J", timeout=10)
-        if not ok or not out:
-            view.set_content(f"  {DIM}No XFS filesystems found.{NC}")
+        # Discover managed XFS filesystems
+        try:
+            fs_rows = await self._list_filesystems()
+        except ControlPathError as exc:
+            view.set_content(f"  {DIM}Could not load filesystems: {exc}{NC}")
             return
 
-        try:
-            data = json.loads(out)
-            filesystems = data.get("filesystems", [])
-        except (json.JSONDecodeError, KeyError):
-            filesystems = []
-
-        if not filesystems:
+        if not fs_rows:
             view.set_content(f"  {DIM}No XFS filesystems found.{NC}")
             return
 
         # Build selection list with quota status
         fs_labels = []
-        fs_list = []
-        for fs in filesystems:
-            target = fs.get("target", "?")
-            options = fs.get("options", "")
-            qs = get_quota_status(options)
+        for fs in fs_rows:
+            target = fs["mountpoint"] or fs["id"]
+            qs = _quota_flags(fs["options"])
             status_parts = []
             if qs["user"]:
                 status_parts.append(f"{GRN}user{NC}")
@@ -597,9 +771,7 @@ class FilesystemScreen(XiNASAppMixin, Screen):
                 status_parts.append(f"{GRN}project{NC}")
             if not status_parts:
                 status_parts.append(f"{YLW}none{NC}")
-            label = f"{target}  [quotas: {', '.join(status_parts)}]"
-            fs_labels.append(label)
-            fs_list.append(fs)
+            fs_labels.append(f"{target}  [quotas: {', '.join(status_parts)}]")
 
         # Show overview first
         lines = [f"{BLD}{CYN}XFS Quota Status{NC}\n"]
@@ -611,10 +783,9 @@ class FilesystemScreen(XiNASAppMixin, Screen):
         # Select filesystem
         # Use plain labels for SelectDialog (no ANSI)
         plain_labels = []
-        for fs in fs_list:
-            target = fs.get("target", "?")
-            options = fs.get("options", "")
-            qs = get_quota_status(options)
+        for fs in fs_rows:
+            target = fs["mountpoint"] or fs["id"]
+            qs = _quota_flags(fs["options"])
             parts = []
             if qs["user"]:
                 parts.append("user")
@@ -634,60 +805,43 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             return
 
         idx = plain_labels.index(choice)
-        target_fs = fs_list[idx]
-        mountpoint = target_fs.get("target", "")
-        options = target_fs.get("options", "")
-        qs = get_quota_status(options)
+        target_fs = fs_rows[idx]
+        fs_id = target_fs["id"]
+        mountpoint = target_fs["mountpoint"] or fs_id
+        qs = _quota_flags(target_fs["options"])
 
-        # Show toggle options
-        actions = []
+        # Show toggle options. The API holds ONE quota mode per filesystem
+        # (none | uquota | pquota) — enabling a mode replaces the current
+        # flag, so user+project simultaneously is no longer offered.
+        actions: list[tuple[str, str, str]] = []  # (label, quota_mode, description)
         if not qs["user"]:
-            actions.append("Enable User Quotas (uquota)")
+            desc = "enable user quotas" + (" (replaces project quotas)" if qs["project"] else "")
+            actions.append(("Enable User Quotas (uquota)", "uquota", desc))
         else:
-            actions.append("Disable User Quotas")
+            actions.append(("Disable User Quotas", "none", "disable user quotas"))
         if not qs["project"]:
-            actions.append("Enable Project Quotas (pquota)")
+            desc = "enable project quotas" + (" (replaces user quotas)" if qs["user"] else "")
+            actions.append(("Enable Project Quotas (pquota)", "pquota", desc))
         else:
-            actions.append("Disable Project Quotas")
-        if not qs["user"] and not qs["project"]:
-            actions.append("Enable Both (user + project)")
+            actions.append(("Disable Project Quotas", "none", "disable project quotas"))
 
         action = await self.app.push_screen_wait(
-            SelectDialog(actions, title=f"Quotas — {mountpoint}", prompt="Select action:")
+            SelectDialog(
+                [a[0] for a in actions],
+                title=f"Quotas — {mountpoint}",
+                prompt="Select action:",
+            )
         )
         if not action:
             return
 
-        # Determine what to toggle
-        enable_user: bool | None = None
-        enable_project: bool | None = None
-        if action.startswith("Enable User"):
-            enable_user = True
-        elif action.startswith("Disable User"):
-            enable_user = False
-        elif action.startswith("Enable Project"):
-            enable_project = True
-        elif action.startswith("Disable Project"):
-            enable_project = False
-        elif action.startswith("Enable Both"):
-            enable_user = True
-            enable_project = True
+        quota_mode, desc = next((m, d) for label, m, d in actions if label == action)
 
         # Confirm
-        desc_parts = []
-        if enable_user is True:
-            desc_parts.append("enable user quotas")
-        elif enable_user is False:
-            desc_parts.append("disable user quotas")
-        if enable_project is True:
-            desc_parts.append("enable project quotas")
-        elif enable_project is False:
-            desc_parts.append("disable project quotas")
-
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
                 f"Filesystem: {mountpoint}\n\n"
-                f"Action: {', '.join(desc_parts)}\n\n"
+                f"Action: {desc}\n\n"
                 f"WARNING: XFS requires a full unmount/mount cycle to change\n"
                 f"quota settings. Active NFS clients may be briefly disconnected.",
                 "Confirm Quota Change",
@@ -698,44 +852,34 @@ class FilesystemScreen(XiNASAppMixin, Screen):
 
         view.set_content(f"  Updating quota settings on {mountpoint}...")
 
-        ok, err = await update_mount_unit_quota(
-            mountpoint,
-            enable_user=enable_user,
-            enable_project=enable_project,
-        )
-        if ok:
-            self.app.audit.log(
-                "fs.quota",
-                f"{mountpoint}: {', '.join(desc_parts)}",
-                "OK",
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "PATCH",
+                f"/api/v1/filesystems/{fs_id}",
+                {"quota_mode": quota_mode},
+                on_progress=self._task_progress("Quota Change"),
             )
-            await self.app.snapshots.record(
-                "fs_modify",
-                diff_summary=f"Changed quotas on {mountpoint}: {', '.join(desc_parts)}",
-            )
-            view.set_content(
-                f"{BLD}{GRN}Quota settings updated.{NC}\n\n"
-                f"  Filesystem: {mountpoint}\n"
-                f"  Changed:    {', '.join(desc_parts)}\n\n"
-                f"  {DIM}Filesystem remounted. Quotas are now active.{NC}"
-            )
-            self.app.notify("Quota settings updated.", severity="information")
-        else:
+        except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Failed to update quotas:\n\n{err}", "Error", ok_only=True)
+                ConfirmDialog(f"Failed to update quotas:\n\n{exc}", "Error", ok_only=True)
             )
-            view.set_content(f"{RED}Failed to update quotas: {err}{NC}")
+            view.set_content(f"{RED}Failed to update quotas: {exc}{NC}")
+            return
 
-
-def _parse_arrays(data: Any) -> list[dict]:
-    """Parse raid_show response into a list of array dicts."""
-    if isinstance(data, list):
-        return [a for a in data if isinstance(a, dict)]
-    if isinstance(data, dict):
-        result = []
-        for name, arr in data.items():
-            if isinstance(arr, dict):
-                arr.setdefault("name", name)
-                result.append(arr)
-        return result
-    return []
+        self.app.audit.log(
+            "fs.quota",
+            f"{mountpoint}: {desc}",
+            "OK",
+        )
+        await self.app.snapshots.record(
+            "fs_modify",
+            diff_summary=f"Changed quotas on {mountpoint}: {desc}",
+        )
+        view.set_content(
+            f"{BLD}{GRN}Quota settings updated.{NC}\n\n"
+            f"  Filesystem: {mountpoint}\n"
+            f"  Changed:    {desc}\n\n"
+            f"  {DIM}Filesystem remounted. Quotas are now active.{NC}"
+        )
+        self.app.notify("Quota settings updated.", severity="information")
