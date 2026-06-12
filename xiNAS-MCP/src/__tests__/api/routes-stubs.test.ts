@@ -17,12 +17,17 @@ describe('stub routes', () => {
     expect(res.body.result).toEqual([]);
   });
 
-  it('GET /audit returns empty + warning', async () => {
-    const res = await request(setup.app).get('/api/v1/audit').set('Authorization', ADMIN_TOKEN);
+  it('GET /audit is live (S9): empty result on a fresh store, NO stub warning', async () => {
+    const res = await request(setup.app)
+      .get('/api/v1/audit')
+      .set('Authorization', ADMIN_TOKEN);
     expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.result)).toBe(true);
     expect(
-      res.body.warnings.some((w: { code: string }) => w.code === 'AUDIT_QUERY_NOT_IMPLEMENTED'),
-    ).toBe(true);
+      res.body.warnings.some(
+        (w: { code: string }) => w.code === 'AUDIT_QUERY_NOT_IMPLEMENTED',
+      ),
+    ).toBe(false);
   });
 
   it('GET /config-history/snapshots is live (S9): empty result, NO stub warning', async () => {
