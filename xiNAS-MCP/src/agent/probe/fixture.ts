@@ -151,6 +151,22 @@ export function createFixtureTuningProbe(dir: string): {
   };
 }
 
+/** Snapshot diffs: reads <dir>/config-diffs.json keyed "<from>..<to>"; missing key → error. */
+export function createFixtureDiffSource(dir: string): {
+  snapshotDiff(from: string, to: string): Promise<unknown>;
+} {
+  return {
+    snapshotDiff: (from: string, to: string) => {
+      const diffs = readFixture<Record<string, unknown>>(dir, 'config-diffs.json', {});
+      const hit = diffs[`${from}..${to}`];
+      if (hit === undefined) {
+        return Promise.reject(new Error(`no fixture diff for ${from}..${to}`));
+      }
+      return Promise.resolve(hit);
+    },
+  };
+}
+
 /** ConfigSnapshot manifests: reads <dir>/config-snapshots.json (manifest array); absent → []. */
 export function createFixtureSnapshotSource(dir: string): {
   snapshotList(): Promise<import('../task/xinas-history-bridge.js').HistoryManifest[]>;

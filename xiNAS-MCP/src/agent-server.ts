@@ -26,6 +26,7 @@ import { log } from './agent/log.js';
 import { createDispatcher } from './agent/rpc/dispatch.js';
 import { makeHealthHandler } from './agent/rpc/methods/health.js';
 import { makeHealthProbeDeps, makeHealthProbeHandler } from './agent/rpc/methods/health-probe.js';
+import { makeConfigDiffDeps, makeConfigDiffHandler } from './agent/rpc/methods/config-diff.js';
 import { STUB_METHODS } from './agent/rpc/methods/stubs.js';
 import { makeTaskHandlers } from './agent/rpc/methods/task.js';
 import { makeVersionHandler } from './agent/rpc/methods/version.js';
@@ -108,10 +109,15 @@ async function main(): Promise<void> {
     }),
   );
 
+  // config.diff (S9 T3, ADR-0011): on-demand snapshot diff via the
+  // xinas_history bridge (fixture-backed in fixture mode).
+  const configDiffHandler = makeConfigDiffHandler(makeConfigDiffDeps());
+
   const dispatch = createDispatcher({
     'agent.health': healthHandler,
     'agent.version': versionHandler,
     'health.probe': healthProbeHandler,
+    'config.diff': configDiffHandler,
     ...STUB_METHODS,
     ...taskHandlers,
   });
