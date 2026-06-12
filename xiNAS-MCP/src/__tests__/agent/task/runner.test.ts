@@ -387,3 +387,52 @@ describe('TaskRunner.run — cancel (S10)', () => {
     expect(terminal?.error_code).toBe('FAILED_PARTIAL_ROLLED_BACK');
   });
 });
+
+// ── S10 T3: reference executor spec.sleep_ms (cancellable slow task) ─────────
+
+describe('reference executor sleep_ms (S10)', () => {
+  it('clampSleepMs: non-finite/negative → 0, cap 60_000', async () => {
+    const { clampSleepMs } = await import('../../../agent/task/reference-executor.js');
+    expect(clampSleepMs(undefined)).toBe(0);
+    expect(clampSleepMs(-5)).toBe(0);
+    expect(clampSleepMs('x')).toBe(0);
+    expect(clampSleepMs(150)).toBe(150);
+    expect(clampSleepMs(999_999)).toBe(60_000);
+  });
+
+  it('sleep_ms delays the apply stage and still succeeds', async () => {
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+    });
+    const runner = makeRunner(makeBridge(['b', 'a']));
+    const t0 = Date.now();
+    await runner.run(
+      { task_id: 'ts', operation_kind: 'reference.echo', spec: { sleep_ms: 150 } },
+      referenceExecutor,
+      publish,
+    );
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(140);
+    expect(events.at(-1)?.status).toBe('success');
+  });
+
+  it('cancel during the sleep → apply throws → attributed → terminal(cancelled)', async () => {
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+    });
+    const runner = makeRunner(makeBridge(['b']));
+    const done = runner.run(
+      { task_id: 'tslow', operation_kind: 'reference.echo', spec: { sleep_ms: 10_000 } },
+      referenceExecutor,
+      publish,
+    );
+    await new Promise((r) => setTimeout(r, 250));
+    runner.requestCancel('tslow');
+    await done;
+    const failed = events.find((e) => e.event_type === 'stage_failed');
+    expect(failed?.stage_name).toBe('apply');
+    expect(failed?.error_message).toContain('cancelled during sleep');
+    expect(events.at(-1)?.status).toBe('cancelled');
+  }, 15_000);
+});
