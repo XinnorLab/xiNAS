@@ -14,6 +14,11 @@ import {
 import { netIfaceUpdateProvider, netPoolApplyProvider } from '../plan/providers/network.js';
 import { supportBundleProvider } from '../plan/providers/support.js';
 import { configRollbackProvider } from '../plan/providers/config-rollback.js';
+import {
+  poolCreateProvider,
+  poolDeleteProvider,
+  poolModifyProvider,
+} from '../plan/providers/pool.js';
 import { buildNfsPlanProviders } from '../plan/providers/nfs.js';
 import { referencePlanProvider } from '../plan/providers/reference.js';
 import {
@@ -78,6 +83,9 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   planEngine.register(netIfaceUpdateProvider);
   planEngine.register(supportBundleProvider);
   planEngine.register(configRollbackProvider);
+  planEngine.register(poolCreateProvider);
+  planEngine.register(poolModifyProvider);
+  planEngine.register(poolDeleteProvider);
   planEngine.register(netPoolApplyProvider);
 
   return {

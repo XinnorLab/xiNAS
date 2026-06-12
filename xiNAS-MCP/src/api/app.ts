@@ -4,6 +4,7 @@ import { ApiException } from './errors.js';
 import { executorUnavailable } from './handlers/unsupported.js';
 import { rbacMiddleware } from './middleware/rbac.js';
 import { promotedReadsRouter } from './routes/promoted-reads.js';
+import { poolsRouter } from './routes/pools.js';
 import { mountMcpTransport } from './mcp/transport.js';
 import { randomBytes } from 'node:crypto';
 import type { HeartbeatTracker } from './heartbeat.js';
@@ -96,6 +97,8 @@ export function createApp(ctx: ApiContext): Express {
   v1.use(nfsIdmapRouter(ctx));
   // S8 T5 (ADR-0010): the promoted legacy read routes.
   v1.use(promotedReadsRouter(ctx));
+  // S9 T8 (ADR-0011): pool mutations.
+  v1.use(poolsRouter(ctx));
 
   // S2 reference plan/apply route — the first REAL mutating route, wired to
   // the task engine (ctx.tasks). Mounted before the executorUnavailable stub
