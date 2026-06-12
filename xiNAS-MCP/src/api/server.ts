@@ -44,17 +44,20 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   // plus an api→agent RPC client (when an agent socket is configured) the
   // mutating routes dispatch task.begin through. Built BEFORE the heartbeat
   // tracker so the tracker's onReconnect hook (T9) can trigger reconcile().
-  const tasks = buildTaskEngines({
-    state,
-    ...(config.agent ? { agentClient: createAgentRpcClient(config.agent.socket) } : {}),
-    ...(config.tasks?.max_inflight !== undefined ? { maxInflight: config.tasks.max_inflight } : {}),
-  });
-
   // S2 resumable SSE fan-out (s2-task-envelope-spec §10). The task_progress
   // receiver (T5) calls taskWatch.notify() after applying each event so a live
   // /tasks/{id}/watch stream sees it; replay-on-reconnect is served from the
-  // durable task_stages rows by the watch route.
+  // durable task_stages rows by the watch route. Created BEFORE the engines:
+  // engine-local terminals (queued cancel / failBeforeChange — S10) notify
+  // watchers through the same fan-out.
   const taskWatch = new TaskWatch();
+
+  const tasks = buildTaskEngines({
+    state,
+    taskWatch,
+    ...(config.agent ? { agentClient: createAgentRpcClient(config.agent.socket) } : {}),
+    ...(config.tasks?.max_inflight !== undefined ? { maxInflight: config.tasks.max_inflight } : {}),
+  });
 
   // When the api is configured to track a xinas-agent, poll its UDS for
   // agent.health on an interval and surface the derived state to routes.

@@ -39,6 +39,8 @@ export interface BuildTaskEnginesOptions {
   newId?: () => string;
   /** Worker-pool cap (§5.3), from `ApiConfig.tasks?.max_inflight`. Default 4. */
   maxInflight?: number;
+  /** SSE fan-out for engine-local synthetic terminals (S10, ADR-0012 §4). */
+  taskWatch?: { notify(taskId: string, event: unknown): void };
 }
 
 /**
@@ -64,6 +66,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
     leases: state.leases,
     kv: state.kv,
     ...(opts.maxInflight !== undefined ? { maxInflight: opts.maxInflight } : {}),
+    ...(opts.taskWatch !== undefined ? { taskWatch: opts.taskWatch } : {}),
   });
   const planEngine = new PlanEngine({ store, ctx: { kv: state.kv } });
   planEngine.register(referencePlanProvider);

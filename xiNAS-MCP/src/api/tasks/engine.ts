@@ -124,6 +124,13 @@ export interface TaskEngineDeps {
   kv: KvStore;
   /** Worker-pool cap (§5.3): max tasks in flight end-to-end. Default 4. */
   maxInflight?: number;
+  /**
+   * SSE fan-out for synthetic terminal events (S10, ADR-0012 §4): engine-local
+   * terminals (queued cancel, failBeforeChange) produce no agent progress
+   * event, so the engine notifies watchers itself. Structural — the real
+   * TaskWatch in production, a recorder in tests.
+   */
+  taskWatch?: { notify(taskId: string, event: unknown): void };
 }
 
 /** Default lease TTL (seconds). Heartbeats extend it during execution. */
@@ -134,6 +141,9 @@ const DEFAULT_MAX_INFLIGHT = 4;
 
 /** Hard cap on a single `task.begin` round-trip. */
 const TASK_BEGIN_TIMEOUT_MS = 5_000;
+
+/** task.cancel RPC timeout (S10). */
+const TASK_CANCEL_TIMEOUT_MS = 5_000;
 
 /** Hard cap on the single task.list_inflight reconcile RPC. */
 const TASK_LIST_INFLIGHT_TIMEOUT_MS = 5_000;
@@ -189,6 +199,7 @@ export class TaskEngine {
   private readonly kv: KvStore;
   /** Worker-pool cap (§5.3). */
   private readonly maxInflight: number;
+  private readonly taskWatch: { notify(taskId: string, event: unknown): void } | undefined;
   /** Re-entrancy guard: true while a reconcile() pass is in flight. */
   private reconciling = false;
   /** Re-entrancy guard: true while a drainQueued() pass is in flight. */
@@ -208,11 +219,137 @@ export class TaskEngine {
     this.leases = deps.leases;
     this.kv = deps.kv;
     this.maxInflight = deps.maxInflight ?? DEFAULT_MAX_INFLIGHT;
+    this.taskWatch = deps.taskWatch;
   }
 
   /** in_flight = COUNT(state='running') + live dispatch reservations (§5.3). */
   private inFlightCount(): number {
     return this.store.countByState('running') + this.dispatchReservations.size;
+  }
+
+  /** Synthetic terminal fan-out for engine-local terminals (ADR-0012 §4). */
+  private notifySyntheticTerminal(
+    taskId: string,
+    sequence: number,
+    status: 'cancelled' | 'failed',
+  ): void {
+    this.taskWatch?.notify(taskId, {
+      task_id: taskId,
+      sequence,
+      event_type: 'terminal',
+      status,
+      observed_at: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Cancel a task (S10, ADR-0012 / s2 spec §16.1–§16.3). State-branched:
+   *   - unknown → NOT_FOUND; cancelled → returned as-is (idempotent);
+   *     plan_only / other terminals → CONFLICT `not_cancellable`.
+   *   - queued → engine-local: guarded CAS flip (transitionIf — a concurrent
+   *     drainer dispatch must not be clobbered), lease release, desired-intent
+   *     revert, synthetic terminal for watchers. Reserved (mid-begin) →
+   *     CONFLICT `dispatch_in_flight` (retry lands on the running path).
+   *   - running → forward the agent's task.cancel; tracker offline OR any
+   *     post-check RPC failure → INTERNAL/EXECUTOR_UNAVAILABLE with NOTHING
+   *     durable recorded; accepted → guarded cancel_requested_at write;
+   *     not_found → CONFLICT `agent_not_found` + refusal metadata (lease
+   *     expiry/sweep owns desync recovery — no new reconcile action).
+   */
+  async cancel(args: {
+    taskId: string;
+    agentClient: AgentRpcClient | undefined;
+    trackerOffline: boolean;
+  }): Promise<Task> {
+    const { taskId, agentClient, trackerOffline } = args;
+    let task = this.store.get(taskId);
+    if (!task) throw new ApiException('NOT_FOUND', `task not found: ${taskId}`);
+
+    for (;;) {
+      if (task.state === 'cancelled') return task;
+      if (task.state !== 'queued' && task.state !== 'running') {
+        throw new ApiException(
+          'CONFLICT',
+          `task is not cancellable in state '${task.state}'`,
+          { reason: 'not_cancellable', state: task.state },
+          'Only queued or running tasks can be cancelled.',
+        );
+      }
+
+      if (task.state === 'queued') {
+        if (this.dispatchReservations.has(taskId)) {
+          throw new ApiException(
+            'CONFLICT',
+            'task is being dispatched to the executor',
+            { reason: 'dispatch_in_flight' },
+            'Retry shortly — the task is transitioning to running.',
+          );
+        }
+        const seq = (task.last_event_sequence ?? 0) + 1;
+        const flipped = this.store.transitionIf(taskId, 'queued', {
+          state: 'cancelled',
+          cancel_requested_at: Date.now(),
+          last_event_sequence: seq,
+        });
+        if (flipped !== null) {
+          // Engine-local terminal: the same cleanup the progress receiver
+          // performs on terminal events (Model R revert + lease release),
+          // then the synthetic watch frame (§16.2 step 4).
+          this.revertDesired(flipped);
+          this.leases.releaseByTask(taskId);
+          this.notifySyntheticTerminal(taskId, seq, 'cancelled');
+          return flipped;
+        }
+        // Lost the CAS (drainer dispatched, or a terminal raced in) →
+        // re-read and re-branch (§16.2 step 2).
+        task = this.store.get(taskId);
+        if (!task) throw new ApiException('NOT_FOUND', `task not found: ${taskId}`);
+        continue;
+      }
+
+      // running
+      if (trackerOffline || agentClient === undefined) {
+        throw new ApiException(
+          'INTERNAL',
+          'xinas-agent is offline — the cancel was not delivered',
+          { code: 'EXECUTOR_UNAVAILABLE' },
+          'restart xinas-agent.service, then retry the cancel',
+        );
+      }
+      let result: unknown;
+      try {
+        result = await agentClient.call('task.cancel', { task_id: taskId }, TASK_CANCEL_TIMEOUT_MS);
+      } catch (err) {
+        // Post-check RPC failure (connect error, timeout, malformed
+        // response) — same class as offline (§16.3): nothing durable.
+        throw new ApiException(
+          'INTERNAL',
+          `the cancel did not reach the executor: ${err instanceof Error ? err.message : String(err)}`,
+          { code: 'EXECUTOR_UNAVAILABLE' },
+          'check xinas-agent.service, then retry the cancel',
+        );
+      }
+      const accepted =
+        result !== null &&
+        typeof result === 'object' &&
+        (result as { cancel_requested?: unknown }).cancel_requested === true;
+      if (accepted) {
+        // Guarded metadata write: a terminal that raced in must never be
+        // clobbered or resurrected. null → return the current row as-is.
+        const updated = this.store.transitionIf(taskId, 'running', {
+          cancel_requested_at: Date.now(),
+        });
+        return updated ?? this.store.get(taskId) ?? task;
+      }
+      // Refused (not_found): the agent has no such task in flight.
+      this.store.transitionIf(taskId, 'running', { cancel_refused_reason: 'agent_not_found' });
+      throw new ApiException(
+        'CONFLICT',
+        'the executor has no such task in flight',
+        { reason: 'agent_not_found' },
+        'The task may have just finished — re-read it; lease expiry/sweep owns desync recovery.',
+      );
+    }
   }
 
   /**
@@ -603,12 +740,18 @@ export class TaskEngine {
     this.revertDesired(task);
 
     const errorMessage = err instanceof Error ? err.message : String(err);
+    // Advance the event sequence + notify watchers (S10, ADR-0012 §4): a
+    // queued task the drainer fails has subscribers from its 202 — without a
+    // synthetic terminal frame they hang and Last-Event-ID 0 never resyncs.
+    const failSeq = (task.last_event_sequence ?? 0) + 1;
     this.store.transition(task.task_id, {
       state: 'failed',
       error_code: 'FAILED_BEFORE_CHANGE',
       error_message: errorMessage,
+      last_event_sequence: failSeq,
     });
     this.leases.releaseByTask(task.task_id);
+    this.notifySyntheticTerminal(task.task_id, failSeq, 'failed');
 
     if (unsupported) {
       // Executor reachable but operation unbuilt → UNSUPPORTED/422 (default map).
