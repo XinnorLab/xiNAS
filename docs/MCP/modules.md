@@ -1,5 +1,11 @@
 # xiNAS-MCP — Module Map & Dependency Graph
 
+> **Superseded (S8, ADR-0010).** The standalone MCP server this spec
+> set describes was retired; the MCP transport now lives inside
+> `xinas-api.service`. Live contract:
+> `docs/control-path/adr/0010-clients-mcp-cli-tui.md` +
+> `docs/control-path/s8-clients-spec.md`. Kept for reference.
+
 ## Module Layers
 
 ```

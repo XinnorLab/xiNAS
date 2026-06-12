@@ -4,12 +4,11 @@
   "description": "MCP server exposing xiNAS NAS infrastructure operations to AI assistants",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts",
     "dev:api": "tsx src/api-server.ts",
     "build": "tsc -p tsconfig.json && npm run copy-assets",
     "copy-assets": "mkdir -p dist/state/migrations && cp src/state/migrations/*.sql dist/state/migrations/",
     "typecheck": "tsc --noEmit",
-    "start": "node dist/index.js",
+    "start": "node dist/api-server.js",
     "start:api": "node dist/api-server.js",
     "dev:agent": "tsx src/agent-server.ts",
     "start:agent": "node dist/agent-server.js",

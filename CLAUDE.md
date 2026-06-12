@@ -135,7 +135,15 @@ Python library providing snapshot-based configuration tracking and rollback for 
 
 ### MCP Server Documentation
 
-MCP (Model Context Protocol) server specification and design docs live under `docs/MCP/`. Server source remains in `xiNAS-MCP/`.
+> **Superseded (S8, ADR-0010):** the standalone MCP server was retired.
+> The MCP transport now lives inside `xinas-api.service`
+> (`/mcp` endpoint + the `xinas-mcp-stdio` adapter; catalog-generated
+> tools; apply gated by `mcp.allow_apply`). The docs below describe the
+> LEGACY server and are kept for reference; see
+> `docs/control-path/adr/0010-clients-mcp-cli-tui.md` and
+> `docs/control-path/s8-clients-spec.md` for the live contract.
+
+MCP (Model Context Protocol) server specification and design docs live under `docs/MCP/`.
 
 | File | Purpose |
 |------|---------|
