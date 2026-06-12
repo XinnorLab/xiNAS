@@ -3,7 +3,8 @@
 **Status:** design (2026-06-12; conforms to **ADR-0010**). Closes WS12
 ("same operation through CLI/TUI/MCP produces the same plan and task;
 MCP cannot apply by default"). Implementation plan:
-`docs/plans/2026-06-12-s8-clients-plan.md`.
+`docs/plans/2026-06-12-s8-clients-plan.md` (to be written via
+writing-plans after this spec is approved).
 
 **Goal.** The MCP transport rehosts inside `xinas-api.service` as a
 loopback dispatcher over the api's own middleware spine; `xinasctl`
@@ -33,6 +34,18 @@ legacy `xinas-mcp.service` is retired. MCP apply is blocked by default
   adds the optional `mcp.http` TCP listener serving the same app.
 - `req.context.client_type` is the literal `'rest'` and already
   threads into plan args and audit rows → widen to `'rest' | 'mcp'`.
+- **The api has NO role enforcement on public routes (review P0):**
+  middleware order is request-id → audit → json → auth; auth resolves
+  `ctx.role` but only `/internal` checks it. T2 adds `rbacMiddleware`
+  BEFORE any retirement — otherwise retiring the legacy MCP RBAC
+  removes the only role gate in the system.
+- **`auditMiddleware` logs every HTTP response (review P1):** without
+  a skip rule, one MCP tool call would produce TWO rows (the `/mcp`
+  frame and the loopback `/api/v1` call). The middleware skips `/mcp`;
+  the loopback row is the audit record.
+- **`screens/filesystem.py` mutates directly (review P0):** create
+  runs `mkfs.xfs` via `xfs_helpers`, delete walks findmnt → NFS helper
+  → unmount helpers — in scope for the retarget (T13b).
 - Legacy MCP: `@modelcontextprotocol/sdk` ^1.12; stdio + SSE +
   Streamable HTTP; RBAC `TOOL_PERMISSIONS` map + `checkPermission`;
   hash-chained audit at `/var/log/xinas/mcp-audit.jsonl` (retired with
@@ -51,17 +64,30 @@ legacy `xinas-mcp.service` is retired. MCP apply is blocked by default
   preflight message repointed; `site.yml` order
   `xinas_node_build → xinas_nfs_helper → xinas_api → xinas_agent →
   xinas_mcp`. `Requires-Rebuild: all` (role boundaries move).
-- **T2 loopback auth:** ephemeral loopback token minted at boot;
+- **T2 REST RBAC enforcement (review P0):** `rbacMiddleware` after
+  auth — matches method+path against the catalog's `min_role` (ported
+  from the legacy TOOL_PERMISSIONS matrix: reads → viewer,
+  share/task ops → operator, RAID/fs/network mutation → admin),
+  rejects `PERMISSION_DENIED` below rank; unmatched public routes
+  default admin. Tested: viewer token vs mutating route → 403 (today
+  it succeeds).
+- **T2b loopback auth:** ephemeral loopback token minted at boot;
   auth middleware honors `X-Xinas-Forwarded-Principal/Role` +
   `X-Xinas-Client-Type` ONLY under that bearer; forwarded headers from
-  any other caller ignored + warn-logged.
+  any other caller ignored + warn-logged. `auditMiddleware` gains the
+  `/mcp` skip rule (single row per operation).
 - **T3 catalog:** `src/api/mcp/catalog.ts` — the declarative table
   (§3); unit tests pin every entry's `{method, path, mutability,
   requires_mcp_apply, status}`.
-- **T4 dispatcher + gate:** tool call → catalog lookup → gate (§4) →
+- **T4 read-route promotion (review P1):** the carried legacy read
+  handlers become REAL additive `/api/v1` routes — `GET /system/logs`,
+  `GET /system/performance`, `GET /quotas`, `GET /pools`,
+  `GET /mail/settings`, `GET /mail/recipients`, `GET /auth/modes`
+  (api-v1.yaml additions; the gRPC-backed ones carry the
+  deprecated-until-agent-coverage marker). No `legacy/` layer exists.
+- **T4b dispatcher + gate:** tool call → catalog lookup → gate (§4) →
   loopback HTTP request → envelope → MCP result (warnings passed
-  through). Read-only legacy passthrough tools (§5) registered beside
-  the catalog with the same RBAC/audit path.
+  through).
 - **T5 transports:** `/mcp` Streamable HTTP endpoint on the express
   app; optional `config.mcp.http` TCP listener (multi-listener support
   in `server.ts`); the `xinas-mcp-stdio` SDK transport adapter binary.
@@ -90,6 +116,10 @@ legacy `xinas-mcp.service` is retired. MCP apply is blocked by default
 - **T13:** RAID screens retarget — list/create/**modify**/delete incl.
   the composite teardown as an API sequence (§6); wizard pool lookups
   stay on gRPC.
+- **T13b:** filesystem screens retarget (review P0) —
+  `screens/filesystem.py` create/mount/delete onto `/filesystems`
+  plan/apply (+ `/shares` for delete-time export cleanup); the direct
+  `xfs_helpers`/findmnt/unmount calls leave the screen.
 - **T14:** retirement — `xinas_mcp` role shrinks to the shim
   (stop/disable legacy service, endpoint config, token-migration doc);
   legacy server code under `src/server/`, `src/registry/`,
@@ -112,8 +142,8 @@ read-only gRPC passthrough, MCP resources/prompts.
                     │ stdio adapter ─┤   dispatcher: catalog lookup → GATE →     │
                     └────────────────│   loopback HTTP (ephemeral token,         │
  xinasctl ──────── REST (UDS/TCP) ──│   forwarded principal, client_type=mcp)   │
- TUI control_client.py ── REST UDS ─│ express spine: auth→RBAC→idem→audit→route │
-                                    │ legacy/ read-only passthrough tools       │
+ TUI control_client.py ── REST UDS ─│ express spine: auth→rbac→audit→routes     │
+                                    │ promoted read routes (logs/perf/pools/…)  │
                                     └──────────────┬─────────────────────────────┘
                                                    │ plan/apply tasks (unchanged)
                                                    ▼
@@ -131,6 +161,7 @@ interface CatalogEntry {
   input_schema: JsonSchema;           // path params + query + body
   mutability: 'read' | 'plan_apply' | 'direct';
   requires_mcp_apply: boolean;        // explicit; no inference
+  min_role: 'viewer' | 'operator' | 'admin';  // REST rbacMiddleware + MCP share it
   status: 'live' | 'degraded';
 }
 ```
@@ -167,16 +198,16 @@ diagnostic), `tasks.cancel` (allow — emergency stop cannot apply new
 state). `MCP_APPLY_DISABLED` is a structured tool error naming
 `mcp.allow_apply` and the REST/CLI alternative.
 
-## 5. Read-only legacy passthrough (T4)
+## 5. Read-route promotion (T4)
 
-Per ADR-0010 §passthrough: `auth.list_users` (getent),
-`auth.list_quotas` (repquota, best-effort), `disks.get_smart` (sysfs),
-`system.get_logs` (journalctl; needs `systemd-journal` group — clear
-degraded error otherwise), `system.get_performance` (Prometheus HTTP),
-and the deprecated read-only gRPC quartet (`pool.list`, `mail.list_
-recipients`, `mail.get_settings`, `auth.get_supported_modes`). All
-audited through the api chain with `client_type: 'mcp'`. Everything
-else uncovered → `NOT_IMPLEMENTED` + replacement pointer.
+Per ADR-0010 §read-route promotion: the carried legacy reads are
+ordinary API routes (§1 T4 list), so the corresponding tools
+(`system.get_logs`, `system.get_performance`, `quotas.list`,
+`pools.list`, `mail.settings`, `mail.recipients`, `auth.modes`) are
+ordinary catalog entries — full spine, one audit chain, RBAC by
+`min_role`. `users.list` and `disks.get` (with `status.health`) cover
+the old `auth.list_users` / `disk.get_smart`. Everything else
+uncovered → `NOT_IMPLEMENTED` + replacement pointer.
 
 ## 6. TUI composite teardown (T13)
 
@@ -200,7 +231,11 @@ rollback inside it). The progress view renders task stage events.
    `mcp.allow_apply: true` the same MCP call runs plan→apply→task to
    success.
 3. **Audit parity:** the REST and MCP rows for the same principal
-   differ only in `client_type`.
+   differ only in `client_type`, and one MCP tool call produces
+   exactly ONE audit row (the `/mcp` frame is skipped).
+3b. **RBAC parity:** a viewer token hitting a mutating route → 403
+   via REST AND the same tool via MCP → PERMISSION_DENIED (today the
+   REST call would succeed — T2's regression pin).
 4. **Direct entries:** `support.bundle` + `tasks.cancel` allowed via
    MCP under the default gate.
 5. **Degraded honesty:** `config_history.snapshots` via MCP returns the

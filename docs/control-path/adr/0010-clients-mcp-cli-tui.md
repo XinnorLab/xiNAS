@@ -20,10 +20,13 @@ against:
   changes **in-process** (xiRAID gRPC, nfs-helper UDS, `netplan`
   subprocess) — the exact privileged-adapter coupling ADR-0001
   §Migration requires extracting.
-- The api's express app already carries the full middleware spine
-  (auth → RBAC → idempotency → audit → envelope); `req.context` carries
-  `client_type` (today the literal `'rest'`), which plan args and audit
-  rows already thread through.
+- The api's express middleware order is request-id → audit → json →
+  auth; `authMiddleware` RESOLVES `ctx.role` but **nothing enforces it
+  on public routes** (only `/internal` checks role) — a viewer token
+  can hit mutating routes today (review P0). Idempotency lives in the
+  task-engine apply txn, not middleware. `req.context` carries
+  `client_type` (today the literal `'rest'`), which plan args and
+  audit rows already thread through.
 - The api listens on ONE listener (`config.listen`: unix | tcp) —
   `server.ts` has no simultaneous-listener support yet.
 - **Role coupling (review P0):** `xinas_api` preflights on
@@ -72,6 +75,21 @@ Transports:
 - SSE (legacy `/sse`) is dropped; Streamable HTTP supersedes it
   (ADR-0001 lists SSE as optional; the SDK marks it deprecated).
 
+## Decision — REST RBAC enforcement (review P0 — S8 prerequisite)
+
+S8 adds the missing role ENFORCEMENT before anything is retired: the
+catalog (below) carries `min_role: 'viewer' | 'operator' | 'admin'`
+per entry (ported from the legacy `TOOL_PERMISSIONS` matrix in
+docs/MCP/spec-middleware.md — reads → viewer, share/task operations →
+operator, RAID/filesystem/network mutation → admin), and a new
+`rbacMiddleware` mounted after auth matches the request
+(method + path pattern) against that SAME table and rejects
+`PERMISSION_DENIED` when `ctx.role` ranks below `min_role`.
+Internal routes keep `requireInternalAgent`; unmatched public routes
+default to admin. One authorization table feeds REST and MCP alike —
+retiring the legacy MCP RBAC without this would have REMOVED the only
+role gate in the system.
+
 ## Decision — loopback auth (one spine, honest principals)
 
 At boot the api mints an **ephemeral loopback token** (random,
@@ -84,6 +102,13 @@ headers **only when the bearer equals the loopback token**; from any
 other caller they are ignored (and audited as suspicious). Audit rows
 therefore carry the REAL principal and `client_type: 'mcp'`; the
 `client_type` union widens from `'rest'` to `'rest' | 'mcp'`.
+
+**Single audit row per operation (review P1):** `auditMiddleware`
+records every HTTP response, which would log the `/mcp` transport
+frame AND the loopback `/api/v1` call. The audit middleware therefore
+SKIPS the `/mcp` path — the transport frame is not an operation; the
+loopback row (real principal, `client_type: 'mcp'`) is THE audit
+record. The parity test asserts exactly one row per tool call.
 
 ## Decision — the apply gate (catalog-metadata-driven, review P1)
 
@@ -112,7 +137,7 @@ their explicit flag:
 
 `src/api/mcp/catalog.ts`: one table of
 `{ name, description, method, path, input_schema, mutability,
-requires_mcp_apply, status }`. REST-shaped names (scope lock):
+requires_mcp_apply, min_role, status }`. REST-shaped names (scope lock):
 `arrays.list/get/create/modify/delete/import`, `disks.list/get`,
 `filesystems.*`, `shares.*`, `nfs_profiles.*`, `nfs_sessions.list`,
 `network.interfaces.list/get/update`, `network.pool.apply`,
@@ -129,25 +154,29 @@ in the tree, descriptions state the limitation, and the envelope's
 `CONFIG_HISTORY_NOT_INTEGRATED` warning passes through to the MCP
 result verbatim. `drift.report` is live (S7).
 
-## Decision — read-only legacy passthrough (scope lock)
+## Decision — read-route promotion (review P1; supersedes "passthrough")
 
-Uncovered legacy namespaces keep READ-ONLY tools, carried into
-`src/api/mcp/legacy/`, each running through the same RBAC + audit as
-catalog tools, all running unprivileged in the api process:
+The carried read-only legacy handlers do NOT live beside the catalog
+as a special `legacy/` layer — that would be a second, unaudited path.
+Instead they become REAL additive `/api/v1` read routes, so every tool
+is an ordinary catalog entry traversing the full spine:
 
-| tool | mechanism | note |
+| new route | handler (carried legacy code) | note |
 |---|---|---|
-| `auth.list_users` | `getent passwd` subprocess | unprivileged |
-| `auth.list_quotas` | `repquota -a` subprocess | best-effort: may need privilege; degrades with a clear error |
-| `disks.get_smart` | sysfs read (`/sys/class/block/*/device/`) | unprivileged, NVMe only |
-| `system.get_logs` | `journalctl` subprocess | needs the `systemd-journal` supplementary group (below) |
-| `system.get_performance` | Prometheus HTTP read | unprivileged |
-| `pool.list`, `mail.list_recipients`, `mail.get_settings`, `auth.get_supported_modes` | read-only localhost xiRAID gRPC | **deprecated-until-API-coverage**: a read-only gRPC client remains in the api process as a temporary, explicitly-marked exception to the adapter extraction; removed when the API grows these resources |
+| `GET /system/logs` | `journalctl` subprocess | needs the `systemd-journal` supplementary group (below) |
+| `GET /system/performance` | Prometheus HTTP read | unprivileged |
+| `GET /quotas` | `repquota -a` subprocess | best-effort: degrades with a clear error when unprivileged |
+| `GET /pools` | read-only localhost xiRAID gRPC | **deprecated-until-agent-coverage** — the one explicitly-marked exception to the adapter extraction; read-only, removed when pools observe via the agent |
+| `GET /mail/settings`, `GET /mail/recipients` | read-only xiRAID gRPC | same deprecation marker |
+| `GET /auth/modes` | static + gRPC read | same |
 
-`share.get_active_sessions` is REPLACED by the catalog's
-`nfs_sessions.list`. Every other uncovered tool (all mutating auth/mail
-tools, pool mutators, `disk.secure_erase/set_led/run_selftest`) returns
-`NOT_IMPLEMENTED` naming the replacement or "returns in a later phase".
+`auth.list_users` maps to the EXISTING `/users`; `disks.get_smart`
+maps to the existing `GET /disks/{id}` (`status.health` — the S7
+field), degrading with a note when the health block is absent;
+`share.get_active_sessions` is replaced by `nfs_sessions.list`. Every
+other uncovered tool (all mutating auth/mail tools, pool mutators,
+`disk.secure_erase/set_led/run_selftest`) returns `NOT_IMPLEMENTED`
+naming the replacement or "returns in a later phase".
 
 ## Decision — xinasctl
 
@@ -176,6 +205,11 @@ progress). Retargeted call sites:
   no cross-step auto-rollback (same best-effort semantics the screen
   has today). Pool lookups inside the create/modify wizards keep
   `grpc.pool_show` (consistent with pool passthrough).
+- `screens/filesystem.py` (review P0) — create (`mkfs.xfs` via
+  `xfs_helpers`), mount, and the findmnt/NFS/unmount delete flow all
+  retarget to `/filesystems` plan/apply (+ `/shares` for the delete's
+  export cleanup); the direct XFS/systemd helper calls are removed
+  from the screen.
 - `screens/nfs.py` + `screens/configure/nfs_config.py` — shares CRUD
   via `/shares`.
 - `screens/network.py` + `screens/configure/network_config.py` — the
