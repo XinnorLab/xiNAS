@@ -86,13 +86,27 @@ set `cancel_requested_at`, transition to `cancelled`. Two guards:
   running-cancel path (or 409 `not_cancellable` if it raced to
   terminal).
 
+An engine-local cancel produces no agent progress event, and watch
+live fan-out + `Last-Event-ID` resync both key off the progress
+pipeline (`TaskWatch.notify()` / `last_event_sequence`). The engine
+therefore emits a **synthetic terminal event** via a shared helper —
+advance `last_event_sequence` and notify a terminal-shaped
+`cancelled` frame — so live watchers close out and reconnects resync.
+The helper is also wired into `failBeforeChange` for queued tasks the
+drainer fails (the same watcher-hang gap, fixed by the same helper).
+
 ### 5. Running cancel is a forwarded request, refused honestly offline
 
 `running` tasks: forward the existing `task.cancel` RPC.
 
 - Tracker offline → `INTERNAL` / `EXECUTOR_UNAVAILABLE` (500). The
   cancel did NOT reach the executor; no durable pending-cancel is
-  recorded (rejected alternative below).
+  recorded (rejected alternative below). The same applies to any RPC
+  rejection AFTER the tracker check (connect error, timeout,
+  malformed response — `AgentRpcClient.call()` rejects on all three
+  even when the tracker just looked healthy): nothing durable, 500
+  `EXECUTOR_UNAVAILABLE`, matching the class the begin path already
+  treats as executor-unavailable.
 - Agent answers `cancel_requested: true` → set `cancel_requested_at`
   (guarded: only while the row is still `running`, so a terminal that
   raced in cannot be clobbered or resurrected) and return 200 with the

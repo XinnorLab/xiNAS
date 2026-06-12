@@ -1180,8 +1180,11 @@ components:
         cancel_refused_reason: { type: [string, "null"] }
         error_code:
           description: |
-            Set only when `state=failed`. Type is nullable via the
-            `[string, "null"]` union; the enum lists the value set.
+            Set on non-success terminal failure states (`failed`,
+            `requires_manual_recovery`) — including a cancel whose
+            rollback failed (S10, ADR-0012). `cancelled` itself carries
+            NO error_code. Type is nullable via the `[string, "null"]`
+            union; the enum lists the value set.
           type: [string, "null"]
           enum:
             - FAILED_BEFORE_CHANGE

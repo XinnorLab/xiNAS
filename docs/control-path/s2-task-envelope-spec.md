@@ -42,7 +42,7 @@
    ┌──────────────────────────────────────┐    UDS      ┌────────────────────────────┐
    │ plan/engine.ts + plan/providers/*     │  api→agent  │ rpc/methods/task.ts        │
    │ tasks/store.ts  (tasks + task_stages) │ ─task.begin→│  begin / cancel / list_inflight │
-   │ tasks/engine.ts (worker pool cap=1,   │             │ task/runner.ts             │
+   │ tasks/engine.ts (worker pool cap=4,   │             │ task/runner.ts             │
    │   apply txn, dispatch, reconcile)     │             │  + task/registry.ts        │
    │ state/leases.ts  LeaseManager (EXISTS)│ ←progress── │  + task/reference-executor.ts │
    │ tasks/progress.ts (/internal push rx) │  agent→api  │ task/progress-publisher.ts │
@@ -72,7 +72,7 @@ Columns per ADR-0004 §`tasks table` / `001-initial.sql`: `task_id` (uuid), `kin
 Per ADR-0004: `stage_id`, `task_id`, `stage_index`, `name` (`preflight`/`snapshot_before`/`apply`/`verify`/`rollback`/`snapshot_after`), `status`, `started_at`, `ended_at`, `output_inline` (BLOB, ≤64 KiB), `output_path` (relative, when spilled), `output_size_bytes` (**required**), `error_code`, `error_message`. The progress push (§6) writes/updates these rows; SSE resume **resyncs** from the rolled-up Task snapshot built over them (§10), not from a per-event log. This **replaces** the KV "event log" from the pre-review draft.
 
 ### 3.3 `leases` (existing) — via `LeaseManager`
-Per ADR-0004 / `leases.ts`: `lease_id`, `resource_kind`, `resource_id`, `task_id`, `acquired_at`, `ttl_seconds`, `heartbeat_at`, `UNIQUE(resource_kind, resource_id)`. **No global serialize lease** — the worker pool cap=1 + per-resource leases are the serialization. Acquisition is `LeaseManager.acquire()` (INSERT-on-conflict → `held_by_other` with the holder `task_id`). Stale recovery is `LeaseManager.sweepExpired()` (already → `requires_manual_recovery`).
+Per ADR-0004 / `leases.ts`: `lease_id`, `resource_kind`, `resource_id`, `task_id`, `acquired_at`, `ttl_seconds`, `heartbeat_at`, `UNIQUE(resource_kind, resource_id)`. **No global serialize lease** — the bounded worker pool (§5.3, default cap 4) + per-resource leases are the serialization. Acquisition is `LeaseManager.acquire()` (INSERT-on-conflict → `held_by_other` with the holder `task_id`). Stale recovery is `LeaseManager.sweepExpired()` (already → `requires_manual_recovery`).
 
 ### 3.4 Idempotency
 No separate map. The `UNIQUE(idempotency_key, principal)` constraint makes a retry's INSERT fail; the engine catches the conflict, reads the existing row, and returns it — **same `task_id`**. A different `plan_hash`/`input_hash` for the same key → the engine returns `CONFLICT` (§11).
@@ -304,6 +304,20 @@ No host work has started; the agent is not involved.
 3. On the won CAS: state `cancelled`, `cancel_requested_at` set,
    leases released, desired intent reverted (same revert the receiver
    performs for non-success terminals). 200 with the cancelled row.
+4. **Watch story (required):** no agent progress event will ever
+   arrive for an engine-local cancel, and `/tasks/{id}/watch` live
+   fan-out only fires from the progress receiver's
+   `TaskWatch.notify()`; resync keys off `last_event_sequence`. The
+   engine therefore emits a **synthetic terminal event** through a
+   shared helper: advance `last_event_sequence` (a queued task's
+   sequence space is untouched — the agent never began it) and
+   `notify()` a terminal-shaped frame
+   (`{task_id, sequence, event_type: 'terminal', status: 'cancelled',
+   observed_at}`) so live subscribers close out and a
+   `Last-Event-ID` reconnect resyncs. The same helper is wired into
+   `failBeforeChange` for QUEUED tasks the drainer later fails —
+   the identical watcher-hang gap (a client that got 202 `queued`,
+   watched, and whose task failed dispatch never got a frame).
 
 The drainer needs no change: it re-picks queued tasks per iteration,
 and a cancelled row has left the queued set.
@@ -313,7 +327,13 @@ and a cancelled row has left the queued set.
 1. Tracker offline → 500 `INTERNAL` / `EXECUTOR_UNAVAILABLE`. The
    cancel did not reach the executor; nothing durable is recorded
    (no pending-cancel queue — ADR-0012 alternatives).
-2. Otherwise call the existing `task.cancel` RPC:
+2. Otherwise call the existing `task.cancel` RPC. **Any RPC
+   rejection after the tracker check** — connect error, timeout,
+   malformed response (`AgentRpcClient.call()` can reject on all
+   three even when the tracker just looked healthy) — is the same
+   outcome as offline: nothing durable recorded, 500 `INTERNAL` /
+   `EXECUTOR_UNAVAILABLE` (the class the begin path already treats
+   as executor-unavailable). On a well-formed reply:
    - `cancel_requested: true` → write `cancel_requested_at` with a
      **state guard** (`… WHERE task_id = ? AND state = 'running'`) so
      a terminal that raced in is never clobbered or resurrected.
