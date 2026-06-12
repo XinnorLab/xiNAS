@@ -82,6 +82,7 @@ function postJson(
   path: string,
   token: string,
   bodyObj: unknown,
+  method = 'POST',
 ): Promise<JsonResponse> {
   const payload = JSON.stringify(bodyObj);
   return new Promise((resolveP, reject) => {
@@ -89,7 +90,7 @@ function postJson(
       {
         socketPath,
         path,
-        method: 'POST',
+        method,
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -306,16 +307,15 @@ describe.sequential('e2e: agent -> api round-trip (fixture probe mode)', () => {
   it('slow: mutating stub returns EXECUTOR_UNSUPPORTED while the agent is ONLINE', async () => {
     // The agent is up + healthy (fixture mode), so the api's heartbeat tick has
     // recorded a successful agent.health within 2x interval -> tracker state is
-    // 'healthy'/'degraded' (NOT offline). The executor is reachable but the
-    // config-history rollback isn't built yet (POST /arrays, /filesystems,
-    // and /shares all have real routes), so the tracker-aware stub returns
-    // UNSUPPORTED (422 / EXECUTOR_UNSUPPORTED), not UNAVAILABLE. Guard
-    // against the offline gate hollowly always returning UNAVAILABLE.
+    // 'healthy'/'degraded' (NOT offline). The executor is reachable but
+    // PUT /shares (full replace) isn't built yet (POST /arrays,
+    // /filesystems, /pools, and /config-history/rollback all have real
+    // routes as of S9), so the tracker-aware stub returns UNSUPPORTED
+    // (422 / EXECUTOR_UNSUPPORTED), not UNAVAILABLE. Guard against the
+    // offline gate hollowly always returning UNAVAILABLE.
     // Give one heartbeat tick time to land.
     await sleep(HEARTBEAT_INTERVAL_MS * 3);
-    const res = await postJson(apiSockPath, '/api/v1/config-history/rollback', ADMIN_TOKEN, {
-      snapshot_id: 'snap-x',
-    });
+    const res = await postJson(apiSockPath, '/api/v1/shares', ADMIN_TOKEN, { name: 'x' }, 'PUT');
     expect(res.status).toBe(422);
     expect(res.body.errors?.[0]?.details?.code).toBe('EXECUTOR_UNSUPPORTED');
   }, 20_000);
@@ -338,9 +338,7 @@ describe.sequential('e2e: agent -> api round-trip (fixture probe mode)', () => {
     expect(agent?.state).toBe('offline');
 
     // And the mutating stub now reports the executor unavailable.
-    const res = await postJson(apiSockPath, '/api/v1/config-history/rollback', ADMIN_TOKEN, {
-      snapshot_id: 'snap-x',
-    });
+    const res = await postJson(apiSockPath, '/api/v1/shares', ADMIN_TOKEN, { name: 'x' }, 'PUT');
     expect(res.status).toBe(500);
     expect(res.body.errors?.[0]?.details?.code).toBe('EXECUTOR_UNAVAILABLE');
   }, 20_000);

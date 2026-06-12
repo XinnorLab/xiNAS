@@ -162,6 +162,43 @@ On a scratch node (or after `./uninstall.sh`):
 - [ ] One audit row per MCP tool call (`/var/log/xinas/audit.jsonl` —
   no `http.POST./mcp` frames).
 
+## 5c. S9 — config-history bridge, audit query, pools
+
+- [ ] **Snapshots observed:** `GET /api/v1/config-history/snapshots`
+  lists the store's manifests with projected kinds (`baseline` /
+  `before` / `after`) matching `python3 -m xinas_history snapshot list`;
+  rows refresh within the poll interval after a new apply creates
+  snapshots.
+- [ ] **Diff round-trip:** pick a before/after pair from an apply and
+  `GET /api/v1/config-history/diff?from=<before>&to=<after>` → file
+  changes match `python3 -m xinas_history snapshot diff` for the same
+  pair.
+- [ ] **Baseline rollback gate:** `POST /config-history/rollback` with
+  `to` ≠ baseline → `targeted_rollback_not_implemented` blocker;
+  `to: baseline` plans with `risk_level: destructive`, apply WITHOUT
+  `dangerous: true` → 412, with it → task runs
+  `python3 -m xinas_history` reset and post-rollback configs match the
+  baseline snapshot (spot-check `/etc/exports`).
+- [ ] **Audit query:** `GET /api/v1/audit?kind=http.POST./config-history/rollback`
+  finds the rollback rows; `?task_id=<apply task>` exact lookup returns
+  the same rows immediately after the apply (index + outbox fallback —
+  no visibility window).
+- [ ] **Pools end-to-end:** `xinasctl pools list` matches
+  `xicli pool show`; create a pool from a free drive, add/remove a
+  drive, activate, then `DELETE` while active → `pool_active` blocker;
+  while referenced as an array's spare pool → `pool_referenced` (and
+  the executor's live preflight blocks even when observation lags);
+  deactivate + unreference → delete completes and the row vanishes
+  from `GET /api/v1/pools`.
+- [ ] **TUI spare pools:** the Spare Pools screen drives all six
+  actions through the API (tasks appear in `xinasctl tasks list`;
+  `referenced_by` column shows the in-use badge; no `xicli pool`
+  subprocess calls from the TUI).
+- [ ] **Observation longevity:** ≥5 minutes after agent start,
+  `GET /api/v1/pools`, `/config-history/snapshots`, and tuning-backed
+  health checks still return rows (poll-sweep reconcile must not wipe
+  re-emitted kinds — the S9 collector regression).
+
 ## 6. Cross-cutting
 
 1. [ ] **Plan→pause→apply:** plan an array modify, wait 2+ minutes,
