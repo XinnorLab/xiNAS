@@ -1,12 +1,14 @@
 # xiNAS S9 — config-history bridge, audit query, pools (design spec)
 
 **Status:** design (2026-06-12; conforms to **ADR-0011**). Brings the
-catalog's last `degraded` entries live and retires the in-api gRPC
-pool read. Implementation plan:
+config-history/audit `degraded` catalog entries live and retires the
+in-api gRPC pool read. Implementation plan:
 `docs/plans/2026-06-12-s9-bridge-pools-plan.md` (to be written via
 writing-plans after this spec is approved).
 
-**Goal.** Config-history snapshots/show/diff live via observed rows +
+**Goal.** The config-history/audit `degraded` catalog entries go live
+(`tasks.cancel` stays degraded until cancel wiring — a separate
+slice). Config-history snapshots/show/diff live via observed rows +
 one diff RPC; `POST /config-history/rollback` real for the
 baseline-only case as a destructive plan/apply task; `GET /audit`
 queries the api's own audit data (filters + exact index lookups);
@@ -56,15 +58,16 @@ across REST/MCP/CLI/TUI.
   parameter set + `AuditEntry` schema, `Pool` schema +
   `POST /pools` + `PATCH /pools/{name}` + `DELETE /pools/{name}`,
   `ResourceRef.kind` += `Pool`, `XiraidArray.status.spare_pool`
-  additive field; agent `Kind` union + `OBSERVED_KINDS` +=
+  additive field, `ConfigSnapshot` gains optional `history_type`/
+  `operation`/`source`/`diff_summary` top-level fields; agent `Kind` union + `OBSERVED_KINDS` +=
   `ConfigSnapshot`, `Pool`; s0s1 RPC table += `config.diff` (Real).
 - **T1 bridge verbs:** `snapshotList()`, `snapshotDiff(from, to)`,
   `resetToBaseline(reason)` on `XinasHistoryBridge` — argv + JSON
   parsing pinned by tests with a fake subprocess seam; the
   **projection table is verified here** against real manifest shapes
   (baseline→baseline, rollback_eligible→after, ephemeral→before,
-  else→imported; raw `type`/`operation`/`rollback_class` ride in
-  `status.history_*`).
+  else→imported; raw fields land in the TYPED top-level schema
+  fields — review P1).
 - **T2 ConfigSnapshot collector:** 60 s poll, compare-and-skip,
   fixture passthrough (`config-snapshots.json`).
 - **T3 `config.diff` RPC:** enumerated; level-validated params; the
@@ -76,9 +79,14 @@ across REST/MCP/CLI/TUI.
   INTEGRATED` warning DIES on these routes (drift untouched).
 - **T5 rollback:** `config.rollback` provider (spec `{to: 'baseline',
   reason}`; `to !== 'baseline'` → blocker naming the deferral;
-  `risk_level: 'destructive'`; lease `ConfigHistory/default`;
-  affected `ConfigSnapshot/baseline`) + executor over
-  `resetToBaseline` + route wiring replacing the stub.
+  `risk_level: 'destructive'`; lease `ConfigHistory/default`; the
+  provider RESOLVES the actual baseline snapshot id from observed
+  rows — absent → blocker; `observed_freshness_ref` pins
+  `{ConfigSnapshot, <baseline-id>, revision}` (review P0 — the
+  engine's affected_resources check is desired-only, so the affected
+  entry `ConfigSnapshot/<baseline-id>` carries NO revision, display
+  only) + executor over `resetToBaseline` + route wiring replacing
+  the stub.
 
 ### In scope — audit query (T6)
 
@@ -101,8 +109,13 @@ across REST/MCP/CLI/TUI.
 - **T8 providers:** `pool.create` (name+drives; blockers: duplicate
   name, unknown/unsafe drives), `pool.modify` (ONE intent:
   `add_drives|remove_drives|active`), `pool.delete` (blockers:
-  `active`, non-empty `referenced_by`); per-resource revision pins;
-  min_role: create/delete admin, modify operator.
+  `active`, non-empty `referenced_by`). Freshness per the S4
+  imperative pattern (review P1 — affected_resources freshness is
+  desired-only): affected `Pool/<name>` WITHOUT revision (display),
+  ONE `observed_freshness_ref` on the observed Pool row (revision 0 =
+  absence pin for create), `lease_resources [Pool/<name>]`, executor
+  live preflight as the cross-resource guarantee. min_role:
+  create/delete admin, modify operator.
 - **T9 executors:** three executors over the existing client verbs;
   the DELETE executor preflight re-checks live `pool_show` +
   `raid_show` (active/referenced — TOCTOU vs observed lag); fake
@@ -118,7 +131,9 @@ across REST/MCP/CLI/TUI.
   via `plan_apply_wait` (delete keeps the consent dialog →
   `dangerous` only if the route requires; create/add/remove/activate/
   deactivate map to create/modify); `raid.py` wizard pool lookups →
-  `GET /pools` (the TUI's last xiRAID gRPC call site dies).
+  `GET /pools` (the TUI's last xiRAID POOL gRPC dependency dies;
+  drives/license screens keep their gRPC reads until their own
+  slices).
 - **T12 e2e + full gate:** scenarios §7; runbook §5c.
 
 ### Out of scope (ADR-0011 deferrals)
@@ -137,10 +152,16 @@ Targeted snapshot rollback, dbus systemd subscription, `ip_pool.py`
 | `ephemeral` | `before` | pre-change/working captures |
 | (unknown) | `imported` | forward-compat |
 
-`status` carries `history_type`, `history_rollback_class`,
-`operation`, `source`, `user`, `diff_summary` verbatim. T1's bridge
-tests assert the projection against representative manifests; any
-phase-encoding surprise is fixed THERE before the collector lands.
+The public shape is the EXISTING top-level `ConfigSnapshot` schema
+(review P1 — no untyped `status` bag): `snapshot_id`, projected
+`kind`, `created_at`, `principal` (from `user`),
+`rollback_classification` (the public enum already uses the history
+RollbackClass vocabulary), `files_changed`; T0 adds OPTIONAL typed
+top-level fields `history_type`, `operation`, `source`,
+`diff_summary` to api-v1. The route projects observed rows onto this
+shape. T1's bridge tests assert the projection against representative
+manifests; any phase-encoding surprise is fixed THERE before the
+collector lands.
 
 ## 3. Rollback contract (T5)
 
@@ -148,11 +169,12 @@ phase-encoding surprise is fixed THERE before the collector lands.
 POST /config-history/rollback
   mode=plan  spec={ to: 'baseline', reason: string }
   → blockers: to!=='baseline' (NOT_IMPLEMENTED pointer),
-              baseline snapshot absent;
+              baseline snapshot absent (id resolved from observed rows);
   risk_level: 'destructive'  (API enum — review P1; the history
-  RollbackClass appears only in diff/evidence as history_rollback_class)
+  RollbackClass appears only in diff/evidence)
   lease: ConfigHistory/default (internal)
-  affected: [ConfigSnapshot/baseline]
+  affected: [ConfigSnapshot/<baseline-id>]   # NO revision — display only
+  observed_freshness_ref: {ConfigSnapshot, <baseline-id>, revision}
   mode=apply + dangerous=true → task → executor resetToBaseline(reason)
 ```
 

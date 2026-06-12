@@ -2,8 +2,9 @@
 
 **Status:** accepted (2026-06-12). Extends ADR-0002 (one new enumerated
 agent RPC, three new task kinds), ADR-0004 (executors), ADR-0010 (the
-catalog's last `degraded` entries go live; one deprecated gRPC read
-retires).
+catalog's config-history/audit `degraded` entries go live —
+`tasks.cancel` stays degraded until cancel wiring — and one deprecated
+gRPC read retires).
 
 ## Context
 
@@ -55,7 +56,8 @@ registries grow: the agent `Kind` union and the api observed-schema
 list accept `ConfigSnapshot` (review P0).
 
 **Projection table (review P0)** — public `kind` from history `type`,
-with NOTHING lost (the raw fields ride in `status`):
+with NOTHING lost (the raw fields become typed top-level schema
+fields, below):
 
 | history `type` | public `kind` |
 |---|---|
@@ -64,9 +66,15 @@ with NOTHING lost (the raw fields ride in `status`):
 | `ephemeral` | `before` |
 | anything else | `imported` |
 
-`status` carries the raw `type`, `operation`, `rollback_class`
-(history vocabulary, clearly named `history_*`), `source`, `user`,
-`diff_summary`. T1 VERIFIES this projection against real manifests in
+The PUBLIC shape stays the existing top-level `ConfigSnapshot` schema
+(review P1 — no untyped `status` bag): `snapshot_id`, projected
+`kind`, `created_at`, `principal` (from `user`),
+`rollback_classification` (the history `RollbackClass` — the public
+enum already uses that vocabulary), `files_changed`. T0 adds the few
+missing OPTIONAL top-level fields to api-v1 explicitly:
+`history_type`, `operation`, `source`, `diff_summary`. The collector's
+observed rows carry these same fields; the route projects the row onto
+the public shape. T1 VERIFIES the projection against real manifests in
 the bridge tests; if pre/post phase turns out to be encoded elsewhere
 (e.g. `operation` suffixes), the table is corrected there before the
 collector lands.
@@ -84,8 +92,17 @@ python in the transactional runner — its own slice).
 `risk_level: 'destructive'` — the API enum the central dangerous gate
 fires on; the history library's `destroying_data` RollbackClass is
 reported in the diff/evidence, never used as a risk level (review P1).
-Internal lease `ConfigHistory/default` serializes it;
-`affected_resources` pins `ConfigSnapshot/baseline`. The executor
+
+**Freshness model (review P0):** the engine's `affected_resources`
+revision check reads DESIRED keys only — config snapshots are observed
+rows, and `baseline` is a snapshot TYPE, not an id (the baseline
+manifest has a generated id). So: the provider resolves the ACTUAL
+baseline snapshot id from observed rows at plan time (absent →
+blocker); `observed_freshness_ref` pins
+`{ConfigSnapshot, <baseline-id>, revision}` (the engine's observed
+path); `affected_resources` lists `ConfigSnapshot/<baseline-id>`
+WITHOUT a revision (display only — never a desired-side pin); the
+internal `ConfigHistory/default` lease serializes writers. The executor
 calls the new bridge verb `resetToBaseline(reason)`
 (`snapshot reset-to-baseline --reason … --yes`); the runner's own
 pre-change snapshot + validation + auto-rollback are the host-side
@@ -133,6 +150,14 @@ Pools stop being a deprecated read and become a first-class resource:
   non-empty; the executor preflight ADDITIONALLY re-checks live
   `raid_show`/`pool_show` before mutating (TOCTOU — observed state may
   lag a just-created array).
+- **Freshness (review P1):** pools have NO desired model — the S4
+  imperative pattern applies. `affected_resources` lists
+  `Pool/<name>` without a revision (display); ONE
+  `observed_freshness_ref` pins the observed Pool row (revision 0 =
+  absence pin for create); `lease_resources` `[Pool/<name>]`
+  serializes writers; the executor's live preflight is the
+  cross-resource guarantee (arrays referencing the pool may be newer
+  than the sweep).
 - **Executors:** three executors over the existing client verbs
   (create; modify dispatching add/remove/activate/deactivate;
   delete), fake-transport e2e. min_role per the legacy matrix:
@@ -147,7 +172,9 @@ delete` appear. MCP + xinasctl inherit everything (generated). TUI:
 `spare_pools.py` retargets fully — the view from `GET /pools`, the six
 actions onto the three routes via `plan_apply_wait` (delete/create
 dangerous-consent dialogs preserved); `raid.py`'s wizard pool lookups
-move to `GET /pools`, deleting the TUI's last xiRAID gRPC call site.
+move to `GET /pools`, deleting the TUI's last xiRAID POOL gRPC
+dependency (other screens — drives, license — keep their gRPC reads
+until their own slices).
 
 ## Deferred
 
