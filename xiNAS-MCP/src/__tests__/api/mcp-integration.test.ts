@@ -167,10 +167,11 @@ describe('MCP integration: default posture (S8 T8)', () => {
     expect(JSON.stringify(plan.payload)).toContain('PERMISSION_DENIED');
   });
 
-  it('degraded honesty: config_history.snapshots returns the stub WITH its warning', async () => {
+  it('config_history.snapshots is live (S9): result without the stub warning', async () => {
     const out = await callTool(port, adminSession, 'config_history.snapshots', {});
     expect(out.isError).toBe(false);
-    expect(JSON.stringify(out.payload)).toContain('CONFIG_HISTORY_NOT_INTEGRATED');
+    expect(JSON.stringify(out.payload)).not.toContain('CONFIG_HISTORY_NOT_INTEGRATED');
+    expect(out.payload).toHaveProperty('result');
   });
 
   it('legacy names answer with structured replacement pointers', async () => {

@@ -196,8 +196,10 @@ describe('query contract: /config-history/diff requires from + to', () => {
     expect(res.status).toBe(200);
     expect(res.body.result.from).toBe('a');
     expect(res.body.result.to).toBe('b');
+    // S9 T4: diff is live but needs the agent — this read-only test app
+    // has none, so it degrades (the NOT_INTEGRATED stub era is over).
     expect(
-      res.body.warnings.some((w: { code: string }) => w.code === 'CONFIG_HISTORY_NOT_INTEGRATED'),
+      res.body.warnings.some((w: { code: string }) => w.code === 'EXECUTOR_UNAVAILABLE'),
     ).toBe(true);
   });
 });

@@ -25,14 +25,15 @@ describe('stub routes', () => {
     ).toBe(true);
   });
 
-  it('GET /config-history/snapshots returns empty + warning', async () => {
+  it('GET /config-history/snapshots is live (S9): empty result, NO stub warning', async () => {
     const res = await request(setup.app)
       .get('/api/v1/config-history/snapshots')
       .set('Authorization', ADMIN_TOKEN);
     expect(res.status).toBe(200);
+    expect(res.body.result).toEqual([]);
     expect(
       res.body.warnings.some((w: { code: string }) => w.code === 'CONFIG_HISTORY_NOT_INTEGRATED'),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('GET /config-history/snapshots/{id} 404s', async () => {
