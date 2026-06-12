@@ -10,3 +10,8 @@ useDefault = true
 description = "Bash assignment of git rev-parse HEAD in startup_menu.sh"
 paths = ['''^startup_menu\.sh$''']
 regexes = ['''local_commit=\$\(git ''']
+
+[[allowlists]]
+description = "Fake xicli license goldens in tests/fixtures (hwkey lines are deliberately invented; the suite asserts they never leak into results or bundles)"
+paths = ['''xiNAS-MCP/src/__tests__/.*\.test\.ts$''']
+regexes = ['''hwkey: [A-Z]{4}-[A-Z0-9-]*(?:KEY|MATERIAL)''']
