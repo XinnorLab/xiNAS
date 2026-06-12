@@ -135,11 +135,27 @@ class ControlClient:
 
     # -- plan/apply --------------------------------------------------------
 
-    def plan(self, method: str, path: str, spec: dict[str, Any]) -> dict[str, Any]:
-        """mode=plan; raises PlanBlocked when the plan carries blockers."""
+    def plan(
+        self,
+        method: str,
+        path: str,
+        spec: dict[str, Any],
+        *,
+        dangerous: bool = False,
+    ) -> dict[str, Any]:
+        """mode=plan; raises PlanBlocked when the plan carries blockers.
+
+        ``dangerous=True`` filters the engine-owned advisory
+        ``dangerous_flag_required`` blocker (always present on destructive
+        plans) before the check — the caller's consent rides to apply as
+        ``dangerous: true``, mirroring the server's own apply-time re-check
+        filter. Any OTHER blocker still raises.
+        """
         envelope = self.request(method, path, {"mode": "plan", "spec": spec})
         result = envelope.get("result") or {}
         blockers = result.get("blockers") or []
+        if dangerous:
+            blockers = [b for b in blockers if str(b.get("code")) != "dangerous_flag_required"]
         if blockers:
             raise PlanBlocked(blockers)
         return result
@@ -157,7 +173,7 @@ class ControlClient:
     ) -> dict[str, Any]:
         """plan → apply → poll the task to terminal. Returns the final task
         result; raises PlanBlocked / TaskFailed / ApiError."""
-        plan_result = self.plan(method, path, spec)
+        plan_result = self.plan(method, path, spec, dangerous=dangerous)
         plan_id = plan_result.get("plan_id")
         if not isinstance(plan_id, str):
             raise TransportError("plan response carried no plan_id")

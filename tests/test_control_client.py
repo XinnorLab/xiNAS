@@ -55,12 +55,21 @@ class _Handler(BaseHTTPRequestHandler):
         self._serve("GET")
 
     def do_POST(self) -> None:  # noqa: N802
+        self._capture_and_serve("POST")
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        self._capture_and_serve("PATCH")
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        self._capture_and_serve("DELETE")
+
+    def _capture_and_serve(self, method: str) -> None:
         raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         try:
-            BODIES.append(("POST", self.path, json.loads(raw) if raw else {}))
+            BODIES.append((method, self.path, json.loads(raw) if raw else {}))
         except ValueError:
-            BODIES.append(("POST", self.path, {}))
-        self._serve("POST")
+            BODIES.append((method, self.path, {}))
+        self._serve(method)
 
     def log_message(self, *_args: object) -> None:
         pass
@@ -167,6 +176,77 @@ def test_plan_apply_wait_happy_path_reports_progress(stub_socket):
     assert apply_bodies[0]["expected_revision"] == 7
     assert isinstance(apply_bodies[0]["idempotency_key"], str)
     assert apply_bodies[0]["idempotency_key"]
+
+
+def test_plan_apply_wait_dangerous_filters_advisory_blocker(stub_socket):
+    """dangerous=True mirrors the server's apply re-check (S8 T13): the
+    engine-owned dangerous_flag_required advisory blocker — always present
+    on destructive plans like arrays.delete — does not abort the flow, and
+    the apply body carries dangerous: true."""
+    posts = {"n": 0}
+
+    def array_delete():
+        posts["n"] += 1
+        if posts["n"] == 1:
+            return (
+                200,
+                {
+                    "result": {
+                        "plan_id": "p9",
+                        "state_revision_expected": 3,
+                        "blockers": [
+                            {"code": "dangerous_flag_required", "message": "irreversible"}
+                        ],
+                    }
+                },
+            )
+        return (202, {"result": {"task_id": "t9", "state": "queued"}})
+
+    ROUTES[("DELETE", "/api/v1/arrays/a1")] = array_delete
+    ROUTES[("GET", "/api/v1/tasks/t9")] = (200, {"result": {"task_id": "t9", "state": "success"}})
+
+    result = client(stub_socket).plan_apply_wait(
+        "DELETE", "/api/v1/arrays/a1", {}, dangerous=True, poll_s=0.01
+    )
+    assert result["state"] == "success"
+    apply_bodies = [b for (m, _, b) in BODIES if m == "DELETE" and b.get("mode") == "apply"]
+    assert len(apply_bodies) == 1
+    assert apply_bodies[0]["dangerous"] is True
+    assert apply_bodies[0]["expected_revision"] == 3
+
+
+def test_plan_dangerous_blocker_still_blocks_without_flag(stub_socket):
+    ROUTES[("DELETE", "/api/v1/arrays/a1")] = (
+        200,
+        {
+            "result": {
+                "plan_id": "p9",
+                "blockers": [{"code": "dangerous_flag_required", "message": "irreversible"}],
+            }
+        },
+    )
+    with pytest.raises(PlanBlocked):
+        client(stub_socket).plan("DELETE", "/api/v1/arrays/a1", {})
+
+
+def test_plan_dangerous_keeps_real_blockers(stub_socket):
+    """dangerous=True filters ONLY the advisory code; dependency blockers
+    (mounted filesystems, active sessions) still raise PlanBlocked."""
+    ROUTES[("DELETE", "/api/v1/arrays/a1")] = (
+        200,
+        {
+            "result": {
+                "plan_id": "p9",
+                "blockers": [
+                    {"code": "dangerous_flag_required", "message": "irreversible"},
+                    {"code": "dependent_filesystem_mounted", "message": "fs mounted"},
+                ],
+            }
+        },
+    )
+    with pytest.raises(PlanBlocked) as err:
+        client(stub_socket).plan("DELETE", "/api/v1/arrays/a1", {}, dangerous=True)
+    assert "fs mounted" in str(err.value)
 
 
 def test_plan_apply_wait_failed_task_raises(stub_socket):

@@ -1,7 +1,18 @@
-"""RAIDScreen — Quick Overview, Extended Details, Spare Pools, CRUD."""
+"""RAIDScreen — Quick Overview, Extended Details, Spare Pools, CRUD.
+
+S8 T13 (ADR-0010, s8-clients-spec §6): array list/create/modify/delete
+ride the control-path API (``/api/v1/arrays`` + ``/disks`` for the
+picker), and the composite delete teardown is a stop-on-failure SEQUENCE
+of API operations (shares delete → filesystem unmount + unmanage →
+arrays delete with the dangerous consent). Spare-pool LOOKUPS stay on
+gRPC ``pool_show`` — pools have no Phase-0 API surface (ADR-0010
+deferral); the chosen pool's drives map onto the API spec's
+``spare_disk_ids``.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -16,6 +27,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.api.control_client import ControlClient, ControlPathError
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -29,13 +41,15 @@ _ARRAY_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]
 _STRIP_SIZES = ["16", "32", "64", "128", "256"]
 _CPU_LIST_RE = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
+# Live-modify surface = the ADR-0006 writability matrix: spare_disk_ids
+# (the "sparepool" entry) + tuning.* keys. resync_enabled is create-only
+# (xiRAID RaidModify has no such field) and is no longer offered here.
 _MODIFY_PARAMS = [
     # (key, label, kind, options, value_type)
     ("cpu_allowed", "CPU Affinity", "cpu_affinity", None, str),
     ("sparepool", "Spare Pool", "input", None, str),
     ("init_prio", "Init Priority (0-100)", "input", None, int),
     ("recon_prio", "Recon Priority (0-100)", "input", None, int),
-    ("resync_enabled", "Resync Enabled", "select", ["true", "false"], str),
     ("sched_enabled", "Scheduler Enabled", "select", ["true", "false"], str),
     ("memory_limit", "Memory Limit (MB)", "input", None, int),
     ("merge_read_enabled", "Merge Read Enabled", "select", ["true", "false"], str),
@@ -67,45 +81,101 @@ def _fmt_size(size_bytes: float) -> str:
     return f"{size_bytes:.1f} EB"
 
 
-def _drive_label(d: dict) -> str:
-    """Format a rich label for a drive: name | size | model | NUMA."""
-    name = d.get("name", "?")
-    size = _fmt_size(d.get("size_bytes") or d.get("size_raw") or 0)
-    model = d.get("model") or "unknown"
-    numa = d.get("numa_node", d.get("numa", "?"))
-    return f"{name:<14s}  {size:>8s}  {model:<20s}  NUMA {numa}"
+def _numa_node(name: str) -> int:
+    """NUMA node for a block device (sysfs; NVMe falls back to the controller)."""
+    try:
+        numa_path = Path(f"/sys/class/block/{name}/device/numa_node")
+        if numa_path.is_file():
+            return max(0, int(numa_path.read_text().strip()))
+        if name.startswith("nvme"):
+            ctrl = name.split("n")[0]
+            ctrl_path = Path(f"/sys/class/nvme/{ctrl}/device/numa_node")
+            if ctrl_path.is_file():
+                return max(0, int(ctrl_path.read_text().strip()))
+    except (OSError, ValueError):
+        _log.debug("NUMA lookup failed for %s", name, exc_info=True)
+    return 0
 
 
-async def _get_drive_groups(grpc_client) -> tuple[dict[str, list[str]], list[dict]]:
-    """Fetch NVMe drives grouped by NUMA node + size category."""
-    ok, disks, err = await grpc_client.disk_list()
-    if not ok or not disks:
-        return {}, []
+async def _list_api_disks(control: ControlClient) -> list[dict[str, Any]]:
+    """GET /api/v1/disks adapted to the legacy drive-picker dict shape.
+
+    API Disk rows are ``{id, status: {name, device_path, model?, serial?,
+    transport?, capacity_bytes?, system_disk, mounted, safe_for_use}}``.
+    The adapter adds ``claimed`` (member/spare of any observed array, from
+    GET /api/v1/arrays) and a sysfs NUMA node (the API rows carry none).
+    """
+    disks = await asyncio.to_thread(control.result, "/api/v1/disks")
+    try:
+        arrays = await asyncio.to_thread(control.result, "/api/v1/arrays")
+    except ControlPathError:
+        arrays = []
+    claimed: set[str] = set()
+    for doc in arrays if isinstance(arrays, list) else []:
+        spec = doc.get("spec") if isinstance(doc, dict) else None
+        if not isinstance(spec, dict):
+            continue
+        for field in ("member_disk_ids", "spare_disk_ids"):
+            for did in spec.get(field) or []:
+                claimed.add(str(did))
+    rows: list[dict[str, Any]] = []
+    for doc in disks if isinstance(disks, list) else []:
+        if not isinstance(doc, dict):
+            continue
+        status = doc.get("status")
+        status = status if isinstance(status, dict) else {}
+        disk_id = str(doc.get("id") or status.get("name") or "")
+        name = str(status.get("name") or disk_id)
+        if not name:
+            continue
+        size = status.get("capacity_bytes") or 0
+        rows.append(
+            {
+                "id": disk_id or name,
+                "name": name,
+                "device_path": str(status.get("device_path") or f"/dev/{name}"),
+                "size_bytes": size,
+                "size_raw": size,
+                "model": str(status.get("model") or "").strip(),
+                "serial": str(status.get("serial") or "").strip(),
+                "transport": str(status.get("transport") or ""),
+                "numa_node": _numa_node(name),
+                "system": status.get("system_disk") is True,
+                "safe_for_use": status.get("safe_for_use") is True,
+                "claimed": (disk_id or name) in claimed,
+            }
+        )
+    return rows
+
+
+def _drive_groups(
+    rows: list[dict[str, Any]],
+) -> tuple[dict[str, list[str]], list[dict[str, Any]]]:
+    """Group pickable NVMe drives by NUMA node + size category.
+
+    Pickable = ``safe_for_use``, never the system disk, and not already a
+    member/spare of an observed array (those would only come back as
+    ``disk_in_use`` plan blockers).
+    """
     SMALL_THRESHOLD = 1_000_000_000  # 1 GB
     nvme = [
         d
-        for d in disks
-        if "nvme" in d.get("name", "").lower() and not d.get("system") and not d.get("raid_name")
+        for d in rows
+        if "nvme" in d.get("name", "").lower()
+        and d.get("safe_for_use")
+        and not d.get("system")
+        and not d.get("claimed")
     ]
     if not nvme:
         return {}, nvme
     groups: dict[str, list[str]] = {}
     for d in nvme:
-        numa = d.get("numa_node", d.get("numa", "0"))
-        size_bytes = d.get("size_bytes", d.get("size_raw", 0)) or 0
+        numa = d.get("numa_node", 0)
+        size_bytes = d.get("size_bytes") or 0
         size_cat = "small" if size_bytes < SMALL_THRESHOLD else "large"
-        key = f"All {size_cat} NVMe, NUMA {numa}"
-        groups.setdefault(key, []).append(d["name"])
-    all_large = [
-        d["name"]
-        for d in nvme
-        if (d.get("size_bytes", d.get("size_raw", 0)) or 0) >= SMALL_THRESHOLD
-    ]
-    all_small = [
-        d["name"]
-        for d in nvme
-        if (d.get("size_bytes", d.get("size_raw", 0)) or 0) < SMALL_THRESHOLD
-    ]
+        groups.setdefault(f"All {size_cat} NVMe, NUMA {numa}", []).append(d["name"])
+    all_large = [d["name"] for d in nvme if (d.get("size_bytes") or 0) >= SMALL_THRESHOLD]
+    all_small = [d["name"] for d in nvme if (d.get("size_bytes") or 0) < SMALL_THRESHOLD]
     if all_large:
         groups[f"All large NVMe ({len(all_large)} drives)"] = all_large
     if all_small:
@@ -113,7 +183,7 @@ async def _get_drive_groups(grpc_client) -> tuple[dict[str, list[str]], list[dic
     return groups, nvme
 
 
-async def _get_numa_topology(grpc_client) -> list[dict]:
+async def _get_numa_topology(control: ControlClient) -> list[dict]:
     """Return NUMA topology: [{node: 0, cpulist: '0-15', drives: ['nvme0',...]}, ...]."""
     nodes: list[dict] = []
     node_base = Path("/sys/devices/system/node")
@@ -131,21 +201,97 @@ async def _get_numa_topology(grpc_client) -> list[dict]:
         cpulist = cpulist_file.read_text().strip() if cpulist_file.is_file() else ""
         nodes.append({"node": node_id, "cpulist": cpulist, "drives": []})
 
-    # Map NVMe drives to NUMA nodes
-    ok, disks, _ = await grpc_client.disk_list()
-    if ok and disks:
-        drive_list = disks if isinstance(disks, list) else []
-        for d in drive_list:
-            name = d.get("name", "")
-            if "nvme" not in name.lower():
-                continue
-            numa = d.get("numa_node", d.get("numa", 0))
-            for n in nodes:
-                if n["node"] == numa:
-                    n["drives"].append(name)
-                    break
+    # Map NVMe drives to NUMA nodes (API disk listing + sysfs NUMA)
+    try:
+        rows = await _list_api_disks(control)
+    except ControlPathError:
+        rows = []
+    for d in rows:
+        name = d.get("name", "")
+        if "nvme" not in name.lower():
+            continue
+        numa = d.get("numa_node", 0)
+        for n in nodes:
+            if n["node"] == numa:
+                n["drives"].append(name)
+                break
 
     return nodes
+
+
+def _pools_by_name(data: Any) -> dict[str, dict]:
+    """Normalise a gRPC pool_show payload to {name: pool_dict}."""
+    if isinstance(data, dict):
+        return {str(k): v for k, v in data.items() if isinstance(v, dict)}
+    if isinstance(data, list):
+        return {str(p.get("name")): p for p in data if isinstance(p, dict) and p.get("name")}
+    return {}
+
+
+def _pool_drive_paths(pool: dict) -> list[str]:
+    """Device paths of a spare pool's drives (tolerant of payload shape)."""
+    raw = pool.get("devices") or pool.get("drives") or []
+    paths: list[str] = []
+    for dev in raw if isinstance(raw, list) else []:
+        path = dev[1] if isinstance(dev, list) and len(dev) > 1 else str(dev)
+        if path:
+            paths.append(str(path))
+    return paths
+
+
+def _is_under(path: str, root: str) -> bool:
+    """True when ``path`` is at or under ``root`` (path-segment aware)."""
+    if path == root:
+        return True
+    prefix = root if root.endswith("/") else root + "/"
+    return path.startswith(prefix)
+
+
+def _level_label(level: Any) -> str:
+    """API level ('raid5' / 'n+m') → display label ('5' / 'n+m')."""
+    text = str(level or "?")
+    return text[4:] if text.startswith("raid") and len(text) > 4 else text
+
+
+def _arrays_from_api(rows: Any) -> dict[str, dict]:
+    """Adapt GET /api/v1/arrays docs to the legacy renderer dict shape.
+
+    API rows are ``{id, spec: {name, level, member_disk_ids,
+    spare_disk_ids, strip_size_kib, block_size, group_size}, status:
+    {state, volume_path, rebuild_progress_pct, usable_capacity_bytes,
+    member_states, ...}}``. Per-member states and the tuning surface are
+    not observed via the API — the renderer shows placeholders for those.
+    """
+    arrays: dict[str, dict] = {}
+    for doc in rows if isinstance(rows, list) else []:
+        if not isinstance(doc, dict):
+            continue
+        spec = doc.get("spec")
+        spec = spec if isinstance(spec, dict) else {}
+        status = doc.get("status")
+        status = status if isinstance(status, dict) else {}
+        name = str(doc.get("id") or spec.get("name") or "")
+        if not name:
+            continue
+        members = [str(m) for m in spec.get("member_disk_ids") or []]
+        spares = [str(s) for s in spec.get("spare_disk_ids") or []]
+        cap = status.get("usable_capacity_bytes")
+        arrays[name] = {
+            "name": name,
+            "level": _level_label(spec.get("level")),
+            "size": _fmt_size(cap) if isinstance(cap, int | float) else "N/A",
+            "state": [str(status.get("state") or "unknown")],
+            # member states are not observed via the API → unknown
+            "devices": [[i, m, []] for i, m in enumerate(members)],
+            "strip_size": spec.get("strip_size_kib", "?"),
+            "sparepool": ", ".join(spares) if spares else "-",
+            "block_size": spec.get("block_size", 4096),
+            "init_progress": status.get("rebuild_progress_pct"),
+            "volume_path": str(status.get("volume_path") or f"/dev/xi_{name}"),
+            "member_disk_ids": members,
+            "spare_disk_ids": spares,
+        }
+    return arrays
 
 
 class RAIDScreen(XiNASAppMixin, Screen):
@@ -195,27 +341,39 @@ class RAIDScreen(XiNASAppMixin, Screen):
         elif key == "6":
             self._delete_array()
 
+    def _task_progress(self, label: str):
+        """Build an ``on_progress`` callback for ``plan_apply_wait``.
+
+        ``plan_apply_wait`` runs in a worker thread, so the callback hops
+        back to the UI thread before raising the toast.
+        """
+
+        def _cb(state: str) -> None:
+            self.app.call_from_thread(self.app.notify, f"{label}: task {state}", timeout=4)
+
+        return _cb
+
     @work(exclusive=True)
     async def _show_quick(self) -> None:
         view = self.query_one("#raid-content", ScrollableTextView)
         view.set_content("Loading RAID arrays…")
-        ok, data, err = await self.app.grpc.raid_show()
-        view.set_content(
-            _format_raid_overview(data, extended=False)
-            if ok
-            else f"Could not load RAID info: {grpc_short_error(err)}"
-        )
+        try:
+            rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
+        except ControlPathError as exc:
+            view.set_content(f"Could not load RAID info: {exc}")
+            return
+        view.set_content(_format_raid_overview(_arrays_from_api(rows), extended=False))
 
     @work(exclusive=True)
     async def _show_extended(self) -> None:
         view = self.query_one("#raid-content", ScrollableTextView)
         view.set_content("Loading RAID arrays (extended)…")
-        ok, data, err = await self.app.grpc.raid_show(extended=True)
-        view.set_content(
-            _format_raid_overview(data, extended=True)
-            if ok
-            else f"Could not load RAID info: {grpc_short_error(err)}"
-        )
+        try:
+            rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
+        except ControlPathError as exc:
+            view.set_content(f"Could not load RAID info: {exc}")
+            return
+        view.set_content(_format_raid_overview(_arrays_from_api(rows), extended=True))
 
     @work(exclusive=True)
     async def _show_pools(self) -> None:
@@ -258,8 +416,13 @@ class RAIDScreen(XiNASAppMixin, Screen):
         if not level:
             return
 
-        # Step 3: Select drives (grouped by NUMA/size)
-        groups, nvme = await _get_drive_groups(self.app.grpc)
+        # Step 3: Select drives (grouped by NUMA/size; API disk listing)
+        try:
+            disk_rows = await _list_api_disks(self.app.control)
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(ConfirmDialog(f"Could not list disks.\n{exc}", "Error"))
+            return
+        groups, nvme = _drive_groups(disk_rows)
         if not nvme:
             await self.app.push_screen_wait(
                 ConfirmDialog("No available NVMe drives found.", "Error")
@@ -318,8 +481,16 @@ class RAIDScreen(XiNASAppMixin, Screen):
         if not strip:
             strip = "64"
 
+        # The picker returns drive NAMES; the API spec references Disk ids.
+        name_to_id = {d["name"]: d["id"] for d in nvme}
+        spec: dict[str, Any] = {
+            "name": name,
+            "level": f"raid{level}",
+            "member_disk_ids": [name_to_id.get(n, n) for n in drives],
+            "strip_size_kib": int(strip),
+        }
+
         # Step 5: Group size (mandatory for RAID 50/60)
-        kwargs: dict[str, Any] = {"strip_size": int(strip)}
         if level in ("50", "60"):
             while True:
                 group_size = await self.app.push_screen_wait(
@@ -338,22 +509,18 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 except ValueError:
                     self.app.notify("Group size must be a positive integer.", severity="error")
                     continue
-                kwargs["group_size"] = gs
+                spec["group_size"] = gs
                 break
 
-        # Step 6: Spare pool (optional) — pick from existing pools
+        # Step 6: Spare pool (optional) — pick from existing pools (gRPC
+        # lookup, ADR-0010 deferral); the pool's drives become the API
+        # spec's spare_disk_ids (the executor provisions xnsp_<name>).
         _NONE_POOL = "(none)"
-        pool_names: list[str] = []
+        spare_pool_label = ""
         p_ok, p_data, _ = await self.app.grpc.pool_show()
-        if p_ok and p_data:
-            if isinstance(p_data, dict):
-                pool_names = list(p_data.keys())
-            elif isinstance(p_data, list):
-                pool_names = [
-                    p.get("name", "") for p in p_data if isinstance(p, dict) and p.get("name")
-                ]
-        if pool_names:
-            pool_choices = [_NONE_POOL] + sorted(pool_names)
+        pools = _pools_by_name(p_data) if p_ok else {}
+        if pools:
+            pool_choices = [_NONE_POOL] + sorted(pools.keys())
             sparepool = await self.app.push_screen_wait(
                 SelectDialog(
                     pool_choices,
@@ -364,7 +531,19 @@ class RAIDScreen(XiNASAppMixin, Screen):
             if sparepool is None:
                 return
             if sparepool != _NONE_POOL:
-                kwargs["sparepool"] = sparepool
+                path_to_id = {d["device_path"]: d["id"] for d in disk_rows}
+                spare_ids = [
+                    path_to_id.get(p, p.rsplit("/", 1)[-1])
+                    for p in _pool_drive_paths(pools.get(sparepool, {}))
+                ]
+                if spare_ids:
+                    spec["spare_disk_ids"] = spare_ids
+                    spare_pool_label = f"{sparepool} ({len(spare_ids)} drive(s))"
+                else:
+                    self.app.notify(
+                        f"Pool '{sparepool}' has no drives — skipping spare assignment.",
+                        severity="warning",
+                    )
         # If no pools exist, skip silently (no spare pool assigned)
 
         # Confirm
@@ -374,10 +553,10 @@ class RAIDScreen(XiNASAppMixin, Screen):
             f"Drives:     {', '.join(drives)}\n"
             f"Strip Size: {strip} KB"
         )
-        if "group_size" in kwargs:
-            summary += f"\nGroup Size: {kwargs['group_size']}"
-        if "sparepool" in kwargs:
-            summary += f"\nSpare Pool: {kwargs['sparepool']}"
+        if "group_size" in spec:
+            summary += f"\nGroup Size: {spec['group_size']}"
+        if spare_pool_label:
+            summary += f"\nSpare Pool: {spare_pool_label}"
 
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(f"Create this RAID array?\n\n{summary}", "Confirm Create")
@@ -385,40 +564,38 @@ class RAIDScreen(XiNASAppMixin, Screen):
         if not confirmed:
             return
 
-        # Ensure full device paths (e.g. /dev/nvme2n1, not nvme2n1)
-        drives = [d if d.startswith("/dev/") else f"/dev/{d}" for d in drives]
-
-        ok, _, err = await self.app.grpc.raid_create(name, level, drives, **kwargs)
-        if ok:
-            self.app.audit.log("raid.create", f"{name} RAID-{level} ({len(drives)} drives)", "OK")
-            await self.app.snapshots.record(
-                "raid_create",
-                diff_summary=f"Created RAID-{level} array '{name}' with {len(drives)} drives",
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "POST",
+                "/api/v1/arrays",
+                spec,
+                on_progress=self._task_progress("Create Array"),
             )
-            self._show_quick()
-        else:
-            await self.app.push_screen_wait(
-                ConfirmDialog(f"Create failed.\n{grpc_short_error(err)}", "Error")
-            )
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(ConfirmDialog(f"Create failed.\n{exc}", "Error"))
+            return
+        self.app.audit.log("raid.create", f"{name} RAID-{level} ({len(drives)} drives)", "OK")
+        await self.app.snapshots.record(
+            "raid_create",
+            diff_summary=f"Created RAID-{level} array '{name}' with {len(drives)} drives",
+        )
+        self._show_quick()
 
     # ── Edit Array ───────────────────────────────────────────────────────────
 
     @work(exclusive=True)
     async def _modify_array(self) -> None:
-        """Pick array -> pick parameter -> enter value -> confirm -> apply."""
-        ok, data, err = await self.app.grpc.raid_show()
-        if not ok or not data:
+        """Pick array -> pick parameter -> enter value -> confirm -> PATCH."""
+        try:
+            rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
+        except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(
-                    f"No arrays available.\n{grpc_short_error(err)}"
-                    if not ok
-                    else "No RAID arrays configured.",
-                    "Edit Array",
-                )
+                ConfirmDialog(f"No arrays available.\n{exc}", "Edit Array")
             )
             return
 
-        arrays = _as_array_dict(data)
+        arrays = _arrays_from_api(rows)
         names = list(arrays.keys())
         if not names:
             await self.app.push_screen_wait(
@@ -447,8 +624,10 @@ class RAIDScreen(XiNASAppMixin, Screen):
         idx = param_labels.index(param_choice)
         key, label, kind, options, vtype = _MODIFY_PARAMS[idx]
 
+        spare_ids: list[str] = []
         if key == "cpu_allowed":
-            # Smart CPU affinity selector
+            # Smart CPU affinity selector (tuning is not observed via the
+            # API, so the current value is unknown → "all").
             current_cpu = arrays[arr_name].get("cpu_allowed") or "all"
             mode = await self.app.push_screen_wait(
                 SelectDialog(
@@ -463,7 +642,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
             if mode == "All CPUs (reset)":
                 value = ""
             elif mode == "NUMA Node":
-                topo = await _get_numa_topology(self.app.grpc)
+                topo = await _get_numa_topology(self.app.control)
                 if not topo:
                     self.app.notify("Cannot detect NUMA topology.", severity="warning")
                     return
@@ -507,26 +686,34 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 value = raw
 
         elif key == "sparepool":
-            # Dynamic select: fetch available spare pools
-            pool_names: list[str] = []
+            # Dynamic select: fetch available spare pools (gRPC lookup —
+            # ADR-0010 deferral); the chosen pool's drives map onto the
+            # PATCH spec's spare_disk_ids.
             p_ok, p_data, _ = await self.app.grpc.pool_show()
-            if p_ok and p_data:
-                if isinstance(p_data, dict):
-                    pool_names = list(p_data.keys())
-                elif isinstance(p_data, list):
-                    pool_names = [
-                        p.get("name", "") for p in p_data if isinstance(p, dict) and p.get("name")
-                    ]
-            if not pool_names:
+            pools = _pools_by_name(p_data) if p_ok else {}
+            if not pools:
                 self.app.notify("No spare pools available.", severity="warning")
                 return
             value = await self.app.push_screen_wait(
                 SelectDialog(
-                    sorted(pool_names),
+                    sorted(pools.keys()),
                     title=f"Set {label}",
                     prompt=f"Select spare pool for {arr_name}:",
                 )
             )
+            if value:
+                try:
+                    disk_rows = await _list_api_disks(self.app.control)
+                except ControlPathError:
+                    disk_rows = []
+                path_to_id = {d["device_path"]: d["id"] for d in disk_rows}
+                spare_ids = [
+                    path_to_id.get(p, p.rsplit("/", 1)[-1])
+                    for p in _pool_drive_paths(pools.get(value, {}))
+                ]
+                if not spare_ids:
+                    self.app.notify(f"Pool '{value}' has no drives.", severity="warning")
+                    return
         elif kind == "select" and options:
             value = await self.app.push_screen_wait(
                 SelectDialog(options, title=f"Set {label}", prompt=f"New value for {label}:")
@@ -549,55 +736,97 @@ class RAIDScreen(XiNASAppMixin, Screen):
         if not confirmed:
             return
 
-        # Convert value to the expected type (Input widgets return strings)
-        try:
-            value = vtype(value)
-        except (ValueError, TypeError):
-            await self.app.push_screen_wait(
-                ConfirmDialog(f"Invalid value: expected {vtype.__name__}", "Error")
-            )
-            return
-
-        ok, _, err = await self.app.grpc.raid_modify(arr_name, **{key: value})
-        if ok:
-            self.app.audit.log("raid.modify", f"{arr_name} {key}={value}", "OK")
-            await self.app.snapshots.record(
-                "raid_modify",
-                diff_summary=f"Modified array '{arr_name}': {key}={value}",
-            )
-            self._show_quick()
+        # Map the wizard value onto the PATCH spec (ADR-0006 writable
+        # subset: spare_disk_ids | tuning.*).
+        patch_spec: dict[str, Any]
+        if key == "sparepool":
+            patch_spec = {"spare_disk_ids": spare_ids}
+        elif key == "cpu_allowed":
+            patch_spec = {"tuning": {"cpu_allowed": value}}
+        elif kind == "select" and options:
+            patch_spec = {"tuning": {key: value == "true"}}
         else:
-            await self.app.push_screen_wait(
-                ConfirmDialog(f"Edit failed.\n{grpc_short_error(err)}", "Error")
+            # Input widgets return strings — convert to the expected type.
+            try:
+                patch_spec = {"tuning": {key: vtype(value)}}
+            except (ValueError, TypeError):
+                await self.app.push_screen_wait(
+                    ConfirmDialog(f"Invalid value: expected {vtype.__name__}", "Error")
+                )
+                return
+
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "PATCH",
+                f"/api/v1/arrays/{arr_name}",
+                patch_spec,
+                on_progress=self._task_progress(f"Edit {arr_name}"),
             )
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(ConfirmDialog(f"Edit failed.\n{exc}", "Error"))
+            return
+        self.app.audit.log("raid.modify", f"{arr_name} {key}={value}", "OK")
+        await self.app.snapshots.record(
+            "raid_modify",
+            diff_summary=f"Modified array '{arr_name}': {key}={value}",
+        )
+        self._show_quick()
 
     # ── Delete Array ─────────────────────────────────────────────────────────
+
+    def _teardown_append(self, lines: list[str], line: str) -> None:
+        """Append a step line to the teardown progress view."""
+        lines.append(line)
+        self.query_one("#raid-content", ScrollableTextView).set_content("\n".join(lines))
+
+    def _teardown_progress(self, lines: list[str]):
+        """``on_progress`` callback rendering task states as step lines.
+
+        ``plan_apply_wait`` runs in a worker thread, so the callback hops
+        back to the UI thread before touching the view.
+        """
+
+        def _cb(state: str) -> None:
+            self.app.call_from_thread(self._teardown_append, lines, f"      task {state}")
+
+        return _cb
+
+    async def _teardown_failed(self, lines: list[str], step: str, exc: Exception) -> None:
+        """Render a stop-on-failure halt (s8-clients-spec §6: no cross-step
+        rollback — each step's task carries its own rollback)."""
+        self._teardown_append(lines, f"  FAILED: {exc}")
+        self._teardown_append(lines, "  Teardown stopped — remaining steps were not run.")
+        await self.app.push_screen_wait(
+            ConfirmDialog(
+                f"{step}:\n{exc}\n\n"
+                "Teardown stopped at this step. No cross-step rollback; the "
+                "failed task rolled itself back where supported.",
+                "Delete Array — Stopped",
+            )
+        )
 
     @work(exclusive=True)
     async def _delete_array(self) -> None:
         """Pick array -> check dependencies -> ordered teardown -> destroy.
 
-        Teardown order: NFS shares -> filesystem (unmount + unit) -> RAID.
-        Rollback on failure at any step.
+        s8-clients-spec §6: the teardown is a stop-on-failure SEQUENCE of
+        control-path API operations — shares delete → filesystem unmount +
+        unmanage → arrays delete (the confirm dialog is the dangerous
+        consent). A step failure STOPS the sequence with the task/plan
+        error surfaced; there is no cross-step rollback.
         """
-        from xinas_menu.utils.xfs_helpers import (
-            find_mounts_using_raid,
-            unmount_filesystem,
-        )
+        from xinas_menu.utils.xfs_helpers import find_mounts_using_raid
 
-        ok, data, err = await self.app.grpc.raid_show()
-        if not ok or not data:
+        try:
+            rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
+        except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(
-                    f"No arrays available.\n{grpc_short_error(err)}"
-                    if not ok
-                    else "No RAID arrays configured.",
-                    "Delete Array",
-                )
+                ConfirmDialog(f"No arrays available.\n{exc}", "Delete Array")
             )
             return
 
-        arrays = _as_array_dict(data)
+        arrays = _arrays_from_api(rows)
         names = list(arrays.keys())
         if not names:
             await self.app.push_screen_wait(
@@ -612,29 +841,56 @@ class RAIDScreen(XiNASAppMixin, Screen):
             return
 
         arr = arrays.get(arr_name, {})
-        level = arr.get("level", "?") if isinstance(arr, dict) else "?"
-        size = arr.get("size", "N/A") if isinstance(arr, dict) else "N/A"
-        devs = arr.get("devices", []) if isinstance(arr, dict) else []
+        level = arr.get("level", "?")
+        size = arr.get("size", "N/A")
+        devs = arr.get("member_disk_ids", [])
+        volume_path = arr.get("volume_path", f"/dev/xi_{arr_name}")
 
-        # ── Check for active filesystems using this RAID array ───────────
+        # ── Affected mounts: local findmnt read (kept from the legacy
+        # flow — it also catches log-device usage the API does not model
+        # as backing_device) ──────────────────────────────────────────────
         mounts = await find_mounts_using_raid(arr_name)
+        mountpoints = {m["mountpoint"] for m in mounts if m.get("mountpoint")}
 
-        # ── Check for active NFS shares on those mountpoints ─────────────
-        affected_shares: list[dict] = []  # [{path, mountpoint}]
-        if mounts:
-            ok_nfs, exports, _ = self.app.nfs.list_exports()
-            if ok_nfs and exports:
-                for exp in exports:
-                    exp_path = exp.get("path", "")
-                    for m in mounts:
-                        mp = m.get("mountpoint", "")
-                        if mp and exp_path.startswith(mp):
-                            affected_shares.append(
-                                {
-                                    "path": exp_path,
-                                    "mountpoint": mp,
-                                }
-                            )
+        # ── Affected shares: GET /shares filtered to paths under those
+        # mountpoints ─────────────────────────────────────────────────────
+        affected_shares: list[dict] = []  # [{id, path}]
+        if mountpoints:
+            try:
+                share_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
+            except ControlPathError:
+                share_rows = []
+            for doc in share_rows if isinstance(share_rows, list) else []:
+                if not isinstance(doc, dict):
+                    continue
+                doc_spec = doc.get("spec")
+                path = doc_spec.get("path") if isinstance(doc_spec, dict) else None
+                sid = doc.get("id")
+                if not path or sid is None:
+                    continue
+                if any(_is_under(str(path), mp) for mp in mountpoints):
+                    affected_shares.append({"id": str(sid), "path": str(path)})
+
+        # ── Affected filesystems (mount units): backed by the array's
+        # volume, or mounted on one of the affected mountpoints ──────────
+        affected_fs: list[dict] = []  # [{id, mountpoint, mounted}]
+        try:
+            fs_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/filesystems")
+        except ControlPathError:
+            fs_rows = []
+        for doc in fs_rows if isinstance(fs_rows, list) else []:
+            if not isinstance(doc, dict):
+                continue
+            status = doc.get("status")
+            status = status if isinstance(status, dict) else {}
+            fid = doc.get("id")
+            if fid is None:
+                continue
+            mp = str(status.get("mountpoint") or "")
+            if status.get("backing_device") == volume_path or (mp and mp in mountpoints):
+                affected_fs.append(
+                    {"id": str(fid), "mountpoint": mp, "mounted": status.get("mounted") is True}
+                )
 
         # ── Build warning message with dependency info ───────────────────
         warning_parts = [
@@ -645,18 +901,24 @@ class RAIDScreen(XiNASAppMixin, Screen):
             share_list = "\n".join(f"  - {s['path']}" for s in affected_shares)
             warning_parts.append(f"ACTIVE NFS SHARES will be removed:\n{share_list}\n")
 
-        if mounts:
-            mount_list = "\n".join(
-                f"  - {m['mountpoint']} ({m.get('role', 'unknown')} device)" for m in mounts
+        if affected_fs or mounts:
+            fs_lines = [f"  - {f['mountpoint'] or f['id']} ({f['id']})" for f in affected_fs]
+            for m in mounts:
+                mp = m.get("mountpoint", "")
+                if mp and not any(f["mountpoint"] == mp for f in affected_fs):
+                    fs_lines.append(
+                        f"  - {mp} ({m.get('role', 'unknown')} device — not API-managed)"
+                    )
+            warning_parts.append(
+                "ACTIVE FILESYSTEMS will be unmounted/unmanaged:\n" + "\n".join(fs_lines) + "\n"
             )
-            warning_parts.append(f"ACTIVE FILESYSTEMS will be unmounted:\n{mount_list}\n")
 
         warning_parts.append(
             f"WARNING: This will DESTROY array '{arr_name}' and all data on it!\n"
             f"This action cannot be undone."
         )
 
-        # ── First confirmation ───────────────────────────────────────────
+        # ── First confirmation (this consent carries dangerous=True) ─────
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog("\n".join(warning_parts), f"Delete {arr_name}?")
         )
@@ -664,12 +926,12 @@ class RAIDScreen(XiNASAppMixin, Screen):
             return
 
         # ── Double confirmation when dependencies exist ──────────────────
-        if mounts or affected_shares:
+        if mounts or affected_fs or affected_shares:
             confirmed2 = await self.app.push_screen_wait(
                 ConfirmDialog(
                     f"Are you ABSOLUTELY sure?\n\n"
                     f"This will remove {len(affected_shares)} NFS share(s) "
-                    f"and {len(mounts)} filesystem(s) before destroying "
+                    f"and {len(affected_fs) or len(mounts)} filesystem(s) before destroying "
                     f"array '{arr_name}'.\n\n"
                     f"ALL DATA WILL BE LOST.",
                     "FINAL CONFIRMATION",
@@ -678,113 +940,92 @@ class RAIDScreen(XiNASAppMixin, Screen):
             if not confirmed2:
                 return
 
-        view = self.query_one("#raid-content", ScrollableTextView)
+        lines: list[str] = []
+        self._teardown_append(lines, f"Teardown sequence for array '{arr_name}':")
+        progress = self._teardown_progress(lines)
 
-        # ── Step 1: Remove NFS shares ────────────────────────────────────
-        removed_shares: list[dict] = []  # for rollback
-        if affected_shares:
-            # Save share details for potential rollback
-            ok_nfs, all_exports, _ = self.app.nfs.list_exports()
-            export_map = {}
-            if ok_nfs and all_exports:
-                export_map = {e.get("path", ""): e for e in all_exports}
-
-            for share in affected_shares:
-                path = share["path"]
-                view.set_content(f"  Removing NFS share: {path}...")
-                ok_rm, _, err_rm = self.app.nfs.remove_export(path)
-                if not ok_rm:
-                    # Rollback: re-add previously removed shares
-                    for rs in removed_shares:
-                        self.app.nfs.add_export(rs)
-                    self.app.nfs.reload()
-                    await self.app.push_screen_wait(
-                        ConfirmDialog(
-                            f"Failed to remove NFS share '{path}':\n{err_rm}\n\n"
-                            f"Rolled back {len(removed_shares)} previously removed share(s).",
-                            "Error — Rollback Complete",
-                        )
-                    )
-                    view.set_content("  Delete cancelled (rollback complete).")
-                    return
-                # Save full export entry for rollback
-                saved = export_map.get(path, {"path": path})
-                removed_shares.append(saved)
-                self.app.audit.log("nfs.remove", f"share={path} (RAID teardown)", "OK")
-
-            # Reload NFS exports after removal
-            self.app.nfs.reload()
-
-        # ── Step 2: Unmount filesystems ──────────────────────────────────
-        unmounted_mounts: list[dict] = []  # for rollback
-        if mounts:
-            for m in mounts:
-                mp = m.get("mountpoint", "")
-                if not mp:
-                    continue
-                view.set_content(f"  Unmounting filesystem: {mp}...")
-                ok_um, err_um = await unmount_filesystem(mp)
-                if not ok_um:
-                    # Rollback: re-mount unmounted filesystems
-                    from xinas_menu.utils.xfs_helpers import mount_filesystem
-
-                    for um in unmounted_mounts:
-                        await mount_filesystem(um["mountpoint"])
-                    # Rollback: re-add removed shares
-                    for rs in removed_shares:
-                        self.app.nfs.add_export(rs)
-                    if removed_shares:
-                        self.app.nfs.reload()
-                    await self.app.push_screen_wait(
-                        ConfirmDialog(
-                            f"Failed to unmount '{mp}':\n{err_um}\n\n"
-                            f"Rolled back {len(unmounted_mounts)} unmount(s) "
-                            f"and {len(removed_shares)} share(s).",
-                            "Error — Rollback Complete",
-                        )
-                    )
-                    view.set_content("  Delete cancelled (rollback complete).")
-                    return
-                unmounted_mounts.append(m)
-                self.app.audit.log("fs.unmount", f"mountpoint={mp} (RAID teardown)", "OK")
-
-        # ── Step 3: Destroy RAID array ───────────────────────────────────
-        view.set_content(f"  Destroying RAID array: {arr_name}...")
-        ok, _, err = await self.app.grpc.raid_destroy(arr_name, force=True)
-        if ok:
-            self.app.audit.log("raid.destroy", arr_name, "OK")
-            await self.app.snapshots.record(
-                "raid_delete",
-                diff_summary=f"Deleted array '{arr_name}' "
-                f"({len(removed_shares)} share(s), {len(unmounted_mounts)} mount(s) removed)",
-            )
-            GRN, BLD, NC = "\033[32m", "\033[1m", "\033[0m"
-            summary_parts = [f"{BLD}{GRN}Array '{arr_name}' deleted successfully.{NC}\n"]
-            if removed_shares:
-                summary_parts.append(f"  Removed {len(removed_shares)} NFS share(s)")
-            if unmounted_mounts:
-                summary_parts.append(f"  Unmounted {len(unmounted_mounts)} filesystem(s)")
-            view.set_content("\n".join(summary_parts))
-            self.app.notify(f"Array '{arr_name}' deleted.", severity="information")
-        else:
-            # Rollback: re-mount filesystems and re-add shares
-            from xinas_menu.utils.xfs_helpers import mount_filesystem
-
-            for um in unmounted_mounts:
-                await mount_filesystem(um["mountpoint"])
-            for rs in removed_shares:
-                self.app.nfs.add_export(rs)
-            if removed_shares:
-                self.app.nfs.reload()
-            await self.app.push_screen_wait(
-                ConfirmDialog(
-                    f"RAID destroy failed:\n{grpc_short_error(err)}\n\n"
-                    f"Rolled back {len(unmounted_mounts)} unmount(s) "
-                    f"and {len(removed_shares)} share(s).",
-                    "Error — Rollback Complete",
+        # ── Step 1: Remove NFS shares (API delete; stop on failure) ──────
+        removed_shares = 0
+        for share in affected_shares:
+            path = share["path"]
+            self._teardown_append(lines, f"  Removing NFS share: {path} ...")
+            try:
+                await asyncio.to_thread(
+                    self.app.control.plan_apply_wait,
+                    "DELETE",
+                    f"/api/v1/shares/{share['id']}",
+                    {},
+                    on_progress=progress,
                 )
+            except ControlPathError as exc:
+                await self._teardown_failed(lines, f"Failed to remove NFS share '{path}'", exc)
+                return
+            removed_shares += 1
+            self.app.audit.log("nfs.remove", f"share={path} (RAID teardown)", "OK")
+
+        # ── Step 2: Unmount + unmanage filesystems ───────────────────────
+        removed_fs = 0
+        for fs in affected_fs:
+            fid = fs["id"]
+            mp = fs["mountpoint"] or fid
+            if fs["mounted"]:
+                self._teardown_append(lines, f"  Unmounting filesystem: {mp} ...")
+                try:
+                    await asyncio.to_thread(
+                        self.app.control.plan_apply_wait,
+                        "PATCH",
+                        f"/api/v1/filesystems/{fid}",
+                        {"mounted": False},
+                        on_progress=progress,
+                    )
+                except ControlPathError as exc:
+                    await self._teardown_failed(lines, f"Failed to unmount '{mp}'", exc)
+                    return
+                self.app.audit.log("fs.unmount", f"mountpoint={mp} (RAID teardown)", "OK")
+            self._teardown_append(lines, f"  Removing mount unit: {fid} ...")
+            try:
+                await asyncio.to_thread(
+                    self.app.control.plan_apply_wait,
+                    "DELETE",
+                    f"/api/v1/filesystems/{fid}",
+                    {},
+                    on_progress=progress,
+                )
+            except ControlPathError as exc:
+                await self._teardown_failed(lines, f"Failed to unmanage '{fid}'", exc)
+                return
+            removed_fs += 1
+            self.app.audit.log("fs.unmanage", f"unit={fid} (RAID teardown)", "OK")
+
+        # ── Step 3: Destroy the array (dangerous consent given above) ────
+        self._teardown_append(lines, f"  Destroying RAID array: {arr_name} ...")
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "DELETE",
+                f"/api/v1/arrays/{arr_name}",
+                {},
+                dangerous=True,
+                on_progress=progress,
             )
-            view.set_content("  Delete failed (rollback complete).")
+        except ControlPathError as exc:
+            await self._teardown_failed(lines, f"RAID destroy failed for '{arr_name}'", exc)
+            return
+
+        self.app.audit.log("raid.destroy", arr_name, "OK")
+        await self.app.snapshots.record(
+            "raid_delete",
+            diff_summary=f"Deleted array '{arr_name}' "
+            f"({removed_shares} share(s), {removed_fs} filesystem(s) removed)",
+        )
+        GRN, BLD, NC = "\033[32m", "\033[1m", "\033[0m"
+        self._teardown_append(lines, "")
+        self._teardown_append(lines, f"{BLD}{GRN}Array '{arr_name}' deleted successfully.{NC}")
+        if removed_shares:
+            self._teardown_append(lines, f"  Removed {removed_shares} NFS share(s)")
+        if removed_fs:
+            self._teardown_append(lines, f"  Removed {removed_fs} filesystem unit(s)")
+        self.app.notify(f"Array '{arr_name}' deleted.", severity="information")
 
 
 # ── Formatters ────────────────────────────────────────────────────────────────
@@ -827,11 +1068,14 @@ def _progress_bar(percent: int, width: int = 28) -> str:
     return f"[{'#' * filled}{'.' * empty}] {percent:3d}%"
 
 
+_HEALTHY_STATES = ("online", "initialized", "optimal")
+
+
 def _state_icon(state: str) -> str:
     s = state.lower()
-    if s in ("online", "initialized"):
+    if s in _HEALTHY_STATES:
         return f"{_GRN}*{_NC}"
-    if s in ("initing", "rebuilding"):
+    if s in ("initing", "rebuilding", "importing"):
         return f"{_YLW}~{_NC}"
     if s == "degraded":
         return f"{_YLW}!{_NC}"
@@ -842,9 +1086,9 @@ def _state_icon(state: str) -> str:
 
 def _state_color(state: str) -> str:
     s = state.lower()
-    if s in ("online", "initialized"):
+    if s in _HEALTHY_STATES:
         return _GRN
-    if s in ("initing", "rebuilding", "degraded"):
+    if s in ("initing", "rebuilding", "importing", "degraded"):
         return _YLW
     if s in ("offline", "failed"):
         return _RED
@@ -861,37 +1105,27 @@ def _format_state(state_list: Any) -> str:
     return " ".join(f"{_state_icon(s)} {_state_color(s)}{s}{_NC}" for s in states)
 
 
-def _count_states(devices: list) -> tuple[int, int, int]:
-    online = degraded = offline = 0
+def _count_states(devices: list) -> tuple[int, int, int, int]:
+    """Per-member (online, degraded, offline, unknown) counts."""
+    online = degraded = offline = unknown = 0
     for dev in devices:
         raw = dev[2][0] if (isinstance(dev, list) and len(dev) > 2 and dev[2]) else "unknown"
         s = (raw or "unknown").lower()
-        if s == "online":
+        if s in ("online", "optimal"):
             online += 1
         elif s in ("degraded", "rebuilding"):
             degraded += 1
+        elif s == "unknown":
+            unknown += 1
         else:
             offline += 1
-    return online, degraded, offline
-
-
-def _as_array_dict(data: Any) -> dict:
-    """Normalise raid_show response to {name: array_dict}."""
-    if isinstance(data, dict):
-        return data
-    if isinstance(data, list):
-        return {
-            (a.get("name", str(i)) if isinstance(a, dict) else str(i)): a
-            for i, a in enumerate(data)
-        }
-    return {}
+    return online, degraded, offline, unknown
 
 
 # ── Quick / Extended overview ──────────────────────────────────────────────────
 
 
-def _format_raid_overview(data: Any, extended: bool = False) -> str:
-    arrays = _as_array_dict(data)
+def _format_raid_overview(arrays: dict, extended: bool = False) -> str:
     lines: list[str] = []
 
     title = "RAID ARRAYS — EXTENDED" if extended else "RAID ARRAYS — QUICK OVERVIEW"
@@ -920,12 +1154,16 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
         memory_mb = arr.get("memory_usage_mb", 0)
         block_size = arr.get("block_size", 4096)
 
-        online, degraded, offline = _count_states(devices)
+        online, degraded, offline, _unknown = _count_states(devices)
         total = len(devices)
         state_str = _format_state(state)
-        is_initing = any((s or "").lower() == "initing" for s in (state or []))
+        is_initing = any((s or "").lower() in ("initing", "rebuilding") for s in (state or []))
 
-        dev_parts = [f"{total} total", f"{_GRN}{online} online{_NC}"]
+        # Per-member states are not always observed (the API rows carry
+        # none) — show only the buckets that are.
+        dev_parts = [f"{total} total"]
+        if online:
+            dev_parts.append(f"{_GRN}{online} online{_NC}")
         if degraded:
             dev_parts.append(f"{_YLW}{degraded} degraded{_NC}")
         if offline:
@@ -945,7 +1183,9 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
 
         if init_progress is not None and is_initing:
             lines.append(_box_line())
-            lines.append(_box_line(f"  {_YLW}~ Initializing: {_progress_bar(init_progress)}{_NC}"))
+            lines.append(
+                _box_line(f"  {_YLW}~ Initializing: {_progress_bar(int(init_progress))}{_NC}")
+            )
 
         if extended:
 
@@ -1050,7 +1290,7 @@ def _format_raid_overview(data: Any, extended: bool = False) -> str:
         1
         for a in arrays.values()
         if isinstance(a, dict)
-        and all((s or "").lower() in ("online", "initialized") for s in (a.get("state") or []))
+        and all((s or "").lower() in _HEALTHY_STATES for s in (a.get("state") or []))
     )
     lines.append(_box_sep("="))
     hc = _GRN if healthy == len(arrays) else _YLW
