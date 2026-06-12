@@ -396,6 +396,70 @@ export class TaskStore {
   }
 
   /**
+   * Guarded CAS variant of {@link transition} (S10, ADR-0012 §4): the UPDATE
+   * carries `AND state = expectedState`, so the patch lands ONLY if the row is
+   * still in the expected state. Returns the merged row on success, or `null`
+   * when nothing changed (state moved on, or the id is unknown) — the caller
+   * re-reads and re-branches. Required for queued→cancelled (a concurrent
+   * drainer dispatch must not be clobbered) and for cancel metadata writes on
+   * running rows (a terminal that raced in must never be resurrected).
+   */
+  transitionIf(taskId: string, expectedState: TaskState, patch: TaskPatch): Task | null {
+    const current = this.get(taskId);
+    if (!current || current.state !== expectedState) return null;
+
+    const now = this.now();
+    const merged: Task = { ...current, ...stripUndefined(patch), updated_at: now };
+
+    if (
+      patch.state !== undefined &&
+      TERMINAL_STATES.has(patch.state) &&
+      current.terminal_at === undefined
+    ) {
+      merged.terminal_at = now;
+    }
+
+    const info = this.db
+      .prepare(
+        `UPDATE tasks SET
+            state = @state, plan_hash = @plan_hash, result_hash = @result_hash,
+            state_revision_at_apply = @state_revision_at_apply,
+            plan_binding = @plan_binding, desired_rollback = @desired_rollback,
+            snapshot_before = @snapshot_before, snapshot_after = @snapshot_after,
+            agent_acceptance_id = @agent_acceptance_id, last_event_sequence = @last_event_sequence,
+            cancel_requested_at = @cancel_requested_at, cancel_refused_reason = @cancel_refused_reason,
+            error_code = @error_code, error_message = @error_message,
+            remediation_hint = @remediation_hint, updated_at = @updated_at, terminal_at = @terminal_at
+          WHERE task_id = @task_id AND state = @expected_state`,
+      )
+      .run({
+        task_id: taskId,
+        expected_state: expectedState,
+        state: merged.state,
+        plan_hash: merged.plan_hash ?? null,
+        result_hash: merged.result_hash ?? null,
+        state_revision_at_apply: merged.state_revision_at_apply ?? null,
+        plan_binding:
+          merged.plan_binding !== undefined ? JSON.stringify(merged.plan_binding) : null,
+        desired_rollback:
+          merged.desired_rollback !== undefined ? JSON.stringify(merged.desired_rollback) : null,
+        snapshot_before: merged.snapshot_before ?? null,
+        snapshot_after: merged.snapshot_after ?? null,
+        agent_acceptance_id: merged.agent_acceptance_id ?? null,
+        last_event_sequence: merged.last_event_sequence,
+        cancel_requested_at: merged.cancel_requested_at ?? null,
+        cancel_refused_reason: merged.cancel_refused_reason ?? null,
+        error_code: merged.error_code ?? null,
+        error_message: merged.error_message ?? null,
+        remediation_hint: merged.remediation_hint ?? null,
+        updated_at: merged.updated_at,
+        terminal_at: merged.terminal_at ?? null,
+      });
+
+    return info.changes === 0 ? null : merged;
+  }
+
+  /**
    * Insert or update a stage keyed by `(task_id, stage_index)`. A second call
    * with the same index updates the row in place (no duplicate). Inline-vs-spill
    * is the caller's decision; the store records whatever it is handed.

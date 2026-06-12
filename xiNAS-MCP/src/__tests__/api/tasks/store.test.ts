@@ -271,3 +271,60 @@ describe('TaskStore', () => {
     expect(h.store.list({}).length).toBe(3);
   });
 });
+
+// ── S10 T1 (ADR-0012 §4): transitionIf — guarded CAS transition ──────────────
+
+describe('TaskStore.transitionIf (S10)', () => {
+  let h: ReturnType<typeof makeHarness>;
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  it('flips a queued row when the state matches and stamps terminal_at', () => {
+    h.store.createPlanOnly(PLAN_INPUT);
+    const apply = h.store.createApplyTask(APPLY_INPUT);
+    h.advance(50);
+    const flipped = h.store.transitionIf(apply.task_id, 'queued', {
+      state: 'cancelled',
+      cancel_requested_at: 1_050,
+      last_event_sequence: 1,
+    });
+    expect(flipped?.state).toBe('cancelled');
+    expect(flipped?.cancel_requested_at).toBe(1_050);
+    expect(flipped?.last_event_sequence).toBe(1);
+    expect(flipped?.terminal_at).toBe(1_050);
+    expect(h.store.get(apply.task_id)?.state).toBe('cancelled');
+  });
+
+  it('returns null and writes NOTHING when the state does not match', () => {
+    h.store.createPlanOnly(PLAN_INPUT);
+    const apply = h.store.createApplyTask(APPLY_INPUT);
+    h.store.transition(apply.task_id, { state: 'running' });
+    const res = h.store.transitionIf(apply.task_id, 'queued', {
+      state: 'cancelled',
+      cancel_requested_at: 999,
+    });
+    expect(res).toBeNull();
+    const row = h.store.get(apply.task_id);
+    expect(row?.state).toBe('running');
+    expect(row?.cancel_requested_at).toBeUndefined();
+  });
+
+  it('returns null for an unknown id (no throw — caller re-reads)', () => {
+    expect(h.store.transitionIf('task-nope', 'queued', { state: 'cancelled' })).toBeNull();
+  });
+
+  it('guards metadata-only writes the same way (running cancel_requested_at)', () => {
+    h.store.createPlanOnly(PLAN_INPUT);
+    const apply = h.store.createApplyTask(APPLY_INPUT);
+    h.store.transition(apply.task_id, { state: 'running' });
+    const ok = h.store.transitionIf(apply.task_id, 'running', { cancel_requested_at: 2_000 });
+    expect(ok?.cancel_requested_at).toBe(2_000);
+    expect(ok?.state).toBe('running');
+    // terminal raced in → the guard refuses
+    h.store.transition(apply.task_id, { state: 'success' });
+    expect(
+      h.store.transitionIf(apply.task_id, 'running', { cancel_refused_reason: 'agent_not_found' }),
+    ).toBeNull();
+  });
+});
