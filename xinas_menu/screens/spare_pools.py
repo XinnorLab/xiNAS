@@ -1,7 +1,17 @@
-"""SparePoolScreen — Spare pool lifecycle management (create, delete, add/remove drives, activate/deactivate)."""
+"""SparePoolScreen — Spare pool lifecycle management (create, delete, add/remove drives, activate/deactivate).
+
+S9 T11 (ADR-0011): the screen rides the control-path API. Reads come
+from GET /api/v1/pools (rows: ``{name, drives, active, referenced_by}``),
+mutations go through ``plan_apply_wait`` — POST /api/v1/pools (create),
+PATCH /api/v1/pools/{name} with exactly ONE intent (``add_drives`` |
+``remove_drives`` | ``active``), DELETE /api/v1/pools/{name} (blocked
+server-side while the pool is active or referenced by an array). Drive
+candidates come from GET /api/v1/disks via the RAID screen's adapter.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -15,8 +25,9 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.api.control_client import ControlClient, ControlPathError
 from xinas_menu.apptype import XiNASAppMixin
-from xinas_menu.utils.formatting import grpc_short_error
+from xinas_menu.screens.raid import _list_api_disks
 from xinas_menu.widgets.checklist_dialog import ChecklistDialog
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.drive_picker import DrivePickerScreen
@@ -52,14 +63,14 @@ _NC = "\033[0m"
 
 def _pool_error(action: str, err: str) -> str:
     """Format a pool operation error with short summary and full details."""
-    short = grpc_short_error(err)
+    raw = err.strip() if err else ""
+    short = raw.splitlines()[0][:100] if raw else "unknown error"
     lines = [
         f"{_BLD}{_RED}ERROR:{_NC} {action}",
         "",
         f"  {_BLD}Reason:{_NC}  {short}",
     ]
     # Show full error if it contains more info than the short version
-    raw = err.strip() if err else ""
     if raw and raw != short and len(raw) > len(short):
         lines.append("")
         lines.append(f"  {_DIM}Full error:{_NC}")
@@ -90,7 +101,12 @@ def _box_sep(char: str = "-", w: int = 66) -> str:
 
 
 def _format_spare_pools(data: Any) -> str:
-    """Format pool data for display. Shared with RAID screen."""
+    """Format GET /api/v1/pools rows for display. Shared with RAID screen.
+
+    Rows are ``{name, drives: ["/dev/..."], active: bool,
+    referenced_by: [array names]}``. Pools referenced by an array are
+    marked clearly — they cannot be deleted until released.
+    """
     W3 = 66
     lines: list[str] = []
 
@@ -102,13 +118,7 @@ def _format_spare_pools(data: Any) -> str:
     lines.append(_box_sep("="))
     lines.append("")
 
-    pools: dict = {}
-    if isinstance(data, dict):
-        pools = data
-    elif isinstance(data, list):
-        for p in data:
-            if isinstance(p, dict):
-                pools[p.get("name", str(len(pools)))] = p
+    pools = [p for p in data if isinstance(p, dict)] if isinstance(data, list) else []
 
     if not pools:
         lines.append("  No spare pools configured.")
@@ -117,34 +127,30 @@ def _format_spare_pools(data: Any) -> str:
         lines.append("")
         return "\n".join(lines)
 
-    for name, pool in pools.items():
-        if not isinstance(pool, dict):
-            continue
-        devices = pool.get("devices", [])
-        serials = pool.get("serials", [])
-        sizes = pool.get("sizes", [])
-        state = pool.get("state", "unknown")
-        if isinstance(state, list):
-            state = state[0] if state else "unknown"
+    for pool in pools:
+        name = str(pool.get("name", "?"))
+        drives = [str(d) for d in pool.get("drives") or []]
+        active = pool.get("active") is True
+        refs = [str(r) for r in pool.get("referenced_by") or []]
 
-        state_color = _GRN if state == "active" else _YLW if state == "inactive" else _RED
+        state = "active" if active else "inactive"
+        state_color = _GRN if active else _YLW
+
+        header = f" Pool: {_BLD}{name.upper()}{_NC}"
+        if refs:
+            header += f"  {_YLW}[in use]{_NC}"
 
         lines.append(_box_sep("-"))
-        lines.append(_box_line(f" Pool: {_BLD}{name.upper()}{_NC}"))
+        lines.append(_box_line(header))
         lines.append(_box_sep())
         lines.append(_box_line(f"  State:    {state_color}{state}{_NC}"))
-        lines.append(_box_line(f"  Devices:  {len(devices)}"))
-        lines.append(_box_sep())
-        if devices:
-            lines.append(_box_line(f"  {'Device':<22}{'Size':<16}Serial"))
+        used_by = f"{_YLW}{', '.join(refs)}{_NC}" if refs else f"{_DIM}-{_NC}"
+        lines.append(_box_line(f"  Used by:  {used_by}"))
+        lines.append(_box_line(f"  Drives:   {len(drives)}"))
+        if drives:
             lines.append(_box_sep())
-            for i, dev in enumerate(devices):
-                dev_path = (dev[1] if isinstance(dev, list) and len(dev) > 1 else str(dev)).replace(
-                    "/dev/", ""
-                )
-                sz = sizes[i] if i < len(sizes) else "N/A"
-                serial = str(serials[i])[:16] if i < len(serials) and serials[i] else "N/A"
-                lines.append(_box_line(f"  {dev_path:<22}{sz:<16}{serial}"))
+            for path in drives:
+                lines.append(_box_line(f"  {path.replace('/dev/', '')}"))
         lines.append(_box_line())
         lines.append(_box_sep("-"))
         lines.append("")
@@ -154,75 +160,61 @@ def _format_spare_pools(data: Any) -> str:
     return "\n".join(lines)
 
 
-async def _get_pool_names(grpc_client) -> list[str]:
+async def _get_pools(control: ControlClient) -> list[dict[str, Any]]:
+    """GET /api/v1/pools → pool rows ``{name, drives, active, referenced_by}``.
+
+    Raises ControlPathError when the api is unreachable.
+    """
+    rows = await asyncio.to_thread(control.result, "/api/v1/pools")
+    return [p for p in rows if isinstance(p, dict)] if isinstance(rows, list) else []
+
+
+async def _get_pool_names(control: ControlClient) -> list[str]:
     """Fetch list of existing pool names."""
-    ok, data, _ = await grpc_client.pool_show()
-    if not ok or not data:
-        return []
-    if isinstance(data, dict):
-        return list(data.keys())
-    if isinstance(data, list):
-        return [p.get("name", "") for p in data if isinstance(p, dict) and p.get("name")]
+    return [str(p["name"]) for p in await _get_pools(control) if p.get("name")]
+
+
+async def _get_pool_drives(control: ControlClient, pool_name: str) -> list[str]:
+    """Fetch drive paths in a specific pool."""
+    for pool in await _get_pools(control):
+        if pool.get("name") == pool_name:
+            return [str(d) for d in pool.get("drives") or []]
     return []
 
 
-async def _get_pool_drives(grpc_client, pool_name: str) -> list[str]:
-    """Fetch drive paths in a specific pool."""
-    ok, data, _ = await grpc_client.pool_show(name=pool_name)
-    if not ok or not data:
-        return []
-    pool = None
-    if isinstance(data, dict):
-        pool = data.get(pool_name, data)
-    elif isinstance(data, list):
-        pool = next((p for p in data if isinstance(p, dict) and p.get("name") == pool_name), None)
-    if not pool or not isinstance(pool, dict):
-        return []
-    devices = pool.get("devices", [])
-    paths = []
-    for dev in devices:
-        if isinstance(dev, list) and len(dev) > 1:
-            paths.append(dev[1])
-        else:
-            paths.append(str(dev))
-    return paths
+async def _get_free_nvme_drives(control: ControlClient) -> list[dict[str, Any]]:
+    """NVMe drives available for pool use.
 
+    ``safe_for_use``, not the system disk, not a member/spare of an
+    observed array (``claimed``), and not already in any spare pool.
+    Raises ControlPathError when the api is unreachable.
+    """
+    rows = await _list_api_disks(control)
 
-async def _get_free_nvme_drives(grpc_client) -> list[dict]:
-    """Get NVMe drives that are not in any RAID array or spare pool."""
-    ok, disks, _ = await grpc_client.disk_list()
-    if not ok or not disks:
-        return []
-
-    # Get drives in pools
     pool_drives: set[str] = set()
-    p_ok, p_data, _ = await grpc_client.pool_show()
-    if p_ok and p_data:
-        pools = p_data if isinstance(p_data, dict) else {}
-        if isinstance(p_data, list):
-            for p in p_data:
-                if isinstance(p, dict):
-                    pools[p.get("name", "")] = p
-        for pool in pools.values():
-            if isinstance(pool, dict):
-                for dev in pool.get("devices", []):
-                    path = dev[1] if isinstance(dev, list) and len(dev) > 1 else str(dev)
-                    pool_drives.add(path)
+    for pool in await _get_pools(control):
+        for raw in pool.get("drives") or []:
+            path = str(raw)
+            pool_drives.add(path)
+            pool_drives.add(path.rsplit("/", 1)[-1])
 
-    free = []
-    for d in disks:
+    free: list[dict[str, Any]] = []
+    for d in rows:
         name = d.get("name", "")
         if "nvme" not in name.lower():
             continue
-        if d.get("system"):
+        if d.get("system") or not d.get("safe_for_use") or d.get("claimed"):
             continue
-        if d.get("raid_name"):
-            continue
-        dev_path = f"/dev/{name}" if not name.startswith("/dev/") else name
-        if dev_path in pool_drives or name in pool_drives:
+        if d.get("device_path") in pool_drives or name in pool_drives:
             continue
         free.append(d)
     return free
+
+
+def _to_dev_paths(selected: list[str], rows: list[dict[str, Any]]) -> list[str]:
+    """Map picker drive NAMES onto /dev/ paths (the pool spec contract)."""
+    path_by_name = {str(d.get("name")): str(d.get("device_path")) for d in rows}
+    return [path_by_name.get(n) or (n if n.startswith("/dev/") else f"/dev/{n}") for n in selected]
 
 
 class SparePoolScreen(XiNASAppMixin, Screen):
@@ -273,18 +265,48 @@ class SparePoolScreen(XiNASAppMixin, Screen):
         elif key == "7":
             self._delete_pool()
 
+    def _task_progress(self, label: str):
+        """Build an ``on_progress`` callback for ``plan_apply_wait``.
+
+        ``plan_apply_wait`` runs in a worker thread, so the callback hops
+        back to the UI thread before raising the toast.
+        """
+
+        def _cb(state: str) -> None:
+            self.app.call_from_thread(self.app.notify, f"{label}: task {state}", timeout=4)
+
+        return _cb
+
+    async def _pool_names_or_dialog(self) -> list[str] | None:
+        """Pool names for the verb flows; shows the error/empty dialogs.
+
+        Returns None when the flow should abort (api unreachable or no
+        pools exist) — the dialog has already been shown.
+        """
+        try:
+            pool_names = await _get_pool_names(self.app.control)
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(ConfirmDialog(f"Could not list pools.\n{exc}", "Error"))
+            return None
+        if not pool_names:
+            await self.app.push_screen_wait(
+                ConfirmDialog("No spare pools exist.", "Error", ok_only=True)
+            )
+            return None
+        return pool_names
+
     # ── View ─────────────────────────────────────────────────────────────────
 
     @work(exclusive=True)
     async def _view_pools(self) -> None:
         view = self.query_one("#pool-content", ScrollableTextView)
         view.set_content("Loading spare pools…")
-        ok, data, err = await self.app.grpc.pool_show()
-        view.set_content(
-            _format_spare_pools(data)
-            if ok
-            else f"Could not load pool info: {grpc_short_error(err)}"
-        )
+        try:
+            pools = await _get_pools(self.app.control)
+        except ControlPathError as exc:
+            view.set_content(f"Could not load pool info: {exc}")
+            return
+        view.set_content(_format_spare_pools(pools))
 
     # ── Create Pool ──────────────────────────────────────────────────────────
 
@@ -306,7 +328,13 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             break
 
         # Step 2: Select drives
-        free_drives = await _get_free_nvme_drives(self.app.grpc)
+        try:
+            free_drives = await _get_free_nvme_drives(self.app.control)
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Could not list drives.\n{exc}", "Error")
+            )
+            return
         if not free_drives:
             await self.app.push_screen_wait(
                 ConfirmDialog(
@@ -330,27 +358,31 @@ class SparePoolScreen(XiNASAppMixin, Screen):
         if not confirmed:
             return
 
-        # Normalize to /dev/ paths (drive picker returns bare names)
-        drives = [d if d.startswith("/dev/") else f"/dev/{d}" for d in selected]
+        # The picker returns drive NAMES; the pool spec wants /dev/ paths.
+        drives = _to_dev_paths(selected, free_drives)
 
         view = self.query_one("#pool-content", ScrollableTextView)
         view.set_content(f"Creating pool '{name}'…")
-        ok, data, err = await self.app.grpc.pool_create(name=name, drives=drives)
-        if ok:
-            self.app.notify(f"Pool '{name}' created successfully.", severity="information")
-            self._view_pools()
-        else:
-            view.set_content(_pool_error("Failed to create pool", err))
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "POST",
+                "/api/v1/pools",
+                {"name": name, "drives": drives},
+                on_progress=self._task_progress("Create Pool"),
+            )
+        except ControlPathError as exc:
+            view.set_content(_pool_error("Failed to create pool", str(exc)))
+            return
+        self.app.notify(f"Pool '{name}' created successfully.", severity="information")
+        self._view_pools()
 
     # ── Add Drives ───────────────────────────────────────────────────────────
 
     @work(exclusive=True)
     async def _add_drives(self) -> None:
-        pool_names = await _get_pool_names(self.app.grpc)
-        if not pool_names:
-            await self.app.push_screen_wait(
-                ConfirmDialog("No spare pools exist.", "Error", ok_only=True)
-            )
+        pool_names = await self._pool_names_or_dialog()
+        if pool_names is None:
             return
 
         pool = await self.app.push_screen_wait(
@@ -359,7 +391,13 @@ class SparePoolScreen(XiNASAppMixin, Screen):
         if not pool:
             return
 
-        free_drives = await _get_free_nvme_drives(self.app.grpc)
+        try:
+            free_drives = await _get_free_nvme_drives(self.app.control)
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Could not list drives.\n{exc}", "Error")
+            )
+            return
         if not free_drives:
             await self.app.push_screen_wait(ConfirmDialog("No available drives found.", "Error"))
             return
@@ -379,27 +417,31 @@ class SparePoolScreen(XiNASAppMixin, Screen):
         if not confirmed:
             return
 
-        # Normalize to /dev/ paths (drive picker returns bare names)
-        drives = [d if d.startswith("/dev/") else f"/dev/{d}" for d in selected]
+        # The picker returns drive NAMES; the pool spec wants /dev/ paths.
+        drives = _to_dev_paths(selected, free_drives)
 
         view = self.query_one("#pool-content", ScrollableTextView)
         view.set_content(f"Adding drives to pool '{pool}'…")
-        ok, data, err = await self.app.grpc.pool_add(name=pool, drives=drives)
-        if ok:
-            self.app.notify(f"Drives added to pool '{pool}'.", severity="information")
-            self._view_pools()
-        else:
-            view.set_content(_pool_error("Failed to add drives", err))
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "PATCH",
+                f"/api/v1/pools/{pool}",
+                {"add_drives": drives},
+                on_progress=self._task_progress("Add Drives"),
+            )
+        except ControlPathError as exc:
+            view.set_content(_pool_error("Failed to add drives", str(exc)))
+            return
+        self.app.notify(f"Drives added to pool '{pool}'.", severity="information")
+        self._view_pools()
 
     # ── Remove Drives ────────────────────────────────────────────────────────
 
     @work(exclusive=True)
     async def _remove_drives(self) -> None:
-        pool_names = await _get_pool_names(self.app.grpc)
-        if not pool_names:
-            await self.app.push_screen_wait(
-                ConfirmDialog("No spare pools exist.", "Error", ok_only=True)
-            )
+        pool_names = await self._pool_names_or_dialog()
+        if pool_names is None:
             return
 
         pool = await self.app.push_screen_wait(
@@ -408,16 +450,22 @@ class SparePoolScreen(XiNASAppMixin, Screen):
         if not pool:
             return
 
-        drives = await _get_pool_drives(self.app.grpc, pool)
+        try:
+            drives = await _get_pool_drives(self.app.control, pool)
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Could not list pool drives.\n{exc}", "Error")
+            )
+            return
         if not drives:
             await self.app.push_screen_wait(ConfirmDialog(f"Pool '{pool}' has no drives.", "Error"))
             return
 
         # Use checklist so user can pick which drives to remove
-        drive_labels = [d.replace("/dev/", "") for d in drives]
+        label_to_path = {d.rsplit("/", 1)[-1]: d for d in drives}
         selected_values = await self.app.push_screen_wait(
             ChecklistDialog(
-                [(label, label, False) for label in drive_labels],
+                [(label, label, False) for label in label_to_path],
                 title=f"Remove Drives from '{pool}'",
                 prompt="Select drives to remove:",
             )
@@ -425,7 +473,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
         if not selected_values:
             return
 
-        selected_drives = [f"/dev/{v}" for v in selected_values]
+        selected_drives = [label_to_path.get(v, f"/dev/{v}") for v in selected_values]
 
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
@@ -439,22 +487,26 @@ class SparePoolScreen(XiNASAppMixin, Screen):
 
         view = self.query_one("#pool-content", ScrollableTextView)
         view.set_content(f"Removing drives from pool '{pool}'…")
-        ok, data, err = await self.app.grpc.pool_remove(name=pool, drives=selected_drives)
-        if ok:
-            self.app.notify(f"Drives removed from pool '{pool}'.", severity="information")
-            self._view_pools()
-        else:
-            view.set_content(_pool_error("Failed to remove drives", err))
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "PATCH",
+                f"/api/v1/pools/{pool}",
+                {"remove_drives": selected_drives},
+                on_progress=self._task_progress("Remove Drives"),
+            )
+        except ControlPathError as exc:
+            view.set_content(_pool_error("Failed to remove drives", str(exc)))
+            return
+        self.app.notify(f"Drives removed from pool '{pool}'.", severity="information")
+        self._view_pools()
 
     # ── Activate ─────────────────────────────────────────────────────────────
 
     @work(exclusive=True)
     async def _activate_pool(self) -> None:
-        pool_names = await _get_pool_names(self.app.grpc)
-        if not pool_names:
-            await self.app.push_screen_wait(
-                ConfirmDialog("No spare pools exist.", "Error", ok_only=True)
-            )
+        pool_names = await self._pool_names_or_dialog()
+        if pool_names is None:
             return
 
         pool = await self.app.push_screen_wait(
@@ -467,22 +519,26 @@ class SparePoolScreen(XiNASAppMixin, Screen):
 
         view = self.query_one("#pool-content", ScrollableTextView)
         view.set_content(f"Activating pool '{pool}'…")
-        ok, data, err = await self.app.grpc.pool_activate(name=pool)
-        if ok:
-            self.app.notify(f"Pool '{pool}' activated.", severity="information")
-            self._view_pools()
-        else:
-            view.set_content(_pool_error("Failed to activate pool", err))
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "PATCH",
+                f"/api/v1/pools/{pool}",
+                {"active": True},
+                on_progress=self._task_progress("Activate Pool"),
+            )
+        except ControlPathError as exc:
+            view.set_content(_pool_error("Failed to activate pool", str(exc)))
+            return
+        self.app.notify(f"Pool '{pool}' activated.", severity="information")
+        self._view_pools()
 
     # ── Deactivate ───────────────────────────────────────────────────────────
 
     @work(exclusive=True)
     async def _deactivate_pool(self) -> None:
-        pool_names = await _get_pool_names(self.app.grpc)
-        if not pool_names:
-            await self.app.push_screen_wait(
-                ConfirmDialog("No spare pools exist.", "Error", ok_only=True)
-            )
+        pool_names = await self._pool_names_or_dialog()
+        if pool_names is None:
             return
 
         pool = await self.app.push_screen_wait(
@@ -505,22 +561,26 @@ class SparePoolScreen(XiNASAppMixin, Screen):
 
         view = self.query_one("#pool-content", ScrollableTextView)
         view.set_content(f"Deactivating pool '{pool}'…")
-        ok, data, err = await self.app.grpc.pool_deactivate(name=pool)
-        if ok:
-            self.app.notify(f"Pool '{pool}' deactivated.", severity="information")
-            self._view_pools()
-        else:
-            view.set_content(_pool_error("Failed to deactivate pool", err))
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "PATCH",
+                f"/api/v1/pools/{pool}",
+                {"active": False},
+                on_progress=self._task_progress("Deactivate Pool"),
+            )
+        except ControlPathError as exc:
+            view.set_content(_pool_error("Failed to deactivate pool", str(exc)))
+            return
+        self.app.notify(f"Pool '{pool}' deactivated.", severity="information")
+        self._view_pools()
 
     # ── Delete ───────────────────────────────────────────────────────────────
 
     @work(exclusive=True)
     async def _delete_pool(self) -> None:
-        pool_names = await _get_pool_names(self.app.grpc)
-        if not pool_names:
-            await self.app.push_screen_wait(
-                ConfirmDialog("No spare pools exist.", "Error", ok_only=True)
-            )
+        pool_names = await self._pool_names_or_dialog()
+        if pool_names is None:
             return
 
         pool = await self.app.push_screen_wait(
@@ -542,9 +602,18 @@ class SparePoolScreen(XiNASAppMixin, Screen):
 
         view = self.query_one("#pool-content", ScrollableTextView)
         view.set_content(f"Deleting pool '{pool}'…")
-        ok, data, err = await self.app.grpc.pool_delete(name=pool)
-        if ok:
-            self.app.notify(f"Pool '{pool}' deleted.", severity="information")
-            self._view_pools()
-        else:
-            view.set_content(_pool_error("Failed to delete pool", err))
+        # Active/referenced pools are blocked server-side (pool_active /
+        # pool_referenced plan blockers) — the message lands in _pool_error.
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "DELETE",
+                f"/api/v1/pools/{pool}",
+                {},
+                on_progress=self._task_progress("Delete Pool"),
+            )
+        except ControlPathError as exc:
+            view.set_content(_pool_error("Failed to delete pool", str(exc)))
+            return
+        self.app.notify(f"Pool '{pool}' deleted.", severity="information")
+        self._view_pools()

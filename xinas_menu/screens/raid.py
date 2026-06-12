@@ -4,9 +4,9 @@ S8 T13 (ADR-0010, s8-clients-spec §6): array list/create/modify/delete
 ride the control-path API (``/api/v1/arrays`` + ``/disks`` for the
 picker), and the composite delete teardown is a stop-on-failure SEQUENCE
 of API operations (shares delete → filesystem unmount + unmanage →
-arrays delete with the dangerous consent). Spare-pool LOOKUPS stay on
-gRPC ``pool_show`` — pools have no Phase-0 API surface (ADR-0010
-deferral); the chosen pool's drives map onto the API spec's
+arrays delete with the dangerous consent). Spare-pool lookups ride
+GET /api/v1/pools (S9 T11, ADR-0011 — the gRPC ``pool_show`` path is
+retired); the chosen pool's drives map onto the API spec's
 ``spare_disk_ids``.
 """
 
@@ -29,7 +29,6 @@ from textual.widgets import Footer, Label
 
 from xinas_menu.api.control_client import ControlClient, ControlPathError
 from xinas_menu.apptype import XiNASAppMixin
-from xinas_menu.utils.formatting import grpc_short_error
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.drive_picker import DrivePickerScreen
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -220,7 +219,7 @@ async def _get_numa_topology(control: ControlClient) -> list[dict]:
 
 
 def _pools_by_name(data: Any) -> dict[str, dict]:
-    """Normalise a gRPC pool_show payload to {name: pool_dict}."""
+    """Normalise a GET /api/v1/pools payload to {name: pool_dict}."""
     if isinstance(data, dict):
         return {str(k): v for k, v in data.items() if isinstance(v, dict)}
     if isinstance(data, list):
@@ -229,7 +228,8 @@ def _pools_by_name(data: Any) -> dict[str, dict]:
 
 
 def _pool_drive_paths(pool: dict) -> list[str]:
-    """Device paths of a spare pool's drives (tolerant of payload shape)."""
+    """Device paths of a spare pool's drives (API rows carry ``drives``;
+    tolerant of the legacy ``devices`` pair shape)."""
     raw = pool.get("devices") or pool.get("drives") or []
     paths: list[str] = []
     for dev in raw if isinstance(raw, list) else []:
@@ -377,14 +377,18 @@ class RAIDScreen(XiNASAppMixin, Screen):
 
     @work(exclusive=True)
     async def _show_pools(self) -> None:
+        # Lazy import: spare_pools imports this module at load time for
+        # _list_api_disks, so the renderer is pulled in lazily here.
+        from xinas_menu.screens.spare_pools import _format_spare_pools
+
         view = self.query_one("#raid-content", ScrollableTextView)
         view.set_content("Loading spare pools…")
-        ok, data, err = await self.app.grpc.pool_show()
-        view.set_content(
-            _format_spare_pools(data)
-            if ok
-            else f"Could not load pool info: {grpc_short_error(err)}"
-        )
+        try:
+            rows = await asyncio.to_thread(self.app.control.result, "/api/v1/pools")
+        except ControlPathError as exc:
+            view.set_content(f"Could not load pool info: {exc}")
+            return
+        view.set_content(_format_spare_pools(rows))
 
     # ── Create Array Wizard ──────────────────────────────────────────────────
 
@@ -512,13 +516,16 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 spec["group_size"] = gs
                 break
 
-        # Step 6: Spare pool (optional) — pick from existing pools (gRPC
-        # lookup, ADR-0010 deferral); the pool's drives become the API
+        # Step 6: Spare pool (optional) — pick from existing pools (GET
+        # /api/v1/pools, S9 T11); the pool's drives become the API
         # spec's spare_disk_ids (the executor provisions xnsp_<name>).
         _NONE_POOL = "(none)"
         spare_pool_label = ""
-        p_ok, p_data, _ = await self.app.grpc.pool_show()
-        pools = _pools_by_name(p_data) if p_ok else {}
+        try:
+            p_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/pools")
+        except ControlPathError:
+            p_rows = []
+        pools = _pools_by_name(p_rows)
         if pools:
             pool_choices = [_NONE_POOL] + sorted(pools.keys())
             sparepool = await self.app.push_screen_wait(
@@ -686,11 +693,14 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 value = raw
 
         elif key == "sparepool":
-            # Dynamic select: fetch available spare pools (gRPC lookup —
-            # ADR-0010 deferral); the chosen pool's drives map onto the
-            # PATCH spec's spare_disk_ids.
-            p_ok, p_data, _ = await self.app.grpc.pool_show()
-            pools = _pools_by_name(p_data) if p_ok else {}
+            # Dynamic select: fetch available spare pools (GET /api/v1/pools,
+            # S9 T11); the chosen pool's drives map onto the PATCH spec's
+            # spare_disk_ids.
+            try:
+                p_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/pools")
+            except ControlPathError:
+                p_rows = []
+            pools = _pools_by_name(p_rows)
             if not pools:
                 self.app.notify("No spare pools available.", severity="warning")
                 return
@@ -1300,70 +1310,5 @@ def _format_raid_overview(arrays: dict, extended: bool = False) -> str:
 
 
 # ── Spare Pools ────────────────────────────────────────────────────────────────
-
-
-def _format_spare_pools(data: Any) -> str:
-    W3 = 66
-    lines: list[str] = []
-
-    def bl(content: str = "") -> str:
-        return _box_line(content, w=W3)
-
-    def bs(char: str = "-") -> str:
-        return _box_sep(char, w=W3)
-
-    lines.append(bs("="))
-    pad = (W3 - len("SPARE POOLS")) // 2
-    lines.append(
-        f"{_DIM}|{_NC}{' ' * pad}{_BLD}{_CYN}SPARE POOLS{_NC}{' ' * (W3 - pad - len('SPARE POOLS') + 1)}{_DIM}|{_NC}"
-    )
-    lines.append(bs("="))
-    lines.append("")
-
-    pools: dict = {}
-    if isinstance(data, dict):
-        pools = data
-    elif isinstance(data, list):
-        for p in data:
-            if isinstance(p, dict):
-                pools[p.get("name", str(len(pools)))] = p
-
-    if not pools:
-        lines.append("  No spare pools configured.")
-        lines.append("")
-        lines.append("  Create a spare pool with:")
-        lines.append("    xicli pool create -n <name> -d <drive1> [drive2...]")
-        lines.append("")
-        return "\n".join(lines)
-
-    for name, pool in pools.items():
-        if not isinstance(pool, dict):
-            continue
-        devices = pool.get("devices", [])
-        serials = pool.get("serials", [])
-        sizes = pool.get("sizes", [])
-        state = pool.get("state", "unknown")
-
-        lines.append(bs("-"))
-        lines.append(bl(f" Pool: {name.upper()}"))
-        lines.append(bs())
-        lines.append(bl(f"  State:    {state}"))
-        lines.append(bl(f"  Devices:  {len(devices)}"))
-        lines.append(bs())
-        if devices:
-            lines.append(bl(f"  {'Device':<22}{'Size':<16}Serial"))
-            lines.append(bs())
-            for i, dev in enumerate(devices):
-                dev_path = (dev[1] if isinstance(dev, list) and len(dev) > 1 else str(dev)).replace(
-                    "/dev/", ""
-                )
-                sz = sizes[i] if i < len(sizes) else "N/A"
-                serial = str(serials[i])[:16] if i < len(serials) and serials[i] else "N/A"
-                lines.append(bl(f"  {dev_path:<22}{sz:<16}{serial}"))
-        lines.append(bl())
-        lines.append(bs("-"))
-        lines.append("")
-
-    lines.append(f"  Total: {len(pools)} pool(s)")
-    lines.append(bs("="))
-    return "\n".join(lines)
+# The pool renderer lives in xinas_menu.screens.spare_pools
+# (_format_spare_pools, API row shape) — _show_pools imports it lazily.
