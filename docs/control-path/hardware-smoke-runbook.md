@@ -199,6 +199,30 @@ On a scratch node (or after `./uninstall.sh`):
   health checks still return rows (poll-sweep reconcile must not wipe
   re-emitted kinds — the S9 collector regression).
 
+## 5d. S10 — task cancel
+
+- [ ] **Running cancel:** start a slow reference apply
+  (`xinasctl reference apply` equivalent via REST:
+  `POST /api/v1/reference` with `spec.sleep_ms: 30000`), then
+  `xinasctl tasks cancel --id <task>` → exit 0; `xinasctl tasks show`
+  reaches `cancelled` with a `rollback` stage and NO error_code;
+  `cancel_requested_at` is set.
+- [ ] **Queued cancel:** with the worker pool busy (4 concurrent slow
+  applies), queue a 5th, cancel it → immediate `cancelled` with no
+  agent involvement; a `GET /tasks/{id}/watch` stream open during the
+  cancel receives the synthetic terminal frame (sequence advanced).
+- [ ] **Late cancel:** cancel a completed task → 409
+  `not_cancellable`; re-cancel a cancelled task → 200 (idempotent).
+- [ ] **MCP emergency stop:** `tasks.cancel` via MCP with
+  `mcp.allow_apply: false` MUST be permitted (ADR-0010: an emergency
+  stop cannot apply new state).
+- [ ] **Audit:** `GET /api/v1/audit?task_id=<task>` finds both the
+  apply AND the cancel rows (the cancel route stamps operation_id).
+- [ ] **TUI:** start a RAID create or filesystem create and press
+  Cancel in the wait dialog → "cancelled — partial work rolled back"
+  notice (not a failure toast); the array/filesystem does NOT exist
+  afterwards.
+
 ## 6. Cross-cutting
 
 1. [ ] **Plan→pause→apply:** plan an array modify, wait 2+ minutes,

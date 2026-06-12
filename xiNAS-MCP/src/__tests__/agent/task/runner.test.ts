@@ -266,7 +266,11 @@ describe('TaskRunner.run — cancel (S10)', () => {
     });
     const runner = makeRunner(makeBridge(['snap-before', 'snap-after']));
     runnerRef.runner = runner;
-    await runner.run({ task_id: 'tc', operation_kind: 'reference.echo', spec: {} }, executor, publish);
+    await runner.run(
+      { task_id: 'tc', operation_kind: 'reference.echo', spec: {} },
+      executor,
+      publish,
+    );
     return events;
   }
 
@@ -312,7 +316,11 @@ describe('TaskRunner.run — cancel (S10)', () => {
     });
     const runner = makeRunner(makeBridge(['snap-before']));
     ref.runner = runner;
-    await runner.run({ task_id: 'tc', operation_kind: 'reference.echo', spec: {} }, executor, publish);
+    await runner.run(
+      { task_id: 'tc', operation_kind: 'reference.echo', spec: {} },
+      executor,
+      publish,
+    );
     expect(stage1Ran).toBe(false);
     expect(shape(events)).toEqual([
       ['accepted', undefined],
