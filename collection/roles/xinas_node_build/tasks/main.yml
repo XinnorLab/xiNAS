@@ -1,0 +1,89 @@
+---
+# xinas_node_build role — Node 20 toolchain + the xiNAS-MCP TypeScript
+# build (S8 T1, ADR-0010 §deployment). Extracted from xinas_mcp so the
+# build artifacts (dist/) are provisioned independently of the legacy
+# MCP daemon: xinas_api, xinas_agent, and the xinas_mcp shim all
+# consume dist/ produced here.
+
+# ─── 1. Node.js 20 LTS via NodeSource ─────────────────────────────────────────
+
+- name: Check current Node.js version
+  ansible.builtin.command: node --version
+  register: _node_ver
+  changed_when: false
+  failed_when: false
+  tags: [xinas_node_build, nodejs]
+
+- name: Install Node.js 20 from NodeSource
+  tags: [xinas_node_build, nodejs]
+  when: >
+    _node_ver.rc != 0 or
+    not (_node_ver.stdout | regex_search('^v2[0-9]\.'))
+  block:
+    - name: Install NodeSource prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+
+    - name: Create /etc/apt/keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    # curl pipes into `gpg --dearmor`; get_url cannot dearmor, and the
+    # task is already guarded by creates:.
+    - name: Import NodeSource GPG key  # noqa: command-instead-of-module
+      ansible.builtin.shell: >
+        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+      args:
+        creates: /etc/apt/keyrings/nodesource.gpg
+
+    - name: Add NodeSource APT repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [signed-by=/etc/apt/keyrings/nodesource.gpg]
+          https://deb.nodesource.com/node_20.x nodistro main
+        state: present
+        filename: nodesource
+
+    - name: Install nodejs package
+      ansible.builtin.apt:
+        name: nodejs
+        state: present
+        update_cache: true
+
+# ─── 2. Build xiNAS-MCP → dist/ ────────────────────────────────────────────────
+
+- name: Verify xiNAS-MCP source directory exists
+  ansible.builtin.stat:
+    path: "{{ xinas_node_build_repo_path }}/package.json"
+  register: _src
+  tags: [xinas_node_build, build]
+
+- name: Fail if xiNAS-MCP source not found
+  ansible.builtin.fail:
+    msg: >
+      xiNAS-MCP source not found at {{ xinas_node_build_repo_path }}.
+      Ensure the xiNAS repo is cloned to /opt/xiNAS before running this role.
+  when: not _src.stat.exists
+  tags: [xinas_node_build, build]
+
+- name: Install npm dependencies
+  ansible.builtin.command:
+    cmd: npm ci
+    chdir: "{{ xinas_node_build_repo_path }}"
+  register: _npm_ci
+  changed_when: "'added' in _npm_ci.stdout or 'updated' in _npm_ci.stdout"
+  tags: [xinas_node_build, build]
+
+- name: Build TypeScript → dist/
+  ansible.builtin.command:
+    cmd: npm run build
+    chdir: "{{ xinas_node_build_repo_path }}"
+  changed_when: true
+  tags: [xinas_node_build, build]

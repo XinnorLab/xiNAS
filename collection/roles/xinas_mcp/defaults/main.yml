@@ -1,9 +1,6 @@
 # Path where xiNAS repo is installed (set by install.sh → /opt/xiNAS)
 xinas_mcp_repo_path: /opt/xiNAS/xiNAS-MCP
 
-# NFS helper daemon installation target
-xinas_mcp_helper_lib_path: /usr/lib/xinas-mcp/nfs-helper
-
 # MCP server config directory
 xinas_mcp_config_dir: /etc/xinas-mcp
 

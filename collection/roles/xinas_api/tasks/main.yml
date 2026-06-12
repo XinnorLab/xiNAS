@@ -2,12 +2,11 @@
 # xinas_api role — Phase 0 installer.
 # Spec: docs/Installer/xinas-api-role-spec.md
 
-# 1. Pre-flight: the xinas-mcp build artifacts must exist. The role
-#    deliberately does NOT meta-depend on xinas_mcp (which would
-#    drag in the MCP daemon, Claude config, SSE transport). The
-#    operator runs xinas_mcp first; this task fails fast with an
-#    actionable message if they haven't.
-- name: Pre-flight — verify xinas-mcp build artifacts are present
+# 1. Pre-flight: the xiNAS-MCP build artifacts must exist. The role
+#    deliberately does NOT meta-depend on xinas_node_build; the
+#    operator runs it first and this task fails fast with an
+#    actionable message if they haven't (S8 T1, ADR-0010).
+- name: Pre-flight — verify xiNAS-MCP build artifacts are present
   ansible.builtin.stat:
     path: "{{ xinas_api_repo_path }}/dist/api-server.js"
   register: _xinas_api_build_stat
@@ -16,11 +15,11 @@
 - name: Fail with actionable message when build artifacts are missing
   ansible.builtin.fail:
     msg: |
-      xinas_api requires xinas-mcp build artifacts at
+      xinas_api requires xiNAS-MCP build artifacts at
       {{ xinas_api_repo_path }}/dist/api-server.js, which were not
-      found. Run the xinas_mcp role first — either include it in
-      the same playbook above xinas_api, or invoke it directly via
-      `ansible-playbook playbooks/site.yml --tags xinas_mcp`.
+      found. Run the xinas_node_build role first — either include it
+      in the same playbook above xinas_api, or invoke it directly via
+      `ansible-playbook playbooks/site.yml --tags xinas_node_build`.
   when: not _xinas_api_build_stat.stat.exists
   tags: [xinas_api]
 

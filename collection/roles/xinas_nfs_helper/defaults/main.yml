@@ -1,0 +1,6 @@
+# Path where the xiNAS repo is installed (set by install.sh → /opt/xiNAS)
+xinas_nfs_helper_repo_path: /opt/xiNAS/xiNAS-MCP
+
+# NFS helper daemon installation target (path kept from the original
+# xinas_mcp layout so the shipped systemd unit needs no edits)
+xinas_nfs_helper_lib_path: /usr/lib/xinas-mcp/nfs-helper

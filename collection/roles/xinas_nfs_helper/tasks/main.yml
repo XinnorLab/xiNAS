@@ -1,0 +1,52 @@
+---
+# xinas_nfs_helper role — the python NFS helper daemon (S8 T1,
+# ADR-0010 §deployment). Extracted from xinas_mcp: the helper serves
+# the agent (and, until retirement, the legacy MCP), so its lifecycle
+# must not be tied to the legacy daemon's role.
+
+- name: Create NFS helper library directory
+  ansible.builtin.file:
+    path: "{{ xinas_nfs_helper_lib_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [xinas_nfs_helper]
+
+- name: Copy NFS helper Python sources
+  ansible.builtin.copy:
+    src: "{{ xinas_nfs_helper_repo_path }}/nfs-helper/"
+    dest: "{{ xinas_nfs_helper_lib_path }}/"
+    owner: root
+    group: root
+    mode: '0644'
+    remote_src: true
+  register: _nfs_helper_src
+  tags: [xinas_nfs_helper]
+
+- name: Make nfs_helper.py executable
+  ansible.builtin.file:
+    path: "{{ xinas_nfs_helper_lib_path }}/nfs_helper.py"
+    mode: '0755'
+  tags: [xinas_nfs_helper]
+
+- name: Install xinas-nfs-helper systemd unit
+  ansible.builtin.copy:
+    src: "{{ xinas_nfs_helper_repo_path }}/nfs-helper/xinas-nfs-helper.service"
+    dest: /etc/systemd/system/xinas-nfs-helper.service
+    owner: root
+    group: root
+    mode: '0644'
+    remote_src: true
+  register: _nfs_helper_unit
+  tags: [xinas_nfs_helper]
+
+# Self-contained lifecycle: daemon_reload runs before the state action,
+# so a freshly-copied unit is reloaded before start.
+- name: Reload systemd, enable and (re)start xinas-nfs-helper
+  ansible.builtin.systemd:
+    name: xinas-nfs-helper
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if (_nfs_helper_src is changed or _nfs_helper_unit is changed) else 'started' }}"
+  tags: [xinas_nfs_helper, service]

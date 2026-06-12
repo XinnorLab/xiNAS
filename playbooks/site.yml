@@ -12,7 +12,9 @@
     - role: raid_fs
     - role: exports       # manage /etc/exports
     - role: nfs_server    # configure kernel NFS server
-    - role: xinas_mcp     # MCP server + NFS helper daemon (AI assistant bridge)
+    - role: xinas_node_build  # Node 20 + xiNAS-MCP build (dist/ for api/agent/mcp)
+    - role: xinas_nfs_helper  # NFS helper daemon (serves the agent + legacy MCP)
+    - role: xinas_mcp     # LEGACY MCP server (retiring in S8; shim after T15)
     - role: xinas_menu    # Python/Textual management console (replaces Bash menus)
     - role: xinas_history  # Configuration history snapshots and rollback
     - role: perf_tuning

@@ -1,0 +1,2 @@
+# Path where the xiNAS repo is installed (set by install.sh → /opt/xiNAS)
+xinas_node_build_repo_path: /opt/xiNAS/xiNAS-MCP

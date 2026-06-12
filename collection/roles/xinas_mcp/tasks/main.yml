@@ -1,136 +1,26 @@
 ---
-# ─── 1. Node.js 20 LTS via NodeSource ─────────────────────────────────────────
+# xinas_mcp role — the LEGACY MCP daemon (retiring in S8 T15,
+# ADR-0010). The Node toolchain + TypeScript build moved to
+# xinas_node_build; the NFS helper moved to xinas_nfs_helper (S8 T1).
+# This role now only installs/configures the legacy xinas-mcp service
+# and the Claude Code integration.
 
-- name: Check current Node.js version
-  ansible.builtin.command: node --version
-  register: _node_ver
-  changed_when: false
-  failed_when: false
-  tags: [xinas_mcp, nodejs]
-
-- name: Install Node.js 20 from NodeSource
-  tags: [xinas_mcp, nodejs]
-  when: >
-    _node_ver.rc != 0 or
-    not (_node_ver.stdout | regex_search('^v2[0-9]\.'))
-  block:
-    - name: Install NodeSource prerequisites
-      ansible.builtin.apt:
-        name:
-          - ca-certificates
-          - curl
-          - gnupg
-        state: present
-
-    - name: Create /etc/apt/keyrings directory
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: '0755'
-
-    # curl pipes into `gpg --dearmor`; get_url cannot dearmor, and the
-    # task is already guarded by creates:.
-    - name: Import NodeSource GPG key  # noqa: command-instead-of-module
-      ansible.builtin.shell: >
-        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
-        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
-      args:
-        creates: /etc/apt/keyrings/nodesource.gpg
-
-    - name: Add NodeSource APT repository
-      ansible.builtin.apt_repository:
-        repo: >-
-          deb [signed-by=/etc/apt/keyrings/nodesource.gpg]
-          https://deb.nodesource.com/node_20.x nodistro main
-        state: present
-        filename: nodesource
-
-    - name: Install nodejs package
-      ansible.builtin.apt:
-        name: nodejs
-        state: present
-        update_cache: true
-
-# ─── 2. Build the MCP server ───────────────────────────────────────────────────
-
-- name: Verify MCP source directory exists
+- name: Pre-flight — verify build artifacts are present
   ansible.builtin.stat:
-    path: "{{ xinas_mcp_repo_path }}/package.json"
-  register: _mcp_src
-  tags: [xinas_mcp, build]
+    path: "{{ xinas_mcp_repo_path }}/dist/index.js"
+  register: _mcp_build_stat
+  tags: [xinas_mcp]
 
-- name: Fail if MCP source not found
+- name: Fail with actionable message when build artifacts are missing
   ansible.builtin.fail:
-    msg: >
-      xiNAS-MCP source not found at {{ xinas_mcp_repo_path }}.
-      Ensure the xiNAS repo is cloned to /opt/xiNAS before running this role.
-  when: not _mcp_src.stat.exists
-  tags: [xinas_mcp, build]
-
-- name: Install npm dependencies
-  ansible.builtin.command:
-    cmd: npm ci
-    chdir: "{{ xinas_mcp_repo_path }}"
-  register: _npm_ci
-  changed_when: "'added' in _npm_ci.stdout or 'updated' in _npm_ci.stdout"
-  tags: [xinas_mcp, build]
-
-# NOTE: the TypeScript build lives in section 4b, next to the xinas-mcp unit
-# install and (re)start — dist/ must exist before the service starts. Daemon
-# lifecycle is driven by explicit per-service systemd tasks (no handlers /
-# flush_handlers), because this role provisions two independent daemons and a
-# global flush would fire one daemon's restart before the other's unit exists.
-
-# ─── 3. NFS helper daemon ──────────────────────────────────────────────────────
-
-- name: Create NFS helper library directory
-  ansible.builtin.file:
-    path: "{{ xinas_mcp_helper_lib_path }}"
-    state: directory
-    owner: root
-    group: root
-    mode: '0755'
-  tags: [xinas_mcp, nfs_helper]
-
-- name: Copy NFS helper Python sources
-  ansible.builtin.copy:
-    src: "{{ xinas_mcp_repo_path }}/nfs-helper/"
-    dest: "{{ xinas_mcp_helper_lib_path }}/"
-    owner: root
-    group: root
-    mode: '0644'
-    remote_src: true
-  register: _nfs_helper_src
-  tags: [xinas_mcp, nfs_helper]
-
-- name: Make nfs_helper.py executable
-  ansible.builtin.file:
-    path: "{{ xinas_mcp_helper_lib_path }}/nfs_helper.py"
-    mode: '0755'
-  tags: [xinas_mcp, nfs_helper]
-
-- name: Install xinas-nfs-helper systemd unit
-  ansible.builtin.copy:
-    src: "{{ xinas_mcp_repo_path }}/nfs-helper/xinas-nfs-helper.service"
-    dest: /etc/systemd/system/xinas-nfs-helper.service
-    owner: root
-    group: root
-    mode: '0644'
-    remote_src: true
-  register: _nfs_helper_unit
-  tags: [xinas_mcp, nfs_helper]
-
-# Self-contained lifecycle: daemon_reload runs before the state action, so a
-# freshly-copied unit is reloaded before start. No handlers / flush_handlers —
-# this role provisions two independent daemons, and a global flush would fire
-# the *other* daemon's restart before its unit exists.
-- name: Reload systemd, enable and (re)start xinas-nfs-helper
-  ansible.builtin.systemd:
-    name: xinas-nfs-helper
-    daemon_reload: true
-    enabled: true
-    state: "{{ 'restarted' if (_nfs_helper_src is changed or _nfs_helper_unit is changed) else 'started' }}"
-  tags: [xinas_mcp, nfs_helper, service]
+    msg: |
+      xinas_mcp requires build artifacts at
+      {{ xinas_mcp_repo_path }}/dist/index.js, which were not found.
+      Run the xinas_node_build role first — either include it in the
+      same playbook above xinas_mcp, or invoke it directly via
+      `ansible-playbook playbooks/site.yml --tags xinas_node_build`.
+  when: not _mcp_build_stat.stat.exists
+  tags: [xinas_mcp]
 
 # ─── 4. Directories and configuration ─────────────────────────────────────────
 
@@ -164,19 +54,7 @@
 
 # ─── 4b. MCP server daemon (Streamable HTTP / SSE / stdio) ───────────────────
 # Must run after config deploy: the daemon reads /etc/xinas-mcp/config.json
-# at startup. Placed before Claude Code config so the service is ready first.
-#
-# Build → install unit → (re)start are kept together here: dist/ must exist
-# before the service starts, and the unit lifecycle is driven by an explicit
-# systemd task (no handlers / flush_handlers — see the nfs-helper task above).
-
-- name: Build TypeScript → dist/
-  ansible.builtin.command:
-    cmd: npm run build
-    chdir: "{{ xinas_mcp_repo_path }}"
-  changed_when: true
-  register: _mcp_build
-  tags: [xinas_mcp, build]
+# at startup. dist/ is provisioned by xinas_node_build (preflight above).
 
 - name: Install xinas-mcp systemd unit
   ansible.builtin.copy:
@@ -197,7 +75,7 @@
     name: xinas-mcp
     daemon_reload: true
     enabled: true
-    state: "{{ 'restarted' if (_mcp_build is changed or _mcp_unit is changed) else 'started' }}"
+    state: "{{ 'restarted' if _mcp_unit is changed else 'started' }}"
   tags: [xinas_mcp, service]
 
 # ─── 5. Claude Code MCP integration ───────────────────────────────────────────
