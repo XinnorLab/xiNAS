@@ -52,5 +52,9 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "bin": {
+    "xinasctl": "dist/cli/xinasctl.js",
+    "xinas-mcp-stdio": "dist/mcp-stdio.js"
   }
 }
