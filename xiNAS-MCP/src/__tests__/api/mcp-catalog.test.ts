@@ -33,12 +33,12 @@ describe('client catalog (S8 T2)', () => {
     expect(byName.get('support.bundle')?.requires_mcp_apply).toBe(false);
     expect(byName.get('tasks.cancel')?.requires_mcp_apply).toBe(false);
     expect(byName.get('shares.create')?.requires_mcp_apply).toBe(true);
-    // S9: config-history/audit went LIVE; tasks.cancel is the one
-    // remaining degraded entry (cancel wiring is a later slice).
+    // S10: tasks.cancel went live — the degraded set is now EMPTY.
     expect(byName.get('audit.query')?.status).toBe('live');
     expect(byName.get('config_history.snapshots')?.status).toBe('live');
     expect(byName.get('config_history.rollback')?.status).toBe('live');
-    expect(byName.get('tasks.cancel')?.status).toBe('degraded');
+    expect(byName.get('tasks.cancel')?.status).toBe('live');
+    expect([...byName.values()].filter((e) => e.status === 'degraded')).toEqual([]);
     expect(byName.get('drift.report')?.status).toBe('live');
     // S9 pools entries
     expect(byName.get('pools.create')?.min_role).toBe('admin');

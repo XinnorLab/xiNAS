@@ -303,14 +303,14 @@ export const CATALOG: CatalogEntry[] = [
   {
     name: 'tasks.cancel',
     description:
-      'Request cooperative cancellation of a running task. DEGRADED: the route is a stub until cancel wiring lands. Allowed via MCP without allow_apply — an emergency stop cannot apply new state (ADR-0010).',
+      'Request cooperative task cancellation (S10, ADR-0012). Queued tasks cancel immediately; running tasks stop at the next stage boundary AND roll back their partial work (cancelled = nothing changed, best-effort) — a cancel after the last stage completed is ignored and the task finishes success. Allowed via MCP without allow_apply — an emergency stop cannot apply new state (ADR-0010).',
     method: 'POST',
     path: '/tasks/{id}/cancel',
     input_schema: idInput('id', 'task id'),
     mutability: 'direct',
     requires_mcp_apply: false,
     min_role: 'operator',
-    status: 'degraded',
+    status: 'live',
   },
 
   // ── support bundle ──
