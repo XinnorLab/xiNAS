@@ -19,7 +19,6 @@ from textual.screen import Screen
 from textual.widgets import Footer, Label
 
 from xinas_menu.apptype import XiNASAppMixin
-from xinas_menu.screens.network import _flush_pbr_rules
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -258,6 +257,57 @@ def _generate_netplan(allocations: list[dict]) -> str:
             lines.append(f"          priority: {table_id}")
     lines.append("")
     return "\n".join(lines)
+
+
+def _flush_pbr_rules() -> None:
+    """Remove all custom PBR ip-rules (tables 100-199) and flush stale IPs
+    from RDMA-capable interfaces so netplan apply starts clean.
+
+    Moved here from screens/network.py when that screen was retargeted to
+    the control-path API (S8, ADR-0010) — the pool screen's direct netplan
+    path is the deferred remaining consumer.
+    """
+
+    def _run_cmd(cmd: str) -> str:
+        import shlex
+
+        try:
+            return subprocess.check_output(
+                shlex.split(cmd),
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except Exception:
+            return ""
+
+    out = _run_cmd("ip rule show")
+    if not out:
+        return
+    seen_tables: set[int] = set()
+    for line in out.splitlines():
+        if "lookup" not in line:
+            continue
+        parts = line.split()
+        try:
+            idx = parts.index("lookup")
+            table = int(parts[idx + 1])
+        except (ValueError, IndexError):
+            continue
+        if 100 <= table < 200:
+            spec = line.split(":", 1)[1].strip()
+            _run_cmd(f"ip rule del {spec}")
+            seen_tables.add(table)
+    for table in seen_tables:
+        _run_cmd(f"ip route flush table {table}")
+    # Flush all IPs from RDMA-capable (mlx) interfaces to remove stale
+    # secondary addresses that netplan apply alone does not clean up.
+    for iface_dir in sorted(Path("/sys/class/net").iterdir()):
+        try:
+            driver = (iface_dir / "device" / "driver").resolve().name
+            if "mlx" in driver:
+                _run_cmd(f"ip addr flush dev {iface_dir.name}")
+        except Exception:
+            continue
 
 
 def _write_and_apply_netplan(netplan_content: str) -> tuple[bool, str]:

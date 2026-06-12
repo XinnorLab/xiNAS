@@ -1,4 +1,11 @@
-"""NetworkScreen — show and edit network interfaces."""
+"""NetworkScreen — show and edit network interfaces.
+
+Mutations go through the control-path API (S8, ADR-0010): per-interface
+address/MTU edits are ``PATCH /api/v1/network/interfaces/{id}`` plan/apply
+operations. The API executor owns the netplan render, the surgical
+flush, and ``netplan apply`` (ADR-0008) — this screen no longer runs
+``netplan`` or touches ``/etc/netplan`` / ip rules directly.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +16,7 @@ import shlex
 import socket
 import subprocess
 from pathlib import Path
+from typing import Any
 
 _log = logging.getLogger(__name__)
 
@@ -19,6 +27,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.api.control_client import ControlPathError, PlanBlocked
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -37,10 +46,9 @@ _NC = "\033[0m"
 _MENU = [
     MenuItem("1", "View Current Configuration"),
     MenuItem("2", "Edit Interface IP Address"),
-    MenuItem("3", "Apply Network Changes"),
-    MenuItem("4", "View Netplan Config File"),
+    MenuItem("3", "View Netplan Config File"),
     MenuItem("", "", separator=True),
-    MenuItem("5", "IP Pool Configuration"),
+    MenuItem("4", "IP Pool Configuration"),
     MenuItem("0", "Back"),
 ]
 
@@ -61,10 +69,12 @@ class NetworkScreen(XiNASAppMixin, Screen):
                 "\033[1m\033[36mNetwork Settings\033[0m\n"
                 "\n"
                 "  \033[1m1\033[0m  \033[36mShow Interfaces\033[0m     \033[2mView network interfaces and IP addresses\033[0m\n"
-                "  \033[1m2\033[0m  \033[36mEdit Interface IP\033[0m   \033[2mChange interface IP address (CIDR)\033[0m\n"
-                "  \033[1m3\033[0m  \033[36mApply Netplan\033[0m       \033[2mApply netplan changes\033[0m\n"
-                "  \033[1m4\033[0m  \033[36mShow Netplan\033[0m        \033[2mDisplay current netplan configuration\033[0m\n"
-                "  \033[1m5\033[0m  \033[36mIP Pool\033[0m             \033[2mConfigure IP pool for high-speed interfaces\033[0m\n",
+                "  \033[1m2\033[0m  \033[36mEdit Interface IP\033[0m   \033[2mChange IP/MTU via the control-path API\033[0m\n"
+                "  \033[1m3\033[0m  \033[36mShow Netplan\033[0m        \033[2mDisplay current netplan configuration\033[0m\n"
+                "  \033[1m4\033[0m  \033[36mIP Pool\033[0m             \033[2mConfigure IP pool for high-speed interfaces\033[0m\n"
+                "\n"
+                "  \033[2mChanges are planned and applied through xinas-api; the\033[0m\n"
+                "  \033[2mexecutor rewrites netplan and applies it server-side.\033[0m\n",
                 id="net-content",
             )
         yield Footer()
@@ -81,46 +91,77 @@ class NetworkScreen(XiNASAppMixin, Screen):
         elif key == "2":
             self._edit_interface_ip()
         elif key == "3":
-            self._apply_netplan()
-        elif key == "4":
             self._view_netplan_file()
-        elif key == "5":
+        elif key == "4":
             from xinas_menu.screens.ip_pool import IPPoolScreen
 
             self.app.push_screen(IPPoolScreen())
 
+    def _task_progress(self, label: str):
+        """Build an ``on_progress`` callback for ``plan_apply_wait``.
+
+        ``plan_apply_wait`` runs in a worker thread, so the callback hops
+        back to the UI thread before raising the toast.
+        """
+
+        def _cb(state: str) -> None:
+            self.app.call_from_thread(self.app.notify, f"{label}: task {state}", timeout=4)
+
+        return _cb
+
+    async def _api_interfaces(self) -> list[dict]:
+        """GET /network/interfaces → merged desired+observed rows."""
+        rows = await asyncio.to_thread(self.app.control.result, "/api/v1/network/interfaces")
+        if not isinstance(rows, list):
+            return []
+        return [r for r in rows if isinstance(r, dict) and r.get("id")]
+
     @work(exclusive=True)
     async def _show_network_info(self) -> None:
-        loop = asyncio.get_running_loop()
-        text = await loop.run_in_executor(None, _collect_network_info)
         view = self.query_one("#net-content", ScrollableTextView)
+        try:
+            rows = await self._api_interfaces()
+        except ControlPathError as exc:
+            # Read-only degraded view when the api is unreachable (e.g.
+            # before the control path is provisioned).
+            text = await asyncio.to_thread(_collect_network_info, None)
+            view.set_content(
+                f"{_YLW}Control API unavailable ({exc}) — local read-only view.{_NC}\n\n{text}"
+            )
+            return
+        text = await asyncio.to_thread(_collect_network_info, rows)
         view.set_content(text)
 
     @work(exclusive=True)
     async def _edit_interface_ip(self) -> None:
-        # Enumerate available interfaces (exclude loopback) with current IPs
+        view = self.query_one("#net-content", ScrollableTextView)
         try:
-            iface_names = sorted(p.name for p in Path("/sys/class/net").iterdir() if p.name != "lo")
-        except Exception:
-            iface_names = []
-
-        if not iface_names:
-            view = self.query_one("#net-content", ScrollableTextView)
-            view.set_content(f"{_RED}No network interfaces found.{_NC}")
+            rows = await self._api_interfaces()
+        except ControlPathError as exc:
+            view.set_content(f"{_RED}Control API: {exc}{_NC}")
             return
 
-        loop = asyncio.get_running_loop()
-        labels = await loop.run_in_executor(None, lambda: _iface_labels(iface_names))
+        managed = [r for r in rows if _is_managed(r)]
+        if not managed:
+            view.set_content(
+                f"{_RED}No xiNAS-managed interfaces found.{_NC}\n\n"
+                f"{_DIM}Only RDMA-capable (mlx-driver) interfaces are managed via the\n"
+                f"control-path API; the management Ethernet stays cloud-init-owned.{_NC}"
+            )
+            return
 
+        labels = _iface_labels(managed)
         choice = await self.app.push_screen_wait(
             SelectDialog(labels, title="Edit Interface IP", prompt="Select interface:")
         )
         if choice is None:
             return
         iface = choice.split()[0]
+        row = next((r for r in managed if r.get("id") == iface), {})
 
-        # Fetch current IP, gateway, and MTU for pre-filling
-        cur_ip, cur_gw, cur_mtu = await loop.run_in_executor(None, lambda: _iface_current(iface))
+        # Pre-fill from the API row (desired spec first, then netplan stanza,
+        # then the live address).
+        cur_ip, cur_mtu = _iface_current(row)
 
         while True:
             ip = await self.app.push_screen_wait(
@@ -143,17 +184,6 @@ class NetworkScreen(XiNASAppMixin, Screen):
                 continue
             ip = ip.strip()
             break
-
-        gw = await self.app.push_screen_wait(
-            InputDialog(
-                "Default gateway (leave blank to keep):",
-                "Edit Interface IP",
-                default=cur_gw,
-                placeholder="192.168.1.1",
-            )
-        )
-        if gw is None:
-            return
 
         # MTU dialog — default depends on interface type (IB vs Ethernet)
         default_mtu = cur_mtu or ("4092" if iface.startswith("ib") else "9000")
@@ -178,54 +208,65 @@ class NetworkScreen(XiNASAppMixin, Screen):
                 continue
             break
 
-        summary = f"Set {iface} to {ip}"
-        if gw:
-            summary += f" via {gw}"
-        summary += f", MTU {mtu_str}"
-
+        summary = f"Set {iface} to {ip}, MTU {mtu_val}"
         confirmed = await self.app.push_screen_wait(ConfirmDialog(summary + "?", "Confirm"))
         if not confirmed:
             return
 
-        loop = asyncio.get_running_loop()
-        ok, err = await loop.run_in_executor(None, lambda: _update_netplan(iface, ip, gw, mtu_val))
-        if ok:
-            self.app.audit.log("network.edit_ip", f"{iface}={ip} mtu={mtu_val}", "OK")
-            await self.app.snapshots.record(
-                "network_modify",
-                diff_summary=summary,
-            )
-            self._show_network_info()
-        else:
-            view = self.query_one("#net-content", ScrollableTextView)
-            view.set_content(f"{_RED}Failed: {err}{_NC}")
-
-    @work(exclusive=True)
-    async def _apply_netplan(self) -> None:
-        confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(
-                "Apply network configuration?\n\nThis runs 'netplan apply'.\nActive connections may be briefly interrupted.",
-                "Apply Network Changes",
-            )
-        )
-        if not confirmed:
+        spec: dict[str, Any] = {"addresses": [ip], "mtu": mtu_val}
+        if not await self._patch_interface(iface, spec):
             return
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _flush_pbr_rules)
-        ok, out, err = await loop.run_in_executor(None, lambda: _run("netplan", "apply"))
-        if ok:
-            self.app.audit.log("network.netplan_apply", "", "OK")
-            await self.app.snapshots.record(
-                "network_modify",
-                diff_summary="Applied netplan configuration",
-            )
-            view = self.query_one("#net-content", ScrollableTextView)
-            view.set_content(f"{_GRN}Network configuration applied.{_NC}")
-            self._show_network_info()
-        else:
-            view = self.query_one("#net-content", ScrollableTextView)
-            view.set_content(f"{_RED}netplan apply failed:{_NC}\n\n{(err or out)[:300]}")
+        self.app.audit.log("network.edit_ip", f"{iface}={ip} mtu={mtu_val}", "OK")
+        await self.app.snapshots.record(
+            "network_modify",
+            diff_summary=summary,
+        )
+        self._show_network_info()
+
+    async def _patch_interface(self, iface: str, spec: dict[str, Any]) -> bool:
+        """plan/apply a PATCH; offer the cleanup re-plan on duplicate blockers.
+
+        Returns ``True`` on success, ``False`` when blocked/failed/cancelled
+        (the error dialog has already been shown).
+        """
+        path = f"/api/v1/network/interfaces/{iface}"
+        label = f"Edit {iface}"
+        try:
+            try:
+                await asyncio.to_thread(
+                    self.app.control.plan_apply_wait,
+                    "PATCH",
+                    path,
+                    spec,
+                    on_progress=self._task_progress(label),
+                )
+            except PlanBlocked as exc:
+                dup_msgs = _cleanup_repairable(exc.blockers)
+                if not dup_msgs:
+                    raise
+                cleanup = await self.app.push_screen_wait(
+                    ConfirmDialog(
+                        "Plan blocked by duplicate netplan definitions:\n\n"
+                        + "\n".join(f"  {m}" for m in dup_msgs)
+                        + "\n\nRemove the duplicate stanza(s) and retry?\n"
+                        "(audited netplan repair via the API)",
+                        "Duplicate Netplan Definition",
+                    )
+                )
+                if not cleanup:
+                    return False
+                await asyncio.to_thread(
+                    self.app.control.plan_apply_wait,
+                    "PATCH",
+                    path,
+                    {**spec, "cleanup": True},
+                    on_progress=self._task_progress(label),
+                )
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error"))
+            return False
+        return True
 
     @work(exclusive=True)
     async def _view_netplan_file(self) -> None:
@@ -236,6 +277,69 @@ class NetworkScreen(XiNASAppMixin, Screen):
             view.set_content(f"Netplan: {path}\n{'=' * 60}\n\n{text}")
         else:
             view.set_content("No netplan configuration file found in /etc/netplan/")
+
+
+# ── API row helpers ───────────────────────────────────────────────────────────
+
+
+def _is_managed(row: dict) -> bool:
+    """True for rows the API will accept a PATCH for (mlx/RDMA-capable)."""
+    status = row.get("status") or {}
+    if status.get("rdma_capable") is True:
+        return True
+    return "mlx" in str(status.get("driver", ""))
+
+
+def _cleanup_repairable(blockers: list[dict[str, Any]]) -> list[str]:
+    """Blocker messages when EVERY blocker is a duplicate-netplan one.
+
+    Only then does a ``cleanup: true`` re-plan have a chance to succeed;
+    any other blocker mix is surfaced as a plain failure.
+    """
+    if blockers and all(str(b.get("code")) == "duplicate_netplan_definition" for b in blockers):
+        return [str(b.get("message", b.get("code", "?"))) for b in blockers]
+    return []
+
+
+def _row_addresses(row: dict) -> list[str]:
+    """Preferred address list: desired spec → netplan stanza → live."""
+    spec = row.get("spec") or {}
+    status = row.get("status") or {}
+    netplan = status.get("netplan") or {}
+    for source in (spec.get("addresses"), netplan.get("addresses")):
+        if isinstance(source, list) and source:
+            return [str(a) for a in source]
+    live = status.get("current_addresses") or status.get("ip4_addresses") or []
+    return [str(a) for a in live if isinstance(a, str) and ":" not in a]
+
+
+def _row_mtu(row: dict) -> str:
+    spec = row.get("spec") or {}
+    status = row.get("status") or {}
+    netplan = status.get("netplan") or {}
+    for source in (spec.get("mtu"), netplan.get("mtu"), status.get("mtu")):
+        if isinstance(source, int):
+            return str(source)
+    return ""
+
+
+def _iface_labels(rows: list[dict]) -> list[str]:
+    """Display labels like 'ibp65s0  10.10.1.1/24' from API rows."""
+    names = [str(r.get("id", "")) for r in rows]
+    max_len = max((len(n) for n in names), default=0)
+    labels: list[str] = []
+    for row in rows:
+        name = str(row.get("id", ""))
+        addrs = _row_addresses(row)
+        padded = name.ljust(max_len)
+        labels.append(f"{padded}  {addrs[0]}" if addrs else padded)
+    return labels
+
+
+def _iface_current(row: dict) -> tuple[str, str]:
+    """(current_ip_cidr, current_mtu) pre-fill values from an API row."""
+    addrs = _row_addresses(row)
+    return (addrs[0] if addrs else "", _row_mtu(row))
 
 
 # ── Formatter ─────────────────────────────────────────────────────────────────
@@ -251,41 +355,6 @@ def _run_cmd(cmd: str) -> str:
     except Exception:
         _log.debug("command failed: %s", cmd, exc_info=True)
         return ""
-
-
-def _flush_pbr_rules() -> None:
-    """Remove all custom PBR ip-rules (tables 100-199) and flush stale IPs
-    from RDMA-capable interfaces so netplan apply starts clean."""
-    out = _run_cmd("ip rule show")
-    if not out:
-        return
-    seen_tables: set[int] = set()
-    for line in out.splitlines():
-        if "lookup" not in line:
-            continue
-        parts = line.split()
-        try:
-            idx = parts.index("lookup")
-            table = int(parts[idx + 1])
-        except (ValueError, IndexError):
-            continue
-        if 100 <= table < 200:
-            spec = line.split(":", 1)[1].strip()
-            _run_cmd(f"ip rule del {spec}")
-            seen_tables.add(table)
-    for table in seen_tables:
-        _run_cmd(f"ip route flush table {table}")
-    # Flush all IPs from RDMA-capable (mlx) interfaces to remove stale
-    # secondary addresses that netplan apply alone does not clean up.
-    from pathlib import Path
-
-    for iface_dir in sorted(Path("/sys/class/net").iterdir()):
-        try:
-            driver = (iface_dir / "device" / "driver").resolve().name
-            if "mlx" in driver:
-                _run_cmd(f"ip addr flush dev {iface_dir.name}")
-        except Exception:
-            continue
 
 
 def _speed_bar(speed: int) -> str:
@@ -310,58 +379,15 @@ def _format_speed(speed: int) -> str:
     return f"{speed}Mb/s"
 
 
-def _collect_network_info() -> str:
-    GRN, YLW, RED, CYN, BLD, DIM, NC = (
-        "\033[32m",
-        "\033[33m",
-        "\033[31m",
-        "\033[36m",
-        "\033[1m",
-        "\033[2m",
-        "\033[0m",
-    )
-    W = 72
-    lines: list[str] = []
-
-    hostname = socket.gethostname()
+def _sysfs_speed(name: str) -> int:
     try:
-        fqdn = socket.getfqdn()
+        return int(Path(f"/sys/class/net/{name}/speed").read_text().strip())
     except Exception:
-        _log.debug("getfqdn failed", exc_info=True)
-        fqdn = hostname
+        return 0
 
-    lines.append(f"{BLD}{CYN}NETWORK CONFIGURATION{NC}")
-    lines.append(f"{DIM}{'=' * W}{NC}")
-    lines.append("")
-    lines.append(f"  {DIM}Hostname:{NC}  {GRN}{hostname}{NC}")
-    if fqdn != hostname:
-        lines.append(f"  {DIM}FQDN:{NC}      {fqdn}")
-    lines.append("")
 
-    gw_info = _run_cmd("ip route | grep default")
-    if gw_info:
-        parts = gw_info.split()
-        gw_ip = parts[2] if len(parts) > 2 else "N/A"
-        gw_dev = parts[4] if len(parts) > 4 else ""
-        lines.append(f"  {DIM}Gateway:{NC}   {gw_ip}" + (f" via {gw_dev}" if gw_dev else ""))
-
-    dns_servers: list[str] = []
-    try:
-        with open("/etc/resolv.conf") as f:
-            for line in f:
-                if line.strip().startswith("nameserver"):
-                    dns_servers.append(line.split()[1])
-    except Exception:
-        _log.debug("failed to read /etc/resolv.conf", exc_info=True)
-    if dns_servers:
-        lines.append(f"  {DIM}DNS:{NC}       {', '.join(dns_servers[:3])}")
-
-    lines.append("")
-    lines.append(f"{DIM}{'-' * W}{NC}")
-    lines.append(f"  {BLD}{CYN}NETWORK INTERFACES{NC}")
-    lines.append(f"{DIM}{'-' * W}{NC}")
-    lines.append("")
-
+def _local_iface_rows() -> list[dict]:
+    """Interface rows from /sys/class/net + ip(8) (api-unreachable fallback)."""
     interfaces: list[dict] = []
     net_path = "/sys/class/net"
     try:
@@ -425,8 +451,106 @@ def _collect_network_info() -> str:
                 "ip4": ip4,
                 "ip6": ip6,
                 "mtu": mtu,
+                "managed": "mlx" in driver,
+                "duplicates": [],
             }
         )
+    return interfaces
+
+
+def _api_iface_rows(api_rows: list[dict]) -> list[dict]:
+    """Adapt GET /network/interfaces rows to the rendered columns.
+
+    Link speed is not part of the API row; it is supplemented from sysfs
+    (read-only).
+    """
+    interfaces: list[dict] = []
+    for row in sorted(api_rows, key=lambda r: str(r.get("id", ""))):
+        name = str(row.get("id", ""))
+        status = row.get("status") or {}
+        state = str(status.get("link_state") or status.get("operstate") or "unknown").lower()
+        ip4 = ""
+        for addr in status.get("ip4_addresses") or status.get("current_addresses") or []:
+            if isinstance(addr, str) and ":" not in addr:
+                ip4 = addr
+                break
+        ip6 = ""
+        for addr in status.get("ip6_addresses") or []:
+            if isinstance(addr, str):
+                ip6 = addr
+                break
+        mtu = status.get("mtu")
+        duplicates = status.get("duplicates_detected_in") or []
+        interfaces.append(
+            {
+                "name": name,
+                "state": state,
+                "speed": _sysfs_speed(name),
+                "mac": str(status.get("mac", "")) or "N/A",
+                "driver": str(status.get("driver", "")),
+                "ip4": ip4,
+                "ip6": ip6,
+                "mtu": str(mtu) if isinstance(mtu, int) else "N/A",
+                "managed": _is_managed(row),
+                "duplicates": [str(f) for f in duplicates if isinstance(f, str)],
+            }
+        )
+    return interfaces
+
+
+def _collect_network_info(api_rows: list[dict] | None = None) -> str:
+    GRN, YLW, RED, CYN, BLD, DIM, NC = (
+        "\033[32m",
+        "\033[33m",
+        "\033[31m",
+        "\033[36m",
+        "\033[1m",
+        "\033[2m",
+        "\033[0m",
+    )
+    W = 72
+    lines: list[str] = []
+
+    hostname = socket.gethostname()
+    try:
+        fqdn = socket.getfqdn()
+    except Exception:
+        _log.debug("getfqdn failed", exc_info=True)
+        fqdn = hostname
+
+    lines.append(f"{BLD}{CYN}NETWORK CONFIGURATION{NC}")
+    lines.append(f"{DIM}{'=' * W}{NC}")
+    lines.append("")
+    lines.append(f"  {DIM}Hostname:{NC}  {GRN}{hostname}{NC}")
+    if fqdn != hostname:
+        lines.append(f"  {DIM}FQDN:{NC}      {fqdn}")
+    lines.append("")
+
+    gw_info = _run_cmd("ip route | grep default")
+    if gw_info:
+        parts = gw_info.split()
+        gw_ip = parts[2] if len(parts) > 2 else "N/A"
+        gw_dev = parts[4] if len(parts) > 4 else ""
+        lines.append(f"  {DIM}Gateway:{NC}   {gw_ip}" + (f" via {gw_dev}" if gw_dev else ""))
+
+    dns_servers: list[str] = []
+    try:
+        with open("/etc/resolv.conf") as f:
+            for line in f:
+                if line.strip().startswith("nameserver"):
+                    dns_servers.append(line.split()[1])
+    except Exception:
+        _log.debug("failed to read /etc/resolv.conf", exc_info=True)
+    if dns_servers:
+        lines.append(f"  {DIM}DNS:{NC}       {', '.join(dns_servers[:3])}")
+
+    lines.append("")
+    lines.append(f"{DIM}{'-' * W}{NC}")
+    lines.append(f"  {BLD}{CYN}NETWORK INTERFACES{NC}")
+    lines.append(f"{DIM}{'-' * W}{NC}")
+    lines.append("")
+
+    interfaces = _api_iface_rows(api_rows) if api_rows is not None else _local_iface_rows()
 
     up_count = sum(1 for i in interfaces if i["state"] == "up")
     lines.append(f"  Found {len(interfaces)} interface(s), {GRN}{up_count} active{NC}")
@@ -456,7 +580,12 @@ def _collect_network_info() -> str:
             lines.append(f"      {DIM}IPv6:{NC}    {iface['ip6']}")
         lines.append(f"      {DIM}MAC:{NC}     {iface['mac']}    {DIM}MTU:{NC} {iface['mtu']}")
         if iface["driver"]:
-            lines.append(f"      {DIM}Driver:{NC}  {iface['driver']}")
+            managed = f"  {DIM}(xiNAS-managed){NC}" if iface.get("managed") else ""
+            lines.append(f"      {DIM}Driver:{NC}  {iface['driver']}{managed}")
+        if iface.get("duplicates"):
+            lines.append(
+                f"      {RED}Duplicate netplan definition in: {', '.join(iface['duplicates'])}{NC}"
+            )
         lines.append("")
 
     lines.append(f"{DIM}{'-' * W}{NC}")
@@ -522,136 +651,3 @@ def _read_netplan_file() -> tuple[str, str]:
     return str(
         cfg
     ), "No xiNAS netplan configuration found.\nUse [2] Edit Interface IP Address to create one."
-
-
-def _update_netplan(
-    iface: str, ip_cidr: str, gateway: str, mtu: int | None = None
-) -> tuple[bool, str]:
-    import yaml
-
-    netplan_dir = Path("/etc/netplan")
-    # Always write to 99-xinas.yaml — the canonical xiNAS config file.
-    cfg_path = netplan_dir / "99-xinas.yaml"
-    try:
-        if cfg_path.exists():
-            with cfg_path.open() as f:
-                cfg = yaml.safe_load(f) or {}
-        else:
-            cfg = {"network": {"version": 2, "renderer": "networkd", "ethernets": {}}}
-        ethernets = cfg.setdefault("network", {}).setdefault("ethernets", {})
-        iface_cfg = ethernets.setdefault(iface, {})
-        iface_cfg["addresses"] = [ip_cidr]
-        iface_cfg["dhcp4"] = False
-        if gateway:
-            iface_cfg["routes"] = [{"to": "default", "via": gateway}]
-        if mtu is not None:
-            iface_cfg["mtu"] = mtu
-
-        # Policy-based routing for multi-interface configs
-        hp_ifaces = [k for k in ethernets if k != iface and not k.startswith("en")]
-        if hp_ifaces or not iface.startswith("en"):
-            # Count only high-perf (non-Ethernet) interfaces for table numbering
-            all_hp = sorted(k for k in ethernets if not k.startswith("en"))
-            if iface in all_hp:
-                table_id = 100 + all_hp.index(iface)
-                ip_addr = ip_cidr.split("/")[0]
-                prefix = ip_cidr.split("/")[1]
-                octets = ip_addr.split(".")
-                subnet = f"{octets[0]}.{octets[1]}.{octets[2]}.0/{prefix}"
-
-                existing_routes = iface_cfg.get("routes", [])
-                # Remove old PBR routes (those with a "table" key)
-                existing_routes = [r for r in existing_routes if "table" not in r]
-                existing_routes.append({"to": subnet, "scope": "link", "table": table_id})
-                iface_cfg["routes"] = existing_routes
-
-                iface_cfg["routing-policy"] = [
-                    {"from": ip_addr, "table": table_id, "priority": table_id}
-                ]
-
-        with cfg_path.open("w") as f:
-            yaml.dump(cfg, f, default_flow_style=False)
-
-        # Remove this interface from all OTHER netplan files to prevent
-        # netplan merge conflicts (e.g. stale IPs in 50-cloud-init.yaml).
-        _remove_iface_from_other_netplan_files(iface, cfg_path)
-
-        return True, ""
-    except Exception as exc:
-        return False, str(exc)
-
-
-def _remove_iface_from_other_netplan_files(iface: str, exclude_path: Path) -> None:
-    """Remove an interface definition from all netplan files except *exclude_path*.
-
-    This prevents netplan from merging stale config (old IPs, PBR rules) from
-    files like 50-cloud-init.yaml when 99-xinas.yaml is the canonical source.
-    """
-    import yaml
-
-    netplan_dir = Path("/etc/netplan")
-    for path in sorted(netplan_dir.glob("*.yaml")) + sorted(netplan_dir.glob("*.yml")):
-        if path == exclude_path:
-            continue
-        try:
-            with path.open() as f:
-                cfg = yaml.safe_load(f) or {}
-            ethernets = cfg.get("network", {}).get("ethernets", {})
-            if iface not in ethernets:
-                continue
-            del ethernets[iface]
-            with path.open("w") as f:
-                yaml.dump(cfg, f, default_flow_style=False)
-            _log.info("removed stale %s config from %s", iface, path)
-        except Exception:
-            _log.debug("failed to clean %s from %s", iface, path, exc_info=True)
-
-
-def _iface_labels(names: list[str]) -> list[str]:
-    """Return display labels like 'eth0  192.168.1.10/24' for each interface."""
-    max_len = max((len(n) for n in names), default=0)
-    labels: list[str] = []
-    for name in names:
-        ip = ""
-        out = _run_cmd(f"ip -o -4 addr show {name}")
-        if out:
-            parts = out.split()
-            for i, p in enumerate(parts):
-                if p == "inet" and i + 1 < len(parts):
-                    ip = parts[i + 1]
-                    break
-        padded = name.ljust(max_len)
-        labels.append(f"{padded}  {ip}" if ip else padded)
-    return labels
-
-
-def _iface_current(name: str) -> tuple[str, str, str]:
-    """Return (current_ip_cidr, current_gateway, current_mtu) for an interface."""
-    ip = ""
-    out = _run_cmd(f"ip -o -4 addr show {name}")
-    if out:
-        parts = out.split()
-        for i, p in enumerate(parts):
-            if p == "inet" and i + 1 < len(parts):
-                ip = parts[i + 1]
-                break
-    gw = ""
-    routes = _run_cmd(f"ip -4 route show dev {name}")
-    if routes:
-        for line in routes.splitlines():
-            if line.startswith("default via "):
-                gw = line.split()[2]
-                break
-    mtu = ""
-    try:
-        mtu_path = Path(f"/sys/class/net/{name}/mtu")
-        if mtu_path.exists():
-            mtu = mtu_path.read_text().strip()
-    except Exception:
-        pass
-    return ip, gw, mtu
-
-
-def _run(*args: str) -> tuple[bool, str, str]:
-    r = subprocess.run(list(args), capture_output=True, text=True)
-    return r.returncode == 0, r.stdout, r.stderr
