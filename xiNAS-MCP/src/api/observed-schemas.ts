@@ -53,6 +53,8 @@ const OBSERVED_KINDS = [
   'XiraidArray',
   'NetworkConfig',
   'Tuning',
+  'ConfigSnapshot',
+  'Pool',
   'managed_files',
   'inventory',
 ] as const;

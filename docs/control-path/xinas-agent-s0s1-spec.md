@@ -239,6 +239,7 @@ Architecture rules:
 | `network.render_netplan`, `network.flush_managed`, `network.apply` | Stub | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'` |
 | `systemd.reload`, `systemd.restart` | Stub | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'` |
 | `task.begin`, `task.stage_report`, `task.cancel`, `task.list_inflight` | Stub | JSON-RPC error -32000 with `data.code: 'EXECUTOR_UNSUPPORTED'`; reserved for S2 |
+| `config.diff` | **Real (S9, ADR-0011)** | `params {from, to}` → the `xinas_history snapshot diff --format json` payload via the agent's subprocess bridge (the store is root-only). Read-style; 5 s api-side timeout. |
 | `health.probe` | **Real (S7, ADR-0009)** | Read-style diagnostic: `params { level: 'standard'\|'deep', desired_nfs_profile?, first_export_path? }` → parsed license (NEVER the raw xicli blob), fresh rdma links, collector health, the helper's dry-render checksums; `deep` adds the fs touch + PID1 loopback-mount probes. Idempotent; mutates nothing beyond self-cleaned probe artifacts. |
 
 The dispatcher enumerates the full ADR-0002 method set explicitly. Anything outside the enumerated set returns `-32601 Method not found` (unknown method), not `EXECUTOR_UNSUPPORTED` (enumerated but stubbed). This distinction matters: `-32601` is a contract violation (the caller asked for something not in the surface); `EXECUTOR_UNSUPPORTED` is a build-version notice (the surface exists but this build doesn't implement it yet).

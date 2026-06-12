@@ -367,6 +367,7 @@ components:
             - Policy
             - HealthCheck
             - ConfigSnapshot
+            - Pool
         id:
           type: string
         revision:
@@ -645,6 +646,9 @@ components:
               type: string
               enum: [optimal, degraded, rebuilding, failed, importing, unknown]
             volume_path: { type: string }
+            spare_pool:
+              type: [string, "null"]
+              description: "S9 (ADR-0011): the raw sparepool NAME from raid_show — drives Pool.referenced_by. spare_disk_ids keeps its S4 join semantics."
             chunk_size_kib:
               type: [integer, "null"]
               description: "Observe-only/derived (full-stripe width reported by xiRAID)."
@@ -1317,6 +1321,36 @@ components:
           type: array
           items: { $ref: '#/components/schemas/ResourceRef' }
 
+    AuditEntry:
+      type: object
+      required: [kind, timestamp, node_id, principal, client_type, request_id]
+      properties:
+        kind: { type: string, description: "e.g. http.POST./shares" }
+        timestamp: { type: string, format: date-time }
+        node_id: { type: string }
+        principal: { type: string }
+        client_type: { type: string }
+        request_id: { type: string }
+        parameters_hash: { type: string }
+        result_hash: { type: string }
+        operation_id: { type: string }
+        task_id: { type: string }
+        state_revision: { type: integer }
+
+    Pool:
+      type: object
+      required: [name, drives, active, referenced_by]
+      properties:
+        name: { type: string }
+        drives:
+          type: array
+          items: { type: string }
+        active: { type: boolean }
+        referenced_by:
+          type: array
+          items: { type: string }
+          description: Names of xiRAID arrays whose spare pool is this pool.
+
     ConfigSnapshot:
       type: object
       required: [snapshot_id, kind, created_at]
@@ -1338,6 +1372,13 @@ components:
         files_changed:
           type: array
           items: { type: string }
+        # S9 (ADR-0011): typed projections of the xinas_history manifest.
+        history_type:
+          type: string
+          description: Raw xinas_history SnapshotType (baseline|rollback_eligible|ephemeral).
+        operation: { type: string }
+        source: { type: string }
+        diff_summary: { type: string }
 
     User:
       type: object
@@ -2209,14 +2250,87 @@ paths:
     get:
       tags: [storage]
       operationId: listPools
-      summary: xiRAID spare pools (deprecated read-only gRPC path, ADR-0010).
-      description: Degrades with a warning when the xiRAID daemon is unreachable. Removed when pools observe via the agent.
+      summary: xiRAID spare pools (observed state; S9 ADR-0011).
       responses:
         '200':
-          description: OK
+          description: OK (result is Pool[])
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Envelope' }
+        '500': { $ref: '#/components/responses/Internal' }
+    post:
+      tags: [storage]
+      operationId: createPool
+      summary: Create a spare pool (plan/apply).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MutatingRequest' }
+      responses:
+        '200':
+          description: Plan result (mode=plan)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '202':
+          description: Apply accepted (mode=apply; result is the task envelope)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '422': { $ref: '#/components/responses/InvalidArgument' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /pools/{name}:
+    patch:
+      tags: [storage]
+      operationId: modifyPool
+      summary: "Modify a spare pool — ONE intent per call: add_drives | remove_drives | active (plan/apply)."
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MutatingRequest' }
+      responses:
+        '200':
+          description: Plan result (mode=plan)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '202':
+          description: Apply accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/InvalidArgument' }
+        '500': { $ref: '#/components/responses/Internal' }
+    delete:
+      tags: [storage]
+      operationId: deletePool
+      summary: "Delete a spare pool (plan/apply; blocked while active or referenced by an array)."
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MutatingRequest' }
+      responses:
+        '200':
+          description: Plan result (mode=plan)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '202':
+          description: Apply accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/InvalidArgument' }
         '500': { $ref: '#/components/responses/Internal' }
 
   /mail/recipients:
@@ -2460,19 +2574,43 @@ paths:
       tags: [audit]
       operationId: queryAudit
       summary: Query audit entries (read-only).
+      description: |
+        S9 (ADR-0011): tail filters (kind/principal/client_type/since/
+        until/limit, newest-first, limit default 100 cap 1000) over the
+        audit log, or ONE exact lookup (request_id|operation_id|task_id)
+        resolved via the audit index with an outbox fallback for rows
+        not yet drained.
       parameters:
         - in: query
           name: request_id
           schema: { type: string }
         - in: query
+          name: operation_id
+          schema: { type: string }
+        - in: query
+          name: task_id
+          schema: { type: string }
+        - in: query
+          name: kind
+          schema: { type: string }
+        - in: query
           name: principal
+          schema: { type: string }
+        - in: query
+          name: client_type
           schema: { type: string }
         - in: query
           name: since
           schema: { type: string, format: date-time }
+        - in: query
+          name: until
+          schema: { type: string, format: date-time }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
       responses:
         '200':
-          description: OK
+          description: OK (result is AuditEntry[], newest first)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Envelope' }

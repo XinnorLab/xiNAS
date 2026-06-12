@@ -21,6 +21,8 @@ export type Kind =
   | 'XiraidArray'
   | 'NetworkConfig' // internal observed singleton (id 'default'); netplan file-set summary (ADR-0008).
   | 'Tuning' // internal observed singleton (id 'default'); sysctl expected-vs-actual (ADR-0009).
+  | 'ConfigSnapshot' // xinas_history snapshot manifests, projected (ADR-0011).
+  | 'Pool' // xiRAID spare pools (ADR-0011).
   | 'managed_files'
   | 'inventory';
 
