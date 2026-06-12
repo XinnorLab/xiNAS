@@ -151,6 +151,22 @@ export function createFixtureTuningProbe(dir: string): {
   };
 }
 
+/** ConfigSnapshot manifests: reads <dir>/config-snapshots.json (manifest array); absent → []. */
+export function createFixtureSnapshotSource(dir: string): {
+  snapshotList(): Promise<import('../task/xinas-history-bridge.js').HistoryManifest[]>;
+} {
+  return {
+    snapshotList: () =>
+      Promise.resolve(
+        readFixture<import('../task/xinas-history-bridge.js').HistoryManifest[]>(
+          dir,
+          'config-snapshots.json',
+          [],
+        ),
+      ),
+  };
+}
+
 /**
  * Systemd: reads <dir>/systemd-units.json
  * (`{ "<unit>": {load_state, active_state, sub_state, unit_file_state?} }`);

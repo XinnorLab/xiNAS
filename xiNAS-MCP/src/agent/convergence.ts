@@ -57,6 +57,9 @@ import { NfsCollector } from './collectors/nfs.js';
 import { ManagedFilesStubCollector } from './collectors/stubs.js';
 import { SystemdUnitCollector } from './collectors/systemd.js';
 import { TuningCollector } from './collectors/tuning.js';
+import { ConfigSnapshotCollector } from './collectors/config-snapshot.js';
+import { XinasHistoryBridge } from './task/xinas-history-bridge.js';
+import { execFileRunSubprocess } from './task/wiring.js';
 import { UsersCollector } from './collectors/users.js';
 import { XiraidArrayCollector } from './collectors/xiraid.js';
 import type { AgentConfig } from './config.js';
@@ -72,6 +75,7 @@ import {
   createFixtureNetworkProbe,
   createFixtureNfsProbe,
   createFixtureNfsProfileProbe,
+  createFixtureSnapshotSource,
   createFixtureSystemdProbe,
   createFixtureTuningProbe,
   createFixtureUsersProbe,
@@ -360,6 +364,15 @@ export function buildConvergence(config: AgentConfig): Convergence {
   // --- Tuning (S7): sysctl expected-vs-actual singleton. ---
   const tuningProbe = fdir !== null ? createFixtureTuningProbe(fdir) : createTuningProbe();
   registry.register(new TuningCollector({ probe: tuningProbe }));
+
+  // --- ConfigSnapshot (S9, ADR-0011): xinas_history manifests projected
+  //     onto the public shape; the store is root-only, so the bridge
+  //     subprocess is the only read path. ---
+  const snapshotSource =
+    fdir !== null
+      ? createFixtureSnapshotSource(fdir)
+      : new XinasHistoryBridge({ runSubprocess: execFileRunSubprocess });
+  registry.register(new ConfigSnapshotCollector({ source: snapshotSource }));
 
   // --- Deferred-capability stubs (managed_files). ---
   registry.register(new ManagedFilesStubCollector());
