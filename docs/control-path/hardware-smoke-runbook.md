@@ -223,6 +223,39 @@ On a scratch node (or after `./uninstall.sh`):
   notice (not a failure toast); the array/filesystem does NOT exist
   afterwards.
 
+## 5e. S11 — targeted snapshot rollback
+
+- [ ] **Capture carries the payload:** after any S2+ apply, inspect the
+  new snapshot dir under `/var/lib/xinas/config-history/snapshots/<id>/`
+  — a `system/` subdir holds the live config bytes (`etc_exports`,
+  `netplan`, the nfs.conf family), and the manifest has `files_changed`.
+  `python3 -m xinas_history snapshot list --format json` shows
+  `restorable: true` for it (and `false` for any pre-S11 snapshot).
+- [ ] **Targeted restore (NFS):** edit `/etc/exports` out of band (or
+  apply then revert a share), then restore the earlier snapshot — from
+  the TUI snapshot-detail **Restore** action, or `xinasctl` /
+  `POST /config-history/rollback {to: <id>, reason}` with `dangerous`.
+  The task reaches `success`; `/etc/exports` reverts to the captured
+  bytes; `exportfs` re-ran (the clients see the restored set); the task
+  output carries the "observed recovery — re-apply to make durable"
+  warning.
+- [ ] **Drift surfaces:** immediately after the restore, `GET /health`
+  / `GET /config-history/drift` shows `drift.nfs-exports` (and
+  `drift.netplan` if network was restored) degraded — desired KV is
+  unchanged. Re-apply the matching desired state → drift clears.
+- [ ] **Network restore (careful):** on a node where IB is not the
+  management path, restore a snapshot whose `files_changed` includes
+  `netplan` → `99-xinas.yaml` reverts, the PBR-flush + `netplan apply`
+  sequence runs, and the link recovers (the runner is local, so a bad
+  link does not strand it; validation + file-level auto-rollback
+  recover the pre-change bytes if it fails).
+- [ ] **Guards:** restoring a pre-S11 / ephemeral snapshot → plan blocks
+  with `no_restorable_payload`; an unknown id → `snapshot_not_found`; a
+  restore whose live state already matches the target → task `success`
+  no-op. MCP `config_history.rollback` with `to: <id>` still needs
+  `allow_apply` (destructive). Audit: `GET /api/v1/audit?task_id=<id>`
+  finds the restore.
+
 ## 6. Cross-cutting
 
 1. [ ] **Plan→pause→apply:** plan an array modify, wait 2+ minutes,
