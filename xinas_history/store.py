@@ -38,6 +38,7 @@ BASELINE_DIR = "baseline"
 SNAPSHOTS_DIR = "snapshots"
 STATE_DIR = "state"
 RUNTIME_DIR = "runtime"
+SYSTEM_DIR = "system"  # S11 (ADR-0013): restorable live config-file bytes
 MANIFEST_FILE = "manifest.yml"
 
 _DIR_MODE = 0o700
@@ -90,6 +91,7 @@ class FilesystemStore:
         config_files: dict[str, bytes],
         runtime_files: dict[str, bytes],
         is_baseline: bool = False,
+        system_files: dict[str, bytes] | None = None,
     ) -> Path:
         """Write a complete snapshot to disk atomically.
 
@@ -137,6 +139,13 @@ class FilesystemStore:
                 for name, content in runtime_files.items():
                     self._write_bytes(rt_dir / name, content)
 
+            # -- system files (S11): restorable live config-file bytes
+            if system_files:
+                sys_dir = tmp / SYSTEM_DIR
+                sys_dir.mkdir(mode=_DIR_MODE)
+                for name, content in system_files.items():
+                    self._write_bytes(sys_dir / name, content)
+
             # Set directory permission before the rename.
             os.chmod(tmp_dir, _DIR_MODE)
 
@@ -170,6 +179,22 @@ class FilesystemStore:
         """Read a file from the ``runtime/`` subdirectory of a snapshot."""
         path = self.snapshot_path(snapshot_id) / RUNTIME_DIR / filename
         return self._read_bytes(path)
+
+    def read_system_file(self, snapshot_id: str, filename: str) -> bytes | None:
+        """S11: read a captured file from the ``system/`` subdirectory."""
+        path = self.snapshot_path(snapshot_id) / SYSTEM_DIR / filename
+        return self._read_bytes(path)
+
+    def list_system_files(self, snapshot_id: str) -> list[str]:
+        """S11: the logical names captured in the ``system/`` payload.
+
+        ``[]`` when the snapshot has no payload (pre-S11 snapshots are not
+        restorable).
+        """
+        sys_dir = self.snapshot_path(snapshot_id) / SYSTEM_DIR
+        if not sys_dir.is_dir():
+            return []
+        return [p.name for p in sys_dir.iterdir() if p.is_file()]
 
     # -- listing / queries --------------------------------------------------
 

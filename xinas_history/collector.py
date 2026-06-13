@@ -42,6 +42,12 @@ CHECKSUM_TARGETS: dict[str, str] = {
     "nfs_common_defaults": "/etc/default/nfs-common",
 }
 
+# S11 (ADR-0013): live config files whose BYTES are captured into a
+# snapshot's restorable `system/` payload, keyed by the same logical name
+# as CHECKSUM_TARGETS (the inverse map). `collect_system_files()` reads
+# these; the runner writes them back on a targeted restore.
+SYSTEM_FILE_PATHS: dict[str, str] = dict(CHECKSUM_TARGETS)
+
 
 class ConfigCollector:
     """Collects desired configuration files from the xiNAS repo."""
@@ -62,6 +68,22 @@ class ConfigCollector:
                 collected[snapshot_name] = full_path.read_bytes()
             except OSError:
                 # Missing files are silently skipped
+                continue
+        return collected
+
+    def collect_system_files(self) -> dict[str, bytes]:
+        """S11 (ADR-0013): read the LIVE bytes of the managed system files
+        (``SYSTEM_FILE_PATHS``) into the snapshot's restorable payload.
+
+        Returns ``{logical_name: content}``. Absent files are **omitted**
+        (not stored as empty) — restore writes only captured files; it does
+        not delete a file that was absent at capture (ADR-0013 §Consequences).
+        """
+        collected: dict[str, bytes] = {}
+        for name, path in SYSTEM_FILE_PATHS.items():
+            try:
+                collected[name] = Path(path).read_bytes()
+            except OSError:
                 continue
         return collected
 
