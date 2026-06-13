@@ -31,13 +31,11 @@
  *  - NfsIdmap:  real probe exposes snapshot(); collector expects read() plus
  *               two watch subscriptions. Adapter renames snapshot()->read()
  *               and supplies no-op watch handles (poll backstop reconciles).
- *  - Systemd:   real probe is dbus-shaped (isAllowed/start/mapDbusProperties)
- *               and *requires* a connectDbus option; collector expects
- *               { allowList, getUnitState, subscribeAllowListed }. dbus is
- *               integration-only and unavailable on CI, so the adapter wires a
- *               degraded probe: allowList = DEFAULT_ALLOWLIST, getUnitState
- *               throws 'systemd dbus unavailable' (surfaced via collector
- *               health on sweep), subscribeAllowListed is a no-op handle.
+ *  - Systemd:   the live probe is `createSystemctlProbe()` — { allowList,
+ *               getUnitState (`systemctl show`), subscribeAllowListed (no-op) }.
+ *               The collector polls getUnitState on its 30 s backstop; the
+ *               dbus event subscription was removed (ADR-0009 §Systemd),
+ *               so the no-op handle is the steady state, not a degradation.
  *  - Users:     real probe has getentPasswd/getentGroup but no watchPasswdFiles.
  *               Adapter adds a no-op watch handle (poll backstop reconciles).
  *  - Inventory: real probe.snapshot() returns a NESTED shape; collector expects
@@ -271,8 +269,8 @@ export function buildConvergence(config: AgentConfig): Convergence {
   );
 
   // --- Systemd (S7 T1b promotion, ADR-0009): real unit state via the
-  //     systemctl-show subprocess probe (the dbus subscription stays
-  //     deferred — the 30 s poll backstop refreshes). Fixture mode reads
+  //     systemctl-show subprocess probe, refreshed by the 30 s poll
+  //     backstop (the dbus subscription was removed). Fixture mode reads
   //     systemd-units.json rows verbatim. ---
   const systemdProbe = fdir !== null ? createFixtureSystemdProbe(fdir) : createSystemctlProbe();
   registry.register(

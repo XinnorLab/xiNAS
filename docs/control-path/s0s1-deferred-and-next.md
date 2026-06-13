@@ -20,7 +20,6 @@ remains below is deferred-by-design or backlog.
 | Item | Where | Notes |
 |------|-------|-------|
 | **On-demand RPC reads** (`inventory.collect`, `disks.list`, `filesystems.list`, `mounts.list`, `network.snapshot`, `systemd.units_status`, `exports.list`, `nfs.sessions.list`) | `xiNAS-MCP/src/agent/rpc/methods/stubs.ts`; spec RPC table | Enumerated as stubs returning `EXECUTOR_UNSUPPORTED` (not `-32601`). The LIVE S0/S1 data path is the push model (Flow A). **WS12** wires these to the collectors' last-computed snapshots. |
-| **systemd dbus subscription** | `xiNAS-MCP/src/agent/collectors/systemd.ts` (stub `start()`); `convergence.ts` (forces the systemd collector to error) | The `dbus-native` dep is orphaned. Until dbus is wired, the systemd collector reports `error:` → with the J-fix a real node honestly reads **`degraded`**. Wiring real dbus restores `healthy`. |
 | **`tasks` read metadata** | `xiNAS-MCP/src/api/routes/tasks.ts` | Tasks reads are left raw (no synthesized `metadata`). Moot in S0/S1 — mutating ops are stubbed so `/tasks` returns `[]`. Fold into the read-resource path when **S2** lands the task envelope. |
 | **Legacy MCP-tool convergence** | `xiNAS-MCP/src/tools/` | Existing MCP server keeps its own privileged calls in S0/S1. Convergence onto the api/agent split is **WS12** (per ADR-0001 'Migration scope'). |
 | **Lift `xinas_api` / `xinas_agent` into `site.yml` + uninstall** | `docs/Installer/xinas-api-role-spec.md` §Out of scope | Both roles are opt-in for Phase 0; wiring into `playbooks/site.yml` and `xinas_uninstall` is deferred to when xinas-api becomes the primary control surface. |
@@ -47,7 +46,7 @@ remains below is deferred-by-design or backlog.
 
 - **WS12 — convergence:** wire the 8 on-demand RPC reads to collector snapshots; migrate `src/tools/` MCP calls onto the api/agent split; make xinas-api the primary control surface (lift into `site.yml` + uninstall).
 - **S2 / WS4 — task envelope + plan/apply:** `task.begin` / `task.stage_report` / `task.cancel` / `task.list_inflight`; the mutating plan/apply path the stub methods reserve. Unblocks the `tasks` metadata fold-in.
-- **dbus collector:** wire the systemd dbus subscription so the node leaves the permanent `degraded` state.
+- ~~**dbus collector:** wire the systemd dbus subscription so the node leaves the permanent `degraded` state.~~ **Resolved + dropped:** S7 T1b promoted the systemd collector to a `systemctl show` poll (node reads healthy), and the prototype dbus probe + `dbus-native` dependency were removed in the 2026-06 cleanup — sub-30 s unit-state latency is the only thing dbus would have added, not worth the dependency (ADR-0009 §Systemd).
 - **Hardening / cleanup pass:** the warn-only CI backlog + P2 triage + the collector↔probe shape-map doc.
 
 Pick by priority; each is spec-first (brainstorm → spec under the owning `docs/` area → TDD).

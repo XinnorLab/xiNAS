@@ -31,8 +31,10 @@ interface SystemdUnitCollectorOptions {
  * nfs-mountd.service, plus any *.mount units discovered by D4).
  * Units outside the allow-list are silently ignored even if dbus fires for them.
  *
- * Event source: dbus PropertiesChanged (no poll alternative from dbus).
- * Poll fallback: 30 s (catches stuck-state units that didn't fire PropertiesChanged).
+ * Refresh model: the 30 s poll backstop (`systemctl show` per unit). The
+ * collector keeps the generic event-source shape (`subscribeAllowListed`),
+ * but the live probe supplies a no-op handle — the dbus subscription was
+ * removed (ADR-0009 §Systemd), so poll is the only refresh path.
  */
 export class SystemdUnitCollector implements Collector<'SystemdUnit'> {
   readonly kind = 'SystemdUnit' as const;

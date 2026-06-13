@@ -109,6 +109,15 @@ xiRAID's unit names are confirmed on hardware (runbook item) before
 being added. The dbus event subscription remains future work — the poll
 backstop is the only refresh path for now, documented.
 
+> **Superseded (cleanup, 2026-06):** the prototype dbus-shaped probe and
+> its `dbus-native` dependency were **removed**. The 30 s `systemctl show`
+> poll already keeps the node healthy, so the dbus path was only a latency
+> optimization carrying an unmaintained native-ish dependency into the
+> root agent — not worth the attack surface. `subscribeAllowListed` is a
+> permanent no-op; poll is the model. If sub-30 s unit-state latency is
+> ever needed, prefer an `sd_notify`/journal reader or a
+> `systemctl --wait`-style subprocess over re-adding a dbus client.
+
 ## Decision — drift (review P1 locks)
 
 Three desired-vs-observed comparisons, each `degraded` + category

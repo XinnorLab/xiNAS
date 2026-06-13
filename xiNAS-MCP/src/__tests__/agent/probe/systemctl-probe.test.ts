@@ -56,4 +56,10 @@ describe('createSystemctlProbe (S7 T1b promotion)', () => {
     const handle = probe.subscribeAllowListed([], () => {});
     expect(() => handle.stop()).not.toThrow();
   });
+
+  it('DEFAULT_ALLOWLIST contains the required NFS service units', () => {
+    expect(DEFAULT_ALLOWLIST).toContain('nfs-server.service');
+    expect(DEFAULT_ALLOWLIST).toContain('nfs-mountd.service');
+    expect(DEFAULT_ALLOWLIST).toContain('nfs-idmapd.service');
+  });
 });

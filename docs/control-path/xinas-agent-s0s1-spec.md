@@ -53,7 +53,7 @@ Twelve observation kinds. Ten are real implementations; two are stubs with expli
 | 5 | NFS exports — internal observed kind `ExportRule` (no public REST endpoint); joined into `Share.status.exports[]` at read time | `/xinas/v1/observed/ExportRule/<export_path>` | Real | xinas-nfs-helper `list_exports` op |
 | 6 | `NfsSession` | `/xinas/v1/observed/NfsSession/<id>` | Real | xinas-nfs-helper `list_sessions` op |
 | 7 | `NfsIdmap` | `/xinas/v1/observed/nfs_idmap/snapshot` (singleton) | Real | `/etc/idmapd.conf` + `systemctl is-active nfs-idmapd.service` |
-| 8 | `SystemdUnit` | `/xinas/v1/observed/SystemdUnit/<unit-name>` | Real | dbus subscription + `systemctl show` for an allow-listed set of units. Public schema added to api-v1.yaml. |
+| 8 | `SystemdUnit` | `/xinas/v1/observed/SystemdUnit/<unit-name>` | Real | `systemctl show` poll (30 s backstop) for an allow-listed set of units (S7 T1b; the dbus subscription was removed — ADR-0009 §Systemd). Public schema added to api-v1.yaml. |
 | 9 | `managed_files` | `/xinas/v1/observed/managed_files/<path>` | **Stub** (`DRIFT_FRAMEWORK_DEFERRED`) | Drift framework lands in WS9. Path conforms to ADR-0003 line 101's locked layout (snake_case singular noun, used by `xinas_history.drift`). |
 | 10 | Inventory (lowercase singleton, preserves PR #201 shape) | `/xinas/v1/observed/inventory/snapshot` | Real | uname, hostname, `/proc/cpuinfo`, `/proc/meminfo` |
 | 11 | `User` | `/xinas/v1/observed/User/<uid>` | Real | `getent passwd` (local + NSS-resolved) |
@@ -198,7 +198,7 @@ xiNAS-MCP/src/
 │   │   ├── network.ts             ← child_process.spawn('ip', '-j', 'monitor', ...) + ibstat
 │   │   ├── filesystem.ts          ← readdir /etc/systemd/system + spawn systemctl is-enabled
 │   │   ├── nfs.ts                 ← unix socket client to /run/xinas-nfs-helper.sock
-│   │   ├── systemd.ts             ← dbus client for unit state
+│   │   ├── systemd.ts             ← `systemctl show` probe for unit state
 │   │   ├── users.ts               ← spawn getent passwd / getent group
 │   │   ├── idmap.ts               ← readFile /etc/idmapd.conf + spawn systemctl is-active
 │   │   └── inventory.ts           ← readFile /proc/cpuinfo, /proc/meminfo
@@ -392,7 +392,7 @@ interface Collector<K extends Kind> {
 
 **Pending-reconcile set** (per F1): if a publisher batch drops after 5 retries, the publisher records the kinds it contained in `pendingReconcile: Set<Kind>`. On the next collector tick of any kind in that set, the collector runs `initialSweep()` again (full-snapshot reconcile) instead of an incremental delta. On successful POST, the affected kinds are removed from the set.
 
-**No native compiled bindings.** udev events come from a `udevadm monitor` subprocess (the kernel-level event source itself; the subprocess is just our reader). rtnetlink-equivalent events come from an `ip monitor` subprocess. dbus uses `dbus-native` (pure JS). inotify uses Node's built-in `fs.watch` (uses inotify on Linux). The agent supervises these subprocess monitors: SIGCHLD handler restarts them on death, with a 1s/2s/5s backoff and a structured-log entry per restart. Keeps the CI build simple and avoids node-gyp.
+**No native compiled bindings.** udev events come from a `udevadm monitor` subprocess (the kernel-level event source itself; the subprocess is just our reader). rtnetlink-equivalent events come from an `ip monitor` subprocess. systemd unit state comes from a `systemctl show` poll (the dbus prototype + its `dbus-native` dependency were removed — ADR-0009 §Systemd). inotify uses Node's built-in `fs.watch` (uses inotify on Linux). The agent supervises these subprocess monitors: SIGCHLD handler restarts them on death, with a 1s/2s/5s backoff and a structured-log entry per restart. Keeps the CI build simple and avoids node-gyp.
 
 ## API contract additions (api-v1.yaml)
 
