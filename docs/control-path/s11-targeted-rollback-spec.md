@@ -2,7 +2,8 @@
 
 **Status:** design (2026-06-13). Implements ADR-0013. Closes the
 `targeted_rollback_not_implemented` blocker S9 (ADR-0011) left in
-`config.rollback`. Companion plan: `docs/plans/2026-06-13-s11-targeted-rollback-plan.md`.
+`config.rollback`. Companion plan (written next, after spec approval):
+`docs/plans/2026-06-13-s11-targeted-rollback-plan.md`.
 
 **Goal.** Let `config.rollback` restore an *arbitrary* restorable snapshot,
 not just `baseline` — by capturing the live NFS/network config-file bytes
@@ -30,8 +31,13 @@ writers are desired-anchored.
 
 ### Out of scope (deferred / excluded)
 - **Storage topology** (RAID/FS/pools) — not captured, owned by
-  TUI/MCP/installer. A storage-only snapshot restore is blocked
-  (`storage_only_no_effect`).
+  TUI/MCP/installer. A restore whose target captured no managed NFS/network
+  files, or whose restore set is already current, is a runner-reported no-op
+  (not a plan-time block).
+- **Absent-file restore** — `collect_system_files` omits absent files, so this
+  slice restores captured *existing* files only; it does not remove a file
+  that was absent at capture but exists now (tombstone-based absence restore is
+  a deferred follow-on — ADR-0013 §Consequences).
 - **Durable desired-KV adoption** — restore is observed recovery; making the
   restored state the new desired intent (reverse-parsing exports/netplan into
   desired rows) is a named follow-on.
@@ -68,9 +74,12 @@ Reads the **live bytes** of the existing `CHECKSUM_TARGETS` paths
 `/etc/netplan/99-xinas.yaml`, `/etc/nfs/nfsd.conf`,
 `/etc/default/nfs-kernel-server`, `/etc/modprobe.d/lockd.conf`,
 `/etc/default/nfs-common`). Absent files are **omitted** (not stored as
-empty). Keyed by the same logical names as `Checksums` so restore can map a
-stored blob back to its live path via a single `SYSTEM_FILE_PATHS` table
-(the inverse of `CHECKSUM_TARGETS`).
+empty) — so this slice restores *captured existing files only*; it does NOT
+remove a file that was absent at capture but exists at restore time (absence
+restore via tombstones is a deferred follow-on; ADR-0013 §Consequences).
+Keyed by the same logical names as `Checksums` so restore can map a stored
+blob back to its live path via a single `SYSTEM_FILE_PATHS` table (the
+inverse of `CHECKSUM_TARGETS`).
 
 ### 3.2 Store: `system/` payload
 `store.write_snapshot(..., system_files: dict[str, bytes])` writes them under
@@ -81,14 +90,13 @@ and `runtime_files` (`runtime/`).
 
 ### 3.3 `engine.create_snapshot` + manifest metadata
 `create_snapshot` (and `create_baseline`) call `collect_system_files()` and
-pass it to `write_snapshot`. The manifest gains:
-- `files_changed: list[str]` — managed-file names whose checksum differs from
-  the **parent** snapshot (empty for the first/baseline). Populates the
-  public `ConfigSnapshot.files_changed`.
-- the domain set is **derived** (not stored separately): `nfs` if any changed
-  file is an NFS file, `network` if `netplan` changed. Encoded by the
-  `files_changed` names themselves (the provider maps names→domains via the
-  same table), so no new manifest field beyond `files_changed`.
+pass it to `write_snapshot`. The manifest gains `files_changed: list[str]` —
+managed-file names whose checksum differs from the **parent** snapshot (empty
+for the first/baseline). This populates the public
+`ConfigSnapshot.files_changed` and is **history/display + blast-radius hint
+only** — it is NOT the restore set. The authoritative restore set is computed
+at execute time as current-vs-target (§4.1). The captured `Checksums`
+(already per snapshot) are what the runner compares against.
 
 ### 3.4 Projection (TS bridge)
 `ProjectedSnapshot` + `projectSnapshot()` gain `files_changed: string[]` (from
@@ -116,24 +124,29 @@ a file-level apply + rollback:
 2. Classify via `classify_rollback(current, target)` where `current` = the
    latest applied snapshot.
 3. Acquire the global config lock.
-4. Preflight (target readable; changed files resolvable to live paths).
+4. Preflight (target readable; live paths resolvable).
 5. **Pre-change ephemeral snapshot** — already captures `system/` (Part 1),
    so it is itself restorable.
-6. **Apply (file-level):** `changed = target.files_changed` (∩ the captured
-   `system/` set). For each, write `read_system_file(target, name)` to its
-   live path. Then reconverge **only changed domains**:
+6. **Compute the restore set (current-vs-target):** re-checksum the **current
+   live** managed files and compare to the target's captured `Checksums`; the
+   restore set = the captured files whose live checksum differs. NOT
+   `files_changed` (target-vs-parent), which would miss files changed *after*
+   the target. An empty restore set → successful no-op (already at target).
+7. **Apply (file-level):** for each file in the restore set, write
+   `read_system_file(target, name)` to its live path. Then reconverge **only
+   the affected domains** (derived from the restore set):
    - nfs files changed → `exportfs -ra`; restart `nfs-server` if a server
      file changed, `nfs-idmapd` if idmapd changed.
    - `netplan` changed → flush PBR tables 100–199 + flush IPs from mlx
      interfaces, strip IB stanzas from non-xinas netplan files, `netplan
      apply` (the `net_controllers` apply sequence).
-7. **Validate:** services active; `netplan get` parses; (deep) link present.
-8. Validation fail → **file-level auto-rollback**: write the pre-change
-   ephemeral's `system/` bytes back for the same `changed` set + reconverge
-   the same domains; mark the restore `failed`/`partial`. This is a
+8. **Validate:** services active; `netplan get` parses; (deep) link present.
+9. Validation fail → **file-level auto-rollback**: write the pre-change
+   ephemeral's `system/` bytes back for the same restore set + reconverge the
+   same domains; mark the restore `failed`/`partial`. This is a
    restore-specific function — NOT `_auto_rollback` (which re-runs Ansible).
-9. Mark applied; release the lock. Return `RunResult` (success +
-   `snapshot_id` of the applied marker, or failure + message).
+10. Mark applied; release the lock. Return `RunResult` (success +
+    `snapshot_id` of the applied marker, or failure + message).
 
 **Reconverge selection** lives in one helper keyed by domain so apply and
 rollback share it. **Connectivity:** the runner is local; netplan apply uses
@@ -152,12 +165,16 @@ Drop `targeted_rollback_not_implemented`. Branch on `spec.to`:
 - `<snapshot-id>` → resolve the observed `ConfigSnapshot` row. Blockers:
   - `snapshot_not_found` — no observed row for the id.
   - `no_restorable_payload` — `restorable === false`.
-  - `storage_only_no_effect` — `files_changed` maps to no nfs/network domain.
   - `dangerous_flag_required` — always (S4 advisory pattern).
+  - **No** `storage_only`/`no_effect` plan blocker: the provider is KV-only
+    and can't re-checksum live files, so an empty restore set is the runner's
+    call at execute (a successful no-op), not a plan-time block.
   - `risk_level: 'destructive'`, `rollback_model: 'changing_access'`.
-  - **affected**: `{kind:'ConfigSnapshot', id: target}` + per domain set
-    `{kind:'Share'}` / `{kind:'NfsProfile'}` (nfs) and/or
-    `{kind:'NetworkInterface'}` (network) — display-only, no revision.
+  - **affected** (must carry `{kind, id}` — schema + TS type require `id`):
+    exactly `[{kind:'ConfigSnapshot', id: target}]`. The domain blast radius
+    (which NFS/network services the restore may touch, from the target's
+    `files_changed` hint) goes in the plan `diff` + `warnings` — there is no
+    aggregate id for `Share`/`NetworkInterface`, so no bare-kind refs.
   - `observed_freshness_ref {ConfigSnapshot, id, revision}`; lease
     `[{kind:'ConfigHistory', id:'default'}]`; `enriched_spec {to, reason,
     target_id}`.
@@ -180,8 +197,9 @@ task output ("recovery applied; re-apply or adopt to make durable").
 
 - **Catalog** (`mcp/catalog.ts`): `config_history.rollback` description →
   "reset to baseline OR restore any restorable snapshot (observed recovery —
-  re-apply to make durable)". Gate flags unchanged (`requires_mcp_apply`
-  false stays — emergency recovery; `min_role` unchanged).
+  re-apply to make durable)". It is a `planApply` entry, so
+  `requires_mcp_apply` stays **true** (unchanged) — a destructive restore via
+  MCP needs `allow_apply`; `min_role` unchanged.
 - **TUI** (`screens/config_history.py` / `snapshot_detail.py`): a **Restore**
   action on a restorable snapshot → confirm dialog (risk class, diff summary,
   the drift caveat) → `plan_apply_wait('POST', '/api/v1/config-history/
@@ -202,12 +220,12 @@ task output ("recovery applied; re-apply or adopt to make durable").
   restore` JSON shape.
 - **TS (vitest):** bridge `restoreSnapshot` argv/JSON/error; projection
   carries `files_changed`/`restorable`; provider blocker matrix (found /
-  no-payload / storage-only / dangerous), affected-kind selection by domain,
+  no-payload / dangerous), single ConfigSnapshot affected ref + diff/warnings blast radius,
   risk; executor dispatch baseline-vs-targeted plus drift-warning output.
 - **e2e:** capture a snapshot → mutate `/etc/exports` (and, in a second
   scenario, the netplan fixture) → targeted restore → the file reverts, the
-  reconverge ran, the task warns about drift; non-restorable + storage-only
-  blocked at plan.
+  reconverge ran, the task warns about drift; non-restorable blocked at plan;
+  an already-current restore is a successful no-op.
 - **TUI (pytest):** Restore action posts the targeted rollback; non-restorable
   disabled.
 - **Full gate** at the final task (all suites + build + e2e + contracts +
@@ -229,7 +247,7 @@ task output ("recovery applied; re-apply or adopt to make durable").
 | **T6** | Executor dispatch + drift-warning output; executor tests. |
 | **T7** | Catalog description flip + pins. |
 | **T8** | TUI Restore action + confirm + TaskWaitDialog wiring; pytest. |
-| **T9** | e2e (exports + netplan scenarios; non-restorable/storage-only blocked) + runbook §5e + FULL gate. |
+| **T9** | e2e (exports + netplan scenarios; non-restorable blocked; already-current no-op) + runbook §5e + FULL gate. |
 
 ---
 

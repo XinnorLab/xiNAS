@@ -61,14 +61,12 @@ them as a NEW payload (`store.write_snapshot(..., system_files=…)` →
 `system/` subdir; `store.read_system_file(id, name)`), **distinct** from the
 repo-defaults `config_files` and the `runtime_files`.
 
-The manifest also gains, computed at snapshot time by diffing the target's
-checksums against its parent's:
-
-- `files_changed: list[str]` — which managed files changed (populates the
-  public `ConfigSnapshot.files_changed`, currently always empty).
-- a derived **domain set** (`nfs` / `network`) — projected into the observed
-  `ConfigSnapshot` row so the api provider can scope affected resources and
-  block storage-only snapshots **without** an RPC (`PlanContext` is KV-only).
+The manifest also gains `files_changed: list[str]` — computed at snapshot
+time by diffing the target's checksums against its **parent's** — which
+populates the public `ConfigSnapshot.files_changed` (currently always empty).
+This is **history/display metadata only**; it is NOT the restore set (see the
+restore-set rule in §3). The captured `Checksums` (already stored per
+snapshot) are what restore compares against.
 
 Pre-S11 snapshots have no `system/` payload → **not restorable**; the
 provider blocks them honestly (`no_restorable_payload`).
@@ -79,13 +77,23 @@ A new runner verb, transactional like reset-to-baseline (lock → preflight →
 **pre-change ephemeral snapshot** → apply → validate → mark → auto-rollback
 → release), but the apply + rollback are **file-level**:
 
-- **Apply:** for each file in `files_changed` (target-vs-current), write the
-  target's captured `system/` bytes to the live path, then reconverge **only
-  the changed domains**: NFS → `exportfs -ra` and/or restart
-  `nfs-server`/`nfs-idmapd` per which files changed; network → the documented
-  apply sequence (flush PBR tables 100–199 + flush IPs from mlx interfaces,
-  clean IB stanzas from non-xinas files, `netplan apply`). Restore never
-  *blanks* a file the target didn't capture.
+- **Restore set = current-vs-target (NOT `files_changed`).** At execute time
+  the runner re-checksums the **current live** managed files and compares them
+  to the **target's captured `Checksums`**; the restore set is the files that
+  differ. This is the only correct basis — `files_changed` (target-vs-parent)
+  would miss files that changed *after* the target was created, so restoring
+  an older snapshot would skip real current drift.
+- **Apply:** for each file in the restore set, write the target's captured
+  `system/` bytes to the live path, then reconverge **only the affected
+  domains**: NFS → `exportfs -ra` and/or restart `nfs-server`/`nfs-idmapd` per
+  which files changed; network → the documented apply sequence (flush PBR
+  tables 100–199 + flush IPs from mlx interfaces, clean IB stanzas from
+  non-xinas files, `netplan apply`). **Captured-existing-files only:** restore
+  writes the content of files the target *captured*; it does NOT delete a file
+  that exists now but was absent in the target (the absent case — restoring a
+  file's *absence* via tombstones — is a deferred follow-on; see Consequences).
+  A restore set that comes out empty (already at target) is a successful
+  no-op.
 - **File-level auto-rollback (NEW):** the existing `_auto_rollback` re-runs
   Ansible from the pre-change manifest (fact 1's dead end). A restore failure
   instead restores the **pre-change ephemeral's `system/` bytes** and
@@ -120,14 +128,20 @@ Restore is an **emergency recovery**: it changes observed system files but
 - **Provider** (`config-rollback.ts`): drop `targeted_rollback_not_implemented`.
   For a targeted `to`: resolve the target from observed `ConfigSnapshot`
   rows; blockers = `snapshot_not_found`, `no_restorable_payload` (pre-S11 or
-  ephemeral), `storage_only_no_effect` (domain set ∩ {nfs,network} = ∅), plus
-  the always-on `dangerous_flag_required`. `risk_level: 'destructive'`;
-  `rollback_model: 'changing_access'` (within the allowed enum). **Affected
-  resources** use real `ResourceRef` kinds: `ConfigSnapshot` (the target) +,
-  per the observed domain set, `Share`/`NfsProfile` (nfs) and/or
-  `NetworkInterface` (network) — display-only, no revision (observed-only, per
-  the ADR-0011 freshness model). `observed_freshness_ref` on the target;
-  lease `ConfigHistory/default`. `enriched_spec: {to, reason, target_id}`.
+  ephemeral), plus the always-on `dangerous_flag_required`. There is **no**
+  `storage_only`/`no_effect` plan blocker — the provider is KV-only and cannot
+  re-checksum live files, so whether the restore set is empty is the runner's
+  call at execute (an empty set is a successful no-op, §3). `risk_level:
+  'destructive'`; `rollback_model: 'changing_access'` (within the allowed
+  enum). **Affected resources** must each carry a valid `{kind, id}` (the
+  schema + TS type require `id`), so they are exactly
+  `[{kind:'ConfigSnapshot', id: target}]`; the lease is
+  `[{kind:'ConfigHistory', id:'default'}]`. The **domain blast radius** (which
+  NFS/network services the restore may touch, derived from the target's
+  captured `files_changed`) is expressed in the plan's `diff` + `warnings`,
+  NOT as bare-kind `affected_resources` (there is no aggregate id for
+  `Share`/`NetworkInterface`). `observed_freshness_ref` on the target;
+  `enriched_spec: {to, reason, target_id}`.
 - **Executor** (`config-rollback-executor.ts`): the single stage dispatches
   `to === 'baseline'` → `bridge.resetToBaseline` (unchanged) vs a snapshot id
   → `bridge.restoreSnapshot`. `success !== true` throws; `rollback()` stays a
@@ -138,7 +152,9 @@ Restore is an **emergency recovery**: it changes observed system files but
 - **CLI/bridge:** `xinas_history snapshot restore <id> --reason … --format
   json`; `XinasHistoryBridge.restoreSnapshot(id, reason)`.
 - **Catalog:** `config_history.rollback` description updated ("baseline OR any
-  restorable snapshot"); gate flags unchanged.
+  restorable snapshot"). It is a `planApply` entry, so `requires_mcp_apply`
+  stays **true** (unchanged) — a destructive restore via MCP needs
+  `allow_apply`; it is NOT an emergency-stop exception like `tasks.cancel`.
 - **TUI:** the snapshot-detail screen gains a **Restore** action → a confirm
   dialog naming the risk class + diff summary + the drift warning, then
   `plan_apply_wait` with `to: <id>` + `dangerous`, using the S10
@@ -163,8 +179,15 @@ Restore is an **emergency recovery**: it changes observed system files but
   text files); pre-S11 snapshots are read-only history (not restorable).
 - A targeted restore that diverges from desired leaves visible drift until an
   operator re-applies or the deferred adopt path lands — by design, surfaced.
-- Storage topology remains out of scope; a storage-only snapshot restore is
-  blocked with `storage_only_no_effect`, not silently no-op'd.
+- Storage topology remains out of scope; a restore whose target captured no
+  managed NFS/network files (or whose set is already current) is a no-op the
+  runner reports, not a plan-time block.
+- **Absent-file restore is not supported in this slice.** `collect_system_files`
+  omits files that are absent at capture, and restore writes only captured
+  bytes — so restoring a snapshot in which a managed file was *absent* will NOT
+  remove that file if it exists now. The checksum model already distinguishes
+  absence (`""`), so a tombstone-based absence restore is a clean follow-on;
+  for now "arbitrary snapshot restore" means "the captured existing files."
 - The `config.rollback` route, the `ConfigHistory/default` lease, the
   destructive dangerous-gate, and the local-runner connectivity argument all
   carry over from S9 unchanged.
