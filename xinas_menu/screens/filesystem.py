@@ -456,7 +456,9 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             "mount_options": list(_DEFAULT_MOUNT_OPTIONS),
             "quota_mode": "uquota",
         }
-        create_dialog = TaskWaitDialog(f"Creating filesystem on {data_device}…", "Create Filesystem")
+        create_dialog = TaskWaitDialog(
+            f"Creating filesystem on {data_device}…", "Create Filesystem"
+        )
         self.app.push_screen(create_dialog)
         try:
             await asyncio.to_thread(
