@@ -14,8 +14,11 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.api.control_client import ControlPathError, TaskCancelled
 from xinas_menu.apptype import XiNASAppMixin
+from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
+from xinas_menu.widgets.task_wait_dialog import TaskWaitDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
 _log = logging.getLogger(__name__)
@@ -43,8 +46,15 @@ _MENU = [
     MenuItem("2", "Full Diff"),
     MenuItem("3", "Config Files"),
     MenuItem("4", "Runtime State"),
+    MenuItem("5", "Restore"),
     MenuItem("0", "Back"),
 ]
+
+
+def _snapshot_restorable(engine: SnapshotEngine, snapshot_id: str) -> bool:
+    """S11 (ADR-0013): a snapshot is restorable iff it carries a non-empty
+    system_files payload (the live NFS/network config bytes)."""
+    return bool(engine._store.list_system_files(snapshot_id))
 
 
 class SnapshotDetailScreen(XiNASAppMixin, Screen):
@@ -92,6 +102,8 @@ class SnapshotDetailScreen(XiNASAppMixin, Screen):
             self._show_config_files()
         elif key == "4":
             self._show_runtime_state()
+        elif key == "5":
+            self._restore()
 
     # -- Load manifest detail -----------------------------------------------
 
@@ -276,6 +288,91 @@ class SnapshotDetailScreen(XiNASAppMixin, Screen):
             manifest,
         )
         view.set_content(text)
+
+    # -- Restore (S11, ADR-0013) --------------------------------------------
+
+    @work(exclusive=True)
+    async def _restore(self) -> None:
+        """Targeted file-level restore of this snapshot (observed recovery)."""
+        view = self.query_one("#detail-content", ScrollableTextView)
+        if not HAS_HISTORY:
+            view.set_content(f"{_RED}xinas_history package not installed.{_NC}")
+            return
+
+        loop = asyncio.get_running_loop()
+        try:
+            engine = await loop.run_in_executor(None, _create_engine)
+            manifest = await loop.run_in_executor(None, engine.get_snapshot, self._snapshot_id)
+            restorable = await loop.run_in_executor(
+                None, _snapshot_restorable, engine, self._snapshot_id
+            )
+        except Exception as exc:
+            view.set_content(f"{_RED}Failed to read snapshot: {exc}{_NC}")
+            return
+
+        if manifest is None:
+            view.set_content(f"{_RED}Snapshot not found: {self._snapshot_id}{_NC}")
+            return
+        if not restorable:
+            await self.app.push_screen_wait(
+                ConfirmDialog(
+                    "This snapshot has no restorable system-files payload "
+                    "(it predates S11, or is an ephemeral pre-change snapshot).",
+                    "Not Restorable",
+                    ok_only=True,
+                )
+            )
+            return
+
+        risk = manifest.rollback_class or "unknown"
+        summary = manifest.diff_summary or "(no summary)"
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(
+                f"Restore snapshot {self._snapshot_id}?\n\n"
+                f"Risk class: {risk}\n"
+                f"Change:     {summary}\n\n"
+                "This is an OBSERVED RECOVERY — it restores the captured NFS/network\n"
+                "config files but does NOT change desired state. Re-apply (or adopt)\n"
+                "afterward, or the next apply will overwrite it.",
+                "Confirm Restore",
+            )
+        )
+        if not confirmed:
+            return
+
+        dialog = TaskWaitDialog(f"Restoring snapshot {self._snapshot_id}…", "Restore")
+        self.app.push_screen(dialog)
+        cancelled = False
+        error: ControlPathError | None = None
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "POST",
+                "/api/v1/config-history/rollback",
+                {"to": self._snapshot_id, "reason": "TUI restore"},
+                dangerous=True,
+                on_progress=dialog.progress_from_thread(self.app),
+                cancel_check=dialog.cancel_requested,
+            )
+        except TaskCancelled:
+            cancelled = True
+        except ControlPathError as exc:
+            error = exc
+        finally:
+            dialog.dismiss(None)
+
+        if cancelled:
+            self.app.notify("Restore cancelled.", severity="warning")
+            return
+        if error is not None:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Restore failed.\n{error}", "Error", ok_only=True)
+            )
+            return
+        self.app.notify(
+            "Restore applied (observed recovery — re-apply to make durable).",
+            severity="information",
+        )
 
 
 # ---------------------------------------------------------------------------
