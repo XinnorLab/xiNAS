@@ -148,6 +148,39 @@ describe('config.rollback executor', () => {
       /reset-to-baseline failed/,
     );
   });
+
+  it('S11: targeted to → restoreSnapshot + drift-warning output; failure throws', async () => {
+    const calls: string[][] = [];
+    const outputs: string[] = [];
+    const bridge = new XinasHistoryBridge({
+      runSubprocess: async (argv) => {
+        calls.push(argv);
+        return { stdout: JSON.stringify({ success: true, snapshot_id: 'snap-9' }), code: 0 };
+      },
+    });
+    const exec = makeConfigRollbackExecutor({ bridge });
+    await exec.stages[0]?.run({
+      spec: { reason: 'undo', to: 'snap-9', target_id: 'snap-9' },
+      emitOutput: (l: string) => outputs.push(l),
+      isCancelRequested: () => false,
+      stash: {},
+    });
+    expect(calls[0]).toContain('restore');
+    expect(calls[0]).toContain('snap-9');
+    expect(outputs.join('\n')).toContain('re-apply or adopt');
+
+    const failing = makeConfigRollbackExecutor({
+      bridge: new XinasHistoryBridge({
+        runSubprocess: async () => ({
+          stdout: JSON.stringify({ success: false, error: 'no_restorable_payload' }),
+          code: 0,
+        }),
+      }),
+    });
+    await expect(
+      failing.stages[0]?.run(ctxFor({ reason: 'r', to: 'snap-9', target_id: 'snap-9' })),
+    ).rejects.toThrow(/restore-snapshot failed/);
+  });
 });
 
 describe('POST /config-history/rollback route', () => {
