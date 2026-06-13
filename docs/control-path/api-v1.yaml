@@ -2350,7 +2350,7 @@ paths:
     get:
       tags: [system]
       operationId: listMailRecipients
-      summary: xiRAID mail recipients (deprecated read-only gRPC path).
+      summary: xiRAID mail recipients (live xiRAID gRPC read-through; ADR-0014).
       responses:
         '200':
           description: OK
@@ -2363,7 +2363,7 @@ paths:
     get:
       tags: [system]
       operationId: getMailSettings
-      summary: xiRAID mail settings (deprecated read-only gRPC path).
+      summary: xiRAID mail settings (live xiRAID gRPC read-through; ADR-0014).
       responses:
         '200':
           description: OK
@@ -2376,7 +2376,7 @@ paths:
     get:
       tags: [system]
       operationId: getAuthModes
-      summary: Supported NFS auth modes (deprecated read-only gRPC path).
+      summary: Supported NFS auth modes (live xiRAID gRPC read-through; ADR-0014).
       responses:
         '200':
           description: OK

@@ -418,19 +418,19 @@ export const CATALOG: CatalogEntry[] = [
     'mail.recipients',
     'GET',
     '/mail/recipients',
-    'xiRAID mail recipients (deprecated read-only gRPC path).',
+    'xiRAID mail recipients (live xiRAID gRPC read-through; ADR-0014).',
   ),
   read(
     'mail.settings',
     'GET',
     '/mail/settings',
-    'xiRAID mail settings (deprecated read-only gRPC path).',
+    'xiRAID mail settings (live xiRAID gRPC read-through; ADR-0014).',
   ),
   read(
     'auth.modes',
     'GET',
     '/auth/modes',
-    'Supported NFS auth modes (deprecated read-only gRPC path).',
+    'Supported NFS auth modes (live xiRAID gRPC read-through; ADR-0014).',
   ),
 
   // ── users / groups ──

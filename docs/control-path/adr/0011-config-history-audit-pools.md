@@ -147,7 +147,8 @@ Pools stop being a deprecated read and become a first-class resource:
 - **Observation:** `lib/parse/pool.ts` normalizes `poolShow`; a
   `PoolCollector` rides the shared xiRAID client. `GET /pools` serves
   from KV — the in-api gRPC pool read RETIRES (mail/auth-modes remain
-  the only deprecated reads).
+  the only deprecated reads — later blessed as permanent live
+  read-throughs, ADR-0014).
 - **Reference tracking (review P1):** observed `XiraidArray.status`
   gains the raw `spare_pool` NAME (additive — `spare_disk_ids` keeps
   its S4 semantics), and the pool rows' `referenced_by` derives from
@@ -186,6 +187,13 @@ until their own slices).
 Targeted snapshot rollback (python runner work), the dbus systemd
 subscription, the netplan-based `ip_pool.py` screen, mail/auth-modes
 read promotion to agent-observed data.
+
+> **Update — all four resolved.** Targeted rollback shipped (ADR-0013);
+> the dbus subscription was dropped as obsolete (S7 observes `degraded`
+> via a `systemctl show` poll); `ip_pool.py` was retargeted to
+> `net.pool.apply`; and mail/auth-modes promotion was **declined** —
+> they are blessed as permanent live read-throughs (ADR-0014), not
+> observed.
 
 ## Testing
 

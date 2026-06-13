@@ -167,8 +167,8 @@ is an ordinary catalog entry traversing the full spine:
 | `GET /system/performance` | Prometheus HTTP read | unprivileged |
 | `GET /quotas` | `repquota -a` subprocess | best-effort: degrades with a clear error when unprivileged |
 | `GET /pools` | read-only localhost xiRAID gRPC | **deprecated-until-agent-coverage** — the one explicitly-marked exception to the adapter extraction; read-only, removed when pools observe via the agent |
-| `GET /mail/settings`, `GET /mail/recipients` | read-only xiRAID gRPC | same deprecation marker |
-| `GET /auth/modes` | static + gRPC read | same |
+| `GET /mail/settings`, `GET /mail/recipients` | read-only xiRAID gRPC | ~~same deprecation marker~~ → **blessed as a permanent live read-through (ADR-0014)** — not promoted to observed |
+| `GET /auth/modes` | static + gRPC read | ~~same~~ → **blessed as a permanent live read-through (ADR-0014)** |
 
 `auth.list_users` maps to the EXISTING `/users`; `disks.get_smart`
 maps to the existing `GET /disks/{id}` (`status.health` — the S7

@@ -147,7 +147,13 @@ Deferred at S9, with current status:
   `POST /api/v1/network/ip-pool` (`net.pool.apply`, ADR-0008), removing its
   direct interface detection / allocation / netplan / PBR / `netplan apply`.
   See the S8 spec §T12 follow-up.
-- mail / auth-modes read promotion — **still deferred**.
+- mail / auth-modes read promotion — **resolved** (ADR-0014): **declined** —
+  blessed as permanent live xiRAID gRPC read-throughs (viewer reads,
+  degrade-not-5xx on backend-unavailable), not promoted to observed; the
+  "deprecated" framing is dropped. `auth.modes` is a static capability that
+  cannot drift; nothing consumes observed mail state today.
+
+All four S9 deferrals are now closed.
 
 ---
 
