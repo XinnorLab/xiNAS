@@ -1375,6 +1375,16 @@ components:
         files_changed:
           type: array
           items: { type: string }
+          description: >-
+            S11 (ADR-0013): managed-file names whose checksum changed vs the
+            parent snapshot — history/display + restore blast-radius hint, NOT
+            the restore set (the runner computes that as current-vs-target).
+        restorable:
+          type: boolean
+          description: >-
+            S11 (ADR-0013): true iff the snapshot carries a system_files
+            payload (live NFS/network config bytes) that targeted rollback can
+            restore. Pre-S11 snapshots are false.
         # S9 (ADR-0011): typed projections of the xinas_history manifest.
         history_type:
           type: string

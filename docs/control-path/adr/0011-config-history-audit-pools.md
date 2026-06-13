@@ -85,6 +85,11 @@ timeout and degrades with `EXECUTOR_UNAVAILABLE`.
 
 ## Decision — rollback (baseline-only, destructive)
 
+> **Extended in S11 (ADR-0013):** targeted rollback (`to: <snapshot-id>`)
+> is now implemented — file-level restore of the snapshot's captured
+> NFS/network config bytes as an observed recovery. The
+> `targeted_rollback_not_implemented` blocker below is removed.
+
 `POST /config-history/rollback` becomes the real `config.rollback`
 plan/apply operation with spec `{to: 'baseline', reason}`. Any other
 target → a blocker naming the deferral (targeted rollback needs new
