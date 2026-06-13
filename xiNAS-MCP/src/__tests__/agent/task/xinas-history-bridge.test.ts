@@ -176,3 +176,54 @@ describe('projectSnapshot (the ADR-0011 projection table)', () => {
     expect(projectSnapshot({ id: 'x', timestamp: 't' }).kind).toBe('imported');
   });
 });
+
+// ── S11 (ADR-0013): restoreSnapshot verb + restorable/files_changed projection ──
+
+describe('S11 bridge restoreSnapshot + projection', () => {
+  it('restoreSnapshot: argv carries the id, --reason, --yes; success surfaces', async () => {
+    const calls: string[][] = [];
+    const bridge = new XinasHistoryBridge({
+      runSubprocess: async (argv) => {
+        calls.push(argv);
+        return { stdout: JSON.stringify({ success: true, snapshot_id: 'snap-1' }), code: 0 };
+      },
+    });
+    const result = await bridge.restoreSnapshot('snap-1', 'undo bad exports');
+    expect(result.success).toBe(true);
+    expect(calls[0]?.slice(3)).toEqual([
+      'snapshot',
+      'restore',
+      'snap-1',
+      '--reason',
+      'undo bad exports',
+      '--source',
+      'api',
+      '--yes',
+      '--format',
+      'json',
+    ]);
+  });
+
+  it('restoreSnapshot: non-zero exit throws', async () => {
+    const bridge = new XinasHistoryBridge({
+      runSubprocess: async () => ({ stdout: '', code: 1 }),
+    });
+    await expect(bridge.restoreSnapshot('x', 'r')).rejects.toThrow(/exited with code 1/);
+  });
+
+  it('projectSnapshot carries files_changed + restorable (defaults [] / false)', async () => {
+    const withFields = projectSnapshot({
+      id: 's1',
+      timestamp: 't',
+      type: 'rollback_eligible',
+      files_changed: ['etc_exports'],
+      restorable: true,
+    } as HistoryManifest);
+    expect(withFields.files_changed).toEqual(['etc_exports']);
+    expect(withFields.restorable).toBe(true);
+
+    const bare = projectSnapshot({ id: 's2', timestamp: 't', type: 'baseline' } as HistoryManifest);
+    expect(bare.files_changed).toEqual([]);
+    expect(bare.restorable).toBe(false);
+  });
+});

@@ -42,6 +42,9 @@ export interface HistoryManifest {
   rollback_class?: string;
   parent_id?: string;
   diff_summary?: string;
+  // S11 (ADR-0013): display blast-radius hint + restorability signal.
+  files_changed?: string[];
+  restorable?: boolean;
   [k: string]: unknown;
 }
 
@@ -59,6 +62,9 @@ export interface ProjectedSnapshot {
   operation: string | null;
   source: string | null;
   diff_summary: string | null;
+  // S11 (ADR-0013): display blast-radius hint + targeted-restore gate.
+  files_changed: string[];
+  restorable: boolean;
 }
 
 /** history SnapshotType → public ConfigSnapshot.kind (ADR-0011 §projection). */
@@ -81,6 +87,8 @@ export function projectSnapshot(manifest: HistoryManifest): ProjectedSnapshot {
     operation: manifest.operation ?? null,
     source: manifest.source ?? null,
     diff_summary: manifest.diff_summary ?? null,
+    files_changed: Array.isArray(manifest.files_changed) ? manifest.files_changed : [],
+    restorable: manifest.restorable === true,
   };
 }
 
@@ -212,5 +220,38 @@ export class XinasHistoryBridge {
       throw new Error('reset-to-baseline did not return an object');
     }
     return parsed as { success: boolean; [k: string]: unknown };
+  }
+
+  /**
+   * S11 (ADR-0013): targeted file-level restore of an arbitrary snapshot's
+   * captured NFS/network config bytes (observed recovery). The python runner
+   * owns the transactional safety + file-level auto-rollback.
+   */
+  async restoreSnapshot(
+    snapshotId: string,
+    reason: string,
+  ): Promise<{ success: boolean; snapshot_id?: string; error?: string; [k: string]: unknown }> {
+    const parsed = await this.#runJson(
+      [
+        this.#python,
+        '-m',
+        'xinas_history',
+        'snapshot',
+        'restore',
+        snapshotId,
+        '--reason',
+        reason,
+        '--source',
+        'api',
+        '--yes',
+        '--format',
+        'json',
+      ],
+      'xinas_history snapshot restore',
+    );
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error('snapshot restore did not return an object');
+    }
+    return parsed as { success: boolean; snapshot_id?: string; error?: string };
   }
 }

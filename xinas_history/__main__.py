@@ -218,7 +218,15 @@ def _cmd_snapshot_list(args: argparse.Namespace, engine: SnapshotEngine) -> int:
     manifests = engine.list_snapshots()
 
     if args.format == "json":
-        print(json.dumps([m.to_dict() for m in manifests], indent=2))
+        # S11 (ADR-0013): tag each entry with `restorable` (a non-empty
+        # system_files payload) so the bridge/projection can gate targeted
+        # rollback without a second call.
+        rows = []
+        for m in manifests:
+            entry = m.to_dict()
+            entry["restorable"] = bool(engine._store.list_system_files(m.id))
+            rows.append(entry)
+        print(json.dumps(rows, indent=2))
         return 0
 
     # Table format
