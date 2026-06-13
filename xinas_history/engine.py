@@ -128,6 +128,16 @@ class SnapshotEngine:
             if effective is not None:
                 parent_id = effective.id
 
+        # S11 (ADR-0013): capture the live restorable system-file bytes and
+        # compute files_changed vs the parent (display/blast-radius hint).
+        system_files = self._config_collector.collect_system_files()
+        parent_checksums: dict | None = None
+        if parent_id is not None:
+            parent_manifest = self._store.read_manifest(parent_id)
+            if parent_manifest is not None:
+                parent_checksums = parent_manifest.checksums
+        files_changed = compute_files_changed(checksums.to_dict(), parent_checksums)
+
         # 7. Build manifest
         manifest = Manifest(
             id=snapshot_id,
@@ -146,6 +156,7 @@ class SnapshotEngine:
             hardware_id=await self._get_hardware_id(),
             checksums=checksums.to_dict(),
             diff_summary=diff_summary,
+            files_changed=files_changed,
         )
 
         # 8. Write snapshot to store
@@ -155,6 +166,7 @@ class SnapshotEngine:
             config_files=config_files,
             runtime_files=runtime_files,
             is_baseline=is_baseline,
+            system_files=system_files,
         )
 
         # 9. Run garbage collection (non-baseline only)
@@ -540,6 +552,22 @@ class SnapshotEngine:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def compute_files_changed(new_checksums: dict, parent_checksums: dict | None) -> list[str]:
+    """S11 (ADR-0013): the managed-file names whose checksum differs from the
+    parent snapshot — display/blast-radius hint, NOT the restore set.
+
+    A name counts as changed when it is present on one side but not the other
+    (newly written / removed) or its checksum differs. No parent (``None`` —
+    baseline / first snapshot) → ``[]``; an empty-dict parent IS compared (a
+    parent that recorded no checksums, so any new file counts). Returned
+    sorted for determinism.
+    """
+    if parent_checksums is None:
+        return []
+    names = set(new_checksums) | set(parent_checksums)
+    return sorted(n for n in names if new_checksums.get(n) != parent_checksums.get(n))
 
 
 def _get_user() -> str:

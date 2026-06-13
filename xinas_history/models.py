@@ -181,6 +181,9 @@ class Manifest:
     checksums: dict = field(default_factory=dict)
     validation: dict = field(default_factory=dict)
     diff_summary: str | None = None
+    # S11 (ADR-0013): managed-file names changed vs the parent snapshot —
+    # history/display + restore blast-radius hint, NOT the restore set.
+    files_changed: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to a plain dict suitable for YAML serialization.
@@ -212,6 +215,8 @@ class Manifest:
             result["hardware_id"] = self.hardware_id
         if self.diff_summary is not None:
             result["diff_summary"] = self.diff_summary
+        if self.files_changed:
+            result["files_changed"] = list(self.files_changed)
 
         # Boolean fields — include only when non-default
         if self.auto_detected:
@@ -253,6 +258,7 @@ class Manifest:
             checksums=dict(data.get("checksums", {})),
             validation=dict(data.get("validation", {})),
             diff_summary=data.get("diff_summary"),
+            files_changed=list(data.get("files_changed", [])),
         )
 
 
