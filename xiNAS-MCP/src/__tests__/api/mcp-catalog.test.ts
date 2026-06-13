@@ -37,6 +37,10 @@ describe('client catalog (S8 T2)', () => {
     expect(byName.get('audit.query')?.status).toBe('live');
     expect(byName.get('config_history.snapshots')?.status).toBe('live');
     expect(byName.get('config_history.rollback')?.status).toBe('live');
+    // S11: rollback now also restores arbitrary snapshots; still a destructive
+    // planApply entry → requires_mcp_apply stays true (NOT an emergency stop).
+    expect(byName.get('config_history.rollback')?.description).toContain('restorable snapshot');
+    expect(byName.get('config_history.rollback')?.requires_mcp_apply).toBe(true);
     expect(byName.get('tasks.cancel')?.status).toBe('live');
     expect([...byName.values()].filter((e) => e.status === 'degraded')).toEqual([]);
     expect(byName.get('drift.report')?.status).toBe('live');

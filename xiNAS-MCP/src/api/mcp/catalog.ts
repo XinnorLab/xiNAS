@@ -293,7 +293,7 @@ export const CATALOG: CatalogEntry[] = [
     'config_history.rollback',
     'POST',
     '/config-history/rollback',
-    'Roll back to the BASELINE snapshot (plan/apply; destructive — dangerous:true at apply). Targeted rollback is a later slice; spec = {to: "baseline", reason}.',
+    'Roll back to the BASELINE snapshot OR restore any restorable snapshot (file-level NFS/network config — observed recovery, re-apply to make durable). Plan/apply, destructive — dangerous:true at apply. spec = {to: "baseline" | "<snapshot-id>", reason}.',
     'admin',
   ),
 
