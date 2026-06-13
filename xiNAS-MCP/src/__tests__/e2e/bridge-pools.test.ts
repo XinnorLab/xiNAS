@@ -341,13 +341,16 @@ describe.sequential('e2e: S9 config-history / audit / pools (fixture mode)', () 
 
   let rollbackTaskId = '';
 
-  it('2. rollback: targeted blocked; baseline needs dangerous; succeeds with it', async () => {
+  it('2. rollback: targeted non-restorable blocked; baseline needs dangerous; succeeds with it', async () => {
+    // snap-2 is a fixture snapshot with no system_files payload → S11 blocks
+    // it as non-restorable (the targeted_rollback_not_implemented blocker was
+    // removed when targeted restore landed).
     const targeted = await rest(apiSockPath, 'POST', '/api/v1/config-history/rollback', {
       mode: 'plan',
       spec: { to: 'snap-2', reason: 'nope' },
     });
     expect(JSON.stringify((targeted.body.result as { blockers: unknown[] }).blockers)).toContain(
-      'targeted_rollback_not_implemented',
+      'no_restorable_payload',
     );
 
     const plan = await rest(apiSockPath, 'POST', '/api/v1/config-history/rollback', {

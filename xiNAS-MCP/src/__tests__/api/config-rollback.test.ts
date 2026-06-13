@@ -46,19 +46,63 @@ describe('config.rollback provider (S9 T5)', () => {
     expect(result.enriched_spec).toMatchObject({ baseline_id: 'base-1', reason: 'lab reset' });
   });
 
-  it('non-baseline target and absent baseline both block', async () => {
-    const targeted = await configRollbackProvider.preflight(
-      ctxWith([{ key: 'x', value: BASELINE_ROW, revision: 1 }]),
-      { to: 'snap-9', reason: 'r' },
-    );
-    expect(targeted.blockers.map((b) => b.code)).toContain('targeted_rollback_not_implemented');
-
+  it('absent baseline blocks the baseline path', async () => {
     const noBaseline = await configRollbackProvider.preflight(ctxWith([]), {
       to: 'baseline',
       reason: 'r',
     });
     expect(noBaseline.blockers.map((b) => b.code)).toContain('baseline_snapshot_absent');
     expect(noBaseline.observed_freshness_ref).toBeUndefined();
+  });
+
+  // ── S11 (ADR-0013): targeted restore branch ──
+  const RESTORABLE_ROW = {
+    kind: 'ConfigSnapshot',
+    id: 'snap-9',
+    status: {
+      snapshot_id: 'snap-9',
+      kind: 'after',
+      history_type: 'rollback_eligible',
+      restorable: true,
+      files_changed: ['etc_exports'],
+    },
+  };
+
+  it('targeted restorable snapshot → clean destructive plan, no targeted blocker', async () => {
+    const result = await configRollbackProvider.preflight(
+      ctxWith([
+        { key: '/xinas/v1/observed/ConfigSnapshot/snap-9', value: RESTORABLE_ROW, revision: 7 },
+      ]),
+      { to: 'snap-9', reason: 'undo exports' },
+    );
+    expect(result.blockers.map((b) => b.code)).toEqual(['dangerous_flag_required']);
+    expect(result.risk_level).toBe('destructive');
+    expect(result.affected_resources).toEqual([{ kind: 'ConfigSnapshot', id: 'snap-9' }]);
+    expect(result.observed_freshness_ref).toEqual({
+      kind: 'ConfigSnapshot',
+      id: 'snap-9',
+      revision: 7,
+    });
+    expect(result.lease_resources).toEqual([{ kind: 'ConfigHistory', id: 'default' }]);
+    expect(result.enriched_spec).toMatchObject({ to: 'snap-9', target_id: 'snap-9' });
+    expect(result.warnings.map((w) => w.code)).toContain('observed_recovery');
+  });
+
+  it('targeted unknown id → snapshot_not_found', async () => {
+    const result = await configRollbackProvider.preflight(ctxWith([]), {
+      to: 'ghost',
+      reason: 'r',
+    });
+    expect(result.blockers.map((b) => b.code)).toContain('snapshot_not_found');
+  });
+
+  it('targeted non-restorable row → no_restorable_payload', async () => {
+    const bare = { ...RESTORABLE_ROW, status: { ...RESTORABLE_ROW.status, restorable: false } };
+    const result = await configRollbackProvider.preflight(
+      ctxWith([{ key: 'k', value: bare, revision: 1 }]),
+      { to: 'snap-9', reason: 'r' },
+    );
+    expect(result.blockers.map((b) => b.code)).toContain('no_restorable_payload');
   });
 
   it('missing reason / to are 422s', async () => {
