@@ -19,13 +19,16 @@ import logging
 import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .classifier import RollbackClassifier
+from .collector import SYSTEM_FILE_PATHS, RuntimeCollector
 from .engine import SnapshotEngine
 from .gc import GarbageCollector, load_retention_policy
 from .grpc_inspector import GrpcInspector
 from .lock import GlobalConfigLock, LockError
 from .models import (
+    Checksums,
     Manifest,
     OperationType,
     RollbackClass,
@@ -120,6 +123,9 @@ class TransactionalRunner:
         self._post_apply = PostApplyValidator(self._inspector)
         self._gc = GarbageCollector(self._store, load_retention_policy())
         self._classifier = RollbackClassifier()
+        # S11 (ADR-0013): the live paths targeted file restore writes to.
+        # Tests override this to redirect writes to a temp dir.
+        self._system_file_paths: dict[str, str] = dict(SYSTEM_FILE_PATHS)
 
     # ------------------------------------------------------------------
     # Public API
@@ -472,6 +478,195 @@ class TransactionalRunner:
             diff_summary=f"Reset to baseline: {reason}",
             progress_cb=progress_cb,
         )
+
+    # ------------------------------------------------------------------
+    # S11 (ADR-0013): targeted file-level snapshot restore
+    # ------------------------------------------------------------------
+
+    # NFS files whose change warrants restarting nfs-server.
+    _NFS_SERVER_FILES = frozenset(
+        {
+            "etc_exports",
+            "nfs_conf",
+            "nfsd_conf",
+            "nfs_kernel_server_defaults",
+            "nfs_common_defaults",
+            "lockd_conf",
+        }
+    )
+
+    @staticmethod
+    def _reconverge_commands(restore_set: list[str]) -> list[list[str]]:
+        """Pure mapping: which reconverge commands a restore set requires.
+
+        NFS files → ``exportfs -ra`` (+ service restarts); ``netplan`` → the
+        documented PBR-flush + IP-flush + ``netplan apply`` sequence (a plain
+        ``netplan apply`` does NOT remove old IPs/PBR rules — S6 network spec).
+        """
+        names = set(restore_set)
+        cmds: list[list[str]] = []
+        if names - {"netplan"}:  # any NFS file
+            cmds.append(["exportfs", "-ra"])
+            if names & TransactionalRunner._NFS_SERVER_FILES:
+                cmds.append(["systemctl", "restart", "nfs-server"])
+            if "idmapd_conf" in names:
+                cmds.append(["systemctl", "restart", "nfs-idmapd"])
+        if "netplan" in names:
+            cmds.append(
+                [
+                    "sh",
+                    "-c",
+                    "for t in $(seq 100 199); do ip rule del table $t 2>/dev/null || true; done; true",
+                ]
+            )
+            cmds.append(
+                [
+                    "sh",
+                    "-c",
+                    "for i in $(ls /sys/class/net); do case $i in mlx*|ibp*) "
+                    "ip addr flush dev $i 2>/dev/null || true ;; esac; done; true",
+                ]
+            )
+            cmds.append(["netplan", "apply"])
+        return cmds
+
+    async def _run_command(self, argv: list[str]) -> tuple[bool, str]:
+        """Run a reconverge command. Returns ``(ok, output_tail)``. Default
+        is a real subprocess; tests override to record argv."""
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await proc.communicate()
+        text = (out or b"").decode("utf-8", errors="replace")[-2000:]
+        return proc.returncode == 0, text
+
+    async def _collect_current_checksums(self) -> Checksums:
+        """Re-checksum the LIVE managed files (current side of the restore
+        diff). Default uses the runtime collector; tests override."""
+        return await RuntimeCollector(self._inspector).collect_checksums()
+
+    async def _validate_restore(self) -> bool:
+        """Post-restore validation. Best-effort True in this slice (deep link/
+        service validation is a follow-on); tests force False to exercise the
+        file-level rollback."""
+        return True
+
+    def _write_system_file(self, name: str, content: bytes) -> None:
+        path = self._system_file_paths.get(name)
+        if path is None:
+            return
+        Path(path).write_bytes(content)
+
+    async def _reconverge(self, restore_set: list[str]) -> bool:
+        for argv in self._reconverge_commands(restore_set):
+            ok, _out = await self._run_command(argv)
+            if not ok:
+                return False
+        return True
+
+    async def _restore_rollback(self, pre_change_id: str, restore_set: list[str]) -> bool:
+        """File-level rollback: write the pre-change ephemeral's captured bytes
+        back for the same restore set + reconverge. NOT ``_auto_rollback``
+        (which re-runs Ansible — wrong for a file restore)."""
+        try:
+            for name in restore_set:
+                content = self._store.read_system_file(pre_change_id, name)
+                if content is not None:
+                    self._write_system_file(name, content)
+            await self._reconverge(restore_set)
+            return True
+        except Exception:
+            logger.exception("File-level restore rollback failed")
+            return False
+
+    async def execute_restore_snapshot(
+        self,
+        snapshot_id: str,
+        source: str,
+        reason: str,
+        progress_cb: Callable[[str], None] | None = None,
+    ) -> RunResult:
+        """Restore an arbitrary snapshot's captured NFS/network config bytes
+        (S11, ADR-0013) — observed recovery, file-level, with a file-level
+        auto-rollback. The restore set is computed current-vs-target.
+        """
+        result = RunResult(operation=OperationType.ROLLBACK.value, snapshot_id=snapshot_id)
+
+        target = self._store.read_manifest(snapshot_id)
+        if target is None:
+            result.error = "snapshot_not_found"
+            return result
+        captured = self._store.list_system_files(snapshot_id)
+        if not captured:
+            result.error = "no_restorable_payload"
+            return result
+
+        current = self._engine.get_current_effective()
+        if current is not None:
+            result.rollback_class = self._classifier.classify_rollback(current, target).value
+        else:
+            result.rollback_class = RollbackClass.NON_DISRUPTIVE.value
+
+        # Restore set = current-vs-target (NOT files_changed, which is
+        # target-vs-parent and would miss post-target drift).
+        current_checksums = (await self._collect_current_checksums()).to_dict()
+        target_checksums = target.checksums or {}
+        restore_set = [n for n in captured if current_checksums.get(n) != target_checksums.get(n)]
+        if not restore_set:
+            result.success = True
+            result.output = "already at target; no changes"
+            result.steps.append("noop_already_current")
+            return result
+
+        try:
+            self._lock.acquire(operation=result.operation, source=source)
+            result.steps.append("lock_acquired")
+        except LockError as exc:
+            result.error = f"Failed to acquire lock: {exc}"
+            return result
+
+        try:
+            pre = await self._engine.create_snapshot(
+                source=source,
+                operation=result.operation,
+                snapshot_type=SnapshotType.EPHEMERAL.value,
+                diff_summary=f"Pre-restore snapshot for {snapshot_id}",
+            )
+            result.pre_change_snapshot_id = pre.id
+            result.steps.append("pre_snapshot_created")
+
+            for name in restore_set:
+                content = self._store.read_system_file(snapshot_id, name)
+                if content is not None:
+                    self._write_system_file(name, content)
+            result.steps.append("files_written")
+
+            ok = await self._reconverge(restore_set)
+            if ok:
+                ok = await self._validate_restore()
+
+            if not ok:
+                rb_ok = await self._restore_rollback(pre.id, restore_set)
+                result.rollback_performed = True
+                result.rollback_success = rb_ok
+                result.error = "restore validation failed; rolled back to pre-change state"
+                return result
+
+            result.success = True
+            result.steps.append("restore_applied")
+            result.output = (
+                "recovery applied — desired state unchanged; re-apply or adopt to make it "
+                "durable, or the next apply will overwrite it"
+            )
+            return result
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Restore of %s failed", snapshot_id)
+            result.error = f"restore failed: {exc}"
+            return result
+        finally:
+            self._lock.release()
 
     # ------------------------------------------------------------------
     # Internal helpers

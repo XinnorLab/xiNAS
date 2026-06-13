@@ -118,6 +118,21 @@ def main() -> int:
         help="Operation source (default: api)",
     )
 
+    # snapshot restore <id>  (S11, ADR-0013: targeted file-level restore)
+    restore_parser = snap_sub.add_parser(
+        "restore",
+        help="Restore an arbitrary snapshot's NFS/network config (observed recovery)",
+    )
+    restore_parser.add_argument("snapshot_id", help="Snapshot id to restore")
+    restore_parser.add_argument("--reason", required=True, help="Audit reason for the restore")
+    restore_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Execute the restore (without --yes, shows plan only)",
+    )
+    restore_parser.add_argument("--format", choices=["json", "text"], default="text")
+    restore_parser.add_argument("--source", default="api", help="Operation source (default: api)")
+
     # -- gc subcommand ------------------------------------------------------
     gc_parser = subparsers.add_parser("gc", help="Garbage collection")
     gc_sub = gc_parser.add_subparsers(dest="action")
@@ -192,6 +207,8 @@ def _dispatch_snapshot(args: argparse.Namespace, engine: SnapshotEngine) -> int:
         return _cmd_snapshot_diff(args, engine)
     elif args.action == "reset-to-baseline":
         return _cmd_snapshot_reset_to_baseline(args, engine)
+    elif args.action == "restore":
+        return _cmd_snapshot_restore(args, engine)
     else:
         print(f"Error: unknown snapshot action: {args.action}", file=sys.stderr)
         return 1
@@ -379,6 +396,53 @@ def _cmd_snapshot_reset_to_baseline(
             if result.rollback_performed:
                 status = "succeeded" if result.rollback_success else "FAILED"
                 print(f"Auto-rollback: {status}")
+
+    return 0 if result.success else 1
+
+
+def _cmd_snapshot_restore(args: argparse.Namespace, engine: SnapshotEngine) -> int:
+    """Handle ``snapshot restore <id>`` — targeted file-level restore (S11)."""
+    from .runner import TransactionalRunner
+
+    if not args.yes:
+        # Plan mode — the API layer owns the real plan/blockers; here we just
+        # echo the target so an operator running the CLI by hand sees it.
+        plan = {
+            "mode": "plan",
+            "snapshot_id": args.snapshot_id,
+            "note": "observed recovery — desired state unchanged; re-apply to make durable",
+        }
+        if args.format == "json":
+            print(json.dumps(plan, indent=2))
+        else:
+            print(f"Restore plan for snapshot: {args.snapshot_id}")
+            print("  Observed recovery — re-apply afterward to make it durable.")
+        return 0
+
+    runner = TransactionalRunner(engine=engine)
+
+    def _progress(line: str) -> None:
+        if args.format != "json":
+            print(line)
+
+    result = asyncio.run(
+        runner.execute_restore_snapshot(
+            args.snapshot_id,
+            source=args.source,
+            reason=args.reason,
+            progress_cb=_progress,
+        )
+    )
+
+    if args.format == "json":
+        print(json.dumps(result.to_dict(), indent=2))
+    elif result.success:
+        print(f"\nRestore of {result.snapshot_id} completed (observed recovery).")
+    else:
+        print(f"\nRestore FAILED: {result.error}")
+        if result.rollback_performed:
+            status = "succeeded" if result.rollback_success else "FAILED"
+            print(f"Auto-rollback: {status}")
 
     return 0 if result.success else 1
 
