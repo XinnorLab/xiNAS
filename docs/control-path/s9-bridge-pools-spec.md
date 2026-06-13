@@ -137,8 +137,17 @@ across REST/MCP/CLI/TUI.
 
 ### Out of scope (ADR-0011 deferrals)
 
-Targeted snapshot rollback, dbus systemd subscription, `ip_pool.py`
-(netplan-based), mail/auth-modes promotion.
+Deferred at S9, with current status:
+
+- Targeted snapshot rollback — **closed** (S11, ADR-0013: file-level
+  restore as observed recovery).
+- dbus systemd subscription — **dropped** as obsolete; S7 already observes
+  `degraded` via a `systemctl show` poll, so no subscription is needed.
+- `ip_pool.py` (netplan-based) — **closed**; retargeted to
+  `POST /api/v1/network/ip-pool` (`net.pool.apply`, ADR-0008), removing its
+  direct interface detection / allocation / netplan / PBR / `netplan apply`.
+  See the S8 spec §T12 follow-up.
+- mail / auth-modes read promotion — **still deferred**.
 
 ---
 

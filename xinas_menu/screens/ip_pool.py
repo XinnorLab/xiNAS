@@ -1,4 +1,14 @@
-"""IPPoolScreen — IP Pool configuration for high-speed interfaces."""
+"""IPPoolScreen — IP Pool configuration for high-speed interfaces.
+
+S8/ADR-0010 control-path retarget: this screen no longer detects
+interfaces, allocates IPs, renders netplan, flushes PBR, or runs
+``netplan apply`` itself. The agent owns all of that through
+``net.pool.apply`` (ADR-0008): the screen collects the pool inputs
+(``start`` + ``prefix`` + optional ``mtu``), previews via a plan, and
+applies via ``POST /api/v1/network/ip-pool`` plan/apply. The local
+``/etc/xinas/network-pool.json`` is kept ONLY as a prefill cache for the
+input dialogs (the API contract has no end bound and no persisted pool).
+"""
 
 from __future__ import annotations
 
@@ -7,9 +17,9 @@ import contextlib
 import ipaddress
 import json
 import os
-import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from textual import work
 from textual.app import ComposeResult
@@ -18,10 +28,12 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
+from xinas_menu.api.control_client import ControlPathError, PlanBlocked, TaskCancelled
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
+from xinas_menu.widgets.task_wait_dialog import TaskWaitDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
 _RED = "\033[31m"
@@ -33,14 +45,14 @@ _DIM = "\033[2m"
 _NC = "\033[0m"
 
 _CFG_PATH = Path("/etc/xinas/network-pool.json")
-_NETPLAN_PATH = Path("/etc/netplan/99-xinas.yaml")
-_OLD_POOL_PATH = Path("/etc/netplan/99-xinas-pool.yaml")
+_POOL_PATH = "/api/v1/network/ip-pool"
 
+# Prefill defaults (no `pool_end` — net.pool.apply derives the range from
+# start + prefix + the live interface count).
 _DEFAULTS = {
-    "pool_enabled": True,
     "pool_start": "10.10.1.1",
-    "pool_end": "10.10.255.1",
     "pool_prefix": 24,
+    "pool_mtu": "",  # optional; blank → omit from the spec
 }
 
 _MENU = [
@@ -53,22 +65,24 @@ _MENU = [
 ]
 
 
-# ── Config helpers ────────────────────────────────────────────────────────────
+# ── Config prefill cache ──────────────────────────────────────────────────────
 
 
 def _cfg_read() -> dict:
-    """Read pool config from JSON file, returning defaults if missing."""
+    """Read the prefill cache, returning defaults if missing."""
     try:
         data = json.loads(_CFG_PATH.read_text())
         merged = dict(_DEFAULTS)
         merged.update(data)
+        merged.pop("pool_end", None)  # migrate away the removed field
         return merged
     except Exception:
         return dict(_DEFAULTS)
 
 
 def _cfg_write(cfg: dict) -> None:
-    """Atomic write pool config to JSON file with 0600 permissions."""
+    """Atomic write of the prefill cache with 0600 permissions."""
+    cfg = {k: v for k, v in cfg.items() if k != "pool_end"}
     _CFG_PATH.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(_CFG_PATH.parent), suffix=".tmp")
     try:
@@ -83,305 +97,99 @@ def _cfg_write(cfg: dict) -> None:
         raise
 
 
-# ── Interface detection ───────────────────────────────────────────────────────
-
-
-def _detect_interfaces() -> list[dict]:
-    """Detect high-speed network interfaces (InfiniBand + mlx5_core).
-
-    Returns list of dicts: {name, iface_type, driver, mtu_default, state, ip4, mac}
-    """
-    net_path = "/sys/class/net"
-    result: list[dict] = []
-    try:
-        names = sorted(os.listdir(net_path))
-    except Exception:
-        return result
-
-    for iface in names:
-        if iface == "lo":
-            continue
-        iface_path = os.path.join(net_path, iface)
-        if not os.path.isdir(iface_path):
-            continue
-        # Must have a backing device
-        if not os.path.exists(os.path.join(iface_path, "device")):
-            continue
-
-        def _read(rel: str, _base: str = iface_path) -> str:
-            try:
-                with open(os.path.join(_base, rel)) as f:
-                    return f.read().strip()
-            except Exception:
-                return ""
-
-        iface_type_num = _read("type")
-        try:
-            driver = os.path.basename(os.readlink(os.path.join(iface_path, "device/driver")))
-        except Exception:
-            driver = ""
-
-        # Filter: InfiniBand (type=32) or mlx5_core driver
-        is_ib = iface_type_num == "32"
-        is_mlx5 = driver == "mlx5_core"
-        if not is_ib and not is_mlx5:
-            continue
-
-        state = _read("operstate") or "unknown"
-        mac = _read("address") or "N/A"
-
-        # Current IP
-        ip4 = ""
-        try:
-            out = subprocess.check_output(
-                ["ip", "-o", "-4", "addr", "show", iface],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-            if out:
-                parts = out.split()
-                for i, p in enumerate(parts):
-                    if p == "inet" and i + 1 < len(parts):
-                        ip4 = parts[i + 1]
-                        break
-        except Exception:
-            pass
-
-        result.append(
-            {
-                "name": iface,
-                "iface_type": "InfiniBand" if is_ib else "Ethernet",
-                "driver": driver,
-                "mtu_default": 4092 if is_ib else 9000,
-                "state": state,
-                "ip4": ip4,
-                "mac": mac,
-            }
-        )
-
-    return result
-
-
-# ── IP allocation ─────────────────────────────────────────────────────────────
-
-
-def _allocate_ips(cfg: dict, interfaces: list[dict]) -> tuple[list[dict], str]:
-    """Allocate IPs from pool to interfaces.
-
-    Returns (allocations, error_string).
-    Each allocation: {name, ip, prefix, mtu, iface_type}
-    If error_string is non-empty, allocation failed.
-    """
-    start = cfg["pool_start"]
-    end = cfg.get("pool_end", "")
-    prefix = cfg["pool_prefix"]
-
-    try:
-        octets = list(map(int, start.split(".")))
-        if len(octets) != 4:
-            raise ValueError("not 4 octets")
-    except Exception:
-        return [], f"Invalid start IP: {start}"
-
-    # Parse end IP for bounds checking
-    end_third = 255
-    if end:
-        try:
-            end_octets = list(map(int, end.split(".")))
-            if len(end_octets) == 4:
-                end_third = end_octets[2]
-        except Exception:
-            pass
-
-    allocations: list[dict] = []
-    for i, iface in enumerate(interfaces):
-        third = octets[2] + i
-        if third > 255:
-            return [], (
-                f"Pool overflow: interface {iface['name']} would get "
-                f"{octets[0]}.{octets[1]}.{third}.{octets[3]} "
-                f"(third octet {third} > 255). "
-                f"Use a lower starting address or fewer interfaces."
-            )
-        if third > end_third:
-            return [], (
-                f"Pool exhausted: interface {iface['name']} would get "
-                f"{octets[0]}.{octets[1]}.{third}.{octets[3]} "
-                f"which exceeds pool end ({end}). "
-                f"Expand the pool range or reduce the number of interfaces."
-            )
-        ip = f"{octets[0]}.{octets[1]}.{third}.{octets[3]}"
-        allocations.append(
-            {
-                "name": iface["name"],
-                "ip": ip,
-                "prefix": prefix,
-                "mtu": iface["mtu_default"],
-                "iface_type": iface["iface_type"],
-            }
-        )
-
-    return allocations, ""
-
-
-# ── Netplan generation ────────────────────────────────────────────────────────
-
-
-def _generate_netplan(allocations: list[dict]) -> str:
-    """Generate netplan YAML string from allocations."""
-    lines = [
-        "# Generated by xinas-menu IP Pool configuration",
-        "# Do not edit manually — changes will be overwritten on next Apply",
-        "network:",
-        "  version: 2",
-        "  renderer: networkd",
-        "  ethernets:",
-    ]
-    multi = len(allocations) > 1
-    for i, alloc in enumerate(allocations):
-        lines.append(f"    {alloc['name']}:")
-        lines.append("      dhcp4: no")
-        lines.append(f"      addresses: [{alloc['ip']}/{alloc['prefix']}]")
-        lines.append(f"      mtu: {alloc['mtu']}")
-        if multi:
-            table_id = 100 + i
-            octets = alloc["ip"].split(".")
-            subnet = f"{octets[0]}.{octets[1]}.{octets[2]}.0/{alloc['prefix']}"
-            lines.append("      routes:")
-            lines.append(f"        - to: {subnet}")
-            lines.append("          scope: link")
-            lines.append(f"          table: {table_id}")
-            lines.append("      routing-policy:")
-            lines.append(f"        - from: {alloc['ip']}")
-            lines.append(f"          table: {table_id}")
-            lines.append(f"          priority: {table_id}")
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _flush_pbr_rules() -> None:
-    """Remove all custom PBR ip-rules (tables 100-199) and flush stale IPs
-    from RDMA-capable interfaces so netplan apply starts clean.
-
-    Moved here from screens/network.py when that screen was retargeted to
-    the control-path API (S8, ADR-0010) — the pool screen's direct netplan
-    path is the deferred remaining consumer.
-    """
-
-    def _run_cmd(cmd: str) -> str:
-        import shlex
-
-        try:
-            return subprocess.check_output(
-                shlex.split(cmd),
-                stderr=subprocess.DEVNULL,
-                text=True,
-            ).strip()
-        except Exception:
-            return ""
-
-    out = _run_cmd("ip rule show")
-    if not out:
-        return
-    seen_tables: set[int] = set()
-    for line in out.splitlines():
-        if "lookup" not in line:
-            continue
-        parts = line.split()
-        try:
-            idx = parts.index("lookup")
-            table = int(parts[idx + 1])
-        except (ValueError, IndexError):
-            continue
-        if 100 <= table < 200:
-            spec = line.split(":", 1)[1].strip()
-            _run_cmd(f"ip rule del {spec}")
-            seen_tables.add(table)
-    for table in seen_tables:
-        _run_cmd(f"ip route flush table {table}")
-    # Flush all IPs from RDMA-capable (mlx) interfaces to remove stale
-    # secondary addresses that netplan apply alone does not clean up.
-    for iface_dir in sorted(Path("/sys/class/net").iterdir()):
-        try:
-            driver = (iface_dir / "device" / "driver").resolve().name
-            if "mlx" in driver:
-                _run_cmd(f"ip addr flush dev {iface_dir.name}")
-        except Exception:
-            continue
-
-
-def _write_and_apply_netplan(netplan_content: str) -> tuple[bool, str]:
-    """Write netplan file and run netplan apply. Returns (success, message)."""
-    try:
-        _NETPLAN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(
-            dir=str(_NETPLAN_PATH.parent),
-            suffix=".tmp",
-        )
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(netplan_content)
-            os.chmod(tmp, 0o644)
-            os.replace(tmp, str(_NETPLAN_PATH))
-        except Exception:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp)
-            raise
-    except Exception as exc:
-        return False, f"Failed to write netplan file: {exc}"
-
-    # Remove stale pool file from before the path was unified
-    try:
-        if _OLD_POOL_PATH.exists():
-            _OLD_POOL_PATH.unlink()
-    except OSError:
-        pass
-
-    _flush_pbr_rules()
-    try:
-        r = subprocess.run(
-            ["netplan", "apply"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if r.returncode != 0:
-            return False, f"netplan apply failed:\n{(r.stderr or r.stdout)[:500]}"
-        return True, "Configuration applied successfully."
-    except subprocess.TimeoutExpired:
-        return False, "netplan apply timed out after 30 seconds."
-    except Exception as exc:
-        return False, f"Failed to run netplan apply: {exc}"
-
-
-# ── Validation ────────────────────────────────────────────────────────────────
+# ── Validation (matches the server's validatePool) ────────────────────────────
 
 
 def _validate_ipv4(ip: str) -> str | None:
     """Return error message or None if valid IPv4."""
     try:
-        ipaddress.IPv4Address(ip)  # raises on invalid input
+        ipaddress.IPv4Address(ip)
         return None
     except Exception:
         return f"Invalid IPv4 address: {ip}"
 
 
 def _validate_prefix(prefix_str: str) -> tuple[int | None, str | None]:
-    """Return (prefix_int, error_message). One of them is None."""
+    """Return (prefix_int, error). Server bound is [8, 30] (ADR-0008)."""
     try:
         p = int(prefix_str)
-        if not 1 <= p <= 32:
-            return None, "Prefix must be between 1 and 32"
-        return p, None
     except ValueError:
         return None, f"Invalid prefix: {prefix_str}"
+    if not 8 <= p <= 30:
+        return None, "Prefix must be between 8 and 30"
+    return p, None
+
+
+def _validate_mtu(mtu_str: str) -> tuple[int | None, str | None]:
+    """Return (mtu_or_None, error). Empty → (None, None) [optional].
+    Server bound is [1280, 65520]."""
+    s = mtu_str.strip()
+    if not s:
+        return None, None
+    try:
+        m = int(s)
+    except ValueError:
+        return None, f"Invalid MTU: {mtu_str}"
+    if not 1280 <= m <= 65520:
+        return None, "MTU must be between 1280 and 65520"
+    return m, None
+
+
+def _pool_spec(start: str, prefix: int, mtu: int | None = None) -> dict[str, Any]:
+    """Build the net.pool.apply spec (ADR-0008): {start, prefix, mtu?}."""
+    spec: dict[str, Any] = {"start": start, "prefix": prefix}
+    if mtu is not None:
+        spec["mtu"] = mtu
+    return spec
+
+
+def _cleanup_repairable(blockers: list[dict[str, Any]]) -> list[str]:
+    """Blocker messages when EVERY blocker is a duplicate-netplan one — the
+    only case a ``cleanup: true`` re-plan can fix (mirrors network.py)."""
+    if blockers and all(str(b.get("code")) == "duplicate_netplan_definition" for b in blockers):
+        return [str(b.get("message", b.get("code", "?"))) for b in blockers]
+    return []
+
+
+def apply_pool(
+    control,
+    spec: dict[str, Any],
+    *,
+    on_progress=None,
+    cancel_check=None,
+    confirm_cleanup=None,
+) -> dict[str, Any]:
+    """plan/apply the pool spec through the control API, mirroring network.py's
+    duplicate-netplan ``cleanup: true`` retry.
+
+    ``confirm_cleanup(messages)`` is called when the plan is blocked ONLY by
+    duplicate-netplan definitions; returning truthy re-applies with
+    ``cleanup: True``. Raises PlanBlocked for any other blocker mix,
+    TaskCancelled if the wait is cancelled, ApiError/TransportError on
+    transport failure. Returns the terminal task result.
+    """
+    try:
+        return control.plan_apply_wait(
+            "POST", _POOL_PATH, spec, on_progress=on_progress, cancel_check=cancel_check
+        )
+    except PlanBlocked as exc:
+        dup_msgs = _cleanup_repairable(exc.blockers)
+        if not dup_msgs or confirm_cleanup is None or not confirm_cleanup(dup_msgs):
+            raise
+        return control.plan_apply_wait(
+            "POST",
+            _POOL_PATH,
+            {**spec, "cleanup": True},
+            on_progress=on_progress,
+            cancel_check=cancel_check,
+        )
 
 
 # ── Screen ────────────────────────────────────────────────────────────────────
 
 
 class IPPoolScreen(XiNASAppMixin, Screen):
-    """IP Pool configuration — detect interfaces, allocate IPs, apply via netplan."""
+    """IP Pool configuration over the control-path API (net.pool.apply)."""
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back", show=True, key_display="0/Esc"),
@@ -393,12 +201,12 @@ class IPPoolScreen(XiNASAppMixin, Screen):
         with Horizontal(id="split-layout"):
             yield NavigableMenu(_MENU, id="pool-nav")
             yield ScrollableTextView(
-                "\033[1m\033[36mIP Pool Configuration\033[0m\n"
+                f"{_BLD}{_CYN}IP Pool Configuration{_NC}\n"
                 "\n"
-                "  \033[1m1\033[0m  \033[36mConfigure Pool\033[0m      \033[2mSet IP range and subnet prefix\033[0m\n"
-                "  \033[1m2\033[0m  \033[36mPreview Allocation\033[0m  \033[2mPreview IP assignments to interfaces\033[0m\n"
-                "  \033[1m3\033[0m  \033[36mApply Configuration\033[0m \033[2mWrite netplan and activate pool\033[0m\n"
-                "  \033[1m4\033[0m  \033[36mShow Settings\033[0m       \033[2mView current IP pool settings\033[0m\n",
+                f"  {_BLD}1{_NC}  {_CYN}Configure Pool{_NC}      {_DIM}Set base IP, prefix, MTU{_NC}\n"
+                f"  {_BLD}2{_NC}  {_CYN}Preview Allocation{_NC}  {_DIM}Plan the per-interface assignment{_NC}\n"
+                f"  {_BLD}3{_NC}  {_CYN}Apply Configuration{_NC} {_DIM}Reallocate via the control API{_NC}\n"
+                f"  {_BLD}4{_NC}  {_CYN}Show Current Settings{_NC} {_DIM}View observed interface addresses{_NC}\n",
                 id="pool-content",
             )
         yield Footer()
@@ -419,40 +227,23 @@ class IPPoolScreen(XiNASAppMixin, Screen):
         elif key == "4":
             self._show_current_settings()
 
-    @work(exclusive=True)
-    async def _configure_pool(self) -> None:
+    async def _prompt_pool_inputs(self) -> dict | None:
+        """Collect start + prefix + optional MTU (prefilled). None on cancel."""
         loop = asyncio.get_running_loop()
         cfg = await loop.run_in_executor(None, _cfg_read)
 
         while True:
             start = await self.app.push_screen_wait(
                 InputDialog(
-                    "Pool start IP address:",
+                    "Pool base IP address:",
                     "Configure IP Pool",
                     default=cfg["pool_start"],
                     placeholder="10.10.1.1",
                 )
             )
             if start is None:
-                return
+                return None
             err = _validate_ipv4(start)
-            if err:
-                self.app.notify(err, severity="error")
-                continue
-            break
-
-        while True:
-            end = await self.app.push_screen_wait(
-                InputDialog(
-                    "Pool end IP address:",
-                    "Configure IP Pool",
-                    default=cfg["pool_end"],
-                    placeholder="10.10.255.1",
-                )
-            )
-            if end is None:
-                return
-            err = _validate_ipv4(end)
             if err:
                 self.app.notify(err, severity="error")
                 continue
@@ -461,171 +252,185 @@ class IPPoolScreen(XiNASAppMixin, Screen):
         while True:
             prefix_str = await self.app.push_screen_wait(
                 InputDialog(
-                    "Subnet prefix (CIDR):",
+                    "Subnet prefix (CIDR, 8–30):",
                     "Configure IP Pool",
                     default=str(cfg["pool_prefix"]),
                     placeholder="24",
                 )
             )
             if prefix_str is None:
-                return
+                return None
             prefix, err = _validate_prefix(prefix_str)
             if err:
                 self.app.notify(err, severity="error")
                 continue
             break
 
-        cfg["pool_start"] = start
-        cfg["pool_end"] = end
-        cfg["pool_prefix"] = prefix
-        cfg["pool_enabled"] = True
+        while True:
+            mtu_str = await self.app.push_screen_wait(
+                InputDialog(
+                    "MTU (optional, 1280–65520; blank to leave unchanged):",
+                    "Configure IP Pool",
+                    default=str(cfg.get("pool_mtu", "")),
+                    placeholder="9000",
+                )
+            )
+            if mtu_str is None:
+                return None
+            mtu, err = _validate_mtu(mtu_str)
+            if err:
+                self.app.notify(err, severity="error")
+                continue
+            break
 
-        try:
+        cfg["pool_start"] = start
+        cfg["pool_prefix"] = prefix
+        cfg["pool_mtu"] = "" if mtu is None else str(mtu)
+        with contextlib.suppress(Exception):
             await loop.run_in_executor(None, _cfg_write, cfg)
-            self.app.audit.log("network.pool_config", f"{start}-{end}/{prefix}", "OK")
-            await self.app.snapshots.record(
-                "network_modify",
-                diff_summary=f"Configured IP pool {start}-{end}/{prefix}",
-            )
-            view = self.query_one("#pool-content", ScrollableTextView)
-            view.set_content(
-                f"Pool configuration saved.\n\n"
-                f"  Start: {start}\n"
-                f"  End:   {end}\n"
-                f"  Prefix: /{prefix}\n\n"
-                f"Use [bold]Preview[/bold] to see allocation, then [bold]Apply[/bold] to activate."
-            )
-        except Exception as exc:
-            view = self.query_one("#pool-content", ScrollableTextView)
-            view.set_content(
-                f"{_RED}Failed to save config: {exc}{_NC}\n\n"
-                f"  {_DIM}Check file permissions on {_CFG_PATH}.{_NC}"
-            )
+        return {"start": start, "prefix": prefix, "mtu": mtu}
+
+    @work(exclusive=True)
+    async def _configure_pool(self) -> None:
+        inputs = await self._prompt_pool_inputs()
+        if inputs is None:
+            return
+        view = self.query_one("#pool-content", ScrollableTextView)
+        mtu_line = f"\n  MTU:    {inputs['mtu']}" if inputs["mtu"] is not None else ""
+        view.set_content(
+            "Pool inputs saved.\n\n"
+            f"  Base:   {inputs['start']}\n"
+            f"  Prefix: /{inputs['prefix']}"
+            f"{mtu_line}\n\n"
+            "Use [bold]Preview[/bold] to plan the allocation, then [bold]Apply[/bold]."
+        )
 
     @work(exclusive=True)
     async def _preview_allocation(self) -> None:
         view = self.query_one("#pool-content", ScrollableTextView)
-        loop = asyncio.get_running_loop()
-
-        cfg = await loop.run_in_executor(None, _cfg_read)
-        interfaces = await loop.run_in_executor(None, _detect_interfaces)
-
-        if not interfaces:
+        inputs = await self._prompt_pool_inputs()
+        if inputs is None:
+            return
+        spec = _pool_spec(inputs["start"], inputs["prefix"], inputs["mtu"])
+        view.set_content(f"{_DIM}Planning allocation…{_NC}")
+        try:
+            result = await asyncio.to_thread(self.app.control.plan, "POST", _POOL_PATH, spec)
+        except PlanBlocked as exc:
             view.set_content(
-                "No high-speed interfaces detected.\n\n"
-                "Looking for: InfiniBand (type=32) or mlx5_core driver.\n"
-                "Ensure DOCA-OFED is installed and interfaces are present."
+                f"{_RED}Plan blocked:{_NC}\n\n"
+                + "\n".join(f"  - {b.get('message', b.get('code'))}" for b in exc.blockers)
             )
             return
-
-        allocations, err = _allocate_ips(cfg, interfaces)
-        if err:
-            view.set_content(f"[bold red]Allocation Error[/bold red]\n\n{err}")
+        except ControlPathError as exc:
+            view.set_content(f"{_RED}Preview failed.{_NC}\n\n  {exc}")
             return
 
-        GRN, CYN, BLD, DIM, NC = "\033[32m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
-        W = 68
+        diff = result.get("diff") if isinstance(result, dict) else None
         lines = [
-            f"{BLD}{CYN}IP POOL ALLOCATION PREVIEW{NC}",
-            f"{DIM}{'=' * W}{NC}",
+            f"{_BLD}{_CYN}IP POOL ALLOCATION PREVIEW{_NC}",
+            f"{_DIM}{'=' * 68}{_NC}",
             "",
-            f"  {DIM}Pool:{NC}   {cfg['pool_start']} — {cfg['pool_end']}",
-            f"  {DIM}Prefix:{NC} /{cfg['pool_prefix']}",
-            f"  {DIM}Interfaces detected:{NC} {len(interfaces)}",
-            "",
-            f"{DIM}{'-' * W}{NC}",
-            "",
+            f"  {_DIM}Base:{_NC}   {inputs['start']}",
+            f"  {_DIM}Prefix:{_NC} /{inputs['prefix']}",
         ]
-
-        multi = len(allocations) > 1
-        for i, (alloc, iface) in enumerate(zip(allocations, interfaces, strict=False)):
-            state_color = GRN if iface["state"] == "up" else "\033[33m"
-            lines.append(f"  {BLD}{alloc['name']}{NC}  {DIM}({alloc['iface_type']}){NC}")
-            lines.append(f"      {DIM}Assign:{NC}  {GRN}{alloc['ip']}/{alloc['prefix']}{NC}")
-            lines.append(f"      {DIM}MTU:{NC}     {alloc['mtu']}")
-            if multi:
-                table_id = 100 + i
-                lines.append(f"      {DIM}Policy:{NC}  table {table_id} (src-based routing)")
-            if iface["ip4"]:
-                lines.append(f"      {DIM}Current:{NC} {iface['ip4']}")
-            lines.append(
-                f"      {DIM}State:{NC}   {state_color}{iface['state']}{NC}  "
-                f"{DIM}MAC:{NC} {iface['mac']}"
-            )
-            lines.append("")
-
-        lines.append(f"{DIM}{'-' * W}{NC}")
+        if inputs["mtu"] is not None:
+            lines.append(f"  {_DIM}MTU:{_NC}    {inputs['mtu']}")
         lines.append("")
-
-        netplan = _generate_netplan(allocations)
-        lines.append(f"  {BLD}{CYN}GENERATED NETPLAN{NC}")
-        lines.append(f"{DIM}{'-' * W}{NC}")
+        lines.append(f"{_DIM}{'-' * 68}{_NC}")
         lines.append("")
-        for nl in netplan.splitlines():
-            lines.append(f"  {nl}")
+        lines.append(json.dumps(diff, indent=2) if diff is not None else "  (no diff returned)")
         lines.append("")
-        lines.append(f"{DIM}{'=' * W}{NC}")
-        lines.append(f"  Use {BLD}[3] Apply Configuration{NC} to write and activate.")
-
+        lines.append(f"{_DIM}{'=' * 68}{_NC}")
+        lines.append(f"  Use {_BLD}[3] Apply Configuration{_NC} to activate.")
         view.set_content("\n".join(lines))
 
     @work(exclusive=True)
     async def _apply_configuration(self) -> None:
-        loop = asyncio.get_running_loop()
-
-        cfg = await loop.run_in_executor(None, _cfg_read)
-        interfaces = await loop.run_in_executor(None, _detect_interfaces)
-
-        if not interfaces:
-            view = self.query_one("#pool-content", ScrollableTextView)
-            view.set_content(
-                f"{_YLW}No high-speed interfaces detected.{_NC}\n\n"
-                f"  {_DIM}Ensure DOCA-OFED is installed and interfaces are present.{_NC}"
-            )
+        inputs = await self._prompt_pool_inputs()
+        if inputs is None:
             return
+        spec = _pool_spec(inputs["start"], inputs["prefix"], inputs["mtu"])
 
-        allocations, err = _allocate_ips(cfg, interfaces)
-        if err:
-            view = self.query_one("#pool-content", ScrollableTextView)
-            view.set_content(f"{_RED}Allocation error:{_NC}\n\n{err}")
-            return
-
-        summary = "\n".join(
-            f"  {a['name']}: {a['ip']}/{a['prefix']} (MTU {a['mtu']})" for a in allocations
-        )
+        mtu_line = f"\n  MTU:    {inputs['mtu']}" if inputs["mtu"] is not None else ""
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
-                f"Apply IP Pool configuration?\n\n{summary}\n\n"
-                f"This writes {_NETPLAN_PATH} and runs 'netplan apply'.\n"
-                f"Active connections may be briefly interrupted.",
+                "Apply IP Pool configuration?\n\n"
+                f"  Base:   {inputs['start']}\n"
+                f"  Prefix: /{inputs['prefix']}"
+                f"{mtu_line}\n\n"
+                "The agent re-addresses every high-speed interface (flushing\n"
+                "stale IPs/PBR and running netplan apply). Active connections\n"
+                "may be briefly interrupted.",
                 "Apply Network Configuration",
             )
         )
         if not confirmed:
             return
 
-        netplan = _generate_netplan(allocations)
-        ok, msg = await loop.run_in_executor(
-            None,
-            _write_and_apply_netplan,
-            netplan,
-        )
-        if ok:
-            self.app.audit.log(
-                "network.pool_apply",
-                f"{len(allocations)} interfaces configured",
-                "OK",
+        # Attempt 1. The duplicate-netplan cleanup retry mirrors network.py:
+        # only when EVERY blocker is a duplicate definition do we offer the
+        # audited cleanup re-apply.
+        try:
+            await self._plan_apply_with_dialog(spec, "Applying IP pool…")
+        except TaskCancelled:
+            self.app.notify("IP pool apply cancelled.", severity="warning")
+            return
+        except PlanBlocked as exc:
+            dup = _cleanup_repairable(exc.blockers)
+            if not dup:
+                await self.app.push_screen_wait(
+                    ConfirmDialog(f"Apply blocked.\n{exc}", "Error", ok_only=True)
+                )
+                return
+            retry_ok = await self.app.push_screen_wait(
+                ConfirmDialog(
+                    "Plan blocked by duplicate netplan definitions:\n\n"
+                    + "\n".join(f"  {m}" for m in dup)
+                    + "\n\nRemove the duplicate stanza(s) and retry?\n"
+                    "(audited netplan repair via the API)",
+                    "Duplicate Netplan Definition",
+                )
             )
-            await self.app.snapshots.record(
-                "network_modify",
-                diff_summary=f"Applied IP pool: {len(allocations)} interfaces configured",
+            if not retry_ok:
+                return
+            try:
+                await self._plan_apply_with_dialog(
+                    {**spec, "cleanup": True}, "Applying IP pool (cleanup)…"
+                )
+            except TaskCancelled:
+                self.app.notify("IP pool apply cancelled.", severity="warning")
+                return
+            except ControlPathError as exc2:
+                await self.app.push_screen_wait(
+                    ConfirmDialog(f"Apply failed.\n{exc2}", "Error", ok_only=True)
+                )
+                return
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Apply failed.\n{exc}", "Error", ok_only=True)
             )
-            view = self.query_one("#pool-content", ScrollableTextView)
-            view.set_content(f"{_GRN}{msg}{_NC}")
-        else:
-            self.app.audit.log("network.pool_apply", msg[:200], "FAIL")
-            view = self.query_one("#pool-content", ScrollableTextView)
-            view.set_content(f"{_RED}{msg}{_NC}")
+            return
+
+        self.app.notify("IP pool applied.", severity="information")
+        self._show_current_settings()
+
+    async def _plan_apply_with_dialog(self, spec: dict, label: str):
+        """One plan/apply attempt behind a cancellable TaskWaitDialog. The
+        dialog is dismissed on every exit; PlanBlocked / TaskCancelled /
+        ControlPathError propagate to the caller for orchestration."""
+        dialog = TaskWaitDialog(label, "Apply IP Pool")
+        self.app.push_screen(dialog)
+        try:
+            return await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "POST",
+                _POOL_PATH,
+                spec,
+                on_progress=dialog.progress_from_thread(self.app),
+                cancel_check=dialog.cancel_requested,
+            )
+        finally:
+            dialog.dismiss(None)
 
     @work(exclusive=True)
     async def _show_current_settings(self) -> None:
@@ -633,37 +438,36 @@ class IPPoolScreen(XiNASAppMixin, Screen):
         loop = asyncio.get_running_loop()
         cfg = await loop.run_in_executor(None, _cfg_read)
 
-        _GRN, CYN, BLD, DIM, NC = "\033[32m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
-        W = 68
         lines = [
-            f"{BLD}{CYN}IP POOL SETTINGS{NC}",
-            f"{DIM}{'=' * W}{NC}",
+            f"{_BLD}{_CYN}IP POOL SETTINGS{_NC}",
+            f"{_DIM}{'=' * 68}{_NC}",
             "",
-            f"  {DIM}Enabled:{NC} {'Yes' if cfg.get('pool_enabled') else 'No'}",
-            f"  {DIM}Start:{NC}   {cfg['pool_start']}",
-            f"  {DIM}End:{NC}     {cfg['pool_end']}",
-            f"  {DIM}Prefix:{NC}  /{cfg['pool_prefix']}",
+            f"  {_DIM}Base (saved):{_NC}   {cfg['pool_start']}",
+            f"  {_DIM}Prefix (saved):{_NC} /{cfg['pool_prefix']}",
+            f"  {_DIM}MTU (saved):{_NC}    {cfg.get('pool_mtu') or '(unchanged)'}",
+            f"  {_DIM}Prefill cache:{_NC}  {_CFG_PATH}",
             "",
-            f"  {DIM}Config file:{NC} {_CFG_PATH}",
+            f"{_DIM}{'-' * 68}{_NC}",
+            f"  {_BLD}{_CYN}OBSERVED INTERFACE ADDRESSES{_NC}",
+            f"{_DIM}{'-' * 68}{_NC}",
             "",
         ]
+        try:
+            rows = await asyncio.to_thread(self.app.control.result, "/api/v1/network/interfaces")
+        except ControlPathError as exc:
+            lines.append(f"  {_RED}Could not read interfaces: {exc}{_NC}")
+            view.set_content("\n".join(lines))
+            return
 
-        # Show current netplan if exists
-        if _NETPLAN_PATH.exists():
-            try:
-                content = _NETPLAN_PATH.read_text()
-                lines.append(f"{DIM}{'-' * W}{NC}")
-                lines.append(f"  {BLD}{CYN}APPLIED NETPLAN{NC}  ({_NETPLAN_PATH})")
-                lines.append(f"{DIM}{'-' * W}{NC}")
-                lines.append("")
-                for nl in content.splitlines():
-                    lines.append(f"  {nl}")
-                lines.append("")
-            except Exception:
-                pass
-        else:
-            lines.append(f"  {DIM}No pool netplan file applied yet.{NC}")
+        for row in rows or []:
+            name = row.get("id") or (row.get("spec") or {}).get("name") or "?"
+            status = row.get("status") or {}
+            spec = row.get("spec") or {}
+            addrs = spec.get("addresses") or status.get("addresses") or []
+            state = status.get("operstate") or status.get("state") or "?"
+            lines.append(f"  {_BLD}{name}{_NC}  {_DIM}({state}){_NC}")
+            lines.append(f"      {_DIM}Addresses:{_NC} {', '.join(addrs) if addrs else '(none)'}")
             lines.append("")
 
-        lines.append(f"{DIM}{'=' * W}{NC}")
+        lines.append(f"{_DIM}{'=' * 68}{_NC}")
         view.set_content("\n".join(lines))

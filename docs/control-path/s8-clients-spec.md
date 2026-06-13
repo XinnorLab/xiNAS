@@ -111,7 +111,14 @@ legacy `xinas-mcp.service` is retired. MCP apply is blocked by default
   nfs_config.py`).
 - **T12:** network screens retarget — `netplan apply|try` subprocess
   calls REMOVED in favor of the API (`network.py`,
-  `configure/network_config.py`).
+  `configure/network_config.py`). *(Follow-up, post-S11: `screens/
+  ip_pool.py` — the IP-pool allocator — was the one direct-netplan day-2
+  consumer T12 left behind, deferred in the S9 spec. It now plan/applies
+  `POST /api/v1/network/ip-pool` (`net.pool.apply`, ADR-0008) and does no
+  interface detection, allocation, netplan rendering, PBR flushing, or
+  `netplan apply` of its own; `/etc/xinas/network-pool.json` survives only
+  as a dialog prefill cache. This closes the last direct-netplan day-2
+  path.)*
 - **T13:** RAID screens retarget — list/create/**modify**/delete incl.
   the composite teardown as an API sequence (§6); wizard pool lookups
   stay on gRPC.
