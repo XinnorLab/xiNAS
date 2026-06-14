@@ -87,6 +87,12 @@ class ConfigCollector:
                 continue
         return collected
 
+    def collect_absent_system_files(self) -> list[str]:
+        """S13 (ADR-0017): the managed logical names ABSENT now — the complement of
+        collect_system_files over SYSTEM_FILE_PATHS. Recorded at snapshot creation as
+        the explicit tombstone set; never inferred from missing checksums later."""
+        return [name for name, path in SYSTEM_FILE_PATHS.items() if not Path(path).exists()]
+
     def get_repo_commit(self) -> str:
         """Get current git commit hash of the repo."""
         try:
