@@ -256,6 +256,59 @@ On a scratch node (or after `./uninstall.sh`):
   `allow_apply` (destructive). Audit: `GET /api/v1/audit?task_id=<id>`
   finds the restore.
 
+## 5f. S12 — durable adoption (adopt restore)
+
+The S11 restore in §5e is an OBSERVED recovery: it reverts the file bytes
+but leaves desired KV untouched, so `drift.nfs-exports` shows degraded
+until the matching desired state is re-applied. S12 adds **adopt** — the
+restore ALSO re-asserts the snapshot's captured desired rows (puts the
+captured Shares/ExportGroups/NfsProfiles/NetworkInterfaces, deletes the
+orphans) in the SAME apply, so drift is CLEAN afterward.
+
+- [ ] **Captured desired payload:** after any S12 apply, the new snapshot
+  is `adoptable` — `GET /api/v1/config-history/snapshots` shows
+  `adoptable: true` for it (the api persisted a snapshot-desired payload
+  alongside the manifest). A pre-S12 snapshot (or one from a non-mutating
+  / rollback op) shows `adoptable: false`.
+- [ ] **Adopt restore (NFS):** create a share (snapshot S taken), then
+  mutate it out of band — edit `/etc/exports` AND delete the Share from
+  desired (`DELETE /api/v1/shares/<id>` apply, or add a second share so
+  the captured set differs). Restore S **with adopt** — from the TUI
+  snapshot-detail **Adopt (make durable)** action, or
+  `POST /config-history/rollback {to: <S>, reason, adopt: true}` planned
+  then applied with `dangerous` via `xinasctl`. The plan diff carries
+  `adopt: true` with the `desired_puts` / `desired_deletes` it will make
+  (the captured share put, the orphan share deleted); the task reaches
+  `success`; `/etc/exports` reverts to the captured bytes; `exportfs`
+  re-ran (clients see the restored set); `GET /api/v1/shares` now matches
+  the captured set (the re-asserted share present, the orphan gone).
+- [ ] **Drift CLEAN (the S12 payoff):** immediately after the adopt
+  restore — with NO further re-apply — `GET /health` and
+  `GET /config-history/drift` show `drift.nfs-exports` **clean** (and
+  `drift.netplan` clean if network was in the captured set). Contrast
+  §5e: the same restore WITHOUT adopt leaves `drift.nfs-exports`
+  degraded. Re-running the adopt is idempotent (live state already
+  matches → task `success`, drift stays clean).
+- [ ] **Per-domain scoping:** restoring an NFS-only snapshot with adopt
+  does NOT touch desired network rows (and vice versa) — a snapshot whose
+  captured payload has no NetworkInterface rows leaves `99-xinas.yaml`
+  desired state untouched (no `drift.netplan` churn).
+- [ ] **Guards:** `adopt: true` on a `to: baseline` reset → plan rejected
+  `INVALID_ARGUMENT` (baseline has no captured desired payload to adopt);
+  adopt on an observed-but-not-captured snapshot (pre-S12) → plan blocks
+  with `not_adoptable`; the stale guard fires if a captured Share's
+  desired revision is bumped between plan and apply → apply
+  `PRECONDITION_FAILED {stale}` with desired KV unchanged. MCP
+  `config_history.rollback` with `adopt: true` still needs `allow_apply`
+  (destructive). Audit: `GET /api/v1/audit?task_id=<id>` finds the adopt
+  apply.
+- [ ] **GC of orphan payloads:** after the Python-side history GC removes
+  a snapshot and the agent's next sweep drops its
+  `observed/ConfigSnapshot/<id>` row, the api's snapshot-desired GC prunes
+  the orphaned payload — that snapshot id no longer appears with
+  `adoptable: true` (and re-creating a share does not resurrect a stale
+  captured set).
+
 ## 6. Cross-cutting
 
 1. [ ] **Plan→pause→apply:** plan an array modify, wait 2+ minutes,
