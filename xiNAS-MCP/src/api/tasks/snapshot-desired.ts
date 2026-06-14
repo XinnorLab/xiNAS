@@ -41,3 +41,40 @@ export function readSnapshotDesired(
   const row = kv.get<SnapshotDesiredPayload>(snapshotDesiredKey(snapshotId));
   return row !== null ? row.value : null;
 }
+
+/**
+ * GC orphan snapshot-desired payloads (ADR-0015, S12 T6).
+ *
+ * Deletes every `snapshot-desired/{id}` payload whose snapshot id has NO
+ * matching `/xinas/v1/observed/ConfigSnapshot/{id}` row. This prevents
+ * unbounded accumulation when the Python-side GC removes a config snapshot
+ * from history and the agent's next complete-snapshot reconcile deletes the
+ * corresponding `observed/ConfigSnapshot/{id}` row — at that point the
+ * `snapshot-desired/{id}` payload is orphaned and must be pruned.
+ *
+ * The id match uses `row.value.id` on the observed ConfigSnapshot row, which
+ * is authoritative (confirmed by config-rollback.ts: `r.value.id === spec.to`).
+ *
+ * Returns the snapshot ids that were pruned.
+ */
+export function gcSnapshotDesired(kv: KvStore): string[] {
+  // Collect the set of snapshot ids that still have an observed ConfigSnapshot row.
+  const observed = new Set(
+    kv
+      .list<{ id?: string }>({ prefix: '/xinas/v1/observed/ConfigSnapshot/' })
+      .map((r) => r.value.id)
+      .filter((id): id is string => id !== undefined),
+  );
+
+  const pruned: string[] = [];
+  for (const row of kv.list<{ snapshot_id?: string }>({ prefix: SNAPSHOT_DESIRED_PREFIX })) {
+    const snapshotId = row.value.snapshot_id;
+    if (snapshotId === undefined || !observed.has(snapshotId)) {
+      kv.delete(row.key);
+      // Derive the id from the key suffix (the payload's snapshot_id may be
+      // absent for malformed/legacy rows, so use the key suffix as the prune id).
+      pruned.push(row.key.slice(SNAPSHOT_DESIRED_PREFIX.length));
+    }
+  }
+  return pruned;
+}

@@ -1,10 +1,11 @@
-import type { NextFunction, Request, Response } from 'express';
-import type { Kind } from '../../agent/collectors/base.js';
-import { observedSegment } from '../../agent/collectors/base.js';
-import { canonicalize } from '../../lib/canonical-json.js';
-import type { ApiContext } from '../context.js';
-import { ApiException } from '../errors.js';
-import { sendOk } from '../handlers/reads.js';
+import type { NextFunction, Request, Response } from "express";
+import type { Kind } from "../../agent/collectors/base.js";
+import { observedSegment } from "../../agent/collectors/base.js";
+import { canonicalize } from "../../lib/canonical-json.js";
+import type { ApiContext } from "../context.js";
+import { ApiException } from "../errors.js";
+import { sendOk } from "../handlers/reads.js";
+import { gcSnapshotDesired } from "../tasks/snapshot-desired.js";
 
 /**
  * Strip the sweep-churning observed_at stamps (top-level for singleton
@@ -13,11 +14,14 @@ import { sendOk } from '../handlers/reads.js';
  * runs through canonicalize (JSON.stringify), which drops `undefined`.
  */
 function stripObservedAt(value: unknown): unknown {
-  if (typeof value !== 'object' || value === null) return value;
+  if (typeof value !== "object" || value === null) return value;
   const v = { ...(value as Record<string, unknown>) };
-  if ('observed_at' in v) v.observed_at = undefined;
-  if (typeof v.status === 'object' && v.status !== null) {
-    v.status = { ...(v.status as Record<string, unknown>), observed_at: undefined };
+  if ("observed_at" in v) v.observed_at = undefined;
+  if (typeof v.status === "object" && v.status !== null) {
+    v.status = {
+      ...(v.status as Record<string, unknown>),
+      observed_at: undefined,
+    };
   }
   return v;
 }
@@ -25,7 +29,7 @@ function stripObservedAt(value: unknown): unknown {
 interface ObservationDeltaBody {
   kind: Kind;
   id: string;
-  op: 'upsert' | 'delete';
+  op: "upsert" | "delete";
   value?: Record<string, unknown>;
 }
 
@@ -65,15 +69,16 @@ export function isValidObservedId(id: string): boolean {
   // one leading '/' is legitimate (absolute-path ids); strip it, then any
   // remaining leading '/' (i.e. '//...') or trailing '/' or interior '//'
   // is malformed.
-  const body = id.startsWith('/') ? id.slice(1) : id;
+  const body = id.startsWith("/") ? id.slice(1) : id;
   if (body.length === 0) return false;
-  if (body.startsWith('/') || body.endsWith('/') || body.includes('//')) return false;
+  if (body.startsWith("/") || body.endsWith("/") || body.includes("//"))
+    return false;
   for (let i = 0; i < id.length; i++) {
     const c = id.charCodeAt(i);
     if (c < 0x20 || c === 0x7f) return false;
   }
-  for (const segment of body.split('/')) {
-    if (segment === '..' || segment === '.') return false;
+  for (const segment of body.split("/")) {
+    if (segment === ".." || segment === ".") return false;
   }
   return true;
 }
@@ -99,7 +104,7 @@ export function observedHandler(ctx: ApiContext) {
       // Validate controller_id match.
       if (body.controller_id !== ctx.config.controller_id) {
         throw new ApiException(
-          'INVALID_ARGUMENT',
+          "INVALID_ARGUMENT",
           `controller_id mismatch: request has '${body.controller_id}', ` +
             `api is configured with '${ctx.config.controller_id}'`,
         );
@@ -123,16 +128,19 @@ export function observedHandler(ctx: ApiContext) {
       if (ctx.observedSchemas) {
         for (let i = 0; i < deltas.length; i++) {
           const delta = deltas[i]!;
-          if (delta.op !== 'upsert') continue;
+          if (delta.op !== "upsert") continue;
           const validate = ctx.observedSchemas[delta.kind];
           if (!validate) {
-            throw new ApiException('INVALID_ARGUMENT', `delta[${i}]: unknown kind '${delta.kind}'`);
+            throw new ApiException(
+              "INVALID_ARGUMENT",
+              `delta[${i}]: unknown kind '${delta.kind}'`,
+            );
           }
           if (!validate(delta.value)) {
             throw new ApiException(
-              'INVALID_ARGUMENT',
+              "INVALID_ARGUMENT",
               `delta[${i}] (kind=${delta.kind}, id=${delta.id}) failed schema: ` +
-                `${ctx.ajv?.errorsText(validate.errors) ?? 'invalid'}`,
+                `${ctx.ajv?.errorsText(validate.errors) ?? "invalid"}`,
             );
           }
         }
@@ -144,7 +152,10 @@ export function observedHandler(ctx: ApiContext) {
       for (let i = 0; i < deltas.length; i++) {
         const delta = deltas[i]!;
         if (!isValidObservedId(delta.id)) {
-          throw new ApiException('INVALID_ARGUMENT', `delta[${i}]: invalid id '${delta.id}'`);
+          throw new ApiException(
+            "INVALID_ARGUMENT",
+            `delta[${i}]: invalid id '${delta.id}'`,
+          );
         }
       }
 
@@ -175,12 +186,13 @@ export function observedHandler(ctx: ApiContext) {
         //    on every push regardless).
         for (const delta of deltas) {
           const key = `/xinas/v1/observed/${observedSegment(delta.kind)}/${delta.id}`;
-          if (delta.op === 'upsert') {
+          if (delta.op === "upsert") {
             const value = delta.value ?? {};
             const current = tx.get(key);
             if (
               current !== null &&
-              canonicalize(stripObservedAt(current.value)) === canonicalize(stripObservedAt(value))
+              canonicalize(stripObservedAt(current.value)) ===
+                canonicalize(stripObservedAt(value))
             ) {
               skippedUnchanged++;
               revisions.push(current.revision);
@@ -191,7 +203,7 @@ export function observedHandler(ctx: ApiContext) {
             // anyway so a future CAS variant can't silently push undefined.
             if (result.ok) revisions.push(result.value.revision);
             accepted++;
-          } else if (delta.op === 'delete') {
+          } else if (delta.op === "delete") {
             tx.delete(key);
             accepted++;
           }
@@ -201,8 +213,10 @@ export function observedHandler(ctx: ApiContext) {
         //    that were NOT in the batch.
         const upsertedKeys = new Set(
           deltas
-            .filter((d) => d.op === 'upsert')
-            .map((d) => `/xinas/v1/observed/${observedSegment(d.kind)}/${d.id}`),
+            .filter((d) => d.op === "upsert")
+            .map(
+              (d) => `/xinas/v1/observed/${observedSegment(d.kind)}/${d.id}`,
+            ),
         );
 
         for (const kind of completeSnapshots) {
@@ -217,7 +231,17 @@ export function observedHandler(ctx: ApiContext) {
         }
       });
 
-      // 3. Notify the tracker that an observation push happened.
+      // 3. GC orphan snapshot-desired payloads — ONLY on a complete ConfigSnapshot
+      //    re-emit. That is the only push yielding an authoritative observed set, and
+      //    (the collector re-emits every row) it necessarily includes any snapshot
+      //    created before the capture that wrote its payload — so a freshly-captured
+      //    payload is never pruned in the window before its observation lands
+      //    (ADR-0015, S12 T6).
+      if (completeSnapshots.includes("ConfigSnapshot")) {
+        gcSnapshotDesired(ctx.state.kv);
+      }
+
+      // 4. Notify the tracker that an observation push happened.
       ctx.tracker?.recordObservationPush(new Date());
 
       const stateRevision = revisions.length > 0 ? Math.max(...revisions) : 0;
