@@ -184,6 +184,9 @@ class Manifest:
     # S11 (ADR-0013): managed-file names changed vs the parent snapshot —
     # history/display + restore blast-radius hint, NOT the restore set.
     files_changed: list[str] = field(default_factory=list)
+    # S13 (ADR-0017): managed-file names absent from disk at creation time —
+    # the explicit tombstone set; tombstones come ONLY from this field.
+    absent_files: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to a plain dict suitable for YAML serialization.
@@ -217,6 +220,8 @@ class Manifest:
             result["diff_summary"] = self.diff_summary
         if self.files_changed:
             result["files_changed"] = list(self.files_changed)
+        if self.absent_files:
+            result["absent_files"] = list(self.absent_files)
 
         # Boolean fields — include only when non-default
         if self.auto_detected:
@@ -259,6 +264,7 @@ class Manifest:
             validation=dict(data.get("validation", {})),
             diff_summary=data.get("diff_summary"),
             files_changed=list(data.get("files_changed", [])),
+            absent_files=list(data.get("absent_files", [])),
         )
 
 

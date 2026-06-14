@@ -24,6 +24,9 @@ class _FakeConfigCollector:
     def collect_system_files(self) -> dict[str, bytes]:
         return {"etc_exports": b"EPHEMERAL-LIVE"}
 
+    def collect_absent_system_files(self) -> list[str]:
+        return []
+
     def get_repo_commit(self) -> str:
         return ""
 

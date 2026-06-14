@@ -130,7 +130,9 @@ class SnapshotEngine:
 
         # S11 (ADR-0013): capture the live restorable system-file bytes and
         # compute files_changed vs the parent (display/blast-radius hint).
+        # S13 (ADR-0017): record the explicit tombstone set at creation time.
         system_files = self._config_collector.collect_system_files()
+        absent_files = self._config_collector.collect_absent_system_files()
         parent_checksums: dict | None = None
         if parent_id is not None:
             parent_manifest = self._store.read_manifest(parent_id)
@@ -157,6 +159,7 @@ class SnapshotEngine:
             checksums=checksums.to_dict(),
             diff_summary=diff_summary,
             files_changed=files_changed,
+            absent_files=absent_files,
         )
 
         # 8. Write snapshot to store
