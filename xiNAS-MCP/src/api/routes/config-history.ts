@@ -8,6 +8,8 @@ import { getOrNull, listByPrefix } from '../handlers/reads.js';
 import { applyMode, planMode, requireTasks } from './apply-helpers.js';
 import { gatherHealthFacts } from '../handlers/health-facts.js';
 import { sendOk } from '../handlers/reads.js';
+import { snapshotDesiredKey } from '../tasks/snapshot-desired.js';
+import type { KvStore } from '../../state/store.js';
 
 const WARN = {
   code: 'CONFIG_HISTORY_NOT_INTEGRATED',
@@ -28,10 +30,14 @@ function emptyEnvelope(req: Request, res: Response, result: unknown) {
 }
 
 /** Observed ConfigSnapshot row → the public schema shape. */
-function publicSnapshot(value: Record<string, unknown>): Record<string, unknown> {
+function publicSnapshot(value: Record<string, unknown>, kv: KvStore): Record<string, unknown> {
   const status = (value.status ?? {}) as Record<string, unknown>;
   const { observed_at: _dropped, ...fields } = status;
-  return fields;
+  // S12 (ADR-0015): adoptable is computed API-side from the snapshot-desired
+  // payload presence — independent of the agent-observed `restorable` field.
+  const snapshotId = typeof fields.snapshot_id === 'string' ? fields.snapshot_id : '';
+  const adoptable = snapshotId !== '' && kv.get(snapshotDesiredKey(snapshotId)) !== null;
+  return { ...fields, adoptable };
 }
 
 export function configHistoryRouter(ctx: ApiContext): Router {
@@ -49,7 +55,7 @@ export function configHistoryRouter(ctx: ApiContext): Router {
     sendOk(
       req,
       res,
-      rows.map((row) => publicSnapshot(row.value)),
+      rows.map((row) => publicSnapshot(row.value, ctx.state.kv)),
       rows.map((row) => row.revision),
     );
   });
@@ -62,7 +68,7 @@ export function configHistoryRouter(ctx: ApiContext): Router {
     if (row === null) {
       throw new ApiException('NOT_FOUND', `no such snapshot: ${req.params.id}`);
     }
-    sendOk(req, res, publicSnapshot(row.value), [row.revision]);
+    sendOk(req, res, publicSnapshot(row.value, ctx.state.kv), [row.revision]);
   });
 
   r.get('/config-history/diff', async (req, res, next) => {
