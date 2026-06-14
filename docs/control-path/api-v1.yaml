@@ -1385,6 +1385,11 @@ components:
             S11 (ADR-0013): true iff the snapshot carries a system_files
             payload (live NFS/network config bytes) that targeted rollback can
             restore. Pre-S11 snapshots are false.
+        adoptable:
+          type: boolean
+          description: >-
+            True when the snapshot carries a captured desired-state payload (S12) and
+            can be restored with adopt:true. Independent of `restorable`.
         # S9 (ADR-0011): typed projections of the xinas_history manifest.
         history_type:
           type: string
@@ -2702,7 +2707,34 @@ paths:
       tags: [config-history]
       operationId: planConfigRollback
       summary: Plan a rollback to a snapshot (plan/apply).
-      requestBody: { $ref: '#/components/requestBodies/Mutating' }
+      requestBody:
+        description: >-
+          Plan or apply request. spec = { to: "baseline" | "<snapshot-id>",
+          reason: string, adopt?: boolean }. ADR-0013, ADR-0015.
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/MutatingRequest'
+                - type: object
+                  properties:
+                    spec:
+                      type: object
+                      properties:
+                        to:
+                          type: string
+                          description: >-
+                            Target snapshot id or the literal "baseline".
+                        reason:
+                          type: string
+                          description: Audit reason for the rollback.
+                        adopt:
+                          type: boolean
+                          default: false
+                          description: >-
+                            Adopt the restored config as the new desired state (durable). Targeted
+                            restores only; replaces desired within the captured domains. ADR-0015.
       responses:
         '200': { $ref: '#/components/responses/PlanReturned' }
         '202': { $ref: '#/components/responses/TaskAccepted' }
