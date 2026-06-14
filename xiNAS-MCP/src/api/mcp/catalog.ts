@@ -293,7 +293,7 @@ export const CATALOG: CatalogEntry[] = [
     'config_history.rollback',
     'POST',
     '/config-history/rollback',
-    'Roll back to the BASELINE snapshot OR restore any restorable snapshot (file-level NFS/network config — observed recovery, re-apply to make durable). Plan/apply, destructive — dangerous:true at apply. spec = {to: "baseline" | "<snapshot-id>", reason}.',
+    'Roll back to the BASELINE snapshot OR restore any restorable snapshot (file-level NFS/network config — observed recovery, re-apply to make durable). For adoptable snapshots only: add adopt:true to spec to also replace desired state within the captured domains, making the restore durable without a separate re-apply. Plan/apply, destructive — dangerous:true at apply. spec = {to: "baseline" | "<snapshot-id>", reason, adopt?:true}.',
     'admin',
   ),
 

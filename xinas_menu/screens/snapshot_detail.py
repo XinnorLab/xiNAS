@@ -47,6 +47,7 @@ _MENU = [
     MenuItem("3", "Config Files"),
     MenuItem("4", "Runtime State"),
     MenuItem("5", "Restore"),
+    MenuItem("6", "Adopt (make durable)"),
     MenuItem("0", "Back"),
 ]
 
@@ -55,6 +56,26 @@ def _snapshot_restorable(engine: SnapshotEngine, snapshot_id: str) -> bool:
     """S11 (ADR-0013): a snapshot is restorable iff it carries a non-empty
     system_files payload (the live NFS/network config bytes)."""
     return bool(engine._store.list_system_files(snapshot_id))
+
+
+def _snapshot_adoptable(control, snapshot_id: str) -> bool:
+    """S12 (ADR-0015): a snapshot is adoptable iff the API projects
+    ``adoptable: true`` on its GET /config-history/snapshots/{id} row.
+
+    ``adoptable`` is computed API-side from the presence of a
+    snapshot-desired KV payload; it is NOT derivable from the Python
+    xinas_history engine, so this helper reads from the control API.
+
+    ``control`` is a :class:`~xinas_menu.api.control_client.ControlClient`.
+    Returns False when the API is unreachable or the snapshot is not found.
+    """
+    try:
+        row = control.result(f"/api/v1/config-history/snapshots/{snapshot_id}")
+        if isinstance(row, dict):
+            return bool(row.get("adoptable", False))
+    except Exception:
+        pass
+    return False
 
 
 class SnapshotDetailScreen(XiNASAppMixin, Screen):
@@ -104,6 +125,8 @@ class SnapshotDetailScreen(XiNASAppMixin, Screen):
             self._show_runtime_state()
         elif key == "5":
             self._restore()
+        elif key == "6":
+            self._adopt()
 
     # -- Load manifest detail -----------------------------------------------
 
@@ -371,6 +394,82 @@ class SnapshotDetailScreen(XiNASAppMixin, Screen):
             return
         self.app.notify(
             "Restore applied (observed recovery — re-apply to make durable).",
+            severity="information",
+        )
+
+    # -- Adopt (S12, ADR-0015) ---------------------------------------------
+
+    @work(exclusive=True)
+    async def _adopt(self) -> None:
+        """Make this snapshot durable: restore files AND replace desired state
+        within the captured domains (targeted rollback with adopt:true).
+
+        Only offered when the snapshot is ``adoptable`` (the API row carries
+        ``adoptable: true``, meaning a snapshot-desired payload was captured
+        at the time of the apply that created this snapshot).
+        """
+        # Check adoptable via the control API (engine-local cannot compute it).
+        adoptable = await asyncio.to_thread(
+            _snapshot_adoptable, self.app.control, self._snapshot_id
+        )
+        if not adoptable:
+            await self.app.push_screen_wait(
+                ConfirmDialog(
+                    "This snapshot is not adoptable.\n\n"
+                    "Adopt is only available for snapshots that have a captured\n"
+                    "desired-state payload (created after S12 was deployed).",
+                    "Not Adoptable",
+                    ok_only=True,
+                )
+            )
+            return
+
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(
+                f"Make snapshot {self._snapshot_id} durable (adopt)?\n\n"
+                "This will:\n"
+                "  1. Restore the captured NFS/network config files, AND\n"
+                "  2. REPLACE desired state within the captured domains\n"
+                "     (existing desired rows NOT in the snapshot will be DELETED).\n\n"
+                "This is a DURABLE restore — no separate re-apply is needed.\n"
+                "Desired rows in un-captured domains are left untouched.",
+                "Confirm Adopt (make durable)",
+            )
+        )
+        if not confirmed:
+            return
+
+        dialog = TaskWaitDialog(f"Adopting snapshot {self._snapshot_id}…", "Adopt")
+        self.app.push_screen(dialog)
+        cancelled = False
+        error: ControlPathError | None = None
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "POST",
+                "/api/v1/config-history/rollback",
+                {"to": self._snapshot_id, "reason": "TUI adopt", "adopt": True},
+                dangerous=True,
+                on_progress=dialog.progress_from_thread(self.app),
+                cancel_check=dialog.cancel_requested,
+            )
+        except TaskCancelled:
+            cancelled = True
+        except ControlPathError as exc:
+            error = exc
+        finally:
+            dialog.dismiss(None)
+
+        if cancelled:
+            self.app.notify("Adopt cancelled.", severity="warning")
+            return
+        if error is not None:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Adopt failed.\n{error}", "Error", ok_only=True)
+            )
+            return
+        self.app.notify(
+            "Adopt applied — snapshot is now durable (desired state updated).",
             severity="information",
         )
 
