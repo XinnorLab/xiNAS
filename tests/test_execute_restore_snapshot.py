@@ -32,7 +32,14 @@ class _FakeRuntimeCollector:
         return Checksums(etc_exports="sha256:LIVE")
 
 
-def _build(tmp_path, *, target_system: dict[str, bytes], target_checksums: dict):
+def _build(
+    tmp_path,
+    *,
+    target_system: dict[str, bytes],
+    target_checksums: dict,
+    target_absent: list[str] | None = None,
+    current_checksums: dict | None = None,
+):
     """A runner whose engine + restore seams are faked. Returns
     (runner, store, target_id, live_dir, commands)."""
     store = FilesystemStore(root=str(tmp_path))
@@ -47,16 +54,19 @@ def _build(tmp_path, *, target_system: dict[str, bytes], target_checksums: dict)
     engine._get_hardware_id = _no_hw  # type: ignore[assignment]
 
     target_id = "20260601T120000Z-share-create"
+    manifest = Manifest(
+        id=target_id,
+        timestamp="2026-06-01T12:00:00Z",
+        user="root",
+        source="api",
+        operation="share_create",
+        checksums=target_checksums,
+    )
+    if target_absent is not None:
+        manifest.absent_files = target_absent
     store.write_snapshot(
         snapshot_id=target_id,
-        manifest=Manifest(
-            id=target_id,
-            timestamp="2026-06-01T12:00:00Z",
-            user="root",
-            source="api",
-            operation="share_create",
-            checksums=target_checksums,
-        ),
+        manifest=manifest,
         config_files={},
         runtime_files={},
         system_files=target_system,
@@ -79,9 +89,12 @@ def _build(tmp_path, *, target_system: dict[str, bytes], target_checksums: dict)
 
     runner._run_command = _fake_run  # type: ignore[attr-defined]
 
+    # Allow tests to supply their own current-checksum dict; fall back to
+    # the original default (etc_exports differs from target).
+    _current = current_checksums if current_checksums is not None else {"etc_exports": "sha256:LIVE"}
+
     async def _live_checksums() -> Checksums:
-        # etc_exports differs from the target → in the restore set.
-        return Checksums(etc_exports="sha256:LIVE")
+        return Checksums(**_current)
 
     runner._collect_current_checksums = _live_checksums  # type: ignore[attr-defined]
     return runner, store, target_id, live_dir, commands
@@ -167,3 +180,49 @@ def test_reconverge_commands_netplan_includes_flush_and_apply():
     # PBR-flush + IP-flush precede the apply (the documented sequence).
     assert any("ip rule del table" in " ".join(c) for c in cmds)
     assert cmds.index(["netplan", "apply"]) == len(cmds) - 1
+
+
+# ---------------------------------------------------------------------------
+# S13 T3 — tombstone delete_set tests
+# ---------------------------------------------------------------------------
+
+
+def test_restore_deletes_absent_target_file(tmp_path):
+    runner, store, target_id, live_dir, commands = _build(
+        tmp_path,
+        target_system={},
+        target_checksums={},
+        target_absent=["etc_exports"],
+        current_checksums={"etc_exports": "sha256:LIVE"},
+    )
+    (live_dir / "exports").write_bytes(b"LIVE")
+    result = asyncio.run(runner.execute_restore_snapshot(target_id, source="api", reason="x"))
+    assert result.success is True
+    assert not (live_dir / "exports").exists()
+    assert ["exportfs", "-ra"] in commands
+
+
+def test_restore_restorable_on_absent_files_only(tmp_path):
+    runner, store, target_id, live_dir, commands = _build(
+        tmp_path,
+        target_system={},
+        target_checksums={},
+        target_absent=["etc_exports"],
+        current_checksums={"etc_exports": "sha256:LIVE"},
+    )
+    (live_dir / "exports").write_bytes(b"LIVE")
+    result = asyncio.run(runner.execute_restore_snapshot(target_id, source="api", reason="x"))
+    assert result.error != "no_restorable_payload"
+    assert result.success is True
+
+
+def test_restore_absent_and_already_absent_is_noop(tmp_path):
+    runner, store, target_id, live_dir, commands = _build(
+        tmp_path,
+        target_system={},
+        target_checksums={},
+        target_absent=["etc_exports"],
+        current_checksums={},
+    )
+    result = asyncio.run(runner.execute_restore_snapshot(target_id, source="api", reason="x"))
+    assert result.success is True and any("noop" in s for s in result.steps)

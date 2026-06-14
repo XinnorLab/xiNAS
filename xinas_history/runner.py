@@ -559,25 +559,31 @@ class TransactionalRunner:
             return
         Path(path).write_bytes(content)
 
-    async def _reconverge(self, restore_set: list[str]) -> bool:
-        for argv in self._reconverge_commands(restore_set):
+    def _delete_system_file(self, name: str) -> None:
+        path = self._system_file_paths.get(name)
+        if path is None:
+            return
+        Path(path).unlink(missing_ok=True)
+
+    async def _reconverge(self, change_set: list[str]) -> bool:
+        for argv in self._reconverge_commands(change_set):
             ok, _out = await self._run_command(argv)
             if not ok:
                 return False
         return True
 
-    async def _restore_rollback(self, pre_change_id: str, restore_set: list[str]) -> bool:
+    async def _restore_rollback(self, pre_change_id: str, change_set: list[str]) -> bool:
         """File-level rollback: write the pre-change ephemeral's captured bytes
-        back for the same restore set + reconverge. NOT ``_auto_rollback``
-        (which re-runs Ansible — wrong for a file restore)."""
+        back for the same change set + reconverge. Restore-specific (the
+        Ansible flow's ``_auto_rollback`` is its own file-level path)."""
         try:
-            for name in restore_set:
+            for name in change_set:
                 content = self._store.read_system_file(pre_change_id, name)
                 if content is not None:
                     self._write_system_file(name, content)
             # Honor the reconverge outcome: bytes on disk without a successful
             # service reconverge is a partial rollback, not a success.
-            return await self._reconverge(restore_set)
+            return await self._reconverge(change_set)
         except Exception:
             logger.exception("File-level restore rollback failed")
             return False
@@ -600,7 +606,7 @@ class TransactionalRunner:
             result.error = "snapshot_not_found"
             return result
         captured = self._store.list_system_files(snapshot_id)
-        if not captured:
+        if not captured and not (target.absent_files or []):
             result.error = "no_restorable_payload"
             return result
 
@@ -615,7 +621,15 @@ class TransactionalRunner:
         current_checksums = (await self._collect_current_checksums()).to_dict()
         target_checksums = target.checksums or {}
         restore_set = [n for n in captured if current_checksums.get(n) != target_checksums.get(n)]
-        if not restore_set:
+        # Delete set = files absent at snapshot time that are present now,
+        # and only names within the managed set (invariant guard).
+        delete_set = [
+            n
+            for n in (target.absent_files or [])
+            if current_checksums.get(n) and n in self._system_file_paths
+        ]
+        change_set = restore_set + delete_set
+        if not change_set:
             result.success = True
             result.output = "already at target; no changes"
             result.steps.append("noop_already_current")
@@ -642,14 +656,20 @@ class TransactionalRunner:
                 content = self._store.read_system_file(snapshot_id, name)
                 if content is not None:
                     self._write_system_file(name, content)
-            result.steps.append("files_written")
+            if restore_set:
+                result.steps.append("files_written")
 
-            ok = await self._reconverge(restore_set)
+            for name in delete_set:
+                self._delete_system_file(name)
+            if delete_set:
+                result.steps.append("files_deleted")
+
+            ok = await self._reconverge(change_set)
             if ok:
                 ok = await self._validate_restore()
 
             if not ok:
-                rb_ok = await self._restore_rollback(pre.id, restore_set)
+                rb_ok = await self._restore_rollback(pre.id, change_set)
                 result.rollback_performed = True
                 result.rollback_success = rb_ok
                 result.error = "restore validation failed; rolled back to pre-change state"
