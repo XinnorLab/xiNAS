@@ -226,3 +226,42 @@ def test_restore_absent_and_already_absent_is_noop(tmp_path):
     )
     result = asyncio.run(runner.execute_restore_snapshot(target_id, source="api", reason="x"))
     assert result.success is True and any("noop" in s for s in result.steps)
+
+
+# ---------------------------------------------------------------------------
+# S13 T4 — file-level rollback RECREATES a tombstone-deleted file
+# ---------------------------------------------------------------------------
+
+
+def test_rollback_recreates_deleted_file(tmp_path):
+    """Validation failure after a tombstone-delete must recreate the file.
+
+    Scenario:
+      • target snapshot has etc_exports in absent_files (file should be gone)
+      • current live state has the file (sha256:LIVE) → ends up in delete_set
+      • pre-change ephemeral is created before the delete; the fake collector
+        captures etc_exports=b"EPHEMERAL-LIVE" regardless of disk state
+      • _validate_restore forced → False
+      • rollback must write the pre-change bytes back, recreating the file
+    """
+    runner, store, target_id, live_dir, commands = _build(
+        tmp_path,
+        target_system={},
+        target_checksums={},
+        target_absent=["etc_exports"],
+        current_checksums={"etc_exports": "sha256:LIVE"},
+    )
+    # File is present pre-change; the real ephemeral would capture it.
+    # The fake collector always returns b"EPHEMERAL-LIVE" for etc_exports.
+    (live_dir / "exports").write_bytes(b"LIVE-BYTES")
+
+    async def _fail() -> bool:
+        return False
+
+    runner._validate_restore = _fail  # type: ignore[attr-defined]
+
+    result = asyncio.run(runner.execute_restore_snapshot(target_id, source="api", reason="x"))
+    assert result.success is False
+    assert result.rollback_performed is True
+    # The deleted file must be RECREATED from the pre-change ephemeral bytes.
+    assert (live_dir / "exports").read_bytes() == b"EPHEMERAL-LIVE"
