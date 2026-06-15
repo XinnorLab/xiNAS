@@ -33,11 +33,24 @@ import type { PlanContext, PlanProvider, PlanResult } from '../engine.js';
  * NetworkInterface). When a domain's primary set is empty in the payload, that
  * domain is left untouched — no puts, no deletes — so a snapshot that only ever
  * touched NFS never wipes desired network rows.
+ *
+ * S13 (ADR-0017): when the primary set is empty AND the domain's backing file
+ * appears in `absent_files`, that means the file was REMOVED at snapshot time —
+ * so current desired rows of the PRIMARY kind are tombstone-deleted. Secondary
+ * kinds (ExportGroup, NfsProfile) are NEVER tombstone-deleted.
  */
 const ADOPT_DOMAINS: { primary: string; kinds: string[] }[] = [
   { primary: 'Share', kinds: ['Share', 'ExportGroup', 'NfsProfile'] },
   { primary: 'NetworkInterface', kinds: ['NetworkInterface'] },
 ];
+
+/** S13 (ADR-0017): maps a domain's PRIMARY kind to the logical file name used
+ *  in `status.absent_files`. Only PRIMARY kinds appear here — singletons like
+ *  ExportGroup/NfsProfile are never tombstone-deleted. */
+const DOMAIN_FILE: Record<string, string> = {
+  Share: 'etc_exports',
+  NetworkInterface: 'netplan',
+};
 
 interface ObservedSnapshotRow {
   id?: string;
@@ -47,6 +60,7 @@ interface ObservedSnapshotRow {
     created_at?: string;
     restorable?: boolean;
     files_changed?: string[];
+    absent_files?: string[];
   };
 }
 
@@ -119,6 +133,7 @@ function baselinePlan(spec: { reason: string }, ctx: PlanContext): PlanResult {
 function adoptOverlay(
   to: string,
   ctx: PlanContext,
+  absentFiles: string[],
 ): {
   mutations: DesiredMutation[];
   pinned: ResourceRef[];
@@ -144,6 +159,19 @@ function adoptOverlay(
   for (const { primary, kinds } of ADOPT_DOMAINS) {
     // Per-domain gate: skip the whole domain unless its PRIMARY kind has ≥1 row.
     if ((captured[primary] ?? []).length === 0) {
+      // S13 (ADR-0017): tombstone path — if the domain's backing file was absent
+      // at snapshot time, delete current desired rows of the PRIMARY kind only.
+      // ExportGroup/NfsProfile singletons are NEVER tombstone-deleted.
+      const backing = DOMAIN_FILE[primary];
+      if (backing !== undefined && absentFiles.includes(backing)) {
+        const current = ctx.kv.list<{ id?: string }>({ prefix: `/xinas/v1/desired/${primary}/` });
+        for (const r of current) {
+          const id = r.value.id ?? '';
+          mutations.push({ key: `/xinas/v1/desired/${primary}/${id}`, delete: true });
+          pinned.push({ kind: primary, id, revision: r.revision });
+        }
+      }
+      // else: skip (no spurious drift) — S12 behavior
       continue;
     }
     for (const kind of kinds) {
@@ -204,6 +232,7 @@ function targetedPlan(
   // re-checksum live files; an empty restore set is the runner's no-op at apply.
 
   const filesChanged = row?.value.status?.files_changed ?? [];
+  const absentFiles = row?.value.status?.absent_files ?? [];
   const domains = new Set(filesChanged.map((f) => (f === 'netplan' ? 'network' : 'nfs')));
   const warnings: PlanResult['warnings'] =
     domains.size > 0
@@ -263,7 +292,7 @@ function targetedPlan(
   // observed_freshness_ref, risk_level and the ConfigHistory/default lease are
   // all unchanged either way.
   if (adopt) {
-    const overlay = adoptOverlay(spec.to, ctx);
+    const overlay = adoptOverlay(spec.to, ctx, absentFiles);
     if (overlay.blocker !== undefined) {
       // Payload wholly absent → not adoptable; add the blocker, no mutations.
       result.blockers.push(overlay.blocker);
