@@ -598,6 +598,14 @@ def _format_manifest(manifest) -> str:
         lines.append(f"  {_DIM}{'-' * 56}{_NC}")
         lines.append(f"  {manifest.diff_summary}")
 
+    # S13 (ADR-0017): tombstone set — files that would be DELETED on restore
+    if getattr(manifest, "absent_files", None):
+        absent = ", ".join(manifest.absent_files)
+        lines.append("")
+        lines.append(f"  {_BLD}Absent files (will be deleted on restore){_NC}")
+        lines.append(f"  {_DIM}{'-' * 56}{_NC}")
+        lines.append(f"  {_YLW}{absent}{_NC}")
+
     return "\n".join(lines)
 
 
