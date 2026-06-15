@@ -309,6 +309,53 @@ orphans) in the SAME apply, so drift is CLEAN afterward.
   `adoptable: true` (and re-creating a share does not resurrect a stale
   captured set).
 
+## 5g. S13 — tombstone absent-file restore
+
+S11/S12 restore the bytes of files that EXISTED at capture time. They could
+not represent "this managed file was ABSENT here" — so restoring a snapshot
+taken while NFS was off LEFT a later-created `/etc/exports` in place (and the
+adopt overlay only ever PUT captured rows, never deleting a domain that the
+snapshot had wholly removed). S13 adds an explicit `absent_files` set captured
+at snapshot time: on restore the runner DELETES any managed file that is in
+`absent_files` but present now, and adopt tombstone-DELETES the current desired
+rows of that domain's primary kind (Share↔etc_exports, NetworkInterface↔netplan;
+ExportGroup / the default NfsProfile are NEVER tombstone-deleted).
+
+- [ ] **Capture records absences:** with NFS OFF (no `/etc/exports`, or
+  `share.list` empty / `xinas-nfs-helper` not exporting), take a snapshot
+  (any S2+ apply, or `python3 -m xinas_history snapshot create`). Inspect it:
+  `python3 -m xinas_history snapshot show <S> --format json` lists
+  `etc_exports` in `absent_files`, and `GET /api/v1/config-history/snapshots`
+  shows the projected `absent_files: ["etc_exports"]` for `<S>` (the row is
+  `restorable: true` because a non-empty `absent_files` widens restorability
+  even with no changed-file bytes to write).
+- [ ] **Tombstone restore (NFS):** AFTER capturing `<S>` above, create a share
+  (`POST /api/v1/shares` apply) so `/etc/exports` now EXISTS and the desired
+  KV has the Share row. Restore `<S>` **with adopt** — from the TUI
+  snapshot-detail **Adopt (make durable)** action, or
+  `POST /config-history/rollback {to: <S>, reason, adopt: true}` planned then
+  applied with `dangerous` via `xinasctl`. The plan diff carries `adopt: true`
+  with `desired_deletes` listing the Share key (`/xinas/v1/desired/Share/<id>`)
+  and NO matching `desired_puts` (the captured Share set is empty); the task
+  reaches `success`; **`/etc/exports` is REMOVED** (contrast S11/§5e, which
+  would leave the file); `GET /api/v1/shares` no longer lists the share (the
+  desired row was tombstone-deleted); `exportfs` re-ran with the share gone.
+- [ ] **Drift CLEAN afterward:** immediately after the tombstone restore — with
+  NO further re-apply — `GET /health` and `GET /config-history/drift` show
+  `drift.nfs-exports` **clean** (desired and live both have no export). S11
+  WITHOUT adopt would leave `/etc/exports` present and desired-vs-live skewed;
+  S13 adopt removes both sides in the same apply. Re-running the adopt is
+  idempotent (file already absent, no Share rows → task `success`, drift stays
+  clean).
+- [ ] **Singletons survive:** the tombstone deletes only the PRIMARY-kind rows
+  (Share / NetworkInterface). The default `ExportGroup` and the default
+  `NfsProfile` are NOT deleted — confirm they still resolve after the restore.
+- [ ] **The hinge (pre-S13 snapshots carry no tombstones):** restore an OLDER
+  snapshot taken before S13 (or any snapshot whose `absent_files` is empty)
+  with adopt → the plan diff has NO tombstone `desired_deletes` for a domain
+  that has live desired rows; behaviour is exactly the S11/S12 adopt (puts the
+  captured rows, no removed-domain deletion). No `absent_files` → no tombstone.
+
 ## 6. Cross-cutting
 
 1. [ ] **Plan→pause→apply:** plan an array modify, wait 2+ minutes,
