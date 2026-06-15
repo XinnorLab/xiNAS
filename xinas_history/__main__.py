@@ -224,7 +224,9 @@ def _cmd_snapshot_list(args: argparse.Namespace, engine: SnapshotEngine) -> int:
         rows = []
         for m in manifests:
             entry = m.to_dict()
-            entry["restorable"] = bool(engine._store.list_system_files(m.id))
+            entry["restorable"] = bool(engine._store.list_system_files(m.id)) or bool(
+                m.absent_files
+            )
             rows.append(entry)
         print(json.dumps(rows, indent=2))
         return 0

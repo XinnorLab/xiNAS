@@ -226,4 +226,26 @@ describe('S11 bridge restoreSnapshot + projection', () => {
     expect(bare.files_changed).toEqual([]);
     expect(bare.restorable).toBe(false);
   });
+
+  // S13 T5 (ADR-0017): absent_files + widened restorable projection.
+  it('projectSnapshot carries absent_files from manifest (defaults [])', () => {
+    // Tombstone-only manifest: CLI sets restorable: true, absent_files populated.
+    const tombstone = projectSnapshot({
+      id: 's3',
+      timestamp: 't',
+      type: 'rollback_eligible',
+      absent_files: ['etc_exports'],
+      restorable: true, // widened by CLI (S13 T5 — absent_files or system payload)
+    } as HistoryManifest);
+    expect(tombstone.absent_files).toEqual(['etc_exports']);
+    expect(tombstone.restorable).toBe(true); // passes through from CLI value
+
+    // Bare manifest with no absent_files → defaults to [].
+    const noAbsent = projectSnapshot({
+      id: 's4',
+      timestamp: 't',
+      type: 'baseline',
+    } as HistoryManifest);
+    expect(noAbsent.absent_files).toEqual([]);
+  });
 });

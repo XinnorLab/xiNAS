@@ -45,6 +45,8 @@ export interface HistoryManifest {
   // S11 (ADR-0013): display blast-radius hint + restorability signal.
   files_changed?: string[];
   restorable?: boolean;
+  // S13 (ADR-0017): tombstone file names that were absent at capture time.
+  absent_files?: string[];
   [k: string]: unknown;
 }
 
@@ -65,6 +67,8 @@ export interface ProjectedSnapshot {
   // S11 (ADR-0013): display blast-radius hint + targeted-restore gate.
   files_changed: string[];
   restorable: boolean;
+  // S13 (ADR-0017): tombstone file names that were absent at capture time.
+  absent_files: string[];
 }
 
 /** history SnapshotType → public ConfigSnapshot.kind (ADR-0011 §projection). */
@@ -89,6 +93,7 @@ export function projectSnapshot(manifest: HistoryManifest): ProjectedSnapshot {
     diff_summary: manifest.diff_summary ?? null,
     files_changed: Array.isArray(manifest.files_changed) ? manifest.files_changed : [],
     restorable: manifest.restorable === true,
+    absent_files: Array.isArray(manifest.absent_files) ? manifest.absent_files : [],
   };
 }
 
