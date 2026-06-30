@@ -128,3 +128,27 @@
     state: absent
   when: not (menu_hint_enabled | bool)
   tags: [motd, menu]
+
+# ===== Installed-preset marker (finding #16) =====
+# motd is the last role, so writing this marker here means it only appears on a
+# fully successful install. Downstream tooling/tests read it to learn the preset
+# without guessing. Preset comes from the autoinstall -e var, falling back to the
+# .xinas_applied_preset file the menu's apply_preset writes (control == target on
+# a xiNAS node, so a control-side file lookup resolves the host's file).
+- name: Resolve installed preset name
+  ansible.builtin.set_fact:
+    xinas_installed_preset: >-
+      {{ (xinas_install_preset | default('', true) | trim)
+         or (lookup('file', '/opt/xiNAS/.xinas_applied_preset', errors='ignore')
+             | default('', true) | trim) }}
+  tags: [motd, install_state]
+
+- name: Stamp /opt/xiNAS/.installed_preset on successful install
+  ansible.builtin.copy:
+    dest: /opt/xiNAS/.installed_preset
+    content: "{{ xinas_installed_preset }}\n"
+    owner: root
+    group: root
+    mode: '0644'
+  when: xinas_installed_preset | length > 0
+  tags: [motd, install_state]
