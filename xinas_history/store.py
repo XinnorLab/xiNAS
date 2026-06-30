@@ -78,7 +78,7 @@ class FilesystemStore:
     def ensure_dirs(self) -> None:
         """Create the store directory structure if missing.  Directories are
         created with mode 0o700."""
-        for d in (self._root, self.baseline_path, self.snapshots_path, self.state_path):
+        for d in (self._root, self.snapshots_path, self.state_path):  # NOT baseline_path: write_snapshot creates it atomically; pre-creating it makes the baseline snapshot always fail with "already exists"
             d.mkdir(parents=True, exist_ok=True)
             os.chmod(str(d), _DIR_MODE)
 
