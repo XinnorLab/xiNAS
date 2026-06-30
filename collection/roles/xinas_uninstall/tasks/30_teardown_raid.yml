@@ -81,7 +81,9 @@
       changed_when: false
 
     - name: "RAID | delete xiNAS-named arrays"
-      ansible.builtin.command: "xicli raid delete -n {{ item }} --force"
+      # xicli's raid verb is 'destroy' (not 'delete'); 'delete' is an invalid
+      # choice and aborts the teardown, leaving the arrays online.
+      ansible.builtin.command: "xicli raid destroy -n {{ item }} --force"
       loop: "{{ _xinas_array_names | default([]) }}"
       register: _raid_delete
       changed_when: _raid_delete.rc == 0
