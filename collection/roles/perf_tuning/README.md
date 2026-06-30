@@ -9,6 +9,11 @@ recommended in Xinnor blogs (2023-2025) and NVIDIA ConnectX-7 (400 Gbit) docs.
 * Optionally stops **irqbalance**, sets CPU governor to *performance*, applies TuneD
   *throughput-performance* profile.
 * Turns off THP/KSM and ups read-ahead, queue depth and *nr_requests*.
+* Installs a `xinas-perf-runtime.service` oneshot that re-applies the volatile
+  tunables at every boot — `vm.swappiness=1` (otherwise clobbered by the
+  `common` role's `swappiness=10`) and THP `defrag=never` (the kernel cmdline
+  pins THP `enabled` but not `defrag`). Without it those two settings silently
+  revert after a reboot.
 * Network block:
   * MTU 9000, enlarged RX/TX rings, big socket buffers, netdev backlog for
     400 Gbit ConnectX-7 links.

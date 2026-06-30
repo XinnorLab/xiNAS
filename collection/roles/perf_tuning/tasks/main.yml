@@ -100,6 +100,28 @@
     - { key: 'vm.vfs_cache_pressure', value: '{{ perf_vm_vfs_cache_pressure }}' }
   tags: [memory, vm]
 
+# ===== Boot-persistent runtime re-apply (findings #9, #11) =====
+# vm.swappiness and THP 'defrag' are written but do not survive a reboot:
+# swappiness=10 (common role) clobbers swappiness=1 at boot, and the THP
+# 'defrag' sysfs knob has no persistent drop-in. A oneshot unit re-applies both
+# late in boot so the post-install summary's claims actually hold at runtime.
+- name: Install xinas-perf-runtime oneshot unit (re-apply volatile tunables at boot)
+  ansible.builtin.template:
+    src: xinas-perf-runtime.service.j2
+    dest: /etc/systemd/system/xinas-perf-runtime.service
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [memory, vm]
+
+- name: Enable and start xinas-perf-runtime (applies now and on every boot)
+  ansible.builtin.systemd:
+    name: xinas-perf-runtime.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  tags: [memory, vm]
+
 # ===== I/O scheduler & queue depth =====
 # noop scheduler configuration removed
 

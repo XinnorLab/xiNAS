@@ -249,6 +249,15 @@ CPU / memory:
 - THP disabled at runtime (`/sys/kernel/mm/transparent_hugepage/{enabled,defrag} = never`).
 - KSM disabled (`/sys/kernel/mm/ksm/run = 0`).
 - VM sysctls in `/etc/sysctl.d/90-perf-vm.conf`: `vm.lru_gen.enabled=1`, `vm.lru_gen.min_ttl_ms=10000`, `vm.watermark_scale_factor=200`, `vm.dirty_background_ratio=5`, `vm.dirty_ratio=15`, `vm.swappiness=1`, `vm.zone_reclaim_mode=0`, `vm.vfs_cache_pressure=200`.
+- **Boot-persistent re-apply** — a `xinas-perf-runtime.service` oneshot
+  (`RemainAfterExit`, `WantedBy=multi-user.target`, after `systemd-sysctl`) runs
+  `sysctl --system` then `sysctl -p /etc/sysctl.d/90-perf-vm.conf`, and (when
+  `perf_disable_thp`) re-pins THP `enabled`/`defrag` to `never`. This is required
+  because two settings do **not** otherwise survive a reboot: `vm.swappiness`
+  (the `common` role's default `swappiness=10` is applied after the perf drop-in
+  and wins at boot) and THP `defrag` (the kernel cmdline pins `enabled` but not
+  `defrag`). The unit re-applies the perf file *last* so it wins regardless of
+  drop-in ordering. (Fixes findings #9 and #11.)
 
 I/O:
 
