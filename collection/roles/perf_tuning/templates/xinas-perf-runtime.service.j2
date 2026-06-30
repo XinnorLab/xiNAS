@@ -1,0 +1,28 @@
+# {{ ansible_managed }}
+# xiNAS performance runtime tuning. Re-applies tunables that do NOT survive a
+# reboot on their own, fixing InstallationFeedback findings #9 and #11:
+#   * #9  vm.swappiness — the common role writes swappiness=10 to the default
+#         sysctl file, which is applied after /etc/sysctl.d/90-perf-vm.conf and
+#         clobbers the intended swappiness=1 at boot. Re-applying the perf file
+#         last makes it win regardless of drop-in ordering.
+#   * #11 Transparent Huge Pages 'defrag' — the kernel cmdline pins THP
+#         'enabled=never' but NOT 'defrag', which reverts to [madvise] on every
+#         boot. sysfs has no persistent drop-in, so it must be re-applied here.
+[Unit]
+Description=xiNAS performance runtime tuning (re-apply volatile sysctl + THP)
+After=systemd-sysctl.service
+Wants=systemd-sysctl.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Re-apply every drop-in, then force the perf VM file to win last.
+ExecStart=/sbin/sysctl --system
+ExecStart=/sbin/sysctl -p /etc/sysctl.d/90-perf-vm.conf
+{% if perf_disable_thp %}
+ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'
+ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/defrag'
+{% endif %}
+
+[Install]
+WantedBy=multi-user.target
