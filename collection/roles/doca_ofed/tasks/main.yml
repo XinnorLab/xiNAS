@@ -8,10 +8,17 @@
     state: present
   tags: [ofed, deps]
 
-- name: Add Mellanox GPG key
-  ansible.builtin.apt_key:
-    url: "{{ doca_repo_base }}/GPG-KEY-Mellanox.pub"
-    state: present
+# The DOCA-Host repo is signed by the "NVIDIA DOCA Host" key, published per
+# component as doca_keyring.gpg. The legacy base-path GPG-KEY-Mellanox.pub no
+# longer carries the active signing key (rotated 2026-01 to 70454E6B…DC726C5E41B9CC50),
+# so `apt update` fails with NO_PUBKEY. apt_key is also deprecated on 22.04+;
+# drop the dearmored keyring straight into trusted.gpg.d instead.
+- name: Install NVIDIA DOCA repository signing key
+  ansible.builtin.get_url:
+    url: "{{ doca_repo_base }}/{{ doca_repo_component }}/doca_keyring.gpg"
+    dest: /etc/apt/trusted.gpg.d/mellanox-doca.gpg
+    mode: '0644'
+    force: true
   tags: [ofed, repo]
 
 - name: Add DOCA-OFED APT repo
