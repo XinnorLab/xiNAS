@@ -154,6 +154,12 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
       - run: pip install ansible-lint
+      # The roles use modules from community.general (timezone) and ansible.posix
+      # (sysctl, reached via the ansible.builtin redirect). ansible-lint ships
+      # only ansible-core, so without these collections it fails with
+      # syntax-check[unknown-module]. The deployment's full `ansible` install
+      # bundles them; install them here so the lint env matches the host.
+      - run: ansible-galaxy collection install community.general ansible.posix
       - run: ansible-lint collection/roles/
 
   yamllint:
