@@ -384,12 +384,18 @@ yes_no() {
         printf '%*s' "$inner_width" '' >/dev/tty
         printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
 
-        # Footer with help text
+        # Footer: normal help text, or a transient hint on unrecognized input
+        # (finding #5). A hint passed as $1 is shown in red instead of the help.
         local help_text="←→ Switch  Enter Confirm"
+        local help_color="${DIM}"
+        if [[ -n "${1:-}" ]]; then
+            help_text="$1"
+            help_color="${RED}"
+        fi
         local help_len; help_len=$(_menu_display_width "$help_text")
         local help_pad=$((inner_width - help_len - 1))
         [[ $help_pad -lt 0 ]] && help_pad=0
-        printf "${CYAN}${BOX_V}${NC} ${DIM}%s${NC}" "$help_text" >/dev/tty
+        printf "${CYAN}${BOX_V}${NC} ${help_color}%s${NC}" "$help_text" >/dev/tty
         printf '%*s' "$help_pad" '' >/dev/tty
         printf "${CYAN}${BOX_V}${NC}\n" >/dev/tty
 
@@ -424,6 +430,14 @@ yes_no() {
             [nN])
                 _menu_cursor_show
                 return 1
+                ;;
+            *)
+                # Finding #5: don't silently swallow an unrecognized key — beep
+                # and flash a red footer hint so the user knows the keystroke was
+                # rejected and which keys are valid. The hint persists until the
+                # next keypress re-renders the dialog.
+                printf '\a' >/dev/tty 2>/dev/null || true
+                _render_yesno "Unknown key — use ←→, Enter, y/n, or Esc"
                 ;;
         esac
     done
@@ -1047,6 +1061,14 @@ xinas_run_playbook() {
             "$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')" "$*" "$PWD"
     } >>"$log_path" 2>/dev/null || true
 
+    # Run the ansible pipeline in the BACKGROUND and wait for it, so a SIGTERM /
+    # SIGINT to the menu (e.g. `pkill -f startup_menu.sh`, Ctrl-C) interrupts the
+    # wait and fires startup_menu.sh's descendant-kill trap — tearing down
+    # ansible-playbook and its apt/dpkg children instead of orphaning them with
+    # the dpkg lock held (finding #8). A *foreground* pipeline would defer the
+    # trap until ansible exits, which is exactly that bug. The inner
+    # `echo $? >"$_rc_file"` captures ansible's own exit code (not tee's).
+    local _rc_file; _rc_file=$(mktemp 2>/dev/null || echo "/tmp/.xinas_rc.$$")
     if [ -t 1 ]; then
         # The ticker only recognizes the *default* stdout callback's
         # "PLAY [...]" / "TASK [...]" banners. ansible.cfg pins
@@ -1058,15 +1080,17 @@ xinas_run_playbook() {
         # "PLAY"/"TASK" would break the ticker's `^…PLAY \[` anchors. The Python
         # TUI does the identical override in
         # xinas_menu/screens/startup/playbook_screen.py.
-        ANSIBLE_STDOUT_CALLBACK=default ansible-playbook "$@" 2>&1 \
-            | tee -a "$log_path" | _xinas_playbook_ticker
-        rc=${PIPESTATUS[0]}
+        { ANSIBLE_STDOUT_CALLBACK=default ansible-playbook "$@" 2>&1; echo "$?" >"$_rc_file"; } \
+            | tee -a "$log_path" | _xinas_playbook_ticker &
+        wait $! 2>/dev/null
     else
         # Non-TTY (CI, redirected install): preserve verbose passthrough and
         # honor ansible.cfg's stdout_callback (minimal) for compact logs.
-        ansible-playbook "$@" 2>&1 | tee -a "$log_path"
-        rc=${PIPESTATUS[0]}
+        { ansible-playbook "$@" 2>&1; echo "$?" >"$_rc_file"; } | tee -a "$log_path" &
+        wait $! 2>/dev/null
     fi
+    rc=$(cat "$_rc_file" 2>/dev/null || echo 1)
+    rm -f "$_rc_file"
 
     if [ "$rc" -ne 0 ]; then
         while true; do
