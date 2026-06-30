@@ -2,3 +2,7 @@
 # xiNAS Configuration History defaults
 xinas_history_store_path: /var/lib/xinas/config-history
 xinas_history_max_snapshots: 10
+
+# Repo root to editable-install the xinas_history package from. The repo-root
+# pyproject.toml declares the package; same value the xinas_menu role uses.
+xinas_history_repo_path: /opt/xiNAS

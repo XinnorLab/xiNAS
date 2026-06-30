@@ -47,24 +47,54 @@
     cmd: python3 -m venv /opt/xiNAS/venv
     creates: /opt/xiNAS/venv/bin/python
 
-- name: Install xinas_history into shared venv
+# Editable-install xinas_history into the shared venv so `python3 -m
+# xinas_history` and `import xinas_history` resolve for every process using the
+# venv. Mirrors the xinas_menu role: the repo-root pyproject.toml declares both
+# packages, so the install runs against the repo root. PEP 660 editable installs
+# need setuptools>=64 + pip>=23 — newer than the venv's Ubuntu 22.04 defaults.
+- name: Upgrade pip + setuptools + wheel in shared venv (PEP 660 editable installs)
   ansible.builtin.pip:
     name:
-      - pyyaml
+      - "pip>=23"
+      - "setuptools>=64"
+      - "wheel"
+    virtualenv: /opt/xiNAS/venv
+    virtualenv_command: python3 -m venv
+    state: latest
+
+- name: Install xinas_history (editable) into shared venv
+  ansible.builtin.pip:
+    name: "{{ xinas_history_repo_path }}"
+    editable: true
     virtualenv: /opt/xiNAS/venv
     virtualenv_command: python3 -m venv
     state: present
 
+- name: Ensure PyYAML runtime dependency in shared venv
+  ansible.builtin.pip:
+    name: pyyaml
+    virtualenv: /opt/xiNAS/venv
+    virtualenv_command: python3 -m venv
+    state: present
+
+# PYTHONPATH=/opt/xiNAS makes the package importable even if the editable
+# install is ever absent — the same belt-and-suspenders the xinas-menu wrapper
+# uses. Without it, finding #12 recurs: `-m xinas_history` -> No module named.
 - name: Create xinas-history CLI wrapper
   ansible.builtin.copy:
     dest: /usr/local/bin/xinas-history
     content: |
       #!/bin/bash
-      exec /opt/xiNAS/venv/bin/python3 -m xinas_history "$@"
+      PYTHONPATH={{ xinas_history_repo_path }} \
+        exec /opt/xiNAS/venv/bin/python3 -m xinas_history "$@"
     owner: root
     group: root
     mode: '0755'
 
+# No failed_when override: a non-zero exit fails the install. Finding #13 —
+# the previous `failed_when: false` swallowed the broken-CLI failure (#12) and
+# reported a successful install with no baseline, leaving drift detection with
+# no anchor. Surfacing the error is the point.
 - name: Create baseline snapshot
   ansible.builtin.command:
     cmd: >-
@@ -76,4 +106,3 @@
       --preset "{{ preset | default('') }}"
   register: baseline_result
   changed_when: baseline_result.rc == 0
-  failed_when: false
