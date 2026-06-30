@@ -153,7 +153,14 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 - Kernel held: `dpkg-selections` marks `linux-image-generic` as `hold` to prevent auto-upgrades.
 - Unattended-upgrades config deployed to `/etc/apt/apt.conf.d/20auto-upgrades`.
 - Sysctl set (persisted): `net.core.rmem_max=268435456`, `net.core.wmem_max=268435456`, `vm.swappiness=10`.
-- Hostname: `xiNAS-<HWKEY>` (from `./hwkey`), unless `xinas_hostname` is overridden.
+- Hostname: `xiNAS-<HWKEY>` (from the `./hwkey` binary), unless `xinas_hostname`
+  is overridden. **The `./hwkey` value is a DMI-derived host identifier and is
+  NOT the same as the xiRAID _license_ hwkey** reported by `xicli license show`
+  (finding #3): they are independent 16-hex IDs (e.g. a host can be
+  `xiNAS-6C7F5C14E7E555E6` while the license hwkey is `BC46A1E8E7E555E6`). Do
+  **not** parse the hostname to recover the license hwkey or vice-versa —
+  anything validating the license-to-host binding must read
+  `xicli license show` directly.
 
 ### 3.2 `doca_ofed` — NVIDIA DOCA-Host / OFED
 
