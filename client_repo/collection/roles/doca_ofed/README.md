@@ -4,6 +4,14 @@ firmware updater (`mlnx-fw-updater`) from the official DOCA APT repository
 on Ubuntu. Defaults to the `latest` repo alias so each run pulls the most
 recent DOCA-Host release.
 
+The repo's signing key is fetched from the component dir's `doca_keyring.gpg`
+(`<doca_repo_base>/<doca_repo_component>/doca_keyring.gpg`) into
+`/usr/share/keyrings/` and pinned via `signed-by`. NVIDIA rotated the DOCA-Host
+key to `DC726C5E41B9CC50` (2026-01-20); the legacy top-level
+`GPG-KEY-Mellanox.pub` is stale and does not carry it, which made the former
+`apt_key` import fail `apt update` with `NO_PUBKEY`. The key is re-fetched every
+run so a future rotation self-heals. (Mirrors the server-side `doca_ofed` role.)
+
 Variables:
   * `doca_version` – release version string. Default `latest` (NVIDIA's
     alias to the most recent release); pin to a specific version
