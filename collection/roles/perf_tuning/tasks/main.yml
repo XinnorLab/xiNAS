@@ -77,6 +77,31 @@
   tags: [memory]
 
 # ===== VM / Memory sysctl parameters =====
+# MGLRU (vm.lru_gen.*) is only exposed when the running kernel was built with
+# CONFIG_LRU_GEN_SYSFS/sysctl. On kernels without it (e.g. stock Ubuntu where the
+# knob lives under /sys, not /proc/sys), writing these keys makes the
+# xinas-perf-runtime service's `sysctl -p` exit 1 at every boot. Gate on the
+# actual sysctl path so unsupported kernels neither apply nor persist the keys.
+- name: Detect MGLRU sysctl support
+  ansible.builtin.stat:
+    path: /proc/sys/vm/lru_gen/enabled
+  register: perf_mglru
+  tags: [memory, vm]
+
+- name: Apply (or purge) MGLRU sysctl parameters based on kernel support
+  ansible.builtin.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: "{{ 'present' if perf_mglru.stat.exists else 'absent' }}"
+    sysctl_file: /etc/sysctl.d/90-perf-vm.conf
+    reload: "{{ perf_mglru.stat.exists }}"
+    ignoreerrors: yes
+  loop:
+    # MGLRU (Multi-Gen LRU) - kernel 6.1+ (only when /proc/sys/vm/lru_gen exists)
+    - { key: 'vm.lru_gen.enabled', value: '{{ perf_vm_lru_gen }}' }
+    - { key: 'vm.lru_gen.min_ttl_ms', value: '{{ perf_vm_min_ttl_ms }}' }
+  tags: [memory, vm]
+
 - name: Apply VM sysctl parameters for memory management
   ansible.builtin.sysctl:
     name: "{{ item.key }}"
@@ -86,9 +111,6 @@
     reload: yes
     ignoreerrors: yes
   loop:
-    # MGLRU (Multi-Gen LRU) - kernel 6.1+
-    - { key: 'vm.lru_gen.enabled', value: '{{ perf_vm_lru_gen }}' }
-    - { key: 'vm.lru_gen.min_ttl_ms', value: '{{ perf_vm_min_ttl_ms }}' }
     # Watermark
     - { key: 'vm.watermark_scale_factor', value: '{{ perf_vm_watermark_scale_factor }}' }
     # Writeback
