@@ -168,13 +168,14 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 - Repo: `https://linux.mellanox.com/public/repo/doca/latest/ubuntu<ver>/x86_64`.
 - Repo signing key: fetched from the **component dir's** `doca_keyring.gpg`
-  (`<repo_base>/<repo_component>/doca_keyring.gpg`) into `/usr/share/keyrings/`
-  and pinned with `signed-by` on the repo line. NVIDIA rotated the DOCA-Host key
-  to `DC726C5E41B9CC50` (2026-01-20); the legacy top-level `GPG-KEY-Mellanox.pub`
-  is stale and does **not** carry it, so the old `apt_key`
+  (`<repo_base>/<repo_component>/doca_keyring.gpg`, already a binary keyring) into
+  `/etc/apt/trusted.gpg.d/mellanox-doca.gpg`. NVIDIA rotated the DOCA-Host key to
+  `DC726C5E41B9CC50` (2026-01); the legacy top-level `GPG-KEY-Mellanox.pub` is
+  stale and does **not** carry it, so the old `apt_key`
   `url=…/GPG-KEY-Mellanox.pub` produced `NO_PUBKEY DC726C5E41B9CC50` and
   `apt update` failed the whole install. `get_url … force: true` re-fetches so a
-  future key rotation self-heals.
+  future key rotation self-heals. (This trusted.gpg.d path is the one verified
+  end-to-end on DOCA hardware; the uninstaller removes it on OFED teardown.)
 - Packages: `doca-all`, `mlnx-fw-updater`, `mlnx-nfsrdma-dkms` (kernel module for NFS-RDMA).
 - Auto-reboot after install: **off** (`doca_ofed_auto_reboot=false`). A reboot is required for the new mlx5/IB stack to come up, but it is the operator's responsibility.
 - IB udev rules written to `/etc/udev/rules.d/70-ib-names.rules`.
