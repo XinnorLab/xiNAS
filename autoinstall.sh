@@ -43,6 +43,7 @@ Options:
   --skip-prepare        do not auto-install dependencies
   --dry-run             resolve + validate, print the command, do not run
   --check               validate configuration only
+  --status              print last install's per-role progress and exit
   -h, --help            show this help
 
 The license is read from a file only. When --license-file is omitted the
@@ -62,7 +63,7 @@ is_yes() { case "${1,,}" in y|yes|true|1|on) return 0 ;; *) return 1 ;; esac; }
 cli_preset=""; cli_license_file=""
 cli_hostname=""; cli_inventory=""; cli_extra_vars=""; cli_config=""
 cli_purge=""; cli_skip_prepare=""
-DRY_RUN=0; CHECK_ONLY=0
+DRY_RUN=0; CHECK_ONLY=0; STATUS_ONLY=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -76,10 +77,24 @@ while [ $# -gt 0 ]; do
         --skip-prepare)    cli_skip_prepare="yes"; shift ;;
         --dry-run)         DRY_RUN=1; shift ;;
         --check)           CHECK_ONLY=1; shift ;;
+        --status)          STATUS_ONLY=1; shift ;;
         -h|--help)         usage; exit 0 ;;
         *) die "Unknown option: $1 (try --help)" ;;
     esac
 done
+
+# ── --status: report the last install's per-role progress and exit ────────────
+# Reads the install-state.json the xinas_install_state callback writes. No root
+# required; this is a read-only query (finding #2).
+if [ "$STATUS_ONLY" -eq 1 ]; then
+    state_file="${XINAS_INSTALL_STATE_PATH:-/var/lib/xinas/install-state.json}"
+    if [ -f "$state_file" ]; then
+        cat "$state_file"
+        exit 0
+    fi
+    echo "No install state recorded yet ($state_file not found)." >&2
+    exit 1
+fi
 
 # ── Answer file (lowest precedence) ───────────────────────────────────────────
 preset=""; license_file=""; hostname=""
@@ -146,6 +161,9 @@ fi
 # ── Build the Ansible command ─────────────────────────────────────────────────
 ev_args=()
 [ -n "$hostname" ] && ev_args+=( -e "xinas_hostname=$hostname" )
+# Surfaces the preset to the install-state callback (#2) and the .installed_preset
+# marker written by the motd role (#16).
+ev_args+=( -e "xinas_install_preset=$preset" )
 if [ "$existing_raid" -eq 1 ]; then
     ev_args+=( -e "xiraid_skip_install=true" -e "nvme_auto_namespace=false" )
 fi
@@ -239,6 +257,10 @@ if is_yes "$purge_xiraid"; then
 fi
 
 # ── Run the playbook ──────────────────────────────────────────────────────────
+# Mark this as an install run so the xinas_install_state callback records
+# per-role progress to /var/lib/xinas/install-state.json (finding #2). Day-2
+# playbook runs leave this unset, so they never clobber install state.
+export XINAS_RECORD_INSTALL_STATE=1
 step "Running ansible-playbook"
 info "Log: $LOG_FILE"
 {

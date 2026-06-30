@@ -522,6 +522,10 @@ apply_preset() {
         cp "$pdir/playbook.yml" "playbooks/site.yml"
         msg+="- playbook updated\n"
     fi
+    # Record the applied preset so the motd role can stamp
+    # /opt/xiNAS/.installed_preset on a successful install (finding #16). The
+    # autoinstall path passes the same value as -e xinas_install_preset.
+    echo "$preset" > /opt/xiNAS/.xinas_applied_preset 2>/dev/null || true
     msg_box "Preset Applied" "$msg"
 }
 

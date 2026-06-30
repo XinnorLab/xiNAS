@@ -282,6 +282,8 @@ Profile:
 - Custom MOTD enabled; default Ubuntu MOTD components disabled.
 - Pre-login banner off by default (`banner_enabled=false`).
 - `xinas-menu` hint shown after login (`menu_hint_enabled=true`); not auto-launched.
+- Stamps `/opt/xiNAS/.installed_preset` with the preset name (last role to run →
+  marks a fully successful install; see §7.7).
 
 ### 3.14 Optional roles not in the default chain
 
@@ -588,3 +590,28 @@ hostname=xinas-rack1-node3
 sudo ./autoinstall.sh             # picks up the answer file automatically
 sudo ./autoinstall.sh --dry-run   # validate without touching the system
 ```
+
+### 7.7 Install-state tracking and resume signal
+
+Every install run records per-role progress so a partial or interrupted
+install is observable (finding #2 — previously there was no resume signal).
+
+- **`/var/lib/xinas/install-state.json`** — written incrementally by the
+  `xinas_install_state` Ansible callback plugin
+  ([collection/callback_plugins/xinas_install_state.py](../../collection/callback_plugins/xinas_install_state.py),
+  enabled in [ansible.cfg](../../ansible.cfg)). It records `status`
+  (`running`/`completed`/`failed`), the `preset`, and a `roles[]` array of
+  `{role, status, ts}` where each role is `running` → `ok` (or `failed`). Each
+  transition flushes atomically, so a kill mid-install leaves a readable file
+  naming the last role reached. The callback only records when the installer
+  exports `XINAS_RECORD_INSTALL_STATE=1` (both `autoinstall.sh` and
+  `startup_menu.sh` do); day-2 / partial playbook runs leave it unset so they
+  never clobber install state.
+- **`autoinstall.sh --status`** prints the JSON and exits (0 if present, 1 if
+  no install has recorded state). No root required — it is a read-only query.
+- **`/opt/xiNAS/.installed_preset`** — a one-line marker (the preset name)
+  stamped by the `motd` role, the last role to run, so it appears **only on a
+  fully successful install** (finding #16). Downstream tooling and tests read it
+  to learn the preset instead of guessing from RAID layout. The preset value
+  comes from `-e xinas_install_preset=<preset>` (autoinstall) or the
+  `/opt/xiNAS/.xinas_applied_preset` file the menu's `apply_preset` writes.
