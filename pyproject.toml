@@ -12,7 +12,7 @@ dynamic = ["version"]
 version = {attr = "xinas_menu.version.XINAS_MENU_VERSION"}
 
 [tool.setuptools.packages.find]
-include = ["xinas_menu*"]
+include = ["xinas_menu*", "xinas_history*"]
 
 [project.optional-dependencies]
 dev = [

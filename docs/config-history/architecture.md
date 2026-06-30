@@ -487,15 +487,28 @@ roles:
 The role performs the following tasks:
 
 1. **Copy package** -- Copies `xinas_history/` to `/opt/xiNAS/xinas_history/`.
-2. **Install into venv** -- Runs `pip install -e /opt/xiNAS/xinas_history/`
-   in the shared venv at `/opt/xiNAS/venv/`.
+2. **Install into venv** -- Editable-installs the package into the shared venv
+   at `/opt/xiNAS/venv/`. The package is declared in the repo-root
+   `pyproject.toml` (`[tool.setuptools.packages.find] include` lists both
+   `xinas_menu*` and `xinas_history*`), so the install runs
+   `pip install -e /opt/xiNAS` -- the same mechanism, repo root, and venv that
+   the `xinas_menu` role uses. As with `xinas_menu`, pip/setuptools/wheel are
+   upgraded first (PEP 660 editable installs need `setuptools>=64`, `pip>=23`;
+   the venv's Ubuntu 22.04 defaults are too old). PyYAML is installed as a
+   runtime dependency.
 3. **Create directory structure** -- Creates
    `/var/lib/xinas/config-history/{baseline,snapshots,state}` with ownership
    `root:root` and mode `0700`.
-4. **Install CLI wrapper** -- Creates `/usr/local/bin/xinas-history` as a
-   shell script that activates the venv and invokes `python3 -m xinas_history`.
+4. **Install CLI wrapper** -- Creates `/usr/local/bin/xinas-history` as a shell
+   script that sets `PYTHONPATH=/opt/xiNAS` and execs
+   `/opt/xiNAS/venv/bin/python3 -m xinas_history "$@"`. The `PYTHONPATH` makes
+   the package importable even if the editable install is absent -- the same
+   belt-and-suspenders pattern the `xinas-menu` wrapper uses.
 5. **Baseline snapshot** -- If no baseline exists, creates the initial baseline
-   snapshot capturing the current system state.
+   snapshot capturing the current system state. **Baseline creation failure is
+   fatal**: the task does not swallow a non-zero exit, so a broken history
+   backend (e.g. a CLI that cannot import its own package) fails the install
+   rather than reporting success with no anchor for drift detection.
 
 ---
 
