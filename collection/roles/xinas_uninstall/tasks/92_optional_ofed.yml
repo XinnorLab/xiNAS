@@ -42,9 +42,9 @@
 - name: "OFED | remove Mellanox apt keys (legacy apt_key + keyring drop-ins)"
   ansible.builtin.shell: |
     set +e
-    # doca_ofed now installs /usr/share/keyrings/doca_keyring.gpg and pins it with
-    # signed-by; older builds used `apt_key` (legacy global keyring). Clean up
-    # both, plus any manual trusted.gpg.d drop-in.
+    # doca_ofed now installs the keyring at /etc/apt/trusted.gpg.d/mellanox-doca.gpg;
+    # an interim build used /usr/share/keyrings/doca_keyring.gpg (signed-by) and
+    # older builds used `apt_key` (legacy global keyring). Clean up all of them.
     if command -v apt-key >/dev/null 2>&1; then
       for key in $(apt-key list 2>/dev/null | awk '/Mellanox/{getline; print $2}'); do
         apt-key del "$key" 2>/dev/null || true
