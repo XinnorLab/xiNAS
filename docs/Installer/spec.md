@@ -121,6 +121,22 @@ the ticker/StatusBar has banners to show; without it the status area renders bla
 (`[ -t 1 ]`); the non-TTY passthrough keeps `minimal`. The override must **not**
 force color — ANSI codes ahead of `PLAY`/`TASK` would break the ticker's anchors.
 
+### 2.6 Installer signal handling and input feedback
+
+- **Kill tears down the whole tree (finding #8).** `startup_menu.sh` traps
+  `TERM`/`INT` and recursively `SIGTERM`s every descendant before exiting, and
+  `xinas_run_playbook` runs the `ansible-playbook` pipeline in the **background**
+  and `wait`s on it. Together these ensure a `pkill -f startup_menu.sh` or
+  `Ctrl-C` reliably stops the in-flight `ansible-playbook` and its `apt`/`dpkg`
+  children — previously they were re-parented to init and kept holding
+  `/var/lib/dpkg/lock`, blocking the next install. (A *foreground* pipeline would
+  defer the trap until ansible exited, so backgrounding the run is load-bearing,
+  not cosmetic.)
+- **Unrecognized keys get feedback (finding #5).** `yes_no`
+  ([lib/menu_lib.sh](../../lib/menu_lib.sh)) no longer silently swallows
+  unmapped keystrokes: an unrecognized key beeps (`\a`) and flashes a red footer
+  hint (`Unknown key — use ←→, Enter, y/n, or Esc`) until the next keypress.
+
 ---
 
 ## 3. Parameters set by each playbook / role

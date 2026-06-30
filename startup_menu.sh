@@ -9,6 +9,29 @@ TMP_DIR="$(mktemp -d)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Directory of the repository currently being configured
 REPO_DIR="$(pwd)"
+# This is the interactive installer: record per-role progress to
+# install-state.json (finding #2). Day-2 management (Python TUI) leaves this
+# unset, so it never overwrites install state.
+export XINAS_RECORD_INSTALL_STATE=1
+
+# Finding #8: a killed wizard must take its children with it. A SIGTERM
+# (`pkill -f startup_menu.sh`) or SIGINT (Ctrl-C) otherwise kills only this bash,
+# leaving a running `ansible-playbook` and its `apt-get`/`dpkg` child re-parented
+# to init — still holding /var/lib/dpkg/lock and blocking the next install.
+# Recursively SIGTERM every descendant before exiting.
+_kill_descendants() {
+    local parent="$1" child
+    for child in $(pgrep -P "$parent" 2>/dev/null); do
+        _kill_descendants "$child"
+        kill -TERM "$child" 2>/dev/null || true
+    done
+}
+_on_signal() {
+    trap '' TERM INT            # don't re-enter while tearing down
+    _kill_descendants "$$"
+    exit 130                    # triggers the EXIT trap (TMP_DIR cleanup)
+}
+trap '_on_signal' TERM INT
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 # Source the menu library
@@ -135,6 +158,20 @@ _xiraid_has_license() {
     return 0
 }
 
+# Finding #4: `xicli license show` output is NOT a usable license file — it
+# carries the hwkey/status/metadata but no license_key blob, so it cannot be fed
+# back to `xicli license update -p`. Never write it to the canonical license
+# path. Save the captured details to <file>.recovered for reference and return 1
+# so callers fall through to manual license entry.
+_save_recovered_license_note() {
+    local license_file="${1:-/tmp/license}"
+    local note="${license_file}.recovered"
+    printf '%s\n' "$_XIRAID_LICENSE_OUTPUT" > "$note" 2>/dev/null || true
+    msg_box "Cannot Auto-Recover License" \
+        "xiRAID reports an active license, but 'xicli license show' is not a\nusable license file (no license key), so it cannot be reinstalled.\n\nCaptured details saved for reference:\n  $note\n\nPaste your original license, or place the license file at:\n  $license_file"
+    return 1
+}
+
 # Prompt user for license string and store it in /tmp/license
 # Show license prompt and save to /tmp/license
 enter_license() {
@@ -161,10 +198,9 @@ enter_license() {
                 1) return 0 ;;
                 2) ;; # fall through to manual paste
                 3)
-                    cp "$license_file" "${license_file}.$(date +%Y%m%d%H%M%S).bak"
-                    echo "$_XIRAID_LICENSE_OUTPUT" > "$license_file"
-                    msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to $license_file"
-                    return 0
+                    # Cannot recover a usable license from `xicli license show`
+                    # (finding #4) — note it and fall through to manual paste.
+                    _save_recovered_license_note "$license_file" || true
                     ;;
                 0) return 0 ;;
             esac
@@ -183,9 +219,9 @@ enter_license() {
             "0" "🔙 Back") || return
         case "$choice" in
             1)
-                echo "$_XIRAID_LICENSE_OUTPUT" > "$license_file"
-                msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to $license_file"
-                return 0
+                # `xicli license show` is not a reinstallable license (finding
+                # #4) — note it and fall through to manual paste.
+                _save_recovered_license_note "$license_file" || true
                 ;;
             2) ;; # fall through to manual paste
             0) return 0 ;;
@@ -389,8 +425,10 @@ install_menu() {
     if ! has_license; then
         # Try to recover license from running xiRAID before giving up
         if _xiraid_has_license; then
-            echo "$_XIRAID_LICENSE_OUTPUT" > /tmp/license
-            msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to /tmp/license"
+            # `xicli license show` can't be reinstalled (finding #4): don't
+            # fabricate /tmp/license. Note it and require a real license file.
+            _save_recovered_license_note /tmp/license || true
+            return
         else
             msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 2 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
             return

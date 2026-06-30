@@ -293,6 +293,19 @@ xicli license update -p /tmp/license
 
 Re-runs are cheap. If the file is missing (cleared by a reboot — `/tmp/license` is tmpfs), this step fails and `xicli raid create` will not be reachable. The remedy is to re-enter the license via the menu, then re-run the play with `--tags raid_fs`.
 
+**License recovery caveat (finding #4).** When `/tmp/license` is gone but a
+running xiRAID still reports `status: valid`, it is tempting to "recover" the
+license from the live system. **`xicli license show` output is not a usable
+license file** — it carries the hwkey, status, and metadata but **not the
+`license_key` blob**, so it cannot be fed back to `xicli license update -p`. The
+menu therefore does **not** write `xicli license show` output to `/tmp/license`
+(doing so produced a malformed file that risked a parser error, or a partial
+success, in this step). Instead it saves the captured details to
+`/tmp/license.recovered` for reference and prompts the operator to re-supply the
+original license file. The canonical license file format is:
+`hwkey`, `license_key`, `version`, `crypto_version`, `created`, `expired`,
+`disks`, `levels`, `type`.
+
 ### 7.3 Drive prep
 
 Two passes against the union of every array's `devices` plus every spare pool's `devices`:
