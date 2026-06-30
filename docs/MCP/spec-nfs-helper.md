@@ -211,6 +211,20 @@ WantedBy=multi-user.target
 
 ## Installation
 
+In production the daemon is deployed by the **`xinas_nfs_helper` Ansible role**
+(`collection/roles/xinas_nfs_helper/`), which performs the steps below. The role
+is wired into `playbooks/site.yml` and **both shipping presets**
+(`presets/default/playbook.yml`, `presets/xinnorVM/playbook.yml`), ordered
+*before* `xinas_mcp` — the helper must be up before the daemon that calls it
+(ADR-0010 §deployment). Its lifecycle is intentionally separate from the
+retiring `xinas_mcp` role so the helper survives the legacy daemon's removal.
+
+> Finding #14 (InstallationFeedback-2026-05-28): the role existed but no preset
+> invoked it, so preset installs had no `xinas-nfs-helper.service`. The wiring
+> above is the fix.
+
+Equivalent manual steps:
+
 ```bash
 cp -r nfs-helper/ /usr/lib/xinas-mcp/nfs-helper/
 cp nfs-helper/xinas-nfs-helper.service /etc/systemd/system/
