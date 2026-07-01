@@ -31,8 +31,9 @@
 - name: "OFED | purge any remaining DOCA/OFED dependency packages"
   ansible.builtin.shell: |
     set +e
+    pkgs_re='^(doca|mlnx|ibverbs|ibacm|ibutils|ibsim|infiniband-diags|opensm|libopensm|rdma-core|srptools?|perftest|ucx|dpcp|collectx|flexio|mft|ofed-scripts|iser-dkms|isert-dkms|srp-dkms|libib)'
     pkgs=$(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 2>/dev/null \
-      | awk '/^ii/ && $2 ~ /^(doca|mlnx|ibverbs|ibacm|ibutils|ibsim|infiniband-diags|opensm|libopensm|rdma-core|srptools?|perftest|ucx|dpcp|collectx|flexio|mft|ofed-scripts|iser-dkms|isert-dkms|srp-dkms|libib)/ {print $2}')
+      | awk -v re="$pkgs_re" '/^ii/ && $2 ~ re {print $2}')
     if [ -n "$pkgs" ]; then
       apt-get purge -y $pkgs
     fi
