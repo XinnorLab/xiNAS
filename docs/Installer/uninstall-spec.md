@@ -380,11 +380,13 @@ Before any phase runs, `uninstall.sh` displays:
 ```
 This will permanently remove xiNAS from this host.
 
+This permanently destroys data and CANNOT be undone.
+
 Mandatory cleanup includes:
   - Stopping and removing the xiNAS MCP server and NFS helper
   - Removing NFS exports created by xiNAS
   - Unmounting and removing xiRAID Classic arrays + XFS filesystems
-    (THIS DESTROYS THE DATA ON /mnt/data AND ANY OTHER xiNAS-MANAGED MOUNT)
+    (THIS PERMANENTLY DESTROYS THE DATA ON /mnt/data AND ANY OTHER xiNAS-MANAGED MOUNT)
   - Removing the /opt/xiNAS source tree
   - Removing xiNAS history at /var/lib/xinas/config-history
 
