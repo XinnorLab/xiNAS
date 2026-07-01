@@ -3,6 +3,17 @@
 # phase A; here we delete the unit files and the runtime directories
 # systemd would otherwise keep around.
 
+- name: "Services | stop + disable xiNAS units (clears enable symlinks)"
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - xinas-mcp.service
+    - xinas-nfs-helper.service
+    - xinas-perf-runtime.service
+  failed_when: false
+
 - name: "Services | delete xiNAS unit files"
   ansible.builtin.file:
     path: "{{ item }}"
@@ -10,6 +21,7 @@
   loop:
     - /etc/systemd/system/xinas-mcp.service
     - /etc/systemd/system/xinas-nfs-helper.service
+    - /etc/systemd/system/xinas-perf-runtime.service
 
 - name: "Services | delete NFS-helper runtime directory"
   ansible.builtin.file:
@@ -26,7 +38,7 @@
       {{
         uninstall_summary | combine({
           'removed': uninstall_summary.removed + [
-            ['Service units', 'xinas-mcp.service, xinas-nfs-helper.service']
+            ['Service units', 'xinas-mcp.service, xinas-nfs-helper.service, xinas-perf-runtime.service']
           ]
         })
       }}
