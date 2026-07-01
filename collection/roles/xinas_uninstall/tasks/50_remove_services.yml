@@ -9,10 +9,11 @@
     state: stopped
     enabled: false
   loop:
+    - xinas-agent.service
+    - xinas-api.service
     - xinas-mcp.service
     - xinas-nfs-helper.service
     - xinas-perf-runtime.service
-    - xinas-api.service
   failed_when: false
 
 - name: "Services | delete xiNAS unit files"
@@ -20,15 +21,20 @@
     path: "{{ item }}"
     state: absent
   loop:
+    - /etc/systemd/system/xinas-agent.service
+    - /etc/systemd/system/xinas-api.service
     - /etc/systemd/system/xinas-mcp.service
     - /etc/systemd/system/xinas-nfs-helper.service
     - /etc/systemd/system/xinas-perf-runtime.service
-    - /etc/systemd/system/xinas-api.service
 
-- name: "Services | delete NFS-helper runtime directory"
+- name: "Services | delete xiNAS runtime directories"
   ansible.builtin.file:
-    path: /run/xinas-nfs-helper
+    path: "{{ item }}"
     state: absent
+  loop:
+    - /run/xinas-nfs-helper
+    - /run/xinas                 # api/agent sockets (finding #33)
+    - /usr/lib/tmpfiles.d/xinas-api.conf
 
 - name: "Services | daemon-reload"
   ansible.builtin.systemd:
@@ -40,7 +46,7 @@
       {{
         uninstall_summary | combine({
           'removed': uninstall_summary.removed + [
-            ['Service units', 'xinas-mcp.service, xinas-nfs-helper.service, xinas-perf-runtime.service, xinas-api.service']
+            ['Service units', 'xinas-agent.service, xinas-api.service, xinas-mcp.service, xinas-nfs-helper.service, xinas-perf-runtime.service']
           ]
         })
       }}

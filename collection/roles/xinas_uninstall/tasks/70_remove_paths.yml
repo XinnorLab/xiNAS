@@ -16,6 +16,8 @@
     - "{{ xinas_log_dir }}"              # /var/log/xinas
     - "{{ xinas_mcp_etc_dir }}"          # /etc/xinas-mcp
     - "{{ xinas_mcp_lib_dir }}"          # /usr/lib/xinas-mcp
+    - /etc/xinas-api                     # api config + tokens (finding #33)
+    - /etc/xinas-agent                   # agent config + token (finding #33)
 
 - name: "Paths | remove xiNAS-owned single files"
   ansible.builtin.file:
