@@ -17,6 +17,10 @@
     state: absent
     purge: true
     autoremove: false
+    # xiraid_classic pins these with `apt-mark hold` (version_lock service).
+    # Without this, apt refuses to remove held packages and the teardown aborts:
+    #   E: Held packages were changed and -y was used without --allow-change-held-packages
+    allow_change_held_packages: true
   register: _apt_xiraid
   failed_when:
     - _apt_xiraid.failed | default(false)

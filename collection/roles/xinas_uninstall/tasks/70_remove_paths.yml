@@ -5,7 +5,8 @@
 # holds this playbook/role tree, which Ansible needs for module execution
 # through the remaining phases (80 edits, 90 packages, 91-93 optional). Removing
 # it now aborts all of them with "No such file or directory: /opt/xiNAS/playbooks".
-# It is removed as the very last step in phase 99 (finalize).
+# It is removed by uninstall.sh after ansible-playbook returns (ansible cannot
+# delete the tree it is running from).
 - name: "Paths | remove xiNAS-owned directories"
   ansible.builtin.file:
     path: "{{ item }}"

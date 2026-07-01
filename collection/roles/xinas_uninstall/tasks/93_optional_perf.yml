@@ -24,6 +24,15 @@
     - 'transparent_hugepage=never\s*'
     - 'mitigations=off\s+noibrs\s+noibpb\s+nopti\s+nospectre_v2\s+nospec_store_bypass_disable\s+no_stf_barrier\s+mds=off\s*'
 
+# Hosts installed before the perf_tuning grub backref fix ($1 -> \1) have a
+# literal `$1` left inside GRUB_CMDLINE_LINUX after the args are stripped.
+# Remove it so the line collapses back to a clean value.
+- name: "Perf | drop stray literal $1 left by the old grub backref bug"
+  ansible.builtin.replace:
+    path: /etc/default/grub
+    regexp: '(^GRUB_CMDLINE_LINUX=".*?)\s*\$1\s*(".*$)'
+    replace: '\1\2'
+
 - name: "Perf | collapse double spaces and stray spaces inside GRUB_CMDLINE_LINUX"
   ansible.builtin.replace:
     path: /etc/default/grub

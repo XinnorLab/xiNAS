@@ -214,6 +214,12 @@ if ! (cd "$INSTALL_DIR" && ansible-playbook "${ANSIBLE_ARGS[@]}"); then
     exit 1
 fi
 
+# Remove the install dir LAST, from here rather than inside the playbook:
+# ansible cannot delete the playbook/role tree it is executing from without
+# throwing "FileNotFoundError: ${INSTALL_DIR}/playbooks" and failing the run.
+# We are already cd'd to /tmp (above), so this is safe.
+rm -rf "$INSTALL_DIR"
+
 # ── Render the final summary ──────────────────────────────────────────────────
 echo ""
 echo -e "  ${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
