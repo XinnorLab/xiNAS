@@ -19,11 +19,29 @@
     name: "{{ xinas_ofed_apt_purge }}"
     state: absent
     purge: true
-    autoremove: false
+    # Removing only the metapackages leaves ~90 auto-installed DOCA/OFED
+    # dependency packages behind. autoremove sweeps them (they were pulled in
+    # as dependencies of doca-all, so they are no longer required once it is gone).
+    autoremove: true
   register: _apt_ofed
   failed_when:
     - _apt_ofed.failed | default(false)
     - "'is not installed' not in (_apt_ofed.msg | default(''))"
+
+- name: "OFED | purge any remaining DOCA/OFED dependency packages"
+  ansible.builtin.shell: |
+    set +e
+    pkgs=$(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 2>/dev/null \
+      | awk '/^ii/ && $2 ~ /^(doca|mlnx|ibverbs|ibacm|ibutils|ibsim|infiniband-diags|opensm|libopensm|rdma-core|srptools?|perftest|ucx|dpcp|collectx|flexio|mft|ofed-scripts|iser-dkms|isert-dkms|srp-dkms|libib)/ {print $2}')
+    if [ -n "$pkgs" ]; then
+      apt-get purge -y $pkgs
+    fi
+    apt-get autoremove --purge -y
+    exit 0
+  args:
+    executable: /bin/bash
+  register: _ofed_sweep
+  changed_when: "'Removing' in _ofed_sweep.stdout"
 
 - name: "OFED | remove DOCA APT sources file (mellanox-doca.list, written by doca_ofed role)"
   ansible.builtin.file:
