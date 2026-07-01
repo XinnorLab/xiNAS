@@ -8,6 +8,37 @@
     _sw: "{{ (item.devices | length | int) - (item.parity_disks | default(0) | int) }}"
   tags: [raid_fs, raid]
 
+# xiRAID preallocates a large contiguous kernel mempool per array. On
+# RAM-constrained hosts a full page cache makes __get_free_pages() fail, so
+# reclaim clean cache and compact memory first — this makes the create
+# deterministic (verified: identical create fails with a full cache, succeeds
+# after drop_caches + compact_memory).
+- name: Reclaim page cache and compact memory before creating {{ item.name }}
+  ansible.builtin.shell: |
+    set -e
+    sync
+    echo 3 > /proc/sys/vm/drop_caches
+    echo 1 > /proc/sys/vm/compact_memory 2>/dev/null || true
+  changed_when: false
+  tags: [raid_fs, raid]
+
+- name: Read MemAvailable after reclaim (for {{ item.name }})
+  ansible.builtin.command: awk '/^MemAvailable:/ {print $2}' /proc/meminfo
+  register: _mem_avail_kb
+  changed_when: false
+  tags: [raid_fs, raid]
+
+- name: Fail early if free memory is below the xiRAID mempool floor ({{ item.name }})
+  ansible.builtin.fail:
+    msg: >-
+      Only {{ _mem_avail_kb.stdout | int // 1024 }} MiB free after reclaim, but
+      creating array '{{ item.name }}' needs >= {{ raid_create_min_free_mb }} MiB
+      for the xiRAID mempool (memory_prealloc). Proceeding would fail with a
+      kernel '__get_free_pages() failed … RAID creation failed' error. Add RAM,
+      reduce the disk count for this array, or lower its memory_prealloc_mb.
+  when: (_mem_avail_kb.stdout | int // 1024) < (raid_create_min_free_mb | int)
+  tags: [raid_fs, raid]
+
 - name: Create array {{ item.name }}
   ansible.builtin.command: >-
     xicli raid create -n {{ item.name }} -l {{ item.level }}
