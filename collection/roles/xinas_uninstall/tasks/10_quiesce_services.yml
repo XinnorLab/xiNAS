@@ -9,6 +9,10 @@
     state: stopped
     enabled: false
   loop:
+    # xinas-agent + xinas-api are the MCP/observation stack (finding #33,
+    # symmetric to #28). Stop the agent before the api it depends on.
+    - xinas-agent.service
+    - xinas-api.service
     - xinas-mcp.service
     - xinas-nfs-helper.service
   register: _quiesce_stop
