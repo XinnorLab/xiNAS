@@ -21,10 +21,20 @@ SyslogIdentifier=xinas-agent
 # drop after bind) is a future hardening step (see ADR-0002 open questions).
 User=root
 Group=root
+# Finding #31: the agent POSTs observations to the api's /internal/v1/observed
+# over /run/xinas/api.sock, which is 0660 xinas-api:xinas-admin. The sandbox
+# drops CAP_DAC_OVERRIDE, so root cannot bypass the mode — join xinas-admin so
+# the group bit grants access (auth is still the agent-token).
+SupplementaryGroups=xinas-admin
 
 # Environment
 Environment=XINAS_AGENT_CONFIG=/etc/xinas-agent/config.json
 Environment=NODE_ENV=production
+# Finding #30: the ConfigSnapshot collector shells out to xinas_history; point it
+# at the xiNAS venv + package root, exactly like the xinas-history CLI wrapper,
+# so `-m xinas_history` resolves (system python3 has no such module).
+Environment=XINAS_HISTORY_PYTHON=/opt/xiNAS/venv/bin/python3
+Environment=PYTHONPATH=/opt/xiNAS
 
 # --- Filesystem isolation ---
 # ProtectSystem=strict makes / read-only except for explicit ReadWritePaths.
@@ -45,7 +55,10 @@ ProtectHome=true
 # api's /internal/v1/observed. /var/lib/xinas is read-only below (the agent
 # only reads /var/lib/xinas/controller-id). Listing /var/lib/xinas/state in
 # both ReadWritePaths and under a ReadOnlyPaths parent was contradictory.
-ReadWritePaths=/run/xinas /var/log/xinas /etc/systemd/system /etc/netplan /run/netplan /run/systemd
+# Finding #29: /run/netplan (and /etc/netplan on netplan-less hosts) may not
+# exist; a non-optional ReadWritePaths entry fails namespace setup with
+# 226/NAMESPACE and the agent restart-loops. '-' makes them optional.
+ReadWritePaths=/run/xinas /var/log/xinas /etc/systemd/system -/etc/netplan -/run/netplan /run/systemd
 #   /etc/netplan         — S6 network executors (ADR-0008 §Sandbox): the
 #                          full-file 99-xinas.yaml render + the audited
 #                          cleanup of managed-iface stanzas in foreign files.

@@ -15,6 +15,8 @@
     - role: exports       # manage /etc/exports
     - role: nfs_server    # configure kernel NFS server
     - role: xinas_node_build  # Node 20 + xiNAS-MCP build (dist/ for api/agent/mcp)
+    - role: xinas_api     # xinas-api.service: serves the /mcp endpoint on /run/xinas/api.sock (finding #28)
+    - role: xinas_agent   # xinas-agent.service (meta-depends on xinas_api for the agent-token)
     - role: xinas_nfs_helper  # NFS helper daemon (serves the agent + legacy MCP)
     - role: xinas_mcp     # legacy MCP server (AI assistant bridge)
     - role: xinas_menu    # Python/Textual management console (replaces Bash menus)
