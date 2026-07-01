@@ -180,13 +180,19 @@ The formatter normalises the response with `_as_array_dict()`, since `raid_show`
 - a `dict` keyed by array name, or
 - a `list` of dicts each carrying a `name` field.
 
-Quick Overview shows: level, capacity, state list, device counts (online / degraded / offline derived from the per-device state field), strip size, spare pool, and an initialisation progress bar when any state is `initing`.
+Quick Overview shows: level, capacity, state list, device counts (online / degraded / offline derived from the per-device state field), strip size, spare pool, and an initialisation progress bar when any state is `initing`. The base payload also carries `memory_usage_mb` and `block_size` (see the reconciliation note below).
 
 Extended adds three blocks:
 
-- **Priorities** — `init_prio`, `recon_prio`, `restripe_prio`
-- **Performance** — `memory_usage_mb`, `memory_limit`, `memory_prealloc`, `block_size`, `request_limit`, `cpu_allowed`
-- **I/O Scheduler & Merge** — `sched_enabled`, `resync_enabled`, `merge_read_enabled`, `merge_write_enabled`, `adaptive_merge`, plus the four merge timing knobs
+- **Priorities** — `init_prio`, `recon_prio`, `restripe_prio`, `sdc_prio`
+- **Performance** — `memory_limit_mb`, `memory_prealloc_mb`, `request_limit`, `cpu_allowed`
+- **I/O Scheduler & Merge** — `sched_enabled`, `merge_read_enabled`, `merge_write_enabled`, `adaptive_merge`, plus the four merge timing knobs `merge_read_max_usecs`, `merge_read_wait_usecs`, `merge_write_max_usecs`, `merge_write_wait_usecs`
+
+> **Field names verified against the live daemon** (`xicli raid show --format json [--extended]`, xiRAID Classic on this build). Reconciliations vs earlier drafts of this spec (finding #18):
+> - Memory/timing fields carry their unit suffix: **`memory_limit_mb`**, **`memory_prealloc_mb`**, and **`merge_*_usecs`** — not `memory_limit` / `memory_prealloc` / bare `merge_*`.
+> - **`sdc_prio`** is emitted (Priorities block) and is now documented.
+> - **`resync_enabled`** is **not** emitted by the current daemon — removed from this spec.
+> - **`memory_usage_mb`** and **`block_size`** appear in the **base** payload (Quick Overview), not only under Extended.
 
 If the response includes `devices_health` or `devices_wear` arrays, a per-device row is appended showing state icon + health + wear%.
 
@@ -218,6 +224,21 @@ A failed validation re-prompts via the `while True:` loop until the user enters 
 ### Step 2 — RAID level
 
 `SelectDialog` over `_RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]`. xiRAID Classic accepts all seven; the TUI passes the string through to `RaidCreate.level`.
+
+**Engine-enforced minimum drive counts (finding #20).** xiRAID Classic enforces higher minimums than textbook RAID math, and `xicli raid create --help` does not document the numbers — an under-count is rejected with e.g. `Error: To create RAID level '5', a minimum of '4' disks are required.`:
+
+| Level | Textbook min | xiRAID min |
+|---|---|---|
+| 0, 1 | 2 | 2 |
+| 5 | 3 | **4** |
+| 6 | 4 | 4 |
+| 10 | 4 | 4 |
+| 50 | 6 | **8** |
+| 60 | 6–8 | **8** |
+
+(Minimums per the installer-feedback observations; the RAID-5 value is the engine's own rejection message. They could not be re-probed live here because the engine validates device existence before drive count and no free devices were available.)
+
+The Create wizard does **not** pre-validate drive count against the chosen level — an under-count is caught by the engine only *after* the confirmation step and surfaced through `grpc_short_error` (§4, "Confirmation + dispatch", failure step 4). Pre-checking count-vs-level in Step 3 before dispatch (so the operator gets an immediate, actionable message) is a tracked follow-up.
 
 ### Step 3 — drives
 
