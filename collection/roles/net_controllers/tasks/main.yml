@@ -196,6 +196,30 @@
   when: net_ip_pool_enabled | bool and (net_allocated_ips | default({}) | length > 0)
   tags: [network]
 
+# Empty mode: pool enabled but no high-speed interfaces detected. Neither the
+# pool-deploy (needs allocated_ips) nor the manual-deploy (needs pool disabled)
+# task fires, so without this the file is never created (finding #15). Render a
+# valid, commented placeholder so the file always exists and documents why it is
+# empty.
+- name: Render placeholder netplan stub when no high-speed interfaces detected (empty mode)
+  ansible.builtin.copy:
+    dest: /etc/netplan/99-xinas.yaml
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      # Managed by xiNAS (net_controllers role).
+      # No high-speed InfiniBand/mlx5 interfaces were detected on this host, so
+      # no addresses were assigned. Re-run the installer after DOCA-OFED brings
+      # the NICs up, or add interfaces manually under network.ethernets below.
+      network:
+        version: 2
+        # ethernets: {}
+  become: true
+  notify: apply netplan
+  when: net_ip_pool_enabled | bool and (net_allocated_ips | default({}) | length == 0)
+  tags: [network]
+
 # Fallback: Manual mode (pool disabled)
 - name: Deploy static netplan configuration (manual mode)
   ansible.builtin.template:
