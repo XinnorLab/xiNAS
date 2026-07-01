@@ -250,7 +250,7 @@ mountpoints are gone.
    Fallback: `xicli raid show -f json` and `xicli pool show -f json`,
    then match against the names xiNAS uses (`data`, `log`,
    `*_spare_pool`).
-2. For every array found in (1): `xicli raid delete -n <name> --force`.
+2. For every array found in (1): `xicli raid destroy -n <name> --force`.
 3. For every pool found in (1): `xicli pool delete -n <name>`.
 4. For every NVMe device that backed an array: `xicli drive clean -d
    <device>` (best-effort).
