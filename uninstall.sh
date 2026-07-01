@@ -83,8 +83,11 @@ warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
 ask_yes_no() {
     # ask_yes_no "Question text"  → echoes "true" or "false" (default false)
     local prompt="$1"
-    local reply
-    read -r -p "  $prompt [y/N] " reply </dev/tty
+    # Finding #26: default + swallow the read so a missing TTY (non-interactive
+    # run) answers "no" cleanly instead of leaving `reply` unset and tripping
+    # `set -u` with "unbound variable".
+    local reply=""
+    read -r -p "  $prompt [y/N] " reply </dev/tty || reply=""
     if [[ "$reply" =~ ^[Yy]$ ]]; then
         echo "true"
     else
@@ -155,11 +158,14 @@ echo -e "  ${RED}${BOLD}╭─────────────────�
 echo -e "  ${RED}${BOLD}│  DESTRUCTIVE ACTION                                       │${NC}"
 echo -e "  ${RED}${BOLD}╰───────────────────────────────────────────────────────────╯${NC}"
 echo ""
+# Finding #27 / uninstall-spec §5: the banner must call out *permanent* data loss.
+echo -e "  ${RED}${BOLD}This permanently destroys data and CANNOT be undone.${NC}"
+echo ""
 echo -e "  Mandatory cleanup includes:"
 echo -e "    ${DIM}-${NC} Stopping and removing xiNAS MCP and NFS-helper services"
 echo -e "    ${DIM}-${NC} Removing NFS exports created by xiNAS"
 echo -e "    ${DIM}-${NC} Unmounting and removing xiRAID Classic arrays + XFS filesystems"
-echo -e "      ${RED}(THIS DESTROYS THE DATA ON /mnt/data AND ANY OTHER xiNAS-MANAGED MOUNT)${NC}"
+echo -e "      ${RED}(THIS PERMANENTLY DESTROYS THE DATA ON /mnt/data AND ANY OTHER xiNAS-MANAGED MOUNT)${NC}"
 echo -e "    ${DIM}-${NC} Removing ${WHITE}${INSTALL_DIR}${NC} and xiNAS state under /var/lib/xinas, /var/log/xinas"
 echo -e "    ${DIM}-${NC} Removing xiNAS systemd units, wrappers, sudoers, and motd hooks"
 echo ""
@@ -177,7 +183,13 @@ fi
 # ── Confirmation gate ─────────────────────────────────────────────────────────
 if [[ "$SKIP_GATE" != "true" ]]; then
     echo -e "  To proceed, type this host's hostname (${BOLD}${HOSTNAME_VALUE}${NC}):"
-    read -r -p "  > " typed </dev/tty
+    # Finding #26: under `set -u`, a run with no controlling TTY (e.g. piped
+    # stdin) makes the /dev/tty redirect fail and leaves `typed` unset, so the
+    # comparison below aborts with "unbound variable" instead of the spec's clean
+    # "declined" exit 2. Default it and swallow the read failure so a missing TTY
+    # is treated as a non-match.
+    typed=""
+    read -r -p "  > " typed </dev/tty || typed=""
     if [[ "$typed" != "$HOSTNAME_VALUE" ]]; then
         echo ""
         warn "Hostname did not match. No changes made."
