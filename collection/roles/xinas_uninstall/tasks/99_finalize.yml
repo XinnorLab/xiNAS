@@ -68,3 +68,12 @@
 - name: "Finalize | echo summary path"
   ansible.builtin.debug:
     msg: "Uninstall summary written to {{ xinas_uninstall_summary_path }}."
+
+# MUST be the final task: this deletes the playbook/role tree Ansible is
+# running from. Anything after it fails with "No such file or directory:
+# {{ xinas_install_dir }}/playbooks". Moved here from phase 70 (see note there)
+# so the package/perf/state phases can complete first.
+- name: "Finalize | remove the xiNAS install dir (very last step)"
+  ansible.builtin.file:
+    path: "{{ xinas_install_dir }}"
+    state: absent
