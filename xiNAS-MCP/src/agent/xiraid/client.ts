@@ -147,7 +147,10 @@ export function createGrpcTransport(): XiraidTransport {
   return {
     async raidShow(): Promise<unknown> {
       const client = await getClient();
-      const res = await raidShow(client, {});
+      // units:'g' is required — the xiRAID daemon's formatter throws
+      // "13 INTERNAL: Unsupported unit: None" on an unset unit (finding #17),
+      // which otherwise fails every array observation sweep.
+      const res = await raidShow(client, { units: 'g' });
       return res.data ?? [];
     },
     async raidCreate(req: RaidCreateRequest): Promise<void> {
@@ -188,7 +191,8 @@ export function createGrpcTransport(): XiraidTransport {
     },
     async poolShow(): Promise<unknown> {
       const client = await getClient();
-      const res = await poolShow(client, {});
+      // units:'g' — same daemon "Unsupported unit: None" crash as raidShow (#17).
+      const res = await poolShow(client, { units: 'g' });
       return res.data ?? [];
     },
     async raidImportShow(): Promise<unknown> {

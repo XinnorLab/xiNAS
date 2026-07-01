@@ -98,7 +98,12 @@ export class XinasHistoryBridge {
 
   constructor(opts: XinasHistoryBridgeOptions) {
     this.#runSubprocess = opts.runSubprocess;
-    this.#python = opts.python ?? 'python3';
+    // Finding #30: bare 'python3' is the system interpreter, which has no
+    // xinas_history module ("No module named xinas_history") and fails every
+    // ConfigSnapshot sweep. The deployment points XINAS_HISTORY_PYTHON at the
+    // xiNAS venv (with PYTHONPATH=/opt/xiNAS) via the systemd unit — matching
+    // the xinas-history CLI wrapper.
+    this.#python = opts.python ?? process.env.XINAS_HISTORY_PYTHON ?? 'python3';
   }
 
   /**
