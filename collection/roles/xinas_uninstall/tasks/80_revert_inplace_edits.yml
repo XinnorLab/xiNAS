@@ -58,6 +58,21 @@
     # is shared system territory — do not delete the directory.
     - /etc/sysctl.d/90-roce-lossless.conf
 
+# ── /etc/sysctl.conf — remove keys the common role wrote to the shared file ─
+# The common role applies common_sysctl via ansible.builtin.sysctl with the
+# default sysctl_file (/etc/sysctl.conf), so these persist after uninstall
+# (notably vm.swappiness=10). Remove only the exact keys xiNAS manages.
+- name: "Edits | remove common-role sysctl keys from /etc/sysctl.conf"
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: "{{ item }}"
+    state: absent
+  loop:
+    - '^\s*net\.core\.rmem_max\s*='
+    - '^\s*net\.core\.wmem_max\s*='
+    - '^\s*vm\.swappiness\s*='
+  failed_when: false
+
 # ── /etc/ssh: reload after revert ───────────────────────────────────────
 - name: "Edits | reload sshd"
   ansible.builtin.service:
@@ -74,7 +89,7 @@
         uninstall_summary | combine({
           'removed': uninstall_summary.removed + [
             ['Config edits reverted',
-             '/etc/nfs.conf block, /etc/ssh/sshd_config Banner/PrintMotd, /etc/pam.d/login pam_motd, /etc/sysctl.d/90-roce-lossless.conf']
+             '/etc/nfs.conf block, /etc/ssh/sshd_config Banner/PrintMotd, /etc/pam.d/login pam_motd, /etc/sysctl.d/90-roce-lossless.conf, /etc/sysctl.conf common keys']
           ]
         })
       }}

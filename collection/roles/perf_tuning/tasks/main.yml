@@ -21,7 +21,7 @@
       GRUB_CMDLINE_LINUX="intel_idle.max_cstate=0
       {{ "transparent_hugepage=never" if perf_disable_thp else "" }}
       {{ "mitigations=off noibrs noibpb nopti nospectre_v2 nospec_store_bypass_disable no_stf_barrier mds=off"
-      if perf_disable_mitigations else "" }} $1"
+      if perf_disable_mitigations else "" }} \1"
     backrefs: yes
   notify: Update grub
   when: ansible_facts['cmdline'] is defined
