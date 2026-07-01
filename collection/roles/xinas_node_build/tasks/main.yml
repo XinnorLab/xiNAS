@@ -51,11 +51,50 @@
         state: present
         filename: nodesource
 
-    - name: Install nodejs package
+    # NodeSource's nodejs bundles headers that collide with Ubuntu's node-12
+    # packages (both ship /usr/include/node/common.gypi), so the node-20 unpack
+    # aborts with "trying to overwrite '/usr/include/node/common.gypi', which is
+    # also in package libnode-dev". Remove the distro node-12 dev/doc/lib
+    # packages first.
+    - name: Remove distro node-12 packages that conflict with NodeSource node 20
+      ansible.builtin.apt:
+        name:
+          - libnode-dev
+          - libnode72
+          - nodejs-doc
+        state: absent
+        purge: true
+        autoremove: true
+
+    # state: latest, NOT present — Ubuntu 22.04 ships nodejs 12.22.9, which
+    # already satisfies `present`, so apt would keep node 12 and npm ci/build
+    # then fail (optional chaining needs node >= 14). latest forces the upgrade
+    # to the NodeSource 20.x candidate.
+    - name: Install nodejs 20 (upgrade over any distro node)
       ansible.builtin.apt:
         name: nodejs
-        state: present
+        state: latest
         update_cache: true
+
+# Guard: confirm the upgrade took effect before building, so a stale node 12
+# surfaces as a clear message instead of a cryptic npm SyntaxError (optional
+# chaining) mid-`npm ci`.
+- name: Re-check Node.js version
+  ansible.builtin.command: node --version
+  register: _node_ver_final
+  changed_when: false
+  tags: [xinas_node_build, nodejs]
+
+- name: Assert Node.js >= 20 before building
+  ansible.builtin.assert:
+    that:
+      - _node_ver_final.stdout is regex('^v(2[0-9]|[3-9][0-9])\.')
+    fail_msg: >-
+      Node.js is {{ _node_ver_final.stdout }} but the build needs >= 20. The
+      NodeSource upgrade did not take effect (distro node 12 still active) — check
+      the NodeSource repo/key and that libnode-dev/libnode72 were removed.
+    success_msg: "Node.js {{ _node_ver_final.stdout }} OK"
+  tags: [xinas_node_build, nodejs]
 
 # ─── 2. Build xiNAS-MCP → dist/ ────────────────────────────────────────────────
 
