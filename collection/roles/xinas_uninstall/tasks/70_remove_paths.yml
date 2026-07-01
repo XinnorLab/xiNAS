@@ -1,12 +1,16 @@
 ---
 # Phase G — remove xiNAS-owned directories and small per-file artifacts.
 
+# NOTE: xinas_install_dir (/opt/xiNAS) is intentionally NOT removed here. It
+# holds this playbook/role tree, which Ansible needs for module execution
+# through the remaining phases (80 edits, 90 packages, 91-93 optional). Removing
+# it now aborts all of them with "No such file or directory: /opt/xiNAS/playbooks".
+# It is removed as the very last step in phase 99 (finalize).
 - name: "Paths | remove xiNAS-owned directories"
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
   loop:
-    - "{{ xinas_install_dir }}"          # /opt/xiNAS
     - "{{ xinas_state_dir }}"            # /var/lib/xinas
     - "{{ xinas_log_dir }}"              # /var/log/xinas
     - "{{ xinas_mcp_etc_dir }}"          # /etc/xinas-mcp
