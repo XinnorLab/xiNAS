@@ -82,35 +82,27 @@
 # knob lives under /sys, not /proc/sys), writing these keys makes the
 # xinas-perf-runtime service's `sysctl -p` exit 1 at every boot. Gate on the
 # actual sysctl path so unsupported kernels neither apply nor persist the keys.
+# Same stat-then-gate idiom as roce_lossless/tasks/configure_roce.yml; items
+# below opt in via `supported:` — undecorated items always apply.
 - name: Detect MGLRU sysctl support
   ansible.builtin.stat:
     path: /proc/sys/vm/lru_gen/enabled
   register: perf_mglru
   tags: [memory, vm]
 
-- name: Apply (or purge) MGLRU sysctl parameters based on kernel support
-  ansible.builtin.sysctl:
-    name: "{{ item.key }}"
-    value: "{{ item.value }}"
-    state: "{{ 'present' if perf_mglru.stat.exists else 'absent' }}"
-    sysctl_file: /etc/sysctl.d/90-perf-vm.conf
-    reload: "{{ perf_mglru.stat.exists }}"
-    ignoreerrors: yes
-  loop:
-    # MGLRU (Multi-Gen LRU) - kernel 6.1+ (only when /proc/sys/vm/lru_gen exists)
-    - { key: 'vm.lru_gen.enabled', value: '{{ perf_vm_lru_gen }}' }
-    - { key: 'vm.lru_gen.min_ttl_ms', value: '{{ perf_vm_min_ttl_ms }}' }
-  tags: [memory, vm]
-
 - name: Apply VM sysctl parameters for memory management
   ansible.builtin.sysctl:
     name: "{{ item.key }}"
     value: "{{ item.value }}"
-    state: present
+    state: "{{ 'present' if (item.supported | default(true) | bool) else 'absent' }}"
     sysctl_file: /etc/sysctl.d/90-perf-vm.conf
-    reload: yes
+    reload: "{{ item.supported | default(true) | bool }}"
     ignoreerrors: yes
   loop:
+    # MGLRU (Multi-Gen LRU) - kernel 6.1+ (only when /proc/sys/vm/lru_gen exists;
+    # 'absent' purges a stale entry left by a prior kernel that did support it)
+    - { key: 'vm.lru_gen.enabled', value: '{{ perf_vm_lru_gen }}', supported: "{{ perf_mglru.stat.exists }}" }
+    - { key: 'vm.lru_gen.min_ttl_ms', value: '{{ perf_vm_min_ttl_ms }}', supported: "{{ perf_mglru.stat.exists }}" }
     # Watermark
     - { key: 'vm.watermark_scale_factor', value: '{{ perf_vm_watermark_scale_factor }}' }
     # Writeback
