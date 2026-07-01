@@ -10,6 +10,7 @@
   loop:
     - /usr/local/bin/xinas-mcp
     - /usr/local/bin/xinas-mcp-stdio
+    - /usr/local/bin/xinasctl
     - /usr/local/bin/xinas-menu
     - /usr/local/bin/xinas-setup
     - /usr/local/bin/xinas-history
@@ -17,6 +18,7 @@
     - /usr/local/bin/xinas-generate-banner
     - /usr/local/sbin/xinas-update-git
     - /usr/local/sbin/configure_ib_udev.sh
+    - /usr/local/sbin/roce-lossless-config.sh
 
 - name: "Binaries | record removal"
   ansible.builtin.set_fact:
@@ -24,7 +26,7 @@
       {{
         uninstall_summary | combine({
           'removed': uninstall_summary.removed + [
-            ['Wrappers', 'xinas-mcp, xinas-mcp-stdio, xinas-menu, xinas-setup, xinas-history, xinas-status, xinas-generate-banner, xinas-update-git']
+            ['Wrappers', 'xinas-mcp, xinas-mcp-stdio, xinasctl, xinas-menu, xinas-setup, xinas-history, xinas-status, xinas-generate-banner, xinas-update-git, roce-lossless-config.sh']
           ]
         })
       }}
