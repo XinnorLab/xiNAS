@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { type Server, createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type Collector,
   CollectorRegistry,
@@ -89,14 +89,18 @@ describe('PollDriver — steady-state re-sweep + reconcile (review F2/F3/F4)', (
     );
     const driver = new PollDriver({ registry, publisher: pub, backstopMs: 10_000 });
     driver.start();
-    await new Promise((r) => setTimeout(r, 80));
+    // Poll for the first interval tick to land its POST instead of racing
+    // a fixed sleep (tick + HTTP round-trip can exceed it under load).
+    await vi.waitFor(() => expect(observedPosts.length).toBeGreaterThanOrEqual(1), {
+      timeout: 5_000,
+      interval: 10,
+    });
     driver.stop();
     pub.dispose();
 
-    expect(observedPosts.length).toBeGreaterThanOrEqual(1);
     // Each tick is a full snapshot → complete_snapshots names the kind.
     expect(observedPosts[0]?.complete_snapshots).toContain('NfsSession');
-  });
+  }, 10_000);
 
   it('uses the backstop interval for a collector with no pollIntervalMs', async () => {
     const pub = makePublisher();
@@ -105,13 +109,15 @@ describe('PollDriver — steady-state re-sweep + reconcile (review F2/F3/F4)', (
     registry.register(fakeCollector('Disk', [{ kind: 'Disk', id: 'd1', op: 'upsert', value: {} }]));
     const driver = new PollDriver({ registry, publisher: pub, backstopMs: 20 });
     driver.start();
-    await new Promise((r) => setTimeout(r, 80));
+    await vi.waitFor(() => expect(observedPosts.length).toBeGreaterThanOrEqual(1), {
+      timeout: 5_000,
+      interval: 10,
+    });
     driver.stop();
     pub.dispose();
 
-    expect(observedPosts.length).toBeGreaterThanOrEqual(1);
     expect(observedPosts[0]?.complete_snapshots).toContain('Disk');
-  });
+  }, 10_000);
 
   it('consumes pendingReconcile: a kind marked after a dropped batch clears on the next tick', async () => {
     const pub = makePublisher();
@@ -125,13 +131,15 @@ describe('PollDriver — steady-state re-sweep + reconcile (review F2/F3/F4)', (
     );
     const driver = new PollDriver({ registry, publisher: pub, backstopMs: 10_000 });
     driver.start();
-    await new Promise((r) => setTimeout(r, 80));
+    // The full re-sweep + flushWithSnapshot reconciles the kind → poll for
+    // the cleared flag itself rather than sleeping through a tick.
+    await vi.waitFor(() => expect(pub.needsReconcile('NfsSession')).toBe(false), {
+      timeout: 5_000,
+      interval: 10,
+    });
     driver.stop();
     pub.dispose();
-
-    // The full re-sweep + flushWithSnapshot reconciled the kind → cleared.
-    expect(pub.needsReconcile('NfsSession')).toBe(false);
-  });
+  }, 10_000);
 
   it('stop() halts further sweeps', async () => {
     const pub = makePublisher();
@@ -141,13 +149,19 @@ describe('PollDriver — steady-state re-sweep + reconcile (review F2/F3/F4)', (
     );
     const driver = new PollDriver({ registry, publisher: pub, backstopMs: 10_000 });
     driver.start();
-    await new Promise((r) => setTimeout(r, 60));
+    // Poll for the first sweep to land before stopping.
+    await vi.waitFor(() => expect(observedPosts.length).toBeGreaterThanOrEqual(1), {
+      timeout: 5_000,
+      interval: 10,
+    });
     driver.stop();
+    // stop() only clears the timers — a sweep fired just before it can still
+    // land its POST. Let it settle before snapshotting the count.
+    await new Promise((r) => setTimeout(r, 50));
     const countAfterStop = observedPosts.length;
-    expect(countAfterStop).toBeGreaterThanOrEqual(1);
+    // Negative check: a fixed window is the only way to assert "no more posts".
     await new Promise((r) => setTimeout(r, 80));
     pub.dispose();
-    // No new posts after stop().
     expect(observedPosts.length).toBe(countAfterStop);
-  });
+  }, 10_000);
 });

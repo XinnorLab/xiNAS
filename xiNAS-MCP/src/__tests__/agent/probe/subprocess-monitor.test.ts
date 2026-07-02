@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type MonitorHandle, startMonitor } from '../../../agent/probe/subprocess-monitor.js';
 
 describe('startMonitor', () => {
@@ -18,11 +18,16 @@ describe('startMonitor', () => {
       backoffMs: [50, 100, 200],
     });
     handles.push(handle);
-    // allow the process to emit lines
-    await new Promise((r) => setTimeout(r, 300));
-    expect(lines).toContain('line1');
-    expect(lines).toContain('line2');
-  });
+    // Poll until the lines arrive: `node` cold-start can exceed any fixed
+    // sleep budget on a loaded machine.
+    await vi.waitFor(
+      () => {
+        expect(lines).toContain('line1');
+        expect(lines).toContain('line2');
+      },
+      { timeout: 10_000, interval: 25 },
+    );
+  }, 15_000);
 
   it('restarts the subprocess on exit and calls onLine again', async () => {
     let restartCount = 0;
@@ -38,13 +43,13 @@ describe('startMonitor', () => {
       backoffMs: [50, 50, 50],
     });
     handles.push(handle);
-    // Generous window: needs >=2 real `node` cold-starts plus 50ms backoffs.
-    // 500ms is borderline (~507ms observed) and flakes under full-suite
-    // parallel CPU load; 1500ms gives comfortable margin without slowing
-    // the suite meaningfully (the assertion fires as soon as it's reached).
-    await new Promise((r) => setTimeout(r, 1500));
-    expect(restartCount).toBeGreaterThanOrEqual(2);
-  });
+    // Needs >=2 real `node` cold-starts plus 50ms backoffs; poll for the
+    // restart instead of racing a fixed sleep under full-suite CPU load.
+    await vi.waitFor(() => expect(restartCount).toBeGreaterThanOrEqual(2), {
+      timeout: 10_000,
+      interval: 25,
+    });
+  }, 15_000);
 
   it('stop() terminates the subprocess and prevents further restarts', async () => {
     let startCount = 0;
@@ -58,11 +63,15 @@ describe('startMonitor', () => {
       backoffMs: [50, 50, 50],
     });
     handles.push(handle);
-    await new Promise((r) => setTimeout(r, 100));
+    // Poll for the first line so the test isn't vacuous when cold-start is slow.
+    await vi.waitFor(() => expect(startCount).toBeGreaterThanOrEqual(1), {
+      timeout: 10_000,
+      interval: 25,
+    });
     const countBefore = startCount;
     await handle.stop();
+    // Negative check: a fixed window is the only way to assert "nothing more".
     await new Promise((r) => setTimeout(r, 300));
-    // no new lines after stop
     expect(startCount).toBe(countBefore);
-  });
+  }, 15_000);
 });
