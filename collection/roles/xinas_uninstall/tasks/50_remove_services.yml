@@ -12,6 +12,7 @@
     - xinas-mcp.service
     - xinas-nfs-helper.service
     - xinas-perf-runtime.service
+    - xinas-api.service
   failed_when: false
 
 - name: "Services | delete xiNAS unit files"
@@ -22,6 +23,7 @@
     - /etc/systemd/system/xinas-mcp.service
     - /etc/systemd/system/xinas-nfs-helper.service
     - /etc/systemd/system/xinas-perf-runtime.service
+    - /etc/systemd/system/xinas-api.service
 
 - name: "Services | delete NFS-helper runtime directory"
   ansible.builtin.file:
@@ -38,7 +40,7 @@
       {{
         uninstall_summary | combine({
           'removed': uninstall_summary.removed + [
-            ['Service units', 'xinas-mcp.service, xinas-nfs-helper.service, xinas-perf-runtime.service']
+            ['Service units', 'xinas-mcp.service, xinas-nfs-helper.service, xinas-perf-runtime.service, xinas-api.service']
           ]
         })
       }}

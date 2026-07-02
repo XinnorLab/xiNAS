@@ -214,8 +214,8 @@ the §8 report.
 
 ### 4.1 Phase A — quiesce services
 
-1. `systemctl stop xinas-mcp xinas-nfs-helper` (best-effort).
-2. `systemctl disable xinas-mcp xinas-nfs-helper` (best-effort).
+1. `systemctl stop xinas-mcp xinas-nfs-helper xinas-api` (best-effort).
+2. `systemctl disable xinas-mcp xinas-nfs-helper xinas-api` (best-effort).
 3. `exportfs -ua` (best-effort) — unexports all NFS shares so the
    kernel server is no longer serving xiNAS data while we tear down the
    filesystems.
@@ -283,6 +283,7 @@ The role does **not** edit `/etc/fstab` — xiNAS never writes to it.
 1. Remove unit files:
    - `/etc/systemd/system/xinas-mcp.service`
    - `/etc/systemd/system/xinas-nfs-helper.service`
+   - `/etc/systemd/system/xinas-api.service`
 2. Remove the runtime socket dir `/run/xinas-nfs-helper/` if present
    (systemd usually does this on stop, but we want to be explicit on
    partial-state systems).
@@ -446,7 +447,7 @@ After the playbook returns, `uninstall.sh` prints a structured report:
 xiNAS uninstall complete
 
 Removed:
-  ✓ Services: xinas-mcp, xinas-nfs-helper, nfs-server
+  ✓ Services: xinas-mcp, xinas-nfs-helper, xinas-api, nfs-server
   ✓ Mounts:   mnt-data.mount, mnt-log.mount
   ✓ Arrays:   data, log
   ✓ Pools:    data_spare_pool
