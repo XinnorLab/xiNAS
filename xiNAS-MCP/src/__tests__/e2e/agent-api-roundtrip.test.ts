@@ -190,8 +190,10 @@ describe.sequential('e2e: agent -> api round-trip (fixture probe mode)', () => {
     writeFileSync(controllerIdPath, `${CONTROLLER_ID}\n`);
     writeFileSync(agentTokenPath, `${AGENT_TOKEN}\n`);
 
-    // Pre-seed the DB with the Cluster + Node singletons so GET /api/v1/system
-    // returns 200 (the agent never emits those kinds). Open the store, seed,
+    // Pre-seed the Cluster + Node singletons with fixture values (display_name,
+    // hostname, etc.). Since ADR-0016 startServer self-seeds defaults anyway —
+    // explicit rows here make the assertions deterministic (the self-seed is
+    // create-if-absent, so it leaves these rows alone). Open the store, seed,
     // close — the api process then reopens the same file.
     const seedStore = await openStateStore({
       databasePath: dbPath,

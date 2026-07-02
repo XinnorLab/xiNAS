@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { type OpenedStateStore, openStateStore } from '../state/index.js';
 import { createAgentRpcClient } from './agent-client.js';
 import { createApp } from './app.js';
+import { seedInfrastructure } from './bootstrap.js';
 import { type ApiConfig, loadConfig } from './config.js';
 import type { ApiContext } from './context.js';
 import { HeartbeatTracker, createAgentHealthProbe } from './heartbeat.js';
@@ -35,6 +36,11 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
     ...(config.state.archiveDir !== undefined ? { archiveDir: config.state.archiveDir } : {}),
   });
   state.drainer.start();
+
+  // ADR-0016: seed /xinas/v1/cluster + /xinas/v1/nodes/<controller_id>
+  // (create-if-absent; allow_apply mirror refresh) before anything can
+  // serve reads — the routes hard-require both rows.
+  seedInfrastructure(state, config);
 
   // Compile inbound-observation validators from api-v1.yaml once. Returns null
   // (validation skipped) when the spec isn't shipped — the graceful default.
