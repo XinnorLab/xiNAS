@@ -105,6 +105,9 @@ The format below is:
 **Requirement:** Existing Ansible roles must publish the initial desired state into the local Control Path store after provisioning.
 **How to verify:** Complete a clean install and compare API desired state with the generated xiRAID, XFS, NFS, network, and tuning configuration.
 
+**Requirement:** `xinas-api` must self-seed the infrastructure singletons — the `/xinas/v1/cluster` record (`mode=single_node`, Phase 0 capability flags) and its own `/xinas/v1/nodes/<controller_id>` record — at startup whenever they are absent, without any installer or agent involvement (ADR-0016). Existing rows must not be overwritten, except that the advertised `mcp.allow_apply` capability follows the api config.
+**How to verify:** On a fresh install (or after deleting the state database and restarting `xinas-api`), `GET /system` and `GET /capabilities` return 200 with `mode=single_node` and exactly one node, with no manual seeding step.
+
 **Requirement:** Shell menu scripts must remain compatibility wrappers only. New day-2 functionality must be implemented through the Control API and Python TUI/CLI clients.
 **How to verify:** Run static-code checks on new commits. Fail the check if a new day-2 feature is implemented only in shell menu scripts.
 
