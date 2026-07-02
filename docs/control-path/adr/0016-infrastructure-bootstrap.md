@@ -100,9 +100,13 @@ idempotent rules:
    config value, update that one field (read-modify-write of the row).
    The MCP dispatcher reads config directly, so the gate itself never
    goes stale — this keeps the *advertised* capability truthful for
-   clients that plan UI around `/capabilities`. No other field of an
-   existing row is ever touched: operator edits (e.g. `display_name`)
-   survive restarts.
+   clients that plan UI around `/capabilities`. No other *value* field
+   of an existing row is ever touched: operator edits (e.g.
+   `display_name`) survive restarts. Row *metadata* is the exception a
+   refresh implies: the rewrite bumps the revision and restamps
+   `modified_at`/`source`/`owner` (to `api:bootstrap` defaults) like
+   any other put — acceptable because the refresh fires only when the
+   config flag actually changed.
 
 Startup order guarantees single-writer: the seed runs before any
 listener binds, so no CAS/expected-revision handling is needed.

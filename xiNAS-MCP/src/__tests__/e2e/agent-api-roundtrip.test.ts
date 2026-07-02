@@ -192,9 +192,10 @@ describe.sequential('e2e: agent -> api round-trip (fixture probe mode)', () => {
 
     // Pre-seed the Cluster + Node singletons with fixture values (display_name,
     // hostname, etc.). Since ADR-0016 startServer self-seeds defaults anyway —
-    // explicit rows here make the assertions deterministic (the self-seed is
-    // create-if-absent, so it leaves these rows alone). Open the store, seed,
-    // close — the api process then reopens the same file.
+    // explicit rows here make the assertions deterministic (create-if-absent
+    // leaves them alone; the mirror refresh is a no-op because the fixture
+    // already carries mcp.allow_apply=false, matching the mcp-less config).
+    // Open the store, seed, close — the api process then reopens the same file.
     const seedStore = await openStateStore({
       databasePath: dbPath,
       auditJsonlPath: auditPath,
@@ -204,7 +205,11 @@ describe.sequential('e2e: agent -> api round-trip (fixture probe mode)', () => {
       kind: 'Cluster',
       id: 'default',
       spec: { display_name: 'e2e-cluster' },
-      status: { mode: 'single_node', capabilities: {}, member_node_ids: [CONTROLLER_ID] },
+      status: {
+        mode: 'single_node',
+        capabilities: { 'mcp.allow_apply': false },
+        member_node_ids: [CONTROLLER_ID],
+      },
     });
     seedStore.kv.put(`/xinas/v1/nodes/${CONTROLLER_ID}`, {
       kind: 'Node',
