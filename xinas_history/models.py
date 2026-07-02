@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -313,17 +314,31 @@ class DiffResult:
 
 
 def generate_snapshot_id(operation: str) -> str:
-    """Generate a snapshot ID from the current UTC time and operation name.
+    """Generate a UNIQUE snapshot ID from the current UTC time and operation.
 
-    Format: ``YYYYMMDDTHHMMSSZ-<operation>`` where *operation* has
-    underscores replaced with hyphens for readability.
+    Format: ``YYYYMMDDTHHMMSSZ-<operation>-<rand>`` where *operation* has
+    underscores replaced with hyphens for readability and *rand* is a short
+    random hex suffix.
+
+    The random suffix is REQUIRED for correctness, not decoration: the timestamp
+    has one-second granularity, so two snapshots created in the same wall-clock
+    second for the same operation would otherwise derive the IDENTICAL id. That
+    happens routinely when two task executors run concurrently (each captures a
+    ``snapshot_before`` + ``snapshot_after``) — e.g. creating two NFS shares at
+    once. On collision the second snapshot's atomic ``.tmp-<id>`` → ``<id>``
+    store rename fails with ``[Errno 39] Directory not empty``; the bridge throws,
+    and the agent runner's snapshot capture had no terminal path, leaving the
+    whole task wedged in ``running`` forever (share never materialized). The id
+    is opaque everywhere — listings sort by the manifest ``timestamp`` field and
+    nothing parses the id string — so the suffix is safe to add.
 
     Examples::
 
-        generate_snapshot_id("raid_create")   -> "20260316T145500Z-raid-create"
-        generate_snapshot_id("install")       -> "20260316T145500Z-install"
+        generate_snapshot_id("raid_create")   -> "20260316T145500Z-raid-create-3f2a9c1b"
+        generate_snapshot_id("install")       -> "20260316T145500Z-install-a17b02de"
     """
     now = datetime.datetime.utcnow()
     ts = now.strftime("%Y%m%dT%H%M%SZ")
     slug = operation.replace("_", "-")
-    return f"{ts}-{slug}"
+    suffix = uuid.uuid4().hex[:8]
+    return f"{ts}-{slug}-{suffix}"

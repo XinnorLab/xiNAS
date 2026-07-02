@@ -134,8 +134,24 @@ export class TaskRunner {
       // 1. accepted (seq 1).
       await emit('accepted');
 
-      // 2. snapshot_before — real xinas_history capture.
-      const before = await this.#bridge.snapshotCreate(begin.operation_kind, 'api');
+      // 2. snapshot_before — real xinas_history capture. A capture failure here
+      //    must NOT wedge the task: task.begin fires run() fire-and-forget and
+      //    swallows a thrown promise, so an uncaught throw would leave the task
+      //    stuck 'running' with NO terminal event (the api only settles a task on
+      //    a terminal). No change has been applied yet, so report a clean failure.
+      let before: { snapshot_id: string };
+      try {
+        before = await this.#bridge.snapshotCreate(begin.operation_kind, 'api');
+      } catch (err) {
+        await emit('stage_failed', {
+          stage_index: nextStageIndex(),
+          stage_name: 'snapshot_before',
+          status: 'failed',
+          error_message: err instanceof Error ? err.message : String(err),
+        });
+        await emit('terminal', { status: 'failed', error_code: 'FAILED_BEFORE_CHANGE' });
+        return;
+      }
       await emit('stage_succeeded', {
         stage_index: nextStageIndex(),
         stage_name: 'snapshot_before',
@@ -193,15 +209,37 @@ export class TaskRunner {
         });
       }
 
-      // 4. All stages ok → snapshot_after + terminal(success).
-      const after = await this.#bridge.snapshotCreate(begin.operation_kind, 'api');
-      await emit('stage_succeeded', {
-        stage_index: nextStageIndex(),
-        stage_name: 'snapshot_after',
-        status: 'succeeded',
-        snapshot_id: after.snapshot_id,
+      // 4. All stages ok → snapshot_after + terminal(success). snapshot_after is
+      //    a POST-change capture (a rollback reference); the operation's real
+      //    work already succeeded, so a capture failure here must neither fail
+      //    the task nor wedge it in 'running'. Best-effort: log to the journal and
+      //    still terminate success, just without an after-snapshot id.
+      let after: { snapshot_id: string } | null = null;
+      try {
+        after = await this.#bridge.snapshotCreate(begin.operation_kind, 'api');
+      } catch (err) {
+        process.stderr.write(
+          `${JSON.stringify({
+            level: 'error',
+            subsystem: 'task-runner',
+            event: 'snapshot_after_failed',
+            task_id: begin.task_id,
+            error: err instanceof Error ? err.message : String(err),
+          })}\n`,
+        );
+      }
+      if (after !== null) {
+        await emit('stage_succeeded', {
+          stage_index: nextStageIndex(),
+          stage_name: 'snapshot_after',
+          status: 'succeeded',
+          snapshot_id: after.snapshot_id,
+        });
+      }
+      await emit('terminal', {
+        status: 'success',
+        ...(after !== null ? { snapshot_id: after.snapshot_id } : {}),
       });
-      await emit('terminal', { status: 'success', snapshot_id: after.snapshot_id });
     } finally {
       this.#inflight.delete(begin.task_id);
     }
