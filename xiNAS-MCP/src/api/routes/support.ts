@@ -120,23 +120,42 @@ export function supportRouter(ctx: ApiContext): Router {
         return;
       }
 
-      // Stage the DB-owned half BEFORE dispatch so the collect stage
-      // finds it; the dispatch spec carries the apply task_id.
-      await stageApiHalf(ctx, bundleDir, task.task_id);
+      // Stage the DB-owned half BEFORE dispatch so the collect stage finds it;
+      // the dispatch spec carries the apply task_id. The task is already
+      // 'queued' holding the SupportBundle lease at this point, so if staging or
+      // dispatch throws we MUST release that lease — otherwise the queued task is
+      // orphaned and every later support-bundle fails CONFLICT 'resource is
+      // locked by another task' until an operator manually cancels it. Cancel a
+      // queued task releases its lease (engine.cancel → revertDesired). Cleanup
+      // is best-effort and must never mask the original failure.
+      try {
+        await stageApiHalf(ctx, bundleDir, task.task_id);
 
-      const dispatchSpec = {
-        ...(persisted.spec as Record<string, unknown>),
-        task_id: task.task_id,
-      };
-      const dispatched = await tasks.taskEngine.admitAndDispatch({
-        task,
-        agentClient: tasks.agentClient,
-        spec: dispatchSpec,
-        plan: applyPlan,
-      });
+        const dispatchSpec = {
+          ...(persisted.spec as Record<string, unknown>),
+          task_id: task.task_id,
+        };
+        const dispatched = await tasks.taskEngine.admitAndDispatch({
+          task,
+          agentClient: tasks.agentClient,
+          spec: dispatchSpec,
+          plan: applyPlan,
+        });
 
-      res.status(202);
-      sendOk(req, res, taskEnvelope(dispatched), [dispatched.state_revision_at_apply ?? 0]);
+        res.status(202);
+        sendOk(req, res, taskEnvelope(dispatched), [dispatched.state_revision_at_apply ?? 0]);
+      } catch (stageErr) {
+        try {
+          await tasks.taskEngine.cancel({
+            taskId: task.task_id,
+            agentClient: tasks.agentClient,
+            trackerOffline: false,
+          });
+        } catch {
+          /* best-effort lease release; surface the original failure below */
+        }
+        throw stageErr;
+      }
     } catch (err) {
       next(err);
     }

@@ -29,6 +29,15 @@ d /run/xinas             1731 root xinas-api -
 d /var/lib/xinas         0755 root root          -
 d {{ xinas_api_state_dir }}   0750 {{ xinas_api_user }} {{ xinas_api_socket_group }} -
 d {{ xinas_api_log_dir }}     0750 {{ xinas_api_user }} {{ xinas_api_socket_group }} -
+# support-bundle staging dir — written by BOTH the api (owner xinas-api: stages
+# <task>.api.json) AND the agent (group xinas-admin: creates work-<task>/ +
+# <task>.tar.gz). The agent runs as root but its sandbox drops CAP_DAC_OVERRIDE,
+# so root does NOT bypass mode bits — the dir must be group-writable for the
+# agent, like /run/xinas. Mode 0770 (NOT setgid 2770): a setgid bit propagates
+# into the collected work tree and the executor's tar verify then fails with
+# "Cannot change mode to rwxr-sr-x: Operation not permitted" (sandboxed root
+# lacks CAP_FSETID to restore setgid on dirs it isn't the group-owner of).
+d {{ xinas_api_log_dir }}/bundles 0770 {{ xinas_api_user }} {{ xinas_api_socket_group }} -
 # config-history store (xinas_history DEFAULT_STORE_PATH). Created here — by the
 # api role, which runs BEFORE xinas_agent and at every boot — so the agent's
 # ReadWritePaths carve-out for it resolves at namespace-setup time. The
