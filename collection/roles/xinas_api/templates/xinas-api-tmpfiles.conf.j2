@@ -29,4 +29,10 @@ d /run/xinas             1731 root xinas-api -
 d /var/lib/xinas         0755 root root          -
 d {{ xinas_api_state_dir }}   0750 {{ xinas_api_user }} {{ xinas_api_socket_group }} -
 d {{ xinas_api_log_dir }}     0750 {{ xinas_api_user }} {{ xinas_api_socket_group }} -
+# config-history store (xinas_history DEFAULT_STORE_PATH). Created here — by the
+# api role, which runs BEFORE xinas_agent and at every boot — so the agent's
+# ReadWritePaths carve-out for it resolves at namespace-setup time. The
+# xinas_history role (later) populates baseline/snapshots/state subdirs; root
+# 0700 matches how that role owns the tree (the agent runs as root).
+d /var/lib/xinas/config-history 0700 root root      -
 d /etc/xinas-agent       0755 root root          -

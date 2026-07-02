@@ -77,10 +77,18 @@ export function parseLsblkOutput(raw: string): ObservedDisk[] {
         status: {
           name: d.name,
           device_path: `/dev/${d.name}`,
-          ...(d.model !== undefined ? { model: d.model } : {}),
-          ...(d.serial !== undefined ? { serial: d.serial } : {}),
-          ...(d.tran !== undefined ? { transport: d.tran } : {}),
-          ...(d.wwn !== undefined ? { wwn: d.wwn } : {}),
+          // lsblk emits `null` (not omitted) for these on virtual block
+          // devices — e.g. xiRAID volumes /dev/xi_data, /dev/xi_log have no
+          // model/serial/transport/wwn. The api Disk schema types them as
+          // `string`, and inbound validation strips `required` but still checks
+          // TYPE, so a JSON `null` fails "must be string" and — because the
+          // observed endpoint fail-closes the WHOLE batch on one bad delta —
+          // silently dropped EVERY disk on real hardware. Guard on `string`
+          // (not `!== undefined`, which lets `null` through).
+          ...(typeof d.model === 'string' ? { model: d.model } : {}),
+          ...(typeof d.serial === 'string' ? { serial: d.serial } : {}),
+          ...(typeof d.tran === 'string' ? { transport: d.tran } : {}),
+          ...(typeof d.wwn === 'string' ? { wwn: d.wwn } : {}),
           ...(sizeText !== undefined ? { size_text: sizeText } : {}),
           ...(capacityBytes !== undefined ? { capacity_bytes: capacityBytes } : {}),
           system_disk: systemDisk,

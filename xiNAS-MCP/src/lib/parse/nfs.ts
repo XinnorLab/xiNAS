@@ -54,7 +54,10 @@ function parseJson(raw: string, caller: string): unknown {
 }
 
 interface RawClient {
-  host_pattern: string;
+  // The live xinas-nfs-helper emits `host`; older/assumed shapes used
+  // `host_pattern`. Accept both (see parseListExports).
+  host_pattern?: string;
+  host?: string;
   options?: string[];
 }
 
@@ -64,12 +67,18 @@ interface RawExport {
 }
 
 interface RawListExports {
+  // The live helper wraps its payload in a `{ ok, result: [...] }` envelope
+  // (callHelper returns the WHOLE line, unwrapped). Earlier this parser only
+  // read `exports`, so on real hardware it always saw undefined → [] and NO
+  // NFS export was ever observed (health then reported false drift for every
+  // managed share). Accept `result` (real), `exports` (legacy), or a bare array.
+  result?: RawExport[];
   exports?: RawExport[];
 }
 
 export function parseListExports(raw: string): ObservedExportRule[] {
-  const data = parseJson(raw, 'parseListExports') as RawListExports;
-  const exports_ = data.exports ?? [];
+  const data = parseJson(raw, 'parseListExports') as RawListExports | RawExport[];
+  const exports_ = Array.isArray(data) ? data : (data.result ?? data.exports ?? []);
   const rules: ObservedExportRule[] = [];
 
   for (const exp of exports_) {
@@ -81,7 +90,7 @@ export function parseListExports(raw: string): ObservedExportRule[] {
       const anon_gid = extractAnonId(opts, 'anon_gid');
       rules.push({
         export_path: exp.path,
-        host_pattern: client.host_pattern,
+        host_pattern: client.host_pattern ?? client.host ?? '*',
         options: opts,
         ...(squash_mode !== undefined ? { squash_mode } : {}),
         ...(anon_uid !== undefined ? { anon_uid } : {}),
@@ -102,12 +111,14 @@ interface RawSession {
 }
 
 interface RawListSessions {
+  // Same envelope as list_exports: the live helper returns `{ ok, result }`.
+  result?: RawSession[];
   sessions?: RawSession[];
 }
 
 export function parseListSessions(raw: string): ObservedNfsSession[] {
-  const data = parseJson(raw, 'parseListSessions') as RawListSessions;
-  const sessions = data.sessions ?? [];
+  const data = parseJson(raw, 'parseListSessions') as RawListSessions | RawSession[];
+  const sessions = Array.isArray(data) ? data : (data.result ?? data.sessions ?? []);
 
   return sessions.map<ObservedNfsSession>((s) => ({
     kind: 'NfsSession',

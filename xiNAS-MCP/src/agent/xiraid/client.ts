@@ -140,6 +140,21 @@ export class XiraidClient {
 }
 
 /**
+ * Normalize a daemon list payload to an array. The xiRAID daemon returns
+ * raid_show / pool_show as a NAME-KEYED MAP (e.g. `{ data: {...}, log: {...} }`,
+ * as `xicli ... --format json` also emits), whereas every downstream parser
+ * (parseRaidShow, readPools) expects an array of per-entry objects and returns
+ * empty on a non-array. Accept either shape: pass arrays through, spread a
+ * map's values, and treat anything else (incl. an empty `{}` = no entries) as
+ * an empty list.
+ */
+function toArrayPayload(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (payload !== null && typeof payload === 'object') return Object.values(payload);
+  return [];
+}
+
+/**
  * The real transport: lazy gRPC channel from /etc/xraid/net.conf via the
  * existing client pool. raid_show returns the parsed JSON payload.
  */
@@ -151,7 +166,13 @@ export function createGrpcTransport(): XiraidTransport {
       // "13 INTERNAL: Unsupported unit: None" on an unset unit (finding #17),
       // which otherwise fails every array observation sweep.
       const res = await raidShow(client, { units: 'g' });
-      return res.data ?? [];
+      // The live daemon returns a NAME-KEYED MAP ({ data: {...}, log: {...} }),
+      // matching `xicli raid show --format json`, but the collector/parser
+      // contract (and this method's JSDoc) is "an array of per-array objects".
+      // parseRaidShow() bails with `if (!Array.isArray(payload)) return []`, so
+      // returning the raw map silently observed ZERO arrays on real hardware
+      // (only the fake transport ever emitted an array). Normalize to an array.
+      return toArrayPayload(res.data);
     },
     async raidCreate(req: RaidCreateRequest): Promise<void> {
       const client = await getClient();
@@ -193,7 +214,9 @@ export function createGrpcTransport(): XiraidTransport {
       const client = await getClient();
       // units:'g' — same daemon "Unsupported unit: None" crash as raidShow (#17).
       const res = await poolShow(client, { units: 'g' });
-      return res.data ?? [];
+      // Same name-keyed-map vs array mismatch as raidShow: readPools() bails on
+      // a non-array, so spare-pool membership was never joined. Normalize.
+      return toArrayPayload(res.data);
     },
     async raidImportShow(): Promise<unknown> {
       // No drives filter: scan all (confirm exact daemon semantics for an

@@ -180,8 +180,24 @@ export class Publisher {
           return;
         }
 
-        // 4xx: don't retry — payload is structurally wrong.
+        // 4xx: don't retry — payload is structurally wrong. But DO log it: the
+        // observed endpoint fail-closes the whole batch on one bad delta, so a
+        // silent 4xx here means an ENTIRE kind vanished from observed state with
+        // no trace (this masked a real schema-mismatch bug for the Disk,
+        // Filesystem and XiraidArray kinds on real hardware). Never swallow it.
         if (result.status >= 400 && result.status < 500) {
+          process.stderr.write(
+            `${JSON.stringify({
+              time: new Date().toISOString(),
+              level: 'error',
+              subsystem: 'publisher',
+              event: 'observed_post_rejected',
+              status: result.status,
+              kinds: [...kindsInBatch],
+              complete_snapshots: completeSnapshots,
+              delta_count: batch.length,
+            })}\n`,
+          );
           return;
         }
 
