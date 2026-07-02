@@ -214,8 +214,10 @@ the §8 report.
 
 ### 4.1 Phase A — quiesce services
 
-1. `systemctl stop xinas-mcp xinas-nfs-helper xinas-api` (best-effort).
-2. `systemctl disable xinas-mcp xinas-nfs-helper xinas-api` (best-effort).
+1. `systemctl stop xinas-agent xinas-api xinas-mcp xinas-nfs-helper`
+   (best-effort). The agent is stopped before the api it depends on.
+2. `systemctl disable xinas-agent xinas-api xinas-mcp xinas-nfs-helper`
+   (best-effort).
 3. `exportfs -ua` (best-effort) — unexports all NFS shares so the
    kernel server is no longer serving xiNAS data while we tear down the
    filesystems.
@@ -281,12 +283,16 @@ The role does **not** edit `/etc/fstab` — xiNAS never writes to it.
 ### 4.5 Phase E — remove xiNAS services and helpers
 
 1. Remove unit files:
+   - `/etc/systemd/system/xinas-agent.service`
+   - `/etc/systemd/system/xinas-api.service`
    - `/etc/systemd/system/xinas-mcp.service`
    - `/etc/systemd/system/xinas-nfs-helper.service`
-   - `/etc/systemd/system/xinas-api.service`
-2. Remove the runtime socket dir `/run/xinas-nfs-helper/` if present
-   (systemd usually does this on stop, but we want to be explicit on
-   partial-state systems).
+   - `/etc/systemd/system/xinas-perf-runtime.service`
+2. Remove the runtime socket dirs `/run/xinas-nfs-helper/` and
+   `/run/xinas/` (api/agent sockets) if present, plus the
+   `/usr/lib/tmpfiles.d/xinas-api.conf` snippet that recreates
+   `/run/xinas` on boot (systemd usually removes the socket dirs on
+   stop, but we want to be explicit on partial-state systems).
 3. `systemctl daemon-reload`.
 
 ### 4.6 Phase F — remove wrapper binaries
@@ -306,6 +312,8 @@ Remove the following files if they exist:
 Remove the following directories (recursive, idempotent):
 
 - `/etc/xinas-mcp/` — MCP config + audit log dir
+- `/etc/xinas-api/` — api config + tokens
+- `/etc/xinas-agent/` — agent config + token
 - `/usr/lib/xinas-mcp/` — NFS helper library
 - `/var/lib/xinas/` — config-history store and any future xiNAS state
 - `/var/log/xinas/` — MCP audit log, healthcheck logs
@@ -447,7 +455,7 @@ After the playbook returns, `uninstall.sh` prints a structured report:
 xiNAS uninstall complete
 
 Removed:
-  ✓ Services: xinas-mcp, xinas-nfs-helper, xinas-api, nfs-server
+  ✓ Services: xinas-agent, xinas-api, xinas-mcp, xinas-nfs-helper, nfs-server
   ✓ Mounts:   mnt-data.mount, mnt-log.mount
   ✓ Arrays:   data, log
   ✓ Pools:    data_spare_pool
