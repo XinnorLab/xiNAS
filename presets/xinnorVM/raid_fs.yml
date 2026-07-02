@@ -9,3 +9,10 @@ xiraid_force_metadata: true
 
 # When true, always format XFS filesystems even if the label already exists
 xfs_force_mkfs: true
+
+# VM guests are RAM-constrained, so a full page cache can make xiRAID's
+# per-array kernel mempool allocation (__get_free_pages()) fail. Reclaim
+# page cache + compact memory before each `xicli raid create`, and fail
+# early with an actionable message if free memory is still below this
+# floor. Not set for bare-metal presets — see raid_fs role defaults.
+raid_create_min_free_mb: 2560
