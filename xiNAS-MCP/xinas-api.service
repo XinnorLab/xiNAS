@@ -29,6 +29,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Re-assert the tmpfiles.d ownership/mode of the writable dirs on EVERY start.
+# systemd-tmpfiles-setup runs these only at boot; a plain `systemctl restart`
+# does not. If /var/log/xinas or /var/lib/xinas/state ever drift from
+# `xinas-api:xinas-admin` (e.g. recreated as root by a partial reinstall, or a
+# log-rotation misstep), the unprivileged api can no longer open audit.jsonl /
+# the SQLite db and restart-loops with EACCES until someone manually re-runs
+# tmpfiles. The `+` prefix runs this as root (before the sandbox), so it can
+# chown; it is idempotent and cheap. This makes restart self-healing.
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /usr/lib/tmpfiles.d/xinas-api.conf
 ExecStart=/usr/bin/node /opt/xiNAS/xiNAS-MCP/dist/api-server.js
 Environment=XINAS_API_CONFIG=/etc/xinas-api/config.json
 Restart=on-failure

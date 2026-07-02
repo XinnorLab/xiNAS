@@ -1,0 +1,19 @@
+---
+# The xinas-agent role runs BEFORE this one, so at the agent's first boot the
+# NFS helper socket (/run/xinas-nfs-helper.sock) does not exist yet. The agent's
+# NfsSession collector fails its initial sweep with ENOENT and CACHES that error
+# for the process lifetime, which leaves agent.health = degraded and the
+# `agent.connectivity` health check degraded on every fresh install until a
+# manual restart. Once this role has deployed and started the helper, bounce the
+# agent so its collectors re-sweep with the socket present. Handlers run at the
+# END of the play (after every role, so all other agent deps are up too), and
+# only when notified (i.e. the helper actually changed), so idempotent re-runs
+# do not needlessly churn the agent.
+- name: Restart xinas-agent to re-sweep NFS collectors
+  ansible.builtin.systemd:
+    name: xinas-agent
+    state: restarted
+  # Never let a re-sweep restart fail the whole install: the agent recovers on
+  # its own next start regardless, and the socket is already serving.
+  failed_when: false
+  tags: [xinas_nfs_helper, service]

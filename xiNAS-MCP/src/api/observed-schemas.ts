@@ -113,6 +113,38 @@ function stripRequired(node: unknown): void {
 }
 
 /**
+ * Recursively delete every `enum` array anywhere in a JSON Schema object graph
+ * (mirrors stripRequired).
+ *
+ * WHY: inbound observation validation is documented as TYPE-ONLY (see
+ * loadObservedSchemas), but `enum` is a VALUE constraint, not a type check, and
+ * survived stripRequired. Real observed values legitimately fall outside a
+ * public read-schema's enum — e.g. a Filesystem's `mount_unit_state` carries
+ * whatever `systemctl is-enabled` prints (`generated`, `transient`, …) which is
+ * not in the closed read-schema enum, and an observed row's own `kind` fails
+ * the FLAT ConfigSnapshot/Pool `kind` enum. Because the observed endpoint
+ * fail-closes the WHOLE batch on one bad delta, a single out-of-enum value
+ * silently dropped an entire kind (Filesystem never observed on real hardware).
+ * Enum correctness belongs to the public READ schemas (what clients GET back),
+ * not to the inbound garbage-net. Stripping `enum` keeps the type checks while
+ * letting real-world values through; this also subsumes the FLAT_SCHEMA_KINDS
+ * workaround for enum-bearing `kind` fields.
+ *
+ * Only deletes `enum` when it is the JSON-Schema keyword (an array); a property
+ * literally NAMED "enum" whose value is a subschema object is left alone.
+ */
+function stripEnum(node: unknown): void {
+  if (Array.isArray(node)) {
+    for (const item of node) stripEnum(item);
+    return;
+  }
+  if (node === null || typeof node !== 'object') return;
+  const obj = node as Record<string, unknown>;
+  if (Array.isArray(obj['enum'])) delete obj['enum'];
+  for (const value of Object.values(obj)) stripEnum(value);
+}
+
+/**
  * Compile per-kind inbound-observation validators from api-v1.yaml.
  *
  * Returns `{ schemas, ajv }` where `schemas` is keyed by observed kind name
@@ -174,7 +206,13 @@ export function loadObservedSchemas(): {
     // are all type-only. We register the STRIPPED doc (not the original) so a
     // ref from Disk → Metadata also lands on the required-stripped Metadata.
     const strippedDoc = structuredClone(doc) as typeof doc;
-    if (strippedDoc.components?.schemas) stripRequired(strippedDoc.components.schemas);
+    if (strippedDoc.components?.schemas) {
+      stripRequired(strippedDoc.components.schemas);
+      // Also strip `enum` so inbound validation is truly TYPE-ONLY (see
+      // stripEnum): a real observed value outside a read-schema enum must not
+      // fail-close the whole batch.
+      stripEnum(strippedDoc.components.schemas);
+    }
     // Register the stripped spec so internal `$ref` pointers resolve to the
     // required-stripped subschemas when each kind schema is compiled.
     ajv.addSchema(strippedDoc, 'api-v1.yaml');

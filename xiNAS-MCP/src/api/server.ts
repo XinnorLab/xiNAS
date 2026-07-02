@@ -1,6 +1,7 @@
 import { chmodSync, chownSync, existsSync, unlinkSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { hostname as osHostname } from 'node:os';
 import { type OpenedStateStore, openStateStore } from '../state/index.js';
 import { createAgentRpcClient } from './agent-client.js';
 import { createApp } from './app.js';
@@ -24,6 +25,60 @@ export interface ServerHandle {
   close(): Promise<void>;
 }
 
+/**
+ * Seed the singleton Cluster and this node's Node record if they don't exist
+ * yet (finding #32). Shapes match what GET /system + GET /capabilities read
+ * (src/api/routes/system.ts): the cluster carries status.capabilities and
+ * member_node_ids; the node carries spec.hostname + status.agent_state. The
+ * heartbeat tracker updates the node's live agent_state afterwards; this only
+ * establishes the row so the system-family reads stop 404ing on a clean host.
+ */
+function seedClusterIfAbsent(state: OpenedStateStore, config: ApiConfig): void {
+  try {
+    if (state.kv.get('/xinas/v1/cluster') === null) {
+      state.kv.put('/xinas/v1/cluster', {
+        kind: 'Cluster',
+        id: 'default',
+        spec: { display_name: osHostname() },
+        status: {
+          mode: 'single_node',
+          capabilities: {
+            ha: 'not_enabled',
+            quorum: 'not_enabled',
+            witness: 'not_enabled',
+            'nfs.v3_locking_managed': false,
+            'nfs.recovery_state_managed': false,
+            'mcp.allow_apply': config.mcp?.allow_apply === true,
+          },
+          member_node_ids: [config.controller_id],
+        },
+      });
+    }
+    const nodeKey = `/xinas/v1/nodes/${config.controller_id}`;
+    if (state.kv.get(nodeKey) === null) {
+      state.kv.put(nodeKey, {
+        kind: 'Node',
+        id: config.controller_id,
+        spec: { hostname: osHostname() },
+        status: { agent_state: 'offline', observation_age_seconds: 0 },
+      });
+    }
+  } catch (err) {
+    // Non-fatal: a seed failure must not stop the api from starting. The
+    // system-family reads will 404 until the next successful start, exactly the
+    // pre-fix behavior — everything else (shares, arrays, health) is unaffected.
+    process.stderr.write(
+      `${JSON.stringify({
+        time: new Date().toISOString(),
+        level: 'error',
+        subsystem: 'bootstrap',
+        event: 'cluster_seed_failed',
+        error: err instanceof Error ? err.message : String(err),
+      })}\n`,
+    );
+  }
+}
+
 export async function startServer(opts: StartServerOptions = {}): Promise<ServerHandle> {
   const config = loadConfig(opts);
   // Conditional spread — exactOptionalPropertyTypes refuses
@@ -35,6 +90,15 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
     ...(config.state.archiveDir !== undefined ? { archiveDir: config.state.archiveDir } : {}),
   });
   state.drainer.start();
+
+  // First-boot cluster/node bootstrap (finding #32). Nothing in the shipped
+  // product ever seeded /xinas/v1/cluster or /xinas/v1/nodes/<id> — only test
+  // fixtures did — so on a real install GET /system and GET /capabilities
+  // permanently returned NOT_FOUND 'cluster not initialized'. Per ADR-0002 the
+  // api is the SOLE SQLite writer, so ansible/agent cannot seed it; the api
+  // must self-seed on first start. Idempotent: only writes when absent, so a
+  // human-managed cluster record (future multi-node) is never clobbered.
+  seedClusterIfAbsent(state, config);
 
   // Compile inbound-observation validators from api-v1.yaml once. Returns null
   // (validation skipped) when the spec isn't shipped — the graceful default.

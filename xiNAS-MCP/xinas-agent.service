@@ -58,7 +58,25 @@ ProtectHome=true
 # Finding #29: /run/netplan (and /etc/netplan on netplan-less hosts) may not
 # exist; a non-optional ReadWritePaths entry fails namespace setup with
 # 226/NAMESPACE and the agent restart-loops. '-' makes them optional.
-ReadWritePaths=/run/xinas /var/log/xinas /etc/systemd/system -/etc/netplan -/run/netplan /run/systemd
+#   /var/lib/xinas/config-history — the task executors' snapshot_before /
+#                          snapshot_after stages shell out to `xinas_history`,
+#                          which writes config snapshots under
+#                          /var/lib/xinas/config-history (store.py DEFAULT_STORE_PATH).
+#                          /var/lib/xinas is ReadOnlyPaths below (the api owns the
+#                          SQLite state), so WITHOUT this RW carve-out every
+#                          mutating task (share/fs/network create) threw EROFS at
+#                          stage 0 and — because task.begin fires the runner
+#                          fire-and-forget — hung stuck-'running' with no trace.
+#                          A ReadWritePaths subpath overrides a ReadOnlyPaths
+#                          parent. The dir is created by the xinas_api role's
+#                          tmpfiles.d (runs BEFORE this role, and at every boot),
+#                          so it exists at namespace-setup time. The leading '-'
+#                          keeps it OPTIONAL: if it is ever absent the agent still
+#                          starts (a non-optional missing RW path fails namespace
+#                          setup with 226/NAMESPACE — the exact trap a `+mkdir`
+#                          ExecStartPre can't escape, since ExecStartPre also runs
+#                          inside the mount namespace).
+ReadWritePaths=/run/xinas /var/log/xinas /etc/systemd/system -/var/lib/xinas/config-history -/etc/netplan -/run/netplan /run/systemd
 #   /etc/netplan         — S6 network executors (ADR-0008 §Sandbox): the
 #                          full-file 99-xinas.yaml render + the audited
 #                          cleanup of managed-iface stanzas in foreign files.
