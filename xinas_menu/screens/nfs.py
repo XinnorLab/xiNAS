@@ -56,7 +56,15 @@ def _path_prefill(stored: str, mount_points: list[str]) -> tuple[str | None, str
     return _CUSTOM_PATH, stored
 
 
-def _share_summary(path, host, access, root_squash, sync_mode, sec, options) -> str:
+def _share_summary(
+    path: str,
+    host: str,
+    access: str,
+    root_squash: str,
+    sync_mode: str,
+    sec: str,
+    options: list[str],
+) -> str:
     access_label = "Read & Write" if access == "rw" else "Read Only"
     admin_label = "Yes (no_root_squash)" if root_squash == "no_root_squash" else "No (root_squash)"
     sync_label = "Sync (safer)" if sync_mode == "sync" else "Async (faster)"
@@ -232,8 +240,11 @@ class NFSScreen(XiNASAppMixin, Screen):
                     )
                 if sub is None:
                     return CANCEL
-                if sub is BACK or not sub:
-                    continue  # back to (or empty at) the who-select
+                if sub is BACK:
+                    continue  # back to the who-select
+                if not sub:
+                    self.app.notify("Host/network must not be empty.", severity="error")
+                    continue
                 return sub
 
         access_choices = [
