@@ -33,3 +33,9 @@ nvme_raid_log_level: 10       # RAID 10 for small namespaces (log array)
 
 # Note: xiraid_arrays and xfs_filesystems are generated automatically
 # by nvme_namespace role when nvme_auto_namespace: true
+# Minimum free memory (MiB) required before creating each array. xiRAID
+# preallocates a per-array kernel mempool (~memory_prealloc, ~2 GB) via
+# __get_free_pages(); creation fails cryptically below this floor. Defined here
+# because this preset REPLACES the raid_fs role's defaults/main.yml, so any
+# default the role adds must be mirrored here or it is lost at preset-apply.
+raid_create_min_free_mb: 2560

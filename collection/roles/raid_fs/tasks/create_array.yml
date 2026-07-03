@@ -32,11 +32,11 @@
   ansible.builtin.fail:
     msg: >-
       Only {{ _mem_avail_kb.stdout | int // 1024 }} MiB free after reclaim, but
-      creating array '{{ item.name }}' needs >= {{ raid_create_min_free_mb }} MiB
+      creating array '{{ item.name }}' needs >= {{ raid_create_min_free_mb | default(2560) }} MiB
       for the xiRAID mempool (memory_prealloc). Proceeding would fail with a
       kernel '__get_free_pages() failed … RAID creation failed' error. Add RAM,
       reduce the disk count for this array, or lower its memory_prealloc_mb.
-  when: (_mem_avail_kb.stdout | int // 1024) < (raid_create_min_free_mb | int)
+  when: (_mem_avail_kb.stdout | int // 1024) < (raid_create_min_free_mb | default(2560) | int)
   tags: [raid_fs, raid]
 
 - name: Create array {{ item.name }}
