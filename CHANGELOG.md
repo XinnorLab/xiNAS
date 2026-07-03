@@ -6,6 +6,25 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.1.2] - 2026-07-03
+
+### Fixed
+
+- **Default install no longer aborts at array creation.** Installing a
+  release via `install.sh` → `autoinstall.sh --preset default` failed on
+  every host with `raid_fs/tasks/create_array.yml: 'raid_create_min_free_mb'
+  is undefined` (`ansible-playbook` exit 2). `autoinstall.sh` applies a
+  preset by copying `presets/<name>/raid_fs.yml` over the `raid_fs` role's
+  `defaults/main.yml`, so the `raid_create_min_free_mb` default added in
+  3.1.0 was wiped whenever a preset was applied and the memory-floor guard
+  then evaluated an undefined variable (#242).
+- Both shipped presets (`default`, `xinnorVM`) now carry
+  `raid_create_min_free_mb: 2560`, with a comment documenting that role
+  defaults must be mirrored into presets that replace them.
+- The guard task is now defensive (`raid_create_min_free_mb | default(2560)`)
+  so a preset that forgets the tunable can never hard-fail the whole install
+  again — it loses the override, not the run.
+
 ## [3.1.1] - 2026-07-03
 
 ### Changed — GitHub-Releases-only delivery
