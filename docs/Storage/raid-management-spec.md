@@ -224,20 +224,25 @@ State → icon/colour mapping (from `_state_icon` / `_state_color`):
 
 ## 4. Create Array wizard
 
-`_create_array_wizard()` runs as a Textual `@work(exclusive=True)` async worker so the UI stays responsive. Steps:
+`_create_array_wizard()` runs as a Textual `@work(exclusive=True)` async worker so the UI stays responsive. Like the NFS share wizards ([Storage/fs-shares-management-spec.md §4.3](fs-shares-management-spec.md#43-wizard-navigation-model)), it is built on the generic [xinas_menu/widgets/wizard.py](../../xinas_menu/widgets/wizard.py) driver: a flat list of `WizardStep`s (`name`, `level`, `drives`, `strip`, `group_size`, `spare`, `confirmed`) handed to `run_wizard()`, with `group_size` and `spare` marked conditional via an `applies=` predicate. `run_wizard` computes `allow_back` and `step_no` per step; **every step after the first (`name`) renders a Back button**, and `Back` returns the operator to the previous *applicable* step — skipping `group_size` when the level isn't 50/60, and skipping `spare` when no pools exist — with that step's prior answer pre-filled. Titles are driver-computed `f"Create Array — Step {step_no}"` (no `/N` denominator, unlike the NFS wizards) so a RAID-5 array (no `group_size` step) numbers its steps 1..6 contiguously, with no gap where step 5 would otherwise have been.
 
-### Step 1 — name
+**Disks and pools are fetched up front**, before the wizard's step list is even built — this is what lets the `group_size`/`spare` `applies=` predicates and the drives step see their data on every entry, including after a Back:
+
+1. `_list_api_disks(self.app.control)` (`GET /api/v1/disks`, cross-referenced against the arrays list to exclude already-claimed drives) enumerates NVMe drives. **If zero NVMe drives are available, the wizard aborts immediately with a "No available NVMe drives found." dialog — this check now runs before the name prompt is ever shown**, not after Step 3 as in the pre-Back-navigation flow.
+2. `GET /api/v1/pools` (via `self.app.control.result`) lists spare pools. A failure here is swallowed (`pools = {}`) rather than aborting the wizard — it just means the `spare` step's `applies=lambda a: bool(pools)` predicate stays `False` and the step is skipped.
+
+### Step — name
 
 `InputDialog` with validation:
 
 - 1 ≤ length ≤ 64.
 - Matches `_ARRAY_NAME_RE = ^[a-zA-Z0-9_-]+$`.
 
-A failed validation re-prompts via the `while True:` loop until the user enters a valid name or cancels.
+A failed validation re-prompts via the `while True:` loop until the user enters a valid name or cancels. This is the wizard's first step, so its dialog never renders a Back button.
 
-### Step 2 — RAID level
+### Step — RAID level
 
-`SelectDialog` over `_RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]`. xiRAID Classic accepts all seven; the TUI passes the string through to `RaidCreate.level`.
+`SelectDialog` over `_RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]`, pre-selecting the previously-chosen level on re-entry. xiRAID Classic accepts all seven; the TUI passes the string through to the array-create spec's `level` field.
 
 **Engine-enforced minimum drive counts (finding #20).** xiRAID Classic enforces higher minimums than textbook RAID math, and `xicli raid create --help` does not document the numbers — an under-count is rejected with e.g. `Error: To create RAID level '5', a minimum of '4' disks are required.`:
 
@@ -252,47 +257,52 @@ A failed validation re-prompts via the `while True:` loop until the user enters 
 
 (Minimums per the installer-feedback observations; the RAID-5 value is the engine's own rejection message. They could not be re-probed live here because the engine validates device existence before drive count and no free devices were available.)
 
-The Create wizard does **not** pre-validate drive count against the chosen level — an under-count is caught by the engine only *after* the confirmation step and surfaced through `grpc_short_error` (§4, "Confirmation + dispatch", failure step 4). Pre-checking count-vs-level in Step 3 before dispatch (so the operator gets an immediate, actionable message) is a tracked follow-up.
+The Create wizard does **not** pre-validate drive count against the chosen level — an under-count is caught by the engine only *after* the confirmation step and surfaced as a failure dialog. Pre-checking count-vs-level in the drives step before dispatch (so the operator gets an immediate, actionable message) is a tracked follow-up.
 
-### Step 3 — drives
+Changing the level on a Back visit can flip whether `group_size` applies going forward — e.g. going from `50` back to `5` — in which case the driver prunes the now-inapplicable `group_size` answer and the wizard skips straight past it on the next advance.
 
-`_get_drive_groups()` enumerates NVMe drives via `grpc.disk_list()` (which itself is `lsblk` enriched with RAID membership from `raid_show(extended=True)` — see §5) and bins them by NUMA node and size category. Threshold for "small" vs "large" is `1 GB` (`SMALL_THRESHOLD = 1_000_000_000`). The split is what lets the wizard offer separate "log" (small `n1` namespaces) and "data" (large `n2` namespaces) groups out of the box.
+### Step — drives
 
-The user picks a **drive group**:
+Drive groups are precomputed from the up-front disk fetch and binned by NUMA node and size category. Threshold for "small" vs "large" is `1 GB` (`SMALL_THRESHOLD = 1_000_000_000`). The split is what lets the wizard offer separate "log" (small `n1` namespaces) and "data" (large `n2` namespaces) groups out of the box.
 
-- `All small NVMe, NUMA 0` (etc.) — pre-selected list, opens the `DrivePickerScreen` with `preselected=` so the operator can review.
+**First entry** (no prior `drives` answer in this run): the user picks a **drive group** via a `SelectDialog`:
+
+- `All small NVMe, NUMA 0` (etc.) — opens `DrivePickerScreen` pre-filtered to that group, with `preselected=` set to the whole group so the operator can review/deselect.
 - `Pick individual drives` — opens `DrivePickerScreen` with all unassigned NVMe drives and no preselection.
 
-`DrivePickerScreen` ([widgets/drive_picker.py](../../xinas_menu/widgets/drive_picker.py)) is the full-screen modal: filter by text/NUMA/size, sort by name/size/model/NUMA, multi-select with Space, `a` to select-all-visible, `d` for the detail dialog.
+Backing out of either picker (`allow_back=True` is hardcoded on both, since they're a sub-step of `drives`) returns to the group-select `SelectDialog`, not out of the `drives` step itself; a Back from the group-select is what returns `BACK` to the driver. Picking zero drives shows a "No drives selected." dialog and re-prompts the group select.
+
+**Re-entry** (the operator already completed this step once and has now navigated Back into it from a later step, e.g. `strip`): the group-select `SelectDialog` is **skipped entirely** — the wizard jumps straight to `DrivePickerScreen` over all NVMe drives with the prior selection **pre-checked** (`preselected=prior`), so revising a drive pick doesn't force re-choosing a group.
+
+`DrivePickerScreen` ([widgets/drive_picker.py](../../xinas_menu/widgets/drive_picker.py)) is the full-screen modal: filter by text/NUMA/size, sort by name/size/model/NUMA, multi-select with Space, `a` to select-all-visible, `d` for the detail dialog, and (when `allow_back` is set) `b` for Back — `Esc` always still cancels the whole wizard, never just this step.
 
 Filters that exclude a drive from the picker:
 
-- `system: True` (any OS-mounted partition on it — see `_get_os_drives()` in `grpc_client.py`)
-- `raid_name` set (already a member of some RAID array)
+- `system: True` (any OS-mounted partition on it)
+- already a member of some RAID array, or already assigned to a spare pool
 - `nvme` not in the name (anything that isn't NVMe — the wizard is NVMe-only)
 
-If zero drives are available, the wizard aborts with a "No available NVMe drives found." dialog.
+### Step — strip size
 
-### Step 4 — strip size
+`SelectDialog` over `_STRIP_SIZES = ["16", "32", "64", "128", "256"]` (KB), pre-selecting `"64"` (`selected=answers.get("strip", "64")`) so Enter on first entry still yields the historical default. **`Esc` now cancels the whole wizard**, the same as every other plain-`SelectDialog` step — there is no special-cased "dismiss without choosing silently defaults to 64" behavior anymore; the pre-selection is what makes the common case ("just press Enter") still land on 64.
 
-`SelectDialog` over `_STRIP_SIZES = ["16", "32", "64", "128", "256"]` (KB). Default if the user dismisses without choosing: `64`.
+### Step — group size (RAID 50/60 only, conditional)
 
-### Step 5 — group size (RAID 50/60 only)
+`applies=lambda a: a.get("level") in ("50", "60")`. For levels `50` and `60` the wizard prompts for `group_size` as a positive integer; the validation loop re-prompts on bad input. For any other level this step is skipped in both directions — advancing past `strip` goes straight to `spare`/`confirmed`, and Back from a later step lands on `strip`, not on a hidden `group_size` prompt.
 
-For levels `50` and `60` the wizard prompts for `group_size` as a positive integer. The validation loop re-prompts on bad input.
+### Step — spare pool (conditional on pools existing)
 
-### Step 6 — spare pool
-
-`grpc.pool_show()` lists existing pools. If any exist, a `SelectDialog` offers `(none)` + the sorted pool names. If no pools exist, the step is skipped silently (no spare pool assigned).
+`applies=lambda a: bool(pools)`. If any spare pools exist, a `SelectDialog` offers `(none)` + the sorted pool names, pre-selecting the prior choice on re-entry. If no pools exist at all, the step is skipped silently (no spare pool assigned) — same as before, just expressed as an `applies=` predicate now instead of an inline `if` in a hand-rolled step sequence.
 
 ### Confirmation + dispatch
 
-The summary dialog renders all selections. On confirm:
+The summary dialog (title `"Confirm Create"`, `allow_back=True`) renders all selections, so the operator can Back up from the summary to revise any earlier answer before creating. On confirm:
 
-1. Drive names are normalised to `/dev/<name>` (the picker returns bare names).
-2. `grpc.raid_create(name, level, drives, **kwargs)` is invoked.
+1. The spec is assembled from the collected `answers`: `name`, `level` (as `"raid<N>"`), `member_disk_ids` (drive names mapped to disk ids via the up-front disk fetch), `strip_size_kib`, plus `group_size` and `spare_disk_ids` when applicable.
+2. `POST /api/v1/arrays` is submitted via `self.app.control.plan_apply_wait(...)`, with progress and cancellation surfaced through a `TaskWaitDialog`.
 3. On success: `audit.log("raid.create", "<name> RAID-<level> (<n> drives)", "OK")` + `snapshots.record("raid_create", …)` + Quick Overview is refreshed.
-4. On failure: a `ConfirmDialog` shows `grpc_short_error(err)`.
+4. On cancellation: a "Create cancelled — partial work rolled back." dialog is shown.
+5. On failure: a `ConfirmDialog` shows the create error.
 
 ---
 
@@ -306,6 +316,8 @@ Steps:
 2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(grpc_key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Resync Enabled, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max.
 3. **Per-parameter prompt** — see §5.1.
 4. **Confirm + dispatch.** Value is coerced to the declared `vtype` (`int` for the integer knobs, `str` for the rest). `grpc.raid_modify(name, **{key: value})` is invoked. On success: audit (`raid.modify`) + snapshot (`raid_modify`) + Quick Overview refresh.
+
+Step 1 guards the empty case: if the array listing fails or returns no arrays, the flow aborts on an **OK-only** dialog ("No RAID arrays configured." / "No arrays available."). Delete Array (§6) guards the same way. This is one instance of the screen-wide dialog convention — see §12.
 
 ### 5.1 CPU Affinity dialog (special case)
 
@@ -451,16 +463,20 @@ No write operations — no RPCs are sent. The screen is the canonical "what does
 
 ```
 RAIDScreen._create_array_wizard()
-  ├─ InputDialog (name)                 — TUI only
-  ├─ SelectDialog (level)               — TUI only
-  ├─ _get_drive_groups()
-  │    └─ grpc.disk_list()              → lsblk + raid_show(extended=True)
-  │         └─ grpc raid_show RPC       → xRAID daemon → xicli raid show -f json
-  ├─ DrivePickerScreen                  — TUI only
-  ├─ SelectDialog (strip size)          — TUI only
-  ├─ ConfirmDialog (summary)            — TUI only
-  ├─ grpc.raid_create(name, level, drives, strip_size, [sparepool])
-  │    └─ gRPC raid_create RPC          → xRAID daemon → xicli raid create
+  ├─ _list_api_disks(control)           — GET /api/v1/disks (up front; aborts here if no NVMe)
+  ├─ GET /api/v1/pools                  — up front (failure ⇒ spare step just skipped)
+  ├─ run_wizard([name, level, drives, strip, group_size?, spare?, confirmed])
+  │    ├─ InputDialog (name)                 — TUI only, no Back (first step)
+  │    ├─ SelectDialog (level)               — TUI only, Back-enabled
+  │    ├─ drives: SelectDialog (group) → DrivePickerScreen
+  │    │       — first entry only; re-entry after Back jumps straight to
+  │    │         DrivePickerScreen with the prior selection preselected
+  │    ├─ SelectDialog (strip size, pre-selects 64)
+  │    ├─ InputDialog (group size)           — only if level in {50, 60}
+  │    ├─ SelectDialog (spare pool)          — only if pools exist
+  │    └─ ConfirmDialog (summary, Back-enabled)
+  ├─ POST /api/v1/arrays (name, level, member_disk_ids, strip_size_kib, [group_size], [spare_disk_ids])
+  │    └─ plan_apply_wait → control-path API → xiRAID
   ├─ audit.log("raid.create", …, "OK")  — write /var/log/xinas/audit.log
   ├─ snapshots.record("raid_create", …) — xinas_history snapshot
   └─ _show_quick()                      → refresh Quick Overview

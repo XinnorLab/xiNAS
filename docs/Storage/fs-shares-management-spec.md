@@ -265,31 +265,46 @@ Every write goes through the helper socket, including the `idmapd` step (which i
 
 This is the closest the TUI comes to a dashboard — it's the screen most operators see most often.
 
-### 4.3 The shared 5-step access-control wizard (`_access_wizard`)
+### 4.3 Wizard navigation model
 
-Add and Edit both call into `_access_wizard()` with `step_offset` and `total_steps` parameters so the title chrome reads `Step N/7` consistently. The wizard collects five fields:
+Both share wizards (Add, Edit) — and, by the same pattern, the RAID Create-Array wizard covered in [Storage/raid-management-spec.md §4](raid-management-spec.md#4-create-array-wizard) — run on a generic **Back-navigable driver**: [xinas_menu/widgets/wizard.py](../../xinas_menu/widgets/wizard.py).
 
-| Step | Field | Choices |
-|---|---|---|
-| 1 | `host` | `Everyone` (→ `*`), `Specific network` (→ free-form CIDR), `Single host` (→ free-form IP) |
-| 2 | `access` | `rw` or `ro` |
-| 3 | `root_squash` | `no_root_squash` ("full admin", recommended) or `root_squash` ("limited", more secure) |
-| 4 | `sync_mode` | `sync` (safer) or `async` (faster) |
-| 5 | `sec` | `sys`, `krb5`, `krb5i`, `krb5p` |
+- **`WizardStep`** — a dataclass of `key` (the answers-dict key the step's result is stored under), an async `run(answers, allow_back, step_no)` callable, and an optional `applies(answers)` predicate (default: always applicable). A step whose `applies()` returns `False` is skipped in both directions and its stale key (if any) is pruned from `answers` when skipped.
+- **`BACK` / `CANCEL`** — two distinct sentinel objects (not `None`, not any real string/bool). A step's `run()` returns one of these instead of a value to signal "go to the previous applicable step" or "abort the whole wizard."
+- **`run_wizard(steps, initial=None)`** — the driver loop. It owns the current index and the accumulated `answers` dict (seeded from `initial`, used by Edit to pre-load the selected share's current values). For each applicable step it computes `allow_back` (`True` once any earlier step is applicable — `False` on the wizard's first step) and `step_no` (the 1-based position **counting only applicable steps**, so a skipped step doesn't leave a gap in the numbering). It calls `step.run(answers, allow_back, step_no)`; on `CANCEL` the whole call returns `None`; on `BACK` it rewinds to the previous applicable index; otherwise it stores `answers[step.key] = result` and advances. Returns the final `answers` dict once every step has been passed, or `None` if any step cancelled.
+- **Answers are retained across Back.** Since `answers` is one dict shared by the whole run, backing up and coming forward again shows the step's previously-entered value pre-filled rather than blank — see the dialog pre-fill params below.
 
-When called from Edit (`current=` set), every prompt is annotated with `(Current: …)` so the operator can see what they're about to change before they change it.
+**Dialog support.** The four dialogs used by these wizards — `SelectDialog`, `InputDialog`, `ConfirmDialog` ([xinas_menu/widgets/](../../xinas_menu/widgets/)), and `DrivePickerScreen` (RAID only, see the RAID spec) — all accept a keyword-only `allow_back: bool = False`. When `True`, the dialog renders a **Back** button and dismisses with the `BACK` sentinel when it's pressed. `Esc` always still dismisses as **Cancel** (`None`), never Back — that binding is unconditional in every dialog. `SelectDialog` and `ConfirmDialog` additionally bind the `left` arrow key to Back (a no-op if `allow_back` is `False`); `InputDialog` exposes Back only via the button (arrow-left would collide with in-field cursor movement); `DrivePickerScreen` binds `b` to Back in addition to its button, since arrow keys and most single letters are already claimed by the picker's own navigation/filter/sort bindings.
 
-The wizard returns the dict `{host, access, root_squash, sync_mode, sec}` or `None` on cancel. Each step also accepts cancel — bailing on step 3 doesn't mutate state.
+Pre-fill on re-entry is dialog-specific: `SelectDialog.selected` pre-highlights an option, `InputDialog.default` pre-fills the text field, and `DrivePickerScreen.preselected` pre-checks a drive set — each wizard step reads its current value out of `answers` and passes it back in on every entry, so what the operator sees after backing up matches what they last chose.
 
-### 4.4 Add Share (7 steps)
+### 4.4 The shared 5-step access-control steps (`_access_steps`)
+
+Add and Edit both call `NFSScreen._access_steps(prefix, total)`, which builds and returns the five shared `WizardStep`s (it no longer runs the steps itself — the caller concatenates them into its own step list and hands the whole thing to `run_wizard`). `prefix` (`"Add Share"` or `"Edit Share"`) and `total` (currently always `7`) feed a shared `title(step_no)` closure so every dialog in the wizard reads `<prefix> — Step <step_no>/<total>`, with `step_no` computed by the driver.
+
+| Step | Key | Field | Choices |
+|---|---|---|---|
+| 1 | `host` | `host` | `Everyone` (→ `*`), `Specific network` (→ free-form CIDR), `Single host` (→ free-form IP) |
+| 2 | `access` | `access` | `rw` or `ro` |
+| 3 | `root_squash` | `root_squash` | `no_root_squash` ("full admin", recommended) or `root_squash` ("limited", more secure) |
+| 4 | `sync_mode` | `sync_mode` | `sync` (safer) or `async` (faster) |
+| 5 | `sec` | `sec` | `sys`, `krb5`, `krb5i`, `krb5p` |
+
+Every step reads its **working value** out of the running `answers` dict (`answers.get("host", "*")`, etc.) to compute the `SelectDialog.selected` pre-fill — so re-entering a step after Back shows what was picked last, not the original default. Separately, when `answers` carries an `_orig` snapshot — which only Edit seeds (see §4.6) — each prompt appends a `(Current: …)` hint describing the share's value *before this edit run started*, so the operator can see both "what I'm about to pick" (pre-selected) and "what it was originally" (the hint) at once.
+
+The host step (step 1) is a nested sub-flow: the top-level `SelectDialog` offers the three radio choices; picking "Specific network" or "Single host" pushes a follow-up `InputDialog` (always `allow_back=True`) for the CIDR/IP. Backing out of that sub-input returns to the host `SelectDialog` (an internal `continue`, not a `BACK` to the driver); an **empty** value at that sub-input re-prompts the same way, with a `"Host/network must not be empty."` notification — it no longer aborts the wizard as older behavior did.
+
+Each step returns `CANCEL` if its dialog is dismissed with `None`, `BACK` if the dialog returns the `BACK` sentinel, or the resolved field value.
+
+### 4.5 Add Share (7 steps)
 
 **Step 1 — pick an export path.**
 
-The wizard scans `findmnt -t xfs -n -o TARGET` to list existing XFS mounts. The list is prepended with a `Custom path…` option so an operator can export a subdirectory under an existing mount (e.g. `/mnt/data/share1`). Either choice ends up as an absolute path; the wizard rejects anything that doesn't start with `/`.
+The wizard scans `findmnt -t xfs -n -o TARGET` to list existing XFS mounts. The list is prepended with a `Custom path…` option so an operator can export a subdirectory under an existing mount (e.g. `/mnt/data/share1`). Either choice ends up as an absolute path; the wizard rejects anything that doesn't start with `/`. This is the wizard's first step, so its dialogs never render a Back button (`allow_back` is `False` here — there's no earlier step to return to); every step after it does.
 
-**Steps 2–6.** `_access_wizard("Add Share", step_offset=2, total_steps=7)`.
+**Steps 2–6.** `self._access_steps("Add Share", total=7)` — see §4.4. A Back button is available on all five.
 
-**Step 7 — confirmation.** The options list is built deterministically:
+**Step 7 — confirmation.** `allow_back=True`, so the operator can back up from the summary to revise any earlier answer before committing. The options list is built deterministically:
 
 ```
 options = [access, sync_mode, "no_subtree_check", root_squash]
@@ -320,21 +335,22 @@ This is the canonical internal representation. The helper serialises it to the s
 
 On success: `audit.log("nfs.add_export", path, "OK")` + `snapshots.record("share_create", diff_summary=…)` + Show is refreshed.
 
-### 4.5 Edit Share — preserve unknown options
+### 4.6 Edit Share — preserve unknown options
 
-**Step 1.** `nfs.list_exports()` → `SelectDialog` over current paths.
+**Step 1 — select export.** `SelectDialog` over current paths, `selected=answers.get("path")` (so re-entering after Back re-highlights whichever share was already chosen). The step's `run()` only **reseeds** the working answers when the operator picks a **different** path than the one already recorded (`if choice != answers.get("path")`): it looks up the export, calls `_parse_current_export(export)`, stores the snapshot under `answers["_orig"]`, the export's id under `answers["share_id"]`, and copies the five wizard fields (`host`, `access`, `root_squash`, `sync_mode`, `sec`) from that snapshot into `answers`. If the operator backs into this step and re-confirms the **same** path, none of that reseeding happens — any in-flight edits made on the later access steps during this run are left untouched rather than being clobbered back to the share's on-disk values. If the looked-up share has no id, the step shows a "Share not found." dialog and returns `CANCEL`.
 
 **Parse current values.** `_parse_current_export(export)` extracts the five wizard-managed fields and **everything else** (`extra_opts`). Unknown options are anything not in `_WIZARD_MANAGED_OPTS = {"rw", "ro", "root_squash", "no_root_squash", "sync", "async"}` and not a `sec=…` line.
 
-**Steps 2–6.** `_access_wizard(..., current=current)` — every step shows the current value.
+**Steps 2–6.** `self._access_steps("Edit Share", total=7)` — the same shared steps Add uses (§4.4). Because `answers["_orig"]` was seeded in step 1, every prompt shows the `(Current: …)` hint alongside the pre-selected working value.
 
-**Step 7 — confirmation.** The new options list rebuilds the wizard-managed knobs **plus** appends the preserved `extra_opts`:
+**Step 7 — confirmation.** `allow_back=True`. The new options list rebuilds the wizard-managed knobs **plus** appends the preserved `extra_opts` (read from `answers["_orig"]["extra_opts"]`):
 
 ```python
+extra = answers["_orig"]["extra_opts"]
 options = [access, sync_mode, root_squash]
 if sec != "sys":
     options.append(f"sec={sec}")
-options.extend(current["extra_opts"])
+options.extend(extra)
 ```
 
 So if the original export had `insecure,no_wdelay,fsid=0` (the appliance baseline from [Installer/fs-exports-spec.md §2.3](../Installer/fs-exports-spec.md#23-decoding-the-default-options)), those three options survive a wizard run unchanged. Note: `no_subtree_check` is *not* in `_WIZARD_MANAGED_OPTS`, so it counts as an extra and is preserved through edits — but unlike Add, Edit doesn't force-add it.
@@ -343,7 +359,7 @@ So if the original export had `insecure,no_wdelay,fsid=0` (the appliance baselin
 
 On success: `audit.log("nfs.update_export", path, "OK")` + `snapshots.record("share_modify", diff_summary=…)` + Show is refreshed.
 
-### 4.6 Remove Share
+### 4.7 Remove Share
 
 Simple two-prompt flow:
 
@@ -354,13 +370,13 @@ Then `nfs.remove_export(path)`. On success: `audit.log("nfs.remove_export", path
 
 The export's directory on disk is **not** removed. Anything the share was rooted at stays put.
 
-### 4.7 Active Sessions
+### 4.8 Active Sessions
 
 `nfs.list_sessions()` reads `/proc/fs/nfsd/clients/*/info` on the server side, returning a list of `{client_ip, nfs_version, export_path, active_locks}` dicts. The screen prints `client → export_path` per row. The fallback path (when `/proc/fs/nfsd/clients` is empty — older kernels or v3-only servers) parses `/proc/net/rpc/auth.unix.ip`.
 
 Per-export filtering is available via `nfs.get_sessions(path)`, but the screen always asks for the global list. Use the MCP tool surface for per-path queries.
 
-### 4.8 Configure idmapd Domain
+### 4.9 Configure idmapd Domain
 
 The only NFS-screen action that **does not** go through the helper socket. NFSv4 ID mapping (`/etc/idmapd.conf`) is a one-time / rare-edit configuration; rather than adding a `set_idmapd_domain` op to the helper, the screen edits the file directly in an executor:
 
@@ -407,8 +423,8 @@ FilesystemScreen._create_filesystem_wizard()
 ```
 NFSScreen._add_share_wizard()
   ├─ findmnt -t xfs -n -o TARGET                — list candidate paths
-  ├─ SelectDialog (path) or InputDialog (custom)
-  ├─ _access_wizard(...)                        — 5 nested dialogs
+  ├─ run_wizard([path_step] + _access_steps(...) + [confirm_step])
+  │    ├─ path (mount SelectDialog or custom InputDialog; Back-enabled from step 2 on)
   │    ├─ host (Everyone/Network/Single)
   │    ├─ access (rw/ro)
   │    ├─ root_squash (no_root_squash/root_squash)

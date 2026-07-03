@@ -7,11 +7,14 @@ from textual.binding import Binding
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label
 
+from xinas_menu.widgets.wizard import BACK
 
-class InputDialog(ModalScreen[str | None]):
+
+class InputDialog(ModalScreen["str | None"]):
     """Modal text (or password) input dialog.
 
-    Returns the entered string, or None if cancelled.
+    Returns the entered string, :data:`BACK` if the user requested
+    back-navigation, or None if cancelled.
     """
 
     BINDINGS = [
@@ -25,6 +28,8 @@ class InputDialog(ModalScreen[str | None]):
         default: str = "",
         password: bool = False,
         placeholder: str = "",
+        *,
+        allow_back: bool = False,
     ) -> None:
         super().__init__()
         self._prompt = prompt
@@ -32,6 +37,7 @@ class InputDialog(ModalScreen[str | None]):
         self._default = default
         self._password = password
         self._placeholder = placeholder
+        self._allow_back = allow_back
 
     def compose(self) -> ComposeResult:
         from textual.containers import Horizontal, Vertical
@@ -46,6 +52,8 @@ class InputDialog(ModalScreen[str | None]):
                 id="dialog-input",
             )
             with Horizontal(id="dialog-buttons"):
+                if self._allow_back:
+                    yield Button("Back", variant="default", id="btn-back")
                 yield Button("OK [Enter]", variant="primary", id="btn-ok")
                 yield Button("Cancel [Esc]", variant="default", id="btn-cancel")
 
@@ -53,6 +61,8 @@ class InputDialog(ModalScreen[str | None]):
         if event.button.id == "btn-ok":
             inp = self.query_one("#dialog-input", Input)
             self.dismiss(inp.value)
+        elif event.button.id == "btn-back":
+            self._dismiss_back()
         else:
             self.dismiss(None)
 
@@ -62,3 +72,7 @@ class InputDialog(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def _dismiss_back(self) -> None:
+        if self._allow_back:
+            self.dismiss(BACK)  # pyright: ignore[reportArgumentType]

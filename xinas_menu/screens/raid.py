@@ -37,6 +37,7 @@ from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.task_wait_dialog import TaskWaitDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
+from xinas_menu.widgets.wizard import BACK, CANCEL, WizardStep, run_wizard
 
 _ARRAY_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]
@@ -404,184 +405,263 @@ class RAIDScreen(XiNASAppMixin, Screen):
 
     @work(exclusive=True)
     async def _create_array_wizard(self) -> None:
-        """Multi-step wizard: name -> level -> drives -> strip -> group_size -> spare -> confirm."""
-        # Step 1: Array name (with validation)
-        while True:
-            name = await self.app.push_screen_wait(
-                InputDialog("Array name:", "Create Array — Step 1", placeholder="data0")
-            )
-            if not name:
-                return
-            if len(name) > 64:
-                self.app.notify("Array name must be 64 characters or fewer.", severity="error")
-                continue
-            if not _ARRAY_NAME_RE.match(name):
-                self.app.notify(
-                    "Array name must contain only letters, digits, hyphens, and underscores.",
-                    severity="error",
-                )
-                continue
-            break
-
-        # Step 2: RAID level
-        level = await self.app.push_screen_wait(
-            SelectDialog(_RAID_LEVELS, title="Create Array — Step 2", prompt="Select RAID level:")
-        )
-        if not level:
-            return
-
-        # Step 3: Select drives (grouped by NUMA/size; API disk listing)
+        """Create-array wizard with Back navigation."""
+        # Fetch disks up front so the drive + spare steps and their applies()
+        # predicates have their data; fail fast if there are no NVMe drives.
         try:
             disk_rows = await _list_api_disks(self.app.control)
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Could not list disks.\n{exc}", "Error"))
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Could not list disks.\n{exc}", "Error", ok_only=True)
+            )
             return
         groups, nvme = _drive_groups(disk_rows)
         if not nvme:
             await self.app.push_screen_wait(
-                ConfirmDialog("No available NVMe drives found.", "Error")
+                ConfirmDialog("No available NVMe drives found.", "Error", ok_only=True)
             )
             return
-
-        choices = list(groups.keys()) + ["Pick individual drives"]
-        group_choice = await self.app.push_screen_wait(
-            SelectDialog(choices, title="Create Array — Step 3", prompt="Select drive group:")
-        )
-        if not group_choice:
-            return
-
-        if group_choice == "Pick individual drives":
-            # Full-featured drive picker with filters, sort, detail view
-            selected = await self.app.push_screen_wait(
-                DrivePickerScreen(nvme, title="Create Array — Select Drives")
-            )
-            if not selected:
-                return
-            drives = selected
-        else:
-            # Show group drives in picker for review (all pre-selected)
-            group_drives = groups.get(group_choice, [])
-            group_names = {d if isinstance(d, str) else d.get("name", "") for d in group_drives}
-            # Filter full drive info for this group
-            group_drive_info: list[dict[str, Any]] = [
-                d for d in nvme if d.get("name") in group_names
-            ]
-            if not group_drive_info:
-                # Fallback: bare name strings, not the dict shape DrivePicker
-                # expects. Unreachable in practice (groups are built from
-                # nvme), kept as-is for behavior parity.
-                group_drive_info = group_drives  # pyright: ignore[reportAssignmentType]
-            selected = await self.app.push_screen_wait(
-                DrivePickerScreen(
-                    group_drive_info,
-                    title=f"Review — {group_choice}",
-                    preselected=group_names,
-                )
-            )
-            if not selected:
-                return
-            drives = selected
-
-        if not drives:
-            await self.app.push_screen_wait(ConfirmDialog("No drives selected.", "Error"))
-            return
-
-        # Step 4: Strip size
-        strip = await self.app.push_screen_wait(
-            SelectDialog(
-                _STRIP_SIZES, title="Create Array — Step 4", prompt="Strip size (KB), default 64:"
-            )
-        )
-        if not strip:
-            strip = "64"
-
-        # The picker returns drive NAMES; the API spec references Disk ids.
         name_to_id = {d["name"]: d["id"] for d in nvme}
-        spec: dict[str, Any] = {
-            "name": name,
-            "level": f"raid{level}",
-            "member_disk_ids": [name_to_id.get(n, n) for n in drives],
-            "strip_size_kib": int(strip),
-        }
 
-        # Step 5: Group size (mandatory for RAID 50/60)
-        if level in ("50", "60"):
-            while True:
-                group_size = await self.app.push_screen_wait(
-                    InputDialog(
-                        "Group size (required for RAID 50/60):",
-                        "Create Array — Step 5",
-                        placeholder="4",
-                    )
-                )
-                if not group_size:
-                    return
-                try:
-                    gs = int(group_size)
-                    if gs <= 0:
-                        raise ValueError
-                except ValueError:
-                    self.app.notify("Group size must be a positive integer.", severity="error")
-                    continue
-                spec["group_size"] = gs
-                break
-
-        # Step 6: Spare pool (optional) — pick from existing pools (GET
-        # /api/v1/pools, S9 T11); the pool's drives become the API
-        # spec's spare_disk_ids (the executor provisions xnsp_<name>).
         _NONE_POOL = "(none)"
-        spare_pool_label = ""
         try:
             p_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/pools")
         except ControlPathError:
             p_rows = []
         pools = _pools_by_name(p_rows)
-        if pools:
-            pool_choices = [_NONE_POOL] + sorted(pools.keys())
-            sparepool = await self.app.push_screen_wait(
+
+        async def name_step(answers, allow_back, step_no):
+            default = answers.get("name", "")
+            while True:
+                name = await self.app.push_screen_wait(
+                    InputDialog(
+                        "Array name:",
+                        f"Create Array — Step {step_no}",
+                        default=default,
+                        placeholder="data0",
+                        allow_back=allow_back,
+                    )
+                )
+                if name is None:
+                    return CANCEL
+                if name is BACK:
+                    return BACK
+                if len(name) > 64:
+                    self.app.notify("Array name must be 64 characters or fewer.", severity="error")
+                    default = name
+                    continue
+                if not _ARRAY_NAME_RE.match(name):
+                    self.app.notify(
+                        "Array name must contain only letters, digits, hyphens, and underscores.",
+                        severity="error",
+                    )
+                    default = name
+                    continue
+                return name
+
+        async def level_step(answers, allow_back, step_no):
+            pick = await self.app.push_screen_wait(
                 SelectDialog(
-                    pool_choices,
-                    title="Create Array — Spare Pool",
-                    prompt="Select spare pool (or none):",
+                    _RAID_LEVELS,
+                    title=f"Create Array — Step {step_no}",
+                    prompt="Select RAID level:",
+                    selected=answers.get("level"),
+                    allow_back=allow_back,
                 )
             )
-            if sparepool is None:
-                return
-            if sparepool != _NONE_POOL:
-                path_to_id = {d["device_path"]: d["id"] for d in disk_rows}
-                spare_ids = [
-                    path_to_id.get(p, p.rsplit("/", 1)[-1])
-                    for p in _pool_drive_paths(pools.get(sparepool, {}))
-                ]
-                if spare_ids:
-                    spec["spare_disk_ids"] = spare_ids
-                    spare_pool_label = f"{sparepool} ({len(spare_ids)} drive(s))"
-                else:
-                    self.app.notify(
-                        f"Pool '{sparepool}' has no drives — skipping spare assignment.",
-                        severity="warning",
+            if pick is None:
+                return CANCEL
+            if pick is BACK:
+                return BACK
+            return pick
+
+        async def drives_step(answers, allow_back, step_no):
+            prior = answers.get("drives")
+            if prior:
+                # Re-entry: jump straight to the picker with the prior selection.
+                selected = await self.app.push_screen_wait(
+                    DrivePickerScreen(
+                        nvme,
+                        title="Create Array — Select Drives",
+                        preselected=prior,
+                        allow_back=allow_back,
                     )
-        # If no pools exist, skip silently (no spare pool assigned)
+                )
+                if selected is None:
+                    return CANCEL
+                if selected is BACK:
+                    return BACK
+                return selected
+            while True:
+                choices = list(groups.keys()) + ["Pick individual drives"]
+                group_choice = await self.app.push_screen_wait(
+                    SelectDialog(
+                        choices,
+                        title=f"Create Array — Step {step_no}",
+                        prompt="Select drive group:",
+                        allow_back=allow_back,
+                    )
+                )
+                if group_choice is None:
+                    return CANCEL
+                if group_choice is BACK:
+                    return BACK
+                if group_choice == "Pick individual drives":
+                    selected = await self.app.push_screen_wait(
+                        DrivePickerScreen(
+                            nvme, title="Create Array — Select Drives", allow_back=True
+                        )
+                    )
+                else:
+                    group_drives = groups.get(group_choice, [])
+                    group_names = {
+                        d if isinstance(d, str) else d.get("name", "") for d in group_drives
+                    }
+                    group_drive_info: list[dict[str, Any]] = [
+                        d for d in nvme if d.get("name") in group_names
+                    ] or group_drives  # pyright: ignore[reportAssignmentType]
+                    selected = await self.app.push_screen_wait(
+                        DrivePickerScreen(
+                            group_drive_info,
+                            title=f"Review — {group_choice}",
+                            preselected=group_names,
+                            allow_back=True,
+                        )
+                    )
+                if selected is None:
+                    return CANCEL
+                if selected is BACK:
+                    continue  # back to the group select
+                if not selected:
+                    await self.app.push_screen_wait(
+                        ConfirmDialog("No drives selected.", "Error", ok_only=True)
+                    )
+                    continue
+                return selected
 
-        # Confirm
-        summary = (
-            f"Name:       {name}\n"
-            f"Level:      RAID-{level}\n"
-            f"Drives:     {', '.join(drives)}\n"
-            f"Strip Size: {strip} KB"
-        )
-        if "group_size" in spec:
-            summary += f"\nGroup Size: {spec['group_size']}"
-        if spare_pool_label:
-            summary += f"\nSpare Pool: {spare_pool_label}"
+        async def strip_step(answers, allow_back, step_no):
+            pick = await self.app.push_screen_wait(
+                SelectDialog(
+                    _STRIP_SIZES,
+                    title=f"Create Array — Step {step_no}",
+                    prompt="Strip size (KB), default 64:",
+                    selected=answers.get("strip", "64"),
+                    allow_back=allow_back,
+                )
+            )
+            if pick is None:
+                return CANCEL
+            if pick is BACK:
+                return BACK
+            return pick
 
-        confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(f"Create this RAID array?\n\n{summary}", "Confirm Create")
-        )
-        if not confirmed:
+        async def group_size_step(answers, allow_back, step_no):
+            default = str(answers.get("group_size", ""))
+            while True:
+                value = await self.app.push_screen_wait(
+                    InputDialog(
+                        "Group size (required for RAID 50/60):",
+                        f"Create Array — Step {step_no}",
+                        default=default,
+                        placeholder="4",
+                        allow_back=allow_back,
+                    )
+                )
+                if value is None:
+                    return CANCEL
+                if value is BACK:
+                    return BACK
+                try:
+                    gs = int(value)
+                    if gs <= 0:
+                        raise ValueError
+                except ValueError:
+                    self.app.notify("Group size must be a positive integer.", severity="error")
+                    default = value
+                    continue
+                return gs
+
+        async def spare_step(answers, allow_back, step_no):
+            pool_choices = [_NONE_POOL] + sorted(pools.keys())
+            pick = await self.app.push_screen_wait(
+                SelectDialog(
+                    pool_choices,
+                    title=f"Create Array — Step {step_no}",
+                    prompt="Select spare pool (or none):",
+                    selected=answers.get("spare", _NONE_POOL),
+                    allow_back=allow_back,
+                )
+            )
+            if pick is None:
+                return CANCEL
+            if pick is BACK:
+                return BACK
+            return pick
+
+        async def confirm_step(answers, allow_back, step_no):
+            summary = (
+                f"Name:       {answers['name']}\n"
+                f"Level:      RAID-{answers['level']}\n"
+                f"Drives:     {', '.join(answers['drives'])}\n"
+                f"Strip Size: {answers['strip']} KB"
+            )
+            if answers["level"] in ("50", "60"):
+                summary += f"\nGroup Size: {answers.get('group_size')}"
+            spare = answers.get("spare", _NONE_POOL)
+            if spare != _NONE_POOL:
+                summary += f"\nSpare Pool: {spare}"
+            result = await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"Create this RAID array?\n\n{summary}", "Confirm Create", allow_back=allow_back
+                )
+            )
+            if result is BACK:
+                return BACK
+            return True if result is True else CANCEL
+
+        steps = [
+            WizardStep(key="name", run=name_step),
+            WizardStep(key="level", run=level_step),
+            WizardStep(key="drives", run=drives_step),
+            WizardStep(key="strip", run=strip_step),
+            WizardStep(
+                key="group_size",
+                run=group_size_step,
+                applies=lambda a: a.get("level") in ("50", "60"),
+            ),
+            WizardStep(key="spare", run=spare_step, applies=lambda a: bool(pools)),
+            WizardStep(key="confirmed", run=confirm_step),
+        ]
+        answers = await run_wizard(steps)
+        if answers is None:
             return
 
-        dialog = TaskWaitDialog(f"Creating RAID array '{name}'…", "Create Array")
+        # Assemble the API spec from the collected answers.
+        drives = answers["drives"]
+        spec: dict[str, Any] = {
+            "name": answers["name"],
+            "level": f"raid{answers['level']}",
+            "member_disk_ids": [name_to_id.get(n, n) for n in drives],
+            "strip_size_kib": int(answers["strip"]),
+        }
+        if answers["level"] in ("50", "60"):
+            spec["group_size"] = int(answers["group_size"])
+        spare = answers.get("spare", _NONE_POOL)
+        if spare != _NONE_POOL:
+            path_to_id = {d["device_path"]: d["id"] for d in disk_rows}
+            spare_ids = [
+                path_to_id.get(p, p.rsplit("/", 1)[-1])
+                for p in _pool_drive_paths(pools.get(spare, {}))
+            ]
+            if spare_ids:
+                spec["spare_disk_ids"] = spare_ids
+            else:
+                self.app.notify(
+                    f"Pool '{spare}' has no drives — skipping spare assignment.",
+                    severity="warning",
+                )
+
+        dialog = TaskWaitDialog(f"Creating RAID array '{answers['name']}'…", "Create Array")
         self.app.push_screen(dialog)
         cancelled = False
         error: ControlPathError | None = None
@@ -608,12 +688,16 @@ class RAIDScreen(XiNASAppMixin, Screen):
             )
             return
         if error is not None:
-            await self.app.push_screen_wait(ConfirmDialog(f"Create failed.\n{error}", "Error"))
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Create failed.\n{error}", "Error", ok_only=True)
+            )
             return
-        self.app.audit.log("raid.create", f"{name} RAID-{level} ({len(drives)} drives)", "OK")
+        self.app.audit.log(
+            "raid.create", f"{answers['name']} RAID-{answers['level']} ({len(drives)} drives)", "OK"
+        )
         await self.app.snapshots.record(
             "raid_create",
-            diff_summary=f"Created RAID-{level} array '{name}' with {len(drives)} drives",
+            diff_summary=f"Created RAID-{answers['level']} array '{answers['name']}' with {len(drives)} drives",
         )
         self._show_quick()
 
@@ -626,7 +710,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
             rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
         except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"No arrays available.\n{exc}", "Edit Array")
+                ConfirmDialog(f"No arrays available.\n{exc}", "Edit Array", ok_only=True)
             )
             return
 
@@ -634,7 +718,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
         names = list(arrays.keys())
         if not names:
             await self.app.push_screen_wait(
-                ConfirmDialog("No RAID arrays configured.", "Edit Array")
+                ConfirmDialog("No RAID arrays configured.", "Edit Array", ok_only=True)
             )
             return
 
@@ -715,6 +799,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                             f"Invalid CPU list format: '{raw}'\n"
                             "Expected: comma-separated numbers or ranges (e.g. 0,2,4-7)",
                             "Error",
+                            ok_only=True,
                         )
                     )
                     return
@@ -789,7 +874,9 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 patch_spec = {"tuning": {key: vtype(value)}}
             except (ValueError, TypeError):
                 await self.app.push_screen_wait(
-                    ConfirmDialog(f"Invalid value: expected {vtype.__name__}", "Error")
+                    ConfirmDialog(
+                        f"Invalid value: expected {vtype.__name__}", "Error", ok_only=True
+                    )
                 )
                 return
 
@@ -802,7 +889,9 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 on_progress=self._task_progress(f"Edit {arr_name}"),
             )
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Edit failed.\n{exc}", "Error"))
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Edit failed.\n{exc}", "Error", ok_only=True)
+            )
             return
         self.app.audit.log("raid.modify", f"{arr_name} {key}={value}", "OK")
         await self.app.snapshots.record(
@@ -841,6 +930,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 "Teardown stopped at this step. No cross-step rollback; the "
                 "failed task rolled itself back where supported.",
                 "Delete Array — Stopped",
+                ok_only=True,
             )
         )
 
@@ -860,7 +950,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
             rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
         except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"No arrays available.\n{exc}", "Delete Array")
+                ConfirmDialog(f"No arrays available.\n{exc}", "Delete Array", ok_only=True)
             )
             return
 
@@ -868,7 +958,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
         names = list(arrays.keys())
         if not names:
             await self.app.push_screen_wait(
-                ConfirmDialog("No RAID arrays configured.", "Delete Array")
+                ConfirmDialog("No RAID arrays configured.", "Delete Array", ok_only=True)
             )
             return
 
