@@ -52,9 +52,9 @@ class InputDialog(ModalScreen["str | object | None"]):
                 id="dialog-input",
             )
             with Horizontal(id="dialog-buttons"):
-                yield Button("OK [Enter]", variant="primary", id="btn-ok")
                 if self._allow_back:
                     yield Button("Back", variant="default", id="btn-back")
+                yield Button("OK [Enter]", variant="primary", id="btn-ok")
                 yield Button("Cancel [Esc]", variant="default", id="btn-cancel")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
