@@ -400,7 +400,7 @@ class NFSScreen(XiNASAppMixin, Screen):
             await loop.run_in_executor(None, lambda: os.makedirs(path, exist_ok=True))
         except OSError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Cannot create directory:\n{exc}", "Error")
+                ConfirmDialog(f"Cannot create directory:\n{exc}", "Error", ok_only=True)
             )
             return
 
@@ -434,7 +434,7 @@ class NFSScreen(XiNASAppMixin, Screen):
                 on_progress=self._task_progress("Add Share"),
             )
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error", ok_only=True))
             return
         self.app.audit.log("nfs.add_export", path, "OK")
         await self.app.snapshots.record(
@@ -449,7 +449,9 @@ class NFSScreen(XiNASAppMixin, Screen):
         # Step 1: Select export to edit
         exports = await self._get_exports()
         if not exports:
-            await self.app.push_screen_wait(ConfirmDialog("No shares configured.", "Edit Share"))
+            await self.app.push_screen_wait(
+                ConfirmDialog("No shares configured.", "Edit Share", ok_only=True)
+            )
             return
         paths = [e["path"] for e in exports]
         path = await self.app.push_screen_wait(
@@ -462,7 +464,9 @@ class NFSScreen(XiNASAppMixin, Screen):
         export = next((e for e in exports if e["path"] == path), {})
         share_id = str(export.get("id", ""))
         if not share_id:
-            await self.app.push_screen_wait(ConfirmDialog("Share not found.", "Edit Share"))
+            await self.app.push_screen_wait(
+                ConfirmDialog("Share not found.", "Edit Share", ok_only=True)
+            )
             return
         current = _parse_current_export(export)
 
@@ -534,7 +538,7 @@ class NFSScreen(XiNASAppMixin, Screen):
                 on_progress=self._task_progress("Edit Share"),
             )
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error", ok_only=True))
             return
         self.app.audit.log("nfs.update_export", path, "OK")
         await self.app.snapshots.record(
@@ -547,7 +551,9 @@ class NFSScreen(XiNASAppMixin, Screen):
     async def _remove_share(self) -> None:
         exports = await self._get_exports()
         if not exports:
-            await self.app.push_screen_wait(ConfirmDialog("No shares configured.", "Remove Share"))
+            await self.app.push_screen_wait(
+                ConfirmDialog("No shares configured.", "Remove Share", ok_only=True)
+            )
             return
         paths = [e["path"] for e in exports]
         path = await self.app.push_screen_wait(
@@ -558,7 +564,9 @@ class NFSScreen(XiNASAppMixin, Screen):
         share = next((e for e in exports if e["path"] == path), {})
         share_id = str(share.get("id", ""))
         if not share_id:
-            await self.app.push_screen_wait(ConfirmDialog("Share not found.", "Remove Share"))
+            await self.app.push_screen_wait(
+                ConfirmDialog("Share not found.", "Remove Share", ok_only=True)
+            )
             return
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(f"Remove export {path}?", "Confirm Removal")
@@ -576,7 +584,7 @@ class NFSScreen(XiNASAppMixin, Screen):
                 on_progress=self._task_progress("Remove Share"),
             )
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error", ok_only=True))
             return
         self.app.audit.log("nfs.remove_export", path, "OK")
         await self.app.snapshots.record(
@@ -635,9 +643,11 @@ class NFSScreen(XiNASAppMixin, Screen):
                 "nfs_modify",
                 diff_summary=f"Set idmapd domain to {domain}",
             )
-            await self.app.push_screen_wait(ConfirmDialog("idmapd domain updated.", "Done"))
+            await self.app.push_screen_wait(
+                ConfirmDialog("idmapd domain updated.", "Done", ok_only=True)
+            )
         else:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {err}", "Error", ok_only=True))
 
 
 def _rows_from_api(shares: Any) -> list[dict]:

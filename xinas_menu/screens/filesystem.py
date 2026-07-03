@@ -303,7 +303,7 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             arr_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
         except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Failed to query RAID arrays.\n{exc}", "Error")
+                ConfirmDialog(f"Failed to query RAID arrays.\n{exc}", "Error", ok_only=True)
             )
             return
 
@@ -504,7 +504,7 @@ class FilesystemScreen(XiNASAppMixin, Screen):
                 )
             except ControlPathError as exc2:
                 await self.app.push_screen_wait(
-                    ConfirmDialog(f"Filesystem creation failed:\n\n{exc2}", "Error")
+                    ConfirmDialog(f"Filesystem creation failed:\n\n{exc2}", "Error", ok_only=True)
                 )
                 view.set_content("\033[31m  Filesystem creation failed.\033[0m")
                 return
@@ -513,7 +513,7 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             # PlanBlocked carries the plan's blocker text; ApiError /
             # TransportError carry the envelope/socket failure.
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Filesystem creation failed:\n\n{exc}", "Error")
+                ConfirmDialog(f"Filesystem creation failed:\n\n{exc}", "Error", ok_only=True)
             )
             view.set_content("\033[31m  Filesystem creation failed.\033[0m")
             return
@@ -572,6 +572,7 @@ class FilesystemScreen(XiNASAppMixin, Screen):
                 "Teardown stopped at this step. No cross-step rollback; the "
                 "failed task rolled itself back where supported.",
                 "Delete Filesystem — Stopped",
+                ok_only=True,
             )
         )
 
@@ -590,13 +591,15 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             fs_rows = await self._list_filesystems()
         except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Could not load filesystems.\n{exc}", "Delete Filesystem")
+                ConfirmDialog(
+                    f"Could not load filesystems.\n{exc}", "Delete Filesystem", ok_only=True
+                )
             )
             return
 
         if not fs_rows:
             await self.app.push_screen_wait(
-                ConfirmDialog("No XFS filesystems found.", "Delete Filesystem")
+                ConfirmDialog("No XFS filesystems found.", "Delete Filesystem", ok_only=True)
             )
             return
 

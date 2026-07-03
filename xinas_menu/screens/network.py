@@ -264,7 +264,7 @@ class NetworkScreen(XiNASAppMixin, Screen):
                     on_progress=self._task_progress(label),
                 )
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error"))
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error", ok_only=True))
             return False
         return True
 

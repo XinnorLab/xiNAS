@@ -511,3 +511,12 @@ If any step after share-removal fails, the rollback path re-runs `add_export` + 
 - It does not delete arrays without `force=True`. Every `_delete_array` path passes `force=True`, on the assumption that the two-stage confirmation gate is the real safety. The non-force destroy semantics are not exposed.
 - It does not edit `xiraid_arrays` or `xfs_filesystems` Ansible facts. Day-1 (installer) topology is owned by Ansible; day-2 mutations live in the gRPC daemon's state. The two are reconciled via xiraid's persistent config, not via Ansible re-runs.
 - It does not multiplex drives between RAID and pool membership. The drive filters explicitly exclude drives that are already a member of either.
+
+## 12. Dialog conventions — informational vs consent
+
+`ConfirmDialog` ([widgets/confirm_dialog.py](../../xinas_menu/widgets/confirm_dialog.py)) renders **Yes / No** buttons by default and shows a single **OK** button only when constructed with `ok_only=True`. The two are not interchangeable, and this rule is TUI-wide (RAID Management is the reference implementation):
+
+- **Informational / error / notice dialogs → OK-only.** Any pop-up that reports a result, shows a read-only detail view, or surfaces a failure — i.e. one whose boolean return value is discarded (`await push_screen_wait(ConfirmDialog(...))` immediately followed by `return`, with nothing branching on the result) — MUST pass `ok_only=True`. A bare Yes/No on "No spare pools exist.", "SMART read failed", or "Could not list drives." asks the operator an unanswerable question.
+- **Yes/No is reserved for genuine consent.** Any dialog whose result is captured and branched on (`if not confirmed: return`, `if confirmed:`, and every overwrite / retry / destroy prompt) stays Yes/No. The two-stage destroy gate (§6.2) keeps Yes/No on **both** stages.
+
+This governs every RAID Management, Spare Pools (§7), and Physical Drives (§8) dialog. The same convention is mirrored for the other day-2 surfaces in [fs-shares-management-spec.md §9](fs-shares-management-spec.md#9-dialog-conventions--informational-vs-consent) and [spec-network-management.md](../Network/spec-network-management.md#dialog-conventions).

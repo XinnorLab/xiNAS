@@ -268,7 +268,9 @@ class PhysicalDrivesScreen(XiNASAppMixin, Screen):
         if drive.get("raid_name"):
             lines.append(f"RAID:       {drive['raid_name']} ({drive.get('member_state', '?')})")
 
-        await self.app.push_screen_wait(ConfirmDialog("\n".join(lines), f"Drive Detail — {name}"))
+        await self.app.push_screen_wait(
+            ConfirmDialog("\n".join(lines), f"Drive Detail — {name}", ok_only=True)
+        )
 
     @work(exclusive=True)
     async def action_locate_drive(self) -> None:
@@ -313,7 +315,9 @@ class PhysicalDrivesScreen(XiNASAppMixin, Screen):
         result = await smart_summary(name)
         if not result.get("ok"):
             await self.app.push_screen_wait(
-                ConfirmDialog(f"SMART read failed:\n{result.get('error', '?')}", "Error")
+                ConfirmDialog(
+                    f"SMART read failed:\n{result.get('error', '?')}", "Error", ok_only=True
+                )
             )
             return
 
@@ -345,7 +349,9 @@ class PhysicalDrivesScreen(XiNASAppMixin, Screen):
             f"Wear Level:       {wear_status}",
             f"Critical Warning: {crit_status}",
         ]
-        await self.app.push_screen_wait(ConfirmDialog("\n".join(lines), f"SMART Summary — {name}"))
+        await self.app.push_screen_wait(
+            ConfirmDialog("\n".join(lines), f"SMART Summary — {name}", ok_only=True)
+        )
 
     @work(exclusive=True)
     async def action_smart_full(self) -> None:
@@ -370,7 +376,9 @@ class PhysicalDrivesScreen(XiNASAppMixin, Screen):
         result = await smart_full(name)
         if not result.get("ok"):
             await self.app.push_screen_wait(
-                ConfirmDialog(f"SMART read failed:\n{result.get('error', '?')}", "Error")
+                ConfirmDialog(
+                    f"SMART read failed:\n{result.get('error', '?')}", "Error", ok_only=True
+                )
             )
             return
 
@@ -381,4 +389,6 @@ class PhysicalDrivesScreen(XiNASAppMixin, Screen):
                 continue
             lines.append(f"  {key}: {val}")
 
-        await self.app.push_screen_wait(ConfirmDialog("\n".join(lines), f"Full SMART Log — {name}"))
+        await self.app.push_screen_wait(
+            ConfirmDialog("\n".join(lines), f"Full SMART Log — {name}", ok_only=True)
+        )

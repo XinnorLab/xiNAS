@@ -207,6 +207,10 @@ The flush-before-apply pattern compensates for these limitations.
 | `ip_pool.py` | `_generate_netplan()` | Generate pool-based config |
 | `main_menu.py` | `_routable_ips()` | Detect server IPs for client instructions |
 
+### Dialog conventions
+
+Day-2 network dialogs follow the TUI-wide `ConfirmDialog` rule (canonical statement in [raid-management-spec.md §12](../Storage/raid-management-spec.md#12-dialog-conventions--informational-vs-consent)): an apply-failure pop-up (`"Failed: …"`) is informational and is constructed with `ok_only=True` (single OK button), while the apply-confirmation summary and the duplicate-netplan cleanup/retry prompts (shared by `network.py` and `ip_pool.py`) capture and branch on their boolean result and therefore stay Yes/No.
+
 ---
 
 ## Troubleshooting

@@ -286,7 +286,9 @@ class SparePoolScreen(XiNASAppMixin, Screen):
         try:
             pool_names = await _get_pool_names(self.app.control)
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Could not list pools.\n{exc}", "Error"))
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Could not list pools.\n{exc}", "Error", ok_only=True)
+            )
             return None
         if not pool_names:
             await self.app.push_screen_wait(
@@ -332,7 +334,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             free_drives = await _get_free_nvme_drives(self.app.control)
         except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Could not list drives.\n{exc}", "Error")
+                ConfirmDialog(f"Could not list drives.\n{exc}", "Error", ok_only=True)
             )
             return
         if not free_drives:
@@ -340,6 +342,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
                 ConfirmDialog(
                     "No available drives found.\nAll drives are assigned to RAID arrays or other pools.",
                     "Error",
+                    ok_only=True,
                 )
             )
             return
@@ -395,11 +398,13 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             free_drives = await _get_free_nvme_drives(self.app.control)
         except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Could not list drives.\n{exc}", "Error")
+                ConfirmDialog(f"Could not list drives.\n{exc}", "Error", ok_only=True)
             )
             return
         if not free_drives:
-            await self.app.push_screen_wait(ConfirmDialog("No available drives found.", "Error"))
+            await self.app.push_screen_wait(
+                ConfirmDialog("No available drives found.", "Error", ok_only=True)
+            )
             return
 
         selected = await self.app.push_screen_wait(
@@ -454,11 +459,13 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             drives = await _get_pool_drives(self.app.control, pool)
         except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"Could not list pool drives.\n{exc}", "Error")
+                ConfirmDialog(f"Could not list pool drives.\n{exc}", "Error", ok_only=True)
             )
             return
         if not drives:
-            await self.app.push_screen_wait(ConfirmDialog(f"Pool '{pool}' has no drives.", "Error"))
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Pool '{pool}' has no drives.", "Error", ok_only=True)
+            )
             return
 
         # Use checklist so user can pick which drives to remove

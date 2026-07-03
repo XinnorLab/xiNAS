@@ -507,3 +507,10 @@ YYYY-MM-DD HH:MM:SS | <user> | <action> | OK | <detail>
 - They do not edit `/etc/exports` directly, and they do not preserve hand-edits. The helper writes the file in full on every `add` / `remove` / `update` and re-injects the `# Managed by xinas-nfs-helper — do not edit manually` banner — anything in the file outside the structured format is dropped.
 - They do not delete the on-disk content of a share or FS. Removing a share leaves the directory tree intact; deleting a filesystem removes the mount but leaves the XFS on `/dev/xi_<name>` so a re-mount picks up the existing data. The only place data is destroyed is `mkfs.xfs -f` in the Create wizard, and it's gated by an explicit confirmation when a filesystem is already present.
 - They do not export the same path twice. `add_export` removes any existing entry with the same `path` before appending the new one — there is exactly one rule per path at any time.
+
+## 9. Dialog conventions — informational vs consent
+
+Both screens follow the TUI-wide `ConfirmDialog` rule (canonical statement in [raid-management-spec.md §12](raid-management-spec.md#12-dialog-conventions--informational-vs-consent)):
+
+- **Informational / error / notice → `ok_only=True`** (single OK button). The failure pop-ups (`"Failed: …"`, "No shares configured.", "Share not found.", "Cannot create directory:", "Filesystem creation failed:", "Could not load filesystems.", "No XFS filesystems found."), the idmapd "domain updated." success notice, and the delete-teardown "stopped" notice all discard their return value and use OK-only.
+- **Yes/No is reserved for genuine consent** — the Add / Edit / Remove Share confirmations, the Create-Filesystem summary, the force-recreate retry, the log-array "Proceed?" step, the Delete-Filesystem warning plus the FINAL CONFIRMATION double gate, and the quota-change confirmation, each of which captures and branches on the returned boolean.
