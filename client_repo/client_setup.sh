@@ -4403,7 +4403,9 @@ case "${1:-}" in
         # Add trunking for multi-IP configurations (kernel >= 6.x only)
         trunk_opts=""
         if [[ $num_ips -gt 1 ]]; then
-            local kmajor
+            # NOTE: this --mount case runs at top level (case "${1:-}"), NOT in a
+            # function, so `local` here aborts under `set -euo pipefail` and kills
+            # the mount before it runs. Use a plain assignment.
             kmajor=$(uname -r | cut -d. -f1)
             if [[ "$kmajor" -ge 6 ]]; then
                 trunk_opts=",trunkdiscovery"
