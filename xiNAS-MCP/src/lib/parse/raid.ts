@@ -70,16 +70,39 @@ export function parseRaidShow(
   diskIdByPath: ReadonlyMap<string, string>,
   pools?: unknown,
 ): ObservedXiraidArray[] {
-  if (!Array.isArray(payload)) return [];
+  // xiRAID's raid_show returns EITHER a JSON array of per-array objects OR an
+  // object keyed by array name ({"data":{...},"log":{...}}) — the latter on the
+  // real xiRAID 4.3.x daemon (the fake transport emits an array). Normalize both
+  // to a list, injecting the map key as `name` when a keyed value lacks one;
+  // otherwise real arrays are silently dropped and the API/TUI shows "no arrays".
+  let entries: unknown[];
+  if (Array.isArray(payload)) {
+    entries = payload;
+  } else if (payload !== null && typeof payload === 'object') {
+    entries = Object.entries(payload as Record<string, unknown>).map(([name, info]) =>
+      info !== null && typeof info === 'object' && !Array.isArray(info)
+        ? { name, ...(info as Record<string, unknown>) }
+        : info,
+    );
+  } else {
+    return [];
+  }
   const poolDrives = readPools(pools);
   const out: ObservedXiraidArray[] = [];
-  for (const entry of payload) {
+  for (const entry of entries) {
     if (typeof entry !== 'object' || entry === null) continue;
     const o = entry as Record<string, unknown>;
     if (typeof o.name !== 'string' || o.name.length === 0) continue;
 
+    // devices is either ["/dev/..."] (fake transport) or, on the real xiRAID
+    // daemon, [[index, "/dev/...", [states]], ...] tuples — extract the path
+    // from both shapes so member_disk_ids is populated.
     const devices = Array.isArray(o.devices)
-      ? o.devices.filter((d): d is string => typeof d === 'string')
+      ? o.devices
+          .map((d): string | null =>
+            typeof d === 'string' ? d : Array.isArray(d) && typeof d[1] === 'string' ? d[1] : null,
+          )
+          .filter((d): d is string => d !== null)
       : [];
     const states = normalizeStates(o.state);
     const reconProgress = numberOrNull(o.recon_progress) ?? numberOrNull(o.init_progress);
