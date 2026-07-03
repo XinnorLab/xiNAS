@@ -293,6 +293,8 @@ Steps:
 3. **Per-parameter prompt** — see §5.1.
 4. **Confirm + dispatch.** Value is coerced to the declared `vtype` (`int` for the integer knobs, `str` for the rest). `grpc.raid_modify(name, **{key: value})` is invoked. On success: audit (`raid.modify`) + snapshot (`raid_modify`) + Quick Overview refresh.
 
+Step 1 guards the empty case: if the array listing fails or returns no arrays, the flow aborts on an **OK-only** dialog ("No RAID arrays configured." / "No arrays available."). Delete Array (§6) guards the same way. This is one instance of the screen-wide dialog convention — see §12.
+
 ### 5.1 CPU Affinity dialog (special case)
 
 CPU affinity is the only knob with a multi-mode UI. The current value is read from the array dict (`arr["cpu_allowed"]`, defaulting to `"all"`). Three modes:

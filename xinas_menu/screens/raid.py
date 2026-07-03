@@ -425,12 +425,14 @@ class RAIDScreen(XiNASAppMixin, Screen):
         try:
             disk_rows = await _list_api_disks(self.app.control)
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Could not list disks.\n{exc}", "Error"))
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Could not list disks.\n{exc}", "Error", ok_only=True)
+            )
             return
         groups, nvme = _drive_groups(disk_rows)
         if not nvme:
             await self.app.push_screen_wait(
-                ConfirmDialog("No available NVMe drives found.", "Error")
+                ConfirmDialog("No available NVMe drives found.", "Error", ok_only=True)
             )
             return
 
@@ -474,7 +476,9 @@ class RAIDScreen(XiNASAppMixin, Screen):
             drives = selected
 
         if not drives:
-            await self.app.push_screen_wait(ConfirmDialog("No drives selected.", "Error"))
+            await self.app.push_screen_wait(
+                ConfirmDialog("No drives selected.", "Error", ok_only=True)
+            )
             return
 
         # Step 4: Strip size
@@ -599,7 +603,9 @@ class RAIDScreen(XiNASAppMixin, Screen):
             )
             return
         if error is not None:
-            await self.app.push_screen_wait(ConfirmDialog(f"Create failed.\n{error}", "Error"))
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Create failed.\n{error}", "Error", ok_only=True)
+            )
             return
         self.app.audit.log("raid.create", f"{name} RAID-{level} ({len(drives)} drives)", "OK")
         await self.app.snapshots.record(
@@ -617,7 +623,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
             rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
         except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"No arrays available.\n{exc}", "Edit Array")
+                ConfirmDialog(f"No arrays available.\n{exc}", "Edit Array", ok_only=True)
             )
             return
 
@@ -625,7 +631,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
         names = list(arrays.keys())
         if not names:
             await self.app.push_screen_wait(
-                ConfirmDialog("No RAID arrays configured.", "Edit Array")
+                ConfirmDialog("No RAID arrays configured.", "Edit Array", ok_only=True)
             )
             return
 
@@ -706,6 +712,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                             f"Invalid CPU list format: '{raw}'\n"
                             "Expected: comma-separated numbers or ranges (e.g. 0,2,4-7)",
                             "Error",
+                            ok_only=True,
                         )
                     )
                     return
@@ -780,7 +787,9 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 patch_spec = {"tuning": {key: vtype(value)}}
             except (ValueError, TypeError):
                 await self.app.push_screen_wait(
-                    ConfirmDialog(f"Invalid value: expected {vtype.__name__}", "Error")
+                    ConfirmDialog(
+                        f"Invalid value: expected {vtype.__name__}", "Error", ok_only=True
+                    )
                 )
                 return
 
@@ -793,7 +802,9 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 on_progress=self._task_progress(f"Edit {arr_name}"),
             )
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Edit failed.\n{exc}", "Error"))
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Edit failed.\n{exc}", "Error", ok_only=True)
+            )
             return
         self.app.audit.log("raid.modify", f"{arr_name} {key}={value}", "OK")
         await self.app.snapshots.record(
@@ -832,6 +843,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 "Teardown stopped at this step. No cross-step rollback; the "
                 "failed task rolled itself back where supported.",
                 "Delete Array — Stopped",
+                ok_only=True,
             )
         )
 
@@ -851,7 +863,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
             rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
         except ControlPathError as exc:
             await self.app.push_screen_wait(
-                ConfirmDialog(f"No arrays available.\n{exc}", "Delete Array")
+                ConfirmDialog(f"No arrays available.\n{exc}", "Delete Array", ok_only=True)
             )
             return
 
@@ -859,7 +871,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
         names = list(arrays.keys())
         if not names:
             await self.app.push_screen_wait(
-                ConfirmDialog("No RAID arrays configured.", "Delete Array")
+                ConfirmDialog("No RAID arrays configured.", "Delete Array", ok_only=True)
             )
             return
 
