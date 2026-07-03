@@ -67,12 +67,17 @@ async def run_wizard(steps: list[WizardStep], initial: dict | None = None) -> di
     Returns the accumulated answers dict when the user advances past the last
     step, or ``None`` if any step returns :data:`CANCEL`. ``initial`` seeds the
     answers dict (used by Edit to pre-fill from the current share).
+
+    The returned dict never contains a key for a step that is inapplicable on
+    the taken path (such keys are dropped when the step is skipped); answers for
+    still-applicable later steps are retained across Back.
     """
     answers: dict = dict(initial or {})
     idx = 0
     while idx < len(steps):
         step = steps[idx]
         if not step.applies(answers):
+            answers.pop(step.key, None)  # forget a now-inapplicable step's stale answer
             idx += 1
             continue
         allow_back = _has_prior_applicable(steps, idx, answers)

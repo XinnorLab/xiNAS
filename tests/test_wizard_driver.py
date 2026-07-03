@@ -91,3 +91,20 @@ def test_display_number_counts_only_applicable():
     c = _script_step("c", [rec("c")])
     asyncio.run(run_wizard([a, b, c]))
     assert seen == {"a": 1, "c": 2}  # b skipped, c numbered 2 not 3
+
+
+def test_back_then_invalidate_drops_stale_answer():
+    # a="yes" -> b applies, returns "B"; c backs to b, b backs to a, a changes to
+    # "no" -> b is now skipped, so its stale answer must be dropped from the result.
+    a = _script_step("a", ["yes", "no"])
+    b = _script_step("b", ["B", BACK], applies=lambda ans: ans.get("a") == "yes")
+    c = _script_step("c", [BACK, "C"])
+    result = asyncio.run(run_wizard([a, b, c]))
+    assert result == {"a": "no", "c": "C"}  # no "b" key
+    assert "b" not in result
+
+
+def test_initial_seeds_answers():
+    a = _script_step("a", ["A"])
+    result = asyncio.run(run_wizard([a], initial={"x": 1}))
+    assert result == {"x": 1, "a": "A"}
