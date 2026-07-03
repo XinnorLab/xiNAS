@@ -18,3 +18,25 @@
     mode: '0644'
   notify: Reload exports
   tags: [exports]
+
+# Additive: render a seed manifest xinas-api reads ONCE at first boot to adopt
+# these exports into control-path desired state (see fs-exports-spec §2.6). No
+# `notify` handler here — unlike /etc/exports above, the manifest never drives
+# `exportfs`; the running kernel export set is unchanged by writing it.
+- name: Ensure the xinas-api seed directory exists
+  ansible.builtin.file:
+    path: /var/lib/xinas/seed
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [exports]
+
+- name: Render the NFS share seed manifest for the control-path API
+  ansible.builtin.template:
+    src: shares-seed.json.j2
+    dest: /var/lib/xinas/seed/shares.json
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [exports]

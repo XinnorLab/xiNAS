@@ -9,6 +9,7 @@ import { type ApiConfig, loadConfig } from './config.js';
 import type { ApiContext } from './context.js';
 import { HeartbeatTracker, createAgentHealthProbe } from './heartbeat.js';
 import { loadObservedSchemas } from './observed-schemas.js';
+import { seedShares } from './seed-shares.js';
 import { buildTaskEngines } from './tasks/build.js';
 import { TaskWatch } from './tasks/watch.js';
 
@@ -41,6 +42,9 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   // (create-if-absent; allow_apply mirror refresh) before anything can
   // serve reads — the routes hard-require both rows.
   seedInfrastructure(state, config);
+
+  // Install-time NFS share adoption (one-time; leaves operator deletes permanent).
+  seedShares(state, config);
 
   // Compile inbound-observation validators from api-v1.yaml once. Returns null
   // (validation skipped) when the spec isn't shipped — the graceful default.

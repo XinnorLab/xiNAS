@@ -67,6 +67,13 @@ export interface ApiConfig {
    * may be omitted.
    */
   tasks?: { max_inflight?: number };
+  /**
+   * Install-time NFS share seed (see docs/.../2026-07-03-nfs-share-seed-adoption).
+   * `shares_manifest_path` points at the JSON manifest the Ansible `exports`
+   * role renders (default /var/lib/xinas/seed/shares.json). Consumed once by
+   * seedShares() at bootstrap; absent → the code default path is used.
+   */
+  seed?: { shares_manifest_path?: string };
 }
 
 const DEFAULT_PATH = '/etc/xinas-api/config.json';

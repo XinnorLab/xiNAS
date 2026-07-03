@@ -19,6 +19,9 @@
   "tasks": {
     "max_inflight": {{ xinas_api_tasks_max_inflight }}
   },
+  "seed": {
+    "shares_manifest_path": "{{ xinas_api_seed_manifest_path }}"
+  },
   "state": {
     "databasePath": "{{ xinas_api_state_dir }}/xinas.db",
     "auditJsonlPath": "{{ xinas_api_log_dir }}/audit.jsonl",
