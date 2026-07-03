@@ -100,11 +100,7 @@ export function parseRaidShow(
     const devices = Array.isArray(o.devices)
       ? o.devices
           .map((d): string | null =>
-            typeof d === 'string'
-              ? d
-              : Array.isArray(d) && typeof d[1] === 'string'
-                ? d[1]
-                : null,
+            typeof d === 'string' ? d : Array.isArray(d) && typeof d[1] === 'string' ? d[1] : null,
           )
           .filter((d): d is string => d !== null)
       : [];
