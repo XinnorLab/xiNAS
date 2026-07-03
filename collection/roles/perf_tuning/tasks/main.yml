@@ -13,6 +13,26 @@
   tags: [packages]
 
 # ===== Kernel boot parameters =====
+# This MUST stay idempotent. A prior version prepended the xiNAS arg block with
+# a `\1` backref to the existing GRUB_CMDLINE_LINUX value, so every re-provision
+# appended another full copy. The flag-style tokens (noibrs noibpb no_stf_barrier
+# …) that the kernel does not consume land in argv_init[]; after ~6 runs they
+# overflow MAX_INIT_ARGS (32) and PID 1 setup panics at boot with
+# "Too many boot init vars". Strip any previously-applied xiNAS args first, then
+# prepend exactly one copy. This is idempotent in content AND self-heals a host
+# that already accumulated duplicates (as long as it can still boot to re-run).
+- name: Strip previously-applied xiNAS kernel args from GRUB_CMDLINE_LINUX
+  ansible.builtin.replace:
+    path: /etc/default/grub
+    regexp: '{{ item }}'
+    replace: ''
+  loop:
+    - 'intel_idle\.max_cstate=0\s*'
+    - 'transparent_hugepage=never\s*'
+    - 'mitigations=off\s+noibrs\s+noibpb\s+nopti\s+nospectre_v2\s+nospec_store_bypass_disable\s+no_stf_barrier\s+mds=off\s*'
+  when: ansible_facts['cmdline'] is defined
+  tags: [kernel]
+
 - name: Add high-performance kernel parameters (Xinnor guide)
   ansible.builtin.lineinfile:
     path: /etc/default/grub
@@ -25,6 +45,18 @@
     backrefs: yes
   notify: Update grub
   when: ansible_facts['cmdline'] is defined
+  tags: [kernel]
+
+- name: Tidy stray spaces left in GRUB_CMDLINE_LINUX after strip/add
+  ansible.builtin.replace:
+    path: /etc/default/grub
+    regexp: '{{ item.regexp }}'
+    replace: '{{ item.replace }}'
+  loop:
+    - { regexp: 'GRUB_CMDLINE_LINUX="\s+', replace: 'GRUB_CMDLINE_LINUX="' }
+    - { regexp: '\s+(")\s*$', replace: '\1' }
+  when: ansible_facts['cmdline'] is defined
+  notify: Update grub
   tags: [kernel]
 
 - name: Configure NVMe polling mode, poll queues {{ perf_nvme_poll_queues }}

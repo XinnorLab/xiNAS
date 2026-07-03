@@ -273,6 +273,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 Kernel + boot:
 
 - GRUB `GRUB_CMDLINE_LINUX` updated with `intel_idle.max_cstate=0`, `transparent_hugepage=never`, `mitigations=off noibrs noibpb nopti nospectre_v2 nospec_store_bypass_disable no_stf_barrier mds=off`. Triggers `update-grub`.
+  - **Idempotency (required).** The task first strips any previously-applied xiNAS args, then prepends exactly one copy, so repeated provisions/updates never accumulate duplicate tokens. It also self-heals a host that already grew duplicates from an earlier non-idempotent version (provided it can still boot to re-run). This guards against the flag-style tokens overflowing the kernel's `MAX_INIT_ARGS` (32), which would panic PID 1 setup at boot with `Too many boot init vars`.
 - `/etc/modprobe.d/nvme.conf` sets `options nvme poll_queues=4`. Triggers `update-initramfs`.
 
 CPU / memory:
