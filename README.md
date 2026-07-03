@@ -36,10 +36,10 @@ Ansible-based provisioning and management framework for high-performance NAS sto
 Run on the target NAS server as root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install.sh | sudo bash
+curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh | sudo bash
 ```
 
-This installs all dependencies (Ansible, yq, git), clones the repository to `/opt/xiNAS`, and launches the provisioning menu. The menu walks you through:
+xiNAS installs and updates **only from published GitHub Releases** — never from the `main` branch (see [docs/Installer/update-spec.md](docs/Installer/update-spec.md)). The installer resolves the latest release tag, installs all dependencies (Ansible, yq, git), checks that release out to `/opt/xiNAS`, and launches the provisioning menu. The menu walks you through:
 
 1. **Collect system data** — gather hardware info and generate a hardware key
 2. **Enter license** — send the hardware key to `support@xinnor.io`, then enter the received license
@@ -57,7 +57,7 @@ common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace
 For scripted provisioning (kickstart, cloud-init, golden images, fleet rollout), xiNAS supports a fully non-interactive install path. Place the xiRAID license at `/tmp/license` (or pass `--license-file`), set `XINAS_UNATTENDED=1`, and choose a preset:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install.sh \
+curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh \
   | sudo XINAS_UNATTENDED=1 XINAS_PRESET=default bash
 ```
 
@@ -74,10 +74,10 @@ Configuration can also come from an answer file (`/etc/xinas/autoinstall.conf`).
 Run on each NFS client machine as root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install_client.sh | sudo bash
+curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install_client.sh | sudo bash
 ```
 
-This installs NFS tools and RDMA prerequisites, clones the client package, and registers the `xinas-client` command. The client setup wizard launches automatically. Run it again any time:
+This installs NFS tools and RDMA prerequisites, checks out the client package at the latest release tag, and registers the `xinas-client` command. The client setup wizard launches automatically. Run it again any time:
 
 ```bash
 sudo xinas-client

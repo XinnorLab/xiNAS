@@ -32,8 +32,27 @@ NC='\033[0m'
 XGREEN='\033[38;2;131;180;73m'
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Update Check
+# Update Check — GitHub Releases only (never the main branch).
+# See docs/Installer/update-spec.md.
 # ═══════════════════════════════════════════════════════════════════════════════
+
+CLIENT_REPO_SLUG="${XINAS_UPDATE_REPO:-XinnorLab/xiNAS}"
+
+# Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints the tag on
+# success, nothing on failure. Never returns a branch name — callers must NOT
+# fall back to main.
+client_latest_release_tag() {
+    curl -fsSL "https://api.github.com/repos/${CLIENT_REPO_SLUG}/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
+# Release tag the working tree at $1 is currently checked out on (empty if not
+# on a tag).
+client_current_tag() {
+    git -C "$1" describe --tags --exact-match 2>/dev/null \
+        || git -C "$1" describe --tags 2>/dev/null || true
+}
 
 check_for_updates() {
     # Only check if installed via git (standard install location)
@@ -54,19 +73,15 @@ check_for_updates() {
     # Skip if no network (quick check)
     timeout 2 bash -c "echo >/dev/tcp/github.com/443" 2>/dev/null || return 0
 
-    # Get local commit
-    local local_commit
-    local_commit=$(git -C "$install_dir" rev-parse HEAD 2>/dev/null) || return 0
+    # Compare the installed release tag against the latest published release.
+    # If the API is unreachable we simply show no banner — we never inspect
+    # or fall back to the main branch.
+    local latest_tag current_tag
+    latest_tag=$(client_latest_release_tag)
+    [[ -n "$latest_tag" ]] || return 0
+    current_tag=$(client_current_tag "$install_dir")
 
-    # Fetch latest (quiet, background-friendly)
-    git -C "$install_dir" fetch --quiet origin main 2>/dev/null || return 0
-
-    # Get remote commit
-    local remote_commit
-    remote_commit=$(git -C "$install_dir" rev-parse origin/main 2>/dev/null) || return 0
-
-    # Compare
-    if [[ "$local_commit" != "$remote_commit" ]]; then
+    if [[ "$current_tag" != "$latest_tag" ]]; then
         echo "true" > "$UPDATE_FLAG_FILE"
     fi
 }
@@ -3447,19 +3462,18 @@ check_and_update() {
 
     local client_update_available=""
     local csi_update_available=""
-    local local_commit=""
-    local remote_commit=""
+    local current_tag=""
+    local latest_tag=""
 
     info_box "Checking..." "Checking for updates..."
 
-    # Check xiNAS Client updates
+    # Check xiNAS Client updates — compare the installed release tag against
+    # the latest published GitHub Release. Never inspects the main branch.
     if [[ -d "$git_dir" ]] && command -v git &>/dev/null; then
-        if git -C "$install_dir" fetch --quiet origin main 2>/dev/null; then
-            local_commit=$(git -C "$install_dir" rev-parse HEAD 2>/dev/null)
-            remote_commit=$(git -C "$install_dir" rev-parse origin/main 2>/dev/null)
-            if [[ "$local_commit" != "$remote_commit" ]]; then
-                client_update_available="true"
-            fi
+        latest_tag=$(client_latest_release_tag)
+        current_tag=$(client_current_tag "$install_dir")
+        if [[ -n "$latest_tag" && "$current_tag" != "$latest_tag" ]]; then
+            client_update_available="true"
         fi
     fi
 
@@ -3479,7 +3493,7 @@ check_and_update() {
         msg_box "Up to Date" "\
 Everything is up to date!
 
-xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg"
+xiNAS Client: v$CLIENT_VERSION${current_tag:+ (${current_tag})}$csi_msg"
         UPDATE_AVAILABLE=""; rm -f "$UPDATE_FLAG_FILE"
         return
     fi
@@ -3489,12 +3503,10 @@ xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg"
     local update_options=()
 
     if [[ -n "$client_update_available" ]]; then
-        local changes
-        changes=$(git -C "$install_dir" log -n 5 --oneline HEAD..origin/main 2>/dev/null) || changes=""
         update_msg+="xiNAS Client:\n"
-        update_msg+="  Current: ${local_commit:0:8}\n"
-        update_msg+="  Latest:  ${remote_commit:0:8}\n"
-        update_msg+="  Changes:\n$(echo "$changes" | sed 's/^/    /')\n\n"
+        update_msg+="  Current: ${current_tag:-unknown}\n"
+        update_msg+="  Latest:  ${latest_tag}\n"
+        update_msg+="  Source:  github.com/${CLIENT_REPO_SLUG}/releases/${latest_tag}\n\n"
         update_options+=("client" "Update xiNAS Client" "ON")
     fi
 
@@ -3509,14 +3521,15 @@ xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg"
     if [[ ${#update_options[@]} -eq 3 ]]; then
         # Only one update available, use simple yesno
         if [[ -n "$client_update_available" ]]; then
-            if yes_no "Update Available" "$update_msg\n\nUpdate xiNAS Client now?"; then
-                info_box "Updating..." "Downloading xiNAS Client update..."
-                if git -C "$install_dir" pull --quiet origin main 2>/dev/null; then
+            if yes_no "Update Available" "$update_msg\n\nUpdate xiNAS Client to ${latest_tag}?"; then
+                info_box "Updating..." "Downloading xiNAS Client ${latest_tag}..."
+                if git -C "$install_dir" fetch --quiet origin --tags 2>/dev/null \
+                    && git -C "$install_dir" checkout --quiet "$latest_tag" 2>/dev/null; then
                     UPDATE_AVAILABLE=""; rm -f "$UPDATE_FLAG_FILE"
-                    msg_box "Updated!" "xiNAS Client updated!\n\nThe menu will restart."
+                    msg_box "Updated!" "xiNAS Client updated to ${latest_tag}!\n\nThe menu will restart."
                     exec "$0" "$@"
                 else
-                    msg_box "Update Failed" "Failed to update. Try: git pull origin main"
+                    msg_box "Update Failed" "Failed to check out ${latest_tag}. xiNAS updates from GitHub Releases only (no main fallback)."
                 fi
             fi
         else
@@ -3534,11 +3547,12 @@ xiNAS Client: v$CLIENT_VERSION${local_commit:+ (${local_commit:0:8})}$csi_msg"
             "${update_options[@]}") || return
 
         if [[ "$selected" == *"client"* ]]; then
-            info_box "Updating..." "Downloading xiNAS Client update..."
-            if git -C "$install_dir" pull --quiet origin main 2>/dev/null; then
+            info_box "Updating..." "Downloading xiNAS Client ${latest_tag}..."
+            if git -C "$install_dir" fetch --quiet origin --tags 2>/dev/null \
+                && git -C "$install_dir" checkout --quiet "$latest_tag" 2>/dev/null; then
                 UPDATE_AVAILABLE=""; rm -f "$UPDATE_FLAG_FILE"
             else
-                msg_box "Client Update Failed" "Failed to update client."
+                msg_box "Client Update Failed" "Failed to check out ${latest_tag} (no main fallback)."
             fi
         fi
 
@@ -4321,21 +4335,23 @@ case "${1:-}" in
             echo "Reinstall using: curl -fsSL https://xinnor.io/install_client.sh | sudo bash"
             exit 1
         fi
-        git -C "$_install_dir" fetch --quiet origin main 2>/dev/null || {
-            echo -e "${RED}Error: Could not fetch updates${NC}"
+        _latest_tag=$(client_latest_release_tag)
+        if [[ -z "$_latest_tag" ]]; then
+            echo -e "${RED}Error: Could not resolve the latest GitHub Release${NC}"
+            echo "xiNAS updates from releases only — no fallback to main."
             exit 1
-        }
-        _local_commit=$(git -C "$_install_dir" rev-parse HEAD 2>/dev/null)
-        _remote_commit=$(git -C "$_install_dir" rev-parse origin/main 2>/dev/null)
-        if [[ "$_local_commit" == "$_remote_commit" ]]; then
-            echo -e "${GREEN}Already up to date${NC}"
+        fi
+        _current_tag=$(client_current_tag "$_install_dir")
+        if [[ "$_current_tag" == "$_latest_tag" ]]; then
+            echo -e "${GREEN}Already up to date (${_latest_tag})${NC}"
             exit 0
         fi
-        echo -e "${YELLOW}Update available: ${_local_commit:0:8} -> ${_remote_commit:0:8}${NC}"
-        git -C "$_install_dir" pull --quiet origin main 2>/dev/null && {
-            echo -e "${GREEN}Updated successfully!${NC}"
+        echo -e "${YELLOW}Update available: ${_current_tag:-unknown} -> ${_latest_tag}${NC}"
+        if git -C "$_install_dir" fetch --quiet origin --tags 2>/dev/null \
+            && git -C "$_install_dir" checkout --quiet "$_latest_tag" 2>/dev/null; then
+            echo -e "${GREEN}Updated to ${_latest_tag}!${NC}"
             exit 0
-        }
+        fi
         echo -e "${RED}Update failed${NC}"
         exit 1
         ;;

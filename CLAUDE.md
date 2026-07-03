@@ -81,7 +81,7 @@ spec dump — every doc belongs to an area.
 
 | Subfolder | What goes here |
 |-----------|----------------|
-| `docs/Installer/` | Install-time / Ansible-driven behavior: `spec.md` (preset + playbook + role map), `network-spec.md`, `raid-spec.md`, `fs-exports-spec.md`, `uninstall-spec.md` (uninstaller contract) |
+| `docs/Installer/` | Install-time / Ansible-driven behavior: `spec.md` (preset + playbook + role map), `network-spec.md`, `raid-spec.md`, `fs-exports-spec.md`, `uninstall-spec.md` (uninstaller contract), `update-spec.md` (GitHub-Releases-only install + update contract) |
 | `docs/Storage/` | Day-2 storage management surface (TUI screens, helpers, gRPC): `raid-management-spec.md`, `fs-shares-management-spec.md` |
 | `docs/MCP/` | MCP server spec set: `REQUIREMENTS.md`, `spec-core.md`, `spec-tools.md`, `spec-middleware.md`, `spec-config-history.md`, `spec-mail.md`, `spec-nfs-helper.md`, `spec-os.md`, `spec-server.md`, `modules.md` |
 | `docs/Network/` | Cross-cutting network management (netplan ownership, PBR, day-2 IP edits): `spec-network-management.md` |
@@ -163,7 +163,7 @@ Each preset directory (`presets/default/`, `presets/xinnorVM/`) contains:
 
 ## Update rebuild markers (`Requires-Rebuild:` trailer)
 
-The in-TUI update flow (`u` shortcut, Management → Check for Updates, MCP/Advanced "Check for Updates") does `git pull` + service restart by default. It does **not** re-run Ansible unless the incoming commits opt in.
+The in-TUI update flow (`u` shortcut, Management → Check for Updates, MCP/Advanced "Check for Updates") checks out the **latest published GitHub Release tag** and restarts the service by default (see [Release and Update Policy](#release-and-update-policy) and [docs/Installer/update-spec.md](docs/Installer/update-spec.md)). It does **not** re-run Ansible unless the incoming release opts in.
 
 If a commit changes anything that requires an Ansible role to re-run on the host to take effect (systemd unit files, package installs, sysctl/perf tuning, kernel module config, NFS server flags, RAID layout, network config that needs `net_controllers` to re-apply, etc.), **add a Git trailer to the commit message**:
 
@@ -174,8 +174,8 @@ Requires-Rebuild: <ansible_tag>[, <ansible_tag>...]
 - `<ansible_tag>` is a tag accepted by `ansible-playbook playbooks/site.yml --tags <tag>` — usually the role name (`nfs_server`, `perf_tuning`, `net_controllers`, `xinas_mcp`, `xinas_menu`, …).
 - Comma-separate multiple tags. Multiple trailers across multiple commits are aggregated by the TUI.
 - The special value `all` means run the full `site.yml` with no `--tags` filter; use it only when the change spans many roles.
-- **Do not add this trailer for code-only changes** (Python TUI logic, MCP server Python code, docs, plan/spec updates, test fixtures). The plain `git pull` + `xinas-nfs-helper` restart that already runs on every update is sufficient — adding a trailer here just trains users to click past an unnecessary Ansible warning.
-- Parsed case-insensitively, and only from commits in `local..origin/main` — backfilling old commits has no effect.
+- **Do not add this trailer for code-only changes** (Python TUI logic, MCP server Python code, docs, plan/spec updates, test fixtures). The plain release-tag checkout + `xinas-nfs-helper` restart that already runs on every update is sufficient — adding a trailer here just trains users to click past an unnecessary Ansible warning.
+- Parsed case-insensitively from the **release notes** of the incoming release (the release body aggregates the trailers from the commits it ships). Backfilling old commit messages has no effect.
 
 Examples:
 
@@ -203,6 +203,66 @@ Runtime behaviour of the update flow:
 3. If the playbook fails, the new code stays in place, the menu is **not** auto-restarted, and the user is told to review the log.
 
 Parser + orchestration live in [xinas_menu/utils/update_check.py](xinas_menu/utils/update_check.py) (`parse_rebuild_trailers`, `build_rebuild_cmd`); both `XiNASApp` and `StartupApp` consume it via `prompt_and_apply_update(result)` / `_apply_update(result)`.
+
+## Release and Update Policy
+
+xiNAS ships to users **only through GitHub Releases**. The full
+behavioral contract lives in
+[docs/Installer/update-spec.md](docs/Installer/update-spec.md); the
+rules below are binding and must be preserved whenever install or
+update logic changes.
+
+- **`main`/`master` is not a delivery channel.** It is the development
+  integration branch. It is never a user installation source and never
+  a production update source.
+- **All user installations and updates use published GitHub Releases.**
+  Install one-liners pull the installer from the latest release asset
+  (`https://github.com/XinnorLab/xiNAS/releases/latest/download/…`);
+  installers clone/check out the latest **release tag**, never `main`.
+- **Update checks look only at published GitHub Releases** via the
+  Releases API (`/repos/XinnorLab/xiNAS/releases`). The installed
+  version (`xinas_menu.version.XINAS_MENU_VERSION`) is compared against
+  the **latest published release tag** using semantic versioning
+  (`v1.2.3` and `1.2.3` compare equal).
+- **Drafts and prereleases are excluded from production updates.**
+  Drafts are ignored unconditionally; prereleases are ignored unless a
+  dedicated dev/prerelease channel is explicitly enabled in code
+  (`XINAS_UPDATE_CHANNEL=prerelease` / `channel="prerelease"`).
+- **No branch fallback, ever.** xiNAS must not suggest or perform an
+  install or update from `main`, `master`, `HEAD`, branch zip/tarballs
+  (`archive/refs/heads`), raw-GitHub URLs (`raw.githubusercontent.com`),
+  or commit snapshots. If the GitHub API is unavailable, or the latest
+  release lacks a required asset, xiNAS returns a **clear error** and
+  stops — it does not degrade to a branch.
+- **Behavior on comparison:** equal ⇒ report "no update available";
+  latest newer ⇒ show the new version, release notes, and download
+  source; latest older/none ⇒ "no update available".
+
+### Publishing a new version
+
+To cut a release (see also `CHANGELOG.md`):
+
+1. Update the project version in
+   [xinas_menu/version.py](xinas_menu/version.py) (`XINAS_MENU_VERSION`;
+   `pyproject.toml` derives from it). Pick the next patch for
+   backward-compatible changes, minor/major otherwise.
+2. Update the changelog / release notes (`CHANGELOG.md`).
+3. Run the tests, linters, and basic checks (`pytest`,
+   `ruff check`, `ruff format --check`).
+4. Create a git tag in `vX.Y.Z` form.
+5. Create a GitHub Release from that tag (`gh release create vX.Y.Z`).
+6. Attach the release assets the project uses (`install.sh`,
+   `install_client.sh`).
+
+### Rule for Claude Code
+
+**Whenever you change installation or update logic, preserve the rule
+that xiNAS checks for updates and installs only through GitHub
+Releases.** Do not (re)introduce `git pull origin main`, raw-`main`
+URLs, branch archives, or any branch/commit fallback into a
+user-facing install or production-update path. If you add a
+dev/nightly path, keep it explicitly separated from the production
+flow and off by default.
 
 ## Important Notes
 

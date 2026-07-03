@@ -65,6 +65,35 @@ run_quiet() {
     fi
 }
 
+# xiNAS installs and updates ONLY from published GitHub Releases — never
+# from the main/master branch. See docs/Installer/update-spec.md.
+REPO_SLUG="XinnorLab/xiNAS"
+
+# Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints the tag
+# on success, nothing on failure. Never returns a branch name; callers must
+# NOT fall back to main.
+xinas_latest_release_tag() {
+    curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
+# Fetch tags and check out the latest release tag in the cwd repo. Returns
+# non-zero (without touching the working tree's branch) if no release
+# resolves — deliberately no main fallback.
+xinas_update_to_latest_release() {
+    local tag
+    tag="$(xinas_latest_release_tag)"
+    if [ -z "$tag" ]; then
+        echo -e "${RED}Could not resolve the latest xiNAS GitHub Release.${NC}" >&2
+        echo -e "${RED}xiNAS updates from releases only — no fallback to main.${NC}" >&2
+        return 1
+    fi
+    git fetch origin --tags --quiet
+    git checkout --quiet "$tag"
+    echo "$tag"
+}
+
 if [ "$QUIET_MODE" != "1" ]; then
     echo -e "${CYAN}xiNAS System Preparation${NC}"
     echo ""
@@ -91,19 +120,26 @@ if [ -f "ansible.cfg" ] && [ -d "playbooks" ]; then
     REPO_DIR="$(pwd)"
 else
     if [ ! -d "$REPO_DIR" ]; then
-        echo -e "${YELLOW}Cloning xiNAS repository...${NC}"
-        git clone "$REPO_URL" "$REPO_DIR"
+        _tag="$(xinas_latest_release_tag)"
+        if [ -z "$_tag" ]; then
+            echo -e "${RED}Could not resolve the latest xiNAS GitHub Release.${NC}" >&2
+            echo -e "${RED}xiNAS installs from releases only — no fallback to main.${NC}" >&2
+            exit 1
+        fi
+        echo -e "${YELLOW}Cloning xiNAS ${_tag}...${NC}"
+        git clone --branch "$_tag" "$REPO_URL" "$REPO_DIR"
     fi
     cd "$REPO_DIR"
 fi
 
 # If only updating the repository, perform the update and exit
 if [ "$UPDATE_ONLY" -eq 1 ]; then
-    echo -e "${YELLOW}Updating repository...${NC}"
-    git reset --hard
-    git pull origin main
-    echo -e "${GREEN}Repository updated${NC}"
-    exit 0
+    echo -e "${YELLOW}Updating to the latest release...${NC}"
+    if _tag="$(xinas_update_to_latest_release)"; then
+        echo -e "${GREEN}Updated to ${_tag}${NC}"
+        exit 0
+    fi
+    exit 1
 fi
 
 # Ensure the hardware key utility is executable
@@ -113,22 +149,24 @@ fi
 if [ -f "lib/menu_lib.sh" ]; then
     source "lib/menu_lib.sh"
 
-    # In expert mode allow updating the repository from GitHub
+    # In expert mode allow updating to the latest GitHub Release
     if [ "$EXPERT" -eq 1 ]; then
-        if yes_no "Update Repository" "Update xiNAS code from GitHub?"; then
-            git reset --hard
-            git pull origin main
-            msg_box "Updated" "Repository updated successfully"
+        if yes_no "Update Repository" "Update xiNAS to the latest GitHub Release?"; then
+            if _tag="$(xinas_update_to_latest_release)"; then
+                msg_box "Updated" "Updated to ${_tag}"
+            else
+                msg_box "Update Failed" "Could not resolve the latest GitHub Release. No fallback to main."
+            fi
         fi
     fi
 else
     # Fallback to simple prompt if menu library not available
     if [ "$EXPERT" -eq 1 ]; then
-        echo -e "${YELLOW}Update xiNAS code from GitHub? (y/n)${NC}"
+        echo -e "${YELLOW}Update xiNAS to the latest GitHub Release? (y/n)${NC}"
         read -r response
         if [[ "$response" =~ ^[Yy] ]]; then
-            git reset --hard
-            git pull origin main
+            xinas_update_to_latest_release || \
+                echo -e "${RED}Could not resolve the latest release — no fallback to main.${NC}"
         fi
     fi
 fi

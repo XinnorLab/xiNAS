@@ -37,8 +37,25 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 # Source the menu library
 source "$SCRIPT_DIR/lib/menu_lib.sh"
 
-# Update check
+# Update check — GitHub Releases only (never the main branch).
+# See docs/Installer/update-spec.md.
 UPDATE_AVAILABLE=""
+UPDATE_TARGET_TAG=""
+REPO_SLUG="${XINAS_UPDATE_REPO:-XinnorLab/xiNAS}"
+
+# Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints nothing on
+# failure. Never returns a branch name; callers must NOT fall back to main.
+_latest_release_tag() {
+    curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
+# Release tag the working tree at $1 is currently on (empty if none).
+_current_release_tag() {
+    git -C "$1" describe --tags --exact-match 2>/dev/null \
+        || git -C "$1" describe --tags 2>/dev/null || true
+}
 
 check_for_updates() {
     # Check if running from a git repo
@@ -51,20 +68,16 @@ check_for_updates() {
     # Skip if no network (quick check)
     timeout 2 bash -c "echo >/dev/tcp/github.com/443" 2>/dev/null || return 0
 
-    # Get local commit
-    local local_commit
-    local_commit=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null) || return 0
+    # Compare the installed release tag against the latest published release.
+    # If the API is unreachable, show no update — never inspect main.
+    local latest_tag current_tag
+    latest_tag=$(_latest_release_tag)
+    [[ -n "$latest_tag" ]] || return 0
+    current_tag=$(_current_release_tag "$REPO_DIR")
 
-    # Fetch latest (quiet, background-friendly)
-    git -C "$REPO_DIR" fetch --quiet origin main 2>/dev/null || return 0
-
-    # Get remote commit
-    local remote_commit
-    remote_commit=$(git -C "$REPO_DIR" rev-parse origin/main 2>/dev/null) || return 0
-
-    # Compare
-    if [[ "$local_commit" != "$remote_commit" ]]; then
+    if [[ "$current_tag" != "$latest_tag" ]]; then
         UPDATE_AVAILABLE="true"
+        UPDATE_TARGET_TAG="$latest_tag"
     fi
 }
 
@@ -74,12 +87,19 @@ do_update() {
         return 1
     fi
 
-    info_box "Updating..." "Pulling latest changes from origin/main..."
+    local _tag="${UPDATE_TARGET_TAG:-$(_latest_release_tag)}"
+    if [[ -z "$_tag" ]]; then
+        msg_box "Update Failed" "Could not resolve the latest GitHub Release.\n\nxiNAS updates from releases only — no fallback to main."
+        return 1
+    fi
+
+    info_box "Updating..." "Checking out release ${_tag}..."
 
     local _before
     _before=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
-    if git -C "$REPO_DIR" pull origin main 2>"$TMP_DIR/update.log"; then
+    if git -C "$REPO_DIR" fetch origin --tags 2>"$TMP_DIR/update.log" \
+        && git -C "$REPO_DIR" checkout "$_tag" 2>>"$TMP_DIR/update.log"; then
         UPDATE_AVAILABLE=""
 
         # Rebuild MCP server and NFS helper if installed
@@ -298,7 +318,14 @@ configure_raid() {
     ./configure_raid.sh
 }
 
-# Configure or update git repository under /opt/provision
+# Configure or update git repository under /opt/provision.
+#
+# DEV/EXPERT OVERRIDE — NOT the production update path. This lets an expert
+# point the provisioning tree at an arbitrary fork/branch for development.
+# Production installs and updates come from published GitHub Releases only
+# (see docs/Installer/update-spec.md and the release-based do_update above);
+# this manual, opt-in reconfiguration is deliberately kept separate from that
+# flow and is never invoked by the automatic update checker.
 configure_git_repo() {
     local repo_dir="/opt/provision"
     mkdir -p "$repo_dir"

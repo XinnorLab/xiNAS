@@ -217,35 +217,30 @@ class XiNASApp(App):
     async def prompt_and_apply_update(self, result: CheckResult) -> None:
         """Confirm with the user, then run ``_apply_update(result)``.
 
-        The dialog message reflects whether the incoming commits include
-        a ``Requires-Rebuild:`` trailer — see CLAUDE.md "Update rebuild
-        markers". When no rebuild is required we promise the user a
-        zero-ansible update; when one is required we name the affected
-        roles so they know what is about to re-run.
+        The dialog shows the current → latest release versions, the
+        release notes, the download source, and — when the incoming
+        release carries a ``Requires-Rebuild:`` trailer — the Ansible
+        roles that will re-run (see CLAUDE.md "Update rebuild markers").
         """
+        from xinas_menu.utils.update_check import format_update_prompt
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 
-        rebuilds = result.required_rebuilds
-        if rebuilds:
-            what = "the full site.yml" if rebuilds == ("all",) else ", ".join(rebuilds)
-            msg = (
-                "An update is available.\n\n"
-                f"⚠ This update requires re-applying Ansible: {what}\n\n"
-                "Apply update and run Ansible now?"
-            )
-        else:
-            msg = "An update is available (no system rebuild required). Apply now?"
+        msg = format_update_prompt(result)
         confirmed = await self.push_screen_wait(ConfirmDialog(msg, "Update Available"))
         if confirmed:
             await self._apply_update(result)
 
     async def _apply_update(self, result: CheckResult | None = None) -> None:
+        tag = result.latest_version if result else ""
+        if not tag:
+            self.notify("No release selected to apply.", severity="error")
+            return
         loop = asyncio.get_running_loop()
-        ok, msg = await loop.run_in_executor(None, self._update_checker.apply_update)
+        ok, msg = await loop.run_in_executor(None, self._update_checker.apply_update, tag)
         if not ok:
             self.notify(f"Update failed: {msg}", severity="error")
             return
-        self.audit.log("system.update", "git pull succeeded")
+        self.audit.log("system.update", f"checked out release {tag}")
 
         rebuilds = result.required_rebuilds if result else ()
         cmd = build_rebuild_cmd(rebuilds)

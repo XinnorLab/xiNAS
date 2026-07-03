@@ -600,7 +600,7 @@ Remote one-command, default preset, license already placed at
 `/tmp/license`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install.sh \
+curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh \
   | sudo XINAS_UNATTENDED=1 XINAS_PRESET=default bash
 ```
 

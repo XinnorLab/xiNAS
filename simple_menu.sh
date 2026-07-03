@@ -12,21 +12,35 @@ trap '' INT   # Ignore Ctrl+C — menus handle cancellation via Esc/Back
 # Source the menu library
 source "$SCRIPT_DIR/lib/menu_lib.sh"
 
-# Update check
+# Update check — GitHub Releases only (never the main branch).
+# See docs/Installer/update-spec.md.
 UPDATE_AVAILABLE=""
+UPDATE_TARGET_TAG=""
+REPO_SLUG="${XINAS_UPDATE_REPO:-XinnorLab/xiNAS}"
+
+_latest_release_tag() {
+    curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
+_current_release_tag() {
+    git -C "$1" describe --tags --exact-match 2>/dev/null \
+        || git -C "$1" describe --tags 2>/dev/null || true
+}
 
 check_for_updates() {
     local git_dir="$REPO_DIR/.git"
     [[ -d "$git_dir" ]] || return 0
     command -v git &>/dev/null || return 0
     timeout 2 bash -c "echo >/dev/tcp/github.com/443" 2>/dev/null || return 0
-    local local_commit
-    local_commit=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null) || return 0
-    git -C "$REPO_DIR" fetch --quiet origin main 2>/dev/null || return 0
-    local remote_commit
-    remote_commit=$(git -C "$REPO_DIR" rev-parse origin/main 2>/dev/null) || return 0
-    if [[ "$local_commit" != "$remote_commit" ]]; then
+    local latest_tag current_tag
+    latest_tag=$(_latest_release_tag)
+    [[ -n "$latest_tag" ]] || return 0
+    current_tag=$(_current_release_tag "$REPO_DIR")
+    if [[ "$current_tag" != "$latest_tag" ]]; then
         UPDATE_AVAILABLE="true"
+        UPDATE_TARGET_TAG="$latest_tag"
     fi
 }
 
@@ -35,10 +49,16 @@ do_update() {
         msg_box "Error" "Git is not installed."
         return 1
     fi
-    info_box "Updating..." "Pulling latest changes..."
-    if git -C "$REPO_DIR" pull origin main 2>"$TMP_DIR/update.log"; then
+    local _tag="${UPDATE_TARGET_TAG:-$(_latest_release_tag)}"
+    if [[ -z "$_tag" ]]; then
+        msg_box "Failed" "Could not resolve the latest GitHub Release.\n\nxiNAS updates from releases only — no fallback to main."
+        return 1
+    fi
+    info_box "Updating..." "Checking out release ${_tag}..."
+    if git -C "$REPO_DIR" fetch origin --tags 2>"$TMP_DIR/update.log" \
+        && git -C "$REPO_DIR" checkout "$_tag" 2>>"$TMP_DIR/update.log"; then
         UPDATE_AVAILABLE=""
-        msg_box "Updated" "xiNAS updated!\n\nRestart the menu to use new version."
+        msg_box "Updated" "xiNAS updated to ${_tag}!\n\nRestart the menu to use new version."
     else
         msg_box "Failed" "Update failed:\n\n$(cat "$TMP_DIR/update.log")"
     fi

@@ -170,6 +170,22 @@ _check_installed_files() {
     return 1
 }
 
+# xiNAS updates come from published GitHub Releases only — never the main
+# branch. See docs/Installer/update-spec.md.
+_UPDATE_REPO_SLUG="${XINAS_UPDATE_REPO:-XinnorLab/xiNAS}"
+UPDATE_TARGET_TAG=""
+
+_latest_release_tag() {
+    curl -fsSL "https://api.github.com/repos/${_UPDATE_REPO_SLUG}/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
+_current_release_tag() {
+    git -C "$1" describe --tags --exact-match 2>/dev/null \
+        || git -C "$1" describe --tags 2>/dev/null || true
+}
+
 check_for_updates() {
     command -v git &>/dev/null || return 0
     local repo_dir
@@ -180,18 +196,17 @@ check_for_updates() {
         UPDATE_AVAILABLE="true"
     fi
 
-    # Check remote for new commits
+    # Check the latest published release against the installed release tag.
+    # If the API is unreachable, show no remote update — never inspect main.
     timeout 2 bash -c "echo >/dev/tcp/github.com/443" 2>/dev/null || return 0
-    local local_commit
-    local_commit=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null) || return 0
-    git -C "$repo_dir" fetch --quiet origin main 2>/dev/null || return 0
-    local remote_commit
-    remote_commit=$(git -C "$repo_dir" rev-parse origin/main 2>/dev/null) || return 0
-    if [[ "$local_commit" != "$remote_commit" ]]; then
+    local latest_tag current_tag
+    latest_tag=$(_latest_release_tag)
+    [[ -n "$latest_tag" ]] || return 0
+    current_tag=$(_current_release_tag "$repo_dir")
+    if [[ "$current_tag" != "$latest_tag" ]]; then
         UPDATE_AVAILABLE="true"
-        local behind
-        behind=$(git -C "$repo_dir" rev-list --count HEAD..origin/main 2>/dev/null) || behind="?"
-        UPDATE_DETAILS="Remote is ${behind} commit(s) ahead\n${UPDATE_DETAILS}"
+        UPDATE_TARGET_TAG="$latest_tag"
+        UPDATE_DETAILS="New release ${latest_tag} available (installed: ${current_tag:-unknown})\n${UPDATE_DETAILS}"
     fi
 }
 
@@ -203,8 +218,15 @@ do_update() {
     local repo_dir
     repo_dir=$(_find_repo_dir) || { msg_box "Error" "Cannot find xiNAS git repository."; return 1; }
 
-    info_box "Updating..." "Pulling latest changes from origin/main..."
-    if git -C "$repo_dir" pull origin main 2>"$TMP_DIR/update.log"; then
+    local _tag="${UPDATE_TARGET_TAG:-$(_latest_release_tag)}"
+    if [[ -z "$_tag" ]]; then
+        msg_box "Update Failed" "Could not resolve the latest GitHub Release.\n\nxiNAS updates from releases only — no fallback to main."
+        return 1
+    fi
+
+    info_box "Updating..." "Checking out release ${_tag}..."
+    if git -C "$repo_dir" fetch origin --tags 2>"$TMP_DIR/update.log" \
+        && git -C "$repo_dir" checkout "$_tag" 2>>"$TMP_DIR/update.log"; then
         # Sync installed scripts from repo
         local synced=()
         if [[ -f "$repo_dir/post_install_menu.sh" ]]; then
@@ -3161,51 +3183,13 @@ mcp_menu() {
                 ;;
             8)
                 audit_log "MCP > Check Updates"
-                local _repo="/opt/xiNAS"
-                local _mcp_dir="$_repo/xiNAS-MCP"
-                local _helper_lib="/usr/lib/xinas-mcp/nfs-helper"
-
-                git -C "$_repo" fetch origin main --quiet 2>/dev/null || true
-
-                local _behind
-                _behind=$(git -C "$_repo" rev-list HEAD..origin/main --count 2>/dev/null || echo "0")
-
-                if [[ "$_behind" == "0" ]]; then
-                    msg_box "🔄 MCP Updates" "Already up to date.\n\nNo new commits on origin/main."
-                else
-                    local _log
-                    _log=$(git -C "$_repo" log HEAD..origin/main --oneline 2>/dev/null | head -10)
-                    if yes_no "🔄 MCP Updates Available" \
-                        "${_behind} update(s) available:\n\n${_log}\n\nInstall now?"; then
-                        audit_log "MCP > Install Updates" "${_behind} commits"
-                        local _before
-                        _before=$(git -C "$_repo" rev-parse HEAD 2>/dev/null || echo "")
-                        op_start "Update MCP & NFS Helper"
-                        op_run "git pull"        git -C "$_repo" pull origin main --quiet
-                        local _pkg_changed=""
-                        if [[ -n "$_before" ]]; then
-                            _pkg_changed=$(git -C "$_repo" diff "$_before" HEAD \
-                                -- xiNAS-MCP/package-lock.json --name-only 2>/dev/null || true)
-                        fi
-                        [[ -n "$_pkg_changed" ]] && op_run "npm ci" npm --prefix "$_mcp_dir" ci
-                        op_run "npm run build"   npm --prefix "$_mcp_dir" run build
-                        op_run "copy nfs-helper" cp "$_mcp_dir"/nfs-helper/nfs_helper.py \
-                                                    "$_mcp_dir"/nfs-helper/nfs_exports.py \
-                                                    "$_mcp_dir"/nfs-helper/nfs_quota.py \
-                                                    "$_mcp_dir"/nfs-helper/nfs_sessions.py \
-                                                    "$_helper_lib/"
-                        op_run "set permissions" chmod 755 "$_helper_lib/nfs_helper.py"
-                        op_run "update service file" \
-                            cp "$_mcp_dir/nfs-helper/xinas-nfs-helper.service" \
-                               /etc/systemd/system/xinas-nfs-helper.service
-                        op_run "daemon-reload"   systemctl daemon-reload
-                        op_run "restart nfs-helper" systemctl restart "$MCP_NFS_HELPER_SVC"
-                        local _s
-                        _s=$(_service_state "$MCP_NFS_HELPER_SVC")
-                        op_verify "nfs-helper active" test "$_s" = "active"
-                        op_end "NFS Helper: ${_s}"
-                    fi
-                fi
+                # Updates are release-based (GitHub Releases only) and are
+                # driven by the Python TUI, which compares the installed
+                # version against the latest published release tag and checks
+                # that tag out. This deprecated bash menu no longer pulls the
+                # main branch — see docs/Installer/update-spec.md.
+                msg_box "🔄 Updates" \
+                    "xiNAS updates from published GitHub Releases only.\n\nRun the management console to check and apply updates:\n\n    sudo xinas-menu\n\n(Management → Check for Updates)"
                 ;;
             0) return ;;
         esac

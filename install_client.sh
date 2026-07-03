@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # xiNAS Client One-Shot Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install_client.sh | sudo bash
-#    or: wget -qO- https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install_client.sh | sudo bash
+# Usage: curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install_client.sh | sudo bash
+#    or: wget -qO- https://github.com/XinnorLab/xiNAS/releases/latest/download/install_client.sh | sudo bash
+#
+# Installs/updates from published GitHub Releases only — never main/master.
 
 set -euo pipefail
 
@@ -34,7 +36,17 @@ warn()  { echo -e "     ${YELLOW}⚠${NC}  $*"; }
 fail()  { echo -e "     ${RED}✗${NC}  $*"; }
 
 REPO_URL="https://github.com/XinnorLab/xiNAS.git"
+REPO_SLUG="XinnorLab/xiNAS"
 INSTALL_DIR="/opt/xinas-client"
+
+# xiNAS ships from published GitHub Releases only — never the main branch
+# (see docs/Installer/update-spec.md). Resolve the latest release tag; print
+# nothing on failure. Callers must NOT fall back to main.
+xinas_latest_release_tag() {
+    curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
+}
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "${XGREEN}"
@@ -58,7 +70,7 @@ echo ""
 if [[ $EUID -ne 0 ]]; then
     fail "${RED}Must be run as root${NC}"
     echo ""
-    echo -e "     Run:  ${CYAN}curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install_client.sh | sudo bash${NC}"
+    echo -e "     Run:  ${CYAN}curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install_client.sh | sudo bash${NC}"
     echo ""
     exit 1
 fi
@@ -130,14 +142,23 @@ fi
 # ── Step 3: Client package ────────────────────────────────────────────────────
 step 3 5 "Downloading xiNAS client"
 
+RELEASE_TAG="$(xinas_latest_release_tag)"
+if [[ -z "$RELEASE_TAG" ]]; then
+    fail "Could not resolve the latest xiNAS GitHub Release."
+    echo -e "     ${DIM}xiNAS installs from releases only — no fallback to main.${NC}"
+    echo -e "     ${DIM}Check access to https://api.github.com and that a release exists.${NC}"
+    exit 1
+fi
+
 if [[ -d "$INSTALL_DIR" ]]; then
-    info "Existing installation found — updating..."
+    info "Existing installation found — updating to ${RELEASE_TAG}..."
     cd "$INSTALL_DIR"
-    git pull --quiet origin main 2>/dev/null || true
-    ok "Client updated"
+    git fetch --quiet origin --tags 2>/dev/null || true
+    git checkout --quiet "$RELEASE_TAG" 2>/dev/null || true
+    ok "Client updated to ${RELEASE_TAG}"
 else
-    info "Cloning repository (sparse — client only)..."
-    git clone --quiet --depth 1 --filter=blob:none --sparse "$REPO_URL" "$INSTALL_DIR" 2>/dev/null
+    info "Cloning repository (sparse — client only) at ${RELEASE_TAG}..."
+    git clone --quiet --branch "$RELEASE_TAG" --depth 1 --filter=blob:none --sparse "$REPO_URL" "$INSTALL_DIR" 2>/dev/null
     cd "$INSTALL_DIR"
     git sparse-checkout set client_repo 2>/dev/null
     ok "Client cloned to ${WHITE}${INSTALL_DIR}${NC}"

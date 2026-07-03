@@ -49,30 +49,26 @@ class StartupApp(App):
         await self.push_screen(StartupMainScreen())
 
     async def prompt_and_apply_update(self, result: CheckResult) -> None:
+        from xinas_menu.utils.update_check import format_update_prompt
         from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 
-        rebuilds = result.required_rebuilds
-        if rebuilds:
-            what = "the full site.yml" if rebuilds == ("all",) else ", ".join(rebuilds)
-            msg = (
-                "An update is available.\n\n"
-                f"⚠ This update requires re-applying Ansible: {what}\n\n"
-                "Apply update and run Ansible now?"
-            )
-        else:
-            msg = "An update is available (no system rebuild required). Apply now?"
+        msg = format_update_prompt(result)
         if await self.push_screen_wait(ConfirmDialog(msg, "Update Available")):
             await self._apply_update(result)
 
     async def _apply_update(self, result: CheckResult | None = None) -> None:
         import asyncio
 
+        tag = result.latest_version if result else ""
+        if not tag:
+            self.notify("No release selected to apply.", severity="error")
+            return
         loop = asyncio.get_running_loop()
-        ok, msg = await loop.run_in_executor(None, self._update_checker.apply_update)
+        ok, msg = await loop.run_in_executor(None, self._update_checker.apply_update, tag)
         if not ok:
             self.notify(f"Update failed: {msg}", severity="error")
             return
-        self.audit.log("system.update", "git pull succeeded")
+        self.audit.log("system.update", f"checked out release {tag}")
         rebuilds = result.required_rebuilds if result else ()
         cmd = build_rebuild_cmd(rebuilds)
         if cmd:

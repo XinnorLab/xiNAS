@@ -316,8 +316,8 @@ def _build_mini_status() -> str:
     lines.append("")
     lines.append(f"  {_BLD}1.{_NC} Install the xiNAS client package:")
     lines.append(
-        f"     {_GRN}curl -fsSL https://raw.githubusercontent.com/"
-        f"XinnorLab/xiNAS/main/install_client.sh | sudo bash{_NC}"
+        f"     {_GRN}curl -fsSL https://github.com/XinnorLab/xiNAS/"
+        f"releases/latest/download/install_client.sh | sudo bash{_NC}"
     )
     lines.append("")
     lines.append(f"  {_BLD}2.{_NC} Launch the client wizard:")

@@ -64,7 +64,8 @@ class ManagementScreen(XiNASAppMixin, Screen):
         """
         if not os.path.isfile(_UNINSTALL_SCRIPT):
             self.app.notify(
-                f"{_UNINSTALL_SCRIPT} not found. Run `git pull` in /opt/xiNAS first.",
+                f"{_UNINSTALL_SCRIPT} not found. Reinstall xiNAS from the latest "
+                "GitHub Release first.",
                 severity="error",
                 timeout=10,
             )

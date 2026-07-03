@@ -1,7 +1,10 @@
 #!/bin/bash
 # xiNAS Installation Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install.sh | sudo bash
-#    or: wget -qO- https://raw.githubusercontent.com/XinnorLab/xiNAS/main/install.sh | sudo bash
+# Usage: curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh | sudo bash
+#    or: wget -qO- https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh | sudo bash
+#
+# xiNAS installs and updates ONLY from published GitHub Releases — never
+# from the main/master branch. See docs/Installer/update-spec.md.
 
 set -e
 
@@ -197,6 +200,16 @@ fi
 # ── Step 2: Repository ────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/xiNAS"
 REPO_URL="https://github.com/XinnorLab/xiNAS.git"
+REPO_SLUG="XinnorLab/xiNAS"
+
+# Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints the tag
+# on success, nothing on failure. xiNAS installs from releases only — this
+# helper never returns a branch name, and callers must NOT fall back to main.
+xinas_latest_release_tag() {
+    curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
+}
 
 step "Setting up repository"
 info "Target: ${WHITE}${INSTALL_DIR}${NC}"
@@ -207,13 +220,25 @@ else
     ok "git found"
 fi
 
-if [[ -d "$INSTALL_DIR" ]]; then
+RELEASE_TAG="$(xinas_latest_release_tag)"
+if [[ -z "$RELEASE_TAG" ]]; then
+    fail "Could not resolve the latest xiNAS GitHub Release."
+    echo ""
+    echo -e "     xiNAS installs only from published releases — no fallback to ${BOLD}main${NC}."
+    echo -e "     Check network access to ${CYAN}https://api.github.com${NC} and that a"
+    echo -e "     release is published at ${CYAN}https://github.com/${REPO_SLUG}/releases${NC}."
+    echo ""
+    exit 1
+fi
+ok "Latest release: ${BOLD}${RELEASE_TAG}${NC}"
+
+if [[ -d "$INSTALL_DIR/.git" ]]; then
     cd "$INSTALL_DIR"
-    run_quiet "Updating xiNAS repository at ${INSTALL_DIR}" \
-        bash -c 'git fetch origin -q && git reset --hard origin/main -q'
+    run_quiet "Updating xiNAS to ${RELEASE_TAG} at ${INSTALL_DIR}" \
+        bash -c "git fetch origin --tags -q && git checkout -q '${RELEASE_TAG}'"
 else
-    run_quiet "Cloning xiNAS repository to ${INSTALL_DIR}" \
-        git clone -q "$REPO_URL" "$INSTALL_DIR"
+    run_quiet "Cloning xiNAS ${RELEASE_TAG} to ${INSTALL_DIR}" \
+        git clone -q --branch "$RELEASE_TAG" "$REPO_URL" "$INSTALL_DIR"
     cd "$INSTALL_DIR"
 fi
 
