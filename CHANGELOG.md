@@ -6,6 +6,65 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.2.0] - 2026-07-03
+
+### Added
+
+- **Install-time NFS exports are seeded into control-path desired
+  state.** The installer wrote `/etc/exports` directly but never
+  registered those exports in desired state, so the install-time default
+  share disappeared from the TUI the moment any share was added through
+  the API (the export stayed live but became invisible and
+  unmanageable). The `exports` role now renders a seed manifest that
+  `xinas-api` adopts into desired state once at first boot, guarded by a
+  one-time marker so operator deletes are not resurrected (#244).
+- **Observed-read routes now signal a degraded backend instead of
+  faking an empty result.** The list routes
+  (`GET /api/v1/arrays|disks|filesystems`) attach a
+  `DEGRADED_BACKEND_UNAVAILABLE` warning when their backing collector
+  (`XiraidArray` / `Disk` / `Filesystem`) is errored, and the RAID and
+  Filesystem TUI screens render a degraded banner rather than a
+  misleading "(no … configured)" empty state — so a down or stale
+  backend is distinguishable from "genuinely none". The result payload
+  is unchanged (additive warning; no `api-v1.yaml` change) (#245).
+- **State-preserving Back navigation across the day-2 wizards.** The Add
+  Share, Edit Share, and Create Array wizards gained a Back button on a
+  new headless `run_wizard` driver (`BACK` / `CANCEL` sentinels,
+  conditional-step `applies()` predicates); previously entered answers
+  are remembered when stepping back, and conditional RAID steps are
+  handled correctly (#246).
+
+### Fixed
+
+- **Observed xiRAID arrays were invisible in the API and TUI.** The
+  tolerant `parseRaidShow` parser only accepted the fake transport's
+  JSON-array `raid_show` payload and rejected the real xiRAID 4.3.x
+  daemon shape (an object keyed by array name, with devices expressed as
+  `[idx, path, states]` tuples). Configured arrays therefore never
+  reached the observed-state store, the Control-Path API, or the Textual
+  TUI. The parser now normalizes both shapes and extracts device paths
+  from the tuple form, with a regression test for the real
+  object-keyed / tuple-device payload (#243).
+- **Informational and error pop-ups no longer ask an unanswerable
+  Yes/No.** `ConfirmDialog` defaults to Yes/No and only renders a single
+  OK button when constructed with `ok_only=True`. Notices, detail views,
+  and error dialogs across the day-2 screens (RAID, NFS, filesystem,
+  spare pools, drives, network) omitted the kwarg and so prompted the
+  operator to answer messages that have nothing to answer (e.g. "No
+  available drives found."). Every informational dialog now passes
+  `ok_only=True`; genuine consent prompts whose result is branched on
+  (Create/Edit confirmations, delete warnings, final confirmations) keep
+  Yes/No. The screen-wide convention is recorded in the RAID, FS/shares,
+  and network management specs.
+
+### Rebuild required
+
+Updating to this release rebuilds the node agent, its TypeScript bundle,
+and the API service so the `parseRaidShow` fix and the degraded-read
+warnings take effect:
+
+    Requires-Rebuild: xinas_node_build, xinas_agent, xinas_api
+
 ## [3.1.2] - 2026-07-03
 
 ### Fixed
