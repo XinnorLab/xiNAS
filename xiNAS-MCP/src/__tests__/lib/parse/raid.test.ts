@@ -136,4 +136,43 @@ describe('parseRaidShow', () => {
     );
     expect(noPayload[0]?.spec.spare_disk_ids).toEqual([]);
   });
+
+  it('normalizes the real xiRAID daemon shape (object keyed by name, tuple devices)', () => {
+    // The live xiRAID 4.3.x daemon returns raid_show as an object keyed by
+    // array name ({"data":{...},"log":{...}}) with devices as
+    // [index, path, [states]] tuples — NOT the flat array of string-device
+    // objects the fake transport emits. Both must parse.
+    const arrays = parseRaidShow(
+      {
+        data: {
+          level: '5',
+          devices: [
+            [0, '/dev/nvme1n1', ['online']],
+            [1, '/dev/nvme2n1', ['online']],
+          ],
+          state: ['online', 'initing'],
+          init_progress: 30,
+        },
+        log: {
+          level: '10',
+          devices: [[0, '/dev/nvme3n1', ['online']]],
+          state: ['online'],
+        },
+      },
+      DISK_IDS,
+    );
+    expect(arrays).toHaveLength(2);
+    const byId = Object.fromEntries(arrays.map((a) => [a.id, a]));
+    // the map key becomes the array name; tuple devices resolve to disk ids
+    expect(byId.data).toMatchObject({
+      id: 'data',
+      spec: { name: 'data', level: 'raid5', member_disk_ids: ['disk-1', 'disk-2'] },
+      status: { state: 'rebuilding', rebuild_progress_pct: 30 },
+    });
+    expect(byId.log).toMatchObject({
+      id: 'log',
+      spec: { name: 'log', level: 'raid10', member_disk_ids: ['disk-3'] },
+      status: { state: 'optimal' },
+    });
+  });
 });
