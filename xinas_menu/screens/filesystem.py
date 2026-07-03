@@ -297,7 +297,10 @@ class FilesystemScreen(XiNASAppMixin, Screen):
         try:
             fs_rows, banner = await self._list_filesystems_with_status()
         except ControlPathError as exc:
-            view.set_content(f"  \033[2mCould not load filesystems: {exc}\033[0m")
+            view.set_content(
+                f"\033[1m\033[36mXFS Filesystems\033[0m\n\n"
+                f"  \033[2mCould not load filesystems: {exc}\033[0m"
+            )
             return
         view.set_content(_format_filesystems(fs_rows, banner))
 
