@@ -24,6 +24,37 @@ from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 
+_HOST_CHOICES = [
+    "Everyone (any host on the network)",
+    "Specific network (e.g., 192.168.1.0/24)",
+    "Single host (by IP address)",
+]
+_CUSTOM_PATH = "Custom path…"
+
+
+def _host_prefill(host: str) -> tuple[str, str]:
+    """Map a stored export host to (selected radio label, "(Current:)" hint)."""
+    if host == "*":
+        return _HOST_CHOICES[0], "Everyone"
+    if "/" in host:
+        return _HOST_CHOICES[1], f"Network {host}"
+    return _HOST_CHOICES[2], f"Host {host}"
+
+
+def _path_prefill(stored: str, mount_points: list[str]) -> tuple[str | None, str]:
+    """Map a stored path to (SelectDialog pre-selection, custom-input default).
+
+    Returns ``(mount, "/mnt/data/")`` when *stored* is one of *mount_points*,
+    ``("Custom path…", stored)`` when it is a non-empty non-mount path, and
+    ``(None, "/mnt/data/")`` when *stored* is empty (first entry).
+    """
+    if not stored:
+        return None, "/mnt/data/"
+    if stored in mount_points:
+        return stored, "/mnt/data/"
+    return _CUSTOM_PATH, stored
+
+
 _MENU = [
     MenuItem("1", "Show NFS Exports"),
     MenuItem("2", "Add Share"),
