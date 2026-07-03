@@ -170,8 +170,15 @@
   ansible.builtin.file:
     path: "{{ xinas_log_dir }}"
     state: directory
-    owner: root
-    group: root
+    # MUST match the xinas_api role's tmpfiles ownership (xinas-api:xinas-admin).
+    # This role runs AFTER xinas_api, so owning /var/log/xinas as root:root here
+    # CLOBBERS the api's ownership: the unprivileged api can then no longer create
+    # entries in its own log dir — support.bundle fails with EACCES mkdir
+    # /var/log/xinas/bundles, and a plain api restart would EACCES on audit.jsonl
+    # (only the api unit's ExecStartPre tmpfiles re-assert masks that). The menu's
+    # own healthcheck writes run as root and work fine inside an api-owned dir.
+    owner: xinas-api
+    group: xinas-admin
     mode: '0750'
   tags: [xinas_menu, logs]
 
