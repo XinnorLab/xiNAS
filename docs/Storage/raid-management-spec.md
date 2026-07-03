@@ -196,6 +196,20 @@ Extended adds three blocks:
 
 If the response includes `devices_health` or `devices_wear` arrays, a per-device row is appended showing state icon + health + wear%.
 
+### 3.1 Degraded-backend honesty
+
+Since the S8 control-path migration the read path rides `GET /api/v1/arrays`
+(not `grpc.raid_show()` directly), so `_show_quick()` / `_show_extended()`
+fetch the full envelope (`control.get`, not `control.result`) and inspect its
+`warnings`. When the envelope carries `DEGRADED_BACKEND_UNAVAILABLE` — the
+`XiraidArray` collector is errored, e.g. the xiRAID daemon is unreachable
+(control-path contract: [s8-clients-spec §5.1](../control-path/s8-clients-spec.md)) —
+the screen renders a distinct banner above any rows
+(`⚠ xiRAID backend unavailable — array list may be empty or stale`), and when
+the list is empty it **replaces** the `(no RAID arrays configured)`
+empty-state with that message. An empty list under a degraded backend must
+never read as "genuinely no arrays".
+
 State → icon/colour mapping (from `_state_icon` / `_state_color`):
 
 | State | Icon | Colour |

@@ -28,6 +28,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Label
 
 from xinas_menu.api.control_client import ControlClient, ControlPathError, TaskCancelled
+from xinas_menu.api.degraded import degraded_banner
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.drive_picker import DrivePickerScreen
@@ -359,22 +360,30 @@ class RAIDScreen(XiNASAppMixin, Screen):
         view = self.query_one("#raid-content", ScrollableTextView)
         view.set_content("Loading RAID arrays…")
         try:
-            rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
+            env = await asyncio.to_thread(self.app.control.get, "/api/v1/arrays")
         except ControlPathError as exc:
             view.set_content(f"Could not load RAID info: {exc}")
             return
-        view.set_content(_format_raid_overview(_arrays_from_api(rows), extended=False))
+        view.set_content(
+            _format_raid_overview(
+                _arrays_from_api(env.get("result")), extended=False, banner=degraded_banner(env)
+            )
+        )
 
     @work(exclusive=True)
     async def _show_extended(self) -> None:
         view = self.query_one("#raid-content", ScrollableTextView)
         view.set_content("Loading RAID arrays (extended)…")
         try:
-            rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
+            env = await asyncio.to_thread(self.app.control.get, "/api/v1/arrays")
         except ControlPathError as exc:
             view.set_content(f"Could not load RAID info: {exc}")
             return
-        view.set_content(_format_raid_overview(_arrays_from_api(rows), extended=True))
+        view.set_content(
+            _format_raid_overview(
+                _arrays_from_api(env.get("result")), extended=True, banner=degraded_banner(env)
+            )
+        )
 
     @work(exclusive=True)
     async def _show_pools(self) -> None:
@@ -1181,8 +1190,12 @@ def _count_states(devices: list) -> tuple[int, int, int, int]:
 # ── Quick / Extended overview ──────────────────────────────────────────────────
 
 
-def _format_raid_overview(arrays: dict, extended: bool = False) -> str:
+def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | None = None) -> str:
     lines: list[str] = []
+
+    if banner:
+        lines.append(f"  {_YLW}⚠ {banner}{_NC}")
+        lines.append("")
 
     title = "RAID ARRAYS — EXTENDED" if extended else "RAID ARRAYS — QUICK OVERVIEW"
     lines.append(_box_sep("="))
@@ -1194,7 +1207,10 @@ def _format_raid_overview(arrays: dict, extended: bool = False) -> str:
     lines.append("")
 
     if not arrays:
-        lines.append(f"  {_DIM}(no RAID arrays configured){_NC}")
+        if banner:
+            lines.append(f"  {_YLW}xiRAID backend unavailable — cannot list arrays.{_NC}")
+        else:
+            lines.append(f"  {_DIM}(no RAID arrays configured){_NC}")
         return "\n".join(lines)
 
     for name, arr in arrays.items():

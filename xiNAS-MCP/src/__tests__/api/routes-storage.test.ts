@@ -57,6 +57,46 @@ describe('storage routes', () => {
     expect(res.body.result).toHaveLength(1);
   });
 
+  it('GET /arrays warns when the XiraidArray collector is errored', async () => {
+    setup.ctx.tracker!.recordHeartbeatSuccess(new Date(), {
+      collectors: { XiraidArray: 'error: XIRAID_DAEMON_UNAVAILABLE: boom' },
+    });
+    const res = await request(setup.app).get('/api/v1/arrays').set('Authorization', ADMIN_TOKEN);
+    expect(res.status).toBe(200);
+    const codes = res.body.warnings.map((w: { code: string }) => w.code);
+    expect(codes).toContain('DEGRADED_BACKEND_UNAVAILABLE');
+  });
+
+  it('GET /arrays has no degraded warning when the collector is healthy', async () => {
+    setup.ctx.tracker!.recordHeartbeatSuccess(new Date(), {
+      collectors: { XiraidArray: 'running' },
+    });
+    seedArray(setup.state, 'a1');
+    const res = await request(setup.app).get('/api/v1/arrays').set('Authorization', ADMIN_TOKEN);
+    const codes = res.body.warnings.map((w: { code: string }) => w.code);
+    expect(codes).not.toContain('DEGRADED_BACKEND_UNAVAILABLE');
+  });
+
+  it('GET /disks warns when the Disk collector is errored', async () => {
+    setup.ctx.tracker!.recordHeartbeatSuccess(new Date(), {
+      collectors: { Disk: 'error: PROBE_UNAVAILABLE' },
+    });
+    const res = await request(setup.app).get('/api/v1/disks').set('Authorization', ADMIN_TOKEN);
+    const codes = res.body.warnings.map((w: { code: string }) => w.code);
+    expect(codes).toContain('DEGRADED_BACKEND_UNAVAILABLE');
+  });
+
+  it('GET /filesystems warns when the Filesystem collector is errored', async () => {
+    setup.ctx.tracker!.recordHeartbeatSuccess(new Date(), {
+      collectors: { Filesystem: 'error: MOUNT_READ_FAILED' },
+    });
+    const res = await request(setup.app)
+      .get('/api/v1/filesystems')
+      .set('Authorization', ADMIN_TOKEN);
+    const codes = res.body.warnings.map((w: { code: string }) => w.code);
+    expect(codes).toContain('DEGRADED_BACKEND_UNAVAILABLE');
+  });
+
   it('GET /arrays/{id} returns the single array', async () => {
     seedArray(setup.state, 'a1');
     const res = await request(setup.app).get('/api/v1/arrays/a1').set('Authorization', ADMIN_TOKEN);

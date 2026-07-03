@@ -25,6 +25,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Label
 
 from xinas_menu.api.control_client import ControlPathError, TaskCancelled, TaskFailed
+from xinas_menu.api.degraded import degraded_banner
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -143,6 +144,40 @@ def _fs_rows_from_api(rows: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _format_filesystems(fs_rows: list[dict[str, Any]], banner: str | None = None) -> str:
+    """Render the XFS filesystem list; a banner replaces the empty-state."""
+    GRN, BLD, DIM, YLW, CYN, NC = (
+        "\033[32m",
+        "\033[1m",
+        "\033[2m",
+        "\033[33m",
+        "\033[36m",
+        "\033[0m",
+    )
+    lines = [f"{BLD}{CYN}XFS Filesystems{NC}\n"]
+    if banner:
+        lines.append(f"  {YLW}⚠ {banner}{NC}")
+        lines.append("")
+    if not fs_rows:
+        if banner:
+            lines.append(f"  {YLW}xiRAID backend unavailable — cannot list filesystems.{NC}")
+        else:
+            lines.append(f"  {DIM}No XFS filesystems found.{NC}")
+        return "\n".join(lines)
+    for fs in fs_rows:
+        target = fs["mountpoint"] or fs["id"]
+        mounted = f" {YLW}(not mounted){NC}" if not fs["mounted"] else ""
+        lines.append(f"  {GRN}{target}{NC}{mounted}")
+        lines.append(f"    Device:  {fs['backing_device'] or '?'}")
+        lines.append(f"    Options: {DIM}{','.join(fs['options'])}{NC}")
+        if fs.get("size_bytes") is not None:
+            size = _fmt_size(fs.get("size_bytes"))
+            free = _fmt_size(fs.get("free_bytes"))
+            lines.append(f"    Size:    {size} total, {free} free")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _volumes_in_use(fs_rows: list[dict[str, Any]]) -> set[str]:
     """Volume paths consumed by managed filesystems (data OR log device)."""
     used: set[str] = set()
@@ -242,10 +277,15 @@ class FilesystemScreen(XiNASAppMixin, Screen):
 
         return _cb
 
+    async def _list_filesystems_with_status(self) -> tuple[list[dict[str, Any]], str | None]:
+        """GET /api/v1/filesystems → (adapted rows, degraded banner or None)."""
+        env = await asyncio.to_thread(self.app.control.get, "/api/v1/filesystems")
+        return _fs_rows_from_api(env.get("result")), degraded_banner(env)
+
     async def _list_filesystems(self) -> list[dict[str, Any]]:
         """GET /api/v1/filesystems adapted to the screen's row shape."""
-        rows = await asyncio.to_thread(self.app.control.result, "/api/v1/filesystems")
-        return _fs_rows_from_api(rows)
+        rows, _ = await self._list_filesystems_with_status()
+        return rows
 
     # ── Show Filesystems ──────────────────────────────────────────────────
 
@@ -254,42 +294,15 @@ class FilesystemScreen(XiNASAppMixin, Screen):
         """Display managed XFS filesystems (GET /api/v1/filesystems)."""
         view = self.query_one("#fs-content", ScrollableTextView)
         view.set_content("  Scanning filesystems...")
-
-        GRN, BLD, DIM, YLW, CYN, NC = (
-            "\033[32m",
-            "\033[1m",
-            "\033[2m",
-            "\033[33m",
-            "\033[36m",
-            "\033[0m",
-        )
-        lines = [f"{BLD}{CYN}XFS Filesystems{NC}\n"]
-
         try:
-            fs_rows = await self._list_filesystems()
+            fs_rows, banner = await self._list_filesystems_with_status()
         except ControlPathError as exc:
-            lines.append(f"  {DIM}Could not load filesystems: {exc}{NC}")
-            view.set_content("\n".join(lines))
+            view.set_content(
+                f"\033[1m\033[36mXFS Filesystems\033[0m\n\n"
+                f"  \033[2mCould not load filesystems: {exc}\033[0m"
+            )
             return
-
-        if not fs_rows:
-            lines.append(f"  {DIM}No XFS filesystems found.{NC}")
-            view.set_content("\n".join(lines))
-            return
-
-        for fs in fs_rows:
-            target = fs["mountpoint"] or fs["id"]
-            mounted = f" {YLW}(not mounted){NC}" if not fs["mounted"] else ""
-            lines.append(f"  {GRN}{target}{NC}{mounted}")
-            lines.append(f"    Device:  {fs['backing_device'] or '?'}")
-            lines.append(f"    Options: {DIM}{','.join(fs['options'])}{NC}")
-            if fs.get("size_bytes") is not None:
-                size = _fmt_size(fs.get("size_bytes"))
-                free = _fmt_size(fs.get("free_bytes"))
-                lines.append(f"    Size:    {size} total, {free} free")
-            lines.append("")
-
-        view.set_content("\n".join(lines))
+        view.set_content(_format_filesystems(fs_rows, banner))
 
     # ── Create Filesystem Wizard ──────────────────────────────────────────
 

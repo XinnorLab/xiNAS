@@ -7,6 +7,7 @@ import {
   sendOk,
   unwrapResources,
 } from '../handlers/reads.js';
+import { degradedCollectorWarnings } from '../handlers/collector-health.js';
 import type { ApiContext } from '../context.js';
 
 /**
@@ -48,6 +49,7 @@ export function storageRouter(ctx: ApiContext): Router {
       res,
       values,
       rows.map((x) => x.revision),
+      degradedCollectorWarnings(ctx, 'Disk'),
     );
   });
 
@@ -75,6 +77,7 @@ export function storageRouter(ctx: ApiContext): Router {
       res,
       unwrapResources(rows),
       rows.map((x) => x.revision),
+      degradedCollectorWarnings(ctx, 'XiraidArray'),
     );
   });
 
@@ -94,6 +97,7 @@ export function storageRouter(ctx: ApiContext): Router {
       res,
       unwrapResources(rows),
       rows.map((x) => x.revision),
+      degradedCollectorWarnings(ctx, 'Filesystem'),
     );
   });
 
