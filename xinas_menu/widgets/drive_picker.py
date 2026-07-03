@@ -19,6 +19,8 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Label, Static
 
+from xinas_menu.widgets.wizard import BACK
+
 _log = logging.getLogger(__name__)
 
 
@@ -33,14 +35,16 @@ def _fmt_size(size_bytes: float) -> str:
     return f"{size_bytes:.1f} EB"
 
 
-class DrivePickerScreen(ModalScreen[list[str] | None]):
+class DrivePickerScreen(ModalScreen["list[str] | object | None"]):
     """Full-featured drive picker with filtering, sorting, and multi-select.
 
-    Returns list of selected drive names, or None if cancelled.
+    Returns list of selected drive names, :data:`BACK` if the user requested
+    back-navigation, or None if cancelled.
     """
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel", show=True, key_display="Esc"),
+        Binding("b", "back", "Back", show=True),
         Binding("space", "toggle_select", "Toggle", show=True),
         Binding("a", "toggle_all", "All", show=True),
         Binding("s", "cycle_sort", "Sort", show=True),
@@ -132,6 +136,8 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
         drives: list[dict[str, Any]],
         title: str = "Select Drives",
         preselected: set[str] | list[str] | None = None,
+        *,
+        allow_back: bool = False,
     ) -> None:
         super().__init__()
         self._all_drives = list(drives)
@@ -143,6 +149,7 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
         self._filter_numa: int | None = None
         self._filter_size_min: int = 0
         self._filter_size_max: int = 0
+        self._allow_back = allow_back
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-container"):
@@ -152,6 +159,8 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
             yield DataTable(id="picker-table")
             with Horizontal(id="picker-buttons"):
                 yield Button("OK [Enter]", variant="primary", id="btn-ok")
+                if self._allow_back:
+                    yield Button("Back [b]", variant="default", id="btn-back")
                 yield Button("Cancel [Esc]", variant="default", id="btn-cancel")
         yield Static("", id="picker-detail")
 
@@ -383,8 +392,14 @@ class DrivePickerScreen(ModalScreen[list[str] | None]):
     def action_cancel(self) -> None:
         self.dismiss(None)
 
+    def action_back(self) -> None:
+        if self._allow_back:
+            self.dismiss(BACK)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-ok":
             self.action_confirm()
+        elif event.button.id == "btn-back":
+            self.action_back()
         else:
             self.action_cancel()

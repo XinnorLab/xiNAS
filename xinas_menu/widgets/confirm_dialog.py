@@ -7,8 +7,10 @@ from textual.binding import Binding
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label
 
+from xinas_menu.widgets.wizard import BACK
 
-class ConfirmDialog(ModalScreen[bool]):
+
+class ConfirmDialog(ModalScreen["bool | object"]):
     """Modal confirmation or informational dialog.
 
     When *ok_only* is ``False`` (default) the dialog shows **Yes / No**
@@ -32,6 +34,7 @@ class ConfirmDialog(ModalScreen[bool]):
 
     BINDINGS = [
         Binding("escape", "dismiss_no", "Cancel", show=False),
+        Binding("left", "back", "Back", show=False),
         Binding("y", "dismiss_yes", "Yes", show=False),
         Binding("n", "dismiss_no", "No", show=False),
         Binding("enter", "dismiss_ok", "OK", show=False),
@@ -47,6 +50,7 @@ class ConfirmDialog(ModalScreen[bool]):
         yes_label: str | None = None,
         no_label: str | None = None,
         copy_text: str | None = None,
+        allow_back: bool = False,
     ) -> None:
         super().__init__()
         self._message = message
@@ -55,6 +59,7 @@ class ConfirmDialog(ModalScreen[bool]):
         self._yes_label = yes_label or "Yes [y]"
         self._no_label = no_label or "No [n]"
         self._copy_text = copy_text if copy_text is not None else message
+        self._allow_back = allow_back
 
     def compose(self) -> ComposeResult:
         from textual.containers import Horizontal, Vertical
@@ -63,6 +68,8 @@ class ConfirmDialog(ModalScreen[bool]):
             yield Label(self._title, id="dialog-title")
             yield Label(self._message, id="dialog-body", markup=False)
             with Horizontal(id="dialog-buttons"):
+                if self._allow_back:
+                    yield Button("Back [←]", variant="default", id="btn-back", classes="dialog-btn")
                 if self._ok_only:
                     yield Button("OK", variant="primary", id="btn-ok", classes="dialog-btn")
                 else:
@@ -74,10 +81,16 @@ class ConfirmDialog(ModalScreen[bool]):
                     )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-ok":
+        if event.button.id == "btn-back":
+            self.action_back()
+        elif event.button.id == "btn-ok":
             self.dismiss(True)
         else:
             self.dismiss(event.button.id == "btn-yes")
+
+    def action_back(self) -> None:
+        if self._allow_back:
+            self.dismiss(BACK)
 
     def action_dismiss_yes(self) -> None:
         if not self._ok_only:
