@@ -215,6 +215,35 @@ ordinary catalog entries — full spine, one audit chain, RBAC by
 the old `auth.list_users` / `disk.get_smart`. Everything else
 uncovered → `NOT_IMPLEMENTED` + replacement pointer.
 
+### 5.1 Observed-read degraded honesty
+
+The first-class observed-read **list** routes — `GET /api/v1/arrays`,
+`/disks`, `/filesystems` — are pure reads of the observed-state store
+(`/xinas/v1/observed/<Kind>/`). When the backing collector has errored, no
+rows are flushed and the route returns `[]` with HTTP 200. Silent, that is
+indistinguishable from "genuinely none" and lets a stale/unreachable backend
+read as an empty inventory (the PR #243 class of confusion).
+
+So each of these three routes attaches a `DEGRADED_BACKEND_UNAVAILABLE`
+warning to its envelope when its backing collector is errored, while leaving
+the `result` list unchanged (it may be empty or stale):
+
+| Route | Collector kind |
+|---|---|
+| `GET /api/v1/arrays` | `XiraidArray` |
+| `GET /api/v1/disks` | `Disk` |
+| `GET /api/v1/filesystems` | `Filesystem` |
+
+The signal is the captured per-collector health map
+(`HeartbeatTracker.currentSnapshot().collectors[kind]`, the same map the node
+already degrades on via `#hasCollectorError`): a value beginning `error`
+degrades; `running` and `stubbed` do not. `DEGRADED_BACKEND_UNAVAILABLE` is the SAME code the
+promoted legacy reads already emit (§5), so consumers see one honesty
+convention. The warning propagates unchanged to MCP results and `xinasctl`
+(§1 T4), and clients render it (the TUI degraded banner — Storage specs).
+Additive only: `warnings[]` is already in every envelope, so `api-v1.yaml`
+does not change.
+
 ## 6. TUI composite teardown (T13)
 
 `raid.py` delete becomes, in the existing teardown progress view:

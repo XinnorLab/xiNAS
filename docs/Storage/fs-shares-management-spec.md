@@ -127,7 +127,9 @@ Nothing in this screen calls the xiRAID gRPC for writes — RAID arrays are inpu
 
 ### 3.2 Show Filesystems
 
-`findmnt -t xfs -J` returns JSON; the screen parses `filesystems[]` and prints `target`, `source`, and `options` per row. No subprocess elsewhere, no socket call. Read-only.
+`_show_filesystems()` rides the S8 control-path read `GET /api/v1/filesystems`; the screen parses the rows and prints `target`, `source`, and `options` per row. Read-only.
+
+**Degraded-backend honesty.** The screen fetches the full envelope (`control.get`, not `control.result`) and inspects its `warnings`. When the envelope carries `DEGRADED_BACKEND_UNAVAILABLE` — the `Filesystem` collector is errored (control-path contract: [s8-clients-spec §5.1](../control-path/s8-clients-spec.md)) — it renders a distinct banner above any rows, and when the list is empty it **replaces** the `No XFS filesystems found.` empty-state with that message, so an unobservable backend never reads as "genuinely none".
 
 ### 3.3 Create Filesystem wizard
 
