@@ -364,7 +364,8 @@ class NFSScreen(XiNASAppMixin, Screen):
             prompt = "Select authentication mode:"
             o = orig(answers)
             if o is not None:
-                prompt += f"\n(Current: {_SEC_LABELS.get(o.get('sec'), o.get('sec'))})"
+                cur_sec = o.get("sec", "sys")
+                prompt += f"\n(Current: {_SEC_LABELS.get(cur_sec, cur_sec)})"
             pick = await self.app.push_screen_wait(
                 SelectDialog(
                     sec_choices,

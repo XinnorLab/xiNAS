@@ -10,7 +10,7 @@ from textual.widgets import Button, Label
 from xinas_menu.widgets.wizard import BACK
 
 
-class ConfirmDialog(ModalScreen["bool | object"]):
+class ConfirmDialog(ModalScreen["bool"]):
     """Modal confirmation or informational dialog.
 
     When *ok_only* is ``False`` (default) the dialog shows **Yes / No**
@@ -90,7 +90,7 @@ class ConfirmDialog(ModalScreen["bool | object"]):
 
     def action_back(self) -> None:
         if self._allow_back:
-            self.dismiss(BACK)
+            self.dismiss(BACK)  # pyright: ignore[reportArgumentType]
 
     def action_dismiss_yes(self) -> None:
         if not self._ok_only:

@@ -10,7 +10,7 @@ from textual.widgets import Button, Input, Label
 from xinas_menu.widgets.wizard import BACK
 
 
-class InputDialog(ModalScreen["str | object | None"]):
+class InputDialog(ModalScreen["str | None"]):
     """Modal text (or password) input dialog.
 
     Returns the entered string, :data:`BACK` if the user requested
@@ -75,4 +75,4 @@ class InputDialog(ModalScreen["str | object | None"]):
 
     def _dismiss_back(self) -> None:
         if self._allow_back:
-            self.dismiss(BACK)
+            self.dismiss(BACK)  # pyright: ignore[reportArgumentType]

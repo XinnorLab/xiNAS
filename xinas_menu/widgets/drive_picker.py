@@ -35,7 +35,7 @@ def _fmt_size(size_bytes: float) -> str:
     return f"{size_bytes:.1f} EB"
 
 
-class DrivePickerScreen(ModalScreen["list[str] | object | None"]):
+class DrivePickerScreen(ModalScreen["list[str] | None"]):
     """Full-featured drive picker with filtering, sorting, and multi-select.
 
     Returns list of selected drive names, :data:`BACK` if the user requested
@@ -394,7 +394,7 @@ class DrivePickerScreen(ModalScreen["list[str] | object | None"]):
 
     def action_back(self) -> None:
         if self._allow_back:
-            self.dismiss(BACK)
+            self.dismiss(BACK)  # pyright: ignore[reportArgumentType]
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-ok":

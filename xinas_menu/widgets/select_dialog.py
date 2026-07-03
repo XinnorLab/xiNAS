@@ -11,7 +11,7 @@ from textual.widgets.option_list import Option
 from xinas_menu.widgets.wizard import BACK
 
 
-class SelectDialog(ModalScreen["str | object | None"]):
+class SelectDialog(ModalScreen["str | None"]):
     """Modal dialog that lets the user pick one item from a list.
 
     Returns the selected string value, :data:`BACK` if the user requested
@@ -74,4 +74,4 @@ class SelectDialog(ModalScreen["str | object | None"]):
 
     def action_back(self) -> None:
         if self._allow_back:
-            self.dismiss(BACK)
+            self.dismiss(BACK)  # pyright: ignore[reportArgumentType]
