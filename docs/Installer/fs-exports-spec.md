@@ -11,9 +11,10 @@ Each section names the source file the behavior comes from. Where this spec over
 Sources:
 
 - [collection/roles/raid_fs/tasks/create_fs.yml](../../collection/roles/raid_fs/tasks/create_fs.yml), [templates/mount.unit.j2](../../collection/roles/raid_fs/templates/mount.unit.j2)
-- [collection/roles/exports/tasks/main.yml](../../collection/roles/exports/tasks/main.yml), [templates/exports.j2](../../collection/roles/exports/templates/exports.j2), [handlers/main.yml](../../collection/roles/exports/handlers/main.yml), [defaults/main.yml](../../collection/roles/exports/defaults/main.yml)
+- [collection/roles/exports/tasks/main.yml](../../collection/roles/exports/tasks/main.yml), [templates/exports.j2](../../collection/roles/exports/templates/exports.j2), [templates/shares-seed.json.j2](../../collection/roles/exports/templates/shares-seed.json.j2), [handlers/main.yml](../../collection/roles/exports/handlers/main.yml), [defaults/main.yml](../../collection/roles/exports/defaults/main.yml)
 - [collection/roles/nfs_server/tasks/main.yml](../../collection/roles/nfs_server/tasks/main.yml), [handlers/main.yml](../../collection/roles/nfs_server/handlers/main.yml), [defaults/main.yml](../../collection/roles/nfs_server/defaults/main.yml)
 - Preset overrides: [presets/default/nfs_exports.yml](../../presets/default/nfs_exports.yml), [presets/xinnorVM/nfs_exports.yml](../../presets/xinnorVM/nfs_exports.yml)
+- [xiNAS-MCP/src/api/seed-shares.ts](../../xiNAS-MCP/src/api/seed-shares.ts) — one-time install-time share adoption at first `xinas-api` boot (§2.6)
 
 ---
 
@@ -195,6 +196,36 @@ For the default single-rule preset, `/etc/exports` ends up as exactly:
 ```
 
 No managed-section markers — the file is treated as fully owned by the role and rewritten in place. Hand-editing it survives only until the next play run.
+
+### 2.6 Install-time share adoption (seed manifest)
+
+Source: [collection/roles/exports/templates/shares-seed.json.j2](../../collection/roles/exports/templates/shares-seed.json.j2), [xiNAS-MCP/src/api/seed-shares.ts](../../xiNAS-MCP/src/api/seed-shares.ts). Design: [docs/superpowers/specs/2026-07-03-nfs-share-seed-adoption-design.md](../superpowers/specs/2026-07-03-nfs-share-seed-adoption-design.md).
+
+In addition to `/etc/exports`, the `exports` role renders a JSON seed manifest at `/var/lib/xinas/seed/shares.json` (template `shares-seed.json.j2`) from the *same* `exports` preset var that drives `exports.j2` (§2.1), so the two are consistent by construction. This is an additive task — it does not change the existing `/etc/exports` template task.
+
+Manifest shape — one entry per export, `options` carried as the raw comma-split token list:
+
+```json
+[
+  {
+    "path": "/mnt/data",
+    "clients": "*",
+    "options": ["rw", "sync", "insecure", "no_root_squash",
+                "no_subtree_check", "no_wdelay", "fsid=0"]
+  }
+]
+```
+
+On its **first boot** after install, `xinas-api` (`seedShares()`) reads this manifest and writes one desired `Share` per entry:
+
+```
+/xinas/v1/desired/Share/<encExportId(path)> =
+  { kind: "Share", id, spec: { path, clients: [{ pattern, options }], fsid } }
+```
+
+`fsid` is extracted from the option tokens (assigned `max(existing fsids) + 1` when an entry omits it). No executor runs and `/etc/exports` is not rewritten — the export already exists on disk from the role's own render. A one-time marker `/xinas/v1/meta/shares_seeded` makes this permanent-once: an operator delete of the seeded share is never resurrected on a later restart, while a fresh state database (re-install) has no marker and re-seeds.
+
+**Scope:** only the install-declared exports are adopted this way. Out-of-band `exportfs` edits or hand-added `/etc/exports` lines are NOT auto-adopted — they remain drift, surfaced as `drift.nfs-exports` (`extra`). This does not carry a `Requires-Rebuild: exports` trailer — forcing the `exports` role to re-run on a plain release update would re-template `/etc/exports` and risk clobbering a helper-managed file (§7); existing installs adopt on their next full provision instead.
 
 ---
 

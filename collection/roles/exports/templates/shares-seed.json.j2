@@ -1,0 +1,13 @@
+{# Managed by the xiNAS `exports` role. Consumed ONCE by xinas-api seedShares()
+   to adopt the install-time exports into control-path desired state.
+   Rendered from the SAME `exports` var that drives exports.j2, so this manifest
+   and /etc/exports are consistent by construction. #}
+{% set entries = [] %}
+{% for ex in exports %}
+{%   set _ = entries.append({
+       'path': ex.path,
+       'clients': ex.clients,
+       'options': ex.options.split(',') | map('trim') | select | list,
+     }) %}
+{% endfor %}
+{{ entries | to_nice_json }}

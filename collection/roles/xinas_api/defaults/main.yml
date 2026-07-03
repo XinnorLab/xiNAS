@@ -27,6 +27,11 @@ xinas_api_config_dir: /etc/xinas-api
 xinas_api_state_dir: /var/lib/xinas/state
 xinas_api_log_dir:   /var/log/xinas
 
+# Path to the NFS share seed manifest the `exports` role renders. xinas-api
+# reads it ONCE at first boot (seedShares) to adopt install-time exports into
+# desired state. MUST match the exports role's dest (/var/lib/xinas/seed/shares.json).
+xinas_api_seed_manifest_path: /var/lib/xinas/seed/shares.json
+
 # Unix-domain socket path. The parent directory /run/xinas is created
 # by the role's tmpfiles.d entry as root:xinas-admin 0770 so the api
 # process (primary group xinas-admin via the unit's `Group=`) can
