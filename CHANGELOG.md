@@ -6,6 +6,25 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.2.1] - 2026-07-04
+
+### Fixed
+
+- **Repeated provisioning no longer bricks boot with "Too many boot init
+  vars".** The `perf_tuning` role appended its high-performance kernel-arg
+  block to `GRUB_CMDLINE_LINUX` on every run — a `\1` backref that
+  re-prepended the existing value — so each re-provision added another full
+  copy of `intel_idle.max_cstate=0 … mds=off`. The flag-style tokens the
+  kernel does not consume (`noibrs`, `noibpb`, `no_stf_barrier`, …) pile into
+  the init argument vector; once they cross the kernel's `MAX_INIT_ARGS` (32),
+  PID 1 setup panics at boot with `Too many boot init vars` — reported after
+  several reinstalls. The task now strips any previously-applied xiNAS args
+  before prepending exactly one copy: it is idempotent, preserves foreign
+  kernel args, and self-heals a host that already accumulated duplicates (as
+  long as it can still boot to re-run). Regression from 3.1.x
+  (`$1` → `\1` backref correction). Requires the `perf_tuning` role to
+  re-run on update.
+
 ## [3.2.0] - 2026-07-03
 
 ### Added
