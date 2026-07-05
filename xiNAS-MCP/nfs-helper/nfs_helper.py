@@ -18,9 +18,13 @@ import subprocess
 import sys
 import threading
 
+from nfs_conf import LOCK_PATH as _NFS_CONF_LOCK
 from nfs_conf import build_nfsd_updates, restart_nfs_server, set_nfs_conf
+from nfs_exports import LOCK_PATH as _EXPORTS_LOCK
 from nfs_exports import add_export, list_exports, remove_export, update_export
+from nfs_idmap import LOCK_PATH as _IDMAP_LOCK
 from nfs_idmap import set_idmapd_domain
+from nfs_profile import LOCK_PATH as _PROFILE_LOCK
 from nfs_profile import render_nfs_profile
 from nfs_quota import set_project_quota, set_user_quota
 from nfs_sessions import get_sessions_for_path, list_sessions
@@ -29,6 +33,12 @@ from nfs_sessions import get_sessions_for_path, list_sessions
 
 SOCKET_PATH = os.environ.get("NFS_HELPER_SOCKET", "/run/xinas-nfs-helper.sock")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
+
+# The lock files each op flocks (spec §File Locking). Sourced from the owning
+# module so there is a single definition per path. Pre-created at startup by
+# precreate_locks() so the lock surface is deterministic rather than appearing
+# lazily on first use.
+LOCK_PATHS = (_EXPORTS_LOCK, _NFS_CONF_LOCK, _IDMAP_LOCK, _PROFILE_LOCK)
 
 # --- Logging ---
 
@@ -331,6 +341,27 @@ def handle_client(conn: socket.socket) -> None:
 # --- Server ---
 
 
+def precreate_locks(paths=LOCK_PATHS) -> None:
+    """Create each lock file (empty, if absent) before the daemon serves.
+
+    Makes the lock surface deterministic and observable — every lock file
+    exists as soon as the service is active rather than appearing lazily on
+    first use (spec §File Locking). Never truncates an existing file and never
+    creates a directory. A per-path failure is logged, not fatal: a lock in a
+    weird state must not stop the daemon from serving.
+    """
+    for path in paths:
+        try:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            # O_CREAT without O_TRUNC: create if missing, never clobber.
+            fd = os.open(path, os.O_CREAT | os.O_WRONLY, 0o644)
+            os.close(fd)
+        except OSError as e:
+            log.warning("could not pre-create lock file %s: %s", path, e)
+
+
 def run_server() -> None:
     """Start the Unix socket server."""
     # Remove stale socket
@@ -339,6 +370,9 @@ def run_server() -> None:
 
     # Ensure socket directory exists
     os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
+
+    # Pre-create the op lock files so the lock surface exists immediately.
+    precreate_locks()
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

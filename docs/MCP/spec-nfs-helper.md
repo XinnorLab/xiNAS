@@ -187,6 +187,23 @@ and the ADR-0005 profile files (`render_nfs_profile`) lock
 Each file has its own lock, preventing concurrent writes from multiple daemon
 threads.
 
+Each lock path is a **regular file** (the target of `open(path, "w")` +
+`fcntl.flock`), never a directory. The four locks are:
+
+| Lock file | Guards |
+|-----------|--------|
+| `/run/xinas-exports.lock` | `/etc/exports` (`add`/`remove`/`update`/`list_exports`) |
+| `/run/xinas-nfs-conf.lock` | `/etc/nfs.conf` (`fix_nfs_conf`) |
+| `/run/xinas-nfs-idmap.lock` | `/etc/idmapd.conf` (`set_idmapd_domain`) |
+| `/run/xinas-nfs-profile.lock` | ADR-0005 profile files (`render_nfs_profile`) |
+
+**Pre-created at startup.** The daemon touches all four lock files (empty,
+mode 0644) when it boots, before it accepts connections. This makes the lock
+surface deterministic and observable: every lock file exists as soon as the
+service is active, rather than appearing lazily only after its op has run for
+the first time. Locking semantics are unchanged — each op still acquires its
+own `flock` on its own file.
+
 ---
 
 ## Systemd Unit
@@ -195,6 +212,7 @@ threads.
 [Unit]
 Description=xiNAS NFS Helper Daemon
 After=network.target nfs-kernel-server.service
+Requires=nfs-kernel-server.service
 
 [Service]
 Type=simple
@@ -208,6 +226,17 @@ Environment=NFS_HELPER_SOCKET=/run/xinas-nfs-helper.sock
 [Install]
 WantedBy=multi-user.target
 ```
+
+The unit names the **canonical** `nfs-kernel-server.service` in both `After=`
+and `Requires=`; the helper manages `/etc/exports` and therefore must not start
+before the NFS server. On Ubuntu 22.04/24.04 `nfs-kernel-server.service` is an
+alias whose primary name is `nfs-server.service`, so systemd's *resolved* view
+(`systemctl show xinas-nfs-helper -p After,Requires`) reports
+`nfs-server.service`. Both names refer to the same unit — the alias resolves
+functionally. Tests that assert on the dependency should either parse the unit
+**file text** (which names `nfs-kernel-server.service`) or accept the
+alias-resolved `nfs-server.service` from a live `systemctl` query; they must not
+require `nfs-kernel-server.service` to appear in systemd's resolved output.
 
 ## Installation
 
