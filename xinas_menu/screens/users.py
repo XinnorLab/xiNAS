@@ -200,22 +200,63 @@ class UsersScreen(XiNASAppMixin, Screen):
             elif action == "Manage Groups":
                 await self._manage_groups(username)
             elif action == "Delete User":
-                confirmed = await self.app.push_screen_wait(
-                    ConfirmDialog(
-                        f"Delete user '{username}'? Home directory will be removed.", "Confirm"
-                    )
-                )
-                if confirmed:
-                    ok, _, err = await loop.run_in_executor(
-                        None, lambda: _run_cmd("userdel", "-r", username)
-                    )
-                    if ok:
-                        self.app.audit.log("user.delete", username, "OK")
-                        self._list_users()
-                    else:
-                        view = self.query_one("#users-content", ScrollableTextView)
-                        view.set_content(f"{_RED}Failed: {err}{_NC}")
+                await self._delete_user(username)
                 break
+
+    async def _delete_user(self, username: str) -> None:
+        loop = asyncio.get_running_loop()
+        view = self.query_one("#users-content", ScrollableTextView)
+
+        # Snapshot the user's XFS quotas up front so the confirmation can name
+        # them and so we can restore them if the delete fails.
+        saved = await loop.run_in_executor(None, lambda: _collect_user_quotas(username))
+        if saved:
+            n = len(saved)
+            quota_note = f"\n\n{n} disk quota entr{'y' if n == 1 else 'ies'} will be cleared first."
+        else:
+            quota_note = ""
+
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(
+                f"Delete user '{username}'? Home directory will be removed.{quota_note}",
+                "Confirm",
+            )
+        )
+        if not confirmed:
+            return
+
+        def set_quota_fn(mount: str, soft: int, hard: int) -> tuple[bool, str]:
+            ok, _res, err = self.app.nfs.set_quota(mount, soft, hard, username=username)
+            return ok, err
+
+        def userdel_fn() -> tuple[bool, str]:
+            ok, _out, err = _run_cmd("userdel", "-r", username)
+            return ok, err
+
+        ok, msg, quota_ops, restore_ok = await loop.run_in_executor(
+            None,
+            lambda: _delete_user_with_quota_cleanup(username, saved, set_quota_fn, userdel_fn),
+        )
+        if ok:
+            detail = (
+                f" ({quota_ops} quota entr{'y' if quota_ops == 1 else 'ies'} cleared)"
+                if quota_ops
+                else ""
+            )
+            self.app.audit.log("user.delete", username, f"OK{detail}")
+            self._list_users()
+        else:
+            if quota_ops and restore_ok:
+                note = "\n\nUser not deleted; quotas restored."
+            elif quota_ops:
+                note = (
+                    "\n\nUser not deleted. WARNING: quota restore was incomplete — "
+                    "check Show Quotas."
+                )
+            else:
+                note = ""
+            self.app.audit.log("user.delete", username, f"FAIL: {msg}")
+            view.set_content(f"{_RED}{msg}{note}{_NC}")
 
     async def _change_password(self, username: str) -> None:
         while True:
@@ -631,6 +672,98 @@ def _format_users(users: list[pwd.struct_passwd], locked: dict[str, bool] | None
 def _run_cmd(*args: str) -> tuple[bool, str, str]:
     r = subprocess.run(list(args), capture_output=True, text=True)
     return r.returncode == 0, r.stdout, r.stderr
+
+
+# ── quota cleanup on user delete ────────────────────────────────────────────────
+#
+# XFS user quotas are keyed by numeric UID, so a plain `userdel` orphans the
+# user's limits; a later `useradd` that reuses the UID inherits them. Deleting a
+# user therefore clears its quotas first (while the name still resolves), and
+# rolls the quotas back if any step fails. See docs/Management/user-management-spec.md.
+
+
+def _get_xfs_mounts() -> list[str]:
+    """Mountpoints of every mounted XFS filesystem."""
+    ok, out, _ = _run_cmd("findmnt", "-t", "xfs", "-n", "-o", "TARGET")
+    if not ok:
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def _parse_quota_kb(output: str) -> tuple[int, int]:
+    """(soft_kb, hard_kb) from `xfs_quota -x -c 'quota -u -N -b <user>' <mount>`.
+
+    The header-suppressed data line is ``<device> <used> <soft> <hard> …`` with
+    block values in kilobytes. Returns ``(0, 0)`` when no data line is present.
+    """
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[0].startswith("/"):
+            try:
+                return int(parts[2]), int(parts[3])
+            except ValueError:
+                continue
+    return 0, 0
+
+
+def _collect_user_quotas(username: str) -> list[tuple[str, int, int]]:
+    """(mount, soft_kb, hard_kb) for every XFS mount where *username* has a limit.
+
+    Mounts where both the soft and hard block limits are zero are omitted.
+    """
+    saved: list[tuple[str, int, int]] = []
+    for mount in _get_xfs_mounts():
+        ok, out, _ = _run_cmd("xfs_quota", "-x", "-c", f"quota -u -N -b {username}", mount)
+        if not ok:
+            continue
+        soft, hard = _parse_quota_kb(out)
+        if soft > 0 or hard > 0:
+            saved.append((mount, soft, hard))
+    return saved
+
+
+def _restore_quotas(cleared, set_quota_fn) -> bool:
+    """Re-apply captured (mount, soft_kb, hard_kb) limits. True if all succeeded."""
+    all_ok = True
+    for mount, soft, hard in cleared:
+        ok, _err = set_quota_fn(mount, soft, hard)
+        if not ok:
+            all_ok = False
+    return all_ok
+
+
+def _delete_user_with_quota_cleanup(
+    username, saved, set_quota_fn, userdel_fn
+) -> tuple[bool, str, int, bool]:
+    """Clear *saved* quotas to 0/0, then delete the user; roll back on failure.
+
+    *saved* is ``[(mount, soft_kb, hard_kb), …]``; *set_quota_fn(mount, soft, hard)*
+    and *userdel_fn()* each return ``(ok, err)``. Nothing is deleted unless every
+    quota clears; if clearing or the delete fails, already-cleared quotas are
+    restored to their captured values.
+
+    Returns ``(ok, message, quota_ops, restore_ok)`` where *quota_ops* is the
+    number of quotas cleared during the attempt (restored on failure) and
+    *restore_ok* reports whether any rollback re-applied cleanly.
+    """
+    cleared: list[tuple[str, int, int]] = []
+    for mount, soft, hard in saved:
+        ok, err = set_quota_fn(mount, 0, 0)
+        if not ok:
+            restore_ok = _restore_quotas(cleared, set_quota_fn)
+            return (
+                False,
+                f"Failed to clear quota on {mount}: {err}",
+                len(cleared),
+                restore_ok,
+            )
+        cleared.append((mount, soft, hard))
+
+    ok, err = userdel_fn()
+    if not ok:
+        restore_ok = _restore_quotas(cleared, set_quota_fn)
+        return False, f"Failed to delete user: {err}", len(cleared), restore_ok
+    return True, "", len(cleared), True
 
 
 def _create_user_sync(username: str, home: str, password: str) -> tuple[bool, str]:

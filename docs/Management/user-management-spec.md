@@ -72,8 +72,47 @@ filesystem carries a quota mount option (`uquota`/`usrquota`/`pquota`/
 Lock/unlock uses `usermod -L` / `usermod -U`; the menu label reflects the
 current `passwd -S` state. Other actions: change password (`chpasswd`),
 change shell (`chsh`), manage groups (`usermod -aG` / `gpasswd -d`),
-delete (`userdel -r`, home removed). Every mutating action is audited via
+delete (see below). Every mutating action is audited via
 `self.app.audit.log(...)`.
+
+### Delete User — quota cleanup first
+
+XFS user quotas are keyed by **numeric UID**, not by name. A plain
+`userdel` therefore leaves the user's quota limits behind in the XFS
+quota database; when a later `useradd` reuses the freed UID, the new
+account silently inherits the stale limits (observed as an unresolved
+`#<uid>` row in Show Quotas carrying the old soft/hard limits). Deleting
+a user must clear its quotas **before** removing the account, while the
+name still resolves to the UID.
+
+The delete flow is:
+
+1. **Collect** the user's block quotas across every mounted XFS
+   filesystem (`findmnt -t xfs -n -o TARGET`, then
+   `xfs_quota -x -c 'quota -u -N -b <user>' <mount>` per mount). A mount
+   is in scope only when the user's soft **or** hard block limit is
+   nonzero. Limits are read and re-applied in **kilobytes** — the native
+   unit of both `xfs_quota report`/`quota` and the `limit -u bsoft=Nk`
+   set path — so the capture/restore round-trip is exact.
+2. **Confirm.** The confirmation dialog names how many quota entries will
+   be cleared first (when any), so the removal is not a surprise.
+3. **Clear** each in-scope mount to `0/0` via the NFS helper
+   (`set_quota(mount, 0, 0, username=…)`), remembering the prior
+   `(mount, soft_kb, hard_kb)` for each cleared entry.
+4. **Delete** the account with `userdel -r` (home removed).
+5. **Roll back on any failure.** If clearing a mount fails, or if
+   `userdel` fails after quotas were cleared, every already-cleared quota
+   is restored to its captured `(soft_kb, hard_kb)` and the account is
+   **not** left half-deleted. The result view reports the failing step
+   and whether the quotas were restored cleanly; a restore that itself
+   fails is surfaced as a warning to check Show Quotas. Nothing is
+   deleted unless every quota was cleared successfully.
+
+A user with no quotas skips steps 1's scope entirely and deletes as
+before. The core sequencing + rollback (`_delete_user_with_quota_cleanup`)
+is a pure, injectable function so it is unit-testable without a live
+filesystem; the quota-line parser (`_parse_quota_kb`) and collector
+(`_collect_user_quotas`) are likewise separable.
 
 ## Notes
 
