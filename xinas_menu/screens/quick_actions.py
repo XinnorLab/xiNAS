@@ -39,7 +39,8 @@ _SERVICES = [
     "xiraid-server",
     "xiraid-exporter",
     "xinas-nfs-helper",
-    "xinas-mcp",
+    "xinas-api",
+    "xinas-agent",
     "nfsdcld",
     "rpcbind",
 ]
