@@ -302,6 +302,7 @@ ChecklistDialog #dialog-container {
 }
 
 #dialog-container Button.-default,
+#dialog-buttons #btn-back,
 #dialog-buttons #btn-cancel,
 #dialog-buttons #btn-no {
     background: #2a2a2a;
@@ -313,6 +314,8 @@ ChecklistDialog #dialog-container {
 
 #dialog-container Button.-default:hover,
 #dialog-container Button.-default:focus,
+#dialog-buttons #btn-back:hover,
+#dialog-buttons #btn-back:focus,
 #dialog-buttons #btn-cancel:hover,
 #dialog-buttons #btn-no:hover,
 #dialog-buttons #btn-cancel:focus,
