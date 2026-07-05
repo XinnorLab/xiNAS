@@ -281,7 +281,16 @@ CPU / memory:
 - CPU governor → `performance` (skipped on the xinnorVM preset).
 - THP disabled at runtime (`/sys/kernel/mm/transparent_hugepage/{enabled,defrag} = never`).
 - KSM disabled (`/sys/kernel/mm/ksm/run = 0`).
-- VM sysctls in `/etc/sysctl.d/90-perf-vm.conf`: `vm.lru_gen.enabled=1`, `vm.lru_gen.min_ttl_ms=10000`, `vm.watermark_scale_factor=200`, `vm.dirty_background_ratio=5`, `vm.dirty_ratio=15`, `vm.swappiness=1`, `vm.zone_reclaim_mode=0`, `vm.vfs_cache_pressure=200`.
+- VM sysctls in `/etc/sysctl.d/90-perf-vm.conf`. Six keys are always
+  written: `vm.watermark_scale_factor=200`, `vm.dirty_background_ratio=5`,
+  `vm.dirty_ratio=15`, `vm.swappiness=1`, `vm.zone_reclaim_mode=0`,
+  `vm.vfs_cache_pressure=200`. The two MGLRU keys
+  `vm.lru_gen.enabled=1` and `vm.lru_gen.min_ttl_ms=10000` are written
+  **only when the running kernel exposes `/proc/sys/vm/lru_gen`** (kernel
+  6.1+ built with `CONFIG_LRU_GEN`); on kernels without it they are
+  omitted (and any stale entry is purged) so the boot-time
+  `sysctl -p /etc/sysctl.d/90-perf-vm.conf` below does not exit 1. So the
+  file has 8 keys on MGLRU-capable kernels and 6 otherwise.
 - **Boot-persistent re-apply** — a `xinas-perf-runtime.service` oneshot
   (`RemainAfterExit`, `WantedBy=multi-user.target`, after `systemd-sysctl`) runs
   `sysctl --system` then `sysctl -p /etc/sysctl.d/90-perf-vm.conf`, and (when
