@@ -293,7 +293,7 @@ class MCPScreen(XiNASAppMixin, Screen):
     @work(exclusive=True)
     async def _restart(self) -> None:
         confirmed = await self.app.push_screen_wait(
-            ConfirmDialog("Restart xinas-mcp and xinas-nfs-helper?", "Confirm")
+            ConfirmDialog("Restart xinas-nfs-helper?", "Confirm")
         )
         if not confirmed:
             return
@@ -302,10 +302,12 @@ class MCPScreen(XiNASAppMixin, Screen):
         loop = asyncio.get_running_loop()
         ctl = ServiceController()
         results = []
-        for svc in ("xinas-mcp", "xinas-nfs-helper"):
+        # xinas-mcp.service is retired — MCP runs on-demand over Streamable
+        # HTTP via xinas-api's /mcp, so only the NFS helper needs restarting.
+        for svc in ("xinas-nfs-helper",):
             ok, err = await loop.run_in_executor(None, lambda s=svc: ctl.restart(s))
             results.append(f"  {svc}: {'OK' if ok else err[:60]}")
-        self.app.audit.log("mcp.restart", "both services", "OK")
+        self.app.audit.log("mcp.restart", "xinas-nfs-helper", "OK")
         view = self.query_one("#mcp-content", ScrollableTextView)
         view.set_content(f"{_GRN}Services restarted:{_NC}\n\n" + "\n".join(results))
         self._show_status()
