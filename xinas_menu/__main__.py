@@ -65,7 +65,7 @@ def _print_status() -> None:
     print(f"OS:        {platform.system()} {platform.release()}")
 
     ctl = ServiceController()
-    for svc in ("xiraid-server", "nfs-server", "xinas-nfs-helper", "xinas-mcp"):
+    for svc in ("xiraid-server", "nfs-server", "xinas-nfs-helper", "xinas-api", "xinas-agent"):
         st = ctl.state(svc)
         sym = "●" if st.is_active else "○"
         print(f"  {sym} {svc:<30} {st.active}")
