@@ -8,6 +8,7 @@ import { seedInfrastructure } from './bootstrap.js';
 import { type ApiConfig, loadConfig } from './config.js';
 import type { ApiContext } from './context.js';
 import { HeartbeatTracker, createAgentHealthProbe } from './heartbeat.js';
+import { startLeaseSweeper } from './lease-sweeper.js';
 import { loadObservedSchemas } from './observed-schemas.js';
 import { seedShares } from './seed-shares.js';
 import { buildTaskEngines } from './tasks/build.js';
@@ -100,6 +101,15 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   void tasks.taskEngine.reconcile({ agentClient: tasks.agentClient }).catch(() => {
     /* best-effort */
   });
+
+  // ADR-0004 "periodic sweep" (s2-task-envelope-spec §9): the startup +
+  // agent-reconnect reconcile passes are NOT enough to honor the 60 s lease
+  // TTL — a lease that outlives its task (the §6 crash window, or a `running`
+  // task whose agent died) would otherwise stay held until the next
+  // restart/reconnect, blocking the next mutation of that resource with a
+  // spurious `CONFLICT: resource is locked by another task`. This timer runs
+  // `sweepExpired()` every ~TTL/2 so a leaked lease is reclaimed within ~TTL.
+  const leaseSweeper = startLeaseSweeper({ leases: state.leases });
 
   // Conditional spread for the optionals — exactOptionalPropertyTypes refuses
   // an explicit `tracker: undefined` / `observedSchemas: undefined`.
@@ -212,6 +222,8 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
     async close() {
       // Clear the heartbeat tick timer first so no probe fires mid-shutdown.
       tracker?.stop();
+      // Stop the periodic lease sweep so no timer fires against a closing db.
+      leaseSweeper.stop();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });

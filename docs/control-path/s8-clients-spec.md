@@ -107,8 +107,21 @@ legacy `xinas-mcp.service` is retired. MCP apply is blocked by default
 
 - **T10:** `xinas_menu/api/control_client.py` (stdlib HTTP-over-UDS,
   envelope parsing, `plan_apply_wait()`); pytest against a stub server.
+  `ApiError` also carries the first error's `details` dict and exposes
+  `reason` / `holder_task_id`, so screens can distinguish a transient
+  lock from a hard failure.
 - **T11:** shares/NFS screens retarget (`nfs.py`, `configure/
   nfs_config.py`).
+
+**Lock-conflict UX.** A mutating apply can return `CONFLICT` with
+`details.reason == "lease_held"` when another task holds the resource's
+lease (the periodic lease sweep, S2 §9, bounds how long this can persist
+after a leak; a live in-flight op on the same resource is the normal
+case). Share/NFS screens map that specific error to a friendly,
+non-alarming dialog — "temporarily locked by another operation
+(task `<holder_task_id>`); wait a few seconds and try again" — instead of
+the raw `Failed: CONFLICT: resource is locked by another task`. All other
+`ControlPathError`s keep the existing `Failed: <exc>` rendering.
 - **T12:** network screens retarget — `netplan apply|try` subprocess
   calls REMOVED in favor of the API (`network.py`,
   `configure/network_config.py`). *(Follow-up, post-S11: `screens/

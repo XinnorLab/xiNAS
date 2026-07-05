@@ -136,6 +136,28 @@ that held them is moved to `requires_manual_recovery` if it was still
 running, since the API process restart means in-flight tasks have lost
 their executor handle on the agent (per ADR-0002 startup reconciliation).
 
+The **periodic sweep** is a real timer in the api process
+(`LEASE_SWEEP_INTERVAL_MS`, default 30 s = TTL/2), not merely the
+startup + agent-reconnect `reconcile()` passes. It calls
+`LeaseManager.reapExpiredTerminalLeases()` — which removes expired leases
+whose holder is **already terminal** (or gone) and does NOT re-dispatch.
+Without this timer such an orphaned lease is reclaimed only at the next
+api restart or agent-reconnect edge, so a resource can stay locked far
+past its TTL and the next mutation of it fails with `CONFLICT`
+(`lease_held`). The terminal-event handler also runs its state transition
+**and** lease release inside one `db.transaction`, so a crash between
+them cannot leak a lease on an already-terminal task in the first place;
+the periodic reap is the backstop for a release that still didn't run.
+
+Crucially the periodic timer does **not** move a still-`running`/`queued`
+task to `requires_manual_recovery` on lease expiry — that behavior stays
+with `sweepExpired()` on the startup + reconnect passes. The "moved to
+`requires_manual_recovery` if it was still running" rule above is
+justified by the *API process restart* losing the executor handle; a mere
+periodic tick is not a restart, and a long executor stage can outlive the
+TTL without emitting a heartbeat, so reaping a running task on a timer
+would false-fail healthy in-flight work.
+
 ### Plan/apply binding
 
 - **`plan`** call: produces a row with `state=plan_only`, populates

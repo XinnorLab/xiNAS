@@ -20,6 +20,7 @@ from xinas_menu.api.control_client import (
     PlanBlocked,
     TaskFailed,
     TransportError,
+    lease_conflict_message,
 )
 
 # Route table the stub serves: (method, path) -> (status, envelope) or a
@@ -117,6 +118,56 @@ def test_api_error_maps_code_and_message(stub_socket):
         client(stub_socket).get("/api/v1/arrays/x")
     assert err.value.code == "NOT_FOUND"
     assert err.value.status == 404
+
+
+def test_api_error_captures_details_and_holder(stub_socket):
+    # A lease-conflict apply returns 409 CONFLICT with details naming the
+    # holding task — the client must surface those, not drop them.
+    ROUTES[("DELETE", "/api/v1/shares/s1")] = (
+        409,
+        {
+            "errors": [
+                {
+                    "code": "CONFLICT",
+                    "message": "resource is locked by another task",
+                    "details": {"reason": "lease_held", "holder_task_id": "task-0042"},
+                }
+            ]
+        },
+    )
+    with pytest.raises(ApiError) as err:
+        client(stub_socket).request("DELETE", "/api/v1/shares/s1", {})
+    assert err.value.code == "CONFLICT"
+    assert err.value.reason == "lease_held"
+    assert err.value.holder_task_id == "task-0042"
+    assert err.value.details["reason"] == "lease_held"
+
+
+def test_lease_conflict_message_friendly_for_lease_held():
+    exc = ApiError(
+        409,
+        "CONFLICT",
+        "resource is locked by another task",
+        details={"reason": "lease_held", "holder_task_id": "task-0042"},
+    )
+    msg = lease_conflict_message(exc)
+    assert msg is not None
+    assert "task-0042" in msg
+    # Friendly, not the raw code, and hints at the retry.
+    assert "CONFLICT" not in msg
+    assert "try again" in msg.lower() or "retry" in msg.lower()
+
+
+def test_lease_conflict_message_none_for_other_errors():
+    # Not a lease conflict → no special message (caller falls back to Failed: …).
+    assert lease_conflict_message(ApiError(404, "NOT_FOUND", "no such share")) is None
+    assert lease_conflict_message(TransportError("socket gone")) is None
+    assert (
+        lease_conflict_message(
+            ApiError(409, "CONFLICT", "fsid in use", details={"reason": "fsid_in_use"})
+        )
+        is None
+    )
 
 
 def test_transport_error_when_socket_absent(tmp_path):

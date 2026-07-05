@@ -35,13 +35,36 @@ class TransportError(ControlPathError):
 
 
 class ApiError(ControlPathError):
-    """A non-2xx envelope. Carries the first error's code/message."""
+    """A non-2xx envelope. Carries the first error's code/message/details.
 
-    def __init__(self, status: int, code: str, message: str) -> None:
+    ``details`` is the structured payload the api attaches to some errors
+    (e.g. a ``CONFLICT`` from a held lease carries ``{reason, holder_task_id}``).
+    ``reason`` / ``holder_task_id`` are convenience views so screens can tell a
+    transient lock apart from a hard failure without re-parsing.
+    """
+
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(f"{code}: {message}")
         self.status = status
         self.code = code
         self.message = message
+        self.details: dict[str, Any] = details or {}
+
+    @property
+    def reason(self) -> str | None:
+        reason = self.details.get("reason")
+        return reason if isinstance(reason, str) else None
+
+    @property
+    def holder_task_id(self) -> str | None:
+        holder = self.details.get("holder_task_id")
+        return holder if isinstance(holder, str) else None
 
 
 class PlanBlocked(ControlPathError):
@@ -68,6 +91,30 @@ class TaskCancelled(TaskFailed):
     rolled back. Subclass of TaskFailed so existing handlers keep working;
     screens catch it FIRST to message "operation cancelled" instead of a
     failure."""
+
+
+def lease_conflict_message(exc: ControlPathError) -> str | None:
+    """Friendly text for a *transient lock* conflict, else ``None``.
+
+    A mutating apply returns ``CONFLICT`` with ``details.reason ==
+    "lease_held"`` when another task holds the resource's lease — the normal
+    case being a concurrent operation on the same resource, or a briefly-leaked
+    lease the periodic sweep will reclaim (s2-task-envelope-spec §9). Screens
+    render this as a calm "busy, retry" message rather than the raw
+    ``Failed: CONFLICT: resource is locked by another task``. Any other error
+    (including other ``CONFLICT`` reasons like ``fsid_in_use``) returns ``None``
+    so the caller keeps its default rendering.
+    """
+    if not isinstance(exc, ApiError):
+        return None
+    if exc.code != "CONFLICT" or exc.reason != "lease_held":
+        return None
+    holder = exc.holder_task_id
+    who = f" (task {holder})" if holder else ""
+    return (
+        f"This resource is temporarily locked by another operation{who}.\n"
+        "Wait a few seconds and try again."
+    )
 
 
 class _UDSConnection(http.client.HTTPConnection):
@@ -127,10 +174,12 @@ class ControlClient:
         if status >= 400:
             errors = envelope.get("errors") or [{}]
             first = errors[0] if isinstance(errors, list) and errors else {}
+            details = first.get("details")
             raise ApiError(
                 status,
                 str(first.get("code", f"HTTP_{status}")),
                 str(first.get("message", "request failed")),
+                details if isinstance(details, dict) else None,
             )
         return envelope
 

@@ -157,4 +157,57 @@ describe('LeaseManager', () => {
     };
     expect(task.state).toBe('success');
   });
+
+  it('reapExpiredTerminalLeases reclaims an expired lease of a terminal task', () => {
+    db.prepare("UPDATE tasks SET state = 'success', terminal_at = ? WHERE task_id = 't1'").run(
+      Date.now(),
+    );
+    const r = leases.acquire({
+      resource_kind: 'Share',
+      resource_id: 's1',
+      task_id: 't1',
+      ttl_seconds: 1,
+    });
+    if (!r.ok) throw new Error('seed failed');
+    db.prepare('UPDATE leases SET heartbeat_at = ? WHERE lease_id = ?').run(
+      Date.now() - 5000,
+      r.lease_id,
+    );
+
+    expect(leases.reapExpiredTerminalLeases()).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM leases').get()).toEqual({ n: 0 });
+  });
+
+  it("reapExpiredTerminalLeases NEVER reaps a running task's expired lease", () => {
+    // t1 stays 'running' (openLeases default). Its lease is expired, but a
+    // frequent timer must not reap a possibly-still-executing task.
+    const r = leases.acquire({
+      resource_kind: 'Share',
+      resource_id: 's1',
+      task_id: 't1',
+      ttl_seconds: 1,
+    });
+    if (!r.ok) throw new Error('seed failed');
+    db.prepare('UPDATE leases SET heartbeat_at = ? WHERE lease_id = ?').run(
+      Date.now() - 5000,
+      r.lease_id,
+    );
+
+    expect(leases.reapExpiredTerminalLeases()).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM leases').get()).toEqual({ n: 1 });
+    // And the task is untouched — NOT flipped to requires_manual_recovery.
+    expect(
+      (db.prepare("SELECT state FROM tasks WHERE task_id = 't1'").get() as { state: string }).state,
+    ).toBe('running');
+  });
+
+  it('reapExpiredTerminalLeases leaves an unexpired terminal lease alone', () => {
+    db.prepare("UPDATE tasks SET state = 'success', terminal_at = ? WHERE task_id = 't1'").run(
+      Date.now(),
+    );
+    // Fresh heartbeat, long ttl → not expired.
+    leases.acquire({ resource_kind: 'Share', resource_id: 's1', task_id: 't1', ttl_seconds: 60 });
+    expect(leases.reapExpiredTerminalLeases()).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM leases').get()).toEqual({ n: 1 });
+  });
 });

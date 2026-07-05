@@ -16,7 +16,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
-from xinas_menu.api.control_client import ControlPathError
+from xinas_menu.api.control_client import ControlPathError, lease_conflict_message
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -527,7 +527,7 @@ class NFSScreen(XiNASAppMixin, Screen):
                 on_progress=self._task_progress("Add Share"),
             )
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error", ok_only=True))
+            await self._show_control_error(exc)
             return
         self.app.audit.log("nfs.add_export", path, "OK")
         await self.app.snapshots.record("share_create", diff_summary=f"Added NFS share {path}")
@@ -629,7 +629,7 @@ class NFSScreen(XiNASAppMixin, Screen):
                 on_progress=self._task_progress("Edit Share"),
             )
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error", ok_only=True))
+            await self._show_control_error(exc)
             return
         self.app.audit.log("nfs.update_export", answers["path"], "OK")
         await self.app.snapshots.record(
@@ -638,6 +638,17 @@ class NFSScreen(XiNASAppMixin, Screen):
         self._load_exports()
 
     @work(exclusive=True)
+    async def _show_control_error(self, exc: ControlPathError) -> None:
+        """Render a control-path failure. A transient lease conflict gets a
+        calm "busy, retry" dialog (the resource is locked by another task and
+        the lock is short-lived — the periodic sweep bounds it); everything
+        else keeps the plain ``Failed: …`` message."""
+        locked = lease_conflict_message(exc)
+        if locked is not None:
+            await self.app.push_screen_wait(ConfirmDialog(locked, "Resource Busy", ok_only=True))
+        else:
+            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error", ok_only=True))
+
     async def _remove_share(self) -> None:
         exports = await self._get_exports()
         if not exports:
@@ -674,7 +685,7 @@ class NFSScreen(XiNASAppMixin, Screen):
                 on_progress=self._task_progress("Remove Share"),
             )
         except ControlPathError as exc:
-            await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error", ok_only=True))
+            await self._show_control_error(exc)
             return
         self.app.audit.log("nfs.remove_export", path, "OK")
         await self.app.snapshots.record(

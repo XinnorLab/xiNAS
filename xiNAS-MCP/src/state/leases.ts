@@ -28,6 +28,7 @@ export class LeaseManager {
   private readonly findExpiredHoldersStmt: Statement;
   private readonly recoverTaskStmt: Statement;
   private readonly deleteExpiredStmt: Statement;
+  private readonly reapTerminalStmt: Statement;
 
   constructor(db: Database) {
     this.db = db;
@@ -70,6 +71,18 @@ export class LeaseManager {
     // crash window into a permanent leak.
     this.deleteExpiredStmt = db.prepare(
       'DELETE FROM leases WHERE heartbeat_at + (ttl_seconds * 1000) < ?',
+    );
+    // Reap ONLY the expired leases whose holder is already terminal (or whose
+    // task row is gone). This is the periodic-timer variant: unlike the full
+    // sweep it never flips a queued/running task to requires_manual_recovery,
+    // so a slow in-flight stage that simply hasn't emitted a heartbeat within
+    // the TTL is NOT false-reaped. Running-task recovery stays with the
+    // startup/reconnect reconcile (where a restart genuinely means the
+    // executor handle was lost — ADR-0004).
+    this.reapTerminalStmt = db.prepare(
+      `DELETE FROM leases
+        WHERE heartbeat_at + (ttl_seconds * 1000) < ?
+          AND task_id NOT IN (SELECT task_id FROM tasks WHERE state IN ('queued', 'running'))`,
     );
   }
 
@@ -120,6 +133,25 @@ export class LeaseManager {
 
   release(lease_id: string): void {
     this.releaseStmt.run(lease_id);
+  }
+
+  /**
+   * Reclaim expired leases whose holder is already TERMINAL (success / failed /
+   * cancelled / requires_manual_recovery) or whose task row is gone — the
+   * orphan case a leaked lease produces (e.g. the §6 terminal-handler crash
+   * window, closed separately, or any release that didn't run). Returns the
+   * number of leases removed.
+   *
+   * This is the safe periodic-timer sweep: it NEVER touches a `queued` /
+   * `running` task's lease, so it cannot false-reap an in-flight stage that
+   * legitimately runs longer than the lease TTL without emitting a
+   * heartbeat-bearing progress event. Recovering a non-terminal task whose
+   * lease expired (→ `requires_manual_recovery`) remains the job of
+   * `sweepExpired()` via the startup/reconnect `reconcile()` passes, where an
+   * api restart genuinely means the executor handle was lost (ADR-0004).
+   */
+  reapExpiredTerminalLeases(): number {
+    return this.reapTerminalStmt.run(Date.now()).changes;
   }
 
   /**
