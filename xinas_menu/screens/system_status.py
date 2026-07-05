@@ -247,7 +247,7 @@ def _build_fallback_status() -> str:
         from xinas_menu.utils.service_ctl import ServiceController
 
         ctl = ServiceController()
-        for svc in ("xiraid-server", "nfs-server", "xinas-nfs-helper", "xinas-mcp"):
+        for svc in ("xiraid-server", "nfs-server", "xinas-nfs-helper", "xinas-api", "xinas-agent"):
             st = ctl.state(svc)
             if st.is_active:
                 lines.append(f"  {GRN}●{NC} {svc:<28} {GRN}{st.active}{NC}")
