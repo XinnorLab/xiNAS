@@ -83,6 +83,7 @@ spec dump — every doc belongs to an area.
 |-----------|----------------|
 | `docs/Installer/` | Install-time / Ansible-driven behavior: `spec.md` (preset + playbook + role map), `network-spec.md`, `raid-spec.md`, `fs-exports-spec.md`, `uninstall-spec.md` (uninstaller contract), `update-spec.md` (GitHub-Releases-only install + update contract) |
 | `docs/Storage/` | Day-2 storage management surface (TUI screens, helpers, gRPC): `raid-management-spec.md`, `fs-shares-management-spec.md` |
+| `docs/Management/` | Day-2 System→Management submenu screens: `user-management-spec.md` (User Management TUI — accounts, lock status, groups, quota) |
 | `docs/MCP/` | MCP server spec set: `REQUIREMENTS.md`, `spec-core.md`, `spec-tools.md`, `spec-middleware.md`, `spec-config-history.md`, `spec-mail.md`, `spec-nfs-helper.md`, `spec-os.md`, `spec-server.md`, `modules.md` |
 | `docs/Network/` | Cross-cutting network management (netplan ownership, PBR, day-2 IP edits): `spec-network-management.md` |
 | `docs/Notifications/` | Email / alerting pipelines (xiNAS SMTP + xiRAID sendmail): `spec-email-notifications.md` |

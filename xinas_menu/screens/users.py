@@ -87,8 +87,9 @@ class UsersScreen(XiNASAppMixin, Screen):
     async def _list_users(self) -> None:
         loop = asyncio.get_running_loop()
         users = await loop.run_in_executor(None, _get_local_users)
+        locked = await loop.run_in_executor(None, lambda: _get_lock_map(users))
         view = self.query_one("#users-content", ScrollableTextView)
-        view.set_content(_format_users(users))
+        view.set_content(_format_users(users, locked))
 
     @work(exclusive=True)
     async def _create_user(self) -> None:
@@ -542,7 +543,20 @@ def _get_local_users() -> list[pwd.struct_passwd]:
     return [p for p in pwd.getpwall() if p.pw_uid >= _UID_MIN]
 
 
-def _format_users(users: list[pwd.struct_passwd]) -> str:
+def _get_lock_map(users: list[pwd.struct_passwd]) -> dict[str, bool]:
+    """Return {username: locked} using the same source as the Manage flow."""
+    return {u.pw_name: _get_lock_status(u.pw_name) for u in users}
+
+
+def _format_lock_status(is_locked: bool, width: int = 8) -> str:
+    """Padded, ANSI-colored account-status cell for the user list."""
+    label = "Locked" if is_locked else "Active"
+    color = _RED if is_locked else _GRN
+    return f"{color}{label:<{width}}{_NC}"
+
+
+def _format_users(users: list[pwd.struct_passwd], locked: dict[str, bool] | None = None) -> str:
+    locked = locked or {}
     GRN, YLW, _RED, CYN, BLD, DIM, NC = (
         "\033[32m",
         "\033[33m",
@@ -567,7 +581,8 @@ def _format_users(users: list[pwd.struct_passwd]) -> str:
         lines.append("")
         lines.append(f"{DIM}{'-' * W}{NC}")
         lines.append(
-            f"  {DIM}{'Username':<16} {'UID':<8} {'Group':<16} {'Groups':<36} Home Directory{NC}"
+            f"  {DIM}{'Username':<16} {'UID':<8} {'Group':<16} {'Groups':<36} "
+            f"{'Status':<8} Home Directory{NC}"
         )
         lines.append(f"{DIM}{'-' * W}{NC}")
         for u in sorted(users, key=lambda x: x.pw_name):
@@ -577,8 +592,10 @@ def _format_users(users: list[pwd.struct_passwd]) -> str:
                 group = str(u.pw_gid)
             groups = [g for g in _get_user_groups(u.pw_name) if g != group]
             groups_str = _format_group_list(groups, max_width=35)
+            status = _format_lock_status(locked.get(u.pw_name, False))
             lines.append(
-                f"  {GRN}{u.pw_name:<16}{NC} {u.pw_uid:<8} {group:<16} {groups_str:<36} {u.pw_dir}"
+                f"  {GRN}{u.pw_name:<16}{NC} {u.pw_uid:<8} {group:<16} "
+                f"{groups_str:<36} {status} {u.pw_dir}"
             )
         lines.append(f"{DIM}{'-' * W}{NC}")
 
