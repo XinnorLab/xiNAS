@@ -167,13 +167,40 @@ class QuickActionsScreen(XiNASAppMixin, Screen):
 
     @work(exclusive=True)
     async def _view_audit_log(self) -> None:
+        """Unified audit view: local audit.log merged with the control-path
+        ``GET /audit`` trail (share/RAID/network/MCP activity). See
+        docs/Management/audit-log-spec.md."""
+        from xinas_menu.api.control_client import ControlPathError
         from xinas_menu.utils.audit import AUDIT_LOG
+        from xinas_menu.utils.audit_view import merge_audit
 
         view = self.query_one("#qa-content", ScrollableTextView)
+        view.set_content("  Loading audit log...")
+        loop = asyncio.get_running_loop()
+
+        # Local trail (TUI-direct actions: users, service restart, updates).
+        def _read_local() -> list[str] | None:
+            try:
+                return AUDIT_LOG.read_text().splitlines()
+            except FileNotFoundError:
+                return None
+
+        local_lines = await loop.run_in_executor(None, _read_local)
+
+        # Control-path trail (share.create, RAID, network — any client).
+        control_rows: list[dict] = []
+        control_note = ""
         try:
-            lines = AUDIT_LOG.read_text().splitlines()[-200:]
-            view.set_content("\n".join(lines) or "  Audit log is empty.")
-        except FileNotFoundError:
-            view.set_content("  Audit log not found.")
-        except Exception as exc:
-            view.set_content(f"  Error: {exc}")
+            result = await asyncio.to_thread(self.app.control.result, "/api/v1/audit?limit=200")
+            if isinstance(result, list):
+                control_rows = [r for r in result if isinstance(r, dict)]
+        except ControlPathError as exc:
+            control_note = f"  (control-path audit unavailable: {exc})"
+        except Exception as exc:  # defensive: never break the view
+            control_note = f"  (control-path audit error: {exc})"
+
+        merged = merge_audit(local_lines or [], control_rows, limit=200)
+        body = "\n".join(merged) if merged else "  Audit log is empty."
+        if control_note:
+            body = f"{body}\n\n{control_note}"
+        view.set_content(body)
