@@ -276,7 +276,7 @@ if [[ ! -x /usr/local/bin/xinas-menu ]]; then
         run_quiet "Creating Python virtualenv" python3 -m venv "$INSTALL_DIR/venv"
     fi
     run_quiet "Installing Textual TUI dependencies" \
-        "$INSTALL_DIR/venv/bin/pip" install -q "textual>=0.70.0" "pyyaml>=6.0" || true
+        "$INSTALL_DIR/venv/bin/pip" install -q "textual>=8.2.8,<8.3" "pyyaml>=6.0" || true
 
     cat > /usr/local/bin/xinas-menu <<WEOF
 #!/bin/sh

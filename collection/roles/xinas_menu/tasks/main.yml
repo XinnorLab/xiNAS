@@ -19,7 +19,9 @@
 - name: Install pip packages into venv
   ansible.builtin.pip:
     name:
-      - "textual>=0.71.0"
+      # Pinned to a tested minor: textual 8.3+ has repeatedly drifted its
+      # Worker/await surface. Keep in sync with pyproject.toml + install.sh.
+      - "textual>=8.2.8,<8.3"
       - "grpcio>=1.60.0"
       - "grpcio-tools>=1.60.0"
       - "protobuf>=4.25.0"
