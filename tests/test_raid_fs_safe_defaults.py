@@ -51,3 +51,19 @@ def test_update_flow_never_injects_storage_reset():
     for tags in [("all",), ("raid_fs",), ("nvme_namespace", "raid_fs")]:
         cmd = build_rebuild_cmd(tags)
         assert not any("xinas_storage_reset" in part for part in cmd), cmd
+
+
+DETECT = REPO / "collection/roles/nvme_namespace/tasks/detect_storage_state.yml"
+
+
+def test_detection_sets_state_fact():
+    text = DETECT.read_text()
+    assert "xinas_storage_state" in text
+    for state in ("MATCH", "EMPTY", "FOREIGN"):
+        assert state in text, f"detection never yields {state}"
+    # Detection must be read-only: no destructive verbs.
+    for verb in ("delete-ns", "mkfs", "drive clean", "wipefs", "zero-superblock"):
+        assert verb not in text, f"detection must not run {verb!r}"
+    # It must parse into a native list, not a stringified one.
+    tasks = yaml.safe_load(text)
+    assert isinstance(tasks, list) and tasks, "detection file must be a task list"

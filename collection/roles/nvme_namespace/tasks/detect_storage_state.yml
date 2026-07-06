@@ -1,0 +1,65 @@
+---
+# Read-only storage-identity detection. Sets xinas_storage_state to one of:
+#   MATCH   - xiRAID data+log arrays online AND /dev/xi_data is XFS with the wanted label
+#   EMPTY   - no xiRAID arrays and no XFS/foreign signature on /dev/xi_data
+#   FOREIGN - some xiRAID/fs signature exists but does not match the expected layout
+#
+# Idempotent and side-effect-free: safe to run before any decision, at either role.
+# raid_fs reuses this via include_role (guarded on xinas_storage_state undefined).
+
+- name: Determine the wanted XFS label
+  ansible.builtin.set_fact:
+    xfs_label_wanted: "{{ (xfs_filesystems | default([{}]) | first).label | default('nfsdata') }}"
+
+- name: Probe existing xiRAID arrays (read-only)
+  ansible.builtin.command: xicli raid show -f json
+  register: _ssd_raid_show
+  changed_when: false
+  failed_when: false
+
+- name: Parse xiRAID array output (native dict/list, empty dict on failure)
+  ansible.builtin.set_fact:
+    _ssd_parsed: >-
+      {{ (_ssd_raid_show.stdout | from_json)
+         if ((_ssd_raid_show.rc | default(1)) == 0 and (_ssd_raid_show.stdout | default('') | trim | length > 0))
+         else {} }}
+
+- name: Normalize xiRAID array names to a real list
+  ansible.builtin.set_fact:
+    _ssd_array_names: >-
+      {{ (_ssd_parsed.keys() | list) if (_ssd_parsed is mapping)
+         else ((_ssd_parsed | map(attribute='name') | list)
+               if (_ssd_parsed is iterable and _ssd_parsed is not string) else []) }}
+
+- name: Probe filesystem type on /dev/xi_data (read-only)
+  ansible.builtin.command: blkid -s TYPE -o value /dev/xi_data
+  register: _ssd_fstype
+  changed_when: false
+  failed_when: false
+
+- name: Probe filesystem label on /dev/xi_data (read-only)
+  ansible.builtin.command: blkid -s LABEL -o value /dev/xi_data
+  register: _ssd_fslabel
+  changed_when: false
+  failed_when: false
+
+- name: Classify storage state
+  ansible.builtin.set_fact:
+    xinas_storage_state: >-
+      {{
+        'MATCH'
+        if (('data' in _ssd_array_names) and ('log' in _ssd_array_names)
+            and ((_ssd_fstype.stdout | default('') | trim) == 'xfs')
+            and ((_ssd_fslabel.stdout | default('') | trim) == xfs_label_wanted))
+        else ('EMPTY'
+              if ((_ssd_array_names | length) == 0
+                  and ((_ssd_fstype.stdout | default('') | trim) | length) == 0)
+              else 'FOREIGN')
+      }}
+
+- name: Report storage state
+  ansible.builtin.debug:
+    msg: >-
+      Storage state = {{ xinas_storage_state }}
+      (arrays={{ _ssd_array_names }}, fstype='{{ _ssd_fstype.stdout | default('') | trim }}',
+      label='{{ _ssd_fslabel.stdout | default('') | trim }}', wanted='{{ xfs_label_wanted }}')
