@@ -28,6 +28,45 @@ const TOKEN = process.env.XINAS_MCP_TOKEN;
 
 let sessionId: string | undefined;
 
+/**
+ * Map a socket connect failure to an actionable one-liner. The api
+ * socket is mode 0660 root:xinas-admin, so the common cause of a failed
+ * tool call from a non-root operator is "not in the xinas-admin group"
+ * (finding N4) — surface the fix rather than a bare `connect EACCES`.
+ * Returns undefined for codes we have no specific guidance for (the raw
+ * errno still travels in the base message).
+ */
+export function connectErrorHint(err: unknown): string | undefined {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  switch (code) {
+    case 'EACCES':
+      return (
+        'permission denied on the socket (mode 0660 root:xinas-admin). ' +
+        'Add this account to the xinas-admin group — ' +
+        '`sudo usermod -aG xinas-admin <user>`, then log out and back in — or run as root.'
+      );
+    case 'ENOENT':
+      return (
+        'the socket does not exist. xinas-api.service is likely not installed or ' +
+        'not running — check `systemctl status xinas-api`.'
+      );
+    case 'ECONNREFUSED':
+      return (
+        'the socket exists but nothing is listening. xinas-api is likely stopped — ' +
+        'check `systemctl status xinas-api`.'
+      );
+    default:
+      return undefined;
+  }
+}
+
+/** Compose the JSON-RPC error message for an unreachable api socket. */
+export function unreachableMessage(socket: string, err: unknown): string {
+  const base = `xinas-api unreachable at ${socket}: ${err instanceof Error ? err.message : String(err)}`;
+  const hint = connectErrorHint(err);
+  return hint === undefined ? base : `${base} — ${hint}`;
+}
+
 function post(message: unknown): Promise<{ status: number; body: string; session?: string }> {
   const payload = JSON.stringify(message);
   return new Promise((resolve, reject) => {
@@ -95,7 +134,7 @@ async function bridge(line: string): Promise<void> {
         jsonrpc: '2.0',
         error: {
           code: -32603,
-          message: `xinas-api unreachable at ${SOCKET}: ${err instanceof Error ? err.message : String(err)}`,
+          message: unreachableMessage(SOCKET, err),
         },
         id: message.id ?? null,
       })}\n`,
@@ -104,11 +143,21 @@ async function bridge(line: string): Promise<void> {
 }
 
 // Serialize message handling: stdio MCP clients expect ordered replies.
-let chain: Promise<void> = Promise.resolve();
-const rl = createInterface({ input: process.stdin, terminal: false });
-rl.on('line', (line) => {
-  chain = chain.then(() => bridge(line));
-});
-rl.on('close', () => {
-  void chain.then(() => process.exit(0));
-});
+// Guarded so importing this module (unit tests) doesn't start the read
+// loop or exit the process — mirrors the isMain pattern in cli/xinasctl.ts.
+const isMain =
+  process.argv[1] !== undefined &&
+  (process.argv[1].endsWith('mcp-stdio.js') ||
+    process.argv[1].endsWith('mcp-stdio') ||
+    process.argv[1].endsWith('xinas-mcp-stdio'));
+
+if (isMain) {
+  let chain: Promise<void> = Promise.resolve();
+  const rl = createInterface({ input: process.stdin, terminal: false });
+  rl.on('line', (line) => {
+    chain = chain.then(() => bridge(line));
+  });
+  rl.on('close', () => {
+    void chain.then(() => process.exit(0));
+  });
+}

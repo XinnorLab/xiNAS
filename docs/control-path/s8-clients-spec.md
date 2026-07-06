@@ -90,6 +90,13 @@ legacy `xinas-mcp.service` is retired. MCP apply is blocked by default
 - **T5 transports:** `/mcp` Streamable HTTP endpoint on the express
   app; optional `config.mcp.http` TCP listener (multi-listener support
   in `server.ts`); the `xinas-mcp-stdio` SDK transport adapter binary.
+  When the adapter cannot reach the api socket it returns a `-32603`
+  JSON-RPC error whose message names the socket path and the raw errno,
+  and — for `EACCES`/`ENOENT`/`ECONNREFUSED` — appends an actionable
+  hint (join `xinas-admin` + re-login, or check
+  `systemctl status xinas-api`). An `EACCES` from a non-root operator is
+  finding N4's "socket is 0660 root:xinas-admin, caller isn't a member"
+  case; the hint names the `usermod -aG xinas-admin` fix.
 - **T6 MCP integration tests:** real SDK client against the in-process
   endpoint; gate matrix; RBAC parity (same token via REST and MCP →
   same authorization outcome + audit principal).
