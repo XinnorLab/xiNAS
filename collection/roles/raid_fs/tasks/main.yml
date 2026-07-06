@@ -27,6 +27,46 @@
         - Define xfs_filesystems in your preset
   when: xfs_filesystems is not defined or xfs_filesystems | length == 0
 
+- name: Detect current storage state (reuse nvme_namespace's fact if already set)
+  ansible.builtin.include_role:
+    name: nvme_namespace
+    tasks_from: detect_storage_state
+    apply:
+      tags: [raid_fs, raid, fs]
+  when: xinas_storage_state is not defined
+  tags: [raid_fs, raid, fs]
+
+- name: Confirm reset before any destructive raid_fs operation
+  ansible.builtin.include_role:
+    name: nvme_namespace
+    tasks_from: storage_reset_confirm
+    apply:
+      tags: [raid_fs, raid, fs]
+  when: xinas_storage_reset | default(false) | bool
+  tags: [raid_fs, raid, fs]
+
+- name: Refuse to wipe without confirmation
+  ansible.builtin.fail:
+    msg: >-
+      xinas_storage_reset is set but the reset was not confirmed. Refusing to run any
+      destructive step. Run interactively to confirm, or set
+      nvme_skip_cleanup_confirmation=true for unattended resets.
+  when:
+    - xinas_storage_reset | default(false) | bool
+    - not (xinas_storage_reset_confirmed | default(false) | bool)
+  tags: [raid_fs, raid, fs]
+
+- name: Fail fast on unexpected existing storage (FOREIGN, raid_fs layer)
+  ansible.builtin.fail:
+    msg: >-
+      Existing storage does not match the expected xiNAS layout (state=FOREIGN).
+      Refusing to run drive-clean / mkfs. Set xinas_storage_reset=true to wipe and
+      rebuild, or clean the drives manually.
+  when:
+    - (xinas_storage_state | default('EMPTY')) == 'FOREIGN'
+    - not (xinas_storage_reset | default(false) | bool)
+  tags: [raid_fs, raid, fs]
+
 - name: Apply xiRAID license
   ansible.builtin.command: "xicli license update -p {{ xiraid_license_path }}"
   changed_when: false
@@ -53,12 +93,15 @@
   register: drive_clean_result
   changed_when: false
   failed_when: false
+  when: >-
+    (xinas_storage_reset | default(false) | bool)
+    or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
   tags: [raid_fs, raid, cleanup]
 
 - name: Warn about drives that could not be cleaned
   ansible.builtin.debug:
     msg: "WARNING: Could not clean {{ item.item }}: {{ item.stderr | default('unknown error') }}"
-  loop: "{{ drive_clean_result.results }}"
+  loop: "{{ drive_clean_result.results | default([]) }}"
   when:
     - item.rc is defined
     - item.rc != 0
@@ -119,6 +162,9 @@
   register: mdraid_scan
   changed_when: false
   failed_when: false
+  when: >-
+    (xinas_storage_reset | default(false) | bool)
+    or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
   tags: [raid_fs, raid]
 
 - name: Stop leftover MD RAID arrays on xiRAID devices
@@ -150,6 +196,9 @@
   args:
     executable: /bin/bash
   changed_when: false
+  when: >-
+    (xinas_storage_reset | default(false) | bool)
+    or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
   tags: [raid_fs, raid]
 
 - name: Gather existing xiRAID arrays (json)

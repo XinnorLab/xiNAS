@@ -130,3 +130,28 @@ def test_nvme_detects_state_and_gates_rebuild():
         clwhen = " ".join(str(w) for w in (cl.get("when") or []))
         assert "xinas_storage_reset" in clwhen and "EMPTY" in clwhen, clwhen
         assert "!= 'MATCH'" not in clwhen and "!= \"MATCH\"" not in clwhen
+
+
+RAID_MAIN = REPO / "collection/roles/raid_fs/tasks/main.yml"
+
+
+def _find_by_name(path, name):
+    for t in _iter(yaml.safe_load(path.read_text())):
+        if t.get("name") == name:
+            return t
+    return None
+
+
+def test_raid_fs_reuses_state_and_gates_wipes():
+    text = RAID_MAIN.read_text()
+    # Detection is reused via include_role guarded on the fact being undefined.
+    assert "detect_storage_state" in text
+    assert "xinas_storage_state is not defined" in text
+    # Confirm include is present and raid_fs fails on required-but-unconfirmed reset.
+    assert "storage_reset_confirm" in text
+    assert "xinas_storage_reset_confirmed" in text
+    # drive clean is gated on state.
+    dc = _find_by_name(RAID_MAIN, "Clean xiRAID drives")
+    assert dc is not None
+    # `when` may be a folded string (single OR-expression) or a list — str() covers both.
+    assert "xinas_storage_state" in str(dc.get("when"))
