@@ -12,8 +12,15 @@ xiraid_license_path: "/tmp/license"
 # Set to `false` if metadata should not be overwritten
 xiraid_force_metadata: true
 
-# When true, always format XFS filesystems even if the label already exists
-xfs_force_mkfs: true
+# DEPRECATED / internal — do NOT use to reformat. The supported control is
+# `xinas_storage_reset`. Kept only so older inventories don't error; pinned to the
+# safe side. `xfs_force_mkfs: true` set alone no longer reformats a healthy array.
+xfs_force_mkfs: false
+
+# Operator control for destroying and rebuilding storage. Default false = converge
+# (a re-run never touches an existing healthy array). Set true (with an interactive
+# YES, or nvme_skip_cleanup_confirmation=true for automation) to wipe + rebuild.
+xinas_storage_reset: false
 
 # Before creating each array, xiRAID preallocates a per-array kernel mempool
 # (~memory_prealloc_mb, 2048 MB by default) via __get_free_pages(). On

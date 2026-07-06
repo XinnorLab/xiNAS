@@ -16,10 +16,13 @@ nvme_detect_mode: "nvme"
 # First N non-OS drives become log devices, remaining become data devices
 nvme_log_drive_count: 2
 
-# Use existing namespaces instead of recreating them
-# Set to true if drives already have namespaces or don't support namespace mgmt
-# Set to false to rebuild namespaces with proper format (4KB, shared)
+# DEPRECATED / internal — namespace reuse vs. rebuild is now decided by
+# xinas_storage_state (see tasks/detect_storage_state.yml, added in a later task),
+# NOT by this knob. Retained only to avoid "undefined variable" on old inventories.
 nvme_use_existing_namespaces: false
+
+# Operator control for destroying and rebuilding storage (mirrors raid_fs default).
+xinas_storage_reset: false
 
 # Size of the small namespace (MB) - used for XFS log device
 nvme_small_ns_size_mb: 500

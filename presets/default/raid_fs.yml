@@ -12,16 +12,9 @@ xiraid_license_path: "/tmp/license"
 # Whether to pass `--force_metadata` when creating arrays
 xiraid_force_metadata: true
 
-# When true, always format XFS filesystems even if the label already exists
-xfs_force_mkfs: true
-
 # Enable automatic NVMe namespace management
 # This will auto-detect drives and generate RAID configuration
 nvme_auto_namespace: true
-
-# Use existing namespaces instead of recreating them
-# Set to FALSE to rebuild namespaces with proper 4KB blocks and shared flag
-nvme_use_existing_namespaces: false
 
 # Namespace format settings (4KB blocks; non-shared for single-controller HW)
 nvme_namespace_block_size: 4096
