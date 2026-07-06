@@ -82,3 +82,51 @@ def test_confirm_is_fact_guarded_and_bypassable():
     assert "xinas_storage_reset" in text
     assert "xinas_storage_reset_confirmed" in text
     assert "nvme_skip_cleanup_confirmation" in text
+
+
+NVME_MAIN = REPO / "collection/roles/nvme_namespace/tasks/main.yml"
+
+
+def _iter(tasks):
+    for t in tasks or []:
+        if not isinstance(t, dict):
+            continue
+        yield t
+        if isinstance(t.get("block"), list):
+            yield from _iter(t["block"])
+
+
+def _find_include(tasks, tasks_file):
+    for t in _iter(tasks):
+        inc = t.get("ansible.builtin.include_tasks") or t.get("include_tasks")
+        if inc == tasks_file or (isinstance(inc, dict) and inc.get("file") == tasks_file):
+            return t
+    return None
+
+
+def _all_includes(tasks, tasks_file):
+    out = []
+    for t in _iter(tasks):
+        inc = t.get("ansible.builtin.include_tasks") or t.get("include_tasks")
+        if inc == tasks_file or (isinstance(inc, dict) and inc.get("file") == tasks_file):
+            out.append(t)
+    return out
+
+
+def test_nvme_detects_state_and_gates_rebuild():
+    tasks = yaml.safe_load(NVME_MAIN.read_text())
+    assert _find_include(tasks, "detect_storage_state.yml") is not None
+    assert any(
+        "FOREIGN" in str(t.get("name", "")) or "FOREIGN" in str(t.get("fail", ""))
+        for t in _iter(tasks)
+    ), "no FOREIGN fail-fast task"
+    reb = _find_include(tasks, "rebuild_namespaces.yml")
+    assert reb is not None
+    when = " ".join(str(w) for w in (reb.get("when") or []))
+    assert "xinas_storage_state" in when and "xinas_storage_reset" in when
+    cleanups = _all_includes(tasks, "cleanup_storage.yml")
+    assert cleanups, "no cleanup_storage include found"
+    for cl in cleanups:
+        clwhen = " ".join(str(w) for w in (cl.get("when") or []))
+        assert "xinas_storage_reset" in clwhen and "EMPTY" in clwhen, clwhen
+        assert "!= 'MATCH'" not in clwhen and "!= \"MATCH\"" not in clwhen

@@ -16,6 +16,26 @@
       Using manual RAID configuration from presets.
   when: not nvme_auto_namespace | bool
 
+- name: Storage-state preflight (both modes)
+  when: nvme_auto_namespace | bool
+  block:
+    - name: Detect current storage state
+      ansible.builtin.include_tasks: detect_storage_state.yml
+
+    - name: Fail fast on unexpected existing storage (FOREIGN)
+      ansible.builtin.fail:
+        msg: >-
+          Existing storage does not match the expected xiNAS layout (state=FOREIGN).
+          Refusing to touch it. Set xinas_storage_reset=true to wipe and rebuild, or
+          clean the drives manually.
+      when:
+        - (xinas_storage_state | default('EMPTY')) == 'FOREIGN'
+        - not (xinas_storage_reset | default(false) | bool)
+
+    - name: Confirm reset before any destructive operation
+      ansible.builtin.include_tasks: storage_reset_confirm.yml
+      when: xinas_storage_reset | default(false) | bool
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Mode: "all" - Detect all block devices (VMs with virtio/SCSI drives)
 # Uses whole drives directly, no namespace management
@@ -53,6 +73,8 @@
       when:
         - nvme_data_drives | length > 0
         - nvme_cleanup_existing_storage | default(true) | bool
+        - (xinas_storage_reset | default(false) | bool)
+          or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
 
     - name: Generate RAID configuration
       ansible.builtin.include_tasks: generate_raid_config.yml
@@ -114,6 +136,8 @@
       when:
         - nvme_data_drives | length > 0
         - nvme_cleanup_existing_storage | default(true) | bool
+        - (xinas_storage_reset | default(false) | bool)
+          or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
 
     # Phase 4: Check if there are any data drives to process
     - name: Check for available data drives
@@ -123,25 +147,28 @@
           All detected NVMe drives appear to be system drives.
       when: nvme_data_drives | length == 0
 
-    # Phase 5: Either use existing namespaces or rebuild them
-    - name: Use existing namespaces (skip rebuild)
+    # Phase 5: MATCH → converge (reuse existing namespaces); EMPTY/reset → rebuild.
+    - name: Use existing namespaces (converge)
       ansible.builtin.include_tasks: detect_existing_namespaces.yml
       when:
         - nvme_data_drives | length > 0
-        - nvme_use_existing_namespaces | bool
+        - (xinas_storage_state | default('EMPTY')) == 'MATCH'
+        - not (xinas_storage_reset | default(false) | bool)
 
     - name: Collect NVMe topology for namespace rebuild
       ansible.builtin.include_tasks: collect_topology.yml
       when:
         - nvme_data_drives | length > 0
-        - not (nvme_use_existing_namespaces | bool)
+        - (xinas_storage_reset | default(false) | bool)
+          or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
 
-    # Phase 6: Rebuild namespaces (only if not using existing)
+    # Phase 6: Rebuild namespaces (fresh install or explicit reset)
     - name: Rebuild namespaces on data drives
       ansible.builtin.include_tasks: rebuild_namespaces.yml
       when:
         - nvme_data_drives | length > 0
-        - not (nvme_use_existing_namespaces | bool)
+        - (xinas_storage_reset | default(false) | bool)
+          or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
 
     # Phase 7: Generate RAID configuration (only if namespaces were created)
     - name: Generate RAID configuration
@@ -251,6 +278,8 @@
           when:
             - nvme_data_drives | length > 0
             - nvme_cleanup_existing_storage | default(true) | bool
+            - (xinas_storage_reset | default(false) | bool)
+              or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
 
         - name: Generate RAID configuration (fallback)
           ansible.builtin.include_tasks: generate_raid_config.yml
