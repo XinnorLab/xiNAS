@@ -6,7 +6,8 @@ Creates xiRAID arrays and tuned XFS filesystems as per Xinnor NFS RDMA blog.
 * `xfs_filesystems` – list defining data/log device pairs, mount point, mkfs params.
 * `xiraid_license_path` – path to license file applied before arrays are created.
 * `xiraid_force_metadata` – when `true` add `--force_metadata` to array creation.
-* `xfs_force_mkfs` – when `true` always run `mkfs.xfs` even if the filesystem and label already match. By default this is `true`, so filesystems are recreated on every run.
+* `xinas_storage_reset` – **the** control for destroying and rebuilding storage. Default `false` = converge (a re-run never reformats a healthy array). Set `true` (with an interactive `YES`, or `nvme_skip_cleanup_confirmation: true` for automation) to wipe + rebuild.
+* `xfs_force_mkfs` – **deprecated / disarmed.** No longer triggers a reformat on its own; the reformat decision is driven by `xinas_storage_reset` + detected storage state. Default `false`.
 
 This role requires the **mdadm** package to be installed so that any
 leftover Linux MD arrays on xiRAID devices can be stopped and wiped.
@@ -23,6 +24,15 @@ mounting happens at boot. This follows the
 Array creation is idempotent. If a RAID with the same name already
 exists in the xiRAID configuration file, the role will skip creation
 without failing.
+
+## Storage-reset safety
+
+Re-running `raid_fs` over a healthy array **converges**: `mkfs` is skipped, `xicli drive
+clean` and the MD-superblock sweep are skipped, and NFS is left running. The filesystem is
+(re)created only on a fresh device or when `xinas_storage_reset: true` is set (behind an
+interactive `YES`, enforced even under `--tags raid_fs`). A filesystem whose label doesn't
+match the configured one fails fast rather than being reformatted. See
+[docs/Installer/raid-spec.md](../../../docs/Installer/raid-spec.md) §11.
 
 ## Example playbook
 ```yaml

@@ -94,8 +94,19 @@ The role sets these facts for the `raid_fs` role:
 - `xiraid_arrays` - Array definitions for xiRAID
 - `xfs_filesystems` - XFS filesystem definitions
 
+## Storage-reset safety
+
+A read-only preflight (`detect_storage_state.yml`) classifies the box as
+`xinas_storage_state` ∈ {MATCH, EMPTY, FOREIGN}. On **MATCH** (an existing healthy xiNAS
+array) a re-run **converges** — namespaces are reused, nothing is destroyed. Namespaces are
+deleted and recreated only on a fresh box (**EMPTY**) or when the operator sets
+`xinas_storage_reset: true` (guarded by an interactive `YES`, bypassable for automation
+with `nvme_skip_cleanup_confirmation: true`). A **FOREIGN** layout fails fast rather than
+being wiped. The legacy `nvme_use_existing_namespaces` knob is deprecated. See
+[docs/Installer/raid-spec.md](../../../docs/Installer/raid-spec.md) §11.
+
 ## Warning
 
-**This role DESTROYS ALL DATA on non-system NVMe drives.**
+**With `xinas_storage_reset: true`, this role DESTROYS ALL DATA on non-system NVMe drives.**
 
-All existing namespaces on data drives are deleted and recreated. Ensure you have backups before running with `nvme_auto_namespace: true`.
+In that case all existing namespaces on data drives are deleted and recreated. Ensure you have backups.

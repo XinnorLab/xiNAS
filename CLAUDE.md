@@ -273,7 +273,7 @@ flow and off by default.
   - When a feature touches both surfaces (e.g. how `ansible-playbook` output is presented during install), it is acceptable — and expected — to update both the bash installer side and the Python TUI side so they stay in feel-parity.
 - **No build/test system** - This is infrastructure-as-code; validation occurs through Ansible modules
 - **yq v4 required** - Shell scripts use mikefarah/yq (not the Python jq wrapper). Ensure `/usr/local/bin/yq` is in PATH
-- **Roles are idempotent** - Safe to re-run, except `xfs_force_mkfs: true` forces filesystem recreation
+- **Roles are idempotent by default** - Re-running `site.yml` over a healthy array converges (no reformat, no namespace rebuild). Destroying and rebuilding storage requires the explicit `xinas_storage_reset: true` (with an interactive `YES`, or `nvme_skip_cleanup_confirmation: true` for automation). The legacy `xfs_force_mkfs` / `nvme_use_existing_namespaces` knobs are disarmed and no longer trigger wipes on their own. See [docs/Installer/raid-spec.md](docs/Installer/raid-spec.md) §11.
 - **License stored at `/tmp/license`** - Cleared on reboot; enter via menu before deployment
 - **DOCA-OFED version** - Configured in `collection/roles/doca_ofed/defaults/main.yml` (`doca_ofed_version` variable)
 - **Netplan file ownership** - All IB interface config MUST live in `/etc/netplan/99-xinas.yaml` only. Netplan merges all `*.yaml` files in `/etc/netplan/`, so duplicate interface definitions in other files (e.g. `50-cloud-init.yaml`) cause phantom IPs and conflicting PBR tables. Both TUI and Ansible auto-clean IB entries from non-xinas files. See `docs/Network/spec-network-management.md` for full details.

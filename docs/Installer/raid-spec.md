@@ -159,18 +159,25 @@ For every controller in `nvme_data_drives` the role records three numbers:
 
 The list of dicts is stored as `nvme_topology`.
 
-### 4.2 Skip path — `nvme_use_existing_namespaces: true`
+### 4.2 Converge path — reuse existing namespaces (state MATCH)
 
 Source: [detect_existing_namespaces.yml](../../collection/roles/nvme_namespace/tasks/detect_existing_namespaces.yml).
 
-If the operator opts to reuse what's already on the drives:
+A read-only preflight (`detect_storage_state.yml`) classifies the box as
+`xinas_storage_state` ∈ {MATCH, EMPTY, FOREIGN} before any namespace decision (see §11).
+When the box is **MATCH** (the expected xiRAID `data`+`log` arrays are online and
+`/dev/xi_data` is XFS with the configured label) and `xinas_storage_reset` is not set,
+the role reuses the namespaces already on the drives — no rebuild, no data loss:
 
 - `ls /dev/<ctrl>n*` per data drive.
 - `n1` → log devices (`nvme_small_ns_devices`).
 - `n2`–`n9` (and `n10+`) → data devices (`nvme_large_ns_devices`).
 - Special case: if **no** `n2+` were found, the role treats `n1` as data (single-namespace drives) and leaves the log device list empty — at which point `raid_fs` will fail with a clear message in §6.
 
-Default (`nvme_use_existing_namespaces=false`) falls through to §4.3.
+**EMPTY** (a fresh box, including a factory single-`n1` drive) or an explicit
+`xinas_storage_reset: true` falls through to the delete+recreate path in §4.3. **FOREIGN**
+without reset fails fast before touching anything. The deprecated
+`nvme_use_existing_namespaces` knob no longer drives this choice.
 
 ### 4.3 Delete + recreate
 
@@ -391,16 +398,22 @@ xicli raid create -n <name> -l <level> \
 Source: [create_fs.yml](../../collection/roles/raid_fs/tasks/create_fs.yml). Per `xfs_filesystems` entry:
 
 1. **Sniff existing state:** `blkid -s TYPE` and `blkid -s LABEL` against the data device.
-2. **Decide:** mkfs is performed if any of the following holds:
-   - `xfs_force_mkfs=true` (default `true` in both presets), **or**
-   - filesystem type ≠ `xfs`, **or**
-   - label ≠ the configured label.
+2. **Decide (storage-reset-safe, finding C1):** compute `_do_mkfs`. mkfs runs only when:
+   - `xinas_storage_reset` is set (after the §11 confirmation gate), **or**
+   - the data device has no XFS at all (state EMPTY — a fresh install, nothing to lose).
+
+   An XFS whose label **matches** the configured label → **converge**: mkfs is skipped and
+   the live data is preserved. An XFS with a **different** label, or a non-xfs signature
+   (state FOREIGN) → the play **fails fast** with an actionable message rather than
+   reformatting. The old always-reformat behaviour (`xfs_force_mkfs=true` shipped by
+   default, or "label ≠ configured") is gone; `xfs_force_mkfs` is disarmed (see §11).
 3. **Pick geometry:** if the operator didn't set `su_kb`/`sw`, the role looks up the `data` array in `xiraid_arrays` and computes `su_kb = strip_size_kb`, `sw = device_count − parity_disks`.
 4. **Release the device:** if it is already mounted and we are about to reformat it:
    - Snapshot whether `nfs-server` is active (`systemctl is-active`).
    - `systemctl stop nfs-server` if it was running.
    - `umount <data_device>`.
-   This is how re-running the install on a live NAS doesn't wedge with "device busy" — the helper actually drops NFS first.
+   This runs **only when `_do_mkfs` is true** (a reset, or a genuinely fresh device). On a
+   converge re-run mkfs is skipped, so NFS is never stopped and the mount is left untouched.
 5. **Cap the log size:** `blockdev --getsize64 <log_device>` is compared against `item.log_size` (`1G` by default). If the log array is smaller than 1 GiB, the requested size is clamped to the actual device size — important on small (500 MB × 4) RAID 10 log arrays.
 6. **Format:**
    ```
@@ -498,7 +511,8 @@ For one-shot validation, the Textual TUI's Health tab (`xinas-menu`) and the MCP
 | Operator did not consent to wiping prior storage | Silent destruction would be unacceptable | Interactive `YES` prompt; only bypassed by explicit `nvme_skip_cleanup_confirmation=true` |
 | Drive doesn't support `nmic=1` (single-controller HW) | `nvme create-ns -m 1` rejected, namespace creation fails per-drive | `nvme_namespace_shared=false` default; xinnorVM preset and project memory both pin it off |
 | Odd number of log namespaces and `raid_log_level=10` | xiRAID rejects the unbalanced array | `generate_raid_config.yml` drops one device and reports it in the summary |
-| Re-run with NFS already serving `/mnt/data` | `umount` fails with "device busy" → mkfs aborts | `create_fs.yml` snapshots `nfs-server` state, stops it, reformats, restarts |
+| Routine `site.yml` re-run reformats the live array (finding C1) | any `site.yml` re-run (incl. the TUI update flow's `Requires-Rebuild: all`) stopped NFS, ran `mkfs -f` over the live array, and finished green | Read-only `detect_storage_state` → MATCH **converges**: mkfs, namespace rebuild, `drive clean`, the MD sweep, and all three `cleanup_storage` wipes are skipped. Destruction requires an explicit `xinas_storage_reset` behind a `YES` gate enforced in **both** roles (§11) |
+| Existing storage doesn't match the expected layout | a stray/foreign array or wrong-label XFS would have been silently reformatted | **FOREIGN fail-fast** at both the namespace and filesystem layers, before any wipe; requires `xinas_storage_reset` to proceed |
 | Log RAID array smaller than the requested `log_size=1G` | `mkfs.xfs` exits with E2BIG | `_effective_log_size` clamps the size to `blockdev --getsize64` of the log device |
 | Boot-time race between xiRAID and fstab | `/mnt/data` would fail to mount on cold boot | Mount unit `Requires=` + `After=` the kernel `.device` units for `xi_data` and `xi_log` |
 | Stale xiRAID metadata from a prior install | `xicli raid create` refuses | `xicli drive clean` runs per member; `--force_metadata` is set when `xiraid_force_metadata=true` |
@@ -514,3 +528,42 @@ For one-shot validation, the Textual TUI's Health tab (`xinas-menu`) and the MCP
 - It does not encrypt the data set. There is no LUKS step in the install path.
 - It does not create more than one data array or more than one filesystem per node. Multi-pool support is a TUI/MCP operation post-install.
 - It does not pick a non-`/mnt/data` path. The `nfs_exports` rules in both presets hardcode `/mnt/data` with `fsid=0`; changing that requires editing both the preset and the export rules.
+
+---
+
+## 11. Idempotency & the storage-reset contract
+
+A `site.yml` run — tagged or untagged, attended or unattended — **never destroys an
+existing, data-bearing xiNAS layout unless the operator explicitly requested a reset.**
+Formatting happens only on a genuinely fresh box, or under an explicit, confirmed reset.
+
+**Detection.** `nvme_namespace/tasks/detect_storage_state.yml` (read-only) sets
+`xinas_storage_state`:
+
+| State | Meaning | Effect (no reset) |
+|---|---|---|
+| **MATCH** | xiRAID `data`+`log` online **and** `/dev/xi_data` is XFS with the configured label | **converge** — every destructive op is skipped |
+| **EMPTY** | no xiRAID arrays and no fs signature on `/dev/xi_data` (incl. a factory single-`n1` drive) | provision as a first install |
+| **FOREIGN** | some array/fs signature exists but doesn't match the expected layout | **fail fast** before any wipe |
+
+**Single control.** `xinas_storage_reset` (default `false`) is the only operator switch
+for destruction. The legacy `xfs_force_mkfs` and `nvme_use_existing_namespaces` knobs are
+**disarmed** — neither can initiate a wipe on its own, and both are removed from the
+shipping presets.
+
+**Every destructive op is gated** on `xinas_storage_reset` OR `state == EMPTY` (never on
+`!= MATCH`, which would also wipe FOREIGN): the three `cleanup_storage` wipes
+(`wipefs`/`dd`, including the empty-NVMe fallback path of §1.1), the namespace rebuild
+(`delete-ns`), `raid_fs`'s `xicli drive clean` and MD-superblock sweep, and
+`create_fs.yml`'s `mkfs.xfs -f`.
+
+**Confirmation.** When `xinas_storage_reset` is set, a shared, fact-guarded include
+(`storage_reset_confirm.yml`) prints a banner and requires the operator to type `YES`. It
+is enforced in **both** `nvme_namespace` and `raid_fs` (via `include_role`) so a
+`--tags raid_fs` run can't bypass it; `raid_fs` hard-fails on a required-but-unconfirmed
+reset. `nvme_skip_cleanup_confirmation: true` is the unattended bypass (an intentional
+reset sets both).
+
+**Update flow.** The in-TUI update runs a bare `site.yml` and never injects
+`xinas_storage_reset`, so an update resolves to MATCH → converge — `Requires-Rebuild: all`
+is safe. See [update-spec.md](update-spec.md).
