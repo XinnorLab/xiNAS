@@ -637,7 +637,10 @@ class NFSScreen(XiNASAppMixin, Screen):
         )
         self._load_exports()
 
-    @work(exclusive=True)
+    # NOT a @work worker: callers `await` this inline to show the dialog and
+    # return. textual 8.x Workers are not awaitable (Worker has no __await__),
+    # so decorating it with @work breaks `await self._show_control_error(...)`
+    # at both type-check and runtime.
     async def _show_control_error(self, exc: ControlPathError) -> None:
         """Render a control-path failure. A transient lease conflict gets a
         calm "busy, retry" dialog (the resource is locked by another task and
