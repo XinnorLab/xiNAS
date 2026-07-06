@@ -88,6 +88,55 @@
     state: present
   tags: [xinas_api, user]
 
+# 3c. Grant operator access to the socket group. Without a human member
+#     of xinas-admin, a non-root operator hits
+#     `connect EACCES /run/xinas/api.sock` from xinas-mcp-stdio / the CLI
+#     until they manually `usermod -aG xinas-admin`. We resolve the human
+#     behind the install from the sudo/login environment and add them
+#     (plus any explicitly-named accounts). ansible_env reflects the
+#     connection user's environment BEFORE become, so `sudo ansible-playbook`
+#     surfaces the real operator as SUDO_USER, and a become-from-login run
+#     surfaces them as USER. root and empty are skipped (root already
+#     bypasses the socket mode; nothing to grant). Membership takes effect
+#     on the operator's NEXT login — no service restart, so no handler.
+- name: Resolve operators to add to {{ xinas_api_socket_group }}
+  ansible.builtin.set_fact:
+    _xinas_api_operator_users: >-
+      {{ (
+           ([_xinas_api_installing_operator]
+              if (xinas_api_add_installing_operator | bool)
+                 and (_xinas_api_installing_operator | length > 0)
+              else [])
+           + xinas_api_admin_users
+         ) | unique }}
+  vars:
+    # SUDO_USER wins (launched via sudo); else the login user; '' otherwise.
+    _xinas_api_sudo_or_login: "{{ (ansible_env.SUDO_USER | default('', true)) or (ansible_env.USER | default('', true)) }}"
+    # Drop root — it can already reach the socket and isn't an operator grant.
+    _xinas_api_installing_operator: "{{ _xinas_api_sudo_or_login if _xinas_api_sudo_or_login != 'root' else '' }}"
+  tags: [xinas_api, operator, group]
+
+# getent passwd populates ansible_facts.getent_passwd so the add step can
+# skip names that don't resolve to a real account (never auto-create).
+- name: Enumerate local accounts to validate operator names
+  ansible.builtin.getent:
+    database: passwd
+  when: _xinas_api_operator_users | length > 0
+  tags: [xinas_api, operator, group]
+
+- name: Add operator account(s) to {{ xinas_api_socket_group }}
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: "{{ xinas_api_socket_group }}"
+    append: true
+  loop: "{{ _xinas_api_operator_users }}"
+  loop_control:
+    label: "{{ item }}"
+  when:
+    - _xinas_api_operator_users | length > 0
+    - item in ansible_facts.getent_passwd
+  tags: [xinas_api, operator, group]
+
 # 4. /etc/xinas-api/ — root:xinas-admin 0750. The api process gets
 #    read access via its primary-group membership of xinas-admin.
 - name: Create config directory {{ xinas_api_config_dir }}

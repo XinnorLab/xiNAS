@@ -20,6 +20,13 @@ ADR-0001 'Migration scope' and WS12 — MCP transport convergence).
   it as a supplementary member so the unit's `SupplementaryGroups=xinas-api`
   grants the running api process the group without disturbing its primary
   group (`xinas-admin`).
+- Add the installing operator to `xinas-admin`. Without a human member,
+  a non-root operator hits `connect EACCES /run/xinas/api.sock` from
+  `xinas-mcp-stdio` / the CLI until they manually run `usermod`. The role
+  resolves the operator behind the install from the sudo/login
+  environment (`SUDO_USER`, else `USER`; `root` and empty are skipped) and
+  adds them, plus any accounts named in `xinas_api_admin_users`, to the
+  group. Auto-add is on by default (`xinas_api_add_installing_operator`).
 - Create the on-disk config directory and write `config.json` + the
   bootstrap admin bearer token.
 - Generate `/var/lib/xinas/controller-id` (xinas-agent S0+S1 PR) — the
@@ -43,9 +50,14 @@ ADR-0001 'Migration scope' and WS12 — MCP transport convergence).
 - **No** token rotation tooling. Rotation is a manual operator action
   (delete config.json + token file, re-run the role); a `xinas-api token
   rotate` workflow is deferred.
-- **No** operator user management. The role creates the `xinas-admin`
-  group; adding operators to it (`usermod -aG xinas-admin <user>`) is
-  the operator's call.
+- **No** arbitrary account creation or removal. The role adds *existing*
+  accounts to `xinas-admin` (the installing sudo/login operator by
+  default, plus `xinas_api_admin_users`) with `append: true` — it never
+  creates a missing account and never *removes* anyone from the group.
+  Membership takes effect on the operator's next login. Set
+  `xinas_api_add_installing_operator: false` to skip the auto-add
+  entirely (e.g. hardened deployments that provision operators out of
+  band).
 
 ## Preconditions
 
@@ -113,6 +125,18 @@ xinas_api_socket: /run/xinas/api.sock
 # this role into site.yml).
 xinas_api_socket_group: xinas-admin
 
+# Auto-add the installing operator to {{ xinas_api_socket_group }} so a
+# non-root sudo user can reach the API socket right after install. The
+# role resolves the human behind the run from ansible_env.SUDO_USER,
+# falling back to ansible_env.USER, and skips empty/root values. Set to
+# false for deployments that manage group membership out of band.
+xinas_api_add_installing_operator: true
+
+# Extra existing accounts to add to {{ xinas_api_socket_group }} (a
+# superset applied alongside the auto-detected installer). Names that
+# don't resolve to a real account via getent are skipped, not created.
+xinas_api_admin_users: []
+
 # Per-controller identity. Default is an EMPTY placeholder; the role
 # generates /var/lib/xinas/controller-id with `uuidgen` on first install,
 # then slurps it FROM THE MANAGED HOST and set_facts this variable from
@@ -150,6 +174,17 @@ corresponding feature ships.
     {{ xinas_api_socket_group }}, no home directory, /usr/sbin/nologin
     shell, system uid range. Owns the SQLite + audit JSONL so state
     persists with a stable owner across restarts.
+
+3c. Grant operator access to the socket group. Resolve the operator
+    list = [installing operator] + xinas_api_admin_users, where the
+    installing operator is `ansible_env.SUDO_USER or ansible_env.USER`,
+    dropped when empty or `root`, and the whole step is skipped when
+    `xinas_api_add_installing_operator` is false. `getent passwd`
+    enumerates real accounts; only names that resolve are added to
+    {{ xinas_api_socket_group }} via `user … append: true` (never
+    created, never removed). Tagged `operator` for targeted re-runs.
+    No handler — group membership takes effect on the operator's next
+    login, not via a service restart.
 
 4.  Create /etc/xinas-api/ directory: mode 0750, owner root,
     group {{ xinas_api_socket_group }}. (Group needs +x for traversal

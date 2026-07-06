@@ -11,6 +11,10 @@ and the filesystem/group plumbing it depends on.
 - Creates the `xinas-admin` Unix group and the `xinas-api` system user
   (no home dir, `/usr/sbin/nologin` shell, system-assigned uid/gid;
   `xinas-api`'s primary group is `xinas-admin`).
+- Adds the installing operator to `xinas-admin` so a non-root sudo user
+  can reach the API socket right after install (auto-detected from
+  `SUDO_USER`/`USER`; opt out with `xinas_api_add_installing_operator`).
+  See "Adding an operator" below.
 - Pre-creates `/run/xinas/` as `root:xinas-admin 0770` and
   `/var/lib/xinas/state/` + `/var/log/xinas/` as `xinas-api:xinas-admin 0750`
   via `/usr/lib/tmpfiles.d/xinas-api.conf`.
@@ -56,6 +60,8 @@ See `defaults/main.yml`. Highlights:
 | `xinas_api_log_dir` | `/var/log/xinas` | Audit JSONL. Per ADR-0003. |
 | `xinas_api_socket` | `/run/xinas/api.sock` | Unix-domain socket. |
 | `xinas_api_socket_group` | `xinas-admin` | **See Phase 0 caveat in defaults comment** — also referenced by the unit's hardcoded `SupplementaryGroups`. |
+| `xinas_api_add_installing_operator` | `true` | Auto-add the sudo/login operator to `xinas-admin`. Set `false` to manage membership out of band. |
+| `xinas_api_admin_users` | `[]` | Extra **existing** accounts to add to `xinas-admin`; unknown names are skipped, never created. |
 | `xinas_api_controller_id` | `{{ ansible_machine_id \| to_uuid }}` | UUIDv5 derivation; override for pre-assigned IDs. |
 
 ## Example play
@@ -98,8 +104,37 @@ curl --unix-socket /run/xinas/api.sock \
 
 ## Adding an operator to xinas-admin
 
-The role creates the group but does NOT add users. To grant operator
-access:
+Membership in `xinas-admin` is what lets a non-root operator connect to
+`/run/xinas/api.sock` (via `xinas-mcp-stdio` or the CLI). Without it the
+adapter fails with `connect EACCES /run/xinas/api.sock`.
+
+**By default the role adds the installing operator for you.** It resolves
+the human behind the run from the sudo/login environment
+(`ansible_env.SUDO_USER`, falling back to `ansible_env.USER`) and adds
+that account to `xinas-admin` — so `sudo ansible-playbook … --tags
+xinas_api` grants the invoking user automatically. `root` and empty
+values are skipped, accounts that don't exist are never created, and
+`append: true` means no one is ever removed.
+
+**The new membership takes effect on the operator's next login** — log
+out and back in (or start a fresh `sudo -i` session) before using the
+MCP/CLI.
+
+To grant additional accounts, list them (they must already exist):
+
+```yaml
+xinas_api_admin_users:
+  - alice
+  - bob
+```
+
+To opt out of the auto-add entirely (manage membership out of band):
+
+```yaml
+xinas_api_add_installing_operator: false
+```
+
+You can still add operators by hand at any time:
 
 ```bash
 sudo usermod -aG xinas-admin <operator-username>
@@ -131,8 +166,9 @@ the per-area tags are safe for targeted reapplications.
 | Tag | Use case |
 |---|---|
 | `xinas_api` | All tasks. Use for a fresh install or a full re-apply. |
-| `group` | Reapply the xinas-admin group + gid lookup if the group was deleted by hand. |
+| `group` | Reapply the xinas-admin group + gid lookup (and re-add operators) if the group was deleted by hand. |
 | `user` | Reapply the xinas-api system user if it was deleted by hand. |
+| `operator` | Re-resolve and re-add operator accounts to xinas-admin (e.g. after changing `xinas_api_admin_users`, or to add a new sudo user on a re-run). |
 | `config` | Reapply `/etc/xinas-api/`, the tmpfiles snippet, and the token/config bootstrap after manual edits. |
 | `tmpfiles` | Reapply `/usr/lib/tmpfiles.d/xinas-api.conf` + recreate the writable dirs. |
 | `service` | Reapply the systemd unit + restart. |
