@@ -129,7 +129,7 @@ def test_nvme_detects_state_and_gates_rebuild():
     for cl in cleanups:
         clwhen = " ".join(str(w) for w in (cl.get("when") or []))
         assert "xinas_storage_reset" in clwhen and "EMPTY" in clwhen, clwhen
-        assert "!= 'MATCH'" not in clwhen and "!= \"MATCH\"" not in clwhen
+        assert "!= 'MATCH'" not in clwhen and '!= "MATCH"' not in clwhen
 
 
 RAID_MAIN = REPO / "collection/roles/raid_fs/tasks/main.yml"
