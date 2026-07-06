@@ -155,3 +155,21 @@ def test_raid_fs_reuses_state_and_gates_wipes():
     assert dc is not None
     # `when` may be a folded string (single OR-expression) or a list — str() covers both.
     assert "xinas_storage_state" in str(dc.get("when"))
+
+
+CREATE_FS = REPO / "collection/roles/raid_fs/tasks/create_fs.yml"
+
+
+def test_mkfs_is_converge_or_reset_and_foreign_fails():
+    text = CREATE_FS.read_text()
+    # A single computed _do_mkfs fact drives the gate; the old always-true
+    # xfs_force_mkfs-or-label-mismatch expression is gone.
+    assert "_do_mkfs" in text
+    assert "blkid_label.stdout != item.label" not in text, (
+        "label-mismatch must fail-fast, not trigger mkfs"
+    )
+    # FOREIGN fail-fast task exists.
+    assert "FOREIGN" in text
+    mkfs = _find_by_name(CREATE_FS, "Make XFS filesystem on {{ item.data_device }}")
+    assert mkfs is not None
+    assert "_do_mkfs" in str(mkfs.get("when"))

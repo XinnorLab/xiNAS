@@ -10,6 +10,37 @@
   failed_when: false
   changed_when: false
 
+# Storage-reset-safe mkfs decision (finding C1). mkfs runs only when:
+#   - xinas_storage_reset is set (after the confirm gate), OR
+#   - the data device has no XFS at all (fresh install; nothing to lose).
+# An XFS whose label matches -> converge (skip). An XFS with a different label, or a
+# non-xfs signature -> FOREIGN -> fail-fast (never silently reformat live data).
+- name: Classify this filesystem's state
+  ansible.builtin.set_fact:
+    _fs_present: "{{ blkid_type.stdout == 'xfs' }}"
+    _fs_foreign: >-
+      {{ (blkid_type.stdout | length > 0) and
+         not (blkid_type.stdout == 'xfs' and blkid_label.stdout == item.label) }}
+  tags: [raid_fs, fs, mkfs]
+
+- name: Fail fast on unexpected filesystem (FOREIGN) on {{ item.data_device }}
+  ansible.builtin.fail:
+    msg: >-
+      Existing filesystem '{{ blkid_label.stdout }}' ({{ blkid_type.stdout }}) on
+      {{ item.data_device }} does not match the expected label '{{ item.label }}'
+      (state=FOREIGN). Set xinas_storage_reset=true to wipe and rebuild, or clean the
+      device manually. Refusing to reformat.
+  when:
+    - _fs_foreign | bool
+    - not (xinas_storage_reset | default(false) | bool)
+  tags: [raid_fs, fs, mkfs]
+
+- name: Decide whether to (re)create the filesystem on {{ item.data_device }}
+  ansible.builtin.set_fact:
+    _do_mkfs: >-
+      {{ (xinas_storage_reset | default(false) | bool) or (not (_fs_present | bool)) }}
+  tags: [raid_fs, fs, mkfs]
+
 # Calculate XFS geometry from RAID array if not explicitly provided
 - name: Find data array for geometry calculation
   ansible.builtin.set_fact:
@@ -45,7 +76,7 @@
   when:
     - _current_mount.rc == 0
     - _current_mount.stdout | length > 0
-    - (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+    - _do_mkfs | bool
   tags: [raid_fs, fs, mkfs]
 
 - name: Stop nfs-server to release {{ item.data_device }}
@@ -55,7 +86,7 @@
   when:
     - _current_mount.rc == 0
     - _current_mount.stdout | length > 0
-    - (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+    - _do_mkfs | bool
     - _nfs_was_active.rc is defined
     - _nfs_was_active.rc == 0
   tags: [raid_fs, fs, mkfs]
@@ -65,14 +96,14 @@
   when:
     - _current_mount.rc == 0
     - _current_mount.stdout | length > 0
-    - (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+    - _do_mkfs | bool
   tags: [raid_fs, fs, mkfs]
 
 - name: Get log device size in bytes for {{ item.log_device }}
   ansible.builtin.command: blockdev --getsize64 {{ item.log_device }}
   register: _log_dev_bytes
   changed_when: false
-  when: (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+  when: _do_mkfs | bool
   tags: [raid_fs, fs, mkfs]
 
 - name: Calculate effective log size for {{ item.label }}
@@ -80,7 +111,7 @@
     _effective_log_size: >-
       {{ (item.log_size | human_to_bytes | int > _log_dev_bytes.stdout | int)
          | ternary(_log_dev_bytes.stdout | int | string, item.log_size) }}
-  when: (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+  when: _do_mkfs | bool
   tags: [raid_fs, fs, mkfs]
 
 - name: Make XFS filesystem on {{ item.data_device }}
@@ -88,7 +119,7 @@
     mkfs.xfs -f -L {{ item.label }} -d su={{ _fs_su_kb }}k,sw={{ _fs_sw }}
     -l logdev={{ item.log_device }},size={{ _effective_log_size }}
     -s size={{ item.sector_size }} {{ item.data_device }}
-  when: (xfs_force_mkfs | default(false) | bool) or blkid_type.stdout != 'xfs' or blkid_label.stdout != item.label
+  when: _do_mkfs | bool
   tags: [raid_fs, fs, mkfs]
 
 - name: Wait for block devices to settle
