@@ -143,8 +143,11 @@ a file-level apply + rollback:
 8. **Validate:** services active; `netplan get` parses; (deep) link present.
 9. Validation fail → **file-level auto-rollback**: write the pre-change
    ephemeral's `system/` bytes back for the same restore set + reconverge the
-   same domains; mark the restore `failed`/`partial`. This is a
-   restore-specific function — NOT `_auto_rollback` (which re-runs Ansible).
+   same domains; mark the restore `failed`/`partial`. This shares the
+   `_restore_rollback` primitive with the transactional runner's
+   `_auto_rollback` — as of C3 (2026-07-06) that path is also a file-level
+   restore (it computes a current-vs-pre-change restore set and delegates to
+   `_restore_rollback`), no longer an Ansible re-run.
 10. Mark applied; release the lock. Return `RunResult` (success +
     `snapshot_id` of the applied marker, or failure + message).
 

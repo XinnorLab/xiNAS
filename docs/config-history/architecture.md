@@ -103,7 +103,17 @@ Wraps Ansible playbook execution in a transactional envelope:
 3. Run Ansible via subprocess with streaming output.
 4. Run post-apply validation.
 5. On success: create rollback-eligible snapshot, mark applied.
-6. On failure: auto-rollback to pre-change snapshot, mark failed.
+6. On failure: auto-rollback to pre-change snapshot, mark failed. The
+   auto-rollback is a **file-level restore** — it writes the pre-change
+   snapshot's captured `system/` bytes back for the files the failed op
+   actually changed (current-vs-pre-change restore set) and reconverges only
+   the affected NFS/network domains (`exportfs -ra`, `netplan apply`, …),
+   reusing the S11 `_restore_rollback` primitive. It does **not** re-run a
+   playbook: the pre-change ephemeral carries the forward op's (empty for
+   control-path) `extra_vars`, so a re-run would re-apply the broken desired
+   state, and an untagged `site.yml` run can reformat the array. Storage
+   topology (RAID/FS) is out of scope, so an op that captured no managed
+   NFS/network file is a truthful no-op.
 7. Release lock.
 
 Journal state is persisted to disk after each step so crash recovery can
@@ -279,8 +289,10 @@ Runner.execute(playbook, extra_vars)
   │     └── Runner.mark_applied()
   │
   ├─► [FAILURE PATH]
-  │     ├── Runner.auto_rollback()
-  │     │     └── Engine.apply_snapshot(pre_change_ephemeral)
+  │     ├── Runner.auto_rollback()   # file-level restore (S11), NOT a playbook re-run
+  │     │     ├── restore set = captured files, current-vs-pre-change
+  │     │     ├── write pre_change_ephemeral system/ bytes back
+  │     │     └── reconverge affected NFS/network domains
   │     └── Runner.mark_failed()
   │
   ├─► GC.run()

@@ -575,8 +575,9 @@ class TransactionalRunner:
                 content = self._store.read_system_file(pre_change_id, name)
                 if content is not None:
                     self._write_system_file(name, content)
-            await self._reconverge(restore_set)
-            return True
+            # Honor the reconverge outcome: bytes on disk without a successful
+            # service reconverge is a partial rollback, not a success.
+            return await self._reconverge(restore_set)
         except Exception:
             logger.exception("File-level restore rollback failed")
             return False
@@ -798,13 +799,25 @@ class TransactionalRunner:
         pre_change_id: str,
         failed_operation: str,
     ) -> tuple[bool, str | None]:
-        """Attempt automatic rollback to pre-change snapshot.
+        """Attempt automatic rollback to the pre-change snapshot.
 
         Returns ``(success, error_message)``.
 
-        This method does NOT re-enter the transactional runner to avoid
-        infinite recursion.  It directly re-runs Ansible with the
-        pre-change configuration if possible.
+        C3: this is a **file-level restore** — it writes the pre-change
+        snapshot's captured ``system/`` bytes back for the files the failed
+        operation actually changed, then reconverges only the affected
+        NFS/network domains (the S11 mechanism ``execute_restore_snapshot``
+        uses via :meth:`_restore_rollback`). It deliberately does NOT re-run
+        Ansible: the pre-change ephemeral carries the *forward* operation's
+        ``extra_vars`` (empty for control-path snapshots), so a playbook re-run
+        would re-apply the broken desired state — not restore the prior one —
+        and, worse, an untagged ``site.yml`` run can reformat the array.
+
+        Storage topology (RAID/FS/pools) is out of config-history scope; a
+        failed op that captured no managed NFS/network file yields an empty
+        restore set and a truthful no-op (nothing to restore file-level).
+
+        Does not re-enter the transactional runner (avoids recursion).
         """
         logger.warning(
             "Initiating auto-rollback for failed operation %s to pre-change snapshot %s",
@@ -815,39 +828,42 @@ class TransactionalRunner:
         self._lock.update_journal(phase="rolling_back")
 
         try:
-            # Read the pre-change snapshot manifest to get its config.
             pre_manifest = self._store.read_manifest(pre_change_id)
             if pre_manifest is None:
                 msg = f"Pre-change snapshot {pre_change_id} not found"
                 logger.error("Auto-rollback failed: %s", msg)
                 return False, msg
 
-            # Re-run the playbook with the pre-change extra_vars.
-            playbook = pre_manifest.playbook or "playbooks/site.yml"
-            ok, output = await self._run_ansible_playbook(
-                playbook=playbook,
-                extra_vars=pre_manifest.extra_vars or None,
-            )
+            # Restore set = captured files whose CURRENT live checksum differs
+            # from the pre-change capture (current-vs-target, target =
+            # pre-change). NOT files_changed (target-vs-parent), which would
+            # miss files the forward op changed.
+            captured = self._store.list_system_files(pre_change_id)
+            current = (await self._collect_current_checksums()).to_dict()
+            pre = pre_manifest.checksums or {}
+            restore_set = [n for n in captured if current.get(n) != pre.get(n)]
 
-            if ok:
+            if not restore_set:
                 logger.info(
-                    "Auto-rollback succeeded for %s",
+                    "Auto-rollback for %s: empty restore set, nothing to restore file-level",
                     failed_operation,
                 )
-                # Update the pre-change snapshot status to indicate it was
-                # used for rollback.
-                try:
-                    pre_manifest.status = SnapshotStatus.ROLLED_BACK.value
-                    self._store.update_manifest(pre_change_id, pre_manifest)
-                except Exception:
-                    pass  # Non-fatal — the rollback itself worked.
                 return True, None
-            else:
-                msg = "Ansible playbook failed during rollback"
-                if output:
-                    msg += "\n" + output
+
+            rb_ok = await self._restore_rollback(pre_change_id, restore_set)
+            if not rb_ok:
+                msg = "File-level rollback failed"
                 logger.error("Auto-rollback failed: %s", msg)
                 return False, msg
+
+            logger.info("Auto-rollback succeeded for %s", failed_operation)
+            # Mark the pre-change snapshot as used for rollback (non-fatal).
+            try:
+                pre_manifest.status = SnapshotStatus.ROLLED_BACK.value
+                self._store.update_manifest(pre_change_id, pre_manifest)
+            except Exception:
+                pass  # Non-fatal — the rollback itself worked.
+            return True, None
 
         except Exception as exc:
             msg = f"Auto-rollback exception: {exc}"

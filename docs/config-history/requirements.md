@@ -261,7 +261,10 @@ Block execution until dependency order is validated.
 
 - Stop workflow at the failed step.
 - Mark the snapshot as `failed`.
-- Auto-rollback to the pre-change snapshot.
+- Auto-rollback to the pre-change snapshot: a **file-level restore** of the
+  captured config bytes for the managed NFS/network set (write the pre-change
+  bytes back for the changed files + reconverge the affected domains), not a
+  playbook re-run. Storage topology (RAID/FS) is out of scope.
 - Mark as `rolled_back` or `partial`.
 - Show the failed layer to the user.
 
