@@ -1,0 +1,52 @@
+---
+# Shared reset confirmation. Invoked by both nvme_namespace and raid_fs immediately
+# before their first destructive step. Idempotent within a play: the first invocation
+# prompts and sets xinas_storage_reset_confirmed; later invocations short-circuit.
+#
+# Fires only when xinas_storage_reset is set and not yet confirmed. Bypassed (auto-
+# confirmed) when nvme_skip_cleanup_confirmation is true — the automation escape hatch.
+
+- name: Auto-confirm reset for unattended runs
+  ansible.builtin.set_fact:
+    xinas_storage_reset_confirmed: true
+  when:
+    - xinas_storage_reset | default(false) | bool
+    - nvme_skip_cleanup_confirmation | default(false) | bool
+    - not (xinas_storage_reset_confirmed | default(false) | bool)
+
+- name: Confirm destructive storage reset
+  ansible.builtin.pause:
+    prompt: |
+
+      ╔══════════════════════════════════════════════════════════════════════╗
+      ║  ⚠️  STORAGE RESET — DATA DESTRUCTION                                ║
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  xinas_storage_reset is set. This will DESTROY the existing array and ║
+      ║  reformat the filesystem. All data on it will be lost.                ║
+      ║    • arrays : {{ (xiraid_arrays | default([]) | map(attribute='name') | list) | join(', ') }}
+      ║    • label  : {{ (xfs_filesystems | default([{}]) | first).label | default('nfsdata') }}
+      ║    • mount  : {{ (xfs_filesystems | default([{}]) | first).mountpoint | default('/mnt/data') }}
+      ╠══════════════════════════════════════════════════════════════════════╣
+      ║  Type 'YES' to proceed, or press Ctrl+C to abort.                     ║
+      ╚══════════════════════════════════════════════════════════════════════╝
+
+      Confirm destruction (YES/no)
+  register: _reset_confirmation
+  when:
+    - xinas_storage_reset | default(false) | bool
+    - not (xinas_storage_reset_confirmed | default(false) | bool)
+
+- name: Abort unless the operator typed YES
+  ansible.builtin.fail:
+    msg: "Storage reset cancelled by operator. Aborting to protect existing data."
+  when:
+    - xinas_storage_reset | default(false) | bool
+    - not (xinas_storage_reset_confirmed | default(false) | bool)
+    - (_reset_confirmation.user_input | default('') | upper) != 'YES'
+
+- name: Mark reset as confirmed for the rest of the play
+  ansible.builtin.set_fact:
+    xinas_storage_reset_confirmed: true
+  when:
+    - xinas_storage_reset | default(false) | bool
+    - not (xinas_storage_reset_confirmed | default(false) | bool)

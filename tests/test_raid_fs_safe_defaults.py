@@ -67,3 +67,18 @@ def test_detection_sets_state_fact():
     # It must parse into a native list, not a stringified one.
     tasks = yaml.safe_load(text)
     assert isinstance(tasks, list) and tasks, "detection file must be a task list"
+
+
+CONFIRM = REPO / "collection/roles/nvme_namespace/tasks/storage_reset_confirm.yml"
+
+
+def test_confirm_is_fact_guarded_and_bypassable():
+    text = CONFIRM.read_text()
+    yaml.safe_load(text)  # must parse
+    # A pause task requires typing YES.
+    assert "ansible.builtin.pause" in text, "no confirmation pause task"
+    assert "YES" in text
+    # The gate is guarded by the reset flag and the confirmed fact, and bypassable.
+    assert "xinas_storage_reset" in text
+    assert "xinas_storage_reset_confirmed" in text
+    assert "nvme_skip_cleanup_confirmation" in text
