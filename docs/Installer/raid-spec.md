@@ -33,6 +33,31 @@ The role has two strategies, selected by `nvme_detect_mode`:
 
 If `nvme_auto_namespace: false`, the role prints a notice and does nothing — operators must define `xiraid_arrays` / `xfs_filesystems` themselves in the preset.
 
+### 1.1 Empty-NVMe fallback (VM safety net)
+
+`nvme` mode assumes real NVMe controllers exist. On a virtio/SCSI VM there are
+none, so `nvme_data_drives` comes back empty. Rather than silently skip RAID
+generation (which made `raid_fs` abort several roles later with an undefined
+`xiraid_arrays`), the role runs a fallback whenever **`nvme_detect_mode == 'nvme'`
+and zero data drives were found**:
+
+1. Re-probe every block device via `detect_all_drives.yml` (§5).
+2. **No non-OS disks at all** → fail: *"No data drives found … Attach data disks."*
+3. **`systemd-detect-virt` reports a VM** (output not `none`/empty) → auto-continue
+   in whole-disk mode: force `nvme_raid_log_level: 1` (RAID1 log, matching the
+   `xinnorVM` geometry), run cleanup (§3) and `generate_raid_config.yml` (§6). A
+   warning is logged that VM detection was auto-selected and that **all** non-OS
+   disks will be consumed.
+4. **Bare metal with non-NVMe disks present** → fail-fast: *"Detected N non-NVMe
+   disk(s) … not virtualized. Re-run with the `xinnorVM` preset or set
+   `nvme_detect_mode: all` …"* — the role will not silently RAID over SATA disks
+   the operator didn't mean to consume.
+
+Effective minimum for the VM auto-path is **5 non-OS disks** (2 log + 3 data for
+RAID5); fewer disks fail with the clear "insufficient devices" message from §6,
+identical to how the `xinnorVM` preset fails today. The fallback changes only the
+`default`-preset path; `autoinstall.sh`, the presets, and the menus are untouched.
+
 ---
 
 ## 2. System-drive detection (both modes)
@@ -441,6 +466,7 @@ For one-shot validation, the Textual TUI's Health tab (`xinas-menu`) and the MCP
 | Failure | Where it would show up | Guard |
 |---|---|---|
 | OS drive detected as a data drive | `xicli raid create` would clobber the boot disk | `nvme_abort_if_no_system_drive=true` halts the play if none of root / boot / EFI resolves |
+| Unattended default-preset install on a virtio/SCSI VM (0 NVMe controllers) | `nvme_namespace` generated no facts → `raid_fs` aborted with "xiraid_arrays undefined" | Empty-NVMe fallback (§1.1): re-probe all disks; auto-continue in whole-disk mode on VMs, fail-fast with a remedy on bare metal |
 | Existing LVM / MD / ZFS still bound to data drives | `xicli drive clean` errors; arrays don't form | `cleanup_storage.yml` discovers + destroys all three before any namespace op |
 | Operator did not consent to wiping prior storage | Silent destruction would be unacceptable | Interactive `YES` prompt; only bypassed by explicit `nvme_skip_cleanup_confirmation=true` |
 | Drive doesn't support `nmic=1` (single-controller HW) | `nvme create-ns -m 1` rejected, namespace creation fails per-drive | `nvme_namespace_shared=false` default; xinnorVM preset and project memory both pin it off |

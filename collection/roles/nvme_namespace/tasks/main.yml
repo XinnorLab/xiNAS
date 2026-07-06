@@ -167,3 +167,81 @@
             Log array: RAID {{ nvme_raid_log_level }} with {{ nvme_small_ns_devices | default([]) | length }} devices
           ===========================================================
       when: nvme_data_drives | length > 0
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Fallback: "nvme" mode found no data drives.
+# Either a VM (virtio/SCSI, no NVMe controllers) or a misconfigured bare-metal
+# host. Re-probe all block devices, then auto-continue in whole-disk mode on a
+# VM or fail with an actionable message.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- name: Fallback when NVMe detection found no data drives
+  when:
+    - nvme_auto_namespace | bool
+    - nvme_detect_mode | default('nvme') == 'nvme'
+    - nvme_data_drives | default([]) | length == 0
+  block:
+    - name: Re-probe all block devices for non-NVMe candidates
+      ansible.builtin.include_tasks: detect_all_drives.yml
+
+    - name: Abort if system drive not found (fallback)
+      ansible.builtin.fail:
+        msg: |
+          CRITICAL: Could not detect system drive during VM fallback.
+          Aborting to prevent accidental data loss on the OS drive.
+          If this is intentional, set nvme_abort_if_no_system_drive: false
+      when:
+        - nvme_abort_if_no_system_drive | bool
+        - nvme_system_drives is not defined or nvme_system_drives | length == 0
+
+    - name: Fail when no data drives exist at all
+      ansible.builtin.fail:
+        msg: |
+          No data drives found (no NVMe namespaces and no non-OS block devices).
+          Attach data disks before deploying.
+      when: nvme_data_drives | default([]) | length == 0
+
+    - name: Detect virtualization
+      ansible.builtin.command: systemd-detect-virt
+      register: nvme_virt_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail-fast on bare metal with non-NVMe disks present
+      ansible.builtin.fail:
+        msg: |
+          Detected {{ nvme_data_drives | length }} non-NVMe disk(s)
+          ({{ nvme_data_drives | join(', ') }}) but 0 NVMe data drives, and this
+          host is not virtualized.
+
+          If these are your intended data drives, re-run with the xinnorVM preset
+          or set nvme_detect_mode: all.
+          If you expected NVMe drives, verify the NVMe controllers are present and
+          not held by the OS.
+      when: (nvme_virt_check.stdout | default('') | trim) in ['', 'none']
+
+    - name: Auto-continue in whole-disk mode (VM detected)
+      when: (nvme_virt_check.stdout | default('') | trim) not in ['', 'none']
+      block:
+        - name: Announce VM auto-fallback
+          ansible.builtin.debug:
+            msg: |
+              WARNING: No NVMe data drives found, but virtualization was detected
+              ({{ nvme_virt_check.stdout | trim }}). Auto-selecting whole-disk (VM)
+              detection — all {{ nvme_data_drives | length }} non-OS block
+              device(s) will be consumed for RAID, exactly as the xinnorVM preset
+              would. Re-run with an explicit preset to override.
+
+        - name: Force RAID1 log level for the VM fallback
+          ansible.builtin.set_fact:
+            nvme_raid_log_level: 1
+
+        - name: Cleanup existing storage configurations (fallback)
+          ansible.builtin.include_tasks: cleanup_storage.yml
+          when:
+            - nvme_data_drives | length > 0
+            - nvme_cleanup_existing_storage | default(true) | bool
+
+        - name: Generate RAID configuration (fallback)
+          ansible.builtin.include_tasks: generate_raid_config.yml
+          when: nvme_data_drives | length > 0
