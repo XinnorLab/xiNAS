@@ -448,7 +448,13 @@ def _privileged_git(repo: Path, action: str, *extra: str) -> str:
     if action == "checkout":
         if not extra:
             raise ValueError("checkout requires a tag argument")
-        return _git_output(repo, "checkout", "--quiet", extra[0])
+        # --force = reset-to-release. The installed tree is dirty by design
+        # (installer copies preset files over tracked role defaults +
+        # playbooks/site.yml), so a plain checkout aborts with "Your local
+        # changes ... would be overwritten by checkout". Forcing discards
+        # local modifications to *tracked* files only; untracked files are
+        # left alone (no `git clean`). See docs/Installer/update-spec.md.
+        return _git_output(repo, "checkout", "--force", "--quiet", extra[0])
     raise ValueError(f"unknown privileged action: {action}")
 
 

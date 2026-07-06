@@ -233,6 +233,83 @@ def test_apply_update_rejects_non_release_ref(tmp_path):
         assert ok is False, f"must refuse to check out {ref!r}"
 
 
+# ── apply: reset-to-release — force checkout over local changes ───────────
+# The installed /opt/xiNAS tree is git-dirty by design: the installer copies
+# preset files over tracked role defaults + playbooks/site.yml. A plain
+# `git checkout <tag>` then fails with "Your local changes ... would be
+# overwritten by checkout". Policy (docs/Installer/update-spec.md): the apply
+# force-checks-out the release tag, discarding local modifications to tracked
+# files. Untracked files (.xinas_applied_preset, keys/, logs) are preserved —
+# so we must never use `git clean`, only `checkout --force`.
+
+
+def test_fallback_checkout_forces_over_local_changes(monkeypatch, tmp_path):
+    """Helper-absent path must pass --force so a dirty tree checks out."""
+    # Point the privileged-helper path at a file that does not exist so the
+    # direct-git fallback runs.
+    monkeypatch.setattr(uc, "_PRIVILEGED_HELPER", tmp_path / "no-such-helper")
+    calls = []
+
+    def _fake_run(argv, **kw):
+        calls.append(argv)
+
+        class _R:
+            stdout = ""
+
+        return _R()
+
+    monkeypatch.setattr(uc.subprocess, "run", _fake_run)
+
+    uc._privileged_git(tmp_path, "checkout", "v3.1.1")
+
+    checkout = next(a for a in calls if "checkout" in a)
+    assert "--force" in checkout, f"fallback checkout must force: {checkout}"
+    assert "v3.1.1" in checkout
+    # Never wipe untracked files.
+    assert all("clean" not in a for a in calls)
+
+
+def test_helper_present_checkout_delegates_forcing_to_helper(monkeypatch, tmp_path):
+    """When the sudo helper is present, apply calls it; the helper itself forces."""
+    helper = tmp_path / "xinas-update-git"
+    helper.write_text("#!/bin/bash\n")
+    helper.chmod(0o755)
+    monkeypatch.setattr(uc, "_PRIVILEGED_HELPER", helper)
+    calls = []
+
+    def _fake_run(argv, **kw):
+        calls.append(argv)
+
+        class _R:
+            stdout = ""
+
+        return _R()
+
+    monkeypatch.setattr(uc.subprocess, "run", _fake_run)
+
+    uc._privileged_git(tmp_path, "checkout", "v3.1.1")
+
+    argv = next(a for a in calls if str(helper) in a)
+    assert argv[:3] == ["sudo", "-n", str(helper)]
+    assert argv[-2:] == ["checkout", "v3.1.1"]
+
+
+def test_deployed_helper_script_force_checks_out():
+    """The Ansible-deployed helper must force the checkout (reset-to-release)."""
+    from pathlib import Path
+
+    helper = (
+        Path(__file__).resolve().parent.parent
+        / "collection/roles/xinas_menu/files/xinas-update-git"
+    )
+    text = helper.read_text()
+    assert "git checkout --force" in text, "helper must force-checkout to discard local changes"
+    # Must not delete untracked files: no *executable* `git clean` (ignore
+    # comment lines, which mention it to explain why it is avoided).
+    code = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+    assert all("git clean" not in ln for ln in code)
+
+
 # ── prompt formatting ────────────────────────────────────────────────────
 
 

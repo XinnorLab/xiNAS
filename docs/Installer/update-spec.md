@@ -64,24 +64,55 @@ Applying an update **checks out the release tag** — it never pulls a
 branch:
 
 1. `git fetch origin --tags` (via the privileged helper).
-2. `git checkout <vX.Y.Z>` — the exact commit the release points to
-   (detached HEAD at the release tag).
+2. `git checkout --force <vX.Y.Z>` — the exact commit the release points
+   to (detached HEAD at the release tag).
 3. Sync the NFS helper sources and restart `xinas-nfs-helper`.
 4. If the incoming release carries `Requires-Rebuild:` trailers, run
    `ansible-playbook playbooks/site.yml --tags <tags>` before
    restarting the menu (see *Update rebuild markers* in `CLAUDE.md`).
 
+### Reset-to-release: local changes are discarded
+
+The installed `/opt/xiNAS` working tree is **git-dirty by design**. The
+installer materializes the chosen preset by copying preset files over
+tracked files — `presets/<name>/playbook.yml` → `playbooks/site.yml`,
+and each `presets/<name>/*.yml` → the matching role `defaults/main.yml`
+(`raid_fs`, `net_controllers`, `nvme_namespace`, `exports`) plus
+`net_controllers/templates/netplan.yaml.j2`. Whenever a new release also
+changes one of those tracked files, a plain `git checkout <tag>` aborts
+with *"Your local changes to the following files would be overwritten by
+checkout"* and the update fails.
+
+The apply therefore uses **`git checkout --force`**: the release tag
+wins and local modifications to **tracked** files are discarded
+(reset-to-release). **Untracked** files are preserved — the checkout
+uses `--force`, never `git clean`, so install markers
+(`.xinas_applied_preset`), cached `keys/`, and logs survive.
+
+Consequence to be aware of: after an update the role `defaults/main.yml`
+files and `playbooks/site.yml` hold the **release's** values, not the
+preset the operator materialized at install time. Day-2 runtime config
+lives in `/etc` (netplan `99-xinas.yaml`, `/etc/exports`,
+`/etc/nfs.conf`) and the live RAID — none of which the checkout touches
+— so a code-only update is transparent. But if the same update also
+carries a `Requires-Rebuild:` trailer for `raid_fs`, `net_controllers`,
+or `exports`, that role re-runs against the **release-default** config.
+Operators who rely on a rebuild preserving a customized layout must
+re-apply their preset (or re-materialize config) after such an update.
+
 The privileged helper `/usr/local/sbin/xinas-update-git` (deployed by
 the `xinas_menu` Ansible role) whitelists exactly two operations:
 `fetch` (→ `git fetch origin --tags --quiet`) and `checkout <tag>`
-(tag validated against `^v?[0-9]+\.[0-9]+\.[0-9]+`). It never accepts a
-branch name and no longer offers `pull`.
+(→ `git checkout --force --quiet <tag>`, tag validated against
+`^v?[0-9]+\.[0-9]+\.[0-9]+`). It never accepts a branch name and no
+longer offers `pull`.
 
 If the helper is not deployed (host predating this change), apply falls
-back to invoking `git fetch --tags` + `git checkout <tag>` directly;
-on a root-owned `/opt/xiNAS` that fails with a permissions error, which
-is surfaced to the user with a hint to re-run the `xinas_menu` role.
-The fallback still targets the release tag — never `main`.
+back to invoking `git fetch --tags` + `git checkout --force <tag>`
+directly; on a root-owned `/opt/xiNAS` that fails with a permissions
+error, which is surfaced to the user with a hint to re-run the
+`xinas_menu` role. The fallback still targets the release tag — never
+`main`.
 
 ## Install / bootstrap
 
@@ -123,3 +154,24 @@ updater. Their final main-based pull brings in this release-based
 updater (and, via the `Requires-Rebuild: xinas_menu` trailer, the
 re-deployed privileged helper). Every subsequent update is
 release-based.
+
+### Bootstrapping the forcing helper
+
+The `--force` checkout lives in the privileged helper, which is deployed
+by the `xinas_menu` role. A host that already carries the **old**
+(non-forcing) helper and whose tree is dirty on a file the incoming
+release also changed cannot self-heal on that first update: the old
+helper's plain `git checkout <tag>` fails *before* the rebuild step that
+would deploy the new helper. The release shipping this fix carries
+`Requires-Rebuild: xinas_menu`, so any host that updates while its tree
+is **clean or non-conflicting** proactively picks up the forcing helper
+and every later conflicting update self-heals.
+
+A host that is already wedged (old helper + conflicting dirty file)
+needs a one-time manual reset before its next update:
+
+```bash
+sudo git -C /opt/xiNAS checkout --force <vX.Y.Z>   # or: sudo git -C /opt/xiNAS stash
+```
+
+after which the update proceeds and installs the forcing helper.

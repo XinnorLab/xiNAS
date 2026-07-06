@@ -33,7 +33,14 @@ case "${1:-}" in
             echo "refusing to check out non-release ref: '$tag'" >&2
             exit 2
         fi
-        exec git checkout --quiet "$tag"
+        # --force = reset-to-release: the installed tree is dirty by design
+        # (the installer copies preset files over tracked role defaults +
+        # playbooks/site.yml), so a plain checkout aborts with "Your local
+        # changes ... would be overwritten by checkout". Forcing discards
+        # local modifications to *tracked* files; untracked files
+        # (.xinas_applied_preset, keys/, logs) are left alone — we never
+        # `git clean`. See docs/Installer/update-spec.md "Reset-to-release".
+        exec git checkout --force --quiet "$tag"
         ;;
     *)
         echo "Usage: $0 {fetch|checkout <vX.Y.Z>}" >&2
