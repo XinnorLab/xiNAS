@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import secrets
 import socket as _socket
 import subprocess
@@ -16,9 +17,23 @@ from textual.screen import Screen
 from textual.widgets import Footer, Label
 
 from xinas_menu.apptype import XiNASAppMixin
-from xinas_menu.utils.config import CONFIG_PATH as _MCP_CONFIG
-from xinas_menu.utils.config import cfg_read as _cfg_read
-from xinas_menu.utils.config import cfg_write as _cfg_write
+from xinas_menu.utils.api_config import (
+    API_CONFIG_PATH,
+    DEFAULT_HTTP_HOST,
+    DEFAULT_HTTP_PORT,
+    add_token,
+    allow_apply_enabled,
+    api_cfg_read,
+    api_cfg_write,
+    api_config_present,
+    disable_http_transport,
+    http_transport_view,
+    list_tokens,
+    redact_config,
+    remove_token,
+    set_allow_apply,
+    set_http_transport,
+)
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -39,9 +54,9 @@ def _safe_exists(p: Path) -> bool:
     """Path.exists() that returns False on EACCES.
 
     Python 3.12 changed Path.exists() to propagate non-ENOENT OSErrors, so a
-    plain `.exists()` on a root-owned file (e.g. /etc/xinas-mcp/config.json,
-    mode 0640 root:root) raises PermissionError when the TUI is run as a
-    non-root user. We treat "can't stat" the same as "not there" for display.
+    plain `.exists()` on a root-owned file (e.g. /etc/xinas-api/config.json,
+    mode 0640 root:xinas-admin) raises PermissionError when the TUI is run as
+    a non-root user. We treat "can't stat" the same as "not there" for display.
     """
     try:
         return p.exists()
@@ -83,15 +98,34 @@ async def _probe_unix_socket(sock_path: Path, *, attempts: int = 4, delay: float
 
 
 def _cfg_restart_service() -> tuple[bool, str]:
-    """Restart xinas-mcp after a config write so port/tokens/TLS take effect."""
-    r = subprocess.run(
-        ["systemctl", "restart", "xinas-mcp"],
-        capture_output=True,
-        text=True,
-    )
-    if r.returncode != 0:
-        return False, r.stderr.strip()
-    return True, ""
+    """Restart xinas-api so token / mcp.http / allow_apply edits take effect.
+
+    The MCP transport lives inside xinas-api.service now (ADR-0010), and the
+    api reads /etc/xinas-api/config.json once at boot (loadConfig — no hot
+    reload), so a config write only applies after the service restarts.
+    """
+    from xinas_menu.utils.service_ctl import ServiceController
+
+    return ServiceController().restart("xinas-api")
+
+
+async def _write_and_restart(
+    app, cfg: dict, audit_action: str, audit_target: str
+) -> tuple[bool, str]:
+    """Persist an api-config edit, restart xinas-api, and audit the change.
+
+    Returns ``(ok, err)`` — ``ok`` is False (with the message in ``err``) if
+    the write fails (e.g. EACCES for a non-root TUI) or the restart fails.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(None, api_cfg_write, cfg)
+    except Exception as exc:
+        app.audit.log(audit_action, audit_target, "FAIL")
+        return False, str(exc)
+    ok, err = await loop.run_in_executor(None, _cfg_restart_service)
+    app.audit.log(audit_action, audit_target, "OK" if ok else "FAIL")
+    return ok, err
 
 
 def _get_ip() -> str:
@@ -226,9 +260,9 @@ class MCPScreen(XiNASAppMixin, Screen):
         loop = asyncio.get_running_loop()
         ctl = ServiceController()
 
-        mcp_dist = Path("/opt/xiNAS/xiNAS-MCP/dist/index.js")
+        mcp_dist = Path("/opt/xiNAS/xiNAS-MCP/dist/mcp-stdio.js")
         nfs_sock = Path("/run/xinas-nfs-helper.sock")
-        mcp_cfg = _MCP_CONFIG
+        mcp_cfg = API_CONFIG_PATH
 
         nfs_state = await loop.run_in_executor(None, lambda: ctl.state("xinas-nfs-helper"))
 
@@ -265,20 +299,19 @@ class MCPScreen(XiNASAppMixin, Screen):
         lines.append(f"     {DIM}Socket:{NC}       {nfs_sock}  ({sock_status})")
         lines.append("")
 
-        # HTTP transport status
-        cfg = await loop.run_in_executor(None, _cfg_read)
-        http_on = cfg.get("http_enabled", False)
-        http_port = cfg.get("http_port", 8080)
-        tls = cfg.get("tls")
-        token_count = len(cfg.get("tokens", {}))
-        if http_on:
-            proto = "https" if tls else "http"
+        # HTTP transport status (read from the xinas-api config)
+        cfg = await loop.run_in_executor(None, api_cfg_read)
+        http = http_transport_view(cfg)
+        token_count = len(list_tokens(cfg))
+        if http["enabled"]:
+            apply_note = "apply on" if allow_apply_enabled(cfg) else "read/plan only"
             lines.append(
-                f"  {GRN}*{NC}  HTTP Remote   {GRN}Enabled ({proto}://…:{http_port}/mcp){NC}"
+                f"  {GRN}*{NC}  HTTP Remote   {GRN}Enabled (http://…:{http['port']}/mcp){NC}"
             )
             lines.append(f"     {DIM}Tokens:{NC}       {token_count} configured")
+            lines.append(f"     {DIM}MCP apply:{NC}    {apply_note}")
         else:
-            lines.append(f"  {DIM}○{NC}  HTTP Remote   {DIM}Disabled{NC}")
+            lines.append(f"  {DIM}○{NC}  HTTP Remote   {DIM}Disabled (stdio only){NC}")
         lines.append("")
 
         if _safe_exists(mcp_cfg):
@@ -312,7 +345,7 @@ class MCPScreen(XiNASAppMixin, Screen):
             lines.append(f"  {DIM}[ ]{NC} Claude Code   {YLW}Not configured locally{NC}")
             lines.append(f"     {DIM}Register with:{NC}")
             lines.append(
-                f"       claude mcp add --transport stdio xinas -- ssh -T root@{ip} xinas-mcp"
+                f"       claude mcp add --transport stdio xinas -- ssh -T root@{ip} xinas-mcp-stdio"
             )
 
         view = self.query_one("#mcp-content", ScrollableTextView)
@@ -392,11 +425,16 @@ class MCPScreen(XiNASAppMixin, Screen):
     @work(exclusive=True)
     async def _view_config(self) -> None:
         view = self.query_one("#mcp-content", ScrollableTextView)
+        loop = asyncio.get_running_loop()
+        if not await loop.run_in_executor(None, api_config_present):
+            view.set_content(f"[dim]xinas-api config not found: {API_CONFIG_PATH}[/dim]")
+            return
         try:
-            text = _MCP_CONFIG.read_text()
-            view.set_content(f"[bold]{_MCP_CONFIG}[/bold]\n\n{text}")
-        except FileNotFoundError:
-            view.set_content("[dim]MCP config not found.[/dim]")
+            cfg = await loop.run_in_executor(None, api_cfg_read)
+            text = json.dumps(redact_config(cfg), indent=2)
+            view.set_content(
+                f"[bold]{API_CONFIG_PATH}[/bold]  [dim](token values masked)[/dim]\n\n{text}"
+            )
         except Exception as exc:
             view.set_content(f"[red]{exc}[/red]")
 
@@ -464,54 +502,63 @@ class RemoteAccessScreen(XiNASAppMixin, Screen):
 
     def _refresh_menu(self) -> None:
         """Rebuild menu to reflect current config state."""
-        cfg = _cfg_read()
-        http_on = cfg.get("http_enabled", False)
-        http_port = cfg.get("http_port", 8080)
-        token_count = len(cfg.get("tokens", {}))
+        nav = self.query_one("#ra-nav", NavigableMenu)
+        if not api_config_present():
+            nav.update_items([MenuItem("0", "Back")])
+            view = self.query_one("#ra-content", ScrollableTextView)
+            view.set_content(
+                f"{_RED}xinas-api config not found:{_NC} {API_CONFIG_PATH}\n\n"
+                f"  {_DIM}MCP transport + tokens are managed in the xinas-api\n"
+                f"  config. Install/enable xinas-api first.{_NC}"
+            )
+            return
 
-        toggle_label = "Disable HTTP Transport" if http_on else "Enable HTTP Transport"
+        cfg = api_cfg_read()
+        http = http_transport_view(cfg)
+        port = http["port"] or DEFAULT_HTTP_PORT
+        token_count = len(list_tokens(cfg))
+        apply_on = allow_apply_enabled(cfg)
+
+        toggle_label = "Disable HTTP Transport" if http["enabled"] else "Enable HTTP Transport"
+        apply_label = "Disable MCP Apply" if apply_on else "Allow MCP Apply"
         items = [
             MenuItem("1", toggle_label),
-            MenuItem("2", f"Set Port (current: {http_port})"),
+            MenuItem("2", f"Set Port (current: {port})"),
             MenuItem("3", f"Manage Tokens ({token_count})"),
-            MenuItem("4", "Configure TLS"),
+            MenuItem("4", apply_label),
             MenuItem("5", "Show Connection Command"),
             MenuItem("0", "Back"),
         ]
-        nav = self.query_one("#ra-nav", NavigableMenu)
         nav.update_items(items)
         self._show_status_panel(cfg)
 
     def _show_status_panel(self, cfg: dict | None = None) -> None:
         """Update the right-side status panel."""
         if cfg is None:
-            cfg = _cfg_read()
+            cfg = api_cfg_read()
         GRN, RED, DIM, NC = "\033[32m", "\033[31m", "\033[2m", "\033[0m"
 
-        http_on = cfg.get("http_enabled", False)
-        http_port = cfg.get("http_port", 8080)
-        tls = cfg.get("tls")
-        tokens = cfg.get("tokens", {})
-        labels = cfg.get("token_labels", {})
+        http = http_transport_view(cfg)
+        apply_on = allow_apply_enabled(cfg)
+        tokens = list_tokens(cfg)
 
         lines = []
-        if http_on:
-            lines.append(f"  {GRN}●{NC}  HTTP Transport   {GRN}Enabled (port {http_port}){NC}")
+        if http["enabled"]:
+            lines.append(f"  {GRN}●{NC}  HTTP Transport   {GRN}Enabled (port {http['port']}){NC}")
         else:
             lines.append(f"  {RED}○{NC}  HTTP Transport   {RED}Disabled{NC}")
 
-        if tls and tls.get("cert"):
-            lines.append(f"  {GRN}●{NC}  TLS              {GRN}Configured{NC}")
-            lines.append(f"     {DIM}Cert:{NC} {tls['cert']}")
+        if apply_on:
+            lines.append(f"  {GRN}●{NC}  MCP Apply        {GRN}Allowed{NC}")
         else:
-            lines.append(f"  {DIM}○{NC}  TLS              {DIM}Not configured{NC}")
+            lines.append(f"  {DIM}○{NC}  MCP Apply        {DIM}Disabled (read/plan only){NC}")
 
         lines.append(f"  {DIM}   Tokens:{NC}          {len(tokens)} configured")
         if tokens:
             lines.append("")
-            for tv, role in tokens.items():
-                name = labels.get(tv, tv[:12] + "…")
-                lines.append(f"     {GRN}●{NC} {name}  {DIM}[{role}]{NC}")
+            for row in tokens:
+                tag = " (bootstrap)" if row["protected"] else ""
+                lines.append(f"     {GRN}●{NC} {row['principal']}  {DIM}[{row['role']}]{tag}{NC}")
 
         view = self.query_one("#ra-content", ScrollableTextView)
         view.set_content("\n".join(lines))
@@ -527,58 +574,60 @@ class RemoteAccessScreen(XiNASAppMixin, Screen):
         elif key == "3":
             self.app.push_screen(TokenManagementScreen())
         elif key == "4":
-            self._configure_tls()
+            self._toggle_allow_apply()
         elif key == "5":
             self._show_connection_cmd()
 
     @work(exclusive=True)
     async def _toggle_http(self) -> None:
         loop = asyncio.get_running_loop()
-        cfg = await loop.run_in_executor(None, _cfg_read)
-        http_on = cfg.get("http_enabled", False)
+        cfg = await loop.run_in_executor(None, api_cfg_read)
+        http = http_transport_view(cfg)
+        view = self.query_one("#ra-content", ScrollableTextView)
 
-        if http_on:
-            cfg["http_enabled"] = False
-            await loop.run_in_executor(None, _cfg_write, cfg)
-            await loop.run_in_executor(None, _cfg_restart_service)
-            self.app.audit.log("mcp.http_disable", "", "OK")
-            view = self.query_one("#ra-content", ScrollableTextView)
-            view.set_content(
-                f"{_GRN}HTTP transport disabled.{_NC}\n\n  {_DIM}MCP server is now stdio-only.{_NC}"
-            )
-        else:
-            token_count = len(cfg.get("tokens", {}))
-            if token_count == 0:
-                proceed = await self.app.push_screen_wait(
-                    ConfirmDialog(
-                        "No auth tokens configured.\n"
-                        "Enabling HTTP without tokens allows\n"
-                        "unauthenticated access.\n\n"
-                        "Continue anyway?",
-                        "Warning: No Tokens",
-                    )
+        if http["enabled"]:
+            new_cfg = disable_http_transport(cfg)
+            ok, err = await _write_and_restart(self.app, new_cfg, "mcp.http_disable", "")
+            if not ok:
+                view.set_content(f"{_RED}Failed: {err}{_NC}")
+            else:
+                view.set_content(
+                    f"{_GRN}HTTP transport disabled.{_NC}\n\n"
+                    f"  {_DIM}MCP is now reachable via stdio only.{_NC}"
                 )
-                if not proceed:
-                    return
-            cfg["http_enabled"] = True
-            await loop.run_in_executor(None, _cfg_write, cfg)
-            await loop.run_in_executor(None, _cfg_restart_service)
-            port = cfg.get("http_port", 8080)
-            ip = _get_ip()
-            self.app.audit.log("mcp.http_enable", f"port={port}", "OK")
-            view = self.query_one("#ra-content", ScrollableTextView)
-            view.set_content(
-                f"{_GRN}HTTP transport enabled on port {port}.{_NC}\n\n"
-                f"  {_DIM}Remote clients can connect at:{_NC}\n"
-                f"  http://{ip}:{port}/mcp"
+        else:
+            port = http["port"] or DEFAULT_HTTP_PORT
+            host = http["host"] or DEFAULT_HTTP_HOST
+            proceed = await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"Enable MCP HTTP transport on {host}:{port}?\n\n"
+                    "Remote clients presenting a valid bearer token will be\n"
+                    "able to reach the control API over TCP.",
+                    "Enable HTTP Transport",
+                )
             )
+            if not proceed:
+                return
+            new_cfg = set_http_transport(cfg, host=host, port=port)
+            ok, err = await _write_and_restart(self.app, new_cfg, "mcp.http_enable", f"port={port}")
+            if not ok:
+                view.set_content(f"{_RED}Failed: {err}{_NC}")
+            else:
+                ip = _get_ip()
+                view.set_content(
+                    f"{_GRN}HTTP transport enabled on port {port}.{_NC}\n\n"
+                    f"  {_DIM}Remote clients can connect at:{_NC}\n"
+                    f"  http://{ip}:{port}/mcp"
+                )
         self._refresh_menu()
 
     @work(exclusive=True)
     async def _set_port(self) -> None:
         loop = asyncio.get_running_loop()
-        cfg = await loop.run_in_executor(None, _cfg_read)
-        current = str(cfg.get("http_port", 8080))
+        cfg = await loop.run_in_executor(None, api_cfg_read)
+        http = http_transport_view(cfg)
+        current = str(http["port"] or DEFAULT_HTTP_PORT)
+        host = http["host"] or DEFAULT_HTTP_HOST
 
         while True:
             new_port = await self.app.push_screen_wait(
@@ -600,121 +649,71 @@ class RemoteAccessScreen(XiNASAppMixin, Screen):
                 continue
             break
 
-        cfg["http_port"] = port
-        await loop.run_in_executor(None, _cfg_write, cfg)
-        await loop.run_in_executor(None, _cfg_restart_service)
-        self.app.audit.log("mcp.http_port", str(port), "OK")
+        new_cfg = set_http_transport(cfg, host=host, port=port)
         view = self.query_one("#ra-content", ScrollableTextView)
-        view.set_content(f"{_GRN}HTTP port set to {port}.{_NC}")
+        ok, err = await _write_and_restart(self.app, new_cfg, "mcp.http_port", str(port))
+        if not ok:
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
+        elif http["enabled"]:
+            view.set_content(f"{_GRN}HTTP port set to {port}.{_NC}")
+        else:
+            ip = _get_ip()
+            view.set_content(
+                f"{_GRN}HTTP transport enabled on port {port}.{_NC}\n\n"
+                f"  {_DIM}Remote clients can connect at:{_NC}\n"
+                f"  http://{ip}:{port}/mcp"
+            )
         self._refresh_menu()
 
     @work(exclusive=True)
-    async def _configure_tls(self) -> None:
+    async def _toggle_allow_apply(self) -> None:
         loop = asyncio.get_running_loop()
-        cfg = await loop.run_in_executor(None, _cfg_read)
-        tls = cfg.get("tls") or {}
-
-        cert_path = await self.app.push_screen_wait(
-            InputDialog(
-                "Path to TLS certificate (.crt/.pem):\n\n(Leave empty to disable TLS)",
-                "TLS Certificate",
-                default=tls.get("cert", ""),
-                placeholder="/etc/ssl/certs/server.crt",
-            )
-        )
-        if cert_path is None:
-            return
-
-        if not cert_path.strip():
-            # Disable TLS
-            confirmed = await self.app.push_screen_wait(
-                ConfirmDialog(
-                    "Remove TLS configuration?\nHTTP will use plain (unencrypted) connections.",
-                    "Disable TLS?",
-                )
-            )
-            if confirmed:
-                cfg.pop("tls", None)
-                await loop.run_in_executor(None, _cfg_write, cfg)
-                await loop.run_in_executor(None, _cfg_restart_service)
-                self.app.audit.log("mcp.tls_disable", "", "OK")
-                view = self.query_one("#ra-content", ScrollableTextView)
-                view.set_content(
-                    f"{_GRN}TLS configuration removed.{_NC}\n\n"
-                    f"  {_DIM}HTTP will use plain (unencrypted) connections.{_NC}"
-                )
-            self._refresh_menu()
-            return
-
-        if not Path(cert_path).exists():
-            view = self.query_one("#ra-content", ScrollableTextView)
-            view.set_content(
-                f"{_RED}File not found: {cert_path}{_NC}\n\n"
-                f"  {_DIM}Provide a valid path to the TLS certificate.{_NC}"
-            )
-            return
-
-        key_path = await self.app.push_screen_wait(
-            InputDialog(
-                "Path to TLS private key (.key/.pem):",
-                "TLS Private Key",
-                default=tls.get("key", ""),
-                placeholder="/etc/ssl/private/server.key",
-            )
-        )
-        if not key_path:
-            return
-        if not Path(key_path).exists():
-            view = self.query_one("#ra-content", ScrollableTextView)
-            view.set_content(
-                f"{_RED}File not found: {key_path}{_NC}\n\n"
-                f"  {_DIM}Provide a valid path to the TLS private key.{_NC}"
-            )
-            return
-
-        ca_path = await self.app.push_screen_wait(
-            InputDialog(
-                "Path to CA certificate for mTLS (optional):\n\n(Leave empty to skip client verification)",
-                "CA Certificate",
-                default=tls.get("ca", ""),
-                placeholder="/etc/ssl/certs/ca.crt",
-            )
-        )
-        if ca_path is None:
-            return
-        if ca_path.strip() and not Path(ca_path).exists():
-            view = self.query_one("#ra-content", ScrollableTextView)
-            view.set_content(
-                f"{_RED}File not found: {ca_path}{_NC}\n\n"
-                f"  {_DIM}Provide a valid path to the CA certificate.{_NC}"
-            )
-            return
-
-        new_tls: dict = {"cert": cert_path.strip(), "key": key_path.strip()}
-        if ca_path.strip():
-            new_tls["ca"] = ca_path.strip()
-        cfg["tls"] = new_tls
-        await loop.run_in_executor(None, _cfg_write, cfg)
-        await loop.run_in_executor(None, _cfg_restart_service)
-        self.app.audit.log("mcp.tls_configure", f"cert={cert_path}", "OK")
-
-        msg = f"{_GRN}TLS configured:{_NC}\n\n  Cert: {cert_path}\n  Key:  {key_path}"
-        if ca_path.strip():
-            msg += f"\n  CA:   {ca_path}"
+        cfg = await loop.run_in_executor(None, api_cfg_read)
         view = self.query_one("#ra-content", ScrollableTextView)
-        view.set_content(msg)
+
+        if allow_apply_enabled(cfg):
+            new_cfg = set_allow_apply(cfg, False)
+            ok, err = await _write_and_restart(self.app, new_cfg, "mcp.allow_apply_disable", "")
+            if not ok:
+                view.set_content(f"{_RED}Failed: {err}{_NC}")
+            else:
+                view.set_content(
+                    f"{_GRN}MCP apply disabled.{_NC}\n\n"
+                    f"  {_DIM}Remote MCP clients can plan/read but not apply changes.{_NC}"
+                )
+        else:
+            proceed = await self.app.push_screen_wait(
+                ConfirmDialog(
+                    "Allow MCP clients to APPLY changes?\n\n"
+                    "By default remote MCP is plan/read-only. Enabling this\n"
+                    "lets an MCP client with an operator/admin token mutate\n"
+                    "host state (RAID, shares, network). RBAC still applies.",
+                    "Allow MCP Apply",
+                )
+            )
+            if not proceed:
+                return
+            new_cfg = set_allow_apply(cfg, True)
+            ok, err = await _write_and_restart(self.app, new_cfg, "mcp.allow_apply_enable", "")
+            if not ok:
+                view.set_content(f"{_RED}Failed: {err}{_NC}")
+            else:
+                view.set_content(
+                    f"{_GRN}MCP apply enabled.{_NC}\n\n"
+                    f"  {_DIM}Remote MCP clients may now apply changes (RBAC enforced).{_NC}"
+                )
         self._refresh_menu()
 
     @work(exclusive=True)
     async def _show_connection_cmd(self) -> None:
         loop = asyncio.get_running_loop()
-        cfg = await loop.run_in_executor(None, _cfg_read)
+        cfg = await loop.run_in_executor(None, api_cfg_read)
         ip = _get_ip()
-        port = cfg.get("http_port", 8080)
-        tls = cfg.get("tls")
-        proto = "https" if tls else "http"
-        tokens = cfg.get("tokens", {})
-        first_token = next(iter(tokens), None)
+        http = http_transport_view(cfg)
+        port = http["port"] or DEFAULT_HTTP_PORT
+        proto = "http"
+        tokens = list_tokens(cfg)
+        first_token = tokens[0]["token"] if tokens else None
         masked = f"{first_token[:8]}...{first_token[-4:]}" if first_token else ""
 
         _GRN, CYN, BLD, DIM, NC = "\033[32m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
@@ -781,9 +780,15 @@ class TokenManagementScreen(XiNASAppMixin, Screen):
         self._refresh()
 
     def _refresh(self) -> None:
-        cfg = _cfg_read()
-        tokens = cfg.get("tokens", {})
-        labels = cfg.get("token_labels", {})
+        nav = self.query_one("#tok-nav", NavigableMenu)
+        if not api_config_present():
+            nav.update_items([MenuItem("0", "Back")])
+            view = self.query_one("#tok-content", ScrollableTextView)
+            view.set_content(f"{_RED}xinas-api config not found:{_NC} {API_CONFIG_PATH}")
+            return
+
+        cfg = api_cfg_read()
+        tokens = list_tokens(cfg)
 
         items = [
             MenuItem("A", "Add Token"),
@@ -791,23 +796,21 @@ class TokenManagementScreen(XiNASAppMixin, Screen):
         ]
         if tokens:
             items.append(MenuItem("", "", separator=True))
-            idx = 1
-            for tv, role in tokens.items():
-                name = labels.get(tv, tv[:12] + "…")
-                items.append(MenuItem(str(idx), f"{name}  [{role}]", enabled=False))
-                idx += 1
+            for idx, row in enumerate(tokens, 1):
+                tag = " (bootstrap)" if row["protected"] else ""
+                items.append(
+                    MenuItem(str(idx), f"{row['principal']}  [{row['role']}]{tag}", enabled=False)
+                )
         items.append(MenuItem("0", "Back"))
-
-        nav = self.query_one("#tok-nav", NavigableMenu)
         nav.update_items(items)
 
         # Status panel
         GRN, DIM, NC = "\033[32m", "\033[2m", "\033[0m"
         lines = [f"  {len(tokens)} token(s) configured", ""]
-        for tv, role in tokens.items():
-            name = labels.get(tv, tv[:12] + "…")
-            lines.append(f"  {GRN}●{NC} {name}  {DIM}[{role}]{NC}")
-            lines.append(f"    {DIM}{tv[:8]}…{NC}")
+        for row in tokens:
+            tag = " (bootstrap, protected)" if row["protected"] else ""
+            lines.append(f"  {GRN}●{NC} {row['principal']}  {DIM}[{row['role']}]{tag}{NC}")
+            lines.append(f"    {DIM}{row['token'][:8]}…{NC}")
             lines.append("")
         if not tokens:
             lines.append(f"  {DIM}No tokens. Press A to add one.{NC}")
@@ -835,7 +838,7 @@ class TokenManagementScreen(XiNASAppMixin, Screen):
         while True:
             token_name = await self.app.push_screen_wait(
                 InputDialog(
-                    "Enter a name for the new token\n(e.g. remote-claude, monitoring):",
+                    "Enter a name (principal) for the new token\n(e.g. remote-claude, monitoring):",
                     "Token Name",
                     placeholder="remote-claude",
                 )
@@ -851,12 +854,13 @@ class TokenManagementScreen(XiNASAppMixin, Screen):
                     "Token name must be alphanumeric, dash, or underscore only.", severity="error"
                 )
                 continue
-            # Check duplicate name
-            cfg = await loop.run_in_executor(None, _cfg_read)
-            labels = cfg.get("token_labels", {})
-            if token_name in labels.values():
+            # Check duplicate principal
+            cfg = await loop.run_in_executor(None, api_cfg_read)
+            existing = {row["principal"] for row in list_tokens(cfg)}
+            if token_name in existing:
                 self.app.notify(
-                    f"Token '{token_name}' already exists. Remove it first to regenerate.",
+                    f"A token with principal '{token_name}' already exists. "
+                    "Remove it first to regenerate.",
                     severity="error",
                 )
                 continue
@@ -867,24 +871,25 @@ class TokenManagementScreen(XiNASAppMixin, Screen):
         if not role_key:
             return
 
-        # Generate token
+        # Generate token and persist (write api config + restart xinas-api)
         token_value = secrets.token_hex(32)
-
-        # Save atomically
-        cfg.setdefault("tokens", {})[token_value] = role_key
-        cfg.setdefault("token_labels", {})[token_value] = token_name
-        await loop.run_in_executor(None, _cfg_write, cfg)
-        await loop.run_in_executor(None, _cfg_restart_service)
-        self.app.audit.log("mcp.token_add", f"{token_name} ({role_key})", "OK")
+        new_cfg = add_token(cfg, token_value, token_name, role_key)
+        ok, err = await _write_and_restart(
+            self.app, new_cfg, "mcp.token_add", f"{token_name} ({role_key})"
+        )
+        if not ok:
+            view = self.query_one("#tok-content", ScrollableTextView)
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
+            return
 
         await self.app.push_screen_wait(
             ConfirmDialog(
-                f"Name:  {token_name}\n"
-                f"Role:  {role_key}\n\n"
+                f"Principal: {token_name}\n"
+                f"Role:      {role_key}\n\n"
                 f"Token (copy now — shown once):\n\n"
                 f"{token_value}\n\n"
                 f"Press Ctrl+Y to copy the token.\n"
-                f"Use as Bearer token in Authorization header.",
+                f"Use as Bearer token in the Authorization header.",
                 "Token Created",
                 ok_only=True,
                 copy_text=token_value,
@@ -895,24 +900,22 @@ class TokenManagementScreen(XiNASAppMixin, Screen):
     @work(exclusive=True)
     async def _remove_token(self) -> None:
         loop = asyncio.get_running_loop()
-        cfg = await loop.run_in_executor(None, _cfg_read)
-        tokens = cfg.get("tokens", {})
-        labels = cfg.get("token_labels", {})
+        cfg = await loop.run_in_executor(None, api_cfg_read)
+        # The bootstrap admin token is protected — never offered for removal.
+        tokens = [row for row in list_tokens(cfg) if not row["protected"]]
 
         if not tokens:
             view = self.query_one("#tok-content", ScrollableTextView)
             view.set_content(
-                f"{_YLW}No tokens to remove.{_NC}\n\n  {_DIM}Press A to add a token first.{_NC}"
+                f"{_YLW}No removable tokens.{_NC}\n\n"
+                f"  {_DIM}The bootstrap admin token is protected. Press A to add one.{_NC}"
             )
             return
 
         # Build selection menu
         items: list[MenuItem] = []
-        token_keys: list[str] = []
-        for idx, (tv, role) in enumerate(tokens.items(), 1):
-            name = labels.get(tv, tv[:12] + "…")
-            items.append(MenuItem(str(idx), f"{name}  [{role}]"))
-            token_keys.append(tv)
+        for idx, row in enumerate(tokens, 1):
+            items.append(MenuItem(str(idx), f"{row['principal']}  [{row['role']}]"))
         items.append(MenuItem("0", "Cancel"))
 
         sel = await self.app.push_screen_wait(_SelectionDialog("Select token to remove:", items))
@@ -920,26 +923,23 @@ class TokenManagementScreen(XiNASAppMixin, Screen):
             return
 
         rm_idx = int(sel) - 1
-        if rm_idx < 0 or rm_idx >= len(token_keys):
+        if rm_idx < 0 or rm_idx >= len(tokens):
             return
-        rm_key = token_keys[rm_idx]
-        rm_label = labels.get(rm_key, rm_key[:12] + "…")
+        row = tokens[rm_idx]
 
         confirmed = await self.app.push_screen_wait(
-            ConfirmDialog(f"Remove token '{rm_label}'?", "Confirm Remove")
+            ConfirmDialog(f"Remove token '{row['principal']}'?", "Confirm Remove")
         )
         if not confirmed:
             return
 
-        tokens.pop(rm_key, None)
-        labels.pop(rm_key, None)
-        cfg["tokens"] = tokens
-        cfg["token_labels"] = labels
-        await loop.run_in_executor(None, _cfg_write, cfg)
-        await loop.run_in_executor(None, _cfg_restart_service)
-        self.app.audit.log("mcp.token_remove", rm_label, "OK")
+        new_cfg = remove_token(cfg, row["token"])
+        ok, err = await _write_and_restart(self.app, new_cfg, "mcp.token_remove", row["principal"])
         view = self.query_one("#tok-content", ScrollableTextView)
-        view.set_content(f"{_GRN}Token '{rm_label}' removed.{_NC}")
+        if not ok:
+            view.set_content(f"{_RED}Failed: {err}{_NC}")
+        else:
+            view.set_content(f"{_GRN}Token '{row['principal']}' removed.{_NC}")
         self._refresh()
 
 

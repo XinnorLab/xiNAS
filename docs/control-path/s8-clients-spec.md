@@ -318,6 +318,85 @@ restart the two control-plane daemons — `xinas-api` and `xinas-agent`.
   `xinas-api,xinas-agent` and result `OK`/`FAILED`; per-service results
   are rendered in the content pane.
 
+## 6c. TUI MCP Server screen — transport + token config (post-retirement)
+
+The Python TUI's **MCP Server** screen (`xinas_menu/screens/mcp.py`:
+`MCPScreen`, `RemoteAccessScreen`, `TokenManagementScreen`) predates
+retirement (T14) and still spoke to the standalone `xinas-mcp` daemon —
+it restarted `xinas-mcp` after every write and read/wrote MCP settings
+from `/etc/xinas-mcp/config.json` in the legacy shape (`http_enabled`,
+`http_port`, `tls`, `tokens: {token: role}`, `token_labels`). None of
+that exists post-S8. This section is the live contract for what the
+screen manages now.
+
+**Config surface.** MCP transport + bearer tokens live in the api
+config, `/etc/xinas-api/config.json` (schema: `src/api/config.ts`,
+`ApiConfig`; env override `XINAS_API_CONFIG`). Until a runtime auth API
+lands (ADR-0010 §deferred; the `xinas_api` role README documents manual
+rotation as the Phase-0 mechanism), the screen edits that file **in
+place** as a bridge. Writes MUST:
+
+- preserve the file's existing mode + owner — Ansible templates it
+  `0640 root:xinas-admin` so the unprivileged `xinas-api` user keeps
+  read access; a naive `0600 root:root` rewrite would lock the service
+  out of its own config;
+- preserve every unrelated key (`controller_id`, `listen`, `state`,
+  `agent`, `internalTokensPath`, `tasks`, `seed`) untouched — the screen
+  only ever mutates `mcp.*` and `tokens`;
+- restart `xinas-api` (not the retired `xinas-mcp`), because
+  `loadConfig()` reads the file once at boot (no hot reload).
+
+If `/etc/xinas-api/config.json` is absent, the screen shows a clear
+"xinas-api config not found" state and offers no edits — it never
+writes a partial config that would break the service on next start.
+
+The TUI's OWN local settings (`email`, `healthcheck_schedule`,
+`retention`, menu polling) stay in `/etc/xinas-mcp/config.json` via
+`xinas_menu/utils/config.py` — that file is the TUI settings store, not
+the retired daemon's config, and is untouched by this reconciliation.
+
+**Schema mapping.** The screen adapts between its view model and
+`ApiConfig` via pure, unit-tested helpers in
+`xinas_menu/utils/api_config.py`:
+
+| screen concept | legacy key (removed) | api-config location |
+|---|---|---|
+| HTTP transport enabled | `http_enabled: bool` | presence of `mcp.http` |
+| listener host/port | `http_port: int` | `mcp.http: {host, port}` |
+| allow MCP apply | — | `mcp.allow_apply: bool` (default false) |
+| token → role | `tokens: {token: role}` | `tokens: {token: {principal, role}}` |
+| token label | `token_labels: {token: name}` | the token's `principal` string |
+| TLS | `tls: {cert, key, ca}` | **not supported** — removed |
+
+- **Enable/disable HTTP** = set / delete `mcp.http` (`{host, port}`;
+  host defaults `0.0.0.0`, port `8080`). Deleting `mcp.http` prunes an
+  otherwise-empty `mcp` object but keeps `mcp.allow_apply` if set.
+- **Tokens.** A new token is `secrets.token_hex(32)` mapped to
+  `{principal: <operator-entered name>, role: <viewer|operator|admin>}`.
+  `principal` carries the human label (there is no separate label map).
+  Assignable roles are `viewer|operator|admin`; `local_admin` (UDS peer
+  trust) and `internal_agent` (agent bearer, kept in the separate
+  `internalTokensPath` file so never in this map) are never
+  hand-assigned. The bootstrap token (`principal == "admin:bootstrap"`,
+  mirrored to `/etc/xinas-api/admin-token`) is **protected**: shown but
+  not removable from the TUI, so an operator cannot lock themselves out.
+- **allow_apply.** A toggle flips `mcp.allow_apply`. Default false ⇒
+  remote MCP is plan/read-only (the WS12 exit posture, ADR-0010 §gate,
+  §4 above); enabling warns that remote MCP clients may then mutate host
+  state.
+- **TLS is dropped.** `ApiConfig` has no TLS field (`mcp.http` and the
+  tcp `ListenSpec` are `{host, port}` only); the connection command
+  shows `http://…/mcp`. TLS, if required, is terminated by a front proxy
+  outside the api's config model.
+- **Redaction.** "View MCP Config" renders the api config with token
+  keys masked (principal + role kept), so bearer values are not dumped
+  to the panel.
+
+**Local stdio registration.** The install ships
+`/usr/local/bin/xinas-mcp-stdio` (the SDK transport adapter, §1 T5 /
+ADR-0010); there is no `xinas-mcp` binary. The screen's Claude Code
+registration hint uses `… -- ssh -T root@<ip> xinas-mcp-stdio`.
+
 ## 7. e2e parity scenarios (T15)
 
 1. **Same plan everywhere:** one share spec via REST, MCP tool call,
