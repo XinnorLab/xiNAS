@@ -1,0 +1,31 @@
+---
+# Resolve the physical disk(s) that host the OS and publish them as the
+# protected set. Shared by both detection modes.
+#
+# The heavy lifting lives in files/resolve_system_disks.sh (unit-tested against
+# stubbed findmnt/lsblk/zpool in tests/test_nvme_resolve_system_disks.py). It
+# walks each OS mount down the block-device stack — LVM, dm-crypt, MD, ZFS — so
+# an opaque root (/dev/mapper/..., /dev/mdX, rpool/ROOT/...) resolves to the real
+# disk(s) instead of being misread as a data drive. See raid-spec.md §2.
+
+- name: Resolve physical disks hosting the OS
+  ansible.builtin.script:
+    cmd: resolve_system_disks.sh
+  register: nvme_system_disks_raw
+  changed_when: false
+  check_mode: false
+
+- name: Publish the protected system-disk set
+  ansible.builtin.set_fact:
+    # True only when the ROOT filesystem mapped to a physical disk. A ZFS/iSCSI
+    # root whose ESP still populates nvme_system_drives is NOT treated as
+    # resolved, so the abort guard fires. See raid-spec.md §2.
+    nvme_system_root_resolved: >-
+      {{ 'root_resolved=1' in (nvme_system_disks_raw.stdout_lines | default([])) }}
+    nvme_system_drives: >-
+      {{ nvme_system_disks_raw.stdout_lines
+         | default([])
+         | map('trim')
+         | select('match', '^/dev/')
+         | unique
+         | list }}

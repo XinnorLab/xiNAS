@@ -1,59 +1,18 @@
 ---
 # Detect system drives and enumerate NVMe data drives
+#
+# System-drive detection resolves each OS mount (/, /boot, /boot/efi) down to
+# its underlying *physical* disk(s), walking through any device-mapper, LVM, or
+# MD layer (see resolve_system_disks.yml). A guided-LVM / dm-crypt / MD-root
+# install exposes the root fs as /dev/mapper/... or /dev/mdX, which must be
+# traced back to the NVMe controller that hosts it — otherwise that controller
+# is misclassified as a data drive and wiped. See raid-spec.md §2.
 
-# Step 1: Get the device containing the root filesystem
-- name: Get root filesystem device
-  ansible.builtin.shell: |
-    set -o pipefail
-    dev=$(findmnt -no SOURCE / | head -1)
-    # Handle partition numbers (nvme0n1p1 -> nvme0n1, sda1 -> sda)
-    echo "$dev" | sed -E 's/p?[0-9]+$//'
-  args:
-    executable: /bin/bash
-  register: root_device
-  changed_when: false
+# Step 1: Resolve the physical disks backing the OS mounts (-> nvme_system_drives)
+- name: Resolve system disks
+  ansible.builtin.include_tasks: resolve_system_disks.yml
 
-# Step 2: Get device containing /boot (if separate partition)
-- name: Get boot filesystem device
-  ansible.builtin.shell: |
-    set -o pipefail
-    dev=$(findmnt -no SOURCE /boot 2>/dev/null | head -1)
-    if [ -n "$dev" ]; then
-      echo "$dev" | sed -E 's/p?[0-9]+$//'
-    fi
-  args:
-    executable: /bin/bash
-  register: boot_device
-  changed_when: false
-  failed_when: false
-
-# Step 3: Get EFI system partition device
-- name: Get EFI partition device
-  ansible.builtin.shell: |
-    set -o pipefail
-    # Look for EFI System Partition by GUID
-    dev=$(lsblk -nro NAME,PARTTYPE 2>/dev/null | grep -i 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b' | awk '{print $1}' | head -1)
-    if [ -n "$dev" ]; then
-      echo "/dev/$dev" | sed -E 's/p?[0-9]+$//'
-    fi
-  args:
-    executable: /bin/bash
-  register: efi_device
-  changed_when: false
-  failed_when: false
-
-# Step 4: Consolidate system drives (remove duplicates and empty entries)
-- name: Build system drive list
-  ansible.builtin.set_fact:
-    nvme_system_drives: >-
-      {{ [root_device.stdout | trim,
-          boot_device.stdout | default('') | trim,
-          efi_device.stdout | default('') | trim]
-         | select('match', '^/dev/')
-         | unique
-         | list }}
-
-# Step 5: Get all NVMe controllers (base devices, not namespaces)
+# Step 2: Get all NVMe controllers (base devices, not namespaces)
 - name: List all NVMe controllers
   ansible.builtin.shell: |
     ls -1d /dev/nvme[0-9]* 2>/dev/null | grep -E '^/dev/nvme[0-9]+$' || true
@@ -64,8 +23,9 @@
   ansible.builtin.set_fact:
     nvme_all_controllers: "{{ nvme_controllers_raw.stdout_lines | default([]) }}"
 
-# Step 6: Filter out system drives to get data drives
-# For NVMe, we need to check if any namespace on the controller is a system drive
+# Step 3: Collapse system NVMe namespaces to their controller path
+# A non-NVMe OS disk (sda/vda) yields an empty set here — that is a legitimate
+# SATA-root + NVMe-data layout, not a failure.
 - name: Identify system NVMe controllers
   ansible.builtin.set_fact:
     nvme_system_controllers: >-
@@ -75,6 +35,7 @@
          | unique
          | list }}
 
+# Step 4: Everything that is not a system controller is a data drive
 - name: Set data drives fact (excluding system drives)
   ansible.builtin.set_fact:
     nvme_data_drives: >-
@@ -82,16 +43,26 @@
          | reject('in', nvme_system_controllers)
          | list }}
 
-# Step 7: Display detection results
+# Step 5: Defense in depth — refuse to proceed if a protected controller leaked
+# into the data set (guards against a future regression in the reject logic).
+- name: Assert no system controller was classified as a data drive
+  ansible.builtin.assert:
+    that:
+      - "nvme_data_drives | select('in', nvme_system_controllers) | list | length == 0"
+    fail_msg: >-
+      SAFETY ABORT: system NVMe controller(s)
+      {{ nvme_data_drives | select('in', nvme_system_controllers) | list | join(', ') }}
+      were about to be treated as data drives. Refusing to continue to avoid
+      wiping the OS disk.
+    success_msg: "System controllers correctly excluded from data drives."
+
+# Step 6: Display detection results
 - name: Display detected drives
   ansible.builtin.debug:
     msg: |
       ========== NVMe Drive Detection ==========
-      System drives (PROTECTED):
-        Root device: {{ root_device.stdout | trim }}
-        Boot device: {{ boot_device.stdout | default('(same as root)') | trim }}
-        EFI device:  {{ efi_device.stdout | default('(not found)') | trim }}
-        Controllers: {{ nvme_system_controllers | join(', ') | default('none') }}
+      System disks (PROTECTED): {{ nvme_system_drives | join(', ') | default('none') }}
+        System controllers:     {{ nvme_system_controllers | join(', ') | default('none') }}
 
       Data drives (available for namespace operations):
         {{ nvme_data_drives | join('\n        ') | default('none found') }}

@@ -1,6 +1,12 @@
 ---
 # Detect and remove existing storage configurations (LVM, MD RAID, ZFS) on data drives
 # This runs before namespace operations to ensure clean drives
+#
+# All device selection goes through the boundary-safe is_data_member helper
+# (files/disk_match.sh): a candidate PV / MD component / ZFS member is a target
+# only if it sits on a DATA drive and NOT on any protected OS disk. This closes
+# the string-prefix hole where a data controller /dev/nvme1 matched an OS disk
+# /dev/nvme10. See docs/Installer/raid-spec.md §3.
 
 - name: Initialize cleanup tracking
   ansible.builtin.set_fact:
@@ -10,15 +16,24 @@
     nvme_found_zpools: []
     nvme_cleanup_required: false
 
+- name: Stage the boundary-safe disk-match helper
+  ansible.builtin.copy:
+    src: disk_match.sh
+    dest: /tmp/xinas_disk_match.sh
+    mode: "0644"
+  changed_when: false
+
 # ============ DETECT LVM ============
 - name: Check for LVM physical volumes on data drives
   ansible.builtin.shell: |
-    pvs --noheadings -o pv_name,vg_name 2>/dev/null | while read pv vg; do
-      for drive in {{ nvme_data_drives | join(' ') }}; do
-        if [[ "$pv" == "${drive}"* ]]; then
-          echo "${pv}|${vg}"
-        fi
-      done
+    source /tmp/xinas_disk_match.sh
+    DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
+    SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
+    SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
+    pvs --noheadings -o pv_name,vg_name 2>/dev/null | while read -r pv vg; do
+      if is_data_member "$pv"; then
+        echo "${pv}|${vg}"
+      fi
     done
   args:
     executable: /bin/bash
@@ -39,17 +54,19 @@
 # ============ DETECT MD RAID ============
 - name: Check for MD RAID arrays using data drives
   ansible.builtin.shell: |
+    source /tmp/xinas_disk_match.sh
+    DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
+    SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
+    SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
     for md in /dev/md*; do
       [ -b "$md" ] || continue
       # Get component devices
       components=$(mdadm --detail "$md" 2>/dev/null | grep -E '^\s+/dev/' | awk '{print $NF}')
       for comp in $components; do
-        for drive in {{ nvme_data_drives | join(' ') }}; do
-          if [[ "$comp" == "${drive}"* ]]; then
-            echo "$md"
-            break 2
-          fi
-        done
+        if is_data_member "$comp"; then
+          echo "$md"
+          break
+        fi
       done
     done 2>/dev/null | sort -u
   args:
@@ -72,16 +89,18 @@
 
 - name: Check for ZFS pools using data drives
   ansible.builtin.shell: |
-    zpool list -H -o name 2>/dev/null | while read pool; do
+    source /tmp/xinas_disk_match.sh
+    DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
+    SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
+    SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
+    zpool list -H -o name 2>/dev/null | while read -r pool; do
       # Get devices in pool
       devices=$(zpool status "$pool" 2>/dev/null | grep -E '^\s+(nvme|sd)' | awk '{print "/dev/"$1}')
       for dev in $devices; do
-        for drive in {{ nvme_data_drives | join(' ') }}; do
-          if [[ "$dev" == "${drive}"* ]]; then
-            echo "$pool"
-            break 2
-          fi
-        done
+        if is_data_member "$dev"; then
+          echo "$pool"
+          break
+        fi
       done
     done 2>/dev/null | sort -u
   args:
@@ -200,10 +219,15 @@
 
 - name: Zero MD superblocks on data drives
   ansible.builtin.shell: |
-    for drive in {{ nvme_data_drives | join(' ') }}; do
-      for part in ${drive}* ${drive}p*; do
-        [ -b "$part" ] && mdadm --zero-superblock "$part" 2>/dev/null || true
-      done
+    source /tmp/xinas_disk_match.sh
+    DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
+    SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
+    SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
+    # Enumerate real block devices and act only on those that resolve to a data
+    # drive — never glob ${drive}* (which would reach /dev/nvme10 from nvme1).
+    lsblk -rnpo NAME,TYPE 2>/dev/null | awk '$2 == "part" || $2 == "disk" { print $1 }' | while IFS= read -r part; do
+      is_data_member "$part" || continue
+      [ -b "$part" ] && mdadm --zero-superblock "$part" 2>/dev/null || true
     done
   args:
     executable: /bin/bash
@@ -234,10 +258,13 @@
 
 - name: Remove LVM physical volumes on data drives
   ansible.builtin.shell: |
-    for drive in {{ nvme_data_drives | join(' ') }}; do
-      for part in ${drive}* ${drive}p*; do
-        [ -b "$part" ] && pvremove -f "$part" 2>/dev/null || true
-      done
+    source /tmp/xinas_disk_match.sh
+    DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
+    SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
+    SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
+    lsblk -rnpo NAME,TYPE 2>/dev/null | awk '$2 == "part" || $2 == "disk" { print $1 }' | while IFS= read -r part; do
+      is_data_member "$part" || continue
+      [ -b "$part" ] && pvremove -f "$part" 2>/dev/null || true
     done
   args:
     executable: /bin/bash

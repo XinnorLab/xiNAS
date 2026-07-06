@@ -32,12 +32,15 @@
     - name: Abort if system drive not found
       ansible.builtin.fail:
         msg: |
-          CRITICAL: Could not detect system drive.
+          CRITICAL: Could not detect the OS system drive.
           Aborting to prevent accidental data loss on the OS drive.
+          (The root filesystem did not resolve to a physical disk — expected for
+          diskless / iSCSI / unresolved-ZFS roots.)
           If this is intentional, set nvme_abort_if_no_system_drive: false
       when:
         - nvme_abort_if_no_system_drive | bool
-        - nvme_system_drives is not defined or nvme_system_drives | length == 0
+        - (nvme_system_drives is not defined or nvme_system_drives | length == 0)
+          or not (nvme_system_root_resolved | default(false))
 
     - name: Check for available data drives
       ansible.builtin.debug:
@@ -90,23 +93,27 @@
     - name: Detect system and data drives
       ansible.builtin.include_tasks: detect_drives.yml
 
-    # Phase 2: Cleanup existing storage (LVM, MD, ZFS) on data drives
+    # Phase 2: Abort if system drive not found (safety check) — MUST run before
+    # any cleanup so a failed OS-disk detection never reaches vgremove/wipefs.
+    - name: Abort if system drive not found
+      ansible.builtin.fail:
+        msg: |
+          CRITICAL: Could not detect the OS system drive.
+          Aborting to prevent accidental data loss on the OS drive.
+          (The root filesystem did not resolve to a physical disk — expected for
+          diskless / iSCSI / unresolved-ZFS roots.)
+          If this is intentional, set nvme_abort_if_no_system_drive: false
+      when:
+        - nvme_abort_if_no_system_drive | bool
+        - (nvme_system_drives is not defined or nvme_system_drives | length == 0)
+          or not (nvme_system_root_resolved | default(false))
+
+    # Phase 3: Cleanup existing storage (LVM, MD, ZFS) on data drives
     - name: Cleanup existing storage configurations
       ansible.builtin.include_tasks: cleanup_storage.yml
       when:
         - nvme_data_drives | length > 0
         - nvme_cleanup_existing_storage | default(true) | bool
-
-    # Phase 3: Abort if system drive not found (safety check)
-    - name: Abort if system drive not found
-      ansible.builtin.fail:
-        msg: |
-          CRITICAL: Could not detect system drive.
-          Aborting to prevent accidental data loss on the OS drive.
-          If this is intentional, set nvme_abort_if_no_system_drive: false
-      when:
-        - nvme_abort_if_no_system_drive | bool
-        - nvme_system_drives is not defined or nvme_system_drives | length == 0
 
     # Phase 4: Check if there are any data drives to process
     - name: Check for available data drives
@@ -187,12 +194,15 @@
     - name: Abort if system drive not found (fallback)
       ansible.builtin.fail:
         msg: |
-          CRITICAL: Could not detect system drive during VM fallback.
+          CRITICAL: Could not detect the OS system drive during VM fallback.
           Aborting to prevent accidental data loss on the OS drive.
+          (The root filesystem did not resolve to a physical disk — expected for
+          diskless / iSCSI / unresolved-ZFS roots.)
           If this is intentional, set nvme_abort_if_no_system_drive: false
       when:
         - nvme_abort_if_no_system_drive | bool
-        - nvme_system_drives is not defined or nvme_system_drives | length == 0
+        - (nvme_system_drives is not defined or nvme_system_drives | length == 0)
+          or not (nvme_system_root_resolved | default(false))
 
     - name: Fail when no data drives exist at all
       ansible.builtin.fail:

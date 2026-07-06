@@ -64,17 +64,27 @@ identical to how the `xinnorVM` preset fails today. The fallback changes only th
 
 Before touching anything, the role figures out which drives are off-limits.
 
-Source: [detect_drives.yml](../../collection/roles/nvme_namespace/tasks/detect_drives.yml) (and the matching block in `detect_all_drives.yml`).
+Source: [resolve_system_disks.yml](../../collection/roles/nvme_namespace/tasks/resolve_system_disks.yml) → [files/resolve_system_disks.sh](../../collection/roles/nvme_namespace/files/resolve_system_disks.sh) — shared by [detect_drives.yml](../../collection/roles/nvme_namespace/tasks/detect_drives.yml) (`nvme` mode) and [detect_all_drives.yml](../../collection/roles/nvme_namespace/tasks/detect_all_drives.yml) (`all` mode / VM fallback). The resolver logic lives in a standalone script so it can be unit-tested against stubbed `findmnt`/`lsblk`/`zpool` ([tests/test_nvme_resolve_system_disks.py](../../tests/test_nvme_resolve_system_disks.py)).
 
-It builds `nvme_system_drives` by collecting the parent device of:
+It builds `nvme_system_drives` by **resolving each OS mount down to the physical disk(s) it is built on**, walking through any device-mapper / LVM / MD / ZFS layer. For each of:
 
-1. **Root** — `findmnt -no SOURCE /`, stripped of partition suffix (`nvme0n1p2 → nvme0n1`, `vda1 → vda`).
-2. **Boot** — `findmnt -no SOURCE /boot` (only if separate from root).
-3. **EFI System Partition** — `lsblk -nro NAME,PARTTYPE` with the standard ESP GUID `c12a7328-f81f-11d2-ba4b-00a0c93ec93b`.
+1. **Root** — `findmnt -no SOURCE /`
+2. **Boot** — `findmnt -no SOURCE /boot` (only if separate from root)
+3. **EFI System Partition(s)** — `/boot/efi`, plus a GUID scan via `lsblk -nrpo NAME,PARTTYPE` matching the standard ESP GUID `c12a7328-f81f-11d2-ba4b-00a0c93ec93b`. **All** matching ESPs are resolved, not just the mounted one, so mirrored-ESP layouts protect every backing disk.
 
-In `nvme` mode, anything matching `/dev/nvmeXnY` is collapsed to the controller path `/dev/nvmeX` and pushed into `nvme_system_controllers`. That set is then **excluded** from `nvme_data_drives`.
+Resolution per source:
 
-Hard safety stop: if `nvme_abort_if_no_system_drive=true` (default) and none of the three queries returned a device, the play fails with a CRITICAL message rather than risk wiping the OS disk. Override to `false` only for diskless boot / iSCSI roots where you know what you're doing.
+- A `/dev/…` source is fed to `lsblk --inverse -npo NAME,TYPE <src>`; every row whose `TYPE == disk` is a physical system disk. A guided-LVM, dm-crypt, or MD-root install exposes `/` as `/dev/mapper/…` or `/dev/mdX`, **not** as `/dev/nvmeXnY`; the inverse device tree traces those opaque names back to the real disk(s) — including every member of an MD/LVM mirror or stripe. A btrfs subvolume suffix (`/dev/sda2[/@]`) is stripped first.
+- A **ZFS** root (`findmnt` returns `pool/dataset`, not a `/dev` path) is resolved via `zpool status -LP <pool>`: every `/dev/…` vdev member is run back through `lsblk --inverse`, so all pool disks are protected — not just whichever one happens to carry the ESP.
+- An **nfs / network** source (`host:/export`), or a ZFS pool that `zpool` cannot resolve, contributes nothing.
+
+> **Why not just strip the partition suffix?** The previous implementation ran `sed 's/p?[0-9]+$//'` on the raw `findmnt` output. On a direct-partition root (`/dev/nvme0n1p2 → /dev/nvme0n1`) that worked, but on an LVM root it produced `/dev/mapper/ubuntu--vg-ubuntu--lv` — a string that *passes* the `^/dev/` filter (so `nvme_system_drives` was non-empty and the abort guard below never fired) but resolves to no physical NVMe controller. The OS disk was then classified as a data drive and wiped by the §3 cleanup pass. Resolving through `lsblk --inverse` (and `zpool status` for ZFS) closes that fail-open hole.
+
+In `nvme` mode, anything matching `/dev/nvmeXnY` in `nvme_system_drives` is collapsed to the controller path `/dev/nvmeX` and pushed into `nvme_system_controllers`. That set is then **excluded** from `nvme_data_drives`. In `all` mode the physical system disks are excluded directly. An OS on a non-NVMe disk (SATA `/dev/sda`, virtio `/dev/vda`) is a legitimate configuration: `nvme_system_controllers` is empty and every NVMe drive is available as data — that empty set is **not** treated as a failure.
+
+Hard safety stop: the resolver also publishes `nvme_system_root_resolved` — true **only** when the *root filesystem* mapped to at least one physical disk. If `nvme_abort_if_no_system_drive=true` (default) and either no system disk resolved **or** the root did not resolve, the play fails with a CRITICAL message **before any cleanup runs**. The `root_resolved` signal is what makes ZFS / iSCSI / diskless roots fail closed even when a `/boot/efi` ESP already populated `nvme_system_drives` — protecting the ESP disk while silently leaving other root-pool members exposed is exactly the trap this avoids. Override to `false` only for roots you have manually confirmed are safe.
+
+Defense in depth: after the split, each detection path runs an `assert` that `nvme_data_drives` shares no member with the protected set (`nvme_system_controllers` in `nvme` mode, `nvme_system_drives` in `all` mode). By construction this always holds; the assert exists to halt the play immediately if a future edit to the reject logic ever regresses.
 
 Result: `nvme_system_drives` (protected list) and `nvme_data_drives` (everything else).
 
@@ -88,9 +98,23 @@ Source: [cleanup_storage.yml](../../collection/roles/nvme_namespace/tasks/cleanu
 
 Three independent scans, each restricted to `nvme_data_drives`:
 
-- **LVM** — `pvs --noheadings -o pv_name,vg_name` filtered by drive path. Produces `nvme_found_lvm_pvs` and the unique `nvme_found_lvm_vgs`.
-- **MD RAID** — for every `/dev/md*` block device, `mdadm --detail` is parsed and each component compared against the data-drive set. Matching arrays land in `nvme_found_md_arrays`.
-- **ZFS** — only if `which zpool` succeeds. `zpool status` is parsed for `nvme*` / `sd*` devices and any pool that includes one of the data drives is added to `nvme_found_zpools`.
+- **LVM** — `pvs --noheadings -o pv_name,vg_name`; each PV tested for membership. Produces `nvme_found_lvm_pvs` and the unique `nvme_found_lvm_vgs`.
+- **MD RAID** — for every `/dev/md*` block device, `mdadm --detail` is parsed and each component tested for membership. Matching arrays land in `nvme_found_md_arrays`.
+- **ZFS** — only if `which zpool` succeeds. `zpool status` is parsed for `nvme*` / `sd*` devices and any pool with a member on a data drive is added to `nvme_found_zpools`.
+
+**Boundary-safe membership.** Every one of those tests — and the later
+`mdadm --zero-superblock` / `pvremove` sweeps — routes through the
+`is_data_member` helper in [files/disk_match.sh](../../collection/roles/nvme_namespace/files/disk_match.sh)
+rather than a string prefix. The old `[[ "$pv" == "${drive}"* ]]` / `${drive}*`
+glob matching was unsafe: a data controller `/dev/nvme1` is a string prefix of
+`/dev/nvme10`, so an OS partition `/dev/nvme10n1p3` on a *protected* controller
+was dragged into cleanup and its VG/array/pool destroyed. `is_data_member`
+matches only on device-name boundaries (`/dev/nvme1` → `/dev/nvme1n…`, never
+`/dev/nvme10…`) **and** vetoes anything that also resolves onto a
+`nvme_system_drives` / `nvme_system_controllers` member first. The
+`zero-superblock` and `pvremove` sweeps enumerate real block devices via
+`lsblk` and filter them through the same helper instead of globbing
+`${drive}*`. Unit tests: [tests/test_nvme_disk_match.py](../../tests/test_nvme_disk_match.py).
 
 `nvme_cleanup_required` is the OR of the three.
 
@@ -465,7 +489,10 @@ For one-shot validation, the Textual TUI's Health tab (`xinas-menu`) and the MCP
 
 | Failure | Where it would show up | Guard |
 |---|---|---|
-| OS drive detected as a data drive | `xicli raid create` would clobber the boot disk | `nvme_abort_if_no_system_drive=true` halts the play if none of root / boot / EFI resolves |
+| OS on LVM / dm-crypt / MD root misclassified as a data drive | `/` resolves to `/dev/mapper/…` or `/dev/mdX`, which failed the `^/dev/nvme` collapse, so the OS controller fell into `nvme_data_drives` and §3 cleanup ran `vgremove -f` + `wipefs`/`dd` on the boot disk | `resolve_system_disks.sh` walks `lsblk --inverse` from every OS mount down to the physical disk(s); the OS controller is excluded before cleanup (§2) |
+| OS on a ZFS root pool, only one member carrying the ESP | root resolved via ESP to one disk, so the abort never fired and the *other* mirror member landed in `nvme_data_drives` | resolver resolves the zpool's own vdevs via `zpool status`; `nvme_system_root_resolved` fails the play closed when the root itself can't be mapped (§2) |
+| Cleanup drags a protected disk in via string-prefix match | data controller `/dev/nvme1` prefix-matched OS partition `/dev/nvme10n1p3`, destroying its VG/array/pool | `is_data_member` (`files/disk_match.sh`) matches on device-name boundaries and vetoes any device on a protected disk (§3.1) |
+| OS drive detected as a data drive | `xicli raid create` would clobber the boot disk | `nvme_abort_if_no_system_drive=true` halts the play **before cleanup** if no system disk resolves or the root did not resolve; a post-split `assert` re-checks that no protected drive leaked into `nvme_data_drives` |
 | Unattended default-preset install on a virtio/SCSI VM (0 NVMe controllers) | `nvme_namespace` generated no facts → `raid_fs` aborted with "xiraid_arrays undefined" | Empty-NVMe fallback (§1.1): re-probe all disks; auto-continue in whole-disk mode on VMs, fail-fast with a remedy on bare metal |
 | Existing LVM / MD / ZFS still bound to data drives | `xicli drive clean` errors; arrays don't form | `cleanup_storage.yml` discovers + destroys all three before any namespace op |
 | Operator did not consent to wiping prior storage | Silent destruction would be unacceptable | Interactive `YES` prompt; only bypassed by explicit `nvme_skip_cleanup_confirmation=true` |
