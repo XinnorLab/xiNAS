@@ -282,6 +282,35 @@ with `NOT_FOUND: no such API route` on a raw slash. The TUI does this via
 array / pool ids). Regression: the un-encoded form aborted the whole
 "Delete Array" teardown on step 1.
 
+## 6b. Break-glass control-plane restart (TUI, post-S8)
+
+The MCP Server screen (`xinas_menu/screens/mcp.py`, reached via
+Integrations → MCP Server) offers a single **break-glass** action to
+restart the two control-plane daemons — `xinas-api` and `xinas-agent`.
+
+- **Menu item:** `[R] Restart Control-Plane (api+agent)` (letter key —
+  the numbered slots are full). It sits above `Back`.
+- **Order matters.** `xinas-agent` declares `Requires=`/`After=
+  xinas-api`, so restarting `xinas-api` alone stops the agent (Requires
+  propagates the stop) and nothing pulls it back up. The action restarts
+  **`xinas-api` first, then `xinas-agent`**, so the agent rebinds to a
+  healthy api. The ordering is enforced by the pure helper
+  `_restart_control_plane(restart_fn)` (dependency-ordered restart tuple
+  `_CONTROL_PLANE_SERVICES = ("xinas-api", "xinas-agent")`), which is
+  unit-tested independent of the Textual worker.
+- **Guarded, not routine.** A `ConfirmDialog` states that the restart
+  briefly interrupts the REST/MCP API, disconnects active remote MCP/API
+  sessions (including the TUI's own `control_client` UDS connection), and
+  may interrupt in-flight operations — "use only to recover a hung
+  daemon." systemd already recovers both units on failure
+  (`Restart=on-failure`), so this is a manual recovery lever, not a
+  day-2 button.
+- **No bare stop.** The action only ever *restarts*; it never stops or
+  disables either daemon, and never targets `xinas-agent` in isolation.
+- **Audit.** Emits `mcp.control_plane_restart` with target
+  `xinas-api,xinas-agent` and result `OK`/`FAILED`; per-service results
+  are rendered in the content pane.
+
 ## 7. e2e parity scenarios (T15)
 
 1. **Same plan everywhere:** one share spec via REST, MCP tool call,
