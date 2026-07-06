@@ -6,6 +6,119 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.3.0] - 2026-07-06
+
+### Added
+
+- **Installing operator is auto-added to `xinas-admin`.** Without a human
+  member of `xinas-admin`, a non-root operator hit
+  `connect EACCES /run/xinas/api.sock` from `xinas-mcp-stdio` and the CLI
+  until they manually ran `usermod -aG`. The `xinas_api` role now resolves
+  the operator behind the install (`SUDO_USER`/`USER`; root and empty
+  skipped) and appends them — plus any accounts in the new
+  `xinas_api_admin_users` list — to `xinas-admin`. `append: true` means
+  nobody is created or removed; opt out with
+  `xinas_api_add_installing_operator: false`. Requires the `xinas_api`
+  role to re-run on update.
+- **Actionable hint when the API socket rejects an MCP connection.**
+  `xinas-mcp-stdio` now maps the socket errno to a fix — `EACCES` → join
+  `xinas-admin` (or run as root); `ENOENT`/`ECONNREFUSED` → check
+  `systemctl status xinas-api` — instead of surfacing a bare
+  `connect EACCES … api.sock`. The raw errno and socket path are kept.
+- **Break-glass control-plane restart on the MCP screen.** A guarded
+  "[R] Restart Control-Plane (api+agent)" action on Integrations → MCP
+  Server restarts `xinas-api` then `xinas-agent` (order matters — the
+  agent `Requires=`/`After=` the api). A confirm dialog warns it
+  disconnects active remote MCP/API sessions; it never stops a daemon,
+  never targets the agent alone, and is audit-logged as
+  `mcp.control_plane_restart` (#250).
+- **User deletion clears XFS quotas first.** XFS user quotas are keyed by
+  numeric UID, so a plain `userdel` orphaned the account's block limits and
+  a later `useradd` reusing the freed UID silently inherited them. Delete
+  now snapshots the user's per-mount quotas, names them in the confirm
+  dialog, clears each to 0/0 via the NFS helper, then runs `userdel -r`;
+  on any failure every already-cleared quota is restored and the account
+  left intact.
+- **Account lock status in the List Users table.** A new Status
+  (Locked/Active) column sourced from `passwd -S` surfaces lock state
+  without drilling into Manage User.
+- **NFS helper pre-creates its op lock files at startup.** All four flock
+  lock files (`/run/xinas-exports.lock` and the nfs-conf/idmap/profile
+  locks) are created empty in `run_server()` before accepting
+  connections, so the lock surface is deterministic and observable from
+  boot rather than appearing lazily on first use.
+
+### Fixed
+
+- **TUI MCP Server screen retargeted to `xinas-api` config.** The screen
+  still spoke to the retired `xinas-mcp` daemon — restarting `xinas-mcp`
+  after every write and reading/writing `/etc/xinas-mcp/config.json` in
+  the legacy schema. Post-S8 (ADR-0010) the MCP transport lives inside
+  `xinas-api.service`; the screen now restarts `xinas-api` and reads/writes
+  `/etc/xinas-api/config.json` in the real `ApiConfig` schema
+  (`mcp.http`, `mcp.allow_apply`, `tokens: {token: {principal, role}}`),
+  preserving the file's `0640 root:xinas-admin` mode/owner. Drops the TLS
+  UI, adds an "Allow MCP apply" toggle, protects the bootstrap admin
+  token, and fixes the Claude Code registration hint (`xinas-mcp-stdio`).
+- **VM-aware fallback when NVMe detection finds no data drives.** An
+  unattended default-preset install on a KVM/virtio VM aborted
+  mid-pipeline (`nvme_namespace` found 0 data drives, `raid_fs` then
+  failed on an undefined `xiraid_arrays`). It now re-probes all block
+  devices and, on a VM, auto-continues in whole-disk mode with a forced
+  RAID1 log; on bare metal or a diskless host it fails with an actionable
+  message.
+- **Updates no longer abort on a dirty install tree.** The installer copies
+  preset files over tracked files, so `/opt/xiNAS` is git-dirty by design;
+  when a release also changed one of those files, `git checkout <tag>`
+  aborted. The update now force-checks-out the release tag (discarding
+  local modifications to *tracked* files only; untracked
+  `.xinas_applied_preset`, `keys/`, logs preserved). Requires the
+  `xinas_menu` role to re-run on update.
+- **Active filesystems are no longer dropped from observed state.** The
+  agent wrote `systemctl is-enabled` output into `mount_unit_state`, which
+  the control-path schema constrains to systemd `ActiveState`, so every
+  enabled `.mount` unit 400'd at `/internal/v1/observed` and was silently
+  dropped — a mounted `/mnt/data` never reached the store and the TUI
+  showed "No XFS filesystems found." The probe now queries
+  `systemctl is-active`, and the publisher surfaces non-retryable 4xx
+  rejections to the journal instead of dropping them silently.
+- **Leaked task leases are reclaimed — no more spurious "resource is
+  locked".** Deleting a just-created NFS share failed with
+  `CONFLICT: resource is locked by another task` because nothing drove the
+  60s lease TTL. A new 30s lease sweeper reaps expired leases whose holder
+  is already terminal (never touching in-flight work), the terminal-event
+  state transition and lease release now run in one transaction, and a
+  `lease_held` conflict renders a calm "temporarily locked… wait and retry"
+  dialog.
+- **RAID/share/filesystem deletes no longer 404 on ids containing `/`.**
+  A Share id mirrors the export path minus its leading slash
+  (`/mnt/data` → `mnt/data`), so raw interpolation split
+  `DELETE /api/v1/shares/mnt/data` into two segments and matched no route,
+  aborting "Delete Array" on step 1. Every id-in-path call site now
+  percent-encodes the id as a single segment via `control_client.quote_id()`.
+- **View Audit Log merges the control-path trail.** The screen read only
+  the local `/var/log/xinas/audit.log`, so shares created via MCP/API
+  (recorded as `share.create` in the hash-chained `GET /api/v1/audit`
+  trail) never appeared. It now queries both and renders them in one
+  chronological view, degrading gracefully when either source is missing.
+- **Retired `xinas-mcp` unit removed from the TUI.** The startup banner,
+  system-status screen, Service Status view, and menu restart actions
+  still referenced the standalone `xinas-mcp.service` (removed at install
+  time), painting a false red "inactive" and producing spurious restart
+  failures. They now reflect the real daemons — `xinas-api` + `xinas-agent`
+  — and "Restart NFS Helper" targets only `xinas-nfs-helper` (#247, #249).
+- **Wizard "Back" button styled flat to match Cancel.** `#btn-back` fell
+  through to Textual's stock bordered button style; it now shares the
+  neutral-button selector with `#btn-cancel`/`#btn-no` across
+  SelectDialog, ConfirmDialog, and InputDialog.
+- **`textual` pinned to `>=8.2.8,<8.3`.** An unpinned `textual>=0.71.0`
+  floor let CI and production drift onto 8.2.8, whose `Worker` is no longer
+  awaitable — breaking `python-typecheck` and the `_show_control_error`
+  call sites. Pinned identically across `pyproject.toml`, the `xinas_menu`
+  role, and `install.sh`, and `_show_control_error` dropped `@work` so it
+  stays awaitable (#251). Requires the `xinas_menu` role to re-run on
+  update.
+
 ## [3.2.1] - 2026-07-04
 
 ### Fixed
