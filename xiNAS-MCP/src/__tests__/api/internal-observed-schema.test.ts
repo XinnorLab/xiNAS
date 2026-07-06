@@ -306,6 +306,75 @@ describe('POST /internal/v1/observed — agent-emitted kinds are accepted (revie
     expect(setup.state.kv.get('/xinas/v1/observed/inventory/node')).not.toBeNull();
   });
 
+  /** A status-only Filesystem observation as the collector emits it. */
+  function observedFilesystem(mountUnitState: string): Record<string, unknown> {
+    return {
+      kind: 'Filesystem',
+      id: 'mnt-data.mount',
+      status: {
+        mounted: true,
+        fs_type: 'xfs',
+        backing_device: '/dev/xi_data',
+        mountpoint: '/mnt/data',
+        mount_options: ['rw', 'noatime'],
+        effective_mount_options: ['rw', 'noatime', 'logdev=/dev/xi_log', 'usrquota'],
+        mount_unit_name: 'mnt-data.mount',
+        mount_unit_enabled: true,
+        mount_unit_state: mountUnitState,
+        observed_at: new Date().toISOString(),
+      },
+    };
+  }
+
+  it('accepts a real enabled+active Filesystem observation (mount_unit_state=active) and stores it', async () => {
+    // The exact shape the fixed probe emits for /mnt/data. Before the fix the
+    // probe put an is-enabled value here and this 400'd → "No XFS filesystems
+    // found" while the FS was mounted and active.
+    const res = await request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send({
+        observed_at: new Date().toISOString(),
+        controller_id: CONTROLLER_ID,
+        deltas: [
+          {
+            kind: 'Filesystem',
+            id: 'mnt-data.mount',
+            op: 'upsert',
+            value: observedFilesystem('active'),
+          },
+        ],
+        complete_snapshots: ['Filesystem'],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.result.accepted).toBe(1);
+    expect(setup.state.kv.get('/xinas/v1/observed/Filesystem/mnt-data.mount')).not.toBeNull();
+  });
+
+  it('rejects a Filesystem observation carrying an is-enabled value in mount_unit_state (the old bug)', async () => {
+    // Documents why the bug fail-closed the batch: 'enabled' is an is-enabled
+    // value, not a systemd ActiveState, so it violates the enum.
+    const res = await request(setup.app)
+      .post('/internal/v1/observed')
+      .set('Authorization', `Bearer ${AGENT_TOKEN}`)
+      .send({
+        observed_at: new Date().toISOString(),
+        controller_id: CONTROLLER_ID,
+        deltas: [
+          {
+            kind: 'Filesystem',
+            id: 'mnt-data.mount',
+            op: 'upsert',
+            value: observedFilesystem('enabled'),
+          },
+        ],
+        complete_snapshots: [],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.errors[0]?.code).toBe('INVALID_ARGUMENT');
+    expect(setup.state.kv.get('/xinas/v1/observed/Filesystem/mnt-data.mount')).toBeNull();
+  });
+
   it('co-batch integrity: a previously-broken kind no longer fail-closes a real co-batched kind', async () => {
     // The agent ships NfsSession + ExportRule in one batch, and the boot sweep
     // mixes kinds. Before the fix, one rejected kind dropped the whole batch.

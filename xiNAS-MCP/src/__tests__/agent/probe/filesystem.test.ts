@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createFilesystemProbe } from '../../../agent/probe/filesystem.js';
+import { loadObservedSchemas } from '../../../api/observed-schemas.js';
 
 // ESM __dirname shim
 const __filename = fileURLToPath(import.meta.url);
@@ -35,6 +36,20 @@ function fakeExecFile(result: string) {
   };
 }
 
+// Fake systemctl that answers per verb (args[0]) — so `is-enabled` and
+// `is-active` return DIFFERENT strings, which is the whole point of the
+// mount_unit_enabled (enablement) vs mount_unit_state (ActiveState) split.
+function fakeSystemctl(byVerb: Record<string, string>) {
+  return (
+    _f: string,
+    a: string[],
+    _o: unknown,
+    cb: (err: Error | null, stdout: string, stderr: string) => void,
+  ) => {
+    cb(null, `${byVerb[a[0] ?? ''] ?? ''}\n`, '');
+  };
+}
+
 describe('FilesystemProbe', () => {
   const mountContent = readFileSync(join(fixtureDir, 'srv-share01.mount'), 'utf8');
 
@@ -54,15 +69,45 @@ describe('FilesystemProbe', () => {
     expect(fses[0]?.status?.mount_unit_name).toBe('srv-share01.mount');
   });
 
-  it('snapshot() marks unit as disabled when is-enabled returns disabled', async () => {
+  it('snapshot() sets mount_unit_state to the systemd ActiveState (is-active), NOT the is-enabled value', async () => {
+    // The .mount unit is enabled AND active. mount_unit_enabled must reflect
+    // enablement (is-enabled → 'enabled'); mount_unit_state must reflect the
+    // ActiveState (is-active → 'active') — the schema enum the api enforces.
     const probe = createFilesystemProbe({
       systemdDir: '/etc/systemd/system',
       readdir: fakeReaddir(mountContent) as any,
       readFile: fakeReadFile(mountContent) as any,
-      execFile: fakeExecFile('disabled') as any,
+      execFile: fakeSystemctl({ 'is-enabled': 'enabled', 'is-active': 'active' }) as any,
     });
-    const fses = await probe.snapshot();
-    expect(fses[0]?.status?.mount_unit_state).toBe('disabled');
+    const [fs] = await probe.snapshot();
+    expect(fs?.status?.mount_unit_state).toBe('active');
+    expect(fs?.status?.mount_unit_enabled).toBe(true);
+  });
+
+  it('snapshot() reports mount_unit_enabled=false when is-enabled returns disabled', async () => {
+    const probe = createFilesystemProbe({
+      systemdDir: '/etc/systemd/system',
+      readdir: fakeReaddir(mountContent) as any,
+      readFile: fakeReadFile(mountContent) as any,
+      execFile: fakeSystemctl({ 'is-enabled': 'disabled', 'is-active': 'inactive' }) as any,
+    });
+    const [fs] = await probe.snapshot();
+    expect(fs?.status?.mount_unit_enabled).toBe(false);
+    expect(fs?.status?.mount_unit_state).toBe('inactive');
+  });
+
+  it('snapshot() omits mount_unit_state when is-active is not a valid ActiveState', async () => {
+    // `systemctl is-active` prints 'unknown' for a masked/not-found unit — not
+    // in the schema enum. Emitting it would 400 the whole batch at ingest, so
+    // the probe omits the field instead (ingest strips `required`).
+    const probe = createFilesystemProbe({
+      systemdDir: '/etc/systemd/system',
+      readdir: fakeReaddir(mountContent) as any,
+      readFile: fakeReadFile(mountContent) as any,
+      execFile: fakeSystemctl({ 'is-enabled': 'static', 'is-active': 'unknown' }) as any,
+    });
+    const [fs] = await probe.snapshot();
+    expect(fs?.status?.mount_unit_state).toBeUndefined();
   });
 
   it('snapshot() ignores non-.mount files', async () => {
@@ -140,5 +185,45 @@ describe('snapshot enrichment', () => {
     expect(fs?.status.uuid).toBeUndefined();
     expect(fs?.status.size_bytes).toBeUndefined();
     expect(fs?.status.mountpoint).toBe('/srv/share01'); // row intact
+  });
+});
+
+// ---- Regression: probe output must satisfy the control-path Filesystem
+//      schema, or the api's /internal/v1/observed ingest 400s the whole batch
+//      and the publisher drops it silently — the "No XFS filesystems found"
+//      bug where an enabled+active mount never reached the store because the
+//      probe put an `is-enabled` value ('enabled') into the ActiveState field.
+describe('probe output satisfies the observed Filesystem schema', () => {
+  const mountContent = readFileSync(join(fixtureDir, 'srv-share01.mount'), 'utf8');
+  const MOUNTINFO_LINE =
+    '36 25 0:32 / /srv/share01 rw,noatime shared:5 - xfs /dev/md/xinas-data rw,logdev=/dev/xi_log\n';
+
+  it('an enabled+active managed .mount validates against the Filesystem kind schema', async () => {
+    const loaded = loadObservedSchemas();
+    // The spec IS present in the repo (tests run from source); a null means the
+    // path resolution is broken — surface it as a hard failure.
+    if (!loaded) throw new Error('loadObservedSchemas() returned null — api-v1.yaml not found');
+    const validate = loaded.schemas.Filesystem;
+    if (!validate) throw new Error('Filesystem schema was not compiled from api-v1.yaml');
+
+    const probe = createFilesystemProbe({
+      systemdDir: '/etc/systemd/system',
+      readdir: fakeReaddir(mountContent) as any,
+      readFile: fakeReadFile(mountContent) as any,
+      execFile: fakeSystemctl({ 'is-enabled': 'enabled', 'is-active': 'active' }) as any,
+      enrich: {
+        blkid: async () => ({ fstype: 'xfs', label: 'share01', uuid: 'uuid-1' }),
+        statfs: async () => ({ size_bytes: 1000, free_bytes: 900 }),
+        readMountinfo: async () => MOUNTINFO_LINE,
+      },
+    });
+    const [fs] = await probe.snapshot();
+    // Stamp observed_at as the convergence wrapper does before publishing.
+    const observation = { ...fs, status: { ...fs?.status, observed_at: '2026-07-05T00:00:00Z' } };
+
+    const ok = validate(observation);
+    expect(ok, `schema errors: ${JSON.stringify((validate as { errors?: unknown }).errors)}`).toBe(
+      true,
+    );
   });
 });

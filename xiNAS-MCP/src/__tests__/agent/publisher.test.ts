@@ -185,3 +185,73 @@ describe('Publisher — core enqueue + flush', () => {
     pub.dispose();
   });
 });
+
+// Regression: a 4xx rejection (e.g. a schema-invalid observation) is NOT
+// retried, so if it is also swallowed silently an entire kind's observations
+// vanish with no trace — the "No XFS filesystems found" investigation cost
+// (the Filesystem batch 400'd on an out-of-enum mount_unit_state and was
+// dropped with zero logging). The publisher must surface it.
+describe('Publisher — 4xx rejection is surfaced, not silently dropped', () => {
+  let dir: string;
+  let socketPath: string;
+  let server: Server;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'xinas-pub-4xx-'));
+    socketPath = join(dir, 'api.sock');
+    await new Promise<void>((resolve) => {
+      server = createServer((req, res) => {
+        req.resume();
+        req.on('end', () => {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              errors: [{ code: 'INVALID_ARGUMENT', message: 'delta[0] failed schema' }],
+            }),
+          );
+        });
+      });
+      server.listen(socketPath, resolve);
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('invokes onPublishError with the status, batch kinds, and api error body', async () => {
+    const errors: Array<{ status: number; kinds: string[]; body?: string }> = [];
+    const pub = new Publisher({
+      apiSocketPath: socketPath,
+      agentToken: 'tok',
+      controllerId: '00000000-0000-0000-0000-0000000000aa',
+      onPublishError: (info) => errors.push(info),
+    });
+
+    pub.enqueue({
+      kind: 'Filesystem',
+      id: 'mnt-data.mount',
+      op: 'upsert',
+      value: { kind: 'Filesystem', id: 'mnt-data.mount', status: {} },
+    });
+    await pub.flush();
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.status).toBe(400);
+    expect(errors[0]?.kinds).toEqual(['Filesystem']);
+    expect(errors[0]?.body).toContain('INVALID_ARGUMENT');
+  });
+
+  it('does not mark a 4xx-rejected kind for reconcile (non-retryable)', async () => {
+    const pub = new Publisher({
+      apiSocketPath: socketPath,
+      agentToken: 'tok',
+      controllerId: '00000000-0000-0000-0000-0000000000aa',
+      onPublishError: () => {},
+    });
+    pub.enqueue({ kind: 'Filesystem', id: 'x.mount', op: 'upsert', value: {} });
+    await pub.flush();
+    expect(pub.needsReconcile('Filesystem')).toBe(false);
+  });
+});

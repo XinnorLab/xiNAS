@@ -77,6 +77,7 @@ describe('Publisher — retry + pendingReconcile', () => {
       agentToken: 'tok',
       controllerId: '00000000-0000-0000-0000-0000000000aa',
       retryBaseMs: 0,
+      onPublishError: () => {}, // silence the default stderr sink in tests
     });
 
     const delta: ObservationDelta = { kind: 'Disk', id: 'nvme0n1', op: 'upsert', value: {} };

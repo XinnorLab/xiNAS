@@ -49,9 +49,24 @@ interface FilesystemProbeOptions {
   enrich?: FsEnrichDeps;
 }
 
+/**
+ * Valid systemd ActiveState values for a .mount unit — the exact enum the
+ * control-path `Filesystem.status.mount_unit_state` schema accepts. `systemctl
+ * is-active` can also print 'unknown' (masked/not-found); that is NOT a member,
+ * so the probe omits the field rather than emit a value ingest would 400 on.
+ */
+const ACTIVE_STATES: ReadonlySet<string> = new Set([
+  'active',
+  'inactive',
+  'failed',
+  'activating',
+  'deactivating',
+]);
+
 export interface FilesystemSnapshot extends ObservedFilesystem {
   status: ObservedFilesystem['status'] & {
-    mount_unit_state: string;
+    /** systemd ActiveState; absent when is-active reports a non-enum value. */
+    mount_unit_state?: string;
     uuid?: string;
     label?: string;
     size_bytes?: number;
@@ -137,6 +152,8 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
         const unitPath = join(sysDir, unitName);
         const content = await rf(unitPath, 'utf8');
         const parsed = parseSystemdUnit(content);
+        // Enablement (is-enabled): the boolean mount_unit_enabled. Values are
+        // 'enabled' / 'disabled' / 'static' / 'not-found' — NOT ActiveState.
         let enabledState = 'unknown';
         try {
           const { stdout } = await execFilePromise(ef, 'systemctl', ['is-enabled', unitName], {});
@@ -146,6 +163,25 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
           const anyErr = err as Record<string, unknown>;
           enabledState = (anyErr['stdout'] as string | undefined)?.trim() ?? 'not-found';
         }
+
+        // ActiveState (is-active): the mount_unit_state enum. A DISTINCT concept
+        // from enablement — is-enabled values ('enabled', 'static', …) are NOT
+        // valid ActiveState and would 400 the whole batch at ingest. systemctl
+        // exits non-zero for inactive/failed but still prints the state on
+        // stdout, so capture it from the error the same way.
+        let activeStateRaw: string | undefined;
+        try {
+          const { stdout } = await execFilePromise(ef, 'systemctl', ['is-active', unitName], {});
+          activeStateRaw = stdout.trim();
+        } catch (err: unknown) {
+          const anyErr = err as Record<string, unknown>;
+          activeStateRaw = (anyErr['stdout'] as string | undefined)?.trim();
+        }
+        const mountUnitState =
+          activeStateRaw !== undefined && ACTIVE_STATES.has(activeStateRaw)
+            ? activeStateRaw
+            : undefined;
+
         const fs = mountUnitToFilesystem(parsed, unitName, enabledState === 'enabled');
 
         // --- S5 T6 enrichment (each field degrades independently) ---
@@ -178,7 +214,7 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
             ...(blkidInfo?.label !== undefined ? { label: blkidInfo.label } : {}),
             ...(sizes !== undefined ? { size_bytes: sizes.size_bytes } : {}),
             ...(sizes !== undefined ? { free_bytes: sizes.free_bytes } : {}),
-            mount_unit_state: enabledState,
+            ...(mountUnitState !== undefined ? { mount_unit_state: mountUnitState } : {}),
           },
         });
       }

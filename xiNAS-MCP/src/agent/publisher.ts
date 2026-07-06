@@ -26,10 +26,21 @@ export interface PublisherOptions {
    * explicitly).
    */
   debounceMs?: number;
+  /**
+   * Sink for a non-retryable 4xx rejection of an observation batch. A 4xx means
+   * the payload is structurally wrong (e.g. a schema-invalid observed row), so
+   * the batch is dropped without retry. This callback makes that drop VISIBLE
+   * rather than silent — a silent drop once hid an entire kind's observations
+   * (the Filesystem batch 400'd on an out-of-enum mount_unit_state and vanished
+   * with no log). Default: write a structured JSON error line to stderr (→
+   * journal).
+   */
+  onPublishError?: (info: { status: number; kinds: string[]; body: string }) => void;
 }
 
 interface PostResult {
   status: number;
+  body: string;
 }
 
 /**
@@ -70,6 +81,18 @@ export class Publisher {
       retryBaseMs: 250,
       maxRetries: 5,
       debounceMs: 75,
+      onPublishError: (info) => {
+        process.stderr.write(
+          `${JSON.stringify({
+            level: 'error',
+            subsystem: 'publisher',
+            event: 'observation_batch_rejected',
+            status: info.status,
+            kinds: info.kinds,
+            error: info.body,
+          })}\n`,
+        );
+      },
       ...opts,
     };
   }
@@ -180,8 +203,14 @@ export class Publisher {
           return;
         }
 
-        // 4xx: don't retry — payload is structurally wrong.
+        // 4xx: don't retry — payload is structurally wrong. Surface it (a 4xx
+        // silently dropped here once hid a whole kind's observations).
         if (result.status >= 400 && result.status < 500) {
+          this.#opts.onPublishError({
+            status: result.status,
+            kinds: [...kindsInBatch],
+            body: result.body,
+          });
           return;
         }
 
@@ -219,9 +248,12 @@ export class Publisher {
           },
         },
         (res) => {
-          res.resume();
+          let respBody = '';
+          res.on('data', (chunk) => {
+            respBody += String(chunk);
+          });
           res.on('end', () => {
-            resolve({ status: res.statusCode ?? 0 });
+            resolve({ status: res.statusCode ?? 0, body: respBody });
           });
         },
       );
