@@ -1,7 +1,7 @@
 # NVMe VM-Fallback Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
+>
 > **Commits:** This repo's owner requires **explicit approval before any commit**. Treat every `git commit` step below as "stage the change and request approval," not "commit automatically."
 
 **Goal:** Stop the mid-pipeline abort when an unattended default-preset install runs on a KVM/virtio VM, by making the `nvme_namespace` role VM-aware when NVMe detection finds zero data drives.

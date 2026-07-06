@@ -102,6 +102,31 @@ def _get_ip() -> str:
         return "10.10.1.1"
 
 
+# Control-plane daemons, in dependency order. xinas-agent declares
+# Requires=/After= xinas-api, so xinas-api MUST be restarted first:
+# restarting the api stops the agent (Requires propagates the stop) and
+# nothing pulls it back up, so the agent is restarted explicitly after.
+_CONTROL_PLANE_SERVICES = ("xinas-api", "xinas-agent")
+
+
+def _restart_control_plane(restart_fn) -> tuple[bool, list[tuple[str, bool, str]]]:
+    """Restart the control-plane daemons in dependency order (api → agent).
+
+    ``restart_fn(name) -> (ok, err)`` is injected so this is unit-testable
+    without systemd. Returns ``(all_ok, [(service, ok, err), ...])``; every
+    service is attempted (honest per-service report) even if an earlier one
+    fails.
+    """
+    results: list[tuple[str, bool, str]] = []
+    all_ok = True
+    for svc in _CONTROL_PLANE_SERVICES:
+        ok, err = restart_fn(svc)
+        results.append((svc, ok, err))
+        if not ok:
+            all_ok = False
+    return all_ok, results
+
+
 # ── Main MCP menu ──────────────────────────────────────────────────────────
 
 _MENU = [
@@ -114,6 +139,7 @@ _MENU = [
     MenuItem("7", "View NFS Helper Logs"),
     MenuItem("8", "Check & Install Updates"),
     MenuItem("9", "Remote Access (HTTP)"),
+    MenuItem("R", "Restart Control-Plane (api+agent)"),
     MenuItem("0", "Back"),
 ]
 
@@ -158,6 +184,8 @@ class MCPScreen(XiNASAppMixin, Screen):
             self._check_updates()
         elif key == "9":
             self.app.push_screen(RemoteAccessScreen())
+        elif key == "R":
+            self._restart_control_plane_action()
 
     @work(exclusive=True)
     async def _toggle_nfs_helper(self) -> None:
@@ -310,6 +338,39 @@ class MCPScreen(XiNASAppMixin, Screen):
         self.app.audit.log("mcp.restart", "xinas-nfs-helper", "OK")
         view = self.query_one("#mcp-content", ScrollableTextView)
         view.set_content(f"{_GRN}Services restarted:{_NC}\n\n" + "\n".join(results))
+        self._show_status()
+
+    @work(exclusive=True)
+    async def _restart_control_plane_action(self) -> None:
+        """Break-glass: restart xinas-api then xinas-agent. See
+        docs/control-path/s8-clients-spec.md §6b."""
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(
+                "Restart the control-plane services xinas-api and xinas-agent?\n\n"
+                "This briefly interrupts the REST/MCP API, disconnects active\n"
+                "remote MCP/API sessions, and may interrupt in-flight operations.\n"
+                "Use only to recover a hung daemon.",
+                "Restart Control-Plane",
+            )
+        )
+        if not confirmed:
+            return
+        from xinas_menu.utils.service_ctl import ServiceController
+
+        loop = asyncio.get_running_loop()
+        ctl = ServiceController()
+        all_ok, results = await loop.run_in_executor(
+            None, lambda: _restart_control_plane(ctl.restart)
+        )
+        self.app.audit.log(
+            "mcp.control_plane_restart",
+            "xinas-api,xinas-agent",
+            "OK" if all_ok else "FAILED",
+        )
+        lines = [f"  {svc}: {'OK' if ok else (err[:60] or 'failed')}" for svc, ok, err in results]
+        header = _GRN if all_ok else _RED
+        view = self.query_one("#mcp-content", ScrollableTextView)
+        view.set_content(f"{header}Control-plane restart:{_NC}\n\n" + "\n".join(lines))
         self._show_status()
 
     @work(exclusive=True)
