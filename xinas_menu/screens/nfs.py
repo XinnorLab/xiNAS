@@ -16,7 +16,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
-from xinas_menu.api.control_client import ControlPathError, lease_conflict_message
+from xinas_menu.api.control_client import ControlPathError, lease_conflict_message, quote_id
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -624,7 +624,7 @@ class NFSScreen(XiNASAppMixin, Screen):
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "PATCH",
-                f"/api/v1/shares/{share_id}",
+                f"/api/v1/shares/{quote_id(share_id)}",
                 patch,
                 on_progress=self._task_progress("Edit Share"),
             )
@@ -680,7 +680,7 @@ class NFSScreen(XiNASAppMixin, Screen):
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "DELETE",
-                f"/api/v1/shares/{share_id}",
+                f"/api/v1/shares/{quote_id(share_id)}",
                 {},
                 on_progress=self._task_progress("Remove Share"),
             )

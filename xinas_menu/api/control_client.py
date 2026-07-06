@@ -21,9 +21,29 @@ import time
 import uuid
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import quote
 
 DEFAULT_SOCKET = "/run/xinas/api.sock"
 TERMINAL_STATES = {"success", "failed", "cancelled", "requires_manual_recovery"}
+
+
+def quote_id(ident: Any) -> str:
+    """Percent-encode a resource id for use as a single URL path segment.
+
+    A Share id mirrors ``encExportId(path)`` — the exported directory with its
+    leading slash stripped (``/mnt/data`` → ``mnt/data``) — so it can contain
+    internal ``/`` characters. The api's mutating routes match a single,
+    non-slash segment (``/shares/:id``); interpolating a raw ``mnt/data`` yields
+    ``/api/v1/shares/mnt/data``, which no route matches, and the request fails
+    with ``NOT_FOUND: no such API route`` (the raid-teardown "Delete Array"
+    404). Encoding it to ``mnt%2Fdata`` makes the route match; the server
+    decodes ``req.params.id`` back to ``mnt/data`` and resolves the share.
+
+    ``safe=""`` encodes every reserved char, so slash-free ids (UUIDs, systemd
+    mount-unit filesystem ids like ``mnt-data.mount``, array / pool names) pass
+    through byte-for-byte — wrapping any id segment is always safe.
+    """
+    return quote(str(ident), safe="")
 
 
 class ControlPathError(Exception):

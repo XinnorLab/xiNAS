@@ -21,6 +21,7 @@ from xinas_menu.api.control_client import (
     TaskFailed,
     TransportError,
     lease_conflict_message,
+    quote_id,
 )
 
 # Route table the stub serves: (method, path) -> (status, envelope) or a
@@ -369,6 +370,77 @@ def test_plan_apply_wait_cancel_check_sends_once_and_raises_task_cancelled(stub_
     assert exc.value.state == "cancelled"
     # Sent exactly ONCE despite multiple poll iterations.
     assert posts["cancels"] == 1
+
+
+# -- id path-segment encoding (share ids can contain '/') --------------------
+
+
+def test_quote_id_percent_encodes_a_slash_share_id():
+    """A share whose id mirrors encExportId(path) (e.g. '/mnt/data' → 'mnt/data')
+    carries an internal '/'. It MUST be percent-encoded so the api's single
+    -segment '/shares/:id' route matches instead of 404-ing 'no such API route'."""
+    assert quote_id("mnt/data") == "mnt%2Fdata"
+    assert quote_id("srv/nfs/share01") == "srv%2Fnfs%2Fshare01"
+
+
+def test_quote_id_is_a_noop_for_slash_free_ids():
+    """UUID share ids, systemd mount-unit filesystem ids ('mnt-data.mount'),
+    array names, and pool names contain only unreserved chars — encoding leaves
+    them byte-for-byte identical, so wrapping every id segment is always safe."""
+    for ident in ("1234-abcd-5678", "mnt-data.mount", "data", "default"):
+        assert quote_id(ident) == ident
+
+
+def test_quote_id_coerces_non_str():
+    assert quote_id(42) == "42"
+
+
+def test_encoded_share_id_travels_the_wire_unmangled(stub_socket):
+    """End-to-end: DELETE /shares/mnt%2Fdata must reach the server at that exact
+    encoded path (Python's http.client does not touch it), so the server sees a
+    single segment it can decode back to 'mnt/data'. This is the transport half
+    of the raid-teardown fix (screens build the path with quote_id)."""
+    posts = {"n": 0}
+
+    def share_delete():
+        posts["n"] += 1
+        if posts["n"] == 1:
+            return (
+                200,
+                {"result": {"plan_id": "p1", "state_revision_expected": 1, "blockers": []}},
+            )
+        return (202, {"result": {"task_id": "t1", "state": "queued"}})
+
+    wire_path = f"/api/v1/shares/{quote_id('mnt/data')}"
+    assert wire_path == "/api/v1/shares/mnt%2Fdata"
+    ROUTES[("DELETE", wire_path)] = share_delete
+    ROUTES[("GET", "/api/v1/tasks/t1")] = (200, {"result": {"task_id": "t1", "state": "success"}})
+
+    result = client(stub_socket).plan_apply_wait("DELETE", wire_path, {}, poll_s=0.01)
+    assert result["state"] == "success"
+    # The stub records the raw request path — it must be the encoded form.
+    assert any(m == "DELETE" and p == "/api/v1/shares/mnt%2Fdata" for (m, p, _) in BODIES)
+
+
+def test_id_in_path_call_sites_encode_the_id():
+    """Regression guard for the raid-teardown 404: no screen may interpolate a
+    raw resource id into an '/api/v1/<kind>/{...}' path — every such site must
+    wrap it in quote_id (a Share id can contain '/'). Fails on the pre-fix raw
+    f-strings."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "xinas_menu" / "screens"
+    # Matches an f-string URL f"/api/v1/<kind>/{ ... }" whose first interpolation
+    # is a raw id (not already wrapped in quote_id). Anchored on f" so prose /
+    # docstrings that merely mention a route path are not flagged.
+    site = re.compile(r'f"/api/v1/[a-z-]+/\{(?!quote_id\()')
+    offenders: list[str] = []
+    for src in root.rglob("*.py"):
+        for lineno, line in enumerate(src.read_text().splitlines(), 1):
+            if site.search(line):
+                offenders.append(f"{src.name}:{lineno}: {line.strip()}")
+    assert not offenders, "raw (un-encoded) resource id in URL path:\n" + "\n".join(offenders)
 
 
 def test_plan_apply_wait_without_cancel_check_unchanged(stub_socket):

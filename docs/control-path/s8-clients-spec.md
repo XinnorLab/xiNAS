@@ -270,6 +270,18 @@ A step failure STOPS the sequence with the task error surfaced; no
 cross-step auto-rollback (today's semantics; each step has task-level
 rollback inside it). The progress view renders task stage events.
 
+**Id path-segment encoding.** A Share id mirrors `encExportId(path)` —
+the exported directory minus its leading slash (`/mnt/data` →
+`mnt/data`) — so it can contain internal `/`. Every client that
+addresses a resource by id (`DELETE /shares/{id}`, `PATCH
+/filesystems/{id}`, `DELETE /arrays/{id}`, `PATCH /pools/{id}`, …) MUST
+percent-encode the id as a single path segment (`mnt/data` →
+`mnt%2Fdata`); the api's routes match a single non-slash segment and 404
+with `NOT_FOUND: no such API route` on a raw slash. The TUI does this via
+`control_client.quote_id()` (a no-op for slash-free UUID / mount-unit /
+array / pool ids). Regression: the un-encoded form aborted the whole
+"Delete Array" teardown on step 1.
+
 ## 7. e2e parity scenarios (T15)
 
 1. **Same plan everywhere:** one share spec via REST, MCP tool call,

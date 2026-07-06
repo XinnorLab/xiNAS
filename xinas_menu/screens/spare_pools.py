@@ -25,7 +25,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
-from xinas_menu.api.control_client import ControlClient, ControlPathError
+from xinas_menu.api.control_client import ControlClient, ControlPathError, quote_id
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.screens.raid import _list_api_disks
 from xinas_menu.widgets.checklist_dialog import ChecklistDialog
@@ -431,7 +431,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "PATCH",
-                f"/api/v1/pools/{pool}",
+                f"/api/v1/pools/{quote_id(pool)}",
                 {"add_drives": drives},
                 on_progress=self._task_progress("Add Drives"),
             )
@@ -498,7 +498,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "PATCH",
-                f"/api/v1/pools/{pool}",
+                f"/api/v1/pools/{quote_id(pool)}",
                 {"remove_drives": selected_drives},
                 on_progress=self._task_progress("Remove Drives"),
             )
@@ -530,7 +530,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "PATCH",
-                f"/api/v1/pools/{pool}",
+                f"/api/v1/pools/{quote_id(pool)}",
                 {"active": True},
                 on_progress=self._task_progress("Activate Pool"),
             )
@@ -572,7 +572,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "PATCH",
-                f"/api/v1/pools/{pool}",
+                f"/api/v1/pools/{quote_id(pool)}",
                 {"active": False},
                 on_progress=self._task_progress("Deactivate Pool"),
             )
@@ -615,7 +615,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "DELETE",
-                f"/api/v1/pools/{pool}",
+                f"/api/v1/pools/{quote_id(pool)}",
                 {},
                 on_progress=self._task_progress("Delete Pool"),
             )

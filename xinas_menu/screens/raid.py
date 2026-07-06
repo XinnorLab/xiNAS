@@ -27,7 +27,12 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
-from xinas_menu.api.control_client import ControlClient, ControlPathError, TaskCancelled
+from xinas_menu.api.control_client import (
+    ControlClient,
+    ControlPathError,
+    TaskCancelled,
+    quote_id,
+)
 from xinas_menu.api.degraded import degraded_banner
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -884,7 +889,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "PATCH",
-                f"/api/v1/arrays/{arr_name}",
+                f"/api/v1/arrays/{quote_id(arr_name)}",
                 patch_spec,
                 on_progress=self._task_progress(f"Edit {arr_name}"),
             )
@@ -1081,7 +1086,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 await asyncio.to_thread(
                     self.app.control.plan_apply_wait,
                     "DELETE",
-                    f"/api/v1/shares/{share['id']}",
+                    f"/api/v1/shares/{quote_id(share['id'])}",
                     {},
                     on_progress=progress,
                 )
@@ -1102,7 +1107,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                     await asyncio.to_thread(
                         self.app.control.plan_apply_wait,
                         "PATCH",
-                        f"/api/v1/filesystems/{fid}",
+                        f"/api/v1/filesystems/{quote_id(fid)}",
                         {"mounted": False},
                         on_progress=progress,
                     )
@@ -1115,7 +1120,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 await asyncio.to_thread(
                     self.app.control.plan_apply_wait,
                     "DELETE",
-                    f"/api/v1/filesystems/{fid}",
+                    f"/api/v1/filesystems/{quote_id(fid)}",
                     {},
                     on_progress=progress,
                 )
@@ -1141,7 +1146,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "DELETE",
-                f"/api/v1/arrays/{arr_name}",
+                f"/api/v1/arrays/{quote_id(arr_name)}",
                 {},
                 dangerous=True,
                 on_progress=_destroy_progress,

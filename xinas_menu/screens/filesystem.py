@@ -24,7 +24,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Label
 
-from xinas_menu.api.control_client import ControlPathError, TaskCancelled, TaskFailed
+from xinas_menu.api.control_client import ControlPathError, TaskCancelled, TaskFailed, quote_id
 from xinas_menu.api.degraded import degraded_banner
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -703,7 +703,7 @@ class FilesystemScreen(XiNASAppMixin, Screen):
                 await asyncio.to_thread(
                     self.app.control.plan_apply_wait,
                     "DELETE",
-                    f"/api/v1/shares/{share['id']}",
+                    f"/api/v1/shares/{quote_id(share['id'])}",
                     {},
                     on_progress=progress,
                 )
@@ -720,7 +720,7 @@ class FilesystemScreen(XiNASAppMixin, Screen):
                 await asyncio.to_thread(
                     self.app.control.plan_apply_wait,
                     "PATCH",
-                    f"/api/v1/filesystems/{fs_id}",
+                    f"/api/v1/filesystems/{quote_id(fs_id)}",
                     {"mounted": False},
                     on_progress=progress,
                 )
@@ -735,7 +735,7 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "DELETE",
-                f"/api/v1/filesystems/{fs_id}",
+                f"/api/v1/filesystems/{quote_id(fs_id)}",
                 {},
                 on_progress=progress,
             )
@@ -889,7 +889,7 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             await asyncio.to_thread(
                 self.app.control.plan_apply_wait,
                 "PATCH",
-                f"/api/v1/filesystems/{fs_id}",
+                f"/api/v1/filesystems/{quote_id(fs_id)}",
                 {"quota_mode": quota_mode},
                 on_progress=self._task_progress("Quota Change"),
             )
