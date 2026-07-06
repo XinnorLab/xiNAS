@@ -14,13 +14,18 @@
 
 ## ⚠️ Execution preconditions (read first)
 
-1. **The working tree is being edited concurrently.** At plan-writing time
-   `collection/roles/nvme_namespace/tasks/main.yml`, `cleanup_storage.yml`,
-   `docs/Installer/raid-spec.md`, and `CLAUDE.md` all had uncommitted changes from
-   another agent (system-drive detection work). **Execute this plan in an isolated git
-   worktree** (`superpowers:using-git-worktrees`) branched from a commit that already
-   contains that other work, or coordinate so the two streams don't collide. Line
-   numbers below are indicative — re-anchor to the current file before editing.
+1. **The concurrent system-drive work has landed** — commits `691ef7d`
+   (`fix(nvme_namespace): protect the OS disk on LVM/ZFS/MD roots and in cleanup`) and
+   `00d9361` (`fix(xinas_history): auto-rollback restores files instead of re-running
+   site.yml`) now sit on `main` above the design/plan commits. Branch the execution
+   worktree (`superpowers:using-git-worktrees`) from current `main` HEAD — it already
+   contains that work, so there is a clean base. **Line numbers below are indicative and
+   have drifted** (691ef7d rewrote `nvme_namespace/tasks/main.yml` and
+   `cleanup_storage.yml`); re-anchor by task name before editing. Task 7's
+   `raid-spec.md` edits (§4/§7.6/§9) land on top of 691ef7d's §2/§3.1/§9 changes — no
+   git conflict, but reconcile adjacent §9 rows by hand. A separate uncommitted
+   `CLAUDE.md` "Language" section may exist in the main working tree; Task 7 edits a
+   different section ("Important Notes"), so the two merge cleanly.
 2. **No behavioral Ansible harness exists.** "Tests" are structural PyYAML assertions
    over parsed task/preset YAML, matching `tests/test_nvme_namespace_fallback.py` and
    `tests/test_preset_playbooks.py`. Behavioral confirmation is the manual matrix in
