@@ -445,6 +445,21 @@
     - Restart xinas-api
   tags: [xinas_api, service]
 
+# 8b. Clear any stale `failed` unit record BEFORE the daemon-reload / restart
+#     handlers fire below. A prior uninstall (or a crashed earlier run) on the
+#     same boot can leave xinas-api.service in a failed sub-state that survives
+#     unit-file removal + daemon-reload; the enable/start then fails with
+#     "Unit xinas-api.service ... Device or resource busy" (EBUSY). reset-failed
+#     clears it. Harmless + idempotent on a clean system (no failed state = no-op).
+#     The uninstall role also does this, but the guard here makes install robust
+#     regardless of how the stale record arose.
+- name: Clear any stale failed state for xinas-api (reinstall-without-reboot guard)
+  ansible.builtin.command:
+    cmd: systemctl reset-failed xinas-api.service
+  changed_when: false
+  failed_when: false
+  tags: [xinas_api, service]
+
 # 9. Force daemon-reload before enable so systemd picks up the new
 #    unit. Without this, the next `service` task can race the reload
 #    and fail with "Unit xinas-api.service not found."
