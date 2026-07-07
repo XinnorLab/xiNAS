@@ -58,6 +58,24 @@
   notify: Restart xinas-agent
   tags: [xinas_agent, config]
 
+# --- config-history store (agent must write it) ---
+# The task runner's snapshot_before/after steps shell out to
+# `xinas_history snapshot create`, which writes DEFAULT_STORE_PATH
+# (/var/lib/xinas/config-history). That dir is normally created by the
+# xinas_history role — but that role runs AFTER this one (see the preset
+# playbook order), so it does not exist when the unit below first starts.
+# The unit lists this path in ReadWritePaths as NON-optional, so a namespace
+# bind of a missing dir would fail unit start with 226/NAMESPACE. Create it
+# here first (idempotent; xinas_history re-asserts it + its subdirs later).
+- name: Ensure config-history store directory exists (agent writes snapshots here)
+  ansible.builtin.file:
+    path: /var/lib/xinas/config-history
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  tags: [xinas_agent, unit]
+
 # --- Systemd unit ---
 
 - name: Install xinas-agent.service systemd unit

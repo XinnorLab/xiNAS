@@ -50,15 +50,27 @@ ProtectHome=true
 #                          are delegated to PID1 over dbus; mountpoint dirs
 #                          are PID1-created; /dev stays writable under
 #                          ProtectSystem=strict (PrivateDevices unset).
+#   /var/lib/xinas/config-history — the task runner's snapshot_before/after
+#                          steps shell out to `xinas_history snapshot create`,
+#                          which WRITES DEFAULT_STORE_PATH
+#                          (/var/lib/xinas/config-history). Without this, every
+#                          apply throws EROFS at snapshot_before, the runner
+#                          rejection is swallowed, no terminal event is emitted,
+#                          and the task hangs in `running` forever, holding its
+#                          worker-pool slot. The xinas_agent role creates this
+#                          dir before starting the unit (xinas_history, which
+#                          normally owns it, runs later in the playbook), so the
+#                          non-optional bind below always finds it.
 # NOTE: /var/lib/xinas/state is deliberately NOT writable here. Per ADR-0002
 # the api is the SOLE SQLite writer; the agent reports observations via the
-# api's /internal/v1/observed. /var/lib/xinas is read-only below (the agent
-# only reads /var/lib/xinas/controller-id). Listing /var/lib/xinas/state in
-# both ReadWritePaths and under a ReadOnlyPaths parent was contradictory.
+# api's /internal/v1/observed. The rest of /var/lib/xinas is read-only below
+# (the agent only reads /var/lib/xinas/controller-id and writes config-history).
+# Listing /var/lib/xinas/state in both ReadWritePaths and under a ReadOnlyPaths
+# parent was contradictory.
 # Finding #29: /run/netplan (and /etc/netplan on netplan-less hosts) may not
 # exist; a non-optional ReadWritePaths entry fails namespace setup with
 # 226/NAMESPACE and the agent restart-loops. '-' makes them optional.
-ReadWritePaths=/run/xinas /var/log/xinas /etc/systemd/system -/etc/netplan -/run/netplan /run/systemd
+ReadWritePaths=/run/xinas /var/log/xinas /var/lib/xinas/config-history /etc/systemd/system -/etc/netplan -/run/netplan /run/systemd
 #   /etc/netplan         — S6 network executors (ADR-0008 §Sandbox): the
 #                          full-file 99-xinas.yaml render + the audited
 #                          cleanup of managed-iface stanzas in foreign files.
