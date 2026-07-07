@@ -77,10 +77,16 @@ export function parseLsblkOutput(raw: string): ObservedDisk[] {
         status: {
           name: d.name,
           device_path: `/dev/${d.name}`,
-          ...(d.model !== undefined ? { model: d.model } : {}),
-          ...(d.serial !== undefined ? { serial: d.serial } : {}),
-          ...(d.tran !== undefined ? { transport: d.tran } : {}),
-          ...(d.wwn !== undefined ? { wwn: d.wwn } : {}),
+          // lsblk emits JSON `null` (not omitted) for a device that has no
+          // model/serial/transport/wwn — e.g. a device-mapper / xiRAID array
+          // device like `xi_data`. `!== undefined` lets that null through, and
+          // the api Disk schema requires these to be strings, so the whole
+          // observation batch is rejected ("status/serial must be string") and
+          // disks.list stays empty. `!= null` omits both null and undefined.
+          ...(d.model != null ? { model: d.model } : {}),
+          ...(d.serial != null ? { serial: d.serial } : {}),
+          ...(d.tran != null ? { transport: d.tran } : {}),
+          ...(d.wwn != null ? { wwn: d.wwn } : {}),
           ...(sizeText !== undefined ? { size_text: sizeText } : {}),
           ...(capacityBytes !== undefined ? { capacity_bytes: capacityBytes } : {}),
           system_disk: systemDisk,
