@@ -315,15 +315,25 @@ class DiffResult:
 def generate_snapshot_id(operation: str) -> str:
     """Generate a snapshot ID from the current UTC time and operation name.
 
-    Format: ``YYYYMMDDTHHMMSSZ-<operation>`` where *operation* has
-    underscores replaced with hyphens for readability.
+    Format: ``YYYYMMDDTHHMMSSffffffZ-<operation>`` (microsecond-resolution
+    timestamp) where *operation* has underscores replaced with hyphens for
+    readability.
+
+    The timestamp carries microseconds because a single task takes two
+    snapshots in quick succession (``snapshot_before`` then ``snapshot_after``);
+    a fast operation completes them within the same wall-clock SECOND, so a
+    second-resolution id collided and ``write_snapshot`` raised
+    ``FileExistsError: Snapshot path already exists``. That aborted
+    ``snapshot_after`` and (via the agent task runner) wedged the whole apply.
+    Microseconds keep the id unique for any sequential creates while remaining
+    lexicographically sortable (chronological order is preserved).
 
     Examples::
 
-        generate_snapshot_id("raid_create")   -> "20260316T145500Z-raid-create"
-        generate_snapshot_id("install")       -> "20260316T145500Z-install"
+        generate_snapshot_id("raid_create")   -> "20260316T145500123456Z-raid-create"
+        generate_snapshot_id("install")       -> "20260316T145500123456Z-install"
     """
     now = datetime.datetime.utcnow()
-    ts = now.strftime("%Y%m%dT%H%M%SZ")
+    ts = now.strftime("%Y%m%dT%H%M%S%fZ")
     slug = operation.replace("_", "-")
     return f"{ts}-{slug}"
