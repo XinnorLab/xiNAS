@@ -40,6 +40,25 @@
   ansible.builtin.systemd:
     daemon_reload: true
 
+# A unit that was in a `failed` sub-state when its fragment was removed leaves
+# a lingering failed record that survives unit-file deletion + daemon-reload —
+# only `systemctl reset-failed` or a reboot clears it. Without this, a reinstall
+# on the SAME boot fails at the api role's "Enable and start xinas-api" with
+# "Unit xinas-api.service ... Device or resource busy" (EBUSY). Clear the
+# records here so uninstall -> reinstall-without-reboot is clean. Harmless +
+# idempotent: reset-failed on a unit with no failed state is a no-op.
+- name: "Services | clear lingering failed unit records (reinstall-without-reboot)"
+  ansible.builtin.command:
+    cmd: "systemctl reset-failed {{ item }}"
+  loop:
+    - xinas-agent.service
+    - xinas-api.service
+    - xinas-mcp.service
+    - xinas-nfs-helper.service
+    - xinas-perf-runtime.service
+  changed_when: false
+  failed_when: false
+
 - name: "Services | record removal"
   ansible.builtin.set_fact:
     uninstall_summary: >-
