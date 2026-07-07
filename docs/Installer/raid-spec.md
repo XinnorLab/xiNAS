@@ -192,7 +192,7 @@ nvme detach-ns <ctrl> -n <nsid> -c <cntlid>   # cntlid pulled from id-ctrl
 nvme delete-ns <ctrl> -n <nsid>
 ```
 
-`detach` failures are swallowed (a not-attached NS isn't an error); `delete` failures push the controller onto `nvme_failed_devices` unless `nvme_skip_failed_devices=true` (default `true`), in which case the play continues without that drive.
+`detach` failures are swallowed (a not-attached NS isn't an error); `delete` failures always push the controller onto `nvme_failed_devices`, regardless of `nvme_skip_failed_devices`. With `nvme_skip_failed_devices=true` (default `true`) the play continues, skipping that drive in every downstream step (create/attach/wait, all gated on `item.controller not in nvme_failed_devices`); otherwise the play fails immediately on any delete failure.
 
 **Step 2 — create the small (log) namespace.**
 

@@ -52,7 +52,6 @@
   loop: "{{ ns_delete_result.results }}"
   when:
     - item.rc != 0
-    - not nvme_skip_failed_devices | bool
 
 - name: Fail on namespace deletion errors
   ansible.builtin.fail:

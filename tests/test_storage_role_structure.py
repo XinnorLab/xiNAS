@@ -1,12 +1,16 @@
-"""Structural regression guards for small storage-role residuals (WS1-R1).
+"""Structural regression guards for small storage-role residuals (WS1-R1/R2).
 
-These pin two narrow fixes over the raid_fs role and the lab inventory:
+These pin three narrow fixes over the raid_fs and nvme_namespace roles:
 
 - raid_fs must not carry the dead "Find active MD RAID arrays" task (it used
   ``ansible.builtin.command`` with a shell pipe, which the command module
   never interprets — it always errored and its result was never consumed).
 - inventories/lab.ini must not pin the deprecated/disarmed
   ``xfs_force_mkfs`` knob at the inventory level.
+- nvme_namespace's "Track failed namespace deletions" task must always
+  record a delete failure in ``nvme_failed_devices``, regardless of
+  ``nvme_skip_failed_devices`` — otherwise "skip failed devices" mode never
+  populates the list the downstream create/attach/wait tasks gate on.
 
 These are structural assertions over parsed YAML — the repo has no
 molecule/behavioral Ansible harness (see tests/test_raid_fs_safe_defaults.py).
@@ -24,6 +28,7 @@ _JINJA_EXPR_RE = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
 REPO = Path(__file__).resolve().parents[1]
 RAID_FS_TASKS_DIR = REPO / "collection/roles/raid_fs/tasks"
 LAB_INVENTORY = REPO / "inventories/lab.ini"
+REBUILD_NAMESPACES = REPO / "collection/roles/nvme_namespace/tasks/rebuild_namespaces.yml"
 
 
 def _iter_tasks(tasks):
@@ -90,3 +95,33 @@ def test_lab_inventory_does_not_pin_disarmed_xfs_force_mkfs():
     assert "xfs_force_mkfs" not in text, (
         "lab.ini still pins the deprecated/disarmed xfs_force_mkfs knob"
     )
+
+
+def test_track_failed_deletions_is_unconditional_on_skip_flag():
+    tasks = yaml.safe_load(REBUILD_NAMESPACES.read_text())
+    track = _find_by_name(tasks, "Track failed namespace deletions")
+    assert track is not None
+    assert "nvme_skip_failed_devices" not in _when_text(track), (
+        "delete-ns failures must always populate nvme_failed_devices, not just in fail-fast mode"
+    )
+
+
+def test_fail_on_deletion_errors_still_gated_by_skip_flag():
+    """The fail-fast task is unaffected by R2 — it must remain skip-gated."""
+    tasks = yaml.safe_load(REBUILD_NAMESPACES.read_text())
+    fail_task = _find_by_name(tasks, "Fail on namespace deletion errors")
+    assert fail_task is not None
+    assert "not nvme_skip_failed_devices" in _when_text(fail_task)
+
+
+def test_namespace_create_tasks_still_skip_failed_devices():
+    tasks = yaml.safe_load(REBUILD_NAMESPACES.read_text())
+    for name in (
+        "Create small namespace, size MB {{ nvme_small_ns_size_mb }}",
+        "Create large namespace (remaining capacity)",
+    ):
+        task = _find_by_name(tasks, name)
+        assert task is not None, f"task {name!r} not found"
+        assert "not in nvme_failed_devices" in _when_text(task), (
+            f"task {name!r} must still gate on nvme_failed_devices"
+        )
