@@ -130,6 +130,10 @@ export class TaskRunner {
     let stageOrdinal = 0;
     const nextStageIndex = (): number => stageOrdinal++;
 
+    // True once an executor stage has begun mutating the host — decides the
+    // terminal state if an OTHERWISE-uncaught throw reaches the catch below.
+    let hostMayHaveChanged = false;
+
     try {
       // 1. accepted (seq 1).
       await emit('accepted');
@@ -161,6 +165,7 @@ export class TaskRunner {
           status: 'running',
         });
         try {
+          hostMayHaveChanged = true;
           await stage.run(ctx);
         } catch (err) {
           // Stage failed → report, run executor rollback, terminate. A throw
@@ -202,6 +207,37 @@ export class TaskRunner {
         snapshot_id: after.snapshot_id,
       });
       await emit('terminal', { status: 'success', snapshot_id: after.snapshot_id });
+    } catch (err) {
+      // A throw that escapes the per-stage try/catch above — the
+      // snapshot_before/after bridge calls, or an accepted/stage/terminal emit —
+      // would otherwise reject run(), be SWALLOWED by task.begin's
+      // fire-and-forget `.catch(() => {})`, and leave the task wedged in
+      // `running` forever, holding its worker-pool lease until the lease
+      // expires (§9 sweep). Emit a terminal so the failure is durable and the
+      // slot is freed promptly. No executor stage started → no host change
+      // (`failed`/FAILED_BEFORE_CHANGE); a stage had begun → the host may have
+      // converged but post-stage bookkeeping (snapshot_after) failed, so a human
+      // should verify (`requires_manual_recovery`). Best-effort: if this emit
+      // ALSO throws, the api's lease-sweep reconciler remains the durable
+      // backstop — we must not rethrow into task.begin's silent catch.
+      const error_message = err instanceof Error ? err.message : String(err);
+      try {
+        if (hostMayHaveChanged) {
+          await emit('terminal', {
+            status: 'requires_manual_recovery',
+            error_code: 'FAILED_MANUAL_RECOVERY_REQUIRED',
+            error_message,
+          });
+        } else {
+          await emit('terminal', {
+            status: 'failed',
+            error_code: 'FAILED_BEFORE_CHANGE',
+            error_message,
+          });
+        }
+      } catch {
+        /* lease-sweep reconciler recovers a task left with no terminal (§9) */
+      }
     } finally {
       this.#inflight.delete(begin.task_id);
     }
