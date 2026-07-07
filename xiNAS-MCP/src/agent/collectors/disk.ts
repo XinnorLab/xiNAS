@@ -128,10 +128,13 @@ export class DiskCollector implements Collector<'Disk'> {
           ...(disk.status.device_path !== undefined
             ? { device_path: disk.status.device_path }
             : {}),
-          ...(disk.status.model !== undefined ? { model: disk.status.model } : {}),
-          ...(disk.status.serial !== undefined ? { serial: disk.status.serial } : {}),
-          ...(disk.status.transport !== undefined ? { transport: disk.status.transport } : {}),
-          ...(disk.status.wwn !== undefined ? { wwn: disk.status.wwn } : {}),
+          // Defense-in-depth against a null (not just undefined) slipping in
+          // from a non-lsblk disk source: the api schema requires strings, and
+          // a null fails the whole batch. `!= null` omits null and undefined.
+          ...(disk.status.model != null ? { model: disk.status.model } : {}),
+          ...(disk.status.serial != null ? { serial: disk.status.serial } : {}),
+          ...(disk.status.transport != null ? { transport: disk.status.transport } : {}),
+          ...(disk.status.wwn != null ? { wwn: disk.status.wwn } : {}),
           ...(disk.status.size_text !== undefined ? { size_text: disk.status.size_text } : {}),
           ...(disk.status.capacity_bytes !== undefined
             ? { capacity_bytes: disk.status.capacity_bytes }
