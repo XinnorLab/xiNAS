@@ -172,8 +172,14 @@
   ansible.builtin.file:
     path: "{{ xinas_log_dir }}"
     state: directory
-    owner: root
-    group: root
+    # /var/log/xinas is the SHARED log dir. The xinas_api role (which runs
+    # earlier) owns it via tmpfiles as xinas_api_user:xinas_api_socket_group
+    # (xinas-api:xinas-admin) so the User=xinas-api service can open its
+    # audit.jsonl. Reclaiming it to root:root here locks the api out and
+    # crash-loops it (EACCES on /var/log/xinas/audit.jsonl) on the next
+    # restart/reboot, so mirror that ownership instead.
+    owner: "{{ xinas_api_user | default('xinas-api') }}"
+    group: "{{ xinas_api_socket_group | default('xinas-admin') }}"
     mode: '0750'
   tags: [xinas_menu, logs]
 
