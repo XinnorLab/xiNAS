@@ -157,16 +157,6 @@
     - item.name not in existing_pool_names
   tags: [raid_fs, raid]
 
-- name: Find active MD RAID arrays
-  ansible.builtin.command: lsblk -ln -o NAME,TYPE | awk '$2 ~ /^raid/ {print "/dev/"$1}'
-  register: mdraid_scan
-  changed_when: false
-  failed_when: false
-  when: >-
-    (xinas_storage_reset | default(false) | bool)
-    or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
-  tags: [raid_fs, raid]
-
 - name: Stop leftover MD RAID arrays on xiRAID devices
   ansible.builtin.shell: |
     set -e
