@@ -974,8 +974,8 @@ scenario, confirm the expected outcome from the design's matrix (§5 / §10).
 - [ ] **`ansible-playbook playbooks/site.yml --tags raid_fs -e xinas_storage_reset=true`**
   (no `nvme_namespace`) → the confirmation prompt still appears (or aborts unattended).
   Gate is not bypassed.
-- [ ] **`-e xinas_storage_reset=true`** interactive → banner + `YES` required, then wipe
-  + rebuild succeeds.
+- [ ] **`-e xinas_storage_reset=true`** interactive → banner + `YES` required, then wipe +
+  rebuild succeeds.
 - [ ] **`-e xinas_storage_reset=true -e nvme_skip_cleanup_confirmation=true`** →
   unattended wipe + rebuild, no prompt.
 - [ ] **Re-run after relabeling the XFS** (simulate FOREIGN) → play fails fast with the
