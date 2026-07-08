@@ -98,4 +98,38 @@ describe('DiskCollector', () => {
     const collector = new DiskCollector({ probe });
     expect(collector.pollIntervalMs).toBe(60_000);
   });
+
+  it('omits null model/serial/transport/wwn from a disk source (#253 defense-in-depth)', async () => {
+    // Even if a null slips past the lsblk parser (any non-lsblk disk source),
+    // the collector's upsert must OMIT it: the api Disk schema requires strings
+    // and a single null rejects the whole observation batch (disks.list = 0).
+    const collector = new DiskCollector({
+      probe: {
+        snapshot: async () => [
+          {
+            kind: 'Disk',
+            id: 'xi_data',
+            status: {
+              name: 'xi_data',
+              model: null,
+              serial: null,
+              transport: null,
+              wwn: null,
+              observed_at: new Date().toISOString(),
+            },
+          },
+        ],
+        startEventStream: () => ({ stop: () => {} }),
+      } as unknown as ConstructorParameters<typeof DiskCollector>[0]['probe'],
+    });
+
+    const deltas = await collector.initialSweep();
+    expect(deltas).toHaveLength(1);
+    const status = deltas[0]?.value?.status as Record<string, unknown>;
+    expect(status.name).toBe('xi_data');
+    expect('model' in status).toBe(false);
+    expect('serial' in status).toBe(false);
+    expect('transport' in status).toBe(false);
+    expect('wwn' in status).toBe(false);
+  });
 });

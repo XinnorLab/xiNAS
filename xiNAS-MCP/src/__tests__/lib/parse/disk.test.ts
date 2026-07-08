@@ -30,6 +30,28 @@ describe('parseLsblkOutput', () => {
     expect(disks[0]?.status.model).toBeUndefined();
   });
 
+  it('omits lsblk JSON null model/serial/transport/wwn instead of emitting null (#253)', () => {
+    // lsblk prints literal `null` (NOT an omitted key) for a device with no
+    // model/serial/transport/wwn — e.g. a device-mapper / xiRAID array device
+    // like `xi_data`. The api Disk schema requires these to be strings, so a
+    // null would fail the WHOLE observation batch ("status/serial must be
+    // string") and disks.list stays empty. The parser must omit them, not pass
+    // the null through (`!= null`, not `!== undefined`).
+    const raw = JSON.stringify({
+      blockdevices: [
+        { name: 'xi_data', type: 'disk', model: null, serial: null, tran: null, wwn: null },
+      ],
+    });
+    const disks = parseLsblkOutput(raw);
+    expect(disks).toHaveLength(1);
+    const status = disks[0]!.status;
+    expect(status.name).toBe('xi_data');
+    expect('model' in status).toBe(false);
+    expect('serial' in status).toBe(false);
+    expect('transport' in status).toBe(false);
+    expect('wwn' in status).toBe(false);
+  });
+
   // ---- S3 T2 enrichment (ADR-0006 §Disk references) ----
 
   it('derives device_path, capacity_bytes, system_disk, mounted, safe_for_use', () => {

@@ -396,6 +396,83 @@ describe('TaskRunner.run — cancel (S10)', () => {
   });
 });
 
+// ── #255: a throw OUTSIDE the per-stage try/catch still terminates the task ──
+// The snapshot_before/after bridge calls (and the accepted/terminal emits) sit
+// outside the per-stage try/catch. Before the fix a throw there rejected run(),
+// which task.begin invokes fire-and-forget with `.catch(() => {})`, so the
+// rejection was SWALLOWED: no terminal event, and the task wedged in `running`
+// forever holding its worker-pool lease. The runner must now always emit a
+// terminal (and run() must RESOLVE, never reject).
+
+describe('TaskRunner.run — uncaught throw always terminates (#255)', () => {
+  /** A bridge whose Nth `snapshot create` call exits non-zero (like the real
+   *  EROFS / FileExistsError failures behind #254 / #256). */
+  function bridgeFailingOnCall(failCall: number): XinasHistoryBridge {
+    let call = 0;
+    return new XinasHistoryBridge({
+      runSubprocess: async () => {
+        call += 1;
+        if (call === failCall) return { stdout: '[Errno 30] Read-only file system', code: 1 };
+        return { stdout: JSON.stringify({ id: `snap-${call}` }), code: 0 };
+      },
+    });
+  }
+
+  it('snapshot_before throws (no stage started) → terminal(failed / FAILED_BEFORE_CHANGE)', async () => {
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+    });
+    const runner = makeRunner(bridgeFailingOnCall(1));
+
+    // Must RESOLVE, not reject: an unhandled rejection here is the wedge bug.
+    await runner.run(
+      { task_id: 'tb', operation_kind: 'reference.echo', spec: {} },
+      referenceExecutor,
+      publish,
+    );
+
+    // snapshot_before is step 2, before the stage loop → no executor stage ran.
+    expect(events.some((e) => e.event_type === 'stage_started')).toBe(false);
+    const terminal = events.at(-1);
+    expect(terminal?.event_type).toBe('terminal');
+    expect(terminal?.status).toBe('failed');
+    expect(terminal?.error_code).toBe('FAILED_BEFORE_CHANGE');
+    expect(terminal?.error_message).toMatch(/code 1/);
+    // Sequences stay 1..N monotonic and the in-flight slot is freed.
+    expect(events.map((e) => e.sequence)).toEqual(events.map((_e, i) => i + 1));
+    expect(runner.getInflight().has('tb')).toBe(false);
+  });
+
+  it('snapshot_after throws (stages ran) → terminal(requires_manual_recovery / FAILED_MANUAL_RECOVERY_REQUIRED)', async () => {
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+    });
+    // before (call 1) succeeds, all reference stages run, after (call 2) fails.
+    const runner = makeRunner(bridgeFailingOnCall(2));
+
+    await runner.run(
+      { task_id: 'ta', operation_kind: 'reference.echo', spec: {} },
+      referenceExecutor,
+      publish,
+    );
+
+    // Executor stages DID run (the host may have converged) ...
+    expect(
+      events.some((e) => e.event_type === 'stage_succeeded' && e.stage_name === 'apply'),
+    ).toBe(true);
+    // ... so the terminal escalates to manual recovery, not a plain failure.
+    const terminal = events.at(-1);
+    expect(terminal?.event_type).toBe('terminal');
+    expect(terminal?.status).toBe('requires_manual_recovery');
+    expect(terminal?.error_code).toBe('FAILED_MANUAL_RECOVERY_REQUIRED');
+    expect(terminal?.error_message).toMatch(/code 1/);
+    expect(events.map((e) => e.sequence)).toEqual(events.map((_e, i) => i + 1));
+    expect(runner.getInflight().has('ta')).toBe(false);
+  });
+});
+
 // ── S10 T3: reference executor spec.sleep_ms (cancellable slow task) ─────────
 
 describe('reference executor sleep_ms (S10)', () => {
