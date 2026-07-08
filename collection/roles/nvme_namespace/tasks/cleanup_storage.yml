@@ -26,7 +26,7 @@
 # ============ DETECT LVM ============
 - name: Check for LVM physical volumes on data drives
   ansible.builtin.shell: |
-    source /tmp/xinas_disk_match.sh
+    source /tmp/xinas_disk_match.sh || { echo "xinas_disk_match.sh helper missing; skipping sweep"; exit 0; }
     DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
     SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
     SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
@@ -54,7 +54,7 @@
 # ============ DETECT MD RAID ============
 - name: Check for MD RAID arrays using data drives
   ansible.builtin.shell: |
-    source /tmp/xinas_disk_match.sh
+    source /tmp/xinas_disk_match.sh || { echo "xinas_disk_match.sh helper missing; skipping sweep"; exit 0; }
     DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
     SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
     SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
@@ -89,7 +89,7 @@
 
 - name: Check for ZFS pools using data drives
   ansible.builtin.shell: |
-    source /tmp/xinas_disk_match.sh
+    source /tmp/xinas_disk_match.sh || { echo "xinas_disk_match.sh helper missing; skipping sweep"; exit 0; }
     DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
     SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
     SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
@@ -153,6 +153,8 @@
       ╠══════════════════════════════════════════════════════════════════════╣
       ║  These will be DESTROYED to prepare drives for xiRAID.               ║
       ║  ALL DATA ON THESE STORAGE CONFIGURATIONS WILL BE LOST!              ║
+      ║  Partition tables/signatures will also be wiped on ALL {{ nvme_data_drives | length }} data drive(s):
+      ║    {{ nvme_data_drives | join(', ') }}
       ╚══════════════════════════════════════════════════════════════════════╝
   when: nvme_cleanup_required | bool
 
@@ -221,7 +223,7 @@
 
 - name: Zero MD superblocks on data drives
   ansible.builtin.shell: |
-    source /tmp/xinas_disk_match.sh
+    source /tmp/xinas_disk_match.sh || { echo "xinas_disk_match.sh helper missing; skipping sweep"; exit 0; }
     DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
     SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
     SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
@@ -260,7 +262,7 @@
 
 - name: Remove LVM physical volumes on data drives
   ansible.builtin.shell: |
-    source /tmp/xinas_disk_match.sh
+    source /tmp/xinas_disk_match.sh || { echo "xinas_disk_match.sh helper missing; skipping sweep"; exit 0; }
     DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
     SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
     SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
@@ -287,7 +289,7 @@
 # loop so the kernel re-read targets exactly the devices that were wiped.
 - name: Wipe partition tables on data drives
   ansible.builtin.shell: |
-    source /tmp/xinas_disk_match.sh
+    source /tmp/xinas_disk_match.sh || { echo "xinas_disk_match.sh helper missing; skipping sweep"; exit 0; }
     DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
     SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
     SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"

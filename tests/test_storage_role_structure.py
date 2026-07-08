@@ -21,6 +21,10 @@ These pin narrow fixes over the raid_fs and nvme_namespace roles:
   (the downstream RAID-config gate requires both n1 and n2+ anyway) and it
   masked the real cause of the later generic failure. It must fail explicitly
   and name the remedies (WS1-R4).
+- nvme_namespace's cleanup sweeps must fail loudly-but-safely (not with a
+  command-not-found cascade) when the staged ``xinas_disk_match.sh`` helper
+  is missing, and the wipe-scope disclosure must also reach the always-shown
+  banner, not just the confirmation prompt that unattended runs skip.
 
 These are structural assertions over parsed YAML — the repo has no
 molecule/behavioral Ansible harness (see tests/test_raid_fs_safe_defaults.py).
@@ -156,10 +160,18 @@ def test_wipe_partition_tables_resolves_block_devices_via_is_data_member():
 
 
 def test_partprobe_runs_on_resolved_devices_not_raw_entries():
-    """partprobe on a raw controller entry (/dev/nvme0) is a masked no-op."""
-    text = CLEANUP_STORAGE.read_text()
-    assert "partprobe" in text, "kernel partition-table re-read must still happen"
-    assert "partprobe {{ item }}" not in text, (
+    """partprobe on a raw controller entry (/dev/nvme0) is a masked no-op.
+
+    Asserted against the resolved wipe task's shell text specifically (not the
+    raw file text), so a mention of "partprobe" in a comment elsewhere in the
+    file can't satisfy this.
+    """
+    tasks = yaml.safe_load(CLEANUP_STORAGE.read_text())
+    wipe = _find_by_name(tasks, "Wipe partition tables on data drives")
+    assert wipe is not None, "wipe task missing from cleanup_storage.yml"
+    shell = _shell_text(wipe)
+    assert "partprobe" in shell, "kernel partition-table re-read must still happen"
+    assert "partprobe {{ item }}" not in shell, (
         "partprobe must target resolved block devices, not raw nvme_data_drives entries"
     )
 
@@ -224,4 +236,42 @@ def test_single_namespace_layout_fails_explicitly():
     msg = str(matches[0]["ansible.builtin.fail"].get("msg", ""))
     assert "xinas_storage_reset" in msg, (
         "failure message should name the remedy (xinas_storage_reset=true)"
+    )
+
+
+# ── Code-review follow-ups on cleanup_storage.yml ────────────────────────────
+
+
+def test_cleanup_sweeps_guard_missing_disk_match_helper():
+    """Every is_data_member sweep must fail loud-but-safe if the helper is missing.
+
+    A bare `source /tmp/xinas_disk_match.sh` on a missing file would cascade
+    into a wall of "command not found" errors for is_data_member instead of a
+    single clear message, while still silently no-op'ing (failed_when: false).
+    """
+    tasks = yaml.safe_load(CLEANUP_STORAGE.read_text())
+    sweep_tasks = [t for t in _iter_tasks(tasks) if "is_data_member" in _shell_text(t)]
+    assert sweep_tasks, "expected at least one is_data_member sweep task in cleanup_storage.yml"
+    for t in sweep_tasks:
+        assert "helper missing" in _shell_text(t), (
+            f"{t.get('name')!r} sources xinas_disk_match.sh without a helper-missing guard"
+        )
+
+
+def test_display_findings_banner_discloses_partition_wipe_for_unattended_runs():
+    """The always-shown banner must carry the wipe-scope disclosure too.
+
+    The YES-confirmation pause (and its disclosure) is skipped entirely when
+    nvme_skip_cleanup_confirmation=true, so unattended/automation logs only
+    ever see the unconditional "Display detected storage configurations"
+    banner — it must carry the same information.
+    """
+    tasks = yaml.safe_load(CLEANUP_STORAGE.read_text())
+    banner = _find_by_name(tasks, "Display detected storage configurations")
+    assert banner is not None
+    msg = str((banner.get("ansible.builtin.debug") or {}).get("msg", ""))
+    assert "nvme_data_drives" in msg and "wiped" in msg.lower(), (
+        "the always-shown banner must disclose that partition signatures on all "
+        "data drives get wiped, since the YES-prompt version of this disclosure "
+        "is skipped when nvme_skip_cleanup_confirmation=true"
     )
