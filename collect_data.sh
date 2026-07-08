@@ -59,7 +59,7 @@ main() {
     archive="/tmp/${cfg}.tgz"
     tar czf "$archive" -C "$tmp" .
 
-    server=${TRANSFER_SERVER:-"http://178.253.23.152:8080"}
+    server=${TRANSFER_SERVER:-"http://5.75.230.104:8080"}
 
     info_box "Uploading" "Uploading data to server..."
 
