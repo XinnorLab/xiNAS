@@ -6,6 +6,70 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.4.0] - 2026-07-08
+
+### Added
+
+- **Non-destructive `site.yml` re-run (storage-reset safety).** Re-running
+  the installer over a healthy array now converges instead of risking a
+  reformat. The `nvme_namespace` role performs read-only storage-state
+  detection that classifies each data drive as **MATCH** (already
+  provisioned to the intended layout), **EMPTY**, or **FOREIGN**, and
+  gates namespace rebuild + cleanup on that state. `raid_fs` reuses the
+  detected state to gate the drive-clean and MD sweep and makes a
+  converge/fail-fast `mkfs` decision instead of reformatting on a label
+  mismatch. Destroying and rebuilding storage now requires the explicit
+  `xinas_storage_reset: true` with an interactive `YES` (or
+  `nvme_skip_cleanup_confirmation: true` for automation), surfaced
+  through a shared fact-guarded confirmation banner that discloses
+  exactly which devices will be wiped. See
+  [docs/Installer/raid-spec.md](docs/Installer/raid-spec.md) §11.
+
+### Changed
+
+- **Legacy wipe knobs disarmed.** `xfs_force_mkfs` and
+  `nvme_use_existing_namespaces` no longer trigger destructive actions on
+  their own; storage is only destroyed via the explicit
+  `xinas_storage_reset` path above. The disarmed `xfs_force_mkfs` pin was
+  removed from the lab inventory and the preset `raid_fs.yml` files.
+- **OS disk protected across LVM/ZFS/MD roots.** Detection and cleanup
+  now resolve the system disk through its LVM/ZFS/MD backing devices (via
+  `lsblk` paths) and exclude it from every wipe and namespace operation.
+
+### Fixed
+
+- **`nvme_namespace` hardening.** Per-device wipe error isolation (one
+  drive's failure no longer aborts the sweep); explicit failure on
+  unexpected single-namespace layouts instead of a dead fallback;
+  partition tables wiped on the resolved block devices with the scope
+  disclosed in the confirm banner; ZFS vdevs resolved via `lsblk`;
+  detection facts kept clean by routing helper `echo` output to stderr; a
+  loud guard when a required helper is missing; and defensive `rc` checks
+  in delete-tracking so skip mode reliably skips.
+- **`xinas-agent` task lifecycle.** A pre/post-stage throw can no longer
+  hang a task — the agent always emits a terminal event. Apply tasks no
+  longer hang at `snapshot_before` (the agent is granted config-history
+  RW). Disk observation batches with null model/serial are no longer
+  rejected (null fields are omitted before the batch is sent).
+- **Reinstall without reboot.** The installer now `reset-failed`s the
+  xiNAS units so reinstalling no longer fails with `EBUSY` on units left
+  in a failed state.
+- **Config-history correctness.** Snapshot ids now carry microsecond
+  resolution so two snapshots created in the same second no longer
+  collide, and auto-rollback restores the changed files directly instead
+  of re-running `site.yml`.
+- **`/var/log/xinas` ownership.** The `xinas_menu` role no longer
+  clobbers `/var/log/xinas` ownership, which was crash-looping
+  `xinas-api`.
+
+### Rebuild required
+
+Updating to this release rebuilds the node agent and its TypeScript
+bundle (agent lifecycle fixes) and re-runs the `xinas_menu` role (log
+ownership fix):
+
+    Requires-Rebuild: xinas_node_build, xinas_agent, xinas_menu
+
 ## [3.3.0] - 2026-07-06
 
 ### Added
