@@ -1,0 +1,350 @@
+{
+  "testPlan": {
+    "title": "TP: xinas-agent — privileged observation & execution daemon (Phase 0)",
+    "scope": "Daemon-level, on-a-running-box behavior of xinas-agent.service (node dist/agent-server.js, User=root, Requires=xinas-api): boot & lifecycle (bind-before-sweep, UDS permissions/fail-closed, signal handling, fatal exit code), convergence/boot sweep (best-effort per-collector, failed-sweep-no-reconcile-delete invariant, one-shot agent_started), RPC dispatch (JSON-RPC 2.0 envelope validation, allow-list routing incl. prototype-pollution rejection, error-code mapping, 1MB DoS guard), the task subsystem (progress taxonomy, stage-failure rollback, requires_manual_recovery, cooperative cancel, idempotent task.begin, config.rollback executor), publisher retry/backoff and 4xx visible-drop, and agent.health derivation. Excludes xiRAID gRPC internals, xinas-api REST/RBAC, xinas-nfs-helper, api-side observed-schema validation, and exhaustive per-collector parsing (already covered by the vitest unit suite).",
+    "risks": [
+      {"description": "Privilege boundary: agent runs as root and its UDS is the only auth gate; a world-connectable or wrong-group socket lets any local user drive privileged RPC. Must fail closed as root on a chmod/chown error.", "severity": "high"},
+      {"description": "Silent observed-data loss: a transient probe failure that reconcile-deletes good api-side observed rows, or a 4xx batch that vanishes with no log.", "severity": "high"},
+      {"description": "Task rollback integrity: a failed stage not rolled back, or a rollback failure mis-reported as failed (implying auto-heal) instead of requires_manual_recovery.", "severity": "high"},
+      {"description": "Startup wedging: an unavailable xinas-api blocking agent startup so agent.health never answers and systemd flaps. Server must bind before the backgrounded boot sweep.", "severity": "medium"},
+      {"description": "DoS on the root daemon: an unbounded RPC line growing the per-connection read buffer until OOM. Guarded by the 1MB MAX_LINE_BYTES cap.", "severity": "medium"},
+      {"description": "Prototype-pollution routing: __proto__/constructor resolving to an inherited handler instead of returning method-not-found.", "severity": "medium"},
+      {"description": "Idempotency: a re-dispatched task.begin (api reconcile) starting a second run of the same task_id.", "severity": "medium"},
+      {"description": "Shutdown hang: a held-open client blocking server.close() past systemd's stop timeout; guarded by a 3s forced-exit backstop.", "severity": "low"}
+    ],
+    "strategy": ["functional", "negative", "boundary", "resilience", "security", "stability"],
+    "environment": "Ubuntu 22.04/24.04 xiNAS node with xinas-api.service active and xinas-agent.service installed (/opt/xiNAS/xiNAS-MCP/dist/agent-server.js). Config at /etc/xinas-agent/config.json (+ agent-token, controller-id); agent UDS /run/xinas/agent.sock (0660 root:xinas-api); api UDS from config.api_socket. Box tools: systemctl, journalctl, socat or nc -U, getent, jq. For hermetic/failure-injection cases use fixture probe mode (XINAS_AGENT_PROBE_MODE=fixture:<dir>) and the *_POLL_MS overrides. JSON-RPC helper: rpc() { printf '%s\\n' \"$1\" | socat -t5 - UNIX-CONNECT:/run/xinas/agent.sock; }",
+    "entryCriteria": "dist/ built from the commit under test; xinas-api active; agent socket present and reachable by root or a xinas-api group member; a clean api observed-state baseline captured for the reconcile cases.",
+    "exitCriteria": "All P0 cases pass; no high-severity risk (R1-R3) has an open failing case; every negative/error case returns the exact JSON-RPC code specified; no case leaves xinas-agent in failed or activating (auto-restart) at teardown.",
+    "traceability": {
+      "pr": null,
+      "commit": "3d8eb6d",
+      "components": ["MCP", "xinas-agent"]
+    }
+  },
+  "testCases": [
+    {
+      "id": "TC-001",
+      "title": "agent.health answers while xinas-api is down (bind-before-sweep)",
+      "component": "xinas-agent / lifecycle",
+      "priority": "P0",
+      "type": "functional",
+      "preconditions": "Agent installed; xinas-api stopped (systemctl stop xinas-api).",
+      "inputData": "RPC {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"agent.health\"}",
+      "steps": [
+        {"step": 1, "action": "Stop xinas-api, then start xinas-agent.", "expected": "Agent reaches active (running); journal shows event:\"listening\" with the socket path."},
+        {"step": 2, "action": "Within ~1s send agent.health over /run/xinas/agent.sock.", "expected": "A JSON-RPC result is returned (not a timeout); status is \"starting\" (or \"degraded\" if a probe already errored) with version, uptime_seconds, controller_id, collectors present."}
+      ],
+      "expectedResult": "Health responds independently of api availability; the boot sweep runs in the background and its api-POST failures are logged, not fatal.",
+      "observability": "journalctl -u xinas-agent (listening, boot_sequence_failed); RPC reply JSON.",
+      "references": ["xiNAS-MCP/src/agent-server.ts:185", "xiNAS-MCP/src/agent-server.ts:199", "xiNAS-MCP/src/agent/rpc/methods/health.ts"]
+    },
+    {
+      "id": "TC-002",
+      "title": "Agent UDS is 0660 root:xinas-api and fails closed on a permission error",
+      "component": "xinas-agent / rpc-server",
+      "priority": "P0",
+      "type": "security",
+      "preconditions": "Agent active as root.",
+      "inputData": "Filesystem inspection + a fault-injected unresolvable socket_group so chown fails.",
+      "steps": [
+        {"step": 1, "action": "stat -c '%a %U %G' /run/xinas/agent.sock", "expected": "660 root xinas-api."},
+        {"step": 2, "action": "As an unprivileged user NOT in xinas-api, connect and send agent.health.", "expected": "Connection refused / EACCES; no RPC served."},
+        {"step": 3, "action": "Fault-inject an unresolvable socket_group and restart as root.", "expected": "journal logs event:\"socket_perm_failed\"; the bind rejects, the process exits non-zero, systemd Restart=on-failure retries; the agent does NOT serve on a mis-permissioned socket."}
+      ],
+      "expectedResult": "The socket is the auth gate; as root a chmod/chown failure is fatal (fail closed). The non-root socket_perm_skipped warn path must not run in production.",
+      "observability": "stat; journalctl (socket_perm_failed); systemctl status xinas-agent (Result/restart count).",
+      "references": ["xiNAS-MCP/src/agent/rpc/server.ts:104"]
+    },
+    {
+      "id": "TC-003",
+      "title": "RPC rejects non-allow-listed and prototype-pollution methods (-32601)",
+      "component": "xinas-agent / rpc-dispatch",
+      "priority": "P0",
+      "type": "security",
+      "preconditions": "Agent active.",
+      "inputData": "methods: \"agent.nope\", \"__proto__\", \"constructor\", \"hasOwnProperty\", \"toString\"",
+      "steps": [
+        {"step": 1, "action": "Send each as {\"jsonrpc\":\"2.0\",\"id\":N,\"method\":\"<m>\"}.", "expected": "Every reply is error.code:-32601 (not in the agent's RPC surface); no handler runs."}
+      ],
+      "expectedResult": "Only own-property allow-listed methods route; inherited Object.prototype keys never resolve to a handler.",
+      "observability": "RPC reply error.code via jq.",
+      "references": ["xiNAS-MCP/src/agent/rpc/dispatch.ts:68"]
+    },
+    {
+      "id": "TC-004",
+      "title": "Oversized RPC line (>1MB) returns -32600 and the connection is destroyed",
+      "component": "xinas-agent / rpc-server",
+      "priority": "P0",
+      "type": "boundary",
+      "preconditions": "Agent active.",
+      "inputData": "A single ~1.1MB line with no newline.",
+      "steps": [
+        {"step": 1, "action": "Stream >1MB without a newline into the socket.", "expected": "Server replies error.code:-32600 \"request too large\" and destroys the socket; agent stays active (no OOM, no crash)."},
+        {"step": 2, "action": "Send a normal agent.health on a fresh connection.", "expected": "Served normally."}
+      ],
+      "expectedResult": "The per-connection read buffer is capped at MAX_LINE_BYTES; a large-line/slow-loris client cannot grow memory unbounded.",
+      "observability": "RPC reply; systemctl status (still active); process RSS unchanged.",
+      "references": ["xiNAS-MCP/src/agent/rpc/server.ts:25", "xiNAS-MCP/src/agent/rpc/server.ts:51"]
+    },
+    {
+      "id": "TC-005",
+      "title": "Task happy-path emits the full progress taxonomy in order",
+      "component": "xinas-agent / task-runner",
+      "priority": "P0",
+      "type": "functional",
+      "preconditions": "Agent active; a registered executor (e.g. reference) available; progress captured via api task view or a publish sink in fixture mode.",
+      "inputData": "task.begin {task_id:\"t-happy\", kind:\"reference\", spec:{...}}",
+      "steps": [
+        {"step": 1, "action": "Dispatch task.begin.", "expected": "Returns {accepted:true, agent_acceptance_id:<uuid>}."},
+        {"step": 2, "action": "Collect emitted TaskProgressEvents.", "expected": "Order is exactly accepted -> stage_succeeded(snapshot_before, snapshot_id) -> (stage_started -> stage_succeeded)* -> stage_succeeded(snapshot_after) -> terminal(success, snapshot_id); sequence is per-task monotonic from 1; each distinct stage has a unique stage_index."}
+      ],
+      "expectedResult": "Real xinas_history snapshot_before/snapshot_after bracket the stages; terminal is success with the after-snapshot id.",
+      "observability": "api task_stages rows / progress-event stream; snapshot_ids resolvable via xinas_history.",
+      "references": ["xiNAS-MCP/src/agent/task/runner.ts:133"]
+    },
+    {
+      "id": "TC-006",
+      "title": "Failed initialSweep must NOT reconcile-delete existing observed rows",
+      "component": "xinas-agent / boot-sweep",
+      "priority": "P0",
+      "type": "resilience",
+      "preconditions": "Api holds a known-good observed snapshot for a kind (e.g. Disk); inject a probe that throws on initialSweep for that kind.",
+      "inputData": "Agent restart with the throwing probe for one kind.",
+      "steps": [
+        {"step": 1, "action": "Restart the agent.", "expected": "journal logs event:\"initial_sweep_failed\" for that kind."},
+        {"step": 2, "action": "Query api observed rows for the kind.", "expected": "Existing rows are still present; no complete_snapshots:[kind] reconcile-delete was sent for the failed kind."},
+        {"step": 3, "action": "Let the poll backstop recover the probe.", "expected": "The kind re-sweeps and reconciles normally once the probe recovers."}
+      ],
+      "expectedResult": "An empty result from a FAILED sweep means unknown, not none; the collector is skipped, its health=error surfaces via agent.health, and no good data is wiped.",
+      "observability": "journalctl (initial_sweep_failed); api observed-row count before/after; agent.health.collectors[kind]=error:*.",
+      "references": ["xiNAS-MCP/src/agent/boot.ts:36"]
+    },
+    {
+      "id": "TC-007",
+      "title": "task.begin is idempotent by task_id (no double run)",
+      "component": "xinas-agent / task-rpc",
+      "priority": "P0",
+      "type": "functional",
+      "preconditions": "Agent active; an executor whose first stage blocks long enough to send a second begin while in-flight.",
+      "inputData": "Two task.begin calls with the same task_id:\"t-idem\".",
+      "steps": [
+        {"step": 1, "action": "Send begin #1.", "expected": "{accepted:true, agent_acceptance_id:A}; task appears in task.list_inflight."},
+        {"step": 2, "action": "While still in-flight, send begin #2 with the same task_id.", "expected": "Returns the SAME agent_acceptance_id:A; task.list_inflight still shows exactly one entry; only one run's progress events are emitted."}
+      ],
+      "expectedResult": "Re-dispatch (api reconcile) is safe; a repeated begin never starts a second run.",
+      "observability": "The two RPC replies (equal agent_acceptance_id); task.list_inflight count; progress-event stream (single run).",
+      "references": ["xiNAS-MCP/src/agent/rpc/methods/task.ts:129"]
+    },
+    {
+      "id": "TC-008",
+      "title": "Malformed envelope returns -32600 (parse / missing method)",
+      "component": "xinas-agent / rpc-dispatch",
+      "priority": "P1",
+      "type": "negative",
+      "preconditions": "Agent active.",
+      "inputData": "(a) not json; (b) [] (array); (c) {\"jsonrpc\":\"2.0\",\"id\":5}; (d) {\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"\"}",
+      "steps": [
+        {"step": 1, "action": "Send each line.", "expected": "(a) -32600 Parse error; (b) -32600 envelope must be a JSON object; (c)/(d) -32600 missing or non-string method, with id echoed as 5/6."}
+      ],
+      "expectedResult": "Envelope validation precedes routing; id is echoed when a number/string, else null.",
+      "observability": "RPC reply error.code + id.",
+      "references": ["xiNAS-MCP/src/agent/rpc/dispatch.ts:41"]
+    },
+    {
+      "id": "TC-009",
+      "title": "Handler error mapping: EXECUTOR_UNSUPPORTED -> -32000, INVALID_PARAMS -> -32602",
+      "component": "xinas-agent / rpc-dispatch",
+      "priority": "P1",
+      "type": "negative",
+      "preconditions": "Agent active.",
+      "inputData": "(a) task.begin with kind:\"does.not.exist\"; (b) task.begin with no task_id.",
+      "steps": [
+        {"step": 1, "action": "Send (a).", "expected": "error.code:-32000, error.data:{code:\"EXECUTOR_UNSUPPORTED\", method:\"task.begin\"}."},
+        {"step": 2, "action": "Send (b).", "expected": "error.code:-32602 \"task.begin requires task_id + operation_kind\"."}
+      ],
+      "expectedResult": "Unknown operation kind is a distinct custom code (api maps to 422); bad params are -32602.",
+      "observability": "RPC reply error.code / error.data.",
+      "references": ["xiNAS-MCP/src/agent/rpc/dispatch.ts:86", "xiNAS-MCP/src/agent/rpc/methods/task.ts:118"]
+    },
+    {
+      "id": "TC-010",
+      "title": "Stage failure -> rollback -> terminal(failed, FAILED_PARTIAL_ROLLED_BACK)",
+      "component": "xinas-agent / task-runner",
+      "priority": "P1",
+      "type": "resilience",
+      "preconditions": "An executor whose 2nd stage throws and whose rollback() succeeds.",
+      "inputData": "task.begin for that operation kind.",
+      "steps": [
+        {"step": 1, "action": "Run the task and collect events.", "expected": "accepted -> snapshot_before -> stage_started(s1) -> stage_succeeded(s1) -> stage_started(s2) -> stage_failed(s2, error_message) -> rollback_started -> rollback_succeeded -> terminal(failed)."},
+        {"step": 2, "action": "Inspect the terminal event.", "expected": "status:\"failed\", error_code:\"FAILED_PARTIAL_ROLLED_BACK\"; no stage after the failed one ran."}
+      ],
+      "expectedResult": "First failure stops the sequence; the executor's own rollback() runs; drained output_inline is attached to stage_failed/rollback_*.",
+      "observability": "Progress-event stream; api task terminal row.",
+      "references": ["xiNAS-MCP/src/agent/task/runner.ts:163", "xiNAS-MCP/src/agent/task/runner.ts:247"]
+    },
+    {
+      "id": "TC-011",
+      "title": "Rollback throws -> terminal(requires_manual_recovery)",
+      "component": "xinas-agent / task-runner",
+      "priority": "P1",
+      "type": "resilience",
+      "preconditions": "An executor whose stage throws AND whose rollback() throws.",
+      "inputData": "task.begin for that kind.",
+      "steps": [
+        {"step": 1, "action": "Run the task and collect events.", "expected": "... stage_failed -> rollback_started -> rollback_failed(error_message) -> terminal(requires_manual_recovery)."},
+        {"step": 2, "action": "Inspect the terminal event.", "expected": "status:\"requires_manual_recovery\", error_code:\"FAILED_MANUAL_RECOVERY_REQUIRED\"."}
+      ],
+      "expectedResult": "A rollback failure is never reported as a plain failed (which implies auto-heal); it escalates to manual recovery.",
+      "observability": "Progress-event stream; api terminal state.",
+      "references": ["xiNAS-MCP/src/agent/task/runner.ts:231"]
+    },
+    {
+      "id": "TC-012",
+      "title": "Cooperative cancel honored at a stage boundary -> terminal(cancelled)",
+      "component": "xinas-agent / task-runner",
+      "priority": "P1",
+      "type": "functional",
+      "preconditions": "An executor with a stage that checks ctx.isCancelRequested() (e.g. fs/xiraid).",
+      "inputData": "task.begin then task.cancel for the same task_id before the next stage boundary.",
+      "steps": [
+        {"step": 1, "action": "Begin a multi-stage task; send task.cancel {task_id}.", "expected": "{cancel_requested:true}."},
+        {"step": 2, "action": "Observe the terminal event.", "expected": "Rollback runs; terminal status:\"cancelled\" with NO error_code."},
+        {"step": 3, "action": "Cancel a fast reference task (no mid-stage check) after it finished.", "expected": "Cancel is a no-op; task terminates success (a cancel after the last stage is ignored)."}
+      ],
+      "expectedResult": "Cancel is cooperative, honored only at safe points (before each stage).",
+      "observability": "task.cancel reply; progress-event terminal.",
+      "references": ["xiNAS-MCP/src/agent/task/runner.ts:150", "xiNAS-MCP/src/agent/rpc/methods/task.ts:167"]
+    },
+    {
+      "id": "TC-013",
+      "title": "Publisher retry/backoff exhaustion -> pendingReconcile, then recovery re-sweeps",
+      "component": "xinas-agent / publisher",
+      "priority": "P1",
+      "type": "resilience",
+      "preconditions": "Failure harness where the api returns 503 for N calls then 200; retryBaseMs small.",
+      "inputData": "A steady-state observation delta for a kind while the api 5xxs.",
+      "steps": [
+        {"step": 1, "action": "Emit a delta while api returns 503.", "expected": "5 attempts with exponential backoff (250ms->500->..., capped 30s); on exhaustion the kind is added to pendingReconcile."},
+        {"step": 2, "action": "Restore api to 200; trigger the next collector tick.", "expected": "needsReconcile(kind) is true -> the collector runs initialSweep (full reconcile) instead of an incremental delta; the 2xx clears the kind from pendingReconcile."}
+      ],
+      "expectedResult": "5xx/network errors retry then reconcile-recover; no observation is permanently lost on a transient api outage.",
+      "observability": "journal retry/pendingReconcile; api observed rows converge after recovery.",
+      "references": ["xiNAS-MCP/src/agent/publisher.ts:186", "xiNAS-MCP/src/agent/publisher.ts:152"]
+    },
+    {
+      "id": "TC-014",
+      "title": "Publisher 4xx -> no retry, drop is made visible",
+      "component": "xinas-agent / publisher",
+      "priority": "P1",
+      "type": "negative",
+      "preconditions": "Harness where the api returns 400 for an observation batch (e.g. a schema-invalid observed row).",
+      "inputData": "A delta batch the api rejects with 400.",
+      "steps": [
+        {"step": 1, "action": "Emit the batch.", "expected": "Exactly one POST (no retries); onPublishError fires -> a structured stderr/journal line event:\"observation_batch_rejected\" with status:400 and the affected kinds."}
+      ],
+      "expectedResult": "A structurally-wrong payload is dropped without retry but never silently; the reject is logged so a whole kind can't vanish unnoticed.",
+      "observability": "journalctl -u xinas-agent | jq 'select(.event==\"observation_batch_rejected\")'.",
+      "references": ["xiNAS-MCP/src/agent/publisher.ts:206", "xiNAS-MCP/src/agent/publisher.ts:84"]
+    },
+    {
+      "id": "TC-015",
+      "title": "One bad collector doesn't abort boot; agent_started still POSTed once",
+      "component": "xinas-agent / convergence",
+      "priority": "P1",
+      "type": "resilience",
+      "preconditions": "One collector's probe throws; all others healthy; api up.",
+      "inputData": "Agent restart.",
+      "steps": [
+        {"step": 1, "action": "Restart the agent.", "expected": "The throwing kind logs initial_sweep_failed and is skipped; every other kind is swept and reconciled via flushWithSnapshot([kind])."},
+        {"step": 2, "action": "Confirm the one-shot startup POST.", "expected": "Exactly one POST /internal/v1/agent_started {controller_id} after the sweep loop, clearing the api heartbeat startup grace."}
+      ],
+      "expectedResult": "Boot is best-effort per collector; a single failure neither aborts convergence nor blocks the agent_started signal.",
+      "observability": "journal (initial_sweep_failed); api heartbeat leaving startup-grace; api observed rows for healthy kinds.",
+      "references": ["xiNAS-MCP/src/agent/boot.ts:25", "xiNAS-MCP/src/agent/convergence.ts:420"]
+    },
+    {
+      "id": "TC-016",
+      "title": "config.rollback executor: baseline vs snapshot-id, drift caveat, no-op rollback",
+      "component": "xinas-agent / config-rollback-executor",
+      "priority": "P1",
+      "type": "functional",
+      "preconditions": "xinas_history bridge reachable (or fixture); a known snapshot id present.",
+      "inputData": "(a) {reason:\"revert\", to:\"baseline\", baseline_id:\"baseline\"}; (b) {reason:\"revert\", to:\"<snap-id>\"}; (c) spec missing reason.",
+      "steps": [
+        {"step": 1, "action": "Run (a).", "expected": "Stage restore calls bridge.resetToBaseline(\"revert\"); output includes 'reset-to-baseline (baseline): revert' then 'baseline reset completed'; terminal success."},
+        {"step": 2, "action": "Run (b).", "expected": "Calls bridge.restoreSnapshot(\"<snap-id>\",\"revert\"); output includes the drift caveat ('recovery applied - desired state unchanged; re-apply or adopt to make it durable')."},
+        {"step": 3, "action": "Run (c).", "expected": "Stage throws 'config.rollback: enriched spec missing reason' -> stage_failed -> terminal."},
+        {"step": 4, "action": "Force the bridge to return success:false.", "expected": "Stage throws 'runner auto-rollback applies'; the executor's own rollback() is a no-op (the python transactional runner already rolled back - the agent must not fight it)."}
+      ],
+      "expectedResult": "to routes baseline-reset vs targeted-restore; targeted restore emits the durability caveat; the executor never runs a compensating rollback of its own.",
+      "observability": "Progress-event output_inline; xinas_history state; terminal status/error.",
+      "references": ["xiNAS-MCP/src/agent/task/config-rollback-executor.ts:26"]
+    },
+    {
+      "id": "TC-017",
+      "title": "agent.health status derivation (starting / healthy / degraded)",
+      "component": "xinas-agent / health",
+      "priority": "P1",
+      "type": "functional",
+      "preconditions": "Controllable collector health snapshot (fixture or targeted probe fault).",
+      "inputData": "agent.health under three registry states.",
+      "steps": [
+        {"step": 1, "action": "No collector reported yet (all stubbed / empty).", "expected": "status:\"starting\"."},
+        {"step": 2, "action": "All collectors running/stubbed with >=1 real.", "expected": "status:\"healthy\"."},
+        {"step": 3, "action": "Inject one probe error so a collector reports error:<msg>.", "expected": "status:\"degraded\"; collectors map names the erroring kind; uptime_seconds increases monotonically."}
+      ],
+      "expectedResult": "Status is derived purely from the live snapshot; a single error: collector degrades the whole agent (api maps degraded -> EXECUTOR_DEGRADED).",
+      "observability": "agent.health reply status/collectors.",
+      "references": ["xiNAS-MCP/src/agent/rpc/methods/health.ts:31"]
+    },
+    {
+      "id": "TC-018",
+      "title": "Graceful shutdown on SIGTERM (before and after bind) -> exit 0",
+      "component": "xinas-agent / lifecycle",
+      "priority": "P1",
+      "type": "resilience",
+      "preconditions": "Agent installed.",
+      "inputData": "systemctl stop xinas-agent (SIGTERM); and a race variant delivering SIGTERM immediately after the socket file appears.",
+      "steps": [
+        {"step": 1, "action": "systemctl stop xinas-agent.", "expected": "journal event:\"shutdown\", signal:\"SIGTERM\"; poll driver + publisher debounce stopped first, then collectors (registry.stop, allSettled), then server.close(); exit 0; socket removed."},
+        {"step": 2, "action": "Hold a client connection open and stop.", "expected": "Shutdown does not hang past ~3s: the forced-exit backstop logs shutdown_forced and exits 0."},
+        {"step": 3, "action": "Deliver SIGTERM right after bind (before post-bind work).", "expected": "Still runs shutdown() (handlers registered before bind) and exits cleanly."}
+      ],
+      "expectedResult": "Clean teardown ordering; no hang past systemd stop timeout; SIGTERM always reaches shutdown().",
+      "observability": "journalctl (shutdown, shutdown_forced); systemctl status Result=; socket absence.",
+      "references": ["xiNAS-MCP/src/agent-server.ts:134"]
+    },
+    {
+      "id": "TC-019",
+      "title": "Fixture probe mode spawns no host subprocesses (hermetic)",
+      "component": "xinas-agent / convergence",
+      "priority": "P2",
+      "type": "stability",
+      "preconditions": "XINAS_AGENT_PROBE_MODE=fixture:<dir> with sample fixture files.",
+      "inputData": "Agent start in fixture mode under strace -f -e trace=execve (or equivalent).",
+      "steps": [
+        {"step": 1, "action": "Start the agent in fixture mode.", "expected": "No execve of udevadm/ip/systemctl/getent from the probes; disks/users/nfs-idmap populate from <dir>/*.json; other kinds are empty."}
+      ],
+      "expectedResult": "Fixture mode is fully file-backed - safe for CI or a machine where privileged probes must not run.",
+      "observability": "strace execve count; agent.health.collectors.",
+      "references": ["xiNAS-MCP/src/agent/convergence.ts:118"]
+    },
+    {
+      "id": "TC-020",
+      "title": "Restart hygiene: stale socket removed; auto-restart loop bounded",
+      "component": "xinas-agent / rpc-server",
+      "priority": "P2",
+      "type": "stability",
+      "preconditions": "A leftover socket file at the agent path from a prior unclean exit.",
+      "inputData": "Start the agent with a pre-existing agent.sock file.",
+      "steps": [
+        {"step": 1, "action": "Create a dummy file at the socket path, then start the agent.", "expected": "The stale file is unlinked and re-bound; agent reaches active."},
+        {"step": 2, "action": "Force repeated bind failures (keep the perm fault) and observe restarts.", "expected": "Restart=on-failure / RestartSec=5s retries without a tight crash-loop."}
+      ],
+      "expectedResult": "A stale socket never blocks startup; failed starts back off per the unit, not a hot loop.",
+      "observability": "stat on the socket; systemctl show xinas-agent -p NRestarts.",
+      "references": ["xiNAS-MCP/src/agent/rpc/server.ts:42", "xiNAS-MCP/xinas-agent.service"]
+    }
+  ]
+}
