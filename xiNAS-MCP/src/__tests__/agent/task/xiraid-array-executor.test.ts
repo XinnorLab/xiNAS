@@ -559,11 +559,16 @@ describe('xiraid.array.delete executor', () => {
     fake: ReturnType<typeof makeFake>,
     mounts: Array<{ source: string; mountpoint: string }>,
     spec: Record<string, unknown> = { id: 'data' },
+    transport?: XiraidTransport,
   ): Promise<TaskProgressEvent[]> {
     const events: TaskProgressEvent[] = [];
     const executor = makeXiraidArrayDeleteExecutor({
-      client: new XiraidClient(fake.transport),
+      client: new XiraidClient(transport ?? fake.transport),
       readMounts: async () => mounts,
+      // Fast bounded verify wait so the async-propagation tests don't sleep.
+      pollIntervalMs: 1,
+      timeoutMs: 5,
+      sleep: async () => {},
     });
     await makeRunner().run(
       { task_id: 't-del', operation_kind: 'xiraid.array.delete', spec },
@@ -574,6 +579,10 @@ describe('xiraid.array.delete executor', () => {
     );
     return events;
   }
+
+  /** Concatenated human-readable stage output across all events. */
+  const outputText = (events: TaskProgressEvent[]): string =>
+    events.map((e) => e.output_inline ?? '').join('\n');
 
   function seedDoomed(fake: ReturnType<typeof makeFake>): void {
     fake.arrays.push({ name: 'data', level: '5', devices: ['/dev/a'], state: ['online'] });
@@ -627,18 +636,96 @@ describe('xiraid.array.delete executor', () => {
     expect(fake.arrays).toHaveLength(1);
   });
 
-  it('pool cleanup fails AFTER the destroy → rollback throws → manual recovery', async () => {
+  // ── Post-destroy hardening (§7): once raid_destroy succeeds, pool cleanup and
+  //    verify are best-effort and must NEVER escalate to requires_manual_recovery ──
+
+  it('post-destroy: pool_show failure is best-effort → success with warning, array gone', async () => {
     const fake = makeFake();
     seedDoomed(fake);
-    // an active pool whose deactivate explodes: simulate by replacing poolDeactivate
+    // The deterministic real-world culprit: pool_show errors on this daemon.
+    // It runs only AFTER raid_destroy, so preflight is unaffected.
+    fake.transport.poolShow = async () => {
+      throw new Error('pool show unsupported on this daemon');
+    };
+    const events = await runDelete(fake, []);
+    // The array was destroyed (irreversible, intended) → success, NOT
+    // requires_manual_recovery for a post-destroy bookkeeping hiccup.
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.arrays).toEqual([]); // array actually gone
+    expect(shape(events)).toContainEqual(['stage_succeeded', 'destroy']);
+    expect(outputText(events)).toMatch(/spare-pool cleanup failed/i);
+  });
+
+  it('post-destroy: spare-pool deactivate failure is best-effort → success with warning', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
     fake.pools.push({ name: 'xnsp_data', drives: ['/dev/s'], active: true });
     fake.transport.poolDeactivate = async () => {
       throw new Error('daemon hiccup');
     };
     const events = await runDelete(fake, []);
-    expect(shape(events)).toContainEqual(['stage_failed', 'destroy']);
-    expect(shape(events)).toContainEqual(['rollback_failed', 'rollback']);
-    expect(terminal(events)?.status).toBe('requires_manual_recovery');
-    expect(fake.arrays).toEqual([]); // the array IS gone — manual recovery is honest
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.arrays).toEqual([]);
+    expect(outputText(events)).toMatch(/spare-pool cleanup failed/i);
+  });
+
+  it('post-destroy: a transient raid_show error during verify does NOT escalate → success with warning', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
+    let destroyed = false;
+    const transport: XiraidTransport = {
+      ...fake.transport,
+      async raidDestroy(req) {
+        await fake.transport.raidDestroy(req);
+        destroyed = true;
+      },
+      async raidShow() {
+        if (destroyed) throw new Error('raid_show timed out');
+        return fake.transport.raidShow();
+      },
+    };
+    const events = await runDelete(fake, [], { id: 'data' }, transport);
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.arrays).toEqual([]); // really destroyed
+    expect(outputText(events)).toMatch(/could not confirm .* gone/i);
+  });
+
+  it('post-destroy: verify tolerates async propagation — array clears within the wait → success', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
+    let shows = 0;
+    const transport: XiraidTransport = {
+      ...fake.transport,
+      // async daemon: destroy is accepted but raid_show still lists the array briefly.
+      async raidDestroy() {},
+      async raidShow() {
+        shows += 1;
+        // preflight (1) + first verify poll (2) still show it; then it clears.
+        return shows >= 3
+          ? []
+          : [{ name: 'data', level: '5', devices: ['/dev/a'], state: ['online'] }];
+      },
+    };
+    const events = await runDelete(fake, [], { id: 'data' }, transport);
+    expect(terminal(events)?.status).toBe('success');
+    expect(shape(events)).toContainEqual(['stage_succeeded', 'verify']);
+  });
+
+  it('post-destroy: array still present after the wait → clean failed (retryable), NOT manual recovery', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
+    const transport: XiraidTransport = {
+      ...fake.transport,
+      // pathological: the daemon acknowledges the destroy but never removes the array.
+      async raidDestroy() {},
+    };
+    const events = await runDelete(fake, [], { id: 'data' }, transport);
+    expect(shape(events)).toContainEqual(['stage_failed', 'verify']);
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
+    expect(terminal(events)?.status).not.toBe('requires_manual_recovery');
+    expect(fake.arrays).toHaveLength(1); // still there — surfaced honestly, retryable
   });
 });
