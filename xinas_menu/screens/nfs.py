@@ -652,6 +652,7 @@ class NFSScreen(XiNASAppMixin, Screen):
         else:
             await self.app.push_screen_wait(ConfirmDialog(f"Failed: {exc}", "Error", ok_only=True))
 
+    @work(exclusive=True)
     async def _remove_share(self) -> None:
         exports = await self._get_exports()
         if not exports:
