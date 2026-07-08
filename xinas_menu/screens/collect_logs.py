@@ -320,7 +320,7 @@ def _create_archive(tmp: str, hostname: str) -> str:
 
 
 def _upload(archive_path: str) -> tuple[bool, str]:
-    server = os.environ.get("TRANSFER_SERVER", "http://178.253.23.152:8080")
+    server = os.environ.get("TRANSFER_SERVER", "http://5.75.230.104:8080")
     basename = Path(archive_path).name
     try:
         r = subprocess.run(
