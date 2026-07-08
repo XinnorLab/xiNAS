@@ -171,7 +171,7 @@ the role reuses the namespaces already on the drives — no rebuild, no data los
 - `ls /dev/<ctrl>n*` per data drive.
 - `n1` → log devices (`nvme_small_ns_devices`).
 - `n2`–`n9` (and `n10+`) → data devices (`nvme_large_ns_devices`).
-- Special case: if **no** `n2+` were found, the role treats `n1` as data (single-namespace drives) and leaves the log device list empty — at which point `raid_fs` will fail with a clear message in §6.
+- Requirement: existing-namespace reuse needs the n1 (log) + n2 (data) two-namespace layout on every data drive. If **no** `n2+` were found anywhere, the task fails explicitly ("Fail on single-namespace layout") naming the remedy — re-run with `xinas_storage_reset: true` to wipe and rebuild the two-namespace layout, or provision it manually. A single-namespace layout can never legitimately reach this task on a healthy converge: `MATCH` requires the `log` xiRAID array to already be online, and that array is only ever built from `n1`+`n2` devices by this same role (§6), so the only way to trip this fail is an externally-tampered-with array.
 
 **EMPTY** (a fresh box, including a factory single-`n1` drive) or an explicit
 `xinas_storage_reset: true` falls through to the delete+recreate path in §4.3. **FOREIGN**

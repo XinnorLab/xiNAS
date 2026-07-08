@@ -1,4 +1,4 @@
-"""Structural regression guards for small storage-role residuals (WS1-R1/R2/R3).
+"""Structural regression guards for small storage-role residuals (WS1-R1..R4).
 
 These pin narrow fixes over the raid_fs and nvme_namespace roles:
 
@@ -16,6 +16,11 @@ These pin narrow fixes over the raid_fs and nvme_namespace roles:
   the raw ``nvme_data_drives`` entries, which in the default NVMe mode are
   controller char devices (``/dev/nvme0``) on which ``wipefs``/``dd``/
   ``partprobe`` silently no-op.
+- nvme_namespace's existing-namespace detection must not silently reinterpret
+  an n1-only (single-namespace) layout as "data" — that fallback was dead
+  (the downstream RAID-config gate requires both n1 and n2+ anyway) and it
+  masked the real cause of the later generic failure. It must fail explicitly
+  and name the remedies (WS1-R4).
 
 These are structural assertions over parsed YAML — the repo has no
 molecule/behavioral Ansible harness (see tests/test_raid_fs_safe_defaults.py).
@@ -36,6 +41,7 @@ NVME_NAMESPACE_TASKS_DIR = REPO / "collection/roles/nvme_namespace/tasks"
 LAB_INVENTORY = REPO / "inventories/lab.ini"
 REBUILD_NAMESPACES = NVME_NAMESPACE_TASKS_DIR / "rebuild_namespaces.yml"
 CLEANUP_STORAGE = NVME_NAMESPACE_TASKS_DIR / "cleanup_storage.yml"
+DETECT_EXISTING_NAMESPACES = NVME_NAMESPACE_TASKS_DIR / "detect_existing_namespaces.yml"
 
 
 def _iter_tasks(tasks):
@@ -181,3 +187,41 @@ def test_namespace_create_tasks_still_skip_failed_devices():
         assert "not in nvme_failed_devices" in _when_text(task), (
             f"task {name!r} must still gate on nvme_failed_devices"
         )
+
+
+# ── WS1-R4: dead single-namespace fallback replaced by an explicit fail ──────
+
+
+def test_no_dead_single_namespace_fallback():
+    """The old fallback silently emptied nvme_small_ns_devices and reassigned
+    it to nvme_large_ns_devices. It never actually reached a working converge
+    (the downstream RAID-config gate requires both lists non-empty), so it
+    only masked the real cause of a later generic failure.
+    """
+    tasks = yaml.safe_load(DETECT_EXISTING_NAMESPACES.read_text())
+    assert _find_by_name(tasks, "Use n1 namespaces for data if no n2 found") is None, (
+        "detect_existing_namespaces.yml still carries the dead single-namespace "
+        "fallback that silently reassigns nvme_large_ns_devices"
+    )
+
+
+def test_single_namespace_layout_fails_explicitly():
+    tasks = yaml.safe_load(DETECT_EXISTING_NAMESPACES.read_text())
+    fail_tasks = [t for t in _iter_tasks(tasks) if t.get("ansible.builtin.fail")]
+    assert fail_tasks, (
+        "detect_existing_namespaces.yml must fail explicitly on a single-namespace layout"
+    )
+    matches = [
+        t
+        for t in fail_tasks
+        if "nvme_large_ns_devices | length == 0" in _when_text(t)
+        and "nvme_small_ns_devices | length > 0" in _when_text(t)
+    ]
+    assert matches, (
+        "no fail task guards on (no n2+ found, some n1 found) — a single-namespace "
+        "layout must fail loudly instead of silently reassigning facts"
+    )
+    msg = str(matches[0]["ansible.builtin.fail"].get("msg", ""))
+    assert "xinas_storage_reset" in msg, (
+        "failure message should name the remedy (xinas_storage_reset=true)"
+    )

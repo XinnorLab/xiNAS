@@ -34,11 +34,24 @@
   loop: "{{ existing_ns_result.results }}"
   when: item.stdout_lines | length > 0
 
-# If no n2 namespaces found, use n1 for data (single namespace per drive)
-- name: Use n1 namespaces for data if no n2 found
-  ansible.builtin.set_fact:
-    nvme_large_ns_devices: "{{ nvme_small_ns_devices }}"
-    nvme_small_ns_devices: []
+# No n2+ namespaces found on any data drive: this is a single-namespace-per-
+# drive layout. Existing-namespace reuse only supports the n1 (log) + n2
+# (data) two-namespace layout — a converge can only reach this task when
+# xinas_storage_state == MATCH, which itself requires the 'log' xiRAID array
+# to already be online (built from n1+n2 by this same role), so a healthy
+# converge never trips this fail. Fail loudly instead of silently
+# reassigning n1 to data, which used to mask this exact situation behind a
+# later, generic "insufficient devices" error. See raid-spec.md §4.2.
+- name: Fail on single-namespace layout (existing-namespace reuse unsupported)
+  ansible.builtin.fail:
+    msg: >-
+      Existing-namespace reuse requires the n1 (log) + n2 (data) two-namespace
+      layout on every data drive; found {{ nvme_small_ns_devices | length }}
+      n1 device(s) and 0 n2+ device(s), which is a single-namespace layout
+      that cannot be reused. Re-run with xinas_storage_reset=true to wipe and
+      rebuild the expected two-namespace layout (destroys data; requires an
+      interactive YES confirmation, or nvme_skip_cleanup_confirmation=true for
+      automation), or provision the n1+n2 layout manually before re-running.
   when:
     - nvme_large_ns_devices | length == 0
     - nvme_small_ns_devices | length > 0
