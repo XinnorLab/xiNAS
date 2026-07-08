@@ -1,0 +1,336 @@
+{
+  "testPlan": {
+    "title": "TP: On-node xiNAS agent lifecycle — boot + poll + publish",
+    "scope": "Covers the steady-state lifecycle of the on-node agent (xiNAS-MCP/src/agent): config resolution (config.ts), the Flow C boot sweep (boot.ts), the batching/retry/reconcile Publisher (publisher.ts), the poll/backstop driver (poll.ts), and convergence wiring (convergence.ts: buildConvergence/runConvergence). Focus is observable lifecycle behavior: what the agent POSTs to /internal/v1/observed and /internal/v1/agent_started, when it reconciles vs. skips, and how it survives a transient api/probe outage without losing or wiping observed state. Explicitly EXCLUDED: individual collector/probe parsing correctness (covered by their own suites), the RPC/task-apply path, xiRAID gRPC transport, and the api-side ingestion of observations.",
+    "risks": [
+      {"description": "A failed initialSweep that reconciles an empty snapshot would make the api reconcile-DELETE every existing observed row for that kind, silently wiping good data on a transient probe failure.", "severity": "high"},
+      {"description": "Retry-exhaustion (api down) that does NOT mark kinds pendingReconcile leaves observed state permanently stale until process restart — a silent freeze with no error surfaced to the user.", "severity": "high"},
+      {"description": "Boot mode not restored (ceiling flush during boot) sends a partial complete_snapshots:[] batch that the api reconcile-deletes, causing boot-time data loss for any kind exceeding 256 entries / 1 MB.", "severity": "high"},
+      {"description": "runConvergence throwing on a startup boot failure (api briefly down) would produce an unhandled rejection and prevent event streams + poll backstop from ever starting, so the node never recovers.", "severity": "high"},
+      {"description": "Retrying a 4xx (structurally-wrong payload) wastes backoff and can amplify a malformed batch against the api.", "severity": "medium"},
+      {"description": "PollDriver.start not being idempotent would double-arm intervals, doubling observation traffic and probe load per collector.", "severity": "medium"},
+      {"description": "Debounce reset-on-each-enqueue (instead of leading-arm) could starve the queue under a continuous event stream, so a quiet-then-busy node never flushes.", "severity": "medium"},
+      {"description": "Config resolution silently accepting a missing controller-id / token file would start an agent that cannot authenticate, failing every POST with 401 with no clear root-cause.", "severity": "medium"},
+      {"description": "A single throwing collector inside a poll tick or boot sweep aborting the whole loop would take down observation for all other kinds.", "severity": "medium"}
+    ],
+    "strategy": ["functional", "negative", "boundary", "resilience", "stability"],
+    "environment": "Node.js (agent runtime) + vitest (xiNAS-MCP). Unit/integration level: a fake api over a Unix-domain socket (http server on socketPath) records POST bodies, statuses, and headers; fake collectors/probes with scripted initialSweep() results and injectable throws. Publisher constructed with retryBaseMs=0 and debounceMs=0 to make retry/flush deterministic; debounce tests set an explicit small debounceMs with fake timers. PollDriver constructed with backstopMs override. Fixture probe mode exercised via XINAS_AGENT_PROBE_MODE=fixture:<dir>. No privileged host access required; no real xiRAID/NFS.",
+    "entryCriteria": "Agent package builds (tsc) and the existing agent test suite (vitest run) is green on the target branch; a fake api UDS harness and fake collector helpers are available in src/__tests__; fixture directory for probe-mode tests is present.",
+    "exitCriteria": "All P0 and P1 cases pass. No case demonstrates observed-data loss (reconcile-delete on failed sweep, boot ceiling partial) or a silent freeze (missing pendingReconcile on exhaustion). runConvergence resolves (never rejects) under injected boot/registry/poll failures. Any P2 miss is logged as a known limitation with a follow-up.",
+    "traceability": {"pr": null, "commit": "e64e50f", "components": ["agent/config", "agent/boot", "agent/publisher", "agent/poll", "agent/convergence"]}
+  },
+  "testCases": [
+    {
+      "id": "TC-001",
+      "title": "Boot sweep sends one reconcile batch per collector and posts agent_started exactly once",
+      "component": "agent/boot",
+      "priority": "P0",
+      "type": "functional",
+      "preconditions": "Registry with N collectors, each initialSweep() returning a known set of deltas; fake api returns 200 for /internal/v1/observed and /internal/v1/agent_started.",
+      "inputData": "3 collectors: Disk (2 deltas), Users (2 User + 1 Group delta), Filesystem (0 deltas). controllerId='ctrl-1'.",
+      "steps": [
+        {"step": 1, "action": "Call runBootSequence({publisher, registry, controllerId}).", "expected": "For each collector, exactly one POST /internal/v1/observed arrives carrying its deltas and complete_snapshots set to the union of the collector.kind + delta kinds."},
+        {"step": 2, "action": "Inspect the recorded POST bodies in registration order.", "expected": "Disk batch complete_snapshots=['Disk']; Users batch complete_snapshots covers ['User','Group']; Filesystem batch has deltas:[] and complete_snapshots=['Filesystem']."},
+        {"step": 3, "action": "Inspect the final request.", "expected": "Exactly one POST /internal/v1/agent_started with body {controller_id:'ctrl-1'}; it is the last request and fires once."}
+      ],
+      "expectedResult": "Each kind is reconciled with a single complete snapshot and the api receives exactly one agent_started signal, clearing its heartbeat startup-grace timer.",
+      "observability": "Fake api request log (path, body); assert count of agent_started == 1; boot.ts:59-69.",
+      "references": ["xiNAS-MCP/src/agent/boot.ts:35-69", "xiNAS-MCP/src/__tests__/agent/boot-sequence.test.ts"]
+    },
+    {
+      "id": "TC-002",
+      "title": "Failed initialSweep is skipped — no reconcile, existing observed rows are NOT wiped",
+      "component": "agent/boot",
+      "priority": "P0",
+      "type": "resilience",
+      "preconditions": "Registry with a collector whose initialSweep() rejects (probe throws), plus one healthy collector.",
+      "inputData": "NfsCollector.initialSweep() throws Error('nfsd socket refused'); DiskCollector returns 1 delta.",
+      "steps": [
+        {"step": 1, "action": "Run runBootSequence.", "expected": "A structured error line is written to stderr with subsystem:'boot', event:'initial_sweep_failed', kind:'NfsSession', error containing 'nfsd socket refused'."},
+        {"step": 2, "action": "Inspect POSTs to /internal/v1/observed.", "expected": "NO batch is sent for the failed collector's kind(s) — no complete_snapshots:['NfsSession'] appears, so the api never reconcile-deletes existing NFS rows."},
+        {"step": 3, "action": "Confirm the healthy collector still reconciled.", "expected": "Disk batch with complete_snapshots=['Disk'] is present; agent_started still posts once."}
+      ],
+      "expectedResult": "A transient probe failure surfaces via log/health but does NOT emit an empty complete snapshot; good observed data for that kind is preserved for the poll backstop to re-reconcile later.",
+      "observability": "stderr JSON line initial_sweep_failed; assert absence of complete_snapshots containing the failed kind; boot.ts:39-58.",
+      "references": ["xiNAS-MCP/src/agent/boot.ts:37-58"]
+    },
+    {
+      "id": "TC-003",
+      "title": "Publisher retries 5xx with exponential backoff, then marks kinds pendingReconcile on exhaustion",
+      "component": "agent/publisher",
+      "priority": "P0",
+      "type": "resilience",
+      "preconditions": "Publisher with maxRetries=5, retryBaseMs=0 (deterministic, no real waits). Fake api returns 503 for every attempt.",
+      "inputData": "One enqueued delta of kind 'Disk'; flush().",
+      "steps": [
+        {"step": 1, "action": "Enqueue a Disk delta and call flush().", "expected": "Exactly 5 POST attempts to /internal/v1/observed are made (attempt 0..4)."},
+        {"step": 2, "action": "After flush resolves, read publisher.needsReconcile('Disk').", "expected": "Returns true — the kind was added to pendingReconcile after retry exhaustion."},
+        {"step": 3, "action": "Assert flush() resolved (did not throw).", "expected": "The promise resolves; no unhandled rejection is produced on the exhaustion path."}
+      ],
+      "expectedResult": "5xx exhaustion is non-fatal: the batch is dropped but the affected kind is queued for reconcile so the next poll tick re-sweeps and heals the gap.",
+      "observability": "Attempt counter on the fake api; publisher.pendingReconcile membership; publisher.ts:166-205.",
+      "references": ["xiNAS-MCP/src/agent/publisher.ts:146-206", "xiNAS-MCP/src/__tests__/agent/publisher-retry.test.ts"]
+    },
+    {
+      "id": "TC-004",
+      "title": "Successful (2xx) flush clears pendingReconcile for batch kinds and requested snapshot kinds",
+      "component": "agent/publisher",
+      "priority": "P0",
+      "type": "functional",
+      "preconditions": "Publisher with 'Disk' and 'NfsSession' already in pendingReconcile. Fake api returns 200.",
+      "inputData": "Enqueue a Disk delta; call flushWithSnapshot(['NfsSession']).",
+      "steps": [
+        {"step": 1, "action": "Pre-seed pendingReconcile with Disk and NfsSession, enqueue a Disk delta, call flushWithSnapshot(['NfsSession']).", "expected": "One POST with deltas=[Disk], complete_snapshots=['NfsSession'] returns 200."},
+        {"step": 2, "action": "Read needsReconcile('Disk') and needsReconcile('NfsSession').", "expected": "Both return false — Disk cleared because it was in the batch, NfsSession cleared because it was a requested complete_snapshot."}
+      ],
+      "expectedResult": "On success the publisher clears the reconcile debt for both the kinds actually sent as deltas and the kinds requested as complete snapshots.",
+      "observability": "publisher.pendingReconcile after flush; publisher.ts:171-180.",
+      "references": ["xiNAS-MCP/src/agent/publisher.ts:171-180"]
+    },
+    {
+      "id": "TC-005",
+      "title": "loadAgentConfig resolves and trims controller_id/agent_token; inline config short-circuits",
+      "component": "agent/config",
+      "priority": "P0",
+      "type": "functional",
+      "preconditions": "A temp config.json referencing controller_id_path and agent_token_path files whose contents have trailing newlines/whitespace.",
+      "inputData": "controller-id file contents='ctrl-42\\n'; token file contents='  secret-token  \\n'; config includes nfs_helper_socket='/run/x.sock'.",
+      "steps": [
+        {"step": 1, "action": "Call loadAgentConfig({configPath}) pointing at the temp config.", "expected": "Returns AgentConfig with controller_id==='ctrl-42' and agent_token==='secret-token' (both trimmed), api_socket/agent_socket/socket_group passed through, nfs_helper_socket==='/run/x.sock'."},
+        {"step": 2, "action": "Call loadAgentConfig({inline: someConfig}).", "expected": "Returns the inline object verbatim without touching the filesystem (no path reads)."},
+        {"step": 3, "action": "Call loadAgentConfig() on a config with no nfs_helper_socket key.", "expected": "Result has no nfs_helper_socket property at all (omitted, not undefined), per exactOptionalPropertyTypes."}
+      ],
+      "expectedResult": "Config resolution reads referenced secret files, trims them, honors the inline override, and omits the optional helper socket when absent.",
+      "observability": "Returned AgentConfig object; config.ts:26-49.",
+      "references": ["xiNAS-MCP/src/agent/config.ts:23-50", "xiNAS-MCP/src/__tests__/agent/config.test.ts"]
+    },
+    {
+      "id": "TC-006",
+      "title": "Poll backstop re-sweeps and consumes pendingReconcile after the api recovers",
+      "component": "agent/poll",
+      "priority": "P0",
+      "type": "resilience",
+      "preconditions": "A collector whose initialSweep() returns a stable set; Publisher whose api first errors (kind lands in pendingReconcile via an earlier flush) then recovers to 200. PollDriver with a short backstopMs and fake timers.",
+      "inputData": "collector.kind='Network', no pollIntervalMs (uses backstop); backstopMs=1000.",
+      "steps": [
+        {"step": 1, "action": "Drive an initial flush that exhausts retries so needsReconcile('Network') is true; then flip the fake api to 200.", "expected": "pendingReconcile contains 'Network'."},
+        {"step": 2, "action": "Start PollDriver and advance fake timers by backstopMs.", "expected": "#sweep runs collector.initialSweep(), enqueues its deltas, and POSTs flushWithSnapshot(['Network']) which returns 200."},
+        {"step": 3, "action": "Read needsReconcile('Network').", "expected": "Returns false — the successful reconcile flush cleared the kind; observed state is healed without a process restart."}
+      ],
+      "expectedResult": "The poll tick is the 'next tick' the retry path waited on: it re-sweeps the kind, reconciles it, and clears the reconcile debt.",
+      "observability": "Fake api request log; publisher.pendingReconcile; poll.ts:65-77 + publisher.ts:171-180.",
+      "references": ["xiNAS-MCP/src/agent/poll.ts:38-77", "xiNAS-MCP/src/agent/publisher.ts:200-205"]
+    },
+    {
+      "id": "TC-007",
+      "title": "4xx response is not retried and does not mark the kind for reconcile",
+      "component": "agent/publisher",
+      "priority": "P1",
+      "type": "negative",
+      "preconditions": "Publisher maxRetries=5, retryBaseMs=0. Fake api returns 400 on the first attempt.",
+      "inputData": "One enqueued 'Disk' delta; flush().",
+      "steps": [
+        {"step": 1, "action": "Enqueue a Disk delta and call flush(); api replies 400.", "expected": "Exactly ONE POST attempt is made — no retry loop."},
+        {"step": 2, "action": "Read needsReconcile('Disk').", "expected": "Returns false — a structurally-wrong payload is dropped, not queued for reconcile (retrying/reconciling would just resend the same bad batch)."}
+      ],
+      "expectedResult": "4xx short-circuits: single attempt, no backoff, no pendingReconcile entry.",
+      "observability": "Attempt counter == 1; pendingReconcile empty; publisher.ts:184-186.",
+      "references": ["xiNAS-MCP/src/agent/publisher.ts:183-186"]
+    },
+    {
+      "id": "TC-008",
+      "title": "Network error (api socket down) is treated as 5xx — retried, then pendingReconcile",
+      "component": "agent/publisher",
+      "priority": "P1",
+      "type": "resilience",
+      "preconditions": "Publisher pointed at a socketPath with NO listener (ECONNREFUSED), or a server that destroys the connection. maxRetries=3, retryBaseMs=0.",
+      "inputData": "One enqueued 'NfsSession' delta; flush().",
+      "steps": [
+        {"step": 1, "action": "Enqueue and flush() against a dead api socket.", "expected": "req.on('error') fires each attempt; the publisher performs maxRetries attempts (lastStatus reset to 0), never throwing out of flush()."},
+        {"step": 2, "action": "After flush resolves, read needsReconcile('NfsSession').", "expected": "Returns true — a connection error is handled identically to 5xx and lands the kind in pendingReconcile."}
+      ],
+      "expectedResult": "A transport-level failure is absorbed like a 5xx: bounded retries, no throw, reconcile debt recorded for recovery.",
+      "observability": "Connection attempt count; pendingReconcile; publisher.ts:189-192.",
+      "references": ["xiNAS-MCP/src/agent/publisher.ts:189-205"]
+    },
+    {
+      "id": "TC-009",
+      "title": "loadAgentConfig throws a clear error when config, controller-id, or token file is missing",
+      "component": "agent/config",
+      "priority": "P1",
+      "type": "negative",
+      "preconditions": "Temp paths crafted so each required file can be independently removed.",
+      "inputData": "Case A: configPath does not exist. Case B: config exists but controller_id_path missing. Case C: config exists but agent_token_path missing.",
+      "steps": [
+        {"step": 1, "action": "Case A: loadAgentConfig({configPath:'/no/such.json'}).", "expected": "Throws Error message 'xinas-agent config not found at /no/such.json'."},
+        {"step": 2, "action": "Case B: controller-id file absent.", "expected": "Throws 'controller-id file not found at <path>'."},
+        {"step": 3, "action": "Case C: token file absent.", "expected": "Throws 'agent-token file not found at <path>'."}
+      ],
+      "expectedResult": "Each missing prerequisite fails fast with a path-specific message rather than starting an agent that cannot authenticate.",
+      "observability": "Thrown Error.message; config.ts:28-37.",
+      "references": ["xiNAS-MCP/src/agent/config.ts:28-37"]
+    },
+    {
+      "id": "TC-010",
+      "title": "Boot mode suppresses ceiling/debounce auto-flush so an oversized kind is one reconcile batch",
+      "component": "agent/publisher",
+      "priority": "P1",
+      "type": "boundary",
+      "preconditions": "Publisher with default maxBatchSize=256; setBootMode(true).",
+      "inputData": "Enqueue 300 deltas of kind 'User' while in boot mode, then flushWithSnapshot(['User']).",
+      "steps": [
+        {"step": 1, "action": "setBootMode(true); enqueue 300 User deltas.", "expected": "No POST is made during the enqueues — the 256-entry ceiling does NOT trigger an early flush, and no debounce timer is armed."},
+        {"step": 2, "action": "Call flushWithSnapshot(['User']).", "expected": "A single POST carries all 300 deltas with complete_snapshots=['User'] — one reconcile batch, no partial complete_snapshots:[] flush precedes it."}
+      ],
+      "expectedResult": "Boot data is never lost to a partial ceiling flush: the whole kind is delivered as one atomic reconcile.",
+      "observability": "POST count during enqueue phase == 0; final batch deltas.length == 300; publisher.ts:82-95.",
+      "references": ["xiNAS-MCP/src/agent/publisher.ts:77-99", "xiNAS-MCP/src/agent/boot.ts:33-63"]
+    },
+    {
+      "id": "TC-011",
+      "title": "Boot mode is restored (finally) even when a mid-boot flush throws",
+      "component": "agent/boot",
+      "priority": "P1",
+      "type": "resilience",
+      "preconditions": "Publisher stub whose flushWithSnapshot rejects on the first collector; setBootMode spy.",
+      "inputData": "2 collectors; publisher.flushWithSnapshot throws Error('boom') on the first call.",
+      "steps": [
+        {"step": 1, "action": "Call runBootSequence and let the first flushWithSnapshot reject.", "expected": "runBootSequence rejects/propagates, but publisher.setBootMode(false) was invoked in the finally block."},
+        {"step": 2, "action": "Inspect setBootMode call order.", "expected": "Sequence is setBootMode(true) then setBootMode(false); the publisher is left in steady-state mode so debounce/ceiling resume."}
+      ],
+      "expectedResult": "A boot flush failure cannot strand the publisher in boot mode (which would freeze steady-state auto-flush).",
+      "observability": "setBootMode spy call args; boot.ts:33/65-67.",
+      "references": ["xiNAS-MCP/src/agent/boot.ts:33-67"]
+    },
+    {
+      "id": "TC-012",
+      "title": "Empty collector still reconciles its primary kind to empty",
+      "component": "agent/boot",
+      "priority": "P1",
+      "type": "boundary",
+      "preconditions": "A collector whose initialSweep() returns []. Fake api 200.",
+      "inputData": "FilesystemCollector.initialSweep() => [].",
+      "steps": [
+        {"step": 1, "action": "Run runBootSequence with the empty collector.", "expected": "A POST is still sent with deltas:[] and complete_snapshots=['Filesystem']."},
+        {"step": 2, "action": "Confirm doFlush did not early-return.", "expected": "Because completeSnapshots.length>0, the empty-queue guard (queue.length===0 && completeSnapshots.length===0) does not skip the flush."}
+      ],
+      "expectedResult": "An empty sweep is a deliberate 'reconcile to zero rows', not a no-op — the api learns the kind has no entities.",
+      "observability": "POST body deltas:[] with the kind in complete_snapshots; publisher.ts:150 + boot.ts:62-63.",
+      "references": ["xiNAS-MCP/src/agent/boot.ts:59-63", "xiNAS-MCP/src/agent/publisher.ts:150"]
+    },
+    {
+      "id": "TC-013",
+      "title": "Dual-kind collector marks ALL its kinds complete in one boot batch",
+      "component": "agent/boot",
+      "priority": "P1",
+      "type": "functional",
+      "preconditions": "A collector.kind='User' whose sweep also emits 'Group' deltas.",
+      "inputData": "UsersCollector.initialSweep() => [User a, User b, Group g1].",
+      "steps": [
+        {"step": 1, "action": "Run runBootSequence.", "expected": "One POST with deltas=[User a, User b, Group g1] and complete_snapshots as the set {'User','Group'} (union of collector.kind and delta kinds)."},
+        {"step": 2, "action": "Assert both kinds present in complete_snapshots.", "expected": "Neither 'User' nor 'Group' is left un-reconciled, so a stale Group from a prior run is reconcile-deleted correctly."}
+      ],
+      "expectedResult": "A collector that produces more than one kind reconciles every kind it owns, not just its declared primary.",
+      "observability": "complete_snapshots set equality; boot.ts:62.",
+      "references": ["xiNAS-MCP/src/agent/boot.ts:62-63"]
+    },
+    {
+      "id": "TC-014",
+      "title": "PollDriver arms one interval per collector (pollIntervalMs vs 5-min backstop), start is idempotent, stop clears timers",
+      "component": "agent/poll",
+      "priority": "P1",
+      "type": "functional",
+      "preconditions": "Registry with collector A (pollIntervalMs=30000) and collector B (no pollIntervalMs). Fake timers.",
+      "inputData": "backstopMs default 300000; collector A interval 30000.",
+      "steps": [
+        {"step": 1, "action": "Call start(); inspect armed intervals.", "expected": "Two timers: A at 30000 ms, B at 300000 ms (DEFAULT_BACKSTOP_MS); each timer.unref() was called."},
+        {"step": 2, "action": "Call start() a second time.", "expected": "No additional timers armed — the #started guard makes the second call a no-op (no doubled traffic)."},
+        {"step": 3, "action": "Call stop().", "expected": "All intervals cleared, internal timer list emptied, #started reset so a later start() re-arms."}
+      ],
+      "expectedResult": "Each collector gets exactly one refresh timer at its own cadence or the shared backstop; start/stop are safe to call repeatedly.",
+      "observability": "setInterval/clearInterval/unref spies; poll.ts:44-61.",
+      "references": ["xiNAS-MCP/src/agent/poll.ts:11-61"]
+    },
+    {
+      "id": "TC-015",
+      "title": "A throwing collector in a poll tick is absorbed and does not break other collectors' timers",
+      "component": "agent/poll",
+      "priority": "P1",
+      "type": "resilience",
+      "preconditions": "Registry with collector X whose initialSweep() throws and collector Y that succeeds. Fake timers.",
+      "inputData": "X.initialSweep() throws Error('probe gone'); Y returns 1 delta.",
+      "steps": [
+        {"step": 1, "action": "Start PollDriver and fire X's tick.", "expected": "The error is caught inside #sweep and logged as event:'poll_sweep_failed' with kind X and the error message; the interval callback does not throw."},
+        {"step": 2, "action": "Fire Y's tick.", "expected": "Y sweeps, enqueues, and flushes normally — X's failure did not disarm or crash Y's timer."}
+      ],
+      "expectedResult": "Per-collector fault isolation: one bad probe degrades only its own kind, and its next tick retries.",
+      "observability": "log 'poll_sweep_failed'; Y's POST present; poll.ts:65-77.",
+      "references": ["xiNAS-MCP/src/agent/poll.ts:63-77"]
+    },
+    {
+      "id": "TC-016",
+      "title": "runConvergence never rejects when the boot sweep fails at startup (api down)",
+      "component": "agent/convergence",
+      "priority": "P1",
+      "type": "resilience",
+      "preconditions": "A Convergence whose runBootSequence rejects (api socket down at startup); registry.start and pollDriver.start are spies.",
+      "inputData": "Publisher pointed at a dead api socket so the boot postOnce/flush path fails.",
+      "steps": [
+        {"step": 1, "action": "await runConvergence(c) and assert it resolves.", "expected": "The returned promise resolves (no unhandled rejection); a log line event:'boot_sequence_failed' is emitted."},
+        {"step": 2, "action": "Verify downstream startup still ran.", "expected": "registry.start(emit) and pollDriver.start() are both still invoked after the boot failure, so event streams and the poll backstop come up and later heal the observed state."}
+      ],
+      "expectedResult": "A transient startup failure is logged and absorbed; convergence always brings up the steady-state loop so the node self-heals once the api returns.",
+      "observability": "Promise resolves; boot_sequence_failed log; registry.start/pollDriver.start spies; convergence.ts:420-446.",
+      "references": ["xiNAS-MCP/src/agent/convergence.ts:420-446"]
+    },
+    {
+      "id": "TC-017",
+      "title": "Steady-state debounce is leading-arm — a burst of enqueues produces a single flush",
+      "component": "agent/publisher",
+      "priority": "P2",
+      "type": "stability",
+      "preconditions": "Publisher with debounceMs=75, not in boot mode. Fake timers. Fake api 200.",
+      "inputData": "Enqueue 10 Disk deltas in rapid succession, each below the 256/1MB ceiling.",
+      "steps": [
+        {"step": 1, "action": "Enqueue 10 deltas within the debounce window without advancing timers.", "expected": "No POST yet; exactly one debounce timer is armed on the FIRST enqueue and NOT reset by the subsequent nine (leading-arm)."},
+        {"step": 2, "action": "Advance fake timers by 75 ms.", "expected": "Exactly one POST /internal/v1/observed carries all 10 deltas; the queue is drained and the timer is cleared."},
+        {"step": 3, "action": "Enqueue once more and advance 75 ms.", "expected": "A new single flush fires — the window re-arms for the next burst; a continuous stream cannot starve the flush."}
+      ],
+      "expectedResult": "Bursts coalesce into one flush per window and a quiet single event still flushes after the window, with no per-event chattiness or starvation.",
+      "observability": "POST count vs. advanced time; setTimeout spy call count == 1 per window; publisher.ts:112-120.",
+      "references": ["xiNAS-MCP/src/agent/publisher.ts:96-127"]
+    },
+    {
+      "id": "TC-018",
+      "title": "Fixture probe mode spawns no subprocesses and populates disks/users/nfs-idmap from fixtures",
+      "component": "agent/convergence",
+      "priority": "P2",
+      "type": "functional",
+      "preconditions": "XINAS_AGENT_PROBE_MODE=fixture:<dir> with disk/users/nfs-idmap JSON fixtures present; a spy/guard that fails the test if any child_process spawn occurs.",
+      "inputData": "fixtureDir with disks.json, users.json (passwd+group), nfs-idmap.json.",
+      "steps": [
+        {"step": 1, "action": "Set the env var and call buildConvergence(config); run the boot sweep against a fake api.", "expected": "No subprocess is spawned (all probes are fixture-backed); the registry is fully constructed."},
+        {"step": 2, "action": "Inspect observations for Disk, User/Group, NfsIdmap.", "expected": "Those kinds are populated from the fixture files; other kinds sweep empty (fixture mode intentionally leaves them empty)."}
+      ],
+      "expectedResult": "Fixture mode gives a hermetic, host-free agent for e2e/CI: real collector adapters, fixture data, zero privileged calls.",
+      "observability": "spawn spy count == 0; observed rows for the three kinds; convergence.ts:121-131.",
+      "references": ["xiNAS-MCP/src/agent/convergence.ts:118-131", "xiNAS-MCP/src/agent/probe/fixture.ts"]
+    },
+    {
+      "id": "TC-019",
+      "title": "Observation POST body and headers carry the correct envelope and bearer auth",
+      "component": "agent/publisher",
+      "priority": "P2",
+      "type": "functional",
+      "preconditions": "Publisher with controllerId='ctrl-9', agentToken='tok-abc'. Fake api records headers and body.",
+      "inputData": "Enqueue a Disk delta; flushWithSnapshot(['Disk']).",
+      "steps": [
+        {"step": 1, "action": "Trigger the flush and capture the recorded request.", "expected": "Body JSON has keys observed_at (ISO 8601), controller_id==='ctrl-9', deltas (array), complete_snapshots===['Disk']."},
+        {"step": 2, "action": "Inspect request headers.", "expected": "Authorization==='Bearer tok-abc', Content-Type==='application/json', Content-Length matches the body byte length; request targets socketPath, path '/internal/v1/observed', method POST."}
+      ],
+      "expectedResult": "The wire contract to the api is exact: authenticated, correctly framed, and carries the controller id + reconcile set.",
+      "observability": "Recorded headers/body on the fake api; publisher.ts:156-161, 208-232.",
+      "references": ["xiNAS-MCP/src/agent/publisher.ts:146-232"]
+    }
+  ]
+}
