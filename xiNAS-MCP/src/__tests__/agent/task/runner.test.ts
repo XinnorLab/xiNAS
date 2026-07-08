@@ -459,9 +459,9 @@ describe('TaskRunner.run — uncaught throw always terminates (#255)', () => {
     );
 
     // Executor stages DID run (the host may have converged) ...
-    expect(
-      events.some((e) => e.event_type === 'stage_succeeded' && e.stage_name === 'apply'),
-    ).toBe(true);
+    expect(events.some((e) => e.event_type === 'stage_succeeded' && e.stage_name === 'apply')).toBe(
+      true,
+    );
     // ... so the terminal escalates to manual recovery, not a plain failure.
     const terminal = events.at(-1);
     expect(terminal?.event_type).toBe('terminal');
