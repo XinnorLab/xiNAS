@@ -26,12 +26,22 @@ import type {
   TaskProgressEvent,
   TaskProgressEventType,
 } from './types.js';
+import type { Reobserve } from './reobserve.js';
 import type { XinasHistoryBridge } from './xinas-history-bridge.js';
 
 export interface TaskRunnerOptions {
   bridge: XinasHistoryBridge;
   /** Clock for `observed_at`. Default: `() => new Date().toISOString()`. */
   now?: () => string;
+  /**
+   * Post-apply observed settle (§7.1). Called on the SUCCESS path between
+   * `snapshot_after` and `terminal` to refresh the observed rows the operation
+   * mutated, so a chained follow-up plan (unmount→unmanage) reads post-apply
+   * state instead of the pre-apply snapshot. Best-effort — it resolves always
+   * and never blocks the terminal event. Default: no settle (unit/fixture
+   * builds and the reference executor need none).
+   */
+  reobserve?: Reobserve;
 }
 
 /** Bookkeeping for a task the runner is currently executing. */
@@ -50,11 +60,13 @@ const ROLLBACK_STAGE = 'rollback';
 export class TaskRunner {
   readonly #bridge: XinasHistoryBridge;
   readonly #now: () => string;
+  readonly #reobserve: Reobserve | undefined;
   readonly #inflight = new Map<string, InflightTask>();
 
   constructor(opts: TaskRunnerOptions) {
     this.#bridge = opts.bridge;
     this.#now = opts.now ?? (() => new Date().toISOString());
+    this.#reobserve = opts.reobserve;
   }
 
   /** The in-flight registry (read by T7's `task.list_inflight`). */
@@ -206,6 +218,20 @@ export class TaskRunner {
         status: 'succeeded',
         snapshot_id: after.snapshot_id,
       });
+      // Post-apply observed settle (§7.1): refresh the observed rows this
+      // operation mutated BEFORE the terminal event the client's
+      // plan_apply_wait blocks on, so a chained follow-up plan (e.g.
+      // unmount→unmanage) reads post-apply state instead of the pre-apply
+      // snapshot. Best-effort — the callback absorbs its own errors and
+      // resolves always; this guard covers a defensive throw so a settle
+      // failure can never wedge the terminal (the poll backstop reconciles).
+      if (this.#reobserve) {
+        try {
+          await this.#reobserve(begin.operation_kind);
+        } catch {
+          /* best-effort; poll backstop remains the durable reconcile */
+        }
+      }
       await emit('terminal', { status: 'success', snapshot_id: after.snapshot_id });
     } catch (err) {
       // A throw that escapes the per-stage try/catch above — the

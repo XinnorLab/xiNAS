@@ -31,6 +31,7 @@ import { STUB_METHODS } from './agent/rpc/methods/stubs.js';
 import { makeTaskHandlers } from './agent/rpc/methods/task.js';
 import { makeVersionHandler } from './agent/rpc/methods/version.js';
 import { createAgentRpcServer } from './agent/rpc/server.js';
+import { makeReobserve } from './agent/task/reobserve.js';
 import { buildTaskSubsystem } from './agent/task/wiring.js';
 
 const VERSION = process.env['XINAS_AGENT_VERSION'] ?? '0.0.0-dev';
@@ -92,7 +93,14 @@ async function main(): Promise<void> {
   // `task.list_inflight` into it. T0 removed the four task.* from
   // STUB_METHODS, so registering the real handlers after the
   // ...STUB_METHODS spread shadows nothing.
-  const taskSubsystem = buildTaskSubsystem(config, { xiraidClient: convergence.xiraidClient });
+  // §7.1: the post-apply observed settle re-runs the convergence collectors
+  // (via the same registry the poll driver uses) and flushes through the
+  // convergence publisher, so a chained follow-up plan (unmount→unmanage)
+  // reads post-apply observed state before the terminal event.
+  const taskSubsystem = buildTaskSubsystem(config, {
+    xiraidClient: convergence.xiraidClient,
+    reobserve: makeReobserve(convergence.registry, convergence.publisher),
+  });
   const taskHandlers = makeTaskHandlers({
     runner: taskSubsystem.runner,
     registry: taskSubsystem.registry,

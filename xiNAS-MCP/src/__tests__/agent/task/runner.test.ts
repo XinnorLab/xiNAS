@@ -459,9 +459,9 @@ describe('TaskRunner.run — uncaught throw always terminates (#255)', () => {
     );
 
     // Executor stages DID run (the host may have converged) ...
-    expect(
-      events.some((e) => e.event_type === 'stage_succeeded' && e.stage_name === 'apply'),
-    ).toBe(true);
+    expect(events.some((e) => e.event_type === 'stage_succeeded' && e.stage_name === 'apply')).toBe(
+      true,
+    );
     // ... so the terminal escalates to manual recovery, not a plain failure.
     const terminal = events.at(-1);
     expect(terminal?.event_type).toBe('terminal');
@@ -470,6 +470,104 @@ describe('TaskRunner.run — uncaught throw always terminates (#255)', () => {
     expect(terminal?.error_message).toMatch(/code 1/);
     expect(events.map((e) => e.sequence)).toEqual(events.map((_e, i) => i + 1));
     expect(runner.getInflight().has('ta')).toBe(false);
+  });
+});
+
+// ── Post-apply observed settle (§7.1): reobserve fires before terminal ───────
+
+describe('TaskRunner.run — post-apply observed settle (§7.1)', () => {
+  function makeRunnerWithReobserve(
+    bridge: XinasHistoryBridge,
+    reobserve: (operationKind: string) => Promise<void>,
+  ): TaskRunner {
+    let n = 0;
+    return new TaskRunner({
+      bridge,
+      now: () => new Date(1_700_000_000_000 + n++ * 1000).toISOString(),
+      reobserve,
+    });
+  }
+
+  it('invokes reobserve(operation_kind) once, BEFORE the terminal event, on success', async () => {
+    const order: string[] = [];
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+      order.push(`emit:${e.event_type}`);
+    });
+    const reobserve = vi.fn(async (kind: string) => {
+      order.push(`reobserve:${kind}`);
+    });
+    const runner = makeRunnerWithReobserve(makeBridge(['b', 'a']), reobserve);
+
+    await runner.run(
+      { task_id: 'tr', operation_kind: 'fs.unmount', spec: {} },
+      referenceExecutor,
+      publish,
+    );
+
+    expect(reobserve).toHaveBeenCalledTimes(1);
+    expect(reobserve).toHaveBeenCalledWith('fs.unmount');
+    // The settle happens strictly between snapshot_after and terminal.
+    const reIdx = order.indexOf('reobserve:fs.unmount');
+    const termIdx = order.indexOf('emit:terminal');
+    expect(reIdx).toBeGreaterThanOrEqual(0);
+    expect(termIdx).toBeGreaterThan(reIdx);
+    expect(events.at(-1)?.status).toBe('success');
+  });
+
+  it('does NOT invoke reobserve on the failure/rollback path', async () => {
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+    });
+    const reobserve = vi.fn(async () => {});
+    const runner = makeRunnerWithReobserve(makeBridge(['b', 'a']), reobserve);
+
+    await runner.run(
+      { task_id: 'trf', operation_kind: 'fs.unmount', spec: { fail_at_stage: 'apply' } },
+      referenceExecutor,
+      publish,
+    );
+
+    expect(reobserve).not.toHaveBeenCalled();
+    expect(events.at(-1)?.status).toBe('failed');
+  });
+
+  it('is best-effort: a reobserve rejection does not block the terminal(success)', async () => {
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+    });
+    const reobserve = vi.fn(async () => {
+      throw new Error('settle exploded');
+    });
+    const runner = makeRunnerWithReobserve(makeBridge(['b', 'a']), reobserve);
+
+    await runner.run(
+      { task_id: 'trb', operation_kind: 'fs.unmount', spec: {} },
+      referenceExecutor,
+      publish,
+    );
+
+    expect(reobserve).toHaveBeenCalledTimes(1);
+    const terminal = events.at(-1);
+    expect(terminal?.event_type).toBe('terminal');
+    expect(terminal?.status).toBe('success');
+  });
+
+  it('runs unchanged when no reobserve is injected (default no-op)', async () => {
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+    });
+    const runner = makeRunner(makeBridge(['b', 'a']));
+    await runner.run(
+      { task_id: 'trn', operation_kind: 'fs.unmount', spec: {} },
+      referenceExecutor,
+      publish,
+    );
+    expect(events.at(-1)?.status).toBe('success');
   });
 });
 

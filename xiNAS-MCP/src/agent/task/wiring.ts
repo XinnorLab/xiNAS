@@ -43,6 +43,7 @@ import { makeNetIfaceUpdateExecutor, makeNetPoolApplyExecutor } from './net-exec
 import { buildNfsExecutors, type NfsExecutorDeps } from './nfs-executor.js';
 import { createNfsHelperClientFromProbe } from './nfs-helper-client.js';
 import { createProgressPublisher } from './progress-publisher.js';
+import type { Reobserve } from './reobserve.js';
 import { ExecutorRegistry } from './registry.js';
 import { TaskRunner } from './runner.js';
 import type { PublishProgress } from './types.js';
@@ -188,6 +189,9 @@ export function buildTaskSubsystem(
     /** Host-command seam override; default: fake in fixture mode, real otherwise. */
     fsHost?: FsHost;
     netHost?: NetHost;
+    /** Post-apply observed settle (§7.1), built from the convergence registry +
+     *  publisher. Omitted in unit/fixture builds → the runner does no settle. */
+    reobserve?: Reobserve;
   } = {},
 ): TaskSubsystem {
   const registry = new ExecutorRegistry();
@@ -241,7 +245,10 @@ export function buildTaskSubsystem(
   }
   // S9 T5: the baseline-reset executor shares the runner's bridge.
   registry.register(makeConfigRollbackExecutor({ bridge }));
-  const runner = new TaskRunner({ bridge });
+  const runner = new TaskRunner({
+    bridge,
+    ...(opts.reobserve ? { reobserve: opts.reobserve } : {}),
+  });
   const publish = createProgressPublisher({
     apiSocketPath: config.api_socket,
     agentToken: config.agent_token,
