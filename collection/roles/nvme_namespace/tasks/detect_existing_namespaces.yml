@@ -34,14 +34,29 @@
   loop: "{{ existing_ns_result.results }}"
   when: item.stdout_lines | length > 0
 
+# Shown before the single-namespace check below so the operator sees the
+# per-tier device evidence in the failure path too, not only on success.
+- name: Display detected existing namespaces
+  ansible.builtin.debug:
+    msg: |
+      ========== Existing Namespace Detection ==========
+      Small namespaces (n1) detected: {{ nvme_small_ns_devices | length }}
+        {{ nvme_small_ns_devices | join('\n        ') | default('none') }}
+
+      Large namespaces (n2+) detected: {{ nvme_large_ns_devices | length }}
+        {{ nvme_large_ns_devices | join('\n        ') | default('none') }}
+      ==================================================
+
 # No n2+ namespaces found on any data drive: this is a single-namespace-per-
 # drive layout. Existing-namespace reuse only supports the n1 (log) + n2
 # (data) two-namespace layout — a converge can only reach this task when
-# xinas_storage_state == MATCH, which itself requires the 'log' xiRAID array
-# to already be online (built from n1+n2 by this same role), so a healthy
-# converge never trips this fail. Fail loudly instead of silently
-# reassigning n1 to data, which used to mask this exact situation behind a
-# later, generic "insufficient devices" error. See raid-spec.md §4.2.
+# xinas_storage_state == MATCH, which itself requires the 'data' xiRAID array
+# online and /dev/xi_data probing as XFS with the configured label (see
+# detect_storage_state.yml); that array is built from n2 devices, so a
+# healthy converge always finds n2+ and never trips this fail. Fail loudly
+# instead of silently reassigning n1 to data, which used to mask this exact
+# situation behind a later, generic "insufficient devices" error. See
+# raid-spec.md §4.2.
 - name: Fail on single-namespace layout (existing-namespace reuse unsupported)
   ansible.builtin.fail:
     msg: >-
@@ -55,14 +70,3 @@
   when:
     - nvme_large_ns_devices | length == 0
     - nvme_small_ns_devices | length > 0
-
-- name: Display detected existing namespaces
-  ansible.builtin.debug:
-    msg: |
-      ========== Existing Namespace Detection ==========
-      Small namespaces (n1) detected: {{ nvme_small_ns_devices | length }}
-        {{ nvme_small_ns_devices | join('\n        ') | default('none') }}
-
-      Large namespaces (n2+) detected: {{ nvme_large_ns_devices | length }}
-        {{ nvme_large_ns_devices | join('\n        ') | default('none') }}
-      ==================================================

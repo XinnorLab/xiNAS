@@ -248,14 +248,25 @@ def test_cleanup_sweeps_guard_missing_disk_match_helper():
     A bare `source /tmp/xinas_disk_match.sh` on a missing file would cascade
     into a wall of "command not found" errors for is_data_member instead of a
     single clear message, while still silently no-op'ing (failed_when: false).
+
+    The guard message must go to STDERR: the detection sweeps register stdout
+    and parse stdout_lines into nvme_found_* facts, so a guard echo on stdout
+    would be misread as a found PV/array/pool — fabricating a finding and
+    flipping nvme_cleanup_required to true.
     """
     tasks = yaml.safe_load(CLEANUP_STORAGE.read_text())
     sweep_tasks = [t for t in _iter_tasks(tasks) if "is_data_member" in _shell_text(t)]
     assert sweep_tasks, "expected at least one is_data_member sweep task in cleanup_storage.yml"
     for t in sweep_tasks:
-        assert "helper missing" in _shell_text(t), (
+        shell = _shell_text(t)
+        assert "helper missing" in shell, (
             f"{t.get('name')!r} sources xinas_disk_match.sh without a helper-missing guard"
         )
+        for line in (ln for ln in shell.splitlines() if "helper missing" in ln):
+            assert ">&2" in line, (
+                f"{t.get('name')!r}: guard echo must redirect to stderr — on stdout "
+                "it pollutes the registered detection output and fabricates findings"
+            )
 
 
 def test_display_findings_banner_discloses_partition_wipe_for_unattended_runs():

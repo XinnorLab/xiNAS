@@ -122,7 +122,7 @@ globbing `${drive}*`. Unit tests: [tests/test_nvme_disk_match.py](../../tests/te
 
 If anything was found:
 
-- A banner is printed listing the VGs/MD arrays/pools that will be destroyed.
+- A banner is printed listing the VGs/MD arrays/pools that will be destroyed. This always-shown findings banner also carries the wipe-scope disclosure (partition tables/signatures wiped on ALL data drives, listing `nvme_data_drives`), so unattended runs with `nvme_skip_cleanup_confirmation=true` — which never see the confirmation prompt — still log it.
 - Unless `nvme_skip_cleanup_confirmation=true` (default `false` — operators must type `YES` interactively), an `ansible.builtin.pause` task waits for confirmation. The confirmation banner enumerates the found VG/MD/ZFS counts **and** discloses that partition tables/signatures will be wiped on ALL data drives, listing `nvme_data_drives`. Anything other than `YES` aborts with `Cleanup cancelled by user.`
 
 For unattended deployments set `nvme_skip_cleanup_confirmation: true` in the preset or inventory — that is the dangerous knob the comments call out.
@@ -171,7 +171,7 @@ the role reuses the namespaces already on the drives — no rebuild, no data los
 - `ls /dev/<ctrl>n*` per data drive.
 - `n1` → log devices (`nvme_small_ns_devices`).
 - `n2`–`n9` (and `n10+`) → data devices (`nvme_large_ns_devices`).
-- Requirement: existing-namespace reuse needs the n1 (log) + n2 (data) two-namespace layout on every data drive. If **no** `n2+` were found anywhere, the task fails explicitly ("Fail on single-namespace layout") naming the remedy — re-run with `xinas_storage_reset: true` to wipe and rebuild the two-namespace layout, or provision it manually. A single-namespace layout can never legitimately reach this task on a healthy converge: `MATCH` requires the `log` xiRAID array to already be online, and that array is only ever built from `n1`+`n2` devices by this same role (§6), so the only way to trip this fail is an externally-tampered-with array.
+- Requirement: existing-namespace reuse needs the n1 (log) + n2 (data) two-namespace layout on every data drive. If **no** `n2+` were found anywhere, the task fails explicitly ("Fail on single-namespace layout") naming the remedy — re-run with `xinas_storage_reset: true` to wipe and rebuild the two-namespace layout, or provision it manually. The per-tier detection banner is printed before this check, so the failure path shows which devices were classified n1. A single-namespace layout can never legitimately reach this task on a healthy converge: `MATCH` requires the `data` xiRAID array online **and** `/dev/xi_data` probing as XFS with the configured label (§11), and that array is built from `n2` devices (§6.4) — so a genuine MATCH implies `n2+` namespaces exist, and the only way to trip this fail is a layout tampered with outside the role.
 
 **EMPTY** (a fresh box, including a factory single-`n1` drive) or an explicit
 `xinas_storage_reset: true` falls through to the delete+recreate path in §4.3. **FOREIGN**
