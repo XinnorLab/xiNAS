@@ -6,6 +6,26 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.4.1] - 2026-07-08
+
+### Fixed
+
+- **OS-disk resolution across `lsblk -s` tree output (`nvme_namespace`).**
+  `resolve_system_disks.sh` walks each OS mount down to its backing disk
+  with `lsblk -s`, whose NAME column carries box-drawing glyphs (e.g.
+  `└─/dev/nvme0n1`) and, for a branching root such as an MD-mirror, a
+  `│ ` continuation field — even with `-n -p`. The awk read a fixed field
+  and emitted the name verbatim, so callers got glyph-prefixed paths (and
+  lost mirror members), `resolve_system_disks.yml` then dropped them via
+  its `^/dev/` filter, and every guided-LVM / MD-mirror install aborted
+  with `CRITICAL: Could not detect the OS system drive` (a fail-closed
+  guard — no data was wiped, but the install could not proceed). TYPE is
+  now keyed off the last field and the name taken from `$(NF-1)` with
+  everything before `/dev/` stripped, so linear (LVM) and branching (MD
+  mirror) roots both resolve to every backing disk. The unit test now
+  stubs the real tree-glyph output, including the branching MD case
+  ([#258](https://github.com/XinnorLab/xiNAS/pull/258)).
+
 ## [3.4.0] - 2026-07-08
 
 ### Added
