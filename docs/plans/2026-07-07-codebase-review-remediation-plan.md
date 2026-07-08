@@ -183,7 +183,7 @@ written: `docs/superpowers/specs/2026-07-06-storage-reset-safety-design.md`,
 | medium | `startup_menu.sh:144` | `check_for_updates &` sets `UPDATE_AVAILABLE`/`UPDATE_TARGET_TAG` in a subshell — parent menu never sees them |
 | medium | `startup_menu.sh:102`, `install.sh:238`, all bash update paths | plain `git checkout <tag>` on a tree that preset materialization dirties by design — update-spec §"apply" mandates `git checkout --force` |
 | medium | `menu_lib.sh:1133` | install-failure dialog offers "Collect Logs (auto-uploads…)" but the choice is a dead-end handled identically to close |
-| medium | `install_client.sh:158` | update path swallows git failures with `\|\| true`, then reports "Client updated to <tag>" |
+| medium | `install_client.sh:158` | update path swallows git failures with `\|\| true`, then reports "Client updated to `<tag>`" |
 | medium | `autoinstall.sh:235` | no `set -e`, `copy_if` cp status unchecked → failed preset copy provisions with stale RAID/net config |
 | medium | `xinas_menu/utils/update_check.py:368` | NFS-helper sync ignores service-restart result; in the documented unprivileged (xinnor) deployment it fails after checkout — update half-applied |
 | low | `startup_menu.sh:78` | update detection is string inequality of tags → offers downgrades; spec mandates semver compare |
@@ -208,7 +208,7 @@ written: `docs/superpowers/specs/2026-07-06-storage-reset-safety-design.md`,
 - [ ] **WS3.5** `menu_lib.sh:1133`: wire the collect choice to
   `collect_data.sh` (after WS6 fixes its transport) or drop the option.
 - [ ] **WS3.6** `update_check.py:368`: check the restart result; on failure,
-  surface "updated, helper restart failed — run <cmd>" instead of silence.
+  surface "updated, helper restart failed — run `<cmd>`" instead of silence.
   Either document `XINAS_UPDATE_REPO` in update-spec.md (dev-only, off by
   default) or drop it. Add an orchestration test for
   `prompt_and_apply_update`/`_apply_update` (checkout → rebuild → rc≠0 keeps

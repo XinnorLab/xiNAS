@@ -184,8 +184,8 @@ Starts a self-test; result observable. **Pass/fail:** test launched, status read
 Locate LED on/off via `driveLocate`. **Pass/fail:** LED state toggles.
 
 ### TC-DSK-05 — `disk.secure_erase` (admin, dangerous, apply-gated) — 🟡 Need to be validated
-**Expected:** `plan` previews; `apply` without `dangerous` refused; `apply` + `dangerous`
-+ allow_apply runs `driveClean`. **Must not** target a protected/system disk.
+**Expected:** `plan` previews; `apply` without `dangerous` refused; `apply` + `dangerous` +
+allow_apply runs `driveClean`. **Must not** target a protected/system disk.
 **Pass/fail:** erase only with full gating; OS disk never eligible.
 
 ---
