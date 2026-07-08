@@ -153,6 +153,27 @@ The agent (root, TS) calls `python3 -m xinas_history` (subprocess, JSON) for **s
 
 **Rollback is executor-provided**, not a generic snapshot-restore (xinas_history has no arbitrary restore — only `reset-to-baseline` + an internal `_auto_rollback`). Each `Executor` declares `rollback(ctx)` that undoes its own change; the **reference executor's** is a trivial inverse (it is inert). Snapshots are captured for audit/diff and as the basis for file-level rollback when a file-based executor (S5 nfs) later needs it — at which point xinas_history gains an arbitrary-restore capability. S2 builds neither arbitrary-restore nor `reset-to-baseline` use.
 
+### 7.1 Post-apply observed settle (agent runner)
+
+The runner's success emission order is `… → snapshot_after → terminal(success)`. Between `snapshot_after` and `terminal`, **on success only**, the runner performs a **best-effort observed settle**: it re-runs the collectors for the observed kinds the operation mutated and `await`s a `flushWithSnapshot([kinds])` into the api's `/internal/v1/observed` writer **before** emitting `terminal`.
+
+**The race it closes.** Observed rows (`/xinas/v1/observed/<kind>/<id>`, ADR-0003) are refreshed *only* by the collectors — event streams plus a poll backstop; `Filesystem` is poll-only at 60 s (its mount-unit watch is a no-op in production). A client that chains two plan/apply calls back-to-back — the Delete-Array / Delete-Filesystem teardown issues `fs.unmount` then `fs.unmanage` — would have the second call's **plan/apply preflight read the pre-apply observed snapshot**: `fs.unmanage`'s provider re-checks `validateFsUnmanage({ mounted })` against the observed row, which still reads `mounted: true`, and returns the `fs_mounted` blocker ("unmount the filesystem before removing it from management"; s5-filesystem-spec §Blocker codes). The unmount apply's own executor `verify` stage already confirmed the host is truly unmounted, so this block is a stale-read artifact, not a real precondition — the teardown stops mid-sequence with the filesystem unmounted but still "managed". Settling the affected observed rows **before** `terminal` — the event a client's `plan_apply_wait` blocks on (§6; s8-clients-spec) — guarantees the next plan reads post-apply state.
+
+**Scope (`operation_kind` → observed kinds).** A static table (`REOBSERVE_KINDS`) maps each mutating operation kind to the observed kinds whose rows it changes. The settle reuses the poll sweep verbatim (`initialSweep()` → `enqueue` → `flushWithSnapshot([kinds])`):
+
+| operation_kind | settled kinds |
+|---|---|
+| `fs.create`, `fs.mount`, `fs.unmount`, `fs.grow`, `fs.set_quota_mode`, `fs.unmanage` | `Filesystem` |
+| `xiraid.array.create`, `xiraid.array.modify`, `xiraid.array.import`, `xiraid.array.delete` | `XiraidArray` |
+| `pool.create`, `pool.modify`, `pool.delete` | `Pool` |
+| `share.create`, `share.update`, `share.delete` | `NfsSession`, `ExportRule` |
+
+Operation kinds not in the table skip the settle (unchanged behavior; the poll backstop still reconciles within one interval).
+
+**Table invariant + multi-kind reconcile.** Every kind in a table entry is (co-)emitted by a collector whose `kind` is also in that entry, so sweeping the entry's collector-kind collectors yields a **complete snapshot of every listed kind**. The NFS collector's `kind` is `NfsSession` but its one sweep also emits `ExportRule`, so `share.*` lists both — settling `ExportRule` is what lets a chained `fs.unmount` see a just-removed export gone (`validateFsUnmount`'s `mountpoint_exported`, closing the second stale-read in the Delete-Array chain: `share.delete → fs.unmount → fs.unmanage → xiraid.array.delete`), **even when the LAST export is removed** and the sweep carries zero `ExportRule` rows — the complete-snapshot flush then reconciles the stale row away. To keep that flush safe, the settle runs the complete-snapshot flush only when **every** collector-kind in the entry swept cleanly; a failed sweep skips the flush entirely (the poll backstop reconciles), so a complete-snapshot flush never deletes a kind's rows against an empty batch.
+
+**Best-effort / non-blocking.** The settle NEVER fails or delays the task outcome: a collector sweep or an observed-flush error is logged and swallowed, the runner proceeds to `terminal`, and the ordinary poll backstop remains the durable reconcile. It runs only on the success path (a failed/rolled-back task leaves observed state for the poll to reconcile). It adds one collector sweep + one observed flush of latency to a successful apply's terminal — the same work the poll driver already does each interval. The runner receives the settle as an injected `reobserve(operation_kind)` callback (default no-op), wired from the convergence `registry` + `publisher`; unit/fixture builds that construct a runner without it are unaffected.
+
 ---
 
 ## 8. Reference executor
