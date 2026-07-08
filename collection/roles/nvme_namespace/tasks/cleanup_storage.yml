@@ -173,6 +173,8 @@
       ║    • {{ nvme_found_lvm_vgs | length }} LVM volume group(s)                                        ║
       ║    • {{ nvme_found_md_arrays | length }} MD RAID array(s)                                           ║
       ║    • {{ nvme_found_zpools | length }} ZFS pool(s)                                                 ║
+      ║  Partition tables/signatures will be wiped on ALL {{ nvme_data_drives | length }} data drive(s):
+      ║    {{ nvme_data_drives | join(', ') }}
       ╠══════════════════════════════════════════════════════════════════════╣
       ║  Type 'YES' to proceed, or press Ctrl+C to abort                     ║
       ╚══════════════════════════════════════════════════════════════════════╝
@@ -275,24 +277,33 @@
   failed_when: false
 
 # ============ WIPE PARTITION TABLES ============
+# In the default NVMe mode nvme_data_drives holds controller CHAR devices
+# (/dev/nvme0, /dev/nvme1, ...); wipefs/dd/blockdev/partprobe are block-device
+# operations and silently no-op on those. Enumerate real whole-disk block
+# devices via lsblk and act only on the ones is_data_member resolves to a data
+# drive: a controller entry thus reaches its namespace block devices
+# (/dev/nvme0n1, ...), a whole-disk entry (/dev/vdb) matches itself, and
+# anything on a protected OS disk stays vetoed. partprobe runs in the same
+# loop so the kernel re-read targets exactly the devices that were wiped.
 - name: Wipe partition tables on data drives
   ansible.builtin.shell: |
-    drive="{{ item }}"
-    # Wipe GPT and MBR signatures
-    wipefs -a "$drive" 2>/dev/null || true
-    # Clear first and last MB (partition tables)
-    dd if=/dev/zero of="$drive" bs=1M count=1 2>/dev/null || true
-    dd if=/dev/zero of="$drive" bs=1M seek=$(($(blockdev --getsz "$drive") / 2048 - 1)) count=1 2>/dev/null || true
+    source /tmp/xinas_disk_match.sh
+    DATA_DRIVES="{{ nvme_data_drives | join(' ') }}"
+    SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
+    SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
+    lsblk -rnpo NAME,TYPE 2>/dev/null | awk '$2 == "disk" { print $1 }' | while IFS= read -r dev; do
+      is_data_member "$dev" || continue
+      [ -b "$dev" ] || continue
+      # Wipe GPT and MBR signatures
+      wipefs -a "$dev" 2>/dev/null || true
+      # Clear first and last MB (MBR + GPT backup header at end of disk)
+      dd if=/dev/zero of="$dev" bs=1M count=1 2>/dev/null || true
+      dd if=/dev/zero of="$dev" bs=1M seek=$(($(blockdev --getsz "$dev") / 2048 - 1)) count=1 2>/dev/null || true
+      # Inform the kernel of the partition-table change
+      partprobe "$dev" 2>/dev/null || true
+    done
   args:
     executable: /bin/bash
-  loop: "{{ nvme_data_drives }}"
-  when: nvme_cleanup_required | bool
-  changed_when: false
-  failed_when: false
-
-- name: Inform kernel of partition table changes
-  ansible.builtin.command: "partprobe {{ item }}"
-  loop: "{{ nvme_data_drives }}"
   when: nvme_cleanup_required | bool
   changed_when: false
   failed_when: false

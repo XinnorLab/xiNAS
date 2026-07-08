@@ -1,6 +1,6 @@
-"""Structural regression guards for small storage-role residuals (WS1-R1/R2).
+"""Structural regression guards for small storage-role residuals (WS1-R1/R2/R3).
 
-These pin three narrow fixes over the raid_fs and nvme_namespace roles:
+These pin narrow fixes over the raid_fs and nvme_namespace roles:
 
 - raid_fs must not carry the dead "Find active MD RAID arrays" task (it used
   ``ansible.builtin.command`` with a shell pipe, which the command module
@@ -11,6 +11,11 @@ These pin three narrow fixes over the raid_fs and nvme_namespace roles:
   record a delete failure in ``nvme_failed_devices``, regardless of
   ``nvme_skip_failed_devices`` — otherwise "skip failed devices" mode never
   populates the list the downstream create/attach/wait tasks gate on.
+- nvme_namespace's partition-table wipe must operate on resolved *block*
+  devices guarded by the boundary-safe ``is_data_member`` helper — never on
+  the raw ``nvme_data_drives`` entries, which in the default NVMe mode are
+  controller char devices (``/dev/nvme0``) on which ``wipefs``/``dd``/
+  ``partprobe`` silently no-op.
 
 These are structural assertions over parsed YAML — the repo has no
 molecule/behavioral Ansible harness (see tests/test_raid_fs_safe_defaults.py).
@@ -27,8 +32,10 @@ _JINJA_EXPR_RE = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
 
 REPO = Path(__file__).resolve().parents[1]
 RAID_FS_TASKS_DIR = REPO / "collection/roles/raid_fs/tasks"
+NVME_NAMESPACE_TASKS_DIR = REPO / "collection/roles/nvme_namespace/tasks"
 LAB_INVENTORY = REPO / "inventories/lab.ini"
-REBUILD_NAMESPACES = REPO / "collection/roles/nvme_namespace/tasks/rebuild_namespaces.yml"
+REBUILD_NAMESPACES = NVME_NAMESPACE_TASKS_DIR / "rebuild_namespaces.yml"
+CLEANUP_STORAGE = NVME_NAMESPACE_TASKS_DIR / "cleanup_storage.yml"
 
 
 def _iter_tasks(tasks):
@@ -112,6 +119,53 @@ def test_fail_on_deletion_errors_still_gated_by_skip_flag():
     fail_task = _find_by_name(tasks, "Fail on namespace deletion errors")
     assert fail_task is not None
     assert "not nvme_skip_failed_devices" in _when_text(fail_task)
+
+
+def _shell_text(task: dict) -> str:
+    shell = task.get("ansible.builtin.shell")
+    if shell is None:
+        return ""
+    return shell if isinstance(shell, str) else str(shell.get("cmd", ""))
+
+
+def test_wipe_partition_tables_resolves_block_devices_via_is_data_member():
+    """The wipe must resolve real block devices through the boundary-safe helper.
+
+    In the default NVMe mode ``nvme_data_drives`` holds controller char devices
+    (``/dev/nvme0``); wiping ``{{ item }}`` directly is a silent no-op there.
+    """
+    tasks = yaml.safe_load(CLEANUP_STORAGE.read_text())
+    wipe = _find_by_name(tasks, "Wipe partition tables on data drives")
+    assert wipe is not None, "wipe task missing from cleanup_storage.yml"
+    shell = _shell_text(wipe)
+    assert "wipefs" in shell
+    assert "/tmp/xinas_disk_match.sh" in shell, "wipe must source the disk-match helper"
+    assert "is_data_member" in shell, "wipe must gate targets through is_data_member"
+    assert "{{ item }}" not in shell, (
+        "wipe must not operate on the bare loop item (a controller char device "
+        "in NVMe mode) — it must enumerate resolved block devices"
+    )
+
+
+def test_partprobe_runs_on_resolved_devices_not_raw_entries():
+    """partprobe on a raw controller entry (/dev/nvme0) is a masked no-op."""
+    text = CLEANUP_STORAGE.read_text()
+    assert "partprobe" in text, "kernel partition-table re-read must still happen"
+    assert "partprobe {{ item }}" not in text, (
+        "partprobe must target resolved block devices, not raw nvme_data_drives entries"
+    )
+
+
+def test_cleanup_confirmation_banner_discloses_partition_wipe():
+    tasks = yaml.safe_load(CLEANUP_STORAGE.read_text())
+    prompt_task = _find_by_name(tasks, "Prompt for cleanup confirmation")
+    assert prompt_task is not None
+    pause = prompt_task.get("ansible.builtin.pause") or {}
+    prompt = str(pause.get("prompt", ""))
+    assert "nvme_data_drives" in prompt and "wiped" in prompt.lower(), (
+        "the YES-confirmation banner must disclose that partition signatures on "
+        "all data drives get wiped"
+    )
 
 
 def test_namespace_create_tasks_still_skip_failed_devices():

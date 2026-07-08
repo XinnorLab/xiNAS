@@ -103,7 +103,7 @@ Three independent scans, each restricted to `nvme_data_drives`:
 - **ZFS** — only if `which zpool` succeeds. `zpool status` is parsed for `nvme*` / `sd*` devices and any pool with a member on a data drive is added to `nvme_found_zpools`.
 
 **Boundary-safe membership.** Every one of those tests — and the later
-`mdadm --zero-superblock` / `pvremove` sweeps — routes through the
+`mdadm --zero-superblock` / `pvremove` / partition-table-wipe sweeps — routes through the
 `is_data_member` helper in [files/disk_match.sh](../../collection/roles/nvme_namespace/files/disk_match.sh)
 rather than a string prefix. The old `[[ "$pv" == "${drive}"* ]]` / `${drive}*`
 glob matching was unsafe: a data controller `/dev/nvme1` is a string prefix of
@@ -112,9 +112,9 @@ was dragged into cleanup and its VG/array/pool destroyed. `is_data_member`
 matches only on device-name boundaries (`/dev/nvme1` → `/dev/nvme1n…`, never
 `/dev/nvme10…`) **and** vetoes anything that also resolves onto a
 `nvme_system_drives` / `nvme_system_controllers` member first. The
-`zero-superblock` and `pvremove` sweeps enumerate real block devices via
-`lsblk` and filter them through the same helper instead of globbing
-`${drive}*`. Unit tests: [tests/test_nvme_disk_match.py](../../tests/test_nvme_disk_match.py).
+`zero-superblock`, `pvremove`, and partition-table-wipe sweeps enumerate real
+block devices via `lsblk` and filter them through the same helper instead of
+globbing `${drive}*`. Unit tests: [tests/test_nvme_disk_match.py](../../tests/test_nvme_disk_match.py).
 
 `nvme_cleanup_required` is the OR of the three.
 
@@ -123,7 +123,7 @@ matches only on device-name boundaries (`/dev/nvme1` → `/dev/nvme1n…`, never
 If anything was found:
 
 - A banner is printed listing the VGs/MD arrays/pools that will be destroyed.
-- Unless `nvme_skip_cleanup_confirmation=true` (default `false` — operators must type `YES` interactively), an `ansible.builtin.pause` task waits for confirmation. Anything other than `YES` aborts with `Cleanup cancelled by user.`
+- Unless `nvme_skip_cleanup_confirmation=true` (default `false` — operators must type `YES` interactively), an `ansible.builtin.pause` task waits for confirmation. The confirmation banner enumerates the found VG/MD/ZFS counts **and** discloses that partition tables/signatures will be wiped on ALL data drives, listing `nvme_data_drives`. Anything other than `YES` aborts with `Cleanup cancelled by user.`
 
 For unattended deployments set `nvme_skip_cleanup_confirmation: true` in the preset or inventory — that is the dangerous knob the comments call out.
 
@@ -134,8 +134,7 @@ The order is chosen so dependent objects are gone before their backing store is 
 1. **ZFS** — `zpool destroy -f <pool>` for every found pool.
 2. **MD RAID** — `mdadm --stop <md>` for each array, then `mdadm --zero-superblock` on every partition of every data drive.
 3. **LVM** — `vgchange -an <vg>`, `vgremove -f <vg>`, then `pvremove -f` on every partition of every data drive.
-4. **Partition tables** — `wipefs -a` plus `dd` on the first MB and the last MB of each data drive (so both MBR and the GPT backup header at end-of-disk are gone).
-5. **Kernel re-read** — `partprobe` per data drive.
+4. **Partition tables** — `wipefs -a` plus `dd` on the first MB and the last MB of every whole-disk **block device** that resolves to a data drive (so both MBR and the GPT backup header at end-of-disk are gone), followed by `partprobe` on the same device so the kernel re-reads the table. Like the MD/LVM sweeps, the targets come from `lsblk` filtered through `is_data_member`, **not** from the raw `nvme_data_drives` entries: in the default NVMe mode those entries are controller char devices (`/dev/nvme0`), on which `wipefs`/`dd`/`partprobe` silently no-op — a controller entry therefore resolves to its namespace block devices (`/dev/nvme0n1`, …), while a whole-disk entry (`/dev/vdb`) matches itself.
 
 Each step uses `failed_when: false` so a stale or already-deactivated object never blocks the install. The final summary banner prints how many of each type were removed.
 
