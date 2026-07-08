@@ -140,8 +140,15 @@ Do you want to remove the xiRAID package from this system? [y/N]
 ```
 
 - **Yes** → role removes `/etc/xiraid/`, `apt purge xiraid-core
-  xiraid-exporter`, removes the xiRAID APT repo file and its GPG key,
-  and runs `dkms remove xiraid --all`.
+  xiraid-exporter xiraid-appimage xiraid-kmod`, removes the xiRAID APT
+  repo file and its GPG key, and runs `dkms remove xiraid --all`. The
+  `xiraid-appimage` (which provides `xicli`) and `xiraid-kmod` (the
+  prebuilt kernel module) packages must be named explicitly: they are
+  pulled in as dependencies of the `xiraid-core` metapackage and are
+  `apt-mark hold`'d by xiRAID's own version-lock service, so a purge of
+  `xiraid-core` alone leaves them installed (the purge runs with
+  `autoremove: false`, and `allow_change_held_packages: true` covers the
+  hold). Packages absent on a given install are tolerated as a no-op.
 - **No** → none of the above. The xiRAID kernel module, `xicli`, the
   Xinnor APT repository, and `/etc/xiraid/` are left in place exactly as
   the user had them. xiRAID arrays that xiNAS created are still torn
@@ -517,6 +524,7 @@ After a successful `uninstall.sh` run, the following must be true:
 | `cat /etc/exports` is empty / single comment line | ✓ |
 | `xicli raid show -f json` lists no xiNAS-named arrays | ✓ |
 | `xicli` is present iff `uninstall_remove_xiraid=false` | ✓ |
+| `dpkg -l \| grep -E '^ii\s+xiraid'` returns nothing when `uninstall_remove_xiraid=true` (no `xiraid-appimage` / `xiraid-kmod` left behind) | ✓ |
 | `lsmod \| grep mlx5_core` returns iff `uninstall_remove_ofed=false` | ✓ |
 | `/etc/sysctl.d/90-perf-vm.conf` exists iff `uninstall_revert_perf=false` | ✓ |
 | `/etc/default/grub` xiNAS args removed iff `uninstall_revert_perf=true` | ✓ |

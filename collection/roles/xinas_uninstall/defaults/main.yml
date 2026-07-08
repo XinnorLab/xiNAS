@@ -32,6 +32,11 @@ xinas_mandatory_apt_purge:
 xinas_xiraid_apt_purge:
   - xiraid-core
   - xiraid-exporter
+  # xiraid-core is a metapackage; these two are pulled in as dependencies and
+  # apt-mark hold'd by xiRAID's version-lock service. autoremove is off, so a
+  # purge of xiraid-core alone leaves them behind. Name them explicitly.
+  - xiraid-appimage   # provides `xicli`
+  - xiraid-kmod       # prebuilt kernel module (kver-pinned, not DKMS)
 
 xinas_ofed_apt_purge:
   - doca-all
