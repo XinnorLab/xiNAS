@@ -100,7 +100,7 @@ Three independent scans, each restricted to `nvme_data_drives`:
 
 - **LVM** — `pvs --noheadings -o pv_name,vg_name`; each PV tested for membership. Produces `nvme_found_lvm_pvs` and the unique `nvme_found_lvm_vgs`.
 - **MD RAID** — for every `/dev/md*` block device, `mdadm --detail` is parsed and each component tested for membership. Matching arrays land in `nvme_found_md_arrays`.
-- **ZFS** — only if `which zpool` succeeds. `zpool status` is parsed for `nvme*` / `sd*` devices and any pool with a member on a data drive is added to `nvme_found_zpools`.
+- **ZFS** — only if `which zpool` succeeds. For each pool, `zpool status -LP` resolves the vdevs to real full paths (`-L` follows symlinks, `-P` prints full paths) and the `/dev/*` entries are each tested for membership; any pool with a vdev on a data drive is added to `nvme_found_zpools`. This is device-type agnostic — `nvme*`, `sd*`, `vd*` (the xinnorVM device type), and by-id vdevs all resolve to their real `/dev` node, where the earlier name-prefix grep (`nvme|sd`) was blind to everything else.
 
 **Boundary-safe membership.** Every one of those tests — and the later
 `mdadm --zero-superblock` / `pvremove` / partition-table-wipe sweeps — routes through the
@@ -132,9 +132,9 @@ For unattended deployments set `nvme_skip_cleanup_confirmation: true` in the pre
 The order is chosen so dependent objects are gone before their backing store is wiped:
 
 1. **ZFS** — `zpool destroy -f <pool>` for every found pool.
-2. **MD RAID** — `mdadm --stop <md>` for each array, then `mdadm --zero-superblock` on every partition of every data drive.
-3. **LVM** — `vgchange -an <vg>`, `vgremove -f <vg>`, then `pvremove -f` on every partition of every data drive.
-4. **Partition tables** — `wipefs -a` plus `dd` on the first MB and the last MB of every whole-disk **block device** that resolves to a data drive (so both MBR and the GPT backup header at end-of-disk are gone), followed by `partprobe` on the same device so the kernel re-reads the table. Like the MD/LVM sweeps, the targets come from `lsblk` filtered through `is_data_member`, **not** from the raw `nvme_data_drives` entries: in the default NVMe mode those entries are controller char devices (`/dev/nvme0`), on which `wipefs`/`dd`/`partprobe` silently no-op — a controller entry therefore resolves to its namespace block devices (`/dev/nvme0n1`, …), while a whole-disk entry (`/dev/vdb`) matches itself.
+2. **MD RAID** — `mdadm --stop <md>` for each array, then `mdadm --zero-superblock` on every partition and whole-disk block device of every data drive (enumerated via `lsblk`, filtered through `is_data_member`).
+3. **LVM** — `vgchange -an <vg>`, `vgremove -f <vg>`, then `pvremove -f` on every partition and whole-disk block device of every data drive (enumerated via `lsblk`, filtered through `is_data_member`).
+4. **Partition tables** — `wipefs -a` plus `dd` on the first MB and the last MB of every whole-disk **block device** that resolves to a data drive (so both MBR and the GPT backup header at end-of-disk are gone), followed by `partprobe` on the same device so the kernel re-reads the table. Like the MD/LVM sweeps, the targets come from `lsblk` filtered through `is_data_member`, **not** from the raw `nvme_data_drives` entries: in the default NVMe mode those entries are controller char devices (`/dev/nvme0`), on which `wipefs`/`dd`/`partprobe` silently no-op — a controller entry therefore resolves to its namespace block devices (`/dev/nvme0n1`, …), while a whole-disk entry (`/dev/vdb`) matches itself. Failures are isolated per device: the end-of-disk size is computed defensively (empty/non-numeric `blockdev --getsz` output skips only that device's last-MB `dd`), so one flaky or vanished device never aborts the wipe/`partprobe` for the remaining drives.
 
 Each step uses `failed_when: false` so a stale or already-deactivated object never blocks the install. The final summary banner prints how many of each type were removed.
 

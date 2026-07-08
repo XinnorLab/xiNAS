@@ -145,6 +145,10 @@ def test_wipe_partition_tables_resolves_block_devices_via_is_data_member():
 
     In the default NVMe mode ``nvme_data_drives`` holds controller char devices
     (``/dev/nvme0``); wiping ``{{ item }}`` directly is a silent no-op there.
+    The enumeration itself is pinned too: iterating ``$DATA_DRIVES`` directly
+    would pass the is_data_member assertions (the helper accepts raw controller
+    entries by identity) yet reintroduce the char-device no-op — targets must
+    come from an lsblk enumeration and each be verified a block device.
     """
     tasks = yaml.safe_load(CLEANUP_STORAGE.read_text())
     wipe = _find_by_name(tasks, "Wipe partition tables on data drives")
@@ -156,6 +160,55 @@ def test_wipe_partition_tables_resolves_block_devices_via_is_data_member():
     assert "{{ item }}" not in shell, (
         "wipe must not operate on the bare loop item (a controller char device "
         "in NVMe mode) — it must enumerate resolved block devices"
+    )
+    assert "lsblk" in shell, "wipe targets must be enumerated via lsblk, not $DATA_DRIVES"
+    assert '[ -b "$dev" ]' in shell, "each wipe target must be verified a block device"
+
+
+def test_wipe_last_mb_size_computation_is_per_device_safe():
+    """One flaky device must not abort the wipe for the remaining drives.
+
+    An inline ``seek=$(($(blockdev --getsz "$dev") / 2048 - 1))`` is a FATAL
+    bash arithmetic error when blockdev emits nothing (device vanished after
+    the ``[ -b ]`` check): the whole while-loop dies, remaining drives get no
+    wipe/partprobe, and failed_when:false masks it. The size must be captured
+    into a validated variable first, with the last-MB dd guarded on it.
+    """
+    tasks = yaml.safe_load(CLEANUP_STORAGE.read_text())
+    wipe = _find_by_name(tasks, "Wipe partition tables on data drives")
+    assert wipe is not None, "wipe task missing from cleanup_storage.yml"
+    shell = _shell_text(wipe)
+    assert "seek=$(($(blockdev" not in shell, (
+        "inline blockdev substitution inside arithmetic is a fatal shell error "
+        "on empty output — it aborts the whole wipe loop, not just this device"
+    )
+    assert 'sz=$(blockdev --getsz "$dev" 2>/dev/null || echo 0)' in shell, (
+        "device size must be captured defensively into a variable"
+    )
+    assert "sz=0" in shell, "empty/non-numeric size must be normalized to 0"
+    assert '[ "$sz" -gt 2048 ]' in shell, "the last-MB dd must be guarded on a sane device size"
+
+
+def test_zfs_detection_resolves_vdevs_via_full_paths():
+    """ZFS vdev matching must not depend on device-name prefixes.
+
+    ``grep -E '^\\s+(nvme|sd)'`` over plain ``zpool status`` is blind to pools
+    on /dev/vdX (the xinnorVM device type) or by-id vdevs: the pool goes
+    undetected, the box classifies EMPTY, and raid_fs later consumes the pool
+    disks with no prompt. Vdevs must be resolved to real full paths
+    (``zpool status -LP``) and each filtered through is_data_member.
+    """
+    tasks = yaml.safe_load(CLEANUP_STORAGE.read_text())
+    zfs = _find_by_name(tasks, "Check for ZFS pools using data drives")
+    assert zfs is not None, "ZFS detection task missing from cleanup_storage.yml"
+    shell = _shell_text(zfs)
+    assert "-LP" in shell, (
+        "zpool status must resolve vdevs to full real paths (-L follows "
+        "symlinks, -P prints full paths)"
+    )
+    assert "is_data_member" in shell, "each vdev must be filtered through is_data_member"
+    assert "(nvme|sd)" not in shell, (
+        "device-name-prefix matching misses vd*/by-id vdevs — match on resolved /dev/ paths instead"
     )
 
 

@@ -94,8 +94,11 @@
     SYSTEM_DISKS="{{ nvme_system_drives | default([]) | join(' ') }}"
     SYSTEM_CTRLS="{{ nvme_system_controllers | default([]) | join(' ') }}"
     zpool list -H -o name 2>/dev/null | while read -r pool; do
-      # Get devices in pool
-      devices=$(zpool status "$pool" 2>/dev/null | grep -E '^\s+(nvme|sd)' | awk '{print "/dev/"$1}')
+      # Resolve vdevs to real full paths (-L follows symlinks, -P prints full
+      # paths) and keep the /dev/* entries. Device-type agnostic: nvme*, sd*,
+      # vd* (the xinnorVM device type) and by-id vdevs all resolve to their
+      # real /dev node — a name-prefix grep would miss everything but nvme/sd.
+      devices=$(zpool status -LP "$pool" 2>/dev/null | awk '$1 ~ /^\/dev\// { print $1 }')
       for dev in $devices; do
         if is_data_member "$dev"; then
           echo "$pool"
@@ -298,9 +301,17 @@
       [ -b "$dev" ] || continue
       # Wipe GPT and MBR signatures
       wipefs -a "$dev" 2>/dev/null || true
-      # Clear first and last MB (MBR + GPT backup header at end of disk)
+      # Clear first MB (MBR + primary GPT header)
       dd if=/dev/zero of="$dev" bs=1M count=1 2>/dev/null || true
-      dd if=/dev/zero of="$dev" bs=1M seek=$(($(blockdev --getsz "$dev") / 2048 - 1)) count=1 2>/dev/null || true
+      # Clear last MB (GPT backup header). Capture the size defensively: if
+      # the device vanished after the -b check, an inline $(( $(blockdev ...)
+      # / 2048 - 1 )) is a FATAL arithmetic error that kills the whole loop —
+      # the remaining drives would silently get no wipe/partprobe.
+      sz=$(blockdev --getsz "$dev" 2>/dev/null || echo 0)
+      case "$sz" in (''|*[!0-9]*) sz=0;; esac
+      if [ "$sz" -gt 2048 ]; then
+        dd if=/dev/zero of="$dev" bs=1M seek=$((sz / 2048 - 1)) count=1 2>/dev/null || true
+      fi
       # Inform the kernel of the partition-table change
       partprobe "$dev" 2>/dev/null || true
     done
