@@ -595,6 +595,12 @@ export interface XiraidArrayDeleteExecutorOptions {
    * destroyed.
    */
   readMounts: () => Promise<Array<{ source: string; mountpoint: string }>>;
+  /** verify wait-gone poll cadence; injectable for tests. */
+  pollIntervalMs?: number;
+  /** verify wait-gone bound — a synchronous raid_destroy clears immediately;
+   *  this only tolerates async propagation before declaring the array stuck. */
+  timeoutMs?: number;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 function narrowDeleteSpec(ctx: ExecutorContext): { id: string } {
@@ -608,6 +614,12 @@ function narrowDeleteSpec(ctx: ExecutorContext): { id: string } {
 export function makeXiraidArrayDeleteExecutor(opts: XiraidArrayDeleteExecutorOptions): Executor {
   const client = opts.client;
   const readMounts = opts.readMounts;
+  const pollIntervalMs = opts.pollIntervalMs ?? 1_000;
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const sleep =
+    opts.sleep ??
+    ((ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms)));
+  const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
   const preflight: ExecutorStage = {
     name: 'preflight',
@@ -643,13 +655,23 @@ export function makeXiraidArrayDeleteExecutor(opts: XiraidArrayDeleteExecutorOpt
       ctx.emitOutput(`raid_destroy ${id} (force)`);
       await client.raidDestroy({ name: id, force: true });
 
-      // Clean the executor-owned spare pool, if any.
+      // raid_destroy has returned: the array is destroyed (irreversible, the
+      // intended outcome). Everything below is best-effort and MUST NOT throw
+      // out of the stage — a throw here triggers rollback, and since the array
+      // is now gone the rollback escalates to requires_manual_recovery, which
+      // would wrongly tell the operator the destroy half-failed (§7).
       const poolName = derivedPoolName(id);
-      const pool = readPoolEntry(await client.poolShow(), poolName);
-      if (pool) {
-        if (pool.active) await client.poolDeactivate({ name: poolName });
-        await client.poolDelete({ name: poolName });
-        ctx.emitOutput(`spare pool '${poolName}' removed`);
+      try {
+        const pool = readPoolEntry(await client.poolShow(), poolName);
+        if (pool) {
+          if (pool.active) await client.poolDeactivate({ name: poolName });
+          await client.poolDelete({ name: poolName });
+          ctx.emitOutput(`spare pool '${poolName}' removed`);
+        }
+      } catch (err) {
+        ctx.emitOutput(
+          `warning: '${id}' destroyed, but spare-pool cleanup failed: ${errMsg(err)} — remove '${poolName}' manually if it lingers`,
+        );
       }
       ctx.emitOutput(`'${id}' destroyed`);
     },
@@ -659,10 +681,34 @@ export function makeXiraidArrayDeleteExecutor(opts: XiraidArrayDeleteExecutorOpt
     name: 'verify',
     async run(ctx: ExecutorContext): Promise<void> {
       const { id } = narrowDeleteSpec(ctx);
-      if (readShow(await client.raidShow()).some((a) => a.name === id)) {
-        throw new Error(`verify: array '${id}' still present after destroy`);
+      // raid_destroy already returned success — this only CONFIRMS the array
+      // cleared. Poll for it to disappear (absorbing async propagation on
+      // daemons where raid_destroy is not instantaneous). A transient raid_show
+      // error is tolerated (the destroy was acknowledged; the observe path
+      // resurfaces the true state). Only an array STILL present after the wait
+      // is a genuine "destroy did not take" → throw → rollback sees it present
+      // → clean `failed` (retryable), never requires_manual_recovery.
+      let waited = 0;
+      for (;;) {
+        let stillPresent: boolean;
+        try {
+          stillPresent = readShow(await client.raidShow()).some((a) => a.name === id);
+        } catch (err) {
+          ctx.emitOutput(
+            `warning: could not confirm '${id}' gone (raid_show unavailable): ${errMsg(err)}`,
+          );
+          return;
+        }
+        if (!stillPresent) {
+          ctx.emitOutput('verify ok: array gone');
+          return;
+        }
+        if (waited >= timeoutMs) {
+          throw new Error(`verify: array '${id}' still present ${timeoutMs}ms after destroy`);
+        }
+        await sleep(pollIntervalMs);
+        waited += pollIntervalMs;
       }
-      ctx.emitOutput('verify ok: array gone');
     },
   };
 
