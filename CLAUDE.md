@@ -8,6 +8,23 @@ xiNAS is an Ansible-based provisioning framework for high-performance NAS storag
 
 **Target Platform:** Ubuntu 22.04/24.04 LTS
 
+## Language
+
+**All repository artifacts are written in English, regardless of the
+language used in the working session.** This is binding for every
+contribution:
+
+- **Documentation** — every file under `docs/`, all READMEs, specs,
+  ADRs, plans, and changelog entries.
+- **Code comments** — inline comments, docstrings, and any explanatory
+  text embedded in source (Bash, Python, YAML, Ansible, Jinja2, etc.).
+- **Git metadata** — commit messages, branch names, tags, PR titles and
+  descriptions, and issue text.
+
+A conversation may happen in any language, but anything committed to the
+repository must be in English so the codebase stays consistent for all
+contributors.
+
 ## Key Commands
 
 ### Running Playbooks
