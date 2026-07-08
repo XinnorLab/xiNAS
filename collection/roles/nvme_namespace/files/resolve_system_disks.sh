@@ -24,7 +24,13 @@ resolve() {
   src="${src%%[*}"   # strip btrfs subvolume annotation: /dev/sda2[/@] -> /dev/sda2
   case "$src" in
     /dev/*)
-      lsblk -s -npo NAME,TYPE "$src" 2>/dev/null | awk '$2 == "disk" { print $1 }'
+      # `lsblk -s` renders an inverse *tree*: the NAME column carries box-drawing
+      # glyphs even with -n -p. A linear chain glues them to the name
+      # ("└─/dev/nvme0n1"); a branching tree (e.g. an MD mirror) also prepends a
+      # "│ " continuation field. So TYPE is the last field and NAME is $(NF-1);
+      # strip everything before "/dev/" so the caller's '^/dev/' filter keeps
+      # every backing disk. See §2.
+      lsblk -s -npo NAME,TYPE "$src" 2>/dev/null | awk '$NF == "disk" { print substr($(NF-1), index($(NF-1), "/dev/")) }'
       ;;
     *:/*)
       return 0   # nfs / network root: nothing local to protect
@@ -37,7 +43,7 @@ resolve() {
         | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^\/dev\//) print $i }' \
         | while IFS= read -r member; do
             lsblk -s -npo NAME,TYPE "$member" 2>/dev/null \
-              | awk '$2 == "disk" { print $1 }'
+              | awk '$NF == "disk" { print substr($(NF-1), index($(NF-1), "/dev/")) }'
           done
       ;;
     *)

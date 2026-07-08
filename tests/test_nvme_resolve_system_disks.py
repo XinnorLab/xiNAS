@@ -15,15 +15,20 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 RESOLVE = REPO / "collection/roles/nvme_namespace/files/resolve_system_disks.sh"
 
-# lsblk --inverse output per mount source (TYPE column drives the disk filter).
+# `lsblk -s` (inverse) output per mount source (TYPE column drives the disk
+# filter). Real lsblk renders a *tree* — even with -n -p the NAME column is
+# prefixed with box-drawing glyphs, and a branching tree (MD mirror) also emits a
+# "│ " continuation field. These stubs reproduce that so the resolver's glyph
+# stripping is actually exercised (a clean-name stub silently hid the bug where
+# "└─/dev/nvme0n1" failed the caller's '^/dev/' filter).
 LSBLK_INVERSE = {
-    "/dev/mapper/ubuntu--vg-ubuntu--lv": "/dev/mapper/ubuntu--vg-ubuntu--lv lvm\n/dev/nvme0n1p3 part\n/dev/nvme0n1 disk\n",
-    "/dev/md0": "/dev/md0 raid1\n/dev/nvme0n1p3 part\n/dev/nvme0n1 disk\n/dev/nvme1n1p3 part\n/dev/nvme1n1 disk\n",
-    "/dev/sda2": "/dev/sda2 part\n/dev/sda disk\n",
-    "/dev/nvme0n1p1": "/dev/nvme0n1p1 part\n/dev/nvme0n1 disk\n",
-    "/dev/nvme1n1p1": "/dev/nvme1n1p1 part\n/dev/nvme1n1 disk\n",
-    "/dev/nvme0n1p2": "/dev/nvme0n1p2 part\n/dev/nvme0n1 disk\n",
-    "/dev/nvme1n1p2": "/dev/nvme1n1p2 part\n/dev/nvme1n1 disk\n",
+    "/dev/mapper/ubuntu--vg-ubuntu--lv": "/dev/mapper/ubuntu--vg-ubuntu--lv lvm\n└─/dev/nvme0n1p3 part\n  └─/dev/nvme0n1 disk\n",
+    "/dev/md0": "/dev/md0 raid1\n├─/dev/nvme0n1p3 part\n│ └─/dev/nvme0n1 disk\n└─/dev/nvme1n1p3 part\n  └─/dev/nvme1n1 disk\n",
+    "/dev/sda2": "/dev/sda2 part\n└─/dev/sda disk\n",
+    "/dev/nvme0n1p1": "/dev/nvme0n1p1 part\n└─/dev/nvme0n1 disk\n",
+    "/dev/nvme1n1p1": "/dev/nvme1n1p1 part\n└─/dev/nvme1n1 disk\n",
+    "/dev/nvme0n1p2": "/dev/nvme0n1p2 part\n└─/dev/nvme0n1 disk\n",
+    "/dev/nvme1n1p2": "/dev/nvme1n1p2 part\n└─/dev/nvme1n1 disk\n",
 }
 
 
