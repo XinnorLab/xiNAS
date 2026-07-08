@@ -346,7 +346,7 @@ Fast-fail if either `xiraid_arrays` or `xfs_filesystems` is undefined / empty. T
 xicli license update -p /tmp/license
 ```
 
-Re-runs are cheap. If the file is missing (cleared by a reboot — `/tmp/license` is tmpfs), this step fails and `xicli raid create` will not be reachable. The remedy is to re-enter the license via the menu, then re-run the play with `--tags raid_fs`.
+Re-runs are cheap. If the file is missing (cleared by a reboot — `/tmp/license` is tmpfs), this step fails and `xicli raid create` will not be reachable. The remedy is to re-enter the license via the menu, then re-run the play with `--tags raid_fs`. Such a re-run **converges** under the §11 contract — on a MATCH box nothing is reformatted, and a destructive reset still requires the explicitly confirmed `xinas_storage_reset`.
 
 **License recovery caveat (finding #4).** When `/tmp/license` is gone but a
 running xiRAID still reports `status: valid`, it is tempting to "recover" the

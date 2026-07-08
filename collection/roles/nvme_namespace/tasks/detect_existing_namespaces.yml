@@ -1,6 +1,8 @@
 ---
-# Detect existing NVMe namespaces on data drives
-# Used when nvme_use_existing_namespaces: true
+# Detect existing NVMe namespaces on data drives.
+# Converge path: included only when xinas_storage_state == MATCH and
+# xinas_storage_reset is not set (see raid-spec.md §4.2). The legacy
+# nvme_use_existing_namespaces knob no longer drives this include.
 
 - name: Initialize namespace device lists
   ansible.builtin.set_fact:

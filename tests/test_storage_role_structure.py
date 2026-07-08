@@ -292,6 +292,24 @@ def test_single_namespace_layout_fails_explicitly():
     )
 
 
+def test_detection_banner_precedes_single_namespace_fail():
+    """The per-tier evidence banner must print before the fail fires.
+
+    Otherwise the operator sees the failure without the n1/n2 device lists —
+    the banner is the only place the classified devices are shown.
+    """
+    tasks = yaml.safe_load(DETECT_EXISTING_NAMESPACES.read_text())
+    names = [t.get("name") for t in tasks if isinstance(t, dict)]
+    banner = "Display detected existing namespaces"
+    fail = "Fail on single-namespace layout (existing-namespace reuse unsupported)"
+    assert banner in names, f"task {banner!r} missing"
+    assert fail in names, f"task {fail!r} missing"
+    assert names.index(banner) < names.index(fail), (
+        "the detection banner must come before the single-namespace fail so the "
+        "failure path shows which devices were classified n1"
+    )
+
+
 # ── Code-review follow-ups on cleanup_storage.yml ────────────────────────────
 
 
@@ -319,6 +337,10 @@ def test_cleanup_sweeps_guard_missing_disk_match_helper():
             assert ">&2" in line, (
                 f"{t.get('name')!r}: guard echo must redirect to stderr — on stdout "
                 "it pollutes the registered detection output and fabricates findings"
+            )
+            assert "exit 0" in line, (
+                f"{t.get('name')!r}: the guard must short-circuit with exit 0 — "
+                "without it the sweep body runs with is_data_member undefined"
             )
 
 
