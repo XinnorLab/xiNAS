@@ -51,6 +51,7 @@
     nvme_failed_devices: "{{ nvme_failed_devices + [item.item.controller] }}"
   loop: "{{ ns_delete_result.results }}"
   when:
+    - item.rc is defined
     - item.rc != 0
 
 - name: Fail on namespace deletion errors

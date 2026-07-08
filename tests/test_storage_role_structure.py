@@ -77,13 +77,15 @@ def test_raid_fs_has_no_dead_mdraid_scan_task():
         )
 
 
-def test_raid_fs_command_tasks_never_pipe_shell_syntax_to_command_module():
+def test_storage_command_tasks_never_pipe_shell_syntax_to_command_module():
     """`ansible.builtin.command` never interprets `|`; only shell tasks may pipe.
 
     Jinja expressions legitimately use `|` for filters (e.g. `{{ x | bool }}`),
-    so those are stripped before checking for a literal shell pipe.
+    so those are stripped before checking for a literal shell pipe. Covers both
+    storage roles' task dirs (raid_fs and nvme_namespace).
     """
-    for path in sorted(RAID_FS_TASKS_DIR.glob("*.yml")):
+    paths = sorted(RAID_FS_TASKS_DIR.glob("*.yml")) + sorted(NVME_NAMESPACE_TASKS_DIR.glob("*.yml"))
+    for path in paths:
         tasks = yaml.safe_load(path.read_text())
         for t in _iter_tasks(tasks):
             cmd = t.get("ansible.builtin.command")
