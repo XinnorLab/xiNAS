@@ -91,7 +91,9 @@ def _build(
 
     # Allow tests to supply their own current-checksum dict; fall back to
     # the original default (etc_exports differs from target).
-    _current = current_checksums if current_checksums is not None else {"etc_exports": "sha256:LIVE"}
+    _current = (
+        current_checksums if current_checksums is not None else {"etc_exports": "sha256:LIVE"}
+    )
 
     async def _live_checksums() -> Checksums:
         return Checksums(**_current)

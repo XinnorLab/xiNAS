@@ -76,16 +76,14 @@ def test_fallback_forces_raid1_log():
         for t in _fallback_tasks()
         if t.get("ansible.builtin.set_fact")
     ]
-    assert any(
-        str(sf.get("nvme_raid_log_level")) == "1" for sf in setfacts
-    ), "VM fallback must force nvme_raid_log_level: 1"
+    assert any(str(sf.get("nvme_raid_log_level")) == "1" for sf in setfacts), (
+        "VM fallback must force nvme_raid_log_level: 1"
+    )
 
 
 def test_fallback_messages_are_actionable():
     fails = [
-        t.get("ansible.builtin.fail")
-        for t in _fallback_tasks()
-        if t.get("ansible.builtin.fail")
+        t.get("ansible.builtin.fail") for t in _fallback_tasks() if t.get("ansible.builtin.fail")
     ]
     msgs = " ".join(f.get("msg", "") for f in fails)
     assert "xinnorVM" in msgs, "bare-metal failure must name the xinnorVM remedy"

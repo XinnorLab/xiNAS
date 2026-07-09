@@ -14,10 +14,7 @@ import itertools
 import json
 from pathlib import Path
 
-PLUGIN = (
-    Path(__file__).resolve().parents[1]
-    / "collection/callback_plugins/xinas_install_state.py"
-)
+PLUGIN = Path(__file__).resolve().parents[1] / "collection/callback_plugins/xinas_install_state.py"
 
 
 def _state_writer_cls():

@@ -69,11 +69,7 @@ def test_adopt_posts_body_with_adopt_true(stub_socket):
     )
     assert result["state"] == "success"
 
-    plan_bodies = [
-        b
-        for (_, p, b) in BODIES
-        if p.endswith("/rollback") and b.get("mode") == "plan"
-    ]
+    plan_bodies = [b for (_, p, b) in BODIES if p.endswith("/rollback") and b.get("mode") == "plan"]
     assert plan_bodies[0]["spec"] == {
         "to": "snap-adopt",
         "reason": "TUI adopt",
@@ -81,9 +77,7 @@ def test_adopt_posts_body_with_adopt_true(stub_socket):
     }
 
     apply_bodies = [
-        b
-        for (_, p, b) in BODIES
-        if p.endswith("/rollback") and b.get("mode") == "apply"
+        b for (_, p, b) in BODIES if p.endswith("/rollback") and b.get("mode") == "apply"
     ]
     assert apply_bodies[0]["dangerous"] is True
 
