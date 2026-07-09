@@ -42,6 +42,7 @@ After installation:
 
 ```bash
 xinas-menu          # Main management console (post-deploy)
+xinas-menu -e       # Expert mode: adds destructive entries (Uninstall xiNAS)
 xinas-menu --setup  # Provisioning menu (pre-deploy)
 xinas-setup         # Same as xinas-menu --setup
 xinas-menu --status # Non-TUI status summary

@@ -1,4 +1,5 @@
-"""ManagementScreen — Management submenu (Settings, Integrations, Updates, Uninstall)."""
+"""ManagementScreen — Management submenu (Settings, Integrations, Updates;
+Uninstall xiNAS appears only in expert mode, xinas-menu -e)."""
 
 from __future__ import annotations
 
@@ -15,13 +16,21 @@ from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 
 _UNINSTALL_SCRIPT = "/opt/xiNAS/uninstall.sh"
 
-_MENU = [
-    MenuItem("1", "Settings"),
-    MenuItem("2", "Integrations"),
-    MenuItem("3", "Check for Updates"),
-    MenuItem("4", "Uninstall xiNAS"),
-    MenuItem("0", "Back"),
-]
+
+def _menu_items(expert: bool) -> list[MenuItem]:
+    """Uninstall is destructive and rarely needed — expert mode (-e) only.
+
+    See docs/Installer/uninstall-spec.md §2.2.
+    """
+    items = [
+        MenuItem("1", "Settings"),
+        MenuItem("2", "Integrations"),
+        MenuItem("3", "Check for Updates"),
+    ]
+    if expert:
+        items.append(MenuItem("4", "Uninstall xiNAS"))
+    items.append(MenuItem("0", "Back"))
+    return items
 
 
 class ManagementScreen(XiNASAppMixin, Screen):
@@ -34,7 +43,7 @@ class ManagementScreen(XiNASAppMixin, Screen):
 
     def compose(self) -> ComposeResult:
         yield Label("  Management", id="main-prompt")
-        yield NavigableMenu(_MENU, id="mgmt-nav")
+        yield NavigableMenu(_menu_items(expert=self.app.expert), id="mgmt-nav")
         yield Footer()
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:

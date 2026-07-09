@@ -46,10 +46,14 @@ class XiNASApp(App):
         self,
         no_welcome: bool = False,
         grpc_address: str = "localhost:6066",
+        expert: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._no_welcome = no_welcome
+        # Expert mode (xinas-menu -e): unlocks rarely-needed destructive
+        # entries such as Management -> Uninstall xiNAS.
+        self.expert = expert
         self.grpc = XiRAIDClient(grpc_address)
         self.nfs = NFSHelperClient()
         # S8 (ADR-0010): the control-path API client — the retargeted

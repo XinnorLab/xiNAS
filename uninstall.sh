@@ -219,7 +219,11 @@ fi
 # playbook tree. cd to /tmp first so ansible-playbook doesn't lose its CWD.
 cd /tmp
 
-if ! (cd "$INSTALL_DIR" && ansible-playbook "${ANSIBLE_ARGS[@]}"); then
+# ansible.cfg pins stdout_callback=minimal (raw per-task JSON, no task
+# names). Force the default callback so the operator sees readable
+# PLAY/TASK banners — same override the install path applies
+# (lib/menu_lib.sh, playbook_screen.py). Spec: uninstall-spec.md §2.1.
+if ! (cd "$INSTALL_DIR" && ANSIBLE_STDOUT_CALLBACK=default ansible-playbook "${ANSIBLE_ARGS[@]}"); then
     echo ""
     fail "Ansible playbook failed. xiNAS state may be partially removed."
     echo "    Re-run this script to retry the remaining steps (it is idempotent)."

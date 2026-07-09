@@ -16,7 +16,7 @@ Source layout this spec is paired with:
 - Entry script: [uninstall.sh](../../uninstall.sh)
 - Playbook: [playbooks/uninstall.yml](../../playbooks/uninstall.yml)
 - Role: [collection/roles/xinas_uninstall/](../../collection/roles/xinas_uninstall)
-- TUI entry: Management → "Uninstall xiNAS" in [xinas_menu/screens/management.py](../../xinas_menu/screens/management.py)
+- TUI entry: Management → "Uninstall xiNAS" (expert mode only, `xinas-menu -e`) in [xinas_menu/screens/management.py](../../xinas_menu/screens/management.py)
 
 ---
 
@@ -68,12 +68,22 @@ A top-level bash script at the repo root, parallel to
    answers passed as extra-vars:
 
    ```bash
-   ansible-playbook playbooks/uninstall.yml \
+   ANSIBLE_STDOUT_CALLBACK=default ansible-playbook playbooks/uninstall.yml \
        -e uninstall_remove_xiraid=<true|false> \
        -e uninstall_remove_ofed=<true|false> \
        -e uninstall_revert_perf=<true|false> \
        -e uninstall_confirmed=true
    ```
+
+   The script forces the **default** stdout callback for the run. The
+   repo `ansible.cfg` pins `stdout_callback = minimal` (compact logs for
+   unattended runs), which prints each task as a raw
+   `localhost | CHANGED => { …json… }` blob with no task names — an
+   unreadable wall of JSON for an interactive operator. The default
+   callback shows the usual `PLAY [...]` / `TASK [...]` banners instead.
+   This mirrors the install path, which applies the same override
+   ([lib/menu_lib.sh](../../lib/menu_lib.sh) ticker and the Python TUI's
+   `playbook_screen.py`).
 
 6. Captures the playbook's structured summary fact and prints the final
    §8 report.
@@ -93,12 +103,18 @@ When `--yes` is **not** passed, the script always shows the destructive
 banner and the typed-confirmation gate, even if all three optional
 removal flags were supplied via the command line.
 
-### 2.2 TUI entry: Management → Uninstall xiNAS
+### 2.2 TUI entry: Management → Uninstall xiNAS (expert mode only)
 
 The Textual Management screen
 ([xinas_menu/screens/management.py](../../xinas_menu/screens/management.py))
-adds a new entry **"Uninstall xiNAS"** under Management. It does not run
-the cleanup in-process. It shells out to:
+adds an entry **"Uninstall xiNAS"** under Management — but only when the
+console was launched in **expert mode** (`xinas-menu -e` /
+`xinas-menu --expert`). A normal `xinas-menu` run does not show the
+entry at all: uninstall is a rare, destructive operation and must not
+sit one keypress away in the day-2 menu. Direct `uninstall.sh`
+invocation (§2.1) remains available regardless of mode.
+
+The entry does not run the cleanup in-process. It shells out to:
 
 ```
 sudo /opt/xiNAS/uninstall.sh

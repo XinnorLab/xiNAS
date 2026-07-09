@@ -5,6 +5,7 @@ Flags:
   --status         Print system status (no TUI)
   --no-welcome     Skip welcome splash screen
   --setup          Launch startup/provisioning app (xinas-setup)
+  -e, --expert     Expert mode: show rarely-needed destructive entries
 """
 
 from __future__ import annotations
@@ -36,6 +37,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--status", action="store_true", help="Print system status (no TUI)")
     p.add_argument("--no-welcome", action="store_true", help="Skip welcome screen")
     p.add_argument("--setup", action="store_true", help="Launch setup/provisioning menu")
+    p.add_argument(
+        "-e",
+        "--expert",
+        action="store_true",
+        help="Expert mode: show rarely-needed destructive entries (e.g. Uninstall xiNAS)",
+    )
     p.add_argument(
         "--grpc-address",
         default="localhost:6066",
@@ -97,6 +104,7 @@ def main() -> None:
     app = XiNASApp(
         no_welcome=args.no_welcome,
         grpc_address=args.grpc_address,
+        expert=args.expert,
     )
     app.run()
 
