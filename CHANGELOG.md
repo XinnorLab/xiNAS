@@ -6,6 +6,86 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.6.0] - 2026-07-09
+
+> **Requires-Rebuild: motd, xinas_node_build** — updating from an
+> earlier release re-runs the `motd` role (relocated banner cron) and
+> rebuilds the control-path node (`xinas_node_build`) for the agent
+> delete-preflight fix.
+
+### Added
+
+- **Uninstall is gated behind expert mode, and uninstall output is
+  readable.** The Management → "Uninstall xiNAS" entry no longer appears
+  in a normal `xinas-menu` run — it shows only in the new expert mode
+  (`xinas-menu -e` / `--expert`), since uninstall is rare and
+  destructive and must not sit one keypress away in the day-2 menu.
+  Direct `uninstall.sh` invocation is unaffected. `uninstall.sh` now
+  forces `ANSIBLE_STDOUT_CALLBACK=default` for the playbook run, so the
+  operator sees named tasks instead of the raw per-task JSON blobs that
+  `ansible.cfg`'s pinned `minimal` callback produced. See
+  `docs/Installer/uninstall-spec.md` §2.1, §2.2.
+
+### Fixed
+
+- **TUI: modal dialogs no longer crash or pop the wrong screen on a
+  double-dismiss.** A duplicated input event (double Enter, double-click)
+  could queue a second dismiss before the first popped the screen;
+  textual 8.2.8's `Screen.dismiss` pops unconditionally, so the duplicate
+  popped the wrong screen — or raised `ScreenStackError` when only the
+  base screen remained. A shared `GuardedModalScreen` mixin makes
+  `dismiss()` a no-op once the screen is inactive; every modal dialog now
+  uses it — `SelectDialog`, `ConfirmDialog`, `InputDialog`,
+  `ChecklistDialog`, `TextAreaDialog`, `DrivePicker`, and `TaskWaitDialog`
+  — each with a back-to-back double-dismiss regression test.
+- **TUI: control-path task failures now show the failing stage's
+  message.** A failed task previously rendered only
+  `task <id> ended failed (<error_code>)`; the actionable detail (e.g.
+  `preflight: /mnt/data is already a live mountpoint`) was in the task
+  record but never surfaced. `TaskFailed`/`TaskCancelled` now carry the
+  stage `error_message`, `ConfirmDialog` wraps long lines instead of
+  clipping them, and the "Retry with force?" consent appears only for the
+  filesystem executor's existing-filesystem gate rather than on every
+  failure.
+- **Agent: delete-preflight failures are no longer escalated to
+  `requires_manual_recovery`.** The `xiraid.array.delete` executor's
+  rollback threw "destructive operation: rollback unsupported" whenever
+  `raid_show` reported the array absent or itself threw — even when the
+  failure originated in preflight and nothing destructive was attempted.
+  The destroy stage now records a `destroy_attempted` marker before
+  calling `raid_destroy`; with the marker absent, rollback is a no-op
+  that never queries the daemon, yielding a clean, retryable `failed`.
+  See `docs/control-path/s4-xiraid-array-mutations-spec.md` §7, §12.
+  **Requires-Rebuild: xinas_node_build**
+- **Uninstaller safety (WS2).** Four independent hazards in the teardown
+  path are fixed:
+  - **Config-history store is never purged on role re-runs.** The
+    `xinas_history` role deleted `snapshots/`, `baseline/`, and `state`
+    on *every* run, so any day-2 `site.yml` re-run destroyed all rollback
+    history. Store dirs are now created idempotently and never removed.
+  - **`--dry-run` never deletes.** `rm -rf "$INSTALL_DIR"` was
+    unconditional, so a dry run actually deleted `/opt/xiNAS`; it is now
+    guarded by the dry-run check. Each `--remove-*` flag now answers only
+    its own question instead of forcing global non-interactive mode.
+  - **RAID teardown is scoped to xiNAS-managed arrays and the OS disk is
+    excluded from drive clean.** Teardown previously destroyed *every*
+    xiRAID array/pool and cleaned *every* NVMe device, including foreign
+    arrays and the system drive. It now filters to managed names and
+    excludes the resolved system drives.
+  - **Banner-refresh cron is removed on uninstall.** The cron job
+    installed into root's crontab but uninstall only removed
+    `/etc/cron.d/xinas-banner`, so the job survived. The job now lives at
+    the `cron.d` path (with migration away from the legacy root-crontab
+    entry). **Requires-Rebuild: motd**
+
+### Changed
+
+- **`docs/Installer/uninstall-spec.md` §4.3:** namespace re-consolidation
+  is deliberately not performed on uninstall — the pre-install namespace
+  layout is not recorded in the install baseline, so re-consolidation
+  would be a guess; a subsequent install reshapes namespaces via
+  `nvme_namespace`.
+
 ## [3.5.0] - 2026-07-09
 
 ### Added
