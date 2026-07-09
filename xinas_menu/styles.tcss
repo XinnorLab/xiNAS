@@ -196,6 +196,9 @@ ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog, ChecklistDialog {
 #dialog-body {
     color: #999999;
     margin-bottom: 1;
+    /* Constrain to the container so long error lines (task ids + stage
+       messages) wrap instead of rendering one clipped row. */
+    width: 100%;
 }
 
 #dialog-input {

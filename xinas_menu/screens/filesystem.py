@@ -62,6 +62,19 @@ _DEFAULT_MOUNT_OPTIONS = [
 ]
 
 
+# The fs-executor's destruction-gate preflight message
+# (xiNAS-MCP/src/agent/task/fs-executor.ts): the ONLY fs.create failure
+# where a force retry is the documented remedy. Matched on the message
+# because the task-level error_code is the generic
+# FAILED_PARTIAL_ROLLED_BACK shared by every stage failure.
+_EXISTING_FS_GATE_MARKER = "already carries a"
+
+
+def _is_existing_fs_gate(exc: TaskFailed) -> bool:
+    """True only for the existing-filesystem destruction-gate failure."""
+    return _EXISTING_FS_GATE_MARKER in (exc.error_message or "")
+
+
 def _classify_role(level: str) -> str:
     """Suggest 'data' or 'log' based on RAID level."""
     if str(level) in _DATA_LEVELS:
@@ -490,14 +503,22 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             return
         except TaskFailed as exc:
             create_dialog.dismiss(None)
-            # The executor's destruction gate: an existing filesystem on
-            # the device fails a non-force create. Offer the force retry
-            # (the legacy "existing filesystem" consent, post-task).
+            # Force retry is offered ONLY on the executor's destruction
+            # gate (an existing filesystem on the device); any other stage
+            # failure gets the plain error dialog — force cannot fix a
+            # live mountpoint or an existing unit, and offering it there
+            # trains users to click through a destructive consent.
+            if not _is_existing_fs_gate(exc):
+                await self.app.push_screen_wait(
+                    ConfirmDialog(f"Filesystem creation failed:\n\n{exc}", "Error", ok_only=True)
+                )
+                view.set_content("\033[31m  Filesystem creation failed.\033[0m")
+                return
             warn_confirmed = await self.app.push_screen_wait(
                 ConfirmDialog(
                     f"Filesystem creation failed:\n{exc}\n\n"
-                    f"If {data_device} already carries a filesystem, retrying\n"
-                    f"with force will DESTROY all existing data.\n\n"
+                    f"{data_device} already carries a filesystem. Retrying "
+                    f"with force will DESTROY all existing data on it.\n\n"
                     f"Retry with force?",
                     "⚠ Create Failed",
                 )

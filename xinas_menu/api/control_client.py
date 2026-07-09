@@ -97,13 +97,29 @@ class PlanBlocked(ControlPathError):
 
 
 class TaskFailed(ControlPathError):
-    """The apply task ended in a non-success terminal state."""
+    """The apply task ended in a non-success terminal state.
 
-    def __init__(self, task_id: str, state: str, error_code: str | None) -> None:
-        super().__init__(f"task {task_id} ended {state} ({error_code or 'no error code'})")
+    ``error_message`` is the best human-readable cause pulled from the
+    final task record (see :func:`_failure_detail`); ``str(exc)`` includes
+    it, so screens that render ``Failed: {exc}`` surface the failing
+    stage's message without any change.
+    """
+
+    def __init__(
+        self,
+        task_id: str,
+        state: str,
+        error_code: str | None,
+        error_message: str | None = None,
+    ) -> None:
+        text = f"task {task_id} ended {state} ({error_code or 'no error code'})"
+        if error_message:
+            text = f"{text}: {error_message}"
+        super().__init__(text)
         self.task_id = task_id
         self.state = state
         self.error_code = error_code
+        self.error_message = error_message
 
 
 class TaskCancelled(TaskFailed):
@@ -135,6 +151,42 @@ def lease_conflict_message(exc: ControlPathError) -> str | None:
         f"This resource is temporarily locked by another operation{who}.\n"
         "Wait a few seconds and try again."
     )
+
+
+def _failure_detail(task: dict[str, Any]) -> str | None:
+    """Best human-readable failure cause from a terminal task record.
+
+    The task row's ``error_message`` is set on FAILED_BEFORE_CHANGE /
+    FAILED_MANUAL_RECOVERY_REQUIRED terminals; on the common stage-failure
+    path (FAILED_PARTIAL_ROLLED_BACK) the agent's terminal event carries no
+    message and the detail lives only on the failed stage row
+    (s2-task-envelope-spec §6). Preference: task row → first failed
+    non-rollback stage → failed rollback stage. The stage name is prefixed
+    when the message doesn't already carry it.
+    """
+    message = task.get("error_message")
+    if isinstance(message, str) and message:
+        return message
+    stages = task.get("stages")
+    if not isinstance(stages, list):
+        return None
+    failed = [
+        s
+        for s in stages
+        if isinstance(s, dict)
+        and s.get("status") == "failed"
+        and isinstance(s.get("error_message"), str)
+        and s.get("error_message")
+    ]
+    ordered = [s for s in failed if s.get("name") != "rollback"] or failed
+    if not ordered:
+        return None
+    stage = ordered[0]
+    text = str(stage["error_message"])
+    name = stage.get("name")
+    if isinstance(name, str) and name and not text.startswith(name):
+        return f"{name}: {text}"
+    return text
 
 
 class _UDSConnection(http.client.HTTPConnection):
@@ -296,9 +348,13 @@ class ControlClient:
                 last_state = state
             if state in TERMINAL_STATES:
                 if state == "cancelled":
-                    raise TaskCancelled(task_id, state, current.get("error_code"))
+                    raise TaskCancelled(
+                        task_id, state, current.get("error_code"), _failure_detail(current)
+                    )
                 if state != "success":
-                    raise TaskFailed(task_id, state, current.get("error_code"))
+                    raise TaskFailed(
+                        task_id, state, current.get("error_code"), _failure_detail(current)
+                    )
                 return current
             if cancel_check is not None and not cancel_sent and cancel_check():
                 cancel_sent = True

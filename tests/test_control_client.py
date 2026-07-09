@@ -475,3 +475,106 @@ def test_plan_apply_wait_without_cancel_check_unchanged(stub_socket):
     with pytest.raises(TaskFailed) as exc:
         client(stub_socket).plan_apply_wait("POST", "/api/v1/shares", {}, poll_s=0.01)
     assert isinstance(exc.value, TaskCancelled)
+
+
+# -- TaskFailed failure detail (s8-clients-spec "Task-failure detail") --------
+
+
+def _failed_task_routes(task_payload: dict) -> None:
+    posts = {"n": 0}
+
+    def fs_post():
+        posts["n"] += 1
+        if posts["n"] == 1:
+            return (200, {"result": {"plan_id": "p1", "blockers": []}})
+        return (202, {"result": {"task_id": "t3", "state": "queued"}})
+
+    ROUTES[("POST", "/api/v1/filesystems")] = fs_post
+    ROUTES[("GET", "/api/v1/tasks/t3")] = (200, {"result": task_payload})
+
+
+def test_task_failed_carries_failing_stage_detail(stub_socket):
+    """FAILED_PARTIAL_ROLLED_BACK terminals carry no task-level
+    error_message; the detail lives on the failed stage row."""
+    _failed_task_routes(
+        {
+            "task_id": "t3",
+            "state": "failed",
+            "error_code": "FAILED_PARTIAL_ROLLED_BACK",
+            "stages": [
+                {"name": "snapshot_before", "status": "success"},
+                {
+                    "name": "preflight",
+                    "status": "failed",
+                    "error_message": "preflight: /mnt/data is already a live mountpoint (/dev/sda1)",
+                },
+                {"name": "rollback", "status": "success"},
+            ],
+        }
+    )
+    with pytest.raises(TaskFailed) as err:
+        client(stub_socket).plan_apply_wait("POST", "/api/v1/filesystems", {}, poll_s=0.01)
+    assert err.value.error_message == (
+        "preflight: /mnt/data is already a live mountpoint (/dev/sda1)"
+    )
+    assert "already a live mountpoint" in str(err.value)
+    assert "FAILED_PARTIAL_ROLLED_BACK" in str(err.value)
+
+
+def test_task_failed_prefers_task_level_error_message(stub_socket):
+    _failed_task_routes(
+        {
+            "task_id": "t3",
+            "state": "failed",
+            "error_code": "FAILED_BEFORE_CHANGE",
+            "error_message": "executor rejected the spec",
+            "stages": [
+                {"name": "preflight", "status": "failed", "error_message": "stage detail"},
+            ],
+        }
+    )
+    with pytest.raises(TaskFailed) as err:
+        client(stub_socket).plan_apply_wait("POST", "/api/v1/filesystems", {}, poll_s=0.01)
+    assert err.value.error_message == "executor rejected the spec"
+
+
+def test_task_failed_stage_detail_gets_stage_name_prefix(stub_socket):
+    """A stage message that doesn't already start with the stage name is
+    prefixed with it, so bare executor errors keep their context."""
+    _failed_task_routes(
+        {
+            "task_id": "t3",
+            "state": "failed",
+            "error_code": "FAILED_PARTIAL_ROLLED_BACK",
+            "stages": [
+                {"name": "mount", "status": "failed", "error_message": "unit failed to start"},
+            ],
+        }
+    )
+    with pytest.raises(TaskFailed) as err:
+        client(stub_socket).plan_apply_wait("POST", "/api/v1/filesystems", {}, poll_s=0.01)
+    assert err.value.error_message == "mount: unit failed to start"
+
+
+def test_task_failed_falls_back_to_rollback_stage_detail(stub_socket):
+    _failed_task_routes(
+        {
+            "task_id": "t3",
+            "state": "requires_manual_recovery",
+            "error_code": "FAILED_MANUAL_RECOVERY_REQUIRED",
+            "stages": [
+                {"name": "rollback", "status": "failed", "error_message": "rollback: umount busy"},
+            ],
+        }
+    )
+    with pytest.raises(TaskFailed) as err:
+        client(stub_socket).plan_apply_wait("POST", "/api/v1/filesystems", {}, poll_s=0.01)
+    assert err.value.error_message == "rollback: umount busy"
+
+
+def test_task_failed_without_detail_keeps_legacy_message(stub_socket):
+    _failed_task_routes({"task_id": "t3", "state": "failed", "error_code": "BOOM"})
+    with pytest.raises(TaskFailed) as err:
+        client(stub_socket).plan_apply_wait("POST", "/api/v1/filesystems", {}, poll_s=0.01)
+    assert err.value.error_message is None
+    assert str(err.value) == "task t3 ended failed (BOOM)"

@@ -129,6 +129,23 @@ non-alarming dialog — "temporarily locked by another operation
 (task `<holder_task_id>`); wait a few seconds and try again" — instead of
 the raw `Failed: CONFLICT: resource is locked by another task`. All other
 `ControlPathError`s keep the existing `Failed: <exc>` rendering.
+
+**Task-failure detail.** `plan_apply_wait` polls `GET /tasks/{id}`; when
+the terminal state is non-success it raises `TaskFailed` carrying, besides
+`task_id` / `state` / `error_code`, an `error_message` with the best
+human-readable cause from the final task record: the task row's
+`error_message` when set (the `FAILED_BEFORE_CHANGE` /
+`FAILED_MANUAL_RECOVERY_REQUIRED` terminals), else the first failed
+non-rollback stage's `error_message` (the stage-failure path — a
+`FAILED_PARTIAL_ROLLED_BACK` terminal carries no task-level message,
+s2-task-envelope-spec §6), else a failed rollback stage's message. The
+stage name is prefixed when the message doesn't already start with it
+(`preflight: …`). `str(exc)` includes the detail —
+`task <id> ended failed (FAILED_PARTIAL_ROLLED_BACK): preflight: /mnt/data
+is already a live mountpoint` — so every screen that renders
+`Failed: <exc>` shows the cause without code changes. `TaskCancelled`
+carries the same field (usually empty — a cancelled terminal has no
+error).
 - **T12:** network screens retarget — `netplan apply|try` subprocess
   calls REMOVED in favor of the API (`network.py`,
   `configure/network_config.py`). *(Follow-up, post-S11: `screens/

@@ -168,14 +168,15 @@ logdev=<log_device>,noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,all
 
 — byte-identical to the [Installer/fs-exports-spec.md §1.7](../Installer/fs-exports-spec.md#17-mount-options-decoded) install-time set, so a TUI-created FS is indistinguishable from an Ansible-created one.
 
-**Step 5 — confirmation.** Summary shows everything: arrays + roles, mountpoint, derived geometry, full mount option string. On confirm the wizard runs four ordered steps:
+**Step 5 — confirmation.** Summary shows everything: arrays + roles, mountpoint, derived geometry, full mount option string. On confirm the screen submits **one control-path plan→apply** — `POST /api/v1/filesystems` with the full spec (backing/log device, label, mountpoint, geometry, mount options, `quota_mode: uquota`) via `control.plan_apply_wait`, with a `TaskWaitDialog` showing task-state progress and offering cancel (S10). The executor runs preflight → mkfs → unit → mount as task stages.
 
-1. **Existing-filesystem warn.** `check_existing_filesystem(data_device)` returns `(type, label)` from `blkid`. If `type` is set, an extra `⚠ Existing Filesystem` confirmation appears stating that mkfs will destroy existing data.
-2. **`mkfs.xfs`.** `mkfs_xfs(...)` runs the full command with the clamp on `log_size` against `blockdev --getsize64 <log_device>`.
-3. **Mount-unit creation.** `create_mount_unit(mp, data, log, opts)` writes `/etc/systemd/system/<mp_unit>.mount` atomically. The unit body is built by `generate_mount_unit()` — `Requires=` and `After=` the `dev-xi_*.device` units, `Before=umount.target`, `Conflicts=umount.target`, `WantedBy=local-fs.target`. Same boilerplate the Ansible template emits, just generated in Python.
-4. **`mount_filesystem`.** `systemctl daemon-reload` + `systemctl enable --now <unit>`.
+**Failure handling.** Three distinct exits:
 
-If any step fails the wizard stops and displays the error; the partial state (e.g. a fresh XFS that couldn't be mounted) is left as-is and the operator has to clean up manually. There is **no rollback** in the create path — by design, since reformatting a successfully created FS to "undo" would lose data, and removing a fresh mount unit before its first mount succeeds isn't useful enough to justify the complexity.
+1. **Cancelled** (`TaskCancelled`, caught before `TaskFailed` — it is a subclass): the view reports "cancelled — partial work rolled back"; no retry is offered.
+2. **Destruction gate** (`TaskFailed` whose `error_message` is the fs-executor preflight gate — the device `already carries a … filesystem`, [xiNAS-MCP/src/agent/task/fs-executor.ts](../../xiNAS-MCP/src/agent/task/fs-executor.ts)): the screen offers the **force-recreate consent** — a Yes/No dialog quoting the task's failure detail and warning that retrying with `force: true` DESTROYS the existing data on the device. On Yes it re-submits the same spec with `force: true` and `dangerous=True`. This is the *only* failure that offers the retry.
+3. **Any other failure** (`TaskFailed` with any other detail — live mountpoint, existing unit, mkfs/mount error — or `PlanBlocked` / `ApiError` / `TransportError`): an OK-only error dialog shows `Filesystem creation failed:` plus the exception text, which includes the failing stage's message (see [s8-clients-spec §S8c](../control-path/s8-clients-spec.md), "Task-failure detail"). No force retry is offered — retrying with force cannot fix, say, an occupied mountpoint, and offering it there trains operators to click through a destructive consent.
+
+Rollback of a failed create is the task's own (the executor rolls back its completed stages per s2-task-envelope-spec); the screen performs no cleanup of its own.
 
 **Side effects.** On full success:
 
@@ -403,17 +404,13 @@ FilesystemScreen._create_filesystem_wizard()
   ├─ InputDialog (mountpoint)                  — TUI only
   ├─ build_mount_options + calculate_stripe_width  — pure Python
   ├─ ConfirmDialog (summary)                   — TUI only
-  ├─ check_existing_filesystem(/dev/xi_<name>)
-  │    └─ blkid -s TYPE / LABEL
-  ├─ mkfs_xfs(...)
-  │    ├─ blockdev --getsize64 /dev/xi_<log>    — clamp log size
-  │    └─ mkfs.xfs -f -L … -d su=Nk,sw=M -l logdev=…,size=… -s size=4k <data>
-  ├─ create_mount_unit(...)
-  │    ├─ mkdir -p <mountpoint>
-  │    └─ write /etc/systemd/system/<unit>.mount  (mkstemp + os.replace)
-  ├─ mount_filesystem(...)
-  │    ├─ systemctl daemon-reload
-  │    └─ systemctl enable --now <unit>
+  ├─ control.plan_apply_wait(POST /api/v1/filesystems)   — ONE plan→apply
+  │    ├─ mode=plan  → plan_id, blockers checked
+  │    ├─ mode=apply → task_id
+  │    └─ poll GET /tasks/{id} → preflight → mkfs → unit → mount stages
+  │         └─ on failed terminal: TaskFailed carries the failing
+  │            stage's error_message (force retry ONLY on the
+  │            existing-filesystem destruction gate)
   ├─ audit.log("fs.create", …)                  — /var/log/xinas/audit.log
   └─ snapshots.record("fs_create", …)           — xinas_history snapshot
 ```
@@ -508,7 +505,8 @@ YYYY-MM-DD HH:MM:SS | <user> | <action> | OK | <detail>
 | Export target directory missing | `nfs_helper.handle_add_export` | `NOT_FOUND` unless `create_path=true`. TUI's Add wizard pre-creates the directory client-side. |
 | Quota toggle while NFS clients connected | XFS requires unmount cycle | `_manage_quotas` warns up front; clients are briefly disconnected during the stop/start. |
 | Mount-unit not found during quota toggle | `update_mount_unit_quota` | Returns `(False, "Mount unit not found: …")`; the dialog reports the missing path. |
-| `mkfs.xfs` fails (e.g. log array too small) | `mkfs_xfs` returns `(False, …)` | Wizard aborts; no mount unit is created; operator must investigate (typically: log array undersized — see [Installer/raid-spec.md §6.1](../Installer/raid-spec.md#61-capacity-checks)). |
+| fs.create task fails (live mountpoint, existing unit, mkfs error, log array too small) | control-path task terminal | `TaskFailed.error_message` carries the failing stage's message; an OK-only dialog shows it. **No force retry** unless the failure is the existing-filesystem destruction gate. |
+| fs.create fails on the destruction gate (device already carries a filesystem) | fs-executor preflight (`blkid` gate) | Yes/No force-recreate consent quoting the task detail; on Yes the spec is re-submitted with `force: true` + `dangerous=True`. |
 | Mount unit fails to start (e.g. xiRAID device not present) | `mount_filesystem` returns `(False, …)` | Wizard aborts after the mount unit was written; the unit stays on disk so the next `systemctl start` can succeed without re-running mkfs. |
 | `findmnt` JSON parse error | Show / Delete / Quotas | Caught; the screen shows `(parse error: …)` but stays interactive. |
 | RAID delete cascades into shares but `add_export` rollback fails | FS-delete rollback | The dialog reports "Rolled back N share(s)"; the failure is noted but rollback does not itself roll back. Audit log captures every step. |
@@ -532,3 +530,4 @@ Both screens follow the TUI-wide `ConfirmDialog` rule (canonical statement in [r
 
 - **Informational / error / notice → `ok_only=True`** (single OK button). The failure pop-ups (`"Failed: …"`, "No shares configured.", "Share not found.", "Cannot create directory:", "Filesystem creation failed:", "Could not load filesystems.", "No XFS filesystems found."), the idmapd "domain updated." success notice, and the delete-teardown "stopped" notice all discard their return value and use OK-only.
 - **Yes/No is reserved for genuine consent** — the Add / Edit / Remove Share confirmations, the Create-Filesystem summary, the force-recreate retry, the log-array "Proceed?" step, the Delete-Filesystem warning plus the FINAL CONFIRMATION double gate, and the quota-change confirmation, each of which captures and branches on the returned boolean.
+- **Long dialog text wraps, never truncates.** `#dialog-body` is width-constrained to the dialog container, so long error lines wrap (task ids + stage messages easily exceed the 80-cell dialog). Truncation hid the tail of exactly the text the operator needed (`FAILED_PARTIAL_ROL…`).

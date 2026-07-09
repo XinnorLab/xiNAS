@@ -34,3 +34,38 @@ def test_confirm_dialog_accepts_allow_back():
 def test_drive_picker_accepts_allow_back():
     d = DrivePickerScreen([], title="t", allow_back=True)
     assert d._allow_back is True
+
+
+def test_confirm_dialog_wraps_long_error_lines():
+    """A long single-line error (task id + stage message) must wrap inside
+    the dialog container, not render one clipped line (the
+    'FAILED_PARTIAL_ROL…' truncation)."""
+    import asyncio
+    from pathlib import Path
+
+    from textual.app import App
+
+    long_msg = (
+        "Filesystem creation failed:\n"
+        "task 0b0778a9-1234-5678-9abc-def012345678 ended failed "
+        "(FAILED_PARTIAL_ROLLED_BACK): preflight: /mnt/data is already "
+        "a live mountpoint (/dev/mapper/something-long)"
+    )
+
+    class _Shell(App):
+        CSS_PATH = Path(__file__).parent.parent / "xinas_menu" / "styles.tcss"
+
+    async def scenario() -> None:
+        app = _Shell()
+        async with app.run_test(size=(100, 32)) as pilot:
+            dialog = ConfirmDialog(long_msg, "⚠ Create Failed", ok_only=True)
+            app.push_screen(dialog)
+            await pilot.pause()
+            body = dialog.query_one("#dialog-body")
+            container = dialog.query_one("#dialog-container")
+            # Constrained to the container (not overflowing off-dialog)…
+            assert body.region.width <= container.region.width
+            # …and the >76-cell line occupies multiple rows, i.e. wrapped.
+            assert body.region.height >= 3
+
+    asyncio.run(scenario())
