@@ -62,6 +62,93 @@
           {%- endif -%}
       when: _xicli_pool_show.rc == 0
 
+    # spec §4.3 point 1: the *preferred* source for "which names are ours" is
+    # the install baseline. The baseline manifest itself (xinas-history
+    # snapshot show/status --format json) does NOT carry array/pool names —
+    # it only exposes Manifest fields (id/timestamp/preset/...). What DOES
+    # capture the real names is the raw `xicli raid show`/`pool show` JSON
+    # xinas_history saves under the baseline's own runtime/ payload at
+    # install time (xinas_history/collector.py RuntimeCollector.collect()).
+    # We read that file directly (root-only, 0600) rather than inventing a
+    # manifest field that doesn't exist. If it is missing/unreadable/or was
+    # captured as a collector error, we fall back to the name-match pattern.
+    - name: "RAID | read baseline raid-show capture (preferred names source; spec §4.3)"
+      ansible.builtin.slurp:
+        src: /var/lib/xinas/config-history/baseline/runtime/raid-show.json
+      register: _xinas_baseline_raid_show
+      failed_when: false
+
+    - name: "RAID | read baseline pool-show capture (preferred names source; spec §4.3)"
+      ansible.builtin.slurp:
+        src: /var/lib/xinas/config-history/baseline/runtime/pool-show.json
+      register: _xinas_baseline_pool_show
+      failed_when: false
+
+    - name: "RAID | parse baseline-captured array names"
+      ansible.builtin.set_fact:
+        _xinas_baseline_array_names: >-
+          {%- set parsed = _xinas_baseline_raid_show.content | b64decode | from_json -%}
+          {%- if parsed is mapping and 'error' in parsed -%}
+            []
+          {%- elif parsed is mapping -%}
+            {{ parsed.keys() | list }}
+          {%- elif parsed is iterable and parsed is not string -%}
+            {{ parsed | map(attribute='name') | list }}
+          {%- else -%}
+            []
+          {%- endif -%}
+      when: _xinas_baseline_raid_show.content is defined
+
+    - name: "RAID | parse baseline-captured pool names"
+      ansible.builtin.set_fact:
+        _xinas_baseline_pool_names: >-
+          {%- set parsed = _xinas_baseline_pool_show.content | b64decode | from_json -%}
+          {%- if parsed is mapping and 'error' in parsed -%}
+            []
+          {%- elif parsed is mapping -%}
+            {{ parsed.keys() | list }}
+          {%- elif parsed is iterable and parsed is not string -%}
+            {{ parsed | map(attribute='name') | list }}
+          {%- else -%}
+            []
+          {%- endif -%}
+      when: _xinas_baseline_pool_show.content is defined
+
+    - name: "RAID | filter to xiNAS-managed names (spec §4.3: baseline capture preferred, else name-match)"
+      ansible.builtin.set_fact:
+        # Baseline-preferred: intersect the live names with what the baseline
+        # actually created. Fallback pattern (no usable baseline capture):
+        # the names xiNAS creates — data/dataN, log/logN, and *_spare_pool.
+        # Arrays/pools with other names are NOT ours and are preserved.
+        _xinas_managed_array_names: >-
+          {{ (_xinas_array_names | default([]) | intersect(_xinas_baseline_array_names | default([])))
+             if (_xinas_baseline_array_names | default([]) | length > 0)
+             else (_xinas_array_names | default([]) | select('match', '^(data|log)[0-9]*$') | list) }}
+        _xinas_managed_pool_names: >-
+          {{ (_xinas_pool_names | default([]) | intersect(_xinas_baseline_pool_names | default([])))
+             if (_xinas_baseline_pool_names | default([]) | length > 0)
+             else (_xinas_pool_names | default([]) | select('match', '^.*_spare_pool$') | list) }}
+
+    - name: "RAID | record preserved foreign arrays/pools in the summary"
+      ansible.builtin.set_fact:
+        uninstall_summary: >-
+          {{
+            uninstall_summary | combine({
+              'preserved': uninstall_summary.preserved + [
+                [
+                  'foreign xiRAID arrays/pools',
+                  (
+                    (_xinas_array_names | default([]) | difference(_xinas_managed_array_names))
+                    + (_xinas_pool_names | default([]) | difference(_xinas_managed_pool_names))
+                  ) | join(', ') ~ ' (not created by xiNAS; left untouched)'
+                ]
+              ]
+            })
+          }}
+      when: >-
+        (_xinas_array_names | default([]) | difference(_xinas_managed_array_names) | length > 0)
+        or (_xinas_pool_names | default([]) | difference(_xinas_managed_pool_names) | length > 0)
+
     - name: "RAID | stop systemd mount units before raid delete"
       # xicli raid delete refuses if the array is mounted. The mount-unit
       # cleanup in phase D will remove the units; here we just stop them.
@@ -80,11 +167,12 @@
         executable: /bin/bash
       changed_when: false
 
-    - name: "RAID | delete xiNAS-named arrays"
+    - name: "RAID | delete xiNAS-managed arrays"
       # xicli's raid verb is 'destroy' (not 'delete'); 'delete' is an invalid
-      # choice and aborts the teardown, leaving the arrays online.
+      # choice and aborts the teardown, leaving the arrays online. Only names
+      # that survived the managed-name filter above are touched (spec §4.3).
       ansible.builtin.command: "xicli raid destroy -n {{ item }} --force"
-      loop: "{{ _xinas_array_names | default([]) }}"
+      loop: "{{ _xinas_managed_array_names | default([]) }}"
       register: _raid_delete
       changed_when: _raid_delete.rc == 0
       failed_when:
@@ -93,9 +181,9 @@
         - "'not found' not in (_raid_delete.stderr | default(''))"
         - "'does not exist' not in (_raid_delete.stderr | default(''))"
 
-    - name: "RAID | delete xiNAS-named spare pools"
+    - name: "RAID | delete xiNAS-managed spare pools"
       ansible.builtin.command: "xicli pool delete -n {{ item }}"
-      loop: "{{ _xinas_pool_names | default([]) }}"
+      loop: "{{ _xinas_managed_pool_names | default([]) }}"
       register: _pool_delete
       changed_when: _pool_delete.rc == 0
       failed_when:
@@ -104,11 +192,51 @@
         - "'not found' not in (_pool_delete.stderr | default(''))"
         - "'does not exist' not in (_pool_delete.stderr | default(''))"
 
-    - name: "RAID | clean every NVMe device once arrays are gone"
+    - name: "RAID | resolve OS disks to exclude from drive clean"
+      # Reuses the tested detector (tests/test_nvme_resolve_system_disks.py):
+      # tasks_from only pulls in detection (sets nvme_system_drives /
+      # nvme_system_root_resolved) so teardown reads the same facts install
+      # would compute. It does NOT pull in nvme_namespace/tasks/main.yml's
+      # own safety abort — that gate is mirrored explicitly in the task
+      # below, because tasks_from never includes it.
+      ansible.builtin.include_role:
+        name: nvme_namespace
+        tasks_from: resolve_system_disks
+      when: nvme_system_drives is not defined
+
+    - name: "RAID | abort teardown if the OS disk cannot be resolved (fail-closed)"
+      # Mirrors the abort guard in nvme_namespace/tasks/main.yml (same
+      # condition, same override knob) because resolve_system_disks.yml above
+      # only detects — it does not carry that guard with it. Without this,
+      # a failed/empty resolution leaves nvme_system_drives=[], "protected"
+      # empty, and the drive-clean loop below would wipe every NVMe device,
+      # including the OS disk.
+      ansible.builtin.fail:
+        msg: >-
+          Refusing to run `xicli drive clean`: the OS/system disk could not be
+          resolved (nvme_system_drives={{ nvme_system_drives | default([]) }},
+          nvme_system_root_resolved={{ nvme_system_root_resolved | default(false) }}).
+          Cleaning every NVMe device without a protected set would wipe the
+          boot disk. Set nvme_abort_if_no_system_drive=false to override (NOT
+          recommended).
+      when:
+        - nvme_abort_if_no_system_drive | default(true) | bool
+        - (nvme_system_drives is not defined or nvme_system_drives | length == 0)
+          or not (nvme_system_root_resolved | default(false))
+
+    - name: "RAID | clean every non-OS NVMe device once arrays are gone"
       ansible.builtin.shell: |
         set +e
+        protected="{{ nvme_system_drives | default([]) | join(' ') }}"
         for dev in /dev/nvme[0-9]*n[0-9]*; do
           [ -e "$dev" ] || continue
+          parent="/dev/$(lsblk -no PKNAME "$dev" 2>/dev/null || true)"
+          skip=0
+          for p in $protected; do
+            [ "$dev" = "$p" ] && skip=1
+            [ "$parent" = "$p" ] && skip=1
+          done
+          [ "$skip" = "1" ] && continue
           xicli drive clean -d "$dev" 2>/dev/null || true
         done
         exit 0
@@ -122,8 +250,8 @@
           {{
             uninstall_summary | combine({
               'removed': uninstall_summary.removed + [
-                ['xiRAID arrays', (_xinas_array_names | default([])) | join(', ') if _xinas_array_names | default([]) | length else 'none found'],
-                ['xiRAID pools',  (_xinas_pool_names  | default([])) | join(', ') if _xinas_pool_names  | default([]) | length else 'none found']
+                ['xiRAID arrays', (_xinas_managed_array_names | default([])) | join(', ') if _xinas_managed_array_names | default([]) | length else 'none found'],
+                ['xiRAID pools',  (_xinas_managed_pool_names  | default([])) | join(', ') if _xinas_managed_pool_names  | default([]) | length else 'none found']
               ]
             })
           }}

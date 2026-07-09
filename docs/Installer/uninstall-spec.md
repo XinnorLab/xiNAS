@@ -269,16 +269,47 @@ mountpoints are gone.
 
 ### 4.3 Phase C — tear down xiRAID arrays and namespaces
 
-1. Read xiNAS-managed array and pool names. Preferred source:
-   `xinas-history snapshot show baseline --json` (the install baseline
-   records the `xiraid_arrays` and `xiraid_spare_pools` it created).
-   Fallback: `xicli raid show -f json` and `xicli pool show -f json`,
-   then match against the names xiNAS uses (`data`, `log`,
-   `*_spare_pool`).
+1. Read xiNAS-managed array and pool names, then filter the arrays/pools
+   currently reported by `xicli raid show -f json` / `xicli pool show -f
+   json` down to the managed set before touching anything:
+   - **Preferred source:** the raw `xicli raid show` / `pool show` JSON
+     that `xinas_history` captured into the install baseline's own
+     `runtime/` payload at install time
+     (`/var/lib/xinas/config-history/baseline/runtime/raid-show.json` and
+     `pool-show.json` — see `xinas_history/collector.py`
+     `RuntimeCollector.collect()`). The currently-live names are
+     intersected with the names present in that capture. Note: the
+     baseline **manifest** itself (`xinas-history snapshot show <id>
+     --format json`, or `status --format json`) does **not** carry
+     array/pool names — it only exposes `Manifest` fields
+     (id/timestamp/preset/checksums/...); there is no CLI subcommand
+     that reads the baseline's `runtime/` payload, so the role reads
+     those files directly from the store.
+   - **Fallback** (baseline runtime capture missing, unreadable, or
+     itself recorded as a collector error): match the live names against
+     the pattern xiNAS uses to create them — arrays: `^(data|log)[0-9]*$`,
+     pools: `^.*_spare_pool$`. Names that don't match are treated as
+     foreign and left untouched, then reported as "preserved" in the
+     §8 summary.
 2. For every array found in (1): `xicli raid destroy -n <name> --force`.
 3. For every pool found in (1): `xicli pool delete -n <name>`.
-4. For every NVMe device that backed an array: `xicli drive clean -d
-   <device>` (best-effort).
+4. Resolve the physical disk(s) hosting the OS (the same detector the
+   installer uses — `nvme_namespace` role, `resolve_system_disks.yml` /
+   `resolve_system_disks.sh`; publishes `nvme_system_drives` /
+   `nvme_system_root_resolved`) and exclude them from cleanup. `tasks_from`
+   only pulls in detection, not the install-time safety abort in
+   `nvme_namespace/tasks/main.yml`, so teardown mirrors that same
+   fail-closed guard itself: if the OS disk cannot be resolved
+   (`nvme_system_drives` empty or `nvme_system_root_resolved` false) and
+   `nvme_abort_if_no_system_drive` is not explicitly disabled, teardown
+   **aborts before running `xicli drive clean`** rather than cleaning
+   every NVMe device including the boot disk. Only once resolution
+   succeeds does it proceed: for every NVMe device that is **not** in the
+   resolved system-disk set (an exact match on the device itself or on
+   its `lsblk PKNAME` parent): `xicli drive clean -d <device>`
+   (best-effort). The OS disk (and any of its partitions/namespaces) is
+   never passed to `drive clean`, regardless of whether it was
+   detected as backing a managed array.
 5. Rebuild NVMe namespaces to a single full-size namespace only **if**
    the operator opted into xiRAID removal **and** the install baseline
    recorded that xiNAS rebuilt the namespaces. Otherwise leave NVMe
