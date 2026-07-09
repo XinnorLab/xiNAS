@@ -82,12 +82,23 @@
   when: banner_enabled | bool
   tags: [motd, banner]
 
+# This migration must stay indefinitely, not just one release: updates only run
+# Ansible when Requires-Rebuild fires, so a node can jump many versions in one
+# upgrade and still needs this cleanup on that first rebuild.
+- name: Remove legacy banner cron from root's crontab (pre-WS2.4 layout)
+  ansible.builtin.cron:
+    name: "Refresh xiNAS login banner"
+    user: root
+    state: absent
+  tags: [motd, banner]
+
 - name: Set up cron job to refresh banner
   ansible.builtin.cron:
     name: "Refresh xiNAS login banner"
     minute: "*/{{ banner_refresh_minutes }}"
     job: "/usr/local/bin/xinas-generate-banner"
     user: root
+    cron_file: xinas-banner
     state: present
   when: banner_enabled | bool
   tags: [motd, banner]
