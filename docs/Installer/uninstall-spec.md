@@ -310,11 +310,14 @@ mountpoints are gone.
    (best-effort). The OS disk (and any of its partitions/namespaces) is
    never passed to `drive clean`, regardless of whether it was
    detected as backing a managed array.
-5. Rebuild NVMe namespaces to a single full-size namespace only **if**
-   the operator opted into xiRAID removal **and** the install baseline
-   recorded that xiNAS rebuilt the namespaces. Otherwise leave NVMe
-   namespaces alone (the operator may want to keep the n1/n2 split
-   for their own xiRAID setup after uninstall).
+5. NVMe namespaces are left exactly as they are. Re-consolidating to a
+   single full-size namespace is **deliberately not performed**: the
+   install baseline does not record the pre-install namespace layout,
+   so a rebuild would be a guess — and a wrong guess is itself
+   destructive. A subsequent xiNAS install reshapes namespaces via
+   `nvme_namespace` anyway; operators who want a different layout
+   after uninstall can use the `nvme` CLI directly. (Revisit if the
+   baseline ever records the pre-install layout.)
 
 If `xicli` is not on `PATH` (e.g. xiRAID was already removed in a prior
 run), the whole phase is skipped with a "xicli not present, skipping"
