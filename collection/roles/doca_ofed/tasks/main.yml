@@ -109,7 +109,12 @@
     {{ ib_netplan_template }}
     {{ ib_udev_rules_file }}
   register: ib_udev_result
-  changed_when: ib_udev_result.rc == 0
+  changed_when: ib_udev_result.stdout is search('^changed:')
+  tags: [ofed, udev]
+
+- name: Report InfiniBand UDEV rename outcome
+  ansible.builtin.debug:
+    msg: "{{ ib_udev_result.stdout | default(ib_udev_result.stderr) | default('(no output)') }}"
   tags: [ofed, udev]
 
 - name: Reboot if kernel modules built and reboot requested
