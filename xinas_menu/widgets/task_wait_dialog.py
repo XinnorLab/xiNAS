@@ -17,11 +17,12 @@ from collections.abc import Callable
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.screen import ModalScreen
 from textual.widgets import Button, Label
 
+from xinas_menu.widgets._guarded_modal import GuardedModalScreen
 
-class TaskWaitDialog(ModalScreen[None]):
+
+class TaskWaitDialog(GuardedModalScreen[None]):
     """Modal "operation in progress" dialog with a cooperative Cancel.
 
     Usage (from a screen, UI thread)::
