@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.screen import ModalScreen
 from textual.widgets import Button, Label, SelectionList
 from textual.widgets.selection_list import Selection
 
+from xinas_menu.widgets._guarded_modal import GuardedModalScreen
 
-class ChecklistDialog(ModalScreen[list[str] | None]):
+
+class ChecklistDialog(GuardedModalScreen[list[str] | None]):
     """Modal multi-select checklist dialog.
 
     Returns a list of selected values, or None if cancelled.

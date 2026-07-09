@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.screen import ModalScreen
 from textual.widgets import Button, Label, OptionList
 from textual.widgets.option_list import Option
 
+from xinas_menu.widgets._guarded_modal import GuardedModalScreen
 from xinas_menu.widgets.wizard import BACK
 
 
-class SelectDialog(ModalScreen["str | None"]):
+class SelectDialog(GuardedModalScreen["str | None"]):
     """Modal dialog that lets the user pick one item from a list.
 
     Returns the selected string value, :data:`BACK` if the user requested

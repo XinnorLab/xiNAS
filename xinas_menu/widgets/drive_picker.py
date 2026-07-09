@@ -16,9 +16,9 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Label, Static
 
+from xinas_menu.widgets._guarded_modal import GuardedModalScreen
 from xinas_menu.widgets.wizard import BACK
 
 _log = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ def _fmt_size(size_bytes: float) -> str:
     return f"{size_bytes:.1f} EB"
 
 
-class DrivePickerScreen(ModalScreen["list[str] | None"]):
+class DrivePickerScreen(GuardedModalScreen["list[str] | None"]):
     """Full-featured drive picker with filtering, sorting, and multi-select.
 
     Returns list of selected drive names, :data:`BACK` if the user requested

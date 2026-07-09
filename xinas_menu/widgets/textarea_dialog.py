@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.screen import ModalScreen
 from textual.widgets import Button, Label, TextArea
 
+from xinas_menu.widgets._guarded_modal import GuardedModalScreen
 
-class TextAreaDialog(ModalScreen[str | None]):
+
+class TextAreaDialog(GuardedModalScreen[str | None]):
     """Modal multi-line text input dialog.
 
     Returns the entered text, or None if cancelled.

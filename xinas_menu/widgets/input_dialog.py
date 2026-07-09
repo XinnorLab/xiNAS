@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label
 
+from xinas_menu.widgets._guarded_modal import GuardedModalScreen
 from xinas_menu.widgets.wizard import BACK
 
 
-class InputDialog(ModalScreen["str | None"]):
+class InputDialog(GuardedModalScreen["str | None"]):
     """Modal text (or password) input dialog.
 
     Returns the entered string, :data:`BACK` if the user requested

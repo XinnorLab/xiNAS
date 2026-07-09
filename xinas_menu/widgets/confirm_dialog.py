@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.screen import ModalScreen
 from textual.widgets import Button, Label
 
+from xinas_menu.widgets._guarded_modal import GuardedModalScreen
 from xinas_menu.widgets.wizard import BACK
 
 
-class ConfirmDialog(ModalScreen["bool"]):
+class ConfirmDialog(GuardedModalScreen["bool"]):
     """Modal confirmation or informational dialog.
 
     When *ok_only* is ``False`` (default) the dialog shows **Yes / No**
