@@ -28,6 +28,18 @@
 Every snapshot is stored as a directory under `/var/lib/xinas/config-history/snapshots/<id>/`.
 The manifest lives at `manifest.yml` inside that directory.
 
+The store itself (`/var/lib/xinas/config-history/` and its `snapshots/`,
+`baseline/`, and `state/` subdirectories) is created idempotently by the
+`xinas_history` Ansible role -- directories are created only if absent -- and
+is never deleted by install or re-install. A day-2 `site.yml` re-run leaves
+existing snapshots, the baseline, and lock/journal state untouched. The only
+things that ever remove snapshots are the library's garbage collector
+(Section 7, subject to the configured retention policy, which never purges
+the baseline) and explicit, doubly-confirmed operator action -- e.g. the
+TUI's Config History "Replace Baseline" flow
+(`SnapshotEngine.purge_and_create_baseline`) -- which is the only path that
+also removes the baseline itself.
+
 ```yaml
 # manifest.yml -- Full schema definition
 
