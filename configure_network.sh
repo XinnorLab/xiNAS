@@ -231,8 +231,15 @@ configure_manual() {
         done
     done
 
+    # Nothing was configured. Overwriting the role template with a guessed
+    # interface name would silently strand every NIC without an address, so
+    # leave it alone and hand the box back to pool mode.
     if [[ ${#configs[@]} -eq 0 ]]; then
-        configs=("ib0:100.100.100.1/24")
+        if [[ -f "$ROLE_DEFAULTS" ]]; then
+            yq -i '.net_ip_pool_enabled = true' "$ROLE_DEFAULTS"
+        fi
+        msg_box "No Changes" "No interfaces were configured.\n\nThe netplan template was left untouched and IP pool mode is still enabled."
+        return
     fi
 
     tmp_file=$(mktemp)
