@@ -6,6 +6,42 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.6.1] - 2026-07-09
+
+> **Requires-Rebuild: net_controllers, doca_ofed** — the fix re-renders
+> netplan through the `net_controllers` role and resolves the IB udev
+> template in `doca_ofed`, so updating hosts must re-run both roles for
+> data interfaces to actually get addressed.
+
+### Fixed
+
+- **Data NICs never got an IP from the pool.** The `default` and
+  `xinnorVM` presets each shipped a static `netplan.yaml.j2` snapshot
+  (taken in `6b6819f`, before the role template became dynamic).
+  `autoinstall.sh` copies preset files over role files, so every install
+  replaced the dynamic template with a config for a single non-existent
+  `ib0` interface — `net_controllers` still detected the NICs and computed
+  `net_allocated_ips`, but the render discarded them, leaving the data
+  interfaces unaddressed and never brought up. The `ib0` rename path was
+  also dead: `ib_netplan_template` pointed at `/opt/provision` (never
+  installed to), so `configure_ib_udev.sh` returned at its `[ ! -f ]`
+  guard while still reporting "changed". The fix:
+  - drops the two preset `netplan.yaml.j2` snapshots so the role's dynamic
+    template survives (as already done for `nvme_namespace.yml`);
+  - resolves `ib_netplan_template` via `playbook_dir`, matching the
+    `common` role;
+  - makes `configure_ib_udev.sh` emit `noop:` / `changed:` / `unchanged:`
+    markers and keys `changed_when` off the marker, so a no-op is visible;
+  - stops `configure_manual()` from inventing `ib0:100.100.100.1/24` when
+    the operator configures nothing (it had already disabled the IP pool,
+    so cancelling out stranded every NIC).
+
+  With the snapshots gone, the three IB ports render as
+  `ibp65s0` / `ibp9s0f0` / `ibp9s0f1` on `10.10.{1,2,3}.1/24`, MTU 4092,
+  each with its own routing table. Covered by
+  `tests/test_net_controllers_template.py`.
+  ([#262](https://github.com/XinnorLab/xiNAS/pull/262))
+
 ## [3.6.0] - 2026-07-09
 
 > **Requires-Rebuild: motd, xinas_node_build** — updating from an
