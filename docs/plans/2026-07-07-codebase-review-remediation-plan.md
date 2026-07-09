@@ -144,6 +144,10 @@ written: `docs/superpowers/specs/2026-07-06-storage-reset-safety-design.md`,
 **Owning specs:** `docs/Installer/uninstall-spec.md`,
 `docs/config-history/specs.md`.
 
+> **Status 2026-07-09:** LANDED on `ws2-uninstall-store-safety` (T1–T5);
+> §4.3 step 5 resolved by spec amendment (re-consolidation deliberately not
+> performed). The table below is kept as review history.
+
 | Sev | Location | Defect |
 |-----|----------|--------|
 | high | `collection/roles/xinas_history/tasks/main.yml:11` | role deletes the entire config-history store (snapshots, baseline, state) on every run — any day-2 `site.yml` re-run destroys rollback history |
@@ -154,21 +158,21 @@ written: `docs/superpowers/specs/2026-07-06-storage-reset-safety-design.md`,
 | medium | `collection/roles/xinas_uninstall/tasks/70_remove_paths.yml:31` | removes `/etc/cron.d/xinas-banner`, but motd role installs the banner via root's crontab (cron module) — job survives uninstall |
 | low | `uninstall.sh:73` | any single `--remove-*` flag disables ALL interactive prompting, contrary to the in-file comment and spec |
 
-- [ ] **WS2.1** `xinas_history` role: make store creation idempotent — create
+- [x] **WS2.1** `xinas_history` role: make store creation idempotent — create
   dirs only if absent; never delete `/var/lib/xinas/config-history/` content.
   Add a regression test asserting the tasks contain no `state: absent` on the
   store path.
-- [ ] **WS2.2** `uninstall.sh`: guard every destructive step (including the
+- [x] **WS2.2** `uninstall.sh`: guard every destructive step (including the
   `rm -rf "$INSTALL_DIR"`) behind the dry-run check; make `--remove-*` flags
   answer only their own question, leaving other prompts interactive.
-- [ ] **WS2.3** `30_teardown_raid.yml`: filter parsed names against
+- [x] **WS2.3** `30_teardown_raid.yml`: filter parsed names against
   xiNAS-managed names per spec §4.3 (baseline snapshot first, fallback
   name-match `data`/`log`/`*_spare_pool`); exclude the system drive from the
   drive-clean loop (reuse `nvme_namespace`'s system-drive detection).
-- [ ] **WS2.4** motd/uninstall cron mismatch: pick one location (prefer
+- [x] **WS2.4** motd/uninstall cron mismatch: pick one location (prefer
   `/etc/cron.d/xinas-banner`, no user crontab) and make install+uninstall
   symmetric.
-- [ ] **WS2.5** §4.3.5 re-consolidation: implement, or amend the spec to state
+- [x] **WS2.5** §4.3.5 re-consolidation: implement, or amend the spec to state
   it is not performed and why (decision needed — implementing requires the
   baseline to record the pre-install namespace layout).
 
