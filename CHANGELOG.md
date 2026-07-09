@@ -6,6 +6,56 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.5.0] - 2026-07-09
+
+### Added
+
+- **Config-history tombstones: deleted config files are tracked and
+  restorable (ADR-0017, S13).** Snapshots now record `absent_files` — the
+  well-known system config files that did not exist at snapshot time —
+  explicitly at creation, never inferred after the fact. File-level
+  rollback recreates a deletion when the target snapshot tombstones a file
+  that exists now, restore computes a `delete_set` for tombstoned files,
+  and `restorable` was widened to cover them. The control-path API adopts
+  tombstone deletes (primary-kind config files only) and can apply and
+  revert a desired-delete; the TUI snapshot detail screen lists the
+  tombstoned paths. Covered by an end-to-end tombstone/adopt test and
+  runbook §5g.
+
+### Fixed
+
+- **Agent: a completed array destroy is no longer escalated to
+  `requires_manual_recovery`.** Any hiccup after a successful
+  `raid_destroy` (spare-pool `pool_show` error, transient `raid_show`,
+  async propagation delay) escalated a cleanly completed destroy to
+  `FAILED_MANUAL_RECOVERY_REQUIRED` and halted teardown. Post-destroy
+  steps are now best-effort or confirmation-only: spare-pool cleanup
+  failure warns instead of failing the stage, `verify` polls for the
+  array to clear with a bounded wait, and `requires_manual_recovery` is
+  reserved for a `raid_destroy` call that itself failed mid-way. See
+  `docs/control-path/s4-xiraid-array-mutations-spec.md` §7.
+- **Agent: observed state settles after a successful apply.** Teardown
+  chains (`fs.unmount` → `fs.unmanage`) raced the 60-second collector
+  poll: the next step's preflight read the stale pre-apply state and
+  returned a false `fs_mounted` blocker. The agent TaskRunner now re-runs
+  the collectors for the kinds an operation mutated and flushes them to
+  the API KV before the terminal event, so a chained plan reads
+  post-apply state. See `docs/control-path/s2-task-envelope-spec.md`
+  §7.1.
+- **TUI: "Remove Share" on the NFS screen did nothing.** A refactor left
+  `NFSScreen._remove_share` without its `@work` decorator, so the menu
+  handler created and dropped a coroutine. The decorator is restored and
+  a structural test guards all sync-handler worker calls.
+- **Log collectors: default transfer server updated to
+  `5.75.230.104:8080`** in `collect_data.sh` and the TUI Collect Logs
+  screen; the `TRANSFER_SERVER` override is unchanged.
+  ([#260](https://github.com/XinnorLab/xiNAS/pull/260))
+- **Uninstaller: `--remove-xiraid` also purges `xiraid-appimage` and
+  `xiraid-kmod`.** xiRAID 4.3 installs both as held dependencies of
+  `xiraid-core`, so purging the metapackage alone left `xicli` and the
+  prebuilt kernel module behind, violating the uninstall spec's §9
+  guarantee.
+
 ## [3.4.1] - 2026-07-08
 
 ### Fixed
