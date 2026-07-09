@@ -68,9 +68,9 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-# Any explicit --remove-* flag implies non-interactive answers for that
-# question; the other questions still get prompted unless --yes is set.
-if [[ "$FLAG_XIRAID_GIVEN" == "true" || "$FLAG_OFED_GIVEN" == "true" || "$FLAG_PERF_GIVEN" == "true" || "$SKIP_GATE" == "true" ]]; then
+# --yes answers every question; an explicit --remove-* flag answers ONLY its
+# own question. Everything else stays interactive.
+if [[ "$SKIP_GATE" == "true" ]]; then
     INTERACTIVE="false"
 fi
 
@@ -234,7 +234,11 @@ fi
 # ansible cannot delete the playbook/role tree it is executing from without
 # throwing "FileNotFoundError: ${INSTALL_DIR}/playbooks" and failing the run.
 # We are already cd'd to /tmp (above), so this is safe.
-rm -rf "$INSTALL_DIR"
+if [[ "$DRY_RUN" == "true" ]]; then
+    info "dry-run: would remove ${INSTALL_DIR} (skipped)"
+else
+    rm -rf "$INSTALL_DIR"
+fi
 
 # ── Render the final summary ──────────────────────────────────────────────────
 echo ""
@@ -242,6 +246,11 @@ echo -e "  ${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━
 echo -e "  ${GREEN}${BOLD}  xiNAS uninstall complete${NC}"
 echo -e "  ${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
+
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo -e "  ${YELLOW}${BOLD}  (dry-run — no changes applied)${NC}"
+    echo ""
+fi
 
 if [[ ! -f "$SUMMARY_PATH" ]]; then
     warn "No summary at ${SUMMARY_PATH} — the playbook may have exited early."
