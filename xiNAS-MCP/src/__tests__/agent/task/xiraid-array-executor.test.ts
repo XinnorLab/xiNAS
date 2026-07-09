@@ -613,10 +613,48 @@ describe('xiraid.array.delete executor', () => {
     expect(fake.arrays).toHaveLength(1); // untouched
   });
 
-  it('array vanished before begin → rollback throws → requires_manual_recovery', async () => {
-    const fake = makeFake(); // no array seeded
+  it('array vanished before begin → preflight fails → clean failed (destroy never attempted)', async () => {
+    const fake = makeFake(); // no array seeded — stale observed state / repeat delete
     const events = await runDelete(fake, []);
     expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(shape(events)).toContainEqual(['rollback_succeeded', 'rollback']);
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
+    expect(fake.destroyCalls).toEqual([]); // nothing destructive was attempted
+  });
+
+  it('daemon unreachable at preflight → clean failed, never manual recovery', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
+    fake.setDown(true); // raid_show throws everywhere, incl. inside rollback
+    const events = await runDelete(fake, []);
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(shape(events)).toContainEqual(['rollback_succeeded', 'rollback']);
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
+    expect(fake.destroyCalls).toEqual([]);
+    expect(fake.arrays).toHaveLength(1); // untouched
+  });
+
+  it('destroy fails mid-way with the array gone → rollback throws → requires_manual_recovery', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
+    const transport: XiraidTransport = {
+      ...fake.transport,
+      // partial destroy: the daemon removed the array but the call errored out.
+      async raidDestroy(req) {
+        fake.destroyCalls.push(req.name ?? '');
+        const i = fake.arrays.findIndex((a) => a.name === req.name);
+        if (i >= 0) fake.arrays.splice(i, 1);
+        throw new Error('connection reset mid-destroy');
+      },
+    };
+    const events = await runDelete(fake, [], { id: 'data' }, transport);
+    expect(shape(events)).toContainEqual(['stage_failed', 'destroy']);
     expect(shape(events)).toContainEqual(['rollback_failed', 'rollback']);
     expect(terminal(events)).toMatchObject({
       status: 'requires_manual_recovery',

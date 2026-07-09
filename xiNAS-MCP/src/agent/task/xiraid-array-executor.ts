@@ -653,6 +653,9 @@ export function makeXiraidArrayDeleteExecutor(opts: XiraidArrayDeleteExecutorOpt
       checkCancelled(ctx, 'destroy');
       const { id } = narrowDeleteSpec(ctx);
       ctx.emitOutput(`raid_destroy ${id} (force)`);
+      // Marked BEFORE the call: rollback may only escalate to
+      // requires_manual_recovery once destruction was actually attempted (§7).
+      ctx.stash.destroy_attempted = true;
       await client.raidDestroy({ name: id, force: true });
 
       // raid_destroy has returned: the array is destroyed (irreversible, the
@@ -717,12 +720,15 @@ export function makeXiraidArrayDeleteExecutor(opts: XiraidArrayDeleteExecutorOpt
     stages: [preflight, destroy, verify],
 
     /**
-     * Live-state decided (S4 spec §7, post-review semantics): the array
-     * still exists → nothing destructive happened (preflight/early-destroy
-     * failure) → no-op, terminal `failed` (clean, retryable). The array is
-     * gone or its state is unknowable → THROW → rollback_failed →
-     * requires_manual_recovery — "no rollback for a destructive op" applies
-     * to attempted destruction, not to a preflight that touched nothing.
+     * Gated on attempted destruction, then live-state decided (S4 spec §7):
+     * no `destroy_attempted` stash marker → the failure was pre-destroy
+     * (preflight guard, vanished array, unreachable daemon) → no-op without
+     * querying the daemon, terminal `failed` (clean, retryable). Marker set
+     * and the array still exists → the destroy did not take → no-op, clean
+     * `failed`. Marker set and the array is gone or its state is unknowable
+     * → THROW → rollback_failed → requires_manual_recovery — "no rollback
+     * for a destructive op" applies to attempted destruction, not to a
+     * preflight that touched nothing.
      */
     async rollback(ctx: ExecutorContext): Promise<void> {
       let id: string;
@@ -730,6 +736,10 @@ export function makeXiraidArrayDeleteExecutor(opts: XiraidArrayDeleteExecutorOpt
         id = narrowDeleteSpec(ctx).id;
       } catch {
         ctx.emitOutput('rollback: spec unparsable — nothing was destroyed');
+        return;
+      }
+      if (ctx.stash.destroy_attempted !== true) {
+        ctx.emitOutput(`rollback: destroy of '${id}' was never attempted — nothing to undo`);
         return;
       }
       const exists = readShow(await client.raidShow()).some((a) => a.name === id);
