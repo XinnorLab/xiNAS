@@ -8,7 +8,6 @@ from xinas_history.engine import SnapshotEngine
 from xinas_history.models import Checksums, Manifest
 from xinas_history.store import FilesystemStore
 
-
 # ---------------------------------------------------------------------------
 # Unit tests: Manifest roundtrip
 # ---------------------------------------------------------------------------
@@ -28,9 +27,12 @@ def test_absent_files_roundtrip():
 
 
 def test_absent_files_omitted_when_empty():
-    assert "absent_files" not in Manifest(
-        id="s1", timestamp="2026-01-01T00:00:00Z", user="root", source="api"
-    ).to_dict()
+    assert (
+        "absent_files"
+        not in Manifest(
+            id="s1", timestamp="2026-01-01T00:00:00Z", user="root", source="api"
+        ).to_dict()
+    )
     assert Manifest.from_dict({"id": "s1", "timestamp": "t"}).absent_files == []
 
 
