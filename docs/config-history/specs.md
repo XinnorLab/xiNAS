@@ -20,6 +20,7 @@
 10. [Confirmation Requirements by Risk Class](#10-confirmation-requirements-by-risk-class)
 11. [CLI Interface](#11-cli-interface)
 12. [MCP Tools Interface](#12-mcp-tools-interface)
+13. [Post-Apply and Post-Restore Validation](#13-post-apply-and-post-restore-validation)
 
 ---
 
@@ -135,10 +136,67 @@ diff_summary: string|null
 ### Field Constraints
 
 - `id` is globally unique and monotonically increasing by timestamp prefix.
+- `id` MUST match the allowlist `^[A-Za-z0-9._-]+$` and MUST NOT contain a `..`
+  path segment or be an absolute path (see "Snapshot ID and Store-Path Safety"
+  below).
 - `parent_id` forms a singly-linked chain. The baseline snapshot has `parent_id: null`.
 - `checksums` values always use the prefix `sha256:` followed by 64 lowercase hex characters.
 - `validation.blockers` is non-empty only when `validation.passed` is `false`.
 - `diff_summary` is `null` for baseline snapshots.
+- `timestamp` MUST be generated from a timezone-aware UTC clock (not a naive
+  clock treated as UTC); the serialized form is unchanged: ISO 8601 with a
+  `Z` suffix.
+
+### Snapshot Status Lifecycle
+
+`status` tracks where a snapshot is in its lifecycle, independently of
+`type` (`baseline` / `rollback_eligible` / `ephemeral`, which governs
+retention — see Section 7):
+
+| Status | Meaning |
+|---|---|
+| `pending` | A pre-change snapshot has been created but the operation it precedes has not yet reached a terminal outcome. |
+| `applied` | The operation the snapshot represents completed and passed post-apply validation. |
+| `rolled_back` | The snapshot was the rollback target of a completed rollback/restore, or is a pre-change snapshot consumed by an auto-rollback. |
+| `failed` | The operation failed, or a pre-change snapshot's forward operation failed and the snapshot is retained for forensic review. |
+| `partial` | The operation partially completed and neither a clean `applied` nor a clean `rolled_back` state could be reached. |
+
+Every transactional operation (`requirements.md` §17) creates an **ephemeral
+pre-change snapshot** before executing. That snapshot MUST NOT remain
+indefinitely without a terminal status: the transactional runner MUST move
+it to a terminal status (`applied`, `rolled_back`, or `failed`, as
+appropriate to the outcome) once the operation it precedes concludes, so
+that garbage collection and the startup stale-ephemeral cleanup (§7.3) can
+reclaim it. An ephemeral snapshot that never reaches a terminal status is a
+lifecycle bug: it is structurally excluded from the count/age-based purge
+in §7.2 (which only considers `rollback_eligible`-type snapshots), and the
+ephemeral-specific cleanup path in §7.3 cannot reclaim it either. See
+`requirements.md` §3 and §18 for the requirement-level statement of this
+contract.
+
+### Snapshot ID and Store-Path Safety
+
+Snapshot ids are generated in the `YYYYMMDDTHHMMSSffffffZ-<operation>` form
+(microsecond-resolution timestamp + operation slug), so they remain unique
+even when two snapshots are created within the same wall-clock second — for
+example, a pre-change snapshot immediately followed by the applied
+snapshot for the same operation.
+
+Regardless of how an id is produced, any code path that turns a snapshot id
+into a filesystem path (store reads, writes, or deletes) MUST validate the
+id against the allowlist `^[A-Za-z0-9._-]+$` and MUST reject an id
+containing a `..` path segment or an absolute path, before joining it onto
+the store root. This is defense-in-depth: ids are normally derived from the
+internal id generator and never taken directly from untrusted input, but
+the store MUST NOT rely on that as its only safeguard.
+
+`list_snapshots` (and any other enumeration consumed by the CLI, TUI, or
+MCP layer) MUST NOT return an uncommitted snapshot. A crash between writing
+a snapshot's files into a temporary staging directory and the atomic rename
+into its final `snapshots/<id>/` location MUST NOT surface that staging
+directory as a real snapshot — the listing MUST skip `.tmp-*` staging
+directories (and/or require an explicit committed marker), so a
+partially-written directory is never mistaken for a completed one.
 
 ---
 
@@ -266,6 +324,32 @@ destroying_data > changing_access > non_disruptive
 
 For example, an operation that both reformats a filesystem (`destroying_data`) and changes an NFS export (`changing_access`) is classified as `destroying_data`.
 
+### 4.7 Unknown-Operation Fail-Safe
+
+An operation whose type does not match any entry in the classification
+tables above — including an operation string that does not parse to a known
+operation type at all — MUST be classified at the **most** destructive
+tier, `destroying_data`, never `non_disruptive`. This is the opposite of
+what "default to the safest option" naively suggests: an operation the
+classifier cannot recognize is the case where the system knows the *least*
+about what it will do, so it MUST receive the two-screen `destroying_data`
+confirmation gate (§10.1), not the auto-proceed / simple-`[OK]` path
+reserved for `non_disruptive` changes (§10.3).
+
+This fail-safe direction applies at every site that falls through to a
+default classification when an operation type is unrecognized, including
+(but not limited to):
+
+- the classifier's terminal fallthrough when an operation is absent from
+  the static lookup table;
+- any caller-side fallback (e.g. a runner catching an operation string that
+  fails to parse to a known operation type) that substitutes a default
+  classification instead of propagating the classifier's result.
+
+Both sites MUST default to `destroying_data` — consistent with the
+existing (correct) unrecognized-detail-key defaults already used for
+`RAID_MODIFY` and `FS_MODIFY` refinement (§4.1, §4.2).
+
 ---
 
 ## 5. Dependency Order for Destructive Rollback
@@ -376,6 +460,26 @@ When the config-history subsystem initializes, it performs the following recover
 7. Clear `lock.meta` and `journal.yml`.
 8. Log the recovery event to `audit.log`.
 
+### 6.5 Stale Lock Recovery Contract
+
+Stale-lock recovery (§6.4) MUST NOT create a window where a second process
+can acquire the lock and have its just-written `lock.meta`/`journal.yml`
+deleted out from under it:
+
+- Clearing `lock.meta` and `journal.yml` (§6.4 step 7) MUST happen while
+  still holding the `flock` acquired to detect the stale lock in the first
+  place — the recovery routine MUST NOT release the `flock` (or skip taking
+  it) before removing those files. Only after the metadata is cleared, and
+  the `flock` released, may another process's `acquire()` observe a clean
+  slate.
+- The liveness check in step 3 (`os.kill(pid, 0)`) MUST distinguish "the
+  process no longer exists" (`ESRCH` / `ProcessLookupError`) from "the
+  process exists but is owned by another user" (`EPERM` /
+  `PermissionError`). Only the former means the lock is stale. `EPERM` MUST
+  be treated as "the process is alive" — the lock is NOT stale — even
+  though both currently surface as generic `OSError` subclasses; they MUST
+  be handled as distinct outcomes, not folded into a single "gone" branch.
+
 ---
 
 ## 7. Garbage Collection Rules
@@ -391,9 +495,9 @@ Retention is configurable via `/etc/xinas-mcp/config.json` (key: `retention`):
 
 | Snapshot Type | Retention Rule |
 |---|---|
-| `baseline` | Always retained (immutable) |
+| `baseline` | Always retained (immutable); GC never considers it for purge |
 | `rollback_eligible` | Oldest purged when count > `max_snapshots` OR age > `max_age_days` |
-| `ephemeral` | 1 per active transaction, cleaned up after completion |
+| `ephemeral` | Not retained under a fixed count. Reclaimed via the transactional lifecycle (§1 "Snapshot Status Lifecycle"): once the operation it precedes reaches a terminal status, it becomes eligible for cleanup by GC / the startup stale-ephemeral cleanup (§7.3). An ephemeral snapshot that never reaches a terminal status MUST NOT be retained forever — that is a lifecycle bug, not an intended retention outcome. |
 | Currently effective | Always retained regardless of policy |
 
 Settings can be changed via TUI (Config History → Retention Settings) or MCP (`config.set_retention`).
@@ -417,6 +521,32 @@ After every successful snapshot creation:
    - If the operation never started applying: delete the ephemeral snapshot.
    - If the operation had begun executing: convert to `status: failed` and keep for forensics.
 4. Mark as visible in the UI as "interrupted by daemon crash".
+
+### 7.4 GC Concurrency and Mutual Exclusion
+
+Garbage collection MUST be mutually exclusive with any in-flight
+transactional operation (apply, rollback, or restore):
+
+- Before deleting any snapshot, GC MUST acquire the global configuration
+  lock (§6.1) — or otherwise guarantee, by construction, that no apply or
+  restore is concurrently in flight. **GC MUST NOT delete a snapshot while
+  holding no lock if a transactional operation could concurrently be
+  reading or writing store state.**
+- GC MUST NOT delete a snapshot that is the source of an in-flight
+  `snapshot restore` (§11.6) — a snapshot another in-progress operation is
+  actively reading files out of — even if that snapshot would otherwise be
+  eligible for purge by count or age. This protection is in addition to,
+  and does not replace, the existing baseline / currently-effective
+  protections in §7.1.
+- The snapshot-directory removal itself (deleting a snapshot's files from
+  disk) MUST never execute against a snapshot that another operation
+  (restore, diff, or show) is actively reading.
+
+The specific mechanism — holding the global configuration lock for the
+duration of the GC pass, passing an in-flight restore's source snapshot id
+into GC's protected-id set, or an equivalent guarantee — is an
+implementation detail. The contract is: **no lock-free deletion, and an
+active restore's source snapshot is always protected.**
 
 ---
 
@@ -502,6 +632,25 @@ All drift events are logged with:
 - Detection timestamp
 - Operator action taken (confirmed, rejected, deferred)
 
+### 9.4 Systemd Mount-Unit Drift Decision
+
+For xiNAS-managed systemd mount units (the "systemd mount units" row in
+§9.1), "Unit file checksum + enabled state" is the decision path — not
+merely the live `ActiveState`/`SubState` reported by `systemctl show`:
+
+- Drift detection MUST compare the checksum of the unit file on disk
+  (`/etc/systemd/system/<unit>.mount`) against the checksum captured in the
+  reference snapshot.
+- Drift detection MUST additionally query and compare the unit's
+  enabled/disabled state (`systemctl is-enabled`) against the state
+  recorded in the snapshot.
+- A changed unit file that has not been re-activated (i.e. live
+  `ActiveState`/`SubState` still match the snapshot) MUST still register as
+  drift — a content or enabled-state change is drift on its own; it is NOT
+  masked by a liveness check that happens to still match.
+- Live `ActiveState`/`SubState` MAY be reported as supplementary detail (as
+  today) but MUST NOT be the sole basis for the drift decision.
+
 ---
 
 ## 10. Confirmation Requirements by Risk Class
@@ -562,52 +711,140 @@ Confirmation depends on the source:
 
 ## 11. CLI Interface
 
-The CLI is invoked as a Python module and supports the following subcommands:
+The CLI is invoked as a Python module (`python3 -m xinas_history`) and
+supports the subcommands below. Every subcommand accepts three global
+options (placed before the subcommand name):
+
+```
+--store-path <path>         Override the store root (default: /var/lib/xinas/config-history)
+--repo-root <path>          xiNAS repo root (default: /opt/xiNAS)
+--grpc-address <host:port>  xiRAID gRPC address (default: localhost:6066)
+```
+
+### 11.1 `snapshot list`
 
 ```
 python3 -m xinas_history snapshot list [--format json|table]
 ```
-List all snapshots with ID, timestamp, operation, status, and rollback class.
+
+List all snapshots with ID, timestamp, operation, status, and rollback
+class. `--format json` additionally tags each entry with `restorable`
+(whether the snapshot has a non-empty `system/` payload or tombstoned
+files, i.e. is a valid target for `snapshot restore`).
+
+### 11.2 `snapshot show`
 
 ```
 python3 -m xinas_history snapshot show <id> [--format json|yaml]
 ```
-Display the full manifest and collected file listing for a single snapshot.
+
+Display the full manifest for a single snapshot.
+
+### 11.3 `snapshot create`
 
 ```
-python3 -m xinas_history snapshot create --source <source> --operation <op> [--preset <name>]
+python3 -m xinas_history snapshot create --source <source> --operation <op>
+    [--preset <name>] [--type baseline|rollback_eligible|ephemeral]
+    [--summary <text>] [--format json|text]
 ```
-Create a new snapshot of the current system state.
+
+Create a new snapshot of the current system state. `--type` selects the
+snapshot type (default `rollback_eligible`); `--type baseline` creates the
+baseline instead. `--summary` sets the diff summary recorded on the
+manifest. `--format json` prints `{"id": "<snapshot-id>"}` for machine
+consumers (the agent bridge).
+
+### 11.4 `snapshot diff`
 
 ```
 python3 -m xinas_history snapshot diff <id1> <id2> [--format json|unified]
 ```
-Show differences between two snapshots. Unified format produces a human-readable diff; JSON format produces a structured diff suitable for programmatic consumption.
+
+Show differences between two snapshots. `unified` produces a
+human-readable diff; `json` produces a structured diff suitable for
+programmatic consumption.
+
+### 11.5 `snapshot reset-to-baseline`
 
 ```
-python3 -m xinas_history snapshot rollback <target_id> [--yes] [--reason <text>]
+python3 -m xinas_history snapshot reset-to-baseline --reason <text>
+    [--yes] [--source <source>] [--format json|text]
 ```
-Roll back the system to the state captured in the target snapshot. The `--yes` flag skips interactive confirmation (for scripted use). The `--reason` flag records the rollback motivation in the audit log.
+
+Reset system configuration to the initial baseline. Without `--yes`, prints
+a plan (baseline id, timestamp, preset, risk class, and — if a current
+effective snapshot exists — a diff against it) and exits without changing
+anything. With `--yes`, executes the reset through the transactional
+runner's 8-step sequence (`requirements.md` §17), including auto-rollback
+on validation failure. `--reason` records the audit motivation; `--source`
+defaults to `api`.
+
+### 11.6 `snapshot restore`
+
+```
+python3 -m xinas_history snapshot restore <snapshot_id> --reason <text>
+    [--yes] [--source <source>] [--format json|text]
+```
+
+Targeted file-level restore of an arbitrary snapshot's captured NFS/network
+configuration (S11, ADR-0013) — an **observed recovery**, not a change to
+desired state: it writes the target snapshot's captured file bytes back to
+their live system paths and reconverges the affected NFS/network services,
+without re-running Ansible. This is the real verb that a hypothetical
+`snapshot rollback` command would have described; there is no separate
+`rollback` subcommand. Without `--yes`, prints a plan and exits. With
+`--yes`, executes through the lock / pre-snapshot / reconverge / validate
+sequence, with an automatic file-level rollback to the pre-restore state if
+reconvergence or post-restore validation fails (§13.2). `--reason` is
+required and recorded in the audit trail; `--source` defaults to `api`.
+
+### 11.7 `gc run`
 
 ```
 python3 -m xinas_history gc run
 ```
-Manually trigger garbage collection of expired snapshots.
+
+Manually trigger garbage collection under the currently configured
+retention policy (§7). Prints the ids of any purged snapshots.
+
+### 11.8 `gc policy`
 
 ```
-python3 -m xinas_history drift check [--format json|table]
+python3 -m xinas_history gc policy [--format json|text]
+    [--set [--max-snapshots <n>] [--max-age-days <n>]]
 ```
-Compare the live system against the last applied snapshot and report any drifted artifacts.
+
+Without `--set`, shows the effective retention policy. With `--set`,
+updates `/etc/xinas-mcp/config.json` (`retention.max_snapshots` and/or
+`retention.max_age_days`) and then shows the resulting policy.
+`--max-snapshots` is clamped to a minimum of 1; `--max-age-days` is
+clamped to a minimum of 0 (`0` = disabled).
+
+### 11.9 `status`
 
 ```
-python3 -m xinas_history lock status
+python3 -m xinas_history status [--format json|table]
 ```
-Show the current lock state, including holder PID, operation, and duration.
 
-```
-python3 -m xinas_history lock clear --force
-```
-Emergency lock release. Requires `--force` to confirm. Logs the forced release to the audit log.
+Show a history summary: whether a baseline exists (and its id/timestamp),
+total snapshot count, rollback-eligible count, and the current effective
+snapshot (id, operation, applied timestamp).
+
+### 11.10 Removed from this spec (never implemented)
+
+The following subcommands appeared in an earlier draft of this spec but
+were never built, and are not part of the CLI contract:
+
+- `snapshot rollback <target_id>` — superseded by `snapshot restore`
+  (§11.6), which is the real, implemented verb for recovering a prior
+  state.
+- `drift check` — drift detection (§9) is a library class
+  (`DriftDetector`) consumed by the TUI and MCP layers; it is not exposed
+  as a standalone CLI subcommand.
+- `lock status` — covered by `status` (§11.9).
+- `lock clear --force` — not implemented; stale-lock recovery (§6.4, §6.5)
+  runs automatically on startup instead of through an operator-invoked CLI
+  command.
 
 ---
 
@@ -639,3 +876,43 @@ The following MCP tools are exposed for programmatic access by AI agents and ext
 
 - **Input:** none
 - **Returns:** Drift report -- either clean status or a list of drifted artifacts with checksums and safety impact
+
+---
+
+## 13. Post-Apply and Post-Restore Validation
+
+### 13.1 Post-Apply Validation Contract
+
+Post-apply validation is the gate between "the apply function returned
+success" and "the snapshot is marked `applied`" (`requirements.md` §17.1:
+*"A snapshot is marked `applied` only after all post-playbook validations
+pass"*). To make that gate meaningful:
+
+- The post-apply validator MUST receive the **expected post-change state**
+  for the operation that just ran -- the RAID arrays, mounts, exports, and
+  services the operation was supposed to produce or change -- not the
+  pre-change manifest, and not an empty/default expected state.
+- The validator MUST check the resources the operation actually changed. A
+  blanket "is `nfs-server`/`xiraid` active" liveness check is not a
+  substitute for checking that, e.g., a `raid_modify` actually produced the
+  expected array level, or that a `share_create` actually produced the
+  expected export path. The liveness check MAY remain as one of several
+  checks, but MUST NOT be the only check capable of running for every
+  operation type.
+- A failed post-apply validation MUST trigger auto-rollback to the
+  pre-change snapshot (already the case -- this spec does not change that
+  mechanism, only what feeds the validation decision).
+
+### 13.2 Post-Restore Validation Contract
+
+The S11/ADR-0013 targeted restore path (`snapshot restore`, §11.6) MUST
+also validate before declaring success, on the same principle as §13.1:
+post-restore validation MUST check that the reconverge step actually
+produced the expected state for the restored files (e.g. `exportfs`/NFS
+service state matches the restored exports; netplan state matches the
+restored network config), not assume success once the reconverge commands
+return a zero exit code. An always-`True` post-restore validation stub is
+a gap, not a valid implementation of this contract: a reconverge command
+can exit `0` while leaving the system in a state that does not match what
+was restored, and that case MUST be caught before the restore is reported
+as successful.
