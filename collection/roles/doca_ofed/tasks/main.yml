@@ -123,3 +123,24 @@
     reboot_timeout: 1200
   when: ofed_pkgs is changed and doca_ofed_auto_reboot | bool
   tags: [ofed, reboot]
+
+# Run the queued `Restart openibd` now instead of at end-of-play.
+#
+# On a card in InfiniBand mode, mlx5_core creates no netdev — the ibN
+# interfaces come from ib_ipoib, which is only loaded when openibd starts.
+# net_controllers runs immediately after this role and detects interfaces by
+# scanning /sys/class/net. With the restart still queued as a handler, that
+# scan finds nothing on a host where DOCA-OFED was not already installed, so
+# net_controllers writes the "no high-speed interfaces detected" placeholder
+# netplan and the IB ports come up with no addresses. The install still exits
+# 0, which is why this only ever reproduced on a genuinely cold node
+# (any reinstall over an existing OFED already has ib_ipoib loaded).
+#
+# Safe to flush globally here: the only other handlers pending at this point
+# are common's `Reload sysctl` / `Restart unattended-upgrades`, both
+# independent and idempotent. This is deliberately NOT done in xinas_mcp,
+# where an early flush would restart one daemon before the other's unit
+# exists (see that role's handlers/main.yml).
+- name: Flush handlers so openibd restarts before net_controllers scans for NICs
+  ansible.builtin.meta: flush_handlers
+  tags: [ofed, network]
