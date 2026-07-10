@@ -216,14 +216,36 @@ export interface VerifySettleOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** Live CIDRs on `dev`, from `ip -j addr show`. */
-async function liveAddresses(host: NetHost, dev: string): Promise<string[]> {
+/**
+ * Does `ip -j addr` report this interface as carrying link? A NO-CARRIER
+ * (down) IPoIB port can't bind its address until it trains, so verify must
+ * not treat that as a failure. Prefer the kernel flags (`LOWER_UP` ⇔ carrier,
+ * `NO-CARRIER` its negation); fall back to `operstate` for older `ip`. When
+ * neither is reported, assume carrier so the strict path is preserved.
+ */
+function ifaceHasCarrier(entry: { operstate?: string; flags?: string[] }): boolean {
+  const flags = entry.flags ?? [];
+  if (flags.includes('NO-CARRIER')) return false;
+  if (flags.includes('LOWER_UP')) return true;
+  return entry.operstate !== 'DOWN' && entry.operstate !== 'LOWERLAYERDOWN';
+}
+
+/** Live CIDRs and carrier state on `dev`, from `ip -j addr show`. */
+async function liveState(
+  host: NetHost,
+  dev: string,
+): Promise<{ live: string[]; hasCarrier: boolean }> {
   const parsed = JSON.parse(await host.ipAddrShow()) as Array<{
     ifname?: string;
+    operstate?: string;
+    flags?: string[];
     addr_info?: Array<{ local?: string; prefixlen?: number }>;
   }>;
   const entry = parsed.find((e) => e.ifname === dev);
-  return (entry?.addr_info ?? []).map((a) => `${a.local}/${a.prefixlen}`);
+  return {
+    live: (entry?.addr_info ?? []).map((a) => `${a.local}/${a.prefixlen}`),
+    hasCarrier: entry !== undefined && ifaceHasCarrier(entry),
+  };
 }
 
 /**
@@ -235,6 +257,13 @@ async function liveAddresses(host: NetHost, dev: string): Promise<string[]> {
  * absent and networkd re-added it ~0.4 s later. A single immediate read
  * therefore observed the post-flush empty state and failed every legitimate
  * change, rolling it back — the apply path could never succeed.
+ *
+ * Returns `'deferred'` when the interface has no carrier and its address
+ * hasn't bound yet — the netplan is correct, the bind is merely pending the
+ * link, so one dead port does not fail (and roll back) the whole apply. That
+ * verdict is reached without waiting out the settle budget: polling cannot
+ * make a dead port train, and a pool of them would otherwise stall the apply
+ * for settleMs per interface.
  */
 async function verifyDev(
   host: NetHost,
@@ -243,8 +272,8 @@ async function verifyDev(
   tableId: number,
   enabled: boolean,
   opts: VerifySettleOptions = {},
-): Promise<void> {
-  if (!enabled) return; // disabled iface: flushed is the desired end state
+): Promise<'ok' | 'deferred'> {
+  if (!enabled) return 'ok'; // disabled iface: flushed is the desired end state
   const settleMs = opts.settleMs ?? VERIFY_SETTLE_MS;
   const pollMs = opts.pollMs ?? VERIFY_POLL_MS;
   const sleep =
@@ -257,14 +286,23 @@ async function verifyDev(
   let ruleMissing = false;
 
   for (;;) {
-    live = await liveAddresses(host, dev);
+    const state = await liveState(host, dev);
+    live = state.live;
     missing = addresses.find((cidr) => !live.includes(cidr));
     ruleMissing = false;
     if (missing === undefined) {
-      if (addresses.length === 0) return;
+      if (addresses.length === 0) return 'ok';
+      // No carrier: the source rule can't install without a bound address on a
+      // live port, so the rule check can't speak to correctness here.
+      if (!state.hasCarrier) return 'ok';
       const rules = await host.ipRuleShow();
-      if (rules.includes(`lookup ${tableId}`)) return;
+      if (rules.includes(`lookup ${tableId}`)) return 'ok';
       ruleMissing = true;
+    } else if (!state.hasCarrier) {
+      // Link down: the address (and its source PBR rule) can't program until
+      // the port carries. Defer instead of failing; it binds when carrier
+      // returns. No point polling — the settle budget can't train a dead link.
+      return 'deferred';
     }
     if (Date.now() >= deadline) break;
     await sleep(pollMs);
@@ -278,6 +316,7 @@ async function verifyDev(
   if (ruleMissing) {
     throw new Error(`verify: no PBR rule for table ${tableId} after apply (waited ${settleMs}ms)`);
   }
+  return 'ok';
 }
 
 export function makeNetIfaceUpdateExecutor(
@@ -324,7 +363,7 @@ export function makeNetIfaceUpdateExecutor(
     name: 'verify',
     async run(ctx: ExecutorContext): Promise<void> {
       const spec = narrowUpdateSpec(ctx);
-      await verifyDev(
+      const outcome = await verifyDev(
         host,
         spec.surgical.dev,
         spec.desired?.addresses ?? [],
@@ -332,7 +371,13 @@ export function makeNetIfaceUpdateExecutor(
         spec.desired?.enabled !== false,
         settle,
       );
-      ctx.emitOutput(`verified: ${spec.surgical.dev} matches the desired state`);
+      if (outcome === 'deferred') {
+        ctx.emitOutput(
+          `deferred: ${spec.surgical.dev} has no carrier — address binds when the link trains`,
+        );
+      } else {
+        ctx.emitOutput(`verified: ${spec.surgical.dev} matches the desired state`);
+      }
     },
   };
 
@@ -414,10 +459,20 @@ export function makeNetPoolApplyExecutor(opts: { host: NetHost } & VerifySettleO
         name: 'verify',
         async run(ctx: ExecutorContext): Promise<void> {
           const spec = narrowPoolSpec(ctx);
+          const deferred: string[] = [];
           for (const t of spec.targets) {
-            await verifyDev(host, t.dev, t.addresses, t.pbr_table_id, true, settle);
+            const outcome = await verifyDev(host, t.dev, t.addresses, t.pbr_table_id, true, settle);
+            if (outcome === 'deferred') deferred.push(t.dev);
           }
-          ctx.emitOutput(`verified: ${spec.targets.length} interface(s) match the pool`);
+          if (deferred.length > 0) {
+            ctx.emitOutput(
+              `deferred (no carrier, binds when the link trains): ${deferred.join(', ')}`,
+            );
+          }
+          ctx.emitOutput(
+            `verified: ${spec.targets.length} interface(s) match the pool` +
+              (deferred.length > 0 ? ` (${deferred.length} deferred)` : ''),
+          );
         },
       },
     ],

@@ -218,6 +218,40 @@ describe('net.iface.update executor', () => {
     await executor.rollback(ctx).catch(() => {});
     expect(host.files()[XINAS_NETPLAN]).toBe(PRIOR_XINAS);
   });
+
+  it('carrier-down target is DEFERRED, not failed (config committed, no rollback)', async () => {
+    // The target's IB link is down (NO-CARRIER) — netplan is correct but the
+    // kernel can't bind the address until the port trains. Defer, don't fail.
+    writeFileSync(
+      join(dir, 'net-host-state.json'),
+      JSON.stringify({
+        netplan_files: {
+          [XINAS_NETPLAN]: PRIOR_XINAS,
+          '/etc/netplan/50-cloud-init.yaml': CLOUD_INIT,
+        },
+        kernel: { addrs: {}, rules: [], tables: {} },
+        sys_class_net: [
+          { name: 'ibp65s0', driver: 'mlx5_core', no_carrier: true },
+          { name: 'ibp9s0f0', driver: 'mlx5_core' },
+          { name: 'eno1', driver: 'igb' },
+        ],
+        rdma_links: [],
+        ops: [],
+      }),
+    );
+    host = createFakeNetHost(dir);
+    await host.netplanApply();
+    const hash = netplanHashes(await host.readNetplanDir()).world_config_hash;
+
+    const executor = makeNetIfaceUpdateExecutor({ host });
+    const ctx = makeCtx(spec({ world_config_hash: hash }));
+    await runAll(executor, ctx);
+
+    // config committed (not rolled back), address deferred (never bound)
+    expect(host.files()[XINAS_NETPLAN]).toBe(NEW_RENDER);
+    expect(host.kernel().addrs.ibp65s0 ?? []).toEqual([]);
+    expect(ctx.lines.some((l) => l.includes('deferred') && l.includes('ibp65s0'))).toBe(true);
+  });
 });
 
 describe('net.pool.apply executor', () => {
@@ -272,5 +306,75 @@ describe('net.pool.apply executor', () => {
     expect(ops).toContain('ip-route-flush-table:101');
     expect(host.kernel().addrs.ibp65s0).toEqual(['10.20.1.1/24']);
     expect(host.kernel().addrs.ibp9s0f0).toEqual(['10.20.2.1/24']);
+  });
+
+  it('one carrier-down port is DEFERRED — healthy interfaces still apply, no whole-pool rollback', async () => {
+    // The "dead cable in the pool" case: ibp9s0f1's port is link-down. Before
+    // carrier-aware verify, its missing address threw and rolled the WHOLE
+    // pool back, reverting the healthy interface too.
+    writeFileSync(
+      join(dir, 'net-host-state.json'),
+      JSON.stringify({
+        netplan_files: { [XINAS_NETPLAN]: PRIOR_XINAS },
+        kernel: { addrs: {}, rules: [], tables: {} },
+        sys_class_net: [
+          { name: 'ibp65s0', driver: 'mlx5_core' },
+          { name: 'ibp9s0f1', driver: 'mlx5_core', no_carrier: true },
+          { name: 'eno1', driver: 'igb' },
+        ],
+        rdma_links: [],
+        ops: [],
+      }),
+    );
+    host = createFakeNetHost(dir);
+    await host.netplanApply();
+
+    const render = renderNetplan([
+      { name: 'ibp65s0', addresses: ['10.20.1.1/24'], enabled: true, pbr_table_id: 100 },
+      { name: 'ibp9s0f1', addresses: ['10.20.9.1/24'], enabled: true, pbr_table_id: 109 },
+    ]);
+    const executor = makeNetPoolApplyExecutor({ host });
+    const ctx = makeCtx({
+      render,
+      world_config_hash: netplanHashes(await host.readNetplanDir()).world_config_hash,
+      cleanup_files: {},
+      targets: [
+        { dev: 'ibp65s0', addresses: ['10.20.1.1/24'], pbr_table_id: 100 },
+        { dev: 'ibp9s0f1', addresses: ['10.20.9.1/24'], pbr_table_id: 109 },
+      ],
+    });
+    for (const stage of executor.stages) await stage.run(ctx);
+
+    // healthy interface applied; dead port deferred (no address bound)
+    expect(host.kernel().addrs.ibp65s0).toEqual(['10.20.1.1/24']);
+    expect(host.kernel().addrs.ibp9s0f1 ?? []).toEqual([]);
+    // committed — NOT rolled back to the prior file
+    expect(host.files()[XINAS_NETPLAN]).toBe(render);
+    expect(ctx.lines.some((l) => l.includes('deferred') && l.includes('ibp9s0f1'))).toBe(true);
+  });
+
+  it('carrier-UP target missing its address still hard-fails (strictness preserved)', async () => {
+    // Both interfaces are UP; the render only assigns ibp65s0, so ibp9s0f0 is
+    // carrier-up yet never gets its address → a real apply failure, not deferred.
+    // A carrier-up miss is polled for the full settle budget before it throws,
+    // so cap the budget rather than making the suite wait it out.
+    const render = renderNetplan([
+      { name: 'ibp65s0', addresses: ['10.20.1.1/24'], enabled: true, pbr_table_id: 100 },
+    ]);
+    const executor = makeNetPoolApplyExecutor({ host, settleMs: 5, pollMs: 1 });
+    const ctx = makeCtx({
+      render,
+      world_config_hash: netplanHashes(await host.readNetplanDir()).world_config_hash,
+      cleanup_files: {},
+      targets: [
+        { dev: 'ibp65s0', addresses: ['10.20.1.1/24'], pbr_table_id: 100 },
+        { dev: 'ibp9s0f0', addresses: ['10.20.2.1/24'], pbr_table_id: 101 },
+      ],
+    });
+    await expect(
+      (async () => {
+        for (const stage of executor.stages) await stage.run(ctx);
+      })(),
+    ).rejects.toThrow(/ibp9s0f0 is missing 10\.20\.2\.1\/24 after apply/);
   });
 });
