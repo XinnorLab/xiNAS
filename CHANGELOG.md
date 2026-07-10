@@ -8,10 +8,21 @@ supported source for installing and updating xiNAS.
 
 ## [3.6.2] - 2026-07-10
 
-> **Requires-Rebuild: xinas_node_build, xinas_agent** — the fix is
-> agent-side TypeScript. A plain code-only update does not rebuild
-> `dist/`, so updating hosts must re-run both roles for RAID array
-> delete/create to work against the xiRAID daemon.
+> **Requires-Rebuild: xinas_node_build, xinas_agent, net_controllers,
+> doca_ofed** — the RAID fix is agent-side TypeScript, and a plain
+> code-only update does not rebuild `dist/`, so `xinas_node_build` and
+> `xinas_agent` must re-run for array delete/create to work against the
+> xiRAID daemon. `net_controllers` and `doca_ofed` are carried over from
+> 3.6.1: that release's trailer was wrapped in a Markdown blockquote and
+> never matched `parse_rebuild_trailers`' line-anchored regex, so updating
+> hosts never re-rendered netplan and their data NICs may still be
+> unaddressed. Re-running `net_controllers` flushes PBR tables 100–199 and
+> all mlx interface IPs before re-applying — expect a brief interruption on
+> the data interfaces.
+>
+> Write the trailer as a bare, column-0 line in release notes. The update
+> flow reads only the **latest** release's body, so a trailer that fails to
+> parse (or a release the operator skips) silently drops its rebuild.
 
 ### Fixed
 
