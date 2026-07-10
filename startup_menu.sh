@@ -43,56 +43,10 @@ UPDATE_AVAILABLE=""
 UPDATE_TARGET_TAG=""
 REPO_SLUG="${XINAS_UPDATE_REPO:-XinnorLab/xiNAS}"
 
-# Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints nothing on
-# failure. Never returns a branch name; callers must NOT fall back to main.
-# Bounded (--connect-timeout/--max-time): check_for_updates now calls this
-# synchronously, so an unbounded curl would hang the whole menu at startup
-# on an air-gapped/blackholed network (the OS TCP connect timeout alone can
-# run to minutes). 2s to connect, 3s total is enough for a healthy GitHub
-# API call and short enough that a dead network is barely noticeable.
-# Trailing `|| true`: under `set -e`, `var=$(this_pipeline)` aborts the
-# CALLING shell if the pipeline's exit status is non-zero (e.g. curl times
-# out, or `grep -o` finds nothing on empty/error output — `pipefail` makes
-# that the pipeline's status). While backgrounded that only killed a
-# throwaway subshell; now that check_for_updates runs synchronously it would
-# silently kill the whole menu on any curl hiccup. Force success; an empty
-# result already reads as "no update" at the call site.
-_latest_release_tag() {
-    curl --connect-timeout 2 --max-time 3 -fsSL \
-        "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
-        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
-        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/' || true
-}
-
-# Release tag the working tree at $1 is currently on (empty if none).
-_current_release_tag() {
-    git -C "$1" describe --tags --exact-match 2>/dev/null \
-        || git -C "$1" describe --tags 2>/dev/null || true
-}
-
-check_for_updates() {
-    # Check if running from a git repo
-    local git_dir="$REPO_DIR/.git"
-    [[ -d "$git_dir" ]] || return 0
-
-    # Skip if no git command
-    command -v git &>/dev/null || return 0
-
-    # Skip if no network (quick check)
-    timeout 2 bash -c "echo >/dev/tcp/github.com/443" 2>/dev/null || return 0
-
-    # Compare the installed release tag against the latest published release.
-    # If the API is unreachable, show no update — never inspect main.
-    local latest_tag current_tag
-    latest_tag=$(_latest_release_tag)
-    [[ -n "$latest_tag" ]] || return 0
-    current_tag=$(_current_release_tag "$REPO_DIR")
-
-    if [[ "$current_tag" != "$latest_tag" ]]; then
-        UPDATE_AVAILABLE="true"
-        UPDATE_TARGET_TAG="$latest_tag"
-    fi
-}
+# _latest_release_tag / _current_release_tag / check_for_updates now live in
+# lib/menu_lib.sh (WS3 T4, Part B) — they were byte-identical to
+# simple_menu.sh's copies and had to be fixed twice in T3. See that file for
+# the implementation and the ordering-safety note on REPO_DIR/REPO_SLUG.
 
 do_update() {
     if ! command -v git &>/dev/null; then
@@ -100,7 +54,13 @@ do_update() {
         return 1
     fi
 
-    local _tag="${UPDATE_TARGET_TAG:-$(_latest_release_tag)}"
+    # 20s max-time / 5s connect-timeout: unlike the passive startup check's
+    # tight 3s/2s bound, this resolve only runs when the operator explicitly
+    # picked "Update" without an already-cached UPDATE_TARGET_TAG — they are
+    # already waiting on a blocking action, so it is correct to ride out a
+    # slow-but-live network rather than fail fast (docs/Installer/update-spec.md
+    # "Bash-path parity").
+    local _tag="${UPDATE_TARGET_TAG:-$(_latest_release_tag 20 5)}"
     if [[ -z "$_tag" ]]; then
         msg_box "Update Failed" "Could not resolve the latest GitHub Release.\n\nxiNAS updates from releases only — no fallback to main."
         return 1
@@ -159,8 +119,8 @@ do_update() {
 # so `check_for_updates &` silently discarded every result (F4). Safe to
 # block on now: the tcp reachability probe above is bounded to 2s
 # (`timeout 2`) and _latest_release_tag's curl is bounded to a 2s connect /
-# 3s total (see above), so the worst case with GitHub unreachable is ~5s,
-# not an indefinite hang.
+# 3s total by default (see lib/menu_lib.sh), so the worst case with GitHub
+# unreachable is ~5s, not an indefinite hang.
 check_for_updates
 
 check_license() {

@@ -294,6 +294,20 @@ The `--force` checkout and semantic-version comparison rules above bind
   `var=$(pipeline)` assignment kills the calling shell, so the
   pipeline needs an explicit escape), and MUST NOT be reported as an
   update being available.
+- **A tighter bound on the passive check does not bind the interactive
+  apply.** `_latest_release_tag` (`lib/menu_lib.sh`) takes the curl
+  `--max-time`/`--connect-timeout` bound as optional arguments,
+  defaulting to the tight passive-check bound above (3s / 2s). The
+  interactive path — `do_update`, in both menus, resolving
+  `"${UPDATE_TARGET_TAG:-$(_latest_release_tag …)}"` when the operator
+  picks "Update" without an already-cached target tag — passes a
+  materially longer bound instead. The operator explicitly requested a
+  blocking action and is already waiting on it; failing fast after ~3s
+  on a slow-but-live link is the wrong trade there, and is a distinct
+  failure mode from the passive, unattended startup probe this bullet
+  otherwise governs. The tight default MUST NOT be relaxed for the
+  passive check; the longer bound is scoped to the explicit apply path
+  only.
 
 ## Install / bootstrap
 

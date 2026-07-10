@@ -962,6 +962,184 @@ print_status() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# _semver_gt / _semver_parse - pure-bash semantic-version comparison
+# ═══════════════════════════════════════════════════════════════════════════════
+# Mirrors xinas_menu/utils/update_check.py's _parse_semver / _semver_key so the
+# bash update paths and the Python updater agree on ordering (a final release
+# outranks a prerelease of the same X.Y.Z). Accepts an optional "v" prefix and
+# an optional "-prerelease" suffix; build metadata ("+...") is stripped. Used
+# by check_for_updates below so "update available" is decided by semantic-
+# version ordering, never string inequality (docs/Installer/update-spec.md
+# "Bash-path parity", F6).
+
+# Prints "MAJOR MINOR PATCH PRERELEASE" on success; returns 1 (and prints
+# nothing) if $1 is not parseable as X.Y.Z.
+_semver_parse() {
+    local v="$1"
+    v="${v#v}"; v="${v#V}"
+    v="${v%%+*}"
+    local core="${v%%-*}"
+    local pre=""
+    [[ "$v" == *-* ]] && pre="${v#*-}"
+    local maj min pat
+    IFS='.' read -r maj min pat <<< "$core"
+    [[ "$maj" =~ ^[0-9]+$ && "$min" =~ ^[0-9]+$ && "$pat" =~ ^[0-9]+$ ]] || return 1
+    printf '%s %s %s %s\n' "$maj" "$min" "$pat" "$pre"
+}
+
+# True (exit 0) iff $1 is a strictly newer semantic version than $2. False
+# (exit 1) on a tie, on $1 older than $2, or if either argument fails to
+# parse — an unparseable tag must never be treated as "older" in a way that
+# manufactures a false "update available".
+#
+# Hardening (WS3 T4, Mandate A1): every branch below returns 0/1 explicitly
+# via `if (( … )); then return 0; else return 1; fi` rather than a bare
+# `(( … )); return`. A bare `(( expr ))` that evaluates false exits 1, and
+# under `set -euo pipefail` a failing simple command that is not itself the
+# condition of an if/while/until, part of a `&&`/`||` list, or negated with
+# `!` kills the shell immediately. Bash exempts the ENTIRE execution of a
+# compound command / function call from -e only while that call's own
+# result is being tested — every call site in this file wraps the call as
+# `if _semver_gt …; then`, which is why the original bare-`((...))`-then-
+# `return` form already worked, but only by accident: safe today only
+# because nothing calls it unguarded. That is exactly the class of bug T3
+# fixed for `var=$(failing_pipeline)`. A truly bare, unconditional call
+# whose honest answer is "false" will still trip errexit no matter how this
+# function is implemented internally — that is `set -e` correctly punishing
+# an unguarded failing command, not something to suppress. What the
+# explicit-return form buys instead: every branch is self-contained, so
+# correctness no longer depends on nothing running between an arithmetic
+# test and a bare `return` (which just inherits whatever $? happens to
+# hold), nor on every future caller remembering to wrap the call in `if`.
+#
+# Divergence from xinas_menu/utils/update_check.py (Mandate A2): Python's
+# _semver_key splits a prerelease suffix on "." and compares each identifier
+# numerically when it looks like an integer, so "rc.2" < "rc.10" there. The
+# final line below instead does a single string compare of the whole
+# prerelease suffix ([[ "$a_pre" > "$b_pre" ]]), so "rc.10" < "rc.2" here —
+# the reverse of Python's order for that specific case. This is a
+# deliberate, documented mismatch, not a silent one: it is unreachable from
+# every current bash call site. _latest_release_tag (below) always queries
+# GitHub's `/releases/latest` endpoint, which GitHub defines to already
+# exclude every prerelease and draft, so the "latest" argument this function
+# ever receives from a bash update path can never itself carry a prerelease
+# suffix — a two-prerelease comparison (the only case where the two
+# implementations disagree) can never occur here. (XINAS_UPDATE_CHANNEL,
+# how the Python path opts into prereleases, is not read anywhere in bash.)
+# The only prerelease case bash can hit — current_tag pinned to a
+# prerelease vs. a final latest release of the same X.Y.Z — is the "final
+# outranks any prerelease" branch above, where both implementations agree.
+_semver_gt() {
+    local a b
+    a=$(_semver_parse "$1") || return 1
+    b=$(_semver_parse "$2") || return 1
+    local a_maj a_min a_pat a_pre b_maj b_min b_pat b_pre
+    read -r a_maj a_min a_pat a_pre <<< "$a"
+    read -r b_maj b_min b_pat b_pre <<< "$b"
+    if ((a_maj != b_maj)); then
+        if ((a_maj > b_maj)); then return 0; else return 1; fi
+    fi
+    if ((a_min != b_min)); then
+        if ((a_min > b_min)); then return 0; else return 1; fi
+    fi
+    if ((a_pat != b_pat)); then
+        if ((a_pat > b_pat)); then return 0; else return 1; fi
+    fi
+    # Same X.Y.Z: a final release (empty prerelease) outranks any prerelease.
+    if [[ -z "$a_pre" && -n "$b_pre" ]]; then return 0; fi
+    if [[ -n "$a_pre" && -z "$b_pre" ]]; then return 1; fi
+    if [[ "$a_pre" > "$b_pre" ]]; then return 0; else return 1; fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# check_for_updates / _latest_release_tag / _current_release_tag
+# ═══════════════════════════════════════════════════════════════════════════════
+# Shared by startup_menu.sh and simple_menu.sh (WS3 T4, Part B) — these three
+# functions were byte-identical in both menus and had to be fixed twice, in
+# T3 (WS3.3, F4); this is now the single canonical copy. Callers must have
+# REPO_DIR and REPO_SLUG set as globals by the time check_for_updates is
+# actually CALLED — both menus set REPO_DIR before their `source
+# lib/menu_lib.sh` line, and REPO_SLUG/UPDATE_AVAILABLE/UPDATE_TARGET_TAG
+# after it but well before the top-level `check_for_updates` call site.
+# That ordering is safe: `source` only DEFINES these functions, it does not
+# execute them, and bash resolves a function's global variable references
+# at CALL time, not at source/definition time.
+#
+# do_update() itself is deliberately NOT hoisted here: startup_menu.sh's
+# rebuilds the MCP server and restarts xinas-nfs-helper; simple_menu.sh's is
+# a plain checkout. They genuinely differ and stay per-menu.
+#
+# Note: post_install_menu.sh also sources this file, but defines its OWN
+# check_for_updates / _latest_release_tag / _current_release_tag / do_update
+# AFTER its `source lib/menu_lib.sh` line — those later definitions shadow
+# the ones below (bash: last definition wins). That is intentional, not a
+# bug; post_install_menu.sh has not been migrated to the shared copy.
+
+# Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints nothing on
+# failure. Never returns a branch name; callers must NOT fall back to main.
+#
+# $1 (optional): max seconds for the whole curl (--max-time). Default 3 — the
+# passive startup check (check_for_updates, below) must not stall the menu;
+# an unbounded curl could hang for the OS TCP timeout (commonly minutes) on
+# an air-gapped/blackholed network. do_update (in both menus) passes a
+# longer bound here: the operator explicitly asked to update and is already
+# waiting on a blocking action, so failing fast after ~3s on a slow-but-live
+# link is the wrong trade there — see docs/Installer/update-spec.md
+# "Bash-path parity".
+# $2 (optional): max seconds to establish the TCP connection
+# (--connect-timeout). Default 2, matching the original passive-check bound.
+# do_update passes a longer value too, to tolerate a slower handshake
+# (higher-latency link, corporate proxy) it is now willing to wait out.
+#
+# Trailing `|| true`: under `set -e`, `var=$(this_pipeline)` aborts the
+# CALLING shell if the pipeline's exit status is non-zero (e.g. curl times
+# out, or `grep -o` finds nothing on empty/error output — `pipefail` makes
+# that the pipeline's status). Force success; an empty result already reads
+# as "no update" at the call site.
+_latest_release_tag() {
+    local max_time="${1:-3}"
+    local connect_timeout="${2:-2}"
+    curl --connect-timeout "$connect_timeout" --max-time "$max_time" -fsSL \
+        "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/' || true
+}
+
+# Release tag the working tree at $1 is currently on (empty if none).
+_current_release_tag() {
+    git -C "$1" describe --tags --exact-match 2>/dev/null \
+        || git -C "$1" describe --tags 2>/dev/null || true
+}
+
+check_for_updates() {
+    # Check if running from a git repo
+    local git_dir="$REPO_DIR/.git"
+    [[ -d "$git_dir" ]] || return 0
+
+    # Skip if no git command
+    command -v git &>/dev/null || return 0
+
+    # Skip if no network (quick check)
+    timeout 2 bash -c "echo >/dev/tcp/github.com/443" 2>/dev/null || return 0
+
+    # Compare the installed release tag against the latest published
+    # release, using semantic-version ordering (docs/Installer/update-spec.md
+    # "Bash-path parity") — never string inequality, which reports "update
+    # available" whenever the tags merely differ, including when the feed's
+    # tag is OLDER, walking an install backwards. If the API is unreachable,
+    # show no update — never inspect main.
+    local latest_tag current_tag
+    latest_tag=$(_latest_release_tag)
+    [[ -n "$latest_tag" ]] || return 0
+    current_tag=$(_current_release_tag "$REPO_DIR")
+
+    if _semver_gt "$latest_tag" "$current_tag"; then
+        UPDATE_AVAILABLE="true"
+        UPDATE_TARGET_TAG="$latest_tag"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # _xinas_playbook_ticker — awk filter that compresses PLAY/TASK headers into a
 # single overwriting status line. Errors and warnings pass through verbatim so
 # they remain visible inline.
