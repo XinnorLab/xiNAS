@@ -56,6 +56,25 @@ def _path_prefill(stored: str, mount_points: list[str]) -> tuple[str | None, str
     return _CUSTOM_PATH, stored
 
 
+def _xiraid_mount_points(findmnt_output: str) -> list[str]:
+    """Return the TARGET mountpoints backed by a xiRAID volume (``/dev/xi_*``).
+
+    *findmnt_output* is the raw text of ``findmnt -t xfs -n -o TARGET,SOURCE``
+    (one ``<target> <source>`` row per line). Only rows whose SOURCE begins with
+    ``/dev/xi_`` are kept — that is xiNAS's block-device namespace for xiRAID
+    arrays.
+    """
+    mounts: list[str] = []
+    for line in findmnt_output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.rsplit(None, 1)
+        if len(parts) == 2 and parts[1].startswith("/dev/xi_"):
+            mounts.append(parts[0])
+    return mounts
+
+
 def _share_summary(
     path: str,
     host: str,
