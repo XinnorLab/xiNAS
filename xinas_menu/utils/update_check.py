@@ -43,9 +43,11 @@ _TRAILER_RE = re.compile(
 # `` `nfs_server` ``, and a trailing sentence period all mean nfs_server.
 _TAG_DECORATION = " \t*_`."
 
-# Repository of record. Overridable via env for forks / dev mirrors, but the
-# default — and the only production source — is XinnorLab/xiNAS.
-_DEFAULT_REPO = os.environ.get("XINAS_UPDATE_REPO", "XinnorLab/xiNAS")
+# Fixed at the repository of record — docs/Installer/update-spec.md
+# "Release-detection source is fixed". There is deliberately no environment
+# variable or config knob here; XINAS_UPDATE_CHANNEL (below) only changes
+# which releases within this repo are eligible, never which repo is queried.
+_DEFAULT_REPO = "XinnorLab/xiNAS"
 
 # A release ref we are willing to check out: a semver tag, optionally
 # ``v``-prefixed, optionally with a prerelease suffix. Deliberately rejects

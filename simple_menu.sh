@@ -16,7 +16,7 @@ source "$SCRIPT_DIR/lib/menu_lib.sh"
 # See docs/Installer/update-spec.md.
 UPDATE_AVAILABLE=""
 UPDATE_TARGET_TAG=""
-REPO_SLUG="${XINAS_UPDATE_REPO:-XinnorLab/xiNAS}"
+REPO_SLUG="XinnorLab/xiNAS"
 
 # _latest_release_tag / _current_release_tag / check_for_updates now live in
 # lib/menu_lib.sh (WS3 T4, Part B) — they were byte-identical to

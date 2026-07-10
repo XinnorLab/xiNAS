@@ -36,7 +36,7 @@ XGREEN='\033[38;2;131;180;73m'
 # See docs/Installer/update-spec.md.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-CLIENT_REPO_SLUG="${XINAS_UPDATE_REPO:-XinnorLab/xiNAS}"
+CLIENT_REPO_SLUG="XinnorLab/xiNAS"
 
 # Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints the tag on
 # success, nothing on failure. Never returns a branch name — callers must NOT

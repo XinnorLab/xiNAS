@@ -172,7 +172,7 @@ _check_installed_files() {
 
 # xiNAS updates come from published GitHub Releases only — never the main
 # branch. See docs/Installer/update-spec.md.
-_UPDATE_REPO_SLUG="${XINAS_UPDATE_REPO:-XinnorLab/xiNAS}"
+_UPDATE_REPO_SLUG="XinnorLab/xiNAS"
 UPDATE_TARGET_TAG=""
 
 _latest_release_tag() {
@@ -203,7 +203,7 @@ check_for_updates() {
     latest_tag=$(_latest_release_tag)
     [[ -n "$latest_tag" ]] || return 0
     current_tag=$(_current_release_tag "$repo_dir")
-    if [[ "$current_tag" != "$latest_tag" ]]; then
+    if _semver_gt "$latest_tag" "$current_tag"; then
         UPDATE_AVAILABLE="true"
         UPDATE_TARGET_TAG="$latest_tag"
         UPDATE_DETAILS="New release ${latest_tag} available (installed: ${current_tag:-unknown})\n${UPDATE_DETAILS}"
@@ -221,6 +221,15 @@ do_update() {
     local _tag="${UPDATE_TARGET_TAG:-$(_latest_release_tag)}"
     if [[ -z "$_tag" ]]; then
         msg_box "Update Failed" "Could not resolve the latest GitHub Release.\n\nxiNAS updates from releases only — no fallback to main."
+        return 1
+    fi
+
+    # _tag came from an unanchored `grep -o | sed` over the GitHub API
+    # response (_latest_release_tag above) — refuse anything that isn't a
+    # semver release tag before ever calling git (WS3 T5c, mirrored here
+    # from startup_menu.sh/simple_menu.sh's do_update).
+    if ! _is_release_tag "$_tag"; then
+        msg_box "Update Failed" "Refusing to check out non-release ref: '${_tag}'.\n\nxiNAS updates from releases only — no fallback to main."
         return 1
     fi
 
