@@ -7,6 +7,8 @@ never discarding a subprocess.run result — with a direct-copy fallback when
 the wrapper isn't deployed, mirroring _privileged_git's existing shape.
 """
 
+import subprocess as _subprocess
+
 from xinas_menu.utils import update_check as uc
 
 
@@ -107,6 +109,48 @@ def test_fails_without_wrapper_names_role_redeploy_not_wrapper(monkeypatch, tmp_
     assert r.ok is False
     assert r.remediation == "sudo ansible-playbook playbooks/site.yml --tags xinas_menu"
     assert "xinas-update-helper-sync" not in r.remediation
+
+
+def test_wrapper_timeout_is_failed_wrapper_not_raised(monkeypatch, tmp_path):
+    # subprocess.run raising (systemctl restart hangs past timeout) must map to
+    # FAILED_WRAPPER, never propagate — apply_update_flow relies on
+    # refresh_nfs_helper never raising so the restart still happens.
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    monkeypatch.setattr(uc, "_NFS_HELPER_DEST", dest)
+    wrapper = tmp_path / "xinas-update-helper-sync"
+    wrapper.write_text("#!/bin/bash\nexit 0\n")
+    wrapper.chmod(0o755)
+    monkeypatch.setattr(uc, "_HELPER_SYNC_WRAPPER", wrapper)
+
+    def _boom(*a, **k):
+        raise _subprocess.TimeoutExpired(cmd="wrapper", timeout=30)
+
+    monkeypatch.setattr(uc.subprocess, "run", _boom)
+
+    r = uc.refresh_nfs_helper(tmp_path, ())  # must NOT raise
+    assert r.outcome is uc.NfsHelperRefreshOutcome.FAILED_WRAPPER
+    assert r.ok is False
+    assert "timed out" in r.detail.lower() or "timeout" in r.detail.lower()
+
+
+def test_wrapper_oserror_is_failed_wrapper_not_raised(monkeypatch, tmp_path):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    monkeypatch.setattr(uc, "_NFS_HELPER_DEST", dest)
+    wrapper = tmp_path / "xinas-update-helper-sync"
+    wrapper.write_text("#!/bin/bash\nexit 0\n")
+    wrapper.chmod(0o755)
+    monkeypatch.setattr(uc, "_HELPER_SYNC_WRAPPER", wrapper)
+
+    def _boom(*a, **k):
+        raise OSError("sudo: command not found")
+
+    monkeypatch.setattr(uc.subprocess, "run", _boom)
+
+    r = uc.refresh_nfs_helper(tmp_path, ())
+    assert r.outcome is uc.NfsHelperRefreshOutcome.FAILED_WRAPPER
+    assert r.ok is False
 
 
 def test_apply_update_no_longer_calls_sync(monkeypatch, tmp_path):

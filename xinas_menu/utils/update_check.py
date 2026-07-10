@@ -458,6 +458,16 @@ def refresh_nfs_helper(
     Call this AFTER a successful rebuild (or directly after checkout when no
     rebuild trailer is present) — never after a failed rebuild; the safety
     stop is enforced by the caller (xinas_menu/utils/update_apply.py, Task 13).
+
+    This function NEVER raises — it returns an ``NfsHelperRefreshResult`` on
+    every path, including when the wrapper or fallback subprocess call itself
+    raises (``TimeoutExpired``, ``OSError``, or anything else), which is
+    mapped to ``FAILED_WRAPPER``/``FAILED_NO_WRAPPER`` instead of propagating.
+    ``apply_update_flow`` (xinas_menu/utils/update_apply.py) has no
+    try/except around its call to this function and depends on that
+    invariant to always reach ``restart_self()`` afterwards; letting an
+    exception escape here would silently abort a half-applied update with
+    no notify and no audit-log entry.
     """
     if required_rebuilds == ("all",) or "xinas_nfs_helper" in required_rebuilds:
         return NfsHelperRefreshResult(NfsHelperRefreshOutcome.SKIPPED_REBUILD_COVERED)
@@ -466,12 +476,15 @@ def refresh_nfs_helper(
         return NfsHelperRefreshResult(NfsHelperRefreshOutcome.SKIPPED_NOT_INSTALLED)
 
     if _HELPER_SYNC_WRAPPER.exists() and os.access(_HELPER_SYNC_WRAPPER, os.X_OK):
-        r = subprocess.run(
-            ["sudo", "-n", str(_HELPER_SYNC_WRAPPER)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        try:
+            r = subprocess.run(
+                ["sudo", "-n", str(_HELPER_SYNC_WRAPPER)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except Exception as exc:  # noqa: BLE001 — never propagate; the caller relies on this
+            return NfsHelperRefreshResult(NfsHelperRefreshOutcome.FAILED_WRAPPER, detail=str(exc))
         if r.returncode == 0:
             return NfsHelperRefreshResult(NfsHelperRefreshOutcome.SUCCESS)
         return NfsHelperRefreshResult(
