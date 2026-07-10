@@ -103,14 +103,114 @@ Applying an update **checks out the release tag** — it never pulls a
 branch:
 
 1. `git fetch origin --tags` (via the privileged helper).
-2. `git checkout --force <vX.Y.Z>` — the exact commit the release points
-   to (detached HEAD at the release tag).
-3. Sync the NFS helper sources and restart `xinas-nfs-helper`.
-4. If the incoming update carries `Requires-Rebuild:` trailers — unioned
-   across every release newer than the installed version, per *Rebuild
-   trailers* above — run `ansible-playbook playbooks/site.yml --tags
-   <tags>` before restarting the menu (see *Update rebuild markers* in
-   `CLAUDE.md`).
+2. `git checkout --force <vX.Y.Z>` (via the privileged helper) — the
+   exact commit the release points to (detached HEAD at the release
+   tag).
+3. If the incoming release carries `Requires-Rebuild:` trailers, run
+   `ansible-playbook playbooks/site.yml --tags <tags>` (see *Update
+   rebuild markers* in `CLAUDE.md`). **If this step fails (rc ≠ 0),
+   STOP**: the code stays at the new release, the NFS helper is
+   **not** refreshed, and the menu is **not** restarted — the operator
+   is told to review the log. This is a deliberate safety stop that
+   predates this document and MUST be preserved: neither the helper
+   refresh nor a restarted menu should paper over a failed rebuild.
+4. Refresh the NFS helper (see *NFS-helper refresh* below).
+5. Restart the menu.
+
+The refresh runs **after** the rebuild (step 3), not before it, precisely
+so that a release which itself deploys new refresh machinery has
+already done so by the time the refresh needs it — see *Bootstrapping
+the helper-sync wrapper* below.
+
+### NFS-helper refresh
+
+The refresh (step 4) runs **after** a successful rebuild — i.e. after
+step 3 completes with rc = 0 when the release carries `Requires-Rebuild:`
+trailers — or directly after the checkout (step 2) when the release
+carries no trailers at all, so no rebuild step runs. It **never** runs
+if the rebuild step failed; that case stops at step 3 per the safety
+stop above.
+
+By the time the refresh runs, the checkout (step 2) has already taken
+effect — the working tree is at the new release. A failure in the
+helper refresh does **not** undo the checkout: it means the **code is
+updated (and, if scheduled, already rebuilt) but the running
+`xinas-nfs-helper` daemon and/or its installed files may not be**.
+
+The refresh copies `*.py` from `<repo>/xiNAS-MCP/nfs-helper` to
+`/usr/lib/xinas-mcp/nfs-helper` and restarts `xinas-nfs-helper`. Both the
+destination directory and the systemd unit are root-owned
+(`root:root`, service `User=root`), while the TUI driving the update
+runs as the unprivileged `xinnor` user — copying the files or
+restarting the unit directly as `xinnor` cannot work, for the same
+reason a direct `git checkout` against a root-owned `/opt/xiNAS` cannot
+(see below).
+
+The refresh is therefore performed by a second privileged wrapper,
+`/usr/local/sbin/xinas-update-helper-sync`, deployed by the `xinas_menu`
+role and granted via the same passwordless-sudo mechanism as
+`xinas-update-git`, restricted to that one binary. Its contract mirrors
+`xinas-update-git`:
+
+- `set -euo pipefail`.
+- Hard-coded source `/opt/xiNAS/xiNAS-MCP/nfs-helper` and destination
+  `/usr/lib/xinas-mcp/nfs-helper` — it accepts **no** caller-supplied
+  paths.
+- Copies `*.py` from source to destination, then runs
+  `systemctl restart xinas-nfs-helper`.
+- Exits non-zero on any failure. The caller MUST check the wrapper's
+  exit status — no discarding the result of a `subprocess.run` call.
+
+**Skip condition:** if step 3 ran `ansible-playbook` in a way that
+already covers the `xinas_nfs_helper` role — that is, the resolved tag
+set is either `("all",)`, which runs `site.yml` with **no** `--tags`
+filter and therefore every role including `xinas_nfs_helper`, or a tag
+set that explicitly contains `xinas_nfs_helper` — the refresh step is
+skipped outright. Ansible has already synced the files and (re)started
+the unit, running as root rather than as the unprivileged `xinnor` user
+that drives the update. This is reported as a **plain success**, never
+as a failure or as a separate warning: the rebuild already did the
+refresh's job.
+
+Apply distinguishes **four outcomes** — two of them a "skip" for a
+different reason, one an unqualified success, one a partial success —
+and reports each differently:
+
+a. **Skipped — rebuild already covered it.** Step 3 ran with tags that
+   include `xinas_nfs_helper`, so the refresh step does not run at all.
+   This is **not** an error; the update is reported as a plain success.
+b. **Skipped — helper not installed on this host** (destination
+   directory absent). The refresh is skipped; this is **not** an
+   error; the update is reported as a plain success.
+c. **Refresh succeeds.** The update is reported as a plain success.
+d. **Refresh fails.** The wrapper returns non-zero, or (wrapper absent)
+   the direct fallback hits a permission error writing the root-owned
+   destination. The update is reported as a **partial success**: the
+   release tag IS already checked out, and any scheduled rebuild
+   already succeeded (the refresh never runs after a failed rebuild —
+   see the safety stop in *Update apply* above) — but the helper may be
+   stale. This outcome MUST NOT be reported as a bare failure (the code
+   update, and any rebuild, did succeed) and MUST NOT be reported as an
+   unqualified success (the helper is stale). **The remediation depends
+   on why it failed, and the two cases MUST NOT be conflated:**
+
+- **Wrapper present but returned non-zero** — remediation:
+  `sudo /usr/local/sbin/xinas-update-helper-sync`.
+- **Wrapper absent** (a host predating this change, or one that
+  skipped the bootstrapping release described below, so the direct
+  fallback hit a permission error against the root-owned
+  destination) — the remediation MUST NOT name the wrapper, because
+  it does not exist on this host. Instead, tell the operator to
+  redeploy the `xinas_menu` role, e.g.
+  `sudo ansible-playbook playbooks/site.yml --tags xinas_menu` (run
+  from `/opt/xiNAS`), which installs the wrapper; the *next* update
+  then refreshes normally.
+
+Telling an operator to run a binary that is not present on their host
+is precisely the defect this distinction guards against: the two
+remediations for outcome (d) are not interchangeable, and the reporting
+logic MUST pick the one that matches whether the wrapper is actually
+installed.
 
 ### Reset-to-release: local changes are discarded
 
@@ -155,6 +255,31 @@ error, which is surfaced to the user with a hint to re-run the
 `xinas_menu` role. The fallback still targets the release tag — never
 `main`.
 
+### Bash-path parity
+
+The `--force` checkout and semantic-version comparison rules above bind
+**every** update/install code path — bash and Python alike:
+
+- **Tag checkout** — any path that checks out a release tag MUST use
+  `git checkout --force <tag>`, never a plain `git checkout <tag>`. The
+  working tree is git-dirty by design (see *Reset-to-release* above),
+  so a non-forcing checkout can abort mid-update, leaving the host
+  straddling two releases. This binds `startup_menu.sh`, `install.sh`,
+  `install_client.sh`, and `prepare_system.sh` equally with the Python
+  updater.
+- **Version comparison** — "is an update available" MUST be decided by
+  semantic-version ordering (as in *Update check* above), never by
+  string inequality between tag strings. A string comparison reports
+  "update available" whenever the feed's tag string differs from the
+  installed one at all — including when it is older — which can walk
+  an installation backwards.
+- **No false success** — a bash update path MUST propagate the exit
+  status of `fetch`/`checkout` and MUST NOT print or report a
+  success/updated message when either command failed. A pattern such
+  as `git fetch ... || true` followed by an unconditional "updated"
+  message is prohibited: swallowing the failure denies the operator
+  any signal that the tree did not move.
+
 ## Install / bootstrap
 
 The one-line installers fetch from the **latest release asset**, not a
@@ -169,10 +294,40 @@ curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install_c
 
 `install.sh` and `prepare_system.sh` resolve the latest published
 release tag from the API (`/releases/latest`) and clone / check out
-that tag (`git clone --branch <tag>` on first install; `git fetch
---tags && git checkout <tag>` on an existing clone). If no published
+that tag: `git clone --branch <tag>` on first install; on an existing
+clone, `git fetch --tags && git checkout --force <tag>` — per *Bash-path
+parity* above, never a plain (non-forcing) checkout. If no published
 release can be resolved, install **fails with a clear error** rather
 than falling back to `main`.
+
+## Release-detection source is fixed
+
+The repository queried for release detection — version comparison,
+release notes, `Requires-Rebuild:` trailers, and the displayed download
+URL (see *Update check* above) — is **fixed** at `XinnorLab/xiNAS`.
+There is **no** environment variable, config file, or other mechanism
+to redirect it.
+
+`XINAS_UPDATE_REPO` — an environment variable that previously existed,
+undocumented, in `xinas_menu/utils/update_check.py` and in four bash
+scripts (`simple_menu.sh`, `startup_menu.sh`, `post_install_menu.sh`,
+`client_repo/client_setup.sh`) — is **removed**. It only ever
+redirected the release-detection source, never the git checkout target
+(which always uses the local `origin` remote); its removal does not
+change checkout behavior.
+
+Rationale: per the Release and Update Policy (`CLAUDE.md`), production
+update information must originate only from the official GitHub
+Releases feed for `XinnorLab/xiNAS`. A redirectable release-detection
+source lets an environment variable point the version check, release
+notes, `Requires-Rebuild:` trailers, and download link at an arbitrary
+repository — spoofed content in any of those would reach the
+operator's confirmation dialog indistinguishably from the genuine feed.
+
+`XINAS_UPDATE_CHANNEL` (below) remains the **only** supported override
+knob, and it does not change *which* repository is queried — only
+*which releases within* `XinnorLab/xiNAS` are eligible (stable vs.
+prerelease).
 
 ## Dev / prerelease mode
 
@@ -216,3 +371,19 @@ sudo git -C /opt/xiNAS checkout --force <vX.Y.Z>   # or: sudo git -C /opt/xiNAS 
 ```
 
 after which the update proceeds and installs the forcing helper.
+
+### Bootstrapping the helper-sync wrapper
+
+The `/usr/local/sbin/xinas-update-helper-sync` wrapper is deployed by
+the `xinas_menu` role, same as `xinas-update-git`. The release that
+introduces it carries `Requires-Rebuild: xinas_menu`, so on a host that
+takes that update, the rebuild step (step 3) installs the wrapper
+*before* the refresh step (step 4) needs it — that update self-heals
+and reports outcome (c), a plain success, with no spurious warning
+about a binary the host doesn't have yet.
+
+A host that skips that release and later takes a **code-only** update —
+no `Requires-Rebuild:` trailer, per the trailer rules in `CLAUDE.md`, so
+no rebuild runs and the wrapper never gets deployed — hits outcome (d)
+with the wrapper absent, and is told to redeploy the `xinas_menu` role
+directly, exactly as described in *NFS-helper refresh* above.

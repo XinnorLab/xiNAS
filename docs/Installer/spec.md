@@ -137,6 +137,37 @@ force color — ANSI codes ahead of `PLAY`/`TASK` would break the ticker's ancho
   unmapped keystrokes: an unrecognized key beeps (`\a`) and flashes a red footer
   hint (`Unknown key — use ←→, Enter, y/n, or Esc`) until the next keypress.
 
+### 2.7 Menu exit-code contract
+
+`startup_menu.sh` and `simple_menu.sh` exit with status **2** when the
+operator explicitly chooses "Exit" from the top-level menu — a clean,
+deliberate abort, **not** an error. This is distinct from every other
+non-zero exit, which indicates the menu itself failed.
+
+Both menus' scripted callers run under `set -e`:
+
+- `prepare_system.sh` invokes `./startup_menu.sh` (expert mode) or
+  `./simple_menu.sh` (default) and inspects its exit status to decide
+  whether to `exit 0` (operator exited cleanly) or propagate a real
+  failure.
+- `install.sh` invokes `./prepare_system.sh` as its "Preparing system"
+  step, ahead of installing the `xinas-menu` wrapper.
+
+Because both callers run under `set -e`, a bare `cmd` followed on the
+next line by `status=$?` does **not** protect a nonzero-returning `cmd`
+from errexit — the shell aborts on the failing simple command before
+the next line ever runs. Each caller MUST instead capture the child's
+exit status without letting `errexit` kill the caller first, e.g.
+`set +e; cmd; status=$?; set -e`, or `cmd || status=$?` — the same
+pattern `install.sh` already uses around its `autoinstall.sh` call.
+
+**Requirement:** on a first-run install where the operator chooses Exit
+from the menu, `install.sh` MUST still complete installation of the
+`/usr/local/bin/xinas-menu` (and `/usr/local/bin/xinas-setup`) wrapper
+and MUST exit `0`. Exit code `2` from either menu MUST NOT be surfaced
+to the user as an install failure at any point in the
+`install.sh` → `prepare_system.sh` → menu call chain.
+
 ---
 
 ## 3. Parameters set by each playbook / role
@@ -657,3 +688,110 @@ install is observable (finding #2 — previously there was no resume signal).
   to learn the preset instead of guessing from RAID layout. The preset value
   comes from `-e xinas_install_preset=<preset>` (autoinstall) or the
   `/opt/xiNAS/.xinas_applied_preset` file the menu's `apply_preset` writes.
+
+### 7.8 Preset application is fail-closed
+
+Step 6 of §7.2 (applying the selected preset) copies each preset file —
+`playbook.yml` → `playbooks/site.yml`, each `presets/<name>/*.yml` → the
+matching role `defaults/main.yml`, and `netplan.yaml.j2` — over the
+corresponding tracked file. `autoinstall.sh` MUST check the exit status
+of **every** one of those copies and MUST abort (fatal, non-zero exit)
+the moment any single copy fails, rather than logging the failure and
+continuing on to run the playbook. Provisioning MUST NEVER run against
+a partially-applied or stale preset: a copy failure part-way through
+step 6 means the tree is a mix of the previous preset's files and the
+new preset's files, and running Ansible against that mix produces an
+inconsistent deployment that is hard to diagnose after the fact. The
+same fail-closed requirement applies to the interactive menus'
+`apply_preset` function.
+
+---
+
+## 8. Additional installer safety invariants
+
+### 8.1 yq provisioning
+
+`prepare_system.sh` installs `yq` (mikefarah/yq v4 — see [Important
+Notes](../../CLAUDE.md) for why the Go binary and not the Python `yq`
+wrapper) for use by the configuration shell scripts. This MUST be a
+**pinned, checksum-verified** install, not a fetch of
+`releases/latest`:
+
+- The download MUST target a **specific, recorded yq release version**,
+  not the `latest` redirect — a `latest`-tracking fetch means the exact
+  binary running on a host silently changes between installs with no
+  record of which version is in use.
+- The downloaded artifact MUST be verified against a **recorded sha256
+  checksum** for that exact version before it is installed or made
+  executable.
+- On a checksum mismatch, the installer MUST abort — it MUST NEVER
+  proceed with (`chmod +x`, move into `/usr/local/bin/yq`, or otherwise
+  trust) an unverified binary.
+- The binary MUST be selected by **host architecture**, derived from
+  `uname -m` (`x86_64` → the `amd64` asset, `aarch64`/`arm64` → the
+  `arm64` asset), not hard-coded to `amd64`.
+- The pinned version string and its per-architecture sha256 values live
+  as named constants in `prepare_system.sh` (this spec does not fix a
+  particular version or hash — those are maintained in the script and
+  bumped deliberately).
+
+### 8.2 License recovery invariant
+
+The installer and menus MUST NOT synthesize `/tmp/license` (or any file
+later fed to `xicli license update -p`) from `xicli license show`
+output. As already established in
+[raid-spec.md §7.2](./raid-spec.md#72-license-application), that output
+carries the hwkey, status, and metadata but **not** the `license_key`
+blob, so it is not a usable license file — writing it to the canonical
+license path either produces a parser error or a misleading partial
+success.
+
+This invariant binds every installer surface that touches license
+recovery, not just one menu:
+
+- Recovery MAY save a human-readable capture of `xicli license show`
+  output to a clearly **non-canonical** path (e.g. `<file>.recovered`)
+  for the operator's reference.
+- Recovery MUST then instruct the operator to re-supply the original
+  license file (or paste the real license) rather than silently
+  proceeding.
+- `startup_menu.sh`'s `_save_recovered_license_note()` is the reference
+  pattern: it writes only to `/tmp/license.recovered` and shows a
+  dialog naming the canonical license fields
+  (`hwkey`, `license_key`, `version`, `crypto_version`, `created`,
+  `expired`, `disks`, `levels`, `type`) the operator still needs to
+  supply. Any other installer surface that offers license recovery
+  MUST follow the same shape — non-canonical save path, explicit
+  operator prompt, no silent write to `/tmp/license`.
+
+### 8.3 Install-failure dialog
+
+When a playbook run fails, the install-failure dialog (`lib/menu_lib.sh`,
+raised from `xinas_run_playbook`) MUST offer exactly these choices, and
+every offered choice MUST have a distinct, real effect — no choice may
+be a silent no-op that behaves like another:
+
+| Option | Behavior |
+|--------|----------|
+| View Log | Opens the full install log (`less +G` on the tee'd output, or a whiptail textbox fallback). |
+| Collect Diagnostics | Invokes `collect_data.sh` to gather a local diagnostic archive. |
+| Continue | Returns to the menu without collecting or viewing anything further. |
+
+"Collect Diagnostics" MUST actually invoke `collect_data.sh` — the same
+script `startup_menu.sh` and `simple_menu.sh` already call from their
+own top-level menus — rather than falling through to the same no-op
+branch as Continue. Its label MUST describe only what
+`collect_data.sh` actually does **locally** (gather/write a diagnostic
+archive); it MUST NOT claim automatic upload behavior ("auto-uploads")
+unless and until an upload transport exists — upload is a separate,
+not-yet-implemented workstream, and the dialog must not promise it.
+
+### 8.4 Client installer accuracy
+
+`install_client.sh`'s update path MUST propagate the exit status of its
+`git fetch` and `git checkout` calls (see *Bash-path parity* in
+[update-spec.md](./update-spec.md)) and MUST NOT print a success
+message (e.g. "Client updated to `<tag>`") when either call failed. A
+fetch or checkout failure MUST result in a non-zero exit and an error
+message naming what failed, so a scripted or fleet-wide client rollout
+can detect a host that did not actually update.
