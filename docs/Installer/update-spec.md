@@ -43,9 +43,11 @@ Outcomes:
 
 - **Up to date** — latest ≤ installed: reports *no update available*.
 - **Update available** — latest > installed: reports the new version,
-  the release notes (release body), and the download source (the
-  release's `html_url` / asset URL). The `Requires-Rebuild:` trailers
-  are parsed from the **release notes body**.
+  the release notes (release body of the latest release), and the
+  download source (the release's `html_url` / asset URL). The
+  `Requires-Rebuild:` trailers are parsed from the release notes bodies
+  of **every eligible release strictly newer than the installed
+  version**, not just the latest one — see *Rebuild trailers* below.
 - **API unavailable / error** — network failure, HTTP error, rate
   limit, or malformed response: returns a **clear error**. It does
   **not** fall back to `main` and does **not** report "up to date".
@@ -58,6 +60,43 @@ Outcomes:
 Callers MUST treat a non-`None` `error` as "check failed", never as
 "no update" — this is the silent-failure guard the type exists for.
 
+## Rebuild trailers
+
+A release requests an Ansible re-run by carrying a `Requires-Rebuild:`
+trailer in its **release notes body** (the body aggregates the trailers
+of the commits it ships — see *Update rebuild markers* in `CLAUDE.md`).
+
+**Union across skipped releases.** An operator who updates from 3.6.0
+straight to 3.6.2 never sees 3.6.1's notes, but 3.6.1's roles still have
+to run on that host. The checker therefore parses trailers from **every
+eligible release strictly newer than the installed version** and unions
+the tags. Reading only the latest release's body silently drops the
+rebuild of every release the operator skipped — a host would take the new
+code without the role re-run that makes it effective. `all` anywhere in
+that union short-circuits to `("all",)`.
+
+Only the **latest** release's body is shown to the operator as release
+notes; the union governs only which roles run.
+
+**Tolerant syntax.** The trailer is matched case-insensitively at the
+start of a line, ignoring Markdown decoration that authors reach for when
+they want the line to render as a callout: leading blockquote markers
+(`>`), leading/trailing emphasis (`*`, `_`), surrounding backticks, and
+whitespace. All of these carry the same meaning:
+
+```
+Requires-Rebuild: nfs_server
+> **Requires-Rebuild: nfs_server**
+  _Requires-Rebuild: `nfs_server`_
+```
+
+This tolerance is a **safety property, not a convenience**: a trailer
+that fails to parse is indistinguishable from no trailer at all, so the
+update silently skips the Ansible step. That regression shipped in
+v3.6.0 and v3.6.1, whose bolded, blockquoted trailers never matched the
+line-anchored pattern. Tags are decoration-stripped individually, so
+`**a**, `b`` yields `("a", "b")`.
+
 ## Update apply
 
 Applying an update **checks out the release tag** — it never pulls a
@@ -67,9 +106,11 @@ branch:
 2. `git checkout --force <vX.Y.Z>` — the exact commit the release points
    to (detached HEAD at the release tag).
 3. Sync the NFS helper sources and restart `xinas-nfs-helper`.
-4. If the incoming release carries `Requires-Rebuild:` trailers, run
-   `ansible-playbook playbooks/site.yml --tags <tags>` before
-   restarting the menu (see *Update rebuild markers* in `CLAUDE.md`).
+4. If the incoming update carries `Requires-Rebuild:` trailers — unioned
+   across every release newer than the installed version, per *Rebuild
+   trailers* above — run `ansible-playbook playbooks/site.yml --tags
+   <tags>` before restarting the menu (see *Update rebuild markers* in
+   `CLAUDE.md`).
 
 ### Reset-to-release: local changes are discarded
 

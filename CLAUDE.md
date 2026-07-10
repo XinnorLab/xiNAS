@@ -193,7 +193,9 @@ Requires-Rebuild: <ansible_tag>[, <ansible_tag>...]
 - Comma-separate multiple tags. Multiple trailers across multiple commits are aggregated by the TUI.
 - The special value `all` means run the full `site.yml` with no `--tags` filter; use it only when the change spans many roles.
 - **Do not add this trailer for code-only changes** (Python TUI logic, MCP server Python code, docs, plan/spec updates, test fixtures). The plain release-tag checkout + `xinas-nfs-helper` restart that already runs on every update is sufficient — adding a trailer here just trains users to click past an unnecessary Ansible warning.
-- Parsed case-insensitively from the **release notes** of the incoming release (the release body aggregates the trailers from the commits it ships). Backfilling old commit messages has no effect.
+- Parsed case-insensitively from the **release notes** (the release body aggregates the trailers from the commits it ships). Backfilling old commit messages has no effect.
+- Tags are **unioned across every published release newer than the installed version**, not just the latest one — a host jumping 3.6.0 → 3.6.2 still runs the roles 3.6.1 asked for.
+- The trailer must **start a line** (leading `>` blockquote markers, `*`/`_` emphasis, backticks and whitespace are tolerated and stripped). A trailer that fails to parse is indistinguishable from no trailer, so the Ansible step is silently skipped — that regression shipped in v3.6.0 and v3.6.1. Prefer a bare, column-0 line. See `docs/Installer/update-spec.md` §*Rebuild trailers*.
 
 Examples:
 

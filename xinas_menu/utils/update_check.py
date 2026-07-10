@@ -28,7 +28,19 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_TRAILER_RE = re.compile(r"^Requires-Rebuild:\s*(.+)$", re.MULTILINE | re.IGNORECASE)
+# The trailer must START a line — a prose mention ("see the
+# Requires-Rebuild: docs") is not a trailer. But release-note authors reach
+# for Markdown callouts, so tolerate leading blockquote markers and emphasis:
+# a trailer that fails to parse is indistinguishable from no trailer and
+# silently skips the Ansible step (v3.6.0/v3.6.1 shipped exactly that bug).
+_TRAILER_RE = re.compile(
+    r"^[ \t>]*[*_]*\s*Requires-Rebuild:\s*(.+?)\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# Markdown decoration stripped from each individual tag: `**nfs_server**`,
+# `` `nfs_server` ``, and a trailing sentence period all mean nfs_server.
+_TAG_DECORATION = " \t*_`."
 
 # Repository of record. Overridable via env for forks / dev mirrors, but the
 # default — and the only production source — is XinnorLab/xiNAS.
@@ -53,12 +65,18 @@ def parse_rebuild_trailers(message_bodies: str) -> tuple[str, ...]:
     ``--tags all,foo`` which would silently skip ``foo``-only tasks.
 
     With release-based updates the trailers are read from the release
-    notes body (which aggregates the trailers of the commits it ships).
+    notes bodies (each body aggregates the trailers of the commits it
+    ships). Callers pass the concatenated bodies of *every* release newer
+    than the installed version, so a release the operator skipped still
+    gets its roles re-run.
+
+    Markdown decoration around the trailer line and around each tag is
+    tolerated — see ``_TRAILER_RE``.
     """
     tags: set[str] = set()
     for m in _TRAILER_RE.finditer(message_bodies):
         for tag in m.group(1).split(","):
-            tag = tag.strip()
+            tag = tag.strip(_TAG_DECORATION)
             if tag:
                 tags.add(tag)
     if "all" in tags:
@@ -322,7 +340,13 @@ class UpdateChecker:
                 )
             download_url = match
 
-        rebuilds = parse_rebuild_trailers(str(latest.get("body", "") or ""))
+        # Rebuild trailers union over EVERY eligible release newer than the
+        # installed version, not just the latest: an operator jumping 3.6.0 →
+        # 3.6.2 never sees 3.6.1's notes, but 3.6.1's roles still have to run
+        # on that host. Reading only `latest` silently drops them.
+        cur_key = _semver_key(cur_parsed)
+        newer_bodies = [str(rel.get("body", "") or "") for key, rel in candidates if key > cur_key]
+        rebuilds = parse_rebuild_trailers("\n".join(newer_bodies))
         return CheckResult(
             True,
             current_version=self._current,

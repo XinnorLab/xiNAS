@@ -328,6 +328,100 @@ def test_parse_rebuild_trailers_all_short_circuits():
     assert uc.parse_rebuild_trailers("Requires-Rebuild: all, nfs_server") == ("all",)
 
 
+# ── trailer syntax tolerance ─────────────────────────────────────────────
+#
+# A trailer that fails to parse is indistinguishable from no trailer, so
+# the update silently skips Ansible. v3.6.0/v3.6.1 shipped bolded,
+# blockquoted trailers that never matched the line-anchored pattern.
+
+
+def test_parse_rebuild_trailers_tolerates_blockquote_and_bold():
+    body = "> **Requires-Rebuild: net_controllers, doca_ofed**\n"
+    assert uc.parse_rebuild_trailers(body) == ("doca_ofed", "net_controllers")
+
+
+def test_parse_rebuild_trailers_tolerates_emphasis_backticks_and_indent():
+    body = "  _Requires-Rebuild: `nfs_server`, *perf_tuning*_\n"
+    assert uc.parse_rebuild_trailers(body) == ("nfs_server", "perf_tuning")
+
+
+def test_parse_rebuild_trailers_nested_blockquote_and_all_short_circuit():
+    assert uc.parse_rebuild_trailers("> > **Requires-Rebuild: all**") == ("all",)
+
+
+def test_parse_rebuild_trailers_ignores_prose_mentions():
+    """The trailer must start the line — a sentence about it is not one."""
+    body = "See the Requires-Rebuild: trailer docs for how this works.\n"
+    assert uc.parse_rebuild_trailers("Prose. " + body) == ()
+
+
+def test_parse_rebuild_trailers_real_v362_release_body():
+    """The exact shape shipped in the v3.6.2 release notes."""
+    body = (
+        "xiNAS **v3.6.2** — patch release.\n\n"
+        "Requires-Rebuild: xinas_node_build, xinas_agent, net_controllers, doca_ofed\n\n"
+        "> **This update re-runs Ansible.**\n"
+    )
+    assert uc.parse_rebuild_trailers(body) == (
+        "doca_ofed",
+        "net_controllers",
+        "xinas_agent",
+        "xinas_node_build",
+    )
+
+
+# ── trailers union across skipped releases ───────────────────────────────
+
+
+def test_required_rebuilds_union_across_skipped_releases():
+    """Updating 3.1.0 → v3.3.0 must still run the roles v3.2.0 asked for."""
+    c = _checker(
+        [
+            _rel("v3.2.0", body="Requires-Rebuild: net_controllers"),
+            _rel("v3.3.0", body="Requires-Rebuild: nfs_server"),
+        ]
+    )
+    r = _run(c.check())
+    assert r.available is True
+    assert r.latest_version == "v3.3.0"
+    assert r.required_rebuilds == ("net_controllers", "nfs_server")
+    # Only the latest release's notes are shown to the operator.
+    assert r.release_notes == "Requires-Rebuild: nfs_server"
+
+
+def test_required_rebuilds_ignore_releases_at_or_below_installed():
+    c = _checker(
+        [
+            _rel("v3.0.0", body="Requires-Rebuild: perf_tuning"),
+            _rel("v3.1.0", body="Requires-Rebuild: exports"),
+            _rel("v3.1.1", body="Requires-Rebuild: nfs_server"),
+        ]
+    )
+    r = _run(c.check())
+    assert r.required_rebuilds == ("nfs_server",)
+
+
+def test_required_rebuilds_union_all_short_circuits_across_releases():
+    c = _checker(
+        [
+            _rel("v3.2.0", body="Requires-Rebuild: all"),
+            _rel("v3.3.0", body="Requires-Rebuild: nfs_server"),
+        ]
+    )
+    assert _run(c.check()).required_rebuilds == ("all",)
+
+
+def test_required_rebuilds_skip_drafts_and_prereleases():
+    c = _checker(
+        [
+            _rel("v3.2.0", draft=True, body="Requires-Rebuild: draft_role"),
+            _rel("v3.2.5", prerelease=True, body="Requires-Rebuild: prerelease_role"),
+            _rel("v3.3.0", body="Requires-Rebuild: nfs_server"),
+        ]
+    )
+    assert _run(c.check()).required_rebuilds == ("nfs_server",)
+
+
 def test_build_rebuild_cmd():
     assert uc.build_rebuild_cmd(()) == []
     assert uc.build_rebuild_cmd(("all",)) == ["ansible-playbook", "playbooks/site.yml"]
