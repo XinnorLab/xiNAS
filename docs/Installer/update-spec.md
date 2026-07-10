@@ -279,6 +279,21 @@ The `--force` checkout and semantic-version comparison rules above bind
   as `git fetch ... || true` followed by an unconditional "updated"
   message is prohibited: swallowing the failure denies the operator
   any signal that the tree did not move.
+- **Bounded, non-blocking check** — the automatic update check that
+  runs at menu startup (`check_for_updates` in `startup_menu.sh` and
+  `simple_menu.sh`) MUST run synchronously, never backgrounded: a
+  background subshell's result variables never reach the parent shell,
+  so the banner can never fire. Because it therefore blocks startup,
+  **every** network operation on that path MUST carry an explicit
+  timeout — an unreachable GitHub may delay the menu by a few seconds,
+  never indefinitely. Note the reachability probe and the release-API
+  call target *different hosts* (`github.com` vs `api.github.com`), so
+  a bounded probe does not bound the API call; each needs its own
+  limit. A network or API failure on this path MUST read as "no update
+  available": it MUST NOT abort the menu (under `set -e` a failing
+  `var=$(pipeline)` assignment kills the calling shell, so the
+  pipeline needs an explicit escape), and MUST NOT be reported as an
+  update being available.
 
 ## Install / bootstrap
 
