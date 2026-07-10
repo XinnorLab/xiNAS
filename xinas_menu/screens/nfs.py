@@ -18,6 +18,7 @@ from textual.widgets import Footer, Label
 
 from xinas_menu.api.control_client import ControlPathError, lease_conflict_message, quote_id
 from xinas_menu.apptype import XiNASAppMixin
+from xinas_menu.utils.xfs_helpers import is_path_under
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -45,14 +46,19 @@ def _host_prefill(host: str) -> tuple[str, str]:
 def _path_prefill(stored: str, mount_points: list[str]) -> tuple[str | None, str]:
     """Map a stored path to (SelectDialog pre-selection, custom-input default).
 
-    Returns ``(mount, "/mnt/data/")`` when *stored* is one of *mount_points*,
+    The custom-input default is the first xiRAID mount root with a trailing
+    slash (falling back to ``/mnt/data/`` only when the list is empty), so the
+    custom-path field always starts inside a valid xiRAID filesystem.
+
+    Returns ``(mount, <default>)`` when *stored* is one of *mount_points*,
     ``("Custom path…", stored)`` when it is a non-empty non-mount path, and
-    ``(None, "/mnt/data/")`` when *stored* is empty (first entry).
+    ``(None, <default>)`` when *stored* is empty (first entry).
     """
+    default = (mount_points[0].rstrip("/") + "/") if mount_points else "/mnt/data/"
     if not stored:
-        return None, "/mnt/data/"
+        return None, default
     if stored in mount_points:
-        return stored, "/mnt/data/"
+        return stored, default
     return _CUSTOM_PATH, stored
 
 
@@ -414,65 +420,72 @@ class NFSScreen(XiNASAppMixin, Screen):
         from xinas_menu.utils.xfs_helpers import run_async_cmd
 
         mount_points: list[str] = []
-        ok, out, _ = await run_async_cmd("findmnt", "-t", "xfs", "-n", "-o", "TARGET", timeout=10)
+        ok, out, _ = await run_async_cmd(
+            "findmnt", "-t", "xfs", "-n", "-o", "TARGET,SOURCE", timeout=10
+        )
         if ok and out:
-            mount_points = [line.strip() for line in out.splitlines() if line.strip()]
+            mount_points = _xiraid_mount_points(out)
+
+        if not mount_points:
+            await self.app.push_screen_wait(
+                ConfirmDialog(
+                    "No xiRAID-backed filesystem found.\n\n"
+                    "NFS shares can only be exported from a filesystem on a "
+                    "xiRAID array. Create one first:\n"
+                    "Storage → Filesystems → Create Filesystem.",
+                    "Add Share",
+                    ok_only=True,
+                )
+            )
+            return
 
         async def path_step(answers, allow_back, step_no):
             stored = answers.get("path", "")
             title = f"Add Share — Step {step_no}/7"
             while True:
-                if mount_points:
-                    selected, custom_default = _path_prefill(stored, mount_points)
-                    choice = await self.app.push_screen_wait(
-                        SelectDialog(
-                            mount_points + [_CUSTOM_PATH],
-                            title=title,
-                            prompt="Select filesystem to export (or choose custom for a subfolder):",
-                            selected=selected,
-                            allow_back=allow_back,
-                        )
+                selected, custom_default = _path_prefill(stored, mount_points)
+                choice = await self.app.push_screen_wait(
+                    SelectDialog(
+                        mount_points + [_CUSTOM_PATH],
+                        title=title,
+                        prompt="Select filesystem to export (or choose custom for a subfolder):",
+                        selected=selected,
+                        allow_back=allow_back,
                     )
-                    if choice is None:
-                        return CANCEL
-                    if choice is BACK:
-                        return BACK
-                    if choice == _CUSTOM_PATH:
-                        sub = await self.app.push_screen_wait(
-                            InputDialog(
-                                "Export path:",
-                                title,
-                                default=custom_default,
-                                placeholder="/mnt/data/share1",
-                                allow_back=True,
-                            )
-                        )
-                        if sub is None:
-                            return CANCEL
-                        if sub is BACK:
-                            continue
-                        path = sub
-                    else:
-                        path = choice
-                else:
+                )
+                if choice is None:
+                    return CANCEL
+                if choice is BACK:
+                    return BACK
+                if choice == _CUSTOM_PATH:
                     sub = await self.app.push_screen_wait(
                         InputDialog(
                             "Export path:",
                             title,
-                            default=stored or "/mnt/data/",
+                            default=custom_default,
                             placeholder="/mnt/data/share1",
-                            allow_back=allow_back,
+                            allow_back=True,
                         )
                     )
                     if sub is None:
                         return CANCEL
                     if sub is BACK:
-                        return BACK
+                        continue
                     path = sub
+                else:
+                    path = choice
                 if not path.startswith("/"):
                     self.app.notify("Export path must start with '/'.", severity="error")
                     continue
-                return path.rstrip("/") or "/"
+                path = os.path.normpath(path)
+                if not any(is_path_under(path, mp) for mp in mount_points):
+                    self.app.notify(
+                        "Export path must be inside a xiRAID filesystem "
+                        f"({', '.join(mount_points)}).",
+                        severity="error",
+                    )
+                    continue
+                return path
 
         async def confirm_step(answers, allow_back, step_no):
             host = answers["host"]
