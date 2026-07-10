@@ -191,6 +191,38 @@ def test_startup_menu_no_banner_when_up_to_date(tmp_path):
     assert "Update available!" not in plain
 
 
+def test_startup_menu_no_banner_when_feed_serves_older_release(tmp_path):
+    # F6 regression guard: the release feed serving an OLDER tag than the
+    # installed one must never read as "update available" — that would walk
+    # an installation backwards. Equal-tag coverage cannot catch a swapped
+    # _semver_gt call site (both orders return false on a tie); only a
+    # strict downgrade can.
+    sandbox = _sandbox(tmp_path)
+    bin_dir = _stub_bin(tmp_path, latest_tag="v1.0.0", current_tag="v9.9.9")
+    transcript, exit_code = _drive(REPO / "startup_menu.sh", sandbox, bin_dir)
+    assert exit_code == 2
+    plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", transcript)
+    assert "Update available!" not in plain, (
+        "banner appeared for an OLDER feed tag -> check_for_updates is not "
+        f"using strict semver ordering (F6).\n--- transcript ---\n{plain}"
+    )
+
+
+def test_simple_menu_no_banner_when_feed_serves_older_release(tmp_path):
+    # Same F6 guard as test_startup_menu_no_banner_when_feed_serves_older_release,
+    # pinned for simple_menu.sh's call site too — both menus share the
+    # hoisted check_for_updates, but both call sites need pinning.
+    sandbox = _sandbox(tmp_path)
+    bin_dir = _stub_bin(tmp_path, latest_tag="v1.0.0", current_tag="v9.9.9")
+    transcript, exit_code = _drive(REPO / "simple_menu.sh", sandbox, bin_dir)
+    assert exit_code == 2
+    plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", transcript)
+    assert "Update available!" not in plain, (
+        "banner appeared for an OLDER feed tag -> check_for_updates is not "
+        f"using strict semver ordering (F6).\n--- transcript ---\n{plain}"
+    )
+
+
 def test_simple_menu_shows_banner_when_update_available(tmp_path):
     sandbox = _sandbox(tmp_path)
     bin_dir = _stub_bin(tmp_path, latest_tag="v9.9.9", current_tag="v1.0.0")
