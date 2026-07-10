@@ -67,3 +67,8 @@ def test_role_installs_the_wrapper():
     )
     assert installed.get("mode") == "0755"
     assert installed.get("src") == "xinas-update-helper-sync"
+    # Ownership is the single highest-severity property: a non-root-owned or
+    # group/world-writable wrapper under a NOPASSWD sudo grant lets the
+    # unprivileged xinnor user rewrite the very script it runs as root.
+    assert installed.get("owner") == "root"
+    assert installed.get("group") == "root"
