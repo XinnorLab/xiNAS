@@ -142,9 +142,16 @@ Connection lifecycle (connect on start, reconnect on drop, availability flag) li
 
 `raid_show` and `pool_show` each return **two shapes in the wild**: a JSON array
 of entries (what the fake transport emits) or an **object keyed by name**
-(`{"data": {...}, "log": {...}}` — the real xiRAID 4.3.x daemon). `raid_show`
-additionally lists devices either as `["/dev/…"]` or as `[idx, "/dev/…", [states]]`
-tuples.
+(`{"data": {...}, "log": {...}}` — the real xiRAID 4.3.x daemon). Both list
+devices either as `["/dev/…"]` or as tuples whose device path is **not at a
+fixed index** (`[idx, "/dev/…", [states]]`, `[idx, "/dev/…", "SERIAL"]`); read
+the path by scanning the tuple for the `/dev/…` string.
+
+Both also report `state` as a **list of words**, not a bare string — a real pool
+reads `{"e": {"devices": [], "name": "e", "serials": [], "sizes": [],
+"state": ["active"]}}`. A string-only reader observes every live pool as
+INACTIVE, which silently disarms the `pool_active` plan blocker *and* the pool
+delete executor's live preflight, so an active pool becomes deletable.
 
 Every consumer — collectors **and** task executors — MUST read these payloads
 through `lib/parse/raid.ts` (`parseRaidShow`, `parseRaidShowEntries`) and

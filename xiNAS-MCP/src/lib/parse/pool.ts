@@ -6,6 +6,14 @@
  * normalize to `{name, drives, active}`. `referenced_by` is NOT
  * computed here — it joins observed arrays' `spare_pool` at read time
  * (api-side) so a just-swept array is never missed.
+ *
+ * The real xiRAID 4.3.x daemon emits the dict shape, and reports
+ * `state` as a LIST of words (`{"e": {"devices": [], "name": "e",
+ * "serials": [], "sizes": [], "state": ["active"]}}`) — the same
+ * vocabulary `raid_show` uses for an array's state. Reading `state`
+ * as a bare string leaves every live pool observed as INACTIVE, which
+ * disarms the `pool_active` plan blocker AND the delete executor's
+ * live preflight. Both shapes are covered below; cover both in tests.
  */
 
 export interface ObservedPool {
@@ -14,27 +22,33 @@ export interface ObservedPool {
   active: boolean;
 }
 
+/** The device path out of one `devices` entry, whatever shape it takes. */
+function devicePath(entry: unknown): string | null {
+  if (typeof entry === 'string') return entry;
+  // Tuple shape: [index, "/dev/…"] or, like raid_show, [index, "/dev/…",
+  // [states]]. Scan for the path rather than indexing a fixed position —
+  // a trailing serial/state element must not be mistaken for the device.
+  if (Array.isArray(entry)) {
+    const path = entry.find((x): x is string => typeof x === 'string' && x.startsWith('/dev/'));
+    return path ?? null;
+  }
+  return null;
+}
+
+/** `active` from either the boolean field or the state-word vocabulary. */
+function isActive(raw: Record<string, unknown>): boolean {
+  if (typeof raw.active === 'boolean') return raw.active;
+  const state = raw.state;
+  const word = typeof state === 'string' ? state : Array.isArray(state) ? state[0] : undefined;
+  return typeof word === 'string' && word.toLowerCase() === 'active';
+}
+
 function normalizeOne(name: string, raw: Record<string, unknown>): ObservedPool {
   const drivesRaw = raw.drives ?? raw.devices;
   const drives = Array.isArray(drivesRaw)
-    ? drivesRaw
-        .map((d) => {
-          if (typeof d === 'string') return d;
-          // the dict shape sometimes lists devices as [index, path] pairs
-          if (Array.isArray(d) && typeof d[d.length - 1] === 'string') {
-            return d[d.length - 1] as string;
-          }
-          return null;
-        })
-        .filter((d): d is string => d !== null)
+    ? drivesRaw.map(devicePath).filter((d): d is string => d !== null)
     : [];
-  const active =
-    typeof raw.active === 'boolean'
-      ? raw.active
-      : typeof raw.state === 'string'
-        ? raw.state.toLowerCase() === 'active'
-        : false;
-  return { name, drives, active };
+  return { name, drives, active: isActive(raw) };
 }
 
 export function parsePoolShow(payload: unknown): ObservedPool[] {
