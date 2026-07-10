@@ -125,11 +125,47 @@ if [ "$UPDATE_ONLY" -eq 0 ]; then
     run_quiet "Updating package lists" sudo apt-get update -y -qq
     run_quiet "Installing dependencies (ansible, git, dialog, wget, btop)" \
         sudo apt-get install -y -qq ansible git dialog wget btop
-    # Install yq v4 for YAML processing used by configuration scripts
-    run_quiet "Installing yq (YAML processor)" bash -c '
-        sudo wget -qO /usr/local/bin/yq \
-            "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" \
-        && sudo chmod +x /usr/local/bin/yq'
+    # Install yq v4 (YAML processor) used by configuration scripts.
+    # Pinned + checksum-verified (docs/Installer/spec.md §8.1) — never fetch
+    # `releases/latest`: a latest-tracking install means the exact binary on a
+    # host silently changes between installs, and an unverified download must
+    # never be chmod +x'd. Selected by host architecture (uname -m). Bump the
+    # version and BOTH hashes together, deliberately, when updating yq.
+    YQ_VERSION="v4.53.3"
+    YQ_SHA256_AMD64="fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
+    YQ_SHA256_ARM64="578648e463a11c1b6db6010cbf41eafed6bee79466fcffa1bb446672cf7945ea"
+
+    install_yq() {
+        local arch yq_asset yq_sha tmp_yq actual_sha
+        case "$(uname -m)" in
+            x86_64)        arch="amd64"; yq_sha="$YQ_SHA256_AMD64" ;;
+            aarch64|arm64) arch="arm64"; yq_sha="$YQ_SHA256_ARM64" ;;
+            *)
+                echo -e "${RED}Unsupported architecture for yq: $(uname -m)${NC}" >&2
+                return 1
+                ;;
+        esac
+        yq_asset="yq_linux_${arch}"
+        tmp_yq="$(mktemp)"
+        # Download to a user-owned temp (no sudo needed); sudo only to install.
+        if ! wget -qO "$tmp_yq" \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${yq_asset}"; then
+            rm -f "$tmp_yq"
+            echo -e "${RED}yq download failed${NC}" >&2
+            return 1
+        fi
+        actual_sha="$(sha256sum "$tmp_yq" | awk '{print $1}')"
+        if [ "$actual_sha" != "$yq_sha" ]; then
+            rm -f "$tmp_yq"
+            echo -e "${RED}yq checksum mismatch for ${yq_asset} ${YQ_VERSION}${NC}" >&2
+            echo -e "${RED}expected ${yq_sha}, got ${actual_sha} — aborting, NOT installing.${NC}" >&2
+            return 1
+        fi
+        sudo install -m 0755 "$tmp_yq" /usr/local/bin/yq
+        rm -f "$tmp_yq"
+    }
+
+    run_quiet "Installing yq ${YQ_VERSION} (YAML processor, checksum-verified)" install_yq
     [ "$QUIET_MODE" != "1" ] && echo -e "${GREEN}Packages installed successfully${NC}"
 fi
 
@@ -177,7 +213,10 @@ if [ "$UPDATE_ONLY" -eq 1 ]; then
 fi
 
 # Ensure the hardware key utility is executable
-[ -x ./hwkey ] || chmod +x ./hwkey
+# F7 guard: chmod on a missing hwkey would exit 1 as the last command of the
+# ||-list, tripping errexit and aborting the script — same fix as the hwkey
+# sites in lib/menu_lib.sh.
+[ -x ./hwkey ] || chmod +x ./hwkey 2>/dev/null || true
 
 # Source the menu library if available
 if [ -f "lib/menu_lib.sh" ]; then

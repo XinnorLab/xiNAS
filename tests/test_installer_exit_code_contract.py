@@ -7,7 +7,10 @@ status capture must be wrapped in `set +e ... set -e`.
 The first suite runs the real prepare_system.sh end-to-end with stubbed
 menu scripts (only the exit-2 contract is a menu concern; the package-
 install block is bypassed by stubbing `sudo` as a no-op, since every
-privileged command in prepare_system.sh runs through `sudo`). The second
+privileged command in prepare_system.sh runs through `sudo` — except the
+yq download itself (T9, F2 — pinned + checksum-verified, downloaded without
+sudo by design), which is bypassed with `wget`/`sha256sum` stubs so that
+step also succeeds hermetically without touching the network). The second
 suite extracts install.sh's guarded "Preparing system" block verbatim and
 executes it with a stub ./prepare_system.sh — install.sh itself requires
 root (EUID check) and performs real system mutations before reaching this
@@ -76,6 +79,22 @@ def _run_prepare_system(tmp_path: Path, *, expert: bool, menu_exit_code: int):
     # apt/wget for real.
     (stub_bin / "sudo").write_text("#!/bin/bash\nexit 0\n")
     (stub_bin / "sudo").chmod(0o755)
+    # yq's download+verify (T9, F2) runs without sudo, so it isn't covered by
+    # the no-op sudo stub above — stub wget/sha256sum too so that step
+    # succeeds hermetically without a real network call. sha256sum answers
+    # with the real pinned hash for whichever arch `uname -m` reports, so the
+    # in-script checksum comparison passes regardless of host architecture.
+    (stub_bin / "wget").write_text('#!/bin/bash\nprintf fake-yq-bytes > "$2"\n')
+    (stub_bin / "wget").chmod(0o755)
+    (stub_bin / "sha256sum").write_text(
+        "#!/bin/bash\n"
+        'case "$(uname -m)" in\n'
+        '    x86_64) echo "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4  -" ;;\n'
+        '    aarch64|arm64) echo "578648e463a11c1b6db6010cbf41eafed6bee79466fcffa1bb446672cf7945ea  -" ;;\n'
+        '    *) echo "0000000000000000000000000000000000000000000000000000000000000000  -" ;;\n'
+        "esac\n"
+    )
+    (stub_bin / "sha256sum").chmod(0o755)
 
     env = dict(os.environ, PATH=f"{stub_bin}:{os.environ['PATH']}", XINAS_QUIET="1")
     args = ["-e"] if expert else []
