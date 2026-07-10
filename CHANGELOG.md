@@ -6,6 +6,98 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.6.5] - 2026-07-10
+
+> **Requires-Rebuild: xinas_agent, xinas_node_build** — the sandbox fixes
+> land in `/etc/systemd/system/xinas-agent.service`, which only the
+> `xinas_agent` role re-installs; the pool and array fixes are agent-side
+> TypeScript, and a code-only update does not rebuild `dist/`. Both roles
+> are the same pair 3.6.4 asked for, so a host that took 3.6.4 simply
+> converges. Neither role touches the network.
+
+### Fixed
+
+- **Every spare pool was observed empty, and every live pool was observed
+  inactive.** The real xiRAID 4.3.x daemon lists a pool's members as
+  `[idx, path, [state]]` triples and reports `state` as a list of words.
+  `parsePoolShow` read the device path as the tuple's *last* element, so it
+  got `["ready"]` — an array, not a string — and filtered every drive out;
+  `active` was read as a bare string and never matched a list. The blast
+  radius ran well past the Spare Pools screen: the TUI drive picker offered
+  drives the pool already owned (the daemon then rejected `pool add`, which
+  surfaced as `FAILED_PARTIAL_ROLLED_BACK`), the RAID create wizard offered
+  a live array's spares as free devices, and a false `active` disarmed
+  **both** pool-delete guards, leaving an active pool deletable through the
+  API. The path is now found by scanning the tuple for the `/dev/…` string
+  rather than by fixed index, and `state` is accepted as either a word or a
+  list of words. Tests carry the captured payload verbatim — the shape the
+  fake transport emitted was invented, which is why 1370 green tests never
+  saw this.
+
+- **A failed `pool add` rolled back the pool's pre-existing members.** The
+  pool modify executor reversed the whole spec instead of the delta it had
+  caused. Because `pool add` fails as a unit when any named drive is already
+  a member, the inverse `poolRemove(spec.drives)` targeted the members the
+  task had never touched. Observed live: a failed 3-drive add rolled back
+  into a `pool remove` of the pool's two existing members, and survived only
+  because the daemon rejects an all-or-nothing remove naming one non-member.
+  Each intent now snapshots membership and active state before mutating and
+  reverses only what actually changed; a missing snapshot means rollback does
+  nothing, because a no-op beats a guessed reversal.
+
+- **Editing a RAID array always failed.** Three spare-pool reads in the
+  modify executor still used a local array-shaped reader for `raid_show`,
+  which the real daemon keys by array name. Verify threw
+  `array '<name>' vanished` on every edit — after `raid_modify` had already
+  succeeded — and surfaced as `FAILED_PARTIAL_ROLLED_BACK`. The
+  foreign-sparepool preflight guard never fired, so an array on an
+  operator-managed pool was silently re-pointed at `xnsp_<array>`, and
+  rollback mis-captured the pre-state, leaving an array referencing a deleted
+  pool. All three now route through the shared `readShow` normalizer.
+
+- **Every `fs.create` died at the mkfs stage and rolled back.** `mkfs.xfs`
+  sets the device's soft block size with `ioctl(BLKBSZSET)`, which the kernel
+  gates on `CAP_SYS_ADMIN` and denies with `EACCES` — not a permissions
+  problem on the device node, which is what the ADR-0007 sandbox audit had
+  assumed when it ruled the row "no extra capability needed". The agent runs
+  `User=root` but bounded to `CAP_CHOWN CAP_NET_ADMIN`, so the `capable()`
+  check failed however `/dev/xi_*` was owned. `fs.grow` carried the identical
+  defect through `xfs_growfs`; it went unnoticed because a filesystem that
+  cannot be created cannot be grown. `CAP_SYS_ADMIN` is now granted in both
+  `CapabilityBoundingSet` and `AmbientCapabilities`. Read the grant as an
+  accident guard, not a containment boundary — the unit already runs as root
+  with `/etc/systemd/system` writable.
+
+- **Every `net.iface.update` and `net.pool.apply` died at `render_write`.**
+  `netplan generate` writes `/run/udev/rules.d/90-netplan.rules`, which the
+  ADR-0008 sandbox audit missed when it enumerated netplan's runtime outputs,
+  and `ProtectSystem=strict` mounts all of `/run` read-only. The write hit
+  `EROFS`, and because `netRollback` re-runs `netplan generate` to re-validate
+  it failed identically — so a stage that had touched no kernel state reported
+  as `FAILED_MANUAL_RECOVERY_REQUIRED`. `-/run/udev` is added to
+  `ReadWritePaths`, optional like `/run/netplan`. Both sandbox fixes are
+  guarded by unit-file contract tests, but neither is proven on hardware: the
+  fake host never execs `mkfs.xfs`, so no unit or e2e coverage can surface a
+  kernel capability check.
+
+- **A cold install left the InfiniBand ports with no addresses, and still
+  exited 0.** On a ConnectX card in InfiniBand mode `mlx5_core` creates no
+  netdev — the `ibN` interfaces come from `ib_ipoib`, loaded only when
+  `openibd` starts. `doca_ofed` restarts `openibd` via `notify:`, and Ansible
+  defers handlers to the end of the play, so `net_controllers` scanned
+  `/sys/class/net` with the restart still queued, found nothing, and wrote its
+  "no high-speed interfaces were detected" placeholder netplan. This only
+  reproduces on a genuinely cold node — any reinstall over an existing OFED
+  already has `ib_ipoib` loaded. Fixed with `meta: flush_handlers` at the end
+  of `doca_ofed`. **Affects fresh installs only**, which is why this release
+  does not ask updating hosts to re-run `doca_ofed`. (#264)
+
+- **Two CI failures.** `_semver_key` took an `Optional` straight from
+  `_parse_semver` — no crash was reachable, but pyright cannot narrow through
+  the guarding bool, so the typecheck job failed; the `None` checks now fold
+  into the early return. Nested backticks in `docs/Installer/update-spec.md`
+  closed a code span early and tripped markdownlint MD038.
+
 ## [3.6.4] - 2026-07-10
 
 > **Requires-Rebuild: xinas_agent, xinas_node_build** — the unit-file fix
