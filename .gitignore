@@ -27,3 +27,6 @@ scripts/node_modules/
 
 # pytest-cov data file (the CI coverage gate regenerates it on every run)
 .coverage
+
+# macOS Finder metadata
+.DS_Store
