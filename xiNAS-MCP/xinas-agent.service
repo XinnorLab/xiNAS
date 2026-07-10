@@ -1,9 +1,14 @@
 [Unit]
 Description=xinas-agent — privileged observation and execution daemon (Phase 0)
 Documentation=https://github.com/Xinnor/xiNAS/blob/main/collection/roles/xinas_agent/README.md
-After=network-online.target xinas-api.service
+# xinas-nfs-helper is ordered-after but only Wants=: the NfsSession collector's
+# initialSweep() connects to /run/xinas-nfs-helper.sock, and without the ordering
+# it races the helper on every boot, losing that sweep to ENOENT (PollDriver
+# recovers it later, but agent.health reports error until then). Soft dep so the
+# agent still starts where the helper is not deployed.
+After=network-online.target xinas-api.service xinas-nfs-helper.service
 Requires=xinas-api.service
-Wants=network-online.target
+Wants=network-online.target xinas-nfs-helper.service
 
 [Service]
 Type=simple
@@ -119,7 +124,10 @@ RemoveIPC=true
 # perspective) but prevent the agent from creating new namespaces itself.
 # The probe subprocesses (ip, udevadm) inherit the parent's namespace — this
 # is intentional: they observe the host, not a container namespace.
-RestrictNamespaces=~cgroup ~user
+# The leading ~ negates the WHOLE list; repeating it ("~cgroup ~user") makes
+# systemd fail to parse the value and drop the directive entirely, leaving the
+# agent unrestricted.
+RestrictNamespaces=~cgroup user
 
 # --- System call filter ---
 # @system-service  — baseline for a long-running service (read/write/open/mmap etc.)
