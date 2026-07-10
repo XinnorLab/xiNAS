@@ -26,6 +26,7 @@ import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 # The trailer must START a line — a prose mention ("see the
@@ -271,6 +272,10 @@ class UpdateChecker:
     def allow_prerelease(self) -> bool:
         return self._channel == "prerelease"
 
+    @property
+    def repo_path(self) -> Path | None:
+        return self._repo
+
     async def check(self) -> CheckResult:
         """Query the Releases API and compare versions. Non-blocking."""
         loop = asyncio.get_running_loop()
@@ -372,30 +377,11 @@ class UpdateChecker:
         try:
             _privileged_git(self._repo, "fetch")
             out = _privileged_git(self._repo, "checkout", tag)
-            self._sync_nfs_helper()
             return True, out or f"checked out {tag}"
         except subprocess.CalledProcessError as exc:
             return False, _short_git_error(exc)
         except Exception as exc:  # noqa: BLE001 — surface any apply failure verbatim
             return False, str(exc)
-
-    def _sync_nfs_helper(self) -> None:
-        """Copy nfs-helper sources to installed location and restart the service."""
-        if self._repo is None:
-            return
-        src = self._repo / "xiNAS-MCP" / "nfs-helper"
-        dest = Path("/usr/lib/xinas-mcp/nfs-helper")
-        if not src.is_dir() or not dest.is_dir():
-            return
-        import shutil
-
-        for py_file in src.glob("*.py"):
-            shutil.copy2(py_file, dest / py_file.name)
-        subprocess.run(
-            ["systemctl", "restart", "xinas-nfs-helper"],
-            capture_output=True,
-            timeout=15,
-        )
 
     @staticmethod
     def restart_self() -> None:
@@ -424,6 +410,98 @@ def _find_repo_root() -> Path | None:
 
 
 _PRIVILEGED_HELPER = Path("/usr/local/sbin/xinas-update-git")
+_HELPER_SYNC_WRAPPER = Path("/usr/local/sbin/xinas-update-helper-sync")
+_NFS_HELPER_DEST = Path("/usr/lib/xinas-mcp/nfs-helper")
+
+
+class NfsHelperRefreshOutcome(Enum):
+    """The outcomes in docs/Installer/update-spec.md "NFS-helper refresh"."""
+
+    SKIPPED_REBUILD_COVERED = "skipped_rebuild_covered"
+    SKIPPED_NOT_INSTALLED = "skipped_not_installed"
+    SUCCESS = "success"
+    FAILED_WRAPPER = "failed_wrapper"
+    FAILED_NO_WRAPPER = "failed_no_wrapper"
+
+
+@dataclass(frozen=True)
+class NfsHelperRefreshResult:
+    outcome: NfsHelperRefreshOutcome
+    detail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        """True unless the refresh actually failed (never a bare failure of
+        apply_update itself — see update-spec.md outcome (d))."""
+        return self.outcome not in (
+            NfsHelperRefreshOutcome.FAILED_WRAPPER,
+            NfsHelperRefreshOutcome.FAILED_NO_WRAPPER,
+        )
+
+    @property
+    def remediation(self) -> str:
+        """The one remediation that matches why it failed — never interchangeable."""
+        if self.outcome is NfsHelperRefreshOutcome.FAILED_WRAPPER:
+            return "sudo /usr/local/sbin/xinas-update-helper-sync"
+        if self.outcome is NfsHelperRefreshOutcome.FAILED_NO_WRAPPER:
+            return "sudo ansible-playbook playbooks/site.yml --tags xinas_menu"
+        return ""
+
+
+def refresh_nfs_helper(
+    repo: Path | None, required_rebuilds: tuple[str, ...]
+) -> NfsHelperRefreshResult:
+    """Refresh the installed NFS-helper daemon after a code-only update.
+
+    Call this AFTER a successful rebuild (or directly after checkout when no
+    rebuild trailer is present) — never after a failed rebuild; the safety
+    stop is enforced by the caller (xinas_menu/utils/update_apply.py, Task 13).
+    """
+    if required_rebuilds == ("all",) or "xinas_nfs_helper" in required_rebuilds:
+        return NfsHelperRefreshResult(NfsHelperRefreshOutcome.SKIPPED_REBUILD_COVERED)
+
+    if not _NFS_HELPER_DEST.is_dir():
+        return NfsHelperRefreshResult(NfsHelperRefreshOutcome.SKIPPED_NOT_INSTALLED)
+
+    if _HELPER_SYNC_WRAPPER.exists() and os.access(_HELPER_SYNC_WRAPPER, os.X_OK):
+        r = subprocess.run(
+            ["sudo", "-n", str(_HELPER_SYNC_WRAPPER)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if r.returncode == 0:
+            return NfsHelperRefreshResult(NfsHelperRefreshOutcome.SUCCESS)
+        return NfsHelperRefreshResult(
+            NfsHelperRefreshOutcome.FAILED_WRAPPER,
+            detail=(r.stderr or r.stdout or f"wrapper exited {r.returncode}").strip(),
+        )
+
+    # Wrapper not deployed (host predating this change) — direct fallback,
+    # mirroring _privileged_git's fallback. This normally hits PermissionError
+    # against the root-owned destination when run as the unprivileged xinnor
+    # user; that is outcome (d) with the "wrapper absent" remediation.
+    if repo is None:
+        return NfsHelperRefreshResult(
+            NfsHelperRefreshOutcome.FAILED_NO_WRAPPER, detail="no repo found"
+        )
+    src = repo / "xiNAS-MCP" / "nfs-helper"
+    if not src.is_dir():
+        return NfsHelperRefreshResult(NfsHelperRefreshOutcome.SKIPPED_NOT_INSTALLED)
+    try:
+        import shutil
+
+        for py_file in src.glob("*.py"):
+            shutil.copy2(py_file, _NFS_HELPER_DEST / py_file.name)
+        subprocess.run(
+            ["systemctl", "restart", "xinas-nfs-helper"],
+            check=True,
+            capture_output=True,
+            timeout=15,
+        )
+        return NfsHelperRefreshResult(NfsHelperRefreshOutcome.SUCCESS)
+    except Exception as exc:  # noqa: BLE001 — surface any refresh failure
+        return NfsHelperRefreshResult(NfsHelperRefreshOutcome.FAILED_NO_WRAPPER, detail=str(exc))
 
 
 def _git_output(repo: Path, *args: str) -> str:

@@ -232,7 +232,6 @@ def test_apply_update_checks_out_tag_not_main(monkeypatch, tmp_path):
     c = uc.UpdateChecker(repo_path=tmp_path, current_version="3.1.0", releases_fetcher=lambda: [])
     seen = []
     monkeypatch.setattr(uc, "_privileged_git", lambda repo, *a: seen.append(a) or "")
-    monkeypatch.setattr(c, "_sync_nfs_helper", lambda: None)
 
     ok, _msg = c.apply_update("v3.1.1")
     assert ok is True
