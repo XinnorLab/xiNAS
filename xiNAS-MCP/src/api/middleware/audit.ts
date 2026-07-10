@@ -30,6 +30,20 @@ export function auditMiddleware(state: OpenedStateStore) {
       next();
       return;
     }
+    // The xinas-agent's observation push (POST /internal/v1/observed) is
+    // high-frequency telemetry ingest (Flow A), not an operator operation.
+    // PollDriver full-sweeps every collector on its interval, so auditing it
+    // floods the trail with hundreds of identical http.POST./observed rows
+    // that bury real actions (health.check, share.create, …). Skip it — the
+    // observed-state writes it performs are visible via the GET observed-state
+    // routes, not the audit trail. The other /internal/v1 routes
+    // (agent_started, task_progress) are low-frequency and stay audited.
+    // (req.path is the full path here: this app-level middleware runs before
+    // the /internal/v1 sub-router strips its mount prefix.)
+    if (req.path === '/internal/v1/observed') {
+      next();
+      return;
+    }
     res.on('finish', () => {
       const ctx = req.context;
       if (!ctx) return;
