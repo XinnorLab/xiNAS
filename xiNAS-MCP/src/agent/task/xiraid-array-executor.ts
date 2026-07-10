@@ -287,6 +287,20 @@ function readPoolEntry(
   return parsePoolShow(pools).find((p) => p.name === name);
 }
 
+/**
+ * Live sparepool NAME for one array; `undefined` when the array is absent.
+ *
+ * Goes through readShow for the same reason every other consumer does: on the
+ * real daemon raid_show is an object keyed by array name, so an `Array.isArray`
+ * read finds no entry and reports a live array as vanished (s3 spec §Payload
+ * shapes — one reader, no local copies). An array with no sparepool reads ''.
+ */
+function readSparepool(payload: unknown, name: string): string | undefined {
+  const entry = readShow(payload).find((a) => a.name === name);
+  if (!entry) return undefined;
+  return typeof entry.raw.sparepool === 'string' ? entry.raw.sparepool : '';
+}
+
 export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): Executor {
   const client = opts.client;
   const preStates = new WeakMap<object, ModifyPreState>();
@@ -313,11 +327,7 @@ export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): E
       const arr = shown.find((a) => a.name === spec.id);
       if (!arr) throw new Error(`preflight: array '${spec.id}' does not exist on the daemon`);
 
-      // The live sparepool name comes from the raw payload (readShow strips it).
-      const raw = (await client.raidShow()) as Array<Record<string, unknown>>;
-      const rawEntry = Array.isArray(raw) ? raw.find((a) => a?.name === spec.id) : undefined;
-      const liveSparepool =
-        typeof rawEntry?.sparepool === 'string' ? (rawEntry.sparepool as string) : '';
+      const liveSparepool = typeof arr.raw.sparepool === 'string' ? arr.raw.sparepool : '';
 
       // Foreign-pool guard: the control path only manages xnsp_<array>.
       if (spec.spare_disk_ids !== undefined && liveSparepool !== '' && liveSparepool !== poolName) {
@@ -405,12 +415,10 @@ export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): E
     name: 'verify',
     async run(ctx: ExecutorContext): Promise<void> {
       const spec = narrowModifySpec(ctx);
-      const raw = (await client.raidShow()) as Array<Record<string, unknown>>;
-      const entry = Array.isArray(raw) ? raw.find((a) => a?.name === spec.id) : undefined;
-      if (!entry) throw new Error(`verify: array '${spec.id}' vanished`);
+      const live = readSparepool(await client.raidShow(), spec.id);
+      if (live === undefined) throw new Error(`verify: array '${spec.id}' vanished`);
       if (spec.spare_disk_ids !== undefined) {
         const expected = spec.spare_disk_ids.length > 0 ? derivedPoolName(spec.id) : '';
-        const live = typeof entry.sparepool === 'string' ? entry.sparepool : '';
         if (live !== expected) {
           throw new Error(`verify: sparepool is '${live}', expected '${expected}'`);
         }
@@ -435,9 +443,7 @@ export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): E
       const spec = narrowModifySpec(ctx);
       const poolName = derivedPoolName(spec.id);
 
-      const raw = (await client.raidShow()) as Array<Record<string, unknown>>;
-      const entry = Array.isArray(raw) ? raw.find((a) => a?.name === spec.id) : undefined;
-      const liveSparepool = typeof entry?.sparepool === 'string' ? entry.sparepool : '';
+      const liveSparepool = readSparepool(await client.raidShow(), spec.id) ?? '';
       const livePool = readPoolEntry(await client.poolShow(), poolName);
 
       // 1. Restore the array's sparepool linkage.

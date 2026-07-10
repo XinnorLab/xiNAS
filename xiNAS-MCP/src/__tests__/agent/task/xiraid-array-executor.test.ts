@@ -874,6 +874,86 @@ describe('executors against the real daemon payload shapes', () => {
     expect(fake.ops).toEqual([]); // raid_create never reached
   });
 
+  it('modify: dict-keyed raid_show → tuning-only edit verifies instead of "array vanished"', async () => {
+    const fake = makeFake();
+    fake.arrays.push({ name: 'data', level: '6', devices: ['/dev/a'], state: ['online'] });
+
+    const events: TaskProgressEvent[] = [];
+    const executor = makeXiraidArrayModifyExecutor({ client: new XiraidClient(realShapes(fake)) });
+    await makeRunner().run(
+      {
+        task_id: 't-mod-real',
+        operation_kind: 'xiraid.array.modify',
+        spec: { id: 'data', tuning: { init_prio: 42 } },
+      },
+      executor,
+      async (e) => {
+        events.push(e);
+      },
+    );
+
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.arrays[0]?.init_prio).toBe(42);
+  });
+
+  it('modify preflight: dict-keyed raid_show still catches a foreign sparepool', async () => {
+    const fake = makeFake();
+    fake.arrays.push({
+      name: 'data',
+      level: '6',
+      devices: ['/dev/a'],
+      state: ['online'],
+      sparepool: 'legacy0', // operator-managed, not xnsp_data
+    });
+
+    const events: TaskProgressEvent[] = [];
+    const executor = makeXiraidArrayModifyExecutor({ client: new XiraidClient(realShapes(fake)) });
+    await makeRunner().run(
+      {
+        task_id: 't-mod-foreign',
+        operation_kind: 'xiraid.array.modify',
+        spec: { id: 'data', spare_disk_ids: ['d5'], device_by_id: { d5: '/dev/nvme5n1' } },
+      },
+      executor,
+      async (e) => {
+        events.push(e);
+      },
+    );
+
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(fake.ops).toEqual([]); // the operator's pool is never re-pointed
+    expect(fake.arrays[0]?.sparepool).toBe('legacy0');
+  });
+
+  it('modify rollback: dict-keyed raid_show → the attached sparepool is detached again', async () => {
+    const fake = makeFake({ failTuningModify: true });
+    fake.arrays.push({ name: 'data', level: '6', devices: ['/dev/a'], state: ['online'] });
+
+    const events: TaskProgressEvent[] = [];
+    const executor = makeXiraidArrayModifyExecutor({ client: new XiraidClient(realShapes(fake)) });
+    await makeRunner().run(
+      {
+        task_id: 't-mod-roll',
+        operation_kind: 'xiraid.array.modify',
+        spec: {
+          id: 'data',
+          spare_disk_ids: ['d5'],
+          device_by_id: { d5: '/dev/nvme5n1' },
+          tuning: { init_prio: 9 },
+        },
+      },
+      executor,
+      async (e) => {
+        events.push(e);
+      },
+    );
+
+    expect(shape(events)).toContainEqual(['stage_failed', 'apply_tuning']);
+    // the pool is gone AND the array no longer references it — no dangling sparepool
+    expect(fake.pools).toEqual([]);
+    expect(fake.arrays[0]?.sparepool ?? '').toBe('');
+  });
+
   it('create preflight: tuple device lists still catch an already-claimed member', async () => {
     const fake = makeFake();
     fake.arrays.push({
