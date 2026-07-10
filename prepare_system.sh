@@ -90,7 +90,7 @@ xinas_update_to_latest_release() {
         return 1
     fi
     git fetch origin --tags --quiet
-    git checkout --quiet "$tag"
+    git checkout --force --quiet "$tag"
     echo "$tag"
 }
 

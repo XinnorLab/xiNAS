@@ -72,7 +72,7 @@ do_update() {
     _before=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
     if git -C "$REPO_DIR" fetch origin --tags 2>"$TMP_DIR/update.log" \
-        && git -C "$REPO_DIR" checkout "$_tag" 2>>"$TMP_DIR/update.log"; then
+        && git -C "$REPO_DIR" checkout --force "$_tag" 2>>"$TMP_DIR/update.log"; then
         UPDATE_AVAILABLE=""
 
         # Rebuild MCP server and NFS helper if installed

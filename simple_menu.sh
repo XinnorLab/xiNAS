@@ -41,7 +41,7 @@ do_update() {
     fi
     info_box "Updating..." "Checking out release ${_tag}..."
     if git -C "$REPO_DIR" fetch origin --tags 2>"$TMP_DIR/update.log" \
-        && git -C "$REPO_DIR" checkout "$_tag" 2>>"$TMP_DIR/update.log"; then
+        && git -C "$REPO_DIR" checkout --force "$_tag" 2>>"$TMP_DIR/update.log"; then
         UPDATE_AVAILABLE=""
         msg_box "Updated" "xiNAS updated to ${_tag}!\n\nRestart the menu to use new version."
     else

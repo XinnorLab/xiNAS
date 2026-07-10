@@ -235,7 +235,7 @@ ok "Latest release: ${BOLD}${RELEASE_TAG}${NC}"
 if [[ -d "$INSTALL_DIR/.git" ]]; then
     cd "$INSTALL_DIR"
     run_quiet "Updating xiNAS to ${RELEASE_TAG} at ${INSTALL_DIR}" \
-        bash -c "git fetch origin --tags -q && git checkout -q '${RELEASE_TAG}'"
+        bash -c "git fetch origin --tags -q && git checkout --force -q '${RELEASE_TAG}'"
 else
     run_quiet "Cloning xiNAS ${RELEASE_TAG} to ${INSTALL_DIR}" \
         git clone -q --branch "$RELEASE_TAG" "$REPO_URL" "$INSTALL_DIR"
