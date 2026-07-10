@@ -11,7 +11,7 @@ from textual.widgets import Footer
 from xinas_menu.api.grpc_client import XiRAIDClient
 from xinas_menu.api.nfs_client import NFSHelperClient
 from xinas_menu.utils.audit import AuditLogger
-from xinas_menu.utils.update_check import CheckResult, UpdateChecker, build_rebuild_cmd
+from xinas_menu.utils.update_check import CheckResult, UpdateChecker
 from xinas_menu.widgets.header import XiNASHeader
 
 _MENU_ITEMS_MAIN = [
@@ -57,37 +57,9 @@ class StartupApp(App):
             await self._apply_update(result)
 
     async def _apply_update(self, result: CheckResult | None = None) -> None:
-        import asyncio
+        from xinas_menu.utils.update_apply import apply_update_flow
 
-        tag = result.latest_version if result else ""
-        if not tag:
-            self.notify("No release selected to apply.", severity="error")
-            return
-        loop = asyncio.get_running_loop()
-        ok, msg = await loop.run_in_executor(None, self._update_checker.apply_update, tag)
-        if not ok:
-            self.notify(f"Update failed: {msg}", severity="error")
-            return
-        self.audit.log("system.update", f"checked out release {tag}")
-        rebuilds = result.required_rebuilds if result else ()
-        cmd = build_rebuild_cmd(rebuilds)
-        if cmd:
-            from xinas_menu.screens.startup.playbook_screen import PlaybookRunScreen
-
-            self.audit.log("system.update", f"rebuild required: {' '.join(cmd)}")
-            rc = await self.push_screen_wait(
-                PlaybookRunScreen(cmd=cmd, title="Applying update — Ansible rebuild")
-            )
-            if rc != 0:
-                self.notify(
-                    "Update applied but Ansible failed — not restarting. "
-                    "Review the log and re-run the role manually.",
-                    severity="error",
-                    timeout=15,
-                )
-                return
-        self.audit.log("system.update", "complete — restarting")
-        self._update_checker.restart_self()
+        await apply_update_flow(self, result)
 
     async def on_unmount(self) -> None:
         await self.grpc.close()
