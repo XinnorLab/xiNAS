@@ -45,10 +45,23 @@ REPO_SLUG="${XINAS_UPDATE_REPO:-XinnorLab/xiNAS}"
 
 # Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints nothing on
 # failure. Never returns a branch name; callers must NOT fall back to main.
+# Bounded (--connect-timeout/--max-time): check_for_updates now calls this
+# synchronously, so an unbounded curl would hang the whole menu at startup
+# on an air-gapped/blackholed network (the OS TCP connect timeout alone can
+# run to minutes). 2s to connect, 3s total is enough for a healthy GitHub
+# API call and short enough that a dead network is barely noticeable.
+# Trailing `|| true`: under `set -e`, `var=$(this_pipeline)` aborts the
+# CALLING shell if the pipeline's exit status is non-zero (e.g. curl times
+# out, or `grep -o` finds nothing on empty/error output — `pipefail` makes
+# that the pipeline's status). While backgrounded that only killed a
+# throwaway subshell; now that check_for_updates runs synchronously it would
+# silently kill the whole menu on any curl hiccup. Force success; an empty
+# result already reads as "no update" at the call site.
 _latest_release_tag() {
-    curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+    curl --connect-timeout 2 --max-time 3 -fsSL \
+        "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
         | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
-        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
+        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/' || true
 }
 
 # Release tag the working tree at $1 is currently on (empty if none).
@@ -140,8 +153,15 @@ do_update() {
     fi
 }
 
-# Run update check in background
-check_for_updates &
+# Run synchronously (NOT backgrounded): a background subshell's
+# UPDATE_AVAILABLE/UPDATE_TARGET_TAG assignments are invisible to this parent
+# shell — bash never propagates a subshell's variables back to its parent —
+# so `check_for_updates &` silently discarded every result (F4). Safe to
+# block on now: the tcp reachability probe above is bounded to 2s
+# (`timeout 2`) and _latest_release_tag's curl is bounded to a 2s connect /
+# 3s total (see above), so the worst case with GitHub unreachable is ~5s,
+# not an indefinite hang.
+check_for_updates
 
 check_license() {
     local license_file="/tmp/license"
