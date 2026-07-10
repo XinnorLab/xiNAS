@@ -14,7 +14,7 @@ history — this spec is the source of truth.
 | Key | Item | Action |
 |-----|------|--------|
 | 1 | List Users | Render the user-accounts table (default view on mount) |
-| 2 | Create User | `useradd -m` + optional `chpasswd` |
+| 2 | Create User | `useradd -m` + `chpasswd` (**password required**) |
 | 3 | Manage User | Password / lock / shell / groups / delete for one user |
 | 4 | Set Disk Quota | XFS user quota via the NFS helper |
 | 5 | Show Quotas | `xfs_quota` user + project report |
@@ -67,6 +67,37 @@ Below the table, a **Disk Quotas** line reports whether any mounted XFS
 filesystem carries a quota mount option (`uquota`/`usrquota`/`pquota`/
 `prjquota`) via `findmnt`.
 
+## Create User — a password is required
+
+Create User prompts for a username, a **non-empty** password (confirmed
+twice), and a home directory, then runs
+`useradd -m -d <home> -s /bin/bash <name>` followed by `chpasswd`.
+
+The password is mandatory by design. `useradd` on its own writes `!` to
+the account's `/etc/shadow` password field; `passwd -S` then reports the
+status field as `L`, so a freshly created **passwordless** account shows
+as **`Locked`** in the List Users Status column (see above) even though
+no admin ever locked it. Requiring a password means the new account has a
+real hash, `passwd -S` reports `P`, and the account renders as `Active`.
+
+The rule is enforced at two layers so the invariant "a user created by
+this screen is never left in a `!`/Locked state" holds even if a caller
+is added later:
+
+1. **UI** — the password prompt loop rejects an empty value and re-asks;
+   the account-creation step is never reached without a password.
+2. **`_create_user_sync`** — refuses to run `useradd` when the password
+   is empty (returns a `Password is required.` error), so it can never
+   create the passwordless account that would surface as Locked. If
+   `useradd` succeeds but the follow-up `chpasswd` fails, it rolls the
+   account back with `userdel -r` before returning the error, so a
+   half-created `!`/Locked account is never left behind.
+
+Deleting a user does **not** carry lock state to a later account: `L` is
+a per-name `/etc/shadow` fact, and `userdel` removes the shadow entry.
+The Locked-on-a-new-user symptom is created entirely by the passwordless
+`useradd` path above, not inherited from the deleted account.
+
 ## Manage User
 
 Lock/unlock uses `usermod -L` / `usermod -U`; the menu label reflects the
@@ -89,13 +120,39 @@ The delete flow is:
 
 1. **Collect** the user's block quotas across every mounted XFS
    filesystem (`findmnt -t xfs -n -o TARGET`, then
-   `xfs_quota -x -c 'quota -u -N -b <user>' <mount>` per mount). A mount
-   is in scope only when the user's soft **or** hard block limit is
-   nonzero. Limits are read and re-applied in **kilobytes** — the native
-   unit of both `xfs_quota report`/`quota` and the `limit -u bsoft=Nk`
-   set path — so the capture/restore round-trip is exact.
+   `xfs_quota -x -c 'report -u -N' <mount>` per mount). The collector
+   reads the **`report`** command, not the per-user `quota` command:
+   `report -u -N` prints one line per user — `<name> <used> <soft> <hard>
+   <warn> [<grace>]`, block values in **kilobytes** — and the collector
+   picks the row whose first field equals the username. The per-user
+   `xfs_quota -x -c 'quota -u -N -b <user>' <mount>` form is **not** used:
+   on some xfsprogs/device combinations (observed on an xiRAID-backed XFS)
+   it prints **nothing** for a user that plainly has a limit, so the
+   collector silently saw no quota and `userdel` then orphaned it — the
+   exact bug this flow exists to prevent. A mount is in scope only when
+   the user's soft **or** hard block limit is nonzero. Limits are read and
+   re-applied in kilobytes — the same unit as the `limit -u bsoft=Nk` set
+   path — so the capture/restore round-trip is exact.
+
+   `xfs_quota` **exits 0 even on hard errors** (e.g. `foreign filesystem`,
+   `cannot setup path … No such device`). The collector therefore judges
+   success from the command's **text**, not its exit code: any listed mount
+   whose output carries a known error marker is treated as a **read
+   failure**, not as "no quota". `_collect_user_quotas` returns
+   `(saved, read_ok)` where `read_ok` is False if a listed mount could not
+   be read (xfs_quota error in the output, or `_run_cmd` non-zero). Note the
+   scope: this catches a mount that `findmnt` lists but `xfs_quota` chokes
+   on (e.g. a flaky `foreign filesystem` reading). It does **not** cover a
+   filesystem that `findmnt` does not list at all (array fully unmounted at
+   delete time) — there is nothing to key a warning off, and a system with
+   genuinely no XFS mounts has no quotas to orphan.
 2. **Confirm.** The confirmation dialog names how many quota entries will
-   be cleared first (when any), so the removal is not a surprise.
+   be cleared first (when any), so the removal is not a surprise. If the
+   quota read **failed** on a listed mount (`read_ok` False — e.g.
+   `xfs_quota` reports the mount as a foreign filesystem), the dialog
+   instead **warns** that quotas could not be verified and that deleting now
+   may orphan stale limits onto a future account reusing this UID, so the
+   operator deletes with eyes open rather than silently orphaning.
 3. **Clear** each in-scope mount to `0/0` via the NFS helper
    (`set_quota(mount, 0, 0, username=…)`), remembering the prior
    `(mount, soft_kb, hard_kb)` for each cleared entry.
@@ -108,11 +165,13 @@ The delete flow is:
    fails is surfaced as a warning to check Show Quotas. Nothing is
    deleted unless every quota was cleared successfully.
 
-A user with no quotas skips steps 1's scope entirely and deletes as
+A user with no quotas skips step 1's scope entirely and deletes as
 before. The core sequencing + rollback (`_delete_user_with_quota_cleanup`)
 is a pure, injectable function so it is unit-testable without a live
-filesystem; the quota-line parser (`_parse_quota_kb`) and collector
-(`_collect_user_quotas`) are likewise separable.
+filesystem; the report-line parser (`_parse_report_user_quota`), the
+xfs_quota error sniffer (`_xfs_quota_errored`), the collector
+(`_collect_user_quotas`), and the confirm-note builder
+(`_delete_confirm_note`) are likewise separable.
 
 ## Notes
 

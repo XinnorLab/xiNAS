@@ -120,12 +120,15 @@ class UsersScreen(XiNASAppMixin, Screen):
 
         while True:
             password = await self.app.push_screen_wait(
-                InputDialog("Password (leave blank for no password):", "Create User", password=True)
+                InputDialog("Password:", "Create User", password=True)
             )
             if password is None:
                 return
             if not password:
-                break
+                # A password is required: a passwordless useradd writes `!` to
+                # /etc/shadow and the account shows as Locked in List Users.
+                self.app.notify("Password is required.", severity="error")
+                continue
             password2 = await self.app.push_screen_wait(
                 InputDialog("Confirm password:", "Create User", password=True)
             )
@@ -208,13 +211,15 @@ class UsersScreen(XiNASAppMixin, Screen):
         view = self.query_one("#users-content", ScrollableTextView)
 
         # Snapshot the user's XFS quotas up front so the confirmation can name
-        # them and so we can restore them if the delete fails.
-        saved = await loop.run_in_executor(None, lambda: _collect_user_quotas(username))
-        if saved:
-            n = len(saved)
-            quota_note = f"\n\n{n} disk quota entr{'y' if n == 1 else 'ies'} will be cleared first."
-        else:
-            quota_note = ""
+        # them and so we can restore them if the delete fails. read_ok is False
+        # when a mount could not be read — the dialog then warns rather than
+        # silently orphaning a quota we never saw.
+        try:
+            uid = pwd.getpwnam(username).pw_uid
+        except KeyError:
+            uid = -1
+        saved, read_ok = await loop.run_in_executor(None, lambda: _collect_user_quotas(username))
+        quota_note = _delete_confirm_note(saved, read_ok, uid)
 
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
@@ -690,15 +695,40 @@ def _get_xfs_mounts() -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
-def _parse_quota_kb(output: str) -> tuple[int, int]:
-    """(soft_kb, hard_kb) from `xfs_quota -x -c 'quota -u -N -b <user>' <mount>`.
+_XFS_QUOTA_ERROR_MARKERS = (
+    "foreign filesystem",
+    "cannot setup path",
+    "no such device",
+    "not a mount point",
+)
 
-    The header-suppressed data line is ``<device> <used> <soft> <hard> …`` with
-    block values in kilobytes. Returns ``(0, 0)`` when no data line is present.
+
+def _xfs_quota_errored(stdout: str, stderr: str) -> bool:
+    """True if xfs_quota output signals a hard error.
+
+    xfs_quota exits 0 even on failures such as ``cannot setup path … No such
+    device`` or ``foreign filesystem``, so the exit code cannot be trusted; the
+    failure has to be read out of the command's text.
+    """
+    blob = f"{stdout}\n{stderr}".lower()
+    return any(marker in blob for marker in _XFS_QUOTA_ERROR_MARKERS)
+
+
+def _parse_report_user_quota(output: str, username: str) -> tuple[int, int]:
+    """(soft_kb, hard_kb) for *username* from ``xfs_quota -x -c 'report -u -N'``.
+
+    Each data row is ``<name> <used> <soft> <hard> <warn> [<grace>]`` with block
+    values in kilobytes (no ``-h``). Returns ``(0, 0)`` when the user has no row.
+
+    The ``report`` command is read rather than the per-user
+    ``quota -u -N -b <user>`` form: on some xfsprogs/device combinations (an
+    xiRAID-backed XFS was observed) ``quota`` prints *nothing* for a user that
+    plainly has a limit, so the collector saw no quota and ``userdel`` orphaned
+    it. ``report`` lists every user reliably.
     """
     for line in output.splitlines():
         parts = line.split()
-        if len(parts) >= 4 and parts[0].startswith("/"):
+        if len(parts) >= 4 and parts[0] == username:
             try:
                 return int(parts[2]), int(parts[3])
             except ValueError:
@@ -706,20 +736,46 @@ def _parse_quota_kb(output: str) -> tuple[int, int]:
     return 0, 0
 
 
-def _collect_user_quotas(username: str) -> list[tuple[str, int, int]]:
-    """(mount, soft_kb, hard_kb) for every XFS mount where *username* has a limit.
+def _collect_user_quotas(username: str) -> tuple[list[tuple[str, int, int]], bool]:
+    """(saved, read_ok) — *username*'s nonzero block quotas across XFS mounts.
 
-    Mounts where both the soft and hard block limits are zero are omitted.
+    *saved* is ``[(mount, soft_kb, hard_kb), …]`` for every mount where the user
+    has a nonzero soft or hard limit. *read_ok* is False when any mount could not
+    be read (``_run_cmd`` non-zero, or an xfs_quota error in the output despite a
+    zero exit code), so the caller can warn instead of silently orphaning a quota
+    it never managed to see.
     """
     saved: list[tuple[str, int, int]] = []
+    read_ok = True
     for mount in _get_xfs_mounts():
-        ok, out, _ = _run_cmd("xfs_quota", "-x", "-c", f"quota -u -N -b {username}", mount)
-        if not ok:
+        ok, out, err = _run_cmd("xfs_quota", "-x", "-c", "report -u -N", mount)
+        if not ok or _xfs_quota_errored(out, err):
+            read_ok = False
             continue
-        soft, hard = _parse_quota_kb(out)
+        soft, hard = _parse_report_user_quota(out, username)
         if soft > 0 or hard > 0:
             saved.append((mount, soft, hard))
-    return saved
+    return saved, read_ok
+
+
+def _delete_confirm_note(saved: list[tuple[str, int, int]], read_ok: bool, uid: int) -> str:
+    """Suffix for the delete-confirmation dialog describing quota handling.
+
+    - read failure → a warning that quotas could not be verified and deleting
+      may orphan stale limits onto a future account reusing *uid*;
+    - quotas found → how many entries will be cleared first;
+    - none → empty string.
+    """
+    if not read_ok:
+        return (
+            "\n\nWARNING: could not read this user's XFS quotas (the array may be "
+            "unmounted). Deleting now may orphan stale quota limits onto a future "
+            f"account that reuses UID {uid}. Check Show Quotas once the array is back."
+        )
+    if saved:
+        n = len(saved)
+        return f"\n\n{n} disk quota entr{'y' if n == 1 else 'ies'} will be cleared first."
+    return ""
 
 
 def _restore_quotas(cleared, set_quota_fn) -> bool:
@@ -767,6 +823,12 @@ def _delete_user_with_quota_cleanup(
 
 
 def _create_user_sync(username: str, home: str, password: str) -> tuple[bool, str]:
+    # A password is mandatory. `useradd` on its own writes `!` to the account's
+    # /etc/shadow password field, which `passwd -S` reports as `L` — the account
+    # then shows as Locked in List Users even though nobody locked it. Refuse to
+    # create that passwordless account rather than surface a spurious lock.
+    if not password:
+        return False, "Password is required."
     r = subprocess.run(
         ["useradd", "-m", "-d", home, "-s", "/bin/bash", username],
         capture_output=True,
@@ -774,15 +836,17 @@ def _create_user_sync(username: str, home: str, password: str) -> tuple[bool, st
     )
     if r.returncode != 0:
         return False, r.stderr.strip()
-    if password:
-        p = subprocess.run(
-            ["chpasswd"],
-            input=f"{username}:{password}\n",
-            capture_output=True,
-            text=True,
-        )
-        if p.returncode != 0:
-            return False, p.stderr.strip()
+    p = subprocess.run(
+        ["chpasswd"],
+        input=f"{username}:{password}\n",
+        capture_output=True,
+        text=True,
+    )
+    if p.returncode != 0:
+        # useradd already created a locked (`!`) account; roll it back so a
+        # half-created Locked account is never left behind.
+        subprocess.run(["userdel", "-r", username], capture_output=True, text=True)
+        return False, p.stderr.strip()
     return True, ""
 
 
