@@ -96,6 +96,85 @@ def test_unparseable_tags_report_not_greater():
     assert _semver_gt("not-a-tag", "not-a-tag") is False
 
 
+# ── WS3 T4 code review: leading-zero octal inversion, oversized-component
+# overflow, and REPO_DIR unbound-under-`set -u` ─────────────────────────────
+
+
+def _semver_gt_proc(a: str, b: str) -> subprocess.CompletedProcess:
+    """Like _semver_gt but captures stdout/stderr so tests can also assert
+    on stderr noise (e.g. the bash octal-arithmetic error the leading-zero
+    fix eliminates)."""
+    script = f'source "{MENU_LIB}" >/dev/null 2>&1; _semver_gt "{a}" "{b}"'
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+
+def test_leading_zero_components_are_rejected():
+    """Bash `((...))` reads a leading-zero literal as octal: "v1.010.0" used
+    to compare as octal 8 (< 9), inverting the true decimal 10 > 9, and
+    "v1.08.0" is not even a valid octal literal, so the comparison used to
+    raise `value too great for base` -- swallowed as false because it fired
+    as the *tested* condition of `if ((...))`, letting the patch field
+    silently decide instead of the real minor-version difference. SemVer's
+    own no-leading-zero rule (enforced in _semver_parse) makes both tags
+    simply unparseable, so both directions read as "not greater" -- never a
+    false "update available" -- and no stderr noise reaches the caller."""
+    for a, b in (
+        ("v1.010.0", "v1.9.0"),
+        ("v1.9.0", "v1.010.0"),
+        ("v1.08.0", "v1.7.0"),
+        ("v1.7.0", "v1.08.0"),
+    ):
+        proc = _semver_gt_proc(a, b)
+        assert proc.returncode == 1, f"_semver_gt({a!r}, {b!r}) should be False"
+        assert proc.stderr == "", f"_semver_gt({a!r}, {b!r}) leaked stderr noise: {proc.stderr!r}"
+
+
+def test_oversized_numeric_component_is_rejected():
+    """A 26-digit patch component used to overflow bash's signed 64-bit
+    `((...))` arithmetic and wrap negative, comparing as smaller than a tiny
+    patch value. The 18-digit cap in _semver_parse's component regex makes
+    the tag unparseable instead, so neither direction manufactures a false
+    comparison."""
+    huge = "v1.2.99999999999999999999999999"
+    assert _semver_gt(huge, "v1.2.3") is False
+    assert _semver_gt("v1.2.3", huge) is False
+
+
+def test_normal_versions_still_compare():
+    """Regression guard: tightening the component regex to reject leading
+    zeros must not break ordinary multi-digit tags, and a bare "0" component
+    (common in v0.x.y and v1.0.0 tags) must still be valid."""
+    assert _semver_gt("v3.10.0", "v3.9.0") is True
+    assert _semver_gt("v3.9.0", "v3.10.0") is False
+    assert _semver_gt("v10.0.0", "v9.9.9") is True
+    # A bare "0" component must still parse and compare correctly.
+    assert _semver_gt("v0.1.0", "v0.0.9") is True
+    assert _semver_gt("v1.0.0", "v0.9.9") is True
+
+
+def test_check_for_updates_returns_quietly_when_repo_dir_unset():
+    """check_for_updates' first line used to be a plain assignment reading
+    $REPO_DIR -- a plain assignment gets no errexit/nounset exemption, so
+    sourcing lib/menu_lib.sh under `set -euo pipefail` with REPO_DIR unset
+    and calling check_for_updates aborted the ENTIRE shell with
+    "REPO_DIR: unbound variable". It was safe only because both current
+    callers (startup_menu.sh, simple_menu.sh) set REPO_DIR before sourcing
+    this file. check_for_updates already returns 0 silently for every other
+    missing precondition (no .git, no git binary, no network); the added
+    guard makes a missing REPO_DIR consistent with that."""
+    script = textwrap.dedent(f"""\
+        set -euo pipefail
+        unset REPO_DIR
+        source "{MENU_LIB}" >/dev/null 2>&1
+        check_for_updates
+        echo "SURVIVED"
+        """)
+    proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert proc.stdout.strip() == "SURVIVED"
+    assert proc.stderr == ""
+
+
 def test_check_for_updates_uses_semver_not_string_inequality():
     """Post-hoist (Part B): check_for_updates/_semver_gt live only in
     lib/menu_lib.sh; the menus must not carry either the old string-

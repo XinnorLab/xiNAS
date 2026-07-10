@@ -974,6 +974,23 @@ print_status() {
 
 # Prints "MAJOR MINOR PATCH PRERELEASE" on success; returns 1 (and prints
 # nothing) if $1 is not parseable as X.Y.Z.
+#
+# Component validation is `^(0|[1-9][0-9]{0,17})$`, not the looser
+# `^[0-9]+$`: real SemVer forbids leading zeroes in numeric identifiers, so
+# rejecting them here is a correctness fix, not just a workaround. It also
+# closes two bugs in `_semver_gt`'s `((...))` arithmetic, which parses a
+# leading-zero literal as octal: "010" silently read as octal 8 (< 9,
+# inverting a true decimal 10 > 9), and "08" is not a valid octal digit at
+# all, so bash raises `value too great for base` on that comparison — an
+# error that gets swallowed as "false" because it fires as the *tested*
+# condition of `if ((...))`, letting a later field (e.g. patch) silently
+# decide the result instead of the real minor-version difference. Capping
+# each component at 18 digits (max 999999999999999999 < 2^63-1) closes a
+# third bug: an unbounded numeric literal like 26 nines overflows bash's
+# signed 64-bit arithmetic and wraps negative, comparing as smaller than a
+# tiny patch value. An unparseable tag already makes `_semver_gt` return
+# false, which is the safe direction here — it never manufactures a false
+# "update available".
 _semver_parse() {
     local v="$1"
     v="${v#v}"; v="${v#V}"
@@ -983,7 +1000,8 @@ _semver_parse() {
     [[ "$v" == *-* ]] && pre="${v#*-}"
     local maj min pat
     IFS='.' read -r maj min pat <<< "$core"
-    [[ "$maj" =~ ^[0-9]+$ && "$min" =~ ^[0-9]+$ && "$pat" =~ ^[0-9]+$ ]] || return 1
+    local -r num_re='^(0|[1-9][0-9]{0,17})$'
+    [[ "$maj" =~ $num_re && "$min" =~ $num_re && "$pat" =~ $num_re ]] || return 1
     printf '%s %s %s %s\n' "$maj" "$min" "$pat" "$pre"
 }
 
@@ -1100,7 +1118,7 @@ _latest_release_tag() {
     local max_time="${1:-3}"
     local connect_timeout="${2:-2}"
     curl --connect-timeout "$connect_timeout" --max-time "$max_time" -fsSL \
-        "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+        "https://api.github.com/repos/${REPO_SLUG:-}/releases/latest" 2>/dev/null \
         | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
         | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/' || true
 }
@@ -1112,6 +1130,17 @@ _current_release_tag() {
 }
 
 check_for_updates() {
+    # Guard against an unset REPO_DIR before anything else runs: this
+    # function is sourced under `set -euo pipefail` by both menus, and the
+    # very next line is a plain assignment that reads $REPO_DIR — a plain
+    # assignment gets no errexit/nounset exemption, so an unset REPO_DIR
+    # would abort the ENTIRE shell with "REPO_DIR: unbound variable" rather
+    # than just this function failing. Every other missing precondition
+    # below (no .git, no git binary, no network) already returns 0 quietly;
+    # do the same here instead of relying on both current callers happening
+    # to set REPO_DIR before sourcing this file.
+    [[ -n "${REPO_DIR:-}" ]] || return 0
+
     # Check if running from a git repo
     local git_dir="$REPO_DIR/.git"
     [[ -d "$git_dir" ]] || return 0
