@@ -248,7 +248,14 @@ chmod +x ./*.sh 2>/dev/null || true
 step "Preparing system"
 info "Detailed log: ${WHITE}${LOG_FILE}${NC}"
 
+set +e
 XINAS_QUIET=1 XINAS_UNATTENDED="$UNATTENDED" XINAS_LOG="$LOG_FILE" ./prepare_system.sh
+prep_rc=$?
+set -e
+if [[ $prep_rc -ne 0 ]]; then
+    fail "System preparation failed (exit ${prep_rc}) — see ${LOG_FILE}"
+    exit "$prep_rc"
+fi
 
 # ── Unattended provisioning ───────────────────────────────────────────────────
 # prepare_system.sh installed the dependencies and (in unattended mode) skipped

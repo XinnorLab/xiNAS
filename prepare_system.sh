@@ -181,6 +181,7 @@ if [ "${XINAS_UNATTENDED:-0}" = "1" ]; then
     exit 0
 fi
 
+set +e
 if [ "$EXPERT" -eq 1 ]; then
     ./startup_menu.sh
     status=$?
@@ -188,7 +189,17 @@ else
     ./simple_menu.sh
     status=$?
 fi
+set -e
 
 if [ "$status" -eq 2 ]; then
     exit 0
 fi
+
+# POSIX: an `if` with no `else` whose condition is false exits 0, so without
+# this explicit exit a real menu failure (any status other than 2) would be
+# silently swallowed as success once the errexit-kills-the-shell bug above is
+# fixed. Propagate the menu's actual exit status for every other case.
+if [ "$status" -ne 0 ]; then
+    echo -e "${RED}Menu exited with status ${status}${NC}" >&2
+fi
+exit "$status"
