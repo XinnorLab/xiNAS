@@ -75,15 +75,23 @@ ProtectHome=true
 # Finding #29: /run/netplan (and /etc/netplan on netplan-less hosts) may not
 # exist; a non-optional ReadWritePaths entry fails namespace setup with
 # 226/NAMESPACE and the agent restart-loops. '-' makes them optional.
-ReadWritePaths=/run/xinas /var/log/xinas /var/lib/xinas/config-history /etc/systemd/system -/etc/netplan -/run/netplan /run/systemd
+ReadWritePaths=/run/xinas /var/log/xinas /var/lib/xinas/config-history /etc/systemd/system -/etc/netplan -/run/netplan /run/systemd -/run/udev
 #   /etc/netplan         — S6 network executors (ADR-0008 §Sandbox): the
 #                          full-file 99-xinas.yaml render + the audited
 #                          cleanup of managed-iface stanzas in foreign files.
 #   /run/netplan,
-#   /run/systemd         — `netplan generate/apply` write their generated
-#                          backend configs under /run/netplan and
-#                          /run/systemd/network; networkd reload itself goes
-#                          over dbus (AF_UNIX, already allowed).
+#   /run/systemd,
+#   /run/udev            — `netplan generate/apply` write their generated
+#                          backend configs under /run/netplan,
+#                          /run/systemd/network and /run/udev/rules.d
+#                          (90-netplan.rules); networkd reload itself goes
+#                          over dbus (AF_UNIX, already allowed). The ADR-0008
+#                          sandbox audit missed the udev rules file, so every
+#                          net.iface.update died at render_write with EROFS —
+#                          and the rollback's own `netplan generate` died the
+#                          same way, escalating to requires_manual_recovery.
+#                          Optional ('-') like /run/netplan: udev's runtime
+#                          dir is absent in some container test hosts.
 # Read-only paths the agent must read:
 #   /var/lib/xinas/controller-id — shared identity (0644 world-readable)
 #   /etc/xinas-agent             — config.json + agent-token (0640 / 0400)

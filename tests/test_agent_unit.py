@@ -51,6 +51,21 @@ def test_state_dir_stays_read_only():
     assert "/var/lib/xinas/state" not in _read_write_paths()
 
 
+def test_netplan_runtime_dirs_are_writable():
+    """``netplan generate`` writes /run/systemd/network **and** /run/udev/rules.d.
+
+    ``ProtectSystem=strict`` mounts all of ``/run`` read-only, so a missing
+    ``/run/udev`` makes the S6 ``render_write`` stage die with
+    ``cannot create file run/udev/rules.d/90-netplan.rules: Read-only file
+    system``. The rollback re-runs the same ``netplan generate`` and dies the
+    same way, escalating a change-nothing failure to
+    ``requires_manual_recovery``.
+    """
+    paths = _read_write_paths()
+    assert "/run/systemd" in paths
+    assert "/run/udev" in paths
+
+
 def test_restrict_namespaces_parses():
     """A repeated ``~`` makes systemd drop the directive, unsandboxing the agent.
 

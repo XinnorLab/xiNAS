@@ -40,8 +40,8 @@ Verified integration facts this ADR is designed against:
 - The agent sandbox today: `CapabilityBoundingSet=CAP_CHOWN` (no
   CAP_NET_ADMIN — `ip rule/addr` mutations and netplan's kernel
   programming are impossible) and no write access to `/etc/netplan` or
-  `/run/netplan`/`/run/systemd` under `ProtectSystem=strict`. §Sandbox
-  lists the audited delta.
+  `/run/netplan`/`/run/systemd`/`/run/udev` under `ProtectSystem=strict`.
+  §Sandbox lists the audited delta.
 - `api-v1.yaml` `risk_level` enum is
   `[non_disruptive, changing_access, destructive, unsupported_rollback]`.
   S5 shipped `'disruptive'` (off-enum) on fs.unmount/fs.set_quota_mode;
@@ -240,13 +240,24 @@ Audited against the current unit:
 |---|---|---|
 | `ip rule/route/addr` mutations + netplan's kernel programming | `CapabilityBoundingSet=CAP_CHOWN` | `+ CAP_NET_ADMIN` (bounding + ambient) |
 | write `/etc/netplan/99-xinas.yaml` + foreign-file cleanup | `ProtectSystem=strict` | `ReadWritePaths += /etc/netplan` |
-| `netplan generate/apply` writes `/run/netplan`, `/run/systemd/network` | — | `ReadWritePaths += /run/netplan /run/systemd` |
+| `netplan generate/apply` writes `/run/netplan`, `/run/systemd/network`, `/run/udev/rules.d/90-netplan.rules` | — | `ReadWritePaths += /run/netplan /run/systemd /run/udev` |
 | netlink for `ip -j`/monitor | `RestrictAddressFamilies` already has `AF_NETLINK` | none |
 | networkd reload over dbus | `AF_UNIX` allowed | none |
 
 One commit, `Requires-Rebuild: xinas_agent`, hardware smoke item appended
 to the S6 spec checklist (no systemd/netlink mutation in CI — the
 residual mirrors S5's).
+
+**Amended after hardware smoke:** the original audit enumerated netplan's
+runtime outputs as `/run/netplan` + `/run/systemd/network` only. `netplan
+generate` also writes `/run/udev/rules.d/90-netplan.rules`, and
+`ProtectSystem=strict` mounts *all* of `/run` read-only. Every
+`net.iface.update` therefore failed at `render_write` with `cannot create
+file run/udev/rules.d/90-netplan.rules: Read-only file system`, and
+because `netRollback` re-runs the same `netplan generate`, the rollback
+failed identically — turning a stage that had changed no kernel state into
+`requires_manual_recovery`. The table row above now carries `/run/udev`;
+`tests/test_agent_unit.py::test_netplan_runtime_dirs_are_writable` guards it.
 
 ## Decision — RDMA readiness & health
 

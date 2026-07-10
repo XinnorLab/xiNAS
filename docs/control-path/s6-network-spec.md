@@ -300,7 +300,7 @@ ethernet), `sys-class-net.json` (2× mlx + 1 ethernet), `rdma-links.json`,
 | Task | Contents | Commit type |
 |---|---|---|
 | T0 | ADR-0008 + this spec land; api-v1 (spec-optional NetworkInterface, merged-read note, POST /network/ip-pool, NetworkConfig in OBSERVED_KINDS); S5 `risk_level` drift fix (`'disruptive'`→`'changing_access'` + tests); contract fixtures | docs+fix(api) |
-| T1 | agent unit: `CAP_NET_ADMIN`, `ReadWritePaths += /etc/netplan /run/netplan /run/systemd`; smoke checklist appended here §10 | feat(agent), `Requires-Rebuild: xinas_agent` |
+| T1 | agent unit: `CAP_NET_ADMIN`, `ReadWritePaths += /etc/netplan /run/netplan /run/systemd /run/udev` (udev added post-smoke — `netplan generate` writes `/run/udev/rules.d/90-netplan.rules`, see ADR-0008 §Sandbox amendment); smoke checklist appended here §10 | feat(agent), `Requires-Rebuild: xinas_agent` |
 | T2 | `lib/parse/netplan.ts` + `lib/net/render.ts` (day-1 goldens, hash determinism) | feat(lib) |
 | T3 | `lib/net/validate.ts` (blockers, allocations) | feat(lib) |
 | T4 | NetHost + fake host | feat(agent) |
@@ -317,7 +317,9 @@ ethernet), `sys-class-net.json` (2× mlx + 1 ethernet), `rdma-links.json`,
   lab node post-rebuild: PATCH an IB interface IP → `ip addr`/`ip rule`
   match; duplicates blocked then cleaned with `cleanup: true`; pool apply
   re-addresses with stable tables; agent journal free of EPERM/EACCES
-  (CAP_NET_ADMIN sufficiency); `netplan generate` rejection path leaves
+  (CAP_NET_ADMIN sufficiency) **and of EROFS** (ReadWritePaths sufficiency —
+  the sandbox gap that hid behind `netplan generate` until first smoke);
+  `netplan generate` rejection path leaves
   the prior file in place; management ethernet untouched throughout.
 - **Foreign-file YAML round-trip:** cleanup rewrites e.g.
   `50-cloud-init.yaml` via js-yaml (comments/ordering may change in THAT
