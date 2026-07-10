@@ -121,6 +121,20 @@ _xiraid_has_license() {
     return 0
 }
 
+# Finding #4: `xicli license show` output is NOT a usable license file — it
+# carries the hwkey/status/metadata but no license_key blob, so it cannot be fed
+# back to `xicli license update -p`. Never write it to the canonical license
+# path. Save the captured details to <file>.recovered for reference and return 1
+# so callers fall through to manual license entry.
+_save_recovered_license_note() {
+    local license_file="${1:-/tmp/license}"
+    local note="${license_file}.recovered"
+    printf '%s\n' "$_XIRAID_LICENSE_OUTPUT" > "$note" 2>/dev/null || true
+    msg_box "Cannot Auto-Recover License" \
+        "xiRAID reports an active license, but 'xicli license show' is not a\nusable license file (no license key), so it cannot be reinstalled.\n\nCaptured details saved for reference:\n  $note\n\nPaste your original license, or place the license file at:\n  $license_file"
+    return 1
+}
+
 enter_license() {
     local license_file="/tmp/license"
     [ -x ./hwkey ] || chmod +x ./hwkey
@@ -145,10 +159,9 @@ enter_license() {
                 1) return 0 ;;
                 2) ;; # fall through to manual paste
                 3)
-                    cp "$license_file" "${license_file}.$(date +%Y%m%d%H%M%S).bak"
-                    echo "$_XIRAID_LICENSE_OUTPUT" > "$license_file"
-                    msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to $license_file"
-                    return 0
+                    # Cannot recover a usable license from `xicli license show`
+                    # (finding #4) — note it and fall through to manual paste.
+                    _save_recovered_license_note "$license_file" || true
                     ;;
                 0) return 0 ;;
             esac
@@ -167,9 +180,9 @@ enter_license() {
             "0" "🔙 Back") || return
         case "$choice" in
             1)
-                echo "$_XIRAID_LICENSE_OUTPUT" > "$license_file"
-                msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to $license_file"
-                return 0
+                # `xicli license show` is not a reinstallable license (finding
+                # #4) — note it and fall through to manual paste.
+                _save_recovered_license_note "$license_file" || true
                 ;;
             2) ;; # fall through to manual paste
             0) return 0 ;;
@@ -688,8 +701,11 @@ while true; do
             if ! has_license; then
                 # Try to recover license from running xiRAID
                 if _xiraid_has_license; then
-                    echo "$_XIRAID_LICENSE_OUTPUT" > /tmp/license
-                    msg_box "License Recovered" "License key recovered from running xiRAID\nand saved to /tmp/license"
+                    # `xicli license show` can't be reinstalled (finding #4):
+                    # don't fabricate /tmp/license. Note it and require a real
+                    # license file.
+                    _save_recovered_license_note /tmp/license || true
+                    continue
                 else
                     msg_box "License Required" "Oops! You need a license to continue.\n\n┌─────────────────────────────────────────┐\n│  Please complete step 1 first:          │\n│                                         │\n│  🔑 Enter License                       │\n│                                         │\n│  Contact: support@xinnor.io             │\n└─────────────────────────────────────────┘\n\nWe're excited to have you on board! 🎉"
                     continue
