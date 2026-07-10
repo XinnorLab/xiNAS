@@ -37,7 +37,7 @@ main() {
     pvs > "$tmp/pvs.txt" 2>&1 || true
     nvme list > "$tmp/nvme_list.txt" 2>&1 || true
     lspci > "$tmp/lspci.txt" 2>&1 || true
-    [ -x ./hwkey ] || chmod +x ./hwkey
+    [ -x ./hwkey ] || chmod +x ./hwkey 2>/dev/null || true
     ./hwkey > "$tmp/hwkey.txt" 2>&1 || true
 
     # Install logs (playbook output captured by xinas_run_playbook + bootstrap)

@@ -51,7 +51,7 @@ if [ ! -f "$vars_file" ]; then
 fi
 
 current=$(yq -r '.xinas_hostname // ""' "$vars_file")
-[ -x ./hwkey ] || chmod +x ./hwkey
+[ -x ./hwkey ] || chmod +x ./hwkey 2>/dev/null || true
 if [ -z "$current" ]; then
     hw=$(./hwkey 2>/dev/null | tr -d '\n' | tr '[:lower:]' '[:upper:]')
     current="xiNAS-$hw"
