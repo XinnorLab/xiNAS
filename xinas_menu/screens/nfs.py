@@ -423,7 +423,18 @@ class NFSScreen(XiNASAppMixin, Screen):
         ok, out, _ = await run_async_cmd(
             "findmnt", "-t", "xfs", "-n", "-o", "TARGET,SOURCE", timeout=10
         )
-        if ok and out:
+        if not ok:
+            await self.app.push_screen_wait(
+                ConfirmDialog(
+                    "Couldn't read the mount table (findmnt failed), so the "
+                    "available xiRAID filesystems can't be determined.\n\n"
+                    "Check the system and try again.",
+                    "Add Share",
+                    ok_only=True,
+                )
+            )
+            return
+        if out:
             mount_points = _xiraid_mount_points(out)
 
         if not mount_points:

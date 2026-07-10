@@ -306,7 +306,10 @@ SOURCE is a xiRAID volume (`/dev/xi_*`) — an NFS export is allowed **only** fr
 filesystem on a xiRAID array. If no such mount exists, the wizard aborts **before
 it starts** with an OK-only dialog directing the operator to *Storage →
 Filesystems → Create Filesystem* (the former free-form `/mnt/data/` fallback is
-gone). Otherwise the xiRAID mount roots are offered in a `SelectDialog`, prepended
+gone). A `findmnt` **read failure** (the command errored, as opposed to
+succeeding with no xiRAID mounts) surfaces a distinct *"Couldn't read the mount
+table"* dialog instead, so a transient fault is not misreported as a missing
+filesystem. Otherwise the xiRAID mount roots are offered in a `SelectDialog`, prepended
 with `Custom path…` so an operator can export a subdirectory (e.g.
 `/mnt/data/share1`). A directly picked mount root is valid as-is; a custom path is
 accepted only when it is at-or-under one of the xiRAID mount roots (segment-aware
