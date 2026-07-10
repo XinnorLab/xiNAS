@@ -1,0 +1,35 @@
+#!/bin/bash
+# /usr/local/sbin/xinas-update-helper-sync
+#
+# Privileged helper for xinas-menu's update flow. Runs as root via
+# sudo (granted by /etc/sudoers.d/xinas-update) so that xinas-menu,
+# running as the unprivileged xinnor user, can refresh the NFS-helper
+# daemon's installed files after a code-only update (no
+# Requires-Rebuild trailer, so the xinas_nfs_helper role itself does
+# not re-run).
+#
+# Hard-coded source and destination — accepts NO caller-supplied
+# arguments. See docs/Installer/update-spec.md "NFS-helper refresh".
+
+set -euo pipefail
+
+SRC=/opt/xiNAS/xiNAS-MCP/nfs-helper
+DEST=/usr/lib/xinas-mcp/nfs-helper
+
+if [[ ! -d "$SRC" ]]; then
+    echo "source not found: $SRC" >&2
+    exit 1
+fi
+if [[ ! -d "$DEST" ]]; then
+    echo "destination not found: $DEST (xinas_nfs_helper role not deployed on this host)" >&2
+    exit 1
+fi
+
+# NOTE: if $SRC exists but contains no *.py files, the unquoted glob
+# below stays literal (no nullglob) and `cp` fails on the literal
+# "*.py" argument, tripping `set -e` into exit 1. That is intentional:
+# a valid /opt/xiNAS checkout always ships nfs-helper *.py files, so an
+# empty SRC is itself an error worth failing loudly on rather than
+# silently restarting the daemon with nothing copied.
+cp "$SRC"/*.py "$DEST/"
+systemctl restart xinas-nfs-helper

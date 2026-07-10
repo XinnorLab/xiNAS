@@ -138,7 +138,7 @@
     mode: '0755'
   tags: [xinas_menu, wrapper]
 
-# ─── 5b. Privileged update helper (sudo wrapper + sudoers) ────────────────────
+# ─── 5b. Privileged update helpers (sudo wrappers + sudoers) ──────────────────
 # /opt/xiNAS is owned by root, but xinas-menu runs as the unprivileged
 # xinnor user. To let the Update Check / Apply Update flow work without
 # granting xinnor blanket sudo on git, ship a tiny wrapper script that
@@ -146,11 +146,27 @@
 # sudoers.d entry that grants xinnor passwordless sudo on just that
 # wrapper. Without these two files, the menu surfaces a permission-
 # denied error instead of silently lying about being up-to-date.
+#
+# A second wrapper, xinas-update-helper-sync, solves the same problem
+# for the NFS-helper refresh: it copies the updated *.py files from the
+# root-owned /opt/xiNAS checkout into the root-owned
+# /usr/lib/xinas-mcp/nfs-helper and restarts the root-run
+# xinas-nfs-helper unit (docs/Installer/update-spec.md "NFS-helper
+# refresh").
 
 - name: Install xinas-update-git sudo helper
   ansible.builtin.copy:
     src: xinas-update-git
     dest: /usr/local/sbin/xinas-update-git
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [xinas_menu, update_helper]
+
+- name: Install xinas-update-helper-sync sudo helper
+  ansible.builtin.copy:
+    src: xinas-update-helper-sync
+    dest: /usr/local/sbin/xinas-update-helper-sync
     owner: root
     group: root
     mode: '0755'
