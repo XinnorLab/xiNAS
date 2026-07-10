@@ -6,6 +6,45 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.6.3] - 2026-07-10
+
+> **Requires-Rebuild: doca_ofed, motd, net_controllers, xinas_agent,
+> xinas_node_build** — the code change itself is Python-only and needs no
+> rebuild. These roles are **carried forward** for hosts that never ran
+> them: 3.6.0's and 3.6.1's trailers never parsed (see below), and a host
+> running 3.6.2 or older still reads only the incoming release's notes with
+> the old, strict parser. Re-running `net_controllers` flushes PBR tables
+> 100–199 and all mlx interface IPs before re-applying — expect a brief
+> interruption on the data interfaces. All the roles are idempotent, so a
+> host already carrying these changes simply converges.
+
+### Fixed
+
+- **`Requires-Rebuild:` trailers were silently lost two different ways.**
+  An unparsed trailer is indistinguishable from no trailer, so the update
+  checked out the new code and skipped the Ansible step that makes it
+  effective — with no warning to the operator.
+  - `parse_rebuild_trailers` anchored the trailer at column 0, but release
+    notes wrap it in a Markdown callout. **v3.6.0**
+    (`motd, xinas_node_build`) and **v3.6.1**
+    (`net_controllers, doca_ofed`) both bolded and blockquoted the line, so
+    neither release ever re-ran a single role on an updating host. The
+    parser now tolerates leading blockquote markers (`>`), emphasis
+    (`*`, `_`), backticks and whitespace, and strips the same decoration
+    from each tag. A prose mention mid-sentence still does not match.
+  - The checker parsed only the **latest** release's body, so every release
+    an operator skipped lost its rebuild — a host jumping 3.6.0 → 3.6.2
+    never saw 3.6.1's notes, yet 3.6.1's roles still had to run there.
+    Trailers are now unioned across **every eligible release strictly newer
+    than the installed version** (drafts and prereleases were already
+    filtered); `all` anywhere in that union short-circuits. Only the latest
+    release's notes are still shown to the operator.
+
+  The union takes effect for hosts running 3.6.3 or later — an older host
+  uses its own installed parser for the next check, which is why this
+  release carries the missing roles forward explicitly.
+  `docs/Installer/update-spec.md` gains a *Rebuild trailers* section.
+
 ## [3.6.2] - 2026-07-10
 
 > **Requires-Rebuild: xinas_node_build, xinas_agent, net_controllers,
