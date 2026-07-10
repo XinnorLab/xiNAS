@@ -238,8 +238,11 @@ enter_license() {
     # also referenced under set -u below, so it must end up set either way.
     hwkey_val=$(./hwkey 2>/dev/null | tr -d '\n' | tr '[:lower:]' '[:upper:]') || hwkey_val=""
 
-    # Show HWKEY to the user
-    msg_box "Hardware Key" "HWKEY: ${hwkey_val}\n\nRequest your license key from xiNNOR Support."
+    # Show HWKEY to the user. Say "unavailable" rather than render a blank
+    # after the colon: this dialog tells the operator to quote the key to
+    # support, and an empty field reads as a UI glitch instead of a failed
+    # hardware read.
+    msg_box "Hardware Key" "HWKEY: ${hwkey_val:-unavailable}\n\nRequest your license key from xiNNOR Support."
 
     if ! text_area "Enter License" "Paste your license key below:" "$TMP_DIR/license"; then
         return 0

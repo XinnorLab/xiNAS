@@ -88,3 +88,21 @@ def test_simple_menu_working_hwkey_still_reports_value(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert "SURVIVED" in proc.stdout
     assert "hwkey_val=[ABC123]" in proc.stdout
+
+
+def test_display_says_unavailable_rather_than_blank():
+    """A failing/missing hwkey yields hwkey_val="" (see the guard above). The
+    dialog must not then render a bare "HWKEY: " — it tells the operator to
+    quote the key to support, so a blank field reads as a UI glitch rather
+    than a failed hardware read. `${hwkey_val:-unavailable}` also covers the
+    case where hwkey exits 0 but prints nothing.
+    """
+    for script in ("startup_menu.sh", "simple_menu.sh"):
+        body = (REPO / script).read_text()
+        assert "HWKEY: ${hwkey_val:-unavailable}" in body, (
+            f"{script}: hwkey dialog must substitute 'unavailable' for an "
+            "empty hardware key, not render a blank"
+        )
+        assert "HWKEY: ${hwkey_val}\\n" not in body, (
+            f"{script}: bare ${{hwkey_val}} in the dialog would render blank"
+        )
