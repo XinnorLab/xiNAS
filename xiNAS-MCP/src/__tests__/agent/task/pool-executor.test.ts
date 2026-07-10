@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createFakeXiraidTransport } from '../../../agent/xiraid/fake-transport.js';
-import { XiraidClient } from '../../../agent/xiraid/client.js';
+import { XiraidClient, type XiraidTransport } from '../../../agent/xiraid/client.js';
 import {
   makePoolCreateExecutor,
   makePoolDeleteExecutor,
@@ -71,6 +71,30 @@ describe('pool executors (S9 T9, fake transport)', () => {
       pools: [{ name: 'p2', drives: ['/dev/a'], active: false }],
       arrays: [{ name: 'data1', level: 5, devices: ['/dev/c'], state: 'online', sparepool: 'p2' }],
     });
+    await expect(del.stages[0]?.run(ctxFor({ intent: 'delete', name: 'p2' }))).rejects.toThrow(
+      /spare pool of: data1/,
+    );
+    expect(load().pools).toHaveLength(1); // nothing mutated
+  });
+
+  it('delete preflight: the live REFERENCE guard survives a dict-keyed raid_show', async () => {
+    // The real xiRAID 4.3.x daemon keys raid_show by array name. An array-only
+    // reader skips the guard entirely and deletes a pool still in use.
+    seed({ pools: [{ name: 'p2', drives: ['/dev/a'], active: false }] });
+    const transport: XiraidTransport = {
+      ...createFakeXiraidTransport(dir),
+      async raidShow() {
+        return {
+          data1: {
+            level: 5,
+            devices: [[0, '/dev/c', ['online']]],
+            state: 'online',
+            sparepool: 'p2',
+          },
+        };
+      },
+    };
+    const del = makePoolDeleteExecutor({ client: new XiraidClient(transport) });
     await expect(del.stages[0]?.run(ctxFor({ intent: 'delete', name: 'p2' }))).rejects.toThrow(
       /spare pool of: data1/,
     );

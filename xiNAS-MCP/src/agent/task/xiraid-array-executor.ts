@@ -16,6 +16,8 @@
  * deliberately spec-only).
  */
 
+import { parsePoolShow } from '../../lib/parse/pool.js';
+import { type RaidShowEntry, parseRaidShowEntries } from '../../lib/parse/raid.js';
 import { derivedPoolName, parseCreateSpec } from '../../lib/xiraid/validate.js';
 import { toRaidCreateRequest, toRaidModifyRequest } from '../../lib/xiraid/translate.js';
 import type { XiraidClient } from '../xiraid/client.js';
@@ -32,32 +34,20 @@ export interface XiraidArrayCreateExecutorOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-interface ShownArray {
-  name: string;
-  devices: string[];
-  states: string[];
-}
+type ShownArray = RaidShowEntry;
 
-/** Minimal tolerant read of the raid_show payload (name/devices/state). */
+/**
+ * Tolerant read of the raid_show payload (name/devices/state).
+ *
+ * Delegates to the shared normalizer: the real xiRAID 4.3.x daemon keys
+ * raid_show by array name and lists devices as [idx, path, states] tuples,
+ * while the fake transport emits a flat array. An array-only reader here made
+ * every live array look absent — preflight refused to delete or modify a real
+ * array, and create skipped its collision guards (#243 fixed only the
+ * collector's copy).
+ */
 function readShow(payload: unknown): ShownArray[] {
-  if (!Array.isArray(payload)) return [];
-  const out: ShownArray[] = [];
-  for (const entry of payload) {
-    if (typeof entry !== 'object' || entry === null) continue;
-    const o = entry as Record<string, unknown>;
-    if (typeof o.name !== 'string') continue;
-    const devices = Array.isArray(o.devices)
-      ? o.devices.filter((d): d is string => typeof d === 'string')
-      : [];
-    const states =
-      typeof o.state === 'string'
-        ? [o.state.toLowerCase()]
-        : Array.isArray(o.state)
-          ? o.state.filter((s): s is string => typeof s === 'string').map((s) => s.toLowerCase())
-          : [];
-    out.push({ name: o.name, devices, states });
-  }
-  return out;
+  return parseRaidShowEntries(payload);
 }
 
 /** States that mean "the array is up" for wait_online purposes. */
@@ -124,6 +114,12 @@ export function makeXiraidArrayCreateExecutor(opts: XiraidArrayCreateExecutorOpt
     async run(ctx: ExecutorContext): Promise<void> {
       checkCancelled(ctx, 'create');
       const { spec, deviceById } = narrowSpec(ctx);
+
+      // Marked BEFORE the first mutation: rollback destroys by live state, so
+      // it may only touch '<name>' once THIS run started building it. Without
+      // the marker a preflight name collision rolls back by destroying the
+      // operator's pre-existing array of the same name.
+      ctx.stash.create_attempted = true;
 
       // S4 T4: spares ride an executor-provisioned pool — created AND
       // activated before raid_create (an unactivated pool never
@@ -201,7 +197,15 @@ export function makeXiraidArrayCreateExecutor(opts: XiraidArrayCreateExecutorOpt
         ctx.emitOutput('rollback: spec unparsable — nothing was created, nothing to undo');
         return;
       }
-      // Live-state decision (crash-safe, no per-run flag): destroy only what
+      // The create stage never started → this run built nothing, and anything
+      // wearing `name` on the daemon predates us (a preflight name collision
+      // is exactly that). Destroying it would be data loss, not a rollback.
+      if (ctx.stash.create_attempted !== true) {
+        ctx.emitOutput(`rollback: create never ran — '${name}' is not ours to undo`);
+        return;
+      }
+
+      // Live-state decision (crash-safe within the run): destroy only what
       // raid_show says exists. A show/destroy failure here propagates → the
       // runner emits rollback_failed → requires_manual_recovery.
       const exists = readShow(await client.raidShow()).some((a) => a.name === name);
@@ -217,12 +221,9 @@ export function makeXiraidArrayCreateExecutor(opts: XiraidArrayCreateExecutorOpt
       // happens BEFORE raid_create, so a clean create failure can leave the
       // pool behind). Live poolShow decides — same crash-safe principle.
       const poolName = derivedPoolName(name);
-      const pools = (await client.poolShow()) as unknown;
-      const pool = Array.isArray(pools)
-        ? (pools as Array<Record<string, unknown>>).find((p) => p.name === poolName)
-        : undefined;
+      const pool = readPoolEntry(await client.poolShow(), poolName);
       if (pool) {
-        if (pool.active === true) {
+        if (pool.active) {
           await client.poolDeactivate({ name: poolName });
         }
         await client.poolDelete({ name: poolName });
@@ -278,23 +279,12 @@ function narrowModifySpec(ctx: ExecutorContext): ModifyExecSpec {
   };
 }
 
+/** Tolerant read of one pool_show entry — dict- and array-shaped payloads. */
 function readPoolEntry(
   pools: unknown,
   name: string,
 ): { drives: string[]; active: boolean } | undefined {
-  if (!Array.isArray(pools)) return undefined;
-  for (const entry of pools) {
-    if (typeof entry !== 'object' || entry === null) continue;
-    const o = entry as Record<string, unknown>;
-    if (o.name !== name) continue;
-    return {
-      drives: Array.isArray(o.drives)
-        ? o.drives.filter((d): d is string => typeof d === 'string')
-        : [],
-      active: o.active === true,
-    };
-  }
-  return undefined;
+  return parsePoolShow(pools).find((p) => p.name === name);
 }
 
 export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): Executor {

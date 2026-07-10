@@ -117,6 +117,23 @@ describe('parseRaidShow', () => {
     expect(a?.spec.spare_disk_ids).toEqual(['disk-3', '/dev/unknown9']); // raw-path fallback
   });
 
+  it('maps the sparepool through a dict-keyed pool_show payload (real daemon shape)', () => {
+    const [a] = parseRaidShow(
+      [
+        {
+          name: 'data',
+          level: '6',
+          devices: ['/dev/nvme1n1'],
+          state: ['online'],
+          sparepool: 'xnsp_data',
+        },
+      ],
+      DISK_IDS,
+      { xnsp_data: { drives: ['/dev/nvme3n1'], state: 'active' } },
+    );
+    expect(a?.spec.spare_disk_ids).toEqual(['disk-3']);
+  });
+
   it('no sparepool, unknown pool, or absent pools payload → spare_disk_ids []', () => {
     const noPool = parseRaidShow(
       [{ name: 'a', level: '0', devices: [], state: ['online'] }],

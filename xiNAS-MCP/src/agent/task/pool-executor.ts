@@ -14,6 +14,7 @@
  */
 
 import { parsePoolShow } from '../../lib/parse/pool.js';
+import { parseRaidShowEntries } from '../../lib/parse/raid.js';
 import type { XiraidClient } from '../xiraid/client.js';
 import type { Executor, ExecutorContext, ExecutorStage } from './types.js';
 
@@ -135,21 +136,16 @@ export function makePoolDeleteExecutor(opts: { client: XiraidClient }): Executor
         if (pool.active) {
           throw new Error(`pool '${spec.name}' is ACTIVE (live pool_show) — deactivate first`);
         }
-        const raidPayload = await opts.client.raidShow();
-        if (Array.isArray(raidPayload)) {
-          const refs = raidPayload
-            .filter(
-              (a): a is { name: string; sparepool?: string } =>
-                typeof a === 'object' &&
-                a !== null &&
-                (a as { sparepool?: unknown }).sparepool === spec.name,
-            )
-            .map((a) => a.name);
-          if (refs.length > 0) {
-            throw new Error(
-              `pool '${spec.name}' is the spare pool of: ${refs.join(', ')} (live raid_show)`,
-            );
-          }
+        // parseRaidShowEntries, not a local Array.isArray check: the real
+        // daemon keys raid_show by array name, and an array-only reader would
+        // silently skip this guard and delete a pool an array still uses.
+        const refs = parseRaidShowEntries(await opts.client.raidShow())
+          .filter((a) => a.raw.sparepool === spec.name)
+          .map((a) => a.name);
+        if (refs.length > 0) {
+          throw new Error(
+            `pool '${spec.name}' is the spare pool of: ${refs.join(', ')} (live raid_show)`,
+          );
         }
         ctx.emitOutput('live preflight clean (inactive, unreferenced)');
       },

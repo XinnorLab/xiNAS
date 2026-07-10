@@ -11,7 +11,12 @@
  *
  * observed_at is NOT stamped here — the collector adds it (parser stays
  * clock-free, like parse/disk.ts).
+ *
+ * `parseRaidShowEntries` is the shape-normalizing half, exported so the task
+ * executors read raid_show through the same tolerant reader.
  */
+
+import { parsePoolShow } from './pool.js';
 
 export interface ObservedXiraidArray {
   kind: 'XiraidArray';
@@ -52,29 +57,35 @@ const DEGRADED_STATES = new Set(['degraded', 'need_recon', 'need_resync']);
 /** Tolerant read of the pool_show payload: name + member drives. */
 function readPools(pools: unknown): Map<string, string[]> {
   const out = new Map<string, string[]>();
-  if (!Array.isArray(pools)) return out;
-  for (const entry of pools) {
-    if (typeof entry !== 'object' || entry === null) continue;
-    const o = entry as Record<string, unknown>;
-    if (typeof o.name !== 'string') continue;
-    const drives = Array.isArray(o.drives)
-      ? o.drives.filter((d): d is string => typeof d === 'string')
-      : [];
-    out.set(o.name, drives);
-  }
+  for (const pool of parsePoolShow(pools)) out.set(pool.name, pool.drives);
   return out;
 }
 
-export function parseRaidShow(
-  payload: unknown,
-  diskIdByPath: ReadonlyMap<string, string>,
-  pools?: unknown,
-): ObservedXiraidArray[] {
-  // xiRAID's raid_show returns EITHER a JSON array of per-array objects OR an
-  // object keyed by array name ({"data":{...},"log":{...}}) — the latter on the
-  // real xiRAID 4.3.x daemon (the fake transport emits an array). Normalize both
-  // to a list, injecting the map key as `name` when a keyed value lacks one;
-  // otherwise real arrays are silently dropped and the API/TUI shows "no arrays".
+/** One array as raid_show describes it, with both payload shapes flattened. */
+export interface RaidShowEntry {
+  name: string;
+  /** Member device paths, tuple entries unwrapped. */
+  devices: string[];
+  /** Lower-cased state words. */
+  states: string[];
+  /** The remaining daemon fields (level, strip_size, sparepool, …). */
+  raw: Record<string, unknown>;
+}
+
+/**
+ * Normalize a raid_show payload to a flat entry list.
+ *
+ * xiRAID's raid_show returns EITHER a JSON array of per-array objects OR an
+ * object keyed by array name ({"data":{...},"log":{...}}) — the latter on the
+ * real xiRAID 4.3.x daemon (the fake transport emits an array). The map key is
+ * injected as `name` when a keyed value lacks one; otherwise real arrays are
+ * silently dropped and every caller reads a live array as absent.
+ *
+ * Every consumer of raid_show — the collector AND the task executors — must go
+ * through here. A second, array-only reader is how #243 shipped a fix that left
+ * the executors blind to real arrays.
+ */
+export function parseRaidShowEntries(payload: unknown): RaidShowEntry[] {
   let entries: unknown[];
   if (Array.isArray(payload)) {
     entries = payload;
@@ -87,8 +98,8 @@ export function parseRaidShow(
   } else {
     return [];
   }
-  const poolDrives = readPools(pools);
-  const out: ObservedXiraidArray[] = [];
+
+  const out: RaidShowEntry[] = [];
   for (const entry of entries) {
     if (typeof entry !== 'object' || entry === null) continue;
     const o = entry as Record<string, unknown>;
@@ -96,7 +107,7 @@ export function parseRaidShow(
 
     // devices is either ["/dev/..."] (fake transport) or, on the real xiRAID
     // daemon, [[index, "/dev/...", [states]], ...] tuples — extract the path
-    // from both shapes so member_disk_ids is populated.
+    // from both shapes.
     const devices = Array.isArray(o.devices)
       ? o.devices
           .map((d): string | null =>
@@ -104,7 +115,20 @@ export function parseRaidShow(
           )
           .filter((d): d is string => d !== null)
       : [];
-    const states = normalizeStates(o.state);
+
+    out.push({ name: o.name, devices, states: normalizeStates(o.state), raw: o });
+  }
+  return out;
+}
+
+export function parseRaidShow(
+  payload: unknown,
+  diskIdByPath: ReadonlyMap<string, string>,
+  pools?: unknown,
+): ObservedXiraidArray[] {
+  const poolDrives = readPools(pools);
+  const out: ObservedXiraidArray[] = [];
+  for (const { name, devices, states, raw: o } of parseRaidShowEntries(payload)) {
     const reconProgress = numberOrNull(o.recon_progress) ?? numberOrNull(o.init_progress);
     // S4 T5: the array's sparepool NAME (raid_show) joins to its member
     // DRIVES (pool_show) → control-path disk ids. Absent/unknown → [].
@@ -115,9 +139,9 @@ export function parseRaidShow(
 
     out.push({
       kind: 'XiraidArray',
-      id: o.name,
+      id: name,
       spec: {
-        name: o.name,
+        name,
         level: normalizeLevel(o.level),
         member_disk_ids: devices.map((d) => diskIdByPath.get(d) ?? d),
         spare_disk_ids: spareDrives.map((d) => diskIdByPath.get(d) ?? d),
@@ -127,7 +151,7 @@ export function parseRaidShow(
       },
       status: {
         state: deriveState(states),
-        volume_path: `/dev/xi_${o.name}`,
+        volume_path: `/dev/xi_${name}`,
         ...(typeof o.sparepool === 'string' && o.sparepool.length > 0
           ? { spare_pool: o.sparepool }
           : {}),

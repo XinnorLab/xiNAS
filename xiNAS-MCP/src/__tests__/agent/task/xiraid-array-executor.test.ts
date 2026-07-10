@@ -216,6 +216,20 @@ describe('xiraid.array.create executor', () => {
     expect(fake.arrays).toHaveLength(1); // the pre-existing array is untouched
   });
 
+  it('preflight failure (name collision) → rollback must NOT destroy the array it found', async () => {
+    const fake = makeFake();
+    // An array the operator already owns, wearing the name this create wants.
+    fake.arrays.push({ name: 'data', level: '1', devices: ['/dev/other'], state: ['online'] });
+    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/s'], active: true });
+    const events = await run(fake);
+
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(shape(events)).toContainEqual(['rollback_succeeded', 'rollback']);
+    expect(fake.destroyCalls).toEqual([]); // we never created it → we never destroy it
+    expect(fake.arrays).toHaveLength(1);
+    expect(fake.pools).toHaveLength(1); // nor its spare pool
+  });
+
   it('clean create failure → rollback finds no array, no destroy, terminal failed', async () => {
     const fake = makeFake({ failCreate: 'clean' });
     const events = await run(fake);
@@ -765,5 +779,126 @@ describe('xiraid.array.delete executor', () => {
     });
     expect(terminal(events)?.status).not.toBe('requires_manual_recovery');
     expect(fake.arrays).toHaveLength(1); // still there — surfaced honestly, retryable
+  });
+});
+
+// ---- Real xiRAID 4.3.x payload shapes (#243 follow-up) ----
+//
+// The fake transport emits raid_show/pool_show as JSON arrays. The real
+// daemon emits objects keyed by name, with devices as [idx, path, states]
+// tuples. lib/parse normalizes both; the executors must too, or every
+// stage that consults live state misreads an existing array as absent.
+
+describe('executors against the real daemon payload shapes', () => {
+  /** Wrap a fake transport so raid_show/pool_show speak xiRAID 4.3.x. */
+  function realShapes(fake: ReturnType<typeof makeFake>): XiraidTransport {
+    return {
+      ...fake.transport,
+      async raidShow() {
+        const list = (await fake.transport.raidShow()) as Array<Record<string, unknown>>;
+        return Object.fromEntries(
+          list.map((a) => {
+            // the keyed value carries no `name` — the key IS the name
+            const { name, devices, state, ...rest } = a;
+            return [
+              name,
+              {
+                ...rest,
+                state,
+                devices: (devices as string[]).map((d, i) => [i, d, ['online']]),
+              },
+            ];
+          }),
+        );
+      },
+      async poolShow() {
+        const list = (await fake.transport.poolShow()) as Array<Record<string, unknown>>;
+        return Object.fromEntries(
+          list.map((p) => [
+            p.name,
+            { drives: p.drives, state: p.active === true ? 'active' : 'inactive' },
+          ]),
+        );
+      },
+    };
+  }
+
+  it('delete: dict-keyed raid_show → preflight sees the array, destroy + pool cleanup run', async () => {
+    const fake = makeFake();
+    fake.arrays.push({ name: 'data', level: '5', devices: ['/dev/a'], state: ['online'] });
+    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/s'], active: true });
+
+    const events: TaskProgressEvent[] = [];
+    const executor = makeXiraidArrayDeleteExecutor({
+      client: new XiraidClient(realShapes(fake)),
+      readMounts: async () => [],
+      pollIntervalMs: 1,
+      timeoutMs: 5,
+      sleep: async () => {},
+    });
+    await makeRunner().run(
+      { task_id: 't-del-real', operation_kind: 'xiraid.array.delete', spec: { id: 'data' } },
+      executor,
+      async (e) => {
+        events.push(e);
+      },
+    );
+
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.destroyCalls).toEqual(['data']);
+    expect(fake.arrays).toEqual([]);
+    expect(fake.pools).toEqual([]); // spare pool cleaned, not silently skipped
+  });
+
+  it('create preflight: dict-keyed raid_show still catches a name collision', async () => {
+    const fake = makeFake();
+    fake.arrays.push({ name: 'data', level: '5', devices: ['/dev/x'], state: ['online'] });
+
+    const events: TaskProgressEvent[] = [];
+    const executor = makeXiraidArrayCreateExecutor({
+      client: new XiraidClient(realShapes(fake)),
+      pollIntervalMs: 1,
+      timeoutMs: 20,
+      sleep: async () => {},
+    });
+    await makeRunner().run(
+      { task_id: 't-arr-real', operation_kind: 'xiraid.array.create', spec: SPEC },
+      executor,
+      async (e) => {
+        events.push(e);
+      },
+    );
+
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(terminal(events)?.status).toBe('failed');
+    expect(fake.ops).toEqual([]); // raid_create never reached
+  });
+
+  it('create preflight: tuple device lists still catch an already-claimed member', async () => {
+    const fake = makeFake();
+    fake.arrays.push({
+      name: 'other',
+      level: '5',
+      devices: ['/dev/nvme2n1'], // a member of SPEC
+      state: ['online'],
+    });
+
+    const events: TaskProgressEvent[] = [];
+    const executor = makeXiraidArrayCreateExecutor({
+      client: new XiraidClient(realShapes(fake)),
+      pollIntervalMs: 1,
+      timeoutMs: 20,
+      sleep: async () => {},
+    });
+    await makeRunner().run(
+      { task_id: 't-arr-claim', operation_kind: 'xiraid.array.create', spec: SPEC },
+      executor,
+      async (e) => {
+        events.push(e);
+      },
+    );
+
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(fake.ops).toEqual([]); // raid_create never reached
   });
 });

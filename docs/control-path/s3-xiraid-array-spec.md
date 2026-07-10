@@ -138,6 +138,23 @@ The apply body is the **full OpenAPI `ApplyRequest`**: `{ mode:"apply", plan_id,
 
 Connection lifecycle (connect on start, reconnect on drop, availability flag) lives here; the collector + executor read its availability. **Prerequisite:** the unit-file change in §1 — without `AF_INET`, `connect()` fails with `EAFNOSUPPORT` regardless of code.
 
+### Payload shapes — one reader, no local copies
+
+`raid_show` and `pool_show` each return **two shapes in the wild**: a JSON array
+of entries (what the fake transport emits) or an **object keyed by name**
+(`{"data": {...}, "log": {...}}` — the real xiRAID 4.3.x daemon). `raid_show`
+additionally lists devices either as `["/dev/…"]` or as `[idx, "/dev/…", [states]]`
+tuples.
+
+Every consumer — collectors **and** task executors — MUST read these payloads
+through `lib/parse/raid.ts` (`parseRaidShow`, `parseRaidShowEntries`) and
+`lib/parse/pool.ts` (`parsePoolShow`). A local `Array.isArray(payload)` reader is
+a defect: against the real daemon it silently yields an empty list, so every live
+array reads as **absent** — preflight refuses to delete or modify a real array,
+create skips its name-collision and claimed-device guards, and pool-delete skips
+its "still referenced as a spare pool" guard. Unit tests that only exercise the
+array-shaped fake transport will not catch it; cover both shapes.
+
 ---
 
 ## 9. Error model — reuse existing codes (no additions)
