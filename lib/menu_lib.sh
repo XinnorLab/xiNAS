@@ -1332,7 +1332,7 @@ xinas_run_playbook() {
                 choice=$(whiptail --title "Installation Failed" \
                     --menu "Installation failed (exit ${rc}).\n\nFull log: ${log_path}" \
                     16 70 3 \
-                    "collect" "Collect Logs (auto-uploads diagnostic archive)" \
+                    "collect" "Collect Diagnostics (writes a local archive)" \
                     "view"    "View Log (opens less +G on full output)" \
                     "close"   "Continue (return to menu)" \
                     3>&1 1>&2 2>&3) || choice="close"
@@ -1363,7 +1363,17 @@ xinas_run_playbook() {
                     fi
                     # Loop back to dialog
                     ;;
-                collect|close|*)
+                collect)
+                    if [ -x ./collect_data.sh ]; then
+                        ./collect_data.sh || true
+                    else
+                        printf '\n  collect_data.sh not found (expected at repo root).\n' >&2
+                    fi
+                    # Loop back to the dialog (same as view), so the operator
+                    # can then View Log or Continue. Runs from the repo root,
+                    # matching how both menus invoke ./collect_data.sh.
+                    ;;
+                close|*)
                     break
                     ;;
             esac
