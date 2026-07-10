@@ -119,6 +119,20 @@ across REST/MCP/CLI/TUI.
   the DELETE executor preflight re-checks live `pool_show` +
   `raid_show` (active/referenced — TOCTOU vs observed lag); fake
   transport grows deterministic failure hooks where missing.
+  **Rollback undoes the delta, not the spec.** The MODIFY executor
+  snapshots live membership + `active` before mutating (`ctx.stash`)
+  and reverses only what changed: `add_drives` removes solely the
+  drives that were absent before and present after, `remove_drives`
+  re-adds solely those present before and absent after, and
+  `activate`/`deactivate` invert only on an observed transition. An
+  inverse-verb rollback over the whole spec is a **defect**: `pool add`
+  fails as a unit when any drive is already a member, so the inverse
+  `pool remove` targets the pool's pre-existing members and strips
+  drives the task never added (observed on hardware, 2026-07-10 — a
+  failed 3-drive add rolled back into a `pool remove` of the pool's two
+  existing members, survived only because the daemon rejects an
+  all-or-nothing remove naming one non-member). An unreadable snapshot
+  means rollback does nothing; a no-op beats a guessed reversal.
 - **T10 catalog + clients:** entries flip/appear (audit.query,
   config_history.* live; pools.create/modify/delete new); MCP +
   xinasctl inherit; api-v1 description cleanups.
