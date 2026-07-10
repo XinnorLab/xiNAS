@@ -1093,6 +1093,32 @@ _semver_gt() {
 # the ones below (bash: last definition wins). That is intentional, not a
 # bug; post_install_menu.sh has not been migrated to the shared copy.
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# _is_release_tag — WS3 T5c (code review hardening)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Accept only a semver release tag (optionally v-prefixed, optional
+# prerelease suffix). Reject branches, HEAD, refspecs, flag-shaped strings
+# (leading `-`), and anything else — this is the single source of truth for
+# the regex; the privileged root-owned helper
+# (collection/roles/xinas_menu/files/xinas-update-git) carries its own
+# character-identical copy since it must not depend on this file, and
+# install.sh carries an inline copy for the same reason (it runs standalone,
+# before/independently of the clone this file lives in). Keep all three in
+# sync if the contract ever changes.
+#
+# Every bash tag resolver (_latest_release_tag below, and both
+# prepare_system.sh's and install.sh's own xinas_latest_release_tag())
+# extracts tag_name via an unanchored `grep -o | sed` over the GitHub API
+# response — good enough to find the field, but it does not by itself prove
+# the result is a release tag rather than a branch name, HEAD, or arbitrary
+# text a compromised/misconfigured feed could return. `git checkout --force`
+# on an unvalidated ref is exactly the "no branch fallback, ever" policy
+# violation docs/Installer/update-spec.md forbids — this predicate is the
+# gate every checkout site must pass before it ever calls git.
+_is_release_tag() {
+    [[ "$1" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+}
+
 # Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints nothing on
 # failure. Never returns a branch name; callers must NOT fall back to main.
 #

@@ -279,6 +279,18 @@ The `--force` checkout and semantic-version comparison rules above bind
   as `git fetch ... || true` followed by an unconditional "updated"
   message is prohibited: swallowing the failure denies the operator
   any signal that the tree did not move.
+- **Tag validation before checkout** — every bash update/install path
+  MUST validate the resolved tag against the shared semver
+  release-tag regex (`^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`,
+  the same pattern the `xinas-update-git` wrapper enforces) BEFORE
+  invoking `git`, and MUST refuse — with a clear error and a non-zero
+  exit, never a branch fallback — any value that fails it. The tag
+  comes from an unanchored `grep`/`sed` over the GitHub API response,
+  so a spoofed or malformed `tag_name` (`main`, `--quiet`, a
+  shell-injection payload) would otherwise reach `git checkout`. The
+  canonical check is `_is_release_tag` in `lib/menu_lib.sh`;
+  `install.sh` carries a character-identical inline copy because it
+  runs before the clone exists and cannot source the library.
 - **Bounded, non-blocking check** — the automatic update check that
   runs at menu startup (`check_for_updates` in `startup_menu.sh` and
   `simple_menu.sh`) MUST run synchronously, never backgrounded: a

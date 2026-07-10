@@ -14,7 +14,6 @@ fallback.
 """
 
 import os
-import re
 import subprocess
 from pathlib import Path
 
@@ -27,6 +26,16 @@ def test_prepare_system_update_only_forces_checkout(tmp_path):
     sandbox.mkdir()
     (sandbox / "ansible.cfg").write_text("")
     (sandbox / "playbooks").mkdir()
+    # prepare_system.sh (WS3 T5c) now sources lib/menu_lib.sh right after
+    # resolving the repo directory so xinas_update_to_latest_release() can
+    # call the shared _is_release_tag() validator before it ever checks out
+    # -- stub just that one function rather than the whole real file, to
+    # keep this sandbox (a bare "repo root" with no real lib/) hermetic.
+    lib_dir = sandbox / "lib"
+    lib_dir.mkdir()
+    (lib_dir / "menu_lib.sh").write_text(
+        '_is_release_tag() { [[ "$1" =~ ^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; }\n'
+    )
 
     stub_bin = tmp_path / "bin"
     stub_bin.mkdir()
@@ -54,10 +63,19 @@ def test_prepare_system_update_only_forces_checkout(tmp_path):
 
 def test_install_sh_forces_checkout():
     body = (REPO / "install.sh").read_text()
-    assert re.search(r"git checkout .*--force|git checkout --force", body), (
-        "install.sh must checkout --force (F5)"
+    # Exact-substring, not a pattern: WS3 T5c dropped the nested `bash -c
+    # "... '${RELEASE_TAG}' ..."` string (a command-injection vector — a
+    # single quote in the tag broke out of the quoting) in favor of passing
+    # the tag straight through to `git` as an argv element, so this pins the
+    # real post-fix call-site text rather than any string shaped like it.
+    assert 'git checkout --force -q "$RELEASE_TAG"' in body, (
+        "install.sh must checkout --force via argv, not a shell string (F5, T5c)"
     )
     assert "git checkout -q '${RELEASE_TAG}'" not in body
+    assert 'bash -c "git fetch origin --tags -q && git checkout' not in body, (
+        "install.sh must not rebuild the tag into a second shell's command "
+        "string (T5c command-injection fix)"
+    )
 
 
 def test_startup_and_simple_menu_do_update_forces_checkout():

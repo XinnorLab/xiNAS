@@ -232,10 +232,40 @@ if [[ -z "$RELEASE_TAG" ]]; then
 fi
 ok "Latest release: ${BOLD}${RELEASE_TAG}${NC}"
 
+# Refuse anything that is not a semver release tag before it ever reaches
+# `git checkout`/`git clone --branch` (WS3 T5c). install.sh runs standalone
+# and cannot `source lib/menu_lib.sh` — that file lives inside the repo
+# being cloned/updated — so this is an inline, character-identical copy of
+# the canonical regex in lib/menu_lib.sh's _is_release_tag() and
+# collection/roles/xinas_menu/files/xinas-update-git. Keep all three in
+# sync if the contract ever changes. RELEASE_TAG comes from an unanchored
+# `grep -o | sed` over the GitHub API response (xinas_latest_release_tag,
+# above) — good enough to find the field, not enough to prove it is a
+# release tag rather than a branch name or arbitrary text.
+if [[ ! "$RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+    fail "Refusing to check out non-release ref: '${RELEASE_TAG}'."
+    echo ""
+    echo -e "     xiNAS installs only from published releases — no fallback to ${BOLD}main${NC}."
+    echo ""
+    exit 1
+fi
+
 if [[ -d "$INSTALL_DIR/.git" ]]; then
     cd "$INSTALL_DIR"
+    # The installed tree is git-dirty by design (presets are copied over
+    # tracked role defaults/playbooks/site.yml), so a plain checkout aborts
+    # with "local changes would be overwritten". --force discards changes to
+    # *tracked* files only and is never paired with `git clean` (mirrors
+    # xinas-update-git; see docs/Installer/update-spec.md "Reset-to-release").
+    # RELEASE_TAG is passed as a single argv element to `git` directly — no
+    # shell ever re-parses it, so there is nothing for a quote/semicolon in
+    # the tag to break out of (the historical bug here was a nested
+    # `bash -c "... '${RELEASE_TAG}' ..."` that built a second shell's
+    # command string out of the tag; removing that second shell removes the
+    # injection).
+    run_quiet "Fetching xiNAS release tags" git fetch origin --tags -q
     run_quiet "Updating xiNAS to ${RELEASE_TAG} at ${INSTALL_DIR}" \
-        bash -c "git fetch origin --tags -q && git checkout --force -q '${RELEASE_TAG}'"
+        git checkout --force -q "$RELEASE_TAG"
 else
     run_quiet "Cloning xiNAS ${RELEASE_TAG} to ${INSTALL_DIR}" \
         git clone -q --branch "$RELEASE_TAG" "$REPO_URL" "$INSTALL_DIR"

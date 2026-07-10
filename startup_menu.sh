@@ -66,11 +66,24 @@ do_update() {
         return 1
     fi
 
+    # _tag came from an unanchored `grep -o | sed` over the GitHub API
+    # response (_latest_release_tag, lib/menu_lib.sh) — refuse anything that
+    # isn't a semver release tag before ever calling git (WS3 T5c).
+    if ! _is_release_tag "$_tag"; then
+        msg_box "Update Failed" "Refusing to check out non-release ref: '${_tag}'.\n\nxiNAS updates from releases only — no fallback to main."
+        return 1
+    fi
+
     info_box "Updating..." "Checking out release ${_tag}..."
 
     local _before
     _before=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
+    # The installed tree is git-dirty by design (presets are copied over
+    # tracked role defaults/playbooks/site.yml), so a plain checkout aborts
+    # with "local changes would be overwritten". --force discards changes
+    # to *tracked* files only and is never paired with `git clean` (mirrors
+    # xinas-update-git; see docs/Installer/update-spec.md "Reset-to-release").
     if git -C "$REPO_DIR" fetch origin --tags 2>"$TMP_DIR/update.log" \
         && git -C "$REPO_DIR" checkout --force "$_tag" 2>>"$TMP_DIR/update.log"; then
         UPDATE_AVAILABLE=""

@@ -89,7 +89,22 @@ xinas_update_to_latest_release() {
         echo -e "${RED}xiNAS updates from releases only — no fallback to main.${NC}" >&2
         return 1
     fi
+    # tag came from an unanchored `grep -o | sed` over the GitHub API
+    # response (xinas_latest_release_tag, above) — refuse anything that
+    # isn't a semver release tag before ever calling git (WS3 T5c;
+    # _is_release_tag is sourced from lib/menu_lib.sh, see the early
+    # `source` below).
+    if ! _is_release_tag "$tag"; then
+        echo -e "${RED}Refusing to check out non-release ref: '${tag}'.${NC}" >&2
+        echo -e "${RED}xiNAS updates from releases only — no fallback to main.${NC}" >&2
+        return 1
+    fi
     git fetch origin --tags --quiet
+    # The installed tree is git-dirty by design (presets are copied over
+    # tracked role defaults/playbooks/site.yml), so a plain checkout aborts
+    # with "local changes would be overwritten". --force discards changes
+    # to *tracked* files only and is never paired with `git clean` (mirrors
+    # xinas-update-git; see docs/Installer/update-spec.md "Reset-to-release").
     git checkout --force --quiet "$tag"
     echo "$tag"
 }
@@ -131,6 +146,19 @@ else
     fi
     cd "$REPO_DIR"
 fi
+
+# Source the menu library as early as possible — right after the repo
+# directory is resolved (cloned into, if it wasn't already present), and
+# well before the later `if [ -f "lib/menu_lib.sh" ]` integration point
+# further down that wires up the interactive expert-mode update prompt.
+# _is_release_tag() (WS3 T5c) must be defined before
+# xinas_update_to_latest_release() is ever CALLED, and the -u (update-only)
+# path below calls it well before that later block runs. Sourcing here only
+# defines functions and color variables (colors use `${RED:-default}`, so
+# the values already set above are left untouched); it is safe to source
+# again later, and that later block still needs its own file-existence
+# check for hosts where the file is missing.
+[ -f "lib/menu_lib.sh" ] && source "lib/menu_lib.sh"
 
 # If only updating the repository, perform the update and exit
 if [ "$UPDATE_ONLY" -eq 1 ]; then
