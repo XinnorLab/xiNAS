@@ -99,13 +99,19 @@ xinas_update_to_latest_release() {
         echo -e "${RED}xiNAS updates from releases only — no fallback to main.${NC}" >&2
         return 1
     fi
-    git fetch origin --tags --quiet
+    if ! git fetch origin --tags --quiet; then
+        echo -e "${RED}git fetch failed while updating to ${tag}.${NC}" >&2
+        return 1
+    fi
     # The installed tree is git-dirty by design (presets are copied over
     # tracked role defaults/playbooks/site.yml), so a plain checkout aborts
     # with "local changes would be overwritten". --force discards changes
     # to *tracked* files only and is never paired with `git clean` (mirrors
     # xinas-update-git; see docs/Installer/update-spec.md "Reset-to-release").
-    git checkout --force --quiet "$tag"
+    if ! git checkout --force --quiet "$tag"; then
+        echo -e "${RED}git checkout ${tag} failed — tree left unchanged.${NC}" >&2
+        return 1
+    fi
     echo "$tag"
 }
 

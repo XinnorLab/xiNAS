@@ -153,9 +153,26 @@ fi
 if [[ -d "$INSTALL_DIR" ]]; then
     info "Existing installation found — updating to ${RELEASE_TAG}..."
     cd "$INSTALL_DIR"
-    git fetch --quiet origin --tags 2>/dev/null || true
-    git checkout --quiet "$RELEASE_TAG" 2>/dev/null || true
-    ok "Client updated to ${RELEASE_TAG}"
+    # RELEASE_TAG came from an unanchored grep/sed over the GitHub API
+    # response (xinas_latest_release_tag, above); refuse anything that isn't
+    # a semver release tag before calling git (docs/Installer/update-spec.md
+    # "Tag validation before checkout"). install_client.sh can't source
+    # lib/menu_lib.sh (standalone client installer), so this regex is a
+    # character-identical copy of _is_release_tag in lib/menu_lib.sh / the
+    # inline copy in install.sh.
+    if [[ ! "$RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+        fail "Refusing to check out non-release ref: '${RELEASE_TAG}'"
+        exit 1
+    fi
+    # The tree may be dirty by design; --force resets to the release tag,
+    # never paired with git clean. Drop 2>/dev/null so a real git error
+    # reaches the operator; --quiet already hides success chatter.
+    if git fetch --quiet origin --tags && git checkout --force --quiet "$RELEASE_TAG"; then
+        ok "Client updated to ${RELEASE_TAG}"
+    else
+        fail "Failed to update client to ${RELEASE_TAG} (git fetch/checkout error)"
+        exit 1
+    fi
 else
     info "Cloning repository (sparse — client only) at ${RELEASE_TAG}..."
     git clone --quiet --branch "$RELEASE_TAG" --depth 1 --filter=blob:none --sparse "$REPO_URL" "$INSTALL_DIR" 2>/dev/null
