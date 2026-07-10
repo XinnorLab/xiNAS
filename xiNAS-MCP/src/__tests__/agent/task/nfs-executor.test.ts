@@ -122,12 +122,15 @@ function stage(ex: Executor, name: string) {
   return s;
 }
 
-/** Deps with a no-op readIdmapDomain unless overridden. */
+/** Deps with a no-op readIdmapDomain and a default xiRAID mount at /mnt/data. */
 function makeDeps(
   helper: NfsHelperClient,
   readIdmapDomain: () => Promise<string | undefined> = async () => undefined,
+  readMounts: () => Promise<Array<{ source: string; mountpoint: string }>> = async () => [
+    { source: '/dev/xi_data', mountpoint: '/mnt/data' },
+  ],
 ): NfsExecutorDeps {
-  return { helper, readIdmapDomain };
+  return { helper, readIdmapDomain, readMounts };
 }
 
 describe('buildNfsExecutors — registration', () => {
@@ -265,6 +268,48 @@ describe('share.create', () => {
     await expect(stage(ex, 'preflight').run(ctx)).rejects.toThrow(/helper unreachable/);
     await expect(ex.rollback(ctx)).resolves.toBeUndefined();
     expect(helper.calls.some((c) => c.op === 'removeExport')).toBe(false);
+  });
+
+  it('preflight throws EXPORT_PATH_NOT_ON_XIRAID when no mount is at or above the path', async () => {
+    const helper = makeFakeHelper([]);
+    const deps = makeDeps(helper, undefined, async () => []);
+    const ex = getExecutor(deps, 'share.create');
+    await expect(stage(ex, 'preflight').run(makeCtx(spec))).rejects.toThrow(
+      'EXPORT_PATH_NOT_ON_XIRAID',
+    );
+  });
+
+  it('preflight throws EXPORT_PATH_NOT_ON_XIRAID when the containing mount is not xiRAID', async () => {
+    const helper = makeFakeHelper([]);
+    const deps = makeDeps(helper, undefined, async () => [
+      { source: '/dev/sda2', mountpoint: '/' },
+      { source: '/dev/sdb1', mountpoint: '/mnt/data' },
+    ]);
+    const ex = getExecutor(deps, 'share.create');
+    await expect(stage(ex, 'preflight').run(makeCtx(spec))).rejects.toThrow(
+      'EXPORT_PATH_NOT_ON_XIRAID',
+    );
+  });
+
+  it('preflight accepts a subfolder under a xiRAID mount (longest-match beats /)', async () => {
+    const helper = makeFakeHelper([]);
+    const deps = makeDeps(helper, undefined, async () => [
+      { source: '/dev/sda2', mountpoint: '/' },
+      { source: '/dev/xi_data', mountpoint: '/mnt/data' },
+    ]);
+    const ex = getExecutor(deps, 'share.create');
+    await expect(
+      stage(ex, 'preflight').run(makeCtx({ ...spec, path: '/mnt/data/share1' })),
+    ).resolves.toBeUndefined();
+  });
+
+  it('preflight fails closed when readMounts throws', async () => {
+    const helper = makeFakeHelper([]);
+    const deps = makeDeps(helper, undefined, async () => {
+      throw new Error('proc unreadable');
+    });
+    const ex = getExecutor(deps, 'share.create');
+    await expect(stage(ex, 'preflight').run(makeCtx(spec))).rejects.toThrow();
   });
 });
 

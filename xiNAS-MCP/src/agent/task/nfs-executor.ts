@@ -40,6 +40,12 @@ export interface NfsExecutorDeps {
   helper: NfsHelperClient;
   /** Read the current /etc/idmapd.conf Domain (undefined if unset). Injected so tests fake it. */
   readIdmapDomain: () => Promise<string | undefined>;
+  /**
+   * Read live mounts for the share.create xiRAID-backing gate. FAIL-CLOSED: a
+   * throw refuses the create (better no export than one on the wrong device).
+   * Injected so tests fake it; wired to the same reader as the delete guard.
+   */
+  readMounts: () => Promise<Array<{ source: string; mountpoint: string }>>;
 }
 
 /** The raw Share spec the api forwards (T9b) — narrowed defensively below. */
@@ -167,13 +173,39 @@ function asPriorEntry(stashed: unknown): HelperExportEntry | null {
   return null;
 }
 
+/** True when `path` is at or under `root` (path-segment aware). */
+function pathIsUnder(path: string, root: string): boolean {
+  if (path === root) return true;
+  const prefix = root.endsWith('/') ? root : `${root}/`;
+  return path.startsWith(prefix);
+}
+
+/**
+ * The most specific mount containing `path` — the longest mountpoint that is a
+ * path-prefix of `path` — or null if none contains it. Longest-match ensures a
+ * nested xiRAID mount (e.g. /mnt/data) wins over the root `/`.
+ */
+function containingMount(
+  mounts: Array<{ source: string; mountpoint: string }>,
+  path: string,
+): { source: string; mountpoint: string } | null {
+  let best: { source: string; mountpoint: string } | null = null;
+  for (const m of mounts) {
+    if (pathIsUnder(path, m.mountpoint)) {
+      if (best === null || m.mountpoint.length > best.mountpoint.length) best = m;
+    }
+  }
+  return best;
+}
+
 /**
  * `share.create` — add a brand-new export.
  *
- * preflight blocks if the path is already exported (`EXPORT_PATH_IN_USE`, a
- * fail-before-change); apply compiles the Share and `add_export`s it
- * (creating the directory); verify confirms it is now listed; rollback removes
- * it (idempotent).
+ * preflight gates on the export path living on a xiRAID-backed filesystem
+ * (`EXPORT_PATH_NOT_ON_XIRAID`, live + fail-closed), then blocks if the path
+ * is already exported (`EXPORT_PATH_IN_USE`, a fail-before-change); apply
+ * compiles the Share and `add_export`s it (creating the directory); verify
+ * confirms it is now listed; rollback removes it (idempotent).
  */
 function buildShareCreate(deps: NfsExecutorDeps): Executor {
   return {
@@ -184,6 +216,20 @@ function buildShareCreate(deps: NfsExecutorDeps): Executor {
         async run(ctx: ExecutorContext): Promise<void> {
           const spec = readShareSpec(ctx.spec);
           ctx.emitOutput(`share.create: preflight — checking export path ${spec.path}`);
+          // xiRAID-backing gate: the path must live on a /dev/xi_* filesystem.
+          // Live + fail-closed — an unreadable mount table throws and refuses.
+          const mounts = await deps.readMounts();
+          const backing = containingMount(mounts, spec.path);
+          if (backing === null || !backing.source.startsWith('/dev/xi_')) {
+            const where =
+              backing === null
+                ? 'no filesystem is mounted at or above it'
+                : `it is on ${backing.source} (${backing.mountpoint})`;
+            ctx.emitOutput(`share.create: ${spec.path} is not on a xiRAID filesystem — ${where}`);
+            throw new Error(
+              `EXPORT_PATH_NOT_ON_XIRAID: ${spec.path} is not on a xiRAID-backed filesystem`,
+            );
+          }
           const existing = await deps.helper.listExports();
           if (findEntry(existing, spec.path) !== null) {
             ctx.emitOutput(`share.create: path ${spec.path} is already exported`);

@@ -112,9 +112,14 @@ const IDMAPD_CONF_PATH = '/etc/idmapd.conf';
  * `readIdmapDomain` that parses `/etc/idmapd.conf` (the prior-domain rollback
  * target for `nfs-idmap.set`). On ENOENT / read / parse error the domain is
  * reported as unset (undefined), so a fresh install with no idmapd.conf
- * yields a prior-unset (no-op) rollback.
+ * yields a prior-unset (no-op) rollback. `readMounts` is passed in by the
+ * caller — the SAME resolved reader used by the xiRAID delete guard — so
+ * `share.create`'s xiRAID-backing gate sees the live mount table.
  */
-function buildNfsExecutorDeps(config: AgentConfig): NfsExecutorDeps {
+function buildNfsExecutorDeps(
+  config: AgentConfig,
+  readMounts: () => Promise<Array<{ source: string; mountpoint: string }>>,
+): NfsExecutorDeps {
   const helper = createNfsHelperClientFromProbe({
     helperSocket: config.nfs_helper_socket ?? DEFAULT_NFS_HELPER_SOCKET,
     timeoutMs: DEFAULT_NFS_HELPER_TIMEOUT_MS,
@@ -127,7 +132,7 @@ function buildNfsExecutorDeps(config: AgentConfig): NfsExecutorDeps {
       return undefined;
     }
   };
-  return { helper, readIdmapDomain };
+  return { helper, readIdmapDomain, readMounts };
 }
 
 /** What the task RPC handlers need from the wiring. */
@@ -196,10 +201,14 @@ export function buildTaskSubsystem(
 ): TaskSubsystem {
   const registry = new ExecutorRegistry();
   const fdir = fixtureDir();
+  // Resolved ONCE and shared by the xiRAID delete guard's TOCTOU check and
+  // share.create's xiRAID-backing gate — same mount table, same seam.
+  const resolvedReadMounts =
+    opts.readMounts ?? (fdir !== null ? makeFixtureMounts(fdir) : readProcMounts);
   // Register the real NFS executors (share.* + nfs-profile.update +
   // nfs-idmap.set) over the helper client; tests may inject `nfsDeps` to
   // override the helper/idmap reader.
-  const nfsDeps = opts.nfsDeps ?? buildNfsExecutorDeps(config);
+  const nfsDeps = opts.nfsDeps ?? buildNfsExecutorDeps(config, resolvedReadMounts);
   for (const ex of buildNfsExecutors(nfsDeps)) {
     registry.register(ex);
   }
@@ -212,7 +221,7 @@ export function buildTaskSubsystem(
     registry.register(
       makeXiraidArrayDeleteExecutor({
         client: opts.xiraidClient,
-        readMounts: opts.readMounts ?? (fdir !== null ? makeFixtureMounts(fdir) : readProcMounts),
+        readMounts: resolvedReadMounts,
       }),
     );
   }
