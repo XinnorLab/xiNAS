@@ -95,7 +95,7 @@ that fails to parse is indistinguishable from no trailer at all, so the
 update silently skips the Ansible step. That regression shipped in
 v3.6.0 and v3.6.1, whose bolded, blockquoted trailers never matched the
 line-anchored pattern. Tags are decoration-stripped individually, so
-`**a**, `b`` yields `("a", "b")`.
+a tag list of ``**a**, `b` `` yields `("a", "b")`.
 
 ## Update apply
 
