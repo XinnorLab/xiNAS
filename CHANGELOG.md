@@ -6,6 +6,53 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.6.2] - 2026-07-10
+
+> **Requires-Rebuild: xinas_node_build, xinas_agent** — the fix is
+> agent-side TypeScript. A plain code-only update does not rebuild
+> `dist/`, so updating hosts must re-run both roles for RAID array
+> delete/create to work against the xiRAID daemon.
+
+### Fixed
+
+- **RAID array delete always failed on real hardware.** `Delete Array`
+  tore down the NFS share, unmounted the filesystem and removed the mount
+  unit, then stopped at `preflight: array '<name>' does not exist on the
+  daemon` — while the array was there the whole time. The task executors
+  kept private, array-only readers for `raid_show` / `pool_show`, but the
+  real xiRAID 4.3.x daemon keys both payloads by array name
+  (`{"data": {...}, "log": {...}}`). Those readers returned an empty list,
+  so every live array read as absent. `2868136` (v3.5.0) fixed the
+  collector's copy of the reader and left the others, which is why the TUI
+  could list an array the executor then denied existed. Beyond the delete
+  failure this also meant:
+  - `create` skipped its name-collision and claimed-device guards, then
+    timed out in `wait_online` while leaving the new array behind;
+  - `modify` / rename saw no array;
+  - delete's spare-pool cleanup silently skipped;
+  - `pool.delete` skipped its "still referenced as a spare pool" guard,
+    allowing deletion of a pool an array was actively using;
+  - observed `spare_disk_ids` was always empty.
+
+  All four readers now route through the shared normalizers
+  (`parseRaidShowEntries`, `parsePoolShow`), and
+  `docs/control-path/s3-xiraid-array-spec.md` §8 records the one-reader
+  rule so a fifth copy does not appear.
+
+- **Create rollback could destroy an array it never created.** Repairing
+  the payload-shape bug above re-armed the create executor's name-collision
+  guard — and its rollback then destroyed whatever `raid_show` listed under
+  the target name, including a pre-existing array. A `create` that failed
+  preflight because the name was taken would have wiped the operator's
+  array of that name. The destructive branch is now gated on a
+  `create_attempted` stash marker (the delete executor's existing idiom),
+  restoring the contract `s3-xiraid-array-spec.md` §7 already specified:
+  *if `created` → `raidDestroy`; else no-op.* Reproducible on the
+  array-shaped fake transport, so it predated the shape fix — the shape bug
+  had been masking it on real hardware.
+
+  Covered by six regression tests exercising both payload shapes.
+
 ## [3.6.1] - 2026-07-09
 
 > **Requires-Rebuild: net_controllers, doca_ofed** — the fix re-renders
