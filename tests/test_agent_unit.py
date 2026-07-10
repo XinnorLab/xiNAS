@@ -83,6 +83,47 @@ def test_restrict_namespaces_parses():
     assert values[-1].split() == ["~cgroup", "user"], values[-1]
 
 
+def test_mkfs_and_growfs_capability_is_held_and_inheritable():
+    """``fs.create``/``fs.grow`` need CAP_SYS_ADMIN, in *both* capability sets.
+
+    ``mkfs.xfs`` sets the block device's soft block size with
+    ``ioctl(BLKBSZSET)``; ``blkdev_bszset()`` opens with
+    ``if (!capable(CAP_SYS_ADMIN)) return -EACCES``. ``xfs_growfs`` takes the
+    same capability via ``xfs_growfs_data()`` (``-EPERM``). Both are capability
+    checks, not DAC checks, so uid-0 ownership of ``/dev/xi_*`` does not satisfy
+    them — the ADR-0007 audit row said "no extra capability needed" on DAC
+    grounds and every ``fs.create`` died with ``mkfs.xfs: error - cannot set
+    blocksize 4096 on block device /dev/xi_ss: Permission denied``.
+
+    Bounding is the set that actually reaches ``mkfs.xfs``: a root process
+    exec'ing a binary that carries no file capabilities gets
+    ``pP' = bounding | pI`` with ``pE' = pP'`` (``handle_privileged_root()``).
+    The ``NoNewPrivileges`` downgrade that intersects a child's permitted set
+    with its parent's only fires when the exec *gains* permitted capabilities,
+    which cannot happen while the agent's own permitted set already equals the
+    bounding set. Ambient is asserted alongside it because it is what
+    ``systemctl show xinas-agent -p AmbientCapabilities`` reports, and because
+    it keeps the grant intact if the unit ever stops running as ``User=root``,
+    where a bounding entry on its own confers nothing.
+    """
+    bounding = _directive("CapabilityBoundingSet")
+    ambient = _directive("AmbientCapabilities")
+    assert bounding and ambient, "both capability directives must be set"
+
+    for name, values in (("CapabilityBoundingSet", bounding), ("AmbientCapabilities", ambient)):
+        assert "CAP_SYS_ADMIN" in values[-1].split(), f"{name}: {values[-1]!r}"
+
+    # The pre-existing grants must survive: CAP_CHOWN gates the agent.sock
+    # chgrp (the socket gate), CAP_NET_ADMIN the S6 network executors.
+    for values in (bounding, ambient):
+        assert "CAP_CHOWN" in values[-1].split()
+        assert "CAP_NET_ADMIN" in values[-1].split()
+
+    # NoNewPrivileges bounds how far a subprocess can escalate past the sets
+    # above; dropping it would silently widen what mkfs.xfs may acquire.
+    assert _directive("NoNewPrivileges") == ["true"]
+
+
 def test_agent_is_ordered_after_the_nfs_helper():
     """The NfsSession initialSweep() connects to the helper's unix socket.
 

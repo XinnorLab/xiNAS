@@ -32,10 +32,19 @@ bundle. Verified facts this ADR is designed against:
   (`/etc/sysctl.d/90-perf-*.conf`; the SunRPC key is
   `sunrpc.tcp_max_slot_table_entries`) — hardcoded expected values
   would false-warn on customized installs (review P1).
-- The agent deliberately lacks `CAP_SYS_ADMIN`; mounts are delegated to
-  PID1 (the S5 pattern). The bundle path `/var/log/xinas` is already
-  agent-writable; `CAP_CHOWN` is held for the chgrp pattern. **S7 needs
-  no sandbox delta.**
+- Mounts are delegated to PID1 (the S5 pattern). The bundle path
+  `/var/log/xinas` is already agent-writable; `CAP_CHOWN` is held for the
+  chgrp pattern. **S7 needs no sandbox delta.**
+  > **Superseded (hardware smoke, 2026-07-10).** This bullet read "the
+  > agent deliberately lacks `CAP_SYS_ADMIN`; mounts are delegated to PID1
+  > (the S5 pattern)", and stated the delegation as a *consequence* of the
+  > missing capability. It was never true that S5 delegated in order to
+  > avoid `CAP_SYS_ADMIN` — S5's own `mkfs.xfs` needed it and silently
+  > could not get it (ADR-0007 §Sandbox amendment). The agent now holds
+  > `CAP_SYS_ADMIN`. PID1 delegation of `mount`/`umount` stays, on its own
+  > merits: `.mount` units give reboot persistence and device-dependency
+  > ordering that a bare `mount(2)` does not. `loopbackMount` and the
+  > `.mount` executors are unaffected by this grant and require no change.
 
 ## Decision — architecture
 

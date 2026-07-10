@@ -96,17 +96,25 @@ The executors run host commands (`mkfs.xfs`, `xfs_growfs`, `blkid`, `blockdev`, 
 
 **The sandbox does NOT suffice as-is** (S5 review P0). The live unit runs `ProtectSystem=strict` with `ReadWritePaths=/run/xinas /var/log/xinas` only, `NoNewPrivileges`, `CapabilityBoundingSet=CAP_CHOWN`, namespace and syscall restrictions. The audited compatibility delta:
 
+> **Amended (hardware smoke, 2026-07-10).** The `mkfs.xfs` and `xfs_growfs` rows below originally read "allowed — no extra capability needed", reasoning that `/dev` stays writable under `strict` and uid 0 owns `/dev/xi_*`. That is a **discretionary-access** argument, and both tools are gated on a **capability** check the kernel makes independently of file permissions. `fs.create` therefore failed on the first real array with `mkfs.xfs: error - cannot set blocksize 4096 on block device /dev/xi_ss: Permission denied`, and `fs.grow` carried the identical defect — masked only because a filesystem that cannot be created cannot be grown. The rows are corrected below and the unit now grants `CAP_SYS_ADMIN` in **both** `CapabilityBoundingSet` and `AmbientCapabilities`. Bounding is the load-bearing one — a root process exec'ing a binary with no file capabilities receives `pP' = bounding ∪ pI` — while ambient keeps the grant intact should the unit ever stop running as `User=root`, and makes it observable through `systemctl show`. The diagnostic tell that this was a capability denial and not a `SystemCallFilter` denial is the errno — `blkdev_bszset()` returns `EACCES`, whereas the unit's `SystemCallErrorNumber=EPERM` would have produced "Operation not permitted".
+>
+> Read `CAP_SYS_ADMIN` here as an **accident guard, not a containment boundary**. The agent runs `User=root`, holds `/etc/systemd/system` in `ReadWritePaths`, and shells `systemctl enable --now`; that combination is already arbitrary code execution as unconfined root. See ADR-0009 §Consequences, whose "the agent deliberately lacks `CAP_SYS_ADMIN`" invariant this supersedes.
+
 | Need | Verdict under the current unit | Delta |
 |------|-------------------------------|-------|
-| Write/remove `.mount` units + `systemctl enable` symlinks under `/etc/systemd/system` | **blocked** (`ProtectSystem=strict`) | `ReadWritePaths=/etc/systemd/system` — **the one unit change**, shipped in its own commit with `Requires-Rebuild: xinas_agent`. |
+| Write/remove `.mount` units + `systemctl enable` symlinks under `/etc/systemd/system` | **blocked** (`ProtectSystem=strict`) | `ReadWritePaths=/etc/systemd/system`, shipped in its own commit with `Requires-Rebuild: xinas_agent`. |
 | Mountpoint directory creation | not needed by the agent | systemd (PID1, unconfined) creates `Where=` directories itself when starting a `.mount`. |
-| Raw block writes for `mkfs.xfs`/`blkid`/`blockdev` on `/dev/xi_*` | allowed | `strict` leaves `/dev` writable; `PrivateDevices` is NOT set; uid 0 owns the nodes (no extra capability needed). |
+| Raw block writes for `blkid`/`blockdev` on `/dev/xi_*` | allowed | `strict` leaves `/dev` writable; `PrivateDevices` is NOT set; uid 0 owns the nodes. `BLKGETSIZE64` (the `log_size` clamp) takes no capability. |
+| `mkfs.xfs` on `/dev/xi_*` | **blocked** (`CapabilityBoundingSet`) | `+ CAP_SYS_ADMIN` (bounding **and** ambient). `mkfs.xfs` sets the device's soft block size with `ioctl(BLKBSZSET)` and flushes with `BLKFLSBUF`; `blkdev_bszset()`/`blkdev_flushbuf()` open with `if (!capable(CAP_SYS_ADMIN)) return -EACCES`. |
 | `mount`/`umount` themselves | not performed by the agent | delegated to PID1 via `systemctl start/stop` over the already-allowed `AF_UNIX` dbus socket. |
-| `xfs_growfs` (ioctl on the mounted fs) / `statfs` | allowed | new mounts propagate rw into the agent's namespace; `ioctl` is in the `@system-service` filter. |
+| `xfs_growfs` (ioctl on the mounted fs) | **blocked** (`CapabilityBoundingSet`) | `+ CAP_SYS_ADMIN` (same grant). `XFS_IOC_FSGROWFSDATA` → `xfs_growfs_data()` opens with the same `capable()` check, returning `-EPERM`. |
+| `statfs` on the mountpoint | allowed | new mounts propagate rw into the agent's namespace; `ioctl` is in the `@system-service` filter. |
 | `owner_policy` chown/chmod on the fresh fs root | allowed | `CAP_CHOWN` is retained; root owns the fresh root inode. |
 | Spawning `mkfs.xfs`/`xfs_growfs`/`blkid`/`blockdev` | allowed | the agent already execs `lsblk`/`udevadm` under the same filter. |
 
 Because the dev/CI environment has no systemd, the delta is **proven by**: (a) the audit table above against the unit text, (b) unit/e2e coverage over the fake host, and (c) a written Ubuntu hardware smoke checklist (create→mount→grow→quota→unmount→unmanage on a lab node) attached to the plan — an explicitly tracked residual until run.
+
+Note what (a) and (b) can and cannot establish, because the `CAP_SYS_ADMIN` miss above went through both. The audit table is a **reading of the unit text**, so it can only catch what its author thought to ask; it asked "can the agent open and write the device node" (yes) and never "does the tool make a `capable()` call" (it does, twice). The fake host never execs `mkfs.xfs`, so no amount of unit or e2e coverage over it can surface a kernel permission check. Only (c) closes that class. Treat the smoke checklist as the sole evidence for every privileged host verb, and when auditing a sandbox, enumerate the **syscalls and ioctls** the tool issues rather than the files it touches.
 
 ## Consequences
 

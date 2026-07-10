@@ -5,8 +5,9 @@
  *  - touchProbe: write/read/delete `.xinas-health-probe` in a
  *    mountpoint — proves the filesystem accepts I/O end to end.
  *  - loopbackMount: PID1-DELEGATED `systemd-mount localhost:<export>`
- *    at /run/xinas/health-probe/mnt (the S5 pattern — the agent holds
- *    no CAP_SYS_ADMIN; PID1 performs the mount), list the root, then
+ *    at /run/xinas/health-probe/mnt (the S5 pattern — PID1 performs the
+ *    mount so the probe inherits `.mount` unit semantics, not because the
+ *    agent lacks the privilege to mount), list the root, then
  *    `systemd-umount`. The unmount runs in `finally` so a listing
  *    failure never leaks a mount.
  *

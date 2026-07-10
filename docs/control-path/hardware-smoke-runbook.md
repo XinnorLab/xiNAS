@@ -70,6 +70,18 @@ On a scratch node (or after `./uninstall.sh`):
    the render; `xfs_info` shows su/sw + external log with the CLAMPED
    size; the mountpoint dir was PID1-created (no agent mkdir in the
    journal).
+
+   > This step is the ONLY thing that can catch a capability denial on
+   > the mkfs path — the fake host never execs `mkfs.xfs`, so CI is
+   > structurally blind to it. Watch the journal for **all three** error
+   > classes, which name three different sandbox directives:
+   > `EROFS`/"Read-only file system" → `ReadWritePaths`;
+   > `EPERM`/"Operation not permitted" → `SystemCallFilter`
+   > (`SystemCallErrorNumber=EPERM`) or an `xfs_*` `capable()` check;
+   > `EACCES`/"Permission denied" → `CapabilityBoundingSet` +
+   > `AmbientCapabilities` (this is what `ioctl(BLKBSZSET)` returns
+   > without `CAP_SYS_ADMIN`). Confirm the grant landed before blaming
+   > the device: `systemctl show xinas-agent -p AmbientCapabilities`.
 2. [ ] `systemctl is-enabled <unit>` → `enabled` (sandboxed symlink
    write worked).
 3. [ ] Export a path + mount from the client → unmount apply → 412 with
@@ -123,8 +135,10 @@ On a scratch node (or after `./uninstall.sh`):
   (probe file appears/disappears); `nfs.loopback` performs a REAL
   PID1-delegated `systemd-mount localhost:<export>` at
   `/run/xinas/health-probe/mnt` and unmounts (check `systemd-mount
-  --list` empty afterwards) — the agent has no CAP_SYS_ADMIN, so this
-  validates the delegation end to end.
+  --list` empty afterwards) — PID1 performs the mount, so this validates
+  the delegation end to end. (The agent does now hold `CAP_SYS_ADMIN`,
+  for `mkfs.xfs`/`xfs_growfs`; the delegation is kept for `.mount` unit
+  semantics, not for want of the capability.)
 - [ ] Drift: edit `/etc/netplan/99-xinas.yaml` by hand → `drift.netplan`
   degraded in `GET /health` AND `GET /config-history/drift`; re-apply →
   clean. Remove an export via `exportfs -u` → `drift.nfs-exports`

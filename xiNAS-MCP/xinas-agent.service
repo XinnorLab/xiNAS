@@ -99,21 +99,57 @@ ReadOnlyPaths=/var/lib/xinas /etc/xinas-agent
 
 # --- Capability bounding ---
 NoNewPrivileges=true
+# Every capability below is listed TWICE. Bounding is the line that actually
+# reaches a subprocess today: root exec'ing a binary that carries no file
+# capabilities gets pP' = bounding | pI, with pE' = pP'
+# (cap_bprm_creds_from_file -> handle_privileged_root), so mkfs.xfs/ip/netplan
+# inherit whatever is bounded here. The NoNewPrivileges downgrade that
+# intersects a child's permitted set with its parent's only fires when the exec
+# GAINS permitted capabilities, which cannot happen while the agent's own
+# permitted set already equals the bounding set. Ambient is listed anyway: it
+# is what `systemctl show xinas-agent -p AmbientCapabilities` reports, and it
+# keeps the grant intact if this unit ever stops running as User=root, where a
+# bounding entry on its own confers nothing. Keep the two lines in sync — the
+# contract test in tests/test_agent_unit.py enforces it.
+#
 # CAP_CHOWN is required: the agent creates /run/xinas/agent.sock owned by
 # root:root, then chgrps it to root:xinas-api so the api (member of the
 # xinas-api group) can connect. With User=root + NoNewPrivileges, an EMPTY
 # CapabilityBoundingSet would mask CAP_CHOWN and the chgrp would fail with
-# EPERM, breaking the socket gate. We grant exactly CAP_CHOWN — nothing else.
+# EPERM, breaking the socket gate.
 # (The udevadm/ip-monitor subprocesses read the kernel uevent/rtnetlink
 # multicast groups, which do not require CAP_NET_ADMIN for a read-only
 # listener. The final minimal capability + SystemCallFilter set is tuned
 # against real hardware in the L-phase validation / WS13 packaging pass.)
+#
 # CAP_NET_ADMIN (S6, ADR-0008 §Sandbox): `ip rule del`, `ip route flush`,
 # `ip addr flush` and netplan's kernel programming all require it; the
 # observe-side `ip -j`/`ip monitor` reads ride AF_NETLINK (already allowed)
 # without it, but the network executors mutate kernel state.
-CapabilityBoundingSet=CAP_CHOWN CAP_NET_ADMIN
-AmbientCapabilities=CAP_CHOWN CAP_NET_ADMIN
+#
+# CAP_SYS_ADMIN (S5, ADR-0007 §Sandbox): the filesystem executors' two
+# privileged verbs are gated on it by CAPABILITY, not by file permissions:
+#   mkfs.xfs   → ioctl(BLKBSZSET) to set the device's soft block size, and
+#                BLKFLSBUF to flush it. blkdev_bszset()/blkdev_flushbuf()
+#                open with `if (!capable(CAP_SYS_ADMIN)) return -EACCES`.
+#   xfs_growfs → XFS_IOC_FSGROWFSDATA; xfs_growfs_data() opens with the same
+#                capable() check, returning -EPERM.
+# The original ADR-0007 audit row reasoned only about DAC — /dev stays writable
+# under ProtectSystem=strict and uid 0 owns /dev/xi_* — and concluded "no extra
+# capability needed". DAC does not satisfy a capable() check, so every fs.create
+# died at `mkfs.xfs: error - cannot set blocksize 4096 on block device
+# /dev/xi_ss: Permission denied` (EACCES, not the SystemCallErrorNumber=EPERM a
+# seccomp denial would have produced) and fs.grow was broken the same way,
+# unnoticed only because you cannot grow a filesystem you cannot create.
+#
+# CAP_SYS_ADMIN is close to root, so be honest about what the bounding set is
+# worth here: it is an accident guard, NOT a containment boundary. This unit
+# already runs User=root with /etc/systemd/system in ReadWritePaths and shells
+# `systemctl enable --now`, so anything able to drive the agent can already
+# execute arbitrary code as unconfined root. Do not add capabilities on the
+# theory that the sandbox contains a compromised agent; it does not.
+CapabilityBoundingSet=CAP_CHOWN CAP_NET_ADMIN CAP_SYS_ADMIN
+AmbientCapabilities=CAP_CHOWN CAP_NET_ADMIN CAP_SYS_ADMIN
 
 # --- Process isolation ---
 LockPersonality=true
