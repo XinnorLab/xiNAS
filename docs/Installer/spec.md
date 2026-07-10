@@ -756,13 +756,15 @@ recovery, not just one menu:
   license file (or paste the real license) rather than silently
   proceeding.
 - `startup_menu.sh`'s `_save_recovered_license_note()` is the reference
-  pattern: it writes only to `/tmp/license.recovered` and shows a
-  dialog naming the canonical license fields
-  (`hwkey`, `license_key`, `version`, `crypto_version`, `created`,
-  `expired`, `disks`, `levels`, `type`) the operator still needs to
-  supply. Any other installer surface that offers license recovery
-  MUST follow the same shape — non-canonical save path, explicit
-  operator prompt, no silent write to `/tmp/license`.
+  pattern: it writes the captured output only to `<file>.recovered`,
+  shows a dialog explaining that `xicli license show` is not a usable
+  license file (it carries no license key) and naming both the
+  `.recovered` capture path and the canonical path the operator must
+  supply, then returns non-zero so callers fall through to manual
+  license entry. Any other installer surface that offers license
+  recovery MUST follow the same shape — non-canonical save path,
+  explicit operator prompt, no silent write to the canonical path, and
+  no proceeding to provisioning on a fabricated license.
 
 ### 8.3 Install-failure dialog
 
