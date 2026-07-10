@@ -35,8 +35,16 @@ def test_xiraid_license_output_never_redirected_to_canonical_path():
 
 
 def test_recovered_note_path_used_at_all_three_sites():
+    # Assert the three exact call patterns rather than a bare mention count: a
+    # count alone would still pass if a real call site were deleted and an
+    # unrelated mention (a comment, say) added in its place. Pinning the
+    # literal calls also pins the `|| true` suffix, which errexit makes
+    # load-bearing — the helper returns 1 by design, and a `case` branch does
+    # not suppress that under `set -euo pipefail`.
     body = SIMPLE.read_text()
-    assert body.count("_save_recovered_license_note") >= 4  # 1 def + 3 call sites
+    assert body.count('_save_recovered_license_note "$license_file" || true') == 2
+    assert body.count("_save_recovered_license_note /tmp/license || true") == 1
+    assert body.count("_save_recovered_license_note() {") == 1
 
 
 def test_matches_startup_menu_function_body():
