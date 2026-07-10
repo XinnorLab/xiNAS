@@ -1263,8 +1263,8 @@ _xinas_playbook_ticker() {
 #
 # Tees ansible-playbook output to /var/log/xinas/install.log (falling back to
 # /tmp/xinas-install.log when the primary path is not writable). On non-zero
-# exit, shows a msg_box telling the operator to run "Collect System Data" and
-# email the archive to support@xinnor.io.
+# exit, shows a whiptail menu offering Collect Diagnostics (runs
+# collect_data.sh to write a local archive), View Log, or Continue.
 #
 # Usage:  xinas_run_playbook <playbook> [args...]
 # Returns: ansible-playbook's exit code (not tee's).
