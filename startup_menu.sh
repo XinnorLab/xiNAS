@@ -176,7 +176,10 @@ _save_recovered_license_note() {
 # Show license prompt and save to /tmp/license
 enter_license() {
     local license_file="/tmp/license"
-    [ -x ./hwkey ] || chmod +x ./hwkey
+    # chmod on a missing ./hwkey fails, and under set -e that failing `||`
+    # branch aborts the whole menu — trailing `|| true` keeps a missing
+    # binary from killing the interactive session (F7).
+    [ -x ./hwkey ] || chmod +x ./hwkey 2>/dev/null || true
     local hwkey_val
 
     # Check if xiRAID already has an active license
@@ -228,7 +231,12 @@ enter_license() {
         esac
     fi
 
-    hwkey_val=$(./hwkey 2>/dev/null | tr -d '\n' | tr '[:lower:]' '[:upper:]')
+    # Under pipefail, this assignment's status is non-zero if ANY stage of
+    # the pipe fails (a hardware-read error in ./hwkey itself, not just the
+    # tr stages) — that would abort the menu (F7). Fall back to empty rather
+    # than let a failing hwkey take down the whole session; `hwkey_val` is
+    # also referenced under set -u below, so it must end up set either way.
+    hwkey_val=$(./hwkey 2>/dev/null | tr -d '\n' | tr '[:lower:]' '[:upper:]') || hwkey_val=""
 
     # Show HWKEY to the user
     msg_box "Hardware Key" "HWKEY: ${hwkey_val}\n\nRequest your license key from xiNNOR Support."
