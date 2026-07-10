@@ -183,6 +183,17 @@ else
             echo -e "${RED}xiNAS installs from releases only — no fallback to main.${NC}" >&2
             exit 1
         fi
+        # _tag came from an unanchored grep/sed over the GitHub API response;
+        # refuse anything that isn't a semver release tag before `git clone
+        # --branch`. lib/menu_lib.sh (and its _is_release_tag) isn't available
+        # pre-clone, so this regex is a character-identical copy of
+        # _is_release_tag / install.sh's inline copy — kept in sync by
+        # tests/test_release_tag_regex_parity.py.
+        if [[ ! "$_tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo -e "${RED}Refusing to clone non-release ref: '${_tag}'.${NC}" >&2
+            echo -e "${RED}xiNAS installs from releases only — no fallback to main.${NC}" >&2
+            exit 1
+        fi
         echo -e "${YELLOW}Cloning xiNAS ${_tag}...${NC}"
         git clone --branch "$_tag" "$REPO_URL" "$REPO_DIR"
     fi

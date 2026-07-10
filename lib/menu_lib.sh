@@ -1099,12 +1099,14 @@ _semver_gt() {
 # Accept only a semver release tag (optionally v-prefixed, optional
 # prerelease suffix). Reject branches, HEAD, refspecs, flag-shaped strings
 # (leading `-`), and anything else — this is the single source of truth for
-# the regex; the privileged root-owned helper
-# (collection/roles/xinas_menu/files/xinas-update-git) carries its own
-# character-identical copy since it must not depend on this file, and
-# install.sh carries an inline copy for the same reason (it runs standalone,
-# before/independently of the clone this file lives in). Keep all three in
-# sync if the contract ever changes.
+# the regex; four other sites carry character-identical inline copies
+# because they can't source this file: the privileged root-owned helper
+# (collection/roles/xinas_menu/files/xinas-update-git), install.sh and
+# install_client.sh (standalone installers that run before/independently of
+# the clone this file lives in), and prepare_system.sh's own initial
+# bootstrap clone (runs before the repo — and this file inside it — exists
+# on disk at all). That's five copies total; keep them all in sync if the
+# contract ever changes. tests/test_release_tag_regex_parity.py enforces it.
 #
 # Every bash tag resolver (_latest_release_tag below, and both
 # prepare_system.sh's and install.sh's own xinas_latest_release_tag())

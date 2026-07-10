@@ -260,3 +260,77 @@ def test_prepare_system_update_only_refuses_non_release_tag(tmp_path):
     assert "Refusing to check out non-release ref: 'main'" in proc.stderr, (
         f"expected the real refusal message on stderr, got: {proc.stderr!r}"
     )
+
+
+# ── Behavioral: prepare_system.sh's initial BOOTSTRAP clone (before the repo
+# exists on disk at all) must also refuse a non-release tag before ever
+# calling git ─────────────────────────────────────────────────────────────
+
+
+def _extract_prepare_system_bootstrap_clone_block() -> str:
+    # The bootstrap-clone site: the ELSE branch of prepare_system.sh's
+    # `ansible.cfg`/`playbooks` check, taken when the repo isn't present in
+    # the cwd yet. lib/menu_lib.sh (and its _is_release_tag) is sourced only
+    # AFTER this block -- it can't be sourced earlier, because the lib file
+    # doesn't exist on disk until this very clone creates the repo. So this
+    # site cannot call the shared _is_release_tag and instead needs its own
+    # inline copy of the regex, like install.sh's pre-clone path.
+    # Anchored with re.M so the non-greedy body match stops at the outer
+    # `fi` (4-space indent) rather than the inner `if [ -z "$_tag" ]; then`
+    # block's own `fi` (8-space indent, which is also a *substring* match
+    # for "    fi\n" without the ^ anchor).
+    src = PREPARE_SYSTEM.read_text()
+    m = re.search(
+        r'^    if \[ ! -d "\$REPO_DIR" \]; then\n.*?^    fi\n',
+        src,
+        re.M | re.S,
+    )
+    assert m, "prepare_system.sh's bootstrap-clone block not found"
+    return m.group(0)
+
+
+def _run_prepare_system_bootstrap_clone(
+    tmp_path: Path, latest_tag: str
+) -> tuple[subprocess.CompletedProcess, Path]:
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    git_log = tmp_path / "git-calls.log"
+    (stub_bin / "git").write_text(f'#!/bin/bash\necho "$@" >> "{git_log}"\nexit 0\n')
+    (stub_bin / "git").chmod(0o755)
+
+    snippet = (
+        "set -e\n"
+        'RED="\\033[0;31m"; YELLOW="\\033[1;33m"; NC="\\033[0m"\n'
+        'REPO_URL="https://example.invalid/xiNAS.git"\n'
+        f'REPO_DIR="{tmp_path / "xiNAS"}"\n'
+        # Simulates a compromised/malformed GitHub Release API response --
+        # the unanchored `grep -o | sed` in the real xinas_latest_release_tag
+        # would happily extract a branch name like "main" too.
+        f'xinas_latest_release_tag() {{ echo "{latest_tag}"; }}\n'
+        + _extract_prepare_system_bootstrap_clone_block()
+        + '\necho "REACHED_END"\n'
+    )
+    proc = subprocess.run(
+        ["bash", "-c", snippet],
+        cwd=tmp_path,
+        env=dict(os.environ, PATH=f"{stub_bin}:{os.environ['PATH']}"),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return proc, git_log
+
+
+def test_prepare_system_bootstrap_clone_refuses_non_release_tag(tmp_path):
+    """The initial bootstrap clone -- run before the repo (and lib/menu_lib.sh
+    inside it) exists on disk at all -- must refuse a non-release tag the
+    same way install.sh's pre-clone path and the update-only path do."""
+    proc, git_log = _run_prepare_system_bootstrap_clone(tmp_path, "main")
+    calls = git_log.read_text().splitlines() if git_log.exists() else []
+    clone_calls = [c for c in calls if "clone" in c]
+    assert not clone_calls, f"a non-release tag must never reach git clone: {calls}"
+    assert proc.returncode != 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    assert "Refusing to clone non-release ref: 'main'" in proc.stderr, (
+        f"expected the refusal message on stderr, got: {proc.stderr!r}"
+    )
+    assert "REACHED_END" not in proc.stdout

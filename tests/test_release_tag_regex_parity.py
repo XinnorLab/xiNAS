@@ -2,12 +2,15 @@
 
 `_is_release_tag`'s pattern is duplicated by necessity — the two standalone
 installers (`install.sh`, `install_client.sh`) run before/independently of the
-clone and cannot source `lib/menu_lib.sh`, and the privileged
-`xinas-update-git` wrapper is a root-owned file deployed by Ansible. All four
-copies gate `git checkout` against a non-release ref; if one drifts, a bash
-path could accept a ref the others reject (or vice versa). This guards the
-"keep in sync" burden the copies' own comments describe, which had no
-enforcement — WS3 added the fourth copy.
+clone and cannot source `lib/menu_lib.sh`, the privileged `xinas-update-git`
+wrapper is a root-owned file deployed by Ansible, and `prepare_system.sh`'s
+own initial bootstrap clone runs before the repo (and the lib inside it)
+exists on disk at all. All five copies gate `git clone`/`git checkout`
+against a non-release ref; if one drifts, a bash path could accept a ref the
+others reject (or vice versa). This guards the "keep in sync" burden the
+copies' own comments describe, which had no enforcement — WS3 added the
+fourth copy; a follow-up review found the fifth (prepare_system.sh's
+bootstrap clone).
 """
 
 import re
@@ -22,6 +25,7 @@ _SITES = {
     "install.sh": "standalone server installer, runs before the clone",
     "install_client.sh": "standalone client installer, never sources the lib",
     "collection/roles/xinas_menu/files/xinas-update-git": "root-owned sudo wrapper",
+    "prepare_system.sh": "standalone installer, inline check before bootstrap clone",
 }
 
 # The one true pattern. A `# _is_release_tag pattern:` change here without
