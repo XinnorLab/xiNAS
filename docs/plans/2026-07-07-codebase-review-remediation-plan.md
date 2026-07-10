@@ -180,6 +180,20 @@ written: `docs/superpowers/specs/2026-07-06-storage-reset-safety-design.md`,
 
 **Owning specs:** `docs/Installer/update-spec.md`, `docs/Installer/spec.md`.
 
+> **Status 2026-07-10:** LANDED on `ws3-installer-update-correctness`
+> (`docs/plans/2026-07-10-ws3-installer-update-correctness-plan.md`, T1–T15).
+> All 12 recorded findings (F1–F12) closed. Review surfaced and closed five
+> further items in the same branch: install.sh `bash -c` command injection +
+> release-tag validation across every bash checkout site (T5c), the
+> `configure_git_repo` dev-repo Release-Policy violation now gated behind
+> `XINAS_DEV_REPO_CONFIG` off by default (T5b), `prepare_system.sh`
+> false-success on a failed checkout (folded into T7), the F7 hwkey errexit
+> guard in `prepare_system.sh` (folded into T9), and `post_install_menu.sh`'s
+> own F6 string-compare downgrade bug (folded into T14). The
+> `xinas-update-helper-sync` privileged wrapper (T11) ships with
+> `Requires-Rebuild: xinas_menu` — see update-spec.md "Bootstrapping the
+> helper-sync wrapper".
+
 | Sev | Location | Defect |
 |-----|----------|--------|
 | high | `prepare_system.sh:184-194` (+ `set -e` at :4) | menus exit 2 on normal Exit; under errexit the shell dies before `status=$?` — the exit-2 handling is dead code and `install.sh:251` aborts before installing `/usr/local/bin/xinas-menu` |
@@ -195,23 +209,23 @@ written: `docs/superpowers/specs/2026-07-06-storage-reset-safety-design.md`,
 | low | `prepare_system.sh:108` | yq fetched from `releases/latest`, no pin/checksum, hardcoded amd64 |
 | low | `xinas_menu/utils/update_check.py:35` | undocumented `XINAS_UPDATE_REPO` env var can redirect the production update source |
 
-- [ ] **WS3.1** Fix the errexit bug: `status=0; ./simple_menu.sh || status=$?`
+- [x] **WS3.1** Fix the errexit bug: `status=0; ./simple_menu.sh || status=$?`
   (same for `startup_menu.sh` call sites); add a bats/shell test or at minimum
   a `bash -n` + scripted exit-2 harness under `tests/`.
-- [ ] **WS3.2** Remove the fabricated-license path in `simple_menu.sh:691`
+- [x] **WS3.2** Remove the fabricated-license path in `simple_menu.sh:691`
   (recovery must instruct the user to re-enter the real key; never synthesize
   `/tmp/license`).
-- [ ] **WS3.3** `startup_menu.sh`: write update-check results to a temp file
+- [x] **WS3.3** `startup_menu.sh`: write update-check results to a temp file
   the parent reads, or run the check synchronously with a short timeout;
   switch tag comparison to the same semver rule as `update_check.py`; use
   `git checkout --force <tag>` in every bash apply path (matches spec).
-- [ ] **WS3.4** `install_client.sh`: propagate git failures, report accurately.
+- [x] **WS3.4** `install_client.sh`: propagate git failures, report accurately.
   `autoinstall.sh`: `set -euo pipefail` + check `copy_if`.
   `prepare_system.sh:108`: pin yq to a tested version + sha256, select the
   binary by `uname -m`.
-- [ ] **WS3.5** `menu_lib.sh:1133`: wire the collect choice to
+- [x] **WS3.5** `menu_lib.sh:1133`: wire the collect choice to
   `collect_data.sh` (after WS6 fixes its transport) or drop the option.
-- [ ] **WS3.6** `update_check.py:368`: check the restart result; on failure,
+- [x] **WS3.6** `update_check.py:368`: check the restart result; on failure,
   surface "updated, helper restart failed — run `<cmd>`" instead of silence.
   Either document `XINAS_UPDATE_REPO` in update-spec.md (dev-only, off by
   default) or drop it. Add an orchestration test for
