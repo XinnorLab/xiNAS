@@ -311,12 +311,14 @@ class UpdateChecker:
 
         cur_parsed = _parse_semver(self._current)
         latest_parsed = _parse_semver(latest_tag)
-        is_newer = (
-            cur_parsed is not None
-            and latest_parsed is not None
-            and _semver_key(latest_parsed) > _semver_key(cur_parsed)
-        )
-        if not is_newer:
+        # An unparsable tag on either side means we cannot establish precedence,
+        # and "cannot establish" is never "an update is available". Bail before
+        # _semver_key rather than comparing against a fabricated key.
+        if (
+            cur_parsed is None
+            or latest_parsed is None
+            or _semver_key(latest_parsed) <= _semver_key(cur_parsed)
+        ):
             return CheckResult(
                 False,
                 current_version=self._current,

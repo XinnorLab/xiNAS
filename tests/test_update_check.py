@@ -99,6 +99,23 @@ def test_older_release_reports_no_update():
     assert r.error is None
 
 
+def test_unparsable_installed_version_reports_no_update():
+    # A dev build whose version string isn't semver has no comparable key, so
+    # precedence can't be established. Report "no update" instead of crashing.
+    c = _checker([_rel("v3.1.1")], current_version="main")
+    r = _run(c.check())
+    assert r.available is False
+    assert r.error is None
+    assert r.latest_version == "v3.1.1"
+
+
+def test_unparsable_release_tag_is_filtered_out():
+    c = _checker([_rel("nightly"), _rel("v3.1.1")], current_version="3.1.0")
+    r = _run(c.check())
+    assert r.available is True
+    assert r.latest_version == "v3.1.1"
+
+
 # ── draft / prerelease filtering ─────────────────────────────────────────
 
 
