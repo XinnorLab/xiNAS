@@ -331,6 +331,16 @@ configure_raid() {
 # this manual, opt-in reconfiguration is deliberately kept separate from that
 # flow and is never invoked by the automatic update checker.
 configure_git_repo() {
+    # Release Policy (CLAUDE.md): this repoints REPO_DIR at an arbitrary
+    # URL/branch and `git pull`s a branch — forbidden in the production update
+    # path. It survives only as a DEV affordance, off by default. Gate it
+    # behind XINAS_DEV_REPO_CONFIG=1 so a normal expert session can't reach it.
+    if [ "${XINAS_DEV_REPO_CONFIG:-0}" != "1" ]; then
+        msg_box "Developer Feature" \
+            "Git repository configuration is a development-only feature and is\ndisabled. xiNAS installs and updates only from published GitHub\nReleases (see docs/Installer/update-spec.md).\n\nTo enable for development, re-launch with XINAS_DEV_REPO_CONFIG=1."
+        return 0
+    fi
+
     local repo_dir="/opt/provision"
     mkdir -p "$repo_dir"
 
@@ -730,6 +740,14 @@ advanced_settings_menu() {
             update_text="🔄 Check for Updates [Update Available!]"
         fi
 
+        # Developer-only affordance (see configure_git_repo's Release Policy
+        # gate): label it as such when reachable, so an operator without the
+        # env var set sees the entry but not a false promise it will work.
+        local git_repo_text="🔧 Git Repository Configuration (dev, disabled)"
+        if [ "${XINAS_DEV_REPO_CONFIG:-0}" = "1" ]; then
+            git_repo_text="🔧 Git Repository Configuration (dev)"
+        fi
+
         local choice
         choice=$(menu_select "Advanced Settings" "Configuration & Management Options" \
             "1" "🌐 Configure Network" \
@@ -737,7 +755,7 @@ advanced_settings_menu() {
             "3" "💾 Configure RAID" \
             "4" "📂 Edit NFS Exports" \
             "5" "📦 Presets" \
-            "6" "🔧 Git Repository Configuration" \
+            "6" "$git_repo_text" \
             "7" "$update_text" \
             "0" "🔙 Back to Main Menu") || return
 

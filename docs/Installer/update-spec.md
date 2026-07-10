@@ -384,6 +384,37 @@ There is no code path in which the default (stable) channel selects a
 prerelease, a draft, `main`, `master`, `HEAD`, a branch archive, or a
 commit tarball.
 
+## Dev-only: expert-menu Git Repository Configuration
+
+`startup_menu.sh`'s expert menu (Advanced Settings → "Git Repository
+Configuration", `configure_git_repo()`) can repoint a local provisioning
+clone at `/opt/provision` to an arbitrary git URL and branch, then
+`git pull`s (or clones) that branch and `cd`s the running menu session
+into it. Left unguarded, this would let the menu's own `check_for_updates`
+/ `do_update` operate against that arbitrary clone afterward — exactly
+the branch/arbitrary-URL fallback the Release and Update Policy forbids
+in a user-facing update path.
+
+This affordance exists only for development (pointing the provisioning
+tree at a fork or feature branch while iterating on xiNAS itself). It is
+**never** part of the production install/update flow, is not invoked by
+the automatic update checker, and is **disabled by default**:
+
+- The function refuses immediately — before touching any git remote,
+  checkout, pull, or clone — unless the environment variable
+  `XINAS_DEV_REPO_CONFIG=1` is set for the menu process.
+- With the gate off (unset, or any value other than `1`), the menu shows
+  a "Developer Feature" notice and returns without side effects. The
+  menu entry itself remains visible (labeled `(dev, disabled)`) so an
+  operator isn't confused by a missing option, but selecting it does
+  nothing destructive.
+- With `XINAS_DEV_REPO_CONFIG=1` set, the entry is labeled `(dev)` and
+  the feature behaves as before: it prompts for a URL/branch and
+  repoints `/opt/provision`.
+
+A normal expert session — the one a customer or field engineer runs —
+never sets this variable, so this path is unreachable in production use.
+
 ## Migration
 
 Hosts installed before this change run the old `git pull origin main`
