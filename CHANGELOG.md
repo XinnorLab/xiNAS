@@ -6,6 +6,40 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.6.4] - 2026-07-10
+
+> **Requires-Rebuild: xinas_agent, xinas_node_build** — the unit-file fix
+> only takes effect once the `xinas_agent` role re-installs
+> `/etc/systemd/system/xinas-agent.service`; a code-only update leaves the
+> broken unit in place. `xinas_node_build` is carried forward so a host
+> updating from 3.6.2 or earlier rebuilds `dist/` and picks up the 3.6.2
+> RAID fix. Neither role touches the network.
+
+### Fixed
+
+- **The agent ran with no namespace restriction at all.**
+  `RestrictNamespaces=~cgroup ~user` does not mean "deny cgroup and user":
+  the leading `~` already negates the whole list, so the second one is a
+  parse error. systemd logs *"Failed to parse namespace type string,
+  ignoring: cgroup ~user"* and drops the directive entirely — the exact
+  opposite of what the comment above it promised, on every start. Corrected
+  to `RestrictNamespaces=~cgroup user`, which denies both. (#263)
+
+- **The agent lost its NfsSession sweep on every boot.** The unit had no
+  ordering against `xinas-nfs-helper.service`, but the `NfsSession`
+  collector connects to `/run/xinas-nfs-helper.sock` in `initialSweep()`,
+  so boot raced the helper and failed with
+  `connect ENOENT /run/xinas-nfs-helper.sock`. Added `After=` + `Wants=`
+  (soft, so the agent still starts where the helper is not deployed;
+  `Requires=` would couple their failures). This narrows the window rather
+  than closing it — the helper is `Type=simple`, so ordering guarantees
+  only that it was forked, not that it has bound the socket. The residue is
+  benign: `boot.ts` skips a failed sweep and `PollDriver` re-sweeps once the
+  probe recovers. Closing it fully needs socket activation or `Type=notify`.
+  (#263)
+
+  Both regressions are now guarded by `tests/test_agent_unit.py`.
+
 ## [3.6.3] - 2026-07-10
 
 > **Requires-Rebuild: doca_ofed, motd, net_controllers, xinas_agent,
