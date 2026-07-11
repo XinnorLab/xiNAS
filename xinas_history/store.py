@@ -220,13 +220,24 @@ class FilesystemStore:
 
     def list_snapshots(self) -> list[Manifest]:
         """List all snapshots (excluding baseline), sorted by timestamp
-        ascending."""
+        ascending.
+
+        Skips ``.tmp-*`` staging directories: write_snapshot() builds each
+        new snapshot in a ``.tmp-{id}-XXXXXX`` directory before an atomic
+        rename into ``snapshots/<id>/``; a crash between the write and the
+        rename can leak one of these directories -- complete with a fully
+        valid ``manifest.yml`` -- directly under ``snapshots/``. Such a
+        directory was never committed and must never be surfaced as a real
+        snapshot (specs.md §1).
+        """
         manifests: list[Manifest] = []
         if not self.snapshots_path.is_dir():
             return manifests
 
         for entry in self.snapshots_path.iterdir():
             if not entry.is_dir():
+                continue
+            if entry.name.startswith(".tmp-"):
                 continue
             m = self._load_manifest(entry / MANIFEST_FILE)
             if m is not None:
