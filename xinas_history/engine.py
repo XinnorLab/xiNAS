@@ -158,7 +158,18 @@ class SnapshotEngine:
             preset=preset,
             operation=operation,
             rollback_class=rollback_class,
-            status=SnapshotStatus.APPLIED.value,
+            # specs.md §1 "Snapshot Status Lifecycle": an ephemeral
+            # pre-change snapshot starts pending -- the runner moves it to
+            # a terminal status once the operation it precedes resolves
+            # (see runner.py _mark_pre_change_terminal). Baseline and
+            # rollback_eligible snapshots are only ever created AFTER
+            # their operation has already succeeded, so applied is correct
+            # for them at creation time.
+            status=(
+                SnapshotStatus.PENDING.value
+                if snapshot_type == SnapshotType.EPHEMERAL.value
+                else SnapshotStatus.APPLIED.value
+            ),
             type=snapshot_type,
             parent_id=parent_id,
             repo_commit=repo_commit,

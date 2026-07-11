@@ -300,6 +300,19 @@ class TransactionalRunner:
                         )
                         result.steps.append("snapshot_applied")
 
+                        # specs.md §1: the pre-change ephemeral's operation
+                        # completed successfully and was never used for a
+                        # rollback -- move it to a terminal status too, so
+                        # GC / cleanup_stale_ephemeral (§7.3) can reclaim it.
+                        if result.pre_change_snapshot_id:
+                            pre_manifest = self._store.read_manifest(result.pre_change_snapshot_id)
+                            if pre_manifest is not None:
+                                self._mark_pre_change_terminal(
+                                    result.pre_change_snapshot_id,
+                                    pre_manifest,
+                                    SnapshotStatus.APPLIED,
+                                )
+
                         # Run garbage collection (non-fatal).
                         try:
                             self._gc.run(
@@ -686,6 +699,11 @@ class TransactionalRunner:
                 result.rollback_performed = True
                 result.rollback_success = rb_ok
                 result.error = "restore validation failed; rolled back to pre-change state"
+                self._mark_pre_change_terminal(
+                    pre.id,
+                    pre,
+                    SnapshotStatus.ROLLED_BACK if rb_ok else SnapshotStatus.FAILED,
+                )
                 return result
 
             result.success = True
@@ -694,10 +712,18 @@ class TransactionalRunner:
                 "recovery applied — desired state unchanged; re-apply or adopt to make it "
                 "durable, or the next apply will overwrite it"
             )
+            self._mark_pre_change_terminal(pre.id, pre, SnapshotStatus.APPLIED)
             return result
         except Exception as exc:  # noqa: BLE001
             logger.exception("Restore of %s failed", snapshot_id)
             result.error = f"restore failed: {exc}"
+            if result.pre_change_snapshot_id:
+                with contextlib.suppress(Exception):
+                    pre_manifest = self._store.read_manifest(result.pre_change_snapshot_id)
+                    if pre_manifest is not None:
+                        self._mark_pre_change_terminal(
+                            result.pre_change_snapshot_id, pre_manifest, SnapshotStatus.FAILED
+                        )
             return result
         finally:
             self._lock.release()
@@ -827,6 +853,19 @@ class TransactionalRunner:
                 except OSError:
                     pass
 
+    def _mark_pre_change_terminal(
+        self, snapshot_id: str, manifest: Manifest, status: SnapshotStatus
+    ) -> None:
+        """Best-effort: move a pre-change ephemeral snapshot to a terminal
+        status once the operation it precedes has resolved (specs.md §1
+        "Snapshot Status Lifecycle") so GC / cleanup_stale_ephemeral
+        (§7.3) can reclaim it instead of leaving it pending forever."""
+        try:
+            manifest.status = status.value
+            self._store.update_manifest(snapshot_id, manifest)
+        except Exception:
+            pass  # Non-fatal — the rollback/failure outcome already stands.
+
     async def _auto_rollback(
         self,
         pre_change_id: str,
@@ -881,26 +920,35 @@ class TransactionalRunner:
                     "Auto-rollback for %s: empty restore set, nothing to restore file-level",
                     failed_operation,
                 )
+                self._mark_pre_change_terminal(
+                    pre_change_id, pre_manifest, SnapshotStatus.ROLLED_BACK
+                )
                 return True, None
 
             rb_ok = await self._restore_rollback(pre_change_id, restore_set)
             if not rb_ok:
                 msg = "File-level rollback failed"
                 logger.error("Auto-rollback failed: %s", msg)
+                # specs.md §1: the forward op AND the rollback both failed --
+                # terminal failed, retained for forensic review (not the
+                # misleading hardcoded applied it used to keep).
+                self._mark_pre_change_terminal(pre_change_id, pre_manifest, SnapshotStatus.FAILED)
                 return False, msg
 
             logger.info("Auto-rollback succeeded for %s", failed_operation)
-            # Mark the pre-change snapshot as used for rollback (non-fatal).
-            try:
-                pre_manifest.status = SnapshotStatus.ROLLED_BACK.value
-                self._store.update_manifest(pre_change_id, pre_manifest)
-            except Exception:
-                pass  # Non-fatal — the rollback itself worked.
+            # Mark the pre-change snapshot as used for rollback.
+            self._mark_pre_change_terminal(pre_change_id, pre_manifest, SnapshotStatus.ROLLED_BACK)
             return True, None
 
         except Exception as exc:
             msg = f"Auto-rollback exception: {exc}"
             logger.exception(msg)
+            with contextlib.suppress(Exception):
+                pre_manifest = self._store.read_manifest(pre_change_id)
+                if pre_manifest is not None:
+                    self._mark_pre_change_terminal(
+                        pre_change_id, pre_manifest, SnapshotStatus.FAILED
+                    )
             return False, msg
 
     # ------------------------------------------------------------------
