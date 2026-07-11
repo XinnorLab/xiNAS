@@ -100,3 +100,14 @@ def test_runner_execute_unparseable_operation_defaults_destroying_data(tmp_path)
         )
     )
     assert result.rollback_class == RollbackClass.DESTROYING_DATA.value
+
+
+def test_classify_change_entry_unknown_defaults_destroying_data():
+    """specs.md §4.7: a change entry whose change_type does not parse to a
+    known operation and whose file path matches no heuristic must fail safe
+    to destroying_data, not non_disruptive."""
+    cls = RollbackClassifier()
+    result = cls._classify_change_entry(
+        {"change_type": "totally-unknown-change", "file": "/etc/something-unmapped.conf"}
+    )
+    assert result == RollbackClass.DESTROYING_DATA

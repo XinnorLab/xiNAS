@@ -617,7 +617,11 @@ class TransactionalRunner:
         if current is not None:
             result.rollback_class = self._classifier.classify_rollback(current, target).value
         else:
-            result.rollback_class = RollbackClass.NON_DISRUPTIVE.value
+            # specs.md §4.7: no current-effective snapshot to diff against --
+            # derive the restore risk from the target snapshot alone (its own
+            # recorded class/operation) rather than silently assuming
+            # non_disruptive, which would understate a destructive restore.
+            result.rollback_class = self._classifier.classify_rollback(target, target).value
 
         # Restore set = current-vs-target (NOT files_changed, which is
         # target-vs-parent and would miss post-target drift).

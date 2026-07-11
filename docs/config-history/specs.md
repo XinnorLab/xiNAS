@@ -337,18 +337,26 @@ confirmation gate (§10.1), not the auto-proceed / simple-`[OK]` path
 reserved for `non_disruptive` changes (§10.3).
 
 This fail-safe direction applies at every site that falls through to a
-default classification when an operation type is unrecognized, including
-(but not limited to):
+default classification when the classifier cannot fully determine an
+operation's or change's risk, including (but not limited to):
 
 - the classifier's terminal fallthrough when an operation is absent from
   the static lookup table;
 - any caller-side fallback (e.g. a runner catching an operation string that
   fails to parse to a known operation type) that substitutes a default
-  classification instead of propagating the classifier's result.
+  classification instead of propagating the classifier's result;
+- the diff/change-entry classifier's terminal fallthrough, reached when a
+  change entry's `change_type` neither parses to a known operation type nor
+  matches any file-path heuristic.
 
-Both sites MUST default to `destroying_data` — consistent with the
-existing (correct) unrecognized-detail-key defaults already used for
-`RAID_MODIFY` and `FS_MODIFY` refinement (§4.1, §4.2).
+Each of these sites MUST default to `destroying_data`, never
+`non_disruptive` — consistent with the existing (correct)
+unrecognized-detail-key defaults already used for `RAID_MODIFY` and
+`FS_MODIFY` refinement (§4.1, §4.2). Relatedly, when classifying the risk
+of restoring to a target snapshot and there is no current-effective
+snapshot to diff against, the risk MUST be derived from the target snapshot
+alone (its own recorded class/operation), never silently reported as
+`non_disruptive`.
 
 ---
 
