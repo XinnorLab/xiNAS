@@ -147,8 +147,11 @@ class RollbackClassifier:
         if operation in _OPERATION_CLASS:
             return _OPERATION_CLASS[operation]
 
-        # Unknown operations default to the safest assumption.
-        return RollbackClass.NON_DISRUPTIVE
+        # Unknown operations default to the MOST destructive tier (specs.md
+        # §4.7): an operation the classifier cannot recognize is the case
+        # the system knows the LEAST about, so it must get the two-screen
+        # destroying_data confirmation gate, never the auto-proceed path.
+        return RollbackClass.DESTROYING_DATA
 
     def classify_diff(self, diff: DiffResult) -> RollbackClass:
         """Classify the overall risk of a diff between two snapshots.

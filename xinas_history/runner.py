@@ -167,7 +167,10 @@ class TransactionalRunner:
             rollback_class = self._classifier.classify_operation(op_enum)
             result.rollback_class = rollback_class.value
         except ValueError:
-            result.rollback_class = RollbackClass.NON_DISRUPTIVE.value
+            # Operation string doesn't parse to a known OperationType — the
+            # classifier's result can't be trusted, so default to the MOST
+            # destructive tier (specs.md §4.7), not the auto-proceed path.
+            result.rollback_class = RollbackClass.DESTROYING_DATA.value
 
         # Step 2: Acquire the global configuration lock.
         try:

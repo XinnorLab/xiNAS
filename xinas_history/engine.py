@@ -120,7 +120,10 @@ class SnapshotEngine:
             op_enum = OperationType(operation)
             rollback_class = self._classifier.classify_operation(op_enum).value
         except ValueError:
-            rollback_class = RollbackClass.NON_DISRUPTIVE.value
+            # Operation string doesn't parse to a known OperationType — the
+            # classifier's result can't be trusted, so default to the MOST
+            # destructive tier (specs.md §4.7), not the auto-proceed path.
+            rollback_class = RollbackClass.DESTROYING_DATA.value
 
         # 6. Auto-detect parent_id if not provided
         if parent_id is None and not is_baseline:
