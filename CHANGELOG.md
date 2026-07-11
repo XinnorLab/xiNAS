@@ -6,6 +6,95 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.7.0] - 2026-07-11
+
+> **Requires-Rebuild: xinas_menu, xinas_node_build** — the helper-sync
+> wrapper deploys via the `xinas_menu` role, and the audit-middleware
+> change lives in the compiled `xinas-api` bundle
+> (`xinas_node_build`). A host must re-run those roles once on update to
+> pick up the new wrapper and the rebuilt bundle.
+
+Closes the **WS3 installer & update-flow correctness** workstream — all
+12 verified findings (F1–F12) plus review-surfaced follow-ups — and adds
+two control-path fixes.
+
+### Added
+
+- **`xinas-update-helper-sync` privileged wrapper.** The in-TUI update's
+  NFS-helper refresh must write the root-owned
+  `/usr/lib/xinas-mcp/nfs-helper` tree and restart a root-run unit from
+  the unprivileged `xinnor` user; a new root-owned wrapper (mirroring
+  `xinas-update-git`: hard-coded paths, no caller input,
+  `set -euo pipefail`, non-zero on failure) provides that under a
+  NOPASSWD grant. This is the bootstrapping release — a host must re-run
+  the `xinas_menu` role once to pick the wrapper up (F11a).
+- **Update apply factored into one tested flow.** `XiNASApp` and
+  `StartupApp` carried an independently-maintained checkout → rebuild →
+  restart sequence in two untested files. They now delegate to a shared
+  `update_apply.apply_update_flow()`: checkout, rebuild with an `rc != 0`
+  safety stop (no refresh, no restart), the NFS-helper refresh, then
+  restart. `refresh_nfs_helper()` returns one of five explicit outcomes
+  (skip-covered / skip-absent / success / fail-with-wrapper /
+  fail-without-wrapper), each with non-interchangeable remediation, and a
+  refresh failure is a partial success — warn and still restart into the
+  new code (F11b/F11c).
+
+### Fixed
+
+- **Interactive menus no longer die on a clean Exit, a missing `./hwkey`,
+  or an update check.** Under `set -euo pipefail` a menu Exit (rc 2), a
+  `chmod`/pipeline failure on an absent or non-zero `./hwkey`, and a
+  backgrounded update check each aborted or silently no-op'd the installer
+  (F1/F4/F7). Menu exit-2 is now guarded (so `install.sh` reaches the
+  wrapper install), the hwkey call sites fall back to `unavailable`
+  instead of a bare/blank field, and `check_for_updates` runs
+  synchronously so its banner actually fires — with every network call
+  bounded (a failed check reads as "no update" without hanging or aborting
+  the shell).
+- **Update/version checks compare release tags by semver — no downgrades,
+  no injection, no false success.** A string inequality reported "update
+  available" for any differing tag, including an *older* one, and could
+  walk an install backward (F6); shared `_semver_parse`/`_semver_gt` in
+  `lib/menu_lib.sh` now mirror `update_check.py`'s ordering (rejecting
+  leading-zero/oversized components as unparseable → "not greater"). Every
+  bash checkout path force-checks-out (the installed tree is git-dirty by
+  design) and validates the ref against a shared `_is_release_tag()`
+  semver regex before checkout — `install.sh` also drops a nested
+  `bash -c` that made a quote in the tag a command-injection vector; the
+  four regex copies are pinned byte-identical against drift (F5/F5c). The
+  client and `prepare_system.sh` update paths stop swallowing
+  fetch/checkout failures and no longer print "updated" on failure
+  (F8/F9).
+- **`XINAS_UPDATE_REPO` removed; dev-only repo repointing gated off.** An
+  env var could redirect version comparison, release notes, rebuild
+  trailers, and the download link at a spoofed feed; it is removed across
+  all five surfaces (F12). The expert menu's "Git Repository
+  Configuration" (which repointed and `git pull`'d an arbitrary branch — a
+  Release-Policy violation) is now gated behind `XINAS_DEV_REPO_CONFIG=1`,
+  off by default. `XINAS_UPDATE_CHANNEL` is unaffected.
+- **`yq` is pinned and checksum-verified.** It was fetched from
+  `releases/latest` with no version pin, no checksum, and a hardcoded
+  `amd64` asset; the installer now pins `v4.53.3`, selects the asset by
+  `uname -m`, verifies its sha256 before install, and aborts on mismatch
+  or an unsupported arch (F2).
+- **Honest install-failure dialog.** The "Collect Diagnostics" choice was
+  a dead end handled identically to "close" while its label falsely
+  claimed an auto-upload; it now invokes `collect_data.sh` and is
+  relabeled to match what actually happens (F10).
+- **Agent observation pushes no longer flood the audit trail.** The audit
+  middleware recorded an `http.POST./observed` row for every
+  `xinas-agent` observation push; the `PollDriver` full-sweep buried real
+  operator actions under hundreds of identical rows. `POST
+  /internal/v1/observed` is now skipped in `auditMiddleware` (the agent's
+  low-frequency internal routes stay audited).
+- **User delete stops orphaning XFS quotas; new accounts require a
+  password.** `_collect_user_quotas` read a `quota -u -N -b` form that
+  printed nothing for a user with a limit on this xiRAID-backed XFS, so
+  delete saw no quota to clear and `userdel` orphaned it onto the freed
+  UID (a later `useradd` reusing that UID inherited the stale limit);
+  quota collection now uses `report -u` and clears reliably. Passwordless
+  new accounts also no longer land in a Locked state.
+
 ## [3.6.5] - 2026-07-10
 
 > **Requires-Rebuild: xinas_agent, xinas_node_build** — the sandbox fixes
