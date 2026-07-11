@@ -339,7 +339,7 @@ def generate_snapshot_id(operation: str) -> str:
         generate_snapshot_id("raid_create")   -> "20260316T145500123456Z-raid-create"
         generate_snapshot_id("install")       -> "20260316T145500123456Z-install"
     """
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     ts = now.strftime("%Y%m%dT%H%M%S%fZ")
     slug = operation.replace("_", "-")
     return f"{ts}-{slug}"

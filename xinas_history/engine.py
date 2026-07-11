@@ -146,7 +146,9 @@ class SnapshotEngine:
         # 7. Build manifest
         manifest = Manifest(
             id=snapshot_id,
-            timestamp=datetime.datetime.utcnow().isoformat() + "Z",
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
             user=_get_user(),
             source=source,
             preset=preset,

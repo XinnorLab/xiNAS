@@ -21,6 +21,13 @@ class LockError(Exception):
     pass
 
 
+def _utc_now_iso() -> str:
+    """Timezone-aware UTC timestamp, serialized with the same "...Z"
+    suffix the prior deprecated-naive-datetime pattern produced
+    (specs.md §1)."""
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 class GlobalConfigLock:
     """Process-level exclusive lock for configuration mutations.
 
@@ -124,7 +131,7 @@ class GlobalConfigLock:
 
         self._write_lock_meta(operation, source, pre_change_snapshot)
 
-        now = datetime.datetime.utcnow().isoformat() + "Z"
+        now = _utc_now_iso()
         journal = {
             "transaction_id": str(uuid.uuid4()),
             "operation": operation,
@@ -219,7 +226,7 @@ class GlobalConfigLock:
         if pre_change_snapshot is not None:
             journal["pre_change_snapshot"] = pre_change_snapshot
 
-        journal["last_updated"] = datetime.datetime.utcnow().isoformat() + "Z"
+        journal["last_updated"] = _utc_now_iso()
         self._write_journal(journal)
 
     # ------------------------------------------------------------------
@@ -327,7 +334,7 @@ class GlobalConfigLock:
             "operation": operation,
             "user": user,
             "source": source,
-            "started": datetime.datetime.utcnow().isoformat() + "Z",
+            "started": _utc_now_iso(),
             "pre_change_snapshot": pre_change_snapshot,
         }
 

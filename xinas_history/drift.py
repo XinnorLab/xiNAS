@@ -205,7 +205,9 @@ class DriftDetector:
             A :class:`DriftReport`.
         """
         report = DriftReport(
-            timestamp=datetime.datetime.utcnow().isoformat() + "Z",
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
         )
 
         # Resolve reference snapshot.

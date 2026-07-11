@@ -30,11 +30,11 @@ def test_same_second_ids_are_unique_and_chronologically_sortable():
     # Two creates in the SAME second but different microseconds — the exact
     # collision window. Build the fake times BEFORE patching so the real
     # datetime constructor is still available.
-    t0 = datetime.datetime(2026, 7, 7, 18, 59, 54, 100_000)
-    t1 = datetime.datetime(2026, 7, 7, 18, 59, 54, 900_000)
+    t0 = datetime.datetime(2026, 7, 7, 18, 59, 54, 100_000, tzinfo=datetime.timezone.utc)
+    t1 = datetime.datetime(2026, 7, 7, 18, 59, 54, 900_000, tzinfo=datetime.timezone.utc)
 
     with mock.patch.object(models, "datetime") as fake:
-        fake.datetime.utcnow.side_effect = [t0, t1]
+        fake.datetime.now.side_effect = [t0, t1]
         first = models.generate_snapshot_id("share_create")
         second = models.generate_snapshot_id("share_create")
 
