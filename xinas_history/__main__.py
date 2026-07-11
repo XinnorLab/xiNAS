@@ -485,13 +485,30 @@ def _dispatch_gc(args: argparse.Namespace, engine: SnapshotEngine) -> int:
 
 def _cmd_gc_run(engine: SnapshotEngine) -> int:
     from .gc import GarbageCollector, load_retention_policy
+    from .lock import GlobalConfigLock, LockError
 
-    effective = engine.get_current_effective()
-    effective_id = effective.id if effective else None
+    # Standalone GC entry points own no enclosing transaction lock, so they
+    # must acquire GlobalConfigLock themselves and refuse when another
+    # operation holds it (specs.md §7.4: "no lock-free deletion").
+    lock = GlobalConfigLock(str(engine._store.state_path))
+    try:
+        lock.acquire(operation="gc_run", source="api")
+    except LockError as exc:
+        print(
+            f"Error: cannot run GC while a configuration change is in progress: {exc}",
+            file=sys.stderr,
+        )
+        return 1
 
-    policy = load_retention_policy()
-    gc = GarbageCollector(engine._store, policy)
-    purged = gc.run(current_effective_id=effective_id)
+    try:
+        effective = engine.get_current_effective()
+        effective_id = effective.id if effective else None
+
+        policy = load_retention_policy()
+        gc = GarbageCollector(engine._store, policy)
+        purged = gc.run(current_effective_id=effective_id)
+    finally:
+        lock.release()
 
     if purged:
         print(f"Purged {len(purged)} snapshot(s):")

@@ -650,11 +650,17 @@ class TransactionalRunner:
             return result
 
         try:
+            # specs.md §7.4: GC must not delete the snapshot this restore is
+            # reading FROM. The standalone GC entry points (CLI/TUI) are
+            # lock-gated (see __main__.py / config_history.py), so the only
+            # unprotected window is this call's own inline GC pass -- protect
+            # the restore source explicitly.
             pre = await self._engine.create_snapshot(
                 source=source,
                 operation=result.operation,
                 snapshot_type=SnapshotType.EPHEMERAL.value,
                 diff_summary=f"Pre-restore snapshot for {snapshot_id}",
+                gc_protect_ids={snapshot_id},
             )
             result.pre_change_snapshot_id = pre.id
             result.steps.append("pre_snapshot_created")

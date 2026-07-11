@@ -517,20 +517,41 @@ class ConfigHistoryScreen(XiNASAppMixin, Screen):
         loop = asyncio.get_running_loop()
         try:
             from xinas_history.gc import GarbageCollector, load_retention_policy
+            from xinas_history.lock import GlobalConfigLock, LockError
             from xinas_history.store import FilesystemStore
 
             store = FilesystemStore()
             gc = GarbageCollector(store, load_retention_policy())
             engine = _create_engine(store=store)
-            effective = await loop.run_in_executor(
-                None,
-                engine.get_current_effective,
-            )
-            effective_id = effective.id if effective else None
-            purged = await loop.run_in_executor(
-                None,
-                lambda: gc.run(current_effective_id=effective_id),
-            )
+
+            # Standalone GC (this TUI action) owns no enclosing transaction
+            # lock, so it must acquire GlobalConfigLock itself and refuse
+            # when another operation holds it (specs.md §7.4: "no lock-free
+            # deletion").
+            lock = GlobalConfigLock(str(store.state_path))
+            try:
+                await loop.run_in_executor(
+                    None,
+                    lambda: lock.acquire(operation="gc_run", source="xinas_menu"),
+                )
+            except LockError as exc:
+                view.set_content(
+                    f"{_RED}Cannot run GC: a configuration change is in progress ({exc}){_NC}"
+                )
+                return
+
+            try:
+                effective = await loop.run_in_executor(
+                    None,
+                    engine.get_current_effective,
+                )
+                effective_id = effective.id if effective else None
+                purged = await loop.run_in_executor(
+                    None,
+                    lambda: gc.run(current_effective_id=effective_id),
+                )
+            finally:
+                await loop.run_in_executor(None, lock.release)
         except Exception as exc:
             view.set_content(f"{_RED}Garbage collection failed: {exc}{_NC}")
             return
