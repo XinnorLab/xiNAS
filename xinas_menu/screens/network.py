@@ -386,6 +386,14 @@ def _sysfs_speed(name: str) -> int:
         return 0
 
 
+def _is_loopback(name: str) -> bool:
+    """True when ``name`` is a loopback device (ARPHRD_LOOPBACK = 772)."""
+    try:
+        return Path(f"/sys/class/net/{name}/type").read_text().strip() == "772"
+    except Exception:
+        return name == "lo"
+
+
 def _local_iface_rows() -> list[dict]:
     """Interface rows from /sys/class/net + ip(8) (api-unreachable fallback)."""
     interfaces: list[dict] = []
@@ -469,6 +477,11 @@ def _api_iface_rows(api_rows: list[dict]) -> list[dict]:
         name = str(row.get("id", ""))
         status = row.get("status") or {}
         state = str(status.get("link_state") or status.get("operstate") or "unknown").lower()
+        # The kernel reports operstate=unknown for carrier-less devices such
+        # as lo; a loopback that is present is up, so don't render it as a
+        # fault.
+        if state == "unknown" and _is_loopback(name):
+            state = "up"
         ip4 = ""
         for addr in status.get("ip4_addresses") or status.get("current_addresses") or []:
             if isinstance(addr, str) and ":" not in addr:

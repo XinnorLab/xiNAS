@@ -57,6 +57,18 @@ Netplan merges in alphabetical order. Higher-numbered files override lower ones 
 
 Detection method: resolve `/sys/class/net/<iface>/device/driver` symlink; if the basename contains `mlx`, the interface is RDMA-capable and managed by xiNAS.
 
+### Loopback link state
+
+The kernel reports `operstate=unknown` for carrier-less devices, so `lo`
+arrives from `GET /network/interfaces` with `link_state: unknown`. The
+network overview must not render that verbatim (`[??] lo` / `State:
+unknown` reads as a fault): a loopback that is present is up, so the TUI
+normalizes `unknown` → `up` for loopback devices and shows the normal
+`[UP]` marker. Loopback is identified by
+`/sys/class/net/<iface>/type == 772` (`ARPHRD_LOOPBACK`), falling back to
+the name `lo` when sysfs is unreadable. A loopback explicitly reported
+`down` is still rendered as down.
+
 ---
 
 ## IP Address Assignment
