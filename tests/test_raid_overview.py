@@ -71,6 +71,7 @@ def test_unobserved_tuning_renders_unknown_not_a_default():
     # Priorities have no plausible default to fall back on — they already
     # showed the placeholder, and keep it.
     assert "-" in _row(out, "Init Priority")
+    assert "-" in _row(out, "SDC Priority")
 
 
 def test_unobserved_merge_timings_omit_the_rows():
@@ -86,6 +87,7 @@ def test_observed_tuning_renders_the_real_values():
                 "init_prio": 100,
                 "recon_prio": 80,
                 "restripe_prio": 20,
+                "sdc_prio": 30,
                 "memory_limit": 2048,
                 "memory_prealloc": 512,
                 "request_limit": 64,
@@ -110,6 +112,7 @@ def test_observed_tuning_renders_the_real_values():
     assert "64 MB" in _row(out, "Memory Usage")
     assert "4096 bytes" in _row(out, "Block Size")
     assert "100%" in _row(out, "Init Priority")
+    assert "30%" in _row(out, "SDC Priority")
     assert "Enabled" in _row(out, "Scheduler")
     assert "Disabled" in _row(out, "Merge Read ")
     assert "100 us" in _row(out, "Merge Read Max")
@@ -133,3 +136,16 @@ def test_observed_empty_cpu_mask_means_all():
     rows = _api_row(spec_extra={"tuning": {"cpu_allowed": ""}})
     out = _format_raid_overview(_arrays_from_api(rows), extended=True)
     assert "all" in _row(out, "CPU Affinity")
+
+
+def test_merge_max_edit_params_are_labelled_microseconds_not_kb():
+    # The Extended view renders the merge windows in us; the Edit-Array knobs
+    # for the same fields must not claim KB. The daemon spells them
+    # merge_*_usecs (Storage/raid-management-spec §3.2).
+    from xinas_menu.screens.raid import _MODIFY_PARAMS
+
+    labels = {key: label for key, label, *_ in _MODIFY_PARAMS}
+    assert "(us)" in labels["merge_read_max"]
+    assert "(us)" in labels["merge_write_max"]
+    assert "KB" not in labels["merge_read_max"]
+    assert "KB" not in labels["merge_write_max"]

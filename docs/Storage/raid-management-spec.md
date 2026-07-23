@@ -352,7 +352,7 @@ The summary dialog (title `"Confirm Create"`, `allow_back=True`) renders all sel
 Steps:
 
 1. **Pick an array.** `grpc.raid_show()` → `SelectDialog` over array names.
-2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(grpc_key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max. (`resync_enabled` is create-only — xiRAID's `RaidModify` has no such field — so it is not offered.)
+2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(grpc_key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max. (`resync_enabled` is create-only — xiRAID's `RaidModify` has no such field — so it is not offered.) The two merge-max knobs are **times in microseconds** (the daemon spells them `merge_*_usecs`), so their labels read `(us)` — they were mislabelled `(KB)` until the tuning surface became observable and read and write paths could be compared.
 3. **Per-parameter prompt** — see §5.1.
 4. **Confirm + dispatch.** Value is coerced to the declared `vtype` (`int` for the integer knobs, `str` for the rest). `grpc.raid_modify(name, **{key: value})` is invoked. On success: audit (`raid.modify`) + snapshot (`raid_modify`) + Quick Overview refresh.
 

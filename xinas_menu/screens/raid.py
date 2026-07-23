@@ -61,8 +61,10 @@ _MODIFY_PARAMS = [
     ("memory_limit", "Memory Limit (MB)", "input", None, int),
     ("merge_read_enabled", "Merge Read Enabled", "select", ["true", "false"], str),
     ("merge_write_enabled", "Merge Write Enabled", "select", ["true", "false"], str),
-    ("merge_read_max", "Merge Read Max (KB)", "input", None, int),
-    ("merge_write_max", "Merge Write Max (KB)", "input", None, int),
+    # Merge windows are TIMES: the daemon reports them as merge_*_usecs and
+    # the extended view renders them in us — the old "(KB)" labels were wrong.
+    ("merge_read_max", "Merge Read Max (us)", "input", None, int),
+    ("merge_write_max", "Merge Write Max (us)", "input", None, int),
 ]
 
 _MENU = [
@@ -1399,9 +1401,11 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
             init_p = _pct(arr.get("init_prio"))
             recon_p = _pct(arr.get("recon_prio"))
             restripe_p = _pct(arr.get("restripe_prio"))
+            sdc_p = _pct(arr.get("sdc_prio"))
             lines.append(_box_line(f"  {_DIM}Init Priority{_NC}       |  {init_p}"))
             lines.append(_box_line(f"  {_DIM}Recon Priority{_NC}      |  {recon_p}"))
             lines.append(_box_line(f"  {_DIM}Restripe Priority{_NC}   |  {restripe_p}"))
+            lines.append(_box_line(f"  {_DIM}SDC Priority{_NC}        |  {sdc_p}"))
 
             # ── Performance ──
             lines.append(_box_line())

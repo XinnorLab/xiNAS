@@ -103,7 +103,8 @@ The gRPC client dials the xiRAID daemon over **TCP with TLS** (`host:port` from 
 ```
 
 - `level` enum: `raid0 | raid1 | raid5 | raid6 | raid7 | raid10 | raid50 | raid60 | raid70 | n+m` (the full xiRAID `RAID_LEVELS` set; `raid7`/`raid70` added to the existing api-v1.yaml enum).
-- A `null`/absent `spec.tuning.*` field means "use the xiRAID default" — the translate layer omits it from the gRPC call. The control-path stores **only operator-set values**, so the object never drifts against xiRAID's evolving defaults.
+- A `null`/absent `spec.tuning.*` field means "use the xiRAID default" — the translate layer omits it from the gRPC call. On a **desired** object the control-path stores **only operator-set values**, so intent never drifts against xiRAID's evolving defaults.
+- *(Amended 2026-07-23.)* On an **observed** object `spec.tuning` carries the daemon's **effective** values, exactly as `spec.strip_size_kib` / `block_size` / `group_size` already do — observation reports what is, not what was asked for. The collector must therefore call `raid_show` with **`extended: true`**; the tuning surface is not in the base payload, and without the flag every observed array reads as "tuning unknown" (which is what shipped: the TUI's Extended Details rendered `-` for every priority). A knob the daemon does not emit stays **absent** rather than defaulting, so clients can tell "not reported" from a real value.
 - `status` is server-managed (computed by the agent from `raid_show`). `chunk_size_kib` is **observe-only/derived**; `strip_size_kib` is the writable per-disk knob.
 
 ### Excluded parameters

@@ -110,15 +110,15 @@ export function parseRaidShowEntries(payload: unknown): RaidShowEntry[] {
     const o = entry as Record<string, unknown>;
     if (typeof o.name !== 'string' || o.name.length === 0) continue;
 
-    // devices is either ["/dev/..."] (fake transport) or, on the real xiRAID
-    // daemon, [[index, "/dev/...", [states]], ...] tuples — extract the path
-    // from both shapes.
+    // devices is ["/dev/..."] (fake transport), [[index, "/dev/...",
+    // [states]], ...] tuples (the real xiRAID 4.3.x daemon), or
+    // [{path|device|name: "/dev/..."}, ...] (the per-device object shape the
+    // gRPC reference documents). Extract the path from all three: a shape we
+    // fail to read drops the array's members silently, and an array observed
+    // with zero members reads as "these drives are free" to the create
+    // wizard's claimed-disk check.
     const devices = Array.isArray(o.devices)
-      ? o.devices
-          .map((d): string | null =>
-            typeof d === 'string' ? d : Array.isArray(d) && typeof d[1] === 'string' ? d[1] : null,
-          )
-          .filter((d): d is string => d !== null)
+      ? o.devices.map(devicePath).filter((d): d is string => d !== null)
       : [];
 
     out.push({ name: o.name, devices, states: normalizeStates(o.state), raw: o });
@@ -173,6 +173,19 @@ export function parseRaidShow(
     });
   }
   return out;
+}
+
+/** One raid_show `devices` entry → its /dev path, across all three shapes. */
+function devicePath(entry: unknown): string | null {
+  if (typeof entry === 'string') return entry;
+  if (Array.isArray(entry)) return typeof entry[1] === 'string' ? entry[1] : null;
+  if (entry === null || typeof entry !== 'object') return null;
+  const o = entry as Record<string, unknown>;
+  for (const key of ['path', 'device', 'device_path', 'name']) {
+    const value = o[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
 }
 
 function normalizeStates(state: unknown): string[] {

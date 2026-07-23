@@ -373,4 +373,27 @@ describe('parseRaidShow', () => {
       status: { state: 'optimal' },
     });
   });
+
+  it('reads members from the per-device OBJECT shape too', () => {
+    // The gRPC reference documents devices as objects; the live 4.3.x daemon
+    // emits tuples. Asking for the extended payload must not be able to turn
+    // a populated array into a member-less one just because the daemon
+    // switched shapes — a zero-member array reads as "those drives are free".
+    const [a] = parseRaidShow(
+      [
+        {
+          name: 'data',
+          level: '6',
+          state: ['online'],
+          devices: [
+            { path: '/dev/nvme1n1', serial: 'S1', state: 'active' },
+            { device: '/dev/nvme2n1' },
+            { name: '/dev/nvme3n1' },
+          ],
+        },
+      ],
+      DISK_IDS,
+    );
+    expect(a?.spec.member_disk_ids).toEqual(['disk-1', 'disk-2', 'disk-3']);
+  });
 });
