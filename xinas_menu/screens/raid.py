@@ -274,8 +274,14 @@ def _arrays_from_api(rows: Any) -> dict[str, dict]:
     ``spec.tuning`` is flattened onto the top level so the renderer reads
     one flat dict. A key the API does not carry is left **absent** — the
     renderer must then print a placeholder, never a plausible-looking
-    default (raid-management-spec §3.2). Per-member states are still not
-    observed via the API.
+    default (raid-management-spec §3.2).
+
+    ``status.member_states`` (S3 spec §5.2) carries per-member observation;
+    each entry's ``device`` is in the same control-path ``Disk`` identity as
+    ``member_disk_ids``. It is matched **by device id** into the renderer's
+    per-member state lists so a degraded/offline member shows in the device
+    breakdown. Absent or empty leaves those lists empty and the breakdown
+    falls back to a bare total — never a fabricated ``online``.
     """
     arrays: dict[str, dict] = {}
     for doc in rows if isinstance(rows, list) else []:
@@ -293,13 +299,22 @@ def _arrays_from_api(rows: Any) -> dict[str, dict]:
         cap = status.get("usable_capacity_bytes")
         tuning = spec.get("tuning")
         tuning = tuning if isinstance(tuning, dict) else {}
+        # Per-member states, keyed by device id so the order the agent emitted
+        # them in does not matter (S3 spec §5.2). Absent/malformed → no entry,
+        # and that member's state list stays empty.
+        states_by_device: dict[str, list] = {}
+        for ms in status.get("member_states") or []:
+            if isinstance(ms, dict) and isinstance(ms.get("device"), str):
+                st = ms.get("states")
+                states_by_device[ms["device"]] = (
+                    [str(s) for s in st] if isinstance(st, list) else []
+                )
         arrays[name] = {
             "name": name,
             "level": _level_label(spec.get("level")),
             "size": _fmt_size(cap) if isinstance(cap, int | float) else "N/A",
             "state": [str(status.get("state") or "unknown")],
-            # member states are not observed via the API → unknown
-            "devices": [[i, m, []] for i, m in enumerate(members)],
+            "devices": [[i, m, states_by_device.get(m, [])] for i, m in enumerate(members)],
             "strip_size": spec.get("strip_size_kib", "?"),
             "sparepool": ", ".join(spares) if spares else "-",
             "block_size": spec.get("block_size"),

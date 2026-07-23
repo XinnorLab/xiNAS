@@ -396,4 +396,108 @@ describe('parseRaidShow', () => {
     );
     expect(a?.spec.member_disk_ids).toEqual(['disk-1', 'disk-2', 'disk-3']);
   });
+
+  describe('status.member_states (per-member observation)', () => {
+    it('populates member_states from tuple devices — index, mapped id, states', () => {
+      const status = parseRaidShow(
+        {
+          data: {
+            level: '5',
+            devices: [
+              [0, '/dev/nvme1n1', ['online']],
+              [1, '/dev/nvme2n1', ['degraded']],
+            ],
+            state: ['online', 'degraded'],
+          },
+        },
+        DISK_IDS,
+      )[0]?.status;
+      expect(status?.member_states).toEqual([
+        { index: 0, device: 'disk-1', states: ['online'] },
+        { index: 1, device: 'disk-2', states: ['degraded'] },
+      ]);
+    });
+
+    it('reads member states from the per-device object shape (path/device + state)', () => {
+      const status = parseRaidShow(
+        [
+          {
+            name: 'data',
+            level: '5',
+            devices: [
+              { path: '/dev/nvme1n1', state: 'online' },
+              { device: '/dev/nvme2n1', state: ['offline'] },
+            ],
+            state: ['degraded'],
+          },
+        ],
+        DISK_IDS,
+      )[0]?.status;
+      expect(status?.member_states).toEqual([
+        { index: 0, device: 'disk-1', states: ['online'] },
+        { index: 1, device: 'disk-2', states: ['offline'] },
+      ]);
+    });
+
+    it('bare-string devices → member_states entries with empty states (fake transport)', () => {
+      const status = parseRaidShow(
+        [
+          {
+            name: 'data',
+            level: '5',
+            devices: ['/dev/nvme1n1', '/dev/nvme2n1'],
+            state: ['online'],
+          },
+        ],
+        DISK_IDS,
+      )[0]?.status;
+      expect(status?.member_states).toEqual([
+        { index: 0, device: 'disk-1', states: [] },
+        { index: 1, device: 'disk-2', states: [] },
+      ]);
+    });
+
+    it('member_states align with member_disk_ids; unknown path falls back to the raw path', () => {
+      const array = parseRaidShow(
+        [
+          {
+            name: 'data',
+            level: '5',
+            devices: [
+              [0, '/dev/nvme1n1', ['online']],
+              [1, '/dev/unknownX', ['online']],
+            ],
+            state: ['online'],
+          },
+        ],
+        DISK_IDS,
+      )[0];
+      expect(array?.spec.member_disk_ids).toEqual(['disk-1', '/dev/unknownX']);
+      expect(array?.status.member_states).toEqual([
+        { index: 0, device: 'disk-1', states: ['online'] },
+        { index: 1, device: '/dev/unknownX', states: ['online'] },
+      ]);
+    });
+
+    it('drops path-less device entries so member_states stays aligned', () => {
+      const array = parseRaidShow(
+        [
+          {
+            name: 'data',
+            level: '5',
+            devices: [
+              [0, '/dev/nvme1n1', ['online']],
+              [1, null, ['offline']],
+            ],
+            state: ['degraded'],
+          },
+        ],
+        DISK_IDS,
+      )[0];
+      expect(array?.spec.member_disk_ids).toEqual(['disk-1']);
+      expect(array?.status.member_states).toEqual([
+        { index: 0, device: 'disk-1', states: ['online'] },
+      ]);
+    });
+  });
 });

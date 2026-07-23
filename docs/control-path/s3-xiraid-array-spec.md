@@ -121,6 +121,38 @@ integer count of bytes (the api-v1 schema types it `integer`):
 Accepting only JSON numbers is what shipped capacity as `N/A` for every array
 on a real node while every other field rendered.
 
+### 5.2 `devices` → `status.member_states`
+
+The daemon's `raid_show` reports each member in the array's `devices` list.
+The parser reads the member out of all three shapes it can arrive in and
+records the per-member state on `status.member_states`, one object per member:
+
+| `devices` entry as reported | shape | → member |
+|---|---|---|
+| `"/dev/nvme1n1"` | bare string (fake transport / xicli) | `{ index: <position>, device, states: [] }` |
+| `[0, "/dev/nvme1n1", ["online"]]` | `[index, path, [states]]` tuple (real xiRAID 4.3.x) | `{ index: 0, device, states: ["online"] }` |
+| `{ path\|device\|device_path\|name, state\|states, index? }` | per-device object (gRPC reference shape) | `{ index, device, states }` |
+
+- `device` is the member's path mapped **back** to its control-path `Disk`
+  id via the same `diskIdByPath` lookup as `member_disk_ids` (an unknown
+  path falls back to the raw path), so `member_states[i].device` matches
+  `member_disk_ids[i]` and a client can correlate the two by identity.
+- `index` is the member index the daemon reports (tuple position `[0]` /
+  object `index`), else the entry's position in the list.
+- `states` are the lower-cased state words, using the same `normalizeStates`
+  reader as the array-level state; a member the daemon reports no state for
+  (the bare-string shape) carries `states: []`.
+- Entries with **no readable path** are dropped, so `member_states` stays
+  index-aligned with `member_disk_ids` (both derive from the same filtered
+  member list).
+
+This is what lets a client render the array's device breakdown as
+`N total | k online | j degraded | i offline` instead of a bare total: the
+member states were being parsed and **discarded** (the parser hardcoded
+`member_states: []`), so every member read as `unknown` and the breakdown
+collapsed to the total. Observation, not intent — a member state the daemon
+did not report stays absent rather than defaulting to `online`.
+
 ---
 
 ## 6. Create — plan / apply flow

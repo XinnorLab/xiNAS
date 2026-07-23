@@ -183,7 +183,15 @@ top level** so the renderer reads one flat dict. A key the API does not
 carry is left **absent** — the renderer must then print a placeholder,
 never a plausible-looking default (§3.2).
 
-Quick Overview shows: level, capacity, state list, device counts (online / degraded / offline derived from the per-member state field), strip size, spare pool, and an initialisation progress bar when any state is `initing`.
+Per-member states come from `status.member_states` (S3 spec §5.2): each
+entry is `{index, device, states}` with `device` in the same control-path
+`Disk` identity as `member_disk_ids`. `_arrays_from_api()` matches them to
+the members **by `device` id** and fills the renderer's per-member state
+lists — the field `_count_states()` reads. Absent or empty `member_states`
+(the fake transport, or an array observed without per-member detail) leaves
+those state lists empty, and the breakdown falls back to a bare total.
+
+Quick Overview shows: level, capacity, state list, device counts (online / degraded / offline derived from the per-member `status.member_states`), strip size, spare pool, and an initialisation progress bar when any state is `initing`.
 
 Extended adds three blocks, all sourced from observed `spec.tuning`:
 

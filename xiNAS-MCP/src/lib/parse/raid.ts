@@ -66,11 +66,30 @@ function readPools(pools: unknown): Map<string, string[]> {
   return out;
 }
 
+/** One member of an array, read out of a raid_show `devices` entry. */
+export interface RaidShowMember {
+  /** Member index the daemon reports (tuple `[0]` / object `index`), else position. */
+  index: number;
+  /** Member /dev path — always present (path-less entries are dropped). */
+  device: string;
+  /** Lower-cased per-member state words; `[]` when the daemon reported none. */
+  states: string[];
+}
+
+/** `readMember`'s pre-filter result: `device` may be null (dropped downstream). */
+interface RawMember {
+  index: number;
+  device: string | null;
+  states: string[];
+}
+
 /** One array as raid_show describes it, with both payload shapes flattened. */
 export interface RaidShowEntry {
   name: string;
-  /** Member device paths, tuple entries unwrapped. */
+  /** Member device paths, tuple/object entries unwrapped. */
   devices: string[];
+  /** Per-member records (index/device/states), aligned with `devices`. */
+  members: RaidShowMember[];
   /** Lower-cased state words. */
   states: string[];
   /** The remaining daemon fields (level, strip_size, sparepool, …). */
@@ -113,15 +132,17 @@ export function parseRaidShowEntries(payload: unknown): RaidShowEntry[] {
     // devices is ["/dev/..."] (fake transport), [[index, "/dev/...",
     // [states]], ...] tuples (the real xiRAID 4.3.x daemon), or
     // [{path|device|name: "/dev/..."}, ...] (the per-device object shape the
-    // gRPC reference documents). Extract the path from all three: a shape we
-    // fail to read drops the array's members silently, and an array observed
-    // with zero members reads as "these drives are free" to the create
-    // wizard's claimed-disk check.
-    const devices = Array.isArray(o.devices)
-      ? o.devices.map(devicePath).filter((d): d is string => d !== null)
-      : [];
+    // gRPC reference documents). `readMember` reads the path (via
+    // `devicePath`) plus the per-member index/state from all three; entries
+    // with no readable path are dropped, so `devices` and `members` stay
+    // aligned with member_disk_ids. A zero-member array reads as "these
+    // drives are free" to the create wizard's claimed-disk check.
+    const members: RaidShowMember[] = (
+      Array.isArray(o.devices) ? o.devices.map(readMember) : []
+    ).filter((m): m is RaidShowMember => m.device !== null);
+    const devices = members.map((m) => m.device);
 
-    out.push({ name: o.name, devices, states: normalizeStates(o.state), raw: o });
+    out.push({ name: o.name, devices, members, states: normalizeStates(o.state), raw: o });
   }
   return out;
 }
@@ -133,7 +154,7 @@ export function parseRaidShow(
 ): ObservedXiraidArray[] {
   const poolDrives = readPools(pools);
   const out: ObservedXiraidArray[] = [];
-  for (const { name, devices, states, raw: o } of parseRaidShowEntries(payload)) {
+  for (const { name, devices, members, states, raw: o } of parseRaidShowEntries(payload)) {
     const reconProgress = numberOrNull(o.recon_progress) ?? numberOrNull(o.init_progress);
     // S4 T5: the array's sparepool NAME (raid_show) joins to its member
     // DRIVES (pool_show) → control-path disk ids. Absent/unknown → [].
@@ -168,7 +189,13 @@ export function parseRaidShow(
         check_progress_pct: null,
         ...(capacityBytes !== null ? { usable_capacity_bytes: capacityBytes } : {}),
         ...(memoryUsage !== null ? { memory_usage_mb: memoryUsage } : {}),
-        member_states: [],
+        // Per-member observation: `device` in the same control-path Disk
+        // identity as member_disk_ids, so a client correlates the two by id.
+        member_states: members.map((m) => ({
+          index: m.index,
+          device: diskIdByPath.get(m.device) ?? m.device,
+          states: m.states,
+        })),
       },
     });
   }
@@ -194,6 +221,36 @@ function normalizeStates(state: unknown): string[] {
     return state.filter((s): s is string => typeof s === 'string').map((s) => s.toLowerCase());
   }
   return [];
+}
+
+/**
+ * One raid_show `devices` entry → its member record, across the three shapes
+ * the daemon and adapters emit:
+ *   - `"/dev/nvme1n1"` — bare path (fake transport / xicli), no per-member state.
+ *   - `[index, "/dev/nvme1n1", ["online"]]` — the real xiRAID 4.3.x tuple.
+ *   - `{ path|device|device_path|name, state|states, index? }` — the gRPC
+ *     reference's per-device object.
+ * The path comes from the shared `devicePath` (so path extraction has one
+ * home); this adds the per-member index and states. `device` is null when the
+ * entry carries no readable path — the caller drops those so the member list
+ * stays aligned with `member_disk_ids`.
+ */
+function readMember(entry: unknown, position: number): RawMember {
+  const device = devicePath(entry);
+  if (Array.isArray(entry)) {
+    return { index: numberOrNull(entry[0]) ?? position, device, states: normalizeStates(entry[2]) };
+  }
+  if (entry !== null && typeof entry === 'object') {
+    const o = entry as Record<string, unknown>;
+    return {
+      index: numberOrNull(o.index) ?? position,
+      device,
+      states: normalizeStates(o.state ?? o.states),
+    };
+  }
+  // Bare string (path via devicePath, no per-member state) or unreadable
+  // (device === null); the caller drops the latter.
+  return { index: position, device, states: [] };
 }
 
 function deriveState(states: string[]): ObservedXiraidArray['status']['state'] {

@@ -660,8 +660,21 @@ components:
               description: "Memory the array is currently using, as reported by raid_show. Absent when not observed — distinct from spec.tuning.memory_limit."
             member_states:
               type: array
-              items: { type: object, additionalProperties: true }
-              description: "Per-member device state as reported by raid_show."
+              description: >-
+                Per-member device state as reported by raid_show, one object
+                per array member. Keys: `index` (member index the daemon
+                reports, else position), `device` (member in the same
+                control-path Disk identity as spec.member_disk_ids), `states`
+                (lower-cased state words; [] when the daemon reported none).
+              items:
+                type: object
+                additionalProperties: true
+                properties:
+                  index: { type: integer }
+                  device: { type: string }
+                  states:
+                    type: array
+                    items: { type: string }
             observed_at:
               type: string
               format: date-time

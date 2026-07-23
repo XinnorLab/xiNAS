@@ -54,6 +54,66 @@ def _row(out: str, label: str) -> str:
     raise AssertionError(f"no {label!r} row in:\n{out}")
 
 
+# ---- per-member device states (S3 spec §5.2, raid-management-spec §3) ----
+#
+# status.member_states now carries per-member observation. _arrays_from_api
+# matches it to member_disk_ids by device id and fills the renderer's device
+# triples, so a degraded/offline member shows in the overview breakdown
+# instead of collapsing to a bare "N total". A member state the daemon never
+# reported must never fabricate "online".
+
+
+def _member_states(*pairs: tuple[str, list[str]]) -> list[dict]:
+    return [
+        {"index": i, "device": device, "states": states} for i, (device, states) in enumerate(pairs)
+    ]
+
+
+def test_member_states_surface_online_degraded_breakdown():
+    rows = _api_row(
+        status_extra={
+            "member_states": _member_states(("disk-1", ["online"]), ("disk-2", ["degraded"])),
+        }
+    )
+    dev = _row(_format_raid_overview(_arrays_from_api(rows)), "Devices")
+    assert "2 total" in dev
+    assert "1 online" in dev
+    assert "1 degraded" in dev
+
+
+def test_member_states_matched_by_device_id_not_position():
+    # member_states in the OPPOSITE order from member_disk_ids: matching is by
+    # device id, so disk-1 stays online and disk-2 reads offline.
+    rows = _api_row(
+        status_extra={
+            "member_states": _member_states(("disk-2", ["offline"]), ("disk-1", ["online"])),
+        }
+    )
+    dev = _row(_format_raid_overview(_arrays_from_api(rows)), "Devices")
+    assert "1 online" in dev
+    assert "1 offline" in dev
+
+
+def test_arrays_from_api_fills_device_state_lists():
+    rows = _api_row(
+        status_extra={
+            "member_states": _member_states(("disk-1", ["online"]), ("disk-2", ["degraded"])),
+        }
+    )
+    devices = _arrays_from_api(rows)["data"]["devices"]
+    assert devices == [[0, "disk-1", ["online"]], [1, "disk-2", ["degraded"]]]
+
+
+def test_absent_member_states_leave_bare_total():
+    # No per-member observation (fake transport / degraded backend): the
+    # breakdown falls back to the total, never fabricating "online".
+    dev = _row(_format_raid_overview(_arrays_from_api(_api_row())), "Devices")
+    assert "2 total" in dev
+    assert "online" not in dev
+    assert "degraded" not in dev
+    assert "offline" not in dev
+
+
 def test_unobserved_tuning_renders_unknown_not_a_default():
     out = _format_raid_overview(_arrays_from_api(_api_row()), extended=True)
 
