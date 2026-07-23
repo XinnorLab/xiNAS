@@ -18,6 +18,9 @@
 
 import { parsePoolShow } from './pool.js';
 
+/** ADR-0006 `spec.tuning`, as OBSERVED — only keys the daemon emitted. */
+export type ObservedTuning = Partial<Record<string, number | boolean | string>>;
+
 export interface ObservedXiraidArray {
   kind: 'XiraidArray';
   id: string;
@@ -29,6 +32,7 @@ export interface ObservedXiraidArray {
     strip_size_kib?: number;
     block_size?: number;
     group_size?: number;
+    tuning?: ObservedTuning;
   };
   status: {
     state: 'optimal' | 'degraded' | 'rebuilding' | 'failed' | 'importing' | 'unknown';
@@ -38,6 +42,7 @@ export interface ObservedXiraidArray {
     rebuild_progress_pct: number | null;
     check_progress_pct: number | null;
     usable_capacity_bytes?: number;
+    memory_usage_mb?: number;
     member_states: Array<Record<string, unknown>>;
   };
 }
@@ -136,6 +141,9 @@ export function parseRaidShow(
       typeof o.sparepool === 'string' && o.sparepool.length > 0
         ? (poolDrives.get(o.sparepool) ?? [])
         : [];
+    const capacityBytes = sizeToBytes(o.size);
+    const tuning = readTuning(o);
+    const memoryUsage = coerceNumber(o.memory_usage_mb ?? o.memory_usage);
 
     out.push({
       kind: 'XiraidArray',
@@ -148,6 +156,7 @@ export function parseRaidShow(
         ...(numberOrNull(o.strip_size) !== null ? { strip_size_kib: o.strip_size as number } : {}),
         ...(numberOrNull(o.block_size) !== null ? { block_size: o.block_size as number } : {}),
         ...(numberOrNull(o.group_size) !== null ? { group_size: o.group_size as number } : {}),
+        ...(tuning !== null ? { tuning } : {}),
       },
       status: {
         state: deriveState(states),
@@ -157,7 +166,8 @@ export function parseRaidShow(
           : {}),
         rebuild_progress_pct: reconProgress,
         check_progress_pct: null,
-        ...(numberOrNull(o.size) !== null ? { usable_capacity_bytes: o.size as number } : {}),
+        ...(capacityBytes !== null ? { usable_capacity_bytes: capacityBytes } : {}),
+        ...(memoryUsage !== null ? { memory_usage_mb: memoryUsage } : {}),
         member_states: [],
       },
     });
@@ -189,4 +199,136 @@ function normalizeLevel(level: unknown): string {
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * ADR-0006 `spec.tuning` field names → the spelling the daemon emits under
+ * `raid_show --extended`, where the two differ.
+ *
+ * The daemon suffixes the unit (`memory_limit_mb`, `merge_read_max_usecs`);
+ * the control-path schema — and the gRPC *request* side, and the fake
+ * transport's `raidModify` write-back — do not. The daemon spelling is
+ * checked first (it is the authoritative one on a live node); the plain name
+ * is accepted as an alias.
+ */
+const TUNING_DAEMON_ALIAS: Record<string, string> = {
+  memory_limit: 'memory_limit_mb',
+  memory_prealloc: 'memory_prealloc_mb',
+  merge_read_max: 'merge_read_max_usecs',
+  merge_read_wait: 'merge_read_wait_usecs',
+  merge_write_max: 'merge_write_max_usecs',
+  merge_write_wait: 'merge_write_wait_usecs',
+};
+
+const TUNING_NUMBERS = [
+  'init_prio',
+  'recon_prio',
+  'restripe_prio',
+  'sdc_prio',
+  'merge_read_max',
+  'merge_read_wait',
+  'merge_write_max',
+  'merge_write_wait',
+  'memory_limit',
+  'memory_prealloc',
+  'request_limit',
+  'max_sectors_kb',
+];
+
+const TUNING_BOOLEANS = [
+  'resync_enabled',
+  'sched_enabled',
+  'merge_read_enabled',
+  'merge_write_enabled',
+  'adaptive_merge',
+  'single_run',
+  'discard',
+  'drive_trim',
+];
+
+const TUNING_STRINGS = ['cpu_allowed'];
+
+/** JSON number, or the numeric string the daemon sometimes emits. */
+function coerceNumber(value: unknown): number | null {
+  if (typeof value === 'number') return numberOrNull(value);
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** xiRAID reports flags as `0`/`1` (sometimes stringified), not as booleans. */
+function coerceBoolean(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  const n = coerceNumber(value);
+  return n === null ? null : n !== 0;
+}
+
+/**
+ * The array's OBSERVED tuning, in ADR-0006 `spec.tuning` names (spec §5).
+ *
+ * Observation, not desired state: the daemon reports the *effective* values,
+ * including its own defaults, and this records what it read. Only keys the
+ * daemon actually emitted are set — an absent or unreadable knob stays
+ * absent, so a client can tell "not reported" from a real value. Returns
+ * null when nothing was observed at all (the shape `raid_show` returns
+ * without `extended: true`), so `spec.tuning` is omitted entirely rather
+ * than published as an empty object.
+ */
+function readTuning(o: Record<string, unknown>): ObservedTuning | null {
+  const out: ObservedTuning = {};
+
+  const read = (key: string): unknown => o[TUNING_DAEMON_ALIAS[key] ?? key] ?? o[key];
+
+  for (const key of TUNING_NUMBERS) {
+    const value = coerceNumber(read(key));
+    if (value !== null) out[key] = value;
+  }
+  for (const key of TUNING_BOOLEANS) {
+    const value = coerceBoolean(read(key));
+    if (value !== null) out[key] = value;
+  }
+  for (const key of TUNING_STRINGS) {
+    // An empty cpu_allowed is an observed value ("all"), not an absent one.
+    const value = read(key);
+    if (typeof value === 'string') out[key] = value;
+  }
+
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+const SIZE_MULTIPLIER: Record<string, number> = {
+  b: 1,
+  k: 1024,
+  m: 1024 ** 2,
+  g: 1024 ** 3,
+  t: 1024 ** 4,
+  p: 1024 ** 5,
+  e: 1024 ** 6,
+};
+
+/** `<number>` with an optional binary unit: `1.2T`, `1.2 TiB`, `500M`, `1024B`. */
+const SIZE_TEXT = /^\s*(\d+(?:\.\d+)?)\s*(?:([bkmgtpe])(?:i?b)?)?\s*$/i;
+
+/**
+ * An array's `size` as raid_show reports it → whole bytes (spec §5.1).
+ *
+ * The daemon renders the size with the unit it was ASKED for, and the adapter
+ * always requests `units:'g'` (a missing unit makes the daemon's formatter
+ * throw), so a live array reports a formatted STRING — `"1.2T"`, `"163.727G"`,
+ * possibly bare `"163.727"` — while the fake transport and the contract
+ * fixtures use a plain byte count. Hence: number → bytes verbatim; string →
+ * scaled by its unit, or by GiB when it carries none. Unparseable → null, so
+ * the optional field is omitted rather than guessed at.
+ */
+function sizeToBytes(value: unknown): number | null {
+  if (typeof value === 'number') return numberOrNull(value);
+  if (typeof value !== 'string') return null;
+  const match = SIZE_TEXT.exec(value);
+  if (match === null) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return null;
+  const unit = match[2]?.toLowerCase() ?? 'g';
+  return Math.round(amount * (SIZE_MULTIPLIER[unit] as number));
 }

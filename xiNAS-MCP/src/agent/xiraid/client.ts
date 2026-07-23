@@ -150,7 +150,12 @@ export function createGrpcTransport(): XiraidTransport {
       // units:'g' is required — the xiRAID daemon's formatter throws
       // "13 INTERNAL: Unsupported unit: None" on an unset unit (finding #17),
       // which otherwise fails every array observation sweep.
-      const res = await raidShow(client, { units: 'g' });
+      //
+      // extended:true is what makes the daemon emit the tuning surface
+      // (priorities, memory/request limits, CPU affinity, scheduler + merge
+      // knobs) at all. Without it spec.tuning can only ever be empty and
+      // every client reads the array's tuning as unknown.
+      const res = await raidShow(client, { units: 'g', extended: true });
       return res.data ?? [];
     },
     async raidCreate(req: RaidCreateRequest): Promise<void> {

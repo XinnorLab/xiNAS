@@ -34,8 +34,8 @@ Main Menu → Storage (StorageScreen) → 1 RAID Management (RAIDScreen)
 
 | Key | Action | Handler in `raid.py` |
 |---|---|---|
-| 1 | Quick Overview | `_show_quick()` → `grpc.raid_show()` |
-| 2 | Extended Details | `_show_extended()` → `grpc.raid_show(extended=True)` |
+| 1 | Quick Overview | `_show_quick()` → `GET /api/v1/arrays` |
+| 2 | Extended Details | `_show_extended()` → `GET /api/v1/arrays` (same call; renders `spec.tuning` too) |
 | 3 | Spare Pools | pushes `SparePoolScreen` |
 | 4 | Create Array | `_create_array_wizard()` |
 | 5 | Edit Array | `_modify_array()` |
@@ -173,28 +173,33 @@ The audit line is written **after** the gRPC reports success. The snapshot is re
 
 ## 3. Read paths — Quick Overview / Extended Details
 
-`_show_quick()` and `_show_extended()` are nearly identical: both call `grpc.raid_show()` (with `extended=True` for the latter) and feed the JSON list/dict into `_format_raid_overview()`.
+`_show_quick()` and `_show_extended()` are nearly identical: both `GET /api/v1/arrays` (since S8 — see §3.1), adapt the API rows to the legacy renderer dict with `_arrays_from_api()`, and feed that into `_format_raid_overview()` with `extended=False` / `True`.
 
-The formatter normalises the response with `_as_array_dict()`, since `raid_show` can return either:
+`_arrays_from_api()` is the only place the API shape is known. It maps
+`spec` → `level` / `strip_size` / `block_size` / `sparepool` /
+`member_disk_ids`, `status` → `state` / `size` / `init_progress` /
+`volume_path` / `memory_usage_mb`, and **flattens `spec.tuning` onto the
+top level** so the renderer reads one flat dict. A key the API does not
+carry is left **absent** — the renderer must then print a placeholder,
+never a plausible-looking default (§3.2).
 
-- a `dict` keyed by array name, or
-- a `list` of dicts each carrying a `name` field.
+Quick Overview shows: level, capacity, state list, device counts (online / degraded / offline derived from the per-member state field), strip size, spare pool, and an initialisation progress bar when any state is `initing`.
 
-Quick Overview shows: level, capacity, state list, device counts (online / degraded / offline derived from the per-device state field), strip size, spare pool, and an initialisation progress bar when any state is `initing`. The base payload also carries `memory_usage_mb` and `block_size` (see the reconciliation note below).
-
-Extended adds three blocks:
+Extended adds three blocks, all sourced from observed `spec.tuning`:
 
 - **Priorities** — `init_prio`, `recon_prio`, `restripe_prio`, `sdc_prio`
-- **Performance** — `memory_limit_mb`, `memory_prealloc_mb`, `request_limit`, `cpu_allowed`
-- **I/O Scheduler & Merge** — `sched_enabled`, `merge_read_enabled`, `merge_write_enabled`, `adaptive_merge`, plus the four merge timing knobs `merge_read_max_usecs`, `merge_read_wait_usecs`, `merge_write_max_usecs`, `merge_write_wait_usecs`
+- **Performance** — `memory_limit`, `memory_prealloc`, `request_limit`, `cpu_allowed`, plus `block_size` (`spec`) and `memory_usage_mb` (`status`)
+- **I/O Scheduler & Merge** — `sched_enabled`, `merge_read_enabled`, `merge_write_enabled`, `adaptive_merge`, plus the four merge timing knobs `merge_read_max`, `merge_read_wait`, `merge_write_max`, `merge_write_wait`
+
+Those are the **control-path** names (ADR-0006 `spec.tuning`), not the daemon's. The daemon→control-path rename happens once, in the agent parser [lib/parse/raid.ts](../../xiNAS-MCP/src/lib/parse/raid.ts):
 
 > **Field names verified against the live daemon** (`xicli raid show --format json [--extended]`, xiRAID Classic on this build). Reconciliations vs earlier drafts of this spec (finding #18):
-> - Memory/timing fields carry their unit suffix: **`memory_limit_mb`**, **`memory_prealloc_mb`**, and **`merge_*_usecs`** — not `memory_limit` / `memory_prealloc` / bare `merge_*`.
+> - Memory/timing fields carry their unit suffix on the daemon side: **`memory_limit_mb`**, **`memory_prealloc_mb`**, and **`merge_*_usecs`** — the parser strips the suffix to reach the ADR-0006 `tuning` names (`memory_limit`, `memory_prealloc`, `merge_*`) and also accepts the unsuffixed spelling, since the gRPC *request* fields are unsuffixed.
 > - **`sdc_prio`** is emitted (Priorities block) and is now documented.
-> - **`resync_enabled`** is **not** emitted by the current daemon — removed from this spec.
-> - **`memory_usage_mb`** and **`block_size`** appear in the **base** payload (Quick Overview), not only under Extended.
+> - **`resync_enabled`** is **not** emitted by the current daemon — removed from this spec, and the Extended block no longer renders a `Resync` row it could only ever fill with a guess. (It is create-only on the gRPC side too — `RaidModify` has no such field — so it is absent from `_MODIFY_PARAMS` as well.)
+> - **`memory_usage_mb`** and **`block_size`** appear in the **base** payload, so they survive on `status` / `spec` rather than under `tuning`.
 
-If the response includes `devices_health` or `devices_wear` arrays, a per-device row is appended showing state icon + health + wear%.
+If the row includes `devices_health` or `devices_wear` arrays, a per-device row is appended showing state icon + health + wear%. The control-path `XiraidArray` object carries **neither** today (the daemon returns them only under `extended`, and they are per-drive SMART data that belongs on `Disk`, not on the array), so the block is currently never rendered — it is kept for the day those land.
 
 ### 3.1 Degraded-backend honesty
 
@@ -219,6 +224,40 @@ State → icon/colour mapping (from `_state_icon` / `_state_color`):
 | `degraded` | `!` | yellow |
 | `offline` / `failed` | `x` | red |
 | anything else | `o` | none |
+
+### 3.2 Unobserved tuning values render as unknown
+
+The Extended blocks are pure observation: whatever the agent's collector
+read out of `raid_show(extended=true)` and stored in `spec.tuning`. A
+value the control path does **not** have (`null`, or the key absent
+because the daemon did not emit it — `resync_enabled`, for instance) is
+rendered as a placeholder:
+
+| Field kind | Unobserved renders as | Observed renders as |
+|---|---|---|
+| Priorities (`*_prio`) | `-` | `<n>%` |
+| `memory_limit` / `request_limit` | `unknown` | `unlimited` when `0`, else the value |
+| `memory_prealloc` | `unknown` | `disabled` when `0`, else `<n> MB` |
+| `cpu_allowed` | `unknown` | `all` when empty, else the mask |
+| `block_size` (`spec`) | `unknown` | `<n> bytes` |
+| Booleans (`sched_enabled`, `merge_*_enabled`, `adaptive_merge`) | `unknown` | `Enabled` / `Disabled` |
+| Merge timings | row omitted when all four are unobserved | `<n> us` |
+| `memory_usage_mb` (`status`) | `unknown` | `<n> MB` |
+
+`0` is an observed value, not an absent one — it is exactly how xiRAID
+spells "no limit" and "prealloc off" — so the unknown case keys off
+`is None`, never off falsiness.
+
+This is the array-detail case of the same rule as §3.1: **an unobserved
+value must never render as a plausible default.** Printing `unlimited`,
+`all`, or `Disabled` for a knob nobody read tells the operator the array
+is configured a way it may not be — the failure mode that hid the missing
+`extended: true` on the collector's `raid_show` call, so that Extended
+Details reported `Memory Limit | unlimited` while an edit against the
+same array was rejected with `Unable to set memory limit to '1028' MiBs.
+RAID already has '2048' reserved MiBs.` The Priorities block, which had
+no plausible default to fall back on, showed `-%` throughout and was the
+only visible symptom.
 
 ---
 
@@ -313,7 +352,7 @@ The summary dialog (title `"Confirm Create"`, `allow_back=True`) renders all sel
 Steps:
 
 1. **Pick an array.** `grpc.raid_show()` → `SelectDialog` over array names.
-2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(grpc_key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Resync Enabled, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max.
+2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(grpc_key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max. (`resync_enabled` is create-only — xiRAID's `RaidModify` has no such field — so it is not offered.)
 3. **Per-parameter prompt** — see §5.1.
 4. **Confirm + dispatch.** Value is coerced to the declared `vtype` (`int` for the integer knobs, `str` for the rest). `grpc.raid_modify(name, **{key: value})` is invoked. On success: audit (`raid.modify`) + snapshot (`raid_modify`) + Quick Overview refresh.
 

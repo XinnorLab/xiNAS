@@ -98,6 +98,187 @@ describe('parseRaidShow', () => {
     expect(parseRaidShow({ message: 'no raids' }, DISK_IDS)).toEqual([]);
   });
 
+  // ---- size → usable_capacity_bytes (spec §5.1) ----
+  // The live daemon renders `size` with the unit it was asked for (units:'g'),
+  // so it arrives as a formatted STRING. Reading only JSON numbers is what
+  // showed "Capacity | N/A" for every array on a real node.
+
+  describe('usable_capacity_bytes from a unit-formatted size', () => {
+    const capacity = (size: unknown): number | undefined =>
+      parseRaidShow(
+        [{ name: 'data', level: '5', devices: [], state: ['online'], size }],
+        DISK_IDS,
+      )[0]?.status.usable_capacity_bytes;
+
+    it('reads the daemon string shape ("1.2T")', () => {
+      expect(capacity('1.2T')).toBe(Math.round(1.2 * 1024 ** 4));
+    });
+
+    it('accepts the binary-unit spellings (T / TiB / TB, spaced or not)', () => {
+      const expected = Math.round(1.2 * 1024 ** 4);
+      expect(capacity('1.2 TiB')).toBe(expected);
+      expect(capacity('1.2TB')).toBe(expected);
+      expect(capacity('1.2 t')).toBe(expected);
+    });
+
+    it('scales k/m/g/p/e and a bare byte count', () => {
+      expect(capacity('12K')).toBe(12 * 1024);
+      expect(capacity('500M')).toBe(500 * 1024 ** 2);
+      expect(capacity('163.727G')).toBe(Math.round(163.727 * 1024 ** 3));
+      expect(capacity('2P')).toBe(2 * 1024 ** 5);
+      expect(capacity('1024B')).toBe(1024);
+    });
+
+    it('a unit-less string is the unit the adapter asked for (GiB)', () => {
+      expect(capacity('163.727')).toBe(Math.round(163.727 * 1024 ** 3));
+    });
+
+    it('a JSON number stays a byte count (fake transport / fixture shape)', () => {
+      expect(capacity(15360000000000)).toBe(15360000000000);
+    });
+
+    it('always an integer — the api-v1 schema types it `integer`', () => {
+      expect(Number.isInteger(capacity('1.2T'))).toBe(true);
+      expect(Number.isInteger(capacity('163.727'))).toBe(true);
+    });
+
+    it('omits the field when the size is absent or unreadable', () => {
+      expect(capacity(undefined)).toBeUndefined();
+      expect(capacity('')).toBeUndefined();
+      expect(capacity('n/a')).toBeUndefined();
+      expect(capacity('T')).toBeUndefined();
+      expect(capacity(Number.NaN)).toBeUndefined();
+      expect(capacity({ bytes: 5 })).toBeUndefined();
+    });
+  });
+
+  // ---- spec.tuning from the extended payload (spec §5) ----
+  // raid_show --extended reports the array's EFFECTIVE tuning. The daemon
+  // suffixes units where ADR-0006 spec.tuning does not; the parser renames.
+  // An unobserved knob must stay ABSENT — a client that fills in a default
+  // tells the operator the array is configured a way it is not.
+
+  describe('spec.tuning', () => {
+    const tuning = (extra: Record<string, unknown>) =>
+      parseRaidShow(
+        [{ name: 'data', level: '5', devices: [], state: ['online'], ...extra }],
+        DISK_IDS,
+      )[0]?.spec.tuning;
+
+    it('renames the daemon unit-suffixed names to the ADR-0006 tuning names', () => {
+      expect(
+        tuning({
+          memory_limit_mb: 2048,
+          memory_prealloc_mb: 512,
+          merge_read_max_usecs: 100,
+          merge_read_wait_usecs: 10,
+          merge_write_max_usecs: 200,
+          merge_write_wait_usecs: 20,
+        }),
+      ).toEqual({
+        memory_limit: 2048,
+        memory_prealloc: 512,
+        merge_read_max: 100,
+        merge_read_wait: 10,
+        merge_write_max: 200,
+        merge_write_wait: 20,
+      });
+    });
+
+    it('accepts the unsuffixed spelling too (gRPC request / fake write-back)', () => {
+      expect(tuning({ memory_limit: 2048, merge_read_max: 100 })).toEqual({
+        memory_limit: 2048,
+        merge_read_max: 100,
+      });
+    });
+
+    it('carries the priorities, limits and CPU mask straight through', () => {
+      expect(
+        tuning({
+          init_prio: 100,
+          recon_prio: 80,
+          restripe_prio: 20,
+          sdc_prio: 10,
+          request_limit: 0,
+          max_sectors_kb: 512,
+          cpu_allowed: '0-7',
+        }),
+      ).toEqual({
+        init_prio: 100,
+        recon_prio: 80,
+        restripe_prio: 20,
+        sdc_prio: 10,
+        request_limit: 0,
+        max_sectors_kb: 512,
+        cpu_allowed: '0-7',
+      });
+    });
+
+    it("coerces xiRAID's 0/1 flags to booleans", () => {
+      expect(
+        tuning({
+          sched_enabled: 1,
+          merge_read_enabled: 0,
+          merge_write_enabled: '1',
+          adaptive_merge: '0',
+          single_run: true,
+          discard: 1,
+          drive_trim: 0,
+        }),
+      ).toEqual({
+        sched_enabled: true,
+        merge_read_enabled: false,
+        merge_write_enabled: true,
+        adaptive_merge: false,
+        single_run: true,
+        discard: true,
+        drive_trim: false,
+      });
+    });
+
+    it('coerces numeric strings to numbers', () => {
+      expect(tuning({ memory_limit_mb: '2048', init_prio: '100' })).toEqual({
+        memory_limit: 2048,
+        init_prio: 100,
+      });
+    });
+
+    it('an empty cpu_allowed is an OBSERVED value ("all"), not an absent one', () => {
+      expect(tuning({ cpu_allowed: '' })).toEqual({ cpu_allowed: '' });
+    });
+
+    it('omits keys the daemon does not emit, and unreadable values', () => {
+      expect(
+        tuning({
+          memory_limit_mb: 2048,
+          init_prio: null,
+          recon_prio: 'high',
+          sched_enabled: 'yes',
+          cpu_allowed: 7,
+        }),
+      ).toEqual({ memory_limit: 2048 });
+    });
+
+    it('omits tuning entirely when nothing was observed (no --extended)', () => {
+      // The exact live shape: raid_show WITHOUT extended:true reports no
+      // tuning at all. spec.tuning must be absent, so every client renders
+      // the knobs as unknown instead of as a plausible default.
+      expect(tuning({ strip_size: 64, block_size: 4096 })).toBeUndefined();
+    });
+
+    it('status.memory_usage_mb is observed separately from the limit', () => {
+      const status = (extra: Record<string, unknown>) =>
+        parseRaidShow(
+          [{ name: 'data', level: '5', devices: [], state: ['online'], ...extra }],
+          DISK_IDS,
+        )[0]?.status;
+
+      expect(status({ memory_usage_mb: 0 })?.memory_usage_mb).toBe(0);
+      expect(status({ memory_usage_mb: '64' })?.memory_usage_mb).toBe(64);
+      expect(status({})).not.toHaveProperty('memory_usage_mb');
+    });
+  });
+
   // ---- S4 T5: sparepool membership observed via pool_show ----
 
   it('maps the array sparepool through the pools payload to spare disk ids', () => {

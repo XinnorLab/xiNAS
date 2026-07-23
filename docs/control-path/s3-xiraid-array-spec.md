@@ -87,13 +87,39 @@ Per ADR-0006 / ADR-0005: API validation and agent rendering must not diverge.
 
 `XiraidArrayCollector` replaces `XiraidArrayStubCollector`:
 
-1. Each collection cycle, call `client.raidShow()` via the shared gRPC adapter.
-2. Map each array → an `XiraidArray` observed object via the pure `lib/parse/raid.ts` (`spec` from config incl. current sparepool→disk-ids; `status` = `{ state, volume_path: /dev/xi_<name>, chunk_size_kib, rebuild/check_progress_pct, usable_capacity_bytes, member_states, observed_at }`), unit-testable without a daemon.
+1. Each collection cycle, call `client.raidShow()` via the shared gRPC adapter. The real transport sends **`{ units: 'g', extended: true }`**: `extended` is what makes the daemon emit the tuning surface (priorities, memory/request limits, CPU affinity, scheduler + merge knobs) at all — without it `spec.tuning` can only ever be empty, and every client reads the array's tuning as unknown. (`units: 'g'` is separately required — an unset unit crashes the daemon's formatter, finding #17.)
+2. Map each array → an `XiraidArray` observed object via the pure `lib/parse/raid.ts` (`spec` from config incl. current sparepool→disk-ids **and `tuning` from the extended payload**; `status` = `{ state, volume_path: /dev/xi_<name>, chunk_size_kib, rebuild/check_progress_pct, usable_capacity_bytes, memory_usage_mb, member_states, observed_at }`), unit-testable without a daemon.
+   - **Tuning is observation, not desired state.** The daemon reports *effective* values, including its own defaults; the parser records what it read. Only keys the daemon actually emits are set — an absent knob stays absent rather than becoming a fabricated default, so a client can distinguish "not configured / not reported" from a real value. `spec.tuning` is omitted entirely when nothing was observed.
+   - **Daemon → control-path names.** The daemon suffixes units (`memory_limit_mb`, `memory_prealloc_mb`, `merge_read_max_usecs`, …) where ADR-0006 `spec.tuning` does not. The parser renames, and accepts the unsuffixed spelling as an alias (that is the gRPC *request* spelling, and what the fake transport writes back on `raidModify`). Numeric strings coerce to numbers; xiRAID's `0`/`1` flags coerce to booleans. An empty `cpu_allowed` is an observed value ("all"), not an absent one.
 3. Member device paths map **back** to `Disk` ids via observed `Disk` state so `member_disk_ids` is in control-path identity.
 4. Publish deltas via the existing push model (Flow A).
 5. **Daemon unavailable** (connect refused / timeout / TLS failure): the collector reports `error` with reason `XIRAID_DAEMON_UNAVAILABLE` → the node honestly reads `degraded` (the systemd-collector precedent), never fabricated or stale-as-fresh data.
 
 The collector shares the **one** injected `XiraidGrpcClient` with the executor and observes its availability state.
+
+### 5.1 `size` → `usable_capacity_bytes`
+
+The daemon renders an array's size **with the unit it was asked for**, and the
+adapter always calls `raid_show` with `units:'g'` (a missing unit makes the
+daemon's formatter throw — #17). A live array therefore reports `size` as a
+formatted **string** (`"1.2T"`, `"163.727G"`, `"163.727"`), not a byte count —
+see the `raid_show` response in
+[config-history/grpc-api-reference.md](../config-history/grpc-api-reference.md).
+Sibling fields do not share that shape: `strip_size` arrives as a plain number.
+
+`lib/parse/raid.ts` converts, and `status.usable_capacity_bytes` is always an
+integer count of bytes (the api-v1 schema types it `integer`):
+
+| `size` as reported | → `usable_capacity_bytes` |
+|---|---|
+| `"1.2T"` / `"1.2 TiB"` / `"1.2TB"` | `1.2 × 1024⁴`, rounded |
+| `"500M"`, `"163.727G"`, `"12K"`, `"1024B"` | binary multiplier for `k/m/g/t/p/e`, optional `i`/`B` |
+| `"163.727"` (no unit) | GiB — the unit the adapter requested |
+| `15360000000000` (JSON number) | bytes, verbatim (the fake transport / contract-fixture shape) |
+| anything else (`""`, `"n/a"`, absent) | field omitted — clients render `N/A` |
+
+Accepting only JSON numbers is what shipped capacity as `N/A` for every array
+on a real node while every other field rendered.
 
 ---
 
@@ -222,7 +248,7 @@ array-shaped fake transport will not catch it; cover both shapes.
 
 ## 13. Open questions / risks
 
-- **`raid_show` field mapping** — confirm the exact gRPC response fields for `state` / `usable_capacity_bytes` / progress / member health / sparepool against `proto/xraid/` + the analyst doc when writing `lib/parse/raid.ts`.
+- **`raid_show` field mapping** — confirm the exact gRPC response fields for `state` / `usable_capacity_bytes` / progress / member health / sparepool against `proto/xraid/` + the analyst doc when writing `lib/parse/raid.ts`. *(Partly resolved: `size` is a unit-formatted string, not a byte count — see §5.1; the tuning surface needs `extended: true` and a unit-suffix rename — see §5.)*
 - **`wait_online` timeout** — pick a bound that tolerates large-array init without hanging the worker (cap=1) too long; initialization continues in the background after the task succeeds.
 - **Disk-id stability** — the device→`Disk`-id mapping in observe and the id→device resolution at plan time must use the same `Disk` identity scheme; the parser's id is still the provisional device-name key (see the `PROVISIONAL` note in `lib/parse/disk.ts`) — verify against the collector's stable-key behavior during T2 and align if needed.
 - **TLS material** — the adapter reuses `/etc/xraid/net.conf` + the CA cert exactly as `src/grpc/client.ts` does today; if the daemon's cert setup differs on a real node, that surfaces in T5/T10 and is a packaging concern (`xiraid_classic`), not a code one.

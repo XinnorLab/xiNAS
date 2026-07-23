@@ -655,6 +655,9 @@ components:
             rebuild_progress_pct: { type: [integer, "null"] }
             check_progress_pct: { type: [integer, "null"] }
             usable_capacity_bytes: { type: integer, format: int64 }
+            memory_usage_mb:
+              type: [integer, "null"]
+              description: "Memory the array is currently using, as reported by raid_show. Absent when not observed — distinct from spec.tuning.memory_limit."
             member_states:
               type: array
               items: { type: object, additionalProperties: true }

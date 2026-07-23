@@ -265,10 +265,15 @@ def _arrays_from_api(rows: Any) -> dict[str, dict]:
     """Adapt GET /api/v1/arrays docs to the legacy renderer dict shape.
 
     API rows are ``{id, spec: {name, level, member_disk_ids,
-    spare_disk_ids, strip_size_kib, block_size, group_size}, status:
-    {state, volume_path, rebuild_progress_pct, usable_capacity_bytes,
-    member_states, ...}}``. Per-member states and the tuning surface are
-    not observed via the API — the renderer shows placeholders for those.
+    spare_disk_ids, strip_size_kib, block_size, group_size, tuning},
+    status: {state, volume_path, rebuild_progress_pct,
+    usable_capacity_bytes, memory_usage_mb, member_states, ...}}``.
+
+    ``spec.tuning`` is flattened onto the top level so the renderer reads
+    one flat dict. A key the API does not carry is left **absent** — the
+    renderer must then print a placeholder, never a plausible-looking
+    default (raid-management-spec §3.2). Per-member states are still not
+    observed via the API.
     """
     arrays: dict[str, dict] = {}
     for doc in rows if isinstance(rows, list) else []:
@@ -284,6 +289,8 @@ def _arrays_from_api(rows: Any) -> dict[str, dict]:
         members = [str(m) for m in spec.get("member_disk_ids") or []]
         spares = [str(s) for s in spec.get("spare_disk_ids") or []]
         cap = status.get("usable_capacity_bytes")
+        tuning = spec.get("tuning")
+        tuning = tuning if isinstance(tuning, dict) else {}
         arrays[name] = {
             "name": name,
             "level": _level_label(spec.get("level")),
@@ -293,11 +300,15 @@ def _arrays_from_api(rows: Any) -> dict[str, dict]:
             "devices": [[i, m, []] for i, m in enumerate(members)],
             "strip_size": spec.get("strip_size_kib", "?"),
             "sparepool": ", ".join(spares) if spares else "-",
-            "block_size": spec.get("block_size", 4096),
+            "block_size": spec.get("block_size"),
             "init_progress": status.get("rebuild_progress_pct"),
             "volume_path": str(status.get("volume_path") or f"/dev/xi_{name}"),
             "member_disk_ids": members,
             "spare_disk_ids": spares,
+            "memory_usage_mb": status.get("memory_usage_mb"),
+            # Observed tuning only: a knob the agent did not read stays
+            # absent here so the renderer prints "unknown" for it.
+            **{k: v for k, v in tuning.items() if v is not None},
         }
     return arrays
 
@@ -1204,6 +1215,10 @@ _GRN, _YLW, _RED, _CYN, _BLD, _DIM, _NC = (
 )
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
+# What an UNOBSERVED value renders as. Never a plausible default — see
+# docs/Storage/raid-management-spec.md §3.2.
+_UNKNOWN = f"{_DIM}unknown{_NC}"
+
 
 def _visible_len(s: str) -> int:
     """Length of string after stripping ANSI escape codes."""
@@ -1318,8 +1333,8 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
         strip_size = arr.get("strip_size", "?")
         sparepool = arr.get("sparepool", "-")
         init_progress = arr.get("init_progress")
-        memory_mb = arr.get("memory_usage_mb", 0)
-        block_size = arr.get("block_size", 4096)
+        memory_mb = arr.get("memory_usage_mb")
+        block_size = arr.get("block_size")
 
         online, degraded, offline, _unknown = _count_states(devices)
         total = len(devices)
@@ -1355,48 +1370,65 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
             )
 
         if extended:
+            # Every value below is pure observation. An unobserved knob
+            # (absent → None) renders as the unknown placeholder, NEVER as a
+            # plausible default: printing "unlimited" for a memory limit
+            # nobody read tells the operator the array is unconstrained while
+            # the daemon rejects their edit with "RAID already has '2048'
+            # reserved MiBs". See raid-management-spec §3.2.
+            def _opt(value, render):
+                return _UNKNOWN if value is None else render(value)
 
             def _on_off(v):
-                return f"{_GRN}Enabled{_NC}" if v else f"{_DIM}Disabled{_NC}"
+                return _opt(v, lambda x: f"{_GRN}Enabled{_NC}" if x else f"{_DIM}Disabled{_NC}")
+
+            def _usecs(v):
+                return _opt(v, lambda x: f"{x} us")
 
             # ── Priorities ──
             lines.append(_box_line())
             lines.append(_box_sep())
             lines.append(_box_line(f" {_BLD}{_CYN}PRIORITIES{_NC}"))
             lines.append(_box_sep())
-            init_p = arr.get("init_prio", "-")
-            recon_p = arr.get("recon_prio", "-")
-            restripe_p = arr.get("restripe_prio", "-")
-            lines.append(_box_line(f"  {_DIM}Init Priority{_NC}       |  {init_p}%"))
-            lines.append(_box_line(f"  {_DIM}Recon Priority{_NC}      |  {recon_p}%"))
-            lines.append(_box_line(f"  {_DIM}Restripe Priority{_NC}   |  {restripe_p}%"))
+
+            def _pct(v):
+                # Priorities keep the dash they always had — the one block
+                # with no plausible default to fall back on.
+                return "-" if v is None else f"{v}%"
+
+            init_p = _pct(arr.get("init_prio"))
+            recon_p = _pct(arr.get("recon_prio"))
+            restripe_p = _pct(arr.get("restripe_prio"))
+            lines.append(_box_line(f"  {_DIM}Init Priority{_NC}       |  {init_p}"))
+            lines.append(_box_line(f"  {_DIM}Recon Priority{_NC}      |  {recon_p}"))
+            lines.append(_box_line(f"  {_DIM}Restripe Priority{_NC}   |  {restripe_p}"))
 
             # ── Performance ──
             lines.append(_box_line())
             lines.append(_box_sep())
             lines.append(_box_line(f" {_BLD}{_CYN}PERFORMANCE{_NC}"))
             lines.append(_box_sep())
-            mem_limit = arr.get("memory_limit", 0)
-            mem_prealloc = arr.get("memory_prealloc", 0)
-            req_limit = arr.get("request_limit", 0)
-            cpu = arr.get("cpu_allowed") or "all"
-            lines.append(_box_line(f"  {_DIM}Memory Usage{_NC}        |  {memory_mb} MB"))
+            # 0 is a real observed value — xiRAID's "no limit" / "prealloc
+            # off" — and must not collapse into the unknown case.
+            mem_limit = _opt(arr.get("memory_limit"), lambda v: "unlimited" if not v else f"{v} MB")
+            mem_prealloc = _opt(
+                arr.get("memory_prealloc"), lambda v: "disabled" if not v else f"{v} MB"
+            )
+            req_limit = _opt(arr.get("request_limit"), lambda v: "unlimited" if not v else str(v))
+            cpu = _opt(arr.get("cpu_allowed"), lambda v: v or "all")
             lines.append(
                 _box_line(
-                    f"  {_DIM}Memory Limit{_NC}        |  {'unlimited' if not mem_limit else f'{mem_limit} MB'}"
+                    f"  {_DIM}Memory Usage{_NC}        |  {_opt(memory_mb, lambda v: f'{v} MB')}"
                 )
             )
+            lines.append(_box_line(f"  {_DIM}Memory Limit{_NC}        |  {mem_limit}"))
+            lines.append(_box_line(f"  {_DIM}Memory Pre-alloc{_NC}    |  {mem_prealloc}"))
             lines.append(
                 _box_line(
-                    f"  {_DIM}Memory Pre-alloc{_NC}    |  {'disabled' if not mem_prealloc else f'{mem_prealloc} MB'}"
+                    f"  {_DIM}Block Size{_NC}          |  {_opt(block_size, lambda v: f'{v} bytes')}"
                 )
             )
-            lines.append(_box_line(f"  {_DIM}Block Size{_NC}          |  {block_size} bytes"))
-            lines.append(
-                _box_line(
-                    f"  {_DIM}Request Limit{_NC}       |  {req_limit if req_limit else 'unlimited'}"
-                )
-            )
+            lines.append(_box_line(f"  {_DIM}Request Limit{_NC}       |  {req_limit}"))
             lines.append(_box_line(f"  {_DIM}CPU Affinity{_NC}        |  {cpu}"))
 
             # ── I/O Scheduler & Merge ──
@@ -1404,13 +1436,11 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
             lines.append(_box_sep())
             lines.append(_box_line(f" {_BLD}{_CYN}I/O SCHEDULER & MERGE{_NC}"))
             lines.append(_box_sep())
-            sched = arr.get("sched_enabled", 0)
-            resync = arr.get("resync_enabled", 0)
-            mr_en = arr.get("merge_read_enabled", 0)
-            mw_en = arr.get("merge_write_enabled", 0)
-            adapt = arr.get("adaptive_merge", 0)
+            sched = arr.get("sched_enabled")
+            mr_en = arr.get("merge_read_enabled")
+            mw_en = arr.get("merge_write_enabled")
+            adapt = arr.get("adaptive_merge")
             lines.append(_box_line(f"  {_DIM}Scheduler{_NC}           |  {_on_off(sched)}"))
-            lines.append(_box_line(f"  {_DIM}Resync{_NC}              |  {_on_off(resync)}"))
             lines.append(_box_line(f"  {_DIM}Merge Read{_NC}          |  {_on_off(mr_en)}"))
             lines.append(_box_line(f"  {_DIM}Merge Write{_NC}         |  {_on_off(mw_en)}"))
             lines.append(_box_line(f"  {_DIM}Adaptive Merge{_NC}      |  {_on_off(adapt)}"))
@@ -1419,10 +1449,10 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
             mw_max = arr.get("merge_write_max")
             mw_wait = arr.get("merge_write_wait")
             if any(v is not None for v in (mr_max, mr_wait, mw_max, mw_wait)):
-                lines.append(_box_line(f"  {_DIM}Merge Read Max{_NC}      |  {mr_max or '-'} us"))
-                lines.append(_box_line(f"  {_DIM}Merge Read Wait{_NC}     |  {mr_wait or '-'} us"))
-                lines.append(_box_line(f"  {_DIM}Merge Write Max{_NC}     |  {mw_max or '-'} us"))
-                lines.append(_box_line(f"  {_DIM}Merge Write Wait{_NC}    |  {mw_wait or '-'} us"))
+                lines.append(_box_line(f"  {_DIM}Merge Read Max{_NC}      |  {_usecs(mr_max)}"))
+                lines.append(_box_line(f"  {_DIM}Merge Read Wait{_NC}     |  {_usecs(mr_wait)}"))
+                lines.append(_box_line(f"  {_DIM}Merge Write Max{_NC}     |  {_usecs(mw_max)}"))
+                lines.append(_box_line(f"  {_DIM}Merge Write Wait{_NC}    |  {_usecs(mw_wait)}"))
 
             # ── Device Health & Wear ──
             health = arr.get("devices_health") or []
