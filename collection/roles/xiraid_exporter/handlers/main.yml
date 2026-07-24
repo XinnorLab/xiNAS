@@ -1,5 +1,5 @@
 - name: Reload xiraid_exporter
   ansible.builtin.systemd:
     daemon_reload: yes
-    name: xiraid-exporter
+    name: "{{ xiraid_exporter_unit | default(xiraid_exporter_unit_candidates[0]) }}"
     state: restarted

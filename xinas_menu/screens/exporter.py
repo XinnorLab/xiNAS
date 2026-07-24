@@ -78,10 +78,11 @@ class ExporterScreen(XiNASAppMixin, Screen):
         loop = asyncio.get_running_loop()
         installed = await loop.run_in_executor(None, _get_installed_version)
 
-        from xinas_menu.utils.service_ctl import ServiceController
+        from xinas_menu.utils.service_ctl import ServiceController, xiraid_exporter_unit
 
         ctl = ServiceController()
-        state = await loop.run_in_executor(None, lambda: ctl.state("xiraid-exporter"))
+        unit = await loop.run_in_executor(None, xiraid_exporter_unit)
+        state = await loop.run_in_executor(None, lambda: ctl.state(unit))
 
         GRN, YLW, RED, CYN, BLD, DIM, NC = (
             "\033[32m",
@@ -182,10 +183,11 @@ class ExporterScreen(XiNASAppMixin, Screen):
         )
         if not confirmed:
             return
-        from xinas_menu.utils.service_ctl import ServiceController
+        from xinas_menu.utils.service_ctl import ServiceController, xiraid_exporter_unit
 
         ctl = ServiceController()
-        ok, err = await loop.run_in_executor(None, lambda: ctl.restart("xiraid-exporter"))
+        unit = await loop.run_in_executor(None, xiraid_exporter_unit)
+        ok, err = await loop.run_in_executor(None, lambda: ctl.restart(unit))
         if ok:
             self.app.audit.log("exporter.restart", "", "OK")
             view.set_content(f"{_GRN}Service restarted.{_NC}")

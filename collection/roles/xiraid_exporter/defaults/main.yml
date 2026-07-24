@@ -16,3 +16,11 @@ xiraid_exporter_download_url: >-
 
 # Metrics listen port
 xiraid_exporter_port: 9827
+
+# Candidate systemd unit names, most likely first. The .deb installs
+# `xiraid_exporter.service` (underscore) even though the package and binary
+# are hyphenated; older builds shipped the hyphenated unit. The role resolves
+# which one is actually present instead of assuming.
+xiraid_exporter_unit_candidates:
+  - xiraid_exporter.service
+  - xiraid-exporter.service

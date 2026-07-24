@@ -87,3 +87,32 @@ def service_state(name: str) -> ServiceState:
 
 def service_restart(name: str) -> tuple[bool, str]:
     return _svc.restart(name)
+
+
+# The xiraid-exporter .deb installs its systemd unit as
+# `xiraid_exporter.service` (underscore) even though the package, the binary
+# and the upstream project all spell the name with a hyphen. Older builds
+# shipped the hyphenated unit. Resolve at runtime instead of hardcoding a
+# spelling — asking systemd about the wrong name reports a healthy exporter
+# as "inactive" and makes restart a silent no-op.
+XIRAID_EXPORTER_UNITS = ("xiraid_exporter.service", "xiraid-exporter.service")
+
+
+def resolve_unit(*candidates: str) -> str:
+    """Return the first candidate systemd has a unit file for.
+
+    Probes ``LoadState``: an installed unit reports ``loaded`` even when it is
+    stopped or disabled, while an unknown unit reports ``not-found``. When no
+    candidate resolves, the first is returned so callers still have a stable
+    name to display and to attribute errors to.
+    """
+    for name in candidates:
+        r = ServiceController._run("show", name, "--property=LoadState", "--no-pager")
+        if r.returncode == 0 and "LoadState=loaded" in r.stdout:
+            return name
+    return candidates[0]
+
+
+def xiraid_exporter_unit() -> str:
+    """Resolve the installed xiRAID exporter systemd unit name."""
+    return resolve_unit(*XIRAID_EXPORTER_UNITS)
