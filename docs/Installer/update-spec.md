@@ -97,6 +97,45 @@ v3.6.0 and v3.6.1, whose bolded, blockquoted trailers never matched the
 line-anchored pattern. Tags are decoration-stripped individually, so
 a tag list of ``**a**, `b` `` yields `("a", "b")`.
 
+### Rebuilding dist/ restarts its consumers
+
+`xinas-api` and `xinas-agent` are Node processes launched from
+`xiNAS-MCP/dist/`. Node reads that JavaScript **once, at process start**,
+so rewriting `dist/` changes nothing about what the running daemons
+execute. Nothing else restarts them for a change confined to
+`xiNAS-MCP/src`: the `xinas_api` / `xinas_agent` handlers fire only when
+*those* roles' own unit or config tasks report changed, and a src-only
+change touches neither.
+
+**Contract:** the `xinas_node_build` role's build task MUST notify
+handlers that restart `xinas-api` and then `xinas-agent` — api first,
+matching the unit dependency (`xinas-agent` `Requires=xinas-api.service`).
+A host with neither unit installed skips the restart instead of failing;
+that is the first-install ordering (`xinas_node_build` precedes
+`xinas_api` / `xinas_agent` in `site.yml`), and those roles then start the
+services themselves against the dist/ just built.
+
+Two consequences follow, and both are intended:
+
+- **`Requires-Rebuild: xinas_node_build` is sufficient** for a
+  TypeScript-only change. It does not have to be paired with `xinas_api` /
+  `xinas_agent` for the new code to take effect.
+- **Every run of the role restarts both services**, including a converged
+  `site.yml` re-run, because `npm run build` is unconditionally `changed`.
+  After a rebuild the running processes are stale relative to `dist/` by
+  definition, so an unconditional restart is the honest outcome.
+
+This is the second instance of the same class of bug as the unparsed
+trailers above — the update reports success while the host keeps running
+the old code. It shipped in **v3.8.0**: the release carried
+`Requires-Rebuild: xinas_node_build`, the rebuild ran and rewrote `dist/`,
+and both daemons kept serving the pre-update build. Among the fixes left
+inert was the `raid_show` `size` parse (the daemon reports a formatted
+string such as `"75092 GiB"`, which the superseded parser read only as a
+number), so `usable_capacity_bytes` was absent from every
+`GET /api/v1/arrays` row and the TUI rendered every array's capacity as
+`N/A`.
+
 ## Update apply
 
 Applying an update **checks out the release tag** — it never pulls a
@@ -459,3 +498,30 @@ no `Requires-Rebuild:` trailer, per the trailer rules in `CLAUDE.md`, so
 no rebuild runs and the wrapper never gets deployed — hits outcome (d)
 with the wrapper absent, and is told to redeploy the `xinas_menu` role
 directly, exactly as described in *NFS-helper refresh* above.
+
+### Bootstrapping the dist/-consumer restart
+
+The restart handlers described in *Rebuilding dist/ restarts its
+consumers* live in the `xinas_node_build` role — that is, in the repo,
+not on the host. The checkout (step 2) therefore installs them **before**
+the rebuild (step 3) invokes the role, so the release that introduces
+them applies them on the very update that delivers them, with no
+intermediate release needed. This is unlike the two wrappers above, which
+must be written to `/usr/local/sbin` by a role before a later update can
+call them.
+
+The one precondition is that the release carrying the fix declares
+`Requires-Rebuild: xinas_node_build` — without it no rebuild runs, the
+role is never invoked, and the handlers sit in the checked-out tree doing
+nothing.
+
+A host that took **v3.8.0** is the wedged case: it has the new code but
+both daemons still run the build they loaded before that update, and
+`xinas_node_build` will not re-run on its own. It self-heals on the next
+release that carries the trailer. To recover before then, either restart
+the two services directly (the TUI exposes this as a break-glass action —
+*Advanced → restart the control-plane services*) or re-run the role:
+
+```bash
+sudo ansible-playbook playbooks/site.yml --tags xinas_node_build
+```
