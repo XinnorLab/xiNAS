@@ -247,6 +247,62 @@ describe('parseRaidShow', () => {
       expect(tuning({ cpu_allowed: '' })).toEqual({ cpu_allowed: '' });
     });
 
+    // The real xiRAID 4.3.x daemon reports the affinity as an ARRAY of core
+    // ids; only the fake transport writes the string back. Reading it as a
+    // string dropped the knob, and every client rendered a pinned array's
+    // affinity as "unknown" while the array really was pinned.
+    it('renders the daemon array shape of cpu_allowed as a CPU list', () => {
+      expect(tuning({ cpu_allowed: [5, 6, 7] })).toEqual({ cpu_allowed: '5-7' });
+    });
+
+    it('range-compresses cpu_allowed the way cpulist and xicli write it', () => {
+      expect(tuning({ cpu_allowed: [0, 2, 4, 5, 6] })).toEqual({ cpu_allowed: '0,2,4-6' });
+      expect(tuning({ cpu_allowed: [3] })).toEqual({ cpu_allowed: '3' });
+      expect(tuning({ cpu_allowed: [1, 3, 5] })).toEqual({ cpu_allowed: '1,3,5' });
+    });
+
+    it('sorts and de-duplicates the reported core ids', () => {
+      expect(tuning({ cpu_allowed: [7, 5, 6, 5] })).toEqual({ cpu_allowed: '5-7' });
+    });
+
+    it('renders an empty cpu_allowed array as the observed "all"', () => {
+      expect(tuning({ cpu_allowed: [] })).toEqual({ cpu_allowed: '' });
+    });
+
+    it('accepts the numeric strings the daemon sometimes emits in the array', () => {
+      expect(tuning({ cpu_allowed: ['5', '6', '7'] })).toEqual({ cpu_allowed: '5-7' });
+    });
+
+    it('drops a cpu_allowed array that is not a clean set of core ids', () => {
+      // Guessing at a malformed affinity misreports which cores an array is
+      // pinned to; absent renders as "unknown", which is honest.
+      expect(tuning({ cpu_allowed: [5, 'six'], init_prio: 50 })).toEqual({ init_prio: 50 });
+      expect(tuning({ cpu_allowed: [-1], init_prio: 50 })).toEqual({ init_prio: 50 });
+      expect(tuning({ cpu_allowed: [1.5], init_prio: 50 })).toEqual({ init_prio: 50 });
+    });
+
+    it('parses the exact live payload of a pinned array end to end', () => {
+      // Verbatim from `xicli raid show -e -n data --format json` on a node
+      // whose array is pinned to cores 5-7.
+      const parsed = parseRaidShow(
+        [
+          {
+            name: 'data',
+            level: '5',
+            devices: [[0, '/dev/nvme10n2', ['online']]],
+            state: ['online', 'initialized'],
+            cpu_allowed: [5, 6, 7],
+            init_prio: 50,
+            sdc_prio: 50,
+            memory_limit_mb: 5000,
+            sched_enabled: 1,
+          },
+        ],
+        DISK_IDS,
+      )[0];
+      expect(parsed?.spec.tuning?.cpu_allowed).toBe('5-7');
+    });
+
     it('omits keys the daemon does not emit, and unreadable values', () => {
       expect(
         tuning({

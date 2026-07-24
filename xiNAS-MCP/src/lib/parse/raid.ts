@@ -336,6 +336,56 @@ function coerceBoolean(value: unknown): boolean | null {
 }
 
 /**
+ * A CPU set as the daemon reports it → the control-path `cpu_allowed` string.
+ *
+ * `raid_show --extended` reports the affinity as a JSON ARRAY of core ids
+ * (`[5, 6, 7]` on the real xiRAID 4.3.x daemon), while api-v1.yaml types
+ * `cpu_allowed` as a string and the TUI validates it against
+ * `^\d+(-\d+)?(,\d+(-\d+)?)*$`. Reading the array as a string therefore
+ * dropped the knob and every client rendered a pinned array's affinity as
+ * "unknown" — the same fake-transport-shape assumption that hid array
+ * capacity until the `size` string was handled.
+ *
+ * Rendered range-compressed, the way `/sys/devices/system/node/nodeN/cpulist`
+ * and xicli write a CPU list, so the value read back is the value an operator
+ * would retype into the modify dialog: `[5,6,7]` → `"5-7"`, `[0,2,4,5,6]` →
+ * `"0,2,4-6"`. An empty array renders `""` — the observed "all", matching the
+ * empty-string rule below.
+ *
+ * A BARE number stays unreadable on purpose: `7` is ambiguous between core 7
+ * and a bitmask, and guessing wrong misreports which cores an array is pinned
+ * to. Only the array shape is unambiguous.
+ */
+function cpuListToString(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  const cpus: number[] = [];
+  for (const entry of value) {
+    const n = coerceNumber(entry);
+    if (n === null || !Number.isInteger(n) || n < 0) return null;
+    cpus.push(n);
+  }
+
+  const ranges: string[] = [];
+  let start: number | null = null;
+  let prev: number | null = null;
+  const flush = (): void => {
+    if (start === null || prev === null) return;
+    ranges.push(start === prev ? `${start}` : `${start}-${prev}`);
+  };
+  for (const cpu of [...new Set(cpus)].sort((a, b) => a - b)) {
+    if (prev !== null && cpu === prev + 1) {
+      prev = cpu;
+      continue;
+    }
+    flush();
+    start = cpu;
+    prev = cpu;
+  }
+  flush();
+  return ranges.join(',');
+}
+
+/**
  * The array's OBSERVED tuning, in ADR-0006 `spec.tuning` names (spec §5).
  *
  * Observation, not desired state: the daemon reports the *effective* values,
@@ -362,7 +412,13 @@ function readTuning(o: Record<string, unknown>): ObservedTuning | null {
   for (const key of TUNING_STRINGS) {
     // An empty cpu_allowed is an observed value ("all"), not an absent one.
     const value = read(key);
-    if (typeof value === 'string') out[key] = value;
+    if (typeof value === 'string') {
+      out[key] = value;
+      continue;
+    }
+    // ...and the real daemon reports it as an array of core ids, not a string.
+    const cpuList = key === 'cpu_allowed' ? cpuListToString(value) : null;
+    if (cpuList !== null) out[key] = cpuList;
   }
 
   return Object.keys(out).length > 0 ? out : null;
