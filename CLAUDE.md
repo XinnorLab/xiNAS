@@ -4,28 +4,45 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-xiNAS is an Ansible-based provisioning framework for high-performance NAS storage nodes. It uses interactive Bash menus (whiptail TUI) to configure and deploy Xinnor xiRAID storage with NVIDIA DOCA-OFED networking and NFS-RDMA exports.
+xiNAS is an Ansible-based provisioning framework for high-performance NAS storage nodes. Bash/whiptail menus drive the install; a Python/Textual TUI (`xinas_menu/`) and a TypeScript control path (`xiNAS-MCP/`) drive day-2 management. Deploys Xinnor xiRAID storage with NVIDIA DOCA-OFED networking and NFS-RDMA exports.
 
 **Target Platform:** Ubuntu 22.04/24.04 LTS
 
 ## Language
 
 **All repository artifacts are written in English, regardless of the
-language used in the working session.** This is binding for every
-contribution:
-
-- **Documentation** — every file under `docs/`, all READMEs, specs,
-  ADRs, plans, and changelog entries.
-- **Code comments** — inline comments, docstrings, and any explanatory
-  text embedded in source (Bash, Python, YAML, Ansible, Jinja2, etc.).
-- **Git metadata** — commit messages, branch names, tags, PR titles and
-  descriptions, and issue text.
-
-A conversation may happen in any language, but anything committed to the
-repository must be in English so the codebase stays consistent for all
-contributors.
+language used in the working session.** Binding for documentation, code
+comments and docstrings, commit messages, branch names, tags, PR titles
+and bodies, and issue text. A conversation may happen in any language;
+anything committed to the repository must be in English.
 
 ## Key Commands
+
+### Verification
+
+Run these before proposing a change is done — each mirrors a blocking CI
+job in `.github/workflows/ci.yml`. The path arguments matter: they are
+repeated verbatim across five jobs, and `ruff check .` does not give the
+same result.
+
+```bash
+pytest                                                     # or: pytest --cov=xinas_history --cov-fail-under=20
+ruff check          xinas_menu xinas_history xiNAS-MCP/nfs-helper
+ruff format --check xinas_menu xinas_history xiNAS-MCP/nfs-helper
+pyright             xinas_menu xinas_history xiNAS-MCP/nfs-helper
+ansible-lint collection/roles/     # needs: ansible-galaxy collection install community.general ansible.posix
+yamllint -c .yamllint.yml .
+npx --yes markdownlint-cli2 'docs/**/*.md'
+```
+
+TypeScript control path (from `xiNAS-MCP/`, Node ≥20):
+
+```bash
+npm run typecheck && npm run lint && npm run format:check
+npm test && npm run test:contracts
+```
+
+Dev dependencies: `pip install -e '.[dev]'`.
 
 ### Running Playbooks
 ```bash
@@ -69,27 +86,25 @@ the skill and publisher script remain for manual invocation.)
 User → Interactive Menu Scripts → Preset/Config Files → Ansible Playbooks → System
 ```
 
-### Layer Structure
-
-1. **Interactive Layer** - Bash scripts with whiptail TUI (`startup_menu.sh`, `configure_*.sh`)
-2. **Configuration Layer** - YAML presets in `/presets/{default,xinnorVM}/`
-3. **Orchestration Layer** - Ansible playbooks in `/playbooks/`
-4. **Implementation Layer** - Ansible roles in `/collection/roles/`
-
 ### Playbook Execution Order (site.yml)
-common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace → raid_fs → exports → nfs_server → perf_tuning
+common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace → raid_fs → exports →
+nfs_server → xinas_node_build → xinas_api → xinas_agent → xinas_nfs_helper → xinas_mcp →
+xinas_menu → xinas_history → perf_tuning → motd
 
 ### Key Directories
 
 | Directory | Purpose |
 |-----------|---------|
-| `playbooks/` | Ansible playbooks (site.yml, common.yml, doca_ofed_install.yml) |
-| `collection/roles/` | 10 Ansible roles (common, doca_ofed, xiraid_classic, nvme_namespace, raid_fs, exports, nfs_server, perf_tuning, net_controllers, xiraid_exporter) |
+| `playbooks/` | Ansible playbooks (site.yml, common.yml, doca_ofed_install.yml, uninstall.yml) |
+| `collection/roles/` | 20 Ansible roles — per-role options in `collection/roles/<role>/README.md` |
+| `xinas_menu/` | Python/Textual management TUI + health engine (day-2 management surface) |
+| `xiNAS-MCP/` | TypeScript control path — `xinas-api` (REST + `/mcp`), `xinas-agent`, `xinasctl` CLI, `xinas-mcp-stdio`. Node ≥20, biome + vitest |
+| `xinas_history/` | Configuration history & rollback library (Python) — snapshots, drift detection, transactional runner |
+| `tests/` | pytest suite — TUI screens, installer bash contracts, Ansible template rendering |
 | `presets/` | Deployment profiles with role configs and templates |
 | `inventories/` | Ansible inventory (default: localhost) |
 | `client_repo/` | Standalone NFS client package |
-| `xinas_history/` | Configuration history & rollback library (Python) — snapshots, drift detection, transactional runner |
-| `docs/` | Design docs and specs, organized by area: `Installer/`, `Storage/`, `MCP/`, `Network/`, `Notifications/`, `HealthCheck/`, `config-history/`, `control-path/`, `healthcheck-tunables/`, `troubleshooting/`, `plans/` |
+| `docs/` | Design docs and specs, organized by area (see table below) |
 
 ### Specs and design docs (`docs/`)
 
@@ -100,16 +115,17 @@ spec dump — every doc belongs to an area.
 |-----------|----------------|
 | `docs/Installer/` | Install-time / Ansible-driven behavior: `spec.md` (preset + playbook + role map), `network-spec.md`, `raid-spec.md`, `fs-exports-spec.md`, `uninstall-spec.md` (uninstaller contract), `update-spec.md` (GitHub-Releases-only install + update contract) |
 | `docs/Storage/` | Day-2 storage management surface (TUI screens, helpers, gRPC): `raid-management-spec.md`, `fs-shares-management-spec.md` |
-| `docs/Management/` | Day-2 System management screens: `user-management-spec.md` (User Management TUI — accounts, lock status, groups, quota), `audit-log-spec.md` (View Audit Log — merges the local TUI trail with the control-path `GET /audit` trail) |
-| `docs/MCP/` | MCP server spec set: `REQUIREMENTS.md`, `spec-core.md`, `spec-tools.md`, `spec-middleware.md`, `spec-config-history.md`, `spec-mail.md`, `spec-nfs-helper.md`, `spec-os.md`, `spec-server.md`, `modules.md` |
+| `docs/Management/` | Day-2 System management screens: `user-management-spec.md` (User Management TUI — accounts, lock status, groups, quota), `audit-log-spec.md` (View Audit Log — merges the local TUI trail with the control-path `GET /audit` trail), `xiraid-exporter-spec.md` (Integrations → xiRAID Exporter; the package/unit name split and the unit-name resolution contract) |
+| `docs/MCP/` | LEGACY MCP server spec set — reference only, superseded by ADR-0010 / `s8-clients-spec.md` |
 | `docs/Network/` | Cross-cutting network management (netplan ownership, PBR, day-2 IP edits): `spec-network-management.md` |
 | `docs/Notifications/` | Email / alerting pipelines (xiNAS SMTP + xiRAID sendmail): `spec-email-notifications.md` |
 | `docs/HealthCheck/` | Individual health-check designs (one file per check, e.g. `pcie-link-check.md`) |
 | `docs/config-history/` | `xinas_history` library design (`requirements.md`, `architecture.md`, `specs.md`, `grpc-api-reference.md`) |
-| `docs/control-path/` | Phase 0 Control Path foundation: `phase0-requirements.md` (live contract) and `adr/` (architecture decision records — `0001-api-surface.md`, …). The companion implementation plan lives at `docs/plans/2026-05-26-phase0-control-path-plan.md`. ADRs supersede earlier plan/spec language where they conflict |
+| `docs/control-path/` | Control Path foundation: `phase0-requirements.md`, the `sN-*-spec.md` slice specs, `api-v1.yaml` (CI-gated, see Important Notes), and `adr/` (architecture decision records `0001`–`0017`). ADRs supersede earlier plan/spec language where they conflict |
 | `docs/healthcheck-tunables/` | Reference docs for tunable parameters (sysctl, filesystem, perf) |
 | `docs/troubleshooting/` | Postmortems / known-issue writeups (one file per incident) |
 | `docs/plans/` | Dated implementation plans (`YYYY-MM-DD-<topic>-plan.md`, `-design.md`). Append-only history of intent — do **not** edit landed plans to reflect later changes; the live spec in the topic subfolder is the source of truth |
+| `docs/superpowers/` | Dated design/plan/test artifacts from skill-driven work, split into `plans/`, `specs/`, `tests/`. Same append-only rule as `docs/plans/` |
 
 #### Spec-first rule
 
@@ -140,44 +156,31 @@ test-only changes). When in doubt, write the spec.
 
 ### Configuration History (`xinas_history/`)
 
-Python library providing snapshot-based configuration tracking and rollback for xiNAS:
+Snapshot-based configuration tracking and rollback: captures config files
+plus runtime state (RAID, mounts, exports, services) before and after a
+change, classifies rollback risk (`destroying_data` > `changing_access` >
+`non_disruptive`), and wraps changes in a transactional
+lock → preflight → snapshot → execute → validate → auto-rollback → release
+sequence. Store: `/var/lib/xinas/config-history/`. CLI:
+`python3 -m xinas_history snapshot list|show|create|diff`, `gc run`,
+`status` (JSON output). Design docs: `docs/config-history/`.
 
-- **Snapshots**: Captures config files + runtime state (RAID, mounts, exports, services) before/after changes
-- **Rollback classification**: Three risk levels — `destroying_data` > `changing_access` > `non_disruptive`
-- **Transactional runner**: 8-step sequence (lock → preflight → snapshot → execute → validate → mark → auto-rollback → release)
-- **Drift detection**: Checksum comparison of `/etc/exports`, `/etc/nfs.conf`, netplan against last applied snapshot
-- **Store**: `/var/lib/xinas/config-history/` with atomic writes, `baseline/` + `snapshots/{id}/`
-- **CLI**: `python3 -m xinas_history snapshot list|show|create|diff`, `gc run`, `status` (JSON output for MCP bridge)
-- **Consumers**: Textual TUI screens (`xinas_menu/screens/config_history.py`, `snapshot_detail.py`), MCP tools (`config.*`), installer hooks
-- **Deployment**: Ansible role `collection/roles/xinas_history/` — copies package, installs PyYAML, creates CLI wrapper
+### MCP surface
 
-### MCP Server Documentation
+**The standalone MCP server was retired (ADR-0010, S8.)** The MCP transport
+now lives inside `xinas-api.service` — the `/mcp` endpoint plus the
+`xinas-mcp-stdio` adapter, catalog-generated tools, apply gated by
+`mcp.allow_apply`. Live contract:
+`docs/control-path/adr/0010-clients-mcp-cli-tui.md` and
+`docs/control-path/s8-clients-spec.md`. The spec set under `docs/MCP/`
+describes the legacy server and is kept for reference only — do not treat
+it as current.
 
-> **Superseded (S8, ADR-0010):** the standalone MCP server was retired.
-> The MCP transport now lives inside `xinas-api.service`
-> (`/mcp` endpoint + the `xinas-mcp-stdio` adapter; catalog-generated
-> tools; apply gated by `mcp.allow_apply`). The docs below describe the
-> LEGACY server and are kept for reference; see
-> `docs/control-path/adr/0010-clients-mcp-cli-tui.md` and
-> `docs/control-path/s8-clients-spec.md` for the live contract.
+### Presets
 
-MCP (Model Context Protocol) server specification and design docs live under `docs/MCP/`.
-
-| File | Purpose |
-|------|---------|
-| `docs/MCP/REQUIREMENTS.md` | Functional requirements — 9 tool namespaces (system, network, health, disk, RAID, share, auth, job, config) |
-| `docs/MCP/spec-tools.md` | Tool summary table (55 tools), preflight logic, health profiles, error scenarios |
-| `docs/MCP/spec-middleware.md` | RBAC permission matrix, audit logging, locking, idempotency, plan/apply |
-| `docs/MCP/spec-config-history.md` | Config-history tools spec (6 tools), subprocess protocol for `xinas_history` backend |
-| `docs/MCP/spec-core.md` | Core server architecture, transport, error model |
-| `docs/MCP/modules.md` | Module map, dependency graph, file count summary (42 files) |
-
-### Preset Structure
-Each preset directory (`presets/default/`, `presets/xinnorVM/`) contains:
-- `playbook.yml` - Role execution order and preset-specific variables
-- `raid_fs.yml` - RAID array and XFS filesystem definitions
-- `nfs_exports.yml` - NFS export rules
-- `netplan.yaml.j2` - Network interface template
+Each preset directory (`presets/default/`, `presets/xinnorVM/`) holds
+`playbook.yml` (role order + preset variables), `raid_fs.yml`,
+`nfs_exports.yml`, and `netplan.yaml.j2`.
 
 ## Update rebuild markers (`Requires-Rebuild:` trailer)
 
@@ -186,36 +189,18 @@ The in-TUI update flow (`u` shortcut, Management → Check for Updates, MCP/Adva
 If a commit changes anything that requires an Ansible role to re-run on the host to take effect (systemd unit files, package installs, sysctl/perf tuning, kernel module config, NFS server flags, RAID layout, network config that needs `net_controllers` to re-apply, etc.), **add a Git trailer to the commit message**:
 
 ```
-Requires-Rebuild: <ansible_tag>[, <ansible_tag>...]
-```
-
-- `<ansible_tag>` is a tag accepted by `ansible-playbook playbooks/site.yml --tags <tag>` — usually the role name (`nfs_server`, `perf_tuning`, `net_controllers`, `xinas_mcp`, `xinas_menu`, …).
-- Comma-separate multiple tags. Multiple trailers across multiple commits are aggregated by the TUI.
-- The special value `all` means run the full `site.yml` with no `--tags` filter; use it only when the change spans many roles.
-- **Do not add this trailer for code-only changes** (Python TUI logic, MCP server Python code, docs, plan/spec updates, test fixtures). The plain release-tag checkout + `xinas-nfs-helper` restart that already runs on every update is sufficient — adding a trailer here just trains users to click past an unnecessary Ansible warning.
-- Parsed case-insensitively from the **release notes** (the release body aggregates the trailers from the commits it ships). Backfilling old commit messages has no effect.
-- Tags are **unioned across every published release newer than the installed version**, not just the latest one — a host jumping 3.6.0 → 3.6.2 still runs the roles 3.6.1 asked for.
-- The trailer must **start a line** (leading `>` blockquote markers, `*`/`_` emphasis, backticks and whitespace are tolerated and stripped). A trailer that fails to parse is indistinguishable from no trailer, so the Ansible step is silently skipped — that regression shipped in v3.6.0 and v3.6.1. Prefer a bare, column-0 line. See `docs/Installer/update-spec.md` §*Rebuild trailers*.
-
-Examples:
-
-```
 fix(nfs_server): bump RPC thread count to 64
 
 Requires-Rebuild: nfs_server
 ```
 
-```
-feat(net): add lossless RoCE tuning
-
-Requires-Rebuild: net_controllers, perf_tuning
-```
-
-```
-chore: re-template every role after defaults overhaul
-
-Requires-Rebuild: all
-```
+- `<ansible_tag>` is a tag accepted by `ansible-playbook playbooks/site.yml --tags <tag>` — usually the role name (`nfs_server`, `perf_tuning`, `net_controllers`, `xinas_mcp`, `xinas_menu`, …).
+- Comma-separate multiple tags (`Requires-Rebuild: net_controllers, perf_tuning`). Multiple trailers across multiple commits are aggregated by the TUI.
+- The special value `all` means run the full `site.yml` with no `--tags` filter; use it only when the change spans many roles.
+- **Do not add this trailer for code-only changes** (Python TUI logic, MCP server code, docs, plan/spec updates, test fixtures). The plain release-tag checkout + `xinas-nfs-helper` restart that already runs on every update is sufficient — adding a trailer here just trains users to click past an unnecessary Ansible warning.
+- Parsed case-insensitively from the **release notes** (the release body aggregates the trailers from the commits it ships). Backfilling old commit messages has no effect.
+- Tags are **unioned across every published release newer than the installed version**, not just the latest one — a host jumping 3.6.0 → 3.6.2 still runs the roles 3.6.1 asked for.
+- The trailer must **start a line** (leading `>` blockquote markers, `*`/`_` emphasis, backticks and whitespace are tolerated and stripped). A trailer that fails to parse is indistinguishable from no trailer, so the Ansible step is silently skipped — that regression shipped in v3.6.0 and v3.6.1. Prefer a bare, column-0 line. See `docs/Installer/update-spec.md` §*Rebuild trailers*.
 
 Runtime behaviour of the update flow:
 1. When a rebuild is required, the confirm dialog names the role(s) that will run before the user accepts.
@@ -267,8 +252,7 @@ To cut a release (see also `CHANGELOG.md`):
    `pyproject.toml` derives from it). Pick the next patch for
    backward-compatible changes, minor/major otherwise.
 2. Update the changelog / release notes (`CHANGELOG.md`).
-3. Run the tests, linters, and basic checks (`pytest`,
-   `ruff check`, `ruff format --check`).
+3. Run the tests, linters, and basic checks (see [Verification](#verification)).
 4. Create a git tag in `vX.Y.Z` form.
 5. Create a GitHub Release from that tag (`gh release create vX.Y.Z`).
 6. Attach the release assets the project uses (`install.sh`,
@@ -284,13 +268,22 @@ user-facing install or production-update path. If you add a
 dev/nightly path, keep it explicitly separated from the production
 flow and off by default.
 
+## Repo Etiquette
+
+- **Commits** follow Conventional Commits — `type(scope): subject`, e.g.
+  `fix(installer): validate the tag before the bootstrap clone`,
+  `docs(plans): WS3 landed`. Common types: `feat`, `fix`, `refactor`,
+  `test`, `docs`, `chore`. Releases are `chore(release): vX.Y.Z`.
+- **Branches** are `<type>/<slug>` — `fix/doca-ofed-flush-handlers`,
+  `feat/xiraid-only-shares`, `docs/…`.
+
 ## Important Notes
 
 - **Shell vs. Python TUI scope** — There are two distinct user surfaces. Treat them differently:
   - **Installer / bootstrap (bash, still active):** `prepare_system.sh`, `startup_menu.sh`, `simple_menu.sh`, and the shared `lib/menu_lib.sh`. These run before the Python TUI is installed and remain the supported install path. Bug fixes, polish, and improvements to the install flow itself are welcome here.
   - **Post-install management (Python only):** `post_install_menu.sh`, `configure_*.sh`, and any other day-2 management/configuration UI. These are deprecated. Do NOT add new features, settings screens, or configuration UIs to these shell scripts — implement them in the Python-based `xinas_menu/` package (Textual TUI) instead.
   - When a feature touches both surfaces (e.g. how `ansible-playbook` output is presented during install), it is acceptable — and expected — to update both the bash installer side and the Python TUI side so they stay in feel-parity.
-- **No build/test system** - This is infrastructure-as-code; validation occurs through Ansible modules
+- **`docs/control-path/api-v1.yaml` is CI-gated** — it looks like a doc but is not. Spectral lints it against `.spectral.yaml`, and `oasdiff` fails the PR on any **breaking** schema change relative to the base branch. Edit it deliberately, and expect a red PR if you remove or tighten an existing field.
 - **yq v4 required** - Shell scripts use mikefarah/yq (not the Python jq wrapper). Ensure `/usr/local/bin/yq` is in PATH
 - **Roles are idempotent by default** - Re-running `site.yml` over a healthy array converges (no reformat, no namespace rebuild). Destroying and rebuilding storage requires the explicit `xinas_storage_reset: true` (with an interactive `YES`, or `nvme_skip_cleanup_confirmation: true` for automation). The legacy `xfs_force_mkfs` / `nvme_use_existing_namespaces` knobs are disarmed and no longer trigger wipes on their own. See [docs/Installer/raid-spec.md](docs/Installer/raid-spec.md) §11.
 - **License stored at `/tmp/license`** - Cleared on reboot; enter via menu before deployment
@@ -300,25 +293,19 @@ flow and off by default.
 
 ## Automatic NVMe Namespace Management
 
-The `nvme_namespace` role provides automatic device discovery and namespace configuration:
+The `nvme_namespace` role detects and excludes the system drive, rebuilds
+namespaces on every other NVMe controller (n1: small namespace, 500 MB by
+default, for the XFS log device; n2: remaining capacity for data), and
+generates the `xiraid_arrays` / `xfs_filesystems` facts consumed by
+`raid_fs` — RAID 10 from the small namespaces, RAID 5 from the large ones.
 
-1. Detects system drive (root/boot/EFI partitions) and excludes it
-2. Enumerates all other NVMe controllers as data drives
-3. Rebuilds namespaces on data drives:
-   - n1: Small namespace (500MB default) for XFS log device
-   - n2: Large namespace (remaining capacity) for data
-4. Generates `xiraid_arrays` and `xfs_filesystems` facts for `raid_fs` role:
-   - RAID 10 from small namespaces (log array)
-   - RAID 5 from large namespaces (data array)
-
-Enable/disable via `nvme_auto_namespace: true/false` in `collection/roles/nvme_namespace/defaults/main.yml` or use the "Auto-Detect" option in `configure_raid.sh`.
+Toggle via `nvme_auto_namespace: true/false` in
+`collection/roles/nvme_namespace/defaults/main.yml`, or the "Auto-Detect"
+option in `configure_raid.sh`. Full behavior:
+[docs/Installer/raid-spec.md](docs/Installer/raid-spec.md).
 
 ## Variable Priority
 
 1. CLI/inventory variables (highest)
 2. Preset YAML files (loaded by menu scripts)
 3. Role `defaults/main.yml` (lowest)
-
-## Role Documentation
-
-Each role has its own README at `collection/roles/<role>/README.md` with configuration options and examples.
