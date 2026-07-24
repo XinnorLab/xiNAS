@@ -3,6 +3,7 @@ refresh -> restart), replacing the duplicated _apply_update() bodies in
 xinas_menu/app.py (XiNASApp) and xinas_menu/screens/startup/startup_menu.py
 (StartupApp). This path had ZERO test coverage before this task.
 """
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 

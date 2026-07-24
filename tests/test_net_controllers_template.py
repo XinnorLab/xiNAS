@@ -73,9 +73,7 @@ def test_udev_rename_reports_whether_it_changed_anything():
     The script exits 0 on every no-op path, so `rc == 0` reported "changed" even
     when it wrote nothing.
     """
-    tasks = yaml.safe_load(
-        (REPO / "collection/roles/doca_ofed/tasks/main.yml").read_text()
-    )
+    tasks = yaml.safe_load((REPO / "collection/roles/doca_ofed/tasks/main.yml").read_text())
     task = next(
         t for t in tasks if t.get("name") == "Generate UDEV rules for InfiniBand interfaces"
     )
@@ -84,9 +82,7 @@ def test_udev_rename_reports_whether_it_changed_anything():
 
 
 def test_udev_script_emits_outcome_markers():
-    script = (
-        REPO / "collection/roles/doca_ofed/files/configure_ib_udev.sh"
-    ).read_text()
+    script = (REPO / "collection/roles/doca_ofed/files/configure_ib_udev.sh").read_text()
     assert "/opt/provision" not in script
     for marker in ("noop:", "changed:", "unchanged:"):
         assert marker in script, f"missing {marker!r} outcome marker"

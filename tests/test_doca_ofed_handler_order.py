@@ -98,10 +98,7 @@ def test_net_controllers_runs_after_doca_ofed(playbook: Path) -> None:
         pytest.skip(f"{playbook} not present")
     plays = yaml.safe_load(playbook.read_text()) or []
     for play in plays:
-        names = [
-            role["role"] if isinstance(role, dict) else role
-            for role in play.get("roles", [])
-        ]
+        names = [role["role"] if isinstance(role, dict) else role for role in play.get("roles", [])]
         if "doca_ofed" in names and "net_controllers" in names:
             assert names.index("doca_ofed") < names.index("net_controllers"), names
             return

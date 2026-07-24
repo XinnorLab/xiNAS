@@ -2,6 +2,7 @@
 is fixed at XinnorLab/xiNAS everywhere (docs/Installer/update-spec.md
 "Release-detection source is fixed"). XINAS_UPDATE_CHANNEL is unaffected.
 """
+
 import subprocess
 from pathlib import Path
 
@@ -25,7 +26,9 @@ def test_env_var_removed_from_all_five_surfaces():
 def test_no_grep_hits_repo_wide_on_the_five_surfaces():
     proc = subprocess.run(
         ["grep", "-l", "XINAS_UPDATE_REPO", *_SURFACES],
-        cwd=REPO, capture_output=True, text=True,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 1, proc.stdout  # grep exits 1 when no matches
 

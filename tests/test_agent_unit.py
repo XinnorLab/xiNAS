@@ -30,9 +30,7 @@ def _directive(name: str) -> list[str]:
     """Values of every ``name=`` directive, comments excluded."""
     prefix = f"{name}="
     return [
-        ln[len(prefix) :].strip()
-        for ln in UNIT.read_text().splitlines()
-        if ln.startswith(prefix)
+        ln[len(prefix) :].strip() for ln in UNIT.read_text().splitlines() if ln.startswith(prefix)
     ]
 
 

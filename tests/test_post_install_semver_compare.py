@@ -2,6 +2,7 @@
 available' by semver, not string inequality (a string compare offers
 downgrades). It sources lib/menu_lib.sh's _semver_gt.
 """
+
 import re
 from pathlib import Path
 

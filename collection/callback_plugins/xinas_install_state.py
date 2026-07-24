@@ -28,9 +28,7 @@ try:
 except ImportError:  # allow importing _StateWriter in unit tests without ansible
     CallbackBase = object
 
-STATE_PATH = os.environ.get(
-    "XINAS_INSTALL_STATE_PATH", "/var/lib/xinas/install-state.json"
-)
+STATE_PATH = os.environ.get("XINAS_INSTALL_STATE_PATH", "/var/lib/xinas/install-state.json")
 
 
 class _StateWriter:
@@ -75,9 +73,7 @@ class _StateWriter:
     def _entry(self, role):
         idx = self._index.get(role)
         if idx is None:
-            self.state["roles"].append(
-                {"role": role, "status": "running", "ts": self._clock()}
-            )
+            self.state["roles"].append({"role": role, "status": "running", "ts": self._clock()})
             self._index[role] = len(self.state["roles"]) - 1
             idx = self._index[role]
         return self.state["roles"][idx]
