@@ -6,6 +6,129 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.8.0] - 2026-07-24
+
+> **Requires-Rebuild: xinas_node_build** — the RAID observation fixes and
+> the share-create preflight gate are agent/API TypeScript, and a
+> code-only update does not rebuild `dist/`. A host must re-run that role
+> once on update to pick up the rebuilt bundle. Nothing in this release
+> touches the network, storage layout, or systemd units.
+
+An observation-correctness cycle. Every fix below is a case where the TUI
+printed a confident value it had never actually read — an unread tuning
+knob rendered as `unlimited`, a member state the daemon did report
+collapsed into `unknown`, a healthy exporter reported `inactive`, a
+carrier-less loopback drawn as a fault. The new NFS restriction is the
+one behavior change.
+
+### Added
+
+- **NFS shares are restricted to xiRAID-backed filesystems.** Exporting a
+  path off a xiRAID array was accepted end-to-end, which let an operator
+  publish the system disk. The TUI's Add Share now offers only xiRAID
+  mount points and their subfolders, and the control path enforces the
+  same rule independently: `share.create` runs a live, fail-closed
+  preflight in `buildShareCreate` requiring the export path to sit at or
+  under a `/dev/xi_*` mount, rejecting anything else with
+  `EXPORT_PATH_NOT_ON_XIRAID`. A `findmnt` failure is distinguished from
+  "no xiRAID filesystems present" so a probe error cannot read as an
+  empty allowlist. Specs: `docs/Storage/fs-shares-management-spec.md`,
+  `docs/control-path/s3-nfs-executor-spec.md`.
+
+### Fixed
+
+- **Array tuning was rendered entirely from defaults, never from the
+  daemon.** Extended Details showed `Memory Limit | unlimited` while
+  `apply_tuning` rejected the same edit with "RAID already has '2048'
+  reserved MiBs". Three independent breaks stacked: the collector's
+  `raid_show` omitted `extended: true`, so the daemon never emitted the
+  tuning surface; `lib/parse/raid.ts` had no tuning mapping, so
+  `spec.tuning` stayed empty regardless; and the renderer read each knob
+  with a falsy-default (`memory_limit` → `unlimited`, `memory_prealloc` →
+  `disabled`, every boolean → `Disabled`). A knob nobody read printed as
+  the most reassuring possible value. The parser now maps the tuning
+  surface, renames the daemon's unit-suffixed fields to their ADR-0006
+  names, and **omits** any knob the daemon did not emit; the renderer
+  prints those as `unknown`, keyed off `is None` rather than falsiness so
+  a real `0` still means unlimited/disabled. The Resync row is gone —
+  `resync_enabled` is create-only and never reported, so it could only
+  ever have been a guess.
+
+- **A daemon answering with object-shaped members parsed to a
+  member-less array.** The member-path reader handled string and
+  `[idx, path, [states]]` tuple shapes but not the per-device object
+  (`{path|device|name: …}`) form the extended payload can carry — and the
+  create wizard reads a member-less array as "those drives are free".
+  Path extraction moved to a shared `devicePath()` helper. Same change
+  restores the SDC Priority row (parsed and specced, missing only from
+  the renderer) and relabels the Merge Read/Write Max knobs `(KB)` →
+  `(us)`, the last place still mislabelling a time as a size.
+
+- **A degraded array member was invisible in the array overview.**
+  `parseRaidShow` hardcoded `status.member_states: []`, discarding the
+  states the daemon reports inside each `raid_show` device tuple, so the
+  Devices line counted every member as unknown and collapsed to a bare
+  "N total". The parser now reads a per-member `{index, device, states}`
+  record and maps each device path back to its control-path Disk id, so
+  the overview renders "N total | k online | j degraded | i offline".
+  Observation only: a state the daemon never reported stays absent rather
+  than becoming a fabricated `online`.
+
+- **A healthy xiRAID exporter was reported as inactive, permanently.**
+  The upstream `.deb` is hyphenated as a package but installs its unit as
+  `xiraid_exporter.service` (underscore); older builds shipped the
+  hyphenated spelling, so both exist in the field. Every xiNAS call site
+  assumed the hyphen, and because `systemctl show` exits 0 reporting
+  `ActiveState=inactive` for an unknown unit, a wrong name was
+  indistinguishable from a stopped service — so Integrations → xiRAID
+  Exporter showed "inactive" for an exporter actively serving metrics on
+  `:9827`, its Restart action restarted a non-existent unit and reported
+  success (leaving a false status that could never be cleared), both
+  health engines flagged the exporter as down, and the role's `service:`
+  task would fail outright. The unit name is now resolved at runtime by
+  probing `LoadState`, which distinguishes installed-but-stopped from
+  unknown where `ActiveState` conflates them. `healthcheck.sh` embeds a
+  standalone program that cannot import the resolver, so it carries a
+  byte-identical copy pinned by a parity test; the uninstall role sweeps
+  both spellings instead of guessing. Spec:
+  `docs/Management/xiraid-exporter-spec.md`.
+
+- **Loopback was drawn as a fault.** The kernel reports
+  `operstate=unknown` for carrier-less devices, so `lo` arrived from
+  `GET /network/interfaces` as `link_state: unknown` and the overview
+  rendered `[??] lo / State: unknown`. Normalized to `up` for loopback
+  devices only (identified by `/sys/class/net/<if>/type == 772`, falling
+  back to the name). A loopback explicitly reported down still renders
+  down, and a non-loopback with an unknown state keeps its `[??]` marker.
+
+- **An interface whose driver cannot report link speed rendered as
+  `-1M`.** `/sys/class/net/<iface>/speed` reports `-1` (or `0` on some
+  drivers) when the speed is unknown, and an interface can be
+  operationally up in that state; the main-page mini-status and System
+  Status formatted the raw value while the network overview already
+  showed `[----] ---`. New `format_link_speed()` / `read_link_speed()`
+  helpers treat anything non-positive, unparseable, or read from a
+  missing/EINVAL attribute as unknown, and both screens keep their own
+  placeholder.
+
+### Changed
+
+- **`CLAUDE.md` refreshed against the current tree.** It claimed "No
+  build/test system" against 15 blocking CI jobs, listed 9 roles in the
+  playbook order where `site.yml` has 17 (omitting the entire
+  `xinas_node_build` → `xinas_api` → `xinas_agent` control-path block),
+  said 10 Ansible roles where there are 20, and omitted `xinas_menu/`,
+  `xiNAS-MCP/`, and `tests/` from Key Directories. Replaced with a
+  Verification section carrying the exact CI commands — including the
+  three-path argument list that five jobs repeat verbatim and that
+  `ruff check .` does not reproduce. Binding policy (release/update,
+  spec-first, rebuild-trailer rules, netplan and storage-reset gotchas)
+  is unchanged.
+
+- **`ruff format` drift repaired under `tests/` and `collection/`.** CI
+  format-checks only three paths, so drift accumulated unnoticed in
+  7 files and blocked the repo-wide release gate. Formatting only.
+
 ## [3.7.0] - 2026-07-11
 
 > **Requires-Rebuild: xinas_menu, xinas_node_build** — the helper-sync
