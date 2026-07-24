@@ -16,6 +16,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Label
 
 from xinas_menu.apptype import XiNASAppMixin
+from xinas_menu.utils.formatting import read_link_speed
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -264,12 +265,8 @@ def _build_mini_status() -> str:
                 state = "unknown"
             icon = f"{_GRN}●{_NC}" if state == "up" else f"{_RED}○{_NC}"
 
-            # Speed
-            try:
-                speed = int((iface / "speed").read_text().strip())
-                speed_str = f"{speed // 1000}G" if speed >= 1000 else f"{speed}M"
-            except Exception:
-                speed_str = "—"
+            # Speed ("-1" when the driver cannot tell — render as unknown)
+            speed_str = read_link_speed(iface)
 
             # IP address
             try:

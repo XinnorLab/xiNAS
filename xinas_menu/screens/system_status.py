@@ -17,7 +17,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Label
 
 from xinas_menu.apptype import XiNASAppMixin
-from xinas_menu.utils.formatting import grpc_short_error
+from xinas_menu.utils.formatting import grpc_short_error, read_link_speed
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 
@@ -203,11 +203,8 @@ def _build_fallback_status() -> str:
                 state = "unknown"
             icon = f"{GRN}●{NC}" if state == "up" else f"{RED}○{NC}"
 
-            try:
-                speed = (iface / "speed").read_text().strip()
-                speed_str = f"{int(speed) // 1000}G" if int(speed) >= 1000 else f"{speed}M"
-            except Exception:
-                speed_str = "?"
+            # "-1" when the driver cannot tell the link speed — render as unknown
+            speed_str = read_link_speed(iface, unknown="?")
 
             try:
                 r = subprocess.run(

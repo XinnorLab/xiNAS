@@ -69,6 +69,28 @@ normalizes `unknown` → `up` for loopback devices and shows the normal
 the name `lo` when sysfs is unreadable. A loopback explicitly reported
 `down` is still rendered as down.
 
+### Link speed rendering
+
+`/sys/class/net/<iface>/speed` reports `-1` when the driver cannot report a
+link speed, and some drivers report `0`; the attribute is also absent or
+returns `EINVAL` on InfiniBand, bonded, and down interfaces. An interface can
+be `up` and still have no readable speed, so a non-positive or unparseable
+value is **unknown**, not a speed — no screen may echo the sentinel back as a
+value (the main-page mini-status printed `-1M`).
+
+| Surface | Known speed | Unknown speed |
+|---------|-------------|---------------|
+| Main page mini-status | `100G`, `1000M` | `—` |
+| System Status → NETWORK | `100G`, `1000M` | `?` |
+| Network overview | `[****] 100Gb/s` | `[----] ---` |
+
+The compact `<N>G` / `<N>M` label and the unknown fallback are produced by
+`xinas_menu.utils.formatting.format_link_speed()` /
+`read_link_speed(iface_dir, unknown=…)`; the network overview keeps its own
+verbose `_format_speed()` / `_speed_bar()` pair, which already treats
+`speed <= 0` as unknown. The `speed` health check separately SKIPs a
+negative value instead of failing it as a low speed.
+
 ---
 
 ## IP Address Assignment
