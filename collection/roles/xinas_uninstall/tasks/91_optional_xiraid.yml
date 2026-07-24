@@ -2,11 +2,17 @@
 # Optional phase 91 — remove the xiRAID package, repo, and DKMS module.
 # Gated by uninstall_remove_xiraid in tasks/main.yml.
 
+# The exporter .deb installs `xiraid_exporter.service` (underscore); older
+# builds shipped the hyphenated unit. Sweep both — a name that does not exist
+# is tolerated by failed_when: false, so teardown never depends on guessing.
 - name: "XiRAID | stop and disable xiraid-exporter"
   ansible.builtin.systemd:
-    name: xiraid-exporter.service
+    name: "{{ item }}"
     state: stopped
     enabled: false
+  loop:
+    - xiraid_exporter.service
+    - xiraid-exporter.service
   register: _xiraid_exp_stop
   failed_when: false
   changed_when: _xiraid_exp_stop.changed | default(false)

@@ -34,16 +34,25 @@ _MENU = [
     MenuItem("0", "Back"),
 ]
 
-_SERVICES = [
-    "nfs-server",
-    "xiraid-server",
-    "xiraid-exporter",
-    "xinas-nfs-helper",
-    "xinas-api",
-    "xinas-agent",
-    "nfsdcld",
-    "rpcbind",
-]
+
+def _services() -> list[str]:
+    """Units listed on the Service Status view.
+
+    The xiRAID exporter unit is resolved at call time rather than hardcoded —
+    the .deb spells it with an underscore, older builds with a hyphen.
+    """
+    from xinas_menu.utils.service_ctl import xiraid_exporter_unit
+
+    return [
+        "nfs-server",
+        "xiraid-server",
+        xiraid_exporter_unit(),
+        "xinas-nfs-helper",
+        "xinas-api",
+        "xinas-agent",
+        "nfsdcld",
+        "rpcbind",
+    ]
 
 
 class QuickActionsScreen(XiNASAppMixin, Screen):
@@ -141,7 +150,7 @@ class QuickActionsScreen(XiNASAppMixin, Screen):
             "\033[0m",
         )
         lines = [f"{BLD}{CYN}=== Service Status ==={NC}", ""]
-        for svc in _SERVICES:
+        for svc in await loop.run_in_executor(None, _services):
             state = await loop.run_in_executor(None, lambda s=svc: ctl.state(s))
             if state.is_active:
                 icon = f"{GRN}*{NC}"

@@ -13,9 +13,20 @@
     state: present
   tags: [xiraid_exporter, install]
 
+- name: Gather service facts to resolve the exporter unit name
+  ansible.builtin.service_facts:
+  tags: [xiraid_exporter, service]
+
+- name: Resolve the xiraid-exporter systemd unit name
+  ansible.builtin.set_fact:
+    xiraid_exporter_unit: >-
+      {{ (xiraid_exporter_unit_candidates | select('in', ansible_facts.services) | list
+          + [xiraid_exporter_unit_candidates[0]]) | first }}
+  tags: [xiraid_exporter, service]
+
 - name: Enable and start xiraid-exporter service
   ansible.builtin.service:
-    name: xiraid-exporter
+    name: "{{ xiraid_exporter_unit }}"
     enabled: true
     state: started
   tags: [xiraid_exporter, service]

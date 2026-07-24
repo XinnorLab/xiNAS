@@ -2144,6 +2144,21 @@ def check_nfs(exp, checks):
     return results
 
 
+def xiraid_exporter_unit():
+    """Resolve the xiRAID exporter systemd unit name.
+
+    The .deb installs `xiraid_exporter.service` (underscore) while the package
+    and binary are hyphenated; older builds shipped the hyphen. Probing
+    LoadState keeps a healthy exporter from being reported as down.
+    """
+    for unit in ("xiraid_exporter.service", "xiraid-exporter.service"):
+        if run_cmd(f"systemctl show {unit} --property=LoadState 2>/dev/null") == (
+            "LoadState=loaded"
+        ):
+            return unit
+    return "xiraid_exporter.service"
+
+
 def check_services(exp, checks):
     results = []
 
@@ -2153,7 +2168,7 @@ def check_services(exp, checks):
         "nfs_server": ("nfs-server", "NFS server"),
         "rpcbind": ("rpcbind", "RPC port mapper"),
         "nfsdcld": ("nfsdcld", "NFS client tracking daemon"),
-        "xiraid_exporter": ("xiraid-exporter", "xiRAID Prometheus exporter"),
+        "xiraid_exporter": (xiraid_exporter_unit(), "xiRAID Prometheus exporter"),
         "chrony": ("chrony", "NTP time synchronization"),
     }
 
