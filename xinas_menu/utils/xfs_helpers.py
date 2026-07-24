@@ -18,6 +18,19 @@ _log = logging.getLogger(__name__)
 
 _DEVICE_RE = re.compile(r"^/dev/[a-zA-Z0-9_]+$")
 
+
+def is_path_under(path: str, root: str) -> bool:
+    """True when *path* is at or under *root* (path-segment aware).
+
+    ``/mnt/data`` is under ``/mnt/data``; ``/mnt/data/share1`` is under
+    ``/mnt/data``; ``/mnt/database`` is NOT (segment boundary enforced).
+    """
+    if path == root:
+        return True
+    prefix = root if root.endswith("/") else root + "/"
+    return path.startswith(prefix)
+
+
 # ── Async subprocess wrapper ─────────────────────────────────────────────
 
 

@@ -27,6 +27,7 @@ from textual.widgets import Footer, Label
 from xinas_menu.api.control_client import ControlPathError, TaskCancelled, TaskFailed, quote_id
 from xinas_menu.api.degraded import degraded_banner
 from xinas_menu.apptype import XiNASAppMixin
+from xinas_menu.utils.xfs_helpers import is_path_under
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
@@ -201,14 +202,6 @@ def _volumes_in_use(fs_rows: list[dict[str, Any]]) -> set[str]:
             if isinstance(opt, str) and opt.startswith("logdev="):
                 used.add(opt[len("logdev=") :])
     return used
-
-
-def _is_under(path: str, root: str) -> bool:
-    """True when ``path`` is at or under ``root`` (path-segment aware)."""
-    if path == root:
-        return True
-    prefix = root if root.endswith("/") else root + "/"
-    return path.startswith(prefix)
 
 
 def _fmt_size(size_bytes: Any) -> str:
@@ -675,7 +668,7 @@ class FilesystemScreen(XiNASAppMixin, Screen):
                 sid = doc.get("id")
                 if not path or sid is None:
                     continue
-                if _is_under(str(path), mountpoint):
+                if is_path_under(str(path), mountpoint):
                     affected_shares.append({"id": str(sid), "path": str(path)})
 
         # ── Build warning ────────────────────────────────────────────────

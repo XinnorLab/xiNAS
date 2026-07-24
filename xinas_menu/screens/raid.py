@@ -35,6 +35,7 @@ from xinas_menu.api.control_client import (
 )
 from xinas_menu.api.degraded import degraded_banner
 from xinas_menu.apptype import XiNASAppMixin
+from xinas_menu.utils.xfs_helpers import is_path_under
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.drive_picker import DrivePickerScreen
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -247,14 +248,6 @@ def _pool_drive_paths(pool: dict) -> list[str]:
         if path:
             paths.append(str(path))
     return paths
-
-
-def _is_under(path: str, root: str) -> bool:
-    """True when ``path`` is at or under ``root`` (path-segment aware)."""
-    if path == root:
-        return True
-    prefix = root if root.endswith("/") else root + "/"
-    return path.startswith(prefix)
 
 
 def _level_label(level: Any) -> str:
@@ -1029,7 +1022,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 sid = doc.get("id")
                 if not path or sid is None:
                     continue
-                if any(_is_under(str(path), mp) for mp in mountpoints):
+                if any(is_path_under(str(path), mp) for mp in mountpoints):
                     affected_shares.append({"id": str(sid), "path": str(path)})
 
         # ── Affected filesystems (mount units): backed by the array's

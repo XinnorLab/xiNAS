@@ -301,7 +301,23 @@ Each step returns `CANCEL` if its dialog is dismissed with `None`, `BACK` if the
 
 **Step 1 — pick an export path.**
 
-The wizard scans `findmnt -t xfs -n -o TARGET` to list existing XFS mounts. The list is prepended with a `Custom path…` option so an operator can export a subdirectory under an existing mount (e.g. `/mnt/data/share1`). Either choice ends up as an absolute path; the wizard rejects anything that doesn't start with `/`. This is the wizard's first step, so its dialogs never render a Back button (`allow_back` is `False` here — there's no earlier step to return to); every step after it does.
+The wizard scans `findmnt -t xfs -n -o TARGET,SOURCE` and keeps only mounts whose
+SOURCE is a xiRAID volume (`/dev/xi_*`) — an NFS export is allowed **only** from a
+filesystem on a xiRAID array. If no such mount exists, the wizard aborts **before
+it starts** with an OK-only dialog directing the operator to *Storage →
+Filesystems → Create Filesystem* (the former free-form `/mnt/data/` fallback is
+gone). A `findmnt` **read failure** (the command errored, as opposed to
+succeeding with no xiRAID mounts) surfaces a distinct *"Couldn't read the mount
+table"* dialog instead, so a transient fault is not misreported as a missing
+filesystem. Otherwise the xiRAID mount roots are offered in a `SelectDialog`, prepended
+with `Custom path…` so an operator can export a subdirectory (e.g.
+`/mnt/data/share1`). A directly picked mount root is valid as-is; a custom path is
+accepted only when it is at-or-under one of the xiRAID mount roots (segment-aware
+`is_path_under`, [xfs_helpers.py](../../xinas_menu/utils/xfs_helpers.py)), otherwise
+the step re-prompts with an error. Either choice must be an absolute path (rejects
+anything that doesn't start with `/`). This is the wizard's first step, so its
+dialogs never render a Back button (`allow_back` is `False` here); every step after
+it does.
 
 **Steps 2–6.** `self._access_steps("Add Share", total=7)` — see §4.4. A Back button is available on all five.
 

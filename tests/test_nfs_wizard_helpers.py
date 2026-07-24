@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from xinas_menu.screens.nfs import _host_prefill, _path_prefill
+from xinas_menu.screens.nfs import _host_prefill, _path_prefill, _xiraid_mount_points
 
 _HOST_CHOICES = [
     "Everyone (any host on the network)",
@@ -45,3 +45,28 @@ def test_path_prefill_empty():
     sel, default = _path_prefill("", ["/mnt/data"])
     assert sel is None
     assert default == "/mnt/data/"
+
+
+def test_path_prefill_custom_default_uses_first_mount():
+    sel, default = _path_prefill("", ["/srv/pool1", "/mnt/log"])
+    assert sel is None
+    assert default == "/srv/pool1/"
+
+
+def test_xiraid_mount_points_keeps_only_xi_sources():
+    out = "/mnt/data      /dev/xi_data\n/boot          /dev/sda1\n/              /dev/sda2\n"
+    assert _xiraid_mount_points(out) == ["/mnt/data"]
+
+
+def test_xiraid_mount_points_multiple():
+    out = "/mnt/data   /dev/xi_data\n/mnt/logs   /dev/xi_logs\n"
+    assert _xiraid_mount_points(out) == ["/mnt/data", "/mnt/logs"]
+
+
+def test_xiraid_mount_points_none():
+    out = "/           /dev/sda2\n/boot       /dev/sda1\n"
+    assert _xiraid_mount_points(out) == []
+
+
+def test_xiraid_mount_points_empty_string():
+    assert _xiraid_mount_points("") == []

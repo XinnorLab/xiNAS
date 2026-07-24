@@ -128,9 +128,16 @@ the `status.effective_files` producer (§3.4).
 - **Apply (api txn):** write `/xinas/v1/desired/Share/{id}` (prior=none → recorded for
   revert, §5.2); lease `Share/{id}`; insert task. **`spec` = the raw Share spec** (`{ id,
   path, clients, fsid, security_mode?, sync?, rdma_enabled?, nfs_versions? }`).
-- **Executor:** `snapshot_before` → `preflight` (helper reachable; `list_exports`, fail
-  `EXPORT_PATH_IN_USE` if appeared) → `apply` (`add_export(compile(spec), create_path:true)`)
-  → `verify` (`list_exports` contains it) → `snapshot_after`. Compile via lib/nfs-exports.
+- **Executor:** `snapshot_before` → `preflight` (**xiRAID-backing gate** — read live
+  mounts via the injected `readMounts()` seam; the export path must be at-or-under a
+  mount whose source is `/dev/xi_*` (longest-match wins so a nested xiRAID mount beats
+  `/`), else fail `EXPORT_PATH_NOT_ON_XIRAID`; **fail-closed** — an unreadable mount
+  table throws and refuses the create. Then: helper reachable; `list_exports`, fail
+  `EXPORT_PATH_IN_USE` if appeared) → `apply` (`add_export(compile(spec),
+  create_path:true)`) → `verify` (`list_exports` contains it) → `snapshot_after`.
+  Compile via lib/nfs-exports. The gate is **executor-side only** — there is no
+  plan-phase blocker, because the plan would read *observed* Filesystem state and a
+  degraded/stale collector could falsely block a legitimate create.
 - **Rollback:** `remove_export(path)` (idempotent). api reverts the desired Share write.
 
 ### 3.2 `share.update`
