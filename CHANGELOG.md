@@ -6,6 +6,98 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.8.1] - 2026-07-27
+
+> **Requires-Rebuild: xinas_node_build** — every fix below except the
+> Active Sessions render is agent/API TypeScript, and a code-only update
+> does not rebuild `dist/`. A host must re-run that role once on update
+> to pick up the rebuilt bundle. Nothing here touches the network,
+> storage layout, or systemd unit definitions.
+
+The release that makes v3.8.0 actually land. v3.8.0 shipped
+`Requires-Rebuild: xinas_node_build`, the rebuild ran and rewrote
+`dist/`, but nothing restarted `xinas-api` / `xinas-agent` — so both
+daemons kept serving the build they had loaded before the update and
+every v3.8.0 control-path fix stayed inert on updated hosts. This release
+fixes the restart gap and clears the remaining observe/apply defects
+surfaced by end-to-end testing against a live host.
+
+### Fixed
+
+- **`xinas_node_build` rebuilt `dist/` but never restarted its
+  consumers.** `xinas-api` and `xinas-agent` run compiled JavaScript out
+  of `xiNAS-MCP/dist/` and read it once at process start; the role
+  rebuilt the bundle and stopped, because the `xinas_api` / `xinas_agent`
+  handlers fire only on their own unit/config changes, which a change
+  confined to `xiNAS-MCP/src` never touches. v3.8.0 shipped with that gap
+  — its fixes (including the `raid_show` `size` parse that left every
+  array's capacity `N/A`) rewrote `dist/` and then kept running the old
+  process, reporting success throughout. The build task now notifies
+  uniquely-named handlers that restart `xinas-api` then `xinas-agent`
+  (the agent `Requires=xinas-api.service`), each guarded on a stat of the
+  unit so a host without them skips rather than fails. `Requires-Rebuild:
+  xinas_node_build` is now sufficient for a TypeScript-only change on its
+  own. (#269)
+
+- **A legitimate network address change could never be applied, and a
+  malformed one answered 500.** `verifyDev` read `ip -j addr show` once,
+  immediately after `netplan apply` — but apply returns before
+  systemd-networkd finishes reconfiguring (measured ~0.4 s early on a
+  live IB host), so verify observed the post-flush empty state, threw
+  `missing <cidr> after apply`, and the runner rolled every change back
+  in both directions. Verify now polls to a settle deadline (15 s,
+  250 ms interval) with an injectable budget. Separately, a blocked plan
+  (e.g. a malformed CIDR) still rendered netplan, and `connectedSubnet()`
+  threw on the unparsable CIDR, dying as `500 INTERNAL` and leaking an
+  internal symbol; the render is now skipped when blockers exist, so a
+  bad CIDR returns 200 with the `addresses_invalid` blocker. (#275)
+
+- **The RAID tuning modify path was unreachable or silently lossy.**
+  Three defects: `expected_revision` was absent from the MCP catalog's
+  mutate schema and never coerced by the CLI, so every apply route
+  answered `INVALID_ARGUMENT`; the vendored `RaidModify` proto was stale,
+  so `sdc_prio` / `max_sectors_kb` / `adaptive_merge_path` modifies
+  reached the daemon with the field silently dropped; and `translate.ts`
+  emitted create-only knobs (`discard`, `drive_trim`, `resync_enabled`)
+  on modify, which the daemon accepted as `success` while never applying
+  them. Field numbers are taken from the running 4.3.1 descriptor,
+  create-only knobs are now rejected pre-plan with
+  `reason: create_only_tuning` (422), and a `coerceToSchema()` converts
+  each string arg to the catalog-declared scalar type. (#272)
+
+- **Exported shares were observed as not exported.** The observe-side
+  `parseListExports` / `parseListSessions` read a wire shape the
+  nfs-helper never emits, so both always returned `[]` — no `ExportRule`
+  or `NfsSession` was ever observed even though writes worked. The health
+  check reported `nfs.exports: <share> not exported` and
+  `drift.nfs-exports: N missing` for shares that ARE exported, and
+  `Share.status.exports` was always empty. Both parsers now read the real
+  `{ok, result, request_id}` envelope and field names, an `ok:false`
+  throws instead of returning `[]` (which would let the collector
+  reconcile-DELETE good rows), and `drift.nfs-exports` normalizes
+  `fsid=N` out of the comparison so the NFSv4 root export stops flagging
+  a permanent false drift. (#274)
+
+- **`cpu_allowed` rendered as `unknown` for arrays that really were
+  pinned.** The xiRAID 4.3.x daemon reports CPU affinity as a JSON array
+  of core ids (`cpu_allowed = [5, 6, 7]`), but `readTuning` accepted only
+  the string shape the fake transport writes back, so the array failed
+  the `typeof === 'string'` check and the knob was dropped before it
+  reached the API. It is now range-compressed into the schema's existing
+  string spelling (`[5,6,7]` → `"5-7"`, sorted and de-duplicated) — the
+  value an operator would retype into the modify dialog — so a whole-node
+  pin renders `"0-63"` instead of a 200-character list. A bare number
+  stays unreadable on purpose (ambiguous between a core id and a
+  bitmask). (#270)
+
+- **Active Sessions rendered `? -> ?` for every NFS client.**
+  `nfs.list_sessions()` returns `{client_ip, nfs_version, export_path,
+  active_locks}` dicts, but `_format_sessions` read `s["client"]` /
+  `s["path"]` — keys that shape never carries — so both fell through to
+  the `?` default while the real client IP and export path sat unread.
+  Now reads the documented `client_ip` / `export_path`, keeping the old
+  keys as a fallback for an alternate session source. (#273)
+
 ## [3.8.0] - 2026-07-24
 
 > **Requires-Rebuild: xinas_node_build** — the RAID observation fixes and
