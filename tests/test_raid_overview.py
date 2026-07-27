@@ -23,13 +23,21 @@ def test_no_banner_keeps_empty_state():
 # "RAID already has '2048' reserved MiBs".
 
 
-def _api_row(spec_extra: dict | None = None, status_extra: dict | None = None) -> list[dict]:
+def _api_row(
+    spec_extra: dict | None = None,
+    status_extra: dict | None = None,
+    level: str = "raid5",
+) -> list[dict]:
+    # A PARITY level by default, so the unobserved-tuning tests below exercise
+    # the `unknown` path for every knob — including the eight that exist only
+    # on parity arrays. On a non-parity level those narrow to `NA` instead
+    # (§3.3), which is what the tests further down pin with level="raid10".
     return [
         {
             "id": "data",
             "spec": {
                 "name": "data",
-                "level": "raid10",
+                "level": level,
                 "member_disk_ids": ["disk-1", "disk-2"],
                 "strip_size_kib": 16,
                 **(spec_extra or {}),
@@ -196,6 +204,75 @@ def test_observed_empty_cpu_mask_means_all():
     rows = _api_row(spec_extra={"tuning": {"cpu_allowed": ""}})
     out = _format_raid_overview(_arrays_from_api(rows), extended=True)
     assert "all" in _row(out, "CPU Affinity")
+
+
+# ---- parity-only knobs on a non-parity level (raid-management-spec §3.3) ----
+#
+# `unknown` and "does not exist" are different facts. A RAID 10 array showed
+# Merge Read / Merge Write / Adaptive Merge as `unknown` and SDC Priority as
+# `-`, sending the operator looking for four values a mirror cannot have.
+
+
+def test_parity_only_knobs_render_na_on_a_mirror():
+    out = _format_raid_overview(_arrays_from_api(_api_row(level="raid10")), extended=True)
+
+    for label in ("Merge Read", "Merge Write", "Adaptive Merge"):
+        assert "NA" in _row(out, label), label
+        assert "unknown" not in _row(out, label), label
+    # SDC narrows from the Priorities block's dash, not from `unknown`.
+    assert "NA" in _row(out, "SDC Priority")
+
+
+def test_na_does_not_leak_to_knobs_every_level_has():
+    # Only the eight parity-only knobs narrow. Everything else keeps `unknown`
+    # — NA there would claim a value cannot exist when it merely was not read.
+    out = _format_raid_overview(_arrays_from_api(_api_row(level="raid10")), extended=True)
+
+    for label in ("Memory Limit", "Memory Pre-alloc", "Request Limit", "CPU Affinity", "Scheduler"):
+        assert "unknown" in _row(out, label), label
+        assert "NA" not in _row(out, label), label
+    # ...and the priorities that exist at every level keep their dash.
+    for label in ("Init Priority", "Recon Priority", "Restripe Priority"):
+        assert "-" in _row(out, label), label
+        assert "NA" not in _row(out, label), label
+
+
+def test_parity_level_keeps_unknown_for_the_same_knobs():
+    out = _format_raid_overview(_arrays_from_api(_api_row(level="raid5")), extended=True)
+
+    for label in ("Merge Read", "Merge Write", "Adaptive Merge"):
+        assert "unknown" in _row(out, label), label
+        assert "NA" not in _row(out, label), label
+    assert "-" in _row(out, "SDC Priority")
+
+
+def test_unrecognised_level_keeps_unknown_rather_than_claiming_na():
+    # The non-parity set is a whitelist. A level this code has never seen
+    # must not become a claim that a knob cannot exist for it.
+    for level in ("raidn+m", "raid7", "raid60", "", "raid-who-knows"):
+        out = _format_raid_overview(_arrays_from_api(_api_row(level=level)), extended=True)
+        assert "unknown" in _row(out, "Adaptive Merge"), level
+        assert "NA" not in _row(out, "Adaptive Merge"), level
+
+
+def test_na_never_overrides_an_observed_value():
+    # If the daemon ever does report one of these on a mirror, show the real
+    # value. NA only ever narrows a PLACEHOLDER.
+    rows = _api_row(
+        level="raid10",
+        spec_extra={"tuning": {"adaptive_merge": True, "sdc_prio": 40}},
+    )
+    out = _format_raid_overview(_arrays_from_api(rows), extended=True)
+    assert "Enabled" in _row(out, "Adaptive Merge")
+    assert "NA" not in _row(out, "Adaptive Merge")
+    assert "40%" in _row(out, "SDC Priority")
+
+
+def test_merge_timing_rows_stay_omitted_on_a_non_parity_level():
+    # They are unobserved, so §3.2's omission rule already covers them; four
+    # more NA rows under a merge feature already marked NA is noise.
+    out = _format_raid_overview(_arrays_from_api(_api_row(level="raid10")), extended=True)
+    assert "Merge Read Max" not in _plain(out)
 
 
 def test_merge_max_edit_params_are_labelled_microseconds_not_kb():

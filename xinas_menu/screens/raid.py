@@ -1229,6 +1229,49 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 # docs/Storage/raid-management-spec.md §3.2.
 _UNKNOWN = f"{_DIM}unknown{_NC}"
 
+# What a knob the array's RAID level does not HAVE renders as. Distinct from
+# _UNKNOWN on purpose: "unknown" says the control path failed to read a value
+# that exists, and sends the operator looking for it. "NA" says there is
+# nothing to read. See _tuning_not_applicable and raid-management-spec §3.2.
+_NA = f"{_DIM}NA{_NC}"
+
+# Tuning knobs xiRAID implements only on PARITY arrays. A mirror or a plain
+# stripe has no parity: there is no read-modify-write for the merge machinery
+# to amortise, and no parity to check silent corruption against. The daemon
+# reflects that — `raid_show(extended)` omits these eight entirely on a
+# non-parity array. Verified against xiRAID 4.3.1 on a node carrying both:
+# the RAID 5 array reports all eight (including the ones sitting at 0), the
+# RAID 10 array reports none of them.
+_PARITY_ONLY_TUNING = frozenset(
+    {
+        "sdc_prio",
+        "adaptive_merge",
+        "merge_read_enabled",
+        "merge_write_enabled",
+        "merge_read_max",
+        "merge_read_wait",
+        "merge_write_max",
+        "merge_write_wait",
+    }
+)
+
+# Levels with no parity, spelled the way _level_label renders them. This is
+# deliberately a whitelist of the levels we know rather than "anything that
+# is not 5/6/50/60": an unrecognised level (a new xiRAID level, `n+m`, a
+# spelling change) keeps the honest `unknown` instead of being told a knob
+# cannot exist for it.
+_NON_PARITY_LEVELS = frozenset({"0", "1", "10"})
+
+
+def _tuning_not_applicable(level: Any, key: str | None) -> bool:
+    """True when *key* is a knob this array's RAID level does not have.
+
+    Only ever narrows a placeholder from `unknown` to `NA` — an OBSERVED
+    value is always rendered, whatever this returns, so a daemon that starts
+    reporting one of these on a mirror still shows the real value.
+    """
+    return key in _PARITY_ONLY_TUNING and str(level).strip() in _NON_PARITY_LEVELS
+
 
 def _visible_len(s: str) -> int:
     """Length of string after stripping ANSI escape codes."""
@@ -1386,11 +1429,22 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
             # nobody read tells the operator the array is unconstrained while
             # the daemon rejects their edit with "RAID already has '2048'
             # reserved MiBs". See raid-management-spec §3.2.
-            def _opt(value, render):
-                return _UNKNOWN if value is None else render(value)
+            def _na_or(placeholder, key, _level=level):
+                # A knob this RAID level does not have reads NA, not the
+                # generic placeholder — `unknown` (or the priorities' dash)
+                # sends the operator hunting for a value that cannot exist.
+                # Passing no key keeps the old behaviour. `_level` is bound at
+                # definition time because `level` belongs to the enclosing
+                # per-array loop (ruff B023).
+                return _NA if _tuning_not_applicable(_level, key) else placeholder
 
-            def _on_off(v):
-                return _opt(v, lambda x: f"{_GRN}Enabled{_NC}" if x else f"{_DIM}Disabled{_NC}")
+            def _opt(value, render, key=None):
+                return _na_or(_UNKNOWN, key) if value is None else render(value)
+
+            def _on_off(v, key=None):
+                return _opt(
+                    v, lambda x: f"{_GRN}Enabled{_NC}" if x else f"{_DIM}Disabled{_NC}", key
+                )
 
             def _usecs(v):
                 return _opt(v, lambda x: f"{x} us")
@@ -1401,15 +1455,19 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
             lines.append(_box_line(f" {_BLD}{_CYN}PRIORITIES{_NC}"))
             lines.append(_box_sep())
 
-            def _pct(v):
+            def _pct(v, key=None):
                 # Priorities keep the dash they always had — the one block
-                # with no plausible default to fall back on.
-                return "-" if v is None else f"{v}%"
+                # with no plausible default to fall back on. A priority the
+                # level does not have is still NA, not a dash: the dash says
+                # "not read", NA says "does not exist here".
+                if v is not None:
+                    return f"{v}%"
+                return _na_or("-", key)
 
             init_p = _pct(arr.get("init_prio"))
             recon_p = _pct(arr.get("recon_prio"))
             restripe_p = _pct(arr.get("restripe_prio"))
-            sdc_p = _pct(arr.get("sdc_prio"))
+            sdc_p = _pct(arr.get("sdc_prio"), "sdc_prio")
             lines.append(_box_line(f"  {_DIM}Init Priority{_NC}       |  {init_p}"))
             lines.append(_box_line(f"  {_DIM}Recon Priority{_NC}      |  {recon_p}"))
             lines.append(_box_line(f"  {_DIM}Restripe Priority{_NC}   |  {restripe_p}"))
@@ -1453,9 +1511,19 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
             mw_en = arr.get("merge_write_enabled")
             adapt = arr.get("adaptive_merge")
             lines.append(_box_line(f"  {_DIM}Scheduler{_NC}           |  {_on_off(sched)}"))
-            lines.append(_box_line(f"  {_DIM}Merge Read{_NC}          |  {_on_off(mr_en)}"))
-            lines.append(_box_line(f"  {_DIM}Merge Write{_NC}         |  {_on_off(mw_en)}"))
-            lines.append(_box_line(f"  {_DIM}Adaptive Merge{_NC}      |  {_on_off(adapt)}"))
+            lines.append(
+                _box_line(
+                    f"  {_DIM}Merge Read{_NC}          |  {_on_off(mr_en, 'merge_read_enabled')}"
+                )
+            )
+            lines.append(
+                _box_line(
+                    f"  {_DIM}Merge Write{_NC}         |  {_on_off(mw_en, 'merge_write_enabled')}"
+                )
+            )
+            lines.append(
+                _box_line(f"  {_DIM}Adaptive Merge{_NC}      |  {_on_off(adapt, 'adaptive_merge')}")
+            )
             mr_max = arr.get("merge_read_max")
             mr_wait = arr.get("merge_read_wait")
             mw_max = arr.get("merge_write_max")

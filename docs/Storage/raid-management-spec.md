@@ -256,6 +256,9 @@ rendered as a placeholder:
 spells "no limit" and "prealloc off" — so the unknown case keys off
 `is None`, never off falsiness.
 
+The `unknown` column above is the default. Where the array's RAID **level**
+does not have the knob at all, the placeholder narrows to `NA` — see §3.3.
+
 This is the array-detail case of the same rule as §3.1: **an unobserved
 value must never render as a plausible default.** Printing `unlimited`,
 `all`, or `Disabled` for a knob nobody read tells the operator the array
@@ -266,6 +269,50 @@ same array was rejected with `Unable to set memory limit to '1028' MiBs.
 RAID already has '2048' reserved MiBs.` The Priorities block, which had
 no plausible default to fall back on, showed `-%` throughout and was the
 only visible symptom.
+
+### 3.3 Knobs the RAID level does not have render as NA
+
+`unknown` and "does not exist" are different facts, and §3.2 collapsed
+them. A RAID 10 array showed `Merge Read | unknown`, `Merge Write |
+unknown`, `Adaptive Merge | unknown` and `SDC Priority | -` — sending the
+operator looking for four values that cannot exist on a mirror.
+
+Eight tuning knobs are **parity-only**. A mirror or a plain stripe has no
+parity: nothing for the merge machinery to amortise (there is no
+read-modify-write) and no parity to check silent corruption against. The
+daemon agrees — `raid_show(extended)` omits all eight on a non-parity
+array. Verified against xiRAID 4.3.1 on a node carrying both levels: the
+RAID 5 array reports all eight *including the ones sitting at `0`*, the
+RAID 10 array reports none of them.
+
+| | |
+|---|---|
+| Parity-only knobs | `sdc_prio`, `adaptive_merge`, `merge_read_enabled`, `merge_write_enabled`, `merge_read_max`, `merge_read_wait`, `merge_write_max`, `merge_write_wait` |
+| Non-parity levels | `0`, `1`, `10` (as `_level_label` spells them) |
+
+When a knob is parity-only **and** the array's level is non-parity, the
+placeholder narrows from `unknown` to **`NA`** — and, for `sdc_prio`,
+from the Priorities block's `-` to `NA`. Everything else is untouched:
+`sched_enabled`, the priorities other than SDC, and the whole Performance
+block apply at every level and keep rendering exactly as §3.2 says.
+
+Three properties make this safe to state as a claim rather than a guess:
+
+- **Whitelist, not "everything that is not 5/6/50/60".** An unrecognised
+  level — a new xiRAID level, `n+m`, a spelling change — is not in
+  `_NON_PARITY_LEVELS`, so it keeps the honest `unknown`. A level this
+  code has never seen never becomes a claim that a knob cannot exist.
+- **It only ever narrows a placeholder.** An OBSERVED value is rendered
+  whatever the level says, so a daemon that starts reporting one of these
+  on a mirror shows the real value rather than `NA`.
+- **The merge timing rows keep the §3.2 omission rule** — dropped when all
+  four are unobserved, which on a non-parity array they always are. Four
+  more `NA` rows under a merge feature already marked `NA` would be noise,
+  not information.
+
+This does not weaken §3.2's rule; it sharpens it. `NA` is not a plausible
+default standing in for an unread value — it is a statement about the
+array's level, which *is* observed (`spec.level`).
 
 ---
 
