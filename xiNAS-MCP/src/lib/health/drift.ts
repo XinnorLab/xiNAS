@@ -31,8 +31,22 @@ export interface ObservedExportRuleRow {
  */
 const KERNEL_NOISE_OPTIONS = new Set(['wdelay', 'no_wdelay', 'hide', 'nohide', 'pnfs', 'no_pnfs']);
 
+/**
+ * `fsid=N` is not a client option in the desired model — it is a first-class
+ * `Share.spec.fsid` field, and the compile deliberately does NOT render it
+ * into the export entry (s3-nfs-executor-spec §4 deferral). The live
+ * /etc/exports, however, DOES carry `fsid=N` (the installer writes `fsid=0`
+ * for the NFSv4 root). Comparing raw options would therefore flag a
+ * PERMANENT false "changed" drift on every fsid-bearing export. Normalize it
+ * out of both sides. (fsid drift itself is invisible to this compare until
+ * §4 renders fsid; tracked separately.)
+ */
+function isComparedOption(o: string): boolean {
+  return !KERNEL_NOISE_OPTIONS.has(o) && !o.startsWith('fsid=');
+}
+
 function canonicalOptions(options: string[]): string {
-  return [...new Set(options.filter((o) => !KERNEL_NOISE_OPTIONS.has(o)))].sort().join(',');
+  return [...new Set(options.filter(isComparedOption))].sort().join(',');
 }
 
 export interface ExportsDrift {

@@ -53,8 +53,21 @@ function parseJson(raw: string, caller: string): unknown {
   }
 }
 
+/**
+ * The nfs-helper wraps every response as `{ ok, result, request_id }`
+ * (success) or `{ ok: false, error, code, request_id }` (failure) —
+ * nfs_helper.py `handle_request`. The parsers below take the RAW response
+ * JSON, so they unwrap that envelope themselves.
+ */
+interface HelperEnvelope {
+  ok?: boolean;
+  result?: unknown;
+  error?: string;
+}
+
+/** One list_exports entry in the helper's wire shape: `{ path, clients:[{host, options}] }`. */
 interface RawClient {
-  host_pattern: string;
+  host: string;
   options?: string[];
 }
 
@@ -63,13 +76,23 @@ interface RawExport {
   clients?: RawClient[];
 }
 
-interface RawListExports {
-  exports?: RawExport[];
+/**
+ * Unwrap the helper envelope. An `ok:false` response MUST throw, not return
+ * empty: the NFS collector treats a successful-but-empty sweep as "no
+ * entities" and reconcile-DELETEs the observed rows for the kind, so
+ * swallowing a helper error would wipe good observed state on a transient
+ * failure. A throw makes the sweep fail, which skips reconcile (boot.ts).
+ */
+function helperResult(data: HelperEnvelope, caller: string): unknown {
+  if (data.ok === false) {
+    throw new Error(`${caller}: nfs-helper returned an error: ${data.error ?? 'unknown'}`);
+  }
+  return data.result;
 }
 
 export function parseListExports(raw: string): ObservedExportRule[] {
-  const data = parseJson(raw, 'parseListExports') as RawListExports;
-  const exports_ = data.exports ?? [];
+  const data = parseJson(raw, 'parseListExports') as HelperEnvelope;
+  const exports_ = (helperResult(data, 'parseListExports') as RawExport[] | undefined) ?? [];
   const rules: ObservedExportRule[] = [];
 
   for (const exp of exports_) {
@@ -81,7 +104,7 @@ export function parseListExports(raw: string): ObservedExportRule[] {
       const anon_gid = extractAnonId(opts, 'anon_gid');
       rules.push({
         export_path: exp.path,
-        host_pattern: client.host_pattern,
+        host_pattern: client.host,
         options: opts,
         ...(squash_mode !== undefined ? { squash_mode } : {}),
         ...(anon_uid !== undefined ? { anon_uid } : {}),
@@ -93,33 +116,32 @@ export function parseListExports(raw: string): ObservedExportRule[] {
   return rules;
 }
 
+/**
+ * One list_sessions entry in the helper's wire shape (nfs_sessions.py):
+ * `{ client_ip, nfs_version, export_path, active_locks }`. The helper does
+ * not resolve a hostname or per-session lock count beyond active_locks.
+ */
 interface RawSession {
-  client_addr: string;
+  client_ip: string;
   export_path: string;
-  proto_version: string;
-  locked_files: number;
-  client_hostname?: string;
-}
-
-interface RawListSessions {
-  sessions?: RawSession[];
+  nfs_version: string;
+  active_locks: number;
 }
 
 export function parseListSessions(raw: string): ObservedNfsSession[] {
-  const data = parseJson(raw, 'parseListSessions') as RawListSessions;
-  const sessions = data.sessions ?? [];
+  const data = parseJson(raw, 'parseListSessions') as HelperEnvelope;
+  const sessions = (helperResult(data, 'parseListSessions') as RawSession[] | undefined) ?? [];
 
   return sessions.map<ObservedNfsSession>((s) => ({
     kind: 'NfsSession',
-    id: `${s.client_addr}:${s.export_path}`,
+    id: `${s.client_ip}:${s.export_path}`,
     spec: {
-      client_addr: s.client_addr,
+      client_addr: s.client_ip,
       export_path: s.export_path,
-      ...(s.client_hostname !== undefined ? { client_hostname: s.client_hostname } : {}),
     },
     status: {
-      proto_version: s.proto_version,
-      locked_files: s.locked_files,
+      proto_version: s.nfs_version,
+      locked_files: s.active_locks,
     },
   }));
 }

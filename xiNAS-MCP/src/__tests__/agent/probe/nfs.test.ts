@@ -35,26 +35,29 @@ describe('NfsProbe', () => {
   const socketPath = join(tmpdir(), `xinas-test-helper-${process.pid}.sock`);
   let server: ReturnType<typeof createNetServer>;
 
-  // Use the nested clients format that parseListExports expects
+  // The real nfs-helper wire shape: { ok, result:[{path, clients:[{host, options}]}] }.
   const exportsFixture = {
-    exports: [
+    ok: true,
+    result: [
       {
         path: '/srv/share01',
-        clients: [{ host_pattern: '10.0.0.0/24', options: ['rw', 'no_root_squash'] }],
+        clients: [{ host: '10.0.0.0/24', options: ['rw', 'no_root_squash'] }],
       },
     ],
+    request_id: 'test',
   };
-  // parseListSessions expects flat sessions array with these fields
+  // list_sessions wire shape: { ok, result:[{client_ip, nfs_version, export_path, active_locks}] }.
   const sessionsFixture = {
-    sessions: [
+    ok: true,
+    result: [
       {
-        client_addr: '10.0.0.5',
-        client_hostname: 'client-01',
+        client_ip: '10.0.0.5',
+        nfs_version: 'v4.1',
         export_path: '/srv/share01',
-        proto_version: 'v4.1',
-        locked_files: 0,
+        active_locks: 0,
       },
     ],
+    request_id: 'test',
   };
 
   afterAll(async () => {
