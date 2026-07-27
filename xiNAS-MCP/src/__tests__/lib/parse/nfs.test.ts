@@ -38,9 +38,16 @@ describe('parseListExports', () => {
     expect(() => parseListExports('not json')).toThrow(/JSON/);
   });
 
-  it('returns empty array when exports field is absent or empty', () => {
-    const raw = JSON.stringify({ op: 'list_exports', status: 'ok', exports: [] });
-    expect(parseListExports(raw)).toEqual([]);
+  it('returns empty array when the helper result is absent or empty', () => {
+    expect(parseListExports(JSON.stringify({ ok: true, result: [], request_id: 'x' }))).toEqual([]);
+    expect(parseListExports(JSON.stringify({ ok: true, request_id: 'x' }))).toEqual([]);
+  });
+
+  it('throws on an ok:false helper error instead of returning empty', () => {
+    // Returning [] here would let the collector reconcile-DELETE every observed
+    // export on a transient helper failure — the error must propagate.
+    const raw = JSON.stringify({ ok: false, error: 'boom', code: 'INTERNAL', request_id: 'x' });
+    expect(() => parseListExports(raw)).toThrow(/boom/);
   });
 });
 
@@ -50,24 +57,33 @@ describe('parseListSessions', () => {
     const sessions = parseListSessions(raw);
     expect(sessions).toHaveLength(3);
 
+    // The helper maps client_ip → client_addr, nfs_version → proto_version,
+    // active_locks → locked_files, and does not resolve a hostname.
     const s1 = sessions.find((s) => s.spec.client_addr === '10.0.0.10');
     expect(s1).toBeDefined();
-    expect(s1?.spec.client_hostname).toBe('compute-01.local');
+    expect(s1?.spec.client_hostname).toBeUndefined();
     expect(s1?.spec.export_path).toBe('/srv/share01');
     expect(s1?.status.proto_version).toBe('v4.1');
     expect(s1?.status.locked_files).toBe(3);
     expect(s1?.id).toBe('10.0.0.10:/srv/share01');
 
-    const s2 = sessions.find((s) => s.spec.client_addr === '10.0.0.11');
-    expect(s2?.spec.client_hostname).toBeUndefined();
+    const s3 = sessions.find((s) => s.spec.client_addr === '10.0.0.12');
+    expect(s3?.status.locked_files).toBe(12);
   });
 
   it('throws on malformed JSON', () => {
     expect(() => parseListSessions('not json')).toThrow(/JSON/);
   });
 
-  it('returns empty array when sessions field is absent or empty', () => {
-    const raw = JSON.stringify({ op: 'list_sessions', status: 'ok', sessions: [] });
-    expect(parseListSessions(raw)).toEqual([]);
+  it('returns empty array when the helper result is absent or empty', () => {
+    expect(parseListSessions(JSON.stringify({ ok: true, result: [], request_id: 'x' }))).toEqual(
+      [],
+    );
+    expect(parseListSessions(JSON.stringify({ ok: true, request_id: 'x' }))).toEqual([]);
+  });
+
+  it('throws on an ok:false helper error instead of returning empty', () => {
+    const raw = JSON.stringify({ ok: false, error: 'boom', request_id: 'x' });
+    expect(() => parseListSessions(raw)).toThrow(/boom/);
   });
 });

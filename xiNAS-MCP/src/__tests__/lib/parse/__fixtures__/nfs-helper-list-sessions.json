@@ -1,25 +1,24 @@
 {
-  "op": "list_sessions",
-  "status": "ok",
-  "sessions": [
+  "ok": true,
+  "result": [
     {
-      "client_addr": "10.0.0.10",
-      "client_hostname": "compute-01.local",
+      "client_ip": "10.0.0.10",
+      "nfs_version": "v4.1",
       "export_path": "/srv/share01",
-      "proto_version": "v4.1",
-      "locked_files": 3
+      "active_locks": 3
     },
     {
-      "client_addr": "10.0.0.11",
+      "client_ip": "10.0.0.11",
+      "nfs_version": "v3",
       "export_path": "/srv/share01",
-      "proto_version": "v3",
-      "locked_files": 0
+      "active_locks": 0
     },
     {
-      "client_addr": "10.0.0.12",
+      "client_ip": "10.0.0.12",
+      "nfs_version": "v4.2",
       "export_path": "/srv/share02",
-      "proto_version": "v4.2",
-      "locked_files": 12
+      "active_locks": 12
     }
-  ]
+  ],
+  "request_id": "test"
 }

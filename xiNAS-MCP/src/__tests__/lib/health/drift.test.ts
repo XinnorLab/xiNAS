@@ -32,6 +32,21 @@ describe('compareExports (semantic)', () => {
     expect(drift).toEqual({ missing: [], extra: [], changed: [] });
   });
 
+  it('fsid=N on the observed side is not drift (desired models it via spec.fsid)', () => {
+    // Regression: the NFSv4 root export carries fsid=0 in /etc/exports, but
+    // the desired compile does not render fsid (§4). This must NOT read as a
+    // permanent "changed" drift.
+    const drift = compareExports(DESIRED, [
+      {
+        export_path: '/mnt/a',
+        rules: [
+          { host_pattern: '*', options: ['rw', 'no_root_squash', 'no_subtree_check', 'fsid=0'] },
+        ],
+      },
+    ]);
+    expect(drift).toEqual({ missing: [], extra: [], changed: [] });
+  });
+
   it('detects missing, extra, and changed (options + hosts)', () => {
     const drift = compareExports(
       [...DESIRED, { path: '/mnt/b', clients: [{ host: '10.0.0.0/24', options: ['ro'] }] }],
