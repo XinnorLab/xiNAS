@@ -60,7 +60,17 @@ const MUTATE_PROPS: Record<string, unknown> = {
     description: 'operation spec (see api-v1.yaml for the per-resource schema)',
   },
   plan_id: { type: 'string', description: 'required for mode=apply' },
-  idempotency_key: { type: 'string' },
+  idempotency_key: { type: 'string', description: 'required for mode=apply' },
+  // Every apply route validates this with requireInteger (api-v1 ApplyRequest,
+  // see routes/apply-helpers.ts). Leaving it out of the schema made apply
+  // unreachable for any client that builds its call FROM the schema: the
+  // request omits the field and the route answers INVALID_ARGUMENT.
+  expected_revision: {
+    type: 'integer',
+    description:
+      'required for mode=apply — the state_revision the plan was computed against ' +
+      '(state_revision_expected in the plan response); the apply fails if it moved',
+  },
   dangerous: { type: 'boolean', description: 'required true for destructive operations' },
 };
 

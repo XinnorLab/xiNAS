@@ -17,7 +17,7 @@
 
 ### In scope (S4)
 - **Engine dangerous gate (§3):** `TaskEngine.apply` enforces `risk_level == 'destructive' && dangerous !== true` → `PRECONDITION_FAILED { reason: 'dangerous_flag_required' }` — one gate for every client (REST/CLI/TUI/MCP), per reqs §14.
-- **Modify** (`xiraid.array.modify`, `PATCH /arrays/{id}`): `spec.tuning.*` + `spec.spare_disk_ids` writable; topology fields → per-field `UNSUPPORTED` before any plan. Spare changes drive the executor-owned pool lifecycle.
+- **Modify** (`xiraid.array.modify`, `PATCH /arrays/{id}`): `spec.tuning.*` (except the create-surface trio `resync_enabled`/`discard`/`drive_trim`) + `spec.spare_disk_ids` writable; topology fields and create-surface tuning keys → per-field `UNSUPPORTED` before any plan. Spare changes drive the executor-owned pool lifecycle.
 - **Create-with-spares un-deferral:** the S3 `spare_pool_deferred` blocker is removed; create validates/leases/resolves spare disks and the create executor provisions the pool before `raid_create`.
 - **Import** (`xiraid.array.import`, `POST /arrays` import-shaped spec `{ uuid, new_name? }`): adopt a foreign array; executor-side validation via `raid_import_show` (§7).
 - **Delete** (`xiraid.array.delete`, `DELETE /arrays/{id}`): dependency guard + blast radius + the dangerous gate; `raid_destroy`; failed destroy → `requires_manual_recovery`.
@@ -81,7 +81,7 @@ A future migration may persist the observed pin and let the engine's `plan_stale
 
 **Request shape.** `{ mode, spec: { spare_disk_ids?, tuning? } }` (+ `plan_id`/`expected_revision`/`idempotency_key` on apply). The array id comes from the path; `spec.name` is not accepted.
 
-**Writability enforcement (pre-plan).** Any topology field present in the PATCH spec (`name`, `level`, `member_disk_ids`, `group_size`, `synd_cnt`, `strip_size_kib`, `block_size`, `force_metadata`) → `UNSUPPORTED` (422) with the ADR-0006 per-field shape (`reason: 'topology_immutable'`) **before** any plan row is written.
+**Writability enforcement (pre-plan).** Any topology field present in the PATCH spec (`name`, `level`, `member_disk_ids`, `group_size`, `synd_cnt`, `strip_size_kib`, `block_size`, `force_metadata`) → `UNSUPPORTED` (422) with the ADR-0006 per-field shape (`reason: 'topology_immutable'`) **before** any plan row is written. The three **create-surface tuning keys** — `spec.tuning.resync_enabled`, `spec.tuning.discard`, `spec.tuning.drive_trim` — reject on the same pre-plan path with `reason: 'create_only_tuning'`: the daemon's `RaidModify` message has no field for any of them (verified against the running 4.3.1 descriptor), so forwarding one would be silently dropped by protobuf and report a false `success`. `translate.ts` also omits them from the `raid_modify` request as a second line of defence.
 
 **Provider preflight.**
 1. The array must exist in observed state (else `NOT_FOUND`); read its observed `spec` as the *before*.
@@ -165,7 +165,7 @@ The S3 route re-runs the create provider's preflight at apply. S4 generalizes: e
 
 ## 10. Error model — reuse existing codes (no additions)
 
-New **blocker codes** (plan `blockers[]`, not `ErrorCode`s): `dangerous_flag_required`, `dependent_filesystem_mounted`, `dependent_share_active`, `uuid_invalid`, `foreign sparepool` surfaces as an executor failure (not a plan blocker — the api cannot see pool ownership). New `details.reason` discriminators on `PRECONDITION_FAILED`: `dangerous_flag_required` (engine), `observed_revision_stale` (route). Topology writes on PATCH → `UNSUPPORTED` (422). Everything else unchanged from S3/S2.
+New **blocker codes** (plan `blockers[]`, not `ErrorCode`s): `dangerous_flag_required`, `dependent_filesystem_mounted`, `dependent_share_active`, `uuid_invalid`, `foreign sparepool` surfaces as an executor failure (not a plan blocker — the api cannot see pool ownership). New `details.reason` discriminators on `PRECONDITION_FAILED`: `dangerous_flag_required` (engine), `observed_revision_stale` (route). Topology writes on PATCH → `UNSUPPORTED` (422, `reason: 'topology_immutable'`); create-surface tuning keys (`resync_enabled`/`discard`/`drive_trim`) on PATCH → `UNSUPPORTED` (422, `reason: 'create_only_tuning'`). Everything else unchanged from S3/S2.
 
 ## 11. Contract revisions (T0)
 

@@ -20,6 +20,22 @@ describe('client catalog (S8 T2)', () => {
     }
   });
 
+  it('plan/apply entries expose the whole apply envelope in their schema', () => {
+    // A schema-driven client (MCP tool, generated CLI) builds its apply call
+    // FROM these properties. expected_revision is validated by requireInteger
+    // on every apply route, so if the schema omits it the client can never
+    // reach a successful apply. plan_id marks the plan/apply-shaped entries.
+    const props = (e: (typeof CATALOG)[number]) =>
+      (e.input_schema as { properties?: Record<string, { type?: string }> }).properties ?? {};
+    const planApply = CATALOG.filter((e) => 'plan_id' in props(e));
+    expect(planApply.length).toBeGreaterThan(0);
+    for (const e of planApply) {
+      const p = props(e);
+      expect(p.expected_revision?.type, `${e.name} missing expected_revision`).toBe('integer');
+      expect(p.idempotency_key?.type, `${e.name} missing idempotency_key`).toBe('string');
+    }
+  });
+
   it('min_role spot pins (ported legacy matrix)', () => {
     const byName = new Map(CATALOG.map((e) => [e.name, e]));
     expect(byName.get('arrays.create')?.min_role).toBe('admin');

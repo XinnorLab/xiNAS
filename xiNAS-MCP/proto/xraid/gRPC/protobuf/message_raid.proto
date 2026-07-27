@@ -195,7 +195,12 @@ message RaidInitStop{
     * Modify the parameters of the created RAID.
 */
 message RaidModify{
-    reserved 10, 11, 17 to 19, 27;
+    // 19 (max_sectors_kb), 27 (adaptive_merge_path) and 29 (sdc_prio) were
+    // added by the daemon after this file was vendored. Field numbers below
+    // are taken from the RUNNING daemon's own descriptor (xiRAID 4.3.1,
+    // xraid.gRPC.protobuf.message_raid_pb2.RaidModify) — NOT guessed. A wrong
+    // number here would write a different knob than the caller asked for.
+    reserved 10, 11, 17, 18;
     reserved "merge_wait", "merge_max";
     /**
         * The name of the RAID.
@@ -284,9 +289,21 @@ message RaidModify{
     */
     optional bool single_run = 26;
     /**
+        * Path used by the adaptive merge tuner.
+    */
+    optional string adaptive_merge_path = 27;
+    /**
         * Reserved memory pool in MiB
     */
     optional uint32 memory_prealloc = 28;
+    /**
+        * Maximum size of an I/O request in KB.
+    */
+    optional uint32 max_sectors_kb = 19;
+    /**
+        * Silent data corruption detection priority in percent.
+    */
+    optional uint32 sdc_prio = 29;
 }
 
 /**

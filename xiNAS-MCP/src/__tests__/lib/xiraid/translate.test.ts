@@ -129,11 +129,15 @@ describe('toRaidCreateRequest', () => {
 });
 
 describe('toRaidModifyRequest', () => {
-  it('tuning golden: boolean→0/1, null dropped, never force; resync_enabled is create-only (dropped)', () => {
+  it('tuning golden: boolean→0/1, null dropped, never force; create-only knobs dropped', () => {
     const req = toRaidModifyRequest('data', {
       tuning: {
         init_prio: 50,
-        resync_enabled: true, // create-time knob — RaidModify has no field for it
+        // create-time knobs — RaidModify has no field for any of them, so the
+        // translator drops them (they are also rejected up front by the route).
+        resync_enabled: true,
+        discard: true,
+        drive_trim: false,
         merge_read_enabled: false,
         cpu_allowed: '0-3',
         memory_limit: null,
@@ -147,6 +151,9 @@ describe('toRaidModifyRequest', () => {
       cpu_allowed: '0-3',
       single_run: true,
     });
+    expect('discard' in req).toBe(false);
+    expect('drive_trim' in req).toBe(false);
+    expect('resync_enabled' in req).toBe(false);
     expect('force' in req).toBe(false);
   });
 

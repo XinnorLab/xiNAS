@@ -316,6 +316,20 @@ describe('POST /api/v1/arrays', () => {
       expect(count('SELECT COUNT(*) AS n FROM tasks')).toBe(0);
     });
 
+    it.each(['resync_enabled', 'discard', 'drive_trim'])(
+      'create-only tuning key %s in the body → 422 UNSUPPORTED, no plan row',
+      async (field) => {
+        // The daemon's RaidModify has no field for these; protobuf would drop
+        // them silently and report a false success, so the route rejects them.
+        seedObservedArray();
+        const res = await patchPlan({ tuning: { [field]: true } });
+        expect(res.status).toBe(422);
+        expect(res.body.errors[0].details?.field).toBe(`spec.tuning.${field}`);
+        expect(res.body.errors[0].details?.reason).toBe('create_only_tuning');
+        expect(count('SELECT COUNT(*) AS n FROM tasks')).toBe(0);
+      },
+    );
+
     it('plan + apply happy path: 202 running, array + spare leased', async () => {
       seedObservedArray();
       setup.state.kv.put('/xinas/v1/observed/Disk/nvme5n1', {
