@@ -246,7 +246,7 @@ rendered as a placeholder:
 | Priorities (`*_prio`) | `-` | `<n>%` |
 | `memory_limit` / `request_limit` | `unknown` | `unlimited` when `0`, else the value |
 | `memory_prealloc` | `unknown` | `disabled` when `0`, else `<n> MB` |
-| `cpu_allowed` | `unknown` | `all` when empty, else the mask |
+| `cpu_allowed` | `unknown` | `all` when empty, else the CPU list (`5-7`, `0,2,4-6`) |
 | `block_size` (`spec`) | `unknown` | `<n> bytes` |
 | Booleans (`sched_enabled`, `merge_*_enabled`, `adaptive_merge`) | `unknown` | `Enabled` / `Disabled` |
 | Merge timings | row omitted when all four are unobserved | `<n> us` |
@@ -368,7 +368,7 @@ Step 1 guards the empty case: if the array listing fails or returns no arrays, t
 
 ### 5.1 CPU Affinity dialog (special case)
 
-CPU affinity is the only knob with a multi-mode UI. The current value is read from the array dict (`arr["cpu_allowed"]`, defaulting to `"all"`). Three modes:
+CPU affinity is the only knob with a multi-mode UI. The current value is read from the array dict (`arr["cpu_allowed"]`, defaulting to `"all"`). It arrives as a range-compressed CPU list (`5-7`, `0,2,4-6`) — the same spelling the Manual CPU List mode accepts — so what the dialog shows is what an operator would retype. The `"all"` default now means the knob was genuinely not observed; it used to also cover a pinned array whose affinity the parser dropped for arriving as an array of core ids rather than a string (see `docs/control-path/s3-xiraid-array-spec.md` §2).
 
 - **All CPUs (reset)** — sends an empty string, which xiRAID interprets as "no restriction".
 - **NUMA Node** — `_get_numa_topology()` reads `/sys/devices/system/node/node*/cpulist` for each node and maps NVMe drives to nodes via `disk_list()`'s `numa_node`. The dialog shows `NUMA 0 (CPUs 0-15) — nvme0, nvme1, …` so the operator can pin the array to the NUMA node hosting its drives.
