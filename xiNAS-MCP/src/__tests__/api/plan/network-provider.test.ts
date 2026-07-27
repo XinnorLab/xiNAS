@@ -197,6 +197,25 @@ describe('netIfaceUpdateProvider', () => {
     expect(planResult.blockers.map((b) => b.code)).toContain('address_conflict');
   });
 
+  it('malformed CIDR → addresses_invalid blocker, not a thrown INTERNAL', async () => {
+    // Regression: the provider rendered the netplan unconditionally, so
+    // connectedSubnet() threw on the bad CIDR and the request 500'd before
+    // the blocker the validator had already produced could be returned.
+    const { planResult } = await h.engine.plan(
+      planArgs({ id: 'ibp65s0', addresses: ['not-an-ip'] }),
+    );
+    expect(planResult.blockers.map((b) => b.code)).toContain('addresses_invalid');
+    // a blocked plan carries no render (it can never be applied)
+    expect((planResult.enriched_spec as { render?: string }).render).toBe('');
+  });
+
+  it('address missing its prefix is also addresses_invalid', async () => {
+    const { planResult } = await h.engine.plan(
+      planArgs({ id: 'ibp65s0', addresses: ['10.10.9.5'] }),
+    );
+    expect(planResult.blockers.map((b) => b.code)).toContain('addresses_invalid');
+  });
+
   it('re-parses its own enriched spec (apply re-check contract)', async () => {
     const first = await h.engine.plan(planArgs({ id: 'ibp65s0', addresses: ['10.10.5.1/24'] }));
     const persisted = h.store.get(first.task.task_id)?.spec as Record<string, unknown>;
