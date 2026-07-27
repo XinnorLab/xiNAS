@@ -204,38 +204,87 @@ async function netRollback(
   ctx.emitOutput(`rollback (${op}): ${Object.keys(stashed).length} file(s) restored + re-applied`);
 }
 
-/** Verify a dev's desired addresses are live (ip -j) + its rule exists. */
+/** Settle budget for verify — `netplan apply` returns before networkd finishes. */
+const VERIFY_SETTLE_MS = 15_000;
+const VERIFY_POLL_MS = 250;
+
+export interface VerifySettleOptions {
+  /** Total time to wait for the kernel to reach the desired state. */
+  settleMs?: number;
+  /** Gap between re-reads while waiting. */
+  pollMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Live CIDRs on `dev`, from `ip -j addr show`. */
+async function liveAddresses(host: NetHost, dev: string): Promise<string[]> {
+  const parsed = JSON.parse(await host.ipAddrShow()) as Array<{
+    ifname?: string;
+    addr_info?: Array<{ local?: string; prefixlen?: number }>;
+  }>;
+  const entry = parsed.find((e) => e.ifname === dev);
+  return (entry?.addr_info ?? []).map((a) => `${a.local}/${a.prefixlen}`);
+}
+
+/**
+ * Verify a dev's desired addresses are live (ip -j) + its rule exists.
+ *
+ * POLLS until the desired state appears or the settle budget runs out.
+ * `netplan apply` returns BEFORE systemd-networkd has finished reconfiguring:
+ * measured on a live IB host, `netplan apply` returned with the address still
+ * absent and networkd re-added it ~0.4 s later. A single immediate read
+ * therefore observed the post-flush empty state and failed every legitimate
+ * change, rolling it back — the apply path could never succeed.
+ */
 async function verifyDev(
   host: NetHost,
   dev: string,
   addresses: string[],
   tableId: number,
   enabled: boolean,
+  opts: VerifySettleOptions = {},
 ): Promise<void> {
-  const parsed = JSON.parse(await host.ipAddrShow()) as Array<{
-    ifname?: string;
-    addr_info?: Array<{ local?: string; prefixlen?: number }>;
-  }>;
-  const entry = parsed.find((e) => e.ifname === dev);
-  const live = (entry?.addr_info ?? []).map((a) => `${a.local}/${a.prefixlen}`);
   if (!enabled) return; // disabled iface: flushed is the desired end state
-  for (const cidr of addresses) {
-    if (!live.includes(cidr)) {
-      throw new Error(
-        `verify: ${dev} is missing ${cidr} after apply (live: ${live.join(', ') || 'none'})`,
-      );
+  const settleMs = opts.settleMs ?? VERIFY_SETTLE_MS;
+  const pollMs = opts.pollMs ?? VERIFY_POLL_MS;
+  const sleep =
+    opts.sleep ??
+    ((ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms)));
+
+  const deadline = Date.now() + settleMs;
+  let live: string[] = [];
+  let missing: string | undefined;
+  let ruleMissing = false;
+
+  for (;;) {
+    live = await liveAddresses(host, dev);
+    missing = addresses.find((cidr) => !live.includes(cidr));
+    ruleMissing = false;
+    if (missing === undefined) {
+      if (addresses.length === 0) return;
+      const rules = await host.ipRuleShow();
+      if (rules.includes(`lookup ${tableId}`)) return;
+      ruleMissing = true;
     }
+    if (Date.now() >= deadline) break;
+    await sleep(pollMs);
   }
-  if (addresses.length > 0) {
-    const rules = await host.ipRuleShow();
-    if (!rules.includes(`lookup ${tableId}`)) {
-      throw new Error(`verify: no PBR rule for table ${tableId} after apply`);
-    }
+
+  if (missing !== undefined) {
+    throw new Error(
+      `verify: ${dev} is missing ${missing} after apply (live: ${live.join(', ') || 'none'}; waited ${settleMs}ms)`,
+    );
+  }
+  if (ruleMissing) {
+    throw new Error(`verify: no PBR rule for table ${tableId} after apply (waited ${settleMs}ms)`);
   }
 }
 
-export function makeNetIfaceUpdateExecutor(opts: { host: NetHost }): Executor {
+export function makeNetIfaceUpdateExecutor(
+  opts: { host: NetHost } & VerifySettleOptions,
+): Executor {
   const host = opts.host;
+  const settle: VerifySettleOptions = opts;
 
   const preflight: ExecutorStage = {
     name: 'preflight',
@@ -281,6 +330,7 @@ export function makeNetIfaceUpdateExecutor(opts: { host: NetHost }): Executor {
         spec.desired?.addresses ?? [],
         spec.surgical.pbr_table_id,
         spec.desired?.enabled !== false,
+        settle,
       );
       ctx.emitOutput(`verified: ${spec.surgical.dev} matches the desired state`);
     },
@@ -319,8 +369,9 @@ function narrowPoolSpec(ctx: ExecutorContext): PoolEnriched {
   return raw as unknown as PoolEnriched;
 }
 
-export function makeNetPoolApplyExecutor(opts: { host: NetHost }): Executor {
+export function makeNetPoolApplyExecutor(opts: { host: NetHost } & VerifySettleOptions): Executor {
   const host = opts.host;
+  const settle: VerifySettleOptions = opts;
 
   return {
     operation_kind: 'net.pool.apply',
@@ -364,7 +415,7 @@ export function makeNetPoolApplyExecutor(opts: { host: NetHost }): Executor {
         async run(ctx: ExecutorContext): Promise<void> {
           const spec = narrowPoolSpec(ctx);
           for (const t of spec.targets) {
-            await verifyDev(host, t.dev, t.addresses, t.pbr_table_id, true);
+            await verifyDev(host, t.dev, t.addresses, t.pbr_table_id, true, settle);
           }
           ctx.emitOutput(`verified: ${spec.targets.length} interface(s) match the pool`);
         },

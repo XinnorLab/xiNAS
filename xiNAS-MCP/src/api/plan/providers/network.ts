@@ -311,7 +311,13 @@ export const netIfaceUpdateProvider: PlanProvider = {
         .map((n): ResourceRef => ({ kind: 'NetworkInterface', id: n })),
     ];
 
-    const render = renderNetplan(rows);
+    // A blocked plan can NEVER be applied (the route re-runs preflight and
+    // refuses on any blocker), and the render requires every address to be a
+    // parsable CIDR. Rendering regardless turned an `addresses_invalid`
+    // blocker into a 500 INTERNAL — connectedSubnet() throws on the bad CIDR
+    // before this function can return the blocker the validator had already
+    // produced. Skip the render when blocked and let the plan report why.
+    const render = blockers.length > 0 ? '' : renderNetplan(rows);
     const cleanupFiles =
       spec.cleanup === true && targetDuplicates.length > 0 ? { [id]: targetDuplicates } : {};
 
@@ -427,7 +433,8 @@ export const netPoolApplyProvider: PlanProvider = {
       ...facts.managed.map((m): ResourceRef => ({ kind: 'NetworkInterface', id: m.name })),
     ];
 
-    const render = renderNetplan(rows);
+    // Same guard as the iface-update provider: never render a blocked plan.
+    const render = blockers.length > 0 ? '' : renderNetplan(rows);
     return {
       affected_resources: affected,
       blockers,

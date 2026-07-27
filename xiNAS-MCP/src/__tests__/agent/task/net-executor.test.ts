@@ -114,6 +114,50 @@ describe('net.iface.update executor', () => {
     expect(host.kernel().addrs.ibp9s0f0).toContain('10.10.2.1/24');
   });
 
+  it('verify POLLS until networkd settles (netplan apply returns early)', async () => {
+    // Regression: `netplan apply` returns BEFORE systemd-networkd finishes
+    // reconfiguring — measured on a live IB host, the address reappeared
+    // ~0.4 s after apply returned. A single immediate read saw the
+    // post-flush empty state, so EVERY legitimate change failed verify and
+    // rolled back. Verify must wait for the desired state to appear.
+    let reads = 0;
+    const slowHost = {
+      ...host,
+      async ipAddrShow(): Promise<string> {
+        reads += 1;
+        // first few reads: networkd has not re-added the address yet
+        if (reads <= 3) return JSON.stringify([{ ifname: 'ibp65s0', addr_info: [] }]);
+        return host.ipAddrShow();
+      },
+    };
+    const executor = makeNetIfaceUpdateExecutor({
+      host: slowHost as typeof host,
+      settleMs: 5_000,
+      pollMs: 1,
+      sleep: async () => {},
+    });
+    await runAll(executor, makeCtx(spec()));
+    expect(reads).toBeGreaterThan(3); // it retried rather than failing on read #1
+  });
+
+  it('verify gives up after the settle budget, reporting the live state', async () => {
+    const blindHost = {
+      ...host,
+      async ipAddrShow(): Promise<string> {
+        return JSON.stringify([{ ifname: 'ibp65s0', addr_info: [] }]);
+      },
+    };
+    const executor = makeNetIfaceUpdateExecutor({
+      host: blindHost as typeof host,
+      settleMs: 5,
+      pollMs: 1,
+      sleep: async () => {},
+    });
+    await expect(runAll(executor, makeCtx(spec()))).rejects.toThrow(
+      /missing 10\.10\.5\.1\/24 after apply .*waited/,
+    );
+  });
+
   it('preflight live hash gate: out-of-band netplan edit aborts before any write', async () => {
     await host.writeNetplanFile('/etc/netplan/77-rogue.yaml', 'network: {version: 2}\n');
     const opsBefore = host.ops().length;
