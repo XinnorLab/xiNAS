@@ -51,6 +51,18 @@ const TOPOLOGY_FIELDS = [
   'force_metadata',
 ] as const;
 
+/**
+ * Tuning keys the daemon's RaidModify message has no field for (verified
+ * against the running 4.3.1 descriptor): `resync_enabled`, `discard`,
+ * `drive_trim`. The control-path schema (ADR-0006) models them as
+ * create-surface tuning, but they cannot be changed on a live array.
+ *
+ * These MUST be rejected rather than forwarded: protobuf drops an unknown
+ * field silently, so a modify carrying one used to come back `success` with
+ * the stage reporting `tuning applied: <key>` while the daemon never saw it.
+ */
+const CREATE_ONLY_TUNING = ['resync_enabled', 'discard', 'drive_trim'] as const;
+
 /** Per-field UNSUPPORTED (422) for topology keys in a raw PATCH body. */
 function rejectTopologyKeys(spec: unknown): void {
   if (typeof spec !== 'object' || spec === null) return;
@@ -61,6 +73,18 @@ function rejectTopologyKeys(spec: unknown): void {
         `spec.${field} cannot be changed live`,
         { field: `spec.${field}`, reason: 'topology_immutable' },
         'RAID topology is immutable (ADR-0006). Delete and recreate the array (data is destroyed).',
+      );
+    }
+  }
+  const tuning = (spec as { tuning?: unknown }).tuning;
+  if (typeof tuning !== 'object' || tuning === null) return;
+  for (const field of CREATE_ONLY_TUNING) {
+    if (field in (tuning as Record<string, unknown>)) {
+      throw new ApiException(
+        'UNSUPPORTED',
+        `spec.tuning.${field} cannot be changed live`,
+        { field: `spec.tuning.${field}`, reason: 'create_only_tuning' },
+        `The daemon's RaidModify has no ${field} field; this tuning knob cannot be changed on an existing array.`,
       );
     }
   }

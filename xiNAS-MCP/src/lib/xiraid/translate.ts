@@ -102,11 +102,12 @@ export function toRaidModifyRequest(
     ...num('max_sectors_kb', t.max_sectors_kb),
     ...num('sdc_prio', t.sdc_prio),
     ...(t.single_run !== undefined && t.single_run !== null ? { single_run: t.single_run } : {}),
-    ...bool01('discard', t.discard),
-    ...bool01('drive_trim', t.drive_trim),
-    // resync_enabled is a CREATE-time knob (proto RaidCreate field 12);
-    // RaidModify has no such field (force_resync is a different semantic),
-    // so a modify-time resync_enabled is silently dropped here.
+    // resync_enabled, discard and drive_trim are CREATE-time knobs: the
+    // daemon's RaidModify has no field for any of them (checked against the
+    // running 4.3.1 descriptor). They are NOT emitted here — protobuf drops
+    // an unknown field without complaint, so emitting one produced a modify
+    // that reported success while changing nothing. They are rejected up
+    // front instead, in CREATE_ONLY_TUNING (routes/arrays.ts).
   };
 }
 

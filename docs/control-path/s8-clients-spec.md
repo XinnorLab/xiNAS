@@ -225,6 +225,18 @@ Generation invariant: the MCP tools/list, the call dispatcher, AND the
 xinasctl command tree derive from this one table — a new route reaches
 all three clients by adding one entry.
 
+For a `plan_apply` entry, `input_schema` MUST expose the **full apply
+envelope** the OpenAPI `ApplyRequest` requires — `mode`, `plan_id`,
+`expected_revision` (integer), `idempotency_key`, and `dangerous` — so a
+schema-driven client (an MCP tool call, the generated `xinasctl`) can
+construct a valid `mode: 'apply'` body from the schema alone. Omitting
+`expected_revision`, which every apply route validates with
+`requireInteger`, made apply unreachable for such clients (they never sent
+the field and the route answered `INVALID_ARGUMENT`); the catalog test pins
+its presence. `xinasctl` additionally coerces each string argv value to the
+scalar type the schema declares, because argv is all strings while the API
+body is typed JSON.
+
 ## 4. The gate (T4)
 
 In the MCP dispatch layer (REST untouched):

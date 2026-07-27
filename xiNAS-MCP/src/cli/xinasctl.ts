@@ -124,7 +124,44 @@ export function parseArgs(entry: CatalogEntry, rest: string[]): ParsedArgs {
   for (const [idx, param] of pathParams.entries()) {
     if (positionals[idx] !== undefined) args[param] = positionals[idx];
   }
-  return { args, conn, json, wait };
+  return { args: coerceToSchema(entry, args), conn, json, wait };
+}
+
+/**
+ * argv is all strings; the API body is typed JSON. Coerce each arg to the
+ * type the catalog declares for it.
+ *
+ * Without this every `--flag value` reaches the route as a string, and a
+ * route that validates with requireInteger rejects it. `--expected-revision
+ * 102` arrived as `"102"`, so `--apply` answered INVALID_ARGUMENT on every
+ * plan/apply command — the whole mutating surface of the CLI.
+ *
+ * Only STRING values are converted, and only when the schema names a scalar
+ * type: `--spec` is already parsed JSON and must pass through untouched. A
+ * value that does not parse as its declared type is left alone so the route
+ * reports it, rather than the CLI silently turning `--expected-revision abc`
+ * into NaN.
+ */
+function coerceToSchema(
+  entry: CatalogEntry,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const schema = entry.input_schema as { properties?: Record<string, { type?: string }> };
+  const props = schema?.properties;
+  if (props === undefined) return args;
+  const out: Record<string, unknown> = { ...args };
+  for (const [key, value] of Object.entries(out)) {
+    if (typeof value !== 'string') continue;
+    const type = props[key]?.type;
+    if (type === 'integer' || type === 'number') {
+      const n = Number(value);
+      if (Number.isFinite(n) && (type === 'number' || Number.isInteger(n))) out[key] = n;
+    } else if (type === 'boolean') {
+      if (value === 'true') out[key] = true;
+      else if (value === 'false') out[key] = false;
+    }
+  }
+  return out;
 }
 
 export const httpRequester: Requester = (conn, req) =>

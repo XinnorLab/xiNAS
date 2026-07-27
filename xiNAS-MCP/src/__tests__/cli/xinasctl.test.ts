@@ -61,6 +61,46 @@ describe('parseArgs', () => {
     ]);
     expect(args).toMatchObject({ mode: 'apply', plan_id: 'p-9', dangerous: true });
   });
+
+  it('coerces string argv to the catalog-declared scalar type', () => {
+    // --expected-revision is integer in the schema; argv delivers it as a
+    // string, and the apply route validates with requireInteger. Without the
+    // coercion this reached the route as "102" and apply failed INVALID_ARGUMENT.
+    const { args } = parseArgs(entry('arrays.modify'), [
+      'data',
+      '--apply',
+      '--plan-id',
+      'p-1',
+      '--expected-revision',
+      '102',
+      '--idempotency-key',
+      'k-1',
+    ]);
+    expect(args.expected_revision).toBe(102);
+    expect(typeof args.expected_revision).toBe('number');
+    expect(args.plan_id).toBe('p-1'); // string param stays a string
+    expect(args.idempotency_key).toBe('k-1');
+  });
+
+  it('leaves an unparseable numeric arg as a string for the route to reject', () => {
+    const { args } = parseArgs(entry('arrays.modify'), [
+      'data',
+      '--apply',
+      '--expected-revision',
+      'not-a-number',
+    ]);
+    expect(args.expected_revision).toBe('not-a-number');
+  });
+
+  it('does not touch already-parsed --spec JSON during coercion', () => {
+    const { args } = parseArgs(entry('arrays.modify'), [
+      'data',
+      '--plan',
+      '--spec',
+      '{"tuning":{"init_prio":20}}',
+    ]);
+    expect(args.spec).toEqual({ tuning: { init_prio: 20 } });
+  });
 });
 
 describe('runCli', () => {
