@@ -1110,8 +1110,16 @@ def _format_sessions(data: Any) -> str:
         if not sessions:
             lines.append("  (no active sessions)")
         for s in sessions:
-            client = s.get("client", "?") if isinstance(s, dict) else str(s)
-            path = s.get("path", "?") if isinstance(s, dict) else ""
+            if isinstance(s, dict):
+                # nfs.list_sessions() returns {client_ip, nfs_version,
+                # export_path, active_locks} (spec §4.8). Read those keys —
+                # the old client/path keys never exist in that shape, so every
+                # row rendered as "?  ->  ?". Keep client/path as a fallback so
+                # an alternate session source still renders.
+                client = s.get("client_ip") or s.get("client") or "?"
+                path = s.get("export_path") or s.get("path") or "?"
+            else:
+                client, path = str(s), ""
             lines.append(f"  {client}  ->  {path}")
     except Exception as exc:
         lines.append(f"(parse error: {exc})")

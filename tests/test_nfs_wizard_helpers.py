@@ -2,7 +2,47 @@
 
 from __future__ import annotations
 
-from xinas_menu.screens.nfs import _host_prefill, _path_prefill, _xiraid_mount_points
+from xinas_menu.screens.nfs import (
+    _format_sessions,
+    _host_prefill,
+    _path_prefill,
+    _xiraid_mount_points,
+)
+
+
+def test_format_sessions_reads_helper_shape():
+    # nfs.list_sessions() returns this shape (spec §4.8). The row must show
+    # the real client IP and export path, not "?  ->  ?".
+    out = _format_sessions(
+        [
+            {
+                "client_ip": "10.0.0.15",
+                "nfs_version": "4.2",
+                "export_path": "/mnt/data",
+                "active_locks": 3,
+            },
+            {
+                "client_ip": "10.0.0.22",
+                "nfs_version": "4.1",
+                "export_path": "unknown",
+                "active_locks": 0,
+            },
+        ]
+    )
+    assert "10.0.0.15  ->  /mnt/data" in out
+    assert "10.0.0.22  ->  unknown" in out
+    assert "?  ->  ?" not in out
+
+
+def test_format_sessions_empty():
+    assert "(no active sessions)" in _format_sessions([])
+
+
+def test_format_sessions_legacy_client_path_fallback():
+    # An alternate source that uses client/path still renders.
+    out = _format_sessions([{"client": "192.168.1.5", "path": "/mnt/data/sub"}])
+    assert "192.168.1.5  ->  /mnt/data/sub" in out
+
 
 _HOST_CHOICES = [
     "Everyone (any host on the network)",
