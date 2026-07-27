@@ -1,0 +1,39 @@
+---
+# xinas_node_build role handlers.
+#
+# `npm run build` rewrites dist/, but Node reads the JS once at process
+# start: xinas-api and xinas-agent keep executing the OLD build until they
+# are restarted, and nothing else restarts them for a src-only TypeScript
+# change. The xinas_api / xinas_agent handlers only fire when *those*
+# roles' own unit or config tasks report changed, which a change confined
+# to xiNAS-MCP/src never touches.
+#
+# That gap shipped v3.8.0: the release carried `Requires-Rebuild:
+# xinas_node_build`, the rebuild ran and rewrote dist/, and both daemons
+# stayed on the pre-update code — including the raid_show `size` parse fix,
+# so the TUI kept rendering "N/A" for every array's capacity.
+#
+# Restart order is api then agent, matching the unit dependency
+# (xinas-agent Requires=xinas-api.service) and the TUI's break-glass
+# action. Handlers run in definition order, so the order in this file IS
+# the contract.
+#
+# The names are deliberately unique. A handler named "Restart xinas-api"
+# here would collide with the xinas_api role's handler of that name, and
+# Ansible resolves a duplicate handler name to the LAST definition in the
+# play — the notify would silently run the other role's handler instead of
+# this one.
+
+- name: Restart xinas-api after dist rebuild
+  ansible.builtin.systemd:
+    name: xinas-api.service
+    state: restarted
+  when: _xinas_node_build_api_unit.stat.exists | default(false)
+  listen: restart dist consumers
+
+- name: Restart xinas-agent after dist rebuild
+  ansible.builtin.systemd:
+    name: xinas-agent.service
+    state: restarted
+  when: _xinas_node_build_agent_unit.stat.exists | default(false)
+  listen: restart dist consumers

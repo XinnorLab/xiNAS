@@ -120,9 +120,33 @@
   changed_when: "'added' in _npm_ci.stdout or 'updated' in _npm_ci.stdout"
   tags: [xinas_node_build, build]
 
+# The dist/ consumers are restarted by the handlers in handlers/main.yml,
+# and `systemd: state=restarted` against a unit systemd has never seen is a
+# hard failure. Stat the units first so the two hosts that legitimately have
+# none skip the restart instead: a first install (this role runs BEFORE
+# xinas_api / xinas_agent in site.yml) and a `--tags xinas_node_build` run on
+# a box where the control path was never deployed. Both are correct to skip —
+# xinas_api / xinas_agent start the services themselves, against the dist/
+# this role just produced.
+- name: Check whether xinas-api.service is installed
+  ansible.builtin.stat:
+    path: /etc/systemd/system/xinas-api.service
+  register: _xinas_node_build_api_unit
+  tags: [xinas_node_build, build]
+
+- name: Check whether xinas-agent.service is installed
+  ansible.builtin.stat:
+    path: /etc/systemd/system/xinas-agent.service
+  register: _xinas_node_build_agent_unit
+  tags: [xinas_node_build, build]
+
+# notify is on the build, not on `npm ci`: the build is unconditionally
+# `changed`, so it already covers every path that rewrites dist/ — including
+# a dependency-only change, which still emits fresh JS.
 - name: Build TypeScript → dist/
   ansible.builtin.command:
     cmd: npm run build
     chdir: "{{ xinas_node_build_repo_path }}"
   changed_when: true
+  notify: restart dist consumers
   tags: [xinas_node_build, build]
