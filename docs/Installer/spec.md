@@ -225,7 +225,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 [defaults](../../collection/roles/xiraid_classic/defaults/main.yml)
 
-- Installs `xiraid-repo_1.3.0-1588.kver.6.8_amd64.deb` from `pkg.xinnor.io` and then `xiraid-core` (version `4.3.0`).
+- Installs `xiraid-repo_4.4-1802.kver.6.8_amd64.deb` from `pkg.xinnor.io` and then `xiraid-core` (version `4.4.0`).
 - EULA accepted automatically (`xiraid_accept_eula=true`).
 - No auto-reboot (`xiraid_auto_reboot=false`).
 - License file expected at `/tmp/license` (cleared on reboot — re-enter via the menu before deploying).
@@ -404,7 +404,7 @@ ip route show table 100                       # per-link default route present
 ### 4.4 xiRAID (`xiraid_classic`, `raid_fs`)
 
 ```bash
-xicli --version                              # 4.3.0 (or override)
+xicli --version                              # 4.4.0 (or override)
 xicli license show                           # license valid, not expired
 xicli raid show -f json | jq 'keys'          # data + log arrays present
 xicli raid show                              # state = online, no degraded members
