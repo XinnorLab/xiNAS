@@ -93,6 +93,33 @@ describe('validateCreateSpec', () => {
     expect(codes(spec({ level, member_disk_ids: at, ...extra }))).not.toContain('min_drives');
   });
 
+  // AG / RAIDs explained: "RAID 10 requires at least 2 drives (the number of
+  // drives must be even)". Only raid10 carries the rule.
+  it('raid10 rejects an odd member count', () => {
+    expect(codes(spec({ level: 'raid10', member_disk_ids: POOL.slice(0, 5) }))).toContain(
+      'members_not_even',
+    );
+    expect(codes(spec({ level: 'raid10', member_disk_ids: POOL.slice(0, 6) }))).toEqual([]);
+  });
+
+  it('odd member counts are fine for levels without the even rule', () => {
+    expect(codes(spec({ level: 'raid5', member_disk_ids: POOL.slice(0, 5) }))).toEqual([]);
+  });
+
+  // AG raises raid70's group-size floor to 6; raid50/60 stay at the command
+  // reference's 4.
+  it('raid70 group_size floor is 6, not the generic 4', () => {
+    const twelve = POOL.slice(0, 12);
+    expect(codes(spec({ level: 'raid70', member_disk_ids: twelve, group_size: 4 }))).toContain(
+      'group_size_range',
+    );
+    expect(codes(spec({ level: 'raid70', member_disk_ids: twelve, group_size: 6 }))).toEqual([]);
+    // the same group_size of 4 is valid for raid50
+    expect(
+      codes(spec({ level: 'raid50', member_disk_ids: POOL.slice(0, 8), group_size: 4 })),
+    ).toEqual([]);
+  });
+
   it('raid50/60/70 group_size rules', () => {
     const eight = POOL.slice(0, 8);
     expect(codes(spec({ level: 'raid50', member_disk_ids: eight }))).toContain(
@@ -203,8 +230,16 @@ describe('validateCreateSpec', () => {
     // hyphens are valid in most Linux object names but NOT in a xiRAID array name
     expect(codes(spec({ name: 'my-array' }))).toContain('name_invalid');
     expect(codes(spec({ name: 'my_array' }))).toEqual([]);
-    for (const reserved of ['power', 'uevent', 'POWER', 'Uevent']) {
+    for (const reserved of ['power', 'uevent']) {
       expect(codes(spec({ name: reserved }))).toContain('name_invalid');
+    }
+    // The prohibited-name match is EXACT, and deliberately so: the array
+    // surfaces as /sys/block/xi_<name>/ and the attributes it would collide
+    // with are lowercase, so 'POWER' collides with nothing. Rejecting it would
+    // refuse a name xiRAID accepts. Mirrored in the TUI rule module — see
+    // tests/test_raid_rules.py::TestArrayName.
+    for (const notReserved of ['POWER', 'Uevent']) {
+      expect(codes(spec({ name: notReserved }))).toEqual([]);
     }
   });
 

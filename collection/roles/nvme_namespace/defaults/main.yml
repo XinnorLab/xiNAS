@@ -63,7 +63,7 @@ nvme_skip_cleanup_confirmation: false  # Skip confirmation prompt (DANGEROUS - s
 # Replaces the former nvme_min_devices_for_raid5 / nvme_min_devices_for_raid10
 # scalars, which is how RAID 5 ended up with a 3-drive floor the engine rejects.
 nvme_raid_min_devices:
-  0: 2
+  0: 1
   1: 2
   5: 4
   6: 4

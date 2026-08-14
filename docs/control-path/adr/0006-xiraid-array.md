@@ -120,7 +120,7 @@ The gRPC client dials the xiRAID daemon over **TCP with TLS** (`host:port` from 
 | `spec.name` | ✅ required | ❌ `UNSUPPORTED` | Identity; rename = destroy+recreate. Constrained by xiRAID, not by us: **≤ 28 chars, `[A-Za-z0-9_]` only, and `power`/`uevent` prohibited** ([CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html) §*RAID array naming rules*). *(Amended 2026-08-14: `NAME_RE` was `^[A-Za-z0-9_-]{1,63}$` — hyphens allowed and more than twice the length limit.)* |
 | `spec.level` | ✅ required | ❌ `UNSUPPORTED` | Topology; immutable after create. |
 | `spec.member_disk_ids` | ✅ required | ❌ `UNSUPPORTED` | Topology; reshaping members is not a Phase-0 modify. |
-| `spec.group_size` | ✅ (**required** for `raid50/60/70`) | ❌ `UNSUPPORTED` | Drives per group; **`[4,32]`**; member count must divide evenly into ≥ 2 groups. *(Amended 2026-08-14: was `[2,32]`, taken from the internal source-tree analysis. [CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html) gives 4–32, and [AG / RAIDs explained](https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/xiraid_raids_explained.html) requires group size ≥ 4 for raid50/60 and ≥ 6 for raid70 — the raid70 floor is **not** yet enforced separately.)* |
+| `spec.group_size` | ✅ (**required** for `raid50/60/70`) | ❌ `UNSUPPORTED` | Drives per group; **`[4,32]`** for `raid50/60` and **`[6,32]`** for `raid70`; member count must divide evenly into ≥ 2 groups. *(Amended 2026-08-14: was `[2,32]`, taken from the internal source-tree analysis. [CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html) gives 4–32; [AG / RAIDs explained](https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/xiraid_raids_explained.html) raises the floor to 6 for `raid70`, now enforced per level.)* |
 | `spec.synd_cnt` | ✅ (**required** for `n+m`) | ❌ `UNSUPPORTED` | Syndrome count (the `m`); `[4,32]`. |
 | `spec.strip_size_kib` | ✅ | ❌ `UNSUPPORTED` | From the xiRAID `STRIP_SIZES_KB` set (powers of two; `{16,32,64,128,256}`). |
 | `spec.block_size` | ✅ | ❌ `UNSUPPORTED` | `512` or `4096`. |
@@ -169,10 +169,13 @@ A shared **`xiNAS-MCP/src/lib/xiraid/`** module is the single home for array log
   > **n+m ≥ 8**. `LEVEL_CONSTRAINTS` was below the engine on five of the ten
   > levels (raid5, raid7, raid50, raid70, n+m), so `validateCreateSpec`
   > returned no `min_drives` blocker for specs xiRAID then rejected at
-  > `raid_create` — the plan looked clean and the executor failed. Two rules
-  > the validator still does **not** enforce, both documented by AG:
-  > raid10's even-member-count rule, and raid70's group size ≥ 6 (the generic
-  > `[4,32]` range applies instead). **Pure**: disk facts are passed in by the caller, so the same function runs in the api (against observed `Disk`/`XiraidArray` state) and in the executor (against live agent-side facts).
+  > `raid_create` — the plan looked clean and the executor failed.
+  >
+  > *(Amended again 2026-08-14.)* The two AG rules left unenforced by that
+  > first pass are now enforced too: **raid10's even-member-count rule**
+  > (new blocker code `members_not_even`) and **raid70's group size ≥ 6**
+  > (per-level floor rather than the generic `[4,32]`). With those in, every
+  > per-level requirement AG states is checked before a plan row is written. **Pure**: disk facts are passed in by the caller, so the same function runs in the api (against observed `Disk`/`XiraidArray` state) and in the executor (against live agent-side facts).
 - `translate.ts` — control-path `spec` + the resolved `device_by_id` map → the gRPC `RaidCreateRequest` / `RaidModifyRequest` (`raid6 → "6"`, `n+m → "n+m"` + `synd_cnt`, `strip_size_kib → strip_size`, booleans → `0/1`, `member_disk_ids → drives` via `device_by_id`, `null` tuning omitted). Never emits `force`.
 
 ### API endpoints (REST)
@@ -211,7 +214,7 @@ All `risk_level` / `rollback_model` values below use the api-v1.yaml enums (`ris
 
 ### Preflight blockers (codes)
 
-Harvested from the xiRAID error taxonomy into `lib/xiraid/validate`: `min_drives` (level minimum not met), `group_size_required` / `group_size_range` / `members_not_divisible_by_group` (raid50/60/70), `synd_cnt_required` / `synd_cnt_range` (n+m), `strip_size_invalid`, `block_size_invalid`, `param_out_of_range` (priorities/memory/timings), `name_invalid` / `name_taken`, `disk_not_found` / `disk_not_safe` / `disk_is_system` / `disk_in_use` (per offending disk). Delete adds `dangerous_flag_required`, `dependent_filesystem_mounted`, `dependent_share_active`.
+Harvested from the xiRAID error taxonomy into `lib/xiraid/validate`: `min_drives` (level minimum not met), `members_not_even` (raid10 — AG: "the number of drives must be even"), `group_size_required` / `group_size_range` / `members_not_divisible_by_group` (raid50/60/70), `synd_cnt_required` / `synd_cnt_range` (n+m), `strip_size_invalid`, `block_size_invalid`, `param_out_of_range` (priorities/memory/timings), `name_invalid` / `name_taken`, `disk_not_found` / `disk_not_safe` / `disk_is_system` / `disk_in_use` (per offending disk). Delete adds `dangerous_flag_required`, `dependent_filesystem_mounted`, `dependent_share_active`.
 
 ### Relationship to other objects
 
