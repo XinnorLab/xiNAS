@@ -165,3 +165,12 @@ def test_executable_self_test_passes():
 def test_executable_is_not_an_elf_binary():
     # Drop-in must be a text script, not the old committed ELF.
     assert HWKEY.read_bytes()[:4] != b"\x7fELF"
+
+
+def test_license_screen_imports_local_fallback():
+    """license.py must wire the local-compute fallback so a pre-install
+    license entry (module not loaded) still shows a hardware key instead of
+    the '(unavailable)' dead-end. We assert on the source to avoid needing
+    Textual installed in the unit env (the screen is CI-covered)."""
+    src = (REPO / "xinas_menu" / "screens" / "license.py").read_text()
+    assert "best_effort_v2_hwkey" in src, "license.py must use the local hwkey fallback"
