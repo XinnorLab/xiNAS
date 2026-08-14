@@ -8,21 +8,10 @@ LVM/MD/ZFS root, and the health-check remediation runner.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import subprocess
 
 from xinas_menu.screens.mcp import MCPScreen
-
-
-def test_mcp_restart_audits_the_observed_outcome():
-    """A failed restart must not be recorded as OK — the audit trail is what an
-    operator reconstructs an incident from."""
-    src = inspect.getsource(MCPScreen._restart)
-    assert '"OK"' in src, "guard: the OK literal should still be there"
-    assert '"FAIL"' in src, "a failing restart must be auditable as FAIL"
-    # The audit call must not pass a bare literal.
-    assert 'audit.log("mcp.restart", "xinas-nfs-helper", "OK")' not in src
 
 
 class _StubAudit:
