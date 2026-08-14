@@ -15,18 +15,12 @@ from __future__ import annotations
 
 import inspect
 import re
-from collections import namedtuple
 
 from xinas_history.runner import TransactionalRunner
 from xinas_menu.screens.config_history import ConfigHistoryScreen
 
 # Thread-hopping primitives that would raise RuntimeError on the event loop
-_ThreadHopAPI = namedtuple("_ThreadHopAPI", ["name"])
-_FORBIDDEN_APIS = [
-    _ThreadHopAPI("call_from_thread"),
-    _ThreadHopAPI("call_soon_threadsafe"),
-    _ThreadHopAPI("run_coroutine_threadsafe"),
-]
+_FORBIDDEN_APIS = ["call_from_thread", "call_soon_threadsafe", "run_coroutine_threadsafe"]
 
 
 def test_reset_progress_does_not_hop_threads():
@@ -38,8 +32,8 @@ def test_reset_progress_does_not_hop_threads():
     """
     src = inspect.getsource(ConfigHistoryScreen._reset_to_baseline)
     for api in _FORBIDDEN_APIS:
-        assert api.name not in src, (
-            f"progress_cb runs on the event loop; {api.name} raises RuntimeError "
+        assert api not in src, (
+            f"progress_cb runs on the event loop; {api} raises RuntimeError "
             "there and the runner suppresses it, so every progress line is dropped"
         )
 
@@ -48,6 +42,27 @@ def test_reset_progress_callback_still_updates_the_view():
     # Guard against 'fixing' the above by deleting the update entirely.
     src = inspect.getsource(ConfigHistoryScreen._reset_to_baseline)
     assert "set_content" in src
+
+
+def test_screen_awaits_runner_on_its_own_loop():
+    """Pins the screen's half of the threading contract.
+
+    The direct `view.set_content()` call in the progress callback is only
+    correct because the screen awaits `runner.execute_reset_to_baseline`
+    inline, on the same event loop the callback runs on. If a future change
+    wrapped that call to move it off-loop (e.g.
+    `await asyncio.to_thread(lambda: asyncio.run(runner.execute_reset_to_baseline(...)))`),
+    the callback would land back on a thread on a foreign loop and
+    `call_from_thread` would become necessary again — but every assertion
+    above would stay green, since they only inspect the callback body. This
+    test catches that class of regression directly.
+    """
+    src = inspect.getsource(ConfigHistoryScreen._reset_to_baseline)
+    assert re.search(r"await\s+runner\.execute_reset_to_baseline", src), (
+        "the screen must await runner.execute_reset_to_baseline() inline; "
+        "moving it off the event loop (to_thread/asyncio.run) breaks the "
+        "callback's direct set_content() call"
+    )
 
 
 def test_runner_invokes_progress_cb_on_the_event_loop():
