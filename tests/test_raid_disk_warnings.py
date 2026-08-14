@@ -9,8 +9,7 @@ to look for missing drives instead of a broken collector.
 from __future__ import annotations
 
 import asyncio
-
-import pytest
+import uuid
 
 from xinas_menu.screens.raid import (
     RAIDScreen,
@@ -74,15 +73,31 @@ def test_no_drives_message_is_plain_without_a_banner():
     assert _no_drives_message("") == "No available NVMe drives found."
 
 
-@pytest.mark.parametrize(
-    "banner_text",
-    ["disk collector errored", "collector wedged: ENOENT on /dev/nvme0"],
-)
-def test_wizard_renders_the_banner_in_its_abort_dialog(banner_text):
-    """Drives the real no-drives path. Two different banner texts, because a
-    single fixed one is satisfiable by a wizard that ignores the fetched banner
-    and prints a matching constant — that is how the previous version of this
-    test was defeated."""
+def test_wizard_renders_the_fetched_banner_in_its_abort_dialog():
+    """The banner the wizard *fetched* must be the one it renders.
+
+    The text is generated per run and appears nowhere in this file, so an
+    implementation that hardcodes or table-looks-up the expected message
+    cannot pass. Four earlier versions of this test were each defeated by a
+    reviewer-constructed passing-but-wrong implementation:
+
+    1. A substring check on the wizard's source (`"banner" in src`) was
+       satisfied by the variable name `disk_banner` alone.
+    2. A regex on the source for `_no_drives_message(disk_banner)` was
+       satisfied by a body that called the helper and discarded the result.
+    3. A behavioral test driving the real no-drives path with a single fixed
+       banner string was satisfied by a wizard that ignored the fetched
+       banner and printed a matching constant.
+    4. Parametrizing over two fixed banner strings raised the bar from one
+       hardcoded constant to a two-entry lookup table keyed on exactly those
+       strings, still bypassing `_no_drives_message` entirely.
+
+    Every one of those fixtures was visible in the test source, so any finite
+    set of them could be hardcoded or tabulated. A value generated at run
+    time and never written to disk closes that class of attack outright: no
+    lookup table can contain a token it has never seen.
+    """
+    token = f"collector unavailable {uuid.uuid4().hex}"
     captured: list = []
 
     class _StubApp:
@@ -97,9 +112,9 @@ def test_wizard_renders_the_banner_in_its_abort_dialog(banner_text):
         def __init__(self, control):
             self.app = _StubApp(control)
 
-    asyncio.run(RAIDScreen._create_array_wizard.__wrapped__(_StubScreen(_degraded(banner_text))))
+    asyncio.run(RAIDScreen._create_array_wizard.__wrapped__(_StubScreen(_degraded(token))))
 
     assert captured, "the wizard showed no dialog"
     message = captured[0]._message
     assert "No available NVMe drives found." in message
-    assert banner_text in message, "the banner never reached the dialog"
+    assert token in message, "the fetched banner never reached the dialog"
