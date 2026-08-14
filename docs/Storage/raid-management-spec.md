@@ -1,17 +1,19 @@
 # xiNAS — RAID Management from the TUI
 
-This document covers the *day-2* RAID management surface: the Textual TUI screens, the helpers they call, and the gRPC service those helpers talk to. It is the counterpart to [Installer/raid-spec.md](../Installer/raid-spec.md), which describes how arrays are first created by Ansible.
+This document covers the *day-2* RAID management surface: the Textual TUI screens and the services they call. It is the counterpart to [Installer/raid-spec.md](../Installer/raid-spec.md), which describes how arrays are first created by Ansible.
 
-The TUI never runs `xicli` directly. Every RAID operation is an RPC against the xiRAID gRPC daemon, with two adjuncts: an NFS helper daemon over a Unix socket, and a small XFS helper module that runs `findmnt` / `systemctl` synchronously from the TUI process.
+The TUI never runs `xicli` directly. Since the S8/S9 control-path migration (ADR-0010, ADR-0011), **every array and pool operation — read and write — is a control-path API call** against `xinas-api`; writes go through `plan_apply_wait`. Two adjuncts remain: the xiRAID gRPC client, still used by the Physical Drives screen (§8) for `disk_list` / `drive_locate`, and a small XFS helper module that runs `findmnt` synchronously from the TUI process. The `xinas-nfs-helper` socket is **no longer** on the RAID path at all.
 
 Sources:
 
 - Screens: [xinas_menu/screens/storage.py](../../xinas_menu/screens/storage.py), [raid.py](../../xinas_menu/screens/raid.py), [spare_pools.py](../../xinas_menu/screens/spare_pools.py), [drives.py](../../xinas_menu/screens/drives.py)
+- Control-path client: [xinas_menu/api/control_client.py](../../xinas_menu/api/control_client.py) (`ControlClient.result` / `.get` / `.plan_apply_wait`, `quote_id`)
 - gRPC helper: [xinas_menu/api/grpc_client.py](../../xinas_menu/api/grpc_client.py)
 - NFS helper client: [xinas_menu/api/nfs_client.py](../../xinas_menu/api/nfs_client.py)
 - XFS helpers: [xinas_menu/utils/xfs_helpers.py](../../xinas_menu/utils/xfs_helpers.py)
 - Audit + snapshot helpers: [xinas_menu/utils/audit.py](../../xinas_menu/utils/audit.py), [xinas_menu/utils/snapshot_helper.py](../../xinas_menu/utils/snapshot_helper.py)
 - Drive picker widget: [xinas_menu/widgets/drive_picker.py](../../xinas_menu/widgets/drive_picker.py)
+- Control-path contract: [docs/control-path/api-v1.yaml](../control-path/api-v1.yaml), [s8-clients-spec.md](../control-path/s8-clients-spec.md) (§6 is the authoritative teardown contract), [ADR-0011](../control-path/adr/0011-config-history-audit-pools.md) (pools)
 - gRPC service contract: [xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto), [message_raid.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/message_raid.proto), [message_pool.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/message_pool.proto)
 - NFS helper daemon: [xiNAS-MCP/nfs-helper/nfs_helper.py](../../xiNAS-MCP/nfs-helper/nfs_helper.py), [xinas-nfs-helper.service](../../xiNAS-MCP/nfs-helper/xinas-nfs-helper.service)
 
@@ -37,7 +39,7 @@ page behind it.
 
 ## 1. Where this lives in the TUI
 
-`xinas-menu` (entry point `xinas_menu/__main__.py`) launches the Textual app with `XiRAIDClient` mounted as `self.app.grpc` and `NFSHelperClient` as `self.app.nfs`. The user reaches RAID via:
+`xinas-menu` (entry point `xinas_menu/__main__.py`) launches the Textual app with `ControlClient` mounted as `self.app.control`, `XiRAIDClient` as `self.app.grpc`, and `NFSHelperClient` as `self.app.nfs`. RAID Management and Spare Pools use `self.app.control` exclusively; Physical Drives is the one screen in this document that still uses `self.app.grpc`, and none of the three touch `self.app.nfs`. The user reaches RAID via:
 
 ```
 Main Menu → Storage (StorageScreen) → 1 RAID Management (RAIDScreen)
@@ -59,43 +61,56 @@ Main Menu → Storage (StorageScreen) → 1 RAID Management (RAIDScreen)
 | 5 | Edit Array | `_modify_array()` |
 | 6 | Delete Array | `_delete_array()` |
 
-`on_mount` runs Quick Overview immediately, so opening the screen kicks a `raid_show` against the daemon.
+`on_mount` runs Quick Overview immediately, so opening the screen kicks a `GET /api/v1/arrays` against `xinas-api`.
 
 ---
 
-## 2. The two helpers behind RAID Management
+## 2. The service layer behind RAID Management
 
-Every RAID operation crosses one of two IPC boundaries — neither one is `subprocess('xicli …')`. The TUI is a thin presenter; the **xiRAID gRPC daemon** and the **xinas-nfs-helper** are the actual service layer.
+RAID and pool work crosses exactly one boundary — never `subprocess('xicli …')`. The TUI is a thin presenter; **`xinas-api`** is the service layer, and the agent behind it is what reaches the xiRAID daemon.
 
 ```
 ┌──────────────────────┐
 │  xinas-menu (TUI)    │
-│   Python / Textual    │
-│   runs as root        │
-└─────┬────────┬───────┘
-      │        │
-      │ gRPC   │ JSON over AF_UNIX
-      │ :6066  │ /run/xinas-nfs-helper.sock
-      ▼        ▼
-┌─────────────┐  ┌──────────────────────┐
-│ xRAID gRPC  │  │ xinas-nfs-helper     │
-│ daemon      │  │ Python daemon, root  │
-│ (xiRAID-    │  │ ProtectHome=true     │
-│  Classic)   │  └────────┬─────────────┘
-└──────┬──────┘           │
-       │                  │ writes
-       │ ioctl + xicli    ▼
-       ▼               /etc/exports
-   xiRAID kmod         /etc/nfs.conf
-   /dev/xi_<name>      exportfs -r
-                       systemctl restart nfs-server
+│   Python / Textual   │
+│   runs as root       │
+└─────┬──────────┬─────┘
+      │          │
+      │ HTTP     │ gRPC :6066
+      │ (control │ (Physical Drives
+      │  path)   │  screen only)
+      ▼          │
+┌──────────────┐ │
+│  xinas-api   │ │
+│  plan/apply  │ │
+│  + task wait │ │
+└──────┬───────┘ │
+       │         │
+       ▼         │
+┌──────────────┐ │
+│  xinas-agent │ │
+└──────┬───────┘ │
+       │         │
+       ▼         ▼
+┌────────────────────┐
+│  xRAID gRPC daemon │
+│  (xiRAID-Classic)  │
+└─────────┬──────────┘
+          │ ioctl + xicli
+          ▼
+     xiRAID kmod
+     /dev/xi_<name>
 ```
 
-The third "helper" used during RAID **deletion** is `xinas_menu/utils/xfs_helpers.py` — but that runs in-process inside the TUI (no separate service); it just shells out to `findmnt`, `systemctl`, `mkfs.xfs` etc. via `asyncio.create_subprocess_exec`.
+Writes are never fire-and-forget: `ControlClient.plan_apply_wait(method, path, spec, …)` submits the intent, applies the resulting plan (with `dangerous=True` where the endpoint demands it), and blocks on the task, streaming stage transitions to an `on_progress` callback and honouring a `cancel_check`. Plan blockers surface as `ControlPathError` before anything is touched.
+
+The one in-process helper left on the RAID path is `xinas_menu/utils/xfs_helpers.py` — no separate service; it shells out to `findmnt` via `asyncio.create_subprocess_exec` (§2.4).
 
 ### 2.1 `XiRAIDClient` — gRPC bridge to xiRAID
 
 Source: [xinas_menu/api/grpc_client.py](../../xinas_menu/api/grpc_client.py).
+
+**Scope note.** Of the screens in this document, only Physical Drives (§8) still calls this client — `disk_list()` and `drive_locate()`. RAID Management and Spare Pools do not import it. The client's remaining RAID/pool methods are described below because they are still the contract the *agent* speaks on the far side of `xinas-api`, and because the client keeps them available; they are not the TUI's call path.
 
 - **Address:** `localhost:6066` (hardcoded, `_GRPC_ADDRESS`).
 - **Transport:** `grpc.aio` channel. Secure by default — TLS root cert resolved in this order:
@@ -114,32 +129,41 @@ Source: [xinas_menu/api/grpc_client.py](../../xinas_menu/api/grpc_client.py).
   Errors never raise into the UI layer.
 - **RPC naming gotcha:** the service is `XRAIDService` (capital `XRAID`), but request messages live in `message_*_pb2`, **not** `service_xraid_pb2`. The client's `_import_stubs()` imports the message modules separately.
 
-### 2.2 RAID RPCs the TUI uses
+### 2.2 The RAID/pool endpoints the TUI uses
 
-Direct mapping from `XiRAIDClient` methods to the protos in [service_xraid.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto):
+Every array and pool operation in these screens is one of these calls. Reads go through `control.result(path)` (or `control.get(path)` when the screen needs the envelope's `warnings` — §3.1); writes through `control.plan_apply_wait(...)`. Ids are always percent-encoded as a single path segment with `quote_id()` (s8-clients-spec §6).
 
-| Python method | RPC | Request message | Used by |
-|---|---|---|---|
-| `raid_show(units, name, extended)` | `raid_show` | `RaidShow` | Quick / Extended overview, every edit/delete pre-check |
-| `raid_create(name, level, drives, **kwargs)` | `raid_create` | `RaidCreate` | Create wizard |
-| `raid_modify(name, **kwargs)` | `raid_modify` | `RaidModify` | Edit Array |
-| `raid_destroy(name, force)` | `raid_destroy` | `RaidDestroy` | Delete Array (always with `force=True`) |
-| `raid_unload(name)` | `raid_unload` | `RaidUnload` | — (available, not currently used) |
-| `raid_init_start(name)` / `raid_init_stop(name)` | matching RPCs | — | — (available, not currently used) |
-| `raid_recon_start(name)` / `raid_recon_stop(name)` | matching RPCs | — | — (available, not currently used) |
+| Operation | Call | Used by |
+|---|---|---|
+| List arrays | `GET /api/v1/arrays` | Quick / Extended overview, every edit/delete pre-check |
+| Create array | `POST /api/v1/arrays` | Create wizard (§4) |
+| Modify array | `PATCH /api/v1/arrays/{id}` | Edit Array (§5) |
+| Destroy array | `DELETE /api/v1/arrays/{id}` (`dangerous=True`) | Delete Array (§6), teardown step 3 |
+| List disks | `GET /api/v1/disks` | Create wizard, spare-pool drive picker |
+| List shares | `GET /api/v1/shares` | Delete Array dependency discovery |
+| Delete share | `DELETE /api/v1/shares/{id}` | Delete Array, teardown step 1 |
+| List filesystems | `GET /api/v1/filesystems` | Delete Array dependency discovery |
+| Unmount filesystem | `PATCH /api/v1/filesystems/{id}` `{"mounted": false}` | Delete Array, teardown step 2 |
+| Unmanage filesystem | `DELETE /api/v1/filesystems/{id}` | Delete Array, teardown step 2 |
+| Pools | `GET` / `POST` / `PATCH` / `DELETE /api/v1/pools[/{name}]` | Spare Pools (§7), spare-pool pickers in §4 / §5.2 |
 
-For pools:
+The array create spec (`XiraidArray.spec`, [api-v1.yaml](../control-path/api-v1.yaml)) carries `name`, `level` (`"raid<N>"`), `member_disk_ids`, `strip_size_kib`, and optionally `group_size` and `spare_disk_ids`. `force_metadata` is **not** set from the TUI — that flag is reserved for Ansible re-creates where stale metadata is expected.
+
+#### 2.2.1 The daemon-side RPCs behind those endpoints
+
+Retained for reference: the `XiRAIDClient` methods and the protos in [service_xraid.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto) that the agent's executors ultimately drive. **No screen in this document calls these** (see the §2.1 scope note) except the two marked *drives screen*.
 
 | Python method | RPC | Request message |
 |---|---|---|
-| `pool_show(name, units)` | `pool_show` | `PoolShow` |
-| `pool_create(name, drives)` | `pool_create` | `PoolCreate` |
-| `pool_delete(name)` | `pool_delete` | `PoolDelete` |
-| `pool_add(name, drives)` | `pool_add` | `PoolAdd` |
-| `pool_remove(name, drives)` | `pool_remove` | `PoolRemove` |
-| `pool_activate(name)` / `pool_deactivate(name)` | matching RPCs | matching messages |
-
-`RaidCreate` accepts the full Xinnor parameter surface — see [message_raid.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/message_raid.proto). The TUI passes `strip_size`, optional `group_size` (RAID 50/60 only), and optional `sparepool`. `force_metadata` is **not** set from the TUI — that flag is reserved for Ansible re-creates where stale metadata is expected.
+| `disk_list()` | `disk_list` | — (*drives screen*, §8) |
+| `drive_locate(drives)` | `drive_locate` | — (*drives screen*, §8) |
+| `raid_show(units, name, extended)` | `raid_show` | `RaidShow` |
+| `raid_create(name, level, drives, **kwargs)` | `raid_create` | `RaidCreate` |
+| `raid_modify(name, **kwargs)` | `raid_modify` | `RaidModify` |
+| `raid_destroy(name, force)` | `raid_destroy` | `RaidDestroy` |
+| `raid_unload(name)` | `raid_unload` | `RaidUnload` |
+| `raid_init_start` / `raid_init_stop` / `raid_recon_start` / `raid_recon_stop` | matching RPCs | — |
+| `pool_show` / `pool_create` / `pool_delete` / `pool_add` / `pool_remove` / `pool_activate` / `pool_deactivate` | matching RPCs | matching messages |
 
 ### 2.3 `NFSHelperClient` — Unix-socket bridge to xinas-nfs-helper
 
@@ -167,25 +191,25 @@ Ops it exposes (one Python handler each, from [nfs_helper.py](../../xiNAS-MCP/nf
 | `reload` | `exportfs -r` |
 | `fix_nfs_conf` | Re-writes the managed block in `/etc/nfs.conf`, restarts `nfs-server` |
 
-In the RAID screen, only `list_exports`, `remove_export`, `add_export`, and `reload` are reached — they are called during teardown when an array being deleted has dependent NFS shares (see §6).
+**No RAID screen reaches this client.** Share removal during a RAID teardown is `DELETE /api/v1/shares/{id}` (§6.3). The helper is documented here because it is still the writer of `/etc/exports` on the far side of that call — the agent's NFS executor talks to the same socket ([agent/task/nfs-helper-client.ts](../../xiNAS-MCP/src/agent/task/nfs-helper-client.ts)) — and because other TUI screens (Shares, Users) call it directly.
 
 ### 2.4 `xfs_helpers` — async subprocess helpers
 
-Source: [xinas_menu/utils/xfs_helpers.py](../../xinas_menu/utils/xfs_helpers.py). Pure Python, no daemon. Used by the RAID screen for two things during deletion:
+Source: [xinas_menu/utils/xfs_helpers.py](../../xinas_menu/utils/xfs_helpers.py). Pure Python, no daemon. The RAID screen imports exactly two of its functions, both **read-only**:
 
-- `find_mounts_using_raid(array_name)` — finds every XFS mount whose **data** device is `/dev/xi_<name>` *or* whose mount options carry `logdev=/dev/xi_<name>`. The second case matters: the data array and the log array are separate xiRAID volumes, and `mnt-data.mount` references the log via `Options=…,logdev=/dev/xi_log,…`. Deleting `xi_log` without unmounting `/mnt/data` first would leave the XFS log dangling.
-- `unmount_filesystem(mountpoint)` and `mount_filesystem(mountpoint)` — wrap `systemctl stop/start <unit>` for the systemd `.mount` units (see [Installer/fs-exports-spec.md §1.8](../Installer/fs-exports-spec.md#18-mountpoint-and-systemd-mount-unit)). Both are used in the rollback path.
+- `find_mounts_using_raid(array_name)` — finds every XFS mount whose **data** device is `/dev/xi_<name>` *or* whose mount options carry `logdev=/dev/xi_<name>`. The second case matters: the data array and the log array are separate xiRAID volumes, and `mnt-data.mount` references the log via `Options=…,logdev=/dev/xi_log,…`. Deleting `xi_log` without unmounting `/mnt/data` first would leave the XFS log dangling. This local `findmnt` read is kept alongside `GET /api/v1/filesystems` because the API does not model log-device usage as a `backing_device` (§6.1).
+- `is_path_under(path, mountpoint)` — the containment test that decides which shares a mountpoint owns.
 
-The geometry / mkfs / mount-unit helpers in the same file are used by the Filesystem screen, not the RAID screen — they replicate the Ansible behavior for runtime FS creation.
+The mutating helpers in the same file — `unmount_filesystem` / `mount_filesystem` (the `systemctl stop/start <unit>` wrappers, see [Installer/fs-exports-spec.md §1.8](../Installer/fs-exports-spec.md#18-mountpoint-and-systemd-mount-unit)) — and the geometry / mkfs / mount-unit helpers belong to the Filesystem screen. The RAID screen does **not** call them: unmounting during a teardown is `PATCH /api/v1/filesystems/{id}` (§6.3), and there is no re-mount path at all (§6.4).
 
 ### 2.5 Cross-cutting helpers: audit + snapshots
 
 Every RAID write (create / modify / destroy) goes through two side-channel helpers:
 
-- **Audit log** ([utils/audit.py](../../xinas_menu/utils/audit.py)) — appends one line per action to `/var/log/xinas/audit.log` in the format `YYYY-MM-DD HH:MM:SS | user | action | STATUS | detail`. `action` strings are stable identifiers like `raid.create`, `raid.modify`, `raid.destroy`, `nfs.remove`, `fs.unmount`. The logger never raises into the UI.
+- **Audit log** ([utils/audit.py](../../xinas_menu/utils/audit.py)) — appends one line per action to `/var/log/xinas/audit.log` in the format `YYYY-MM-DD HH:MM:SS | user | action | STATUS | detail`. `action` strings are stable identifiers like `raid.create`, `raid.modify`, `raid.destroy`, `nfs.remove`, `fs.unmount`, `fs.unmanage`. The logger never raises into the UI.
 - **Snapshot helper** ([utils/snapshot_helper.py](../../xinas_menu/utils/snapshot_helper.py)) — best-effort `await app.snapshots.record("<operation>", diff_summary=…)`. Backed by `xinas_history.SnapshotEngine` (see [Installer/spec.md §3.11](../Installer/spec.md#311-xinas_history--config-snapshots--rollback)). Failures are logged but never propagate; snapshots are advisory, not transactional.
 
-The audit line is written **after** the gRPC reports success. The snapshot is recorded **after** the audit line. Either can fail without affecting the user-visible result.
+The audit line is written **after** the apply task reports success. The snapshot is recorded **after** the audit line. Either can fail without affecting the user-visible result.
 
 ---
 
@@ -500,11 +524,10 @@ The summary dialog (title `"Confirm Create"`, `allow_back=True`) renders all sel
 
 Steps:
 
-1. **Pick an array.** `grpc.raid_show()` → `SelectDialog` over array names.
-2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(grpc_key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max. (`resync_enabled` is not offered — the vendored `RaidModify` message has no such field **[from descriptor]**; see the caveat below.) The two merge-max knobs are **times in microseconds** (the daemon spells them `merge_*_usecs`), so their labels read `(us)` — they were mislabelled `(KB)` until the tuning surface became observable and read and write paths could be compared.
-
+1. **Pick an array.** `GET /api/v1/arrays` → `SelectDialog` over array names.
+2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max. (`resync_enabled` is create-only — xiRAID's `RaidModify` has no such field — so it is not offered.) The two merge-max knobs are **times in microseconds** (the daemon spells them `merge_*_usecs`), so their labels read `(us)` — they were mislabelled `(KB)` until the tuning surface became observable and read and write paths could be compared.
 3. **Per-parameter prompt** — see §5.1.
-4. **Confirm + dispatch.** Value is coerced to the declared `vtype` (`int` for the integer knobs, `str` for the rest). `grpc.raid_modify(name, **{key: value})` is invoked. On success: audit (`raid.modify`) + snapshot (`raid_modify`) + Quick Overview refresh.
+4. **Confirm + dispatch.** Value is coerced to the declared `vtype` (`int` for the integer knobs, `str` for the rest) and mapped onto the ADR-0006 writable subset — `sparepool` becomes `{"spare_disk_ids": [...]}`, everything else `{"tuning": {key: value}}`. `PATCH /api/v1/arrays/{name}` is submitted via `plan_apply_wait`. On success: audit (`raid.modify`) + snapshot (`raid_modify`) + Quick Overview refresh. On `ControlPathError`: an OK-only `Edit failed.` dialog.
 
 **Caveat on step 2: "create-only" here means "absent from the gRPC message",
 not "the product can't change it".** CR / `xicli raid` documents
@@ -540,13 +563,15 @@ This is the only place where the TUI itself reads `/sys` rather than going throu
 
 ### 5.2 Spare-pool selection
 
-`spare_pool` is also dynamic — instead of free-form input, `grpc.pool_show()` is queried and a `SelectDialog` is offered. If no pools exist, the operator is told via `notify(severity="warning")` and the dialog aborts.
+`spare_pool` is also dynamic — instead of free-form input, `GET /api/v1/pools` is queried and a `SelectDialog` is offered. If no pools exist, the operator is told via `notify(severity="warning")` and the dialog aborts. The chosen pool's drive paths are mapped to disk ids (via `GET /api/v1/disks`) to build the PATCH's `spare_disk_ids`; a pool with no drives aborts with a warning rather than sending an empty list.
+
+This is also the only knob in §5 whose PATCH spec is not under `tuning`.
 
 ---
 
-## 6. Delete Array — ordered teardown with rollback
+## 6. Delete Array — ordered, stop-on-failure teardown
 
-This is the most complex flow in the screen because deleting a RAID array can cascade into NFS exports and XFS mounts. The deletion path is implemented as a three-step transaction with point-in-time rollback.
+This is the most complex flow in the screen because deleting a RAID array can cascade into NFS shares and filesystems. The deletion path is a **sequence of control-path API operations**, each one a `plan_apply_wait` of its own; it is *not* a transaction, and there is no cross-step rollback (§6.4). The authoritative contract is [s8-clients-spec §6](../control-path/s8-clients-spec.md#6-tui-composite-teardown-t13).
 
 ### 6.1 Dependency discovery
 
@@ -573,41 +598,64 @@ Either case fails preflight with the mountpoint and the reason, before `raid_des
 
 ### 6.2 Two-stage confirmation
 
-The first dialog shows the array summary, the list of NFS shares that will be removed, and the list of filesystems that will be unmounted.
+The first dialog shows the array summary, the list of NFS shares that will be removed, and the list of filesystems that will be unmounted/unmanaged. A mount found by `findmnt` but not present in `affected_fs` is still listed, annotated `(<role> device — not API-managed)`.
 
-When the array has dependencies, a **second** `FINAL CONFIRMATION` dialog appears restating the counts. This is the only place in the screen where double confirmation is required.
+When the array has dependencies, a **second** `FINAL CONFIRMATION` dialog appears restating the counts. This is the only place in the screen where double confirmation is required. Together they are the `dangerous=True` consent that the array-delete apply requires — there is no separate dangerous prompt later.
 
 ### 6.3 The teardown order
 
-Once both confirmations pass, the screen runs three steps **in order**:
+Once both confirmations pass, the screen runs three steps **in order**, each rendered into the teardown progress view with its task's stage transitions:
 
 ```
-Step 1: Remove every affected NFS share         (synchronous, helper socket)
-Step 2: Unmount every affected filesystem        (async, systemctl)
-Step 3: Destroy the RAID array                   (gRPC raid_destroy force=True)
+Step 1: for each affected share       DELETE /api/v1/shares/{id}
+Step 2: for each affected filesystem  PATCH  /api/v1/filesystems/{id} {"mounted": false}   (if mounted)
+                                      DELETE /api/v1/filesystems/{id}                      (unmanage)
+Step 3: the array itself              DELETE /api/v1/arrays/{id}  (dangerous=True)
 ```
 
-The order matters: stopping the mount before the export is removed would orphan an active export; destroying the array before the mount is gone would leave systemd holding a stale device reference.
+The order matters: stopping the mount before the share is removed would orphan an active export; destroying the array before the mount is gone would leave systemd holding a stale device reference.
 
-### 6.4 Rollback
+Step 3 additionally raises a `TaskWaitDialog` so the destroy — the long step — is cancellable; its `cancel_requested` is passed as the `cancel_check`.
 
-Each step appends to a per-step bookkeeping list (`removed_shares`, `unmounted_mounts`). On any failure during teardown:
+### 6.4 Partial teardown — no cross-step rollback
 
-- **Step 1 fails** (NFS share won't remove): re-add every previously removed share via `nfs.add_export(saved)`, then `nfs.reload()`. The teardown aborts with `Error — Rollback Complete`.
-- **Step 2 fails** (a mount won't unmount): re-mount every previously unmounted mountpoint via `mount_filesystem()`, then re-add every removed share, then `nfs.reload()`. Teardown aborts.
-- **Step 3 fails** (xiRAID refuses to destroy): same as Step 2 rollback — every removed share and every unmounted FS is restored. The xiRAID error from `grpc_short_error(err)` is shown to the operator.
+**The sequence stops at the first failing step, and everything already completed stays completed.** Steps 1 and 2 are plain `for` loops over `plan_apply_wait` calls; a `ControlPathError` from any of them calls `_teardown_failed(...)` and returns. There is no bookkeeping of removed shares or unmounted filesystems to undo, and the screen never re-creates a share or re-mounts a filesystem — those paths do not exist in `raid.py`.
 
-This is best-effort, not transactional: if rollback itself errors out, the screen shows what was restored and what wasn't, but cannot reverse the rollback. The audit log captures every step, so an operator can reconstruct the sequence after the fact.
+This is deliberate, per s8-clients-spec §6: rollback belongs to the task engine, one apply at a time. Each individual step's apply either lands or rolls itself back where its executor supports that; the TUI does not stack a second, weaker rollback layer on top of steps that already succeeded and were reported as successful.
+
+**What the operator is told.** `_teardown_failed` appends two lines to the progress view —
+
+```
+  FAILED: <error>
+  Teardown stopped — remaining steps were not run.
+```
+
+— and raises an OK-only dialog titled **`Delete Array — Stopped`** naming the step that failed, the error, and, verbatim: *"Teardown stopped at this step. No cross-step rollback; the failed task rolled itself back where supported."* The progress view above it still shows every step that did complete, in order.
+
+Cancelling the step-3 destroy is reported separately: the progress view gets `Destroy CANCELLED — partial work rolled back (shares/filesystems already removed stay removed).` and a warning notification. The cancellation rolls back the destroy task only.
+
+**Manual recovery.** The system is left in a valid but partially-torn-down state, and recovery is an ordinary forward operation, not an undo:
+
+| Stopped at | State | Recovery |
+|---|---|---|
+| Step 1, share *k* | shares 1..*k-1* deleted; everything else intact | Re-create the missing shares from the Shares screen (or `POST /api/v1/shares`), or continue the teardown once the blocker is cleared. |
+| Step 2, filesystem *k* | all shares deleted; filesystems 1..*k-1* unmounted + unmanaged | Fix the blocker (usually a busy mount — see §10), then either re-run Delete Array to finish, or re-manage/re-mount the filesystem and re-create its shares. |
+| Step 3 (destroy) | all shares and filesystems gone; array still present | The array is intact and its data still readable. Re-run Delete Array once the daemon-side blocker is cleared, or re-create the filesystem and shares on top of it. |
+
+The audit log records each completed step (§6.5), so the boundary between "done" and "not run" is reconstructable after the fact — that trail is what a recovery is driven from.
 
 ### 6.5 Side effects per step
 
 | Step | Audit action | Snapshot recorded |
 |---|---|---|
-| 1 — `nfs.remove_export(path)` | `nfs.remove` with detail `share=<path> (RAID teardown)` | — |
-| 2 — `xfs_helpers.unmount_filesystem(mp)` | `fs.unmount` with detail `mountpoint=<mp> (RAID teardown)` | — |
-| 3 — `grpc.raid_destroy(name, force=True)` | `raid.destroy` with detail `<name>` | `raid_delete` with diff summary |
+| 1 — `DELETE /api/v1/shares/{id}` | `nfs.remove` with detail `share=<path> (RAID teardown)` | — |
+| 2a — `PATCH /api/v1/filesystems/{id}` `{"mounted": false}` | `fs.unmount` with detail `mountpoint=<mp> (RAID teardown)` | — |
+| 2b — `DELETE /api/v1/filesystems/{id}` | `fs.unmanage` with detail `unit=<id> (RAID teardown)` | — |
+| 3 — `DELETE /api/v1/arrays/{id}` (`dangerous=True`) | `raid.destroy` with detail `<name>` | `raid_delete` with diff summary |
 
-Snapshots are taken **only** on the final RAID destroy step, since the share + mount changes are subsumed by the array's disappearance. The snapshot's `diff_summary` counts the removed shares and unmounted mountpoints for context.
+Each audit line is written only after its own step succeeded, which is what makes the trail a faithful record of where a stopped teardown got to. Step 2a is skipped (and no `fs.unmount` line written) for a filesystem the API already reports as not mounted.
+
+Snapshots are taken **only** on the final RAID destroy step, since the share + filesystem changes are subsumed by the array's disappearance. The snapshot's `diff_summary` counts the removed shares and filesystems for context. A teardown that stops early therefore records **no** snapshot.
 
 ---
 
@@ -615,25 +663,31 @@ Snapshots are taken **only** on the final RAID destroy step, since the share + m
 
 Source: [xinas_menu/screens/spare_pools.py](../../xinas_menu/screens/spare_pools.py). Reached from RAID Management → 3, or from Storage → 5.
 
+Since S9 T11 (ADR-0011) the screen rides the control-path API end to end — it does not import the gRPC client. Reads are `GET /api/v1/pools`, returning rows of `{name, drives, active, referenced_by}`; every mutation is a `plan_apply_wait`.
+
 ### 7.1 Menu
 
-| Key | Action | gRPC RPC |
+A `PATCH` carries **exactly one** intent — `add_drives`, `remove_drives`, or `active`; the API rejects a body that mixes them.
+
+| Key | Action | Control-path call |
 |---|---|---|
-| 1 | View Pools | `pool_show` |
-| 2 | Create Pool | `pool_create` |
-| 3 | Add Drives | `pool_add` |
-| 4 | Remove Drives | `pool_remove` |
-| 5 | Activate Pool | `pool_activate` |
-| 6 | Deactivate Pool | `pool_deactivate` |
-| 7 | Delete Pool | `pool_delete` |
+| 1 | View Pools | `GET /api/v1/pools` |
+| 2 | Create Pool | `POST /api/v1/pools` `{name, drives}` |
+| 3 | Add Drives | `PATCH /api/v1/pools/{name}` `{add_drives: [...]}` |
+| 4 | Remove Drives | `PATCH /api/v1/pools/{name}` `{remove_drives: [...]}` |
+| 5 | Activate Pool | `PATCH /api/v1/pools/{name}` `{active: true}` |
+| 6 | Deactivate Pool | `PATCH /api/v1/pools/{name}` `{active: false}` |
+| 7 | Delete Pool | `DELETE /api/v1/pools/{name}` |
+
+Pool names reach the path via `quote_id()` like every other id (s8-clients-spec §6). Failures render through `_pool_error(action, err)`, which shows a one-line reason plus the wrapped full error.
 
 ### 7.2 Drive selection rules
 
 `_get_free_nvme_drives()` enforces the "no double-membership" invariant: a drive can be in **either** a RAID array **or** a spare pool, not both. The function:
 
-1. Calls `disk_list()` for all block drives.
-2. Calls `pool_show()` and builds a set of paths already in any pool.
-3. Filters out: anything missing `nvme` in its name, anything with `system=True`, anything with `raid_name` set, anything already in `pool_drives`.
+1. Calls `_list_api_disks()` (`GET /api/v1/disks`, shared with the RAID Create wizard) for all block drives.
+2. Calls `GET /api/v1/pools` and builds a set of paths already in any pool.
+3. Filters out: anything missing `nvme` in its name, anything with `system=True`, anything not `safe_for_use`, anything `claimed` (already a member or spare of an observed array), and anything already in `pool_drives` — matched on both the `/dev/` path and the bare name, since pool rows and disk rows spell drives differently.
 
 The result is fed into `DrivePickerScreen` so the operator can apply the same NUMA/size/text filters as in the RAID Create wizard.
 
@@ -652,10 +706,10 @@ Same flow as RAID Create up to the drive picker, then:
    The `Pool` schema in [api-v1.yaml](../../docs/control-path/api-v1.yaml) intentionally keeps `name` unpatterned. Publishing a pattern there would over-claim — it would present a xiNAS-local precaution as a vendor contract — and would spend a second `oasdiff` breaking-change finding on a rule we are less sure of than the array one. Enforcement lives in `requireName()` in [xiNAS-MCP/src/api/plan/providers/pool.ts](../../xiNAS-MCP/src/api/plan/providers/pool.ts), which returns `INVALID_ARGUMENT` at plan time.
 2. Drive picker with `_get_free_nvme_drives()` as the source.
 3. Confirmation summary.
-4. Names normalised to `/dev/<name>`.
-5. `grpc.pool_create(name, drives)`.
+4. Names normalised to `/dev/<name>` (`_to_dev_paths` — the picker returns bare names, the pool spec wants paths).
+5. `POST /api/v1/pools` `{name, drives}` via `plan_apply_wait`.
 
-No audit / snapshot calls are wired in for pool operations at the moment — pool changes are visible in the gRPC state but not recorded in `/var/log/xinas/audit.log`.
+No audit / snapshot calls are wired in the *screen* for pool operations — pool changes are not written to `/var/log/xinas/audit.log` by the TUI. They are recorded control-path-side, in the api's own `GET /audit` trail (ADR-0011), which the View Audit Log screen merges with the local trail (see [Management/audit-log-spec.md](../Management/audit-log-spec.md)).
 
 ### 7.4 Remove Drives — checklist style
 
@@ -673,11 +727,13 @@ Single confirmation (no two-stage gate — pools have no downstream FS / NFS dep
 
 ---
 
-## 8. Physical Drives screen (read-only)
+## 8. Physical Drives screen — inventory, plus LED locate
 
 Source: [xinas_menu/screens/drives.py](../../xinas_menu/screens/drives.py).
 
-This is a read-only inventory view. It uses the same `disk_list()` enrichment (`lsblk` + `raid_show(extended=True)` membership join) as the wizards, plus the role classifier:
+This is an inventory view: **no drive's contents or membership can be changed from it.** It is the one screen in this document that still calls the gRPC client directly (`self.app.grpc`, §2.1), not the control-path API.
+
+It loads `grpc.disk_list()` (`lsblk` + `raid_show(extended=True)` membership join), plus the role classifier:
 
 ```
 system → OS drive (root/boot/EFI partition present)
@@ -686,7 +742,11 @@ pool   → in a spare pool
 free   → none of the above
 ```
 
-No write operations — no RPCs are sent. The screen is the canonical "what does this box see right now" view, and it's the data source the wizards' drive filters depend on.
+Everything else on the screen — sort (`s`), reverse (`r`), text filter (`f`), NUMA filter (`n`), detail (`Enter` / `d`), SMART summary (`m`), SMART full (`Shift+M`) — is local or a read.
+
+**The one exception is `l` — Blink LED.** `action_locate_drive` sends `grpc.drive_locate([name])`, which is a **write RPC**: it changes device state on the enclosure, and on success the screen records an audit event, `audit.log("drive.locate", <name>, "OK")`. It is non-destructive and needs no confirmation dialog, but this screen is not "no RPCs are sent" — describing it that way is what let the claim go stale. A failure is reported through `notify(..., severity="error")` with `grpc_short_error(err)` and writes no audit line.
+
+Apart from `drive_locate`, the screen issues no writes. It is the canonical "what does this box see right now" view, and its data source is what the wizards' drive filters depend on (the wizards read the same inventory through `GET /api/v1/disks`).
 
 ---
 
@@ -719,31 +779,32 @@ RAIDScreen._create_array_wizard()
 
 ```
 RAIDScreen._delete_array()
-  ├─ grpc.raid_show()                   — list arrays
+  ├─ GET /api/v1/arrays                 — list arrays
   ├─ SelectDialog (pick array)
-  ├─ find_mounts_using_raid("data")
+  ├─ find_mounts_using_raid("data")     — local findmnt read
   │    ├─ findmnt /dev/xi_data           → /mnt/data role=data
   │    └─ findmnt -t xfs (logdev scan)   → no extra mounts
-  ├─ nfs.list_exports()                 — Unix socket: list_exports
-  │    └─ helper reads /etc/exports
+  ├─ GET /api/v1/shares                 — filtered to paths under /mnt/data
+  ├─ GET /api/v1/filesystems            — backing_device or mountpoint match
   ├─ first ConfirmDialog (warning)
-  ├─ second ConfirmDialog (FINAL)
-  ├─ for each affected share:
-  │    ├─ nfs.remove_export(path)        — Unix socket: remove_export
-  │    │    └─ helper: edit /etc/exports + exportfs -ra
+  ├─ second ConfirmDialog (FINAL)       — together: the dangerous consent
+  ├─ for each affected share:                                    [step 1]
+  │    ├─ DELETE /api/v1/shares/{id}     — plan_apply_wait
+  │    │    └─ api → agent → nfs-helper: /etc/exports + exportfs -ra
   │    └─ audit.log("nfs.remove", …)
-  ├─ nfs.reload()                        — Unix socket: reload (exportfs -r)
-  ├─ for each mount:
-  │    ├─ unmount_filesystem(mp)         — systemctl stop mnt-data.mount
-  │    │                                   + systemctl disable + rm unit
-  │    └─ audit.log("fs.unmount", …)
-  ├─ grpc.raid_destroy("data", force=True)
-  │    └─ gRPC raid_destroy RPC          → xRAID daemon → xicli raid destroy
+  ├─ for each affected filesystem:                               [step 2]
+  │    ├─ PATCH /api/v1/filesystems/{id} {"mounted": false}       (if mounted)
+  │    │    └─ audit.log("fs.unmount", …)
+  │    ├─ DELETE /api/v1/filesystems/{id}
+  │    └─ audit.log("fs.unmanage", …)
+  ├─ TaskWaitDialog (cancellable)                                [step 3]
+  ├─ DELETE /api/v1/arrays/data          — plan_apply_wait(dangerous=True)
+  │    └─ api → agent → xRAID daemon → xicli raid destroy
   ├─ audit.log("raid.destroy", "data", "OK")
   └─ snapshots.record("raid_delete", diff_summary=…)
 ```
 
-If any step after share-removal fails, the rollback path re-runs `add_export` + `mount_filesystem` to restore prior state before the error dialog appears.
+If any step fails, the sequence **stops there** — `_teardown_failed` renders the error and the remaining steps are not run. Steps that already completed are not undone; see §6.4 for what the operator is told and how to recover.
 
 ---
 
@@ -751,18 +812,20 @@ If any step after share-removal fails, the rollback path re-runs `add_export` + 
 
 | Failure | Where | Handling |
 |---|---|---|
-| gRPC stubs not generated | `XiRAIDClient._import_stubs()` | First RPC returns `(False, None, "gRPC stubs not available: <ImportError>")`. UI shows the message; operator runs `--tags xinas_menu` to regenerate. |
+| `xinas-api` unreachable / apply rejected | every `control.result` / `plan_apply_wait` | Raises `ControlPathError`. Reads that only feed a confirmation degrade to an empty list (§6.1); reads that gate a flow abort on an OK-only dialog; writes abort the step. |
+| xiRAID backend down behind a healthy api | `GET /api/v1/arrays` envelope | `DEGRADED_BACKEND_UNAVAILABLE` warning → the screen renders the degraded banner and never shows an empty list as "no arrays" (§3.1). |
+| Plan blocked (e.g. pool active or referenced on delete) | api-side plan blockers | `plan_apply_wait` raises before anything is applied; Spare Pools renders it through `_pool_error` with the blocker's reason. |
+| gRPC stubs not generated | `XiRAIDClient._import_stubs()` | First RPC returns `(False, None, "gRPC stubs not available: <ImportError>")`. Reaches the operator via the Physical Drives screen (§8); operator runs `--tags xinas_menu` to regenerate. |
 | TLS cert missing | `_load_channel_credentials()` | Falls through to insecure channel with a `UserWarning`. Intended only for dev hosts; production should always find a cert. |
-| xRAID daemon down | every RPC | `grpc.aio` raises `RpcError("StatusCode.UNAVAILABLE")`; `_call()` catches and returns `(False, None, str(exc))`. UI shows the short error. |
-| `xinas-nfs-helper` socket missing or refused | `NFSHelperClient._request()` | Returns `(False, None, "NFS helper socket not found: …")` or `"…not running (connection refused)"`. Delete-array path uses this to short-circuit before touching the array. |
-| Helper response not JSON | `NFSHelperClient._request()` | `(False, None, "bad JSON from NFS helper: …")`. |
+| xRAID daemon down | every gRPC RPC — Physical Drives only (§8) | `grpc.aio` raises `RpcError("StatusCode.UNAVAILABLE")`; `_call()` catches and returns `(False, None, str(exc))`. UI shows the short error. |
 | `GET /shares` or `GET /filesystems` fails during Delete Array dependency discovery | `_delete_dependencies` | `Delete Array — Aborted` dialog with the `ControlPathError`; the array is not deleted and nothing is changed. An unreadable dependency set is never treated as an empty one (§6.1). |
 | A mount uses the array but the teardown cannot unmount it (e.g. `logdev=` with no mount unit) | `_delete_dependencies` | `Delete Array — Aborted` listing those mountpoints; the operator unmounts them first. The agent's delete preflight refuses the destroy while such a mount exists (§6.1). |
-| Pool name / array name contains invalid chars | `_ARRAY_NAME_RE` / `_POOL_NAME_RE` | InputDialog re-prompts; never sent to the daemon. |
-| RAID 10 with no spare pool when one is required | xiRAID's own validation | Caught when `raid_create` returns failure; the operator sees the daemon's reason. |
+| Array / pool name breaks the xiRAID rule | `validate_array_name()` / `validate_pool_name()` in [xiraid_names.py](../../xinas_menu/utils/xiraid_names.py) | InputDialog re-prompts with the reason; the name never reaches the api (§4). |
+| Drive count under the level's minimum | `raid_rules.validate_member_count()` | The drives step re-prompts, naming the level's requirement — the engine is no longer the first to say no (§4). |
+| RAID 10 with no spare pool when one is required | xiRAID's own validation, via the api | The create apply fails; the operator sees the daemon's reason. |
 | Operator picks 0 drives in the picker | `action_confirm()` | Notify `"No drives selected."` and stay on the picker. |
-| Mount unit refuses to unmount during RAID delete (busy FS) | `xfs_helpers.unmount_filesystem` | Returns `(False, "Failed to stop mount: <stderr>")` → triggers Step 2 rollback. |
-| `raid_destroy` fails after FS / NFS already torn down | Step 3 catch | Restores every unmounted FS and re-adds every removed share before reporting the error. Audit log captures the rollback. |
+| Share / filesystem / array step fails mid-teardown (busy FS, blocked plan, daemon refusal) | `_teardown_failed` | The sequence **stops**. Completed steps stay completed — there is no cross-step rollback. Progress view shows what ran; an OK-only `Delete Array — Stopped` dialog names the failing step and the error (§6.4). |
+| Operator cancels the step-3 destroy | `TaskWaitDialog.cancel_requested` → `TaskCancelled` | The destroy task rolls itself back; already-removed shares and filesystems stay removed, and the progress view says so. No snapshot is recorded. |
 | Snapshot creation fails | `SnapshotHelper.record` | Logged via `_log.warning(…)`; UI flow is unaffected (snapshots are advisory). |
 | Audit log can't be written | `AuditLogger.log` | Silently swallowed (`OSError` is caught). The UI flow is never blocked by the audit channel. |
 
@@ -770,10 +833,11 @@ If any step after share-removal fails, the rollback path re-runs `add_export` + 
 
 ## 11. What the TUI does **not** do
 
-- It does not call `xicli` directly. Every RAID, pool, and drive query goes through the gRPC daemon at `localhost:6066`. If the daemon is down, the screen is inert — there is no fallback path.
-- It does not edit `/etc/exports` or `/etc/nfs.conf` itself. NFS state mutations always cross the `/run/xinas-nfs-helper.sock` boundary.
-- It does not perform initialisation control (`raid_init_start` / `raid_init_stop`) or reconstruction control (`raid_recon_start` / `raid_recon_stop`). The RPCs exist in the client but no menu entry calls them — they currently belong to xiRAID's automatic management.
-- It does not delete arrays without `force=True`. Every `_delete_array` path passes `force=True`, on the assumption that the two-stage confirmation gate is the real safety. The non-force destroy semantics are not exposed.
+- It does not call `xicli` directly. Every array and pool operation goes through `xinas-api`; the Physical Drives screen's inventory and LED locate go through the gRPC daemon at `localhost:6066`. If the service behind a screen is down, that screen is inert — there is no fallback path.
+- It does not edit `/etc/exports` or `/etc/nfs.conf` itself, and no longer even speaks to the helper socket: NFS state mutations reached from a RAID teardown go `api → agent → /run/xinas-nfs-helper.sock`.
+- It does not roll back across teardown steps. A failed step stops the sequence and leaves the completed ones in place (§6.4); recovery is a forward operation by the operator.
+- It does not perform initialisation control (`raid_init_start` / `raid_init_stop`) or reconstruction control (`raid_recon_start` / `raid_recon_stop`). The RPCs exist in the gRPC client but no menu entry and no API call reaches them — they currently belong to xiRAID's automatic management.
+- It does not expose non-force destroy semantics. `DELETE /api/v1/arrays/{id}` is always submitted with `dangerous=True`, on the assumption that the two-stage confirmation gate is the real safety.
 - It does not edit `xiraid_arrays` or `xfs_filesystems` Ansible facts. Day-1 (installer) topology is owned by Ansible; day-2 mutations live in the gRPC daemon's state. The two are reconciled via xiraid's persistent config, not via Ansible re-runs.
 - It does not multiplex drives between RAID and pool membership. The drive filters explicitly exclude drives that are already a member of either.
 
