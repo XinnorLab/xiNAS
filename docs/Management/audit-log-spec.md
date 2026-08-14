@@ -60,6 +60,19 @@ Local `audit.log` lines are parsed on ` | ` and pass through unchanged;
 the leading `YYYY-MM-DD HH:MM:SS` is interpreted as **local** time for
 sort ordering.
 
+### Writer contract — STATUS is an observation, not a formality
+
+The rendering rules above are only worth as much as the values writers put in.
+Every local `audit.log` writer must pass the **observed** outcome as STATUS:
+`OK` only when the operation it names actually succeeded, `FAIL` otherwise. A
+writer that hardcodes `OK` makes the audit trail actively misleading — it is
+the one record an operator reconstructs an incident from, and a failed action
+recorded as a success is worse than no record at all, because it is trusted.
+
+Where an action fans out over several units or resources, STATUS is `OK` only
+when **all** of them succeeded; the per-item detail belongs in the rendered
+view, not in the STATUS column.
+
 ### Degradation
 
 The screen never crashes on a missing source:

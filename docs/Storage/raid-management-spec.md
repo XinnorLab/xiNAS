@@ -463,7 +463,7 @@ Backing out of either picker (`allow_back=True` is hardcoded on both, since they
 
 Filters that exclude a drive from the picker:
 
-- `system: True` (any OS-mounted partition on it)
+- `system: True` (any OS-mounted partition on it). OS detection walks the **full** `lsblk` tree, not just a disk's immediate children: a guided-LVM, dm-crypt, or MD root exposes `/` on a grandchild (`disk → part → lvm`), and a one-level check leaves that disk looking available for a new array. This is the TUI-side twin of the installer bug fixed in `691ef7d` ([Installer/raid-spec.md §2](../Installer/raid-spec.md)).
 - already a member of some RAID array, or already assigned to a spare pool
 - `nvme` not in the name (anything that isn't NVMe — the wizard is NVMe-only)
 

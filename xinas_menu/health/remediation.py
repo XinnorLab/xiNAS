@@ -205,6 +205,9 @@ def _parse_fix_hint(hint: str) -> list[str] | None:
     return parts
 
 
+_COMMAND_TIMEOUT = 120
+
+
 class RemediationWizard:
     """Parse a health check JSON report and suggest remediations for failures."""
 
@@ -285,7 +288,17 @@ class RemediationWizard:
             return _apply_nfs_conf_fix(action.nfs_conf_fix)
         if not action.command:
             return False, "no automated fix available"
-        r = subprocess.run(action.command, capture_output=True, text=True)
+        try:
+            r = subprocess.run(
+                action.command,
+                capture_output=True,
+                text=True,
+                timeout=_COMMAND_TIMEOUT,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return False, f"timed out after {_COMMAND_TIMEOUT}s: {' '.join(action.command)}"
         return r.returncode == 0, r.stderr.strip() or r.stdout.strip()
 
     @staticmethod

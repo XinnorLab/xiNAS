@@ -147,16 +147,19 @@ def _get_os_drives() -> set[str]:
         )
         data = json.loads(r.stdout)
         _OS_MOUNTS = ("/", "/boot", "/boot/efi", "[SWAP]")
+
+        def _hosts_os_mount(node: dict) -> bool:
+            """True when this node, or anything beneath it, is an OS mount.
+
+            LVM / dm-crypt / MD roots put `/` on a grandchild, so a one-level
+            check leaves the OS disk looking free (see 691ef7d).
+            """
+            if (node.get("mountpoint") or "") in _OS_MOUNTS:
+                return True
+            return any(_hosts_os_mount(child) for child in node.get("children") or [])
+
         for dev in data.get("blockdevices", []):
-            # Check children (partitions) for OS mount points
-            for child in dev.get("children") or []:
-                mp = child.get("mountpoint") or ""
-                if mp in _OS_MOUNTS:
-                    os_drives.add(dev.get("name", ""))
-                    break
-            # Also check the device itself (rare: whole-disk root)
-            mp = dev.get("mountpoint") or ""
-            if mp in _OS_MOUNTS:
+            if _hosts_os_mount(dev):
                 os_drives.add(dev.get("name", ""))
     except Exception:
         pass
