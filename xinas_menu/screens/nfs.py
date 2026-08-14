@@ -181,8 +181,14 @@ class NFSScreen(XiNASAppMixin, Screen):
         """Fetch shares from the control-path API, adapted to legacy rows.
 
         Raises ControlPathError. Callers MUST NOT degrade a failed read to
-        "no shares": Add allocates the next fsid from this list, and an
-        empty-looking list restarts numbering at 1 against a live host.
+        "no shares": Edit and Remove pick their target out of this list, and
+        Show renders it, so an empty-looking list tells the operator this host
+        exports nothing while it is still serving every one of them.
+
+        The rule predates that reasoning: the list also fed the TUI's own
+        `fsid` allocator, where a swallowed error restarted numbering at 1 and
+        collided with every existing share. Allocation moved server-side, so
+        Add no longer reads this at all — the rule stays for the callers above.
         """
         shares = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
         return [e for e in _rows_from_api(shares) if e.get("path") and e.get("id")]
