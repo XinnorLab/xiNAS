@@ -302,11 +302,20 @@ def test_get_exports_propagates_a_control_path_error():
     assert "except ControlPathError" not in src, "_get_exports must not swallow the read failure"
 
 
-def test_add_share_aborts_when_the_existing_shares_cannot_be_read():
+def test_add_share_does_not_allocate_an_fsid():
+    # Share.spec.fsid is allocated server-side now; a client-side max+1 over a
+    # list the screen may not have read completely is exactly the collision
+    # this removed.
     src = inspect.getsource(NFSScreen._add_share_wizard)
-    fsid_block = src.split("used: set[int] = set()", 1)
-    assert len(fsid_block) == 2, "fsid allocation block not found"
-    assert "Could not read existing shares" in fsid_block[1]
+    assert '"fsid"' not in src
+    assert "max(used" not in src
+
+
+def test_add_share_no_longer_reads_the_share_list():
+    # The read existed only to allocate. Edit and Remove still call _get_exports.
+    src = inspect.getsource(NFSScreen._add_share_wizard)
+    assert "_get_exports" not in src
+    assert "Could not read existing shares" not in src
 
 
 def test_edit_and_remove_distinguish_unreadable_from_empty():

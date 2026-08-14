@@ -549,31 +549,10 @@ class NFSScreen(XiNASAppMixin, Screen):
             )
             return
 
-        # fsid is REQUIRED by the API and allocated here, so this read must
-        # be authoritative — allocating from a swallowed error would restart
-        # at 1 and collide with every existing share.
-        used: set[int] = set()
-        try:
-            existing = await self._get_exports()
-        except ControlPathError as exc:
-            await self.app.push_screen_wait(
-                ConfirmDialog(
-                    f"Could not read existing shares, so a new export id "
-                    f"cannot be allocated safely.\n\n{exc}",
-                    "Error",
-                    ok_only=True,
-                )
-            )
-            return
-        for row in existing:
-            fsid = row.get("fsid")
-            if isinstance(fsid, int):
-                used.add(fsid)
-            elif isinstance(fsid, str) and fsid.strip().lstrip("-").isdigit():
-                used.add(int(fsid))
+        # fsid is allocated server-side (POST /api/v1/shares); omitting it is
+        # what asks the api to pick a free one.
         spec: dict[str, Any] = {
             "path": path,
-            "fsid": max(used, default=0) + 1,
             "clients": [{"pattern": host, "options": [access, root_squash, "no_subtree_check"]}],
             "sync": sync_mode,
         }
