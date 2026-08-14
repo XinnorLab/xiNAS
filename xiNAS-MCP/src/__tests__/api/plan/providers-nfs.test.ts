@@ -330,7 +330,12 @@ describe('share.delete plan provider', () => {
       id: 'mnt/data',
       revision: 1,
     });
-    expect(result.desired_mutations).toEqual([{ key: '/xinas/v1/desired/Share/s1', delete: true }]);
+    // The share doc AND its fsid marker (seedDesiredShare uses fsid 42), so
+    // the number is released rather than burned.
+    expect(result.desired_mutations).toEqual([
+      { key: '/xinas/v1/desired/Share/s1', delete: true },
+      { key: '/xinas/v1/desired/ShareFsid/42', delete: true },
+    ]);
     expect(result.diff).toEqual({ action: 'delete', export_path: '/mnt/data' });
     expect(result.risk_level).toBe('changing_access');
     expect(result.rollback_model).toBe('reversible');
@@ -744,5 +749,42 @@ describe('share.create — fsid allocation', () => {
     await expect(
       providerFor('share.update').preflight(ctx, makeShareSpec({ fsid: undefined })),
     ).rejects.toBeInstanceOf(ApiException);
+  });
+});
+
+describe('share.delete — fsid marker release', () => {
+  const DESIRED = '/xinas/v1/desired/Share/';
+
+  it('deletes the marker alongside the share', async () => {
+    const { ctx, kv } = makeHarness();
+    kv.put(`${DESIRED}mnt/data`, {
+      kind: 'Share',
+      id: 'mnt/data',
+      spec: { path: '/mnt/data', clients: [], fsid: 3 },
+    });
+    const result = await providerFor('share.delete').preflight(ctx, {
+      id: 'mnt/data',
+      path: '/mnt/data',
+    });
+    expect(result.desired_mutations).toContainEqual({
+      key: '/xinas/v1/desired/ShareFsid/3',
+      delete: true,
+    });
+  });
+
+  it('still deletes the share when the desired doc carries no fsid', async () => {
+    // Not reachable through the API, but a hand-edited store must not wedge
+    // the delete path.
+    const { ctx, kv } = makeHarness();
+    kv.put(`${DESIRED}mnt/data`, {
+      kind: 'Share',
+      id: 'mnt/data',
+      spec: { path: '/mnt/data', clients: [] },
+    });
+    const result = await providerFor('share.delete').preflight(ctx, {
+      id: 'mnt/data',
+      path: '/mnt/data',
+    });
+    expect(result.desired_mutations).toEqual([{ key: `${DESIRED}mnt/data`, delete: true }]);
   });
 });
