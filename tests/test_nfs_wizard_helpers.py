@@ -328,6 +328,7 @@ def test_edit_and_remove_distinguish_unreadable_from_empty():
 
 def test_share_usage_df_is_bounded_by_a_timeout(monkeypatch):
     """A hung export must not stall the renderer forever."""
+    import os
     import subprocess as _sp
 
     from xinas_menu.screens import nfs as nfs_mod
@@ -339,6 +340,16 @@ def test_share_usage_df_is_bounded_by_a_timeout(monkeypatch):
         return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(nfs_mod.subprocess, "run", _fake_run)
+    # The renderer only calls df if the path exists; mock that check for exports.
+    original_isdir = os.path.isdir
+
+    def mock_isdir(path):
+        path_str = str(path)
+        if path_str.startswith("/mnt") or path_str.startswith("/srv"):
+            return True
+        return original_isdir(path)
+
+    monkeypatch.setattr(os.path, "isdir", mock_isdir)
     _format_exports(_rows_from_api(_api_share({"sync": "sync"})))
 
     df_calls = [c for c in seen if c["cmd"][:1] == ["df"]]
