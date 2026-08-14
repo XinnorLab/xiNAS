@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import inspect
 
 from xinas_menu.screens.nfs import (
@@ -314,3 +315,39 @@ def test_edit_and_remove_distinguish_unreadable_from_empty():
         src = inspect.getsource(method)
         assert "Could not load shares." in src, f"{method.__name__} reports a failed read as empty"
         assert "No shares configured." in src
+
+
+def test_share_usage_df_is_bounded_by_a_timeout(monkeypatch):
+    """A hung export must not stall the renderer forever."""
+    import subprocess as _sp
+
+    from xinas_menu.screens import nfs as nfs_mod
+
+    seen: list[dict] = []
+
+    def _fake_run(cmd, **kwargs):
+        seen.append({"cmd": cmd, **kwargs})
+        return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(nfs_mod.subprocess, "run", _fake_run)
+    _format_exports(_rows_from_api(_api_share({"sync": "sync"})))
+
+    df_calls = [c for c in seen if c["cmd"][:1] == ["df"]]
+    assert df_calls, "renderer no longer calls df — update this test"
+    for call in df_calls:
+        assert isinstance(call.get("timeout"), (int, float)), "df has no timeout"
+        assert 0 < call["timeout"] <= 30
+
+
+def test_load_exports_renders_off_the_event_loop():
+    """`@work` on an async def runs ON the loop, so the blocking renderer
+    (df per share + /proc reads) has to be handed to a thread explicitly."""
+    src = inspect.getsource(NFSScreen._load_exports)
+    # Handed to to_thread as a reference, never called inline. A bare
+    # `_format_exports(` in this method means it runs on the event loop —
+    # and `to_thread` appearing *somewhere* in the method proves nothing,
+    # because the control-path call already uses it.
+    assert "_format_exports(" not in src, "_format_exports is still called inline"
+    assert re.search(r"to_thread\(\s*_format_exports", src), (
+        "_format_exports must be handed to asyncio.to_thread"
+    )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import subprocess
 from typing import Any
 
 _log = logging.getLogger(__name__)
@@ -158,7 +159,12 @@ class NFSScreen(XiNASAppMixin, Screen):
         except ControlPathError as exc:
             view.set_content(f"Control API: {exc}")
             return
-        view.set_content(_format_exports(_rows_from_api(env.get("result")), degraded_banner(env)))
+        # `@work` on an async def runs on the event loop, and the renderer
+        # shells out to df per share and reads /proc — keep it off the loop.
+        text = await asyncio.to_thread(
+            _format_exports, _rows_from_api(env.get("result")), degraded_banner(env)
+        )
+        view.set_content(text)
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
@@ -921,7 +927,6 @@ def _format_exports(data: Any, banner: str | None = None) -> str:
     """Render adapted share rows; a banner replaces the empty-state."""
     import os
     import shlex
-    import subprocess
 
     GRN, _YLW, RED, CYN, BLD, DIM, NC = (
         "\033[32m",
@@ -952,6 +957,10 @@ def _format_exports(data: Any, banner: str | None = None) -> str:
                 ["df", "-h", path],
                 capture_output=True,
                 text=True,
+                # A hung backing FS (dead NFS server, lost FC path) makes df
+                # block forever; bound it and fall through to "N/A".
+                timeout=5,
+                check=False,
             )
             if r.returncode == 0 and r.stdout:
                 lines = r.stdout.strip().splitlines()
