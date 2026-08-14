@@ -147,8 +147,11 @@ class RollbackClassifier:
         if operation in _OPERATION_CLASS:
             return _OPERATION_CLASS[operation]
 
-        # Unknown operations default to the safest assumption.
-        return RollbackClass.NON_DISRUPTIVE
+        # Unknown operations default to the MOST destructive tier (specs.md
+        # §4.7): an operation the classifier cannot recognize is the case
+        # the system knows the LEAST about, so it must get the two-screen
+        # destroying_data confirmation gate, never the auto-proceed path.
+        return RollbackClass.DESTROYING_DATA
 
     def classify_diff(self, diff: DiffResult) -> RollbackClass:
         """Classify the overall risk of a diff between two snapshots.
@@ -197,6 +200,10 @@ class RollbackClassifier:
                     op_class = self.classify_operation(op)
                     overall = _higher_risk(overall, op_class)
                 except ValueError:
+                    # Unparseable operation string: safe to skip here because
+                    # manifest.rollback_class (checked just above) already
+                    # carries the fail-safe destroying_data stamp for such
+                    # ops (specs.md §4.7); this is not a silent downgrade.
                     pass
 
         return overall
@@ -287,5 +294,8 @@ class RollbackClassifier:
             if "fstab" in file_path or "mount" in file_path:
                 return RollbackClass.CHANGING_ACCESS
 
-        # Default to non-disruptive for unrecognised entries.
-        return RollbackClass.NON_DISRUPTIVE
+        # specs.md §4.7: an unrecognised change entry -- change_type does not
+        # parse to a known operation and no file-path heuristic matched -- is
+        # the case the classifier knows least about, so it must fail safe to
+        # the most destructive tier, never non_disruptive.
+        return RollbackClass.DESTROYING_DATA

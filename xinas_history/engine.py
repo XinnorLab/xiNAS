@@ -68,6 +68,7 @@ class SnapshotEngine:
         parent_id: str | None = None,
         extra_vars: dict | None = None,
         diff_summary: str | None = None,
+        gc_protect_ids: set[str] | None = None,
     ) -> Manifest:
         """Create a new configuration snapshot from current system state.
 
@@ -90,6 +91,9 @@ class SnapshotEngine:
             parent_id: Parent snapshot ID (auto-detected if not provided).
             extra_vars: Extra variables used during apply.
             diff_summary: Human-readable change summary.
+            gc_protect_ids: Snapshot ids to protect from this call's own
+                inline GC pass (e.g. a restore's source snapshot) -- see
+                specs.md §7.4.
 
         Returns:
             The created Manifest.
@@ -120,7 +124,10 @@ class SnapshotEngine:
             op_enum = OperationType(operation)
             rollback_class = self._classifier.classify_operation(op_enum).value
         except ValueError:
-            rollback_class = RollbackClass.NON_DISRUPTIVE.value
+            # Operation string doesn't parse to a known OperationType — the
+            # classifier's result can't be trusted, so default to the MOST
+            # destructive tier (specs.md §4.7), not the auto-proceed path.
+            rollback_class = RollbackClass.DESTROYING_DATA.value
 
         # 6. Auto-detect parent_id if not provided
         if parent_id is None and not is_baseline:
@@ -143,13 +150,26 @@ class SnapshotEngine:
         # 7. Build manifest
         manifest = Manifest(
             id=snapshot_id,
-            timestamp=datetime.datetime.utcnow().isoformat() + "Z",
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
             user=_get_user(),
             source=source,
             preset=preset,
             operation=operation,
             rollback_class=rollback_class,
-            status=SnapshotStatus.APPLIED.value,
+            # specs.md §1 "Snapshot Status Lifecycle": an ephemeral
+            # pre-change snapshot starts pending -- the runner moves it to
+            # a terminal status once the operation it precedes resolves
+            # (see runner.py _mark_pre_change_terminal). Baseline and
+            # rollback_eligible snapshots are only ever created AFTER
+            # their operation has already succeeded, so applied is correct
+            # for them at creation time.
+            status=(
+                SnapshotStatus.PENDING.value
+                if snapshot_type == SnapshotType.EPHEMERAL.value
+                else SnapshotStatus.APPLIED.value
+            ),
             type=snapshot_type,
             parent_id=parent_id,
             repo_commit=repo_commit,
@@ -172,11 +192,19 @@ class SnapshotEngine:
             system_files=system_files,
         )
 
-        # 9. Run garbage collection (non-baseline only)
+        # 9. Run garbage collection (non-baseline only).
+        # This call runs INSIDE the caller's already-held GlobalConfigLock
+        # (create_snapshot is always invoked from within a locked
+        # transaction) -- it must NOT try to acquire the lock itself, since
+        # a second LOCK_EX|LOCK_NB from the same process on the same file
+        # fails immediately (lock.py). Instead, any snapshot ids the caller
+        # needs protected from THIS inline pass (e.g. the source snapshot of
+        # an in-flight restore) are threaded through via gc_protect_ids
+        # (specs.md §7.4).
         if not is_baseline:
             effective_id = snapshot_id  # this one is now the effective
             with contextlib.suppress(Exception):  # GC failures are non-fatal
-                self._gc.run(current_effective_id=effective_id)
+                self._gc.run(current_effective_id=effective_id, in_progress_ids=gc_protect_ids)
 
         return manifest
 

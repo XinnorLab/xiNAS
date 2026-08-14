@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -43,6 +44,20 @@ MANIFEST_FILE = "manifest.yml"
 
 _DIR_MODE = 0o700
 _FILE_MODE = 0o600
+
+_SNAPSHOT_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_snapshot_id(snapshot_id: str) -> None:
+    """Reject a snapshot id that is unsafe to join onto the store root
+    (specs.md §1, "Snapshot ID and Store-Path Safety"). The allowlist regex
+    already excludes "/", so it rejects any absolute path or ".." segment
+    that contains a slash; the one case it would otherwise miss -- an id that
+    is exactly ".." or "." (all-allowlisted chars, no slash needed to
+    traverse) -- is rejected explicitly.
+    """
+    if not snapshot_id or not _SNAPSHOT_ID_RE.match(snapshot_id) or snapshot_id in (".", ".."):
+        raise ValueError(f"Invalid snapshot id: {snapshot_id!r}")
 
 
 class FilesystemStore:
@@ -71,6 +86,7 @@ class FilesystemStore:
 
     def snapshot_path(self, snapshot_id: str) -> Path:
         """Get the filesystem path for a snapshot ID."""
+        _validate_snapshot_id(snapshot_id)
         return self.snapshots_path / snapshot_id
 
     # -- directory bootstrapping --------------------------------------------
@@ -204,13 +220,24 @@ class FilesystemStore:
 
     def list_snapshots(self) -> list[Manifest]:
         """List all snapshots (excluding baseline), sorted by timestamp
-        ascending."""
+        ascending.
+
+        Skips ``.tmp-*`` staging directories: write_snapshot() builds each
+        new snapshot in a ``.tmp-{id}-XXXXXX`` directory before an atomic
+        rename into ``snapshots/<id>/``; a crash between the write and the
+        rename can leak one of these directories -- complete with a fully
+        valid ``manifest.yml`` -- directly under ``snapshots/``. Such a
+        directory was never committed and must never be surfaced as a real
+        snapshot (specs.md §1).
+        """
         manifests: list[Manifest] = []
         if not self.snapshots_path.is_dir():
             return manifests
 
         for entry in self.snapshots_path.iterdir():
             if not entry.is_dir():
+                continue
+            if entry.name.startswith(".tmp-"):
                 continue
             m = self._load_manifest(entry / MANIFEST_FILE)
             if m is not None:

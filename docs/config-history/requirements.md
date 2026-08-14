@@ -55,7 +55,16 @@ Named snapshots with the following attributes:
 - Validation results
 - Checksums
 
-**Retention policy:** immutable baseline + 10 rolling rollback-eligible + 1 ephemeral pre-change.
+**Retention policy:** an immutable baseline that garbage collection never
+purges; a configurable cap on rollback-eligible snapshots (`max_snapshots`,
+default 40, tunable via `/etc/xinas-mcp/config.json` or `gc policy --set
+--max-snapshots`); an optional age-based purge (`max_age_days`, default 0 =
+disabled, tunable the same way); and ephemeral pre-change snapshots, which
+are reclaimed through the transactional lifecycle (marked to a terminal
+status once the operation they precede concludes, so GC / startup cleanup
+can remove them) rather than retained under a fixed count. See
+`docs/config-history/specs.md` §1 ("Snapshot Status Lifecycle") and §7
+("Garbage Collection Rules") for the full contract.
 
 ## 4. Snapshot Creation Rules
 
@@ -345,7 +354,9 @@ Per-snapshot detail view:
 
 - Installer stores both profile snapshot and first installed config snapshot.
 - A snapshot is created for every CRUD change.
-- Retention is baseline + 10 rolling rollback-eligible.
+- Retention is an immutable baseline plus a configurable cap on
+  rollback-eligible snapshots (§1, §18); ephemeral pre-change snapshots do
+  not accumulate unbounded.
 - Every snapshot and rollback carries a classification.
 - Invalid dependency sequences are blocked.
 - Pre-change snapshot is created before every change.
@@ -399,12 +410,30 @@ Persist transaction state to disk to survive crashes. Persisted fields:
 
 ### 18.1 Retention
 
-- Baseline + 10 rollback-eligible + 1 ephemeral per active transaction.
-- Purge the 11th oldest rollback-eligible snapshot when a new snapshot is created.
+- Baseline is retained forever; garbage collection never selects it for
+  purge.
+- Rollback-eligible snapshots are capped at a configurable `max_snapshots`
+  (default 40). The oldest excess rollback-eligible snapshots are purged
+  after every successful snapshot creation.
+- An optional `max_age_days` (default 0 = disabled) purges rollback-eligible
+  snapshots older than the cutoff, evaluated on the same trigger.
+- Ephemeral pre-change snapshots are **not** retained under a fixed count.
+  They are reclaimed via the transactional lifecycle once the operation
+  they precede reaches a terminal status (see `specs.md` §1 "Snapshot
+  Status Lifecycle"); they must not accumulate unbounded because a snapshot
+  never reaches that terminal status.
 
 ### 18.2 Purge Rules
 
-- Never delete baseline, current effective, or in-progress rollback reference.
+- Never delete baseline, current effective, or in-progress rollback
+  reference.
+- Garbage collection MUST NOT run lock-free: it MUST acquire the global
+  configuration lock, or otherwise guarantee no apply/restore is
+  concurrently in flight, before deleting any snapshot.
+- Garbage collection MUST NOT delete a snapshot that is the source of an
+  in-flight `snapshot restore` -- a snapshot another in-progress operation
+  is actively reading -- even if that snapshot would otherwise be eligible
+  for purge by count or age.
 - Verify snapshot is not locked.
 - Remove metadata + artifacts.
 - Log all purges.
@@ -529,6 +558,8 @@ The following events require user-facing notifications:
 - Snapshots are marked `applied` only after strict validation.
 - A global lock prevents concurrent interleaving.
 - Garbage collection auto-purges beyond the retention limit.
+- Garbage collection never runs lock-free and never deletes a snapshot that
+  is the source of an in-flight restore (§18.2).
 - Stale ephemeral snapshots are cleaned up on startup.
 - gRPC is the preferred backend for xicli interactions.
 - Disk-full conditions are handled safely.

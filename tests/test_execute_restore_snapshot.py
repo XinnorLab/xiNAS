@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from xinas_history.engine import SnapshotEngine
-from xinas_history.models import Checksums, Manifest
+from xinas_history.models import Checksums, Manifest, RollbackClass
 from xinas_history.runner import TransactionalRunner
 from xinas_history.store import FilesystemStore
 
@@ -39,6 +39,7 @@ def _build(
     target_checksums: dict,
     target_absent: list[str] | None = None,
     current_checksums: dict | None = None,
+    target_operation: str = "share_create",
 ):
     """A runner whose engine + restore seams are faked. Returns
     (runner, store, target_id, live_dir, commands)."""
@@ -59,7 +60,7 @@ def _build(
         timestamp="2026-06-01T12:00:00Z",
         user="root",
         source="api",
-        operation="share_create",
+        operation=target_operation,
         checksums=target_checksums,
     )
     if target_absent is not None:
@@ -128,6 +129,24 @@ def test_restore_empty_set_is_success_noop(tmp_path):
     assert commands == []
     assert not (live_dir / "exports").exists()
     assert "already at target" in (result.output or "")
+
+
+def test_restore_no_current_effective_derives_risk_from_target(tmp_path):
+    """specs.md §4.7: when there is no current-effective snapshot to diff
+    against (the common case in this fixture -- no baseline, no applied
+    snapshot, so engine.get_current_effective() returns None), the restore
+    risk must be derived from the target snapshot's own recorded
+    class/operation instead of being silently hardcoded to non_disruptive.
+    The target's operation here (raid_create) is destructive."""
+    runner, store, target_id, live_dir, commands = _build(
+        tmp_path,
+        target_system={"etc_exports": b"TARGET-EXPORTS"},
+        target_checksums={"etc_exports": "sha256:TARGET"},
+        target_operation="raid_create",
+    )
+    assert runner._engine.get_current_effective() is None  # sanity: no diff baseline
+    result = asyncio.run(runner.execute_restore_snapshot(target_id, source="api", reason="oops"))
+    assert result.rollback_class == RollbackClass.DESTROYING_DATA.value
 
 
 def test_restore_snapshot_not_found(tmp_path):
