@@ -26,6 +26,10 @@ ignore: |
   .claude/
   node_modules/
   xiNAS-MCP/node_modules/
+  # Local dev venv. CI never has one, but `yamllint .` walks it otherwise and
+  # a venv with ansible installed drowns the real findings in site-packages
+  # noise (~400 diagnostics), so the documented command is unusable locally.
+  .venv/
   # The OpenAPI contract is machine-validated by the blocking spectral CI
   # job; yamllint style checks add nothing there.
   docs/control-path/api-v1.yaml
