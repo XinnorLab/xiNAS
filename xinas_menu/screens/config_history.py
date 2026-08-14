@@ -403,10 +403,14 @@ class ConfigHistoryScreen(XiNASAppMixin, Screen):
         _progress_lines: list[str] = []
 
         def _on_progress(line: str) -> None:
+            # Invoked on the event loop by TransactionalRunner's async stream
+            # reader, so update the widget directly. Threading APIs would
+            # raise RuntimeError here, and the runner suppresses callback
+            # exceptions — every line would vanish. (raid.py's
+            # _teardown_progress is the opposite case: a real worker thread.)
             _progress_lines.append(line)
             tail = _progress_lines[-30:]
-            self.app.call_from_thread(
-                view.set_content,
+            view.set_content(
                 f"{_DIM}Resetting to baseline...{_NC}\n\n" + "\n".join(tail),
             )
 
