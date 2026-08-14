@@ -165,4 +165,20 @@ describe('seedShares — install-time desired-state adoption', () => {
     expect(setup.state.kv.list({ prefix: SHARE_PREFIX })).toHaveLength(0);
     expect(setup.state.kv.get(MARKER_KEY)).toBeNull();
   });
+
+  it('writes an fsid marker for each seeded share', () => {
+    writeManifest([{ path: '/mnt/data', clients: '*', options: ['rw', 'fsid=0'] }]);
+    seedShares(setup.state, cfg());
+    const marker = setup.state.kv.get('/xinas/v1/desired/ShareFsid/0');
+    expect(marker?.value).toEqual({ fsid: 0, share_id: 'mnt/data' });
+  });
+
+  it('marks the allocated number when the manifest entry has no fsid', () => {
+    writeManifest([{ path: '/mnt/data', clients: '*', options: ['rw'] }]);
+    seedShares(setup.state, cfg());
+    const row = setup.state.kv.get<ShareRow>('/xinas/v1/desired/Share/mnt/data');
+    const fsid = row?.value.spec.fsid;
+    expect(fsid).toBe(1);
+    expect(setup.state.kv.get(`/xinas/v1/desired/ShareFsid/${fsid}`)).not.toBeNull();
+  });
 });
