@@ -19,6 +19,11 @@ xiRAID state and serves Prometheus metrics on **port 9827**
 (`http://localhost:9827/metrics`). xiNAS installs, updates, restarts, reports
 on, and removes it, but does not vendor or build it.
 
+The port is the upstream default, documented in the project README as
+`--web.listen-address … (default: :9827)`
+(<https://github.com/E4-Computer-Engineering/xiraid-exporter>). xiNAS does not
+pass that flag, so changing it upstream would change it here.
+
 It is **not** part of `site.yml`. The `xiraid_exporter` role exists for
 explicit invocation (`--tags xiraid_exporter`); the normal path is the TUI
 screen, which downloads the release asset and installs it with `apt`.
@@ -37,6 +42,16 @@ This is the contract every call site must respect.
 The unit is the odd one out. Older builds of the package shipped the
 hyphenated unit (`xiraid-exporter.service`), so **both spellings exist in the
 field** and the unit name must not be hardcoded.
+
+> **[observed]** The upstream README documents the exporter's flags and
+> metrics but says nothing about the Debian package layout — no package name,
+> no unit name, no statement that the unit is spelled with an underscore. The
+> whole table above was established by inspecting installed `.deb`s on real
+> nodes, and the underscore/hyphen split is the reason
+> `tests/test_xiraid_exporter_unit.py` exists. Since it is undocumented,
+> upstream can change it in any release without notice: the runtime
+> resolution contract below is the mitigation, and the candidate list must
+> stay ordered rather than reduced to a single "correct" name.
 
 ### Why hardcoding fails silently
 

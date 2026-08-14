@@ -27,7 +27,24 @@ All IB/RDMA interface configuration is owned exclusively by `99-xinas.yaml`. Thi
 
 ### Other Netplan Files
 
-Netplan merges ALL `*.yaml` and `*.yml` files in `/etc/netplan/` before applying. Files like `50-cloud-init.yaml` may exist for the management Ethernet interface.
+Netplan reads **`/{lib,etc,run}/netplan/*.yaml`** and merges them before
+applying ([`netplan(5)`](https://manpages.ubuntu.com/manpages/noble/en/man5/netplan.5.html)).
+Files like `50-cloud-init.yaml` may exist for the management Ethernet
+interface.
+
+Two corrections to what this section used to claim (2026-08-14):
+
+- It said netplan merges `*.yaml` **and `*.yml`**. `netplan(5)` documents the
+  `*.yaml` glob only, so a `foo.yml` dropped in `/etc/netplan/` is **ignored**,
+  not merged. Don't rely on the `.yml` extension either way — a config saved
+  as `.yml` silently does nothing.
+- It named only `/etc/netplan/`. `netplan(5)` also reads `/lib/netplan/` and
+  `/run/netplan/`, with same-name shadowing: "A file in /run/netplan
+  completely shadows a file with same name in /etc/netplan, and a file in
+  either of those directories shadows a file with the same name in
+  /lib/netplan." A vendor- or runtime-supplied `99-xinas.yaml` in `/run` would
+  therefore replace ours wholesale. The cleanup passes below only scan
+  `/etc/netplan/`.
 
 **Critical rule:** IB interfaces must NEVER be defined in files other than `99-xinas.yaml`. If the same interface appears in two files, netplan merges them, producing:
 - Duplicate IP addresses on the interface
@@ -44,7 +61,21 @@ Netplan merges ALL `*.yaml` and `*.yml` files in `/etc/netplan/` before applying
 99-xinas.yaml           # xiNAS owned (all IB interfaces + PBR)
 ```
 
-Netplan merges in alphabetical order. Higher-numbered files override lower ones for scalar values, but **arrays are concatenated** (e.g. `addresses`), which is why duplicate definitions cause problems.
+`netplan(5)`: "Lexicographically later files (regardless of in which directory
+they are) amend (new mapping keys) or override (same mapping keys) previous
+ones." So `99-xinas.yaml` is processed last and wins on any key it sets.
+
+**[observed]** This section previously explained the duplicate-IP symptom by
+asserting that **arrays are concatenated** (e.g. `addresses`). `netplan(5)`
+does not document list-merge behaviour either way — "amend or override" reads
+as replacement for a repeated key. The *symptom* is real and reproducible on
+these nodes (duplicate IPs and conflicting PBR tables when an IB interface is
+defined in two files); the *mechanism* is not confirmed by netplan's
+documentation, and the observed behaviour may instead come from the renderer
+(`systemd-networkd`) or from `netplan apply` not tearing down prior state
+(see the apply limitations below). Do not cite list-concatenation as netplan
+documented behaviour, and do not weaken the single-file rule on the strength
+of it — the rule is justified by the observed breakage regardless of cause.
 
 ---
 
@@ -210,10 +241,20 @@ Run `netplan apply` which reads the merged configuration and programs the kernel
 
 ### Why Full Flush Is Necessary
 
-`netplan apply` has known limitations:
+**[observed]** `netplan apply` has limitations we have hit repeatedly on these
+nodes:
 - Does **not** remove IP addresses from previous configurations
 - Does **not** clean up PBR rules from deleted interfaces
-- **Merges** arrays (like `addresses`) across files, creating duplicates
+- Leaves duplicate addresses behind when an interface was defined in more
+  than one file
+
+None of these are documented. `netplan(5)` describes the configuration format
+and merge order but has **no section on what `netplan apply` tears down**, so
+there is no vendor statement to cite either for or against. Every item above
+was established by running it and inspecting `ip addr` / `ip rule` afterwards.
+Re-verify on a netplan version bump rather than assuming it still holds — if
+upstream starts reconciling state, the flush below becomes redundant work
+rather than a correctness requirement.
 
 The flush-before-apply pattern compensates for these limitations.
 
