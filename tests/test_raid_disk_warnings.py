@@ -22,12 +22,8 @@ from xinas_menu.screens.raid import (
 class _StubControl:
     """Minimal ControlClient stand-in: `get` returns envelopes, `result` unwraps.
 
-    `get` also counts calls per path and raises past the first one. The real
-    wizard fetches each envelope exactly once; a "fetch it again to derive the
-    banner" implementation would read `/api/v1/disks` a second time from a
-    fresh (possibly changed) state, decoupling the banner it displays from the
-    fetch that decided there were zero drives. A pure-function stub can't see
-    that inconsistency — only call accounting can.
+    `get` also counts calls per path so a test can assert the wizard fetched
+    it exactly once, rather than relying on a raise buried inside the stub.
     """
 
     def __init__(self, envelopes: dict[str, dict]) -> None:
@@ -36,8 +32,6 @@ class _StubControl:
 
     def get(self, path: str) -> dict:
         self._get_calls[path] = self._get_calls.get(path, 0) + 1
-        if self._get_calls[path] > 1:
-            raise AssertionError(f"get({path!r}) called more than once")
         return self._envelopes[path]
 
     def result(self, path: str):
@@ -88,6 +82,7 @@ def test_no_drives_message_is_plain_without_a_banner():
 class _StubApp:
     def __init__(self, control):
         self.control = control
+        self.captured = []
 
     async def push_screen_wait(self, dialog):
         self.captured.append(dialog)
@@ -95,11 +90,10 @@ class _StubApp:
 
 
 class _StubScreen:
-    """Wires a fresh `_StubApp` (with its own capture list) to a control stub."""
+    """Wires a `_StubApp` to a control stub."""
 
     def __init__(self, control):
         self.app = _StubApp(control)
-        self.app.captured = []
 
 
 def _run_wizard_and_capture_message(control: _StubControl) -> str:
@@ -110,67 +104,18 @@ def _run_wizard_and_capture_message(control: _StubControl) -> str:
     return captured[0]._message
 
 
-def test_wizard_renders_the_fetched_banner_in_its_abort_dialog():
-    """The banner the wizard *fetched* must be the one it renders, on the one
-    fetch it is allowed to make.
-
-    The text is generated per run and appears nowhere in this file, so an
-    implementation that hardcodes or table-looks-up the expected message
-    cannot pass. `_StubControl.get` also raises past its first call per path,
-    so an implementation that derives the banner from a *second*, independent
-    fetch of `/api/v1/disks` cannot pass either — that second fetch would
-    read a state the "zero drives" decision was never made against.
-
-    Five earlier versions of this test were each defeated by a
-    reviewer-constructed passing-but-wrong implementation:
-
-    1. A substring check on the wizard's source (`"banner" in src`) was
-       satisfied by the variable name `disk_banner` alone.
-    2. A regex on the source for `_no_drives_message(disk_banner)` was
-       satisfied by a body that called the helper and discarded the result.
-    3. A behavioral test driving the real no-drives path with a single fixed
-       banner string was satisfied by a wizard that ignored the fetched
-       banner and printed a matching constant.
-    4. Parametrizing over two fixed banner strings raised the bar from one
-       hardcoded constant to a two-entry lookup table keyed on exactly those
-       strings, still bypassing `_no_drives_message` entirely.
-    5. A run-time token defeated hardcoding and lookup tables, but a second,
-       independent `control.get("/api/v1/disks")` call inside the abort
-       branch could still derive a banner that happened to match — the stub
-       had no way to tell "the one fetch" from "a second fetch of the same
-       path".
-
-    Every fixture value up to attempt 4 was visible in the test source, so
-    any finite set of them could be hardcoded or tabulated. A value generated
-    at run time and never written to disk closes that class of attack
-    outright. The call-count guard on `_StubControl.get` closes the
-    re-fetch class: the wizard gets exactly one look at `/api/v1/disks`, so
-    whatever banner it shows has to come from that look.
+def test_wizard_renders_the_fetched_banner_from_a_single_fetch():
+    """The banner text is generated at run time, so it can't be hardcoded or
+    tabulated. The wizard is allowed exactly one fetch of `/api/v1/disks`, so
+    the rendered banner must come from the fetch that decided there were zero
+    drives.
     """
-    token = f"collector unavailable {uuid.uuid4().hex}"
-    message = _run_wizard_and_capture_message(_degraded(token))
-    assert "No available NVMe drives found." in message
-    assert token in message, "the fetched banner never reached the dialog"
-
-
-def test_wizard_renders_a_fresh_banner_on_each_invocation():
-    """Two separate invocations must each render their own fetched banner.
-
-    A module-level (or otherwise process-wide) "first banner wins, reuse it
-    forever" cache would pass a test that invokes the wizard only once — the
-    single call and the cached value are indistinguishable. Calling the
-    wizard twice, with two independently generated tokens and a fresh stub
-    per call, makes that distinguishable: the second dialog has to carry the
-    second token, not an echo of the first.
-    """
-    token_a = f"collector unavailable {uuid.uuid4().hex}"
-    token_b = f"collector unavailable {uuid.uuid4().hex}"
-    assert token_a != token_b
-
-    message_a = _run_wizard_and_capture_message(_degraded(token_a))
-    message_b = _run_wizard_and_capture_message(_degraded(token_b))
-
-    assert token_a in message_a, "the first invocation's banner never reached its dialog"
-    assert token_b in message_b, "the second invocation's banner never reached its dialog"
-    assert token_a not in message_b, "the second dialog echoed the first invocation's banner"
-    assert token_b not in message_a, "the first dialog echoed the second invocation's banner"
+    for _ in range(2):
+        token = f"collector unavailable {uuid.uuid4().hex}"
+        control = _degraded(token)
+        message = _run_wizard_and_capture_message(control)
+        assert "No available NVMe drives found." in message
+        assert token in message, "the fetched banner never reached the dialog"
+        assert control._get_calls["/api/v1/disks"] == 1, (
+            "the wizard must decide and render from one fetch"
+        )
