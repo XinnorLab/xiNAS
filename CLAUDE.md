@@ -149,10 +149,41 @@ end state.**
 4. `docs/plans/` is for execution plans (sequenced work, milestones,
    rollout), not for the durable behavior contract. Plans reference the
    spec; the spec is what survives.
+5. **Validate every claim about third-party behavior against that
+   vendor's own documentation before the spec lands.** This covers
+   xiRAID (`xicli` flags, defaults, limits, constraints), DOCA-OFED,
+   netplan, NVMe / `nvme-cli`, XFS, and nfsd. Cite the doc URL and the
+   product version inline in the spec, so the next reader can re-check
+   it. When published docs cannot settle a question, write down how the
+   answer was actually obtained (observed on a node, inferred from an
+   error message) instead of stating it as fact. Where a vendor page
+   contradicts an internal reverse-engineering doc such as
+   `xiNAS-MCP/xiraid-analysis/api_behavior_doc.md`, the vendor page
+   wins and the internal doc gets a correction note.
+
+   A plausible reading of a flag name is not a source. xiRAID's
+   `--drive_trim` reads like "the array sends TRIM to its drives"; it
+   actually TRIMs every disk *before* the array is created, and xiRAID
+   enables it on its own only when no disk carries metadata — a
+   safety check that keeps a TRIM from destroying recoverable data.
+   A spec written from the name alone told the installer to override
+   exactly that check.
 
 The only exemptions are trivial code-only fixes that don't change
 externally observable behavior (typos, refactors, log-message tweaks,
 test-only changes). When in doubt, write the spec.
+
+#### Deferred work → [docs/TODO.md](docs/TODO.md)
+
+When a change deliberately leaves something out, record it in
+[docs/TODO.md](docs/TODO.md) as part of that same change — what is
+missing, what the code does instead, why it was cut, and what "done"
+looks like. That file is the one place deferred work accumulates, so a
+scoping decision survives the conversation that produced it.
+
+It is not a bug tracker: anything that makes shipped behavior wrong gets
+fixed, not deferred. Delete an entry when it lands — the spec it changed
+is the durable record.
 
 ### Configuration History (`xinas_history/`)
 
