@@ -21,6 +21,51 @@ deferred and the change that deferred it.
 
 ---
 
+## Storage — hung NFS mount can still stall the share-list render
+
+*Deferred 2026-08-14, from the WS5.2 TUI thread-safety fix
+(`fix/ws5-tui-thread-safety`).*
+
+**What is missing.** A bound on the blocking syscalls in
+[`nfs.py`](../xinas_menu/screens/nfs.py) `_format_exports` that `df`'s
+`timeout=5` does not cover: `os.path.isdir(path)` (`nfs.py:1063`), which runs
+immediately before and gates the `df` call, and the `ss -tn state established
+( dport = :2049 )` fallback in the connected-hosts block (`nfs.py:1107`).
+Neither has a timeout.
+
+**Current behavior.** `stat(2)` on a hard-mounted, unresponsive NFS export
+blocks in uninterruptible sleep (`D` state) with no timeout available at the
+syscall level, so on the spec's own headline example (dead NFS server) `isdir`
+hangs before the `df` timeout ever gets a chance to fire; `ss` can hang the
+same way against a wedged network stack. WS5.2 moved the whole render off the
+event loop (`_load_exports` awaits `_format_exports` via `asyncio.to_thread`),
+so the TUI no longer freezes — but the render for that refresh still stalls
+indefinitely, and because `_load_exports` is `@work(exclusive=True)`, each
+subsequent refresh cancels the *worker* while the `to_thread` call underneath
+keeps running on a thread borrowed from the event loop's shared default
+executor. It cannot be cancelled or reclaimed, so repeated refreshes against a
+hung export strand one thread per refresh in that shared pool.
+
+**Why it was cut.** WS5.2's scope was the event-loop-blocking defect (a hung
+call freezing the whole TUI), which `to_thread` fixes. Bounding `isdir`/`ss`
+themselves is a different problem — there is no interruptible timeout for a
+blocked `stat(2)`, so "done" means a probe-in-a-thread design (a dedicated,
+bounded worker pool with a hard wall-clock join timeout, treating a probe that
+doesn't return in time as failed and leaking that one thread deliberately
+instead of the default executor), not a parameter tweak on the existing call.
+
+**What done looks like.**
+
+1. `isdir` (and the `ss` fallback) run through a small dedicated thread pool
+   sized to survive N stranded probes, not the event loop's shared default
+   executor, so a hung mount can't starve unrelated `to_thread` work.
+2. Each probe is joined with a wall-clock timeout; a probe that doesn't
+   return in time renders the same way `df`'s timeout does today (`N/A` /
+   status badge unaffected) rather than blocking the refresh.
+3. `docs/Storage/fs-shares-management-spec.md` §4.2 is updated to state the
+   bound covers `isdir` and `ss` too, and the caveat added in this change is
+   removed.
+
 ## Storage — day-2 array creation does not enable discard
 
 *Deferred 2026-08-14, from the TRIM-support change.*
