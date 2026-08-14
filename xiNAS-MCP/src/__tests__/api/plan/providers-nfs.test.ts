@@ -193,10 +193,17 @@ describe('share.create plan provider', () => {
     );
   });
 
-  it('validation: missing fsid → INVALID_ARGUMENT', async () => {
+  it('validation: missing fsid is ALLOWED on create — the provider allocates one', async () => {
+    // Supersedes the old "missing fsid → INVALID_ARGUMENT" expectation: fsid is
+    // server-allocated now (design §4), which is what lets a client omit it.
+    // share.update still rejects a missing fsid — see the allocation describe.
     const spec = makeShareSpec();
     delete spec.fsid;
-    await expectInvalidArgument(provider.preflight(h.ctx, spec));
+    const result = await provider.preflight(h.ctx, spec);
+    const doc = result.desired_mutations?.find((m) => 'value' in m) as {
+      value: { spec: { fsid: number } };
+    };
+    expect(doc.value.spec.fsid).toBe(1);
   });
 
   it('validation: non-integer fsid (42.5, "Infinity") → INVALID_ARGUMENT; "17" tolerated', async () => {
@@ -618,5 +625,76 @@ describe('PlanEngine integration (N0.2 plumbing end-to-end)', () => {
       desired_mutations: [],
     });
     expect(persisted?.state_revision_expected).toBe(0);
+  });
+});
+
+describe('share.create — fsid allocation', () => {
+  const DESIRED = '/xinas/v1/desired/Share/';
+
+  /** Put a desired Share row holding `fsid`. */
+  function seedShare(kv: SqliteKvStore, id: string, path: string, fsid: number): void {
+    kv.put(`${DESIRED}${id}`, { kind: 'Share', id, spec: { path, clients: [], fsid } });
+  }
+
+  it('allocates fsid 1 when the spec omits it and no shares exist', async () => {
+    const { ctx } = makeHarness();
+    const result = await providerFor('share.create').preflight(
+      ctx,
+      makeShareSpec({ fsid: undefined }),
+    );
+    const doc = result.desired_mutations?.find((m) => 'value' in m) as {
+      value: { spec: { fsid: number } };
+    };
+    expect(doc.value.spec.fsid).toBe(1);
+  });
+
+  it('allocates above the highest fsid in use, not into a gap', async () => {
+    const { ctx, kv } = makeHarness();
+    seedShare(kv, 'mnt/a', '/mnt/a', 0);
+    seedShare(kv, 'mnt/b', '/mnt/b', 4);
+    const result = await providerFor('share.create').preflight(
+      ctx,
+      makeShareSpec({ fsid: undefined }),
+    );
+    const doc = result.desired_mutations?.find((m) => 'value' in m) as {
+      value: { spec: { fsid: number } };
+    };
+    expect(doc.value.spec.fsid).toBe(5);
+  });
+
+  it('passes an explicit free fsid through unchanged', async () => {
+    const { ctx } = makeHarness();
+    const result = await providerFor('share.create').preflight(ctx, makeShareSpec({ fsid: 9 }));
+    const doc = result.desired_mutations?.find((m) => 'value' in m) as {
+      value: { spec: { fsid: number } };
+    };
+    expect(doc.value.spec.fsid).toBe(9);
+    expect(result.blockers).toEqual([]);
+  });
+
+  it('blocks — not throws — when an explicit fsid is already held', async () => {
+    const { ctx, kv } = makeHarness();
+    seedShare(kv, 'mnt/a', '/mnt/a', 7);
+    const result = await providerFor('share.create').preflight(ctx, makeShareSpec({ fsid: 7 }));
+    // The plan still renders, like EXPORT_PATH_IN_USE, so the operator sees the
+    // whole picture rather than a bare 400.
+    const codes = result.blockers.map((b) => b.code);
+    expect(codes).toContain('FSID_IN_USE');
+    expect(result.blockers.find((b) => b.code === 'FSID_IN_USE')?.message).toContain('mnt/a');
+  });
+
+  it('still rejects a non-integer fsid', async () => {
+    const { ctx } = makeHarness();
+    await expect(
+      providerFor('share.create').preflight(ctx, makeShareSpec({ fsid: 4.5 })),
+    ).rejects.toBeInstanceOf(ApiException);
+  });
+
+  it('still requires fsid on share.update — an absent one would erase it', async () => {
+    const { ctx, kv } = makeHarness();
+    seedShare(kv, 's1', '/mnt/data', 3);
+    await expect(
+      providerFor('share.update').preflight(ctx, makeShareSpec({ fsid: undefined })),
+    ).rejects.toBeInstanceOf(ApiException);
   });
 });
