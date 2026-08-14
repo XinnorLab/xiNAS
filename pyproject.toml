@@ -17,12 +17,15 @@ include = ["xinas_menu*", "xinas_history*"]
 [project.optional-dependencies]
 dev = [
   "pyright>=1.1.380",
-  "ruff>=0.6.0",
+  # Capped below the next minor, for the same reason as textual below: the
+  # unpinned floor let CI float onto 0.16, whose formatter also reformats
+  # Python inside Markdown fences. That turned every `docs/plans/*.md` code
+  # block into a format-check failure on a repo whose Python was already
+  # clean. `docs` is excluded from ruff's scope below; the cap keeps the next
+  # formatter change from landing on a green branch without anyone choosing it.
+  "ruff>=0.6.0,<0.17",
   "pytest>=8.0",
   "pytest-cov>=5.0",
-  # tests/test_storage_state_fail_closed.py replays an Ansible set_fact chain
-  # through Jinja; ansible ships it on the host, CI needs it explicitly.
-  "jinja2>=3.0",
   # TUI runtime deps, mirrored from collection/roles/xinas_menu/tasks/main.yml
   # (the deployment venv) and install.sh so pyright/tests resolve the same
   # versions CI ships. Keep the pins in sync across all three. textual is
@@ -42,7 +45,13 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-extend-exclude = [".claude", "node_modules", "xiNAS-MCP/node_modules"]
+# `docs` is excluded because ruff >= 0.16 formats Python inside Markdown code
+# fences. Most of those fences live in `docs/plans/`, which CLAUDE.md declares
+# append-only — a landed plan records what was intended at the time and is not
+# edited afterwards, least of all by a formatter. Reformatting them to satisfy
+# `ruff format --check .` would rewrite ~1.8k lines of history to change
+# nothing that runs. No `.py` file lives under `docs/`.
+extend-exclude = [".claude", "node_modules", "xiNAS-MCP/node_modules", "docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
