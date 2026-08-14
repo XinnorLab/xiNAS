@@ -292,10 +292,26 @@ rollback mechanism everything else leans on.
 - [ ] **WS5.1** `_remove_share`: decorate with `@work` (match the other
   mutating methods in nfs.py); add a screen test that the menu action
   schedules the worker.
-- [ ] **WS5.2** Thread-safety pass: fix `config_history.py:408`
+- [x] **WS5.2** Thread-safety pass: fix `config_history.py:408`
   (`call_from_thread` only from workers; direct call otherwise); move the `df`
   calls in `nfs.py:882` into a worker with `timeout=`; suspend the app around
   btop (`app.suspend()`).
+
+  > **Status 2026-08-14:** LANDED on `fix/ws5-tui-thread-safety`. Three
+  > fixes: the `config_history.py` Reset-to-Baseline progress callback no
+  > longer calls `call_from_thread` from the event-loop thread (that call
+  > always raised `RuntimeError`, silently swallowed by the runner) —
+  > `TransactionalRunner` invokes the callback on the event loop already, so
+  > the handler now updates the widget directly; `nfs.py`'s `df` calls got a
+  > `timeout=5` and the whole `_format_exports` render moved off the event
+  > loop via `asyncio.to_thread`, so a slow-but-live export can no longer
+  > freeze the TUI; and `quick_actions.py`'s btop launch is now wrapped in
+  > `App.suspend()` instead of running in a bare executor thread, so btop and
+  > Textual no longer fight over the same terminal. Observation, not part of
+  > this landing: WS5.1 (`_remove_share` `@work`) was already fixed
+  > independently before this branch — `_remove_share` carries `@work` plus
+  > a regression test — so its box above is left unchecked rather than
+  > claimed here.
 - [ ] **WS5.3** raid.py: make teardown workers `exclusive=True` and
   non-cancellable by stray input (confirm-then-run-to-completion, disable
   bindings while running); surface envelope warnings in the empty-disk state.
