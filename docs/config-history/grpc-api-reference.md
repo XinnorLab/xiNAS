@@ -124,9 +124,18 @@ Create a new RAID array.
 | `merge_read_wait` | `string` | Read merge wait time |
 | `merge_write_max` | `string` | Max write merge size |
 | `merge_write_wait` | `string` | Write merge wait time |
-| `discard` | `bool` | TRIM/discard support |
-| `drive_trim` | `bool` | Drive-level TRIM |
+| `discard` | `bool` | Enable TRIM/discard pass-through on the array. **Defaults to `0`**, and **every member must support RZAT** (Deterministic Read Zero after TRIM) — not merely support discard |
+| `drive_trim` | `bool` | **TRIMs all the disks before the array is created** — a one-shot prep step, not ongoing pass-through. xiRAID enables it by default **only if all disks support RZAT and none carries metadata**; that condition is a data-safety interlock, so do not force it on |
 | `force` | `bool` | Force creation |
+
+> `discard` / `drive_trim` semantics per [CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html)
+> (xiRAID Classic 4.4.0), corrected 2026-08-14. The previous one-line
+> descriptions ("TRIM/discard support", "Drive-level TRIM") were written from
+> the flag names and were wrong in both directions: they missed the RZAT
+> precondition on `discard`, and described `drive_trim` as an ongoing
+> array-level behaviour rather than a pre-create wipe with a conditional
+> default. Both fields are create-surface only on this transport — see
+> [ADR-0006](../control-path/adr/0006-xiraid-array.md).
 
 **Config-history usage:** Transactional runner for rollback rebuild.
 
@@ -168,10 +177,20 @@ Modify RAID parameters after creation.
 | Field | Type | Description |
 |-------|------|-------------|
 | `force_online` | `bool` | Force online parameter change |
-| `force_resync` | `bool` | Force resynchronization |
+| `force_resync` | `bool` | Force resynchronization — **deprecated** by CR in favour of `xicli raid init reset` |
 | `discard_ignore` | `bool` | Ignore discard requests |
 | `discard_verify` | `bool` | Verify discard operations |
 | `drive_write_through` | `bool` | Drive write-through mode |
+
+> **Reality check (2026-08-14).** This table describes the *`xicli` surface*.
+> CR / `xicli raid` confirms `xicli raid modify` takes `discard` (requiring a
+> RAID unload/restore), `discard_verify` and `drive_write_through`. The
+> **gRPC** `RaidModify` message vendored at
+> `xiNAS-MCP/proto/xraid/gRPC/protobuf/message_raid.proto` (field numbers read
+> from a running **4.3.1** daemon) has **no** field for `discard`,
+> `discard_ignore`, `discard_verify` or `drive_write_through`. Any client
+> setting them over gRPC has them silently dropped and gets a `success`
+> reply. Hosts now run 4.4; the descriptor has not been re-vendored.
 
 **Config-history usage:** Transactional runner for non-disruptive changes.
 

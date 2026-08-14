@@ -307,7 +307,16 @@ function checkDisks(
   }
 }
 
-/** The executor-owned pool is named xnsp_<array>; it must fit the namespace. */
+/**
+ * The executor-owned pool is named xnsp_<array>; it must fit the namespace.
+ *
+ * Note: with NAME_RE capped at xiRAID's documented 28 chars, 'xnsp_' + name is
+ * at most 33, so this check can no longer fire. It is kept as a guard in case
+ * the array-name cap is ever raised, and because the 63-char pool-name limit
+ * is our own assumption — the xiRAID command reference states no naming
+ * constraints at all for `xicli pool -n`, so there is nothing to verify it
+ * against.
+ */
 export function derivedPoolName(arrayName: string): string {
   return `xnsp_${arrayName}`;
 }

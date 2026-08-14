@@ -83,6 +83,21 @@ A future migration may persist the observed pin and let the engine's `plan_stale
 
 **Writability enforcement (pre-plan).** Any topology field present in the PATCH spec (`name`, `level`, `member_disk_ids`, `group_size`, `synd_cnt`, `strip_size_kib`, `block_size`, `force_metadata`) → `UNSUPPORTED` (422) with the ADR-0006 per-field shape (`reason: 'topology_immutable'`) **before** any plan row is written. The three **create-surface tuning keys** — `spec.tuning.resync_enabled`, `spec.tuning.discard`, `spec.tuning.drive_trim` — reject on the same pre-plan path with `reason: 'create_only_tuning'`: the daemon's `RaidModify` message has no field for any of them (verified against the running 4.3.1 descriptor), so forwarding one would be silently dropped by protobuf and report a false `success`. `translate.ts` also omits them from the `raid_modify` request as a second line of defence.
 
+> **Naming caveat (added 2026-08-14).** "Create-only" describes the **gRPC
+> message**, not the product. [CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html)
+> documents `xicli raid modify` as accepting `discard` (noting it requires a
+> RAID unload/restore to take effect), plus `discard_verify` and
+> `drive_write_through`. The rejection here is therefore a *transport
+> capability limit* — correct to keep, wrong to describe as "xiRAID cannot
+> change discard". Two consequences: (1) `reason: 'create_only_tuning'` is a
+> slight misnomer that should not be relied on as a statement about the
+> engine; (2) the descriptor was read from **4.3.1** and hosts now run
+> **4.4** — if 4.4's `RaidModify` gained these fields, this rejection is
+> stale. Re-vendor `proto/xraid/gRPC/protobuf/message_raid.proto` from a 4.4
+> daemon before assuming either way. The related latent gap ADR-0006 records
+> — that 4.3.1's `RaidCreate` also lacks all three, so they are not writable
+> at create either — is unchanged.
+
 **Provider preflight.**
 1. The array must exist in observed state (else `NOT_FOUND`); read its observed `spec` as the *before*.
 2. `validateModifySpec`: tuning ranges (reusing the create rules); spare disks resolved + checked exactly like create members (`disk_not_found`/`disk_not_safe`/`disk_is_system`/`disk_in_use` — a disk spared to **this** array's current pool is not "in use").

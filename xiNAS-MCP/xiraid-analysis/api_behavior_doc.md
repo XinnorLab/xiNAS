@@ -7,6 +7,26 @@
 
 ---
 
+> ## ⚠ Status: internal reverse-engineering — the vendor reference wins
+>
+> This document was produced by reading a xiRAID source tree, not from Xinnor
+> documentation. It is useful for things the published docs do not cover
+> (internal exception classes, the config server, threading), and it is
+> **not authoritative for anything the published docs do cover** — parameter
+> ranges, defaults, per-level requirements, flag semantics.
+>
+> Where the two disagree, the vendor page is correct and this file gets a
+> correction note. Reviewed against **xiRAID Classic 4.4.0** documentation on
+> **2026-08-14**; corrections are marked **⚠ Corrected 2026-08-14** inline.
+> Vendor pages used:
+> [CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html),
+> [AG / RAIDs explained](https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/xiraid_raids_explained.html).
+>
+> Note also that the source tree read here predates 4.4; a range that was
+> right for that tree may simply have moved.
+
+---
+
 ## 1. Overview
 
 xiRAID exposes **two** internal servers. Only one is relevant for xiNAS-MCP.
@@ -179,7 +199,7 @@ Optional field valid ranges:
 | `level` | From `RAID_LEVELS` constant (0,1,5,6,7,10,50,60,70,N+M notation) |
 | `strip_size` | From `STRIP_SIZES_KB` (powers of 2 in KiB) |
 | `block_size` | From `RAID_BS_CHOICE` (512 or 4096) |
-| `group_size` | 2–32 (required for levels 50/60/70) |
+| `group_size` | ~~2–32~~ **4–32** (required for levels 50/60/70) — **⚠ Corrected 2026-08-14** |
 | `synd_cnt` | 4–32 (for N+M levels) |
 | `memory_limit` | 1024–1048576 MiB, or 0 (disabled) |
 | `memory_prealloc` | 1024–65536 MiB, or 0 |
@@ -187,6 +207,23 @@ Optional field valid ranges:
 | `sched_enabled`, `merge_read_enabled`, `merge_write_enabled`, `adaptive_merge` | 0 or 1 |
 | `max_sectors_kb` | 4–4096, or 0 |
 | `request_limit` | 0–INT_MAX |
+
+**⚠ Corrected 2026-08-14 — `group_size` range.** This table said `2–32`, read
+from `ARGUMENT_BOUNDARY_MIN_MAX` in the source tree. CR / `xicli raid` gives
+**4–32**, and AG / RAIDs explained is stricter still per level: group size
+**≥ 4** for RAID 50/60 and **≥ 6** for RAID 70, with the member count a
+multiple of the group size and **at least 2 groups**. A validator built on
+`2–32` accepts specs the engine rejects. `lib/xiraid/schema.ts`
+(`GROUP_SIZE_MIN`) was corrected to 4 on the same date.
+
+**⚠ Corrected 2026-08-14 — minimum drives per level.** This document names
+`RAIDMinimumDrivesRequiredError` but never records the numbers, so consumers
+guessed them. AG / RAIDs explained publishes them: RAID 0 ≥ 1, RAID 1 ≥ 2,
+RAID 5 ≥ **4**, RAID 6 ≥ 4, RAID 7.3 ≥ **6**, RAID 10 ≥ 2 (even), RAID 50 ≥
+**8**, RAID 60 ≥ 8, RAID 70 ≥ **12**, N+M ≥ **8** (≥ 4 for checksums,
+`N+M ≤ 64`, `M ≤ N`). `LEVEL_CONSTRAINTS` in `lib/xiraid/schema.ts` had
+raid5=3, raid7=4, raid50=6, raid70=8 and n+m=4 — all below the engine — and
+was corrected on the same date.
 
 **Server-side preflight errors thrown:**
 - `RAIDMinimumDrivesRequiredError` — insufficient drives for level
@@ -224,6 +261,20 @@ Parameters modifiable at runtime without restarting RAID:
 - `discard`, `discard_ignore`, `discard_verify`, `drive_write_through`
 
 Error `RAIDParametersModifyError` is raised if a parameter cannot be modified (e.g., sysfs write fails).
+
+**⚠ Note added 2026-08-14 — this list is the *source tree's*, not the gRPC
+message's.** CR / `xicli raid` confirms `xicli raid modify` accepts `discard`
+(with "requires RAID unload/restore"), `discard_verify` and
+`drive_write_through`, so this section is right about the product. It is
+**not** a list of what a gRPC client can send: the `RaidModify` message
+vendored at `proto/xraid/gRPC/protobuf/message_raid.proto` — field numbers
+taken from the running **4.3.1** daemon's descriptor — carries **no**
+`discard`, `discard_ignore`, `discard_verify` or `drive_write_through` field.
+Sending one is silently dropped by protobuf and reports success, which is why
+the control path rejects those keys pre-plan (ADR-0006). CR also marks
+`--force_resync` **deprecated** in favour of `xicli raid init reset`.
+The daemon on hosts is now 4.4; the vendored descriptor has not been
+refreshed against it.
 
 ### 3.7 Init / Recon / Restripe Lifecycle
 

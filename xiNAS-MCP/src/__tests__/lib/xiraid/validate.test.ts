@@ -21,19 +21,12 @@ function disk(id: string, over: Partial<ResolvedDisk> = {}): ResolvedDisk {
   };
 }
 
+/** d1..d12 — enough members for raid70's documented 12-drive minimum. */
+const POOL = Array.from({ length: 12 }, (_, i) => `d${i + 1}`);
+
 function facts(over: Partial<CreateFacts> = {}): CreateFacts {
   return {
-    disks: [
-      disk('d1'),
-      disk('d2'),
-      disk('d3'),
-      disk('d4'),
-      disk('d5'),
-      disk('d6'),
-      disk('d7'),
-      disk('d8'),
-      disk('claimed'),
-    ],
+    disks: [...POOL.map((id) => disk(id)), disk('claimed')],
     existingArrayNames: ['taken'],
     existingMemberDiskIds: new Set(['claimed']),
     ...over,
@@ -67,47 +60,56 @@ describe('validateCreateSpec', () => {
     expect(validateCreateSpec(spec(), facts())).toEqual([]);
   });
 
-  it('level minimums', () => {
-    expect(codes(spec({ member_disk_ids: ['d1', 'd2', 'd3'] }))).toContain('min_drives');
-    expect(codes(spec({ level: 'raid5', member_disk_ids: ['d1', 'd2', 'd3', 'd4'] }))).toEqual([]);
-  });
-
-  // The engine minimums are stricter than textbook RAID math: xiRAID Classic
-  // rejects RAID 5 under 4 drives and RAID 50/60 under 8. See
-  // docs/Storage/raid-management-spec.md §4 → "Engine-enforced minimum drive
-  // counts" — the numbers there are the single source of truth for the TUI,
-  // this table, and the installer alike.
-  it('enforces the engine minimums, not the textbook ones', () => {
-    // raid5 with 3 drives is textbook-legal but rejected by the engine.
-    expect(codes(spec({ level: 'raid5', member_disk_ids: ['d1', 'd2', 'd3'] }))).toContain(
-      'min_drives',
-    );
-    // raid50 with 6 drives splits evenly into 2 groups of 3, yet is under the
-    // engine's 8-drive floor — the group_size rules alone would let it pass.
-    expect(
-      codes(
-        spec({
-          level: 'raid50',
-          member_disk_ids: ['d1', 'd2', 'd3', 'd4', 'd5', 'd6'],
-          group_size: 3,
-        }),
-      ),
-    ).toContain('min_drives');
+  // Minimums are xiRAID's own, published per level in the 4.4.0 Administrator's
+  // Guide ("RAIDs explained"). They are NOT textbook RAID minimums: raid5 needs
+  // 4, not 3, and raid50 needs 8, not 6. A floor below the engine's lets a spec
+  // through the plan and fails it later at raid_create.
+  it.each([
+    ['raid0', 1],
+    ['raid1', 2],
+    ['raid5', 4],
+    ['raid6', 4],
+    ['raid7', 6],
+    ['raid10', 4],
+    ['raid50', 8],
+    ['raid60', 8],
+    ['raid70', 12],
+    ['n+m', 8],
+  ] as const)('level minimum for %s is %i drives', (level, min) => {
+    const under = POOL.slice(0, min - 1);
+    const at = POOL.slice(0, min);
+    // group_size / synd_cnt are supplied so the only blocker in play is min_drives
+    const extra =
+      level === 'raid50' || level === 'raid60'
+        ? { group_size: 4 }
+        : level === 'raid70'
+          ? { group_size: 6 }
+          : level === 'n+m'
+            ? { synd_cnt: 4 }
+            : {};
+    if (min > 1) {
+      expect(codes(spec({ level, member_disk_ids: under, ...extra }))).toContain('min_drives');
+    }
+    expect(codes(spec({ level, member_disk_ids: at, ...extra }))).not.toContain('min_drives');
   });
 
   it('raid50/60/70 group_size rules', () => {
-    const eight = ['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8'];
+    const eight = POOL.slice(0, 8);
     expect(codes(spec({ level: 'raid50', member_disk_ids: eight }))).toContain(
       'group_size_required',
     );
-    expect(codes(spec({ level: 'raid50', member_disk_ids: eight, group_size: 1 }))).toContain(
+    // xiRAID's documented range is 4-32 (command reference); 3 used to pass
+    expect(codes(spec({ level: 'raid50', member_disk_ids: eight, group_size: 3 }))).toContain(
       'group_size_range',
     );
-    expect(codes(spec({ level: 'raid50', member_disk_ids: eight, group_size: 3 }))).toContain(
-      'members_not_divisible_by_group',
+    expect(codes(spec({ level: 'raid50', member_disk_ids: eight, group_size: 33 }))).toContain(
+      'group_size_range',
     );
     // 8 % 4 == 0 and 8/4 = 2 groups → valid
     expect(codes(spec({ level: 'raid50', member_disk_ids: eight, group_size: 4 }))).toEqual([]);
+    expect(codes(spec({ level: 'raid50', member_disk_ids: eight, group_size: 6 }))).toContain(
+      'members_not_divisible_by_group',
+    );
     // group_size == member count → only 1 group → compound level needs >= 2
     expect(codes(spec({ level: 'raid50', member_disk_ids: eight, group_size: 8 }))).toContain(
       'members_not_divisible_by_group',
@@ -115,12 +117,12 @@ describe('validateCreateSpec', () => {
   });
 
   it('n+m synd_cnt rules', () => {
-    const six = ['d1', 'd2', 'd3', 'd4', 'd5', 'd6'];
-    expect(codes(spec({ level: 'n+m', member_disk_ids: six }))).toContain('synd_cnt_required');
-    expect(codes(spec({ level: 'n+m', member_disk_ids: six, synd_cnt: 3 }))).toContain(
+    const eight = POOL.slice(0, 8);
+    expect(codes(spec({ level: 'n+m', member_disk_ids: eight }))).toContain('synd_cnt_required');
+    expect(codes(spec({ level: 'n+m', member_disk_ids: eight, synd_cnt: 3 }))).toContain(
       'synd_cnt_range',
     );
-    expect(codes(spec({ level: 'n+m', member_disk_ids: six, synd_cnt: 4 }))).toEqual([]);
+    expect(codes(spec({ level: 'n+m', member_disk_ids: eight, synd_cnt: 4 }))).toEqual([]);
   });
 
   it('strip/block validation', () => {
@@ -143,26 +145,6 @@ describe('validateCreateSpec', () => {
   it('name rules', () => {
     expect(codes(spec({ name: 'bad name!' }))).toContain('name_invalid');
     expect(codes(spec({ name: 'taken' }))).toContain('name_taken');
-  });
-
-  // The xiRAID Classic 4.4 engine rule for `xicli raid create -n`: <= 28 chars,
-  // Latin letters/digits/underscore, no hyphens. Anything looser is a name the
-  // engine rejects after the operator has confirmed the create.
-  it('rejects hyphens — xicli does not accept them', () => {
-    expect(codes(spec({ name: 'my-array' }))).toContain('name_invalid');
-  });
-
-  it('caps names at 28 characters', () => {
-    expect(codes(spec({ name: 'a'.repeat(28) }))).toEqual([]);
-    expect(codes(spec({ name: 'a'.repeat(29) }))).toContain('name_invalid');
-  });
-
-  it('rejects the names xiRAID prohibits (they collide with sysfs attributes)', () => {
-    expect(codes(spec({ name: 'power' }))).toContain('name_invalid');
-    expect(codes(spec({ name: 'uevent' }))).toContain('name_invalid');
-    // The sysfs attributes are lowercase, so only the exact names collide.
-    expect(codes(spec({ name: 'powerful' }))).toEqual([]);
-    expect(codes(spec({ name: 'Power' }))).toEqual([]);
   });
 
   it('disk rules — one blocker per offending disk', () => {
@@ -213,15 +195,27 @@ describe('validateCreateSpec', () => {
     expect(codes(spec({ spare_disk_ids: ['d1'] }))).toContain('disk_in_use');
   });
 
-  it('the 28-char name cap subsumes the derived xnsp_<name> pool guard on create', () => {
-    // `xnsp_` + 28 = 33 always fits, so no create-time name can trip the
-    // derived-pool guard any more — the name rule rejects it first. The guard
-    // stays reachable on MODIFY, where the array name comes from observed
-    // state (an imported array may carry a name this rule would refuse).
-    const longName = 'a'.repeat(60);
-    expect(codes(spec({ name: longName, spare_disk_ids: ['d5'] }))).toContain('name_invalid');
-    expect(codes(spec({ name: longName }))).toContain('name_invalid');
-    expect(codes(spec({ name: 'a'.repeat(28), spare_disk_ids: ['d5'] }))).toEqual([]);
+  // xiRAID array naming rules, per the 4.4.0 command reference: max 28 chars,
+  // Latin letters / numbers / underscores, and "power"/"uevent" prohibited.
+  it('array names follow xiRAID rules', () => {
+    expect(codes(spec({ name: 'a'.repeat(28) }))).toEqual([]);
+    expect(codes(spec({ name: 'a'.repeat(29) }))).toContain('name_invalid');
+    // hyphens are valid in most Linux object names but NOT in a xiRAID array name
+    expect(codes(spec({ name: 'my-array' }))).toContain('name_invalid');
+    expect(codes(spec({ name: 'my_array' }))).toEqual([]);
+    for (const reserved of ['power', 'uevent', 'POWER', 'Uevent']) {
+      expect(codes(spec({ name: reserved }))).toContain('name_invalid');
+    }
+  });
+
+  it('derived pool name xnsp_<name> cannot overflow once names are capped at 28', () => {
+    // The longest legal array name is 28 chars, so xnsp_ + name is at most 33 —
+    // comfortably inside the 63-char assumption. The guard in validate.ts is
+    // therefore unreachable by construction; this test pins that invariant so a
+    // future relaxation of NAME_RE has to revisit it.
+    const longest = 'a'.repeat(28);
+    expect(`xnsp_${longest}`.length).toBeLessThanOrEqual(63);
+    expect(codes(spec({ name: longest, spare_disk_ids: ['d5'] }))).toEqual([]);
   });
 });
 

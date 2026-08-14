@@ -15,6 +15,24 @@ Sources:
 - gRPC service contract: [xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/service_xraid.proto), [message_raid.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/message_raid.proto), [message_pool.proto](../../xiNAS-MCP/proto/xraid/gRPC/protobuf/message_pool.proto)
 - NFS helper daemon: [xiNAS-MCP/nfs-helper/nfs_helper.py](../../xiNAS-MCP/nfs-helper/nfs_helper.py), [xinas-nfs-helper.service](../../xiNAS-MCP/nfs-helper/xinas-nfs-helper.service)
 
+**Vendor references.** Every statement in this document about what *xiRAID*
+(as opposed to xiNAS) accepts, rejects, or defaults to is sourced from the
+Xinnor documentation for **xiRAID Classic 4.4.0** — the version the
+`xiraid_classic` role installs:
+
+| Short name used below | Page |
+|---|---|
+| **CR / `xicli raid`** | <https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html> |
+| **CR / `xicli pool`** | <https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/pool.html> |
+| **AG / RAIDs explained** | <https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/xiraid_raids_explained.html> |
+
+A claim that is *not* traceable to one of those pages is marked inline with
+how it was actually established — **[observed]** (seen on a node),
+**[from error message]** (inferred from an engine rejection string), or
+**[from descriptor]** (read out of the running daemon's protobuf
+descriptor). Do not promote such a claim to plain fact without a vendor
+page behind it.
+
 ---
 
 ## 1. Where this lives in the TUI
@@ -341,24 +359,42 @@ info  [response-property-pattern-changed] in API GET /arrays
 
 No exclusion was added to [.github/workflows/ci.yml](../../.github/workflows/ci.yml) and no `oasdiff` rule was suppressed. Note the corollary: because the request side is untyped, the schema pattern is documentation, not request validation — the enforcing gate for API clients is `validateCreateSpec()`, which is why the rule has to be right in **both** places.
 
+**Spare-pool names are a separate, undocumented case.** CR / `xicli pool`
+states **no** constraints on `-n/--name` — no length limit, no character set,
+no prohibited values. `SparePoolScreen` therefore keeps its looser
+`_POOL_NAME_RE = ^[a-zA-Z0-9_-]+$` (§7.3). Do not "fix" it to match the array
+rule by analogy: there is no vendor statement that the array rule applies to
+pools, and tightening it would reject pool names that work today.
+
 ### Step — RAID level
 
 `SelectDialog` over `_RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]`, pre-selecting the previously-chosen level on re-entry. xiRAID Classic accepts all seven; the TUI passes the string through to the array-create spec's `level` field.
 
 #### Engine-enforced minimum drive counts
 
-(Finding #20; unified across surfaces by finding #4.) xiRAID Classic enforces higher minimums than textbook RAID math — an under-count is rejected with e.g. `Error: To create RAID level '5', a minimum of '4' disks are required.` This table is the **single source of truth for minimum member counts across the whole repo**: the TUI Create wizard, the control-path constraint table, and the installer's auto-generated arrays all encode these numbers and must not diverge (review finding #4).
+(Finding #20; unified across surfaces by finding #4.) xiRAID enforces higher minimums than textbook RAID math, and they are **documented by the vendor** — the Administrator's Guide [RAIDs explained](https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/xiraid_raids_explained.html) page carries a `Requirements` line per level, even though `xicli raid create --help` and the CR parameter table do not repeat them. This table is the **single source of truth for minimum member counts across the whole repo**: the TUI Create wizard, the control-path constraint table, and the installer's auto-generated arrays all encode these numbers and must not diverge (review finding #4).
 
-| Level | Textbook min | xiRAID min |
-|---|---|---|
-| 0, 1 | 2 | 2 |
-| 5 | 3 | **4** |
-| 6 | 4 | 4 |
-| 10 | 4 | 4 |
-| 50 | 6 | **8** |
-| 60 | 6–8 | **8** |
+| Level | Textbook min | xiRAID min (AG / RAIDs explained) | Extra rule |
+|---|---|---|---|
+| 0 | 2 | **1** | — |
+| 1 | 2 | 2 | — |
+| 5 | 3 | **4** | — |
+| 6 | 4 | 4 | — |
+| 7.3 | 4 | **6** | — |
+| 10 | 4 | **2** | "the number of drives must be even" |
+| 50 | 6 | **8** | multiple of group size, ≥ 2 groups, group size ≥ 4 |
+| 60 | 8 | 8 | multiple of group size, ≥ 2 groups, group size ≥ 4 |
+| 70 | 12 | **12** | multiple of group size, ≥ 2 groups, group size ≥ 6 |
+| N+M | — | **8** | ≥ 4 drives for checksums; `N+M ≤ 64`; `M ≤ N` |
 
-> **Provenance and version scope.** These numbers were read off the **engine's own rejection messages** on xiRAID Classic 4.4 (the version the `xiraid_classic` role installs), *not* from `xicli raid create --help` — the help text does not document them. They are therefore **xiRAID-version-specific**: a future engine release may relax or tighten a minimum, and the table would then be wrong in the safe direction (rejecting a layout the engine would accept) or the unsafe one (passing preflight and failing at `xicli raid create`). They could not be re-probed live when recorded, because the engine validates device existence before drive count and no free devices were available. **When bumping the xiRAID version, re-confirm each minimum against the new engine before trusting this table.**
+> **Provenance and version scope.** The numbers above are the vendor's, read off the AG *RAIDs explained* page for xiRAID Classic 4.4 (the version the `xiraid_classic` role installs). They are **xiRAID-version-specific**: a future engine release may relax or tighten a minimum, and the table would then be wrong in the safe direction (rejecting a layout the engine would accept) or the unsafe one (passing preflight and failing at `xicli raid create`). **When bumping the xiRAID version, re-confirm each minimum against the new AG page before trusting this table.**
+
+**Reconciliation with what this spec used to say** (finding #20, superseded 2026-08-14). The first version of this table was assembled from an engine rejection string and installer feedback rather than from the AG page, which got four of the ten levels wrong:
+
+- **RAID 5 = 4** and **RAID 50 = 8** came from `Error: To create RAID level '5', a minimum of '4' disks are required.` and from installer feedback. Both are **confirmed** by AG. **RAID 60 = 8** is confirmed too.
+- **RAID 7.3 = 6**, **RAID 70 = 12** and **N+M = 8** were recorded as 4, 8 and 4 — *below* the engine's floor. A spec under the floor produced no `min_drives` blocker and failed later at `raid_create`, which is the exact failure mode the table exists to prevent.
+- **RAID 0 = 1** was recorded as 2 — stricter than the engine, so it rejects a layout xiRAID would accept.
+- **RAID 10 = 4** is **not** a xiRAID minimum: AG says 2, even. The floor of 4 is a xiNAS choice (a 2-drive RAID 10 is a mirror with extra steps) and must not be attributed to the engine.
 
 ##### Where the table is encoded
 
@@ -399,11 +435,33 @@ Filters that exclude a drive from the picker:
 
 ### Step — strip size
 
-`SelectDialog` over `_STRIP_SIZES = ["16", "32", "64", "128", "256"]` (KB), pre-selecting `"64"` (`selected=answers.get("strip", "64")`) so Enter on first entry still yields the historical default. **`Esc` now cancels the whole wizard**, the same as every other plain-`SelectDialog` step — there is no special-cased "dismiss without choosing silently defaults to 64" behavior anymore; the pre-selection is what makes the common case ("just press Enter") still land on 64.
+`SelectDialog` over `_STRIP_SIZES = ["16", "32", "64", "128", "256"]` (KB) — exactly the set CR / `xicli raid` allows for `-ss, --strip_size`. Note the **pre-selection is xiNAS's, not xiRAID's**: CR gives the engine default as `16`, while the wizard pre-selects `"64"` (`selected=answers.get("strip", "64")`) so Enter on first entry still yields the historical default. **`Esc` now cancels the whole wizard**, the same as every other plain-`SelectDialog` step — there is no special-cased "dismiss without choosing silently defaults to 64" behavior anymore; the pre-selection is what makes the common case ("just press Enter") still land on 64.
 
 ### Step — group size (RAID 50/60 only, conditional)
 
 `applies=lambda a: a.get("level") in ("50", "60")`. For levels `50` and `60` the wizard prompts for `group_size` as a positive integer; the validation loop re-prompts on bad input. For any other level this step is skipped in both directions — advancing past `strip` goes straight to `spare`/`confirmed`, and Back from a later step lands on `strip`, not on a hidden `group_size` prompt.
+
+**What xiRAID actually accepts here.** CR / `xicli raid` lists
+`-gs, --group_size` with the range **4–32** "for RAID 10, 50, 60, 70 only",
+and AG adds that the member count must be a multiple of the group size with
+**at least 2 groups** (group size ≥ 6 for RAID 70). So "any positive integer"
+is far looser than the engine: `1`, `3`, and `33` are all accepted by the
+dialog and rejected at dispatch, as is any value that doesn't divide the
+member count into ≥ 2 groups. Tightening the prompt to `4 ≤ gs ≤ 32` plus the
+divisibility check is the same tracked follow-up as the drive-count
+pre-validation above.
+
+Two further notes on the level list:
+
+- CR lists RAID **10** among the levels `-gs` applies to, but AG states RAID
+  10's only rule is an even drive count, and the installer creates its RAID 10
+  log array with no `-gs` at all (Installer/raid-spec §7.5) — successfully, on
+  every deployed node **[observed]**. `group_size` is therefore *accepted* for
+  RAID 10, not *required*; the wizard is right to skip the step. The daemon
+  source agrees: `RAIDNeedToSpecifyGroupSizeError` fires for 50/60/70 only
+  (`xiraid-analysis/api_behavior_doc.md` §3.4).
+- Levels 7.3, 70 and N+M are absent from `_RAID_LEVELS` and so never reach
+  this step, even though xiRAID supports them.
 
 ### Step — spare pool (conditional on pools existing)
 
@@ -428,9 +486,30 @@ The summary dialog (title `"Confirm Create"`, `allow_back=True`) renders all sel
 Steps:
 
 1. **Pick an array.** `grpc.raid_show()` → `SelectDialog` over array names.
-2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(grpc_key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max. (`resync_enabled` is create-only — xiRAID's `RaidModify` has no such field — so it is not offered.) The two merge-max knobs are **times in microseconds** (the daemon spells them `merge_*_usecs`), so their labels read `(us)` — they were mislabelled `(KB)` until the tuning surface became observable and read and write paths could be compared.
+2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(grpc_key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max. (`resync_enabled` is not offered — the vendored `RaidModify` message has no such field **[from descriptor]**; see the caveat below.) The two merge-max knobs are **times in microseconds** (the daemon spells them `merge_*_usecs`), so their labels read `(us)` — they were mislabelled `(KB)` until the tuning surface became observable and read and write paths could be compared.
+
 3. **Per-parameter prompt** — see §5.1.
 4. **Confirm + dispatch.** Value is coerced to the declared `vtype` (`int` for the integer knobs, `str` for the rest). `grpc.raid_modify(name, **{key: value})` is invoked. On success: audit (`raid.modify`) + snapshot (`raid_modify`) + Quick Overview refresh.
+
+**Caveat on step 2: "create-only" here means "absent from the gRPC message",
+not "the product can't change it".** CR / `xicli raid` documents
+`xicli raid modify` as accepting `discard` (noting it "requires RAID
+unload/restore"), `discard_verify` and `drive_write_through` — none of which
+exist as fields in `proto/xraid/gRPC/protobuf/message_raid.proto`, whose field
+numbers were taken from the **xiRAID 4.3.1** daemon's own descriptor. The CLI
+and the gRPC surface are not the same surface. What this means in practice:
+
+- The TUI's parameter list is correct *for the transport it uses*. Sending
+  `discard` over this `RaidModify` would be silently dropped by protobuf and
+  reported as success — which is exactly why the control path rejects it
+  pre-plan ([ADR-0006 §Writability](../control-path/adr/0006-xiraid-array.md),
+  [s4 spec §Writability enforcement](../control-path/s4-xiraid-array-mutations-spec.md)).
+- It is **not** correct to say xiRAID cannot modify `discard`. It can, via
+  `xicli`.
+- The vendored descriptor is 4.3.1 and the `xiraid_classic` role now installs
+  **4.4**. Whether 4.4's `RaidModify` gained these fields has **not been
+  re-checked against a 4.4 daemon**. Re-vendor the descriptor from a 4.4 host
+  before treating the create-only classification as still current.
 
 Step 1 guards the empty case: if the array listing fails or returns no arrays, the flow aborts on an **OK-only** dialog ("No RAID arrays configured." / "No arrays available."). Delete Array (§6) guards the same way. This is one instance of the screen-wide dialog convention — see §12.
 
