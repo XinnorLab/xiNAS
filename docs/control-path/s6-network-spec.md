@@ -211,6 +211,41 @@ mixed-revision pool (A at rev 3, B at rev 7) applies cleanly;
 `metadata.revision` overlaid from the desired row when present
 (ADR-0008 §read model).
 
+### 4.4 Verify stage — carrier-aware (shared by §4.1/§4.2)
+
+The final `verify` stage reads `ip -j addr show` and, for each target
+interface, confirms every desired address is live and — when the target
+has addresses — that its PBR rule is installed. The read is **polled**
+until the desired state appears or a settle budget runs out (15 s,
+re-read every 250 ms; both overridable per executor), because `netplan
+apply` returns before systemd-networkd has finished reconfiguring.
+Beyond a plain pass, it distinguishes two outcomes:
+
+- **Carrier-down ⇒ deferred, not failed.** An IPoIB interface whose link
+  is not up (`ip -j addr` reports the `NO-CARRIER` flag / no `LOWER_UP`,
+  `operstate` `DOWN`) cannot bind its address until the port trains — the
+  netplan is correct, the address is merely pending. Verify treats a
+  missing address on a carrier-down interface as **deferred** and does
+  NOT throw; the PBR-rule check is likewise skipped for that interface
+  (the source rule only installs once the address is live). The address
+  binds automatically when carrier returns — no re-apply needed. The
+  deferral is decided on the first read, without waiting out the settle
+  budget: polling cannot train a dead link, and a pool of down ports
+  would otherwise stall the apply by the full budget per interface.
+- **Carrier-up ⇒ strict.** A carrier-up interface (`LOWER_UP`) still
+  missing a desired address, or missing its PBR rule, is a real apply
+  failure and throws
+  `verify: <dev> is missing <cidr> after apply (live: …)` /
+  `verify: no PBR rule for table <id> after apply` → rollback.
+
+Consequence for `net.pool.apply` (§4.2): the pool verify loops over ALL
+managed interfaces, so a single dead port would otherwise throw and roll
+the WHOLE pool back, reverting every healthy interface too. With
+carrier-aware verify a down port is deferred and the pool apply commits
+the healthy interfaces; the down port's address binds when its link comes
+up. The executor emits a `deferred (no carrier …): <devs>` progress line
+naming the deferred interfaces.
+
 ---
 
 ## 5. NetHost seam (T4)
@@ -241,7 +276,11 @@ the flush verbs are what remove); `netplanGenerate` rejects when any file
 fails YAML parse or a stanza has no addresses while enabled
 (deterministic `-invalid` hook: a file containing the string
 `INVALID-NETPLAN` rejects). `-fail` stem hooks on `netplanApply` /
-`ipAddrFlush` targets for rollback paths.
+`ipAddrFlush` targets for rollback paths. A `sys_class_net` entry marked
+`no_carrier: true` models a link-down interface: `ipAddrShow` reports it
+with the `NO-CARRIER` flag / `operstate DOWN`, and `netplanApply` does
+NOT bind its addresses or PBR rule (the kernel can't program a down
+link) — the fixture for the carrier-aware verify deferral in §4.4.
 
 ## 6. Observe enrichment (T5)
 

@@ -37,7 +37,9 @@ interface FakeKernel {
 interface FakeNetState {
   netplan_files: Record<string, string>;
   kernel: FakeKernel;
-  sys_class_net: Array<{ name: string; driver: string }>;
+  // `no_carrier: true` models a link-down interface: netplanApply won't bind
+  // its addresses/PBR rule and ipAddrShow reports it NO-CARRIER / operstate DOWN.
+  sys_class_net: Array<{ name: string; driver: string; no_carrier?: boolean }>;
   rdma_links: Array<{ ifname: string; state: string; physical_state: string }>;
   ops: string[];
 }
@@ -140,10 +142,16 @@ export function createFakeNetHost(dir: string): NetHost & FakeNetHostHandle {
         }
       }
       const parsed = parsedOrThrow(state);
+      // A link-down interface never binds its config: the kernel can't
+      // program addresses/rules on an interface without carrier.
+      const downIfaces = new Set(
+        state.sys_class_net.filter((i) => i.no_carrier).map((i) => i.name),
+      );
       // ADD-ONLY kernel programming (the real netplan-apply quirk):
       // configured addresses/rules/routes are added; stale ones survive
       // until the flush verbs remove them.
       for (const [iface, stanza] of Object.entries(parsed.stanzas)) {
+        if (downIfaces.has(iface)) continue;
         const addrs = (state.kernel.addrs[iface] ??= []);
         for (const cidr of stanza.addresses) {
           if (!addrs.includes(cidr)) addrs.push(cidr);
@@ -209,7 +217,10 @@ export function createFakeNetHost(dir: string): NetHost & FakeNetHostHandle {
       const state = load(dir);
       const json = state.sys_class_net.map((iface) => ({
         ifname: iface.name,
-        operstate: 'UP',
+        operstate: iface.no_carrier ? 'DOWN' : 'UP',
+        flags: iface.no_carrier
+          ? ['NO-CARRIER', 'BROADCAST', 'MULTICAST', 'UP']
+          : ['BROADCAST', 'MULTICAST', 'UP', 'LOWER_UP'],
         addr_info: (state.kernel.addrs[iface.name] ?? []).map((cidr) => ({
           family: 'inet',
           local: cidr.split('/')[0],
