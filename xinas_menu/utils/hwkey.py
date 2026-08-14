@@ -14,12 +14,21 @@ are installed.
 
 from __future__ import annotations
 
+import os
+from dataclasses import dataclass
+
 GOLDEN_RATIO_64 = 0x61C8864680B583EB
 _MASK64 = (1 << 64) - 1
 _PAGE_SIZE = 4096
 _WORDS = _PAGE_SIZE // 8  # 512
 _UUID_STRING_LEN = 36
 NULL_SUBSTITUTE = b"(null)"  # kernel snprintf("%s", NULL)
+
+# DMI field names, in the kernel's concatenation order.
+DMI_PRODUCT_SERIAL = "product_serial"
+DMI_PRODUCT_UUID = "product_uuid"
+DMI_BOARD_SERIAL = "board_serial"
+DEFAULT_MODULE = "xiraid"
 
 
 def _rdx_hash_64(val: int) -> int:
@@ -112,3 +121,95 @@ GOLDEN_VECTORS: list[tuple[bytes, bytes, bytes, str, str]] = [
         "265219800E1ACCB6",
     ),
 ]
+
+
+class HwkeyError(Exception):
+    """Fatal error that must not be silently turned into a wrong key."""
+
+
+@dataclass
+class DmiField:
+    name: str
+    value: bytes  # bytes actually fed to the hash (real value or b"(null)")
+    present: bool  # True if read from DMI, False if substituted
+
+    @property
+    def display(self) -> str:
+        if not self.present:
+            return "<absent -> (null)>"
+        return self.value.decode("utf-8", "replace")
+
+
+def read_dmi_field(name: str, *, sysfs_root: str = "/") -> DmiField:
+    path = os.path.join(sysfs_root, "sys/class/dmi/id", name)
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        return DmiField(name, NULL_SUBSTITUTE, present=False)
+    except PermissionError as exc:
+        raise HwkeyError(
+            f"cannot read {path}: permission denied. Run as root -- DMI serial "
+            "fields are root-readable only, and reading them as a normal user "
+            "would silently produce the wrong hardware key."
+        ) from exc
+    except OSError as exc:
+        raise HwkeyError(f"cannot read {path}: {exc}") from exc
+    if data.endswith(b"\n"):
+        data = data[:-1]  # strip exactly the one sysfs newline
+    return DmiField(name, data, present=True)
+
+
+def read_module_hwkey(module: str = DEFAULT_MODULE, *, sysfs_root: str = "/") -> str | None:
+    path = os.path.join(sysfs_root, "sys/module", module, "parameters/hwkey")
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+@dataclass
+class HwkeyResult:
+    v2: str
+    legacy: str
+    dmi: dict[str, str]
+    present: dict[str, bool]
+    module_hwkey: str | None = None
+    module_matches: bool | None = None
+
+
+def compute_result(*, sysfs_root: str = "/", module: str | None = DEFAULT_MODULE) -> HwkeyResult:
+    fields = {
+        name: read_dmi_field(name, sysfs_root=sysfs_root)
+        for name in (DMI_PRODUCT_SERIAL, DMI_PRODUCT_UUID, DMI_BOARD_SERIAL)
+    }
+    ps = fields[DMI_PRODUCT_SERIAL].value
+    uu = fields[DMI_PRODUCT_UUID].value
+    bs = fields[DMI_BOARD_SERIAL].value
+    v2_key = compute_hwkey(ps, uu, bs)
+    v2 = format_hwkey(v2_key)
+    legacy = format_hwkey(compute_hwkey(ps, uu, bs, legacy=True))
+    result = HwkeyResult(
+        v2=v2,
+        legacy=legacy,
+        dmi={n: f.display for n, f in fields.items()},
+        present={n: f.present for n, f in fields.items()},
+    )
+    if module is not None:
+        live = read_module_hwkey(module, sysfs_root=sysfs_root)
+        if live is not None:
+            result.module_hwkey = live
+            try:
+                result.module_matches = int(live, 16) == v2_key
+            except ValueError:
+                result.module_matches = False
+    return result
+
+
+def best_effort_v2_hwkey(*, sysfs_root: str = "/") -> str | None:
+    """v2 key hex, or None on any error. Never raises — for UI fallbacks."""
+    try:
+        return compute_result(sysfs_root=sysfs_root, module=None).v2
+    except Exception:
+        return None
