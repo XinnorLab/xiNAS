@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 import inspect
+import re
 
 from xinas_menu.screens.nfs import (
     NFSScreen,

@@ -35,3 +35,14 @@ def test_suspend_not_supported_is_handled():
 
 def test_missing_btop_still_reports_the_install_hint():
     assert "not installed" in _src()
+
+
+def test_system_monitor_is_scheduled_as_a_worker():
+    """Guards against a repeat of f7401d0: `@work` was silently dropped from
+    a method invoked bare (`self._system_monitor()`, not awaited) from a
+    synchronous key-binding handler in `quick_actions.py`. Without `@work`,
+    calling the coroutine function returns an un-awaited coroutine that is
+    immediately garbage-collected — the menu item does nothing and no
+    exception is raised anywhere the user can see it.
+    """
+    assert "@work" in _src()
