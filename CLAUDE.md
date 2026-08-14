@@ -20,22 +20,51 @@ anything committed to the repository must be in English.
 
 ### Verification
 
-Run these before proposing a change is done — each mirrors a blocking CI
-job in `.github/workflows/ci.yml`. The path arguments matter: they are
-repeated verbatim across five jobs, and `ruff check .` does not give the
-same result.
+Run these before proposing a change is done — each is copied verbatim
+from a blocking CI job in `.github/workflows/ci.yml`. **The scope
+arguments are part of the gate and differ per tool.** `ruff check` and
+`pyright` are scoped to the three package dirs; `ruff format` is
+whole-repo. Swapping either scope changes the result, in both
+directions — so copy these lines rather than reconstructing them.
 
 ```bash
-pytest                                                     # or: pytest --cov=xinas_history --cov-fail-under=20
+pytest --cov=xinas_history --cov-fail-under=20
 ruff check          xinas_menu xinas_history xiNAS-MCP/nfs-helper
-ruff format --check xinas_menu xinas_history xiNAS-MCP/nfs-helper
+ruff format --check .
 pyright             xinas_menu xinas_history xiNAS-MCP/nfs-helper
 ansible-lint collection/roles/     # needs: ansible-galaxy collection install community.general ansible.posix
 yamllint -c .yamllint.yml .
 npx --yes markdownlint-cli2 'docs/**/*.md'
+npx --yes -p @stoplight/spectral-cli@latest spectral lint \
+  --ruleset .spectral.yaml docs/control-path/api-v1.yaml
 ```
 
-TypeScript control path (from `xiNAS-MCP/`, Node ≥20):
+Notes on the ones with sharp edges:
+
+- **`pytest` alone is not the gate.** The `--cov-fail-under=20` floor is
+  blocking in `python-tests`, so run the full line. (Actual coverage is
+  well above the floor; the flag guards against a drop, not a target.)
+- **`ruff format --check .` is whole-repo on purpose.** Files under
+  `tests/` and `collection/` kept re-drifting while only the three
+  package dirs were checked. `.` honors `[tool.ruff] extend-exclude`
+  (`.claude`, `node_modules`, `docs`). Running the three dirs instead
+  covers 113 files where CI covers 247 — that gap is exactly how a
+  new file under `tests/` reaches CI unformatted.
+- **`ruff check .` is *not* the gate** — the inverse of the above. It
+  reports findings outside the three packages that no CI job fails on.
+  Keep the scoped paths for `ruff check`.
+- **`pyright` must resolve against the venv's interpreter.** If the venv
+  is not active on `PATH` (e.g. invoking `.venv/bin/pyright` directly),
+  pyright falls back to the system interpreter, does not find `textual`,
+  and reports hundreds of phantom `reportMissingImports` errors. Either
+  activate the venv first, or pass the interpreter explicitly:
+  `pyright --pythonpath .venv/bin/python xinas_menu xinas_history xiNAS-MCP/nfs-helper`.
+- **`yamllint`'s ignore list carries `.venv/`** for the same reason —
+  without it, `yamllint .` walks a local venv's `site-packages` and
+  buries the real findings. CI has no venv, so the entry is a no-op there.
+
+TypeScript control path (from `xiNAS-MCP/`, Node ≥20; each CI job runs
+`npm ci` first):
 
 ```bash
 npm run typecheck && npm run lint && npm run format:check
@@ -43,6 +72,11 @@ npm test && npm run test:contracts
 ```
 
 Dev dependencies: `pip install -e '.[dev]'`.
+
+Two blocking jobs have no local equivalent and are not in the list
+above: `openapi-compat` (oasdiff, PR-only — diffs `api-v1.yaml` against
+the base branch and fails on breaking changes) and `secrets` (gitleaks
+over full history). Expect those to run only on the PR.
 
 ### Running Playbooks
 ```bash
