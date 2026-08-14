@@ -159,12 +159,21 @@ rw,sync,insecure,no_root_squash,no_subtree_check,no_wdelay,fsid=0
 | Option | Effect |
 |---|---|
 | `rw` | Read-write export. |
-| `sync` | Server replies only after data is on stable storage. Required for predictable NFS semantics; the XFS external log makes this fast. |
-| `insecure` | Accept connections from client ports above `1023`. NFS-RDMA does not negotiate a privileged port, so without this, the RDMA mount is refused. |
-| `no_root_squash` | UID `0` on the client stays UID `0` on the server. xiNAS is deployed as an appliance with trusted clients on a storage network; squashing would break root-owned workloads. Tighten this on multi-tenant deployments. |
-| `no_subtree_check` | Don't verify that requested file is in the exported subtree on each call. Faster, and `fsid=0` makes the check redundant. |
-| `no_wdelay` | Don't bunch writes — issue every write to the array immediately. Wins on RAID arrays with their own write coalescing; loses on single spindles. |
-| `fsid=0` | **Mark this export as the NFSv4 root.** Clients can mount it as `server:/`; subsequent subdir exports become children of this root. |
+| `sync` | `exports(5)`: "Reply to requests only after the changes have been committed to stable storage." Required for predictable NFS semantics; the XFS external log makes this fast. |
+| `insecure` | Turns off the default `secure`, which `exports(5)` describes as requiring that "requests not using gss originate on an Internet port less than IPPORT_RESERVED (1024)". **[observed]** NFS-RDMA on this stack does not use a privileged port, so without `insecure` the RDMA mount is refused — that consequence is from the field, not from `exports(5)`. |
+| `no_root_squash` | `exports(5)`: "Turn off root squashing." UID `0` on the client stays UID `0` on the server. xiNAS is deployed as an appliance with trusted clients on a storage network; squashing would break root-owned workloads. Tighten this on multi-tenant deployments. |
+| `no_subtree_check` | Don't verify on each call that the requested file is inside the exported subtree. **This is already the `exports(5)` default** (since nfs-utils 1.1.0) — listing it is explicitness, not a change. `exports(5)` frames the trade-off as reliability (subtree checking breaks on renames) rather than as a security requirement, and recommends disabling it for filesystems that see many renames. |
+| `no_wdelay` | `exports(5)`: the server "will normally delay committing a write request to disc slightly if it suspects that another related write request may be in progress or may arrive soon"; `no_wdelay` disables that. **[rationale]** Wins on RAID arrays with their own write coalescing; loses on single spindles — our reasoning, not a man-page claim. |
+| `fsid=0` | **Mark this export as the NFSv4 root.** `exports(5)`: "For NFSv4, there is a distinguished filesystem which is the root of all exported filesystem. This is specified with `fsid=root` or `fsid=0` both of which mean exactly the same thing." Clients can mount it as `server:/`; subsequent subdir exports become children of this root. |
+
+> Options above are per [`exports(5)`](https://man7.org/linux/man-pages/man5/exports.5.html)
+> (nfs-utils), reconciled 2026-08-14. One justification was **wrong** and has
+> been replaced: `no_subtree_check` was described as redundant *because of*
+> `fsid=0`. The two are unrelated — `fsid` assigns the export's filesystem
+> identity for NFSv4, and has no bearing on subtree checking. What actually
+> makes subtree checking unnecessary here is that `/mnt/data` is an entire
+> filesystem rather than a subdirectory of one, and in any case
+> `no_subtree_check` is the default.
 
 ### 2.4 NFSv4 root semantics (`fsid=0`)
 
@@ -278,7 +287,13 @@ The block is *additive* — anything else already in `/etc/nfs.conf` (system def
 | `vers3=y` | NFSv3 enabled — for legacy clients and tools that don't speak v4. |
 | `vers4=y` + `vers4.{0,1,2}=y` | Enable every NFSv4 minor version up to 4.2 (pNFS layouts, sparse files, server-side copy, label-NFS). NFS-RDMA requires v4.0 minimum. |
 | `rdma=y` | Bind `nfsd` to the RDMA transport in addition to TCP. The `rpcrdma` / `svcrdma` kernel modules (from `mlnx-nfsrdma-dkms`, installed by `doca_ofed` — see [network-spec.md §2](network-spec.md#2-stage-1--doca_ofed-drivers--ib-udev-rename)) must be loadable. |
-| `rdma-port=20049` | Standard NFS-RDMA port. Clients connect with `-o proto=rdma,port=20049`. |
+| `rdma-port=20049` | Standard NFS-RDMA port. Clients connect with `-o proto=rdma,port=20049`. Assigned by IANA to `nfsrdma` and specified as the default in [RFC 8267 §5](https://www.rfc-editor.org/rfc/rfc8267#section-5). |
+
+> The section names and keys above are per [`nfs.conf(5)`](https://man7.org/linux/man-pages/man5/nfs.conf.5.html)
+> (nfs-utils). **[rationale]** "One nfsd thread per core" is a xiNAS/Xinnor
+> starting point, not a value nfs-utils documents or defaults to — `nfs.conf(5)`
+> states no recommended `threads` count. Treat it as a tuning default to
+> measure, not a vendor requirement.
 
 ### 3.4 Service lifecycle
 

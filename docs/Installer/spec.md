@@ -208,7 +208,7 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
   future key rotation self-heals. (This trusted.gpg.d path is the one verified
   end-to-end on DOCA hardware; the uninstaller removes it on OFED teardown.)
 - Packages: `doca-all`, `mlnx-fw-updater`, `mlnx-nfsrdma-dkms` (kernel module for NFS-RDMA).
-- Auto-reboot after install: **off** (`doca_ofed_auto_reboot=false`). A reboot is required for the new mlx5/IB stack to come up, but it is the operator's responsibility.
+- Auto-reboot after install: **off** (`doca_ofed_auto_reboot=false`). xiNAS requires a reboot for the new mlx5/IB stack to come up, and it is the operator's responsibility. **[observed]** NVIDIA's own guide prescribes a *driver restart* (`/etc/init.d/openibd restart`, `mst restart`) and a full reboot only for Secure Boot MOK enrollment — the stricter reboot is a xiNAS choice, given the DKMS modules this role adds. See [collection/roles/doca_ofed/README.md](../../collection/roles/doca_ofed/README.md) §*What NVIDIA documents, and what we determined ourselves* for the full split of vendor-documented vs. field-determined claims in this role (repo URL, keyring path and key ID are all in the latter group).
 - IB udev rules written to `/etc/udev/rules.d/70-ib-names.rules`.
 
 ### 3.3 `net_controllers` — network discovery + netplan
