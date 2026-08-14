@@ -133,7 +133,8 @@ jobs:
       - run: pip install -e '.[dev]'
       # Whole-repo, not just the three package dirs: files under tests/ and
       # collection/ kept re-drifting because they were never format-checked.
-      # `.` honors [tool.ruff] extend-exclude (.claude, node_modules).
+      # `.` honors [tool.ruff] extend-exclude (.claude, node_modules, *.md —
+      # ruff formats Python blocks inside Markdown, which docs/ never was).
       - run: ruff format --check .
 
   python-typecheck:
