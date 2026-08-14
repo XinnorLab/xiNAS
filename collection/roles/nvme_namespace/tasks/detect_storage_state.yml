@@ -1,8 +1,19 @@
 ---
 # Read-only storage-identity detection. Sets xinas_storage_state to one of:
 #   MATCH   - xiRAID data+log arrays online AND /dev/xi_data is XFS with the wanted label
-#   EMPTY   - no xiRAID arrays and no XFS/foreign signature on /dev/xi_data
+#   EMPTY   - both probes ANSWERED, and what they answered was "nothing here"
 #   FOREIGN - some xiRAID/fs signature exists but does not match the expected layout
+#   UNKNOWN - a probe could not answer; the box is not provably empty
+#
+# EMPTY is what authorizes namespace deletion and mkfs (raid-spec §11), so it is
+# only ever reached from SUCCESSFUL negative probes. This matters because a
+# failed probe looks exactly like a factory-fresh node: with xiRAID down (daemon
+# stopped, kernel module not loaded, xicli absent) `xicli raid show` exits
+# non-zero AND /dev/xi_data does not exist, so an unguarded classifier reads a
+# live, data-bearing array as EMPTY and wipes it on a routine re-run. Both probes
+# therefore record whether they answered at all, and UNKNOWN outranks every other
+# state — including FOREIGN, which would claim knowledge of an array list we do
+# not have.
 #
 # "Online" is read out of the daemon's own per-array `state` words — it is not
 # inferred from the array merely existing. A degraded, offline, initializing or
@@ -28,6 +39,12 @@
   register: _ssd_raid_show
   changed_when: false
   failed_when: false
+
+- name: Record whether the xiRAID probe answered
+  ansible.builtin.set_fact:
+    # rc 0 means the daemon replied, so an empty reply genuinely means "no
+    # arrays". Any other rc means the array list could not be read at all.
+    _ssd_raid_probe_ok: "{{ (_ssd_raid_show.rc | default(1)) == 0 }}"
 
 - name: Parse xiRAID array output (native dict/list, empty dict on failure)
   ansible.builtin.set_fact:
@@ -86,6 +103,11 @@
          and (not (_ssd_arrays_online | bool)) }}
     xinas_storage_array_states: "{{ _ssd_array_states }}"
 
+- name: Check whether the xiRAID data volume exists
+  ansible.builtin.stat:
+    path: /dev/xi_data
+  register: _ssd_volume
+
 - name: Probe filesystem type on /dev/xi_data (read-only)
   ansible.builtin.command: blkid -s TYPE -o value /dev/xi_data
   register: _ssd_fstype
@@ -98,19 +120,31 @@
   changed_when: false
   failed_when: false
 
+- name: Record whether the filesystem probe answered
+  ansible.builtin.set_fact:
+    # No volume ⇒ conclusively no filesystem, whatever blkid made of the missing
+    # path. Otherwise only blkid's "found" (0) and "nothing found" (2) are
+    # answers; any other rc (usage error, I/O error, blkid missing) leaves the
+    # volume's content unknown.
+    _ssd_fs_probe_ok: >-
+      {{ (not (_ssd_volume.stat.exists | default(false)))
+         or ((_ssd_fstype.rc | default(1)) in [0, 2]) }}
+
 - name: Classify storage state
   ansible.builtin.set_fact:
     xinas_storage_state: >-
       {{
-        'MATCH'
-        if (('data' in _ssd_array_names) and ('log' in _ssd_array_names)
-            and (_ssd_arrays_online | bool)
-            and ((_ssd_fstype.stdout | default('') | trim) == 'xfs')
-            and ((_ssd_fslabel.stdout | default('') | trim) == xfs_label_wanted))
-        else ('EMPTY'
-              if ((_ssd_array_names | length) == 0
-                  and ((_ssd_fstype.stdout | default('') | trim) | length) == 0)
-              else 'FOREIGN')
+        'UNKNOWN'
+        if (not (_ssd_raid_probe_ok | bool) or not (_ssd_fs_probe_ok | bool))
+        else ('MATCH'
+              if (('data' in _ssd_array_names) and ('log' in _ssd_array_names)
+                  and (_ssd_arrays_online | bool)
+                  and ((_ssd_fstype.stdout | default('') | trim) == 'xfs')
+                  and ((_ssd_fslabel.stdout | default('') | trim) == xfs_label_wanted))
+              else ('EMPTY'
+                    if ((_ssd_array_names | length) == 0
+                        and ((_ssd_fstype.stdout | default('') | trim) | length) == 0)
+                    else 'FOREIGN'))
       }}
 
 - name: Report storage state
@@ -118,5 +152,19 @@
     msg: >-
       Storage state = {{ xinas_storage_state }}
       (arrays={{ _ssd_array_states }}, online={{ _ssd_arrays_online }},
+      raid_probe_ok={{ _ssd_raid_probe_ok }}, fs_probe_ok={{ _ssd_fs_probe_ok }},
       fstype='{{ _ssd_fstype.stdout | default('') | trim }}',
       label='{{ _ssd_fslabel.stdout | default('') | trim }}', wanted='{{ xfs_label_wanted }}')
+
+- name: Explain an undeterminable storage state
+  ansible.builtin.debug:
+    msg: >-
+      Storage state could not be determined:
+      {{ "'xicli raid show' failed (rc="
+         + (_ssd_raid_show.rc | default('?') | string) + ") — is xiraid-core running?"
+         if not (_ssd_raid_probe_ok | bool) else "" }}
+      {{ "blkid could not read /dev/xi_data (rc="
+         + (_ssd_fstype.rc | default('?') | string) + ")."
+         if not (_ssd_fs_probe_ok | bool) else "" }}
+      Refusing to treat this as a fresh box. Nothing has been modified.
+  when: xinas_storage_state == 'UNKNOWN'

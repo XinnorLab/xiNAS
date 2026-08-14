@@ -163,7 +163,7 @@ The list of dicts is stored as `nvme_topology`.
 Source: [detect_existing_namespaces.yml](../../collection/roles/nvme_namespace/tasks/detect_existing_namespaces.yml).
 
 A read-only preflight (`detect_storage_state.yml`) classifies the box as
-`xinas_storage_state` ∈ {MATCH, EMPTY, FOREIGN} before any namespace decision (see §11).
+`xinas_storage_state` ∈ {MATCH, EMPTY, FOREIGN, UNKNOWN} before any namespace decision (see §11).
 When the box is **MATCH** (the expected xiRAID `data`+`log` arrays are online and
 `/dev/xi_data` is XFS with the configured label) and `xinas_storage_reset` is not set,
 the role reuses the namespaces already on the drives — no rebuild, no data loss:
@@ -175,7 +175,7 @@ the role reuses the namespaces already on the drives — no rebuild, no data los
 
 **EMPTY** (a fresh box, including a factory single-`n1` drive) or an explicit
 `xinas_storage_reset: true` falls through to the delete+recreate path in §4.3. **FOREIGN**
-without reset fails fast before touching anything. The deprecated
+and **UNKNOWN** without reset fail fast before touching anything. The deprecated
 `nvme_use_existing_namespaces` knob no longer drives this choice.
 
 ### 4.3 Delete + recreate
@@ -512,6 +512,7 @@ For one-shot validation, the Textual TUI's Health tab (`xinas-menu`) and the MCP
 | Odd number of log namespaces and `raid_log_level=10` | xiRAID rejects the unbalanced array | `generate_raid_config.yml` drops one device and reports it in the summary |
 | Routine `site.yml` re-run reformats the live array (finding C1) | any `site.yml` re-run (incl. the TUI update flow's `Requires-Rebuild: all`) stopped NFS, ran `mkfs -f` over the live array, and finished green | Read-only `detect_storage_state` → MATCH **converges**: mkfs, namespace rebuild, `drive clean`, the MD sweep, and all three `cleanup_storage` wipes are skipped. Destruction requires an explicit `xinas_storage_reset` behind a `YES` gate enforced in **both** roles (§11) |
 | Existing storage doesn't match the expected layout | a stray/foreign array or wrong-label XFS would have been silently reformatted | **FOREIGN fail-fast** at both the namespace and filesystem layers, before any wipe; requires `xinas_storage_reset` to proceed |
+| Storage probes can't answer (xiRAID daemon down, module not loaded, `xicli`/`blkid` unusable) | a live array looks exactly like a fresh box — `xicli raid show` fails and `/dev/xi_data` is absent — so detection classified it `EMPTY` and a routine re-run wiped it | Probe success is tracked; a non-answer yields **UNKNOWN**, which outranks every other state and fails fast in both roles. Undefined state defaults to `UNKNOWN`, never `EMPTY` (§11) |
 | Log RAID array smaller than the requested `log_size=1G` | `mkfs.xfs` exits with E2BIG | `_effective_log_size` clamps the size to `blockdev --getsize64` of the log device |
 | Boot-time race between xiRAID and fstab | `/mnt/data` would fail to mount on cold boot | Mount unit `Requires=` + `After=` the kernel `.device` units for `xi_data` and `xi_log` |
 | Stale xiRAID metadata from a prior install | `xicli raid create` refuses | `xicli drive clean` runs per member; `--force_metadata` is set when `xiraid_force_metadata=true` |
@@ -542,8 +543,32 @@ Formatting happens only on a genuinely fresh box, or under an explicit, confirme
 | State | Meaning | Effect (no reset) |
 |---|---|---|
 | **MATCH** | xiRAID `data`+`log` online **and** `/dev/xi_data` is XFS with the configured label | **converge** — every destructive op is skipped |
-| **EMPTY** | no xiRAID arrays and no fs signature on `/dev/xi_data` (incl. a factory single-`n1` drive) | provision as a first install |
+| **EMPTY** | both probes **answered**, and no xiRAID arrays and no fs signature exist (incl. a factory single-`n1` drive) | provision as a first install |
 | **FOREIGN** | some array/fs signature exists but doesn't match the expected layout | **fail fast** before any wipe |
+| **UNKNOWN** | a probe could not answer, so the layout is undetermined | **fail fast** before any wipe |
+
+**Probes must answer for EMPTY to be reachable.** `EMPTY` is the state that authorizes
+destruction, so it is only ever derived from *successful* negative probes — never from a
+probe that failed. This is not theoretical: with xiRAID down (daemon stopped, kernel module
+not loaded, `xicli` absent) `xicli raid show` exits non-zero **and** `/dev/xi_data` does not
+exist, which is byte-for-byte how a factory-fresh node looks. Treating that as `EMPTY` would
+erase a live, data-bearing array on a routine re-run. Detection therefore records whether
+each probe answered at all:
+
+- **Array probe** — `xicli raid show -f json` answered iff `rc == 0`. An empty reply from a
+  running daemon is a real "no arrays"; any other rc means the array list is unreadable.
+- **Filesystem probe** — conclusive iff `/dev/xi_data` is absent (then there is provably no
+  filesystem), or `blkid` returned `0` ("found") or `2` ("nothing found"). Any other rc
+  (usage error, I/O error, `blkid` missing) leaves the volume's content unknown.
+
+`UNKNOWN` **outranks every other state**, including `FOREIGN` — `FOREIGN` would assert
+knowledge about an array list that could not be read. Both roles fail fast on it with the
+remedy named (bring xiRAID up and re-run, or set `xinas_storage_reset=true` to wipe and
+rebuild regardless), and nothing is modified before that point. An explicit, confirmed reset
+still wins, exactly as it does over `FOREIGN`.
+
+The gates read `xinas_storage_state | default('UNKNOWN')`: an undefined fact is a
+non-answer, and a non-answer never authorizes destruction.
 
 **"Online" is read from the daemon, not inferred from the array existing.**
 `xicli raid show -f json` reports per-array `state` words; an array counts as

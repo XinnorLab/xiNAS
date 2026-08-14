@@ -22,6 +22,17 @@
     - name: Detect current storage state
       ansible.builtin.include_tasks: detect_storage_state.yml
 
+    - name: Fail fast when the storage state could not be determined (UNKNOWN)
+      ansible.builtin.fail:
+        msg: >-
+          Could not determine what is on this node (state=UNKNOWN): a read-only probe
+          failed, so an existing array is indistinguishable from a fresh box. Refusing
+          to provision. Bring xiRAID up (systemctl status xiraid.target, modprobe xiraid)
+          and re-run, or set xinas_storage_reset=true to wipe and rebuild regardless.
+      when:
+        - (xinas_storage_state | default('UNKNOWN')) == 'UNKNOWN'
+        - not (xinas_storage_reset | default(false) | bool)
+
     - name: Fail fast on an existing xiNAS layout whose arrays are not online
       ansible.builtin.fail:
         msg: >-
@@ -31,7 +42,7 @@
           re-run; a healthy array converges. Do NOT set xinas_storage_reset to
           get past this: it would destroy the data on a recoverable array.
       when:
-        - (xinas_storage_state | default('EMPTY')) == 'FOREIGN'
+        - (xinas_storage_state | default('UNKNOWN')) == 'FOREIGN'
         - xinas_storage_arrays_unhealthy | default(false) | bool
         - not (xinas_storage_reset | default(false) | bool)
 
@@ -42,7 +53,7 @@
           Refusing to touch it. Set xinas_storage_reset=true to wipe and rebuild, or
           clean the drives manually.
       when:
-        - (xinas_storage_state | default('EMPTY')) == 'FOREIGN'
+        - (xinas_storage_state | default('UNKNOWN')) == 'FOREIGN'
         - not (xinas_storage_reset | default(false) | bool)
 
     - name: Confirm reset before any destructive operation
@@ -87,7 +98,7 @@
         - nvme_data_drives | length > 0
         - nvme_cleanup_existing_storage | default(true) | bool
         - (xinas_storage_reset | default(false) | bool)
-          or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
+          or (xinas_storage_state | default('UNKNOWN')) == 'EMPTY'
 
     - name: Generate RAID configuration
       ansible.builtin.include_tasks: generate_raid_config.yml
@@ -150,7 +161,7 @@
         - nvme_data_drives | length > 0
         - nvme_cleanup_existing_storage | default(true) | bool
         - (xinas_storage_reset | default(false) | bool)
-          or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
+          or (xinas_storage_state | default('UNKNOWN')) == 'EMPTY'
 
     # Phase 4: Check if there are any data drives to process
     - name: Check for available data drives
@@ -165,7 +176,7 @@
       ansible.builtin.include_tasks: detect_existing_namespaces.yml
       when:
         - nvme_data_drives | length > 0
-        - (xinas_storage_state | default('EMPTY')) == 'MATCH'
+        - (xinas_storage_state | default('UNKNOWN')) == 'MATCH'
         - not (xinas_storage_reset | default(false) | bool)
 
     - name: Collect NVMe topology for namespace rebuild
@@ -173,7 +184,7 @@
       when:
         - nvme_data_drives | length > 0
         - (xinas_storage_reset | default(false) | bool)
-          or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
+          or (xinas_storage_state | default('UNKNOWN')) == 'EMPTY'
 
     # Phase 6: Rebuild namespaces (fresh install or explicit reset)
     - name: Rebuild namespaces on data drives
@@ -181,7 +192,7 @@
       when:
         - nvme_data_drives | length > 0
         - (xinas_storage_reset | default(false) | bool)
-          or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
+          or (xinas_storage_state | default('UNKNOWN')) == 'EMPTY'
 
     # Phase 7: Generate RAID configuration (only if namespaces were created)
     - name: Generate RAID configuration
@@ -292,7 +303,7 @@
             - nvme_data_drives | length > 0
             - nvme_cleanup_existing_storage | default(true) | bool
             - (xinas_storage_reset | default(false) | bool)
-              or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
+              or (xinas_storage_state | default('UNKNOWN')) == 'EMPTY'
 
         - name: Generate RAID configuration (fallback)
           ansible.builtin.include_tasks: generate_raid_config.yml
