@@ -346,6 +346,17 @@ const shareDeleteProvider: PlanProvider = {
 
     const warning = activeSessionsWarning(ctx, path);
 
+    // Release the fsid marker so the number is not burned forever. A desired
+    // doc with no fsid is not reachable through the API but must not wedge the
+    // delete on a hand-edited store.
+    const desiredFsid = (desired.value as { spec?: { fsid?: unknown } })?.spec?.fsid;
+    const desiredFsidNum =
+      typeof desiredFsid === 'number'
+        ? desiredFsid
+        : typeof desiredFsid === 'string' && desiredFsid.trim().length > 0
+          ? Number(desiredFsid)
+          : Number.NaN;
+
     return {
       affected_resources: [{ kind: 'Share', id, revision: desired.revision }],
       blockers: [],
@@ -355,7 +366,14 @@ const shareDeleteProvider: PlanProvider = {
       rollback_model: 'reversible',
       state_revision_expected: desired.revision,
       observed_freshness_ref: exportRuleFreshnessRef(ctx, exportId),
-      desired_mutations: [{ key: `${DESIRED_SHARE_PREFIX}${id}`, delete: true }],
+      desired_mutations: [
+        { key: `${DESIRED_SHARE_PREFIX}${id}`, delete: true },
+        // `delete: true as const` — inside an array literal the plain `true`
+        // widens to `boolean`, which DesiredMutation's delete variant rejects.
+        ...(Number.isInteger(desiredFsidNum)
+          ? [{ key: shareFsidKey(desiredFsidNum), delete: true as const }]
+          : []),
+      ],
     };
   },
 };
