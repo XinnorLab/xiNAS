@@ -19,6 +19,16 @@ properties follow, and both are contract rather than implementation detail:
    prompts must fail fast on EOF rather than block forever on a terminal the
    wizard is not driving. Remediation commands that genuinely need operator
    input do not belong here; they belong in the finding's `fix_hint` text.
+3. **A failure is a return value, never an exception.** `apply` catches both
+   `subprocess.TimeoutExpired` and `OSError` around the `subprocess.run` call
+   and turns each into `(False, <detail>)`. `OSError` covers, in particular,
+   `FileNotFoundError` when `action.command`'s binary (`modprobe`, `ethtool`,
+   …) is not installed on the node — a real case, since remediation commands
+   are generated per finding and not all of them are guaranteed present. The
+   caller ([xinas_menu/screens/health.py](../../xinas_menu/screens/health.py))
+   loops over every selected fix with no `try`/`except` of its own; if `apply`
+   let an exception escape, that loop would die on the first missing binary
+   and every fix queued after it would silently never run.
 
 `apply` returns `(ok, detail)` where `detail` is stderr, falling back to
 stdout. A non-zero exit is a normal failure, not an exception.

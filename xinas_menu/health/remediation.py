@@ -299,6 +299,12 @@ class RemediationWizard:
             )
         except subprocess.TimeoutExpired:
             return False, f"timed out after {_COMMAND_TIMEOUT}s: {' '.join(action.command)}"
+        except OSError as exc:
+            # e.g. FileNotFoundError when the fix command isn't installed
+            # (modprobe, ethtool, ...). The caller (health.py) has no guard
+            # around apply(), so an uncaught exception here would kill the
+            # remediation loop mid-run and silently skip the remaining fixes.
+            return False, f"could not run {' '.join(action.command)}: {exc}"
         return r.returncode == 0, r.stderr.strip() or r.stdout.strip()
 
     @staticmethod
