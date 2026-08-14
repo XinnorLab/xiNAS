@@ -111,15 +111,24 @@ def _numa_node(name: str) -> int:
     return 0
 
 
-async def _list_api_disks(control: ControlClient) -> list[dict[str, Any]]:
+async def _list_api_disks_with_banner(
+    control: ControlClient,
+) -> tuple[list[dict[str, Any]], str | None]:
     """GET /api/v1/disks adapted to the legacy drive-picker dict shape.
+
+    Returns ``(rows, banner)``. The banner is the envelope's degraded-backend
+    message when the Disk collector could not be read — an empty row list with
+    a warning means "nothing was observed", not "there is no hardware", and the
+    caller's empty state has to be able to tell those apart.
 
     API Disk rows are ``{id, status: {name, device_path, model?, serial?,
     transport?, capacity_bytes?, system_disk, mounted, safe_for_use}}``.
     The adapter adds ``claimed`` (member/spare of any observed array, from
     GET /api/v1/arrays) and a sysfs NUMA node (the API rows carry none).
     """
-    disks = await asyncio.to_thread(control.result, "/api/v1/disks")
+    env = await asyncio.to_thread(control.get, "/api/v1/disks")
+    disks = env.get("result")
+    banner = degraded_banner(env)
     try:
         arrays = await asyncio.to_thread(control.result, "/api/v1/arrays")
     except ControlPathError:
@@ -159,6 +168,12 @@ async def _list_api_disks(control: ControlClient) -> list[dict[str, Any]]:
                 "claimed": (disk_id or name) in claimed,
             }
         )
+    return rows, banner
+
+
+async def _list_api_disks(control: ControlClient) -> list[dict[str, Any]]:
+    """Rows only, for callers that render no empty state of their own."""
+    rows, _ = await _list_api_disks_with_banner(control)
     return rows
 
 
@@ -439,7 +454,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
         # Fetch disks up front so the drive + spare steps and their applies()
         # predicates have their data; fail fast if there are no NVMe drives.
         try:
-            disk_rows = await _list_api_disks(self.app.control)
+            disk_rows, disk_banner = await _list_api_disks_with_banner(self.app.control)
         except ControlPathError as exc:
             await self.app.push_screen_wait(
                 ConfirmDialog(f"Could not list disks.\n{exc}", "Error", ok_only=True)
@@ -447,9 +462,10 @@ class RAIDScreen(XiNASAppMixin, Screen):
             return
         groups, nvme = _drive_groups(disk_rows)
         if not nvme:
-            await self.app.push_screen_wait(
-                ConfirmDialog("No available NVMe drives found.", "Error", ok_only=True)
-            )
+            message = "No available NVMe drives found."
+            if disk_banner:
+                message = f"{message}\n\n{disk_banner}"
+            await self.app.push_screen_wait(ConfirmDialog(message, "Error", ok_only=True))
             return
         name_to_id = {d["name"]: d["id"] for d in nvme}
 

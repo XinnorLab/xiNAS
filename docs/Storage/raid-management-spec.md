@@ -338,7 +338,9 @@ only visible symptom.
 
 **Disks and pools are fetched up front**, before the wizard's step list is even built — this is what lets the `group_size`/`spare` `applies=` predicates and the drives step see their data on every entry, including after a Back:
 
-1. `_list_api_disks(self.app.control)` (`GET /api/v1/disks`, cross-referenced against the arrays list to exclude already-claimed drives) enumerates NVMe drives. **If zero NVMe drives are available, the wizard aborts immediately with a "No available NVMe drives found." dialog — this check now runs before the name prompt is ever shown**, not after Step 3 as in the pre-Back-navigation flow.
+1. `_list_api_disks_with_banner(self.app.control)` (`GET /api/v1/disks`, cross-referenced against the arrays list to exclude already-claimed drives) enumerates NVMe drives **and** returns the envelope's degraded banner. **If zero NVMe drives are available, the wizard aborts immediately with a dialog — before the name prompt is ever shown** — and that dialog **names the cause when there is one**: an empty list with a `DEGRADED_BACKEND_UNAVAILABLE` warning renders "No available NVMe drives found." followed by the banner, because "no drives" and "the Disk collector could not be read" are different facts and only one of them means the operator should go looking for hardware. With no warning present the dialog is unchanged.
+
+   The banner comes from the shared extractor [api/degraded.py](../../xinas_menu/api/degraded.py) `degraded_banner(envelope)` — the same one Show Exports (§ [fs-shares-management-spec](fs-shares-management-spec.md)) and the RAID overview use. `_list_api_disks_with_banner` fetches the full envelope via `control.get`; `_list_api_disks` remains as a thin wrapper returning rows only, for the three call sites (Extended Details, Edit Array, Spare Pools) that render no empty state of their own.
 2. `GET /api/v1/pools` (via `self.app.control.result`) lists spare pools. A failure here is swallowed (`pools = {}`) rather than aborting the wizard — it just means the `spare` step's `applies=lambda a: bool(pools)` predicate stays `False` and the step is skipped.
 
 ### Step — name
