@@ -16,6 +16,7 @@ from textual.widgets import Footer, Label
 
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.utils.formatting import grpc_short_error
+from xinas_menu.utils.hwkey import best_effort_v2_hwkey
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.text_view import ScrollableTextView
 from xinas_menu.widgets.textarea_dialog import TextAreaDialog
@@ -88,9 +89,21 @@ class LicenseScreen(XiNASAppMixin, Screen):
         except Exception:
             _log.debug("Could not fetch hwkey", exc_info=True)
 
+        # gRPC gives the live module key. Before install (module not loaded)
+        # it is empty; fall back to computing the key locally from DMI so the
+        # operator can still copy it when requesting a license.
+        computed_locally = False
+        if not hwkey:
+            local = best_effort_v2_hwkey()
+            if local:
+                hwkey = local
+                computed_locally = True
+
         if hwkey:
+            suffix = " (computed locally)" if computed_locally else ""
             prompt = (
-                f"HW key: {hwkey}\n(Press Ctrl+Y to copy HW key)\n\nPaste the license text below:"
+                f"HW key: {hwkey}{suffix}\n(Press Ctrl+Y to copy HW key)\n\n"
+                "Paste the license text below:"
             )
         else:
             prompt = "HW key: (unavailable)\n\nPaste the license text below:"
