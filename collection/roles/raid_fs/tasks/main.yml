@@ -244,6 +244,55 @@
       {%- endif -%}
   tags: [raid_fs, raid]
 
+# TRIM is a create-time knob, so the CLI's support for it is established once,
+# before the per-array loop. Passing a flag an older xicli does not know fails
+# EVERY array creation on "unrecognized arguments", so the flags are only ever
+# used when this probe finds both of them. See raid-spec §7.5.
+- name: Probe xicli for TRIM support
+  ansible.builtin.command: xicli raid create --help
+  register: _xicli_create_help
+  changed_when: false
+  failed_when: false
+  when: (xiraid_trim_mode | default('auto')) != 'off'
+  tags: [raid_fs, raid]
+
+# Every `--flag` named in xiraid_trim_create_args must appear in the help text —
+# an override that adds a flag this build lacks then disables TRIM instead of
+# failing every create.
+- name: Set fact – TRIM flags the installed xicli does not advertise
+  ansible.builtin.set_fact:
+    _xicli_trim_missing: >-
+      {%- set missing = [] -%}
+      {%- for tok in (xiraid_trim_create_args | default('')).split() -%}
+        {%- if tok[:2] == '--' and tok not in (_xicli_create_help.stdout | default('')) -%}
+          {%- set _ = missing.append(tok) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ missing }}
+  tags: [raid_fs, raid]
+
+- name: Set fact – whether xicli accepts the TRIM flags
+  ansible.builtin.set_fact:
+    _xicli_trim_supported: >-
+      {{ (xiraid_trim_mode | default('auto')) != 'off'
+         and ((_xicli_create_help.rc | default(1)) == 0)
+         and ((_xicli_trim_missing | default([])) | length) == 0 }}
+  tags: [raid_fs, raid]
+
+- name: Report that xicli does not advertise the TRIM flags
+  ansible.builtin.debug:
+    msg: >-
+      Installed xicli does not accept {{ (_xicli_trim_missing | default([])) | join(', ')
+      if ((_xicli_trim_missing | default([])) | length) > 0
+      else 'the TRIM flags (xicli raid create --help failed, rc='
+           + (_xicli_create_help.rc | default('?') | string) + ')' }};
+      arrays will be created without TRIM. Override xiraid_trim_create_args if this
+      build spells them differently.
+  when:
+    - (xiraid_trim_mode | default('auto')) != 'off'
+    - not (_xicli_trim_supported | bool)
+  tags: [raid_fs, raid]
+
 - name: Create xiRAID arrays that are missing
   ansible.builtin.include_tasks: create_array.yml
   loop: "{{ xiraid_arrays }}"

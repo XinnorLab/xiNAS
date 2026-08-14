@@ -1526,6 +1526,22 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
                 lines.append(_box_line(f"  {_DIM}Merge Write Max{_NC}     |  {_usecs(mw_max)}"))
                 lines.append(_box_line(f"  {_DIM}Merge Write Wait{_NC}    |  {_usecs(mw_wait)}"))
 
+            # ── TRIM / Discard ──
+            # Create-only knobs (the daemon's RaidModify has no field for
+            # either), decided by the installer from the members' discard
+            # support — see Installer/raid-spec §7.5. Shown here because this
+            # is the only place an operator can find out what the array got.
+            lines.append(_box_line())
+            lines.append(_box_sep())
+            lines.append(_box_line(f" {_BLD}{_CYN}TRIM / DISCARD{_NC}"))
+            lines.append(_box_sep())
+            lines.append(
+                _box_line(f"  {_DIM}Discard (TRIM){_NC}      |  {_on_off(arr.get('discard'))}")
+            )
+            lines.append(
+                _box_line(f"  {_DIM}Drive TRIM{_NC}          |  {_on_off(arr.get('drive_trim'))}")
+            )
+
             # ── Device Health & Wear ──
             health = arr.get("devices_health") or []
             wear = arr.get("devices_wear") or []

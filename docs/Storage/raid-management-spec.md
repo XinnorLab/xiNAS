@@ -193,11 +193,32 @@ those state lists empty, and the breakdown falls back to a bare total.
 
 Quick Overview shows: level, capacity, state list, device counts (online / degraded / offline derived from the per-member `status.member_states`), strip size, spare pool, and an initialisation progress bar when any state is `initing`.
 
-Extended adds three blocks, all sourced from observed `spec.tuning`:
+Extended adds four blocks, all sourced from observed `spec.tuning`:
 
 - **Priorities** — `init_prio`, `recon_prio`, `restripe_prio`, `sdc_prio`
 - **Performance** — `memory_limit`, `memory_prealloc`, `request_limit`, `cpu_allowed`, plus `block_size` (`spec`) and `memory_usage_mb` (`status`)
 - **I/O Scheduler & Merge** — `sched_enabled`, `merge_read_enabled`, `merge_write_enabled`, `adaptive_merge`, plus the four merge timing knobs `merge_read_max`, `merge_read_wait`, `merge_write_max`, `merge_write_wait`
+- **TRIM / Discard** — `discard` (the array accepts discards from the filesystem) and `drive_trim` (the array issues TRIM to its members)
+
+Neither knob is editable from this screen: the control path classifies both as
+create-only (`CREATE_ONLY_TUNING` in `routes/arrays.ts`, verified against the 4.3.1 gRPC
+descriptor, whose `RaidModify` carries no field for either), so Edit Array rejects them
+and they carry no edit affordance. The xiRAID Classic 4.4 CLI reference does list
+`discard` as modifiable via `xicli raid modify`, so that classification is worth
+re-checking against a 4.4 descriptor; until it is, the block is display-only.
+
+The installer decides them per array from the members' discard support **and RZAT**, and
+never forces `drive_trim` (see [raid-spec §7.5](../Installer/raid-spec.md#75-array-creation)).
+The block states what the array *is*, so an operator diagnosing discard behaviour does not
+have to infer it from the install log.
+
+**Day-2 creation does not match the installer yet.** The Create Array wizard (§4) sends no
+`tuning`, so an array created from the TUI gets xiRAID's default `discard = 0` while an
+installer-created array on the same hardware gets `discard = 1`. The wizard has nothing to
+decide from — the control-path `Disk` object carries neither discard nor RZAT — so closing
+the gap means extending the agent's disk probe first. Tracked in
+[docs/TODO.md](../TODO.md); until it lands, this block is where the difference becomes
+visible.
 
 Those are the **control-path** names (ADR-0006 `spec.tuning`), not the daemon's. The daemon→control-path rename happens once, in the agent parser [lib/parse/raid.ts](../../xiNAS-MCP/src/lib/parse/raid.ts):
 
@@ -248,7 +269,7 @@ rendered as a placeholder:
 | `memory_prealloc` | `unknown` | `disabled` when `0`, else `<n> MB` |
 | `cpu_allowed` | `unknown` | `all` when empty, else the CPU list (`5-7`, `0,2,4-6`) |
 | `block_size` (`spec`) | `unknown` | `<n> bytes` |
-| Booleans (`sched_enabled`, `merge_*_enabled`, `adaptive_merge`) | `unknown` | `Enabled` / `Disabled` |
+| Booleans (`sched_enabled`, `merge_*_enabled`, `adaptive_merge`, `discard`, `drive_trim`) | `unknown` | `Enabled` / `Disabled` |
 | Merge timings | row omitted when all four are unobserved | `<n> us` |
 | `memory_usage_mb` (`status`) | `unknown` | `<n> MB` |
 
