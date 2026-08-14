@@ -319,9 +319,14 @@ Share ids are percent-encoded with `quote_id()` on every path — a Share id mir
 The renderer is intentionally rich:
 
 - **Storage line** — `df -h <path>` to show `used / total (pct)`, with a
-  **5-second timeout**; on timeout or error the line reads `N/A`. An export
-  whose backing filesystem is hung (dead NFS server, lost FC path) must not be
-  able to stall the render.
+  **5-second timeout**; on timeout or error the line reads `N/A`. This bounds
+  only the `df` call: an export whose filesystem is live but slow cannot stall
+  the render past 5 seconds. It does **not** cover a fully hung mount (dead
+  NFS server, lost FC path) — `os.path.isdir(path)` runs immediately before
+  `df` and gates it, and `stat(2)` on a hard-mounted unresponsive NFS export
+  blocks in uninterruptible sleep with no timeout available, so `isdir` hangs
+  before the `df` timeout ever has a chance to fire. See the residual gap
+  tracked in [docs/TODO.md](../TODO.md).
 - **Path-missing flag** — `os.path.isdir(path)` — flips the status badge to `[!] PATH MISSING` (red) if the export targets a directory that doesn't exist on disk.
 - **Security label** — translates `sec=krb5` / `krb5i` / `krb5p` → `"Kerberos"` / `"Kerberos+integrity"` / `"Kerberos+encryption"`, defaults to `"Standard (UID/GID)"`.
 - **Per-client explanation** — translates `*` → `"Everyone (all hosts)"`, `10.10.0.0/24` → `"Network: 10.10.0.0/24"`, and flags `no_root_squash` as `"full admin"` next to `rw` / `ro`.
