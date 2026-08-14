@@ -131,7 +131,10 @@ jobs:
           cache: 'pip'
           cache-dependency-path: pyproject.toml
       - run: pip install -e '.[dev]'
-      - run: ruff format --check xinas_menu xinas_history xiNAS-MCP/nfs-helper
+      # Whole-repo, not just the three package dirs: files under tests/ and
+      # collection/ kept re-drifting because they were never format-checked.
+      # `.` honors [tool.ruff] extend-exclude (.claude, node_modules).
+      - run: ruff format --check .
 
   python-typecheck:
     runs-on: ubuntu-latest

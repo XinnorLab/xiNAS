@@ -138,7 +138,9 @@ def test_executable_default_prints_bare_v2(tmp_path):
     _fake_dmi(tmp_path)
     out = subprocess.run(
         [sys.executable, str(HWKEY), "--sysfs-root", str(tmp_path)],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     assert out.stdout.strip() == "D5E37EE32F065F31"
     assert out.stdout.endswith("\n")
@@ -148,7 +150,9 @@ def test_executable_legacy_flag(tmp_path):
     _fake_dmi(tmp_path)
     out = subprocess.run(
         [sys.executable, str(HWKEY), "--legacy", "--sysfs-root", str(tmp_path)],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     assert out.stdout.strip() == "B0D44633EF11F8F2"
 
@@ -157,7 +161,9 @@ def test_executable_json_flag(tmp_path):
     _fake_dmi(tmp_path, module_key="D5E37EE32F065F31")
     out = subprocess.run(
         [sys.executable, str(HWKEY), "--json", "--sysfs-root", str(tmp_path)],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     data = json.loads(out.stdout)
     assert data["hwkey"] == "D5E37EE32F065F31"
@@ -168,7 +174,8 @@ def test_executable_json_flag(tmp_path):
 def test_executable_self_test_passes():
     out = subprocess.run(
         [sys.executable, str(HWKEY), "--self-test"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert out.returncode == 0, out.stdout + out.stderr
 
