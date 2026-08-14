@@ -25,6 +25,10 @@ scripts/node_modules/
 # End
 .worktrees/
 
+# Subagent-driven-development scratch (ledger, briefs, review packages).
+# Per-plan working state; the git history is the durable record.
+.superpowers/
+
 # pytest-cov data file (the CI coverage gate regenerates it on every run)
 .coverage
 
