@@ -6,8 +6,12 @@ xiRAID 4.4.1 kernel functions (rdx_license_init_hwkey / rdx_license_hash_buf64
 docs/Installer/hwkey-spec.md.
 """
 
+import json
 import os
 import stat
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -113,3 +117,51 @@ def test_best_effort_returns_none_on_missing_tree(tmp_path):
     # so best_effort returns a value (fields absent is not an error).
     r = best_effort_v2_hwkey(sysfs_root=str(tmp_path))
     assert r == "32389975897296B8"
+
+
+REPO = Path(__file__).resolve().parents[1]
+HWKEY = REPO / "hwkey"
+
+
+def test_executable_default_prints_bare_v2(tmp_path):
+    _fake_dmi(tmp_path)
+    out = subprocess.run(
+        [sys.executable, str(HWKEY), "--sysfs-root", str(tmp_path)],
+        capture_output=True, text=True, check=True,
+    )
+    assert out.stdout.strip() == "D5E37EE32F065F31"
+    assert out.stdout.endswith("\n")
+
+
+def test_executable_legacy_flag(tmp_path):
+    _fake_dmi(tmp_path)
+    out = subprocess.run(
+        [sys.executable, str(HWKEY), "--legacy", "--sysfs-root", str(tmp_path)],
+        capture_output=True, text=True, check=True,
+    )
+    assert out.stdout.strip() == "B0D44633EF11F8F2"
+
+
+def test_executable_json_flag(tmp_path):
+    _fake_dmi(tmp_path, module_key="D5E37EE32F065F31")
+    out = subprocess.run(
+        [sys.executable, str(HWKEY), "--json", "--sysfs-root", str(tmp_path)],
+        capture_output=True, text=True, check=True,
+    )
+    data = json.loads(out.stdout)
+    assert data["hwkey"] == "D5E37EE32F065F31"
+    assert data["hwkey_legacy"] == "B0D44633EF11F8F2"
+    assert data["module_matches"] is True
+
+
+def test_executable_self_test_passes():
+    out = subprocess.run(
+        [sys.executable, str(HWKEY), "--self-test"],
+        capture_output=True, text=True,
+    )
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+def test_executable_is_not_an_elf_binary():
+    # Drop-in must be a text script, not the old committed ELF.
+    assert HWKEY.read_bytes()[:4] != b"\x7fELF"
