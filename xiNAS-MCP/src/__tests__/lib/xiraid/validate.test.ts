@@ -30,6 +30,8 @@ function facts(over: Partial<CreateFacts> = {}): CreateFacts {
       disk('d4'),
       disk('d5'),
       disk('d6'),
+      disk('d7'),
+      disk('d8'),
       disk('claimed'),
     ],
     existingArrayNames: ['taken'],
@@ -67,22 +69,47 @@ describe('validateCreateSpec', () => {
 
   it('level minimums', () => {
     expect(codes(spec({ member_disk_ids: ['d1', 'd2', 'd3'] }))).toContain('min_drives');
-    expect(codes(spec({ level: 'raid5', member_disk_ids: ['d1', 'd2', 'd3'] }))).toEqual([]);
+    expect(codes(spec({ level: 'raid5', member_disk_ids: ['d1', 'd2', 'd3', 'd4'] }))).toEqual([]);
+  });
+
+  // The engine minimums are stricter than textbook RAID math: xiRAID Classic
+  // rejects RAID 5 under 4 drives and RAID 50/60 under 8. See
+  // docs/Storage/raid-management-spec.md §4 → "Engine-enforced minimum drive
+  // counts" — the numbers there are the single source of truth for the TUI,
+  // this table, and the installer alike.
+  it('enforces the engine minimums, not the textbook ones', () => {
+    // raid5 with 3 drives is textbook-legal but rejected by the engine.
+    expect(codes(spec({ level: 'raid5', member_disk_ids: ['d1', 'd2', 'd3'] }))).toContain(
+      'min_drives',
+    );
+    // raid50 with 6 drives splits evenly into 2 groups of 3, yet is under the
+    // engine's 8-drive floor — the group_size rules alone would let it pass.
+    expect(
+      codes(
+        spec({
+          level: 'raid50',
+          member_disk_ids: ['d1', 'd2', 'd3', 'd4', 'd5', 'd6'],
+          group_size: 3,
+        }),
+      ),
+    ).toContain('min_drives');
   });
 
   it('raid50/60/70 group_size rules', () => {
-    const six = ['d1', 'd2', 'd3', 'd4', 'd5', 'd6'];
-    expect(codes(spec({ level: 'raid50', member_disk_ids: six }))).toContain('group_size_required');
-    expect(codes(spec({ level: 'raid50', member_disk_ids: six, group_size: 1 }))).toContain(
+    const eight = ['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8'];
+    expect(codes(spec({ level: 'raid50', member_disk_ids: eight }))).toContain(
+      'group_size_required',
+    );
+    expect(codes(spec({ level: 'raid50', member_disk_ids: eight, group_size: 1 }))).toContain(
       'group_size_range',
     );
-    expect(codes(spec({ level: 'raid50', member_disk_ids: six, group_size: 4 }))).toContain(
+    expect(codes(spec({ level: 'raid50', member_disk_ids: eight, group_size: 3 }))).toContain(
       'members_not_divisible_by_group',
     );
-    // 6 % 3 == 0 and 6/3 = 2 groups → valid
-    expect(codes(spec({ level: 'raid50', member_disk_ids: six, group_size: 3 }))).toEqual([]);
+    // 8 % 4 == 0 and 8/4 = 2 groups → valid
+    expect(codes(spec({ level: 'raid50', member_disk_ids: eight, group_size: 4 }))).toEqual([]);
     // group_size == member count → only 1 group → compound level needs >= 2
-    expect(codes(spec({ level: 'raid50', member_disk_ids: six, group_size: 6 }))).toContain(
+    expect(codes(spec({ level: 'raid50', member_disk_ids: eight, group_size: 8 }))).toContain(
       'members_not_divisible_by_group',
     );
   });

@@ -1,30 +1,49 @@
 ---
 # Generate RAID configuration for raid_fs role
 
+# The per-level scalars were replaced by the nvme_raid_min_devices table (they
+# disagreed with the engine: RAID 5 had a 3-drive floor xiRAID rejects). Honour
+# them nowhere, but say so loudly — a silently ignored override is the same
+# class of bug as the divergence itself.
+- name: Fail on removed per-level minimum-device knobs
+  ansible.builtin.assert:
+    that:
+      - nvme_min_devices_for_raid5 is not defined
+      - nvme_min_devices_for_raid10 is not defined
+    fail_msg: >-
+      nvme_min_devices_for_raid5 / nvme_min_devices_for_raid10 have been removed.
+      Minimum member counts now come from the nvme_raid_min_devices table
+      (defaults/main.yml), which carries the counts the xiRAID engine actually
+      enforces. Drop the removed variable from your inventory or preset; override
+      nvme_raid_min_devices only if you have confirmed the numbers against your
+      xiRAID version. See docs/Installer/raid-spec.md section 6.1.
+    quiet: true
+
 # Validate minimum device counts for requested RAID levels
 - name: Calculate available device counts
   ansible.builtin.set_fact:
     nvme_small_ns_count: "{{ nvme_small_ns_devices | length }}"
     nvme_large_ns_count: "{{ nvme_large_ns_devices | length }}"
 
-# Determine if we can create the requested RAID arrays
-- name: Validate RAID 5 requirements for data array
+# One table, one lookup per array — no per-level cascade, and no ">= 2" fallback
+# for levels nobody wrote a branch for (that is how RAID 50/60 got a 2-drive
+# floor). docs/Storage/raid-management-spec.md section 4 owns the numbers.
+- name: Resolve engine-enforced minimum member counts
   ansible.builtin.set_fact:
-    nvme_can_create_data_raid: >-
-      {{ nvme_large_ns_count | int >= nvme_min_devices_for_raid5 | int }}
-  when: nvme_raid_data_level | int == 5
+    _data_min_devices: >-
+      {{ nvme_raid_min_devices[nvme_raid_data_level | int]
+         | default(nvme_raid_min_devices_default) }}
+    _log_min_devices: >-
+      {{ nvme_raid_min_devices[nvme_raid_log_level | int]
+         | default(nvme_raid_min_devices_default) }}
 
-- name: Validate RAID 6 requirements for data array
+- name: Validate member counts against the engine minimums
   ansible.builtin.set_fact:
-    nvme_can_create_data_raid: >-
-      {{ nvme_large_ns_count | int >= 4 }}
-  when: nvme_raid_data_level | int == 6
+    nvme_can_create_data_raid: "{{ nvme_large_ns_count | int >= _data_min_devices | int }}"
+    nvme_can_create_log_raid: "{{ nvme_small_ns_count | int >= _log_min_devices | int }}"
 
-- name: Validate RAID 10 requirements for log array
+- name: Calculate even log device count for RAID 10
   ansible.builtin.set_fact:
-    nvme_can_create_log_raid: >-
-      {{ nvme_small_ns_count | int >= nvme_min_devices_for_raid10 | int }}
-    _log_raid_level: "{{ nvme_raid_log_level }}"
     # For RAID 10, use N-1 devices if count is odd to ensure even number
     _log_device_count: >-
       {{ (nvme_small_ns_count | int) - (nvme_small_ns_count | int % 2) }}
@@ -33,42 +52,19 @@
 # Trim device list for RAID 10 if odd count (use first N-1 devices)
 - name: Adjust log devices for RAID 10 (odd count uses N-1)
   ansible.builtin.set_fact:
+    _log_raid_level: "{{ nvme_raid_log_level }}"
     _log_devices_adjusted: "{{ nvme_small_ns_devices[: _log_device_count | int] }}"
     _log_device_dropped: "{{ nvme_small_ns_devices[_log_device_count | int :] }}"
   when:
     - nvme_raid_log_level | int == 10
     - nvme_small_ns_count | int % 2 == 1
 
-- name: Use all log devices for RAID 10 (even count)
+- name: Use all log devices (RAID 10 with an even count, or any other level)
   ansible.builtin.set_fact:
-    _log_devices_adjusted: "{{ nvme_small_ns_devices }}"
-    _log_device_dropped: []
-  when:
-    - nvme_raid_log_level | int == 10
-    - nvme_small_ns_count | int % 2 == 0
-
-- name: Validate RAID 1 requirements for log array
-  ansible.builtin.set_fact:
-    nvme_can_create_log_raid: >-
-      {{ nvme_small_ns_count | int >= 2 }}
-    _log_raid_level: "1"
-    _log_devices_adjusted: "{{ nvme_small_ns_devices }}"
-    _log_device_dropped: []
-  when: nvme_raid_log_level | int == 1
-
-# Set defaults for other RAID levels
-- name: Default data RAID validation
-  ansible.builtin.set_fact:
-    nvme_can_create_data_raid: "{{ nvme_large_ns_count | int >= 2 }}"
-  when: nvme_can_create_data_raid is not defined
-
-- name: Default log RAID validation
-  ansible.builtin.set_fact:
-    nvme_can_create_log_raid: "{{ nvme_small_ns_count | int >= 2 }}"
     _log_raid_level: "{{ nvme_raid_log_level }}"
     _log_devices_adjusted: "{{ nvme_small_ns_devices }}"
     _log_device_dropped: []
-  when: nvme_can_create_log_raid is not defined
+  when: not (nvme_raid_log_level | int == 10 and nvme_small_ns_count | int % 2 == 1)
 
 # Report validation results
 - name: Report insufficient devices for data array
@@ -76,7 +72,7 @@
     msg: |
       WARNING: Insufficient devices for data array (RAID {{ nvme_raid_data_level }})
       Available: {{ nvme_large_ns_count }} large namespaces
-      Required: {{ nvme_min_devices_for_raid5 }} (RAID 5) or 4 (RAID 6)
+      Required: {{ _data_min_devices }}
   when: not (nvme_can_create_data_raid | bool)
 
 - name: Report insufficient devices for log array
@@ -84,7 +80,7 @@
     msg: |
       WARNING: Insufficient devices for log array (RAID {{ nvme_raid_log_level }})
       Available: {{ nvme_small_ns_count }} small namespaces
-      Required: {{ nvme_min_devices_for_raid10 }} (RAID 10) or 2 (RAID 1)
+      Required: {{ _log_min_devices }}
   when: not (nvme_can_create_log_raid | bool)
 
 # Calculate parity disks based on RAID level
@@ -138,8 +134,14 @@
   ansible.builtin.fail:
     msg: |
       Cannot create required RAID arrays due to insufficient devices.
-      Data array (RAID {{ nvme_raid_data_level }}): {{ 'OK' if nvme_can_create_data_raid | bool else 'FAILED - need more devices' }}
-      Log array (RAID {{ nvme_raid_log_level }}): {{ 'OK' if nvme_can_create_log_raid | bool else 'FAILED - need more devices' }}
+      Data array (RAID {{ nvme_raid_data_level }}): {{ 'OK' if nvme_can_create_data_raid | bool else
+        'FAILED - have ' ~ nvme_large_ns_count ~ ', need ' ~ _data_min_devices }}
+      Log array (RAID {{ nvme_raid_log_level }}): {{ 'OK' if nvme_can_create_log_raid | bool else
+        'FAILED - have ' ~ nvme_small_ns_count ~ ', need ' ~ _log_min_devices }}
+
+      These are the minimums the xiRAID engine enforces, not textbook RAID math
+      (RAID 5 needs 4 members, RAID 50/60 need 8). Attach more drives, or pick a
+      RAID level that fits the drives you have.
   when: not (nvme_can_create_data_raid | bool and nvme_can_create_log_raid | bool)
 
 # Display final configuration

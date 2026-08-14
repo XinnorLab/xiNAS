@@ -295,8 +295,8 @@ The `nvme_namespace` role auto-detects system vs. data drives and builds RAID ar
 | `nvme_skip_failed_devices` | `true` | Continue if a single device fails |
 | `nvme_cleanup_existing_storage` | `true` | Remove existing LVM/MD/ZFS on data drives |
 | `nvme_skip_cleanup_confirmation` | `false` | Skip cleanup confirmation (set `true` for automation) |
-| `nvme_min_devices_for_raid5` | `3` | Minimum drives for RAID 5 |
-| `nvme_min_devices_for_raid10` | `4` | Minimum drives for RAID 10 (must be even) |
+| `nvme_raid_min_devices` | `{0: 2, 1: 2, 5: 4, 6: 4, 10: 4, 50: 8, 60: 8}` | Engine-enforced minimum member count per RAID level (RAID 10 is additionally rounded down to an even count) |
+| `nvme_raid_min_devices_default` | `2` | Minimum for a RAID level absent from the table |
 
 #### Filesystem and Array Creation
 

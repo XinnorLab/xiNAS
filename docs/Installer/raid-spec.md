@@ -53,10 +53,17 @@ and zero data drives were found**:
    `nvme_detect_mode: all` …"* — the role will not silently RAID over SATA disks
    the operator didn't mean to consume.
 
-Effective minimum for the VM auto-path is **5 non-OS disks** (2 log + 3 data for
-RAID5); fewer disks fail with the clear "insufficient devices" message from §6,
-identical to how the `xinnorVM` preset fails today. The fallback changes only the
-`default`-preset path; `autoinstall.sh`, the presets, and the menus are untouched.
+Effective minimum for the VM auto-path is **6 non-OS disks** (2 log + 4 data for
+RAID5 — see §6.1); fewer disks fail with the clear "insufficient devices" message
+from §6, identical to how the `xinnorVM` preset fails today. The fallback changes
+only the `default`-preset path; `autoinstall.sh`, the presets, and the menus are
+untouched.
+
+> This minimum was **5** (2 log + 3 data) until the RAID-5 minimum was corrected
+> from the textbook `3` to the engine-enforced `4` (§6.1). A VM with exactly 5
+> non-OS disks used to pass preflight and then fail mid-install at
+> `xicli raid create` — it now fails earlier, at the `generate_raid_config.yml`
+> preflight, before any namespace or array work has run.
 
 ---
 
@@ -272,15 +279,46 @@ Source: [generate_raid_config.yml](../../collection/roles/nvme_namespace/tasks/g
 
 ### 6.1 Capacity checks
 
-| RAID level | Min members | Source variable |
-|---|---|---|
-| RAID 5 (data) | `nvme_min_devices_for_raid5` (default `3`) | `nvme_can_create_data_raid` |
-| RAID 6 (data) | hardcoded `4` | same |
-| RAID 10 (log) | `nvme_min_devices_for_raid10` (default `4`, must be even) | `nvme_can_create_log_raid` |
-| RAID 1 (log) | hardcoded `2` | same |
-| Other levels (default fallback) | `≥ 2` | same |
+Both arrays are checked against **one** table, `nvme_raid_min_devices` in
+[defaults/main.yml](../../collection/roles/nvme_namespace/defaults/main.yml),
+keyed by RAID level:
 
-If either array fails its check, the play fails with a message that names both checks and which one came up short.
+| RAID level | Min members |
+|---|---|
+| 0, 1 | 2 |
+| 5 | **4** |
+| 6 | 4 |
+| 10 | 4 (and see §6.2 — an odd count is trimmed to even) |
+| 50, 60 | **8** |
+| any level not in the table | 2 |
+
+The data array checks `nvme_large_ns_count` against
+`nvme_raid_min_devices[nvme_raid_data_level]` into `nvme_can_create_data_raid`;
+the log array checks `nvme_small_ns_count` against
+`nvme_raid_min_devices[nvme_raid_log_level]` into `nvme_can_create_log_raid`. If
+either fails, the play fails with a message that names both checks, which one
+came up short, and the count-vs-required numbers.
+
+These are the **engine-enforced** minimums, not textbook RAID math. They are
+xiRAID-version-specific and were read off xiRAID Classic 4.4's own rejection
+messages (`Error: To create RAID level '5', a minimum of '4' disks are
+required.`) rather than from `xicli raid create --help`, which does not document
+them. The table is shared verbatim with the TUI Create Array wizard and the
+control-path constraint table — see
+[Storage/raid-management-spec.md §4](../Storage/raid-management-spec.md#engine-enforced-minimum-drive-counts),
+which owns the numbers and the re-confirmation rule for a xiRAID version bump.
+
+> **This tightened the default preset.** The RAID-5 minimum was `3` (the
+> `nvme_min_devices_for_raid5` variable, now removed along with
+> `nvme_min_devices_for_raid10`; both are rejected with an explicit error if an
+> old inventory or preset still sets them). A node with exactly **three** data
+> namespaces used to pass this preflight and then fail several tasks later, at
+> `xicli raid create`, with the engine's rejection — after `nvme_namespace` had
+> already destroyed and rebuilt every namespace. It now fails **here**, at
+> preflight, with an actionable count. That is a behavior change for any
+> three-data-drive node that previously got as far as the array create; such a
+> node was never able to complete an install, so nothing that used to work stops
+> working.
 
 ### 6.2 RAID 10 odd-count correction
 
