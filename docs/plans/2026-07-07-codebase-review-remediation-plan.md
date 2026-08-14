@@ -312,12 +312,37 @@ rollback mechanism everything else leans on.
   > independently before this branch — `_remove_share` carries `@work` plus
   > a regression test — so its box above is left unchecked rather than
   > claimed here.
-- [ ] **WS5.3** raid.py: make teardown workers `exclusive=True` and
+- [x] **WS5.3** raid.py: make teardown workers `exclusive=True` and
   non-cancellable by stray input (confirm-then-run-to-completion, disable
   bindings while running); surface envelope warnings in the empty-disk state.
-- [ ] **WS5.4** Small fixes: audit record honesty in `mcp.py:371`; deepen
+  > **Status 2026-08-15:** PARTLY LANDED on `fix/ws5-tui-correctness`. The
+  > envelope half is done: `_list_api_disks_with_banner` fetches the full
+  > envelope, and the Create Array wizard's abort dialog now names the cause
+  > when the Disk collector is degraded instead of reporting "No available
+  > NVMe drives found." for an unobservable backend.
+  >
+  > The teardown half is **verified not reproduced** and deliberately not
+  > implemented. `TaskCancelled` subclasses `TaskFailed`, which subclasses
+  > `ControlPathError`, so `_delete_array`'s existing `except ControlPathError`
+  > already catches a cancellation and surfaces it through `_teardown_failed`;
+  > the final destroy step handles `TaskCancelled` explicitly and passes a
+  > `cancel_check`. Nothing cancels silently. The only residual is cosmetic — a
+  > cancellation during steps 1–2 is *labelled* a failure rather than a
+  > cancellation. Recorded here so the next reader does not re-open it from the
+  > finding table alone.
+- [x] **WS5.4** Small fixes: audit record honesty in `mcp.py:371`; deepen
   OS-disk detection (recurse lsblk children — mirror the fix pattern from
   commit 691ef7d); add timeout+`stdin=DEVNULL` in `remediation.py:288`.
+  > **Status 2026-08-15:** LANDED on `fix/ws5-tui-correctness`. All three:
+  > `mcp.py` audits the observed outcome (`OK` only when every unit restarted)
+  > and heads the view accordingly; `_get_os_drives` walks the whole `lsblk`
+  > tree, so an LVM/dm-crypt/MD root on a grandchild flags its disk instead of
+  > offering it for a new array; `RemediationWizard.apply` runs fix commands
+  > with a 120 s timeout and `stdin=DEVNULL`, reporting a timeout as a normal
+  > failure. Specs: `docs/Management/audit-log-spec.md` gains a writer contract
+  > (STATUS must be observed, not formality), `docs/Storage/raid-management-spec.md`
+  > documents the full-tree OS detection, and `docs/HealthCheck/remediation-spec.md`
+  > is new — nothing covered the remediation runner's execution contract.
 - [x] **WS5.5** Delete dead code: `op_tracker.py`/`OpStatusWidget` consumers,
   `xfs_helpers.py:174` block (grep callers first: `grep -rn "xfs_helpers\|OpTracker" xinas_menu/`).
   > **Status 2026-08-15:** LANDED on `refactor/ws5-remove-dead-code`. Deleted
