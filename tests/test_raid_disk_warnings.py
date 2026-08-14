@@ -9,8 +9,6 @@ to look for missing drives instead of a broken collector.
 from __future__ import annotations
 
 import asyncio
-import inspect
-import re
 
 from xinas_menu.screens.raid import (
     RAIDScreen,
@@ -54,9 +52,7 @@ def test_degraded_disk_collector_yields_a_banner():
 
 
 def test_healthy_empty_list_yields_no_banner():
-    control = _StubControl(
-        {"/api/v1/disks": {"result": []}, "/api/v1/arrays": {"result": []}}
-    )
+    control = _StubControl({"/api/v1/disks": {"result": []}, "/api/v1/arrays": {"result": []}})
     rows, banner = asyncio.run(_list_api_disks_with_banner(control))
     assert rows == []
     assert banner is None
@@ -78,8 +74,26 @@ def test_no_drives_message_is_plain_without_a_banner():
     assert _no_drives_message("") == "No available NVMe drives found."
 
 
-def test_wizard_passes_the_fetched_banner_into_the_message():
-    """Guards the fetch-and-drop regression: the banner the wizard fetched must
-    be the one it renders, not a discarded local."""
-    src = inspect.getsource(RAIDScreen._create_array_wizard)
-    assert re.search(r"_no_drives_message\(\s*disk_banner\s*\)", src)
+def test_wizard_renders_the_banner_in_its_abort_dialog():
+    """Drives the real no-drives path: a degraded collector's banner must reach
+    the dialog the operator sees, not be computed and discarded."""
+    captured: list = []
+
+    class _StubApp:
+        def __init__(self, control):
+            self.control = control
+
+        async def push_screen_wait(self, dialog):
+            captured.append(dialog)
+            return None
+
+    class _StubScreen:
+        def __init__(self, control):
+            self.app = _StubApp(control)
+
+    asyncio.run(RAIDScreen._create_array_wizard.__wrapped__(_StubScreen(_degraded())))
+
+    assert captured, "the wizard showed no dialog"
+    message = captured[0]._message
+    assert "No available NVMe drives found." in message
+    assert "disk collector errored" in message, "the banner never reached the dialog"
