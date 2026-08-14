@@ -388,9 +388,68 @@ xicli raid create -n <name> -l <level> \
                   -ss <strip_size_kb> \
                   [-sp <spare_pool>] \
                   [--force_metadata]   # when xiraid_force_metadata=true
+                  [--discard 1]        # when TRIM is enabled for this array
 ```
 
 `xiraid_force_metadata` defaults to `true` in both presets. After creation, the role `wait_for`-s the resulting block device at `/dev/xi_<name>` with a 120 s timeout. If the array already existed and the preset declares a `spare_pool`, the role runs `xicli raid modify --name <name> -sp <pool>` separately so adding a pool to a live array is idempotent too.
+
+#### TRIM / discard
+
+New arrays are created with discard enabled when the hardware supports it, so discards
+issued by XFS reach the NVMe media instead of being dropped at the RAID layer. The
+xiRAID Classic 4.4 command reference defines two related knobs, and the installer sets
+exactly one of them:
+
+| Knob | What xiRAID does with it | Installer |
+|---|---|---|
+| `--discard 0\|1` | enables discarding of unused blocks in the RAID. Defaults to `0`; requires **every** member to support Deterministic Read Zero after TRIM (RZAT) | **set to `1`** when the probe passes |
+| `--drive_trim 0\|1` | TRIMs the disks *before* the RAID is created. xiRAID enables it **by default** when all disks support RZAT **and none carries metadata** | **never passed** |
+
+**`--drive_trim` is deliberately left alone.** Its default already does the right thing,
+and its second condition — no metadata on any disk — is a data-safety check: TRIMming a
+disk that still carries metadata makes the data on it unrecoverable. Forcing
+`--drive_trim 1` would override exactly that check, so the installer does not name the
+flag at all and lets xiRAID decide.
+
+**Detection is per array, not per node.** For every member device the role checks two
+things:
+
+1. **Discard support** — `/sys/block/<dev>/queue/discard_max_bytes` is non-zero.
+2. **RZAT** — the NVMe namespace's `DLFEAT` field (from `nvme id-ns`) has its low three
+   bits equal to `1`, meaning deallocated blocks read back as zeroes. Plain discard
+   support does not imply this, and the kernel attribute that used to answer it
+   (`discard_zeroes_data`) was removed in 4.12, so it does not exist on the supported
+   Ubuntu kernels. A non-NVMe member (the VM whole-disk path) answers neither and is
+   treated as ineligible; so is any member on a host without `nvme-cli`, which a normal
+   `site.yml` run cannot hit (`nvme_namespace` hard-requires it and runs first) but a
+   bare `--tags raid_fs` run can. Both degrade to "create without discard", never to a
+   failed create.
+
+`--discard 1` is passed only when **every** member of *that* array passes both — so a log
+array on eligible namespaces still gets discard when a data-array member does not.
+
+**Discard cannot be added by a later install run.** A converging re-run of `site.yml`
+never recreates a healthy array (§11), so an array created without `--discard` keeps that
+setting until it is destroyed and rebuilt under an explicit, confirmed
+`xinas_storage_reset`. (The 4.4 CLI does document `discard` as modifiable via
+`xicli raid modify`, but the control path currently rejects it as create-only — that was
+verified against the 4.3.1 gRPC descriptor and has not been re-checked on 4.4.)
+
+Two role variables control it, both mirrored in the shipping presets (a preset replaces
+the role's `defaults/main.yml` wholesale, so an unmirrored default is lost at preset-apply):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `xiraid_trim_mode` | `auto` | `auto` = enable iff every member passes both probes; `on` = force the flags on regardless of the probe; `off` = never pass them |
+| `xiraid_trim_create_args` | `--discard 1` | the literal flags appended to `xicli raid create`; one-line override if a future xiRAID spells them differently |
+
+**The CLI is probed before the flags are used.** The role runs `xicli raid create --help`
+once, outside the per-array loop, and appends the flags only when every `--flag` named in
+`xiraid_trim_create_args` appears in that help text. Without the guard an older xiRAID
+would fail *every* array creation on an unrecognised argument; with it, an unsupporting
+build — or an override naming a flag this build lacks — simply creates arrays without
+discard. The decision and its reason (which member failed which probe, or which flag the
+CLI does not accept) are printed per array before creation.
 
 ### 7.6 Filesystem creation
 

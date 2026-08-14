@@ -39,12 +39,61 @@
   when: (_mem_avail_kb.stdout | int // 1024) < (raid_create_min_free_mb | default(2560) | int)
   tags: [raid_fs, raid]
 
+# TRIM/discard is decided per array, not per node: a log array on TRIM-capable
+# namespaces still gets TRIM when a data-array member does not support it. A
+# member reporting 0 (or missing the attribute) cannot discard. Both xiRAID knobs
+# are create-only, so this is the only chance to set them — see raid-spec §7.5.
+- name: Probe member discard support for {{ item.name }}
+  ansible.builtin.shell: |
+    set -u
+    for dev in {{ _devlist }}; do
+      max=$(cat "/sys/block/$(basename "$dev")/queue/discard_max_bytes" 2>/dev/null || echo 0)
+      # RZAT: deallocated blocks must read back as zeroes. On NVMe that is the
+      # namespace's DLFEAT field, low 3 bits == 1. The kernel's old
+      # discard_zeroes_data attribute was removed in 4.12, so sysfs cannot
+      # answer this on the supported Ubuntu kernels.
+      dlfeat=$(nvme id-ns "$dev" 2>/dev/null \
+               | awk -F: '/dlfeat/ {gsub(/[^0-9]/, "", $2); print $2; exit}')
+      if [ "${max:-0}" -eq 0 ] 2>/dev/null; then
+        echo "$dev (no discard support)"
+      elif [ -z "${dlfeat:-}" ] || [ $((dlfeat & 7)) -ne 1 ]; then
+        echo "$dev (no RZAT)"
+      fi
+    done
+  register: _trim_probe
+  changed_when: false
+  when: (xiraid_trim_mode | default('auto')) != 'off'
+  tags: [raid_fs, raid]
+
+- name: Decide TRIM for {{ item.name }}
+  ansible.builtin.set_fact:
+    _array_trim: >-
+      {{ (xiraid_trim_mode | default('auto')) != 'off'
+         and (_xicli_trim_supported | default(false) | bool)
+         and ((xiraid_trim_mode | default('auto')) == 'on'
+              or ((_trim_probe.stdout_lines | default([])) | length) == 0) }}
+  tags: [raid_fs, raid]
+
+- name: Report the TRIM decision for {{ item.name }}
+  ansible.builtin.debug:
+    msg: >-
+      Array '{{ item.name }}': TRIM {{ 'ENABLED' if (_array_trim | bool) else 'disabled' }}
+      {{ '(' + xiraid_trim_create_args + ')' if (_array_trim | bool) else '' }}
+      {{ '- members not eligible: '
+         + (_trim_probe.stdout_lines | default([]) | join('; '))
+         if ((_trim_probe.stdout_lines | default([])) | length) > 0 else '' }}
+      {{ '- xicli does not advertise the TRIM flags'
+         if not (_xicli_trim_supported | default(false) | bool)
+            and (xiraid_trim_mode | default('auto')) != 'off' else '' }}
+  tags: [raid_fs, raid]
+
 - name: Create array {{ item.name }}
   ansible.builtin.command: >-
     xicli raid create -n {{ item.name }} -l {{ item.level }}
     -d {{ _devlist }} -ss {{ item.strip_size_kb }}
     {% if item.spare_pool is defined %}-sp {{ item.spare_pool }}{% endif %}
     {% if xiraid_force_metadata | bool %}--force_metadata{% endif %}
+    {% if _array_trim | bool %}{{ xiraid_trim_create_args }}{% endif %}
   register: raid_create
   changed_when: raid_create.rc == 0
   failed_when:

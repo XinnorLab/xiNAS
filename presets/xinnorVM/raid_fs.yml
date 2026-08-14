@@ -7,6 +7,14 @@ xiraid_license_path: "/tmp/license"
 # Whether to pass `--force_metadata` when creating arrays
 xiraid_force_metadata: true
 
+# TRIM/discard for new arrays: enable per array when every member reports both
+# discard support and RZAT (raid-spec §7.5). Virtio/SCSI backing devices report
+# neither, so `auto` quietly creates without discard here — same knob, hardware
+# decides. Mirrored from the role defaults for the same reason as
+# raid_create_min_free_mb below.
+xiraid_trim_mode: auto
+xiraid_trim_create_args: "--discard 1"
+
 # Minimum free memory (MiB) required before creating each array. xiRAID
 # preallocates a per-array kernel mempool (~memory_prealloc, ~2 GB) via
 # __get_free_pages(); creation fails cryptically below this floor. Defined here

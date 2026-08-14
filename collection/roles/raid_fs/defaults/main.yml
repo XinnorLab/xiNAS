@@ -12,6 +12,26 @@ xiraid_license_path: "/tmp/license"
 # Set to `false` if metadata should not be overwritten
 xiraid_force_metadata: true
 
+# TRIM/discard for NEW arrays (raid-spec §7.5). xiRAID's `--discard` defaults to
+# 0, and enabling it requires EVERY member to support Deterministic Read Zero
+# after TRIM (RZAT) — see the xiRAID Classic 4.4 command reference.
+#   auto - enable iff every member of that array reports discard support AND RZAT
+#          (decided per array)
+#   on   - pass the flags regardless of what the members report
+#   off  - never pass them
+xiraid_trim_mode: auto
+
+# The literal flags appended to `xicli raid create` when TRIM is enabled. Kept as
+# a variable so a future xiRAID spelling is a one-line override; the role probes
+# `xicli raid create --help` and drops them all when the installed CLI does not
+# advertise every flag named here, since an unknown argument fails the create.
+#
+# `--drive_trim` is deliberately absent. It TRIMs the disks before creation, and
+# xiRAID already enables it by default when RZAT holds AND no disk carries
+# metadata — that second condition is what stops a TRIM from destroying data that
+# is still recoverable. Forcing `--drive_trim 1` here would override it.
+xiraid_trim_create_args: "--discard 1"
+
 # DEPRECATED / internal — do NOT use to reformat. The supported control is
 # `xinas_storage_reset`. Kept only so older inventories don't error; pinned to the
 # safe side. `xfs_force_mkfs: true` set alone no longer reformats a healthy array.

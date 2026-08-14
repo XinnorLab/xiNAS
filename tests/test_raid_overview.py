@@ -209,3 +209,51 @@ def test_merge_max_edit_params_are_labelled_microseconds_not_kb():
     assert "(us)" in labels["merge_write_max"]
     assert "KB" not in labels["merge_read_max"]
     assert "KB" not in labels["merge_write_max"]
+
+
+# ---- TRIM / discard (raid-management-spec §3, Installer raid-spec §7.5) ----
+#
+# `discard` and `drive_trim` are create-only knobs the installer decides from
+# the members' discard support. The Extended view is where an operator finds
+# out what the array actually got, so both must render — and, like every other
+# tuning value, an unobserved one must not render as a plausible default.
+
+
+def test_trim_block_renders_observed_values():
+    rows = _api_row(spec_extra={"tuning": {"discard": True, "drive_trim": True}})
+    out = _format_raid_overview(_arrays_from_api(rows), extended=True)
+
+    assert "Enabled" in _row(out, "Discard (TRIM)")
+    assert "Enabled" in _row(out, "Drive TRIM")
+
+
+def test_trim_block_renders_disabled_when_observed_off():
+    rows = _api_row(spec_extra={"tuning": {"discard": False, "drive_trim": False}})
+    out = _format_raid_overview(_arrays_from_api(rows), extended=True)
+
+    assert "Disabled" in _row(out, "Discard (TRIM)")
+    assert "Disabled" in _row(out, "Drive TRIM")
+
+
+def test_unobserved_trim_renders_unknown_not_disabled():
+    out = _format_raid_overview(_arrays_from_api(_api_row()), extended=True)
+
+    assert "unknown" in _row(out, "Discard (TRIM)")
+    assert "Disabled" not in _row(out, "Discard (TRIM)")
+    assert "unknown" in _row(out, "Drive TRIM")
+    assert "Disabled" not in _row(out, "Drive TRIM")
+
+
+def test_trim_rows_are_absent_from_the_quick_overview():
+    rows = _api_row(spec_extra={"tuning": {"discard": True, "drive_trim": True}})
+    out = _format_raid_overview(_arrays_from_api(rows), extended=False)
+    assert "Discard (TRIM)" not in _plain(out)
+
+
+def test_trim_knobs_are_not_offered_as_edits():
+    """Create-only: RaidModify has no field for either (translate.ts)."""
+    from xinas_menu.screens.raid import _MODIFY_PARAMS
+
+    keys = {key for key, *_ in _MODIFY_PARAMS}
+    assert "discard" not in keys
+    assert "drive_trim" not in keys
