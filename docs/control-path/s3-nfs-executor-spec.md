@@ -244,7 +244,11 @@ contradict an explicit client token, and the output is deterministic. There is *
 "wizard-managed vs extra_opts" split** (that was a TUI concept; the OpenAPI model already
 carries the full raw option list, so an update's `options[]` is taken as-is).
 
-Note: `fsid` is validated (integer) and uniqueness-enforced at plan time but is **not yet
+Note: `fsid` is validated (integer), **allocated server-side when the create spec omits it**,
+and uniqueness-enforced at plan time — an explicit collision is an `FSID_IN_USE` blocker, and
+two creates that allocate the same number are serialised by an absence pin on
+`ShareFsid/{n}` (design:
+`docs/superpowers/specs/2026-08-14-server-side-fsid-allocation-design.md`). It is still **not
 rendered** into the compiled export entry — deferred, because emitting `fsid=` would change
 host behavior vs the installer baseline; revisit with Phase-1 HA (see §11).
 
@@ -354,8 +358,8 @@ OpenAPI (`openapi` CI gate must stay green):
 - **Add `PATCH /api/v1/nfs-idmap`** (currently GET-only): body `{ domain: string }`,
   `mode=plan|apply`. This is the **only** missing route.
 - **Keep `expected_revision`** in apply bodies — `ApplyRequest.required` still lists it.
-- Confirm `Share` POST assigns/validates `id` + `fsid` (server-assigned id if omitted;
-  `fsid` required + unique) — N5 detail.
+- `Share` POST `fsid` assignment: **done** — omitted `fsid` is allocated server-side and
+  uniqueness is enforced (§4). Server-assigned `id` when omitted is still open — N5 detail.
 
 Config-history (`xinas_history/collector.py` `CHECKSUM_TARGETS`, `docs/config-history/specs.md`):
 - **Add `/etc/idmapd.conf`** so the §8 snapshot backstop for `nfs-idmap.set` is real
@@ -459,10 +463,11 @@ not yet in scope, the executor's prior-state rollback is the sole undo (noted pe
   (snake_case per ADR-0003); `observed_freshness_ref.kind` must resolve to `nfs_idmap` (N4).
 - **Active-session on update/delete** kept a **warning**, not a blocker — revisit if
   operators want a hard gate.
-- **Share `id`/`fsid` assignment** on `POST /shares` — N5.
-- **`fsid` not rendered into the export entry** (§4): validated + uniqueness-enforced only;
-  emitting `fsid=` would change host behavior vs the installer baseline — revisit with
-  Phase-1 HA.
+- **Share `id` assignment** on `POST /shares` — N5. (The `fsid` half is done: allocated
+  server-side, collision-serialised by the `ShareFsid/{n}` absence pin.)
+- **`fsid` not rendered into the export entry** (§4): validated, allocated, and
+  uniqueness-enforced, but not emitted; writing `fsid=` would change host behavior vs the
+  installer baseline — revisit with Phase-1 HA.
 
 ---
 
