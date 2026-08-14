@@ -318,12 +318,22 @@ Share ids are percent-encoded with `quote_id()` on every path — a Share id mir
 
 The renderer is intentionally rich:
 
-- **Storage line** — `df -h <path>` to show `used / total (pct)`.
+- **Storage line** — `df -h <path>` to show `used / total (pct)`, with a
+  **5-second timeout**; on timeout or error the line reads `N/A`. An export
+  whose backing filesystem is hung (dead NFS server, lost FC path) must not be
+  able to stall the render.
 - **Path-missing flag** — `os.path.isdir(path)` — flips the status badge to `[!] PATH MISSING` (red) if the export targets a directory that doesn't exist on disk.
 - **Security label** — translates `sec=krb5` / `krb5i` / `krb5p` → `"Kerberos"` / `"Kerberos+integrity"` / `"Kerberos+encryption"`, defaults to `"Standard (UID/GID)"`.
 - **Per-client explanation** — translates `*` → `"Everyone (all hosts)"`, `10.10.0.0/24` → `"Network: 10.10.0.0/24"`, and flags `no_root_squash` as `"full admin"` next to `rw` / `ro`.
 - **Empty state** — an empty share list renders `(no NFS shares configured)`. The renderer does **not** read `/etc/exports`. It used to: when the row list came back empty it parsed the file directly and displayed its contents as the share list. That made sense while the helper socket was the read path and an empty result meant "the socket failed", but under the control path an empty result means *the api observed no shares* — and the collector already observes `/etc/exports` itself, so anything genuinely exported would have come back as a row. All the fallback could still do was present unmanaged file contents as though they were the managed share list, in exactly the case where the operator most needs to see that the control path has nothing.
 - **Connected hosts** — last block. Reads `/proc/fs/nfsd/clients/*/info` for active v4 connections; if that's empty, falls back to `ss -tn state established ( dport = :2049 )` for v3 / TCP connections. IPs are de-duplicated.
+
+**The renderer runs in a worker thread.** `_format_exports` shells out to `df`
+once per share and reads `/proc/fs/nfsd/clients/*/info`, so `_load_exports`
+invokes it via `asyncio.to_thread`. `@work` on an `async def` runs the worker
+*on the event loop*, not in a thread — offloading the control-path call alone
+is not enough, and rendering inline is what froze the whole TUI when a single
+export's filesystem hung.
 
 **Degraded-backend honesty.** Like Show Filesystems (§3.2) and the RAID overview, `_load_exports` fetches the **full envelope** (`control.get`, not `control.result`) and inspects its `warnings`. When the envelope carries `DEGRADED_BACKEND_UNAVAILABLE` — the `Share` collector is errored (control-path contract: [s8-clients-spec §5.1](../control-path/s8-clients-spec.md)) — `_format_exports` renders that message as a banner above any rows, and when the list is empty the banner **replaces** the `(no NFS shares configured)` empty state. An unobservable backend must never read as "genuinely no shares". The shared extractor is [api/degraded.py](../../xinas_menu/api/degraded.py) `degraded_banner(envelope)`, the same one the other two screens use.
 
