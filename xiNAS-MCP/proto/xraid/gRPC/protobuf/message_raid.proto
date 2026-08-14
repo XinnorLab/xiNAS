@@ -9,8 +9,15 @@ package xraid.v2;
     * Create the RAID.
 */
 message RaidCreate{
-    reserved 16, 17, 21 to 23, 31;
-    reserved "merge_wait", "merge_max";
+    // Field numbers and set re-vendored from the RUNNING xiRAID Classic 4.3.1
+    // daemon's own descriptor, read off the demo node on 2026-08-14
+    // (/usr/lib/xraid/gRPC/protobuf/message_raid_pb2.py). Earlier drafts of
+    // this file reserved 23 and 31 and carried resync_enabled=12 — all three
+    // WRONG against the real daemon: it assigns 23=max_sectors_kb and
+    // 31=adaptive_merge_path, has no resync_enabled at all, and adds
+    // trim=33 / no_trim=34 / sdc_prio=35. Do not "restore" the old shape.
+    reserved 12, 16, 17, 21, 22;
+    reserved "resync_enabled", "merge_wait", "merge_max";
     /**
         * The name of the RAID.
     */
@@ -58,10 +65,6 @@ message RaidCreate{
     */
     optional uint32 restripe_prio = 11;
     /**
-        * Enable (1) or disable (0) the resync function.
-    */
-    optional uint32 resync_enabled = 12;
-    /**
         * Enable (1) or disable (0) the scheduling function.
     */
     optional uint32 sched_enabled = 13;
@@ -85,6 +88,10 @@ message RaidCreate{
         * Allow overwriting metadata on disks.
     */
     optional bool force_metadata = 20;
+    /**
+        * Maximum size of an I/O request in KB.
+    */
+    optional uint32 max_sectors_kb = 23;
     /**
         * Maximum wait time (in microseconds) for stripe accumulation with "merge" enabled for read requests.
     */
@@ -115,9 +122,29 @@ message RaidCreate{
     */
     optional bool single_run = 30;
     /**
+        * Path used by the adaptive merge tuner.
+    */
+    optional string adaptive_merge_path = 31;
+    /**
         * Reserved memory pool in MiB.
     */
     optional uint32 memory_prealloc = 32;
+    /**
+        * TRIM every disk BEFORE the RAID is created. The daemon spells the
+        * CLI's --drive_trim as this bool; it is a one-shot pre-create wipe,
+        * not per-array discard passthrough, and the engine enables it on its
+        * own only when every disk supports RZAT and none carries metadata.
+    */
+    optional bool trim = 33;
+    /**
+        * Skip the pre-create TRIM (the CLI's --no_drive_trim). Mutually
+        * exclusive with trim.
+    */
+    optional bool no_trim = 34;
+    /**
+        * Silent data corruption detection priority in percent.
+    */
+    optional uint32 sdc_prio = 35;
     /**
         * Force the command execution.
     */
@@ -195,13 +222,15 @@ message RaidInitStop{
     * Modify the parameters of the created RAID.
 */
 message RaidModify{
-    // 19 (max_sectors_kb), 27 (adaptive_merge_path) and 29 (sdc_prio) were
-    // added by the daemon after this file was vendored. Field numbers below
-    // are taken from the RUNNING daemon's own descriptor (xiRAID 4.3.1,
-    // xraid.gRPC.protobuf.message_raid_pb2.RaidModify) — NOT guessed. A wrong
-    // number here would write a different knob than the caller asked for.
-    reserved 10, 11, 17, 18;
-    reserved "merge_wait", "merge_max";
+    // Field numbers and set re-vendored from the RUNNING xiRAID Classic 4.3.1
+    // daemon's own descriptor, read off the demo node on 2026-08-14
+    // (message_raid_pb2.RaidModify) — NOT guessed. A wrong number here would
+    // write a different knob than the caller asked for. The daemon's
+    // RaidModify has NO resync_enabled (field 6 is unused): resync is a
+    // create-only knob and is rejected pre-plan on PATCH. 19=max_sectors_kb,
+    // 27=adaptive_merge_path, 29=sdc_prio are present and correct.
+    reserved 6, 10, 11, 17, 18;
+    reserved "resync_enabled", "merge_wait", "merge_max";
     /**
         * The name of the RAID.
     */
@@ -223,10 +252,6 @@ message RaidModify{
         * Restriping priority in percent.
     */
     optional uint32 restripe_prio = 5;
-    /**
-        * Enable (1) or disable (0) the resync function.
-    */
-    optional uint32 resync_enabled = 6;
     /**
         * Enable (1) or disable (0) the scheduling function.
     */
