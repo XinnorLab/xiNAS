@@ -152,10 +152,12 @@ The drop-in keeps every existing caller working with **no code change**:
   '[:lower:]' '[:upper:]')`, displayed as `HWKEY: ${hwkey_val:-unavailable}`.
   The tool already prints uppercase; the guard in `tests/test_hwkey_guard.py`
   (survives missing/failing `./hwkey`, never renders a blank) stays valid.
-- The same bare-key contract is also relied on by `configure_hostname.sh`,
-  `collect_data.sh`, `prepare_system.sh`, and `autoinstall.sh` (verified
-  callers): each does `[ -x ./hwkey ] || chmod +x ./hwkey` then consumes
-  `./hwkey` stdout.
+- Other installer/config scripts rely on the same bare-key contract. Two read
+  `./hwkey` stdout directly — `configure_hostname.sh` (`hw=$(./hwkey | tr …)`)
+  and `collect_data.sh` (`./hwkey > "$tmp/hwkey.txt"`). Two only ensure the
+  executable bit (`[ -x ./hwkey ] || chmod +x ./hwkey`) before a downstream
+  consumer reads it — `prepare_system.sh` and `autoinstall.sh`, which hand off
+  to the menu scripts / the `common` role above.
 
 No `Requires-Rebuild:` trailer: this is a code/tool + Python change consumed at
 install time; it installs nothing, touches no unit/sysctl/package. (The `common`
