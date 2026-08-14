@@ -44,6 +44,8 @@ nvme_skip_failed_devices: true        # Continue if individual device fails
 nvme_cleanup_existing_storage: true   # Detect and remove LVM, MD RAID, ZFS on data drives
 nvme_skip_cleanup_confirmation: false  # Skip confirmation prompt (DANGEROUS - set true for automation)
 
-# Minimum device counts for RAID creation
-nvme_min_devices_for_raid5: 3         # Minimum devices for RAID 5
-nvme_min_devices_for_raid10: 4        # Minimum devices for RAID 10 (must be even)
+# Minimum member counts are NOT overridden here: they come from the
+# nvme_raid_min_devices table in the role defaults, which carries the counts the
+# xiRAID engine actually enforces (RAID 5 needs 4 members, not 3). With
+# nvme_log_drive_count: 2 and a RAID 5 data array, this preset therefore needs
+# at least 6 non-OS disks — 2 log + 4 data. See docs/Installer/raid-spec.md §6.1.

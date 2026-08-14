@@ -19,7 +19,8 @@ This role implements the Default Storage Namespace and RAID Specification:
 
 - `nvme-cli` package must be installed
 - NVMe drives must support namespace management (most enterprise NVMe do)
-- Sufficient drives for requested RAID levels (minimum 3 for RAID 5, 4 for RAID 10)
+- Sufficient drives for the requested RAID levels — the engine-enforced minimums
+  (4 for RAID 5, 4 for RAID 10, 8 for RAID 50/60), not textbook RAID math
 
 ## Role Variables
 
@@ -33,8 +34,14 @@ This role implements the Default Storage Namespace and RAID Specification:
 | `nvme_raid_log_strip_kb` | `16` | Strip size for log array in KB |
 | `nvme_abort_if_no_system_drive` | `true` | Abort if system drive cannot be detected |
 | `nvme_skip_failed_devices` | `true` | Continue if individual device fails |
-| `nvme_min_devices_for_raid5` | `3` | Minimum devices for RAID 5 |
-| `nvme_min_devices_for_raid10` | `4` | Minimum devices for RAID 10 |
+| `nvme_raid_min_devices` | `{0: 2, 1: 2, 5: 4, 6: 4, 10: 4, 50: 8, 60: 8}` | Engine-enforced minimum member count per RAID level |
+| `nvme_raid_min_devices_default` | `2` | Minimum for a level absent from the table |
+
+> `nvme_min_devices_for_raid5` and `nvme_min_devices_for_raid10` were removed —
+> they let the installer accept a 3-drive RAID 5 that `xicli raid create`
+> rejects. Setting either now fails the play with an explicit message. The
+> replacement table is documented in
+> [docs/Installer/raid-spec.md](../../../docs/Installer/raid-spec.md) §6.1.
 
 ## Dependencies
 

@@ -7,7 +7,8 @@
  *
  * Constraint sources: xiraid-analysis/api_behavior_doc.md §3.4 (param
  * ranges, group_size 2-32 required for 50/60/70, synd_cnt 4-32 for n+m,
- * >= 2 groups for compound levels) + standard per-level drive minimums.
+ * >= 2 groups for compound levels) + the engine-enforced per-level drive
+ * minimums in docs/Storage/raid-management-spec.md §4.
  */
 
 export const LEVELS = [
@@ -68,14 +69,27 @@ export interface LevelConstraints {
   needsSyndCnt: boolean;
 }
 
+/**
+ * `minDrives` is what the **engine** enforces, not textbook RAID math: xiRAID
+ * Classic rejects RAID 5 under 4 drives (`Error: To create RAID level '5', a
+ * minimum of '4' disks are required.`) and RAID 50/60 under 8. The numbers were
+ * read off those rejection messages on xiRAID Classic 4.4 — `xicli raid create
+ * --help` does not document them — so they are version-specific and must be
+ * re-confirmed when the engine version moves.
+ *
+ * docs/Storage/raid-management-spec.md §4 owns the table; the TUI Create Array
+ * wizard (`_RAID_MIN_DRIVES` in xinas_menu/screens/raid.py) and the installer
+ * (`nvme_raid_min_devices` in collection/roles/nvme_namespace/defaults/main.yml)
+ * carry the same values. Changing one without the others is review finding #4.
+ */
 export const LEVEL_CONSTRAINTS: Record<Level, LevelConstraints> = {
   raid0: { minDrives: 2, needsGroupSize: false, needsSyndCnt: false },
   raid1: { minDrives: 2, needsGroupSize: false, needsSyndCnt: false },
-  raid5: { minDrives: 3, needsGroupSize: false, needsSyndCnt: false },
+  raid5: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
   raid6: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
   raid7: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
   raid10: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
-  raid50: { minDrives: 6, needsGroupSize: true, needsSyndCnt: false },
+  raid50: { minDrives: 8, needsGroupSize: true, needsSyndCnt: false },
   raid60: { minDrives: 8, needsGroupSize: true, needsSyndCnt: false },
   raid70: { minDrives: 8, needsGroupSize: true, needsSyndCnt: false },
   'n+m': { minDrives: 4, needsGroupSize: false, needsSyndCnt: true },

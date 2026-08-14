@@ -47,6 +47,27 @@ nvme_skip_failed_devices: true        # Continue if individual device fails
 nvme_cleanup_existing_storage: true   # Detect and remove LVM, MD RAID, ZFS on data drives
 nvme_skip_cleanup_confirmation: false  # Skip confirmation prompt (DANGEROUS - set true for automation)
 
-# Minimum device counts for RAID creation
-nvme_min_devices_for_raid5: 3         # Minimum devices for RAID 5
-nvme_min_devices_for_raid10: 4        # Minimum devices for RAID 10 (must be even)
+# Minimum member counts for RAID creation, keyed by RAID level.
+#
+# These are the counts the xiRAID *engine* enforces, not textbook RAID math —
+# `xicli raid create` rejects a 3-drive RAID 5 with "To create RAID level '5',
+# a minimum of '4' disks are required." Read off the engine's own rejection
+# messages on xiRAID Classic 4.4 (`xicli raid create --help` does not document
+# them), so re-confirm these numbers when the engine version moves.
+#
+# docs/Storage/raid-management-spec.md §4 owns the table; the TUI Create Array
+# wizard (_RAID_MIN_DRIVES in xinas_menu/screens/raid.py) and the control path
+# (LEVEL_CONSTRAINTS in xiNAS-MCP/src/lib/xiraid/schema.ts) carry the same
+# values. A level absent from this map falls back to nvme_raid_min_devices_default.
+#
+# Replaces the former nvme_min_devices_for_raid5 / nvme_min_devices_for_raid10
+# scalars, which is how RAID 5 ended up with a 3-drive floor the engine rejects.
+nvme_raid_min_devices:
+  0: 2
+  1: 2
+  5: 4
+  6: 4
+  10: 4                               # RAID 10 additionally rounds down to an even count
+  50: 8
+  60: 8
+nvme_raid_min_devices_default: 2

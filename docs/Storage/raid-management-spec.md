@@ -291,7 +291,9 @@ A failed validation re-prompts via the `while True:` loop until the user enters 
 
 `SelectDialog` over `_RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]`, pre-selecting the previously-chosen level on re-entry. xiRAID Classic accepts all seven; the TUI passes the string through to the array-create spec's `level` field.
 
-**Engine-enforced minimum drive counts (finding #20).** xiRAID Classic enforces higher minimums than textbook RAID math, and `xicli raid create --help` does not document the numbers — an under-count is rejected with e.g. `Error: To create RAID level '5', a minimum of '4' disks are required.`:
+#### Engine-enforced minimum drive counts
+
+(Finding #20; unified across surfaces by finding #4.) xiRAID Classic enforces higher minimums than textbook RAID math — an under-count is rejected with e.g. `Error: To create RAID level '5', a minimum of '4' disks are required.` This table is the **single source of truth for minimum member counts across the whole repo**: the TUI Create wizard, the control-path constraint table, and the installer's auto-generated arrays all encode these numbers and must not diverge (review finding #4).
 
 | Level | Textbook min | xiRAID min |
 |---|---|---|
@@ -302,9 +304,21 @@ A failed validation re-prompts via the `while True:` loop until the user enters 
 | 50 | 6 | **8** |
 | 60 | 6–8 | **8** |
 
-(Minimums per the installer-feedback observations; the RAID-5 value is the engine's own rejection message. They could not be re-probed live here because the engine validates device existence before drive count and no free devices were available.)
+> **Provenance and version scope.** These numbers were read off the **engine's own rejection messages** on xiRAID Classic 4.4 (the version the `xiraid_classic` role installs), *not* from `xicli raid create --help` — the help text does not document them. They are therefore **xiRAID-version-specific**: a future engine release may relax or tighten a minimum, and the table would then be wrong in the safe direction (rejecting a layout the engine would accept) or the unsafe one (passing preflight and failing at `xicli raid create`). They could not be re-probed live when recorded, because the engine validates device existence before drive count and no free devices were available. **When bumping the xiRAID version, re-confirm each minimum against the new engine before trusting this table.**
 
-The Create wizard does **not** pre-validate drive count against the chosen level — an under-count is caught by the engine only *after* the confirmation step and surfaced as a failure dialog. Pre-checking count-vs-level in the drives step before dispatch (so the operator gets an immediate, actionable message) is a tracked follow-up.
+##### Where the table is encoded
+
+| Surface | Where | Enforced at |
+|---|---|---|
+| TUI Create Array wizard | `_RAID_MIN_DRIVES` in [xinas_menu/screens/raid.py](../../xinas_menu/screens/raid.py) | drives step, before the confirmation dialog (below) |
+| Control path (API + agent) | `LEVEL_CONSTRAINTS[…].minDrives` in [xiNAS-MCP/src/lib/xiraid/schema.ts](../../xiNAS-MCP/src/lib/xiraid/schema.ts) | `validateCreateSpec` → `min_drives` blocker |
+| Installer auto-path | `nvme_raid_min_devices` in [collection/roles/nvme_namespace/defaults/main.yml](../../collection/roles/nvme_namespace/defaults/main.yml) | `generate_raid_config.yml` preflight — see [Installer/raid-spec.md §6.1](../Installer/raid-spec.md#61-capacity-checks) |
+
+##### Pre-validation in the wizard
+
+**The Create wizard pre-validates drive count against the chosen level.** After the operator finishes the drives step, the wizard compares the selection against `_RAID_MIN_DRIVES[level]` and, on an under-count, shows an OK-only dialog naming the level, the minimum, and the count actually selected (`RAID 5 needs at least 4 drives; 3 selected.`) and re-prompts the drives step rather than advancing. Previously the under-count was caught by the engine only *after* the confirmation step, so the operator paid for the whole wizard before learning the layout was impossible. A level unknown to `_RAID_MIN_DRIVES` falls back to a minimum of `2` — the wizard never blocks on a level it cannot reason about, leaving the engine as the backstop.
+
+Because `level` is chosen *before* `drives`, revising the level on a Back visit can invalidate an already-collected drive selection (e.g. `5` → `50` with 4 drives picked). The check runs on every entry into the drives step, including re-entry with a prior selection pre-checked, so the stale-selection case is caught on the way forward rather than at dispatch.
 
 Changing the level on a Back visit can flip whether `group_size` applies going forward — e.g. going from `50` back to `5` — in which case the driver prunes the now-inapplicable `group_size` answer and the wizard skips straight past it on the next advance.
 
