@@ -26,7 +26,7 @@ from textual.widgets import Footer, Label
 
 from xinas_menu.api.control_client import ControlClient, ControlPathError, quote_id
 from xinas_menu.apptype import XiNASAppMixin
-from xinas_menu.screens.raid import _list_api_disks
+from xinas_menu.screens.raid import _list_api_disks_with_banner
 from xinas_menu.utils.xiraid_names import validate_pool_name
 from xinas_menu.widgets.checklist_dialog import ChecklistDialog
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -180,14 +180,19 @@ async def _get_pool_drives(control: ControlClient, pool_name: str) -> list[str]:
     return []
 
 
-async def _get_free_nvme_drives(control: ControlClient) -> list[dict[str, Any]]:
-    """NVMe drives available for pool use.
+async def _get_free_nvme_drives(
+    control: ControlClient,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """NVMe drives available for pool use, plus the degraded-backend banner.
 
     ``safe_for_use``, not the system disk, not a member/spare of an
     observed array (``claimed``), and not already in any spare pool.
-    Raises ControlPathError when the api is unreachable.
+    Raises ControlPathError when the api is unreachable. The banner
+    (second element) is the Disk collector's degraded-backend warning, if
+    any — an empty result with a warning means "nothing was observed", not
+    "there are no drives," same distinction the Create Array wizard makes.
     """
-    rows = await _list_api_disks(control)
+    rows, banner = await _list_api_disks_with_banner(control)
 
     pool_drives: set[str] = set()
     for pool in await _get_pools(control):
@@ -206,7 +211,12 @@ async def _get_free_nvme_drives(control: ControlClient) -> list[dict[str, Any]]:
         if d.get("device_path") in pool_drives or name in pool_drives:
             continue
         free.append(d)
-    return free
+    return free, banner
+
+
+def _no_free_drives_message(base: str, banner: str | None) -> str:
+    """Append the degraded-backend banner to a Spare Pools empty-state message."""
+    return f"{base}\n\n{banner}" if banner else base
 
 
 def _to_dev_paths(selected: list[str], rows: list[dict[str, Any]]) -> list[str]:
@@ -327,7 +337,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
 
         # Step 2: Select drives
         try:
-            free_drives = await _get_free_nvme_drives(self.app.control)
+            free_drives, disk_banner = await _get_free_nvme_drives(self.app.control)
         except ControlPathError as exc:
             await self.app.push_screen_wait(
                 ConfirmDialog(f"Could not list drives.\n{exc}", "Error", ok_only=True)
@@ -336,7 +346,11 @@ class SparePoolScreen(XiNASAppMixin, Screen):
         if not free_drives:
             await self.app.push_screen_wait(
                 ConfirmDialog(
-                    "No available drives found.\nAll drives are assigned to RAID arrays or other pools.",
+                    _no_free_drives_message(
+                        "No available drives found.\n"
+                        "All drives are assigned to RAID arrays or other pools.",
+                        disk_banner,
+                    ),
                     "Error",
                     ok_only=True,
                 )
@@ -391,7 +405,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             return
 
         try:
-            free_drives = await _get_free_nvme_drives(self.app.control)
+            free_drives, disk_banner = await _get_free_nvme_drives(self.app.control)
         except ControlPathError as exc:
             await self.app.push_screen_wait(
                 ConfirmDialog(f"Could not list drives.\n{exc}", "Error", ok_only=True)
@@ -399,7 +413,11 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             return
         if not free_drives:
             await self.app.push_screen_wait(
-                ConfirmDialog("No available drives found.", "Error", ok_only=True)
+                ConfirmDialog(
+                    _no_free_drives_message("No available drives found.", disk_banner),
+                    "Error",
+                    ok_only=True,
+                )
             )
             return
 
