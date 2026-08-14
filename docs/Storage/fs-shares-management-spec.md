@@ -306,7 +306,7 @@ Group quotas (`gquota` / `grpquota`) are *parsed* by `_quota_flags` and *accepte
 
 Share ids are percent-encoded with `quote_id()` on every path — a Share id mirrors `encExportId(path)` and **contains internal slashes** (`/mnt/data` → `mnt/data`), so an un-encoded id 404s. See [s8-clients-spec §6](../control-path/s8-clients-spec.md#6-tui-composite-teardown-t13).
 
-**Shared share read.** Every write action first calls `NFSScreen._get_exports()` (`GET /api/v1/shares` → `_rows_from_api`, keeping only rows with both a `path` and an `id`). It **propagates** `ControlPathError` rather than degrading to `[]`, so each caller can tell "the api is unreachable" apart from "this host has no shares" — Edit and Remove show an OK-only `Could not load shares.` dialog for the former and `No shares configured.` for the latter, and Add fails its `fsid` allocation closed (§4.5). Reporting an unreadable list as an empty one is what made the `fsid` allocator restart from `1` against a live host.
+**Shared share read.** Every write action first calls `NFSScreen._get_exports()` (`GET /api/v1/shares` → `_rows_from_api`, keeping only rows with both a `path` and an `id`). It **propagates** `ControlPathError` rather than degrading to `[]`, so each caller can tell "the api is unreachable" apart from "this host has no shares" — Edit and Remove show an OK-only `Could not load shares.` dialog for the former and `No shares configured.` for the latter. Add does not call it at all: `fsid` is server-allocated, so the wizard has nothing to read the list for (§4.5).
 
 **Shared failure rendering.** All three write actions funnel a `ControlPathError` through `NFSScreen._show_control_error(exc)`, which splits one case out of the generic path: a **lease conflict** (the resource is locked by another in-flight task) gets a calm OK-only *Resource Busy* dialog via `lease_conflict_message(exc)`, because the lock is short-lived and the periodic sweep bounds it — retrying is the right advice. Everything else keeps the plain OK-only `Failed: <error>` dialog. `_show_control_error` is deliberately **not** a `@work` worker: callers `await` it inline, and Textual 8.x `Worker` objects are not awaitable.
 
@@ -393,7 +393,6 @@ Then one `plan_apply_wait` — `POST /api/v1/shares` with the `NfsShare.spec`:
 ```json
 {
   "path": "/mnt/data/share1",
-  "fsid": 3,
   "clients": [
     { "pattern": "10.10.0.0/24", "options": ["rw", "no_root_squash", "no_subtree_check"] }
   ],
@@ -405,9 +404,7 @@ Three things to note, because the wizard's five answers do **not** map one-to-on
 
 - **`sync_mode` and `sec` are share-level fields, not client options.** `sync` always carries the wizard's answer; `security_mode` is added **only when `sec != "sys"`**. `_rows_from_api` folds both back into the client option list on read (§4.2), which is why the display and the Edit wizard still see them there.
 - **`no_subtree_check` is force-added** to every client's options even though the wizard doesn't ask — it's required for any export on an NFS appliance.
-- **`fsid` is allocated client-side, and the allocation fails closed.** `Share.spec.fsid` is **required** by the API ([api-v1.yaml](../control-path/api-v1.yaml)) — the server does not assign one — so the screen reads the current shares, collects every integer `fsid` already in use (accepting both int and numeric-string spellings), and assigns `max(used, default=0) + 1`. That read must therefore be **authoritative**: if `GET /api/v1/shares` fails, the wizard aborts on an OK-only `Could not read existing shares` dialog rather than allocating from an empty set. Allocating from a swallowed error would restart numbering at `1` and collide with every existing share — an `fsid` collision silently breaks NFSv4 client mounts, so guessing is worse than refusing.
-
-  What this does **not** fix: two operators adding a share at the same time can still compute the same number, because the allocation is client-side by construction. The api's plan is the backstop there. Moving allocation server-side would need an API change (`fsid` becoming optional), which is tracked separately.
+- **`fsid` is allocated server-side.** The wizard omits `spec.fsid` entirely; `POST /api/v1/shares` assigns the next integer above the highest in use, and concurrent creates that resolve the same number are serialised by the plan's absence pin on the fsid marker — the loser gets `PRECONDITION_FAILED` and re-plans. A caller that wants a specific number may still send one, and an `FSID_IN_USE` blocker says so if it is taken. See [docs/control-path/s3-nfs-executor-spec.md](../control-path/s3-nfs-executor-spec.md) §4.
 
 On success: `audit.log("nfs.add_export", path, "OK")` + `snapshots.record("share_create", diff_summary=…)` + Show is refreshed. On `ControlPathError`, `_show_control_error` renders it (§4.1).
 
@@ -524,9 +521,8 @@ NFSScreen._add_share_wizard()
   │    └─ sec (sys/krb5/krb5i/krb5p)
   ├─ ConfirmDialog (summary)
   ├─ os.makedirs(path, exist_ok=True)           — client-side, one clear error
-  ├─ GET /api/v1/shares                         — collect used fsids → max+1
   ├─ control.plan_apply_wait(POST /api/v1/shares)
-  │    ├─ spec: {path, fsid, clients:[{pattern, options}], sync,
+  │    ├─ spec: {path, clients:[{pattern, options}], sync,
   │    │         security_mode?}   — sync/sec are share-level, not options
   │    ├─ mode=plan  → plan_id, blockers checked
   │    ├─ mode=apply → task_id
@@ -601,7 +597,7 @@ YYYY-MM-DD HH:MM:SS | <user> | <action> | OK | <detail>
 
 | Failure | Where | Handling |
 |---|---|---|
-| `GET /api/v1/shares` unreachable | `_load_exports` / `_get_exports` | `_get_exports` **propagates** the `ControlPathError`; no caller degrades a failed read to "no shares". Show prints `Control API: <error>`; Add aborts its `fsid` scan (§4.5); Edit and Remove abort on an OK-only `Could not load shares.` dialog, distinct from the `No shares configured.` empty case. |
+| `GET /api/v1/shares` unreachable | `_load_exports` / `_get_exports` | `_get_exports` **propagates** the `ControlPathError`; no caller degrades a failed read to "no shares". Show prints `Control API: <error>`; Add does not read the list at all; Edit and Remove abort on an OK-only `Could not load shares.` dialog, distinct from the `No shares configured.` empty case. |
 | `Share` collector degraded behind a healthy api | `GET /api/v1/shares` envelope | `DEGRADED_BACKEND_UNAVAILABLE` warning → Show renders the banner, and an empty list shows the banner instead of `(no NFS shares configured)` (§4.2). |
 | Share write fails (plan blocked, task failed, api down) | `_show_control_error` | OK-only `Failed: <error>` dialog carrying the plan/task message; the flow aborts with no partial state (the apply is one task). |
 | Share write hits a lease conflict | `_show_control_error` → `lease_conflict_message` | OK-only *Resource Busy* dialog instead of the raw error — the resource is locked by another in-flight task and the lock is short-lived, so retrying is the advice (§4.1). |
@@ -610,8 +606,8 @@ YYYY-MM-DD HH:MM:SS | <user> | <action> | OK | <detail>
 | `nfs-kernel-server` not installed | helper startup health check | `xinas-nfs-helper` logs a warning at boot; first export op fails with `exportfs not found`. |
 | Non-absolute `path` to `add_export` | `nfs_helper.handle_add_export` | `INVALID_ARGUMENT` — `"entry.path must be absolute"`. The wizard rejects a non-`/` path before submitting, so this is a defence in depth. |
 | Export target directory missing | `nfs_helper.handle_add_export` | `NOT_FOUND` unless `create_path=true`. TUI's Add wizard pre-creates the directory client-side. |
-| Add Share cannot read the existing shares | `fsid` allocation (§4.5) | Fails closed: OK-only `Could not read existing shares` dialog, wizard aborts. It never allocates from an empty set. |
-| Two concurrent Add Shares allocate the same `fsid` | client-side `max(used)+1` allocation (§4.5) | Not prevented by the TUI — allocation is client-side by construction. The api's plan is the backstop. |
+| Explicit `fsid` already held by another share | create plan blocker | `FSID_IN_USE` on the returned plan, naming the share that holds it; reaches the operator through `_show_control_error` like any blocker. |
+| Two concurrent creates resolve the same `fsid` | fsid marker absence pin (api-side) | The second apply fails `PRECONDITION_FAILED`; re-planning allocates the next number. Nothing is required of the TUI. |
 | Quota toggle while NFS clients connected | XFS requires unmount cycle | `_manage_quotas` warns up front; clients are briefly disconnected during the stop/start. |
 | Quota toggle fails (unit missing, remount refused, plan blocked) | `PATCH {"quota_mode": …}` | `ControlPathError` → OK-only `Failed to update quotas:` dialog carrying the task/plan message, plus a red line in the view. No retry. |
 | fs.create task fails (live mountpoint, existing unit, mkfs error, log array too small) | control-path task terminal | `TaskFailed.error_message` carries the failing stage's message; an OK-only dialog shows it. **No force retry** unless the failure is the existing-filesystem destruction gate. |

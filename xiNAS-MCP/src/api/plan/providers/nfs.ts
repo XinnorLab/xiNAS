@@ -34,6 +34,12 @@
  */
 import { decExportId, encExportId } from '../../../lib/nfs-export-id.js';
 import { compileShareToExportEntry, shareSpecToCompileInput } from '../../../lib/nfs-exports.js';
+import {
+  allocateFsid,
+  collectUsedFsids,
+  SHARE_FSID_KIND,
+  shareFsidKey,
+} from '../../../lib/nfs-fsid.js';
 import { deriveProfileServiceAction, type NfsProfileSpec } from '../../../lib/nfs-profile.js';
 import { ApiException } from '../../errors.js';
 import type { PlanContext, PlanProvider, PlanResult } from '../engine.js';
@@ -51,7 +57,8 @@ interface RawShareSpec {
   id: string;
   path: string;
   clients: Array<{ pattern: string; options: string[] }>;
-  fsid: number | string;
+  /** Absent only on `share.create`, where the provider allocates one. */
+  fsid?: number | string;
   sync?: 'sync' | 'async';
   security_mode?: string;
 }
@@ -98,10 +105,17 @@ function validateIdAndPath(op: string, spec: unknown): { id: string; path: strin
 
 /**
  * Validate a full Share spec (create/update): id, absolute path, non-empty
- * `clients[]` of `{ pattern, options[] }` with non-empty string options, and a
- * present `fsid` (integer per OpenAPI; a numeric string is tolerated).
+ * `clients[]` of `{ pattern, options[] }` with non-empty string options, and —
+ * unless `allowMissingFsid` — a present `fsid` (integer per OpenAPI; a numeric
+ * string is tolerated). `share.create` passes `allowMissingFsid` and allocates;
+ * `share.update` does not, because an absent fsid there would erase the value
+ * already on the desired doc.
  */
-function validateShareSpec(op: string, spec: unknown): RawShareSpec {
+function validateShareSpec(
+  op: string,
+  spec: unknown,
+  { allowMissingFsid = false }: { allowMissingFsid?: boolean } = {},
+): RawShareSpec {
   validateIdAndPath(op, spec);
   const rec = spec as Record<string, unknown>;
 
@@ -123,16 +137,22 @@ function validateShareSpec(op: string, spec: unknown): RawShareSpec {
   }
 
   const fsid = rec.fsid;
-  // OpenAPI declares fsid as an integer; an integer-valued string is tolerated
-  // (Number.isInteger rejects 42.5, NaN, and ±Infinity in either form).
-  const fsidNum =
-    typeof fsid === 'number'
-      ? fsid
-      : typeof fsid === 'string' && fsid.trim().length > 0
-        ? Number(fsid)
-        : Number.NaN;
-  if (!Number.isInteger(fsidNum)) {
-    throw invalid(op, 'spec.fsid must be an integer (or integer string)');
+  if (fsid === undefined) {
+    if (!allowMissingFsid) {
+      throw invalid(op, 'spec.fsid must be an integer (or integer string)');
+    }
+  } else {
+    // OpenAPI declares fsid as an integer; an integer-valued string is tolerated
+    // (Number.isInteger rejects 42.5, NaN, and ±Infinity in either form).
+    const fsidNum =
+      typeof fsid === 'number'
+        ? fsid
+        : typeof fsid === 'string' && fsid.trim().length > 0
+          ? Number(fsid)
+          : Number.NaN;
+    if (!Number.isInteger(fsidNum)) {
+      throw invalid(op, 'spec.fsid must be an integer (or integer string)');
+    }
   }
 
   const sync = rec.sync;
@@ -207,8 +227,18 @@ const shareCreateProvider: PlanProvider = {
   operation_kind: 'share.create',
 
   async preflight(ctx: PlanContext, spec: unknown): Promise<PlanResult> {
-    const share = validateShareSpec('share.create', spec);
+    const share = validateShareSpec('share.create', spec, { allowMissingFsid: true });
     const exportId = encodeExportIdOrThrow('share.create', share.path);
+
+    // fsid: allocate when the caller omitted it; an explicit one that another
+    // share already holds is a BLOCKER, not a silent substitution — quietly
+    // changing the number yields a share that looks right and breaks on the
+    // client (design §6).
+    const usedFsids = collectUsedFsids(
+      ctx.kv.list<{ id?: unknown; spec?: { fsid?: unknown } }>({ prefix: DESIRED_SHARE_PREFIX }),
+    );
+    const explicitFsid = share.fsid === undefined ? undefined : Number(share.fsid);
+    const fsid = explicitFsid ?? allocateFsid(usedFsids.keys());
 
     const freshness = exportRuleFreshnessRef(ctx, exportId);
     const blockers: PlanResult['blockers'] = [];
@@ -218,13 +248,32 @@ const shareCreateProvider: PlanProvider = {
         message: `${share.path} is already exported; cannot create a second share on it`,
       });
     }
+    if (explicitFsid !== undefined && usedFsids.has(explicitFsid)) {
+      blockers.push({
+        code: 'FSID_IN_USE',
+        message:
+          `fsid ${explicitFsid} is already held by share ${usedFsids.get(explicitFsid)}; ` +
+          'omit spec.fsid to allocate a free one',
+      });
+    }
+
+    // The desired doc always carries a resolved integer fsid, whether the
+    // caller supplied it or we allocated it.
+    const resolvedSpec = { ...(spec as Record<string, unknown>), fsid };
 
     return {
       // ABSENCE pin: revision 0 asserts the desired row does NOT exist yet.
       // The apply txn's desired-revision check reads an absent row as 0, so a
       // Share/{id} that appeared between plan and apply (duplicate id) reads
       // >= 1 and fails PRECONDITION_FAILED instead of silently overwriting.
-      affected_resources: [{ kind: 'Share', id: share.id, revision: 0 }],
+      affected_resources: [
+        { kind: 'Share', id: share.id, revision: 0 },
+        // Absence pin on the fsid marker: two creates that allocated the same
+        // number both pin it at 0; the first apply writes it, the second reads
+        // 1 and fails PRECONDITION_FAILED, whose remediation is "re-run plan".
+        // Share stays FIRST — engine.ts checks affected_resources[0].
+        { kind: SHARE_FSID_KIND, id: String(fsid), revision: 0 },
+      ],
       blockers,
       warnings: [],
       diff: {
@@ -237,8 +286,9 @@ const shareCreateProvider: PlanProvider = {
       desired_mutations: [
         {
           key: `${DESIRED_SHARE_PREFIX}${share.id}`,
-          value: toDesiredShareDoc(spec as Record<string, unknown>),
+          value: toDesiredShareDoc(resolvedSpec),
         },
+        { key: shareFsidKey(fsid), value: { fsid, share_id: share.id } },
       ],
     };
   },
@@ -296,6 +346,17 @@ const shareDeleteProvider: PlanProvider = {
 
     const warning = activeSessionsWarning(ctx, path);
 
+    // Release the fsid marker so the number is not burned forever. A desired
+    // doc with no fsid is not reachable through the API but must not wedge the
+    // delete on a hand-edited store.
+    const desiredFsid = (desired.value as { spec?: { fsid?: unknown } })?.spec?.fsid;
+    const desiredFsidNum =
+      typeof desiredFsid === 'number'
+        ? desiredFsid
+        : typeof desiredFsid === 'string' && desiredFsid.trim().length > 0
+          ? Number(desiredFsid)
+          : Number.NaN;
+
     return {
       affected_resources: [{ kind: 'Share', id, revision: desired.revision }],
       blockers: [],
@@ -305,7 +366,14 @@ const shareDeleteProvider: PlanProvider = {
       rollback_model: 'reversible',
       state_revision_expected: desired.revision,
       observed_freshness_ref: exportRuleFreshnessRef(ctx, exportId),
-      desired_mutations: [{ key: `${DESIRED_SHARE_PREFIX}${id}`, delete: true }],
+      desired_mutations: [
+        { key: `${DESIRED_SHARE_PREFIX}${id}`, delete: true },
+        // `delete: true as const` — inside an array literal the plain `true`
+        // widens to `boolean`, which DesiredMutation's delete variant rejects.
+        ...(Number.isInteger(desiredFsidNum)
+          ? [{ key: shareFsidKey(desiredFsidNum), delete: true as const }]
+          : []),
+      ],
     };
   },
 };

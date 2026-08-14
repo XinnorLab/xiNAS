@@ -1939,6 +1939,14 @@ paths:
       tags: [nfs]
       operationId: createShare
       summary: Create a share (plan/apply).
+      description: |
+        `spec.fsid` may be omitted; the server assigns the next integer above
+        the highest currently in use (0 is reserved for the installer's root
+        export, and a gap left by a deleted share is not reused). Supplying an
+        `fsid` another share already holds returns an `FSID_IN_USE` blocker on
+        the plan rather than an error, so the operator sees the whole plan.
+        `fsid` is always present on read, which is why `Share.spec` still
+        requires it.
       requestBody: { $ref: '#/components/requestBodies/Mutating' }
       responses:
         '200': { $ref: '#/components/responses/PlanReturned' }
