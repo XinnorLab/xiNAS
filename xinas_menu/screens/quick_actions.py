@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import subprocess
 
 from textual import work
-from textual.app import ComposeResult
+from textual.app import ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
@@ -163,17 +164,26 @@ class QuickActionsScreen(XiNASAppMixin, Screen):
 
     @work(exclusive=True)
     async def _system_monitor(self) -> None:
-        """Launch btop if available, otherwise show top output snapshot."""
+        """Launch btop with the terminal handed over via App.suspend().
+
+        btop owns the alternate screen buffer and raw stdin while it runs —
+        the same resources Textual holds. See
+        docs/Management/quick-actions-spec.md.
+        """
         view = self.query_one("#qa-content", ScrollableTextView)
-        loop = asyncio.get_running_loop()
-        has_btop = await loop.run_in_executor(
-            None, lambda: subprocess.run(["which", "btop"], capture_output=True).returncode == 0
-        )
-        if has_btop:
-            view.set_content("Launching btop -- press q to return to menu.")
-            await loop.run_in_executor(None, lambda: subprocess.run(["btop"]))
-        else:
+        if shutil.which("btop") is None:
             view.set_content("btop is not installed.\n\nInstall with: sudo apt-get install btop")
+            return
+        view.set_content("Launching btop -- press q to return to menu.")
+        try:
+            with self.app.suspend():
+                # Synchronous on purpose: a suspended app is not rendering,
+                # so there is no event loop to keep responsive.
+                subprocess.run(["btop"], check=False)
+        except SuspendNotSupported:
+            view.set_content("btop needs a real terminal.\n\nThis app cannot be suspended here.")
+            return
+        view.set_content("btop closed.")
 
     @work(exclusive=True)
     async def _view_audit_log(self) -> None:
