@@ -36,6 +36,7 @@ from xinas_menu.api.control_client import (
 from xinas_menu.api.degraded import degraded_banner
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.utils.xfs_helpers import is_path_under
+from xinas_menu.utils.xiraid_names import partition_collision, validate_array_name
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.drive_picker import DrivePickerScreen
 from xinas_menu.widgets.input_dialog import InputDialog
@@ -45,7 +46,6 @@ from xinas_menu.widgets.task_wait_dialog import TaskWaitDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 from xinas_menu.widgets.wizard import BACK, CANCEL, WizardStep, run_wizard
 
-_ARRAY_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]
 _STRIP_SIZES = ["16", "32", "64", "128", "256"]
 _CPU_LIST_RE = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
@@ -456,6 +456,15 @@ class RAIDScreen(XiNASAppMixin, Screen):
             p_rows = []
         pools = _pools_by_name(p_rows)
 
+        # Existing array names feed the partition-identifier collision warning
+        # (spec §4). A failed fetch degrades the warning, it does not block the
+        # wizard — the hard name rules do not depend on it.
+        try:
+            a_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/arrays")
+        except ControlPathError:
+            a_rows = []
+        existing_names = list(_arrays_from_api(a_rows))
+
         async def name_step(answers, allow_back, step_no):
             default = answers.get("name", "")
             while True:
@@ -472,17 +481,19 @@ class RAIDScreen(XiNASAppMixin, Screen):
                     return CANCEL
                 if name is BACK:
                     return BACK
-                if len(name) > 64:
-                    self.app.notify("Array name must be 64 characters or fewer.", severity="error")
+                error = validate_array_name(name)
+                if error is not None:
+                    self.app.notify(error, severity="error")
                     default = name
                     continue
-                if not _ARRAY_NAME_RE.match(name):
-                    self.app.notify(
-                        "Array name must contain only letters, digits, hyphens, and underscores.",
-                        severity="error",
+                warning = partition_collision(name, existing_names)
+                if warning is not None:
+                    proceed = await self.app.push_screen_wait(
+                        ConfirmDialog(warning, "Possible Name Collision")
                     )
-                    default = name
-                    continue
+                    if not proceed:
+                        default = name
+                        continue
                 return name
 
         async def level_step(answers, allow_back, step_no):

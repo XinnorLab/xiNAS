@@ -18,7 +18,15 @@ const OBSERVED_POOL_PREFIX = '/xinas/v1/observed/Pool/';
 const OBSERVED_DISK_PREFIX = '/xinas/v1/observed/Disk/';
 const OBSERVED_ARRAY_PREFIX = '/xinas/v1/observed/XiraidArray/';
 
-const NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/**
+ * The 4.4 command reference documents no rule for `xicli pool create -n`, so
+ * xiNAS applies the documented ARRAY character set — Latin letters, digits and
+ * underscore, no hyphens — and keeps the incumbent 64-char bound rather than
+ * inventing a shorter one: the array executor derives pool names as
+ * `xnsp_<array>` (up to 33 chars), so a 28-char rule would outlaw the pools
+ * this system creates itself. See docs/Storage/raid-management-spec.md §7.3.
+ */
+const NAME_RE = /^[A-Za-z0-9_]{1,64}$/;
 
 function invalid(op: string, message: string): ApiException {
   return new ApiException('INVALID_ARGUMENT', `${op}: ${message}`);
@@ -27,7 +35,10 @@ function invalid(op: string, message: string): ApiException {
 function requireName(op: string, raw: unknown): string {
   const name = (raw as { name?: unknown })?.name;
   if (typeof name !== 'string' || !NAME_RE.test(name)) {
-    throw invalid(op, 'spec.name must match [A-Za-z0-9_-]{1,64}');
+    throw invalid(
+      op,
+      'spec.name must match [A-Za-z0-9_]{1,64} — Latin letters, digits and underscore only (no hyphens)',
+    );
   }
   return name;
 }

@@ -118,6 +118,26 @@ describe('validateCreateSpec', () => {
     expect(codes(spec({ name: 'taken' }))).toContain('name_taken');
   });
 
+  // The xiRAID Classic 4.4 engine rule for `xicli raid create -n`: <= 28 chars,
+  // Latin letters/digits/underscore, no hyphens. Anything looser is a name the
+  // engine rejects after the operator has confirmed the create.
+  it('rejects hyphens — xicli does not accept them', () => {
+    expect(codes(spec({ name: 'my-array' }))).toContain('name_invalid');
+  });
+
+  it('caps names at 28 characters', () => {
+    expect(codes(spec({ name: 'a'.repeat(28) }))).toEqual([]);
+    expect(codes(spec({ name: 'a'.repeat(29) }))).toContain('name_invalid');
+  });
+
+  it('rejects the names xiRAID prohibits (they collide with sysfs attributes)', () => {
+    expect(codes(spec({ name: 'power' }))).toContain('name_invalid');
+    expect(codes(spec({ name: 'uevent' }))).toContain('name_invalid');
+    // The sysfs attributes are lowercase, so only the exact names collide.
+    expect(codes(spec({ name: 'powerful' }))).toEqual([]);
+    expect(codes(spec({ name: 'Power' }))).toEqual([]);
+  });
+
   it('disk rules — one blocker per offending disk', () => {
     const f = facts({
       disks: [
@@ -166,11 +186,15 @@ describe('validateCreateSpec', () => {
     expect(codes(spec({ spare_disk_ids: ['d1'] }))).toContain('disk_in_use');
   });
 
-  it('derived pool name xnsp_<name> must fit the 63-char namespace', () => {
-    const longName = 'a'.repeat(60); // valid alone, xnsp_+60 = 65 > 63
+  it('the 28-char name cap subsumes the derived xnsp_<name> pool guard on create', () => {
+    // `xnsp_` + 28 = 33 always fits, so no create-time name can trip the
+    // derived-pool guard any more — the name rule rejects it first. The guard
+    // stays reachable on MODIFY, where the array name comes from observed
+    // state (an imported array may carry a name this rule would refuse).
+    const longName = 'a'.repeat(60);
     expect(codes(spec({ name: longName, spare_disk_ids: ['d5'] }))).toContain('name_invalid');
-    // without spares the same name is fine (no pool derived)
-    expect(codes(spec({ name: longName }))).toEqual([]);
+    expect(codes(spec({ name: longName }))).toContain('name_invalid');
+    expect(codes(spec({ name: 'a'.repeat(28), spare_disk_ids: ['d5'] }))).toEqual([]);
   });
 });
 

@@ -37,6 +37,31 @@ const DISK = (path: string, over: Record<string, unknown> = {}): Row => ({
 });
 
 describe('pool providers (S9 T8) — the S4 imperative freshness pattern', () => {
+  // Pool names are engine identifiers handed to the same `xicli` binary as
+  // array names. The 4.4 reference documents no rule for `xicli pool create -n`,
+  // so xiNAS applies the documented array character set: Latin letters, digits
+  // and underscore. Hyphens are not accepted anywhere xiRAID naming is
+  // documented. See docs/Storage/raid-management-spec.md §7.3.
+  it('create: rejects hyphenated names', async () => {
+    await expect(
+      poolCreateProvider.preflight(ctxWith([DISK('/dev/a')]), {
+        name: 'spare-1',
+        drives: ['/dev/a'],
+      }),
+    ).rejects.toThrow(/spec\.name/);
+  });
+
+  it('create: accepts an underscored name of the derived xnsp_<array> width', async () => {
+    // The array executor creates pools named `xnsp_<array>` — up to 33 chars
+    // with a 28-char array name — so the pool rule must not be narrower.
+    const derived = `xnsp_${'a'.repeat(28)}`;
+    const out = await poolCreateProvider.preflight(ctxWith([DISK('/dev/a')]), {
+      name: derived,
+      drives: ['/dev/a'],
+    });
+    expect(out.blockers).toEqual([]);
+  });
+
   it('create: absence pin (revision 0), lease, blockers for dup/system/unsafe', async () => {
     const clean = await poolCreateProvider.preflight(ctxWith([DISK('/dev/a')]), {
       name: 'spare1',

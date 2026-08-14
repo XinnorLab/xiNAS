@@ -23,6 +23,7 @@ import {
   NAME_RE,
   PRIO_MAX,
   PRIO_MIN,
+  RESERVED_NAMES,
   STRIP_SIZES_KIB,
   SYND_CNT_MAX,
   SYND_CNT_MIN,
@@ -91,7 +92,12 @@ export function validateCreateSpec(spec: XiraidArraySpec, facts: CreateFacts): B
 
   // --- name ---
   if (!NAME_RE.test(spec.name)) {
-    push('name_invalid', `array name '${spec.name}' must match ${NAME_RE}`);
+    push(
+      'name_invalid',
+      `array name '${spec.name}' must match ${NAME_RE} — xiRAID accepts at most 28 characters of Latin letters, digits and underscore (no hyphens)`,
+    );
+  } else if (RESERVED_NAMES.includes(spec.name)) {
+    push('name_invalid', `array name '${spec.name}' is prohibited by xiRAID`);
   } else if (facts.existingArrayNames.includes(spec.name)) {
     push('name_taken', `an array named '${spec.name}' already exists`);
   }

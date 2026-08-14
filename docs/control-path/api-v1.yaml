@@ -590,7 +590,18 @@ components:
           type: object
           required: [name, level, member_disk_ids]
           properties:
-            name: { type: string, pattern: "^[A-Za-z0-9_-]{1,63}$" }
+            name:
+              type: string
+              pattern: "^[A-Za-z0-9_]{1,28}$"
+              description: >-
+                xiRAID Classic 4.4 engine rule for `xicli raid create -n`: at most 28
+                characters, Latin letters/digits/underscore only (no hyphens). The names
+                `power` and `uevent` are additionally rejected by the plan validator
+                (they collide with sysfs attributes under /sys/block/xi_<name>/), and a
+                name that differs from an existing array's name only by trailing digits
+                is warned about — partitions of /dev/xi_test surface as /dev/xi_test1.
+                Tightened from ^[A-Za-z0-9_-]{1,63}$, which advertised names the engine
+                always rejected; see docs/Storage/raid-management-spec.md §4 "Step — name".
             level:
               type: string
               enum: [raid0, raid1, raid5, raid6, raid7, raid10, raid50, raid60, raid70, "n+m"]

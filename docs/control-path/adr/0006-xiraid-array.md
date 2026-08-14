@@ -25,6 +25,8 @@ Decisions taken during brainstorming (2026-06-07), which this ADR records:
 
 Array **`id == spec.name`**. xiRAID array names are unique per node, `Filesystem.spec.backing_device` resolves to `/dev/xi_<name>`, and the installer/Ansible day-1 path already keys on the name — so the name is the natural, stable join key. Names match `^[A-Za-z0-9_-]{1,63}$`. Import surfaces a foreign xiRAID UUID; it is mapped to a control-path id at adopt time via the `new_name` field (see *Import*).
 
+> **Correction (2026-08-14).** The `^[A-Za-z0-9_-]{1,63}$` above was never the engine's rule. xiRAID Classic 4.4 accepts **at most 28 characters of Latin letters, digits and underscore — no hyphens** — and prohibits the names `power` and `uevent` ([command reference](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html)). The corrected rule, and the reasoning behind tightening the published `api-v1.yaml` pattern to match it, live in [docs/Storage/raid-management-spec.md](../../Storage/raid-management-spec.md) §4 "Step — name". Everything else in this section stands: the identity decision does not depend on the width of the character class.
+
 ### Agent sandbox prerequisite (transport)
 
 The gRPC client dials the xiRAID daemon over **TCP with TLS** (`host:port` from `/etc/xraid/net.conf`, default `localhost:6066`). The hardened agent unit currently sets `RestrictAddressFamilies=AF_UNIX AF_NETLINK` (`xinas-agent.service`), which blocks any TCP socket — the collector/executor would fail at `connect()` before any logic runs.
