@@ -10,8 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 
-from xinas_menu.screens.raid import _list_api_disks, _list_api_disks_with_banner
+from xinas_menu.screens.raid import (
+    RAIDScreen,
+    _list_api_disks,
+    _list_api_disks_with_banner,
+    _no_drives_message,
+)
 
 
 class _StubControl:
@@ -61,12 +67,19 @@ def test_plain_wrapper_still_returns_rows_only():
     assert rows == []
 
 
-def test_wizard_shows_the_banner_in_its_empty_state():
-    """The abort dialog must render the banner, not just the generic sentence."""
-    src = inspect.getsource(
-        __import__("xinas_menu.screens.raid", fromlist=["RAIDScreen"]).RAIDScreen._create_array_wizard
-    )
-    assert "_list_api_disks_with_banner" in src
-    assert "No available NVMe drives found." in src
-    # The banner has to reach the dialog text, not be fetched and dropped.
-    assert "banner" in src
+def test_no_drives_message_carries_the_banner():
+    out = _no_drives_message("Disk collector unavailable")
+    assert "No available NVMe drives found." in out
+    assert "Disk collector unavailable" in out
+
+
+def test_no_drives_message_is_plain_without_a_banner():
+    assert _no_drives_message(None) == "No available NVMe drives found."
+    assert _no_drives_message("") == "No available NVMe drives found."
+
+
+def test_wizard_passes_the_fetched_banner_into_the_message():
+    """Guards the fetch-and-drop regression: the banner the wizard fetched must
+    be the one it renders, not a discarded local."""
+    src = inspect.getsource(RAIDScreen._create_array_wizard)
+    assert re.search(r"_no_drives_message\(\s*disk_banner\s*\)", src)
