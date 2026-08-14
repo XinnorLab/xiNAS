@@ -20,6 +20,9 @@ dev = [
   "ruff>=0.6.0",
   "pytest>=8.0",
   "pytest-cov>=5.0",
+  # tests/test_storage_state_fail_closed.py replays an Ansible set_fact chain
+  # through Jinja; ansible ships it on the host, CI needs it explicitly.
+  "jinja2>=3.0",
   # TUI runtime deps, mirrored from collection/roles/xinas_menu/tasks/main.yml
   # (the deployment venv) and install.sh so pyright/tests resolve the same
   # versions CI ships. Keep the pins in sync across all three. textual is
