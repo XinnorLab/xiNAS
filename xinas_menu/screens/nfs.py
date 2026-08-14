@@ -176,11 +176,6 @@ class NFSScreen(XiNASAppMixin, Screen):
         elif key == "6":
             self._configure_idmapd()
 
-    async def _get_export_paths(self) -> list[str]:
-        """Fetch current export paths from the control-path API."""
-        exports = await self._get_exports()
-        return [e["path"] for e in exports]
-
     async def _get_exports(self) -> list[dict]:
         """Fetch shares from the control-path API, adapted to legacy rows."""
         try:
