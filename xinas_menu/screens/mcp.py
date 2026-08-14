@@ -369,7 +369,7 @@ class MCPScreen(XiNASAppMixin, Screen):
         for svc in ("xinas-nfs-helper",):
             ok, err = await loop.run_in_executor(None, lambda s=svc: ctl.restart(s))
             all_ok = all_ok and ok
-            results.append(f"  {svc}: {'OK' if ok else err[:60]}")
+            results.append(f"  {svc}: {'OK' if ok else (err[:60] or 'failed')}")
         self.app.audit.log("mcp.restart", "xinas-nfs-helper", "OK" if all_ok else "FAIL")
         view = self.query_one("#mcp-content", ScrollableTextView)
         header = "Services restarted:" if all_ok else "Service restart FAILED:"
@@ -402,7 +402,7 @@ class MCPScreen(XiNASAppMixin, Screen):
         self.app.audit.log(
             "mcp.control_plane_restart",
             "xinas-api,xinas-agent",
-            "OK" if all_ok else "FAILED",
+            "OK" if all_ok else "FAIL",
         )
         lines = [f"  {svc}: {'OK' if ok else (err[:60] or 'failed')}" for svc, ok, err in results]
         header = _GRN if all_ok else _RED
@@ -1089,6 +1089,7 @@ class SSHAccessScreen(XiNASAppMixin, Screen):
             self.app.audit.log("ssh.root_enable", "", "OK")
             view.set_content(f"{_GRN}Root SSH enabled.{_NC}")
         else:
+            self.app.audit.log("ssh.root_enable", "", "FAIL")
             view.set_content(f"{_RED}Failed: {err}{_NC}")
         self._show_status()
 
@@ -1101,9 +1102,15 @@ class SSHAccessScreen(XiNASAppMixin, Screen):
             return
         try:
             self._SSH_CFG.unlink(missing_ok=True)
-            subprocess.run(["systemctl", "reload", "sshd"], capture_output=True)
-            self.app.audit.log("ssh.root_disable", "", "OK")
+            r = subprocess.run(["systemctl", "reload", "sshd"], capture_output=True, text=True)
+            if r.returncode != 0:
+                self.app.audit.log("ssh.root_disable", "", "FAIL")
+                view = self.query_one("#ssh-content", ScrollableTextView)
+                view.set_content(f"{_RED}Failed: {r.stderr.strip() or 'reload failed'}{_NC}")
+            else:
+                self.app.audit.log("ssh.root_disable", "", "OK")
         except Exception as exc:
+            self.app.audit.log("ssh.root_disable", "", "FAIL")
             view = self.query_one("#ssh-content", ScrollableTextView)
             view.set_content(f"{_RED}{exc}{_NC}")
         self._show_status()
