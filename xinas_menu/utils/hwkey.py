@@ -91,7 +91,7 @@ def compute_hwkey(
 
 def format_hwkey(key: int) -> str:
     """Render like the kernel's snprintf("%08llX", key): uppercase, min width 8."""
-    return "%08X" % key  # noqa: UP031
+    return f"{key:08X}"
 
 
 # Validated against the C oracle; absent fields shown as the literal b"(null)".
@@ -165,7 +165,7 @@ def read_module_hwkey(module: str = DEFAULT_MODULE, *, sysfs_root: str = "/") ->
     try:
         with open(path) as fh:
             return fh.read().strip()
-    except OSError:
+    except (OSError, ValueError):
         return None
 
 

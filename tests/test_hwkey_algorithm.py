@@ -88,6 +88,17 @@ def test_dmi_absent_maps_to_null(tmp_path):
     assert not f.present and f.value == b"(null)"
 
 
+def test_dmi_preserves_spaces_strips_only_newline(tmp_path):
+    import os
+
+    d = os.path.join(str(tmp_path), "sys/class/dmi/id")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "product_serial"), "w") as fh:
+        fh.write("SN 12345  \n")  # trailing spaces before the newline
+    f = read_dmi_field("product_serial", sysfs_root=str(tmp_path))
+    assert f.value == b"SN 12345  "  # only the newline is stripped; spaces preserved
+
+
 @pytest.mark.skipif(
     hasattr(os, "geteuid") and os.geteuid() == 0,
     reason="root bypasses file permissions, so chmod(0) would not raise",

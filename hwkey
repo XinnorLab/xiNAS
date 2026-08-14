@@ -51,8 +51,10 @@ def main(argv=None):
     if args.self_test:
         bad = 0
         for ps, uu, bs, v2, legacy in hk.GOLDEN_VECTORS:
-            if hk.format_hwkey(hk.compute_hwkey(ps, uu, bs)) != v2 or \
-               hk.format_hwkey(hk.compute_hwkey(ps, uu, bs, legacy=True)) != legacy:
+            if (
+                hk.format_hwkey(hk.compute_hwkey(ps, uu, bs)) != v2
+                or hk.format_hwkey(hk.compute_hwkey(ps, uu, bs, legacy=True)) != legacy
+            ):
                 bad += 1
         n = len(hk.GOLDEN_VECTORS)
         print(f"self-test: {n - bad}/{n} vectors passed")
@@ -65,11 +67,20 @@ def main(argv=None):
         return 2
 
     if args.json:
-        print(json.dumps({
-            "hwkey": r.v2, "hwkey_legacy": r.legacy, "dmi": r.dmi,
-            "dmi_present": r.present, "module_hwkey": r.module_hwkey,
-            "module_matches": r.module_matches,
-        }, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "hwkey": r.v2,
+                    "hwkey_legacy": r.legacy,
+                    "dmi": r.dmi,
+                    "dmi_present": r.present,
+                    "module_hwkey": r.module_hwkey,
+                    "module_matches": r.module_matches,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
 
     if args.details:
@@ -84,7 +95,7 @@ def main(argv=None):
             print(f"  live module ({args.module}) : {r.module_hwkey}  [{status}]")
         absent = [n for n, ok in r.present.items() if not ok]
         if absent:
-            print(f"  WARNING: absent DMI fields hashed as \"(null)\": {', '.join(sorted(absent))}")
+            print(f'  WARNING: absent DMI fields hashed as "(null)": {", ".join(sorted(absent))}')
         return 0
 
     print(r.legacy if args.legacy else r.v2)
