@@ -70,12 +70,20 @@ export interface LevelConstraints {
 }
 
 /**
- * `minDrives` is what the **engine** enforces, not textbook RAID math: xiRAID
- * Classic rejects RAID 5 under 4 drives (`Error: To create RAID level '5', a
- * minimum of '4' disks are required.`) and RAID 50/60 under 8. The numbers were
- * read off those rejection messages on xiRAID Classic 4.4 — `xicli raid create
- * --help` does not document them — so they are version-specific and must be
- * re-confirmed when the engine version moves.
+ * Minimum drive counts are xiRAID's, published per level in the
+ * Administrator's Guide "RAIDs explained" page (xiRAID Classic 4.4.0):
+ * https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/xiraid_raids_explained.html
+ *
+ * They are NOT textbook RAID minimums. An earlier pass sourced them from the
+ * engine's rejection messages and got raid7, raid70 and n+m too LOW (4, 8, 4
+ * against the published 6, 12, 8), so a spec under the engine's floor produced
+ * no `min_drives` blocker and failed later at `raid_create` instead. Keep them
+ * >= the AG numbers; a stricter xiNAS floor is fine, a looser one is a bug.
+ *
+ * raid10 is one such deliberate stricter floor: AG allows 2 (even), xiNAS
+ * requires 4. AG's other per-level rules — raid10's even member count and the
+ * group-size floors (>= 4 for raid50/60, >= 6 for raid70) — are not expressed
+ * in this table.
  *
  * docs/Storage/raid-management-spec.md §4 owns the table; the TUI Create Array
  * wizard (`_RAID_MIN_DRIVES` in xinas_menu/screens/raid.py) and the installer
@@ -83,34 +91,43 @@ export interface LevelConstraints {
  * carry the same values. Changing one without the others is review finding #4.
  */
 export const LEVEL_CONSTRAINTS: Record<Level, LevelConstraints> = {
-  raid0: { minDrives: 2, needsGroupSize: false, needsSyndCnt: false },
+  raid0: { minDrives: 1, needsGroupSize: false, needsSyndCnt: false },
   raid1: { minDrives: 2, needsGroupSize: false, needsSyndCnt: false },
   raid5: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
   raid6: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
-  raid7: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
+  raid7: { minDrives: 6, needsGroupSize: false, needsSyndCnt: false },
   raid10: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
   raid50: { minDrives: 8, needsGroupSize: true, needsSyndCnt: false },
   raid60: { minDrives: 8, needsGroupSize: true, needsSyndCnt: false },
-  raid70: { minDrives: 8, needsGroupSize: true, needsSyndCnt: false },
-  'n+m': { minDrives: 4, needsGroupSize: false, needsSyndCnt: true },
+  raid70: { minDrives: 12, needsGroupSize: true, needsSyndCnt: false },
+  'n+m': { minDrives: 8, needsGroupSize: false, needsSyndCnt: true },
 };
 
 export const STRIP_SIZES_KIB = [16, 32, 64, 128, 256] as const;
 export const BLOCK_SIZES = [512, 4096] as const;
 /**
- * xiRAID Classic 4.4 rule for `xicli raid create -n/--name`: at most 28
- * characters of Latin letters, digits and underscore. Hyphens are NOT
- * accepted. See docs/Storage/raid-management-spec.md §4 "Step — name".
+ * xiRAID Classic 4.4 rule for `xicli raid create -n/--name`, per the command
+ * reference (https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html): at most 28
+ * characters of Latin letters, digits and underscore. Hyphens are NOT accepted.
+ * Was `^[A-Za-z0-9_-]{1,63}$` — hyphens are not valid and the cap was more than
+ * twice the documented limit. See docs/Storage/raid-management-spec.md §4.
  */
 export const NAME_RE = /^[A-Za-z0-9_]{1,28}$/;
 
 /**
- * Names xiRAID prohibits outright — they collide with the sysfs attributes
- * under /sys/block/xi_<name>/, which are lowercase, so the match is exact.
+ * Names xiRAID prohibits outright (same reference) — they collide with the
+ * sysfs attributes under /sys/block/xi_<name>/, which are lowercase, so the
+ * match is exact.
  */
 export const RESERVED_NAMES: readonly string[] = ['power', 'uevent'];
 
-export const GROUP_SIZE_MIN = 2;
+/**
+ * group_size range per the 4.4.0 command reference: 4-32. Was 2-32, taken from
+ * the internal source-tree analysis. The Administrator's Guide is stricter
+ * still per level (>= 4 for raid50/60, >= 6 for raid70); only the generic
+ * range is enforced here.
+ */
+export const GROUP_SIZE_MIN = 4;
 export const GROUP_SIZE_MAX = 32;
 export const SYND_CNT_MIN = 4;
 export const SYND_CNT_MAX = 32;

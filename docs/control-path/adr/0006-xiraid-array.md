@@ -117,10 +117,10 @@ The gRPC client dials the xiRAID daemon over **TCP with TLS** (`host:port` from 
 
 | Field | Create | Modify (live) | Notes |
 |-------|:------:|:-------------:|-------|
-| `spec.name` | ✅ required | ❌ `UNSUPPORTED` | Identity; rename = destroy+recreate. |
+| `spec.name` | ✅ required | ❌ `UNSUPPORTED` | Identity; rename = destroy+recreate. Constrained by xiRAID, not by us: **≤ 28 chars, `[A-Za-z0-9_]` only, and `power`/`uevent` prohibited** ([CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html) §*RAID array naming rules*). *(Amended 2026-08-14: `NAME_RE` was `^[A-Za-z0-9_-]{1,63}$` — hyphens allowed and more than twice the length limit.)* |
 | `spec.level` | ✅ required | ❌ `UNSUPPORTED` | Topology; immutable after create. |
 | `spec.member_disk_ids` | ✅ required | ❌ `UNSUPPORTED` | Topology; reshaping members is not a Phase-0 modify. |
-| `spec.group_size` | ✅ (**required** for `raid50/60/70`) | ❌ `UNSUPPORTED` | Drives per group; `[2,32]`; member count must divide evenly. |
+| `spec.group_size` | ✅ (**required** for `raid50/60/70`) | ❌ `UNSUPPORTED` | Drives per group; **`[4,32]`**; member count must divide evenly into ≥ 2 groups. *(Amended 2026-08-14: was `[2,32]`, taken from the internal source-tree analysis. [CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html) gives 4–32, and [AG / RAIDs explained](https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/xiraid_raids_explained.html) requires group size ≥ 4 for raid50/60 and ≥ 6 for raid70 — the raid70 floor is **not** yet enforced separately.)* |
 | `spec.synd_cnt` | ✅ (**required** for `n+m`) | ❌ `UNSUPPORTED` | Syndrome count (the `m`); `[4,32]`. |
 | `spec.strip_size_kib` | ✅ | ❌ `UNSUPPORTED` | From the xiRAID `STRIP_SIZES_KB` set (powers of two; `{16,32,64,128,256}`). |
 | `spec.block_size` | ✅ | ❌ `UNSUPPORTED` | `512` or `4096`. |
@@ -158,7 +158,21 @@ xiRAID models spares as **pool objects** with their own lifecycle (`pool_create 
 A shared **`xiNAS-MCP/src/lib/xiraid/`** module is the single home for array logic, so the API and the agent never duplicate it (the ADR-0005 rule):
 
 - `schema.ts` — the writable spec type + the writability metadata above + the level→constraints table.
-- `validate.ts` — the RAID-semantic rules (min drives per level per the xiRAID constants; `group_size`/`synd_cnt` rules; param ranges; name regex). **Pure**: disk facts are passed in by the caller, so the same function runs in the api (against observed `Disk`/`XiraidArray` state) and in the executor (against live agent-side facts).
+- `validate.ts` — the RAID-semantic rules (min drives per level; `group_size`/`synd_cnt` rules; param ranges; name regex).
+
+  > *(Amended 2026-08-14.)* "Per the xiRAID constants" used to mean *per the
+  > internal source-tree analysis in `xiraid-analysis/api_behavior_doc.md`*.
+  > It now means **per [AG / RAIDs explained](https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/xiraid_raids_explained.html)**,
+  > which publishes the per-level requirements the analysis never recorded:
+  > raid0 ≥ 1, raid1 ≥ 2, **raid5 ≥ 4**, raid6 ≥ 4, **raid7 (7.3) ≥ 6**,
+  > raid10 ≥ 2 (even), **raid50 ≥ 8**, raid60 ≥ 8, **raid70 ≥ 12**,
+  > **n+m ≥ 8**. `LEVEL_CONSTRAINTS` was below the engine on five of the ten
+  > levels (raid5, raid7, raid50, raid70, n+m), so `validateCreateSpec`
+  > returned no `min_drives` blocker for specs xiRAID then rejected at
+  > `raid_create` — the plan looked clean and the executor failed. Two rules
+  > the validator still does **not** enforce, both documented by AG:
+  > raid10's even-member-count rule, and raid70's group size ≥ 6 (the generic
+  > `[4,32]` range applies instead). **Pure**: disk facts are passed in by the caller, so the same function runs in the api (against observed `Disk`/`XiraidArray` state) and in the executor (against live agent-side facts).
 - `translate.ts` — control-path `spec` + the resolved `device_by_id` map → the gRPC `RaidCreateRequest` / `RaidModifyRequest` (`raid6 → "6"`, `n+m → "n+m"` + `synd_cnt`, `strip_size_kib → strip_size`, booleans → `0/1`, `member_disk_ids → drives` via `device_by_id`, `null` tuning omitted). Never emits `force`.
 
 ### API endpoints (REST)
