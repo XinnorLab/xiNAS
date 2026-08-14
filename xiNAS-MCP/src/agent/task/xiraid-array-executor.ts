@@ -16,6 +16,7 @@
  * deliberately spec-only).
  */
 
+import type { MountGuardEntry } from '../../lib/parse/mountinfo.js';
 import { parsePoolShow } from '../../lib/parse/pool.js';
 import { type RaidShowEntry, parseRaidShowEntries } from '../../lib/parse/raid.js';
 import { derivedPoolName, parseCreateSpec } from '../../lib/xiraid/validate.js';
@@ -590,13 +591,42 @@ export interface XiraidArrayDeleteExecutorOptions {
    * FAIL-CLOSED: if mounts cannot be read, preflight throws and nothing is
    * destroyed.
    */
-  readMounts: () => Promise<Array<{ source: string; mountpoint: string }>>;
+  readMounts: () => Promise<MountGuardEntry[]>;
   /** verify wait-gone poll cadence; injectable for tests. */
   pollIntervalMs?: number;
   /** verify wait-gone bound — a synchronous raid_destroy clears immediately;
    *  this only tolerates async propagation before declaring the array stuck. */
   timeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Mount options that name a SEPARATE block device the filesystem depends on.
+ * XFS prints both in its super options (`xfs_fs_show_options`), so a mount
+ * whose `source` is another volume can still be destroyed out from under by
+ * deleting the array named here.
+ */
+const EXTERNAL_DEVICE_OPTIONS = ['logdev', 'rtdev'];
+
+/**
+ * First mount that references *volume* through an external-device option.
+ * Both option lists are searched: the fs-specific options live in
+ * `super_options`, but a reader that flattens the two must not slip past.
+ */
+function findExternalDeviceUse(
+  mounts: MountGuardEntry[],
+  volume: string,
+): { mountpoint: string; option: string } | undefined {
+  for (const mount of mounts) {
+    for (const opt of [...(mount.options ?? []), ...(mount.super_options ?? [])]) {
+      const eq = opt.indexOf('=');
+      if (eq === -1) continue;
+      const key = opt.slice(0, eq);
+      if (!EXTERNAL_DEVICE_OPTIONS.includes(key)) continue;
+      if (opt.slice(eq + 1) === volume) return { mountpoint: mount.mountpoint, option: key };
+    }
+  }
+  return undefined;
 }
 
 function narrowDeleteSpec(ctx: ExecutorContext): { id: string } {
@@ -639,7 +669,19 @@ export function makeXiraidArrayDeleteExecutor(opts: XiraidArrayDeleteExecutorOpt
           `preflight: ${volume} is mounted at ${busy.mountpoint} — unmount it before deleting`,
         );
       }
-      ctx.emitOutput(`preflight ok: '${id}' exists and ${volume} is not mounted`);
+      // Same data loss, different shape: a filesystem can depend on the
+      // volume WITHOUT mounting it — XFS carries its journal (logdev=) or
+      // realtime section (rtdev=) on a separate device. Destroying that
+      // device under the mounted filesystem corrupts it, so an external
+      // reference blocks the delete exactly like a direct mount.
+      const external = findExternalDeviceUse(mounts, volume);
+      if (external) {
+        throw new Error(
+          `preflight: ${volume} is in use as the ${external.option} device of the ` +
+            `filesystem mounted at ${external.mountpoint} — unmount it before deleting`,
+        );
+      }
+      ctx.emitOutput(`preflight ok: '${id}' exists and ${volume} is not in use by any mount`);
     },
   };
 

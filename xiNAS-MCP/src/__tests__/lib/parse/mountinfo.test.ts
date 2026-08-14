@@ -53,4 +53,24 @@ describe('parseMountinfo', () => {
     expect(mounts).toHaveLength(1);
     expect(mounts[0]?.source).toBe('/dev/disk/by-label/my disk');
   });
+
+  // The fs-specific options (where XFS reports logdev=/rtdev=) live in the
+  // SUPER-options field after the '-' separator, not in the per-mount VFS
+  // options field. The xiRAID delete guard needs them to see an array used
+  // only as an external log device.
+  it('retains the fs-specific super options separately from the VFS options', () => {
+    const raw =
+      '100 22 259:1 / /srv/share01 rw,noatime shared:50 - xfs /dev/xi_data ' +
+      'rw,attr2,inode64,logbufs=8,logdev=/dev/xi_log,noquota';
+    const mount = parseMountinfo(raw)[0];
+    expect(mount?.options).toEqual(['rw', 'noatime']);
+    expect(mount?.super_options).toContain('logdev=/dev/xi_log');
+    expect(mount?.super_options).toContain('attr2');
+  });
+
+  it('super options default to empty when the field is absent', () => {
+    const raw = '123 22 253:1 / /mnt/data rw shared:2 - xfs /dev/xi_data';
+    const mount = parseMountinfo(raw)[0];
+    expect(mount?.super_options).toEqual([]);
+  });
 });

@@ -12,9 +12,29 @@ export interface MountEntry {
   mount_id: number;
   parent_id: number;
   mountpoint: string;
+  /** Per-mount VFS options (rw, relatime, nosuid, …). */
   options: string[];
   fstype: string;
   source: string;
+  /**
+   * Filesystem-specific super options (the last field). XFS reports its
+   * external devices here — `logdev=/dev/xi_<array>`, `rtdev=…` — which is
+   * how a mount can depend on a block device that is not its `source`.
+   */
+  super_options: string[];
+}
+
+/**
+ * Mount rows as the destructive guards consume them: source + mountpoint,
+ * plus whatever option lists the reader could supply. Both option lists are
+ * optional so fixture/e2e readers stay valid, and both are searched for
+ * external-device references.
+ */
+export interface MountGuardEntry {
+  source: string;
+  mountpoint: string;
+  options?: string[];
+  super_options?: string[];
 }
 
 /**
@@ -55,6 +75,7 @@ export function parseMountinfo(raw: string): MountEntry[] {
     const mountOptionsRaw = preFields[5] ?? '';
     const fstype = postFields[0] ?? '';
     const source = decodeOctalEscapes(postFields[1] ?? '');
+    const superOptionsRaw = postFields[2] ?? '';
 
     if (isNaN(mount_id) || isNaN(parent_id) || mountpoint === '') continue;
 
@@ -65,6 +86,11 @@ export function parseMountinfo(raw: string): MountEntry[] {
       options: mountOptionsRaw.split(',').filter((o) => o !== ''),
       fstype,
       source,
+      // Decoded like the path fields: an external-device option carries a
+      // device path the guards compare against.
+      super_options: decodeOctalEscapes(superOptionsRaw)
+        .split(',')
+        .filter((o) => o !== ''),
     });
   }
   return entries;

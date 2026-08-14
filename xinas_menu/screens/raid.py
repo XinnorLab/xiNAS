@@ -960,6 +960,105 @@ class RAIDScreen(XiNASAppMixin, Screen):
             )
         )
 
+    async def _delete_dependencies(
+        self, arr_name: str, volume_path: str, mounts: list[dict]
+    ) -> tuple[list[dict], list[dict]] | None:
+        """Discover what the teardown must remove before destroying the array.
+
+        FAIL-CLOSED (raid-management-spec §6.1): a control-path read that
+        errors out is not evidence of "no dependencies" — it is an unknown.
+        Any read failure aborts the deletion with the error surfaced and
+        nothing changed. Likewise a dependent mount the teardown cannot
+        unmount (typically an XFS filesystem using the array only as its
+        external log device, which the API does not model as
+        ``backing_device``) blocks the deletion here, before any share is
+        removed: the agent's delete preflight would refuse the destroy at
+        the last step anyway.
+
+        Returns ``(affected_shares, affected_filesystems)``, or ``None``
+        when the deletion was aborted (the dialog is already shown).
+        """
+        mountpoints = {m["mountpoint"] for m in mounts if m.get("mountpoint")}
+
+        # ── Affected shares: GET /shares filtered to paths under those
+        # mountpoints ─────────────────────────────────────────────────────
+        affected_shares: list[dict] = []  # [{id, path}]
+        if mountpoints:
+            try:
+                share_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
+            except ControlPathError as exc:
+                await self._delete_aborted(
+                    f"Could not read NFS shares from the control path:\n{exc}",
+                    arr_name,
+                )
+                return None
+            for doc in share_rows if isinstance(share_rows, list) else []:
+                if not isinstance(doc, dict):
+                    continue
+                doc_spec = doc.get("spec")
+                path = doc_spec.get("path") if isinstance(doc_spec, dict) else None
+                sid = doc.get("id")
+                if not path or sid is None:
+                    continue
+                if any(is_path_under(str(path), mp) for mp in mountpoints):
+                    affected_shares.append({"id": str(sid), "path": str(path)})
+
+        # ── Affected filesystems (mount units): backed by the array's
+        # volume, or mounted on one of the affected mountpoints ──────────
+        affected_fs: list[dict] = []  # [{id, mountpoint, mounted}]
+        try:
+            fs_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/filesystems")
+        except ControlPathError as exc:
+            await self._delete_aborted(
+                f"Could not read filesystems from the control path:\n{exc}",
+                arr_name,
+            )
+            return None
+        for doc in fs_rows if isinstance(fs_rows, list) else []:
+            if not isinstance(doc, dict):
+                continue
+            status = doc.get("status")
+            status = status if isinstance(status, dict) else {}
+            fid = doc.get("id")
+            if fid is None:
+                continue
+            mp = str(status.get("mountpoint") or "")
+            if status.get("backing_device") == volume_path or (mp and mp in mountpoints):
+                affected_fs.append(
+                    {"id": str(fid), "mountpoint": mp, "mounted": status.get("mounted") is True}
+                )
+
+        # ── Dependents the teardown cannot clear (log/data device usage
+        # with no matching mount unit) ───────────────────────────────────
+        managed = {f["mountpoint"] for f in affected_fs}
+        unmanaged = [m for m in mounts if m.get("mountpoint") and m["mountpoint"] not in managed]
+        if unmanaged:
+            listing = "\n".join(
+                f"  - {m['mountpoint']}  ({m.get('role', 'unknown')} device)" for m in unmanaged
+            )
+            await self._delete_aborted(
+                f"These mounts use '{arr_name}' but are not managed through "
+                f"the control path, so the teardown cannot unmount them:\n"
+                f"{listing}\n\n"
+                f"Unmount them first — destroying the array would wipe the "
+                f"journal of a filesystem that uses it as its external log "
+                f"device, corrupting that filesystem.",
+                arr_name,
+            )
+            return None
+
+        return affected_shares, affected_fs
+
+    async def _delete_aborted(self, reason: str, arr_name: str) -> None:
+        """Informational halt before anything was changed (§6.1)."""
+        await self.app.push_screen_wait(
+            ConfirmDialog(
+                f"{reason}\n\nArray '{arr_name}' was NOT deleted. Nothing was changed.",
+                "Delete Array — Aborted",
+                ok_only=True,
+            )
+        )
+
     @work(exclusive=True)
     async def _delete_array(self) -> None:
         """Pick array -> check dependencies -> ordered teardown -> destroy.
@@ -1004,47 +1103,12 @@ class RAIDScreen(XiNASAppMixin, Screen):
         # flow — it also catches log-device usage the API does not model
         # as backing_device) ──────────────────────────────────────────────
         mounts = await find_mounts_using_raid(arr_name)
-        mountpoints = {m["mountpoint"] for m in mounts if m.get("mountpoint")}
 
-        # ── Affected shares: GET /shares filtered to paths under those
-        # mountpoints ─────────────────────────────────────────────────────
-        affected_shares: list[dict] = []  # [{id, path}]
-        if mountpoints:
-            try:
-                share_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
-            except ControlPathError:
-                share_rows = []
-            for doc in share_rows if isinstance(share_rows, list) else []:
-                if not isinstance(doc, dict):
-                    continue
-                doc_spec = doc.get("spec")
-                path = doc_spec.get("path") if isinstance(doc_spec, dict) else None
-                sid = doc.get("id")
-                if not path or sid is None:
-                    continue
-                if any(is_path_under(str(path), mp) for mp in mountpoints):
-                    affected_shares.append({"id": str(sid), "path": str(path)})
-
-        # ── Affected filesystems (mount units): backed by the array's
-        # volume, or mounted on one of the affected mountpoints ──────────
-        affected_fs: list[dict] = []  # [{id, mountpoint, mounted}]
-        try:
-            fs_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/filesystems")
-        except ControlPathError:
-            fs_rows = []
-        for doc in fs_rows if isinstance(fs_rows, list) else []:
-            if not isinstance(doc, dict):
-                continue
-            status = doc.get("status")
-            status = status if isinstance(status, dict) else {}
-            fid = doc.get("id")
-            if fid is None:
-                continue
-            mp = str(status.get("mountpoint") or "")
-            if status.get("backing_device") == volume_path or (mp and mp in mountpoints):
-                affected_fs.append(
-                    {"id": str(fid), "mountpoint": mp, "mounted": status.get("mounted") is True}
-                )
+        # ── Dependencies (fail-closed; aborts with the error surfaced) ───
+        found = await self._delete_dependencies(arr_name, volume_path, mounts)
+        if found is None:
+            return
+        affected_shares, affected_fs = found
 
         # ── Build warning message with dependency info ───────────────────
         warning_parts = [
@@ -1055,14 +1119,10 @@ class RAIDScreen(XiNASAppMixin, Screen):
             share_list = "\n".join(f"  - {s['path']}" for s in affected_shares)
             warning_parts.append(f"ACTIVE NFS SHARES will be removed:\n{share_list}\n")
 
-        if affected_fs or mounts:
+        # Every dependent mount is API-managed here — a mount the teardown
+        # could not clear already aborted the deletion in §6.1.
+        if affected_fs:
             fs_lines = [f"  - {f['mountpoint'] or f['id']} ({f['id']})" for f in affected_fs]
-            for m in mounts:
-                mp = m.get("mountpoint", "")
-                if mp and not any(f["mountpoint"] == mp for f in affected_fs):
-                    fs_lines.append(
-                        f"  - {mp} ({m.get('role', 'unknown')} device — not API-managed)"
-                    )
             warning_parts.append(
                 "ACTIVE FILESYSTEMS will be unmounted/unmanaged:\n" + "\n".join(fs_lines) + "\n"
             )
@@ -1080,12 +1140,12 @@ class RAIDScreen(XiNASAppMixin, Screen):
             return
 
         # ── Double confirmation when dependencies exist ──────────────────
-        if mounts or affected_fs or affected_shares:
+        if affected_fs or affected_shares:
             confirmed2 = await self.app.push_screen_wait(
                 ConfirmDialog(
                     f"Are you ABSOLUTELY sure?\n\n"
                     f"This will remove {len(affected_shares)} NFS share(s) "
-                    f"and {len(affected_fs) or len(mounts)} filesystem(s) before destroying "
+                    f"and {len(affected_fs)} filesystem(s) before destroying "
                     f"array '{arr_name}'.\n\n"
                     f"ALL DATA WILL BE LOST.",
                     "FINAL CONFIRMATION",

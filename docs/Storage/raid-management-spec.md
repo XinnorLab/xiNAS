@@ -388,10 +388,26 @@ This is the most complex flow in the screen because deleting a RAID array can ca
 
 ### 6.1 Dependency discovery
 
-For the selected array name `arr_name`:
+Discovery runs in `RAIDScreen._delete_dependencies(arr_name, volume_path, mounts)` and decides what the teardown must remove before `raid_destroy`. Since a wrong answer here ends in a destroyed array, **discovery fails closed**: every outcome other than a complete, actionable dependency set aborts the deletion before anything is changed.
 
-1. `find_mounts_using_raid(arr_name)` (from `xfs_helpers`) — returns every mount whose data device is `/dev/xi_<name>` *or* whose mount opts carry `logdev=/dev/xi_<name>`. Each result carries a `role` field (`"data"` or `"log"`).
-2. For each discovered mountpoint, the TUI calls `nfs.list_exports()` (synchronous, against the helper socket) and scans for any export whose `path` is rooted at that mountpoint. Matches go into `affected_shares`.
+For the selected array name `arr_name` (volume `/dev/xi_<arr_name>`):
+
+1. `find_mounts_using_raid(arr_name)` (from `xfs_helpers`) — returns every mount whose data device is `/dev/xi_<name>` *or* whose mount opts carry `logdev=/dev/xi_<name>`. Each result carries a `role` field (`"data"` or `"log"`). Their mountpoints are the filter for step 2.
+2. `GET /api/v1/shares` — every share whose `spec.path` is rooted at one of those mountpoints goes into `affected_shares`. Skipped when no mount was found (nothing can be rooted under an unmounted array).
+3. `GET /api/v1/filesystems` — every filesystem whose `status.backing_device` is the array volume, or whose `status.mountpoint` is one of those mountpoints, goes into `affected_fs`.
+
+**Read failures abort, they never read as "no dependencies".** A `ControlPathError` from either read leaves the TUI without evidence about the array's dependents — which is not the same as evidence of none. The screen shows a `Delete Array — Aborted` dialog carrying the underlying error and stating that the array was NOT deleted and nothing was changed, and the flow returns before the first confirmation. (Both reads were previously swallowed into empty lists, so a control path that was down presented as an array with nothing on it and the teardown proceeded to destroy it.)
+
+**Dependents the teardown cannot clear also abort.** Every mount from step 1 whose mountpoint is not covered by an `affected_fs` entry is unremovable by this flow — typically an XFS filesystem that uses the array only as its external log device (`logdev=`), which the API does not model as `backing_device`, so there is no mount unit for the teardown to unmount. The same `Delete Array — Aborted` dialog lists those mountpoints with their `role` and asks the operator to unmount them first. Proceeding was never useful: the agent's delete preflight (below) refuses the destroy while such a mount exists, so the teardown would have removed the shares and mount units and *then* failed at the last step.
+
+Consequently, by the time the confirmations are shown, every dependent mount is API-managed and the first dialog lists exactly what the teardown will remove.
+
+**Agent-side backstop (`xiraid.array.delete` preflight).** The TUI checks are advisory; the host-level guard in the agent executor is what makes destruction safe under a race (a mount that appeared after the api's re-check). It reads `/proc/self/mountinfo` — fail-closed: an unreadable mount table throws and nothing is destroyed — and refuses the delete when the volume is either:
+
+- the `source` of any mount, or
+- referenced by an external-device mount option, `logdev=<volume>` or `rtdev=<volume>`, in a mount's VFS options or its filesystem-specific super options (XFS reports its external log and realtime devices in the latter, so such a filesystem never names the array as its mount source).
+
+Either case fails preflight with the mountpoint and the reason, before `raid_destroy` is called — the task ends `failed` with a clean no-op rollback, never `requires_manual_recovery`.
 
 ### 6.2 Two-stage confirmation
 
@@ -570,6 +586,8 @@ If any step after share-removal fails, the rollback path re-runs `add_export` + 
 | xRAID daemon down | every RPC | `grpc.aio` raises `RpcError("StatusCode.UNAVAILABLE")`; `_call()` catches and returns `(False, None, str(exc))`. UI shows the short error. |
 | `xinas-nfs-helper` socket missing or refused | `NFSHelperClient._request()` | Returns `(False, None, "NFS helper socket not found: …")` or `"…not running (connection refused)"`. Delete-array path uses this to short-circuit before touching the array. |
 | Helper response not JSON | `NFSHelperClient._request()` | `(False, None, "bad JSON from NFS helper: …")`. |
+| `GET /shares` or `GET /filesystems` fails during Delete Array dependency discovery | `_delete_dependencies` | `Delete Array — Aborted` dialog with the `ControlPathError`; the array is not deleted and nothing is changed. An unreadable dependency set is never treated as an empty one (§6.1). |
+| A mount uses the array but the teardown cannot unmount it (e.g. `logdev=` with no mount unit) | `_delete_dependencies` | `Delete Array — Aborted` listing those mountpoints; the operator unmounts them first. The agent's delete preflight refuses the destroy while such a mount exists (§6.1). |
 | Pool name / array name contains invalid chars | `_ARRAY_NAME_RE` / `_POOL_NAME_RE` | InputDialog re-prompts; never sent to the daemon. |
 | RAID 10 with no spare pool when one is required | xiRAID's own validation | Caught when `raid_create` returns failure; the operator sees the daemon's reason. |
 | Operator picks 0 drives in the picker | `action_confirm()` | Notify `"No drives selected."` and stay on the picker. |

@@ -14,7 +14,7 @@ import { type ExecFileOptions, execFile as nodeExecFile } from 'node:child_proce
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseIdmapConf } from '../../lib/parse/idmap.js';
-import { parseMountinfo } from '../../lib/parse/mountinfo.js';
+import { type MountGuardEntry, parseMountinfo } from '../../lib/parse/mountinfo.js';
 import type { AgentConfig } from '../config.js';
 import { createFakeFsHost } from '../fs/fake-host.js';
 import { createFakeNetHost } from '../net/fake-host.js';
@@ -59,9 +59,17 @@ import {
  * an unreadable /proc/self/mountinfo throws → delete preflight refuses
  * (better no destruction than an unverified one).
  */
-async function readProcMounts(): Promise<Array<{ source: string; mountpoint: string }>> {
+async function readProcMounts(): Promise<MountGuardEntry[]> {
   const raw = await readFile('/proc/self/mountinfo', 'utf8');
-  return parseMountinfo(raw).map((m) => ({ source: m.source, mountpoint: m.mountpoint }));
+  // Options ride along: the xiRAID delete guard reads them to catch a
+  // filesystem that uses the doomed volume as its external log/rt device
+  // (`logdev=` lives in the fs-specific super options).
+  return parseMountinfo(raw).map((m) => ({
+    source: m.source,
+    mountpoint: m.mountpoint,
+    options: m.options,
+    super_options: m.super_options,
+  }));
 }
 
 /**
@@ -69,17 +77,31 @@ async function readProcMounts(): Promise<Array<{ source: string; mountpoint: str
  * dev hosts without /proc): reads <dir>/mounts.json, defaulting to "nothing
  * mounted". Same pattern as the probe/xiraid fixtures.
  */
-function makeFixtureMounts(
-  dir: string,
-): () => Promise<Array<{ source: string; mountpoint: string }>> {
+function makeFixtureMounts(dir: string): () => Promise<MountGuardEntry[]> {
   return async () => {
     try {
       const raw = await readFile(join(dir, 'mounts.json'), 'utf8');
-      const parsed = JSON.parse(raw) as Array<{ source?: string; mountpoint?: string }>;
+      const parsed = JSON.parse(raw) as Array<{
+        source?: string;
+        mountpoint?: string;
+        options?: unknown;
+        super_options?: unknown;
+      }>;
+      const strings = (v: unknown): string[] | undefined =>
+        Array.isArray(v) && v.every((o) => typeof o === 'string') ? (v as string[]) : undefined;
       return Array.isArray(parsed)
         ? parsed
             .filter((m) => typeof m.source === 'string' && typeof m.mountpoint === 'string')
-            .map((m) => ({ source: m.source as string, mountpoint: m.mountpoint as string }))
+            .map((m) => {
+              const options = strings(m.options);
+              const superOptions = strings(m.super_options);
+              return {
+                source: m.source as string,
+                mountpoint: m.mountpoint as string,
+                ...(options !== undefined ? { options } : {}),
+                ...(superOptions !== undefined ? { super_options: superOptions } : {}),
+              };
+            })
         : [];
     } catch {
       return [];
@@ -118,7 +140,7 @@ const IDMAPD_CONF_PATH = '/etc/idmapd.conf';
  */
 function buildNfsExecutorDeps(
   config: AgentConfig,
-  readMounts: () => Promise<Array<{ source: string; mountpoint: string }>>,
+  readMounts: () => Promise<MountGuardEntry[]>,
 ): NfsExecutorDeps {
   const helper = createNfsHelperClientFromProbe({
     helperSocket: config.nfs_helper_socket ?? DEFAULT_NFS_HELPER_SOCKET,
@@ -190,7 +212,7 @@ export function buildTaskSubsystem(
     nfsDeps?: NfsExecutorDeps;
     xiraidClient?: XiraidClient;
     /** Mount-guard override (fixture/e2e); default reads /proc/self/mountinfo. */
-    readMounts?: () => Promise<Array<{ source: string; mountpoint: string }>>;
+    readMounts?: () => Promise<MountGuardEntry[]>;
     /** Host-command seam override; default: fake in fixture mode, real otherwise. */
     fsHost?: FsHost;
     netHost?: NetHost;

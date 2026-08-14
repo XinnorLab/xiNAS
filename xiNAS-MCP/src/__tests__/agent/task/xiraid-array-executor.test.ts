@@ -571,7 +571,12 @@ describe('xiraid.array.import executor', () => {
 describe('xiraid.array.delete executor', () => {
   async function runDelete(
     fake: ReturnType<typeof makeFake>,
-    mounts: Array<{ source: string; mountpoint: string }>,
+    mounts: Array<{
+      source: string;
+      mountpoint: string;
+      options?: string[];
+      super_options?: string[];
+    }>,
     spec: Record<string, unknown> = { id: 'data' },
     transport?: XiraidTransport,
   ): Promise<TaskProgressEvent[]> {
@@ -625,6 +630,57 @@ describe('xiraid.array.delete executor', () => {
     });
     expect(fake.destroyCalls).toEqual([]);
     expect(fake.arrays).toHaveLength(1); // untouched
+  });
+
+  // An array used ONLY as an XFS external log device never appears as a mount
+  // SOURCE — it shows up as `logdev=/dev/xi_<id>` in the fs-specific super
+  // options of the data filesystem's mount. Destroying it under a mounted
+  // filesystem corrupts that filesystem's journal, so the guard must catch it.
+  it('mount guard: array used as an external XFS log device → preflight fails, no destroy', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
+    const events = await runDelete(fake, [
+      {
+        source: '/dev/xi_bulk',
+        mountpoint: '/srv/share01',
+        options: ['rw', 'noatime'],
+        super_options: ['rw', 'attr2', 'inode64', 'logdev=/dev/xi_data', 'noquota'],
+      },
+    ]);
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
+    expect(fake.destroyCalls).toEqual([]);
+    expect(fake.arrays).toHaveLength(1); // untouched
+    const failure = events.find((e) => e.stage_name === 'preflight' && e.error_message);
+    expect(failure?.error_message).toContain('/srv/share01');
+    expect(failure?.error_message).toContain('logdev');
+  });
+
+  it('mount guard: external-device option in the VFS options field is caught too', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
+    const events = await runDelete(fake, [
+      { source: '/dev/xi_bulk', mountpoint: '/srv/share01', options: ['rw', 'rtdev=/dev/xi_data'] },
+    ]);
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(fake.destroyCalls).toEqual([]);
+  });
+
+  it('mount guard: a like-named external device on another array does not block', async () => {
+    const fake = makeFake();
+    seedDoomed(fake);
+    const events = await runDelete(fake, [
+      {
+        source: '/dev/xi_bulk',
+        mountpoint: '/srv/share01',
+        super_options: ['rw', 'logdev=/dev/xi_datalog'],
+      },
+    ]);
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.destroyCalls).toEqual(['data']);
   });
 
   it('array vanished before begin → preflight fails → clean failed (destroy never attempted)', async () => {
