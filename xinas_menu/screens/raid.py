@@ -46,6 +46,11 @@ from xinas_menu.widgets.text_view import ScrollableTextView
 from xinas_menu.widgets.wizard import BACK, CANCEL, WizardStep, run_wizard
 
 _ARRAY_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+# The control-path contract for XiraidArray.spec.name is
+# ^[A-Za-z0-9_-]{1,63}$ (docs/control-path/api-v1.yaml). The wizard
+# enforces the same bound so a name the API would reject is caught at the
+# first step instead of after the operator has answered every other one.
+_ARRAY_NAME_MAX = 63
 _RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]
 _STRIP_SIZES = ["16", "32", "64", "128", "256"]
 _CPU_LIST_RE = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
@@ -78,6 +83,19 @@ _MENU = [
     MenuItem("6", "Delete Array"),
     MenuItem("0", "Back"),
 ]
+
+
+def _array_name_error(name: str) -> str | None:
+    """Reason ``name`` is not a valid array name, or ``None`` if it is.
+
+    Mirrors the control-path ``XiraidArray.spec.name`` pattern; see
+    ``_ARRAY_NAME_MAX``.
+    """
+    if len(name) > _ARRAY_NAME_MAX:
+        return f"Array name must be {_ARRAY_NAME_MAX} characters or fewer."
+    if not _ARRAY_NAME_RE.match(name):
+        return "Array name must contain only letters, digits, hyphens, and underscores."
+    return None
 
 
 def _fmt_size(size_bytes: float) -> str:
@@ -472,15 +490,9 @@ class RAIDScreen(XiNASAppMixin, Screen):
                     return CANCEL
                 if name is BACK:
                     return BACK
-                if len(name) > 64:
-                    self.app.notify("Array name must be 64 characters or fewer.", severity="error")
-                    default = name
-                    continue
-                if not _ARRAY_NAME_RE.match(name):
-                    self.app.notify(
-                        "Array name must contain only letters, digits, hyphens, and underscores.",
-                        severity="error",
-                    )
+                problem = _array_name_error(name)
+                if problem:
+                    self.app.notify(problem, severity="error")
                     default = name
                     continue
                 return name

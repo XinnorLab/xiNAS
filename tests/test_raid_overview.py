@@ -1,6 +1,12 @@
+import inspect
 import re
+from pathlib import Path
+
+import yaml
 
 from xinas_menu.screens.raid import _arrays_from_api, _format_raid_overview
+
+_REPO = Path(__file__).resolve().parent.parent
 
 
 def test_banner_prepended_and_replaces_empty_state():
@@ -209,3 +215,116 @@ def test_merge_max_edit_params_are_labelled_microseconds_not_kb():
     assert "(us)" in labels["merge_write_max"]
     assert "KB" not in labels["merge_read_max"]
     assert "KB" not in labels["merge_write_max"]
+
+
+# ---- array-name validation vs the API contract (raid-management-spec §4) ----
+#
+# The Create wizard used to accept 64 characters while
+# XiraidArray.spec.name is ^[A-Za-z0-9_-]{1,63}$ — a 64-char name passed
+# every wizard step and was then rejected at dispatch. The two bounds must
+# stay equal; that is what these pin.
+
+
+def _api_array_name_pattern() -> str:
+    doc = yaml.safe_load((_REPO / "docs/control-path/api-v1.yaml").read_text())
+    schema = doc["components"]["schemas"]["XiraidArray"]["properties"]["spec"]
+    return schema["properties"]["name"]["pattern"]
+
+
+def test_array_name_max_matches_the_api_contract():
+    from xinas_menu.screens.raid import _ARRAY_NAME_MAX
+
+    pattern = _api_array_name_pattern()
+    bound = re.search(r"\{1,(\d+)\}\$?$", pattern)
+    assert bound, f"unexpected XiraidArray.spec.name pattern: {pattern!r}"
+    assert int(bound.group(1)) == _ARRAY_NAME_MAX
+
+
+def test_array_name_validator_agrees_with_the_api_pattern():
+    from xinas_menu.screens.raid import _ARRAY_NAME_MAX, _array_name_error
+
+    api_re = re.compile(_api_array_name_pattern())
+    at_limit = "a" * _ARRAY_NAME_MAX
+    over_limit = "a" * (_ARRAY_NAME_MAX + 1)
+
+    # Accepted by the TUI exactly when the API would accept it.
+    assert _array_name_error(at_limit) is None
+    assert api_re.match(at_limit)
+    assert _array_name_error(over_limit) is not None
+    assert not api_re.match(over_limit)
+
+    for bad in ("", "data 0", "data/0", "data.0", "dat@"):
+        assert _array_name_error(bad) is not None, bad
+        assert not api_re.match(bad), bad
+
+    for good in ("data0", "xi_log", "a-b_C9"):
+        assert _array_name_error(good) is None, good
+        assert api_re.match(good), good
+
+
+def test_array_name_error_message_states_the_real_limit():
+    from xinas_menu.screens.raid import _ARRAY_NAME_MAX, _array_name_error
+
+    msg = _array_name_error("a" * (_ARRAY_NAME_MAX + 1))
+    assert msg is not None
+    assert str(_ARRAY_NAME_MAX) in msg
+
+
+# ---- teardown has no cross-step rollback (raid-management-spec §6.4,
+#      s8-clients-spec §6) ----
+#
+# The spec used to promise that a failed teardown step re-added the removed
+# shares and re-mounted the unmounted filesystems. It never did: a step
+# failure stops the sequence and completed steps stay completed. If a
+# rollback is ever added, §6.4 has to be rewritten with it.
+
+
+def test_delete_array_never_restores_a_completed_step():
+    from xinas_menu.screens.raid import RAIDScreen
+
+    src = inspect.getsource(RAIDScreen._delete_array)
+    for undo in ("add_export", "mount_filesystem", "remount", "rollback("):
+        assert undo not in src, f"_delete_array appears to undo a completed step: {undo}"
+
+
+def test_teardown_failure_says_the_sequence_stopped():
+    from xinas_menu.screens.raid import RAIDScreen
+
+    src = inspect.getsource(RAIDScreen._teardown_failed)
+    assert "remaining steps were not run" in src
+    assert "No cross-step rollback" in src
+    # Reporting a halt is informational: OK-only, never an unanswerable Yes/No.
+    assert "ok_only=True" in src
+
+
+def test_raid_screen_does_not_import_the_mutating_xfs_helpers():
+    # §2.4: the RAID screen's only xfs_helpers use is the read side.
+    src = (_REPO / "xinas_menu/screens/raid.py").read_text()
+    imports = [ln for ln in src.splitlines() if "xfs_helpers" in ln and "import" in ln]
+    assert imports
+    for line in imports:
+        assert "unmount_filesystem" not in line
+        assert "mount_filesystem" not in line
+
+
+# ---- control-path, not gRPC (raid-management-spec §2.2, §6.3, §7.1) ----
+
+
+def test_raid_and_pool_screens_do_not_call_the_grpc_client():
+    for rel in ("xinas_menu/screens/raid.py", "xinas_menu/screens/spare_pools.py"):
+        src = (_REPO / rel).read_text()
+        assert "app.grpc" not in src, f"{rel} still calls the gRPC client"
+        for rpc in ("raid_destroy", "raid_create", "raid_modify", "pool_create", "pool_show"):
+            assert f".{rpc}(" not in src, f"{rel} still calls {rpc}"
+
+
+def test_teardown_uses_the_control_path_endpoints():
+    from xinas_menu.screens.raid import RAIDScreen
+
+    src = inspect.getsource(RAIDScreen._delete_array)
+    assert "/api/v1/shares/" in src
+    assert "/api/v1/filesystems/" in src
+    assert "/api/v1/arrays/" in src
+    # The array delete is the dangerous one; the two confirm dialogs are its gate.
+    assert "dangerous=True" in src
+    assert "app.nfs" not in src
