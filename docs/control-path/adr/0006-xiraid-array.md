@@ -141,7 +141,33 @@ Writes to a `Modify=UNSUPPORTED` (topology) field on `PATCH /arrays/{id}` fail a
 }
 ```
 
-The three create-surface tuning keys reject on the same pre-plan path, with `field: "spec.tuning.<key>"` and `reason: "create_only_tuning"`. This is a daemon-capability limit, not a policy choice: `RaidModify` carries no `resync_enabled` / `discard` / `drive_trim` field, so `translate.ts` also drops them from the modify request (belt-and-suspenders — the route rejects first). *(A related latent gap: the running 4.3.1 `RaidCreate` also lacks these three, so they are not writable at create against that daemon either, even though the control-path schema and the hand-maintained `src/grpc/raid.ts` wrapper model them as create knobs. Reconciling the create surface is out of scope here and tracked separately.)*
+The three create-surface tuning keys reject on the same pre-plan path, with `field: "spec.tuning.<key>"` and `reason: "create_only_tuning"`. This is a daemon-capability limit, not a policy choice: `RaidModify` carries no `resync_enabled` / `discard` / `drive_trim` field, so `translate.ts` also drops them from the modify request (belt-and-suspenders — the route rejects first).
+
+> **Empirically confirmed and partly corrected 2026-08-14.** The `RaidModify`
+> claim was read straight off the descriptor of the **running 4.3.1 daemon on
+> the demo node** (`/usr/lib/xraid/gRPC/protobuf/message_raid_pb2.py`):
+> `RaidModify` has 24 fields and none named `resync_enabled`, `discard`,
+> `discard_ignore`, `discard_verify`, `drive_write_through`, or `drive_trim`.
+> So the modify-side `create_only_tuning` rejection is correct.
+>
+> The *create*-side note above was **misleading** and is corrected here. The
+> real 4.3.1 `RaidCreate` (31 fields) does lack `resync_enabled` and `discard`
+> — but TRIM-at-create is NOT absent: the daemon expresses the CLI's
+> `--drive_trim` as the booleans **`trim` (33) / `no_trim` (34)**, not a field
+> named `drive_trim`. So `translate.ts` emitting `drive_trim` reaches no field
+> and is dropped, while the capability itself exists under a different name.
+> The vendored `proto/.../message_raid.proto` was re-vendored the same day to
+> match the real descriptor (it had wrongly reserved 23/31, carried
+> `resync_enabled`, and omitted `trim`/`no_trim`/`sdc_prio`/`max_sectors_kb`
+> on create). What remains — wiring `translate.ts` + `schema.ts` +
+> `api-v1.yaml` to emit `trim`/`no_trim` and to drop the inert `discard` /
+> `resync_enabled` create knobs — is the create-surface reconciliation, still
+> tracked in [docs/TODO.md](../../TODO.md), and unchanged in scope by the
+> re-vendor.
+>
+> The 4.4 question is still open: the demo node runs **4.3.1**, so whether
+> 4.4's `RaidModify` gained `discard` (the CLI docs say it is modifiable there)
+> has not been checked against a 4.4 daemon.
 
 ### Spare pools
 

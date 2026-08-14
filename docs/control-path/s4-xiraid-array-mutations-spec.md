@@ -89,14 +89,21 @@ A future migration may persist the observed pin and let the engine's `plan_stale
 > RAID unload/restore to take effect), plus `discard_verify` and
 > `drive_write_through`. The rejection here is therefore a *transport
 > capability limit* — correct to keep, wrong to describe as "xiRAID cannot
-> change discard". Two consequences: (1) `reason: 'create_only_tuning'` is a
-> slight misnomer that should not be relied on as a statement about the
-> engine; (2) the descriptor was read from **4.3.1** and hosts now run
-> **4.4** — if 4.4's `RaidModify` gained these fields, this rejection is
-> stale. Re-vendor `proto/xraid/gRPC/protobuf/message_raid.proto` from a 4.4
-> daemon before assuming either way. The related latent gap ADR-0006 records
-> — that 4.3.1's `RaidCreate` also lacks all three, so they are not writable
-> at create either — is unchanged.
+> change discard". `reason: 'create_only_tuning'` is thus a slight misnomer
+> that should not be read as a statement about the engine.
+>
+> **Confirmed against the real descriptor 2026-08-14.** The `RaidModify` field
+> set was read directly off the **running 4.3.1 daemon on the demo node**: 24
+> fields, none of `resync_enabled` / `discard` / `discard_ignore` /
+> `discard_verify` / `drive_write_through` / `drive_trim`. The rejection is
+> correct for 4.3.1. The vendored `message_raid.proto` was re-vendored the
+> same day to match that descriptor exactly. Two things did **not** change:
+> (1) the 4.4 question is still open — the demo node runs 4.3.1, so whether
+> 4.4's `RaidModify` gained `discard` is unverified; (2) the create surface
+> still models `discard` / `drive_trim` / `resync_enabled` as knobs, of which
+> only TRIM-at-create is real on the daemon (under `trim`/`no_trim`, not
+> `drive_trim`) — see [ADR-0006](../adr/0006-xiraid-array.md) and
+> [docs/TODO.md](../../TODO.md).
 
 **Provider preflight.**
 1. The array must exist in observed state (else `NOT_FOUND`); read its observed `spec` as the *before*.

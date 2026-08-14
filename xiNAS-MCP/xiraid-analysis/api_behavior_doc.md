@@ -266,15 +266,26 @@ Error `RAIDParametersModifyError` is raised if a parameter cannot be modified (e
 message's.** CR / `xicli raid` confirms `xicli raid modify` accepts `discard`
 (with "requires RAID unload/restore"), `discard_verify` and
 `drive_write_through`, so this section is right about the product. It is
-**not** a list of what a gRPC client can send: the `RaidModify` message
-vendored at `proto/xraid/gRPC/protobuf/message_raid.proto` — field numbers
-taken from the running **4.3.1** daemon's descriptor — carries **no**
-`discard`, `discard_ignore`, `discard_verify` or `drive_write_through` field.
-Sending one is silently dropped by protobuf and reports success, which is why
-the control path rejects those keys pre-plan (ADR-0006). CR also marks
-`--force_resync` **deprecated** in favour of `xicli raid init reset`.
-The daemon on hosts is now 4.4; the vendored descriptor has not been
-refreshed against it.
+**not** a list of what a gRPC client can send: the `RaidModify` message on the
+**running 4.3.1 daemon** — read directly off the demo node's
+`message_raid_pb2.py` on 2026-08-14 — has 24 fields and carries **no**
+`discard`, `discard_ignore`, `discard_verify`, `drive_write_through` or
+`resync_enabled`. Sending one is silently dropped by protobuf and reports
+success, which is why the control path rejects those keys pre-plan (ADR-0006).
+CR also marks `--force_resync` **deprecated** in favour of
+`xicli raid init reset`.
+
+The same read corrected the vendored proto and the create-side picture:
+- `RaidCreate` on the real daemon has **31 fields**, including `trim` (33) and
+  `no_trim` (34) — the gRPC form of the CLI's `--drive_trim` — plus
+  `max_sectors_kb` (23), `adaptive_merge_path` (31) and `sdc_prio` (35). It has
+  **no** `discard` and **no** `resync_enabled`.
+- `proto/xraid/gRPC/protobuf/message_raid.proto` had drifted from this: it
+  reserved 23/31 (which the daemon uses), carried `resync_enabled`, and omitted
+  `trim`/`no_trim`/`sdc_prio`/`max_sectors_kb` on create. It was re-vendored
+  the same day to match the descriptor field-for-field.
+- The demo node is **4.3.1**, so the 4.4 question (does 4.4's `RaidModify` gain
+  `discard`?) is still open.
 
 ### 3.7 Init / Recon / Restripe Lifecycle
 

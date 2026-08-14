@@ -521,10 +521,18 @@ and the gRPC surface are not the same surface. What this means in practice:
   [s4 spec §Writability enforcement](../control-path/s4-xiraid-array-mutations-spec.md)).
 - It is **not** correct to say xiRAID cannot modify `discard`. It can, via
   `xicli`.
-- The vendored descriptor is 4.3.1 and the `xiraid_classic` role now installs
-  **4.4**. Whether 4.4's `RaidModify` gained these fields has **not been
-  re-checked against a 4.4 daemon**. Re-vendor the descriptor from a 4.4 host
-  before treating the create-only classification as still current.
+- The vendored descriptor is 4.3.1. **Confirmed 2026-08-14** against the
+  running daemon on the demo node: `RaidModify` there has 24 fields and none
+  named `discard` / `drive_trim` / `resync_enabled`, so the rejection is
+  correct for 4.3.1, and the vendored `message_raid.proto` was re-vendored to
+  match it exactly. The demo node runs **4.3.1, not 4.4** — so whether 4.4's
+  `RaidModify` gained `discard` (the 4.4 CLI docs say it is modifiable there)
+  is **still unverified**; re-check against a 4.4 daemon when one is available.
+- Related create-surface detail found in the same check: the daemon expresses
+  the CLI's `--drive_trim` as `trim`/`no_trim` on `RaidCreate`, not a field
+  named `drive_trim`, so TRIM-at-create is a real gRPC capability under a
+  different name. Wiring it through the TUI/control path is tracked in
+  [docs/TODO.md](../../docs/TODO.md).
 
 Step 1 guards the empty case: if the array listing fails or returns no arrays, the flow aborts on an **OK-only** dialog ("No RAID arrays configured." / "No arrays available."). Delete Array (§6) guards the same way. This is one instance of the screen-wide dialog convention — see §12.
 

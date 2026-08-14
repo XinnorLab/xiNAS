@@ -21,6 +21,60 @@ deferred and the change that deferred it.
 
 ---
 
+## Control path — create-surface tuning still models fields the daemon doesn't have
+
+**Deferred 2026-08-14**, when the vendored `message_raid.proto` was re-vendored
+from the running xiRAID **4.3.1** daemon on the demo node (its
+`message_raid_pb2.py` descriptor read directly). The proto now matches the
+daemon field-for-field; the TypeScript layers above it were left as-is.
+
+**What is missing.** `translate.ts` (`toRaidCreateRequest`), `schema.ts`
+(`Tuning`), and `docs/control-path/api-v1.yaml` still model three create knobs
+that do not line up with the real daemon:
+
+- `drive_trim` — the daemon has **no** field by this name; TRIM-at-create is
+  `trim` / `no_trim` (RaidCreate fields 33/34). `translate.ts` emits
+  `drive_trim`, which `@grpc/proto-loader` now drops, so the knob is inert.
+- `discard` — absent from RaidCreate on 4.3.1 (per-array discard is a
+  `xicli raid modify` / CLI concept, not a gRPC create field). Also inert.
+- `resync_enabled` — absent from both RaidCreate and RaidModify on 4.3.1.
+  Already inert; now also absent from the vendored proto.
+
+**Current behavior.** Setting any of the three on create is silently dropped
+at the proto-loader boundary and reports success — the same false-success
+failure mode ADR-0006 flags for modify. `max_sectors_kb` and `sdc_prio`, by
+contrast, now DO reach the daemon on create (they were being dropped before
+the re-vendor because the old proto lacked them on RaidCreate).
+
+**Why deferred, not fixed now.** Dropping `discard` / `drive_trim` from
+`api-v1.yaml`'s tuning schema is a **breaking** change that `oasdiff` will fail
+in CI, and renaming the create knob to `trim`/`no_trim` is a public-contract
+decision, not a mechanical edit. It needs its own reviewed change, and it
+interacts with the discard-enablement entry below (both touch how the create
+surface expresses TRIM/discard).
+
+**What done looks like.**
+
+1. Decide the create-surface contract: expose `trim`/`no_trim` as the real
+   TRIM-at-create knob; drop or repurpose `discard`/`resync_enabled` on create.
+2. `translate.ts` emits `trim`/`no_trim` (mapped from whatever the schema
+   settles on), and stops emitting `drive_trim`/`discard`/`resync_enabled` on
+   create.
+3. `api-v1.yaml` + `docs/control-path/` updated (additive where possible to
+   keep oasdiff green; a removal needs an explicit breaking-change decision).
+4. The "misleading create-side note" corrections in ADR-0006 §Writability and
+   `s4-xiraid-array-mutations-spec.md` collapse to "done".
+
+**Also still open, unrelated to this repo change:** the demo node runs 4.3.1,
+so whether xiRAID **4.4**'s `RaidModify` gained `discard` (the 4.4 CLI docs say
+it is modifiable) has not been checked against a 4.4 daemon. Re-run the same
+descriptor read against a 4.4 host when one is available.
+
+TypeScript under `xiNAS-MCP/src/` needs a `Requires-Rebuild: xinas_node_build`
+trailer when this lands.
+
+---
+
 ## Storage — day-2 array creation does not enable discard
 
 *Deferred 2026-08-14, from the TRIM-support change.*
