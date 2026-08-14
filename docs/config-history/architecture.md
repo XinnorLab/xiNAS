@@ -218,6 +218,25 @@ calls). Commands mirror the Engine API: `snapshot create`, `snapshot list`,
 All consumers share the same lock, the same store path, and the same GC
 policy. Concurrent access is serialised by the global file lock.
 
+### 4.1 Progress callbacks run on the TUI event loop
+
+The Reset-to-Baseline screen renders Ansible output line by line as the reset
+runs. The progress callback handed to
+`TransactionalRunner.execute_reset_to_baseline(progress_cb=…)` is invoked
+**on the event loop**, from the `async for` stream reader in
+`TransactionalRunner._run_ansible_playbook`. It must therefore update the
+Textual view by calling the widget directly.
+
+It must **not** use `App.call_from_thread`: that API raises `RuntimeError` when
+called from the event-loop thread, and the runner swallows callback exceptions
+(`contextlib.suppress(Exception)`), so the failure is invisible — the reset
+appears to hang with no output for its entire multi-minute run. This is the
+inverse of the RAID teardown callback (`xinas_menu/screens/raid.py`
+`_teardown_progress`), which *is* invoked from a worker thread by
+`plan_apply_wait` and so does need `call_from_thread`.
+
+The view keeps the last 30 lines.
+
 ---
 
 ## 5. Data Flow Diagrams
