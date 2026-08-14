@@ -34,7 +34,12 @@
  */
 import { decExportId, encExportId } from '../../../lib/nfs-export-id.js';
 import { compileShareToExportEntry, shareSpecToCompileInput } from '../../../lib/nfs-exports.js';
-import { allocateFsid, collectUsedFsids } from '../../../lib/nfs-fsid.js';
+import {
+  allocateFsid,
+  collectUsedFsids,
+  SHARE_FSID_KIND,
+  shareFsidKey,
+} from '../../../lib/nfs-fsid.js';
 import { deriveProfileServiceAction, type NfsProfileSpec } from '../../../lib/nfs-profile.js';
 import { ApiException } from '../../errors.js';
 import type { PlanContext, PlanProvider, PlanResult } from '../engine.js';
@@ -261,7 +266,14 @@ const shareCreateProvider: PlanProvider = {
       // The apply txn's desired-revision check reads an absent row as 0, so a
       // Share/{id} that appeared between plan and apply (duplicate id) reads
       // >= 1 and fails PRECONDITION_FAILED instead of silently overwriting.
-      affected_resources: [{ kind: 'Share', id: share.id, revision: 0 }],
+      affected_resources: [
+        { kind: 'Share', id: share.id, revision: 0 },
+        // Absence pin on the fsid marker: two creates that allocated the same
+        // number both pin it at 0; the first apply writes it, the second reads
+        // 1 and fails PRECONDITION_FAILED, whose remediation is "re-run plan".
+        // Share stays FIRST — engine.ts checks affected_resources[0].
+        { kind: SHARE_FSID_KIND, id: String(fsid), revision: 0 },
+      ],
       blockers,
       warnings: [],
       diff: {
@@ -276,6 +288,7 @@ const shareCreateProvider: PlanProvider = {
           key: `${DESIRED_SHARE_PREFIX}${share.id}`,
           value: toDesiredShareDoc(resolvedSpec),
         },
+        { key: shareFsidKey(fsid), value: { fsid, share_id: share.id } },
       ],
     };
   },

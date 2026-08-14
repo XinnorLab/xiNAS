@@ -119,7 +119,12 @@ describe('share.create plan provider', () => {
     // Desired resource with the ABSENCE pin (revision 0): the apply txn reads
     // an absent row as 0, so a duplicate-id Share appearing between plan and
     // apply fails PRECONDITION_FAILED instead of silently overwriting.
-    expect(result.affected_resources).toEqual([{ kind: 'Share', id: 's1', revision: 0 }]);
+    // Second pin: the fsid marker, also absent (revision 0), which is what
+    // serialises two creates that resolved the same number.
+    expect(result.affected_resources).toEqual([
+      { kind: 'Share', id: 's1', revision: 0 },
+      { kind: 'ShareFsid', id: '42', revision: 0 },
+    ]);
     expect(result.state_revision_expected).toBeUndefined();
 
     // Freshness pin on the encoded observed ExportRule id; absent row → 0.
@@ -129,7 +134,8 @@ describe('share.create plan provider', () => {
       revision: 0,
     });
 
-    // One desired put with the seedShare-shaped doc ({kind,id,spec} — id NOT in spec).
+    // Desired put with the seedShare-shaped doc ({kind,id,spec} — id NOT in
+    // spec), plus the fsid marker that claims the number.
     expect(result.desired_mutations).toEqual([
       {
         key: '/xinas/v1/desired/Share/s1',
@@ -143,6 +149,7 @@ describe('share.create plan provider', () => {
           },
         },
       },
+      { key: '/xinas/v1/desired/ShareFsid/42', value: { fsid: 42, share_id: 's1' } },
     ]);
 
     // The diff carries the compiled export entry (defaults folded in).
@@ -609,6 +616,7 @@ describe('PlanEngine integration (N0.2 plumbing end-to-end)', () => {
             },
           },
         },
+        { key: '/xinas/v1/desired/ShareFsid/42', value: { fsid: 42, share_id: 's1' } },
       ],
     });
     // The raw request spec rides the row verbatim (T9b dispatch contract).
@@ -688,6 +696,46 @@ describe('share.create — fsid allocation', () => {
     await expect(
       providerFor('share.create').preflight(ctx, makeShareSpec({ fsid: 4.5 })),
     ).rejects.toBeInstanceOf(ApiException);
+  });
+
+  it('writes a marker row and pins it absent, for allocated fsids', async () => {
+    const { ctx } = makeHarness();
+    const result = await providerFor('share.create').preflight(
+      ctx,
+      makeShareSpec({ fsid: undefined }),
+    );
+    expect(result.desired_mutations).toContainEqual({
+      key: '/xinas/v1/desired/ShareFsid/1',
+      value: { fsid: 1, share_id: 's1' },
+    });
+    expect(result.affected_resources).toContainEqual({
+      kind: 'ShareFsid',
+      id: '1',
+      revision: 0,
+    });
+  });
+
+  it('pins the marker for an EXPLICIT fsid too', async () => {
+    // Load-bearing: an explicit fsid=5 racing an allocation that computes 5
+    // would otherwise slip through, because only the allocating side pinned.
+    const { ctx } = makeHarness();
+    const result = await providerFor('share.create').preflight(ctx, makeShareSpec({ fsid: 5 }));
+    expect(result.affected_resources).toContainEqual({
+      kind: 'ShareFsid',
+      id: '5',
+      revision: 0,
+    });
+  });
+
+  it('keeps Share first in affected_resources', async () => {
+    // tasks/engine.ts checks the legacy observed_revision_expected against
+    // affected_resources[0]; the marker must not displace the Share.
+    const { ctx } = makeHarness();
+    const result = await providerFor('share.create').preflight(
+      ctx,
+      makeShareSpec({ fsid: undefined }),
+    );
+    expect(result.affected_resources[0]?.kind).toBe('Share');
   });
 
   it('still requires fsid on share.update — an absent one would erase it', async () => {
