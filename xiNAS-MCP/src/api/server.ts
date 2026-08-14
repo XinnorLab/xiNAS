@@ -10,6 +10,7 @@ import type { ApiContext } from './context.js';
 import { HeartbeatTracker, createAgentHealthProbe } from './heartbeat.js';
 import { startLeaseSweeper } from './lease-sweeper.js';
 import { loadObservedSchemas } from './observed-schemas.js';
+import { backfillShareFsidMarkers } from './backfill-fsid-markers.js';
 import { seedShares } from './seed-shares.js';
 import { buildTaskEngines } from './tasks/build.js';
 import { TaskWatch } from './tasks/watch.js';
@@ -46,6 +47,12 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
 
   // Install-time NFS share adoption (one-time; leaves operator deletes permanent).
   seedShares(state, config);
+
+  // Ensure every desired Share's fsid has a marker row. Every boot, not once:
+  // it backfills installs predating server-side allocation AND self-heals a
+  // marker lost to a rolled-back task or a restored snapshot. Must run AFTER
+  // seedShares, which may create shares.
+  backfillShareFsidMarkers(state);
 
   // Compile inbound-observation validators from api-v1.yaml once. Returns null
   // (validation skipped) when the spec isn't shipped — the graceful default.
