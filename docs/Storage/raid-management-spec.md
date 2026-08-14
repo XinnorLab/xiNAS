@@ -340,7 +340,7 @@ only visible symptom.
 
 1. `_list_api_disks_with_banner(self.app.control)` (`GET /api/v1/disks`, cross-referenced against the arrays list to exclude already-claimed drives) enumerates NVMe drives **and** returns the envelope's degraded banner. **If zero NVMe drives are available, the wizard aborts immediately with a dialog — before the name prompt is ever shown** — and that dialog **names the cause when there is one**: an empty list with a `DEGRADED_BACKEND_UNAVAILABLE` warning renders "No available NVMe drives found." followed by the banner, because "no drives" and "the Disk collector could not be read" are different facts and only one of them means the operator should go looking for hardware. With no warning present the dialog is unchanged.
 
-   The banner comes from the shared extractor [api/degraded.py](../../xinas_menu/api/degraded.py) `degraded_banner(envelope)` — the same one Show Exports (§ [fs-shares-management-spec](fs-shares-management-spec.md)) and the RAID overview use. `_list_api_disks_with_banner` fetches the full envelope via `control.get`; `_list_api_disks` remains as a thin wrapper returning rows only, for the three call sites that render no empty state of their own: Edit Array (via `_get_numa_topology` for the CPU-affinity NUMA picker and directly for the spare-pool disk-id lookup) and Spare Pools (via `_get_free_nvme_drives`).
+   The banner comes from the shared extractor [api/degraded.py](../../xinas_menu/api/degraded.py) `degraded_banner(envelope)` — the same one Show Exports (§ [fs-shares-management-spec](fs-shares-management-spec.md)) and the RAID overview use. `_list_api_disks_with_banner` fetches the full envelope via `control.get`; `_list_api_disks` remains as a thin wrapper returning rows only, for Edit Array's two lookups (via `_get_numa_topology` for the CPU-affinity NUMA picker and directly for the spare-pool disk-id lookup), which genuinely render no drive-count empty state of their own. Spare Pools is not in that group: `_get_free_nvme_drives` (§7.2) calls `_list_api_disks_with_banner` directly and threads the banner into both of its empty-state dialogs, Create Pool (§7.3) and Add Drives (§7.1), the same pattern as the wizard above.
 2. `GET /api/v1/pools` (via `self.app.control.result`) lists spare pools. A failure here is swallowed (`pools = {}`) rather than aborting the wizard — it just means the `spare` step's `applies=lambda a: bool(pools)` predicate stays `False` and the step is skipped.
 
 ### Step — name
@@ -463,7 +463,7 @@ Backing out of either picker (`allow_back=True` is hardcoded on both, since they
 
 Filters that exclude a drive from the picker:
 
-- `system: True` (any OS-mounted partition on it). OS detection walks the **full** `lsblk` tree, not just a disk's immediate children: a guided-LVM, dm-crypt, or MD root exposes `/` on a grandchild (`disk → part → lvm`), and a one-level check leaves that disk looking available for a new array. This is the TUI-side twin of the installer bug fixed in `691ef7d` ([Installer/raid-spec.md §2](../Installer/raid-spec.md)).
+- `system: True` (any OS-mounted partition on it), taken from the control-path Disk collector's `system_disk` field (`GET /api/v1/disks`). That collector already walks the full mountpoint tree (`collectMountpoints()` in [xiNAS-MCP/src/lib/parse/disk.ts](../../xiNAS-MCP/src/lib/parse/disk.ts)), so a guided-LVM/dm-crypt/MD root that puts `/` on a grandchild is excluded correctly here — see §8 for the sibling detector that was not.
 - already a member of some RAID array, or already assigned to a spare pool
 - `nvme` not in the name (anything that isn't NVMe — the wizard is NVMe-only)
 
@@ -685,13 +685,13 @@ Pool names reach the path via `quote_id()` like every other id (s8-clients-spec 
 
 ### 7.2 Drive selection rules
 
-`_get_free_nvme_drives()` enforces the "no double-membership" invariant: a drive can be in **either** a RAID array **or** a spare pool, not both. The function:
+`_get_free_nvme_drives()` enforces the "no double-membership" invariant: a drive can be in **either** a RAID array **or** a spare pool, not both. The function returns `(rows, banner)`:
 
-1. Calls `_list_api_disks()` (`GET /api/v1/disks`, shared with the RAID Create wizard) for all block drives.
+1. Calls `_list_api_disks_with_banner()` (`GET /api/v1/disks`, shared with the RAID Create wizard) for all block drives, plus the degraded-backend banner.
 2. Calls `GET /api/v1/pools` and builds a set of paths already in any pool.
 3. Filters out: anything missing `nvme` in its name, anything with `system=True`, anything not `safe_for_use`, anything `claimed` (already a member or spare of an observed array), and anything already in `pool_drives` — matched on both the `/dev/` path and the bare name, since pool rows and disk rows spell drives differently.
 
-The result is fed into `DrivePickerScreen` so the operator can apply the same NUMA/size/text filters as in the RAID Create wizard.
+The rows are fed into `DrivePickerScreen` so the operator can apply the same NUMA/size/text filters as in the RAID Create wizard. Both callers (Create Pool §7.3, Add Drives) append the banner to their own empty-drives dialog when the filtered result is empty, via the local `_no_free_drives_message()` helper — the same "no drives" vs. "the Disk collector could not be read" distinction as the wizard's `_no_drives_message()` (§4), worded for Spare Pools rather than reused verbatim.
 
 ### 7.3 Create Pool
 
@@ -738,11 +738,15 @@ This is an inventory view: **no drive's contents or membership can be changed fr
 It loads `grpc.disk_list()` (`lsblk` + `raid_show(extended=True)` membership join), plus the role classifier:
 
 ```
-system → OS drive (root/boot/EFI partition present)
+system → OS drive (root/boot/EFI/swap partition present)
 raid   → in a RAID array (carries raid_name)
 pool   → in a spare pool
 free   → none of the above
 ```
+
+`system` is decided by `_get_os_drives()` in [xinas_menu/api/grpc_client.py](../../xinas_menu/api/grpc_client.py), which is a **separate** OS-mount detector from the control-path Disk collector used elsewhere in this document (§4 "Step — drives") — it does its own `lsblk` parse and its own tree walk, not a shared library call. The two also read different lsblk columns: the Python detector asks for `MOUNTPOINT` (singular — one mount per node) while the TypeScript collector asks for `MOUNTPOINTS` (plural). Its `_OS_MOUNTS` set is `("/", "/boot", "/boot/efi", "[SWAP]")`, one more entry than the "root/boot/EFI partition present" wording above suggests.
+
+**This detector had the one-level bug the drives-step filter (§4) does not.** Before it recursed into `children`, a guided-LVM, dm-crypt, or MD root — which puts `/` on a grandchild (`disk → part → lvm`), not an immediate child — read as unmounted, so the **Role** column below showed `free` for a disk that was actually the OS drive. `_get_os_drives()` now walks the full tree the same way the control-path collector always did, so the two detectors agree again; only this screen's Role column was ever wrong, because the wizard's `system` filter (§4) is fed by the control-path collector, not by this function.
 
 Everything else on the screen — sort (`s`), reverse (`r`), text filter (`f`), NUMA filter (`n`), detail (`Enter` / `d`), SMART summary (`m`), SMART full (`Shift+M`) — is local or a read.
 
