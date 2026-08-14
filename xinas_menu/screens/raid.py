@@ -111,6 +111,17 @@ def _numa_node(name: str) -> int:
     return 0
 
 
+def _no_drives_message(banner: str | None) -> str:
+    """Text for the Create Array wizard's empty-disk abort.
+
+    "No drives" and "the Disk collector could not be read" are different
+    facts; when the envelope carried a warning, the dialog has to say which
+    one the operator is looking at.
+    """
+    message = "No available NVMe drives found."
+    return f"{message}\n\n{banner}" if banner else message
+
+
 async def _list_api_disks_with_banner(
     control: ControlClient,
 ) -> tuple[list[dict[str, Any]], str | None]:
@@ -462,10 +473,9 @@ class RAIDScreen(XiNASAppMixin, Screen):
             return
         groups, nvme = _drive_groups(disk_rows)
         if not nvme:
-            message = "No available NVMe drives found."
-            if disk_banner:
-                message = f"{message}\n\n{disk_banner}"
-            await self.app.push_screen_wait(ConfirmDialog(message, "Error", ok_only=True))
+            await self.app.push_screen_wait(
+                ConfirmDialog(_no_drives_message(disk_banner), "Error", ok_only=True)
+            )
             return
         name_to_id = {d["name"]: d["id"] for d in nvme}
 
