@@ -171,7 +171,7 @@ the role reuses the namespaces already on the drives — no rebuild, no data los
 - `ls /dev/<ctrl>n*` per data drive.
 - `n1` → log devices (`nvme_small_ns_devices`).
 - `n2`–`n9` (and `n10+`) → data devices (`nvme_large_ns_devices`).
-- Requirement: existing-namespace reuse needs the n1 (log) + n2 (data) two-namespace layout on every data drive. If **no** `n2+` were found anywhere, the task fails explicitly ("Fail on single-namespace layout") naming the remedy — re-run with `xinas_storage_reset: true` to wipe and rebuild the two-namespace layout, or provision it manually. The per-tier detection banner is printed before this check, so the failure path shows which devices were classified n1. A single-namespace layout can never legitimately reach this task on a healthy converge: `MATCH` requires the `data` xiRAID array online **and** `/dev/xi_data` probing as XFS with the configured label (§11), and that array is built from `n2` devices (§6.4) — so a genuine MATCH implies `n2+` namespaces exist, and the only way to trip this fail is a layout tampered with outside the role.
+- Requirement: existing-namespace reuse needs the n1 (log) + n2 (data) two-namespace layout on every data drive. If **no** `n2+` were found anywhere, the task fails explicitly ("Fail on single-namespace layout") naming the remedy — re-run with `xinas_storage_reset: true` to wipe and rebuild the two-namespace layout, or provision it manually. The per-tier detection banner is printed before this check, so the failure path shows which devices were classified n1. A single-namespace layout can never legitimately reach this task on a healthy converge: `MATCH` requires the `data` xiRAID array to report itself online — read out of the daemon's own per-array `state` words, not inferred from the array existing (§11) — **and** `/dev/xi_data` probing as XFS with the configured label, and that array is built from `n2` devices (§6.4) — so a genuine MATCH implies `n2+` namespaces exist, and the only way to trip this fail is a layout tampered with outside the role.
 
 **EMPTY** (a fresh box, including a factory single-`n1` drive) or an explicit
 `xinas_storage_reset: true` falls through to the delete+recreate path in §4.3. **FOREIGN**
@@ -544,6 +544,30 @@ Formatting happens only on a genuinely fresh box, or under an explicit, confirme
 | **MATCH** | xiRAID `data`+`log` online **and** `/dev/xi_data` is XFS with the configured label | **converge** — every destructive op is skipped |
 | **EMPTY** | no xiRAID arrays and no fs signature on `/dev/xi_data` (incl. a factory single-`n1` drive) | provision as a first install |
 | **FOREIGN** | some array/fs signature exists but doesn't match the expected layout | **fail fast** before any wipe |
+
+**"Online" is read from the daemon, not inferred from the array existing.**
+`xicli raid show -f json` reports per-array `state` words; an array counts as
+online only when it reported at least one word and **every** word is `online` or
+`initialized` — the same allowlist the TUI health engine's `raid_status` check
+applies. So a `degraded`, `offline`, `initializing` or reconstructing array — or
+one whose record carries no `state` at all — is **not** a MATCH: with arrays
+present it classifies FOREIGN, and the run fails fast without touching anything.
+Both payload shapes are read (the `name → record` mapping xicli emits, and the
+list-of-records shape), and both the list (`["online", "initialized"]`) and bare
+string (`"online"`) spellings of `state` are accepted, case-insensitively.
+Pinned by [tests/test_storage_state_fail_closed.py](../../tests/test_storage_state_fail_closed.py),
+which replays the classifier's `set_fact` chain against synthetic probe output.
+
+**An unhealthy array is not a foreign layout.** FOREIGN's generic remedy is
+"set `xinas_storage_reset=true` to wipe and rebuild" — the wrong advice for a
+degraded or rebuilding array, which is recoverable. When both expected arrays
+are present but at least one is not online, the classifier sets
+`xinas_storage_arrays_unhealthy` (with `xinas_storage_array_states` for the
+detail), and **both** `nvme_namespace` and `raid_fs` fail *before* the generic
+FOREIGN failure with the right remedy: repair the array or let the rebuild
+finish, then re-run — a healthy array converges. An operator who really does
+want to wipe a degraded array can still do so with an explicit
+`xinas_storage_reset` (which keeps its `YES` gate).
 
 **Single control.** `xinas_storage_reset` (default `false`) is the only operator switch
 for destruction. The legacy `xfs_force_mkfs` and `nvme_use_existing_namespaces` knobs are

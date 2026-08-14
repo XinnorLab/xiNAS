@@ -22,6 +22,19 @@
     - name: Detect current storage state
       ansible.builtin.include_tasks: detect_storage_state.yml
 
+    - name: Fail fast on an existing xiNAS layout whose arrays are not online
+      ansible.builtin.fail:
+        msg: >-
+          The expected xiNAS arrays exist but are not online
+          (states={{ xinas_storage_array_states | default({}) }}). Refusing to
+          touch the storage. Repair the array — or let a rebuild finish — and
+          re-run; a healthy array converges. Do NOT set xinas_storage_reset to
+          get past this: it would destroy the data on a recoverable array.
+      when:
+        - (xinas_storage_state | default('EMPTY')) == 'FOREIGN'
+        - xinas_storage_arrays_unhealthy | default(false) | bool
+        - not (xinas_storage_reset | default(false) | bool)
+
     - name: Fail fast on unexpected existing storage (FOREIGN)
       ansible.builtin.fail:
         msg: >-

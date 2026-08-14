@@ -4,12 +4,24 @@
 #   EMPTY   - no xiRAID arrays and no XFS/foreign signature on /dev/xi_data
 #   FOREIGN - some xiRAID/fs signature exists but does not match the expected layout
 #
+# "Online" is read out of the daemon's own per-array `state` words — it is not
+# inferred from the array merely existing. A degraded, offline, initializing or
+# state-less `data`/`log` array is therefore NOT a MATCH; with arrays present it
+# lands in FOREIGN, which fails fast without touching anything. §4.2 of
+# docs/Installer/raid-spec.md leans on that: a genuine MATCH implies a healthy
+# `data` array, and that array is built from the n2 namespaces.
+#
 # Idempotent and side-effect-free: safe to run before any decision, at either role.
 # raid_fs reuses this via include_role (guarded on xinas_storage_state undefined).
 
 - name: Determine the wanted XFS label
   ansible.builtin.set_fact:
     xfs_label_wanted: "{{ (xfs_filesystems | default([{}]) | first).label | default('nfsdata') }}"
+    # Per-array state words that count as "online". Same allowlist the TUI
+    # health engine's raid_status check applies (xinas_menu/health/engine.py).
+    _ssd_online_states:
+      - online
+      - initialized
 
 - name: Probe existing xiRAID arrays (read-only)
   ansible.builtin.command: xicli raid show -f json
@@ -30,6 +42,49 @@
       {{ (_ssd_parsed.keys() | list) if (_ssd_parsed is mapping)
          else ((_ssd_parsed | map(attribute='name') | list)
                if (_ssd_parsed is iterable and _ssd_parsed is not string) else []) }}
+    # Per-array records, positionally aligned with _ssd_array_names. Both
+    # shapes carry the state words at the record's top level: the mapping shape
+    # (name -> record) is what xicli emits, the list-of-records shape is what
+    # some releases / the fake transport emit.
+    _ssd_array_records: >-
+      {{ (_ssd_parsed.values() | list) if (_ssd_parsed is mapping)
+         else ((_ssd_parsed | list)
+               if (_ssd_parsed is iterable and _ssd_parsed is not string) else []) }}
+
+- name: Map each array name to the state words xiRAID reported for it
+  ansible.builtin.set_fact:
+    _ssd_array_states: >-
+      {{ dict(_ssd_array_names
+              | zip(_ssd_array_records | map(attribute='state', default=[]) | list)) }}
+
+- name: Reduce the expected arrays' state words to a comparable form
+  ansible.builtin.set_fact:
+    # flatten tolerates the bare-string spelling ("online") next to the list
+    # spelling (["online", "initialized"]); a missing state yields [].
+    _ssd_data_states: >-
+      {{ [_ssd_array_states.get('data', [])] | flatten | map('string') | map('lower') | list }}
+    _ssd_log_states: >-
+      {{ [_ssd_array_states.get('log', [])] | flatten | map('string') | map('lower') | list }}
+
+- name: Decide whether the expected arrays are online
+  ansible.builtin.set_fact:
+    # Fail closed: an array that reported no state at all is not online.
+    _ssd_arrays_online: >-
+      {{ (_ssd_data_states | length) > 0
+         and (_ssd_log_states | length) > 0
+         and (((_ssd_data_states + _ssd_log_states)
+               | reject('in', _ssd_online_states) | list | length) == 0) }}
+
+- name: Export why an existing layout may not be a MATCH
+  ansible.builtin.set_fact:
+    # Both expected arrays are there, but at least one is not online: a
+    # repairable condition, NOT a foreign layout to wipe. The FOREIGN failure
+    # in nvme_namespace/raid_fs keys off this to give the right remedy —
+    # "repair / let the rebuild finish", not "set xinas_storage_reset".
+    xinas_storage_arrays_unhealthy: >-
+      {{ ('data' in _ssd_array_names) and ('log' in _ssd_array_names)
+         and (not (_ssd_arrays_online | bool)) }}
+    xinas_storage_array_states: "{{ _ssd_array_states }}"
 
 - name: Probe filesystem type on /dev/xi_data (read-only)
   ansible.builtin.command: blkid -s TYPE -o value /dev/xi_data
@@ -49,6 +104,7 @@
       {{
         'MATCH'
         if (('data' in _ssd_array_names) and ('log' in _ssd_array_names)
+            and (_ssd_arrays_online | bool)
             and ((_ssd_fstype.stdout | default('') | trim) == 'xfs')
             and ((_ssd_fslabel.stdout | default('') | trim) == xfs_label_wanted))
         else ('EMPTY'
@@ -61,5 +117,6 @@
   ansible.builtin.debug:
     msg: >-
       Storage state = {{ xinas_storage_state }}
-      (arrays={{ _ssd_array_names }}, fstype='{{ _ssd_fstype.stdout | default('') | trim }}',
+      (arrays={{ _ssd_array_states }}, online={{ _ssd_arrays_online }},
+      fstype='{{ _ssd_fstype.stdout | default('') | trim }}',
       label='{{ _ssd_fslabel.stdout | default('') | trim }}', wanted='{{ xfs_label_wanted }}')
