@@ -17,6 +17,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Label
 
 from xinas_menu.api.control_client import ControlPathError, lease_conflict_message, quote_id
+from xinas_menu.api.degraded import degraded_banner
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.utils.xfs_helpers import is_path_under
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -153,11 +154,11 @@ class NFSScreen(XiNASAppMixin, Screen):
     async def _load_exports(self) -> None:
         view = self.query_one("#nfs-content", ScrollableTextView)
         try:
-            shares = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
+            env = await asyncio.to_thread(self.app.control.get, "/api/v1/shares")
         except ControlPathError as exc:
-            view.set_content(f"[yellow]Control API: {exc}[/yellow]")
+            view.set_content(f"Control API: {exc}")
             return
-        view.set_content(_format_exports(_rows_from_api(shares)))
+        view.set_content(_format_exports(_rows_from_api(env.get("result")), degraded_banner(env)))
 
     def on_navigable_menu_selected(self, event: NavigableMenu.Selected) -> None:
         key = event.key
@@ -182,11 +183,13 @@ class NFSScreen(XiNASAppMixin, Screen):
         return [e["path"] for e in exports]
 
     async def _get_exports(self) -> list[dict]:
-        """Fetch shares from the control-path API, adapted to legacy rows."""
-        try:
-            shares = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
-        except ControlPathError:
-            return []
+        """Fetch shares from the control-path API, adapted to legacy rows.
+
+        Raises ControlPathError. Callers MUST NOT degrade a failed read to
+        "no shares": Add allocates the next fsid from this list, and an
+        empty-looking list restarts numbering at 1 against a live host.
+        """
+        shares = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
         return [e for e in _rows_from_api(shares) if e.get("path") and e.get("id")]
 
     def _task_progress(self, label: str):
@@ -546,8 +549,23 @@ class NFSScreen(XiNASAppMixin, Screen):
             )
             return
 
+        # fsid is REQUIRED by the API and allocated here, so this read must
+        # be authoritative — allocating from a swallowed error would restart
+        # at 1 and collide with every existing share.
         used: set[int] = set()
-        for row in await self._get_exports():
+        try:
+            existing = await self._get_exports()
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"Could not read existing shares, so a new export id "
+                    f"cannot be allocated safely.\n\n{exc}",
+                    "Error",
+                    ok_only=True,
+                )
+            )
+            return
+        for row in existing:
             fsid = row.get("fsid")
             if isinstance(fsid, int):
                 used.add(fsid)
@@ -579,7 +597,13 @@ class NFSScreen(XiNASAppMixin, Screen):
     @work(exclusive=True)
     async def _edit_share(self) -> None:
         """7-step edit share wizard with Back navigation."""
-        exports = await self._get_exports()
+        try:
+            exports = await self._get_exports()
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Could not load shares.\n{exc}", "Edit Share", ok_only=True)
+            )
+            return
         if not exports:
             await self.app.push_screen_wait(
                 ConfirmDialog("No shares configured.", "Edit Share", ok_only=True)
@@ -697,7 +721,13 @@ class NFSScreen(XiNASAppMixin, Screen):
 
     @work(exclusive=True)
     async def _remove_share(self) -> None:
-        exports = await self._get_exports()
+        try:
+            exports = await self._get_exports()
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(
+                ConfirmDialog(f"Could not load shares.\n{exc}", "Remove Share", ok_only=True)
+            )
+            return
         if not exports:
             await self.app.push_screen_wait(
                 ConfirmDialog("No shares configured.", "Remove Share", ok_only=True)
@@ -892,8 +922,8 @@ def _parse_current_export(export: dict) -> dict:
     }
 
 
-def _format_exports(data: Any) -> str:
-    """Format NFS exports — uses socket data if available, falls back to /etc/exports."""
+def _format_exports(data: Any, banner: str | None = None) -> str:
+    """Render adapted share rows; a banner replaces the empty-state."""
     import os
     import shlex
     import subprocess
@@ -980,52 +1010,43 @@ def _format_exports(data: Any) -> str:
     lines.append(f"  {DIM}NFS allows other hosts to access folders on this server.{NC}")
     lines.append("")
 
-    # Build list of (path, raw_client_strings) from socket data or /etc/exports
+    if banner:
+        lines.append(f"  {RED}⚠ {banner}{NC}")
+        lines.append("")
+
+    # Build list of (path, raw_client_strings) from the adapted API rows.
+    # There is deliberately NO /etc/exports fallback: an empty list means the
+    # api observed no shares, and its collector reads /etc/exports itself —
+    # so parsing the file here could only present unmanaged contents as the
+    # managed share list (spec §4.2).
     shares: list[tuple[str, list[str]]] = []
 
-    if data and isinstance(data, list):
-        for exp in data:
-            if not isinstance(exp, dict):
-                continue
-            path = exp.get("path", "")
-            clients = exp.get("clients", [])
-            if not path:
-                continue
-            # clients may be [{"host": "*", "options": [...]}] or ["host(opts)"]
-            raw: list[str] = []
-            client_specs: list = clients or [{"host": "*", "options": []}]
-            for c in client_specs:
-                if isinstance(c, dict):
-                    host = c.get("host", "*")
-                    opts = c.get("options", [])
-                    raw.append(f"{host}({','.join(opts)})" if opts else host)
-                else:
-                    raw.append(str(c))
-            shares.append((path, raw))
-    else:
-        # Fallback: read /etc/exports directly
-        exports_file = "/etc/exports"
-        try:
-            with open(exports_file) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    parts = line.split()
-                    if parts:
-                        shares.append((parts[0], parts[1:]))
-        except FileNotFoundError:
-            lines.append("  /etc/exports not found — NFS may not be configured.")
-            lines.append("")
-            return "\n".join(lines)
-        except Exception as exc:
-            lines.append(f"  Error reading /etc/exports: {exc}")
-            return "\n".join(lines)
+    for exp in data if isinstance(data, list) else []:
+        if not isinstance(exp, dict):
+            continue
+        path = exp.get("path", "")
+        clients = exp.get("clients", [])
+        if not path:
+            continue
+        # clients may be [{"host": "*", "options": [...]}] or ["host(opts)"]
+        raw: list[str] = []
+        client_specs: list = clients or [{"host": "*", "options": []}]
+        for c in client_specs:
+            if isinstance(c, dict):
+                host = c.get("host", "*")
+                opts = c.get("options", [])
+                raw.append(f"{host}({','.join(opts)})" if opts else host)
+            else:
+                raw.append(str(c))
+        shares.append((path, raw))
 
     if not shares:
-        lines.append(f"  {DIM}No shares configured.{NC}")
-        lines.append("")
-        lines.append(f"  Use {GRN}'Add Share'{NC} to create an NFS export.")
+        # A degraded backend must never read as "genuinely none" — the
+        # banner above already said so, so don't contradict it.
+        if not banner:
+            lines.append(f"  {DIM}(no NFS shares configured){NC}")
+            lines.append("")
+            lines.append(f"  Use {GRN}'Add Share'{NC} to create an NFS export.")
         lines.append("")
         return "\n".join(lines)
 
