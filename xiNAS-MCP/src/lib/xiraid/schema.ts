@@ -97,7 +97,18 @@ export const LEVEL_CONSTRAINTS: Record<Level, LevelConstraints> = {
 
 export const STRIP_SIZES_KIB = [16, 32, 64, 128, 256] as const;
 export const BLOCK_SIZES = [512, 4096] as const;
-export const NAME_RE = /^[A-Za-z0-9_-]{1,63}$/;
+/**
+ * xiRAID Classic 4.4 rule for `xicli raid create -n/--name`: at most 28
+ * characters of Latin letters, digits and underscore. Hyphens are NOT
+ * accepted. See docs/Storage/raid-management-spec.md §4 "Step — name".
+ */
+export const NAME_RE = /^[A-Za-z0-9_]{1,28}$/;
+
+/**
+ * Names xiRAID prohibits outright — they collide with the sysfs attributes
+ * under /sys/block/xi_<name>/, which are lowercase, so the match is exact.
+ */
+export const RESERVED_NAMES: readonly string[] = ['power', 'uevent'];
 
 export const GROUP_SIZE_MIN = 2;
 export const GROUP_SIZE_MAX = 32;

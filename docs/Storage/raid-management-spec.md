@@ -301,12 +301,45 @@ only visible symptom.
 
 ### Step — name
 
-`InputDialog` with validation:
+`InputDialog` with validation. **The rule below is the xiRAID Classic 4.4 engine rule, not a xiNAS convention** — it is transcribed from the [xiRAID 4.4 command reference](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html) for `xicli raid create -n/--name`, and it is the canonical statement of array naming for the whole product (TUI, control-path plan validator, API contract):
 
-- 1 ≤ length ≤ 64.
-- Matches `_ARRAY_NAME_RE = ^[a-zA-Z0-9_-]+$`.
+| Rule | Value | Enforcement |
+|---|---|---|
+| Length | 1–28 characters | hard reject |
+| Character set | Latin letters, digits, underscore — `^[A-Za-z0-9_]{1,28}$`. **Hyphens are NOT allowed.** | hard reject |
+| Reserved names | `power`, `uevent` (they collide with the sysfs attributes under `/sys/block/xi_<name>/`) | hard reject |
+| Partition-identifier collisions | A name that is an existing array's name plus trailing digits, or vice versa — `test1` next to an existing `test`, because partitions of `/dev/xi_test` surface as `/dev/xi_test1` | **warn + allow override** |
 
-A failed validation re-prompts via the `while True:` loop until the user enters a valid name or cancels. This is the wizard's first step, so its dialog never renders a Back button.
+The first three are engine rejections: a name that violates them fails inside `xicli`, so accepting it anywhere upstream only defers the failure past the operator's confirmation. The fourth is worded in the reference as something to *avoid*, not something the engine refuses, so it is a warning the operator can accept, never a block.
+
+The rule is implemented once, in [xinas_menu/utils/xiraid_names.py](../../xinas_menu/utils/xiraid_names.py) (`ARRAY_NAME_RE`, `RESERVED_ARRAY_NAMES`, `validate_array_name()`, `partition_collision()`). The screens hold **no name pattern of their own** — the per-screen `_ARRAY_NAME_RE` / `_POOL_NAME_RE` constants are gone, and `tests/test_xiraid_name_rules.py` fails if a hyphenated character class reappears in either screen, which is how the three rules drifted apart in the first place. A failed validation re-prompts via the `while True:` loop until the user enters a valid name or cancels; a collision warning renders a `ConfirmDialog` whose "No" answer re-prompts and whose "Yes" answer proceeds. This is the wizard's first step, so its dialog never renders a Back button.
+
+To evaluate collisions the wizard fetches `GET /api/v1/arrays` alongside the pool list, up front. That call is swallowed on failure (`existing = []`) exactly like the pool fetch — a control-path hiccup degrades the warning, it does not block array creation.
+
+#### Why the rule lives in three places, and why the published pattern moved
+
+Before this change all three enforcement points disagreed: the TUI allowed hyphens and 64 characters, `docs/control-path/api-v1.yaml` published `^[A-Za-z0-9_-]{1,63}$`, and the engine accepted neither. A name could pass the TUI and be rejected by the API, or pass both and be rejected by `xicli` *after* the operator confirmed the create. Every layer now enforces the same rule:
+
+1. **TUI** — rejects at the name step, before any drive selection work is spent.
+2. **Control-path plan validator** — `NAME_RE` in [xiNAS-MCP/src/lib/xiraid/schema.ts](../../xiNAS-MCP/src/lib/xiraid/schema.ts), surfaced as the `name_invalid` blocker from `validateCreateSpec()`. This is the authoritative gate for non-TUI clients (REST, MCP, `xinasctl`).
+3. **`api-v1.yaml`** — the published `XiraidArray.spec.name` pattern was **tightened** to `^[A-Za-z0-9_]{1,28}$`.
+
+Tightening a published pattern is normally the breaking direction, so the choice was made deliberately rather than by default:
+
+- **The old pattern advertised values the system can never accept.** `my-array` was schema-valid and unconditionally failed at apply. A contract that documents impossible values is not "permissive", it is wrong.
+- **No conforming instance is lost.** Every array that can exist on a node already matches the tighter pattern, because xiRAID itself refuses to create anything else. The change invalidates no stored state and no request that ever succeeded.
+- **Leaving it loose would keep the contract knowingly false**, which is the exact drift this change exists to remove — clients generated from the schema would keep offering hyphens.
+
+**The `oasdiff` gate does not fail on it**, and that was checked rather than assumed. `XiraidArray` is referenced only from *responses* (`GET /arrays`, `GET /arrays/{id}`); the create/modify request body is the generic `requestBodies/Mutating`, whose `spec` is untyped. So `oasdiff` reports the change as two `response-property-pattern-changed` entries at **INFO** severity, and the workflow's `fail-on: ERR` leaves the job green:
+
+```text
+2 changes: 0 error, 0 warning, 2 info
+info  [response-property-pattern-changed] in API GET /arrays
+      the `.../spec/name` response's property pattern was changed
+      from `^[A-Za-z0-9_-]{1,63}$` to `^[A-Za-z0-9_]{1,28}$` for the status `200`
+```
+
+No exclusion was added to [.github/workflows/ci.yml](../../.github/workflows/ci.yml) and no `oasdiff` rule was suppressed. Note the corollary: because the request side is untyped, the schema pattern is documentation, not request validation — the enforcing gate for API clients is `validateCreateSpec()`, which is why the rule has to be right in **both** places.
 
 ### Step — RAID level
 
@@ -514,7 +547,15 @@ The result is fed into `DrivePickerScreen` so the operator can apply the same NU
 
 Same flow as RAID Create up to the drive picker, then:
 
-1. Pool name validated against `_POOL_NAME_RE = ^[a-zA-Z0-9_-]+$`.
+1. Pool name validated against `POOL_NAME_RE = ^[A-Za-z0-9_]{1,64}$` via `validate_pool_name()` in [xinas_menu/utils/xiraid_names.py](../../xinas_menu/utils/xiraid_names.py) — the **array character set, hyphens included in the ban**, over the control path's incumbent 64-character bound.
+
+   The xiRAID 4.4 command reference documents no naming rule for `xicli pool create -n` (it says only "The name of the spare pool"), so unlike the array rule this is a xiNAS choice. The character set is deliberately conservative: pool names are engine identifiers handed to the same `xicli` binary, hyphens are not accepted anywhere xiRAID naming *is* documented, and the two failure modes are not symmetric — a name rejected here costs the operator one keystroke, while a name accepted here and rejected by the engine fails after the confirmation step, mid-apply. If Xinnor documents a laxer pool rule, relax this one; do not relax it on the assumption that it is lax.
+
+   The **length bound is deliberately not** the array's 28. There is no vendor source for a pool length limit, and xiNAS has positive evidence that longer names work: the array executor creates its own spare pools as `xnsp_<array>` (up to 33 characters for a maximum-length array name, `derivedPoolName()` in [xiNAS-MCP/src/lib/xiraid/validate.ts](../../xiNAS-MCP/src/lib/xiraid/validate.ts)). A 28-character pool rule would outlaw pools this system creates itself, so the incumbent 64 stands; `POOL_NAME_MAX_LEN` must remain ≥ `len("xnsp_") + ARRAY_NAME_MAX_LEN`.
+
+   `power`/`uevent` are **not** reserved for pools. Those two names are prohibited because they collide with sysfs attributes under `/sys/block/xi_<name>/`, and a spare pool is not a block device.
+
+   The `Pool` schema in [api-v1.yaml](../../docs/control-path/api-v1.yaml) intentionally keeps `name` unpatterned. Publishing a pattern there would over-claim — it would present a xiNAS-local precaution as a vendor contract — and would spend a second `oasdiff` breaking-change finding on a rule we are less sure of than the array one. Enforcement lives in `requireName()` in [xiNAS-MCP/src/api/plan/providers/pool.ts](../../xiNAS-MCP/src/api/plan/providers/pool.ts), which returns `INVALID_ARGUMENT` at plan time.
 2. Drive picker with `_get_free_nvme_drives()` as the source.
 3. Confirmation summary.
 4. Names normalised to `/dev/<name>`.

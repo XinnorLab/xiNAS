@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from typing import Any
 
 _log = logging.getLogger(__name__)
@@ -28,6 +27,7 @@ from textual.widgets import Footer, Label
 from xinas_menu.api.control_client import ControlClient, ControlPathError, quote_id
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.screens.raid import _list_api_disks
+from xinas_menu.utils.xiraid_names import validate_pool_name
 from xinas_menu.widgets.checklist_dialog import ChecklistDialog
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
 from xinas_menu.widgets.drive_picker import DrivePickerScreen
@@ -35,8 +35,6 @@ from xinas_menu.widgets.input_dialog import InputDialog
 from xinas_menu.widgets.menu_list import MenuItem, NavigableMenu
 from xinas_menu.widgets.select_dialog import SelectDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
-
-_POOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 _MENU = [
     MenuItem("1", "View Pools"),
@@ -321,11 +319,9 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             )
             if not name:
                 return
-            if not _POOL_NAME_RE.match(name):
-                self.app.notify(
-                    "Pool name must contain only letters, digits, hyphens, and underscores.",
-                    severity="error",
-                )
+            error = validate_pool_name(name)
+            if error is not None:
+                self.app.notify(error, severity="error")
                 continue
             break
 
