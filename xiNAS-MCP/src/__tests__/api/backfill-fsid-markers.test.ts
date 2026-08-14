@@ -42,6 +42,17 @@ describe('backfillShareFsidMarkers', () => {
     expect(setup.state.kv.list({ prefix: MARKER })).toEqual([]);
   });
 
+  it('marker rows do not leak into the desired Share listing', () => {
+    // GET /shares lists by the '/xinas/v1/desired/Share/' prefix. The marker
+    // prefix only stays out of it because of that trailing slash — assert it
+    // against real rows, not just string comparison.
+    putShare('mnt/data', 3);
+    backfillShareFsidMarkers(setup.state);
+    const listed = setup.state.kv.list<{ kind?: string }>({ prefix: SHARE });
+    expect(listed).toHaveLength(1);
+    expect(listed.every((r) => r.value.kind === 'Share')).toBe(true);
+  });
+
   it('does not touch unrelated desired rows', () => {
     putShare('mnt/data', 3);
     setup.state.kv.put('/xinas/v1/desired/Filesystem/mnt-data.mount', { kind: 'Filesystem' });
