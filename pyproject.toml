@@ -33,6 +33,10 @@ dev = [
   "rich",            # imported directly (rich.text, rich.markup); textual dep
   "grpcio>=1.60.0",
   "pyyaml>=6.0",
+  # Ansible's templating engine, used by tests that render a role's real Jinja
+  # expressions instead of pattern-matching the task text (see
+  # tests/test_storage_state_fail_closed.py). Not a xiNAS runtime dependency.
+  "jinja2>=3.1",
 ]
 
 [tool.ruff]

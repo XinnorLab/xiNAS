@@ -106,18 +106,23 @@ def replay(
     fslabel: str = "nfsdata",
     raid_rc: int = 0,
     wanted_label: str = "nfsdata",
+    volume_exists: bool = True,
+    fstype_rc: int = 0,
 ) -> dict:
     """Replay the classifier against synthetic probe output, returning its facts.
 
     `raid_show` is the parsed payload `xicli raid show -f json` would print
     (serialized back to JSON for the replay), or a raw string for malformed
-    output.
+    output. `volume_exists` / `fstype_rc` model the filesystem probe: whether
+    /dev/xi_data is there at all, and what blkid made of it (0 = found,
+    2 = nothing found, anything else = could not answer).
     """
     stdout = raid_show if isinstance(raid_show, str) else json.dumps(raid_show)
     context: dict[str, Any] = {
         "xfs_filesystems": [{"label": wanted_label}],
         "_ssd_raid_show": {"rc": raid_rc, "stdout": stdout},
-        "_ssd_fstype": {"rc": 0, "stdout": fstype},
+        "_ssd_volume": {"stat": {"exists": volume_exists}},
+        "_ssd_fstype": {"rc": fstype_rc, "stdout": fstype},
         "_ssd_fslabel": {"rc": 0, "stdout": fslabel},
     }
     for task in _set_fact_tasks():
@@ -263,6 +268,45 @@ def test_failed_raid_probe_never_matches():
     assert classify("", raid_rc=1) != "MATCH"
 
 
+@pytest.mark.parametrize(
+    ("raid_rc", "why"),
+    [(1, "daemon down / module not loaded"), (127, "xicli not on PATH")],
+)
+def test_failed_raid_probe_is_unknown_not_empty(raid_rc, why):
+    """The P0: with xiRAID down a live array looks exactly like a fresh box.
+
+    `xicli raid show` fails AND /dev/xi_data is absent — byte-for-byte how a
+    factory node reads. EMPTY authorizes the namespace rebuild, so a probe that
+    never answered must not produce it.
+    """
+    state = classify("", raid_rc=raid_rc, volume_exists=False, fstype="", fstype_rc=2)
+    assert state != "EMPTY", f"{why}: a failed xicli probe authorized a wipe"
+    assert state == "UNKNOWN", state
+
+
+def test_inconclusive_filesystem_probe_is_unknown_not_empty():
+    """Volume present but blkid errored: its content is not known to be absent."""
+    state = classify({}, volume_exists=True, fstype="", fstype_rc=8)
+    assert state != "EMPTY"
+    assert state == "UNKNOWN", state
+
+
+def test_unknown_outranks_foreign():
+    """FOREIGN would assert knowledge of an array list that could not be read."""
+    state = classify("", raid_rc=1, volume_exists=True, fstype="ext4", fstype_rc=0)
+    assert state == "UNKNOWN", state
+
+
+def test_a_genuinely_fresh_box_is_still_empty():
+    """The daemon answered "no arrays" and the volume is provably absent."""
+    assert classify({}, volume_exists=False, fstype="", fstype_rc=2) == "EMPTY"
+
+
+def test_present_but_unsigned_volume_is_still_empty():
+    """blkid rc 2 is a conclusive negative, not a failure."""
+    assert classify({}, volume_exists=True, fstype="", fstype_rc=2) == "EMPTY"
+
+
 def test_unparsable_raid_output_never_matches():
     """Malformed JSON with rc=0 must not converge — erroring out is fine too.
 
@@ -355,3 +399,42 @@ def test_unhealthy_array_failure_does_not_advise_a_reset(role_task_file):
     guards = " ".join(str(w) for w in task["when"])
     assert "xinas_storage_arrays_unhealthy" in guards, guards
     assert "xinas_storage_reset" in guards, "an explicit reset must still be able to proceed"
+
+
+# --- the gates must not fall back to the destructive state -----------------
+
+UNKNOWN_FAIL = "Fail fast when the storage state could not be determined"
+GATED_ROLE_FILES = [
+    "collection/roles/nvme_namespace/tasks/main.yml",
+    "collection/roles/raid_fs/tasks/main.yml",
+]
+
+
+@pytest.mark.parametrize("role_task_file", GATED_ROLE_FILES)
+def test_gates_never_default_to_empty(role_task_file):
+    """An undefined state fact is a non-answer, and must not authorize a wipe."""
+    text = (REPO / role_task_file).read_text()
+    assert "default('EMPTY')" not in text, (
+        f"{role_task_file} still treats an undefined storage state as EMPTY"
+    )
+
+
+@pytest.mark.parametrize("role_task_file", GATED_ROLE_FILES)
+def test_unknown_failure_exists_and_outranks_every_other_failure(role_task_file):
+    names = [str(t.get("name", "")) for t in _tasks_of(role_task_file)]
+    unknown = [i for i, n in enumerate(names) if n.startswith(UNKNOWN_FAIL)]
+    others = [
+        i for i, n in enumerate(names) if n.startswith(UNHEALTHY_FAIL) or n.startswith(FOREIGN_FAIL)
+    ]
+    assert unknown, f"{role_task_file} has no fail-fast guard on state=UNKNOWN"
+    assert others, f"{role_task_file} lost its FOREIGN failures"
+    assert unknown[0] < min(others), "UNKNOWN must be decided before the layout failures"
+
+
+@pytest.mark.parametrize("role_task_file", GATED_ROLE_FILES)
+def test_unknown_failure_stays_overridable_by_an_explicit_reset(role_task_file):
+    task = next(
+        t for t in _tasks_of(role_task_file) if str(t.get("name", "")).startswith(UNKNOWN_FAIL)
+    )
+    guards = " ".join(str(w) for w in task["when"])
+    assert "xinas_storage_reset" in guards, guards

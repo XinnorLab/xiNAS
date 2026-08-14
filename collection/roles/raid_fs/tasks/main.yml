@@ -56,6 +56,18 @@
     - not (xinas_storage_reset_confirmed | default(false) | bool)
   tags: [raid_fs, raid, fs]
 
+- name: Fail fast when the storage state could not be determined (UNKNOWN, raid_fs layer)
+  ansible.builtin.fail:
+    msg: >-
+      Could not determine what is on this node (state=UNKNOWN): a read-only probe failed,
+      so an existing array is indistinguishable from a fresh box. Refusing to run
+      drive-clean / mkfs. Bring xiRAID up (systemctl status xiraid.target, modprobe xiraid)
+      and re-run, or set xinas_storage_reset=true to wipe and rebuild regardless.
+  when:
+    - (xinas_storage_state | default('UNKNOWN')) == 'UNKNOWN'
+    - not (xinas_storage_reset | default(false) | bool)
+  tags: [raid_fs, raid, fs]
+
 - name: Fail fast on an existing xiNAS layout whose arrays are not online (raid_fs layer)
   ansible.builtin.fail:
     msg: >-
@@ -65,7 +77,7 @@
       re-run; a healthy array converges. Do NOT set xinas_storage_reset to get
       past this: it would destroy the data on a recoverable array.
   when:
-    - (xinas_storage_state | default('EMPTY')) == 'FOREIGN'
+    - (xinas_storage_state | default('UNKNOWN')) == 'FOREIGN'
     - xinas_storage_arrays_unhealthy | default(false) | bool
     - not (xinas_storage_reset | default(false) | bool)
   tags: [raid_fs, raid, fs]
@@ -77,7 +89,7 @@
       Refusing to run drive-clean / mkfs. Set xinas_storage_reset=true to wipe and
       rebuild, or clean the drives manually.
   when:
-    - (xinas_storage_state | default('EMPTY')) == 'FOREIGN'
+    - (xinas_storage_state | default('UNKNOWN')) == 'FOREIGN'
     - not (xinas_storage_reset | default(false) | bool)
   tags: [raid_fs, raid, fs]
 
@@ -109,7 +121,7 @@
   failed_when: false
   when: >-
     (xinas_storage_reset | default(false) | bool)
-    or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
+    or (xinas_storage_state | default('UNKNOWN')) == 'EMPTY'
   tags: [raid_fs, raid, cleanup]
 
 - name: Warn about drives that could not be cleaned
@@ -202,7 +214,7 @@
   changed_when: false
   when: >-
     (xinas_storage_reset | default(false) | bool)
-    or (xinas_storage_state | default('EMPTY')) == 'EMPTY'
+    or (xinas_storage_state | default('UNKNOWN')) == 'EMPTY'
   tags: [raid_fs, raid]
 
 - name: Gather existing xiRAID arrays (json)
