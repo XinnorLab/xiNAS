@@ -425,13 +425,22 @@ the xiNAS codebase rather than re-implementing them:
 | Code | Path | Reuse in xinas_history |
 |------|------|------------------------|
 | `AuditLogger` | `xinas_menu/utils/audit.py` | Append audit records to `/var/log/xinas/audit.log` for every snapshot and rollback operation |
-| `OpTracker` / `OpResult` | `xinas_menu/utils/op_tracker.py` | Structured operation logging with timing, success/failure, and context |
 | `cfg_read` / `cfg_write` | `xinas_menu/utils/config.py` | Atomic JSON I/O pattern reused for manifest and journal persistence |
 | `XiRAIDClient` | `xinas_menu/api/grpc_client.py` | gRPC calls: `raid_show`, `pool_show`, `config_show`, `config_backup` |
 | `ServiceController` | `xinas_menu/utils/service_ctl.py` | Inspect systemd unit status for runtime state collection |
 | `run_cmd` / `run_cmd_stream` | `xinas_menu/utils/subprocess_utils.py` | Execute Ansible playbooks with streaming output |
 | `NavigableMenu` | `xinas_menu/widgets/menu_list.py` | History list UI in Phase 4 TUI screens |
 | `ConfirmDialog` | `xinas_menu/widgets/confirm_dialog.py` | Risk-class-aware confirmation dialogs in Phase 4 |
+
+> **Removed from this table (WS5.5):** `OpTracker` / `OpResult`
+> (`xinas_menu/utils/op_tracker.py`) was listed here as providing structured
+> operation logging. That reuse was never implemented — `xinas_history` never
+> imported the module, and nothing else in the tree did either, so `op_tracker.py`
+> and its `OpStatusWidget` companion were deleted. The row is called out rather
+> than silently dropped because this table is a *planned*-reuse record: a row
+> that never became real is the kind of thing a reader would otherwise trust.
+> Structured operation logging in `xinas_history` is done by the transaction
+> journal (§6.3), not by a borrowed TUI helper.
 
 ---
 

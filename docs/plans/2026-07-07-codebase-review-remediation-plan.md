@@ -318,8 +318,30 @@ rollback mechanism everything else leans on.
 - [ ] **WS5.4** Small fixes: audit record honesty in `mcp.py:371`; deepen
   OS-disk detection (recurse lsblk children — mirror the fix pattern from
   commit 691ef7d); add timeout+`stdin=DEVNULL` in `remediation.py:288`.
-- [ ] **WS5.5** Delete dead code: `op_tracker.py`/`OpStatusWidget` consumers,
+- [x] **WS5.5** Delete dead code: `op_tracker.py`/`OpStatusWidget` consumers,
   `xfs_helpers.py:174` block (grep callers first: `grep -rn "xfs_helpers\|OpTracker" xinas_menu/`).
+  > **Status 2026-08-15:** LANDED on `refactor/ws5-remove-dead-code`. Deleted
+  > `xinas_menu/utils/op_tracker.py`, `xinas_menu/widgets/op_status.py`, and the
+  > dead `OpStatusWidget` block in `styles.tcss` (not named in the finding, but
+  > dead with them). From `xfs_helpers.py`: `mkfs_xfs` plus the two helpers that
+  > existed only to serve it (`get_device_size_bytes`, `_parse_size_to_bytes`)
+  > and the already-callerless `check_existing_filesystem` — deleting `mkfs_xfs`
+  > alone would have left two functions with zero callers. Specs updated in the
+  > same change: `docs/Storage/fs-shares-management-spec.md` (the mkfs row moved
+  > out of "still exist in the module" into a deleted-rather-than-retained note)
+  > and `docs/config-history/architecture.md` §7 (its `OpTracker` reuse row
+  > documented a reuse that was never implemented).
+  >
+  > **Correction to the finding.** The row at the top of this section calls out
+  > "OpTracker/OpStatusWidget + two `@work` methods". The two `@work` methods do
+  > not reproduce against `origin/main` 05c8ecc: an AST scan for `@work`-decorated
+  > methods whose names appear nowhere else returns four hits — `action_check_update`,
+  > `action_locate_drive`, `action_smart_summary`, `action_smart_full` — and all
+  > four are **live**, reached through Textual's action system by the bindings at
+  > `app.py:37` and `drives.py:34,37,38`, which name them without the `action_`
+  > prefix so a name grep cannot see the reference. Any future dead-code sweep in
+  > this codebase has to resolve `Binding(...)` action strings before trusting a
+  > reference count.
 
 ## WS6 — Security — HIGH (two items), rest MEDIUM/LOW
 

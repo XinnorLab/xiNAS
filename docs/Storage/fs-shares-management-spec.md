@@ -54,12 +54,23 @@ The screens never write to `/etc/exports`, `/etc/nfs.conf`, `/etc/systemd/system
 
 | Helper | Now done by |
 |---|---|
-| `mkfs_xfs`, `get_device_size_bytes`, `check_existing_filesystem` | fs-executor preflight + mkfs stages (`POST /api/v1/filesystems`) |
 | `create_mount_unit`, `mount_filesystem` | fs-executor unit + mount stages |
 | `unmount_filesystem` | `PATCH /api/v1/filesystems/{id}` `{"mounted": false}` + `DELETE` to unmanage |
 | `calculate_parity_disks`, `calculate_stripe_width`, `build_mount_options` | api-side derivation from the array (`su_kb` / `sw` omitted from the spec — §3.3) |
 | `update_mount_unit_quota` | `PATCH /api/v1/filesystems/{id}` `{"quota_mode": …}` → `fs.set_quota_mode` (§3.5) |
 | `find_mounts_using_raid` | still used, but by the **RAID** screen only ([raid-management-spec §2.4](raid-management-spec.md#24-xfs_helpers--async-subprocess-helpers)) |
+
+**Deleted rather than retained (WS5.5).** `mkfs_xfs` and its two exclusive
+dependencies, `get_device_size_bytes` and `_parse_size_to_bytes`, plus the
+already-callerless `check_existing_filesystem`, were **removed** from the module
+rather than left in the table above. Their work is done by the fs-executor's
+preflight and mkfs stages (`POST /api/v1/filesystems`), same as the retained
+helpers — but unlike them, `mkfs_xfs` issued an unconditional `mkfs.xfs -f`.
+A reachable-looking helper that reformats a device with no confirmation, no
+plan/apply gate, and no caller is a hazard rather than a convenience: the next
+person to need "create a filesystem from the TUI" would find it and call it.
+The retained helpers in the table are non-destructive, so keeping them
+documented costs nothing.
 
 `_quota_flags(options)` in `filesystem.py` replaced the module's `get_quota_status` for parsing the observed option list.
 

@@ -153,23 +153,6 @@ ScrollableTextView TextArea:focus {
     color: #e6a817;
 }
 
-/* ── OpStatusWidget ────────────────────────────────────────────── */
-OpStatusWidget {
-    height: auto;
-    background: #0c0e14;
-    border: round #2a3454;
-    padding: 0 1;
-    margin: 1 0;
-}
-
-.op-step-ok {
-    color: #00cc88;
-}
-
-.op-step-fail {
-    color: #e85555;
-}
-
 /* ── ConfirmDialog / InputDialog / SelectDialog ──────────────── */
 ConfirmDialog, InputDialog, SelectDialog, TextAreaDialog, ChecklistDialog {
     align: center middle;
