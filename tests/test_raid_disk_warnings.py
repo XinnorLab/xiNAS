@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from xinas_menu.screens.raid import (
     RAIDScreen,
     _list_api_disks,
@@ -31,14 +33,12 @@ class _StubControl:
         return self._envelopes[path].get("result")
 
 
-def _degraded() -> _StubControl:
+def _degraded(message: str = "disk collector errored") -> _StubControl:
     return _StubControl(
         {
             "/api/v1/disks": {
                 "result": [],
-                "warnings": [
-                    {"code": "DEGRADED_BACKEND_UNAVAILABLE", "message": "disk collector errored"}
-                ],
+                "warnings": [{"code": "DEGRADED_BACKEND_UNAVAILABLE", "message": message}],
             },
             "/api/v1/arrays": {"result": []},
         }
@@ -74,9 +74,15 @@ def test_no_drives_message_is_plain_without_a_banner():
     assert _no_drives_message("") == "No available NVMe drives found."
 
 
-def test_wizard_renders_the_banner_in_its_abort_dialog():
-    """Drives the real no-drives path: a degraded collector's banner must reach
-    the dialog the operator sees, not be computed and discarded."""
+@pytest.mark.parametrize(
+    "banner_text",
+    ["disk collector errored", "collector wedged: ENOENT on /dev/nvme0"],
+)
+def test_wizard_renders_the_banner_in_its_abort_dialog(banner_text):
+    """Drives the real no-drives path. Two different banner texts, because a
+    single fixed one is satisfiable by a wizard that ignores the fetched banner
+    and prints a matching constant — that is how the previous version of this
+    test was defeated."""
     captured: list = []
 
     class _StubApp:
@@ -91,9 +97,9 @@ def test_wizard_renders_the_banner_in_its_abort_dialog():
         def __init__(self, control):
             self.app = _StubApp(control)
 
-    asyncio.run(RAIDScreen._create_array_wizard.__wrapped__(_StubScreen(_degraded())))
+    asyncio.run(RAIDScreen._create_array_wizard.__wrapped__(_StubScreen(_degraded(banner_text))))
 
     assert captured, "the wizard showed no dialog"
     message = captured[0]._message
     assert "No available NVMe drives found." in message
-    assert "disk collector errored" in message, "the banner never reached the dialog"
+    assert banner_text in message, "the banner never reached the dialog"
