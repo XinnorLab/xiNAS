@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { encExportId } from '../lib/nfs-export-id.js';
+import { allocateFsid, collectUsedFsids, shareFsidKey } from '../lib/nfs-fsid.js';
 import type { OpenedStateStore } from '../state/index.js';
 import type { ApiConfig } from './config.js';
 
@@ -69,17 +70,16 @@ export function seedShares(state: OpenedStateStore, config: ApiConfig): void {
   // Existing desired paths + used fsids (skip duplicates; assign fsid on gaps).
   // Unpaginated: a node's Share count is realistically well under the KvStore
   // list default cap, and a fresh seed runs against an empty/near-empty prefix.
-  const rows = state.kv.list<{ spec?: { path?: unknown; fsid?: unknown } }>({
+  const rows = state.kv.list<{ id?: unknown; spec?: { path?: unknown; fsid?: unknown } }>({
     prefix: DESIRED_SHARE_PREFIX,
   });
   const existingPaths = new Set<string>();
-  const usedFsids = new Set<number>();
   for (const r of rows) {
     const p = r.value.spec?.path;
     if (typeof p === 'string') existingPaths.add(p);
-    const f = r.value.spec?.fsid;
-    if (typeof f === 'number' && Number.isInteger(f)) usedFsids.add(f);
   }
+  // Same allocation rule as the create plan provider — one definition.
+  const usedFsids = new Set(collectUsedFsids(rows).keys());
 
   for (const entry of entries) {
     const path = entry.path;
@@ -99,7 +99,7 @@ export function seedShares(state: OpenedStateStore, config: ApiConfig): void {
     const { fsid: parsedFsid, options } = extractFsid(rawOpts);
     let fsid = parsedFsid;
     if (fsid === undefined || usedFsids.has(fsid)) {
-      fsid = Math.max(0, ...usedFsids) + 1; // 0 reserved; next free integer
+      fsid = allocateFsid(usedFsids); // 0 reserved; next free integer
     }
     usedFsids.add(fsid);
     existingPaths.add(path);
@@ -109,6 +109,8 @@ export function seedShares(state: OpenedStateStore, config: ApiConfig): void {
     const spec = { path, clients: [{ pattern, options }], fsid };
     // Same doc shape as providers/nfs.ts toDesiredShareDoc + the GET routes.
     state.kv.put(`${DESIRED_SHARE_PREFIX}${id}`, { kind: 'Share', id, spec }, PUT_SOURCE);
+    // Marker so the create provider's absence pin sees this number as taken.
+    state.kv.put(shareFsidKey(fsid), { fsid, share_id: id }, PUT_SOURCE);
   }
 
   state.kv.put(
