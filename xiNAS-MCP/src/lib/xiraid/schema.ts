@@ -67,6 +67,10 @@ export interface LevelConstraints {
   minDrives: number;
   needsGroupSize: boolean;
   needsSyndCnt: boolean;
+  /** AG: raid10's "the number of drives must be even". Only raid10 carries it. */
+  evenMembers?: boolean;
+  /** Per-level group_size floor; defaults to GROUP_SIZE_MIN when absent. */
+  groupSizeMin?: number;
 }
 
 /**
@@ -81,14 +85,14 @@ export interface LevelConstraints {
  * >= the AG numbers; a stricter xiNAS floor is fine, a looser one is a bug.
  *
  * raid10 is one such deliberate stricter floor: AG allows 2 (even), xiNAS
- * requires 4. AG's other per-level rules — raid10's even member count and the
- * group-size floors (>= 4 for raid50/60, >= 6 for raid70) — are not expressed
- * in this table.
+ * requires 4. AG's other per-level rules ride this table too — `evenMembers`
+ * for raid10, `groupSizeMin` for raid70.
  *
  * docs/Storage/raid-management-spec.md §4 owns the table; the TUI Create Array
  * wizard (`_RAID_MIN_DRIVES` in xinas_menu/screens/raid.py) and the installer
  * (`nvme_raid_min_devices` in collection/roles/nvme_namespace/defaults/main.yml)
- * carry the same values. Changing one without the others is review finding #4.
+ * carry the same values for the levels they offer. Changing one without the
+ * others is review finding #4.
  */
 export const LEVEL_CONSTRAINTS: Record<Level, LevelConstraints> = {
   raid0: { minDrives: 1, needsGroupSize: false, needsSyndCnt: false },
@@ -96,10 +100,10 @@ export const LEVEL_CONSTRAINTS: Record<Level, LevelConstraints> = {
   raid5: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
   raid6: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
   raid7: { minDrives: 6, needsGroupSize: false, needsSyndCnt: false },
-  raid10: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false },
+  raid10: { minDrives: 4, needsGroupSize: false, needsSyndCnt: false, evenMembers: true },
   raid50: { minDrives: 8, needsGroupSize: true, needsSyndCnt: false },
   raid60: { minDrives: 8, needsGroupSize: true, needsSyndCnt: false },
-  raid70: { minDrives: 12, needsGroupSize: true, needsSyndCnt: false },
+  raid70: { minDrives: 12, needsGroupSize: true, needsSyndCnt: false, groupSizeMin: 6 },
   'n+m': { minDrives: 8, needsGroupSize: false, needsSyndCnt: true },
 };
 

@@ -35,6 +35,7 @@ from xinas_menu.api.control_client import (
 )
 from xinas_menu.api.degraded import degraded_banner
 from xinas_menu.apptype import XiNASAppMixin
+from xinas_menu.utils import raid_rules
 from xinas_menu.utils.xfs_helpers import is_path_under
 from xinas_menu.utils.xiraid_names import partition_collision, validate_array_name
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -46,19 +47,11 @@ from xinas_menu.widgets.task_wait_dialog import TaskWaitDialog
 from xinas_menu.widgets.text_view import ScrollableTextView
 from xinas_menu.widgets.wizard import BACK, CANCEL, WizardStep, run_wizard
 
+# Every xiRAID constraint this screen enforces (array names, per-level drive
+# minimums, group_size) lives in xinas_menu.utils.raid_rules, with the vendor
+# page and product version cited there. Do not re-derive them here.
 _RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]
 _STRIP_SIZES = ["16", "32", "64", "128", "256"]
-# Minimum member count per RAID level, as enforced by the xiRAID engine — not
-# textbook RAID math. RAID 5 wants 4 (not 3) and RAID 50/60 want 8 (not 6);
-# an under-count is rejected by `xicli raid create` with e.g. "To create RAID
-# level '5', a minimum of '4' disks are required." Read off the engine's own
-# rejection messages on xiRAID Classic 4.4, so re-confirm on a version bump.
-# docs/Storage/raid-management-spec.md §4 owns this table; LEVEL_CONSTRAINTS in
-# xiNAS-MCP/src/lib/xiraid/schema.ts and nvme_raid_min_devices in
-# collection/roles/nvme_namespace/defaults/main.yml carry the same values.
-_RAID_MIN_DRIVES = {"0": 2, "1": 2, "5": 4, "6": 4, "10": 4, "50": 8, "60": 8}
-# A level we have no entry for is left to the engine rather than blocked here.
-_RAID_MIN_DRIVES_FALLBACK = 2
 _CPU_LIST_RE = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
 # Live-modify surface = the ADR-0006 writability matrix: spare_disk_ids
 # (the "sparepool" entry) + tuning.* keys. resync_enabled is create-only
@@ -100,22 +93,6 @@ def _fmt_size(size_bytes: float) -> str:
             return f"{size_bytes:.1f} {unit}" if unit != "B" else f"{size_bytes} B"
         size_bytes /= 1024
     return f"{size_bytes:.1f} EB"
-
-
-def _min_drives_error(level: str, count: int) -> str | None:
-    """Return an operator-facing message when `count` is under the level's floor.
-
-    Returns ``None`` when the selection is acceptable. Catching the under-count
-    here means the operator hears about it in the drives step rather than after
-    the confirmation dialog, when the engine rejects the create.
-    """
-    minimum = _RAID_MIN_DRIVES.get(str(level), _RAID_MIN_DRIVES_FALLBACK)
-    if count >= minimum:
-        return None
-    return (
-        f"RAID {level} needs at least {minimum} drives; {count} selected.\n\n"
-        "Select more drives, or go back and pick a different RAID level."
-    )
 
 
 def _numa_node(name: str) -> int:
@@ -539,30 +516,26 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 return BACK
             return pick
 
+        async def _member_count_ok(level: str, selected) -> bool:
+            """Reject a drive count xiRAID would refuse, before the operator goes on."""
+            problem = raid_rules.validate_member_count(level, len(selected))
+            if problem is None:
+                return True
+            await self.app.push_screen_wait(ConfirmDialog(problem, "Error", ok_only=True))
+            return False
+
         async def drives_step(answers, allow_back, step_no):
-            level = answers.get("level", "")
-
-            async def enough_drives(selected) -> bool:
-                """Pre-validate count vs level so the engine isn't the first to say no."""
-                message = _min_drives_error(level, len(selected))
-                if message is None:
-                    return True
-                await self.app.push_screen_wait(
-                    ConfirmDialog(message, "Not enough drives", ok_only=True)
-                )
-                return False
-
+            level = str(answers.get("level") or "")
             prior = answers.get("drives")
             if prior:
                 # Re-entry: jump straight to the picker with the prior selection.
-                # Looped, because a Back visit may have changed the level and
-                # left the prior selection under the new level's floor.
+                preselected = prior
                 while True:
                     selected = await self.app.push_screen_wait(
                         DrivePickerScreen(
                             nvme,
                             title="Create Array — Select Drives",
-                            preselected=prior,
+                            preselected=preselected,
                             allow_back=allow_back,
                         )
                     )
@@ -570,8 +543,14 @@ class RAIDScreen(XiNASAppMixin, Screen):
                         return CANCEL
                     if selected is BACK:
                         return BACK
-                    if not await enough_drives(selected):
-                        prior = selected
+                    if not selected:
+                        await self.app.push_screen_wait(
+                            ConfirmDialog("No drives selected.", "Error", ok_only=True)
+                        )
+                        continue
+                    if not await _member_count_ok(level, selected):
+                        # keep the operator's picks so they can add to them
+                        preselected = selected
                         continue
                     return selected
             while True:
@@ -619,7 +598,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                         ConfirmDialog("No drives selected.", "Error", ok_only=True)
                     )
                     continue
-                if not await enough_drives(selected):
+                if not await _member_count_ok(level, selected):
                     continue
                 return selected
 
@@ -640,14 +619,19 @@ class RAIDScreen(XiNASAppMixin, Screen):
             return pick
 
         async def group_size_step(answers, allow_back, step_no):
+            # First step where both the level and the drive count are known, so
+            # divisibility is checked here rather than in the drives step.
+            level = str(answers.get("level") or "")
+            member_count = len(answers.get("drives") or ())
+            minimum = raid_rules.group_size_min(level)
             default = str(answers.get("group_size", ""))
             while True:
                 value = await self.app.push_screen_wait(
                     InputDialog(
-                        "Group size (required for RAID 50/60):",
+                        f"Group size (required for RAID {level}):",
                         f"Create Array — Step {step_no}",
                         default=default,
-                        placeholder="4",
+                        placeholder=str(minimum),
                         allow_back=allow_back,
                     )
                 )
@@ -657,10 +641,13 @@ class RAIDScreen(XiNASAppMixin, Screen):
                     return BACK
                 try:
                     gs = int(value)
-                    if gs <= 0:
-                        raise ValueError
                 except ValueError:
-                    self.app.notify("Group size must be a positive integer.", severity="error")
+                    self.app.notify("Group size must be a whole number.", severity="error")
+                    default = value
+                    continue
+                problem = raid_rules.validate_group_size(level, member_count, gs)
+                if problem:
+                    self.app.notify(problem, severity="error")
                     default = value
                     continue
                 return gs

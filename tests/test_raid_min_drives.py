@@ -26,10 +26,13 @@ GENERATE = ROLE / "tasks/generate_raid_config.yml"
 VM_PRESET = REPO / "presets/xinnorVM/nvme_namespace.yml"
 STORAGE_SPEC = REPO / "docs/Storage/raid-management-spec.md"
 
-# The engine-enforced table, keyed by bare level number. This literal is the
-# test's own copy on purpose: if someone relaxes a minimum they must edit this
-# file too, which makes the change visible in review.
-STRICT_MINIMUMS = {"0": 2, "1": 2, "5": 4, "6": 4, "10": 4, "50": 8, "60": 8}
+# The vendor table, keyed by bare level number, for the levels the TUI wizard
+# and the installer both cover. This literal is the test's own copy on purpose:
+# if someone relaxes a minimum they must edit this file too, which makes the
+# change visible in review. Source: xiRAID Classic 4.4 Administrator's Guide,
+# "RAIDs explained" — RAID 0 takes 1 drive, RAID 5 takes 4, RAID 50/60 take 8.
+# RAID 10's 4 is a xiNAS choice: the guide's own minimum is 2, even.
+STRICT_MINIMUMS = {"0": 1, "1": 2, "5": 4, "6": 4, "10": 4, "50": 8, "60": 8}
 
 # Levels the strict table shares with the control path's wider level list
 # (which also carries raid7/raid70/n+m, outside the TUI + installer surface).
@@ -73,20 +76,24 @@ def _iter_tasks(tasks):
 
 
 def test_tui_table_matches_the_strict_minimums():
-    from xinas_menu.screens.raid import _RAID_LEVELS, _RAID_MIN_DRIVES
+    from xinas_menu.screens.raid import _RAID_LEVELS
+    from xinas_menu.utils.raid_rules import LEVEL_MIN_DRIVES
 
-    assert _RAID_MIN_DRIVES == STRICT_MINIMUMS
+    covered = {lvl: LEVEL_MIN_DRIVES[lvl] for lvl in STRICT_MINIMUMS}
+    assert covered == STRICT_MINIMUMS
     # Every level the wizard offers must have an entry, or the operator gets no
     # pre-validation at all for that level.
-    assert set(_RAID_LEVELS) <= set(_RAID_MIN_DRIVES)
+    assert set(_RAID_LEVELS) <= set(LEVEL_MIN_DRIVES)
 
 
 def test_tui_rejects_under_count_and_accepts_the_minimum():
-    from xinas_menu.screens.raid import _min_drives_error
+    from xinas_menu.utils.raid_rules import validate_member_count as _min_drives_error
 
     for level, minimum in STRICT_MINIMUMS.items():
         assert _min_drives_error(level, minimum) is None, level
-        assert _min_drives_error(level, minimum + 1) is None, level
+        # RAID 10 additionally requires an even count, so step by 2 there.
+        step = 2 if level == "10" else 1
+        assert _min_drives_error(level, minimum + step) is None, level
         message = _min_drives_error(level, minimum - 1)
         assert message is not None, f"RAID {level} accepted {minimum - 1} drives"
         # The message has to be actionable: name the level, the floor, and the
@@ -98,18 +105,18 @@ def test_tui_rejects_under_count_and_accepts_the_minimum():
 
 def test_tui_rejects_the_textbook_raid5_and_raid50_counts():
     """The exact layouts that used to sail through to the engine."""
-    from xinas_menu.screens.raid import _min_drives_error
+    from xinas_menu.utils.raid_rules import validate_member_count as _min_drives_error
 
     assert _min_drives_error("5", 3) is not None
     assert _min_drives_error("50", 6) is not None
 
 
 def test_tui_never_blocks_a_level_it_cannot_reason_about():
-    from xinas_menu.screens.raid import _min_drives_error
+    from xinas_menu.utils.raid_rules import validate_member_count as _min_drives_error
 
     # Unknown level → fall back to 2 and leave the engine as the backstop,
     # rather than blocking a layout the wizard has no opinion on.
-    assert _min_drives_error("70", 2) is None
+    assert _min_drives_error("99", 2) is None
     assert _min_drives_error("70", 1) is not None
 
 
@@ -214,10 +221,23 @@ def test_spec_table_matches_the_code():
     for row in re.finditer(r"^\|\s*([\d,\s]+?)\s*\|[^|]*\|\s*\**(\d+)\**\s*\|", body, re.MULTILINE):
         for level in row.group(1).split(","):
             documented[level.strip()] = int(row.group(2))
-    assert documented == STRICT_MINIMUMS, documented
 
-    # The provenance note is load-bearing: these numbers came from the engine's
-    # rejection messages on a specific xiRAID version, not from its --help.
+    # The spec table is the VENDOR's; STRICT_MINIMUMS is what xiNAS enforces.
+    # They agree everywhere except RAID 10, where xiNAS is deliberately
+    # stricter (4 vs the guide's 2) — a divergence the spec has to spell out,
+    # because an undocumented stricter floor is indistinguishable from a stale
+    # one.
+    for level, enforced in STRICT_MINIMUMS.items():
+        vendor = documented.get(level)
+        assert vendor is not None, f"RAID {level} missing from the spec table"
+        assert vendor <= enforced, (
+            f"RAID {level}: xiNAS enforces {enforced}, under the vendor's {vendor}"
+        )
+        if vendor != enforced:
+            assert level == "10", f"undocumented stricter floor for RAID {level}"
+    assert "xiNAS choice" in body, "the RAID 10 divergence is not called out"
+
+    # The provenance note is load-bearing: these are the vendor's published
+    # numbers for one xiRAID version, not values inferred from an error string.
     assert "xiRAID-version-specific" in body
-    assert "rejection messages" in body
-    assert "xicli raid create --help" in body
+    assert "RAIDs explained" in body

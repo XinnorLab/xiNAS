@@ -319,7 +319,7 @@ only visible symptom.
 
 ### Step — name
 
-`InputDialog` with validation. **The rule below is the xiRAID Classic 4.4 engine rule, not a xiNAS convention** — it is transcribed from the [xiRAID 4.4 command reference](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html) for `xicli raid create -n/--name`, and it is the canonical statement of array naming for the whole product (TUI, control-path plan validator, API contract):
+`InputDialog` with validation, applied via `raid_rules.validate_array_name()` (the rule itself lives in [xinas_menu/utils/xiraid_names.py](../../xinas_menu/utils/xiraid_names.py), which `raid_rules` re-exports — see "Where the rules live" below). **The rule below is the xiRAID Classic 4.4 engine rule, not a xiNAS convention** — it is transcribed from the [xiRAID 4.4 command reference](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html) for `xicli raid create -n/--name`, and it is the canonical statement of array naming for the whole product (TUI, control-path plan validator, API contract):
 
 | Rule | Value | Enforcement |
 |---|---|---|
@@ -396,19 +396,27 @@ pools, and tightening it would reject pool names that work today.
 - **RAID 0 = 1** was recorded as 2 — stricter than the engine, so it rejects a layout xiRAID would accept.
 - **RAID 10 = 4** is **not** a xiRAID minimum: AG says 2, even. The floor of 4 is a xiNAS choice (a 2-drive RAID 10 is a mirror with extra steps) and must not be attributed to the engine.
 
-##### Where the table is encoded
+##### Where the rules live
 
-| Surface | Where | Enforced at |
-|---|---|---|
-| TUI Create Array wizard | `_RAID_MIN_DRIVES` in [xinas_menu/screens/raid.py](../../xinas_menu/screens/raid.py) | drives step, before the confirmation dialog (below) |
-| Control path (API + agent) | `LEVEL_CONSTRAINTS[…].minDrives` in [xiNAS-MCP/src/lib/xiraid/schema.ts](../../xiNAS-MCP/src/lib/xiraid/schema.ts) | `validateCreateSpec` → `min_drives` blocker |
-| Installer auto-path | `nvme_raid_min_devices` in [collection/roles/nvme_namespace/defaults/main.yml](../../collection/roles/nvme_namespace/defaults/main.yml) | `generate_raid_config.yml` preflight — see [Installer/raid-spec.md §6.1](../Installer/raid-spec.md#61-capacity-checks) |
+**The wizard pre-validates against this table.** The drives step re-prompts on
+an under-count with the level's own requirement
+(`RAID 5 needs at least 4 drives (4 selected)`), and on an odd member count
+for RAID 10, rather than letting the operator complete four more steps and a
+confirmation before the engine rejects the create. The control path validates
+the same rules independently — see [ADR-0006](../control-path/adr/0006-xiraid-array.md)
+and `lib/xiraid/schema.ts` — because the TUI is not the only client.
 
-##### Pre-validation in the wizard
+The rules live in one module per language so there is a single place to
+re-check when the xiRAID version moves:
 
-**The Create wizard pre-validates drive count against the chosen level.** After the operator finishes the drives step, the wizard compares the selection against `_RAID_MIN_DRIVES[level]` and, on an under-count, shows an OK-only dialog naming the level, the minimum, and the count actually selected (`RAID 5 needs at least 4 drives; 3 selected.`) and re-prompts the drives step rather than advancing. Previously the under-count was caught by the engine only *after* the confirmation step, so the operator paid for the whole wizard before learning the layout was impossible. A level unknown to `_RAID_MIN_DRIVES` falls back to a minimum of `2` — the wizard never blocks on a level it cannot reason about, leaving the engine as the backstop.
+| Surface | Module |
+|---|---|
+| Python TUI | [xinas_menu/utils/raid_rules.py](../../xinas_menu/utils/raid_rules.py) |
+| TypeScript control path | [xiNAS-MCP/src/lib/xiraid/schema.ts](../../xiNAS-MCP/src/lib/xiraid/schema.ts) |
 
-Because `level` is chosen *before* `drives`, revising the level on a Back visit can invalidate an already-collected drive selection (e.g. `5` → `50` with 4 drives picked). The check runs on every entry into the drives step, including re-entry with a prior selection pre-checked, so the stale-selection case is caught on the way forward rather than at dispatch.
+Neither is allowed to be *looser* than the vendor table; stricter is a
+deliberate xiNAS choice and must say so (RAID 10's floor of 4 is the only one
+today).
 
 Changing the level on a Back visit can flip whether `group_size` applies going forward — e.g. going from `50` back to `5` — in which case the driver prunes the now-inapplicable `group_size` answer and the wizard skips straight past it on the next advance.
 
@@ -441,15 +449,22 @@ Filters that exclude a drive from the picker:
 
 `applies=lambda a: a.get("level") in ("50", "60")`. For levels `50` and `60` the wizard prompts for `group_size` as a positive integer; the validation loop re-prompts on bad input. For any other level this step is skipped in both directions — advancing past `strip` goes straight to `spare`/`confirmed`, and Back from a later step lands on `strip`, not on a hidden `group_size` prompt.
 
-**What xiRAID actually accepts here.** CR / `xicli raid` lists
-`-gs, --group_size` with the range **4–32** "for RAID 10, 50, 60, 70 only",
-and AG adds that the member count must be a multiple of the group size with
-**at least 2 groups** (group size ≥ 6 for RAID 70). So "any positive integer"
-is far looser than the engine: `1`, `3`, and `33` are all accepted by the
-dialog and rejected at dispatch, as is any value that doesn't divide the
-member count into ≥ 2 groups. Tightening the prompt to `4 ≤ gs ≤ 32` plus the
-divisibility check is the same tracked follow-up as the drive-count
-pre-validation above.
+**What xiRAID accepts here, and what the prompt enforces.** CR / `xicli raid`
+lists `-gs, --group_size` with the range **4–32** "for RAID 10, 50, 60, 70
+only", and AG adds that the member count must be a multiple of the group size
+with **at least 2 groups** (group size ≥ 6 for RAID 70). "Any positive
+integer" was far looser than that — `1`, `3` and `33` all reached dispatch —
+so the prompt now applies the full rule and re-prompts with the reason:
+
+- outside `[4,32]` → `Group size must be between 4 and 32.`
+- doesn't divide the member count → `8 drives do not divide evenly into
+  groups of 3.`
+- divides into fewer than 2 groups → `Group size 8 leaves only 1 group; at
+  least 2 are required.`
+
+This step is the first point where both the level and the drive count are
+known, which is why divisibility is checked here rather than in the drives
+step.
 
 Two further notes on the level list:
 

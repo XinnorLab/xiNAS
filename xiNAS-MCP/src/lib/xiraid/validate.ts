@@ -111,13 +111,20 @@ export function validateCreateSpec(spec: XiraidArraySpec, facts: CreateFacts): B
       `level ${spec.level} needs at least ${constraints.minDrives} drives (got ${memberCount})`,
     );
   }
+  if (constraints.evenMembers && memberCount % 2 !== 0) {
+    push(
+      'members_not_even',
+      `level ${spec.level} needs an even number of drives (got ${memberCount})`,
+    );
+  }
   if (constraints.needsGroupSize) {
+    const groupSizeMin = constraints.groupSizeMin ?? GROUP_SIZE_MIN;
     if (spec.group_size === undefined || spec.group_size === null) {
       push('group_size_required', `level ${spec.level} requires group_size`);
-    } else if (spec.group_size < GROUP_SIZE_MIN || spec.group_size > GROUP_SIZE_MAX) {
+    } else if (spec.group_size < groupSizeMin || spec.group_size > GROUP_SIZE_MAX) {
       push(
         'group_size_range',
-        `group_size must be ${GROUP_SIZE_MIN}-${GROUP_SIZE_MAX} (got ${spec.group_size})`,
+        `group_size must be ${groupSizeMin}-${GROUP_SIZE_MAX} for ${spec.level} (got ${spec.group_size})`,
       );
     } else if (memberCount % spec.group_size !== 0 || memberCount / spec.group_size < 2) {
       // compound levels need an even split into >= 2 groups
