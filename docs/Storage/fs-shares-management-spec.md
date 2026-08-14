@@ -145,7 +145,9 @@ The wizard mirrors what the installer's `raid_fs` role does (see [Installer/raid
 **Pre-check.** Two control-path reads, no `findmnt` and no gRPC:
 
 1. `GET /api/v1/arrays` enumerates arrays (`_arrays_from_api`). A `ControlPathError` here aborts on an OK-only `Failed to query RAID arrays.` dialog.
-2. `GET /api/v1/filesystems` → `_volumes_in_use()` collects every volume path already consumed by a managed filesystem, as a **data device** (`status.backing_device`) *or* as a **log device** (a `logdev=` entry in its effective mount options). Arrays whose `volume_path` is in that set are filtered out. A failure here degrades to an empty set rather than aborting — the wizard then offers arrays that may already be in use, and the executor's preflight is what catches it.
+2. `_unused_arrays(arr_rows)` runs `GET /api/v1/filesystems` → `_volumes_in_use()`, collecting every volume path already consumed by a managed filesystem, as a **data device** (`status.backing_device`) *or* as a **log device** (a `logdev=` entry in its effective mount options). Arrays whose `volume_path` is in that set are filtered out. A `ControlPathError` **aborts** on an OK-only `Create Filesystem — Aborted` dialog.
+
+   That read used to degrade to an empty set, and the failure it enabled ran through the executor rather than stopping at the screen: the wizard offered arrays that already carried a filesystem, the create failed in the agent's `blkid` preflight, and this screen offers a **force retry** as that failure's remedy (§3.3, *force*) — a retry that overwrites the existing filesystem. The preflight held, but a read that never answered was walking the operator toward a destructive dialog.
 
 If fewer than 2 free arrays remain, the wizard aborts with "Filesystem creation requires at least 2 RAID arrays (one for data, one for log)."
 
@@ -204,7 +206,9 @@ Same shape as the RAID-delete teardown in [Storage/raid-management-spec.md §6](
 
 > This picker calls the banner-less `_list_filesystems()`, not `_list_filesystems_with_status()`. Under a degraded backend (`DEGRADED_BACKEND_UNAVAILABLE`) the list arrives empty and the operator is told `No XFS filesystems found.` — the one place in this screen where a degraded read is not distinguished from a genuinely empty one. Show Filesystems (§3.2) does render the banner.
 
-**Dependency check.** `GET /api/v1/shares`; every share whose `spec.path` is under the chosen `mountpoint` (`is_path_under`, not a bare `startswith` — `/mnt/data2` is not under `/mnt/data`) is recorded in `affected_shares` as `{id, path}`. This catches both the root export and any sub-directory exports rooted at the same mount. A `ControlPathError` here degrades to an empty list rather than aborting: the confirmation still appears, with the un-listable shares absent from it. The check is skipped entirely for a filesystem with no mountpoint.
+**Dependency check — fail-closed.** `_shares_on_mountpoint(mountpoint, fs_label)` runs `GET /api/v1/shares`; every share whose `spec.path` is under the chosen `mountpoint` (`is_path_under`, not a bare `startswith` — `/mnt/data2` is not under `/mnt/data`) is recorded in `affected_shares` as `{id, path}`. This catches both the root export and any sub-directory exports rooted at the same mount. The check is skipped for a filesystem with no mountpoint, which returns an empty list: nothing can be rooted under a mountpoint that does not exist.
+
+A `ControlPathError` **aborts the deletion** — `Delete Filesystem — Aborted`, carrying the underlying error and stating that the filesystem was not deleted and nothing was changed — and the flow returns before the first confirmation. It previously degraded to an empty list, which is not the same as an empty answer, and the rest of the flow reads that list as fact twice over: the second `FINAL CONFIRMATION` renders only when it is non-empty, and step 1 iterates it to remove the shares. A control path that was down therefore downgraded the teardown to a single confirmation, skipped the share removal entirely, and unmounted and unmanaged the filesystem under live NFS exports. There is no server-side backstop for this one — the filesystem plan provider carries no share blocker — so this read is the only gate.
 
 **Confirmation.**
 

@@ -326,14 +326,10 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             )
             return
 
-        # Filter out arrays already in use as a data OR log device of a
-        # managed filesystem (GET /api/v1/filesystems).
-        try:
-            fs_rows = await self._list_filesystems()
-        except ControlPathError:
-            fs_rows = []
-        used = _volumes_in_use(fs_rows)
-        arrays = [a for a in _arrays_from_api(arr_rows) if a["volume_path"] not in used]
+        candidates = await self._unused_arrays(arr_rows)
+        if candidates is None:
+            return
+        arrays = candidates
 
         if len(arrays) < 2:
             await self.app.push_screen_wait(
@@ -603,6 +599,82 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             )
         )
 
+    async def _unused_arrays(self, arr_rows: Any) -> list[dict[str, Any]] | None:
+        """Arrays not already backing a managed filesystem, or ``None`` when unknowable.
+
+        FAIL-CLOSED: this filter is the only thing keeping an array that already
+        carries a filesystem out of the candidate list. Swallowed into an empty
+        list it offered exactly those arrays; the create then failed in the
+        agent's `blkid` preflight, whose remedy this screen offers as a **force
+        retry that overwrites the existing filesystem**. A read that never
+        answered was walking the operator to a destructive dialog.
+        """
+        try:
+            fs_rows = await self._list_filesystems()
+        except ControlPathError as exc:
+            await self.app.push_screen_wait(
+                ConfirmDialog(
+                    f"Could not read existing filesystems:\n{exc}\n\n"
+                    f"Without that list the wizard cannot tell which arrays are "
+                    f"already in use, so it will not offer any. Retry once the "
+                    f"control path is reachable.",
+                    "Create Filesystem — Aborted",
+                    ok_only=True,
+                )
+            )
+            return None
+        used = _volumes_in_use(fs_rows)
+        return [a for a in _arrays_from_api(arr_rows) if a["volume_path"] not in used]
+
+    async def _delete_aborted(self, reason: str, fs_label: str) -> None:
+        """Halt the deletion before anything is changed, and say why."""
+        await self.app.push_screen_wait(
+            ConfirmDialog(
+                f"{reason}\n\n"
+                f"'{fs_label}' was NOT deleted and nothing was changed. An "
+                f"unreadable dependency list is not evidence that the filesystem "
+                f"has none — retry once the control path is reachable.",
+                "Delete Filesystem — Aborted",
+                ok_only=True,
+            )
+        )
+
+    async def _shares_on_mountpoint(self, mountpoint: str, fs_label: str) -> list[dict] | None:
+        """NFS shares rooted at ``mountpoint``, or ``None`` when unknowable.
+
+        FAIL-CLOSED: the teardown removes these shares before unmounting, and
+        the second confirmation renders only when the list is non-empty. A
+        `ControlPathError` swallowed into `[]` therefore both hid the shares
+        from the operator and skipped their removal, unmounting the filesystem
+        under live exports. There is no server-side backstop — the filesystem
+        plan provider carries no share blocker — so this read is the only gate.
+
+        An unmounted filesystem returns ``[]`` without reading: nothing can be
+        rooted under a mountpoint that does not exist.
+        """
+        if not mountpoint:
+            return []
+        try:
+            share_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
+        except ControlPathError as exc:
+            await self._delete_aborted(
+                f"Could not read NFS shares from the control path:\n{exc}", fs_label
+            )
+            return None
+
+        affected: list[dict] = []
+        for doc in share_rows if isinstance(share_rows, list) else []:
+            if not isinstance(doc, dict):
+                continue
+            doc_spec = doc.get("spec")
+            path = doc_spec.get("path") if isinstance(doc_spec, dict) else None
+            sid = doc.get("id")
+            if not path or sid is None:
+                continue
+            if is_path_under(str(path), mountpoint):
+                affected.append({"id": str(sid), "path": str(path)})
+        return affected
+
     @work(exclusive=True)
     async def _delete_filesystem(self) -> None:
         """Delete a filesystem: shares delete → unmount PATCH → unmanage DELETE.
@@ -653,23 +725,10 @@ class FilesystemScreen(XiNASAppMixin, Screen):
         mountpoint = target_fs["mountpoint"]
         source_dev = target_fs["backing_device"]
 
-        # ── Check for active NFS shares on this mountpoint ───────────────
-        affected_shares: list[dict] = []  # [{id, path}]
-        if mountpoint:
-            try:
-                share_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/shares")
-            except ControlPathError:
-                share_rows = []
-            for doc in share_rows if isinstance(share_rows, list) else []:
-                if not isinstance(doc, dict):
-                    continue
-                doc_spec = doc.get("spec")
-                path = doc_spec.get("path") if isinstance(doc_spec, dict) else None
-                sid = doc.get("id")
-                if not path or sid is None:
-                    continue
-                if is_path_under(str(path), mountpoint):
-                    affected_shares.append({"id": str(sid), "path": str(path)})
+        # ── Check for active NFS shares on this mountpoint (fail-closed) ──
+        affected_shares = await self._shares_on_mountpoint(mountpoint, mountpoint or fs_id)
+        if affected_shares is None:
+            return
 
         # ── Build warning ────────────────────────────────────────────────
         warning_parts = [
