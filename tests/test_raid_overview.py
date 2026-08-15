@@ -213,26 +213,50 @@ def test_merge_max_edit_params_are_labelled_microseconds_not_kb():
 
 # ---- TRIM / discard (raid-management-spec §3, Installer raid-spec §7.5) ----
 #
-# `discard` and `drive_trim` are create-only knobs the installer decides from
-# the members' discard support. The Extended view is where an operator finds
-# out what the array actually got, so both must render — and, like every other
-# tuning value, an unobserved one must not render as a plausible default.
+# The Extended view is where an operator finds out what discard the array
+# actually got. Two distinct facts, both observed: `spec.tuning.discard` (the
+# daemon's `discard_allowed` — what the array is CONFIGURED to accept) and
+# `status.discard_active` (whether it is processing discards right now). An
+# unobserved one must not render as a plausible default.
 
 
 def test_trim_block_renders_observed_values():
-    rows = _api_row(spec_extra={"tuning": {"discard": True, "drive_trim": True}})
+    rows = _api_row(
+        spec_extra={"tuning": {"discard": True}},
+        status_extra={"discard_active": True},
+    )
     out = _format_raid_overview(_arrays_from_api(rows), extended=True)
 
     assert "Enabled" in _row(out, "Discard (TRIM)")
-    assert "Enabled" in _row(out, "Drive TRIM")
+    assert "Yes" in _row(out, "Discard Active")
 
 
 def test_trim_block_renders_disabled_when_observed_off():
-    rows = _api_row(spec_extra={"tuning": {"discard": False, "drive_trim": False}})
+    rows = _api_row(
+        spec_extra={"tuning": {"discard": False}},
+        status_extra={"discard_active": False},
+    )
     out = _format_raid_overview(_arrays_from_api(rows), extended=True)
 
     assert "Disabled" in _row(out, "Discard (TRIM)")
-    assert "Disabled" in _row(out, "Drive TRIM")
+    assert "No" in _row(out, "Discard Active")
+
+
+def test_configured_discard_that_is_not_in_effect_shows_both():
+    """The live 4.4.0 case: an initializing array reads allowed=1, active=0.
+
+    Rendering only the configured value would tell the operator TRIM reaches
+    the media while the daemon is not processing a single discard.
+    """
+    rows = _api_row(
+        spec_extra={"tuning": {"discard": True}},
+        status_extra={"discard_active": False},
+    )
+    out = _format_raid_overview(_arrays_from_api(rows), extended=True)
+
+    assert "Enabled" in _row(out, "Discard (TRIM)")
+    assert "No" in _row(out, "Discard Active")
+    assert "Yes" not in _row(out, "Discard Active")
 
 
 def test_unobserved_trim_renders_unknown_not_disabled():
@@ -240,20 +264,38 @@ def test_unobserved_trim_renders_unknown_not_disabled():
 
     assert "unknown" in _row(out, "Discard (TRIM)")
     assert "Disabled" not in _row(out, "Discard (TRIM)")
-    assert "unknown" in _row(out, "Drive TRIM")
-    assert "Disabled" not in _row(out, "Drive TRIM")
+    assert "unknown" in _row(out, "Discard Active")
+    assert "No" not in _row(out, "Discard Active")
+
+
+def test_no_drive_trim_row():
+    """`drive_trim` TRIMs the disks BEFORE the array exists — an action, not
+    state. raid_show never reports it, so a row could only print "unknown"
+    forever (raid-management-spec §3)."""
+    rows = _api_row(spec_extra={"tuning": {"discard": True, "drive_trim": True}})
+    out = _plain(_format_raid_overview(_arrays_from_api(rows), extended=True))
+
+    assert "Drive TRIM" not in out
 
 
 def test_trim_rows_are_absent_from_the_quick_overview():
-    rows = _api_row(spec_extra={"tuning": {"discard": True, "drive_trim": True}})
+    rows = _api_row(
+        spec_extra={"tuning": {"discard": True}},
+        status_extra={"discard_active": True},
+    )
     out = _format_raid_overview(_arrays_from_api(rows), extended=False)
     assert "Discard (TRIM)" not in _plain(out)
+    assert "Discard Active" not in _plain(out)
 
 
 def test_trim_knobs_are_not_offered_as_edits():
-    """Create-only: RaidModify has no field for either (translate.ts)."""
+    """Create-only: RaidModify has no field for either (translate.ts).
+
+    `discard_active` is observation and has no write surface at all.
+    """
     from xinas_menu.screens.raid import _MODIFY_PARAMS
 
     keys = {key for key, *_ in _MODIFY_PARAMS}
     assert "discard" not in keys
     assert "drive_trim" not in keys
+    assert "discard_active" not in keys

@@ -43,6 +43,13 @@ export interface ObservedXiraidArray {
     check_progress_pct: number | null;
     usable_capacity_bytes?: number;
     memory_usage_mb?: number;
+    /**
+     * `discard_active`: the array is processing discard requests right now.
+     * Observation with no write surface, which is why it lives here and not
+     * under `spec.tuning` next to `discard` (`discard_allowed`, what the array
+     * is CONFIGURED to accept). The two diverge in practice.
+     */
+    discard_active?: boolean;
     member_states: Array<Record<string, unknown>>;
   };
 }
@@ -165,6 +172,7 @@ export function parseRaidShow(
     const capacityBytes = sizeToBytes(o.size);
     const tuning = readTuning(o);
     const memoryUsage = coerceNumber(o.memory_usage_mb ?? o.memory_usage);
+    const discardActive = coerceBoolean(o.discard_active);
 
     out.push({
       kind: 'XiraidArray',
@@ -189,6 +197,7 @@ export function parseRaidShow(
         check_progress_pct: null,
         ...(capacityBytes !== null ? { usable_capacity_bytes: capacityBytes } : {}),
         ...(memoryUsage !== null ? { memory_usage_mb: memoryUsage } : {}),
+        ...(discardActive !== null ? { discard_active: discardActive } : {}),
         // Per-member observation: `device` in the same control-path Disk
         // identity as member_disk_ids, so a client correlates the two by id.
         member_states: members.map((m) => ({
@@ -288,6 +297,11 @@ const TUNING_DAEMON_ALIAS: Record<string, string> = {
   merge_read_wait: 'merge_read_wait_usecs',
   merge_write_max: 'merge_write_max_usecs',
   merge_write_wait: 'merge_write_wait_usecs',
+  // `--discard` on the CREATE surface, `discard_allowed` on the SHOW surface
+  // (verified on xicli 4.4.0 / driver 4.4.0-43861, whose only discard keys are
+  // discard_allowed, discard_active, discard_ignore, discard_verify). Reading
+  // the create spelling is why every client rendered discard as "unknown".
+  discard: 'discard_allowed',
 };
 
 const TUNING_NUMBERS = [
@@ -305,6 +319,13 @@ const TUNING_NUMBERS = [
   'max_sectors_kb',
 ];
 
+/**
+ * `drive_trim` is deliberately absent: it TRIMs the member disks *before* the
+ * array is created, so it is a create-time ACTION, not array state, and no
+ * `raid_show` reports it. A knob read from it could only ever be missing.
+ * `discard_ignore` / `discard_verify` are absent for a different reason — see
+ * docs/TODO.md.
+ */
 const TUNING_BOOLEANS = [
   'resync_enabled',
   'sched_enabled',
@@ -313,7 +334,6 @@ const TUNING_BOOLEANS = [
   'adaptive_merge',
   'single_run',
   'discard',
-  'drive_trim',
 ];
 
 const TUNING_STRINGS = ['cpu_allowed'];

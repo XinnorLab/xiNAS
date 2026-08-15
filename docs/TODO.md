@@ -105,3 +105,40 @@ TypeScript under `xiNAS-MCP/src/` needs a `Requires-Rebuild: xinas_node_build`
 trailer. `drive_trim` stays untouched here for the same reason as in the
 installer: xiRAID enables it itself only when no disk carries metadata, and
 forcing it overrides that safety check.
+
+## Storage — `discard_ignore` / `discard_verify` are not observed
+
+*Deferred 2026-08-15, from the discard-observation fix.*
+
+**What is missing.** `raid_show --extended` reports four discard knobs. The
+parser reads two of them — `discard_allowed` → `spec.tuning.discard` and
+`discard_active` → `status.discard_active` — and ignores `discard_ignore`
+("all discard requests are ignored") and `discard_verify` ("the system tracks
+discarded blocks and verifies they contain zeroes").
+
+**Current behavior.** Both read `0` on the reference node, so the TRIM /
+Discard block is complete for the configurations xiNAS creates. An array whose
+discards were disabled out-of-band with `xicli raid modify --discard_ignore 1`
+would still render `Discard (TRIM) | Enabled` with no hint that every request
+is being dropped.
+
+**Why it was cut.** Unlike `discard_active`, these two are *modifiable*
+(`xicli raid modify`), so putting them on `spec.tuning` implies a write path.
+The vendored `RaidModify` descriptor (4.3.1) carries no field for either, and
+protobuf drops an unknown field silently — a PATCH would report success while
+the daemon never saw it, exactly the failure `CREATE_ONLY_TUNING` exists to
+prevent. Observing them safely means extending that rejection list in the same
+change, which is wider than the render bug being fixed.
+
+**What done looks like.**
+
+1. `lib/parse/raid.ts` reads both into `spec.tuning`.
+2. `CREATE_ONLY_TUNING` in [routes/arrays.ts](../xiNAS-MCP/src/api/routes/arrays.ts)
+   grows both, so a PATCH is rejected with `UNSUPPORTED` rather than silently
+   dropped — or the descriptor is re-verified against 4.4 and they become a
+   real modify surface.
+3. `api-v1.yaml` gains both fields (additive) and the Extended block renders
+   them, with `discard_ignore = true` overriding the `Enabled` reading.
+
+TypeScript under `xiNAS-MCP/src/` needs a `Requires-Rebuild: xinas_node_build`
+trailer.

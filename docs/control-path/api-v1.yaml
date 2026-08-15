@@ -647,8 +647,12 @@ components:
                 max_sectors_kb: { type: [integer, "null"] }
                 sdc_prio: { type: [integer, "null"] }
                 single_run: { type: [boolean, "null"] }
-                discard: { type: [boolean, "null"] }
-                drive_trim: { type: [boolean, "null"] }
+                discard:
+                  type: [boolean, "null"]
+                  description: "Create surface `raid create --discard`. Observed from the daemon's `discard_allowed` — whether the array is CONFIGURED to accept discards, which is not the same as processing them (see status.discard_active)."
+                drive_trim:
+                  type: [boolean, "null"]
+                  description: "Create surface `raid create --drive_trim`: TRIMs the member disks BEFORE the array is created. Never observed — it is an action, not array state, and raid_show reports no such field."
         status:
           type: object
           required: [state, volume_path, observed_at]
@@ -669,6 +673,9 @@ components:
             memory_usage_mb:
               type: [integer, "null"]
               description: "Memory the array is currently using, as reported by raid_show. Absent when not observed — distinct from spec.tuning.memory_limit."
+            discard_active:
+              type: [boolean, "null"]
+              description: "raid_show `discard_active`: the array is processing discard requests right now. Distinct from spec.tuning.discard (`discard_allowed`), which is only what it is configured to accept — an array can read allowed=true, active=false. Absent when not observed."
             member_states:
               type: array
               description: >-

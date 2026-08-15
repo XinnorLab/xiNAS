@@ -240,17 +240,43 @@ Extended adds four blocks, all sourced from observed `spec.tuning`:
 - **Priorities** — `init_prio`, `recon_prio`, `restripe_prio`, `sdc_prio`
 - **Performance** — `memory_limit`, `memory_prealloc`, `request_limit`, `cpu_allowed`, plus `block_size` (`spec`) and `memory_usage_mb` (`status`)
 - **I/O Scheduler & Merge** — `sched_enabled`, `merge_read_enabled`, `merge_write_enabled`, `adaptive_merge`, plus the four merge timing knobs `merge_read_max`, `merge_read_wait`, `merge_write_max`, `merge_write_wait`
-- **TRIM / Discard** — `discard` (the array accepts discards from the filesystem) and `drive_trim` (the array issues TRIM to its members)
+- **TRIM / Discard** — `spec.tuning.discard` (the array is configured to accept discards from the filesystem) and `status.discard_active` (the array is processing them *right now*)
 
-Neither knob is editable from this screen: the control path classifies both as
-create-only (`CREATE_ONLY_TUNING` in `routes/arrays.ts`, verified against the 4.3.1 gRPC
-descriptor, whose `RaidModify` carries no field for either), so Edit Array rejects them
-and they carry no edit affordance. The xiRAID Classic 4.4 CLI reference does list
-`discard` as modifiable via `xicli raid modify`, so that classification is worth
-re-checking against a 4.4 descriptor; until it is, the block is display-only.
+**Both rows read a name the daemon actually emits.** `raid_show --extended` reports
+`discard_allowed` and `discard_active`; it reports **no** key called `discard`, and none
+called `drive_trim`. Reading the create-flag spellings is why this block rendered
+`unknown` on every array of every build from v3.9.0 until this was fixed — the same
+class of miss as the `resync_enabled` row removed earlier, and it survived because the
+tests asserted the `unknown` and called it correct. Verified on a live node
+(`xicli 4.4.0`, driver `4.4.0-43861`): the payload's only discard keys are
+`discard_active`, `discard_allowed`, `discard_ignore`, `discard_verify`, plus
+`drive_write_through`.
 
-The installer decides them per array from the members' discard support **and RZAT**, and
-never forces `drive_trim` (see [raid-spec §7.5](../Installer/raid-spec.md#75-array-creation)).
+**`drive_trim` has no row, and cannot have one.** It is a create-time *action* — it TRIMs
+the member disks *before* the array is created ([raid-spec §7.5](../Installer/raid-spec.md#75-array-creation))
+— not persistent array state, so there is nothing for `raid_show` to report back. A row
+for it could only ever print `unknown`.
+
+Neither observed value is editable from this screen: the control path classifies `discard`
+as create-only (`CREATE_ONLY_TUNING` in `routes/arrays.ts`, verified against the 4.3.1 gRPC
+descriptor, whose `RaidModify` carries no field for it), so Edit Array rejects it and it
+carries no edit affordance. `status.discard_active` is observation and has no write surface
+at all. The xiRAID Classic 4.4 CLI reference does list `discard` as modifiable via
+`xicli raid modify`, so that classification is worth re-checking against a 4.4 descriptor;
+until it is, the block is display-only.
+
+**Configured ≠ in effect.** `discard_allowed` is what the array was created (or modified)
+with; `discard_active` is whether discard requests are being processed. They diverge — on
+the reference node the `log` array reads `allowed=1 active=1` while `data`, still
+initializing, reads `allowed=1 active=0`. Showing only the configured value would tell an
+operator TRIM is reaching the media when it is not, which is the whole reason this block
+exists. The screen states both and does **not** speculate about the cause: xiRAID's own
+`discard_allowed_conf` ("enabled, but the RAID has not been unloaded and restored, so the
+change is not yet in effect") is documented for 4.4 but is **not** emitted by the
+4.4.0-43861 build, so the reason is not observable from here.
+
+The installer decides `discard` per array from the members' discard support **and RZAT**,
+and never forces `drive_trim` (see [raid-spec §7.5](../Installer/raid-spec.md#75-array-creation)).
 The block states what the array *is*, so an operator diagnosing discard behaviour does not
 have to infer it from the install log.
 
@@ -269,6 +295,7 @@ Those are the **control-path** names (ADR-0006 `spec.tuning`), not the daemon's.
 > - **`sdc_prio`** is emitted (Priorities block) and is now documented.
 > - **`resync_enabled`** is **not** emitted by the current daemon — removed from this spec, and the Extended block no longer renders a `Resync` row it could only ever fill with a guess. (It is create-only on the gRPC side too — `RaidModify` has no such field — so it is absent from `_MODIFY_PARAMS` as well.)
 > - **`memory_usage_mb`** and **`block_size`** appear in the **base** payload, so they survive on `status` / `spec` rather than under `tuning`.
+> - **`discard`** is emitted as **`discard_allowed`**, and there is no `drive_trim` at all. Re-verified on `xicli 4.4.0` / driver `4.4.0-43861`: the discard surface is `discard_allowed`, `discard_active`, `discard_ignore`, `discard_verify` (plus `drive_write_through`). The parser aliases `discard_allowed` → `tuning.discard` and lifts `discard_active` onto `status`; `drive_trim`, `discard_ignore` and `discard_verify` are not read (see below and [docs/TODO.md](../TODO.md)).
 
 If the row includes `devices_health` or `devices_wear` arrays, a per-device row is appended showing state icon + health + wear%. The control-path `XiraidArray` object carries **neither** today (the daemon returns them only under `extended`, and they are per-drive SMART data that belongs on `Disk`, not on the array), so the block is currently never rendered — it is kept for the day those land.
 
@@ -311,9 +338,10 @@ rendered as a placeholder:
 | `memory_prealloc` | `unknown` | `disabled` when `0`, else `<n> MB` |
 | `cpu_allowed` | `unknown` | `all` when empty, else the CPU list (`5-7`, `0,2,4-6`) |
 | `block_size` (`spec`) | `unknown` | `<n> bytes` |
-| Booleans (`sched_enabled`, `merge_*_enabled`, `adaptive_merge`, `discard`, `drive_trim`) | `unknown` | `Enabled` / `Disabled` |
+| Booleans (`sched_enabled`, `merge_*_enabled`, `adaptive_merge`, `discard`) | `unknown` | `Enabled` / `Disabled` |
 | Merge timings | row omitted when all four are unobserved | `<n> us` |
 | `memory_usage_mb` (`status`) | `unknown` | `<n> MB` |
+| `discard_active` (`status`) | `unknown` | `Yes` / `No` |
 
 `0` is an observed value, not an absent one — it is exactly how xiRAID
 spells "no limit" and "prealloc off" — so the unknown case keys off

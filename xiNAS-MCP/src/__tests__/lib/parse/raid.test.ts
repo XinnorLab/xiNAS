@@ -223,7 +223,6 @@ describe('parseRaidShow', () => {
           adaptive_merge: '0',
           single_run: true,
           discard: 1,
-          drive_trim: 0,
         }),
       ).toEqual({
         sched_enabled: true,
@@ -232,8 +231,27 @@ describe('parseRaidShow', () => {
         adaptive_merge: false,
         single_run: true,
         discard: true,
-        drive_trim: false,
       });
+    });
+
+    // The daemon spells the create flag's `--discard` as `discard_allowed` on
+    // the show surface. Reading the create spelling is why the TUI's TRIM /
+    // Discard block printed "unknown" on every array of every build.
+    it('reads discard from the daemon spelling, discard_allowed', () => {
+      expect(tuning({ discard_allowed: 1 })).toEqual({ discard: true });
+      expect(tuning({ discard_allowed: 0 })).toEqual({ discard: false });
+    });
+
+    // `drive_trim` TRIMs the member disks BEFORE the array exists: an action,
+    // not array state, so no raid_show will ever report it. Observing the key
+    // would promise a value that can never arrive.
+    it('never observes drive_trim, even if the payload carries the name', () => {
+      expect(tuning({ drive_trim: 1 })).toBeUndefined();
+      expect(tuning({ discard_allowed: 1, drive_trim: 1 })).toEqual({ discard: true });
+    });
+
+    it('leaves discard absent when the daemon reports no discard key', () => {
+      expect(tuning({ init_prio: 50 })).toEqual({ init_prio: 50 });
     });
 
     it('coerces numeric strings to numbers', () => {
@@ -332,6 +350,27 @@ describe('parseRaidShow', () => {
       expect(status({ memory_usage_mb: 0 })?.memory_usage_mb).toBe(0);
       expect(status({ memory_usage_mb: '64' })?.memory_usage_mb).toBe(64);
       expect(status({})).not.toHaveProperty('memory_usage_mb');
+    });
+
+    // Configured (`discard_allowed` → spec.tuning.discard) is not the same as
+    // in effect (`discard_active`). On a live 4.4.0 node the initializing
+    // `data` array reads allowed=1 active=0 while `log` reads 1/1, so a
+    // screen showing only the configured value claims TRIM reaches the media
+    // when it does not.
+    it('status.discard_active is observed separately from tuning.discard', () => {
+      const array = (extra: Record<string, unknown>) =>
+        parseRaidShow(
+          [{ name: 'data', level: '5', devices: [], state: ['online'], ...extra }],
+          DISK_IDS,
+        )[0];
+
+      const initing = array({ discard_allowed: 1, discard_active: 0 });
+      expect(initing?.spec.tuning).toEqual({ discard: true });
+      expect(initing?.status.discard_active).toBe(false);
+
+      expect(array({ discard_allowed: 1, discard_active: 1 })?.status.discard_active).toBe(true);
+      expect(array({ discard_active: '1' })?.status.discard_active).toBe(true);
+      expect(array({})?.status).not.toHaveProperty('discard_active');
     });
   });
 
