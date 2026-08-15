@@ -346,6 +346,10 @@ def _arrays_from_api(rows: Any) -> dict[str, dict]:
             "member_disk_ids": members,
             "spare_disk_ids": spares,
             "memory_usage_mb": status.get("memory_usage_mb"),
+            # Observed runtime state, not a tuning knob: whether the daemon is
+            # processing discards, as distinct from spec.tuning.discard (what
+            # the array is configured to accept). Absent → None → "unknown".
+            "discard_active": status.get("discard_active"),
             # Observed tuning only: a knob the agent did not read stays
             # absent here so the renderer prints "unknown" for it.
             **{k: v for k, v in tuning.items() if v is not None},
@@ -1523,6 +1527,11 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
             def _on_off(v):
                 return _opt(v, lambda x: f"{_GRN}Enabled{_NC}" if x else f"{_DIM}Disabled{_NC}")
 
+            def _yes_no(v):
+                # For state the daemon observes rather than a knob that was
+                # set — "Enabled" would read as configuration.
+                return _opt(v, lambda x: f"{_GRN}Yes{_NC}" if x else f"{_DIM}No{_NC}")
+
             def _usecs(v):
                 return _opt(v, lambda x: f"{x} us")
 
@@ -1598,10 +1607,18 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
                 lines.append(_box_line(f"  {_DIM}Merge Write Wait{_NC}    |  {_usecs(mw_wait)}"))
 
             # ── TRIM / Discard ──
-            # Create-only knobs (the daemon's RaidModify has no field for
-            # either), decided by the installer from the members' discard
-            # support — see Installer/raid-spec §7.5. Shown here because this
-            # is the only place an operator can find out what the array got.
+            # Two different facts. `discard` (the daemon's `discard_allowed`)
+            # is what the array was CREATED to accept — create-only, since
+            # RaidModify has no field for it — and the installer decides it
+            # from the members' discard support (Installer/raid-spec §7.5).
+            # `discard_active` is whether the daemon is processing discards
+            # right now, which is not implied by the first: an initializing
+            # array reports allowed=1 active=0. Showing only the configured
+            # value claims TRIM reaches the media when it may not.
+            #
+            # There is no Drive TRIM row: `--drive_trim` TRIMs the disks
+            # BEFORE the array is created, so it is an action with no state to
+            # read back, and raid_show reports no such field.
             lines.append(_box_line())
             lines.append(_box_sep())
             lines.append(_box_line(f" {_BLD}{_CYN}TRIM / DISCARD{_NC}"))
@@ -1610,7 +1627,9 @@ def _format_raid_overview(arrays: dict, extended: bool = False, banner: str | No
                 _box_line(f"  {_DIM}Discard (TRIM){_NC}      |  {_on_off(arr.get('discard'))}")
             )
             lines.append(
-                _box_line(f"  {_DIM}Drive TRIM{_NC}          |  {_on_off(arr.get('drive_trim'))}")
+                _box_line(
+                    f"  {_DIM}Discard Active{_NC}      |  {_yes_no(arr.get('discard_active'))}"
+                )
             )
 
             # ── Device Health & Wear ──
