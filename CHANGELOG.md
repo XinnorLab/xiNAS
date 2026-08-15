@@ -6,6 +6,55 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.9.1] - 2026-08-15
+
+Requires-Rebuild: xinas_node_build
+
+`xinas-api` and `xinas-agent` run compiled JavaScript from
+`xiNAS-MCP/dist/`, which is not tracked in git. The fix in this release
+is in the agent's `raid_show` parser, so without that role it never
+reaches the host and the TUI keeps rendering the old value.
+
+A single-fix release: the TRIM / Discard block added in 3.9.0 could never
+show anything but `unknown`.
+
+### Fixed
+
+- **The Extended array view now reads discard under the name the daemon
+  actually reports.** `Discard (TRIM)` and `Drive TRIM` rendered
+  `unknown` on every array of every 3.9.0 install. The parser looked for
+  `discard` and `drive_trim` — those are `xicli raid create` **flag**
+  spellings, and `raid_show --extended` does not use them. Verified on a
+  live node (`xicli 4.4.0`, driver `4.4.0-43861`): the payload's only
+  discard keys are `discard_allowed`, `discard_active`, `discard_ignore`,
+  `discard_verify` and `drive_write_through`. The same class of miss as
+  the `resync_enabled` row removed in 3.8.0, and it survived review
+  because the tests asserted the `unknown` and called it correct.
+
+  `discard_allowed` now maps to `spec.tuning.discard` (what the array is
+  **configured** to accept) and `discard_active` to the new
+  `status.discard_active` (whether discards are being processed **right
+  now**). The block renders both, because they diverge: on the reference
+  node the initializing `data` array reads `allowed=1 active=0` while
+  `log` reads `1/1`. Showing only the configured value tells an operator
+  TRIM is reaching the media when the daemon is not processing a single
+  discard.
+
+  The `Drive TRIM` row is gone and `drive_trim` is no longer read at all.
+  It TRIMs the member disks *before* the array is created — a one-shot
+  action, not array state — so no `raid_show` will ever report it, and
+  the row could only ever have printed `unknown`.
+
+  `discard_ignore` / `discard_verify` remain unobserved on purpose
+  ([docs/TODO.md](docs/TODO.md)): both are `raid modify` knobs, and
+  surfacing them on `spec.tuning` without extending `CREATE_ONLY_TUNING`
+  in the same change would offer a write path the vendored `RaidModify`
+  descriptor silently drops.
+
+  `status.discard_active` is additive in `api-v1.yaml` — no breaking
+  schema change. Specs: `Storage/raid-management-spec.md` §3 and the §3.2
+  render table, `control-path/s3-xiraid-array-spec.md` §5.
+
 ## [3.9.0] - 2026-08-15
 
 > **Requires-Rebuild: nvme_namespace, raid_fs, xinas_node_build, xiraid**
