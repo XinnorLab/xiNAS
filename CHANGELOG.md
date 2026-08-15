@@ -6,6 +6,161 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.9.0] - 2026-08-15
+
+> **Requires-Rebuild: nvme_namespace, raid_fs, xinas_node_build, xiraid**
+> — four roles, for four independent reasons. `xinas_node_build` is the
+> load-bearing one: `xinas-api` and `xinas-agent` run compiled JavaScript
+> from `xiNAS-MCP/dist/`, which is not tracked in git, so without that
+> role the fsid work and every other TypeScript change in this release
+> never reaches the host. `xiraid` installs the renumbered xiRAID 4.4
+> repository package, `raid_fs` carries the new discard decision, and
+> `nvme_namespace` carries the corrected per-level minimum drive table
+> and its fail-closed state checks.
+
+The xiRAID 4.4 release. The installer now pulls xiRAID 4.4, and the
+per-level rules that engine actually enforces — array-name character set
+and length, minimum member counts, RAID 10's even-count rule, RAID 70's
+group-size floor — are checked in the TUI and the control path before a
+create is dispatched, instead of after the operator has confirmed it.
+Alongside that, NFS `fsid` allocation moves off the clients and into the
+server, and a long run of fail-closed and observation-honesty fixes stops
+several surfaces from reporting a confident value they never read.
+
+> **Caveat:** the server-side `fsid` allocation (#293) has not been
+> smoke-tested on real hardware. No dev host carried the source or the
+> built `dist/` for it; this release is what makes that test reachable
+> through the normal update path. Treat the first NFSv4 mount after
+> updating as the verification step.
+
+### Added
+
+- **NFS share `fsid`s are allocated server-side, collision-free.**
+  `Share.spec.fsid` was required by the API and nothing assigned it, so
+  every client allocated its own — two concurrent creates computed the
+  same number and both applies succeeded, because the plans pin the
+  Share id (which differs) and not the fsid (which does not). An fsid
+  collision silently breaks NFSv4 client mounts. Allocation now happens
+  in the `share.create` plan provider, and the plan→apply race is closed
+  by a per-number marker row pinned absent in `affected_resources`: the
+  losing apply fails `PRECONDITION_FAILED` and re-plans onto the next
+  number. Clients may now omit `spec.fsid` on `POST /api/v1/shares`; an
+  explicitly requested fsid that is already held is an `FSID_IN_USE`
+  plan blocker rather than a silent substitution. Delete releases the
+  marker, and boot backfills markers for pre-existing installs. The TUI
+  stops allocating entirely. (#293)
+
+- **Every per-level xiRAID rule is checked before dispatch.** The vendor
+  audit had documented three rules as known gaps. RAID 10's even-member
+  requirement becomes a `members_not_even` blocker; RAID 70's group-size
+  floor of 6 becomes a per-level minimum rather than the generic 4.
+  The create wizard now re-prompts at the drives step naming the level's
+  own requirement ("RAID 5 needs at least 4 drives (3 selected)"), and
+  applies range, divisibility and the two-group minimum at the group-size
+  step — the first step where both level and drive count are known.
+  `xinas_menu/utils/raid_rules.py` holds the Python-side constraints,
+  mirroring `lib/xiraid/schema.ts`, with the vendor source and product
+  version cited.
+
+- **Discard is enabled on new arrays where the hardware allows it.**
+  Discards issued by XFS were dropped at the RAID layer: xiRAID's
+  `--discard` defaults to 0 and the installer never set it. The decision
+  is made per array, probing each member for discard support
+  (`discard_max_bytes`) and RZAT (the NVMe `DLFEAT` field, which xiRAID
+  requires and sysfs can no longer answer). An ineligible member degrades
+  to "create without discard", never to a failed create. `--drive_trim`
+  is deliberately not passed — it TRIMs disks *before* creation, and
+  xiRAID enables it on its own only when no disk carries metadata, which
+  is exactly the safety check a forced flag would override.
+
+- **A source-controlled xiRAID 4.4 hardware-key tool.** The opaque, stale
+  `./hwkey` ELF binary is replaced by a stdlib-only tool computing the
+  correct 4.4 v2 hardware key, byte-exact at the same path, with a shared
+  library (`xinas_menu/utils/hwkey.py`), a TUI local-compute fallback,
+  and a durable spec (`docs/Installer/hwkey-spec.md`). (#276)
+
+### Fixed
+
+- **The installer pulled a xiRAID version that no longer exists at that
+  name.** 4.4 renumbers the multi-pack repository package from the old
+  `1.x.y-NNNN` scheme to a product-aligned `4.4-1802`. The repo version
+  now points at the real published `.deb` (verified live on
+  `pkg.xinnor.io`), `xiraid_version` moves to 4.4.0, and the role READMEs,
+  mounting-docs link and installer spec are synced.
+
+- **Three surfaces each had a different idea of a legal array name and a
+  legal member count.** The wizard allowed hyphens and 64 characters, the
+  published OpenAPI pattern allowed `^[A-Za-z0-9_-]{1,63}$`, and `xicli`
+  accepts neither — a name could pass the TUI and be rejected by the API,
+  or pass both and be rejected by the engine after the operator confirmed
+  the create. Per the xiRAID Classic 4.4 command reference the rule is 28
+  characters of Latin letters, digits and underscore, with `power` and
+  `uevent` prohibited; it now lives once in
+  `xinas_menu/utils/xiraid_names.py`, is enforced in `validateCreateSpec()`,
+  and the published pattern is tightened to match. Separately, the minimum
+  drive counts disagreed three ways — the installer defaulted RAID 5 to 3
+  and fell through to a `>= 2` catch-all for RAID 50/60, the control-path
+  table said raid5 3 and raid50 6, and the wizard did not pre-validate at
+  all. All three now carry the engine-enforced table (RAID 5 → 4,
+  RAID 50/60 → 8), which matters most in the installer, where the
+  under-count previously failed only after `nvme_namespace` had already
+  destroyed and rebuilt every namespace.
+
+- **Several surfaces failed open when they could not read the truth.**
+  `nvme_namespace` now fails closed when storage state cannot be
+  determined, and its `MATCH` path requires the arrays to be online
+  (#279); Delete Array fails closed on dependency discovery; a
+  filesystem whose dependencies cannot be read no longer reports as
+  having none; and an unreadable NFS share list is no longer reported as
+  an empty one, which had made a probe failure indistinguishable from a
+  host with no shares.
+
+- **The TUI reported outcomes it had not observed.** Audit entries now
+  record what actually happened rather than what was assumed; the
+  degraded-disks banner is threaded into the Spare Pools dialogs, and the
+  false "all drives assigned" claim is suppressed when the fetch behind
+  it was degraded; an operator with no drives is told that no drives
+  means no observation, instead of being shown a clean result. A hung
+  export no longer freezes the share list, config-history reset renders
+  its progress instead of dropping every line, and Quick Actions hands
+  the terminal to `btop` via `App.suspend()` rather than fighting it for
+  the screen.
+
+- **`xinas_history` snapshot store, GC and risk classification (WS4).**
+  Seven fixes, chiefly fail-safe defaults that failed the wrong way: an
+  undetermined risk classification defaulted to `non_disruptive` — the
+  auto-proceed path — for exactly the cases the system understands least,
+  and now defaults to `destroying_data`. Snapshot ids are validated before
+  a store path is built, GC no longer runs lock-free or deletes an
+  in-flight restore's source, ephemeral pre-change snapshots resolve to a
+  terminal state, leaked `.tmp-*` staging directories are skipped, and the
+  deprecated `datetime.utcnow()` is gone from all six sites. (#295)
+
+- **Client DOCA OFED install is gated on NIC presence.** A client with no
+  PCI vendor `0x15b3` device no longer pulls the DOCA repo, builds DKMS
+  modules, or reboots for nothing. The gate is applied both in
+  `client_setup.sh` (with a "[No Mellanox NIC]" indicator) and in the
+  client `doca_ofed` role, so a direct `ansible-playbook` invocation is
+  equally safe. (#294)
+
+- **A carrier-down interface no longer fails a pool verify.** The agent
+  defers verification instead. (#289)
+
+### Changed
+
+- **CI format-checks the whole repository.** `ruff format --check` was
+  scoped to three package dirs and covered 113 files where the repo has
+  247, so files under `tests/` and `collection/` kept drifting and
+  reaching CI unformatted. The check is now whole-repo, honoring
+  `extend-exclude`; `ruff check` deliberately keeps its scoped paths.
+
+- **Day-2 RAID and NFS specs realigned with the control-path code.**
+  `docs/Storage/raid-management-spec.md` and the NFS docs were describing
+  behavior the code no longer had. Vendor-documented behavior is now
+  separated from what was observed on a node, and `CLAUDE.md` requires
+  third-party claims to be validated against the vendor's own
+  documentation before a spec lands.
+
 ## [3.8.1] - 2026-07-27
 
 > **Requires-Rebuild: xinas_node_build** — every fix below except the
