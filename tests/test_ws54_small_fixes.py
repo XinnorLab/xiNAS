@@ -41,10 +41,10 @@ class _StubView:
 class _StubMCPScreen:
     """Hand-built `self` for driving `MCPScreen._restart.__wrapped__` directly.
 
-    The source-text test above cannot tell "OK" hardcoded behind an
-    always-true condition from a real dataflow check, so this drives the
-    actual coroutine with a `ServiceController` stubbed to fail, and checks
-    what actually reaches `audit.log` and the rendered view.
+    Drives the actual coroutine with a `ServiceController` stubbed to fail,
+    and checks what actually reaches `audit.log` and the rendered view —
+    catching an "OK" hardcoded behind an always-true condition, which a
+    source-text check would miss.
     """
 
     def __init__(self):

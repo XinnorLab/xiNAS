@@ -214,9 +214,20 @@ async def _get_free_nvme_drives(
     return free, banner
 
 
-def _no_free_drives_message(base: str, banner: str | None) -> str:
-    """Append the degraded-backend banner to a Spare Pools empty-state message."""
-    return f"{base}\n\n{banner}" if banner else base
+def _no_free_drives_message(base: str, banner: str | None, specific: str | None = None) -> str:
+    """Build a Spare Pools empty-state message, banner-aware.
+
+    ``specific`` is a claim about *why* nothing came back (e.g. "all drives
+    are assigned to RAID arrays or other pools") that is only true when the
+    fetch actually observed every drive. When the collector is degraded, an
+    empty result means "nothing was observed" — asserting the specific
+    reason would be an observation nothing made, so it is dropped and the
+    banner explains the gap instead. With no banner, the fetch was
+    trustworthy and the specific reason is appended as before.
+    """
+    if banner:
+        return f"{base}\n\n{banner}"
+    return f"{base}\n{specific}" if specific else base
 
 
 def _to_dev_paths(selected: list[str], rows: list[dict[str, Any]]) -> list[str]:
@@ -347,9 +358,9 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             await self.app.push_screen_wait(
                 ConfirmDialog(
                     _no_free_drives_message(
-                        "No available drives found.\n"
-                        "All drives are assigned to RAID arrays or other pools.",
+                        "No available drives found.",
                         disk_banner,
+                        specific="All drives are assigned to RAID arrays or other pools.",
                     ),
                     "Error",
                     ok_only=True,

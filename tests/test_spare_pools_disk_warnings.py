@@ -44,6 +44,32 @@ def _degraded_with_one_pool(message: str) -> _StubControl:
     )
 
 
+def _healthy_all_drives_claimed(serial: str) -> _StubControl:
+    """No warnings — the fetch is trustworthy, and the one NVMe drive it saw
+    is already a RAID member, so the pool really is empty of free drives."""
+    return _StubControl(
+        {
+            "/api/v1/disks": {
+                "result": [
+                    {
+                        "id": serial,
+                        "status": {
+                            "name": f"nvme{serial}n1",
+                            "device_path": f"/dev/nvme{serial}n1",
+                            "system_disk": False,
+                            "safe_for_use": True,
+                        },
+                    }
+                ],
+            },
+            "/api/v1/arrays": {
+                "result": [{"spec": {"member_disk_ids": [serial], "spare_disk_ids": []}}],
+            },
+            "/api/v1/pools": {"result": []},
+        }
+    )
+
+
 def test_get_free_nvme_drives_returns_the_degraded_banner():
     token = f"collector unavailable {uuid.uuid4().hex}"
     rows, banner = asyncio.run(_get_free_nvme_drives(_degraded_with_one_pool(token)))
@@ -87,6 +113,26 @@ def test_create_pool_empty_drives_dialog_carries_the_fetched_banner():
         message = captured[1]._message
         assert "No available drives found." in message
         assert token in message, "the fetched banner never reached the dialog"
+        assert "All drives are assigned to RAID arrays or other pools" not in message, (
+            "the degraded fetch never observed all drives, so it cannot claim they're assigned"
+        )
+        assert control._get_calls["/api/v1/disks"] == 1
+
+
+def test_create_pool_empty_drives_dialog_keeps_the_specific_reason_when_healthy():
+    """No banner means the fetch was trustworthy — the specific "all drives
+    are assigned" explanation is correct and useful, so it must stay."""
+    for _ in range(2):
+        serial = f"serial-{uuid.uuid4().hex}"
+        control = _healthy_all_drives_claimed(serial)
+        screen = _StubScreen(control, replies=["spare0"])
+        asyncio.run(SparePoolScreen._create_pool.__wrapped__(screen))
+
+        captured = screen.app.captured
+        assert len(captured) == 2, "expected the name prompt then the empty-drives dialog"
+        message = captured[1]._message
+        assert "No available drives found." in message
+        assert "All drives are assigned to RAID arrays or other pools" in message
         assert control._get_calls["/api/v1/disks"] == 1
 
 
