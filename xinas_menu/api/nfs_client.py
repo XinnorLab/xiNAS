@@ -25,6 +25,19 @@ class NFSHelperClient:
     def __init__(self, socket_path: str = NFS_SOCKET_PATH) -> None:
         self._path = socket_path
 
+    def _unreachable(self, cause: str) -> str:
+        """Message for "the daemon is not there", naming the way back.
+
+        Both connect-time failures mean the same thing to the operator, and
+        neither the socket path nor "connection refused" tells them what to
+        do — see docs/control-path/nfs-helper-service-spec.md §4.
+        """
+        return (
+            f"nfs-helper is not reachable at {self._path} ({cause}) — "
+            "xinas-nfs-helper.service is not running; start it with: "
+            "systemctl start xinas-nfs-helper"
+        )
+
     def _request(self, op: str, **kwargs: Any) -> tuple[bool, Any, str]:
         payload = {"op": op, "request_id": str(uuid.uuid4()), **kwargs}
         raw = json.dumps(payload).encode() + b"\n"
@@ -42,9 +55,9 @@ class NFSHelperClient:
                     if b"\n" in buf:
                         break
         except FileNotFoundError:
-            return False, None, f"NFS helper socket not found: {self._path}"
+            return False, None, self._unreachable("socket not found")
         except ConnectionRefusedError:
-            return False, None, "NFS helper is not running (connection refused)"
+            return False, None, self._unreachable("connection refused")
         except TimeoutError:
             return False, None, "NFS helper timed out"
         except OSError as exc:
