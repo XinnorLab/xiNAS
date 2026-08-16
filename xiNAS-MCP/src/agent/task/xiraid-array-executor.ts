@@ -18,7 +18,11 @@
 
 import type { MountGuardEntry } from '../../lib/parse/mountinfo.js';
 import { parsePoolShow } from '../../lib/parse/pool.js';
-import { type RaidShowEntry, parseRaidShowEntries } from '../../lib/parse/raid.js';
+import {
+  type RaidShowEntry,
+  parseRaidShowEntries,
+  readSparepoolName,
+} from '../../lib/parse/raid.js';
 import { derivedPoolName, parseCreateSpec } from '../../lib/xiraid/validate.js';
 import { toRaidCreateRequest, toRaidModifyRequest } from '../../lib/xiraid/translate.js';
 import type { XiraidClient } from '../xiraid/client.js';
@@ -299,7 +303,7 @@ function readPoolEntry(
 function readSparepool(payload: unknown, name: string): string | undefined {
   const entry = readShow(payload).find((a) => a.name === name);
   if (!entry) return undefined;
-  return typeof entry.raw.sparepool === 'string' ? entry.raw.sparepool : '';
+  return readSparepoolName(entry.raw.sparepool);
 }
 
 export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): Executor {
@@ -328,7 +332,7 @@ export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): E
       const arr = shown.find((a) => a.name === spec.id);
       if (!arr) throw new Error(`preflight: array '${spec.id}' does not exist on the daemon`);
 
-      const liveSparepool = typeof arr.raw.sparepool === 'string' ? arr.raw.sparepool : '';
+      const liveSparepool = readSparepoolName(arr.raw.sparepool);
 
       // Foreign-pool guard: the control path only manages xnsp_<array>.
       if (spec.spare_disk_ids !== undefined && liveSparepool !== '' && liveSparepool !== poolName) {

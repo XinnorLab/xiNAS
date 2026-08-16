@@ -375,9 +375,17 @@ asserted is what ships. Three rules it has to get right:
   It previously matched an invented set (`rebuilding`, `active`) that contains
   no real xiRAID state, so a `reconstructing` or `initing` array — the latter
   being every array for hours after install — got a red cross.
-- **The array's name is the payload's key.** The daemon returns
-  `{"data": {...}}` and does not repeat the name inside the object, so reading
-  only `arr["name"]` labelled every array `unknown`.
+- **The array's name is read from the payload key, falling back to `name`.**
+  The daemon returns `{"data": {...}}`, keyed by array name.
+
+  **Correction (2026-08-16).** This bullet previously claimed the daemon "does
+  not repeat the name inside the object, so reading only `arr["name"]` labelled
+  every array `unknown`". That is **false** on xiRAID 4.4, and was never
+  observed — it was reasoned from the payload being keyed, not checked.
+  Verified on a live node (`xicli 4.4.0`, driver `4.4.0-43861`): each value
+  *does* carry `"name": "data"`, and the pre-change banner rendered both array
+  names correctly. `arr.get('name') or key` is kept because it is the more
+  robust read of the two, not because it fixed an observed defect.
 
 ### 3.14 Optional roles not in the default chain
 
