@@ -4,6 +4,7 @@ import { ApiException } from '../errors.js';
 import { getOrNull, listByPrefix, sendOk, unwrapValues } from '../handlers/reads.js';
 import { requireTasks } from './apply-helpers.js';
 import { renderTask } from '../tasks/render.js';
+import { waitForTask } from './task-wait.js';
 import type { TaskListFilter } from '../tasks/store.js';
 import type { TaskState } from '../tasks/types.js';
 import { formatFrame } from '../tasks/watch.js';
@@ -117,6 +118,10 @@ export function tasksRouter(ctx: ApiContext): Router {
   });
 
   r.get('/tasks/:id/watch', (req, res) => watchTask(ctx, req, res, req.params.id));
+
+  r.get('/tasks/:id/wait', (req, res, next) => {
+    waitForTask(ctx, req, res, req.params.id as string).catch(next);
+  });
 
   return r;
 }

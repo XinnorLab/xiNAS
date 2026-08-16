@@ -190,6 +190,7 @@ export class TaskStore {
   private readonly getTaskStmt: Statement;
   private readonly getByIdempotencyStmt: Statement;
   private readonly getStagesStmt: Statement;
+  private readonly revisionStmt: Statement;
   private readonly findStageStmt: Statement;
   private readonly insertStageStmt: Statement;
   private readonly updateStageStmt: Statement;
@@ -203,6 +204,9 @@ export class TaskStore {
 
     this.insertTaskStmt = this.db.prepare(INSERT_TASK_SQL);
     this.getTaskStmt = this.db.prepare('SELECT * FROM tasks WHERE task_id = ?');
+    this.revisionStmt = this.db.prepare(
+      'SELECT state, last_event_sequence FROM tasks WHERE task_id = ?',
+    );
     this.getByIdempotencyStmt = this.db.prepare(
       'SELECT * FROM tasks WHERE idempotency_key = ? AND principal = ?',
     );
@@ -280,6 +284,20 @@ export class TaskStore {
     if (!row) return null;
     const stages = (this.getStagesStmt.all(taskId) as StageRow[]).map(rowToStage);
     return rowToTask(row, stages);
+  }
+
+  /**
+   * Cheap liveness probe for the long-poll (`/tasks/{id}/wait`, s2 spec §10.2):
+   * the two columns a waiter actually branches on, without the stage-row fetch
+   * and JSON parsing `get()` does. A waiter runs this four times a second, so it
+   * must stay a single-row read.
+   */
+  revisionOf(taskId: string): { state: TaskState; last_event_sequence: number } | null {
+    const row = this.revisionStmt.get(taskId) as
+      | { state: string; last_event_sequence: number }
+      | undefined;
+    if (!row) return null;
+    return { state: row.state as TaskState, last_event_sequence: row.last_event_sequence };
   }
 
   /**
