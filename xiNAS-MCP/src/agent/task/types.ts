@@ -75,6 +75,12 @@ export interface TaskProgressEvent {
   readonly event_type: TaskProgressEventType;
   readonly stage_index?: number;
   readonly stage_name?: string;
+  /**
+   * Number of EXECUTOR stages this task will run (the denominator for
+   * "stage 2 of 5"). Sent on the `accepted` event only; excludes the
+   * runner's synthetic snapshot_before/snapshot_after/rollback rows.
+   */
+  readonly stage_total?: number;
   readonly status?: string;
   readonly output_inline?: string;
   readonly output_size_bytes?: number;
