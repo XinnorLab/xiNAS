@@ -283,6 +283,42 @@ class FilesystemScreen(XiNASAppMixin, Screen):
 
         return _cb
 
+    async def _submit_create(
+        self,
+        title: str,
+        spec: dict[str, Any],
+        *,
+        dangerous: bool = False,
+    ) -> None:
+        """Submit one fs.create plan→apply under a cancellable progress dialog.
+
+        Both submissions the wizard makes — the first attempt and the force
+        retry after the destruction-gate consent — go through here, so the
+        retry is as watchable and as abortable as the attempt it repeats
+        (Storage/fs-shares-management-spec.md §3.3). They used to be two call
+        sites, and the retry's drifted: it fed a 4-second toast instead of a
+        dialog and passed no cancel_check, leaving the slower and destructive
+        of the two attempts running behind a static line.
+
+        Raises whatever ``plan_apply_wait`` raises (``TaskCancelled``,
+        ``TaskFailed``, ``ControlPathError``); the dialog is dismissed first
+        so the caller's own dialogs are not stacked behind it.
+        """
+        dialog = TaskWaitDialog(title, "Create Filesystem")
+        self.app.push_screen(dialog)
+        try:
+            await asyncio.to_thread(
+                self.app.control.plan_apply_wait,
+                "POST",
+                "/api/v1/filesystems",
+                spec,
+                dangerous=dangerous,
+                on_progress=dialog.progress_from_thread(self.app),
+                cancel_check=dialog.cancel_requested,
+            )
+        finally:
+            dialog.dismiss(None)
+
     async def _list_filesystems_with_status(self) -> tuple[list[dict[str, Any]], str | None]:
         """GET /api/v1/filesystems → (adapted rows, degraded banner or None)."""
         env = await asyncio.to_thread(self.app.control.get, "/api/v1/filesystems")
@@ -471,27 +507,14 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             "mount_options": list(_DEFAULT_MOUNT_OPTIONS),
             "quota_mode": "uquota",
         }
-        create_dialog = TaskWaitDialog(
-            f"Creating filesystem on {data_device}…", "Create Filesystem"
-        )
-        self.app.push_screen(create_dialog)
         try:
-            await asyncio.to_thread(
-                self.app.control.plan_apply_wait,
-                "POST",
-                "/api/v1/filesystems",
-                spec,
-                on_progress=create_dialog.progress_from_thread(self.app),
-                cancel_check=create_dialog.cancel_requested,
-            )
+            await self._submit_create(f"Creating filesystem on {data_device}…", spec)
         except TaskCancelled:
             # MUST precede TaskFailed (subclass): a cancel is not a
             # create-failure and must not offer the force retry.
-            create_dialog.dismiss(None)
             view.set_content("  Filesystem creation cancelled — partial work rolled back.")
             return
         except TaskFailed as exc:
-            create_dialog.dismiss(None)
             # Force retry is offered ONLY on the executor's destruction
             # gate (an existing filesystem on the device); any other stage
             # failure gets the plain error dialog — force cannot fix a
@@ -517,14 +540,16 @@ class FilesystemScreen(XiNASAppMixin, Screen):
                 return
             view.set_content(f"  Re-creating with force on {data_device}...")
             try:
-                await asyncio.to_thread(
-                    self.app.control.plan_apply_wait,
-                    "POST",
-                    "/api/v1/filesystems",
+                await self._submit_create(
+                    f"Re-creating with force on {data_device}…",
                     {**spec, "force": True},
                     dangerous=True,
-                    on_progress=self._task_progress("Create Filesystem"),
                 )
+            except TaskCancelled:
+                # Same precedence rule as the first attempt — and now reachable,
+                # since the retry finally offers cancel.
+                view.set_content("  Filesystem creation cancelled — partial work rolled back.")
+                return
             except ControlPathError as exc2:
                 await self.app.push_screen_wait(
                     ConfirmDialog(f"Filesystem creation failed:\n\n{exc2}", "Error", ok_only=True)
@@ -532,7 +557,6 @@ class FilesystemScreen(XiNASAppMixin, Screen):
                 view.set_content("\033[31m  Filesystem creation failed.\033[0m")
                 return
         except ControlPathError as exc:
-            create_dialog.dismiss(None)
             # PlanBlocked carries the plan's blocker text; ApiError /
             # TransportError carry the envelope/socket failure.
             await self.app.push_screen_wait(
@@ -540,9 +564,6 @@ class FilesystemScreen(XiNASAppMixin, Screen):
             )
             view.set_content("\033[31m  Filesystem creation failed.\033[0m")
             return
-        else:
-            # Happy path: the try completed without an exception.
-            create_dialog.dismiss(None)
 
         # Success
         self.app.audit.log(
