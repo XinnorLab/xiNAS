@@ -347,13 +347,14 @@ class SnapshotDetailScreen(XiNASAppMixin, Screen):
             )
             return
 
-        risk = manifest.rollback_class or "unknown"
+        # No risk class line: it read destroying_data for nearly every
+        # operation, so on this dialog it was noise in the one place the
+        # operator is being asked to decide (config-history/specs.md §10).
         summary = manifest.diff_summary or "(no summary)"
         confirmed = await self.app.push_screen_wait(
             ConfirmDialog(
                 f"Restore snapshot {self._snapshot_id}?\n\n"
-                f"Risk class: {risk}\n"
-                f"Change:     {summary}\n\n"
+                f"Change: {summary}\n\n"
                 "This is an OBSERVED RECOVERY — it restores the captured NFS/network\n"
                 "config files but does NOT change desired state. Re-apply (or adopt)\n"
                 "afterward, or the next apply will overwrite it.",
@@ -508,16 +509,10 @@ def _format_manifest(manifest) -> str:
     else:
         status_str = f"{_DIM}{status}{_NC}"
 
-    # Risk class coloring
-    risk = manifest.rollback_class
-    if risk == "destroying_data":
-        risk_str = f"{_RED}{risk}{_NC}"
-    elif risk == "changing_access":
-        risk_str = f"{_YLW}{risk}{_NC}"
-    elif risk == "non_disruptive":
-        risk_str = f"{_GRN}{risk}{_NC}"
-    else:
-        risk_str = f"{_DIM}{risk or '-'}{_NC}"
+    # The risk class is deliberately not rendered anywhere on this screen —
+    # it reads destroying_data for nearly every operation, so it misinformed
+    # rather than warned (config-history/specs.md §10, docs/TODO.md).
+    # manifest.rollback_class is still populated and still stored.
 
     # Type coloring
     snap_type = manifest.type
@@ -539,7 +534,6 @@ def _format_manifest(manifest) -> str:
     lines.append(f"  {_DIM}Operation:{_NC}      {manifest.operation}")
     lines.append(f"  {_DIM}Status:{_NC}         {status_str}")
     lines.append(f"  {_DIM}Type:{_NC}           {type_str}")
-    lines.append(f"  {_DIM}Risk Class:{_NC}     {risk_str}")
 
     if manifest.preset:
         lines.append(f"  {_DIM}Preset:{_NC}         {manifest.preset}")
@@ -625,15 +619,7 @@ def _format_diff_summary(diff_result) -> str:
     if diff_result.summary:
         lines.append(f"  {diff_result.summary}")
 
-    # Risk class for this diff
-    risk = diff_result.rollback_class
-    if risk:
-        if risk == "destroying_data":
-            lines.append(f"  {_DIM}Rollback risk:{_NC} {_RED}{risk}{_NC}")
-        elif risk == "changing_access":
-            lines.append(f"  {_DIM}Rollback risk:{_NC} {_YLW}{risk}{_NC}")
-        else:
-            lines.append(f"  {_DIM}Rollback risk:{_NC} {_DIM}{risk}{_NC}")
+    # Rollback risk is not rendered — see the note in _format_metadata.
 
     # Show up to 8 change entries
     shown = 0
@@ -668,14 +654,7 @@ def _format_full_diff(diff_result) -> str:
     if diff_result.summary:
         lines.append(f"  {_DIM}Summary:{_NC} {diff_result.summary}")
 
-    risk = diff_result.rollback_class
-    if risk:
-        if risk == "destroying_data":
-            lines.append(f"  {_DIM}Rollback risk:{_NC} {_RED}{risk}{_NC}")
-        elif risk == "changing_access":
-            lines.append(f"  {_DIM}Rollback risk:{_NC} {_YLW}{risk}{_NC}")
-        else:
-            lines.append(f"  {_DIM}Rollback risk:{_NC} {_DIM}{risk}{_NC}")
+    # Rollback risk is not rendered — see the note in _format_metadata.
 
     lines.append("")
 

@@ -663,6 +663,27 @@ merely the live `ActiveState`/`SubState` reported by `systemctl show`:
 
 ## 10. Confirmation Requirements by Risk Class
 
+> **The risk class is not displayed in the TUI (2026-08-15).** The
+> classification still runs and is still stored on every manifest — only its
+> rendering is suppressed, in the Configuration History list, the snapshot
+> detail metadata, both diff views, and the restore confirmation dialog.
+>
+> The reason is that in practice it reads `destroying_data` for everything,
+> which makes the field worse than absent: two fail-safe paths fire on
+> ordinary operations. `classify_operation` is called without `details`
+> ([engine.py](../../xinas_history/engine.py) step 5), so every `raid_modify`
+> takes the "no details — assume worst case" branch in
+> [classifier.py](../../xinas_history/classifier.py) even when the change was
+> a live tuning parameter; and the control path records its own operation
+> kinds (`xiraid.array.modify`), which do not parse as `OperationType`, so
+> they take the unknown-operation fail-safe. A column where every row is red
+> stops carrying information, and trains the operator to click past the
+> confirmation it is meant to gate.
+>
+> The confirmation flows below are unaffected: nothing in the TUI branches on
+> the class today, so hiding it removes no gate. Restoring the display means
+> fixing the classification first — tracked in [docs/TODO.md](../TODO.md).
+
 ### 10.1 Destroying Data
 
 Two-screen confirmation flow:

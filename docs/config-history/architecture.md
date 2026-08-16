@@ -183,6 +183,13 @@ a risk class:
 | `changing_access` | Modifying exports, changing network config | Yellow confirmation |
 | `non_disruptive` | Tuning parameters, adding an export | Green confirmation |
 
+The "UI Treatment" column describes the intended design. **The class is
+currently not rendered in the TUI at all** — it classified nearly everything
+as `destroying_data`, so the display was suppressed until the classification
+is fixed. Storage and classification are unchanged. See
+[specs.md §10](specs.md#10-confirmation-requirements-by-risk-class) and
+[docs/TODO.md](../TODO.md).
+
 Classification is based on the `OperationType` tags stored in the snapshot
 manifest and the structural diff between current and target states.
 
