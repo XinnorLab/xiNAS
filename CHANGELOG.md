@@ -6,6 +6,25 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.10.1] - 2026-08-17
+
+### Fixed
+
+- **The force retry of a filesystem create now shows progress and can be
+  cancelled.** Creating a filesystem ran under a progress dialog; the retry
+  offered after the "already carries a filesystem" consent did not. It fed a
+  four-second toast instead, and passed no cancel hook, so the operator watched
+  a static `Re-creating with force on …` line for the whole of `mkfs` with no
+  way to abort — on the slower and destructive of the two attempts, immediately
+  after consenting to destroy the data on that device.
+
+  The two submissions were separate call sites that had drifted apart since the
+  progress dialog was introduced for the first attempt alone. They are now one
+  helper that owns the dialog, the progress sink and the cancel hook, so they
+  cannot diverge again. The retry also reports a cancellation the same way the
+  first attempt does — a branch that was unreachable while the retry could not
+  be cancelled at all.
+
 ## [3.10.0] - 2026-08-16
 
 Requires a rebuild of `xinas_node_build` (`xinas-api` and `xinas-agent` run
