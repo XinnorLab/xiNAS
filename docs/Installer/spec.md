@@ -358,6 +358,27 @@ Profile:
 - Stamps `/opt/xiNAS/.installed_preset` with the preset name (last role to run →
   marks a fully successful install; see §7.7).
 
+**RAID section.** Both banner templates
+([99-xinas-status.j2](../../collection/roles/motd/templates/99-xinas-status.j2),
+[generate-banner.j2](../../collection/roles/motd/templates/generate-banner.j2))
+embed the **same** small Python reader over `xicli raid show -f json`;
+[tests/test_motd_raid_state.py](../../tests/test_motd_raid_state.py) fails if
+they diverge, and runs the extracted snippet as its own process so what is
+asserted is what ships. Three rules it has to get right:
+
+- **`state` is a list of words, and the worst one decides.** Reading `state[0]`
+  painted `["online", "degraded"]` as a green `online` — the login banner told
+  the operator the array was fine while a drive was gone.
+- **The vocabulary is xiRAID's**, from [AG / Showing RAID State](https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html),
+  and the green/yellow/red split matches the `raid_status` health check's
+  PASS/WARN/FAIL exactly ([HealthCheck/raid-status-check.md](../HealthCheck/raid-status-check.md)).
+  It previously matched an invented set (`rebuilding`, `active`) that contains
+  no real xiRAID state, so a `reconstructing` or `initing` array — the latter
+  being every array for hours after install — got a red cross.
+- **The array's name is the payload's key.** The daemon returns
+  `{"data": {...}}` and does not repeat the name inside the object, so reading
+  only `arr["name"]` labelled every array `unknown`.
+
 ### 3.14 Optional roles not in the default chain
 
 - `roce_lossless` — PFC/ETS/DSCP for lossless RoCE. [defaults](../../collection/roles/roce_lossless/defaults/main.yml). Run with `--tags roce_lossless` when deploying on Ethernet rather than IB.

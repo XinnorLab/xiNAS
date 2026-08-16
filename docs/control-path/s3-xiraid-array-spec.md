@@ -155,6 +155,57 @@ member states were being parsed and **discarded** (the parser hardcoded
 collapsed to the total. Observation, not intent — a member state the daemon
 did not report stays absent rather than defaulting to `online`.
 
+### 5.3 `state` → `status.state`
+
+`raid_show` reports `state` as a **list of words**, not one word. The parser
+(`deriveState` in [lib/parse/raid.ts](../../xiNAS-MCP/src/lib/parse/raid.ts))
+collapses that list onto the api-v1.yaml enum `optimal | degraded | rebuilding
+| failed | importing | unknown`, worst-first, so a single bad word outranks any
+number of good ones.
+
+The vocabulary is the vendor's, published in full on
+[AG / Showing RAID State](https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html)
+for xiRAID Classic 4.4. **Every word on that page maps somewhere**, and that
+completeness is the point of the table rather than a nicety:
+
+| Daemon word (AG 4.4) | → `status.state` | Why |
+|---|---|---|
+| `offline` | `failed` | "the RAID is unavailable […] or the number of available drives […] is insufficient" |
+| `none` | `failed` | "unloaded via the unload command or was not restored after reboot" — the volume is not there |
+| `unrecovered` | `failed` | "can't complete reconstruction because of unrecoverable sections" |
+| `degraded` | `degraded` | "available and ready for work but some drives are missing or failed" |
+| `need_recon` | `degraded` | "the RAID needs reconstruction" |
+| `need_init` | `degraded` | "the RAID needs initialization" — parity is not valid, so there is no redundancy |
+| `inconsistent` | `degraded` | "an intengrity error was detected during an SDC scan" *(sic)* |
+| `read_only` | `degraded` | "the license has expired. The RAID is read-only" — available, impaired |
+| `initing` | `rebuilding` | "the RAID is initializing" |
+| `reconstructing` | `rebuilding` | "the RAID is reconstructing" |
+| `restriping` | `rebuilding` | "RAID is restriping" |
+| `online` | `optimal` | "the RAID is available and ready to work" |
+| `initialized` | *(no bucket)* | "initialization is finished" — rides the `online` in the same list |
+| `sdc_scanning` | *(no bucket)* | a scan an online array runs; costs no redundancy |
+| `need_resize` | *(no bucket)* | "restriping was finished, the RAID size increase is available" |
+| `need_restripe` | *(no bucket)* | "restriping was stopped and not finished" — the array still has its redundancy |
+
+The parser additionally accepts older/alternate spellings (`broken`,
+`unusable`, `faulty`, `failed`, `initializing`, `init`, `recon`, `resyncing`,
+`need_resync`) so a daemon build that predates this vocabulary still maps.
+
+**A word in no bucket is not the same as a word in no table.** The four marked
+*(no bucket)* are deliberate: they describe an array that still has its
+redundancy, so they must not downgrade the verdict a sibling `online` earned.
+Everything else that falls through becomes `unknown` — which for a real state
+is a reporting failure, not caution. `unrecovered`, `read_only`, `none`,
+`inconsistent` and `need_init` all used to land there, so an array that could
+not finish reconstruction, or had gone read-only on an expired license, was
+published to the TUI, MCP and CLI alike as an unremarkable "unknown" with the
+neutral `o` icon.
+
+The same vocabulary drives two surfaces outside the control path, and the three
+are kept in step deliberately: the health engine's `raid_status` check
+([HealthCheck/raid-status-check.md](../HealthCheck/raid-status-check.md)) and
+the login banner's RAID section ([Installer/spec.md §3.13](../Installer/spec.md#313-motd--login-banner)).
+
 ---
 
 ## 6. Create — plan / apply flow

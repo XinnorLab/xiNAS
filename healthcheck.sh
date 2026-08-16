@@ -799,6 +799,47 @@ def check_rdma(exp, checks):
 
     return results
 
+# xiRAID's own state vocabulary, from AG 4.4 "Showing RAID State":
+# https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html
+# Kept in step with xinas_menu/health/engine.py — an array that is merely
+# initializing, scanning or restriping is still fully redundant and must not
+# report as a failure.
+_RAID_STATES_HEALTHY = frozenset({"online", "initialized", "need_resize"})
+_RAID_STATES_LOSING_REDUNDANCY = frozenset({
+    "degraded", "reconstructing", "need_recon", "need_init", "inconsistent",
+    "read_only", "offline", "none", "unrecovered",
+})
+
+def raid_state_verdict(state):
+    """One xiRAID state word -> PASS / WARN / FAIL (unknown words WARN)."""
+    s = (state or "").strip().lower()
+    if s in _RAID_STATES_HEALTHY:
+        return "PASS"
+    if s in _RAID_STATES_LOSING_REDUNDANCY:
+        return "FAIL"
+    return "WARN"
+
+def raid_member(entry):
+    """One raid_show `devices` entry -> (path, [state words]).
+
+    Three shapes: bare path, [index, path, [states]] tuple, {path/device,
+    state/states} object. Indexing entry[2][0] read only the tuple.
+    """
+    if isinstance(entry, str):
+        return entry, []
+    if isinstance(entry, (list, tuple)):
+        path = entry[1] if len(entry) > 1 else "?"
+        raw = entry[2] if len(entry) > 2 else None
+    elif isinstance(entry, dict):
+        path = entry.get("path") or entry.get("device") or entry.get("name") or "?"
+        raw = entry.get("state", entry.get("states"))
+    else:
+        return "?", []
+    if isinstance(raw, str):
+        raw = [raw]
+    states = [str(s) for s in raw if s] if isinstance(raw, (list, tuple)) else []
+    return str(path), states
+
 def check_storage(exp, checks):
     results = []
 
@@ -822,22 +863,29 @@ def check_storage(exp, checks):
                             "no arrays", "all online",
                             evidence="No RAID arrays configured"))
                     else:
-                        all_ok = True
-                        degraded = []
+                        losing_redundancy = []
+                        in_progress = []
                         for name, arr in data.items():
-                            states = arr.get("state", [])
-                            for s in states:
-                                if s.lower() not in ("online", "initialized"):
-                                    all_ok = False
-                                    degraded.append(f"{name}: {s}")
-                        if all_ok:
-                            results.append(CheckResult("Storage", "raid_status", "PASS",
-                                f"{len(data)} array(s) online", "all online"))
-                        else:
+                            for s in arr.get("state", []):
+                                verdict = raid_state_verdict(s)
+                                if verdict == "FAIL":
+                                    losing_redundancy.append(f"{name}: {s}")
+                                elif verdict == "WARN":
+                                    in_progress.append(f"{name}: {s}")
+                        if losing_redundancy:
                             results.append(CheckResult("Storage", "raid_status", "FAIL",
-                                "; ".join(degraded), "all online",
+                                "; ".join(losing_redundancy), "all online",
                                 impact="Degraded RAID reduces redundancy and may reduce performance",
                                 fix_hint="Check xicli raid show for details"))
+                        elif in_progress:
+                            results.append(CheckResult("Storage", "raid_status", "WARN",
+                                "; ".join(in_progress), "all online",
+                                impact="A background operation is running; the array is redundant "
+                                       "but may be slower until it completes",
+                                fix_hint="Watch progress with xicli raid show"))
+                        else:
+                            results.append(CheckResult("Storage", "raid_status", "PASS",
+                                f"{len(data)} array(s) online", "all online"))
                 except (json.JSONDecodeError, AttributeError):
                     results.append(CheckResult("Storage", "raid_status", "SKIP",
                         "parse error", "all online"))
@@ -851,9 +899,10 @@ def check_storage(exp, checks):
                     devices = arr.get("devices", [])
                     bad = []
                     for dev in devices:
-                        state = dev[2][0] if dev[2] else "unknown"
-                        if state.lower() != "online":
-                            bad.append(f"{dev[1]}: {state}")
+                        path, states = raid_member(dev)
+                        for state in states:
+                            if state.lower() != "online":
+                                bad.append(f"{path}: {state}")
                     if bad:
                         results.append(CheckResult("Storage", f"raid_devices ({name})", "WARN",
                             "; ".join(bad), "all online",

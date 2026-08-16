@@ -313,15 +313,24 @@ the list is empty it **replaces** the `(no RAID arrays configured)`
 empty-state with that message. An empty list under a degraded backend must
 never read as "genuinely no arrays".
 
-State → icon/colour mapping (from `_state_icon` / `_state_color`):
+State → icon/colour mapping (from `_state_icon` / `_state_color`). The screen
+renders whatever `status.state` the control path published, so the words here
+are the **control-path** enum, not the daemon's:
 
 | State | Icon | Colour |
 |---|---|---|
-| `online` / `initialized` | `*` | green |
-| `initing` / `rebuilding` | `~` | yellow |
+| `optimal` / `online` / `initialized` | `*` | green |
+| `rebuilding` / `initing` / `importing` | `~` | yellow |
 | `degraded` | `!` | yellow |
 | `offline` / `failed` | `x` | red |
 | anything else | `o` | none |
+
+The daemon's own state words are collapsed into that enum once, in the agent
+parser — see [s3-xiraid-array-spec §5.3](../control-path/s3-xiraid-array-spec.md#53-state--statusstate),
+which carries the full 4.4 vocabulary and the mapping. That mapping is what
+keeps this table short: an array reading `unrecovered` or `read_only` on the
+daemon side does not arrive here as the fallback `o`, it arrives as `failed`
+or `degraded` and is coloured accordingly.
 
 ### 3.2 Unobserved tuning values render as unknown
 

@@ -1222,6 +1222,90 @@ def check_rdma(exp, checks):
     return results
 
 
+# xiRAID's own state vocabulary, from AG 4.4 "Showing RAID State":
+# https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html
+#
+# `state` is a LIST of words, and the words are not all failures. An array
+# initializes for hours after it is created, an SDC scan runs on a schedule,
+# and a restripe is an operator-requested expansion — all three leave the array
+# fully redundant. Treating every non-`online` word as a failure meant a
+# freshly installed node reported "FAIL — Degraded RAID reduces redundancy"
+# for an array that was doing exactly what it was supposed to.
+_RAID_STATES_HEALTHY = frozenset(
+    {
+        "online",  # "the RAID is available and ready to work"
+        "initialized",  # "initialization is finished"
+        "need_resize",  # "restriping was finished, the RAID size increase is available"
+    }
+)
+_RAID_STATES_IN_PROGRESS = frozenset(
+    {
+        "initing",  # "the RAID is initializing"
+        "restriping",  # "RAID is restriping"
+        "sdc_scanning",  # "an SDC scan is in progress"
+        "need_restripe",  # "restriping was stopped and not finished"
+    }
+)
+_RAID_STATES_LOSING_REDUNDANCY = frozenset(
+    {
+        "degraded",  # "some drives are missing or failed"
+        "reconstructing",  # "the RAID is reconstructing"
+        "need_recon",  # "the RAID needs reconstruction"
+        "need_init",  # "the RAID needs initialization" — parity is not valid yet
+        "inconsistent",  # "an intengrity error was detected during an SDC scan" [sic]
+        "read_only",  # "the license has expired. The RAID is read-only"
+        "offline",  # "the RAID is unavailable"
+        "none",  # "unloaded via the unload command or not restored after reboot"
+        "unrecovered",  # "can't complete reconstruction because of unrecoverable sections"
+    }
+)
+
+
+def raid_state_verdict(state):
+    """One xiRAID state word → ``PASS`` / ``WARN`` / ``FAIL``.
+
+    A word this table has never seen returns ``WARN``: a future xiRAID release
+    may add states, and silently passing an unrecognised one would hide a real
+    problem, while failing on it would cry wolf on every engine upgrade.
+    """
+    s = (state or "").strip().lower()
+    if s in _RAID_STATES_HEALTHY:
+        return "PASS"
+    if s in _RAID_STATES_LOSING_REDUNDANCY:
+        return "FAIL"
+    return "WARN"
+
+
+def raid_member(entry):
+    """One `raid_show` ``devices`` entry → ``(path, [state words])``.
+
+    xiRAID reports members in three shapes (control-path
+    docs/control-path/s3-xiraid-array-spec.md §5.2):
+
+    * ``"/dev/nvme0n1"`` — bare path, no per-member state;
+    * ``[index, "/dev/nvme0n1", ["online"]]`` — the tuple the real daemon emits;
+    * ``{"path"|"device": ..., "state"|"states": ...}`` — the gRPC reference shape.
+
+    Indexing ``entry[2][0]`` reads only the second: against a bare path it
+    returned the third *character* of the string, so every member came back
+    "not online", and against an object it raised out of the whole check.
+    """
+    if isinstance(entry, str):
+        return entry, []
+    if isinstance(entry, (list, tuple)):
+        path = entry[1] if len(entry) > 1 else "?"
+        raw = entry[2] if len(entry) > 2 else None
+    elif isinstance(entry, dict):
+        path = entry.get("path") or entry.get("device") or entry.get("name") or "?"
+        raw = entry.get("state", entry.get("states"))
+    else:
+        return "?", []
+    if isinstance(raw, str):
+        raw = [raw]
+    states = [str(s) for s in raw if s] if isinstance(raw, (list, tuple)) else []
+    return str(path), states
+
+
 def check_storage(exp, checks):
     results = []
 
@@ -1266,22 +1350,38 @@ def check_storage(exp, checks):
                             )
                         )
                     else:
-                        all_ok = True
-                        degraded = []
+                        losing_redundancy = []
+                        in_progress = []
                         for name, arr in data.items():
-                            states = arr.get("state", [])
-                            for s in states:
-                                if s.lower() not in ("online", "initialized"):
-                                    all_ok = False
-                                    degraded.append(f"{name}: {s}")
-                        if all_ok:
+                            for s in arr.get("state", []):
+                                verdict = raid_state_verdict(s)
+                                if verdict == "FAIL":
+                                    losing_redundancy.append(f"{name}: {s}")
+                                elif verdict == "WARN":
+                                    in_progress.append(f"{name}: {s}")
+                        if losing_redundancy:
                             results.append(
                                 CheckResult(
                                     "Storage",
                                     "raid_status",
-                                    "PASS",
-                                    f"{len(data)} array(s) online",
+                                    "FAIL",
+                                    "; ".join(losing_redundancy),
                                     "all online",
+                                    impact="Degraded RAID reduces redundancy and may reduce performance",
+                                    fix_hint="Check xicli raid show for details",
+                                )
+                            )
+                        elif in_progress:
+                            results.append(
+                                CheckResult(
+                                    "Storage",
+                                    "raid_status",
+                                    "WARN",
+                                    "; ".join(in_progress),
+                                    "all online",
+                                    impact="A background operation is running; the array is redundant "
+                                    "but may be slower until it completes",
+                                    fix_hint="Watch progress with xicli raid show",
                                 )
                             )
                         else:
@@ -1289,11 +1389,9 @@ def check_storage(exp, checks):
                                 CheckResult(
                                     "Storage",
                                     "raid_status",
-                                    "FAIL",
-                                    "; ".join(degraded),
+                                    "PASS",
+                                    f"{len(data)} array(s) online",
                                     "all online",
-                                    impact="Degraded RAID reduces redundancy and may reduce performance",
-                                    fix_hint="Check xicli raid show for details",
                                 )
                             )
                 except (json.JSONDecodeError, AttributeError):
@@ -1310,9 +1408,12 @@ def check_storage(exp, checks):
                     devices = arr.get("devices", [])
                     bad = []
                     for dev in devices:
-                        state = dev[2][0] if dev[2] else "unknown"
-                        if state.lower() != "online":
-                            bad.append(f"{dev[1]}: {state}")
+                        path, states = raid_member(dev)
+                        # No state reported for this member is not a failed
+                        # member; the bare-path shape carries none at all.
+                        for state in states:
+                            if state.lower() != "online":
+                                bad.append(f"{path}: {state}")
                     if bad:
                         results.append(
                             CheckResult(
