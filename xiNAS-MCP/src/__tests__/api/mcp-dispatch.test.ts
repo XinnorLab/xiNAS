@@ -51,9 +51,9 @@ describe('nextHint (2026-08-16 progress design §5)', () => {
   it('covers support.bundle — a DIRECT tool that returns a Task envelope', () => {
     // Keying the hint off mutability would leave exactly this call handing a
     // client a task_id with no way to follow it.
-    expect(nextHint(entry('support.bundle'), { task_id: 'task-77', state: 'queued' })?.args).toEqual(
-      { id: 'task-77', timeout_s: 25 },
-    );
+    expect(
+      nextHint(entry('support.bundle'), { task_id: 'task-77', state: 'queued' })?.args,
+    ).toEqual({ id: 'task-77', timeout_s: 25 });
   });
 
   it('says nothing for a task that is already terminal', () => {
