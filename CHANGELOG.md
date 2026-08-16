@@ -6,6 +6,56 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.9.4] - 2026-08-16
+
+Requires a rebuild of `xinas_node_build` — the fix is in the control-path
+parser and the agent executor, both of which run compiled JavaScript from the
+untracked `dist/`.
+
+First release verified on hardware. 3.9.3 was deployed to a node running
+xiRAID Classic 4.4.0 (driver `4.4.0-43861`) and the RAID surfaces were
+exercised against the live daemon, which found one real defect and corrected
+one false claim.
+
+### Fixed
+
+- **Attaching a spare pool no longer fails on an array that has none.**
+  The daemon spells "this array has no spare pool" as the **string `"-"`**,
+  not as an empty string and not by omitting the key — both arrays on a
+  freshly installed node report `"sparepool": "-"` with no pools configured at
+  all. xiNAS read that as a pool *name*, with two consequences:
+
+  - The modify executor's foreign-pool guard rejects any sparepool that is
+    neither `''` nor `xnsp_<array>`, so `PATCH /api/v1/arrays/{id}` carrying
+    `spare_disk_ids` failed preflight with *"sparepool '-' is not managed by
+    the control path"* — on every array of a fresh install. Detaching hit the
+    matching failure at the verify stage, and rollback would have written the
+    sentinel back as if it were a name.
+  - `GET /api/v1/arrays` published `status.spare_pool: "-"`, which per
+    ADR-0011 joins to `Pool.referenced_by` — a reference to a pool that cannot
+    exist.
+
+  The sentinel is now normalized in one place, `readSparepoolName()` in
+  `lib/parse/raid.ts`, which every consumer reads through.
+
+### Corrected
+
+- **3.9.3 claimed the login banner labelled every array `unknown`.** It did
+  not. The claim was that the daemon does not repeat the array name inside the
+  keyed object, so `arr["name"]` read empty; on a live 4.4 node each value
+  *does* carry `"name"`, and the pre-change banner rendered `data` and `log`
+  correctly. The reasoning went from "the payload is keyed by name" to "the
+  name must therefore not be inside", and that step was never checked against
+  a real payload. The code change is kept — reading the key as a fallback is
+  the more robust of the two — but it fixed nothing observable, and
+  `docs/Installer/spec.md` §3.13 now records the correction rather than the
+  claim.
+
+  The sibling claim about `raid_devices` and the bare-path device shape stands
+  as written (it is conditional on that shape), but for the record: xiRAID 4.4
+  emits only the `[index, path, [states]]` tuple, so that fix is defensive
+  rather than a repair of observed behaviour.
+
 ## [3.9.3] - 2026-08-16
 
 Requires a rebuild of `xinas_node_build` (the control-path parser compiles
