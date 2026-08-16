@@ -222,6 +222,12 @@ describe('GET /tasks/{id}/watch — resumable SSE', () => {
     expect(snapshot.spec).toBeUndefined();
     expect(snapshot.plan_binding).toBeUndefined();
     expect(snapshot.desired_rollback).toBeUndefined();
+    // The snapshot frame goes through the SHARED renderer (s2 spec §10), so it
+    // carries the progress rollup, ISO timestamps, and the metadata fold-in —
+    // not the raw store row it used to hand-copy.
+    expect(snapshot.progress?.phase).toBe('preparing');
+    expect(typeof snapshot.created_at).toBe('string');
+    expect(snapshot.metadata).toBeDefined();
 
     // A later frame is the live 'accepted' event the receiver applied.
     const live = out.frames.slice(1).map((f) => JSON.parse(dataOf(f)));
