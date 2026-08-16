@@ -79,6 +79,7 @@ export interface TaskPatch {
   snapshot_after?: string;
   agent_acceptance_id?: string;
   last_event_sequence?: number;
+  stage_total?: number;
   cancel_requested_at?: number;
   cancel_refused_reason?: string;
   error_code?: TaskErrorCode;
@@ -129,6 +130,7 @@ interface TaskRow {
   snapshot_after: string | null;
   agent_acceptance_id: string | null;
   last_event_sequence: number;
+  stage_total: number | null;
   cancel_requested_at: number | null;
   cancel_refused_reason: string | null;
   error_code: string | null;
@@ -361,6 +363,7 @@ export class TaskStore {
             plan_binding = @plan_binding, desired_rollback = @desired_rollback,
             snapshot_before = @snapshot_before, snapshot_after = @snapshot_after,
             agent_acceptance_id = @agent_acceptance_id, last_event_sequence = @last_event_sequence,
+            stage_total = @stage_total,
             cancel_requested_at = @cancel_requested_at, cancel_refused_reason = @cancel_refused_reason,
             error_code = @error_code, error_message = @error_message,
             remediation_hint = @remediation_hint, updated_at = @updated_at, terminal_at = @terminal_at
@@ -383,6 +386,7 @@ export class TaskStore {
         snapshot_after: merged.snapshot_after ?? null,
         agent_acceptance_id: merged.agent_acceptance_id ?? null,
         last_event_sequence: merged.last_event_sequence,
+        stage_total: merged.stage_total ?? null,
         cancel_requested_at: merged.cancel_requested_at ?? null,
         cancel_refused_reason: merged.cancel_refused_reason ?? null,
         error_code: merged.error_code ?? null,
@@ -427,6 +431,7 @@ export class TaskStore {
             plan_binding = @plan_binding, desired_rollback = @desired_rollback,
             snapshot_before = @snapshot_before, snapshot_after = @snapshot_after,
             agent_acceptance_id = @agent_acceptance_id, last_event_sequence = @last_event_sequence,
+            stage_total = @stage_total,
             cancel_requested_at = @cancel_requested_at, cancel_refused_reason = @cancel_refused_reason,
             error_code = @error_code, error_message = @error_message,
             remediation_hint = @remediation_hint, updated_at = @updated_at, terminal_at = @terminal_at
@@ -447,6 +452,7 @@ export class TaskStore {
         snapshot_after: merged.snapshot_after ?? null,
         agent_acceptance_id: merged.agent_acceptance_id ?? null,
         last_event_sequence: merged.last_event_sequence,
+        stage_total: merged.stage_total ?? null,
         cancel_requested_at: merged.cancel_requested_at ?? null,
         cancel_refused_reason: merged.cancel_refused_reason ?? null,
         error_code: merged.error_code ?? null,
@@ -623,6 +629,7 @@ function rowToTask(row: TaskRow, stages: TaskStage[]): Task {
     ...(row.snapshot_before !== null ? { snapshot_before: row.snapshot_before } : {}),
     ...(row.snapshot_after !== null ? { snapshot_after: row.snapshot_after } : {}),
     ...(row.agent_acceptance_id !== null ? { agent_acceptance_id: row.agent_acceptance_id } : {}),
+    ...(row.stage_total !== null ? { stage_total: row.stage_total } : {}),
     ...(row.cancel_requested_at !== null ? { cancel_requested_at: row.cancel_requested_at } : {}),
     ...(row.cancel_refused_reason !== null
       ? { cancel_refused_reason: row.cancel_refused_reason }
