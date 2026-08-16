@@ -6,6 +6,56 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.9.6] - 2026-08-16
+
+Requires a rebuild of `xinas_nfs_helper` (the systemd unit only reaches a host
+when the role re-runs) and `xinas_node_build` (the agent runs compiled
+JavaScript from the untracked `dist/`).
+
+### Fixed
+
+- **`xinas-nfs-helper` no longer dies whenever the NFS server stops.** The unit
+  declared `Requires=nfs-kernel-server.service`, which also propagates nfsd's
+  *stop*: any `systemctl stop nfs-server` — a filesystem teardown, a failed
+  restart, an admin action — tore the helper down in the same systemd
+  transaction. Because that is a clean dependency-driven stop rather than a
+  crash, `Restart=on-failure` never fired, and the helper stayed dead until
+  someone restarted it by hand.
+
+  The helper is the sole writer of `/etc/exports` and the only path the control
+  path has to NFS state, so while it was down `share.*`, `nfs-profile.*`,
+  `nfs-idmap.set` and the `ExportRule`/`NfsSession` collectors all failed
+  identically with `connect ENOENT /run/xinas-nfs-helper.sock`. Observed on a
+  node: nfsd stopped at 16:37:53 during a filesystem teardown, and a
+  `share.create` 23 minutes later still failed at preflight while the agent
+  logged `poll_sweep_failed` every 30 s.
+
+  The dependency the helper actually needs is ordering, not co-liveness — it
+  tolerates a down NFS server per-op, since its startup `exportfs -s` check is
+  a warning rather than a fatal. `Requires=` becomes `Wants=`, and
+  `Restart=on-failure` becomes `Restart=always` because the daemon exits `0` on
+  SIGTERM. Verified on a node with no exports and no connected clients:
+
+  ```text
+  BEFORE:       helper=active    nfsd=active
+  AFTER_STOP:   helper=active    nfsd=inactive   socket=present
+  AFTER_START:  helper=active    nfsd=active     socket=present
+  ```
+
+- **A helper that is down now says so, and says how to fix it.** Both
+  transports surfaced their raw connect error — `connect ENOENT
+  /run/xinas-nfs-helper.sock` from the agent probe, `NFS helper socket not
+  found: …` from the TUI client — which reached the operator verbatim in task
+  error messages and TUI dialogs while naming neither the component that was
+  down nor the way back. Both now report the socket, the unit, and
+  `systemctl start xinas-nfs-helper`, keeping the original error as the cause.
+  The wrap lives in the transport, so tasks, the poll sweep, the collectors and
+  the TUI screens all inherit it.
+
+The unit's lifecycle contract is now a live spec at
+`docs/control-path/nfs-helper-service-spec.md`; the corresponding section of
+the legacy `docs/MCP/spec-nfs-helper.md` is marked superseded.
+
 ## [3.9.5] - 2026-08-16
 
 Requires a rebuild of `xinas_node_build` — the fix is in the agent, which runs
