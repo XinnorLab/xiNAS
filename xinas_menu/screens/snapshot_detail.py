@@ -82,7 +82,9 @@ class SnapshotDetailScreen(XiNASAppMixin, Screen):
     """Full detail view of a single snapshot.
 
     Shows:
-    - Manifest metadata (ID, timestamp, user, source, operation, status, risk class)
+    - Manifest metadata (ID, timestamp, user, source, operation, status)
+      (the rollback class is stored but not displayed — config-history
+      specs.md §10)
     - Diff from parent snapshot
     - Config file contents captured in the snapshot
     - Runtime state (RAID, exports, mounts, services)
