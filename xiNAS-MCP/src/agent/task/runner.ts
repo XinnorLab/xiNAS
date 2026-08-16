@@ -18,6 +18,11 @@
  *   rollback_started → rollback_succeeded|rollback_failed → terminal(failed|
  *   requires_manual_recovery). No stages run after the failed one.
  */
+import {
+  ROLLBACK_STAGE,
+  SNAPSHOT_AFTER_STAGE,
+  SNAPSHOT_BEFORE_STAGE,
+} from '../../lib/tasks/stage-names.js';
 import type {
   Executor,
   ExecutorContext,
@@ -53,9 +58,6 @@ export interface InflightTask {
   /** High-water sequence emitted so far (for diagnostics). */
   sequence: number;
 }
-
-/** Stage name used for the synthetic rollback stage event. */
-const ROLLBACK_STAGE = 'rollback';
 
 export class TaskRunner {
   readonly #bridge: XinasHistoryBridge;
@@ -147,14 +149,15 @@ export class TaskRunner {
     let hostMayHaveChanged = false;
 
     try {
-      // 1. accepted (seq 1).
-      await emit('accepted');
+      // 1. accepted (seq 1). Carries the executor's stage count so the api can
+      //    render "stage N of M" — nothing else on the wire knows M.
+      await emit('accepted', { stage_total: executor.stages.length });
 
       // 2. snapshot_before — real xinas_history capture.
       const before = await this.#bridge.snapshotCreate(begin.operation_kind, 'api');
       await emit('stage_succeeded', {
         stage_index: nextStageIndex(),
-        stage_name: 'snapshot_before',
+        stage_name: SNAPSHOT_BEFORE_STAGE,
         status: 'succeeded',
         snapshot_id: before.snapshot_id,
       });
@@ -214,7 +217,7 @@ export class TaskRunner {
       const after = await this.#bridge.snapshotCreate(begin.operation_kind, 'api');
       await emit('stage_succeeded', {
         stage_index: nextStageIndex(),
-        stage_name: 'snapshot_after',
+        stage_name: SNAPSHOT_AFTER_STAGE,
         status: 'succeeded',
         snapshot_id: after.snapshot_id,
       });

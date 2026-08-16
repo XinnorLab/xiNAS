@@ -289,3 +289,64 @@ costs them a lie.
 3. If it does not, `s4-xiraid-array-mutations-spec.md` records that 4.4 was
    checked and the CLI/gRPC split is real, so the next reader does not re-open
    the question.
+
+## Tasks — progress carries no live stage output
+
+**What is missing.** `TaskProgress` (s2 §10.1) reports the current stage and
+elapsed time, but not the line that stage last printed. During the longest
+part of a filesystem create — `mkfs.xfs` on a fresh array — a client sees
+`stage_name: "mkfs"` and a growing `stage_elapsed_s`, and nothing else.
+
+**What the code does instead.** `ctx.emitOutput()` appends to an in-memory
+array in the agent's runner, and `drainOutput()` folds it into the
+`stage_succeeded` / `stage_failed` event — so the durable row of a *running*
+stage carries no output at all. The rollup reports no output line rather than
+a stale one; finished stages' output stays readable in `stages[]`.
+
+**Why it was cut.** Publishing output mid-stage is not a presentation change:
+it needs a ninth value in the §6 event taxonomy (`stage_output`), a drain
+policy in the runner (interval or line count, so a chatty stage cannot flood
+the api), and an append-plus-spill rule on the api side, where today a stage
+row's output is written once. The 2026-08-16 MCP progress design deliberately
+kept its scope to presenting facts the system already records.
+
+**What done looks like.** `stage_output` joins the taxonomy and the
+`TaskProgressEvent` schema; the runner drains on an interval while a stage
+runs; the api appends to the stage row and applies the existing 64 KiB spill
+rule to the accumulated text; `TaskProgress` gains `last_output_line`.
+
+## Tasks — `xinasctl --wait` does not use the long-poll or the rollup
+
+**What is missing.** `plan_apply_wait` in the CLI polls `GET /tasks/{id}` on
+its own loop and renders stage events by hand. It predates
+`GET /tasks/{id}/wait` (s2 §10.2) and does not show the `progress` rollup, so
+the CLI's view of a long apply is coarser than the MCP client's.
+
+**What the code does instead.** The existing poll loop, unchanged. It works;
+it is just a second implementation of waiting.
+
+**Why it was cut.** The 2026-08-16 change was scoped to the MCP surface plus
+the shared renderer both surfaces read. Migrating the CLI is mechanical but
+touches its own output formatting and tests.
+
+**What done looks like.** `plan_apply_wait` calls `/tasks/{id}/wait` with
+`since_revision` threading, and renders `progress.stage_name`,
+`stage_position` / `stage_total`, and `elapsed_s`.
+
+## Tasks — progress reports no completion percentage
+
+**What is missing.** `TaskProgress` has no `percent`. A client can say "stage
+2 of 5, 41 s in" but not "62 % done".
+
+**What the code does instead.** Stage position and elapsed time only.
+
+**Why it was cut.** For the operation that motivated the feature there is
+nothing honest to report: `mkfs.xfs` emits no completion percentage, so any
+number would be invented. Other executors are different — xiRAID
+initialization exposes `init_progress`, which the array probe already parses
+into `rebuild_progress_pct`.
+
+**What done looks like.** An executor that can compute a percentage honestly
+reports it on its stage events, `TaskProgress` gains an optional `percent`
+(additive to the contract), and it stays absent everywhere the underlying
+tool does not supply one — never interpolated from elapsed time.

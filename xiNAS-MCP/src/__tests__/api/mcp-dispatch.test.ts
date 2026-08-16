@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CATALOG } from '../../api/mcp/catalog.js';
-import { LEGACY_TOOL_MAP, buildRequest, gateVerdict } from '../../api/mcp/dispatch.js';
+import { LEGACY_TOOL_MAP, buildRequest, gateVerdict, nextHint } from '../../api/mcp/dispatch.js';
 
 const entry = (name: string) => {
   const e = CATALOG.find((c) => c.name === name);
@@ -34,6 +34,38 @@ describe('gateVerdict (S8 T6 — the WS12 exit criterion)', () => {
         false,
       );
     }
+  });
+});
+
+describe('nextHint (2026-08-16 progress design §5)', () => {
+  const running = { task_id: 'task-42', state: 'running', kind: 'fs.create' };
+
+  it('points a running task at tasks.wait', () => {
+    expect(nextHint(entry('filesystems.create'), running)).toEqual({
+      tool: 'tasks.wait',
+      args: { id: 'task-42', timeout_s: 25 },
+      note: expect.stringContaining('until state is terminal'),
+    });
+  });
+
+  it('covers support.bundle — a DIRECT tool that returns a Task envelope', () => {
+    // Keying the hint off mutability would leave exactly this call handing a
+    // client a task_id with no way to follow it.
+    expect(
+      nextHint(entry('support.bundle'), { task_id: 'task-77', state: 'queued' })?.args,
+    ).toEqual({ id: 'task-77', timeout_s: 25 });
+  });
+
+  it('says nothing for a task that is already terminal', () => {
+    expect(nextHint(entry('filesystems.create'), { ...running, state: 'success' })).toBeUndefined();
+  });
+
+  it('says nothing for a plain read, even when the result carries a task_id', () => {
+    expect(nextHint(entry('tasks.get'), running)).toBeUndefined();
+  });
+
+  it('says nothing for a plan (no task_id in the result)', () => {
+    expect(nextHint(entry('filesystems.create'), { plan_id: 'p-1', diff: [] })).toBeUndefined();
   });
 });
 

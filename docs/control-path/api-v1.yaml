@@ -1230,9 +1230,62 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         terminal_at: { type: [string, "null"], format: date-time }
+        stage_total: { type: [integer, "null"] }
+        progress: { $ref: '#/components/schemas/TaskProgress' }
         stages:
           type: array
           items: { $ref: '#/components/schemas/TaskStage' }
+
+    TaskProgress:
+      description: |
+        Rolled-up view of where a running task is: which stage, how far
+        through the executor's stage list, and how long it has been going.
+        Present on any task that executes (absent on `plan_only`).
+
+        No completion percentage is reported — `mkfs.xfs` and friends do not
+        emit one, so stage plus elapsed time is the honest granularity. No
+        output line is reported either: the agent buffers stage output and
+        publishes it only when the stage ends, so a running stage has none
+        (read finished stages' output from `stages[]`).
+      type: object
+      required: [phase, completed_stages, elapsed_s]
+      properties:
+        phase:
+          type: string
+          enum: [preparing, executing, rolling_back, finalizing, done]
+        stage_name: { type: string }
+        stage_status:
+          type: string
+          enum: [pending, running, success, failed, skipped]
+        stage_index:
+          type: integer
+          description: Raw emission index; correlates with an entry in `stages[]`.
+        stage_position:
+          type: integer
+          description: |
+            1-based position among EXECUTOR stages. Absent while a synthetic
+            stage (snapshot_before/snapshot_after/rollback) is current.
+        stage_total:
+          type: integer
+          description: |
+            Executor stage count reported by the agent on `accepted`. Absent
+            for tasks created before the field existed — clients must render
+            the position without a denominator in that case.
+        completed_stages: { type: integer }
+        elapsed_s:
+          type: integer
+          description: Wall-clock since the task was created; frozen at `terminal_at`.
+        stage_elapsed_s: { type: integer }
+
+    TaskWaitResult:
+      type: object
+      required: [changed, waited_s, task]
+      properties:
+        changed:
+          type: boolean
+          description: False when the call returned because the timeout expired.
+        waited_s: { type: integer }
+        task: { $ref: '#/components/schemas/Task' }
 
     TaskStage:
       type: object
@@ -1288,6 +1341,11 @@ components:
           type: integer
         stage_name:
           type: string
+        stage_total:
+          type: integer
+          description: |
+            Executor stage count; sent on the `accepted` event only. The api
+            persists it on the task as the denominator for `progress`.
         status:
           type: string
         output_inline:
@@ -2565,6 +2623,48 @@ paths:
               schema: { type: string }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/Internal' }
+
+  /tasks/{id}/wait:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [tasks]
+      operationId: waitTask
+      summary: Block until the task changes, or the timeout expires.
+      description: |
+        Bounded long-poll for clients with no server-push channel — above all
+        MCP, whose transport runs in JSON response mode. Returns as soon as the
+        task's `last_event_sequence` passes `since_revision`, or the task is
+        terminal, or `timeout_s` elapses.
+
+        Concurrency is capped (4 waiters per task, 32 per process). Over the
+        cap the call returns immediately with the current task and a
+        `WAIT_CAPACITY` warning rather than queueing or failing.
+      parameters:
+        - name: timeout_s
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 60, default: 25 }
+        - name: since_revision
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The task, with its progress rollup.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/TaskWaitResult' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   # =========================================================================
   # Internal (agent → api) — not part of the public client surface

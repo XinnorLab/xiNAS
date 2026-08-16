@@ -92,6 +92,8 @@ export interface Task {
   snapshot_after?: string;
   agent_acceptance_id?: string;
   last_event_sequence: number;
+  /** Executor stage count reported on `accepted`; absent on pre-005 rows. */
+  stage_total?: number;
   cancel_requested_at?: number;
   cancel_refused_reason?: string;
   error_code?: TaskErrorCode;

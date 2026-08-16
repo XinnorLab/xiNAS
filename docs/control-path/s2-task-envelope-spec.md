@@ -134,7 +134,9 @@ The pool bounds **concurrently in-flight tasks end-to-end** (dispatch → termin
 
 `POST /internal/v1/task_progress` (Bearer agent-token; mirrors `/internal/v1/observed`; under `requireInternalAgent`). **Replaces** the reserved `task.stage_report` RPC (removed in T0).
 
-**Event** `{ task_id, sequence, event_type, stage_index?, stage_name?, status?, output_inline?, output_size_bytes?, error_code?, error_message?, snapshot_id?, observed_at }`, `event_type ∈ accepted | stage_started | stage_succeeded | stage_failed | rollback_started | rollback_succeeded | rollback_failed | terminal`.
+**Event** `{ task_id, sequence, event_type, stage_index?, stage_name?, stage_total?, status?, output_inline?, output_size_bytes?, error_code?, error_message?, snapshot_id?, observed_at }`, `event_type ∈ accepted | stage_started | stage_succeeded | stage_failed | rollback_started | rollback_succeeded | rollback_failed | terminal`.
+
+**`stage_total` (on `accepted` only).** The number of stages the executor will run. The agent is the only party that knows it — `task_stages` rows materialize as events arrive, so without this the api has no denominator for "stage 2 of 5". The api persists it on `tasks.stage_total` (migration 005) and renders it in the progress rollup (§10.1). It counts **executor** stages only: the runner's synthetic `snapshot_before` / `snapshot_after` / `rollback` rows are excluded. Those three names are defined once, in `xiNAS-MCP/src/lib/tasks/stage-names.ts`, and read by both the agent runner (which mints them) and the api rollup (which filters them out) — a second copy would drift the moment a name changes. The field is optional: an event from an agent that predates it still transitions the task, and the rollup then omits the denominator rather than guessing.
 
 **Application (the api is the sole writer of facts the agent reports):**
 - **Monotonic/idempotent:** `sequence` is per-task monotonic; an event with `sequence ≤` the task's high-water mark is a 200 no-op.
@@ -228,6 +230,31 @@ The timer reaps **only leases whose holder is already terminal** (or whose task 
 Reconnect uses a **resync**, not an event replay. The durable record is the rolled-up `task_stages` rows + `tasks` row — there is no per-event log to replay past an arbitrary sequence. So a reconnect with `Last-Event-ID: <sequence>` is handled as: if that sequence is **behind** the task's current `last_event_sequence`, re-send the current Task snapshot (which already carries every stage's latest state) keyed at `last_event_sequence`, then attach live; if it is **at/ahead of** the current sequence, send nothing and attach live directly. Reading the task and subscribing happen synchronously so no live event slips through the gap. A client that misses intermediate events still converges, because the snapshot is the full current state — it just does not see each missed transition individually.
 
 Tasks reads (`/tasks`, `/tasks/{id}`) get the S0/S1 `embedMetadata` fold-in.
+
+**The snapshot frame is produced by the shared renderer** (`tasks/render.ts::renderTask`), the same one `/tasks` and `/tasks/{id}` use. It previously hand-copied the raw store row and deleted three internal columns, which meant anything added to the renderer silently missed the stream. Switching it aligns the frame with the `Task` schema `api-v1.yaml` already documents, and changes its shape: **ISO timestamps instead of epoch-ms, `output_url` instead of `output_path`, plus the synthesized `metadata` object and the `progress` rollup.** `spec`, `plan_binding`, and `desired_rollback` remain stripped. No in-repo consumer reads the stream (the TUI and `xinasctl` both poll `/tasks/{id}`), so the change is contained — but an external SSE client sees the new shape.
+
+### 10.1 Progress rollup (`Task.progress`)
+
+Every task read — REST, the SSE snapshot, and therefore MCP — carries a rolled-up view of where the task is, computed from the stage rows already loaded:
+
+`{ phase, stage_name?, stage_status?, stage_index?, stage_position?, stage_total?, completed_stages, elapsed_s, stage_elapsed_s? }`
+
+- `phase ∈ preparing | executing | rolling_back | finalizing | done` — `preparing` until the first executor stage starts (covers `queued`, `accepted`, `snapshot_before`), `rolling_back` on the `rollback` row, `finalizing` on `snapshot_after`, `done` once the task is terminal in any state.
+- The **current stage** is the row with `status: running`, else the highest-index row.
+- `stage_position` (1-based) and `completed_stages` count **non-synthetic rows only**, so they read correctly against `stage_total`. A synthetic current stage has no `stage_position`. Position is found by locating the current row among the executor rows — never derived arithmetically from `stage_index`, which is an emission ordinal that includes the synthetic rows.
+- `elapsed_s = (terminal_at ?? now) − created_at`; `stage_elapsed_s = (ended_at ?? now) − started_at`.
+- A `plan_only` task has no `progress` at all.
+- **No output line and no percentage.** `ctx.emitOutput()` is buffered in the agent and drained only into a stage's terminal event, so a *running* stage's row carries no output; and `mkfs.xfs` reports no completion percentage. Both are recorded as deferred work in `docs/TODO.md`.
+
+### 10.2 Bounded long-poll — `GET /tasks/{id}/wait`
+
+For clients with no server-push channel — above all MCP, whose transport runs in JSON response mode — the SSE stream is unusable, and a bare `/tasks/{id}` poll makes a client spin. `/wait` holds the request until the task's `last_event_sequence` passes `since_revision`, the task is terminal, or `timeout_s` elapses; it answers `{ changed, waited_s, task }` where `task` is the same rendered Task with its rollup.
+
+- `timeout_s` is **validated, not clamped**: outside `[1, 60]` it is an `INVALID_ARGUMENT` (400), matching `minimum`/`maximum` in the contract. Default 25.
+- The loop probes `TaskStore.revisionOf()` (one row: `state` + `last_event_sequence`) every 250 ms, not `get()` — a waiter runs it four times a second and must not re-read every stage row. The full task is loaded once, on return.
+- **Concurrency is capped: 4 waiters per task, 32 per process.** Over either cap the call does not queue and does not fail — it answers immediately with the current task and a `WAIT_CAPACITY` warning, degrading to the plain read the client would otherwise have done.
+- `res.on('close')` ends the loop when a **direct REST** client hangs up. It does *not* fire for a call arriving over the MCP loopback: `ctx.loopback_fn` issues a real `http.request` against the api's own listener, and nothing aborts that inner request when the outer MCP client disconnects. An abandoned MCP wait therefore holds its slot until the timeout — which is precisely why the caps exist.
+- It polls rather than subscribing to `TaskWatch`: that class is typed against the Express `Response` and writes SSE frames. Generalizing it into an emitter is a larger change than this endpoint justifies; if push-based waiting is ever needed elsewhere, this loop should move onto it.
 
 ---
 

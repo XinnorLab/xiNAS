@@ -206,8 +206,20 @@ interface CatalogEntry {
   requires_mcp_apply: boolean;        // explicit; no inference
   min_role: 'viewer' | 'operator' | 'admin';  // REST rbacMiddleware + MCP share it
   status: 'live' | 'degraded';
+  returns_async_task?: boolean;       // success body is a Task envelope
 }
 ```
+
+`returns_async_task` marks an entry whose success response is a Task
+envelope (`task_id` + `state`) — the work runs asynchronously and the
+client has to follow it. Every `plan_apply` entry carries it, plus the
+two `direct` entries that return one: `support.bundle` (a 202 Task from
+a direct tool) and `tasks.cancel` (the task keeps running until the
+cancel lands). It is explicit rather than inferred from `mutability`,
+because inferring it from `plan_apply` is exactly what would leave
+`support.bundle` handing a client a `task_id` with no way to follow it.
+It drives two things in the MCP layer (§3.1) and nothing in the REST
+contract — it is a catalog field, not an API field.
 
 Namespaces (≈40 entries): `arrays.*` (list/get/create/modify/delete/
 import), `disks.*` (list/get), `filesystems.*` (list/get/create/
@@ -216,7 +228,7 @@ update/delete), `shares.*` (list/get/create/update/delete),
 `nfs_idmap.get/set`, `network.interfaces.*` (list/get/update),
 `network.pool.apply`, `health.check`, `drift.report`,
 `config_history.*` (snapshots/show/diff/drift/rollback — snapshots/
-show/diff/rollback **degraded**), `tasks.*` (list/get/cancel),
+show/diff/rollback **degraded**), `tasks.*` (list/get/wait/cancel),
 `support.bundle` (create + download pointer), `system.*` (get/
 capabilities/inventory), `audit.query` (**degraded**), `users.list`,
 `groups.list`.
@@ -236,6 +248,42 @@ the field and the route answered `INVALID_ARGUMENT`); the catalog test pins
 its presence. `xinasctl` additionally coerces each string argv value to the
 scalar type the schema declares, because argv is all strings while the API
 body is typed JSON.
+
+### 3.1 Following a long operation over MCP
+
+An apply answers in milliseconds with a `task_id` while the real work —
+`mkfs.xfs` on a fresh array, say — runs for minutes in the agent. The
+`/mcp` transport is in JSON response mode (one POST in, one JSON out;
+`GET /mcp` is 405), so the server cannot *push* progress: the client has
+to ask. Two things make that workable, both generated from
+`returns_async_task`:
+
+1. **`tasks.wait`** — a read entry on `GET /tasks/{id}/wait` with input
+   `{ id, timeout_s?, since_revision? }`. It blocks server-side until the
+   task moves or the timeout expires and returns the task with its
+   `progress` rollup (s2 §10.1–10.2). `buildRequest` already turns the
+   non-path args of a `GET` entry into query parameters, so the entry
+   needs no dispatcher special-casing.
+2. **The `next` hint.** When a call on a flagged entry succeeds with a
+   `result.task_id` whose `state` is `queued` or `running`, the
+   dispatcher appends to the tool result:
+
+   ```jsonc
+   "next": {
+     "tool": "tasks.wait",
+     "args": { "id": "<task_id>", "timeout_s": 25 },
+     "note": "long-running operation — call this repeatedly until state is terminal (…)"
+   }
+   ```
+
+   A terminal task, a `mode=plan` call, and every read get no hint. The
+   REST envelope is untouched: no contract field exists solely to
+   instruct a client, and the hint lives in the MCP layer only.
+
+`tools/list` appends the same fact to a flagged entry's description
+("returns a task_id and executes asynchronously — follow it with
+tasks.wait"), generated from the flag rather than written into twenty
+description strings.
 
 ## 4. The gate (T4)
 

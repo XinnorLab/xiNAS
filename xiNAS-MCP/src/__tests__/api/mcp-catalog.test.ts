@@ -36,6 +36,19 @@ describe('client catalog (S8 T2)', () => {
     }
   });
 
+  it('every entry that returns a Task envelope is flagged returns_async_task', () => {
+    const byName = new Map(CATALOG.map((e) => [e.name, e]));
+    for (const e of CATALOG.filter((x) => x.mutability === 'plan_apply')) {
+      expect(e.returns_async_task, `${e.name} must be flagged`).toBe(true);
+    }
+    // The two direct entries whose response carries a Task envelope.
+    expect(byName.get('support.bundle')?.returns_async_task).toBe(true);
+    expect(byName.get('tasks.cancel')?.returns_async_task).toBe(true);
+    // A plain read must not be flagged.
+    expect(byName.get('tasks.get')?.returns_async_task).toBeUndefined();
+    expect(byName.get('tasks.wait')?.returns_async_task).toBeUndefined();
+  });
+
   it('min_role spot pins (ported legacy matrix)', () => {
     const byName = new Map(CATALOG.map((e) => [e.name, e]));
     expect(byName.get('arrays.create')?.min_role).toBe('admin');

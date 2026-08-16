@@ -161,6 +161,8 @@ interface TaskResult {
   snapshot_before?: string | null;
   snapshot_after?: string | null;
   error_code?: string | null;
+  stage_total?: number;
+  progress?: { phase: string; completed_stages: number; stage_total?: number };
   stages: Array<{ stage_index: number; name: string; status: string }>;
 }
 
@@ -384,6 +386,14 @@ describe.sequential('e2e: S2 task engine round-trip (fixture probe mode)', () =>
       verify: 'success',
       snapshot_after: 'success',
     });
+
+    // The rollup rides the same round-trip: the agent's stage_total reached the
+    // durable row, and the summary counts the THREE executor stages — not the
+    // five rows above, two of which are the runner's synthetic snapshots.
+    expect(task.stage_total).toBe(3);
+    expect(task.progress?.phase).toBe('done');
+    expect(task.progress?.completed_stages).toBe(3);
+    expect(task.progress?.stage_total).toBe(3);
   }, 20_000);
 
   it('failure→rollback: fail_at_stage=apply → failed(FAILED_PARTIAL_ROLLED_BACK), no verify/snapshot_after', async () => {

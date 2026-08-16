@@ -3,8 +3,10 @@ import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import { getOrNull, listByPrefix, sendOk, unwrapValues } from '../handlers/reads.js';
 import { requireTasks } from './apply-helpers.js';
+import { renderTask } from '../tasks/render.js';
+import { waitForTask } from './task-wait.js';
 import type { TaskListFilter } from '../tasks/store.js';
-import type { Task, TaskState } from '../tasks/types.js';
+import type { TaskState } from '../tasks/types.js';
 import { formatFrame } from '../tasks/watch.js';
 
 /**
@@ -37,68 +39,6 @@ function parseStringQuery(raw: unknown, name: string): string | undefined {
     throw new ApiException('INVALID_ARGUMENT', `query param '${name}' must be a single value`);
   }
   return raw;
-}
-
-/**
- * Project a store `Task` (epoch-ms timestamps, `output_path`) into the public
- * api-v1.yaml shape: ISO date-time strings, `output_url` for spilled stage
- * output, and the synthesized `metadata` object (s2-task-envelope-spec §10 —
- * the S0/S1 `embedMetadata` fold-in). Tasks live in the SQLite `tasks` table,
- * not as RevisionedValue rows, so there is no KV row tracking to read; the
- * metadata is synthesized from Task fields per §10:
- *   revision        ← last_event_sequence (or 1 — a fresh task has no events)
- *   created_at      ← ISO of created_at
- *   modified_at     ← ISO of updated_at
- *   owner           ← principal
- *   source          ← client_type
- *   validation_status ← 'valid'
- */
-function renderTask(task: Task): Record<string, unknown> {
-  const out: Record<string, unknown> = {
-    ...task,
-    created_at: new Date(task.created_at).toISOString(),
-    updated_at: new Date(task.updated_at).toISOString(),
-    stages: task.stages.map((s) => {
-      const stage: Record<string, unknown> = {
-        ...s,
-        ...(s.started_at !== undefined ? { started_at: new Date(s.started_at).toISOString() } : {}),
-        ...(s.ended_at !== undefined ? { ended_at: new Date(s.ended_at).toISOString() } : {}),
-      };
-      // api-v1.yaml renders the relative spill path as `output_url`.
-      if (s.output_path !== undefined) {
-        stage.output_url = s.output_path;
-        delete (stage as { output_path?: unknown }).output_path;
-      }
-      return stage;
-    }),
-    metadata: {
-      revision: task.last_event_sequence > 0 ? task.last_event_sequence : 1,
-      created_at: new Date(task.created_at).toISOString(),
-      modified_at: new Date(task.updated_at).toISOString(),
-      owner: task.principal,
-      source: task.client_type,
-      validation_status: 'valid',
-    },
-  };
-  if (task.terminal_at !== undefined) {
-    out.terminal_at = new Date(task.terminal_at).toISOString();
-  }
-  if (task.cancel_requested_at !== undefined) {
-    out.cancel_requested_at = new Date(task.cancel_requested_at).toISOString();
-  }
-  // `spec`, `plan_binding`, and `desired_rollback` are internal-only columns —
-  // none is part of the public Task surface in api-v1.yaml.
-  //   - `spec` (migration 003): the raw requester-submitted executor INPUT
-  //     (s2-task-envelope-spec §3.1).
-  //   - `plan_binding` / `desired_rollback` (S3 N0): the plan's observed-freshness
-  //     ref and the prior-value undo set (s3-nfs-executor-spec §5.4).
-  // Strip all three so a read endpoint never echoes the operation input, the
-  // requester's raw desired payload, or every mutated KV key back over the wire.
-  // The SSE watch snapshot strips the same three (see watchTask).
-  delete out.spec;
-  delete out.plan_binding;
-  delete out.desired_rollback;
-  return out;
 }
 
 export function tasksRouter(ctx: ApiContext): Router {
@@ -179,6 +119,10 @@ export function tasksRouter(ctx: ApiContext): Router {
 
   r.get('/tasks/:id/watch', (req, res) => watchTask(ctx, req, res, req.params.id));
 
+  r.get('/tasks/:id/wait', (req, res, next) => {
+    waitForTask(ctx, req, res, req.params.id as string).catch(next);
+  });
+
   return r;
 }
 
@@ -243,15 +187,13 @@ function watchTask(ctx: ApiContext, req: Request, res: Response, id: string): vo
   // attaches live with no re-send. Reading the task and subscribing happen
   // synchronously below, so no live event can slip through the gap.
   if (lastEventId === undefined || lastEventId < task.last_event_sequence) {
-    // Strip the internal-only columns (`spec` raw executor input, `plan_binding`,
-    // `desired_rollback`) before the snapshot crosses the wire — none is part of
-    // the public Task surface on REST or SSE (mirrors renderTask). The rest of the
-    // raw store shape is kept as-is for the frame.
-    const snapshot: Record<string, unknown> = { ...task };
-    delete snapshot.spec;
-    delete snapshot.plan_binding;
-    delete snapshot.desired_rollback;
-    res.write(formatFrame(task.last_event_sequence, snapshot));
+    // ONE renderer for REST and SSE: the frame is the same public Task shape
+    // GET /tasks/{id} returns — ISO timestamps, `output_url`, `metadata`, the
+    // `progress` rollup, and the internal-only columns (`spec`, `plan_binding`,
+    // `desired_rollback`) stripped. This used to hand-copy the raw store row,
+    // which is how the rollup would otherwise have been missing from the stream
+    // (s2-task-envelope-spec §10).
+    res.write(formatFrame(task.last_event_sequence, renderTask(task)));
   }
 
   // Attach to the live stream. If no TaskWatch is wired (should not happen once

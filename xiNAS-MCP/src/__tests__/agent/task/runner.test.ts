@@ -111,6 +111,30 @@ describe('TaskRunner.run — success path', () => {
     // After completion the task is no longer in flight.
     expect(runner.getInflight().has('t-inflight')).toBe(false);
   });
+
+  it('reports the executor stage count as stage_total on the accepted event', async () => {
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+    });
+    const runner = makeRunner(makeBridge(['snap-before', 'snap-after']));
+
+    await runner.run(
+      { task_id: 't-total', operation_kind: 'reference.echo', spec: { message: 'hi' } },
+      referenceExecutor,
+      publish,
+    );
+
+    const accepted = events.find((e) => e.event_type === 'accepted');
+    // referenceExecutor has three stages: preflight, apply, verify.
+    expect(accepted?.stage_total).toBe(3);
+
+    // stage_total counts EXECUTOR stages only — the synthetic
+    // snapshot_before/snapshot_after rows are excluded, and no other
+    // event repeats the field.
+    const withTotal = events.filter((e) => e.stage_total !== undefined);
+    expect(withTotal).toHaveLength(1);
+  });
 });
 
 describe('TaskRunner.run — failure → rollback path', () => {
