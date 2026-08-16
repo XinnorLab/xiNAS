@@ -640,3 +640,32 @@ describe('parseRaidShow', () => {
     });
   });
 });
+
+// The daemon spells "this array has no spare pool" as the STRING "-", not as
+// an empty string or a missing key. Verified on a live node (xicli 4.4.0,
+// driver 4.4.0-43861): both arrays report `"sparepool": "-"` with no pools
+// configured at all. Treating it as a name publishes a reference to a pool
+// that cannot exist, and — worse — makes the modify executor's foreign-pool
+// guard reject every array that has no spare pool.
+describe('sparepool sentinel', () => {
+  const arr = (sparepool: unknown) =>
+    parseRaidShow(
+      [{ name: 'a', level: '5', devices: [], state: ['online'], sparepool }],
+      DISK_IDS,
+    )[0];
+
+  it('"-" means no spare pool, not a pool named "-"', () => {
+    const a = arr('-');
+    expect(a?.status.spare_pool).toBeUndefined();
+    expect(a?.spec.spare_disk_ids).toEqual([]);
+  });
+
+  it('an empty string and a missing key mean the same thing', () => {
+    expect(arr('')?.status.spare_pool).toBeUndefined();
+    expect(arr(undefined)?.status.spare_pool).toBeUndefined();
+  });
+
+  it('a real pool name still comes through', () => {
+    expect(arr('xnsp_a')?.status.spare_pool).toBe('xnsp_a');
+  });
+});

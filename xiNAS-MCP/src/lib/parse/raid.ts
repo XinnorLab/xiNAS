@@ -107,6 +107,26 @@ const DEGRADED_STATES = new Set([
  * list the TUI prints, not from a colour that says the array is in trouble.
  */
 
+/**
+ * The array's spare-pool NAME, or `''` when it has none.
+ *
+ * The daemon spells "no spare pool" as the STRING `"-"`, not as an empty
+ * string and not by omitting the key. Verified on a live node (`xicli 4.4.0`,
+ * driver `4.4.0-43861`): both arrays report `"sparepool": "-"` with no pools
+ * configured at all.
+ *
+ * Every consumer must read the field through here. Treating `"-"` as a name
+ * is not cosmetic — the modify executor's foreign-pool guard rejects any
+ * sparepool that is neither `''` nor `xnsp_<array>`, so attaching spares to an
+ * array that has none failed preflight with *"sparepool '-' is not managed by
+ * the control path"*, which is every array on a fresh install.
+ */
+export function readSparepoolName(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const name = value.trim();
+  return name === '' || name === '-' ? '' : name;
+}
+
 /** Tolerant read of the pool_show payload: name + member drives. */
 function readPools(pools: unknown): Map<string, string[]> {
   const out = new Map<string, string[]>();
@@ -206,10 +226,8 @@ export function parseRaidShow(
     const reconProgress = numberOrNull(o.recon_progress) ?? numberOrNull(o.init_progress);
     // S4 T5: the array's sparepool NAME (raid_show) joins to its member
     // DRIVES (pool_show) → control-path disk ids. Absent/unknown → [].
-    const spareDrives =
-      typeof o.sparepool === 'string' && o.sparepool.length > 0
-        ? (poolDrives.get(o.sparepool) ?? [])
-        : [];
+    const sparepool = readSparepoolName(o.sparepool);
+    const spareDrives = sparepool !== '' ? (poolDrives.get(sparepool) ?? []) : [];
     const capacityBytes = sizeToBytes(o.size);
     const tuning = readTuning(o);
     const memoryUsage = coerceNumber(o.memory_usage_mb ?? o.memory_usage);
@@ -231,9 +249,7 @@ export function parseRaidShow(
       status: {
         state: deriveState(states),
         volume_path: `/dev/xi_${name}`,
-        ...(typeof o.sparepool === 'string' && o.sparepool.length > 0
-          ? { spare_pool: o.sparepool }
-          : {}),
+        ...(sparepool !== '' ? { spare_pool: sparepool } : {}),
         rebuild_progress_pct: reconProgress,
         check_progress_pct: null,
         ...(capacityBytes !== null ? { usable_capacity_bytes: capacityBytes } : {}),

@@ -450,6 +450,34 @@ describe('xiraid.array.modify executor', () => {
     expect(fake.ops).toEqual([]);
   });
 
+  // The daemon reports "no spare pool" as the string "-", not "". Observed on a
+  // live node (xicli 4.4.0 / driver 4.4.0-43861) on every array of a fresh
+  // install. Read as a NAME it is neither '' nor xnsp_<array>, so the
+  // foreign-pool guard rejected attaching spares to any array that had none.
+  it('the daemon "-" sentinel is no spare pool, not a foreign one', async () => {
+    const fake = makeFake();
+    seedArray(fake, { sparepool: '-' });
+    const events = await runModify(fake, {
+      id: 'data',
+      spare_disk_ids: ['d5'],
+      device_by_id: { d5: '/dev/nvme5n1' },
+    });
+    expect(shape(events)).not.toContainEqual(['stage_failed', 'preflight']);
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.arrays[0]?.sparepool).toBe('xnsp_data');
+  });
+
+  it('detaching back to "-" verifies as detached, not as a mismatch', async () => {
+    const fake = makeFake();
+    seedArray(fake, { sparepool: '-' });
+    const events = await runModify(fake, {
+      id: 'data',
+      spare_disk_ids: [],
+      device_by_id: {},
+    });
+    expect(terminal(events)?.status).toBe('success');
+  });
+
   it('tuning fails after a successful attach → rollback inverts the pool ops', async () => {
     const fake = makeFake({ failTuningModify: true });
     seedArray(fake);
