@@ -100,8 +100,42 @@ A future migration may persist the observed pin and let the engine's `plan_stale
 
 **Provider preflight.**
 1. The array must exist in observed state (else `NOT_FOUND`); read its observed `spec` as the *before*.
-2. `validateModifySpec`: tuning ranges (reusing the create rules); spare disks resolved + checked exactly like create members (`disk_not_found`/`disk_not_safe`/`disk_is_system`/`disk_in_use` — a disk spared to **this** array's current pool is not "in use").
+2. `validateModifySpec`: tuning ranges (§Tuning ranges below); spare disks resolved + checked exactly like create members (`disk_not_found`/`disk_not_safe`/`disk_is_system`/`disk_in_use` — a disk spared to **this** array's current pool is not "in use").
 3. `affected_resources = [ XiraidArray#id (primary, first), …added/removed spare Disks ]`.
+
+**Tuning ranges.** `checkTuning()` in
+[lib/xiraid/validate.ts](../../xiNAS-MCP/src/lib/xiraid/validate.ts) is shared
+with create, but it is **not** the same rule on both surfaces, and it takes the
+surface as an argument because of it. [CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html)
+gives `--init_prio` and `--restripe_prio` as *"from 1 to 100"* under
+`raid create` and *"from 0 to 100"* under `raid modify`; `--recon_prio` and
+`--sdc_prio` stay *"from 1 to 100"* on both. Applying the create floor to a
+modify blocked a `PATCH` carrying `init_prio: 0` that `xicli` accepts — a
+preflight that lies in the opposite direction from a missing bound, and one
+the operator cannot work around.
+
+The bounds enforced, all from that reference (`schema.ts` constants in
+brackets):
+
+| Field | Create | Modify |
+|---|---|---|
+| `init_prio`, `restripe_prio` | `1-100` [`PRIO_MIN`] | `0-100` [`PRIO_MIN_MODIFY`] |
+| `recon_prio`, `sdc_prio` | `1-100` | `1-100` |
+| `merge_read_max`, `merge_read_wait`, `merge_write_max`, `merge_write_wait` | `1-100000` µs [`MERGE_USEC_*`] | same |
+| `memory_limit` | `0` or `1024-1048576` | same |
+| `memory_prealloc` | `0` or `1024-65536` | same |
+| `request_limit` | `0-4294967295` [`REQUEST_LIMIT_*`] | same |
+
+The four merge knobs and `request_limit`'s ceiling were previously checked
+only for `>= 0`. A **missing** bound is the expensive direction: the plan
+reports no blocker, the operator confirms, and the rejection arrives from
+`xicli` mid-apply — exactly the failure the constraint table exists to
+prevent. `merge_write_max: 0` and `merge_read_max: 200000` both planned clean
+and failed at `raid_modify`.
+
+The TUI enforces the same modify ranges client-side before it dispatches, from
+its own copy of the table — see
+[Storage/raid-management-spec.md §5.3](../Storage/raid-management-spec.md#53-value-ranges--stated-in-the-label-enforced-before-dispatch).
 4. `risk_level: non_disruptive`, `rollback_model: non_disruptive`.
 5. `diff = { before: { spare_disk_ids, tuning? }, after: { spare_disk_ids, tuning }, raid_modify_request, pool_ops: [...] }`.
 6. **`enriched_spec`** embeds: `{ id, spare_disk_ids?, tuning?, device_by_id }`. *(Implementation refinement over the first draft: the executor captures the pool pre-state — live sparepool linkage, pool existence/membership/activation — at its own `preflight` via `raid_show` + `pool_show` under the held leases, keyed per-run on the spec object. That is strictly fresher than plan-time observed state, so the api does NOT ship `current_*` fields.)*

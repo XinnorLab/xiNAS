@@ -20,9 +20,14 @@ import {
   MEMORY_LIMIT_MIN,
   MEMORY_PREALLOC_MAX,
   MEMORY_PREALLOC_MIN,
+  MERGE_USEC_MAX,
+  MERGE_USEC_MIN,
   NAME_RE,
   PRIO_MAX,
   PRIO_MIN,
+  PRIO_MIN_MODIFY,
+  REQUEST_LIMIT_MAX,
+  REQUEST_LIMIT_MIN,
   RESERVED_NAMES,
   STRIP_SIZES_KIB,
   SYND_CNT_MAX,
@@ -230,7 +235,7 @@ export function validateModifySpec(spec: XiraidArrayModifySpec, facts: ModifyFac
     blockers.push({ code, message });
   };
 
-  checkTuning(spec.tuning ?? {}, push);
+  checkTuning(spec.tuning ?? {}, push, 'modify');
 
   if (spec.spare_disk_ids !== undefined && spec.spare_disk_ids.length > 0) {
     // this array's own current spares are not "in use" — re-listing keeps them
@@ -248,7 +253,24 @@ export function validateModifySpec(spec: XiraidArrayModifySpec, facts: ModifyFac
 
 type Push = (code: string, message: string) => void;
 
-function checkTuning(t: Tuning, push: Push): void {
+/**
+ * Which xicli surface a tuning batch is bound for. The 4.4 command reference
+ * documents different priority floors for `raid create` and `raid modify`
+ * (schema.ts `PRIO_MIN` / `PRIO_MIN_MODIFY`), so the caller has to say.
+ */
+type TuningSurface = 'create' | 'modify';
+
+/**
+ * Range-check a tuning batch against the 4.4 command reference
+ * (https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html).
+ *
+ * Every bound here is the vendor's. A MISSING bound is the expensive
+ * direction: the plan reports no blocker, the operator confirms, and the
+ * rejection arrives from `xicli` mid-apply — which is exactly what happened
+ * while the four merge knobs were checked only for `>= 0` against a documented
+ * range of 1-100000.
+ */
+function checkTuning(t: Tuning, push: Push, surface: TuningSurface = 'create'): void {
   const range = (
     field: string,
     value: number | null | undefined,
@@ -262,24 +284,24 @@ function checkTuning(t: Tuning, push: Push): void {
       push('param_out_of_range', `tuning.${field} must be ${min}-${max}${zeroOk ? ' or 0' : ''}`);
     }
   };
-  range('init_prio', t.init_prio, PRIO_MIN, PRIO_MAX);
+  // `raid modify` widens these two to 0-100; `raid create` keeps them at 1-100.
+  const prioMin = surface === 'modify' ? PRIO_MIN_MODIFY : PRIO_MIN;
+  range('init_prio', t.init_prio, prioMin, PRIO_MAX);
+  range('restripe_prio', t.restripe_prio, prioMin, PRIO_MAX);
+  // ...while these two are 1-100 on both surfaces.
   range('recon_prio', t.recon_prio, PRIO_MIN, PRIO_MAX);
-  range('restripe_prio', t.restripe_prio, PRIO_MIN, PRIO_MAX);
   range('sdc_prio', t.sdc_prio, PRIO_MIN, PRIO_MAX);
   range('memory_limit', t.memory_limit, MEMORY_LIMIT_MIN, MEMORY_LIMIT_MAX, true);
   range('memory_prealloc', t.memory_prealloc, MEMORY_PREALLOC_MIN, MEMORY_PREALLOC_MAX, true);
   range('max_sectors_kb', t.max_sectors_kb, MAX_SECTORS_KB_MIN, MAX_SECTORS_KB_MAX, true);
+  range('request_limit', t.request_limit, REQUEST_LIMIT_MIN, REQUEST_LIMIT_MAX);
   for (const field of [
     'merge_read_max',
     'merge_read_wait',
     'merge_write_max',
     'merge_write_wait',
-    'request_limit',
   ] as const) {
-    const value = t[field];
-    if (value !== undefined && value !== null && value < 0) {
-      push('param_out_of_range', `tuning.${field} must be >= 0`);
-    }
+    range(field, t[field], MERGE_USEC_MIN, MERGE_USEC_MAX);
   }
 }
 

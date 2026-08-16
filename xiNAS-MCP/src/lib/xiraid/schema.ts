@@ -135,8 +135,22 @@ export const GROUP_SIZE_MIN = 4;
 export const GROUP_SIZE_MAX = 32;
 export const SYND_CNT_MIN = 4;
 export const SYND_CNT_MAX = 32;
+/**
+ * Priority floors differ per surface in the 4.4 command reference, and the
+ * difference is not cosmetic: `xicli raid create` gives `--init_prio` and
+ * `--restripe_prio` as "from 1 to 100", while `xicli raid modify` gives both as
+ * "from 0 to 100". `--recon_prio` and `--sdc_prio` are "from 1 to 100" on both.
+ * Enforcing the create floor on a modify rejects a value xicli accepts.
+ */
 export const PRIO_MIN = 1;
+export const PRIO_MIN_MODIFY = 0;
 export const PRIO_MAX = 100;
+/** CR 4.4, every merge knob: "integers from 1 to 100000" (microseconds). */
+export const MERGE_USEC_MIN = 1;
+export const MERGE_USEC_MAX = 100_000;
+/** CR 4.4 `--request_limit`: "integers from 0 to 4294967295"; 0 = unlimited. */
+export const REQUEST_LIMIT_MIN = 0;
+export const REQUEST_LIMIT_MAX = 4_294_967_295;
 export const MEMORY_LIMIT_MIN = 1024;
 export const MEMORY_LIMIT_MAX = 1048576;
 export const MEMORY_PREALLOC_MIN = 1024;
