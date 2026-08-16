@@ -204,16 +204,22 @@ try:
         # State can be array or string
         state_val = arr.get('state', 'unknown')
         states = state_val if isinstance(state_val, list) else [state_val]
-        states = [str(s).strip().lower() for s in states if s]
-        bad = [s for s in states if s in BAD]
-        busy = [s for s in states if s not in HEALTHY and s not in BAD]
+        words = [str(s).strip().lower() for s in states if isinstance(s, str) and s.strip()]
+        # An empty or junk state field is NOT a healthy one. Falling through to
+        # the green branch when nothing parsed painted an array whose state
+        # was never reported as fine.
+        readable = bool(words) and len(words) == len(states)
+        bad = [s for s in words if s in BAD]
+        busy = [s for s in words if s not in HEALTHY and s not in BAD]
         if bad:
             state, icon, state_color = bad[0], '\u2717', '\033[0;31m'  # Red
-        elif busy:
-            # In progress or unrecognised: the array still has its redundancy.
-            state, icon, state_color = busy[0], '\u26a0', '\033[1;33m'  # Yellow
+        elif busy or not readable:
+            # In progress, unrecognised, or unreadable - not something to paint
+            # green. Only the first two are the array still being redundant.
+            state = busy[0] if busy else 'state not reported'
+            icon, state_color = '\u26a0', '\033[1;33m'  # Yellow
         else:
-            state, icon, state_color = (states[0] if states else 'unknown'), '\u2713', '\033[1;32m'
+            state, icon, state_color = words[0], '\u2713', '\033[1;32m'
         # Size can be string like '13111 GiB' or int bytes
         size_val = arr.get('size', 0)
         if isinstance(size_val, str):

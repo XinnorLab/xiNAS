@@ -168,3 +168,120 @@ def test_raid_devices_does_not_invent_a_state_for_an_unreported_member(monkeypat
     """A member the daemon reported no state for is not a failed member."""
     (result,) = _run_devices(monkeypatch, {"data": {"name": "data", "devices": ["/dev/nvme0n1"]}})
     assert result.status == "PASS"
+
+
+# ---- unreadable state payloads (review P1) ---------------------------------
+#
+# The check iterated `arr.get("state", [])` raw, so the SHAPE of the payload
+# decided the verdict rather than its content: a missing or empty `state`
+# reported PASS ("1 array(s) online") for an array nothing was known about,
+# `null` raised an uncaught TypeError out of the whole run, and the string
+# "online" iterated into six single characters and produced six WARNs. None of
+# those may certify an array as healthy.
+
+
+@pytest.mark.parametrize(
+    ("label", "state"),
+    [
+        ("missing", None),  # key absent entirely
+        ("null", None),
+        ("empty list", []),
+        ("empty string", ""),
+        ("dict", {"a": 1}),
+        ("number", 7),
+        ("list of non-strings", [1, 2]),
+    ],
+)
+def test_unreadable_state_never_passes(monkeypatch, label, state):
+    arr = {"name": "data"}
+    if label != "missing":
+        arr["state"] = state
+    result = _run(monkeypatch, {"data": arr})
+    assert result.status in ("SKIP", "WARN"), f"{label} produced {result.status}"
+
+
+def test_unreadable_state_does_not_raise(monkeypatch):
+    """`state: null` used to escape as a TypeError and kill the whole run."""
+    assert _run(monkeypatch, {"data": {"name": "data", "state": None}}).status in ("SKIP", "WARN")
+
+
+def test_bare_string_state_is_one_word_not_six_characters(monkeypatch):
+    assert _run(monkeypatch, {"data": {"name": "data", "state": "online"}}).status == "PASS"
+
+
+def test_bare_string_failure_state_still_fails(monkeypatch):
+    result = _run(monkeypatch, {"data": {"name": "data", "state": "degraded"}})
+    assert result.status == "FAIL"
+    assert "degraded" in result.actual
+
+
+def test_a_real_failure_outranks_an_unreadable_sibling(monkeypatch):
+    """One unreadable array must not mask another array that is degraded."""
+    result = _run(
+        monkeypatch,
+        {"a": {"name": "a", "state": None}, "b": {"name": "b", "state": ["degraded"]}},
+    )
+    assert result.status == "FAIL"
+    assert "b" in result.actual
+
+
+def test_all_arrays_unreadable_reports_skip(monkeypatch):
+    """The documented SKIP case: nothing could be read, so nothing is claimed."""
+    result = _run(monkeypatch, {"a": {"name": "a"}, "b": {"name": "b", "state": None}})
+    assert result.status == "SKIP"
+    assert "a" in result.actual and "b" in result.actual
+
+
+# ---- per-category WARN text (review P1) ------------------------------------
+#
+# One shared line said "the array is redundant but may be slower until it
+# completes" for every WARN. That is not defensible for an initializing array
+# (AG 4.4: the RAID reaches "a fully operational 'initialized' state" only once
+# initialization concludes), for a stopped restripe (nothing is running), or
+# for a word this table does not know (nothing can be inferred at all).
+
+
+def test_initing_does_not_claim_the_array_is_redundant(monkeypatch):
+    result = _run(monkeypatch, _array("online", "initing"))
+    assert result.status == "WARN"
+    assert "is redundant" not in result.impact
+    assert "not yet fully redundant" in result.impact
+
+
+def test_stopped_restripe_does_not_claim_an_operation_is_running(monkeypatch):
+    result = _run(monkeypatch, _array("online", "initialized", "need_restripe"))
+    assert result.status == "WARN"
+    assert "is running" not in result.impact
+    assert "stopped" in result.impact.lower()
+
+
+def test_unrecognised_word_claims_nothing_about_redundancy(monkeypatch):
+    result = _run(monkeypatch, _array("online", "some_future_state"))
+    assert result.status == "WARN"
+    assert "is redundant" not in result.impact
+    assert "some_future_state" in result.actual
+
+
+def test_genuinely_running_background_op_keeps_the_reassuring_text(monkeypatch):
+    result = _run(monkeypatch, _array("online", "initialized", "sdc_scanning"))
+    assert result.status == "WARN"
+    assert "redundant" in result.impact
+
+
+def test_the_more_serious_warn_category_supplies_the_impact(monkeypatch):
+    """An unreadable array alongside a merely-scanning one reports the former."""
+    result = _run(
+        monkeypatch,
+        {
+            "a": {"name": "a", "state": ["online", "initialized", "sdc_scanning"]},
+            "b": {"name": "b", "state": None},
+        },
+    )
+    assert result.status == "WARN"
+    assert "could not be read" in result.impact
+
+
+def test_every_warn_and_fail_carries_a_fix_hint(monkeypatch):
+    for states in (("online", "initing"), ("degraded",), ("online", "some_future_state")):
+        result = _run(monkeypatch, _array(*states))
+        assert result.fix_hint, f"{states} has no fix_hint"

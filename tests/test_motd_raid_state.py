@@ -131,3 +131,46 @@ def test_bare_string_state_still_works(snippet):
 def test_empty_payload_reports_empty(snippet):
     (row,) = _render(snippet, {})
     assert row[0] == "EMPTY"
+
+
+# ---- unreadable state payloads --------------------------------------------
+#
+# The same hole the health check had: the reader inferred the verdict from the
+# payload's shape. `state: null` and `state: []` both left the word list empty
+# and fell through to the healthy branch, so an array whose state was not
+# reported at all was painted green.
+
+
+@pytest.mark.parametrize(
+    ("label", "state"),
+    [("null", None), ("empty list", []), ("empty string", ""), ("number", 7), ("dict", {"a": 1})],
+)
+def test_unreadable_state_is_never_green(snippet, label, state):
+    (row,) = _render(snippet, {"data": {"name": "data", "level": "5", "state": state}})
+    assert row[0] != "✓", f"{label} rendered as healthy"
+    assert row[4] != GREEN
+
+
+def test_missing_state_key_is_never_green(snippet):
+    (row,) = _render(snippet, {"data": {"name": "data", "level": "5"}})
+    assert row[0] != "✓"
+
+
+def test_a_readable_failure_survives_a_junk_entry(snippet):
+    (row,) = _render(snippet, {"data": {"name": "data", "level": "5", "state": [None, "degraded"]}})
+    assert row[0] == "✗"
+    assert row[5] == "degraded"
+
+
+def test_snippet_is_safe_inside_the_shell_double_quotes():
+    """The reader lives in `python3 -c "..."` inside the template.
+
+    Bash expands `$`, backticks and `\\` inside double quotes, and a stray
+    backtick in a comment becomes a command substitution that bash -n happily
+    accepts and then misexecutes at runtime. Jinja delimiters would be eaten
+    before bash ever sees them.
+    """
+    for path in TEMPLATES:
+        snippet = _snippet(path)
+        for token in ('"', "`", "$", "{{", "{%", "{#"):
+            assert token not in snippet, f"{path.name} snippet contains {token!r}"
