@@ -31,6 +31,7 @@ describe('migrations runner', () => {
       { version: 2, filename: '002-task-dispatch.sql' },
       { version: 3, filename: '003-task-spec.sql' },
       { version: 4, filename: '004-task-plan-binding.sql' },
+      { version: 5, filename: '005-task-stage-total.sql' },
     ]);
   });
 
@@ -55,6 +56,28 @@ describe('migrations runner', () => {
       .get('t-004') as { plan_binding: string | null; desired_rollback: string | null };
     expect(row.plan_binding).toBeNull();
     expect(row.desired_rollback).toBeNull();
+  });
+
+  it('005 adds a nullable stage_total column to tasks', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+
+    const columns = (db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(columns).toContain('stage_total');
+
+    // NULL until the agent's `accepted` event reports the executor's stage
+    // count — every pre-005 task keeps a missing denominator, by design.
+    db.prepare(
+      `INSERT INTO tasks (task_id, kind, state, principal, client_type, request_id, correlation_id,
+                          input_hash, risk_level, affected_resources, created_at, updated_at)
+       VALUES ('t-005', 'test', 'queued', 'sys', 'system', 'r', 'c', 'h', 'non_disruptive', '[]', 0, 0)`,
+    ).run();
+    const row = db.prepare('SELECT stage_total FROM tasks WHERE task_id = ?').get('t-005') as {
+      stage_total: number | null;
+    };
+    expect(row.stage_total).toBeNull();
   });
 
   it('003 adds the spec column to tasks (nullable)', () => {

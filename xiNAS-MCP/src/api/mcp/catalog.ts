@@ -33,6 +33,15 @@ export interface CatalogEntry {
   status: 'live' | 'degraded';
   /** Streams a non-JSON body: CLI-only, excluded from MCP tools. */
   binary?: boolean;
+  /**
+   * The success response is a Task envelope (`task_id` + `state`) — the work
+   * runs asynchronously. Drives the MCP `next` hint and the "asynchronous"
+   * clause in tools/list. Explicit rather than inferred from `mutability`:
+   * `support.bundle` is a DIRECT tool that returns 202 + a Task, and inferring
+   * from `plan_apply` would leave exactly that call handing a client a
+   * task_id with no way to follow it.
+   */
+  returns_async_task?: boolean;
 }
 
 const NO_INPUT: Record<string, unknown> = {
@@ -120,6 +129,7 @@ const planApply = (
   requires_mcp_apply: true,
   min_role: minRole,
   status: 'live',
+  returns_async_task: true,
   ...over,
 });
 
@@ -310,6 +320,31 @@ export const CATALOG: CatalogEntry[] = [
   // ── tasks ──
   read('tasks.list', 'GET', '/tasks', 'List tasks.'),
   read('tasks.get', 'GET', '/tasks/{id}', 'Get one task (state, stages, error).'),
+  read(
+    'tasks.wait',
+    'GET',
+    '/tasks/{id}/wait',
+    'Block until a task changes or the timeout expires; returns the task with its progress summary (current stage, position against the stage count, elapsed time). Call repeatedly to follow a long operation.',
+    {
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'task id' },
+          timeout_s: {
+            type: 'integer',
+            description: 'how long to block, 1–60 seconds (default 25)',
+          },
+          since_revision: {
+            type: 'integer',
+            description:
+              'the last_event_sequence already seen; the call returns as soon as the task moves past it',
+          },
+        },
+        required: ['id'],
+        additionalProperties: false,
+      },
+    },
+  ),
   {
     name: 'tasks.cancel',
     description:
@@ -321,6 +356,7 @@ export const CATALOG: CatalogEntry[] = [
     requires_mcp_apply: false,
     min_role: 'operator',
     status: 'live',
+    returns_async_task: true,
   },
 
   // ── support bundle ──
@@ -335,6 +371,7 @@ export const CATALOG: CatalogEntry[] = [
     requires_mcp_apply: false,
     min_role: 'operator',
     status: 'live',
+    returns_async_task: true,
   },
   read(
     'support.download',

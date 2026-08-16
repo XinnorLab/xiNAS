@@ -143,6 +143,34 @@ export function buildRequest(
   return { path: `/api/v1${path}`, body: rest };
 }
 
+/** Task states from which more progress is still expected. */
+const LIVE_TASK_STATES: ReadonlySet<string> = new Set(['queued', 'running']);
+
+/**
+ * The "what do I call next" pointer for a call that started a task.
+ *
+ * The /mcp transport runs in JSON response mode — there is no server-push
+ * stream, so a client cannot be *told* about progress; it has to ask.
+ * Attaching the exact follow-up call to the result is what turns a bare
+ * task_id into something a client will actually follow. Gated on the catalog's
+ * `returns_async_task` flag, NOT on `mutability`: support.bundle is a direct
+ * tool that returns a Task envelope (exported for unit tests).
+ */
+export function nextHint(
+  entry: CatalogEntry,
+  result: unknown,
+): Record<string, unknown> | undefined {
+  if (entry.returns_async_task !== true) return undefined;
+  const task = result as { task_id?: unknown; state?: unknown } | null;
+  if (typeof task?.task_id !== 'string') return undefined;
+  if (typeof task.state !== 'string' || !LIVE_TASK_STATES.has(task.state)) return undefined;
+  return {
+    tool: 'tasks.wait',
+    args: { id: task.task_id, timeout_s: 25 },
+    note: 'long-running operation — call this repeatedly until state is terminal (success, failed, cancelled, requires_manual_recovery)',
+  };
+}
+
 export function buildMcpServer(opts: DispatcherOptions): Server {
   const server = new Server(
     { name: 'xinas-api-mcp', version: '1.0.0' },
@@ -150,11 +178,22 @@ export function buildMcpServer(opts: DispatcherOptions): Server {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: CATALOG.filter((e) => e.binary !== true).map((e) => ({
-      name: e.name,
-      description: e.status === 'degraded' ? `${e.description} [DEGRADED backend]` : e.description,
-      inputSchema: e.input_schema as { type: 'object'; [k: string]: unknown },
-    })),
+    tools: CATALOG.filter((e) => e.binary !== true).map((e) => {
+      // Generated from the catalog flag rather than written into twenty
+      // description strings — the fact a call is asynchronous is what tells a
+      // client to expect a task_id instead of a finished result.
+      const asyncClause =
+        e.returns_async_task === true
+          ? ' Returns a task_id and executes asynchronously — follow it with tasks.wait.'
+          : '';
+      return {
+        name: e.name,
+        description:
+          (e.status === 'degraded' ? `${e.description} [DEGRADED backend]` : e.description) +
+          asyncClause,
+        inputSchema: e.input_schema as { type: 'object'; [k: string]: unknown },
+      };
+    }),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -225,11 +264,13 @@ export function buildMcpServer(opts: DispatcherOptions): Server {
         first?.details,
       );
     }
+    const next = nextHint(entry, envelope.result);
     return text({
       result: envelope.result,
       ...(envelope.warnings !== undefined && envelope.warnings.length > 0
         ? { warnings: envelope.warnings }
         : {}),
+      ...(next !== undefined ? { next } : {}),
     });
   });
 
