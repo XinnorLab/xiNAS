@@ -313,15 +313,24 @@ the list is empty it **replaces** the `(no RAID arrays configured)`
 empty-state with that message. An empty list under a degraded backend must
 never read as "genuinely no arrays".
 
-State → icon/colour mapping (from `_state_icon` / `_state_color`):
+State → icon/colour mapping (from `_state_icon` / `_state_color`). The screen
+renders whatever `status.state` the control path published, so the words here
+are the **control-path** enum, not the daemon's:
 
 | State | Icon | Colour |
 |---|---|---|
-| `online` / `initialized` | `*` | green |
-| `initing` / `rebuilding` | `~` | yellow |
+| `optimal` / `online` / `initialized` | `*` | green |
+| `rebuilding` / `initing` / `importing` | `~` | yellow |
 | `degraded` | `!` | yellow |
 | `offline` / `failed` | `x` | red |
 | anything else | `o` | none |
+
+The daemon's own state words are collapsed into that enum once, in the agent
+parser — see [s3-xiraid-array-spec §5.3](../control-path/s3-xiraid-array-spec.md#53-state--statusstate),
+which carries the full 4.4 vocabulary and the mapping. That mapping is what
+keeps this table short: an array reading `unrecovered` or `read_only` on the
+daemon side does not arrive here as the fallback `o`, it arrives as `failed`
+or `degraded` and is coloured accordingly.
 
 ### 3.2 Unobserved tuning values render as unknown
 
@@ -555,8 +564,8 @@ The summary dialog (title `"Confirm Create"`, `allow_back=True`) renders all sel
 Steps:
 
 1. **Pick an array.** `GET /api/v1/arrays` → `SelectDialog` over array names.
-2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max. (`resync_enabled` is create-only — xiRAID's `RaidModify` has no such field — so it is not offered.) The two merge-max knobs are **times in microseconds** (the daemon spells them `merge_*_usecs`), so their labels read `(us)` — they were mislabelled `(KB)` until the tuning surface became observable and read and write paths could be compared.
-3. **Per-parameter prompt** — see §5.1.
+2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max. (`resync_enabled` is create-only — xiRAID's `RaidModify` has no such field — so it is not offered.) The two merge-max knobs are **times in microseconds** (the daemon spells them `merge_*_usecs`), so their labels say `us` — they were mislabelled `(KB)` until the tuning surface became observable and read and write paths could be compared.
+3. **Per-parameter prompt** — see §5.1 and §5.3.
 4. **Confirm + dispatch.** Value is coerced to the declared `vtype` (`int` for the integer knobs, `str` for the rest) and mapped onto the ADR-0006 writable subset — `sparepool` becomes `{"spare_disk_ids": [...]}`, everything else `{"tuning": {key: value}}`. `PATCH /api/v1/arrays/{name}` is submitted via `plan_apply_wait`. On success: audit (`raid.modify`) + snapshot (`raid_modify`) + Quick Overview refresh. On `ControlPathError`: an OK-only `Edit failed.` dialog.
 
 **Caveat on step 2: "create-only" here means "absent from the gRPC message",
@@ -596,6 +605,44 @@ This is the only place where the TUI itself reads `/sys` rather than going throu
 `spare_pool` is also dynamic — instead of free-form input, `GET /api/v1/pools` is queried and a `SelectDialog` is offered. If no pools exist, the operator is told via `notify(severity="warning")` and the dialog aborts. The chosen pool's drive paths are mapped to disk ids (via `GET /api/v1/disks`) to build the PATCH's `spare_disk_ids`; a pool with no drives aborts with a warning rather than sending an empty list.
 
 This is also the only knob in §5 whose PATCH spec is not under `tuning`.
+
+### 5.3 Value ranges — stated in the label, enforced before dispatch
+
+Every integer knob is range-checked in the prompt loop and re-prompts with the
+reason, the same rule the Create wizard applies to drive counts (§4). Until
+this landed the screen sent anything that parsed as an `int`, so the first
+thing that said no was a plan blocker — after the operator had confirmed.
+
+The ranges are the vendor's, read off the **`xicli raid modify`** table of
+[CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html).
+**That table is not the `xicli raid create` table**, and the difference is
+load-bearing: `--init_prio` and `--restripe_prio` are *"from 0 to 100"* on
+modify and *"from 1 to 100"* on create, while `--recon_prio` and `--sdc_prio`
+are *"from 1 to 100"* on both.
+
+| Parameter | Range enforced | Reference wording |
+|---|---|---|
+| `init_prio` | `0-100` | "Possible values are from 0 to 100" |
+| `recon_prio` | `1-100` | "Possible values: from 1 to 100" |
+| `memory_limit` | `0` or `1024-1048576` | "0 and integers from 1024 to 1048576. The 0 value sets unlimited RAM usage" |
+| `merge_read_max` | `1-100000` | "integers from 1 to 100000" |
+| `merge_write_max` | `1-100000` | "integers from 1 to 100000" |
+
+**The label is generated from the same table it enforces.** `_MODIFY_PARAMS`
+builds each label with `raid_rules.modify_range_hint(key)`, so the two cannot
+drift; `tests/test_raid_overview.py` asserts every ranged key has an entry
+whose label states its range. They *had* drifted: the screen advertised
+`Recon Priority (0-100)` while both xiRAID and the control path reject `0` for
+`recon_prio` — a label inviting a value the operator could not use.
+
+The rule lives in [xinas_menu/utils/raid_rules.py](../../xinas_menu/utils/raid_rules.py)
+(`MODIFY_RANGES`, `modify_range_hint()`, `validate_modify_value()`), next to
+the create-side constraints. Its TypeScript counterpart is `checkTuning()` in
+[lib/xiraid/validate.ts](../../xiNAS-MCP/src/lib/xiraid/validate.ts), which
+enforces the same split via `PRIO_MIN` / `PRIO_MIN_MODIFY` — see
+[s4 spec §Preflight](../control-path/s4-xiraid-array-mutations-spec.md). A knob
+with no entry in `MODIFY_RANGES` is not gated, so adding a parameter to the
+screen without a range degrades to the old behaviour rather than blocking it.
 
 ---
 

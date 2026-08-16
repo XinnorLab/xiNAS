@@ -205,10 +205,27 @@ def test_merge_max_edit_params_are_labelled_microseconds_not_kb():
     from xinas_menu.screens.raid import _MODIFY_PARAMS
 
     labels = {key: label for key, label, *_ in _MODIFY_PARAMS}
-    assert "(us)" in labels["merge_read_max"]
-    assert "(us)" in labels["merge_write_max"]
+    assert "us" in labels["merge_read_max"]
+    assert "us" in labels["merge_write_max"]
     assert "KB" not in labels["merge_read_max"]
     assert "KB" not in labels["merge_write_max"]
+
+
+def test_edit_labels_state_the_range_the_screen_enforces():
+    """A label that advertises a range must be the range validate_modify_value
+    applies — "Recon Priority (0-100)" invited a 0 that xiRAID's modify surface
+    documents as 1-100 and the control path rejects (raid-management-spec §5)."""
+    from xinas_menu.screens.raid import _MODIFY_PARAMS
+    from xinas_menu.utils import raid_rules
+
+    labels = {key: label for key, label, *_ in _MODIFY_PARAMS}
+    for key in raid_rules.MODIFY_RANGES:
+        assert key in labels, f"{key} has a range but no Edit Array entry"
+        assert raid_rules.modify_range_hint(key) in labels[key], (
+            f"{key} label {labels[key]!r} does not state the range it enforces"
+        )
+    # the specific regression: recon_prio's floor is 1, not 0
+    assert "1-100" in labels["recon_prio"]
 
 
 # ---- TRIM / discard (raid-management-spec §3, Installer raid-spec §7.5) ----

@@ -169,6 +169,38 @@ describe('validateCreateSpec', () => {
     expect(codes(spec({ tuning: { init_prio: 50, memory_limit: 2048 } }))).toEqual([]);
   });
 
+  // CR 4.4: every merge knob is "integers from 1 to 100000" on BOTH create and
+  // modify. Accepting anything >= 0 let 0 and 200000 through preflight and put
+  // the rejection at raid_create, which is the failure this table exists to
+  // prevent. https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html
+  it('merge timings are bounded to the documented 1-100000 us', () => {
+    for (const field of [
+      'merge_read_max',
+      'merge_read_wait',
+      'merge_write_max',
+      'merge_write_wait',
+    ] as const) {
+      expect(codes(spec({ tuning: { [field]: 0 } }))).toContain('param_out_of_range');
+      expect(codes(spec({ tuning: { [field]: 100001 } }))).toContain('param_out_of_range');
+      expect(codes(spec({ tuning: { [field]: 1 } }))).toEqual([]);
+      expect(codes(spec({ tuning: { [field]: 100000 } }))).toEqual([]);
+    }
+  });
+
+  // CR 4.4 request_limit: "integers from 0 to 4294967295".
+  it('request_limit is bounded above as well as below', () => {
+    expect(codes(spec({ tuning: { request_limit: 4294967296 } }))).toContain('param_out_of_range');
+    expect(codes(spec({ tuning: { request_limit: 4294967295 } }))).toEqual([]);
+    expect(codes(spec({ tuning: { request_limit: 0 } }))).toEqual([]);
+  });
+
+  // CR 4.4 create: init_prio and restripe_prio are "from 1 to 100"; modify
+  // widens both to "from 0 to 100" (see the modify suite below).
+  it('create keeps the priorities at the create floor of 1', () => {
+    expect(codes(spec({ tuning: { init_prio: 0 } }))).toContain('param_out_of_range');
+    expect(codes(spec({ tuning: { restripe_prio: 0 } }))).toContain('param_out_of_range');
+  });
+
   it('name rules', () => {
     expect(codes(spec({ name: 'bad name!' }))).toContain('name_invalid');
     expect(codes(spec({ name: 'taken' }))).toContain('name_taken');
@@ -256,9 +288,32 @@ describe('validateCreateSpec', () => {
 
 describe('validateModifySpec', () => {
   it('tuning ranges reuse the create rules', () => {
-    const out = validateModifySpec({ tuning: { init_prio: 0, memory_limit: 512 } }, modifyFacts());
+    const out = validateModifySpec({ tuning: { recon_prio: 0, memory_limit: 512 } }, modifyFacts());
     expect(out.map((b) => b.code)).toEqual(['param_out_of_range', 'param_out_of_range']);
     expect(validateModifySpec({ tuning: { init_prio: 50 } }, modifyFacts())).toEqual([]);
+  });
+
+  /*
+   * CR 4.4 states different priority floors per surface: `raid create` gives
+   * init_prio and restripe_prio as "from 1 to 100", `raid modify` gives both as
+   * "from 0 to 100". recon_prio and sdc_prio stay "from 1 to 100" on both.
+   * Applying the create floor to a modify blocks a value xicli accepts, which
+   * is a preflight that lies in the opposite direction from a missing bound.
+   */
+  it('modify allows the priority floor of 0 that create rejects', () => {
+    expect(validateModifySpec({ tuning: { init_prio: 0 } }, modifyFacts())).toEqual([]);
+    expect(validateModifySpec({ tuning: { restripe_prio: 0 } }, modifyFacts())).toEqual([]);
+    // ...but only for the two the reference widens.
+    expect(
+      validateModifySpec({ tuning: { recon_prio: 0 } }, modifyFacts()).map((b) => b.code),
+    ).toEqual(['param_out_of_range']);
+    expect(
+      validateModifySpec({ tuning: { sdc_prio: 0 } }, modifyFacts()).map((b) => b.code),
+    ).toEqual(['param_out_of_range']);
+    // and 101 is still out of range on either surface
+    expect(
+      validateModifySpec({ tuning: { init_prio: 101 } }, modifyFacts()).map((b) => b.code),
+    ).toEqual(['param_out_of_range']);
   });
 
   it('spare disks checked like members; own current spares exempt from disk_in_use', () => {

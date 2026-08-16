@@ -46,12 +46,15 @@ __all__ = [
     "LEVELS_REQUIRING_GROUP_SIZE",
     "LEVEL_MIN_DRIVES",
     "MIN_GROUPS",
+    "MODIFY_RANGES",
     "RESERVED_ARRAY_NAMES",
     "group_size_min",
+    "modify_range_hint",
     "partition_collision",
     "validate_array_name",
     "validate_group_size",
     "validate_member_count",
+    "validate_modify_value",
 ]
 
 # --- per-level drive counts (Administrator's Guide) ------------------------
@@ -95,6 +98,57 @@ def validate_member_count(level: str, count: int) -> str | None:
     if level in LEVELS_REQUIRING_EVEN_MEMBERS and count % 2 != 0:
         return f"RAID {level} needs an even number of drives ({count} selected)."
     return None
+
+
+# --- `xicli raid modify` value ranges --------------------------------------
+# From the command reference's *modify* table, which is NOT the create table:
+# ``--init_prio`` and ``--restripe_prio`` are "from 0 to 100" on modify and
+# "from 1 to 100" on create, while ``--recon_prio`` and ``--sdc_prio`` stay
+# "from 1 to 100" on both. The control path encodes the same split in
+# ``PRIO_MIN`` / ``PRIO_MIN_MODIFY`` (xiNAS-MCP/src/lib/xiraid/schema.ts).
+#
+# Each entry is ``(minimum, maximum, extra_allowed_values)``. Only the knobs
+# the Edit Array screen actually offers are listed; a key that is absent is
+# not validated here, so adding a parameter to the screen without adding its
+# range degrades to the old behaviour rather than blocking it.
+MODIFY_RANGES: dict[str, tuple[int, int, tuple[int, ...]]] = {
+    # "Initialization priority in %. Possible values are from 0 to 100."
+    "init_prio": (0, 100, ()),
+    # "Reconstruction priority in %. Possible values: from 1 to 100."
+    "recon_prio": (1, 100, ()),
+    # "RAM usage limit in MiB. Possible values: 0 and integers from 1024 to
+    # 1048576. The 0 value sets unlimited RAM usage."
+    "memory_limit": (1024, 1048576, (0,)),
+    # "Maximum wait time (in microseconds) […] integers from 1 to 100000."
+    "merge_read_max": (1, 100000, ()),
+    "merge_write_max": (1, 100000, ()),
+}
+
+
+def modify_range_hint(key: str) -> str:
+    """The range for ``key`` as an operator-facing string (``"0 or 1024-1048576"``).
+
+    The Edit Array labels are built from this, so a label can never advertise a
+    range the validator does not enforce.
+    """
+    minimum, maximum, extra = MODIFY_RANGES[key]
+    span = f"{minimum}-{maximum}"
+    return f"{' or '.join(str(e) for e in extra)} or {span}" if extra else span
+
+
+def validate_modify_value(key: str, value: int) -> str | None:
+    """Check a ``xicli raid modify`` value against the vendor range for ``key``.
+
+    Returns ``None`` for a key this table does not cover — the screen must not
+    block a knob just because no range was recorded for it.
+    """
+    bounds = MODIFY_RANGES.get(key)
+    if bounds is None:
+        return None
+    minimum, maximum, extra = bounds
+    if value in extra or minimum <= value <= maximum:
+        return None
+    return f"Value must be {modify_range_hint(key)} (xiRAID limit)."
 
 
 def validate_group_size(level: str, member_count: int, group_size: int | None) -> str | None:

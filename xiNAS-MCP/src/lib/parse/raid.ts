@@ -54,17 +54,58 @@ export interface ObservedXiraidArray {
   };
 }
 
-const FAILED_STATES = new Set(['offline', 'broken', 'unusable', 'faulty', 'failed']);
+/**
+ * The daemon's state words → the control-path `status.state` enum.
+ *
+ * The vocabulary is the vendor's, published in full on AG 4.4 "Showing RAID
+ * State" (https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html).
+ * The sets below cover EVERY word on that page plus the older/alternate
+ * spellings earlier daemons emitted; a word that reaches none of them becomes
+ * `unknown`, which for a real state is a reporting failure, not caution — an
+ * array that cannot finish reconstruction must not be published to the TUI,
+ * MCP and CLI as an unremarkable "unknown".
+ *
+ * `state` is a LIST of words, and the buckets are checked worst-first, so one
+ * bad word outranks any number of good ones.
+ */
+const FAILED_STATES = new Set([
+  'offline', // "the RAID is unavailable […] or the number of available drives […] is insufficient"
+  'none', // "RAID was unloaded via the unload command or was not restored after reboot"
+  'unrecovered', // "RAID can't complete reconstruction because of unrecoverable sections"
+  // Spellings not on the 4.4 page, kept for older/alternate daemon builds.
+  'broken',
+  'unusable',
+  'faulty',
+  'failed',
+]);
 const REBUILDING_STATES = new Set([
+  'initing', // "the RAID is initializing"
+  'reconstructing', // "the RAID is reconstructing"
+  'restriping', // "RAID is restriping"
+  // Alternate spellings.
   'initializing',
-  'initing',
   'init',
-  'reconstructing',
   'recon',
-  'restriping',
   'resyncing',
 ]);
-const DEGRADED_STATES = new Set(['degraded', 'need_recon', 'need_resync']);
+const DEGRADED_STATES = new Set([
+  'degraded', // "available and ready for work but some drives are missing or failed"
+  'need_recon', // "the RAID needs reconstruction"
+  'need_init', // "the RAID needs initialization" — parity is not valid, so no redundancy
+  'inconsistent', // "an intengrity error was detected during an SDC scan" [sic]
+  'read_only', // "the license has expired. The RAID is read-only" — available, impaired
+  // Alternate spelling.
+  'need_resync',
+]);
+/**
+ * Words that are deliberately in NO bucket, so they never downgrade a verdict:
+ * `initialized` ("initialization is finished"), `online`, `sdc_scanning` (a
+ * scan an online array runs), `need_resize` ("restriping was finished, the
+ * RAID size increase is available") and `need_restripe` ("restriping was
+ * stopped and not finished"). All three of the latter describe an array that
+ * still has its redundancy; an operator learns about them from the raw state
+ * list the TUI prints, not from a colour that says the array is in trouble.
+ */
 
 /** Tolerant read of the pool_show payload: name + member drives. */
 function readPools(pools: unknown): Map<string, string[]> {

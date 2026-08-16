@@ -56,20 +56,56 @@ _CPU_LIST_RE = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
 # Live-modify surface = the ADR-0006 writability matrix: spare_disk_ids
 # (the "sparepool" entry) + tuning.* keys. resync_enabled is create-only
 # (xiRAID RaidModify has no such field) and is no longer offered here.
+#
+# The ranges in the labels are NOT written out here: they come from
+# raid_rules.modify_range_hint(), which is the same table
+# raid_rules.validate_modify_value() enforces, so a label cannot advertise a
+# value the screen then rejects. It used to — "Recon Priority (0-100)" invited
+# a 0 that xiRAID's modify surface documents as 1-100.
 _MODIFY_PARAMS = [
     # (key, label, kind, options, value_type)
     ("cpu_allowed", "CPU Affinity", "cpu_affinity", None, str),
     ("sparepool", "Spare Pool", "input", None, str),
-    ("init_prio", "Init Priority (0-100)", "input", None, int),
-    ("recon_prio", "Recon Priority (0-100)", "input", None, int),
+    (
+        "init_prio",
+        f"Init Priority ({raid_rules.modify_range_hint('init_prio')})",
+        "input",
+        None,
+        int,
+    ),
+    (
+        "recon_prio",
+        f"Recon Priority ({raid_rules.modify_range_hint('recon_prio')})",
+        "input",
+        None,
+        int,
+    ),
     ("sched_enabled", "Scheduler Enabled", "select", ["true", "false"], str),
-    ("memory_limit", "Memory Limit (MB)", "input", None, int),
+    (
+        "memory_limit",
+        f"Memory Limit (MB: {raid_rules.modify_range_hint('memory_limit')})",
+        "input",
+        None,
+        int,
+    ),
     ("merge_read_enabled", "Merge Read Enabled", "select", ["true", "false"], str),
     ("merge_write_enabled", "Merge Write Enabled", "select", ["true", "false"], str),
     # Merge windows are TIMES: the daemon reports them as merge_*_usecs and
     # the extended view renders them in us — the old "(KB)" labels were wrong.
-    ("merge_read_max", "Merge Read Max (us)", "input", None, int),
-    ("merge_write_max", "Merge Write Max (us)", "input", None, int),
+    (
+        "merge_read_max",
+        f"Merge Read Max (us: {raid_rules.modify_range_hint('merge_read_max')})",
+        "input",
+        None,
+        int,
+    ),
+    (
+        "merge_write_max",
+        f"Merge Write Max (us: {raid_rules.modify_range_hint('merge_write_max')})",
+        "input",
+        None,
+        int,
+    ),
 ]
 
 _MENU = [
@@ -943,9 +979,32 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 SelectDialog(options, title=f"Set {label}", prompt=f"New value for {label}:")
             )
         else:
-            value = await self.app.push_screen_wait(
-                InputDialog(f"New value for {label}:", f"Set {label}")
-            )
+            # Re-prompt on a value xiRAID would reject rather than sending it
+            # and letting the plan blocker be the first thing that says no —
+            # the same rule the Create wizard applies to drive counts and
+            # group sizes (raid-management-spec §4).
+            default = ""
+            while True:
+                value = await self.app.push_screen_wait(
+                    InputDialog(f"New value for {label}:", f"Set {label}", default=default)
+                )
+                if value is None:
+                    return
+                if vtype is not int:
+                    break
+                try:
+                    parsed = int(str(value).strip())
+                except (TypeError, ValueError):
+                    self.app.notify(f"'{value}' is not a whole number.", severity="error")
+                    default = str(value)
+                    continue
+                problem = raid_rules.validate_modify_value(key, parsed)
+                if problem is not None:
+                    self.app.notify(problem, severity="error")
+                    default = str(value)
+                    continue
+                value = str(parsed)
+                break
 
         if value is None:
             return

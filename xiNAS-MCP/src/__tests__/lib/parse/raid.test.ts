@@ -64,6 +64,50 @@ describe('parseRaidShow', () => {
     expect(states('online')?.state).toBe('optimal'); // bare-string tolerance
   });
 
+  // AG 4.4 "Showing RAID State" publishes the full state vocabulary; every word
+  // in it has to land somewhere other than `unknown`, or an array in real
+  // trouble is published to every client as unremarkable.
+  // https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html
+  it('maps the xiRAID 4.4 failure states to failed', () => {
+    const states = (state: unknown) =>
+      parseRaidShow([{ name: 'a', level: '5', devices: [], state }], DISK_IDS)[0]?.status;
+
+    // "the RAID was unloaded via the unload command or was not restored after
+    // reboot" — the volume is not there, exactly like offline.
+    expect(states(['none'])?.state).toBe('failed');
+    // "RAID can't complete reconstruction because of unrecoverable sections."
+    expect(states(['unrecovered'])?.state).toBe('failed');
+    // a failure word wins over an in-progress one
+    expect(states(['reconstructing', 'unrecovered'])?.state).toBe('failed');
+  });
+
+  it('maps the xiRAID 4.4 impaired states to degraded', () => {
+    const states = (state: unknown) =>
+      parseRaidShow([{ name: 'a', level: '5', devices: [], state }], DISK_IDS)[0]?.status;
+
+    // "an integrity error was detected during an SDC scan"
+    expect(states(['online', 'inconsistent'])?.state).toBe('degraded');
+    // "the RAID needs initialization" — parity is not valid yet, so there is
+    // no redundancy even though the array answers I/O.
+    expect(states(['online', 'need_init'])?.state).toBe('degraded');
+    // "the license has expired. The RAID is read-only." — available, impaired.
+    expect(states(['online', 'read_only'])?.state).toBe('degraded');
+  });
+
+  it('leaves the benign 4.4 states on the array-level verdict they came with', () => {
+    const states = (state: unknown) =>
+      parseRaidShow([{ name: 'a', level: '5', devices: [], state }], DISK_IDS)[0]?.status;
+
+    // An SDC scan, a finished restripe awaiting a resize, and a stopped
+    // restripe are all things an online array does; none of them costs
+    // redundancy, so none of them may downgrade the verdict.
+    expect(states(['online', 'initialized', 'sdc_scanning'])?.state).toBe('optimal');
+    expect(states(['online', 'initialized', 'need_resize'])?.state).toBe('optimal');
+    expect(states(['online', 'initialized', 'need_restripe'])?.state).toBe('optimal');
+    // ...but restriping is progress, and reads as such.
+    expect(states(['online', 'restriping'])?.state).toBe('rebuilding');
+  });
+
   it('progress fields surface as rebuild_progress_pct', () => {
     const [a] = parseRaidShow(
       [

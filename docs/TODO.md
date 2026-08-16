@@ -189,3 +189,103 @@ instead of the default executor), not a parameter tweak on the existing call.
 3. `docs/Storage/fs-shares-management-spec.md` §4.2 is updated to state the
    bound covers `isdir` and `ss` too, and the caveat added in this change is
    removed.
+
+## Storage — `xicli raid modify` knobs the surfaces do not offer
+
+*Deferred 2026-08-16, from the xiRAID 4.4 RAID-surface audit.*
+
+The [CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html)
+`raid modify` table documents seven writable parameters that reach neither the
+TUI's Edit Array list nor any other client-facing surface, even though
+`translate.ts` already emits every one of them into `RaidModifyRequest` and
+`Tuning` already types them: `restripe_prio`, `sdc_prio`, `request_limit`,
+`memory_prealloc`, `merge_read_wait`, `merge_write_wait`, `adaptive_merge`.
+The Extended Details view *renders* all seven, so an operator can see values
+they cannot change.
+
+**What the code does instead.** Nothing rejects them — a REST/MCP client that
+PATCHes `spec.tuning.sdc_prio` today is validated, translated and applied
+correctly. The gap is only that `_MODIFY_PARAMS` in
+[xinas_menu/screens/raid.py](../xinas_menu/screens/raid.py) does not list them.
+
+**Why it was cut.** The audit's scope was correctness of what ships — labels
+that advertise wrong ranges, bounds looser than the engine's. Adding
+parameters is a feature, and three of the seven (`merge_*_wait`,
+`adaptive_merge`) are only meaningful when their `merge_*_enabled` sibling is
+on, so a useful Edit Array entry for them wants conditional presentation
+rather than another flat row.
+
+**What done looks like.**
+
+1. `_MODIFY_PARAMS` carries the seven, each with a `MODIFY_RANGES` entry so
+   its label states the range it enforces (raid-management-spec §5.3).
+2. `raid_rules.MODIFY_RANGES` gains `restripe_prio` `0-100`, `sdc_prio`
+   `1-100`, `request_limit` `0-4294967295`, `memory_prealloc` `0` or
+   `1024-65536`, `merge_*_wait` `1-100000` — the same numbers `checkTuning()`
+   already enforces control-path-side.
+3. `docs/Storage/raid-management-spec.md` §5 lists them.
+
+## Storage — level-conditioned tuning is not validated
+
+*Deferred 2026-08-16, from the xiRAID 4.4 RAID-surface audit.*
+
+Several `xicli raid create` parameters are documented "Except RAIDs 0, 1, 10"
+(`--adaptive_merge`, `--merge_read_enabled`, `--merge_write_enabled`, the four
+`--merge_*` timings) or "cannot be set for RAIDs 0, 1, 10" (`--sdc_prio`);
+`--sparepool` is "not for RAID 0"; `--init_prio` / `--recon_prio` are "Except
+RAID 0". `validateCreateSpec()` checks every one of those ranges but not the
+level they are legal for, so a `POST /api/v1/arrays` for a `raid10` carrying
+`tuning.merge_read_enabled` plans clean and fails at `raid_create`.
+
+**What the code does instead.** The TUI's Create wizard sends **no** `tuning`
+at all, so the gap is unreachable from the menu; it is reachable from REST,
+MCP and `xinasctl`.
+
+**Why it was cut.** It needs a per-level writability matrix in
+`LEVEL_CONSTRAINTS` and a matching blocker code, and the vendor wording is
+per-parameter prose rather than a table — transcribing it is a change of its
+own, with the same "validate against the vendor page, not the flag name" care
+the drive minimums needed.
+
+**What done looks like.**
+
+1. `LEVEL_CONSTRAINTS` in [lib/xiraid/schema.ts](../xiNAS-MCP/src/lib/xiraid/schema.ts)
+   carries the set of tuning keys each level rejects, transcribed from CR 4.4
+   with the wording quoted.
+2. `checkTuning()` takes the level and pushes a `param_not_for_level` blocker.
+3. `s3-xiraid-array-spec.md` §Validation lists the new blocker code.
+
+## Storage — `discard` is create-only against a 4.3.1 descriptor, on a 4.4 node
+
+*Deferred 2026-08-16, from the xiRAID 4.4 RAID-surface audit.*
+
+`CREATE_ONLY_TUNING` in [routes/arrays.ts](../xiNAS-MCP/src/api/routes/arrays.ts)
+rejects `spec.tuning.discard` on a PATCH because the vendored `RaidModify`
+descriptor — taken from a **4.3.1** daemon — has no field for it. CR 4.4
+documents `xicli raid modify -dc/--discard` as a supported parameter (noting it
+"Requires RAID unload/restore to apply"), so on a 4.4 node the rejection may
+now be wrong.
+
+**What the code does instead.** PATCHes carrying `discard` are rejected
+pre-plan with `UNSUPPORTED` / `reason: 'create_only_tuning'`, and
+`translate.ts` omits the field as a second line of defence. The Extended view
+renders `discard` read-only.
+
+**Why it was cut.** Resolving it requires the descriptor from a running 4.4
+daemon, which is a host-side artifact, not something the repo can answer. The
+failure mode of guessing wrong is asymmetric and bad: if 4.4's `RaidModify`
+still lacks the field, removing the rejection makes protobuf drop it silently
+and the task report `success` for a change the daemon never saw. Keeping the
+rejection costs an operator one `xicli` invocation; removing it prematurely
+costs them a lie.
+
+**What done looks like.**
+
+1. The `RaidModify` descriptor is re-vendored from a 4.4 host into
+   `proto/xraid/gRPC/protobuf/message_raid.proto`.
+2. If it carries `discard` (and `discard_verify` / `drive_write_through`),
+   they leave `CREATE_ONLY_TUNING`, `translate.ts` emits them, and Edit Array
+   gains the knob with its "requires unload/restore" caveat in the dialog.
+3. If it does not, `s4-xiraid-array-mutations-spec.md` records that 4.4 was
+   checked and the CLI/gRPC split is real, so the next reader does not re-open
+   the question.
