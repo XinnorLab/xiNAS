@@ -13,6 +13,7 @@ import { execFile as nodeExecFile } from 'node:child_process';
 import { chmod, chown, readFile, rm, statfs as nodeStatfs, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type MountEntry, parseMountinfo } from '../../lib/parse/mountinfo.js';
+import { HOST_MOUNTINFO_PATH } from './mountinfo-source.js';
 
 export interface BlkidInfo {
   fstype?: string;
@@ -81,7 +82,7 @@ export interface RealFsHostOptions {
 export function createRealFsHost(opts: RealFsHostOptions = {}): FsHost {
   const run = opts.runCommand ?? execFileRunCommand;
   const unitDir = opts.unitDir ?? '/etc/systemd/system';
-  const mountinfoPath = opts.mountinfoPath ?? '/proc/self/mountinfo';
+  const mountinfoPath = opts.mountinfoPath ?? HOST_MOUNTINFO_PATH;
 
   const must = async (program: string, args: string[]): Promise<string> => {
     const res = await run(program, args);

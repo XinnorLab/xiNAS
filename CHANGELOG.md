@@ -6,6 +6,43 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.9.5] - 2026-08-16
+
+Requires a rebuild of `xinas_node_build` — the fix is in the agent, which runs
+compiled JavaScript from the untracked `dist/`.
+
+### Fixed
+
+- **The Filesystem screen no longer reports a mounted filesystem as
+  read-only.** `/mnt/data` rendered as `Options: ro,nosuid,noatime,nodiratime`
+  while it was mounted `rw`, exported `rw` over NFS, and being written to.
+
+  The agent read the mount table from `/proc/self/mountinfo`, which reports the
+  namespace of the *reading process*. `xinas-agent.service` runs with
+  `ProtectSystem=strict`, `ProtectHome=yes` and `PrivateTmp=yes` — any one of
+  which gives the service its own mount namespace — so the agent was observing
+  **its own sandbox**, not the host. `ProtectSystem=strict` makes the hierarchy
+  read-only outside the unit's `ReadWritePaths`, which is where the `ro` came
+  from, and the sandbox added `nosuid`. Captured on the reference node, same
+  device, same instant:
+
+  ```text
+  agent ns  /mnt/data ro,nosuid,noatime,nodiratime   - xfs /dev/xi_data rw,…
+  host  ns  /mnt/data rw,noatime,nodiratime          - xfs /dev/xi_data rw,…
+  ```
+
+  All three agent readers now use `/proc/1/mountinfo` — PID 1 is by definition
+  in the root mount namespace — via a single `HOST_MOUNTINFO_PATH` constant,
+  with no fallback to `/proc/self`.
+
+  **The xiRAID delete guard was not affected**, which was verified rather than
+  assumed: it matches on the mount `source` and on `logdev=`/`rtdev=` in the
+  fs-specific *super* options, which are properties of the superblock and read
+  identically in both namespaces. It moves to the host table for consistency
+  only. The state store was not stale either — the api deliberately skips
+  content-identical upserts, so the row sitting at `revision: 1` since install
+  meant the agent kept publishing the same wrong value, not that it had stopped.
+
 ## [3.9.4] - 2026-08-16
 
 Requires a rebuild of `xinas_node_build` — the fix is in the control-path

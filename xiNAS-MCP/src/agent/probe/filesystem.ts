@@ -18,6 +18,7 @@ import {
 import { join } from 'node:path';
 import { type ObservedFilesystem, mountUnitToFilesystem } from '../../lib/parse/filesystem.js';
 import { type MountEntry, parseMountinfo } from '../../lib/parse/mountinfo.js';
+import { HOST_MOUNTINFO_PATH } from '../fs/mountinfo-source.js';
 import { parseSystemdUnit } from '../../lib/parse/systemd-unit.js';
 
 // Narrow injectable shapes (not Node's overloaded signatures) so test
@@ -130,7 +131,7 @@ export function createFilesystemProbe(opts: FilesystemProbeOptions = {}): Filesy
       const s = await nodeStatfs(mountpoint);
       return { size_bytes: s.blocks * s.bsize, free_bytes: s.bfree * s.bsize };
     },
-    readMountinfo: () => nodeReadFile('/proc/self/mountinfo', 'utf8'),
+    readMountinfo: () => nodeReadFile(HOST_MOUNTINFO_PATH, 'utf8'),
   };
 
   return {
