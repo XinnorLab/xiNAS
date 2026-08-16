@@ -15,6 +15,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseIdmapConf } from '../../lib/parse/idmap.js';
 import { type MountGuardEntry, parseMountinfo } from '../../lib/parse/mountinfo.js';
+import { HOST_MOUNTINFO_PATH } from '../fs/mountinfo-source.js';
 import type { AgentConfig } from '../config.js';
 import { createFakeFsHost } from '../fs/fake-host.js';
 import { createFakeNetHost } from '../net/fake-host.js';
@@ -60,7 +61,7 @@ import {
  * (better no destruction than an unverified one).
  */
 async function readProcMounts(): Promise<MountGuardEntry[]> {
-  const raw = await readFile('/proc/self/mountinfo', 'utf8');
+  const raw = await readFile(HOST_MOUNTINFO_PATH, 'utf8');
   // Options ride along: the xiRAID delete guard reads them to catch a
   // filesystem that uses the doomed volume as its external log/rt device
   // (`logdev=` lives in the fs-specific super options).
