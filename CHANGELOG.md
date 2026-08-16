@@ -6,6 +6,43 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.9.2] - 2026-08-16
+
+No rebuild required — the change is Python TUI only, so the release-tag
+checkout the update flow already performs is sufficient.
+
+### Changed
+
+- **Configuration History no longer displays the rollback risk class.**
+  Every row read `destroying_data` — including `Modified array 'log':
+  cpu_allowed=0-63`, a live tuning edit that disrupts nothing. An all-red
+  column carries no signal and trains the operator to click past the
+  confirmation it exists to gate, so it was worse than no column at all.
+
+  Two fail-safes fire on the common path. Each is correct in isolation
+  (`config-history/specs.md` §4.7) — the defect is that they are the rule
+  rather than the exception. `SnapshotEngine.create_snapshot` classifies
+  without passing `details`, so every `raid_modify` takes the "no details
+  — assume worst case" branch; and the control path records its own
+  operation kinds (`xiraid.array.modify`), which are not `OperationType`
+  values, so they take the unknown-operation branch.
+
+  The display is suppressed in all five places it appeared: the history
+  list column, the snapshot-detail metadata row, the diff preview, the
+  full diff, and the restore confirmation dialog. **Classification and
+  storage are unchanged** — `rollback_class` is still computed and still
+  written to every manifest — and no confirmation gate is lost, because
+  nothing in the TUI branched on the class. Fixing the classification is
+  tracked in [docs/TODO.md](docs/TODO.md); the display returns with it.
+
+### Fixed
+
+- **A long operation name no longer collides with the Status column in
+  Configuration History.** `xiraid.array.modify` is 19 characters and the
+  Operation column was 18, so the table rendered
+  `xiraid.array.modifyapplied`. The column is now 21 wide, with
+  truncation past 20.
+
 ## [3.9.1] - 2026-08-15
 
 Requires-Rebuild: xinas_node_build
