@@ -61,7 +61,8 @@ class ConfigHistoryScreen(XiNASAppMixin, Screen):
     - Immutable baseline "First installed configuration"
     - Last 40 rollback-eligible snapshots
     - Current effective snapshot
-    - Per snapshot: timestamp, initiator, operation type, rollback class, status, diff summary
+    - Per snapshot: timestamp, initiator, operation type, status, diff summary
+      (the rollback class is stored but not displayed — specs.md §10)
 
     Actions:
     - View snapshot detail (push SnapshotDetailScreen)
@@ -726,9 +727,14 @@ def _format_history(summary: dict) -> str:
     lines.append("")
 
     # Table header
-    lines.append(
-        f"  {_BLD}{_DIM}{'#':<4}{'Timestamp':<22}{'Operation':<18}{'Status':<12}{'Risk Class':<18}ID{_NC}"
-    )
+    # No Risk Class column: the classifier reads destroying_data for nearly
+    # everything (two fail-safes on the common path), so the column was all
+    # red and carried no signal — see config-history/specs.md §10 and
+    # docs/TODO.md. The class is still classified and stored on the manifest.
+    # Operation is 21 wide: the control path records its own operation kinds
+    # verbatim, and `xiraid.array.modify` is 19 characters — at the old 18 it
+    # ran straight into the Status column ("xiraid.array.modifyapplied").
+    lines.append(f"  {_BLD}{_DIM}{'#':<4}{'Timestamp':<22}{'Operation':<21}{'Status':<12}ID{_NC}")
     lines.append(f"  {_DIM}{'-' * 70}{_NC}")
 
     row = 0
@@ -785,7 +791,6 @@ def _append_snapshot_row(
     ts = snap.get("timestamp", "")[:19].replace("T", " ")
     op = snap.get("operation", "")
     status = snap.get("status", "?")
-    risk = snap.get("rollback_class", "")
 
     # Status coloring
     if status == "applied":
@@ -796,16 +801,6 @@ def _append_snapshot_row(
         status_str = f"{_YLW}{status}{_NC}"
     else:
         status_str = f"{_DIM}{status}{_NC}"
-
-    # Risk class coloring
-    if risk == "destroying_data":
-        risk_str = f"{_RED}{risk}{_NC}"
-    elif risk == "changing_access":
-        risk_str = f"{_YLW}{risk}{_NC}"
-    elif risk == "non_disruptive":
-        risk_str = f"{_DIM}{risk}{_NC}"
-    else:
-        risk_str = f"{_DIM}{risk or '-'}{_NC}"
 
     # Current effective marker
     is_current = sid == current_id
@@ -819,9 +814,8 @@ def _append_snapshot_row(
     # Short ID for display
     short_id = sid[:28] + "..." if len(sid) > 31 else sid
 
-    lines.append(
-        f" {marker}{row:<3} {ts:<22}{op:<18}{status_str:<22}{risk_str:<28}{short_id}{type_tag}"
-    )
+    op_cell = op if len(op) <= 20 else op[:19] + "…"
+    lines.append(f" {marker}{row:<3} {ts:<22}{op_cell:<21}{status_str:<22}{short_id}{type_tag}")
 
     # Diff summary if present
     diff_summary = snap.get("diff_summary")

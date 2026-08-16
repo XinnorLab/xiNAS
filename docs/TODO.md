@@ -20,6 +20,130 @@ Format: `## <area> — <what is missing>`, newest first, with the date it was
 deferred and the change that deferred it.
 
 ---
+## Config history — the risk class is hidden in the TUI, not fixed
+
+*Deferred 2026-08-15, from the "every row is destroying_data" report.*
+
+**What is missing.** `rollback_class` is still classified and still stored on
+every manifest, but the TUI no longer renders it anywhere: the Configuration
+History list column, the snapshot detail metadata row, the diff preview, the
+full diff, and the restore confirmation dialog.
+
+**Current behavior.** The operator sees no risk indication at all. That is a
+deliberate downgrade from a field that read `destroying_data` on every row
+including `cpu_allowed=0-63` — an all-red column carries no signal and trains
+people to click past the confirmation it exists to gate. Nothing branches on
+the class in the TUI today, so no safety gate was removed with the display.
+
+**Why it was cut.** Two independent fail-safes fire on ordinary operations,
+and both need a fix wider than a render change:
+
+1. `SnapshotEngine.create_snapshot` calls `classify_operation(op_enum)` with
+   no `details`, so `_classify_raid_modify(None)` returns `DESTROYING_DATA`
+   ("no details — assume worst case"). The `parameter_change` detail key that
+   would yield `non_disruptive` is never passed — `app.snapshots.record()`
+   has no parameter for it, so the whole call chain from the screens needs
+   the extra argument.
+2. The control path records its own `operation_kind` verbatim
+   (`xiraid.array.modify`, from
+   [xiraid-array-executor.ts](../xiNAS-MCP/src/agent/task/xiraid-array-executor.ts)),
+   which is not an `OperationType` value, so `OperationType(operation)` raises
+   and the engine stamps the unknown-operation fail-safe.
+
+Both fail-safes are correct in isolation (specs.md §4.7) — the bug is that
+they are the common path, not the exception.
+
+**What done looks like.**
+
+1. `OperationType` accepts (or the engine maps) the control-path
+   `xiraid.array.*` / `share.*` / `network.*` operation kinds, so a recorded
+   operation classifies instead of failing safe.
+2. `record()` and `create_snapshot` take `details`, and the RAID/FS screens
+   pass `parameter_change` for live tuning edits.
+3. A test asserts a `cpu_allowed`-only modify classifies `non_disruptive`.
+4. The TUI renders the class again and `docs/config-history/specs.md` §10
+   and `architecture.md` drop their suppression notes.
+
+Also worth folding in: one TUI edit currently writes two snapshots a second
+apart (`raid_modify` from the screen, `xiraid.array.modify` from the
+executor).
+
+## Storage — `discard_ignore` / `discard_verify` are not observed
+
+*Deferred 2026-08-15, from the discard-observation fix.*
+
+**What is missing.** `raid_show --extended` reports four discard knobs. The
+parser reads two of them — `discard_allowed` → `spec.tuning.discard` and
+`discard_active` → `status.discard_active` — and ignores `discard_ignore`
+("all discard requests are ignored") and `discard_verify` ("the system tracks
+discarded blocks and verifies they contain zeroes").
+
+**Current behavior.** Both read `0` on the reference node, so the TRIM /
+Discard block is complete for the configurations xiNAS creates. An array whose
+discards were disabled out-of-band with `xicli raid modify --discard_ignore 1`
+would still render `Discard (TRIM) | Enabled` with no hint that every request
+is being dropped.
+
+**Why it was cut.** Unlike `discard_active`, these two are *modifiable*
+(`xicli raid modify`), so putting them on `spec.tuning` implies a write path.
+The vendored `RaidModify` descriptor (4.3.1) carries no field for either, and
+protobuf drops an unknown field silently — a PATCH would report success while
+the daemon never saw it, exactly the failure `CREATE_ONLY_TUNING` exists to
+prevent. Observing them safely means extending that rejection list in the same
+change, which is wider than the render bug being fixed.
+
+**What done looks like.**
+
+1. `lib/parse/raid.ts` reads both into `spec.tuning`.
+2. `CREATE_ONLY_TUNING` in [routes/arrays.ts](../xiNAS-MCP/src/api/routes/arrays.ts)
+   grows both, so a PATCH is rejected with `UNSUPPORTED` rather than silently
+   dropped — or the descriptor is re-verified against 4.4 and they become a
+   real modify surface.
+3. `api-v1.yaml` gains both fields (additive) and the Extended block renders
+   them, with `discard_ignore = true` overriding the `Enabled` reading.
+
+TypeScript under `xiNAS-MCP/src/` needs a `Requires-Rebuild: xinas_node_build`
+trailer.
+
+## Storage — day-2 array creation does not enable discard
+
+*Deferred 2026-08-14, from the TRIM-support change.*
+
+**What is missing.** The Create Array wizard in the TUI sends no `tuning` at
+all ([raid.py](../xinas_menu/screens/raid.py) — the wizard assembles
+`name` / `level` / `member_disk_ids` / `strip_size_kib` and, conditionally,
+`group_size` and `spare_disk_ids`). `discard` is therefore omitted and xiRAID
+applies its own default of `0`.
+
+**Current behavior.** The installer now enables `--discard 1` per array when
+every member supports discard and RZAT
+([raid-spec §7.5](Installer/raid-spec.md#75-array-creation)). An array created
+from the TUI on the same hardware does not get it, so two arrays on one node
+can differ in discard behavior depending on which surface created them.
+
+**Why it was cut.** The installer decides from a host-side probe the control
+path cannot currently reproduce: `ObservedDisk.status`
+([disk.ts](../xiNAS-MCP/src/lib/parse/disk.ts)) carries no discard and no RZAT
+field, so the wizard has nothing to decide from. Closing the gap properly is a
+four-layer change, not a wizard tweak.
+
+**What done looks like.**
+
+1. The agent's disk probe reads `/sys/block/<dev>/queue/discard_max_bytes` and
+   the NVMe namespace `DLFEAT` (low three bits == 1 means deallocated blocks
+   read back as zeroes), and surfaces both on `Disk`.
+2. `docs/control-path/api-v1.yaml` gains the fields (additive, so oasdiff
+   stays green) and `docs/control-path/` records them.
+3. The Create Array wizard enables `discard` when every selected member
+   qualifies, and says so on the confirmation step — matching the installer's
+   rule rather than asking the operator to know it.
+4. `docs/Storage/raid-management-spec.md` §4 documents the behavior, and the
+   asymmetry note added to §3 is removed.
+
+TypeScript under `xiNAS-MCP/src/` needs a `Requires-Rebuild: xinas_node_build`
+trailer. `drive_trim` stays untouched here for the same reason as in the
+installer: xiRAID enables it itself only when no disk carries metadata, and
+forcing it overrides that safety check.
 
 ## Storage — hung NFS mount can still stall the share-list render
 
@@ -65,80 +189,3 @@ instead of the default executor), not a parameter tweak on the existing call.
 3. `docs/Storage/fs-shares-management-spec.md` §4.2 is updated to state the
    bound covers `isdir` and `ss` too, and the caveat added in this change is
    removed.
-
-## Storage — day-2 array creation does not enable discard
-
-*Deferred 2026-08-14, from the TRIM-support change.*
-
-**What is missing.** The Create Array wizard in the TUI sends no `tuning` at
-all ([raid.py](../xinas_menu/screens/raid.py) — the wizard assembles
-`name` / `level` / `member_disk_ids` / `strip_size_kib` and, conditionally,
-`group_size` and `spare_disk_ids`). `discard` is therefore omitted and xiRAID
-applies its own default of `0`.
-
-**Current behavior.** The installer now enables `--discard 1` per array when
-every member supports discard and RZAT
-([raid-spec §7.5](Installer/raid-spec.md#75-array-creation)). An array created
-from the TUI on the same hardware does not get it, so two arrays on one node
-can differ in discard behavior depending on which surface created them.
-
-**Why it was cut.** The installer decides from a host-side probe the control
-path cannot currently reproduce: `ObservedDisk.status`
-([disk.ts](../xiNAS-MCP/src/lib/parse/disk.ts)) carries no discard and no RZAT
-field, so the wizard has nothing to decide from. Closing the gap properly is a
-four-layer change, not a wizard tweak.
-
-**What done looks like.**
-
-1. The agent's disk probe reads `/sys/block/<dev>/queue/discard_max_bytes` and
-   the NVMe namespace `DLFEAT` (low three bits == 1 means deallocated blocks
-   read back as zeroes), and surfaces both on `Disk`.
-2. `docs/control-path/api-v1.yaml` gains the fields (additive, so oasdiff
-   stays green) and `docs/control-path/` records them.
-3. The Create Array wizard enables `discard` when every selected member
-   qualifies, and says so on the confirmation step — matching the installer's
-   rule rather than asking the operator to know it.
-4. `docs/Storage/raid-management-spec.md` §4 documents the behavior, and the
-   asymmetry note added to §3 is removed.
-
-TypeScript under `xiNAS-MCP/src/` needs a `Requires-Rebuild: xinas_node_build`
-trailer. `drive_trim` stays untouched here for the same reason as in the
-installer: xiRAID enables it itself only when no disk carries metadata, and
-forcing it overrides that safety check.
-
-## Storage — `discard_ignore` / `discard_verify` are not observed
-
-*Deferred 2026-08-15, from the discard-observation fix.*
-
-**What is missing.** `raid_show --extended` reports four discard knobs. The
-parser reads two of them — `discard_allowed` → `spec.tuning.discard` and
-`discard_active` → `status.discard_active` — and ignores `discard_ignore`
-("all discard requests are ignored") and `discard_verify` ("the system tracks
-discarded blocks and verifies they contain zeroes").
-
-**Current behavior.** Both read `0` on the reference node, so the TRIM /
-Discard block is complete for the configurations xiNAS creates. An array whose
-discards were disabled out-of-band with `xicli raid modify --discard_ignore 1`
-would still render `Discard (TRIM) | Enabled` with no hint that every request
-is being dropped.
-
-**Why it was cut.** Unlike `discard_active`, these two are *modifiable*
-(`xicli raid modify`), so putting them on `spec.tuning` implies a write path.
-The vendored `RaidModify` descriptor (4.3.1) carries no field for either, and
-protobuf drops an unknown field silently — a PATCH would report success while
-the daemon never saw it, exactly the failure `CREATE_ONLY_TUNING` exists to
-prevent. Observing them safely means extending that rejection list in the same
-change, which is wider than the render bug being fixed.
-
-**What done looks like.**
-
-1. `lib/parse/raid.ts` reads both into `spec.tuning`.
-2. `CREATE_ONLY_TUNING` in [routes/arrays.ts](../xiNAS-MCP/src/api/routes/arrays.ts)
-   grows both, so a PATCH is rejected with `UNSUPPORTED` rather than silently
-   dropped — or the descriptor is re-verified against 4.4 and they become a
-   real modify surface.
-3. `api-v1.yaml` gains both fields (additive) and the Extended block renders
-   them, with `discard_ignore = true` overriding the `Enabled` reading.
-
-TypeScript under `xiNAS-MCP/src/` needs a `Requires-Rebuild: xinas_node_build`
-trailer.
