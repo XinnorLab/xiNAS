@@ -6,6 +6,84 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.9.3] - 2026-08-16
+
+Requires a rebuild of `xinas_node_build` (the control-path parser compiles
+into the untracked `dist/`) and `motd` (the login banner is an Ansible
+template). The update flow names both before it applies them.
+
+Everything in this release is xiNAS reading xiRAID's own documentation for
+**xiRAID Classic 4.4.0** — the version `xiraid_classic` installs — rather
+than a plausible guess at it. None of it was verified on hardware; the
+reference node was unreachable while the work was done.
+
+### Fixed
+
+- **A RAID array in real trouble is no longer published as `unknown`.**
+  The agent's parser knew only part of xiRAID's state vocabulary, so
+  `unrecovered` ("can't complete reconstruction because of unrecoverable
+  sections"), `read_only` ("the license has expired"), `none` (unloaded or
+  not restored after reboot), `inconsistent` and `need_init` all fell
+  through to `unknown` — the TUI, MCP and CLI each rendered an array that
+  needed attention as unremarkable. Every state on the vendor's
+  [Showing RAID State](https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html)
+  page now maps; four benign ones are deliberately left unmapped so they
+  cannot downgrade a healthy array's verdict.
+
+- **The `raid_status` health check no longer fails a healthy node.** It
+  failed any state that was not `online`/`initialized`, so a freshly
+  installed node reported `FAIL — data: initing` with the impact line
+  "Degraded RAID reduces redundancy" while the array was doing exactly
+  what it was supposed to. The check now separates redundancy loss (FAIL)
+  from work in progress (WARN), and each WARN says only what is true of
+  it: an initializing array is *"usable but not yet fully redundant"*, a
+  stopped restripe is *"serving I/O on an incomplete layout"*, and an
+  unrecognised state supports no claim at all.
+
+- **The login banner no longer paints a degraded array green.** It read
+  only the first word of a state list, so `["online", "degraded"]`
+  rendered as a green `online` while a drive was gone, and it matched an
+  invented vocabulary in which `reconstructing` and `initing` were
+  unknown and got a red cross. It also labelled every array `unknown`,
+  because the daemon keys arrays by name rather than repeating the name
+  inside the object.
+
+- **An unreadable state is no longer certified as healthy.** A missing or
+  empty `state` reported `PASS — 1 array(s) online` for an array nothing
+  was known about, `state: null` raised an uncaught `TypeError` out of the
+  whole health run, and the string `"online"` was iterated into six
+  single characters. Anything unusable is now its own category, never
+  PASS; when no array reports a readable state the check reports SKIP.
+
+- **`raid_devices` reads all three member shapes.** It indexed
+  `dev[2][0]`, which parses only the tuple form — against a bare device
+  path that is the third *character* of the path, so every member read as
+  not-online, and against the object form it raised out of the check.
+
+- **Tuning values xiRAID rejects are now caught before the operator
+  confirms.** The four merge knobs were validated as `>= 0` against a
+  documented range of 1–100000 µs, and `request_limit` had no upper bound
+  at all, so an out-of-range edit planned cleanly and failed mid-apply.
+  Edit Array pre-validates too, instead of letting a plan blocker be the
+  first thing that says no.
+
+- **A legal priority of `0` is no longer blocked on modify.** `xicli raid
+  modify` documents `init_prio` and `restripe_prio` as 0–100 where `raid
+  create` documents 1–100; the create floor was applied to both.
+  `recon_prio` and `sdc_prio` stay at 1 on either surface, as documented.
+
+- **Edit Array's labels state the range it actually enforces.** "Recon
+  Priority (0-100)" invited a value both xiRAID and the control path
+  reject. Labels are now generated from the same table the validator
+  uses, so they cannot drift apart again.
+
+### Added
+
+- `docs/HealthCheck/raid-status-check.md` — the `raid_status` contract:
+  the category table, the vendor wording behind each state, and the
+  documented severity differences between the health check, the banner
+  and the control path's `status.state`.
+
 ## [3.9.2] - 2026-08-16
 
 No rebuild required — the change is Python TUI only, so the release-tag
