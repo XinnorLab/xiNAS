@@ -6,6 +6,69 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.10.0] - 2026-08-16
+
+Requires a rebuild of `xinas_node_build` (`xinas-api` and `xinas-agent` run
+compiled JavaScript from the untracked `dist/`).
+
+### Added
+
+- **A long-running operation now reports where it is.** Creating a filesystem
+  is minutes of `mkfs.xfs`, mount and verify, but an apply answers in
+  milliseconds with a `task_id` and then went quiet — no stage, no elapsed
+  time, no signal that a client should look again. Every task read (`GET
+  /tasks`, `GET /tasks/{id}`, the SSE watch, and therefore MCP) now carries a
+  `progress` rollup: the current stage and its status, the 1-based position
+  against the executor's stage count, how many stages have completed, and
+  elapsed seconds for both the task and the current stage.
+
+  The stage count itself is new on the wire. The api materializes `task_stages`
+  rows as events arrive, so it had no denominator for "stage 2 of 5"; the agent
+  now reports `stage_total` on the `accepted` progress event and the api
+  persists it (migration 005). It counts *executor* stages only — the runner's
+  synthetic `snapshot_before` / `snapshot_after` / `rollback` rows are excluded.
+  A task whose agent predates the field keeps a missing denominator rather than
+  a guessed one.
+
+- **`GET /tasks/{id}/wait` — block until the task moves.** A bounded long-poll
+  for clients with no server-push channel: it returns as soon as the task
+  passes `since_revision` or reaches a terminal state, or when `timeout_s`
+  (validated `[1, 60]`, default 25) expires. Concurrency is capped at 4 waiters
+  per task and 32 per process; over the cap the call returns immediately with a
+  `WAIT_CAPACITY` warning instead of queueing, which degrades to exactly the
+  plain read the client would otherwise have done.
+
+- **MCP clients are told what to call next.** The `/mcp` transport runs in JSON
+  response mode and has no server-push stream, so progress cannot be pushed —
+  a client has to ask, and has to know to ask. A new catalog flag marks every
+  entry that answers with a Task envelope (all plan/apply entries plus the
+  direct `support.bundle` and `tasks.cancel`), and the dispatcher uses it
+  twice: `tools/list` states that the call is asynchronous, and a result
+  carrying a `queued`/`running` `task_id` gains a `next` block naming the new
+  `tasks.wait` tool with the arguments to pass. Keying this off tool mutability
+  would have missed `support.bundle` — a direct tool that nonetheless returns a
+  202 Task.
+
+### Changed
+
+- **The SSE snapshot frame on `GET /tasks/{id}/watch` now matches the `Task`
+  schema the API contract documents.** It previously hand-copied the raw store
+  row, which is why anything added to the shared renderer missed the stream.
+  The frame is now produced by that renderer: ISO timestamps instead of
+  epoch-milliseconds, `output_url` instead of `output_path`, plus the
+  synthesized `metadata` object and the new `progress` rollup. The internal
+  columns (`spec`, `plan_binding`, `desired_rollback`) remain stripped. No
+  in-repo consumer reads the stream — the TUI and `xinasctl` both poll
+  `GET /tasks/{id}` — but an external SSE client sees the new shape.
+
+### Notes
+
+Progress reports no percentage and no live output line, deliberately.
+`mkfs.xfs` emits no completion percentage, and the agent buffers stage output
+until a stage ends, so a *running* stage's row genuinely has none — reporting
+either would mean inventing it. Both are recorded in `docs/TODO.md` with what
+"done" would require.
+
 ## [3.9.6] - 2026-08-16
 
 Requires a rebuild of `xinas_nfs_helper` (the systemd unit only reaches a host
