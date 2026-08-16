@@ -208,6 +208,15 @@ own `flock` on its own file.
 
 ## Systemd Unit
 
+> **Superseded.** The unit's lifecycle contract — dependency directives,
+> restart policy, and the unreachable-helper error contract — now lives in
+> [`docs/control-path/nfs-helper-service-spec.md`](../control-path/nfs-helper-service-spec.md).
+> The text below is kept for history only. In particular the
+> `Requires=nfs-kernel-server.service` it describes was **removed**: it
+> propagated nfsd's stop to the helper, and the clean dependency-driven stop
+> that followed was not covered by `Restart=on-failure`, leaving the helper
+> dead until a human restarted it.
+
 ```ini
 [Unit]
 Description=xiNAS NFS Helper Daemon
@@ -227,11 +236,11 @@ Environment=NFS_HELPER_SOCKET=/run/xinas-nfs-helper.sock
 WantedBy=multi-user.target
 ```
 
-The unit names the **canonical** `nfs-kernel-server.service` in both `After=`
-and `Requires=`; the helper manages `/etc/exports` and therefore must not start
+The unit names the **canonical** `nfs-kernel-server.service` in its ordering
+dependency; the helper manages `/etc/exports` and therefore must not start
 before the NFS server. On Ubuntu 22.04/24.04 `nfs-kernel-server.service` is an
 alias whose primary name is `nfs-server.service`, so systemd's *resolved* view
-(`systemctl show xinas-nfs-helper -p After,Requires`) reports
+(`systemctl show xinas-nfs-helper -p After,Wants`) reports
 `nfs-server.service`. Both names refer to the same unit — the alias resolves
 functionally. Tests that assert on the dependency should either parse the unit
 **file text** (which names `nfs-kernel-server.service`) or accept the

@@ -48,10 +48,33 @@ def test_unit_orders_after_nfs_kernel_server():
     assert "nfs-kernel-server.service" in after[0]
 
 
-def test_unit_requires_nfs_kernel_server():
+def test_unit_wants_nfs_kernel_server():
+    wants = _unit_lines("Wants=")
+    assert wants, "unit has no Wants= line"
+    assert "nfs-kernel-server.service" in wants[0]
+
+
+def test_unit_does_not_require_nfs_kernel_server():
+    """``Requires=`` propagates nfsd's *stop* to the helper.
+
+    A ``systemctl stop nfs-server`` (teardown, failed restart, admin action)
+    would tear the helper down in the same transaction, and because that is a
+    clean dependency-driven stop rather than a crash, no ``Restart=`` policy
+    brings it back — the whole NFS control-path surface stays dead until a
+    human intervenes. Ordering is all this unit needs; see
+    docs/control-path/nfs-helper-service-spec.md §2.
+    """
     requires = _unit_lines("Requires=")
-    assert requires, "unit has no Requires= line"
-    assert "nfs-kernel-server.service" in requires[0]
+    assert not any("nfs-kernel-server.service" in ln for ln in requires), (
+        "unit must not Requires= the NFS server — use Wants= (stop does not propagate)"
+    )
+
+
+def test_unit_restarts_always():
+    """The daemon exits 0 on SIGTERM, which ``on-failure`` does not cover."""
+    restart = _unit_lines("Restart=")
+    assert restart, "unit has no Restart= line"
+    assert restart[0].strip() == "Restart=always"
 
 
 # --- Lock surface ---------------------------------------------------------

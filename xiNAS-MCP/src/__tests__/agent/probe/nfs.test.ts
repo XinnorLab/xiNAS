@@ -88,4 +88,21 @@ describe('NfsProbe', () => {
     const probe = createNfsProbe({ helperSocket: '/tmp/does-not-exist-xinas.sock' });
     await expect(probe.listExports()).rejects.toThrow();
   });
+
+  // A bare `connect ENOENT /run/xinas-nfs-helper.sock` reaches the operator
+  // verbatim — through a task's error_message and the TUI's error dialog — and
+  // names neither the component that is down nor the way back. The transport
+  // owns the wrap so every consumer inherits it (nfs-helper-service-spec §4).
+  it('callHelper() names the socket, the unit and the fix when the helper is not running', async () => {
+    const probe = createNfsProbe({ helperSocket: '/tmp/does-not-exist-xinas.sock' });
+    await expect(probe.listExports()).rejects.toThrow(
+      /nfs-helper is not reachable at \/tmp\/does-not-exist-xinas\.sock \(ENOENT\)[\s\S]*systemctl start xinas-nfs-helper/,
+    );
+  });
+
+  it('callHelper() preserves the original connect error as the cause', async () => {
+    const probe = createNfsProbe({ helperSocket: '/tmp/does-not-exist-xinas.sock' });
+    const err = await probe.listExports().catch((e: unknown) => e);
+    expect((err as Error).cause).toMatchObject({ code: 'ENOENT' });
+  });
 });

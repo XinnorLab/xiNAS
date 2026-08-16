@@ -2,12 +2,20 @@
 Description=xiNAS NFS Helper Daemon
 Documentation=https://github.com/xinnor/xiNAS
 After=network.target nfs-kernel-server.service
-Requires=nfs-kernel-server.service
+# Wants=, never Requires=: Requires= propagates nfsd's *stop* to this helper,
+# and a clean dependency-driven stop is not covered by any Restart= policy —
+# one `systemctl stop nfs-server` leaves the whole NFS control-path surface
+# dead until a human restarts it. The helper only needs to start *after* nfsd;
+# it tolerates a down NFS server per-op (startup check is a warning).
+# See docs/control-path/nfs-helper-service-spec.md §2.
+Wants=nfs-kernel-server.service
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 /usr/lib/xinas-mcp/nfs-helper/nfs_helper.py
-Restart=on-failure
+# always, not on-failure: the daemon exits 0 on SIGTERM, so on-failure would
+# not restart it after an unexpected clean exit.
+Restart=always
 RestartSec=5s
 
 # Runtime directory creates /run/xinas-nfs-helper/
