@@ -214,6 +214,103 @@ EOF
     echo ""
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Startup checklist state (docs/Client/client-setup-spec.md §3-§4)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Overridable so the tests can point the probes at a sandbox.
+XINAS_SYSFS_IB="${XINAS_SYSFS_IB:-/sys/class/infiniband}"
+# The checklist renders on every startup, so no probe may block it (spec §4.4).
+CHECKLIST_PROBE_TIMEOUT="${CHECKLIST_PROBE_TIMEOUT:-3}"
+
+nfs_mount_count() {
+    mount -t nfs,nfs4 2>/dev/null | wc -l
+}
+
+# True when any storage-class interface carries an IPv4 address. The address
+# is the ground truth for "the network is configured" — not the presence of
+# /etc/netplan/99-xinas-client.yaml, which only tells us whether *we* were the
+# ones who configured it (spec §3.1).
+storage_network_has_ip() {
+    local iface
+    for iface in $(detect_high_speed_interfaces); do
+        if [[ -n "$(ip -o -4 addr show "$iface" 2>/dev/null)" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# True when there is storage-network work the user could act on right now:
+# a storage-class NIC exists, none of them has an address, and nothing is
+# mounted. See spec §3.2 for why each clause is there.
+storage_network_pending() {
+    local ifaces
+    ifaces=$(detect_high_speed_interfaces)
+    # No storage-class NIC — Configure Network has nothing to offer this host.
+    [[ -n "${ifaces// /}" ]] || return 1
+    # Already addressed, whoever addressed it.
+    storage_network_has_ip && return 1
+    # A live mount proves the client already reaches a NAS.
+    [[ "$(nfs_mount_count)" -gt 0 ]] && return 1
+    return 0
+}
+
+# State of one startup-checklist step: done | pending | na (spec §4.3).
+# Derived from live system state on every render — nothing is persisted.
+checklist_state() {
+    case "${1:-}" in
+        nfs_tools)
+            if command -v mount.nfs4 &>/dev/null; then echo done; else echo pending; fi
+            ;;
+        doca_ofed)
+            if [[ -d "$XINAS_SYSFS_IB" ]] && [[ -n "$(ls "$XINAS_SYSFS_IB" 2>/dev/null)" ]]; then
+                echo done
+            elif detect_mellanox_nic &>/dev/null; then
+                echo pending
+            else
+                # No Mellanox/NVIDIA adapter — DOCA OFED is not installable here.
+                echo na
+            fi
+            ;;
+        network)
+            if [[ -z "$(detect_high_speed_interfaces)" ]]; then
+                echo na
+            elif storage_network_pending; then
+                echo pending
+            else
+                echo done
+            fi
+            ;;
+        mount)
+            if [[ "$(nfs_mount_count)" -gt 0 ]]; then echo done; else echo pending; fi
+            ;;
+        csi)
+            # Exactly one call: its 0/2/1 result already separates
+            # done / to do / no cluster, so the checklist never probes the
+            # API server twice (spec §4.4).
+            local csi_ec=0
+            check_csi_nfs_installed "$CHECKLIST_PROBE_TIMEOUT" &>/dev/null || csi_ec=$?
+            case "$csi_ec" in
+                0) echo done ;;
+                2) echo pending ;;
+                *) echo na ;;
+            esac
+            ;;
+        *)
+            echo na
+            ;;
+    esac
+}
+
+checklist_marker() {
+    case "${1:-}" in
+        done)    printf '%b' "${GREEN}✔${NC}" ;;
+        pending) printf '%b' "${YELLOW}○${NC}" ;;
+        *)       printf '%b' "${DIM}–${NC}" ;;
+    esac
+}
+
 show_welcome() {
     show_header
 
@@ -266,11 +363,28 @@ show_welcome() {
     echo -e "    ${WHITE}QUICK START${NC}"
     echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
     echo ""
-    echo -e "    ${GREEN}①${NC}  ${WHITE}Install NFS Tools${NC} ${DIM}(if not installed)${NC}"
-    echo -e "    ${GREEN}②${NC}  ${WHITE}Install DOCA OFED${NC} ${DIM}(for RDMA support)${NC}"
-    echo -e "    ${GREEN}③${NC}  ${WHITE}Configure Network${NC} ${DIM}(storage network IPs)${NC}"
-    echo -e "    ${GREEN}④${NC}  ${WHITE}Connect to NAS${NC} ${DIM}(mount NFS share)${NC}"
-    echo -e "    ${GREEN}⑤${NC}  ${WHITE}K8s CSI Driver${NC} ${DIM}(for Kubernetes volumes)${NC}"
+    # Each step carries its live state (spec §4). Without it the list is five
+    # instructions with no way to tell which of them already apply.
+    local _num=("①" "②" "③" "④" "⑤")
+    local _key=("nfs_tools" "doca_ofed" "network" "mount" "csi")
+    local _label=("Install NFS Tools" "Install DOCA OFED" "Configure Network" \
+                  "Connect to NAS" "K8s CSI Driver")
+    local _hint=("(client tools + tuning)" "(for RDMA support)" "(storage network IPs)" \
+                 "(mount NFS share)" "(for Kubernetes volumes)")
+    local _i _state _mark
+    for _i in "${!_key[@]}"; do
+        _state=$(checklist_state "${_key[$_i]}")
+        _mark=$(checklist_marker "$_state")
+        if [[ "$_state" == "na" ]]; then
+            # Not applicable to this host — dimmed, so it reads as "nothing to
+            # do here" rather than "not done yet".
+            echo -e "    ${DIM}${_num[$_i]}${NC}  ${_mark}  ${DIM}${_label[$_i]}${NC} ${DIM}${_hint[$_i]}${NC}"
+        else
+            echo -e "    ${GREEN}${_num[$_i]}${NC}  ${_mark}  ${WHITE}${_label[$_i]}${NC} ${DIM}${_hint[$_i]}${NC}"
+        fi
+    done
+    echo ""
+    echo -e "    ${GREEN}✔${NC} done   ${YELLOW}○${NC} to do   ${DIM}–${NC} ${DIM}not applicable to this host${NC}"
     echo ""
     echo -e "    ${DIM}────────────────────────────────────────────────────────────${NC}"
     echo -e "    ${DIM}Need help?${NC} ${CYAN}support@xinnor.io${NC}"
@@ -867,10 +981,15 @@ Install them now?"; then
         fi
     fi
 
-    # Check if network is configured
-    if [[ ! -f /etc/netplan/99-xinas-client.yaml ]]; then
-        if ! yes_no "Network Not Configured" "\
-No storage network configuration found.
+    # Warn only when there is storage-network work the user could actually do
+    # (spec §3.2-§3.3). Gating on the presence of 99-xinas-client.yaml told
+    # every host whose network came from anywhere but this wizard — cloud-init,
+    # a hand-written netplan, DHCP — that it was unconfigured, mounted share
+    # and all.
+    if storage_network_pending; then
+        if ! yes_no "Storage Network Not Configured" "\
+A storage interface was detected, but it has
+no IP address and no NFS share is mounted.
 
 It is recommended to configure the storage
 network interfaces before connecting to a NAS.
@@ -2773,27 +2892,52 @@ gds_menu() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Check if kubectl is available and cluster is accessible
+# check_kubernetes_available [timeout_seconds]
+#
+# `kubectl cluster-info` against an unreachable cluster blocks for its own
+# default timeout, which is far too long for anything rendered on startup —
+# so every cluster probe runs under `timeout` (spec §4.4). The default of 10s
+# suits the interactive CSI screens; the startup checklist passes 3.
 check_kubernetes_available() {
+    local probe_timeout="${1:-10}"
     if ! command -v kubectl &>/dev/null; then
         return 1
     fi
-    if ! kubectl cluster-info &>/dev/null; then
+    if ! timeout "$probe_timeout" kubectl cluster-info &>/dev/null; then
         return 2
     fi
     return 0
 }
 
 # Check if CSI NFS driver is installed
+# check_csi_nfs_installed [timeout_seconds] — see check_kubernetes_available.
+#
+# Returns 0 = driver found, 2 = cluster reachable but no driver, 1 = no
+# reachable cluster. Callers that only care whether the driver is there can
+# keep treating this as a boolean; the checklist uses the 1/2 split to tell
+# "not applicable" from "to do" without paying for a second cluster probe.
 check_csi_nfs_installed() {
-    if ! check_kubernetes_available; then
+    local probe_timeout="${1:-10}"
+    if ! check_kubernetes_available "$probe_timeout"; then
         return 1
     fi
-    # Check for CSI driver pods
-    kubectl get pods -n kube-system -l app.kubernetes.io/name=csi-driver-nfs &>/dev/null 2>&1 && return 0
-    kubectl get pods -n kube-system -l app=csi-nfs-controller &>/dev/null 2>&1 && return 0
-    # Check for CSI driver daemonset
-    kubectl get daemonset -n kube-system csi-nfs-node &>/dev/null 2>&1 && return 0
-    return 1
+
+    # The three lookups are alternatives against the same API server, so a
+    # timeout on the first means the rest would time out too — bail instead of
+    # spending the budget three more times (spec §4.4).
+    local ec
+    local probe
+    for probe in \
+        "get pods -n kube-system -l app.kubernetes.io/name=csi-driver-nfs" \
+        "get pods -n kube-system -l app=csi-nfs-controller" \
+        "get daemonset -n kube-system csi-nfs-node"; do
+        ec=0
+        # shellcheck disable=SC2086 # probe is a deliberate argument list
+        timeout "$probe_timeout" kubectl $probe &>/dev/null || ec=$?
+        [[ $ec -eq 0 ]] && return 0
+        [[ $ec -eq 124 ]] && return 2
+    done
+    return 2
 }
 
 # Show CSI NFS driver status
