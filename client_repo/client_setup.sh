@@ -643,6 +643,71 @@ enable_nfs_rdma() {
     return 1
 }
 
+# NFS client tuning drop-ins owned by "Install NFS Tools".
+# docs/Client/client-setup-spec.md §2. Overridable so the tests can point
+# them at a sandbox instead of the real /etc.
+NFS_CLIENT_MODPROBE_CONF="${NFS_CLIENT_MODPROBE_CONF:-/etc/modprobe.d/nfsclient.conf}"
+NFS_CLIENT_SYSCTL_CONF="${NFS_CLIENT_SYSCTL_CONF:-/etc/sysctl.d/90-nfs-client.conf}"
+
+# True when at least one drop-in is absent, i.e. apply_nfs_client_tuning has
+# real work to do. Callers use it to decide whether opening an operation frame
+# is worth the user's attention (spec §2.5).
+nfs_client_tuning_missing() {
+    [[ ! -f "$NFS_CLIENT_MODPROBE_CONF" ]] || [[ ! -f "$NFS_CLIENT_SYSCTL_CONF" ]]
+}
+
+# Create whichever drop-ins are missing and report each as an op step. Must be
+# called inside an op_start/op_end frame.
+#
+# Existing files are left alone (spec §2.3) — once a drop-in is on disk it is
+# admin-owned, and drift is the health report's job, not ours to silently
+# revert.
+apply_nfs_client_tuning() {
+    local rc
+
+    if [[ ! -f "$NFS_CLIENT_MODPROBE_CONF" ]]; then
+        # NFS client kernel module tuning for high-throughput workloads.
+        # Values are checked by client_healthcheck.sh's `modprobe *` checks —
+        # change both together.
+        # `|| rc=$?` keeps a failed write (read-only /etc, missing dir) inside
+        # the op frame as a [FAIL] step instead of killing the menu via set -e.
+        rc=0
+        cat > "$NFS_CLIENT_MODPROBE_CONF" <<'EOF' || rc=$?
+# NFS client performance tuning for high-throughput workloads
+options nfs max_session_slots=180
+options nfs max_session_cb_slots=48
+options nfs callback_nr_threads=10
+options nfs nfs4_disable_idmapping=1
+options nfs nfs_idmap_cache_timeout=900
+options nfs delay_retrans=-1
+options nfs nfs_access_max_cachesize=4194304
+options nfs enable_ino64=1
+EOF
+        op_step "create ${NFS_CLIENT_MODPROBE_CONF}" "$rc"
+    else
+        op_step "${NFS_CLIENT_MODPROBE_CONF} already present" 0
+    fi
+
+    if [[ ! -f "$NFS_CLIENT_SYSCTL_CONF" ]]; then
+        rc=0
+        cat > "$NFS_CLIENT_SYSCTL_CONF" <<'EOF' || rc=$?
+# Network buffer sizes for high-throughput NFS (256 MB)
+net.core.rmem_max = 268435456
+net.core.wmem_max = 268435456
+
+# Minimize swapping for better NFS performance
+vm.swappiness = 10
+EOF
+        op_step "create ${NFS_CLIENT_SYSCTL_CONF}" "$rc"
+        # Only reload when we actually wrote the file (spec §2.4): an
+        # unconditional `sysctl --system` re-applies every other drop-in on
+        # the host as a side effect of an action that changed nothing.
+        op_run "sysctl --system" bash -c "sysctl --system >/dev/null 2>&1" || true
+    else
+        op_step "${NFS_CLIENT_SYSCTL_CONF} already present" 0
+    fi
+}
+
 install_nfs_tools() {
     if command -v mount.nfs4 &>/dev/null; then
         # NFS already installed — still ensure NFS-RDMA is wired up if RDMA
@@ -650,10 +715,27 @@ install_nfs_tools() {
         # nfs-common before DOCA-OFED, or upgraded the kernel).
         enable_nfs_rdma || true
 
-        msg_box "Already Installed" "\
-NFS client tools are already installed.
+        # ...and still write the tuning drop-ins. `nfs-common` ships
+        # preinstalled on many images, and on those hosts writing these two
+        # files is the *only* work this action has left to do. Returning here
+        # without them left the host un-tuned forever and put the user in a
+        # loop with the health report's "Run installer: Install NFS Tools"
+        # hint (spec §2.2).
+        if nfs_client_tuning_missing; then
+            op_start "Apply NFS Client Tuning"
+            apply_nfs_client_tuning
+            op_end "" "NFS Client Tuning" "\
+NFS client tools were already installed.
+Missing tuning drop-ins have now been created.
+
+You can proceed to mount NFS shares." || true
+        else
+            msg_box "Already Installed" "\
+NFS client tools are already installed,
+and the tuning drop-ins are in place.
 
 You can proceed to mount NFS shares."
+        fi
         return 0
     fi
 
@@ -682,31 +764,8 @@ This will install:
             return 1
         fi
 
-        # Configure NFS client kernel module for better performance
-        cat > /etc/modprobe.d/nfsclient.conf <<'EOF'
-# NFS client performance tuning for high-throughput workloads
-options nfs max_session_slots=180
-options nfs max_session_cb_slots=48
-options nfs callback_nr_threads=10
-options nfs nfs4_disable_idmapping=1
-options nfs nfs_idmap_cache_timeout=900
-options nfs delay_retrans=-1
-options nfs nfs_access_max_cachesize=4194304
-options nfs enable_ino64=1
-EOF
-        op_step "configure modprobe.d/nfsclient.conf" 0
-
-        # Configure sysctl parameters for high-throughput NFS
-        cat > /etc/sysctl.d/90-nfs-client.conf <<'EOF'
-# Network buffer sizes for high-throughput NFS (256 MB)
-net.core.rmem_max = 268435456
-net.core.wmem_max = 268435456
-
-# Minimize swapping for better NFS performance
-vm.swappiness = 10
-EOF
-        op_step "configure sysctl.d/90-nfs-client.conf" 0
-        op_run "sysctl --system" bash -c "sysctl --system >/dev/null 2>&1" || true
+        # Kernel-module and sysctl tuning drop-ins (spec §2).
+        apply_nfs_client_tuning
 
         op_verify "mount.nfs4 available" command -v mount.nfs4 || true
         op_end "" "Success" "You can now mount NFS shares from your xiNAS server." || true
