@@ -6,6 +6,64 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.10.2] - 2026-08-18
+
+Client-side fixes only. Nothing on the server node changes, and no Ansible
+role needs to re-run — the client package ships through `install_client.sh`
+and the client's own `xinas-client --update`.
+
+### Fixed
+
+- **`Install NFS Tools` now writes its tuning drop-ins on a host that already
+  has `nfs-common`.** The action returned early on "NFS client tools are
+  already installed" from a branch above both writes, so on any image that
+  ships `nfs-common` — most of them — `/etc/modprobe.d/nfsclient.conf` and
+  `/etc/sysctl.d/90-nfs-client.conf` were never created. The client health
+  report then warned on `NFS Client > sysctl_conf`, and on every `modprobe *`
+  value check that reads the same missing file, and told the operator to run
+  `Install NFS Tools` — which answered "Already Installed" and did nothing.
+  A loop with no exit.
+
+  Both writes now happen on either path. An existing drop-in is left alone
+  rather than overwritten: once the file is on disk it is admin-owned, and
+  reverting a deliberate local tuning change is worse than the drift, which
+  the per-parameter health checks already report. `sysctl --system` runs only
+  when the sysctl drop-in was actually created, so an action that changed
+  nothing no longer re-applies every other drop-in on the host.
+
+- **`Connect to NAS` no longer claims the storage network is unconfigured on a
+  host where it plainly is.** The wizard gated on the existence of
+  `/etc/netplan/99-xinas-client.yaml` — the file its own Configure Network
+  step writes. A network that came from anywhere else (cloud-init, a
+  pre-existing netplan, a hand-written config, DHCP) tripped the warning on
+  every visit, share already mounted and all.
+
+  The gate now reads the host: it warns only when a storage-class interface
+  exists, none of them carries an IPv4 address, and nothing is mounted. A
+  client with no storage-class NIC at all — TCP over a stock adapter — no
+  longer sees the prompt, since Configure Network has nothing to offer it.
+
+- **The startup checklist shows what is already done.** The five recommended
+  actions were five static lines, on the one screen whose job is telling a new
+  operator where to start. Each now carries a live marker — done, to do, or
+  not applicable to this host — derived from system state on every render.
+  "Not applicable" is a real third state: a host with no Mellanox/NVIDIA
+  adapter cannot install DOCA OFED, and a host with no `kubectl` has no CSI
+  driver to install; marking those "to do" sent operators after work that did
+  not exist.
+
+- **The Kubernetes probe can no longer stall the welcome screen.** `kubectl
+  cluster-info` against an unreachable cluster blocks for its own default
+  timeout, and the checklist renders on every startup. All cluster probes now
+  run under `timeout` — 3s from the checklist, 10s from the interactive CSI
+  screens — and the checklist step is bounded to two probes end to end.
+
+### Added
+
+- `docs/Client/client-setup-spec.md` — the durable behavior contract for the
+  client package (tuning drop-ins, storage-network state, checklist state).
+  The client surface had no spec, only dated plans under `docs/plans/`.
+
 ## [3.10.1] - 2026-08-17
 
 ### Fixed
