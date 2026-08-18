@@ -40,22 +40,61 @@ xinas_config_effective() {
     yq eval-all '. as $item ireduce ({}; . * $item)' "${files[@]}"
 }
 
+# rc=0: key found, value on stdout. rc=1: no layer defines the key (the
+# ordinary negative result, like grep's "no match"). rc=2: the effective
+# document itself could not be computed (e.g. malformed YAML in a role
+# default) - kept distinct from rc=1 so a real failure never reads as "not
+# set".
+#
+# Looks up presence with has() rather than the `.key // default` operator:
+# `//` treats a *present* `false` the same as absent (and folds a present
+# `null` the same way too), which silently breaks every boolean role default
+# that ships as `false` - several do - and makes a stored `null` indistinguishable
+# from an unset key. has() only asks "is the key there", so both are read
+# correctly, and a real value of the literal string "__XINAS_ABSENT__" can no
+# longer collide with a sentinel.
 xinas_config_get() {
-    local key="$1" out
-    out=$(xinas_config_effective | yq eval ".${key} // \"__XINAS_ABSENT__\"" -)
-    if [ "$out" = "__XINAS_ABSENT__" ]; then return 1; fi
-    printf '%s\n' "$out"
+    local key="$1" effective has
+    effective=$(xinas_config_effective) || return 2
+    has=$(printf '%s\n' "$effective" | yq eval "has(\"${key}\")" -) || return 2
+    if [ "$has" != "true" ]; then
+        return 1
+    fi
+    printf '%s\n' "$effective" | yq eval ".${key}" -
 }
 
-# Value is parsed as YAML, so `xinas_config_set local net_mtu 9000` stores an
-# int and `... net_manual_ips '{}'` stores a mapping.
+# The value is interpreted as YAML when that's unambiguous, so
+# `xinas_config_set local net_mtu 9000` stores an int and
+# `... net_manual_ips '{}'` stores a mapping. Values that are empty, span
+# multiple lines, or collide with YAML's own block-sequence/document-marker
+# syntax ("-", "---", "- <word>") are stored as literal strings instead -
+# interpreting them as a standalone YAML document would silently fold,
+# null out, or reject them. (Residual limitation, not specially handled: a
+# value that happens to contain other YAML syntax, e.g. "key: value" with
+# the space, or a leading "#", is parsed as that syntax like any bare YAML
+# scalar would be.)
+#
+# yq's own exit status is checked before the `mv` on purpose: a caller that
+# writes `if xinas_config_set ...; then` - the natural way to check success -
+# suspends `errexit` for the whole call per bash's if/&&/pipeline exemptions,
+# so a failing yq here would otherwise go unnoticed and `mv` would replace a
+# good layer file with an empty one.
 xinas_config_set() {
-    local layer="$1" key="$2" value="$3" path tmp
+    local layer="$1" key="$2" value="$3" path tmp expr
     path=$(_xinas_layer_path "$layer") || return 2
     mkdir -p "$(dirname "$path")"
     [ -f "$path" ] || printf -- '---\n' > "$path"
+
+    expr='env(XINAS_VALUE)'
+    case "$value" in
+        ''|'-'|'---'|'- '*|*$'\n'*) expr='strenv(XINAS_VALUE)' ;;
+    esac
+
     tmp=$(mktemp)
-    XINAS_VALUE="$value" yq eval ".${key} = (env(XINAS_VALUE) | from_yaml)" "$path" > "$tmp"
+    if ! XINAS_VALUE="$value" yq eval ".${key} = ${expr}" "$path" > "$tmp"; then
+        rm -f "$tmp"
+        return 2
+    fi
     mv "$tmp" "$path"
 }
 

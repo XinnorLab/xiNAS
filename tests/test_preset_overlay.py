@@ -73,3 +73,34 @@ def test_role_defaults_are_never_written(repo: Path):
     before = (repo / "collection/roles/demo/defaults/main.yml").read_text()
     _run("xinas_config_set preset demo_key changed; xinas_config_set local x 1", repo)
     assert (repo / "collection/roles/demo/defaults/main.yml").read_text() == before
+
+
+def test_get_returns_a_present_false_value(repo: Path):
+    """`.key // "ABSENT"` treats a legitimate `false` the same as unset -
+    not theoretical: several shipped role defaults are `false`, and a
+    later task writes `false` through xinas_config_set the same way this
+    test does.
+    """
+    r = _run("xinas_config_set local flag_key false; xinas_config_get flag_key", repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "false"
+
+
+def test_effective_merges_keys_from_every_layer(repo: Path):
+    """A per-key cascade (check local, else preset, else the role default)
+    can answer every test above correctly without ever merging anything -
+    each of those asks about one key at a time. Ask for the whole document
+    instead and check that a key unique to each layer is present at once,
+    which a cascade with no real multi-document merge cannot produce.
+    """
+    r = _run(
+        "xinas_config_set preset preset_only from_preset;"
+        "xinas_config_set local local_only from_local;"
+        "xinas_config_effective",
+        repo,
+    )
+    assert r.returncode == 0, r.stderr
+    doc = yaml.safe_load(r.stdout)
+    assert doc["demo_key"] == "from_defaults"
+    assert doc["preset_only"] == "from_preset"
+    assert doc["local_only"] == "from_local"
