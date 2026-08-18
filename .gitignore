@@ -34,3 +34,9 @@ scripts/node_modules/
 
 # macOS Finder metadata
 .DS_Store
+
+# Live configuration layers (preset apply + config editors write here).
+# Untracked on purpose: the update flow runs `git checkout --force`, which
+# discards tracked modifications. See docs/Installer/update-spec.md.
+playbooks/group_vars/
+.xinas-local/
