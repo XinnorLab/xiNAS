@@ -19,7 +19,14 @@ fi
 
 backup_if_changed() {
     local file="$1" newfile="$2" ts
-    [ -f "$file" ] || return
+    # Explicit `return 0`, not a bare `return`: a bare return here yields the
+    # exit status of the failed `[ -f "$file" ]` test (1), and every call
+    # site invokes this as a plain simple command under `set -e` - so "no
+    # existing file to back up" (the normal, expected state before the first
+    # save of a target that starts absent, like $LIVE_TEMPLATE on a fresh
+    # install) silently aborted the whole script instead of being treated as
+    # the non-event it is.
+    [ -f "$file" ] || return 0
     if ! cmp -s "$file" "$newfile"; then
         ts=$(date +%Y%m%d%H%M%S)
         cp "$file" "${file}.${ts}.bak"

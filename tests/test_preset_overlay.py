@@ -651,3 +651,60 @@ def test_editor_reuse_existing_arrays_writes_survive_a_fresh_checkout(tmp_path: 
     assert layer["xiraid_force_metadata"] is False
     assert layer["xfs_force_mkfs"] is False
     assert layer["xiraid_arrays"] == [{"name": "fromscan", "level": 6, "devices": ["/dev/scanned"]}]
+
+
+def test_editor_manual_mode_save_survives_a_fresh_live_template(tmp_path: Path):
+    """Regression (Critical, fix round 2): backup_if_changed's old
+    `[ -f "$file" ] || return` returned the failed test's own exit status
+    (1, not 0) when the file did not exist. configure_network.sh runs under
+    `set -e` and calls backup_if_changed as a plain simple command, so the
+    *first* manual-mode save on a fresh install - where $LIVE_TEMPLATE
+    (.xinas-local/netplan.yaml.j2) has never been written - aborted the
+    whole script before `mv` wrote the template (line ~268) or
+    xinas_config_set recorded the override (line ~269). Drives the real
+    write section of configure_manual() (extracted by line anchor, same
+    technique as simple_menu.sh's reuse_existing_arrays() test above) plus
+    the real backup_if_changed, with $LIVE_TEMPLATE computed exactly as the
+    real script computes it and never written to beforehand.
+    """
+    role = tmp_path / "collection/roles/net_controllers/defaults"
+    role.mkdir(parents=True)
+    (role / "main.yml").write_text("net_netplan_template: netplan.yaml.j2\n")
+    gv = tmp_path / "playbooks/group_vars/all"
+    gv.mkdir(parents=True)
+    assert not (tmp_path / ".xinas-local").exists()  # sanity: fresh-install case
+
+    fns = _extract_fn(CONFIGURE_NETWORK, "backup_if_changed")
+    write_section = _extract_lines(
+        CONFIGURE_NETWORK,
+        "    tmp_file=$(mktemp)",
+        '    msg_box "Manual Config Saved"',
+    )
+    script = (
+        "set -e\n"
+        f'REPO_DIR="{tmp_path}"\n'
+        f'. "{HELPER}"\n'
+        # Computed the same way line 12 of the real script computes it, not
+        # hand-picked by the test, so this exercises the real fresh-install path.
+        'LIVE_TEMPLATE="$XINAS_LOCAL_ARTEFACTS/netplan.yaml.j2"\n'
+        f"{fns}\n"
+        "run_save() {\n"
+        '    local configs=("eth0:192.168.1.1/24")\n'
+        f"{write_section}\n"
+        "}\n"
+        "run_save\n"
+        'echo "LIVE_TEMPLATE_PATH=$LIVE_TEMPLATE"\n'
+    )
+    r = _run_script(script, tmp_path)
+    assert r.returncode == 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
+
+    live_template_line = next(
+        line for line in r.stdout.splitlines() if line.startswith("LIVE_TEMPLATE_PATH=")
+    )
+    live_template = Path(live_template_line.split("=", 1)[1])
+
+    assert live_template.exists()  # the template was actually written
+    assert "eth0" in live_template.read_text()
+
+    layer = yaml.safe_load((gv / "20-local.yml").read_text())
+    assert layer["net_netplan_template"] == str(live_template)  # the override was recorded

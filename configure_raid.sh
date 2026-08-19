@@ -9,7 +9,15 @@ source "$SCRIPT_DIR/lib/xinas_config.sh"
 
 backup_if_changed() {
     local file="$1" newfile="$2" ts
-    [ -f "$file" ] || return
+    # Explicit `return 0`: every call site here runs this as a plain simple
+    # command under `set -eu`, and a bare `return` would instead propagate
+    # the exit status of the failed `[ -f "$file" ]` test and abort the
+    # script. Currently every caller in this file seeds $vars_file/
+    # $auto_vars_file via xinas_config_seed_local first, which always
+    # creates the overlay file - so this branch isn't reachable today - but
+    # the fix belongs on the shared helper, not on trusting every future
+    # caller to remember that precondition.
+    [ -f "$file" ] || return 0
     if ! cmp -s "$file" "$newfile"; then
         ts=$(date +%Y%m%d%H%M%S)
         cp "$file" "${file}.${ts}.bak"
