@@ -505,15 +505,18 @@ def test_editor_pool_settings_write_preserves_sibling_keys(tmp_path: Path):
     assert "before:10.10.1.1:24" in r.stdout  # the read came from the effective document
 
     layer = yaml.safe_load((gv / "20-local.yml").read_text())
-    # Targeted write: only the four pool keys land in the local layer.
+    # Targeted write: the four pool keys, plus enable_pool_mode()'s own
+    # net_netplan_template reset (Critical 3, final review) - nothing else.
     assert set(layer) == {
         "net_ip_pool_enabled",
         "net_ip_pool_start",
         "net_ip_pool_end",
         "net_ip_pool_prefix",
+        "net_netplan_template",
     }
     assert layer["net_ip_pool_start"] == "10.20.1.1"
     assert layer["net_ip_pool_prefix"] == 26
+    assert layer["net_netplan_template"] == "netplan.yaml.j2"
 
     r2 = _run_script(f'REPO_DIR="{tmp_path}"\n. "{HELPER}"\nxinas_config_effective\n', tmp_path)
     effective = yaml.safe_load(r2.stdout)
@@ -532,9 +535,9 @@ def test_editor_save_pool_settings_clears_a_stale_manual_override(tmp_path: Path
     "manual mode was configured earlier" directly (net_netplan_template set,
     $LIVE_TEMPLATE present) and runs the real save_pool_settings() - the
     literal function configure_ip_pool() calls on a successful save - then
-    asserts both the override and the file are gone afterward, so the role
-    falls back to its own template rather than silently keeping the stale
-    manual one.
+    asserts the override now explicitly points back at the role's own
+    template and the file is gone afterward, so the role falls back to its
+    own template rather than silently keeping the stale manual one.
     """
     role = tmp_path / "collection/roles/net_controllers/defaults"
     role.mkdir(parents=True)
@@ -570,16 +573,78 @@ def test_editor_save_pool_settings_clears_a_stale_manual_override(tmp_path: Path
     assert r.returncode == 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
 
     layer = yaml.safe_load((gv / "20-local.yml").read_text())
-    assert "net_netplan_template" not in layer  # override cleared, not just overwritten
+    # Critical 3 (final review) changed this from a delete to an explicit
+    # override: the key is still present, now pointing at the role's own
+    # template rather than the stale manual path.
+    assert layer["net_netplan_template"] == "netplan.yaml.j2"
     assert not live_template.exists()  # stale manual template file removed
 
     r2 = _run_script(f'REPO_DIR="{tmp_path}"\n. "{HELPER}"\nxinas_config_effective\n', tmp_path)
     effective = yaml.safe_load(r2.stdout)
-    # With the override gone, the effective document falls back to the
+    # With the override reset, the effective document falls back to the
     # role's own default template - proof the role would render its own
     # dynamic netplan again, not the stale manual one.
     assert effective["net_netplan_template"] == "netplan.yaml.j2"
     assert effective["net_ip_pool_enabled"] is True
+
+
+def test_editor_enable_pool_mode_clears_a_preset_layer_manual_override(tmp_path: Path):
+    """Regression (Critical 3, final review): the round-1 fix above only ever
+    proved enable_pool_mode() against a net_netplan_template override living
+    in 20-local.yml, because at the time nothing could put the key in
+    10-preset.yml. xinas_save_preset now refuses to save the key at all
+    (Critical 2), but that does nothing for a preset saved before that fix,
+    or a hand-authored one - xinas_apply_preset has never rejected the
+    net_netplan_template *key*, only a literal netplan.yaml.j2 *file*.
+    Simulates that: the override lives in 10-preset.yml, and 20-local.yml
+    never defines the key at all (it only turns pool mode off, which is what
+    a real manual-mode save does - see save_pool_settings above). The old
+    `yq -i 'del(.net_netplan_template)' "$XINAS_LOCAL_LAYER"` touched
+    20-local.yml only, so this preset-layer value kept winning after
+    "returning to pool mode" - the TUI would report pool mode enabled while
+    net_controllers rendered (or, once $LIVE_TEMPLATE is removed below,
+    failed to find) the stale manual template.
+    """
+    role = tmp_path / "collection/roles/net_controllers/defaults"
+    role.mkdir(parents=True)
+    (role / "main.yml").write_text("net_netplan_template: netplan.yaml.j2\n")
+    gv = tmp_path / "playbooks/group_vars/all"
+    gv.mkdir(parents=True)
+    live_template = tmp_path / "xinas-local/netplan.yaml.j2"
+    live_template.parent.mkdir(parents=True)
+    live_template.write_text("network: {}\n")
+    (gv / "10-preset.yml").write_text(f'net_netplan_template: "{live_template}"\n')
+    (gv / "20-local.yml").write_text("net_ip_pool_enabled: false\n")
+    assert live_template.exists()  # sanity: manual mode really is active
+
+    fn = _extract_fn(CONFIGURE_NETWORK, "enable_pool_mode")
+    script = (
+        "set -e\n"
+        f'REPO_DIR="{tmp_path}"\n'
+        f'. "{HELPER}"\n'
+        f'LIVE_TEMPLATE="{live_template}"\n'
+        f"{fn}\n"
+        "enable_pool_mode\n"
+    )
+    r = _run_script(script, tmp_path)
+    assert r.returncode == 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
+
+    assert not live_template.exists()  # stale manual template file removed
+
+    preset_layer = yaml.safe_load((gv / "10-preset.yml").read_text())
+    # Untouched - proof this is a real conflict between the two layers, not
+    # an absent one silently agreeing with the fix.
+    assert preset_layer["net_netplan_template"] == str(live_template)
+
+    local_layer = yaml.safe_load((gv / "20-local.yml").read_text())
+    assert local_layer["net_netplan_template"] == "netplan.yaml.j2"
+
+    r2 = _run_script(f'REPO_DIR="{tmp_path}"\n. "{HELPER}"\nxinas_config_effective\n', tmp_path)
+    effective = yaml.safe_load(r2.stdout)
+    # The property that matters: despite the preset layer still pointing at
+    # the removed file, the local layer's explicit override wins (20- beats
+    # 10-), so the EFFECTIVE value falls back to the role's own template.
+    assert effective["net_netplan_template"] == "netplan.yaml.j2"
 
 
 def _extract_lines(src: str, start_marker: str, end_marker: str) -> str:

@@ -211,8 +211,10 @@ state back. The prohibition stands and the test keeps enforcing it.
 The remaining writer is `configure_network.sh` manual mode. `ROLE_TEMPLATE`
 (line 10) points into the tracked role templates directory and line 263 `mv`s
 the generated netplan into it. It writes to `.xinas-local/` and sets
-`net_netplan_template` in `20-local.yml` instead. Returning to pool mode removes
-both the override key and the file, so the role falls back to its own template
+`net_netplan_template` in `20-local.yml` instead. Returning to pool mode
+neutralizes the override — see §14 (final review, Critical 3) for why this is
+now an explicit `net_netplan_template: netplan.yaml.j2` write to `20-local.yml`
+rather than a delete from it — so the role falls back to its own template
 rather than silently keeping a stale manual one.
 
 This is the one part of the change that alters role behaviour, so its commit

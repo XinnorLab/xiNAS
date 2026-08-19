@@ -75,11 +75,22 @@ get_pool_settings() {
 # place after re-enabling pool mode would make the role silently keep
 # rendering the old static config while the TUI reports pool mode ENABLED.
 # docs/superpowers/specs/2026-08-18-preset-overlay-design.md §5: "Returning
-# to pool mode removes both the override key and the file, so the role falls
-# back to its own template rather than silently keeping a stale manual one."
+# to pool mode neutralizes the override ... so the role falls back to its
+# own template rather than silently keeping a stale manual one."
+#
+# An explicit override, not a delete (Critical 3, final review): a
+# `del(.net_netplan_template)` against $XINAS_LOCAL_LAYER only clears the
+# key from the LOCAL layer. If a preset saved while manual mode was active
+# also set the key - xinas_save_preset now refuses to write it (Critical 2),
+# but a preset saved before that fix, or a hand-authored one, still can -
+# the value in 10-preset.yml keeps winning, and the TUI would report pool
+# mode ENABLED while the live template it points at was just rm -f'd two
+# lines below. Setting the key to the role's own relative template name
+# beats that regardless of which layer the stale value came from, because
+# 20-local.yml always wins over 10-preset.yml.
 enable_pool_mode() {
     xinas_config_set local net_ip_pool_enabled true
-    yq -i 'del(.net_netplan_template)' "$XINAS_LOCAL_LAYER" 2>/dev/null || true
+    xinas_config_set local net_netplan_template "\"netplan.yaml.j2\""
     rm -f "$LIVE_TEMPLATE"
 }
 
