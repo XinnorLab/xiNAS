@@ -1411,6 +1411,79 @@ git commit -m "docs(installer): describe the configuration layer model"
 
 ---
 
+### Task 11: `configure_hostname.sh` writes the overlay
+
+Added after Task 9, by ruling. The plan's file set never included this editor,
+yet `configure_hostname.sh:74` does `mv "$tmp" "$vars_file"` where `vars_file`
+is `collection/roles/common/defaults/main.yml` — a runtime write to a tracked
+role default. That is what §2 goal 4 forbids and what the update flow's
+`git checkout --force` silently discards. Leaving it also leaves
+`tests/test_no_runtime_writes_to_tracked.py` advertising coverage it does not
+have, since the file is absent from its `SCRIPTS` list.
+
+**Files:**
+- Modify: `configure_hostname.sh`
+- Modify: `tests/test_no_runtime_writes_to_tracked.py`
+- Test: `tests/test_preset_overlay.py`
+
+**Interfaces:**
+- Consumes: `xinas_config_effective`, `xinas_config_get`, `xinas_config_set`,
+  `xinas_config_seed_local`, `XINAS_LOCAL_LAYER` from Tasks 1 and 5.
+- Produces: nothing.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_preset_overlay.py` a test in the shape Task 5 used for the
+other editors: seed the overlay with a hostname-related key, drive the real
+write path from `configure_hostname.sh`, and assert the value lands in
+`20-local.yml` while `collection/roles/common/defaults/main.yml` is untouched.
+Read Task 5's editor tests first and follow their construction — they source the
+real script's functions rather than reimplementing them.
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/python -m pytest tests/test_preset_overlay.py -q -k hostname`
+Expected: FAIL, because the write still goes to the role default.
+
+- [ ] **Step 3: Repoint the script**
+
+Source `lib/xinas_config.sh` next to the existing `menu_lib.sh` source line,
+using the script's own `SCRIPT_DIR` — not `REPO_DIR`, which means the repo being
+configured. Replace the `vars_file` assignment with `$XINAS_LOCAL_LAYER`, route
+every read through `xinas_config_effective`, and call `xinas_config_seed_local`
+for the edited key before writing. Match what Task 5 did to `configure_raid.sh`
+and `configure_nfs_exports.sh`.
+
+Watch the two traps this plan has already hit here: `backup_if_changed` in this
+file carries the same `[ -f "$file" ] || return` shape that aborted a caller
+under `set -e` in Task 5 — fix it to `return 0` the same way; and a value read
+with `//` treats a present `false` as absent, so use `has()`.
+
+- [ ] **Step 4: Run it and confirm it passes**
+
+Run: `.venv/bin/python -m pytest tests/test_preset_overlay.py -q`
+Expected: all pass.
+
+- [ ] **Step 5: Close the contract test's hole**
+
+Add `configure_hostname.sh` to `SCRIPTS` in
+`tests/test_no_runtime_writes_to_tracked.py`, then run
+`.venv/bin/python -m pytest tests/test_no_runtime_writes_to_tracked.py -q`.
+Expected: pass. If it fails, the repoint in Step 3 is incomplete — fix the
+script, not the test.
+
+- [ ] **Step 6: Verify and commit**
+
+Run: `.venv/bin/python -m pytest --cov=xinas_history --cov-fail-under=20 -q`,
+`ruff format --check .`, and `bash -n configure_hostname.sh`.
+
+```bash
+git add configure_hostname.sh tests/test_no_runtime_writes_to_tracked.py tests/test_preset_overlay.py
+git commit -m "fix(installer): configure_hostname.sh writes the overlay, not role defaults"
+```
+
+---
+
 ## Self-review notes
 
 **Spec coverage.** §3 → Task 1; §4 → Tasks 2, 3; §5 → Tasks 4, 5; §6 → Task 5;
