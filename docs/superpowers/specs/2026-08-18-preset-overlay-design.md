@@ -1,7 +1,7 @@
 # Presets as overlays, not file replacements
 
 **Date:** 2026-08-18
-**Status:** Design, revision 2 (revised after review; see §12)
+**Status:** Implemented, revision 3 (revised after the final whole-branch review; see §14)
 **Area:** Installer (`docs/Installer/spec.md` §1 is the durable spec this change makes true)
 
 ## 1. Problem
@@ -165,7 +165,13 @@ first and pass `-e xiraid_skip_install=true` afterwards, to a `site.yml` whose
 guard the copy has just deleted. `xiraid_classic` therefore runs on both
 existing-RAID paths and the flag is inert. Always running the repository's
 `site.yml` restores it, so this is a third defect the root fix closes rather
-than a regression risk it introduces.
+than a regression risk it introduces — **incomplete**: this analysis traced
+the flag and the playbook, not the two lines above the playbook call.
+`startup_menu.sh`'s existing-RAID branch also called `check_remove_xiraid`
+(purges the xiRAID packages) before running with `xiraid_skip_install=true`,
+so restoring the guard here meant the packages it removed were, correctly
+per the guard, never reinstalled. Fixed in §14 (final review, Critical 1) by
+removing that call from the branch, not by relaxing the guard.
 
 Note that moving play `vars:` into the overlay lowers their precedence from
 play-vars level to group-vars level. Nothing in the tree sets those two keys at
@@ -423,3 +429,22 @@ Verifying r1's claim that the preset playbooks are equivalent to `site.yml`
 surfaced a further defect, recorded in §4: the preset copy deletes the
 `xiraid_skip_install` guard, leaving that flag inert on both existing-RAID
 paths. It is closed by §4 rather than tracked separately.
+
+## 14. Final whole-branch review (2026-08-19)
+
+The implementation was complete and every gate green before this pass; the
+findings below are all cross-task seams — what one task wrote, another read
+with a different assumption — not gaps in any single task's own review.
+Full detail: `.superpowers/sdd/2026-08-18-preset-overlay/final-review.md`.
+
+| Finding | Resolution |
+|---|---|
+| Critical 1 — restoring `site.yml`'s `xiraid_classic` guard (§4) made `startup_menu.sh`'s existing-RAID branch purge xiRAID via `check_remove_xiraid` and then never reinstall it, since the guard now honours `xiraid_skip_install=true` | `check_remove_xiraid` removed from that branch, mirroring `autoinstall.sh`'s existing rule (`purge_xiraid="no"` for `existing_raid`) rather than the design's §4 claim that the guard restoration introduced no regression risk — it did, two lines above the playbook call `§4` never traced |
+| Critical 2 — §7 said the manual netplan template was copied into a saved preset; §5 forbids a preset from shipping one; the implementation followed §5 and left `net_netplan_template` pointing at the never-copied file | §7 rewritten below: the key is always dropped from a saved preset, with a reported note, never copied or routed anywhere |
+| Critical 3 — `enable_pool_mode` (§5) cleared `net_netplan_template` from `20-local.yml` only; once Critical 2 could leave it in a saved preset, a preset applied while returning to pool mode left the key winning from `10-preset.yml` | §5's "removes both the override key and the file" is superseded: `enable_pool_mode` now sets an explicit `net_netplan_template: netplan.yaml.j2` override in `20-local.yml` rather than deleting it there, which neutralizes the key regardless of which layer set it, since `20-` always beats `10-` |
+| Important — §7's "a key no role defines is an error, reported rather than written" silently dropped every `perf_tuning`/`common`-owned key and `xiraid_skip_install` (owned by no role) on save, so a saved preset did not reproduce the system it was saved from | §7 rewritten: such a key is written into the saved `playbook.yml`'s `vars:` instead, the same bucket `xinas_apply_preset` already merges for `xinnorVM`'s `perf_disable_cpupower` / `perf_nr_requests` — round-trips symmetrically rather than one-way |
+
+None of the four findings above change the layer model (§3), the always-run-
+`site.yml` decision (§4's role-list argument), or the migration bridge (§9) —
+they correct a menu branch that predates this design and two `xinas_save_preset`
+routing rules that §7 got wrong or left incomplete on the first pass.

@@ -59,7 +59,7 @@ INSTALL_MENU = _extract_fn(STARTUP_MENU, "install_menu")
 # of which needs to exist for this test).
 COMMON_STUBS = (
     "has_license() { return 0; }\n"
-    'menu_select() { echo 3; }\n'
+    "menu_select() { echo 3; }\n"
     "yes_no() { return 0; }\n"
     'apply_preset() { echo "APPLY_PRESET:$1" >&2; }\n'
     "check_license() { return 0; }\n"
@@ -74,7 +74,7 @@ def test_existing_raid_install_never_calls_check_remove_xiraid(tmp_path: Path):
         "set -euo pipefail\n"
         f"{INSTALL_MENU}\n"
         f"{COMMON_STUBS}"
-        'check_remove_xiraid() { echo CALLED_CHECK_REMOVE_XIRAID >&2; return 0; }\n'
+        "check_remove_xiraid() { echo CALLED_CHECK_REMOVE_XIRAID >&2; return 0; }\n"
         "install_menu\n"
     )
     r = _run_script(script, tmp_path)
