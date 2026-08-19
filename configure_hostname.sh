@@ -5,10 +5,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/menu_lib.sh"
+source "$SCRIPT_DIR/lib/xinas_config.sh"
 
 backup_if_changed() {
     local file="$1" newfile="$2" ts
-    [ -f "$file" ] || return
+    # Explicit `return 0`, not a bare `return`: a bare return here yields the
+    # exit status of the failed `[ -f "$file" ]` test (1), and both call
+    # sites below run this as a plain simple command under `set -e` - so "no
+    # existing file to back up" (the normal state before $XINAS_LOCAL_LAYER
+    # has ever been written by xinas_config_seed_local) would silently abort
+    # the whole script instead of being treated as the non-event it is.
+    [ -f "$file" ] || return 0
     if ! cmp -s "$file" "$newfile"; then
         ts=$(date +%Y%m%d%H%M%S)
         cp "$file" "${file}.${ts}.bak"
@@ -36,7 +43,8 @@ update_hosts_file() {
     mv "$tmp" "$hosts_file"
 }
 
-vars_file="collection/roles/common/defaults/main.yml"
+# All configuration writes land in the overlay; role defaults are read-only.
+vars_file="$XINAS_LOCAL_LAYER"
 
 for cmd in yq; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -45,12 +53,7 @@ for cmd in yq; do
     fi
 done
 
-if [ ! -f "$vars_file" ]; then
-    echo "Error: $vars_file not found" >&2
-    exit 1
-fi
-
-current=$(yq -r '.xinas_hostname // ""' "$vars_file")
+current=$(xinas_config_effective | yq -r '.xinas_hostname // ""' -)
 [ -x ./hwkey ] || chmod +x ./hwkey 2>/dev/null || true
 if [ -z "$current" ]; then
     hw=$(./hwkey 2>/dev/null | tr -d '\n' | tr '[:lower:]' '[:upper:]')
@@ -68,6 +71,7 @@ while true; do
     fi
 done
 
+xinas_config_seed_local xinas_hostname
 tmp=$(mktemp)
 NAME="$name" yq e '.xinas_hostname = env(NAME)' "$vars_file" > "$tmp"
 backup_if_changed "$vars_file" "$tmp"

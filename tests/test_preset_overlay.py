@@ -711,6 +711,134 @@ def test_editor_manual_mode_save_survives_a_fresh_live_template(tmp_path: Path):
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Task 11: configure_hostname.sh writes the overlay, not the tracked role
+# default it used to `mv` straight onto. Same extraction technique as the
+# Task 5 tests above. Unlike configure_raid.sh/configure_nfs_exports.sh, the
+# read/seed/write sequence here is top-level script flow, not its own
+# function - the same shape configure_network.sh's configure_manual() write
+# section and simple_menu.sh's reuse_existing_arrays() writes are in above -
+# so this uses _extract_lines by anchor text rather than _extract_fn.
+# ─────────────────────────────────────────────────────────────────────────
+
+CONFIGURE_HOSTNAME = (REPO / "configure_hostname.sh").read_text()
+
+
+def test_hostname_backup_if_changed_returns_success_when_file_absent(tmp_path: Path):
+    """Regression: the same `[ -f "$file" ] || return` shape Task 5 fixed in
+    the other three copies of this function (configure_raid.sh,
+    configure_nfs_exports.sh, configure_network.sh). A bare `return` yields
+    the failed `[ -f "$file" ]` test's own exit status (1); both call sites
+    in this script invoke the function as a plain simple command under
+    `set -euo pipefail`, so hitting this branch would silently abort the
+    whole script instead of being treated as "nothing to back up yet" - the
+    state $XINAS_LOCAL_LAYER is in until xinas_config_seed_local creates it.
+    Calls the real, extracted function directly against a file that does not
+    exist, independent of the rest of the script, so this fails regardless
+    of whether some other caller happens to mask the bug (as seeding does
+    for the $vars_file call site exercised by the test below).
+    """
+    fn = _extract_fn(CONFIGURE_HOSTNAME, "backup_if_changed")
+    newfile = tmp_path / "new"
+    newfile.write_text("content\n")
+    script = (
+        "set -euo pipefail\n"
+        f"{fn}\n"
+        f'backup_if_changed "{tmp_path}/does-not-exist" "{newfile}"\n'
+        'echo "RC=$?"\n'
+    )
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
+    assert "RC=0" in r.stdout
+    assert not list(tmp_path.glob("*.bak"))  # nothing existed, so nothing was backed up
+
+
+def test_hostname_backup_if_changed_actually_backs_up_a_changed_file(tmp_path: Path):
+    """Companion to the test above, and the reason that one names a specific
+    file rather than checking the return code alone: a
+    `backup_if_changed() { return 0; }` stub - fully inert, never inspecting
+    either argument - reports success and creates no backup file, exactly
+    like the correct behavior for "nothing existed yet". Checking only
+    "returns 0 and no .bak file" (the previous test) cannot tell the two
+    apart. This drives the real function against a file that DOES exist and
+    DOES differ, and checks a `.bak` copy actually landed with the pre-edit
+    content - the one outcome a no-op stub cannot fake.
+    """
+    fn = _extract_fn(CONFIGURE_HOSTNAME, "backup_if_changed")
+    existing = tmp_path / "existing"
+    existing.write_text("old-content\n")
+    newfile = tmp_path / "new"
+    newfile.write_text("new-content\n")
+    script = f'set -euo pipefail\n{fn}\nbackup_if_changed "{existing}" "{newfile}"\n'
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
+    backups = list(tmp_path.glob("existing.*.bak"))
+    assert len(backups) == 1, f"expected exactly one backup file, found {backups}"
+    assert backups[0].read_text() == "old-content\n"  # the pre-edit content was preserved
+    assert existing.read_text() == "old-content\n"  # backup_if_changed itself never mutates $file
+
+
+def test_editor_hostname_write_lands_in_local_layer_not_role_defaults(tmp_path: Path):
+    """configure_hostname.sh's real read/seed/write sequence, extracted and
+    run for real.
+
+    Before this task, `vars_file` was collection/roles/common/defaults/main.yml
+    and the script `mv`'d straight onto it - a runtime write to a tracked
+    role default, exactly what `git checkout --force` (the update path)
+    silently discards on every update. Both halves of the fix are proved
+    here: the new hostname lands in the overlay, AND the tracked role
+    default file comes out byte-identical to what it was before the edit -
+    asserting only the former would still pass a script that wrote the new
+    value to the overlay *in addition to* the old role-default path.
+
+    The preset layer starts with an existing xinas_hostname value (not the
+    role default's own empty-string default, and no 20-local.yml exists yet
+    - the fresh-checkout case), and the stubbed input_box captures the
+    "current" value it was prompted with, proving that value came from
+    xinas_config_effective (the preset layer), not from the role default.
+    """
+    role = tmp_path / "collection/roles/common/defaults"
+    role.mkdir(parents=True)
+    role_defaults_before = 'common_timezone: "Europe/Amsterdam"\nxinas_hostname: ""\n'
+    (role / "main.yml").write_text(role_defaults_before)
+    gv = tmp_path / "playbooks/group_vars/all"
+    gv.mkdir(parents=True)
+    (gv / "10-preset.yml").write_text('xinas_hostname: "preset-host"\n')
+    assert not (gv / "20-local.yml").exists()  # sanity: fresh checkout, no prior edit
+
+    fns = "\n".join(
+        _extract_fn(CONFIGURE_HOSTNAME, n) for n in ("backup_if_changed", "valid_hostname")
+    )
+    write_section = _extract_lines(
+        CONFIGURE_HOSTNAME,
+        "current=$(xinas_config_effective",
+        'update_hosts_file "$name"',
+    )
+    script = (
+        "set -euo pipefail\n"
+        f'REPO_DIR="{tmp_path}"\n'
+        f'. "{HELPER}"\n'
+        'vars_file="$XINAS_LOCAL_LAYER"\n'
+        f"{fns}\n"
+        "msg_box() { :; }\n"
+        'input_box() { echo "SEEN_CURRENT=$3" >&2; echo "new-hostname"; }\n'
+        f"{write_section}\n"
+    )
+    r = _run_script(script, tmp_path)
+    assert r.returncode == 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
+    assert "SEEN_CURRENT=preset-host" in r.stderr  # prompt default came from the effective doc
+
+    local_layer = yaml.safe_load((gv / "20-local.yml").read_text())
+    assert local_layer == {"xinas_hostname": "new-hostname"}  # the edit landed in the overlay
+
+    preset_layer = yaml.safe_load((gv / "10-preset.yml").read_text())
+    assert preset_layer == {"xinas_hostname": "preset-host"}  # preset layer untouched
+
+    # The property that matters most: the tracked role default is
+    # byte-identical to what it was before the edit.
+    assert (role / "main.yml").read_text() == role_defaults_before
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Task 6: xinas_save_preset decomposes the live overlay (preset + local
 # layers, never role defaults) back into presets/<name>/*.yml, routed by
 # which role's defaults/main.yml owns each key. This is the inverse of

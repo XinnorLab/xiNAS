@@ -20,6 +20,7 @@ SCRIPTS = [
     "configure_raid.sh",
     "configure_network.sh",
     "configure_nfs_exports.sh",
+    "configure_hostname.sh",
     "lib/xinas_config.sh",
 ]
 
