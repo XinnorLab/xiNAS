@@ -9,9 +9,10 @@ Ansible-based provisioning and management framework for high-performance NAS sto
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  User Interfaces                                         │
-│  • xinas-menu (Python Textual TUI) — server management   │
-│  • xinas-client — NFS client setup and management         │
-│  • install.sh — one-command provisioning                  │
+│  • xinas-menu (Python Textual TUI) — server console      │
+│  • xinasctl (CLI) + MCP clients — control path           │
+│  • xinas-client — NFS client setup and management        │
+│  • install.sh — one-command provisioning                 │
 ├──────────────────────────────────────────────────────────┤
 │  Configuration & History                                 │
 │  • presets/ (YAML deployment profiles)                   │
@@ -19,12 +20,13 @@ Ansible-based provisioning and management framework for high-performance NAS sto
 ├──────────────────────────────────────────────────────────┤
 │  Ansible Orchestration                                   │
 │  • playbooks/ (site.yml, common.yml, doca_ofed_install)  │
-│  • collection/roles/ (15 roles)                          │
+│  • collection/roles/ (20 roles)                          │
 ├──────────────────────────────────────────────────────────┤
 │  Runtime Services                                        │
-│  • xiraid-server (gRPC :6066)                            │
+│  • xinas-api (REST /api/v1 + MCP /mcp endpoint)          │
+│  • xinas-agent (privileged observe/execute daemon)       │
 │  • xinas-nfs-helper (NFS export daemon)                  │
-│  • xinas-mcp (MCP server for AI-assisted management)     │
+│  • xiraid-server (gRPC :6066)                            │
 │  • NFS v4.2 + RDMA                                       │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -49,7 +51,9 @@ Ansible runs the `site.yml` playbook, executing all configured roles in order:
 
 ```
 common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace
-→ raid_fs → exports → nfs_server → xinas_history → perf_tuning → motd
+→ raid_fs → exports → nfs_server → xinas_node_build → xinas_api
+→ xinas_agent → xinas_nfs_helper → xinas_mcp → xinas_menu
+→ xinas_history → perf_tuning → motd
 ```
 
 ### Unattended Installation
@@ -83,6 +87,8 @@ This installs NFS tools and RDMA prerequisites, checks out the client package at
 sudo xinas-client
 ```
 
+The client contract lives in [docs/Client/client-setup-spec.md](docs/Client/client-setup-spec.md).
+
 ### Post-Deployment Management
 
 After installation, the server management console is always available:
@@ -91,14 +97,12 @@ After installation, the server management console is always available:
 sudo xinas-menu
 ```
 
-The TUI provides:
+The TUI groups every day-2 operation under four menus:
 
-- **Storage** — RAID arrays (create, modify, spare pools), XFS filesystems, quota management
-- **Network** — IP pool configuration, interface management, netplan
-- **Shares** — NFS export CRUD, access control wizard
-- **Users** — User and group management, quotas
-- **Health** — Health check profiles, monitoring, alerts
-- **Config History** — Browse snapshots, diff versions, rollback
+- **System** — status, license, user management, health checks, quick actions, configuration history, log collection
+- **Storage** — RAID management, NFS management, physical drives, filesystems, spare pools
+- **Network** — current configuration, interface IP editing, netplan file, IP pool configuration
+- **Management** — settings, integrations (e.g. xiRAID Prometheus exporter), update check, uninstall
 
 See [install.MD](install.MD) for the full installation guide, settings reference, and troubleshooting.
 
@@ -106,17 +110,20 @@ See [install.MD](install.MD) for the full installation guide, settings reference
 
 | Directory | Purpose |
 |-----------|---------|
-| `playbooks/` | Ansible playbooks (`site.yml`, `common.yml`, `doca_ofed_install.yml`) |
-| `collection/roles/` | 15 Ansible roles |
+| `playbooks/` | Ansible playbooks (`site.yml`, `common.yml`, `doca_ofed_install.yml`, `uninstall.yml`) |
+| `collection/roles/` | 20 Ansible roles |
 | `presets/` | Deployment profiles (`default/`, `xinnorVM/`) |
-| `xinas_menu/` | Python Textual TUI — post-deployment management console |
+| `xinas_menu/` | Python Textual TUI — post-deployment management console + health engine |
 | `xinas_history/` | Configuration history engine (snapshots, rollback, drift detection) |
-| `xiNAS-MCP/` | MCP server for AI-assisted management (55 tools) |
+| `xiNAS-MCP/` | TypeScript control path — `xinas-api` (REST + `/mcp`), `xinas-agent`, `xinasctl` CLI, `xinas-mcp-stdio` (Node ≥ 20) |
 | `client_repo/` | Standalone NFS client package |
 | `inventories/` | Ansible inventory (default: localhost) |
-| `docs/` | Design documents and specs (`Installer/`, `Storage/`, `MCP/`, `Network/`, `Notifications/`, `HealthCheck/`, `config-history/`, `plans/`, …) |
+| `tests/` | pytest suite — TUI screens, installer bash contracts, Ansible template rendering |
+| `docs/` | Design documents and specs (`Installer/`, `Storage/`, `Management/`, `Network/`, `Client/`, `Notifications/`, `HealthCheck/`, `control-path/`, `config-history/`, `plans/`, `troubleshooting/`, …) |
 
 ## Ansible Roles
+
+Deployed by `site.yml`, in execution order:
 
 | Role | Purpose |
 |------|---------|
@@ -128,13 +135,23 @@ See [install.MD](install.MD) for the full installation guide, settings reference
 | `raid_fs` | Create RAID arrays, XFS filesystems, systemd mounts |
 | `exports` | Manage `/etc/exports` via Jinja2 templates |
 | `nfs_server` | Kernel NFS v4.2 with RDMA tuning |
+| `xinas_node_build` | Node 20 toolchain + `xiNAS-MCP` TypeScript build (`dist/`) |
+| `xinas_api` | `xinas-api.service` — REST `/api/v1` and the MCP `/mcp` endpoint |
+| `xinas_agent` | `xinas-agent.service` — privileged observation and execution daemon |
+| `xinas_nfs_helper` | `xinas-nfs-helper` daemon (UDS at `/run/xinas-nfs-helper.sock`) |
+| `xinas_mcp` | Retirement shim (ADR-0010) — removes the legacy standalone MCP service, installs the `xinas-mcp-stdio` and `xinasctl` wrappers |
+| `xinas_menu` | Deploy the Python/Textual console and its `xinas-menu` / `xinas-setup` wrappers |
 | `xinas_history` | Deploy configuration history library and CLI |
-| `xinas_menu` | Deploy TUI application as a systemd service |
-| `xinas_mcp` | Deploy MCP server (Node.js) |
 | `perf_tuning` | TCP window scaling, NFS read-ahead, CPU governor |
 | `motd` | Status banner with RAID/NFS/network info |
-| `roce_lossless` | RoCE lossless network configuration (on-demand) |
+
+Run on demand, outside `site.yml`:
+
+| Role | Purpose |
+|------|---------|
+| `roce_lossless` | RoCE / InfiniBand lossless transport configuration |
 | `xiraid_exporter` | Prometheus metrics exporter for xiRAID |
+| `xinas_uninstall` | Reverses everything `site.yml` installs (`playbooks/uninstall.yml`) |
 
 Each role has its own README at `collection/roles/<role>/README.md`.
 
@@ -145,8 +162,12 @@ Deployment profiles live in `presets/` (currently `default/` and `xinnorVM/`). E
 - `playbook.yml` — role execution order and preset-specific variables
 - `raid_fs.yml` — RAID levels, stripe size, spare pool configuration
 - `nfs_exports.yml` — NFS export paths and access control
-- `netplan.yaml.j2` — network interface template
 - `network.yml` — IP pool ranges, MTU, interface detection
+- `nvme_namespace.yml` — namespace layout overrides (`xinnorVM` only)
+
+The netplan template itself is owned by the `net_controllers` role
+(`collection/roles/net_controllers/templates/netplan.yaml.j2`) and rendered
+from the preset's `network.yml`.
 
 Custom presets created through the expert menu are saved here and available across all menus.
 
@@ -167,13 +188,35 @@ python3 -m xinas_history status                 # Current status (JSON)
 python3 -m xinas_history gc run                 # Garbage collect old snapshots
 ```
 
-## MCP Server
+## Control Path (REST · CLI · MCP)
 
-The `xiNAS-MCP/` directory contains a Model Context Protocol server that exposes xiNAS operations to Claude and compatible AI agents. It provides 55 tools across 9 namespaces:
+`xiNAS-MCP/` is the TypeScript control path. A single declarative catalog
+(`src/api/mcp/catalog.ts`, 62 operations) drives three clients at once — the
+REST router under `/api/v1`, the generated `xinasctl` command tree, and the MCP
+`tools/list` dispatcher — so the three surfaces cannot drift apart.
 
-`system` · `health` · `disk` · `raid` · `share` · `auth` · `job` · `config` · `mail`
+The standalone MCP server was retired in favour of an endpoint inside
+`xinas-api.service` (ADR-0010): the Streamable HTTP `/mcp` route plus the
+`xinas-mcp-stdio` adapter used by Claude Code and other MCP clients. **61** of
+the 62 catalog operations are exposed as MCP tools (the binary support-bundle
+download is CLI-only), across 23 namespaces:
 
-Features include RBAC permissions, audit logging, idempotency guarantees, and plan/apply workflows. See `docs/MCP/REQUIREMENTS.md` for the full specification.
+`system` · `arrays` · `pools` · `disks` · `filesystems` · `shares` ·
+`export_groups` · `service_ips` · `network` · `users` · `groups` · `quotas` ·
+`nfs_profiles` · `nfs_idmap` · `nfs_sessions` · `health` · `drift` · `tasks` ·
+`config_history` · `audit` · `mail` · `auth` · `support`
+
+Mutations use a plan/apply contract (`mode: plan` returns a diff, `mode: apply`
+executes it against an expected `state_revision`), guarded by per-operation RBAC
+(`viewer` / `operator` / `admin`), idempotency keys, and audit logging. MCP
+`mode=apply` is additionally gated by `mcp.allow_apply` in
+`/etc/xinas-api/config.json` — **off by default**.
+
+Contracts: [docs/control-path/adr/0010-clients-mcp-cli-tui.md](docs/control-path/adr/0010-clients-mcp-cli-tui.md),
+[docs/control-path/s8-clients-spec.md](docs/control-path/s8-clients-spec.md),
+and the OpenAPI schema [docs/control-path/api-v1.yaml](docs/control-path/api-v1.yaml).
+The spec set under `docs/MCP/` describes the retired standalone server and is
+kept for reference only.
 
 ## Data Collection
 
@@ -192,9 +235,10 @@ export TRANSFER_SERVER="http://your-server:8080"
 
 ## Important Notes
 
-- **Shell menu scripts are deprecated** — `startup_menu.sh`, `post_install_menu.sh`, `configure_*.sh`, and `simple_menu.sh` still work but all new features must be implemented in the Python TUI (`xinas_menu/`)
+- **Two shell surfaces, two rules** — the installer scripts (`prepare_system.sh`, `startup_menu.sh`, `simple_menu.sh`) run before the Python TUI exists and remain the supported install path. The post-install scripts (`post_install_menu.sh`, `configure_*.sh`) are deprecated: all new day-2 features go into the Python TUI (`xinas_menu/`)
 - **yq v4 required** — shell scripts use [mikefarah/yq](https://github.com/mikefarah/yq), not the Python jq wrapper. Ensure `/usr/local/bin/yq` is in PATH. Re-run `prepare_system.sh` if needed
-- **Roles are idempotent** — safe to re-run, except when `xfs_force_mkfs: true` forces filesystem recreation
+- **Roles are idempotent** — re-running `site.yml` over a healthy array converges (no reformat, no namespace rebuild). Destroying and rebuilding storage requires the explicit `xinas_storage_reset: true` plus an interactive `YES`; the legacy `xfs_force_mkfs` / `nvme_use_existing_namespaces` knobs no longer trigger wipes on their own. See [docs/Installer/raid-spec.md](docs/Installer/raid-spec.md) §11
 - **License** — stored at `/tmp/license` (cleared on reboot); enter via menu before deployment
-- **Netplan ownership** — all InfiniBand interface config must live in `/etc/netplan/99-xinas.yaml` only. See `docs/Network/spec-network-management.md` for details
+- **Netplan ownership** — all InfiniBand interface config must live in `/etc/netplan/99-xinas.yaml` only. See [docs/Network/spec-network-management.md](docs/Network/spec-network-management.md) for details
+- **Updates ship through GitHub Releases only** — the TUI update check compares the installed version against the latest published release tag; drafts and prereleases are excluded and there is no branch fallback. See [docs/Installer/update-spec.md](docs/Installer/update-spec.md)
 - **Variable priority** — CLI/inventory (highest) → preset YAML → role `defaults/main.yml` (lowest)
