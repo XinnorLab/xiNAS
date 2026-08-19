@@ -255,9 +255,13 @@ xinas_config_seed_local() {
     mv "$tmp_out" "$XINAS_LOCAL_LAYER"
 }
 
-# role -> preset filename. A role absent from this map has no preset file of
-# its own, so an overlay key it owns cannot round-trip through save/apply -
-# xinas_key_owner reports that key rather than guessing where to put it.
+# role -> preset filename. A role absent from this map has no dedicated
+# preset file, so xinas_key_owner reports "no owner" for a key it defines
+# rather than guessing which of the four files to put it in. xinas_save_preset
+# routes such a key into the saved playbook.yml's `vars:` instead (see there)
+# - the same bucket xinas_apply_preset already merges into the overlay for a
+# shipped preset's own vars:, so the key still round-trips; it just does not
+# get a dedicated file of its own.
 _xinas_role_preset_file() {
     case "$1" in
         net_controllers) echo network.yml ;;
@@ -306,12 +310,22 @@ xinas_key_owner() {
 # later wins - deliberately NOT role defaults, which is the release baseline
 # this whole design keeps out of a saved preset) back into
 # presets/<name>/*.yml, one file per owning role, plus playbook.yml copied
-# from the current playbooks/site.yml. A key no mapped role owns is named on
-# stderr and skipped - never guessed into an unrelated file. Replaces rather
+# from the current playbooks/site.yml. A key owned by a role with no
+# dedicated file of its own - perf_tuning, common, xiraid_classic, and every
+# other role not in _xinas_role_preset_file's map, plus xiraid_skip_install,
+# which is not a role default at all (simple_menu.sh writes it straight into
+# the overlay; playbooks/site.yml's xiraid_classic guard is the only reader) -
+# is written into playbook.yml's own `vars:` instead of being dropped
+# (Important 4, final review): the same bucket xinas_apply_preset already
+# merges into the overlay for a shipped preset's own vars:, so every key in
+# the live overlay round-trips one way or another. Only net_netplan_template
+# is ever dropped outright (above) - never routed anywhere, because the
+# manual template it would point at is never saved either. Replaces rather
 # than accumulates: a re-save under a name that already has preset files
-# starts from a clean slate for the four known preset filenames, so a key
-# dropped from the live overlay since the last save under this name does not
-# survive as a stale leftover.
+# starts from a clean slate for the four known preset filenames, and
+# playbook.yml is always a fresh copy of site.yml before any vars: are
+# merged into it, so a key dropped from the live overlay since the last save
+# under this name does not survive as a stale leftover.
 #
 # Every statement that can fail is checked explicitly with `if !` / `return`
 # rather than left for `set -e` to catch. This function's real callers -
@@ -333,6 +347,8 @@ xinas_key_owner() {
 # below drives it through the guarded form instead.
 xinas_save_preset() {
     local name="$1" pdir="$REPO_DIR/presets/$1" key file tmp overlay
+    local dropped_netplan_template=0
+    local -a unrouted_keys=()
 
     if ! mkdir -p "$pdir"; then
         echo "xinas_save_preset $name: failed to create $pdir" >&2
@@ -373,8 +389,32 @@ xinas_save_preset() {
             continue
         fi
 
+        # net_netplan_template always names either the role's own bundled
+        # template (a relative filename, meaningless outside the role) or an
+        # absolute path under .xinas-local/ that a preset may never ship
+        # (xinas_apply_preset rejects a preset carrying netplan.yaml.j2, §5
+        # of the design doc). Routing it through the ordinary per-role file
+        # like any other net_controllers key would write that absolute path
+        # straight into the saved preset while the template it points at is
+        # never copied there - a dangling pointer the moment the preset is
+        # applied anywhere else, or even back on this node once pool mode is
+        # re-enabled (Critical 2, final review). Dropped rather than saved:
+        # the applying node falls back to net_controllers' own template,
+        # which is always correct, since a preset is forbidden from shipping
+        # a different one anyway.
+        if [ "$key" = "net_netplan_template" ]; then
+            dropped_netplan_template=1
+            continue
+        fi
+
         if ! file=$(xinas_key_owner "$key"); then
-            echo "skipped: no preset file owns '$key'" >&2
+            # No dedicated preset file owns this key - either it belongs to
+            # a role with no file of its own, or (xiraid_skip_install) to no
+            # role default at all. Routed into playbook.yml's vars: below
+            # instead of being dropped; still named here so the operator
+            # sees which key took the unusual path.
+            echo "note: '$key' has no dedicated preset file; saving into playbook.yml vars instead" >&2
+            unrouted_keys+=("$key")
             continue
         fi
 
@@ -410,15 +450,38 @@ xinas_save_preset() {
             return 1
         fi
     done
-    rm -f "$overlay"
 
     if ! cp "$REPO_DIR/playbooks/site.yml" "$pdir/playbook.yml"; then
         echo "xinas_save_preset $name: failed to copy playbooks/site.yml" >&2
+        rm -f "$overlay"
         return 1
     fi
 
-    if [ -f "$XINAS_LOCAL_ARTEFACTS/netplan.yaml.j2" ]; then
-        echo "note: manual netplan template not saved (presets may not ship one)" >&2
+    # Keys with no dedicated preset file (Important 4, final review): merged
+    # into the fresh playbook.yml's `vars:` one at a time, from $overlay -
+    # still open at this point, closed right after this loop - the same
+    # load()-from-file pattern as the per-role writes above, for the same
+    # reason (type-preserving, no shell/env round trip). yq auto-vivifies
+    # `.[0].vars` the first time a key is assigned under it, so this does
+    # not need to special-case a playbook.yml (site.yml, always) that has no
+    # `vars:` key at all yet.
+    for key in "${unrouted_keys[@]}"; do
+        tmp=$(mktemp)
+        if ! yq eval ".[0].vars.${key} = load(\"${overlay}\").${key}" "$pdir/playbook.yml" > "$tmp"; then
+            rm -f "$tmp" "$overlay"
+            echo "xinas_save_preset $name: failed to write '$key' into playbook.yml vars" >&2
+            return 1
+        fi
+        if ! mv "$tmp" "$pdir/playbook.yml"; then
+            rm -f "$tmp" "$overlay"
+            echo "xinas_save_preset $name: failed to update $pdir/playbook.yml" >&2
+            return 1
+        fi
+    done
+    rm -f "$overlay"
+
+    if [ "$dropped_netplan_template" -eq 1 ]; then
+        echo "note: net_netplan_template not saved (presets may not point at a manual netplan template; the applying node falls back to net_controllers' own template)" >&2
     fi
     return 0
 }

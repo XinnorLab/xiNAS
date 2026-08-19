@@ -940,13 +940,198 @@ def test_save_preset_routes_keys_by_owning_role(tmp_path: Path):
     assert yaml.safe_load((p / "nvme_namespace.yml").read_text()) == {"nvme_raid_data_level": 6}
 
 
+def _netplan_save_repo(tmp_path: Path) -> Path:
+    """Like _save_repo, but net_controllers also defines net_netplan_template
+    - the key at the centre of Critical 2 - so xinas_key_owner resolves it to
+    network.yml exactly like any other net_controllers key would, and the
+    special-case drop in xinas_save_preset has a real routing decision to
+    intercept rather than one that never reaches it.
+    """
+    repo = _save_repo(tmp_path)
+    d = repo / "collection/roles/net_controllers/defaults/main.yml"
+    d.write_text(d.read_text() + "net_netplan_template: netplan.yaml.j2\n")
+    return repo
+
+
+def test_save_preset_drops_net_netplan_template(tmp_path: Path):
+    """Critical 2 (final review): the manual netplan template file is never
+    saved into a preset (§5 - presets may not ship netplan.yaml.j2), but
+    before this fix the net_netplan_template KEY still routed through the
+    ordinary net_controllers -> network.yml map like any other key, writing
+    the absolute .xinas-local/netplan.yaml.j2 path straight into
+    presets/<name>/network.yml. Applied on another node - or on this node
+    once Critical 3's fix has removed the live template - net_controllers
+    aborts on a missing `src:`. The key must never survive into a saved
+    preset, regardless of whether presets/saved/network.yml ends up existing
+    at all for some other key.
+    """
+    repo = _netplan_save_repo(tmp_path)
+    r = _run(
+        "xinas_config_set local net_netplan_template"
+        ' "\\"/opt/xiNAS/.xinas-local/netplan.yaml.j2\\""; '
+        "xinas_save_preset saved",
+        repo,
+    )
+    assert r.returncode == 0, r.stderr
+    network_file = repo / "presets/saved/network.yml"
+    if network_file.exists():
+        layer = yaml.safe_load(network_file.read_text()) or {}
+        assert "net_netplan_template" not in layer, (
+            "a saved preset must never carry a pointer to a manual netplan "
+            "template that was not itself saved"
+        )
+
+
+def test_save_preset_reports_the_dropped_netplan_template(tmp_path: Path):
+    """Not silent: the operator sees which key was left out and why, the
+    same way the "Preset Saved (with notes)" box already surfaces
+    "skipped: no preset file owns" messages.
+    """
+    repo = _netplan_save_repo(tmp_path)
+    r = _run(
+        "xinas_config_set local net_netplan_template"
+        ' "\\"/opt/xiNAS/.xinas-local/netplan.yaml.j2\\""; '
+        "xinas_save_preset saved",
+        repo,
+    )
+    assert "net_netplan_template" in (r.stdout + r.stderr)
+
+
+def test_save_preset_does_not_drop_other_net_controllers_keys(tmp_path: Path):
+    """Sanity: the special case is net_netplan_template specifically, not
+    "anything net_controllers owns" or "network.yml is never written" - a
+    sibling key routed through the same map must still land in network.yml.
+    A stub that special-cased the whole file, or dropped every key once one
+    net_netplan_template was seen, would fail this.
+    """
+    repo = _netplan_save_repo(tmp_path)
+    r = _run(
+        "xinas_config_set local net_netplan_template"
+        ' "\\"/opt/xiNAS/.xinas-local/netplan.yaml.j2\\""; '
+        "xinas_config_set local net_mtu 9000; "
+        "xinas_save_preset saved",
+        repo,
+    )
+    assert r.returncode == 0, r.stderr
+    layer = yaml.safe_load((repo / "presets/saved/network.yml").read_text())
+    assert layer == {"net_mtu": 9000}
+
+
+def test_save_then_apply_falls_back_to_the_role_netplan_template(tmp_path: Path):
+    """End to end, at the same level of abstraction as
+    test_save_then_apply_round_trips_every_value_shape below: save while
+    manual mode is active, wipe the overlay completely (a fresh node's
+    starting state), re-apply the saved preset. The effective
+    net_netplan_template must be the role's own relative template name, not
+    the absolute manual path that was correctly never saved. Before the fix,
+    the saved preset carried the absolute path and it won on re-apply
+    instead of falling back - exactly the dangling pointer Critical 2 named.
+    """
+    repo = _netplan_save_repo(tmp_path)
+    gv = repo / "playbooks/group_vars/all"
+    r = _run(
+        "xinas_config_set local net_netplan_template"
+        ' "\\"/opt/xiNAS/.xinas-local/netplan.yaml.j2\\""; '
+        "xinas_save_preset saved",
+        repo,
+    )
+    assert r.returncode == 0, r.stderr
+
+    (gv / "20-local.yml").unlink()
+
+    r = _run("xinas_apply_preset saved", repo)
+    assert r.returncode == 0, r.stderr
+
+    r = _run("xinas_config_get net_netplan_template", repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "netplan.yaml.j2"
+
+
 def test_save_preset_reports_a_key_no_preset_file_owns(tmp_path: Path):
-    """perf_tuning has no preset file; the key cannot round-trip, so it is
-    named rather than silently dropped into an unrelated file.
+    """perf_tuning has no dedicated preset file, so the key routes into
+    playbook.yml's `vars:` instead (Important 4, final review) - the same
+    bucket xinas_apply_preset already merges into the overlay for
+    xinnorVM's perf_disable_cpupower/perf_nr_requests. It is still named
+    in the save output, since that routing is worth telling the operator
+    about, but it is no longer dropped: see
+    test_save_preset_routes_an_unmapped_roles_key_into_playbook_vars below
+    for the assertion that it actually round-trips.
     """
     repo = _save_repo(tmp_path)
     r = _run("xinas_config_set local perf_nr_requests 0; xinas_save_preset saved", repo)
     assert "perf_nr_requests" in (r.stdout + r.stderr)
+
+
+def test_save_preset_routes_an_unmapped_roles_key_into_playbook_vars(tmp_path: Path):
+    """perf_tuning owns perf_nr_requests but has no dedicated preset file -
+    only net_controllers/raid_fs/nvme_namespace/exports have one. Before this
+    fix the key was named on stderr and then dropped outright: the entire
+    `vars:` payload presets/xinnorVM/playbook.yml carries
+    (perf_disable_cpupower, perf_nr_requests) could not survive a save/apply
+    round trip on a system configured through the editors rather than by
+    applying that preset (final review, Important 4). It must land in the
+    saved playbook.yml's `vars:`, not silently vanish, and not get guessed
+    into one of the four unrelated dedicated files.
+    """
+    repo = _save_repo(tmp_path)
+    r = _run("xinas_config_set local perf_nr_requests 0; xinas_save_preset saved", repo)
+    assert r.returncode == 0, r.stderr
+    playbook = yaml.safe_load((repo / "presets/saved/playbook.yml").read_text())
+    assert playbook[0]["vars"]["perf_nr_requests"] == 0
+    for f in ("network.yml", "raid_fs.yml", "nvme_namespace.yml", "nfs_exports.yml"):
+        p = repo / "presets/saved" / f
+        if p.exists():
+            assert "perf_nr_requests" not in (yaml.safe_load(p.read_text()) or {})
+
+
+def test_save_preset_routes_a_key_no_role_defines_into_playbook_vars(tmp_path: Path):
+    """xiraid_skip_install is the sharper case named by the final review:
+    simple_menu.sh's existing-RAID wizard writes it straight into the
+    overlay (xinas_config_set local xiraid_skip_install true), but no role's
+    defaults/main.yml defines it at all - it appears only in
+    playbooks/site.yml's xiraid_classic `when:` guard. xinas_key_owner
+    therefore fails for a reason that has nothing to do with "which of the
+    four files owns it": no role owns it, period. Before this fix this was
+    the one key that could never be captured in a saved preset at all; it
+    must now round-trip through playbook.yml vars like any other unmapped
+    key.
+    """
+    repo = _save_repo(tmp_path)
+    r = _run("xinas_config_set local xiraid_skip_install true; xinas_save_preset saved", repo)
+    assert r.returncode == 0, r.stderr
+    playbook = yaml.safe_load((repo / "presets/saved/playbook.yml").read_text())
+    assert playbook[0]["vars"]["xiraid_skip_install"] is True
+
+
+def test_save_then_apply_round_trips_keys_with_no_dedicated_preset_file(tmp_path: Path):
+    """End to end, the same shape as
+    test_save_then_apply_falls_back_to_the_role_netplan_template above: save,
+    wipe the overlay completely (a fresh node's starting state), re-apply,
+    and check the EFFECTIVE value - not just that it landed in playbook.yml's
+    vars: on disk, but that xinas_apply_preset (which already merges a
+    preset's playbook vars: into the overlay for xinnorVM) actually picks it
+    back up on the far side.
+    """
+    repo = _save_repo(tmp_path)
+    gv = repo / "playbooks/group_vars/all"
+    r = _run(
+        "xinas_config_set local perf_nr_requests 0;"
+        "xinas_config_set local xiraid_skip_install true;"
+        "xinas_save_preset saved",
+        repo,
+    )
+    assert r.returncode == 0, r.stderr
+
+    (gv / "20-local.yml").unlink()
+
+    r = _run("xinas_apply_preset saved", repo)
+    assert r.returncode == 0, r.stderr
+
+    r = _run("xinas_config_effective", repo)
+    assert r.returncode == 0, r.stderr
+    effective = yaml.safe_load(r.stdout)
+    assert effective["perf_nr_requests"] == 0
+    assert effective["xiraid_skip_install"] is True
 
 
 def test_save_preset_copies_site_yml_as_the_playbook(tmp_path: Path):

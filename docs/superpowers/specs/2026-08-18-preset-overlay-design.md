@@ -254,14 +254,34 @@ configuration — the inverse of what the function is for.
 
 New semantics: a saved preset is the **overlay, decomposed**.
 
-- Every key in the merged overlay is routed to the preset file belonging to the
-  role whose `defaults/main.yml` defines it, using the same key→role map the
-  §9 subset test builds. A key no role defines is an error, reported rather than
-  written, because it cannot have had any effect.
-- `netplan.yaml.j2` is copied from `.xinas-local/` when `net_netplan_template`
-  is set in the overlay, and from the role's template otherwise.
-- `playbook.yml` is copied from `playbooks/site.yml`, whose role list is
-  unmodified by construction (§4).
+- A key owned by one of the four roles with a dedicated preset file
+  (`net_controllers`, `raid_fs`, `nvme_namespace`, `exports`) is routed to
+  that file, using the same key→role map the §9 subset test builds.
+- A key owned by any other role — `perf_tuning`'s `perf_disable_cpupower` /
+  `perf_nr_requests`, `common`'s `xinas_hostname` — or by no role default at
+  all (`xiraid_skip_install`, which appears only in `playbooks/site.yml`'s
+  `xiraid_classic` guard, never in a role's `defaults/main.yml`) is written
+  into the saved `playbook.yml`'s `vars:` instead. `xinas_apply_preset`
+  already merges that block into the overlay (§4) for exactly this reason —
+  it is how `xinnorVM`'s own `perf_disable_cpupower` / `perf_nr_requests`
+  apply today — so the round trip is symmetric rather than a one-way loss.
+  The key is still named on stderr, since routing through the fallback
+  bucket is worth telling the operator about, but the value itself is not
+  dropped.
+- `net_netplan_template` is the one key that is always dropped, never
+  written anywhere, with a reported note. A preset may not ship
+  `netplan.yaml.j2` (§5), and the manual-mode template file it would point
+  at is never copied into the preset either, so saving the key would write a
+  pointer to a file the preset does not carry — dangling the moment the
+  preset is applied on another node, or even back on the same node once
+  pool mode is re-enabled (§5). The applying node always falls back to
+  `net_controllers`' own template instead, which is correct because a
+  preset can never carry a different one. (Revision 2 said the template was
+  copied out of `.xinas-local/` when the key was set; that contradicted §5,
+  was never implemented that way, and is corrected here — see §14.)
+- `playbook.yml` is copied from `playbooks/site.yml` (whose role list is
+  unmodified by construction, §4), then has the second bullet's keys merged
+  into its `vars:`.
 
 Keys that came from `10-preset.yml` and keys from `20-local.yml` are written
 identically; a saved preset is a flat statement of desired state, not a record
