@@ -168,6 +168,61 @@ and MUST exit `0`. Exit code `2` from either menu MUST NOT be surfaced
 to the user as an install failure at any point in the
 `install.sh` → `prepare_system.sh` → menu call chain.
 
+### 2.8 Dialog cancellation contract (`configure_*.sh`)
+
+`lib/menu_lib.sh`'s `menu_select` and `input_box` return **1** when the
+operator presses Esc, and every dialog they draw advertises that in its
+footer ("Esc Cancel"). Esc means **abandon this sub-dialog and return to
+the calling menu** — never "terminate the tool".
+
+This binds the interactive editors that dispatch sub-dialogs from a
+top-level `case` branch under `set -e` / `set -euo pipefail`:
+[configure_network.sh](../../configure_network.sh),
+[configure_raid.sh](../../configure_raid.sh),
+[configure_nfs_exports.sh](../../configure_nfs_exports.sh).
+
+**Requirement:** a cancelled dialog MUST NOT let the prompt's exit status
+escape the function that drew it.
+
+```bash
+value=$(input_box …) || return      # WRONG
+value=$(input_box …) || return 0    # correct
+```
+
+A **bare** `return` returns the exit status of the last command run — the
+failed command substitution, i.e. `1`. Because these functions are invoked
+as plain simple commands from a `case` branch (not gated by `if` or `||`),
+that `1` propagates out of the `case`, out of the enclosing `while` loop,
+and errexit terminates the process. The operator sees the whole editor
+vanish, with no message on stdout or stderr and a bare nonzero exit — the
+same silent signature as any other unguarded errexit abort.
+
+`break` is exempt: it discards the triggering command's status, so
+`choice=$(menu_select …) || break` on a top-level menu loop is already
+safe and needs no change.
+
+**Cancelling must not leave a half-applied state.** Where a function has
+already committed a side effect before the cancelled prompt, Esc has to
+undo it. `configure_manual()` disables `net_ip_pool_enabled` on entry, so
+Esc at its interface picker discards the staged interface list and falls
+through to the "nothing configured" guard, which re-enables pool mode and
+leaves `netplan.yaml.j2` untouched. Returning straight out instead would
+strand every NIC: pool mode off, and no manual addresses to replace it.
+The picker offers an explicit "Finish" entry to commit, so Esc discards
+staged edits rather than saving them.
+
+The same hazard applies to any helper these editors call as a plain
+command, not just to dialogs. `backup_if_changed()` opens with
+`[ -f "$file" ] || return`, which hands `[ -f ]`'s own `1` to errexit when
+the file is absent; every call site happens to guarantee existence today,
+so it is latent rather than live, but it is the identical failure. Spell
+the status out there too.
+
+Regression coverage:
+[tests/test_config_editor_esc_cancel.py](../../tests/test_config_editor_esc_cancel.py)
+drives each real editor against a stubbed `lib/menu_lib.sh`, scripts an
+Esc, and asserts the menu is re-entered afterwards.
+
 ---
 
 ## 3. Parameters set by each playbook / role
