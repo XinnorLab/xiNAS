@@ -473,8 +473,12 @@ setting until it is destroyed and rebuilt under an explicit, confirmed
 `xicli raid modify`, but the control path currently rejects it as create-only — that was
 verified against the 4.3.1 gRPC descriptor and has not been re-checked on 4.4.)
 
-Two role variables control it, both mirrored in the shipping presets (a preset replaces
-the role's `defaults/main.yml` wholesale, so an unmirrored default is lost at preset-apply):
+Two role variables control it. Both shipping presets happen to set them to the same
+values the role default already uses — under the configuration-overlay model
+([Installer/spec.md §1.0](spec.md#10-the-configuration-layer-model)) that mirroring is
+redundant rather than required: a preset key merges on top of the role default instead
+of replacing the file, so a key a preset does not set simply falls back to the role
+default instead of being lost:
 
 | Variable | Default | Meaning |
 |---|---|---|

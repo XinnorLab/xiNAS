@@ -310,6 +310,18 @@ frozen-snapshot problem through the migration itself. The path list is fixed;
 no blanket `git checkout .`, and unrelated local modifications are reported,
 not discarded.
 
+**Deferred (2026-08-19).** This secondary path was never implemented — no
+task in the execution plan built it, and `lib/xinas_config.sh` contains no
+code matching the paragraph above. Only the marker-based bridge (steps 1-3)
+shipped. Recorded in [docs/TODO.md](../../TODO.md) ("the design's secondary
+repair path..."), with the reasoning for deferring rather than adding a task:
+after Tasks 5-6 of this plan, nothing writes the six tracked paths at runtime
+any more, so a dirty tree on one of them can now only be legacy state —
+which the next update's forced checkout cleans regardless, while the marker
+bridge separately restores the preset selection. This paragraph stands as
+the design intent for whoever picks the work back up, not as a description
+of what ships today.
+
 ## 10. `xinas_history`
 
 `xinas_history/collector.py:16` lists `CONFIG_SOURCES` — the six role

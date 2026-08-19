@@ -95,6 +95,18 @@ Two records:
 | `exports/defaults/main.yml` | exports role defaults |
 | `nfs_server/defaults/main.yml` | nfs_server role defaults |
 | `playbooks/site.yml` | top-level playbook |
+| `playbooks/group_vars/all/10-preset.yml` | preset overlay — written by preset apply |
+| `playbooks/group_vars/all/20-local.yml` | local overlay — written by the config editors, wins over the preset overlay |
+| `.xinas-local/netplan.yaml.j2` | live netplan override — written by `configure_network.sh` manual mode |
+
+The first eight rows are the immutable release base: role defaults, the
+tracked netplan template, and the top-level playbook change only across a
+release, never at runtime. The last three rows are the live configuration
+overlay
+([docs/superpowers/specs/2026-08-18-preset-overlay-design.md](../superpowers/specs/2026-08-18-preset-overlay-design.md)
+§3, §5, §10) that now carries the desired state those files used to carry
+directly — see [specs.md §2](specs.md#2-configuration-files-collected) for
+the full collection contract.
 
 ### 5.2 Profile Metadata
 
@@ -338,6 +350,9 @@ Per-snapshot detail view:
     exports.defaults.yml
     nfs_server.defaults.yml
     playbook.site.yml
+    overlay.preset.yml       # if a preset has been applied
+    overlay.local.yml        # if a config editor has written 20-local.yml
+    netplan.live.j2          # if manual netplan mode is active
     runtime/
       raid-show.json
       pool-show.json
