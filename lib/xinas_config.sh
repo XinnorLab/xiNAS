@@ -131,9 +131,18 @@ xinas_apply_preset() {
 
     # The preset's playbook contributes its play vars only; its role list is
     # pinned equal to playbooks/site.yml by tests/test_preset_playbooks.py.
+    # Exit status checked for the same reason as the merge below: an
+    # unchecked failure here would silently drop the playbook's vars (or,
+    # with no other var files present, wipe the overlay down to nothing)
+    # while still returning rc=0 - every real caller invokes this function
+    # under `||`, which suppresses errexit for its entire body, so nothing
+    # here fails the function on its own unless it is checked explicitly.
     local playvars=""
     if [ -f "$pdir/playbook.yml" ]; then
-        playvars=$(yq eval '.[0].vars // {}' "$pdir/playbook.yml")
+        if ! playvars=$(yq eval '.[0].vars // {}' "$pdir/playbook.yml"); then
+            echo "preset $preset: failed to read playbook vars" >&2
+            return 1
+        fi
         if [ "$playvars" != "{}" ] && [ -n "$playvars" ]; then
             local tmp_pv
             tmp_pv=$(mktemp); printf '%s\n' "$playvars" > "$tmp_pv"

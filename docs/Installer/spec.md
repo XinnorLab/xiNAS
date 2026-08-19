@@ -737,11 +737,12 @@ overlay, for every way it can fail:
 - **`3`** — the preset ships a `netplan.yaml.j2`. A preset network
   template is not supported: it would replace the `net_controllers`
   role's dynamically generated netplan and strand every NIC.
-- **`1`** — merging the preset's var files failed (e.g. one of them is
-  not valid YAML), or writing the merged result to
-  `10-preset.yml` failed. The previous overlay is left exactly as it
-  was — the merge is validated in memory before anything is written,
-  so a bad preset cannot truncate or partially overwrite a good one.
+- **`1`** — reading the preset's playbook `vars:` failed, merging the
+  preset's var files failed (e.g. one of them is not valid YAML), or
+  writing the merged result to `10-preset.yml` failed. The previous
+  overlay is left exactly as it was — every one of these is checked and
+  validated in memory before anything is written, so a bad preset
+  cannot truncate or partially overwrite a good one.
 
 `autoinstall.sh` MUST check `xinas_apply_preset`'s exit status and MUST
 abort (fatal, non-zero exit) on any non-zero return, rather than

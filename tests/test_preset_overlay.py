@@ -130,9 +130,23 @@ def test_apply_preset_merges_every_var_file(tmp_path: Path):
 
 
 def test_apply_preset_does_not_delete_keys_it_omits(tmp_path: Path):
-    """The whole point: `survivor` is in the defaults and in no preset file."""
+    """The whole point: `survivor` is in the defaults and in no preset file.
+
+    Checking only the merged view is not enough: a no-op stub never touches
+    the overlay at all, and `survivor` would still read back correctly from
+    role defaults alone with nothing having actually been applied - passing
+    this test having done no work. Assert the preset layer was genuinely
+    written with the preset's own content first, so a no-op cannot pass.
+    """
     repo = _preset_repo(tmp_path)
-    _run("xinas_apply_preset vm", repo)
+    r = _run("xinas_apply_preset vm", repo)
+    assert r.returncode == 0, r.stderr
+    layer_path = repo / "playbooks/group_vars/all/10-preset.yml"
+    assert layer_path.exists(), "a no-op stub would never create the preset layer"
+    layer = yaml.safe_load(layer_path.read_text())
+    assert layer.get("demo_key") == "from_preset"  # proof the preset really landed
+    assert "survivor" not in layer  # proof it came from defaults, not the preset
+
     r = _run("xinas_config_get survivor", repo)
     assert r.stdout.strip() == "true"
 
@@ -145,8 +159,19 @@ def test_apply_preset_replaces_rather_than_accumulates(tmp_path: Path):
 
 
 def test_apply_preset_keeps_operator_edits(tmp_path: Path):
+    """Checking only the merged view is not enough: a no-op stub leaves the
+    preset layer absent, so the local layer's demo_key would win by default
+    with nothing to actually override - passing this test without the
+    preset ever having landed. Assert the preset layer was genuinely
+    written with its own, conflicting value for demo_key first, so this
+    exercises a real conflict between the two layers, not an absent one.
+    """
     repo = _preset_repo(tmp_path)
     _run("xinas_config_set local demo_key from_operator; xinas_apply_preset vm", repo)
+    layer_path = repo / "playbooks/group_vars/all/10-preset.yml"
+    layer = yaml.safe_load(layer_path.read_text())
+    assert layer.get("demo_key") == "from_preset"  # proof the preset really landed and conflicts
+
     r = _run("xinas_config_get demo_key", repo)
     assert r.stdout.strip() == "from_operator"
 
@@ -195,3 +220,26 @@ def test_apply_preset_failure_leaves_the_previous_overlay_untouched(tmp_path: Pa
     r = _run("xinas_apply_preset vm || echo RC=$?", repo)
     assert "RC=0" not in r.stdout
     assert layer_path.read_text() == good
+
+
+def test_apply_preset_fails_closed_on_a_malformed_playbook(tmp_path: Path):
+    """Regression: the playbook-vars read (`playvars=$(yq eval ...)`) had no
+    exit-status check of its own, unlike the var-file merge a few lines
+    below it. yq prints its parse error to stderr and nothing to stdout, so
+    a malformed playbook.yml silently read back as `playvars=""` - which
+    fails the `[ -n "$playvars" ]` guard exactly like "this playbook has no
+    vars" does, so the broken file was dropped without a trace. Here the
+    preset also ships a good raid_fs.yml, so the failure is partial-corruption
+    (raid_fs.yml's key would land, the playbook's would silently not) rather
+    than a full wipe - the more dangerous of the two shapes, since the run
+    would have looked completely successful.
+    """
+    repo = _preset_repo(tmp_path)
+    (repo / "presets/vm/playbook.yml").write_text(
+        "---\n- hosts: storage_nodes\n  vars: [this is not, a map: broken\n  roles: [demo]\n"
+    )
+    r = _run("xinas_apply_preset vm || echo RC=$?", repo)
+    assert "RC=0" not in r.stdout
+    assert "RC=" in r.stdout
+    # Not just the return code: nothing should have been written at all.
+    assert not (repo / "playbooks/group_vars/all/10-preset.yml").exists()

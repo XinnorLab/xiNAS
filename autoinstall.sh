@@ -230,7 +230,7 @@ fi
 
 # ── Apply the preset (mirrors the menu's apply_preset) ────────────────────────
 step "Applying preset: $preset"
-. "$(dirname "$0")/lib/xinas_config.sh"
+. "$SCRIPT_DIR/lib/xinas_config.sh"
 xinas_apply_preset "$preset_dir_name" || die "preset apply failed: $preset_dir_name"
 ok "Preset applied"
 

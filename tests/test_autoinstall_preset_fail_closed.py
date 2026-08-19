@@ -58,6 +58,7 @@ def test_apply_failure_aborts_before_preset_applied(tmp_path):
     """
     snippet = (
         "set -uo pipefail\n"
+        f'SCRIPT_DIR="{REPO}"\n'
         f'REPO_DIR="{tmp_path}"\n'
         'preset="nope"\n'
         'preset_dir_name="nope"\n'
@@ -84,6 +85,7 @@ def test_apply_success_reaches_preset_applied(tmp_path):
 
     snippet = (
         "set -uo pipefail\n"
+        f'SCRIPT_DIR="{REPO}"\n'
         f'REPO_DIR="{tmp_path}"\n'
         'preset="existing-raid"\n'
         'preset_dir_name="default"\n'
