@@ -8,7 +8,9 @@ source "$SCRIPT_DIR/lib/menu_lib.sh"
 
 backup_if_changed() {
     local file="$1" newfile="$2" ts
-    [ -f "$file" ] || return
+    # `return 0`: a bare `return` would surface `[ -f ]`'s own 1 to the
+    # caller, where errexit kills the script. See docs/Installer/spec.md 2.8.
+    [ -f "$file" ] || return 0
     if ! cmp -s "$file" "$newfile"; then
         ts=$(date +%Y%m%d%H%M%S)
         cp "$file" "${file}.${ts}.bak"
@@ -28,9 +30,9 @@ edit_export() {
     clients=$(yq -r ".exports[] | select(.path==\"$path\") | .clients" "$vars_file")
     options=$(yq -r ".exports[] | select(.path==\"$path\") | .options" "$vars_file")
 
-    clients=$(input_box "Edit Export" "Clients for $path:\n\nExamples:\n  *           = everyone\n  192.168.1.0/24 = specific network\n  hostname    = specific host" "$clients") || return
+    clients=$(input_box "Edit Export" "Clients for $path:\n\nExamples:\n  *           = everyone\n  192.168.1.0/24 = specific network\n  hostname    = specific host" "$clients") || return 0
 
-    options=$(input_box "Edit Export" "Options for $path:\n\nCommon options:\n  rw,sync,no_subtree_check,no_root_squash" "$options") || return
+    options=$(input_box "Edit Export" "Options for $path:\n\nCommon options:\n  rw,sync,no_subtree_check,no_root_squash" "$options") || return 0
 
     tmp=$(mktemp)
     yq e "(.exports[] | select(.path == \"$path\") | .clients) = \"${clients}\" | (.exports[] | select(.path == \"$path\") | .options) = \"${options}\"" "$vars_file" > "$tmp"
@@ -43,12 +45,12 @@ edit_export() {
 add_export() {
     local path clients options tmp
 
-    path=$(input_box "Add Export" "Export path:\n\nExample: /mnt/data/shared") || return
+    path=$(input_box "Add Export" "Export path:\n\nExample: /mnt/data/shared") || return 0
     [ -z "$path" ] && return
 
-    clients=$(input_box "Add Export" "Clients for $path:\n\nExamples:\n  *           = everyone\n  192.168.1.0/24 = specific network" "*") || return
+    clients=$(input_box "Add Export" "Clients for $path:\n\nExamples:\n  *           = everyone\n  192.168.1.0/24 = specific network" "*") || return 0
 
-    options=$(input_box "Add Export" "Options for $path:\n\nDefault: rw,sync,no_root_squash" "rw,sync,no_root_squash,no_subtree_check") || return
+    options=$(input_box "Add Export" "Options for $path:\n\nDefault: rw,sync,no_root_squash" "rw,sync,no_root_squash,no_subtree_check") || return 0
 
     tmp=$(mktemp)
     yq ".exports += [{\"path\": \"${path}\", \"clients\": \"${clients}\", \"options\": \"${options}\"}]" "$vars_file" > "$tmp"

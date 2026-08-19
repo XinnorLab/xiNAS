@@ -8,7 +8,9 @@ source "$SCRIPT_DIR/lib/menu_lib.sh"
 
 backup_if_changed() {
     local file="$1" newfile="$2" ts
-    [ -f "$file" ] || return
+    # `return 0`: a bare `return` would surface `[ -f ]`'s own 1 to the
+    # caller, where errexit kills the script. See docs/Installer/spec.md 2.8.
+    [ -f "$file" ] || return 0
     if ! cmp -s "$file" "$newfile"; then
         ts=$(date +%Y%m%d%H%M%S)
         cp "$file" "${file}.${ts}.bak"
@@ -53,7 +55,10 @@ get_spare_devices() {
 edit_spare_pool() {
     local current new tmp
     current="$(get_spare_devices)"
-    new=$(input_box "Spare Pool" "Space-separated devices for spare pool:" "$current") || return
+    # `return 0`, not a bare `return`: input_box exits 1 on Esc, and a bare
+    # `return` would hand that 1 back to the `case` branch that called this
+    # function, where errexit turns a cancelled dialog into a dead script.
+    new=$(input_box "Spare Pool" "Space-separated devices for spare pool:" "$current") || return 0
     tmp=$(mktemp)
     # Ensure the spare pool has a name and update its device list
     NEW_LIST="$new" yq eval '.xiraid_spare_pools |= [(.[0] // {"name":"sp1"}) | .devices = (env(NEW_LIST) | split(" "))]' "$vars_file" > "$tmp"
@@ -91,7 +96,7 @@ edit_devices() {
         msg_box "Not Defined" "No ${label} array defined"
         return
     fi
-    new=$(input_box "${label} Array" "Space-separated devices for ${label}:" "$current") || return
+    new=$(input_box "${label} Array" "Space-separated devices for ${label}:" "$current") || return 0
     tmp=$(mktemp)
     NEW_LIST="$new" yq "(.xiraid_arrays[] | select(.level==${level})).devices = (env(NEW_LIST) | split(\" \") )" "$vars_file" > "$tmp"
     backup_if_changed "$vars_file" "$tmp"
