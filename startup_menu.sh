@@ -284,13 +284,11 @@ show_playbook_info() {
     fi
 }
 
-# Show NFS share configuration based on exports role defaults
+# Show NFS share configuration based on the effective exports config
+# (role defaults, overlaid with any preset/operator overrides).
 configure_nfs_shares() {
-    local vars_file="collection/roles/exports/defaults/main.yml"
-    if [ ! -f "$vars_file" ]; then
-        msg_box "Error" "File $vars_file not found"
-        return
-    fi
+    local vars_file="$TMP_DIR/effective_exports.yml"
+    xinas_config_effective > "$vars_file"
     local share_start
     share_start=$(grep -n '^exports:' "$vars_file" | cut -d: -f1)
     local tmp="$TMP_DIR/nfs_info"

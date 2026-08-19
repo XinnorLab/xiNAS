@@ -425,15 +425,22 @@ reuse_existing_arrays() {
         return 1
     fi
 
-    # Write configuration via yq
-    local auto_vars="$REPO_DIR/collection/roles/nvme_namespace/defaults/main.yml"
-    local raid_vars="$REPO_DIR/collection/roles/raid_fs/defaults/main.yml"
-    local xiraid_vars="$REPO_DIR/collection/roles/xiraid_classic/defaults/main.yml"
+    # All configuration writes land in the overlay; role defaults are read-only.
+    local auto_vars="$XINAS_LOCAL_LAYER"
+    local raid_vars="$XINAS_LOCAL_LAYER"
+    local xiraid_vars="$XINAS_LOCAL_LAYER"
 
-    yq -i '.nvme_auto_namespace = false' "$auto_vars"
-    yq -i '.xiraid_skip_install = true' "$xiraid_vars"
-    yq -i '.xiraid_force_metadata = false' "$raid_vars"
-    yq -i '.xfs_force_mkfs = false' "$raid_vars"
+    # xinas_config_set (rather than the raw `yq -i "..." "$auto_vars"` this
+    # replaced) because these four are the first writes of this run: the
+    # overlay file does not exist yet on a fresh checkout, and a raw
+    # `yq -i` on a missing file errors out ("no such file or directory")
+    # rather than creating it. xinas_config_set creates it. The two
+    # structural yq -i calls below run after these, so by the time they
+    # execute the file is already there.
+    xinas_config_set local nvme_auto_namespace false
+    xinas_config_set local xiraid_skip_install true
+    xinas_config_set local xiraid_force_metadata false
+    xinas_config_set local xfs_force_mkfs false
 
     # Build xiraid_arrays YAML
     local data_devices_yaml=""
@@ -472,7 +479,7 @@ reuse_existing_arrays() {
     fs_yaml+="    mountpoint: \"$mountpoint\""$'\n'
     fs_yaml+="    mount_opts: \"logdev=/dev/xi_${log_array},noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k\""$'\n'
 
-    # Write arrays and filesystems to raid_fs defaults
+    # Write arrays and filesystems to the overlay
     local combined_yaml="${arrays_yaml}${fs_yaml}"
     echo "$combined_yaml" > "$TMP_DIR/raid_config.yml"
 

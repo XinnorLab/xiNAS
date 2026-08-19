@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/menu_lib.sh"
+source "$SCRIPT_DIR/lib/xinas_config.sh"
 
 backup_if_changed() {
     local file="$1" newfile="$2" ts
@@ -15,23 +16,20 @@ backup_if_changed() {
     fi
 }
 
-vars_file="collection/roles/exports/defaults/main.yml"
-
-if [ ! -f "$vars_file" ]; then
-    echo "Error: $vars_file not found" >&2
-    exit 1
-fi
+# All configuration writes land in the overlay; role defaults are read-only.
+vars_file="$XINAS_LOCAL_LAYER"
 
 edit_export() {
     local path="$1"
     local clients options tmp
-    clients=$(yq -r ".exports[] | select(.path==\"$path\") | .clients" "$vars_file")
-    options=$(yq -r ".exports[] | select(.path==\"$path\") | .options" "$vars_file")
+    clients=$(xinas_config_effective | yq -r ".exports[] | select(.path==\"$path\") | .clients" -)
+    options=$(xinas_config_effective | yq -r ".exports[] | select(.path==\"$path\") | .options" -)
 
     clients=$(input_box "Edit Export" "Clients for $path:\n\nExamples:\n  *           = everyone\n  192.168.1.0/24 = specific network\n  hostname    = specific host" "$clients") || return
 
     options=$(input_box "Edit Export" "Options for $path:\n\nCommon options:\n  rw,sync,no_subtree_check,no_root_squash" "$options") || return
 
+    xinas_config_seed_local exports
     tmp=$(mktemp)
     yq e "(.exports[] | select(.path == \"$path\") | .clients) = \"${clients}\" | (.exports[] | select(.path == \"$path\") | .options) = \"${options}\"" "$vars_file" > "$tmp"
     backup_if_changed "$vars_file" "$tmp"
@@ -50,6 +48,7 @@ add_export() {
 
     options=$(input_box "Add Export" "Options for $path:\n\nDefault: rw,sync,no_root_squash" "rw,sync,no_root_squash,no_subtree_check") || return
 
+    xinas_config_seed_local exports
     tmp=$(mktemp)
     yq ".exports += [{\"path\": \"${path}\", \"clients\": \"${clients}\", \"options\": \"${options}\"}]" "$vars_file" > "$tmp"
     backup_if_changed "$vars_file" "$tmp"
@@ -65,10 +64,10 @@ if [ "${1:-}" = "--edit" ] && [ -n "${2:-}" ]; then
 fi
 
 while true; do
-    mapfile -t paths < <(yq -r '.exports[].path' "$vars_file")
+    mapfile -t paths < <(xinas_config_effective | yq -r '.exports[].path' -)
     menu_items=()
     for p in "${paths[@]}"; do
-        clients=$(yq -r ".exports[] | select(.path==\"$p\") | .clients" "$vars_file")
+        clients=$(xinas_config_effective | yq -r ".exports[] | select(.path==\"$p\") | .clients" -)
         menu_items+=("$p" "clients: $clients")
     done
     menu_items+=("Add" "Add new export")

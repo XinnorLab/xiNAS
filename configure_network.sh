@@ -5,9 +5,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/menu_lib.sh"
+source "$SCRIPT_DIR/lib/xinas_config.sh"
 
-ROLE_DEFAULTS="$SCRIPT_DIR/collection/roles/net_controllers/defaults/main.yml"
-ROLE_TEMPLATE="$SCRIPT_DIR/collection/roles/net_controllers/templates/netplan.yaml.j2"
+# Manual mode renders from a copy under .xinas-local/, never the tracked role
+# template, and points the role at it via net_netplan_template (Task 4).
+LIVE_TEMPLATE="$XINAS_LOCAL_ARTEFACTS/netplan.yaml.j2"
 
 # Check for yq
 if ! command -v yq &>/dev/null; then
@@ -46,43 +48,24 @@ valid_ipv4_cidr() {
     return 0
 }
 
-# Get current IP pool settings
+# Get current IP pool settings. xinas_config_get's rc=1 ("no layer defines
+# this key") falls back to the same literals the role default itself ships,
+# in case the effective document is somehow missing them.
 get_pool_settings() {
-    if [[ -f "$ROLE_DEFAULTS" ]]; then
-        pool_enabled=$(yq '.net_ip_pool_enabled // true' "$ROLE_DEFAULTS")
-        pool_start=$(yq '.net_ip_pool_start // "10.10.1.1"' "$ROLE_DEFAULTS")
-        pool_end=$(yq '.net_ip_pool_end // "10.10.255.1"' "$ROLE_DEFAULTS")
-        pool_prefix=$(yq '.net_ip_pool_prefix // 24' "$ROLE_DEFAULTS")
-    else
-        pool_enabled=true
-        pool_start="10.10.1.1"
-        pool_end="10.10.255.1"
-        pool_prefix=24
-    fi
+    pool_enabled=$(xinas_config_get net_ip_pool_enabled) || pool_enabled=true
+    pool_start=$(xinas_config_get net_ip_pool_start) || pool_start="10.10.1.1"
+    pool_end=$(xinas_config_get net_ip_pool_end) || pool_end="10.10.255.1"
+    pool_prefix=$(xinas_config_get net_ip_pool_prefix) || pool_prefix=24
 }
 
-# Save IP pool settings
+# Targeted writes, not a document rewrite: the previous `cat >` emitted a fixed
+# eight-key file and silently dropped every other key in the role defaults.
 save_pool_settings() {
     local start="$1" end="$2" prefix="$3"
-
-    cat > "$ROLE_DEFAULTS" <<EOF
----
-# Automatic IP pool allocation
-net_ip_pool_enabled: true
-net_ip_pool_start: "$start"
-net_ip_pool_end: "$end"
-net_ip_pool_prefix: $prefix
-
-# Interface detection
-net_detect_infiniband: true
-net_detect_mlx5: true
-
-# Manual IP overrides
-net_manual_ips: {}
-
-# MTU (0 = auto-detect: 4092 for InfiniBand, 9000 for RoCE/Ethernet)
-net_mtu: 0
-EOF
+    xinas_config_set local net_ip_pool_enabled true
+    xinas_config_set local net_ip_pool_start "\"$start\""
+    xinas_config_set local net_ip_pool_end "\"$end\""
+    xinas_config_set local net_ip_pool_prefix "$prefix"
 }
 
 # Configure IP Pool
@@ -162,15 +145,13 @@ configure_ip_pool() {
     if [[ $iface_count -gt 0 ]]; then
         capacity_note="\n\nDetected interfaces: $iface_count\nPool capacity: $pool_slots subnets"
     fi
-    msg_box "IP Pool Configured" "IP Pool configured:\n\nRange: $new_start - $new_end\nPrefix: /$new_prefix\n\nInterfaces will be auto-assigned:\n  Interface 1: ${new_start}/${new_prefix}\n  Interface 2: next subnet\n  etc.${capacity_note}\n\nSaved to: $ROLE_DEFAULTS"
+    msg_box "IP Pool Configured" "IP Pool configured:\n\nRange: $new_start - $new_end\nPrefix: /$new_prefix\n\nInterfaces will be auto-assigned:\n  Interface 1: ${new_start}/${new_prefix}\n  Interface 2: next subnet\n  etc.${capacity_note}\n\nSaved to: $XINAS_LOCAL_LAYER"
 }
 
 # Configure interfaces manually (legacy mode)
 configure_manual() {
     # Disable pool mode
-    if [[ -f "$ROLE_DEFAULTS" ]]; then
-        yq -i '.net_ip_pool_enabled = false' "$ROLE_DEFAULTS"
-    fi
+    xinas_config_set local net_ip_pool_enabled false
 
     # Gather available interfaces excluding loopback
     readarray -t interfaces < <(ip -o link show | awk -F': ' '{print $2}' | grep -v lo)
@@ -235,9 +216,13 @@ configure_manual() {
     # interface name would silently strand every NIC without an address, so
     # leave it alone and hand the box back to pool mode.
     if [[ ${#configs[@]} -eq 0 ]]; then
-        if [[ -f "$ROLE_DEFAULTS" ]]; then
-            yq -i '.net_ip_pool_enabled = true' "$ROLE_DEFAULTS"
-        fi
+        xinas_config_set local net_ip_pool_enabled true
+        # Drop a stale manual template override so it cannot outlive manual
+        # mode: without this, re-enabling pool mode here would still leave
+        # net_netplan_template pointing at a leftover manual config from an
+        # earlier session.
+        yq -i 'del(.net_netplan_template)' "$XINAS_LOCAL_LAYER" 2>/dev/null || true
+        rm -f "$LIVE_TEMPLATE"
         msg_box "No Changes" "No interfaces were configured.\n\nThe netplan template was left untouched and IP pool mode is still enabled."
         return
     fi
@@ -259,10 +244,12 @@ EOF
 EOF
     done
 
-    backup_if_changed "$ROLE_TEMPLATE" "$tmp_file"
-    mv "$tmp_file" "$ROLE_TEMPLATE"
+    mkdir -p "$XINAS_LOCAL_ARTEFACTS"
+    backup_if_changed "$LIVE_TEMPLATE" "$tmp_file"
+    mv "$tmp_file" "$LIVE_TEMPLATE"
+    xinas_config_set local net_netplan_template "\"$LIVE_TEMPLATE\""
 
-    msg_box "Manual Config Saved" "Manual configuration saved to:\n$ROLE_TEMPLATE\n\nNote: IP pool is DISABLED in manual mode."
+    msg_box "Manual Config Saved" "Manual configuration saved to:\n$LIVE_TEMPLATE\n\nNote: IP pool is DISABLED in manual mode."
 }
 
 # View current configuration

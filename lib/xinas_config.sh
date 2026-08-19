@@ -183,3 +183,57 @@ xinas_apply_preset() {
 
     echo "$preset" > /opt/xiNAS/.xinas_applied_preset 2>/dev/null || true
 }
+
+# Read-modify-write editors need the value the operator sees, not the release
+# default. Seed exactly one key so the overlay stays an override set.
+#
+# Two problems surfaced while wiring this into the real editors (Task 5),
+# neither of which the obvious `xinas_config_set local "$key" "$value"`
+# one-liner survives:
+#
+#   - `.key // "ABSENT"` folds a present `false` to "absent" - the exact trap
+#     xinas_config_get's own has() check exists to avoid (see its comment
+#     above). nvme_auto_namespace is a plain boolean toggle, so a preset or a
+#     prior toggle that leaves it `false` would read back as "nothing to
+#     seed" and silently skip seeding it, for both the local-layer presence
+#     check and the effective-value lookup. has() is used for both instead.
+#
+#   - xiraid_arrays, xiraid_spare_pools and exports are lists of maps; their
+#     effective value is multi-line YAML. Passing that through
+#     xinas_config_set hits its documented literal-string fallback for any
+#     value containing a newline and lands in the local layer as an opaque
+#     block-scalar string, not a sequence. Confirmed by hand: seed a local
+#     layer that way, then run configure_raid.sh's own edit_devices() write
+#     against it - `.xiraid_arrays[]` on a string splats to nothing, so the
+#     select/assign matches nothing, yq exits 0, and the operator's edit is
+#     dropped with no error anywhere. load() reads a temp copy of the
+#     effective document as real YAML instead of round-tripping it through a
+#     shell/env-var scalar, so both scalar and structural values come back
+#     typed the way they actually are.
+#
+# Always leaves $XINAS_LOCAL_LAYER existing as a valid YAML document, even
+# when there is nothing to seed: every caller added in Task 5 chains a raw
+# `yq "..." "$XINAS_LOCAL_LAYER" > tmp` write immediately afterward, and that
+# read fails outright (yq exits nonzero, no output) against a missing file.
+xinas_config_seed_local() {
+    local key="$1" has_local has_eff tmp_eff tmp_out
+
+    mkdir -p "$(dirname "$XINAS_LOCAL_LAYER")"
+    [ -f "$XINAS_LOCAL_LAYER" ] || printf -- '---\n' > "$XINAS_LOCAL_LAYER"
+
+    has_local=$(yq eval "has(\"${key}\")" "$XINAS_LOCAL_LAYER") || return 2
+    if [ "$has_local" = "true" ]; then return 0; fi
+
+    has_eff=$(xinas_config_effective | yq eval "has(\"${key}\")" -) || return 2
+    if [ "$has_eff" != "true" ]; then return 0; fi
+
+    tmp_eff=$(mktemp)
+    xinas_config_effective > "$tmp_eff"
+    tmp_out=$(mktemp)
+    if ! yq eval ".${key} = load(\"${tmp_eff}\").${key}" "$XINAS_LOCAL_LAYER" > "$tmp_out"; then
+        rm -f "$tmp_eff" "$tmp_out"
+        return 2
+    fi
+    rm -f "$tmp_eff"
+    mv "$tmp_out" "$XINAS_LOCAL_LAYER"
+}
