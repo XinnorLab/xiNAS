@@ -106,7 +106,8 @@ def test_template_src_is_a_variable():
     srcs = [
         t["ansible.builtin.template"]["src"]
         for t in tasks
-        if isinstance(t, dict) and "ansible.builtin.template" in t
+        if isinstance(t, dict)
+        and "ansible.builtin.template" in t
         and str(t["ansible.builtin.template"].get("dest", "")).endswith("99-xinas.yaml")
     ]
     assert srcs, "no netplan deploy task found"
