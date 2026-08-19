@@ -237,3 +237,171 @@ xinas_config_seed_local() {
     rm -f "$tmp_eff"
     mv "$tmp_out" "$XINAS_LOCAL_LAYER"
 }
+
+# role -> preset filename. A role absent from this map has no preset file of
+# its own, so an overlay key it owns cannot round-trip through save/apply -
+# xinas_key_owner reports that key rather than guessing where to put it.
+_xinas_role_preset_file() {
+    case "$1" in
+        net_controllers) echo network.yml ;;
+        raid_fs)         echo raid_fs.yml ;;
+        nvme_namespace)  echo nvme_namespace.yml ;;
+        exports)         echo nfs_exports.yml ;;
+        *) return 1 ;;
+    esac
+}
+
+# Which preset file owns key $1: scan role defaults, in sorted role-name
+# order, for the first *mapped* role whose defaults/main.yml defines the key;
+# print its preset filename and return 0. A role that defines the key but has
+# no preset file of its own (see _xinas_role_preset_file) does not stop the
+# scan - a later, mapped role that also happens to define the same key name
+# still wins (two shipped role defaults collide on a key name today:
+# xinas_storage_reset is defined by both nvme_namespace and raid_fs, and both
+# are mapped, so this only matters if an unmapped role is ever added ahead of
+# a mapped one alphabetically). Prints nothing and returns 1 when no mapped
+# role owns the key.
+#
+# has() rather than the `//` alternative operator: same trap documented on
+# xinas_config_get above - a present `false` must read as "defined", not
+# "absent".
+xinas_key_owner() {
+    local key="$1" f role file has
+    while IFS= read -r f; do
+        if [ -z "$f" ]; then
+            continue
+        fi
+        if ! has=$(yq eval "has(\"${key}\")" "$f"); then
+            continue
+        fi
+        if [ "$has" = "true" ]; then
+            role=$(basename "$(dirname "$(dirname "$f")")")
+            if file=$(_xinas_role_preset_file "$role"); then
+                printf '%s\n' "$file"
+                return 0
+            fi
+        fi
+    done < <(find "$REPO_DIR/collection/roles" -path '*/defaults/main.yml' 2>/dev/null | sort)
+    return 1
+}
+
+# Decompose the live overlay (the preset layer + the local layer merged,
+# later wins - deliberately NOT role defaults, which is the release baseline
+# this whole design keeps out of a saved preset) back into
+# presets/<name>/*.yml, one file per owning role, plus playbook.yml copied
+# from the current playbooks/site.yml. A key no mapped role owns is named on
+# stderr and skipped - never guessed into an unrelated file. Replaces rather
+# than accumulates: a re-save under a name that already has preset files
+# starts from a clean slate for the four known preset filenames, so a key
+# dropped from the live overlay since the last save under this name does not
+# survive as a stale leftover.
+#
+# Every statement that can fail is checked explicitly with `if !` / `return`
+# rather than left for `set -e` to catch. This function's real callers -
+# startup_menu.sh's save_preset, mirroring the already-landed apply_preset
+# wrapper, and the guarded-call tests below - invoke it as
+# `out=$(xinas_save_preset ...) || rc=$?`, never as a bare statement. Per
+# documented bash behavior, a function executing inside such a guard (an if
+# condition, or the non-final side of && / ||, and a command substitution
+# feeding one does not exempt itself from this) has `errexit` suspended for
+# its ENTIRE body, not just the top-level call - confirmed by hand with a
+# throwaway probe function: a bare `false` partway through its loop, called
+# this exact way, let the loop run to completion and the function report
+# rc=0, while an identical bare top-level call correctly aborted at the
+# failure. A bare failing statement in here would therefore silently be
+# skipped under the calling convention production actually uses, and this
+# function would return whatever its last statement happened to produce -
+# easily 0 - even though a real write had failed. That gap is invisible to
+# any test that only calls this function bare, which is why one of the tests
+# below drives it through the guarded form instead.
+xinas_save_preset() {
+    local name="$1" pdir="$REPO_DIR/presets/$1" key file tmp overlay
+
+    if ! mkdir -p "$pdir"; then
+        echo "xinas_save_preset $name: failed to create $pdir" >&2
+        return 1
+    fi
+
+    # Best-effort: nothing later depends on these having succeeded, only on
+    # the files not existing with stale content from a previous save.
+    local rolefile
+    for rolefile in network.yml raid_fs.yml nvme_namespace.yml nfs_exports.yml; do
+        rm -f "$pdir/$rolefile" 2>/dev/null || true
+    done
+
+    local -a layers=()
+    if [ -f "$XINAS_PRESET_LAYER" ]; then layers+=("$XINAS_PRESET_LAYER"); fi
+    if [ -f "$XINAS_LOCAL_LAYER" ]; then layers+=("$XINAS_LOCAL_LAYER"); fi
+
+    overlay=$(mktemp)
+    if [ ${#layers[@]} -eq 0 ]; then
+        printf '%s\n' '{}' > "$overlay"
+    elif ! yq eval-all '. as $item ireduce ({}; . * $item)' "${layers[@]}" > "$overlay"; then
+        echo "xinas_save_preset $name: failed to read the configuration overlay" >&2
+        rm -f "$overlay"
+        return 1
+    fi
+
+    local keys_raw
+    if ! keys_raw=$(yq eval 'keys | .[]' "$overlay"); then
+        echo "xinas_save_preset $name: failed to enumerate overlay keys" >&2
+        rm -f "$overlay"
+        return 1
+    fi
+    local -a keys=()
+    mapfile -t keys <<< "$keys_raw"
+
+    for key in "${keys[@]}"; do
+        if [ -z "$key" ]; then
+            continue
+        fi
+
+        if ! file=$(xinas_key_owner "$key"); then
+            echo "skipped: no preset file owns '$key'" >&2
+            continue
+        fi
+
+        if [ ! -f "$pdir/$file" ]; then
+            if ! printf -- '---\n' > "$pdir/$file"; then
+                echo "xinas_save_preset $name: failed to create $pdir/$file" >&2
+                rm -f "$overlay"
+                return 1
+            fi
+        fi
+
+        tmp=$(mktemp)
+        # load() pulls the value out of the overlay file as a typed YAML
+        # node - the same pattern xinas_config_seed_local uses above, and
+        # for the same reason: routing a structural value (a list of maps
+        # such as xiraid_arrays or exports) through a shell variable and
+        # back via env()/from_yaml is not equivalent. Confirmed by hand:
+        # `XINAS_VALUE="$value" yq eval '... = (env(XINAS_VALUE) | from_yaml)'`
+        # - the shape this task's own earlier draft used - errors outright
+        # ("Error: EOF") on a multi-line list value, because env() already
+        # parses a value that merely *looks* scalar-shaped and from_yaml
+        # then receives an already-typed node instead of a string to parse.
+        # load() never round-trips the value through a shell/env string at
+        # all, so the failure mode does not exist.
+        if ! yq eval ".${key} = load(\"${overlay}\").${key}" "$pdir/$file" > "$tmp"; then
+            rm -f "$tmp" "$overlay"
+            echo "xinas_save_preset $name: failed to write '$key' into $file" >&2
+            return 1
+        fi
+        if ! mv "$tmp" "$pdir/$file"; then
+            rm -f "$tmp" "$overlay"
+            echo "xinas_save_preset $name: failed to update $pdir/$file" >&2
+            return 1
+        fi
+    done
+    rm -f "$overlay"
+
+    if ! cp "$REPO_DIR/playbooks/site.yml" "$pdir/playbook.yml"; then
+        echo "xinas_save_preset $name: failed to copy playbooks/site.yml" >&2
+        return 1
+    fi
+
+    if [ -f "$XINAS_LOCAL_ARTEFACTS/netplan.yaml.j2" ]; then
+        echo "note: manual netplan template not saved (presets may not ship one)" >&2
+    fi
+    return 0
+}

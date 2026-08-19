@@ -708,3 +708,311 @@ def test_editor_manual_mode_save_survives_a_fresh_live_template(tmp_path: Path):
 
     layer = yaml.safe_load((gv / "20-local.yml").read_text())
     assert layer["net_netplan_template"] == str(live_template)  # the override was recorded
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Task 6: xinas_save_preset decomposes the live overlay (preset + local
+# layers, never role defaults) back into presets/<name>/*.yml, routed by
+# which role's defaults/main.yml owns each key. This is the inverse of
+# xinas_apply_preset, and the two are proved consistent by the round-trip
+# test near the end of this section: save, wipe the live overlay entirely,
+# re-apply, and compare the effective document key by key.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _save_repo(tmp_path: Path) -> Path:
+    for role, body in (
+        ("net_controllers", "net_mtu: 0\n"),
+        ("nvme_namespace", "nvme_raid_data_level: 5\n"),
+        ("perf_tuning", "perf_nr_requests: 128\n"),
+    ):
+        d = tmp_path / f"collection/roles/{role}/defaults"
+        d.mkdir(parents=True)
+        (d / "main.yml").write_text(body)
+    (tmp_path / "playbooks/group_vars/all").mkdir(parents=True)
+    (tmp_path / "playbooks/site.yml").write_text("---\n- hosts: storage_nodes\n  roles: []\n")
+    return tmp_path
+
+
+def test_save_preset_routes_keys_by_owning_role(tmp_path: Path):
+    repo = _save_repo(tmp_path)
+    _run(
+        "xinas_config_set local net_mtu 9000;"
+        "xinas_config_set preset nvme_raid_data_level 6;"
+        "xinas_save_preset saved",
+        repo,
+    )
+    p = repo / "presets/saved"
+    assert yaml.safe_load((p / "network.yml").read_text()) == {"net_mtu": 9000}
+    assert yaml.safe_load((p / "nvme_namespace.yml").read_text()) == {"nvme_raid_data_level": 6}
+
+
+def test_save_preset_reports_a_key_no_preset_file_owns(tmp_path: Path):
+    """perf_tuning has no preset file; the key cannot round-trip, so it is
+    named rather than silently dropped into an unrelated file.
+    """
+    repo = _save_repo(tmp_path)
+    r = _run("xinas_config_set local perf_nr_requests 0; xinas_save_preset saved", repo)
+    assert "perf_nr_requests" in (r.stdout + r.stderr)
+
+
+def test_save_preset_copies_site_yml_as_the_playbook(tmp_path: Path):
+    repo = _save_repo(tmp_path)
+    _run("xinas_save_preset saved", repo)
+    assert (repo / "presets/saved/playbook.yml").read_text() == (
+        repo / "playbooks/site.yml"
+    ).read_text()
+
+
+def test_save_preset_writes_only_the_playbook_when_the_overlay_is_empty(tmp_path: Path):
+    """A fresh checkout: no preset ever applied, no operator edits, neither
+    overlay file exists. xinas_save_preset must not error out just because
+    there is nothing to decompose - it saves an (empty) preset carrying just
+    the playbook.
+    """
+    repo = _save_repo(tmp_path)
+    gv = repo / "playbooks/group_vars/all"
+    assert not (gv / "10-preset.yml").exists()
+    assert not (gv / "20-local.yml").exists()
+
+    r = _run("xinas_save_preset saved", repo)
+    assert r.returncode == 0, r.stderr
+    saved = [p.name for p in (repo / "presets/saved").glob("*")]
+    assert saved == ["playbook.yml"]
+
+
+def test_save_preset_preserves_the_preset_layer_when_no_local_layer_exists(tmp_path: Path):
+    """Regression: an early draft of xinas_save_preset merged the two
+    overlay layers with `yq eval-all ... "$XINAS_PRESET_LAYER"
+    "$XINAS_LOCAL_LAYER"` unconditionally, passing a path to a file that may
+    not exist. yq exits nonzero when a listed file is missing (confirmed by
+    hand against the real binary), and that draft's fallback on failure was
+    `echo '{}' > overlay` - silently discarding the ENTIRE preset layer's
+    content whenever the operator has made no local edits yet, which is the
+    common state right after xinas_apply_preset. Only the preset layer is
+    populated here; the local layer is never created, matching that case
+    exactly.
+    """
+    repo = _save_repo(tmp_path)
+    gv = repo / "playbooks/group_vars/all"
+    assert not (gv / "20-local.yml").exists()  # sanity: the missing-file case
+
+    r = _run("xinas_config_set preset net_mtu 9000; xinas_save_preset saved", repo)
+    assert r.returncode == 0, r.stderr
+    network_file = repo / "presets/saved/network.yml"
+    assert network_file.exists(), "a stub with the missing-file bug never writes this"
+    assert yaml.safe_load(network_file.read_text()) == {"net_mtu": 9000}
+
+
+def test_save_preset_preserves_the_local_layer_when_no_preset_layer_exists(tmp_path: Path):
+    """Symmetric case: an operator who hand-edits settings without ever
+    applying a preset has a local layer but no preset layer.
+    """
+    repo = _save_repo(tmp_path)
+    gv = repo / "playbooks/group_vars/all"
+    assert not (gv / "10-preset.yml").exists()  # sanity: the missing-file case
+
+    r = _run("xinas_config_set local nvme_raid_data_level 6; xinas_save_preset saved", repo)
+    assert r.returncode == 0, r.stderr
+    nvme_file = repo / "presets/saved/nvme_namespace.yml"
+    assert nvme_file.exists(), "a stub with the missing-file bug never writes this"
+    assert yaml.safe_load(nvme_file.read_text()) == {"nvme_raid_data_level": 6}
+
+
+def test_save_preset_replaces_rather_than_accumulates(tmp_path: Path):
+    """Mirrors test_apply_preset_replaces_rather_than_accumulates: a re-save
+    under a name that already has preset files must not leave a key behind
+    that the live overlay no longer sets.
+    """
+    repo = _save_repo(tmp_path)
+    _run("xinas_config_set local net_mtu 9000; xinas_save_preset saved", repo)
+    network_file = repo / "presets/saved/network.yml"
+    assert yaml.safe_load(network_file.read_text()) == {"net_mtu": 9000}  # sanity: it landed
+
+    gv = repo / "playbooks/group_vars/all"
+    (gv / "20-local.yml").unlink()
+    _run("xinas_config_set local nvme_raid_data_level 6; xinas_save_preset saved", repo)
+    assert not network_file.exists()  # stale file removed, not left holding net_mtu
+    nvme_file = repo / "presets/saved/nvme_namespace.yml"
+    assert yaml.safe_load(nvme_file.read_text()) == {"nvme_raid_data_level": 6}
+
+
+def test_save_preset_fails_closed_on_a_malformed_overlay(tmp_path: Path):
+    """Mirrors test_apply_preset_fails_closed_on_a_malformed_var_file: a
+    corrupt overlay must abort the save with a nonzero exit rather than
+    silently writing an empty or partial preset that looks complete.
+    """
+    repo = _save_repo(tmp_path)
+    gv = repo / "playbooks/group_vars/all"
+    (gv / "10-preset.yml").write_text("this: [is, not, valid: yaml\n")
+
+    r = _run("xinas_save_preset saved || echo RC=$?", repo)
+    assert "RC=0" not in r.stdout
+    assert "RC=" in r.stdout
+    assert list((repo / "presets/saved").glob("*")) == []  # nothing written at all
+
+
+def test_save_preset_reports_failure_under_the_guarded_calling_convention(tmp_path: Path):
+    """xinas_save_preset's real caller (startup_menu.sh's save_preset,
+    mirroring the already-landed apply_preset wrapper) invokes it as
+    `out=$(xinas_save_preset ...) || rc=$?` - never as a bare top-level
+    statement. Per documented bash behavior, a function executing inside
+    such a guard has `errexit` suspended for its ENTIRE body, not just the
+    outer call: confirmed by hand with a throwaway probe function containing
+    a bare `false` partway through a loop - called this way, the loop ran to
+    completion and the function reported rc=0, while an identical bare
+    top-level call correctly aborted at the failure. A bare, unguarded
+    statement inside xinas_save_preset would therefore silently continue
+    past a real write failure and still report success under the exact
+    convention production uses - invisible to a test that only calls the
+    function bare, which every other test in this file does. This one drives
+    it through the guarded form instead, and forces a genuine failure (the
+    playbook it must copy is missing) partway through the function.
+    """
+    repo = _save_repo(tmp_path)
+    (repo / "playbooks/site.yml").unlink()
+
+    r = _run(
+        "rc=0; out=$(xinas_save_preset saved 2>&1 >/dev/null) || rc=$?; echo RC=$rc",
+        repo,
+    )
+    assert "RC=0" not in r.stdout, r.stdout
+
+
+def test_key_owner_prints_the_owning_preset_file(tmp_path: Path):
+    repo = _save_repo(tmp_path)
+    r = _run("xinas_key_owner net_mtu", repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "network.yml"
+
+
+def test_key_owner_fails_for_a_key_no_mapped_role_defines(tmp_path: Path):
+    """perf_tuning defines perf_nr_requests, but perf_tuning has no preset
+    file - the scan must not guess raid_fs.yml as a catch-all.
+    """
+    repo = _save_repo(tmp_path)
+    r = _run("xinas_key_owner perf_nr_requests || echo RC=$?", repo)
+    assert r.stdout.strip() == "RC=1"  # nothing printed before the failure marker
+
+
+def test_key_owner_fails_for_a_key_no_role_defines_at_all(tmp_path: Path):
+    repo = _save_repo(tmp_path)
+    r = _run("xinas_key_owner totally_unknown_key || echo RC=$?", repo)
+    assert r.stdout.strip() == "RC=1"
+
+
+def test_key_owner_continues_past_an_unmapped_role_to_a_later_mapped_one(tmp_path: Path):
+    """The scan does not stop at the first role that defines the key - it
+    keeps looking until it finds one actually mapped to a preset file. Not
+    just theoretical: xinas_storage_reset is defined by both nvme_namespace
+    and raid_fs in the real role defaults today, and both happen to be
+    mapped, so this only bites once an unmapped role sorts ahead of a mapped
+    one - exercised directly here so a future role addition or rename can't
+    silently break it unnoticed. perf_tuning (unmapped) sorts before the
+    raid_fs added below (mapped); both define perf_nr_requests.
+    """
+    repo = _save_repo(tmp_path)
+    d = repo / "collection/roles/raid_fs/defaults"
+    d.mkdir(parents=True)
+    (d / "main.yml").write_text("perf_nr_requests: 999\n")
+
+    r = _run("xinas_key_owner perf_nr_requests", repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "raid_fs.yml"
+
+
+def _roundtrip_repo(tmp_path: Path) -> Path:
+    """One role per mapped preset file, each contributing one key, spanning
+    every value shape xinas_save_preset must round-trip: net_controllers
+    (int), raid_fs (bool + a structural list of maps), nvme_namespace
+    (string), exports (a second, independent structural list of maps).
+    """
+    d = tmp_path / "collection/roles/net_controllers/defaults"
+    d.mkdir(parents=True)
+    (d / "main.yml").write_text("net_mtu: 1500\n")
+
+    d = tmp_path / "collection/roles/raid_fs/defaults"
+    d.mkdir(parents=True)
+    (d / "main.yml").write_text("xiraid_force_metadata: true\nxiraid_arrays: []\n")
+
+    d = tmp_path / "collection/roles/nvme_namespace/defaults"
+    d.mkdir(parents=True)
+    (d / "main.yml").write_text('nvme_label: "default"\n')
+
+    d = tmp_path / "collection/roles/exports/defaults"
+    d.mkdir(parents=True)
+    (d / "main.yml").write_text("exports: []\n")
+
+    (tmp_path / "playbooks/group_vars/all").mkdir(parents=True)
+    (tmp_path / "playbooks/site.yml").write_text("---\n- hosts: storage_nodes\n  roles: []\n")
+    return tmp_path
+
+
+def test_save_then_apply_round_trips_every_value_shape(tmp_path: Path):
+    """The property this task exists for: a preset saved from a configured
+    system, then applied to a fresh one, must reproduce the same effective
+    configuration - across every value shape the overlay can hold, not just
+    the strings a shell variable happens to pass through unchanged. Sets one
+    value of each shape - bool false, int, string, and two independent
+    structural lists of maps (the shape that broke outright in this task's
+    own first draft; see the load() comment on xinas_save_preset) - saves,
+    clears the live overlay completely, re-applies the saved preset, and
+    compares the effective document against the original values key by key.
+    A save that silently drops a key or restringifies a bool/list would pass
+    a shallower test that only checked "some preset file got written"; this
+    would not.
+    """
+    repo = _roundtrip_repo(tmp_path)
+    gv = repo / "playbooks/group_vars/all"
+
+    r = _run(
+        "xinas_config_set preset net_mtu 9000;"
+        "xinas_config_set preset xiraid_force_metadata false;"
+        "xinas_config_set local nvme_label custom-label",
+        repo,
+    )
+    assert r.returncode == 0, r.stderr
+
+    xiraid_arrays = [
+        {"name": "data1", "level": 6, "devices": ["/dev/nvme1n1", "/dev/nvme2n1"]},
+        {"name": "log1", "level": 1, "devices": ["/dev/nvme3n1"]},
+    ]
+    exports = [{"path": "/mnt/data", "clients": "10.0.0.0/24", "options": "rw,sync"}]
+    # Structural values are written directly, the same way a real preset
+    # apply or a structural editor write puts them there - never through
+    # xinas_config_set's scalar setter, which has a documented literal-string
+    # fallback for any value spanning multiple lines.
+    preset_layer = gv / "10-preset.yml"
+    layer = yaml.safe_load(preset_layer.read_text())
+    layer["xiraid_arrays"] = xiraid_arrays
+    preset_layer.write_text(yaml.dump(layer, sort_keys=False))
+
+    local_layer = gv / "20-local.yml"
+    layer = yaml.safe_load(local_layer.read_text())
+    layer["exports"] = exports
+    local_layer.write_text(yaml.dump(layer, sort_keys=False))
+
+    original = {
+        "net_mtu": 9000,
+        "xiraid_force_metadata": False,
+        "nvme_label": "custom-label",
+        "xiraid_arrays": xiraid_arrays,
+        "exports": exports,
+    }
+
+    r = _run("xinas_save_preset roundtrip", repo)
+    assert r.returncode == 0, r.stderr
+
+    # Clear the live overlay completely before reapplying - nothing may
+    # survive by accident from the pre-save state.
+    preset_layer.unlink()
+    local_layer.unlink()
+
+    r = _run("xinas_apply_preset roundtrip", repo)
+    assert r.returncode == 0, r.stderr
+
+    r = _run("xinas_config_effective", repo)
+    assert r.returncode == 0, r.stderr
+    effective = yaml.safe_load(r.stdout)
+    for key, value in original.items():
+        assert effective[key] == value, f"{key}: expected {value!r}, got {effective.get(key)!r}"

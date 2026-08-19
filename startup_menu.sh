@@ -623,13 +623,26 @@ save_preset() {
         rm -rf "$pdir"
     fi
     mkdir -p "$pdir"
-    cp "collection/roles/net_controllers/defaults/main.yml" "$pdir/network.yml" 2>/dev/null || true
-    cp "collection/roles/net_controllers/templates/netplan.yaml.j2" "$pdir/netplan.yaml.j2" 2>/dev/null || true
-    cp "collection/roles/raid_fs/defaults/main.yml" "$pdir/raid_fs.yml" 2>/dev/null || true
-    cp "collection/roles/nvme_namespace/defaults/main.yml" "$pdir/nvme_namespace.yml" 2>/dev/null || true
-    cp "collection/roles/exports/defaults/main.yml" "$pdir/nfs_exports.yml" 2>/dev/null || true
-    [ -f "playbooks/site.yml" ] && cp "playbooks/site.yml" "$pdir/playbook.yml"
-    msg_box "Preset Saved" "Preset saved to $pdir"
+
+    # Decomposes the live overlay (preset + operator layers, not the
+    # git-tracked role defaults) back into presets/$preset/*.yml. Guarded the
+    # same way apply_preset above guards xinas_apply_preset: called through
+    # command substitution, a bare failing statement inside
+    # xinas_save_preset would otherwise not abort it under `set -e` (errexit
+    # is suspended for the whole callee body in this calling shape), so
+    # xinas_save_preset checks its own failures explicitly rather than
+    # relying on that.
+    local skipped rc=0
+    skipped=$(xinas_save_preset "$preset" 2>&1 >/dev/null) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        msg_box "Error" "Preset $preset could not be saved.\n\n$skipped"
+        return
+    fi
+    if [ -n "$skipped" ]; then
+        msg_box "Preset Saved (with notes)" "Preset saved to $pdir\n\n$skipped"
+    else
+        msg_box "Preset Saved" "Preset saved to $pdir"
+    fi
 }
 
 has_license() {
