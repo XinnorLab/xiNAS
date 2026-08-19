@@ -58,11 +58,29 @@ get_pool_settings() {
     pool_prefix=$(xinas_config_get net_ip_pool_prefix) || pool_prefix=24
 }
 
+# Turn pool mode on and drop any manual-mode leftovers. This is its own
+# function, called by every path that turns pool mode on, rather than
+# inlined at each call site: net_controllers's "deploy netplan" task (Step 4,
+# tasks/main.yml) renders whatever net_netplan_template points at whenever
+# net_ip_pool_enabled is true and net_allocated_ips is non-empty - the normal
+# case on real hardware - regardless of whether that variable still points at
+# a stale manual template from an earlier session. Leaving the override in
+# place after re-enabling pool mode would make the role silently keep
+# rendering the old static config while the TUI reports pool mode ENABLED.
+# docs/superpowers/specs/2026-08-18-preset-overlay-design.md §5: "Returning
+# to pool mode removes both the override key and the file, so the role falls
+# back to its own template rather than silently keeping a stale manual one."
+enable_pool_mode() {
+    xinas_config_set local net_ip_pool_enabled true
+    yq -i 'del(.net_netplan_template)' "$XINAS_LOCAL_LAYER" 2>/dev/null || true
+    rm -f "$LIVE_TEMPLATE"
+}
+
 # Targeted writes, not a document rewrite: the previous `cat >` emitted a fixed
 # eight-key file and silently dropped every other key in the role defaults.
 save_pool_settings() {
     local start="$1" end="$2" prefix="$3"
-    xinas_config_set local net_ip_pool_enabled true
+    enable_pool_mode
     xinas_config_set local net_ip_pool_start "\"$start\""
     xinas_config_set local net_ip_pool_end "\"$end\""
     xinas_config_set local net_ip_pool_prefix "$prefix"
@@ -216,13 +234,7 @@ configure_manual() {
     # interface name would silently strand every NIC without an address, so
     # leave it alone and hand the box back to pool mode.
     if [[ ${#configs[@]} -eq 0 ]]; then
-        xinas_config_set local net_ip_pool_enabled true
-        # Drop a stale manual template override so it cannot outlive manual
-        # mode: without this, re-enabling pool mode here would still leave
-        # net_netplan_template pointing at a leftover manual config from an
-        # earlier session.
-        yq -i 'del(.net_netplan_template)' "$XINAS_LOCAL_LAYER" 2>/dev/null || true
-        rm -f "$LIVE_TEMPLATE"
+        enable_pool_mode
         msg_box "No Changes" "No interfaces were configured.\n\nThe netplan template was left untouched and IP pool mode is still enabled."
         return
     fi

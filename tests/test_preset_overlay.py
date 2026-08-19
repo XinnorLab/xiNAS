@@ -487,12 +487,14 @@ def test_editor_pool_settings_write_preserves_sibling_keys(tmp_path: Path):
     (gv / "10-preset.yml").write_text("net_mtu: 9000\n")
 
     fns = "\n".join(
-        _extract_fn(CONFIGURE_NETWORK, n) for n in ("get_pool_settings", "save_pool_settings")
+        _extract_fn(CONFIGURE_NETWORK, n)
+        for n in ("enable_pool_mode", "get_pool_settings", "save_pool_settings")
     )
     script = (
         "set -e\n"
         f'REPO_DIR="{tmp_path}"\n'
         f'. "{HELPER}"\n'
+        f'LIVE_TEMPLATE="{tmp_path}/live-netplan.yaml.j2"\n'
         f"{fns}\n"
         "get_pool_settings\n"
         'echo "before:$pool_start:$pool_prefix"\n'
@@ -517,6 +519,67 @@ def test_editor_pool_settings_write_preserves_sibling_keys(tmp_path: Path):
     effective = yaml.safe_load(r2.stdout)
     assert effective["net_mtu"] == 9000  # preset-layer sibling, untouched
     assert effective["net_manual_ips"] == {"special": True}  # role-default sibling, untouched
+
+
+def test_editor_save_pool_settings_clears_a_stale_manual_override(tmp_path: Path):
+    """Regression (Critical, fix round 1): the normal way an operator returns
+    to pool mode is menu -> "Configure IP Pool" -> save_pool_settings(), not
+    configure_manual()'s "nothing configured" bail-out. net_controllers's
+    "Deploy netplan configuration" task (tasks/main.yml, Step 4) renders
+    whatever net_netplan_template points at whenever net_ip_pool_enabled is
+    true and net_allocated_ips is non-empty - the normal case on real
+    hardware - regardless of which path turned pool mode back on. Simulates
+    "manual mode was configured earlier" directly (net_netplan_template set,
+    $LIVE_TEMPLATE present) and runs the real save_pool_settings() - the
+    literal function configure_ip_pool() calls on a successful save - then
+    asserts both the override and the file are gone afterward, so the role
+    falls back to its own template rather than silently keeping the stale
+    manual one.
+    """
+    role = tmp_path / "collection/roles/net_controllers/defaults"
+    role.mkdir(parents=True)
+    (role / "main.yml").write_text(
+        "net_ip_pool_enabled: true\n"
+        'net_ip_pool_start: "10.10.1.1"\n'
+        'net_ip_pool_end: "10.10.255.1"\n'
+        "net_ip_pool_prefix: 24\n"
+        "net_netplan_template: netplan.yaml.j2\n"
+    )
+    gv = tmp_path / "playbooks/group_vars/all"
+    gv.mkdir(parents=True)
+    live_template = tmp_path / "xinas-local/netplan.yaml.j2"
+    live_template.parent.mkdir(parents=True)
+    live_template.write_text("network: {}\n")
+    (gv / "20-local.yml").write_text(
+        f'net_ip_pool_enabled: false\nnet_netplan_template: "{live_template}"\n'
+    )
+    assert live_template.exists()  # sanity: manual mode really is active
+
+    fns = "\n".join(
+        _extract_fn(CONFIGURE_NETWORK, n) for n in ("enable_pool_mode", "save_pool_settings")
+    )
+    script = (
+        "set -e\n"
+        f'REPO_DIR="{tmp_path}"\n'
+        f'. "{HELPER}"\n'
+        f'LIVE_TEMPLATE="{live_template}"\n'
+        f"{fns}\n"
+        'save_pool_settings "10.30.1.1" "10.30.255.1" "24"\n'
+    )
+    r = _run_script(script, tmp_path)
+    assert r.returncode == 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
+
+    layer = yaml.safe_load((gv / "20-local.yml").read_text())
+    assert "net_netplan_template" not in layer  # override cleared, not just overwritten
+    assert not live_template.exists()  # stale manual template file removed
+
+    r2 = _run_script(f'REPO_DIR="{tmp_path}"\n. "{HELPER}"\nxinas_config_effective\n', tmp_path)
+    effective = yaml.safe_load(r2.stdout)
+    # With the override gone, the effective document falls back to the
+    # role's own default template - proof the role would render its own
+    # dynamic netplan again, not the stale manual one.
+    assert effective["net_netplan_template"] == "netplan.yaml.j2"
+    assert effective["net_ip_pool_enabled"] is True
 
 
 def _extract_lines(src: str, start_marker: str, end_marker: str) -> str:
