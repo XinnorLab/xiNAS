@@ -72,7 +72,24 @@ xinas_config_get() {
 # null out, or reject them. (Residual limitation, not specially handled: a
 # value that happens to contain other YAML syntax, e.g. "key: value" with
 # the space, or a leading "#", is parsed as that syntax like any bare YAML
-# scalar would be.)
+# scalar would be - a colon-space turns the value into a nested map, and a
+# leading "#" turns it into null.)
+#
+# CALLER CONTRACT, not enforced by this function: any string value that is
+# not known ahead of time to be a safe bare YAML scalar (a plain true/false,
+# a bare integer, ...) MUST be pre-wrapped by the CALLER in literal double
+# quotes, so it round-trips as a quoted YAML string regardless of what it
+# contains -
+#   xinas_config_set local net_netplan_template "\"$path\""
+# not
+#   xinas_config_set local net_netplan_template "$path"
+# Every string-valued caller in this tree already does this
+# (net_ip_pool_start, net_ip_pool_end, net_netplan_template - each wrapped
+# in literal `\"…\"` at the call site in configure_network.sh). That
+# convention is the only thing keeping the colon-space/leading-"#" trap
+# above unreachable today; it is not checked here, so a future caller that
+# passes a bare, unquoted string is exposed to it the moment that string
+# happens to contain either.
 #
 # yq's own exit status is checked before the `mv` on purpose: a caller that
 # writes `if xinas_config_set ...; then` - the natural way to check success -
