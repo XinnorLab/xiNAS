@@ -38,6 +38,12 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 source "$SCRIPT_DIR/lib/menu_lib.sh"
 . "$SCRIPT_DIR/lib/xinas_config.sh"
 
+# One-shot bridge for hosts installed before the configuration overlay
+# existed (docs/superpowers/specs/2026-08-18-preset-overlay-design.md §9).
+# No-op on every run after the first.
+migrated=$(xinas_migrate_overlay) || true
+if [ -n "$migrated" ]; then msg_box "Configuration Migrated" "$migrated"; fi
+
 # Update check — GitHub Releases only (never the main branch).
 # See docs/Installer/update-spec.md.
 UPDATE_AVAILABLE=""

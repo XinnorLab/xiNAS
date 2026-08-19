@@ -1016,3 +1016,91 @@ def test_save_then_apply_round_trips_every_value_shape(tmp_path: Path):
     effective = yaml.safe_load(r.stdout)
     for key, value in original.items():
         assert effective[key] == value, f"{key}: expected {value!r}, got {effective.get(key)!r}"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Task 7: migration bridge for hosts installed before this overlay design
+# existed, when apply_preset overwrote git-tracked role defaults directly.
+# The update flow force-checks-out the tree before any new code runs, so
+# those mutated defaults are gone by the time xinas_migrate_overlay ever
+# executes - the only thing that survives is the untracked marker file every
+# xinas_apply_preset call writes. These tests drive the three states the
+# bridge can find a host in: marker present and not yet migrated, already
+# migrated, and no marker at all (a normal fresh install, never touched by
+# the old mechanism).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_migration_reapplies_the_marked_preset(tmp_path: Path):
+    repo = _preset_repo(tmp_path)
+    marker = tmp_path / "marker"
+    marker.write_text("vm\n")
+    r = _run(f'XINAS_PRESET_MARKER="{marker}" xinas_migrate_overlay', repo)
+    assert r.returncode == 0, r.stderr
+    # Interface contract: one line describing what it did, so the menus can
+    # surface it (`migrated=$(xinas_migrate_overlay); [ -n "$migrated" ] && ...`).
+    # A stub that writes the overlay but stays silent would leave the
+    # operator with no idea their configuration just changed.
+    out_lines = r.stdout.strip().splitlines()
+    assert len(out_lines) == 1, r.stdout
+    assert "vm" in out_lines[0]
+    layer = yaml.safe_load((repo / "playbooks/group_vars/all/10-preset.yml").read_text())
+    assert layer["demo_key"] == "from_preset"
+
+
+def test_migration_is_a_noop_once_migrated(tmp_path: Path):
+    """The property this bridge exists to get right: once migrated, a later
+    run must never re-read the marker and stomp an overlay edit made since.
+
+    Checking only the post-edit value is not enough - a fully-stubbed
+    xinas_migrate_overlay that writes nothing, ever, would still pass a test
+    that only asserts the manually-written value survives a second no-op
+    call, because nothing in that shape of test requires the FIRST call to
+    have done anything real. Assert the first call's own effect (the marked
+    preset's value, genuinely landed) before overwriting it, so a stub that
+    skips the real migration is caught right there instead of accidentally
+    passing.
+    """
+    repo = _preset_repo(tmp_path)
+    marker = tmp_path / "marker"
+    marker.write_text("vm\n")
+    layer_path = repo / "playbooks/group_vars/all/10-preset.yml"
+
+    r1 = _run(f'XINAS_PRESET_MARKER="{marker}" xinas_migrate_overlay', repo)
+    assert r1.returncode == 0, r1.stderr
+    layer = yaml.safe_load(layer_path.read_text())
+    assert layer["demo_key"] == "from_preset"  # proof the first call really migrated
+
+    _run("xinas_config_set preset demo_key edited_after_migration", repo)
+
+    r2 = _run(f'XINAS_PRESET_MARKER="{marker}" xinas_migrate_overlay', repo)
+    assert r2.returncode == 0, r2.stderr
+    assert r2.stdout.strip() == ""  # already migrated: nothing to report
+    layer = yaml.safe_load(layer_path.read_text())
+    assert layer["demo_key"] == "edited_after_migration"
+
+
+def test_migration_without_a_marker_leaves_the_overlay_absent(tmp_path: Path):
+    repo = _preset_repo(tmp_path)
+    r = _run(f'XINAS_PRESET_MARKER="{tmp_path}/absent" xinas_migrate_overlay', repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == ""  # nothing to do: nothing to report
+    assert not (repo / "playbooks/group_vars/all/10-preset.yml").exists()
+
+
+def test_migration_with_an_unknown_preset_in_the_marker_leaves_the_overlay_absent(
+    tmp_path: Path,
+):
+    """A legacy marker can name a preset that no longer ships (renamed or
+    removed from presets/ since the host was first installed). Migration
+    must degrade gracefully - report on stderr and leave the overlay absent
+    for a normal preset pick later - rather than blocking menu startup.
+    """
+    repo = _preset_repo(tmp_path)
+    marker = tmp_path / "marker"
+    marker.write_text("no-longer-shipped\n")
+    r = _run(f'XINAS_PRESET_MARKER="{marker}" xinas_migrate_overlay', repo)
+    assert r.returncode == 0, r.stderr
+    assert "no-longer-shipped" in r.stderr
+    assert r.stdout.strip() == ""
+    assert not (repo / "playbooks/group_vars/all/10-preset.yml").exists()

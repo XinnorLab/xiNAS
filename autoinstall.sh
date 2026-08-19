@@ -231,6 +231,15 @@ fi
 # ── Apply the preset (mirrors the menu's apply_preset) ────────────────────────
 step "Applying preset: $preset"
 . "$SCRIPT_DIR/lib/xinas_config.sh"
+
+# One-shot bridge for hosts installed before the configuration overlay
+# existed (docs/superpowers/specs/2026-08-18-preset-overlay-design.md §9).
+# No-op on every run after the first; the explicit apply below still runs
+# regardless, so this only matters the first time autoinstall.sh runs again
+# against a pre-overlay host.
+migrated=$(xinas_migrate_overlay) || true
+if [ -n "$migrated" ]; then info "$migrated"; fi
+
 xinas_apply_preset "$preset_dir_name" || die "preset apply failed: $preset_dir_name"
 ok "Preset applied"
 

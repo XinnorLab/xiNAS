@@ -405,3 +405,41 @@ xinas_save_preset() {
     fi
     return 0
 }
+
+# Bridge for hosts installed before this overlay design existed, when
+# apply_preset overwrote git-tracked role defaults directly instead of
+# writing $XINAS_PRESET_LAYER. Obvious-looking alternative that does NOT
+# work: reading the mutated role defaults on disk and reconstructing the
+# overlay from them. The update flow runs `git checkout --force` before any
+# new code executes (xinas_menu/utils/update_check.py,
+# collection/roles/xinas_menu/files/xinas-update-git) specifically because
+# the installed tree is dirty by design - so by the time this function ever
+# runs on an updated host, those mutated defaults are already gone, checked
+# out back to pristine. The one thing that survives a forced checkout is the
+# untracked marker file every xinas_apply_preset call writes
+# ($XINAS_PRESET_MARKER, see above) - it is the only signal this bridge has.
+# Operator edits made through the config editors before migration cannot be
+# recovered this way; that loss is accepted and documented (Task 10).
+: "${XINAS_PRESET_MARKER:=/opt/xiNAS/.xinas_applied_preset}"
+
+# Idempotent: a host already migrated (XINAS_PRESET_LAYER exists) is left
+# completely untouched, on purpose - re-reading the marker and re-applying
+# its preset on every run would silently stomp any operator edit made to the
+# overlay since migration, which is exactly the failure mode the old
+# file-replacement mechanism had and this whole plan exists to remove.
+# Prints the one line describing what it did on stdout for the caller to
+# surface to the operator; prints nothing when there is nothing to do
+# (already migrated, or no marker - a normal fresh install).
+xinas_migrate_overlay() {
+    if [ -f "$XINAS_PRESET_LAYER" ]; then return 0; fi
+    if [ ! -f "$XINAS_PRESET_MARKER" ]; then return 0; fi
+    local preset
+    preset=$(tr -d '[:space:]' < "$XINAS_PRESET_MARKER")
+    if [ -z "$preset" ]; then return 0; fi
+    [ -d "$REPO_DIR/presets/$preset" ] || {
+        echo "migration: preset '$preset' from the marker no longer exists" >&2
+        return 0
+    }
+    xinas_apply_preset "$preset" >/dev/null || return 0
+    echo "migrated: re-applied preset '$preset' into the configuration overlay"
+}
