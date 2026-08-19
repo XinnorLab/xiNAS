@@ -202,7 +202,7 @@ partially-written directory is never mistaken for a completed one.
 
 ## 2. Configuration Files Collected
 
-Each snapshot directory contains copies of the Ansible role defaults and templates that define the system's desired state.
+Each snapshot directory contains copies of the Ansible role defaults and templates that define the system's desired state, plus the live configuration overlay (see [docs/superpowers/specs/2026-08-18-preset-overlay-design.md](../superpowers/specs/2026-08-18-preset-overlay-design.md) §5, §10).
 
 | Snapshot File | Source Path | Role | When Collected |
 |---|---|---|---|
@@ -214,6 +214,11 @@ Each snapshot directory contains copies of the Ansible role defaults and templat
 | `exports.defaults.yml` | `collection/roles/exports/defaults/main.yml` | exports | Always |
 | `nfs_server.defaults.yml` | `collection/roles/nfs_server/defaults/main.yml` | nfs_server | If modified from role default |
 | `playbook.site.yml` | `playbooks/site.yml` | orchestration | Always |
+| `overlay.preset.yml` | `playbooks/group_vars/all/10-preset.yml` | preset apply | If present |
+| `overlay.local.yml` | `playbooks/group_vars/all/20-local.yml` | config editors | If present |
+| `netplan.live.j2` | `.xinas-local/netplan.yaml.j2` | net_controllers (manual mode) | If present |
+
+The eight rows above `overlay.preset.yml` are the immutable base: role defaults and the tracked netplan template are never written at runtime, only by a release, so they stay in the list because a diff spanning an update should still show them changing. The last three rows are the live layers that now carry the desired state those files used to carry — `overlay.preset.yml` is rewritten by every preset apply, `overlay.local.yml` by the config editors (and wins over `overlay.preset.yml` on conflict), and `netplan.live.j2` pairs with `netplan.template.j2` above: it is the untracked override `configure_network.sh`'s manual mode writes, used instead of the tracked template only while `net_netplan_template` points at it. A host that has never applied a preset has none of the three and they are simply absent from the snapshot, the same as any other missing source.
 
 Files are copied verbatim. Checksums for each collected file are computed at copy time and stored alongside the manifest so that tampering between snapshot creation and rollback can be detected.
 

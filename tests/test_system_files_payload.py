@@ -62,3 +62,15 @@ def test_list_system_files_empty_for_pre_s11_snapshot(tmp_path):
     )
     assert store.list_system_files(sid) == []
     assert store.read_system_file(sid, "etc_exports") is None
+
+
+def test_config_sources_cover_the_overlay():
+    """Role defaults became immutable between releases; the desired state a
+    snapshot must capture now lives in the overlay. Without these entries,
+    snapshot, diff and drift detection are blind to every config change."""
+    from xinas_history.collector import CONFIG_SOURCES
+
+    values = set(CONFIG_SOURCES.values())
+    assert "playbooks/group_vars/all/10-preset.yml" in values
+    assert "playbooks/group_vars/all/20-local.yml" in values
+    assert ".xinas-local/netplan.yaml.j2" in values
