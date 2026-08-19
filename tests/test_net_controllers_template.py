@@ -96,3 +96,25 @@ def test_manual_network_config_has_no_guessed_fallback():
         assert "ib0:100.100.100.1/24" not in code, (
             f"guessed fallback config at configure_network.sh:{lineno}"
         )
+
+
+def test_template_src_is_a_variable():
+    """Manual-mode netplan must be writable without touching the tracked role
+    template. Both deploy tasks read the same variable so pool mode and manual
+    mode cannot diverge."""
+    tasks = yaml.safe_load((REPO / "collection/roles/net_controllers/tasks/main.yml").read_text())
+    srcs = [
+        t["ansible.builtin.template"]["src"]
+        for t in tasks
+        if isinstance(t, dict) and "ansible.builtin.template" in t
+        and str(t["ansible.builtin.template"].get("dest", "")).endswith("99-xinas.yaml")
+    ]
+    assert srcs, "no netplan deploy task found"
+    assert all(s == "{{ net_netplan_template }}" for s in srcs), srcs
+
+
+def test_template_variable_defaults_to_the_role_template():
+    defaults = yaml.safe_load(
+        (REPO / "collection/roles/net_controllers/defaults/main.yml").read_text()
+    )
+    assert defaults["net_netplan_template"] == "netplan.yaml.j2"

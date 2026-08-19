@@ -186,7 +186,7 @@
 # Step 4: Deploy netplan configuration
 - name: Deploy netplan configuration for network controllers
   ansible.builtin.template:
-    src: netplan.yaml.j2
+    src: "{{ net_netplan_template }}"
     dest: /etc/netplan/99-xinas.yaml
     owner: root
     group: root
@@ -223,7 +223,7 @@
 # Fallback: Manual mode (pool disabled)
 - name: Deploy static netplan configuration (manual mode)
   ansible.builtin.template:
-    src: netplan.yaml.j2
+    src: "{{ net_netplan_template }}"
     dest: /etc/netplan/99-xinas.yaml
     owner: root
     group: root
