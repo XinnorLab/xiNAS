@@ -550,7 +550,16 @@ install_menu() {
             apply_preset "default"
             # Set skip flags for xiraid and namespace roles
             local extra_vars="xiraid_skip_install=true nvme_auto_namespace=false"
-            if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
+            # No check_remove_xiraid here, unlike the tail below: the arrays
+            # this path depends on need xiRAID's own packages (xicli,
+            # /dev/xi_*) to already be present, and playbooks/site.yml's
+            # xiraid_classic guard (`when: not (xiraid_skip_install | ...)`)
+            # means nothing on this run reinstalls them once
+            # xiraid_skip_install=true is passed below - purging here would
+            # remove xiRAID and never put it back. autoinstall.sh:140-142
+            # encodes the same rule for --preset existing-raid
+            # (purge_xiraid="no"); mirrored here rather than restored.
+            if check_license && confirm_playbook "playbooks/site.yml"; then
                 if run_playbook_with_vars "playbooks/site.yml" "$extra_vars"; then
                     echo ""
                     echo "🎉 Deployment complete! System status:"
