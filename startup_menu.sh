@@ -36,6 +36,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 # Source the menu library
 source "$SCRIPT_DIR/lib/menu_lib.sh"
+. "$SCRIPT_DIR/lib/xinas_config.sh"
 
 # Update check — GitHub Releases only (never the main branch).
 # See docs/Installer/update-spec.md.
@@ -570,42 +571,17 @@ install_menu() {
     fi
 }
 
-# Copy configuration files from a preset directory and optionally run its playbook
+# Merge configuration files from a preset directory into the group_vars
+# overlay and optionally run its playbook
 apply_preset() {
-    local preset="$1"
-    local pdir="$REPO_DIR/presets/$preset"
-    [ -d "$pdir" ] || { msg_box "Error" "Preset $preset not found"; return; }
-
-    local msg="Applying preset: $preset\n"
-    if [ -f "$pdir/network.yml" ]; then
-        cp "$pdir/network.yml" "collection/roles/net_controllers/defaults/main.yml"
-        msg+="- IP pool configuration\n"
-    fi
-    if [ -f "$pdir/netplan.yaml.j2" ]; then
-        cp "$pdir/netplan.yaml.j2" "collection/roles/net_controllers/templates/netplan.yaml.j2"
-        msg+="- network template\n"
-    fi
-    if [ -f "$pdir/raid_fs.yml" ]; then
-        cp "$pdir/raid_fs.yml" "collection/roles/raid_fs/defaults/main.yml"
-        msg+="- RAID configuration\n"
-    fi
-    if [ -f "$pdir/nvme_namespace.yml" ]; then
-        cp "$pdir/nvme_namespace.yml" "collection/roles/nvme_namespace/defaults/main.yml"
-        msg+="- NVMe namespace configuration\n"
-    fi
-    if [ -f "$pdir/nfs_exports.yml" ]; then
-        cp "$pdir/nfs_exports.yml" "collection/roles/exports/defaults/main.yml"
-        msg+="- NFS exports\n"
-    fi
-    if [ -f "$pdir/playbook.yml" ]; then
-        cp "$pdir/playbook.yml" "playbooks/site.yml"
-        msg+="- playbook updated\n"
-    fi
-    # Record the applied preset so the motd role can stamp
-    # /opt/xiNAS/.installed_preset on a successful install (finding #16). The
-    # autoinstall path passes the same value as -e xinas_install_preset.
-    echo "$preset" > /opt/xiNAS/.xinas_applied_preset 2>/dev/null || true
-    msg_box "Preset Applied" "$msg"
+    local preset="$1" applied rc=0
+    applied=$(xinas_apply_preset "$preset") || rc=$?
+    case "$rc" in
+        0) msg_box "Preset Applied" "Applying preset: $preset\n$applied" ;;
+        2) msg_box "Error" "Preset $preset not found" ;;
+        3) msg_box "Error" "Preset $preset ships a netplan template, which is not supported" ;;
+        *) msg_box "Error" "Preset $preset could not be applied" ;;
+    esac
 }
 
 # Present available presets to the user

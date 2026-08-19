@@ -597,9 +597,10 @@ not a TUI surface.
    elsewhere.
 5. Bootstrap dependencies if `ansible-playbook` is missing — runs
    `prepare_system.sh` in package-only mode — unless `--skip-prepare`.
-6. Apply the selected preset: identical file copies to the menu's
-   `apply_preset` (preset YAML/J2 → role `defaults/`, preset
-   `playbook.yml` → `playbooks/site.yml`).
+6. Apply the selected preset: `xinas_apply_preset` (identical to the
+   menus' `apply_preset`) merges the preset's var files and its
+   playbook's `vars:` into the `playbooks/group_vars/all/10-preset.yml`
+   overlay layer — see §7.8.
 7. Purge any pre-existing xiRAID packages (unless `--no-purge-xiraid`;
    see §7.3 for the `existing-raid` default).
 8. Run `ansible-playbook playbooks/site.yml -i <inventory> -v` with the
@@ -720,19 +721,37 @@ install is observable (finding #2 — previously there was no resume signal).
 
 ### 7.8 Preset application is fail-closed
 
-Step 6 of §7.2 (applying the selected preset) copies each preset file —
-`playbook.yml` → `playbooks/site.yml`, each `presets/<name>/*.yml` → the
-matching role `defaults/main.yml`, and `netplan.yaml.j2` — over the
-corresponding tracked file. `autoinstall.sh` MUST check the exit status
-of **every** one of those copies and MUST abort (fatal, non-zero exit)
-the moment any single copy fails, rather than logging the failure and
-continuing on to run the playbook. Provisioning MUST NEVER run against
-a partially-applied or stale preset: a copy failure part-way through
-step 6 means the tree is a mix of the previous preset's files and the
-new preset's files, and running Ansible against that mix produces an
+Step 6 of §7.2 (applying the selected preset) calls `xinas_apply_preset`
+([lib/xinas_config.sh](../../lib/xinas_config.sh)), which merges the
+preset's var files (`network.yml`, `raid_fs.yml`, `nvme_namespace.yml`,
+`nfs_exports.yml` — whichever the preset ships) and its playbook's
+`vars:` into a single YAML document and replaces
+`playbooks/group_vars/all/10-preset.yml` with it in one write. Nothing
+under `collection/roles/` is written by preset application, and
+`playbooks/site.yml` itself is never copied over or modified.
+
+`xinas_apply_preset` returns non-zero, and writes nothing to the
+overlay, for every way it can fail:
+
+- **`2`** — the preset directory (`presets/<name>/`) does not exist.
+- **`3`** — the preset ships a `netplan.yaml.j2`. A preset network
+  template is not supported: it would replace the `net_controllers`
+  role's dynamically generated netplan and strand every NIC.
+- **`1`** — merging the preset's var files failed (e.g. one of them is
+  not valid YAML), or writing the merged result to
+  `10-preset.yml` failed. The previous overlay is left exactly as it
+  was — the merge is validated in memory before anything is written,
+  so a bad preset cannot truncate or partially overwrite a good one.
+
+`autoinstall.sh` MUST check `xinas_apply_preset`'s exit status and MUST
+abort (fatal, non-zero exit) on any non-zero return, rather than
+logging the failure and continuing on to run the playbook. Provisioning
+MUST NEVER run against a partially-applied or stale preset: a preset
+that is half-merged, or silently not merged at all, produces an
 inconsistent deployment that is hard to diagnose after the fact. The
 same fail-closed requirement applies to the interactive menus'
-`apply_preset` function.
+`apply_preset` function, which maps `xinas_apply_preset`'s return codes
+to the matching error dialog instead of showing "Preset Applied".
 
 ---
 

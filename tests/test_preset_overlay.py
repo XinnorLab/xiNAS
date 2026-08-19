@@ -104,3 +104,94 @@ def test_effective_merges_keys_from_every_layer(repo: Path):
     assert doc["demo_key"] == "from_defaults"
     assert doc["preset_only"] == "from_preset"
     assert doc["local_only"] == "from_local"
+
+
+def _preset_repo(tmp_path: Path) -> Path:
+    role = tmp_path / "collection/roles/demo/defaults"
+    role.mkdir(parents=True)
+    (role / "main.yml").write_text("demo_key: from_defaults\nsurvivor: true\n")
+    preset = tmp_path / "presets/vm"
+    preset.mkdir(parents=True)
+    (preset / "raid_fs.yml").write_text("demo_key: from_preset\n")
+    (preset / "nvme_namespace.yml").write_text("nvme_key: 5\n")
+    (preset / "playbook.yml").write_text(
+        "---\n- hosts: storage_nodes\n  vars:\n    perf_nr_requests: 0\n  roles: [demo]\n"
+    )
+    (tmp_path / "playbooks/group_vars/all").mkdir(parents=True)
+    return tmp_path
+
+
+def test_apply_preset_merges_every_var_file(tmp_path: Path):
+    repo = _preset_repo(tmp_path)
+    r = _run("xinas_apply_preset vm", repo)
+    assert r.returncode == 0, r.stderr
+    layer = yaml.safe_load((repo / "playbooks/group_vars/all/10-preset.yml").read_text())
+    assert layer == {"demo_key": "from_preset", "nvme_key": 5, "perf_nr_requests": 0}
+
+
+def test_apply_preset_does_not_delete_keys_it_omits(tmp_path: Path):
+    """The whole point: `survivor` is in the defaults and in no preset file."""
+    repo = _preset_repo(tmp_path)
+    _run("xinas_apply_preset vm", repo)
+    r = _run("xinas_config_get survivor", repo)
+    assert r.stdout.strip() == "true"
+
+
+def test_apply_preset_replaces_rather_than_accumulates(tmp_path: Path):
+    repo = _preset_repo(tmp_path)
+    _run("xinas_config_set preset stale_key 1; xinas_apply_preset vm", repo)
+    layer = yaml.safe_load((repo / "playbooks/group_vars/all/10-preset.yml").read_text())
+    assert "stale_key" not in layer
+
+
+def test_apply_preset_keeps_operator_edits(tmp_path: Path):
+    repo = _preset_repo(tmp_path)
+    _run("xinas_config_set local demo_key from_operator; xinas_apply_preset vm", repo)
+    r = _run("xinas_config_get demo_key", repo)
+    assert r.stdout.strip() == "from_operator"
+
+
+def test_apply_preset_rejects_a_preset_netplan_template(tmp_path: Path):
+    repo = _preset_repo(tmp_path)
+    (repo / "presets/vm/netplan.yaml.j2").write_text("network: {}\n")
+    r = _run("xinas_apply_preset vm || echo RC=$?", repo)
+    assert "RC=3" in r.stdout
+
+
+def test_apply_preset_unknown_name(tmp_path: Path):
+    repo = _preset_repo(tmp_path)
+    r = _run("xinas_apply_preset nope || echo RC=$?", repo)
+    assert "RC=2" in r.stdout
+
+
+def test_apply_preset_fails_closed_on_a_malformed_var_file(tmp_path: Path):
+    """Regression: xinas_apply_preset's last statement is an unconditional
+    marker write (`... || true`), which previously made the function return 0
+    even when the yq merge upstream of it failed - so a preset shipping one
+    good file (raid_fs.yml) and one malformed file (nvme_namespace.yml) was
+    reported as fully applied. This is the "mixed preset" scenario
+    tests/test_autoinstall_preset_fail_closed.py names in its module
+    docstring, exercised here directly at the helper level.
+    """
+    repo = _preset_repo(tmp_path)
+    (repo / "presets/vm/nvme_namespace.yml").write_text("this: [is, not, valid: yaml\n")
+    r = _run("xinas_apply_preset vm || echo RC=$?", repo)
+    assert "RC=0" not in r.stdout
+    assert "RC=" in r.stdout
+
+
+def test_apply_preset_failure_leaves_the_previous_overlay_untouched(tmp_path: Path):
+    """A failed re-apply must not destroy the last good overlay. This checks
+    content equality, not just the return code, so a shallow fix that returns
+    non-zero but still truncates the layer file first would not pass.
+    """
+    repo = _preset_repo(tmp_path)
+    _run("xinas_apply_preset vm", repo)
+    layer_path = repo / "playbooks/group_vars/all/10-preset.yml"
+    good = layer_path.read_text()
+    assert "from_preset" in good  # sanity: the first, valid apply really landed
+
+    (repo / "presets/vm/nvme_namespace.yml").write_text("this: [is, not, valid: yaml\n")
+    r = _run("xinas_apply_preset vm || echo RC=$?", repo)
+    assert "RC=0" not in r.stdout
+    assert layer_path.read_text() == good

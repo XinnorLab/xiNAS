@@ -105,3 +105,72 @@ xinas_config_replace_layer() {
     mkdir -p "$(dirname "$path")"
     cat > "$path"
 }
+
+# Var files a preset may contribute. The role each one is named after is
+# irrelevant to the merge: Ansible resolves all of these in one host scope, and
+# presets already cross the boundary (presets/default/raid_fs.yml sets nvme_*).
+XINAS_PRESET_VAR_FILES=(network.yml raid_fs.yml nvme_namespace.yml nfs_exports.yml)
+
+xinas_apply_preset() {
+    local preset="$1" pdir="$REPO_DIR/presets/$1"
+    [ -d "$pdir" ] || { echo "preset not found: $preset" >&2; return 2; }
+
+    # A preset netplan template replaced the role's dynamic one and stranded
+    # every NIC; tests/test_net_controllers_template.py forbids it. Fail loudly
+    # rather than silently ignoring a file the author expected to take effect.
+    if [ -f "$pdir/netplan.yaml.j2" ]; then
+        echo "preset $preset ships netplan.yaml.j2, which is not supported" >&2
+        return 3
+    fi
+
+    local -a sources=()
+    local f
+    for f in "${XINAS_PRESET_VAR_FILES[@]}"; do
+        if [ -f "$pdir/$f" ]; then sources+=("$pdir/$f"); echo "- $f"; fi
+    done
+
+    # The preset's playbook contributes its play vars only; its role list is
+    # pinned equal to playbooks/site.yml by tests/test_preset_playbooks.py.
+    local playvars=""
+    if [ -f "$pdir/playbook.yml" ]; then
+        playvars=$(yq eval '.[0].vars // {}' "$pdir/playbook.yml")
+        if [ "$playvars" != "{}" ] && [ -n "$playvars" ]; then
+            local tmp_pv
+            tmp_pv=$(mktemp); printf '%s\n' "$playvars" > "$tmp_pv"
+            sources+=("$tmp_pv"); echo "- playbook vars"
+        fi
+    fi
+
+    # Captured rather than piped straight into xinas_config_replace_layer: a
+    # bare pipeline's exit status is never checked below, and this function's
+    # last statement is an unconditional `... || true` marker write - so
+    # without this check, a malformed var file makes yq fail, the previous
+    # overlay gets silently replaced with an empty one, and the function
+    # still returns 0. That is exactly the "fall through on a mixed preset"
+    # failure this helper exists to prevent (confirmed: with the old direct
+    # pipe, a preset with one good and one malformed var file printed both
+    # as applied, wrote a 0-byte layer, and returned rc=0).
+    local merged
+    if [ ${#sources[@]} -eq 0 ]; then
+        merged='---'
+    elif ! merged=$(yq eval-all '. as $item ireduce ({}; . * $item)' "${sources[@]}"); then
+        echo "preset $preset: failed to merge configuration" >&2
+        return 1
+    fi
+    # Plain statement, checked via a separate $? afterward, rather than
+    # `if ! ... | xinas_config_replace_layer preset; then`: testing a call to
+    # a local multi-statement function directly in an if/pipe condition
+    # suppresses `errexit` for that function's entire body for the duration
+    # of the call (documented bash behavior, the same class of gotcha as
+    # finding 3 in the Task 1 review) - avoided here even though it is not
+    # exploitable in the current body of xinas_config_replace_layer, since
+    # that function's only destructive statement is already its last one.
+    printf '%s\n' "$merged" | xinas_config_replace_layer preset
+    local write_rc=$?
+    if [ "$write_rc" -ne 0 ]; then
+        echo "preset $preset: failed to write overlay layer" >&2
+        return 1
+    fi
+
+    echo "$preset" > /opt/xiNAS/.xinas_applied_preset 2>/dev/null || true
+}
