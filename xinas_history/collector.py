@@ -13,7 +13,14 @@ from pathlib import Path
 from .grpc_inspector import GrpcInspector
 from .models import Checksums
 
-# Source paths for configuration files to collect (relative to repo root)
+# Source paths for configuration files to collect (relative to repo root).
+#
+# docs/superpowers/specs/2026-08-18-preset-overlay-design.md (§5, §10): the
+# role defaults, the netplan template and the playbook above are now the
+# IMMUTABLE base -- they are never written at runtime, only by a release. They
+# stay in CONFIG_SOURCES because they still change across releases, and a diff
+# spanning an update should show that. The entries below are the LIVE layers
+# that carry the desired state those files used to carry:
 CONFIG_SOURCES: dict[str, str] = {
     "common.defaults.yml": "collection/roles/common/defaults/main.yml",
     "network.defaults.yml": "collection/roles/net_controllers/defaults/main.yml",
@@ -23,6 +30,17 @@ CONFIG_SOURCES: dict[str, str] = {
     "exports.defaults.yml": "collection/roles/exports/defaults/main.yml",
     "nfs_server.defaults.yml": "collection/roles/nfs_server/defaults/main.yml",
     "playbook.site.yml": "playbooks/site.yml",
+    # Preset apply writes 10-preset.yml; the config editors (and manual netplan
+    # save) write 20-local.yml, which wins on conflict -- see lib/xinas_config.sh.
+    "overlay.preset.yml": "playbooks/group_vars/all/10-preset.yml",
+    "overlay.local.yml": "playbooks/group_vars/all/20-local.yml",
+    # Pairs with netplan.template.j2 above: that tracked template is what
+    # net_controllers renders by default; this untracked one is what
+    # configure_network.sh's manual mode writes instead, pointing
+    # net_netplan_template (in 20-local.yml) at it. Pool mode deletes both the
+    # key and this file, so only one of the two is ever the live template --
+    # both are snapshotted because which one applies is a runtime decision.
+    "netplan.live.j2": ".xinas-local/netplan.yaml.j2",
 }
 
 # System files to checksum

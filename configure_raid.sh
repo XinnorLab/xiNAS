@@ -5,11 +5,18 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/menu_lib.sh"
+source "$SCRIPT_DIR/lib/xinas_config.sh"
 
 backup_if_changed() {
     local file="$1" newfile="$2" ts
-    # `return 0`: a bare `return` would surface `[ -f ]`'s own 1 to the
-    # caller, where errexit kills the script. See docs/Installer/spec.md 2.8.
+    # `return 0`, not a bare `return`: a bare `return` would surface `[ -f ]`'s
+    # own failed-test status (1) to the caller, and every call site here runs
+    # this as a plain simple command under `set -eu`, so that 1 would abort
+    # the script. See docs/Installer/spec.md 2.8. Every caller in this file
+    # seeds $vars_file/$auto_vars_file via xinas_config_seed_local first,
+    # which always creates the overlay file - so this branch isn't reachable
+    # today - but the fix belongs on the shared helper, not on trusting
+    # every future caller to remember that precondition.
     [ -f "$file" ] || return 0
     if ! cmp -s "$file" "$newfile"; then
         ts=$(date +%Y%m%d%H%M%S)
@@ -17,8 +24,9 @@ backup_if_changed() {
     fi
 }
 
-vars_file="collection/roles/raid_fs/defaults/main.yml"
-auto_vars_file="collection/roles/nvme_namespace/defaults/main.yml"
+# All configuration writes land in the overlay; role defaults are read-only.
+vars_file="$XINAS_LOCAL_LAYER"
+auto_vars_file="$XINAS_LOCAL_LAYER"
 
 # Ensure required commands are present
 for cmd in yq lsblk; do
@@ -37,19 +45,14 @@ if ! yq --version 2>/dev/null | grep -q 'version v4'; then
     exit 1
 fi
 
-if [ ! -f "$vars_file" ]; then
-    echo "Error: $vars_file not found" >&2
-    exit 1
-fi
-
 get_devices() {
     local level="$1"
-    yq -r ".xiraid_arrays[] | select(.level==${level}) | .devices | join(\" \" )" "$vars_file" 2>/dev/null
+    xinas_config_effective | yq -r ".xiraid_arrays[] | select(.level==${level}) | .devices | join(\" \")" 2>/dev/null
 }
 
 get_spare_devices() {
     # Gracefully handle presets without a spare pool defined
-    yq -r '(.xiraid_spare_pools[0].devices // []) | join(" ")' "$vars_file" 2>/dev/null
+    xinas_config_effective | yq -r '(.xiraid_spare_pools[0].devices // []) | join(" ")' 2>/dev/null
 }
 
 edit_spare_pool() {
@@ -59,6 +62,7 @@ edit_spare_pool() {
     # `return` would hand that 1 back to the `case` branch that called this
     # function, where errexit turns a cancelled dialog into a dead script.
     new=$(input_box "Spare Pool" "Space-separated devices for spare pool:" "$current") || return 0
+    xinas_config_seed_local xiraid_spare_pools
     tmp=$(mktemp)
     # Ensure the spare pool has a name and update its device list
     NEW_LIST="$new" yq eval '.xiraid_spare_pools |= [(.[0] // {"name":"sp1"}) | .devices = (env(NEW_LIST) | split(" "))]' "$vars_file" > "$tmp"
@@ -97,6 +101,7 @@ edit_devices() {
         return
     fi
     new=$(input_box "${label} Array" "Space-separated devices for ${label}:" "$current") || return 0
+    xinas_config_seed_local xiraid_arrays
     tmp=$(mktemp)
     NEW_LIST="$new" yq "(.xiraid_arrays[] | select(.level==${level})).devices = (env(NEW_LIST) | split(\" \") )" "$vars_file" > "$tmp"
     backup_if_changed "$vars_file" "$tmp"
@@ -105,11 +110,7 @@ edit_devices() {
 
 # Auto-detect functions
 get_auto_enabled() {
-    if [ -f "$auto_vars_file" ]; then
-        yq -r '.nvme_auto_namespace // false' "$auto_vars_file" 2>/dev/null
-    else
-        echo "false"
-    fi
+    xinas_config_effective | yq -r '.nvme_auto_namespace // false' 2>/dev/null
 }
 
 detect_system_drive() {
@@ -166,10 +167,6 @@ show_auto_detection() {
 }
 
 toggle_auto_mode() {
-    if [ ! -f "$auto_vars_file" ]; then
-        msg_box "Not Found" "Auto-detection role not found.\nFile missing: $auto_vars_file"
-        return
-    fi
     local current new_val tmp
     current=$(get_auto_enabled)
     if [ "$current" = "true" ]; then
@@ -177,6 +174,7 @@ toggle_auto_mode() {
     else
         new_val="true"
     fi
+    xinas_config_seed_local nvme_auto_namespace
     tmp=$(mktemp)
     yq ".nvme_auto_namespace = $new_val" "$auto_vars_file" > "$tmp"
     backup_if_changed "$auto_vars_file" "$tmp"

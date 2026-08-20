@@ -136,7 +136,7 @@ Two collectors run in sequence during snapshot creation:
 
 | Collector | Sources | Output |
 |-----------|---------|--------|
-| `ConfigCollector` | Role `defaults/main.yml`, preset templates, `playbook.site.yml` | YAML/J2 files copied verbatim |
+| `ConfigCollector` | Role `defaults/main.yml` files, the netplan template, and `playbook.site.yml` (the immutable release base) plus the configuration overlay — `10-preset.yml`, `20-local.yml`, and the live netplan override (the desired state those used to carry; see [specs.md §2](specs.md#2-configuration-files-collected) and the [preset-overlay design](../superpowers/specs/2026-08-18-preset-overlay-design.md) §10) | YAML/J2 files copied verbatim |
 | `RuntimeCollector` | gRPC (`raid_show`, `pool_show`, `config_show`, `config_backup`), `/proc/mounts`, `exportfs -v`, `systemctl` | JSON artefacts in `runtime/` |
 
 ### validator.py -- PreflightValidator + PostApplyValidator
@@ -260,8 +260,9 @@ Engine.create_snapshot(label, type)
   │
   ├─► ConfigCollector.collect()
   │     ├── Copy role defaults/main.yml for each role
-  │     ├── Copy preset templates (netplan.yaml.j2, etc.)
-  │     └── Copy playbook.site.yml
+  │     ├── Copy the netplan template (tracked default + live override)
+  │     ├── Copy playbook.site.yml
+  │     └── Copy the configuration overlay (10-preset.yml, 20-local.yml)
   │
   ├─► RuntimeCollector.collect()
   │     ├── gRPC: raid_show, pool_show, config_show, config_backup
@@ -378,6 +379,9 @@ Engine.rollback(target_id)
 │   ├── exports.defaults.yml
 │   ├── nfs_server.defaults.yml
 │   ├── playbook.site.yml
+│   ├── overlay.preset.yml                 # present if a preset has been applied
+│   ├── overlay.local.yml                  # present if a config editor has written 20-local.yml
+│   ├── netplan.live.j2                    # present if manual netplan mode is active
 │   └── runtime/
 │       ├── raid-show.json
 │       ├── pool-show.json

@@ -105,6 +105,25 @@ jobs:
           cache: 'pip'
           cache-dependency-path: pyproject.toml
       - run: pip install -e '.[dev]'
+      # tests/test_preset_overlay.py shells out to yq (mikefarah/yq v4 — the Go
+      # binary, not the Python jq wrapper; see Important Notes in CLAUDE.md).
+      # Pinned + checksum-verified, mirroring prepare_system.sh's install_yq;
+      # keep the version/hash below in sync with that script's YQ_VERSION /
+      # YQ_SHA256_AMD64 when bumping. Runner is always amd64.
+      - run: |
+          YQ_VERSION="v4.53.3"
+          YQ_SHA256_AMD64="fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
+          tmp_yq="$(mktemp)"
+          wget -qO "$tmp_yq" \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          actual_sha="$(sha256sum "$tmp_yq" | awk '{print $1}')"
+          if [ "$actual_sha" != "$YQ_SHA256_AMD64" ]; then
+            echo "yq checksum mismatch: expected $YQ_SHA256_AMD64, got $actual_sha" >&2
+            rm -f "$tmp_yq"
+            exit 1
+          fi
+          sudo install -m 0755 "$tmp_yq" /usr/local/bin/yq
+          rm -f "$tmp_yq"
       # Coverage floor measured at 22% on 2026-06-11; floor set just below.
       # Ratchet upward when meaningful xinas_history coverage lands.
       - run: pytest --cov=xinas_history --cov-fail-under=20

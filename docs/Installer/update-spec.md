@@ -253,32 +253,113 @@ installed.
 
 ### Reset-to-release: local changes are discarded
 
-The installed `/opt/xiNAS` working tree is **git-dirty by design**. The
-installer materializes the chosen preset by copying preset files over
-tracked files — `presets/<name>/playbook.yml` → `playbooks/site.yml`,
-and each `presets/<name>/*.yml` → the matching role `defaults/main.yml`
+Before the preset-overlay change
+([docs/superpowers/specs/2026-08-18-preset-overlay-design.md](../superpowers/specs/2026-08-18-preset-overlay-design.md)),
+the installed `/opt/xiNAS` working tree was **git-dirty by design**:
+`apply_preset` materialized the chosen preset by copying preset files over
+tracked files — `presets/<name>/playbook.yml` → `playbooks/site.yml`, and
+each `presets/<name>/*.yml` → the matching role `defaults/main.yml`
 (`raid_fs`, `net_controllers`, `nvme_namespace`, `exports`) plus
 `net_controllers/templates/netplan.yaml.j2`. Whenever a new release also
-changes one of those tracked files, a plain `git checkout <tag>` aborts
-with *"Your local changes to the following files would be overwritten by
-checkout"* and the update fails.
+changed one of those tracked files, a plain `git checkout <tag>` aborted with
+*"Your local changes to the following files would be overwritten by
+checkout"* and the update failed.
 
-The apply therefore uses **`git checkout --force`**: the release tag
-wins and local modifications to **tracked** files are discarded
-(reset-to-release). **Untracked** files are preserved — the checkout
-uses `--force`, never `git clean`, so install markers
-(`.xinas_applied_preset`), cached `keys/`, and logs survive.
+**That is no longer how a preset is applied.** `apply_preset` /
+`xinas_apply_preset` ([lib/xinas_config.sh](../../lib/xinas_config.sh)) now
+write only the untracked configuration overlay —
+`playbooks/group_vars/all/10-preset.yml` (preset) and
+`playbooks/group_vars/all/20-local.yml` (config editors, including the
+manual-mode netplan override) — and never touch a file under
+`collection/roles/` or `playbooks/site.yml` at runtime; see
+[Installer/spec.md §1.0](./spec.md#10-the-configuration-layer-model). Both
+overlay files, and the manual netplan template at
+`.xinas-local/netplan.yaml.j2`, are listed in `.gitignore`, so on a fully
+migrated node `git status` no longer reports the role defaults or
+`playbooks/site.yml` as modified.
 
-Consequence to be aware of: after an update the role `defaults/main.yml`
-files and `playbooks/site.yml` hold the **release's** values, not the
-preset the operator materialized at install time. Day-2 runtime config
-lives in `/etc` (netplan `99-xinas.yaml`, `/etc/exports`,
-`/etc/nfs.conf`) and the live RAID — none of which the checkout touches
-— so a code-only update is transparent. But if the same update also
-carries a `Requires-Rebuild:` trailer for `raid_fs`, `net_controllers`,
-or `exports`, that role re-runs against the **release-default** config.
-Operators who rely on a rebuild preserving a customized layout must
-re-apply their preset (or re-materialize config) after such an update.
+The apply still uses **`git checkout --force`**, for two reasons that are
+now about the tree in general rather than about presets specifically:
+
+- **Untracked survives `--force` unconditionally**, which is exactly what
+  lets configuration persist across an update now, where before it did not.
+  The checkout uses `--force`, never `git clean`, so the overlay
+  (`playbooks/group_vars/all/`), `.xinas-local/`, install markers
+  (`.xinas_applied_preset`), cached `keys/`, and logs all survive.
+- **A pre-migration host may still have a dirty tracked tree.** A host that
+  last applied or saved a preset before this change wrote it straight into
+  `collection/roles/*/defaults/main.yml` and `playbooks/site.yml`, the old
+  way. `--force` is what lets that host take *this* update at all — a plain
+  checkout would still abort on those now-stale local modifications. See
+  *Migration* below and *Bootstrapping the forcing helper* further down this
+  document, which predates the overlay and remains in force for the same
+  reason.
+
+### Overlay migration: reconstructing the preset layer from the applied-preset marker
+
+(Distinct from *Migration* further below, which covers the one-time move
+from the old `git pull origin main` updater to this release-based one — this
+section is about the configuration overlay specifically.)
+
+The obvious migration — read the dirty tracked files on a pre-migration
+host, extract the overridden keys, restore the files — cannot run on the
+update path: `git checkout --force` (above) runs as part of Update apply
+step 2, *before* any of the incoming release's new code executes, so by the
+time that new code is live the old, mutated role defaults are already gone,
+reset to the release's pristine values.
+
+Instead, `xinas_migrate_overlay`
+([lib/xinas_config.sh](../../lib/xinas_config.sh)) reconstructs the overlay
+from what *does* survive the forced checkout: the untracked marker file,
+`/opt/xiNAS/.xinas_applied_preset`, that `apply_preset` writes on every
+successful apply. `startup_menu.sh`, `simple_menu.sh`, and `autoinstall.sh`
+all call it once at startup, before any menu or install logic runs, and it
+is idempotent:
+
+1. If `playbooks/group_vars/all/10-preset.yml` already exists, the node is
+   already migrated; do nothing.
+2. Otherwise, if the marker file names a preset that still exists under
+   `presets/`, re-apply that preset through the normal `xinas_apply_preset`
+   path. This write goes to the untracked overlay, so — unlike the
+   pre-migration write it replaces — it survives the *next* forced checkout
+   too.
+3. Otherwise (no marker — the node predates it, or the marker names a
+   preset that has since been removed) the overlay is left empty; the role
+   defaults apply as-is, and the caller reports that to the operator.
+
+**Config-editor edits made before a node's first migrated run are not
+recoverable.** They lived only in the tracked files the pre-migration code
+mutated directly, and `git checkout --force` has discarded local
+modifications to tracked files on *every* update since the forcing checkout
+was introduced — this is not a new loss particular to this change. The
+migration bridge recovers the **preset selection**, because the preset name
+survives in the untracked marker; it has no equivalent record of a later
+config-editor edit, because that edit was never written anywhere the forced
+checkout would spare. It is also only as complete as the marker itself:
+before the `apply_preset` consolidation that shipped alongside this change,
+only the `startup_menu.sh` copy of `apply_preset` wrote the marker, so a
+preset last applied through the old `simple_menu.sh` copy leaves nothing for
+the bridge to recover from either. This is a one-time gap on the update that
+first brings in this change — after migration, every preset and
+config-editor write goes to the untracked overlay and survives every
+subsequent update in full.
+
+Consequence to be aware of: after an update, the role `defaults/main.yml`
+files and `playbooks/site.yml` always hold the **release's** values — that
+is now true of every update, not a one-time side effect of materializing a
+preset. Day-2 desired state (preset selection, config-editor edits) lives
+entirely in the untracked overlay, which the checkout never touches, so it
+is unaffected by a code-only update. If the same update also carries a
+`Requires-Rebuild:` trailer for `raid_fs`, `net_controllers`, or `exports`,
+that role re-runs with the overlay merged on top of the new release's
+defaults, the same as any other `ansible-playbook playbooks/site.yml`
+invocation from the repo root (`group_vars` resolves relative to the
+playbook directory regardless of `--tags`; see the design doc §3
+measurements) — so a customized layout is carried forward across the
+rebuild rather than reset to the release defaults. Before the overlay, this
+was the opposite: a rebuild reverted a customized role to the release
+defaults, and operators had to re-apply their preset afterward — that
+limitation is gone for a fully migrated host.
 
 The privileged helper `/usr/local/sbin/xinas-update-git` (deployed by
 the `xinas_menu` Ansible role) whitelists exactly two operations:

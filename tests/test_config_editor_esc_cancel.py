@@ -15,9 +15,15 @@ loop, and terminates the process: the operator opens a sub-dialog, presses
 Esc, and the whole editor vanishes with no output and no diagnostic.
 
 The tests below run the real scripts against a stubbed `lib/menu_lib.sh` and
-stubbed `yq`/`ip`/`lsblk`/`findmnt`, script an Esc, and assert the editor is
-still alive afterwards — the menu is re-entered and the operator's own "Back"
-choice is what ends the process.
+stubbed `ip`/`lsblk`/`findmnt` — but the REAL `lib/xinas_config.sh` and the
+REAL `yq` binary, the same technique tests/test_preset_overlay.py already
+uses. These editors now source `lib/xinas_config.sh` for their reads and
+writes (`xinas_config_effective`/`_get`/`_set`/`_seed_local`, all real yq
+merges over real files), so a hand-written fake of that library would drift
+from the real one and rot into a test that passes while the product breaks.
+They script an Esc, and assert the editor is still alive afterwards — the
+menu is re-entered and the operator's own "Back" choice is what ends the
+process.
 
 Contract: docs/Installer/spec.md 2.8.
 """
@@ -30,6 +36,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -104,15 +111,15 @@ msg_box() { printf 'msg_box|%s|\n' "$1" >> "$XINAS_TEST_LOG"; }
 text_box() { printf 'text_box|%s|\n' "$1" >> "$XINAS_TEST_LOG"; }
 """
 
-YQ_STUB = r"""#!/usr/bin/env bash
-printf 'yq|%s\n' "$*" >> "$XINAS_TEST_LOG"
-if [ "$1" = "--version" ]; then
-    echo "yq (https://github.com/mikefarah/yq/) version v4.44.3"
-    exit 0
-fi
-[ -n "${XINAS_TEST_YQ_OUT:-}" ] && printf '%s\n' "$XINAS_TEST_YQ_OUT"
-exit 0
-"""
+# No yq stub: all three editors now `source lib/xinas_config.sh`, which itself
+# shells out to yq for every read and write (xinas_config_effective/_get/_set/
+# _seed_local). A fake yq that merely echoes a canned string back (the
+# previous design here, before lib/xinas_config.sh existed) cannot perform a
+# real multi-layer YAML merge, so xinas_config_effective would silently
+# return garbage instead of the merged document. The sandbox instead runs
+# against the REAL yq binary already on PATH plus real, minimal YAML fixtures
+# (see _raid_sandbox/_nfs_sandbox below and the per-test setup in the
+# network tests) — same approach as tests/test_preset_overlay.py.
 
 IP_STUB = r"""#!/usr/bin/env bash
 case "$*" in
@@ -141,9 +148,15 @@ def _sandbox(tmp_path: Path, script: str) -> Path:
 
     shutil.copy(REPO / script, root / script)
     (root / "lib" / "menu_lib.sh").write_text(MENU_LIB_STUB)
+    # The real helper, not a stub -- see the module docstring and the "No yq
+    # stub" note above. lib/xinas_config.sh computes REPO_DIR from its own
+    # BASH_SOURCE when not already set, so copying it under `root/lib/`
+    # (alongside the copied editor) makes REPO_DIR resolve to `root` with no
+    # override needed, exactly like the editor's own
+    # `source "$SCRIPT_DIR/lib/xinas_config.sh"` expects.
+    shutil.copy(REPO / "lib/xinas_config.sh", root / "lib" / "xinas_config.sh")
 
     for name, body in (
-        ("yq", YQ_STUB),
         ("ip", IP_STUB),
         ("lsblk", LSBLK_STUB),
         ("findmnt", FINDMNT_STUB),
@@ -155,7 +168,7 @@ def _sandbox(tmp_path: Path, script: str) -> Path:
     return root
 
 
-def _run(root: Path, script: str, queue: list[str], yq_out: str = "") -> tuple[int, list[str]]:
+def _run(root: Path, script: str, queue: list[str]) -> tuple[int, list[str]]:
     """Drive one editor through `queue` and return (exit status, call log)."""
     (root / "queue").write_text("\n".join(queue) + "\n")
     (root / "idx").write_text("0")
@@ -169,7 +182,6 @@ def _run(root: Path, script: str, queue: list[str], yq_out: str = "") -> tuple[i
             "XINAS_TEST_QUEUE": str(root / "queue"),
             "XINAS_TEST_IDX": str(root / "idx"),
             "XINAS_TEST_LOG": str(log),
-            "XINAS_TEST_YQ_OUT": yq_out,
             "TMP_DIR": str(root / "tmp"),
             # These editors call `clear` before drawing each menu; with no TERM
             # it exits nonzero and errexit would kill the script for a reason
@@ -266,15 +278,17 @@ def test_network_manual_esc_restores_pool_mode(tmp_path):
     template.parent.mkdir(parents=True)
     template.write_text("ORIGINAL\n")
 
-    rc, entries = _run(root, "configure_network.sh", ["OK 2", "CANCEL", "OK 4"], yq_out="true")
+    rc, entries = _run(root, "configure_network.sh", ["OK 2", "CANCEL", "OK 4"])
 
     assert rc == 0, f"editor died after Esc (exit {rc}); log={entries}"
     # configure_manual() disables pool mode up front. Abandoning the interface
     # picker must undo that, or the box is left with pool mode off and an
-    # untouched template -- every NIC stranded without an address.
-    yq_calls = [e for e in entries if e.startswith("yq|")]
-    assert any(".net_ip_pool_enabled = true" in c for c in yq_calls), (
-        f"pool mode was not restored after Esc; yq calls={yq_calls}"
+    # untouched template -- every NIC stranded without an address. Checked
+    # against the real overlay file enable_pool_mode() (via the real
+    # xinas_config_set) actually wrote, not a fake yq's call log.
+    local_layer = yaml.safe_load((root / "playbooks/group_vars/all/20-local.yml").read_text())
+    assert local_layer.get("net_ip_pool_enabled") is True, (
+        f"pool mode was not restored after Esc; local layer={local_layer}"
     )
     assert template.read_text() == "ORIGINAL\n", "Esc must not rewrite the template"
 
@@ -295,16 +309,17 @@ def test_network_manual_esc_discards_staged_interfaces(tmp_path):
         root,
         "configure_network.sh",
         ["OK 2", "OK eth0", "OK 192.0.2.5/24", "CANCEL", "OK 4"],
-        yq_out="true",
     )
 
     assert rc == 0, f"editor died after Esc (exit {rc}); log={entries}"
     assert template.read_text() == "ORIGINAL\n", (
         "Esc after staging an address must not rewrite the netplan template"
     )
-    yq_calls = [e for e in entries if e.startswith("yq|")]
-    assert any(".net_ip_pool_enabled = true" in c for c in yq_calls), (
-        f"pool mode was not restored after Esc; yq calls={yq_calls}"
+    # Real overlay file, not a fake yq's call log -- see the sibling test
+    # above (test_network_manual_esc_restores_pool_mode) for why.
+    local_layer = yaml.safe_load((root / "playbooks/group_vars/all/20-local.yml").read_text())
+    assert local_layer.get("net_ip_pool_enabled") is True, (
+        f"pool mode was not restored after Esc; local layer={local_layer}"
     )
 
 
@@ -317,7 +332,20 @@ def _raid_sandbox(tmp_path: Path) -> Path:
     root = _sandbox(tmp_path, "configure_raid.sh")
     vars_file = root / "collection/roles/raid_fs/defaults/main.yml"
     vars_file.parent.mkdir(parents=True)
-    vars_file.write_text("---\nxiraid_arrays: []\n")
+    # edit_devices() bails out to a "Not Defined" msg_box (never reaching
+    # input_box) when get_devices() comes back empty -- real yq against an
+    # empty xiraid_arrays: [] would do exactly that, so the DATA (level 6)
+    # array needs real devices for the Esc prompt to ever appear.
+    vars_file.write_text(
+        "---\n"
+        "xiraid_arrays:\n"
+        "  - name: data1\n"
+        "    level: 6\n"
+        "    devices: [/dev/nvme0n1, /dev/nvme1n1]\n"
+        "  - name: log1\n"
+        "    level: 1\n"
+        "    devices: [/dev/nvme2n1]\n"
+    )
     return root
 
 
@@ -327,7 +355,6 @@ def test_raid_edit_devices_esc_returns_to_menu(tmp_path):
         root,
         "configure_raid.sh",
         ["OK 1", "CANCEL", "OK 6"],
-        yq_out="/dev/nvme0n1 /dev/nvme1n1",
     )
 
     assert rc == 0, f"editor died after Esc (exit {rc}); log={entries}"
@@ -344,7 +371,6 @@ def test_raid_spare_pool_esc_returns_to_menu(tmp_path):
         root,
         "configure_raid.sh",
         ["OK 3", "CANCEL", "OK 6"],
-        yq_out="/dev/nvme0n1 /dev/nvme1n1",
     )
 
     assert rc == 0, f"editor died after Esc (exit {rc}); log={entries}"
@@ -363,7 +389,6 @@ def test_raid_edit_devices_esc_leaves_vars_file_untouched(tmp_path):
         root,
         "configure_raid.sh",
         ["OK 1", "CANCEL", "OK 6"],
-        yq_out="/dev/nvme0n1 /dev/nvme1n1",
     )
 
     assert rc == 0
@@ -389,7 +414,6 @@ def test_nfs_edit_export_esc_returns_to_menu(tmp_path):
         root,
         "configure_nfs_exports.sh",
         ["OK /mnt/data/share", "CANCEL", "OK Back"],
-        yq_out="/mnt/data/share",
     )
 
     assert rc == 0, f"editor died after Esc (exit {rc}); log={entries}"
@@ -406,7 +430,6 @@ def test_nfs_edit_export_esc_at_options_prompt_returns_to_menu(tmp_path):
         root,
         "configure_nfs_exports.sh",
         ["OK /mnt/data/share", "OK *", "CANCEL", "OK Back"],
-        yq_out="/mnt/data/share",
     )
 
     assert rc == 0, f"editor died after Esc (exit {rc}); log={entries}"
@@ -419,7 +442,6 @@ def test_nfs_add_export_esc_returns_to_menu(tmp_path):
         root,
         "configure_nfs_exports.sh",
         ["OK Add", "CANCEL", "OK Back"],
-        yq_out="/mnt/data/share",
     )
 
     assert rc == 0, f"editor died after Esc (exit {rc}); log={entries}"
@@ -436,7 +458,6 @@ def test_nfs_add_export_esc_at_options_prompt_returns_to_menu(tmp_path):
         root,
         "configure_nfs_exports.sh",
         ["OK Add", "OK /mnt/data/new", "OK *", "CANCEL", "OK Back"],
-        yq_out="/mnt/data/share",
     )
 
     assert rc == 0, f"editor died after Esc (exit {rc}); log={entries}"

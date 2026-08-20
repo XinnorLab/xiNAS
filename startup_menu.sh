@@ -36,6 +36,13 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 # Source the menu library
 source "$SCRIPT_DIR/lib/menu_lib.sh"
+. "$SCRIPT_DIR/lib/xinas_config.sh"
+
+# One-shot bridge for hosts installed before the configuration overlay
+# existed (docs/superpowers/specs/2026-08-18-preset-overlay-design.md §9).
+# No-op on every run after the first.
+migrated=$(xinas_migrate_overlay) || true
+if [ -n "$migrated" ]; then msg_box "Configuration Migrated" "$migrated"; fi
 
 # Update check — GitHub Releases only (never the main branch).
 # See docs/Installer/update-spec.md.
@@ -283,13 +290,11 @@ show_playbook_info() {
     fi
 }
 
-# Show NFS share configuration based on exports role defaults
+# Show NFS share configuration based on the effective exports config
+# (role defaults, overlaid with any preset/operator overrides).
 configure_nfs_shares() {
-    local vars_file="collection/roles/exports/defaults/main.yml"
-    if [ ! -f "$vars_file" ]; then
-        msg_box "Error" "File $vars_file not found"
-        return
-    fi
+    local vars_file="$TMP_DIR/effective_exports.yml"
+    xinas_config_effective > "$vars_file"
     local share_start
     share_start=$(grep -n '^exports:' "$vars_file" | cut -d: -f1)
     local tmp="$TMP_DIR/nfs_info"
@@ -545,7 +550,16 @@ install_menu() {
             apply_preset "default"
             # Set skip flags for xiraid and namespace roles
             local extra_vars="xiraid_skip_install=true nvme_auto_namespace=false"
-            if check_license && check_remove_xiraid && confirm_playbook "playbooks/site.yml"; then
+            # No check_remove_xiraid here, unlike the tail below: the arrays
+            # this path depends on need xiRAID's own packages (xicli,
+            # /dev/xi_*) to already be present, and playbooks/site.yml's
+            # xiraid_classic guard (`when: not (xiraid_skip_install | ...)`)
+            # means nothing on this run reinstalls them once
+            # xiraid_skip_install=true is passed below - purging here would
+            # remove xiRAID and never put it back. autoinstall.sh:140-142
+            # encodes the same rule for --preset existing-raid
+            # (purge_xiraid="no"); mirrored here rather than restored.
+            if check_license && confirm_playbook "playbooks/site.yml"; then
                 if run_playbook_with_vars "playbooks/site.yml" "$extra_vars"; then
                     echo ""
                     echo "🎉 Deployment complete! System status:"
@@ -570,42 +584,17 @@ install_menu() {
     fi
 }
 
-# Copy configuration files from a preset directory and optionally run its playbook
+# Merge configuration files from a preset directory into the group_vars
+# overlay and optionally run its playbook
 apply_preset() {
-    local preset="$1"
-    local pdir="$REPO_DIR/presets/$preset"
-    [ -d "$pdir" ] || { msg_box "Error" "Preset $preset not found"; return; }
-
-    local msg="Applying preset: $preset\n"
-    if [ -f "$pdir/network.yml" ]; then
-        cp "$pdir/network.yml" "collection/roles/net_controllers/defaults/main.yml"
-        msg+="- IP pool configuration\n"
-    fi
-    if [ -f "$pdir/netplan.yaml.j2" ]; then
-        cp "$pdir/netplan.yaml.j2" "collection/roles/net_controllers/templates/netplan.yaml.j2"
-        msg+="- network template\n"
-    fi
-    if [ -f "$pdir/raid_fs.yml" ]; then
-        cp "$pdir/raid_fs.yml" "collection/roles/raid_fs/defaults/main.yml"
-        msg+="- RAID configuration\n"
-    fi
-    if [ -f "$pdir/nvme_namespace.yml" ]; then
-        cp "$pdir/nvme_namespace.yml" "collection/roles/nvme_namespace/defaults/main.yml"
-        msg+="- NVMe namespace configuration\n"
-    fi
-    if [ -f "$pdir/nfs_exports.yml" ]; then
-        cp "$pdir/nfs_exports.yml" "collection/roles/exports/defaults/main.yml"
-        msg+="- NFS exports\n"
-    fi
-    if [ -f "$pdir/playbook.yml" ]; then
-        cp "$pdir/playbook.yml" "playbooks/site.yml"
-        msg+="- playbook updated\n"
-    fi
-    # Record the applied preset so the motd role can stamp
-    # /opt/xiNAS/.installed_preset on a successful install (finding #16). The
-    # autoinstall path passes the same value as -e xinas_install_preset.
-    echo "$preset" > /opt/xiNAS/.xinas_applied_preset 2>/dev/null || true
-    msg_box "Preset Applied" "$msg"
+    local preset="$1" applied rc=0
+    applied=$(xinas_apply_preset "$preset") || rc=$?
+    case "$rc" in
+        0) msg_box "Preset Applied" "Applying preset: $preset\n$applied" ;;
+        2) msg_box "Error" "Preset $preset not found" ;;
+        3) msg_box "Error" "Preset $preset ships a netplan template, which is not supported" ;;
+        *) msg_box "Error" "Preset $preset could not be applied" ;;
+    esac
 }
 
 # Present available presets to the user
@@ -649,13 +638,26 @@ save_preset() {
         rm -rf "$pdir"
     fi
     mkdir -p "$pdir"
-    cp "collection/roles/net_controllers/defaults/main.yml" "$pdir/network.yml" 2>/dev/null || true
-    cp "collection/roles/net_controllers/templates/netplan.yaml.j2" "$pdir/netplan.yaml.j2" 2>/dev/null || true
-    cp "collection/roles/raid_fs/defaults/main.yml" "$pdir/raid_fs.yml" 2>/dev/null || true
-    cp "collection/roles/nvme_namespace/defaults/main.yml" "$pdir/nvme_namespace.yml" 2>/dev/null || true
-    cp "collection/roles/exports/defaults/main.yml" "$pdir/nfs_exports.yml" 2>/dev/null || true
-    [ -f "playbooks/site.yml" ] && cp "playbooks/site.yml" "$pdir/playbook.yml"
-    msg_box "Preset Saved" "Preset saved to $pdir"
+
+    # Decomposes the live overlay (preset + operator layers, not the
+    # git-tracked role defaults) back into presets/$preset/*.yml. Guarded the
+    # same way apply_preset above guards xinas_apply_preset: called through
+    # command substitution, a bare failing statement inside
+    # xinas_save_preset would otherwise not abort it under `set -e` (errexit
+    # is suspended for the whole callee body in this calling shape), so
+    # xinas_save_preset checks its own failures explicitly rather than
+    # relying on that.
+    local skipped rc=0
+    skipped=$(xinas_save_preset "$preset" 2>&1 >/dev/null) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        msg_box "Error" "Preset $preset could not be saved.\n\n$skipped"
+        return
+    fi
+    if [ -n "$skipped" ]; then
+        msg_box "Preset Saved (with notes)" "Preset saved to $pdir\n\n$skipped"
+    else
+        msg_box "Preset Saved" "Preset saved to $pdir"
+    fi
 }
 
 has_license() {

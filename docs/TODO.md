@@ -20,6 +20,133 @@ Format: `## <area> — <what is missing>`, newest first, with the date it was
 deferred and the change that deferred it.
 
 ---
+## Installer — the design's secondary repair path for a tree dirtied outside the update flow was never built
+
+*Deferred 2026-08-19, from the preset-overlay change
+([docs/superpowers/specs/2026-08-18-preset-overlay-design.md](superpowers/specs/2026-08-18-preset-overlay-design.md) §9).*
+
+**What is missing.** The design specifies a second migration path beyond the
+marker-based bridge (`xinas_migrate_overlay`): for the six paths preset
+application used to write (the four role `defaults/main.yml` files it
+copied over, `net_controllers/templates/netplan.yaml.j2`, and
+`playbooks/site.yml`), extract the keys that differ from `HEAD`, write only
+those keys into `20-local.yml`, then `git checkout --` the path back to
+clean. This was meant to recover a tree dirtied by something other than the
+update flow itself. No task in the execution plan ever built it, and no code
+in `lib/xinas_config.sh` does what that design paragraph describes.
+
+**Current behavior.** `xinas_migrate_overlay` only ever reads the untracked
+`/opt/xiNAS/.xinas_applied_preset` marker; it never diffs any of the six
+tracked paths against `HEAD`. A tracked file left dirty by something other
+than the pre-migration `apply_preset` / `save_preset` is not specifically
+reconciled by any migration code — it is only ever cleaned up as a side
+effect of the next `git checkout --force` during an update, which discards
+it rather than extracting its keys first.
+
+**Why it was cut.** After the preset-overlay change, nothing in the product
+writes those six tracked paths at runtime any more — `configure_raid.sh`,
+`configure_network.sh`, `configure_nfs_exports.sh`, `configure_hostname.sh`,
+`apply_preset`, and `save_preset` all write the untracked overlay
+exclusively ([Installer/spec.md §1.0](Installer/spec.md#10-the-configuration-layer-model)).
+So a dirty tree on one of those six paths can now only be **legacy state**
+left over from before this change, on a host that has not yet gone through
+the marker-based migration. The next update's `git checkout --force` cleans
+that legacy dirt unconditionally, and the marker bridge already restores the
+preset that produced it — provided the pre-migration host applied that
+preset through a code path that wrote the marker, which before the
+`apply_preset` consolidation in this same change was only the
+`startup_menu.sh` copy (a preset applied from the old `simple_menu.sh` copy
+left no marker). The secondary path would additionally recover an operator's
+config-editor edits layered on top of that legacy dirt, which the marker
+cannot name — a narrower case, and building the per-key `git diff`-against-
+`HEAD` extraction correctly (per-key, not per-file, to avoid recreating the
+frozen-snapshot problem the whole change exists to remove) is real,
+non-trivial work of its own.
+
+**What done looks like.** For each of the six paths, if it is dirty relative
+to `git show HEAD:<path>`, diff the two YAML documents key by key, write the
+differing keys — and only those — into `20-local.yml`, then
+`git checkout -- <path>`. No blanket `git checkout .`: the path list stays
+fixed at the six names, and any local modification outside that list is
+reported to the operator, not silently discarded. A test proves the
+extraction returns only the changed keys, not a whole-file copy.
+
+## Installer — `tests/test_no_runtime_writes_to_tracked.py` cannot see a write reached through a variable
+
+*Deferred 2026-08-19, from Task 11 of the preset-overlay change
+(`configure_hostname.sh` writes the overlay, not role defaults, commit
+`f376ed6`).*
+
+**What is missing.** The contract test is a textual regex over each listed
+script's source (`SCRIPTS` in the test file), not a behavioral check. It
+flags a direct, literal write to a tracked path (`collection/roles/**` or
+`playbooks/site.yml`) spelled out inline in a `cp`/`mv`/`cat >`/`yq -i`/
+redirect command. It cannot see a write that reaches the same tracked path
+indirectly through a shell variable: `vars_file=".../defaults/main.yml"`
+followed by `mv "$tmp" "$vars_file"` two lines later reads, to the regex,
+like a write to `$vars_file`, which matches nothing in the pattern.
+
+**Current behavior.** Both bugs this test exists to prevent a regression of
+were exactly this indirect shape historically — `configure_hostname.sh`
+(fixed in the same change that added it to `SCRIPTS`, commit `f376ed6`) and
+`configure_raid.sh` (fixed earlier in the same plan) both wrote a tracked
+role default through a `$vars_file`-style variable. Neither would have been
+caught by this test even if it had listed the script at the time: adding
+`configure_hostname.sh` to `SCRIPTS` now only prevents a *future* direct
+literal write in that file; it does not, and structurally cannot, prove the
+original bug would have been caught.
+
+**Why it was cut.** This is a deliberate design tradeoff, not an oversight —
+[docs/superpowers/specs/2026-08-18-preset-overlay-design.md](superpowers/specs/2026-08-18-preset-overlay-design.md)
+§11 states the property worth pinning, "nothing writes there," is "cheap to
+state textually and expensive to state behaviourally," and chose the grep
+knowingly. A real fix needs either shell data-flow tracing (resolving a
+variable to its assigned literal before matching) or running each script
+behaviorally against a scratch repo checkout and diffing the tracked tree
+before and after — both materially larger than the regex this test is.
+
+**What done looks like.** At minimum, extend the regex to trace a
+single-hop `var=<literal>` assignment to a tracked path and then match a
+write through `$var` — this would have caught both historical bugs without
+full data-flow analysis. The more thorough option is to actually run every
+script in `SCRIPTS` against a scratch checkout and assert the tracked tree
+is byte-identical before and after, generalizing the harness
+`tests/test_preset_overlay.py` already uses to prove the individual
+`configure_*.sh` read-modify-write contracts.
+
+## Installer — `net_detect_infiniband` / `net_detect_mlx5` are dead
+
+*Deferred 2026-08-19, from the preset-overlay change
+([docs/superpowers/specs/2026-08-18-preset-overlay-design.md](superpowers/specs/2026-08-18-preset-overlay-design.md) §2 Non-goals).*
+
+**What is missing.** `collection/roles/net_controllers/defaults/main.yml`
+declares both `net_detect_infiniband` and `net_detect_mlx5` (both default
+`true`), but no task anywhere in the role reads either key.
+
+**Current behavior.** Both keys are inert. Before the preset-overlay change,
+`configure_network.sh` wrote a fixed set of pool keys that omitted both, and
+applying either preset copied a `network.yml` that also omits them over the
+role defaults — deleting them from the effective configuration on every
+apply. Nothing broke, because nothing reads them either way.
+`configure_network.sh` no longer writes role defaults at all (it writes the
+`20-local.yml` overlay instead), so that particular deletion path is gone,
+but the two keys remain unreferenced by any task.
+
+**Why it was cut.** Deciding whether interface detection should honour these
+two flags, or whether they should be removed entirely, is a role-behavior
+question outside the preset-overlay change's scope — recorded as a Non-goal
+in the design doc. Until decided,
+`tests/test_preset_key_ownership.py::test_every_preset_key_is_defined_by_some_role`
+is the only guard that exists: it stops a preset from setting either key
+without some role defining it, so a preset author cannot silently ship a
+key that looks load-bearing but is not wired to anything.
+
+**What done looks like.** Either wire both into the role's interface
+detection step (`collection/roles/net_controllers/tasks/`), or remove them
+from `defaults/main.yml`. Whichever direction is chosen, update
+[Installer/spec.md §3.3](Installer/spec.md#33-net_controllers--network-discovery--netplan)
+to match.
+
 ## Config history — the risk class is hidden in the TUI, not fixed
 
 *Deferred 2026-08-15, from the "every row is destroying_data" report.*

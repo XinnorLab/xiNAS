@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import jinja2
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
@@ -33,6 +34,12 @@ STORAGE_SPEC = REPO / "docs/Storage/raid-management-spec.md"
 # "RAIDs explained" — RAID 0 takes 1 drive, RAID 5 takes 4, RAID 50/60 take 8.
 # RAID 10's 4 is a xiNAS choice: the guide's own minimum is 2, even.
 STRICT_MINIMUMS = {"0": 1, "1": 2, "5": 4, "6": 4, "10": 4, "50": 8, "60": 8}
+
+# The floor applied to a level the table does not cover, documented as 2 in both
+# `install.MD` and the role README. Held here rather than read back out of the
+# role so the render assertions below fail on a missing variable instead of
+# quietly agreeing with whatever the role happens to ship.
+FALLBACK_MINIMUM = 2
 
 # Levels the strict table shares with the control path's wider level list
 # (which also carries raid7/raid70/n+m, outside the TUI + installer surface).
@@ -70,6 +77,28 @@ def _iter_tasks(tasks):
         yield task
         if isinstance(task.get("block"), list):
             yield from _iter_tasks(task["block"])
+
+
+def _set_fact_expr(var: str) -> str:
+    """The single expression that `generate_raid_config.yml` assigns to `var`."""
+    setters = [
+        task
+        for task in _iter_tasks(_generate_tasks())
+        if var in (task.get("ansible.builtin.set_fact") or {})
+    ]
+    assert len(setters) == 1, f"{var} is set by {len(setters)} tasks; expected one"
+    return str(setters[0]["ansible.builtin.set_fact"][var])
+
+
+def _render(expr: str, **overrides) -> str:
+    """Render `expr` the way Ansible would, against the role's own defaults.
+
+    `StrictUndefined` is the point: a fallback that names a variable nobody
+    ships raises here instead of quietly rendering empty, which is exactly how
+    an undefined `nvme_raid_min_devices_default` reaches a real `site.yml` run.
+    """
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    return env.from_string(expr).render(**{**_role_defaults(), **overrides}).strip()
 
 
 # ── TUI Create Array wizard ──────────────────────────────────────────────────
@@ -142,6 +171,54 @@ def test_role_defaults_carry_the_strict_table():
     assert {str(k): int(v) for k, v in table.items()} == STRICT_MINIMUMS
 
 
+def test_role_defaults_define_the_fallback_minimum():
+    """The table's fallback must be shipped, not just documented.
+
+    `install.MD` and the role README both list `nvme_raid_min_devices_default`
+    with the value 2, and `generate_raid_config.yml` passes it to `default()`.
+    Documented-but-undefined is the failure mode: every `site.yml` run aborts in
+    this role with "'nvme_raid_min_devices_default' is undefined".
+    """
+    assert _role_defaults().get("nvme_raid_min_devices_default") == FALLBACK_MINIMUM
+
+
+def test_min_device_lookup_renders_against_the_role_defaults():
+    """Render the lookup, do not just grep it.
+
+    Asserting the expression *mentions* `nvme_raid_min_devices_default` passes
+    whether or not the variable resolves — the assertion below is what fails if
+    it is dropped from `defaults/main.yml`.
+    """
+    for min_var, level_var in (
+        ("_data_min_devices", "nvme_raid_data_level"),
+        ("_log_min_devices", "nvme_raid_log_level"),
+    ):
+        expr = _set_fact_expr(min_var)
+        for level, minimum in STRICT_MINIMUMS.items():
+            rendered = _render(expr, **{level_var: int(level)})
+            assert rendered == str(minimum), (
+                f"{min_var} renders {rendered!r} for RAID {level}; table says {minimum}"
+            )
+
+
+def test_min_device_lookup_falls_back_for_a_level_absent_from_the_table():
+    """The branch that actually consumes the fallback.
+
+    A level in the table never evaluates `default()`'s argument, so only an
+    unknown level proves `nvme_raid_min_devices_default` resolves at all.
+    """
+    for min_var, level_var in (
+        ("_data_min_devices", "nvme_raid_data_level"),
+        ("_log_min_devices", "nvme_raid_log_level"),
+    ):
+        expr = _set_fact_expr(min_var)
+        rendered = _render(expr, **{level_var: 99})
+        assert rendered == str(FALLBACK_MINIMUM), (
+            f"{min_var} renders {rendered!r} for an unknown level; "
+            f"the documented fallback is {FALLBACK_MINIMUM}"
+        )
+
+
 def test_removed_scalar_knobs_are_gone_from_defaults_and_presets():
     """The per-level scalars are what let the two surfaces drift apart."""
     defaults = _role_defaults()
@@ -174,6 +251,8 @@ def test_generate_raid_config_validates_from_the_table():
         expr = str(setters[0]["ansible.builtin.set_fact"][min_var])
         assert "nvme_raid_min_devices" in expr, expr
         assert level_var in expr, expr
+        # Structural only — that the fallback *resolves* is pinned by
+        # test_min_device_lookup_falls_back_for_a_level_absent_from_the_table.
         assert "nvme_raid_min_devices_default" in expr, f"{min_var} has no fallback: {expr}"
         assert "when" not in setters[0], f"the {min_var} lookup must not be level-gated"
 

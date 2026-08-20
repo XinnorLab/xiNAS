@@ -10,7 +10,7 @@ Sources this spec is derived from:
 - [collection/roles/net_controllers/tasks/main.yml](../../collection/roles/net_controllers/tasks/main.yml), [templates/netplan.yaml.j2](../../collection/roles/net_controllers/templates/netplan.yaml.j2), [handlers/main.yml](../../collection/roles/net_controllers/handlers/main.yml)
 - [collection/roles/perf_tuning/tasks/main.yml](../../collection/roles/perf_tuning/tasks/main.yml) (network sysctl + per-NIC ethtool block)
 - [collection/roles/roce_lossless/defaults/main.yml](../../collection/roles/roce_lossless/defaults/main.yml) (optional, off by default)
-- Preset overrides: [presets/default/network.yml](../../presets/default/network.yml), [presets/xinnorVM/network.yml](../../presets/xinnorVM/network.yml), [presets/*/netplan.yaml.j2](../../presets/default/netplan.yaml.j2)
+- Preset overrides: [presets/default/network.yml](../../presets/default/network.yml), [presets/xinnorVM/network.yml](../../presets/xinnorVM/network.yml) — merged into the configuration overlay at apply time, not copied over the role; see [Installer/spec.md §1.0](spec.md#10-the-configuration-layer-model). No preset may ship a `netplan.yaml.j2` (§7.8 there).
 
 ---
 

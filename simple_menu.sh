@@ -11,6 +11,13 @@ trap '' INT   # Ignore Ctrl+C — menus handle cancellation via Esc/Back
 
 # Source the menu library
 source "$SCRIPT_DIR/lib/menu_lib.sh"
+. "$SCRIPT_DIR/lib/xinas_config.sh"
+
+# One-shot bridge for hosts installed before the configuration overlay
+# existed (docs/superpowers/specs/2026-08-18-preset-overlay-design.md §9).
+# No-op on every run after the first.
+migrated=$(xinas_migrate_overlay) || true
+if [ -n "$migrated" ]; then msg_box "Configuration Migrated" "$migrated"; fi
 
 # Update check — GitHub Releases only (never the main branch).
 # See docs/Installer/update-spec.md.
@@ -424,15 +431,22 @@ reuse_existing_arrays() {
         return 1
     fi
 
-    # Write configuration via yq
-    local auto_vars="$REPO_DIR/collection/roles/nvme_namespace/defaults/main.yml"
-    local raid_vars="$REPO_DIR/collection/roles/raid_fs/defaults/main.yml"
-    local xiraid_vars="$REPO_DIR/collection/roles/xiraid_classic/defaults/main.yml"
+    # All configuration writes land in the overlay; role defaults are read-only.
+    local auto_vars="$XINAS_LOCAL_LAYER"
+    local raid_vars="$XINAS_LOCAL_LAYER"
+    local xiraid_vars="$XINAS_LOCAL_LAYER"
 
-    yq -i '.nvme_auto_namespace = false' "$auto_vars"
-    yq -i '.xiraid_skip_install = true' "$xiraid_vars"
-    yq -i '.xiraid_force_metadata = false' "$raid_vars"
-    yq -i '.xfs_force_mkfs = false' "$raid_vars"
+    # xinas_config_set (rather than the raw `yq -i "..." "$auto_vars"` this
+    # replaced) because these four are the first writes of this run: the
+    # overlay file does not exist yet on a fresh checkout, and a raw
+    # `yq -i` on a missing file errors out ("no such file or directory")
+    # rather than creating it. xinas_config_set creates it. The two
+    # structural yq -i calls below run after these, so by the time they
+    # execute the file is already there.
+    xinas_config_set local nvme_auto_namespace false
+    xinas_config_set local xiraid_skip_install true
+    xinas_config_set local xiraid_force_metadata false
+    xinas_config_set local xfs_force_mkfs false
 
     # Build xiraid_arrays YAML
     local data_devices_yaml=""
@@ -471,7 +485,7 @@ reuse_existing_arrays() {
     fs_yaml+="    mountpoint: \"$mountpoint\""$'\n'
     fs_yaml+="    mount_opts: \"logdev=/dev/xi_${log_array},noatime,nodiratime,logbsize=256k,largeio,inode64,swalloc,allocsize=131072k\""$'\n'
 
-    # Write arrays and filesystems to raid_fs defaults
+    # Write arrays and filesystems to the overlay
     local combined_yaml="${arrays_yaml}${fs_yaml}"
     echo "$combined_yaml" > "$TMP_DIR/raid_config.yml"
 
@@ -502,35 +516,14 @@ confirm_playbook() {
 }
 
 apply_preset() {
-    local preset="$1"
-    local pdir="$REPO_DIR/presets/$preset"
-    [ -d "$pdir" ] || { msg_box "Error" "Preset $preset not found"; return; }
-    local msg="Applying preset: $preset\n"
-    if [ -f "$pdir/network.yml" ]; then
-        cp "$pdir/network.yml" "collection/roles/net_controllers/defaults/main.yml"
-        msg+="- IP pool configuration\n"
-    fi
-    if [ -f "$pdir/netplan.yaml.j2" ]; then
-        cp "$pdir/netplan.yaml.j2" "collection/roles/net_controllers/templates/netplan.yaml.j2"
-        msg+="- network template\n"
-    fi
-    if [ -f "$pdir/raid_fs.yml" ]; then
-        cp "$pdir/raid_fs.yml" "collection/roles/raid_fs/defaults/main.yml"
-        msg+="- RAID configuration\n"
-    fi
-    if [ -f "$pdir/nvme_namespace.yml" ]; then
-        cp "$pdir/nvme_namespace.yml" "collection/roles/nvme_namespace/defaults/main.yml"
-        msg+="- NVMe namespace configuration\n"
-    fi
-    if [ -f "$pdir/nfs_exports.yml" ]; then
-        cp "$pdir/nfs_exports.yml" "collection/roles/exports/defaults/main.yml"
-        msg+="- NFS exports\n"
-    fi
-    if [ -f "$pdir/playbook.yml" ]; then
-        cp "$pdir/playbook.yml" "playbooks/site.yml"
-        msg+="- playbook updated\n"
-    fi
-    msg_box "Preset Applied" "$msg"
+    local preset="$1" applied rc=0
+    applied=$(xinas_apply_preset "$preset") || rc=$?
+    case "$rc" in
+        0) msg_box "Preset Applied" "Applying preset: $preset\n$applied" ;;
+        2) msg_box "Error" "Preset $preset not found" ;;
+        3) msg_box "Error" "Preset $preset ships a netplan template, which is not supported" ;;
+        *) msg_box "Error" "Preset $preset could not be applied" ;;
+    esac
 }
 
 choose_preset() {

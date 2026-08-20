@@ -13,7 +13,26 @@ Source layout this spec is derived from:
 
 ## 1. Presets
 
-Presets live under [presets/](../../presets) and are selected from the interactive installer (`prepare_system.sh` → `startup_menu.sh`) or named non-interactively for unattended installs (§7). Each preset directory contains a `playbook.yml` that defines the role execution order plus a small set of YAML/J2 files that override role defaults.
+Presets live under [presets/](../../presets) and are selected from the interactive installer (`prepare_system.sh` → `startup_menu.sh`) or named non-interactively for unattended installs (§7). Each preset directory contains a `playbook.yml` (role list plus, optionally, play `vars:`) and a small set of YAML files that carry variable overrides.
+
+### 1.0 The configuration layer model
+
+Applying a preset does not overwrite anything. It merges the preset's variable files and its `playbook.yml`'s `vars:` into an **overlay**, resolved in layers, lowest first:
+
+| Layer | Path | Written by | Tracked |
+|---|---|---|---|
+| Role defaults | `collection/roles/*/defaults/main.yml` | commits only | yes |
+| Preset overlay | `playbooks/group_vars/all/10-preset.yml` | `apply_preset` (menus/`autoinstall.sh`) via `xinas_apply_preset` | no |
+| Local overlay | `playbooks/group_vars/all/20-local.yml` | the config editors (`configure_raid.sh`, `configure_network.sh`, `configure_nfs_exports.sh`, `configure_hostname.sh`) | no |
+
+`-e` extra-vars on the `ansible-playbook` command line still override every layer above. Files in `group_vars/all/` merge alphabetically, so `20-` beats `10-`, and a key absent from both overlay files falls back to the role default. An operator edit made through a config editor therefore survives a later preset re-apply (which rewrites only `10-preset.yml`) and continues to win. The overlay lives next to the **playbook** (`playbooks/group_vars/all/`), not next to the inventory: `autoinstall.sh` accepts `--inventory PATH`, and Ansible only resolves an inventory-adjacent `group_vars/` when the inventory is the repo's own, so an inventory-adjacent overlay would vanish whenever a caller supplies one — see [docs/superpowers/specs/2026-08-18-preset-overlay-design.md](../superpowers/specs/2026-08-18-preset-overlay-design.md) §3 for the measurements behind that choice.
+
+Two consequences follow:
+
+- **A preset contributes variables only.** [playbooks/site.yml](../../playbooks/site.yml) is always the playbook that runs — a preset's own `playbook.yml` is never executed and never copied anywhere; only its play `vars:` (e.g. `xinnorVM`'s `perf_disable_cpupower` / `perf_nr_requests`) are merged into the overlay. Each preset's role list is still pinned equal to `site.yml`'s by a test, so the file stays accurate as documentation even though Ansible itself never reads it directly.
+- **A preset may not ship `netplan.yaml.j2`.** `xinas_apply_preset` rejects a preset directory that contains one (exit code `3`, §7.8) — a static preset netplan would replace the `net_controllers` role's dynamically generated one and strand every NIC. The manual-mode netplan template `configure_network.sh` writes instead lives, untracked, at `.xinas-local/netplan.yaml.j2`, pointed at by the `net_netplan_template` role variable set in `20-local.yml` (§3.3). Returning to pool mode removes the live template file and overrides `net_netplan_template` back to the role's own relative template name in `20-local.yml`, rather than deleting the key — an explicit override beats a delete regardless of which layer last set the key, so the effective value can never keep pointing at a file that was just removed. For the same reason, "Save Preset" (below) never writes `net_netplan_template` into a saved preset at all.
+
+Nothing under `collection/roles/` — no role default, no template — and no file under `playbooks/` other than the overlay itself is ever written at runtime by preset application, a config editor, or "Save Preset" (`startup_menu.sh`). Save Preset runs the other direction from apply: it decomposes the current merged overlay back into `presets/<name>/*.yml`. A key owned by one of the four roles with a dedicated preset file (`net_controllers`, `raid_fs`, `nvme_namespace`, `exports`) is routed to that file; a key owned by any other role, or by no role default at all (`xiraid_skip_install`, which the config editors set but which appears only in `playbooks/site.yml`'s `xiraid_classic` guard, never in a role's `defaults/main.yml`), is written into the saved `playbook.yml`'s `vars:` instead — the same bucket a preset's own `playbook.yml` uses for `xinnorVM`'s `perf_disable_cpupower` / `perf_nr_requests` above, so every key in the live overlay round-trips one way or another. `net_netplan_template` is the one exception: it is always dropped, never written anywhere, and reported to the operator, for the reason given in the previous bullet.
 
 ### 1.1 `presets/default/` — physical NVMe storage node
 
@@ -21,11 +40,10 @@ Target: a real server with NVMe drives that support namespace management. The `n
 
 | File | Contents (effective values) |
 |------|-----------------------------|
-| [playbook.yml](../../presets/default/playbook.yml) | Roles, in order: `common` → `doca_ofed` → `net_controllers` → `xiraid_classic` → `raid_fs` → `exports` → `nfs_server` → `xinas_mcp` → `xinas_menu` → `xinas_history` → `perf_tuning` → `motd`. No preset-level vars. (Note: `nvme_namespace` is **not** listed in this preset's playbook — physical NVMe drives still get auto-detection via [playbooks/site.yml](../../playbooks/site.yml), which is the path the menu actually invokes.) |
+| [playbook.yml](../../presets/default/playbook.yml) | Roles, in order: `common` → `doca_ofed` → `net_controllers` → `xiraid_classic` → `nvme_namespace` → `raid_fs` → `exports` → `nfs_server` → `xinas_node_build` → `xinas_api` → `xinas_agent` → `xinas_nfs_helper` → `xinas_mcp` → `xinas_menu` → `xinas_history` → `perf_tuning` → `motd` — the same role list [playbooks/site.yml](../../playbooks/site.yml) runs, in the same order, pinned equal by a test (§1.0). No preset-level `vars:`. |
 | [raid_fs.yml](../../presets/default/raid_fs.yml) | `xiraid_license_path=/tmp/license`, `xiraid_force_metadata=true`, `xfs_force_mkfs=true`, `nvme_auto_namespace=true`, `nvme_use_existing_namespaces=false`, `nvme_namespace_block_size=4096`, `nvme_namespace_shared=false`, `nvme_raid_data_level=5`, `nvme_raid_log_level=10`. |
 | [network.yml](../../presets/default/network.yml) | IP pool `10.10.1.1` → `10.10.255.1` /24, `net_mtu=0` (auto: 4092 IB / 9000 Eth), no manual overrides. |
 | [nfs_exports.yml](../../presets/default/nfs_exports.yml) | `/mnt/data → *  rw,sync,insecure,no_root_squash,no_subtree_check,no_wdelay,fsid=0`. |
-| [netplan.yaml.j2](../../presets/default/netplan.yaml.j2) | Seed template only — `ib0 = 100.100.100.1/24`. The `net_controllers` role discovers IB/mlx interfaces at runtime and rewrites the netplan from the pool. |
 
 Resulting storage layout (when ≥3 data drives are present):
 
@@ -39,12 +57,11 @@ Target: a Linux VM where the data drives are virtio or SCSI, **not** NVMe. Names
 
 | File | Contents (effective values) |
 |------|-----------------------------|
-| [playbook.yml](../../presets/xinnorVM/playbook.yml) | Same role order as `default`, plus `nvme_namespace` is explicitly listed. Sets `perf_disable_cpupower: true` and `perf_nr_requests: 0` (VMs lack `cpupower` and tunable `nr_requests`). |
+| [playbook.yml](../../presets/xinnorVM/playbook.yml) | Same role list as `default`'s, above. `vars:` sets `perf_disable_cpupower: true` and `perf_nr_requests: 0` (VMs lack `cpupower` and tunable `nr_requests`) — these two merge into the overlay (§1.0) at preset-apply time. |
 | [nvme_namespace.yml](../../presets/xinnorVM/nvme_namespace.yml) | `nvme_detect_mode="all"`, `nvme_log_drive_count=2`, `nvme_raid_data_level=5`, `nvme_raid_log_level=1`, `nvme_raid_data_strip_kb=128`, `nvme_raid_log_strip_kb=16`, `nvme_cleanup_existing_storage=true`, `nvme_skip_cleanup_confirmation=false`. |
 | [raid_fs.yml](../../presets/xinnorVM/raid_fs.yml) | `xiraid_license_path=/tmp/license`, `xiraid_force_metadata=true`, `xfs_force_mkfs=true`. RAID/XFS topology is auto-generated by `nvme_namespace`. |
 | [network.yml](../../presets/xinnorVM/network.yml) | Identical to default — IP pool `10.10.1.1` → `10.10.255.1` /24. |
 | [nfs_exports.yml](../../presets/xinnorVM/nfs_exports.yml) | Identical to default — `/mnt/data → *` with `fsid=0`. |
-| [netplan.yaml.j2](../../presets/xinnorVM/netplan.yaml.j2) | Same seed template as default. |
 
 Resulting storage layout (with ≥3 virtio drives):
 
@@ -72,12 +89,13 @@ There are three top-level playbooks under [playbooks/](../../playbooks). The int
 
 ```
 common → doca_ofed → net_controllers → xiraid_classic → nvme_namespace
-       → raid_fs → exports → nfs_server → xinas_mcp → xinas_menu
+       → raid_fs → exports → nfs_server → xinas_node_build → xinas_api
+       → xinas_agent → xinas_nfs_helper → xinas_mcp → xinas_menu
        → xinas_history → perf_tuning → motd
 ```
 
 - `xiraid_classic` is gated by `xiraid_skip_install` (default `false`).
-- The preset-specific `playbook.yml` files mirror this order. For the `default` preset, the menu still uses `site.yml`, so `nvme_namespace` runs even though the preset's own `playbook.yml` omits it.
+- `site.yml` is always the playbook that actually runs — the menus and `autoinstall.sh` never execute a preset's own `playbook.yml` (§1.0). Both preset `playbook.yml` files list this same role order, in the same order, and a test pins that equality; the file survives as documentation of a preset's role selection even though only its `vars:` are read at apply time.
 
 ### 2.2 [playbooks/common.yml](../../playbooks/common.yml) — baseline only
 
@@ -227,7 +245,7 @@ Esc, and asserts the menu is re-entered afterwards.
 
 ## 3. Parameters set by each playbook / role
 
-Effective values listed below come from each role's `defaults/main.yml`, overridden where a preset explicitly sets a different value. File references point at the source of truth.
+Effective values listed below come from each role's `defaults/main.yml`, overridden where a preset explicitly sets a different value — see §1.0 for the full layer order (role defaults → preset overlay → local overlay → `-e`). File references point at the source of truth.
 
 ### 3.1 `common` — baseline OS
 
@@ -652,9 +670,10 @@ not a TUI surface.
    elsewhere.
 5. Bootstrap dependencies if `ansible-playbook` is missing — runs
    `prepare_system.sh` in package-only mode — unless `--skip-prepare`.
-6. Apply the selected preset: identical file copies to the menu's
-   `apply_preset` (preset YAML/J2 → role `defaults/`, preset
-   `playbook.yml` → `playbooks/site.yml`).
+6. Apply the selected preset: `xinas_apply_preset` (identical to the
+   menus' `apply_preset`) merges the preset's var files and its
+   playbook's `vars:` into the `playbooks/group_vars/all/10-preset.yml`
+   overlay layer — see §7.8.
 7. Purge any pre-existing xiRAID packages (unless `--no-purge-xiraid`;
    see §7.3 for the `existing-raid` default).
 8. Run `ansible-playbook playbooks/site.yml -i <inventory> -v` with the
@@ -775,19 +794,38 @@ install is observable (finding #2 — previously there was no resume signal).
 
 ### 7.8 Preset application is fail-closed
 
-Step 6 of §7.2 (applying the selected preset) copies each preset file —
-`playbook.yml` → `playbooks/site.yml`, each `presets/<name>/*.yml` → the
-matching role `defaults/main.yml`, and `netplan.yaml.j2` — over the
-corresponding tracked file. `autoinstall.sh` MUST check the exit status
-of **every** one of those copies and MUST abort (fatal, non-zero exit)
-the moment any single copy fails, rather than logging the failure and
-continuing on to run the playbook. Provisioning MUST NEVER run against
-a partially-applied or stale preset: a copy failure part-way through
-step 6 means the tree is a mix of the previous preset's files and the
-new preset's files, and running Ansible against that mix produces an
+Step 6 of §7.2 (applying the selected preset) calls `xinas_apply_preset`
+([lib/xinas_config.sh](../../lib/xinas_config.sh)), which merges the
+preset's var files (`network.yml`, `raid_fs.yml`, `nvme_namespace.yml`,
+`nfs_exports.yml` — whichever the preset ships) and its playbook's
+`vars:` into a single YAML document and replaces
+`playbooks/group_vars/all/10-preset.yml` with it in one write. Nothing
+under `collection/roles/` is written by preset application, and
+`playbooks/site.yml` itself is never copied over or modified.
+
+`xinas_apply_preset` returns non-zero, and writes nothing to the
+overlay, for every way it can fail:
+
+- **`2`** — the preset directory (`presets/<name>/`) does not exist.
+- **`3`** — the preset ships a `netplan.yaml.j2`. A preset network
+  template is not supported: it would replace the `net_controllers`
+  role's dynamically generated netplan and strand every NIC.
+- **`1`** — reading the preset's playbook `vars:` failed, merging the
+  preset's var files failed (e.g. one of them is not valid YAML), or
+  writing the merged result to `10-preset.yml` failed. The previous
+  overlay is left exactly as it was — every one of these is checked and
+  validated in memory before anything is written, so a bad preset
+  cannot truncate or partially overwrite a good one.
+
+`autoinstall.sh` MUST check `xinas_apply_preset`'s exit status and MUST
+abort (fatal, non-zero exit) on any non-zero return, rather than
+logging the failure and continuing on to run the playbook. Provisioning
+MUST NEVER run against a partially-applied or stale preset: a preset
+that is half-merged, or silently not merged at all, produces an
 inconsistent deployment that is hard to diagnose after the fact. The
 same fail-closed requirement applies to the interactive menus'
-`apply_preset` function.
+`apply_preset` function, which maps `xinas_apply_preset`'s return codes
+to the matching error dialog instead of showing "Preset Applied".
 
 ---
 
