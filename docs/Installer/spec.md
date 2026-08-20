@@ -238,7 +238,37 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 - Chrony service enabled and started.
 - Kernel held: `dpkg-selections` marks `linux-image-generic` as `hold` to prevent auto-upgrades.
 - Unattended-upgrades config deployed to `/etc/apt/apt.conf.d/20auto-upgrades`.
-- Sysctl set (persisted): `net.core.rmem_max=268435456`, `net.core.wmem_max=268435456`, `vm.swappiness=10`.
+- Sysctl set (persisted): `net.core.rmem_max=268435456`,
+  `net.core.wmem_max=268435456`, `vm.swappiness=10` — written to the
+  xiNAS-owned drop-in **`/etc/sysctl.d/80-xinas-common.conf`**.
+  - **xiNAS never writes to `/etc/sysctl.conf`.** Every role that sets a
+    sysctl passes an explicit `sysctl_file:` under `/etc/sysctl.d/`
+    (`80-xinas-common.conf`, `90-perf-net.conf`, `90-perf-vm.conf`,
+    `90-roce-lossless.conf`). This is load-bearing, not cosmetic: the
+    `sysctl` module's `reload: yes` runs `sysctl -p <sysctl_file>`, which
+    re-applies **every** key in that file and fails the task on any one of
+    them. While `common` shared `/etc/sysctl.conf` with `perf_tuning`, the
+    `sunrpc.tcp_max_slot_table_entries` line `perf_tuning` left there
+    aborted `common` on any host where the `sunrpc` module was not loaded
+    (`sysctl: cannot stat /proc/sys/sunrpc/tcp_max_slot_table_entries`).
+    `perf_tuning` tolerated its own key via `ignoreerrors: yes`; `common`
+    did not. Each role now reloads only the file it owns.
+  - The `80-` prefix orders the baseline **before** `perf_tuning`'s `90-`
+    drop-ins in `sysctl --system`, so the perf values (`rmem_max` /
+    `wmem_max` = 1 GiB, `swappiness=1`) win at boot over the baseline.
+    That is the intended layering, and it matches the in-session outcome of
+    a full `site.yml` run, where `perf_tuning` applies last. Running
+    `playbooks/common.yml` on its own still leaves the baseline values.
+  - **Migration.** Hosts provisioned by xiNAS ≤ 3.10.2 carry these keys —
+    and `perf_tuning`'s — in `/etc/sysctl.conf`. The role deletes every
+    xiNAS-managed key from that file before writing its drop-in, so
+    re-provisioning a host that was left in the broken state self-heals.
+    The purge covers `perf_tuning`'s keys too, because those are what break
+    `common`. On a legacy host that means running `playbooks/common.yml`
+    **alone** strips the perf network keys without re-adding them (they come
+    back in `90-perf-net.conf` when `perf_tuning` next runs). Run
+    `playbooks/site.yml`, or `--tags common,perf_tuning`, when migrating a
+    host that already has the perf tunings applied.
 - Hostname: `xiNAS-<HWKEY>` (from the `./hwkey` binary), unless `xinas_hostname`
   is overridden. **The `./hwkey` value is a DMI-derived host identifier and is
   NOT the same as the xiRAID _license_ hwkey** reported by `xicli license show`
@@ -380,23 +410,35 @@ CPU / memory:
 - **Boot-persistent re-apply** — a `xinas-perf-runtime.service` oneshot
   (`RemainAfterExit`, `WantedBy=multi-user.target`, after `systemd-sysctl`) runs
   `sysctl --system` then `sysctl -p /etc/sysctl.d/90-perf-vm.conf`, and (when
-  `perf_disable_thp`) re-pins THP `enabled`/`defrag` to `never`. This is required
-  because two settings do **not** otherwise survive a reboot: `vm.swappiness`
-  (the `common` role's default `swappiness=10` is applied after the perf drop-in
-  and wins at boot) and THP `defrag` (the kernel cmdline pins `enabled` but not
-  `defrag`). The unit re-applies the perf file *last* so it wins regardless of
-  drop-in ordering. (Fixes findings #9 and #11.)
+  `perf_disable_thp`) re-pins THP `enabled`/`defrag` to `never`. It is required
+  for THP `defrag`, which does not survive a reboot (the kernel cmdline pins
+  `enabled` but not `defrag`). It also covers `vm.swappiness`: the unit
+  re-applies the perf file *last*, so `swappiness=1` wins regardless of drop-in
+  ordering. Since `common` moved to `/etc/sysctl.d/80-xinas-common.conf` (§3.1)
+  the perf drop-in already wins at boot on ordering alone — before that,
+  `common` wrote `swappiness=10` to `/etc/sysctl.conf`, which `sysctl --system`
+  applies *after* every `/etc/sysctl.d` file, and the unit was the only thing
+  restoring `1`. (Fixes findings #9 and #11.)
 
 I/O:
 
 - NVMe `nr_requests = 512` (skipped when `perf_nr_requests=0`).
 - NVMe read-ahead = 65536 KB (`blockdev --setra`).
 
-Network sysctl (400 Gbit):
+Network sysctl (400 Gbit) — all in `/etc/sysctl.d/90-perf-net.conf`:
 
 - `net.core.rmem_max=1073741824`, `net.core.wmem_max=1073741824`, `net.core.netdev_max_backlog=250000`, `net.core.somaxconn=65535`.
 - `net.ipv4.tcp_rmem="4096 1048576 16777216"`, `net.ipv4.tcp_wmem="4096 1048576 16777216"`.
-- `sunrpc.tcp_max_slot_table_entries=128`.
+- `sunrpc.tcp_max_slot_table_entries=128`, **gated on the key existing**.
+  `/proc/sys/sunrpc/*` is registered by the `sunrpc` kernel module, so the
+  key is absent on a node that has not yet loaded it — and `systemd-sysctl`
+  runs at boot long before `nfs-kernel-server` loads it. The role therefore
+  writes `/etc/modules-load.d/xinas-sunrpc.conf` and `modprobe sunrpc`
+  (non-fatal), then stats `/proc/sys/sunrpc/tcp_max_slot_table_entries` and
+  writes the key only when it exists; when it does not, the key is written
+  with `state: absent` so a stale line from an earlier run is purged rather
+  than left to fail every subsequent reload. Same stat-then-gate idiom as
+  the MGLRU keys above.
 - For interfaces listed in `perf_net_ifaces`: MTU 9000, `ethtool -G rx 8192 tx 8192`.
 
 Profile:
@@ -461,8 +503,14 @@ timedatectl                                  # timezone = Europe/Amsterdam, NTP 
 systemctl is-active chrony                   # → active
 apt-mark showhold | grep linux-image         # → linux-image-generic
 sysctl net.core.rmem_max net.core.wmem_max vm.swappiness
-# → 268435456 / 268435456 / 10
+# → 268435456 / 268435456 / 10   (baseline only — see note)
+cat /etc/sysctl.d/80-xinas-common.conf        # the three keys; /etc/sysctl.conf untouched
 ```
+
+The values above hold after `playbooks/common.yml` alone. After a full
+`site.yml`, `perf_tuning` layers `/etc/sysctl.d/90-perf-net.conf` and
+`90-perf-vm.conf` on top and `sysctl` reports `1073741824 / 1073741824 / 1`
+(see §3.1 and §4.8).
 
 ### 4.2 DOCA-OFED (`doca_ofed`)
 
@@ -602,7 +650,7 @@ Each install role maps to one uninstall phase:
 | `xinas_menu` | Phase F (wrappers), Phase G (`/opt/xiNAS/venv`, `/etc/sudoers.d/xinas-update`) |
 | `xinas_history` | Phase F (`xinas-history` wrapper), Phase G (`/var/lib/xinas`) |
 | `motd` | Phase G (motd, banner, profile-d, cron), Phase H (`sshd_config`, `pam.d/login`) |
-| `common` | Phase J (`apt update`); the role's hostname change and `chrony.service` are intentionally not reverted |
+| `common` | Phase H removes `/etc/sysctl.d/80-xinas-common.conf` (and purges the legacy keys from `/etc/sysctl.conf`); Phase J (`apt update`); the role's hostname change and `chrony.service` are intentionally not reverted |
 | `xiraid_classic` | Optional phase 91 (`uninstall_remove_xiraid`) |
 | `xiraid_exporter` | Optional phase 91 (`uninstall_remove_xiraid`) |
 | `doca_ofed` | Optional phase 92 (`uninstall_remove_ofed`) |

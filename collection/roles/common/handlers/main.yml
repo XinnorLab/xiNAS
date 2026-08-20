@@ -2,8 +2,12 @@
 # handlers/main.yml
 # -------------------------------------------------------------
 ---
+# -e: this walks every file under /etc/sysctl.d, /usr/lib/sysctl.d and
+# /etc/sysctl.conf, including files xiNAS does not own. A key another package
+# left behind for a module that is not loaded must not fail the play -- the
+# role's own drop-in is reloaded strictly by the task itself.
 - name: Reload sysctl
-  ansible.builtin.command: sysctl --system
+  ansible.builtin.command: sysctl -e --system
 
 - name: Restart unattended-upgrades
   ansible.builtin.service:

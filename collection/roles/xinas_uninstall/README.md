@@ -43,11 +43,11 @@ Each phase is its own task file under `tasks/`:
 | `50_remove_services.yml`  | Delete `xinas-mcp` and `xinas-nfs-helper` unit files. |
 | `60_remove_binaries.yml`  | Remove `/usr/local/{bin,sbin}/xinas-*` wrappers. |
 | `70_remove_paths.yml`     | Remove `/opt/xiNAS`, `/etc/xinas-mcp`, `/usr/lib/xinas-mcp`, `/var/lib/xinas`, `/var/log/xinas`, `/etc/netplan/99-xinas.yaml`, sudoers, motd, cron, sshd drop-in. |
-| `80_revert_inplace_edits.yml` | Strip Ansible block from `/etc/nfs.conf`; remove xiNAS `Banner`/`PrintMotd` lines from `sshd_config`; remove xiNAS pam_motd hook from `/etc/pam.d/login`; remove `/etc/sysctl.d/90-roce-lossless.conf`. |
+| `80_revert_inplace_edits.yml` | Strip Ansible block from `/etc/nfs.conf`; remove xiNAS `Banner`/`PrintMotd` lines from `sshd_config`; remove xiNAS pam_motd hook from `/etc/pam.d/login`; remove `/etc/sysctl.d/80-xinas-common.conf` and `/etc/sysctl.d/90-roce-lossless.conf`; strip the legacy xiNAS sysctl keys from `/etc/sysctl.conf`. |
 | `90_remove_packages.yml`  | Purge `nfs-kernel-server`, `nfs-common`, and `nodejs` (if xiNAS added NodeSource). |
 | `91_optional_xiraid.yml`  | Gated. Purge xiRAID, DKMS-remove module, drop repo. |
 | `92_optional_ofed.yml`    | Gated. Run `mlnxofedinstall --uninstall` if present, purge DOCA packages, drop repo + GPG key, remove IB udev rules. |
-| `93_optional_perf.yml`    | Gated. Delete sysctl drop-ins, NVMe modprobe drop-in, xiNAS kernel args; `update-grub`, `update-initramfs`, tuned=balanced, re-enable irqbalance, purge perf packages. |
+| `93_optional_perf.yml`    | Gated. Delete sysctl drop-ins (`90-perf-vm.conf`, `90-perf-net.conf`), NVMe + sunrpc modprobe/modules-load drop-ins, xiNAS kernel args; `update-grub`, `update-initramfs`, tuned=balanced, re-enable irqbalance, purge perf packages. |
 | `99_finalize.yml`         | `daemon-reload`, `apt update`, write summary JSON to `/tmp/xinas-uninstall-summary.json` and a persistent log under `/var/log/`. |
 
 ## Output
