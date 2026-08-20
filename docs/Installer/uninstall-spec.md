@@ -196,8 +196,12 @@ Do you want to remove OS-level performance optimizations applied by xiNAS? [y/N]
 ```
 
 - **Yes** → role removes the following xiNAS-managed tunings:
-  - Delete `/etc/sysctl.d/90-perf-vm.conf` and
-    `/etc/sysctl.d/90-roce-lossless.conf`.
+  - Delete `/etc/sysctl.d/90-perf-vm.conf`,
+    `/etc/sysctl.d/90-perf-net.conf` and
+    `/etc/sysctl.d/90-roce-lossless.conf`, plus
+    `/etc/modules-load.d/xinas-sunrpc.conf` (the drop-in that loads
+    `sunrpc` early so `sunrpc.tcp_max_slot_table_entries` can be set at
+    boot).
   - Delete `/etc/modprobe.d/nvme.conf` (the xiNAS NVMe `poll_queues`
     line). Run `update-initramfs -u -k all`.
   - Strip the xiNAS-added kernel arguments from
@@ -213,7 +217,8 @@ Do you want to remove OS-level performance optimizations applied by xiNAS? [y/N]
     reverts the network/SunRPC values the `perf_tuning` role applied
     via direct `sysctl` — they survive the file deletion until the
     next `sysctl --system` or reboot, which the role triggers
-    explicitly).
+    explicitly). Run with `-e` so a key another package left behind
+    for an unloaded module cannot fail the phase.
   - The role does **not** re-run `cpupower` to flip the CPU governor
     back. The governor revert is documented as a "manual step" in
     the final summary because there is no portable "previous
@@ -406,6 +411,20 @@ All blocks are bounded by markers so the revert is precise.
 | `/etc/ssh/sshd_config` | (no marker — see below) | Remove the lines `PrintMotd no`, `UsePAM yes`, and `Banner /etc/issue.net` **only if their content matches what xiNAS writes**. Reload sshd. |
 | `/etc/pam.d/login` | (no marker — see below) | Remove the line `session optional pam_motd.so motd=/run/motd.dynamic`. |
 | `/etc/default/grub` | (no marker — see below) | Only touched if the operator opted into perf revert (§3.3). |
+| `/etc/sysctl.conf` | (no marker — key list) | **Legacy cleanup.** xiNAS ≤ 3.10.2 wrote its sysctl keys into this shared file instead of a drop-in. Remove exactly the xiNAS-managed keys: `net.core.rmem_max`, `net.core.wmem_max`, `net.core.netdev_max_backlog`, `net.core.somaxconn`, `net.ipv4.tcp_rmem`, `net.ipv4.tcp_wmem`, `vm.swappiness`, `sunrpc.tcp_max_slot_table_entries`. Nothing else in the file is touched. |
+
+Phase H also deletes the xiNAS-owned sysctl drop-ins that are
+unconditional (not gated on the perf revert of §3.3):
+`/etc/sysctl.d/80-xinas-common.conf` and
+`/etc/sysctl.d/90-roce-lossless.conf`. `/etc/sysctl.d/` itself is shared
+system territory and is never removed.
+
+Leaving `sunrpc.tcp_max_slot_table_entries` behind in `/etc/sysctl.conf`
+is what made a reinstall fail: the old revert removed only the three
+`common` keys, so a subsequent `common` run reloaded the shared file, hit
+the orphaned SunRPC line on a host with no `sunrpc` module loaded, and
+aborted the play. The key list above is therefore the complete set, not
+just `common`'s.
 
 For the marker-less files, the role only touches lines that are
 verbatim what the xiNAS install templates write. If the operator has
@@ -576,7 +595,9 @@ After a successful `uninstall.sh` run, the following must be true:
 | `xicli` is present iff `uninstall_remove_xiraid=false` | ✓ |
 | `dpkg -l \| grep -E '^ii\s+xiraid'` returns nothing when `uninstall_remove_xiraid=true` (no `xiraid-appimage` / `xiraid-kmod` left behind) | ✓ |
 | `lsmod \| grep mlx5_core` returns iff `uninstall_remove_ofed=false` | ✓ |
-| `/etc/sysctl.d/90-perf-vm.conf` exists iff `uninstall_revert_perf=false` | ✓ |
+| `/etc/sysctl.d/90-perf-vm.conf` and `90-perf-net.conf` exist iff `uninstall_revert_perf=false` | ✓ |
+| `/etc/sysctl.d/80-xinas-common.conf` is gone (always) | ✓ |
+| `grep -E 'rmem_max\|wmem_max\|swappiness\|netdev_max_backlog\|somaxconn\|tcp_[rw]mem\|tcp_max_slot_table_entries' /etc/sysctl.conf` returns nothing | ✓ |
 | `/etc/default/grub` xiNAS args removed iff `uninstall_revert_perf=true` | ✓ |
 
 If any guarantee is not met, the §8 summary's "Failed" section names

@@ -193,12 +193,43 @@
   tags: [io]
 
 # ===== Sysctl network 400 Gbit =====
+# /proc/sys/sunrpc/* is registered by the sunrpc kernel module, so
+# sunrpc.tcp_max_slot_table_entries does not exist until something loads it --
+# and systemd-sysctl runs at boot long before nfs-kernel-server does. Load the
+# module now and persist it via modules-load.d, then gate the key on the sysctl
+# path actually existing (same stat-then-gate idiom as the MGLRU keys above).
+# Writing the key unconditionally is what broke the common role: it landed in
+# the shared /etc/sysctl.conf and failed every later `sysctl -p` of that file.
+- name: Load sunrpc at boot so its sysctls exist before systemd-sysctl runs
+  ansible.builtin.copy:
+    content: "sunrpc\n"
+    dest: /etc/modules-load.d/xinas-sunrpc.conf
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [network, nfs]
+
+- name: Load the sunrpc module now
+  community.general.modprobe:
+    name: sunrpc
+    state: present
+  failed_when: false
+  tags: [network, nfs]
+
+- name: Detect SunRPC sysctl support
+  ansible.builtin.stat:
+    path: /proc/sys/sunrpc/tcp_max_slot_table_entries
+  register: perf_sunrpc
+  tags: [network, nfs]
+
 - name: Apply network sysctl parameters for 400 Gbit throughput
   ansible.builtin.sysctl:
     name: "{{ item.key }}"
     value: "{{ item.value }}"
-    state: present
-    reload: yes
+    state: "{{ 'present' if (item.supported | default(true) | bool) else 'absent' }}"
+    sysctl_file: /etc/sysctl.d/90-perf-net.conf
+    reload: "{{ item.supported | default(true) | bool }}"
+    ignoreerrors: yes
   loop:
     - { key: 'net.core.rmem_max',     value: '{{ perf_net_rmem_max }}' }
     - { key: 'net.core.wmem_max',     value: '{{ perf_net_wmem_max }}' }
@@ -206,15 +237,10 @@
     - { key: 'net.core.somaxconn',    value: '{{ perf_net_somaxconn }}' }
     - { key: 'net.ipv4.tcp_rmem',     value: '{{ perf_net_tcp_rmem }}' }
     - { key: 'net.ipv4.tcp_wmem',     value: '{{ perf_net_tcp_wmem }}' }
-  tags: [network]
-
-- name: Apply SunRPC sysctl for NFS transport concurrency
-  ansible.builtin.sysctl:
-    name: sunrpc.tcp_max_slot_table_entries
-    value: "{{ perf_sunrpc_slots }}"
-    state: present
-    reload: yes
-    ignoreerrors: yes
+    # SunRPC transport concurrency for NFS. 'absent' purges a stale entry left
+    # by a run made while the module was loaded.
+    - { key: 'sunrpc.tcp_max_slot_table_entries', value: '{{ perf_sunrpc_slots }}',
+        supported: "{{ perf_sunrpc.stat.exists }}" }
   tags: [network, nfs]
 
 - name: Configure high-speed interface MTU to {{ perf_net_mtu }}

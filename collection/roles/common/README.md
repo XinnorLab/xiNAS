@@ -5,7 +5,10 @@ Baseline configuration for all storage nodes. Installs essential packages, confi
 ## Variables
 * **`common_timezone`** – system timezone (default `Europe/Amsterdam`).
 * **`common_packages`** – list of baseline packages to install.
-* **`common_sysctl`** – dictionary of sysctl parameters.
+* **`common_sysctl`** – dictionary of sysctl parameters. Written to
+  `/etc/sysctl.d/80-xinas-common.conf`; the role never writes to the shared
+  `/etc/sysctl.conf` and strips the keys older versions left there. See
+  [docs/Installer/spec.md](../../../docs/Installer/spec.md) §3.1.
 * **`chrony_service_name`** – name of the chrony service to manage (default `chrony`).
 * **`chrony_package_name`** – name of the chrony package to install (default `chrony`).
 * **`xinas_hostname`** – hostname to set. Defaults to `xiNAS-HWKEY`.

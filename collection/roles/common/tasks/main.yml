@@ -49,11 +49,38 @@
   notify: Restart unattended-upgrades
   tags: [security]
 
+# xiNAS <= 3.10.2 wrote its sysctl keys into the shared /etc/sysctl.conf (the
+# module's default sysctl_file). `reload: yes` runs `sysctl -p <sysctl_file>`,
+# which re-applies *every* key in that file and fails the task on any one of
+# them -- so perf_tuning's sunrpc.tcp_max_slot_table_entries line aborted this
+# role on any host that had not loaded the sunrpc module. xiNAS now owns a
+# drop-in per role; strip the legacy entries first so an upgraded host that is
+# already in the broken state self-heals on the next provision.
+- name: Remove legacy xiNAS sysctl keys from the shared /etc/sysctl.conf
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: "{{ item }}"
+    state: absent
+  loop:
+    - '^\s*net\.core\.rmem_max\s*='
+    - '^\s*net\.core\.wmem_max\s*='
+    - '^\s*net\.core\.netdev_max_backlog\s*='
+    - '^\s*net\.core\.somaxconn\s*='
+    - '^\s*net\.ipv4\.tcp_rmem\s*='
+    - '^\s*net\.ipv4\.tcp_wmem\s*='
+    - '^\s*vm\.swappiness\s*='
+    - '^\s*sunrpc\.tcp_max_slot_table_entries\s*='
+  failed_when: false
+  tags: [sysctl]
+
+# 80- so the baseline loads before perf_tuning's 90- drop-ins in
+# `sysctl --system` order and the perf values win at boot.
 - name: Apply sysctl parameters
   ansible.builtin.sysctl:
     name: "{{ item.key }}"
     value: "{{ item.value }}"
     state: present
+    sysctl_file: /etc/sysctl.d/80-xinas-common.conf
     reload: yes
   loop: "{{ common_sysctl | dict2items }}"
   notify: Reload sysctl
