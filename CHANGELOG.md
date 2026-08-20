@@ -6,6 +6,76 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.11.0] - 2026-08-20
+
+Presets become an overlay layer instead of a file replacement, and the sysctl
+keys each role writes move into drop-ins that role owns. Both were install
+blockers on real hosts.
+
+**This release re-runs three Ansible roles on update.** `common` and
+`perf_tuning` move their sysctl keys out of the shared `/etc/sysctl.conf`;
+`net_controllers` picks up the netplan template path as a variable.
+
+### Added
+
+- **A configuration overlay layer for presets.** `docs/Installer/spec.md` §1
+  has always described a preset as "a small set of YAML/J2 files that override
+  role defaults". The implementation copied the preset file over the role's
+  `defaults/main.yml` wholesale, so a preset did not override the defaults —
+  it *became* them, and every key the preset omitted ceased to exist. Presets
+  now merge into an overlay that layers on top of role defaults, which is what
+  the spec said all along. `lib/xinas_config.sh` is the single implementation;
+  `save_preset` decomposes the overlay back out by owning role.
+- **Legacy preset state migrates into the overlay** on first run, so a host
+  provisioned before this release keeps its settings.
+- **`xinas_history` snapshots the overlay**, so preset changes are covered by
+  the same snapshot/rollback path as everything else.
+
+### Fixed
+
+- **VM installs no longer abort in `nvme_namespace`.** Replacement semantics
+  turned a correct refactor into a blocker: the `nvme_raid_min_devices` table
+  and its `nvme_raid_min_devices_default` fallback live in the role defaults,
+  and `presets/xinnorVM/nvme_namespace.yml` carries neither. Applying the VM
+  preset deleted both, and every `site.yml` run on a VM then failed with
+  `'nvme_raid_min_devices_default' is undefined`. `suggest_vm_preset()`
+  applies `xinnorVM` automatically when `systemd-detect-virt` reports a VM, so
+  this reached VM installs without anyone choosing the preset by hand.
+- **The `common` role no longer fails on a sysctl key it never wrote.**
+  `common` and `perf_tuning` both wrote to the sysctl module's default
+  `sysctl_file` — the shared `/etc/sysctl.conf`. `reload: yes` runs
+  `sysctl -p <sysctl_file>`, which re-applies *every* key in that file and
+  fails the task on any one of them, so `common` died on
+  `sunrpc.tcp_max_slot_table_entries`:
+
+  ```
+  sysctl: cannot stat /proc/sys/sunrpc/tcp_max_slot_table_entries:
+  No such file or directory
+  ```
+
+  `/proc/sys/sunrpc/*` is registered by the `sunrpc` kernel module, which is
+  not loaded when `common` runs first in `site.yml`. `perf_tuning` survived
+  its own key via `ignoreerrors: yes`; `common` had no such flag. The
+  uninstaller made it reproducible by stripping only `common`'s three keys
+  from `/etc/sysctl.conf` and leaving the SunRPC line for the next install.
+
+  Each role now owns a drop-in — `/etc/sysctl.d/80-xinas-common.conf` and
+  `/etc/sysctl.d/90-perf-net.conf` — and reloads only its own file. The
+  SunRPC key is gated on the `/proc` path existing, and `perf_tuning` writes
+  `/etc/modules-load.d/xinas-sunrpc.conf` so the key exists before
+  `systemd-sysctl` runs at boot. `common` purges the legacy keys from
+  `/etc/sysctl.conf`, so an affected host self-heals on the next provision.
+- **The existing-RAID install path no longer purges xiRAID.**
+- **Config editors write the overlay, not role defaults.** `configure_raid.sh`,
+  `configure_nfs_exports.sh`, `configure_network.sh` and
+  `configure_hostname.sh` all edited tracked files under `collection/roles/`;
+  they now write the overlay, and a test pins that no editor writes a tracked
+  path.
+- **`Esc` in a `configure_*.sh` dialog cancels the dialog, not the editor.**
+- **`backup_if_changed` no longer aborts when there is nothing to back up.**
+- **Returning to pool mode clears a manual netplan override** instead of
+  leaving both the override key and the file in place.
+
 ## [3.10.2] - 2026-08-18
 
 Client-side fixes only. Nothing on the server node changes, and no Ansible
