@@ -9,14 +9,14 @@ source "$SCRIPT_DIR/lib/xinas_config.sh"
 
 backup_if_changed() {
     local file="$1" newfile="$2" ts
-    # Explicit `return 0`: every call site here runs this as a plain simple
-    # command under `set -eu`, and a bare `return` would instead propagate
-    # the exit status of the failed `[ -f "$file" ]` test and abort the
-    # script. Currently both callers in this file seed $vars_file via
-    # xinas_config_seed_local first, which always creates the overlay file -
-    # so this branch isn't reachable today - but the fix belongs on the
-    # shared helper, not on trusting every future caller to remember that
-    # precondition.
+    # `return 0`, not a bare `return`: a bare `return` would surface `[ -f ]`'s
+    # own failed-test status (1) to the caller, and every call site here runs
+    # this as a plain simple command under `set -eu`, so that 1 would abort
+    # the script. See docs/Installer/spec.md 2.8. Both callers in this file
+    # seed $vars_file via xinas_config_seed_local first, which always creates
+    # the overlay file - so this branch isn't reachable today - but the fix
+    # belongs on the shared helper, not on trusting every future caller to
+    # remember that precondition.
     [ -f "$file" ] || return 0
     if ! cmp -s "$file" "$newfile"; then
         ts=$(date +%Y%m%d%H%M%S)
@@ -33,9 +33,9 @@ edit_export() {
     clients=$(xinas_config_effective | yq -r ".exports[] | select(.path==\"$path\") | .clients" -)
     options=$(xinas_config_effective | yq -r ".exports[] | select(.path==\"$path\") | .options" -)
 
-    clients=$(input_box "Edit Export" "Clients for $path:\n\nExamples:\n  *           = everyone\n  192.168.1.0/24 = specific network\n  hostname    = specific host" "$clients") || return
+    clients=$(input_box "Edit Export" "Clients for $path:\n\nExamples:\n  *           = everyone\n  192.168.1.0/24 = specific network\n  hostname    = specific host" "$clients") || return 0
 
-    options=$(input_box "Edit Export" "Options for $path:\n\nCommon options:\n  rw,sync,no_subtree_check,no_root_squash" "$options") || return
+    options=$(input_box "Edit Export" "Options for $path:\n\nCommon options:\n  rw,sync,no_subtree_check,no_root_squash" "$options") || return 0
 
     xinas_config_seed_local exports
     tmp=$(mktemp)
@@ -49,12 +49,12 @@ edit_export() {
 add_export() {
     local path clients options tmp
 
-    path=$(input_box "Add Export" "Export path:\n\nExample: /mnt/data/shared") || return
+    path=$(input_box "Add Export" "Export path:\n\nExample: /mnt/data/shared") || return 0
     [ -z "$path" ] && return
 
-    clients=$(input_box "Add Export" "Clients for $path:\n\nExamples:\n  *           = everyone\n  192.168.1.0/24 = specific network" "*") || return
+    clients=$(input_box "Add Export" "Clients for $path:\n\nExamples:\n  *           = everyone\n  192.168.1.0/24 = specific network" "*") || return 0
 
-    options=$(input_box "Add Export" "Options for $path:\n\nDefault: rw,sync,no_root_squash" "rw,sync,no_root_squash,no_subtree_check") || return
+    options=$(input_box "Add Export" "Options for $path:\n\nDefault: rw,sync,no_root_squash" "rw,sync,no_root_squash,no_subtree_check") || return 0
 
     xinas_config_seed_local exports
     tmp=$(mktemp)

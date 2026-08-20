@@ -9,14 +9,14 @@ source "$SCRIPT_DIR/lib/xinas_config.sh"
 
 backup_if_changed() {
     local file="$1" newfile="$2" ts
-    # Explicit `return 0`: every call site here runs this as a plain simple
-    # command under `set -eu`, and a bare `return` would instead propagate
-    # the exit status of the failed `[ -f "$file" ]` test and abort the
-    # script. Currently every caller in this file seeds $vars_file/
-    # $auto_vars_file via xinas_config_seed_local first, which always
-    # creates the overlay file - so this branch isn't reachable today - but
-    # the fix belongs on the shared helper, not on trusting every future
-    # caller to remember that precondition.
+    # `return 0`, not a bare `return`: a bare `return` would surface `[ -f ]`'s
+    # own failed-test status (1) to the caller, and every call site here runs
+    # this as a plain simple command under `set -eu`, so that 1 would abort
+    # the script. See docs/Installer/spec.md 2.8. Every caller in this file
+    # seeds $vars_file/$auto_vars_file via xinas_config_seed_local first,
+    # which always creates the overlay file - so this branch isn't reachable
+    # today - but the fix belongs on the shared helper, not on trusting
+    # every future caller to remember that precondition.
     [ -f "$file" ] || return 0
     if ! cmp -s "$file" "$newfile"; then
         ts=$(date +%Y%m%d%H%M%S)
@@ -58,7 +58,10 @@ get_spare_devices() {
 edit_spare_pool() {
     local current new tmp
     current="$(get_spare_devices)"
-    new=$(input_box "Spare Pool" "Space-separated devices for spare pool:" "$current") || return
+    # `return 0`, not a bare `return`: input_box exits 1 on Esc, and a bare
+    # `return` would hand that 1 back to the `case` branch that called this
+    # function, where errexit turns a cancelled dialog into a dead script.
+    new=$(input_box "Spare Pool" "Space-separated devices for spare pool:" "$current") || return 0
     xinas_config_seed_local xiraid_spare_pools
     tmp=$(mktemp)
     # Ensure the spare pool has a name and update its device list
@@ -97,7 +100,7 @@ edit_devices() {
         msg_box "Not Defined" "No ${label} array defined"
         return
     fi
-    new=$(input_box "${label} Array" "Space-separated devices for ${label}:" "$current") || return
+    new=$(input_box "${label} Array" "Space-separated devices for ${label}:" "$current") || return 0
     xinas_config_seed_local xiraid_arrays
     tmp=$(mktemp)
     NEW_LIST="$new" yq "(.xiraid_arrays[] | select(.level==${level})).devices = (env(NEW_LIST) | split(\" \") )" "$vars_file" > "$tmp"

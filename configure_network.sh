@@ -110,7 +110,7 @@ configure_ip_pool() {
 
     # Input start IP
     while true; do
-        new_start=$(input_box "IP Pool - Start Address" "Start IP address of the pool:\n\nFormat: X.X.X.X (e.g., 10.10.1.1)\nEach interface will get next subnet: 10.10.1.1, 10.10.2.1, ..." "$pool_start") || return
+        new_start=$(input_box "IP Pool - Start Address" "Start IP address of the pool:\n\nFormat: X.X.X.X (e.g., 10.10.1.1)\nEach interface will get next subnet: 10.10.1.1, 10.10.2.1, ..." "$pool_start") || return 0
 
         if valid_ipv4 "$new_start"; then
             break
@@ -121,7 +121,7 @@ configure_ip_pool() {
 
     # Input end IP
     while true; do
-        new_end=$(input_box "IP Pool - End Address" "End IP address of the pool:\n\nFormat: X.X.X.X (e.g., 10.10.255.1)" "$pool_end") || return
+        new_end=$(input_box "IP Pool - End Address" "End IP address of the pool:\n\nFormat: X.X.X.X (e.g., 10.10.255.1)" "$pool_end") || return 0
 
         if valid_ipv4 "$new_end"; then
             break
@@ -132,7 +132,7 @@ configure_ip_pool() {
 
     # Input prefix
     while true; do
-        new_prefix=$(input_box "IP Pool - Prefix" "Subnet prefix (CIDR):\n\n(e.g., 24 for /24 = 255.255.255.0)" "$pool_prefix") || return
+        new_prefix=$(input_box "IP Pool - Prefix" "Subnet prefix (CIDR):\n\n(e.g., 24 for /24 = 255.255.255.0)" "$pool_prefix") || return 0
 
         if [[ $new_prefix =~ ^[0-9]{1,2}$ ]] && [[ $new_prefix -ge 1 && $new_prefix -le 32 ]]; then
             break
@@ -220,7 +220,14 @@ configure_manual() {
         echo -e "${CYAN}Manual Network Configuration${NC}"
         echo ""
 
-        iface=$(menu_select "Select Interface" "Choose interface to configure:" "${menu_items[@]}") || return
+        # Esc abandons manual mode. Drop whatever was staged and fall through
+        # to the "nothing configured" guard below so the pool flag disabled at
+        # the top of this function is restored -- returning straight out here
+        # would leave the box with pool mode off and an untouched template,
+        # stranding every NIC without an address. A bare `return` would be
+        # worse still: menu_select exits 1 on Esc, and under `set -e` that
+        # status escapes the caller's `case` branch and kills the script.
+        iface=$(menu_select "Select Interface" "Choose interface to configure:" "${menu_items[@]}") || { configs=(); break; }
         [[ "$iface" == "Finish" ]] && break
 
         prompt="IPv4 address for $iface (current: ${curr_ip[$iface]})"
