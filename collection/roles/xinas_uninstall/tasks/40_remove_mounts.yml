@@ -22,6 +22,10 @@
     executable: /bin/bash
   register: _xinas_mounts
   changed_when: false
+  # Read-only discovery (awk over the unit files): must run under --check too,
+  # otherwise a dry run parses an empty stdout into an empty unit list and
+  # reports that it would stop nothing.
+  check_mode: false
 
 - name: "Mounts | parse mount unit list"
   ansible.builtin.set_fact:

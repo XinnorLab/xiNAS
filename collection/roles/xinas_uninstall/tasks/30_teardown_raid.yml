@@ -8,6 +8,11 @@
   register: _xicli_path
   changed_when: false
   failed_when: false
+  # Read-only discovery: must run under --check too. Ansible skips
+  # command/shell in check mode and hands back a synthetic result carrying
+  # rc=0 and stdout='' — which reads as "xicli is present and owns no
+  # arrays", so a dry run would report nothing to tear down.
+  check_mode: false
 
 - name: "RAID | record skip if xicli missing"
   ansible.builtin.set_fact:
@@ -29,17 +34,25 @@
       register: _xicli_raid_show
       changed_when: false
       failed_when: false
+      check_mode: false          # read-only; see "locate xicli" above
 
     - name: "RAID | list current pools"
       ansible.builtin.command: xicli pool show -f json
       register: _xicli_pool_show
       changed_when: false
       failed_when: false
+      check_mode: false          # read-only; see "locate xicli" above
 
     - name: "RAID | parse array names"
       ansible.builtin.set_fact:
         _xinas_array_names: >-
-          {%- set parsed = (_xicli_raid_show.stdout | default('{}')) | from_json -%}
+          {#- default('{}', true), not default('{}'): default() substitutes only
+              for an *undefined* value, and stdout is defined-but-empty whenever
+              the command produced no output (or was skipped by --check). The
+              empty string went straight into from_json and raised
+              "Expecting value: line 1 column 1 (char 0)". -#}
+          {%- set raw = _xicli_raid_show.stdout | default('', true) | trim -%}
+          {%- set parsed = (raw | default('{}', true)) | from_json -%}
           {%- if parsed is mapping -%}
             {{ parsed.keys() | list }}
           {%- elif parsed is iterable and parsed is not string -%}
@@ -52,7 +65,9 @@
     - name: "RAID | parse pool names"
       ansible.builtin.set_fact:
         _xinas_pool_names: >-
-          {%- set parsed = (_xicli_pool_show.stdout | default('{}')) | from_json -%}
+          {#- truthy default; see "parse array names" above. -#}
+          {%- set raw = _xicli_pool_show.stdout | default('', true) | trim -%}
+          {%- set parsed = (raw | default('{}', true)) | from_json -%}
           {%- if parsed is mapping -%}
             {{ parsed.keys() | list }}
           {%- elif parsed is iterable and parsed is not string -%}
@@ -87,7 +102,8 @@
     - name: "RAID | parse baseline-captured array names"
       ansible.builtin.set_fact:
         _xinas_baseline_array_names: >-
-          {%- set parsed = _xinas_baseline_raid_show.content | b64decode | from_json -%}
+          {%- set raw = _xinas_baseline_raid_show.content | b64decode | trim -%}
+          {%- set parsed = (raw | default('{}', true)) | from_json -%}
           {%- if parsed is mapping and 'error' in parsed -%}
             []
           {%- elif parsed is mapping -%}
@@ -102,7 +118,8 @@
     - name: "RAID | parse baseline-captured pool names"
       ansible.builtin.set_fact:
         _xinas_baseline_pool_names: >-
-          {%- set parsed = _xinas_baseline_pool_show.content | b64decode | from_json -%}
+          {%- set raw = _xinas_baseline_pool_show.content | b64decode | trim -%}
+          {%- set parsed = (raw | default('{}', true)) | from_json -%}
           {%- if parsed is mapping and 'error' in parsed -%}
             []
           {%- elif parsed is mapping -%}

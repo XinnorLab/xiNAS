@@ -215,6 +215,11 @@ if [[ "$DRY_RUN" == "true" ]]; then
     ANSIBLE_ARGS+=(--check --diff)
 fi
 
+# Drop any summary left behind by an earlier run before we start: the
+# renderer below keys off the file's existence, so a stale one would be
+# printed as if it were this run's result.
+rm -f "$SUMMARY_PATH"
+
 # Some uninstall paths remove /opt/xiNAS while ansible is reading the
 # playbook tree. cd to /tmp first so ansible-playbook doesn't lose its CWD.
 cd /tmp
@@ -310,6 +315,12 @@ print(f"  {WHITE}{BOLD}Reboot recommended:{NC} {flag}")
 PY
 
 echo ""
-info "Persistent log: /var/log/xinas-uninstall-*.log"
+if [[ "$DRY_RUN" == "true" ]]; then
+    # The playbook's persistent-log copy honours --check, so a dry run leaves
+    # no file behind. Only the /tmp summary rendered above was written.
+    info "Dry-run: no persistent log was written."
+else
+    info "Persistent log: /var/log/xinas-uninstall-*.log"
+fi
 echo ""
 exit 0
