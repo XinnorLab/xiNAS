@@ -6,6 +6,51 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.11.1] - 2026-08-21
+
+Uninstaller fix only. No Ansible role needs to re-run — `xinas_uninstall` is
+not part of `site.yml` and executes from the checked-out tree, so a
+release-tag checkout is sufficient.
+
+### Fixed
+
+- **`uninstall.sh --remove-xiraid` no longer aborts at its final stage on
+  Ubuntu 22.04.** The xiRAID purge task passed `allow_change_held_packages:
+  true` to `ansible.builtin.apt` — correct in principle, since xiRAID's own
+  version-lock service `apt-mark hold`s the packages and apt otherwise refuses
+  to remove them, but unusable on the platform the installer itself creates:
+
+  ```
+  TASK [xinas_uninstall : XiRAID | purge xiraid packages]
+  fatal: [localhost]: FAILED! => Unsupported parameters for
+    (ansible.builtin.apt) module: allow_change_held_packages
+  ```
+
+  The parameter was added to the apt module in ansible-core 2.13 and only
+  reached the removal path in 2.15. Ubuntu 22.04 ships `ansible` 2.10.8
+  (`2.10.7+merged+base+2.10.8+dfsg-1`) — exactly what `prepare_system.sh`
+  installs — where it is a fatal argspec error. Ubuntu 24.04 (`ansible`
+  9.2.0 / ansible-core 2.16) was unaffected.
+
+  Because the purge is the second task of phase 91, the failure also skipped
+  the rest of that phase (`xiraid-repo` purge, `dkms remove`, `/etc/xiraid`,
+  the Xinnor APT sources) along with phases 92, 93 and 99, and `uninstall.sh`
+  exited before removing `/opt/xiNAS` — reporting "xiNAS state may be
+  partially removed" with the xiRAID packages still installed. Everything
+  through phase 90 (units, mounts, arrays, exports, wrappers, sudoers,
+  netplan, motd) was removed correctly.
+
+  The role now clears the hold instead of overriding it: it reads `apt-mark
+  showhold`, intersects that list with `xinas_xiraid_apt_purge`, and runs
+  `apt-mark unhold` on the intersection before the purge. Scoping to the
+  intersection keeps the step idempotent and leaves holds outside the purge
+  list untouched. No apt parameter newer than 2.10 remains in the role.
+
+  A host already left in the failed state finishes the teardown with
+  `apt-mark unhold 'xiraid-*'` followed by `apt-get -y purge xiraid-appimage
+  xiraid-core xiraid-kmod xiraid-repo`, or simply by re-running
+  `uninstall.sh` after updating.
+
 ## [3.11.0] - 2026-08-20
 
 Presets become an overlay layer instead of a file replacement, and the sysctl
