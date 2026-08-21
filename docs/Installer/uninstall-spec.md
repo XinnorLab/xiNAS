@@ -163,8 +163,29 @@ Do you want to remove the xiRAID package from this system? [y/N]
   pulled in as dependencies of the `xiraid-core` metapackage and are
   `apt-mark hold`'d by xiRAID's own version-lock service, so a purge of
   `xiraid-core` alone leaves them installed (the purge runs with
-  `autoremove: false`, and `allow_change_held_packages: true` covers the
-  hold). Packages absent on a given install are tolerated as a no-op.
+  `autoremove: false`). Packages absent on a given install are tolerated
+  as a no-op.
+
+  **The hold is cleared before the purge, not overridden during it.** apt
+  refuses to remove a held package (`E: Held packages were changed and -y
+  was used without --allow-change-held-packages`), so the role first reads
+  `apt-mark showhold`, intersects it with `xinas_xiraid_apt_purge`, and
+  runs `apt-mark unhold` on that intersection. Only packages that are
+  actually held are touched, so the step is idempotent and a re-run is a
+  no-op.
+
+  The `ansible.builtin.apt` module has an `allow_change_held_packages`
+  parameter that would express this in one line, and it must **not** be
+  used here. It was added in ansible-core 2.13 and only reached the
+  removal path in 2.15 ([ansible-core CHANGELOG-v2.13][acp-2.13];
+  `remove()` gains the argument in `stable-2.15`). Ubuntu 22.04 ships
+  `ansible` 2.10.8 (`2.10.7+merged+base+2.10.8+dfsg-1`), which is exactly
+  what `prepare_system.sh` installs — on that host the parameter is a
+  fatal `Unsupported parameters for (ansible.builtin.apt) module`, which
+  aborts the teardown at its last stage. The explicit unhold works on
+  every version the installer can produce.
+
+[acp-2.13]: https://github.com/ansible/ansible/blob/stable-2.13/changelogs/CHANGELOG-v2.13.rst
 - **No** → none of the above. The xiRAID kernel module, `xicli`, the
   Xinnor APT repository, and `/etc/xiraid/` are left in place exactly as
   the user had them. xiRAID arrays that xiNAS created are still torn

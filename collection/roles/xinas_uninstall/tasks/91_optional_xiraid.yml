@@ -17,16 +17,37 @@
   failed_when: false
   changed_when: _xiraid_exp_stop.changed | default(false)
 
+# xiRAID's own version-lock service `apt-mark hold`s the packages it owns, and
+# apt refuses to remove a held package:
+#   E: Held packages were changed and -y was used without --allow-change-held-packages
+# The apt module's `allow_change_held_packages` would cover that in one line and
+# must NOT be used: it was added in ansible-core 2.13, only reached the removal
+# path in 2.15, and Ubuntu 22.04 ships ansible 2.10.8 — exactly what
+# prepare_system.sh installs — where it is a fatal "Unsupported parameters for
+# (ansible.builtin.apt) module" that aborts the teardown at its last stage.
+# Clearing the hold explicitly works on every version the installer produces.
+# Spec: docs/Installer/uninstall-spec.md §3.1.
+- name: "XiRAID | read the apt hold list"
+  ansible.builtin.command: apt-mark showhold
+  register: _apt_holds
+  changed_when: false
+
+# Scoped to the intersection with the purge list: unholding only what is
+# actually held keeps the task idempotent and never touches a package outside
+# xinas_xiraid_apt_purge.
+- name: "XiRAID | unhold the held xiRAID packages"
+  ansible.builtin.command: "apt-mark unhold {{ _xiraid_held | join(' ') }}"
+  vars:
+    _xiraid_held: "{{ xinas_xiraid_apt_purge | intersect(_apt_holds.stdout_lines | default([])) }}"
+  when: _xiraid_held | length > 0
+  changed_when: true
+
 - name: "XiRAID | purge xiraid packages"
   ansible.builtin.apt:
     name: "{{ xinas_xiraid_apt_purge }}"
     state: absent
     purge: true
     autoremove: false
-    # xiraid_classic pins these with `apt-mark hold` (version_lock service).
-    # Without this, apt refuses to remove held packages and the teardown aborts:
-    #   E: Held packages were changed and -y was used without --allow-change-held-packages
-    allow_change_held_packages: true
   register: _apt_xiraid
   failed_when:
     - _apt_xiraid.failed | default(false)
