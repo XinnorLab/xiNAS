@@ -15,15 +15,25 @@
  * The session's tool calls then replay through the loopback with that
  * identity (dispatch.ts). `ctx.loopback_fn` is injected by server.ts
  * AFTER the primary listener binds; /mcp answers 503 until then.
+ *
+ * S14 adds the MCP **modern protocol era** on the same endpoint. A modern
+ * request (`server/discover`, or any method declaring a modern version in
+ * `params._meta`) is answered statelessly by modern.ts BEFORE the SDK
+ * session machinery is consulted: identity resolves per request, no session
+ * is opened and no Mcp-Session-Id is returned. Everything else is legacy and
+ * reaches the SDK transport exactly as it did before, so `initialize` keeps
+ * negotiating only the versions the SDK knows — never a modern one.
+ * See `docs/control-path/s14-mcp-modern-era-spec.md`.
  */
 
 import { randomUUID } from 'node:crypto';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import type { Express, Request, Response } from 'express';
+import express, { type Express, type Request, type Response } from 'express';
 import type { ApiContext } from '../context.js';
 import { type McpIdentity, buildMcpServer } from './dispatch.js';
+import { handleModernRequest, isModernRequest, isNotification } from './modern.js';
 
 interface McpSession {
   transport: StreamableHTTPServerTransport;
@@ -55,6 +65,20 @@ function resolveIdentity(req: Request, ctx: ApiContext): McpIdentity | null {
 export function mountMcpTransport(app: Express, ctx: ApiContext): void {
   const sessions = new Map<string, McpSession>();
 
+  // /mcp is mounted ahead of the app-wide express.json(), so it needs its
+  // own parser: the modern-era path (S14) has to read `method` and
+  // `params._meta` to classify the request BEFORE deciding whether the SDK
+  // transport should see it at all. The SDK transport accepts the same
+  // pre-parsed body, which is what it was already being handed.
+  //
+  // The limit is the SDK's own MAXIMUM_MESSAGE_SIZE rather than the api-wide
+  // 1 MB: the Streamable HTTP transport imposes no limit of its own, so a
+  // tighter cap here would be a behavior change for legacy clients — and
+  // "a legacy client retains its existing behavior" is an acceptance
+  // criterion (s14 §8, AC13). 4 MB still bounds the endpoint; the largest
+  // real tool argument in the catalog is orders of magnitude below it.
+  app.use('/mcp', express.json({ limit: '4mb' }));
+
   app.post('/mcp', (req: Request, res: Response) => {
     void (async () => {
       if (ctx.loopback_fn === undefined) {
@@ -63,6 +87,40 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
           error: { code: -32000, message: 'MCP transport not ready (api still starting)' },
           id: null,
         });
+        return;
+      }
+
+      // ── modern protocol era (S14) ──────────────────────────────────
+      // Stateless: no session is opened, no Mcp-Session-Id is returned,
+      // and a session id carried by the caller is ignored rather than
+      // used to route this into the legacy path.
+      //
+      // Auth runs FIRST and answers 401 on failure. It must never fall
+      // through to the -32601 below: `Method not found` on
+      // `server/discover` is the one signal a client may read as "this
+      // server is legacy-only", and returning it for a bad token would
+      // silently downgrade every such client (requirement §2.5.7-8).
+      if (isModernRequest(req.body)) {
+        const modernIdentity = resolveIdentity(req, ctx);
+        if (modernIdentity === null) {
+          res.status(401).json({
+            jsonrpc: '2.0',
+            error: { code: -32000, message: 'unauthorized (unknown or missing bearer)' },
+            id: null,
+          });
+          return;
+        }
+        if (isNotification(req.body)) {
+          res.status(202).end();
+          return;
+        }
+        const response = await handleModernRequest(req.body, {
+          loopback: (r) => (ctx.loopback_fn as NonNullable<typeof ctx.loopback_fn>)(r),
+          loopbackToken: () => ctx.loopback_token,
+          allowApply: () => ctx.config.mcp?.allow_apply === true,
+          identity: () => modernIdentity,
+        });
+        res.status(200).json(response);
         return;
       }
 
