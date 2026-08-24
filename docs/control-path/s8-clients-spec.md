@@ -11,6 +11,13 @@ and the Python TUI become plain REST clients of the same routes; the
 legacy `xinas-mcp.service` is retired. MCP apply is blocked by default
 (`mcp.allow_apply: false`).
 
+**Superseded in part by S14.** The `/mcp` endpoint described here serves the
+MCP *legacy* protocol era (`initialize` + `Mcp-Session-Id`). It now also
+serves the *modern* era (`server/discover`, per-request `_meta`, no session)
+alongside it, on the same endpoint and from the same catalog — see
+[`s14-mcp-modern-era-spec.md`](s14-mcp-modern-era-spec.md). Nothing in this
+spec's legacy behavior changed.
+
 **Verified integration facts (truth-checked this round).**
 
 - `xinas_api` preflights on `dist/api-server.js` and names `xinas_mcp`

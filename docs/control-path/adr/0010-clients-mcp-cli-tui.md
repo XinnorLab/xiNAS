@@ -1,5 +1,12 @@
 # ADR-0010: MCP / CLI / TUI on the control-path core (S8, WS12)
 
+> **Extended by S14.** The `/mcp` endpoint this ADR defines serves the MCP
+> legacy protocol era. It additionally serves the modern era
+> (`server/discover`, no session) — see
+> [`../s14-mcp-modern-era-spec.md`](../s14-mcp-modern-era-spec.md). The
+> deferrals below (MCP resources and prompts) still hold, which is why
+> neither is advertised in the discovery capabilities.
+
 **Status:** accepted (2026-06-12). Implements ADR-0001's locked "MCP is
 a transport on the same Control API core" decision; extends ADR-0002
 (no new privilege; the api stays unprivileged).

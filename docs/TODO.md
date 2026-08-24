@@ -20,6 +20,36 @@ Format: `## <area> — <what is missing>`, newest first, with the date it was
 deferred and the change that deferred it.
 
 ---
+
+## MCP — the modern-era SDK client tests (acceptance criteria 10 and 11) are unwritten
+
+*Deferred 2026-08-24, from the `server/discover` / modern-protocol-era change
+(`docs/control-path/s14-mcp-modern-era-spec.md`).*
+
+**What is missing.** Two of the requirement's acceptance criteria are
+client-side: the official TypeScript SDK must select the modern era in
+`versionNegotiation: 'auto'` mode (#10), and must connect without legacy
+fallback when pinned to `2026-07-28` (#11). Neither test exists.
+
+**What the code does instead.** The server implements the modern era in full
+and is exercised by hand-rolled JSON-RPC clients that speak the exact wire
+format those SDK modes produce — stateless `server/discover`, then stateless
+`tools/list` / `tools/call` carrying the `_meta` envelope. Criterion #12
+(SDK in legacy mode) is covered by the existing real-SDK integration test.
+
+**Why it was cut.** No published `@modelcontextprotocol/sdk` implements the
+modern era. Version 1.30.0 — the latest on npm as of 2026-08-24 — still has
+`LATEST_PROTOCOL_VERSION = '2025-11-25'` and contains no occurrence of
+`server/discover`, `2026-07-28`, or `versionNegotiation` anywhere in its
+published `dist/`. There is no `auto` mode to exercise and no version to pin
+to, so the two tests cannot be written against the real SDK at all.
+
+**What done looks like.** `@modelcontextprotocol/sdk` is bumped to the first
+release carrying modern-era support, and `mcp-integration.test.ts` gains two
+cases: a real SDK client in `auto` mode against the api reports a negotiated
+`2026-07-28` and issues no `initialize`; a client pinned to `2026-07-28`
+connects without raising `SdkError(EraNegotiationFailed)`.
+
 ## Installer — the design's secondary repair path for a tree dirtied outside the update flow was never built
 
 *Deferred 2026-08-19, from the preset-overlay change

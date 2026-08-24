@@ -21,6 +21,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { CATALOG, type CatalogEntry } from './catalog.js';
+import { SERVER_INFO } from './discover.js';
 
 export interface LoopbackRequest {
   method: string;
@@ -82,7 +83,14 @@ export const LEGACY_TOOL_MAP: Record<string, string> = {
 /** Legacy mutators with NO Phase-0 replacement (returns in a later phase). */
 export const RETIRED_TOOL_PREFIXES = ['auth.', 'mail.', 'pool.', 'disk.', 'network.configure'];
 
-interface ToolResult {
+/** An MCP tool descriptor as tools/list returns it. */
+export interface McpTool {
+  name: string;
+  description: string;
+  inputSchema: { type: 'object'; [k: string]: unknown };
+}
+
+export interface ToolResult {
   [key: string]: unknown;
   content: Array<{ type: 'text'; text: string }>;
   isError?: boolean;
@@ -171,108 +179,126 @@ export function nextHint(
   };
 }
 
-export function buildMcpServer(opts: DispatcherOptions): Server {
-  const server = new Server(
-    { name: 'xinas-api-mcp', version: '1.0.0' },
-    { capabilities: { tools: {} } },
-  );
-
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: CATALOG.filter((e) => e.binary !== true).map((e) => {
-      // Generated from the catalog flag rather than written into twenty
-      // description strings — the fact a call is asynchronous is what tells a
-      // client to expect a task_id instead of a finished result.
-      const asyncClause =
-        e.returns_async_task === true
-          ? ' Returns a task_id and executes asynchronously — follow it with tasks.wait.'
-          : '';
-      return {
-        name: e.name,
-        description:
-          (e.status === 'degraded' ? `${e.description} [DEGRADED backend]` : e.description) +
-          asyncClause,
-        inputSchema: e.input_schema as { type: 'object'; [k: string]: unknown },
-      };
-    }),
-  }));
-
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const name = request.params.name;
-    const args = (request.params.arguments ?? {}) as Record<string, unknown>;
-
-    const entry = CATALOG.find((e) => e.name === name && e.binary !== true);
-    if (entry === undefined) {
-      const replacement = LEGACY_TOOL_MAP[name];
-      if (replacement !== undefined) {
-        return errorResult(
-          'NOT_IMPLEMENTED',
-          `'${name}' was retired with the legacy MCP server (ADR-0010); use '${replacement}'`,
-          { replacement },
-        );
-      }
-      if (RETIRED_TOOL_PREFIXES.some((p) => name.startsWith(p))) {
-        return errorResult(
-          'NOT_IMPLEMENTED',
-          `'${name}' has no Phase 0 control-path backing; it returns in a later phase (ADR-0010)`,
-        );
-      }
-      return errorResult('NOT_FOUND', `unknown tool '${name}'`);
-    }
-
-    const verdict = gateVerdict(entry, args, opts.allowApply());
-    if (!verdict.allowed) {
-      return errorResult('MCP_APPLY_DISABLED', verdict.reason ?? 'apply via MCP is disabled', {
-        config_key: 'mcp.allow_apply',
-      });
-    }
-
-    let req: { path: string; body?: unknown };
-    try {
-      req = buildRequest(entry, args);
-    } catch (err) {
-      return errorResult('INVALID_ARGUMENT', err instanceof Error ? err.message : String(err));
-    }
-
-    const token = opts.loopbackToken();
-    if (token === undefined) {
-      return errorResult('INTERNAL', 'loopback token unavailable (api not fully started)');
-    }
-    const identity = opts.identity();
-    const response = await opts.loopback({
-      method: entry.method,
-      path: req.path,
-      headers: {
-        authorization: `Bearer ${token}`,
-        'x-xinas-forwarded-principal': identity.principal,
-        'x-xinas-forwarded-role': identity.role,
-        'x-xinas-client-type': 'mcp',
-        ...(req.body !== undefined ? { 'content-type': 'application/json' } : {}),
-      },
-      ...(req.body !== undefined ? { body: req.body } : {}),
-    });
-
-    const envelope = response.body as {
-      result?: unknown;
-      warnings?: unknown[];
-      errors?: Array<{ code?: string; message?: string; details?: unknown }>;
+/**
+ * `tools/list`, independent of any transport or protocol era.
+ *
+ * Extracted from the SDK request handler so the stateless modern-era path
+ * (modern.ts) and the legacy SDK session path call the SAME code: one tool
+ * list, one dispatcher, one gate. A second implementation is how the two
+ * eras would start disagreeing about what the server can do.
+ */
+export function listTools(): McpTool[] {
+  return CATALOG.filter((e) => e.binary !== true).map((e) => {
+    // Generated from the catalog flag rather than written into twenty
+    // description strings — the fact a call is asynchronous is what tells a
+    // client to expect a task_id instead of a finished result.
+    const asyncClause =
+      e.returns_async_task === true
+        ? ' Returns a task_id and executes asynchronously — follow it with tasks.wait.'
+        : '';
+    return {
+      name: e.name,
+      description:
+        (e.status === 'degraded' ? `${e.description} [DEGRADED backend]` : e.description) +
+        asyncClause,
+      inputSchema: e.input_schema as { type: 'object'; [k: string]: unknown },
     };
-    if (response.status >= 400) {
-      const first = envelope.errors?.[0];
+  });
+}
+
+/** `tools/call`, independent of any transport or protocol era (see listTools). */
+export async function callTool(
+  name: string,
+  args: Record<string, unknown>,
+  opts: DispatcherOptions,
+): Promise<ToolResult> {
+  const entry = CATALOG.find((e) => e.name === name && e.binary !== true);
+  if (entry === undefined) {
+    const replacement = LEGACY_TOOL_MAP[name];
+    if (replacement !== undefined) {
       return errorResult(
-        first?.code ?? 'INTERNAL',
-        first?.message ?? `HTTP ${response.status}`,
-        first?.details,
+        'NOT_IMPLEMENTED',
+        `'${name}' was retired with the legacy MCP server (ADR-0010); use '${replacement}'`,
+        { replacement },
       );
     }
-    const next = nextHint(entry, envelope.result);
-    return text({
-      result: envelope.result,
-      ...(envelope.warnings !== undefined && envelope.warnings.length > 0
-        ? { warnings: envelope.warnings }
-        : {}),
-      ...(next !== undefined ? { next } : {}),
+    if (RETIRED_TOOL_PREFIXES.some((p) => name.startsWith(p))) {
+      return errorResult(
+        'NOT_IMPLEMENTED',
+        `'${name}' has no Phase 0 control-path backing; it returns in a later phase (ADR-0010)`,
+      );
+    }
+    return errorResult('NOT_FOUND', `unknown tool '${name}'`);
+  }
+
+  const verdict = gateVerdict(entry, args, opts.allowApply());
+  if (!verdict.allowed) {
+    return errorResult('MCP_APPLY_DISABLED', verdict.reason ?? 'apply via MCP is disabled', {
+      config_key: 'mcp.allow_apply',
     });
+  }
+
+  let req: { path: string; body?: unknown };
+  try {
+    req = buildRequest(entry, args);
+  } catch (err) {
+    return errorResult('INVALID_ARGUMENT', err instanceof Error ? err.message : String(err));
+  }
+
+  const token = opts.loopbackToken();
+  if (token === undefined) {
+    return errorResult('INTERNAL', 'loopback token unavailable (api not fully started)');
+  }
+  const identity = opts.identity();
+  const response = await opts.loopback({
+    method: entry.method,
+    path: req.path,
+    headers: {
+      authorization: `Bearer ${token}`,
+      'x-xinas-forwarded-principal': identity.principal,
+      'x-xinas-forwarded-role': identity.role,
+      'x-xinas-client-type': 'mcp',
+      ...(req.body !== undefined ? { 'content-type': 'application/json' } : {}),
+    },
+    ...(req.body !== undefined ? { body: req.body } : {}),
   });
+
+  const envelope = response.body as {
+    result?: unknown;
+    warnings?: unknown[];
+    errors?: Array<{ code?: string; message?: string; details?: unknown }>;
+  };
+  if (response.status >= 400) {
+    const first = envelope.errors?.[0];
+    return errorResult(
+      first?.code ?? 'INTERNAL',
+      first?.message ?? `HTTP ${response.status}`,
+      first?.details,
+    );
+  }
+  const next = nextHint(entry, envelope.result);
+  return text({
+    result: envelope.result,
+    ...(envelope.warnings !== undefined && envelope.warnings.length > 0
+      ? { warnings: envelope.warnings }
+      : {}),
+    ...(next !== undefined ? { next } : {}),
+  });
+}
+
+/** The legacy-era SDK server: a thin wiring of listTools/callTool. */
+export function buildMcpServer(opts: DispatcherOptions): Server {
+  const server = new Server({ ...SERVER_INFO }, { capabilities: { tools: {} } });
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listTools() }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) =>
+    callTool(
+      request.params.name,
+      (request.params.arguments ?? {}) as Record<string, unknown>,
+      opts,
+    ),
+  );
 
   return server;
 }
