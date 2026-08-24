@@ -8,6 +8,9 @@ export default defineConfig({
     // with `npm run test:e2e`.
     exclude: [...configDefaults.exclude, 'src/__tests__/e2e/**'],
     environment: 'node',
+    // Rejects a host-less listen(0): its wildcard bind lets a foreign process
+    // holding that port on 127.0.0.1 intercept the request. See the file.
+    setupFiles: ['./src/__tests__/_setup/no-wildcard-listen.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'json-summary'],

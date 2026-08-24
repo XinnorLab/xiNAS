@@ -1,5 +1,7 @@
-import express, { type Express } from 'express';
+import type { Server } from 'node:http';
+import express from 'express';
 import request from 'supertest';
+import { closeLoopback, listenLoopback } from '../_listen.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildTestApp } from './_helpers.js';
 import type { TestSetup } from './_helpers.js';
@@ -20,18 +22,12 @@ async function buildInternalApp(): Promise<TestSetup & { cleanup(): Promise<void
 
 describe('requireInternalAgent middleware', () => {
   let setup: TestSetup & { cleanup(): Promise<void> };
-  let app: Express;
+  let app: Server;
 
   beforeEach(async () => {
     setup = await buildInternalApp();
 
-    // Re-create app after mutating config so authMiddleware sees the agent token.
-    const { createApp } = await import('../../api/app.js');
     const { requireInternalAgent } = await import('../../api/middleware/require-internal-agent.js');
-
-    // Build a fresh app from the patched config.
-    const ctx = { config: setup.config, state: setup.state };
-    app = createApp(ctx);
 
     // Mount a test-only internal route to verify the middleware.
     // In a real app this is wired inside createApp; here we verify in isolation.
@@ -44,10 +40,13 @@ describe('requireInternalAgent middleware', () => {
     internalApp.post('/internal/v1/test', requireInternalAgent(), (_req, res) => {
       res.json({ ok: true });
     });
-    app = internalApp;
+    app = await listenLoopback(internalApp);
   });
 
-  afterEach(() => setup.cleanup());
+  afterEach(async () => {
+    await closeLoopback(app);
+    await setup.cleanup();
+  });
 
   it('passes when Authorization: Bearer <agent-token> is provided', async () => {
     const res = await request(app)

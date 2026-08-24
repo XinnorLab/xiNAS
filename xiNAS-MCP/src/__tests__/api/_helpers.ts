@@ -3,8 +3,9 @@ import { type Server, type Socket, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { Express } from 'express';
+import type { Server as HttpServer } from 'node:http';
 import request from 'supertest';
+import { closeLoopback, listenLoopback } from '../_listen.js';
 import { createAgentRpcClient } from '../../api/agent-client.js';
 import { createApp } from '../../api/app.js';
 import type { ApiConfig } from '../../api/config.js';
@@ -18,7 +19,7 @@ export interface TestSetup {
   dir: string;
   config: ApiConfig;
   state: OpenedStateStore;
-  app: ReturnType<typeof createApp>;
+  app: HttpServer;
   ctx: ApiContext;
 }
 
@@ -58,7 +59,7 @@ export async function buildTestApp(): Promise<TestSetup & { cleanup(): Promise<v
     agentSocketPath: '/tmp/nonexistent.sock',
   });
   const ctx: ApiContext = { config, state, tracker };
-  const app = createApp(ctx);
+  const app = await listenLoopback(createApp(ctx));
   return {
     dir,
     config,
@@ -66,6 +67,7 @@ export async function buildTestApp(): Promise<TestSetup & { cleanup(): Promise<v
     app,
     ctx,
     async cleanup() {
+      await closeLoopback(app);
       await state.close();
       rmSync(dir, { recursive: true, force: true });
     },
@@ -217,7 +219,7 @@ export interface MockAgentHandle {
 }
 
 export interface MockAgentSetup {
-  app: Express;
+  app: HttpServer;
   state: OpenedStateStore;
   config: ApiConfig;
   controllerId: string;
@@ -288,7 +290,7 @@ export async function buildTestAppWithMockAgent(
   });
 
   const ctx: ApiContext = { config, state, tracker, tasks };
-  const app = createApp(ctx);
+  const app = await listenLoopback(createApp(ctx));
 
   // Boot the mock agent UDS server. It answers agent.health with the
   // configured payload (empty/offline-ish until respondToHealth is called)
@@ -417,6 +419,7 @@ export async function buildTestAppWithMockAgent(
     mockAgent,
     async teardown() {
       tracker.stop();
+      await closeLoopback(app);
       if (agentServer) {
         const server = agentServer;
         agentServer = null;

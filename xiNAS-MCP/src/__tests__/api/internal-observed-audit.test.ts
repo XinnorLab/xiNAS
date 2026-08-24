@@ -2,7 +2,9 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import request from 'supertest';
+import { closeLoopback, listenLoopback } from '../_listen.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { Server as HttpServer } from 'node:http';
 import { createApp } from '../../api/app.js';
 import type { ApiConfig } from '../../api/config.js';
 import type { ApiContext } from '../../api/context.js';
@@ -22,7 +24,7 @@ const ADMIN_TOKEN = 'Bearer tok-admin';
 describe('audit: agent observation push', () => {
   let dir: string;
   let state: OpenedStateStore;
-  let app: ReturnType<typeof createApp>;
+  let app: HttpServer;
 
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'xinas-observed-audit-'));
@@ -50,10 +52,11 @@ describe('audit: agent observation push', () => {
       agentSocketPath: '/tmp/nonexistent.sock',
     });
     const ctx: ApiContext = { config, state, tracker };
-    app = createApp(ctx);
+    app = await listenLoopback(createApp(ctx));
   });
 
   afterEach(async () => {
+    await closeLoopback(app);
     await state.close();
     rmSync(dir, { recursive: true, force: true });
   });

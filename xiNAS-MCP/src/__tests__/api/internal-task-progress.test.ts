@@ -8,6 +8,7 @@ import { HeartbeatTracker } from '../../api/heartbeat.js';
 import { buildTaskEngines } from '../../api/tasks/build.js';
 import type { CreateApplyInput } from '../../api/tasks/store.js';
 import { type TestSetup, buildTestApp } from './_helpers.js';
+import { closeLoopback, listenLoopback } from '../_listen.js';
 
 const CONTROLLER_ID = '00000000-0000-0000-0000-0000000000aa';
 const AGENT_TOKEN = 'agent-tok-t5';
@@ -41,7 +42,7 @@ async function buildAppWithProgress(): Promise<ProgressSetup> {
     tasks,
     taskProgressSpillDir: spillDir,
   };
-  const app = createApp(ctx);
+  const app = await listenLoopback(createApp(ctx));
 
   return {
     ...setup,
@@ -63,6 +64,7 @@ async function buildAppWithProgress(): Promise<ProgressSetup> {
       return task.task_id;
     },
     async cleanup() {
+      await closeLoopback(app);
       await setup.cleanup();
     },
   };

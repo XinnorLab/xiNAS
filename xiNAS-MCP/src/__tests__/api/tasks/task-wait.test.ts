@@ -13,6 +13,7 @@ import { createApp } from '../../../api/app.js';
 import type { ApiContext } from '../../../api/context.js';
 import { buildTaskEngines } from '../../../api/tasks/build.js';
 import { type TestSetup, buildTestApp } from '../_helpers.js';
+import { closeLoopback, listenLoopback } from '../../_listen.js';
 
 const AGENT_TOKEN = 'agent-tok-wait';
 const ADMIN_TOKEN = 'Bearer tok-admin';
@@ -34,7 +35,7 @@ async function buildApp(): Promise<WaitSetup> {
     tasks,
     taskProgressSpillDir: join(setup.dir, 'task-logs'),
   };
-  const app = createApp(ctx);
+  const app = await listenLoopback(createApp(ctx));
 
   return {
     ...setup,
@@ -59,6 +60,7 @@ async function buildApp(): Promise<WaitSetup> {
         .send({ task_id: taskId, observed_at: new Date().toISOString(), ...body });
     },
     async cleanup() {
+      await closeLoopback(app);
       await setup.cleanup();
     },
   };

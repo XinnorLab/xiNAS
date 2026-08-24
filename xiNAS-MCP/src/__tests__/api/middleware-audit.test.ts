@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
 import request from 'supertest';
+import { listenLoopbackForTest } from '../_listen.js';
 import { openStateStore, type OpenedStateStore } from '../../state/index.js';
 import { requestIdMiddleware } from '../../api/middleware/request-id.js';
 import { auditMiddleware } from '../../api/middleware/audit.js';
@@ -45,7 +46,7 @@ describe('auditMiddleware', () => {
   }
 
   it('queues an audit row per successful request', async () => {
-    await request(appWith()).get('/ping');
+    await request(await listenLoopbackForTest(appWith())).get('/ping');
     // Audit fires inside res.on('finish'); allow event loop turn.
     await new Promise((r) => setImmediate(r));
     await state.drainer.drainNow();
@@ -75,7 +76,7 @@ describe('auditMiddleware', () => {
     app.get('/secured', (_req, res) => res.json({ ok: true }));
     app.use(errorMiddleware());
 
-    const res = await request(app).get('/secured'); // no Authorization header
+    const res = await request(await listenLoopbackForTest(app)).get('/secured'); // no Authorization header
     expect(res.status).toBe(401);
     await new Promise((r) => setImmediate(r));
     await state.drainer.drainNow();

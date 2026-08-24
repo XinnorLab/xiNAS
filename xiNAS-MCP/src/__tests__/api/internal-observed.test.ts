@@ -2,6 +2,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HeartbeatTracker } from '../../api/heartbeat.js';
 import { type TestSetup, buildTestApp } from './_helpers.js';
+import { closeLoopback, listenLoopback } from '../_listen.js';
 
 const CONTROLLER_ID = '00000000-0000-0000-0000-0000000000aa';
 const AGENT_TOKEN = 'agent-tok-h3';
@@ -27,13 +28,14 @@ async function buildAppWithAgent(): Promise<
   // for tests we can extend ctx with the tracker.
   const { createAppWithTracker } = await import('../../api/app.js');
   const ctx = { config: setup.config, state: setup.state, tracker };
-  const app = createAppWithTracker(ctx);
+  const app = await listenLoopback(createAppWithTracker(ctx));
 
   return {
     ...setup,
     app,
     tracker,
     async cleanup() {
+      await closeLoopback(app);
       await setup.cleanup();
     },
   };

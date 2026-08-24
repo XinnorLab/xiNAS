@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLoopbackForTest } from '../_listen.js';
 import { requestIdMiddleware } from '../../api/middleware/request-id.js';
 import { authMiddleware } from '../../api/middleware/auth.js';
 import type { ApiConfig } from '../../api/config.js';
@@ -27,7 +28,7 @@ const config: ApiConfig = {
 
 describe('authMiddleware', () => {
   it('accepts a bearer token and assigns its principal + role', async () => {
-    const res = await request(appWith(config))
+    const res = await request(await listenLoopbackForTest(appWith(config)))
       .get('/whoami')
       .set('Authorization', 'Bearer tok-admin');
     expect(res.status).toBe(200);
@@ -35,13 +36,13 @@ describe('authMiddleware', () => {
   });
 
   it('rejects requests with no auth on a TCP connection', async () => {
-    const res = await request(appWith(config)).get('/whoami');
+    const res = await request(await listenLoopbackForTest(appWith(config))).get('/whoami');
     expect(res.status).toBe(401);
     expect(res.body.errors?.[0]?.code).toBe('PERMISSION_DENIED');
   });
 
   it('rejects an unknown bearer token', async () => {
-    const res = await request(appWith(config))
+    const res = await request(await listenLoopbackForTest(appWith(config)))
       .get('/whoami')
       .set('Authorization', 'Bearer no-such-token');
     expect(res.status).toBe(401);

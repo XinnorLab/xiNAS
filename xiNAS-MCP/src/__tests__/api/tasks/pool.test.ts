@@ -3,6 +3,7 @@ import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRpcClient } from '../../../api/agent-client.js';
 import { createApp } from '../../../api/app.js';
+import { listenLoopbackForTest } from '../../_listen.js';
 import type { ApiContext } from '../../../api/context.js';
 import { type ApplyPlan, type ApplyRequest, TaskEngine } from '../../../api/tasks/engine.js';
 import { buildTaskEngines } from '../../../api/tasks/build.js';
@@ -440,7 +441,7 @@ describe('terminal progress event triggers the drain (§5.3 trigger a)', () => {
     const agent = fakeAgent({ beginParams });
     const tasks = buildTaskEngines({ state: setup.state, agentClient: agent, maxInflight: 1 });
     const ctx: ApiContext = { config: setup.config, state: setup.state, tasks };
-    const app = createApp(ctx);
+    const app = await listenLoopbackForTest(createApp(ctx));
 
     // Task A occupies the single slot…
     const seed = (n: number) =>

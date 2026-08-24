@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLoopbackForTest } from '../_listen.js';
 import { requestIdMiddleware } from '../../api/middleware/request-id.js';
 import { errorMiddleware } from '../../api/middleware/error.js';
 import { ApiException } from '../../api/errors.js';
@@ -20,7 +21,7 @@ function appWith() {
 
 describe('errorMiddleware', () => {
   it('translates ApiException into envelope error with mapped status', async () => {
-    const res = await request(appWith()).get('/api-throw');
+    const res = await request(await listenLoopbackForTest(appWith())).get('/api-throw');
     expect(res.status).toBe(404);
     expect(res.body.errors).toHaveLength(1);
     expect(res.body.errors[0].code).toBe('NOT_FOUND');
@@ -29,7 +30,7 @@ describe('errorMiddleware', () => {
   });
 
   it('translates a plain Error into INTERNAL 500 with the message', async () => {
-    const res = await request(appWith()).get('/plain-throw');
+    const res = await request(await listenLoopbackForTest(appWith())).get('/plain-throw');
     expect(res.status).toBe(500);
     expect(res.body.errors[0].code).toBe('INTERNAL');
     expect(res.body.errors[0].message).toMatch(/boom/);
@@ -41,7 +42,7 @@ describe('errorMiddleware', () => {
     app.use(express.json());
     app.post('/echo', (req, res) => res.json({ body: req.body }));
     app.use(errorMiddleware());
-    const res = await request(app)
+    const res = await request(await listenLoopbackForTest(app))
       .post('/echo')
       .set('Content-Type', 'application/json')
       .send('not-json {');

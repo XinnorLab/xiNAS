@@ -10,6 +10,7 @@ import { buildTaskEngines } from '../../api/tasks/build.js';
 import type { CreateApplyInput } from '../../api/tasks/store.js';
 import { TaskWatch } from '../../api/tasks/watch.js';
 import { type TestSetup, buildTestApp } from './_helpers.js';
+import { closeLoopback, listenLoopback } from '../_listen.js';
 
 /**
  * T8 — resumable SSE `/tasks/{id}/watch` + tasks metadata fold-in.
@@ -60,7 +61,7 @@ async function buildAppWithWatch(): Promise<WatchSetup> {
     taskWatch: watch,
     taskProgressSpillDir: spillDir,
   };
-  const app = createApp(ctx);
+  const app = await listenLoopback(createApp(ctx));
 
   return {
     ...setup,
@@ -82,6 +83,7 @@ async function buildAppWithWatch(): Promise<WatchSetup> {
       return task.task_id;
     },
     async cleanup() {
+      await closeLoopback(app);
       await setup.cleanup();
     },
   };
@@ -106,7 +108,8 @@ function parseFrames(buf: string): string[] {
 /**
  * Open a real SSE connection to the in-process app and resolve once `minFrames`
  * complete frames have arrived (or the deadline fires). Always tears the socket
- * + server down so no handle leaks into the runner.
+ * down so no handle leaks into the runner; the listener itself belongs to the
+ * harness (`setup.app`) and is closed by `cleanup()`.
  *
  * `afterOpen` runs after the response headers land (so a live notify fired from
  * it races against an already-attached subscriber, not a still-connecting one).
@@ -121,9 +124,7 @@ async function readSse(
     timeoutMs?: number;
   },
 ): Promise<{ status: number; contentType: string | undefined; frames: string[] }> {
-  const server = http.createServer(setup.app);
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address() as AddressInfo;
+  const { port } = setup.app.address() as AddressInfo;
 
   return await new Promise((resolve, reject) => {
     const req = http.request(
@@ -142,12 +143,10 @@ async function readSse(
           settled = true;
           clearTimeout(timer);
           req.destroy();
-          server.close(() => {
-            resolve({
-              status: res.statusCode ?? 0,
-              contentType: res.headers['content-type'],
-              frames: parseFrames(buf),
-            });
+          resolve({
+            status: res.statusCode ?? 0,
+            contentType: res.headers['content-type'],
+            frames: parseFrames(buf),
           });
         };
         res.setEncoding('utf8');
@@ -164,14 +163,14 @@ async function readSse(
     );
     const timer = setTimeout(() => {
       req.destroy();
-      server.close(() => reject(new Error(`SSE timed out waiting for ${opts.minFrames} frame(s)`)));
+      reject(new Error(`SSE timed out waiting for ${opts.minFrames} frame(s)`));
     }, opts.timeoutMs ?? 3_000);
     timer.unref();
     req.on('error', (err) => {
       // A destroy() after we've settled surfaces here; ignore once settled.
       clearTimeout(timer);
-      if (!server.listening) return;
-      server.close(() => reject(err));
+      if (req.destroyed) return;
+      reject(err);
     });
     req.end();
   });

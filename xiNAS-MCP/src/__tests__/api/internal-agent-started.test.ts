@@ -2,6 +2,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HeartbeatTracker } from '../../api/heartbeat.js';
 import { type TestSetup, buildTestApp } from './_helpers.js';
+import { closeLoopback, listenLoopback } from '../_listen.js';
 
 const CONTROLLER_ID = '00000000-0000-0000-0000-0000000000aa';
 const AGENT_TOKEN = 'agent-tok-h4';
@@ -22,13 +23,14 @@ describe('POST /internal/v1/agent_started', () => {
 
     const { createAppWithTracker } = await import('../../api/app.js');
     const ctx = { config: base.config, state: base.state, tracker };
-    const app = createAppWithTracker(ctx);
+    const app = await listenLoopback(createAppWithTracker(ctx));
 
     setup = {
       ...base,
       app,
       tracker,
       async cleanup() {
+        await closeLoopback(app);
         await base.cleanup();
       },
     };

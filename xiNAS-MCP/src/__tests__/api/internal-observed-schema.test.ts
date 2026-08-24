@@ -4,6 +4,7 @@ import type { ApiContext } from '../../api/context.js';
 import { HeartbeatTracker } from '../../api/heartbeat.js';
 import { loadObservedSchemas } from '../../api/observed-schemas.js';
 import { type TestSetup, buildTestApp } from './_helpers.js';
+import { closeLoopback, listenLoopback } from '../_listen.js';
 
 const CONTROLLER_ID = '00000000-0000-0000-0000-0000000000aa';
 const AGENT_TOKEN = 'agent-tok-j3';
@@ -42,13 +43,14 @@ async function buildAppWithSchemas(): Promise<
     ajv: observed.ajv,
   };
   const { createApp } = await import('../../api/app.js');
-  const app = createApp(ctx);
+  const app = await listenLoopback(createApp(ctx));
 
   return {
     ...setup,
     app,
     observedLoaded: true,
     async cleanup() {
+      await closeLoopback(app);
       await setup.cleanup();
     },
   };
