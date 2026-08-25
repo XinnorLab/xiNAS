@@ -2,6 +2,7 @@
   "name": "xinas-mcp",
   "version": "0.1.0",
   "description": "MCP server exposing xiNAS NAS infrastructure operations to AI assistants",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev:api": "tsx src/api-server.ts",
