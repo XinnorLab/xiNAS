@@ -242,3 +242,10 @@ export TRANSFER_SERVER="http://your-server:8080"
 - **Netplan ownership** — all InfiniBand interface config must live in `/etc/netplan/99-xinas.yaml` only. See [docs/Network/spec-network-management.md](docs/Network/spec-network-management.md) for details
 - **Updates ship through GitHub Releases only** — the TUI update check compares the installed version against the latest published release tag; drafts and prereleases are excluded and there is no branch fallback. See [docs/Installer/update-spec.md](docs/Installer/update-spec.md)
 - **Variable priority** — CLI/inventory (highest) → preset YAML → role `defaults/main.yml` (lowest)
+
+## License
+
+xiNAS is released under the [MIT License](LICENSE). Note that this covers the
+xiNAS provisioning and management code only — Xinnor xiRAID and NVIDIA
+DOCA-OFED are third-party products that ship under their own licenses, and
+xiRAID still requires the per-node license key described above.
