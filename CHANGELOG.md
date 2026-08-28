@@ -6,7 +6,7 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
-## [Unreleased]
+## [3.12.1] - 2026-08-28
 
 ### Fixed
 
