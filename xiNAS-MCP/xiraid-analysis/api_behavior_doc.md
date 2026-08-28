@@ -300,6 +300,17 @@ deactivate → [no auto-replace] → delete
 - Pool must be activated for auto-replace to work
 - `pool_acquire` is called internally by the spare pool manager — not for external use
 - Replace delay default: 180 seconds (configurable via `settings_pool_modify`)
+- **Detaching a pool from a RAID uses the literal sentinel `"null"`**, not an
+  empty string: `POOL_REMOVE_CMD = "null"` (`spare_pool/constant.py`), compared
+  by exact string equality in `assign_sparepool` (`spare_pool/command_handler.py`),
+  which `del`etes the config's `sparepool` key on a match and raises
+  `SparePoolNotAssignError` when the array had no pool. An empty `sparepool` is
+  counted as *unsupplied* by `check_number_of_entries_helper`
+  (`gRPC/validation/helper.py`) and additionally skipped by
+  `raid_modify_handler`'s `if opts.get("sparepool")` gate, so it neither detaches
+  nor satisfies `raid_modify`'s at-least-one-argument requirement. Re-checked
+  against xiRAID 4.4.0-15858; `"null"`, `"-"` and `""` are all rejected as pool
+  *names* by `check_sp_name`, so the sentinel cannot collide with a real pool.
 
 ### 3.9 Drive Locate (LED)
 

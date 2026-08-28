@@ -160,9 +160,71 @@ its own copy of the table — see
 | Stage | Action |
 |-------|--------|
 | `preflight` | Array exists in live `raid_show`; spare device paths exist and are not members of another array. |
-| `apply_spares` | Pool lifecycle (only when `spare_disk_ids` changed): attach (∅→S): `pool_create { name: "xnsp_<array>", drives }` → **`pool_activate`** (analyst §3.8 — without activation auto-replace never arms) → `raid_modify { sparepool }`; membership change: `pool_add`/`pool_remove` deltas (pool stays active); detach (S→∅): `raid_modify { sparepool: '' }` → **`pool_deactivate`** → `pool_delete`. Pools named other than `xnsp_<array>` (day-1 Ansible pools) are never touched: a modify on an array with a foreign sparepool gets a `preflight` failure (`foreign sparepool '<name>' is not managed by the control path`). |
+| `apply_spares` | Pool lifecycle (only when `spare_disk_ids` changed): attach (∅→S): `pool_create { name: "xnsp_<array>", drives }` → **`pool_activate`** (analyst §3.8 — without activation auto-replace never arms) → `raid_modify { sparepool }`; membership change: `pool_add`/`pool_remove` deltas (pool stays active); detach (S→∅): `raid_modify { sparepool: 'null' }` (the **detach sentinel**, see below — *not* the empty string) → **`pool_deactivate`** → `pool_delete`. Pools named other than `xnsp_<array>` (day-1 Ansible pools) are never touched: a modify on an array with a foreign sparepool gets a `preflight` failure (`foreign sparepool '<name>' is not managed by the control path`). |
 | `apply_tuning` | One tuning-only `raid_modify` (only when `tuning` present). Last: if it throws, the single call did not apply, and the pool rollback below restores structure. |
 | `verify` | `raid_show` reflects the expected sparepool linkage. |
+
+**The spare-pool detach sentinel is the literal string `null`, never `''`.**
+`translate.toRaidModifyRequest` normalizes `sparepool: ''` (the shape the
+executor's detach branch and its rollback both produce, from "this array has no
+pool") to `'null'` at the translation boundary, so nothing above translate has
+to know the sentinel — the same treatment §*Affinity reset* gives `cpu_allowed`,
+and for the same underlying reason: **to this daemon an empty string is never a
+value.** Each knob spells its own "unset" differently (`all` for affinity,
+`null` for the spare pool), so the mapping belongs per-field in `translate.ts`,
+not in one shared "drop the empties" pass.
+
+The empty string is not a weaker spelling of the same thing — it is *no argument
+at all*. The daemon flattens the request with
+`MessageToDict(including_default_value_fields=True)` and then counts a
+present-but-empty string as unsupplied
+(`gRPC/validation/helper.py::check_number_of_entries_helper`, which increments
+its missing counter for `None`, `False`, **and `""`**). Two consequences, both
+observed against xiRAID 4.4.0-15858 (`xiraid-core`, `/usr/lib/xraid/`):
+
+1. A detach whose only payload is `name` + `sparepool: ''` — exactly what
+   `apply_spares` sends when `spare_disk_ids` empties and no tuning changed —
+   trips `raid_modify_check`'s `check_at_least_one` and comes back
+   `INVALID_ARGUMENT: Required arguments are missing: 'cpu_allowed, init_prio,
+   …, sparepool, …'`.
+2. Even riding along with a tuning batch (so validation passes), `''` detaches
+   nothing: `raid_modify_handler` gates the linkage update on
+   `if opts.get("sparepool")`, so an empty value falls through and the modify
+   **exits 0 with the pool still attached** — the failure is silent, not loud.
+
+Both were reproduced against a live 4.4.0 daemon on a RAID 1 with an attached,
+activated pool:
+
+| Command | Result | `sparepool` after |
+|---------|--------|-------------------|
+| `-sp ''` | `Error: Required arguments are missing: '…, sparepool, …'` | `xnsp_spprobe` (unchanged) |
+| `-sp '' -inp 55` | **exit 0, no output** | `xnsp_spprobe` (**silently unchanged**) |
+| `-sp NULL` | `Error: Spare pool 'NULL' does not exist.` | `xnsp_spprobe` (unchanged) |
+| `-sp null` | success | `-` (**detached**) |
+| `-sp null` again | `Error: The spare pool 'null' is not assigned to RAID 'spprobe'.` | `-` |
+| `-sp xnsp_spprobe` | success | `xnsp_spprobe` (pool survived the detach) |
+
+Note the last two rows of the `sparepool` column: after a detach the daemon
+reports the array's sparepool as **`-`**, not as an absent key —
+`readSparepoolName` already folds `''`, `'-'` and absent to `''`, and the
+in-memory fakes model the `'-'` rendering.
+
+`'null'` is the daemon's own constant — `POOL_REMOVE_CMD = "null"` in
+`spare_pool/constant.py`, compared by exact string equality in
+`spare_pool/command_handler.py::assign_sparepool`, which `del`etes the config's
+`sparepool` key on a match. It is matched case-sensitively, so `NULL` is read as
+a pool *name*; and it cannot collide with a real pool, because `check_sp_name`
+forbids creating a pool called `""`, `"-"` or `"null"`. This is the same
+sentinel the [4.3](https://xinnor.io/docs/xiRAID-4.3.0/E/en/CR/raid.html) and
+[4.4](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html) command references
+mean by *"The null value removes the spare pool from the RAID"* — the wording
+reads like a type, but it names a literal.
+
+`assign_sparepool` raises `SparePoolNotAssignError` when asked to remove a pool
+from an array that has none, so the detach and the rollback re-attach stay
+guarded by their pre-state comparisons (`apply_spares` only detaches when the
+live sparepool *is* the derived pool; `rollback` only calls `raid_modify` when
+live ≠ captured).
 
 `rollback`: inverse **pool ops only** (incl. the activation state), computed from `enriched_spec.current_*` vs live `raid_show`/pool state (re-attach the prior pool, undo `pool_add`/`pool_remove`, re-create+activate or deactivate+delete `xnsp_<array>` as needed). Tuning needs no rollback by construction (it is the last stage and atomic). A rollback failure → `requires_manual_recovery` (S2 runner).
 
