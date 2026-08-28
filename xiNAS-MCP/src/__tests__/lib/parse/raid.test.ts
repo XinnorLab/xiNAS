@@ -474,6 +474,27 @@ describe('parseRaidShow', () => {
     expect(noPayload[0]?.spec.spare_disk_ids).toEqual([]);
   });
 
+  // ---- 2026-08-29 design: spec.spare_pool carries the pool NAME (observed) ----
+
+  it('reports the array sparepool name in spec.spare_pool', () => {
+    const rows = parseRaidShow(
+      { data: { name: 'data', level: '5', devices: [], sparepool: 'sp01' } },
+      new Map(),
+      [{ name: 'sp01', drives: ['/dev/nvme5n2'], active: true }],
+    );
+    expect(rows[0]?.spec.spare_pool).toBe('sp01');
+    expect(rows[0]?.status.spare_pool).toBe('sp01');
+  });
+
+  it('omits spec.spare_pool when the array has no pool', () => {
+    const rows = parseRaidShow(
+      { data: { name: 'data', level: '5', devices: [], sparepool: '-' } },
+      new Map(),
+      [],
+    );
+    expect(rows[0]?.spec.spare_pool).toBeUndefined();
+  });
+
   it('normalizes the real xiRAID daemon shape (object keyed by name, tuple devices)', () => {
     // The live xiRAID 4.3.x daemon returns raid_show as an object keyed by
     // array name ({"data":{...},"log":{...}}) with devices as

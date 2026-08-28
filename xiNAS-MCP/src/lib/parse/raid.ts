@@ -29,6 +29,8 @@ export interface ObservedXiraidArray {
     level: string;
     member_disk_ids: string[];
     spare_disk_ids: string[];
+    /** Design 2026-08-29: the pool's name, so a GET -> PATCH round-trip is closed. */
+    spare_pool?: string;
     strip_size_kib?: number;
     block_size?: number;
     group_size?: number;
@@ -241,6 +243,7 @@ export function parseRaidShow(
         level: normalizeLevel(o.level),
         member_disk_ids: devices.map((d) => diskIdByPath.get(d) ?? d),
         spare_disk_ids: spareDrives.map((d) => diskIdByPath.get(d) ?? d),
+        ...(sparepool !== '' ? { spare_pool: sparepool } : {}),
         ...(numberOrNull(o.strip_size) !== null ? { strip_size_kib: o.strip_size as number } : {}),
         ...(numberOrNull(o.block_size) !== null ? { block_size: o.block_size as number } : {}),
         ...(numberOrNull(o.group_size) !== null ? { group_size: o.group_size as number } : {}),

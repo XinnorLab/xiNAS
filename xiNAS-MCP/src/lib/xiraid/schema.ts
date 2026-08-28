@@ -54,7 +54,10 @@ export interface XiraidArraySpec {
   name: string;
   level: Level;
   member_disk_ids: string[];
+  /** OBSERVED ONLY — the spare pool's drives as Disk ids. Rejected on write. */
   spare_disk_ids?: string[];
+  /** Name of an EXISTING spare pool; null on modify detaches. */
+  spare_pool?: string | null;
   group_size?: number | null;
   synd_cnt?: number | null;
   strip_size_kib?: number | null;

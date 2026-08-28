@@ -19,7 +19,6 @@
 
 import type { RaidCreateRequest, RaidModifyRequest } from '../../grpc/raid.js';
 import type { Tuning, XiraidArraySpec } from './schema.js';
-import { derivedPoolName } from './validate.js';
 
 export function toRaidCreateRequest(
   spec: XiraidArraySpec,
@@ -38,9 +37,9 @@ export function toRaidCreateRequest(
     name: spec.name,
     level: spec.level === 'n+m' ? 'n+m' : spec.level.replace(/^raid/, ''),
     drives,
-    // S4: spares ride the executor-provisioned xnsp_<name> pool (the
-    // executor pool_creates + pool_activates it before raid_create).
-    ...((spec.spare_disk_ids ?? []).length > 0 ? { sparepool: derivedPoolName(spec.name) } : {}),
+    // The pool is the operator's, created through the pool surface; the array
+    // path only references it by name (design 2026-08-29).
+    ...(spec.spare_pool ? { sparepool: spec.spare_pool } : {}),
     ...num('group_size', spec.group_size),
     ...num('synd_cnt', spec.synd_cnt),
     ...num('strip_size', spec.strip_size_kib),
