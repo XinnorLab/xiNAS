@@ -6,6 +6,88 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [3.12.0] - 2026-08-28
+
+Two xiRAID sentinel values the control path was sending as empty strings, an
+MCP protocol era, and a dry run that finally reports what it would remove.
+
+**This release rebuilds `xiNAS-MCP/dist/` on update** (`Requires-Rebuild:
+xinas_node_build`). `xinas-api` and `xinas-agent` run compiled JavaScript that
+is not tracked in git, so the three TypeScript changes below reach a host only
+once that role re-runs; it restarts both daemons.
+
+### Added
+
+- **MCP protocol era `2026-07-28` on the `/mcp` endpoint**, alongside the
+  existing legacy era. `server/discover` is stateless — callable before
+  `initialize`, opens no session, returns no `Mcp-Session-Id`, mutates nothing,
+  safe to repeat. `tools/list` and `tools/call` also answer statelessly when
+  the request carries a modern `_meta` envelope, so discovery stays optional.
+
+  No published `@modelcontextprotocol/sdk` implements the era (1.30.0 still
+  tops out at 2025-11-25 and has no `server/discover`), so modern requests are
+  handled ahead of the SDK transport, which additionally rejects any
+  non-`initialize` POST without a session. The SDK keeps serving the legacy era
+  untouched, and `initialize` therefore cannot return a modern version.
+  `listTools`/`callTool` are extracted from the SDK request handlers so both
+  eras share one implementation of the apply gate, RBAC forwarding and audit
+  path; discovery capabilities are generated from the same catalog, so an
+  advertised capability cannot drift from the handler backing it. Resources,
+  prompts and the MCP tasks extension are not advertised — they are not
+  implemented. An unauthenticated `discover` answers 401 and never `-32601`:
+  `Method not found` on `server/discover` is the one signal a client may read
+  as "this server is legacy-only", and returning it for a bad token would
+  silently downgrade every such client.
+- **The MIT license.** The repository shipped without one, leaving the terms
+  undefined for anyone cloning it. MIT covers the xiNAS code only — xiRAID and
+  DOCA-OFED are third-party products under their own terms.
+
+### Fixed
+
+- **Detaching a spare pool now works.** `apply_spares` detached with
+  `raid_modify { sparepool: '' }` and the translator forwarded the empty string
+  verbatim, which detaches nothing. The daemon flattens the request with
+  `MessageToDict(including_default_value_fields=True)` and then counts a
+  present-but-empty string as *unsupplied*, so a detach-only modify carried no
+  modifiable argument at all and came back `INVALID_ARGUMENT: Required
+  arguments are missing`. Riding along with a tuning batch it failed more
+  quietly: `raid_modify_handler` gates the linkage update on
+  `if opts.get("sparepool")`, so the modify exited 0 and the pool stayed
+  attached. The rollback path sent the same empty string.
+
+  The sentinel is the literal string `null` (`POOL_REMOVE_CMD` in
+  `spare_pool/constant.py`, compared by exact string equality) — what the 4.3
+  and 4.4 command references mean by "The null value removes the spare pool
+  from the RAID": the wording reads like a type, but names a literal. It cannot
+  collide with a real pool, because `check_sp_name` forbids creating one called
+  `""`, `"-"` or `"null"`. Verified end to end against a live xiRAID
+  4.4.0-15858 daemon. `toRaidModifyRequest` normalizes `''` → `'null'`, so
+  nothing above the translation boundary knows the sentinel.
+- **"All CPUs (reset)" no longer fails the whole request.** The mode PATCHed
+  `spec.tuning.cpu_allowed: ""`, and xiRAID documents exactly three shapes for
+  `-ca/--cpu_allowed` — a CPU list, a hyphenated range, or the literal `all`
+  (default: `all`). The empty string is none of them; the daemon reads it as
+  "argument not supplied". Since `apply_tuning` issues a single tuning-only
+  `raid_modify`, a reset-only request carried no modifiable argument and the
+  daemon rejected the call with `INVALID_ARGUMENT`, surfacing as
+  `FAILED_PARTIAL_ROLLED_BACK`. Pinning to an explicit list worked; only the
+  reset failed. `cpuAllowed()` now maps `''` (what observation renders for an
+  unpinned array, and therefore what every client reads back) to `all` for
+  `raid_create` and `raid_modify` alike.
+  Ref: <https://xinnor.io/docs/xiRAID-4.3.0/E/en/CR/raid.html>
+- **`uninstall.sh --dry-run` survives `--check` and reports what it would
+  remove.** It died at "RAID | parse array names" with `Expecting value: line 1
+  column 1 (char 0)`: Ansible skips `command`/`shell` under `--check` and hands
+  the register a synthetic result with `rc=0` and `stdout=''`, so
+  `default('{}')` — which substitutes only for an *undefined* value — passed
+  the empty string straight to `from_json`. The four JSON parses in Phase C now
+  use truthy defaults (a 0-byte baseline capture b64decodes to `''` and crashed
+  identically), and the read-only probes run under check mode so a dry run
+  actually learns something — `rc=0` from a skipped probe is indistinguishable
+  from "found nothing". The summary scratch file is written under `--check`
+  too, since it is the report itself. Destructive steps still honour check
+  mode, and a test pins that allowlist closed.
+
 ## [3.11.1] - 2026-08-21
 
 Uninstaller fix only. No Ansible role needs to re-run — `xinas_uninstall` is
