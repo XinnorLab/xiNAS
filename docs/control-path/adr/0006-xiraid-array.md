@@ -61,7 +61,7 @@ The gRPC client dials the xiRAID daemon over **TCP with TLS** (`host:port` from 
     "name": "data",
     "level": "raid6",
     "member_disk_ids": ["disk-nvme2", "disk-nvme3", "disk-nvme4", "disk-nvme5"],
-    "spare_disk_ids": [],
+    "spare_pool": null,
     "group_size": null,
     "synd_cnt": null,
     "strip_size_kib": 64,
@@ -125,7 +125,8 @@ The gRPC client dials the xiRAID daemon over **TCP with TLS** (`host:port` from 
 | `spec.strip_size_kib` | ✅ | ❌ `UNSUPPORTED` | From the xiRAID `STRIP_SIZES_KB` set (powers of two; `{16,32,64,128,256}`). |
 | `spec.block_size` | ✅ | ❌ `UNSUPPORTED` | `512` or `4096`. |
 | `spec.force_metadata` | ✅ | ❌ `UNSUPPORTED` | Create-only override; overwrites stale metadata on members. |
-| `spec.spare_disk_ids` | ✅ (since S4 — create provisions + activates the pool) | ✅ | Spare pool lifecycle below. |
+| `spec.spare_pool` | ✅ | ✅ | Name of an existing pool (`POST /api/v1/pools`); `null` on modify detaches without deleting it. Spare pool lifecycle below. |
+| `spec.spare_disk_ids` | ❌ `observed_only` | ❌ `observed_only` | Rejected on write — create the pool via `POST /api/v1/pools`, then send `spec.spare_pool`. Populated by the collector from `raid_show` (pool members joined to Disk ids). |
 | `spec.tuning.*` (live-writable) | ✅ | ✅ | Priorities `[1,100]`; `memory_limit` `0` or `[1024,1048576]` MiB; merge timings in microseconds; booleans map to xiRAID `0/1`. |
 | `spec.tuning.{resync_enabled, discard, drive_trim}` | ✅ | ❌ `UNSUPPORTED` | Create-surface tuning only — the daemon's `RaidModify` message has **no field** for any of them (verified against the running 4.3.1 descriptor). Rejected pre-plan with `reason: create_only_tuning`; forwarding one would be silently dropped by protobuf and report a false success. |
 | `status.*` | server-managed | server-managed | Computed by the agent from `raid_show`. |
@@ -223,7 +224,7 @@ All `risk_level` / `rollback_model` values below use the api-v1.yaml enums (`ris
 - Executor stages: `preflight` (re-check `device_by_id` paths exist + not already members, via live `raid_show`) → `create` (`raid_create`; mark created) → `wait_online` (poll `raid_show` until `state ∈ {optimal, rebuilding}` or timeout) → `verify` (`/dev/xi_<name>` present). `rollback`: if created → `raid_destroy(name, force)`, else no-op. `snapshot_before/after` are auto-captured by the runner.
 
 **Modify** (`xiraid.array.modify`, `PATCH /arrays/{id}`).
-- Writable: `spare_disk_ids` (pool lifecycle above) + `spec.tuning.*` **except the create-surface trio** (`resync_enabled`/`discard`/`drive_trim`, matrix). Topology fields and the create-surface tuning keys → `UNSUPPORTED` (matrix). Maps to `raid_modify` (+ pool ops). `risk_level: non_disruptive`, `rollback_model: non_disruptive` (re-apply prior values / inverse pool ops).
+- Writable: `spare_pool` (pool lifecycle above) + `spec.tuning.*` **except the create-surface trio** (`resync_enabled`/`discard`/`drive_trim`, matrix). `spare_disk_ids` is observed-only and rejected on write. Topology fields and the create-surface tuning keys → `UNSUPPORTED` (matrix). Maps to `raid_modify` (+ `pool_activate` on attach to an inactive pool). `risk_level: non_disruptive`, `rollback_model: non_disruptive` (re-apply prior sparepool name / prior tuning values; deactivate the pool only if this run activated it).
 
 **Import** (`xiraid.array.import`, `POST /arrays` with an import-shaped spec `{ uuid, new_name? }`).
 - *(Amended by the S4 spec, 2026-06-10.)* Plan-mode validates what the api can know from KV alone: spec shape, target-name validity + availability. The candidate UUID is validated **at executor preflight** via a live `raid_import_show()` — the privilege split makes a plan-time daemon call impossible (only the agent reaches xiRAID; `PlanContext` is KV-only). A plan-time discovery surface (an observed import-candidates annex or an on-demand agent RPC) is follow-on work; until then clients learn candidate UUIDs from xiRAID tooling. **Adopt:** `mode=apply` → the executor runs `raid_import_apply(uuid, new_name?)`. The apply task terminates `success`; the adopted array surfaces through the normal observe path. `risk_level: non_disruptive`; `rollback_model: non_disruptive` (un-adopt = config-only removal, `raid_destroy { config_only: true }` — data untouched). See `docs/control-path/s4-xiraid-array-mutations-spec.md` §6.

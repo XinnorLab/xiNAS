@@ -54,14 +54,18 @@ On a scratch node (or after `./uninstall.sh`):
    `GET /arrays/{id}` against `xicli raid show` — `level`,
    `strip_size_kib`, `state`, member device paths, spare pool. Any
    mismatch → fix `lib/parse/raid.ts` mapping, not the daemon.
-3. [ ] **Create:** `POST /arrays` plan→apply (4 spare NVMe drives,
-   raid5) → task `success`; array appears in `xicli` and `GET /arrays`;
-   PBR of the pool: `xnsp_<name>` created+activated when spares given.
-4. [ ] **Modify:** PATCH spares + tuning → applied live (`xicli raid
-   show` confirms); topology PATCH → 422.
+3. [ ] **Create:** `POST /pools` from spare NVMe drives to create a
+   pool, then `POST /arrays` plan→apply (raid5, `spec.spare_pool` set
+   to that pool's name) → task `success`; array appears in `xicli` and
+   `GET /arrays` with the pool attached; `xicli pool show` confirms the
+   pool activated (no `pool_create` — the array only referenced it).
+4. [ ] **Modify:** PATCH `spare_pool` (attach/detach an existing pool)
+   and tuning → applied live (`xicli raid show` confirms); topology
+   PATCH → 422.
 5. [ ] **Delete gates:** delete without `dangerous` → 412; with a
    mounted dependent fs → 412 listing it; clean delete with
-   `dangerous: true` → array gone, pool cleaned.
+   `dangerous: true` → array gone, spare pool untouched (still present,
+   active, and attachable to another array via `PATCH /arrays`).
 
 ## 4. S5 — filesystems over the agent sandbox (S5 spec §10)
 
