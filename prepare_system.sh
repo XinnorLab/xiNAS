@@ -275,15 +275,23 @@ else
 fi
 set -e
 
-if [ "$status" -eq 2 ]; then
-    exit 0
-fi
-
-# POSIX: an `if` with no `else` whose condition is false exits 0, so without
-# this explicit exit a real menu failure (any status other than 2) would be
-# silently swallowed as success once the errexit-kills-the-shell bug above is
-# fixed. Propagate the menu's actual exit status for every other case.
-if [ "$status" -ne 0 ]; then
+# Propagate the menu's exit status VERBATIM (docs/Installer/spec.md 2.7):
+#
+#   0  a playbook ran to completion — the host is provisioned
+#   2  the operator chose "Exit" — a clean abort, and nothing was applied
+#   *  the menu itself failed
+#
+# Status 2 used to be collapsed into `exit 0` here. That threw away the only
+# signal install.sh has that no provisioning happened, so an aborted setup
+# was indistinguishable from a finished one: install.sh went on to bootstrap
+# the xinas-menu wrapper and print "installed successfully" for a host with
+# no xiRAID, no arrays and no exports on it.
+#
+# Only a REAL failure gets a diagnostic — 2 is not an error, so it stays
+# silent. Without the explicit `exit "$status"` below, a POSIX `if` with no
+# `else` and a false condition would exit 0 on its own and silently swallow
+# a real menu failure as success.
+if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
     echo -e "${RED}Menu exited with status ${status}${NC}" >&2
 fi
 exit "$status"

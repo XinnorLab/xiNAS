@@ -202,6 +202,13 @@ INSTALL_DIR="/opt/xiNAS"
 REPO_URL="https://github.com/XinnorLab/xiNAS.git"
 REPO_SLUG="XinnorLab/xiNAS"
 
+# Console wrapper paths. Kept in step with the xinas_menu role's
+# xinas_menu_wrapper_path / xinas_setup_wrapper_path defaults — the role owns
+# these files during provisioning; the block near the end of this script only
+# bootstraps them when provisioning did not write them itself.
+MENU_WRAPPER="/usr/local/bin/xinas-menu"
+SETUP_WRAPPER="/usr/local/bin/xinas-setup"
+
 # Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints the tag
 # on success, nothing on failure. xiNAS installs from releases only — this
 # helper never returns a branch name, and callers must NOT fall back to main.
@@ -282,7 +289,10 @@ set +e
 XINAS_QUIET=1 XINAS_UNATTENDED="$UNATTENDED" XINAS_LOG="$LOG_FILE" ./prepare_system.sh
 prep_rc=$?
 set -e
-if [[ $prep_rc -ne 0 ]]; then
+# Status 2 is the setup menu's "operator chose Exit" — a clean abort with no
+# playbook run behind it, not a failure (docs/Installer/spec.md §2.7). It is
+# handled after this guard; every other non-zero status is a real failure.
+if [[ $prep_rc -ne 0 && $prep_rc -ne 2 ]]; then
     fail "System preparation failed (exit ${prep_rc}) — see ${LOG_FILE}"
     exit "$prep_rc"
 fi
@@ -301,11 +311,37 @@ if [[ "$UNATTENDED" == "1" ]]; then
     exit "$rc"
 fi
 
+# ── Setup exited without provisioning ────────────────────────────────────────
+# The operator left the setup menu before any playbook ran, so the host is
+# untouched: no xiRAID, no arrays, no filesystems, no exports. Installing the
+# management console here would put `xinas-menu` on a machine it has nothing
+# to manage, and the success banner below would assert an install that never
+# happened. Report what actually occurred and stop — cleanly, exit 0, because
+# leaving the menu is a legitimate choice and not an error
+# (docs/Installer/spec.md §2.7).
+if [[ $prep_rc -eq 2 ]]; then
+    echo ""
+    _W=55
+    _bar() { printf '─%.0s' $(seq 1 $_W); }
+    echo -e "  ${YELLOW}$(_bar)${NC}"
+    echo -e "    ${YELLOW}${BOLD}Setup exited — xiNAS was not provisioned.${NC}"
+    echo -e ""
+    echo -e "    ${DIM}No playbook ran, so nothing on this host was changed,${NC}"
+    echo -e "    ${DIM}and the management console was not installed.${NC}"
+    echo -e ""
+    echo -e "    ${DIM}Files staged in :${NC}  ${WHITE}${INSTALL_DIR}${NC}"
+    echo -e "    ${DIM}Resume setup    :${NC}  ${CYAN}sudo ${INSTALL_DIR}/install.sh${NC}"
+    echo -e "  ${YELLOW}$(_bar)${NC}"
+    echo ""
+    exit 0
+fi
+
 # ── Ensure xinas-menu wrapper exists ─────────────────────────────────────────
-# The xinas_menu Ansible role creates this during full provisioning (site.yml).
-# Bootstrap it here so the command works immediately, even if the user exited
-# the provisioning menu early.
-if [[ ! -x /usr/local/bin/xinas-menu ]]; then
+# Only reached once provisioning completed (prep_rc == 0). The xinas_menu
+# Ansible role writes both wrappers during a full site.yml run, so this block
+# is normally a no-op; it is the safety net for a preset whose playbook.yml
+# leaves the role out.
+if [[ ! -x "$MENU_WRAPPER" ]]; then
     step "Setting up management console"
     run_quiet "Installing python3-venv" \
         bash -c 'apt-get install -y -qq python3-venv' || true
@@ -315,23 +351,23 @@ if [[ ! -x /usr/local/bin/xinas-menu ]]; then
     run_quiet "Installing Textual TUI dependencies" \
         "$INSTALL_DIR/venv/bin/pip" install -q "textual>=8.2.8,<8.3" "pyyaml>=6.0" || true
 
-    cat > /usr/local/bin/xinas-menu <<WEOF
+    cat > "$MENU_WRAPPER" <<WEOF
 #!/bin/sh
 # xiNAS Management Console wrapper
 # Managed by xinas_menu Ansible role — do not edit manually
 PYTHONPATH=$INSTALL_DIR \\
   exec $INSTALL_DIR/venv/bin/python -m xinas_menu "\$@"
 WEOF
-    chmod 755 /usr/local/bin/xinas-menu
+    chmod 755 "$MENU_WRAPPER"
 
-    cat > /usr/local/bin/xinas-setup <<WEOF
+    cat > "$SETUP_WRAPPER" <<WEOF
 #!/bin/sh
 # xiNAS Setup (provisioning) wrapper
 # Managed by xinas_menu Ansible role — do not edit manually
 PYTHONPATH=$INSTALL_DIR \\
   exec $INSTALL_DIR/venv/bin/python -m xinas_menu --setup "\$@"
 WEOF
-    chmod 755 /usr/local/bin/xinas-setup
+    chmod 755 "$SETUP_WRAPPER"
     ok "xinas-menu command installed"
 fi
 

@@ -113,14 +113,17 @@ def _run_prepare_system(tmp_path: Path, *, expert: bool, menu_exit_code: int):
     )
 
 
-def test_default_menu_exit_2_is_not_a_failure(tmp_path):
+def test_default_menu_exit_2_propagates_verbatim(tmp_path):
+    # spec.md 2.7: status 2 means "operator aborted, nothing was
+    # provisioned". Collapsing it to 0 erases the only signal install.sh
+    # has that no playbook ran.
     proc = _run_prepare_system(tmp_path, expert=False, menu_exit_code=2)
-    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    assert proc.returncode == 2, f"stdout={proc.stdout}\nstderr={proc.stderr}"
 
 
-def test_expert_menu_exit_2_is_not_a_failure(tmp_path):
+def test_expert_menu_exit_2_propagates_verbatim(tmp_path):
     proc = _run_prepare_system(tmp_path, expert=True, menu_exit_code=2)
-    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    assert proc.returncode == 2, f"stdout={proc.stdout}\nstderr={proc.stderr}"
 
 
 def test_real_menu_failure_still_propagates(tmp_path):
@@ -147,9 +150,10 @@ def test_real_failure_prints_diagnostic(tmp_path):
 
 
 def test_menu_exit_2_prints_no_diagnostic(tmp_path):
-    # exit 2 (operator chose "Exit") is not a failure, so it must stay silent.
+    # exit 2 (operator chose "Exit") is not a failure, so it must stay silent
+    # — the status is propagated, but no "Menu exited with status" complaint.
     proc = _run_prepare_system(tmp_path, expert=False, menu_exit_code=2)
-    assert proc.returncode == 0
+    assert proc.returncode == 2
     assert "status" not in proc.stderr.lower()
 
 
@@ -211,3 +215,107 @@ def test_install_sh_prepare_block_aborts_on_real_failure(tmp_path):
     assert proc.returncode == 1
     assert "REACHED_END" not in proc.stdout
     assert "FAIL:" in proc.stderr, f"expected fail() to report before exiting; stderr={proc.stderr}"
+
+
+# ── install.sh: an aborted setup must not install the management TUI ─────────
+# spec.md §2.7 "exit 2 is not a success either". Pre-fix, install.sh could not
+# tell "operator chose Exit" (menu 2 -> prepare_system 0) from "deployment
+# completed" (menu 0 -> prepare_system 0), so it bootstrapped the xinas-menu /
+# xinas-setup wrappers and printed "xiNAS installed successfully!" for a host
+# on which no playbook had ever run.
+
+
+def _extract_install_sh_tail() -> str:
+    """install.sh from the 'Preparing system' step through the final banner."""
+    src = INSTALL_SH.read_text()
+    m = re.search(r'step "Preparing system".*', src, re.S)
+    assert m, "install.sh's 'Preparing system' step block not found"
+    return m.group(0)
+
+
+def _run_install_sh_tail(tmp_path: Path, *, prepare_exit_code: int):
+    stub_prepare = tmp_path / "prepare_system.sh"
+    stub_prepare.write_text(f"#!/bin/bash\nexit {prepare_exit_code}\n")
+    stub_prepare.chmod(0o755)
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    install_dir = tmp_path / "opt-xinas"
+    install_dir.mkdir()
+
+    # MENU_WRAPPER / SETUP_WRAPPER are assigned in install.sh ABOVE the
+    # extracted region (next to INSTALL_DIR), so redirecting them at the
+    # host's real /usr/local/bin is a plain variable override here — no
+    # test-only env knob in the shipped script.
+    snippet = (
+        "set -e\n"
+        'RED=""; GREEN=""; YELLOW=""; CYAN=""; WHITE=""; DIM=""; BOLD=""; NC=""\n'
+        'UNATTENDED="0"; LOG_FILE="/dev/null"\n'
+        f'INSTALL_DIR="{install_dir}"\n'
+        f'MENU_WRAPPER="{bindir}/xinas-menu"\n'
+        f'SETUP_WRAPPER="{bindir}/xinas-setup"\n'
+        "step() { :; }\n"
+        "info() { :; }\n"
+        'ok()   { echo "OK: $*"; }\n'
+        'warn() { echo "WARN: $*"; }\n'
+        'fail() { echo "FAIL: $*" >&2; }\n'
+        "run_quiet() { :; }\n" + _extract_install_sh_tail()
+    )
+    proc = subprocess.run(
+        ["bash", "-c", snippet],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return proc, bindir, install_dir
+
+
+def test_aborted_setup_does_not_install_management_tui(tmp_path):
+    proc, bindir, _ = _run_install_sh_tail(tmp_path, prepare_exit_code=2)
+    assert not (bindir / "xinas-menu").exists(), (
+        "operator exited setup without provisioning, but install.sh still "
+        f"wrote the management-console wrapper; stdout={proc.stdout}"
+    )
+    assert not (bindir / "xinas-setup").exists()
+
+
+def test_aborted_setup_does_not_claim_success(tmp_path):
+    proc, _, _ = _run_install_sh_tail(tmp_path, prepare_exit_code=2)
+    assert "installed successfully" not in proc.stdout, (
+        f"success banner printed for an aborted setup; stdout={proc.stdout}"
+    )
+
+
+def test_aborted_setup_is_not_reported_as_a_failure(tmp_path):
+    # spec.md §2.7 "exit 2 is not a failure": no ✗, no fail(), exit 0.
+    proc, _, _ = _run_install_sh_tail(tmp_path, prepare_exit_code=2)
+    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    assert "FAIL:" not in proc.stderr, proc.stderr
+
+
+def test_aborted_setup_explains_how_to_resume(tmp_path):
+    proc, _, install_dir = _run_install_sh_tail(tmp_path, prepare_exit_code=2)
+    out = proc.stdout
+    assert str(install_dir) in out, f"staged directory not named; stdout={out}"
+    # Resume goes back through install.sh — the one supported entry point —
+    # not straight into prepare_system.sh (spec.md 2.7).
+    assert f"{install_dir}/install.sh" in out, f"no resume command; stdout={out}"
+
+
+def test_completed_setup_still_bootstraps_wrapper_and_reports_success(tmp_path):
+    # The status-0 path is unchanged: the wrapper bootstrap remains a safety
+    # net for a preset whose playbook.yml omits the xinas_menu role.
+    proc, bindir, _ = _run_install_sh_tail(tmp_path, prepare_exit_code=0)
+    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    assert (bindir / "xinas-menu").exists(), proc.stdout
+    assert (bindir / "xinas-setup").exists(), proc.stdout
+    assert "installed successfully" in proc.stdout
+
+
+def test_real_prepare_failure_still_aborts_the_tail(tmp_path):
+    proc, bindir, _ = _run_install_sh_tail(tmp_path, prepare_exit_code=1)
+    assert proc.returncode == 1
+    assert "FAIL:" in proc.stderr
+    assert not (bindir / "xinas-menu").exists()
+    assert "installed successfully" not in proc.stdout
