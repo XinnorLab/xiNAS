@@ -162,14 +162,22 @@ operator explicitly chooses "Exit" from the top-level menu — a clean,
 deliberate abort, **not** an error. This is distinct from every other
 non-zero exit, which indicates the menu itself failed.
 
+Status **2** therefore carries a second, load-bearing meaning: **no
+provisioning ran**. The operator left before any playbook was applied, so
+the host is exactly as it was. A menu that reaches `exit 0` has, by
+construction, completed an `ansible-playbook` run (both menus `exit 0`
+only on the line after a successful `run_playbook`).
+
 Both menus' scripted callers run under `set -e`:
 
 - `prepare_system.sh` invokes `./startup_menu.sh` (expert mode) or
-  `./simple_menu.sh` (default) and inspects its exit status to decide
-  whether to `exit 0` (operator exited cleanly) or propagate a real
-  failure.
+  `./simple_menu.sh` (default) and **propagates the menu's status
+  verbatim** — `0` provisioned, `2` operator aborted, anything else a
+  real failure. It MUST NOT collapse `2` into `0`: that erases the only
+  signal its caller has that nothing was installed.
 - `install.sh` invokes `./prepare_system.sh` as its "Preparing system"
-  step, ahead of installing the `xinas-menu` wrapper.
+  step, ahead of installing the `xinas-menu` wrapper, and branches on
+  that status.
 
 Because both callers run under `set -e`, a bare `cmd` followed on the
 next line by `status=$?` does **not** protect a nonzero-returning `cmd`
@@ -179,12 +187,41 @@ exit status without letting `errexit` kill the caller first, e.g.
 `set +e; cmd; status=$?; set -e`, or `cmd || status=$?` — the same
 pattern `install.sh` already uses around its `autoinstall.sh` call.
 
-**Requirement:** on a first-run install where the operator chooses Exit
-from the menu, `install.sh` MUST still complete installation of the
-`/usr/local/bin/xinas-menu` (and `/usr/local/bin/xinas-setup`) wrapper
-and MUST exit `0`. Exit code `2` from either menu MUST NOT be surfaced
-to the user as an install failure at any point in the
-`install.sh` → `prepare_system.sh` → menu call chain.
+**Requirement — exit 2 is not a failure.** Exit code `2` from either
+menu MUST NOT be surfaced to the user as an install failure at any point
+in the `install.sh` → `prepare_system.sh` → menu call chain. No `✗`,
+no "failed", no log tail. `install.sh` MUST itself exit `0`: the operator
+asked to leave and got what they asked for.
+
+**Requirement — exit 2 is not a success either.** On status `2`,
+`install.sh` MUST NOT:
+
+- write `/usr/local/bin/xinas-menu` or `/usr/local/bin/xinas-setup`,
+  create the Python virtualenv, or install the Textual dependencies; and
+- print the "xiNAS installed successfully" banner.
+
+Provisioning is what installs the management console — the `xinas_menu`
+role, during `site.yml`. Bootstrapping the wrappers after an aborted
+setup leaves `xinas-menu` on a host that has no xiRAID, no arrays, no
+filesystems and no exports, and the success banner asserts an install
+that never happened. `install.sh` MUST instead print a neutral notice
+that setup was exited without provisioning, name the directory the repo
+was staged in, and give the command that resumes setup
+(`sudo <INSTALL_DIR>/install.sh`).
+
+The resume command is `install.sh`, not `prepare_system.sh`: re-entering
+through the installer keeps the operator on the one supported path — it
+re-resolves the latest published release, checks the tree out again,
+re-runs the requirement and root-SSH steps, and only then hands off to
+`prepare_system.sh`. Every one of those steps is idempotent on an already
+staged tree, so resuming costs nothing beyond the release lookup.
+`install.sh` is cwd-independent (it `cd`s into `INSTALL_DIR` itself), so
+the command needs no `cd` in front of it.
+
+The wrapper bootstrap stays on the status-`0` path, where it is a safety
+net for a preset whose `playbook.yml` omits the `xinas_menu` role; after
+a normal `site.yml` run the role has already written both wrappers and
+the `[[ ! -x ... ]]` guard makes the block a no-op.
 
 ### 2.8 Dialog cancellation contract (`configure_*.sh`)
 

@@ -6,6 +6,35 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [Unreleased]
+
+### Fixed
+
+- **Leaving the setup menu no longer installs the management console or
+  claims the install succeeded.** Both setup menus already signalled the
+  difference — `exit 2` when the operator picks "Exit", `exit 0` only on the
+  line after a completed `ansible-playbook` run — but `prepare_system.sh`
+  collapsed `2` into `exit 0`, so `install.sh` could not tell an aborted
+  setup from a finished one. It went on to create the Python virtualenv,
+  install Textual, write `/usr/local/bin/xinas-menu` and
+  `/usr/local/bin/xinas-setup`, and print "xiNAS installed successfully!" —
+  on a host with no xiRAID, no arrays, no filesystems and no exports.
+
+  `prepare_system.sh` now propagates the menu's status verbatim, and
+  `install.sh` branches on it. On `2` it skips the wrapper bootstrap and the
+  success banner entirely, and prints a neutral notice instead: nothing was
+  changed, the console was not installed, the tree is staged in
+  `/opt/xiNAS`, resume with `sudo /opt/xiNAS/install.sh`. It still exits
+  `0` — leaving the menu is a legitimate choice, not an error, so there is
+  no `✗`, no "failed" and no log tail either. The wrapper bootstrap stays on
+  the provisioned path as the safety net it was written to be, for a preset
+  whose `playbook.yml` omits the `xinas_menu` role.
+
+  `docs/Installer/spec.md` §2.7 previously *required* the old behavior
+  ("`install.sh` MUST still complete installation of the wrapper"); that
+  requirement is replaced by the two halves now stated there — exit `2` is
+  not a failure, and it is not a success either.
+
 ## [3.12.0] - 2026-08-28
 
 Two xiRAID sentinel values the control path was sending as empty strings, an
