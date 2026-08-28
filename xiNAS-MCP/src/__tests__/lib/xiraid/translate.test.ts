@@ -157,6 +157,41 @@ describe('toRaidModifyRequest', () => {
     expect('force' in req).toBe(false);
   });
 
+  it('cpu_allowed reset translates the empty string to xiRAID\'s "all" sentinel', () => {
+    // xiRAID documents ONE reset value for the affinity knob: the literal
+    // string `all` (CR 4.2/4.3 `raid modify` -ca: "a comma-separated list of
+    // CPUs, a range of CPUs indicated by a hyphen, or the value 'all'").
+    // An empty string is not a documented value — the daemon reads it as
+    // "argument not supplied", so a reset-only modify carried NO modifiable
+    // argument and the whole call came back INVALID_ARGUMENT "Required
+    // arguments are missing: 'cpu_allowed, init_prio, ...'".
+    expect(toRaidModifyRequest('data', { tuning: { cpu_allowed: '' } })).toEqual({
+      name: 'data',
+      cpu_allowed: 'all',
+    });
+    // ...and whitespace is the same request typed sloppily.
+    expect(toRaidModifyRequest('data', { tuning: { cpu_allowed: '  ' } })).toEqual({
+      name: 'data',
+      cpu_allowed: 'all',
+    });
+    // An explicit 'all' from a client passes through unchanged.
+    expect(toRaidModifyRequest('data', { tuning: { cpu_allowed: 'all' } })).toEqual({
+      name: 'data',
+      cpu_allowed: 'all',
+    });
+    // A real CPU list is untouched.
+    expect(toRaidModifyRequest('data', { tuning: { cpu_allowed: '0,2,4-7' } })).toEqual({
+      name: 'data',
+      cpu_allowed: '0,2,4-7',
+    });
+    // create carries the same spelling.
+    const created = toRaidCreateRequest(
+      { name: 'data', level: 'raid0', member_disk_ids: ['d1', 'd2'], tuning: { cpu_allowed: '' } },
+      DEVICES,
+    );
+    expect(created.cpu_allowed).toBe('all');
+  });
+
   it('sparepool attach + detach', () => {
     expect(toRaidModifyRequest('data', { sparepool: 'xnsp_data' })).toEqual({
       name: 'data',

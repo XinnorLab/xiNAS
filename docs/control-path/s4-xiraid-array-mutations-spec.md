@@ -83,6 +83,21 @@ A future migration may persist the observed pin and let the engine's `plan_stale
 
 **Writability enforcement (pre-plan).** Any topology field present in the PATCH spec (`name`, `level`, `member_disk_ids`, `group_size`, `synd_cnt`, `strip_size_kib`, `block_size`, `force_metadata`) → `UNSUPPORTED` (422) with the ADR-0006 per-field shape (`reason: 'topology_immutable'`) **before** any plan row is written. The three **create-surface tuning keys** — `spec.tuning.resync_enabled`, `spec.tuning.discard`, `spec.tuning.drive_trim` — reject on the same pre-plan path with `reason: 'create_only_tuning'`: the daemon's `RaidModify` message has no field for any of them (verified against the running 4.3.1 descriptor), so forwarding one would be silently dropped by protobuf and report a false `success`. `translate.ts` also omits them from the `raid_modify` request as a second line of defence.
 
+**Affinity reset (`cpu_allowed`).** The knob has one documented reset value on
+both the create and modify surfaces: the literal string `all` — "a
+comma-separated list of CPUs, a range of CPUs indicated by a hyphen, or the
+value 'all' (the RAID will run on all available CPUs)", default `all`
+([CR 4.3.0 `raid`](https://xinnor.io/docs/xiRAID-4.3.0/E/en/CR/raid.html)).
+The empty string is not one of the accepted shapes: the daemon reads an empty
+`cpu_allowed` as *argument not supplied*, so a reset-only `raid_modify` reached
+`apply_tuning` carrying no modifiable argument and the whole call failed with
+`INVALID_ARGUMENT: Required arguments are missing: 'cpu_allowed, init_prio, …'`
+(the task then reported `FAILED_PARTIAL_ROLLED_BACK`). Observation renders an
+unpinned array as `''`, so `''` is the value a client reads back and would send
+to reset; `translate.ts` normalizes `''` (and whitespace) to `all` at the daemon
+boundary — for `raid_create` too — so every client round-trips without learning
+the sentinel. An explicit `all` from a client passes through unchanged.
+
 > **Naming caveat (added 2026-08-14).** "Create-only" describes the **gRPC
 > message**, not the product. [CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html)
 > documents `xicli raid modify` as accepting `discard` (noting it requires a

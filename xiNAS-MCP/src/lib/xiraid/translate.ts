@@ -7,6 +7,9 @@
  *   (the api plan provider resolves it from observed Disk state and embeds
  *   it in the spec as `device_by_id`; the executor passes it back in here).
  * - `null`/absent tuning fields are OMITTED → xiRAID's own defaults apply.
+ * - An EMPTY `cpu_allowed` becomes the literal `all` — xiRAID's documented
+ *   reset value (see `cpuAllowed` below); the empty string is read by the
+ *   daemon as "argument not supplied", not as "no restriction".
  * - Booleans map to the proto's uint 0/1 fields where the gRPC interface
  *   says `number`; `single_run`/`force_metadata` stay boolean.
  * - NEVER emits `force` (ADR-0006 §Excluded parameters).
@@ -58,9 +61,7 @@ export function toRaidCreateRequest(
     ...num('request_limit', t.request_limit),
     ...num('memory_prealloc', t.memory_prealloc),
     ...bool01('adaptive_merge', t.adaptive_merge),
-    ...(t.cpu_allowed !== undefined && t.cpu_allowed !== null
-      ? { cpu_allowed: t.cpu_allowed }
-      : {}),
+    ...cpuAllowed(t.cpu_allowed),
     ...num('max_sectors_kb', t.max_sectors_kb),
     ...num('sdc_prio', t.sdc_prio),
     ...(t.single_run !== undefined && t.single_run !== null ? { single_run: t.single_run } : {}),
@@ -96,9 +97,7 @@ export function toRaidModifyRequest(
     ...num('request_limit', t.request_limit),
     ...num('memory_prealloc', t.memory_prealloc),
     ...bool01('adaptive_merge', t.adaptive_merge),
-    ...(t.cpu_allowed !== undefined && t.cpu_allowed !== null
-      ? { cpu_allowed: t.cpu_allowed }
-      : {}),
+    ...cpuAllowed(t.cpu_allowed),
     ...num('max_sectors_kb', t.max_sectors_kb),
     ...num('sdc_prio', t.sdc_prio),
     ...(t.single_run !== undefined && t.single_run !== null ? { single_run: t.single_run } : {}),
@@ -109,6 +108,31 @@ export function toRaidModifyRequest(
     // that reported success while changing nothing. They are rejected up
     // front instead, in CREATE_ONLY_TUNING (routes/arrays.ts).
   };
+}
+
+/**
+ * `cpu_allowed`, in the ONE spelling xiRAID accepts for "no restriction".
+ *
+ * The command reference gives the knob exactly three value shapes — a
+ * comma-separated CPU list, a hyphenated range, or **the literal string
+ * `all`** ("the RAID will run on all available CPUs"; default: `all`) — for
+ * both `raid create` and `raid modify`
+ * (https://xinnor.io/docs/xiRAID-4.3.0/E/en/CR/raid.html).
+ *
+ * The empty string is NOT one of them. The daemon reads an empty
+ * `cpu_allowed` as "the argument was not supplied", so a reset-only
+ * `raid_modify` carried no modifiable argument at all and the whole call was
+ * rejected — `INVALID_ARGUMENT: Required arguments are missing: 'cpu_allowed,
+ * init_prio, …'` — while pinning to an explicit list worked. Observation
+ * renders an unpinned array as `''` (an empty core-id array, `parse/raid.ts`
+ * `cpuListToString`), so the empty string is the value a client reads back
+ * and would send to reset: it is normalized here, at the daemon boundary, so
+ * every client round-trips instead of each one learning the sentinel.
+ */
+function cpuAllowed(value: string | null | undefined): { cpu_allowed?: string } {
+  if (value === undefined || value === null) return {};
+  const trimmed = value.trim();
+  return { cpu_allowed: trimmed === '' ? 'all' : trimmed };
 }
 
 function num<K extends string>(
