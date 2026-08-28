@@ -96,12 +96,68 @@ A top-level bash script at the repo root, parallel to
 | `--remove-ofed` | Sets `uninstall_remove_ofed=true`. |
 | `--revert-perf-tuning` | Sets `uninstall_revert_perf=true`. |
 | `--yes`, `-y` | Skip the typed confirmation. Optional flags still default to false unless their own flag was passed. |
-| `--dry-run` | Run the playbook with `--check` and `--diff`; no changes are applied. |
+| `--dry-run` | Run the playbook with `--check` and `--diff`; no host state is changed. The run must still complete and name what it would remove — see §2.1.2. |
 | `--help`, `-h` | Print usage and exit. |
 
 When `--yes` is **not** passed, the script always shows the destructive
 banner and the typed-confirmation gate, even if all three optional
 removal flags were supplied via the command line.
+
+#### 2.1.2 Dry-run contract (`--dry-run`)
+
+A dry run must **complete**, and it must **name what a real run would
+remove**. A dry run that finishes clean while reporting nothing is
+indistinguishable from a host that has nothing to remove — it is the
+failure this section exists to prevent, not an acceptable outcome.
+
+Ansible does not execute `command`/`shell` tasks under `--check`. It skips
+them and gives the registered variable a synthetic result:
+
+```json
+{"rc": 0, "stdout": "", "stdout_lines": [], "skipped": true,
+ "msg": "Command would have run if not in check mode"}
+```
+
+Note the `rc: 0`: a skipped probe is indistinguishable from a successful
+one that found nothing. Two rules follow, both enforced by
+[tests/test_uninstall_dry_run.py](../../tests/test_uninstall_dry_run.py):
+
+1. **Read-only discovery carries `check_mode: false`** so it actually runs
+   under `--check`: `which xicli`, `xicli raid show -f json` and
+   `xicli pool show -f json` (§4.3), the mount-unit scan (§4.4), the
+   `/etc/issue.net` ownership probe (§4.7), and the OS-disk resolver
+   `nvme_namespace/tasks/resolve_system_disks.yml` (§4.3 point 4 — without
+   it nothing resolves, and Phase C's fail-closed abort takes the dry run
+   down with it). Each of these only reads the host, so running it under
+   `--check` changes nothing.
+2. **Every task that changes the host keeps honouring check mode**:
+   `xicli raid destroy`, `xicli pool delete`, `xicli drive clean`, the
+   mount-unit stop, service/unit removal, package purges, file removals.
+   The `check_mode: false` allowlist is closed — a future dry-run failure
+   is never to be fixed by forcing a teardown step to run.
+
+Because a skipped command reports `rc: 0` **and** an empty `stdout`, any
+JSON parsed out of one must use a *truthy* default:
+
+```jinja
+{%- set raw = _xicli_raid_show.stdout | default('', true) | trim -%}
+{%- set parsed = (raw | default('{}', true)) | from_json -%}
+```
+
+Plain `default('{}')` substitutes only for an **undefined** value. `stdout`
+is defined-but-empty, so the fallback never fires, the empty string reaches
+`from_json`, and the play aborts with `Expecting value: line 1 column 1
+(char 0)`. The same rule covers the baseline `slurp` captures in §4.3,
+where a truncated 0-byte file b64decodes to an empty string.
+
+What a dry run leaves on the host: the summary scratch file
+`/tmp/xinas-uninstall-summary.json`, and nothing else. That file is the
+report — `uninstall.sh` reads it back to render §8 — so its `copy` task
+carries `check_mode: false`, and `uninstall.sh` deletes any stale copy
+*before* invoking the playbook so an earlier run's summary can never be
+printed as this one's. The persistent `/var/log/xinas-uninstall-*.log` is
+**not** written under `--check`, and `/opt/xiNAS` is not removed; the
+wrapper prints `dry-run: would remove /opt/xiNAS (skipped)` instead.
 
 ### 2.2 TUI entry: Management → Uninstall xiNAS (expert mode only)
 
@@ -348,6 +404,12 @@ mountpoints are gone.
 If `xicli` is not on `PATH` (e.g. xiRAID was already removed in a prior
 run), the whole phase is skipped with a "xicli not present, skipping"
 note in the summary.
+
+The three `xicli` probes in this phase (`which xicli`, `raid show`,
+`pool show`) and the OS-disk resolver in point 4 are read-only and carry
+`check_mode: false`, so `--dry-run` enumerates the real arrays and pools
+and reports the names it would destroy. The `raid destroy` / `pool delete`
+/ `drive clean` steps do not — see §2.1.2.
 
 ### 4.4 Phase D — remove xiNAS mounts
 
@@ -597,6 +659,11 @@ The summary is also written to
 `/var/log/xinas-uninstall.<timestamp>.log` (the only log file the
 uninstaller leaves on the host — the `/var/log/xinas/` directory has
 been removed by then).
+
+Under `--dry-run` the same report is printed, prefixed with
+`(dry-run — no changes applied)`; its "Removed" rows read as *would be
+removed*. The persistent log is not written in that mode (§2.1.2), and the
+wrapper says so instead of pointing at a file that does not exist.
 
 ---
 

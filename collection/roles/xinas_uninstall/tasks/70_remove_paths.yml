@@ -36,6 +36,9 @@
   register: _issue_xinas
   changed_when: false
   failed_when: false
+  # Read-only probe: a skipped check-mode result reports rc=0, which would
+  # make the dry run claim it removes an /etc/issue.net xiNAS never wrote.
+  check_mode: false
 
 - name: "Paths | remove xiNAS-managed /etc/issue.net"
   ansible.builtin.file:

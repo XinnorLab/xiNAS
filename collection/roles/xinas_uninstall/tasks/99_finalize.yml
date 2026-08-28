@@ -16,6 +16,12 @@
     content: "{{ uninstall_summary | to_nice_json }}\n"
     dest: "{{ xinas_uninstall_summary_path }}"
     mode: '0644'
+  # This is the report itself, not system state: a scratch file under /tmp
+  # that uninstall.sh reads back and renders. copy() honours check mode, so
+  # without this a --dry-run left the wrapper with nothing to print but
+  # "the playbook may have exited early". The persistent /var/log copy below
+  # stays check-mode-honest — a dry run writes no lasting artifact.
+  check_mode: false
 
 - name: "Finalize | also write a persistent uninstall log"
   ansible.builtin.copy:
