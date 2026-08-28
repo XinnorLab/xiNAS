@@ -27,6 +27,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { RaidCreateRequest, RaidDestroyRequest, RaidModifyRequest } from '../../grpc/raid.js';
+import { SPAREPOOL_DETACH } from '../../lib/xiraid/translate.js';
 import type { XiraidTransport } from './client.js';
 
 interface FakeArray {
@@ -179,10 +180,24 @@ export function createFakeXiraidTransport(dir: string): XiraidTransport & FakeXi
       if (name.endsWith('-fail-tuning') && tuningKeys.length > 0) {
         throw new Error(`fake xiraid: forced tuning-modify failure for '${name}'`);
       }
+      // The daemon counts a present-but-EMPTY string as unsupplied
+      // (gRPC/validation/helper.py::check_number_of_entries_helper), so a
+      // modify whose every field is empty carries no modifiable argument and
+      // is rejected before it reaches the handler.
+      if (Object.values(rest).every((v) => v === '' || v === undefined)) {
+        throw new Error(
+          `fake xiraid: Required arguments are missing — raid_modify '${name}' carried no modifiable argument`,
+        );
+      }
       const state = load(dir);
       const arr = state.arrays.find((a) => a.name === name);
       if (!arr) throw new Error(`fake xiraid: no RAID named '${name}'`);
       Object.assign(arr, rest);
+      // POOL_REMOVE_CMD: the detach sentinel drops the linkage rather than
+      // being stored as a pool name (spare_pool/command_handler.py). The
+      // daemon then reports the array as '-', not as a missing key (observed
+      // on 4.4.0; readSparepoolName maps '-', '' and absent alike to '').
+      if (rest.sparepool === SPAREPOOL_DETACH) arr.sparepool = '-';
       save(dir, state);
     },
 

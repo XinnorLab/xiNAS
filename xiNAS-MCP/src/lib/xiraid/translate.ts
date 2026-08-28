@@ -71,9 +71,28 @@ export function toRaidCreateRequest(
 }
 
 /**
+ * xiRAID's "remove the spare pool from this RAID" sentinel — the literal
+ * string `null`, NOT the empty string.
+ *
+ * The daemon flattens the request with `MessageToDict` and then counts a
+ * present-but-empty string as *unsupplied* (`check_number_of_entries_helper`),
+ * so `sparepool: ''` is indistinguishable from sending no sparepool at all: on
+ * its own it fails `raid_modify`'s at-least-one-argument check with
+ * `INVALID_ARGUMENT: Required arguments are missing: '…, sparepool, …'`, and
+ * alongside a tuning batch it silently detaches nothing (the handler gates the
+ * linkage update on `if opts.get("sparepool")`). `POOL_REMOVE_CMD = "null"` is
+ * the daemon's own constant, matched case-sensitively; `''`, `'-'` and
+ * `'null'` are all barred as pool names, so it cannot shadow a real pool.
+ * Checked against xiRAID 4.4.0-15858 and the 4.3/4.4 command references
+ * ("The null value removes the spare pool from the RAID").
+ */
+export const SPAREPOOL_DETACH = 'null';
+
+/**
  * Build a raid_modify request: a sparepool change (attach = pool name,
- * detach = '') and/or a tuning batch. Same null-dropping + boolean→0/1
- * conventions as create; NEVER emits `force`.
+ * detach = '', normalized here to {@link SPAREPOOL_DETACH}) and/or a tuning
+ * batch. Same null-dropping + boolean→0/1 conventions as create; NEVER emits
+ * `force`.
  */
 export function toRaidModifyRequest(
   name: string,
@@ -82,7 +101,9 @@ export function toRaidModifyRequest(
   const t = change.tuning ?? {};
   return {
     name,
-    ...(change.sparepool !== undefined ? { sparepool: change.sparepool } : {}),
+    ...(change.sparepool !== undefined
+      ? { sparepool: change.sparepool === '' ? SPAREPOOL_DETACH : change.sparepool }
+      : {}),
     ...num('init_prio', t.init_prio),
     ...num('recon_prio', t.recon_prio),
     ...num('restripe_prio', t.restripe_prio),

@@ -10,6 +10,8 @@ import {
 import { XinasHistoryBridge } from '../../../agent/task/xinas-history-bridge.js';
 import { XiraidClient, type XiraidTransport } from '../../../agent/xiraid/client.js';
 import { makeUnimplementedTransport } from '../../../agent/xiraid/fake-transport.js';
+import { readSparepoolName } from '../../../lib/parse/raid.js';
+import { SPAREPOOL_DETACH } from '../../../lib/xiraid/translate.js';
 
 /** In-memory fake xiRAID with injectable failure modes (+ pool state + op log, S4). */
 function makeFake(
@@ -71,9 +73,21 @@ function makeFake(
       if (opts.failTuningModify && tuningKeys.length > 0) {
         throw new Error('forced tuning-modify failure');
       }
+      // The daemon reads a present-but-empty string as NOT SUPPLIED
+      // (gRPC/validation/helper.py::check_number_of_entries_helper): a modify
+      // carrying only empty values has no modifiable argument at all.
+      if (Object.values(rest).every((v) => v === '' || v === undefined)) {
+        throw new Error(
+          `Required arguments are missing — raid_modify '${name}' carried no modifiable argument`,
+        );
+      }
       const arr = arrays.find((a) => a.name === name);
       if (!arr) throw new Error(`no RAID named '${name}'`);
       Object.assign(arr, rest);
+      // POOL_REMOVE_CMD ('null') removes the linkage instead of being stored
+      // as a pool name (spare_pool/command_handler.py::assign_sparepool); the
+      // daemon then reports '-' for that array, not a missing key.
+      if (rest.sparepool === SPAREPOOL_DETACH) arr.sparepool = '-';
     },
     async poolCreate(req) {
       ops.push(`poolCreate:${req.name}`);
@@ -413,7 +427,7 @@ describe('xiraid.array.modify executor', () => {
     expect(fake.pools[0]?.drives).toEqual(['/dev/nvme6n1']);
   });
 
-  it('detach: raid_modify("") → pool_deactivate → pool_delete', async () => {
+  it("detach: raid_modify('null') → pool_deactivate → pool_delete", async () => {
     const fake = makeFake();
     seedArray(fake, { sparepool: 'xnsp_data' });
     fake.pools.push({ name: 'xnsp_data', drives: ['/dev/nvme5n1'], active: true });
@@ -425,7 +439,11 @@ describe('xiraid.array.modify executor', () => {
       'poolDelete:xnsp_data',
     ]);
     expect(fake.pools).toEqual([]);
-    expect(fake.arrays[0]?.sparepool).toBe('');
+    // The daemon DELETES the config key on POOL_REMOVE_CMD rather than storing
+    // an empty name, and then renders that array's sparepool as '-' (observed
+    // on 4.4.0). The executor's verify stage reads it back through
+    // readSparepoolName(), which maps '-' to ''.
+    expect(fake.arrays[0]?.sparepool).toBe('-');
   });
 
   it('tuning-only: single raid_modify, no pool calls; spares stage skips', async () => {
@@ -494,7 +512,9 @@ describe('xiraid.array.modify executor', () => {
     });
     // pool gone again, sparepool detached — back to the pre-state
     expect(fake.pools).toEqual([]);
-    expect(fake.arrays[0]?.sparepool ?? '').toBe('');
+    // Read it the way production does: the daemon renders a detached array as
+    // '-', which readSparepoolName folds to '' along with the absent case.
+    expect(readSparepoolName(fake.arrays[0]?.sparepool)).toBe('');
   });
 });
 
@@ -1035,7 +1055,9 @@ describe('executors against the real daemon payload shapes', () => {
     expect(shape(events)).toContainEqual(['stage_failed', 'apply_tuning']);
     // the pool is gone AND the array no longer references it — no dangling sparepool
     expect(fake.pools).toEqual([]);
-    expect(fake.arrays[0]?.sparepool ?? '').toBe('');
+    // Read it the way production does: the daemon renders a detached array as
+    // '-', which readSparepoolName folds to '' along with the absent case.
+    expect(readSparepoolName(fake.arrays[0]?.sparepool)).toBe('');
   });
 
   it('create preflight: tuple device lists still catch an already-claimed member', async () => {

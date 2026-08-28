@@ -149,7 +149,21 @@ xiRAID models spares as **pool objects** with their own lifecycle (`pool_create 
 
 - Attach (modify, `spare_disk_ids` ∅→non-∅): `pool_create { name: "xnsp_<array>", drives }` → **`pool_activate`** (xiRAID arms auto-replace only for *activated* pools — analyst doc §3.8) → `raid_modify { sparepool: "xnsp_<array>" }`. Rollback: detach + `pool_deactivate` + `pool_delete`.
 - Change membership: `pool_add` / `pool_remove` on `xnsp_<array>` (pool stays active).
-- Detach (non-∅→∅): `raid_modify { sparepool: "" }` → `pool_deactivate` → `pool_delete`.
+- Detach (non-∅→∅): `raid_modify { sparepool: "null" }` → `pool_deactivate` → `pool_delete`.
+
+  > *(Amended 2026-08-28.)* This line read `sparepool: ""`, and the executor
+  > sent that. It does not detach anything. The daemon counts a present-but-empty
+  > string as **unsupplied** (`gRPC/validation/helper.py`), so a detach carrying
+  > only `name` + `sparepool: ""` is rejected with
+  > `INVALID_ARGUMENT: Required arguments are missing: '…, sparepool, …'`; and
+  > when it rides along with a tuning batch it silently no-ops, because
+  > `raid_modify_handler` gates the linkage update on `if opts.get("sparepool")`.
+  > The sentinel is the literal string `null` — `POOL_REMOVE_CMD = "null"` in
+  > `spare_pool/constant.py` (xiRAID 4.4.0-15858), which is what the command
+  > reference means by *"The null value removes the spare pool from the RAID"*.
+  > `translate.toRaidModifyRequest` now normalizes `''` → `'null'`; see
+  > [s4-xiraid-array-mutations-spec.md](../s4-xiraid-array-mutations-spec.md)
+  > §Modify for the full evidence.
 - Create-with-spares: `pool_create` → `pool_activate` → `raid_create { …, sparepool }` (since S4 — the S3 build briefly deferred this behind a `spare_pool_deferred` blocker, removed in S4).
 - Day-1 Ansible-created pools with other names are surfaced read-only in `status` (observe maps the array's current sparepool to disk ids); the executor only manages pools it named `xnsp_<array>`.
 

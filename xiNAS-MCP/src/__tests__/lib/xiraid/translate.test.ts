@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { XiraidArraySpec } from '../../../lib/xiraid/schema.js';
-import { toRaidCreateRequest, toRaidModifyRequest } from '../../../lib/xiraid/translate.js';
+import {
+  SPAREPOOL_DETACH,
+  toRaidCreateRequest,
+  toRaidModifyRequest,
+} from '../../../lib/xiraid/translate.js';
 
 const DEVICES = new Map([
   ['d1', '/dev/nvme1n1'],
@@ -192,14 +196,44 @@ describe('toRaidModifyRequest', () => {
     expect(created.cpu_allowed).toBe('all');
   });
 
-  it('sparepool attach + detach', () => {
+  it('sparepool attach passes the pool name through', () => {
     expect(toRaidModifyRequest('data', { sparepool: 'xnsp_data' })).toEqual({
       name: 'data',
       sparepool: 'xnsp_data',
     });
-    expect(toRaidModifyRequest('data', { sparepool: '' })).toEqual({
+  });
+
+  // The daemon counts a present-but-empty string as UNSUPPLIED
+  // (gRPC/validation/helper.py::check_number_of_entries_helper), so a detach
+  // spelled `sparepool: ''` is rejected with "Required arguments are missing:
+  // '…, sparepool, …'" when it is the whole payload, and silently detaches
+  // nothing when it rides along with tuning (the handler gates on
+  // `if opts.get("sparepool")`). The sentinel is POOL_REMOVE_CMD = "null".
+  it("detach renders the 'null' sentinel, never the empty string", () => {
+    const req = toRaidModifyRequest('data', { sparepool: '' });
+    expect(req).toEqual({ name: 'data', sparepool: SPAREPOOL_DETACH });
+    expect(req.sparepool).toBe('null');
+    expect(req.sparepool).not.toBe('');
+  });
+
+  it('detach carries a real argument even when it is the whole payload', () => {
+    // The exact request apply_spares sends when spare_disk_ids empties and no
+    // tuning changed. Nothing here may be empty, or the daemon sees a modify
+    // with no modifiable argument at all.
+    const { name, ...rest } = toRaidModifyRequest('data', { sparepool: '' });
+    expect(name).toBe('data');
+    expect(Object.values(rest).some((v) => v !== '' && v !== undefined)).toBe(true);
+  });
+
+  it('normalizes the detach spelling alongside a tuning batch too', () => {
+    expect(toRaidModifyRequest('data', { sparepool: '', tuning: { init_prio: 50 } })).toEqual({
       name: 'data',
-      sparepool: '',
+      sparepool: SPAREPOOL_DETACH,
+      init_prio: 50,
     });
+  });
+
+  it('leaves sparepool out entirely when the caller is not changing it', () => {
+    expect('sparepool' in toRaidModifyRequest('data', { tuning: { init_prio: 50 } })).toBe(false);
   });
 });
