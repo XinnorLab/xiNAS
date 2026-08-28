@@ -623,7 +623,20 @@ components:
             spare_disk_ids:
               type: array
               items: { type: string }
-              description: "Spare pool members (ADR-0006 pool lifecycle). Non-empty on create is deferred in S3 (blocker spare_pool_deferred)."
+              description: >-
+                OBSERVED ONLY. The spare pool's member drives joined to control-path
+                Disk ids (raid_show sparepool -> pool_show drives). Rejected on POST
+                and PATCH: create the pool via POST /api/v1/pools, then send
+                spec.spare_pool with its name.
+            spare_pool:
+              type: [string, "null"]
+              description: >-
+                Name of an EXISTING spare pool (POST /api/v1/pools). Writable on
+                create and modify; null on PATCH detaches the pool without
+                deleting it. The control path never creates a pool from an array
+                request — an inactive target pool is activated on attach and
+                deactivated again if the operation rolls back. Mirrors
+                status.spare_pool in observed rows.
             tuning:
               type: object
               description: "ADR-0006 approved Phase-0 create surface. null/absent = use the xiRAID default (omitted from the gRPC call)."

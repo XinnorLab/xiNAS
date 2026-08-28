@@ -25,7 +25,7 @@
 - **Contract revisions (T0):** wire `PATCH`/`DELETE /arrays/{id}` to real handlers (drop them from the stub loop); ADR-0006 §Import amendment; strike `spare_pool_deferred` from ADR/S3 spec; document the new blocker codes.
 
 ### Out of scope (unchanged ADR-0006 deferrals)
-- Online reshape / capacity expansion; first-class `SparePool` objects; shared pools across arrays (one `xnsp_<array>` pool per array).
+- Online reshape / capacity expansion; first-class `SparePool` objects.
 - A plan-time import-candidates discovery surface (an observed kind or on-demand RPC) — see §7; follow-on work.
 - Day-1 Ansible↔desired-state reconcile (WS13).
 
@@ -160,7 +160,7 @@ its own copy of the table — see
 | Stage | Action |
 |-------|--------|
 | `preflight` | Array exists in live `raid_show`; spare device paths exist and are not members of another array. |
-| `apply_spares` | Pool lifecycle (only when `spare_disk_ids` changed): attach (∅→S): `pool_create { name: "xnsp_<array>", drives }` → **`pool_activate`** (analyst §3.8 — without activation auto-replace never arms) → `raid_modify { sparepool }`; membership change: `pool_add`/`pool_remove` deltas (pool stays active); detach (S→∅): `raid_modify { sparepool: 'null' }` (the **detach sentinel**, see below — *not* the empty string) → **`pool_deactivate`** → `pool_delete`. Pools named other than `xnsp_<array>` (day-1 Ansible pools) are never touched: a modify on an array with a foreign sparepool gets a `preflight` failure (`foreign sparepool '<name>' is not managed by the control path`). |
+| `apply_spares` | Only when `spare_pool` is present. Attach: `pool_activate <name>` (skipped when already active) -> `raid_modify { sparepool: <name> }`. Detach (`null`): `raid_modify { sparepool: 'null' }` (the detach sentinel — *not* the empty string); the pool is left alone. No `pool_create` / `pool_add` / `pool_remove` / `pool_delete` / `pool_deactivate` ever runs here. Preflight fails when the named pool is absent or empty. |
 | `apply_tuning` | One tuning-only `raid_modify` (only when `tuning` present). Last: if it throws, the single call did not apply, and the pool rollback below restores structure. |
 | `verify` | `raid_show` reflects the expected sparepool linkage. |
 

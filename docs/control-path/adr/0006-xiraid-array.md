@@ -145,11 +145,16 @@ The three create-surface tuning keys reject on the same pre-plan path, with `fie
 
 ### Spare pools
 
-xiRAID models spares as **pool objects** with their own lifecycle (`pool_create {name, drives}` / `pool_add` / `pool_remove` / `pool_delete`); `RaidCreate.sparepool` / `RaidModify.sparepool` reference a pool **by name**. The control path does **not** expose pools as a first-class object in Phase 0; it models them via `spec.spare_disk_ids`, and the **executor owns the pool lifecycle**:
+xiRAID models spares as **pool objects** with their own lifecycle (`pool_create {name, drives}` / `pool_add` / `pool_remove` / `pool_delete`); `RaidCreate.sparepool` / `RaidModify.sparepool` reference a pool **by name**. The control path does **not** expose pool CRUD as a first-class object in Phase 0, but an array never creates one either — it only *references* an existing pool by name, via `spec.spare_pool`. Pool lifecycle belongs entirely to the pool surface (ADR-0011 / S9: `POST/PATCH/DELETE /api/v1/pools`).
 
-- Attach (modify, `spare_disk_ids` ∅→non-∅): `pool_create { name: "xnsp_<array>", drives }` → **`pool_activate`** (xiRAID arms auto-replace only for *activated* pools — analyst doc §3.8) → `raid_modify { sparepool: "xnsp_<array>" }`. Rollback: detach + `pool_deactivate` + `pool_delete`.
-- Change membership: `pool_add` / `pool_remove` on `xnsp_<array>` (pool stays active).
-- Detach (non-∅→∅): `raid_modify { sparepool: "null" }` → `pool_deactivate` → `pool_delete`.
+- Attach (`spare_pool` -> a pool name): `pool_activate` when the named pool is
+  inactive (xiRAID arms auto-replace only for activated pools — analyst doc
+  §3.8), then `raid_modify { sparepool: "<name>" }`. Rollback restores the
+  previous sparepool name and deactivates the pool only if this run activated
+  it.
+- Detach (`spare_pool: null`): `raid_modify { sparepool: "null" }` — the
+  detach sentinel. The pool is left in place and active; it may be referenced
+  by other arrays.
 
   > *(Amended 2026-08-28.)* This line read `sparepool: ""`, and the executor
   > sent that. It does not detach anything. The daemon counts a present-but-empty
@@ -164,8 +169,11 @@ xiRAID models spares as **pool objects** with their own lifecycle (`pool_create 
   > `translate.toRaidModifyRequest` now normalizes `''` → `'null'`; see
   > [s4-xiraid-array-mutations-spec.md](../s4-xiraid-array-mutations-spec.md)
   > §Modify for the full evidence.
-- Create-with-spares: `pool_create` → `pool_activate` → `raid_create { …, sparepool }` (since S4 — the S3 build briefly deferred this behind a `spare_pool_deferred` blocker, removed in S4).
-- Day-1 Ansible-created pools with other names are surfaced read-only in `status` (observe maps the array's current sparepool to disk ids); the executor only manages pools it named `xnsp_<array>`.
+- The control path NEVER creates, fills, empties or deletes a pool from an
+  array request. Pool lifecycle belongs to the pool surface (ADR-0011 /
+  S9): POST/PATCH/DELETE /api/v1/pools.
+- Day-1 Ansible pools are ordinary pools and are attachable like any other.
+  The `xnsp_<array>` derived name and the foreign-pool guard are retired.
 
 ### Validation and translation (shared module)
 
@@ -286,6 +294,14 @@ Rejected: blockers must surface at **plan** time (§14 "expose blast radius befo
 ### First-class pool objects now
 
 Rejected for Phase 0: `spare_disk_ids` + an executor-owned pool covers the single-pool-per-array case; a full pool CRUD surface (shared pools across arrays) is real scope with no Phase-0 requirement behind it.
+
+- **Executor-owned `xnsp_<array>` pools (the S4 model, retired 2026-08-29).**
+  It made every operator-created pool unattachable: the TUI resolved the chosen
+  pool to its drives, and the executor then tried to build `xnsp_<array>` from
+  drives the daemon already accounted to that pool, failing with
+  `13 INTERNAL: Drive '/dev/nvme5n2' is already a part of the 'sp01' spare
+  pool`. Two owners for one pool lifecycle is the defect; S9 already made the
+  pool surface the owner.
 
 ## Implementation notes for downstream workstreams
 
