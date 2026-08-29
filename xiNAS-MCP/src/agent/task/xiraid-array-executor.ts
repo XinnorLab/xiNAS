@@ -314,7 +314,6 @@ interface ModifyExecSpec {
   id: string;
   spare_pool?: string | null;
   tuning?: Record<string, unknown>;
-  device_by_id: Map<string, string>;
 }
 
 /** Pool/array pre-state captured LIVE at preflight; keyed by ctx.spec object
@@ -334,26 +333,19 @@ function narrowModifySpec(ctx: ExecutorContext): ModifyExecSpec {
   if (typeof o !== 'object' || o === null || typeof o.id !== 'string') {
     throw new Error('xiraid.array.modify: spec is missing the target array id');
   }
-  const deviceById = new Map<string, string>();
-  if (typeof o.device_by_id === 'object' && o.device_by_id !== null) {
-    for (const [id, path] of Object.entries(o.device_by_id as Record<string, unknown>)) {
-      if (typeof path === 'string') deviceById.set(id, path);
-    }
-  }
   return {
     id: o.id,
     // 'spare_pool' in o distinguishes "absent" (skip the field entirely,
     // apply_spares no-ops) from an explicit null (detach) or a name
     // (attach/re-point) — an `undefined` VALUE under an existing key reads
-    // as absent too, matching narrowModifySpec's tuning/device_by_id
-    // tolerance for enrichment keys the parsers already ignore.
+    // as absent too, matching this narrowing's tolerance for the
+    // enrichment keys the parsers already ignore.
     ...('spare_pool' in o && o.spare_pool !== undefined
       ? { spare_pool: o.spare_pool as string | null }
       : {}),
     ...(typeof o.tuning === 'object' && o.tuning !== null
       ? { tuning: o.tuning as Record<string, unknown> }
       : {}),
-    device_by_id: deviceById,
   };
 }
 

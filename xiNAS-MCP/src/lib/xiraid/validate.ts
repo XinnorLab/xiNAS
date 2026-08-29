@@ -54,13 +54,21 @@ export interface ResolvedDisk {
 /** One observed pool, as the array validators need it. */
 export interface PoolFacts {
   drives: string[];
+  /**
+   * Carried for completeness, deliberately NOT a plan-time blocker: an
+   * inactive pool is a legal attach target, and the executor activates it
+   * at apply from a LIVE `pool_show` read under the held leases (design
+   * §2.1). Blocking here on plan-time observation would be both wrong and
+   * staler than the check that actually gates the operation.
+   */
   active: boolean;
 }
 
 export interface CreateFacts {
   disks: ResolvedDisk[];
   existingArrayNames: string[];
-  /** Disk ids already a member or spare of any existing array. */
+  /** Disk ids already a MEMBER of an existing array. Pool drives are not
+   *  here — they get their own blocker (see checkMembersNotPooled). */
   existingMemberDiskIds: Set<string>;
   /** Observed pools by name — an array may only reference one that exists. */
   poolsByName: Map<string, PoolFacts>;
@@ -181,6 +189,7 @@ export function validateCreateSpec(spec: XiraidArraySpec, facts: CreateFacts): B
 
   // --- member disks (one blocker per offending disk) ---
   checkDisks(spec.member_disk_ids, facts.disks, facts.existingMemberDiskIds, push);
+  checkMembersNotPooled(spec.member_disk_ids, facts.disks, facts.poolsByName, push);
 
   // --- spares (S8: reference an existing pool by name, not a derived one) ---
   checkSparePool(spec.spare_pool, facts.poolsByName, push);
@@ -309,7 +318,7 @@ function checkDisks(
       continue;
     }
     if (claimedIds.has(id)) {
-      push('disk_in_use', `disk '${id}' is already a member/spare of another array`);
+      push('disk_in_use', `disk '${id}' is already a member of another array`);
       continue;
     }
     if (d.system_disk) {
@@ -320,6 +329,47 @@ function checkDisks(
       push(
         'disk_not_safe',
         `disk '${id}' (${d.device_path}) is not safe for use (mounted or in use)`,
+      );
+    }
+  }
+}
+
+/**
+ * A drive held by a spare pool is NOT free, and after S8 nothing else
+ * catches it at plan time: `existingMemberDiskIds` means array members
+ * only, and `safe_for_use` is `!system_disk && !mounted`
+ * (`lib/parse/disk.ts`), which stays true for a pool member. Without this
+ * the conflict is first reported by the daemon MID-APPLY — precisely the
+ * failure mode this change exists to remove. The pool surface keeps pool
+ * drives out of the TUI's free-drive picker, but that is a picker, not a
+ * preflight: REST, MCP and CLI clients get no such protection.
+ *
+ * Deliberately NOT `disk_in_use`: the remedy differs. `disk_in_use` means
+ * "pick another drive"; this one can also be resolved by removing the
+ * drive from the pool, so the message names the pool holding it.
+ */
+function checkMembersNotPooled(
+  ids: string[],
+  disks: ResolvedDisk[],
+  poolsByName: Map<string, PoolFacts>,
+  push: Push,
+): void {
+  if (poolsByName.size === 0) return;
+  const poolByDrive = new Map<string, string>();
+  for (const [name, pool] of poolsByName) {
+    for (const drive of pool.drives) {
+      if (!poolByDrive.has(drive)) poolByDrive.set(drive, name);
+    }
+  }
+  const pathById = new Map(disks.map((d) => [d.id, d.device_path]));
+  for (const id of ids) {
+    const path = pathById.get(id);
+    if (path === undefined) continue; // unknown disk — `disk_not_found` covers it
+    const pool = poolByDrive.get(path);
+    if (pool !== undefined) {
+      push(
+        'disk_in_spare_pool',
+        `disk '${id}' (${path}) belongs to spare pool '${pool}' — remove it from the pool (TUI: Storage > Spare Pools) or choose another drive`,
       );
     }
   }

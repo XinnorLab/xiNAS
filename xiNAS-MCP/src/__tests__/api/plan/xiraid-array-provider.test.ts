@@ -211,6 +211,27 @@ describe('xiraidArrayCreateProvider', () => {
     expect(empty.planResult.blockers.map((b) => b.code)).toContain('spare_pool_empty');
   });
 
+  it('blocks a member drive that belongs to a spare pool, naming the pool', async () => {
+    // safe_for_use is !system_disk && !mounted, so a pool member reads
+    // "safe"; without this blocker the conflict would only surface as a
+    // daemon rejection mid-apply.
+    seedPool(h.kv, 'sp01', { drives: ['/dev/nvme4n1'] });
+    const { planResult } = await h.engine.plan(planArgs(GOOD_SPEC));
+    const pooled = planResult.blockers.filter((b) => b.code === 'disk_in_spare_pool');
+    expect(pooled).toHaveLength(1);
+    expect(pooled[0]?.message).toContain('nvme4n1');
+    expect(pooled[0]?.message).toContain("spare pool 'sp01'");
+    // Distinct from disk_in_use: that one means "member of another array".
+    expect(planResult.blockers.map((b) => b.code)).not.toContain('disk_in_use');
+  });
+
+  it('a pool drive elsewhere on the box does not block an unrelated create', async () => {
+    seedDisk(h.kv, 'nvme5n1');
+    seedPool(h.kv, 'sp01', { drives: ['/dev/nvme5n1'] });
+    const { planResult } = await h.engine.plan(planArgs(GOOD_SPEC));
+    expect(planResult.blockers).toEqual([]);
+  });
+
   it('structural junk → INVALID_ARGUMENT ApiException; spare_disk_ids is rejected on write', async () => {
     await expect(h.engine.plan(planArgs({ name: 'x' }))).rejects.toThrowError(ApiException);
     await expect(h.engine.plan(planArgs({ name: 'x' }))).rejects.toMatchObject({
@@ -256,7 +277,7 @@ describe('xiraidArrayModifyProvider', () => {
     const persisted = h.store.get(task.task_id)?.spec as Record<string, unknown>;
     expect(persisted.id).toBe('data');
     expect(persisted.spare_pool).toBe('sp01');
-    expect(persisted.device_by_id).toEqual({});
+    expect(persisted).not.toHaveProperty('device_by_id');
 
     const diff = planResult.diff as Record<string, Record<string, unknown>>;
     expect(diff.before?.spare_pool).toBeNull();
@@ -292,6 +313,20 @@ describe('xiraidArrayModifyProvider', () => {
     expect(
       (planResult.diff as Record<string, Record<string, unknown>>).after?.spare_pool,
     ).toBeNull();
+  });
+
+  it('tuning-only modify leases no pool — with a pool attached and without', async () => {
+    // A lease collision is a hard failure, not a queue: leasing the
+    // attached pool for a change that never touches it would reject an
+    // operator adding a drive to that pool for no reason.
+    seedArray(h.kv, 'data', { spare_pool: 'sp01' });
+    seedPool(h.kv, 'sp01', { drives: ['/dev/nvme5n1'] });
+    const attached = await h.engine.plan(modifyArgs({ id: 'data', tuning: { init_prio: 10 } }));
+    expect(attached.task.affected_resources).toEqual([{ kind: 'XiraidArray', id: 'data' }]);
+
+    seedArray(h.kv, 'bare', { member_disk_ids: ['nvme6n1'] });
+    const bare = await h.engine.plan(modifyArgs({ id: 'bare', tuning: { init_prio: 10 } }));
+    expect(bare.task.affected_resources).toEqual([{ kind: 'XiraidArray', id: 'bare' }]);
   });
 
   it('unknown array id → NOT_FOUND; junk spec → INVALID_ARGUMENT', async () => {

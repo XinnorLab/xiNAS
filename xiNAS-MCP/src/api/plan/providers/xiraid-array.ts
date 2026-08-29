@@ -56,7 +56,7 @@ interface ObservedDiskRow {
 const OBSERVED_POOL_PREFIX = '/xinas/v1/observed/Pool/';
 
 interface ObservedArrayRow {
-  spec?: { name?: string; member_disk_ids?: string[]; spare_pool?: string | null };
+  spec?: { name?: string; member_disk_ids?: string[] };
 }
 
 /** Observed Disk + XiraidArray + Pool facts every array provider needs. */
@@ -248,13 +248,19 @@ export const xiraidArrayModifyProvider: PlanProvider = {
     // Lease BOTH pools: the one being attached AND the one being left
     // behind. Without the second, a detach (or a re-point) would race a
     // concurrent Spare Pools mutation on the pool it is releasing.
+    //
+    // The second clause is gated on `'spare_pool' in change` — a
+    // tuning-only modify touches no pool, and a lease collision is a hard
+    // failure rather than a queue (state/leases.ts), so leasing the
+    // attached pool there would reject an operator adding a drive to it
+    // for no reason.
     const currentPool = observedSparePool(ctx, id);
     const affected: ResourceRef[] = [
       { kind: 'XiraidArray', id },
       ...(typeof change.spare_pool === 'string' && change.spare_pool !== ''
         ? [{ kind: 'Pool', id: change.spare_pool } as ResourceRef]
         : []),
-      ...(currentPool !== '' && currentPool !== change.spare_pool
+      ...('spare_pool' in change && currentPool !== '' && currentPool !== change.spare_pool
         ? [{ kind: 'Pool', id: currentPool } as ResourceRef]
         : []),
     ];
@@ -278,9 +284,9 @@ export const xiraidArrayModifyProvider: PlanProvider = {
       },
       risk_level: 'non_disruptive',
       rollback_model: 'non_disruptive',
-      // device_by_id stays for shape parity with create; a modify resolves
-      // no disks at all now that spares are a pool reference.
-      enriched_spec: { id, ...change, device_by_id: {} },
+      // No device_by_id: a modify resolves no disks now that spares are a
+      // pool reference, and the executor never read the modify one.
+      enriched_spec: { id, ...change },
     };
   },
 };

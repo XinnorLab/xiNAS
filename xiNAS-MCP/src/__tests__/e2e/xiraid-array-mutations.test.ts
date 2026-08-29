@@ -43,6 +43,8 @@ const ADMIN_TOKEN = 'e2e-admin-tok';
 const AGENT_TOKEN = 'e2e-agent-tok';
 const HEARTBEAT_INTERVAL_MS = 300;
 const TERMINAL = ['success', 'failed', 'cancelled', 'requires_manual_recovery'];
+/** sp01's drives, sorted — asserted unchanged across attach and detach. */
+const SP01_DRIVES = ['/dev/nvme10n1', '/dev/nvme9n1'];
 
 interface JsonResponse {
   status: number;
@@ -185,6 +187,15 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
   async function poolNames(): Promise<string[]> {
     const res = await requestJson(apiSockPath, '/api/v1/pools', ADMIN_TOKEN, 'GET');
     return (res.body.result as Array<{ name: string }>).map((p) => p.name).sort();
+  }
+
+  /** One pool's observed drive list, sorted — the pool-content invariant. */
+  async function poolDrives(name: string): Promise<string[]> {
+    const res = await requestJson(apiSockPath, '/api/v1/pools', ADMIN_TOKEN, 'GET');
+    const pool = (res.body.result as Array<{ name: string; drives: string[] }>).find(
+      (p) => p.name === name,
+    );
+    return [...(pool?.drives ?? [])].sort();
   }
 
   /** The array's currently referenced pool name, '' when it has none. */
@@ -443,7 +454,7 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
     const pool = await planApplyAndWait(
       'POST',
       '/api/v1/pools',
-      { name: 'sp01', drives: ['/dev/nvme9n1', '/dev/nvme10n1'] },
+      { name: 'sp01', drives: ['/dev/nvme9n1', '/dev/nvme10n1'] }, // = SP01_DRIVES
       'K-pool-create',
     );
     expect(pool.state).toBe('success');
@@ -469,6 +480,7 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
     expect((data.status as { state: string }).state).toBe('optimal');
     expect(await arraySparepool('data')).toBe('');
     expect(await poolNames()).toEqual(['sp01']);
+    expect(await poolDrives('sp01')).toEqual(SP01_DRIVES);
   }, 40_000);
 
   it('2. attaches an operator-created pool whose drives it already owns', async () => {
@@ -491,7 +503,11 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
       }
       await sleep(200);
     }
+    // Identity is not enough: the array path must not add or remove
+    // drives either — that is "mutating the operator's pool" just as much
+    // as building a new one.
     expect(await poolNames()).toEqual(['sp01']);
+    expect(await poolDrives('sp01')).toEqual(SP01_DRIVES);
   }, 40_000);
 
   it('3. create-with-pool: a second array references the SAME pool', async () => {
@@ -547,8 +563,9 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
       }
       await sleep(200);
     }
-    // Detach never deletes or deactivates: 'aux' still uses sp01.
+    // Detach never deletes, deactivates, or empties: 'aux' still uses sp01.
     expect(await poolNames()).toEqual(['sp01']);
+    expect(await poolDrives('sp01')).toEqual(SP01_DRIVES);
   }, 40_000);
 
   it('6. import: adopt the seeded candidate under new_name', async () => {

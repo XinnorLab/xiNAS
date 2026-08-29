@@ -18,7 +18,7 @@
 ### In scope (S4)
 - **Engine dangerous gate (§3):** `TaskEngine.apply` enforces `risk_level == 'destructive' && dangerous !== true` → `PRECONDITION_FAILED { reason: 'dangerous_flag_required' }` — one gate for every client (REST/CLI/TUI/MCP), per reqs §14.
 - **Modify** (`xiraid.array.modify`, `PATCH /arrays/{id}`): `spec.tuning.*` (except the create-surface trio `resync_enabled`/`discard`/`drive_trim`) + `spec.spare_pool` writable; topology fields, create-surface tuning keys and the observed-only `spec.spare_disk_ids` → per-field `UNSUPPORTED` before any plan. A spare change re-points the array at an **existing** pool by name (`null` detaches); no pool is created, filled, emptied or deleted by the array path.
-- **Create-with-spares un-deferral:** the S3 `spare_pool_deferred` blocker is removed; create validates the named pool (`spare_pool_not_found` / `spare_pool_empty`), leases it, and the create executor activates it — only when it reads inactive — before `raid_create`.
+- **Create-with-spares un-deferral:** the S3 `spare_pool_deferred` blocker is removed; create validates the named pool (`spare_pool_not_found` / `spare_pool_empty`), blocks a member drive that a pool already holds (`disk_in_spare_pool`), leases the pool, and the create executor activates it — only when it reads inactive — before `raid_create`.
 - **Import** (`xiraid.array.import`, `POST /arrays` import-shaped spec `{ uuid, new_name? }`): adopt a foreign array; executor-side validation via `raid_import_show` (§7).
 - **Delete** (`xiraid.array.delete`, `DELETE /arrays/{id}`): dependency guard + blast radius + the dangerous gate; `raid_destroy`; failed destroy → `requires_manual_recovery`.
 - **Client adapter + fake transport extensions:** `raidModify`, `poolCreate/Delete/Add/Remove`, `raidImportShow/Apply`; fake pool + import-candidate state; deterministic failure hooks.
@@ -153,13 +153,13 @@ its own copy of the table — see
 [Storage/raid-management-spec.md §5.3](../Storage/raid-management-spec.md#53-value-ranges--stated-in-the-label-enforced-before-dispatch).
 4. `risk_level: non_disruptive`, `rollback_model: non_disruptive`.
 5. `diff = { before: { spare_pool, tuning? }, after: { spare_pool?, tuning? }, raid_modify_request }` — `before.spare_pool` is the observed `status.spare_pool`, `null` when the array has none.
-6. **`enriched_spec`** embeds: `{ id, spare_pool?, tuning?, device_by_id }`, where `device_by_id` is always `{}` — a modify resolves no disks now that spares are a pool reference; the key is kept for shape parity with create. *(Implementation refinement over the first draft: the executor captures the pool pre-state — live sparepool linkage, pool existence and activation — at its own `preflight` via `raid_show` + `pool_show` under the held leases, keyed per-run on the spec object. That is strictly fresher than plan-time observed state, so the api does NOT ship `current_*` fields.)*
+6. **`enriched_spec`** embeds: `{ id, spare_pool?, tuning? }` — **no `device_by_id`**, unlike create: a modify resolves no disks now that spares are a pool reference, and the modify executor never read the map. *(Implementation refinement over the first draft: the executor captures the pool pre-state — live sparepool linkage, pool existence and activation — at its own `preflight` via `raid_show` + `pool_show` under the held leases, keyed per-run on the spec object. That is strictly fresher than plan-time observed state, so the api does NOT ship `current_*` fields.)*
 
 **Executor (`xiraid.array.modify`).** Stages ordered so the non-restorable part goes **last**:
 
 | Stage | Action |
 |-------|--------|
-| `preflight` | Array exists in live `raid_show`; spare device paths exist and are not members of another array. |
+| `preflight` | Array exists in live `raid_show`; when `spare_pool` names a pool, that pool exists in live `pool_show` and holds at least one drive. Its `active` flag is stashed for the §2.1 activation and its rollback. |
 | `apply_spares` | Only when `spare_pool` is present. Attach: `pool_activate <name>` (skipped when already active) -> `raid_modify { sparepool: <name> }`. Detach (`null` **or `''`** — the executor folds the empty string into the same branch as `null` deliberately: `spare_pool: ''` means "no pool," never "a pool literally named `''`"): `raid_modify { sparepool: 'null' }` (the detach sentinel — *not* the empty string); the pool is left alone. No `pool_create` / `pool_add` / `pool_remove` / `pool_delete` / `pool_deactivate` ever runs here. Preflight fails when the named pool is absent or empty. |
 | `apply_tuning` | One tuning-only `raid_modify` (only when `tuning` present). Last: if it throws, the single call did not apply, and the pool rollback below restores structure. |
 | `verify` | `raid_show` reflects the expected sparepool linkage. |
