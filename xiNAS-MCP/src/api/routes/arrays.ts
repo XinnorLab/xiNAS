@@ -68,23 +68,19 @@ const CREATE_ONLY_TUNING = ['resync_enabled', 'discard', 'drive_trim'] as const;
  * carry: immutable topology, create-only tuning, and the observed-only
  * `spare_disk_ids`.
  *
- * This runs against the RAW body only — `parseModifySpec` deliberately
- * ignores unknown keys so the apply-time re-check accepts the api's own
- * persisted enriched spec, which means a rejection added there would
- * break apply. Without this gate a stale client sending `spare_disk_ids`
- * got a silent `skipped` success (the executor stopped reading the field
- * in the 2026-08-29 fix), which is worse than an error.
+ * This runs against the RAW body and produces the nicer, per-field 422.
+ * `parseModifySpec` rejects `spare_disk_ids` too — that one is the
+ * backstop for a pre-2026-08-29 plan row re-parsed at apply, which this
+ * gate never sees. Without either, a stale client sending
+ * `spare_disk_ids` got a silent `skipped` success (the executor stopped
+ * reading the field in the 2026-08-29 fix), which is worse than an error.
+ *
+ * Order matters: the topology loop runs FIRST so a client PATCHing a whole
+ * GET'd document back is told `spec.name cannot be changed live` rather
+ * than the narrower observed-only complaint.
  */
-function rejectTopologyKeys(spec: unknown): void {
+function rejectUnwritableKeys(spec: unknown): void {
   if (typeof spec !== 'object' || spec === null) return;
-  if ('spare_disk_ids' in (spec as Record<string, unknown>)) {
-    throw new ApiException(
-      'UNSUPPORTED',
-      'spec.spare_disk_ids is observed-only',
-      { field: 'spec.spare_disk_ids', reason: 'observed_only' },
-      'Create the pool via POST /api/v1/pools, then send spec.spare_pool with its name.',
-    );
-  }
   for (const field of TOPOLOGY_FIELDS) {
     if (field in (spec as Record<string, unknown>)) {
       throw new ApiException(
@@ -94,6 +90,14 @@ function rejectTopologyKeys(spec: unknown): void {
         'RAID topology is immutable (ADR-0006). Delete and recreate the array (data is destroyed).',
       );
     }
+  }
+  if ('spare_disk_ids' in (spec as Record<string, unknown>)) {
+    throw new ApiException(
+      'UNSUPPORTED',
+      'spec.spare_disk_ids is observed-only',
+      { field: 'spec.spare_disk_ids', reason: 'observed_only' },
+      'Create the pool via POST /api/v1/pools, then send spec.spare_pool with its name.',
+    );
   }
   const tuning = (spec as { tuning?: unknown }).tuning;
   if (typeof tuning !== 'object' || tuning === null) return;
@@ -281,7 +285,7 @@ export function arraysRouter(ctx: ApiContext): Router {
     if (mode === 'plan') {
       // Writability matrix: non-writable keys in the RAW body → per-field
       // 422, before any plan row exists.
-      rejectTopologyKeys(body.spec);
+      rejectUnwritableKeys(body.spec);
       const { task, planResult } = await tasks.planEngine.plan({
         operation_kind: 'xiraid.array.modify',
         spec: { ...(typeof body.spec === 'object' && body.spec !== null ? body.spec : {}), id },

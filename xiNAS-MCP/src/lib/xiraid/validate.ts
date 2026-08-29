@@ -214,12 +214,28 @@ export interface ModifyFacts {
  * are ignored, NOT rejected — the route's apply re-check re-parses the
  * persisted enriched spec and must accept its own plan (S4 spec §8).
  * Topology-key rejection is the ROUTE's job against the raw PATCH body.
+ *
+ * `spare_disk_ids` is the ONE exception to that tolerance, and it is not a
+ * duplicate of the route's 422. Plan rows have no TTL: a modify planned
+ * BEFORE spares became a pool reference persists an enriched spec carrying
+ * `spare_disk_ids`, and the route's gate only ever saw the raw PATCH body
+ * at plan time. Applied after the upgrade, a tolerant parse would drop the
+ * key, `apply_spares` would report `skipped (no spare_pool change)` and the
+ * task would land as a SUCCESS that attached nothing — exactly the silent
+ * skip the route's 422 exists to prevent. Rejecting here cannot break the
+ * api's own re-check: an enriched spec is `{ id, ...change }` where `change`
+ * is this function's own output, so it never carries the key.
  */
 export function parseModifySpec(input: unknown): XiraidArrayModifySpec {
   if (typeof input !== 'object' || input === null) {
     throw new TypeError('modify spec must be an object');
   }
   const o = input as Record<string, unknown>;
+  if (o.spare_disk_ids !== undefined) {
+    throw new TypeError(
+      'spec.spare_disk_ids is observed-only; create the pool via POST /api/v1/pools and send spec.spare_pool with its name',
+    );
+  }
   const hasSparePool = 'spare_pool' in o && o.spare_pool !== undefined;
   if (hasSparePool && o.spare_pool !== null && typeof o.spare_pool !== 'string') {
     throw new TypeError('spec.spare_pool must be a pool name string or null');

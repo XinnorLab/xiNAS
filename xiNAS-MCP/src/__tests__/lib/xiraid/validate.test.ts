@@ -293,13 +293,37 @@ describe('parseModifySpec', () => {
     expect(parsed.tuning?.init_prio).toBe(10);
   });
 
-  // The api's own persisted enriched spec still carries this observed-only
-  // key at apply time (it is re-parsed, not re-validated). Rejecting it
-  // against the raw PATCH body is the ROUTE's job (Task 5); this parser must
-  // stay tolerant so a re-parse of its own output never throws.
-  it('ignores a stray spare_disk_ids key regardless of its shape', () => {
-    expect(parseModifySpec({ spare_disk_ids: ['d5'] })).not.toHaveProperty('spare_disk_ids');
-    expect(() => parseModifySpec({ spare_disk_ids: 'nope' })).not.toThrow();
+  // A modify PLANNED before 2026-08-29 persists an enriched spec carrying
+  // `spare_disk_ids`, and plan rows have no TTL. Applied after the upgrade a
+  // tolerant parse would drop the key, `apply_spares` would report
+  // `skipped (no spare_pool change)` and the task would land as a SUCCESS
+  // that attached nothing. The route's 422 cannot catch it: that gate runs
+  // against the raw PATCH body at PLAN time only.
+  it('rejects a legacy spare_disk_ids spec instead of silently skipping it', () => {
+    expect(() => parseModifySpec({ spare_disk_ids: ['d5'] })).toThrow(/spare_disk_ids/);
+    expect(() => parseModifySpec({ spare_disk_ids: 'nope' })).toThrow(/spare_disk_ids/);
+    expect(() => parseModifySpec({ id: 'data', spare_disk_ids: [] })).toThrow(
+      /observed-only.*spare_pool/s,
+    );
+    // A pre-upgrade row is `{ id, spare_disk_ids, device_by_id }` — the
+    // exact shape the executor would have silently no-op'd.
+    expect(() =>
+      parseModifySpec({
+        id: 'data',
+        spare_disk_ids: ['d5', 'd6'],
+        device_by_id: { d5: '/dev/nvme5n2', d6: '/dev/nvme6n2' },
+      }),
+    ).toThrow(/spare_disk_ids/);
+  });
+
+  // The reverse direction, pinned so the rejection above cannot break the
+  // api's own apply-time re-check: an enriched spec is `{ id, ...change }`
+  // where `change` is this function's output, so it never carries the key.
+  it('re-parses its own enriched-spec shape unchanged', () => {
+    const change = parseModifySpec({ spare_pool: 'sp01', tuning: { init_prio: 10 } });
+    const enriched = { id: 'data', ...change };
+    expect(enriched).not.toHaveProperty('spare_disk_ids');
+    expect(parseModifySpec(enriched)).toEqual(change);
   });
 
   it('throws on structural junk', () => {

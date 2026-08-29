@@ -198,6 +198,14 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
     return [...(pool?.drives ?? [])].sort();
   }
 
+  /** One pool's observed active flag — the pool-activation invariant. */
+  async function poolActive(name: string): Promise<boolean | undefined> {
+    const res = await requestJson(apiSockPath, '/api/v1/pools', ADMIN_TOKEN, 'GET');
+    return (res.body.result as Array<{ name: string; active: boolean }>).find(
+      (p) => p.name === name,
+    )?.active;
+  }
+
   /** The array's currently referenced pool name, '' when it has none. */
   async function arraySparepool(id: string): Promise<string> {
     const res = await requestJson(apiSockPath, `/api/v1/arrays/${id}`, ADMIN_TOKEN, 'GET');
@@ -413,6 +421,9 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
         XINAS_AGENT_CONFIG_PATH: agentConfigPath,
         XINAS_AGENT_PROBE_MODE: `fixture:${fixtureDir}`,
         XINAS_AGENT_XIRAID_POLL_MS: '500',
+        // The Pool collector's default 30 s poll is the only thing that
+        // refreshes the observed `active` flag, which case 5 asserts on.
+        XINAS_AGENT_POOL_POLL_MS: '500',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -566,6 +577,19 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
     // Detach never deletes, deactivates, or empties: 'aux' still uses sp01.
     expect(await poolNames()).toEqual(['sp01']);
     expect(await poolDrives('sp01')).toEqual(SP01_DRIVES);
+    // `pool_activate` is the only pool-state write an array operation may
+    // make, and it is never undone by a detach (design §2.1) — a unit test
+    // pins the executor, this pins the observed end state. Case 2's attach
+    // activated sp01; it must still read active after this detach. Polled:
+    // `active` refreshes on the Pool collector's own sweep, not on the
+    // task's completion.
+    const activeDeadline = Date.now() + 5_000;
+    while ((await poolActive('sp01')) !== true) {
+      if (Date.now() > activeDeadline) {
+        throw withAgentStderr(new Error("detach left pool 'sp01' observed as inactive"));
+      }
+      await sleep(200);
+    }
   }, 40_000);
 
   it('6. import: adopt the seeded candidate under new_name', async () => {

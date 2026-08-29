@@ -343,9 +343,9 @@ describe('POST /api/v1/arrays', () => {
 
     it('rejects spec.spare_disk_ids on PATCH as observed-only', async () => {
       // A stale client resolving a pool down to its drives (the 2026-08-29
-      // field failure) must be told, not silently no-op'd: parseModifySpec
-      // is tolerant of unknown keys, so without this the plan would have
-      // succeeded and the apply reported `skipped`.
+      // field failure) must be told, not silently no-op'd. `parseModifySpec`
+      // rejects the key too; this gate exists for the nicer per-field 422,
+      // and it fires first on the plan path.
       seedObservedArray();
       const res = await patchPlan({ spare_disk_ids: ['nvme5n1'] });
       expect(res.status).toBe(422);

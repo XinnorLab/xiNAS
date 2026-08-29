@@ -197,11 +197,13 @@ export const xiraidArrayCreateProvider: PlanProvider = {
  * tuning? }). Rejection of non-writable keys (per-field UNSUPPORTED —
  * topology, create-only tuning, the observed-only `spare_disk_ids`) is the
  * ROUTE's job against the raw PATCH body; parseModifySpec here stays
- * tolerant so the apply-time re-check accepts the persisted enriched spec.
+ * tolerant of the api's own enrichment keys so the apply-time re-check
+ * accepts the persisted enriched spec (it rejects `spare_disk_ids`, which
+ * that spec never carries — see its docblock).
  *
  * The executor captures pool pre-state LIVE at its preflight (raid_show +
  * pool_show under the held leases) — more accurate than plan-time observed
- * state — so the enriched spec carries only { id, change, device_by_id }.
+ * state — so the plan persists no pool pre-state of its own.
  */
 export const xiraidArrayModifyProvider: PlanProvider = {
   operation_kind: 'xiraid.array.modify',
