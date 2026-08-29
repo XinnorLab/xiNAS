@@ -428,11 +428,11 @@ describe('parseRaidShow', () => {
           level: '6',
           devices: ['/dev/nvme1n1', '/dev/nvme2n1'],
           state: ['online'],
-          sparepool: 'xnsp_data',
+          sparepool: 'sp_data',
         },
       ],
       DISK_IDS,
-      [{ name: 'xnsp_data', drives: ['/dev/nvme3n1', '/dev/unknown9'] }],
+      [{ name: 'sp_data', drives: ['/dev/nvme3n1', '/dev/unknown9'] }],
     );
     expect(a?.spec.spare_disk_ids).toEqual(['disk-3', '/dev/unknown9']); // raw-path fallback
   });
@@ -445,11 +445,11 @@ describe('parseRaidShow', () => {
           level: '6',
           devices: ['/dev/nvme1n1'],
           state: ['online'],
-          sparepool: 'xnsp_data',
+          sparepool: 'sp_data',
         },
       ],
       DISK_IDS,
-      { xnsp_data: { drives: ['/dev/nvme3n1'], state: 'active' } },
+      { sp_data: { drives: ['/dev/nvme3n1'], state: 'active' } },
     );
     expect(a?.spec.spare_disk_ids).toEqual(['disk-3']);
   });
@@ -687,6 +687,6 @@ describe('sparepool sentinel', () => {
   });
 
   it('a real pool name still comes through', () => {
-    expect(arr('xnsp_a')?.status.spare_pool).toBe('xnsp_a');
+    expect(arr('sp_a')?.status.spare_pool).toBe('sp_a');
   });
 });

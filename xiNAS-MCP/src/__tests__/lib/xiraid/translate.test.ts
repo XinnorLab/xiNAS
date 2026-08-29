@@ -215,9 +215,9 @@ describe('toRaidModifyRequest', () => {
   });
 
   it('sparepool attach passes the pool name through', () => {
-    expect(toRaidModifyRequest('data', { sparepool: 'xnsp_data' })).toEqual({
+    expect(toRaidModifyRequest('data', { sparepool: 'sp_data' })).toEqual({
       name: 'data',
-      sparepool: 'xnsp_data',
+      sparepool: 'sp_data',
     });
   });
 

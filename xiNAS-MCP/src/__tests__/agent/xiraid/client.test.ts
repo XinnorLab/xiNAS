@@ -114,19 +114,17 @@ describe('createFakeXiraidTransport', () => {
 
   it('pool lifecycle: create/activate/add/remove/deactivate/delete; active pools cannot be deleted', async () => {
     const t = createFakeXiraidTransport(dir);
-    await t.poolCreate({ name: 'xnsp_data', drives: ['/dev/s1'] });
-    await expect(t.poolCreate({ name: 'xnsp_data', drives: ['/dev/s2'] })).rejects.toThrow(
-      /exists/,
-    );
-    await t.poolActivate({ name: 'xnsp_data' });
-    await t.poolAdd({ name: 'xnsp_data', drives: ['/dev/s2'] });
-    await t.poolRemove({ name: 'xnsp_data', drives: ['/dev/s1'] });
+    await t.poolCreate({ name: 'sp_data', drives: ['/dev/s1'] });
+    await expect(t.poolCreate({ name: 'sp_data', drives: ['/dev/s2'] })).rejects.toThrow(/exists/);
+    await t.poolActivate({ name: 'sp_data' });
+    await t.poolAdd({ name: 'sp_data', drives: ['/dev/s2'] });
+    await t.poolRemove({ name: 'sp_data', drives: ['/dev/s1'] });
     const pools = (await t.poolShow()) as Array<Record<string, unknown>>;
-    expect(pools).toEqual([{ name: 'xnsp_data', drives: ['/dev/s2'], active: true }]);
+    expect(pools).toEqual([{ name: 'sp_data', drives: ['/dev/s2'], active: true }]);
     // deleting an ACTIVE pool rejects — forces the deactivate-first order
-    await expect(t.poolDelete({ name: 'xnsp_data' })).rejects.toThrow(/active/);
-    await t.poolDeactivate({ name: 'xnsp_data' });
-    await t.poolDelete({ name: 'xnsp_data' });
+    await expect(t.poolDelete({ name: 'sp_data' })).rejects.toThrow(/active/);
+    await t.poolDeactivate({ name: 'sp_data' });
+    await t.poolDelete({ name: 'sp_data' });
     expect(await t.poolShow()).toEqual([]);
     await expect(t.poolAdd({ name: 'ghost', drives: ['/dev/x'] })).rejects.toThrow(/no pool/);
   });
@@ -134,10 +132,10 @@ describe('createFakeXiraidTransport', () => {
   it('raidModify updates sparepool + echoes tuning onto the array entry', async () => {
     const t = createFakeXiraidTransport(dir);
     await t.raidCreate({ name: 'data', level: '5', drives: ['/dev/a', '/dev/b', '/dev/c'] });
-    await t.raidModify({ name: 'data', sparepool: 'xnsp_data' });
+    await t.raidModify({ name: 'data', sparepool: 'sp_data' });
     await t.raidModify({ name: 'data', init_prio: 42 });
     const [arr] = (await t.raidShow()) as Array<Record<string, unknown>>;
-    expect(arr?.sparepool).toBe('xnsp_data');
+    expect(arr?.sparepool).toBe('sp_data');
     expect(arr?.init_prio).toBe(42);
     await expect(t.raidModify({ name: 'ghost', init_prio: 1 })).rejects.toThrow(/no RAID/);
   });
@@ -176,10 +174,12 @@ describe('createFakeXiraidTransport', () => {
     const t = createFakeXiraidTransport(dir);
     await t.raidCreate({ name: 'arr-fail-tuning', level: '0', drives: ['/dev/a', '/dev/b'] });
     // sparepool-only modify on the -fail-tuning name SUCCEEDS…
-    await t.raidModify({ name: 'arr-fail-tuning', sparepool: 'xnsp_arr-fail-tuning' });
+    await t.raidModify({ name: 'arr-fail-tuning', sparepool: 'sp_arr-fail-tuning' });
     // …a tuning-carrying modify REJECTS…
     await expect(t.raidModify({ name: 'arr-fail-tuning', init_prio: 5 })).rejects.toThrow(/tuning/);
-    // …and pool ops on the derived pool name are NOT tripped by -fail-tuning.
-    await t.poolCreate({ name: 'xnsp_arr-fail-tuning', drives: ['/dev/s'] });
+    // …and pool ops on a pool name sharing the -fail-tuning suffix are
+    // unaffected — that hook lives only in raidModify, keyed on the array's
+    // own name argument.
+    await t.poolCreate({ name: 'sp_arr-fail-tuning', drives: ['/dev/s'] });
   });
 });
