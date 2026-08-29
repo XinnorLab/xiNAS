@@ -71,6 +71,7 @@ PRs" anti-pattern while still surfacing every issue.
 | `python-lint` (`ruff check`) | **Blocking** (flipped 2026-06-10 — ruff cleanup PR) | satisfied |
 | `python-format` (`ruff format --check`) | **Blocking** (flipped 2026-06-10 — format pass PR) | satisfied |
 | `python-typecheck` (`pyright`, `standard` mode) | **Blocking** (graduated `basic` → `standard` 2026-06-11 — 28 possibly-unbound/override errors fixed) | next: `strict` per module |
+| `typescript-e2e` (`npm run build && npm run test:e2e`) | **Blocking** (added 2026-08-29) | n/a |
 | `python-tests` (`pytest --cov=xinas_history --cov-fail-under=20`) | **Blocking** (coverage floor added 2026-06-11 at measured 22%) | ratchet the floor as coverage grows |
 | `ansible` (`ansible-lint`, profile `basic`) | **Blocking** (graduated `min` → `basic` 2026-06-11 — 67 findings fixed; `var-naming[no-role-prefix]` skipped: role vars are the public preset contract, renaming is breaking) | next: profile `production` |
 | `yamllint` | **Blocking** (flipped 2026-06-10 — house style codified in `.yamllint.yml`) | satisfied |
@@ -157,6 +158,28 @@ Verified empirically against the current tree on 2026-05-26.
   `var-naming` (355 of 463). The bootstrap ships at `min` to keep
   the gate blocking from day 1; graduation to `basic` then
   `production` is tracked in the backfill plan below.
+
+Added 2026-08-29:
+
+- **`vitest run --config vitest.e2e.config.ts`**: 15 files, 67 tests,
+  ~55 s. The suite was previously ungated. `vitest.config.ts` excludes
+  `src/__tests__/e2e/**` from `npm test` because each file spawns a real
+  `xinas-api` + `xinas-agent` pair over UNIX sockets, and nothing else
+  ran it — so six failures introduced by two unrelated commits
+  (`e163af6`, hyphens dropped from the xiRAID name rule; `fff7d0f`,
+  `raid5.minDrives` raised to 4) stayed green for two weeks. The
+  exclusion from the fast gate is still right; the missing piece was a
+  job of its own.
+
+  Blocking rather than warn-only, per this doc's own risk entry that
+  warn-only jobs become permanent — and because a non-blocking job would
+  not have prevented the regression it exists to catch. The suite is
+  self-contained: fixture probe mode, file-backed fakes for xiRAID / net
+  / fs, no network and no real hardware, and `fileParallelism: false`
+  (each file binds fixed socket paths in its own temp dir, so concurrent
+  files would race). Timing sensitivity on a loaded runner is the one
+  residual risk; if it materialises, raise the per-test timeouts rather
+  than adding retries, which would mask real failures.
 
 ### Biome version pinning
 
