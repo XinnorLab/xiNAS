@@ -234,14 +234,17 @@ describe('xiraid.array.create executor', () => {
     const fake = makeFake();
     // An array the operator already owns, wearing the name this create wants.
     fake.arrays.push({ name: 'data', level: '1', devices: ['/dev/other'], state: ['online'] });
-    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/s'], active: true });
+    // An unrelated pool that happens to exist — untouched either way, but
+    // asserted below so a regression that starts reaching for pools on a
+    // preflight failure would be caught.
+    fake.pools.push({ name: 'sp01', drives: ['/dev/s'], active: true });
     const events = await run(fake);
 
     expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
     expect(shape(events)).toContainEqual(['rollback_succeeded', 'rollback']);
     expect(fake.destroyCalls).toEqual([]); // we never created it → we never destroy it
     expect(fake.arrays).toHaveLength(1);
-    expect(fake.pools).toHaveLength(1); // nor its spare pool
+    expect(fake.pools).toHaveLength(1); // nor any pool
   });
 
   it('clean create failure → rollback finds no array, no destroy, terminal failed', async () => {
@@ -293,63 +296,72 @@ describe('xiraid.array.create executor', () => {
     expect(terminal(events)?.status).toBe('failed');
   });
 
-  it('create-with-spares: pool created+activated BEFORE raid_create; rollback cleans the pool (S4 T4)', async () => {
-    // success path — use the file-backed fake (records pools + order via state)
-    const { mkdtempSync, rmSync } = await import('node:fs');
-    const { tmpdir } = await import('node:os');
-    const { join } = await import('node:path');
-    const { createFakeXiraidTransport } = await import('../../../agent/xiraid/fake-transport.js');
+  // S4 T4 → design 2026-08-29: the pool is the operator's. The array
+  // executor no longer creates one; it only activates the named pool when
+  // inactive, before raid_create, and only deactivates it again on rollback.
 
-    const dir = mkdtempSync(join(tmpdir(), 'xinas-exec-spares-'));
-    try {
-      const t = createFakeXiraidTransport(dir);
-      const spec = {
-        ...SPEC,
-        spare_disk_ids: ['d5'],
-        device_by_id: { ...SPEC.device_by_id, d5: '/dev/nvme5n1' },
-      };
-      const events: TaskProgressEvent[] = [];
-      const executor = makeXiraidArrayCreateExecutor({
-        client: new XiraidClient(t),
-        pollIntervalMs: 1,
-        timeoutMs: 20,
-        sleep: async () => {},
-      });
-      await makeRunner().run(
-        { task_id: 't-sp', operation_kind: 'xiraid.array.create', spec },
-        executor,
-        async (e) => {
-          events.push(e);
-        },
-      );
-      expect(terminal(events)?.status).toBe('success');
-      const pools = (await t.poolShow()) as Array<Record<string, unknown>>;
-      expect(pools).toEqual([{ name: 'xnsp_data', drives: ['/dev/nvme5n1'], active: true }]);
-      const [arr] = (await t.raidShow()) as Array<Record<string, unknown>>;
-      // raid_create carried the sparepool → the pool existed (and was active) first
-      expect(arr?.sparepool).toBe('xnsp_data');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  const runCreate = run;
+
+  it('creates an array against an existing pool without pool_create', async () => {
+    const fake = makeFake();
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n2'], active: true });
+
+    const events = await runCreate(fake, {
+      name: 'data',
+      level: 'raid5',
+      member_disk_ids: ['d1', 'd2', 'd3', 'd4'],
+      spare_pool: 'sp01',
+      device_by_id: {
+        d1: '/dev/nvme1n1',
+        d2: '/dev/nvme2n1',
+        d3: '/dev/nvme3n1',
+        d4: '/dev/nvme4n1',
+      },
+    });
+
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.ops).not.toContain('poolCreate:xnsp_data');
+    expect(fake.ops.filter((o) => o.startsWith('pool'))).toEqual([]); // already active: no pool_activate either
+    expect(fake.arrays[0]?.sparepool).toBe('sp01');
   });
 
-  it('create-with-spares rollback: raid_create rejects AFTER the pool exists → pool cleaned up', async () => {
-    // In-memory fake: pool ops succeed, raidCreate rejects cleanly. (A
-    // '-fail' name would trip the file-backed fake's POOL hook first — the
-    // same trap the S4 review caught for the modify rollback test.)
+  it('activates an inactive pool before raid_create, and deactivates it again on a failed create', async () => {
     const fake = makeFake({ failCreate: 'clean' });
-    const events = await run(fake, {
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n2'], active: false });
+
+    const events = await runCreate(fake, {
       ...SPEC,
-      spare_disk_ids: ['d5'],
-      device_by_id: { ...SPEC.device_by_id, d5: '/dev/nvme5n1' },
+      spare_pool: 'sp01',
     });
+
     expect(shape(events)).toContainEqual(['stage_failed', 'create']);
     expect(terminal(events)).toMatchObject({
       status: 'failed',
       error_code: 'FAILED_PARTIAL_ROLLED_BACK',
     });
-    expect(fake.pools).toEqual([]); // xnsp_data deactivated + deleted by rollback
-    expect(fake.destroyCalls).toEqual([]); // array never existed
+    expect(fake.ops).toEqual(['poolActivate:sp01', 'raidCreate:data', 'poolDeactivate:sp01']);
+    expect(fake.pools[0]).toEqual({ name: 'sp01', drives: ['/dev/nvme5n2'], active: false });
+    expect(fake.destroyCalls).toEqual([]); // raid_create itself rejected — nothing to destroy
+  });
+
+  it('create preflight fails when the named pool does not exist; no pool op runs', async () => {
+    const fake = makeFake();
+
+    const events = await runCreate(fake, { ...SPEC, spare_pool: 'ghost' });
+
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(JSON.stringify(events)).toMatch(/spare pool 'ghost' does not exist/);
+    expect(fake.ops).toEqual([]);
+  });
+
+  it('create with spare_pool: "" behaves as no pool, not a pool named ""', async () => {
+    const fake = makeFake();
+
+    const events = await runCreate(fake, { ...SPEC, spare_pool: '' });
+
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.ops.filter((o) => o.startsWith('pool'))).toEqual([]);
+    expect(fake.arrays[0]?.sparepool).toBeUndefined();
   });
 
   it('spec without device_by_id → preflight fails before any change', async () => {
@@ -392,58 +404,95 @@ describe('xiraid.array.modify executor', () => {
     return events;
   }
 
-  it('attach: pool_create → pool_activate → raid_modify{sparepool}; tuning stage skips', async () => {
+  it('attaches an existing pool without creating one', async () => {
     const fake = makeFake();
-    seedArray(fake);
-    const events = await runModify(fake, {
-      id: 'data',
-      spare_disk_ids: ['d5'],
-      device_by_id: { d5: '/dev/nvme5n1' },
-    });
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n2'], active: true });
+    seedArray(fake, { devices: ['/dev/nvme1n1'] });
+
+    const events = await runModify(fake, { id: 'data', spare_pool: 'sp01', device_by_id: {} });
+
     expect(terminal(events)?.status).toBe('success');
-    expect(fake.ops).toEqual([
-      'poolCreate:xnsp_data',
-      'poolActivate:xnsp_data',
-      'raidModify:data:sparepool',
-    ]);
-    expect(fake.pools).toEqual([{ name: 'xnsp_data', drives: ['/dev/nvme5n1'], active: true }]);
-    expect(fake.arrays[0]?.sparepool).toBe('xnsp_data');
+    expect(fake.ops.filter((o) => o.startsWith('pool'))).toEqual([]);
+    expect(fake.arrays[0]?.sparepool).toBe('sp01');
   });
 
-  it('membership change: pool_add/pool_remove deltas only, no re-create or activation churn', async () => {
-    const fake = makeFake();
-    seedArray(fake, { sparepool: 'xnsp_data' });
-    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/nvme5n1'], active: true });
+  it('activates an inactive pool on attach and deactivates it on rollback', async () => {
+    const fake = makeFake({ failTuningModify: true });
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n2'], active: false });
+    fake.arrays.push({ name: 'arr-fail-tuning', level: '5', devices: [], state: ['online'] });
+
     const events = await runModify(fake, {
-      id: 'data',
-      spare_disk_ids: ['d6'],
-      device_by_id: { d6: '/dev/nvme6n1' },
+      id: 'arr-fail-tuning',
+      spare_pool: 'sp01',
+      tuning: { init_prio: 55 },
+      device_by_id: {},
     });
-    expect(terminal(events)?.status).toBe('success');
+
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
+    expect(fake.pools[0]?.active).toBe(false);
+    expect(fake.pools[0]?.drives).toEqual(['/dev/nvme5n2']);
+    expect(fake.ops).not.toContain('poolDelete:sp01');
+    // The pool ITSELF (name + drives) is never touched — only its active
+    // flag, and only because this run flipped it.
     expect(fake.ops).toEqual([
-      'poolAdd:xnsp_data:/dev/nvme6n1',
-      'poolRemove:xnsp_data:/dev/nvme5n1',
+      'poolActivate:sp01',
+      'raidModify:arr-fail-tuning:sparepool',
+      'raidModify:arr-fail-tuning:init_prio',
+      'raidModify:arr-fail-tuning:sparepool',
+      'poolDeactivate:sp01',
     ]);
-    expect(fake.pools[0]?.drives).toEqual(['/dev/nvme6n1']);
   });
 
-  it("detach: raid_modify('null') → pool_deactivate → pool_delete", async () => {
+  it('detaches without deleting or deactivating the pool', async () => {
     const fake = makeFake();
-    seedArray(fake, { sparepool: 'xnsp_data' });
-    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/nvme5n1'], active: true });
-    const events = await runModify(fake, { id: 'data', spare_disk_ids: [] });
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n2'], active: true });
+    seedArray(fake, { devices: [], sparepool: 'sp01' });
+
+    const events = await runModify(fake, { id: 'data', spare_pool: null, device_by_id: {} });
+
     expect(terminal(events)?.status).toBe('success');
-    expect(fake.ops).toEqual([
-      'raidModify:data:sparepool',
-      'poolDeactivate:xnsp_data',
-      'poolDelete:xnsp_data',
-    ]);
-    expect(fake.pools).toEqual([]);
-    // The daemon DELETES the config key on POOL_REMOVE_CMD rather than storing
-    // an empty name, and then renders that array's sparepool as '-' (observed
-    // on 4.4.0). The executor's verify stage reads it back through
-    // readSparepoolName(), which maps '-' to ''.
+    // The request carries the daemon's detach sentinel, not the empty string
+    // (translate.ts SPAREPOOL_DETACH). The fake mirrors the real daemon's
+    // POOL_REMOVE_CMD handling by then rendering the array's sparepool as
+    // '-' rather than storing 'null' as a literal name — the same behavior
+    // the pre-existing detach test below already pins.
+    expect(fake.ops).toContain(`raidModify:data:sparepool`);
     expect(fake.arrays[0]?.sparepool).toBe('-');
+    expect(readSparepoolName(fake.arrays[0]?.sparepool)).toBe('');
+    expect(fake.pools).toEqual([{ name: 'sp01', drives: ['/dev/nvme5n2'], active: true }]);
+    expect(fake.ops.filter((o) => o.startsWith('pool'))).toEqual([]);
+  });
+
+  it('fails preflight when the named pool does not exist', async () => {
+    const fake = makeFake();
+    seedArray(fake, { devices: [] });
+
+    const events = await runModify(fake, { id: 'data', spare_pool: 'ghost', device_by_id: {} });
+
+    expect(terminal(events)?.status).toBe('failed');
+    expect(JSON.stringify(events)).toMatch(/spare pool 'ghost' does not exist/);
+  });
+
+  // Ruling 2: spec.spare_pool: '' is a third value distinct from a real
+  // name, deliberately folded into the SAME branch as `null` — not treated
+  // as an attempt to attach a pool literally named ''.
+  it('spare_pool: "" detaches, exactly like null, rather than attaching a pool named ""', async () => {
+    const fake = makeFake();
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n2'], active: true });
+    seedArray(fake, { devices: [], sparepool: 'sp01' });
+
+    const events = await runModify(fake, { id: 'data', spare_pool: '', device_by_id: {} });
+
+    expect(terminal(events)?.status).toBe('success');
+    // Same detach-sentinel behavior as spare_pool: null above — '' is folded
+    // into the same branch, never sent to the daemon as a literal pool name.
+    expect(fake.arrays[0]?.sparepool).toBe('-');
+    expect(readSparepoolName(fake.arrays[0]?.sparepool)).toBe('');
+    expect(fake.pools).toEqual([{ name: 'sp01', drives: ['/dev/nvme5n2'], active: true }]);
+    expect(fake.ops.filter((o) => o.startsWith('pool'))).toEqual([]);
   });
 
   it('tuning-only: single raid_modify, no pool calls; spares stage skips', async () => {
@@ -455,54 +504,43 @@ describe('xiraid.array.modify executor', () => {
     expect(fake.arrays[0]?.init_prio).toBe(42);
   });
 
-  it('foreign sparepool → preflight fails, no pool calls', async () => {
+  it('spare_pool absent from the spec → apply_spares skips, no daemon calls', async () => {
     const fake = makeFake();
     seedArray(fake, { sparepool: 'legacy0' });
-    const events = await runModify(fake, {
-      id: 'data',
-      spare_disk_ids: ['d5'],
-      device_by_id: { d5: '/dev/nvme5n1' },
-    });
-    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
-    expect(terminal(events)?.status).toBe('failed');
-    expect(fake.ops).toEqual([]);
+    const events = await runModify(fake, { id: 'data', tuning: { init_prio: 9 } });
+    expect(terminal(events)?.status).toBe('success');
+    expect(fake.ops).toEqual(['raidModify:data:init_prio']);
+    expect(fake.arrays[0]?.sparepool).toBe('legacy0'); // untouched — no foreign-pool guard anymore
   });
 
   // The daemon reports "no spare pool" as the string "-", not "". Observed on a
   // live node (xicli 4.4.0 / driver 4.4.0-43861) on every array of a fresh
-  // install. Read as a NAME it is neither '' nor xnsp_<array>, so the
-  // foreign-pool guard rejected attaching spares to any array that had none.
-  it('the daemon "-" sentinel is no spare pool, not a foreign one', async () => {
+  // install.
+  it('re-pointing an array whose live sparepool reads "-" attaches cleanly', async () => {
     const fake = makeFake();
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n1'], active: true });
     seedArray(fake, { sparepool: '-' });
-    const events = await runModify(fake, {
-      id: 'data',
-      spare_disk_ids: ['d5'],
-      device_by_id: { d5: '/dev/nvme5n1' },
-    });
-    expect(shape(events)).not.toContainEqual(['stage_failed', 'preflight']);
+    const events = await runModify(fake, { id: 'data', spare_pool: 'sp01', device_by_id: {} });
     expect(terminal(events)?.status).toBe('success');
-    expect(fake.arrays[0]?.sparepool).toBe('xnsp_data');
+    expect(fake.arrays[0]?.sparepool).toBe('sp01');
   });
 
-  it('detaching back to "-" verifies as detached, not as a mismatch', async () => {
+  it('detaching an array whose live sparepool already reads "-" verifies as detached, not as a mismatch', async () => {
     const fake = makeFake();
     seedArray(fake, { sparepool: '-' });
-    const events = await runModify(fake, {
-      id: 'data',
-      spare_disk_ids: [],
-      device_by_id: {},
-    });
+    const events = await runModify(fake, { id: 'data', spare_pool: null, device_by_id: {} });
     expect(terminal(events)?.status).toBe('success');
+    expect(fake.ops.filter((o) => o.startsWith('raidModify'))).toEqual([]); // already detached: no-op
   });
 
-  it('tuning fails after a successful attach → rollback inverts the pool ops', async () => {
+  it('tuning fails after a successful attach → rollback restores the prior linkage, pool untouched', async () => {
     const fake = makeFake({ failTuningModify: true });
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n1'], active: true });
     seedArray(fake);
     const events = await runModify(fake, {
       id: 'data',
-      spare_disk_ids: ['d5'],
-      device_by_id: { d5: '/dev/nvme5n1' },
+      spare_pool: 'sp01',
+      device_by_id: {},
       tuning: { init_prio: 9 },
     });
     expect(shape(events)).toContainEqual(['stage_failed', 'apply_tuning']);
@@ -510,10 +548,11 @@ describe('xiraid.array.modify executor', () => {
       status: 'failed',
       error_code: 'FAILED_PARTIAL_ROLLED_BACK',
     });
-    // pool gone again, sparepool detached — back to the pre-state
-    expect(fake.pools).toEqual([]);
-    // Read it the way production does: the daemon renders a detached array as
-    // '-', which readSparepoolName folds to '' along with the absent case.
+    // The pool was already active before this run → no activation happened,
+    // so rollback has nothing to deactivate, and the pool is never deleted.
+    expect(fake.pools).toEqual([{ name: 'sp01', drives: ['/dev/nvme5n1'], active: true }]);
+    expect(fake.ops).not.toContain('poolDeactivate:sp01');
+    // Sparepool linkage reverted to the pre-state (no sparepool).
     expect(readSparepoolName(fake.arrays[0]?.sparepool)).toBe('');
   });
 });
@@ -655,15 +694,20 @@ describe('xiraid.array.delete executor', () => {
     fake.arrays.push({ name: 'data', level: '5', devices: ['/dev/a'], state: ['online'] });
   }
 
-  it('happy: destroy + spare-pool cleanup → success', async () => {
+  // Delete does not touch the array's spare pool at all (S4 spec §7): the
+  // pool the array referenced, if any, belongs to the pool surface, outlives
+  // the array, and remains available to attach elsewhere or manage from
+  // Spare Pools. There is no cleanup step to test here — only its absence.
+  it('happy: destroy succeeds; the pool the array referenced is left untouched', async () => {
     const fake = makeFake();
     seedDoomed(fake);
-    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/s'], active: true });
+    fake.pools.push({ name: 'sp01', drives: ['/dev/s'], active: true });
     const events = await runDelete(fake, []);
     expect(terminal(events)?.status).toBe('success');
     expect(fake.destroyCalls).toEqual(['data']);
     expect(fake.arrays).toEqual([]);
-    expect(fake.pools).toEqual([]);
+    expect(fake.pools).toEqual([{ name: 'sp01', drives: ['/dev/s'], active: true }]);
+    expect(fake.ops.filter((o) => o.startsWith('pool'))).toEqual([]);
   });
 
   it('mount guard: volume mounted → preflight fails → clean failed (no destroy, no manual recovery)', async () => {
@@ -792,38 +836,10 @@ describe('xiraid.array.delete executor', () => {
     expect(fake.arrays).toHaveLength(1);
   });
 
-  // ── Post-destroy hardening (§7): once raid_destroy succeeds, pool cleanup and
-  //    verify are best-effort and must NEVER escalate to requires_manual_recovery ──
-
-  it('post-destroy: pool_show failure is best-effort → success with warning, array gone', async () => {
-    const fake = makeFake();
-    seedDoomed(fake);
-    // The deterministic real-world culprit: pool_show errors on this daemon.
-    // It runs only AFTER raid_destroy, so preflight is unaffected.
-    fake.transport.poolShow = async () => {
-      throw new Error('pool show unsupported on this daemon');
-    };
-    const events = await runDelete(fake, []);
-    // The array was destroyed (irreversible, intended) → success, NOT
-    // requires_manual_recovery for a post-destroy bookkeeping hiccup.
-    expect(terminal(events)?.status).toBe('success');
-    expect(fake.arrays).toEqual([]); // array actually gone
-    expect(shape(events)).toContainEqual(['stage_succeeded', 'destroy']);
-    expect(outputText(events)).toMatch(/spare-pool cleanup failed/i);
-  });
-
-  it('post-destroy: spare-pool deactivate failure is best-effort → success with warning', async () => {
-    const fake = makeFake();
-    seedDoomed(fake);
-    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/s'], active: true });
-    fake.transport.poolDeactivate = async () => {
-      throw new Error('daemon hiccup');
-    };
-    const events = await runDelete(fake, []);
-    expect(terminal(events)?.status).toBe('success');
-    expect(fake.arrays).toEqual([]);
-    expect(outputText(events)).toMatch(/spare-pool cleanup failed/i);
-  });
+  // ── Post-destroy hardening (§7): once raid_destroy succeeds, verify is
+  //    best-effort and must NEVER escalate to requires_manual_recovery. There
+  //    is no pool cleanup step any more (delete never touches the pool), so
+  //    the only best-effort concern left is confirming the array is gone. ──
 
   it('post-destroy: a transient raid_show error during verify does NOT escalate → success with warning', async () => {
     const fake = makeFake();
@@ -927,10 +943,10 @@ describe('executors against the real daemon payload shapes', () => {
     };
   }
 
-  it('delete: dict-keyed raid_show → preflight sees the array, destroy + pool cleanup run', async () => {
+  it('delete: dict-keyed raid_show → preflight sees the array, destroy runs, pool untouched', async () => {
     const fake = makeFake();
     fake.arrays.push({ name: 'data', level: '5', devices: ['/dev/a'], state: ['online'] });
-    fake.pools.push({ name: 'xnsp_data', drives: ['/dev/s'], active: true });
+    fake.pools.push({ name: 'sp01', drives: ['/dev/s'], active: true });
 
     const events: TaskProgressEvent[] = [];
     const executor = makeXiraidArrayDeleteExecutor({
@@ -951,7 +967,7 @@ describe('executors against the real daemon payload shapes', () => {
     expect(terminal(events)?.status).toBe('success');
     expect(fake.destroyCalls).toEqual(['data']);
     expect(fake.arrays).toEqual([]);
-    expect(fake.pools).toEqual([]); // spare pool cleaned, not silently skipped
+    expect(fake.pools).toEqual([{ name: 'sp01', drives: ['/dev/s'], active: true }]); // untouched
   });
 
   it('create preflight: dict-keyed raid_show still catches a name collision', async () => {
@@ -1000,23 +1016,23 @@ describe('executors against the real daemon payload shapes', () => {
     expect(fake.arrays[0]?.init_prio).toBe(42);
   });
 
-  it('modify preflight: dict-keyed raid_show still catches a foreign sparepool', async () => {
+  it('modify preflight: dict-keyed raid_show still catches a missing target pool', async () => {
     const fake = makeFake();
     fake.arrays.push({
       name: 'data',
       level: '6',
       devices: ['/dev/a'],
       state: ['online'],
-      sparepool: 'legacy0', // operator-managed, not xnsp_data
+      sparepool: 'legacy0', // an operator-managed pool the array already has
     });
 
     const events: TaskProgressEvent[] = [];
     const executor = makeXiraidArrayModifyExecutor({ client: new XiraidClient(realShapes(fake)) });
     await makeRunner().run(
       {
-        task_id: 't-mod-foreign',
+        task_id: 't-mod-ghost',
         operation_kind: 'xiraid.array.modify',
-        spec: { id: 'data', spare_disk_ids: ['d5'], device_by_id: { d5: '/dev/nvme5n1' } },
+        spec: { id: 'data', spare_pool: 'ghost', device_by_id: {} },
       },
       executor,
       async (e) => {
@@ -1025,12 +1041,13 @@ describe('executors against the real daemon payload shapes', () => {
     );
 
     expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
-    expect(fake.ops).toEqual([]); // the operator's pool is never re-pointed
+    expect(fake.ops).toEqual([]); // the array's existing linkage is never touched
     expect(fake.arrays[0]?.sparepool).toBe('legacy0');
   });
 
-  it('modify rollback: dict-keyed raid_show → the attached sparepool is detached again', async () => {
+  it('modify rollback: dict-keyed raid_show → the attached sparepool is detached again, pool untouched', async () => {
     const fake = makeFake({ failTuningModify: true });
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n1'], active: true });
     fake.arrays.push({ name: 'data', level: '6', devices: ['/dev/a'], state: ['online'] });
 
     const events: TaskProgressEvent[] = [];
@@ -1041,8 +1058,8 @@ describe('executors against the real daemon payload shapes', () => {
         operation_kind: 'xiraid.array.modify',
         spec: {
           id: 'data',
-          spare_disk_ids: ['d5'],
-          device_by_id: { d5: '/dev/nvme5n1' },
+          spare_pool: 'sp01',
+          device_by_id: {},
           tuning: { init_prio: 9 },
         },
       },
@@ -1053,8 +1070,9 @@ describe('executors against the real daemon payload shapes', () => {
     );
 
     expect(shape(events)).toContainEqual(['stage_failed', 'apply_tuning']);
-    // the pool is gone AND the array no longer references it — no dangling sparepool
-    expect(fake.pools).toEqual([]);
+    // The pool was already active, so this run never activated it — rollback
+    // has nothing to deactivate, and the pool is never deleted.
+    expect(fake.pools).toEqual([{ name: 'sp01', drives: ['/dev/nvme5n1'], active: true }]);
     // Read it the way production does: the daemon renders a detached array as
     // '-', which readSparepoolName folds to '' along with the absent case.
     expect(readSparepoolName(fake.arrays[0]?.sparepool)).toBe('');

@@ -351,14 +351,3 @@ function checkSparePool(
     push('spare_pool_empty', `spare pool '${name}' has no drives`);
   }
 }
-
-/**
- * The retired executor-owned pool was named xnsp_<array>. Arrays now
- * reference an operator-created pool by name (spec.spare_pool) instead, so
- * this no longer has a caller in this file — it is kept only until the
- * xiraid-array executor's last use of it is removed (Task 4), which deletes
- * it for good.
- */
-export function derivedPoolName(arrayName: string): string {
-  return `xnsp_${arrayName}`;
-}

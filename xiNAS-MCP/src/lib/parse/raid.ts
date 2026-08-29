@@ -118,10 +118,10 @@ const DEGRADED_STATES = new Set([
  * configured at all.
  *
  * Every consumer must read the field through here. Treating `"-"` as a name
- * is not cosmetic — the modify executor's foreign-pool guard rejects any
- * sparepool that is neither `''` nor `xnsp_<array>`, so attaching spares to an
- * array that has none failed preflight with *"sparepool '-' is not managed by
- * the control path"*, which is every array on a fresh install.
+ * is not cosmetic — the array executors compare the live sparepool NAME
+ * against the target pool name to decide whether an attach/detach is a
+ * no-op, and a literal `"-"` would never equal `''` or an operator's pool
+ * name, so every array on a fresh install would look permanently "changed".
  */
 export function readSparepoolName(value: unknown): string {
   if (typeof value !== 'string') return '';
