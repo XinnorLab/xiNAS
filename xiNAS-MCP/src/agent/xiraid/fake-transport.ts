@@ -18,8 +18,11 @@
  *  - a raidModify carrying TUNING keys (any field beyond name/sparepool)
  *    against a name ending '-fail-tuning' REJECTS — this targets the
  *    modify executor's apply_tuning stage specifically, after the operator's
- *    pool has already been attached/activated successfully (a plain
- *    '-fail' name would trip the pool ops first).
+ *    pool has already been attached/activated successfully. A plain '-fail'
+ *    array name cannot do that: failHook keys on the request's own name, and
+ *    apply_spares' `raid_modify` carries the ARRAY's name, so it would reject
+ *    one stage too early. (The pool verbs are unaffected either way — they
+ *    hook on the POOL's name, which is independent of the array's.)
  *  - deleting an ACTIVE pool rejects (forces the deactivate-first order,
  *    analyst doc §3.8).
  */

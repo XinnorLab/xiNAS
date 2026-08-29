@@ -74,6 +74,63 @@ function narrowSpec(ctx: ExecutorContext): {
   return { spec, deviceById };
 }
 
+const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/**
+ * Deactivate a pool THIS run armed, as the first act of a rollback.
+ *
+ * Split out because both array rollbacks need the identical shape: the pool
+ * the operator named must not be left armed by a run that failed, and that
+ * undo has to happen even when the rest of the rollback bails out early
+ * (an unparsable spec, a create that never started, a modify with no
+ * pre-state) — so it runs above every early return.
+ *
+ * The first attempt is deliberately NON-FATAL. It is not established
+ * anywhere — neither the xiRAID 4.4 command reference nor
+ * `xiNAS-MCP/xiraid-analysis/api_behavior_doc.md` — whether the daemon
+ * accepts `pool deactivate` while an array still references the pool, and
+ * the fake transport permits it unconditionally, so no test can settle it
+ * either. Letting a rejection propagate from here would abandon the array
+ * work the rollback still owes (the create rollback's `raid_destroy`, the
+ * modify rollback's linkage restore) and end the task in
+ * `requires_manual_recovery` with this run's array still on the daemon.
+ * The caller retries via {@link retryPoolDeactivate} once that work is done,
+ * and THAT failure is never swallowed.
+ *
+ * @returns the pool name still needing a retry, or undefined when nothing is
+ *          pending (no activation this run, or the first attempt succeeded).
+ */
+async function deactivateActivatedPool(
+  client: XiraidClient,
+  ctx: ExecutorContext,
+): Promise<string | undefined> {
+  const activated = ctx.stash.pool_activated;
+  if (typeof activated !== 'string') return undefined;
+  try {
+    await client.poolDeactivate({ name: activated });
+    ctx.emitOutput(`rollback: spare pool '${activated}' deactivated`);
+    return undefined;
+  } catch (err) {
+    ctx.emitOutput(
+      `rollback: WARNING could not deactivate spare pool '${activated}' yet (${errMsg(err)}) — continuing, will retry`,
+    );
+    return activated;
+  }
+}
+
+/** Second and final `pool_deactivate` attempt; a failure here PROPAGATES
+ *  (→ `rollback_failed` → `requires_manual_recovery`), because the pool is
+ *  then genuinely left armed and only an operator can settle it. */
+async function retryPoolDeactivate(
+  client: XiraidClient,
+  ctx: ExecutorContext,
+  pending: string | undefined,
+): Promise<void> {
+  if (pending === undefined) return;
+  await client.poolDeactivate({ name: pending });
+  ctx.emitOutput(`rollback: spare pool '${pending}' deactivated (retry)`);
+}
+
 function checkCancelled(ctx: ExecutorContext, stage: string): void {
   if (ctx.isCancelRequested()) {
     throw new Error(`xiraid.array.create: cancelled before ${stage}`);
@@ -196,49 +253,55 @@ export function makeXiraidArrayCreateExecutor(opts: XiraidArrayCreateExecutorOpt
     stages: [preflight, create, waitOnline, verify],
 
     async rollback(ctx: ExecutorContext): Promise<void> {
-      // Undo the ONE pool change this path can make, FIRST — above BOTH
-      // early returns below (Ruling 2 / design doc §2.1). This reads only
-      // ctx.stash, never the spec, so it needs neither to have parsed nor
-      // create_attempted to be set: preflight -> create can activate the
-      // pool and then raid_create can still fail, and an activation left
-      // stranded by either early return is a pool the operator did not ask
-      // to be armed. The pool itself is never deleted here — it is the
-      // operator's, not ours to destroy.
-      const activated = ctx.stash.pool_activated;
-      if (typeof activated === 'string') {
-        await client.poolDeactivate({ name: activated });
-        ctx.emitOutput(`rollback: spare pool '${activated}' deactivated`);
-      }
+      // Undo the ONE pool change this path can make, FIRST — above BOTH the
+      // early returns in undoArray() below. `create` can activate the pool and
+      // then have raid_create reject, so an activation stranded by either
+      // early return leaves the operator's pool armed when they never asked
+      // for it (S4 spec §5 "Create-with-spares un-deferral"). This reads only
+      // ctx.stash, never the spec, so it needs neither a parsed spec nor
+      // create_attempted. The pool itself is never deleted here — it is the
+      // operator's, not ours to destroy (S4 spec §7, design doc §2.1).
+      const pending = await deactivateActivatedPool(client, ctx);
 
-      // Rollback needs only the name. A spec that never parsed cannot have
-      // created anything — treat it as nothing-to-undo rather than failing
-      // the rollback into requires_manual_recovery.
-      let name: string;
-      try {
-        name = parseCreateSpec(ctx.spec).name;
-      } catch {
-        ctx.emitOutput('rollback: spec unparsable — nothing was created, nothing to undo');
-        return;
-      }
-      // The create stage never started → this run built nothing, and anything
-      // wearing `name` on the daemon predates us (a preflight name collision
-      // is exactly that). Destroying it would be data loss, not a rollback.
-      if (ctx.stash.create_attempted !== true) {
-        ctx.emitOutput(`rollback: create never ran — '${name}' is not ours to undo`);
-        return;
-      }
+      // The array half of the rollback still runs even when the deactivation
+      // above was rejected — see deactivateActivatedPool()'s note on why that
+      // first attempt is non-fatal. A raid_show/raid_destroy failure here does
+      // propagate (→ rollback_failed → requires_manual_recovery); the pending
+      // deactivation is then reported in the warning already emitted.
+      const undoArray = async (): Promise<void> => {
+        // Rollback needs only the name. A spec that never parsed cannot have
+        // created anything — treat it as nothing-to-undo rather than failing
+        // the rollback into requires_manual_recovery.
+        let name: string;
+        try {
+          name = parseCreateSpec(ctx.spec).name;
+        } catch {
+          ctx.emitOutput('rollback: spec unparsable — nothing was created, nothing to undo');
+          return;
+        }
+        // The create stage never started → this run built nothing, and
+        // anything wearing `name` on the daemon predates us (a preflight name
+        // collision is exactly that). Destroying it would be data loss, not a
+        // rollback.
+        if (ctx.stash.create_attempted !== true) {
+          ctx.emitOutput(`rollback: create never ran — '${name}' is not ours to undo`);
+          return;
+        }
 
-      // Live-state decision (crash-safe within the run): destroy only what
-      // raid_show says exists. A show/destroy failure here propagates → the
-      // runner emits rollback_failed → requires_manual_recovery.
-      const exists = readShow(await client.raidShow()).some((a) => a.name === name);
-      if (exists) {
-        ctx.emitOutput(`rollback: destroying partially created array '${name}'`);
-        await client.raidDestroy({ name, force: true });
-        ctx.emitOutput(`rollback: '${name}' destroyed`);
-      } else {
-        ctx.emitOutput(`rollback: array '${name}' was never created — nothing to undo`);
-      }
+        // Live-state decision (crash-safe within the run): destroy only what
+        // raid_show says exists.
+        const exists = readShow(await client.raidShow()).some((a) => a.name === name);
+        if (exists) {
+          ctx.emitOutput(`rollback: destroying partially created array '${name}'`);
+          await client.raidDestroy({ name, force: true });
+          ctx.emitOutput(`rollback: '${name}' destroyed`);
+        } else {
+          ctx.emitOutput(`rollback: array '${name}' was never created — nothing to undo`);
+        }
+      };
+
+      await undoArray();
+      await retryPoolDeactivate(client, ctx, pending);
     },
   };
 }
@@ -337,10 +400,11 @@ export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): E
       // "foreign" to. Any pool the operator names is a valid attach target,
       // subject only to the existence/non-empty check below.
       //
-      // '' is treated the same as absent here on purpose (Ruling 2): a
-      // spec.spare_pool of '' means "no pool", not "a pool named ''", so it
-      // skips straight to the detach branch in apply_spares — there is
-      // nothing to look up.
+      // '' is treated the same as absent here on purpose: a spec.spare_pool
+      // of '' means "no pool", never "a pool literally named ''", so it skips
+      // straight to the detach branch in apply_spares — there is nothing to
+      // look up. See the apply_spares row in
+      // docs/control-path/s4-xiraid-array-mutations-spec.md §5.
       let targetPoolActive: boolean | null = null;
       if (typeof spec.spare_pool === 'string' && spec.spare_pool !== '') {
         const pool = readPoolEntry(await client.poolShow(), spec.spare_pool);
@@ -373,10 +437,12 @@ export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): E
       const pre = preStates.get(ctx.spec as object);
       const target = spec.spare_pool;
 
-      // Ruling 2: '' is a third value distinct from a real name, and it is
-      // deliberately folded into the detach branch below rather than
-      // attempted as a pool named ''. parseModifySpec/Task 3 already treats
-      // '' as a no-op blocker-wise; here it must behave exactly like `null`.
+      // '' is a third value distinct from both `undefined` (no change) and a
+      // real name, and it is deliberately folded into the detach branch below
+      // rather than attempted as a pool named ''. parseModifySpec already
+      // treats '' as a no-op blocker-wise; here it must behave exactly like
+      // `null`. See the apply_spares row in
+      // docs/control-path/s4-xiraid-array-mutations-spec.md §5.
       if (typeof target === 'string' && target !== '') {
         if (pre?.targetPoolActive === false) {
           await client.poolActivate({ name: target });
@@ -420,8 +486,9 @@ export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): E
       const live = readSparepool(await client.raidShow(), spec.id);
       if (live === undefined) throw new Error(`verify: array '${spec.id}' vanished`);
       if (spec.spare_pool !== undefined) {
-        // Ruling 2: '' reads the same as null here — both expect a detached
-        // array, matching apply_spares' fold of '' into the detach branch.
+        // '' reads the same as null here — both expect a detached array,
+        // matching apply_spares' fold of '' into the detach branch
+        // (docs/control-path/s4-xiraid-array-mutations-spec.md §5).
         const expected = spec.spare_pool ?? '';
         if (live !== expected) {
           throw new Error(`verify: sparepool is '${live}', expected '${expected}'`);
@@ -443,22 +510,28 @@ export function makeXiraidArrayModifyExecutor(opts: { client: XiraidClient }): E
      *  construction (last stage, atomic). No pre-state captured (preflight
      *  threw first) → nothing changed. */
     async rollback(ctx: ExecutorContext): Promise<void> {
-      const pre = preStates.get(ctx.spec as object);
-      if (!pre) {
-        ctx.emitOutput('rollback: no pre-state captured — nothing was changed');
-        return;
-      }
-      const spec = narrowModifySpec(ctx);
+      // Deactivate FIRST, above the no-pre-state guard, for the same reason
+      // the create rollback does it above its own early returns: the guard
+      // reads a WeakMap that a future stage reordering could leave unset while
+      // an activation had already happened, and a "currently unreachable"
+      // ordering bug is exactly the shape that gets reintroduced. The linkage
+      // restore below is real work that a rejected pool_deactivate must not
+      // abandon, so this uses the same non-fatal-then-retry sequence.
+      const pending = await deactivateActivatedPool(client, ctx);
 
-      const liveSparepool = readSparepool(await client.raidShow(), spec.id) ?? '';
-      if (liveSparepool !== pre.arraySparepool) {
-        await client.raidModify(toRaidModifyRequest(spec.id, { sparepool: pre.arraySparepool }));
+      const pre = preStates.get(ctx.spec as object);
+      if (pre) {
+        const spec = narrowModifySpec(ctx);
+        const liveSparepool = readSparepool(await client.raidShow(), spec.id) ?? '';
+        if (liveSparepool !== pre.arraySparepool) {
+          await client.raidModify(toRaidModifyRequest(spec.id, { sparepool: pre.arraySparepool }));
+        }
+        ctx.emitOutput('rollback: sparepool linkage restored to the preflight capture');
+      } else {
+        ctx.emitOutput('rollback: no pre-state captured — nothing was changed');
       }
-      const activated = ctx.stash.pool_activated;
-      if (typeof activated === 'string') {
-        await client.poolDeactivate({ name: activated });
-      }
-      ctx.emitOutput('rollback: sparepool linkage restored to the preflight capture');
+
+      await retryPoolDeactivate(client, ctx, pending);
     },
   };
 }
@@ -629,7 +702,6 @@ export function makeXiraidArrayDeleteExecutor(opts: XiraidArrayDeleteExecutorOpt
   const sleep =
     opts.sleep ??
     ((ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms)));
-  const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
   const preflight: ExecutorStage = {
     name: 'preflight',

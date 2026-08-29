@@ -22,6 +22,13 @@ function makeFake(
     failTuningModify?: boolean;
     /** Reject raidDestroy BEFORE removing the array (delete-failure path). */
     failDestroy?: boolean;
+    /**
+     * Reject poolDeactivate — 'once' fails only the first call, 'always'
+     * every call. Models the undocumented case where the daemon refuses to
+     * deactivate a pool an array still references: the rollback's FIRST
+     * attempt runs before the array work that would clear that reference.
+     */
+    failPoolDeactivate?: 'once' | 'always';
   } = {},
 ) {
   const arrays: Array<{
@@ -34,6 +41,7 @@ function makeFake(
   }> = [];
   const pools: Array<{ name: string; drives: string[]; active: boolean }> = [];
   let down = false;
+  let deactivateCalls = 0;
   const destroyCalls: string[] = [];
   const ops: string[] = [];
   const transport: XiraidTransport = {
@@ -102,6 +110,13 @@ function makeFake(
     },
     async poolDeactivate(req) {
       ops.push(`poolDeactivate:${req.name}`);
+      deactivateCalls += 1;
+      if (
+        opts.failPoolDeactivate === 'always' ||
+        (opts.failPoolDeactivate === 'once' && deactivateCalls === 1)
+      ) {
+        throw new Error(`pool ${req.name} is in use by a RAID`);
+      }
       const p = pools.find((x) => x.name === req.name);
       if (!p) throw new Error(`no pool ${req.name}`);
       p.active = false;
@@ -320,9 +335,22 @@ describe('xiraid.array.create executor', () => {
     });
 
     expect(terminal(events)?.status).toBe('success');
-    expect(fake.ops).not.toContain('poolCreate:xnsp_data');
-    expect(fake.ops.filter((o) => o.startsWith('pool'))).toEqual([]); // already active: no pool_activate either
+    // No pool verb of any kind: nothing is created, and the pool was already
+    // active, so there is not even a pool_activate.
+    expect(fake.ops.filter((o) => o.startsWith('pool'))).toEqual([]);
     expect(fake.arrays[0]?.sparepool).toBe('sp01');
+  });
+
+  it('create preflight rejects a pool with no drives; no pool op runs', async () => {
+    const fake = makeFake();
+    fake.pools.push({ name: 'sp01', drives: [], active: true });
+
+    const events = await runCreate(fake, { ...SPEC, spare_pool: 'sp01' });
+
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(JSON.stringify(events)).toMatch(/spare pool 'sp01' has no drives/);
+    expect(fake.ops).toEqual([]);
+    expect(fake.arrays).toHaveLength(0);
   });
 
   it('activates an inactive pool before raid_create, and deactivates it again on a failed create', async () => {
@@ -342,6 +370,47 @@ describe('xiraid.array.create executor', () => {
     expect(fake.ops).toEqual(['poolActivate:sp01', 'raidCreate:data', 'poolDeactivate:sp01']);
     expect(fake.pools[0]).toEqual({ name: 'sp01', drives: ['/dev/nvme5n2'], active: false });
     expect(fake.destroyCalls).toEqual([]); // raid_create itself rejected — nothing to destroy
+  });
+
+  it('rollback: a rejected first pool_deactivate does NOT abandon the array destroy', async () => {
+    const fake = makeFake({ failCreate: 'partial', failPoolDeactivate: 'once' });
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n2'], active: false });
+
+    const events = await runCreate(fake, { ...SPEC, spare_pool: 'sp01' });
+
+    // The deactivation runs first and is rejected; the destroy this run owes
+    // still happens, and the deactivation is retried afterwards.
+    expect(fake.ops).toEqual([
+      'poolActivate:sp01',
+      'raidCreate:data',
+      'poolDeactivate:sp01',
+      'raidDestroy:data',
+      'poolDeactivate:sp01',
+    ]);
+    expect(fake.destroyCalls).toEqual(['data']);
+    expect(fake.arrays).toHaveLength(0);
+    expect(fake.pools[0]?.active).toBe(false);
+    expect(JSON.stringify(events)).toMatch(/WARNING could not deactivate spare pool 'sp01' yet/);
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
+  });
+
+  it('rollback: a pool_deactivate that fails BOTH times escalates, array still destroyed', async () => {
+    const fake = makeFake({ failCreate: 'partial', failPoolDeactivate: 'always' });
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n2'], active: false });
+
+    const events = await runCreate(fake, { ...SPEC, spare_pool: 'sp01' });
+
+    // The retry failure is never swallowed — but the array is gone first.
+    expect(fake.destroyCalls).toEqual(['data']);
+    expect(fake.arrays).toHaveLength(0);
+    expect(shape(events)).toContainEqual(['rollback_failed', 'rollback']);
+    expect(terminal(events)).toMatchObject({
+      status: 'requires_manual_recovery',
+      error_code: 'FAILED_MANUAL_RECOVERY_REQUIRED',
+    });
   });
 
   it('create preflight fails when the named pool does not exist; no pool op runs', async () => {
@@ -436,14 +505,43 @@ describe('xiraid.array.modify executor', () => {
     expect(fake.pools[0]?.drives).toEqual(['/dev/nvme5n2']);
     expect(fake.ops).not.toContain('poolDelete:sp01');
     // The pool ITSELF (name + drives) is never touched — only its active
-    // flag, and only because this run flipped it.
+    // flag, and only because this run flipped it. Rollback deactivates BEFORE
+    // restoring the linkage, matching the create rollback's ordering.
     expect(fake.ops).toEqual([
       'poolActivate:sp01',
       'raidModify:arr-fail-tuning:sparepool',
       'raidModify:arr-fail-tuning:init_prio',
-      'raidModify:arr-fail-tuning:sparepool',
       'poolDeactivate:sp01',
+      'raidModify:arr-fail-tuning:sparepool',
     ]);
+  });
+
+  it('rollback: a rejected first pool_deactivate does NOT abandon the linkage restore', async () => {
+    const fake = makeFake({ failTuningModify: true, failPoolDeactivate: 'once' });
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n2'], active: false });
+    seedArray(fake, { devices: [] });
+
+    const events = await runModify(fake, {
+      id: 'data',
+      spare_pool: 'sp01',
+      tuning: { init_prio: 55 },
+      device_by_id: {},
+    });
+
+    expect(fake.ops).toEqual([
+      'poolActivate:sp01',
+      'raidModify:data:sparepool',
+      'raidModify:data:init_prio',
+      'poolDeactivate:sp01', // rejected
+      'raidModify:data:sparepool', // linkage restore still runs
+      'poolDeactivate:sp01', // retried afterwards
+    ]);
+    expect(readSparepoolName(fake.arrays[0]?.sparepool)).toBe('');
+    expect(fake.pools[0]?.active).toBe(false);
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
   });
 
   it('detaches without deleting or deactivating the pool', async () => {
@@ -476,9 +574,23 @@ describe('xiraid.array.modify executor', () => {
     expect(JSON.stringify(events)).toMatch(/spare pool 'ghost' does not exist/);
   });
 
-  // Ruling 2: spec.spare_pool: '' is a third value distinct from a real
-  // name, deliberately folded into the SAME branch as `null` — not treated
-  // as an attempt to attach a pool literally named ''.
+  it('fails preflight when the named pool has no drives', async () => {
+    const fake = makeFake();
+    fake.pools.push({ name: 'sp01', drives: [], active: false });
+    seedArray(fake, { devices: [] });
+
+    const events = await runModify(fake, { id: 'data', spare_pool: 'sp01', device_by_id: {} });
+
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(JSON.stringify(events)).toMatch(/spare pool 'sp01' has no drives/);
+    expect(fake.ops).toEqual([]);
+    expect(fake.pools[0]?.active).toBe(false); // an empty pool is never armed
+  });
+
+  // spec.spare_pool: '' is a third value distinct from a real name,
+  // deliberately folded into the SAME branch as `null` — not treated as an
+  // attempt to attach a pool literally named ''. See the apply_spares row in
+  // docs/control-path/s4-xiraid-array-mutations-spec.md §5.
   it('spare_pool: "" detaches, exactly like null, rather than attaching a pool named ""', async () => {
     const fake = makeFake();
     fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n2'], active: true });
@@ -554,6 +666,42 @@ describe('xiraid.array.modify executor', () => {
     expect(fake.ops).not.toContain('poolDeactivate:sp01');
     // Sparepool linkage reverted to the pre-state (no sparepool).
     expect(readSparepoolName(fake.arrays[0]?.sparepool)).toBe('');
+  });
+
+  // The rollback tests above all start from an array with NO sparepool, so
+  // they only ever exercise the restore-to-'' branch. '' and a real name take
+  // different paths through toRaidModifyRequest (detach sentinel vs. literal
+  // name), so a re-point must be covered separately.
+  it('rollback re-attaches a NON-EMPTY prior pool rather than clearing the linkage', async () => {
+    const fake = makeFake({ failTuningModify: true });
+    fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n1'], active: true });
+    fake.pools.push({ name: 'sp02', drives: ['/dev/nvme6n1'], active: true });
+    seedArray(fake, { sparepool: 'sp01' });
+
+    const events = await runModify(fake, {
+      id: 'data',
+      spare_pool: 'sp02',
+      device_by_id: {},
+      tuning: { init_prio: 9 },
+    });
+
+    expect(shape(events)).toContainEqual(['stage_failed', 'apply_tuning']);
+    expect(terminal(events)).toMatchObject({
+      status: 'failed',
+      error_code: 'FAILED_PARTIAL_ROLLED_BACK',
+    });
+    // Back on sp01 — NOT detached, and not left pointing at sp02.
+    expect(fake.arrays[0]?.sparepool).toBe('sp01');
+    // Both pools were already active, so no pool verb runs at all.
+    expect(fake.ops).toEqual([
+      'raidModify:data:sparepool',
+      'raidModify:data:init_prio',
+      'raidModify:data:sparepool',
+    ]);
+    expect(fake.pools).toEqual([
+      { name: 'sp01', drives: ['/dev/nvme5n1'], active: true },
+      { name: 'sp02', drives: ['/dev/nvme6n1'], active: true },
+    ]);
   });
 });
 

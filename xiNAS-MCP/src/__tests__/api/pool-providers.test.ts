@@ -51,12 +51,14 @@ describe('pool providers (S9 T8) — the S4 imperative freshness pattern', () =>
     ).rejects.toThrow(/spec\.name/);
   });
 
-  it('create: accepts an underscored name of the derived xnsp_<array> width', async () => {
-    // The array executor creates pools named `xnsp_<array>` — up to 33 chars
-    // with a 28-char array name — so the pool rule must not be narrower.
-    const derived = `xnsp_${'a'.repeat(28)}`;
+  it('create: accepts a long underscored name up to the 64-char bound', async () => {
+    // The 64-char bound is a deliberate choice borrowed from the array-name
+    // rule, not a vendor-documented pool limit (see the NAME_RE comment in
+    // src/api/plan/providers/pool.ts). Underscores must survive it, since the
+    // documented character set is the only thing narrowing the name.
+    const long = `sp_${'a'.repeat(60)}`;
     const out = await poolCreateProvider.preflight(ctxWith([DISK('/dev/a')]), {
-      name: derived,
+      name: long,
       drives: ['/dev/a'],
     });
     expect(out.blockers).toEqual([]);
