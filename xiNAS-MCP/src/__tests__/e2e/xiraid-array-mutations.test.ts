@@ -358,8 +358,10 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
       spec: {
         name: 'data',
         level: 'raid5',
-        member_disk_ids: ['nvme1n1', 'nvme2n1', 'nvme3n1'],
-        spare_disk_ids: ['nvme4n1'],
+        // raid5's engine floor is 4 members (schema.ts LEVELS.raid5.minDrives);
+        // a 3-member spec is rejected at plan with a min_drives blocker.
+        member_disk_ids: ['nvme1n1', 'nvme2n1', 'nvme3n1', 'nvme4n1'],
+        spare_disk_ids: ['nvme5n1'],
       },
     });
     expect(planned.status).toBe(200);
@@ -389,7 +391,7 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
         (a) =>
           a.id === 'data' &&
           JSON.stringify((a.spec as { spare_disk_ids: string[] }).spare_disk_ids) ===
-            JSON.stringify(['nvme4n1']),
+            JSON.stringify(['nvme5n1']),
       ),
     ).catch((err) => {
       throw withAgentStderr(err);
@@ -401,7 +403,7 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
   it('2. modify: swap the spare + set tuning → success; observed spares update', async () => {
     const planned = await requestJson(apiSockPath, '/api/v1/arrays/data', ADMIN_TOKEN, 'PATCH', {
       mode: 'plan',
-      spec: { spare_disk_ids: ['nvme5n1'], tuning: { init_prio: 25 } },
+      spec: { spare_disk_ids: ['nvme6n1'], tuning: { init_prio: 25 } },
     });
     expect(planned.status).toBe(200);
     expect((planned.body.result as { blockers: unknown[] }).blockers).toEqual([]);
@@ -430,7 +432,7 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
         (a) =>
           a.id === 'data' &&
           JSON.stringify((a.spec as { spare_disk_ids: string[] }).spare_disk_ids) ===
-            JSON.stringify(['nvme5n1']),
+            JSON.stringify(['nvme6n1']),
       ),
     ).catch((err) => {
       throw withAgentStderr(err);

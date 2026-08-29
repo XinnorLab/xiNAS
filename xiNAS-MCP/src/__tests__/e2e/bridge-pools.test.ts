@@ -163,10 +163,10 @@ describe.sequential('e2e: S9 config-history / audit / pools (fixture mode)', () 
             level: 5,
             devices: ['/dev/nvme1n2'],
             state: 'online',
-            sparepool: 'sp-used',
+            sparepool: 'sp_used',
           },
         ],
-        pools: [{ name: 'sp-used', drives: ['/dev/nvme8n1'], active: false }],
+        pools: [{ name: 'sp_used', drives: ['/dev/nvme8n1'], active: false }],
         import_candidates: [],
         tombstones: [],
       }),
@@ -291,7 +291,7 @@ describe.sequential('e2e: S9 config-history / audit / pools (fixture mode)', () 
       const snaps = await rest(apiSockPath, 'GET', '/api/v1/config-history/snapshots');
       const pools = await rest(apiSockPath, 'GET', '/api/v1/pools');
       const used = (pools.body.result as Array<{ name: string; referenced_by?: string[] }>).find(
-        (p) => p.name === 'sp-used',
+        (p) => p.name === 'sp_used',
       );
       if (
         (snaps.body.result as unknown[]).length >= 2 &&
@@ -401,12 +401,12 @@ describe.sequential('e2e: S9 config-history / audit / pools (fixture mode)', () 
     // observed fixture pool carries referenced_by from the fixture array
     const initial = await rest(apiSockPath, 'GET', '/api/v1/pools');
     const used = (initial.body.result as Array<Record<string, unknown>>).find(
-      (p) => p.name === 'sp-used',
+      (p) => p.name === 'sp_used',
     );
     expect(used?.referenced_by).toEqual(['data1']);
 
     // referenced pool delete → blocked at plan
-    const refPlan = await rest(apiSockPath, 'DELETE', '/api/v1/pools/sp-used', {
+    const refPlan = await rest(apiSockPath, 'DELETE', '/api/v1/pools/sp_used', {
       mode: 'plan',
       spec: {},
     });
@@ -415,28 +415,28 @@ describe.sequential('e2e: S9 config-history / audit / pools (fixture mode)', () 
     );
 
     // create a fresh pool → observed
-    await planApply('POST', '/api/v1/pools', { name: 'sp-new', drives: ['/dev/nvme9n1'] });
+    await planApply('POST', '/api/v1/pools', { name: 'sp_new', drives: ['/dev/nvme9n1'] });
     const settle = Date.now() + 10_000;
     for (;;) {
       const pools = await rest(apiSockPath, 'GET', '/api/v1/pools');
-      if ((pools.body.result as Array<{ name: string }>).some((p) => p.name === 'sp-new')) break;
-      if (Date.now() > settle) throw new Error('sp-new never observed');
+      if ((pools.body.result as Array<{ name: string }>).some((p) => p.name === 'sp_new')) break;
+      if (Date.now() > settle) throw new Error('sp_new never observed');
       await sleep(250);
     }
 
     // activate → observed active → delete blocked at plan
-    await planApply('PATCH', '/api/v1/pools/sp-new', { active: true });
+    await planApply('PATCH', '/api/v1/pools/sp_new', { active: true });
     const activeSettle = Date.now() + 10_000;
     for (;;) {
       const pools = await rest(apiSockPath, 'GET', '/api/v1/pools');
       const row = (pools.body.result as Array<{ name: string; active: boolean }>).find(
-        (p) => p.name === 'sp-new',
+        (p) => p.name === 'sp_new',
       );
       if (row?.active === true) break;
-      if (Date.now() > activeSettle) throw new Error('sp-new never active');
+      if (Date.now() > activeSettle) throw new Error('sp_new never active');
       await sleep(250);
     }
-    const activePlan = await rest(apiSockPath, 'DELETE', '/api/v1/pools/sp-new', {
+    const activePlan = await rest(apiSockPath, 'DELETE', '/api/v1/pools/sp_new', {
       mode: 'plan',
       spec: {},
     });
@@ -445,23 +445,23 @@ describe.sequential('e2e: S9 config-history / audit / pools (fixture mode)', () 
     );
 
     // deactivate → delete to completion
-    await planApply('PATCH', '/api/v1/pools/sp-new', { active: false });
+    await planApply('PATCH', '/api/v1/pools/sp_new', { active: false });
     const inactiveSettle = Date.now() + 10_000;
     for (;;) {
       const pools = await rest(apiSockPath, 'GET', '/api/v1/pools');
       const row = (pools.body.result as Array<{ name: string; active: boolean }>).find(
-        (p) => p.name === 'sp-new',
+        (p) => p.name === 'sp_new',
       );
       if (row?.active === false) break;
-      if (Date.now() > inactiveSettle) throw new Error('sp-new never inactive');
+      if (Date.now() > inactiveSettle) throw new Error('sp_new never inactive');
       await sleep(250);
     }
-    await planApply('DELETE', '/api/v1/pools/sp-new', {});
+    await planApply('DELETE', '/api/v1/pools/sp_new', {});
     const goneSettle = Date.now() + 10_000;
     for (;;) {
       const pools = await rest(apiSockPath, 'GET', '/api/v1/pools');
-      if (!(pools.body.result as Array<{ name: string }>).some((p) => p.name === 'sp-new')) break;
-      if (Date.now() > goneSettle) throw new Error('sp-new never removed');
+      if (!(pools.body.result as Array<{ name: string }>).some((p) => p.name === 'sp_new')) break;
+      if (Date.now() > goneSettle) throw new Error('sp_new never removed');
       await sleep(250);
     }
   }, 60_000);
@@ -486,11 +486,11 @@ describe.sequential('e2e: S9 config-history / audit / pools (fixture mode)', () 
     const list = await ctl(['pools', 'list', '--json']);
     expect(list.code, list.stderr).toBe(0);
     expect(
-      JSON.parse(list.stdout).result.some((p: { name: string }) => p.name === 'sp-used'),
+      JSON.parse(list.stdout).result.some((p: { name: string }) => p.name === 'sp_used'),
       `stdout: ${list.stdout.slice(0, 400)}`,
     ).toBe(true);
 
-    const SPEC = { name: 'parity-pool', drives: ['/dev/nvme9n2'] };
+    const SPEC = { name: 'parity_pool', drives: ['/dev/nvme9n2'] };
     const restPlan = await rest(apiSockPath, 'POST', '/api/v1/pools', {
       mode: 'plan',
       spec: SPEC,

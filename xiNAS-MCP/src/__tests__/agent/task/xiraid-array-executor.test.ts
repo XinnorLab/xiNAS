@@ -335,7 +335,7 @@ describe('xiraid.array.create executor', () => {
 
   it('create-with-spares rollback: raid_create rejects AFTER the pool exists → pool cleaned up', async () => {
     // In-memory fake: pool ops succeed, raidCreate rejects cleanly. (A
-    // '-fail' name would trip the file-backed fake's POOL hook first — the
+    // '_fail' name would trip the file-backed fake's POOL hook first — the
     // same trap the S4 review caught for the modify rollback test.)
     const fake = makeFake({ failCreate: 'clean' });
     const events = await run(fake, {

@@ -98,14 +98,14 @@ describe('createFakeXiraidTransport', () => {
     expect(await t.raidShow()).toEqual([]);
   });
 
-  it('duplicate name rejects; names ending in -fail reject (failure-path hook)', async () => {
+  it('duplicate name rejects; names ending in _fail reject (failure-path hook)', async () => {
     const t = createFakeXiraidTransport(dir);
     await t.raidCreate({ name: 'dup', level: '0', drives: ['/dev/a', '/dev/b'] });
     await expect(
       t.raidCreate({ name: 'dup', level: '0', drives: ['/dev/c', '/dev/d'] }),
     ).rejects.toThrow(/exists/);
     await expect(
-      t.raidCreate({ name: 'roll-fail', level: '0', drives: ['/dev/c', '/dev/d'] }),
+      t.raidCreate({ name: 'roll_fail', level: '0', drives: ['/dev/c', '/dev/d'] }),
     ).rejects.toThrow(/fail/);
     expect(await t.raidShow()).toHaveLength(1);
   });
@@ -172,14 +172,14 @@ describe('createFakeXiraidTransport', () => {
     expect(tombstones).toContainEqual({ name: 'a2', data_wiped: false });
   });
 
-  it('-fail-tuning rejects only a tuning-carrying raidModify', async () => {
+  it('_fail_tuning rejects only a tuning-carrying raidModify', async () => {
     const t = createFakeXiraidTransport(dir);
-    await t.raidCreate({ name: 'arr-fail-tuning', level: '0', drives: ['/dev/a', '/dev/b'] });
-    // sparepool-only modify on the -fail-tuning name SUCCEEDS…
-    await t.raidModify({ name: 'arr-fail-tuning', sparepool: 'xnsp_arr-fail-tuning' });
+    await t.raidCreate({ name: 'arr_fail_tuning', level: '0', drives: ['/dev/a', '/dev/b'] });
+    // sparepool-only modify on the _fail_tuning name SUCCEEDS…
+    await t.raidModify({ name: 'arr_fail_tuning', sparepool: 'xnsp_arr_fail_tuning' });
     // …a tuning-carrying modify REJECTS…
-    await expect(t.raidModify({ name: 'arr-fail-tuning', init_prio: 5 })).rejects.toThrow(/tuning/);
-    // …and pool ops on the derived pool name are NOT tripped by -fail-tuning.
-    await t.poolCreate({ name: 'xnsp_arr-fail-tuning', drives: ['/dev/s'] });
+    await expect(t.raidModify({ name: 'arr_fail_tuning', init_prio: 5 })).rejects.toThrow(/tuning/);
+    // …and pool ops on the derived pool name are NOT tripped by _fail_tuning.
+    await t.poolCreate({ name: 'xnsp_arr_fail_tuning', drives: ['/dev/s'] });
   });
 });
