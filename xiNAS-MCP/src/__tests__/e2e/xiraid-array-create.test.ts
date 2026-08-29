@@ -15,7 +15,7 @@
  *
  * Three scenarios:
  *   1. success — full stage set + snapshots + the array observable via REST.
- *   2. failure→rollback — name 'roll-fail' triggers the fake transport's
+ *   2. failure→rollback — name 'roll_fail' triggers the fake transport's
  *      deterministic create failure → FAILED_PARTIAL_ROLLED_BACK; the array
  *      is NOT observable.
  *   3. blocked plan — a system-disk member → blocker disk_is_system; apply
@@ -411,9 +411,9 @@ describe.sequential('e2e: S3 xiraid array create round-trip (fixture mode + fake
     expect((data.spec as Record<string, unknown>).member_disk_ids).toEqual(memberIds(1, 4));
   }, 30_000);
 
-  it('failure→rollback: name roll-fail → FAILED_PARTIAL_ROLLED_BACK; array not observable', async () => {
+  it('failure→rollback: name roll_fail → FAILED_PARTIAL_ROLLED_BACK; array not observable', async () => {
     const planned = await plan({
-      name: 'roll-fail',
+      name: 'roll_fail',
       level: 'raid5',
       member_disk_ids: memberIds(5, 4),
     });
@@ -440,7 +440,7 @@ describe.sequential('e2e: S3 xiraid array create round-trip (fixture mode + fake
     // Never created → never observable.
     const res = await getJson(apiSockPath, '/api/v1/arrays', ADMIN_TOKEN);
     const items = res.body.result as Array<Record<string, unknown>>;
-    expect(items.some((a) => a.id === 'roll-fail')).toBe(false);
+    expect(items.some((a) => a.id === 'roll_fail')).toBe(false);
   }, 30_000);
 
   it('blocked plan: system-disk member → disk_is_system blocker; apply → 412', async () => {
