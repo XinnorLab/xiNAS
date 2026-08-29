@@ -213,6 +213,27 @@ The audit line is written **after** the apply task reports success. The snapshot
 
 ---
 
+### 2.6 Drive eligibility — NVMe on bare metal, `vd*` / `sd*` on a VM
+
+Both drive pickers — the Create Array wizard (§4) and Spare Pools (§7.2) — ask the same question of every disk row before offering it: is this a device kind this host builds arrays out of? The answer lives in one place, [utils/host_profile.py](../../xinas_menu/utils/host_profile.py), so the two screens cannot drift apart:
+
+| Host | Selectable device names |
+|---|---|
+| Bare metal | `nvme` in the name — nothing else |
+| Virtual machine | `nvme`, plus names starting `vd` (virtio-blk) or `sd` (virtio-scsi / SATA / SAS) |
+
+`selectable_drive_name()` matches `nvme` as a substring but `vd` / `sd` with `startswith`, which keeps xiRAID's own array block devices (`xi_data`, `xi_log`) out of both pickers on either host kind. It is the **only** name rule; the other exclusions (`system`, `safe_for_use`, array membership, existing pool membership) are unchanged and apply on a VM exactly as they do on bare metal.
+
+`is_vm()` shells out to `systemd-detect-virt` and calls the host virtual when stdout, stripped, is neither empty nor `none`. That is deliberately the rule the installer already applies twice — `is_vm()` in [startup_menu.sh](../../startup_menu.sh), which offers the `xinnorVM` preset, and the empty-NVMe fallback in [nvme_namespace](../../collection/roles/nvme_namespace/tasks/main.yml) ([Installer/raid-spec.md](../Installer/raid-spec.md) §1.1) — rather than a third definition of "VM". **Exit status is not consulted:** `systemd-detect-virt` exits 1 on bare metal, so gating on the return code would read every physical node as "detection failed" and, by accident, still answer correctly — until the binary is missing, when the same code would answer correctly for the wrong reason. Reading stdout keeps the bare-metal and no-binary cases distinguishable in the one place that decides. The result is cached for the life of the process; virtualization does not change under a running TUI.
+
+The relaxation is gated on the running host, not on the preset marker `/opt/xiNAS/.xinas_applied_preset` ([lib/xinas_config.sh](../../lib/xinas_config.sh)). A VM installed with the `default` preset reaches its storage through the `nvme_namespace` VM fallback, so its marker reads `default` while its disks are still virtio; runtime detection covers that host and one installed from `xinnorVM` alike.
+
+**Why these devices are safe to offer.** xiNAS already builds xiRAID arrays over them: both the `xinnorVM` preset and the empty-NVMe fallback hand whole non-OS block devices (`vdb`, `sdb`, …) to `xicli raid create` on a VM. The pickers were the only surface still refusing them, so day-2 management could not touch storage the installer itself had just created — Create Pool reported "no available drives" over disks Physical Drives (§8) listed as `Available` on the same screen refresh. This is an observation of xiNAS's own install path, not a claim about which transports xiRAID Classic supports; the bare-metal rule is unchanged and stays NVMe-only.
+
+**Naming.** `_get_free_nvme_drives()` (§7.2) keeps its name for cross-reference stability even though a VM makes it return non-NVMe rows; the name describes the bare-metal case, the docstring describes both.
+
+---
+
 ## 3. Read paths — Quick Overview / Extended Details
 
 `_show_quick()` and `_show_extended()` are nearly identical: both `GET /api/v1/arrays` (since S8 — see §3.1), adapt the API rows to the legacy renderer dict with `_arrays_from_api()`, and feed that into `_format_raid_overview()` with `extended=False` / `True`.
@@ -375,7 +396,9 @@ only visible symptom.
 
 **Disks and pools are fetched up front**, before the wizard's step list is even built — this is what lets the `group_size`/`spare` `applies=` predicates and the drives step see their data on every entry, including after a Back:
 
-1. `_list_api_disks_with_banner(self.app.control)` (`GET /api/v1/disks`, cross-referenced against the arrays list to exclude already-claimed drives) enumerates NVMe drives **and** returns the envelope's degraded banner. **If zero NVMe drives are available, the wizard aborts immediately with a dialog — before the name prompt is ever shown** — and that dialog **names the cause when there is one**: an empty list with a `DEGRADED_BACKEND_UNAVAILABLE` warning renders "No available NVMe drives found." followed by the banner, because "no drives" and "the Disk collector could not be read" are different facts and only one of them means the operator should go looking for hardware. With no warning present the dialog is unchanged.
+1. `_list_api_disks_with_banner(self.app.control)` (`GET /api/v1/disks`, cross-referenced against the arrays list to exclude already-claimed drives) enumerates NVMe drives **and** returns the envelope's degraded banner. **If zero NVMe drives are available, the wizard aborts immediately with a dialog — before the name prompt is ever shown** — and that dialog **names the cause when there is one**: an empty list with a `DEGRADED_BACKEND_UNAVAILABLE` warning renders "No available NVMe drives found." followed by the banner, because "no drives" and "the Disk collector could not be read" are different facts and only one of them means the operator should go looking for hardware.
+
+   With no warning present, the fetch was trustworthy, and the dialog says which of the two trustworthy answers it is. If every candidate was dropped by the device-name rule alone — non-system, unmounted, unclaimed disks that simply are not NVMe — the dialog names them: "*N* non-NVMe drive(s) (`sdb`, `sdc`) were excluded — this host is not a VM, so the wizard is NVMe-only." Without that line the operator reads "no available drives" while Physical Drives (§8) lists the same disks as `Available` two screens away, which is the exact contradiction that sent one operator hunting for a broken collector. When nothing was excluded by name, the message is unchanged.
 
    The banner comes from the shared extractor [api/degraded.py](../../xinas_menu/api/degraded.py) `degraded_banner(envelope)` — the same one Show Exports (§ [fs-shares-management-spec](fs-shares-management-spec.md)) and the RAID overview use. `_list_api_disks_with_banner` fetches the full envelope via `control.get`; `_list_api_disks` remains as a thin wrapper returning rows only, for Edit Array's two lookups (via `_get_numa_topology` for the CPU-affinity NUMA picker and directly for the spare-pool disk-id lookup), which genuinely render no drive-count empty state of their own. Spare Pools is not in that group: `_get_free_nvme_drives` (§7.2) calls `_list_api_disks_with_banner` directly and threads the banner into both of its empty-state dialogs, Create Pool (§7.3) and Add Drives (§7.1), the same pattern as the wizard above.
 2. `GET /api/v1/pools` (via `self.app.control.result`) lists spare pools. A failure here is swallowed (`pools = {}`) rather than aborting the wizard — it just means the `spare` step's `applies=lambda a: bool(pools)` predicate stays `False` and the step is skipped.
@@ -489,12 +512,12 @@ Drive groups are precomputed from the up-front disk fetch and binned by NUMA nod
 
 **First entry** (no prior `drives` answer in this run): the user picks a **drive group** via a `SelectDialog`:
 
-- `All small NVMe, NUMA 0` (etc.) — opens `DrivePickerScreen` pre-filtered to that group, with `preselected=` set to the whole group so the operator can review/deselect.
-- `Pick individual drives` — opens `DrivePickerScreen` with all unassigned NVMe drives and no preselection.
+- `All small NVMe, NUMA 0` (etc.) — opens `DrivePickerScreen` pre-filtered to that group, with `preselected=` set to the whole group so the operator can review/deselect. The noun in the label follows the group's contents: a group whose members are all NVMe reads `NVMe`, one that also holds `vd*` / `sd*` devices on a VM (§2.6) reads `drives`. On bare metal every group is all-NVMe, so the labels are byte-identical to what they have always been.
+- `Pick individual drives` — opens `DrivePickerScreen` with all unassigned selectable drives (§2.6) and no preselection.
 
 Backing out of either picker (`allow_back=True` is hardcoded on both, since they're a sub-step of `drives`) returns to the group-select `SelectDialog`, not out of the `drives` step itself; a Back from the group-select is what returns `BACK` to the driver. Picking zero drives shows a "No drives selected." dialog and re-prompts the group select.
 
-**Re-entry** (the operator already completed this step once and has now navigated Back into it from a later step, e.g. `strip`): the group-select `SelectDialog` is **skipped entirely** — the wizard jumps straight to `DrivePickerScreen` over all NVMe drives with the prior selection **pre-checked** (`preselected=prior`), so revising a drive pick doesn't force re-choosing a group.
+**Re-entry** (the operator already completed this step once and has now navigated Back into it from a later step, e.g. `strip`): the group-select `SelectDialog` is **skipped entirely** — the wizard jumps straight to `DrivePickerScreen` over all selectable drives (§2.6) with the prior selection **pre-checked** (`preselected=prior`), so revising a drive pick doesn't force re-choosing a group.
 
 `DrivePickerScreen` ([widgets/drive_picker.py](../../xinas_menu/widgets/drive_picker.py)) is the full-screen modal: filter by text/NUMA/size, sort by name/size/model/NUMA, multi-select with Space, `a` to select-all-visible, `d` for the detail dialog, and (when `allow_back` is set) `b` for Back — `Esc` always still cancels the whole wizard, never just this step.
 
@@ -502,7 +525,7 @@ Filters that exclude a drive from the picker:
 
 - `system: True` (any OS-mounted partition on it), taken from the control-path Disk collector's `system_disk` field (`GET /api/v1/disks`). That collector already walks the full mountpoint tree (`collectMountpoints()` in [xiNAS-MCP/src/lib/parse/disk.ts](../../xiNAS-MCP/src/lib/parse/disk.ts)), so a guided-LVM/dm-crypt/MD root that puts `/` on a grandchild is excluded correctly here — see §8 for the sibling detector that was not.
 - already a member of some RAID array, or already assigned to a spare pool
-- `nvme` not in the name (anything that isn't NVMe — the wizard is NVMe-only)
+- a device name this host does not build arrays from: NVMe-only on bare metal, `vd*` / `sd*` also offered on a VM — the one rule, with its rationale, is §2.6
 
 ### Step — strip size
 
@@ -764,9 +787,10 @@ Pool names reach the path via `quote_id()` like every other id (s8-clients-spec 
 
 1. Calls `_list_api_disks_with_banner()` (`GET /api/v1/disks`, shared with the RAID Create wizard) for all block drives, plus the degraded-backend banner.
 2. Calls `GET /api/v1/pools` and builds a set of paths already in any pool.
-3. Filters out: anything missing `nvme` in its name, anything with `system=True`, anything not `safe_for_use`, anything `claimed` (already a member or spare of an observed array), and anything already in `pool_drives` — matched on both the `/dev/` path and the bare name, since pool rows and disk rows spell drives differently.
+3. Filters out: any name this host does not build arrays from (§2.6 — NVMe on bare metal, plus `vd*` / `sd*` on a VM), anything with `system=True`, anything not `safe_for_use`, anything `claimed` (already a member or spare of an observed array), and anything already in `pool_drives` — matched on both the `/dev/` path and the bare name, since pool rows and disk rows spell drives differently.
+4. Returns, alongside the two, the names it dropped **by the device-name rule alone** (`excluded_by_name`) — rows that cleared every other filter. `FreeDrives` is a `NamedTuple`, so the three fields are read by name at both call sites.
 
-The rows are fed into `DrivePickerScreen` so the operator can apply the same NUMA/size/text filters as in the RAID Create wizard. Both callers (Create Pool §7.3, Add Drives) append the banner to their own empty-drives dialog when the filtered result is empty, via the local `_no_free_drives_message()` helper — the same "no drives" vs. "the Disk collector could not be read" distinction as the wizard's `_no_drives_message()` (§4), worded for Spare Pools rather than reused verbatim.
+The rows are fed into `DrivePickerScreen` so the operator can apply the same NUMA/size/text filters as in the RAID Create wizard. Both callers (Create Pool §7.3, Add Drives) append the banner to their own empty-drives dialog when the filtered result is empty, via the local `_no_free_drives_message()` helper — the same "no drives" vs. "the Disk collector could not be read" distinction as the wizard's `_no_drives_message()` (§4), worded for Spare Pools rather than reused verbatim. It carries the same three-way split as the wizard's dialog: the banner when the fetch was degraded; the `excluded_by_name` list when a healthy fetch dropped otherwise-usable disks for being non-NVMe on bare metal; and only then the incumbent "All drives are assigned to RAID arrays or other pools." That claim used to be printed unconditionally, and on a VM it was false in the one case that mattered — the drives were free, they were `vd*`.
 
 ### 7.3 Create Pool
 
