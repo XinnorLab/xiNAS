@@ -306,24 +306,26 @@ def _pools_by_name(data: Any) -> dict[str, dict]:
     return {}
 
 
-def _pool_drive_paths(pool: dict) -> list[str]:
-    """Device paths of a spare pool's drives (API rows carry ``drives``;
-    tolerant of the legacy ``devices`` pair shape)."""
-    raw = pool.get("devices") or pool.get("drives") or []
-    paths: list[str] = []
-    for dev in raw if isinstance(raw, list) else []:
-        path = dev[1] if isinstance(dev, list) and len(dev) > 1 else str(dev)
-        if path:
-            paths.append(str(path))
-    return paths
-
-
 _NONE_POOL = "(none)"
 
 
 def _spare_pool_patch(choice: str) -> dict[str, Any]:
     """Edit Array's pool choice -> the PATCH spec. `(none)` detaches."""
     return {"spare_pool": None if choice == _NONE_POOL else choice}
+
+
+def _spare_prompt(pools: dict[str, dict]) -> str:
+    """Create-wizard spare step prompt; names where pools come from when none do."""
+    if pools:
+        return "Select spare pool (or none):"
+    return (
+        "No spare pools exist.\nCreate one in Storage > Spare Pools, then attach it via Edit Array."
+    )
+
+
+def _spare_spec_fragment(choice: str) -> dict[str, Any]:
+    """Create-wizard pool choice -> the POST spec fragment."""
+    return {} if choice == _NONE_POOL else {"spare_pool": choice}
 
 
 def _level_label(level: Any) -> str:
@@ -733,7 +735,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 SelectDialog(
                     pool_choices,
                     title=f"Create Array — Step {step_no}",
-                    prompt="Select spare pool (or none):",
+                    prompt=_spare_prompt(pools),
                     selected=answers.get("spare", _NONE_POOL),
                     allow_back=allow_back,
                 )
@@ -775,7 +777,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 run=group_size_step,
                 applies=lambda a: a.get("level") in ("50", "60"),
             ),
-            WizardStep(key="spare", run=spare_step, applies=lambda a: bool(pools)),
+            WizardStep(key="spare", run=spare_step),
             WizardStep(key="confirmed", run=confirm_step),
         ]
         answers = await run_wizard(steps)
@@ -792,20 +794,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
         }
         if answers["level"] in ("50", "60"):
             spec["group_size"] = int(answers["group_size"])
-        spare = answers.get("spare", _NONE_POOL)
-        if spare != _NONE_POOL:
-            path_to_id = {d["device_path"]: d["id"] for d in disk_rows}
-            spare_ids = [
-                path_to_id.get(p, p.rsplit("/", 1)[-1])
-                for p in _pool_drive_paths(pools.get(spare, {}))
-            ]
-            if spare_ids:
-                spec["spare_disk_ids"] = spare_ids
-            else:
-                self.app.notify(
-                    f"Pool '{spare}' has no drives — skipping spare assignment.",
-                    severity="warning",
-                )
+        spec.update(_spare_spec_fragment(answers.get("spare", _NONE_POOL)))
 
         dialog = TaskWaitDialog(f"Creating RAID array '{answers['name']}'…", "Create Array")
         self.app.push_screen(dialog)
