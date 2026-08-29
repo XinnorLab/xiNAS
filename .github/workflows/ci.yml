@@ -95,6 +95,32 @@ jobs:
       - run: npm run test:contracts
         working-directory: xiNAS-MCP
 
+  # The e2e suite spawns a real xinas-api + xinas-agent per test file and
+  # talks to them over UNIX sockets, so it is excluded from `npm test`
+  # (vitest.config.ts) and needs its own job. Without one nothing ran it at
+  # all: six fixture failures from two unrelated commits sat green for two
+  # weeks because `npm test` never touched them.
+  #
+  # `npm run build` is explicit rather than left to the suite's own
+  # `existsSync(dist) || execSync('npm run build')` fallback: dist/ is
+  # untracked, so in CI that fallback always fires, and it fires INSIDE a
+  # test's beforeAll where a build failure reads as a test timeout.
+  typescript-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: xiNAS-MCP/package-lock.json
+      - run: npm ci
+        working-directory: xiNAS-MCP
+      - run: npm run build
+        working-directory: xiNAS-MCP
+      - run: npm run test:e2e
+        working-directory: xiNAS-MCP
+
   python-tests:
     runs-on: ubuntu-latest
     steps:
