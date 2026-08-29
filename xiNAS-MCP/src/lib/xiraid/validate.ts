@@ -51,11 +51,19 @@ export interface ResolvedDisk {
   mounted: boolean;
 }
 
+/** One observed pool, as the array validators need it. */
+export interface PoolFacts {
+  drives: string[];
+  active: boolean;
+}
+
 export interface CreateFacts {
   disks: ResolvedDisk[];
   existingArrayNames: string[];
   /** Disk ids already a member or spare of any existing array. */
   existingMemberDiskIds: Set<string>;
+  /** Observed pools by name — an array may only reference one that exists. */
+  poolsByName: Map<string, PoolFacts>;
 }
 
 /**
@@ -76,11 +84,13 @@ export function parseCreateSpec(input: unknown): XiraidArraySpec {
   if (!Array.isArray(o.member_disk_ids) || o.member_disk_ids.some((m) => typeof m !== 'string')) {
     throw new TypeError('spec.member_disk_ids must be an array of strings');
   }
-  if (
-    o.spare_disk_ids !== undefined &&
-    (!Array.isArray(o.spare_disk_ids) || o.spare_disk_ids.some((m) => typeof m !== 'string'))
-  ) {
-    throw new TypeError('spec.spare_disk_ids must be an array of strings');
+  if (o.spare_disk_ids !== undefined) {
+    throw new TypeError(
+      'spec.spare_disk_ids is observed-only; create the pool via POST /api/v1/pools and send spec.spare_pool with its name',
+    );
+  }
+  if (o.spare_pool !== undefined && o.spare_pool !== null && typeof o.spare_pool !== 'string') {
+    throw new TypeError('spec.spare_pool must be a pool name string or null');
   }
   if (o.tuning !== undefined && (typeof o.tuning !== 'object' || o.tuning === null)) {
     throw new TypeError('spec.tuning must be an object');
@@ -172,33 +182,21 @@ export function validateCreateSpec(spec: XiraidArraySpec, facts: CreateFacts): B
   // --- member disks (one blocker per offending disk) ---
   checkDisks(spec.member_disk_ids, facts.disks, facts.existingMemberDiskIds, push);
 
-  // --- spares (S4: validated like members — ADR-0006 §Spare pools) ---
-  const spares = spec.spare_disk_ids ?? [];
-  if (spares.length > 0) {
-    // a spare that is also a member of this very spec is double-booked
-    const memberSet = new Set(spec.member_disk_ids);
-    const claimed = new Set([...facts.existingMemberDiskIds, ...memberSet]);
-    checkDisks(spares, facts.disks, claimed, push);
-    checkDerivedPoolName(spec.name, push);
-  }
+  // --- spares (S8: reference an existing pool by name, not a derived one) ---
+  checkSparePool(spec.spare_pool, facts.poolsByName, push);
 
   return blockers;
 }
 
 /** Live-modify writable subset (ADR-0006 matrix: spares + tuning). */
 export interface XiraidArrayModifySpec {
-  spare_disk_ids?: string[];
+  spare_pool?: string | null;
   tuning?: Tuning;
 }
 
 export interface ModifyFacts {
-  /** The target array's name (derives the xnsp_ pool name). */
-  arrayName: string;
-  disks: ResolvedDisk[];
-  /** Disk ids claimed as member/spare by ANY array (incl. this one). */
-  existingMemberDiskIds: Set<string>;
-  /** This array's OWN current spares — exempt from disk_in_use. */
-  ownSpareDiskIds: Set<string>;
+  /** Observed pools by name — an array may only reference one that exists. */
+  poolsByName: Map<string, PoolFacts>;
 }
 
 /**
@@ -213,17 +211,15 @@ export function parseModifySpec(input: unknown): XiraidArrayModifySpec {
     throw new TypeError('modify spec must be an object');
   }
   const o = input as Record<string, unknown>;
-  if (
-    o.spare_disk_ids !== undefined &&
-    (!Array.isArray(o.spare_disk_ids) || o.spare_disk_ids.some((m) => typeof m !== 'string'))
-  ) {
-    throw new TypeError('spec.spare_disk_ids must be an array of strings');
+  const hasSparePool = 'spare_pool' in o && o.spare_pool !== undefined;
+  if (hasSparePool && o.spare_pool !== null && typeof o.spare_pool !== 'string') {
+    throw new TypeError('spec.spare_pool must be a pool name string or null');
   }
   if (o.tuning !== undefined && (typeof o.tuning !== 'object' || o.tuning === null)) {
     throw new TypeError('spec.tuning must be an object');
   }
   return {
-    ...(o.spare_disk_ids !== undefined ? { spare_disk_ids: o.spare_disk_ids as string[] } : {}),
+    ...(hasSparePool ? { spare_pool: o.spare_pool as string | null } : {}),
     ...(o.tuning !== undefined ? { tuning: o.tuning as Tuning } : {}),
   };
 }
@@ -237,14 +233,7 @@ export function validateModifySpec(spec: XiraidArrayModifySpec, facts: ModifyFac
 
   checkTuning(spec.tuning ?? {}, push, 'modify');
 
-  if (spec.spare_disk_ids !== undefined && spec.spare_disk_ids.length > 0) {
-    // this array's own current spares are not "in use" — re-listing keeps them
-    const claimedByOthers = new Set(
-      [...facts.existingMemberDiskIds].filter((id) => !facts.ownSpareDiskIds.has(id)),
-    );
-    checkDisks(spec.spare_disk_ids, facts.disks, claimedByOthers, push);
-    checkDerivedPoolName(facts.arrayName, push);
-  }
+  checkSparePool(spec.spare_pool, facts.poolsByName, push);
 
   return blockers;
 }
@@ -337,24 +326,39 @@ function checkDisks(
 }
 
 /**
- * The executor-owned pool is named xnsp_<array>; it must fit the namespace.
- *
- * Note: with NAME_RE capped at xiRAID's documented 28 chars, 'xnsp_' + name is
- * at most 33, so this check can no longer fire. It is kept as a guard in case
- * the array-name cap is ever raised, and because the 63-char pool-name limit
- * is our own assumption — the xiRAID command reference states no naming
- * constraints at all for `xicli pool -n`, so there is nothing to verify it
- * against.
+ * An array's spare pool is now a REFERENCE, not something the plan builds
+ * (S8 / ADR-0006 §Spare pools). Two failure modes matter here, distinctly:
+ * a name that resolves to nothing (typo, or the pool was never created —
+ * the daemon has no "create if missing" behavior for pools), and a name
+ * that resolves to a pool with zero drives, which xiRAID's daemon accepts
+ * as a `sparepool` argument but that can never actually serve a spare —
+ * `spare_disk_ids` on the resulting array reads back empty either way, so
+ * this catches it before the operator is left wondering why.
+ */
+function checkSparePool(
+  name: string | null | undefined,
+  poolsByName: Map<string, PoolFacts>,
+  push: Push,
+): void {
+  if (name === undefined || name === null || name === '') return;
+  const pool = poolsByName.get(name);
+  if (pool === undefined) {
+    push(
+      'spare_pool_not_found',
+      `spare pool '${name}' does not exist — create it via POST /api/v1/pools (TUI: Storage > Spare Pools) first`,
+    );
+  } else if (pool.drives.length === 0) {
+    push('spare_pool_empty', `spare pool '${name}' has no drives`);
+  }
+}
+
+/**
+ * The retired executor-owned pool was named xnsp_<array>. Arrays now
+ * reference an operator-created pool by name (spec.spare_pool) instead, so
+ * this no longer has a caller in this file — it is kept only until the
+ * xiraid-array executor's last use of it is removed (Task 4), which deletes
+ * it for good.
  */
 export function derivedPoolName(arrayName: string): string {
   return `xnsp_${arrayName}`;
-}
-
-function checkDerivedPoolName(arrayName: string, push: Push): void {
-  if (derivedPoolName(arrayName).length > 63) {
-    push(
-      'name_invalid',
-      `array name '${arrayName}' is too long for a spare pool: 'xnsp_' + name must fit 63 chars`,
-    );
-  }
 }

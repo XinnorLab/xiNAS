@@ -29,16 +29,14 @@ function facts(over: Partial<CreateFacts> = {}): CreateFacts {
     disks: [...POOL.map((id) => disk(id)), disk('claimed')],
     existingArrayNames: ['taken'],
     existingMemberDiskIds: new Set(['claimed']),
+    poolsByName: new Map(),
     ...over,
   };
 }
 
 function modifyFacts(over: Partial<ModifyFacts> = {}): ModifyFacts {
   return {
-    arrayName: 'data',
-    disks: [disk('d5'), disk('own-spare'), disk('claimed')],
-    existingMemberDiskIds: new Set(['claimed']),
-    ownSpareDiskIds: new Set(),
+    poolsByName: new Map(),
     ...over,
   };
 }
@@ -228,32 +226,6 @@ describe('validateCreateSpec', () => {
     expect(blockers.filter((b) => b.code.startsWith('disk_')).length).toBe(4);
   });
 
-  // ---- S4 T3: spares un-deferred — validated like members ----
-
-  it('create-with-spares: safe spare disks → no blockers (spare_pool_deferred is gone)', () => {
-    const blockers = validateCreateSpec(spec({ spare_disk_ids: ['d5'] }), facts());
-    expect(blockers).toEqual([]);
-  });
-
-  it('spare disks get the member disk checks', () => {
-    const f = facts({
-      disks: [
-        disk('d1'),
-        disk('d2'),
-        disk('d3'),
-        disk('d4'),
-        disk('bad', { safe_for_use: false, mounted: true }),
-      ],
-    });
-    expect(validateCreateSpec(spec({ spare_disk_ids: ['bad'] }), f).map((b) => b.code)).toContain(
-      'disk_not_safe',
-    );
-    expect(codes(spec({ spare_disk_ids: ['ghost'] }))).toContain('disk_not_found');
-    expect(codes(spec({ spare_disk_ids: ['claimed'] }))).toContain('disk_in_use');
-    // a spare that is ALSO a member of this very spec is double-booked
-    expect(codes(spec({ spare_disk_ids: ['d1'] }))).toContain('disk_in_use');
-  });
-
   // xiRAID array naming rules, per the 4.4.0 command reference: max 28 chars,
   // Latin letters / numbers / underscores, and "power"/"uevent" prohibited.
   it('array names follow xiRAID rules', () => {
@@ -273,16 +245,6 @@ describe('validateCreateSpec', () => {
     for (const notReserved of ['POWER', 'Uevent']) {
       expect(codes(spec({ name: notReserved }))).toEqual([]);
     }
-  });
-
-  it('derived pool name xnsp_<name> cannot overflow once names are capped at 28', () => {
-    // The longest legal array name is 28 chars, so xnsp_ + name is at most 33 —
-    // comfortably inside the 63-char assumption. The guard in validate.ts is
-    // therefore unreachable by construction; this test pins that invariant so a
-    // future relaxation of NAME_RE has to revisit it.
-    const longest = 'a'.repeat(28);
-    expect(`xnsp_${longest}`.length).toBeLessThanOrEqual(63);
-    expect(codes(spec({ name: longest, spare_disk_ids: ['d5'] }))).toEqual([]);
   });
 });
 
@@ -315,48 +277,34 @@ describe('validateModifySpec', () => {
       validateModifySpec({ tuning: { init_prio: 101 } }, modifyFacts()).map((b) => b.code),
     ).toEqual(['param_out_of_range']);
   });
-
-  it('spare disks checked like members; own current spares exempt from disk_in_use', () => {
-    const f = modifyFacts({
-      existingMemberDiskIds: new Set(['claimed', 'own-spare']),
-      ownSpareDiskIds: new Set(['own-spare']),
-    });
-    expect(validateModifySpec({ spare_disk_ids: ['claimed'] }, f).map((b) => b.code)).toContain(
-      'disk_in_use',
-    );
-    // keeping (or re-listing) this array's own spare is NOT "in use"
-    expect(validateModifySpec({ spare_disk_ids: ['own-spare'] }, f)).toEqual([]);
-    expect(validateModifySpec({ spare_disk_ids: ['ghost'] }, f).map((b) => b.code)).toContain(
-      'disk_not_found',
-    );
-  });
-
-  it('pool-name length guard applies via the target array name', () => {
-    const out = validateModifySpec(
-      { spare_disk_ids: ['d5'] },
-      modifyFacts({ arrayName: 'a'.repeat(60) }),
-    );
-    expect(out.map((b) => b.code)).toContain('name_invalid');
-  });
 });
 
 describe('parseModifySpec', () => {
-  it('narrows spare_disk_ids/tuning and tolerates enrichment keys', () => {
+  it('narrows spare_pool/tuning and tolerates enrichment keys', () => {
     const parsed = parseModifySpec({
-      spare_disk_ids: ['d5'],
+      spare_pool: 'sp01',
       tuning: { init_prio: 10 },
       id: 'data',
       device_by_id: { d5: '/dev/nvme5n1' },
       current_sparepool: '',
       current_spare_disk_ids: [],
     });
-    expect(parsed.spare_disk_ids).toEqual(['d5']);
+    expect(parsed.spare_pool).toBe('sp01');
     expect(parsed.tuning?.init_prio).toBe(10);
+  });
+
+  // The api's own persisted enriched spec still carries this observed-only
+  // key at apply time (it is re-parsed, not re-validated). Rejecting it
+  // against the raw PATCH body is the ROUTE's job (Task 5); this parser must
+  // stay tolerant so a re-parse of its own output never throws.
+  it('ignores a stray spare_disk_ids key regardless of its shape', () => {
+    expect(parseModifySpec({ spare_disk_ids: ['d5'] })).not.toHaveProperty('spare_disk_ids');
+    expect(() => parseModifySpec({ spare_disk_ids: 'nope' })).not.toThrow();
   });
 
   it('throws on structural junk', () => {
     expect(() => parseModifySpec(null)).toThrow(/spec/);
-    expect(() => parseModifySpec({ spare_disk_ids: 'nope' })).toThrow(/spare_disk_ids/);
+    expect(() => parseModifySpec({ spare_pool: 7 })).toThrow(/spare_pool/);
     expect(() => parseModifySpec({ tuning: 7 })).toThrow(/tuning/);
   });
 });
@@ -381,5 +329,70 @@ describe('parseCreateSpec', () => {
     expect(() => parseCreateSpec({ name: 'x', level: 'raid6', member_disk_ids: 'nope' })).toThrow(
       /member_disk_ids/,
     );
+  });
+});
+
+describe('spare pool references', () => {
+  const facts = (pools: Record<string, { drives: string[]; active: boolean }>) => ({
+    poolsByName: new Map(Object.entries(pools)),
+  });
+
+  it('rejects spare_disk_ids on create as observed-only', () => {
+    expect(() =>
+      parseCreateSpec({
+        name: 'data',
+        level: 'raid5',
+        member_disk_ids: ['d1'],
+        spare_disk_ids: ['d5'],
+      }),
+    ).toThrow(/observed-only/);
+  });
+
+  it('blocks a create naming a pool that does not exist', () => {
+    const blockers = validateCreateSpec(
+      {
+        name: 'data',
+        level: 'raid5',
+        member_disk_ids: ['d1', 'd2', 'd3', 'd4'],
+        spare_pool: 'sp01',
+      },
+      { disks: [], existingArrayNames: [], existingMemberDiskIds: new Set(), ...facts({}) },
+    );
+    expect(blockers.map((b) => b.code)).toContain('spare_pool_not_found');
+  });
+
+  it('blocks a create naming an empty pool', () => {
+    const blockers = validateCreateSpec(
+      {
+        name: 'data',
+        level: 'raid5',
+        member_disk_ids: ['d1', 'd2', 'd3', 'd4'],
+        spare_pool: 'sp01',
+      },
+      {
+        disks: [],
+        existingArrayNames: [],
+        existingMemberDiskIds: new Set(),
+        ...facts({ sp01: { drives: [], active: true } }),
+      },
+    );
+    expect(blockers.map((b) => b.code)).toContain('spare_pool_empty');
+  });
+
+  it('accepts a modify naming a populated pool', () => {
+    const blockers = validateModifySpec(
+      { spare_pool: 'sp01' },
+      facts({ sp01: { drives: ['/dev/nvme5n2'], active: false } }),
+    );
+    expect(blockers).toEqual([]);
+  });
+
+  it('accepts a detach with no pool blockers', () => {
+    expect(validateModifySpec({ spare_pool: null }, facts({}))).toEqual([]);
+  });
+
+  it('distinguishes an absent spare_pool from an explicit null', () => {
+    expect(parseModifySpec({ tuning: {} }).spare_pool).toBeUndefined();
+    expect(parseModifySpec({ spare_pool: null }).spare_pool).toBeNull();
   });
 });
