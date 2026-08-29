@@ -277,7 +277,7 @@ describe('POST /api/v1/arrays', () => {
   // ---- S4 T5: PATCH /arrays/:id (xiraid.array.modify) ----
 
   describe('PATCH /arrays/:id', () => {
-    function seedObservedArray(spares: string[] = []): void {
+    function seedObservedArray(sparePool = ''): void {
       setup.state.kv.put('/xinas/v1/observed/XiraidArray/data', {
         kind: 'XiraidArray',
         id: 'data',
@@ -285,13 +285,24 @@ describe('POST /api/v1/arrays', () => {
           name: 'data',
           level: 'raid6',
           member_disk_ids: ['nvme1n1', 'nvme2n1', 'nvme3n1', 'nvme4n1'],
-          spare_disk_ids: spares,
+          // Observed-only join; a writer sending it is rejected (422).
+          spare_disk_ids: [],
+          ...(sparePool !== '' ? { spare_pool: sparePool } : {}),
         },
         status: {
           state: 'optimal',
           volume_path: '/dev/xi_data',
+          ...(sparePool !== '' ? { spare_pool: sparePool } : {}),
           observed_at: '2026-06-10T12:00:00Z',
         },
+      });
+    }
+
+    function seedObservedPool(name: string, drives: string[]): void {
+      setup.state.kv.put(`/xinas/v1/observed/Pool/${name}`, {
+        kind: 'Pool',
+        id: name,
+        status: { name, drives, active: true, observed_at: '2026-06-10T12:00:00Z' },
       });
     }
 
@@ -330,27 +341,30 @@ describe('POST /api/v1/arrays', () => {
       },
     );
 
-    it('plan + apply happy path: 202 running, array + spare leased', async () => {
+    it('rejects spec.spare_disk_ids on PATCH as observed-only', async () => {
+      // A stale client resolving a pool down to its drives (the 2026-08-29
+      // field failure) must be told, not silently no-op'd: parseModifySpec
+      // is tolerant of unknown keys, so without this the plan would have
+      // succeeded and the apply reported `skipped`.
       seedObservedArray();
-      setup.state.kv.put('/xinas/v1/observed/Disk/nvme5n1', {
-        kind: 'Disk',
-        id: 'nvme5n1',
-        status: {
-          name: 'nvme5n1',
-          device_path: '/dev/nvme5n1',
-          safe_for_use: true,
-          system_disk: false,
-          mounted: false,
-          observed_at: '2026-06-10T12:00:00Z',
-        },
+      const res = await patchPlan({ spare_disk_ids: ['nvme5n1'] });
+      expect(res.status).toBe(422);
+      expect(res.body.errors[0].details).toMatchObject({
+        field: 'spec.spare_disk_ids',
+        reason: 'observed_only',
       });
+      expect(count('SELECT COUNT(*) AS n FROM tasks')).toBe(0);
+    });
+
+    it('plan + apply happy path: 202 running, array + pool leased', async () => {
+      seedObservedArray();
+      seedObservedPool('sp01', ['/dev/nvme5n1']);
       setup.mockAgent.respondToTaskBegin({ kind: 'accept', agent_acceptance_id: 'acc-mod' });
 
-      const planned = await patchPlan({ spare_disk_ids: ['nvme5n1'], tuning: { init_prio: 20 } });
+      const planned = await patchPlan({ spare_pool: 'sp01', tuning: { init_prio: 20 } });
       expect(planned.status).toBe(200);
       expect(planned.body.result.blockers).toEqual([]);
 
-      // seed the spare disk the plan referenced
       const res = await request(setup.app)
         .patch('/api/v1/arrays/data')
         .set('Authorization', ADMIN_TOKEN)
@@ -363,13 +377,23 @@ describe('POST /api/v1/arrays', () => {
       expect(res.status).toBe(202);
       expect(res.body.result.state).toBe('running');
       expect(res.body.result.kind).toBe('xiraid.array.modify');
-      // leases: the array + the touched spare disk
+      // leases: the array + the referenced POOL (never the pool's drives —
+      // this is what serializes an attach against a Spare Pools mutation).
       expect(
         count('SELECT COUNT(*) AS n FROM leases WHERE task_id = ?', res.body.result.task_id),
       ).toBe(2);
-      // the forwarded spec carries id + device_by_id
+      expect(
+        count(
+          'SELECT COUNT(*) AS n FROM leases WHERE task_id = ? AND resource_kind = ? AND resource_id = ?',
+          res.body.result.task_id,
+          'Pool',
+          'sp01',
+        ),
+      ).toBe(1);
+      // the forwarded spec carries id + the pool name
       const begin = setup.mockAgent.lastTaskBeginParams();
       expect((begin?.spec as Record<string, unknown>)?.id).toBe('data');
+      expect((begin?.spec as Record<string, unknown>)?.spare_pool).toBe('sp01');
     });
 
     it('stale expected_revision → 412 observed_revision_stale', async () => {

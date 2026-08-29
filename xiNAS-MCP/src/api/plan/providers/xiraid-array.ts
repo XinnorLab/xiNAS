@@ -9,8 +9,14 @@
  *  3. Run the shared lib/xiraid validation → blockers (the SAME rules the
  *     agent executor re-checks at apply).
  *  4. Return affected_resources = [ array (primary, FIRST), …member
- *     Disks ] so the apply txn leases the array name and serializes
- *     concurrent creates competing for the same disks.
+ *     Disks, the referenced spare Pool ] so the apply txn leases the array
+ *     name and serializes concurrent creates competing for the same disks.
+ *
+ * The array providers have no separate `lease_resources`:
+ * `affected_resources` doubles as the lease set. Leasing the spare pool
+ * BY NAME (rather than its drives, as the retired executor-owned model
+ * did) is what makes an array attach serialize against a concurrent
+ * Spare Pools mutation on the same pool.
  *
  * Freshness: the array does not exist yet, so state_revision_expected is
  * omitted (nothing to be stale against); disk TOCTOU is covered by the
@@ -26,7 +32,7 @@ import { NAME_RE } from '../../../lib/xiraid/schema.js';
 import { toRaidCreateRequest, toRaidModifyRequest } from '../../../lib/xiraid/translate.js';
 import {
   type CreateFacts,
-  type ModifyFacts,
+  type PoolFacts,
   type ResolvedDisk,
   parseCreateSpec,
   parseModifySpec,
@@ -47,17 +53,19 @@ interface ObservedDiskRow {
   };
 }
 
+const OBSERVED_POOL_PREFIX = '/xinas/v1/observed/Pool/';
+
 interface ObservedArrayRow {
-  spec?: { name?: string; member_disk_ids?: string[]; spare_disk_ids?: string[] };
+  spec?: { name?: string; member_disk_ids?: string[]; spare_pool?: string | null };
 }
 
-/** Observed Disk + XiraidArray facts every array provider needs. */
+/** Observed Disk + XiraidArray + Pool facts every array provider needs. */
 interface GatheredFacts {
   disks: ResolvedDisk[];
   existingArrayNames: string[];
   existingMemberDiskIds: Set<string>;
-  /** name → that array's observed spare disk ids. */
-  sparesByArray: Map<string, string[]>;
+  /** Observed pools by name — an array may only reference one that exists. */
+  poolsByName: Map<string, PoolFacts>;
   deviceByDiskId: Map<string, string>;
 }
 
@@ -81,24 +89,44 @@ function gatherFacts(ctx: PlanContext): GatheredFacts {
   const arrayRows = ctx.kv.list<ObservedArrayRow>({ prefix: '/xinas/v1/observed/XiraidArray/' });
   const existingArrayNames: string[] = [];
   const existingMemberDiskIds = new Set<string>();
-  const sparesByArray = new Map<string, string[]>();
   for (const row of arrayRows) {
     const s = row.value.spec;
-    if (typeof s?.name === 'string') {
-      existingArrayNames.push(s.name);
-      sparesByArray.set(s.name, [...(s.spare_disk_ids ?? [])]);
-    }
+    if (typeof s?.name === 'string') existingArrayNames.push(s.name);
+    // MEMBERS only. An array's spares are the referenced pool's drives,
+    // and the pool surface already keeps pool members out of free-drive
+    // pickers (`_get_free_nvme_drives`, raid-management-spec §7.2) — adding
+    // them here would double-count a disk this array does not own.
     for (const id of s?.member_disk_ids ?? []) existingMemberDiskIds.add(id);
-    for (const id of s?.spare_disk_ids ?? []) existingMemberDiskIds.add(id);
+  }
+
+  const poolsByName = new Map<string, PoolFacts>();
+  for (const row of ctx.kv.list<{
+    id?: string;
+    status?: { drives?: string[]; active?: boolean };
+  }>({ prefix: OBSERVED_POOL_PREFIX })) {
+    const name = row.value.id;
+    if (typeof name !== 'string') continue;
+    poolsByName.set(name, {
+      drives: row.value.status?.drives ?? [],
+      active: row.value.status?.active === true,
+    });
   }
 
   return {
     disks,
     existingArrayNames,
     existingMemberDiskIds,
-    sparesByArray,
+    poolsByName,
     deviceByDiskId: new Map(disks.map((d) => [d.id, d.device_path])),
   };
+}
+
+/** The array's currently referenced pool name, '' when it has none. */
+function observedSparePool(ctx: PlanContext, id: string): string {
+  const row = ctx.kv.get<{ status?: { spare_pool?: string } }>(
+    `/xinas/v1/observed/XiraidArray/${id}`,
+  );
+  return row?.value.status?.spare_pool ?? '';
 }
 
 export const xiraidArrayCreateProvider: PlanProvider = {
@@ -117,26 +145,32 @@ export const xiraidArrayCreateProvider: PlanProvider = {
       );
     }
 
-    const { disks, existingArrayNames, existingMemberDiskIds } = gatherFacts(ctx);
-    const facts: CreateFacts = { disks, existingArrayNames, existingMemberDiskIds };
+    const { disks, existingArrayNames, existingMemberDiskIds, poolsByName, deviceByDiskId } =
+      gatherFacts(ctx);
+    const facts: CreateFacts = {
+      disks,
+      existingArrayNames,
+      existingMemberDiskIds,
+      poolsByName,
+    };
     const blockers = validateCreateSpec(spec, facts);
 
-    // --- device resolution (members + spares, S4 T4) ---
-    const byId = new Map(disks.map((d) => [d.id, d.device_path]));
-    const spares = spec.spare_disk_ids ?? [];
-    const allDiskIds = [...spec.member_disk_ids, ...spares];
+    // --- device resolution: MEMBERS only. Spares live in the pool, which
+    // the array references by name; nothing here resolves its drives.
     const deviceById: Record<string, string> = {};
-    for (const id of allDiskIds) {
-      const path = byId.get(id);
+    for (const id of spec.member_disk_ids) {
+      const path = deviceByDiskId.get(id);
       if (path !== undefined) deviceById[id] = path;
     }
-    const fullyResolved = allDiskIds.every((id) => deviceById[id] !== undefined);
+    const fullyResolved = spec.member_disk_ids.every((id) => deviceById[id] !== undefined);
 
-    // Spares are leased like members: a concurrent create/modify competing
-    // for the same spare disk serializes on the Disk lease.
+    // The referenced pool is leased by NAME: a concurrent Spare Pools
+    // mutation on it serializes behind this create (the retired
+    // executor-owned model leased the pool's drives, which did not).
     const affected: ResourceRef[] = [
       { kind: 'XiraidArray', id: spec.name },
-      ...allDiskIds.map((id): ResourceRef => ({ kind: 'Disk', id })),
+      ...spec.member_disk_ids.map((id): ResourceRef => ({ kind: 'Disk', id })),
+      ...(spec.spare_pool ? [{ kind: 'Pool', id: spec.spare_pool } as ResourceRef] : []),
     ];
 
     return {
@@ -159,10 +193,11 @@ export const xiraidArrayCreateProvider: PlanProvider = {
 /**
  * xiraid.array.modify plan provider (S4 T5, ADR-0006 §Modify).
  *
- * The route injects the path id into the spec ({ id, spare_disk_ids?,
- * tuning? }). Topology rejection (per-field UNSUPPORTED) is the ROUTE's
- * job against the raw PATCH body — parseModifySpec here is tolerant so
- * the apply-time re-check accepts the persisted enriched spec.
+ * The route injects the path id into the spec ({ id, spare_pool?,
+ * tuning? }). Rejection of non-writable keys (per-field UNSUPPORTED —
+ * topology, create-only tuning, the observed-only `spare_disk_ids`) is the
+ * ROUTE's job against the raw PATCH body; parseModifySpec here stays
+ * tolerant so the apply-time re-check accepts the persisted enriched spec.
  *
  * The executor captures pool pre-state LIVE at its preflight (raid_show +
  * pool_show under the held leases) — more accurate than plan-time observed
@@ -181,7 +216,7 @@ export const xiraidArrayModifyProvider: PlanProvider = {
         'INVALID_ARGUMENT',
         'modify spec must carry the target array id',
         undefined,
-        'PATCH /arrays/{id} injects the id; send { spec: { spare_disk_ids?, tuning? } }.',
+        'PATCH /arrays/{id} injects the id; send { spec: { spare_pool?, tuning? } }.',
       );
     }
     const id = (rawSpec as { id: string }).id;
@@ -194,7 +229,7 @@ export const xiraidArrayModifyProvider: PlanProvider = {
         'INVALID_ARGUMENT',
         err instanceof Error ? err.message : String(err),
         undefined,
-        'Send a modify-shaped spec: { spare_disk_ids?, tuning? } per ADR-0006.',
+        'Send a modify-shaped spec: { spare_pool?, tuning? } per ADR-0006.',
       );
     }
 
@@ -208,30 +243,20 @@ export const xiraidArrayModifyProvider: PlanProvider = {
         'List arrays via GET /api/v1/arrays; modify targets an existing array.',
       );
     }
-    const currentSpares = facts.sparesByArray.get(id) ?? [];
+    const blockers = validateModifySpec(change, { poolsByName: facts.poolsByName });
 
-    const modifyFacts: ModifyFacts = {
-      arrayName: id,
-      disks: facts.disks,
-      existingMemberDiskIds: facts.existingMemberDiskIds,
-      ownSpareDiskIds: new Set(currentSpares),
-    };
-    const blockers = validateModifySpec(change, modifyFacts);
-
-    // Disks touched by pool ops: the target set ∪ the current set (adds,
-    // removes, and keeps all ride the lease).
-    const targetSpares = change.spare_disk_ids;
-    const touchedSpares =
-      targetSpares !== undefined ? [...new Set([...targetSpares, ...currentSpares])] : [];
-    const deviceById: Record<string, string> = {};
-    for (const diskId of touchedSpares) {
-      const path = facts.deviceByDiskId.get(diskId);
-      if (path !== undefined) deviceById[diskId] = path;
-    }
-
+    // Lease BOTH pools: the one being attached AND the one being left
+    // behind. Without the second, a detach (or a re-point) would race a
+    // concurrent Spare Pools mutation on the pool it is releasing.
+    const currentPool = observedSparePool(ctx, id);
     const affected: ResourceRef[] = [
       { kind: 'XiraidArray', id },
-      ...touchedSpares.map((d): ResourceRef => ({ kind: 'Disk', id: d })),
+      ...(typeof change.spare_pool === 'string' && change.spare_pool !== ''
+        ? [{ kind: 'Pool', id: change.spare_pool } as ResourceRef]
+        : []),
+      ...(currentPool !== '' && currentPool !== change.spare_pool
+        ? [{ kind: 'Pool', id: currentPool } as ResourceRef]
+        : []),
     ];
 
     return {
@@ -239,9 +264,12 @@ export const xiraidArrayModifyProvider: PlanProvider = {
       blockers,
       warnings: [],
       diff: {
-        before: { spare_disk_ids: currentSpares, tuning: null /* not observed */ },
+        before: {
+          spare_pool: currentPool === '' ? null : currentPool,
+          tuning: null /* not observed */,
+        },
         after: {
-          ...(targetSpares !== undefined ? { spare_disk_ids: targetSpares } : {}),
+          ...(change.spare_pool !== undefined ? { spare_pool: change.spare_pool } : {}),
           ...(change.tuning !== undefined ? { tuning: change.tuning } : {}),
         },
         raid_modify_request: toRaidModifyRequest(id, {
@@ -250,7 +278,9 @@ export const xiraidArrayModifyProvider: PlanProvider = {
       },
       risk_level: 'non_disruptive',
       rollback_model: 'non_disruptive',
-      enriched_spec: { id, ...change, device_by_id: deviceById },
+      // device_by_id stays for shape parity with create; a modify resolves
+      // no disks at all now that spares are a pool reference.
+      enriched_spec: { id, ...change, device_by_id: {} },
     };
   },
 };

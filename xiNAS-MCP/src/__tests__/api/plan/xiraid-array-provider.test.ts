@@ -33,7 +33,7 @@ function makeHarness() {
 function seedArray(
   kv: SqliteKvStore,
   name: string,
-  over: { member_disk_ids?: string[]; spare_disk_ids?: string[] } = {},
+  over: { member_disk_ids?: string[]; spare_pool?: string } = {},
 ): void {
   kv.put(`/xinas/v1/observed/XiraidArray/${name}`, {
     kind: 'XiraidArray',
@@ -42,11 +42,33 @@ function seedArray(
       name,
       level: 'raid6',
       member_disk_ids: over.member_disk_ids ?? ['nvme1n1', 'nvme2n1', 'nvme3n1', 'nvme4n1'],
-      spare_disk_ids: over.spare_disk_ids ?? [],
+      // Observed-only join (the pool's drives resolved to Disk ids); the
+      // collector emits it, no writer may send it.
+      spare_disk_ids: [],
+      ...(over.spare_pool !== undefined ? { spare_pool: over.spare_pool } : {}),
     },
     status: {
       state: 'optimal',
       volume_path: `/dev/xi_${name}`,
+      ...(over.spare_pool !== undefined ? { spare_pool: over.spare_pool } : {}),
+      observed_at: '2026-06-10T12:00:00Z',
+    },
+  });
+}
+
+/** An observed spare pool, as the Pool collector writes it (id = name). */
+function seedPool(
+  kv: SqliteKvStore,
+  name: string,
+  over: { drives?: string[]; active?: boolean } = {},
+): void {
+  kv.put(`/xinas/v1/observed/Pool/${name}`, {
+    kind: 'Pool',
+    id: name,
+    status: {
+      name,
+      drives: over.drives ?? ['/dev/nvme5n1'],
+      active: over.active ?? true,
       observed_at: '2026-06-10T12:00:00Z',
     },
   });
@@ -125,7 +147,7 @@ describe('xiraidArrayCreateProvider', () => {
     });
   });
 
-  it('blockers: name taken / system disk / unknown disk / claimed disk / double-booked spare', async () => {
+  it('blockers: name taken / system disk / unknown disk / claimed disk', async () => {
     h.kv.put('/xinas/v1/observed/XiraidArray/taken', {
       kind: 'XiraidArray',
       id: 'taken',
@@ -148,9 +170,6 @@ describe('xiraidArrayCreateProvider', () => {
         { ...GOOD_SPEC, member_disk_ids: ['nvme4n1', 'nvme1n1', 'nvme2n1', 'nvme3n1'] },
         'disk_in_use',
       ],
-      // S4: spare_pool_deferred is gone — a spare double-booked with a
-      // member of this very spec reads as disk_in_use instead.
-      [{ ...GOOD_SPEC, spare_disk_ids: ['nvme1n1'] }, 'disk_in_use'],
     ];
     for (const [spec, code] of cases) {
       const { planResult } = await h.engine.plan(planArgs(spec));
@@ -161,26 +180,47 @@ describe('xiraidArrayCreateProvider', () => {
     }
   });
 
-  it('create-with-spares: spares leased + resolved into device_by_id (S4 T4)', async () => {
+  it('create-with-pool: the POOL is leased, its drives are not, and none reach device_by_id', async () => {
     seedDisk(h.kv, 'nvme5n1');
+    seedPool(h.kv, 'sp01', { drives: ['/dev/nvme5n1'] });
     const { task, planResult } = await h.engine.plan(
-      planArgs({ ...GOOD_SPEC, spare_disk_ids: ['nvme5n1'] }),
+      planArgs({ ...GOOD_SPEC, spare_pool: 'sp01' }),
     );
     expect(planResult.blockers).toEqual([]);
-    expect(task.affected_resources).toContainEqual({ kind: 'Disk', id: 'nvme5n1' });
+    expect(task.affected_resources).toContainEqual({ kind: 'Pool', id: 'sp01' });
+    expect(task.affected_resources).not.toContainEqual({ kind: 'Disk', id: 'nvme5n1' });
+
+    // device_by_id carries MEMBERS only — the pool's drives belong to the
+    // pool surface, and the executor never resolves them.
     const persisted = h.store.get(task.task_id)?.spec as Record<string, unknown>;
-    expect((persisted.device_by_id as Record<string, string>).nvme5n1).toBe('/dev/nvme5n1');
+    expect(Object.keys(persisted.device_by_id as Record<string, string>)).toEqual(
+      GOOD_SPEC.member_disk_ids,
+    );
+    expect(persisted.spare_pool).toBe('sp01');
     expect(
       (planResult.diff as { raid_create_request?: { sparepool?: string } }).raid_create_request
         ?.sparepool,
-    ).toBe('xnsp_data');
+    ).toBe('sp01');
   });
 
-  it('structural junk → INVALID_ARGUMENT ApiException', async () => {
+  it('blockers: spare_pool_not_found for an unknown name, spare_pool_empty for a drive-less pool', async () => {
+    seedPool(h.kv, 'empty', { drives: [] });
+    const ghost = await h.engine.plan(planArgs({ ...GOOD_SPEC, spare_pool: 'ghost' }));
+    expect(ghost.planResult.blockers.map((b) => b.code)).toContain('spare_pool_not_found');
+    const empty = await h.engine.plan(planArgs({ ...GOOD_SPEC, spare_pool: 'empty' }));
+    expect(empty.planResult.blockers.map((b) => b.code)).toContain('spare_pool_empty');
+  });
+
+  it('structural junk → INVALID_ARGUMENT ApiException; spare_disk_ids is rejected on write', async () => {
     await expect(h.engine.plan(planArgs({ name: 'x' }))).rejects.toThrowError(ApiException);
     await expect(h.engine.plan(planArgs({ name: 'x' }))).rejects.toMatchObject({
       code: 'INVALID_ARGUMENT',
     });
+    // The retired write field: a stale client sending disk ids must not be
+    // silently accepted (2026-08-29 field failure).
+    await expect(
+      h.engine.plan(planArgs({ ...GOOD_SPEC, spare_disk_ids: ['nvme5n1'] })),
+    ).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
   });
 });
 
@@ -198,53 +238,75 @@ describe('xiraidArrayModifyProvider', () => {
     return { ...planArgs(spec), operation_kind: 'xiraid.array.modify' };
   }
 
-  it('attach spares + tuning → no blockers, array first + touched spare leased, enriched spec', async () => {
+  it('leases the referenced pool instead of its drives', async () => {
+    seedPool(h.kv, 'sp01', { drives: ['/dev/nvme5n1'], active: true });
     const { task, planResult } = await h.engine.plan(
-      modifyArgs({ id: 'data', spare_disk_ids: ['nvme5n1'], tuning: { init_prio: 10 } }),
+      modifyArgs({ id: 'data', spare_pool: 'sp01', tuning: { init_prio: 10 } }),
     );
     expect(planResult.blockers).toEqual([]);
     expect(planResult.risk_level).toBe('non_disruptive');
     expect(planResult.rollback_model).toBe('non_disruptive');
     expect(planResult.observed_revision_expected).toBeUndefined(); // route binds freshness (S4 §4)
     expect(task.affected_resources[0]).toEqual({ kind: 'XiraidArray', id: 'data' });
-    expect(task.affected_resources).toContainEqual({ kind: 'Disk', id: 'nvme5n1' });
+    expect(task.affected_resources).toContainEqual({ kind: 'Pool', id: 'sp01' });
+    // The pool's drives are the POOL's business now — leasing them here
+    // would serialize against unrelated array work and miss the pool.
+    expect(task.affected_resources.some((r) => r.kind === 'Disk')).toBe(false);
 
     const persisted = h.store.get(task.task_id)?.spec as Record<string, unknown>;
     expect(persisted.id).toBe('data');
-    expect((persisted.device_by_id as Record<string, string>).nvme5n1).toBe('/dev/nvme5n1');
+    expect(persisted.spare_pool).toBe('sp01');
+    expect(persisted.device_by_id).toEqual({});
 
     const diff = planResult.diff as Record<string, Record<string, unknown>>;
-    expect(diff.before?.spare_disk_ids).toEqual([]);
-    expect(diff.after?.spare_disk_ids).toEqual(['nvme5n1']);
+    expect(diff.before?.spare_pool).toBeNull();
+    expect(diff.after?.spare_pool).toBe('sp01');
   });
 
-  it('detach: current spares are leased too (pool ops touch them)', async () => {
-    seedArray(h.kv, 'data', { spare_disk_ids: ['nvme5n1'] });
-    const { task } = await h.engine.plan(modifyArgs({ id: 'data', spare_disk_ids: [] }));
-    expect(task.affected_resources).toContainEqual({ kind: 'Disk', id: 'nvme5n1' });
+  it('blocks a modify naming an unknown pool', async () => {
+    const { planResult } = await h.engine.plan(modifyArgs({ id: 'data', spare_pool: 'ghost' }));
+    expect(planResult.blockers.map((b) => b.code)).toContain('spare_pool_not_found');
   });
 
-  it('re-listing this array own spare is not in use; a spare claimed elsewhere is', async () => {
-    seedArray(h.kv, 'data', { spare_disk_ids: ['nvme5n1'] });
-    seedArray(h.kv, 'other', { member_disk_ids: ['nvme6n1'], spare_disk_ids: [] });
-    const ok = await h.engine.plan(modifyArgs({ id: 'data', spare_disk_ids: ['nvme5n1'] }));
-    expect(ok.planResult.blockers).toEqual([]);
-    const clash = await h.engine.plan(modifyArgs({ id: 'data', spare_disk_ids: ['nvme6n1'] }));
-    expect(clash.planResult.blockers.map((b) => b.code)).toContain('disk_in_use');
+  it('re-point: both the target and the currently-attached pool are leased', async () => {
+    seedArray(h.kv, 'data', { spare_pool: 'sp01' });
+    seedPool(h.kv, 'sp01', { drives: ['/dev/nvme5n1'] });
+    seedPool(h.kv, 'sp02', { drives: ['/dev/nvme6n1'] });
+    const { task, planResult } = await h.engine.plan(
+      modifyArgs({ id: 'data', spare_pool: 'sp02' }),
+    );
+    expect(planResult.blockers).toEqual([]);
+    expect(task.affected_resources).toContainEqual({ kind: 'Pool', id: 'sp02' });
+    expect(task.affected_resources).toContainEqual({ kind: 'Pool', id: 'sp01' });
+    expect((planResult.diff as Record<string, Record<string, unknown>>).before?.spare_pool).toBe(
+      'sp01',
+    );
+  });
+
+  it('detach (null): the currently-attached pool is still leased', async () => {
+    seedArray(h.kv, 'data', { spare_pool: 'sp01' });
+    seedPool(h.kv, 'sp01', { drives: ['/dev/nvme5n1'] });
+    const { task, planResult } = await h.engine.plan(modifyArgs({ id: 'data', spare_pool: null }));
+    expect(planResult.blockers).toEqual([]);
+    expect(task.affected_resources).toContainEqual({ kind: 'Pool', id: 'sp01' });
+    expect(
+      (planResult.diff as Record<string, Record<string, unknown>>).after?.spare_pool,
+    ).toBeNull();
   });
 
   it('unknown array id → NOT_FOUND; junk spec → INVALID_ARGUMENT', async () => {
     await expect(h.engine.plan(modifyArgs({ id: 'ghost', tuning: {} }))).rejects.toMatchObject({
       code: 'NOT_FOUND',
     });
-    await expect(
-      h.engine.plan(modifyArgs({ id: 'data', spare_disk_ids: 'nope' })),
-    ).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(h.engine.plan(modifyArgs({ id: 'data', spare_pool: 42 }))).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT',
+    });
   });
 
   it('re-parses its own enriched spec (apply re-check contract)', async () => {
+    seedPool(h.kv, 'sp01', { drives: ['/dev/nvme5n1'] });
     const first = await h.engine.plan(
-      modifyArgs({ id: 'data', spare_disk_ids: ['nvme5n1'], tuning: { init_prio: 10 } }),
+      modifyArgs({ id: 'data', spare_pool: 'sp01', tuning: { init_prio: 10 } }),
     );
     const persisted = h.store.get(first.task.task_id)?.spec as Record<string, unknown>;
     const again = await h.engine.plan(modifyArgs(persisted));
