@@ -107,6 +107,11 @@ jobs:
   # test's beforeAll where a build failure reads as a test timeout.
   typescript-e2e:
     runs-on: ubuntu-latest
+    # Each test spawns a real api + agent pair and waits on socket I/O, so a
+    # hang is a plausible failure mode. Without a cap the job inherits GitHub's
+    # 6-hour default and holds a runner slot; the suite runs in ~80s including
+    # npm ci and the build, so 15 minutes is a wide margin over a healthy run.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
