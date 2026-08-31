@@ -12,13 +12,16 @@
  * lets the e2e seed state and lets separate transport instances
  * (collector + executor + test assertions) share one view.
  *
- * Deterministic failure hooks (no randomness, per the workflow rules):
- *  - any mutating verb against a name ending '-fail' REJECTS (the S3
- *    roll-fail pattern, extended to every S4 verb);
+ * Deterministic failure hooks (no randomness, per the workflow rules).
+ * The sentinel suffixes are spelled with UNDERSCORES, not hyphens: xiRAID
+ * 4.4 rejects hyphens in array and pool names (schema.ts NAME_RE), so a
+ * '-fail' name can no longer reach this transport through plan validation.
+ *  - any mutating verb against a name ending '_fail' REJECTS (the S3
+ *    roll_fail pattern, extended to every S4 verb);
  *  - a raidModify carrying TUNING keys (any field beyond name/sparepool)
- *    against a name ending '-fail-tuning' REJECTS — this targets the
+ *    against a name ending '_fail_tuning' REJECTS — this targets the
  *    modify executor's apply_tuning stage specifically, after the operator's
- *    pool has already been attached/activated successfully. A plain '-fail'
+ *    pool has already been attached/activated successfully. A plain '_fail'
  *    array name cannot do that: failHook keys on the request's own name, and
  *    apply_spares' `raid_modify` carries the ARRAY's name, so it would reject
  *    one stage too early. (The pool verbs are unaffected either way — they
@@ -98,7 +101,7 @@ function save(dir: string, state: FakeState): void {
 }
 
 function failHook(name: string): void {
-  if (name.endsWith('-fail')) {
+  if (name.endsWith('_fail')) {
     throw new Error(`fake xiraid: forced failure for '${name}'`);
   }
 }
@@ -180,7 +183,7 @@ export function createFakeXiraidTransport(dir: string): XiraidTransport & FakeXi
       failHook(req.name);
       const { name, ...rest } = req;
       const tuningKeys = Object.keys(rest).filter((k) => k !== 'sparepool');
-      if (name.endsWith('-fail-tuning') && tuningKeys.length > 0) {
+      if (name.endsWith('_fail_tuning') && tuningKeys.length > 0) {
         throw new Error(`fake xiraid: forced tuning-modify failure for '${name}'`);
       }
       // The daemon counts a present-but-EMPTY string as unsupplied

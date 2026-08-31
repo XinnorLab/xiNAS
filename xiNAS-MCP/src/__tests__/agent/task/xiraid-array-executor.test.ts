@@ -354,6 +354,9 @@ describe('xiraid.array.create executor', () => {
   });
 
   it('activates an inactive pool before raid_create, and deactivates it again on a failed create', async () => {
+    // In-memory fake: pool ops succeed, raidCreate rejects cleanly. (A
+    // '_fail' name would trip the file-backed fake's POOL hook first — the
+    // same trap the S4 review caught for the modify rollback test.)
     const fake = makeFake({ failCreate: 'clean' });
     fake.pools.push({ name: 'sp01', drives: ['/dev/nvme5n2'], active: false });
 

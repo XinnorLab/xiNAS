@@ -38,6 +38,7 @@ from xinas_menu.api.control_client import (
 from xinas_menu.api.degraded import degraded_banner
 from xinas_menu.apptype import XiNASAppMixin
 from xinas_menu.utils import raid_rules
+from xinas_menu.utils.host_profile import selectable_drive_name
 from xinas_menu.utils.xfs_helpers import is_path_under
 from xinas_menu.utils.xiraid_names import partition_collision, validate_array_name
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -149,15 +150,53 @@ def _numa_node(name: str) -> int:
     return 0
 
 
-def _no_drives_message(banner: str | None) -> str:
+def _name_excluded_note(names: list[str]) -> str:
+    """Why free drives are missing from a picker that just reported none.
+
+    Without it the dialog says "no available drives" over disks the Physical
+    Drives screen lists as ``Available`` on the same refresh — a contradiction
+    the operator can only resolve by reading this module.
+    """
+    return (
+        f"{len(names)} free drive(s) were not offered — unsupported device "
+        f"type: {', '.join(names)}.\n"
+        "Arrays and pools are built from NVMe devices; on a virtual machine "
+        "vd*/sd* devices are offered too."
+    )
+
+
+def _name_excluded_drives(rows: list[dict[str, Any]]) -> list[str]:
+    """Names dropped by the device-name rule *alone* (spec §2.6).
+
+    Every other filter cleared: not the system disk, ``safe_for_use``, not a
+    member or spare of an observed array. A drive excluded for one of those
+    reasons is not listed — the operator can already see why it is out.
+    """
+    return sorted(
+        str(d.get("name", ""))
+        for d in rows
+        if d.get("name")
+        and d.get("safe_for_use")
+        and not d.get("system")
+        and not d.get("claimed")
+        and not selectable_drive_name(str(d.get("name", "")))
+    )
+
+
+def _no_drives_message(banner: str | None, excluded_by_name: list[str] | None = None) -> str:
     """Text for the Create Array wizard's empty-disk abort.
 
-    "No drives" and "the Disk collector could not be read" are different
-    facts; when the envelope carried a warning, the dialog has to say which
-    one the operator is looking at.
+    "No drives", "the Disk collector could not be read", and "the drives are
+    there but this host does not build arrays from that device type" are three
+    different facts. The banner wins when present: a degraded fetch never
+    observed every drive, so the exclusion list would not be a complete answer.
     """
     message = "No available NVMe drives found."
-    return f"{message}\n\n{banner}" if banner else message
+    if banner:
+        return f"{message}\n\n{banner}"
+    if excluded_by_name:
+        return f"{message}\n\n{_name_excluded_note(excluded_by_name)}"
+    return message
 
 
 async def _list_api_disks_with_banner(
@@ -226,39 +265,56 @@ async def _list_api_disks(control: ControlClient) -> list[dict[str, Any]]:
     return rows
 
 
+def _group_noun(members: list[dict[str, Any]]) -> str:
+    """The word a group label uses for its members.
+
+    ``NVMe`` only when every member is one — a VM group holding ``vdb`` would
+    otherwise be labelled with a transport it does not have. On bare metal
+    every group is all-NVMe, so labels are unchanged.
+    """
+    return "NVMe" if all("nvme" in str(d.get("name", "")).lower() for d in members) else "drives"
+
+
 def _drive_groups(
     rows: list[dict[str, Any]],
 ) -> tuple[dict[str, list[str]], list[dict[str, Any]]]:
-    """Group pickable NVMe drives by NUMA node + size category.
+    """Group pickable drives by NUMA node + size category.
 
-    Pickable = ``safe_for_use``, never the system disk, and not already a
-    member/spare of an observed array (those would only come back as
-    ``disk_in_use`` plan blockers).
+    Pickable = a device name this host builds arrays from (``selectable_drive_name``,
+    spec §2.6 — NVMe, plus ``vd*``/``sd*`` on a VM), ``safe_for_use``, never the
+    system disk, and not already a member/spare of an observed array (those would
+    only come back as ``disk_in_use`` plan blockers).
     """
     SMALL_THRESHOLD = 1_000_000_000  # 1 GB
-    nvme = [
+    pickable = [
         d
         for d in rows
-        if "nvme" in d.get("name", "").lower()
+        if selectable_drive_name(str(d.get("name", "")))
         and d.get("safe_for_use")
         and not d.get("system")
         and not d.get("claimed")
     ]
-    if not nvme:
-        return {}, nvme
-    groups: dict[str, list[str]] = {}
-    for d in nvme:
+    if not pickable:
+        return {}, pickable
+    # Binned first, labelled after: the noun depends on what landed in the bin,
+    # which is not known until every row has been placed.
+    binned: dict[tuple[Any, str], list[dict[str, Any]]] = {}
+    for d in pickable:
         numa = d.get("numa_node", 0)
         size_bytes = d.get("size_bytes") or 0
         size_cat = "small" if size_bytes < SMALL_THRESHOLD else "large"
-        groups.setdefault(f"All {size_cat} NVMe, NUMA {numa}", []).append(d["name"])
-    all_large = [d["name"] for d in nvme if (d.get("size_bytes") or 0) >= SMALL_THRESHOLD]
-    all_small = [d["name"] for d in nvme if (d.get("size_bytes") or 0) < SMALL_THRESHOLD]
-    if all_large:
-        groups[f"All large NVMe ({len(all_large)} drives)"] = all_large
-    if all_small:
-        groups[f"All small NVMe ({len(all_small)} drives)"] = all_small
-    return groups, nvme
+        binned.setdefault((numa, size_cat), []).append(d)
+    groups: dict[str, list[str]] = {
+        f"All {size_cat} {_group_noun(members)}, NUMA {numa}": [d["name"] for d in members]
+        for (numa, size_cat), members in binned.items()
+    }
+    large = [d for d in pickable if (d.get("size_bytes") or 0) >= SMALL_THRESHOLD]
+    small = [d for d in pickable if (d.get("size_bytes") or 0) < SMALL_THRESHOLD]
+    if large:
+        groups[f"All large {_group_noun(large)} ({len(large)} drives)"] = [d["name"] for d in large]
+    if small:
+        groups[f"All small {_group_noun(small)} ({len(small)} drives)"] = [d["name"] for d in small]
+    return groups, pickable
 
 
 async def _get_numa_topology(control: ControlClient) -> list[dict]:
@@ -286,6 +342,9 @@ async def _get_numa_topology(control: ControlClient) -> list[dict]:
         rows = []
     for d in rows:
         name = d.get("name", "")
+        # NVMe-only on purpose, unlike the pickers (spec §2.6): this table maps
+        # drives to NUMA nodes for the CPU-affinity picker, and a VM's virtio
+        # devices carry no PCIe locality to map.
         if "nvme" not in name.lower():
             continue
         numa = d.get("numa_node", 0)
@@ -523,13 +582,17 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 ConfirmDialog(f"Could not list disks.\n{exc}", "Error", ok_only=True)
             )
             return
-        groups, nvme = _drive_groups(disk_rows)
-        if not nvme:
+        groups, pickable = _drive_groups(disk_rows)
+        if not pickable:
             await self.app.push_screen_wait(
-                ConfirmDialog(_no_drives_message(disk_banner), "Error", ok_only=True)
+                ConfirmDialog(
+                    _no_drives_message(disk_banner, _name_excluded_drives(disk_rows)),
+                    "Error",
+                    ok_only=True,
+                )
             )
             return
-        name_to_id = {d["name"]: d["id"] for d in nvme}
+        name_to_id = {d["name"]: d["id"] for d in pickable}
 
         try:
             p_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/pools")
@@ -610,7 +673,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 while True:
                     selected = await self.app.push_screen_wait(
                         DrivePickerScreen(
-                            nvme,
+                            pickable,
                             title="Create Array — Select Drives",
                             preselected=preselected,
                             allow_back=allow_back,
@@ -647,7 +710,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 if group_choice == "Pick individual drives":
                     selected = await self.app.push_screen_wait(
                         DrivePickerScreen(
-                            nvme, title="Create Array — Select Drives", allow_back=True
+                            pickable, title="Create Array — Select Drives", allow_back=True
                         )
                     )
                 else:
@@ -656,7 +719,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                         d if isinstance(d, str) else d.get("name", "") for d in group_drives
                     }
                     group_drive_info: list[dict[str, Any]] = [
-                        d for d in nvme if d.get("name") in group_names
+                        d for d in pickable if d.get("name") in group_names
                     ] or group_drives  # pyright: ignore[reportAssignmentType]
                     selected = await self.app.push_screen_wait(
                         DrivePickerScreen(

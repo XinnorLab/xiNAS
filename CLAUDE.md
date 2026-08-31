@@ -69,7 +69,16 @@ TypeScript control path (from `xiNAS-MCP/`, Node ≥20; each CI job runs
 ```bash
 npm run typecheck && npm run lint && npm run format:check
 npm test && npm run test:contracts
+npm run build && npm run test:e2e
 ```
+
+- **`npm test` does not run the e2e suite.** `vitest.config.ts` excludes
+  `src/__tests__/e2e/**`; it is blocking in CI as its own
+  `typescript-e2e` job, so run the third line before claiming a change
+  to `xiNAS-MCP/` is done. **`npm run build` first is not optional** —
+  the tests spawn `dist/api-server.js` and `dist/agent-server.js`, and
+  `dist/` is untracked, so an unbuilt tree tests stale or absent code.
+  The suite takes ~55 s.
 
 Dev dependencies: `pip install -e '.[dev]'`.
 

@@ -476,6 +476,8 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
       {
         name: 'data',
         level: 'raid5',
+        // raid5's engine floor is 4 members (schema.ts LEVELS.raid5.minDrives);
+        // a 3-member spec is rejected at plan with a min_drives blocker.
         member_disk_ids: ['nvme1n1', 'nvme2n1', 'nvme3n1', 'nvme4n1'],
       },
       'K-create',
