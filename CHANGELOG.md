@@ -8,6 +8,24 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
+## [3.13.0] - 2026-08-31
+
+### Added
+
+- **Spare pools and RAID arrays can be built from a VM's own disks.** Both
+  drive pickers hard-coded "`nvme` in the device name", so on a virtual
+  machine day-2 management refused the very disks the installer had just
+  built an array from: Physical Drives listed `vdb` as `Available` while
+  Create Pool answered "No available drives found. All drives are assigned
+  to RAID arrays or other pools" — a claim that was false in exactly the
+  case that mattered. Drive eligibility now lives in one place and also
+  admits `vd*` (virtio-blk) and `sd*` (virtio-scsi / SATA / SAS) when
+  `systemd-detect-virt` reports a hypervisor, the same rule the setup menu
+  and the `nvme_namespace` empty-NVMe fallback already apply. **Bare metal
+  is unchanged and stays NVMe-only.** Both empty-state dialogs now also name
+  the drives they dropped by device type, so "there is nothing here" reads
+  differently from "this host does not build arrays from that device kind".
+
 ### Fixed
 
 - **Attaching an existing spare pool to an array failed with the daemon
