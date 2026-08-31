@@ -72,9 +72,9 @@ def _healthy_all_drives_claimed(serial: str) -> _StubControl:
 
 def test_get_free_nvme_drives_returns_the_degraded_banner():
     token = f"collector unavailable {uuid.uuid4().hex}"
-    rows, banner = asyncio.run(_get_free_nvme_drives(_degraded_with_one_pool(token)))
-    assert rows == []
-    assert banner and token in banner
+    free = asyncio.run(_get_free_nvme_drives(_degraded_with_one_pool(token)))
+    assert free.drives == []
+    assert free.banner and token in free.banner
 
 
 class _StubApp:

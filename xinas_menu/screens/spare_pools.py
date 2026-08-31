@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
 _log = logging.getLogger(__name__)
 
@@ -26,7 +26,11 @@ from textual.widgets import Footer, Label
 
 from xinas_menu.api.control_client import ControlClient, ControlPathError, quote_id
 from xinas_menu.apptype import XiNASAppMixin
-from xinas_menu.screens.raid import _list_api_disks_with_banner
+from xinas_menu.screens.raid import (
+    _list_api_disks_with_banner,
+    _name_excluded_note,
+)
+from xinas_menu.utils.host_profile import selectable_drive_name
 from xinas_menu.utils.xiraid_names import validate_pool_name
 from xinas_menu.widgets.checklist_dialog import ChecklistDialog
 from xinas_menu.widgets.confirm_dialog import ConfirmDialog
@@ -180,17 +184,29 @@ async def _get_pool_drives(control: ControlClient, pool_name: str) -> list[str]:
     return []
 
 
-async def _get_free_nvme_drives(
-    control: ControlClient,
-) -> tuple[list[dict[str, Any]], str | None]:
-    """NVMe drives available for pool use, plus the degraded-backend banner.
+class FreeDrives(NamedTuple):
+    """What a pool drive fetch found, and what it had to leave out."""
+
+    drives: list[dict[str, Any]]
+    banner: str | None
+    excluded_by_name: list[str]
+
+
+async def _get_free_nvme_drives(control: ControlClient) -> FreeDrives:
+    """Drives available for pool use, the degraded-backend banner, and the
+    names dropped by the device-name rule alone.
 
     ``safe_for_use``, not the system disk, not a member/spare of an
-    observed array (``claimed``), and not already in any spare pool.
-    Raises ControlPathError when the api is unreachable. The banner
-    (second element) is the Disk collector's degraded-backend warning, if
-    any — an empty result with a warning means "nothing was observed", not
-    "there are no drives," same distinction the Create Array wizard makes.
+    observed array (``claimed``), and not already in any spare pool. The
+    name rule is ``selectable_drive_name`` (spec §2.6): NVMe on bare metal,
+    plus ``vd*``/``sd*`` on a VM — so despite the function's name, a VM
+    legitimately gets non-NVMe rows back here.
+
+    Raises ControlPathError when the api is unreachable. The banner is the
+    Disk collector's degraded-backend warning, if any — an empty result with
+    a warning means "nothing was observed", not "there are no drives," same
+    distinction the Create Array wizard makes. ``excluded_by_name`` lists
+    drives that cleared every *other* filter, so an empty picker can say why.
     """
     rows, banner = await _list_api_disks_with_banner(control)
 
@@ -202,31 +218,48 @@ async def _get_free_nvme_drives(
             pool_drives.add(path.rsplit("/", 1)[-1])
 
     free: list[dict[str, Any]] = []
+    excluded: list[str] = []
     for d in rows:
-        name = d.get("name", "")
-        if "nvme" not in name.lower():
-            continue
+        name = str(d.get("name", ""))
         if d.get("system") or not d.get("safe_for_use") or d.get("claimed"):
             continue
         if d.get("device_path") in pool_drives or name in pool_drives:
             continue
+        # Last, so a drive that is out for a reason the operator can already
+        # see (claimed, mounted, in another pool) is never reported as a
+        # device-type exclusion.
+        if not selectable_drive_name(name):
+            excluded.append(name)
+            continue
         free.append(d)
-    return free, banner
+    return FreeDrives(free, banner, sorted(excluded))
 
 
-def _no_free_drives_message(base: str, banner: str | None, specific: str | None = None) -> str:
-    """Build a Spare Pools empty-state message, banner-aware.
+def _no_free_drives_message(
+    base: str,
+    banner: str | None,
+    specific: str | None = None,
+    excluded_by_name: list[str] | None = None,
+) -> str:
+    """Build a Spare Pools empty-state message, banner- and exclusion-aware.
 
     ``specific`` is a claim about *why* nothing came back (e.g. "all drives
     are assigned to RAID arrays or other pools") that is only true when the
     fetch actually observed every drive. When the collector is degraded, an
     empty result means "nothing was observed" — asserting the specific
     reason would be an observation nothing made, so it is dropped and the
-    banner explains the gap instead. With no banner, the fetch was
-    trustworthy and the specific reason is appended as before.
+    banner explains the gap instead.
+
+    ``excluded_by_name`` outranks it for the same reason in the other
+    direction: those drives are free, they are just of a device type this
+    host does not build pools from. Printing "all drives are assigned" over
+    them is the false claim that made a VM operator go looking for a
+    non-existent RAID membership.
     """
     if banner:
         return f"{base}\n\n{banner}"
+    if excluded_by_name:
+        return f"{base}\n\n{_name_excluded_note(excluded_by_name)}"
     return f"{base}\n{specific}" if specific else base
 
 
@@ -348,19 +381,20 @@ class SparePoolScreen(XiNASAppMixin, Screen):
 
         # Step 2: Select drives
         try:
-            free_drives, disk_banner = await _get_free_nvme_drives(self.app.control)
+            free = await _get_free_nvme_drives(self.app.control)
         except ControlPathError as exc:
             await self.app.push_screen_wait(
                 ConfirmDialog(f"Could not list drives.\n{exc}", "Error", ok_only=True)
             )
             return
-        if not free_drives:
+        if not free.drives:
             await self.app.push_screen_wait(
                 ConfirmDialog(
                     _no_free_drives_message(
                         "No available drives found.",
-                        disk_banner,
+                        free.banner,
                         specific="All drives are assigned to RAID arrays or other pools.",
+                        excluded_by_name=free.excluded_by_name,
                     ),
                     "Error",
                     ok_only=True,
@@ -369,7 +403,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             return
 
         selected = await self.app.push_screen_wait(
-            DrivePickerScreen(free_drives, title="Create Pool — Select Drives")
+            DrivePickerScreen(free.drives, title="Create Pool — Select Drives")
         )
         if not selected:
             return
@@ -383,7 +417,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             return
 
         # The picker returns drive NAMES; the pool spec wants /dev/ paths.
-        drives = _to_dev_paths(selected, free_drives)
+        drives = _to_dev_paths(selected, free.drives)
 
         view = self.query_one("#pool-content", ScrollableTextView)
         view.set_content(f"Creating pool '{name}'…")
@@ -416,16 +450,20 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             return
 
         try:
-            free_drives, disk_banner = await _get_free_nvme_drives(self.app.control)
+            free = await _get_free_nvme_drives(self.app.control)
         except ControlPathError as exc:
             await self.app.push_screen_wait(
                 ConfirmDialog(f"Could not list drives.\n{exc}", "Error", ok_only=True)
             )
             return
-        if not free_drives:
+        if not free.drives:
             await self.app.push_screen_wait(
                 ConfirmDialog(
-                    _no_free_drives_message("No available drives found.", disk_banner),
+                    _no_free_drives_message(
+                        "No available drives found.",
+                        free.banner,
+                        excluded_by_name=free.excluded_by_name,
+                    ),
                     "Error",
                     ok_only=True,
                 )
@@ -433,7 +471,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             return
 
         selected = await self.app.push_screen_wait(
-            DrivePickerScreen(free_drives, title=f"Add Drives to '{pool}'")
+            DrivePickerScreen(free.drives, title=f"Add Drives to '{pool}'")
         )
         if not selected:
             return
@@ -448,7 +486,7 @@ class SparePoolScreen(XiNASAppMixin, Screen):
             return
 
         # The picker returns drive NAMES; the pool spec wants /dev/ paths.
-        drives = _to_dev_paths(selected, free_drives)
+        drives = _to_dev_paths(selected, free.drives)
 
         view = self.query_one("#pool-content", ScrollableTextView)
         view.set_content(f"Adding drives to pool '{pool}'…")
