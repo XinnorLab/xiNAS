@@ -6,6 +6,26 @@ each entry corresponds to a published
 [GitHub Release](https://github.com/XinnorLab/xiNAS/releases) — the only
 supported source for installing and updating xiNAS.
 
+## [Unreleased]
+
+### Fixed
+
+- **Attaching an existing spare pool to an array failed with the daemon
+  reporting the pool's own drives as already taken.** A real-node run hit
+  `apply_spares: 13 INTERNAL: Drive '/dev/nvme5n2' is already a part of the
+  'sp01' spare pool` — the array executors built their own `xnsp_<array>`
+  pool out of the chosen pool's drives on every create and modify, so any
+  pool an operator had already made on the Spare Pools screen was
+  unattachable, in both the Create Array wizard and Edit Array.
+
+  Arrays now reference a pool by name (`spec.spare_pool`) instead. No array
+  operation creates, fills, empties or deletes a pool any more — create and
+  modify only activate the named pool (an unactivated pool never arms
+  auto-replace) and deactivate it again on rollback; `spec.spare_disk_ids`
+  becomes observed-only and is rejected on write. Plans lease `Pool/<name>`
+  instead of the spare disks, so an attach now serializes against
+  concurrent Spare Pools mutations.
+
 ## [3.12.1] - 2026-08-28
 
 ### Fixed

@@ -29,9 +29,11 @@ from collections.abc import Iterable
 
 ARRAY_NAME_MAX_LEN = 28
 #: Not a vendor number: the reference documents no pool rule, so xiNAS keeps
-#: the control path's incumbent bound rather than inventing a shorter one. It
-#: must stay >= len("xnsp_") + ARRAY_NAME_MAX_LEN, because the array executor
-#: derives its spare pools as ``xnsp_<array>``.
+#: the control path's incumbent bound rather than inventing a shorter one.
+#: This used to be pinned to ``len("xnsp_") + ARRAY_NAME_MAX_LEN``, back when
+#: the array executor derived its own spare pool named ``xnsp_<array>``; that
+#: derivation is retired (docs/Storage/raid-management-spec.md §7.3) and 64
+#: now stands on its own, with no floor to respect.
 POOL_NAME_MAX_LEN = 64
 
 ARRAY_NAME_RE = re.compile(rf"^[A-Za-z0-9_]{{1,{ARRAY_NAME_MAX_LEN}}}$")

@@ -21,10 +21,12 @@ const OBSERVED_ARRAY_PREFIX = '/xinas/v1/observed/XiraidArray/';
 /**
  * The 4.4 command reference documents no rule for `xicli pool create -n`, so
  * xiNAS applies the documented ARRAY character set — Latin letters, digits and
- * underscore, no hyphens — and keeps the incumbent 64-char bound rather than
- * inventing a shorter one: the array executor derives pool names as
- * `xnsp_<array>` (up to 33 chars), so a 28-char rule would outlaw the pools
- * this system creates itself. See docs/Storage/raid-management-spec.md §7.3.
+ * underscore, no hyphens — and keeps the 64-char bound as a deliberate
+ * choice: there is no vendor-documented pool-name length, so the bound stands
+ * on its own — it is NOT derived from the array-name bound, which is 28.
+ * (The array executors no longer derive a pool name from the array's, so it
+ * no longer has to accommodate one either.) See
+ * docs/Storage/raid-management-spec.md §7.3.
  */
 const NAME_RE = /^[A-Za-z0-9_]{1,64}$/;
 

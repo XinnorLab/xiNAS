@@ -29,6 +29,8 @@ export interface ObservedXiraidArray {
     level: string;
     member_disk_ids: string[];
     spare_disk_ids: string[];
+    /** Design 2026-08-29: the pool's name, so a GET -> PATCH round-trip is closed. */
+    spare_pool?: string;
     strip_size_kib?: number;
     block_size?: number;
     group_size?: number;
@@ -116,10 +118,10 @@ const DEGRADED_STATES = new Set([
  * configured at all.
  *
  * Every consumer must read the field through here. Treating `"-"` as a name
- * is not cosmetic — the modify executor's foreign-pool guard rejects any
- * sparepool that is neither `''` nor `xnsp_<array>`, so attaching spares to an
- * array that has none failed preflight with *"sparepool '-' is not managed by
- * the control path"*, which is every array on a fresh install.
+ * is not cosmetic — the array executors compare the live sparepool NAME
+ * against the target pool name to decide whether an attach/detach is a
+ * no-op, and a literal `"-"` would never equal `''` or an operator's pool
+ * name, so every array on a fresh install would look permanently "changed".
  */
 export function readSparepoolName(value: unknown): string {
   if (typeof value !== 'string') return '';
@@ -241,6 +243,7 @@ export function parseRaidShow(
         level: normalizeLevel(o.level),
         member_disk_ids: devices.map((d) => diskIdByPath.get(d) ?? d),
         spare_disk_ids: spareDrives.map((d) => diskIdByPath.get(d) ?? d),
+        ...(sparepool !== '' ? { spare_pool: sparepool } : {}),
         ...(numberOrNull(o.strip_size) !== null ? { strip_size_kib: o.strip_size as number } : {}),
         ...(numberOrNull(o.block_size) !== null ? { block_size: o.block_size as number } : {}),
         ...(numberOrNull(o.group_size) !== null ? { group_size: o.group_size as number } : {}),

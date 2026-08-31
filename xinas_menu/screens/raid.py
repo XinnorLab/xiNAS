@@ -6,8 +6,10 @@ picker), and the composite delete teardown is a stop-on-failure SEQUENCE
 of API operations (shares delete → filesystem unmount + unmanage →
 arrays delete with the dangerous consent). Spare-pool lookups ride
 GET /api/v1/pools (S9 T11, ADR-0011 — the gRPC ``pool_show`` path is
-retired); the chosen pool's drives map onto the API spec's
-``spare_disk_ids``.
+retired); Edit Array attaches the chosen pool by name via the API
+spec's ``spare_pool`` (design 2026-08-29 — sending the pool's member
+drives as ``spare_disk_ids`` made the control path build a second,
+conflicting pool out of drives the chosen pool already owned).
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ from xinas_menu.widgets.wizard import BACK, CANCEL, WizardStep, run_wizard
 _RAID_LEVELS = ["0", "1", "5", "6", "10", "50", "60"]
 _STRIP_SIZES = ["16", "32", "64", "128", "256"]
 _CPU_LIST_RE = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
-# Live-modify surface = the ADR-0006 writability matrix: spare_disk_ids
+# Live-modify surface = the ADR-0006 writability matrix: spare_pool
 # (the "sparepool" entry) + tuning.* keys. resync_enabled is create-only
 # (xiRAID RaidModify has no such field) and is no longer offered here.
 #
@@ -363,16 +365,26 @@ def _pools_by_name(data: Any) -> dict[str, dict]:
     return {}
 
 
-def _pool_drive_paths(pool: dict) -> list[str]:
-    """Device paths of a spare pool's drives (API rows carry ``drives``;
-    tolerant of the legacy ``devices`` pair shape)."""
-    raw = pool.get("devices") or pool.get("drives") or []
-    paths: list[str] = []
-    for dev in raw if isinstance(raw, list) else []:
-        path = dev[1] if isinstance(dev, list) and len(dev) > 1 else str(dev)
-        if path:
-            paths.append(str(path))
-    return paths
+_NONE_POOL = "(none)"
+
+
+def _spare_pool_patch(choice: str) -> dict[str, Any]:
+    """Edit Array's pool choice -> the PATCH spec. `(none)` detaches."""
+    return {"spare_pool": None if choice == _NONE_POOL else choice}
+
+
+def _spare_prompt(pools: dict[str, dict]) -> str:
+    """Create-wizard spare step prompt; names where pools come from when none do."""
+    if pools:
+        return "Select spare pool (or none):"
+    return (
+        "No spare pools exist.\nCreate one in Storage > Spare Pools, then attach it via Edit Array."
+    )
+
+
+def _spare_spec_fragment(choice: str) -> dict[str, Any]:
+    """Create-wizard pool choice -> the POST spec fragment."""
+    return {} if choice == _NONE_POOL else {"spare_pool": choice}
 
 
 def _level_label(level: Any) -> str:
@@ -582,7 +594,6 @@ class RAIDScreen(XiNASAppMixin, Screen):
             return
         name_to_id = {d["name"]: d["id"] for d in pickable}
 
-        _NONE_POOL = "(none)"
         try:
             p_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/pools")
         except ControlPathError:
@@ -787,7 +798,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 SelectDialog(
                     pool_choices,
                     title=f"Create Array — Step {step_no}",
-                    prompt="Select spare pool (or none):",
+                    prompt=_spare_prompt(pools),
                     selected=answers.get("spare", _NONE_POOL),
                     allow_back=allow_back,
                 )
@@ -829,7 +840,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 run=group_size_step,
                 applies=lambda a: a.get("level") in ("50", "60"),
             ),
-            WizardStep(key="spare", run=spare_step, applies=lambda a: bool(pools)),
+            WizardStep(key="spare", run=spare_step),
             WizardStep(key="confirmed", run=confirm_step),
         ]
         answers = await run_wizard(steps)
@@ -846,20 +857,7 @@ class RAIDScreen(XiNASAppMixin, Screen):
         }
         if answers["level"] in ("50", "60"):
             spec["group_size"] = int(answers["group_size"])
-        spare = answers.get("spare", _NONE_POOL)
-        if spare != _NONE_POOL:
-            path_to_id = {d["device_path"]: d["id"] for d in disk_rows}
-            spare_ids = [
-                path_to_id.get(p, p.rsplit("/", 1)[-1])
-                for p in _pool_drive_paths(pools.get(spare, {}))
-            ]
-            if spare_ids:
-                spec["spare_disk_ids"] = spare_ids
-            else:
-                self.app.notify(
-                    f"Pool '{spare}' has no drives — skipping spare assignment.",
-                    severity="warning",
-                )
+        spec.update(_spare_spec_fragment(answers.get("spare", _NONE_POOL)))
 
         dialog = TaskWaitDialog(f"Creating RAID array '{answers['name']}'…", "Create Array")
         self.app.push_screen(dialog)
@@ -943,7 +941,6 @@ class RAIDScreen(XiNASAppMixin, Screen):
         idx = param_labels.index(param_choice)
         key, label, kind, options, vtype = _MODIFY_PARAMS[idx]
 
-        spare_ids: list[str] = []
         if key == "cpu_allowed":
             # Smart CPU affinity selector (tuning is not observed via the
             # API, so the current value is unknown → "all").
@@ -1006,37 +1003,31 @@ class RAIDScreen(XiNASAppMixin, Screen):
                 value = raw
 
         elif key == "sparepool":
-            # Dynamic select: fetch available spare pools (GET /api/v1/pools,
-            # S9 T11); the chosen pool's drives map onto the PATCH spec's
-            # spare_disk_ids.
+            # The operator picks an EXISTING pool; the control path only
+            # references it (design 2026-08-29). Pool lifecycle is Spare Pools'.
             try:
                 p_rows = await asyncio.to_thread(self.app.control.result, "/api/v1/pools")
             except ControlPathError:
                 p_rows = []
             pools = _pools_by_name(p_rows)
             if not pools:
-                self.app.notify("No spare pools available.", severity="warning")
+                await self.app.push_screen_wait(
+                    ConfirmDialog(
+                        "No spare pools exist.\n\n"
+                        "Create one in Storage > Spare Pools > Create Pool, "
+                        "then run Edit Array again.",
+                        "No Spare Pools",
+                        ok_only=True,
+                    )
+                )
                 return
             value = await self.app.push_screen_wait(
                 SelectDialog(
-                    sorted(pools.keys()),
+                    [_NONE_POOL] + sorted(pools.keys()),
                     title=f"Set {label}",
-                    prompt=f"Select spare pool for {arr_name}:",
+                    prompt=f"Select spare pool for {arr_name} ({_NONE_POOL} detaches):",
                 )
             )
-            if value:
-                try:
-                    disk_rows = await _list_api_disks(self.app.control)
-                except ControlPathError:
-                    disk_rows = []
-                path_to_id = {d["device_path"]: d["id"] for d in disk_rows}
-                spare_ids = [
-                    path_to_id.get(p, p.rsplit("/", 1)[-1])
-                    for p in _pool_drive_paths(pools.get(value, {}))
-                ]
-                if not spare_ids:
-                    self.app.notify(f"Pool '{value}' has no drives.", severity="warning")
-                    return
         elif kind == "select" and options:
             value = await self.app.push_screen_wait(
                 SelectDialog(options, title=f"Set {label}", prompt=f"New value for {label}:")
@@ -1083,10 +1074,10 @@ class RAIDScreen(XiNASAppMixin, Screen):
             return
 
         # Map the wizard value onto the PATCH spec (ADR-0006 writable
-        # subset: spare_disk_ids | tuning.*).
+        # subset: spare_pool | tuning.*).
         patch_spec: dict[str, Any]
         if key == "sparepool":
-            patch_spec = {"spare_disk_ids": spare_ids}
+            patch_spec = _spare_pool_patch(value)
         elif key == "cpu_allowed":
             patch_spec = {"tuning": {"cpu_allowed": value}}
         elif kind == "select" and options:

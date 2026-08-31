@@ -147,7 +147,7 @@ Every array and pool operation in these screens is one of these calls. Reads go 
 | Unmanage filesystem | `DELETE /api/v1/filesystems/{id}` | Delete Array, teardown step 2 |
 | Pools | `GET` / `POST` / `PATCH` / `DELETE /api/v1/pools[/{name}]` | Spare Pools (§7), spare-pool pickers in §4 / §5.2 |
 
-The array create spec (`XiraidArray.spec`, [api-v1.yaml](../control-path/api-v1.yaml)) carries `name`, `level` (`"raid<N>"`), `member_disk_ids`, `strip_size_kib`, and optionally `group_size` and `spare_disk_ids`. `force_metadata` is **not** set from the TUI — that flag is reserved for Ansible re-creates where stale metadata is expected.
+The array create spec (`XiraidArray.spec`, [api-v1.yaml](../control-path/api-v1.yaml)) carries `name`, `level` (`"raid<N>"`), `member_disk_ids`, `strip_size_kib`, and optionally `group_size` and `spare_pool` (a pool **name**; `spare_disk_ids` is observed-only and rejected on `POST`). `force_metadata` is **not** set from the TUI — that flag is reserved for Ansible re-creates where stale metadata is expected.
 
 #### 2.2.1 The daemon-side RPCs behind those endpoints
 
@@ -392,16 +392,16 @@ only visible symptom.
 
 ## 4. Create Array wizard
 
-`_create_array_wizard()` runs as a Textual `@work(exclusive=True)` async worker so the UI stays responsive. Like the NFS share wizards ([Storage/fs-shares-management-spec.md §4.3](fs-shares-management-spec.md#43-wizard-navigation-model)), it is built on the generic [xinas_menu/widgets/wizard.py](../../xinas_menu/widgets/wizard.py) driver: a flat list of `WizardStep`s (`name`, `level`, `drives`, `strip`, `group_size`, `spare`, `confirmed`) handed to `run_wizard()`, with `group_size` and `spare` marked conditional via an `applies=` predicate. `run_wizard` computes `allow_back` and `step_no` per step; **every step after the first (`name`) renders a Back button**, and `Back` returns the operator to the previous *applicable* step — skipping `group_size` when the level isn't 50/60, and skipping `spare` when no pools exist — with that step's prior answer pre-filled. Titles are driver-computed `f"Create Array — Step {step_no}"` (no `/N` denominator, unlike the NFS wizards) so a RAID-5 array (no `group_size` step) numbers its steps 1..6 contiguously, with no gap where step 5 would otherwise have been.
+`_create_array_wizard()` runs as a Textual `@work(exclusive=True)` async worker so the UI stays responsive. Like the NFS share wizards ([Storage/fs-shares-management-spec.md §4.3](fs-shares-management-spec.md#43-wizard-navigation-model)), it is built on the generic [xinas_menu/widgets/wizard.py](../../xinas_menu/widgets/wizard.py) driver: a flat list of `WizardStep`s (`name`, `level`, `drives`, `strip`, `group_size`, `spare`, `confirmed`) handed to `run_wizard()`, with `group_size` marked conditional via an `applies=` predicate; `spare` carries no predicate and is always shown (see "Step — spare pool" below). `run_wizard` computes `allow_back` and `step_no` per step; **every step after the first (`name`) renders a Back button**, and `Back` returns the operator to the previous *applicable* step — skipping `group_size` when the level isn't 50/60 — with that step's prior answer pre-filled. Titles are driver-computed `f"Create Array — Step {step_no}"` (no `/N` denominator, unlike the NFS wizards) so a RAID-5 array (no `group_size` step) numbers its steps 1..6 contiguously, with no gap where step 5 would otherwise have been.
 
-**Disks and pools are fetched up front**, before the wizard's step list is even built — this is what lets the `group_size`/`spare` `applies=` predicates and the drives step see their data on every entry, including after a Back:
+**Disks and pools are fetched up front**, before the wizard's step list is even built — this is what lets the `group_size` `applies=` predicate, the `spare` step's pool-name options, and the drives step see their data on every entry, including after a Back:
 
 1. `_list_api_disks_with_banner(self.app.control)` (`GET /api/v1/disks`, cross-referenced against the arrays list to exclude already-claimed drives) enumerates NVMe drives **and** returns the envelope's degraded banner. **If zero NVMe drives are available, the wizard aborts immediately with a dialog — before the name prompt is ever shown** — and that dialog **names the cause when there is one**: an empty list with a `DEGRADED_BACKEND_UNAVAILABLE` warning renders "No available NVMe drives found." followed by the banner, because "no drives" and "the Disk collector could not be read" are different facts and only one of them means the operator should go looking for hardware.
 
    With no warning present, the fetch was trustworthy, and the dialog says which of the two trustworthy answers it is. If every candidate was dropped by the device-name rule alone — non-system, unmounted, unclaimed disks that simply are not NVMe — the dialog names them: "*N* non-NVMe drive(s) (`sdb`, `sdc`) were excluded — this host is not a VM, so the wizard is NVMe-only." Without that line the operator reads "no available drives" while Physical Drives (§8) lists the same disks as `Available` two screens away, which is the exact contradiction that sent one operator hunting for a broken collector. When nothing was excluded by name, the message is unchanged.
 
-   The banner comes from the shared extractor [api/degraded.py](../../xinas_menu/api/degraded.py) `degraded_banner(envelope)` — the same one Show Exports (§ [fs-shares-management-spec](fs-shares-management-spec.md)) and the RAID overview use. `_list_api_disks_with_banner` fetches the full envelope via `control.get`; `_list_api_disks` remains as a thin wrapper returning rows only, for Edit Array's two lookups (via `_get_numa_topology` for the CPU-affinity NUMA picker and directly for the spare-pool disk-id lookup), which genuinely render no drive-count empty state of their own. Spare Pools is not in that group: `_get_free_nvme_drives` (§7.2) calls `_list_api_disks_with_banner` directly and threads the banner into both of its empty-state dialogs, Create Pool (§7.3) and Add Drives (§7.1), the same pattern as the wizard above.
-2. `GET /api/v1/pools` (via `self.app.control.result`) lists spare pools. A failure here is swallowed (`pools = {}`) rather than aborting the wizard — it just means the `spare` step's `applies=lambda a: bool(pools)` predicate stays `False` and the step is skipped.
+   The banner comes from the shared extractor [api/degraded.py](../../xinas_menu/api/degraded.py) `degraded_banner(envelope)` — the same one Show Exports (§ [fs-shares-management-spec](fs-shares-management-spec.md)) and the RAID overview use. `_list_api_disks_with_banner` fetches the full envelope via `control.get`; `_list_api_disks` remains as a thin wrapper returning rows only, with exactly one caller: `_get_numa_topology`, behind Edit Array's CPU-affinity NUMA picker, which genuinely renders no drive-count empty state of its own. (Edit Array's second use — a spare-pool disk-id lookup — is gone: the pool is now sent by name.) Spare Pools is not in that group: `_get_free_nvme_drives` (§7.2) calls `_list_api_disks_with_banner` directly and threads the banner into both of its empty-state dialogs, Create Pool (§7.3) and Add Drives (§7.1), the same pattern as the wizard above.
+2. `GET /api/v1/pools` (via `self.app.control.result`) lists spare pools. A failure here is swallowed (`pools = {}`) rather than aborting the wizard — the `spare` step still renders, its `SelectDialog` showing `(none)` alone rather than `(none)` plus pool names.
 
 ### Step — name
 
@@ -564,15 +564,15 @@ Two further notes on the level list:
 - Levels 7.3, 70 and N+M are absent from `_RAID_LEVELS` and so never reach
   this step, even though xiRAID supports them.
 
-### Step — spare pool (conditional on pools existing)
+### Step — spare pool
 
-`applies=lambda a: bool(pools)`. If any spare pools exist, a `SelectDialog` offers `(none)` + the sorted pool names, pre-selecting the prior choice on re-entry. If no pools exist at all, the step is skipped silently (no spare pool assigned) — same as before, just expressed as an `applies=` predicate now instead of an inline `if` in a hand-rolled step sequence.
+The step is unconditional — it no longer carries an `applies=lambda a: bool(pools)` predicate, and it is always shown regardless of whether any pools exist. A `SelectDialog` offers `(none)` plus the sorted pool names, pre-selecting the prior choice on re-entry. With no pools, the operator sees `(none)` alone plus a hint line pointing at Storage → Spare Pools to create one. A missing pool never blocks array creation — an array without spares is a valid configuration, so unlike the drive-picker steps this one has no empty-choice failure mode.
 
 ### Confirmation + dispatch
 
 The summary dialog (title `"Confirm Create"`, `allow_back=True`) renders all selections, so the operator can Back up from the summary to revise any earlier answer before creating. On confirm:
 
-1. The spec is assembled from the collected `answers`: `name`, `level` (as `"raid<N>"`), `member_disk_ids` (drive names mapped to disk ids via the up-front disk fetch), `strip_size_kib`, plus `group_size` and `spare_disk_ids` when applicable.
+1. The spec is assembled from the collected `answers`: `name`, `level` (as `"raid<N>"`), `member_disk_ids` (drive names mapped to disk ids via the up-front disk fetch), `strip_size_kib`, plus `group_size` when applicable and `spare_pool` (the chosen pool name), the key being **omitted entirely** for `(none)` — `_spare_spec_fragment(_NONE_POOL)` returns `{}`. Edit Array is deliberately asymmetric here: its `_spare_pool_patch` sends an explicit `spare_pool: null` for `(none)`, because on a `PATCH` an omitted key means "leave it alone" while an explicit `null` is the detach, whereas on a create there is nothing to detach from.
 2. `POST /api/v1/arrays` is submitted via `self.app.control.plan_apply_wait(...)`, with progress and cancellation surfaced through a `TaskWaitDialog`.
 3. On success: `audit.log("raid.create", "<name> RAID-<level> (<n> drives)", "OK")` + `snapshots.record("raid_create", …)` + Quick Overview is refreshed.
 4. On cancellation: a "Create cancelled — partial work rolled back." dialog is shown.
@@ -589,7 +589,7 @@ Steps:
 1. **Pick an array.** `GET /api/v1/arrays` → `SelectDialog` over array names.
 2. **Pick a parameter.** `SelectDialog` over `_MODIFY_PARAMS`, each tuple of `(key, label, kind, options, value_type)`. Parameters offered, in order: CPU Affinity, Spare Pool, Init Priority, Recon Priority, Scheduler Enabled, Memory Limit, Merge Read Enabled, Merge Write Enabled, Merge Read Max, Merge Write Max. (`resync_enabled` is create-only — xiRAID's `RaidModify` has no such field — so it is not offered.) The two merge-max knobs are **times in microseconds** (the daemon spells them `merge_*_usecs`), so their labels say `us` — they were mislabelled `(KB)` until the tuning surface became observable and read and write paths could be compared.
 3. **Per-parameter prompt** — see §5.1 and §5.3.
-4. **Confirm + dispatch.** Value is coerced to the declared `vtype` (`int` for the integer knobs, `str` for the rest) and mapped onto the ADR-0006 writable subset — `sparepool` becomes `{"spare_disk_ids": [...]}`, everything else `{"tuning": {key: value}}`. `PATCH /api/v1/arrays/{name}` is submitted via `plan_apply_wait`. On success: audit (`raid.modify`) + snapshot (`raid_modify`) + Quick Overview refresh. On `ControlPathError`: an OK-only `Edit failed.` dialog.
+4. **Confirm + dispatch.** Value is coerced to the declared `vtype` (`int` for the integer knobs, `str` for the rest) and mapped onto the ADR-0006 writable subset — `sparepool` becomes `{"spare_pool": <name>|null}`, everything else `{"tuning": {key: value}}`. `PATCH /api/v1/arrays/{name}` is submitted via `plan_apply_wait`. On success: audit (`raid.modify`) + snapshot (`raid_modify`) + Quick Overview refresh. On `ControlPathError`: an OK-only `Edit failed.` dialog.
 
 **Caveat on step 2: "create-only" here means "absent from the gRPC message",
 not "the product can't change it".** CR / `xicli raid` documents
@@ -625,7 +625,7 @@ This is the only place where the TUI itself reads `/sys` rather than going throu
 
 ### 5.2 Spare-pool selection
 
-`spare_pool` is also dynamic — instead of free-form input, `GET /api/v1/pools` is queried and a `SelectDialog` is offered. If no pools exist, the operator is told via `notify(severity="warning")` and the dialog aborts. The chosen pool's drive paths are mapped to disk ids (via `GET /api/v1/disks`) to build the PATCH's `spare_disk_ids`; a pool with no drives aborts with a warning rather than sending an empty list.
+`spare_pool` is also dynamic — instead of free-form input, `GET /api/v1/pools` is queried and a `SelectDialog` is offered over `(none)` plus the pool names. The chosen name goes straight into `spec.spare_pool` — there is no `GET /api/v1/disks` join, because the field is a pool name, not a disk-id list. If no pools exist, a modal `ConfirmDialog` replaces the picker: *"No spare pools exist. Create one in Storage → Spare Pools → Create Pool, then run Edit Array again."*
 
 This is also the only knob in §5 whose PATCH spec is not under `tuning`.
 
@@ -800,7 +800,7 @@ Same flow as RAID Create up to the drive picker, then:
 
    The xiRAID 4.4 command reference documents no naming rule for `xicli pool create -n` (it says only "The name of the spare pool"), so unlike the array rule this is a xiNAS choice. The character set is deliberately conservative: pool names are engine identifiers handed to the same `xicli` binary, hyphens are not accepted anywhere xiRAID naming *is* documented, and the two failure modes are not symmetric — a name rejected here costs the operator one keystroke, while a name accepted here and rejected by the engine fails after the confirmation step, mid-apply. If Xinnor documents a laxer pool rule, relax this one; do not relax it on the assumption that it is lax.
 
-   The **length bound is deliberately not** the array's 28. There is no vendor source for a pool length limit, and xiNAS has positive evidence that longer names work: the array executor creates its own spare pools as `xnsp_<array>` (up to 33 characters for a maximum-length array name, `derivedPoolName()` in [xiNAS-MCP/src/lib/xiraid/validate.ts](../../xiNAS-MCP/src/lib/xiraid/validate.ts)). A 28-character pool rule would outlaw pools this system creates itself, so the incumbent 64 stands; `POOL_NAME_MAX_LEN` must remain ≥ `len("xnsp_") + ARRAY_NAME_MAX_LEN`.
+   The **length bound is 64 as a deliberate xiNAS choice, not a derived one.** There is no vendor-documented pool-name length limit — the xiRAID 4.4 command reference is as silent on length as it is on the character set above. The bound used to be pinned to the array name limit, `len("xnsp_") + ARRAY_NAME_MAX_LEN`, back when the array executor provisioned its own spare pool named `xnsp_<array>`; that derivation is gone along with the executor-owned pool — an array now references an existing pool by name instead of creating one (see `docs/superpowers/specs/2026-08-29-array-spare-pool-by-name-design.md`). With no vendor ceiling to defer to and no derived floor to respect, 64 stands on its own: generous enough for any operator-chosen name, small enough to keep names legible. Relax it only if Xinnor documents an actual limit.
 
    `power`/`uevent` are **not** reserved for pools. Those two names are prohibited because they collide with sysfs attributes under `/sys/block/xi_<name>/`, and a spare pool is not a block device.
 
@@ -862,8 +862,8 @@ Apart from `drive_locate`, the screen issues no writes. It is the canonical "wha
 ```
 RAIDScreen._create_array_wizard()
   ├─ _list_api_disks(control)           — GET /api/v1/disks (up front; aborts here if no NVMe)
-  ├─ GET /api/v1/pools                  — up front (failure ⇒ spare step just skipped)
-  ├─ run_wizard([name, level, drives, strip, group_size?, spare?, confirmed])
+  ├─ GET /api/v1/pools                  — up front (failure ⇒ spare step shows (none) alone)
+  ├─ run_wizard([name, level, drives, strip, group_size?, spare, confirmed])
   │    ├─ InputDialog (name)                 — TUI only, no Back (first step)
   │    ├─ SelectDialog (level)               — TUI only, Back-enabled
   │    ├─ drives: SelectDialog (group) → DrivePickerScreen
@@ -871,9 +871,9 @@ RAIDScreen._create_array_wizard()
   │    │         DrivePickerScreen with the prior selection preselected
   │    ├─ SelectDialog (strip size, pre-selects 64)
   │    ├─ InputDialog (group size)           — only if level in {50, 60}
-  │    ├─ SelectDialog (spare pool)          — only if pools exist
+  │    ├─ SelectDialog (spare pool)          — always shown; (none) + pool names
   │    └─ ConfirmDialog (summary, Back-enabled)
-  ├─ POST /api/v1/arrays (name, level, member_disk_ids, strip_size_kib, [group_size], [spare_disk_ids])
+  ├─ POST /api/v1/arrays (name, level, member_disk_ids, strip_size_kib, [group_size], [spare_pool])
   │    └─ plan_apply_wait → control-path API → xiRAID
   ├─ audit.log("raid.create", …, "OK")  — write /var/log/xinas/audit.log
   ├─ snapshots.record("raid_create", …) — xinas_history snapshot

@@ -428,11 +428,11 @@ describe('parseRaidShow', () => {
           level: '6',
           devices: ['/dev/nvme1n1', '/dev/nvme2n1'],
           state: ['online'],
-          sparepool: 'xnsp_data',
+          sparepool: 'sp_data',
         },
       ],
       DISK_IDS,
-      [{ name: 'xnsp_data', drives: ['/dev/nvme3n1', '/dev/unknown9'] }],
+      [{ name: 'sp_data', drives: ['/dev/nvme3n1', '/dev/unknown9'] }],
     );
     expect(a?.spec.spare_disk_ids).toEqual(['disk-3', '/dev/unknown9']); // raw-path fallback
   });
@@ -445,11 +445,11 @@ describe('parseRaidShow', () => {
           level: '6',
           devices: ['/dev/nvme1n1'],
           state: ['online'],
-          sparepool: 'xnsp_data',
+          sparepool: 'sp_data',
         },
       ],
       DISK_IDS,
-      { xnsp_data: { drives: ['/dev/nvme3n1'], state: 'active' } },
+      { sp_data: { drives: ['/dev/nvme3n1'], state: 'active' } },
     );
     expect(a?.spec.spare_disk_ids).toEqual(['disk-3']);
   });
@@ -472,6 +472,27 @@ describe('parseRaidShow', () => {
       DISK_IDS,
     );
     expect(noPayload[0]?.spec.spare_disk_ids).toEqual([]);
+  });
+
+  // ---- 2026-08-29 design: spec.spare_pool carries the pool NAME (observed) ----
+
+  it('reports the array sparepool name in spec.spare_pool', () => {
+    const rows = parseRaidShow(
+      { data: { name: 'data', level: '5', devices: [], sparepool: 'sp01' } },
+      new Map(),
+      [{ name: 'sp01', drives: ['/dev/nvme5n2'], active: true }],
+    );
+    expect(rows[0]?.spec.spare_pool).toBe('sp01');
+    expect(rows[0]?.status.spare_pool).toBe('sp01');
+  });
+
+  it('omits spec.spare_pool when the array has no pool', () => {
+    const rows = parseRaidShow(
+      { data: { name: 'data', level: '5', devices: [], sparepool: '-' } },
+      new Map(),
+      [],
+    );
+    expect(rows[0]?.spec.spare_pool).toBeUndefined();
   });
 
   it('normalizes the real xiRAID daemon shape (object keyed by name, tuple devices)', () => {
@@ -666,6 +687,6 @@ describe('sparepool sentinel', () => {
   });
 
   it('a real pool name still comes through', () => {
-    expect(arr('xnsp_a')?.status.spare_pool).toBe('xnsp_a');
+    expect(arr('sp_a')?.status.spare_pool).toBe('sp_a');
   });
 });

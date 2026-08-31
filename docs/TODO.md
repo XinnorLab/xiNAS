@@ -21,6 +21,50 @@ deferred and the change that deferred it.
 
 ---
 
+## Storage — the Create Array drive picker does not exclude spare-pool drives
+
+*Deferred 2026-08-29, from the array-spare-pool-by-name change
+([docs/superpowers/specs/2026-08-29-array-spare-pool-by-name-design.md](superpowers/specs/2026-08-29-array-spare-pool-by-name-design.md) §5).*
+
+**What is missing.** `_list_api_disks_with_banner` in
+[xinas_menu/screens/raid.py](../xinas_menu/screens/raid.py) builds its
+`claimed` set from the observed arrays' `member_disk_ids` + `spare_disk_ids`
+only. It never reads `GET /api/v1/pools`, so a drive held by a spare pool that
+no array currently references is offered to the operator as a free drive.
+
+**What the code does instead.** The control path catches it at plan time: the
+`disk_in_spare_pool` blocker (`lib/xiraid/validate.ts`
+`checkMembersNotPooled`) names the pool holding the drive and tells the
+operator to remove it from the pool or pick another. The operator sees the
+error at the wizard's confirmation step rather than at the picker.
+
+**Why it was cut.** The change's scope was the array→pool reference itself,
+and the blocker makes the failure correct, actionable and impossible to apply.
+Threading pool drives into the picker means the create wizard grows a third
+API dependency (`GET /api/v1/pools` is already fetched for the spare step, but
+later in the flow and with its failure deliberately swallowed), whose failure
+mode has to be decided: silently offering pooled drives is what happens today,
+and hard-aborting the wizard on a pools read failure is a worse trade.
+
+Note that the design doc's §5 claim — that the pool surface already keeps
+pool-held drives out of free-drive pickers — is **inaccurate for this picker**,
+and this entry is the correction. That rule lives in
+`_get_free_nvme_drives` ([xinas_menu/screens/spare_pools.py](../xinas_menu/screens/spare_pools.py))
+and governs the **Spare Pools** picker only. The design doc is append-only, so
+it is not edited; this entry is the durable record.
+
+**Why it matters more now.** Before this change a pool was executor-owned and
+died with its array. Pools now outlive the arrays that reference them, so an
+unreferenced pool left behind by a deleted array holds drives that show as free
+in the wizard and then fail at confirmation.
+
+**What done looks like.** `_list_api_disks_with_banner` folds the drives of
+every observed pool into `claimed` — the same exclusion `_get_free_nvme_drives`
+already computes — so pooled drives never reach the Create Array picker, with a
+decided, tested behavior for a failed pools read (degraded banner, not an
+abort). The `disk_in_spare_pool` blocker stays as the preflight backstop for
+REST/MCP/CLI clients.
+
 ## MCP — the modern-era SDK client tests (acceptance criteria 10 and 11) are unwritten
 
 *Deferred 2026-08-24, from the `server/discover` / modern-protocol-era change

@@ -26,7 +26,7 @@
 
 ### Out of scope (deferred — designed in ADR-0006, built later)
 - **Modify**, **import**, **delete** — *superseded (2026-06-10): built by the **S4 spec** (`s4-xiraid-array-mutations-spec.md`).*
-- **Create-with-spares:** non-empty `spare_disk_ids` on create → plan blocker `spare_pool_deferred` — *superseded: the S4 spec removes the blocker (create provisions + activates the pool).*
+- **Create-with-spares:** non-empty `spare_disk_ids` on create → plan blocker `spare_pool_deferred` — *superseded: the S4 spec removes the blocker. The create path takes `spec.spare_pool` (the name of an existing pool) and performs no `pool_create`; it activates the named pool only if it reads inactive, then passes `sparepool` straight to `raid_create`.*
 - **Online reshape / capacity expansion**, **first-class pool objects** (ADR-0006 *does NOT decide*).
 - **xiRAID daemon transport hardening** (`xiraid_classic`/packaging concern).
 

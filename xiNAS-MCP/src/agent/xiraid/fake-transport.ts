@@ -20,9 +20,12 @@
  *    roll_fail pattern, extended to every S4 verb);
  *  - a raidModify carrying TUNING keys (any field beyond name/sparepool)
  *    against a name ending '_fail_tuning' REJECTS — this targets the
- *    modify executor's apply_tuning stage specifically while pool ops on
- *    `xnsp_<name>` still succeed (a plain '_fail' name would trip the
- *    pool ops first).
+ *    modify executor's apply_tuning stage specifically, after the operator's
+ *    pool has already been attached/activated successfully. A plain '_fail'
+ *    array name cannot do that: failHook keys on the request's own name, and
+ *    apply_spares' `raid_modify` carries the ARRAY's name, so it would reject
+ *    one stage too early. (The pool verbs are unaffected either way — they
+ *    hook on the POOL's name, which is independent of the array's.)
  *  - deleting an ACTIVE pool rejects (forces the deactivate-first order,
  *    analyst doc §3.8).
  */

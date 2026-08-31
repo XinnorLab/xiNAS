@@ -114,21 +114,39 @@ describe('toRaidCreateRequest', () => {
     ).toThrow(/nope/);
   });
 
-  // ---- S4 T3: create-with-spares renders the derived sparepool ----
+  // ---- 2026-08-29 design: spare pools are referenced by name, not derived ----
 
-  it('spares render as sparepool xnsp_<name>; spare drives are NOT in drives', () => {
+  it('passes spec.spare_pool through as the create sparepool', () => {
+    const req = toRaidCreateRequest(
+      {
+        name: 'data',
+        level: 'raid5',
+        member_disk_ids: ['d1', 'd2', 'd3', 'd4'],
+        spare_pool: 'sp01',
+      },
+      DEVICES,
+    );
+    expect(req.sparepool).toBe('sp01');
+  });
+
+  it('omits sparepool when no spare pool is named', () => {
+    const req = toRaidCreateRequest(
+      { name: 'data', level: 'raid0', member_disk_ids: ['d1', 'd2'] },
+      DEVICES,
+    );
+    expect('sparepool' in req).toBe(false);
+  });
+
+  it('spare_disk_ids alone (observed-only field) does not derive a sparepool', () => {
+    // spare_disk_ids is observed-only after the 2026-08-29 design change — a
+    // caller that sends it without spec.spare_pool must not get a pool
+    // conjured from the array name any more (that was the executor-owned
+    // xnsp_<name> pool this design retires).
     const req = toRaidCreateRequest(
       { name: 'data', level: 'raid0', member_disk_ids: ['d1', 'd2'], spare_disk_ids: ['d3'] },
       DEVICES,
     );
-    expect(req.sparepool).toBe('xnsp_data');
-    expect(req.drives).toEqual(['/dev/nvme1n1', '/dev/nvme2n1']); // no /dev/nvme3n1
-    // no spares → no sparepool key at all
-    const bare = toRaidCreateRequest(
-      { name: 'data', level: 'raid0', member_disk_ids: ['d1', 'd2'] },
-      DEVICES,
-    );
-    expect('sparepool' in bare).toBe(false);
+    expect('sparepool' in req).toBe(false);
   });
 });
 
@@ -197,9 +215,9 @@ describe('toRaidModifyRequest', () => {
   });
 
   it('sparepool attach passes the pool name through', () => {
-    expect(toRaidModifyRequest('data', { sparepool: 'xnsp_data' })).toEqual({
+    expect(toRaidModifyRequest('data', { sparepool: 'sp_data' })).toEqual({
       name: 'data',
-      sparepool: 'xnsp_data',
+      sparepool: 'sp_data',
     });
   });
 

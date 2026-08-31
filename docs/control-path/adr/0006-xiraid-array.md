@@ -39,7 +39,7 @@ The gRPC client dials the xiRAID daemon over **TCP with TLS** (`host:port` from 
 
 **Disk enrichment prerequisite.** Today's live `Disk` observation carries only identity fields (`name`, `model`, `serial`, `transport`, `wwn`, `size_text`); the `safe_for_use` REST filter exists but live observations never emit the field. Array preflight needs more, so S3 **extends the disk parser/probe/collector** to also emit: `device_path` (`/dev/<name>`), `size_bytes`, `system_disk` (any descendant partition mounted at `/`, `/boot`, or `/boot/efi` — the `nvme_namespace` role's detection rule), `mounted` (any descendant mountpoint), and `safe_for_use` (= `!system_disk && !mounted`). Array membership is **not** a collector concern; the plan provider checks it against observed `XiraidArray`s.
 
-**Resolution contract.** The **plan provider** (api side) resolves `Disk.id → device_path` from observed `Disk` state at plan time, validates each disk (exists, `safe_for_use`, not `system_disk`, not already a member/spare of an observed array), and **embeds the resolved `device_by_id` map in the operation spec** persisted on the task — the same `spec` the engine forwards to the agent in `task.begin`. The S2 `ExecutorContext` deliberately exposes only `spec` (no KV access), so the map travels in the spec rather than via a new context surface. The **executor preflight** then re-checks under the held leases against live agent-side facts: every resolved `device_path` exists, and none is already a member of an array per a fresh `raid_show`. Disk *safety* (system-disk, mounted) is pinned at plan time and protected by the disk leases; the executor re-verifies *existence and membership*, which is what can change out from under a plan.
+**Resolution contract.** The **plan provider** (api side) resolves `Disk.id → device_path` from observed `Disk` state at plan time, validates each disk (exists, `safe_for_use`, not `system_disk`, not already a member of an observed array, not held by an observed spare pool), and **embeds the resolved `device_by_id` map in the operation spec** persisted on the task — the same `spec` the engine forwards to the agent in `task.begin`. The S2 `ExecutorContext` deliberately exposes only `spec` (no KV access), so the map travels in the spec rather than via a new context surface. The **executor preflight** then re-checks under the held leases against live agent-side facts: every resolved `device_path` exists, and none is already a member of an array per a fresh `raid_show`. Disk *safety* (system-disk, mounted) is pinned at plan time and protected by the disk leases; the executor re-verifies *existence and membership*, which is what can change out from under a plan.
 
 ### Schema (canonical JSON)
 
@@ -61,7 +61,7 @@ The gRPC client dials the xiRAID daemon over **TCP with TLS** (`host:port` from 
     "name": "data",
     "level": "raid6",
     "member_disk_ids": ["disk-nvme2", "disk-nvme3", "disk-nvme4", "disk-nvme5"],
-    "spare_disk_ids": [],
+    "spare_pool": null,
     "group_size": null,
     "synd_cnt": null,
     "strip_size_kib": 64,
@@ -125,7 +125,8 @@ The gRPC client dials the xiRAID daemon over **TCP with TLS** (`host:port` from 
 | `spec.strip_size_kib` | ✅ | ❌ `UNSUPPORTED` | From the xiRAID `STRIP_SIZES_KB` set (powers of two; `{16,32,64,128,256}`). |
 | `spec.block_size` | ✅ | ❌ `UNSUPPORTED` | `512` or `4096`. |
 | `spec.force_metadata` | ✅ | ❌ `UNSUPPORTED` | Create-only override; overwrites stale metadata on members. |
-| `spec.spare_disk_ids` | ✅ (since S4 — create provisions + activates the pool) | ✅ | Spare pool lifecycle below. |
+| `spec.spare_pool` | ✅ | ✅ | Name of an existing pool (`POST /api/v1/pools`); `null` on modify detaches without deleting it. Spare pool lifecycle below. |
+| `spec.spare_disk_ids` | ❌ `observed_only` | ❌ `observed_only` | Rejected on write — create the pool via `POST /api/v1/pools`, then send `spec.spare_pool`. Populated by the collector from `raid_show` (pool members joined to Disk ids). |
 | `spec.tuning.*` (live-writable) | ✅ | ✅ | Priorities `[1,100]`; `memory_limit` `0` or `[1024,1048576]` MiB; merge timings in microseconds; booleans map to xiRAID `0/1`. |
 | `spec.tuning.{resync_enabled, discard, drive_trim}` | ✅ | ❌ `UNSUPPORTED` | Create-surface tuning only — the daemon's `RaidModify` message has **no field** for any of them (verified against the running 4.3.1 descriptor). Rejected pre-plan with `reason: create_only_tuning`; forwarding one would be silently dropped by protobuf and report a false success. |
 | `status.*` | server-managed | server-managed | Computed by the agent from `raid_show`. |
@@ -145,11 +146,16 @@ The three create-surface tuning keys reject on the same pre-plan path, with `fie
 
 ### Spare pools
 
-xiRAID models spares as **pool objects** with their own lifecycle (`pool_create {name, drives}` / `pool_add` / `pool_remove` / `pool_delete`); `RaidCreate.sparepool` / `RaidModify.sparepool` reference a pool **by name**. The control path does **not** expose pools as a first-class object in Phase 0; it models them via `spec.spare_disk_ids`, and the **executor owns the pool lifecycle**:
+xiRAID models spares as **pool objects** with their own lifecycle (`pool_create {name, drives}` / `pool_add` / `pool_remove` / `pool_delete`); `RaidCreate.sparepool` / `RaidModify.sparepool` reference a pool **by name**. Pool CRUD **is** a first-class control-path surface (ADR-0011 / S9: `POST/PATCH/DELETE /api/v1/pools`), and an array never creates, fills, empties or deletes one — it only *references* an existing pool by name, via `spec.spare_pool`. Pool lifecycle belongs entirely to that pool surface.
 
-- Attach (modify, `spare_disk_ids` ∅→non-∅): `pool_create { name: "xnsp_<array>", drives }` → **`pool_activate`** (xiRAID arms auto-replace only for *activated* pools — analyst doc §3.8) → `raid_modify { sparepool: "xnsp_<array>" }`. Rollback: detach + `pool_deactivate` + `pool_delete`.
-- Change membership: `pool_add` / `pool_remove` on `xnsp_<array>` (pool stays active).
-- Detach (non-∅→∅): `raid_modify { sparepool: "null" }` → `pool_deactivate` → `pool_delete`.
+- Attach (`spare_pool` -> a pool name): `pool_activate` when the named pool is
+  inactive (xiRAID arms auto-replace only for activated pools — analyst doc
+  §3.8), then `raid_modify { sparepool: "<name>" }`. Rollback restores the
+  previous sparepool name and deactivates the pool only if this run activated
+  it.
+- Detach (`spare_pool: null`): `raid_modify { sparepool: "null" }` — the
+  detach sentinel. The pool is left in place and active; it may be referenced
+  by other arrays.
 
   > *(Amended 2026-08-28.)* This line read `sparepool: ""`, and the executor
   > sent that. It does not detach anything. The daemon counts a present-but-empty
@@ -164,8 +170,11 @@ xiRAID models spares as **pool objects** with their own lifecycle (`pool_create 
   > `translate.toRaidModifyRequest` now normalizes `''` → `'null'`; see
   > [s4-xiraid-array-mutations-spec.md](../s4-xiraid-array-mutations-spec.md)
   > §Modify for the full evidence.
-- Create-with-spares: `pool_create` → `pool_activate` → `raid_create { …, sparepool }` (since S4 — the S3 build briefly deferred this behind a `spare_pool_deferred` blocker, removed in S4).
-- Day-1 Ansible-created pools with other names are surfaced read-only in `status` (observe maps the array's current sparepool to disk ids); the executor only manages pools it named `xnsp_<array>`.
+- The control path NEVER creates, fills, empties or deletes a pool from an
+  array request. Pool lifecycle belongs to the pool surface (ADR-0011 /
+  S9): POST/PATCH/DELETE /api/v1/pools.
+- Day-1 Ansible pools are ordinary pools and are attachable like any other.
+  The `xnsp_<array>` derived name and the foreign-pool guard are retired.
 
 ### Validation and translation (shared module)
 
@@ -209,13 +218,13 @@ Mutating calls follow the standard plan/apply contract (ADR-0004). The apply bod
 All `risk_level` / `rollback_model` values below use the api-v1.yaml enums (`risk_level ∈ non_disruptive|changing_access|destructive|unsupported_rollback`; `rollback_model ∈ non_disruptive|changing_access|destructive|unsupported`).
 
 **Create** (`xiraid.array.create`, `POST /arrays` with a create-shaped spec).
-- `affected_resources = [ XiraidArray#name (primary, first), …member Disks ]` (spare Disks join once spares land). The member Disks are leased to serialize concurrent creates competing for the same disks.
+- `affected_resources = [ XiraidArray#name (primary, first), …member Disks, Pool#spare_pool (when the spec references one) ]`. Spares join as a **`Pool` ref, never as Disks** — the pool's drives belong to the pool, not to the array. The member Disks are leased to serialize concurrent creates competing for the same disks.
 - `risk_level: non_disruptive` (consumes free disks; touches no existing data); `rollback_model: non_disruptive` (rollback destroys the just-created, still-empty array).
 - **Freshness:** the array does not exist yet, so the plan omits `state_revision_expected` and apply carries `expected_revision: 0`; disk-state TOCTOU is covered by the disk leases + the executor's `preflight` re-check (existence + membership against live `raid_show`).
 - Executor stages: `preflight` (re-check `device_by_id` paths exist + not already members, via live `raid_show`) → `create` (`raid_create`; mark created) → `wait_online` (poll `raid_show` until `state ∈ {optimal, rebuilding}` or timeout) → `verify` (`/dev/xi_<name>` present). `rollback`: if created → `raid_destroy(name, force)`, else no-op. `snapshot_before/after` are auto-captured by the runner.
 
 **Modify** (`xiraid.array.modify`, `PATCH /arrays/{id}`).
-- Writable: `spare_disk_ids` (pool lifecycle above) + `spec.tuning.*` **except the create-surface trio** (`resync_enabled`/`discard`/`drive_trim`, matrix). Topology fields and the create-surface tuning keys → `UNSUPPORTED` (matrix). Maps to `raid_modify` (+ pool ops). `risk_level: non_disruptive`, `rollback_model: non_disruptive` (re-apply prior values / inverse pool ops).
+- Writable: `spare_pool` (pool lifecycle above) + `spec.tuning.*` **except the create-surface trio** (`resync_enabled`/`discard`/`drive_trim`, matrix). `spare_disk_ids` is observed-only and rejected on write. Topology fields and the create-surface tuning keys → `UNSUPPORTED` (matrix). Maps to `raid_modify` (+ `pool_activate` on attach to an inactive pool). `risk_level: non_disruptive`, `rollback_model: non_disruptive` (re-apply prior sparepool name / prior tuning values; deactivate the pool only if this run activated it).
 
 **Import** (`xiraid.array.import`, `POST /arrays` with an import-shaped spec `{ uuid, new_name? }`).
 - *(Amended by the S4 spec, 2026-06-10.)* Plan-mode validates what the api can know from KV alone: spec shape, target-name validity + availability. The candidate UUID is validated **at executor preflight** via a live `raid_import_show()` — the privilege split makes a plan-time daemon call impossible (only the agent reaches xiRAID; `PlanContext` is KV-only). A plan-time discovery surface (an observed import-candidates annex or an on-demand agent RPC) is follow-on work; until then clients learn candidate UUIDs from xiRAID tooling. **Adopt:** `mode=apply` → the executor runs `raid_import_apply(uuid, new_name?)`. The apply task terminates `success`; the adopted array surfaces through the normal observe path. `risk_level: non_disruptive`; `rollback_model: non_disruptive` (un-adopt = config-only removal, `raid_destroy { config_only: true }` — data untouched). See `docs/control-path/s4-xiraid-array-mutations-spec.md` §6.
@@ -228,12 +237,12 @@ All `risk_level` / `rollback_model` values below use the api-v1.yaml enums (`ris
 
 ### Preflight blockers (codes)
 
-Harvested from the xiRAID error taxonomy into `lib/xiraid/validate`: `min_drives` (level minimum not met), `members_not_even` (raid10 — AG: "the number of drives must be even"), `group_size_required` / `group_size_range` / `members_not_divisible_by_group` (raid50/60/70), `synd_cnt_required` / `synd_cnt_range` (n+m), `strip_size_invalid`, `block_size_invalid`, `param_out_of_range` (priorities/memory/timings), `name_invalid` / `name_taken`, `disk_not_found` / `disk_not_safe` / `disk_is_system` / `disk_in_use` (per offending disk). Delete adds `dangerous_flag_required`, `dependent_filesystem_mounted`, `dependent_share_active`.
+Harvested from the xiRAID error taxonomy into `lib/xiraid/validate`: `min_drives` (level minimum not met), `members_not_even` (raid10 — AG: "the number of drives must be even"), `group_size_required` / `group_size_range` / `members_not_divisible_by_group` (raid50/60/70), `synd_cnt_required` / `synd_cnt_range` (n+m), `strip_size_invalid`, `block_size_invalid`, `param_out_of_range` (priorities/memory/timings), `name_invalid` / `name_taken`, `disk_not_found` / `disk_not_safe` / `disk_is_system` / `disk_in_use` / `disk_in_spare_pool` (per offending disk — `disk_in_use` is membership of another array, `disk_in_spare_pool` is membership of a spare pool, which `safe_for_use` cannot see). Spare-pool references add `spare_pool_not_found` / `spare_pool_empty`. Delete adds `dangerous_flag_required`, `dependent_filesystem_mounted`, `dependent_share_active`.
 
 ### Relationship to other objects
 
 - **Dependency chain:** `XiraidArray.status.volume_path` (`/dev/xi_<name>`) ← `Filesystem.spec.backing_device` ← `Share.spec.path` (under the filesystem mountpoint). This is the delete blast-radius graph.
-- **Disk:** `member_disk_ids`/`spare_disk_ids` reference `Disk` objects; a disk is consumable only when `safe_for_use` and not already claimed by an observed array.
+- **Disk:** `member_disk_ids`/`spare_disk_ids` reference `Disk` objects; a disk is consumable only when `safe_for_use`, not already claimed by an observed array, and **not held by an observed spare pool** (`disk_in_spare_pool`).
 - **Cluster.capabilities** continues to advertise the adapter availability; once the collector is real, the `XIRAID_ADAPTER_DEFERRED` deferral marker is removed.
 
 ## Consequences
@@ -257,7 +266,7 @@ Harvested from the xiRAID error taxonomy into `lib/xiraid/validate`: `min_drives
 ### What this ADR does NOT decide
 
 - **Online capacity expansion / reshape** (add members, change level/strip live). Deferred; would extend the modify matrix in a later ADR.
-- **Pool objects as first-class control-path resources.** Phase 0 models spares via `spare_disk_ids` + the executor-owned `xnsp_<array>` pool; a first-class `SparePool` object is future work.
+- ~~**Pool objects as first-class control-path resources.** Phase 0 models spares via `spare_disk_ids` + the executor-owned `xnsp_<array>` pool; a first-class `SparePool` object is future work.~~ **Superseded 2026-08-29:** pools are a first-class object (ADR-0011 / S9) and an array references one by name — see §Spare pools.
 - **The xiRAID daemon's own auth/transport hardening** (TLS material rotation, UDS vs TCP `:6066`). That is an `xiraid_classic`/packaging concern; this ADR assumes the agent (root) can reach it once the unit change lands.
 - **Whether arrays are editable via the TUI in Phase 0** (must be via the API; a dedicated M5 screen is a UI-scoping question, not an ADR question).
 
@@ -285,7 +294,16 @@ Rejected: blockers must surface at **plan** time (§14 "expose blast radius befo
 
 ### First-class pool objects now
 
-Rejected for Phase 0: `spare_disk_ids` + an executor-owned pool covers the single-pool-per-array case; a full pool CRUD surface (shared pools across arrays) is real scope with no Phase-0 requirement behind it.
+~~Rejected for Phase 0: `spare_disk_ids` + an executor-owned pool covers the single-pool-per-array case; a full pool CRUD surface (shared pools across arrays) is real scope with no Phase-0 requirement behind it.~~ **Superseded 2026-08-29:** the pool CRUD surface landed in S9 (ADR-0011) and shared pools across arrays are now a supported, tested case — see §Spare pools.
+
+### Executor-owned `xnsp_<array>` pools
+
+Rejected, and **retired 2026-08-29** after shipping as the S4 model. It made
+every operator-created pool unattachable: the TUI resolved the chosen pool to
+its drives, and the executor then tried to build `xnsp_<array>` from drives the
+daemon already accounted to that pool, failing with `13 INTERNAL: Drive
+'/dev/nvme5n2' is already a part of the 'sp01' spare pool`. Two owners for one
+pool lifecycle is the defect; S9 already made the pool surface the owner.
 
 ## Implementation notes for downstream workstreams
 

@@ -114,13 +114,14 @@ class TestPoolName:
         assert err is not None
         assert "hyphen" in err.lower()
 
-    def test_rejects_65_characters(self) -> None:
-        assert validate_pool_name("a" * 65) is not None
+    def test_admits_a_64_character_pool_name(self) -> None:
+        # xiRAID documents no pool-name length limit; xiNAS caps at 64 as a
+        # deliberate choice (raid-management-spec §7.3). The old case pinned
+        # this to the retired `xnsp_<array>` derived name.
+        assert validate_pool_name("a" * 64) is None
 
-    def test_admits_the_derived_xnsp_pool_name_of_the_longest_array(self) -> None:
-        # The array executor creates spare pools named `xnsp_<array>`. A pool
-        # rule narrower than that would outlaw the pools xiNAS creates itself.
-        assert validate_pool_name("xnsp_" + "a" * ARRAY_NAME_MAX_LEN) is None
+    def test_rejects_a_65_character_pool_name(self) -> None:
+        assert validate_pool_name("a" * 65) is not None
 
     def test_rejects_empty(self) -> None:
         assert validate_pool_name("") is not None

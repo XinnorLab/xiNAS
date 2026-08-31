@@ -6,17 +6,23 @@
  * mode; xiraid-state.json in the per-run fixture dir).
  *
  * Scenario chain (sequential — each builds on the previous state):
- *   1. create-with-spares  — POST plan/apply; pool xnsp_data provisioned +
- *      activated before raid_create; observed spec.spare_disk_ids real.
- *   2. modify              — PATCH: change the spare + set tuning → success;
- *      observed spares updated on the next sweep.
- *   3. import              — seeded candidate adopted under new_name;
+ *   1. operator pool + bare array — POST /pools creates sp01 (the only pool
+ *      lifecycle owner); POST /arrays creates 'data' with no spare pool.
+ *   2. attach (REGRESSION)  — PATCH spare_pool: 'sp01' + tuning on an array
+ *      that has none; the 2026-08-29 field failure. sp01 must stay the ONLY
+ *      pool, and tuning still applies last.
+ *   3. create-with-pool     — a second array references the SAME sp01;
+ *      one pool backs several arrays (design §2).
+ *   4. retired write field  — PATCH spec.spare_disk_ids → 422 observed_only.
+ *   5. detach               — PATCH spare_pool: null clears the reference and
+ *      LEAVES the pool alone.
+ *   6. import               — seeded candidate adopted under new_name;
  *      observable via GET /arrays.
- *   4. delete gates        — apply without dangerous → 412 (engine gate);
+ *   7. delete gates         — apply without dangerous → 412 (engine gate);
  *      a mounted dependent filesystem (filesystems.json fixture — the
  *      fixture probe feeds the collector, so the complete-snapshot sweep
  *      keeps it alive) → 412 dependent_filesystem_mounted.
- *   5. delete success      — the adopted array, dangerous:true → 202 →
+ *   8. delete success       — the adopted array, dangerous:true → 202 →
  *      success → gone from GET /arrays.
  */
 
@@ -37,6 +43,8 @@ const ADMIN_TOKEN = 'e2e-admin-tok';
 const AGENT_TOKEN = 'e2e-agent-tok';
 const HEARTBEAT_INTERVAL_MS = 300;
 const TERMINAL = ['success', 'failed', 'cancelled', 'requires_manual_recovery'];
+/** sp01's drives, sorted — asserted unchanged across attach and detach. */
+const SP01_DRIVES = ['/dev/nvme10n1', '/dev/nvme9n1'];
 
 interface JsonResponse {
   status: number;
@@ -149,7 +157,7 @@ async function waitForArrays(
 }
 
 function disksFixture(): unknown {
-  const data = Array.from({ length: 8 }, (_v, i) => ({
+  const data = Array.from({ length: 10 }, (_v, i) => ({
     name: `nvme${i + 1}n1`,
     size: 1_920_383_410_176,
     type: 'disk',
@@ -173,6 +181,103 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
   function withAgentStderr(err: unknown): Error {
     const msg = err instanceof Error ? err.message : String(err);
     return new Error(`${msg}\n--- agent stderr ---\n${agentStderr.join('')}`);
+  }
+
+  /** The observed pool names, sorted — the pool-lifecycle invariant. */
+  async function poolNames(): Promise<string[]> {
+    const res = await requestJson(apiSockPath, '/api/v1/pools', ADMIN_TOKEN, 'GET');
+    return (res.body.result as Array<{ name: string }>).map((p) => p.name).sort();
+  }
+
+  /** One pool's observed drive list, sorted — the pool-content invariant. */
+  async function poolDrives(name: string): Promise<string[]> {
+    const res = await requestJson(apiSockPath, '/api/v1/pools', ADMIN_TOKEN, 'GET');
+    const pool = (res.body.result as Array<{ name: string; drives: string[] }>).find(
+      (p) => p.name === name,
+    );
+    return [...(pool?.drives ?? [])].sort();
+  }
+
+  /** One pool's observed active flag — the pool-activation invariant. */
+  async function poolActive(name: string): Promise<boolean | undefined> {
+    const res = await requestJson(apiSockPath, '/api/v1/pools', ADMIN_TOKEN, 'GET');
+    return (res.body.result as Array<{ name: string; active: boolean }>).find(
+      (p) => p.name === name,
+    )?.active;
+  }
+
+  /** The array's currently referenced pool name, '' when it has none. */
+  async function arraySparepool(id: string): Promise<string> {
+    const res = await requestJson(apiSockPath, `/api/v1/arrays/${id}`, ADMIN_TOKEN, 'GET');
+    return (res.body.result as { status?: { spare_pool?: string } }).status?.spare_pool ?? '';
+  }
+
+  /** plan → apply → wait, for the routes that bind freshness from the plan. */
+  async function planApplyAndWait(
+    method: 'POST' | 'PATCH' | 'DELETE',
+    path: string,
+    spec: Record<string, unknown>,
+    idempotencyKey: string,
+  ): Promise<TaskResult> {
+    const planned = await requestJson(apiSockPath, path, ADMIN_TOKEN, method, {
+      mode: 'plan',
+      spec,
+    });
+    expect(planned.status, JSON.stringify(planned.body)).toBe(200);
+    const result = planned.body.result as {
+      plan_id: string;
+      state_revision_expected?: number;
+      blockers: unknown[];
+    };
+    expect(result.blockers).toEqual([]);
+    const applied = await requestJson(apiSockPath, path, ADMIN_TOKEN, method, {
+      mode: 'apply',
+      plan_id: result.plan_id,
+      expected_revision: result.state_revision_expected ?? 0,
+      idempotency_key: idempotencyKey,
+    });
+    expect(applied.status, JSON.stringify(applied.body)).toBe(202);
+    try {
+      return await waitForTaskState(
+        apiSockPath,
+        (applied.body.result as { task_id: string }).task_id,
+      );
+    } catch (err) {
+      throw withAgentStderr(err);
+    }
+  }
+
+  /**
+   * PATCH /arrays/{id}: the array routes bind freshness to the CURRENT
+   * observed revision (S4 §4), not to the plan's, so this cannot share
+   * planApplyAndWait.
+   */
+  async function patchArrayAndWait(
+    id: string,
+    spec: Record<string, unknown>,
+    idempotencyKey: string,
+  ): Promise<TaskResult> {
+    const planned = await requestJson(apiSockPath, `/api/v1/arrays/${id}`, ADMIN_TOKEN, 'PATCH', {
+      mode: 'plan',
+      spec,
+    });
+    expect(planned.status, JSON.stringify(planned.body)).toBe(200);
+    expect((planned.body.result as { blockers: unknown[] }).blockers).toEqual([]);
+    const applied = await requestJson(apiSockPath, `/api/v1/arrays/${id}`, ADMIN_TOKEN, 'PATCH', {
+      mode: 'apply',
+      plan_id: (planned.body.result as { plan_id: string }).plan_id,
+      expected_revision: await arrayRevision(id),
+      idempotency_key: idempotencyKey,
+    });
+    expect(applied.status, JSON.stringify(applied.body)).toBe(202);
+    try {
+      return await waitForTaskState(
+        apiSockPath,
+        (applied.body.result as { task_id: string }).task_id,
+      );
+    } catch (err) {
+      throw withAgentStderr(err);
+    }
   }
 
   function arrayRevision(id: string): Promise<number> {
@@ -316,6 +421,9 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
         XINAS_AGENT_CONFIG_PATH: agentConfigPath,
         XINAS_AGENT_PROBE_MODE: `fixture:${fixtureDir}`,
         XINAS_AGENT_XIRAID_POLL_MS: '500',
+        // The Pool collector's default 30 s poll is the only thing that
+        // refreshes the observed `active` flag, which case 5 asserts on.
+        XINAS_AGENT_POOL_POLL_MS: '500',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -332,7 +440,7 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
         ADMIN_TOKEN,
         'GET',
       );
-      if (res.status === 200 && Array.isArray(res.body.result) && res.body.result.length >= 8) {
+      if (res.status === 200 && Array.isArray(res.body.result) && res.body.result.length >= 10) {
         break;
       }
       if (Date.now() > deadline) throw withAgentStderr(new Error('disks never observed'));
@@ -352,94 +460,141 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
     if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('1. create-with-spares: pool provisioned + activated; observed spares real', async () => {
-    const planned = await requestJson(apiSockPath, '/api/v1/arrays', ADMIN_TOKEN, 'POST', {
-      mode: 'plan',
-      spec: {
+  it('1. an operator-created pool and an array that has no spares', async () => {
+    // The pool surface is the ONLY pool lifecycle owner (design §2).
+    const pool = await planApplyAndWait(
+      'POST',
+      '/api/v1/pools',
+      { name: 'sp01', drives: ['/dev/nvme9n1', '/dev/nvme10n1'] }, // = SP01_DRIVES
+      'K-pool-create',
+    );
+    expect(pool.state).toBe('success');
+
+    const created = await planApplyAndWait(
+      'POST',
+      '/api/v1/arrays',
+      {
         name: 'data',
         level: 'raid5',
         // raid5's engine floor is 4 members (schema.ts LEVELS.raid5.minDrives);
         // a 3-member spec is rejected at plan with a min_drives blocker.
         member_disk_ids: ['nvme1n1', 'nvme2n1', 'nvme3n1', 'nvme4n1'],
-        spare_disk_ids: ['nvme5n1'],
       },
-    });
-    expect(planned.status).toBe(200);
-    expect((planned.body.result as { blockers: unknown[] }).blockers).toEqual([]);
-
-    const applied = await requestJson(apiSockPath, '/api/v1/arrays', ADMIN_TOKEN, 'POST', {
-      mode: 'apply',
-      plan_id: (planned.body.result as { plan_id: string }).plan_id,
-      expected_revision: 0,
-      idempotency_key: 'K-create-spares',
-    });
-    expect(applied.status).toBe(202);
-
-    let task: TaskResult;
-    try {
-      task = await waitForTaskState(
-        apiSockPath,
-        (applied.body.result as { task_id: string }).task_id,
-      );
-    } catch (err) {
-      throw withAgentStderr(err);
-    }
-    expect(task.state).toBe('success');
+      'K-create',
+    );
+    expect(created.state).toBe('success');
 
     const arrays = await waitForArrays(apiSockPath, (items) =>
-      items.some(
-        (a) =>
-          a.id === 'data' &&
-          JSON.stringify((a.spec as { spare_disk_ids: string[] }).spare_disk_ids) ===
-            JSON.stringify(['nvme5n1']),
-      ),
+      items.some((a) => a.id === 'data'),
     ).catch((err) => {
       throw withAgentStderr(err);
     });
     const data = arrays.find((a) => a.id === 'data') as Record<string, unknown>;
     expect((data.status as { state: string }).state).toBe('optimal');
-  }, 30_000);
+    expect(await arraySparepool('data')).toBe('');
+    expect(await poolNames()).toEqual(['sp01']);
+    expect(await poolDrives('sp01')).toEqual(SP01_DRIVES);
+  }, 40_000);
 
-  it('2. modify: swap the spare + set tuning → success; observed spares update', async () => {
-    const planned = await requestJson(apiSockPath, '/api/v1/arrays/data', ADMIN_TOKEN, 'PATCH', {
-      mode: 'plan',
-      spec: { spare_disk_ids: ['nvme6n1'], tuning: { init_prio: 25 } },
-    });
-    expect(planned.status).toBe(200);
-    expect((planned.body.result as { blockers: unknown[] }).blockers).toEqual([]);
-
-    const applied = await requestJson(apiSockPath, '/api/v1/arrays/data', ADMIN_TOKEN, 'PATCH', {
-      mode: 'apply',
-      plan_id: (planned.body.result as { plan_id: string }).plan_id,
-      expected_revision: await arrayRevision('data'),
-      idempotency_key: 'K-modify',
-    });
-    expect(applied.status).toBe(202);
-
-    let task: TaskResult;
-    try {
-      task = await waitForTaskState(
-        apiSockPath,
-        (applied.body.result as { task_id: string }).task_id,
-      );
-    } catch (err) {
-      throw withAgentStderr(err);
-    }
+  it('2. attaches an operator-created pool whose drives it already owns', async () => {
+    // The 2026-08-29 field failure: apply_spares tried to build xnsp_data
+    // from /dev/nvme9n1 + /dev/nvme10n1, which sp01 already held, and the
+    // daemon refused ("Drive ... is already a part of the 'sp01' spare
+    // pool"). Referencing the pool by name is the whole fix, so this
+    // asserts the array points at sp01 AND that no second pool appeared.
+    const task = await patchArrayAndWait(
+      'data',
+      { spare_pool: 'sp01', tuning: { init_prio: 25 } },
+      'K-attach',
+    );
     expect(task.state).toBe('success');
 
-    await waitForArrays(apiSockPath, (items) =>
-      items.some(
-        (a) =>
-          a.id === 'data' &&
-          JSON.stringify((a.spec as { spare_disk_ids: string[] }).spare_disk_ids) ===
-            JSON.stringify(['nvme6n1']),
-      ),
-    ).catch((err) => {
-      throw withAgentStderr(err);
-    });
-  }, 30_000);
+    const deadline = Date.now() + 10_000;
+    while ((await arraySparepool('data')) !== 'sp01') {
+      if (Date.now() > deadline) {
+        throw withAgentStderr(new Error("array 'data' never observed with sparepool sp01"));
+      }
+      await sleep(200);
+    }
+    // Identity is not enough: the array path must not add or remove
+    // drives either — that is "mutating the operator's pool" just as much
+    // as building a new one.
+    expect(await poolNames()).toEqual(['sp01']);
+    expect(await poolDrives('sp01')).toEqual(SP01_DRIVES);
+  }, 40_000);
 
-  it('3. import: adopt the seeded candidate under new_name', async () => {
+  it('3. create-with-pool: a second array references the SAME pool', async () => {
+    const created = await planApplyAndWait(
+      'POST',
+      '/api/v1/arrays',
+      {
+        name: 'aux',
+        level: 'raid5',
+        member_disk_ids: ['nvme5n1', 'nvme6n1', 'nvme7n1', 'nvme8n1'],
+        spare_pool: 'sp01',
+      },
+      'K-create-aux',
+    );
+    expect(created.state).toBe('success');
+
+    const deadline = Date.now() + 10_000;
+    while ((await arraySparepool('aux')) !== 'sp01') {
+      if (Date.now() > deadline) {
+        throw withAgentStderr(new Error("array 'aux' never observed with sparepool sp01"));
+      }
+      await sleep(200);
+    }
+    // One pool, two arrays — Pool.referenced_by is a list (design §2).
+    expect(await poolNames()).toEqual(['sp01']);
+    const pools = await requestJson(apiSockPath, '/api/v1/pools', ADMIN_TOKEN, 'GET');
+    const sp01 = (pools.body.result as Array<{ name: string; referenced_by: string[] }>).find(
+      (p) => p.name === 'sp01',
+    );
+    expect([...(sp01?.referenced_by ?? [])].sort()).toEqual(['aux', 'data']);
+  }, 40_000);
+
+  it('4. the retired write field: spec.spare_disk_ids → 422 observed_only', async () => {
+    const res = await requestJson(apiSockPath, '/api/v1/arrays/data', ADMIN_TOKEN, 'PATCH', {
+      mode: 'plan',
+      spec: { spare_disk_ids: ['nvme9n1'] },
+    });
+    expect(res.status).toBe(422);
+    expect(res.body.errors?.[0]?.details).toMatchObject({
+      field: 'spec.spare_disk_ids',
+      reason: 'observed_only',
+    });
+  }, 20_000);
+
+  it('5. detach: spare_pool null clears the reference and leaves the pool alone', async () => {
+    const task = await patchArrayAndWait('data', { spare_pool: null }, 'K-detach');
+    expect(task.state).toBe('success');
+
+    const deadline = Date.now() + 10_000;
+    while ((await arraySparepool('data')) !== '') {
+      if (Date.now() > deadline) {
+        throw withAgentStderr(new Error("array 'data' never observed without a sparepool"));
+      }
+      await sleep(200);
+    }
+    // Detach never deletes, deactivates, or empties: 'aux' still uses sp01.
+    expect(await poolNames()).toEqual(['sp01']);
+    expect(await poolDrives('sp01')).toEqual(SP01_DRIVES);
+    // `pool_activate` is the only pool-state write an array operation may
+    // make, and it is never undone by a detach (design §2.1) — a unit test
+    // pins the executor, this pins the observed end state. Case 2's attach
+    // activated sp01; it must still read active after this detach. Polled:
+    // `active` refreshes on the Pool collector's own sweep, not on the
+    // task's completion.
+    const activeDeadline = Date.now() + 5_000;
+    while ((await poolActive('sp01')) !== true) {
+      if (Date.now() > activeDeadline) {
+        throw withAgentStderr(new Error("detach left pool 'sp01' observed as inactive"));
+      }
+      await sleep(200);
+    }
+  }, 40_000);
+
+  it('6. import: adopt the seeded candidate under new_name', async () => {
     const planned = await requestJson(apiSockPath, '/api/v1/arrays', ADMIN_TOKEN, 'POST', {
       mode: 'plan',
       spec: { uuid: 'u-e2e', new_name: 'adopted' },
@@ -473,7 +628,7 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
     );
   }, 30_000);
 
-  it('4. delete gates: missing dangerous → 412; mounted dependent fs → 412', async () => {
+  it('7. delete gates: missing dangerous → 412; mounted dependent fs → 412', async () => {
     // 4a: the engine dangerous gate
     const planned = await requestJson(
       apiSockPath,
@@ -538,7 +693,7 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
     expect(codes).toContain('dependent_filesystem_mounted');
   }, 40_000);
 
-  it('5. delete success: adopted array + dangerous:true → gone', async () => {
+  it('8. delete success: adopted array + dangerous:true → gone', async () => {
     const planned = await requestJson(
       apiSockPath,
       '/api/v1/arrays/adopted',

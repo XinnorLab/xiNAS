@@ -226,6 +226,13 @@ DELETE /pools/{name}   blockers: active, referenced_by≠[]  admin
 Executor delete preflight re-checks LIVE `pool_show` (active) and
 `raid_show` (sparepool references) before mutating.
 
+**Pool lifecycle has exactly one owner: this surface.** `XiraidArray`
+never creates, fills, empties or deletes a pool — it only references one
+by name (`spec.spare_pool`, mirrored to `status.spare_pool`). An array
+attach leases `Pool/<name>`, not the pool's member disks, so an array
+mutation and a concurrent pool mutation on the same pool serialize
+through the same lease the pool's own routes take.
+
 ## 6. Component map
 
 ```
