@@ -202,6 +202,35 @@ INSTALL_DIR="/opt/xiNAS"
 REPO_URL="https://github.com/XinnorLab/xiNAS.git"
 REPO_SLUG="XinnorLab/xiNAS"
 
+# Never let git fall back to an interactive credential prompt. GitHub answers
+# a fetch/clone it will not serve with 401, and git's reflex is to ask
+# `Username for 'https://github.com':` on /dev/tty — which run_quiet cannot
+# intercept (it redirects stdout/stderr into the log and backgrounds the
+# command), so the prompt lands unattributed over the spinner and the install
+# blocks forever on a read no operator is watching for. Mirrors
+# collection/roles/xinas_menu/files/xinas-update-git; see
+# docs/Installer/update-spec.md "Non-interactive git access".
+export GIT_TERMINAL_PROMPT=0
+
+# Printed when git is refused access to a repository that is public and whose
+# release tag we just resolved over the same network — so the cause is on this
+# host, not in the release (update-spec.md "Naming the authentication failure").
+git_access_hint() {
+    echo ""
+    fail "git could not reach ${CYAN}https://github.com/${REPO_SLUG}${NC}."
+    echo ""
+    echo -e "     The repository is public, so a credential prompt or an"
+    echo -e "     authentication error points at this host. Check:"
+    echo -e "       ${DIM}•${NC} stale credentials for root — ${WHITE}/root/.git-credentials${NC}"
+    echo -e "       ${DIM}•${NC} a credential helper or ${WHITE}insteadOf${NC} rewrite —"
+    echo -e "         ${CYAN}git config --list --show-origin | grep -Ei 'credential|insteadof|proxy'${NC}"
+    echo -e "       ${DIM}•${NC} an HTTP proxy in root's environment (${WHITE}https_proxy${NC})"
+    echo ""
+    echo -e "     Reproduce the failure directly:"
+    echo -e "       ${CYAN}sudo env GIT_TERMINAL_PROMPT=0 git ls-remote ${REPO_URL}${NC}"
+    echo ""
+}
+
 # Console wrapper paths. Kept in step with the xinas_menu role's
 # xinas_menu_wrapper_path / xinas_setup_wrapper_path defaults — the role owns
 # these files during provisioning; the block near the end of this script only
@@ -270,12 +299,14 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
     # `bash -c "... '${RELEASE_TAG}' ..."` that built a second shell's
     # command string out of the tag; removing that second shell removes the
     # injection).
-    run_quiet "Fetching xiNAS release tags" git fetch origin --tags -q
+    run_quiet "Fetching xiNAS release tags" \
+        git fetch origin --tags -q || { git_access_hint; exit 1; }
     run_quiet "Updating xiNAS to ${RELEASE_TAG} at ${INSTALL_DIR}" \
         git checkout --force -q "$RELEASE_TAG"
 else
     run_quiet "Cloning xiNAS ${RELEASE_TAG} to ${INSTALL_DIR}" \
-        git clone -q --branch "$RELEASE_TAG" "$REPO_URL" "$INSTALL_DIR"
+        git clone -q --branch "$RELEASE_TAG" "$REPO_URL" "$INSTALL_DIR" \
+        || { git_access_hint; exit 1; }
     cd "$INSTALL_DIR"
 fi
 
