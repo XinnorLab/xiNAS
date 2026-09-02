@@ -22,6 +22,7 @@
  */
 
 import { parsePoolShow } from '../../lib/parse/pool.js';
+import { isXiraidVolumePath } from '../../lib/xiraid/schema.js';
 import { parseRaidShowEntries } from '../../lib/parse/raid.js';
 import type { XiraidClient } from '../xiraid/client.js';
 import type { Executor, ExecutorContext, ExecutorStage } from './types.js';
@@ -54,6 +55,26 @@ function requireDrives(spec: PoolSpec): string[] {
   return spec.drives;
 }
 
+/**
+ * Live guard for the intents that put drives INTO a pool. A `/dev/xi_*` path
+ * is a xiRAID array volume, never a spare — pooling one hands the daemon a
+ * live filesystem's external journal as a replacement target (§4.1).
+ *
+ * Applied to `create` and `add_drives` ONLY. `remove_drives` is the repair
+ * path for a pool that already holds a volume, so blocking it there would
+ * strand the very state this guard exists to prevent.
+ */
+function rejectRaidVolumes(intent: string, drives: string[]): string[] {
+  const volumes = drives.filter(isXiraidVolumePath);
+  if (volumes.length > 0) {
+    throw new Error(
+      `pool executor: ${intent} refuses xiRAID array volume(s) ${volumes.join(', ')} — ` +
+        'a pool takes physical drives, not arrays',
+    );
+  }
+  return drives;
+}
+
 /** Live membership + active flag of one pool, or null when it is absent. */
 async function readPool(
   client: XiraidClient,
@@ -82,7 +103,7 @@ export function makePoolCreateExecutor(opts: { client: XiraidClient }): Executor
       name: 'create',
       async run(ctx: ExecutorContext): Promise<void> {
         const spec = narrowSpec(ctx, ['create']);
-        const drives = requireDrives(spec);
+        const drives = rejectRaidVolumes('create', requireDrives(spec));
         ctx.emitOutput(`pool create ${spec.name} (${drives.length} drive(s))`);
         await opts.client.poolCreate({ name: spec.name, drives });
       },
@@ -109,6 +130,9 @@ export function makePoolModifyExecutor(opts: { client: XiraidClient }): Executor
       name: 'modify',
       async run(ctx: ExecutorContext): Promise<void> {
         const spec = narrowSpec(ctx, INTENTS);
+        // Ahead of the snapshot on purpose: this is the one refusal that needs
+        // no live read, and throwing here leaves no stash for rollback to diff.
+        if (spec.intent === 'add_drives') rejectRaidVolumes('add_drives', requireDrives(spec));
         // Snapshot BEFORE mutating; a throw here fails the stage with the
         // pool untouched, and rollback then finds no snapshot and no-ops.
         const before = await readPool(opts.client, spec.name);

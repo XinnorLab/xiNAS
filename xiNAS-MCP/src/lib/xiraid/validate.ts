@@ -34,6 +34,8 @@ import {
   SYND_CNT_MIN,
   type Tuning,
   type XiraidArraySpec,
+  isXiraidVolumePath,
+  xiraidVolumeArrayName,
 } from './schema.js';
 
 /** Plan blocker (api-v1.yaml Blocker subset; evidence added by the caller). */
@@ -188,7 +190,13 @@ export function validateCreateSpec(spec: XiraidArraySpec, facts: CreateFacts): B
   checkTuning(spec.tuning ?? {}, push);
 
   // --- member disks (one blocker per offending disk) ---
-  checkDisks(spec.member_disk_ids, facts.disks, facts.existingMemberDiskIds, push);
+  checkDisks(
+    spec.member_disk_ids,
+    facts.disks,
+    facts.existingMemberDiskIds,
+    facts.existingArrayNames,
+    push,
+  );
   checkMembersNotPooled(spec.member_disk_ids, facts.disks, facts.poolsByName, push);
 
   // --- spares (S8: reference an existing pool by name, not a derived one) ---
@@ -324,13 +332,33 @@ function checkDisks(
   ids: string[],
   disks: ResolvedDisk[],
   claimedIds: ReadonlySet<string>,
+  existingArrayNames: readonly string[],
   push: Push,
 ): void {
   const byId = new Map(disks.map((d) => [d.id, d]));
+  const knownArrays = new Set(existingArrayNames);
   for (const id of ids) {
     const d = byId.get(id);
     if (!d) {
       push('disk_not_found', `disk '${id}' is not present in observed state`);
+      continue;
+    }
+    // Checked FIRST of the four verdicts, and on the path rather than on
+    // observed facts. A xiRAID array volume reaches here looking like a free
+    // drive — `lsblk` types it `disk`, and an array serving as an XFS
+    // external journal (`/dev/xi_log`) has no mountpoint of its own, so
+    // `safe_for_use` is true and `claimedIds` (array MEMBERS) misses it
+    // because it IS an array. Handing one to `raid_create` overwrites a live
+    // filesystem's journal. Naming the owning array is best-effort: the
+    // refusal must not depend on observing it (§4.1).
+    if (isXiraidVolumePath(d.device_path)) {
+      const owner = xiraidVolumeArrayName(d.device_path);
+      push(
+        'disk_is_raid_volume',
+        `disk '${id}' (${d.device_path}) is the volume of ` +
+          (knownArrays.has(owner) ? `xiRAID array '${owner}'` : 'a xiRAID array') +
+          ', not a physical drive — pick a drive, or delete that array first',
+      );
       continue;
     }
     if (claimedIds.has(id)) {

@@ -237,12 +237,25 @@ All `risk_level` / `rollback_model` values below use the api-v1.yaml enums (`ris
 
 ### Preflight blockers (codes)
 
-Harvested from the xiRAID error taxonomy into `lib/xiraid/validate`: `min_drives` (level minimum not met), `members_not_even` (raid10 — AG: "the number of drives must be even"), `group_size_required` / `group_size_range` / `members_not_divisible_by_group` (raid50/60/70), `synd_cnt_required` / `synd_cnt_range` (n+m), `strip_size_invalid`, `block_size_invalid`, `param_out_of_range` (priorities/memory/timings), `name_invalid` / `name_taken`, `disk_not_found` / `disk_not_safe` / `disk_is_system` / `disk_in_use` / `disk_in_spare_pool` (per offending disk — `disk_in_use` is membership of another array, `disk_in_spare_pool` is membership of a spare pool, which `safe_for_use` cannot see). Spare-pool references add `spare_pool_not_found` / `spare_pool_empty`. Delete adds `dangerous_flag_required`, `dependent_filesystem_mounted`, `dependent_share_active`.
+Harvested from the xiRAID error taxonomy into `lib/xiraid/validate`: `min_drives` (level minimum not met), `members_not_even` (raid10 — AG: "the number of drives must be even"), `group_size_required` / `group_size_range` / `members_not_divisible_by_group` (raid50/60/70), `synd_cnt_required` / `synd_cnt_range` (n+m), `strip_size_invalid`, `block_size_invalid`, `param_out_of_range` (priorities/memory/timings), `name_invalid` / `name_taken`, `disk_not_found` / `disk_not_safe` / `disk_is_system` / `disk_in_use` / `disk_in_spare_pool` / `disk_is_raid_volume` (per offending disk — `disk_in_use` is membership of another array; `disk_in_spare_pool` is membership of a spare pool, which `safe_for_use` cannot see; `disk_is_raid_volume` is a `/dev/xi_*` device — an array's OWN volume offered back as a member — which `safe_for_use` cannot see either, see §Disk below). Spare-pool references add `spare_pool_not_found` / `spare_pool_empty`. Delete adds `dangerous_flag_required`, `dependent_filesystem_mounted`, `dependent_share_active`.
 
 ### Relationship to other objects
 
 - **Dependency chain:** `XiraidArray.status.volume_path` (`/dev/xi_<name>`) ← `Filesystem.spec.backing_device` ← `Share.spec.path` (under the filesystem mountpoint). This is the delete blast-radius graph.
 - **Disk:** `member_disk_ids`/`spare_disk_ids` reference `Disk` objects; a disk is consumable only when `safe_for_use`, not already claimed by an observed array, and **not held by an observed spare pool** (`disk_in_spare_pool`).
+  A fourth exclusion is **not** derivable from those three: xiRAID's own array
+  volumes (`/dev/xi_<name>`) are reported by `lsblk` as `TYPE=disk` and become
+  `Disk` rows, and an array volume carrying no mountpoint of its own — the
+  canonical case being an XFS **external journal** (`logdev=`), which xiNAS
+  provisions as `/dev/xi_log` — reads `system_disk: false`, `mounted: false`,
+  therefore `safe_for_use: true`. Consuming one as a member is how a live
+  filesystem's journal gets overwritten by `raid_create`. A device path under
+  `/dev/xi_` is therefore **never** a consumable drive, on any surface that
+  takes drives (`XiraidArray.member_disk_ids`, `Pool.drives`/`add_drives`),
+  and is rejected with `disk_is_raid_volume` regardless of `safe_for_use`.
+  The rule is structural, not observational: it holds when the owning array
+  is missing from observed state, which is exactly when the other three
+  exclusions fail open.
 - **Cluster.capabilities** continues to advertise the adapter availability; once the collector is real, the `XIRAID_ADAPTER_DEFERRED` deferral marker is removed.
 
 ## Consequences

@@ -101,6 +101,31 @@ describe('pool executors (S9 T9, fake transport)', () => {
     expect(load().pools).toHaveLength(1); // nothing mutated
   });
 
+  // AL1 — the live half of the rule on the pool surface (s9 §T8). A pool
+  // that adopts /dev/xi_log hands xiRAID a live filesystem's external
+  // journal as a replacement target.
+  it('create/add_drives refuse a xiRAID array volume; remove_drives does not', async () => {
+    const create = makePoolCreateExecutor({ client: client() });
+    await expect(
+      create.stages[0]?.run(ctxFor({ intent: 'create', name: 'pvol', drives: ['/dev/xi_log'] })),
+    ).rejects.toThrow(/xi_log/);
+    expect(load().pools).toEqual([]); // refused before poolCreate
+
+    seed({ pools: [{ name: 'pvol', drives: ['/dev/a', '/dev/xi_log'], active: false }] });
+    const modify = makePoolModifyExecutor({ client: client() });
+    await expect(
+      modify.stages[0]?.run(ctxFor({ intent: 'add_drives', name: 'pvol', drives: ['/dev/xi_d'] })),
+    ).rejects.toThrow(/xi_d/);
+    expect(load().pools[0]?.drives).toEqual(['/dev/a', '/dev/xi_log']);
+
+    // Removal is the repair path for a pool that already holds one — it must
+    // never be blocked by the same rule that stops it going in.
+    await modify.stages[0]?.run(
+      ctxFor({ intent: 'remove_drives', name: 'pvol', drives: ['/dev/xi_log'] }),
+    );
+    expect(load().pools[0]?.drives).toEqual(['/dev/a']);
+  });
+
   it('modify rollback reverses an activate the task performed', async () => {
     seed({ pools: [{ name: 'p3', drives: ['/dev/a'], active: false }] });
     const modify = makePoolModifyExecutor({ client: client() });

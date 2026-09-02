@@ -23,6 +23,7 @@ import {
   parseRaidShowEntries,
   readSparepoolName,
 } from '../../lib/parse/raid.js';
+import { isXiraidVolumePath, xiraidVolumeArrayName } from '../../lib/xiraid/schema.js';
 import { parseCreateSpec } from '../../lib/xiraid/validate.js';
 import { toRaidCreateRequest, toRaidModifyRequest } from '../../lib/xiraid/translate.js';
 import type { XiraidClient } from '../xiraid/client.js';
@@ -163,6 +164,18 @@ export function makeXiraidArrayCreateExecutor(opts: XiraidArrayCreateExecutorOpt
         }
         if (claimed.has(path)) {
           throw new Error(`preflight: device ${path} (disk '${id}') is already an array member`);
+        }
+        // The live half of the §4.1 rule. The plan-time blocker reads observed
+        // state, which can be stale or predate the array; this refuses under
+        // the held leases, one call before raid_create would overwrite the
+        // volume. Structural, so it holds for an array raid_show does not list.
+        if (isXiraidVolumePath(path)) {
+          const owner = xiraidVolumeArrayName(path);
+          throw new Error(
+            `preflight: device ${path} (disk '${id}') is the volume of ` +
+              (shown.some((a) => a.name === owner) ? `array '${owner}'` : 'a xiRAID array') +
+              ', not a physical drive',
+          );
         }
       }
       // The pool is the operator's — this only confirms it exists and can

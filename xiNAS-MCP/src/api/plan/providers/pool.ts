@@ -11,6 +11,7 @@
  * just-created array).
  */
 
+import { isXiraidVolumePath, xiraidVolumeArrayName } from '../../../lib/xiraid/schema.js';
 import { ApiException } from '../../errors.js';
 import type { PlanContext, PlanProvider, PlanResult } from '../engine.js';
 
@@ -80,7 +81,28 @@ function driveBlockers(ctx: PlanContext, drives: string[]): PlanResult['blockers
       disksByPath.set(status.device_path, status as never);
     }
   }
+  const arrayNames = new Set<string>();
+  for (const row of ctx.kv.list<{ id?: string }>({ prefix: OBSERVED_ARRAY_PREFIX })) {
+    if (typeof row.value.id === 'string') arrayNames.add(row.value.id);
+  }
   for (const drive of drives) {
+    // BEFORE the observed-Disk lookup, and deliberately: the `continue` below
+    // waives every check for a path observation does not know, which would
+    // wave `/dev/xi_log` straight through on a host whose disks have not been
+    // collected yet. A xiRAID array volume is never a spare whatever
+    // observation holds — a pool that adopts one hands the daemon a live
+    // filesystem's external journal as a replacement target (§4.1).
+    if (isXiraidVolumePath(drive)) {
+      const owner = xiraidVolumeArrayName(drive);
+      blockers.push({
+        code: 'disk_is_raid_volume',
+        message:
+          `${drive} is the volume of ` +
+          (arrayNames.has(owner) ? `xiRAID array '${owner}'` : 'a xiRAID array') +
+          ', not a physical drive — a pool takes drives, not arrays',
+      });
+      continue;
+    }
     const disk = disksByPath.get(drive);
     if (disk === undefined) continue; // unknown to observation — xiRAID validates at execute
     if (disk.system_disk === true) {
