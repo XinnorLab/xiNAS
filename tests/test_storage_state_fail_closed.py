@@ -108,6 +108,8 @@ def replay(
     wanted_label: str = "nfsdata",
     volume_exists: bool = True,
     fstype_rc: int = 0,
+    arrays: list[str] | None = None,
+    data_device: str | None = None,
 ) -> dict:
     """Replay the classifier against synthetic probe output, returning its facts.
 
@@ -116,15 +118,24 @@ def replay(
     output. `volume_exists` / `fstype_rc` model the filesystem probe: whether
     /dev/xi_data is there at all, and what blkid made of it (0 = found,
     2 = nothing found, anything else = could not answer).
+
+    `arrays` / `data_device` model the preset: the names in `xiraid_arrays` and
+    `xfs_filesystems[0].data_device`. Left unset, they are absent from the
+    context — the auto path, where detection runs before either is generated.
     """
     stdout = raid_show if isinstance(raid_show, str) else json.dumps(raid_show)
+    filesystem: dict[str, Any] = {"label": wanted_label}
+    if data_device is not None:
+        filesystem["data_device"] = data_device
     context: dict[str, Any] = {
-        "xfs_filesystems": [{"label": wanted_label}],
+        "xfs_filesystems": [filesystem],
         "_ssd_raid_show": {"rc": raid_rc, "stdout": stdout},
         "_ssd_volume": {"stat": {"exists": volume_exists}},
         "_ssd_fstype": {"rc": fstype_rc, "stdout": fstype},
         "_ssd_fslabel": {"rc": 0, "stdout": fslabel},
     }
+    if arrays is not None:
+        context["xiraid_arrays"] = [{"name": name} for name in arrays]
     for task in _set_fact_tasks():
         snapshot = dict(context)
         for key, expr in task[SET_FACT].items():
@@ -254,6 +265,75 @@ def test_wrong_filesystem_or_label_is_foreign():
 def test_label_comes_from_the_configured_filesystem():
     assert classify(mapping_payload(), fslabel="tank", wanted_label="tank") == "MATCH"
     assert classify(mapping_payload(), fslabel="nfsdata", wanted_label="tank") == "FOREIGN"
+
+
+# --- the expected layout comes from the preset, not from literals ----------
+#
+# The bug this pins: MATCH was spelled with the literals 'data', 'log' and
+# /dev/xi_data while raid_fs builds whatever `xiraid_arrays` / `xfs_filesystems`
+# name. A manual preset (nvme_auto_namespace: false) with any other naming had
+# its own healthy layout classified FOREIGN on every re-run, and the only way
+# past that failure — xinas_storage_reset — drive-cleans the array it built.
+
+
+def custom_payload(vol_state: Any = ONLINE, journal_state: Any = ONLINE) -> dict:
+    return {
+        "vol0": {"level": "5", "devices": [], "state": vol_state},
+        "journal": {"level": "10", "devices": [], "state": journal_state},
+    }
+
+
+CUSTOM = ["vol0", "journal"]
+
+
+def test_configured_array_names_match():
+    assert classify(custom_payload(), arrays=CUSTOM) == "MATCH"
+
+
+def test_configured_names_are_what_is_required():
+    """With a custom preset, the auto layout is the foreign one."""
+    assert classify(mapping_payload(), arrays=CUSTOM) == "FOREIGN"
+
+
+def test_missing_configured_array_is_foreign():
+    assert classify({"vol0": {"state": ONLINE}}, arrays=CUSTOM) == "FOREIGN"
+
+
+def test_configured_array_that_is_not_online_is_not_match():
+    facts = replay(custom_payload(journal_state=["degraded"]), arrays=CUSTOM)
+    assert facts["xinas_storage_state"] == "FOREIGN"
+    assert facts["xinas_storage_arrays_unhealthy"] is True
+    assert facts["xinas_storage_array_states"]["journal"] == ["degraded"]
+
+
+def test_auto_path_falls_back_to_data_and_log():
+    """Detection runs before generate_raid_config.yml in the auto path, so
+    `xiraid_arrays` is absent (or empty) there — the auto layout is expected."""
+    assert classify(mapping_payload()) == "MATCH"
+    assert classify(mapping_payload(), arrays=[]) == "MATCH"
+    assert classify(custom_payload()) == "FOREIGN"
+
+
+def _probe_targets(context: dict) -> list[str]:
+    """The device the stat / blkid probes are pointed at, rendered."""
+    targets = []
+    for task in yaml.safe_load(TASK_FILE.read_text()):
+        if "ansible.builtin.stat" in task:
+            targets.append(_render(task["ansible.builtin.stat"]["path"], context))
+        command = task.get("ansible.builtin.command")
+        if isinstance(command, str) and "blkid" in command:
+            targets.append(_render(command, context).split()[-1])
+    assert len(targets) == 3, f"expected stat + 2 blkid probes, found {targets}"
+    return targets
+
+
+def test_probes_target_the_configured_data_device():
+    context = replay(mapping_payload(), data_device="/dev/xi_vol0")
+    assert _probe_targets(context) == ["/dev/xi_vol0"] * 3
+
+
+def test_probes_default_to_xi_data():
+    assert _probe_targets(replay(mapping_payload())) == ["/dev/xi_data"] * 3
 
 
 # --- probes that cannot answer never win MATCH -----------------------------
