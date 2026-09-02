@@ -69,6 +69,12 @@ run_quiet() {
 # from the main/master branch. See docs/Installer/update-spec.md.
 REPO_SLUG="XinnorLab/xiNAS"
 
+# A 401 from GitHub (stale root credentials, a credential helper, a proxy)
+# otherwise makes git prompt for a username on /dev/tty — and this script runs
+# unattended under install.sh and in `-u` update mode, where nobody answers it.
+# See docs/Installer/update-spec.md "Non-interactive git access".
+export GIT_TERMINAL_PROMPT=0
+
 # Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints the tag
 # on success, nothing on failure. Never returns a branch name; callers must
 # NOT fall back to main.

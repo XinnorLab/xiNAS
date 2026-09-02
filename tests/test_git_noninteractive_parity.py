@@ -1,0 +1,162 @@
+"""Every unattended install/update path must disable git's terminal prompt
+(docs/Installer/update-spec.md "Bash-path parity" → *Non-interactive git
+access*).
+
+Reproduced in the field on a fresh 22.04 host: `install.sh` resolved
+`v3.13.0` from the Releases API, then its clone stalled forever with
+`Username for 'https://github.com':` printed over the spinner. GitHub
+answers a fetch/clone it will not serve with `401`, and git's reflex on a
+`401` is to prompt on `/dev/tty` — which install.sh's `run_quiet` cannot
+intercept, because it redirects only stdout/stderr into the install log and
+backgrounds the command. The operator sees a bare prompt with no context
+and an installer that never returns. `xinas-update-git` (the privileged
+update helper) has exported `GIT_TERMINAL_PROMPT=0` since it landed; the
+three bootstrap scripts that run *before* that helper exists did not.
+
+The repository is public and the tag exists, so a `401` on this path is a
+host-side problem (a stale credential for root, a credential helper, an
+`insteadOf` rewrite, an authenticating proxy). Hanging on an invisible
+prompt tells the operator none of that, hence the second half of the
+contract: name what to check.
+
+`prepare_system.sh -u` is driven end-to-end here with a stubbed git, the
+way tests/test_bash_checkout_force_parity.py drives it. `install.sh` and
+`install_client.sh` gate on `EUID == 0` at the top and mutate the real
+filesystem, so they are pinned structurally — the same documented fallback
+those sibling suites use — with an ordering assertion that the export
+really precedes the first `git` call rather than merely appearing somewhere
+in the file.
+"""
+
+import os
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[1]
+INSTALL_SH = REPO / "install.sh"
+INSTALL_CLIENT_SH = REPO / "install_client.sh"
+PREPARE_SYSTEM = REPO / "prepare_system.sh"
+UPDATE_GIT_HELPER = REPO / "collection" / "roles" / "xinas_menu" / "files" / "xinas-update-git"
+
+EXPORT_RE = re.compile(r"^[ \t]*export GIT_TERMINAL_PROMPT=0[ \t]*$", re.M)
+# Matches a git invocation as a command word: at the start of a statement, or
+# after run_quiet/if/&&/||/! etc. Deliberately loose — a false positive here
+# only makes the ordering assertion stricter.
+GIT_CALL_RE = re.compile(r"(?<![\w./-])git[ \t]+[a-z]", re.M)
+
+
+def _first_git_call_line(src: str) -> int:
+    for m in GIT_CALL_RE.finditer(src):
+        line = src[: m.start()].count("\n") + 1
+        stripped = src.splitlines()[line - 1].lstrip()
+        if stripped.startswith("#"):
+            continue
+        return line
+    raise AssertionError("no git invocation found")
+
+
+@pytest.mark.parametrize(
+    "script",
+    [INSTALL_SH, INSTALL_CLIENT_SH, PREPARE_SYSTEM, UPDATE_GIT_HELPER],
+    ids=lambda p: p.name,
+)
+def test_export_precedes_first_git_call(script):
+    src = script.read_text()
+    exports = [src[: m.start()].count("\n") + 1 for m in EXPORT_RE.finditer(src)]
+    assert exports, (
+        f"{script.name} must export GIT_TERMINAL_PROMPT=0 — otherwise a 401 from "
+        "GitHub makes git prompt for a username on /dev/tty and the unattended "
+        "run hangs (update-spec.md, Non-interactive git access)"
+    )
+    assert min(exports) < _first_git_call_line(src), (
+        f"{script.name} exports GIT_TERMINAL_PROMPT=0 only after it has already "
+        "called git — the first call can still hang"
+    )
+
+
+def test_prepare_system_update_only_runs_git_without_terminal_prompt(tmp_path):
+    """Behavioral: the stub git records the variable it was actually invoked
+    with, so this fails if the export is written but not exported (a plain
+    assignment), or is scoped to a subshell the git calls do not run in.
+    """
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    (sandbox / "ansible.cfg").write_text("")
+    (sandbox / "playbooks").mkdir()
+    lib_dir = sandbox / "lib"
+    lib_dir.mkdir()
+    (lib_dir / "menu_lib.sh").write_text(
+        '_is_release_tag() { [[ "$1" =~ ^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; }\n'
+    )
+
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    env_log = tmp_path / "git-env.log"
+    (stub_bin / "git").write_text(
+        f'#!/bin/bash\necho "$1 GIT_TERMINAL_PROMPT=${{GIT_TERMINAL_PROMPT-unset}}" >> "{env_log}"\nexit 0\n'
+    )
+    (stub_bin / "git").chmod(0o755)
+    (stub_bin / "curl").write_text('#!/bin/bash\necho \'{"tag_name": "v9.9.9"}\'\n')
+    (stub_bin / "curl").chmod(0o755)
+
+    env = dict(os.environ, PATH=f"{stub_bin}:{os.environ['PATH']}")
+    env.pop("GIT_TERMINAL_PROMPT", None)
+    proc = subprocess.run(
+        ["bash", str(PREPARE_SYSTEM), "-u"],
+        cwd=sandbox,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    calls = env_log.read_text().splitlines()
+    assert calls, "expected git to be invoked by the -u path"
+    assert all(c.endswith("GIT_TERMINAL_PROMPT=0") for c in calls), calls
+
+
+def _git_access_hint_body() -> str:
+    m = re.search(r"^git_access_hint\(\) \{\n.*?\n\}\n", INSTALL_SH.read_text(), re.M | re.S)
+    assert m, "install.sh must define git_access_hint() for refused git access"
+    return m.group(0)
+
+
+def test_install_sh_auth_failure_hint_names_the_host_side_causes():
+    """The clone/checkout runs inside run_quiet, which prints a generic ✗ and
+    20 log lines. With prompting disabled a 401 now fails fast — so the
+    operator has to be told this is a host-side credential/proxy problem
+    against a public repository, not a broken release.
+    """
+    body = _git_access_hint_body()
+    assert re.search(r"\bcredential", body, re.I), (
+        "install.sh's git-access hint must name host-side git credentials "
+        "(update-spec.md, Naming the authentication failure)"
+    )
+    assert re.search(r"\bproxy\b", body, re.I), "the hint must name a proxy as a cause"
+    assert "${REPO_SLUG}" in body or "$REPO_URL" in body, (
+        "the hint must print the repository it tried to reach"
+    )
+
+
+# Only the network operations: `git checkout` is local, so a failure there is a
+# dirty or mismatched tree, not a credential problem, and the access hint would
+# misdirect the operator.
+@pytest.mark.parametrize("call", ["git fetch", "git clone"])
+def test_install_sh_routes_git_failures_into_the_hint(call):
+    src = INSTALL_SH.read_text()
+    m = re.search(rf"^\s*{call}\b.*$", src, re.M)
+    assert m, f"{call} call site not found in install.sh"
+    # From the start of the call line: the `||` guard may sit on that same
+    # line or on a continuation below it.
+    window = src[m.start() : m.end() + 120]
+    assert "git_access_hint" in window, (
+        f"a failed `{call}` must explain the likely cause, not just dump the log tail"
+    )
+
+
+def test_bash_syntax_ok():
+    for script in (INSTALL_SH, INSTALL_CLIENT_SH, PREPARE_SYSTEM, UPDATE_GIT_HELPER):
+        subprocess.run(["bash", "-n", str(script)], check=True)

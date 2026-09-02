@@ -411,6 +411,35 @@ The `--force` checkout and semantic-version comparison rules above bind
   canonical check is `_is_release_tag` in `lib/menu_lib.sh`;
   `install.sh` carries a character-identical inline copy because it
   runs before the clone exists and cannot source the library.
+- **Non-interactive git access** — every unattended install/update path
+  MUST `export GIT_TERMINAL_PROMPT=0` before it invokes `git` against
+  GitHub, and MUST do so ahead of the first `git` call in the script.
+  When GitHub answers a fetch/clone with `401` — a stale credential in
+  root's `~/.git-credentials` or credential helper, an authenticating
+  proxy, or a repository that has been made private or renamed — git
+  falls back to prompting `Username for 'https://github.com':` on
+  `/dev/tty`. None of these installers is interactive at that point:
+  `install.sh` runs its clone backgrounded behind a spinner with
+  stdout/stderr redirected to the install log, so the prompt surfaces
+  as an unattributed line over the spinner and the installer blocks
+  forever on a terminal read it never announced; `curl … | sudo bash`
+  and unattended provisioning have no operator to answer it at all.
+  With the variable set, git fails immediately with
+  `could not read Username … terminal prompts disabled` instead of
+  hanging. This binds `install.sh`, `prepare_system.sh`,
+  `install_client.sh`, and the `xinas-update-git` wrapper (which has
+  set it since it landed). The dev-only `configure_git_repo` affordance
+  in `startup_menu.sh` is explicitly **out of scope**: it is gated
+  behind `XINAS_DEV_REPO_CONFIG=1`, clones an operator-supplied URL
+  that may legitimately be private, and runs interactively where a
+  prompt can actually be answered.
+- **Naming the authentication failure** — a path that fails its clone
+  or fetch because GitHub refused it MUST NOT leave the operator with
+  only a raw git error. It MUST print the release URL it tried and name
+  the host-side causes worth checking (root's git credentials and
+  credential helper, `insteadOf` rewrites, an HTTP proxy), since the
+  xiNAS repository is public and a `401` on that path is a host
+  configuration problem, not a xiNAS one.
 - **Bounded, non-blocking check** — the automatic update check that
   runs at menu startup (`check_for_updates` in `startup_menu.sh` and
   `simple_menu.sh`) MUST run synchronously, never backgrounded: a
