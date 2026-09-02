@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openStateStore } from '../../state/index.js';
+import { collectionNotEmpty, waitForAgentReady, waitForObservation } from './_helpers.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../../..');
 const API_ENTRY = join(PROJECT_ROOT, 'dist/api-server.js');
@@ -197,7 +198,17 @@ describe.sequential('e2e: S8 xinasctl (fixture mode)', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     agentProc.stderr?.on('data', (c: Buffer) => agentStderr.push(c.toString()));
-    await sleep(1200); // first heartbeat + sweeps
+    // "first heartbeat" = the api can dispatch to the agent; "sweeps" = the
+    // agent's collectors have published. Wait for both conditions rather
+    // than for a duration that happens to cover them on an idle machine.
+    // (The xiraid fixture is deliberately empty, so /arrays never fills —
+    // /filesystems carries the one mounted fs and is the observable sweep.)
+    await waitForAgentReady(apiSockPath, ADMIN_TOKEN, {
+      diagnostics: () => agentStderr.join('').slice(-2000),
+    });
+    await waitForObservation(apiSockPath, ADMIN_TOKEN, '/api/v1/filesystems', {
+      ready: collectionNotEmpty,
+    });
   }, 120_000);
 
   afterAll(async () => {

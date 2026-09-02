@@ -576,3 +576,30 @@ into `rebuild_progress_pct`.
 reports it on its stage events, `TaskProgress` gains an optional `percent`
 (additive to the contract), and it stays absent everywhere the underlying
 tool does not supply one — never interpolated from elapsed time.
+
+## e2e — `xinasctl.test.ts` relies on the default 5 s per-test timeout
+
+**What is missing.** Four of the e2e files run assertions that each spawn a
+`node dist/cli/xinasctl.js` subprocess, and `xinasctl.test.ts` leaves most of
+its `it()` blocks on vitest's default 5000 ms `testTimeout`. Under heavy CPU
+oversubscription that budget covers process spawn plus the round trip only
+just: measured at ~1.9 s per CLI read at 3× oversubscription, and two tests
+("reads over UDS peer trust", "viewer token reads but cannot plan") time out
+at ~26× (load average 262 on 10 cores).
+
+**What the code does instead.** The default timeout, unchanged. The suite is
+green idle and at the ~3× load that reproduces the agent-readiness race the
+2026-09-02 change fixed; only a deliberately extreme load breaks it.
+
+**Why it was cut.** It is a different defect family from the fixed-sleep
+races. Those had a real condition to poll for and the sleep was standing in
+for it; this one has no condition to wait on — the work genuinely takes
+longer than the budget — so the only fixes are raising the per-test timeout
+or not spawning a subprocess per assertion. Raising a timeout to paper over
+load is exactly the move the fixed-sleep work was undoing, and doing it
+opportunistically here would muddy that change.
+
+**What done looks like.** Either the CLI e2e tests carry an explicit timeout
+justified by measured spawn cost (as `apply + --wait` already does), or the
+file drives the CLI through one long-lived process instead of one per
+assertion. Decide deliberately rather than bumping 5000 to a bigger guess.

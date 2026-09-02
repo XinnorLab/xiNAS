@@ -20,7 +20,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { collectionNotEmpty, waitForObservation } from './_helpers.js';
+import { collectionNotEmpty, waitForAgentReady, waitForObservation } from './_helpers.js';
 
 const TOKEN = 'helper-test-tok';
 
@@ -132,5 +132,81 @@ describe('waitForObservation', () => {
     await expect(
       waitForObservation(sockPath, TOKEN, '/api/v1/users', { timeoutMs: 5_000 }),
     ).rejects.toThrow(/Unexpected response from \/api\/v1\/users/);
+  });
+});
+
+describe('waitForAgentReady', () => {
+  /**
+   * The system route always answers 200 — from the moment the api is up, long
+   * before the agent process exists. Readiness lives in the payload:
+   * `node.status.agent` is the LIVE HeartbeatTracker snapshot, and its `state`
+   * stays 'offline' until the api's first `agent.health` tick reaches the
+   * agent's UDS socket.
+   */
+  const system = (agent: unknown, extraNodeStatus: Record<string, unknown> = {}): unknown =>
+    envelope({
+      cluster: { kind: 'Cluster', id: 'default' },
+      node: {
+        kind: 'Node',
+        id: 'n1',
+        status: { ...extraNodeStatus, ...(agent === undefined ? {} : { agent }) },
+      },
+    });
+
+  it('keeps polling while the tracker reports the agent offline', async () => {
+    script = [
+      { status: 200, body: system({ state: 'offline' }) },
+      { status: 200, body: system({ state: 'offline' }) },
+      { status: 200, body: system({ state: 'healthy', version: '3.13.0' }) },
+    ];
+
+    await waitForAgentReady(sockPath, TOKEN, { timeoutMs: 5_000 });
+
+    expect(servedRequests).toBe(3);
+  });
+
+  it('keeps polling while the agent sub-object is absent entirely', async () => {
+    // No tracker snapshot at all: the api is up but has never ticked the agent,
+    // so /system omits node.status.agent. Absent is NOT ready.
+    script = [
+      { status: 200, body: system(undefined) },
+      { status: 200, body: system({ state: 'healthy' }) },
+    ];
+
+    await waitForAgentReady(sockPath, TOKEN, { timeoutMs: 5_000 });
+
+    expect(servedRequests).toBe(2);
+  });
+
+  it('reads the live tracker snapshot, not the stale seeded agent_state field', async () => {
+    // The e2e beforeAll seeds the Node row with status.agent_state='offline'
+    // and nothing ever rewrites it. A helper that keyed off THAT field would
+    // poll until timeout on a perfectly healthy agent.
+    script = [{ status: 200, body: system({ state: 'healthy' }, { agent_state: 'offline' }) }];
+
+    await waitForAgentReady(sockPath, TOKEN, { timeoutMs: 5_000 });
+
+    expect(servedRequests).toBe(1);
+  });
+
+  it('accepts degraded — the executor is reachable, only the tick is late', async () => {
+    script = [{ status: 200, body: system({ state: 'degraded' }) }];
+
+    await waitForAgentReady(sockPath, TOKEN, { timeoutMs: 5_000 });
+
+    expect(servedRequests).toBe(1);
+  });
+
+  it('throws naming the condition, the timeout and the caller diagnostics', async () => {
+    script = [{ status: 200, body: system({ state: 'offline' }) }];
+
+    await expect(
+      waitForAgentReady(sockPath, TOKEN, {
+        timeoutMs: 600,
+        diagnostics: () => 'agent: fatal: EADDRINUSE',
+      }),
+    ).rejects.toThrow(
+      /xinas-agent never became reachable within 600ms[\s\S]*"state":"offline"[\s\S]*agent: fatal: EADDRINUSE/,
+    );
   });
 });
