@@ -292,9 +292,11 @@ behavioral contract lives in
 rules below are binding and must be preserved whenever install or
 update logic changes.
 
-- **`main`/`master` is not a delivery channel.** It is the development
-  integration branch. It is never a user installation source and never
-  a production update source.
+- **`main`/`master` is not a delivery channel.** It is the branch of
+  record for shipped releases — every release tag lives on it — but day-to-day
+  integration happens on the current `release/X.Y` branch (see
+  [Branching model](#branching-model)). Neither is ever a user installation
+  source or a production update source.
 - **All user installations and updates use published GitHub Releases.**
   Install one-liners pull the installer from the latest release asset
   (`https://github.com/XinnorLab/xiNAS/releases/latest/download/…`);
@@ -318,20 +320,78 @@ update logic changes.
   latest newer ⇒ show the new version, release notes, and download
   source; latest older/none ⇒ "no update available".
 
+### Branching model
+
+Work for the next minor accumulates on a long-lived release branch; `main`
+only moves on release day and for hotfixes to an already-shipped version.
+
+| Branch | Role |
+|--------|------|
+| `release/X.Y` | Integration branch for the in-flight release. **Feature PRs target this branch, not `main`.** Cut from the previous release tag. |
+| `main` | Branch of record for shipped releases. Every `vX.Y.Z` tag lives here. Receives the release branch as a merge on release day. |
+| `<type>/<slug>` | Feature/fix work. Branch off `release/X.Y`, PR back into it. |
+
+- **Merge PRs with `--merge`, never `--squash`.** Squashing rewrites the
+  commit message and the `Requires-Rebuild:` trailer vanishes silently.
+- **Hotfix to a shipped version:** branch off the release tag (`v3.13.0`),
+  PR into `main`, tag `v3.13.1` on `main`, then cherry-pick the fix into the
+  active `release/X.Y`. Do not fast-forward `main` onto a feature branch.
+- CI gates both surfaces: `pull_request` carries no base filter, so PRs into
+  a release branch run the full matrix; `push: branches: [main, 'release/**']`
+  gates the merge commits themselves.
+
+### Cutting a release candidate
+
+RCs are how an in-flight `release/X.Y` gets tested on real hardware without
+exposing anything to production hosts.
+
+1. Bump `XINAS_MENU_VERSION` to `X.Y.0-rc.N`. One literal serves both version
+   systems: setuptools normalizes it to PEP 440 `X.Y.0rcN`, and
+   `update_check._semver_key` orders it correctly, so
+   `3.13.0 < 3.14.0-rc.1 < 3.14.0` holds on both sides.
+2. Tag `vX.Y.0-rc.N` on the release branch.
+3. `gh release create vX.Y.0-rc.N --prerelease --target release/X.Y --notes-file <notes>`
+
+   `--prerelease` is what does the isolating: it hides the RC from
+   stable-channel update checks *and* from the `releases/latest` endpoint
+   `install.sh` resolves against. Release assets are not required — the
+   TUI's `UpdateChecker` is constructed with `required_asset=None`.
+4. On the test host, set `XINAS_UPDATE_CHANNEL=prerelease` for the menu
+   process. Check for Updates then offers RC tags. Production hosts, which
+   never set it, cannot see them.
+
+Because an RC is only installable as an *update*, a fresh install of an RC
+via the one-liner is not supported — `install.sh` resolves
+`/releases/latest`, which GitHub defines to exclude prereleases.
+
 ### Publishing a new version
 
 To cut a release (see also `CHANGELOG.md`):
 
-1. Update the project version in
+1. Merge the release branch into `main` (`release/X.Y` → `main`), so the tag
+   lands on the branch of record.
+2. Update the project version in
    [xinas_menu/version.py](xinas_menu/version.py) (`XINAS_MENU_VERSION`;
-   `pyproject.toml` derives from it). Pick the next patch for
+   `pyproject.toml` derives from it) to the final `X.Y.Z` — dropping any
+   `-rc.N` suffix carried during the cycle. Pick the next patch for
    backward-compatible changes, minor/major otherwise.
-2. Update the changelog / release notes (`CHANGELOG.md`).
-3. Run the tests, linters, and basic checks (see [Verification](#verification)).
-4. Create a git tag in `vX.Y.Z` form.
-5. Create a GitHub Release from that tag (`gh release create vX.Y.Z`).
-6. Attach the release assets the project uses (`install.sh`,
+3. Update the changelog / release notes (`CHANGELOG.md`).
+4. **Re-state every `Requires-Rebuild:` trailer accumulated since the previous
+   release** in the release notes. This is not optional and not covered by the
+   RC notes: `UpdateChecker` drops prereleases from its candidate list before
+   it unions the trailers, so a stable-channel host going `X.Y-1.Z` → `X.Y.Z`
+   never reads an RC body. Collect them mechanically:
+
+   ```bash
+   git log <previous-tag>..release/X.Y --format=%B | grep -iE '^[[:space:]]*Requires-Rebuild:'
+   ```
+5. Run the tests, linters, and basic checks (see [Verification](#verification)).
+6. Create a git tag in `vX.Y.Z` form on `main`.
+7. Create a GitHub Release from that tag (`gh release create vX.Y.Z`).
+8. Attach the release assets the project uses (`install.sh`,
    `install_client.sh`).
+9. Cut the next release branch from the new tag
+   (`git branch release/X.Y+1 vX.Y.Z`) and push it.
 
 ### Rule for Claude Code
 
@@ -350,7 +410,10 @@ flow and off by default.
   `docs(plans): WS3 landed`. Common types: `feat`, `fix`, `refactor`,
   `test`, `docs`, `chore`. Releases are `chore(release): vX.Y.Z`.
 - **Branches** are `<type>/<slug>` — `fix/doca-ofed-flush-handlers`,
-  `feat/xiraid-only-shares`, `docs/…`.
+  `feat/xiraid-only-shares`, `docs/…`. Branch off, and PR back into, the
+  active `release/X.Y` — not `main`. See
+  [Branching model](#branching-model). Release branches are the one
+  exception to the `<type>/<slug>` shape.
 
 ## Important Notes
 
