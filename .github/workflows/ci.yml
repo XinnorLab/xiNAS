@@ -18,8 +18,12 @@ name: ci
 
 on:
   pull_request:
+  # `pull_request` carries no base filter, so PRs into a release branch are
+  # already gated. This list is the *post-merge* gate: without `release/**`
+  # a long-lived release branch would accumulate merges with nothing running
+  # on the merge commit itself. See CLAUDE.md "Branching model".
   push:
-    branches: [main]
+    branches: [main, 'release/**']
 
 permissions:
   contents: read

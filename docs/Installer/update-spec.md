@@ -504,6 +504,55 @@ There is no code path in which the default (stable) channel selects a
 prerelease, a draft, `main`, `master`, `HEAD`, a branch archive, or a
 commit tarball.
 
+### Release-candidate cycle
+
+Work for the next minor accumulates on a long-lived `release/X.Y` branch
+(see `CLAUDE.md` §*Branching model*). An RC is the vehicle for testing that
+branch on real hardware:
+
+1. `XINAS_MENU_VERSION` is set to `X.Y.0-rc.N`. The same literal is valid on
+   both sides of the version boundary — setuptools normalizes it to PEP 440
+   `X.Y.0rcN` for the editable install the `xinas_menu` role performs, and
+   `_semver_key` gives it correct semver precedence
+   (`3.13.0 < 3.14.0-rc.1 < 3.14.0`). No second version string is kept.
+2. The tag `vX.Y.0-rc.N` is created on `release/X.Y` and published with
+   `gh release create … --prerelease --target release/X.Y`.
+3. The test host sets `XINAS_UPDATE_CHANNEL=prerelease` for the menu
+   process; the normal update flow then offers RC tags. `apply_update`
+   accepts them because `_TAG_RE` admits a prerelease suffix, and the ref
+   is still a tag — never a branch.
+
+**Release assets are not required on an RC.** `UpdateChecker` enforces the
+asset contract only when constructed with `required_asset`, and neither
+call site (`xinas_menu/app.py`, `xinas_menu/screens/startup/startup_menu.py`)
+passes one. The stable-channel install one-liner is unaffected either way,
+because it never resolves an RC — see below.
+
+### RC trailers do not reach the stable channel
+
+`Requires-Rebuild:` trailers carried by RC release notes are invisible to
+production hosts, and this is a property of the filter order, not an
+oversight:
+
+- `_check_sync` drops prereleases from `candidates` when
+  `allow_prerelease` is false;
+- the trailer union is computed *afterwards*, from `candidates` only.
+
+A host on the stable channel therefore goes `X.Y-1.Z` → `X.Y.Z` and reads
+only final release bodies. **The final release notes must re-state every
+trailer accumulated during the RC cycle**, or the roles those changes
+depend on never run on production hosts. `CLAUDE.md` §*Publishing a new
+version* carries the command that collects them.
+
+### Fresh installs cannot select an RC
+
+`install.sh` resolves `/repos/<slug>/releases/latest`, which GitHub defines
+to exclude prereleases, and then validates the result against the release-tag
+regex. An RC is consequently reachable only as an **update** from an already
+installed host on the prerelease channel. This is deliberate: it keeps the
+`--prerelease` flag a single switch that isolates an RC from both the update
+checker and the installer, with no second gate to keep in sync.
+
 ## Dev-only: expert-menu Git Repository Configuration
 
 `startup_menu.sh`'s expert menu (Advanced Settings → "Git Repository
