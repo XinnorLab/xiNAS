@@ -171,8 +171,9 @@ Source: [detect_existing_namespaces.yml](../../collection/roles/nvme_namespace/t
 
 A read-only preflight (`detect_storage_state.yml`) classifies the box as
 `xinas_storage_state` ∈ {MATCH, EMPTY, FOREIGN, UNKNOWN} before any namespace decision (see §11).
-When the box is **MATCH** (the expected xiRAID `data`+`log` arrays are online and
-`/dev/xi_data` is XFS with the configured label) and `xinas_storage_reset` is not set,
+When the box is **MATCH** (the expected xiRAID arrays — `data`+`log` in the auto
+path — are online and the configured data volume, `/dev/xi_data`, is XFS with the
+configured label; see §11) and `xinas_storage_reset` is not set,
 the role reuses the namespaces already on the drives — no rebuild, no data loss:
 
 - `ls /dev/<ctrl>n*` per data drive.
@@ -643,10 +644,26 @@ Formatting happens only on a genuinely fresh box, or under an explicit, confirme
 
 | State | Meaning | Effect (no reset) |
 |---|---|---|
-| **MATCH** | xiRAID `data`+`log` online **and** `/dev/xi_data` is XFS with the configured label | **converge** — every destructive op is skipped |
+| **MATCH** | every expected xiRAID array online **and** the configured data volume is XFS with the configured label | **converge** — every destructive op is skipped |
 | **EMPTY** | both probes **answered**, and no xiRAID arrays and no fs signature exist (incl. a factory single-`n1` drive) | provision as a first install |
 | **FOREIGN** | some array/fs signature exists but doesn't match the expected layout | **fail fast** before any wipe |
 | **UNKNOWN** | a probe could not answer, so the layout is undetermined | **fail fast** before any wipe |
+
+**The expected layout is read from the configuration, not hard-coded.** The
+arrays MATCH looks for are the names in `xiraid_arrays` (`map(attribute='name')`),
+and the volume it probes with `blkid` is `xfs_filesystems[0].data_device`. Only when
+`xiraid_arrays` is empty or undefined — the auto path, where detection runs before
+`generate_raid_config.yml` has produced it — does detection fall back to the auto
+layout, `data`+`log` on `/dev/xi_data`, which is exactly what that task generates.
+This matters for the supported manual path (`nvme_auto_namespace: false` with
+`xiraid_arrays` / `xfs_filesystems` defined in the preset, see
+`raid_fs/defaults/main.yml`): `raid_fs` creates and mounts whatever the preset
+names, so a preset that names its arrays `vol0`+`journal` or puts the filesystem on
+`/dev/xi_vol0` would otherwise classify its own healthy layout as FOREIGN on every
+re-run, and the only way past that failure — `xinas_storage_reset` — runs
+`xicli drive clean` over the very array the operator wanted to keep. The
+filesystem type is still required to be `xfs`: `create_fs.yml` only ever runs
+`mkfs.xfs`, so there is no configuration under which another type is expected.
 
 **Probes must answer for EMPTY to be reachable.** `EMPTY` is the state that authorizes
 destruction, so it is only ever derived from *successful* negative probes — never from a
