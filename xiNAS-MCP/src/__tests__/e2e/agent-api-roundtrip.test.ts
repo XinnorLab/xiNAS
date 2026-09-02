@@ -31,6 +31,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openStateStore } from '../../state/index.js';
+import { collectionNotEmpty, getJson, type JsonResponse, waitForObservation } from './_helpers.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../../..'); // -> xiNAS-MCP
 const API_ENTRY = join(PROJECT_ROOT, 'dist/api-server.js');
@@ -41,40 +42,6 @@ const CONTROLLER_ID = '00000000-0000-0000-0000-000000000e2e';
 const ADMIN_TOKEN = 'e2e-admin-tok';
 const AGENT_TOKEN = 'e2e-agent-tok';
 const HEARTBEAT_INTERVAL_MS = 300;
-
-interface JsonResponse {
-  status: number;
-  body: {
-    result?: unknown;
-    errors?: Array<{ code?: string; details?: { code?: string } }>;
-    warnings?: unknown[];
-  };
-}
-
-/** GET over UDS; resolves with the HTTP status + parsed envelope. */
-function getJson(socketPath: string, path: string, token: string): Promise<JsonResponse> {
-  return new Promise((resolveP, reject) => {
-    const req = http.request(
-      { socketPath, path, method: 'GET', headers: { Authorization: `Bearer ${token}` } },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => {
-          try {
-            resolveP({
-              status: res.statusCode ?? 0,
-              body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
-            });
-          } catch (e) {
-            reject(e);
-          }
-        });
-      },
-    );
-    req.on('error', reject);
-    req.end();
-  });
-}
 
 /** POST a JSON body over UDS; resolves with the HTTP status + parsed envelope. */
 function postJson(
@@ -132,33 +99,6 @@ async function waitForApi(socketPath: string, token: string, timeoutMs = 8000): 
     }
   }
   throw new Error(`API at ${socketPath} did not become ready within ${timeoutMs}ms`);
-}
-
-/**
- * Poll a GET route until it returns HTTP 200 (observation present). A 404 with
- * errors[0].code === 'NOT_FOUND' means "not yet observed" → keep waiting.
- */
-async function waitForObservation(
-  socketPath: string,
-  token: string,
-  path: string,
-  timeoutMs = 12_000,
-): Promise<JsonResponse> {
-  const deadline = Date.now() + timeoutMs;
-  let last: JsonResponse | null = null;
-  while (Date.now() < deadline) {
-    const res = await getJson(socketPath, path, token);
-    last = res;
-    if (res.status === 200) return res;
-    const code = res.body.errors?.[0]?.code;
-    if (res.status !== 404 || (code !== undefined && code !== 'NOT_FOUND')) {
-      throw new Error(`Unexpected response from ${path}: ${JSON.stringify(res)}`);
-    }
-    await sleep(200);
-  }
-  throw new Error(
-    `Observation at ${path} never arrived within ${timeoutMs}ms; last=${JSON.stringify(last)}`,
-  );
 }
 
 describe.sequential('e2e: agent -> api round-trip (fixture probe mode)', () => {
@@ -297,7 +237,13 @@ describe.sequential('e2e: agent -> api round-trip (fixture probe mode)', () => {
   }, 20_000);
 
   it('slow: fixture users round-trip to GET /api/v1/users', async () => {
-    const res = await waitForObservation(apiSockPath, ADMIN_TOKEN, '/api/v1/users');
+    // /users is a COLLECTION route: it answers 200 with [] from the moment
+    // the api is up, long before the Users collector (#8 in the boot sweep)
+    // flushes. The preceding test only waited for NfsIdmap (#5), so without
+    // an explicit readiness predicate this returns [] and asserts on nothing.
+    const res = await waitForObservation(apiSockPath, ADMIN_TOKEN, '/api/v1/users', {
+      ready: collectionNotEmpty,
+    });
     const rows = res.body.result as Array<{ spec?: { name?: string } }>;
     const names = rows.map((u) => u.spec?.name);
     expect(names).toContain('e2e-alice');
@@ -305,7 +251,11 @@ describe.sequential('e2e: agent -> api round-trip (fixture probe mode)', () => {
   }, 20_000);
 
   it('slow: fixture disk round-trips to GET /api/v1/disks', async () => {
-    const res = await waitForObservation(apiSockPath, ADMIN_TOKEN, '/api/v1/disks');
+    // Same collection race as /users — Disk is collector #1, so it usually
+    // wins by ~11ms, which is exactly the kind of margin CI load inverts.
+    const res = await waitForObservation(apiSockPath, ADMIN_TOKEN, '/api/v1/disks', {
+      ready: collectionNotEmpty,
+    });
     const rows = res.body.result as Array<{ id?: string; status?: { model?: string } }>;
     const disk = rows.find((d) => d.status?.model === 'E2E-TEST-NVME');
     expect(disk).toBeDefined();
