@@ -1,6 +1,13 @@
 /**
  * Shared polling helpers for the e2e suite.
  *
+ * Two readiness families live here, and they are NOT interchangeable:
+ *   - `waitForObservation` — agent→api. Something the agent PUSHED has landed
+ *     in the api's KV and the route now serves it.
+ *   - `waitForAgentReady` — api→agent. The api's heartbeat has reached the
+ *     agent, so an apply can dispatch `task.begin` without racing its boot.
+ * A test that applies AND reads observed rows needs both.
+ *
  * `waitForObservation` used to live (twice, near-identically) inside
  * agent-api-roundtrip.test.ts and nfs-roundtrip.test.ts. Both copies treated
  * "HTTP 200" as "the agent's observation has landed". That holds for a
@@ -118,4 +125,74 @@ export async function waitForObservation(
   throw new Error(
     `Observation at ${path} never arrived within ${timeoutMs}ms; last=${JSON.stringify(last)}`,
   );
+}
+
+/**
+ * Readiness for the api→agent dispatch channel, read off /api/v1/system.
+ *
+ * `node.status.agent` is the live HeartbeatTracker snapshot (src/api/routes/
+ * system.ts merges `tracker.currentSnapshot()` in); its `state` is 'offline'
+ * until the api's first `agent.health` tick reaches the agent's UDS socket,
+ * and any other value means that tick succeeded. Deliberately NOT
+ * `node.status.agent_state` — that is the seeded KV field, which the e2e
+ * beforeAll writes as 'offline' and nothing ever rewrites.
+ *
+ * 'degraded' counts as ready: it means the tick is late, not that the socket
+ * is gone (src/api/heartbeat.ts §"State table"). During boot the tracker can
+ * only leave 'offline' via a successful heartbeat, so the first non-offline
+ * state is always 'healthy' anyway.
+ */
+export const agentNotOffline: ObservationReady = (res) => {
+  const state = (
+    res.body.result as { node?: { status?: { agent?: { state?: string } } } } | undefined
+  )?.node?.status?.agent?.state;
+  return state !== undefined && state !== 'offline';
+};
+
+export interface WaitForAgentReadyOptions {
+  /** Overall budget for the poll loop. */
+  timeoutMs?: number;
+  /** Extra context appended to the timeout error — typically the agent's stderr. */
+  diagnostics?: () => string;
+}
+
+/**
+ * Block until xinas-agent will accept a task, then return the /system response.
+ *
+ * Replaces the fixed `sleep(HEARTBEAT_INTERVAL_MS * 3)` that every e2e
+ * beforeAll used to run after spawning the agent. That sleep was a guess at
+ * the agent's boot time: under load the boot overruns 900ms, the first apply
+ * dispatches into a socket nobody is listening on, and `task.begin` fails with
+ * 503 INTERNAL / EXECUTOR_UNAVAILABLE ("xinas-agent did not accept the task",
+ * src/api/tasks/engine.ts) — taking every test in the file with it.
+ *
+ * The agent binds its RPC socket and serves task.* BEFORE the boot sweep,
+ * which it kicks off unawaited (src/agent-server.ts), so "the api's heartbeat
+ * reached the agent" is exactly the precondition `dispatch()` needs. It is
+ * also conservative: the tracker can lag the agent coming up, never lead it.
+ *
+ * Note this waits for the api→agent DIRECTION only. Tests that then read
+ * observed rows (disks, filesystems, interfaces) must still wait on those —
+ * observations travel agent→api and land later.
+ */
+export async function waitForAgentReady(
+  socketPath: string,
+  token: string,
+  opts: WaitForAgentReadyOptions = {},
+): Promise<JsonResponse> {
+  const timeoutMs = opts.timeoutMs ?? 15_000;
+  try {
+    return await waitForObservation(socketPath, token, '/api/v1/system', {
+      ready: agentNotOffline,
+      timeoutMs,
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    const extra = opts.diagnostics?.() ?? '';
+    throw new Error(
+      `xinas-agent never became reachable within ${timeoutMs}ms ` +
+        `(node.status.agent.state stayed offline/absent): ${detail}` +
+        (extra === '' ? '' : `\n--- agent stderr ---\n${extra}`),
+    );
+  }
 }

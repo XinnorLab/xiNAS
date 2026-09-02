@@ -33,6 +33,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openStateStore } from '../../state/index.js';
+import { waitForAgentReady } from './_helpers.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../../..');
 const API_ENTRY = join(PROJECT_ROOT, 'dist/api-server.js');
@@ -429,7 +430,11 @@ describe.sequential('e2e: S4 xiraid array mutations (fixture mode + fake xiRAID)
     });
     agentProc.stderr?.on('data', (c: Buffer) => agentStderr.push(c.toString()));
 
-    await sleep(HEARTBEAT_INTERVAL_MS * 3);
+    try {
+      await waitForAgentReady(apiSockPath, ADMIN_TOKEN);
+    } catch (err) {
+      throw withAgentStderr(err);
+    }
 
     // observed disks must be present before any plan
     const deadline = Date.now() + 10_000;

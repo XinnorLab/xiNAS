@@ -51,7 +51,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openStateStore } from '../../state/index.js';
-import { waitForObservation } from './_helpers.js';
+import { waitForAgentReady, waitForObservation } from './_helpers.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../../..'); // -> xiNAS-MCP
 const API_ENTRY = join(PROJECT_ROOT, 'dist/api-server.js');
@@ -463,7 +463,11 @@ describe.sequential('e2e: NFS round-trip via stub nfs-helper (S3 N6)', () => {
     agentProc.stderr?.on('data', (c: Buffer) => agentStderr.push(c.toString()));
 
     // The heartbeat tracker needs the agent ONLINE before an apply dispatches.
-    await sleep(HEARTBEAT_INTERVAL_MS * 3);
+    try {
+      await waitForAgentReady(apiSockPath, ADMIN_TOKEN);
+    } catch (err) {
+      throw withProcStderr(err);
+    }
   }, 200_000);
 
   afterAll(async () => {
