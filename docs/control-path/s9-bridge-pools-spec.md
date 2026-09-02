@@ -106,9 +106,19 @@ across REST/MCP/CLI/TUI.
   `GET /pools` re-points at KV and the gRPC pool seam is DELETED from
   read-seams (mail/auth-modes remain).
 - **T8 providers:** `pool.create` (name+drives; blockers: duplicate
-  name, unknown/unsafe drives), `pool.modify` (ONE intent:
-  `add_drives|remove_drives|active`), `pool.delete` (blockers:
-  `active`, non-empty `referenced_by`). Freshness per the S4
+  name, unknown/unsafe drives, `disk_is_raid_volume`), `pool.modify`
+  (ONE intent: `add_drives|remove_drives|active`; `add_drives` runs the
+  same drive blockers), `pool.delete` (blockers: `active`, non-empty
+  `referenced_by`).
+  **`disk_is_raid_volume` is checked BEFORE the observed-`Disk` lookup**,
+  and is the one drive blocker that does not need one: `driveBlockers`
+  skips a path observation does not know (`xiRAID validates at execute`),
+  which would let `/dev/xi_log` through on a host whose disks have not
+  been collected yet. A `/dev/xi_*` path is an array's own volume — never
+  a spare — regardless of what observation holds; a pool that adopts one
+  hands xiRAID a live filesystem's external journal as a replacement
+  target. Rule and rationale: [ADR-0006](adr/0006-xiraid-array.md) §Disk
+  and [s3-xiraid-array-spec.md](s3-xiraid-array-spec.md) §4.1. Freshness per the S4
   imperative pattern (review P1 — affected_resources freshness is
   desired-only): affected `Pool/<name>` WITHOUT revision (display),
   ONE `observed_freshness_ref` on the observed Pool row (revision 0 =

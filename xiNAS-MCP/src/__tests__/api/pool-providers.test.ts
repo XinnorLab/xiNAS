@@ -88,6 +88,43 @@ describe('pool providers (S9 T8) — the S4 imperative freshness pattern', () =>
     expect(unsafe.blockers.map((b) => b.code).sort()).toEqual(['disk_not_safe', 'system_disk']);
   });
 
+  // AL1 — the same hole the array create path had: /dev/xi_log is an ARRAY
+  // VOLUME (XFS external journal), reads safe_for_use:true because an
+  // external-log device carries no mountpoint, and would be handed to
+  // `xicli pool create` as a spare. Spec: s3-xiraid-array-spec.md §4.1,
+  // s9-bridge-pools-spec.md §T8.
+  it('create: a /dev/xi_* array volume is never a pool drive', async () => {
+    const known = await poolCreateProvider.preflight(
+      ctxWith([DISK('/dev/xi_log'), DISK('/dev/a')]),
+      { name: 'p', drives: ['/dev/xi_log', '/dev/a'] },
+    );
+    expect(known.blockers.map((b) => b.code)).toEqual(['disk_is_raid_volume']);
+
+    // The important half: driveBlockers SKIPS a path observation does not
+    // know ("xiRAID validates at execute"), so a host whose disks have not
+    // been collected yet would have let this straight through.
+    const unknown = await poolCreateProvider.preflight(ctxWith([]), {
+      name: 'p',
+      drives: ['/dev/xi_log'],
+    });
+    expect(unknown.blockers.map((b) => b.code)).toEqual(['disk_is_raid_volume']);
+  });
+
+  it('modify: add_drives refuses an array volume, remove_drives still accepts one', async () => {
+    const add = await poolModifyProvider.preflight(ctxWith([POOL('p', false)]), {
+      name: 'p',
+      add_drives: ['/dev/xi_log'],
+    });
+    expect(add.blockers.map((b) => b.code)).toContain('disk_is_raid_volume');
+
+    // The escape hatch: a pool that already holds one must be repairable.
+    const rm = await poolModifyProvider.preflight(ctxWith([POOL('p', false)]), {
+      name: 'p',
+      remove_drives: ['/dev/xi_log'],
+    });
+    expect(rm.blockers).toEqual([]);
+  });
+
   it('modify: exactly one intent; absent pool blocks', async () => {
     await expect(
       poolModifyProvider.preflight(ctxWith([]), {

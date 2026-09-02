@@ -129,6 +129,42 @@ export const NAME_RE = /^[A-Za-z0-9_]{1,28}$/;
 export const RESERVED_NAMES: readonly string[] = ['power', 'uevent'];
 
 /**
+ * The device-path prefix of a xiRAID array volume. `xicli raid create -n
+ * <name>` surfaces the array at `/dev/xi_<name>` with its sysfs attributes
+ * under `/sys/block/xi_<name>/` (CR / `xicli raid`, xiRAID Classic 4.4.0 —
+ * https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html), which is the same
+ * naming contract {@link NAME_RE} enforces from the other end. Already the
+ * identity rule in `parse/raid.ts` (volume_path), `lib/fs/unit.ts` (.device
+ * unit) and the NFS executor's xiRAID-backing gate.
+ */
+export const XIRAID_VOLUME_PREFIX = '/dev/xi_';
+
+/**
+ * True when `devicePath` names a xiRAID array volume rather than a drive.
+ *
+ * `lsblk` reports these with `TYPE=disk`, so they become `Disk` rows, and an
+ * array used as an XFS EXTERNAL JOURNAL (`-o logdev=/dev/xi_log`) carries no
+ * mountpoint of its own — it therefore reads `system_disk:false`,
+ * `mounted:false`, `safe_for_use:true`, and it is a member of no array
+ * because it IS one. Every surface that consumes drives must reject it on
+ * this test alone: the test is structural, so it still holds when the owning
+ * array is missing from observed state — precisely when a volume-path lookup
+ * fails open. See docs/control-path/s3-xiraid-array-spec.md §4.1.
+ *
+ * Deliberately NOT folded into `safe_for_use`: that field is contract-typed
+ * in api-v1.yaml as `!system_disk && !mounted`, and `GET /disks` stays an
+ * honest inventory of what the host reports.
+ */
+export function isXiraidVolumePath(devicePath: string): boolean {
+  return devicePath.startsWith(XIRAID_VOLUME_PREFIX);
+}
+
+/** `/dev/xi_log` -> `log`; `''` when the path is not an array volume. */
+export function xiraidVolumeArrayName(devicePath: string): string {
+  return isXiraidVolumePath(devicePath) ? devicePath.slice(XIRAID_VOLUME_PREFIX.length) : '';
+}
+
+/**
  * group_size range per the 4.4.0 command reference: 4-32. Was 2-32, taken from
  * the internal source-tree analysis. The Administrator's Guide is stricter
  * still per level (>= 4 for raid50/60, >= 6 for raid70); only the generic

@@ -226,6 +226,76 @@ describe('validateCreateSpec', () => {
     expect(blockers.filter((b) => b.code.startsWith('disk_')).length).toBe(4);
   });
 
+  // AL1 — a xiRAID array volume is NOT a drive. `lsblk` reports /dev/xi_*
+  // with TYPE=disk, so the volume becomes a Disk row; an XFS EXTERNAL JOURNAL
+  // (-o logdev=/dev/xi_log) has no mountpoint of its own, so it reads
+  // system_disk:false, mounted:false, safe_for_use:true — and it is not a
+  // MEMBER of any array, it IS one, so existingMemberDiskIds misses it too.
+  // Creating an array over it overwrites a live filesystem's journal.
+  // Spec: docs/control-path/s3-xiraid-array-spec.md §4.1.
+  describe('xiRAID array volumes are never consumable members', () => {
+    const XI_LOG = disk('xi_log'); // safe_for_use:true, unmounted, not a member
+
+    it('blocks an otherwise perfectly safe /dev/xi_* member', () => {
+      const f = facts({ disks: [...POOL.map((id) => disk(id)), XI_LOG] });
+      const blockers = validateCreateSpec(
+        spec({ member_disk_ids: ['d1', 'd2', 'd3', 'xi_log'] }),
+        f,
+      );
+      expect(blockers.map((b) => b.code)).toContain('disk_is_raid_volume');
+      // exactly one blocker for it, and none of the four that already existed
+      expect(blockers.filter((b) => b.code.startsWith('disk_'))).toHaveLength(1);
+    });
+
+    it('names the owning array when the volume matches an observed one', () => {
+      const f = facts({
+        disks: [...POOL.map((id) => disk(id)), XI_LOG],
+        existingArrayNames: ['taken', 'log'],
+      });
+      const hit = validateCreateSpec(
+        spec({ member_disk_ids: ['d1', 'd2', 'd3', 'xi_log'] }),
+        f,
+      ).find((b) => b.code === 'disk_is_raid_volume');
+      expect(hit?.message).toMatch(/array 'log'/);
+    });
+
+    // The structural half of the rule: the prefix test must fire with an
+    // EMPTY observed-array set, which is exactly the state before the first
+    // collector cycle — when a volume-path lookup would fail open.
+    it('fires when the owning array is absent from observed state', () => {
+      const f = facts({
+        disks: [...POOL.map((id) => disk(id)), XI_LOG],
+        existingArrayNames: [],
+      });
+      expect(
+        validateCreateSpec(spec({ member_disk_ids: ['d1', 'd2', 'd3', 'xi_log'] }), f).map(
+          (b) => b.code,
+        ),
+      ).toContain('disk_is_raid_volume');
+    });
+
+    // xi_data IS caught today, but only while mounted — and by the wrong
+    // blocker. The volume verdict is the more specific one and wins.
+    it('takes precedence over disk_not_safe for a mounted array volume', () => {
+      const f = facts({
+        disks: [
+          ...POOL.map((id) => disk(id)),
+          disk('xi_data', { mounted: true, safe_for_use: false }),
+        ],
+      });
+      const codes_ = validateCreateSpec(
+        spec({ member_disk_ids: ['d1', 'd2', 'd3', 'xi_data'] }),
+        f,
+      ).map((b) => b.code);
+      expect(codes_).toContain('disk_is_raid_volume');
+      expect(codes_).not.toContain('disk_not_safe');
+    });
+
+    it('leaves ordinary drives alone', () => {
+      expect(codes(spec({ member_disk_ids: ['d1', 'd2', 'd3', 'd4'] }))).toEqual([]);
+    });
+  });
+
   // xiRAID array naming rules, per the 4.4.0 command reference: max 28 chars,
   // Latin letters / numbers / underscores, and "power"/"uevent" prohibited.
   it('array names follow xiRAID rules', () => {

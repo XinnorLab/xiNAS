@@ -77,9 +77,71 @@ Per ADR-0006 / ADR-0005: API validation and agent rendering must not diverge.
 
 **Enrichment (prerequisite).** `lib/parse/disk.ts` + the disk probe/collector extend the observed `Disk.status` with: `device_path` (`/dev/<name>`), `size_bytes` (lsblk `-b`), `system_disk` (any descendant partition mounted at `/`, `/boot`, `/boot/efi` — the `nvme_namespace` detection rule), `mounted` (any descendant mountpoint), `safe_for_use` (= `!system_disk && !mounted`). Existing fields are unchanged; the `GET /disks?safe_for_use=` filter becomes real on live data. Array **membership is not a collector concern** — the plan provider checks it against observed `XiraidArray`s.
 
-**Resolution (plan time, api).** The provider resolves `member_disk_ids → device_path` from observed `Disk` state, validates each disk (exists / `safe_for_use` / not `system_disk` / not member|spare of an observed array → blockers `disk_not_found`/`disk_not_safe`/`disk_is_system`/`disk_in_use`), and **embeds the resolved `device_by_id` map in the operation spec** persisted on the plan task — the same `spec` the engine forwards in `task.begin`.
+**Resolution (plan time, api).** The provider resolves `member_disk_ids → device_path` from observed `Disk` state, validates each disk (exists / not a xiRAID array volume / `safe_for_use` / not `system_disk` / not member|spare of an observed array → blockers `disk_not_found`/`disk_is_raid_volume`/`disk_not_safe`/`disk_is_system`/`disk_in_use`), and **embeds the resolved `device_by_id` map in the operation spec** persisted on the plan task — the same `spec` the engine forwards in `task.begin`.
 
 **Re-check (apply time, agent).** The S2 `ExecutorContext` exposes only `spec` (no KV) — deliberate; the map travels in the spec. The executor `preflight` re-checks under the held leases: every `device_by_id` path exists on the host, and none is already a member per a fresh `raid_show`. Disk *safety* is pinned at plan time and protected by the disk leases; the executor re-verifies *existence and membership* (what can actually change under a plan).
+
+### 4.1 xiRAID array volumes are never consumable drives
+
+`lsblk` reports a xiRAID array volume (`/dev/xi_<name>`) with `TYPE=disk`, so
+it survives the `type === 'disk'` filter in `lib/parse/disk.ts` and becomes a
+`Disk` row like any NVMe namespace. None of the three enrichment fields
+excludes it:
+
+| Volume | `system_disk` | `mounted` | `safe_for_use` |
+|---|---|---|---|
+| `/dev/xi_data` (XFS mounted at `/mnt/data`) | false | **true** | false |
+| `/dev/xi_log` (XFS **external journal**, `-o logdev=`) | false | **false** | **true** |
+
+An external journal device carries no mountpoint of its own — the filesystem
+references it through a mount *option* — so `xi_log`, the log array every
+`nvme_namespace` layout provisions ([Installer/raid-spec.md](../Installer/raid-spec.md)),
+reads as a free drive. `xi_data` is only protected *while mounted*; unmount it
+for maintenance and it reads free too. Neither is a member of any array —
+each **is** an array — so `existingMemberDiskIds` does not hold it either.
+
+The rule, enforced in `lib/xiraid/validate.ts` (`checkDisks`) and mirrored in
+`api/plan/providers/pool.ts` (`driveBlockers`), is therefore **structural**:
+
+> A device path matching `/^\/dev\/xi_/` is a xiRAID array volume and is
+> **never** offered as a member disk or a pool drive, whatever its
+> `safe_for_use` value, and whether or not the owning array is present in
+> observed state. Blocker: `disk_is_raid_volume`.
+
+`isXiraidVolumePath()` lives in `lib/xiraid/schema.ts` next to `NAME_RE`
+because it is the same vendor naming contract read from the other end:
+`xicli raid create -n <name>` accepts `^[A-Za-z0-9_]{1,28}$` and surfaces the
+result at `/dev/xi_<name>` with sysfs attributes under `/sys/block/xi_<name>/`
+([CR / `xicli raid`](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/raid.html),
+xiRAID Classic 4.4.0). The prefix is already the identity rule elsewhere in
+the codebase — `parse/raid.ts` builds `volume_path` from it, `lib/fs/unit.ts`
+derives the `.device` unit from it, and `nfs-executor.ts` gates
+xiRAID-backing on it — and no NVMe (`nvmeXnY`), virtio (`vdX`) or SCSI
+(`sdX`) device can collide with it.
+
+**Why structural and not a lookup against observed `XiraidArray` rows.** The
+volume-path set is the more precise test and is used to *name* the owning
+array in the blocker message, but it fails **open** exactly when it matters:
+before the first collector cycle, or on a host whose arrays the control path
+has not observed, the set is empty and every `xi_*` volume reads free. The
+prefix fails closed. Both run; the prefix decides.
+
+**Why not simply drop `xi_*` from the `Disk` inventory.** `GET /api/v1/disks`
+is an inventory of what the host reports, and `disk_not_found` ("not present
+in observed state") is the wrong diagnosis for a device the operator can see
+in `lsblk`. The blocker names what the device actually is and what to do
+instead, which is what an MCP client — an LLM picking drives out of
+`GET /disks?safe_for_use=true` — needs to recover.
+
+**Prior art in this codebase, and the asymmetry this closes.** The *delete*
+executor already refuses to destroy a volume that a mounted filesystem
+references as its `logdev=`/`rtdev=` device (`findExternalDeviceUse`,
+[s4-xiraid-array-mutations-spec.md](s4-xiraid-array-mutations-spec.md) §7) —
+the same data loss, reached by destroying the device instead of overwriting
+it. The create path had no counterpart. The TUI's own picker excluded `xi_*`
+by name ([Storage/raid-management-spec.md](../Storage/raid-management-spec.md)
+§2.6), but a picker is not a preflight: REST, `/mcp` and `xinasctl` never
+went through it.
 
 ---
 

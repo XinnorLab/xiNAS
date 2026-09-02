@@ -245,6 +245,38 @@ describe('xiraid.array.create executor', () => {
     expect(fake.arrays).toHaveLength(1); // the pre-existing array is untouched
   });
 
+  // AL1 — the live half of the §4.1 rule. Plan-time state can be stale (or
+  // the plan can predate the array), so the executor refuses a /dev/xi_*
+  // member under the held leases, before raid_create can overwrite it.
+  it('preflight failure (member is a xiRAID array volume) → no create, no destroy', async () => {
+    const fake = makeFake();
+    // The log array exists and is online — this is the normal xiNAS layout,
+    // and /dev/xi_log is the XFS external journal of the data filesystem.
+    fake.arrays.push({ name: 'log', level: '10', devices: ['/dev/nvme0n1'], state: ['online'] });
+    const events = await run(fake, {
+      ...SPEC,
+      member_disk_ids: ['d1', 'd2', 'd3', 'xi_log'],
+      device_by_id: { ...SPEC.device_by_id, xi_log: '/dev/xi_log' },
+    });
+
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(terminal(events)).toMatchObject({ event_type: 'terminal', status: 'failed' });
+    expect(fake.destroyCalls).toEqual([]);
+    expect(fake.arrays).toHaveLength(1); // only 'log' — nothing was created
+  });
+
+  // The array need not be observable for the refusal: the prefix is the rule.
+  it('preflight refuses a /dev/xi_* member even when no such array is shown', async () => {
+    const fake = makeFake();
+    const events = await run(fake, {
+      ...SPEC,
+      member_disk_ids: ['d1', 'd2', 'd3', 'xi_ghost'],
+      device_by_id: { ...SPEC.device_by_id, xi_ghost: '/dev/xi_ghost' },
+    });
+    expect(shape(events)).toContainEqual(['stage_failed', 'preflight']);
+    expect(fake.arrays).toHaveLength(0);
+  });
+
   it('preflight failure (name collision) → rollback must NOT destroy the array it found', async () => {
     const fake = makeFake();
     // An array the operator already owns, wearing the name this create wants.
