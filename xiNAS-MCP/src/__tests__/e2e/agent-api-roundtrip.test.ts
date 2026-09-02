@@ -31,7 +31,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openStateStore } from '../../state/index.js';
-import { collectionNotEmpty, getJson, type JsonResponse, waitForObservation } from './_helpers.js';
+import {
+  collectionNotEmpty,
+  getJson,
+  type JsonResponse,
+  waitForAgentReady,
+  waitForObservation,
+} from './_helpers.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../../..'); // -> xiNAS-MCP
 const API_ENTRY = join(PROJECT_ROOT, 'dist/api-server.js');
@@ -270,8 +276,10 @@ describe.sequential('e2e: agent -> api round-trip (fixture probe mode)', () => {
     // routes as of S9), so the tracker-aware stub returns UNSUPPORTED
     // (422 / EXECUTOR_UNSUPPORTED), not UNAVAILABLE. Guard against the
     // offline gate hollowly always returning UNAVAILABLE.
-    // Give one heartbeat tick time to land.
-    await sleep(HEARTBEAT_INTERVAL_MS * 3);
+    // Wait for that tick to land rather than guessing how long it takes.
+    await waitForAgentReady(apiSockPath, ADMIN_TOKEN, {
+      diagnostics: () => agentStderr.join('').slice(-2000),
+    });
     const res = await postJson(apiSockPath, '/api/v1/shares', ADMIN_TOKEN, { name: 'x' }, 'PUT');
     expect(res.status).toBe(422);
     expect(res.body.errors?.[0]?.details?.code).toBe('EXECUTOR_UNSUPPORTED');

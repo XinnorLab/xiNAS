@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openStateStore } from '../../state/index.js';
+import { waitForAgentReady } from './_helpers.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../../..');
 const API_ENTRY = join(PROJECT_ROOT, 'dist/api-server.js');
@@ -247,7 +248,14 @@ describe.sequential('e2e: S10 task cancel (fixture mode)', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     agentProc.stderr?.on('data', (c: Buffer) => agentStderr.push(c.toString()));
-    await sleep(HEARTBEAT_INTERVAL_MS * 3);
+
+    // Every test below opens with an apply, so a `task.begin` dispatched into a
+    // still-booting agent fails the WHOLE file with 503 EXECUTOR_UNAVAILABLE.
+    // Wait for the api's heartbeat to actually reach the agent instead of
+    // guessing at the boot time — that guess loses under machine load.
+    await waitForAgentReady(apiSockPath, ADMIN_TOKEN, {
+      diagnostics: () => agentStderr.join('').slice(-2000),
+    });
   }, 200_000);
 
   afterAll(async () => {

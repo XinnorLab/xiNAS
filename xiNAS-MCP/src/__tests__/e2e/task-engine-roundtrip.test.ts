@@ -51,6 +51,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { AgentRpcClient } from '../../api/agent-client.js';
 import { buildTaskEngines } from '../../api/tasks/build.js';
 import { openStateStore } from '../../state/index.js';
+import { waitForAgentReady } from './_helpers.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../../..'); // -> xiNAS-MCP
 const API_ENTRY = join(PROJECT_ROOT, 'dist/api-server.js');
@@ -330,7 +331,11 @@ describe.sequential('e2e: S2 task engine round-trip (fixture probe mode)', () =>
     await waitForApi(agentSockPath, AGENT_TOKEN).catch(() => {
       /* agent socket may not answer plain GETs; the apply scenarios verify it */
     });
-    await sleep(HEARTBEAT_INTERVAL_MS * 3);
+    try {
+      await waitForAgentReady(apiSockPath, ADMIN_TOKEN);
+    } catch (err) {
+      throw withAgentStderr(err);
+    }
   }, 200_000);
 
   afterAll(async () => {

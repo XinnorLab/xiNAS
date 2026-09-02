@@ -21,6 +21,7 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openStateStore } from '../../state/index.js';
+import { collectionNotEmpty, waitForAgentReady, waitForObservation } from './_helpers.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../../..');
 const API_ENTRY = join(PROJECT_ROOT, 'dist/api-server.js');
@@ -249,7 +250,12 @@ describe.sequential('e2e: S8 client parity (REST / MCP-stdio / xinasctl)', () =>
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    await sleep(1500); // sweeps land (the share plan needs the mounted fs)
+    // The share plan needs the mounted fs, so wait for that observation to
+    // land — and for the agent to be dispatchable — instead of guessing.
+    await waitForAgentReady(apiSockPath, ADMIN_TOKEN);
+    await waitForObservation(apiSockPath, ADMIN_TOKEN, '/api/v1/filesystems', {
+      ready: collectionNotEmpty,
+    });
 
     mcp = new StdioMcp(apiSockPath, ADMIN_TOKEN);
     await mcp.send({
