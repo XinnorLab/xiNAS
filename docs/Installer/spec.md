@@ -834,11 +834,14 @@ curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.s
 ```
 
 A fleet rolled out from behind one public address shares GitHub's
-per-IP quota for anonymous requests; add `XINAS_GH_TOKEN=<token>` to the
-same `sudo` line and the installer both uses it and keeps it for the
-day-2 update checks (see [update-spec.md](update-spec.md) "GitHub rate
-limits and the access token"). It is not an answer-file key: it is read
-before the answer file exists.
+per-IP quota for anonymous requests. Pre-create `/etc/xinas/github-token`
+(mode `0600`) in the image or through cloud-init, or hand the token over
+by name with `sudo --preserve-env=XINAS_GH_TOKEN` — never as
+`sudo XINAS_GH_TOKEN=… bash`, which puts the value in `ps` and in sudo's
+log — and the installer both uses it and keeps it for the day-2 update
+checks (see [update-spec.md](update-spec.md) "GitHub rate limits and the
+access token"). It is not an answer-file key: it is read before the
+answer file exists.
 
 Local, repo already present, VM preset, license from a specific file:
 

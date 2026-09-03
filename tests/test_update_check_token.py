@@ -35,6 +35,16 @@ def test_github_token_file_first_line_trimmed_and_missing(tmp_path):
     assert uc.github_token({"XINAS_GH_TOKEN": "  "}, path=tmp_path / "missing") is None
 
 
+def test_github_token_file_path_honours_the_env_override(tmp_path):
+    """XINAS_GH_TOKEN_FILE relocates the file for the bash paths; the checker
+    reads the same variable so an install run with a relocated file does not
+    leave the TUI looking at the default path."""
+    f = tmp_path / "custom"
+    f.write_text("from-custom\n")
+    assert uc.github_token({"XINAS_GH_TOKEN_FILE": str(f)}) == "from-custom"
+    assert uc.github_token({"XINAS_GH_TOKEN_FILE": str(tmp_path / "missing")}) is None
+
+
 # ── HTTP error wording ───────────────────────────────────────────────────────
 
 

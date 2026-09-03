@@ -60,6 +60,7 @@ def _run(script: str, env: dict[str, str], cwd: Path) -> subprocess.CompletedPro
         ["bash", "-c", _block(LIB) + "\n" + script],
         env=env,
         cwd=cwd,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=30,
@@ -273,11 +274,30 @@ def test_every_site_carries_the_identical_block():
     )
 
 
+# The menus source lib/menu_lib.sh, so they carry no copy — but their update
+# paths must go through the wrappers all the same.
+_MENUS = ("startup_menu.sh", "simple_menu.sh", "post_install_menu.sh")
+
+# startup_menu.sh's configure_git_repo is gated behind XINAS_DEV_REPO_CONFIG=1,
+# clones an operator-supplied URL and is explicitly out of scope
+# (update-spec.md "Non-interactive git access").
+_DEV_ONLY_RE = re.compile(r"^configure_git_repo\(\) \{\n.*?^\}\n", re.M | re.S)
+
+# A network git call, with any options — each with an optional argument —
+# between `git` and the subcommand (`git -C "$dir" fetch`, `git -c k=v fetch`,
+# `git -q clone`). Quoted strings are blanked to "" by _code_lines first.
+_BARE_GIT_RE = re.compile(
+    r'(?<![\w_])git(?:\s+-\S+(?:\s+(?:""|[^-\s"]\S*))?)*\s+(clone|fetch|ls-remote)\b'
+)
+
+
 def _code_lines(path: str) -> list[str]:
-    """Non-comment lines outside the shared block with their double-quoted
-    strings blanked: what actually runs, minus the operator-facing messages
-    that legitimately quote git ("git fetch/checkout error", the hint)."""
+    """Non-comment lines outside the shared block (and outside the dev-only
+    function) with their double-quoted strings blanked: what actually runs,
+    minus the operator-facing messages that legitimately quote git ("git
+    fetch/checkout error", the hint)."""
     body = _BLOCK_RE.sub("", (REPO / path).read_text())
+    body = _DEV_ONLY_RE.sub("", body)
     out = []
     for line in body.splitlines():
         s = line.strip()
@@ -287,18 +307,41 @@ def _code_lines(path: str) -> list[str]:
     return out
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        'if git -C "" fetch --quiet origin --tags 2>/dev/null \\',
+        "git -c x=y fetch origin",
+        "git -q clone --branch v1 url dir",
+        "git fetch origin --tags",
+        "git ls-remote url",
+    ],
+)
+def test_bare_git_regex_sees_options_between_git_and_subcommand(line):
+    assert _BARE_GIT_RE.search(line), line
+
+
+@pytest.mark.parametrize(
+    "line",
+    ['git -C "" checkout --force ""', 'xinas_gh_git -C "" fetch origin', "git describe --tags"],
+)
+def test_bare_git_regex_ignores_local_and_wrapped_calls(line):
+    assert not _BARE_GIT_RE.search(line.replace("xinas_gh_git", "")), line
+
+
 def test_every_site_calls_the_wrappers_not_bare_tools():
     """Any curl against api.github.com for xiNAS releases and any network git
-    call on a release path must go through the wrappers."""
-    for path in _SITES:
+    call on a release path must go through the wrappers — in the six copies
+    and in the three menus that source the canonical one."""
+    for path in list(_SITES) + list(_MENUS):
         for line in _code_lines(path):
             if re.search(
-                r"(?<![\w_])curl .*api\.github\.com/repos/\$\{?(REPO_SLUG|CLIENT_REPO_SLUG)", line
+                r"(?<![\w_])curl .*api\.github\.com/repos/\$\{?"
+                r"(REPO_SLUG|CLIENT_REPO_SLUG|_UPDATE_REPO_SLUG)",
+                line,
             ):
                 raise AssertionError(f"{path}: bare curl on {line.strip()!r}")
-            if re.search(
-                r"(?<![\w_])git (clone|fetch|ls-remote)\b", line.replace("xinas_gh_git", "")
-            ):
+            if _BARE_GIT_RE.search(line.replace("xinas_gh_git", "")):
                 raise AssertionError(f"{path}: bare network git call on {line.strip()!r}")
 
 
@@ -361,9 +404,92 @@ def test_persist_replaces_an_existing_file(tmp_path):
     assert oct(dest.stat().st_mode & 0o777) == "0o600"
 
 
-def test_install_sh_persists_before_its_first_network_git_call():
-    src = INSTALL_SH.read_text()
+def test_persist_keeps_a_github_token_env_too(tmp_path):
+    proc = _persist(tmp_path, _clean_env(tmp_path, GITHUB_TOKEN="from-gh"))
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "etc" / "xinas" / "github-token").read_text() == "from-gh\n"
+
+
+def test_persist_keeps_an_existing_directory_mode_and_leaves_no_temp_file(tmp_path):
+    d = tmp_path / "etc" / "xinas"
+    d.mkdir(parents=True)
+    d.chmod(0o750)
+    proc = _persist(tmp_path, _clean_env(tmp_path, XINAS_GH_TOKEN="sekret"))
+    assert proc.returncode == 0, proc.stderr
+    assert oct(d.stat().st_mode & 0o777) == "0o750", (
+        "an operator-hardened /etc/xinas keeps its mode"
+    )
+    assert [q.name for q in d.iterdir()] == ["github-token"]
+
+
+@pytest.mark.parametrize(
+    "script,accepted",
+    [
+        ("install.sh", 'ok "Latest release:'),
+        ("install_client.sh", 'RELEASE_TAG="$(xinas_latest_release_tag)"'),
+    ],
+)
+def test_installers_persist_only_after_github_accepted_the_token(script, accepted):
+    """A mistyped token persisted before the release lookup would be reused by
+    every later run — and nothing in xiNAS removes the file. Persist after the
+    lookup succeeded (GitHub took the token), and before the first network
+    git call so the clone benefits from it."""
+    src = (REPO / script).read_text()
     call = src.find('xinas_persist_github_token "$XINAS_GH_TOKEN_FILE"')
-    first_git = re.search(r"^\s*xinas_gh_git (clone|fetch)", src, re.M)
-    assert call > 0, "install.sh must persist the token it was given"
-    assert first_git and call < first_git.start(), "persist must precede the first network git call"
+    resolved = src.find(accepted)
+    first_git = re.search(r"^\s*(if |)xinas_gh_git (clone|fetch)", src, re.M)
+    assert call > 0, f"{script} must persist the token it was given"
+    assert 0 < resolved < call, f"{script}: persist must follow a successful release lookup"
+    assert first_git and call < first_git.start(), (
+        f"{script}: persist must precede the first network git call"
+    )
+
+
+# ── the release-lookup failure names its cause ───────────────────────────────
+
+
+def _stub_curl_status(tmp_path: Path, code: str) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "curl").write_text("#!/bin/bash\ncat >/dev/null\nprintf '%s' '" + code + "'\n")
+    (bin_dir / "curl").chmod(0o755)
+    return bin_dir
+
+
+@pytest.mark.parametrize(
+    "code,token_env,expect",
+    [
+        ("401", {"XINAS_GH_TOKEN": "sekret"}, "rejected the token from XINAS_GH_TOKEN"),
+        ("403", {}, "anonymous requests from this public address"),
+        ("429", {}, "anonymous requests from this public address"),
+        ("403", {"GITHUB_TOKEN": "sekret"}, "token from GITHUB_TOKEN is spent"),
+        ("000", {}, "No connection"),
+        ("500", {}, "answered HTTP 500"),
+    ],
+)
+def test_explain_release_lookup_failure_names_the_cause(tmp_path, code, token_env, expect):
+    bin_dir = _stub_curl_status(tmp_path, code)
+    env = _clean_env(tmp_path, **token_env)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    proc = _run("xinas_gh_explain_release_lookup_failure XinnorLab/xiNAS", env, tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert expect in proc.stdout, proc.stdout
+    assert "sekret" not in proc.stdout + proc.stderr, "never the value, only the source"
+
+
+def test_explain_names_the_file_when_the_token_came_from_it(tmp_path):
+    f = tmp_path / "tok"
+    f.write_text("sekret\n")
+    bin_dir = _stub_curl_status(tmp_path, "401")
+    env = _clean_env(tmp_path, XINAS_GH_TOKEN_FILE=str(f))
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    proc = _run("xinas_gh_explain_release_lookup_failure XinnorLab/xiNAS", env, tmp_path)
+    assert f"rejected the token from {f}" in proc.stdout, proc.stdout
+    assert "sekret" not in proc.stdout
+
+
+@pytest.mark.parametrize("script", ["install.sh", "install_client.sh", "prepare_system.sh"])
+def test_installers_explain_a_failed_release_lookup(script):
+    assert "xinas_gh_explain_release_lookup_failure" in (REPO / script).read_text(), (
+        f"{script}: a failed /releases/latest lookup must name its cause"
+    )

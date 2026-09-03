@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -217,16 +218,18 @@ GITHUB_TOKEN_FILE = Path("/etc/xinas/github-token")
 _GIT_CREDENTIAL_HELPER = '!f() { [ "$1" = get ] || exit 0; echo username=x-access-token; echo "password=$XINAS_GH_TOKEN"; }; f'
 
 
-def github_token(
-    env: Mapping[str, str] | None = None, path: Path = GITHUB_TOKEN_FILE
-) -> str | None:
+def github_token(env: Mapping[str, str] | None = None, path: Path | None = None) -> str | None:
     """Resolve the optional GitHub token: XINAS_GH_TOKEN, GITHUB_TOKEN, then
-    the first line of *path*. Whitespace is stripped; empty means None."""
+    the first line of *path* (default: XINAS_GH_TOKEN_FILE from *env*, else
+    /etc/xinas/github-token — the same order and file as the bash paths).
+    Whitespace is stripped; empty means None."""
     env = os.environ if env is None else env
     for var in ("XINAS_GH_TOKEN", "GITHUB_TOKEN"):
         val = (env.get(var) or "").strip()
         if val:
             return val
+    if path is None:
+        path = Path(env.get("XINAS_GH_TOKEN_FILE") or GITHUB_TOKEN_FILE)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -314,10 +317,16 @@ class ReleaseCache:
             return None
 
     def save(self, entry: _CachedReleases) -> None:
+        # A private temp file in the same directory, then an atomic replace:
+        # two menus saving at once (two logins with menu_auto_launch) never
+        # promote each other's half-written file.
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_name(self.path.name + ".tmp")
-            tmp.write_text(json.dumps(asdict(entry)), encoding="utf-8")
+            with tempfile.NamedTemporaryFile(
+                "w", dir=self.path.parent, prefix=self.path.name + ".", delete=False
+            ) as fh:
+                fh.write(json.dumps(asdict(entry)))
+                tmp = fh.name
             os.chmod(tmp, 0o600)
             os.replace(tmp, self.path)
         except OSError:
@@ -355,7 +364,9 @@ def _fetch_releases(
     cached = cache.load() if cache is not None else None
     if cached is not None and cached.installed != installed:
         cached = None
-    if cached is not None and max_age is not None and now() - cached.checked_at < max_age:
+    # A clock that went backwards makes the age negative; treat that as stale
+    # rather than as "fresh for as long as the skew lasts".
+    if cached is not None and max_age is not None and 0 <= now() - cached.checked_at < max_age:
         return cached.releases
 
     headers = {
