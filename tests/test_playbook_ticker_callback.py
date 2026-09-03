@@ -9,6 +9,13 @@ shown"). The fix forces ``ANSIBLE_STDOUT_CALLBACK=default`` on the interactive
 (TTY) branch of ``xinas_run_playbook``, mirroring what the Python TUI already
 does in ``xinas_menu/screens/startup/playbook_screen.py``.
 
+Second root cause (2026-09-03): the ticker was an awk filter, which can only
+act when a line arrives, so its spinner glyph froze on the last banner for the
+whole length of a silent task (``wait_for`` at 30 s per NVMe controller, a long
+``apt`` install) and a healthy run looked hung. The ticker is now a bash
+``read -t`` loop whose spinner turns on a 100 ms timer independent of output
+(docs/Installer/spec.md §2.5).
+
 These tests stub ``ansible-playbook`` so they need neither real ansible nor a
 configured host. The interactive case runs the real function under a pseudo-tty
 so ``[ -t 1 ]`` is true and the ticker branch executes.
@@ -16,6 +23,7 @@ so ``[ -t 1 ]`` is true and the ticker branch executes.
 
 import os
 import pty
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -117,3 +125,106 @@ def test_menu_lib_forces_default_callback_on_tty_branch():
         "interactive ticker path; the status ticker will go blank under "
         "ansible.cfg's stdout_callback=minimal."
     )
+
+
+# ---------------------------------------------------------------------------
+# Spinner cadence: the ticker must keep turning while a task is silent.
+# ---------------------------------------------------------------------------
+
+SPINNER_GLYPHS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_GLYPH_RE = re.compile(f"[{SPINNER_GLYPHS}]")
+
+SILENT_TASK = "TASK [nvme_namespace : Wait for small namespace devices (n1) to appear]"
+
+# Emits one TASK banner, then produces nothing for a while (what a wait_for or
+# an apt install looks like from the outside), then finishes normally.
+STUB_ANSIBLE_SILENT_TASK = textwrap.dedent(
+    f"""\
+    #!/usr/bin/env bash
+    printf 'PLAY [all] %s\\n' '****************************'
+    printf '{SILENT_TASK} %s\\n' '********'
+    sleep 1.2
+    printf 'ok: [localhost]\\n'
+    printf 'PLAY RECAP %s\\n' '*********************************'
+    printf 'localhost : ok=1 changed=0 unreachable=0 failed=0\\n'
+    exit 0
+    """
+)
+
+
+def _run_ticker_filter(producer: str) -> str:
+    """Pipe a bash producer snippet straight into ``_xinas_playbook_ticker``.
+
+    No pty: this exercises the filter itself, not xinas_run_playbook's TTY
+    gate. ``set -e`` is on so a ticker that trips errexit on a read timeout
+    fails loudly here instead of silently truncating the display on a host.
+    """
+    script = textwrap.dedent(
+        f"""\
+        set -euo pipefail
+        source "{MENU_LIB}"
+        {{ {producer} ; }} | _xinas_playbook_ticker
+        """
+    )
+    proc = subprocess.run(["bash", "-c", script], capture_output=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+    return proc.stdout.decode("utf-8", "replace")
+
+
+def test_ticker_spinner_keeps_turning_during_silent_task(tmp_path):
+    """Regression for the frozen spinner: with no new banner for 1.2 s the
+    status line must still be redrawn repeatedly with a rotating glyph."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "ansible-playbook"
+    stub.write_text(STUB_ANSIBLE_SILENT_TASK)
+    stub.chmod(0o755)
+
+    term_output = _run_ticker_under_pty(bin_dir, tmp_path / "install.log")
+
+    redraws = term_output.count(SILENT_TASK)
+    glyphs = set(_GLYPH_RE.findall(term_output))
+    # 1.2 s at 100 ms/tick is ~12 redraws; demand a fraction of that so a
+    # loaded CI runner cannot flake it, but far more than the single render
+    # the input-driven awk ticker produced.
+    assert redraws >= 4 and len(glyphs) >= 3, (
+        f"status line redrawn {redraws}x with glyphs {sorted(glyphs)}; the ticker "
+        "is not advancing the spinner while the task is silent.\n"
+        "--- terminal output ---\n" + repr(term_output)
+    )
+
+
+def test_ticker_shows_starting_before_first_banner():
+    """Ansible is silent for several seconds before its first PLAY banner
+    (inventory parse, collection load). The operator must see life there too."""
+    out = _run_ticker_filter("sleep 0.5; printf 'PLAY [all] %s\\n' '****'")
+    assert "Starting" in out, repr(out)
+    assert out.index("Starting") < out.index("PLAY [all]"), repr(out)
+
+
+def test_ticker_reassembles_a_banner_split_across_the_timer():
+    """A banner whose bytes straddle a 100 ms tick must be parsed whole, never
+    rendered as a truncated task name."""
+    out = _run_ticker_filter(
+        "printf 'TASK [common : ins'; sleep 0.35; printf 'tall packages] %s\\n' '****'"
+    )
+    assert "TASK [common : install packages]" in out, repr(out)
+    assert "TASK [common : ins]" not in out, repr(out)
+
+
+def test_ticker_passes_errors_and_recap_through_and_stops_spinning():
+    """fatal:/failed: lines and the PLAY RECAP block stay verbatim, and once the
+    recap starts nothing is drawn over it."""
+    out = _run_ticker_filter(
+        "printf 'TASK [raid_fs : Create array] %s\\n' '****';"
+        ' printf \'fatal: [localhost]: FAILED! => {"msg": "boom"}\\n\';'
+        " sleep 0.3;"
+        " printf 'PLAY RECAP %s\\n' '****';"
+        " printf 'localhost : ok=1 changed=0 unreachable=0 failed=1\\n';"
+        " sleep 0.3"
+    )
+    assert 'fatal: [localhost]: FAILED! => {"msg": "boom"}' in out, repr(out)
+    assert "localhost : ok=1 changed=0 unreachable=0 failed=1" in out, repr(out)
+    after_recap = out[out.index("PLAY RECAP") :]
+    assert "TASK [" not in after_recap, repr(out)
+    assert not _GLYPH_RE.search(after_recap), repr(out)
