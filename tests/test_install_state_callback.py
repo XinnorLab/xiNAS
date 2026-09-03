@@ -149,3 +149,64 @@ def test_task_result_for_an_unstarted_role_is_ignored(tmp_path):
     w.start(preset="default", expected=["common"])
     w.task_result("ghost", "ok")
     assert _read(tmp_path)["roles"] == []
+
+
+# ── preset resolution (spec §7.7: the state file's preset is never null) ─────
+
+
+def _module():
+    spec = importlib.util.spec_from_file_location("xinas_install_state", PLUGIN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_autoinstall_var_wins():
+    mod = _module()
+    assert (
+        mod._resolve_preset({"xinas_install_preset": "xinnorVM", "preset": "default"}) == "xinnorVM"
+    )
+
+
+def test_tui_preset_var_is_second():
+    mod = _module()
+    assert mod._resolve_preset({"preset": "existing-raid"}) == "existing-raid"
+
+
+def test_blank_vars_fall_through(tmp_path):
+    mod = _module()
+    (tmp_path / "playbooks").mkdir()
+    (tmp_path / ".xinas_applied_preset").write_text("xinnorVM\n")
+    allvars = {
+        "xinas_install_preset": "  ",
+        "preset": "",
+        "playbook_dir": str(tmp_path / "playbooks"),
+    }
+    assert mod._resolve_preset(allvars) == "xinnorVM"
+
+
+def test_bash_menu_marker_beside_the_checkout_is_third(tmp_path):
+    """The bash menus pass no variable; apply_preset leaves a marker instead."""
+    mod = _module()
+    (tmp_path / "playbooks").mkdir()
+    (tmp_path / ".xinas_applied_preset").write_text("xinnorVM\n")
+    assert mod._resolve_preset({"playbook_dir": str(tmp_path / "playbooks")}) == "xinnorVM"
+
+
+def test_no_preset_anywhere_is_default(tmp_path):
+    """The xinas-box case: bash-menu install, no preset applied → 'default', not None."""
+    mod = _module()
+    (tmp_path / "playbooks").mkdir()
+    assert mod._resolve_preset({"playbook_dir": str(tmp_path / "playbooks")}) == "default"
+    assert mod._resolve_preset({}) == "default"
+    assert mod.DEFAULT_PRESET == "default"
+
+
+def test_unreadable_or_empty_marker_is_default(tmp_path):
+    mod = _module()
+    (tmp_path / "playbooks").mkdir()
+    (tmp_path / ".xinas_applied_preset").write_text("   \n")
+    assert mod._resolve_preset({"playbook_dir": str(tmp_path / "playbooks")}) == "default"
+    (tmp_path / ".xinas_applied_preset").unlink()
+    (tmp_path / ".xinas_applied_preset").mkdir()  # a directory: open() raises OSError
+    assert mod._resolve_preset({"playbook_dir": str(tmp_path / "playbooks")}) == "default"

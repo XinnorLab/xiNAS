@@ -35,6 +35,41 @@ STATE_PATH = os.environ.get("XINAS_INSTALL_STATE_PATH", "/var/lib/xinas/install-
 
 _TASK_OUTCOMES = ("ok", "changed", "skipped", "failed")
 
+# What a run that applied no preset installs: the release defaults, which are
+# the default preset. Never report null — the bash menus pass no preset
+# variable, and every one of their installs used to render "preset unknown".
+DEFAULT_PRESET = "default"
+
+# Written beside the checkout by the bash menus' apply_preset
+# (lib/xinas_config.sh). The callback runs on the control node, which on a
+# xiNAS box is the target itself, so the file is local.
+PRESET_MARKER = ".xinas_applied_preset"
+
+
+def _resolve_preset(allvars):
+    """Name the preset this run installs (docs/Installer/spec.md §7.7).
+
+    Precedence: ``-e xinas_install_preset=…`` (autoinstall.sh), ``-e preset=…``
+    (the xinas-setup Install screen), the ``.xinas_applied_preset`` marker in
+    the parent of ``playbook_dir`` (the bash menus), then ``DEFAULT_PRESET``.
+    Blank values fall through; the result is never empty or None.
+    """
+    for key in ("xinas_install_preset", "preset"):
+        value = allvars.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    playbook_dir = allvars.get("playbook_dir")
+    if isinstance(playbook_dir, str) and playbook_dir:
+        marker = os.path.join(os.path.dirname(os.path.abspath(playbook_dir)), PRESET_MARKER)
+        try:
+            with open(marker) as fh:
+                value = fh.read().strip()
+        except OSError:
+            value = ""
+        if value:
+            return value
+    return DEFAULT_PRESET
+
 
 class _StateWriter:
     """Pure install-state accumulator — no ansible dependency, unit-testable.
@@ -193,13 +228,13 @@ class CallbackModule(CallbackBase):
     def v2_playbook_on_play_start(self, play):
         if not self._enabled:
             return
-        preset = None
+        preset = DEFAULT_PRESET
         try:
             vm = play.get_variable_manager()
             allvars = vm.get_vars(play=play) if vm else {}
-            preset = allvars.get("xinas_install_preset") or allvars.get("preset")
+            preset = _resolve_preset(allvars)
         except Exception:
-            preset = None
+            preset = DEFAULT_PRESET
         if not self._started:
             self._writer.start(preset=preset, expected=self._expected_roles(play))
             self._started = True

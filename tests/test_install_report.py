@@ -207,3 +207,19 @@ def test_module_imports_only_the_standard_library():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
     assert imported <= set(sys.stdlib_module_names), imported - set(sys.stdlib_module_names)
+
+
+def test_header_reports_default_when_the_state_carries_no_preset():
+    """A state file written before the callback resolved the preset (bash-menu
+    installs recorded null) follows the same rule as the callback now does:
+    no preset applied means the release defaults, i.e. `default` — never
+    "unknown" (spec §7.7)."""
+    for missing in ({"preset": None}, {}):
+        state = _state(
+            [(r, "ok") for r in EXPECTED], status="completed", started=1000.0, updated=1060.0
+        )
+        state.pop("preset", None)
+        state.update(missing)
+        lines, _ = ir.render(state, exit_code=0)
+        assert "preset default" in lines[0]
+        assert "unknown" not in lines[0]

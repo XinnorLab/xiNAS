@@ -215,3 +215,20 @@ def test_autoinstall_help_documents_status_json():
     assert "--json" in body and "--status" in body
     m = re.search(r"--json\)\s+", body)
     assert m, "autoinstall.sh does not parse --json"
+
+
+def test_motd_marker_resolves_the_preset_like_the_callback():
+    """`.installed_preset` must be stamped on every successful install: the
+    motd resolution chain ends in 'default' and also honours the TUI's
+    `preset` var, mirroring the callback (spec §7.7)."""
+    import yaml
+
+    tasks = yaml.safe_load((REPO / "collection/roles/motd/tasks/main.yml").read_text())
+    resolve = next(
+        t for t in tasks if isinstance(t, dict) and t.get("name") == "Resolve installed preset name"
+    )
+    expr = str(resolve["ansible.builtin.set_fact"]["xinas_installed_preset"])
+    assert "xinas_install_preset" in expr
+    assert "(preset | default('', true) | trim)" in expr
+    assert ".xinas_applied_preset" in expr
+    assert expr.rstrip().endswith("or 'default' }}")
