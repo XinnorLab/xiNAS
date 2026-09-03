@@ -1,11 +1,25 @@
 ---
 # Rebuild NVMe namespaces on data drives
-# Creates: n1 = small namespace (500MB), n2 = large namespace (remaining capacity)
+# Creates, per controller: a small namespace (500MB, the XFS log member) and a
+# large namespace (remaining capacity, the data member). Their block devices
+# are resolved by controller serial + NSID (files/nvme_ns_device.sh) — the
+# nvmeXnY name is the kernel's head instance, not the NSID, and shifts after a
+# delete/create cycle (new NSID 1 came up as nvme10n2 on xinas-box).
+# See docs/Installer/raid-spec.md §4.3 and §4.5.
 
 # Initialize tracking variables
 - name: Initialize failed devices list
   ansible.builtin.set_fact:
     nvme_failed_devices: []
+    nvme_small_ns_ids: {}
+    nvme_large_ns_ids: {}
+
+- name: Stage the NSID-to-device resolver
+  ansible.builtin.copy:
+    src: nvme_ns_device.sh
+    dest: /tmp/xinas_nvme_ns_device.sh
+    mode: "0755"
+  changed_when: false
 
 # Delete existing namespaces on each data drive
 - name: Delete existing namespaces
@@ -121,7 +135,8 @@
     echo "Attaching namespace $nsid to controller (cntlid=$cntlid)"
     nvme attach-ns "$controller" -n "$nsid" -c "$cntlid"
 
-    echo "Successfully created small namespace: ${controller}n${nsid}"
+    echo "Successfully created small namespace NSID $nsid on $controller"
+    echo "created_nsid=$nsid"
   args:
     executable: /bin/bash
   register: small_ns_result
@@ -138,6 +153,20 @@
   when:
     - item.skipped is not defined or not item.skipped
     - item.rc is defined and item.rc != 0
+
+# Remember the NSID each create-ns returned, per controller: the wait step
+# below looks the block device up by it, never by name (raid-spec.md §4.5).
+- name: Record the NSID each small namespace was created with
+  ansible.builtin.set_fact:
+    nvme_small_ns_ids: >-
+      {{ nvme_small_ns_ids | combine({item.item.controller:
+           (item.stdout_lines | select('match', '^created_nsid=[0-9]+$')
+            | map('regex_replace', '^created_nsid=', '') | first)}) }}
+  loop: "{{ small_ns_result.results }}"
+  when:
+    - item.skipped is not defined or not item.skipped
+    - item.rc is defined and item.rc == 0
+    - item.stdout_lines | default([]) | select('match', '^created_nsid=[0-9]+$') | list | length > 0
 
 # Create large namespace (remaining capacity) on each drive
 - name: Create large namespace (remaining capacity)
@@ -217,7 +246,8 @@
     echo "Attaching namespace $nsid to controller (cntlid=$cntlid)"
     nvme attach-ns "$controller" -n "$nsid" -c "$cntlid"
 
-    echo "Successfully created large namespace: ${controller}n${nsid}"
+    echo "Successfully created large namespace NSID $nsid on $controller"
+    echo "created_nsid=$nsid"
   args:
     executable: /bin/bash
   register: large_ns_result
@@ -235,6 +265,18 @@
     - item.skipped is not defined or not item.skipped
     - item.rc is defined and item.rc != 0
 
+- name: Record the NSID each large namespace was created with
+  ansible.builtin.set_fact:
+    nvme_large_ns_ids: >-
+      {{ nvme_large_ns_ids | combine({item.item.controller:
+           (item.stdout_lines | select('match', '^created_nsid=[0-9]+$')
+            | map('regex_replace', '^created_nsid=', '') | first)}) }}
+  loop: "{{ large_ns_result.results }}"
+  when:
+    - item.skipped is not defined or not item.skipped
+    - item.rc is defined and item.rc == 0
+    - item.stdout_lines | default([]) | select('match', '^created_nsid=[0-9]+$') | list | length > 0
+
 # Rescan NVMe subsystem to detect new namespaces
 - name: Rescan NVMe controllers
   ansible.builtin.shell: |
@@ -247,68 +289,130 @@
   changed_when: false
   failed_when: false
 
-# Wait for namespace devices to appear
-- name: Wait for small namespace devices (n1) to appear
-  ansible.builtin.wait_for:
-    path: "/dev/{{ item.controller | basename }}n1"
-    timeout: 30
+# Wait for the block devices — by identity (controller serial + NSID), never by
+# name. The Y in nvmeXnY is the kernel's namespace-head instance, not the NSID:
+# after the delete/create cycle above the new NSID 1 can come up as nvme10n2
+# and NSID 2 as nvme10n3 (every data controller of xinas-box, 2026-09-03).
+# files/nvme_ns_device.sh does the same sysfs lookup xiRAID uses for its own
+# members ("<serial>_<nsid>"). See raid-spec.md §4.5.
+- name: Wait for the small namespace block devices (by NSID)
+  ansible.builtin.command:
+    argv:
+      - /bin/bash
+      - /tmp/xinas_nvme_ns_device.sh
+      - wait
+      - "{{ item.controller }}"
+      - "{{ nvme_small_ns_ids[item.controller] | default('') }}"
+      - "30"
+  register: small_ns_wait
   loop: "{{ nvme_topology }}"
-  when: item.controller not in nvme_failed_devices
-  ignore_errors: "{{ nvme_skip_failed_devices }}"
-
-- name: Wait for large namespace devices (n2) to appear
-  ansible.builtin.wait_for:
-    path: "/dev/{{ item.controller | basename }}n2"
-    timeout: 30
-  loop: "{{ nvme_topology }}"
-  when: item.controller not in nvme_failed_devices
-  ignore_errors: "{{ nvme_skip_failed_devices }}"
-
-# Collect final namespace list
-- name: List created small namespaces (n1)
-  ansible.builtin.shell: |
-    ls -1 /dev/{{ item.controller | basename }}n1 2>/dev/null || true
-  register: small_ns_devices
-  loop: "{{ nvme_topology }}"
-  when: item.controller not in nvme_failed_devices
+  when:
+    - item.controller not in nvme_failed_devices
+    - item.controller in nvme_small_ns_ids
   changed_when: false
+  failed_when: false
 
-- name: List created large namespaces (n2)
-  ansible.builtin.shell: |
-    ls -1 /dev/{{ item.controller | basename }}n2 2>/dev/null || true
-  register: large_ns_devices
+# A device that never came up is a per-drive failure like a delete or create
+# failure. So is an item skipped here because create returned no NSID (the
+# large step exits 0 without one on a drive with no unallocated capacity).
+- name: Track controllers whose small namespace never came up
+  ansible.builtin.set_fact:
+    nvme_failed_devices: "{{ nvme_failed_devices + [item.item.controller] }}"
+  loop: "{{ small_ns_wait.results }}"
+  when:
+    - item.item.controller not in nvme_failed_devices
+    - (item.skipped | default(false)) or (item.rc | default(1)) != 0
+
+- name: Wait for the large namespace block devices (by NSID)
+  ansible.builtin.command:
+    argv:
+      - /bin/bash
+      - /tmp/xinas_nvme_ns_device.sh
+      - wait
+      - "{{ item.controller }}"
+      - "{{ nvme_large_ns_ids[item.controller] | default('') }}"
+      - "30"
+  register: large_ns_wait
   loop: "{{ nvme_topology }}"
-  when: item.controller not in nvme_failed_devices
+  when:
+    - item.controller not in nvme_failed_devices
+    - item.controller in nvme_large_ns_ids
   changed_when: false
+  failed_when: false
 
-# Build device lists for RAID configuration
+- name: Track controllers whose large namespace never came up
+  ansible.builtin.set_fact:
+    nvme_failed_devices: "{{ nvme_failed_devices + [item.item.controller] }}"
+  loop: "{{ large_ns_wait.results }}"
+  when:
+    - item.item.controller not in nvme_failed_devices
+    - (item.skipped | default(false)) or (item.rc | default(1)) != 0
+
+# Same gate as the delete step: tolerated per drive with nvme_skip_failed_devices,
+# fatal otherwise (this also catches create failures, which only ever track).
+- name: Fail on namespace devices that never came up
+  ansible.builtin.fail:
+    msg: >-
+      Namespace rebuild failed on: {{ nvme_failed_devices | join(', ') }}
+      (nvme_skip_failed_devices=false). Block devices are matched by controller
+      serial + NSID from sysfs; the wait output above lists the namespaces each
+      controller actually exposes.
+  when:
+    - nvme_failed_devices | length > 0
+    - not nvme_skip_failed_devices | bool
+
+# Build device lists for RAID configuration — the paths the resolver printed.
 - name: Build small namespace device list
   ansible.builtin.set_fact:
     nvme_small_ns_devices: >-
-      {{ small_ns_devices.results
-         | selectattr('stdout', 'defined')
-         | selectattr('stdout', 'match', '^/dev/')
+      {{ small_ns_wait.results
+         | selectattr('rc', 'defined')
+         | selectattr('rc', 'equalto', 0)
          | map(attribute='stdout')
+         | map('trim')
+         | select('match', '^/dev/')
          | list }}
 
 - name: Build large namespace device list
   ansible.builtin.set_fact:
     nvme_large_ns_devices: >-
-      {{ large_ns_devices.results
-         | selectattr('stdout', 'defined')
-         | selectattr('stdout', 'match', '^/dev/')
+      {{ large_ns_wait.results
+         | selectattr('rc', 'defined')
+         | selectattr('rc', 'equalto', 0)
          | map(attribute='stdout')
+         | map('trim')
+         | select('match', '^/dev/')
          | list }}
 
 - name: Display namespace rebuild results
   ansible.builtin.debug:
     msg: |
       ========== Namespace Rebuild Results ==========
-      Small namespaces (n1) created: {{ nvme_small_ns_devices | length }}
-        {{ nvme_small_ns_devices | join('\n        ') | default('none') }}
+      Small (log) namespaces resolved: {{ nvme_small_ns_devices | length }}
+        {{ nvme_small_ns_devices | join('\n        ') | default('none', true) }}
 
-      Large namespaces (n2) created: {{ nvme_large_ns_devices | length }}
-        {{ nvme_large_ns_devices | join('\n        ') | default('none') }}
+      Large (data) namespaces resolved: {{ nvme_large_ns_devices | length }}
+        {{ nvme_large_ns_devices | join('\n        ') | default('none', true) }}
 
-      Failed devices: {{ nvme_failed_devices | join(', ') | default('none') }}
+      Failed devices: {{ nvme_failed_devices | join(', ') | default('none', true) }}
+      (block devices matched by controller serial + NSID, not by the nvmeXnY name)
       ===============================================
+
+# An empty tier is not the "individual device" failure nvme_skip_failed_devices
+# tolerates — nothing downstream can work. Fail here, with the evidence, instead
+# of letting main.yml skip generate_raid_config.yml (gated on both lists being
+# non-empty) and raid_fs abort three roles later with "xiraid_arrays is not
+# defined". See raid-spec.md §4.3 Step 6.
+- name: Fail when the rebuild produced no usable namespace devices
+  ansible.builtin.fail:
+    msg: >-
+      The namespace rebuild finished with {{ nvme_small_ns_devices | length }} small (log)
+      and {{ nvme_large_ns_devices | length }} large (data) namespace device(s) across
+      {{ nvme_topology | length }} data controller(s); failed controllers:
+      {{ nvme_failed_devices | join(', ') | default('none', true) }}.
+      Block devices are matched by controller serial + NSID
+      (/sys/class/nvme/<ctrl>/serial, /sys/block/nvme*/device/serial, /sys/block/nvme*/nsid),
+      not by the nvmeXnY name — check `nvme list-ns <ctrl> -a` and those sysfs files on
+      the failed controllers, and the wait-task output above. Stopping here: raid_fs
+      would otherwise abort later with "xiraid_arrays is not defined".
+  when: nvme_small_ns_devices | length == 0 or nvme_large_ns_devices | length == 0

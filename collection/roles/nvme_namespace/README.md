@@ -9,8 +9,13 @@ This role implements the Default Storage Namespace and RAID Specification:
 1. **Detects system drives** - Identifies the OS drive by detecting root, boot, and EFI partitions
 2. **Enumerates data drives** - All NVMe controllers not hosting system partitions
 3. **Rebuilds namespaces** - Deletes existing namespaces and creates:
-   - Small namespace (n1): 500MB for XFS log device
-   - Large namespace (n2): Remaining capacity for data
+   - Small namespace (NSID 1): 500MB for XFS log device
+   - Large namespace (NSID 2): Remaining capacity for data
+
+   Block devices are resolved by controller serial + NSID from sysfs
+   (`files/nvme_ns_device.sh`) — the identity xiRAID keys its own members
+   on — never from the `nvmeXnY` name, whose suffix is the kernel's head
+   instance and shifts after a rebuild (raid-spec §4.5).
 4. **Generates RAID config** - Creates `xiraid_arrays` and `xfs_filesystems` facts for `raid_fs` role:
    - RAID 10 from small namespaces (log array)
    - RAID 5 from large namespaces (data array)

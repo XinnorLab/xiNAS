@@ -20,7 +20,7 @@
 # state-less `data`/`log` array is therefore NOT a MATCH; with arrays present it
 # lands in FOREIGN, which fails fast without touching anything. §4.2 of
 # docs/Installer/raid-spec.md leans on that: a genuine MATCH implies a healthy
-# `data` array, and that array is built from the n2 namespaces.
+# `data` array, and that array is built from the large (NSID 2) namespaces.
 #
 # Idempotent and side-effect-free: safe to run before any decision, at either role.
 # raid_fs reuses this via include_role (guarded on xinas_storage_state undefined).
