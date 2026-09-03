@@ -1002,6 +1002,17 @@ install is observable (finding #2 — previously there was no resume signal).
   `simple_menu.sh` and the `xinas-setup` Install screen all do for their
   run; day-2 / partial playbook runs leave it unset so they never clobber
   install state. The post-install report (§2.9) is rendered from this file.
+- **`preset` is never null.** The callback resolves it at the first `PLAY`,
+  in this order: `-e xinas_install_preset=<preset>` (`autoinstall.sh`),
+  `-e preset=<preset>` (the `xinas-setup` Install screen), the
+  `/opt/xiNAS/.xinas_applied_preset` marker the bash menus' `apply_preset`
+  writes beside the checkout (found as the parent of `playbook_dir`), and
+  finally **`default`** — a run that applied no preset installs the release
+  defaults, which are the default preset. The bash menus pass no variable,
+  so before this rule every `simple_menu.sh` / `startup_menu.sh` install
+  was reported as `preset unknown` even though §2.9 promises a name. The
+  §2.9 renderer applies the same rule to a state file written before it
+  (`null` → `default`).
 - **`autoinstall.sh --status`** prints the last recorded install as the
   §2.9 role table and exits (0 if present, 1 if no install has recorded
   state); `--status --json` prints the raw JSON instead. No root required —
@@ -1010,8 +1021,11 @@ install is observable (finding #2 — previously there was no resume signal).
   stamped by the `motd` role, the last role to run, so it appears **only on a
   fully successful install** (finding #16). Downstream tooling and tests read it
   to learn the preset instead of guessing from RAID layout. The preset value
-  comes from `-e xinas_install_preset=<preset>` (autoinstall) or the
-  `/opt/xiNAS/.xinas_applied_preset` file the menu's `apply_preset` writes.
+  is resolved exactly like the state file's `preset` above —
+  `-e xinas_install_preset=<preset>`, then `-e preset=<preset>`, then the
+  `/opt/xiNAS/.xinas_applied_preset` marker, else `default` — so the marker
+  is stamped on every fully successful install, never skipped for want of a
+  name.
 
 ### 7.8 Preset application is fail-closed
 

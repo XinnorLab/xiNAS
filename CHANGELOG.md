@@ -24,6 +24,19 @@ supported source for installing and updating xiNAS.
 
 ### Fixed
 
+- **The install report no longer says `preset unknown` for an install run
+  from the bash menus.** Only `autoinstall.sh` and the `xinas-setup` screen
+  passed the preset to Ansible; `simple_menu.sh` / `startup_menu.sh` never
+  did, so the install-state callback recorded `null` and every menu install
+  rendered as `unknown`. The callback now resolves the preset the way the
+  spec lists the sources — `-e xinas_install_preset`, `-e preset`, the
+  `.xinas_applied_preset` marker beside the checkout — and records
+  `default` when none names one: a run that applied no preset installs the
+  release defaults, which are the default preset. The renderer reads an
+  older state file's `null` the same way, and the `motd` role now stamps
+  `/opt/xiNAS/.installed_preset` on every successful install instead of
+  skipping it for want of a name.
+
 - **The installer's status spinner no longer freezes during silent tasks.**
   The bash ticker only advanced its glyph when a new `PLAY`/`TASK` banner
   arrived, so any task that produced no output for a while — the
