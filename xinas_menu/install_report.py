@@ -148,7 +148,10 @@ def render(
     started = float(state.get("started") or 0.0)
     updated = float(state.get("updated") or started)
     when = datetime.fromtimestamp(started).strftime("%Y-%m-%d %H:%M") if started else "unknown time"
-    preset = state.get("preset") or "unknown"
+    # A state file written before the callback learned to resolve the preset
+    # carries null; the rule is the same — no preset applied means the release
+    # defaults, i.e. the default preset (docs/Installer/spec.md §7.7).
+    preset = state.get("preset") or "default"
     header = f"Install report — preset {preset} · {when} · {_duration(updated - started)}"
     lines.append(_paint(header, "head", color))
     for role, status in rows:
