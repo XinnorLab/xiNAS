@@ -38,11 +38,54 @@ XGREEN='\033[38;2;131;180;73m'
 
 CLIENT_REPO_SLUG="XinnorLab/xiNAS"
 
+# ── GitHub access token ───────────────────────────────────────────────────────
+# GitHub throttles *anonymous* requests per source IP — REST and git-over-HTTPS
+# alike — so every host behind one NAT shares one quota, and a spent quota
+# surfaces as a 401 on clone/fetch and a 403/429 on the API. A token moves the
+# caller onto its own per-account quota. Resolution order: $XINAS_GH_TOKEN,
+# $GITHUB_TOKEN, then the first line of /etc/xinas/github-token. The token is
+# never printed and never placed in argv: curl reads it from stdin config, git
+# from a credential helper that GitHub's 401 triggers (anonymous first).
+# Canonical copy: lib/menu_lib.sh; docs/Installer/update-spec.md "GitHub rate
+# limits and the access token"; tests/test_github_token_parity.py pins copies.
+XINAS_GH_TOKEN_FILE="${XINAS_GH_TOKEN_FILE:-/etc/xinas/github-token}"
+
+xinas_github_token() {
+    local t="${XINAS_GH_TOKEN:-${GITHUB_TOKEN:-}}"
+    if [[ -z "$t" && -r "$XINAS_GH_TOKEN_FILE" ]]; then
+        t="$(head -n 1 "$XINAS_GH_TOKEN_FILE" 2>/dev/null | tr -d '[:space:]')"
+    fi
+    printf '%s' "$t"
+}
+
+xinas_gh_curl() {
+    local t
+    t="$(xinas_github_token)"
+    if [[ -n "$t" ]]; then
+        printf 'header = "Authorization: Bearer %s"\n' "$t" | curl -K - "$@"
+    else
+        curl "$@"
+    fi
+}
+
+xinas_gh_git() {
+    local t
+    t="$(xinas_github_token)"
+    if [[ -n "$t" ]]; then
+        XINAS_GH_TOKEN="$t" git -c credential.helper= \
+            -c 'credential.helper=!f() { [ "$1" = get ] || exit 0; echo username=x-access-token; echo "password=$XINAS_GH_TOKEN"; }; f' \
+            "$@"
+    else
+        git "$@"
+    fi
+}
+# ── end GitHub access token ───────────────────────────────────────────────────
+
 # Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints the tag on
 # success, nothing on failure. Never returns a branch name — callers must NOT
 # fall back to main.
 client_latest_release_tag() {
-    curl -fsSL "https://api.github.com/repos/${CLIENT_REPO_SLUG}/releases/latest" 2>/dev/null \
+    xinas_gh_curl -fsSL "https://api.github.com/repos/${CLIENT_REPO_SLUG}/releases/latest" 2>/dev/null \
         | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
         | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
 }
