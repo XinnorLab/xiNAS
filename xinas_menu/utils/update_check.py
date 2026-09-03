@@ -23,9 +23,11 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
@@ -196,6 +198,132 @@ def format_update_prompt(result: CheckResult) -> str:
     return "\n".join(lines)
 
 
+# ── GitHub access token ──────────────────────────────────────────────────
+#
+# GitHub throttles *anonymous* requests per source IP — REST and git-over-HTTPS
+# alike — so every host behind one NAT shares one quota. A token moves the
+# caller onto its own per-account quota. docs/Installer/update-spec.md
+# "GitHub rate limits and the access token" is the contract; the bash paths
+# (lib/menu_lib.sh xinas_github_token / xinas_gh_curl / xinas_gh_git) resolve
+# and use the token the same way.
+
+# Where install.sh keeps the token it was given. Read on every check, not
+# cached at import: the operator may create the file while the menu is open.
+GITHUB_TOKEN_FILE = Path("/etc/xinas/github-token")
+
+# The same inline credential helper the bash paths use (lib/menu_lib.sh
+# xinas_gh_git). Git consults it only after GitHub answers 401, and it reads
+# the token from the environment of that one git process — never from argv.
+_GIT_CREDENTIAL_HELPER = '!f() { [ "$1" = get ] || exit 0; echo username=x-access-token; echo "password=$XINAS_GH_TOKEN"; }; f'
+
+
+def github_token(
+    env: Mapping[str, str] | None = None, path: Path = GITHUB_TOKEN_FILE
+) -> str | None:
+    """Resolve the optional GitHub token: XINAS_GH_TOKEN, GITHUB_TOKEN, then
+    the first line of *path*. Whitespace is stripped; empty means None."""
+    env = os.environ if env is None else env
+    for var in ("XINAS_GH_TOKEN", "GITHUB_TOKEN"):
+        val = (env.get(var) or "").strip()
+        if val:
+            return val
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    first = lines[0].strip() if lines else ""
+    return first or None
+
+
+def _git_auth_args(token: str | None) -> list[str]:
+    """``git -c`` options that add the reactive credential helper. The leading
+    empty ``credential.helper=`` clears any helper configured on the host so a
+    stale stored credential cannot answer GitHub's 401 before ours does."""
+    if not token:
+        return []
+    return ["-c", "credential.helper=", "-c", f"credential.helper={_GIT_CREDENTIAL_HELPER}"]
+
+
+def _describe_http_error(exc: urllib.error.HTTPError, *, authenticated: bool) -> str:
+    """Name a GitHub rate limit as such (update-spec.md "Naming the failure")."""
+    headers = exc.headers
+    remaining = headers.get("x-ratelimit-remaining") if headers is not None else None
+    if exc.code == 429 or (exc.code == 403 and remaining == "0"):
+        reset = headers.get("x-ratelimit-reset") if headers is not None else None
+        when = ""
+        if reset and reset.strip().isdigit():
+            when = " (resets at " + time.strftime("%H:%M UTC", time.gmtime(int(reset))) + ")"
+        if authenticated:
+            return f"GitHub API rate limit exceeded for the configured token{when}"
+        return (
+            "GitHub API rate limit exceeded for anonymous requests from this IP"
+            f"{when} — set XINAS_GH_TOKEN or {GITHUB_TOKEN_FILE}"
+        )
+    if exc.code == 401 and authenticated:
+        return (
+            "GitHub rejected the configured token (HTTP 401) — check "
+            f"XINAS_GH_TOKEN / {GITHUB_TOKEN_FILE}"
+        )
+    return f"GitHub API HTTP {exc.code}"
+
+
+# ── Releases cache ───────────────────────────────────────────────────────
+#
+# update-spec.md "Fewer requests from the TUI": the background check on
+# every menu launch is served from disk within CHECK_CACHE_TTL; an explicit
+# check always asks GitHub, revalidating with the cached ETag (a 304 is free
+# on a token). The cache holds the payload GitHub returned and nothing else —
+# the verdict is always recomputed from it.
+
+CHECK_CACHE_TTL = 3600.0
+
+
+def default_cache_path() -> Path:
+    """Root shares one system-wide cache; other users keep one under XDG."""
+    if os.geteuid() == 0:
+        return Path("/var/cache/xinas/update-check.json")
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return Path(base) / "xinas" / "update-check.json"
+
+
+@dataclass(frozen=True)
+class _CachedReleases:
+    checked_at: float
+    etag: str
+    installed: str
+    releases: list[dict]
+
+
+class ReleaseCache:
+    """Last successful Releases payload on disk. Best effort on every path:
+    a cache that cannot be read or written is simply absent."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def load(self) -> _CachedReleases | None:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            return _CachedReleases(
+                checked_at=float(data["checked_at"]),
+                etag=str(data.get("etag") or ""),
+                installed=str(data.get("installed") or ""),
+                releases=list(data["releases"]),
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def save(self, entry: _CachedReleases) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_name(self.path.name + ".tmp")
+            tmp.write_text(json.dumps(asdict(entry)), encoding="utf-8")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.path)
+        except OSError:
+            pass
+
+
 # ── GitHub Releases API ──────────────────────────────────────────────────
 
 
@@ -203,29 +331,53 @@ def _releases_url(repo: str) -> str:
     return f"https://api.github.com/repos/{repo}/releases?per_page=30"
 
 
-def _fetch_releases(repo: str, timeout: float = 8.0) -> list[dict]:
+def _fetch_releases(
+    repo: str,
+    timeout: float = 8.0,
+    *,
+    token: str | None = None,
+    cache: ReleaseCache | None = None,
+    max_age: float | None = None,
+    installed: str = "",
+    now=time.time,
+) -> list[dict]:
     """GET the repo's releases from the GitHub API. Raises on any failure.
 
-    Never returns partial/garbage on error — the caller converts the
-    raised exception into a ``CheckResult`` error string. There is no
-    branch fallback anywhere in this path.
+    *token*, when given, is sent as a bearer token so the call runs on the
+    token's own quota instead of the anonymous per-IP one. With a *cache*, a
+    payload younger than *max_age* seconds that was fetched for the same
+    *installed* version is returned without a request; otherwise the cached
+    ETag is sent as If-None-Match and a 304 reuses the payload. Never returns
+    partial/garbage on error — the caller converts the raised exception into a
+    ``CheckResult`` error string. There is no branch fallback anywhere in this
+    path.
     """
-    req = urllib.request.Request(
-        _releases_url(repo),
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "xinas-update-check",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-    token = os.environ.get("XINAS_GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    cached = cache.load() if cache is not None else None
+    if cached is not None and cached.installed != installed:
+        cached = None
+    if cached is not None and max_age is not None and now() - cached.checked_at < max_age:
+        return cached.releases
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "xinas-update-check",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
     if token:
-        req.add_header("Authorization", f"Bearer {token}")
+        headers["Authorization"] = f"Bearer {token}"
+    if cached is not None and cached.etag:
+        headers["If-None-Match"] = cached.etag
+    req = urllib.request.Request(_releases_url(repo), headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = resp.read()
+            etag = str(resp.headers.get("ETag") or "")
     except urllib.error.HTTPError as exc:
-        raise UpdateCheckError(f"GitHub API HTTP {exc.code}") from exc
+        if exc.code == 304 and cached is not None:
+            if cache is not None:
+                cache.save(replace(cached, checked_at=now()))
+            return cached.releases
+        raise UpdateCheckError(_describe_http_error(exc, authenticated=bool(token))) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         raise UpdateCheckError(f"GitHub API unreachable: {reason}") from exc
@@ -235,6 +387,8 @@ def _fetch_releases(repo: str, timeout: float = 8.0) -> list[dict]:
         raise UpdateCheckError("GitHub API returned malformed JSON") from exc
     if not isinstance(data, list):
         raise UpdateCheckError("GitHub API returned an unexpected payload")
+    if cache is not None:
+        cache.save(_CachedReleases(checked_at=now(), etag=etag, installed=installed, releases=data))
     return data
 
 
@@ -261,14 +415,27 @@ class UpdateChecker:
         current_version: str | None = None,
         required_asset: str | None = None,
         releases_fetcher=None,
+        cache_path: Path | None = None,
     ) -> None:
         self._repo = repo_path or _find_repo_root()
         self._repo_slug = repo
         self._channel = (channel or os.environ.get("XINAS_UPDATE_CHANNEL", "stable")).lower()
         self._current = current_version if current_version is not None else installed_version()
         self._required_asset = required_asset
-        # Injectable seam for tests; production uses the real API.
-        self._fetch = releases_fetcher or (lambda: _fetch_releases(self._repo_slug))
+        self._cache = ReleaseCache(cache_path or default_cache_path())
+        # Injectable seam for tests; production uses the real API — with the
+        # token resolved at call time and the cache: a background check may be
+        # served from disk, a forced one always revalidates against GitHub.
+        if releases_fetcher is not None:
+            self._fetch = lambda force: releases_fetcher()
+        else:
+            self._fetch = lambda force: _fetch_releases(
+                self._repo_slug,
+                token=github_token(),
+                cache=self._cache,
+                max_age=None if force else CHECK_CACHE_TTL,
+                installed=self._current,
+            )
 
     @property
     def allow_prerelease(self) -> bool:
@@ -278,14 +445,19 @@ class UpdateChecker:
     def repo_path(self) -> Path | None:
         return self._repo
 
-    async def check(self) -> CheckResult:
-        """Query the Releases API and compare versions. Non-blocking."""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._check_sync)
+    async def check(self, *, force: bool = False) -> CheckResult:
+        """Query the Releases API and compare versions. Non-blocking.
 
-    def _check_sync(self) -> CheckResult:
+        *force* — an explicit, user-initiated check: always contact GitHub
+        (revalidating with the cached ETag). The default serves the
+        background check on launch from the cache when it is fresh.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._check_sync, force)
+
+    def _check_sync(self, force: bool = False) -> CheckResult:
         try:
-            raw = self._fetch()
+            raw = self._fetch(force)
         except UpdateCheckError as exc:
             return CheckResult(False, str(exc), current_version=self._current)
         except Exception as exc:  # noqa: BLE001 — any fetch failure is an error, not "no update"
@@ -519,18 +691,20 @@ def refresh_nfs_helper(
         return NfsHelperRefreshResult(NfsHelperRefreshOutcome.FAILED_NO_WRAPPER, detail=str(exc))
 
 
-def _git_output(repo: Path, *args: str) -> str:
+def _git_output(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
     """Run a read-only git command and return stdout.
 
     Uses safe.directory to bypass git's CVE-2022-24765 ownership check,
     so xinas-menu running as a non-root user can still read a repo
-    owned by root.
+    owned by root. *env* replaces the child's environment when given (the
+    fallback fetch uses it to hand the credential helper its token).
     """
     r = subprocess.run(
         ["git", "-c", f"safe.directory={repo}", "-C", str(repo)] + list(args),
         check=True,
         capture_output=True,
         text=True,
+        env=env,
     )
     return r.stdout.strip()
 
@@ -550,7 +724,8 @@ def _privileged_git(repo: Path, action: str, *extra: str) -> str:
     invoking git directly — which will fail with EACCES when the repo
     is root-owned, and our caller surfaces that error to the user with
     a hint to redeploy. The fallback still targets the release tag —
-    never ``main``.
+    never ``main``. The fallback fetch carries the same reactive
+    credential helper as the bash paths when a token is configured.
     """
     if _PRIVILEGED_HELPER.exists() and os.access(_PRIVILEGED_HELPER, os.X_OK):
         r = subprocess.run(
@@ -563,7 +738,11 @@ def _privileged_git(repo: Path, action: str, *extra: str) -> str:
     # Fallback: direct git invocation (used on hosts where the role hasn't
     # been re-deployed since this change landed).
     if action == "fetch":
-        return _git_output(repo, "fetch", "origin", "--tags", "--quiet")
+        token = github_token()
+        env = {**os.environ, "XINAS_GH_TOKEN": token} if token else None
+        return _git_output(
+            repo, *_git_auth_args(token), "fetch", "origin", "--tags", "--quiet", env=env
+        )
     if action == "checkout":
         if not extra:
             raise ValueError("checkout requires a tag argument")
