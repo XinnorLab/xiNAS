@@ -2,6 +2,9 @@
 # xiNAS Installation Script
 # Usage: curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh | sudo bash
 #    or: wget -qO- https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh | sudo bash
+#    A specific published release — e.g. a release candidate, which
+#    /releases/latest never returns — is named with XINAS_RELEASE_TAG=vX.Y.Z-rc.N
+#    (see "Release selection" below; still releases only, no branches).
 #
 # xiNAS installs and updates ONLY from published GitHub Releases — never
 # from the main/master branch. See docs/Installer/update-spec.md.
@@ -359,15 +362,6 @@ git_access_hint() {
 MENU_WRAPPER="/usr/local/bin/xinas-menu"
 SETUP_WRAPPER="/usr/local/bin/xinas-setup"
 
-# Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints the tag
-# on success, nothing on failure. xiNAS installs from releases only — this
-# helper never returns a branch name, and callers must NOT fall back to main.
-xinas_latest_release_tag() {
-    xinas_gh_curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
-        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
-        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
-}
-
 step "Setting up repository"
 info "Target: ${WHITE}${INSTALL_DIR}${NC}"
 
@@ -377,25 +371,83 @@ else
     ok "git found"
 fi
 
-RELEASE_TAG="$(xinas_latest_release_tag)"
-if [[ -z "$RELEASE_TAG" ]]; then
-    fail "Could not resolve the latest xiNAS GitHub Release."
-    echo ""
-    # One status probe names the cause: a rejected token, GitHub's per-IP
-    # rate limit, or no connection (update-spec.md "Naming the failure").
-    _why="$(xinas_gh_explain_release_lookup_failure "$REPO_SLUG")"
-    echo -e "     ${_why}"
-    echo ""
-    if [[ "$_why" == *"rate limit"* && -z "$(xinas_github_token_source)" ]]; then
-        token_howto_hint
+# ── Release selection ─────────────────────────────────────────────────────────
+# xiNAS installs from published GitHub Releases only. By default that is the
+# latest stable release (/releases/latest — GitHub excludes prereleases and
+# drafts from it). XINAS_RELEASE_TAG=vX.Y.Z[-rc.N] names one specific published
+# release instead — the way to put a release candidate on a fresh host — and
+# is still releases-only: the value must be release-shaped before GitHub is
+# asked, GitHub must confirm it as a published (non-draft) release, and a miss
+# fails the install. Nothing here ever resolves a branch or a commit. Off by
+# default; the production one-liner never sets it. Contract:
+# docs/Installer/update-spec.md "Fresh installs select a release only by
+# explicit tag"; tests/test_install_release_tag_override.py runs this block.
+
+# Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints the tag
+# on success, nothing on failure. This helper never returns a branch name,
+# and callers must NOT fall back to main.
+xinas_latest_release_tag() {
+    xinas_gh_curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
+# Resolve one named release: prints its tag_name when GitHub knows the tag as
+# a published, non-draft release (prereleases included), nothing otherwise.
+xinas_release_tag_by_name() {
+    local json
+    json="$(xinas_gh_curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/tags/${1}" 2>/dev/null)" || return 1
+    # A draft carries a tag_name in the API only — there is no git tag to
+    # check out — so it is refused exactly like an unknown tag.
+    printf '%s' "$json" | grep -q '"draft":[[:space:]]*false' || return 1
+    printf '%s' "$json" \
+        | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
+if [[ -n "${XINAS_RELEASE_TAG:-}" ]]; then
+    if [[ ! "$XINAS_RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+        fail "XINAS_RELEASE_TAG='${XINAS_RELEASE_TAG}' is not a release tag (expected vX.Y.Z or vX.Y.Z-rc.N)."
         echo ""
+        echo -e "     xiNAS installs only from published releases — no branches, no commits, no fallback to ${BOLD}main${NC}."
+        echo ""
+        exit 1
     fi
-    echo -e "     xiNAS installs only from published releases — no fallback to ${BOLD}main${NC}."
-    echo -e "     Releases: ${CYAN}https://github.com/${REPO_SLUG}/releases${NC}"
-    echo ""
-    exit 1
+    RELEASE_TAG="$(xinas_release_tag_by_name "$XINAS_RELEASE_TAG" || true)"
+    if [[ -z "$RELEASE_TAG" ]]; then
+        fail "XINAS_RELEASE_TAG='${XINAS_RELEASE_TAG}' is not a published xiNAS GitHub Release (unknown tag, a draft, or GitHub could not be reached)."
+        echo ""
+        _why="$(xinas_gh_explain_release_lookup_failure "$REPO_SLUG")"
+        echo -e "     ${_why}"
+        echo ""
+        echo -e "     xiNAS installs only from published releases — no fallback to ${BOLD}main${NC}, nor to the latest release."
+        echo -e "     Releases: ${CYAN}https://github.com/${REPO_SLUG}/releases${NC}"
+        echo ""
+        exit 1
+    fi
+    warn "Installing the explicitly requested release ${BOLD}${RELEASE_TAG}${NC} (XINAS_RELEASE_TAG), not the latest stable release."
+else
+    RELEASE_TAG="$(xinas_latest_release_tag)"
+    if [[ -z "$RELEASE_TAG" ]]; then
+        fail "Could not resolve the latest xiNAS GitHub Release."
+        echo ""
+        # One status probe names the cause: a rejected token, GitHub's per-IP
+        # rate limit, or no connection (update-spec.md "Naming the failure").
+        _why="$(xinas_gh_explain_release_lookup_failure "$REPO_SLUG")"
+        echo -e "     ${_why}"
+        echo ""
+        if [[ "$_why" == *"rate limit"* && -z "$(xinas_github_token_source)" ]]; then
+            token_howto_hint
+            echo ""
+        fi
+        echo -e "     xiNAS installs only from published releases — no fallback to ${BOLD}main${NC}."
+        echo -e "     Releases: ${CYAN}https://github.com/${REPO_SLUG}/releases${NC}"
+        echo ""
+        exit 1
+    fi
+    ok "Latest release: ${BOLD}${RELEASE_TAG}${NC}"
 fi
-ok "Latest release: ${BOLD}${RELEASE_TAG}${NC}"
+# ── end release selection ─────────────────────────────────────────────────────
 
 # GitHub accepted that request with the token this run was given, so the
 # token is worth keeping for the day-2 surfaces (xinas-menu's update check,

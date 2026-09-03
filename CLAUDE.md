@@ -350,19 +350,29 @@ exposing anything to production hosts.
    `update_check._semver_key` orders it correctly, so
    `3.13.0 < 3.14.0-rc.1 < 3.14.0` holds on both sides.
 2. Tag `vX.Y.0-rc.N` on the release branch.
-3. `gh release create vX.Y.0-rc.N --prerelease --target release/X.Y --notes-file <notes>`
+3. `gh release create vX.Y.0-rc.N --prerelease --target release/X.Y --notes-file <notes> install.sh install_client.sh`
 
    `--prerelease` is what does the isolating: it hides the RC from
    stable-channel update checks *and* from the `releases/latest` endpoint
-   `install.sh` resolves against. Release assets are not required — the
-   TUI's `UpdateChecker` is constructed with `required_asset=None`.
+   `install.sh` resolves against by default. Release assets are not
+   required for the update path (the TUI's `UpdateChecker` is constructed
+   with `required_asset=None`); attach `install.sh` when the RC must also
+   go onto a fresh host (step 5).
 4. On the test host, set `XINAS_UPDATE_CHANNEL=prerelease` for the menu
    process. Check for Updates then offers RC tags. Production hosts, which
    never set it, cannot see them.
+5. A *fresh* host installs the RC by naming it — the only way the
+   installer ever selects a prerelease:
 
-Because an RC is only installable as an *update*, a fresh install of an RC
-via the one-liner is not supported — `install.sh` resolves
-`/releases/latest`, which GitHub defines to exclude prereleases.
+   ```bash
+   curl -fsSL https://github.com/XinnorLab/xiNAS/releases/download/vX.Y.0-rc.N/install.sh \
+     | sudo XINAS_RELEASE_TAG=vX.Y.0-rc.N bash
+   ```
+
+   `XINAS_RELEASE_TAG` accepts only a release-shaped tag that GitHub
+   confirms as a published, non-draft release, and has no fallback of any
+   kind. See [docs/Installer/update-spec.md](docs/Installer/update-spec.md)
+   §*Fresh installs select a release only by explicit tag*.
 
 ### Publishing a new version
 
