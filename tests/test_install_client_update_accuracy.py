@@ -37,7 +37,7 @@ def test_checkout_forces():
 
 
 def test_update_block_is_if_guarded_with_failure_exit():
-    m = re.search(r"if git fetch.*?git checkout --force[^\n]*; then", SRC, re.S)
+    m = re.search(r"if xinas_gh_git fetch.*?git checkout --force[^\n]*; then", SRC, re.S)
     assert m, "fetch/checkout must be inside an if-guard"
     window = SRC[m.start() : m.end() + 400]
     assert 'ok "Client updated to ${RELEASE_TAG}"' in window
@@ -52,6 +52,17 @@ def test_release_tag_validated_before_checkout():
 
 # ── Behavioral: extract the real update block (tag-validation guard +
 # fetch/checkout if-guard) and drive it hermetically ─────────────────────────
+
+
+def _extract_token_block() -> str:
+    """The shared GitHub-token block install_client.sh carries (pinned to
+    lib/menu_lib.sh by tests/test_github_token_parity.py). The update block
+    calls its xinas_gh_git wrapper, which is plain git when no token is set."""
+    m = re.search(
+        r"^# ── GitHub access token ─+\n.*?^# ── end GitHub access token ─+\n", SRC, re.M | re.S
+    )
+    assert m, "install_client.sh must carry the GitHub access token block"
+    return m.group(0)
 
 
 def _extract_update_block() -> str:
@@ -87,12 +98,19 @@ def _run_update_block(tmp_path: Path, *, release_tag: str, git_script: str):
         'RED=""; GREEN=""; DIM=""; NC=""\n'
         'info() { echo "INFO: $*"; }\n'
         'ok() { echo "OK: $*"; }\n'
-        'fail() { echo "FAIL: $*" >&2; }\n' + _extract_update_block() + '\necho "REACHED_END"\n'
+        'fail() { echo "FAIL: $*" >&2; }\n'
+        + _extract_token_block()
+        + _extract_update_block()
+        + '\necho "REACHED_END"\n'
     )
+    env = dict(os.environ, PATH=f"{stub_bin}:{os.environ['PATH']}")
+    env.pop("XINAS_GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
+    env["XINAS_GH_TOKEN_FILE"] = str(tmp_path / "no-such-token-file")
     return subprocess.run(
         ["bash", "-c", snippet],
         cwd=tmp_path,
-        env=dict(os.environ, PATH=f"{stub_bin}:{os.environ['PATH']}"),
+        env=env,
         capture_output=True,
         text=True,
         timeout=30,

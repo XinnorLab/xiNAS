@@ -176,7 +176,7 @@ _UPDATE_REPO_SLUG="XinnorLab/xiNAS"
 UPDATE_TARGET_TAG=""
 
 _latest_release_tag() {
-    curl -fsSL "https://api.github.com/repos/${_UPDATE_REPO_SLUG}/releases/latest" 2>/dev/null \
+    xinas_gh_curl -fsSL "https://api.github.com/repos/${_UPDATE_REPO_SLUG}/releases/latest" 2>/dev/null \
         | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
         | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
 }
@@ -234,7 +234,8 @@ do_update() {
     fi
 
     info_box "Updating..." "Checking out release ${_tag}..."
-    if git -C "$repo_dir" fetch origin --tags 2>"$TMP_DIR/update.log" \
+    # Network fetch goes through xinas_gh_git (token, see lib/menu_lib.sh); checkout is local and stays plain git.
+    if xinas_gh_git -C "$repo_dir" fetch origin --tags 2>"$TMP_DIR/update.log" \
         && git -C "$repo_dir" checkout "$_tag" 2>>"$TMP_DIR/update.log"; then
         # Sync installed scripts from repo
         local synced=()

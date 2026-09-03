@@ -46,11 +46,54 @@ INSTALL_DIR="/opt/xinas-client"
 # docs/Installer/update-spec.md "Non-interactive git access".
 export GIT_TERMINAL_PROMPT=0
 
+# ── GitHub access token ───────────────────────────────────────────────────────
+# GitHub throttles *anonymous* requests per source IP — REST and git-over-HTTPS
+# alike — so every host behind one NAT shares one quota, and a spent quota
+# surfaces as a 401 on clone/fetch and a 403/429 on the API. A token moves the
+# caller onto its own per-account quota. Resolution order: $XINAS_GH_TOKEN,
+# $GITHUB_TOKEN, then the first line of /etc/xinas/github-token. The token is
+# never printed and never placed in argv: curl reads it from stdin config, git
+# from a credential helper that GitHub's 401 triggers (anonymous first).
+# Canonical copy: lib/menu_lib.sh; docs/Installer/update-spec.md "GitHub rate
+# limits and the access token"; tests/test_github_token_parity.py pins copies.
+XINAS_GH_TOKEN_FILE="${XINAS_GH_TOKEN_FILE:-/etc/xinas/github-token}"
+
+xinas_github_token() {
+    local t="${XINAS_GH_TOKEN:-${GITHUB_TOKEN:-}}"
+    if [[ -z "$t" && -r "$XINAS_GH_TOKEN_FILE" ]]; then
+        t="$(head -n 1 "$XINAS_GH_TOKEN_FILE" 2>/dev/null | tr -d '[:space:]')"
+    fi
+    printf '%s' "$t"
+}
+
+xinas_gh_curl() {
+    local t
+    t="$(xinas_github_token)"
+    if [[ -n "$t" ]]; then
+        printf 'header = "Authorization: Bearer %s"\n' "$t" | curl -K - "$@"
+    else
+        curl "$@"
+    fi
+}
+
+xinas_gh_git() {
+    local t
+    t="$(xinas_github_token)"
+    if [[ -n "$t" ]]; then
+        XINAS_GH_TOKEN="$t" git -c credential.helper= \
+            -c 'credential.helper=!f() { [ "$1" = get ] || exit 0; echo username=x-access-token; echo "password=$XINAS_GH_TOKEN"; }; f' \
+            "$@"
+    else
+        git "$@"
+    fi
+}
+# ── end GitHub access token ───────────────────────────────────────────────────
+
 # xiNAS ships from published GitHub Releases only — never the main branch
 # (see docs/Installer/update-spec.md). Resolve the latest release tag; print
 # nothing on failure. Callers must NOT fall back to main.
 xinas_latest_release_tag() {
-    curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+    xinas_gh_curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
         | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
         | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
 }
@@ -174,7 +217,7 @@ if [[ -d "$INSTALL_DIR" ]]; then
     # The tree may be dirty by design; --force resets to the release tag,
     # never paired with git clean. Drop 2>/dev/null so a real git error
     # reaches the operator; --quiet already hides success chatter.
-    if git fetch --quiet origin --tags && git checkout --force --quiet "$RELEASE_TAG"; then
+    if xinas_gh_git fetch --quiet origin --tags && git checkout --force --quiet "$RELEASE_TAG"; then
         ok "Client updated to ${RELEASE_TAG}"
     else
         fail "Failed to update client to ${RELEASE_TAG} (git fetch/checkout error)"
@@ -182,7 +225,7 @@ if [[ -d "$INSTALL_DIR" ]]; then
     fi
 else
     info "Cloning repository (sparse — client only) at ${RELEASE_TAG}..."
-    git clone --quiet --branch "$RELEASE_TAG" --depth 1 --filter=blob:none --sparse "$REPO_URL" "$INSTALL_DIR" 2>/dev/null
+    xinas_gh_git clone --quiet --branch "$RELEASE_TAG" --depth 1 --filter=blob:none --sparse "$REPO_URL" "$INSTALL_DIR" 2>/dev/null
     cd "$INSTALL_DIR"
     git sparse-checkout set client_repo 2>/dev/null
     ok "Client cloned to ${WHITE}${INSTALL_DIR}${NC}"
