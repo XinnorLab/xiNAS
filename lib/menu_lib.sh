@@ -1300,66 +1300,83 @@ check_for_updates() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# _xinas_playbook_ticker — awk filter that compresses PLAY/TASK headers into a
-# single overwriting status line. Errors and warnings pass through verbatim so
-# they remain visible inline.
+# _xinas_playbook_ticker — compresses PLAY/TASK headers into a single
+# overwriting status line. Errors and the PLAY RECAP pass through verbatim so
+# they remain visible inline. Contract: docs/Installer/spec.md §2.5.
+#
+# A bash `read -t` loop, deliberately not an awk filter. awk can only act when
+# a line arrives, so its spinner sat on the last banner for the whole length
+# of a silent task (wait_for at 30 s per NVMe controller, an apt install, a
+# DOCA build) and a healthy run looked hung. `read -t 0.1` returns every
+# 100 ms whether or not ansible printed anything, so the glyph turns at a
+# constant rate with no background process and no signal handling — the two
+# costs the 2026-04-28 status-bar design cited when it cut the constant-rate
+# spinner. On a timeout bash leaves the bytes read so far in the variable and
+# the next read continues the same line, so a banner split across the window
+# is reassembled before it is parsed. Safe under errexit: every read failure
+# is caught with `||`, and the function always returns 0.
 # ═══════════════════════════════════════════════════════════════════════════════
+_xinas_ticker_draw() {
+    # \r = carriage return; \033[K = clear to end of line
+    printf '\r\033[K %s %s\033[K' "$1" "$2"
+}
+
 _xinas_playbook_ticker() {
-    LC_ALL=C awk '
-    BEGIN {
-        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-        sp_n = 10
-        sp_i = 0
-        # ANSI: \r = carriage return; \033[K = clear to end of line
-        CR = "\r"
-        EL = "\033[K"
-    }
-    /^[[:space:]]*PLAY \[/ {
-        match($0, /PLAY \[[^]]*\]/)
-        play = substr($0, RSTART, RLENGTH)
-        sp_i = (sp_i + 1) % sp_n
-        glyph = substr(spinner, sp_i*3+1, 3)
-        printf "%s%s %s %s%s", CR, EL, glyph, play, EL
-        emitted = 1
-        fflush()
-        next
-    }
-    /^[[:space:]]*TASK \[/ {
-        match($0, /TASK \[[^]]*\]/)
-        task = substr($0, RSTART, RLENGTH)
-        sp_i = (sp_i + 1) % sp_n
-        glyph = substr(spinner, sp_i*3+1, 3)
-        printf "%s%s %s %s%s", CR, EL, glyph, task, EL
-        emitted = 1
-        fflush()
-        next
-    }
-    /^fatal:/ || /^failed:/ || /^unreachable:/ || /ERROR!/ {
-        printf "\n%s\n", $0
-        emitted = 1
-        fflush()
-        next
-    }
-    /^PLAY RECAP/ {
-        printf "\n%s\n", $0
-        emitted = 1
-        fflush()
-        in_recap = 1
-        next
-    }
-    in_recap == 1 {
-        # Pass recap host lines through verbatim
-        print
-        emitted = 1
-        fflush()
-        next
-    }
-    # All other lines: swallow (full content is in the install log file)
-    { next }
-    END {
-        if (emitted) printf "\n"
-    }
-    '
+    local -a frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+    local i=0 status='Starting…' partial='' line='' t='' rc=0
+    local in_recap=0 emitted=0
+
+    while :; do
+        line=''
+        rc=0
+        IFS= read -r -t 0.1 line || rc=$?
+        if (( rc > 128 )); then
+            # Timer tick with no complete line yet: keep what arrived so far
+            # and turn the glyph. Nothing is drawn once the recap has started.
+            partial+=$line
+            if (( ! in_recap )); then
+                i=$(( (i + 1) % ${#frames[@]} ))
+                _xinas_ticker_draw "${frames[i]}" "$status"
+                emitted=1
+            fi
+            continue
+        fi
+        line=$partial$line
+        partial=''
+        # Any other non-zero rc is EOF. An unterminated final line still
+        # arrives here with rc != 0 and is handled before the loop ends.
+        if (( rc != 0 )) && [[ -z $line ]]; then
+            break
+        fi
+        # Strip leading whitespace, the awk anchors' ^[[:space:]]*.
+        t=${line#"${line%%[![:space:]]*}"}
+        if (( in_recap )); then
+            # Pass recap host lines through verbatim
+            printf '%s\n' "$line"
+            emitted=1
+        elif [[ $t == 'PLAY RECAP'* ]]; then
+            printf '\n%s\n' "$line"
+            emitted=1
+            in_recap=1
+        elif [[ $t == 'PLAY ['* || $t == 'TASK ['* ]]; then
+            # "PLAY [name] ****" -> "PLAY [name]"
+            status=${t%%]*}]
+            i=$(( (i + 1) % ${#frames[@]} ))
+            _xinas_ticker_draw "${frames[i]}" "$status"
+            emitted=1
+        elif [[ $line == fatal:* || $line == failed:* || $line == unreachable:* || $line == *ERROR!* ]]; then
+            printf '\n%s\n' "$line"
+            emitted=1
+        fi
+        # All other lines: swallow (full content is in the install log file)
+        if (( rc != 0 )); then
+            break
+        fi
+    done
+    if (( emitted )); then
+        printf '\n'
+    fi
+    return 0
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
