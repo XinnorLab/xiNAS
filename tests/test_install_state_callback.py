@@ -88,3 +88,64 @@ def test_writes_are_incremental(tmp_path):
     state = _read(tmp_path)  # readable before finish()
     assert state["roles"][0]["role"] == "common"
     assert "updated" in state
+
+
+# ── Post-install role report inputs (docs/Installer/spec.md §2.9 / §7.7) ──────
+
+
+def test_start_records_the_expected_role_list(tmp_path):
+    w = _make(tmp_path)
+    w.start(preset="default", expected=["common", "doca_ofed", "xiraid_classic"])
+    assert _read(tmp_path)["expected"] == ["common", "doca_ofed", "xiraid_classic"]
+
+
+def test_task_results_are_counted_per_role(tmp_path):
+    w = _make(tmp_path)
+    w.start(preset="default", expected=["common"])
+    w.role_running("common")
+    w.task_result("common", "ok")
+    w.task_result("common", "changed")
+    w.task_result("common", "skipped")
+    w.task_result("common", "failed")
+    tasks = _read(tmp_path)["roles"][0]["tasks"]
+    assert tasks == {"ok": 1, "changed": 1, "skipped": 1, "failed": 1}
+
+
+def test_role_whose_every_task_was_skipped_ends_as_skipped_not_ok(tmp_path):
+    w = _make(tmp_path)
+    w.start(preset="default", expected=["xiraid_classic", "nvme_namespace"])
+    w.role_running("xiraid_classic")
+    for _ in range(3):
+        w.task_result("xiraid_classic", "skipped")
+    w.role_running("nvme_namespace")  # closes xiraid_classic
+    assert _read(tmp_path)["roles"][0]["status"] == "skipped"
+
+
+def test_last_role_all_skipped_is_skipped_at_finish(tmp_path):
+    w = _make(tmp_path)
+    w.start(preset="default", expected=["motd"])
+    w.role_running("motd")
+    w.task_result("motd", "skipped")
+    w.finish(failed=False)
+    state = _read(tmp_path)
+    assert state["roles"][0]["status"] == "skipped"
+    assert state["status"] == "completed"
+
+
+def test_role_with_any_executed_task_stays_ok(tmp_path):
+    w = _make(tmp_path)
+    w.start(preset="default", expected=["common", "doca_ofed"])
+    w.role_running("common")
+    w.task_result("common", "skipped")
+    w.task_result("common", "ok")
+    w.role_running("doca_ofed")
+    assert _read(tmp_path)["roles"][0]["status"] == "ok"
+
+
+def test_task_result_for_an_unstarted_role_is_ignored(tmp_path):
+    # A stray result (e.g. a handler attributed to a role that never had a
+    # task start) must not invent a roles[] entry.
+    w = _make(tmp_path)
+    w.start(preset="default", expected=["common"])
+    w.task_result("ghost", "ok")
+    assert _read(tmp_path)["roles"] == []

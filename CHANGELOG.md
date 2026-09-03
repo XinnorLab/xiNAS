@@ -8,6 +8,24 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
+### Added
+
+- **Every install now ends with a per-role report, so a partial install is
+  never silent.** After `ansible-playbook` returns, the bash menus,
+  `autoinstall.sh` and the `xinas-setup` Install screen print one line per
+  role in `site.yml` order — `✓` applied, `–` skipped by condition, `✗`
+  failed (with "install stopped here"), `·` never run — and a summary line:
+  `COMPLETE: 17 of 17 roles applied` or `INCOMPLETE: 3 of 17 roles
+  applied, failed at xiraid_classic, 13 not run`, plus the log path. A run
+  that died before its first play, or against no hosts, reports `No roles
+  ran`. The report is rendered from `/var/lib/xinas/install-state.json` by
+  a standard-library-only module, so it works before the management venv
+  exists. The callback that writes that file now records the play's full
+  role list and per-role task counts, and marks a role whose every task was
+  skipped as `skipped` rather than `ok`; the default `simple_menu.sh` path,
+  which never enabled the recording, now does. `autoinstall.sh --status`
+  prints the same table (`--status --json` keeps the raw JSON).
+
 ### Fixed
 
 - **`xinas-setup` → Install ran against no hosts and reported success.**
