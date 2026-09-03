@@ -202,6 +202,156 @@ INSTALL_DIR="/opt/xiNAS"
 REPO_URL="https://github.com/XinnorLab/xiNAS.git"
 REPO_SLUG="XinnorLab/xiNAS"
 
+# Never let git fall back to an interactive credential prompt. GitHub answers
+# a fetch/clone it will not serve with 401, and git's reflex is to ask
+# `Username for 'https://github.com':` on /dev/tty — which run_quiet cannot
+# intercept (it redirects stdout/stderr into the log and backgrounds the
+# command), so the prompt lands unattributed over the spinner and the install
+# blocks forever on a read no operator is watching for. Mirrors
+# collection/roles/xinas_menu/files/xinas-update-git; see
+# docs/Installer/update-spec.md "Non-interactive git access".
+export GIT_TERMINAL_PROMPT=0
+
+# ── GitHub access token ───────────────────────────────────────────────────────
+# GitHub throttles *anonymous* requests per source IP — REST and git-over-HTTPS
+# alike — so every host behind one NAT shares one quota, and a spent quota
+# surfaces as a 401 on clone/fetch and a 403/429 on the API. A token moves the
+# caller onto its own per-account quota. Resolution order: $XINAS_GH_TOKEN,
+# $GITHUB_TOKEN, then the first line of /etc/xinas/github-token. The token is
+# never printed and never placed in argv: curl reads it from stdin config, git
+# from a credential helper that GitHub's 401 triggers (anonymous first).
+# Canonical copy: lib/menu_lib.sh; docs/Installer/update-spec.md "GitHub rate
+# limits and the access token"; tests/test_github_token_parity.py pins copies.
+XINAS_GH_TOKEN_FILE="${XINAS_GH_TOKEN_FILE:-/etc/xinas/github-token}"
+
+xinas_github_token() {
+    local t="${XINAS_GH_TOKEN:-${GITHUB_TOKEN:-}}"
+    if [[ -z "$t" && -r "$XINAS_GH_TOKEN_FILE" ]]; then
+        t="$(head -n 1 "$XINAS_GH_TOKEN_FILE" 2>/dev/null | tr -d '[:space:]')"
+    fi
+    printf '%s' "$t"
+}
+
+# Where the token in use came from, for messages that must name the source
+# and never the value. Prints nothing when no token is configured.
+xinas_github_token_source() {
+    if [[ -n "${XINAS_GH_TOKEN:-}" ]]; then
+        printf 'XINAS_GH_TOKEN'
+    elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        printf 'GITHUB_TOKEN'
+    elif [[ -n "$(xinas_github_token)" ]]; then
+        printf '%s' "$XINAS_GH_TOKEN_FILE"
+    fi
+}
+
+xinas_gh_curl() {
+    local t
+    t="$(xinas_github_token)"
+    if [[ -n "$t" ]]; then
+        printf 'header = "Authorization: Bearer %s"\n' "$t" | curl -K - "$@"
+    else
+        curl "$@"
+    fi
+}
+
+xinas_gh_git() {
+    local t
+    t="$(xinas_github_token)"
+    if [[ -n "$t" ]]; then
+        XINAS_GH_TOKEN="$t" git -c credential.helper= \
+            -c 'credential.helper=!f() { [ "$1" = get ] || exit 0; echo username=x-access-token; echo "password=$XINAS_GH_TOKEN"; }; f' \
+            "$@"
+    else
+        git "$@"
+    fi
+}
+
+# Keep an environment-supplied token at $1 (mode 0600) for the day-2 surfaces,
+# which run after sudo has stripped the environment. Call this only AFTER
+# GitHub has accepted the token — a mistyped one must never be kept. No-op
+# without an environment token. An existing directory keeps its mode; the
+# file is written through a 0600 temp file, so it is never world-readable,
+# not even briefly.
+xinas_persist_github_token() {
+    local dest="$1" tok="${XINAS_GH_TOKEN:-${GITHUB_TOKEN:-}}" tmp
+    [[ -n "$tok" ]] || return 0
+    [[ -d "$(dirname "$dest")" ]] || install -d -m 0755 "$(dirname "$dest")"
+    tmp="$(mktemp "${dest}.XXXXXX")" || return 1
+    printf '%s\n' "$tok" > "$tmp" && chmod 0600 "$tmp" && mv -f "$tmp" "$dest"
+}
+
+# Explain a failed /releases/latest lookup for $1 (owner/repo) in plain text on
+# stdout: probes the HTTP status once and names the cause — a rejected token
+# (401), GitHub's rate limit (403/429), or no connection at all.
+xinas_gh_explain_release_lookup_failure() {
+    local code src
+    code="$(xinas_gh_curl --connect-timeout 5 --max-time 15 -sS -o /dev/null -w '%{http_code}' \
+        "https://api.github.com/repos/${1}/releases/latest" 2>/dev/null || true)"
+    src="$(xinas_github_token_source)"
+    case "$code" in
+        401)
+            printf 'GitHub rejected the token from %s (HTTP 401). Fix or remove it.\n' \
+                "${src:-the environment}"
+            ;;
+        403|429)
+            if [[ -n "$src" ]]; then
+                printf "GitHub's rate limit refused the request (HTTP %s): the quota of the token from %s is spent. Wait for the reset or use another token.\n" \
+                    "$code" "$src"
+            else
+                printf "GitHub's rate limit refused the request (HTTP %s): anonymous requests from this public address share one quota. Use a GitHub token (XINAS_GH_TOKEN or %s).\n" \
+                    "$code" "$XINAS_GH_TOKEN_FILE"
+            fi
+            ;;
+        000|"")
+            printf 'No connection to https://api.github.com.\n'
+            ;;
+        *)
+            printf 'https://api.github.com answered HTTP %s.\n' "$code"
+            ;;
+    esac
+}
+# ── end GitHub access token ───────────────────────────────────────────────────
+
+
+# How to hand a token to the installer without exposing it: typed into a
+# variable (not echoed, not in shell history) and preserved by NAME across
+# sudo. `sudo XINAS_GH_TOKEN=<token> bash` would keep the value in sudo's own
+# argv for the whole run (visible in ps) and write it to sudo's log (the ENV=
+# field, sudoers(5) LOG FORMAT). See update-spec.md "Handing over the token".
+token_howto_hint() {
+    echo -e "     Lift the limit with a GitHub token (a fine-grained personal access"
+    echo -e "     token with no permissions is enough); the installer keeps it in"
+    echo -e "     ${WHITE}${XINAS_GH_TOKEN_FILE}${NC} for the update checks that follow:"
+    echo -e "       ${CYAN}read -rs XINAS_GH_TOKEN && export XINAS_GH_TOKEN${NC}"
+    echo -e "       ${CYAN}curl -fsSL https://github.com/${REPO_SLUG}/releases/latest/download/install.sh | sudo --preserve-env=XINAS_GH_TOKEN bash${NC}"
+}
+
+# Printed when GitHub refuses the clone/fetch of a repository that is public
+# and whose release tag we just resolved — so the request itself was turned
+# away (update-spec.md "Naming the authentication failure"). The usual cause
+# is GitHub's per-IP limit on anonymous requests: every install, update check
+# and clone from one public address shares one quota, and a spent quota comes
+# back as 401.
+git_access_hint() {
+    echo ""
+    fail "GitHub refused git access to ${CYAN}https://github.com/${REPO_SLUG}${NC}."
+    echo ""
+    echo -e "     The repository is public, so this is GitHub's per-IP rate limit on"
+    echo -e "     anonymous requests (many installs, update checks or clones from one"
+    echo -e "     public address — a lab or office NAT) or, less often, this host."
+    echo ""
+    token_howto_hint
+    echo ""
+    echo -e "     Host-side causes worth ruling out:"
+    echo -e "       ${DIM}•${NC} an HTTP proxy in root's environment (${WHITE}https_proxy${NC})"
+    echo -e "       ${DIM}•${NC} an ${WHITE}insteadOf${NC} rewrite or credential helper —"
+    echo -e "         ${CYAN}git config --list --show-origin | grep -Ei 'credential|insteadof|proxy'${NC}"
+    echo ""
+    echo -e "     Reproduce the failure directly:"
+    echo -e "       ${CYAN}sudo env GIT_TERMINAL_PROMPT=0 git ls-remote ${REPO_URL}${NC}"
+    echo ""
+}
+
 # Console wrapper paths. Kept in step with the xinas_menu role's
 # xinas_menu_wrapper_path / xinas_setup_wrapper_path defaults — the role owns
 # these files during provisioning; the block near the end of this script only
@@ -213,7 +363,7 @@ SETUP_WRAPPER="/usr/local/bin/xinas-setup"
 # on success, nothing on failure. xiNAS installs from releases only — this
 # helper never returns a branch name, and callers must NOT fall back to main.
 xinas_latest_release_tag() {
-    curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+    xinas_gh_curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
         | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
         | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
 }
@@ -231,13 +381,33 @@ RELEASE_TAG="$(xinas_latest_release_tag)"
 if [[ -z "$RELEASE_TAG" ]]; then
     fail "Could not resolve the latest xiNAS GitHub Release."
     echo ""
+    # One status probe names the cause: a rejected token, GitHub's per-IP
+    # rate limit, or no connection (update-spec.md "Naming the failure").
+    _why="$(xinas_gh_explain_release_lookup_failure "$REPO_SLUG")"
+    echo -e "     ${_why}"
+    echo ""
+    if [[ "$_why" == *"rate limit"* && -z "$(xinas_github_token_source)" ]]; then
+        token_howto_hint
+        echo ""
+    fi
     echo -e "     xiNAS installs only from published releases — no fallback to ${BOLD}main${NC}."
-    echo -e "     Check network access to ${CYAN}https://api.github.com${NC} and that a"
-    echo -e "     release is published at ${CYAN}https://github.com/${REPO_SLUG}/releases${NC}."
+    echo -e "     Releases: ${CYAN}https://github.com/${REPO_SLUG}/releases${NC}"
     echo ""
     exit 1
 fi
 ok "Latest release: ${BOLD}${RELEASE_TAG}${NC}"
+
+# GitHub accepted that request with the token this run was given, so the
+# token is worth keeping for the day-2 surfaces (xinas-menu's update check,
+# the xinas-update-git sudo helper), which run after sudo has stripped the
+# environment. Persisting before the lookup would keep a mistyped token and
+# poison every later run — nothing in xiNAS removes the file.
+if [[ -n "${XINAS_GH_TOKEN:-${GITHUB_TOKEN:-}}" ]]; then
+    xinas_persist_github_token "$XINAS_GH_TOKEN_FILE"
+    ok "GitHub token from $(xinas_github_token_source) saved to ${WHITE}${XINAS_GH_TOKEN_FILE}${NC} (0600)"
+elif [[ -n "$(xinas_github_token)" ]]; then
+    info "Using GitHub token from ${WHITE}${XINAS_GH_TOKEN_FILE}${NC}"
+fi
 
 # Refuse anything that is not a semver release tag before it ever reaches
 # `git checkout`/`git clone --branch` (WS3 T5c). install.sh runs standalone
@@ -270,12 +440,14 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
     # `bash -c "... '${RELEASE_TAG}' ..."` that built a second shell's
     # command string out of the tag; removing that second shell removes the
     # injection).
-    run_quiet "Fetching xiNAS release tags" git fetch origin --tags -q
+    run_quiet "Fetching xiNAS release tags" \
+        xinas_gh_git fetch origin --tags -q || { git_access_hint; exit 1; }
     run_quiet "Updating xiNAS to ${RELEASE_TAG} at ${INSTALL_DIR}" \
         git checkout --force -q "$RELEASE_TAG"
 else
     run_quiet "Cloning xiNAS ${RELEASE_TAG} to ${INSTALL_DIR}" \
-        git clone -q --branch "$RELEASE_TAG" "$REPO_URL" "$INSTALL_DIR"
+        xinas_gh_git clone -q --branch "$RELEASE_TAG" "$REPO_URL" "$INSTALL_DIR" \
+        || { git_access_hint; exit 1; }
     cd "$INSTALL_DIR"
 fi
 

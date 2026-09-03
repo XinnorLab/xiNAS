@@ -38,11 +38,111 @@ XGREEN='\033[38;2;131;180;73m'
 
 CLIENT_REPO_SLUG="XinnorLab/xiNAS"
 
+# ── GitHub access token ───────────────────────────────────────────────────────
+# GitHub throttles *anonymous* requests per source IP — REST and git-over-HTTPS
+# alike — so every host behind one NAT shares one quota, and a spent quota
+# surfaces as a 401 on clone/fetch and a 403/429 on the API. A token moves the
+# caller onto its own per-account quota. Resolution order: $XINAS_GH_TOKEN,
+# $GITHUB_TOKEN, then the first line of /etc/xinas/github-token. The token is
+# never printed and never placed in argv: curl reads it from stdin config, git
+# from a credential helper that GitHub's 401 triggers (anonymous first).
+# Canonical copy: lib/menu_lib.sh; docs/Installer/update-spec.md "GitHub rate
+# limits and the access token"; tests/test_github_token_parity.py pins copies.
+XINAS_GH_TOKEN_FILE="${XINAS_GH_TOKEN_FILE:-/etc/xinas/github-token}"
+
+xinas_github_token() {
+    local t="${XINAS_GH_TOKEN:-${GITHUB_TOKEN:-}}"
+    if [[ -z "$t" && -r "$XINAS_GH_TOKEN_FILE" ]]; then
+        t="$(head -n 1 "$XINAS_GH_TOKEN_FILE" 2>/dev/null | tr -d '[:space:]')"
+    fi
+    printf '%s' "$t"
+}
+
+# Where the token in use came from, for messages that must name the source
+# and never the value. Prints nothing when no token is configured.
+xinas_github_token_source() {
+    if [[ -n "${XINAS_GH_TOKEN:-}" ]]; then
+        printf 'XINAS_GH_TOKEN'
+    elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        printf 'GITHUB_TOKEN'
+    elif [[ -n "$(xinas_github_token)" ]]; then
+        printf '%s' "$XINAS_GH_TOKEN_FILE"
+    fi
+}
+
+xinas_gh_curl() {
+    local t
+    t="$(xinas_github_token)"
+    if [[ -n "$t" ]]; then
+        printf 'header = "Authorization: Bearer %s"\n' "$t" | curl -K - "$@"
+    else
+        curl "$@"
+    fi
+}
+
+xinas_gh_git() {
+    local t
+    t="$(xinas_github_token)"
+    if [[ -n "$t" ]]; then
+        XINAS_GH_TOKEN="$t" git -c credential.helper= \
+            -c 'credential.helper=!f() { [ "$1" = get ] || exit 0; echo username=x-access-token; echo "password=$XINAS_GH_TOKEN"; }; f' \
+            "$@"
+    else
+        git "$@"
+    fi
+}
+
+# Keep an environment-supplied token at $1 (mode 0600) for the day-2 surfaces,
+# which run after sudo has stripped the environment. Call this only AFTER
+# GitHub has accepted the token — a mistyped one must never be kept. No-op
+# without an environment token. An existing directory keeps its mode; the
+# file is written through a 0600 temp file, so it is never world-readable,
+# not even briefly.
+xinas_persist_github_token() {
+    local dest="$1" tok="${XINAS_GH_TOKEN:-${GITHUB_TOKEN:-}}" tmp
+    [[ -n "$tok" ]] || return 0
+    [[ -d "$(dirname "$dest")" ]] || install -d -m 0755 "$(dirname "$dest")"
+    tmp="$(mktemp "${dest}.XXXXXX")" || return 1
+    printf '%s\n' "$tok" > "$tmp" && chmod 0600 "$tmp" && mv -f "$tmp" "$dest"
+}
+
+# Explain a failed /releases/latest lookup for $1 (owner/repo) in plain text on
+# stdout: probes the HTTP status once and names the cause — a rejected token
+# (401), GitHub's rate limit (403/429), or no connection at all.
+xinas_gh_explain_release_lookup_failure() {
+    local code src
+    code="$(xinas_gh_curl --connect-timeout 5 --max-time 15 -sS -o /dev/null -w '%{http_code}' \
+        "https://api.github.com/repos/${1}/releases/latest" 2>/dev/null || true)"
+    src="$(xinas_github_token_source)"
+    case "$code" in
+        401)
+            printf 'GitHub rejected the token from %s (HTTP 401). Fix or remove it.\n' \
+                "${src:-the environment}"
+            ;;
+        403|429)
+            if [[ -n "$src" ]]; then
+                printf "GitHub's rate limit refused the request (HTTP %s): the quota of the token from %s is spent. Wait for the reset or use another token.\n" \
+                    "$code" "$src"
+            else
+                printf "GitHub's rate limit refused the request (HTTP %s): anonymous requests from this public address share one quota. Use a GitHub token (XINAS_GH_TOKEN or %s).\n" \
+                    "$code" "$XINAS_GH_TOKEN_FILE"
+            fi
+            ;;
+        000|"")
+            printf 'No connection to https://api.github.com.\n'
+            ;;
+        *)
+            printf 'https://api.github.com answered HTTP %s.\n' "$code"
+            ;;
+    esac
+}
+# ── end GitHub access token ───────────────────────────────────────────────────
+
 # Resolve the latest PUBLISHED GitHub Release tag (vX.Y.Z). Prints the tag on
 # success, nothing on failure. Never returns a branch name — callers must NOT
 # fall back to main.
 client_latest_release_tag() {
-    curl -fsSL "https://api.github.com/repos/${CLIENT_REPO_SLUG}/releases/latest" 2>/dev/null \
+    xinas_gh_curl -fsSL "https://api.github.com/repos/${CLIENT_REPO_SLUG}/releases/latest" 2>/dev/null \
         | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 \
         | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'
 }
@@ -3773,7 +3873,7 @@ xiNAS Client: v$CLIENT_VERSION${current_tag:+ (${current_tag})}$csi_msg"
         if [[ -n "$client_update_available" ]]; then
             if yes_no "Update Available" "$update_msg\n\nUpdate xiNAS Client to ${latest_tag}?"; then
                 info_box "Updating..." "Downloading xiNAS Client ${latest_tag}..."
-                if git -C "$install_dir" fetch --quiet origin --tags 2>/dev/null \
+                if xinas_gh_git -C "$install_dir" fetch --quiet origin --tags 2>/dev/null \
                     && git -C "$install_dir" checkout --quiet "$latest_tag" 2>/dev/null; then
                     UPDATE_AVAILABLE=""; rm -f "$UPDATE_FLAG_FILE"
                     msg_box "Updated!" "xiNAS Client updated to ${latest_tag}!\n\nThe menu will restart."
@@ -3798,7 +3898,7 @@ xiNAS Client: v$CLIENT_VERSION${current_tag:+ (${current_tag})}$csi_msg"
 
         if [[ "$selected" == *"client"* ]]; then
             info_box "Updating..." "Downloading xiNAS Client ${latest_tag}..."
-            if git -C "$install_dir" fetch --quiet origin --tags 2>/dev/null \
+            if xinas_gh_git -C "$install_dir" fetch --quiet origin --tags 2>/dev/null \
                 && git -C "$install_dir" checkout --quiet "$latest_tag" 2>/dev/null; then
                 UPDATE_AVAILABLE=""; rm -f "$UPDATE_FLAG_FILE"
             else
@@ -4599,7 +4699,7 @@ case "${1:-}" in
             exit 0
         fi
         echo -e "${YELLOW}Update available: ${_current_tag:-unknown} -> ${_latest_tag}${NC}"
-        if git -C "$_install_dir" fetch --quiet origin --tags 2>/dev/null \
+        if xinas_gh_git -C "$_install_dir" fetch --quiet origin --tags 2>/dev/null \
             && git -C "$_install_dir" checkout --quiet "$_latest_tag" 2>/dev/null; then
             echo -e "${GREEN}Updated to ${_latest_tag}!${NC}"
             exit 0
