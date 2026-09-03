@@ -44,14 +44,24 @@
   loop: "{{ nvme_data_drives }}"
   changed_when: false
 
-# Get LBA size for each controller (needed for namespace creation)
+# Get the in-use LBA size per controller (informational — namespace creation
+# sizes with nvme_namespace_block_size). Queried through the controller with
+# -n <nsid>, the first NSID list-ns reported, so no block-device name is
+# involved: the nvmeXnY suffix is the kernel's head instance, not the NSID
+# (raid-spec.md §4.5). Loops over the list-ns results so item.item is the
+# controller and item.stdout_lines its NSIDs; the topology task below indexes
+# both result lists positionally, which this keeps aligned.
 - name: Get LBA format size per controller
   ansible.builtin.shell: |
-    # Get LBA size from first namespace or default to 512
-    size=$(nvme id-ns {{ item }}n1 2>/dev/null | grep -E 'in use.*lbads' | awk '{for(i=1;i<=NF;i++) if($i ~ /lbads/) print $(i+1)}' | head -1)
-    if [ -z "$size" ]; then
-      # Fallback: check id-ns output format
-      size=$(nvme id-ns {{ item }}n1 2>/dev/null | grep -E '^\s*lbaf\s+0' | grep -oE 'lbads:[0-9]+' | cut -d: -f2)
+    controller="{{ item.item }}"
+    nsid="{{ item.stdout_lines | default([]) | first | default('') }}"
+    size=""
+    if [ -n "$nsid" ]; then
+      size=$(nvme id-ns "$controller" -n "$nsid" 2>/dev/null | grep -E 'in use.*lbads' | awk '{for(i=1;i<=NF;i++) if($i ~ /lbads/) print $(i+1)}' | head -1)
+      if [ -z "$size" ]; then
+        # Fallback: check id-ns output format
+        size=$(nvme id-ns "$controller" -n "$nsid" 2>/dev/null | grep -E '^\s*lbaf\s+0' | grep -oE 'lbads:[0-9]+' | cut -d: -f2)
+      fi
     fi
     # Convert log2 to actual size if needed, or default to 512
     if [ -n "$size" ] && [ "$size" -lt 32 ]; then
@@ -61,8 +71,10 @@
     else
       echo "512"
     fi
+  args:
+    executable: /bin/bash
   register: nvme_lba_size
-  loop: "{{ nvme_data_drives }}"
+  loop: "{{ nvme_existing_ns.results }}"
   changed_when: false
   failed_when: false
 
