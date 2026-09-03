@@ -39,6 +39,13 @@ REPO_URL="https://github.com/XinnorLab/xiNAS.git"
 REPO_SLUG="XinnorLab/xiNAS"
 INSTALL_DIR="/opt/xinas-client"
 
+# A 401 from GitHub (stale root credentials, a credential helper, a proxy)
+# otherwise makes git prompt for a username on /dev/tty. This installer is
+# meant to run from `curl … | sudo bash` and across a client fleet, so the
+# prompt would hang the run instead of failing it. See
+# docs/Installer/update-spec.md "Non-interactive git access".
+export GIT_TERMINAL_PROMPT=0
+
 # xiNAS ships from published GitHub Releases only — never the main branch
 # (see docs/Installer/update-spec.md). Resolve the latest release tag; print
 # nothing on failure. Callers must NOT fall back to main.
