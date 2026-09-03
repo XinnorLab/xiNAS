@@ -31,22 +31,77 @@ export interface ShareDocRow {
 }
 
 /**
+ * The integer `fsid` a stored value denotes, or `undefined` when it is not one.
+ * Integer-valued strings are accepted, matching the provider's own validator.
+ */
+export function parseFsid(raw: unknown): number | undefined {
+  let n = Number.NaN;
+  if (typeof raw === 'number') n = raw;
+  else if (typeof raw === 'string' && raw.trim().length > 0) n = Number(raw);
+  return Number.isInteger(n) ? n : undefined;
+}
+
+/**
  * Every integer `fsid` on the given desired Share rows, mapped to the id of the
- * share holding it (so a collision can name its owner). Integer-valued strings
- * are accepted, matching the provider's own `fsid` validator.
+ * share holding it (so a collision can name its owner).
  */
 export function collectUsedFsids(rows: readonly ShareDocRow[]): Map<number, string> {
   const used = new Map<number, string>();
   for (const row of rows) {
-    const raw = row.value?.spec?.fsid;
-    let n = Number.NaN;
-    if (typeof raw === 'number') n = raw;
-    else if (typeof raw === 'string' && raw.trim().length > 0) n = Number(raw);
-    if (!Number.isInteger(n)) continue;
+    const n = parseFsid(row.value?.spec?.fsid);
+    if (n === undefined) continue;
     const id = typeof row.value?.id === 'string' ? row.value.id : '<unknown>';
     if (!used.has(n)) used.set(n, id);
   }
   return used;
+}
+
+/** A `ShareFsid/{n}` marker row as `KvStore.list` returns it. */
+export interface FsidMarkerRow {
+  value: { fsid?: unknown; share_id?: unknown };
+  revision: number;
+}
+
+/**
+ * The desired mutations + revision pins that bring the marker rows in line
+ * with `wanted` (fsid → holding share id): a marker is put when it is absent
+ * or names a different share, and deleted when no wanted share holds its
+ * number. Rows already correct are left alone, so a healthy store sees no
+ * revision churn. Every touched marker is pinned at its CURRENT revision (0
+ * when absent), which still closes the plan→apply race — a concurrent create
+ * that writes the marker bumps it past the pin.
+ *
+ * Used by config.rollback adopt, which rewrites the Share set wholesale and
+ * must not leave orphan markers behind (an orphan pinned absent by a later
+ * create fails PRECONDITION_FAILED on every apply).
+ */
+export function reconcileFsidMarkers(
+  current: readonly FsidMarkerRow[],
+  wanted: ReadonlyMap<number, string>,
+): {
+  mutations: ({ key: string; value: unknown } | { key: string; delete: true })[];
+  pins: { kind: string; id: string; revision: number }[];
+} {
+  const currentByFsid = new Map<number, { share_id: unknown; revision: number }>();
+  for (const row of current) {
+    const n = parseFsid(row.value?.fsid);
+    if (n === undefined) continue;
+    currentByFsid.set(n, { share_id: row.value.share_id, revision: row.revision });
+  }
+  const mutations: ({ key: string; value: unknown } | { key: string; delete: true })[] = [];
+  const pins: { kind: string; id: string; revision: number }[] = [];
+  for (const [fsid, shareId] of wanted) {
+    const cur = currentByFsid.get(fsid);
+    if (cur !== undefined && cur.share_id === shareId) continue;
+    mutations.push({ key: shareFsidKey(fsid), value: { fsid, share_id: shareId } });
+    pins.push({ kind: SHARE_FSID_KIND, id: String(fsid), revision: cur?.revision ?? 0 });
+  }
+  for (const [fsid, cur] of currentByFsid) {
+    if (wanted.has(fsid)) continue;
+    mutations.push({ key: shareFsidKey(fsid), delete: true });
+    pins.push({ kind: SHARE_FSID_KIND, id: String(fsid), revision: cur.revision });
+  }
+  return { mutations, pins };
 }
 
 /**

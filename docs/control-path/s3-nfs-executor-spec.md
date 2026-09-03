@@ -246,11 +246,32 @@ carries the full raw option list, so an update's `options[]` is taken as-is).
 
 Note: `fsid` is validated (integer), **allocated server-side when the create spec omits it**,
 and uniqueness-enforced at plan time — an explicit collision is an `FSID_IN_USE` blocker, and
-two creates that allocate the same number are serialised by an absence pin on
+two creates that allocate the same number are serialised by a pin on the marker row
 `ShareFsid/{n}` (design:
 `docs/superpowers/specs/2026-08-14-server-side-fsid-allocation-design.md`). It is still **not
 rendered** into the compiled export entry — deferred, because emitting `fsid=` would change
 host behavior vs the installer baseline; revisit with Phase-1 HA (see §11).
+
+**`ShareFsid/{n}` marker lifecycle.** The marker set must always equal the set of `fsid`s on
+the desired `Share` rows; every operation that changes a `Share`'s `fsid` moves the marker in
+the same apply transaction:
+
+- `share.create` puts `ShareFsid/{n}` = `{ fsid, share_id }`.
+- `share.update` with a changed `fsid` deletes `ShareFsid/{old}` and puts `ShareFsid/{new}`.
+  The new number is uniqueness-checked against the desired `Share` rows exactly like create
+  (`FSID_IN_USE` blocker when another share holds it); an unchanged `fsid` touches no marker.
+- `share.delete` deletes `ShareFsid/{n}`.
+- `config.rollback` with `adopt: true` reconciles the markers against the adopted `Share` set
+  (see `s12-durable-adoption-spec.md` §4.2).
+
+**Marker pin rule.** A marker written by create or update is pinned in `affected_resources`
+at its **current revision, 0 when absent** — not a bare absence pin. Uniqueness is decided by
+the desired `Share` rows, so a marker that exists while no `Share` holds its number is an
+orphan (left by a pre-fix build, a hand-edited store, or a restored snapshot) and is
+reclaimed by overwriting it. Pinning at the current revision still closes the plan→apply
+race: a concurrent create that wrote the marker bumped its revision past the pin, so the
+second apply fails `PRECONDITION_FAILED` and re-plans. Pinning at 0 would instead fail the
+orphaned number on every apply, forever, since nothing would ever delete the marker.
 
 ---
 
