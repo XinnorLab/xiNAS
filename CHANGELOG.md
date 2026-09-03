@@ -8,6 +8,20 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
+### Added
+
+- **`install.sh` can install one named published release, so a release
+  candidate can go onto a fresh host.** `XINAS_RELEASE_TAG=vX.Y.Z-rc.N`
+  selects that release instead of `/releases/latest`, which GitHub defines
+  to exclude prereleases — until now an RC was reachable only as an update
+  through the TUI's prerelease channel. The override stays inside the
+  release-only policy: the value must be release-shaped before GitHub is
+  asked, GitHub must confirm it as a published, non-draft release, the
+  deviation is announced in the log, and a miss fails the install with no
+  fallback to `main` or to the latest release. The TUI, the bash menus and
+  `xinas-update-git` do not read it. See `docs/Installer/update-spec.md`
+  § Fresh installs select a release only by explicit tag.
+
 ### Fixed
 
 - **The installer's status spinner no longer freezes during silent tasks.**
