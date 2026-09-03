@@ -21,6 +21,31 @@ deferred and the change that deferred it.
 
 ---
 
+## Installer — the bash menus' passive update check is not cached
+
+*Deferred 2026-09-03, from the GitHub rate-limit change
+([docs/Installer/update-spec.md](Installer/update-spec.md) "GitHub rate
+limits and the access token").*
+
+**What is missing.** `check_for_updates` in `lib/menu_lib.sh` (run at every
+`startup_menu.sh` / `simple_menu.sh` start) and its twin in
+`post_install_menu.sh` call `api.github.com` on every launch. The Python
+TUI now keeps a one-hour cache with an `ETag`; the bash menus do not.
+
+**What the code does instead.** The bash calls go through `xinas_gh_curl`,
+so a configured token lifts them onto the token's 5,000/h quota — which is
+the fix that matters on a shared address. Without a token they still cost
+one anonymous request per launch.
+
+**Why it was cut.** `startup_menu.sh` runs once per install and
+`post_install_menu.sh` is a deprecated surface; a second cache format in
+bash would duplicate the Python one for a launch count that is small in
+practice. The token covers the case that actually failed.
+
+**What done looks like.** One cache file both surfaces read — the Python
+`ReleaseCache` JSON at `/var/cache/xinas/update-check.json` is the obvious
+candidate — with the bash passive check honouring the same one-hour TTL.
+
 ## Storage — the Create Array drive picker does not exclude spare-pool drives
 
 *Deferred 2026-08-29, from the array-spare-pool-by-name change
