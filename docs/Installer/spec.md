@@ -123,9 +123,22 @@ Both surfaces hide the raw `-v` stream behind a compact status indicator and tee
 the unfiltered output to `/var/log/xinas/install.log`:
 
 - **Bash installer** — `xinas_run_playbook` ([lib/menu_lib.sh](../../lib/menu_lib.sh))
-  pipes `ansible-playbook` through `_xinas_playbook_ticker`, an awk filter that
-  collapses `PLAY [...]` / `TASK [...]` banners into a single overwriting spinner
-  line (errors and the `PLAY RECAP` pass through verbatim).
+  pipes `ansible-playbook` through `_xinas_playbook_ticker`, a bash `read -t`
+  loop that collapses `PLAY [...]` / `TASK [...]` banners into a single
+  overwriting spinner line (errors and the `PLAY RECAP` pass through verbatim).
+  The spinner glyph advances on a **100 ms read timeout, not on input
+  arrival**, so it keeps turning through a silent task — a 30 s `wait_for` per
+  NVMe controller, an `apt` install, a DOCA build — instead of freezing on the
+  last banner and making a healthy run look hung. Before the first banner the
+  line reads `Starting…` with the same spinner, mirroring the TUI's pre-task
+  state. A banner that arrives split across the timeout window is reassembled
+  before it is parsed (bash keeps the partial input in the variable on a
+  timeout). This supersedes the "spinner advances only on header arrival" cut
+  in the 2026-04-28 status-bar design under `docs/plans/`, which assumed a
+  constant-rate spinner needed a background process: `read -t` needs neither a
+  background job nor a signal handler, so the original objection no longer
+  applies. Once `PLAY RECAP` starts, the spinner stops so nothing is drawn
+  over the per-host summary.
 - **Python TUI** — `PlaybookRunScreen` ([xinas_menu/screens/startup/playbook_screen.py](../../xinas_menu/screens/startup/playbook_screen.py))
   parses the same banners to drive its `StatusBar`.
 

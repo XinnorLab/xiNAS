@@ -8,6 +8,17 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The installer's status spinner no longer freezes during silent tasks.**
+  The bash ticker only advanced its glyph when a new `PLAY`/`TASK` banner
+  arrived, so any task that produced no output for a while — the
+  `nvme_namespace` `wait_for` (30 s per controller), a long `apt` install, a
+  DOCA build — left a stale glyph on screen and a healthy run looked hung.
+  The spinner now turns on a 100 ms timer independent of playbook output and
+  shows `Starting…` before the first banner. Display only; the install log
+  and the Python TUI are unchanged.
+
 ## [3.13.1] - 2026-09-03
 
 Requires-Rebuild: xinas_menu
