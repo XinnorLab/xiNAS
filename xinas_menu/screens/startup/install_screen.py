@@ -40,6 +40,25 @@ def _preset_items() -> tuple[list[MenuItem], list[str]]:
     return items, presets
 
 
+def install_command(repo: Path, preset: str) -> list[str]:
+    """The ansible-playbook argv for an install of *preset* from *repo*.
+
+    Runs `playbooks/site.yml` against `inventories/lab.ini` — the same
+    playbook and inventory the bash menus and autoinstall.sh use
+    (docs/Installer/spec.md §2.1). The screen used to pass
+    `inventories/hosts`, which has never existed: Ansible matched no hosts,
+    exited 0, and the screen announced success for an install that never ran.
+    """
+    return [
+        "ansible-playbook",
+        str(repo / "playbooks" / "site.yml"),
+        "-i",
+        str(repo / "inventories" / "lab.ini"),
+        "--extra-vars",
+        f"preset={preset}",
+    ]
+
+
 class InstallScreen(StartupAppMixin, Screen):
     """Multi-step install: preset → confirm → run playbook."""
 
@@ -90,14 +109,7 @@ class InstallScreen(StartupAppMixin, Screen):
         from xinas_menu.screens.startup.playbook_screen import PlaybookRunScreen
 
         repo = _repo_root()
-        cmd = [
-            "ansible-playbook",
-            str(repo / "presets" / preset / "playbook.yml"),
-            "-i",
-            str(repo / "inventories" / "hosts"),
-            "--extra-vars",
-            f"preset={preset}",
-        ]
+        cmd = install_command(repo, preset)
         exit_code = await self.app.push_screen_wait(
             PlaybookRunScreen(cmd=cmd, title=f"Installing — {preset}", workdir=repo)
         )
