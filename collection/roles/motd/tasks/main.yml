@@ -143,15 +143,20 @@
 # ===== Installed-preset marker (finding #16) =====
 # motd is the last role, so writing this marker here means it only appears on a
 # fully successful install. Downstream tooling/tests read it to learn the preset
-# without guessing. Preset comes from the autoinstall -e var, falling back to the
-# .xinas_applied_preset file the menu's apply_preset writes (control == target on
-# a xiNAS node, so a control-side file lookup resolves the host's file).
+# without guessing. Same resolution as the install-state callback (spec §7.7):
+# the autoinstall -e var, the xinas-setup screen's `preset` var, the
+# .xinas_applied_preset file the bash menus' apply_preset writes (control ==
+# target on a xiNAS node, so a control-side file lookup resolves the host's
+# file), and finally 'default' — a run that applied no preset installs the
+# release defaults, which are the default preset.
 - name: Resolve installed preset name
   ansible.builtin.set_fact:
     xinas_installed_preset: >-
       {{ (xinas_install_preset | default('', true) | trim)
+         or (preset | default('', true) | trim)
          or (lookup('file', '/opt/xiNAS/.xinas_applied_preset', errors='ignore')
-             | default('', true) | trim) }}
+             | default('', true) | trim)
+         or 'default' }}
   tags: [motd, install_state]
 
 - name: Stamp /opt/xiNAS/.installed_preset on successful install
