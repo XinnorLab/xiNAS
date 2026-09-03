@@ -135,6 +135,17 @@ first-class column.
     captured row absent now (create) → `revision: 0`; an orphan delete → the
     row's current revision. The `ConfigSnapshot` ref stays in
     `affected_resources` too; the lease stays `ConfigHistory/default`.
+  - **`ShareFsid` marker reconciliation.** Whenever the NFS domain's `Share`
+    set is rewritten — by adoption or by the S13 tombstone delete — the
+    `/xinas/v1/desired/ShareFsid/{n}` marker rows (s3 §4) are reconciled
+    against the FINAL `Share` set in the same plan: a marker is `put`
+    (`{ fsid, share_id }`) when it is absent or names a different share, and
+    `delete`d when no adopted `Share` carries its `fsid`; markers already
+    correct are not touched, so a healthy store sees no churn. Every touched
+    marker is pinned at its current revision (0 when absent). Without this,
+    an adopt that prunes or renumbers a share leaves an orphan marker that
+    wedges the number for every later `share.create`. A network-only
+    adoption, or a skipped NFS domain, leaves the markers alone.
   - The `diff` lists every put/delete explicitly so the operator sees exactly
     which desired rows change/delete. `risk_level: 'destructive'`,
     `dangerous_flag_required` (unchanged from the targeted restore).

@@ -266,3 +266,144 @@ describe('config.rollback adopt branch (S12 T4)', () => {
     expect((plan.enriched_spec as { adopt?: boolean }).adopt).toBe(false);
   });
 });
+
+/**
+ * fsid marker reconciliation: adopting the Share domain must leave the
+ * `ShareFsid/{n}` marker rows matching the adopted Share rows, or the next
+ * share.create pins a stale marker and fails PRECONDITION_FAILED forever.
+ */
+describe('config.rollback adopt — ShareFsid marker reconciliation', () => {
+  const MARKER = '/xinas/v1/desired/ShareFsid/';
+  const snapRow = {
+    value: { id: SNAP, status: { restorable: true, files_changed: ['exports'] } },
+    revision: 7,
+  };
+  function payload(shares: { id: string; spec: unknown }[]) {
+    return {
+      value: {
+        snapshot_id: SNAP,
+        kinds: { Share: shares, ExportGroup: [], NfsProfile: [], NetworkInterface: [] },
+      },
+      revision: 1,
+    };
+  }
+
+  it('deletes the marker of a pruned orphan share, keeps a correct marker untouched', async () => {
+    const ctx = ctxWith({
+      [`/xinas/v1/observed/ConfigSnapshot/${SNAP}`]: snapRow,
+      '/xinas/v1/desired/Share/expA': {
+        value: { kind: 'Share', id: 'expA', spec: { path: '/a', fsid: 5 } },
+        revision: 3,
+      },
+      '/xinas/v1/desired/Share/expB': {
+        value: { kind: 'Share', id: 'expB', spec: { path: '/b', fsid: 7 } },
+        revision: 4,
+      },
+      [`${MARKER}5`]: { value: { fsid: 5, share_id: 'expA' }, revision: 2 },
+      [`${MARKER}7`]: { value: { fsid: 7, share_id: 'expB' }, revision: 3 },
+      [snapshotDesiredKey(SNAP)]: payload([{ id: 'expA', spec: { path: '/a', fsid: 5 } }]),
+    });
+    const plan = await configRollbackProvider.preflight(ctx, {
+      to: SNAP,
+      reason: 'r',
+      adopt: true,
+    });
+    const m = plan.desired_mutations ?? [];
+    expect(m).toContainEqual({ key: `${MARKER}7`, delete: true });
+    expect(plan.affected_resources).toContainEqual({ kind: 'ShareFsid', id: '7', revision: 3 });
+    // Marker 5 already matches the adopted row → no churn, no pin.
+    expect(m.some((x) => x.key === `${MARKER}5`)).toBe(false);
+    expect(plan.affected_resources.some((r) => r.kind === 'ShareFsid' && r.id === '5')).toBe(false);
+    expect((plan.diff as { desired_deletes?: string[] }).desired_deletes).toContain(`${MARKER}7`);
+  });
+
+  it('re-points markers when the captured fsid differs from the current one', async () => {
+    const ctx = ctxWith({
+      [`/xinas/v1/observed/ConfigSnapshot/${SNAP}`]: snapRow,
+      '/xinas/v1/desired/Share/expA': {
+        value: { kind: 'Share', id: 'expA', spec: { path: '/a', fsid: 9 } },
+        revision: 3,
+      },
+      [`${MARKER}9`]: { value: { fsid: 9, share_id: 'expA' }, revision: 6 },
+      [snapshotDesiredKey(SNAP)]: payload([{ id: 'expA', spec: { path: '/a', fsid: 5 } }]),
+    });
+    const plan = await configRollbackProvider.preflight(ctx, {
+      to: SNAP,
+      reason: 'r',
+      adopt: true,
+    });
+    const m = plan.desired_mutations ?? [];
+    expect(m).toContainEqual({ key: `${MARKER}5`, value: { fsid: 5, share_id: 'expA' } });
+    expect(plan.affected_resources).toContainEqual({ kind: 'ShareFsid', id: '5', revision: 0 });
+    expect(m).toContainEqual({ key: `${MARKER}9`, delete: true });
+    expect(plan.affected_resources).toContainEqual({ kind: 'ShareFsid', id: '9', revision: 6 });
+  });
+
+  it('rewrites a marker whose share_id no longer matches, pinned at its current revision', async () => {
+    const ctx = ctxWith({
+      [`/xinas/v1/observed/ConfigSnapshot/${SNAP}`]: snapRow,
+      [`${MARKER}5`]: { value: { fsid: 5, share_id: 'old' }, revision: 4 },
+      [snapshotDesiredKey(SNAP)]: payload([{ id: 'expA', spec: { path: '/a', fsid: 5 } }]),
+    });
+    const plan = await configRollbackProvider.preflight(ctx, {
+      to: SNAP,
+      reason: 'r',
+      adopt: true,
+    });
+    expect(plan.desired_mutations).toContainEqual({
+      key: `${MARKER}5`,
+      value: { fsid: 5, share_id: 'expA' },
+    });
+    expect(plan.affected_resources).toContainEqual({ kind: 'ShareFsid', id: '5', revision: 4 });
+  });
+
+  it('S13 tombstone: deleting every Share also deletes every marker', async () => {
+    const ctx = ctxWith({
+      [`/xinas/v1/observed/ConfigSnapshot/${SNAP}`]: {
+        value: {
+          id: SNAP,
+          status: { restorable: true, files_changed: [], absent_files: ['etc_exports'] },
+        },
+        revision: 7,
+      },
+      '/xinas/v1/desired/Share/expA': {
+        value: { kind: 'Share', id: 'expA', spec: { path: '/a', fsid: 5 } },
+        revision: 3,
+      },
+      [`${MARKER}5`]: { value: { fsid: 5, share_id: 'expA' }, revision: 2 },
+      [snapshotDesiredKey(SNAP)]: payload([]),
+    });
+    const plan = await configRollbackProvider.preflight(ctx, {
+      to: SNAP,
+      reason: 'r',
+      adopt: true,
+    });
+    expect(plan.desired_mutations).toContainEqual({ key: `${MARKER}5`, delete: true });
+    expect(plan.affected_resources).toContainEqual({ kind: 'ShareFsid', id: '5', revision: 2 });
+  });
+
+  it('network-only adoption leaves markers alone', async () => {
+    const ctx = ctxWith({
+      [`/xinas/v1/observed/ConfigSnapshot/${SNAP}`]: snapRow,
+      [`${MARKER}5`]: { value: { fsid: 5, share_id: 'gone' }, revision: 2 },
+      [snapshotDesiredKey(SNAP)]: {
+        value: {
+          snapshot_id: SNAP,
+          kinds: {
+            Share: [],
+            ExportGroup: [],
+            NfsProfile: [],
+            NetworkInterface: [{ id: 'eth0', spec: { address: '10.0.0.1/24' } }],
+          },
+        },
+        revision: 1,
+      },
+    });
+    const plan = await configRollbackProvider.preflight(ctx, {
+      to: SNAP,
+      reason: 'r',
+      adopt: true,
+    });
+    expect((plan.desired_mutations ?? []).some((x) => x.key.startsWith(MARKER))).toBe(false);
+  });
+});

@@ -37,6 +37,7 @@ import { compileShareToExportEntry, shareSpecToCompileInput } from '../../../lib
 import {
   allocateFsid,
   collectUsedFsids,
+  parseFsid,
   SHARE_FSID_KIND,
   shareFsidKey,
 } from '../../../lib/nfs-fsid.js';
@@ -222,6 +223,11 @@ function activeSessionsWarning(
   };
 }
 
+/** Current revision of the `ShareFsid/{fsid}` marker row, 0 when absent. */
+function fsidMarkerRevision(ctx: PlanContext, fsid: number): number {
+  return ctx.kv.get(shareFsidKey(fsid))?.revision ?? 0;
+}
+
 /** §3.1 — create a brand-new export. Already-exported is a BLOCKER, not a throw. */
 const shareCreateProvider: PlanProvider = {
   operation_kind: 'share.create',
@@ -268,11 +274,14 @@ const shareCreateProvider: PlanProvider = {
       // >= 1 and fails PRECONDITION_FAILED instead of silently overwriting.
       affected_resources: [
         { kind: 'Share', id: share.id, revision: 0 },
-        // Absence pin on the fsid marker: two creates that allocated the same
-        // number both pin it at 0; the first apply writes it, the second reads
-        // 1 and fails PRECONDITION_FAILED, whose remediation is "re-run plan".
+        // Pin on the fsid marker at its CURRENT revision (0 when absent): two
+        // creates that allocated the same number pin the same revision; the
+        // first apply writes it, the second reads one higher and fails
+        // PRECONDITION_FAILED, whose remediation is "re-run plan". Not a bare
+        // absence pin — an orphan marker (no desired Share holds the number)
+        // would otherwise wedge the number forever.
         // Share stays FIRST — engine.ts checks affected_resources[0].
-        { kind: SHARE_FSID_KIND, id: String(fsid), revision: 0 },
+        { kind: SHARE_FSID_KIND, id: String(fsid), revision: fsidMarkerRevision(ctx, fsid) },
       ],
       blockers,
       warnings: [],
@@ -309,9 +318,48 @@ const shareUpdateProvider: PlanProvider = {
 
     const warning = activeSessionsWarning(ctx, share.path);
 
+    // fsid change: move the ShareFsid marker with it. Leaving the old marker
+    // behind orphans the number (a later create pinning it fails at apply);
+    // skipping the new one lets a second share take the same fsid.
+    const newFsid = Number(share.fsid);
+    const oldFsid = parseFsid((desired.value as { spec?: { fsid?: unknown } })?.spec?.fsid);
+    const blockers: PlanResult['blockers'] = [];
+    const markerPins: PlanResult['affected_resources'] = [];
+    const markerMutations: NonNullable<PlanResult['desired_mutations']> = [];
+    if (newFsid !== oldFsid) {
+      const usedFsids = collectUsedFsids(
+        ctx.kv.list<{ id?: unknown; spec?: { fsid?: unknown } }>({ prefix: DESIRED_SHARE_PREFIX }),
+      );
+      const holder = usedFsids.get(newFsid);
+      if (holder !== undefined && holder !== share.id) {
+        blockers.push({
+          code: 'FSID_IN_USE',
+          message: `fsid ${newFsid} is already held by share ${holder}`,
+        });
+      } else {
+        if (oldFsid !== undefined) {
+          markerMutations.push({ key: shareFsidKey(oldFsid), delete: true });
+        }
+        markerMutations.push({
+          key: shareFsidKey(newFsid),
+          value: { fsid: newFsid, share_id: share.id },
+        });
+        // Same pin rule as share.create: current revision, 0 when absent.
+        markerPins.push({
+          kind: SHARE_FSID_KIND,
+          id: String(newFsid),
+          revision: fsidMarkerRevision(ctx, newFsid),
+        });
+      }
+    }
+
     return {
-      affected_resources: [{ kind: 'Share', id: share.id, revision: desired.revision }],
-      blockers: [],
+      // Share stays FIRST — engine.ts checks affected_resources[0].
+      affected_resources: [
+        { kind: 'Share', id: share.id, revision: desired.revision },
+        ...markerPins,
+      ],
+      blockers,
       warnings: warning ? [warning] : [],
       diff: {
         action: 'update',
@@ -326,6 +374,7 @@ const shareUpdateProvider: PlanProvider = {
           key: `${DESIRED_SHARE_PREFIX}${share.id}`,
           value: toDesiredShareDoc(spec as Record<string, unknown>),
         },
+        ...markerMutations,
       ],
     };
   },
@@ -349,13 +398,7 @@ const shareDeleteProvider: PlanProvider = {
     // Release the fsid marker so the number is not burned forever. A desired
     // doc with no fsid is not reachable through the API but must not wedge the
     // delete on a hand-edited store.
-    const desiredFsid = (desired.value as { spec?: { fsid?: unknown } })?.spec?.fsid;
-    const desiredFsidNum =
-      typeof desiredFsid === 'number'
-        ? desiredFsid
-        : typeof desiredFsid === 'string' && desiredFsid.trim().length > 0
-          ? Number(desiredFsid)
-          : Number.NaN;
+    const desiredFsid = parseFsid((desired.value as { spec?: { fsid?: unknown } })?.spec?.fsid);
 
     return {
       affected_resources: [{ kind: 'Share', id, revision: desired.revision }],
@@ -370,8 +413,8 @@ const shareDeleteProvider: PlanProvider = {
         { key: `${DESIRED_SHARE_PREFIX}${id}`, delete: true },
         // `delete: true as const` — inside an array literal the plain `true`
         // widens to `boolean`, which DesiredMutation's delete variant rejects.
-        ...(Number.isInteger(desiredFsidNum)
-          ? [{ key: shareFsidKey(desiredFsidNum), delete: true as const }]
+        ...(desiredFsid !== undefined
+          ? [{ key: shareFsidKey(desiredFsid), delete: true as const }]
           : []),
       ],
     };
