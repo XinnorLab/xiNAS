@@ -34,6 +34,19 @@ supported source for installing and updating xiNAS.
 
 Requires-Rebuild: xinas_menu
 
+### Added
+
+- **The installer now fails in its first seconds, not after 20 minutes,
+  when the CPU has no AVX.** xiRAID's `xiraid-kmod` package refuses to
+  install on a CPU without the `avx` flag (its pre-install script aborts
+  with `ERROR: The CPU flag is not supported: avx.`), but `xiraid_classic`
+  is the fourth role, so on a VM given a CPU model without AVX (`qemu64`,
+  `kvm64`) the install spent its time installing DOCA-OFED and then died
+  in `apt`. The `common` role now reads `/proc/cpuinfo` as its very first
+  task and stops the play with the fix named (pass a CPU model with AVX
+  through to the guest). Skipped on the existing-RAID path
+  (`xiraid_skip_install=true`); `xinas_require_avx=false` disables it.
+
 ## [3.13.0] - 2026-08-31
 
 ### Added
