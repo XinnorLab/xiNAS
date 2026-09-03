@@ -44,6 +44,7 @@ Options:
   --dry-run             resolve + validate, print the command, do not run
   --check               validate configuration only
   --status              print last install's per-role progress and exit
+  --json                with --status: print the raw install-state JSON
   -h, --help            show this help
 
 The license is read from a file only. When --license-file is omitted the
@@ -63,7 +64,22 @@ is_yes() { case "${1,,}" in y|yes|true|1|on) return 0 ;; *) return 1 ;; esac; }
 cli_preset=""; cli_license_file=""
 cli_hostname=""; cli_inventory=""; cli_extra_vars=""; cli_config=""
 cli_purge=""; cli_skip_prepare=""
-DRY_RUN=0; CHECK_ONLY=0; STATUS_ONLY=0
+DRY_RUN=0; CHECK_ONLY=0; STATUS_ONLY=0; STATUS_JSON=0
+
+# Post-install role report (docs/Installer/spec.md §2.9). Rendered from the
+# callback's install-state.json by a standard-library-only module under the
+# system python3 — on a fresh install the management venv does not exist yet.
+# Never fails the caller: the report must not change the install's status.
+#   render_install_report [--exit-code N --log PATH --since EPOCH]
+render_install_report() {
+    local renderer="$SCRIPT_DIR/xinas_menu/install_report.py"
+    local state_file="${XINAS_INSTALL_STATE_PATH:-/var/lib/xinas/install-state.json}"
+    if [ -r "$renderer" ] && command -v python3 >/dev/null 2>&1; then
+        python3 "$renderer" --state "$state_file" "$@" && return 0
+    fi
+    echo "  Install report unavailable; per-role state is in $state_file"
+    return 0
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -78,6 +94,7 @@ while [ $# -gt 0 ]; do
         --dry-run)         DRY_RUN=1; shift ;;
         --check)           CHECK_ONLY=1; shift ;;
         --status)          STATUS_ONLY=1; shift ;;
+        --json)            STATUS_JSON=1; shift ;;
         -h|--help)         usage; exit 0 ;;
         *) die "Unknown option: $1 (try --help)" ;;
     esac
@@ -85,11 +102,16 @@ done
 
 # ── --status: report the last install's per-role progress and exit ────────────
 # Reads the install-state.json the xinas_install_state callback writes. No root
-# required; this is a read-only query (finding #2).
+# required; this is a read-only query (finding #2). Prints the §2.9 role
+# table; --json prints the raw file instead.
 if [ "$STATUS_ONLY" -eq 1 ]; then
     state_file="${XINAS_INSTALL_STATE_PATH:-/var/lib/xinas/install-state.json}"
     if [ -f "$state_file" ]; then
-        cat "$state_file"
+        if [ "$STATUS_JSON" -eq 1 ]; then
+            cat "$state_file"
+        else
+            render_install_report
+        fi
         exit 0
     fi
     echo "No install state recorded yet ($state_file not found)." >&2
@@ -269,8 +291,15 @@ info "Log: $LOG_FILE"
         "$(date -Iseconds 2>/dev/null || date)" "${ansible_cmd[*]}"
 } >>"$LOG_FILE" 2>/dev/null || true
 
+# Launch time, so the report can tell this run's state file from one an
+# earlier install left behind.
+run_started=$(date +%s)
 "${ansible_cmd[@]}" 2>&1 | tee -a "$LOG_FILE"
 rc=${PIPESTATUS[0]}
+
+# Post-install role report (§2.9): always, before the verdict line below.
+echo ""
+render_install_report --exit-code "$rc" --log "$LOG_FILE" --since "$run_started"
 
 echo ""
 if [ "$rc" -eq 0 ]; then

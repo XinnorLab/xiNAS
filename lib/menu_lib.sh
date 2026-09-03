@@ -1363,6 +1363,32 @@ _xinas_playbook_ticker() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# _xinas_install_report — print the post-install role report (spec §2.9)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Renders /var/lib/xinas/install-state.json (or $XINAS_INSTALL_STATE_PATH)
+# with xinas_menu/install_report.py under the SYSTEM python3: on a fresh
+# install this runs before the xinas_menu role has created the management
+# venv. The renderer is standard-library only for exactly that reason.
+# Never fails the caller — the report must not change the install's status.
+#
+# Usage:  _xinas_install_report <ansible-rc> <log-path> <launch-epoch>
+_xinas_install_report() {
+    local rc="$1" log_path="$2" since="$3"
+    local lib_dir renderer state_path
+    lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    renderer="$lib_dir/../xinas_menu/install_report.py"
+    state_path="${XINAS_INSTALL_STATE_PATH:-/var/lib/xinas/install-state.json}"
+    if [ -r "$renderer" ] && command -v python3 >/dev/null 2>&1; then
+        python3 "$renderer" --state "$state_path" --exit-code "$rc" \
+            --log "$log_path" --since "$since" && return 0
+    fi
+    printf '  Install report unavailable; per-role state is in %s, full log in %s\n' \
+        "$state_path" "$log_path"
+    return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # xinas_run_playbook — wraps ansible-playbook with persistent log + failure prompt
 # ═══════════════════════════════════════════════════════════════════════════════
 #
@@ -1407,6 +1433,9 @@ xinas_run_playbook() {
     # trap until ansible exits, which is exactly that bug. The inner
     # `echo $? >"$_rc_file"` captures ansible's own exit code (not tee's).
     local _rc_file; _rc_file=$(mktemp 2>/dev/null || echo "/tmp/.xinas_rc.$$")
+    # Launch time, so the post-run report can tell this run's install state
+    # from a file an earlier install left behind (§2.9).
+    local _run_started; _run_started=$(date +%s)
     if [ -t 1 ]; then
         # The ticker only recognizes the *default* stdout callback's
         # "PLAY [...]" / "TASK [...]" banners. ansible.cfg pins
@@ -1429,6 +1458,18 @@ xinas_run_playbook() {
     fi
     rc=$(cat "$_rc_file" 2>/dev/null || echo 1)
     rm -f "$_rc_file"
+
+    # Post-install role report (docs/Installer/spec.md §2.9): one line per
+    # role, always — on success as well as on failure — so "everything ran"
+    # is shown as a list, not implied by the banner that follows. Printed
+    # before the failure dialog so the operator reads it first. Only install
+    # runs (the menus export XINAS_RECORD_INSTALL_STATE=1) get a report; a
+    # day-2 run recorded nothing and would only be told "No roles ran".
+    if [ "${XINAS_RECORD_INSTALL_STATE:-}" = "1" ]; then
+        echo ""
+        _xinas_install_report "$rc" "$log_path" "$_run_started"
+        echo ""
+    fi
 
     if [ "$rc" -ne 0 ]; then
         while true; do
