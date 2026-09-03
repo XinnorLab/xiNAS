@@ -21,6 +21,49 @@ deferred and the change that deferred it.
 
 ---
 
+## Installer — the Python TUI has no "Set Root Password" item, but the installer points at one
+
+*Deferred 2026-09-03, noticed while auditing how the installer handles the
+root password (it does not touch it at all).*
+
+**What is missing.** Neither `install.sh` nor any Ansible role sets, changes
+or unlocks the root password; the installer only writes the
+`PermitRootLogin prohibit-password` sshd drop-in (key-only root SSH) and
+then reads `passwd -S root`. When the account is locked or has no password —
+the Ubuntu default — [install.sh](../install.sh) warns:
+`Root has no password set — run xinas-menu → A → 4 to set one`. That target
+does not exist. The MCP screen's **SSH Access Settings** item (`4`,
+[xinas_menu/screens/mcp.py](../xinas_menu/screens/mcp.py)) offers status,
+enable/disable key-login and add-authorized-key only. The one surface that
+sets the password is the deprecated bash `post_install_menu.sh`
+(**Set Root Password** → interactive `passwd root`), which the shell-scope
+rule says must not grow further and which `install.sh` no longer launches.
+
+**What the code does instead.** The operator gets a warning that names a
+menu item they cannot find, and the only working path is `passwd root` in a
+console session. Nothing is broken on the host: root stays locked for
+password login exactly as Ubuntu shipped it, and key-based SSH for the MCP
+bridge works regardless.
+
+**Why it was cut.** The hint dates from the bash post-install menu, where
+`A → 4` really was **Set Root Password**. When day-2 management moved to the
+Python TUI, the SSH screen was ported but the password item was not, and the
+installer message was never re-pointed. Setting a root password is a
+console-recovery convenience, not part of the install contract, so it was
+left out rather than rushed into the TUI.
+
+**What "done" looks like.** Either:
+
+- add a **Set Root Password** item to the TUI's SSH Access Settings screen
+  (it runs as root, so `chpasswd` is enough; the Users screen already has the
+  pattern), document it in
+  [docs/Installer/spec.md](Installer/spec.md) next to the root-SSH step, and
+  point the `install.sh` warning at the real key path; or
+- keep the TUI as is and change the warning to say `run passwd root from a
+  console session`.
+
+Either way the warning must name something that exists.
+
 ## Storage — the Create Array drive picker does not exclude spare-pool drives
 
 *Deferred 2026-08-29, from the array-spare-pool-by-name change
