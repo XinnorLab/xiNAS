@@ -47,6 +47,12 @@ xiNAS installs and updates **only from published GitHub Releases** — never fro
 2. **Enter license** — send the hardware key to `support@xinnor.io`, then enter the received license
 3. **Install** — choose a profile (Full NVMe / VM / Existing RAID) and deploy
 
+Behind a shared public address (a lab, an office NAT, a fleet of clients) GitHub's per-IP limit on anonymous requests can refuse the clone with a `401` or the release lookup with a `403`. Pass a GitHub token — a fine-grained personal access token with no permissions is enough — and the installer keeps it in `/etc/xinas/github-token` (mode `0600`) for the update checks that follow:
+
+```bash
+curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh | sudo XINAS_GH_TOKEN=<token> bash
+```
+
 Ansible runs the `site.yml` playbook, executing all configured roles in order:
 
 ```
@@ -86,6 +92,8 @@ This installs NFS tools and RDMA prerequisites, checks out the client package at
 ```bash
 sudo xinas-client
 ```
+
+The same `XINAS_GH_TOKEN=<token>` works here; clients on one NAT share GitHub's anonymous quota just like servers do.
 
 The client contract lives in [docs/Client/client-setup-spec.md](docs/Client/client-setup-spec.md).
 

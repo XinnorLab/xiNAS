@@ -8,6 +8,29 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Installs and update checks no longer fail behind a shared public
+  address.** GitHub throttles anonymous requests per source IP — since
+  May 2025 that includes `git clone`/`fetch` over HTTPS, which comes back
+  as a `401` and a `Username for 'https://github.com':` prompt on a public
+  repository. Every host on one NAT (a lab, an office, a fleet of clients)
+  shared that quota, so a fresh install could stall on the prompt or fail
+  the clone. Every path that talks to GitHub for xiNAS releases now honours
+  one optional token (`XINAS_GH_TOKEN`, `GITHUB_TOKEN`, or
+  `/etc/xinas/github-token`; a fine-grained personal access token with no
+  permissions is enough): the REST calls send it as a bearer token, git
+  consults it only after GitHub's `401`, and `install.sh` keeps the token
+  it was given for the day-2 surfaces. The TUI's background check on launch
+  is served from a one-hour cache and explicit checks revalidate with an
+  `ETag`, so opening the menu costs one request an hour instead of one per
+  launch. A rate limit is named as such — with the reset time and the token
+  remedy — instead of `GitHub API HTTP 403`, and the installer's hint on a
+  refused clone names the per-IP limit first. The `xinas-update-git` helper
+  changed, so the release carrying this needs the trailer below.
+
+Requires-Rebuild: xinas_menu
+
 ## [3.13.0] - 2026-08-31
 
 ### Added
