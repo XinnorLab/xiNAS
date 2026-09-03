@@ -13,6 +13,12 @@ trap '' INT   # Ignore Ctrl+C — menus handle cancellation via Esc/Back
 source "$SCRIPT_DIR/lib/menu_lib.sh"
 . "$SCRIPT_DIR/lib/xinas_config.sh"
 
+# This is an installer: record per-role progress to install-state.json so the
+# post-install role report (docs/Installer/spec.md §2.9) has something to
+# render. startup_menu.sh and autoinstall.sh export the same; day-2 playbook
+# runs leave it unset so they never overwrite install state.
+export XINAS_RECORD_INSTALL_STATE=1
+
 # One-shot bridge for hosts installed before the configuration overlay
 # existed (docs/superpowers/specs/2026-08-18-preset-overlay-design.md §9).
 # No-op on every run after the first.
