@@ -10,31 +10,54 @@
     nvme_large_ns_devices: []
     nvme_failed_devices: []
 
-# Detect all existing namespaces on data drives
-- name: Detect existing namespaces on data drives
-  ansible.builtin.shell: |
-    controller="{{ item }}"
-    # List all namespaces on this controller
-    ls -1 /dev/$(basename "$controller")n* 2>/dev/null | sort -V || true
-  args:
-    executable: /bin/bash
+- name: Stage the NSID-to-device resolver
+  ansible.builtin.copy:
+    src: nvme_ns_device.sh
+    dest: /tmp/xinas_nvme_ns_device.sh
+    mode: "0755"
+  changed_when: false
+
+# One line per namespace block device of the controller, ascending NSID:
+# "<nsid> /dev/<dev> <serial>_<nsid>". Matched by controller serial + NSID —
+# the identity xiRAID keys its own members on — never by the nvmeXnY suffix,
+# which is the kernel's head instance and shifts after a rebuild
+# (raid-spec.md §4.5).
+- name: Detect existing namespaces on data drives (by NSID)
+  ansible.builtin.command:
+    argv:
+      - /bin/bash
+      - /tmp/xinas_nvme_ns_device.sh
+      - list
+      - "{{ item }}"
   register: existing_ns_result
   loop: "{{ nvme_data_drives }}"
   changed_when: false
+  failed_when: false
 
-# Build device lists from existing namespaces
-# Assume: n1 = small (log), n2+ = large (data)
+# NSID 1 = small (log), NSID 2+ = large (data): the NSIDs the rebuild path
+# creates them with (§4.3), whatever the kernel named the block devices.
+# The second column is cut out with two plain regex_replace calls rather than
+# a '\1' backreference: how a backslash inside a Jinja string literal is
+# decoded differs between the classic templar and ansible-core >= 2.19, and
+# the wrong reading silently yields a literal "\1" instead of the path.
 - name: Build namespace device lists from existing namespaces
   ansible.builtin.set_fact:
     nvme_small_ns_devices: >-
       {{ nvme_small_ns_devices | default([]) +
-         (item.stdout_lines | select('match', '.*/nvme[0-9]+n1$') | list) }}
+         (item.stdout_lines | default([])
+          | select('match', '^1 /dev/')
+          | map('regex_replace', '^[0-9]+ ', '')
+          | map('regex_replace', ' .*$', '')
+          | list) }}
     nvme_large_ns_devices: >-
       {{ nvme_large_ns_devices | default([]) +
-         (item.stdout_lines | select('match', '.*/nvme[0-9]+n[2-9]$') | list) +
-         (item.stdout_lines | select('match', '.*/nvme[0-9]+n[0-9][0-9]+$') | list) }}
+         (item.stdout_lines | default([])
+          | select('match', '^([2-9]|[1-9][0-9]+) /dev/')
+          | map('regex_replace', '^[0-9]+ ', '')
+          | map('regex_replace', ' .*$', '')
+          | list) }}
   loop: "{{ existing_ns_result.results }}"
-  when: item.stdout_lines | length > 0
+  when: item.stdout_lines | default([]) | length > 0
 
 # Shown before the single-namespace check below so the operator sees the
 # per-tier device evidence in the failure path too, not only on success.
@@ -42,33 +65,35 @@
   ansible.builtin.debug:
     msg: |
       ========== Existing Namespace Detection ==========
-      Small namespaces (n1) detected: {{ nvme_small_ns_devices | length }}
-        {{ nvme_small_ns_devices | join('\n        ') | default('none') }}
+      Small namespaces (NSID 1) detected: {{ nvme_small_ns_devices | length }}
+        {{ nvme_small_ns_devices | join('\n        ') | default('none', true) }}
 
-      Large namespaces (n2+) detected: {{ nvme_large_ns_devices | length }}
-        {{ nvme_large_ns_devices | join('\n        ') | default('none') }}
+      Large namespaces (NSID 2+) detected: {{ nvme_large_ns_devices | length }}
+        {{ nvme_large_ns_devices | join('\n        ') | default('none', true) }}
+      (block devices matched by controller serial + NSID, not by the nvmeXnY name)
       ==================================================
 
-# No n2+ namespaces found on any data drive: this is a single-namespace-per-
-# drive layout. Existing-namespace reuse only supports the n1 (log) + n2
-# (data) two-namespace layout — a converge can only reach this task when
-# xinas_storage_state == MATCH, which itself requires the 'data' xiRAID array
-# online and /dev/xi_data probing as XFS with the configured label (see
-# detect_storage_state.yml); that array is built from n2 devices, so a
-# healthy converge always finds n2+ and never trips this fail. Fail loudly
-# instead of silently reassigning n1 to data, which used to mask this exact
-# situation behind a later, generic "insufficient devices" error. See
-# raid-spec.md §4.2.
+# No NSID ≥ 2 namespace found on any data drive: this is a single-namespace-
+# per-drive layout. Existing-namespace reuse only supports the NSID 1 (log) +
+# NSID 2 (data) two-namespace layout — a converge can only reach this task
+# when xinas_storage_state == MATCH, which itself requires the 'data' xiRAID
+# array online and /dev/xi_data probing as XFS with the configured label (see
+# detect_storage_state.yml); that array is built from the NSID 2 devices, so
+# a healthy converge always finds NSID ≥ 2 and never trips this fail. Fail
+# loudly instead of silently reassigning NSID 1 to data, which used to mask
+# this exact situation behind a later, generic "insufficient devices" error.
+# See raid-spec.md §4.2.
 - name: Fail on single-namespace layout (existing-namespace reuse unsupported)
   ansible.builtin.fail:
     msg: >-
-      Existing-namespace reuse requires the n1 (log) + n2 (data) two-namespace
-      layout on every data drive; found {{ nvme_small_ns_devices | length }}
-      n1 device(s) and 0 n2+ device(s), which is a single-namespace layout
-      that cannot be reused. Re-run with xinas_storage_reset=true to wipe and
-      rebuild the expected two-namespace layout (destroys data; requires an
-      interactive YES confirmation, or nvme_skip_cleanup_confirmation=true for
-      automation), or provision the n1+n2 layout manually before re-running.
+      Existing-namespace reuse requires the NSID 1 (log) + NSID 2 (data)
+      two-namespace layout on every data drive; found
+      {{ nvme_small_ns_devices | length }} NSID-1 device(s) and 0 NSID-2+
+      device(s), which is a single-namespace layout that cannot be reused.
+      Re-run with xinas_storage_reset=true to wipe and rebuild the expected
+      two-namespace layout (destroys data; requires an interactive YES
+      confirmation, or nvme_skip_cleanup_confirmation=true for automation),
+      or provision the two-namespace layout manually before re-running.
   when:
     - nvme_large_ns_devices | length == 0
     - nvme_small_ns_devices | length > 0

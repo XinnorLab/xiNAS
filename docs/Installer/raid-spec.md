@@ -28,7 +28,7 @@ The role has two strategies, selected by `nvme_detect_mode`:
 
 | Mode | Used by preset | Detection source | Namespace handling |
 |---|---|---|---|
-| `nvme` *(default)* | `presets/default/` | `/dev/nvme[0-9]+` (controllers only) | Delete all NSes per drive → create `n1` (500 MB) + `n2` (rest) |
+| `nvme` *(default)* | `presets/default/` | `/dev/nvme[0-9]+` (controllers only) | Delete all NSes per drive → create a small NS (500 MB, NSID 1) + a large NS (rest, NSID 2); block devices resolved by controller serial + NSID, never by the `nvmeXnY` name (§4.5) |
 | `all` | `presets/xinnorVM/` | `lsblk -dnpo NAME,TYPE` (every `disk`) | None — whole drives used as-is |
 
 If `nvme_auto_namespace: false`, the role prints a notice and does nothing — operators must define `xiraid_arrays` / `xfs_filesystems` themselves in the preset.
@@ -161,7 +161,7 @@ For every controller in `nvme_data_drives` the role records three numbers:
 |---|---|---|
 | `existing_namespaces` (list of NSIDs) | `nvme list-ns <ctrl> -a` (`-a` includes unattached NSes) | empty list |
 | `capacity_bytes` (total NVM capacity) | `nvme id-ctrl` → `tnvmcap` | sum of namespace sizes from `nvme list` (TB/GB/MB parsed) |
-| `lba_size` (bytes per LBA) | `nvme id-ns <ctrl>n1` → in-use `lbads` (log2) | `512` |
+| `lba_size` (bytes per LBA) | `nvme id-ns <ctrl> -n <first NSID of existing_namespaces>` → in-use `lbads` (log2); queried through the controller, so no block-device name is involved (§4.5) | `512` (also when the controller has no namespace) |
 
 The list of dicts is stored as `nvme_topology`.
 
@@ -175,12 +175,12 @@ When the box is **MATCH** (the expected xiRAID `data`+`log` arrays are online an
 `/dev/xi_data` is XFS with the configured label) and `xinas_storage_reset` is not set,
 the role reuses the namespaces already on the drives — no rebuild, no data loss:
 
-- `ls /dev/<ctrl>n*` per data drive.
-- `n1` → log devices (`nvme_small_ns_devices`).
-- `n2`–`n9` (and `n10+`) → data devices (`nvme_large_ns_devices`).
-- Requirement: existing-namespace reuse needs the n1 (log) + n2 (data) two-namespace layout on every data drive. If **no** `n2+` were found anywhere, the task fails explicitly ("Fail on single-namespace layout") naming the remedy — re-run with `xinas_storage_reset: true` to wipe and rebuild the two-namespace layout, or provision it manually. The per-tier detection banner is printed before this check, so the failure path shows which devices were classified n1. A single-namespace layout can never legitimately reach this task on a healthy converge: `MATCH` requires the `data` xiRAID array to report itself online — read out of the daemon's own per-array `state` words, not inferred from the array existing (§11) — **and** `/dev/xi_data` probing as XFS with the configured label, and that array is built from `n2` devices (§6.4) — so a genuine MATCH implies `n2+` namespaces exist, and the only way to trip this fail is a layout tampered with outside the role.
+- `files/nvme_ns_device.sh list <ctrl>` per data drive: every namespace block device of the controller as `<nsid> /dev/<dev> <serial>_<nsid>`, matched by controller serial + NSID — the identity xiRAID itself keys drives on (§4.5) — never by the `nvmeXnY` suffix.
+- NSID 1 → log devices (`nvme_small_ns_devices`).
+- NSID 2 and above → data devices (`nvme_large_ns_devices`).
+- Requirement: existing-namespace reuse needs the NSID 1 (log) + NSID 2 (data) two-namespace layout on every data drive. If **no** NSID ≥ 2 namespace was found anywhere, the task fails explicitly ("Fail on single-namespace layout") naming the remedy — re-run with `xinas_storage_reset: true` to wipe and rebuild the two-namespace layout, or provision it manually. The per-tier detection banner is printed before this check, so the failure path shows which devices were classified as NSID 1. A single-namespace layout can never legitimately reach this task on a healthy converge: `MATCH` requires the `data` xiRAID array to report itself online — read out of the daemon's own per-array `state` words, not inferred from the array existing (§11) — **and** `/dev/xi_data` probing as XFS with the configured label, and that array is built from the NSID 2 devices (§6.4) — so a genuine MATCH implies NSID ≥ 2 namespaces exist, and the only way to trip this fail is a layout tampered with outside the role.
 
-**EMPTY** (a fresh box, including a factory single-`n1` drive) or an explicit
+**EMPTY** (a fresh box, including a factory single-namespace drive) or an explicit
 `xinas_storage_reset: true` falls through to the delete+recreate path in §4.3. **FOREIGN**
 and **UNKNOWN** without reset fail fast before touching anything. The deprecated
 `nvme_use_existing_namespaces` knob no longer drives this choice.
@@ -211,7 +211,7 @@ nvme create-ns <ctrl> -s <blocks> -c <blocks> -f <flbas> -d 0 [-m 1]
 nvme attach-ns <ctrl> -n <new_nsid> -c <cntlid>
 ```
 
-Failures land the controller in `nvme_failed_devices`.
+Failures land the controller in `nvme_failed_devices`. The NSID the controller assigned is read back (`nvme list-ns <ctrl> -a`, last entry — 1 on a controller whose namespaces were all just deleted, but the role never assumes so) and recorded as `nvme_small_ns_ids[<ctrl>]`; Step 4 waits for that NSID, never for a name.
 
 **Step 3 — create the large (data) namespace.**
 
@@ -219,7 +219,7 @@ Failures land the controller in `nvme_failed_devices`.
 - If unallocated ≤ 1 MiB the step prints a warning and skips the drive (cap pool exhausted by the small NS).
 - Blocks: `(unalloc − 1 048 576) / block_size` — the 1 MiB reserve keeps create-ns from failing on rounding.
 - Same LBA-format and shared-flag handling as Step 2.
-- Create + attach exactly like Step 2.
+- Create + attach exactly like Step 2; the returned NSID is recorded as `nvme_large_ns_ids[<ctrl>]`.
 
 **Step 4 — make the kernel see them.**
 
@@ -229,11 +229,15 @@ For each controller:
 nvme reset <ctrl> || echo 1 > /sys/class/nvme/<ctrl>/rescan || true
 ```
 
-Then `wait_for path=/dev/<ctrl>n1 timeout=30` and the same for `n2`. If `nvme_skip_failed_devices=true`, missing namespaces are tolerated; otherwise the play fails.
+Then, per controller and per created namespace, `files/nvme_ns_device.sh wait <ctrl> <nsid> 30` polls sysfs for the block device whose identity is `<controller serial>_<nsid>` (§4.5) and prints its `/dev/nvmeXnY` path. A controller whose namespace never appears within 30 s — or whose create step returned without an NSID (the large step skips a drive with no unallocated capacity) — lands in `nvme_failed_devices`, exactly like a delete or create failure. With `nvme_skip_failed_devices=true` the drive is skipped downstream; otherwise the play fails once the wait loop has finished ("Fail on namespace devices that never came up" — which also catches create failures that previously slipped through fail-fast mode, because the create tasks themselves only ever track).
 
 **Step 5 — gather device paths.**
 
-`ls /dev/<ctrl>n1` → `nvme_small_ns_devices`; `ls /dev/<ctrl>n2` → `nvme_large_ns_devices`. These are what `generate_raid_config.yml` consumes next.
+The paths printed by Step 4 become `nvme_small_ns_devices` (small NSID) and `nvme_large_ns_devices` (large NSID); no `ls` by name is involved. These are what `generate_raid_config.yml` consumes next.
+
+**Step 6 — refuse to hand an empty set downstream.**
+
+If either list is empty after the rebuild, the task fails on the spot — regardless of `nvme_skip_failed_devices`, which tolerates *individual* drives, not an install with no usable namespaces — naming both counts, the failed controllers and the sysfs evidence to check. Before this guard existed the role skipped `generate_raid_config.yml` silently (it is gated on both lists being non-empty) and the install died three roles later in `raid_fs` with "xiraid_arrays is not defined".
 
 ### 4.4 What happens on disk
 
@@ -247,10 +251,40 @@ Before rebuild (typical OEM layout):
 After rebuild with `nvme_small_ns_size_mb=500`, `nvme_namespace_block_size=4096`:
 
 ```
-/dev/nvme1     (controller)
-  ├─ nvme1n1   (~500 MB, 4 KB blocks)   → XFS log member
-  └─ nvme1n2   (rest, 4 KB blocks)      → data member
+/dev/nvme1     (controller, serial S)
+  ├─ NSID 1    (~500 MB, 4 KB blocks)   → XFS log member   identity S_1
+  └─ NSID 2    (rest, 4 KB blocks)      → data member      identity S_2
 ```
+
+The block devices are usually `nvme1n1` / `nvme1n2` after a reboot, but right after a rebuild they can just as well be `nvme1n2` / `nvme1n3` (§4.5). Nothing in the role depends on which.
+
+### 4.5 Block-device names are not NSIDs — devices are resolved by serial + NSID
+
+The role never derives a namespace's block device from its `nvmeXnY` name. The `Y` is **not** the NSID: in the Linux NVMe host driver it is the namespace head's *instance*, handed out by an IDA (lowest free integer per subsystem) when the head is allocated — [`drivers/nvme/host/core.c`, `nvme_alloc_ns_head()`](https://github.com/torvalds/linux/blob/v6.8/drivers/nvme/host/core.c#L3484-L3493) (v6.8, the Ubuntu 24.04 kernel: `ret = ida_alloc_min(&ctrl->subsys->ns_ida, 1, GFP_KERNEL); head->instance = ret; … head->ns_id = info->nsid;`; the same in [v5.15, Ubuntu 22.04](https://github.com/torvalds/linux/blob/v5.15/drivers/nvme/host/core.c#L3632-L3641), via `ida_simple_get`). The disk name is formatted from that instance — [`nvme_alloc_ns()`](https://github.com/torvalds/linux/blob/v6.8/drivers/nvme/host/core.c#L3729-L3739): `sprintf(disk->disk_name, "nvme%dn%d", ctrl->instance, ns->head->instance)`; with kernel multipath on (`nvme_core.multipath=Y`, the Ubuntu default), the head device is `nvme<subsystem>n<instance>` ([`multipath.c`, `nvme_mpath_alloc_disk()`](https://github.com/torvalds/linux/blob/v6.8/drivers/nvme/host/multipath.c#L540-L541)) and the hidden per-controller path device is `nvme<subsystem>c<controller>n<instance>` — the instance is the same number in every form. The instance is released only when the last reference to the old head drops — [`nvme_free_ns_head()`](https://github.com/torvalds/linux/blob/v6.8/drivers/nvme/host/core.c#L656-L666): `ida_free(&head->subsys->ns_ida, head->instance)` — which happens through the namespace's own kref (`nvme_free_ns` → `nvme_put_ns_head`), and an open block device holds that kref (`nvme_ns_release` → `nvme_put_ns`).
+
+So name and NSID coincide only when namespaces are scanned in order on a quiet controller (boot). During the delete-ns → create-ns → attach-ns cycle of §4.3 the old head for NSID 1 can still hold instance 1 — its removal is asynchronous scan work, or a udev/blkid worker still has the node open — when the new NSID 1 is scanned, so the new namespace takes instance 2 and the large one instance 3. Observed on `xinas-box` (Ubuntu 24.04, `6.8.0-124-generic`, `nvme_core.multipath=Y`, 22 × KIOXIA KCM61RUL3T84) on 2026-09-03 after the v3.13.1 rebuild, on every data controller:
+
+```
+/sys/block/nvme10n2/nsid = 1   size = 1024000 sectors      (the 500 MB namespace)
+/sys/block/nvme10n3/nsid = 2   size = 7499413504 sectors   (the large namespace)
+nvme list-ns /dev/nvme10 -a    → 0x1, 0x2
+```
+
+A reboot restores `n1`/`n2` (fresh IDA, in-order scan) and a re-run of the rebuild reproduces the shift, so the role must not depend on the name in either direction. With the old name-based lookup the `n1` wait timed out on all 22 controllers (30 s each), the `n2` wait matched the *small* namespaces, `nvme_small_ns_devices` came out empty, RAID generation was skipped and `raid_fs` aborted.
+
+**The identity the role keys on is the one xiRAID itself uses.** xiRAID's array config stores members as drive identities, not device paths, and resolves them to `/dev` nodes at runtime. Read from the installed `xiraid-core` 4.4.1-15869 on `xinas-box` (the daemon ships as plain Python; no vendor document describes this): `/usr/lib/xraid/drive/v2/nvme.py`, `NVMeDrive._serial()`, builds `f"{ID_SERIAL_SHORT}_{NAMESPACE_ID}"` from the udev properties of the block device, and `drive/v2/manager.py`, `_get_system_drives_collection()`, maps those identities back to block devices by enumerating every block device through pyudev — never by name. Both properties come straight from sysfs: `60-persistent-storage.rules` sets `ID_SERIAL_SHORT` from the parent device's `serial` attribute and `ID_NSID` from the namespace's `nsid` attribute ([systemd 255, `rules.d/60-persistent-storage.rules`](https://github.com/systemd/systemd/blob/v255/rules.d/60-persistent-storage.rules) — the same file also derives `/dev/disk/by-id/nvme-<model>_<serial>_<nsid>`), and xiRAID's own `/usr/lib/udev/rules.d/99-xi-new-rules.rules` sets `NAMESPACE_ID` from that same `nsid` attribute. On the box, `udevadm info -q property /dev/nvme10n2` reports `ID_SERIAL_SHORT=6030A005TMYR`, `ID_NSID=1`: identity `6030A005TMYR_1`, the key xiRAID will list that member under.
+
+[`files/nvme_ns_device.sh`](../../collection/roles/nvme_namespace/files/nvme_ns_device.sh) implements the same lookup for the role, from sysfs alone (no udev or nvme-cli dependency):
+
+| Command | Output | Exit |
+|---|---|---|
+| `list <ctrl>` | one line per namespace block device of the controller, ascending NSID: `<nsid> /dev/<dev> <serial>_<nsid>` | 0 (also when empty) |
+| `resolve <ctrl> <nsid>` | `/dev/<dev>` of that namespace | 1 when absent |
+| `wait <ctrl> <nsid> [timeout=30]` | like `resolve`, polling once a second | 1 on timeout |
+
+Lookup: the controller's serial is `/sys/class/nvme/<ctrl>/serial` (trimmed — the attribute is space-padded to the NVMe field width); every `/sys/block/nvme*n*` whose `device/serial` equals it and whose `nsid` equals the wanted NSID is a candidate (`device` is the controller without kernel multipath and the `nvme-subsysN` device with it; both carry `serial`). Hidden path devices (`hidden` = 1, no `/dev` node) and entries whose attributes vanish mid-scan are skipped. When two controllers share a serial (a dual-port drive with multipath off) the candidate whose `device` link is the requested controller wins, and each NSID is reported once. `<ctrl>` may be given as `/dev/nvme10` or `nvme10`. `SYSFS_ROOT` and `DEV_ROOT` (default `/sys`, `/dev`) exist so the resolver can be unit-tested against a fake tree ([tests/test_nvme_ns_device.py](../../tests/test_nvme_ns_device.py)). Unknown controller → exit 2.
+
+The rebuild path (§4.3) records the NSID each `create-ns` returned and waits for *that* identity; the converge path (§4.2) lists what the controller has and classifies by NSID; topology (§4.1) queries `id-ns` through the controller with `-n <nsid>`. The `nvme_small_ns_devices` / `nvme_large_ns_devices` facts still carry `/dev/nvmeXnY` paths — that is what `xicli raid create -d` takes and what `xicli raid show` prints — but the paths are looked up, never constructed.
 
 ---
 
@@ -573,8 +607,8 @@ findmnt -no SOURCE /                        # OS drive — must NOT appear in xi
 xicli raid show                             # data + log arrays, both "online"
 
 # 2. Namespaces (nvme mode only)
-nvme list                                   # each data drive shows n1 (~500 MB) + n2 (rest)
-nvme id-ns /dev/nvme1n2 | grep -E 'nsze|lbads'  # 4 KB LBA (lbads:12), expected size
+nvme list                                   # each data drive shows NSID 0x1 (~500 MB) + 0x2 (rest); the nvmeXnY names need not match (§4.5)
+nvme id-ns /dev/nvme1 -n 2 | grep -E 'nsze|lbads'  # 4 KB LBA (lbads:12), expected size — query by NSID, not by device name
 
 # 3. xiRAID arrays
 xicli raid show -f json | jq '.'            # both arrays present, no degraded members
@@ -607,6 +641,7 @@ For one-shot validation, the Textual TUI's Health tab (`xinas-menu`) and the MCP
 | Cleanup drags a protected disk in via string-prefix match | data controller `/dev/nvme1` prefix-matched OS partition `/dev/nvme10n1p3`, destroying its VG/array/pool | `is_data_member` (`files/disk_match.sh`) matches on device-name boundaries and vetoes any device on a protected disk (§3.1) |
 | OS drive detected as a data drive | `xicli raid create` would clobber the boot disk | `nvme_abort_if_no_system_drive=true` halts the play **before cleanup** if no system disk resolves or the root did not resolve; a post-split `assert` re-checks that no protected drive leaked into `nvme_data_drives` |
 | Unattended default-preset install on a virtio/SCSI VM (0 NVMe controllers) | `nvme_namespace` generated no facts → `raid_fs` aborted with "xiraid_arrays undefined" | Empty-NVMe fallback (§1.1): re-probe all disks; auto-continue in whole-disk mode on VMs, fail-fast with a remedy on bare metal |
+| Namespace block devices named by kernel head instance, not by NSID | after delete+create the new NSID 1 came up as `/dev/nvme10n2` and NSID 2 as `/dev/nvme10n3` on every controller; the `n1` wait timed out 22 × 30 s, the `n2` wait matched the *small* namespaces, `nvme_small_ns_devices` was empty, RAID generation was skipped and `raid_fs` aborted with "xiraid_arrays is not defined" | Devices are resolved by controller serial + NSID through sysfs (`files/nvme_ns_device.sh`, §4.5) — the identity xiRAID itself keys on; an empty device set fails inside `nvme_namespace` (§4.3 Step 6) |
 | Existing LVM / MD / ZFS still bound to data drives | `xicli drive clean` errors; arrays don't form | `cleanup_storage.yml` discovers + destroys all three before any namespace op |
 | Operator did not consent to wiping prior storage | Silent destruction would be unacceptable | Interactive `YES` prompt; only bypassed by explicit `nvme_skip_cleanup_confirmation=true` |
 | Drive doesn't support `nmic=1` (single-controller HW) | `nvme create-ns -m 1` rejected, namespace creation fails per-drive | `nvme_namespace_shared=false` default; xinnorVM preset and project memory both pin it off |
@@ -644,7 +679,7 @@ Formatting happens only on a genuinely fresh box, or under an explicit, confirme
 | State | Meaning | Effect (no reset) |
 |---|---|---|
 | **MATCH** | xiRAID `data`+`log` online **and** `/dev/xi_data` is XFS with the configured label | **converge** — every destructive op is skipped |
-| **EMPTY** | both probes **answered**, and no xiRAID arrays and no fs signature exist (incl. a factory single-`n1` drive) | provision as a first install |
+| **EMPTY** | both probes **answered**, and no xiRAID arrays and no fs signature exist (incl. a factory single-namespace drive) | provision as a first install |
 | **FOREIGN** | some array/fs signature exists but doesn't match the expected layout | **fail fast** before any wipe |
 | **UNKNOWN** | a probe could not answer, so the layout is undetermined | **fail fast** before any wipe |
 
