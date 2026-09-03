@@ -25,8 +25,12 @@ MCP/Advanced → Check for Updates) does **not** touch git. It:
    `xinas_menu.version.XINAS_MENU_VERSION`.
 2. Queries the **GitHub Releases API**
    (`GET https://api.github.com/repos/XinnorLab/xiNAS/releases`) over
-   HTTPS. An optional token is read from `XINAS_GH_TOKEN` /
-   `GITHUB_TOKEN` for rate-limit headroom; unauthenticated is fine.
+   HTTPS. An optional token is sent when one is configured — see
+   *GitHub rate limits and the access token* below for where it comes
+   from and why. Unauthenticated is fine until a shared public address
+   exhausts GitHub's anonymous quota. The background check on menu
+   launch may be answered from a local cache instead of GitHub — see
+   *Fewer requests from the TUI* in that section.
 3. Filters the returned releases:
    - **draft** releases are dropped, always;
    - **prerelease** releases are dropped **by default**. They are only
@@ -373,7 +377,9 @@ back to invoking `git fetch --tags` + `git checkout --force <tag>`
 directly; on a root-owned `/opt/xiNAS` that fails with a permissions
 error, which is surfaced to the user with a hint to re-run the
 `xinas_menu` role. The fallback still targets the release tag — never
-`main`.
+`main`. The fallback passes the same credential helper as `xinas_gh_git`
+when a token is configured (see *GitHub rate limits and the access
+token*).
 
 ### Bash-path parity
 
@@ -411,6 +417,50 @@ The `--force` checkout and semantic-version comparison rules above bind
   canonical check is `_is_release_tag` in `lib/menu_lib.sh`;
   `install.sh` carries a character-identical inline copy because it
   runs before the clone exists and cannot source the library.
+- **Non-interactive git access** — every unattended install/update path
+  MUST `export GIT_TERMINAL_PROMPT=0` before it invokes `git` against
+  GitHub, and MUST do so ahead of the first `git` call in the script.
+  When GitHub answers a fetch/clone with `401` — most often because
+  the anonymous per-IP quota is spent (see *GitHub rate limits and the
+  access token*), otherwise a stale credential in root's
+  `~/.git-credentials` or credential helper, an authenticating proxy,
+  or a repository that has been made private or renamed — git falls
+  back to prompting `Username for 'https://github.com':` on
+  `/dev/tty`. None of these installers is interactive at that point:
+  `install.sh` runs its clone backgrounded behind a spinner with
+  stdout/stderr redirected to the install log, so the prompt surfaces
+  as an unattributed line over the spinner and the installer blocks
+  forever on a terminal read it never announced; `curl … | sudo bash`
+  and unattended provisioning have no operator to answer it at all.
+  With the variable set, git fails immediately with
+  `could not read Username … terminal prompts disabled` instead of
+  hanging. This binds `install.sh`, `prepare_system.sh`,
+  `install_client.sh`, and the `xinas-update-git` wrapper (which has
+  set it since it landed). The dev-only `configure_git_repo` affordance
+  in `startup_menu.sh` is explicitly **out of scope**: it is gated
+  behind `XINAS_DEV_REPO_CONFIG=1`, clones an operator-supplied URL
+  that may legitimately be private, and runs interactively where a
+  prompt can actually be answered.
+- **Naming the authentication failure** — a path that fails its clone
+  or fetch because GitHub refused it MUST NOT leave the operator with
+  only a raw git error. It MUST print the repository it tried, name
+  GitHub's per-IP limit on anonymous requests as the first suspect,
+  give the remedy — the token one-liner
+  (`… | sudo XINAS_GH_TOKEN=<token> bash`) and the token file
+  (`/etc/xinas/github-token`) — and only then the host-side causes
+  (an HTTP proxy in root's environment, an `insteadOf` rewrite or a
+  credential helper). The xiNAS repository is public: a `401` on that
+  path is GitHub throttling the source address or a host configuration
+  problem, never a xiNAS one.
+- **Authenticated GitHub access** — every bash path that calls
+  `api.github.com` for xiNAS releases, and every *network* git
+  operation against GitHub on an install/update path (`clone`,
+  `fetch`, `ls-remote`), MUST go through `xinas_gh_curl` /
+  `xinas_gh_git` (see *GitHub rate limits and the access token*) so a
+  configured token is honoured uniformly. Local git operations
+  (`checkout`, `describe`, `rev-parse`) MUST stay plain `git` — they
+  never authenticate, and routing them through the wrapper would only
+  obscure which calls reach the network.
 - **Bounded, non-blocking check** — the automatic update check that
   runs at menu startup (`check_for_updates` in `startup_menu.sh` and
   `simple_menu.sh`) MUST run synchronously, never backgrounded: a
@@ -453,6 +503,18 @@ curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.s
 curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install_client.sh | sudo bash
 ```
 
+Behind a shared public address, hand over a token by name and the
+installer keeps it for the day-2 surfaces once GitHub has accepted it
+(see *GitHub rate limits and the access token* — never as
+`sudo XINAS_GH_TOKEN=… bash`, which puts the value in `ps` and in sudo's
+log):
+
+```bash
+read -rs XINAS_GH_TOKEN && export XINAS_GH_TOKEN
+curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh \
+  | sudo --preserve-env=XINAS_GH_TOKEN bash
+```
+
 `install.sh` and `prepare_system.sh` resolve the latest published
 release tag from the API (`/releases/latest`) and clone / check out
 that tag: `git clone --branch <tag>` on first install; on an existing
@@ -460,6 +522,205 @@ clone, `git fetch --tags && git checkout --force <tag>` — per *Bash-path
 parity* above, never a plain (non-forcing) checkout. If no published
 release can be resolved, install **fails with a clear error** rather
 than falling back to `main`.
+
+## GitHub rate limits and the access token
+
+GitHub throttles **unauthenticated** requests per source IP, and since
+2025-05-08 that covers cloning over HTTPS, not only the REST API
+(GitHub changelog, *Updated rate limits for unauthenticated requests*,
+<https://github.blog/changelog/2025-05-08-updated-rate-limits-for-unauthenticated-requests/>).
+The REST quota is 60 requests per hour per IP; a personal access token
+raises it to 5,000 per hour per account (*Rate limits for the REST
+API*,
+<https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api>,
+read 2026-09-03). Git-over-HTTPS has its own, unpublished per-IP limit
+("dynamic limits", GitHub staff in
+<https://github.com/orgs/community/discussions/44515>).
+
+Every host behind one public address — a lab, an office NAT, a client
+fleet — shares those anonymous quotas. One `install.sh` run costs one
+API call and one clone or fetch; every `xinas-menu`, `startup_menu.sh`,
+`simple_menu.sh` or `post_install_menu.sh` launch costs one API call;
+`install_client.sh` and `xinas-client` cost the same on every client.
+Once the quota is spent GitHub answers an anonymous git request with
+`401` (git then asks for a username) and an API request with `403` or
+`429` carrying `x-ratelimit-remaining: 0`. Observed 2026-09-02 on a
+fresh Ubuntu 22.04 host in a lab behind one NAT address: the tag
+resolved, the clone was refused. A `401` against a public repository
+is GitHub's throttle first and a host-side credential problem second.
+
+### The token
+
+xiNAS accepts one optional GitHub token on **every** path that talks to
+GitHub for xiNAS releases. Resolution order, identical everywhere:
+
+1. `XINAS_GH_TOKEN` in the environment;
+2. `GITHUB_TOKEN` in the environment;
+3. the first line of `/etc/xinas/github-token`, surrounding whitespace
+   stripped. An unreadable or empty file means "no token". Every path —
+   bash and the Python checker alike — accepts `XINAS_GH_TOKEN_FILE` to
+   relocate the file (tests use it).
+
+A **fine-grained personal access token with no permissions** is enough:
+every token "always include[s] read-only access to all public
+repositories" (*Managing your personal access tokens*,
+<https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens>,
+read 2026-09-03). Such a token is worth exactly its quota — keep the
+file a secret anyway: mode `0600`, readable by the user that runs the
+menu. `install.sh` and `install_client.sh` persist a token they were
+given in the environment to that file, mode `0600`, so the day-2
+surfaces (the menu's update check, the `xinas-update-git` helper,
+`xinas-client`) find it after `sudo` has stripped the environment —
+but **only after GitHub has accepted it**, i.e. after the release lookup
+succeeded with it. Nothing in xiNAS removes the file — `uninstall.sh`
+leaves `/etc/xinas/` in place, so a reinstall picks it up again — which
+is exactly why a mistyped token must never be written: persisted before
+the lookup, it would poison every later run. A token given on a later
+run replaces the file. An existing `/etc/xinas` keeps whatever mode the
+operator gave it, and the file is written through a `0600` temp file,
+so it is never world-readable, not even briefly.
+
+### Handing over the token
+
+Do **not** pass the token as `sudo XINAS_GH_TOKEN=<token> bash`. sudo
+does not exec the command: it stays resident as the installer's parent
+for the whole run with that assignment in its own argv (visible in
+`ps`), and sudoers logs command-line variables with every accepted
+command — the `ENV=` field, "a list of environment variables specified
+on the command line, if specified" (sudoers(5) *LOG FORMAT*,
+<https://manpages.ubuntu.com/manpages/jammy/man5/sudoers.5.html>, read
+2026-09-03). Hand it over by *name* instead:
+
+```bash
+read -rs XINAS_GH_TOKEN && export XINAS_GH_TOKEN
+curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh \
+  | sudo --preserve-env=XINAS_GH_TOKEN bash
+```
+
+`read -rs` keeps the value off the screen and out of the shell history;
+`--preserve-env=list` "indicates to the security policy that the user
+wishes to add the comma-separated list of environment variables to
+those preserved from the user's environment" (sudo(8),
+<https://manpages.ubuntu.com/manpages/jammy/man8/sudo.8.html>, read
+2026-09-03), and is permitted because the matched command is `ALL`,
+which implies the `SETENV` tag (sudoers(5)). Only the variable's name
+reaches argv and the log. Unattended and fleet installs pre-create the
+file instead — from the image, cloud-init `write_files` with
+`permissions: '0600'`, or once by hand:
+
+```bash
+read -rs XINAS_GH_TOKEN && export XINAS_GH_TOKEN
+sudo --preserve-env=XINAS_GH_TOKEN sh -c \
+  'install -d -m 0755 /etc/xinas && umask 077 && printf "%s\n" "$XINAS_GH_TOKEN" > /etc/xinas/github-token'
+```
+
+The installers then report `Using GitHub token from
+/etc/xinas/github-token` and never touch the file.
+
+### How the token is used
+
+- **REST** (`api.github.com`): `Authorization: Bearer <token>`. Bash
+  paths feed the header to curl as a config file on stdin (`curl -K -`;
+  "Specify the filename to --config as minus "-" to make curl read the
+  file from stdin", curl manpage, <https://curl.se/docs/manpage.html>,
+  read 2026-09-03), never as an argument, so the token appears neither
+  in `ps` nor in the install log.
+- **git over HTTPS** (`github.com`): git runs with an inline credential
+  helper that answers `username=x-access-token` and the token as the
+  password. Git tries anonymously first and consults the helper only
+  after GitHub answers `401`, so the token costs nothing while the
+  anonymous quota lasts and the clone or fetch never carries the token
+  in its URL. The helper is preceded by an empty `credential.helper=`
+  so a stale helper configured on the host cannot answer first: "If
+  `credential.helper` is configured to the empty string, this resets
+  the helper list to empty" (gitcredentials(7),
+  <https://git-scm.com/docs/gitcredentials>, read 2026-09-03; the same
+  page defines the `!` shell-snippet helper form with the operation
+  appended). Both behaviours were also verified on 2026-09-03 against a
+  local server answering `401`, and `tests/test_github_token_parity.py`
+  re-verifies them on every run. The token reaches the helper through
+  the environment of that one git process — never through argv,
+  `.git/config` or `~/.git-credentials`. `GIT_TERMINAL_PROMPT=0` stays
+  in force: git consults helpers before the terminal, so the two
+  compose.
+- **Never printed.** No path prints the token, an `Authorization`
+  header, or a URL carrying it; messages name the *source* it came from
+  (`XINAS_GH_TOKEN`, `/etc/xinas/github-token`), never the value.
+
+The bash block — `xinas_github_token`, `xinas_github_token_source`
+(names the source for messages, never the value), `xinas_gh_curl`,
+`xinas_gh_git`, `xinas_persist_github_token`, and
+`xinas_gh_explain_release_lookup_failure` (see *Naming the failure*) —
+lives canonically in `lib/menu_lib.sh` and is copied verbatim into the
+scripts that cannot source it: `install.sh`,
+`install_client.sh`, `prepare_system.sh` (its bootstrap clone runs
+before the lib exists), `client_repo/client_setup.sh`, and the
+root-owned `xinas-update-git` helper. `tests/test_github_token_parity.py`
+fails when any copy drifts and exercises the canonical copy against a
+local server that answers `401`. The Python checker resolves the token
+the same way (`update_check.github_token`), and its direct-git fallback
+(used when the `xinas-update-git` helper is not deployed) passes the
+same credential helper.
+
+### Fewer requests from the TUI
+
+The Python update check keeps a cache of the last successful Releases
+response:
+
+- **Location:** `/var/cache/xinas/update-check.json` when running as
+  root, else `$XDG_CACHE_HOME/xinas/update-check.json`
+  (`~/.cache/xinas/update-check.json`). Mode `0600`, written atomically.
+  Any failure to read or write it is ignored: the cache is an
+  optimisation, never a dependency.
+- **Content:** the releases payload, the response `ETag`, the installed
+  version the check ran against, and the time of the check.
+- **Background check on launch** (`XiNASApp` on mount): reuses the
+  cached payload with no network call when it is younger than **one
+  hour** and was taken for the same installed version. Opening the menu
+  ten times in an hour costs one API call, not ten.
+- **Explicit check** (`u`, Management → Check for Updates, MCP /
+  Advanced → Check for Updates): always contacts GitHub, sending the
+  cached `ETag` as `If-None-Match`. A `304 Not Modified` reuses the
+  cached payload; with a token, a `304` does not count against the
+  quota (*Best practices for using the REST API*,
+  <https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api>,
+  read 2026-09-03).
+- **The cache never changes the verdict.** It holds the payload GitHub
+  returned; filtering, the semver comparison and the trailer union run
+  on it unchanged. It is keyed to the installed version, so an update
+  applied by any path invalidates it.
+
+The bash menus' passive startup check is not cached — see
+`docs/TODO.md`.
+
+### Naming the failure
+
+- A failed `/releases/latest` lookup — in `install.sh`,
+  `install_client.sh`, `prepare_system.sh`, and the menus' *Update*
+  action — probes the status once more and names the cause
+  (`xinas_gh_explain_release_lookup_failure`): `401` → `GitHub rejected
+  the token from <source> (HTTP 401). Fix or remove it.`, where the
+  source is the variable name or the file path; `403`/`429` → GitHub's
+  rate limit, naming the spent quota (anonymous requests from this
+  public address, or the token from `<source>`) and the remedy; no
+  answer → `No connection to https://api.github.com.`; anything else →
+  the status code. At 60 requests per hour the REST lookup is what
+  fails first on a shared address, so this is where operators most
+  often meet the limit; `install.sh` follows an anonymous rate-limit
+  verdict with the hand-over instructions above.
+- The Python checker maps `429`, or `403` with
+  `x-ratelimit-remaining: 0`,
+  to `GitHub API rate limit exceeded for anonymous requests from this
+  IP (resets at HH:MM UTC) — set XINAS_GH_TOKEN or
+  /etc/xinas/github-token`; when a token was sent it says `for the
+  configured token` and drops the hint. A `401` while a token was sent
+  reads `GitHub rejected the configured token (HTTP 401) — check
+  XINAS_GH_TOKEN / /etc/xinas/github-token`. Other HTTP errors keep the
+  plain `GitHub API HTTP <code>` form. The reset time comes from
+  `x-ratelimit-reset` and is omitted when the header is absent.
+- `install.sh`'s hint on a refused clone or fetch follows *Naming the
+  authentication failure* under *Bash-path parity*: the per-IP limit
+  first, the token one-liner and file second, host-side causes last.
 
 ## Release-detection source is fixed
 

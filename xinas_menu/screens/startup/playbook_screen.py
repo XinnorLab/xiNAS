@@ -151,12 +151,17 @@ class PlaybookRunScreen(StartupAppMixin, Screen[int]):
         cmd: list[str],
         title: str = "Running Ansible Playbook",
         workdir: str | Path | None = None,
+        env: dict[str, str] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._cmd = cmd
         self._title = title
         self._workdir = str(workdir) if workdir else _find_repo_root()
+        # Extra environment for the subprocess (e.g. the install-state marker
+        # the Install screen sets, docs/Installer/spec.md §7.7). Applied on
+        # top of the inherited environment and the callback override.
+        self._extra_env: dict[str, str] = dict(env or {})
         self._exit_code: int = -1
         self._running = False
         self._current_task: str = ""
@@ -198,14 +203,22 @@ class PlaybookRunScreen(StartupAppMixin, Screen[int]):
             self._failure_seen = True
             self._auto_expand_log_on_failure()
 
-    async def _run_playbook(self) -> None:
-        log = self.query_one("#playbook-log", RichLog)
-        close_btn = self.query_one("#pb-close", Button)
-
+    def _build_env(self) -> dict[str, str]:
+        """Subprocess environment: inherited, plus the banner-producing
+        stdout callback the StatusBar parses (spec §2.5), plus the caller's
+        extras."""
         env = os.environ.copy()
         env.setdefault("ANSIBLE_FORCE_COLOR", "1")
         env.setdefault("PYTHONUNBUFFERED", "1")
         env["ANSIBLE_STDOUT_CALLBACK"] = "default"
+        env.update(self._extra_env)
+        return env
+
+    async def _run_playbook(self) -> None:
+        log = self.query_one("#playbook-log", RichLog)
+        close_btn = self.query_one("#pb-close", Button)
+
+        env = self._build_env()
 
         log_fh, log_path = _open_install_log(self._cmd, self._workdir)
         if log_path is None:

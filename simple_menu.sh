@@ -13,6 +13,12 @@ trap '' INT   # Ignore Ctrl+C — menus handle cancellation via Esc/Back
 source "$SCRIPT_DIR/lib/menu_lib.sh"
 . "$SCRIPT_DIR/lib/xinas_config.sh"
 
+# This is an installer: record per-role progress to install-state.json so the
+# post-install role report (docs/Installer/spec.md §2.9) has something to
+# render. startup_menu.sh and autoinstall.sh export the same; day-2 playbook
+# runs leave it unset so they never overwrite install state.
+export XINAS_RECORD_INSTALL_STATE=1
+
 # One-shot bridge for hosts installed before the configuration overlay
 # existed (docs/superpowers/specs/2026-08-18-preset-overlay-design.md §9).
 # No-op on every run after the first.
@@ -43,7 +49,7 @@ do_update() {
     # "Bash-path parity").
     local _tag="${UPDATE_TARGET_TAG:-$(_latest_release_tag 20 5)}"
     if [[ -z "$_tag" ]]; then
-        msg_box "Failed" "Could not resolve the latest GitHub Release.\n\nxiNAS updates from releases only — no fallback to main."
+        msg_box "Failed" "Could not resolve the latest GitHub Release.\n\n$(xinas_gh_explain_release_lookup_failure "$REPO_SLUG")\n\nxiNAS updates from releases only — no fallback to main."
         return 1
     fi
     # _tag came from an unanchored `grep -o | sed` over the GitHub API
@@ -59,7 +65,8 @@ do_update() {
     # with "local changes would be overwritten". --force discards changes
     # to *tracked* files only and is never paired with `git clean` (mirrors
     # xinas-update-git; see docs/Installer/update-spec.md "Reset-to-release").
-    if git -C "$REPO_DIR" fetch origin --tags 2>"$TMP_DIR/update.log" \
+    # Network fetch goes through xinas_gh_git (token, see lib/menu_lib.sh); checkout is local and stays plain git.
+    if xinas_gh_git -C "$REPO_DIR" fetch origin --tags 2>"$TMP_DIR/update.log" \
         && git -C "$REPO_DIR" checkout --force "$_tag" 2>>"$TMP_DIR/update.log"; then
         UPDATE_AVAILABLE=""
         msg_box "Updated" "xiNAS updated to ${_tag}!\n\nRestart the menu to use new version."

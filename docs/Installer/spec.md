@@ -280,6 +280,86 @@ Esc, and asserts the menu is re-entered afterwards.
 
 ---
 
+### 2.9 Post-install role report
+
+Every install run ends with a per-role report, printed by the surface that
+ran the playbook, so a partial install is never silent: an operator who
+sees "17 of 17 roles applied" knows nothing was skipped, and one who sees
+"INCOMPLETE" sees exactly where the play stopped and what never ran. This
+closes the gap that let a host end up with the management console but no
+xiRAID (a play that died in `doca_ofed` or `xiraid_classic`) while the
+installer's last words were a success banner.
+
+**Source of truth** is `/var/lib/xinas/install-state.json`, written by the
+`xinas_install_state` callback (§7.7). The report never parses Ansible's
+stdout. One renderer serves every surface:
+[xinas_menu/install_report.py](../../xinas_menu/install_report.py) — a
+standard-library-only module, importable by the TUI and runnable as a
+script by the **system** `python3` (`python3 /opt/xiNAS/xinas_menu/install_report.py`),
+because on the bash paths the report prints before the `xinas_menu` role
+has created the venv. It MUST NOT import Textual or anything outside the
+standard library.
+
+**Format** — one role per line, in `site.yml` order, followed by one
+summary line and the log path:
+
+```
+Install report — preset default · 2026-09-02 22:00 · 4 min 12 s
+  ✓ common
+  ✓ doca_ofed
+  ✓ net_controllers
+  ✗ xiraid_classic          ← install stopped here
+  · nvme_namespace
+  · raid_fs
+  … (one line per remaining role)
+INCOMPLETE: 3 of 17 roles applied, failed at xiraid_classic, 13 not run
+Log: /var/log/xinas/install.log
+```
+
+| Glyph | Role status | Meaning |
+|-------|-------------|---------|
+| `✓` | `ok` | at least one task ran (ok or changed) and none failed |
+| `–` | `skipped` | every task was skipped by its condition — e.g. `xiraid_classic` under `xiraid_skip_install=true` |
+| `✗` | `failed` | a task failed; the play stopped here |
+| `·` | not run | listed in the play's role order but never started |
+| `…` | `running` | the run was interrupted while this role was executing |
+
+The summary line is `COMPLETE: N of N roles applied` (with
+`, K skipped (names)` when any role was skipped) or `INCOMPLETE: A of N
+roles applied, failed at <role>, M not run` (or `interrupted during <role>`
+when the state file still says `running`). "Applied" counts `ok` roles
+only; a skipped role is reported but never counted as applied. Colors are
+used only when stdout is a TTY. The report is printed **always**, on
+success as well as on failure — the point is that "everything ran" is
+shown as a list, not implied by an emoji.
+
+**When no state was recorded for this run** — the play died before its
+first `PLAY` (a syntax error, `no hosts matched`), or the state file is
+older than the run — the report says so (`No roles ran (ansible-playbook
+exit N)`) and is still counted as INCOMPLETE. A stale file is detected by
+comparing the file's `started` timestamp with the moment the surface
+launched `ansible-playbook`.
+
+**Surfaces.** All three install paths export `XINAS_RECORD_INSTALL_STATE=1`
+for their run and print the report immediately after `ansible-playbook`
+returns:
+
+- `xinas_run_playbook` ([lib/menu_lib.sh](../../lib/menu_lib.sh)) — both
+  bash menus, before the install-failure dialog (§8.3) is raised, so the
+  operator reads the report first and the dialog's "View Log" second.
+  `simple_menu.sh` (the default path) previously did not export the
+  variable at all, so the default install recorded nothing.
+- `autoinstall.sh` — after the run, ahead of its own success/failure line.
+  `autoinstall.sh --status` prints the same table for the last recorded
+  install; `--status --json` prints the raw JSON it used to print.
+- `xinas-setup` → Install ([install_screen.py](../../xinas_menu/screens/startup/install_screen.py))
+  — the same text in the dialog that closes the run; on failure the
+  Collect Logs offer stays beneath it.
+
+The report's exit status never changes the install's exit status: the
+renderer exits 0 whatever it printed, and a renderer error falls back to a
+one-line notice naming the state file.
+
 ## 3. Parameters set by each playbook / role
 
 Effective values listed below come from each role's `defaults/main.yml`, overridden where a preset explicitly sets a different value — see §1.0 for the full layer order (role defaults → preset overlay → local overlay → `-e`). File references point at the source of truth.
@@ -856,6 +936,16 @@ curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.s
   | sudo XINAS_UNATTENDED=1 XINAS_PRESET=default bash
 ```
 
+A fleet rolled out from behind one public address shares GitHub's
+per-IP quota for anonymous requests. Pre-create `/etc/xinas/github-token`
+(mode `0600`) in the image or through cloud-init, or hand the token over
+by name with `sudo --preserve-env=XINAS_GH_TOKEN` — never as
+`sudo XINAS_GH_TOKEN=… bash`, which puts the value in `ps` and in sudo's
+log — and the installer both uses it and keeps it for the day-2 update
+checks (see [update-spec.md](update-spec.md) "GitHub rate limits and the
+access token"). It is not an answer-file key: it is read before the
+answer file exists.
+
 Local, repo already present, VM preset, license from a specific file:
 
 ```bash
@@ -884,15 +974,25 @@ install is observable (finding #2 — previously there was no resume signal).
   `xinas_install_state` Ansible callback plugin
   ([collection/callback_plugins/xinas_install_state.py](../../collection/callback_plugins/xinas_install_state.py),
   enabled in [ansible.cfg](../../ansible.cfg)). It records `status`
-  (`running`/`completed`/`failed`), the `preset`, and a `roles[]` array of
-  `{role, status, ts}` where each role is `running` → `ok` (or `failed`). Each
-  transition flushes atomically, so a kill mid-install leaves a readable file
-  naming the last role reached. The callback only records when the installer
-  exports `XINAS_RECORD_INSTALL_STATE=1` (both `autoinstall.sh` and
-  `startup_menu.sh` do); day-2 / partial playbook runs leave it unset so they
-  never clobber install state.
-- **`autoinstall.sh --status`** prints the JSON and exits (0 if present, 1 if
-  no install has recorded state). No root required — it is a read-only query.
+  (`running`/`completed`/`failed`), the `preset`, `started`/`updated`
+  epoch timestamps, `expected` (every role of the play, in play order, read
+  from the play at its first `PLAY` — including roles a role-level `when`
+  later skips entirely), and a `roles[]` array of `{role, status, ts,
+  tasks}` for the roles that started. `tasks` counts that role's task
+  results (`ok`, `changed`, `skipped`, `failed`). A role is `running` →
+  `ok`, `failed`, or `skipped`: it becomes `skipped` — never `ok` — when
+  every one of its tasks was skipped, which is what `xiraid_classic` looks
+  like under `xiraid_skip_install=true`. Each transition flushes
+  atomically, so a kill mid-install leaves a readable file naming the last
+  role reached. The callback only records when the installer exports
+  `XINAS_RECORD_INSTALL_STATE=1` — `autoinstall.sh`, `startup_menu.sh`,
+  `simple_menu.sh` and the `xinas-setup` Install screen all do for their
+  run; day-2 / partial playbook runs leave it unset so they never clobber
+  install state. The post-install report (§2.9) is rendered from this file.
+- **`autoinstall.sh --status`** prints the last recorded install as the
+  §2.9 role table and exits (0 if present, 1 if no install has recorded
+  state); `--status --json` prints the raw JSON instead. No root required —
+  it is a read-only query.
 - **`/opt/xiNAS/.installed_preset`** — a one-line marker (the preset name)
   stamped by the `motd` role, the last role to run, so it appears **only on a
   fully successful install** (finding #16). Downstream tooling and tests read it

@@ -17,6 +17,12 @@
  * (review P0: there is no aggregate id for Share/NetworkInterface).
  */
 
+import {
+  type FsidMarkerRow,
+  parseFsid,
+  reconcileFsidMarkers,
+  SHARE_FSID_PREFIX,
+} from '../../../lib/nfs-fsid.js';
 import { ApiException } from '../../errors.js';
 import {
   type CapturedRow,
@@ -156,6 +162,17 @@ function adoptOverlay(
   const mutations: DesiredMutation[] = [];
   const pinned: ResourceRef[] = [];
 
+  // Whenever the Share set is rewritten (adopt or tombstone), the ShareFsid
+  // marker rows must follow it — a marker left behind for a pruned or
+  // renumbered share is an orphan that wedges its number for every later
+  // share.create. `wanted` is the fsid → share id map of the FINAL Share set.
+  const syncFsidMarkers = (wanted: ReadonlyMap<number, string>): void => {
+    const current = ctx.kv.list<FsidMarkerRow['value']>({ prefix: SHARE_FSID_PREFIX });
+    const r = reconcileFsidMarkers(current, wanted);
+    mutations.push(...r.mutations);
+    pinned.push(...r.pins);
+  };
+
   for (const { primary, kinds } of ADOPT_DOMAINS) {
     // Per-domain gate: skip the whole domain unless its PRIMARY kind has ≥1 row.
     if ((captured[primary] ?? []).length === 0) {
@@ -170,6 +187,7 @@ function adoptOverlay(
           mutations.push({ key: `/xinas/v1/desired/${primary}/${id}`, delete: true });
           pinned.push({ kind: primary, id, revision: r.revision });
         }
+        if (primary === 'Share') syncFsidMarkers(new Map());
       }
       // else: skip (no spurious drift) — S12 behavior
       continue;
@@ -196,6 +214,16 @@ function adoptOverlay(
           pinned.push({ kind, id, revision });
         }
       }
+    }
+    // Markers follow the adopted Share set (after the Share puts/deletes, so
+    // the diff reads top-down: rows first, then their markers).
+    if (primary === 'Share') {
+      const wanted = new Map<number, string>();
+      for (const row of captured.Share ?? []) {
+        const fsid = parseFsid((row.spec as { fsid?: unknown } | undefined)?.fsid);
+        if (fsid !== undefined && !wanted.has(fsid)) wanted.set(fsid, row.id);
+      }
+      syncFsidMarkers(wanted);
     }
   }
   return { mutations, pinned };

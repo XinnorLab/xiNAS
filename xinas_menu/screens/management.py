@@ -83,7 +83,7 @@ class ManagementScreen(XiNASAppMixin, Screen):
 
     @work(exclusive=True)
     async def _do_update_check(self) -> None:
-        result = await self.app._update_checker.check()
+        result = await self.app._update_checker.check(force=True)
         if result.error:
             self.app.notify(
                 f"Update check failed: {result.error}",
