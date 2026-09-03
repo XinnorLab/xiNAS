@@ -41,7 +41,7 @@ Run on the target NAS server as root:
 curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh | sudo bash
 ```
 
-xiNAS installs and updates **only from published GitHub Releases** — never from the `main` branch (see [docs/Installer/update-spec.md](docs/Installer/update-spec.md)). The installer resolves the latest release tag, installs all dependencies (Ansible, yq, git), checks that release out to `/opt/xiNAS`, and launches the provisioning menu. The menu walks you through:
+xiNAS installs and updates **only from published GitHub Releases** — never from the `main` branch (see [docs/Installer/update-spec.md](docs/Installer/update-spec.md)). The installer resolves the latest release tag, installs all dependencies (Ansible, yq, git), checks that release out to `/opt/xiNAS`, and launches the provisioning menu. To install one specific published release instead — a release candidate, which the one-liner never selects on its own — name it with `XINAS_RELEASE_TAG=vX.Y.Z-rc.N` (contract in the update spec). The menu walks you through:
 
 1. **Collect system data** — gather hardware info and generate a hardware key
 2. **Enter license** — send the hardware key to `support@xinnor.io`, then enter the received license
