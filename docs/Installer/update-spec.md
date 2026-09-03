@@ -503,13 +503,16 @@ curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.s
 curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install_client.sh | sudo bash
 ```
 
-Behind a shared public address, pass a token and the installer keeps
-it for the day-2 surfaces (see *GitHub rate limits and the access
-token*):
+Behind a shared public address, hand over a token by name and the
+installer keeps it for the day-2 surfaces once GitHub has accepted it
+(see *GitHub rate limits and the access token* — never as
+`sudo XINAS_GH_TOKEN=… bash`, which puts the value in `ps` and in sudo's
+log):
 
 ```bash
+read -rs XINAS_GH_TOKEN && export XINAS_GH_TOKEN
 curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh \
-  | sudo XINAS_GH_TOKEN=<token> bash
+  | sudo --preserve-env=XINAS_GH_TOKEN bash
 ```
 
 `install.sh` and `prepare_system.sh` resolve the latest published
@@ -554,8 +557,9 @@ GitHub for xiNAS releases. Resolution order, identical everywhere:
 1. `XINAS_GH_TOKEN` in the environment;
 2. `GITHUB_TOKEN` in the environment;
 3. the first line of `/etc/xinas/github-token`, surrounding whitespace
-   stripped. An unreadable or empty file means "no token". Bash paths
-   accept `XINAS_GH_TOKEN_FILE` to relocate the file (tests use it).
+   stripped. An unreadable or empty file means "no token". Every path —
+   bash and the Python checker alike — accepts `XINAS_GH_TOKEN_FILE` to
+   relocate the file (tests use it).
 
 A **fine-grained personal access token with no permissions** is enough:
 every token "always include[s] read-only access to all public
@@ -563,12 +567,55 @@ repositories" (*Managing your personal access tokens*,
 <https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens>,
 read 2026-09-03). Such a token is worth exactly its quota — keep the
 file a secret anyway: mode `0600`, readable by the user that runs the
-menu. `install.sh` persists the token it was given
-(`… | sudo XINAS_GH_TOKEN=<token> bash`) to that file, mode `0600`, so
-the day-2 surfaces find it after `sudo` has stripped the environment; a
-token given on a later run replaces the file. Nothing in xiNAS removes
-the file — `uninstall.sh` leaves `/etc/xinas/` in place — so a reinstall
-picks it up again.
+menu. `install.sh` and `install_client.sh` persist a token they were
+given in the environment to that file, mode `0600`, so the day-2
+surfaces (the menu's update check, the `xinas-update-git` helper,
+`xinas-client`) find it after `sudo` has stripped the environment —
+but **only after GitHub has accepted it**, i.e. after the release lookup
+succeeded with it. Nothing in xiNAS removes the file — `uninstall.sh`
+leaves `/etc/xinas/` in place, so a reinstall picks it up again — which
+is exactly why a mistyped token must never be written: persisted before
+the lookup, it would poison every later run. A token given on a later
+run replaces the file. An existing `/etc/xinas` keeps whatever mode the
+operator gave it, and the file is written through a `0600` temp file,
+so it is never world-readable, not even briefly.
+
+### Handing over the token
+
+Do **not** pass the token as `sudo XINAS_GH_TOKEN=<token> bash`. sudo
+does not exec the command: it stays resident as the installer's parent
+for the whole run with that assignment in its own argv (visible in
+`ps`), and sudoers logs command-line variables with every accepted
+command — the `ENV=` field, "a list of environment variables specified
+on the command line, if specified" (sudoers(5) *LOG FORMAT*,
+<https://manpages.ubuntu.com/manpages/jammy/man5/sudoers.5.html>, read
+2026-09-03). Hand it over by *name* instead:
+
+```bash
+read -rs XINAS_GH_TOKEN && export XINAS_GH_TOKEN
+curl -fsSL https://github.com/XinnorLab/xiNAS/releases/latest/download/install.sh \
+  | sudo --preserve-env=XINAS_GH_TOKEN bash
+```
+
+`read -rs` keeps the value off the screen and out of the shell history;
+`--preserve-env=list` "indicates to the security policy that the user
+wishes to add the comma-separated list of environment variables to
+those preserved from the user's environment" (sudo(8),
+<https://manpages.ubuntu.com/manpages/jammy/man8/sudo.8.html>, read
+2026-09-03), and is permitted because the matched command is `ALL`,
+which implies the `SETENV` tag (sudoers(5)). Only the variable's name
+reaches argv and the log. Unattended and fleet installs pre-create the
+file instead — from the image, cloud-init `write_files` with
+`permissions: '0600'`, or once by hand:
+
+```bash
+read -rs XINAS_GH_TOKEN && export XINAS_GH_TOKEN
+sudo --preserve-env=XINAS_GH_TOKEN sh -c \
+  'install -d -m 0755 /etc/xinas && umask 077 && printf "%s\n" "$XINAS_GH_TOKEN" > /etc/xinas/github-token'
+```
+
+The installers then report `Using GitHub token from
+/etc/xinas/github-token` and never touch the file.
 
 ### How the token is used
 
@@ -600,9 +647,12 @@ picks it up again.
   header, or a URL carrying it; messages name the *source* it came from
   (`XINAS_GH_TOKEN`, `/etc/xinas/github-token`), never the value.
 
-The three bash functions — `xinas_github_token`, `xinas_gh_curl`,
-`xinas_gh_git` — live canonically in `lib/menu_lib.sh` and are copied
-verbatim into the scripts that cannot source it: `install.sh`,
+The bash block — `xinas_github_token`, `xinas_github_token_source`
+(names the source for messages, never the value), `xinas_gh_curl`,
+`xinas_gh_git`, `xinas_persist_github_token`, and
+`xinas_gh_explain_release_lookup_failure` (see *Naming the failure*) —
+lives canonically in `lib/menu_lib.sh` and is copied verbatim into the
+scripts that cannot source it: `install.sh`,
 `install_client.sh`, `prepare_system.sh` (its bootstrap clone runs
 before the lib exists), `client_repo/client_setup.sh`, and the
 root-owned `xinas-update-git` helper. `tests/test_github_token_parity.py`
@@ -645,7 +695,21 @@ The bash menus' passive startup check is not cached — see
 
 ### Naming the failure
 
-- The Python checker maps `403`/`429` with `x-ratelimit-remaining: 0`
+- A failed `/releases/latest` lookup — in `install.sh`,
+  `install_client.sh`, `prepare_system.sh`, and the menus' *Update*
+  action — probes the status once more and names the cause
+  (`xinas_gh_explain_release_lookup_failure`): `401` → `GitHub rejected
+  the token from <source> (HTTP 401). Fix or remove it.`, where the
+  source is the variable name or the file path; `403`/`429` → GitHub's
+  rate limit, naming the spent quota (anonymous requests from this
+  public address, or the token from `<source>`) and the remedy; no
+  answer → `No connection to https://api.github.com.`; anything else →
+  the status code. At 60 requests per hour the REST lookup is what
+  fails first on a shared address, so this is where operators most
+  often meet the limit; `install.sh` follows an anonymous rate-limit
+  verdict with the hand-over instructions above.
+- The Python checker maps `429`, or `403` with
+  `x-ratelimit-remaining: 0`,
   to `GitHub API rate limit exceeded for anonymous requests from this
   IP (resets at HH:MM UTC) — set XINAS_GH_TOKEN or
   /etc/xinas/github-token`; when a token was sent it says `for the

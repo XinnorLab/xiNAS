@@ -66,6 +66,18 @@ xinas_github_token() {
     printf '%s' "$t"
 }
 
+# Where the token in use came from, for messages that must name the source
+# and never the value. Prints nothing when no token is configured.
+xinas_github_token_source() {
+    if [[ -n "${XINAS_GH_TOKEN:-}" ]]; then
+        printf 'XINAS_GH_TOKEN'
+    elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        printf 'GITHUB_TOKEN'
+    elif [[ -n "$(xinas_github_token)" ]]; then
+        printf '%s' "$XINAS_GH_TOKEN_FILE"
+    fi
+}
+
 xinas_gh_curl() {
     local t
     t="$(xinas_github_token)"
@@ -86,6 +98,51 @@ xinas_gh_git() {
     else
         git "$@"
     fi
+}
+
+# Keep an environment-supplied token at $1 (mode 0600) for the day-2 surfaces,
+# which run after sudo has stripped the environment. Call this only AFTER
+# GitHub has accepted the token — a mistyped one must never be kept. No-op
+# without an environment token. An existing directory keeps its mode; the
+# file is written through a 0600 temp file, so it is never world-readable,
+# not even briefly.
+xinas_persist_github_token() {
+    local dest="$1" tok="${XINAS_GH_TOKEN:-${GITHUB_TOKEN:-}}" tmp
+    [[ -n "$tok" ]] || return 0
+    [[ -d "$(dirname "$dest")" ]] || install -d -m 0755 "$(dirname "$dest")"
+    tmp="$(mktemp "${dest}.XXXXXX")" || return 1
+    printf '%s\n' "$tok" > "$tmp" && chmod 0600 "$tmp" && mv -f "$tmp" "$dest"
+}
+
+# Explain a failed /releases/latest lookup for $1 (owner/repo) in plain text on
+# stdout: probes the HTTP status once and names the cause — a rejected token
+# (401), GitHub's rate limit (403/429), or no connection at all.
+xinas_gh_explain_release_lookup_failure() {
+    local code src
+    code="$(xinas_gh_curl --connect-timeout 5 --max-time 15 -sS -o /dev/null -w '%{http_code}' \
+        "https://api.github.com/repos/${1}/releases/latest" 2>/dev/null || true)"
+    src="$(xinas_github_token_source)"
+    case "$code" in
+        401)
+            printf 'GitHub rejected the token from %s (HTTP 401). Fix or remove it.\n' \
+                "${src:-the environment}"
+            ;;
+        403|429)
+            if [[ -n "$src" ]]; then
+                printf "GitHub's rate limit refused the request (HTTP %s): the quota of the token from %s is spent. Wait for the reset or use another token.\n" \
+                    "$code" "$src"
+            else
+                printf "GitHub's rate limit refused the request (HTTP %s): anonymous requests from this public address share one quota. Use a GitHub token (XINAS_GH_TOKEN or %s).\n" \
+                    "$code" "$XINAS_GH_TOKEN_FILE"
+            fi
+            ;;
+        000|"")
+            printf 'No connection to https://api.github.com.\n'
+            ;;
+        *)
+            printf 'https://api.github.com answered HTTP %s.\n' "$code"
+            ;;
+    esac
 }
 # ── end GitHub access token ───────────────────────────────────────────────────
 
@@ -195,9 +252,22 @@ step 3 5 "Downloading xiNAS client"
 RELEASE_TAG="$(xinas_latest_release_tag)"
 if [[ -z "$RELEASE_TAG" ]]; then
     fail "Could not resolve the latest xiNAS GitHub Release."
+    # One status probe names the cause: a rejected token, GitHub's per-IP
+    # rate limit, or no connection (update-spec.md "Naming the failure").
+    echo -e "     ${DIM}$(xinas_gh_explain_release_lookup_failure "$REPO_SLUG")${NC}"
     echo -e "     ${DIM}xiNAS installs from releases only — no fallback to main.${NC}"
-    echo -e "     ${DIM}Check access to https://api.github.com and that a release exists.${NC}"
     exit 1
+fi
+
+# GitHub accepted that request with the token this run was given, so keep it
+# for xinas-client's own update check and fetches, which run after sudo has
+# stripped the environment (update-spec.md "GitHub rate limits and the access
+# token"). Only after the lookup: a mistyped token must never be kept.
+if [[ -n "${XINAS_GH_TOKEN:-${GITHUB_TOKEN:-}}" ]]; then
+    xinas_persist_github_token "$XINAS_GH_TOKEN_FILE"
+    ok "GitHub token from $(xinas_github_token_source) saved to ${XINAS_GH_TOKEN_FILE} (0600)"
+elif [[ -n "$(xinas_github_token)" ]]; then
+    info "Using GitHub token from ${XINAS_GH_TOKEN_FILE}"
 fi
 
 if [[ -d "$INSTALL_DIR" ]]; then

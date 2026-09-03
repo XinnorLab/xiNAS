@@ -20,8 +20,11 @@ supported source for installing and updating xiNAS.
   one optional token (`XINAS_GH_TOKEN`, `GITHUB_TOKEN`, or
   `/etc/xinas/github-token`; a fine-grained personal access token with no
   permissions is enough): the REST calls send it as a bearer token, git
-  consults it only after GitHub's `401`, and `install.sh` keeps the token
-  it was given for the day-2 surfaces. The TUI's background check on launch
+  consults it only after GitHub's `401`, and the installers keep a token
+  GitHub has accepted for the day-2 surfaces (handed over by name with
+  `sudo --preserve-env=XINAS_GH_TOKEN`, never as `sudo VAR=value`, which
+  sudo logs). A failed release lookup now says why — a rejected token, the
+  rate limit, or no connection. The TUI's background check on launch
   is served from a one-hour cache and explicit checks revalidate with an
   `ETag`, so opening the menu costs one request an hour instead of one per
   launch. A rate limit is named as such — with the reset time and the token

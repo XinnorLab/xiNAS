@@ -173,9 +173,17 @@ def test_prepare_system_update_only_passes_the_credential_helper_when_a_token_is
 
 
 def _git_access_hint_body() -> str:
-    m = re.search(r"^git_access_hint\(\) \{\n.*?\n\}\n", INSTALL_SH.read_text(), re.M | re.S)
+    src = INSTALL_SH.read_text()
+    m = re.search(r"^git_access_hint\(\) \{\n.*?\n\}\n", src, re.M | re.S)
     assert m, "install.sh must define git_access_hint() for refused git access"
-    return m.group(0)
+    body = m.group(0)
+    # The token instructions are shared with the release-lookup failure and
+    # live in their own function; read them through the call.
+    if "token_howto_hint" in body:
+        h = re.search(r"^token_howto_hint\(\) \{\n.*?\n\}\n", src, re.M | re.S)
+        assert h, "install.sh must define token_howto_hint()"
+        body += h.group(0)
+    return body
 
 
 def test_install_sh_auth_failure_hint_names_the_limit_and_the_token():
@@ -189,7 +197,11 @@ def test_install_sh_auth_failure_hint_names_the_limit_and_the_token():
         "install.sh's git-access hint must name GitHub's per-IP anonymous limit "
         "(update-spec.md, Naming the authentication failure)"
     )
-    assert "XINAS_GH_TOKEN=" in body, "the hint must give the token one-liner"
+    assert "--preserve-env=XINAS_GH_TOKEN" in body, (
+        "the hint must hand the token over by name — sudo VAR=value would put "
+        "the value in ps for the whole run and in sudo's log (sudoers(5) LOG FORMAT)"
+    )
+    assert "XINAS_GH_TOKEN=<token>" not in body
     assert "/etc/xinas/github-token" in body or "XINAS_GH_TOKEN_FILE" in body, (
         "the hint must name the token file"
     )

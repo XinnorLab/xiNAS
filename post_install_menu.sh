@@ -220,7 +220,7 @@ do_update() {
 
     local _tag="${UPDATE_TARGET_TAG:-$(_latest_release_tag)}"
     if [[ -z "$_tag" ]]; then
-        msg_box "Update Failed" "Could not resolve the latest GitHub Release.\n\nxiNAS updates from releases only — no fallback to main."
+        msg_box "Update Failed" "Could not resolve the latest GitHub Release.\n\n$(xinas_gh_explain_release_lookup_failure "$_UPDATE_REPO_SLUG")\n\nxiNAS updates from releases only — no fallback to main."
         return 1
     fi
 

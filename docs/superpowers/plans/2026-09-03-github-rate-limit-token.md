@@ -1819,3 +1819,40 @@ Dispatch a reviewer with the brief: try to (a) make the token reach argv, a log,
 - [ ] **Step 3: Report to Sergey and wait for the commit go-ahead**
 
 Summarise: what changed, the gate output, the review findings and their fixes, and the exact commit set (with `Requires-Rebuild: xinas_menu` on the helper commit). Then, on his word: commit, push, open the PR against `release/3.14` with `--merge` semantics in the description, and note the later cherry-pick set for the `v3.13.x` hotfix (PR #333's commit plus these).
+
+---
+
+## Post-review amendments (2026-09-03)
+
+An adversarial review of the three commits above found nine issues; all are
+fixed in a fourth commit on the same branch. Recorded here so the plan stays
+an honest history of what shipped:
+
+1. `client_repo/client_setup.sh` ran three bare `git -C … fetch` calls on its
+   update paths, and the parity test's bare-git regex only saw a subcommand
+   directly after `git`. The three calls now go through `xinas_gh_git`; the
+   regex admits options with arguments, is unit-tested itself, and the three
+   menus are checked too (the `XINAS_DEV_REPO_CONFIG`-gated function excluded).
+2. The documented `sudo XINAS_GH_TOKEN=<token> bash` kept the value in sudo's
+   argv for the whole run and in sudo's log (`ENV=` field, sudoers(5) *LOG
+   FORMAT*). Every doc, the installer hint and the spec now hand the token
+   over by name: `read -rs` + `sudo --preserve-env=XINAS_GH_TOKEN`, or a
+   pre-created 0600 file for fleets. New spec subsection *Handing over the
+   token*.
+3. The token was persisted before GitHub had accepted it, so a typo poisoned
+   every later run. `install.sh` and `install_client.sh` persist only after
+   the release lookup succeeds, and a failed lookup now names its cause
+   (`xinas_gh_explain_release_lookup_failure`: rejected token from `<source>`,
+   rate limit, no connection) — in the installers, `prepare_system.sh` and the
+   menus' *Update* dialog.
+4. `GITHUB_TOKEN` from the environment is persisted too, and the message
+   names the actual source (`xinas_github_token_source`).
+5. `install_client.sh` persists as well, so the README's client claim holds.
+6. `install -d -m 0755` no longer re-modes an existing `/etc/xinas`; the file
+   is written through a 0600 temp file, so it is never world-readable.
+7. A clock that went backwards no longer keeps the cache fresh forever.
+8. `ReleaseCache.save` uses a private `NamedTemporaryFile`, so two menus
+   saving at once cannot promote each other's half-written file.
+9. The spec's `429` wording now matches the code (any `429`, or `403` with
+   `x-ratelimit-remaining: 0`). `github_token()` honours `XINAS_GH_TOKEN_FILE`
+   like the bash paths.

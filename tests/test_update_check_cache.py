@@ -120,6 +120,24 @@ def test_cache_write_and_read_failures_are_ignored(tmp_path, monkeypatch):
     assert uc.ReleaseCache(corrupt).load() is None
 
 
+def test_cache_from_the_future_is_stale(tmp_path, monkeypatch):
+    """A clock that went backwards must not make the cache fresh forever."""
+    gh = _FakeGitHub([_rel("v9.9.9")])
+    monkeypatch.setattr(uc.urllib.request, "urlopen", gh)
+    cache = uc.ReleaseCache(tmp_path / "c.json")
+    uc._fetch_releases("r", max_age=3600, cache=cache, installed="3.1.0", now=lambda: 5000.0)
+    uc._fetch_releases("r", max_age=3600, cache=cache, installed="3.1.0", now=lambda: 4000.0)
+    assert len(gh.requests) == 2
+
+
+def test_cache_save_leaves_no_temp_file(tmp_path, monkeypatch):
+    gh = _FakeGitHub([_rel("v9.9.9")])
+    monkeypatch.setattr(uc.urllib.request, "urlopen", gh)
+    d = tmp_path / "cache"
+    uc._fetch_releases("r", cache=uc.ReleaseCache(d / "c.json"), installed="3.1.0")
+    assert [q.name for q in d.iterdir()] == ["c.json"]
+
+
 def test_cache_file_is_private(tmp_path, monkeypatch):
     gh = _FakeGitHub([_rel("v9.9.9")])
     monkeypatch.setattr(uc.urllib.request, "urlopen", gh)
