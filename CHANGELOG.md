@@ -10,6 +10,14 @@ supported source for installing and updating xiNAS.
 
 ### Fixed
 
+- **`xinas-setup` → Install ran against no hosts and reported success.**
+  The Python setup screen passed `-i inventories/hosts`, a file that has
+  never existed in the repository; Ansible warned "Could not match supplied
+  host pattern", matched zero hosts and exited 0, so the screen showed
+  "Installation completed successfully!" while nothing had been installed
+  (since the v2.0.0 rewrite). It now uses `inventories/lab.ini`, the same
+  inventory the bash menus and `autoinstall.sh` use.
+
 - **Installs and update checks no longer fail behind a shared public
   address.** GitHub throttles anonymous requests per source IP — since
   May 2025 that includes `git clone`/`fetch` over HTTPS, which comes back
