@@ -19,6 +19,22 @@ supported source for installing and updating xiNAS.
   shows `Starting…` before the first banner. Display only; the install log
   and the Python TUI are unchanged.
 
+- **A fresh install no longer dies in `raid_fs` with "xiraid_arrays is not
+  defined" when the kernel names the rebuilt namespaces `nvme10n2` /
+  `nvme10n3` instead of `n1` / `n2`.** The `Y` in `nvmeXnY` is the kernel's
+  namespace-head instance, not the NSID, and after the delete/create cycle
+  the new NSID 1 can land on instance 2 — every data controller of a
+  22-drive box did this on 2026-09-03: the `n1` wait timed out 22 × 30 s,
+  the `n2` wait matched the small namespaces, and RAID generation was
+  skipped without a word. The `nvme_namespace` role now resolves block
+  devices the way xiRAID identifies its own members — controller serial +
+  NSID, read from sysfs (`files/nvme_ns_device.sh`) — in the rebuild,
+  converge and topology paths, and fails inside the role, with the
+  evidence, when a rebuild leaves no usable device set. A reboot restores
+  the `n1` / `n2` names but a re-run of the rebuild reproduces the shift,
+  so nothing depends on the name any more. See
+  `docs/Installer/raid-spec.md` §4.5.
+
 ## [3.13.1] - 2026-09-03
 
 Requires-Rebuild: xinas_menu

@@ -20,7 +20,7 @@
 # state-less expected array is therefore NOT a MATCH; with arrays present it
 # lands in FOREIGN, which fails fast without touching anything. §4.2 of
 # docs/Installer/raid-spec.md leans on that: a genuine MATCH implies a healthy
-# `data` array, and that array is built from the n2 namespaces.
+# `data` array, and that array is built from the large (NSID 2) namespaces.
 #
 # The expected layout is read from the preset, not hard-coded (raid-spec §11):
 # the array names come from `xiraid_arrays`, the probed volume from

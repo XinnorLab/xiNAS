@@ -5,7 +5,9 @@
 # and generates RAID configuration for the raid_fs role.
 #
 # Two detection modes:
-#   "nvme" (default) - NVMe controllers only, creates n1/n2 namespaces
+#   "nvme" (default) - NVMe controllers only, creates a small (NSID 1) and a
+#                      large (NSID 2) namespace per drive; block devices are
+#                      resolved by serial + NSID, never by the nvmeXnY name
 #   "all"            - All block devices (VMs), uses whole drives directly
 
 - name: Check if automatic namespace management is enabled
@@ -213,8 +215,8 @@
           Data drives processed: {{ nvme_data_drives | length }}
 
           Namespace creation:
-            Small namespaces (n1, {{ nvme_small_ns_size_mb }}MB): {{ nvme_small_ns_devices | default([]) | length }}
-            Large namespaces (n2, remaining): {{ nvme_large_ns_devices | default([]) | length }}
+            Small namespaces (NSID 1, {{ nvme_small_ns_size_mb }}MB): {{ nvme_small_ns_devices | default([]) | length }}
+            Large namespaces (NSID 2, remaining): {{ nvme_large_ns_devices | default([]) | length }}
 
           {% if nvme_failed_devices | default([]) | length > 0 %}
           FAILED DEVICES: {{ nvme_failed_devices | join(', ') }}
