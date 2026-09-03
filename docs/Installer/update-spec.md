@@ -523,6 +523,11 @@ parity* above, never a plain (non-forcing) checkout. If no published
 release can be resolved, install **fails with a clear error** rather
 than falling back to `main`.
 
+One specific published release — a release candidate in particular, which
+`/releases/latest` never returns — is selected with
+`XINAS_RELEASE_TAG=vX.Y.Z[-rc.N]`; see *Fresh installs select a release
+only by explicit tag* under *Dev / prerelease mode* for its contract.
+
 ## GitHub rate limits and the access token
 
 GitHub throttles **unauthenticated** requests per source IP, and since
@@ -746,10 +751,12 @@ notes, `Requires-Rebuild:` trailers, and download link at an arbitrary
 repository — spoofed content in any of those would reach the
 operator's confirmation dialog indistinguishably from the genuine feed.
 
-`XINAS_UPDATE_CHANNEL` (below) remains the **only** supported override
-knob, and it does not change *which* repository is queried — only
-*which releases within* `XinnorLab/xiNAS` are eligible (stable vs.
-prerelease).
+`XINAS_UPDATE_CHANNEL` (below) and `XINAS_RELEASE_TAG` (*Fresh installs
+select a release only by explicit tag*) remain the **only** supported
+override knobs, and neither changes *which* repository is queried — only
+*which releases within* `XinnorLab/xiNAS` are eligible: the channel for
+the TUI's update check (stable vs. prerelease), the tag for a fresh
+`install.sh` run (one named, published release).
 
 ## Dev / prerelease mode
 
@@ -783,11 +790,14 @@ branch on real hardware:
    accepts them because `_TAG_RE` admits a prerelease suffix, and the ref
    is still a tag — never a branch.
 
-**Release assets are not required on an RC.** `UpdateChecker` enforces the
-asset contract only when constructed with `required_asset`, and neither
-call site (`xinas_menu/app.py`, `xinas_menu/screens/startup/startup_menu.py`)
-passes one. The stable-channel install one-liner is unaffected either way,
-because it never resolves an RC — see below.
+**Release assets are not required for the update path.** `UpdateChecker`
+enforces the asset contract only when constructed with `required_asset`,
+and neither call site (`xinas_menu/app.py`,
+`xinas_menu/screens/startup/startup_menu.py`) passes one. The stable-channel
+install one-liner is unaffected either way, because it never resolves an
+RC. Attach `install.sh` (and `install_client.sh`) to the RC when it must
+also go onto a *fresh* host by tag — see *Fresh installs select a release
+only by explicit tag* below.
 
 ### RC trailers do not reach the stable channel
 
@@ -805,14 +815,49 @@ trailer accumulated during the RC cycle**, or the roles those changes
 depend on never run on production hosts. `CLAUDE.md` §*Publishing a new
 version* carries the command that collects them.
 
-### Fresh installs cannot select an RC
+### Fresh installs select a release only by explicit tag
 
 `install.sh` resolves `/repos/<slug>/releases/latest`, which GitHub defines
-to exclude prereleases, and then validates the result against the release-tag
-regex. An RC is consequently reachable only as an **update** from an already
-installed host on the prerelease channel. This is deliberate: it keeps the
-`--prerelease` flag a single switch that isolates an RC from both the update
-checker and the installer, with no second gate to keep in sync.
+to exclude prereleases and drafts, and then validates the result against the
+release-tag regex. The plain one-liner therefore never installs a release
+candidate.
+
+To put an RC — or any other specific published release — on a *fresh* host,
+the installer accepts one explicit override, `XINAS_RELEASE_TAG=vX.Y.Z[-rc.N]`:
+
+```bash
+curl -fsSL https://github.com/XinnorLab/xiNAS/releases/download/vX.Y.Z-rc.N/install.sh \
+  | sudo XINAS_RELEASE_TAG=vX.Y.Z-rc.N bash
+```
+
+The override stays inside the Release and Update Policy:
+
+- the value must match the release-tag regex **before** GitHub is asked —
+  `main`, `HEAD`, `origin/main`, `release/3.14`, `--quiet` or a two-part
+  version are refused outright, with no API call;
+- GitHub must confirm the tag as a **published, non-draft** release
+  (`GET /repos/<slug>/releases/tags/<tag>`); an unknown tag, a draft, or an
+  unreachable API fails the install with a clear message — there is no
+  fallback to `/releases/latest`, to `main`, or to anything else;
+- the checkout is still `git clone --branch <tag>` /
+  `git checkout --force <tag>` of a release tag, validated once more by the
+  same regex before git runs (*Bash-path parity*);
+- the deviation is announced (`⚠ Installing the explicitly requested
+  release …`), so an install log never reads like a stable install.
+
+Prereleases are eligible here and only here. `XINAS_UPDATE_CHANNEL` governs
+the TUI's update check; `XINAS_RELEASE_TAG` governs `install.sh` only — the
+TUI, the bash menus and `xinas-update-git` do not read it, so a host
+installed from an RC updates through the normal channels afterwards (and
+reports "no update available" on the stable channel until a newer final
+release exists, because the installed prerelease outranks the older final).
+`tests/test_install_release_tag_override.py` runs the real selection block
+of `install.sh` against a stubbed Releases API.
+
+An RC that must be installable fresh **carries `install.sh` as a release
+asset**: the one-liner above downloads it from the RC's own
+`releases/download/<tag>/` path. The asset is only the bootstrap; the tree
+that gets checked out is the tag's.
 
 ## Dev-only: expert-menu Git Repository Configuration
 
