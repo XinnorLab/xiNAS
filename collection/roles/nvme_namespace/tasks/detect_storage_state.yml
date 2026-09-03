@@ -1,6 +1,6 @@
 ---
 # Read-only storage-identity detection. Sets xinas_storage_state to one of:
-#   MATCH   - xiRAID data+log arrays online AND /dev/xi_data is XFS with the wanted label
+#   MATCH   - every expected xiRAID array online AND the data volume is XFS with the wanted label
 #   EMPTY   - both probes ANSWERED, and what they answered was "nothing here"
 #   FOREIGN - some xiRAID/fs signature exists but does not match the expected layout
 #   UNKNOWN - a probe could not answer; the box is not provably empty
@@ -17,17 +17,34 @@
 #
 # "Online" is read out of the daemon's own per-array `state` words — it is not
 # inferred from the array merely existing. A degraded, offline, initializing or
-# state-less `data`/`log` array is therefore NOT a MATCH; with arrays present it
+# state-less expected array is therefore NOT a MATCH; with arrays present it
 # lands in FOREIGN, which fails fast without touching anything. §4.2 of
 # docs/Installer/raid-spec.md leans on that: a genuine MATCH implies a healthy
 # `data` array, and that array is built from the n2 namespaces.
 #
+# The expected layout is read from the preset, not hard-coded (raid-spec §11):
+# the array names come from `xiraid_arrays`, the probed volume from
+# `xfs_filesystems[0].data_device`. raid_fs builds whatever those name, so a
+# manual preset (nvme_auto_namespace: false) calling its arrays `vol0`+`journal`
+# must converge on them, not be told its own layout is FOREIGN — the only way
+# past that failure is a reset, which drive-cleans the array it built. In the
+# auto path detection runs before generate_raid_config.yml has produced
+# `xiraid_arrays`, so an empty/undefined list falls back to the auto layout:
+# `data`+`log` on /dev/xi_data, exactly what that task generates.
+#
 # Idempotent and side-effect-free: safe to run before any decision, at either role.
 # raid_fs reuses this via include_role (guarded on xinas_storage_state undefined).
 
-- name: Determine the wanted XFS label
+- name: Determine the expected layout
   ansible.builtin.set_fact:
     xfs_label_wanted: "{{ (xfs_filesystems | default([{}]) | first).label | default('nfsdata') }}"
+    _ssd_data_device: >-
+      {{ (xfs_filesystems | default([{}]) | first).data_device | default('/dev/xi_data') }}
+    # The arrays that must be present and online. Empty/undefined `xiraid_arrays`
+    # is the auto path (see header) and means the auto layout.
+    _ssd_expected_arrays: >-
+      {{ (xiraid_arrays | map(attribute='name') | list)
+         if ((xiraid_arrays | default([]) | length) > 0) else ['data', 'log'] }}
     # Per-array state words that count as "online". Same allowlist the TUI
     # health engine's raid_status check applies (xinas_menu/health/engine.py).
     _ssd_online_states:
@@ -74,22 +91,28 @@
       {{ dict(_ssd_array_names
               | zip(_ssd_array_records | map(attribute='state', default=[]) | list)) }}
 
-- name: Reduce the expected arrays' state words to a comparable form
+- name: Collect the state words of the expected arrays
   ansible.builtin.set_fact:
-    # flatten tolerates the bare-string spelling ("online") next to the list
-    # spelling (["online", "initialized"]); a missing state yields [].
-    _ssd_data_states: >-
-      {{ [_ssd_array_states.get('data', [])] | flatten | map('string') | map('lower') | list }}
-    _ssd_log_states: >-
-      {{ [_ssd_array_states.get('log', [])] | flatten | map('string') | map('lower') | list }}
+    _ssd_arrays_present: >-
+      {{ (_ssd_expected_arrays | reject('in', _ssd_array_names) | list | length) == 0 }}
+    # One entry per expected array that exists, each the raw `state` value —
+    # the list spelling (["online", "initialized"]), the bare-string spelling
+    # ("online"), or [] when the record carried none. `default([], true)`
+    # folds null / "" into [] so they fail the "reported a word" check below.
+    _ssd_expected_states: >-
+      {{ _ssd_array_states.items()
+         | selectattr(0, 'in', _ssd_expected_arrays)
+         | map(attribute=1) | map('default', [], true) | list }}
 
 - name: Decide whether the expected arrays are online
   ansible.builtin.set_fact:
-    # Fail closed: an array that reported no state at all is not online.
+    # Fail closed: every expected array must exist, must have reported at least
+    # one state word, and every word must be in the allowlist. flatten tolerates
+    # the bare-string spelling next to the list spelling.
     _ssd_arrays_online: >-
-      {{ (_ssd_data_states | length) > 0
-         and (_ssd_log_states | length) > 0
-         and (((_ssd_data_states + _ssd_log_states)
+      {{ (_ssd_arrays_present | bool)
+         and ((_ssd_expected_states | select('eq', []) | list | length) == 0)
+         and ((_ssd_expected_states | flatten | map('string') | map('lower')
                | reject('in', _ssd_online_states) | list | length) == 0) }}
 
 - name: Export why an existing layout may not be a MATCH
@@ -99,23 +122,22 @@
     # in nvme_namespace/raid_fs keys off this to give the right remedy —
     # "repair / let the rebuild finish", not "set xinas_storage_reset".
     xinas_storage_arrays_unhealthy: >-
-      {{ ('data' in _ssd_array_names) and ('log' in _ssd_array_names)
-         and (not (_ssd_arrays_online | bool)) }}
+      {{ (_ssd_arrays_present | bool) and (not (_ssd_arrays_online | bool)) }}
     xinas_storage_array_states: "{{ _ssd_array_states }}"
 
 - name: Check whether the xiRAID data volume exists
   ansible.builtin.stat:
-    path: /dev/xi_data
+    path: "{{ _ssd_data_device }}"
   register: _ssd_volume
 
-- name: Probe filesystem type on /dev/xi_data (read-only)
-  ansible.builtin.command: blkid -s TYPE -o value /dev/xi_data
+- name: Probe filesystem type on the data volume (read-only)
+  ansible.builtin.command: blkid -s TYPE -o value {{ _ssd_data_device }}
   register: _ssd_fstype
   changed_when: false
   failed_when: false
 
-- name: Probe filesystem label on /dev/xi_data (read-only)
-  ansible.builtin.command: blkid -s LABEL -o value /dev/xi_data
+- name: Probe filesystem label on the data volume (read-only)
+  ansible.builtin.command: blkid -s LABEL -o value {{ _ssd_data_device }}
   register: _ssd_fslabel
   changed_when: false
   failed_when: false
@@ -137,8 +159,7 @@
         'UNKNOWN'
         if (not (_ssd_raid_probe_ok | bool) or not (_ssd_fs_probe_ok | bool))
         else ('MATCH'
-              if (('data' in _ssd_array_names) and ('log' in _ssd_array_names)
-                  and (_ssd_arrays_online | bool)
+              if ((_ssd_arrays_online | bool)
                   and ((_ssd_fstype.stdout | default('') | trim) == 'xfs')
                   and ((_ssd_fslabel.stdout | default('') | trim) == xfs_label_wanted))
               else ('EMPTY'
@@ -151,7 +172,8 @@
   ansible.builtin.debug:
     msg: >-
       Storage state = {{ xinas_storage_state }}
-      (arrays={{ _ssd_array_states }}, online={{ _ssd_arrays_online }},
+      (expected={{ _ssd_expected_arrays }}, arrays={{ _ssd_array_states }},
+      online={{ _ssd_arrays_online }}, volume={{ _ssd_data_device }},
       raid_probe_ok={{ _ssd_raid_probe_ok }}, fs_probe_ok={{ _ssd_fs_probe_ok }},
       fstype='{{ _ssd_fstype.stdout | default('') | trim }}',
       label='{{ _ssd_fslabel.stdout | default('') | trim }}', wanted='{{ xfs_label_wanted }}')
@@ -163,7 +185,7 @@
       {{ "'xicli raid show' failed (rc="
          + (_ssd_raid_show.rc | default('?') | string) + ") — is xiraid-core running?"
          if not (_ssd_raid_probe_ok | bool) else "" }}
-      {{ "blkid could not read /dev/xi_data (rc="
+      {{ "blkid could not read " + _ssd_data_device + " (rc="
          + (_ssd_fstype.rc | default('?') | string) + ")."
          if not (_ssd_fs_probe_ok | bool) else "" }}
       Refusing to treat this as a fresh box. Nothing has been modified.
