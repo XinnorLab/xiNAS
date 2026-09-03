@@ -8,18 +8,17 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
-### Added
+## [3.13.1] - 2026-09-03
 
-- **The installer now fails in its first seconds, not after 20 minutes,
-  when the CPU has no AVX.** xiRAID's `xiraid-kmod` package refuses to
-  install on a CPU without the `avx` flag (its pre-install script aborts
-  with `ERROR: The CPU flag is not supported: avx.`), but `xiraid_classic`
-  is the fourth role, so on a VM given a CPU model without AVX (`qemu64`,
-  `kvm64`) the install spent its time installing DOCA-OFED and then died
-  in `apt`. The `common` role now reads `/proc/cpuinfo` as its very first
-  task and stops the play with the fix named (pass a CPU model with AVX
-  through to the guest). Skipped on the existing-RAID path
-  (`xiraid_skip_install=true`); `xinas_require_avx=false` disables it.
+Requires-Rebuild: xinas_menu
+
+Hotfix on 3.13.0, cherry-picked from `release/3.14`: the installer no
+longer stalls or fails on GitHub's per-IP rate limit or on a git
+credential prompt, refuses up front a CPU that xiRAID cannot run on, and
+ends every install with a per-role report so a partial install is never
+silent. The `xinas-update-git` helper changed, hence the trailer above.
+
+### Added
 
 - **Every install now ends with a per-role report, so a partial install is
   never silent.** After `ansible-playbook` returns, the bash menus,
@@ -36,6 +35,17 @@ supported source for installing and updating xiNAS.
   skipped as `skipped` rather than `ok`; the default `simple_menu.sh` path,
   which never enabled the recording, now does. `autoinstall.sh --status`
   prints the same table (`--status --json` keeps the raw JSON).
+
+- **The installer now fails in its first seconds, not after 20 minutes,
+  when the CPU has no AVX.** xiRAID's `xiraid-kmod` package refuses to
+  install on a CPU without the `avx` flag (its pre-install script aborts
+  with `ERROR: The CPU flag is not supported: avx.`), but `xiraid_classic`
+  is the fourth role, so on a VM given a CPU model without AVX (`qemu64`,
+  `kvm64`) the install spent its time installing DOCA-OFED and then died
+  in `apt`. The `common` role now reads `/proc/cpuinfo` as its very first
+  task and stops the play with the fix named (pass a CPU model with AVX
+  through to the guest). Skipped on the existing-RAID path
+  (`xiraid_skip_install=true`); `xinas_require_avx=false` disables it.
 
 ### Fixed
 
@@ -67,9 +77,7 @@ supported source for installing and updating xiNAS.
   launch. A rate limit is named as such — with the reset time and the token
   remedy — instead of `GitHub API HTTP 403`, and the installer's hint on a
   refused clone names the per-IP limit first. The `xinas-update-git` helper
-  changed, so the release carrying this needs the trailer below.
-
-Requires-Rebuild: xinas_menu
+  changed, hence this release's `Requires-Rebuild: xinas_menu` trailer.
 
 ## [3.13.0] - 2026-08-31
 
