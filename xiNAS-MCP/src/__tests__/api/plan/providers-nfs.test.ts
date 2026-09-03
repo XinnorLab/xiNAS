@@ -788,3 +788,88 @@ describe('share.delete — fsid marker release', () => {
     expect(result.desired_mutations).toEqual([{ key: `${DESIRED}mnt/data`, delete: true }]);
   });
 });
+
+describe('share.update — fsid marker lifecycle', () => {
+  const DESIRED = '/xinas/v1/desired/Share/';
+  const MARKER = '/xinas/v1/desired/ShareFsid/';
+
+  function seedShare(kv: SqliteKvStore, id: string, path: string, fsid: number): void {
+    kv.put(`${DESIRED}${id}`, { kind: 'Share', id, spec: { path, clients: [], fsid } });
+    kv.put(`${MARKER}${fsid}`, { fsid, share_id: id });
+  }
+
+  it('moves the marker when the fsid changes: delete old, put new, pin new absent', async () => {
+    const { ctx, kv } = makeHarness();
+    seedShare(kv, 's1', '/mnt/data', 42);
+
+    const result = await providerFor('share.update').preflight(ctx, makeShareSpec({ fsid: 9 }));
+
+    expect(result.blockers).toEqual([]);
+    expect(result.desired_mutations).toContainEqual({ key: `${MARKER}42`, delete: true });
+    expect(result.desired_mutations).toContainEqual({
+      key: `${MARKER}9`,
+      value: { fsid: 9, share_id: 's1' },
+    });
+    // Share stays FIRST (engine.ts reads affected_resources[0]); the new
+    // marker is pinned absent so a concurrent create on 9 loses at apply.
+    expect(result.affected_resources[0]).toEqual({ kind: 'Share', id: 's1', revision: 1 });
+    expect(result.affected_resources).toContainEqual({ kind: 'ShareFsid', id: '9', revision: 0 });
+  });
+
+  it('touches no marker when the fsid is unchanged', async () => {
+    const { ctx, kv } = makeHarness();
+    seedShare(kv, 's1', '/mnt/data', 42);
+
+    const result = await providerFor('share.update').preflight(ctx, makeShareSpec({ fsid: 42 }));
+
+    expect(result.desired_mutations?.some((m) => m.key.startsWith(MARKER))).toBe(false);
+    expect(result.affected_resources).toEqual([{ kind: 'Share', id: 's1', revision: 1 }]);
+  });
+
+  it('blocks FSID_IN_USE when the new fsid is held by another share', async () => {
+    const { ctx, kv } = makeHarness();
+    seedShare(kv, 's1', '/mnt/data', 42);
+    seedShare(kv, 'mnt/b', '/mnt/b', 9);
+
+    const result = await providerFor('share.update').preflight(ctx, makeShareSpec({ fsid: 9 }));
+
+    const blocker = result.blockers.find((b) => b.code === 'FSID_IN_USE');
+    expect(blocker?.message).toContain('mnt/b');
+    // No marker bookkeeping rides on a blocked plan.
+    expect(result.desired_mutations?.some((m) => m.key.startsWith(MARKER))).toBe(false);
+  });
+
+  it('reclaims an orphan marker: pins it at its current revision, not absent', async () => {
+    // An orphan is a marker no desired Share holds — left behind by an older
+    // build's fsid change. Pinning it at 0 would fail PRECONDITION_FAILED on
+    // every apply; pinning at the current revision still closes the race.
+    const { ctx, kv } = makeHarness();
+    seedShare(kv, 's1', '/mnt/data', 42);
+    kv.put(`${MARKER}9`, { fsid: 9, share_id: 'gone' }); // revision 1, orphan
+
+    const result = await providerFor('share.update').preflight(ctx, makeShareSpec({ fsid: 9 }));
+
+    expect(result.blockers).toEqual([]);
+    expect(result.affected_resources).toContainEqual({ kind: 'ShareFsid', id: '9', revision: 1 });
+    expect(result.desired_mutations).toContainEqual({
+      key: `${MARKER}9`,
+      value: { fsid: 9, share_id: 's1' },
+    });
+  });
+});
+
+describe('share.create — orphan fsid marker', () => {
+  it('pins an orphan marker at its current revision so the create can apply', async () => {
+    const { ctx, kv } = makeHarness();
+    // No desired Share holds fsid 1, but a stale marker for it exists.
+    kv.put('/xinas/v1/desired/ShareFsid/1', { fsid: 1, share_id: 'gone' }); // revision 1
+
+    const result = await providerFor('share.create').preflight(
+      ctx,
+      makeShareSpec({ fsid: undefined }),
+    );
+
+    expect(result.blockers).toEqual([]);
+    expect(result.affected_resources).toContainEqual({ kind: 'ShareFsid', id: '1', revision: 1 });
+  });
+});

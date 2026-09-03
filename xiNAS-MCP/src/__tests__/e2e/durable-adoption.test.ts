@@ -327,10 +327,16 @@ describe.sequential('e2e: S12 durable adoption (fixture mode)', () => {
     // adopt is feasible → only the always-on dangerous advisory blocks.
     expect(planResult.risk_level).toBe('destructive');
     expect(planResult.blockers.map((b) => b.code)).toEqual(['dangerous_flag_required']);
-    // The plan diff exposes the desired blast radius: put expA, delete expB.
+    // The plan diff exposes the desired blast radius: put expA, delete expB —
+    // and expB's ShareFsid marker goes with it (an orphan marker would wedge
+    // fsid 2 for every later share.create). expA's marker is already correct
+    // (written by the boot backfill), so it is not touched.
     expect(planResult.diff.adopt).toBe(true);
     expect(planResult.diff.desired_puts).toEqual(['/xinas/v1/desired/Share/expA']);
-    expect(planResult.diff.desired_deletes).toEqual(['/xinas/v1/desired/Share/expB']);
+    expect(planResult.diff.desired_deletes).toEqual([
+      '/xinas/v1/desired/Share/expB',
+      '/xinas/v1/desired/ShareFsid/2',
+    ]);
 
     const apply = await rest(apiSockPath, 'POST', '/api/v1/config-history/rollback', {
       mode: 'apply',
