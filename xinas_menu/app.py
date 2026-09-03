@@ -98,6 +98,7 @@ class XiNASApp(App):
 
     async def _bg_update_check(self) -> None:
         try:
+            # Background check on launch: may be served from the one-hour cache.
             result = await self._update_checker.check()
             if result.error:
                 _log.debug("background update check failed: %s", result.error)
