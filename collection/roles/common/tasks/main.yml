@@ -2,6 +2,41 @@
 # tasks/main.yml
 # -------------------------------------------------------------
 ---
+# Preflight: xiRAID's kernel-module package refuses to install on a CPU that
+# does not report the `avx` flag (xiraid-kmod's pre-install script aborts with
+# "ERROR: The CPU flag is not supported: avx."). xiraid_classic is only the
+# fourth role, so without this check that abort surfaces after doca_ofed has
+# already spent ~20 minutes installing DOCA-OFED. Read the flags before the
+# first apt call and fail with the fix named. Contract and vendor citation:
+# docs/Installer/spec.md §3.1.
+- name: Read the CPU flags (xiRAID AVX preflight)
+  ansible.builtin.command: grep -m1 '^flags' {{ xinas_cpuinfo_path }}
+  register: xinas_cpu_flags
+  changed_when: false
+  failed_when: false
+  when:
+    - xinas_require_avx | bool
+    - not (xiraid_skip_install | default(false) | bool)
+  tags: [preflight, xiraid]
+
+- name: Fail fast when the CPU has no AVX (xiRAID cannot be installed on it)
+  ansible.builtin.fail:
+    msg: >-
+      This CPU does not report the AVX instruction set, which xiRAID requires:
+      the xiraid-kmod package's pre-install script aborts with
+      "The CPU flag is not supported: avx", so the install would fail only
+      after DOCA-OFED had already been installed. On a virtual machine, give the
+      guest a CPU model that passes AVX through (QEMU/KVM: -cpu host; Proxmox:
+      CPU type "host"; VMware: raise the EVC mode) and re-run. Set
+      xinas_require_avx=false to skip this check.
+      Flags line read from {{ xinas_cpuinfo_path }}:
+      "{{ xinas_cpu_flags.stdout | default('') | trim }}"
+  when:
+    - xinas_require_avx | bool
+    - not (xiraid_skip_install | default(false) | bool)
+    - "'avx' not in (xinas_cpu_flags.stdout | default('') | regex_replace('^flags\\s*:', '')).split()"
+  tags: [preflight, xiraid]
+
 - name: Update apt cache
   ansible.builtin.apt:
     update_cache: yes

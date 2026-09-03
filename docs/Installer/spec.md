@@ -288,6 +288,28 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 
 [defaults](../../collection/roles/common/defaults/main.yml) · [tasks](../../collection/roles/common/tasks/main.yml)
 
+- **AVX preflight (first task, before any `apt` call).** xiRAID requires
+  an x86_64 CPU with AVX — vendor requirement: [xiRAID Classic 4.1.0
+  Hardware Requirements](https://xinnor.io/docs/xiRAID-4.1.0/E/en/SR/hardware_requirements.html)
+  (“x86_64 instruction set. With AVX support (RAID N+M requires AVX2)”);
+  the 4.4 line enforces it in the package itself: `xiraid-kmod
+  4.4.1-44480`'s pre-install script aborts with
+  `ERROR: The CPU flag is not supported: avx.` (observed in a host
+  install log, 2026-09-02, Ubuntu 24.04 on a VM whose CPU model exposed
+  no AVX). `xiraid_classic` is the fourth role, so without a preflight
+  that abort surfaces only after `doca_ofed` has spent its ~20 minutes
+  installing DOCA-OFED. The role therefore reads the `flags` line of
+  `xinas_cpuinfo_path` (default `/proc/cpuinfo`) as its very first task
+  and fails the play when `avx` is not among the flags, naming the fix:
+  on a VM, give the guest a CPU model that passes AVX through (QEMU/KVM
+  `-cpu host`, Proxmox CPU type `host`, VMware: raise the EVC mode) and
+  re-run. Only the `avx` flag is checked — the installer builds RAID 5 /
+  RAID 10 / RAID 1, never RAID N+M, so AVX2 is not a hard requirement of
+  a xiNAS deployment. The check is skipped when `xiraid_skip_install` is
+  true (the existing-RAID path: xiRAID is already running on that CPU)
+  and can be disabled with `xinas_require_avx: false`. It carries the
+  `preflight` and `xiraid` tags, so `--tags xiraid` runs it ahead of a
+  standalone xiRAID (re)install.
 - Packages installed (apt): `curl`, `vim`, `htop`, `chrony`, `unattended-upgrades`, `ca-certificates`, `quota`.
 - Timezone: `Europe/Amsterdam`.
 - Chrony service enabled and started.
@@ -681,6 +703,7 @@ The health engine bundles many of the checks above (RAID state, mounts, exports,
 | NFS mounts but RDMA refused | `mlnx-nfsrdma-dkms` not loaded, or port 20049 blocked | `lsmod \| grep rdma`, `ss -lntp \| grep 20049` |
 | `xinas-nfs-helper.sock` missing at boot | Helper raced with NFS server start | `systemctl restart xinas-nfs-helper` (also tracked in commit `45ef0cc`) |
 | `cpupower` fails on VM | VM has no exposed scaling driver | Use the `xinnorVM` preset (`perf_disable_cpupower=true`) |
+| `common` fails at once with "This CPU does not report the AVX instruction set" (or, on ≤ 3.13.0, `xiraid_classic` fails installing `xiraid-core` with `ERROR: The CPU flag is not supported: avx.`) | The CPU model exposed to the host has no AVX — typically a VM on the default `qemu64` / `kvm64` model | `grep -c avx /proc/cpuinfo`; give the VM a CPU model with AVX (§3.1) and re-run |
 
 ---
 
