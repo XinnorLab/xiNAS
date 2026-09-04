@@ -67,6 +67,7 @@ Columns per ADR-0004 §`tasks table` / `001-initial.sql`: `task_id` (uuid), `kin
 **S2 adds columns** (ADR-0004 permits minor additions):
 - migration `002`: `agent_acceptance_id TEXT` — the idempotent-begin correlation token (null until the agent accepts). This + `state` is all reconcile needs (§9); **no separate dispatch state machine**.
 - migration `003`: `spec TEXT` (JSON) — the **raw operation spec** the requester submitted at plan time (`reference.echo`'s `{ message?, fail_at_stage? }`; a real executor's full input). It is persisted on the `plan_only` task and copied onto the apply task, then **forwarded verbatim to the agent** as the `task.begin` `spec` (and by reconcile re-dispatch, §9). `affected_resources` is the *lock set*, NOT the executor input — the two are distinct, so the spec is carried explicitly rather than reusing `affected_resources`. Null only for legacy rows / tasks created before 003. **Internal-only:** `spec` is NOT part of the public `Task` surface in api-v1.yaml — the read renderer (`GET /tasks`, `GET /tasks/{id}`) and the SSE watch snapshot frame (§10) both strip it, so a requester's operation input is never echoed back over a read endpoint.
+- migration `006` (**S15**, 2026-09-04): `plan_document TEXT` (JSON) + `plan_document_hash TEXT` on the `plan_only` row — the **public plan exactly as rendered to the client** (`plan_id`, revisions, `affected_resources`, `risk_level`, `client_impact`, `blockers`, `warnings`, `diff`, `rollback_model`) plus `operation_kind`, `resource_ref`, `created_at`, `created_by`, with secrets redacted; the plan response is rendered *from* it (single source). Until S15 the fields `blockers`, `warnings`, `diff`, `client_impact`, `rollback_model` and `observed_at` were **not** persisted at all (they existed only in the in-memory `PlanResult`), which is why an MCP confirmation could not show "the plan the client saw" — S15 §5. Null for rows created before `006`; such plans cannot be confirmed over MCP (they answer `PRECONDITION_FAILED` `plan_predates_confirmation`) but REST/CLI applies are unaffected. Not copied to the apply task; not part of the public `Task` surface.
 
 ### 3.2 `task_stages` (existing) — hybrid log spill
 Per ADR-0004: `stage_id`, `task_id`, `stage_index`, `name` (`preflight`/`snapshot_before`/`apply`/`verify`/`rollback`/`snapshot_after`), `status`, `started_at`, `ended_at`, `output_inline` (BLOB, ≤64 KiB), `output_path` (relative, when spilled), `output_size_bytes` (**required**), `error_code`, `error_message`. The progress push (§6) writes/updates these rows; SSE resume **resyncs** from the rolled-up Task snapshot built over them (§10), not from a per-event log. This **replaces** the KV "event log" from the pre-review draft.
@@ -75,7 +76,10 @@ Per ADR-0004: `stage_id`, `task_id`, `stage_index`, `name` (`preflight`/`snapsho
 Per ADR-0004 / `leases.ts`: `lease_id`, `resource_kind`, `resource_id`, `task_id`, `acquired_at`, `ttl_seconds`, `heartbeat_at`, `UNIQUE(resource_kind, resource_id)`. **No global serialize lease** — the bounded worker pool (§5.3, default cap 4) + per-resource leases are the serialization. Acquisition is `LeaseManager.acquire()` (INSERT-on-conflict → `held_by_other` with the holder `task_id`). Stale recovery is `LeaseManager.sweepExpired()` (already → `requires_manual_recovery`).
 
 ### 3.4 Idempotency
-No separate map. The `UNIQUE(idempotency_key, principal)` constraint makes a retry's INSERT fail; the engine catches the conflict, reads the existing row, and returns it — **same `task_id`**. A different `plan_hash`/`input_hash` for the same key → the engine returns `CONFLICT` (§11).
+No separate map. The `UNIQUE(idempotency_key, principal)` constraint makes a retry's INSERT fail; the engine catches the conflict, reads the existing row, and returns it — **same `task_id`**. A different `plan_hash`/`input_hash` for the same key → the engine returns `CONFLICT` (§11). (Precisely: the engine SELECTs by key first and compares `input_hash` = sha256(`{operation_kind, raw spec}`); a different `plan_id` for the same kind and spec therefore replays the first task rather than conflicting — S15 binds the MCP confirmation to `plan_id`/`plan_hash`/`expected_revision`/key directly and does not rely on this comparison, §17.)
+
+### 3.5 `mcp_confirmations` (S15, migration `006`)
+The durable approval record for an MCP apply — one row per confirmation, created by the MCP dispatcher before any elicitation is returned, decided by the client (form) or an operator (URL), and **consumed inside the apply transaction** (§5.2 step 2, §17). Columns, statuses and indexes are S15 §6.1; the api is the sole writer. Terminal rows are pruned by the same GC that prunes terminal tasks (30-day retention); non-terminal rows are never touched by GC.
 
 ---
 
@@ -105,12 +109,13 @@ the receiver's Model R desired-intent revert. Full semantics in §16.
 ## 5. Plan / apply flow
 
 ### 5.1 Plan (`mode=plan`)
-A `PlanProvider.preflight` computes `affected_resources`, `blockers`, `warnings`, `diff`, `risk_level`, `rollback_model`, `state_revision_expected`, and **observation freshness** (`observed_revision_expected` + `observed_at`). The engine writes a **`state=plan_only` task row** with `plan_hash` (sha256 over canonicalized inputs), the **raw `spec`** (persisted so apply/dispatch can forward it to the executor), and returns it (the `task_id` is the `plan_id` for apply). Stages limited to `preflight` + `plan_render`.
+A `PlanProvider.preflight` computes `affected_resources`, `blockers`, `warnings`, `diff`, `risk_level`, `rollback_model` (**only** the `api-v1.yaml` `Plan` enum values — since S15 the engine refuses a provider result outside `risk_level` / `rollback_model` enums with `INTERNAL`, and the NFS, pool, config-rollback and support providers were normalized off `reversible` / `executor_managed`; S15 spec §3.2), `state_revision_expected`, and **observation freshness** (`observed_revision_expected` + `observed_at`). The engine writes a **`state=plan_only` task row** with `plan_hash` (sha256 over canonicalized inputs), the **raw `spec`** (persisted so apply/dispatch can forward it to the executor), and — since S15 — the **`plan_document`** (§3.1, migration `006`), and returns it (the `task_id` is the `plan_id` for apply). The `Plan` envelope the route renders is `publicPlan(plan_document)`, so what the client saw and what a later confirmation shows are the same bytes. Stages limited to `preflight` + `plan_render`.
 
 ### 5.2 Apply (`mode=apply`) — one SQLite transaction
 1. Validate `plan_id` + `idempotency_key`; look up the `plan_only` task; recompute `input_hash`.
 2. **Single `db.transaction`:**
    - Idempotency: attempt the task INSERT; `UNIQUE(idempotency_key, principal)` conflict → read & return the existing task (same key+plan) or `CONFLICT` (same key, different `input_hash`/`plan_hash`).
+   - **MCP confirmation (S15, §17):** when `client_type` is `mcp` (and the route did not set `confirmation_exempt` — only `support.bundle` does), the trusted confirmation context must be present and the record must be consumable (`form`: `pending`; `url`: `approved`) — verified here, *after* idempotency (a replay never burns a record) and *before* the `dangerous` gate (so `dangerous` can never stand in for it); the guarded `→ consumed` UPDATE writing `consumed_task_id` runs right after the task INSERT below, in the same transaction. Otherwise `PRECONDITION_FAILED` (`details.reason: confirmation_required | confirmation_not_approved`). Non-MCP callers skip this step entirely.
    - Freshness (TOCTOU guard, ADR-0004 §Plan/apply binding): for each affected resource, current revision == `state_revision_expected` else `PRECONDITION_FAILED` (stale list in details); observed snapshot stale beyond the plan rule → `CONFLICT` (`details.reason: "plan_stale"`).
    - Leases: `LeaseManager.acquire()` each affected resource; `held_by_other` → `CONFLICT` (`details.reason: "lease_held"`, `holder_task_id`).
    - Insert the Task (`state: queued`, `state_revision_at_apply`, and the `spec` copied from the `plan_only` task).
@@ -445,3 +450,89 @@ tests/e2e have a deterministically slow, harmless task to cancel.
   failure. The shared wait modal gets a Cancel button; the
   long-running screens (RAID create/delete, filesystem create) enable
   it.
+
+---
+
+## 17. MCP confirmation consumption (S15, ADR-0010 amendment)
+
+The engine is where an MCP apply's human confirmation is *enforced*, not
+only where it is *checked*: a `client_type: 'mcp'` apply that reaches
+`TaskEngine.apply()` without trusted confirmation context is refused,
+whichever dispatcher sent it. Full contract: `s15-mcp-mrtr-confirmation-spec.md`
+§8; this section records what belongs to the task engine.
+
+### 17.1 Identifiers and their relationship
+
+| id | minted by | lifetime | relationship |
+|---|---|---|---|
+| `plan_id` | plan engine (= `plan_only` `task_id`) | until GC (never expires) | one plan may back many confirmations over time (each apply attempt creates or re-issues one) |
+| `confirmation_id` | MCP dispatcher, before the first `input_required` | `ttl_seconds` (60–900, default 300) | bound to exactly one `{principal, tool, arguments_hash, plan_id, plan_hash, expected_revision, idempotency_key}` tuple |
+| `idempotency_key` | client | per `(key, principal)` | a confirmation carries exactly one key; a key may see one confirmation (a changed binding under the same key fails on the confirmation, not on idempotency) |
+| `task_id` | engine, by the task INSERT | until GC | written into `consumed_task_id` by the guarded consume UPDATE that follows the INSERT in the same transaction; `UNIQUE(consumed_task_id)` makes a second task per confirmation impossible |
+
+### 17.2 Transaction order (supersedes the bullet order in §5.2 for MCP)
+
+1. idempotency SELECT — a replay returns the existing task only if the
+   named confirmation is `consumed` with `consumed_task_id` equal to it;
+   an MCP replay naming a different or unconsumed confirmation is
+   `CONFLICT idempotency_key_reused`;
+2. confirmation verification (MCP only, unless the route set
+   `confirmation_exempt` — only `support.bundle` does): `mcp.allow_apply`
+   still true; context present; record bindings equal the request;
+   `expires_at > now`; status consumable for the mode (`form`: `pending`,
+   `url`: `approved`). No write;
+3. `dangerous` gate;
+4. desired-revision freshness;
+5. observed freshness;
+6. desired-KV mutations;
+7. task INSERT (`queued`);
+8. confirmation consume — guarded UPDATE to `consumed` with
+   `consumed_task_id = task.task_id`; zero rows changed →
+   `PRECONDITION_FAILED confirmation_not_approved`;
+9. leases.
+
+A failure at 3–9 rolls everything back (the record stays
+`pending`/`approved` and a corrected retry may consume it; a `dangerous`
+failure at 3 never consumes). After a rollback caused by 4 or 5 the
+engine expires the record (`expired_reason: revision_changed |
+plan_stale`) in a follow-up statement — the human approved a plan that no
+longer matches reality, so re-planning is required.
+
+### 17.3 Concurrent retries
+
+Two accepted retries of the same confirmation race on the guarded UPDATE
+(`WHERE confirmation_id = ? AND status = ?`); SQLite serialises the
+transactions, the loser's `changes()` is 0 and it fails
+`confirmation_not_approved` — unless it is the byte-identical retry, in
+which case step 1 already returned the winner's task. Exactly one task
+exists either way. The reproduction load for this race on the developer
+machine is the one already recorded for the e2e harness (≈ 100 busy loops).
+
+### 17.4 Dispatch failure after consumption
+
+`failBeforeChange` (outside the transaction) fails the task
+(`FAILED_BEFORE_CHANGE`), reverts desired state and releases leases; the
+record **stays `consumed`** with `consumed_task_id` pointing at the failed
+task. The confirmation produced exactly one task, as required; the
+operator re-plans and confirms again.
+
+### 17.5 Restart recovery
+
+Order at api startup: (1) `expireConfirmations(now)` — `pending`/`approved`
+rows past `expires_at` → `expired` (`restart_sweep` when the sweep itself
+is what found them; `ttl` otherwise) with audit events; (2) the existing
+`LeaseManager.sweepExpired()` and `reconcile()` (§9). A `pending` or
+`approved` row within its TTL is untouched and remains usable; a
+`consumed` row is never altered; no path exists from any terminal status
+back to `approved`. The same expiry sweep also runs every 30 s on the
+lease-sweeper timer. Tests: S15 §15.3.
+
+### 17.6 Audit inside the transaction
+
+The `consumed` and `apply_task_created` lifecycle events are queued via
+`AuditAppender.queue()` **inside** the apply transaction — the first
+in-transaction audit caller in the api (the helper was designed for it,
+`state/audit.ts`). They carry their own kinds (`mcp.confirmation.*`); the
+single operational `http.*` row for the loopback apply is still written by
+the audit middleware after the response, so "exactly one operation row"
+(S8 §7.3) is preserved.

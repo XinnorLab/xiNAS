@@ -6,6 +6,14 @@
 > [`../s14-mcp-modern-era-spec.md`](../s14-mcp-modern-era-spec.md). The
 > deferrals below (MCP resources and prompts) still hold, which is why
 > neither is advertised in the discovery capabilities.
+>
+> **Amended by S15 (2026-09-04).** The apply gate below is no longer the
+> last word on MCP mutation: after `mcp.allow_apply` passes, every MCP
+> `mode=apply` additionally requires a human confirmation carried by an
+> MCP `2026-07-28` Multi Round-Trip Request, and the control-path core
+> verifies and consumes that confirmation inside the apply transaction.
+> See §*Decision — MCP apply confirmation (S15)* below and
+> [`../s15-mcp-mrtr-confirmation-spec.md`](../s15-mcp-mrtr-confirmation-spec.md).
 
 **Status:** accepted (2026-06-12). Implements ADR-0001's locked "MCP is
 a transport on the same Control API core" decision; extends ADR-0002
@@ -252,6 +260,62 @@ hosts not yet rebuilt. The role-decomposition commit carries
 commits carry the specific tags (`xinas_api`, `xinas_mcp`,
 `xinas_menu`).
 
+## Decision — MCP apply confirmation (S15, 2026-09-04)
+
+Recorded against `s15-mcp-mrtr-requirements.md` (validation in its
+Appendix A). The apply gate above stays exactly as decided; the
+following is layered *behind* it:
+
+1. **`mcp.allow_apply` remains the first MCP mutation gate.** When it is
+   false the call fails with `MCP_APPLY_DISABLED` and no confirmation
+   record is created. It is the administrator's off-switch for MCP
+   mutation; there is no switch that disables confirmation itself.
+2. **Every MCP `mode="apply"` call requires a confirmation** bound to the
+   principal, tool, canonical arguments, `plan_id`, `plan_hash`,
+   `expected_revision` and `idempotency_key`, single-use, with a bounded
+   TTL. `non_disruptive` and `changing_access` plans are confirmed
+   in-band (form elicitation); `destructive`, `unsupported_rollback` and
+   any plan whose `rollback_model` is `unsupported` are approved
+   out-of-band by a different admin credential (the HTTPS approval page
+   or REST); `xinasctl` over the UDS is a break-glass path that is off by
+   default. The MRTR only carries the client's acknowledgement. The
+   guarantee is bounded by the node's trust model: an agent that holds
+   root or `xinas-admin` on the node is outside it, and for such
+   deployments approval must happen off the node (S15 §3.5).
+3. **`dangerous` is an execution precondition, not evidence of
+   confirmation.** The two are checked by different code (`dangerous` in
+   the task engine's existing gate; the confirmation in a new step that
+   runs *before* it in the same transaction) and neither satisfies the
+   other.
+4. **Modern MCP clients (`2026-07-28`) use MRTR.** The confirmation is an
+   `InputRequiredResult` with an `elicitation/create` request under the
+   key `confirm_apply` and an HMAC-protected `requestState`; the retry
+   repeats the call with a new JSON-RPC id, `inputResponses` and the exact
+   state. A client that has not declared the needed elicitation mode gets
+   JSON-RPC `-32021` (HTTP 400) before anything is created.
+5. **Legacy MCP clients may read and plan but may not apply.** A
+   legacy-era (`initialize` + `Mcp-Session-Id`) `mode=apply` answers the
+   tool error `MCP_CONFIRMATION_UNSUPPORTED`, naming the required protocol
+   and the REST / `xinasctl` / TUI alternatives. Reads, `mode=plan`,
+   `support.bundle` and `tasks.cancel` are unchanged on the legacy path.
+6. **`support.bundle` and `tasks.cancel` stay exempt** — a read-style
+   diagnostic and an emergency stop respectively (the same rationale as
+   the apply-gate table above).
+7. **Approval is verified inside the control-path core, not only in the
+   MCP transport.** The dispatcher forwards the confirmation id on a
+   loopback-only header (honored solely under the ephemeral loopback
+   bearer, like the forwarded principal); `TaskEngine.apply()` refuses any
+   `client_type: mcp` apply that lacks trusted confirmation context and
+   consumes the record in the same SQLite transaction that inserts the
+   task — so a second dispatcher, a forged header, concurrent retries and
+   a crash between consumption and insertion cannot bypass it.
+8. **REST, CLI and TUI behavior is unchanged.** `ApplyRequest` gains no
+   field; their `client_type` never triggers the core check; their own
+   confirmation dialogs and the `dangerous` flag are untouched. The
+   additive surface is four `admin`-only approval routes (hidden from the
+   MCP tool list by a catalog flag), the approval page, and a metrics
+   endpoint.
+
 ## Security
 
 - The api gains NO privilege: every mutator still flows
@@ -281,4 +345,7 @@ TUI pool screens (no API surface), SSE transport, audit/config-history
 backend integration (the degraded entries go live when the bridges
 land), removal of the read-only gRPC passthrough (tracked to the
 API gaining pools/mail/auth-settings resources), MCP resource/prompt
-capabilities (tools only in Phase 0).
+capabilities (tools only in Phase 0). S15 adds: a TUI screen for pending
+MCP approvals (the web page, REST and `xinasctl` cover approval; recorded
+in `docs/TODO.md`), and a key-rotation CLI for the `requestState` key
+ring (rotation is a documented file edit + restart).
