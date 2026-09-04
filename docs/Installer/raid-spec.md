@@ -856,6 +856,36 @@ v3.13.2-rc.4, where a `12:13:57` purge and a `12:18` run with a stale
 `xiraid_skip_install: true` left the node without `xicli` and the install died in
 `raid_fs`'s `UNKNOWN` gate.
 
+**Recovering arrays after a purge that already happened.** A *fresh* `xiraid-core` install
+runs the package's postinstall, which resets `/etc/xiraid`: the per-array configs in
+`/etc/xiraid/raids/*.conf` and the license store go with it. (§3.4 of
+[spec.md](spec.md#34-xiraid_classic--install-xiraid-classic) says the role "does not wipe
+`/etc/xiraid` on re-run" — that covers apt's no-op install over an *already installed*
+package, which never re-runs the postinst. It does not cover purge-then-install.) The
+arrays themselves survive: their configuration also lives in the drive metadata. Recovery,
+in order:
+
+```bash
+sudo xicli license update -p /tmp/license   # the license store went with /etc/xiraid
+sudo xicli raid import show -f json         # name + uuid of every recoverable array
+sudo xicli raid import apply -id <uuid>     # once per array; -nn renames, default keeps the name
+```
+
+**`xicli raid restore` is not the command for this**, despite the name. The vendor splits
+the two by where the configuration comes from: restore works "from the configuration
+files" ([xiRAID 4.3.0 AG, *Restoring a
+RAID*](https://xinnor.io/docs/xiRAID-4.3.0/E/en/AG/1/restoring_raid.html)), while the
+import commands "work with RAIDs that are present in the disk metadata, but are not
+present in the common configuration file" ([xiRAID 4.3.0 AG, *Importing a
+RAID*](https://xinnor.io/docs/xiRAID-4.3.0/E/en/AG/1/importing_a_raid.html)) — exactly the
+post-reinstall state. With `/etc/xiraid/raids/` empty, `xicli raid restore -a` finds
+nothing to restore and exits silently, which reads like a failed recovery rather than the
+wrong tool. **[observed]** on xiRAID 4.4.1 (2026-09-04, 22-drive RAID 5 `data` + RAID 10
+`log`): `restore -a` printed nothing and created nothing; two `import apply` calls brought
+both arrays back `online, initialized` under their original names and UUIDs, rewrote
+`/etc/xiraid/raids/*.conf`, and `/dev/xi_data` still carried `LABEL=nfsdata` with the log
+device's `LOGUUID` matching — `mnt-data.mount` then mounted it unchanged.
+
 **`xinas_fs_force_format` (default `false`) exempts one gate and no others.** It
 suppresses the "existing storage does not match the expected xiNAS layout" failure in
 `raid_fs` and `nvme_namespace`, and the per-device FOREIGN failure in `create_fs.yml`,
