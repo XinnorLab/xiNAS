@@ -721,9 +721,29 @@ each probe answered at all:
 
 `UNKNOWN` **outranks every other state**, including `FOREIGN` — `FOREIGN` would assert
 knowledge about an array list that could not be read. Both roles fail fast on it with the
-remedy named (bring xiRAID up and re-run, or set `xinas_storage_reset=true` to wipe and
-rebuild regardless), and nothing is modified before that point. An explicit, confirmed reset
-still wins, exactly as it does over `FOREIGN`.
+remedy named (`xinas_storage_probe_hint`, below), and nothing is modified before that
+point. An explicit, confirmed reset still wins, exactly as it does over `FOREIGN`.
+
+**A probe that could not answer says why.** "Could not answer" covers two very different
+hosts and two different remedies, so the classifier records which one it is and both roles
+quote it. Ansible's `command` module reports a *missing executable* as `rc=2` with empty
+`stdout`/`stderr` and `[Errno 2] No such file or directory: b'xicli'` in `msg`, which on
+`rc` alone is indistinguishable from `xicli` itself exiting `2`. Detection therefore sets:
+
+- `xinas_storage_probe_missing_xicli` — true when the array probe failed with that ENOENT
+  signature, i.e. xiRAID is not installed on the host at all;
+- `xinas_storage_probe_hint` — the operator-facing sentence the `UNKNOWN` failures in
+  `nvme_namespace` and `raid_fs` quote verbatim, so the diagnosis is written once.
+
+When `xicli` is absent the hint says exactly that; if the run was additionally told not to
+install xiRAID it names `xiraid_skip_install` and the overlay file that holds it; and it
+states that **`xinas_storage_reset` is not a route out of this one** — `xicli drive clean`
+and array creation both go through the same missing binary, so a reset would authorize
+destruction and then fail anyway. Otherwise the hint carries the probe's own `rc` and
+`stderr` and points at `xiraid-core`. (Through v3.13.2-rc.4 both cases produced the one
+generic sentence "is xiraid-core running?", so a host whose xiRAID packages the menu had
+just purged was told to check a service that was no longer installed — host install log,
+2026-09-04 12:18.)
 
 The gates read `xinas_storage_state | default('UNKNOWN')`: an undefined fact is a
 non-answer, and a non-answer never authorizes destruction.
@@ -816,6 +836,25 @@ offers to purge the xiRAID packages first. Every question after `Reuse Arrays? �
 returns `2` instead, and the caller sends `2` back to the menu untouched. The operator has
 already said to keep these arrays; offering to remove the packages those arrays need
 contradicts the answer they just gave.
+
+**A purge implies a reinstall.** `check_remove_xiraid` — the "Remove them before running
+Ansible?" prompt that `clean_install` and `startup_menu.sh`'s ordinary install path run
+before the playbook — may only remove the xiRAID packages on a run that will put them
+back. `playbooks/site.yml` guards `xiraid_classic` with
+`when: not (xiraid_skip_install | default(false) | bool)`, and that flag is **sticky**: the
+reuse path writes it into the operator overlay `playbooks/group_vars/all/20-local.yml`,
+where it survives into every later run, including a later clean install. Purging under it
+leaves a host with no `xicli` at all and no role that reinstalls one. `check_remove_xiraid`
+therefore reads the effective configuration first and, when `xiraid_skip_install` is true,
+clears it in the local overlay and says so before touching a package — reaching that
+function at all means this run installs xiRAID itself. Declining the removal still aborts
+the run and changes nothing, exactly as before.
+
+This is the same collision the existing-RAID branch hit from the other side (that branch no
+longer calls `check_remove_xiraid` at all); it reappeared through the overlay on
+v3.13.2-rc.4, where a `12:13:57` purge and a `12:18` run with a stale
+`xiraid_skip_install: true` left the node without `xicli` and the install died in
+`raid_fs`'s `UNKNOWN` gate.
 
 **`xinas_fs_force_format` (default `false`) exempts one gate and no others.** It
 suppresses the "existing storage does not match the expected xiNAS layout" failure in
