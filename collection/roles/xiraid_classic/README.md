@@ -12,6 +12,10 @@ kernel module. The role accepts the xiRAID EULA automatically using
 * `xiraid_auto_reboot` – reboot after install.
 * `xiraid_accept_eula` – automatically accept the xiRAID EULA (default: `true`).
 * Existing repository packages in `/tmp` are removed before download to ensure updates are installed.
+* Ends with a daemon preflight: starts `xiraid.target` and fails, naming the
+  daemon, unless `xicli raid show -f json` answers — so a daemon that never came
+  up fails here, not as storage state `UNKNOWN` in `nvme_namespace`
+  (`docs/Installer/spec.md` §3.4).
 
 ## Example play snippet
 ```yaml
