@@ -22,20 +22,27 @@ supported source for installing and updating xiNAS.
   `xinas-update-git` do not read it. See `docs/Installer/update-spec.md`
   § Fresh installs select a release only by explicit tag.
 
-- **The wizard asks about a foreign filesystem before the install starts,
-  instead of failing 20 minutes in.** `simple_menu.sh`'s "Reuse Arrays?" path
-  leaves the arrays alone and only creates the filesystem, so a reused array
-  already carrying something other than XFS with the configured label hit the
-  FOREIGN gate deep inside `site.yml`. The wizard now probes both the data and
-  the log device right after the mountpoint/label questions, shows exactly
-  what it found on each, and asks a separate, default-**No** confirmation to
-  reformat. Declining falls back to a clean install, as declining the reuse
-  question already does. Accepting sets the new `xinas_fs_force_format`, which
-  exempts only the FOREIGN gates and the mkfs decision: the arrays are kept,
-  `xicli drive clean` never runs, and the `UNKNOWN` and unhealthy-array gates
-  still fail fast. Unattended installs opt in with `XINAS_FS_FORCE_FORMAT=yes`
-  in `autoinstall.conf`; without it a headless run stops rather than reformat
-  data it was not told about. See `docs/Installer/raid-spec.md` §11.
+- **The wizard offers a previous install's filesystem back before it offers
+  to destroy it.** After the DATA/LOG arrays are chosen, an XFS on the data
+  device now opens a two-way choice — keep it, or reformat it. Keeping it
+  adopts the label that is actually on disk (`raid_fs` converges only on a
+  matching label, so retyping it is a trap) and test-mounts the data+log pair
+  with `mount -t xfs -o logdev=…`, unmounting again before any configuration
+  is written; a pair that does not mount downgrades the offer to reformat or
+  go back. `xfs_external_log` on the log device is the data filesystem's own
+  journal and is reported as such, not as a foreign signature — the first cut
+  of this step listed it as foreign and offered an operator nothing but a
+  reformat of their own healthy install. Reformatting sets
+  `xinas_fs_force_format`; unattended installs still opt in with
+  `XINAS_FS_FORCE_FORMAT=yes`.
+
+- **Backing out of a wizard question no longer offers to remove the xiRAID
+  packages.** `reuse_existing_arrays` returned `1` both for "don't reuse these
+  arrays" and for "go back", and the caller turns `1` into `clean_install`,
+  which opens with the purge offer — so declining the filesystem question
+  proposed deleting the packages the arrays the operator had just chosen to
+  keep depend on. `1` now means only "rebuild from scratch"; every question
+  after `Reuse Arrays? → Yes` returns `2`, which goes back to the menu.
 
 ### Fixed
 
