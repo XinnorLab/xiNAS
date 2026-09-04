@@ -8,6 +8,7 @@ import type {
   ConfirmationStatus,
   ExpiredReason,
 } from './types.js';
+import { TERMINAL_CONFIRMATION_STATUSES } from './types.js';
 
 export interface ConfirmationStoreDeps {
   db: Database;
@@ -98,7 +99,8 @@ export class ConfirmationStore {
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, @correlation_id, @request_id, @node_id)`,
     );
     this.countPendingByModeStmt = db.prepare(
-      `SELECT mode, COUNT(*) AS n FROM mcp_confirmations WHERE status IN ('pending','approved') GROUP BY mode`,
+      `SELECT mode, COUNT(*) AS n FROM mcp_confirmations
+        WHERE status IN ('pending','approved') AND expires_at > @now GROUP BY mode`,
     );
     this.getStmt = db.prepare(`SELECT ${COLUMNS} FROM mcp_confirmations WHERE confirmation_id = ?`);
     this.findOpenStmt = db.prepare(
@@ -106,13 +108,15 @@ export class ConfirmationStore {
         WHERE status IN ('pending','approved') AND principal = @principal AND tool_name = @tool_name
           AND arguments_hash = @arguments_hash AND plan_id = @plan_id
           AND idempotency_key = @idempotency_key AND expected_revision = @expected_revision
-        ORDER BY created_at DESC LIMIT 1`,
+          AND expires_at > @now
+        ORDER BY created_at DESC, confirmation_id DESC LIMIT 1`,
     );
     this.countOpenStmt = db.prepare(
-      `SELECT COUNT(*) AS n FROM mcp_confirmations WHERE status IN ('pending','approved')`,
+      `SELECT COUNT(*) AS n FROM mcp_confirmations WHERE status IN ('pending','approved') AND expires_at > @now`,
     );
     this.countOpenByPrincipalStmt = db.prepare(
-      `SELECT COUNT(*) AS n FROM mcp_confirmations WHERE status IN ('pending','approved') AND principal = ?`,
+      `SELECT COUNT(*) AS n FROM mcp_confirmations
+        WHERE status IN ('pending','approved') AND principal = @principal AND expires_at > @now`,
     );
     this.reissueStmt = db.prepare(
       `UPDATE mcp_confirmations SET round = round + 1, request_state_nonce_hash = @nonce
@@ -141,15 +145,19 @@ export class ConfirmationStore {
       `UPDATE mcp_confirmations SET status = 'consumed', consumed_at = @now, consumed_task_id = @task_id,
           approved_at = COALESCE(approved_at, @now), approved_by = COALESCE(approved_by, @principal),
           approval_channel = COALESCE(approval_channel, 'mcp_form')
-        WHERE confirmation_id = @id AND status = @from AND expires_at > @now`,
+        WHERE confirmation_id = @id AND status = @from AND expires_at > @now
+          AND mode = CASE @from WHEN 'pending' THEN 'form' ELSE 'url' END`,
     );
     this.expiredCandidatesStmt = db.prepare(
       `SELECT ${COLUMNS} FROM mcp_confirmations
         WHERE status IN ('pending','approved') AND expires_at <= ? ORDER BY expires_at ASC`,
     );
+    const terminalStatusList = Array.from(TERMINAL_CONFIRMATION_STATUSES)
+      .map((status) => `'${status}'`)
+      .join(', ');
     this.pruneStmt = db.prepare(
       `DELETE FROM mcp_confirmations
-        WHERE status IN ('declined','cancelled','expired','consumed') AND created_at < ?`,
+        WHERE status IN (${terminalStatusList}) AND created_at < ?`,
     );
   }
 
@@ -190,16 +198,19 @@ export class ConfirmationStore {
     return rows.map(rowToRecord);
   }
 
+  /** Expiry is checked inline (`expires_at > now`) so a request racing the 30s sweep sees the same answer (S15 §6.3). */
   findOpenByBindings(key: BindingKey): ConfirmationRecord | null {
-    const row = this.findOpenStmt.get(key) as Row | undefined;
+    const row = this.findOpenStmt.get({ ...key, now: this.now() }) as Row | undefined;
     return row === undefined ? null : rowToRecord(row);
   }
 
+  /** Expiry is checked inline (`expires_at > now`), same rationale as findOpenByBindings. */
   countOpen(principal?: string): number {
+    const now = this.now();
     const row = (
       principal === undefined
-        ? this.countOpenStmt.get()
-        : this.countOpenByPrincipalStmt.get(principal)
+        ? this.countOpenStmt.get({ now })
+        : this.countOpenByPrincipalStmt.get({ principal, now })
     ) as { n: number };
     return row.n;
   }
@@ -244,10 +255,13 @@ export class ConfirmationStore {
     return info.changes === 1 ? this.get(id) : null;
   }
 
-  /** Scrape-time source for the pending gauge (S15 §12.2): open rows per mode. */
+  /**
+   * Scrape-time source for the pending gauge (S15 §12.2): open rows per mode.
+   * Expiry is checked inline so the gauge and the sweeper always agree.
+   */
   countPendingByMode(): { form: number; url: number } {
     const out = { form: 0, url: 0 };
-    for (const row of this.countPendingByModeStmt.all() as Array<{
+    for (const row of this.countPendingByModeStmt.all({ now: this.now() }) as Array<{
       mode: 'form' | 'url';
       n: number;
     }>) {
@@ -283,14 +297,23 @@ export class ConfirmationStore {
     );
   }
 
+  /**
+   * One transaction for the whole sweep (better-sqlite3 nests as a
+   * savepoint when the caller is already inside a transaction): a throw
+   * mid-sweep leaves no partial sweep, and the returned array is exactly
+   * the set expired.
+   */
   sweepExpired(now: number, reason: 'ttl' | 'restart_sweep'): ConfirmationRecord[] {
-    const rows = (this.expiredCandidatesStmt.all(now) as Row[]).map(rowToRecord);
-    const out: ConfirmationRecord[] = [];
-    for (const r of rows) {
-      const expired = this.expire(r.confirmation_id, reason);
-      if (expired !== null) out.push(expired);
-    }
-    return out;
+    const sweep = this.db.transaction((): ConfirmationRecord[] => {
+      const rows = (this.expiredCandidatesStmt.all(now) as Row[]).map(rowToRecord);
+      const out: ConfirmationRecord[] = [];
+      for (const r of rows) {
+        const expired = this.expire(r.confirmation_id, reason);
+        if (expired !== null) out.push(expired);
+      }
+      return out;
+    });
+    return sweep();
   }
 
   pruneTerminal(cutoffMs: number): number {
