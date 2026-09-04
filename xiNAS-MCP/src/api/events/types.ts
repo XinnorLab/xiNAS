@@ -19,10 +19,20 @@ export const isFeed = (v: unknown): v is Feed =>
   typeof v === 'string' && (FEEDS as readonly string[]).includes(v);
 
 export type Severity = 'info' | 'warning' | 'error' | 'critical';
-export const SEVERITY_RANK: Record<Severity, number> = { info: 0, warning: 1, error: 2, critical: 3 };
+export const SEVERITY_RANK: Record<Severity, number> = {
+  info: 0,
+  warning: 1,
+  error: 2,
+  critical: 3,
+};
 
 export type TimeAccuracy = 'source' | 'observed' | 'task';
-export type SourceKind = 'observed_transition' | 'observed_snapshot' | 'heartbeat' | 'inventory' | 'task';
+export type SourceKind =
+  | 'observed_transition'
+  | 'observed_snapshot'
+  | 'heartbeat'
+  | 'inventory'
+  | 'task';
 export type SubjectKind =
   | 'XiraidArray'
   | 'Disk'

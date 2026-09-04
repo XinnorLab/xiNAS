@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { CursorError, decodeCursor, encodeCursor } from '../../../api/events/cursor.js';
 
-const scope = { controllerId: '00000000-0000-0000-0000-0000000000aa', feed: 'raid' as const, last: 50 };
+const scope = {
+  controllerId: '00000000-0000-0000-0000-0000000000aa',
+  feed: 'raid' as const,
+  last: 50,
+};
 
 /** A cursor whose sequence field was edited after the tag was computed. */
 function tamperedSequence(): string {

@@ -73,7 +73,9 @@ export class EventJournal {
        VALUES (@event_id, @controller_id, @feed, @type, @severity, @detected_at, @occurred_at,
                @subject_kind, @subject_id, @dedupe_key, @cause_task_id, @cause_operation_id, '')`,
     );
-    this.#setPayloadStmt = db.prepare('UPDATE operational_events SET payload = ? WHERE sequence = ?');
+    this.#setPayloadStmt = db.prepare(
+      'UPDATE operational_events SET payload = ? WHERE sequence = ?',
+    );
     this.#byDedupeStmt = db.prepare(
       'SELECT sequence, payload FROM operational_events WHERE dedupe_key = ?',
     );
