@@ -174,10 +174,51 @@ fi
 # ── Step 1b: Root SSH access ──────────────────────────────────────────────────
 step "Configuring root SSH access"
 
+_sshd_dropin="/etc/ssh/sshd_config.d/10-xinas-root-access.conf"
+
+# ── Root SSH password notice ──────────────────────────────────────────────────
+# The drop-in written below pins root SSH to key-only. On a host that still
+# accepts a root password over SSH that is a real change of access, and the
+# operator most likely to be caught by it is the one who logged in as root
+# directly instead of through sudo — no SUDO_USER in the environment. Say it
+# now, while the session they would lose is still open.
+# See docs/Installer/spec.md section 2.10.
+if [[ -z "${SUDO_USER:-}" ]]; then
+    _prl_now=$(sshd -T 2>/dev/null | awk 'tolower($1) == "permitrootlogin" { print tolower($2); exit }')
+    _host=$(hostname 2>/dev/null || echo "<this-host>")
+
+    echo ""
+    warn "${BOLD}Running as root directly, not through sudo.${NC}"
+    echo ""
+    if [[ "$_prl_now" == "yes" ]]; then
+        echo -e "     This host accepts ${WHITE}root SSH login with a password${NC} today."
+        echo -e "     xiNAS closes that: the step below writes"
+        echo -e "     ${WHITE}PermitRootLogin prohibit-password${NC}, so root may log in over"
+        echo -e "     SSH with a ${BOLD}key only${NC}."
+    else
+        echo -e "     xiNAS writes ${WHITE}PermitRootLogin prohibit-password${NC} below, so root"
+        echo -e "     may log in over SSH with a ${BOLD}key only${NC} — never with a password."
+        if [[ -n "$_prl_now" ]]; then
+            echo -e "     ${DIM}(this host already has PermitRootLogin ${_prl_now})${NC}"
+        fi
+    fi
+    echo ""
+    if [[ -s /root/.ssh/authorized_keys ]]; then
+        ok "Root has an authorized key — key-based login keeps working"
+    else
+        echo -e "     ${RED}No key in /root/.ssh/authorized_keys.${NC} Install one from your"
+        echo -e "     workstation before you log out, or root SSH to this host is gone:"
+        echo -e "       ${CYAN}ssh-copy-id root@${_host}${NC}"
+        echo -e "     Console access and any sudo-capable account are unaffected."
+    fi
+    echo -e "     ${DIM}Revert by editing or removing ${_sshd_dropin}.${NC}"
+    echo ""
+fi
+# ── end root SSH password notice ──────────────────────────────────────────────
+
 # Ubuntu cloud images (AWS/GCP/Azure) drop a cloud-init config that sets
 # PermitRootLogin no. We override it with a lower-numbered drop-in so
 # key-based root SSH works for the AI / MCP bridge.
-_sshd_dropin="/etc/ssh/sshd_config.d/10-xinas-root-access.conf"
 mkdir -p /etc/ssh/sshd_config.d
 if [[ ! -f "$_sshd_dropin" ]]; then
     cat > "$_sshd_dropin" <<'SSHEOF'
