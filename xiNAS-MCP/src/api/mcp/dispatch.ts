@@ -22,6 +22,9 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { CATALOG, type CatalogEntry } from './catalog.js';
 import { SERVER_INFO } from './discover.js';
+import { type ToolResult, errorResult, text } from './results.js';
+
+export type { ToolResult } from './results.js';
 
 export interface LoopbackRequest {
   method: string;
@@ -89,21 +92,6 @@ export interface McpTool {
   description: string;
   inputSchema: { type: 'object'; [k: string]: unknown };
 }
-
-export interface ToolResult {
-  [key: string]: unknown;
-  content: Array<{ type: 'text'; text: string }>;
-  isError?: boolean;
-}
-
-const text = (payload: unknown): ToolResult => ({
-  content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
-});
-
-const errorResult = (code: string, message: string, details?: unknown): ToolResult => ({
-  content: [{ type: 'text', text: JSON.stringify({ error: { code, message, details } }, null, 2) }],
-  isError: true,
-});
 
 /** Apply-gate verdict for one call (exported for unit tests). */
 export function gateVerdict(
