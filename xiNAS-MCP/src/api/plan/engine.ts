@@ -4,6 +4,7 @@ import type { KvStore } from '../../state/index.js';
 import { ApiException } from '../errors.js';
 import type { TaskStore } from '../tasks/store.js';
 import type { DesiredMutation, ResourceRef, Task } from '../tasks/types.js';
+import { type PlanDocument, buildPlanDocument, planDocumentHash } from './document.js';
 
 /**
  * S2 plan engine (s2-task-envelope-spec §5.1, ADR-0004 §Plan/apply
@@ -137,21 +138,27 @@ export interface PlanArgs {
 export interface PlanOutcome {
   task: Task;
   planResult: PlanResult;
+  /** The persisted public plan (S15 §5) — the ONLY source every Plan envelope renders from. */
+  document: PlanDocument;
 }
 
 export interface PlanEngineDeps {
   store: TaskStore;
   ctx: PlanContext;
+  /** Epoch-ms clock, injected for deterministic document.created_at in tests. Default Date.now. */
+  now?: () => number;
 }
 
 export class PlanEngine {
   private readonly store: TaskStore;
   private readonly ctx: PlanContext;
+  private readonly now: () => number;
   private readonly providers = new Map<string, PlanProvider>();
 
   constructor(deps: PlanEngineDeps) {
     this.store = deps.store;
     this.ctx = deps.ctx;
+    this.now = deps.now ?? Date.now;
   }
 
   /** Register a provider, keyed by its `operation_kind`. Last wins. */
@@ -229,6 +236,29 @@ export class PlanEngine {
       }),
     );
 
+    // The persisted public plan (S15 §5): built from the SAME provider result
+    // that feeds the row, so it is the single source every Plan envelope
+    // renders from — plan_id is pre-allocated so the document can carry it
+    // before the row exists.
+    const planId = this.store.nextTaskId();
+    const document = buildPlanDocument({
+      plan_id: planId,
+      operation_kind: args.operation_kind,
+      plan_hash: planHash,
+      state_revision_expected: result.state_revision_expected ?? 0,
+      observed_revision_expected: result.observed_revision_expected,
+      observed_at: result.observed_at,
+      affected_resources: result.affected_resources,
+      risk_level: result.risk_level,
+      blockers: result.blockers,
+      warnings: result.warnings,
+      diff: result.diff,
+      rollback_model: result.rollback_model,
+      created_at_ms: this.now(),
+      principal: args.principal,
+      client_type: args.client_type,
+    });
+
     const task = this.store.createPlanOnly({
       kind: args.operation_kind,
       principal: args.principal,
@@ -239,6 +269,9 @@ export class PlanEngine {
       risk_level: result.risk_level,
       affected_resources: result.affected_resources,
       plan_hash: planHash,
+      task_id: planId,
+      plan_document: document,
+      plan_document_hash: planDocumentHash(document),
       // Spread conditionally — under exactOptionalPropertyTypes the
       // `?:` optionals on CreatePlanOnlyInput reject an explicit undefined.
       // Persist the (possibly enriched) spec so apply/dispatch forward it
@@ -254,7 +287,7 @@ export class PlanEngine {
         : {}),
     });
 
-    return { task, planResult: result };
+    return { task, planResult: result, document };
   }
 }
 

@@ -25,13 +25,13 @@ import { Router } from 'express';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import {
-  clientImpact,
   requireInteger,
   requireString,
   taskEnvelope,
   toApplyPlan,
 } from '../handlers/plan-apply.js';
 import { getOrNull, sendOk } from '../handlers/reads.js';
+import { publicPlan } from '../plan/document.js';
 import {
   xiraidArrayCreateProvider,
   xiraidArrayDeleteProvider,
@@ -143,7 +143,7 @@ export function arraysRouter(ctx: ApiContext): Router {
       const operationKind = isImportShaped(body.spec)
         ? 'xiraid.array.import'
         : 'xiraid.array.create';
-      const { task, planResult } = await tasks.planEngine.plan({
+      const { task, document } = await tasks.planEngine.plan({
         operation_kind: operationKind,
         spec: body.spec,
         principal: rc.principal,
@@ -153,25 +153,7 @@ export function arraysRouter(ctx: ApiContext): Router {
       });
       rc.operation_id = task.task_id;
       const revision = task.state_revision_expected ?? 0;
-      sendOk(
-        req,
-        res,
-        {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
-          state_revision_expected: revision,
-          observed_revision_expected: planResult.observed_revision_expected ?? null,
-          observed_at: planResult.observed_at ?? null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
-        },
-        [revision],
-      );
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 
@@ -286,7 +268,7 @@ export function arraysRouter(ctx: ApiContext): Router {
       // Writability matrix: non-writable keys in the RAW body → per-field
       // 422, before any plan row exists.
       rejectUnwritableKeys(body.spec);
-      const { task, planResult } = await tasks.planEngine.plan({
+      const { task, document } = await tasks.planEngine.plan({
         operation_kind: 'xiraid.array.modify',
         spec: { ...(typeof body.spec === 'object' && body.spec !== null ? body.spec : {}), id },
         principal: rc.principal,
@@ -296,22 +278,17 @@ export function arraysRouter(ctx: ApiContext): Router {
       });
       rc.operation_id = task.task_id;
       const revision = observedArrayRevision(ctx, id) ?? 0;
+      // The modify provider pins no revision (S4 §4: "the plan row does not
+      // persist the observed pin") — the document's state/observed_revision_expected
+      // are the engine defaults (0/null); override with the CURRENT observed
+      // revision the client must echo at apply.
       sendOk(
         req,
         res,
         {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
+          ...publicPlan(document),
           state_revision_expected: revision,
           observed_revision_expected: revision,
-          observed_at: null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
         },
         [revision],
       );
@@ -428,7 +405,7 @@ export function arraysRouter(ctx: ApiContext): Router {
     const id = req.params.id as string;
 
     if (mode === 'plan') {
-      const { task, planResult } = await tasks.planEngine.plan({
+      const { task, document } = await tasks.planEngine.plan({
         operation_kind: 'xiraid.array.delete',
         spec: { id },
         principal: rc.principal,
@@ -438,22 +415,15 @@ export function arraysRouter(ctx: ApiContext): Router {
       });
       rc.operation_id = task.task_id;
       const revision = observedArrayRevision(ctx, id) ?? 0;
+      // Same S4 §4 override as modify (above): echo the CURRENT observed
+      // revision, not the engine's unpinned document default.
       sendOk(
         req,
         res,
         {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
+          ...publicPlan(document),
           state_revision_expected: revision,
           observed_revision_expected: revision,
-          observed_at: null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
         },
         [revision],
       );

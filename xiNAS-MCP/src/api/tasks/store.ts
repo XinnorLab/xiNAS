@@ -1,4 +1,5 @@
 import type { Database, Statement } from 'better-sqlite3';
+import type { PlanDocument } from '../plan/document.js';
 import {
   type ResourceRef,
   type StageStatus,
@@ -45,6 +46,13 @@ export interface CreatePlanOnlyInput {
   idempotency_key?: string;
   plan_hash?: string;
   state_revision_expected?: number;
+  /** Caller-supplied task id (PlanEngine pre-allocates it to stamp the
+   *  document's plan_id before the row exists, S15 §5); falls back to
+   *  TaskStore.newId() when absent. */
+  task_id?: string;
+  /** The rendered public plan (S15 §5), persisted verbatim + its own hash. */
+  plan_document?: PlanDocument;
+  plan_document_hash?: string;
 }
 
 /** Fields a caller supplies to create a `queued` apply task. */
@@ -126,6 +134,8 @@ interface TaskRow {
   spec: string | null;
   plan_binding: string | null;
   desired_rollback: string | null;
+  plan_document: string | null;
+  plan_document_hash: string | null;
   snapshot_before: string | null;
   snapshot_after: string | null;
   agent_acceptance_id: string | null;
@@ -159,7 +169,8 @@ const INSERT_TASK_SQL = `INSERT INTO tasks (
   task_id, kind, state, plan_id, idempotency_key, principal, client_type,
   request_id, correlation_id, input_hash, plan_hash, result_hash,
   state_revision_expected, state_revision_at_apply, risk_level,
-  affected_resources, spec, plan_binding, desired_rollback, snapshot_before,
+  affected_resources, spec, plan_binding, desired_rollback, plan_document, plan_document_hash,
+  snapshot_before,
   snapshot_after, agent_acceptance_id,
   last_event_sequence, cancel_requested_at, cancel_refused_reason,
   error_code, error_message, remediation_hint, created_at, updated_at, terminal_at
@@ -167,7 +178,8 @@ const INSERT_TASK_SQL = `INSERT INTO tasks (
   @task_id, @kind, @state, @plan_id, @idempotency_key, @principal, @client_type,
   @request_id, @correlation_id, @input_hash, @plan_hash, @result_hash,
   @state_revision_expected, @state_revision_at_apply, @risk_level,
-  @affected_resources, @spec, @plan_binding, @desired_rollback, @snapshot_before,
+  @affected_resources, @spec, @plan_binding, @desired_rollback, @plan_document, @plan_document_hash,
+  @snapshot_before,
   @snapshot_after, @agent_acceptance_id,
   @last_event_sequence, @cancel_requested_at, @cancel_refused_reason,
   @error_code, @error_message, @remediation_hint, @created_at, @updated_at, @terminal_at
@@ -235,6 +247,11 @@ export class TaskStore {
     );
   }
 
+  /** A fresh task id for a caller that must know the id before the insert (PlanEngine, S15 §5). */
+  nextTaskId(): string {
+    return this.newId();
+  }
+
   createPlanOnly(input: CreatePlanOnlyInput): Task {
     return this.insertTask({
       kind: input.kind,
@@ -249,11 +266,14 @@ export class TaskStore {
       spec: input.spec,
       plan_binding: input.plan_binding,
       desired_rollback: undefined,
+      plan_document: input.plan_document,
+      plan_document_hash: input.plan_document_hash,
       plan_id: undefined,
       idempotency_key: input.idempotency_key,
       plan_hash: input.plan_hash,
       state_revision_expected: input.state_revision_expected,
       state_revision_at_apply: undefined,
+      task_id: input.task_id,
     });
   }
 
@@ -271,11 +291,14 @@ export class TaskStore {
       spec: input.spec,
       plan_binding: input.plan_binding,
       desired_rollback: input.desired_rollback,
+      plan_document: undefined,
+      plan_document_hash: undefined,
       plan_id: input.plan_id,
       idempotency_key: input.idempotency_key,
       plan_hash: input.plan_hash,
       state_revision_expected: input.state_revision_expected,
       state_revision_at_apply: input.state_revision_at_apply,
+      task_id: undefined,
     });
   }
 
@@ -534,6 +557,9 @@ export class TaskStore {
     // Same treatment as `spec`: JSON columns, `=== undefined` → NULL below.
     plan_binding: unknown;
     desired_rollback: unknown;
+    // The rendered public plan (S15 §5) — JSON column, `=== undefined` → NULL.
+    plan_document: unknown;
+    plan_document_hash: string | undefined;
     // `| undefined` (not `?`) so callers may pass an explicitly-undefined
     // optional through without tripping exactOptionalPropertyTypes; the
     // `?? null` below normalizes either form.
@@ -542,9 +568,12 @@ export class TaskStore {
     plan_hash: string | undefined;
     state_revision_expected: number | undefined;
     state_revision_at_apply: number | undefined;
+    // Caller-supplied task id (PlanEngine pre-allocates it, S15 §5); falls
+    // back to a fresh id when absent.
+    task_id?: string | undefined;
   }): Task {
     const now = this.now();
-    const task_id = this.newId();
+    const task_id = fields.task_id ?? this.newId();
     this.insertTaskStmt.run({
       task_id,
       kind: fields.kind,
@@ -569,6 +598,9 @@ export class TaskStore {
       plan_binding: fields.plan_binding !== undefined ? JSON.stringify(fields.plan_binding) : null,
       desired_rollback:
         fields.desired_rollback !== undefined ? JSON.stringify(fields.desired_rollback) : null,
+      plan_document:
+        fields.plan_document === undefined ? null : JSON.stringify(fields.plan_document),
+      plan_document_hash: fields.plan_document_hash ?? null,
       snapshot_before: null,
       snapshot_after: null,
       agent_acceptance_id: null,
@@ -644,6 +676,10 @@ function rowToTask(row: TaskRow, stages: TaskStage[]): Task {
     ...(row.desired_rollback !== null
       ? { desired_rollback: JSON.parse(row.desired_rollback) as unknown }
       : {}),
+    ...(row.plan_document !== null
+      ? { plan_document: JSON.parse(row.plan_document) as PlanDocument }
+      : {}),
+    ...(row.plan_document_hash !== null ? { plan_document_hash: row.plan_document_hash } : {}),
     ...(row.snapshot_before !== null ? { snapshot_before: row.snapshot_before } : {}),
     ...(row.snapshot_after !== null ? { snapshot_after: row.snapshot_after } : {}),
     ...(row.agent_acceptance_id !== null ? { agent_acceptance_id: row.agent_acceptance_id } : {}),

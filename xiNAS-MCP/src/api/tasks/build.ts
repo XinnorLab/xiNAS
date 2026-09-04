@@ -68,7 +68,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
     ...(opts.maxInflight !== undefined ? { maxInflight: opts.maxInflight } : {}),
     ...(opts.taskWatch !== undefined ? { taskWatch: opts.taskWatch } : {}),
   });
-  const planEngine = new PlanEngine({ store, ctx: { kv: state.kv } });
+  const planEngine = new PlanEngine({ store, ctx: { kv: state.kv }, now });
   planEngine.register(referencePlanProvider);
   // The five real NFS providers (S3 N4.1 + N7.3) — share.* +
   // nfs-profile.update + nfs-idmap.set.

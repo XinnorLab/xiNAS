@@ -3,7 +3,6 @@ import { NET_IDENTITY_FIELDS } from '../../lib/net/validate.js';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import {
-  clientImpact,
   requireInteger,
   requireString,
   taskEnvelope,
@@ -11,6 +10,7 @@ import {
 } from '../handlers/plan-apply.js';
 import type { RevisionedValue } from '../../state/index.js';
 import { embedMetadata, getOrNull, listByPrefix, sendOk } from '../handlers/reads.js';
+import { publicPlan } from '../plan/document.js';
 import type { PlanProvider } from '../plan/engine.js';
 import { netIfaceUpdateProvider, netPoolApplyProvider } from '../plan/providers/network.js';
 
@@ -157,7 +157,7 @@ export function networkRouter(ctx: ApiContext): Router {
 
     if (mode === 'plan') {
       rejectIdentityKeys(body.spec);
-      const { task, planResult } = await tasks.planEngine.plan({
+      const { task, document } = await tasks.planEngine.plan({
         operation_kind: 'net.iface.update',
         spec: { ...(typeof body.spec === 'object' && body.spec !== null ? body.spec : {}), id },
         principal: rc.principal,
@@ -167,25 +167,7 @@ export function networkRouter(ctx: ApiContext): Router {
       });
       rc.operation_id = task.task_id;
       const revision = task.state_revision_expected ?? 0;
-      sendOk(
-        req,
-        res,
-        {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
-          state_revision_expected: revision,
-          observed_revision_expected: null,
-          observed_at: planResult.observed_at ?? null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
-        },
-        [revision],
-      );
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 
@@ -308,7 +290,7 @@ export function networkRouter(ctx: ApiContext): Router {
     const mode = body.mode;
 
     if (mode === 'plan') {
-      const { task, planResult } = await tasks.planEngine.plan({
+      const { task, document } = await tasks.planEngine.plan({
         operation_kind: 'net.pool.apply',
         spec: body.spec,
         principal: rc.principal,
@@ -318,25 +300,7 @@ export function networkRouter(ctx: ApiContext): Router {
       });
       rc.operation_id = task.task_id;
       const revision = task.state_revision_expected ?? 0;
-      sendOk(
-        req,
-        res,
-        {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
-          state_revision_expected: revision,
-          observed_revision_expected: null,
-          observed_at: planResult.observed_at ?? null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
-        },
-        [revision],
-      );
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 

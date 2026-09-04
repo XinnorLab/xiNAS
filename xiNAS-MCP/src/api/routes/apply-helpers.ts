@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import type { ApiContext, TaskEngines } from '../context.js';
 import { ApiException } from '../errors.js';
 import { sendOk } from '../handlers/reads.js';
+import { publicPlan } from '../plan/document.js';
 import type { ApplyPlan } from '../tasks/engine.js';
 import type { DesiredMutation, ResourceRef, Task } from '../tasks/types.js';
 
@@ -95,18 +96,13 @@ export function requireString(v: unknown, name: string): string {
   return v;
 }
 
-/** Plain-language NFS-client impact for the Plan envelope. */
-function clientImpact(riskLevel: string): string {
-  return riskLevel === 'non_disruptive'
-    ? 'No impact on NFS clients.'
-    : 'May affect NFS clients; review the diff.';
-}
-
 /**
  * `mode=plan`: run the PlanEngine for `operationKind` and render the public
- * Plan envelope (api-v1.yaml `Plan`) from BOTH the durable `plan_only` row and
- * the in-memory PlanResult. `extra` lets a route surface route-specific fields
- * (share.create echoes the server-assigned `id`).
+ * Plan envelope (api-v1.yaml `Plan`) as the public projection of the
+ * persisted plan document (S15 §5) — the SAME document stored on the
+ * `plan_only` row, so what the client sees here and what a later
+ * confirmation shows are the same bytes. `extra` lets a route surface
+ * route-specific fields (share.create echoes the server-assigned `id`).
  */
 export async function planMode(
   req: Request,
@@ -117,7 +113,7 @@ export async function planMode(
   extra: Record<string, unknown> = {},
 ): Promise<void> {
   const rc = req.context!;
-  const { task, planResult } = await tasks.planEngine.plan({
+  const { task, document } = await tasks.planEngine.plan({
     operation_kind: operationKind,
     spec,
     principal: rc.principal,
@@ -127,26 +123,7 @@ export async function planMode(
   });
   rc.operation_id = task.task_id;
   const revision = task.state_revision_expected ?? 0;
-  sendOk(
-    req,
-    res,
-    {
-      plan_id: task.task_id,
-      plan_hash: task.plan_hash,
-      state_revision_expected: revision,
-      observed_revision_expected: planResult.observed_revision_expected ?? null,
-      observed_at: planResult.observed_at ?? null,
-      affected_resources: task.affected_resources,
-      risk_level: planResult.risk_level,
-      client_impact: clientImpact(planResult.risk_level),
-      blockers: planResult.blockers,
-      warnings: planResult.warnings,
-      diff: planResult.diff,
-      rollback_model: planResult.rollback_model,
-      ...extra,
-    },
-    [revision],
-  );
+  sendOk(req, res, { ...publicPlan(document), ...extra }, [revision]);
 }
 
 export interface ApplyModeOptions {

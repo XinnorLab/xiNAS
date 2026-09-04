@@ -505,4 +505,15 @@ describe('NFS mutating routes (N5)', () => {
     expect(bogus.status).toBe(400);
     expect(bogus.body.errors[0].code).toBe('INVALID_ARGUMENT');
   });
+
+  it('S15: the Plan envelope is byte-identical to the public projection of the stored document', async () => {
+    const { publicPlan } = await import('../../api/plan/document.js');
+    const res = await post('/api/v1/shares', { mode: 'plan', spec: CREATE_SPEC });
+    expect(res.status).toBe(200);
+    const result = res.body.result as Record<string, unknown>;
+    const stored = setup.tasks.store.get(result.plan_id as string);
+    expect(stored?.plan_document).toBeDefined();
+    const { id: _echoedId, ...envelope } = result;
+    expect(envelope).toEqual(publicPlan(stored?.plan_document as never));
+  });
 });

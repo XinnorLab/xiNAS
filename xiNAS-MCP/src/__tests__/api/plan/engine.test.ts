@@ -291,4 +291,15 @@ describe('PlanEngine.plan', () => {
     });
     expect(h.countTasks()).toBe(0);
   });
+
+  it('S15: persists the plan document + hash and returns it; the row round-trips it', async () => {
+    const { task, document } = await h.engine.plan(makePlanArgs());
+    expect(document.plan_id).toBe(task.task_id);
+    expect(document.plan_hash).toBe(task.plan_hash);
+    expect(document.operation_kind).toBe('reference.echo');
+    expect(document.created_by).toEqual({ principal: 'admin:test', client_type: 'rest' });
+    const stored = h.store.get(task.task_id);
+    expect(stored?.plan_document).toEqual(document);
+    expect(stored?.plan_document_hash).toMatch(/^[0-9a-f]{64}$/);
+  });
 });
