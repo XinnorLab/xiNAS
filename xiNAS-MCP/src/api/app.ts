@@ -24,6 +24,7 @@ import { eventsRouter } from './routes/events.js';
 import { groupsRouter } from './routes/groups.js';
 import { healthRouter } from './routes/health.js';
 import { inventoryRouter } from './routes/inventory.js';
+import { mcpConfirmationsRouter } from './routes/mcp-confirmations.js';
 import { networkRouter } from './routes/network.js';
 import { nfsIdmapRouter } from './routes/nfs-idmap.js';
 import { nfsMutateRouter } from './routes/nfs-mutate.js';
@@ -107,6 +108,9 @@ export function createApp(ctx: ApiContext): Express {
   v1.use(networkRouter(ctx));
   v1.use(healthRouter(ctx));
   v1.use(tasksRouter(ctx));
+  // S15 §9.1–9.2: the operator approval surface over REST — GET/POST
+  // /mcp/confirmations… — and therefore xinasctl's approval commands.
+  v1.use(mcpConfirmationsRouter(ctx));
   v1.use(eventsRouter(ctx));
   v1.use(auditRouter(ctx));
   v1.use(configHistoryRouter(ctx));

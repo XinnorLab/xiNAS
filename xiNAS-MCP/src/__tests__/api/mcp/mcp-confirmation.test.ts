@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startServer } from '../../../api/server.js';
+import { ACK_NO_ROLLBACK } from '../../../api/mcp/confirmation/types.js';
 import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpers.js';
 
 /**
@@ -48,6 +49,20 @@ import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpe
  *    mismatch) rather than by Gate 6's plan-ownership check — matching
  *    the brief. The plan-ownership gate itself is still covered
  *    separately by test 6b (a REST-created plan, no requestState).
+ *
+ * Task 11 addendum: the REST-approval happy path below reuses
+ * `planFsCreateForce` — the only destructive/url-capable plan this suite
+ * has (see above) — whose provider sets rollback_model 'unsupported'
+ * alongside risk_level 'destructive' (`filesystem.ts` force-create path).
+ * `ConfirmationService.operatorDecide`'s acknowledge table checks
+ * rollback_model 'unsupported' BEFORE risk_level 'destructive' (S15 §9.2:
+ * rollback unsupported → "ROLLBACK IS NOT SUPPORTED" wins over destructive
+ * → "DATA MAY BE PERMANENTLY LOST"), so the required phrase for THIS
+ * record is `ACK_NO_ROLLBACK`, not the task-11 brief's literal
+ * `ACK_DATA_LOSS` example — the brief's example assumed a destructive plan
+ * with a non-'unsupported' rollback_model, which nothing in this codebase
+ * currently produces. The wrong-phrase/right-phrase pairing itself is
+ * covered directly by routes-mcp-confirmations.test.ts.
  */
 
 interface RpcResult {
@@ -306,6 +321,25 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
         observed_at: '2026-06-10T12:00:00Z',
       },
     });
+    // A second, independent array so the Task 11 REST-approval test (which
+    // dispatches a real apply all the way to a task — same forever-held-
+    // lease rationale as share-b above) never collides with case 8's
+    // apply on the SAME XiraidArray 'data'.
+    handle.state.kv.put('/xinas/v1/observed/XiraidArray/data2', {
+      kind: 'XiraidArray',
+      id: 'data2',
+      spec: {
+        name: 'data2',
+        level: 'raid5',
+        member_disk_ids: ['d5', 'd6', 'd7', 'd8'],
+        strip_size_kib: 128,
+      },
+      status: {
+        state: 'optimal',
+        volume_path: '/dev/xi_data2',
+        observed_at: '2026-06-10T12:00:00Z',
+      },
+    });
   }, 30_000);
 
   afterAll(async () => {
@@ -353,6 +387,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   async function planFsCreateForce(
     token: string,
     mountpoint: string,
+    backingDevice = '/dev/xi_data',
   ): Promise<{
     plan_id: string;
     expected_revision: number;
@@ -361,7 +396,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   }> {
     const res = await call(port, token, nextId('plan-fs'), 'filesystems.create', {
       mode: 'plan',
-      spec: { backing_device: '/dev/xi_data', mountpoint, force: true },
+      spec: { backing_device: backingDevice, mountpoint, force: true },
     });
     const payload = payloadOf(res);
     const result = payload.result as {
@@ -955,6 +990,116 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     expect(payload.error?.details?.reason).toBe('dangerous_flag_required');
     expect(getConfirmationByPlanId(plan_id)?.status).toBe('approved'); // unchanged
     expect(countTasksByPlan(plan_id)).toBe(0);
+  });
+
+  // ── 11. REST approval (S15 Task 11) ───────────────────────────────────────
+  // See the file header addendum for why the acknowledge phrase here is
+  // ACK_NO_ROLLBACK, not the task-11 brief's literal ACK_DATA_LOSS example.
+
+  it('REST approval: url happy path — POST /mcp/confirmations/:id/approve, then the MCP retry proceeds to apply', async () => {
+    const { plan_id, expected_revision } = await planFsCreateForce(
+      'tok-admin',
+      '/mnt/t11a',
+      '/dev/xi_data2', // a distinct array from case 8's — that apply holds its lease forever
+    );
+    const idem = nextId('ik');
+    const args = {
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: idem,
+      dangerous: true,
+    };
+
+    const first = await call(
+      port,
+      'tok-admin',
+      nextId('call'),
+      'filesystems.create',
+      args,
+      {},
+      BOTH,
+    );
+    const r1 = toolResultOf(first);
+    expect(r1.resultType).toBe('input_required');
+    expect(r1.inputRequests?.confirm_apply?.params.mode).toBe('url');
+    const record = getConfirmationByPlanId(plan_id);
+    expect(record?.status).toBe('pending');
+
+    await handle.state.drainer.drainNow();
+    const before = auditRows(dir).length;
+
+    const approveRes = await restCall(
+      port,
+      'tok-admin2',
+      'POST',
+      `/mcp/confirmations/${record?.confirmation_id as string}/approve`,
+      { acknowledge: ACK_NO_ROLLBACK },
+    );
+    expect(approveRes.status).toBe(200);
+    const approved = approveRes.body.result as Record<string, unknown>;
+    expect(approved.status).toBe('approved');
+    expect(approved.approved_by).toBe('admin:two');
+    expect(approved.approval_channel).toBe('bearer');
+    expect(approved.approval_interface).toBe('rest');
+
+    const retried = await call(
+      port,
+      'tok-admin',
+      nextId('call'),
+      'filesystems.create',
+      args,
+      { requestState: r1.requestState, inputResponses: { confirm_apply: { action: 'accept' } } },
+      BOTH,
+    );
+    const r2 = toolResultOf(retried);
+    expect(r2.resultType).toBe('complete');
+    expect(r2.isError ?? false).toBe(false);
+    const taskId = (payloadOf(retried).result as { task_id?: string })?.task_id;
+    expect(typeof taskId).toBe('string');
+
+    const consumed = getConfirmationByPlanId(plan_id);
+    expect(consumed?.status).toBe('consumed');
+    expect(consumed?.consumed_task_id).toBe(taskId);
+    expect(consumed?.approved_by).toBe('admin:two');
+    expect(consumed?.approval_channel).toBe('bearer');
+    expect(consumed?.approval_interface).toBe('rest');
+
+    await handle.state.drainer.drainNow();
+    const rows = auditRows(dir).slice(before);
+    expect(rows.some((r) => r.kind === 'mcp.confirmation.approved')).toBe(true);
+    expect(rows.some((r) => r.kind === 'mcp.confirmation.consumed')).toBe(true);
+  }, 10_000);
+
+  it("REST approval: the requester's own token on approve is refused 409 approver_policy", async () => {
+    const { plan_id, expected_revision } = await planFsCreateForce(
+      'tok-admin',
+      '/mnt/t11b',
+      '/dev/xi_data2',
+    );
+    const idem = nextId('ik');
+    const args = {
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: idem,
+      dangerous: true,
+    };
+    await call(port, 'tok-admin', nextId('call'), 'filesystems.create', args, {}, BOTH);
+    const record = getConfirmationByPlanId(plan_id);
+
+    const res = await restCall(
+      port,
+      'tok-admin', // same principal (admin:test) that requested this confirmation
+      'POST',
+      `/mcp/confirmations/${record?.confirmation_id as string}/approve`,
+      { acknowledge: ACK_NO_ROLLBACK },
+    );
+    expect(res.status).toBe(409);
+    const err = (res.body.errors as Array<Record<string, unknown>> | undefined)?.[0];
+    expect(err?.code).toBe('CONFLICT');
+    expect((err?.details as Record<string, unknown> | undefined)?.reason).toBe('approver_policy');
+    expect(getConfirmationByPlanId(plan_id)?.status).toBe('pending'); // unchanged
   });
 
   // ── 9. legacy client (brief case 9) ───────────────────────────────────────

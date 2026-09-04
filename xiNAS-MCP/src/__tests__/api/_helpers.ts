@@ -76,6 +76,8 @@ export async function buildTestApp(): Promise<TestSetup & { cleanup(): Promise<v
 export const ADMIN_TOKEN = 'Bearer tok-admin';
 export const OPERATOR_TOKEN = 'Bearer tok-operator';
 export const VIEWER_TOKEN = 'Bearer tok-viewer';
+/** A SECOND, distinct admin principal (S15 §9.2 distinct_principal cases). */
+export const ADMIN2_TOKEN = 'Bearer tok-admin2';
 
 /** Seed a singleton Cluster object. */
 export function seedCluster(state: OpenedStateStore): void {
@@ -225,6 +227,13 @@ export interface MockAgentSetup {
   mockAgent: MockAgentHandle;
   /** The wired S2 engines — exposed so tests can seed/inspect tasks directly (S10). */
   tasks: TaskEngines;
+  /**
+   * The full ApiContext `createApp` was built from — exposed so tests can
+   * reach `ctx.mcpConfirmations` (the ConfirmationService instance the
+   * routes dispatch through) directly, e.g. to exercise `operatorDecide`
+   * for a `local:uds` caller (S15 §9.2), which supertest cannot simulate.
+   */
+  ctx: ApiContext;
   teardown(): Promise<void>;
 }
 
@@ -370,6 +379,7 @@ export async function buildTestAppWithMockAgent(
     listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
     tokens: {
       'tok-admin': { principal: 'admin:test', role: 'admin' },
+      'tok-admin2': { principal: 'admin:two', role: 'admin' },
       'tok-operator': { principal: 'operator:test', role: 'operator' },
       'tok-viewer': { principal: 'viewer:test', role: 'viewer' },
       [MOCK_AGENT_TOKEN]: { principal: 'agent:root', role: 'internal_agent' },
@@ -456,6 +466,7 @@ export async function buildTestAppWithMockAgent(
     controllerId: MOCK_CONTROLLER_ID,
     heartbeatIntervalMs: MOCK_HEARTBEAT_INTERVAL_MS,
     tasks,
+    ctx,
     mockAgent,
     async teardown() {
       tracker.stop();
