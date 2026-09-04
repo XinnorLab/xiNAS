@@ -403,6 +403,26 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
   and can be disabled with `xinas_require_avx: false`. It carries the
   `preflight` and `xiraid` tags, so `--tags xiraid` runs it ahead of a
   standalone xiRAID (re)install.
+- **Existing-install preflight (second task, also before any `apt` call).**
+  `xiraid_skip_install: true` promises that xiRAID is already on the host:
+  `playbooks/site.yml` skips the whole `xiraid_classic` role under it, so
+  nothing later in the run can install one. When the flag is set, `common`
+  therefore checks that `xicli` is actually resolvable on `PATH` and fails
+  the play at once when it is not, naming the flag, the overlay file that
+  holds it (`playbooks/group_vars/all/20-local.yml`) and the two ways out
+  (clear the flag and let `xiraid_classic` install xiRAID, or install it by
+  hand). Without the check the run continues for ~50 more tasks and dies in
+  the storage-state gate of `nvme_namespace` / `raid_fs` instead, because
+  Ansible's `command` module reports a missing executable as `rc=2` with
+  empty `stdout`/`stderr` — indistinguishable, on `rc` alone, from `xicli`
+  exiting `2` — so the probe can only report that it could not read the
+  array list (observed on v3.13.2-rc.4, host install log 2026-09-04 12:18;
+  the diagnosis itself is sharpened in
+  [raid-spec.md §11](raid-spec.md#11-idempotency--the-storage-reset-contract)).
+  The flag is sticky — the reuse wizard writes it into the operator overlay,
+  where it survives into later runs — which is why the interactive menus
+  clear it before purging xiRAID packages (raid-spec.md §11, *A purge implies
+  a reinstall*). Carries the `preflight` and `xiraid` tags.
 - Packages installed (apt): `curl`, `vim`, `htop`, `chrony`, `unattended-upgrades`, `ca-certificates`, `quota`.
 - Timezone: `Europe/Amsterdam`.
 - Chrony service enabled and started.
@@ -796,6 +816,7 @@ The health engine bundles many of the checks above (RAID state, mounts, exports,
 | NFS mounts but RDMA refused | `mlnx-nfsrdma-dkms` not loaded, or port 20049 blocked | `lsmod \| grep rdma`, `ss -lntp \| grep 20049` |
 | `xinas-nfs-helper.sock` missing at boot | Helper raced with NFS server start | `systemctl restart xinas-nfs-helper` (also tracked in commit `45ef0cc`) |
 | `cpupower` fails on VM | VM has no exposed scaling driver | Use the `xinnorVM` preset (`perf_disable_cpupower=true`) |
+| `common` fails at once with "xiRAID is not installed on this host, but this run was told to skip installing it" | `xiraid_skip_install` is set — usually left in `playbooks/group_vars/all/20-local.yml` by an earlier existing-arrays run — on a host that has no `xicli` | Clear the flag (`yq -i 'del(.xiraid_skip_install)' playbooks/group_vars/all/20-local.yml`) and re-run so `xiraid_classic` installs xiRAID (§3.1) |
 | `common` fails at once with "This CPU does not report the AVX instruction set" (or, on ≤ 3.13.0, `xiraid_classic` fails installing `xiraid-core` with `ERROR: The CPU flag is not supported: avx.`) | The CPU model exposed to the host has no AVX — typically a VM on the default `qemu64` / `kvm64` model | `grep -c avx /proc/cpuinfo`; give the VM a CPU model with AVX (§3.1) and re-run |
 
 ---

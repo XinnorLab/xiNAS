@@ -37,6 +37,39 @@
     - "'avx' not in (xinas_cpu_flags.stdout | default('') | regex_replace('^flags\\s*:', '')).split()"
   tags: [preflight, xiraid]
 
+# Preflight: the mirror image of the AVX one above. `xiraid_skip_install: true`
+# promises xiRAID is already on the host - playbooks/site.yml skips the whole
+# xiraid_classic role under it, so nothing later in the run can install one.
+# The flag is sticky (the reuse wizard writes it into the operator overlay), so
+# it outlives the host state it described: on v3.13.2-rc.4 a menu purge at
+# 12:13 met a run at 12:18 that still carried it, and the missing xicli only
+# surfaced ~50 tasks later, in a storage gate that could only report "the probe
+# could not answer". Check the promise before the first apt call instead.
+# Contract and the full incident: docs/Installer/spec.md §3.1.
+- name: Look for the xiRAID CLI (existing-install preflight)  # noqa: command-instead-of-shell
+  ansible.builtin.shell: command -v xicli
+  register: xinas_xicli_check
+  changed_when: false
+  failed_when: false
+  when: xiraid_skip_install | default(false) | bool
+  tags: [preflight, xiraid]
+
+- name: Fail fast when the run skips installing a xiRAID that is not there
+  ansible.builtin.fail:
+    msg: >-
+      xiRAID is not installed on this host ('xicli' is not on PATH), but this run was
+      told to skip installing it (xiraid_skip_install=true): playbooks/site.yml skips
+      the whole xiraid_classic role under that flag, so nothing here would put xiRAID
+      back, and every storage step after this one needs xicli. That flag is usually
+      left behind by an earlier existing-arrays run, in the operator overlay
+      playbooks/group_vars/all/20-local.yml - clear it there (or drop the
+      -e xiraid_skip_install=true) so xiraid_classic installs xiRAID, then re-run.
+      To keep skipping the install, install xiRAID by hand first.
+  when:
+    - xiraid_skip_install | default(false) | bool
+    - (xinas_xicli_check.rc | default(1)) != 0
+  tags: [preflight, xiraid]
+
 - name: Update apt cache
   ansible.builtin.apt:
     update_cache: yes
