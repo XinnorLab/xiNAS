@@ -116,7 +116,11 @@ deleted and recreated only on a fresh box (**EMPTY**) or when the operator sets
 with `nvme_skip_cleanup_confirmation: true`). A **FOREIGN** layout fails fast rather than
 being wiped. MATCH requires the arrays to report themselves **online** (`xicli raid show`
 state words) — a degraded or rebuilding array is not a MATCH, and fails with a repair-first
-message rather than the generic "wipe and rebuild" remedy. The legacy `nvme_use_existing_namespaces` knob is deprecated. See
+message rather than the generic "wipe and rebuild" remedy. A fourth state, **UNKNOWN**,
+covers a probe that could not answer at all; it outranks the others and fails fast, and
+`xinas_storage_probe_hint` carries the specific reason both roles print — including the
+case where `xicli` is not installed at all, which no `xinas_storage_reset` can fix. The
+legacy `nvme_use_existing_namespaces` knob is deprecated. See
 [docs/Installer/raid-spec.md](../../../docs/Installer/raid-spec.md) §11.
 
 ## Warning

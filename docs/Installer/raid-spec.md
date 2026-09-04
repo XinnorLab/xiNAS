@@ -738,9 +738,29 @@ each probe answered at all:
 
 `UNKNOWN` **outranks every other state**, including `FOREIGN` — `FOREIGN` would assert
 knowledge about an array list that could not be read. Both roles fail fast on it with the
-remedy named (bring xiRAID up and re-run, or set `xinas_storage_reset=true` to wipe and
-rebuild regardless), and nothing is modified before that point. An explicit, confirmed reset
-still wins, exactly as it does over `FOREIGN`.
+remedy named (`xinas_storage_probe_hint`, below), and nothing is modified before that
+point. An explicit, confirmed reset still wins, exactly as it does over `FOREIGN`.
+
+**A probe that could not answer says why.** "Could not answer" covers two very different
+hosts and two different remedies, so the classifier records which one it is and both roles
+quote it. Ansible's `command` module reports a *missing executable* as `rc=2` with empty
+`stdout`/`stderr` and `[Errno 2] No such file or directory: b'xicli'` in `msg`, which on
+`rc` alone is indistinguishable from `xicli` itself exiting `2`. Detection therefore sets:
+
+- `xinas_storage_probe_missing_xicli` — true when the array probe failed with that ENOENT
+  signature, i.e. xiRAID is not installed on the host at all;
+- `xinas_storage_probe_hint` — the operator-facing sentence the `UNKNOWN` failures in
+  `nvme_namespace` and `raid_fs` quote verbatim, so the diagnosis is written once.
+
+When `xicli` is absent the hint says exactly that; if the run was additionally told not to
+install xiRAID it names `xiraid_skip_install` and the overlay file that holds it; and it
+states that **`xinas_storage_reset` is not a route out of this one** — `xicli drive clean`
+and array creation both go through the same missing binary, so a reset would authorize
+destruction and then fail anyway. Otherwise the hint carries the probe's own `rc` and
+`stderr` and points at `xiraid-core`. (Through v3.13.2-rc.4 both cases produced the one
+generic sentence "is xiraid-core running?", so a host whose xiRAID packages the menu had
+just purged was told to check a service that was no longer installed — host install log,
+2026-09-04 12:18.)
 
 The gates read `xinas_storage_state | default('UNKNOWN')`: an undefined fact is a
 non-answer, and a non-answer never authorizes destruction.
@@ -833,6 +853,55 @@ offers to purge the xiRAID packages first. Every question after `Reuse Arrays? �
 returns `2` instead, and the caller sends `2` back to the menu untouched. The operator has
 already said to keep these arrays; offering to remove the packages those arrays need
 contradicts the answer they just gave.
+
+**A purge implies a reinstall.** `check_remove_xiraid` — the "Remove them before running
+Ansible?" prompt that `clean_install` and `startup_menu.sh`'s ordinary install path run
+before the playbook — may only remove the xiRAID packages on a run that will put them
+back. `playbooks/site.yml` guards `xiraid_classic` with
+`when: not (xiraid_skip_install | default(false) | bool)`, and that flag is **sticky**: the
+reuse path writes it into the operator overlay `playbooks/group_vars/all/20-local.yml`,
+where it survives into every later run, including a later clean install. Purging under it
+leaves a host with no `xicli` at all and no role that reinstalls one. `check_remove_xiraid`
+therefore reads the effective configuration first and, when `xiraid_skip_install` is true,
+clears it in the local overlay and says so before touching a package — reaching that
+function at all means this run installs xiRAID itself. Declining the removal still aborts
+the run and changes nothing, exactly as before.
+
+This is the same collision the existing-RAID branch hit from the other side (that branch no
+longer calls `check_remove_xiraid` at all); it reappeared through the overlay on
+v3.13.2-rc.4, where a `12:13:57` purge and a `12:18` run with a stale
+`xiraid_skip_install: true` left the node without `xicli` and the install died in
+`raid_fs`'s `UNKNOWN` gate.
+
+**Recovering arrays after a purge that already happened.** A *fresh* `xiraid-core` install
+runs the package's postinstall, which resets `/etc/xiraid`: the per-array configs in
+`/etc/xiraid/raids/*.conf` and the license store go with it. (§3.4 of
+[spec.md](spec.md#34-xiraid_classic--install-xiraid-classic) says the role "does not wipe
+`/etc/xiraid` on re-run" — that covers apt's no-op install over an *already installed*
+package, which never re-runs the postinst. It does not cover purge-then-install.) The
+arrays themselves survive: their configuration also lives in the drive metadata. Recovery,
+in order:
+
+```bash
+sudo xicli license update -p /tmp/license   # the license store went with /etc/xiraid
+sudo xicli raid import show -f json         # name + uuid of every recoverable array
+sudo xicli raid import apply -id <uuid>     # once per array; -nn renames, default keeps the name
+```
+
+**`xicli raid restore` is not the command for this**, despite the name. The vendor splits
+the two by where the configuration comes from: restore works "from the configuration
+files" ([xiRAID 4.3.0 AG, *Restoring a
+RAID*](https://xinnor.io/docs/xiRAID-4.3.0/E/en/AG/1/restoring_raid.html)), while the
+import commands "work with RAIDs that are present in the disk metadata, but are not
+present in the common configuration file" ([xiRAID 4.3.0 AG, *Importing a
+RAID*](https://xinnor.io/docs/xiRAID-4.3.0/E/en/AG/1/importing_a_raid.html)) — exactly the
+post-reinstall state. With `/etc/xiraid/raids/` empty, `xicli raid restore -a` finds
+nothing to restore and exits silently, which reads like a failed recovery rather than the
+wrong tool. **[observed]** on xiRAID 4.4.1 (2026-09-04, 22-drive RAID 5 `data` + RAID 10
+`log`): `restore -a` printed nothing and created nothing; two `import apply` calls brought
+both arrays back `online, initialized` under their original names and UUIDs, rewrote
+`/etc/xiraid/raids/*.conf`, and `/dev/xi_data` still carried `LABEL=nfsdata` with the log
+device's `LOGUUID` matching — `mnt-data.mount` then mounted it unchanged.
 
 **`xinas_fs_force_format` (default `false`) exempts one gate and no others.** It
 suppresses the "existing storage does not match the expected xiNAS layout" failure in

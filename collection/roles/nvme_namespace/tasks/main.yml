@@ -29,8 +29,7 @@
         msg: >-
           Could not determine what is on this node (state=UNKNOWN): a read-only probe
           failed, so an existing array is indistinguishable from a fresh box. Refusing
-          to provision. Bring xiRAID up (systemctl status xiraid.target, modprobe xiraid)
-          and re-run, or set xinas_storage_reset=true to wipe and rebuild regardless.
+          to provision. {{ xinas_storage_probe_hint | default('') }}
       when:
         - (xinas_storage_state | default('UNKNOWN')) == 'UNKNOWN'
         - not (xinas_storage_reset | default(false) | bool)

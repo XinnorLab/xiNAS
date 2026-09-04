@@ -21,6 +21,14 @@ Baseline configuration for all storage nodes. Installs essential packages, confi
   from (default `/proc/cpuinfo`; override only to exercise the check
   against a fixture).
 
+The role also carries the **existing-install preflight**, which takes no
+variable of its own: when `xiraid_skip_install` is true it verifies that
+`xicli` is actually on `PATH` and fails the play before the first `apt` call
+when it is not. The flag skips the whole `xiraid_classic` role, so nothing
+later in the run would install one, and the failure names the operator overlay
+(`playbooks/group_vars/all/20-local.yml`) the sticky flag usually comes from.
+See [docs/Installer/spec.md](../../../docs/Installer/spec.md) §3.1.
+
 ## Example
 ```yaml
 - hosts: storage_nodes

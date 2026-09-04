@@ -46,6 +46,30 @@ supported source for installing and updating xiNAS.
 
 ### Fixed
 
+- **Removing the xiRAID packages no longer leaves a node with no xiRAID at
+  all.** `playbooks/site.yml` skips the whole `xiraid_classic` role under
+  `xiraid_skip_install`, and that flag is sticky: the reuse wizard writes it
+  into the operator overlay `playbooks/group_vars/all/20-local.yml`, where it
+  survives into later runs. Declining `Reuse Arrays?` afterwards routes to
+  `clean_install`, whose "Remove them before running Ansible?" step purged the
+  packages while the stale flag kept anything from reinstalling them — `xicli`
+  was gone, the read-only storage probe came back `rc=2`, and the install died
+  in `raid_fs`'s UNKNOWN gate telling the operator to check a `xiraid-core`
+  that was no longer installed (observed on v3.13.2-rc.4: purge 12:13:57, run
+  12:18). `check_remove_xiraid` now clears the flag before it touches a
+  package, in both menus, and the `common` role fails fast — before the first
+  `apt` call — when `xiraid_skip_install` is set on a host with no `xicli`.
+  See `docs/Installer/spec.md` §3.1 and `docs/Installer/raid-spec.md` §11.
+- **An undeterminable storage state now says which probe failed and why.**
+  Ansible's `command` module reports a missing executable as `rc=2` with empty
+  `stdout`/`stderr`, indistinguishable on `rc` alone from `xicli` exiting `2`,
+  so both produced the same "is xiraid-core running?" line and the same offer
+  to set `xinas_storage_reset=true` — advice that cannot work when the binary
+  behind `xicli drive clean` is the thing that is missing. The classifier now
+  exports `xinas_storage_probe_missing_xicli` and `xinas_storage_probe_hint`,
+  and the UNKNOWN failures in `nvme_namespace` and `raid_fs` quote the hint
+  verbatim. See `docs/Installer/raid-spec.md` §11.
+
 - **An install no longer fails on a filesystem signature it created the
   conditions for itself.** `xicli raid create` does not zero the array
   payload, and TRIM is skipped whenever a member fails the eligibility probe
