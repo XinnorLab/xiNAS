@@ -109,6 +109,8 @@ export function supportRouter(ctx: ApiContext): Router {
           client_type: rc.client_type,
           request_id: rc.request_id,
           correlation_id: rc.correlation_id,
+          // ADR-0010 / S15 §3.1: support.bundle is a read-style diagnostic — exempt from MCP confirmation.
+          confirmation_exempt: true,
         },
       });
       rc.operation_id = task.task_id;

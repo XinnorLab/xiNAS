@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { OpenedStateStore } from '../../state/index.js';
 import type { AgentRpcClient } from '../agent-client.js';
 import type { TaskEngines } from '../context.js';
+import { ConfirmationStore } from '../mcp/confirmation/store.js';
 import { PlanEngine } from '../plan/engine.js';
 import {
   fsCreateProvider,
@@ -41,6 +42,8 @@ export interface BuildTaskEnginesOptions {
   maxInflight?: number;
   /** SSE fan-out for engine-local synthetic terminals (S10, ADR-0012 §4). */
   taskWatch?: { notify(taskId: string, event: unknown): void };
+  /** S15 §13 (mcp.allow_apply): re-checked inside the apply transaction, not just at the route. */
+  allowMcpApply?: () => boolean;
 }
 
 /**
@@ -60,13 +63,18 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
   const newId = opts.newId ?? (() => randomUUID());
 
   const store = new TaskStore({ db: state.db, now, newId });
+  const confirmations = new ConfirmationStore({ db: state.db, now });
   const taskEngine = new TaskEngine({
     db: state.db,
     store,
     leases: state.leases,
     kv: state.kv,
+    confirmations,
+    audit: state.audit,
+    clock: now,
     ...(opts.maxInflight !== undefined ? { maxInflight: opts.maxInflight } : {}),
     ...(opts.taskWatch !== undefined ? { taskWatch: opts.taskWatch } : {}),
+    ...(opts.allowMcpApply !== undefined ? { allowMcpApply: opts.allowMcpApply } : {}),
   });
   const planEngine = new PlanEngine({ store, ctx: { kv: state.kv }, now });
   planEngine.register(referencePlanProvider);
@@ -96,6 +104,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
     taskEngine,
     store,
     leases: state.leases,
+    confirmations,
     ...(opts.agentClient ? { agentClient: opts.agentClient } : {}),
   };
 }

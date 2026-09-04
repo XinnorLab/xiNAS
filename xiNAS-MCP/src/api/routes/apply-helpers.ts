@@ -181,6 +181,7 @@ export async function applyMode(
   // expected_revision). For observed-only operations (nfs-idmap.set) that is
   // the observed snapshot revision the plan returned (S3 §3.5); 0 on a fresh
   // install or when the plan pinned nothing.
+  let expectedRevision: number;
   if (opts.requireExpectedRevision !== false) {
     const expected = body.expected_revision;
     if (typeof expected !== 'number' || !Number.isInteger(expected)) {
@@ -200,6 +201,12 @@ export async function applyMode(
         "Echo the plan's state_revision_expected as expected_revision, or re-run plan.",
       );
     }
+    expectedRevision = expected;
+  } else {
+    // /reference: expected_revision is optional there (S2 engine-proof
+    // route, predates the ApplyRequest contract) — echo it when present,
+    // else 0 (R-3.1 fallback for the confirmation binding).
+    expectedRevision = typeof body.expected_revision === 'number' ? body.expected_revision : 0;
   }
 
   const applyPlan = toApplyPlan(planTask);
@@ -219,6 +226,8 @@ export async function applyMode(
       // S9: destructive ops (config.rollback) ride the generic helper —
       // the engine enforces the flag (risk_level destructive).
       ...(body.dangerous === true ? { dangerous: true } : {}),
+      expected_revision: expectedRevision, // the integer the route already validated from the body (R-3.1)
+      ...(rc.mcp_confirmation_id !== undefined ? { confirmation_id: rc.mcp_confirmation_id } : {}),
     },
   });
   rc.operation_id = task.task_id;

@@ -73,6 +73,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   const tasks = buildTaskEngines({
     state,
     taskWatch,
+    allowMcpApply: () => config.mcp?.allow_apply === true,
     ...(config.agent ? { agentClient: createAgentRpcClient(config.agent.socket) } : {}),
     ...(config.tasks?.max_inflight !== undefined ? { maxInflight: config.tasks.max_inflight } : {}),
   });

@@ -216,6 +216,10 @@ export function arraysRouter(ctx: ApiContext): Router {
           client_type: rc.client_type,
           request_id: rc.request_id,
           correlation_id: rc.correlation_id,
+          expected_revision: expectedRevision, // the integer the route already validated from the body (R-3.1)
+          ...(rc.mcp_confirmation_id !== undefined
+            ? { confirmation_id: rc.mcp_confirmation_id }
+            : {}),
         },
       });
       rc.operation_id = task.task_id;
@@ -353,6 +357,10 @@ export function arraysRouter(ctx: ApiContext): Router {
           request_id: rc.request_id,
           correlation_id: rc.correlation_id,
           ...(body.dangerous === true ? { dangerous: true } : {}),
+          expected_revision: expectedRevision, // the integer the route already validated from the body (R-3.1)
+          ...(rc.mcp_confirmation_id !== undefined
+            ? { confirmation_id: rc.mcp_confirmation_id }
+            : {}),
         },
       });
       rc.operation_id = task.task_id;
@@ -486,6 +494,10 @@ export function arraysRouter(ctx: ApiContext): Router {
           request_id: rc.request_id,
           correlation_id: rc.correlation_id,
           ...(body.dangerous === true ? { dangerous: true } : {}),
+          expected_revision: expectedRevision, // the integer the route already validated from the body (R-3.1)
+          ...(rc.mcp_confirmation_id !== undefined
+            ? { confirmation_id: rc.mcp_confirmation_id }
+            : {}),
         },
       });
       rc.operation_id = task.task_id;

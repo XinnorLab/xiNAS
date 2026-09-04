@@ -1,8 +1,12 @@
 import type { Database } from 'better-sqlite3';
 import type { KvStore } from '../../state/index.js';
 import type { LeaseManager } from '../../state/leases.js';
+import type { AuditAppender } from '../../state/audit.js';
 import { type AgentRpcClient, AgentRpcError } from '../agent-client.js';
 import { ApiException } from '../errors.js';
+import type { ConfirmationStore } from '../mcp/confirmation/store.js';
+import type { ConfirmationRecord } from '../mcp/confirmation/types.js';
+import { queueConfirmationEvent } from '../mcp/confirmation/audit.js';
 import type { TaskStore } from './store.js';
 import type { DesiredMutation, ResourceRef, Task } from './types.js';
 
@@ -110,6 +114,20 @@ export interface ApplyRequest {
    * is blocked at the same place. Ignored for non-destructive plans.
    */
   dangerous?: boolean;
+  /**
+   * S15 §8.3 (ruling R-3.1): the integer the client echoed as
+   * `expected_revision` in the apply body — the value the confirmation
+   * record is compared against. Every apply route already parses it.
+   */
+  expected_revision?: number;
+  /**
+   * S15 §8.2: the confirmation the MCP dispatcher validated (from
+   * ctx.mcp_confirmation_id — loopback-only). Required whenever
+   * client_type is 'mcp' unless the route sets `confirmation_exempt`.
+   */
+  confirmation_id?: string;
+  /** Route policy, never client input: only the support-bundle route sets it (ADR-0010 exemption). */
+  confirmation_exempt?: true;
 }
 
 export interface ApplyArgs {
@@ -131,6 +149,14 @@ export interface TaskEngineDeps {
    * TaskWatch in production, a recorder in tests.
    */
   taskWatch?: { notify(taskId: string, event: unknown): void };
+  /** S15 §8: the confirmation store the apply-transaction gate verifies/consumes against. */
+  confirmations?: ConfirmationStore;
+  /** S15 §12.1: security-event audit sink for the gate's consumed/expired rows. */
+  audit?: AuditAppender;
+  /** Overridable clock for the gate's expiry/consume checks. Default Date.now. */
+  clock?: () => number;
+  /** S15 §13 (mcp.allow_apply): re-checked in the core, not just at the route. */
+  allowMcpApply?: () => boolean;
 }
 
 /** Default lease TTL (seconds). Heartbeats extend it during execution. */
@@ -200,6 +226,11 @@ export class TaskEngine {
   /** Worker-pool cap (§5.3). */
   private readonly maxInflight: number;
   private readonly taskWatch: { notify(taskId: string, event: unknown): void } | undefined;
+  /** S15 §8: optional so REST-only/test contexts stay inert (no confirmations wired). */
+  private readonly confirmations: ConfirmationStore | undefined;
+  private readonly audit: AuditAppender | undefined;
+  private readonly clock: () => number;
+  private readonly allowMcpApply: (() => boolean) | undefined;
   /** Re-entrancy guard: true while a reconcile() pass is in flight. */
   private reconciling = false;
   /** Re-entrancy guard: true while a drainQueued() pass is in flight. */
@@ -220,6 +251,10 @@ export class TaskEngine {
     this.kv = deps.kv;
     this.maxInflight = deps.maxInflight ?? DEFAULT_MAX_INFLIGHT;
     this.taskWatch = deps.taskWatch;
+    this.confirmations = deps.confirmations;
+    this.audit = deps.audit;
+    this.clock = deps.clock ?? (() => Date.now());
+    this.allowMcpApply = deps.allowMcpApply;
   }
 
   /** in_flight = COUNT(state='running') + live dispatch reservations (§5.3). */
@@ -366,6 +401,26 @@ export class TaskEngine {
       const existing = this.store.getByIdempotency(applyReq.idempotency_key, applyReq.principal);
       if (existing) {
         if (existing.input_hash === applyReq.input_hash) {
+          if (applyReq.client_type === 'mcp' && applyReq.confirmation_exempt !== true) {
+            // S15 §8.5: an MCP replay is honored only through the confirmation
+            // that produced the task; any other confirmation is a reuse.
+            const rec =
+              applyReq.confirmation_id !== undefined
+                ? (this.confirmations?.get(applyReq.confirmation_id) ?? null)
+                : null;
+            if (
+              rec === null ||
+              rec.status !== 'consumed' ||
+              rec.consumed_task_id !== existing.task_id
+            ) {
+              throw new ApiException(
+                'CONFLICT',
+                'idempotency key reused with a different request',
+                { reason: 'idempotency_key_reused' },
+                'Use a fresh idempotency_key for a different request, or re-send the original request.',
+              );
+            }
+          }
           // True retry — return the original, do no further work.
           return existing;
         }
@@ -375,6 +430,55 @@ export class TaskEngine {
           { reason: 'idempotency_key_reused' },
           'Use a fresh idempotency_key for a different request, or re-send the original request.',
         );
+      }
+
+      // 2. S15 §8.3 — MCP confirmation gate: VERIFY here (before dangerous,
+      //    so dangerous can never stand in for it); CONSUME after the INSERT.
+      let confirmation: ConfirmationRecord | undefined;
+      if (applyReq.client_type === 'mcp' && applyReq.confirmation_exempt !== true) {
+        if (this.allowMcpApply !== undefined && !this.allowMcpApply()) {
+          throw new ApiException(
+            'PRECONDITION_FAILED',
+            'apply via MCP is disabled',
+            { reason: 'mcp_apply_disabled', config_key: 'mcp.allow_apply' },
+            'Set mcp.allow_apply: true in the api config, or apply via REST/xinasctl.',
+          );
+        }
+        if (this.confirmations === undefined || applyReq.confirmation_id === undefined) {
+          throw new ApiException(
+            'PRECONDITION_FAILED',
+            'an MCP apply requires a verified confirmation',
+            { reason: 'confirmation_required' },
+            'Run the apply through the MCP confirmation flow (input_required). REST and xinasctl applies are not affected.',
+          );
+        }
+        const record = this.confirmations.get(applyReq.confirmation_id);
+        const now = this.clock();
+        const consumableFrom = record?.mode === 'url' ? 'approved' : 'pending';
+        if (
+          record === null ||
+          record.principal !== applyReq.principal ||
+          record.plan_id !== plan.plan_id ||
+          record.plan_hash !== (plan.plan_hash ?? '') ||
+          record.idempotency_key !== applyReq.idempotency_key ||
+          record.operation_kind !== plan.kind ||
+          // Ruling R-3.1: the client's echoed revision, threaded like `dangerous`
+          // — never the row column, which route-computed kinds leave unpinned.
+          record.expected_revision !== applyReq.expected_revision ||
+          record.expires_at <= now ||
+          record.status !== consumableFrom
+        ) {
+          throw new ApiException(
+            'PRECONDITION_FAILED',
+            'the confirmation is not approved for this apply',
+            {
+              reason: 'confirmation_not_approved',
+              ...(record !== null ? { status: record.status } : {}),
+            },
+            'Start a fresh apply through the MCP confirmation flow.',
+          );
+        }
+        confirmation = record;
       }
 
       // 1b. Dangerous gate (reqs §14, ADR-0006 §Delete; S4 T1). Central:
@@ -507,6 +611,32 @@ export class TaskEngine {
         ...(desiredRollback.length > 0 ? { desired_rollback: desiredRollback } : {}),
       });
 
+      // 8. S15 §8.3 — consume the confirmation with the id the INSERT just produced.
+      if (confirmation !== undefined) {
+        const ok = (this.confirmations as ConfirmationStore).consume({
+          confirmation_id: confirmation.confirmation_id,
+          task_id: task.task_id,
+          from: confirmation.mode === 'url' ? 'approved' : 'pending',
+          principal: applyReq.principal,
+          now: this.clock(),
+        });
+        if (!ok) {
+          throw new ApiException(
+            'PRECONDITION_FAILED',
+            'the confirmation was consumed by a concurrent apply',
+            { reason: 'confirmation_not_approved', status: 'consumed' },
+            'Retry the identical request to receive the task it produced, or start a fresh apply.',
+          );
+        }
+        const consumed =
+          (this.confirmations as ConfirmationStore).get(confirmation.confirmation_id) ??
+          confirmation;
+        queueConfirmationEvent(this.audit, 'consumed', consumed, { task_id: task.task_id });
+        queueConfirmationEvent(this.audit, 'apply_task_created', consumed, {
+          task_id: task.task_id,
+        });
+      }
+
       // 4. Acquire a lease per resource in the lease set. N0.3 (S3 §5.2): the
       //    lease set is `lease_resources` when the plan overrides it (only
       //    `nfs-idmap.set` does — it locks a resource that is not a public
@@ -534,7 +664,28 @@ export class TaskEngine {
       return task;
     });
 
-    return run();
+    try {
+      return run();
+    } catch (err) {
+      if (
+        err instanceof ApiException &&
+        this.confirmations !== undefined &&
+        applyReq.client_type === 'mcp' &&
+        applyReq.confirmation_id !== undefined
+      ) {
+        const reason =
+          err.details?.reason === 'plan_stale'
+            ? 'plan_stale'
+            : err.details?.stale !== undefined
+              ? 'revision_changed'
+              : undefined;
+        if (reason !== undefined) {
+          const expired = this.confirmations.expire(applyReq.confirmation_id, reason);
+          if (expired !== null) queueConfirmationEvent(this.audit, 'expired', expired, { reason });
+        }
+      }
+      throw err;
+    }
   }
 
   /**
