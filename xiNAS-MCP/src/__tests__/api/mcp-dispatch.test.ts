@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { CATALOG } from '../../api/mcp/catalog.js';
-import { LEGACY_TOOL_MAP, buildRequest, gateVerdict, nextHint } from '../../api/mcp/dispatch.js';
+import {
+  LEGACY_TOOL_MAP,
+  buildRequest,
+  gateVerdict,
+  listTools,
+  nextHint,
+} from '../../api/mcp/dispatch.js';
 
 const entry = (name: string) => {
   const e = CATALOG.find((c) => c.name === name);
@@ -96,5 +102,15 @@ describe('legacy name map', () => {
     for (const [legacy, replacement] of Object.entries(LEGACY_TOOL_MAP)) {
       expect(names.has(replacement), `${legacy} -> ${replacement} must exist`).toBe(true);
     }
+  });
+});
+
+describe('S15: hidden catalog entries never surface over MCP', () => {
+  it('listTools omits mcp_exposed:false and binary entries', () => {
+    const names = listTools().map((t) => t.name);
+    expect(names).not.toContain('mcp_confirmations.approve');
+    expect(names).not.toContain('mcp_confirmations.list');
+    expect(names).not.toContain('system.metrics');
+    expect(names).toContain('shares.update');
   });
 });

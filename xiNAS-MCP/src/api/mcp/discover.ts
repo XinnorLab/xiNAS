@@ -76,7 +76,7 @@ export const INSTRUCTIONS = [
  */
 export function buildCapabilities(): Record<string, unknown> {
   const capabilities: Record<string, unknown> = {};
-  if (CATALOG.some((e) => e.binary !== true)) capabilities.tools = {};
+  if (CATALOG.some((e) => e.binary !== true && e.mcp_exposed !== false)) capabilities.tools = {};
   return capabilities;
 }
 

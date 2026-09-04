@@ -182,6 +182,14 @@ describe('runCli', () => {
     expect(code).toBe(2);
     expect(o.lines.err.join('\n')).toContain('unknown command');
   });
+
+  it('S15: usage text names the approval commands', async () => {
+    const o = io();
+    await runCli([], { request: respond({}), ...o });
+    expect(o.lines.out.join('\n')).toContain(
+      'approvals: xinasctl mcp_confirmations list|get <id>|approve <id> --acknowledge',
+    );
+  });
 });
 
 describe('waitForTask', () => {

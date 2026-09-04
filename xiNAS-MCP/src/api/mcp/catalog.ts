@@ -42,6 +42,21 @@ export interface CatalogEntry {
    * task_id with no way to follow it.
    */
   returns_async_task?: boolean;
+  /**
+   * S15: the engine kinds this plan_apply entry's route can produce (most
+   * list one; filesystems.update lists four). The confirmation service
+   * requires the plan document's kind to be listed here — a plan_id cannot
+   * be replayed against another tool.
+   */
+  operation_kinds?: string[];
+  /**
+   * S15: false = generated for xinasctl and RBAC only, never a tools/list
+   * entry and never callable through tools/call (the approval commands —
+   * a model must not approve its own request even with an admin token).
+   */
+  mcp_exposed?: boolean;
+  /** S15: explicit opt-in for an entry that needs confirmation but fits neither shape. */
+  confirmation?: 'required';
 }
 
 const NO_INPUT: Record<string, unknown> = {
@@ -118,6 +133,7 @@ const planApply = (
   path: string,
   description: string,
   minRole: MinRole,
+  operationKinds: string[],
   over: Partial<CatalogEntry> = {},
 ): CatalogEntry => ({
   name,
@@ -130,6 +146,7 @@ const planApply = (
   min_role: minRole,
   status: 'live',
   returns_async_task: true,
+  operation_kinds: operationKinds,
   ...over,
 });
 
@@ -142,13 +159,16 @@ export const CATALOG: CatalogEntry[] = [
   // ── arrays (xiRAID) — RAID mutation is admin (legacy matrix) ──
   read('arrays.list', 'GET', '/arrays', 'List xiRAID arrays (observed state).'),
   read('arrays.get', 'GET', '/arrays/{id}', 'Get one xiRAID array.'),
-  planApply('arrays.create', 'POST', '/arrays', 'Create a xiRAID array (plan/apply).', 'admin'),
+  planApply('arrays.create', 'POST', '/arrays', 'Create a xiRAID array (plan/apply).', 'admin', [
+    'xiraid.array.create',
+  ]),
   planApply(
     'arrays.import',
     'POST',
     '/arrays',
     'Import an existing xiRAID array (plan/apply; spec.import).',
     'admin',
+    ['xiraid.array.import'],
   ),
   planApply(
     'arrays.modify',
@@ -156,6 +176,7 @@ export const CATALOG: CatalogEntry[] = [
     '/arrays/{id}',
     'Modify a xiRAID array (plan/apply).',
     'admin',
+    ['xiraid.array.modify'],
   ),
   planApply(
     'arrays.delete',
@@ -163,6 +184,7 @@ export const CATALOG: CatalogEntry[] = [
     '/arrays/{id}',
     'Delete a xiRAID array (plan/apply; dangerous).',
     'admin',
+    ['xiraid.array.delete'],
   ),
 
   // ── disks ──
@@ -183,6 +205,7 @@ export const CATALOG: CatalogEntry[] = [
     '/filesystems',
     'Create an XFS filesystem (plan/apply).',
     'admin',
+    ['fs.create'],
   ),
   planApply(
     'filesystems.update',
@@ -190,6 +213,7 @@ export const CATALOG: CatalogEntry[] = [
     '/filesystems/{id}',
     'Mount/unmount/grow/quota (one intent per call; plan/apply).',
     'admin',
+    ['fs.mount', 'fs.unmount', 'fs.grow', 'fs.set_quota_mode'],
   ),
   planApply(
     'filesystems.delete',
@@ -197,19 +221,23 @@ export const CATALOG: CatalogEntry[] = [
     '/filesystems/{id}',
     'Unmanage a filesystem (plan/apply; dangerous).',
     'admin',
+    ['fs.unmanage'],
   ),
 
   // ── shares (NFS) — share operations are operator (legacy matrix) ──
   read('shares.list', 'GET', '/shares', 'List NFS shares (desired + observed exports).'),
   read('shares.get', 'GET', '/shares/{id}', 'Get one NFS share.'),
   read('nfs_sessions.list', 'GET', '/shares/{id}/sessions', 'Active NFS sessions for a share.'),
-  planApply('shares.create', 'POST', '/shares', 'Create an NFS share (plan/apply).', 'operator'),
+  planApply('shares.create', 'POST', '/shares', 'Create an NFS share (plan/apply).', 'operator', [
+    'share.create',
+  ]),
   planApply(
     'shares.update',
     'PATCH',
     '/shares/{id}',
     'Update an NFS share (plan/apply).',
     'operator',
+    ['share.update'],
   ),
   planApply(
     'shares.delete',
@@ -217,6 +245,7 @@ export const CATALOG: CatalogEntry[] = [
     '/shares/{id}',
     'Delete an NFS share (plan/apply; dangerous).',
     'operator',
+    ['share.delete'],
   ),
   read('export_groups.list', 'GET', '/export-groups', 'List export groups.'),
   read('service_ips.list', 'GET', '/service-ips', 'List service IPs.'),
@@ -230,6 +259,7 @@ export const CATALOG: CatalogEntry[] = [
     '/nfs-profiles/{id}',
     'Update the NFS server profile (plan/apply).',
     'admin',
+    ['nfs-profile.update'],
   ),
   read('nfs_idmap.get', 'GET', '/nfs-idmap', 'Get the NFSv4 idmap configuration.'),
   planApply(
@@ -238,6 +268,7 @@ export const CATALOG: CatalogEntry[] = [
     '/nfs-idmap',
     'Set the NFSv4 idmap domain (plan/apply).',
     'operator',
+    ['nfs-idmap.set'],
   ),
 
   // ── network ──
@@ -255,6 +286,7 @@ export const CATALOG: CatalogEntry[] = [
     '/network/interfaces/{id}',
     'Update interface addresses/MTU/state (plan/apply).',
     'admin',
+    ['net.iface.update'],
   ),
   planApply(
     'network.pool.apply',
@@ -262,6 +294,7 @@ export const CATALOG: CatalogEntry[] = [
     '/network/ip-pool',
     'Re-address all managed interfaces from a pool (plan/apply).',
     'admin',
+    ['net.pool.apply'],
   ),
 
   // ── health / drift ──
@@ -315,6 +348,7 @@ export const CATALOG: CatalogEntry[] = [
     '/config-history/rollback',
     'Roll back to the BASELINE snapshot OR restore any restorable snapshot (file-level NFS/network config — observed recovery, re-apply to make durable). For adoptable snapshots only: add adopt:true to spec to also replace desired state within the captured domains, making the restore durable without a separate re-apply. Plan/apply, destructive — dangerous:true at apply. spec = {to: "baseline" | "<snapshot-id>", reason, adopt?:true}.',
     'admin',
+    ['config.rollback'],
   ),
 
   // ── tasks ──
@@ -446,6 +480,7 @@ export const CATALOG: CatalogEntry[] = [
     '/pools',
     'Create a spare pool (plan/apply; spec = {name, drives}).',
     'admin',
+    ['pool.create'],
   ),
   planApply(
     'pools.modify',
@@ -453,6 +488,7 @@ export const CATALOG: CatalogEntry[] = [
     '/pools/{name}',
     'Modify a spare pool — ONE intent per call: add_drives | remove_drives | active (plan/apply).',
     'operator',
+    ['pool.modify'],
   ),
   planApply(
     'pools.delete',
@@ -460,6 +496,7 @@ export const CATALOG: CatalogEntry[] = [
     '/pools/{name}',
     'Delete a spare pool (plan/apply; blocked while active or referenced by an array).',
     'admin',
+    ['pool.delete'],
   ),
   read(
     'mail.recipients',
@@ -478,6 +515,86 @@ export const CATALOG: CatalogEntry[] = [
     'GET',
     '/auth/modes',
     'Supported NFS auth modes (live xiRAID gRPC read-through; ADR-0014).',
+  ),
+
+  // ── MCP apply confirmations (S15) — operator-only; hidden from MCP ──
+  {
+    ...read(
+      'mcp_confirmations.list',
+      'GET',
+      '/mcp/confirmations',
+      'List MCP apply confirmations (admin). Never an MCP tool.',
+      { min_role: 'admin', mcp_exposed: false },
+    ),
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['pending', 'approved', 'declined', 'cancelled', 'expired', 'consumed'],
+        },
+        principal: { type: 'string' },
+        limit: { type: 'integer', minimum: 1, maximum: 1000, default: 100 },
+      },
+      additionalProperties: false,
+    },
+  },
+  read(
+    'mcp_confirmations.get',
+    'GET',
+    '/mcp/confirmations/{id}',
+    'Show one MCP apply confirmation with its stored plan and summary (admin).',
+    { min_role: 'admin', mcp_exposed: false },
+  ),
+  {
+    name: 'mcp_confirmations.approve',
+    description:
+      'Approve a pending URL-mode MCP confirmation out of band (admin; approver policy applies). Destructive records require --acknowledge "DATA MAY BE PERMANENTLY LOST"; unsupported-rollback records require "ROLLBACK IS NOT SUPPORTED".',
+    method: 'POST',
+    path: '/mcp/confirmations/{id}/approve',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'confirmation id' },
+        acknowledge: { type: 'string', description: 'exact acknowledgement phrase' },
+        reason: { type: 'string' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    mutability: 'direct',
+    requires_mcp_apply: false,
+    min_role: 'admin',
+    status: 'live',
+    mcp_exposed: false,
+  },
+  {
+    name: 'mcp_confirmations.decline',
+    description:
+      'Decline a pending or approved MCP confirmation (admin). The MCP client receives CONFIRMATION_DECLINED; nothing is mutated.',
+    method: 'POST',
+    path: '/mcp/confirmations/{id}/decline',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'confirmation id' },
+        reason: { type: 'string' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    mutability: 'direct',
+    requires_mcp_apply: false,
+    min_role: 'admin',
+    status: 'live',
+    mcp_exposed: false,
+  },
+  read(
+    'system.metrics',
+    'GET',
+    '/metrics',
+    'Prometheus text exposition of api-internal counters (S15; CLI only).',
+    { binary: true },
   ),
 
   // ── users / groups ──

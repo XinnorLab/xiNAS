@@ -86,6 +86,14 @@ export const LEGACY_TOOL_MAP: Record<string, string> = {
 /** Legacy mutators with NO Phase-0 replacement (returns in a later phase). */
 export const RETIRED_TOOL_PREFIXES = ['auth.', 'mail.', 'pool.', 'disk.', 'network.configure'];
 
+/**
+ * S15: an entry is visible over MCP unless it streams a non-JSON body
+ * (`binary`) or is explicitly marked `mcp_exposed: false` — the approval
+ * commands, which a model must never see as a callable tool even with an
+ * admin token.
+ */
+const mcpVisible = (e: CatalogEntry): boolean => e.binary !== true && e.mcp_exposed !== false;
+
 /** An MCP tool descriptor as tools/list returns it. */
 export interface McpTool {
   name: string;
@@ -176,7 +184,7 @@ export function nextHint(
  * eras would start disagreeing about what the server can do.
  */
 export function listTools(): McpTool[] {
-  return CATALOG.filter((e) => e.binary !== true).map((e) => {
+  return CATALOG.filter(mcpVisible).map((e) => {
     // Generated from the catalog flag rather than written into twenty
     // description strings — the fact a call is asynchronous is what tells a
     // client to expect a task_id instead of a finished result.
@@ -200,7 +208,7 @@ export async function callTool(
   args: Record<string, unknown>,
   opts: DispatcherOptions,
 ): Promise<ToolResult> {
-  const entry = CATALOG.find((e) => e.name === name && e.binary !== true);
+  const entry = CATALOG.find((e) => e.name === name && mcpVisible(e));
   if (entry === undefined) {
     const replacement = LEGACY_TOOL_MAP[name];
     if (replacement !== undefined) {
