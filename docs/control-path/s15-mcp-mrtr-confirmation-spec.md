@@ -464,6 +464,20 @@ beside it (`tasks.plan_document_hash TEXT`).
 plan provider (V-52). The document never contains the raw `spec`; the
 public plan does not either (`api-v1.yaml` `Plan`).
 
+**Route-computed revision pins (ruling R-3.1).** Four kinds —
+`xiraid.array.modify`, `xiraid.array.delete`, the `fs.*` update kinds and
+`fs.unmanage` — pin no `state_revision_expected` in their provider result:
+the engine's desired-revision freshness check deliberately skips them and
+their routes validate the echoed revision against live state at apply
+time. Their routes compute the revision they report and hand it to
+`PlanEngine.plan()` as `document_overrides` (`state_revision_expected`,
+`observed_revision_expected`, `observed_at`), which the engine applies to
+the **document only**; the `tasks.state_revision_expected` column keeps
+its existing (unpinned) value so the engine's freshness semantics do not
+change. The document therefore always says what the client saw, and every
+S15 revision comparison reads `document.state_revision_expected`, never
+the row column.
+
 Rows created before migration `006` have a null document. A confirmable
 call against such a plan answers `PRECONDITION_FAILED`
 (`details.reason: plan_predates_confirmation`, remediation: re-plan).
@@ -514,7 +528,11 @@ At gate 6 (§3.3) the confirmation service verifies, in order:
    repeated here so the check is local to the service).
 
 Any failure is `PRECONDITION_FAILED` (`details.reason: plan_binding`) with
-no record created; the message never names the plan's actual creator. The stored `plan_hash` is what the apply transaction
+no record created; the message never names the plan's actual creator.
+The apply arguments' `expected_revision` must equal
+`document.state_revision_expected` (what the plan response said; R-3.1) —
+a mismatch is the existing `PRECONDITION_FAILED` with
+`{ expected_revision, plan_revision }`. The stored `plan_hash` is what the apply transaction
 already verifies against the plan row (`api/tasks/engine.ts`), so the
 document, the row and the transaction agree by construction.
 
@@ -761,7 +779,9 @@ forwarded headers as loopback-only.
 
 `RequestContext` gains `mcp_confirmation_id?: string`. `ApplyRequest` in
 `api/tasks/engine.ts` (the engine's internal type, not the public
-schema) gains two fields: `confirmation_id?: string`, which
+schema) gains three fields: `expected_revision?: number` (the integer the
+client echoed, which every apply route already parses — the value the
+confirmation record is compared against), `confirmation_id?: string`, which
 `routes/apply-helpers.ts` and the bespoke apply sites fill from
 `ctx.mcp_confirmation_id` — the same way `dangerous` is threaded today,
 so every plan/apply `taskEngine.apply()` call site is covered without a
@@ -791,9 +811,12 @@ The transaction body becomes:
      rule**: an MCP-typed apply that reaches the engine without trusted
      confirmation context is refused, whoever dispatched it;
    - the record exists, `principal` equals `applyReq.principal`,
-     `plan_id`/`plan_hash`/`idempotency_key`/`expected_revision`/
-     `operation_kind` equal the request's, `expires_at > now`, and its
-     status is consumable for its mode (`form`: `pending`; `url`:
+     `plan_id`/`plan_hash`/`idempotency_key`/`operation_kind` equal the
+     request's, `expected_revision` equals the integer the client echoed in
+     the apply body (threaded into the engine's `ApplyRequest` like
+     `dangerous` — never the row's `state_revision_expected`, which is
+     unpinned for the route-computed kinds, R-3.1), `expires_at > now`, and
+     its status is consumable for its mode (`form`: `pending`; `url`:
      `approved`) — else `PRECONDITION_FAILED`
      (`details.reason: confirmation_not_approved`, current status in
      details). **Verification only; no write yet.**

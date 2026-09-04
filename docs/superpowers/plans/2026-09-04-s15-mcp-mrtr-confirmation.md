@@ -762,6 +762,16 @@ and pass `task_id: planId, plan_document: document, plan_document_hash: planDocu
 
 At each of the nine bespoke sites (`arrays.ts` ×3, `filesystems.ts` ×3, `network.ts` ×2 — every place that builds a `{ plan_id, plan_hash, …, rollback_model }` literal): destructure `{ task, planResult, document }` from `planEngine.plan(...)` and replace the literal with `publicPlan(document)` (keep any route-specific extras by spreading them after). Remove the now-unused `clientImpact` imports; keep `planResult` only where the route still reads it (e.g. blockers for a 4xx), otherwise drop it from the destructuring.
 
+- [ ] **Step 9b: Route-computed revision pins (ruling R-3.1, added during execution)**
+
+Four kinds pin no `state_revision_expected` in their provider result — `xiraid.array.modify`, `xiraid.array.delete` (`arrays.ts`), the `fs.*` update kinds and `fs.unmanage` (`filesystems.ts`) — and their routes compute the live revision they report. A literal `publicPlan(document)` swap would render `0` there and break every later apply. Do NOT patch the response after rendering; instead:
+
+- `PlanArgs` gains `document_overrides?: { state_revision_expected?: number; observed_revision_expected?: number | null; observed_at?: string | null }`.
+- In `PlanEngine.plan()`, `buildPlanDocument` receives `state_revision_expected: args.document_overrides?.state_revision_expected ?? result.state_revision_expected ?? 0`, and `observed_revision_expected` / `observed_at` from the override when the key is present (a present `null` wins), else from the result. `createPlanOnly` is unchanged — the row column keeps the provider's (unpinned) value, because the engine's desired-revision freshness check reads it and those kinds deliberately do not pin it.
+- The four routes compute their revision BEFORE calling `plan()` and pass it as `document_overrides`; their responses become pure `publicPlan(document)` with no post-spread override.
+- Engine comment: "the row column feeds the freshness check those kinds skip; the document is what the client saw (S15 §5.1, R-3.1)."
+- Parity: extend the parity assertion to one of these routes (e.g. `PATCH /api/v1/arrays/{id}` plan in `routes-arrays.test.ts`, or `PATCH /api/v1/filesystems/{id}` in `routes-filesystems.test.ts` — whichever suite already has a reachable plan fixture): `response.result` deep-equals `publicPlan(stored document)` and the stored document's `state_revision_expected` equals the response's non-zero value.
+
 - [ ] **Step 10: Run the full suite**
 
 Run: `npm run typecheck && npm run lint && npm run format:check && npm test`
@@ -2466,6 +2476,12 @@ and widen the warn condition: `if (fwdPrincipal !== undefined || fwdRole !== und
 
 ```ts
   /**
+   * S15 §8.3 (ruling R-3.1): the integer the client echoed as
+   * `expected_revision` in the apply body — the value the confirmation
+   * record is compared against. Every apply route already parses it.
+   */
+  expected_revision?: number;
+  /**
    * S15 §8.2: the confirmation the MCP dispatcher validated (from
    * ctx.mcp_confirmation_id — loopback-only). Required whenever
    * client_type is 'mcp' unless the route sets `confirmation_exempt`.
@@ -2536,7 +2552,9 @@ In `apply()`:
           record.plan_hash !== (plan.plan_hash ?? '') ||
           record.idempotency_key !== applyReq.idempotency_key ||
           record.operation_kind !== plan.kind ||
-          record.expected_revision !== (plan.state_revision_expected ?? 0) ||
+          // Ruling R-3.1: the client's echoed revision, threaded like `dangerous`
+          // — never the row column, which route-computed kinds leave unpinned.
+          record.expected_revision !== applyReq.expected_revision ||
           record.expires_at <= now ||
           record.status !== consumableFrom
         ) {
@@ -2608,11 +2626,14 @@ In `apply()`:
 
 `build.ts`: import `ConfirmationStore`; after `const store = …` add `const confirmations = new ConfirmationStore({ db: state.db, now });`; pass `confirmations, audit: state.audit, clock: now, ...(opts.allowMcpApply !== undefined ? { allowMcpApply: opts.allowMcpApply } : {})` into `new TaskEngine({...})`; return `confirmations` in the bundle; add `allowMcpApply?: () => boolean` to `BuildTaskEnginesOptions`. `server.ts` passes `allowMcpApply: () => config.mcp?.allow_apply === true`.
 
-Thread the id: in `apply-helpers.ts` `applyMode` and the eight bespoke `taskEngine.apply({ applyReq: {...} })` literals in `arrays.ts`, `filesystems.ts`, `network.ts`, add
+Thread the id and the echoed revision: in `apply-helpers.ts` `applyMode` and the eight bespoke `taskEngine.apply({ applyReq: {...} })` literals in `arrays.ts`, `filesystems.ts`, `network.ts`, add
 
 ```ts
+      expected_revision: expectedRevision, // the integer the route already validated from the body (R-3.1)
       ...(rc.mcp_confirmation_id !== undefined ? { confirmation_id: rc.mcp_confirmation_id } : {}),
 ```
+
+(`applyMode` names it `expected`; when `requireExpectedRevision === false` — the `/reference` route — pass `typeof body.expected_revision === 'number' ? body.expected_revision : 0`.) Add to the engine tests: `mcpReq()` includes `expected_revision: 1` (matching the record's `expected_revision: 1`), and the 'expected_revision' row of the bindings table passes `{ expected_revision: 2 }` in `reqOver` and must be refused.
 
 In `support.ts` add `confirmation_exempt: true,` to its `applyReq` with the comment `// ADR-0010 / S15 §3.1: support.bundle is a read-style diagnostic — exempt from MCP confirmation.`
 
@@ -3197,8 +3218,10 @@ export class ConfirmationService {
     ) {
       return err('PRECONDITION_FAILED', 'the plan does not belong to this principal, tool and resource', { reason: 'plan_binding' });
     }
-    if ((planTask.state_revision_expected ?? 0) !== expectedRevision) {
-      return err('PRECONDITION_FAILED', `expected_revision ${expectedRevision} does not match the plan's ${planTask.state_revision_expected ?? 0}`, { expected_revision: expectedRevision, plan_revision: planTask.state_revision_expected ?? 0 });
+    // Ruling R-3.1: compare against what the plan RESPONSE said (the document),
+    // never the row column — the route-computed kinds leave the row unpinned.
+    if (doc.state_revision_expected !== expectedRevision) {
+      return err('PRECONDITION_FAILED', `expected_revision ${expectedRevision} does not match the plan's ${doc.state_revision_expected}`, { expected_revision: expectedRevision, plan_revision: doc.state_revision_expected });
     }
 
     // Gate 7 — blockers.

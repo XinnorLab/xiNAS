@@ -478,7 +478,10 @@ whichever dispatcher sent it. Full contract: `s15-mcp-mrtr-confirmation-spec.md`
    `CONFLICT idempotency_key_reused`;
 2. confirmation verification (MCP only, unless the route set
    `confirmation_exempt` — only `support.bundle` does): `mcp.allow_apply`
-   still true; context present; record bindings equal the request;
+   still true; context present; record bindings equal the request
+   (principal, plan id + hash, idempotency key, operation kind, and the
+   client's echoed `expected_revision` threaded into `ApplyRequest` — not
+   the row column, which the route-computed kinds leave unpinned);
    `expires_at > now`; status consumable for the mode (`form`: `pending`,
    `url`: `approved`). No write;
 3. `dangerous` gate;
