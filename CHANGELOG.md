@@ -46,6 +46,18 @@ supported source for installing and updating xiNAS.
 
 ### Fixed
 
+- **A xiRAID daemon that never came up now fails in `xiraid_classic`, with
+  the daemon named.** The role only verified the kernel module and
+  `xicli -v`, neither of which needs the daemon, so a host whose
+  `xiraid.target` is not running sails through it and stops one role later
+  as storage state `UNKNOWN`, where the message can only ask "is xiraid-core
+  running?". The role now ends, after any post-install reboot,
+  by starting `xiraid.target` and requiring `xicli raid show -f json` to exit
+  0 (retried while the gRPC server binds); otherwise it fails there with the
+  failing step's output and `systemctl status xiraid.target` /
+  `journalctl -u 'xiraid*' -b` as the remedy. Liveness only — it never
+  inspects or touches arrays. See `docs/Installer/spec.md` §3.4.
+
 - **Removing the xiRAID packages no longer leaves a node with no xiRAID at
   all.** `playbooks/site.yml` skips the whole `xiraid_classic` role under
   `xiraid_skip_install`, and that flag is sticky: the reuse wizard writes it

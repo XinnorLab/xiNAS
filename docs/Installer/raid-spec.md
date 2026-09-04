@@ -676,6 +676,7 @@ For one-shot validation, the Textual TUI's Health tab (`xinas-menu`) and the MCP
 | Stale xiRAID metadata from a prior install | `xicli raid create` refuses | `xicli drive clean` runs per member; `--force_metadata` is set when `xiraid_force_metadata=true` |
 | License missing after reboot (`/tmp` is tmpfs) | `xicli license update -p /tmp/license` fails, no arrays | Surfaces as an early `raid_fs` failure with a clear message; re-enter via menu, re-run `--tags raid_fs` |
 | Operator runs the role before `xiraid_classic` finishes loading the kernel module | `xicli` not on PATH | Role ordering in `site.yml` puts `xiraid_classic` ahead of `nvme_namespace` and `raid_fs` |
+| xiRAID daemon (`xiraid.target`) not running when `nvme_namespace` probes | `xicli raid show` exits non-zero → state `UNKNOWN`, fail-fast one role after the cause | `xiraid_classic` ends with a daemon preflight ([spec.md §3.4](spec.md)): starts `xiraid.target`, then requires `xicli raid show -f json` to exit 0, and fails *there* with the daemon named |
 
 ---
 
