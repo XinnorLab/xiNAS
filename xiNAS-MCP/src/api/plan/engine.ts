@@ -125,6 +125,22 @@ export interface PlanArgs {
   request_id: string;
   correlation_id: string;
   idempotency_key?: string;
+  /**
+   * Route-computed revision pins for the kinds whose provider deliberately
+   * pins none in its `PlanResult` (S4 §4: modify/delete/PATCH-intent
+   * providers bind freshness to the CURRENT observed revision, not a
+   * plan-time snapshot) — S15 §5.1, ruling R-3.1. When set, these values go
+   * into the persisted `document` so the client-visible Plan and the stored
+   * document are the SAME bytes; a present `observed_revision_expected` /
+   * `observed_at` key (even an explicit `null`) wins over the provider's
+   * `PlanResult`. They do NOT touch the row's own `state_revision_expected`
+   * column (see the comment at the `createPlanOnly` call below).
+   */
+  document_overrides?: {
+    state_revision_expected?: number;
+    observed_revision_expected?: number | null;
+    observed_at?: string | null;
+  };
 }
 
 /**
@@ -240,14 +256,32 @@ export class PlanEngine {
     // that feeds the row, so it is the single source every Plan envelope
     // renders from — plan_id is pre-allocated so the document can carry it
     // before the row exists.
+    //
+    // R-3.1: a caller's `document_overrides` wins over the provider result
+    // for the fields it sets — this is how the four modify/delete/PATCH-intent
+    // kinds (whose providers pin no revision, S4 §4) get the route's
+    // live-computed revision INTO the document, rather than the route
+    // patching the rendered response after the fact (which desynced the
+    // stored document from what the client actually saw).
+    const overrides = args.document_overrides;
+    const observedRevisionExpected =
+      overrides && 'observed_revision_expected' in overrides
+        ? (overrides.observed_revision_expected ?? undefined)
+        : result.observed_revision_expected;
+    const observedAt =
+      overrides && 'observed_at' in overrides
+        ? (overrides.observed_at ?? undefined)
+        : result.observed_at;
+
     const planId = this.store.nextTaskId();
     const document = buildPlanDocument({
       plan_id: planId,
       operation_kind: args.operation_kind,
       plan_hash: planHash,
-      state_revision_expected: result.state_revision_expected ?? 0,
-      observed_revision_expected: result.observed_revision_expected,
-      observed_at: result.observed_at,
+      state_revision_expected:
+        overrides?.state_revision_expected ?? result.state_revision_expected ?? 0,
+      observed_revision_expected: observedRevisionExpected,
+      observed_at: observedAt,
       affected_resources: result.affected_resources,
       risk_level: result.risk_level,
       blockers: result.blockers,
@@ -282,6 +316,10 @@ export class PlanEngine {
       // other binding-free providers byte-identical to pre-N0 (§5.1).
       ...(Object.keys(planBinding).length > 0 ? { plan_binding: planBinding } : {}),
       ...(args.idempotency_key !== undefined ? { idempotency_key: args.idempotency_key } : {}),
+      // Deliberately reads `result.state_revision_expected`, NOT
+      // `args.document_overrides` — the row column feeds the freshness check
+      // those kinds skip; the document is what the client saw (S15 §5.1,
+      // R-3.1).
       ...(result.state_revision_expected !== undefined
         ? { state_revision_expected: result.state_revision_expected }
         : {}),

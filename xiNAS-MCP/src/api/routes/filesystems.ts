@@ -212,6 +212,12 @@ export function filesystemsRouter(ctx: ApiContext): Router {
               ? 'fs.grow'
               : 'fs.set_quota_mode';
 
+      // The PATCH providers pin no revision (S4 §4: "the plan row does not
+      // persist the observed pin") — compute the CURRENT observed revision
+      // and pass it as document_overrides so the persisted document carries
+      // the SAME value the client is told to echo at apply (S15 §5.1, R-3.1)
+      // instead of the engine's unpinned default.
+      const revision = observedFsRevision(ctx, id) ?? 0;
       const { task, document } = await tasks.planEngine.plan({
         operation_kind: kind,
         spec: { ...(typeof body.spec === 'object' && body.spec !== null ? body.spec : {}), id },
@@ -219,22 +225,13 @@ export function filesystemsRouter(ctx: ApiContext): Router {
         client_type: rc.client_type,
         request_id: rc.request_id,
         correlation_id: rc.correlation_id,
-      });
-      rc.operation_id = task.task_id;
-      const revision = observedFsRevision(ctx, id) ?? 0;
-      // The PATCH providers pin no revision (S4 §4: "the plan row does not
-      // persist the observed pin") — override the engine's unpinned document
-      // default (0/null) with the CURRENT observed revision to echo at apply.
-      sendOk(
-        req,
-        res,
-        {
-          ...publicPlan(document),
+        document_overrides: {
           state_revision_expected: revision,
           observed_revision_expected: revision,
         },
-        [revision],
-      );
+      });
+      rc.operation_id = task.task_id;
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 
@@ -347,6 +344,9 @@ export function filesystemsRouter(ctx: ApiContext): Router {
     const id = req.params.id as string;
 
     if (mode === 'plan') {
+      // Same S4 §4 revision binding as PATCH (above): compute the CURRENT
+      // observed revision and pass it as document_overrides (S15 §5.1, R-3.1).
+      const revision = observedFsRevision(ctx, id) ?? 0;
       const { task, document } = await tasks.planEngine.plan({
         operation_kind: 'fs.unmanage',
         spec: { id },
@@ -354,20 +354,13 @@ export function filesystemsRouter(ctx: ApiContext): Router {
         client_type: rc.client_type,
         request_id: rc.request_id,
         correlation_id: rc.correlation_id,
-      });
-      rc.operation_id = task.task_id;
-      const revision = observedFsRevision(ctx, id) ?? 0;
-      // Same S4 §4 override as PATCH (above).
-      sendOk(
-        req,
-        res,
-        {
-          ...publicPlan(document),
+        document_overrides: {
           state_revision_expected: revision,
           observed_revision_expected: revision,
         },
-        [revision],
-      );
+      });
+      rc.operation_id = task.task_id;
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 

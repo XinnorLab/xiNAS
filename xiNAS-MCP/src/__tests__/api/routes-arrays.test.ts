@@ -419,6 +419,20 @@ describe('POST /api/v1/arrays', () => {
         .send({ mode: 'plan', spec: { tuning: { init_prio: 5 } } });
       expect(res.status).toBe(404);
     });
+
+    it('S15 R-3.1: the rendered Plan is byte-identical to publicPlan(stored document), and the stored document carries the route-computed (non-zero) revision, not the engine default', async () => {
+      const { publicPlan } = await import('../../api/plan/document.js');
+      seedObservedArray();
+      const res = await patchPlan({ tuning: { init_prio: 5 } });
+      expect(res.status).toBe(200);
+      const result = res.body.result as Record<string, unknown>;
+      expect(result.state_revision_expected).toBe(currentRevision());
+      expect(result.state_revision_expected).not.toBe(0);
+      const stored = setup.tasks.store.get(result.plan_id as string);
+      expect(stored?.plan_document).toBeDefined();
+      expect(result).toEqual(publicPlan(stored?.plan_document as never));
+      expect(stored?.plan_document?.state_revision_expected).toBe(result.state_revision_expected);
+    });
   });
 });
 

@@ -268,6 +268,12 @@ export function arraysRouter(ctx: ApiContext): Router {
       // Writability matrix: non-writable keys in the RAW body → per-field
       // 422, before any plan row exists.
       rejectUnwritableKeys(body.spec);
+      // The modify provider pins no revision (S4 §4: "the plan row does not
+      // persist the observed pin") — compute the CURRENT observed revision
+      // the client must echo at apply, and pass it as document_overrides so
+      // the persisted document carries the SAME value as the rendered
+      // response (S15 §5.1, R-3.1) instead of the engine's unpinned default.
+      const revision = observedArrayRevision(ctx, id) ?? 0;
       const { task, document } = await tasks.planEngine.plan({
         operation_kind: 'xiraid.array.modify',
         spec: { ...(typeof body.spec === 'object' && body.spec !== null ? body.spec : {}), id },
@@ -275,23 +281,13 @@ export function arraysRouter(ctx: ApiContext): Router {
         client_type: rc.client_type,
         request_id: rc.request_id,
         correlation_id: rc.correlation_id,
-      });
-      rc.operation_id = task.task_id;
-      const revision = observedArrayRevision(ctx, id) ?? 0;
-      // The modify provider pins no revision (S4 §4: "the plan row does not
-      // persist the observed pin") — the document's state/observed_revision_expected
-      // are the engine defaults (0/null); override with the CURRENT observed
-      // revision the client must echo at apply.
-      sendOk(
-        req,
-        res,
-        {
-          ...publicPlan(document),
+        document_overrides: {
           state_revision_expected: revision,
           observed_revision_expected: revision,
         },
-        [revision],
-      );
+      });
+      rc.operation_id = task.task_id;
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 
@@ -405,6 +401,11 @@ export function arraysRouter(ctx: ApiContext): Router {
     const id = req.params.id as string;
 
     if (mode === 'plan') {
+      // Same S4 §4 revision binding as modify (above): the delete provider
+      // pins no revision, so the route computes it and passes it as
+      // document_overrides — the persisted document then carries the SAME
+      // value as the rendered response (S15 §5.1, R-3.1).
+      const revision = observedArrayRevision(ctx, id) ?? 0;
       const { task, document } = await tasks.planEngine.plan({
         operation_kind: 'xiraid.array.delete',
         spec: { id },
@@ -412,21 +413,13 @@ export function arraysRouter(ctx: ApiContext): Router {
         client_type: rc.client_type,
         request_id: rc.request_id,
         correlation_id: rc.correlation_id,
-      });
-      rc.operation_id = task.task_id;
-      const revision = observedArrayRevision(ctx, id) ?? 0;
-      // Same S4 §4 override as modify (above): echo the CURRENT observed
-      // revision, not the engine's unpinned document default.
-      sendOk(
-        req,
-        res,
-        {
-          ...publicPlan(document),
+        document_overrides: {
           state_revision_expected: revision,
           observed_revision_expected: revision,
         },
-        [revision],
-      );
+      });
+      rc.operation_id = task.task_id;
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 
