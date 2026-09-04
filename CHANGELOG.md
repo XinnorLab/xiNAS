@@ -24,6 +24,19 @@ supported source for installing and updating xiNAS.
 
 ### Fixed
 
+- **An install no longer fails on a filesystem signature it created the
+  conditions for itself.** `xicli raid create` does not zero the array
+  payload, and TRIM is skipped whenever a member fails the eligibility probe
+  — so on hosts whose drives report no RZAT (every virtio/SCSI bench disk,
+  among others) the head of a brand-new array could still expose a signature
+  left by a previous install. `blkid` read it as a real filesystem and
+  `create_fs.yml`'s FOREIGN gate then refused to format an array the same run
+  had created seconds earlier, aborting the play with
+  `Existing filesystem '' (xfs_external_log) on /dev/xi_data ... Refusing to
+  reformat.` `raid_fs` now wipes the head of each array it creates, inside the
+  create branch only — an array that already existed when the run started is
+  never touched. See `docs/Installer/raid-spec.md` §7.5.
+
 - **The install report no longer says `preset unknown` for an install run
   from the bash menus.** Only `autoinstall.sh` and the `xinas-setup` screen
   passed the preset to Ansible; `simple_menu.sh` / `startup_menu.sh` never

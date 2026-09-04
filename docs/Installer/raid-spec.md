@@ -528,6 +528,21 @@ build — or an override naming a flag this build lacks — simply creates array
 discard. The decision and its reason (which member failed which probe, or which flag the
 CLI does not accept) are printed per array before creation.
 
+**A freshly created array's first sectors are wiped.** `xicli raid create` does not zero
+the array's payload, and TRIM is skipped whenever a member fails the eligibility probes
+above — so the head of a brand-new `/dev/xi_<name>` can still show a stale signature that
+belonged to whatever the member disks held before. `blkid` reports it as a real
+filesystem, and §7.6's FOREIGN gate then refuses to format an array created seconds
+earlier in the same run. (Observed on a QEMU/virtio bench where every member reported
+"no RZAT", so TRIM was disabled: the new data array's head carried `xfs_external_log`
+left by a previous install.) The role therefore runs `udevadm settle` followed by
+`wipefs -a /dev/xi_<name>` immediately after `wait_for` sees the device appear,
+**inside the create branch only** (`wait_for` returns the moment the node exists,
+while udev may still hold it open — `wipefs` on such a device fails with `EBUSY`).
+It is safe by construction — the only thing that can be there is residue, because the
+array was created by this very task. An array that already existed when the run started
+is never wiped and stays subject to the §11 gates.
+
 ### 7.6 Filesystem creation
 
 Source: [create_fs.yml](../../collection/roles/raid_fs/tasks/create_fs.yml). Per `xfs_filesystems` entry:
