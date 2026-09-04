@@ -12,6 +12,8 @@
 
 # Storage-reset-safe mkfs decision (finding C1). mkfs runs only when:
 #   - xinas_storage_reset is set (after the confirm gate), OR
+#   - xinas_fs_force_format is set (the operator was shown this exact signature in
+#     the wizard and asked for it to be reformatted; arrays are reused as-is), OR
 #   - the data device has no XFS at all (fresh install; nothing to lose).
 # An XFS whose label matches -> converge (skip). An XFS with a different label, or a
 # non-xfs signature -> FOREIGN -> fail-fast (never silently reformat live data).
@@ -33,12 +35,15 @@
   when:
     - _fs_foreign | bool
     - not (xinas_storage_reset | default(false) | bool)
+    - not (xinas_fs_force_format | default(false) | bool)
   tags: [raid_fs, fs, mkfs]
 
 - name: Decide whether to (re)create the filesystem on {{ item.data_device }}
   ansible.builtin.set_fact:
     _do_mkfs: >-
-      {{ (xinas_storage_reset | default(false) | bool) or (not (_fs_present | bool)) }}
+      {{ (xinas_storage_reset | default(false) | bool)
+         or (xinas_fs_force_format | default(false) | bool)
+         or (not (_fs_present | bool)) }}
   tags: [raid_fs, fs, mkfs]
 
 # Calculate XFS geometry from RAID array if not explicitly provided

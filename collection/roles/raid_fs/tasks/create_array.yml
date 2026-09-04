@@ -106,3 +106,24 @@
     path: "/dev/xi_{{ item.name }}"
     timeout: 120
   tags: [raid_fs, raid]
+
+# `xicli raid create` does not zero the payload, and TRIM is skipped whenever a
+# member fails the eligibility probes above — so the head of a brand-new array can
+# still expose a signature left on the member disks by a previous install. blkid
+# reports it as a real filesystem and create_fs.yml's FOREIGN gate then refuses to
+# format an array this run created seconds ago (seen on a virtio bench: every
+# member "no RZAT", the new data array's head carrying xfs_external_log).
+# Only reachable from the create branch, so the only thing here is residue.
+#
+# `udevadm settle` first: wait_for returns the moment the node appears, while
+# udev may still be probing it, and wipefs on a device udev holds open fails
+# with EBUSY.
+- name: Wipe stale signatures from the newly created /dev/xi_{{ item.name }}
+  ansible.builtin.shell: |
+    set -e
+    udevadm settle
+    wipefs -a /dev/xi_{{ item.name }}
+  args:
+    executable: /bin/bash
+  changed_when: false
+  tags: [raid_fs, raid]

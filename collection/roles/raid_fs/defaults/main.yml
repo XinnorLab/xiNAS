@@ -42,6 +42,15 @@ xfs_force_mkfs: false
 # YES, or nvme_skip_cleanup_confirmation=true for automation) to wipe + rebuild.
 xinas_storage_reset: false
 
+# Reformat the data volume of an array we are REUSING, when it already carries a
+# filesystem that is not XFS with the configured label (raid-spec §11). Narrower
+# than xinas_storage_reset on purpose: it exempts only the FOREIGN gates and the
+# mkfs decision, and never runs `xicli drive clean`, never destroys or recreates
+# an array, and never relaxes the UNKNOWN or unhealthy-array gates. simple_menu's
+# reuse path sets it after showing the operator what it found; autoinstall.sh
+# passes it from XINAS_FS_FORCE_FORMAT.
+xinas_fs_force_format: false
+
 # Before creating each array, xiRAID preallocates a per-array kernel mempool
 # (~memory_prealloc_mb, 2048 MB by default) via __get_free_pages(). On
 # RAM-constrained hosts a full page cache makes that *contiguous* allocation

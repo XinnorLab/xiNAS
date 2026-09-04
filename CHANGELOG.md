@@ -22,7 +22,35 @@ supported source for installing and updating xiNAS.
   `xinas-update-git` do not read it. See `docs/Installer/update-spec.md`
   § Fresh installs select a release only by explicit tag.
 
+- **The wizard asks about a foreign filesystem before the install starts,
+  instead of failing 20 minutes in.** `simple_menu.sh`'s "Reuse Arrays?" path
+  leaves the arrays alone and only creates the filesystem, so a reused array
+  already carrying something other than XFS with the configured label hit the
+  FOREIGN gate deep inside `site.yml`. The wizard now probes both the data and
+  the log device right after the mountpoint/label questions, shows exactly
+  what it found on each, and asks a separate, default-**No** confirmation to
+  reformat. Declining falls back to a clean install, as declining the reuse
+  question already does. Accepting sets the new `xinas_fs_force_format`, which
+  exempts only the FOREIGN gates and the mkfs decision: the arrays are kept,
+  `xicli drive clean` never runs, and the `UNKNOWN` and unhealthy-array gates
+  still fail fast. Unattended installs opt in with `XINAS_FS_FORCE_FORMAT=yes`
+  in `autoinstall.conf`; without it a headless run stops rather than reformat
+  data it was not told about. See `docs/Installer/raid-spec.md` §11.
+
 ### Fixed
+
+- **An install no longer fails on a filesystem signature it created the
+  conditions for itself.** `xicli raid create` does not zero the array
+  payload, and TRIM is skipped whenever a member fails the eligibility probe
+  — so on hosts whose drives report no RZAT (every virtio/SCSI bench disk,
+  among others) the head of a brand-new array could still expose a signature
+  left by a previous install. `blkid` read it as a real filesystem and
+  `create_fs.yml`'s FOREIGN gate then refused to format an array the same run
+  had created seconds earlier, aborting the play with
+  `Existing filesystem '' (xfs_external_log) on /dev/xi_data ... Refusing to
+  reformat.` `raid_fs` now wipes the head of each array it creates, inside the
+  create branch only — an array that already existed when the run started is
+  never touched. See `docs/Installer/raid-spec.md` §7.5.
 
 - **The install report no longer says `preset unknown` for an install run
   from the bash menus.** Only `autoinstall.sh` and the `xinas-setup` screen

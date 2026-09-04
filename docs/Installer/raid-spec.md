@@ -528,6 +528,21 @@ build — or an override naming a flag this build lacks — simply creates array
 discard. The decision and its reason (which member failed which probe, or which flag the
 CLI does not accept) are printed per array before creation.
 
+**A freshly created array's first sectors are wiped.** `xicli raid create` does not zero
+the array's payload, and TRIM is skipped whenever a member fails the eligibility probes
+above — so the head of a brand-new `/dev/xi_<name>` can still show a stale signature that
+belonged to whatever the member disks held before. `blkid` reports it as a real
+filesystem, and §7.6's FOREIGN gate then refuses to format an array created seconds
+earlier in the same run. (Observed on a QEMU/virtio bench where every member reported
+"no RZAT", so TRIM was disabled: the new data array's head carried `xfs_external_log`
+left by a previous install.) The role therefore runs `udevadm settle` followed by
+`wipefs -a /dev/xi_<name>` immediately after `wait_for` sees the device appear,
+**inside the create branch only** (`wait_for` returns the moment the node exists,
+while udev may still hold it open — `wipefs` on such a device fails with `EBUSY`).
+It is safe by construction — the only thing that can be there is residue, because the
+array was created by this very task. An array that already existed when the run started
+is never wiped and stays subject to the §11 gates.
+
 ### 7.6 Filesystem creation
 
 Source: [create_fs.yml](../../collection/roles/raid_fs/tasks/create_fs.yml). Per `xfs_filesystems` entry:
@@ -542,6 +557,13 @@ Source: [create_fs.yml](../../collection/roles/raid_fs/tasks/create_fs.yml). Per
    (state FOREIGN) → the play **fails fast** with an actionable message rather than
    reformatting. The old always-reformat behaviour (`xfs_force_mkfs=true` shipped by
    default, or "label ≠ configured") is gone; `xfs_force_mkfs` is disarmed (see §11).
+
+   `xinas_fs_force_format: true` (default `false`) is the third route to `_do_mkfs`: it
+   exempts this device from the FOREIGN failure and formats the existing array in place.
+   It answers §11's *reuse an array whose filesystem is foreign* case and is deliberately
+   narrower than `xinas_storage_reset` — it never runs `xicli drive clean`, never
+   destroys or recreates an array, and never relaxes the `UNKNOWN` or unhealthy-array
+   gates.
 3. **Pick geometry:** if the operator didn't set `su_kb`/`sw`, the role looks up the `data` array in `xiraid_arrays` and computes `su_kb = strip_size_kb`, `sw = device_count − parity_disks`.
 4. **Release the device:** if it is already mounted and we are about to reformat it:
    - Snapshot whether `nfs-server` is active (`systemctl is-active`).
@@ -764,6 +786,55 @@ is enforced in **both** `nvme_namespace` and `raid_fs` (via `include_role`) so a
 `--tags raid_fs` run can't bypass it; `raid_fs` hard-fails on a required-but-unconfirmed
 reset. `nvme_skip_cleanup_confirmation: true` is the unattended bypass (an intentional
 reset sets both).
+
+**Reusing an array whose filesystem is foreign.** `simple_menu.sh` offers to reuse
+existing xiRAID arrays instead of rebuilding them (`Reuse Arrays?`). That path leaves the
+arrays untouched and only creates the filesystem — so it lands on exactly the FOREIGN
+case above whenever a reused array already carries a filesystem that is not XFS with the
+configured label. Discovering that inside `site.yml`, twenty minutes into a run, is the
+wrong place for it: everything needed to answer is already known while the operator is
+still in the wizard.
+
+The wizard therefore probes before it writes any configuration. After the DATA and LOG
+arrays are chosen and the mountpoint and label entered — and before the
+`Confirm Configuration` dialog — it runs `blkid -s TYPE` / `blkid -s LABEL` against both
+`/dev/xi_<data>` and `/dev/xi_<log>`:
+
+| What the probe finds | Wizard behaviour |
+|---|---|
+| no signature on either device | proceeds silently; the roles format as on a fresh device |
+| `xfs` on the data device whose label equals the entered label | proceeds; `Confirm Configuration` states that the filesystem is reused and `mkfs` will not run |
+| anything else (`xfs` with a different label, `xfs_external_log`, `ext4`, an LVM/MD signature, …) | shows what was found per device, then asks a separate, **default-No** confirmation to force the format, warning that all data on those arrays is lost |
+
+Declining the force question returns the wizard to the clean-install path, exactly as
+declining `Reuse Arrays?` already does. Accepting it writes `xinas_fs_force_format: true`
+into the local configuration overlay, alongside the `nvme_auto_namespace: false` /
+`xiraid_skip_install: true` that the reuse path already writes.
+
+**`xinas_fs_force_format` (default `false`) exempts one gate and no others.** It
+suppresses the "existing storage does not match the expected xiNAS layout" failure in
+`raid_fs` and `nvme_namespace`, and the per-device FOREIGN failure in `create_fs.yml`,
+and it makes `_do_mkfs` true for that device. It does **not** relax:
+
+- **`UNKNOWN`** — a probe that could not answer still fails fast. The operator confirmed
+  a reformat of a layout they were *shown*, not of one nobody could read.
+- **the unhealthy-array gate** — an array that exists but is not online is recoverable,
+  and the remedy stays "repair it, or let the rebuild finish, then re-run".
+- **any destruction outside the filesystem** — `xicli drive clean`, the MD-superblock
+  sweep, the namespace rebuild and array (re)creation stay gated on
+  `xinas_storage_reset` OR `EMPTY`.
+
+That is why it is a separate switch rather than a use of `xinas_storage_reset`: the
+operator asked to *keep* these arrays, and `xinas_storage_reset` would drive-clean the
+very arrays being reused.
+
+**Unattended.** `autoinstall.sh` reads `XINAS_FS_FORCE_FORMAT` (default `no`) from the
+answer file and passes `-e xinas_fs_force_format=true` when it is set. Without it an
+unattended install over a foreign filesystem fails with the same message an attended run
+shows — a headless run never silently reformats data it was not told about.
+`nvme_skip_cleanup_confirmation` does **not** imply it: that flag is the unattended
+bypass for the reset `YES` prompt, and conflating the two would let an automation flag
+chosen for a rebuild authorise a reformat of arrays the operator meant to keep.
 
 **Update flow.** The in-TUI update runs a bare `site.yml` and never injects
 `xinas_storage_reset`, so an update resolves to MATCH → converge — `Requires-Rebuild: all`

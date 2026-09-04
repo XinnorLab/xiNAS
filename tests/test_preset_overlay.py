@@ -699,6 +699,10 @@ def test_editor_reuse_existing_arrays_writes_survive_a_fresh_checkout(tmp_path: 
         f'REPO_DIR="{tmp_path}"\n'
         f'. "{HELPER}"\n'
         f'TMP_DIR="{tmp_path}"\n'
+        # Computed earlier in reuse_existing_arrays() from the filesystem
+        # signature probe (raid-spec.md §11); the write block below only
+        # records the answer, so a fixed value is enough here.
+        'force_format="false"\n'
         "run_writes() {\n"
         f"{scalar_writes}\n"
         f'echo "xiraid_arrays: [{{name: fromscan, level: 6, devices: [/dev/scanned]}}]" '

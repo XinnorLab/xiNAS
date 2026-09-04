@@ -7,6 +7,7 @@ Creates xiRAID arrays and tuned XFS filesystems as per Xinnor NFS RDMA blog.
 * `xiraid_license_path` – path to license file applied before arrays are created.
 * `xiraid_force_metadata` – when `true` add `--force_metadata` to array creation.
 * `xinas_storage_reset` – **the** control for destroying and rebuilding storage. Default `false` = converge (a re-run never reformats a healthy array). Set `true` (with an interactive `YES`, or `nvme_skip_cleanup_confirmation: true` for automation) to wipe + rebuild.
+* `xinas_fs_force_format` – reformat the data volume of an array that is being **reused** when it already carries a filesystem that is not XFS with the configured label. Default `false`. Narrower than `xinas_storage_reset`: it exempts only the FOREIGN gates and the mkfs decision — the arrays are kept, `xicli drive clean` does not run, and the `UNKNOWN` / unhealthy-array gates still fail fast. Set by the wizard's force-format prompt and by `XINAS_FS_FORCE_FORMAT` in `autoinstall.conf`.
 * `xfs_force_mkfs` – **deprecated / disarmed.** No longer triggers a reformat on its own; the reformat decision is driven by `xinas_storage_reset` + detected storage state. Default `false`.
 
 This role requires the **mdadm** package to be installed so that any
