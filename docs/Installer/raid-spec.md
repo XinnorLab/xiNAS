@@ -770,29 +770,52 @@ is enforced in **both** `nvme_namespace` and `raid_fs` (via `include_role`) so a
 reset. `nvme_skip_cleanup_confirmation: true` is the unattended bypass (an intentional
 reset sets both).
 
-**Reusing an array whose filesystem is foreign.** `simple_menu.sh` offers to reuse
+**Reusing the filesystem of a previous install.** `simple_menu.sh` offers to reuse
 existing xiRAID arrays instead of rebuilding them (`Reuse Arrays?`). That path leaves the
-arrays untouched and only creates the filesystem — so it lands on exactly the FOREIGN
-case above whenever a reused array already carries a filesystem that is not XFS with the
-configured label. Discovering that inside `site.yml`, twenty minutes into a run, is the
-wrong place for it: everything needed to answer is already known while the operator is
-still in the wizard.
+arrays untouched and only creates the filesystem, so whatever those arrays already carry
+decides what happens next — and if that is a filesystem the roles will not converge on,
+the run dies inside `site.yml` twenty minutes later. Everything needed to answer is known
+while the operator is still in the wizard, so the wizard asks there.
 
-The wizard therefore probes before it writes any configuration. After the DATA and LOG
-arrays are chosen and the mountpoint and label entered — and before the
-`Confirm Configuration` dialog — it runs `blkid -s TYPE` / `blkid -s LABEL` against both
-`/dev/xi_<data>` and `/dev/xi_<log>`:
+Immediately after the DATA and LOG arrays are chosen — before the mountpoint and label
+questions, because the answer decides whether the label is even asked for — the wizard
+runs `blkid -s TYPE` / `blkid -s LABEL` against `/dev/xi_<data>` and `/dev/xi_<log>`.
 
-| What the probe finds | Wizard behaviour |
+**The data device decides.** `xfs_external_log` on the log device is the *external
+journal of the XFS on the data device* — the normal, healthy state of a pair a previous
+xiNAS install left behind — so it is reported as part of the finding and never treated as
+a foreign signature in its own right. Reporting it as foreign tells an operator their own
+previous install is junk, and offers them nothing but a reformat. What the data device
+carries selects one of three paths:
+
+| Data device | Wizard behaviour |
 |---|---|
-| no signature on either device | proceeds silently; the roles format as on a fresh device |
-| `xfs` on the data device whose label equals the entered label | proceeds; `Confirm Configuration` states that the filesystem is reused and `mkfs` will not run |
-| anything else (`xfs` with a different label, `xfs_external_log`, `ext4`, an LVM/MD signature, …) | shows what was found per device, then asks a separate, **default-No** confirmation to force the format, warning that all data on those arrays is lost |
+| no signature | no question; the roles format it as a fresh device (a stale `xfs_external_log` on the log device is rewritten by `mkfs.xfs -f`) |
+| `xfs` | **`💾 Existing Filesystem Found`** — a two-way choice between *keep it — mount the existing data* and *reformat it — ALL DATA IS LOST* |
+| anything else | **`⚠️  Existing Filesystem Found`** — nothing xiNAS can mount; the choice is *reformat* or *go back* |
 
-Declining the force question returns the wizard to the clean-install path, exactly as
-declining `Reuse Arrays?` already does. Accepting it writes `xinas_fs_force_format: true`
-into the local configuration overlay, alongside the `nvme_auto_namespace: false` /
-`xiraid_skip_install: true` that the reuse path already writes.
+**Keeping the filesystem adopts what is on disk and proves it mounts.** `raid_fs`
+converges only when the configured label equals the one `blkid` reports, so the wizard
+takes the label from the device rather than asking the operator to retype it — a
+mismatched retype is what would push a perfectly good filesystem into FOREIGN. It then
+mounts the pair for real (`mount -t xfs -o logdev=<log> <data>`) and unmounts it again
+before writing any configuration. `raid_fs` converges on a MATCH without ever mounting
+the pair itself, so a log device that does not belong to that data device would otherwise
+surface only at the systemd `.mount` unit, after the install has reconfigured the node.
+A failed mount is reported with `mount`'s own message and downgrades the offer to
+*reformat or go back*.
+
+**Reformatting** writes `xinas_fs_force_format: true` into the local configuration
+overlay, alongside the `nvme_auto_namespace: false` / `xiraid_skip_install: true` that
+the reuse path already writes.
+
+**Backing out is not the same as declining the arrays.** `reuse_existing_arrays` returns
+`1` only for the two answers that mean *rebuild from scratch* — declining `Reuse Arrays?`,
+and finding fewer than two arrays — and the caller turns `1` into `clean_install`, which
+offers to purge the xiRAID packages first. Every question after `Reuse Arrays? → Yes`
+returns `2` instead, and the caller sends `2` back to the menu untouched. The operator has
+already said to keep these arrays; offering to remove the packages those arrays need
+contradicts the answer they just gave.
 
 **`xinas_fs_force_format` (default `false`) exempts one gate and no others.** It
 suppresses the "existing storage does not match the expected xiNAS layout" failure in
