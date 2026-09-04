@@ -6,6 +6,7 @@ import { executorUnavailable } from './handlers/unsupported.js';
 import { rbacMiddleware } from './middleware/rbac.js';
 import { promotedReadsRouter } from './routes/promoted-reads.js';
 import { poolsRouter } from './routes/pools.js';
+import { mountApprovalPage } from './mcp/confirmation/approval-page.js';
 import { ConfirmationService } from './mcp/confirmation/service.js';
 import { loadOrCreateKeyRing } from './mcp/confirmation/state.js';
 import { mountMcpTransport } from './mcp/transport.js';
@@ -61,6 +62,12 @@ export function createApp(ctx: ApiContext): Express {
   // Audit skips /mcp (T4); auth does not run for /mcp (the transport
   // resolves identity itself and replays through the loopback).
   mountMcpTransport(app, ctx);
+
+  // S15 §9.3: the cookie-free operator approval page — unauthenticated shell
+  // (the JS authenticates the operator directly against the REST routes);
+  // mounted before the json parser and authMiddleware so it stays public,
+  // and before the /mcp audit skip matters (it always applies to /mcp/*).
+  mountApprovalPage(app);
 
   // S8 T4: the loopback token is minted per process start (ADR-0010).
   ctx.loopback_token ??= randomBytes(32).toString('hex');
