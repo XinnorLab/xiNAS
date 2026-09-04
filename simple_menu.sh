@@ -329,6 +329,27 @@ PYEOF2
     [[ -s "$arrays_file" ]]
 }
 
+# Prove an existing data+log pair actually mounts, then leave it unmounted.
+# raid_fs converges on a MATCH without ever mounting the pair itself, so a log
+# device that does not belong to this data device would surface only at the
+# systemd .mount unit — after the install has already reconfigured the node.
+# Mounting read-write is the honest test: it is what the node will do, and it
+# exercises log recovery. The umount is unconditional so the playbook starts
+# from the same state it would have without this check.
+# Returns 0 when the pair mounted, and writes mount's own error to stdout when
+# it did not.
+verify_existing_fs() {
+    local data_dev="$1" log_dev="$2" mp rc=0
+    mp=$(mktemp -d) || return 1
+    if ! mount -t xfs -o "logdev=$log_dev" "$data_dev" "$mp" 2>&1; then
+        rc=1
+    else
+        umount "$mp" || rc=1
+    fi
+    rmdir "$mp" 2>/dev/null || true
+    return "$rc"
+}
+
 # Interactive reuse flow: map DATA + LOG arrays, write config via yq
 # Requires detect_xiraid_arrays to have been called first
 # Returns 0 on success, 1 if user declines or arrays insufficient
@@ -380,7 +401,7 @@ reuse_existing_arrays() {
 
     local data_array
     data_array=$(menu_select "Select Data Array" "Choose the array for primary data storage:" \
-        "${data_menu_items[@]}") || return 1
+        "${data_menu_items[@]}") || return 2
 
     # Select LOG array (mandatory — no "none" option)
     local -a log_menu_items=()
@@ -395,47 +416,78 @@ reuse_existing_arrays() {
 
     local log_array
     log_array=$(menu_select "Select Log Array" "Choose the array for XFS log device:" \
-        "${log_menu_items[@]}") || return 1
+        "${log_menu_items[@]}") || return 2
 
     # Get mountpoint and label
-    local mountpoint label
-    mountpoint=$(input_box "Mountpoint" "XFS mountpoint:" "/mnt/data") || return 1
-    label=$(input_box "FS Label" "XFS filesystem label:" "nfsdata") || return 1
-
-    # Probe the arrays we are about to reuse for filesystem signatures
-    # (raid-spec.md §11). This path leaves the arrays alone and only creates the
-    # filesystem, so a reused array that already carries something other than XFS
-    # with this label is exactly the FOREIGN case the roles refuse to touch. Every
-    # input that decides it — both devices, and the label the operator just typed —
-    # is available here, so ask now instead of failing ~20 minutes into site.yml.
+    # What do the arrays we are about to reuse already carry? (raid-spec.md §11)
     #
-    # Newline-delimited rather than an array: `set -u` plus bash 3.2 makes an empty
-    # array's expansion an error, and "nothing foreign" is the common case.
-    local force_format="false" fs_note="" foreign_found="" dev fs_type fs_label
-    for dev in "/dev/xi_${data_array}" "/dev/xi_${log_array}"; do
-        fs_type=$(blkid -s TYPE -o value "$dev" 2>/dev/null) || fs_type=""
-        fs_label=$(blkid -s LABEL -o value "$dev" 2>/dev/null) || fs_label=""
-        [[ -z "$fs_type" ]] && continue
-        # An XFS on the data device whose label matches converges: the roles skip
-        # mkfs and the live data survives.
-        if [[ "$dev" == "/dev/xi_${data_array}" && "$fs_type" == "xfs" && "$fs_label" == "$label" ]]; then
-            fs_note="\n\nExisting XFS '$fs_label' found on $dev —\nit will be reused, mkfs will not run."
-            continue
-        fi
-        foreign_found+="  • $dev: $fs_type"
-        [[ -n "$fs_label" ]] && foreign_found+=" (label '$fs_label')"
-        foreign_found+="\n"
-    done
+    # The DATA device decides. `xfs_external_log` on the LOG device is the data
+    # filesystem's own journal — the normal, healthy state of a pair a previous
+    # xiNAS install left behind — so it is reported as such and never counted as
+    # a foreign signature on its own. An XFS on the data device is a filesystem
+    # the operator may well want back, so offering it back comes before offering
+    # to destroy it.
+    local data_dev="/dev/xi_${data_array}" log_dev="/dev/xi_${log_array}"
+    local data_type data_label log_type reuse_fs="false" force_format="false"
+    data_type=$(blkid -s TYPE -o value "$data_dev" 2>/dev/null) || data_type=""
+    data_label=$(blkid -s LABEL -o value "$data_dev" 2>/dev/null) || data_label=""
+    log_type=$(blkid -s TYPE -o value "$log_dev" 2>/dev/null) || log_type=""
 
-    if [[ -n "$foreign_found" ]]; then
-        msg_box "⚠️  Existing Filesystem Found" \
-            "These arrays already carry a filesystem that is not\nXFS labelled '$label':\n\n${foreign_found}\nxiNAS will not reformat them unless you say so."
-        # Default No: a stray Enter must never authorise a reformat.
-        if ! yes_no "Force Format?" \
-            "Reformat these arrays anyway?\n\nALL DATA ON THEM WILL BE LOST.\n\nThe arrays themselves are kept — only the\nfilesystem is recreated." "n"; then
-            return 1
+    if [[ -n "$data_type" ]]; then
+        local found_msg fs_choice
+        found_msg="$data_dev carries $data_type"
+        [[ -n "$data_label" ]] && found_msg+=" labelled '$data_label'"
+        if [[ "$log_type" == "xfs_external_log" ]]; then
+            found_msg+="\n$log_dev carries its external log."
+        elif [[ -n "$log_type" ]]; then
+            found_msg+="\n$log_dev carries $log_type."
         fi
-        force_format="true"
+        if [[ "$data_type" == "xfs" ]]; then
+            found_msg+="\n\nThis is the filesystem of a previous xiNAS install."
+            fs_choice=$(menu_select "💾 Existing Filesystem Found" "$found_msg" \
+                "reuse"    "Keep it — mount the existing data" \
+                "reformat" "Reformat it — ALL DATA IS LOST") || return 2
+        else
+            found_msg+="\n\nThis is not a filesystem xiNAS can mount."
+            fs_choice=$(menu_select "⚠️  Existing Filesystem Found" "$found_msg" \
+                "reformat" "Reformat it — ALL DATA IS LOST" \
+                "cancel"   "Leave it alone and go back") || return 2
+        fi
+        case "$fs_choice" in
+            reuse)    reuse_fs="true" ;;
+            reformat) force_format="true" ;;
+            *)        return 2 ;;
+        esac
+    fi
+
+    # Every question from here on is one the operator reached *after* choosing to
+    # keep the arrays, so backing out of it returns 2 — "go back", not "rebuild
+    # from scratch". Returning 1 here would drop the caller into clean_install,
+    # which offers to remove the xiRAID packages these arrays need.
+    local mountpoint label
+    mountpoint=$(input_box "Mountpoint" "XFS mountpoint:" "/mnt/data") || return 2
+    if [[ "$reuse_fs" == "true" ]]; then
+        # Adopt the label that is actually on disk. raid_fs compares the configured
+        # label against blkid's, and a mismatch is exactly what makes it refuse to
+        # converge — asking the operator to retype it is a trap.
+        label="$data_label"
+    else
+        label=$(input_box "FS Label" "XFS filesystem label:" "nfsdata") || return 2
+    fi
+
+    if [[ "$reuse_fs" == "true" ]]; then
+        local mount_err
+        if ! mount_err=$(verify_existing_fs "$data_dev" "$log_dev"); then
+            msg_box "❌ Filesystem Does Not Mount" \
+                "$data_dev could not be mounted with\n$log_dev as its external log:\n\n$mount_err\n\nThe data on it is not reachable as it stands."
+            if ! yes_no "Reformat?" \
+                "Reformat these arrays instead?\n\nALL DATA ON THEM WILL BE LOST." "n"; then
+                return 2
+            fi
+            reuse_fs="false"
+            force_format="true"
+            label=$(input_box "FS Label" "XFS filesystem label:" "nfsdata") || return 2
+        fi
     fi
 
     # Read array details for config
@@ -471,12 +523,12 @@ reuse_existing_arrays() {
     confirm_msg+="\nThe playbook will skip RAID creation and\ncreate filesystems on the existing arrays."
     if [[ "$force_format" == "true" ]]; then
         confirm_msg+="\n\n⚠️  The filesystem on these arrays will be\nREFORMATTED — all data on them is lost."
-    else
-        confirm_msg+="$fs_note"
+    elif [[ "$reuse_fs" == "true" ]]; then
+        confirm_msg+="\n\nThe existing filesystem is kept (it mounted\ncleanly); mkfs will not run."
     fi
 
     if ! yes_no "✅ Confirm Configuration" "$confirm_msg"; then
-        return 1
+        return 2
     fi
 
     # All configuration writes land in the overlay; role defaults are read-only.
@@ -775,22 +827,29 @@ while true; do
 
             # Detect existing xiRAID arrays first
             if detect_xiraid_arrays; then
-                # Arrays found — offer reuse
-                if reuse_existing_arrays; then
-                    # Reuse succeeded — run playbook
-                    if confirm_playbook; then
-                        if run_playbook "playbooks/site.yml" "inventories/lab.ini"; then
-                            echo ""
-                            echo "🎉 Deployment complete! System status:"
-                            echo ""
-                            xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
-                            exit 0
+                # Arrays found — offer reuse. The exit code says which of the two
+                # "no" answers this was: declining the arrays themselves means a
+                # rebuild, so clean_install (which offers to purge xiRAID first)
+                # is right. Backing out of a later question is not that — the
+                # operator has already said to keep these arrays, and purging
+                # xiRAID would take the very packages they need.
+                reuse_rc=0
+                reuse_existing_arrays || reuse_rc=$?
+                case "$reuse_rc" in
+                    0)
+                        if confirm_playbook; then
+                            if run_playbook "playbooks/site.yml" "inventories/lab.ini"; then
+                                echo ""
+                                echo "🎉 Deployment complete! System status:"
+                                echo ""
+                                xinas-status 2>/dev/null || echo "Run 'xinas-status' to see system status."
+                                exit 0
+                            fi
                         fi
-                    fi
-                else
-                    # User declined reuse or not enough arrays — clean install
-                    clean_install || true
-                fi
+                        ;;
+                    1) clean_install || true ;;   # declined reuse / too few arrays
+                    *) : ;;                        # backed out — return to the menu
+                esac
             else
                 # No arrays (or no xicli) — clean install
                 clean_install || true
