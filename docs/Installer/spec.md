@@ -902,6 +902,7 @@ Resolution precedence, lowest to highest:
 | Extra Ansible vars | `extra_vars` | `XINAS_EXTRA_VARS` | `--extra-vars` | — |
 | Purge xiRAID first | `purge_xiraid` | `XINAS_PURGE_XIRAID` | `--no-purge-xiraid` | `yes` (`no` for `existing-raid`) |
 | Skip dep bootstrap | `skip_prepare` | `XINAS_SKIP_PREPARE` | `--skip-prepare` | `no` |
+| Force-format a reused array | `fs_force_format` | `XINAS_FS_FORCE_FORMAT` | — | `no` |
 
 **Presets:** `default`, `xinnorVM`, `existing-raid`. `existing-raid`
 applies the `default` preset files but adds
@@ -910,6 +911,16 @@ non-interactive equivalent of the menu's "Use Existing RAID Arrays"
 profile. For that preset xiRAID purge defaults to `no` (existing
 arrays need the running xiRAID); it is honoured only if explicitly
 requested.
+
+**Force-format:** `fs_force_format` passes `-e xinas_fs_force_format=true`,
+which lets `raid_fs` reformat the data volume of an array it is *reusing* when
+that volume already carries a filesystem that is not XFS with the configured
+label. Without it the run stops on that layout, exactly as an attended one does
+— a headless install never silently reformats data it was not told about. It
+keeps the arrays (no `xicli drive clean`, no rebuild) and does not relax the
+`UNKNOWN` or unhealthy-array gates; `nvme_skip_cleanup_confirmation` does not
+imply it. Full contract:
+[raid-spec.md §11](raid-spec.md#11-idempotency--the-storage-reset-contract).
 
 **License:** the license is read from a file only. When `license_file`
 is not set it defaults to `/tmp/license` — the path the TUI
