@@ -51,6 +51,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openStateStore } from '../../state/index.js';
+import { waitForAgentReady, waitForObservation } from './_helpers.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '../../..'); // -> xiNAS-MCP
 const API_ENTRY = join(PROJECT_ROOT, 'dist/api-server.js');
@@ -142,25 +143,6 @@ async function waitForApi(socketPath: string, token: string, timeoutMs = 8000): 
     }
   }
   throw new Error(`API at ${socketPath} did not become ready within ${timeoutMs}ms`);
-}
-
-/** Poll a GET until it answers 200 (observed snapshot landed); resolves the response. */
-async function waitForObservation(
-  socketPath: string,
-  token: string,
-  path: string,
-  timeoutMs = 15_000,
-): Promise<JsonResponse> {
-  const deadline = Date.now() + timeoutMs;
-  let last: JsonResponse | null = null;
-  while (Date.now() < deadline) {
-    last = await getJson(socketPath, path, token);
-    if (last.status === 200) return last;
-    await sleep(200);
-  }
-  throw new Error(
-    `GET ${path} never returned 200 within ${timeoutMs}ms; last=${JSON.stringify(last)}`,
-  );
 }
 
 interface TaskResult {
@@ -481,7 +463,11 @@ describe.sequential('e2e: NFS round-trip via stub nfs-helper (S3 N6)', () => {
     agentProc.stderr?.on('data', (c: Buffer) => agentStderr.push(c.toString()));
 
     // The heartbeat tracker needs the agent ONLINE before an apply dispatches.
-    await sleep(HEARTBEAT_INTERVAL_MS * 3);
+    try {
+      await waitForAgentReady(apiSockPath, ADMIN_TOKEN);
+    } catch (err) {
+      throw withProcStderr(err);
+    }
   }, 200_000);
 
   afterAll(async () => {
@@ -615,7 +601,9 @@ describe.sequential('e2e: NFS round-trip via stub nfs-helper (S3 N6)', () => {
     // Wait for the agent's boot sweep to land the observed idmap snapshot so
     // the plan pins a STABLE observed revision (the idmap collector re-polls
     // only every 60s — far beyond the plan→apply gap below).
-    await waitForObservation(apiSockPath, ADMIN_TOKEN, '/api/v1/nfs-idmap').catch((err) => {
+    await waitForObservation(apiSockPath, ADMIN_TOKEN, '/api/v1/nfs-idmap', {
+      timeoutMs: 15_000,
+    }).catch((err) => {
       throw withProcStderr(err);
     });
 
