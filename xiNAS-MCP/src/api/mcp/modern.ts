@@ -8,6 +8,8 @@
  * stateful, so the two protocol eras cannot share negotiation state — there
  * is none on this side to share.
  *
+ * Every result on this path carries `resultType` (`2026-07-28` `Result.resultType` is mandatory — S14 §5.1). The legacy SDK path is untouched.
+ *
  * This path runs AHEAD of the SDK transport because no published
  * `@modelcontextprotocol/sdk` implements the era: 1.30.0 has no
  * `server/discover` schema, and its StreamableHTTPServerTransport rejects any
@@ -97,7 +99,11 @@ export async function handleModernRequest(
         return { jsonrpc: '2.0', id: rpcId, result: buildDiscoverResult() };
 
       case 'tools/list':
-        return { jsonrpc: '2.0', id: rpcId, result: { tools: listTools() } };
+        return {
+          jsonrpc: '2.0',
+          id: rpcId,
+          result: { resultType: 'complete', tools: listTools() },
+        };
 
       case 'tools/call': {
         const params = (msg.params ?? {}) as {
@@ -112,7 +118,7 @@ export async function handleModernRequest(
           };
         }
         const result = await callTool(params.name, params.arguments ?? {}, opts);
-        return { jsonrpc: '2.0', id: rpcId, result };
+        return { jsonrpc: '2.0', id: rpcId, result: { ...result, resultType: 'complete' } };
       }
 
       default:

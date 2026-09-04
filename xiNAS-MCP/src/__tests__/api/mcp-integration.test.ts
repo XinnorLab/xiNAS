@@ -191,6 +191,21 @@ describe('MCP integration: default posture (S8 T8)', () => {
     expect(diskRows.at(-1)?.principal).toBe('admin:test');
     expect(diskRows.at(-1)?.client_type).toBe('mcp');
   });
+
+  it('S15: the legacy era result carries NO resultType (legacy wire shape retained)', async () => {
+    const res = await rpc(
+      port,
+      {
+        jsonrpc: '2.0',
+        id: 900,
+        method: 'tools/call',
+        params: { name: 'arrays.list', arguments: {} },
+      },
+      { session: adminSession },
+    );
+    expect(res.body.result).toBeDefined();
+    expect('resultType' in (res.body.result as object)).toBe(false);
+  });
 });
 
 describe('MCP integration: allow_apply=true flips the gate only', () => {

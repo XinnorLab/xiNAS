@@ -327,4 +327,40 @@ describe('mcp modern era — server/discover (S14)', () => {
     expect(resultOf(res).supportedVersions).toContain('2026-07-28');
     expect(res.session).toBeUndefined();
   });
+
+  // S15 T1 (requirement §4, V-23): every modern result carries resultType.
+  it('stamps resultType: complete on tools/list, tools/call and tool errors', async () => {
+    const list = await rpc(
+      port,
+      { jsonrpc: '2.0', id: 'rt-1', method: 'tools/list', params: { _meta: META } },
+      { token: 'tok-admin' },
+    );
+    expect((list.body.result as { resultType?: string }).resultType).toBe('complete');
+
+    const ok = await rpc(
+      port,
+      {
+        jsonrpc: '2.0',
+        id: 'rt-2',
+        method: 'tools/call',
+        params: { _meta: META, name: 'arrays.list', arguments: {} },
+      },
+      { token: 'tok-admin' },
+    );
+    expect((ok.body.result as { resultType?: string }).resultType).toBe('complete');
+
+    const bad = await rpc(
+      port,
+      {
+        jsonrpc: '2.0',
+        id: 'rt-3',
+        method: 'tools/call',
+        params: { _meta: META, name: 'no.such.tool', arguments: {} },
+      },
+      { token: 'tok-admin' },
+    );
+    const err = bad.body.result as { resultType?: string; isError?: boolean };
+    expect(err.isError).toBe(true);
+    expect(err.resultType).toBe('complete');
+  });
 });
