@@ -1,8 +1,16 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { McpProtocolError } from '../../../api/mcp/confirmation/errors.js';
+import { McpProtocolError, invalidRequestState } from '../../../api/mcp/confirmation/errors.js';
 import {
   type KeyRing,
   type RequestStatePayload,
@@ -68,12 +76,40 @@ describe('requestState codec (S15 §7)', () => {
     expect(loadOrCreateKeyRing(real).active).toBe('k1');
   });
 
-  it("a lost EEXIST race loads the other writer's ring instead of overwriting it", () => {
-    const path = join(dir, 'race.json');
+  it('a corrupt ring fails to parse without leaking key material into the error message', () => {
+    const path = join(dir, 'corrupt.json');
+    // Unquoted (bareword) value: V8's JSON.parse "Unexpected token" error
+    // quotes ~20 characters of context around the offending position, so
+    // an unwrapped JSON.parse leaks this run into the thrown message. A
+    // merely truncated (but still quoted) string does not reliably hit
+    // that quoting path on every supported Node/V8 version, so this shape
+    // is the one that actually pins the leak.
+    const body = `{"active":"k1","keys":{"k1":AAAA${'A'.repeat(32)}}}`;
+    writeFileSync(path, body);
+    chmodSync(path, 0o600);
+    expect(() => loadOrCreateKeyRing(path)).toThrow();
+    let err: unknown;
+    try {
+      loadOrCreateKeyRing(path);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toContain('AAAAAAAA');
+  });
+
+  it('reloading an existing ring is idempotent: the second call returns the same key material', () => {
+    const path = join(dir, 'reload.json');
     const first = loadOrCreateKeyRing(path);
-    // Simulate "someone created it between our check and our write": the
-    // second call must find the exclusive create failing with EEXIST and
-    // load first's key, never a fresh one.
+    // These two calls run sequentially in one thread, so this does not
+    // exercise a race between concurrent writers — it only confirms that
+    // calling loadOrCreateKeyRing again on a path that already has a ring
+    // returns the same key material instead of minting a fresh one. The
+    // file already existing makes the exclusive create in
+    // loadOrCreateKeyRing hit its EEXIST branch and fall through to
+    // loading; the guarantee that a genuinely concurrent writer can't
+    // instead clobber an already-created ring comes from O_EXCL's
+    // kernel-level atomicity, not from anything asserted by this test.
     const second = loadOrCreateKeyRing(path);
     expect(second.keys.get('k1')?.equals(first.keys.get('k1') as Buffer)).toBe(true);
   });
@@ -83,6 +119,19 @@ describe('requestState codec (S15 §7)', () => {
     expect(encoded.startsWith(`xc1.${ring.active}.`)).toBe(true);
     expect(encoded.split('.')).toHaveLength(4);
     expect(verifyRequestState(ring, encoded)).toEqual(payload);
+  });
+
+  it('mint throws a plain Error when the encoded requestState would exceed the size cap', () => {
+    const huge: RequestStatePayload = { ...payload, cid: 'c'.repeat(5000) };
+    expect(() => mintRequestState(ring, huge)).toThrow('request state exceeds 4096 bytes');
+    let err: unknown;
+    try {
+      mintRequestState(ring, huge);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(McpProtocolError);
   });
 
   it('rejects every single-character alteration with the same generic error', () => {
@@ -101,6 +150,24 @@ describe('requestState codec (S15 §7)', () => {
       expect((err as McpProtocolError).code).toBe(-32602);
       expect((err as McpProtocolError).message).toBe('invalid request state');
     }
+  });
+
+  it('rejects a signature whose last char carries non-zero pad bits (byte-equal alias)', () => {
+    const encoded = mintRequestState(ring, payload);
+    const last = encoded[encoded.length - 1] as string;
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    // The canonical last char has its low 2 bits zero (index % 4 === 0);
+    // index + 1 shares the same 4 data bits, so Buffer.from(_, 'base64url')
+    // decodes both to identical bytes. A byte compare would accept it.
+    const idx = alphabet.indexOf(last);
+    expect(idx % 4).toBe(0);
+    const alias = alphabet[idx + 1] as string;
+    expect(Buffer.from(encoded.slice(-43), 'base64url')).toEqual(
+      Buffer.from(encoded.slice(-43, -1) + alias, 'base64url'),
+    );
+    expect(() => verifyRequestState(ring, encoded.slice(0, -1) + alias)).toThrow(
+      'invalid request state',
+    );
   });
 
   it('rejects a foreign key, an unknown kid, a wrong prefix, truncation, oversize and non-strings', () => {
@@ -151,5 +218,12 @@ describe('requestState codec (S15 §7)', () => {
     expect(n).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(nonceHash(n)).toMatch(/^[0-9a-f]{64}$/);
     expect(nonceHash(n)).toBe(nonceHash(n));
+  });
+
+  it('reasonClass is readable on the error object but never serialized by JSON.stringify', () => {
+    const err = invalidRequestState('mac');
+    expect(err.reasonClass).toBe('mac');
+    const roundTripped = JSON.parse(JSON.stringify(err)) as Record<string, unknown>;
+    expect(roundTripped).not.toHaveProperty('reasonClass');
   });
 });

@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import {
   closeSync,
   constants,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -56,7 +57,7 @@ const GROUP_OR_WORLD = 0o077;
  * the caller loads it. There is never an "exists, then write" window.
  */
 function createExclusive(path: string): boolean {
-  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   let fd: number;
   try {
     fd = openSync(
@@ -95,7 +96,34 @@ function readRingSafely(path: string): KeyRingFile {
   }
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    return JSON.parse(readFileSync(fd, 'utf8')) as KeyRingFile;
+    // The lstat above and this open are two separate syscalls; anyone with
+    // write access to the parent directory can swap the path for a regular
+    // file between them (TOCTOU). Re-run the same ownership/mode checks
+    // against the descriptor we are actually about to read, not the path,
+    // before trusting its contents.
+    const fst = fstatSync(fd);
+    if (!fst.isFile()) {
+      throw new Error(`confirmation key ring ${path} must be a regular file (not a symlink)`);
+    }
+    if (uid !== undefined && fst.uid !== uid) {
+      throw new Error(`confirmation key ring ${path} is owned by uid ${fst.uid}, expected ${uid}`);
+    }
+    if ((fst.mode & GROUP_OR_WORLD) !== 0) {
+      throw new Error(
+        `confirmation key ring ${path} mode 0${(fst.mode & 0o777).toString(8)} grants group/world access; expected 0600`,
+      );
+    }
+    const raw = readFileSync(fd, 'utf8');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // Bare JSON.parse's SyntaxError quotes ~20 characters around the
+      // offending position, which can put raw key bytes from a corrupt
+      // ring into the thrown message (and hence a log). Never propagate it.
+      throw new Error(`confirmation key ring ${path} is not valid JSON`);
+    }
+    return parsed as KeyRingFile;
   } finally {
     closeSync(fd);
   }
@@ -131,7 +159,14 @@ export function mintRequestState(ring: KeyRing, payload: RequestStatePayload): s
   const key = ring.keys.get(ring.active);
   if (key === undefined) throw new Error('confirmation key ring has no active key');
   const body = `${REQUEST_STATE_PREFIX}.${ring.active}.${b64url(Buffer.from(canonicalize(payload), 'utf8'))}`;
-  return `${body}.${b64url(mac(key, body))}`;
+  const encoded = `${body}.${b64url(mac(key, body))}`;
+  // A server-side bug signal (a caller handed us an oversize payload), not
+  // a protocol error from an untrusted client — a plain Error, never
+  // McpProtocolError.
+  if (Buffer.byteLength(encoded, 'utf8') > REQUEST_STATE_MAX_BYTES) {
+    throw new Error('request state exceeds 4096 bytes');
+  }
+  return encoded;
 }
 
 function isPayload(v: unknown): v is RequestStatePayload {

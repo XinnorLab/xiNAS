@@ -8,7 +8,12 @@ export class McpProtocolError extends Error {
   readonly code: number;
   readonly httpStatus: number;
   readonly data?: Record<string, unknown>;
-  readonly reasonClass?: string;
+  // `declare` suppresses the class-field emit (ES2022 target, fields
+  // emitted): a normal field declaration would define this as an
+  // enumerable own property on every instance, and JSON.stringify(err)
+  // would then leak the audit-trail-only reason to the client. It is
+  // instead defined via Object.defineProperty below, non-enumerable.
+  declare readonly reasonClass?: string;
 
   constructor(
     code: number,
@@ -19,7 +24,13 @@ export class McpProtocolError extends Error {
     this.code = code;
     this.httpStatus = opts.httpStatus ?? 200;
     if (opts.data !== undefined) this.data = opts.data;
-    if (opts.reasonClass !== undefined) this.reasonClass = opts.reasonClass;
+    if (opts.reasonClass !== undefined) {
+      Object.defineProperty(this, 'reasonClass', {
+        value: opts.reasonClass,
+        enumerable: false,
+        writable: false,
+      });
+    }
   }
 }
 
