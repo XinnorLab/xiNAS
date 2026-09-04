@@ -32,11 +32,16 @@ export function elicitationModes(meta: unknown): Set<ElicitationMode> {
   const caps = (meta as Record<string, unknown>)[CLIENT_CAPABILITIES_META];
   if (caps === null || typeof caps !== 'object') return out;
   const elicitation = (caps as Record<string, unknown>).elicitation;
-  if (elicitation === null || typeof elicitation !== 'object') return out;
+  if (elicitation === null || typeof elicitation !== 'object' || Array.isArray(elicitation)) {
+    return out;
+  }
   const e = elicitation as Record<string, unknown>;
-  if (e.form !== undefined) out.add('form');
-  if (e.url !== undefined) out.add('url');
-  if (out.size === 0) out.add('form'); // backwards-compatibility rule
+  if (typeof e.form === 'object' && e.form !== null) out.add('form');
+  if (typeof e.url === 'object' && e.url !== null) out.add('url');
+  // Backwards-compatibility rule: a bare `{}` (no declared keys) means form-only.
+  // A key that IS present but doesn't carry a capability object (e.g. `form: null`)
+  // does not fall back to this rule — it declares nothing.
+  if (out.size === 0 && Object.keys(e).length === 0) out.add('form');
   return out;
 }
 

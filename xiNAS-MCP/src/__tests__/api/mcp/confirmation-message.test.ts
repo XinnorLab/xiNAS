@@ -6,6 +6,7 @@ import {
 } from '../../../api/mcp/confirmation/message.js';
 import type { ConfirmationRecord } from '../../../api/mcp/confirmation/types.js';
 import type { PlanDocument } from '../../../api/plan/document.js';
+import { canonicalize } from '../../../lib/canonical-json.js';
 
 const document: PlanDocument = {
   schema: 1,
@@ -101,6 +102,26 @@ describe('confirmation message (S15 §10)', () => {
     expect(s).toMatch(/… \(\d+ more characters; see the plan\)$/);
   });
 
+  it('summarizeDiff pluralizes the overflow count (F2)', () => {
+    const diff = { a: 'x'.repeat(700) };
+    const full = canonicalize(diff);
+    const s1 = summarizeDiff(diff, full.length - 1);
+    expect(s1).toContain('(1 more character; see the plan)');
+    const s2 = summarizeDiff(diff, full.length - 2);
+    expect(s2).toContain('(2 more characters; see the plan)');
+  });
+
+  it('renders "Affected: (none listed)" when affected_resources is empty (F3)', () => {
+    const d = { ...document, affected_resources: [] };
+    const msg = renderConfirmationMessage({
+      record,
+      document: d,
+      hostname: 'nas-01',
+      now: Date.parse('2026-09-04T10:00:02Z'),
+    });
+    expect(msg).toContain('Affected: (none listed)');
+  });
+
   it('renderSummary spells out destructive consequences and rollback limitation', () => {
     const d = { ...document, risk_level: 'destructive', rollback_model: 'destructive' };
     const r = {
@@ -108,15 +129,66 @@ describe('confirmation message (S15 §10)', () => {
       risk_level: 'destructive',
       rollback_model: 'destructive',
     } as ConfirmationRecord;
-    const s = renderSummary({ record: r, document: d });
+    const now = r.created_at + 240_000;
+    const s = renderSummary({ record: r, document: d, hostname: 'nas-01', now });
     expect(s.consequences).toBe(
       'This operation destroys data on Share share-a, ExportRule share-a/10.0.0.0/24. Data on them may be permanently lost.',
     );
     expect(s.rollback_limitation).toContain('destructive');
+    expect(s.message).toContain('nas-01');
+    expect(s.message.split(r.node_id).length - 1).toBe(1);
+    expect(s.message).toContain('1m00s');
     const u = renderSummary({
       record: { ...r, rollback_model: 'unsupported' } as ConfirmationRecord,
       document: { ...d, rollback_model: 'unsupported' },
+      hostname: 'nas-01',
+      now,
     });
     expect(u.rollback_limitation).toBe('xiNAS cannot roll this operation back automatically.');
+  });
+
+  it('renderSummary spells out destructive consequences with no affected resources (F3)', () => {
+    const d = {
+      ...document,
+      risk_level: 'destructive',
+      rollback_model: 'destructive',
+      affected_resources: [],
+    };
+    const r = {
+      ...record,
+      risk_level: 'destructive',
+      rollback_model: 'destructive',
+    } as ConfirmationRecord;
+    const s = renderSummary({
+      record: r,
+      document: d,
+      hostname: 'nas-01',
+      now: r.created_at + 1000,
+    });
+    expect(s.consequences).toBe(
+      'This operation destroys data on the affected resources. Data may be permanently lost.',
+    );
+  });
+
+  it('renders a url-mode message and never leaks secret hashes (F5)', () => {
+    const secretRecord = {
+      ...record,
+      request_state_nonce_hash: 'nh-SECRET',
+      idempotency_key: 'ik-SECRET',
+      arguments_hash: 'ah-SECRET',
+      plan_document_hash: 'dh-SECRET',
+    } as ConfirmationRecord;
+    for (const mode of ['form', 'url'] as const) {
+      const msg = renderConfirmationMessage({
+        record: { ...secretRecord, mode },
+        document,
+        hostname: 'nas-01',
+        now: Date.parse('2026-09-04T10:00:02Z'),
+      });
+      expect(msg.length).toBeGreaterThan(0);
+      for (const secret of ['nh-SECRET', 'ik-SECRET', 'ah-SECRET', 'dh-SECRET']) {
+        expect(msg).not.toContain(secret);
+      }
+    }
   });
 });

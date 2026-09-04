@@ -39,6 +39,15 @@ describe('confirmation policy (S15 §3, §14)', () => {
     );
   });
 
+  it('elicitationModes (F4): array elicitation, null-valued keys, and object-valued keys', () => {
+    const key = 'io.modelcontextprotocol/clientCapabilities';
+    expect([...elicitationModes({ [key]: { elicitation: [] } })]).toEqual([]);
+    expect([...elicitationModes({ [key]: { elicitation: { form: null } } })]).toEqual([]);
+    expect([...elicitationModes({ [key]: { elicitation: { form: {}, url: {} } } })].sort()).toEqual(
+      ['form', 'url'],
+    );
+  });
+
   it('isConfirmable: plan_apply+apply, direct+requires_mcp_apply, explicit opt-in; nothing else', () => {
     expect(isConfirmable(entry('shares.update'), { mode: 'apply' })).toBe(true);
     expect(isConfirmable(entry('shares.update'), { mode: 'plan' })).toBe(false);

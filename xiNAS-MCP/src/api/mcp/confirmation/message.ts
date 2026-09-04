@@ -8,10 +8,13 @@ const DIFF_CAP = 600;
 export function summarizeDiff(diff: unknown, cap = DIFF_CAP): string {
   const s = canonicalize(diff ?? null);
   if (s.length <= cap) return s;
-  return `${s.slice(0, cap)}… (${s.length - cap} more characters; see the plan)`;
+  const extra = s.length - cap;
+  const unit = extra === 1 ? 'character' : 'characters';
+  return `${s.slice(0, cap)}… (${extra} more ${unit}; see the plan)`;
 }
 
 function resources(doc: PlanDocument): string {
+  if (doc.affected_resources.length === 0) return '(none listed)';
   return doc.affected_resources.map((r) => `${r.kind} ${r.id}`).join('; ');
 }
 
@@ -59,6 +62,8 @@ export function renderConfirmationMessage(input: MessageInput): string {
 export interface SummaryInput {
   record: ConfirmationRecord;
   document: PlanDocument;
+  hostname: string;
+  now: number;
 }
 
 /** The approval-page text (S15 §10.2). */
@@ -67,16 +72,19 @@ export function renderSummary(input: SummaryInput): {
   consequences: string;
   rollback_limitation: string;
 } {
-  const { record, document: doc } = input;
+  const { record, document: doc, hostname, now } = input;
   const message = renderConfirmationMessage({
     record,
     document: doc,
-    hostname: record.node_id,
-    now: record.created_at,
+    hostname,
+    now,
   });
   let consequences = 'This operation changes the node configuration.';
   if (doc.risk_level === 'destructive') {
-    consequences = `This operation destroys data on ${doc.affected_resources.map((r) => `${r.kind} ${r.id}`).join(', ')}. Data on them may be permanently lost.`;
+    consequences =
+      doc.affected_resources.length === 0
+        ? 'This operation destroys data on the affected resources. Data may be permanently lost.'
+        : `This operation destroys data on ${doc.affected_resources.map((r) => `${r.kind} ${r.id}`).join(', ')}. Data on them may be permanently lost.`;
   } else if (doc.risk_level === 'changing_access') {
     consequences = `This operation changes client access: ${doc.client_impact}`;
   }
