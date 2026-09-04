@@ -1,9 +1,14 @@
 import { Router } from 'express';
+import { resolveConfirmationConfig } from '../config.js';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import { sendOk } from '../handlers/reads.js';
 import type { ConfirmationService } from '../mcp/confirmation/service.js';
-import type { ConfirmationRecord, ConfirmationStatus } from '../mcp/confirmation/types.js';
+import type {
+  ApprovalChannel,
+  ConfirmationRecord,
+  ConfirmationStatus,
+} from '../mcp/confirmation/types.js';
 
 /**
  * The operator approval surface over REST (S15 §9.1–9.2): the human-in-
@@ -47,8 +52,12 @@ export function renderConfirmation(r: ConfirmationRecord): Record<string, unknow
   };
 }
 
-/** The VERIFIED channel — from the auth verdict (S15 §9.2), never from a header. */
-function channelOf(principal: string): 'bearer' | 'uds_break_glass' {
+/**
+ * The VERIFIED channel — from the auth verdict (S15 §9.2), never from a
+ * header. Exported (F2a) so the `local:uds` -> `uds_break_glass` branch is
+ * unit-tested directly, not only indirectly through a route.
+ */
+export function channelOf(principal: string): ApprovalChannel {
   return principal === 'local:uds' ? 'uds_break_glass' : 'bearer';
 }
 
@@ -69,9 +78,18 @@ export function mcpConfirmationsRouter(ctx: ApiContext): Router {
         "query param 'status' is not a confirmation status",
       );
     }
-    const principal = typeof req.query.principal === 'string' ? req.query.principal : undefined;
+    const principalRaw = req.query.principal;
+    // F9: a repeated query param (?principal=a&principal=b) parses as an
+    // array — reject it rather than silently ignoring the filter.
+    if (principalRaw !== undefined && typeof principalRaw !== 'string') {
+      throw new ApiException('INVALID_ARGUMENT', "query param 'principal' must be a single value");
+    }
+    const principal = principalRaw;
     const limitRaw = req.query.limit;
-    const limit = limitRaw === undefined ? 100 : Number.parseInt(String(limitRaw), 10);
+    if (limitRaw !== undefined && typeof limitRaw !== 'string') {
+      throw new ApiException('INVALID_ARGUMENT', "query param 'limit' must be a single value");
+    }
+    const limit = limitRaw === undefined ? 100 : Number.parseInt(limitRaw, 10);
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
       throw new ApiException('INVALID_ARGUMENT', "query param 'limit' must be in [1, 1000]");
     }
@@ -101,17 +119,29 @@ export function mcpConfirmationsRouter(ctx: ApiContext): Router {
       const svc = requireConfirmations(ctx);
       const rc = req.context!;
       const body = (req.body ?? {}) as Record<string, unknown>;
-      const channel = channelOf(rc.principal);
+      // channelOf is typed ApprovalChannel (F2a — it mirrors the column's
+      // full type for testability) but its implementation only ever
+      // returns 'bearer' | 'uds_break_glass' — 'mcp_form' is set only by
+      // the MCP client's own form-accept path (store.consume), never
+      // derived from an auth verdict. operatorDecide's `channel` input
+      // keeps its narrower, unchanged shape; this narrows back to it.
+      const channel = channelOf(rc.principal) as 'bearer' | 'uds_break_glass';
       const iface = interfaceOf(req);
       // S15 §9.3 defence in depth only: a request that labels itself as the
       // page must not arrive cross-origin. The label decides nothing else.
+      // F4: compare as an ORIGIN (scheme + host + port), not a string
+      // prefix — 'https://nas.example.co' is a STRING PREFIX MATCH of
+      // 'https://nas.example.com' but a completely different origin.
+      // `base` is the RESOLVED approval_url_base (trailing slash already
+      // stripped by resolveConfirmationConfig), read fresh on every
+      // request — never cached at startup.
       const origin = req.header('origin');
-      const base = ctx.config.mcp?.confirmation?.approval_url_base;
+      const base = resolveConfirmationConfig(ctx.config).approval_url_base;
       if (
         iface === 'web' &&
         origin !== undefined &&
         base !== undefined &&
-        !base.startsWith(origin.replace(/\/+$/, ''))
+        new URL(base).origin !== origin
       ) {
         throw new ApiException('PERMISSION_DENIED', 'cross-origin approval request refused');
       }

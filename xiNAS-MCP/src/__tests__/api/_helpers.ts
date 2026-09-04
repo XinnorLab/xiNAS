@@ -152,6 +152,10 @@ export function seedNfsProfile(state: OpenedStateStore): void {
 const MOCK_CONTROLLER_ID = '00000000-0000-0000-0000-000000000099';
 /** internal_agent bearer the mock agent posts observations with. */
 const MOCK_AGENT_TOKEN = 'internal-agent-tok-test';
+/** Same token, ready as an Authorization header (S15 Task 11 fix1, F9: RBAC
+ *  admits internal_agent as admin-rank at the route; the confirmation
+ *  service's own role check refuses it). */
+export const INTERNAL_AGENT_TOKEN = `Bearer ${MOCK_AGENT_TOKEN}`;
 /** Fast heartbeat interval so ticks fire within a test's lifetime. */
 const MOCK_HEARTBEAT_INTERVAL_MS = 200;
 

@@ -701,6 +701,17 @@ export class ConfirmationService {
   }): ConfirmationRecord {
     const record = this.store.get(input.id);
     if (record === null) throw new ApiException('NOT_FOUND', `no confirmation ${input.id}`);
+    // F1 (S15 §6.3): an expired-but-not-yet-swept record must not be
+    // approvable — checked before the approver-policy gates below, and
+    // scoped to 'approve' only. Decline stays allowed on an expired row:
+    // it is harmless (the sweep never touches a row that already moved to
+    // a terminal status) and lets an operator clean up a stale request.
+    if (input.decision === 'approve' && record.expires_at <= this.now()) {
+      throw new ApiException('CONFLICT', 'confirmation is expired, not pending', {
+        reason: 'not_pending',
+        status: 'expired',
+      });
+    }
     // S15 §9.2 — approver policy. `channel` is the route's derivation from
     // the auth verdict; `interface` is a label and is never consulted here.
     const isUds = input.channel === 'uds_break_glass';
@@ -712,24 +723,35 @@ export class ConfirmationService {
         'Decide from the HTTPS approval page or REST with a different admin credential. Enabling the key lets anyone with root or xinas-admin on this node approve (S15 §3.5).',
       );
     }
+    // F11: consistent with middleware/rbac.ts and the service's own Gate-2
+    // RBAC check (handle() above) — a role failure is PERMISSION_DENIED
+    // with `required_role`, not a CONFLICT approver_policy. RBAC admits
+    // `internal_agent` here as admin-rank (it must reach /internal/v1
+    // routes), but this decision surface requires the literal 'admin'
+    // role, so internal_agent is refused here too.
     if (input.approver.role !== 'admin') {
-      throw new ApiException('CONFLICT', 'only an admin may decide a confirmation', {
-        reason: 'approver_policy',
-      });
-    }
-    if (
-      this.config.approver_policy === 'distinct_principal' &&
-      !isUds &&
-      input.approver.principal === record.principal
-    ) {
       throw new ApiException(
-        'CONFLICT',
-        'the requesting principal may not approve its own request',
-        { reason: 'approver_policy' },
-        'Approve with a different admin credential, or xinasctl on the node.',
+        'PERMISSION_DENIED',
+        `role '${input.approver.role}' may not decide a confirmation (requires admin)`,
+        { required_role: 'admin' },
       );
     }
     if (input.decision === 'approve') {
+      // F3/F5 (S15 §9.2): distinct_principal applies to APPROVE only — the
+      // requester may still decline (withdraw) their own record — and has
+      // no UDS exemption: a uds_break_glass approver is held to the same
+      // distinct-principal rule as a bearer approver.
+      if (
+        this.config.approver_policy === 'distinct_principal' &&
+        input.approver.principal === record.principal
+      ) {
+        throw new ApiException(
+          'CONFLICT',
+          'the requesting principal may not approve its own request',
+          { reason: 'approver_policy' },
+          'Approve with a different admin credential, or xinasctl on the node.',
+        );
+      }
       if (record.mode === 'form') {
         throw new ApiException(
           'CONFLICT',
@@ -756,9 +778,13 @@ export class ConfirmationService {
         input.reason,
       );
       if (moved === null) {
-        throw new ApiException('CONFLICT', `confirmation is ${record.status}, not pending`, {
+        // F10: report the LIVE status (a second writer may have moved the
+        // record between the read above and this guarded UPDATE), not the
+        // pre-transition snapshot captured in `record`.
+        const live = this.store.get(record.confirmation_id)?.status ?? record.status;
+        throw new ApiException('CONFLICT', `confirmation is ${live}, not pending`, {
           reason: 'not_pending',
-          status: record.status,
+          status: live,
         });
       }
       const detail = { channel: input.channel, interface: input.interface ?? null };
@@ -786,11 +812,12 @@ export class ConfirmationService {
       input.reason,
     );
     if (moved === null) {
-      throw new ApiException(
-        'CONFLICT',
-        `confirmation is ${record.status}, not pending or approved`,
-        { reason: 'not_pending', status: record.status },
-      );
+      // F10: same rationale as the approve branch above — report the live status.
+      const live = this.store.get(record.confirmation_id)?.status ?? record.status;
+      throw new ApiException('CONFLICT', `confirmation is ${live}, not pending or approved`, {
+        reason: 'not_pending',
+        status: live,
+      });
     }
     const detail = { channel: input.channel, interface: input.interface ?? null };
     queueConfirmationEvent(this.audit, 'declined', moved, {

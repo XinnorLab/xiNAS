@@ -1,14 +1,24 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import * as http from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveConfirmationConfig } from '../../api/config.js';
 import type { KeyRing } from '../../api/mcp/confirmation/state.js';
 import { ConfirmationService } from '../../api/mcp/confirmation/service.js';
-import type { CreateConfirmationInput } from '../../api/mcp/confirmation/store.js';
+import {
+  ConfirmationStore,
+  type CreateConfirmationInput,
+} from '../../api/mcp/confirmation/store.js';
 import { ACK_DATA_LOSS, type ConfirmationRecord } from '../../api/mcp/confirmation/types.js';
 import { publicPlan } from '../../api/plan/document.js';
+import { channelOf } from '../../api/routes/mcp-confirmations.js';
+import { startServer } from '../../api/server.js';
 import {
   ADMIN2_TOKEN,
   ADMIN_TOKEN,
+  INTERNAL_AGENT_TOKEN,
   OPERATOR_TOKEN,
   VIEWER_TOKEN,
   buildTestAppWithMockAgent,
@@ -109,6 +119,15 @@ function auditRows(
 function fakeKeyRing(): KeyRing {
   return { active: 'k1', keys: new Map([['k1', Buffer.alloc(32, 9)]]) };
 }
+
+describe('channelOf (S15 Task 11 fix1, F2a)', () => {
+  it('maps the UDS peer-trust principal to uds_break_glass and every bearer principal to bearer', () => {
+    expect(channelOf('local:uds')).toBe('uds_break_glass');
+    expect(channelOf('admin:test')).toBe('bearer');
+    expect(channelOf('mcp:local_admin')).toBe('bearer');
+    expect(channelOf('internal_agent')).toBe('bearer');
+  });
+});
 
 describe('mcp-confirmations routes (S15 Task 11)', () => {
   let setup: MockAgentSetup;
@@ -402,5 +421,386 @@ describe('mcp-confirmations routes (S15 Task 11)', () => {
     expect(refused.status).toBe(401);
     expect(refused.body.errors?.[0]?.code).toBe('PERMISSION_DENIED');
     expect(setup.tasks.confirmations.get(crossOrigin.confirmation_id)?.status).toBe('pending');
+  });
+
+  it('Origin is compared as an ORIGIN, not a string prefix: a same-prefix near-miss host is refused, the exact origin is accepted (F4, S15 §9.3)', async () => {
+    setup.config.mcp = { confirmation: { approval_url_base: 'https://nas.example.com/' } };
+
+    const nearMiss = seedRecord(setup, { principal: 'someone:else3' });
+    const refused = await request(setup.app)
+      .post(`/api/v1/mcp/confirmations/${nearMiss.confirmation_id}/decline`)
+      .set('Authorization', ADMIN_TOKEN)
+      .set('X-Xinas-Approval-Interface', 'web')
+      .set('Origin', 'https://nas.example.co') // a STRING PREFIX of the base, not the same origin
+      .send({});
+    expect(refused.status).toBe(401);
+    expect(refused.body.errors?.[0]?.code).toBe('PERMISSION_DENIED');
+    expect(setup.tasks.confirmations.get(nearMiss.confirmation_id)?.status).toBe('pending');
+
+    const exact = seedRecord(setup, { principal: 'someone:else4' });
+    const accepted = await request(setup.app)
+      .post(`/api/v1/mcp/confirmations/${exact.confirmation_id}/decline`)
+      .set('Authorization', ADMIN_TOKEN)
+      .set('X-Xinas-Approval-Interface', 'web')
+      .set('Origin', 'https://nas.example.com') // the resolved (trailing-slash-stripped) base's exact origin
+      .send({});
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.result.status).toBe('declined');
+  });
+
+  it('approve on a pending url record past its TTL is CONFLICT not_pending/expired even with the right acknowledge phrase; decline still succeeds (F1, S15 §6.3)', async () => {
+    const record = seedRecord(setup, {
+      principal: 'admin:test',
+      risk_level: 'destructive',
+      rollback_model: 'destructive',
+      ttl_ms: -1000, // already expired at creation: expires_at = created_at - 1000
+    });
+
+    const res = await request(setup.app)
+      .post(`/api/v1/mcp/confirmations/${record.confirmation_id}/approve`)
+      .set('Authorization', ADMIN2_TOKEN)
+      .send({ acknowledge: ACK_DATA_LOSS });
+    expect(res.status).toBe(409);
+    expect(res.body.errors?.[0]?.code).toBe('CONFLICT');
+    expect(res.body.errors?.[0]?.details?.reason).toBe('not_pending');
+    expect(res.body.errors?.[0]?.details?.status).toBe('expired');
+    expect(setup.tasks.confirmations.get(record.confirmation_id)?.status).toBe('pending');
+    const approvedAudit = auditRows(setup).find(
+      (r) =>
+        r.kind === 'mcp.confirmation.approved' &&
+        r.payload.confirmation_id === record.confirmation_id,
+    );
+    expect(approvedAudit).toBeUndefined();
+
+    const declined = await request(setup.app)
+      .post(`/api/v1/mcp/confirmations/${record.confirmation_id}/decline`)
+      .set('Authorization', ADMIN2_TOKEN)
+      .send({});
+    expect(declined.status).toBe(200);
+    expect(declined.body.result.status).toBe('declined');
+  });
+
+  it('the UDS channel gets no distinct_principal exemption: a same-principal approve over uds_break_glass is refused too (F3, S15 §9.2)', () => {
+    const udsService = new ConfirmationService({
+      store: setup.tasks.confirmations,
+      tasks: setup.tasks.store,
+      keyRing: fakeKeyRing(),
+      config: { ...resolveConfirmationConfig(setup.config), allow_uds_approval: true },
+      now: () => Date.now(),
+      nodeId: setup.controllerId,
+      hostname: 'test-host',
+      audit: setup.state.audit,
+    });
+    const record = seedRecord(setup, { principal: 'local:uds' });
+
+    expect(() =>
+      udsService.operatorDecide({
+        id: record.confirmation_id,
+        decision: 'approve',
+        approver: { principal: 'local:uds', role: 'admin' },
+        channel: 'uds_break_glass',
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CONFLICT',
+        details: expect.objectContaining({ reason: 'approver_policy' }),
+      }),
+    );
+    expect(setup.tasks.confirmations.get(record.confirmation_id)?.status).toBe('pending');
+  });
+
+  it('the requester may decline (withdraw) their own pending record; distinct_principal applies to approve only (F5, S15 §9.2)', async () => {
+    const record = seedRecord(setup, { principal: 'admin:test' });
+    const res = await request(setup.app)
+      .post(`/api/v1/mcp/confirmations/${record.confirmation_id}/decline`)
+      .set('Authorization', ADMIN_TOKEN)
+      .send({ reason: 'changed my mind' });
+    expect(res.status).toBe(200);
+    expect(res.body.result.status).toBe('declined');
+    expect(res.body.result.declined_by).toBe('admin:test');
+  });
+
+  // F9's brief text expects "409 approver_policy" for an internal_agent decision —
+  // that was the CURRENT (unfixed) shape of operatorDecide's own
+  // `approver.role !== 'admin'` check. F11, landed in this SAME commit,
+  // moves exactly that check to PERMISSION_DENIED/{required_role:'admin'}
+  // (matching middleware/rbac.ts and the service's Gate-2 RBAC check,
+  // service.ts:136-140) — and internal_agent's role ('internal_agent') is
+  // the ONLY role that can ever reach this check via the route (RBAC
+  // admits it as admin-rank; viewer/operator are already stopped at 401
+  // by rbacMiddleware before the service is called). Applying F11
+  // necessarily changes this test's expected outcome from CONFLICT
+  // approver_policy to PERMISSION_DENIED; see task-11-fix1-report.md
+  // "Deviations" for the full reasoning.
+  it('internal_agent is admin-rank at RBAC but not the required admin role: the service refuses approve/decline (PERMISSION_DENIED, required_role admin) and the record is unchanged (F9 + F11, S15 §9.2)', async () => {
+    const approveRecord = seedRecord(setup, { principal: 'admin:test' });
+    const approveRes = await request(setup.app)
+      .post(`/api/v1/mcp/confirmations/${approveRecord.confirmation_id}/approve`)
+      .set('Authorization', INTERNAL_AGENT_TOKEN)
+      .send({});
+    expect(approveRes.status).toBe(401);
+    expect(approveRes.body.errors?.[0]?.code).toBe('PERMISSION_DENIED');
+    expect(approveRes.body.errors?.[0]?.details?.required_role).toBe('admin');
+    expect(setup.tasks.confirmations.get(approveRecord.confirmation_id)?.status).toBe('pending');
+
+    const declineRecord = seedRecord(setup, { principal: 'admin:test' });
+    const declineRes = await request(setup.app)
+      .post(`/api/v1/mcp/confirmations/${declineRecord.confirmation_id}/decline`)
+      .set('Authorization', INTERNAL_AGENT_TOKEN)
+      .send({});
+    expect(declineRes.status).toBe(401);
+    expect(declineRes.body.errors?.[0]?.code).toBe('PERMISSION_DENIED');
+    expect(declineRes.body.errors?.[0]?.details?.required_role).toBe('admin');
+    expect(setup.tasks.confirmations.get(declineRecord.confirmation_id)?.status).toBe('pending');
+  });
+
+  it('GET list rejects a repeated (array) query param for limit/status/principal; limit range/type errors are INVALID_ARGUMENT (F9)', async () => {
+    const record = seedRecord(setup, { principal: 'admin:test' });
+
+    const arrayLimit = await request(setup.app)
+      .get('/api/v1/mcp/confirmations?limit=1&limit=2')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(arrayLimit.status).toBe(400);
+    expect(arrayLimit.body.errors?.[0]?.code).toBe('INVALID_ARGUMENT');
+
+    const zeroLimit = await request(setup.app)
+      .get('/api/v1/mcp/confirmations')
+      .query({ limit: 0 })
+      .set('Authorization', ADMIN_TOKEN);
+    expect(zeroLimit.status).toBe(400);
+    expect(zeroLimit.body.errors?.[0]?.code).toBe('INVALID_ARGUMENT');
+
+    const nanLimit = await request(setup.app)
+      .get('/api/v1/mcp/confirmations')
+      .query({ limit: 'abc' })
+      .set('Authorization', ADMIN_TOKEN);
+    expect(nanLimit.status).toBe(400);
+    expect(nanLimit.body.errors?.[0]?.code).toBe('INVALID_ARGUMENT');
+
+    const oneLimit = await request(setup.app)
+      .get('/api/v1/mcp/confirmations')
+      .query({ limit: 1 })
+      .set('Authorization', ADMIN_TOKEN);
+    expect(oneLimit.status).toBe(200);
+    expect((oneLimit.body.result as unknown[]).length).toBe(1);
+    expect((oneLimit.body.result as Array<Record<string, unknown>>)[0]?.confirmation_id).toBe(
+      record.confirmation_id,
+    );
+
+    const arrayPrincipal = await request(setup.app)
+      .get('/api/v1/mcp/confirmations?principal=a&principal=b')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(arrayPrincipal.status).toBe(400);
+    expect(arrayPrincipal.body.errors?.[0]?.code).toBe('INVALID_ARGUMENT');
+
+    const arrayStatus = await request(setup.app)
+      .get('/api/v1/mcp/confirmations?status=pending&status=approved')
+      .set('Authorization', ADMIN_TOKEN);
+    expect(arrayStatus.status).toBe(400);
+    expect(arrayStatus.body.errors?.[0]?.code).toBe('INVALID_ARGUMENT');
+  });
+
+  it('not_pending reports the LIVE status when the guarded UPDATE misses a race, not the pre-transition snapshot (F10)', () => {
+    const record = seedRecord(setup, { principal: 'admin:test' });
+    const svc = setup.ctx.mcpConfirmations!;
+    const store = setup.tasks.confirmations;
+    const spy = vi.spyOn(store, 'approve').mockImplementationOnce((id: string) => {
+      // Simulate a second writer declining the record between operatorDecide's
+      // read and its own guarded UPDATE: decline for real, then report the
+      // guarded UPDATE as having missed (changes() === 0 -> null), exactly as
+      // the store itself would if a real race had beaten it there.
+      store.decline(id, 'admin:two', 'bearer');
+      return null;
+    });
+    try {
+      expect(() =>
+        svc.operatorDecide({
+          id: record.confirmation_id,
+          decision: 'approve',
+          approver: { principal: 'admin:two', role: 'admin' },
+          channel: 'bearer',
+        }),
+      ).toThrowError(
+        expect.objectContaining({
+          code: 'CONFLICT',
+          details: expect.objectContaining({ reason: 'not_pending', status: 'declined' }),
+        }),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+/**
+ * F2(b) — the `local:uds` channel derivation, proven end-to-end over a REAL
+ * Unix-domain socket. `buildTestAppWithMockAgent` (used by the describe
+ * block above) drives `createApp` directly with supertest's own ephemeral
+ * TCP listener, so `middleware/auth.ts`'s UDS peer-trust branch (no bearer
+ * header AND `req.socket.remoteAddress` is falsy) is never reachable there.
+ * This describe block boots a REAL `xinas-api` with `startServer` bound to
+ * `listen: { kind: 'unix', socket: <path> }` and drives it with a raw
+ * `http.request({ socketPath, ... })` carrying no Authorization header — the
+ * one client shape that can actually produce the `local:uds` verdict.
+ */
+describe('local:uds channel over a REAL Unix socket (S15 Task 11 fix1, F2b)', () => {
+  let dir: string;
+  let handle: Awaited<ReturnType<typeof startServer>> | undefined;
+
+  afterEach(async () => {
+    await handle?.close();
+    handle = undefined;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function boot(
+    allowUdsApproval: boolean,
+  ): Promise<{ socketPath: string; controllerId: string }> {
+    // os.tmpdir() + a short prefix: macOS caps AF_UNIX socket paths around
+    // 104 bytes: a long temp path here would make server.listen(socketPath)
+    // fail with ENAMETOOLONG before the test body ever runs.
+    dir = mkdtempSync(join(tmpdir(), 'xinas-uds-'));
+    const socketPath = join(dir, 'a.sock');
+    const controllerId = '00000000-0000-0000-0000-0000000000c9';
+    writeFileSync(
+      join(dir, 'config.json'),
+      JSON.stringify({
+        controller_id: controllerId,
+        listen: { kind: 'unix', socket: socketPath },
+        tokens: { 'tok-admin': { principal: 'admin:test', role: 'admin' } },
+        state: { databasePath: join(dir, 'x.db'), auditJsonlPath: join(dir, 'a.jsonl') },
+        mcp: { confirmation: { allow_uds_approval: allowUdsApproval } },
+      }),
+    );
+    handle = await startServer({ configPath: join(dir, 'config.json') });
+    return { socketPath, controllerId };
+  }
+
+  /** Seed a pending url-mode record directly through a second ConfirmationStore
+   *  instance over the SAME db handle `startServer` opened — no plan/doc needed
+   *  since this suite only exercises approve, never GET .../{id}. */
+  function seedPendingUrlRecord(controllerId: string): ConfirmationRecord {
+    const store = new ConfirmationStore({ db: handle!.state.db, now: () => Date.now() });
+    return store.create({
+      mode: 'url',
+      principal: 'admin:test',
+      role: 'admin',
+      tool_name: 'filesystems.create',
+      operation_kind: 'fs.create',
+      arguments_hash: `ah-${uniq('h')}`,
+      plan_id: uniq('plan'),
+      plan_hash: `ph-${uniq('h')}`,
+      plan_document_hash: `pdh-${uniq('h')}`,
+      idempotency_key: uniq('ik'),
+      expected_revision: 0,
+      risk_level: 'changing_access',
+      rollback_model: 'changing_access',
+      request_state_nonce_hash: `nonce-${uniq('h')}`,
+      ttl_ms: 300_000,
+      correlation_id: uniq('corr'),
+      request_id: uniq('req'),
+      node_id: controllerId,
+    });
+  }
+
+  /** POST .../approve with NO Authorization header, over the real Unix socket. */
+  function udsApprove(
+    socketPath: string,
+    id: string,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    const payload = JSON.stringify({});
+    return new Promise((resolveP, reject) => {
+      const req = http.request(
+        {
+          socketPath,
+          path: `/api/v1/mcp/confirmations/${id}/approve`,
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'content-length': Buffer.byteLength(payload),
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            const text = Buffer.concat(chunks).toString('utf8');
+            resolveP({
+              status: res.statusCode ?? 0,
+              body: text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {},
+            });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+  }
+
+  function auditRowsOf(): Array<{
+    kind: string;
+    principal: string;
+    payload: Record<string, unknown>;
+  }> {
+    const rows = handle!.state.db
+      .prepare('SELECT entry_json FROM audit_outbox ORDER BY audit_seq')
+      .all() as Array<{ entry_json: Buffer }>;
+    return rows.map(
+      (r) =>
+        JSON.parse(r.entry_json.toString('utf8')) as {
+          kind: string;
+          principal: string;
+          payload: Record<string, unknown>;
+        },
+    );
+  }
+
+  it('is refused by default (allow_uds_approval: false): 409 approver_policy, record still pending, no audit row', async () => {
+    const { socketPath, controllerId } = await boot(false);
+    const record = seedPendingUrlRecord(controllerId);
+
+    const res = await udsApprove(socketPath, record.confirmation_id);
+    expect(res.status).toBe(409);
+    expect(
+      (res.body.errors as Array<Record<string, unknown>> | undefined)?.[0]?.details,
+    ).toMatchObject({ reason: 'approver_policy' });
+
+    const store = new ConfirmationStore({ db: handle!.state.db, now: () => Date.now() });
+    expect(store.get(record.confirmation_id)?.status).toBe('pending');
+    const approved = auditRowsOf().find(
+      (r) =>
+        r.kind === 'mcp.confirmation.approved' &&
+        r.payload.confirmation_id === record.confirmation_id,
+    );
+    expect(approved).toBeUndefined();
+  });
+
+  it('with allow_uds_approval: true: 200, approval_channel uds_break_glass, both approved + break_glass_used audited with principal local:uds', async () => {
+    const { socketPath, controllerId } = await boot(true);
+    const record = seedPendingUrlRecord(controllerId);
+
+    const res = await udsApprove(socketPath, record.confirmation_id);
+    expect(res.status).toBe(200);
+    const result = res.body.result as Record<string, unknown>;
+    expect(result?.approval_channel).toBe('uds_break_glass');
+    expect(result?.approved_by).toBe('local:uds');
+    expect(result?.status).toBe('approved');
+
+    const rows = auditRowsOf();
+    const approved = rows.find(
+      (r) =>
+        r.kind === 'mcp.confirmation.approved' &&
+        r.payload.confirmation_id === record.confirmation_id,
+    );
+    const breakGlass = rows.find(
+      (r) =>
+        r.kind === 'mcp.confirmation.break_glass_used' &&
+        r.payload.confirmation_id === record.confirmation_id,
+    );
+    expect(approved).toBeDefined();
+    expect(approved?.principal).toBe('local:uds');
+    expect(breakGlass).toBeDefined();
+    expect(breakGlass?.principal).toBe('local:uds');
   });
 });

@@ -127,6 +127,7 @@ export function loadConfig(opts: { configPath?: string; inline?: ApiConfig } = {
   if (opts.inline) {
     validateTasksSection(opts.inline);
     validateMcpSection(opts.inline);
+    validateTokensSection(opts.inline);
     return opts.inline;
   }
   const path = opts.configPath ?? DEFAULT_PATH;
@@ -154,6 +155,10 @@ export function loadConfig(opts: { configPath?: string; inline?: ApiConfig } = {
     }
   }
 
+  // Validated AFTER the internalTokensPath merge so a 'local:'-prefixed
+  // principal smuggled in via the internal-tokens file is caught too.
+  validateTokensSection(config);
+
   return config;
 }
 
@@ -170,6 +175,23 @@ function validateTasksSection(config: ApiConfig): void {
       `tasks.max_inflight must be an integer >= 1, got ${JSON.stringify(cap)}; ` +
         'remove the key to use the default (4)',
     );
+  }
+}
+
+/**
+ * F6 (S15 Task 11 fix1): the `local:` principal namespace is reserved for
+ * socket-peer identities the auth middleware itself assigns (`local:uds` —
+ * see middleware/auth.ts's UDS peer-trust branch); a configured bearer
+ * token must never be able to impersonate one.
+ */
+function validateTokensSection(config: ApiConfig): void {
+  for (const [key, principal] of Object.entries(config.tokens ?? {})) {
+    if (principal.principal.startsWith('local:')) {
+      throw new Error(
+        `token '${key}': principal '${principal.principal}' is invalid — ` +
+          `'local:' is reserved for socket-peer identities`,
+      );
+    }
   }
 }
 
