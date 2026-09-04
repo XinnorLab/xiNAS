@@ -402,6 +402,42 @@ reuse_existing_arrays() {
     mountpoint=$(input_box "Mountpoint" "XFS mountpoint:" "/mnt/data") || return 1
     label=$(input_box "FS Label" "XFS filesystem label:" "nfsdata") || return 1
 
+    # Probe the arrays we are about to reuse for filesystem signatures
+    # (raid-spec.md §11). This path leaves the arrays alone and only creates the
+    # filesystem, so a reused array that already carries something other than XFS
+    # with this label is exactly the FOREIGN case the roles refuse to touch. Every
+    # input that decides it — both devices, and the label the operator just typed —
+    # is available here, so ask now instead of failing ~20 minutes into site.yml.
+    #
+    # Newline-delimited rather than an array: `set -u` plus bash 3.2 makes an empty
+    # array's expansion an error, and "nothing foreign" is the common case.
+    local force_format="false" fs_note="" foreign_found="" dev fs_type fs_label
+    for dev in "/dev/xi_${data_array}" "/dev/xi_${log_array}"; do
+        fs_type=$(blkid -s TYPE -o value "$dev" 2>/dev/null) || fs_type=""
+        fs_label=$(blkid -s LABEL -o value "$dev" 2>/dev/null) || fs_label=""
+        [[ -z "$fs_type" ]] && continue
+        # An XFS on the data device whose label matches converges: the roles skip
+        # mkfs and the live data survives.
+        if [[ "$dev" == "/dev/xi_${data_array}" && "$fs_type" == "xfs" && "$fs_label" == "$label" ]]; then
+            fs_note="\n\nExisting XFS '$fs_label' found on $dev —\nit will be reused, mkfs will not run."
+            continue
+        fi
+        foreign_found+="  • $dev: $fs_type"
+        [[ -n "$fs_label" ]] && foreign_found+=" (label '$fs_label')"
+        foreign_found+="\n"
+    done
+
+    if [[ -n "$foreign_found" ]]; then
+        msg_box "⚠️  Existing Filesystem Found" \
+            "These arrays already carry a filesystem that is not\nXFS labelled '$label':\n\n${foreign_found}\nxiNAS will not reformat them unless you say so."
+        # Default No: a stray Enter must never authorise a reformat.
+        if ! yes_no "Force Format?" \
+            "Reformat these arrays anyway?\n\nALL DATA ON THEM WILL BE LOST.\n\nThe arrays themselves are kept — only the\nfilesystem is recreated." "n"; then
+            return 1
+        fi
+        force_format="true"
+    fi
+
     # Read array details for config
     local data_info data_level data_strip data_dev_list
     data_info=$(grep "^${data_array}|" "$arrays_file" | head -1)
@@ -433,6 +469,11 @@ reuse_existing_arrays() {
     confirm_msg+="Mountpoint: $mountpoint\n"
     confirm_msg+="Label:      $label\n"
     confirm_msg+="\nThe playbook will skip RAID creation and\ncreate filesystems on the existing arrays."
+    if [[ "$force_format" == "true" ]]; then
+        confirm_msg+="\n\n⚠️  The filesystem on these arrays will be\nREFORMATTED — all data on them is lost."
+    else
+        confirm_msg+="$fs_note"
+    fi
 
     if ! yes_no "✅ Confirm Configuration" "$confirm_msg"; then
         return 1
@@ -454,6 +495,9 @@ reuse_existing_arrays() {
     xinas_config_set local xiraid_skip_install true
     xinas_config_set local xiraid_force_metadata false
     xinas_config_set local xfs_force_mkfs false
+    # The operator's answer to the force-format prompt above. Narrower than
+    # xinas_storage_reset: raid_fs reformats the volume but keeps these arrays.
+    xinas_config_set local xinas_fs_force_format "$force_format"
 
     # Build xiraid_arrays YAML
     local data_devices_yaml=""

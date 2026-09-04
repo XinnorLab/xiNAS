@@ -53,10 +53,13 @@
         msg: >-
           Existing storage does not match the expected xiNAS layout (state=FOREIGN).
           Refusing to touch it. Set xinas_storage_reset=true to wipe and rebuild, or
-          clean the drives manually.
+          clean the drives manually. To keep these arrays and reformat only the
+          filesystem, re-run the wizard and confirm the force-format prompt
+          (xinas_fs_force_format=true).
       when:
         - (xinas_storage_state | default('UNKNOWN')) == 'FOREIGN'
         - not (xinas_storage_reset | default(false) | bool)
+        - not (xinas_fs_force_format | default(false) | bool)
 
     - name: Confirm reset before any destructive operation
       ansible.builtin.include_tasks: storage_reset_confirm.yml

@@ -50,9 +50,15 @@ Options:
 The license is read from a file only. When --license-file is omitted the
 default /tmp/license is used — the same path the TUI and bash menus write.
 
+Answer-file / environment only (no CLI flag):
+  fs_force_format / XINAS_FS_FORCE_FORMAT   (default: no)
+      Reformat a REUSED array whose filesystem is not XFS with the
+      configured label. Without it such an install stops rather than
+      overwrite a filesystem it was not told about. Keeps the arrays.
+
 Environment: XINAS_PRESET, XINAS_LICENSE_FILE, XINAS_HOSTNAME,
   XINAS_INVENTORY, XINAS_EXTRA_VARS, XINAS_PURGE_XIRAID,
-  XINAS_SKIP_PREPARE, XINAS_AUTOINSTALL_CONFIG
+  XINAS_SKIP_PREPARE, XINAS_FS_FORCE_FORMAT, XINAS_AUTOINSTALL_CONFIG
 
 See docs/Installer/spec.md section 7 for the full contract.
 EOF
@@ -121,6 +127,7 @@ fi
 # ── Answer file (lowest precedence) ───────────────────────────────────────────
 preset=""; license_file=""; hostname=""
 inventory=""; extra_vars=""; purge_xiraid=""; skip_prepare=""
+fs_force_format=""
 
 config_path="${cli_config:-${XINAS_AUTOINSTALL_CONFIG:-/etc/xinas/autoinstall.conf}}"
 if [ -f "$config_path" ]; then
@@ -139,6 +146,12 @@ inventory="${XINAS_INVENTORY:-${inventory:-inventories/lab.ini}}"
 extra_vars="${XINAS_EXTRA_VARS:-${extra_vars:-}}"
 purge_xiraid="${XINAS_PURGE_XIRAID:-${purge_xiraid:-}}"
 skip_prepare="${XINAS_SKIP_PREPARE:-${skip_prepare:-no}}"
+# Reformat a reused array whose filesystem is foreign (raid-spec §11). Default
+# "no": an unattended run never silently reformats data it was not told about.
+# Deliberately NOT implied by nvme_skip_cleanup_confirmation, which is the
+# unattended bypass for the storage-reset YES prompt — a flag chosen for a
+# rebuild must not authorise reformatting arrays the operator meant to keep.
+fs_force_format="${XINAS_FS_FORCE_FORMAT:-${fs_force_format:-no}}"
 
 # ── CLI overrides everything ──────────────────────────────────────────────────
 [ -n "$cli_preset" ]       && preset="$cli_preset"
@@ -189,6 +202,9 @@ ev_args+=( -e "xinas_install_preset=$preset" )
 if [ "$existing_raid" -eq 1 ]; then
     ev_args+=( -e "xiraid_skip_install=true" -e "nvme_auto_namespace=false" )
 fi
+if is_yes "$fs_force_format"; then
+    ev_args+=( -e "xinas_fs_force_format=true" )
+fi
 [ -n "$extra_vars" ] && ev_args+=( -e "$extra_vars" )
 
 ansible_cmd=( ansible-playbook playbooks/site.yml -i "$inventory" -v )
@@ -203,6 +219,7 @@ info "Inventory    : $inventory"
 info "Hostname     : ${hostname:-<auto: xiNAS-HWKEY>}"
 info "License file : $license_file"
 info "Purge xiRAID : $purge_xiraid"
+info "Force format : $fs_force_format"
 [ -n "$extra_vars" ] && info "Extra vars   : $extra_vars"
 
 if [ "$CHECK_ONLY" -eq 1 ]; then

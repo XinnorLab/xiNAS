@@ -22,6 +22,21 @@ supported source for installing and updating xiNAS.
   `xinas-update-git` do not read it. See `docs/Installer/update-spec.md`
   § Fresh installs select a release only by explicit tag.
 
+- **The wizard asks about a foreign filesystem before the install starts,
+  instead of failing 20 minutes in.** `simple_menu.sh`'s "Reuse Arrays?" path
+  leaves the arrays alone and only creates the filesystem, so a reused array
+  already carrying something other than XFS with the configured label hit the
+  FOREIGN gate deep inside `site.yml`. The wizard now probes both the data and
+  the log device right after the mountpoint/label questions, shows exactly
+  what it found on each, and asks a separate, default-**No** confirmation to
+  reformat. Declining falls back to a clean install, as declining the reuse
+  question already does. Accepting sets the new `xinas_fs_force_format`, which
+  exempts only the FOREIGN gates and the mkfs decision: the arrays are kept,
+  `xicli drive clean` never runs, and the `UNKNOWN` and unhealthy-array gates
+  still fail fast. Unattended installs opt in with `XINAS_FS_FORCE_FORMAT=yes`
+  in `autoinstall.conf`; without it a headless run stops rather than reformat
+  data it was not told about. See `docs/Installer/raid-spec.md` §11.
+
 ### Fixed
 
 - **An install no longer fails on a filesystem signature it created the
