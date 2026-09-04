@@ -1,6 +1,9 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { queueConfirmationEvent } from '../../../api/mcp/confirmation/audit.js';
+import {
+  queueConfirmationEvent,
+  queueConfirmationEventRaw,
+} from '../../../api/mcp/confirmation/audit.js';
 import {
   type CreateConfirmationInput,
   ConfirmationStore,
@@ -107,5 +110,61 @@ describe('queueConfirmationEvent (S15 §12.1)', () => {
       task_id: string | null;
     };
     expect(idx.task_id).toBe('task-9');
+  });
+});
+
+describe('queueConfirmationEventRaw (S15 §7.3, §12.1, F2)', () => {
+  let h: ReturnType<typeof harness>;
+  beforeEach(() => {
+    h = harness();
+  });
+
+  it('queues a record-less mcp.confirmation.<event> row, passes the payload through verbatim, and carries no nonce key', () => {
+    queueConfirmationEventRaw(h.audit, 'verification_failed', {
+      principal: 'admin:demo',
+      tool_name: 'shares.update',
+      correlation_id: 'corr-9',
+      reason: 'mac',
+    });
+
+    const row = h.db.prepare('SELECT entry_json FROM audit_outbox WHERE audit_seq = 1').get() as {
+      entry_json: Buffer;
+    };
+    const entry = JSON.parse(row.entry_json.toString('utf8')) as Record<string, unknown>;
+    expect(entry.kind).toBe('mcp.confirmation.verification_failed');
+    expect(entry.payload).toEqual({
+      principal: 'admin:demo',
+      tool_name: 'shares.update',
+      correlation_id: 'corr-9',
+      reason: 'mac',
+    });
+
+    const serializedPayload = JSON.stringify(entry.payload);
+    expect(serializedPayload).not.toContain('nonce');
+    expect(serializedPayload.toLowerCase()).not.toContain('mac.');
+  });
+
+  it('aligns operation_id to payload.confirmation_id when present, and omits it otherwise', () => {
+    queueConfirmationEventRaw(h.audit, 'replay_rejected', {
+      presented_by: 'admin:two',
+      record_principal: 'admin:demo',
+      confirmation_id: 'c-42',
+      reason: 'binding_mismatch',
+    });
+    queueConfirmationEventRaw(h.audit, 'capability_missing', {
+      principal: 'admin:demo',
+      tool_name: 'shares.update',
+      plan_id: 'plan-1',
+      required_mode: 'url',
+    });
+
+    const rows = h.db
+      .prepare('SELECT entry_json FROM audit_outbox ORDER BY audit_seq')
+      .all() as Array<{ entry_json: Buffer }>;
+    const entries = rows.map(
+      (r) => JSON.parse(r.entry_json.toString('utf8')) as Record<string, unknown>,
+    );
+    expect(entries[0]?.operation_id).toBe('c-42');
+    expect(entries[1]?.operation_id).toBeUndefined();
   });
 });

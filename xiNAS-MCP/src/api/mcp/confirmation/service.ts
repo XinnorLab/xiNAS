@@ -7,7 +7,7 @@ import type { TaskStore } from '../../tasks/store.js';
 import { type CatalogEntry, ROLE_RANK } from '../catalog.js';
 import type { McpIdentity } from '../dispatch.js';
 import { type InputRequiredToolResult, type ToolResult, errorResult } from '../results.js';
-import { queueConfirmationEvent } from './audit.js';
+import { queueConfirmationEvent, queueConfirmationEventRaw } from './audit.js';
 import {
   MISSING_REQUIRED_CLIENT_CAPABILITY,
   McpProtocolError,
@@ -126,6 +126,40 @@ export class ConfirmationService {
     if (args.dangerous !== undefined && typeof args.dangerous !== 'boolean')
       return err('INVALID_ARGUMENT', "'dangerous' must be a boolean");
 
+    // Gate — RBAC pre-check (S15 §3.3 gate 2), ahead of the plan lookup: a
+    // role that cannot reach this operation at all never creates a
+    // confirmation record and never touches a plan it may not be entitled
+    // to see (F3 — this used to be folded into Gate 6 below).
+    if (ROLE_RANK[identity.role] < ROLE_RANK[entry.min_role]) {
+      return err(
+        'PERMISSION_DENIED',
+        `role '${identity.role}' may not call ${entry.name} (requires ${entry.min_role})`,
+        { required_role: entry.min_role, operation: entry.name },
+      );
+    }
+
+    const bindings: BindingKey = {
+      principal: identity.principal,
+      tool_name: entry.name,
+      arguments_hash: argumentsHash(entry.name, args),
+      plan_id: planId,
+      idempotency_key: idempotencyKey,
+      expected_revision: expectedRevision,
+    };
+
+    // A retry carries a requestState: verify it and cross-check it against
+    // the stored record BEFORE the plan-document gates below (F2, S15
+    // §7.3) — the bindings this needs (principal, tool name, arguments
+    // hash, plan_id, idempotency_key, expected_revision) come from the
+    // identity and the arguments, not from the document, so a forged or
+    // stolen requestState is caught — and audited (verification_failed /
+    // replay_rejected) — before it can ever reach a doc-based
+    // PRECONDITION_FAILED/plan_binding.
+    let retryState: { payload: RequestStatePayload; record: ConfirmationRecord } | undefined;
+    if (input.mrtr?.requestState !== undefined) {
+      retryState = this.verifyRetryState(input, bindings);
+    }
+
     // Gate 5 — resolve the plan and its document.
     const planTask = this.tasks.get(planId);
     if (planTask === null || planTask.state !== 'plan_only') {
@@ -150,8 +184,7 @@ export class ConfirmationService {
       doc.operation_kind !== planTask.kind ||
       (pathParam !== undefined && doc.resource_ref.id !== args[pathParam]) ||
       // S15 §5.3 item 7 (review P1): one principal never applies another's plan.
-      doc.created_by.principal !== identity.principal ||
-      ROLE_RANK[identity.role] < ROLE_RANK[entry.min_role]
+      doc.created_by.principal !== identity.principal
     ) {
       return err(
         'PRECONDITION_FAILED',
@@ -169,27 +202,32 @@ export class ConfirmationService {
       );
     }
 
-    // Gate 7 — blockers.
-    if (doc.blockers.length > 0) {
+    // Gate 7 — blockers. Excludes the engine-owned `dangerous_flag_required`
+    // advisory (F1, ruling R-10.1): every REST apply route filters it the
+    // same way because TaskEngine.apply enforces the real `dangerous` flag
+    // itself at apply time (S15 §3.4) — leaving it in would refuse every
+    // destructive plan here and make url mode unreachable.
+    const blocking = doc.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+    if (blocking.length > 0) {
       return err('PRECONDITION_FAILED', 'the plan has unresolved blockers', {
         reason: 'plan_blocked',
-        blockers: doc.blockers,
+        blockers: blocking,
       });
     }
 
     // Gate 8 — mode.
     const mode = confirmationModeFor(doc.risk_level, doc.rollback_model);
-    const bindings: BindingKey = {
-      principal: identity.principal,
-      tool_name: entry.name,
-      arguments_hash: argumentsHash(entry.name, args),
-      plan_id: planId,
-      idempotency_key: idempotencyKey,
-      expected_revision: expectedRevision,
-    };
 
-    if (input.mrtr?.requestState !== undefined) {
-      return this.retry(input, doc, planTask.plan_hash ?? '', mode, bindings);
+    if (retryState !== undefined) {
+      return this.retry(
+        input,
+        doc,
+        planTask.plan_hash ?? '',
+        mode,
+        bindings,
+        retryState.payload,
+        retryState.record,
+      );
     }
     return this.initial(
       input,
@@ -301,6 +339,63 @@ export class ConfirmationService {
     return { kind: 'input_required', result: this.elicitation(bumped, doc, nonce) };
   }
 
+  // ── retry precheck (F2, S15 §7.3) ─────────────────────────────────────────
+  //
+  // Runs in `handle()` BEFORE the plan-document gates (5–7): verifies the
+  // requestState and cross-checks it against the stored record using only
+  // the bindings derivable from the identity and the arguments (no plan
+  // document needed yet). A forged state fails verification; a stolen
+  // state (presented by a different principal, or against a different
+  // tool/plan/idempotency-key/revision than it was minted for) fails the
+  // binding cross-check — both are audited here so the trail exists even
+  // though the caller never reaches a doc-based gate.
+
+  private verifyRetryState(
+    input: HandleInput,
+    bindings: BindingKey,
+  ): { payload: RequestStatePayload; record: ConfirmationRecord } {
+    let payload: RequestStatePayload;
+    try {
+      payload = verifyRequestState(this.keyRing, input.mrtr?.requestState);
+    } catch (e) {
+      const reason = e instanceof McpProtocolError ? (e.reasonClass ?? 'unknown') : 'unknown';
+      this.metrics.stateValidationFailure(reason);
+      queueConfirmationEventRaw(this.audit, 'verification_failed', {
+        principal: input.identity.principal,
+        tool_name: bindings.tool_name,
+        correlation_id: input.correlationId,
+        reason,
+      });
+      throw e;
+    }
+    const record = this.store.get(payload.cid);
+    const mismatch =
+      record === null ||
+      payload.sub !== bindings.principal ||
+      payload.tool !== bindings.tool_name ||
+      payload.ah !== bindings.arguments_hash ||
+      payload.pid !== bindings.plan_id ||
+      payload.rev !== bindings.expected_revision ||
+      payload.ik !== bindings.idempotency_key ||
+      record.principal !== bindings.principal ||
+      record.arguments_hash !== bindings.arguments_hash ||
+      record.plan_id !== bindings.plan_id ||
+      record.idempotency_key !== bindings.idempotency_key ||
+      record.expected_revision !== bindings.expected_revision ||
+      record.tool_name !== bindings.tool_name;
+    if (mismatch) {
+      queueConfirmationEventRaw(this.audit, 'replay_rejected', {
+        presented_by: bindings.principal,
+        record_principal: record?.principal ?? null,
+        confirmation_id: payload.cid,
+        reason: 'binding_mismatch',
+      });
+      this.metrics.replayRejected();
+      throw invalidRequestState('binding');
+    }
+    return { payload, record };
+  }
+
   // ── retry (S15 §4.3, §4.4, §7.3, §7.5) ────────────────────────────────────
 
   private async retry(
@@ -309,46 +404,27 @@ export class ConfirmationService {
     planHash: string,
     mode: ConfirmationMode,
     bindings: BindingKey,
+    payload: RequestStatePayload,
+    record: ConfirmationRecord,
   ): Promise<HandleOutcome> {
     const cap = this.requireCapability(input.client, mode, bindings);
     if (cap !== undefined) throw cap;
 
-    let payload: RequestStatePayload;
-    try {
-      payload = verifyRequestState(this.keyRing, input.mrtr?.requestState);
-    } catch (e) {
-      const reason = e instanceof McpProtocolError ? (e.reasonClass ?? 'unknown') : 'unknown';
-      this.metrics.stateValidationFailure(reason);
-      throw e;
-    }
-    const record = this.store.get(payload.cid);
+    // The remaining bindings need the plan document / mode (only knowable
+    // once the caller has passed gates 5–8): role, plan hash, risk level,
+    // mode, and the nonce/round/expiry the record itself carries.
     const mismatch =
-      record === null ||
-      payload.sub !== bindings.principal ||
       payload.role !== input.identity.role ||
-      payload.tool !== bindings.tool_name ||
-      payload.ah !== bindings.arguments_hash ||
-      payload.pid !== bindings.plan_id ||
       payload.ph !== planHash ||
-      payload.rev !== bindings.expected_revision ||
-      payload.ik !== bindings.idempotency_key ||
       payload.risk !== doc.risk_level ||
       payload.mode !== mode ||
-      record.principal !== bindings.principal ||
-      record.arguments_hash !== bindings.arguments_hash ||
-      record.plan_id !== bindings.plan_id ||
-      record.idempotency_key !== bindings.idempotency_key ||
-      record.expected_revision !== bindings.expected_revision ||
-      record.tool_name !== bindings.tool_name ||
       nonceHash(payload.nonce) !== record.request_state_nonce_hash ||
       payload.round !== record.round ||
       payload.exp !== record.expires_at;
     if (mismatch) {
-      if (record !== null) {
-        queueConfirmationEvent(this.audit, 'replay_rejected', record, {
-          detail: { presented_by: bindings.principal, presented_round: payload.round },
-        });
-      }
+      queueConfirmationEvent(this.audit, 'replay_rejected', record, {
+        detail: { presented_by: bindings.principal, presented_round: payload.round },
+      });
       this.metrics.replayRejected();
       throw invalidRequestState('binding');
     }
@@ -400,7 +476,12 @@ export class ConfirmationService {
       }
       return current;
     } finally {
-      this.waiters.set(id, (this.waiters.get(id) ?? 1) - 1);
+      // F4: delete the key once the count reaches 0 rather than leaving a
+      // stale 0 entry — this map otherwise leaks one entry per distinct
+      // confirmation id that ever gets a url waiter.
+      const next = (this.waiters.get(id) ?? 1) - 1;
+      if (next <= 0) this.waiters.delete(id);
+      else this.waiters.set(id, next);
       this.totalWaiters -= 1;
     }
   }
@@ -465,18 +546,14 @@ export class ConfirmationService {
     if (client.elicitation.has(mode)) return undefined;
     this.metrics.capabilityFailure(mode);
     // No record exists yet on the initial call; on a retry the record is
-    // untouched. Audit without a record: use the bindings.
-    if (this.audit !== undefined) {
-      this.audit.queue({
-        kind: 'mcp.confirmation.capability_missing',
-        principal: bindings.principal,
-        client_type: 'mcp',
-        request_id: randomUUID(),
-        parameters_hash: `sha256:${bindings.arguments_hash}`,
-        result_hash: 'sha256:',
-        payload: { tool_name: bindings.tool_name, plan_id: bindings.plan_id, required_mode: mode },
-      });
-    }
+    // untouched. Audit without a record: use the bindings (F2 — shares the
+    // same record-less shape as verification_failed / replay_rejected).
+    queueConfirmationEventRaw(this.audit, 'capability_missing', {
+      principal: bindings.principal,
+      tool_name: bindings.tool_name,
+      plan_id: bindings.plan_id,
+      required_mode: mode,
+    });
     return new McpProtocolError(
       MISSING_REQUIRED_CLIENT_CAPABILITY,
       'Server requires the elicitation capability for this request',
@@ -564,6 +641,11 @@ export class ConfirmationService {
     b.tokens -= 1;
     this.buckets.set(principal, b);
     return true;
+  }
+
+  /** Test-only: whether the per-confirmation waiter count is still tracked at all (F4 — the map must not leak a stale 0 entry). */
+  hasWaiterEntry(confirmationId: string): boolean {
+    return this.waiters.has(confirmationId);
   }
 
   /** Expire open records past their TTL (startup + timer, S15 §6.3). */

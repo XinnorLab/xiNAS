@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { canonicalize } from '../../../lib/canonical-json.js';
 import type { AuditAppender } from '../../../state/audit.js';
 import type { ConfirmationRecord } from './types.js';
@@ -70,6 +70,41 @@ export function queueConfirmationEvent(
     result_hash: `sha256:${createHash('sha256').update(event).digest('hex')}`,
     operation_id: record.confirmation_id,
     ...(extra.task_id !== undefined ? { task_id: extra.task_id } : {}),
+    payload,
+  });
+}
+
+/**
+ * Queue one `mcp.confirmation.<event>` row for the events that have no
+ * (trustworthy) `ConfirmationRecord` yet — a forged/tampered requestState
+ * (`verification_failed`), a binding mismatch caught before the record can
+ * be trusted (`replay_rejected`), or a missing elicitation capability
+ * (`capability_missing`). Same `kind` convention and top-level shape as
+ * `queueConfirmationEvent`; `operation_id` is aligned to
+ * `payload.confirmation_id` when the caller supplied one, otherwise
+ * omitted. `payload` is used verbatim as the entry's `payload` — callers
+ * must never put state bytes, a MAC or decoded requestState fields in it.
+ */
+export function queueConfirmationEventRaw(
+  audit: AuditAppender | undefined,
+  event: ConfirmationEvent,
+  payload: Record<string, unknown>,
+): void {
+  if (audit === undefined) return;
+  const principal =
+    (typeof payload.principal === 'string' && payload.principal) ||
+    (typeof payload.presented_by === 'string' && payload.presented_by) ||
+    'unknown';
+  const operationId =
+    typeof payload.confirmation_id === 'string' ? payload.confirmation_id : undefined;
+  audit.queue({
+    kind: `mcp.confirmation.${event}`,
+    principal,
+    client_type: 'mcp',
+    request_id: randomUUID(),
+    parameters_hash: `sha256:${createHash('sha256').update(canonicalize(payload)).digest('hex')}`,
+    result_hash: `sha256:${createHash('sha256').update(event).digest('hex')}`,
+    ...(operationId !== undefined ? { operation_id: operationId } : {}),
     payload,
   });
 }

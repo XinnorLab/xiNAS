@@ -4,7 +4,6 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type PlanDocument, planDocumentHash } from '../../../api/plan/document.js';
 import { startServer } from '../../../api/server.js';
 import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpers.js';
 
@@ -15,20 +14,25 @@ import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpe
  * an accepted/approved confirmation proceeds to a real apply that
  * dispatches to the agent.
  *
- * Deviations from the task brief (see task-10-report.md for the full
- * rationale — summarized here so the "why" travels with the test):
+ * Deviations from the task brief (see task-10-report.md and
+ * task-10-fix1-report.md for the full rationale — summarized here so the
+ * "why" travels with the test):
  *
  *  - The brief's suggested destructive path (`shares.delete` /
  *    `filesystems.delete`) is NOT destructive in the landed NFS/filesystem
  *    providers (`share.delete` → risk_level 'changing_access';
  *    `fs.unmanage` → 'non_disruptive', per ADR-0007 "DELETE never
  *    destroys"). `filesystems.create` with `spec.force: true` IS
- *    risk_level 'destructive' / rollback_model 'unsupported' with an
- *    EMPTY blockers array at plan time (unlike `arrays.delete` and
- *    `config.rollback`, whose providers always attach a static advisory
- *    `dangerous_flag_required` blocker that would trip Gate 7 before a
- *    url-mode confirmation could ever be minted) — so the destructive/url
- *    cases here use `filesystems.create` force:true instead.
+ *    risk_level 'destructive' / rollback_model 'unsupported' — so the
+ *    destructive/url cases here use `filesystems.create` force:true
+ *    instead. Its plan DOES carry the engine-owned advisory
+ *    `dangerous_flag_required` blocker (`lib/fs/validate.ts`
+ *    `validateFsCreate`, same as `arrays.delete` / `config.rollback`) —
+ *    `ConfirmationService`'s Gate 7 excludes that one code (fix round 1,
+ *    F1, ruling R-10.1; every REST apply route filters it the same way
+ *    because `TaskEngine.apply` enforces the real `dangerous` flag itself
+ *    at apply time), so the url-mode cases below reach url mode through
+ *    the unmodified plan document — no hand-edited blockers/hash.
  *  - The audit `kind` this repo actually records is
  *    `http.<METHOD>.<path-after-the-last-router-mount>` — e.g.
  *    `http.PATCH./shares/share-a`, NOT `http.PATCH./api/v1/shares/share-a`
@@ -36,20 +40,20 @@ import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpe
  *    e2e/client-parity.test.ts's `http.POST./shares`).
  *  - Case 5's "cross-principal" sub-case, as literally described (present
  *    a valid requestState to a second principal and expect
- *    `-32602`/`replay_rejected`), is unreachable given the landed
- *    `handle()`: Gate 6's plan-ownership check
- *    (`doc.created_by.principal !== identity.principal`) runs BEFORE the
- *    initial/retry split and answers `PRECONDITION_FAILED`/`plan_binding`
- *    for ANY cross-principal presentation — initial or retry — before the
- *    deeper requestState/binding mismatch check in `retry()` is ever
- *    reached. The test below asserts the actual (Gate 6) behavior instead
- *    and folds the intended coverage into the dedicated plan-ownership
- *    test (6b), which exercises the same gate with a REST-created plan.
+ *    `-32602`/`replay_rejected`), is exercised below as written: fix
+ *    round 1 (F2, spec §7.3) moved the retry-path requestState
+ *    verification and record/bindings cross-check ahead of the
+ *    plan-document gates whenever a requestState is presented, so a
+ *    cross-principal presentation is now caught there (a binding
+ *    mismatch) rather than by Gate 6's plan-ownership check — matching
+ *    the brief. The plan-ownership gate itself is still covered
+ *    separately by test 6b (a REST-created plan, no requestState).
  */
 
 interface RpcResult {
   status: number;
   body: Record<string, unknown>;
+  headers: http.IncomingHttpHeaders;
 }
 
 function rpc(port: number, message: unknown, opts: { token?: string } = {}): Promise<RpcResult> {
@@ -76,6 +80,7 @@ function rpc(port: number, message: unknown, opts: { token?: string } = {}): Pro
           resolve({
             status: res.statusCode ?? 0,
             body: text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {},
+            headers: res.headers,
           });
         });
       },
@@ -197,6 +202,7 @@ interface AuditRow {
   kind?: string;
   principal?: string;
   client_type?: string;
+  payload?: Record<string, unknown>;
 }
 
 function auditRows(dir: string): AuditRow[] {
@@ -334,22 +340,15 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   }
 
   /**
-   * Every destructive plan_apply provider currently landed
-   * (`config.rollback`, `arrays.delete`, `filesystems.create` force:true)
-   * attaches a STATIC advisory `dangerous_flag_required` blocker at plan
-   * time regardless of whether the eventual apply will carry
-   * `dangerous: true` — real for REST/TUI clients (who read it and decide),
-   * but it means Gate 7 (`doc.blockers.length > 0` → `PRECONDITION_FAILED`/
-   * `plan_blocked`) refuses EVERY destructive plan before a url-mode
-   * confirmation could ever be minted over MCP. There is currently no
-   * catalog route that reaches risk_level 'destructive' with an empty
-   * blockers array — see task-10-report.md "Concerns". To still exercise
-   * the confirmation service's real url-mode mechanics (elicit → wait →
-   * approve → engine dangerous gate) against the REAL provider-rendered
-   * document, this plans normally then strips just the advisory blocker
-   * and recomputes the document hash to match — the same "hand-edit the
-   * stored plan_document" technique the brief itself uses for the
-   * OPPOSITE case (injecting a blocker, case 12).
+   * `filesystems.create` with `spec.force: true` is risk_level 'destructive'
+   * / rollback_model 'unsupported', and its plan carries the engine-owned
+   * advisory `dangerous_flag_required` blocker (`lib/fs/validate.ts`
+   * `validateFsCreate`) — the same static advisory `arrays.delete` and
+   * `config.rollback` attach. Fix round 1 (F1, ruling R-10.1) made Gate 7
+   * exclude that one code (every REST apply route already filters it the
+   * same way; `TaskEngine.apply` enforces the real `dangerous` flag at
+   * apply time), so the REAL, unmodified plan document now reaches url
+   * mode over MCP — no hand-edited blockers/hash needed here.
    */
   async function planFsCreateForce(
     token: string,
@@ -371,19 +370,11 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
       risk_level: string;
       blockers: unknown[];
     };
-    const row = handle.state.db
-      .prepare('SELECT plan_document FROM tasks WHERE task_id = ?')
-      .get(result.plan_id) as { plan_document: string };
-    const doc = JSON.parse(row.plan_document) as PlanDocument;
-    doc.blockers = [];
-    handle.state.db
-      .prepare('UPDATE tasks SET plan_document = ?, plan_document_hash = ? WHERE task_id = ?')
-      .run(JSON.stringify(doc), planDocumentHash(doc), result.plan_id);
     return {
       plan_id: result.plan_id,
       expected_revision: result.state_revision_expected,
       risk_level: result.risk_level,
-      blockers: [],
+      blockers: result.blockers,
     };
   }
 
@@ -609,10 +600,14 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     expect(countTasksByPlan(plan_id)).toBe(0);
   });
 
-  // See the file header: a cross-principal presentation is caught by Gate 6
-  // (plan ownership) before retry()'s deeper binding-mismatch/replay_rejected
-  // check is ever reached — for ANY call shape, initial or retry.
-  it('a cross-principal presentation of a valid requestState is refused PRECONDITION_FAILED/plan_binding (Gate 6, not replay_rejected)', async () => {
+  // Fix round 1 (F2, spec §7.3): the retry-path requestState verification
+  // and record/bindings cross-check now run BEFORE the plan-document gates
+  // (5–7) whenever a requestState is presented — see the file header. A
+  // cross-principal presentation is a binding mismatch caught THERE, not
+  // Gate 6's plan-ownership check, so it now surfaces as the generic
+  // JSON-RPC -32602 and leaves a replay_rejected audit row naming both
+  // principals.
+  it('a cross-principal presentation of a valid requestState is refused -32602 (not plan_binding) and audits replay_rejected', async () => {
     const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
     const idem = nextId('ik');
     const args = {
@@ -625,14 +620,25 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     const first = await call(port, 'tok-admin', nextId('call'), 'shares.update', args);
     const requestState = toolResultOf(first).requestState;
 
+    await handle.state.drainer.drainNow();
+    const before = auditRows(dir).length;
+
     const res = await call(port, 'tok-admin2', nextId('call'), 'shares.update', args, {
       requestState,
       inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
     });
-    const payload = payloadOf(res);
-    expect(payload.error?.code).toBe('PRECONDITION_FAILED');
-    expect(payload.error?.details?.reason).toBe('plan_binding');
+    expect(res.status).toBe(200);
+    const err = rpcErrorOf(res);
+    expect(err?.code).toBe(-32602);
+    expect(err?.message).toBe('invalid request state');
     expect(getConfirmationByPlanId(plan_id)?.status).toBe('pending'); // untouched
+
+    await handle.state.drainer.drainNow();
+    const rows = auditRows(dir).slice(before);
+    const rejection = rows.find((r) => r.kind === 'mcp.confirmation.replay_rejected');
+    expect(rejection).toBeDefined();
+    expect(rejection?.payload?.presented_by).toBe('admin:two');
+    expect(rejection?.payload?.record_principal).toBe('admin:test');
   });
 
   // ── 6. changed arguments / revision / idempotency_key on retry (brief case 6) ─
@@ -677,17 +683,14 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     expect(countTasksByPlan(plan_id)).toBe(0);
   });
 
-  // A changed `expected_revision` is caught EARLIER than the requestState
-  // binding check: `handle()`'s shared gate (ruling R-3.1) compares
-  // `args.expected_revision` against the persisted document's
-  // `state_revision_expected` before EVER branching to retry() — for both
-  // the initial call AND a retry. Since the confirmation record can only
-  // ever have been created with an expected_revision that already passed
-  // that gate, a differing value on a retry is always rejected there first
-  // (a plain PRECONDITION_FAILED tool result), so retry()'s own
-  // `payload.rev !== bindings.expected_revision` binding check is
-  // unreachable for this specific field given a document-consistent value.
-  it('a changed expected_revision on the retry is refused PRECONDITION_FAILED before the requestState binding check runs', async () => {
+  // Fix round 1 (F2, spec §7.3): `expected_revision` is now one of the
+  // bindings the retry precheck cross-checks BEFORE the plan-document gates
+  // (`bindings.expected_revision` comes from the CURRENT call's `args`, not
+  // the document) — so a changed value is now caught THERE, as a binding
+  // mismatch against the record/payload minted with the original value, not
+  // by the later doc-based `Ruling R-3.1` revision check. It surfaces as the
+  // generic JSON-RPC -32602, same as any other tampered/stolen retry.
+  it('a changed expected_revision on the retry is refused -32602 (binding mismatch), not PRECONDITION_FAILED', async () => {
     const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
     const idem = nextId('ik');
     const args = {
@@ -711,9 +714,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
       { ...args, expected_revision: expected_revision + 1 },
       { requestState, inputResponses },
     );
-    expect(rpcErrorOf(changedRevision)).toBeUndefined(); // no JSON-RPC protocol error
-    const payload = payloadOf(changedRevision);
-    expect(payload.error?.code).toBe('PRECONDITION_FAILED');
+    expect(rpcErrorOf(changedRevision)?.code).toBe(-32602);
 
     expect(getConfirmationByPlanId(plan_id)?.status).toBe('pending');
     expect(countTasksByPlan(plan_id)).toBe(0);
@@ -781,7 +782,17 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
       '/mnt/t7a',
     );
     expect(risk_level).toBe('destructive');
-    expect(blockers).toEqual([]);
+    // The real plan carries the engine-owned advisory (F1) — Gate 7
+    // excludes only that code, so it is still present in the RESPONSE
+    // blockers (informational for REST/TUI clients) even though it never
+    // blocks this MCP confirmation from reaching url mode.
+    expect(blockers).toEqual([
+      {
+        code: 'dangerous_flag_required',
+        message:
+          'force:true overwrites any existing filesystem on the device; apply must carry dangerous: true',
+      },
+    ]);
     const before = countConfirmations();
     const res = await call(
       port,
@@ -1072,6 +1083,30 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     const payload = payloadOf(res);
     expect(toolResultOf(res).isError).toBe(true);
     expect(payload.error?.code).toBe('NOT_FOUND');
+  });
+
+  // ── F5 (fix round 1) — correlation id is server-owned ─────────────────────
+
+  it('a huge client-chosen JSON-RPC id never reaches mcp_confirmations.correlation_id; the server correlation id (echoed on the response header) does, and is <= 64 chars', async () => {
+    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const hugeId = 'x'.repeat(5000);
+    const res = await call(port, 'tok-admin', hugeId, 'shares.update', {
+      id: 'share-a',
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+    });
+    expect(res.status).toBe(200);
+    const correlationHeader = res.headers['x-correlation-id'];
+    expect(typeof correlationHeader).toBe('string');
+    const serverCorrelationId = correlationHeader as string;
+    expect(serverCorrelationId.length).toBeLessThanOrEqual(64);
+    expect(serverCorrelationId).not.toBe(hugeId);
+
+    const record = getConfirmationByPlanId(plan_id);
+    expect(record?.correlation_id).toBe(serverCorrelationId);
+    expect((record?.correlation_id as string).length).toBeLessThanOrEqual(64);
   });
 });
 

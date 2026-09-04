@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import type { Database as DatabaseInstance } from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type { ResolvedConfirmationConfig } from '../../../api/config.js';
 import { CATALOG, type CatalogEntry } from '../../../api/mcp/catalog.js';
@@ -19,6 +20,7 @@ import {
   planDocumentHash,
 } from '../../../api/plan/document.js';
 import { TaskStore } from '../../../api/tasks/store.js';
+import { AuditAppender } from '../../../state/audit.js';
 import { runMigrations } from '../../../state/migrations.js';
 
 /**
@@ -35,7 +37,10 @@ import { runMigrations } from '../../../state/migrations.js';
 const NODE_ID = 'node-test';
 const HOSTNAME = 'test-host';
 const PRINCIPAL = 'admin:demo';
+const PRINCIPAL_B = 'admin:other-principal';
 const IDENTITY: McpIdentity = { principal: PRINCIPAL, role: 'admin' };
+const IDENTITY_B: McpIdentity = { principal: PRINCIPAL_B, role: 'admin' };
+const OPERATOR_IDENTITY: McpIdentity = { principal: PRINCIPAL, role: 'operator' };
 const BOTH_CLIENT: McpClientInfo = { era: 'modern', elicitation: new Set(['form', 'url']) };
 
 const FS_CREATE = CATALOG.find((e) => e.name === 'filesystems.create') as CatalogEntry;
@@ -46,6 +51,7 @@ function keyRing(): KeyRing {
 }
 
 interface Harness {
+  db: DatabaseInstance;
   store: ConfirmationStore;
   tasks: TaskStore;
   service: ConfirmationService;
@@ -54,7 +60,7 @@ interface Harness {
 
 function harness(
   configOverrides: Partial<ResolvedConfirmationConfig> = {},
-  serviceOverrides: { sleep?: (ms: number) => Promise<void> } = {},
+  serviceOverrides: { sleep?: (ms: number) => Promise<void>; audit?: boolean } = {},
 ): Harness {
   const db = new Database(':memory:');
   runMigrations(db);
@@ -74,6 +80,7 @@ function harness(
     allow_uds_approval: false,
     ...configOverrides,
   };
+  const audit = serviceOverrides.audit === true ? new AuditAppender(db, NODE_ID) : undefined;
   const service = new ConfirmationService({
     store,
     tasks,
@@ -82,9 +89,11 @@ function harness(
     now: () => clock,
     nodeId: NODE_ID,
     hostname: HOSTNAME,
+    ...(audit !== undefined ? { audit } : {}),
     ...(serviceOverrides.sleep !== undefined ? { sleep: serviceOverrides.sleep } : {}),
   });
   return {
+    db,
     store,
     tasks,
     service,
@@ -92,6 +101,20 @@ function harness(
       clock = v;
     },
   };
+}
+
+/** Rows queued via AuditAppender in this in-memory db (harness({}, { audit: true })). */
+function auditRows(h: Harness): Array<{ kind: string; payload: Record<string, unknown> }> {
+  const rows = h.db
+    .prepare('SELECT entry_json FROM audit_outbox ORDER BY audit_seq')
+    .all() as Array<{ entry_json: Buffer }>;
+  return rows.map(
+    (r) =>
+      JSON.parse(r.entry_json.toString('utf8')) as {
+        kind: string;
+        payload: Record<string, unknown>;
+      },
+  );
 }
 
 /** Build a matching (plan_only task, PlanDocument) pair for `entry`, hashed consistently. */
@@ -384,5 +407,209 @@ describe('ConfirmationService.handle (S15 §3.3, §4, §6.4)', () => {
     // elicitation rather than joining the (never-resolving) wait.
     const fifth = await h.service.handle(retryInput());
     expect(fifth.kind).toBe('input_required');
+  });
+
+  // ── F1 (fix round 1, R-10.1) ─────────────────────────────────────────────
+
+  it('F1: a document whose only blocker is the engine-owned dangerous_flag_required advisory passes Gate 7 (reaches the mode gate)', async () => {
+    const h = harness();
+    const { doc } = seedPlan(h.tasks, FS_CREATE, {
+      risk_level: 'destructive',
+      rollback_model: 'unsupported',
+      blockers: [
+        { code: 'dangerous_flag_required', message: 'force:true requires dangerous: true' },
+      ],
+    });
+    const outcome = await h.service.handle({
+      entry: FS_CREATE,
+      args: baseArgs(doc, FS_CREATE, { dangerous: true }),
+      identity: IDENTITY,
+      client: BOTH_CLIENT,
+      correlationId: 'corr-f1a',
+    });
+    expect(outcome.kind).toBe('input_required');
+  });
+
+  it('F1: dangerous_flag_required plus one other blocker still refuses PRECONDITION_FAILED/plan_blocked with ONLY the other blocker listed', async () => {
+    const h = harness();
+    const { doc } = seedPlan(h.tasks, FS_CREATE, {
+      risk_level: 'destructive',
+      rollback_model: 'unsupported',
+      blockers: [
+        { code: 'dangerous_flag_required', message: 'force:true requires dangerous: true' },
+        { code: 'X', message: 'an unrelated blocker' },
+      ],
+    });
+    const outcome = await h.service.handle({
+      entry: FS_CREATE,
+      args: baseArgs(doc, FS_CREATE, { dangerous: true }),
+      identity: IDENTITY,
+      client: BOTH_CLIENT,
+      correlationId: 'corr-f1b',
+    });
+    const error = errorOf(outcome);
+    expect(error.code).toBe('PRECONDITION_FAILED');
+    expect((error.details as { reason?: string } | undefined)?.reason).toBe('plan_blocked');
+    expect((error.details as { blockers?: unknown } | undefined)?.blockers).toEqual([
+      { code: 'X', message: 'an unrelated blocker' },
+    ]);
+  });
+
+  // ── F2 (fix round 1, spec §7.3) ────────────────────────────────────────
+
+  it('F2: a tampered requestState on retry is refused as a protocol error and audits verification_failed with reason "mac" — no state bytes leaked', async () => {
+    const h = harness({}, { audit: true });
+    const { doc } = seedPlan(h.tasks, SHARES_UPDATE);
+    const args = baseArgs(doc, SHARES_UPDATE);
+    const first = requireInputRequired(
+      await h.service.handle({
+        entry: SHARES_UPDATE,
+        args,
+        identity: IDENTITY,
+        client: BOTH_CLIENT,
+        correlationId: 'corr-tamper-1',
+      }),
+    );
+    const requestState = first.requestState as string;
+    const tampered = `${requestState.slice(0, -1)}${requestState.endsWith('a') ? 'b' : 'a'}`;
+
+    await expect(
+      h.service.handle({
+        entry: SHARES_UPDATE,
+        args,
+        identity: IDENTITY,
+        client: BOTH_CLIENT,
+        mrtr: {
+          requestState: tampered,
+          inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+        },
+        correlationId: 'corr-tamper-2',
+      }),
+    ).rejects.toMatchObject({ code: -32602 });
+
+    const rows = auditRows(h);
+    const failure = rows.find((r) => r.kind === 'mcp.confirmation.verification_failed');
+    expect(failure).toBeDefined();
+    expect(failure?.payload.reason).toBe('mac');
+    const serialized = JSON.stringify(failure?.payload);
+    expect(serialized).not.toContain(requestState);
+    expect(serialized).not.toContain(tampered);
+  });
+
+  it('F2: a valid requestState minted for principal A presented by principal B is refused -32602 (not plan_binding) and audits replay_rejected with both principals', async () => {
+    const h = harness({}, { audit: true });
+    const { doc } = seedPlan(h.tasks, SHARES_UPDATE);
+    const args = baseArgs(doc, SHARES_UPDATE);
+    const first = requireInputRequired(
+      await h.service.handle({
+        entry: SHARES_UPDATE,
+        args,
+        identity: IDENTITY,
+        client: BOTH_CLIENT,
+        correlationId: 'corr-cross-1',
+      }),
+    );
+    const requestState = first.requestState as string;
+
+    await expect(
+      h.service.handle({
+        entry: SHARES_UPDATE,
+        args,
+        identity: IDENTITY_B,
+        client: BOTH_CLIENT,
+        mrtr: {
+          requestState,
+          inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+        },
+        correlationId: 'corr-cross-2',
+      }),
+    ).rejects.toMatchObject({ code: -32602 });
+
+    const rows = auditRows(h);
+    const rejection = rows.find((r) => r.kind === 'mcp.confirmation.replay_rejected');
+    expect(rejection).toBeDefined();
+    expect(rejection?.payload.presented_by).toBe(PRINCIPAL_B);
+    expect(rejection?.payload.record_principal).toBe(PRINCIPAL);
+
+    const record = h.store.findOpenByBindings({
+      principal: PRINCIPAL,
+      tool_name: SHARES_UPDATE.name,
+      arguments_hash: argumentsHash(SHARES_UPDATE.name, args),
+      plan_id: doc.plan_id,
+      idempotency_key: args.idempotency_key as string,
+      expected_revision: args.expected_revision as number,
+    });
+    expect(record?.status).toBe('pending'); // untouched by the stolen-state attempt
+  });
+
+  // ── F3 (fix round 1, spec §3.3 gate 2) ────────────────────────────────
+
+  it('F3: an operator identity on an admin-only entry is refused PERMISSION_DENIED ahead of the plan lookup, zero records created', async () => {
+    const h = harness();
+    const { doc } = seedPlan(h.tasks, FS_CREATE);
+    const outcome = await h.service.handle({
+      entry: FS_CREATE,
+      args: baseArgs(doc, FS_CREATE),
+      identity: OPERATOR_IDENTITY,
+      client: BOTH_CLIENT,
+      correlationId: 'corr-rbac',
+    });
+    const error = errorOf(outcome);
+    expect(error.code).toBe('PERMISSION_DENIED');
+    expect((error.details as { required_role?: string } | undefined)?.required_role).toBe('admin');
+    expect((error.details as { operation?: string } | undefined)?.operation).toBe(
+      'filesystems.create',
+    );
+    expect(h.store.countOpen()).toBe(0);
+  });
+
+  // ── F4 (fix round 1) ───────────────────────────────────────────────────
+
+  it('F4: after an awaited url wait settles, the waiters map holds no stale entry for that confirmation', async () => {
+    const h = harness({ url_wait_seconds: 1 });
+    const { doc } = seedPlan(h.tasks, FS_CREATE, {
+      risk_level: 'destructive',
+      rollback_model: 'unsupported',
+    });
+    const args = baseArgs(doc, FS_CREATE, { dangerous: true });
+    const first = requireInputRequired(
+      await h.service.handle({
+        entry: FS_CREATE,
+        args,
+        identity: IDENTITY,
+        client: BOTH_CLIENT,
+        correlationId: 'corr-f4-1',
+      }),
+    );
+    const record = h.store.findOpenByBindings({
+      principal: PRINCIPAL,
+      tool_name: FS_CREATE.name,
+      arguments_hash: argumentsHash(FS_CREATE.name, args),
+      plan_id: doc.plan_id,
+      idempotency_key: args.idempotency_key as string,
+      expected_revision: args.expected_revision as number,
+    });
+    expect(record).not.toBeNull();
+    // Approve out of band so awaitOperator's wait loop settles on its very
+    // first check (status !== 'pending') — no real waiting involved.
+    h.db
+      .prepare(
+        `UPDATE mcp_confirmations SET status='approved', approved_by='admin:other', approved_at=? WHERE confirmation_id=?`,
+      )
+      .run(Date.now(), record?.confirmation_id as string);
+
+    const outcome = await h.service.handle({
+      entry: FS_CREATE,
+      args,
+      identity: IDENTITY,
+      client: BOTH_CLIENT,
+      mrtr: {
+        requestState: first.requestState,
+        inputResponses: { confirm_apply: { action: 'accept' } },
+      },
+      correlationId: 'corr-f4-2',
+    });
+    expect(outcome.kind).toBe('proceed');
+    expect(h.service.hasWaiterEntry(record?.confirmation_id as string)).toBe(false);
   });
 });

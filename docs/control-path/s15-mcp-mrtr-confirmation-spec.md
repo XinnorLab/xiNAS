@@ -167,7 +167,7 @@ under `xiNAS-MCP/src/`).
 | 4 | Apply request shape | new: `plan_id` (uuid), `expected_revision` (integer), `idempotency_key` (non-empty string), `dangerous` (boolean or absent) — `INVALID_ARGUMENT` tool error otherwise |
 | 5 | Resolve the plan | new: `plan_only` row + its `plan_document` (§5); missing → `NOT_FOUND` |
 | 6 | Plan ownership and binding | new: document `operation_kind` equals the entry's kind; document `resource_ref` equals the tool's path arguments; document integrity (§5.3) |
-| 7 | Blockers | new: `plan_document.blockers` non-empty → `PRECONDITION_FAILED` (`details.reason: plan_blocked`, the blocker list) — no record is created (V-26) |
+| 7 | Blockers | new: `plan_document.blockers` non-empty after excluding the engine-owned `dangerous_flag_required` advisory (the engine enforces the real flag at apply, §3.4; REST routes filter it the same way) → `PRECONDITION_FAILED` (`details.reason: plan_blocked`, the blocker list) — no record is created (V-26) |
 | 8 | Confirmation mode | §3.2 from the document |
 | 9 | Execute MRTR | §4 |
 | 10 | Revalidate freshness | inside the apply transaction (existing `PRECONDITION_FAILED` / `CONFLICT plan_stale`) |

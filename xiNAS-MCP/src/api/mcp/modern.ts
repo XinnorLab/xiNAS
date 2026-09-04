@@ -88,10 +88,16 @@ const id = (message: unknown): string | number | null => {
  * caller must get a 401, never `Method not found`, because `-32601` on
  * `server/discover` is the one signal a client is entitled to read as "this
  * server is legacy-only" and downgrade on (requirement §2.5.7-8).
+ *
+ * `correlationId` is the server-owned correlation id for THIS HTTP request
+ * (fix round 1, F5) — never the JSON-RPC envelope `id`, which is
+ * client-chosen and unbounded (S15 §7.3/§12.1 audit rows, and
+ * `mcp_confirmations.correlation_id`, must never carry it verbatim).
  */
 export async function handleModernRequest(
   message: unknown,
   opts: DispatcherOptions,
+  correlationId: string,
 ): Promise<JsonRpcResponse> {
   const msg = message as JsonRpcRequest;
   const rpcId = id(message);
@@ -128,7 +134,7 @@ export async function handleModernRequest(
         const mrtr = parseMrtrParams(msg.params);
         const result = await callTool(params.name, params.arguments ?? {}, opts, {
           ...mrtr,
-          correlationId: String(rpcId),
+          correlationId,
         });
         if (isInputRequired(result)) {
           return { jsonrpc: '2.0', id: rpcId, result };
