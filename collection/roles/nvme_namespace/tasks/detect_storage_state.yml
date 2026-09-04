@@ -130,6 +130,41 @@
       {{ (not (_ssd_volume.stat.exists | default(false)))
          or ((_ssd_fstype.rc | default(1)) in [0, 2]) }}
 
+- name: Record whether the xiRAID CLI is missing entirely
+  ansible.builtin.set_fact:
+    # rc=2 has two meanings and two different remedies: xicli exited 2, or
+    # xicli does not exist. Ansible's command module reports the latter as
+    # rc=2 with empty stdout/stderr and "[Errno 2] No such file or directory:
+    # b'xicli'" in msg - indistinguishable on rc alone. raid-spec.md §11.
+    xinas_storage_probe_missing_xicli: >-
+      {{ (not (_ssd_raid_probe_ok | bool))
+         and ('No such file or directory' in (_ssd_raid_show.msg | default('') | string)) }}
+
+- name: Compose the reason a probe could not answer
+  ansible.builtin.set_fact:
+    # Written once here and quoted verbatim by the UNKNOWN failures in both
+    # roles, so the diagnosis and its remedy never drift apart. Empty when both
+    # probes answered. Every string literal stays on one line on purpose: a
+    # literal broken across lines keeps the newline and the YAML indentation
+    # inside the rendered message, because the fold happens outside the Jinja
+    # string, not inside it.
+    xinas_storage_probe_hint: >-
+      {{
+        ("xiRAID is not installed on this host: 'xicli' is not on PATH"
+         ~ (", and this run was told not to install it (xiraid_skip_install=true) - clear that flag in playbooks/group_vars/all/20-local.yml so xiraid_classic installs xiRAID, then re-run."
+            if (xiraid_skip_install | default(false) | bool)
+            else " - install xiRAID and re-run.")
+         ~ " Setting xinas_storage_reset does NOT help here: drive-clean and array creation both go through the same missing binary.")
+        if (xinas_storage_probe_missing_xicli | bool)
+        else (("'xicli raid show' failed (rc=" ~ (_ssd_raid_show.rc | default('?')) ~ "): "
+               ~ ((_ssd_raid_show.stderr | default('') | trim)
+                  or (_ssd_raid_show.msg | default('') | trim) or 'no output')
+               ~ ". Is xiraid-core running? (systemctl status xiraid.target, modprobe xiraid). Bring it up and re-run, or set xinas_storage_reset=true to wipe and rebuild regardless.")
+              if (not (_ssd_raid_probe_ok | bool))
+              else (("blkid could not read /dev/xi_data (rc=" ~ (_ssd_fstype.rc | default('?')) ~ "). Fix the volume and re-run, or set xinas_storage_reset=true to wipe and rebuild regardless.")
+                    if (not (_ssd_fs_probe_ok | bool)) else ''))
+      }}
+
 - name: Classify storage state
   ansible.builtin.set_fact:
     xinas_storage_state: >-
@@ -159,12 +194,6 @@
 - name: Explain an undeterminable storage state
   ansible.builtin.debug:
     msg: >-
-      Storage state could not be determined:
-      {{ "'xicli raid show' failed (rc="
-         + (_ssd_raid_show.rc | default('?') | string) + ") — is xiraid-core running?"
-         if not (_ssd_raid_probe_ok | bool) else "" }}
-      {{ "blkid could not read /dev/xi_data (rc="
-         + (_ssd_fstype.rc | default('?') | string) + ")."
-         if not (_ssd_fs_probe_ok | bool) else "" }}
+      Storage state could not be determined: {{ xinas_storage_probe_hint }}
       Refusing to treat this as a fresh box. Nothing has been modified.
   when: xinas_storage_state == 'UNKNOWN'

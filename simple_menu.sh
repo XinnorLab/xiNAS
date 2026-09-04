@@ -235,6 +235,26 @@ run_playbook() {
     return $?
 }
 
+
+# A purge is only ever safe on a run that puts xiRAID back. playbooks/site.yml
+# guards xiraid_classic with `when: not (xiraid_skip_install | ...)`, and that
+# flag is sticky: the reuse wizard writes it into the operator overlay
+# (playbooks/group_vars/all/20-local.yml), where it survives into every later
+# run. Purging under it leaves the host with no xicli and no role that installs
+# one - the storage probe then comes back rc=2/ENOENT, the state is UNKNOWN and
+# the install dies in raid_fs (v3.13.2-rc.4: purge 12:13:57, run 12:18).
+# Reaching check_remove_xiraid at all means this run installs xiRAID itself -
+# the existing-RAID paths never call it. Contract: docs/Installer/raid-spec.md
+# §11 "A purge implies a reinstall". A config layer that cannot be read is left
+# alone; the common role's existing-install preflight catches that on the run.
+_xinas_clear_skip_install() {
+    local skip
+    skip=$(xinas_config_get xiraid_skip_install 2>/dev/null) || return 0
+    [ "$skip" = "true" ] || return 0
+    xinas_config_set local xiraid_skip_install false
+    msg_box "xiRAID Will Be Installed" "The saved configuration carried xiraid_skip_install=true, left over from an existing-arrays run.\n\nRemoving the xiRAID packages without clearing it would leave this node with no xicli at all, so the flag has been cleared and this run will install xiRAID."
+}
+
 # Check for installed xiRAID packages and optionally remove them
 check_remove_xiraid() {
     local pkgs found repo_status log=/tmp/xiraid_remove.log
@@ -244,6 +264,7 @@ check_remove_xiraid() {
     [ -n "$repo_status" ] && echo "xiraid-repo: $repo_status"
     rm -f "$log"
     if [ -z "$pkgs" ]; then
+        _xinas_clear_skip_install
         sudo apt-get autoremove -y -qq --allow-change-held-packages >"$log" 2>&1 || true
         if [ -s "$log" ]; then
             msg_box "Cleanup" "Obsolete packages removed"
@@ -256,6 +277,8 @@ check_remove_xiraid() {
     if ! yes_no "xiRAID Packages" "Found installed xiRAID packages:\n${found}\n\nRemove them before running Ansible?"; then
         return 1
     fi
+
+    _xinas_clear_skip_install
 
     if sudo apt-get purge -y -qq --allow-change-held-packages $pkgs >"$log" 2>&1 \
         && sudo apt-get autoremove -y -qq --allow-change-held-packages >>"$log" 2>&1 \

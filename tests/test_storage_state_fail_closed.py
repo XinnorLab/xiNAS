@@ -105,6 +105,9 @@ def replay(
     fstype: str = "xfs",
     fslabel: str = "nfsdata",
     raid_rc: int = 0,
+    raid_msg: str = "",
+    raid_stderr: str = "",
+    skip_install: bool = False,
     wanted_label: str = "nfsdata",
     volume_exists: bool = True,
     fstype_rc: int = 0,
@@ -120,7 +123,15 @@ def replay(
     stdout = raid_show if isinstance(raid_show, str) else json.dumps(raid_show)
     context: dict[str, Any] = {
         "xfs_filesystems": [{"label": wanted_label}],
-        "_ssd_raid_show": {"rc": raid_rc, "stdout": stdout},
+        "xiraid_skip_install": skip_install,
+        "_ssd_raid_show": {
+            "rc": raid_rc,
+            "stdout": stdout,
+            "stderr": raid_stderr,
+            # Ansible's command module puts the OSError here and leaves
+            # stdout/stderr empty when the executable itself is missing.
+            "msg": raid_msg,
+        },
         "_ssd_volume": {"stat": {"exists": volume_exists}},
         "_ssd_fstype": {"rc": fstype_rc, "stdout": fstype},
         "_ssd_fslabel": {"rc": 0, "stdout": fslabel},
@@ -438,3 +449,73 @@ def test_unknown_failure_stays_overridable_by_an_explicit_reset(role_task_file):
     )
     guards = " ".join(str(w) for w in task["when"])
     assert "xinas_storage_reset" in guards, guards
+
+
+# --- why a probe could not answer (raid-spec.md §11) ------------------------
+#
+# rc=2 from the array probe has two very different meanings: xicli exited 2, or
+# xicli does not exist. Ansible's command module reports the latter as rc=2 with
+# empty stdout/stderr and "[Errno 2] No such file or directory: b'xicli'" in
+# msg. v3.13.2-rc.4 printed the same "is xiraid-core running?" line for both and
+# offered xinas_storage_reset as the way out — on a host with no xicli, a reset
+# authorizes destruction and then fails anyway.
+
+ENOENT_MSG = "[Errno 2] No such file or directory: b'xicli'"
+
+
+def _hint(**kwargs: Any) -> str:
+    return str(replay({}, fstype="", fslabel="", **kwargs)["xinas_storage_probe_hint"])
+
+
+def test_missing_xicli_is_told_apart_from_a_failing_xicli():
+    missing = replay({}, fstype="", fslabel="", raid_rc=2, raid_msg=ENOENT_MSG)
+    failed = replay({}, fstype="", fslabel="", raid_rc=2, raid_stderr="connection refused")
+    assert missing["xinas_storage_state"] == "UNKNOWN"
+    assert failed["xinas_storage_state"] == "UNKNOWN"
+    assert missing["xinas_storage_probe_missing_xicli"] is True
+    assert failed["xinas_storage_probe_missing_xicli"] is False
+
+
+def test_a_healthy_probe_is_never_flagged_as_missing_xicli():
+    facts = replay(mapping_payload())
+    assert facts["xinas_storage_state"] == "MATCH"
+    assert facts["xinas_storage_probe_missing_xicli"] is False
+    assert facts["xinas_storage_probe_hint"] == ""
+
+
+def test_missing_xicli_hint_says_so_and_rules_out_a_reset():
+    hint = _hint(raid_rc=2, raid_msg=ENOENT_MSG)
+    assert "xicli" in hint and "not installed" in hint
+    assert "xinas_storage_reset" in hint, "name the knob that does NOT help here"
+    assert "drive clean" in hint or "drive-clean" in hint, hint
+    assert "xiraid-core" not in hint, "there is no service to check when nothing is installed"
+
+
+def test_missing_xicli_hint_names_the_sticky_flag_when_the_run_skipped_the_install():
+    hint = _hint(raid_rc=2, raid_msg=ENOENT_MSG, skip_install=True)
+    assert "xiraid_skip_install" in hint
+    assert "20-local.yml" in hint, "name the file the flag actually lives in"
+
+
+def test_a_failing_xicli_still_points_at_the_daemon():
+    hint = _hint(raid_rc=1, raid_stderr="could not connect to xiraid-core")
+    assert "rc=1" in hint
+    assert "could not connect to xiraid-core" in hint, "quote the probe's own words"
+    assert "xiraid-core" in hint
+
+
+def test_an_unreadable_volume_reports_the_blkid_rc():
+    hint = _hint(fstype_rc=4)
+    assert "blkid" in hint
+    assert "rc=4" in hint
+
+
+@pytest.mark.parametrize("role_task_file", GATED_ROLE_FILES)
+def test_unknown_failure_quotes_the_hint(role_task_file):
+    task = next(
+        t for t in _tasks_of(role_task_file) if str(t.get("name", "")).startswith(UNKNOWN_FAIL)
+    )
+    msg = str(task["ansible.builtin.fail"]["msg"])
+    assert "xinas_storage_probe_hint" in msg, (
+        "the UNKNOWN failure must carry the specific reason, not a generic guess: " + msg
+    )
