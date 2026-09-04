@@ -373,6 +373,51 @@ The report's exit status never changes the install's exit status: the
 renderer exits 0 whatever it printed, and a renderer error falls back to a
 one-line notice naming the state file.
 
+### 2.10 Root SSH access step (`install.sh` Step 1b)
+
+Before it stages the repository, `install.sh` writes
+`/etc/ssh/sshd_config.d/10-xinas-root-access.conf` containing
+`PermitRootLogin prohibit-password`, then reloads sshd. The file is written
+only when it is absent, so a resume or a re-run is a no-op. The same file is
+owned by the `xinas_mcp` role during provisioning
+(`xinas_mcp_allow_root_ssh`, §3.9), and the uninstaller always removes it
+(uninstall-spec.md §*Always-removed paths*).
+
+The stated purpose is to **open** key-based root SSH on cloud images, whose
+cloud-init drop-in sets `PermitRootLogin no`. But `sshd_config` includes
+`sshd_config.d/*.conf` at the top and sshd keeps the **first** value it
+obtains for a keyword, so a `10-` drop-in also wins over `PermitRootLogin
+yes` written in the main `sshd_config`. On a host configured that way — a
+lab box, an appliance image, anything where the admin enabled root password
+login on purpose — this step **closes root SSH password login**.
+
+**Requirement — announce the change to a direct root login.** When
+`install.sh` runs with an empty `SUDO_USER` (i.e. the operator logged in as
+root rather than escalating from their own account), it MUST print, *before*
+the drop-in is written:
+
+- that root SSH will accept a **key only**, never a password, naming
+  `PermitRootLogin prohibit-password`;
+- whether a key is already present in `/root/.ssh/authorized_keys` — and if
+  not, the `ssh-copy-id root@<host>` command that installs one, plus the note
+  that console access and any sudo-capable account are unaffected;
+- the path to revert (`/etc/ssh/sshd_config.d/10-xinas-root-access.conf`).
+
+The notice is informational and never blocks: it does not prompt, and it
+does not change the installer's exit status. Its point is timing — the
+operator is told while the session they stand to lose is still open.
+
+`sshd -T` supplies the host's effective `PermitRootLogin` so the wording
+matches reality: `yes` states that password login works today and is about to
+stop; any other value (including a re-run's own `prohibit-password`) states
+only what xiNAS pins, without claiming a change that is not happening. When
+`sshd -T` cannot be read the notice still prints, minus that clause — under
+`set -e` the lookup must not be able to abort the install.
+
+A run under `sudo` prints nothing: `SUDO_USER` names an account that reaches
+root without root's SSH password, so nothing that operator depends on
+changes.
+
 ## 3. Parameters set by each playbook / role
 
 Effective values listed below come from each role's `defaults/main.yml`, overridden where a preset explicitly sets a different value — see §1.0 for the full layer order (role defaults → preset overlay → local overlay → `-e`). File references point at the source of truth.
