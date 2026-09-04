@@ -646,3 +646,98 @@ opportunistically here would muddy that change.
 justified by measured spawn cost (as `apply + --wait` already does), or the
 file drives the CLI through one long-lived process instead of one per
 assertion. Decide deliberately rather than bumping 5000 to a bigger guess.
+
+## MCP — S17 Phase 2 event producers are not shipped
+
+*Spec: [docs/control-path/s17-mcp-subscriptions-spec.md](control-path/s17-mcp-subscriptions-spec.md) §18; requirement §22–§25.*
+
+**What is missing.** Restripe / SDC-scan / pending-maintenance events
+(`raid.maintenance.*`, `raid.consistency.inconsistent`, the `restripe` and
+`sdc_scan` operation kinds), NFSv4 grace/reclaim events, nfsd counter-rate
+events, inode/quota events, sustained SLO events, HA/path events, and the
+`nfs.configuration.drift_*` pair the requirement leaves as MAY.
+
+**What the code does instead.** The xiRAID observation already retains
+`raw_states` and the four separate progress values, so the Phase 2 xiRAID
+producers need no wire or parser change; the other families need new
+sources (`/proc/net/rpc/nfsd`, quota, performance collectors). Nothing is
+emitted for them; feed reads do not list them under `producers` because the
+families do not exist yet.
+
+**Why it was cut.** Phase 1 covers what current observations can prove
+(requirement §2.2). **Done** = each producer lands with a validated
+fixture for the supported Ubuntu kernel/nfsd, additively on the same six
+feeds, cursors and envelope.
+
+## MCP — S17 source-gated event families have no producer
+
+*Spec: S17 spec §8.2, §8.4; decision D-16 in the requirement's Appendix E.*
+
+**What is missing.** `raid.device.error_count_increased`,
+`raid.device.fault_threshold_reached`, `raid.device.critical_wear`,
+`raid.license.expired`, `raid.license.drive_limit_exceeded`,
+`raid.spare.replacement.failed`, `storage.disk.health_degraded` /
+`health_recovered` / `wear_critical` / `temperature_high` /
+`temperature_cleared`.
+
+**What the code does instead.** The types, severities and envelope schemas
+exist; every feed read lists the family under `producers.inactive` with the
+reason (`no periodic error-count or wear source`, `no periodic license
+source`, `no validated temperature threshold`). xiNAS observes `raid_show`
+and `pool_show` periodically and the license only on demand
+(`health.probe`); `Disk.status.health` is in the OpenAPI schema but no probe
+fills it.
+
+**Why it was cut.** Emitting them from a guess would violate requirement
+D-06 (never fabricate). **Done** = a periodic collector for each source (a
+license observation; per-bdev error counters and wear from xiRAID or NVMe
+SMART; a validated platform temperature threshold) plus the producer and
+its transition table.
+
+## MCP — S17 product-client smoke results are pending
+
+*Spec: S17 spec §16; requirement SUBS-CLIENT-002.*
+
+**What is missing.** The recorded live smoke-test rows for Claude Code and
+Codex (client version, transport, whether `subscriptions/listen` was
+issued, whether `notifications/resources/updated` was observed and
+surfaced, reconnect behavior, configuration).
+
+**What the code does instead.** The official v2 client interop tests are
+the automated proof; the runbook section defines the protocol; release
+notes must state the limitation and point at the `resources/read` polling
+fallback until the rows are filled.
+
+**Why it was cut.** They can only be produced on a node with the product
+clients installed. **Done** = both rows filled in
+`docs/control-path/hardware-smoke-runbook.md`.
+
+## MCP — the modern path does not validate `MCP-Protocol-Version`
+
+*Spec: S14 (`s14-mcp-modern-era-spec.md`); S17 validation V-18 / D-25.*
+
+**What is missing.** The Streamable HTTP transport spec (2026-07-28)
+requires every POST to carry `MCP-Protocol-Version` matching
+`_meta["io.modelcontextprotocol/protocolVersion"]` and the server to reject
+a mismatch.
+
+**What the code does instead.** `api/mcp/modern.ts` classifies the era from
+`_meta` only; the header is ignored. The v2 client sends both, consistently.
+
+**Why it was cut.** Pre-existing S14 gap found while validating S17; not a
+subscription concern. **Done** = header/body mismatch → HTTP 400 with the
+schema's error, tests on both transports.
+
+## MCP — S17 metrics are in memory until the S15 registry lands
+
+*Spec: S17 spec §12; decision D-17.*
+
+**What is missing.** Prometheus text exposition of the eleven
+`xinas_mcp_*` / `xinas_operational_event_*` instruments.
+
+**What the code does instead.** `SubscriptionMetrics` has an in-memory
+implementation that tests assert against; nothing renders it.
+
+**Why it was cut.** `lib/metrics.ts` / `GET /api/v1/metrics` are S15 Task
+13, unlanded on the S17 base. **Done** = a `RegistryMetrics` adapter
+registering the same names on the S15 registry.

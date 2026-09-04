@@ -843,3 +843,29 @@ Per F2, no coverage tooling exists today. S0+S1 lands:
 - [docs/control-path/api-v1.yaml](api-v1.yaml) — the REST contract; this PR extends it with `User`, `Group`, `NfsSession`, `NfsIdmap`, additive `Filesystem.status` fields, additive `Share.status.exports[]` (with the `ExportRule` type), `SystemdUnit` resource, `status.observed_at` on every observed kind, and the `agent` sub-object on `Node.status`.
 - [docs/Installer/xinas-api-role-spec.md](../Installer/xinas-api-role-spec.md) — the existing `xinas_api` role; this PR modifies it (new dedicated group, internal-tokens.json, controller-id file).
 - PR #199 (CI bootstrap), PR #200 (state store), PR #201 (api skeleton), PR #202 (biome cleanup), PR #203 (xinas_api role) — the merged foundation this PR builds on.
+
+## S17 amendment (2026-09-04) — sources the event feeds rely on
+
+`s17-mcp-subscriptions-spec.md` consumes this spec's observation flows and
+adds three agent-side facts:
+
+1. **Boot id.** The inventory probe reads
+   `/proc/sys/kernel/random/boot_id` into `inventory.status.boot_id`
+   (additive; the `inventory` kind has a permissive inbound validator). The
+   api persists the last seen value and emits `system.reboot.detected` on a
+   change; a process restart within the same boot changes nothing.
+2. **Systemd allow-list.** `xinas-nfs-helper.service` and
+   `xiraid-server.service` join the allow-list (`agent/probe/systemd.ts`).
+   A unit whose `load_state` is `not-found` is observed as such and never
+   read as a failed service.
+3. **Freshness bound per kind.** The api records, per observed kind, the
+   time of the last accepted batch; the S17 staleness bound is 3 × the
+   collector's `pollIntervalMs` from the Flow D table (300 s for the
+   backstop-only kinds).
+
+Two existing behaviors are load-bearing for S17 and must be preserved: a
+collector whose sweep throws sends **no** complete snapshot (`boot.ts`,
+`poll.ts` — "unknown, not no entities"), so a source failure can never
+reach the api as a deletion; and the ingest handler applies a batch in one
+SQLite transaction with a previous-value compare, which is where S17's
+transition engine runs.

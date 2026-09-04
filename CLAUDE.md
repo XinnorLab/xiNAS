@@ -245,8 +245,12 @@ sequence. Store: `/var/lib/xinas/config-history/`. CLI:
 now lives inside `xinas-api.service` — the `/mcp` endpoint plus the
 `xinas-mcp-stdio` adapter, catalog-generated tools, apply gated by
 `mcp.allow_apply`. Live contract:
-`docs/control-path/adr/0010-clients-mcp-cli-tui.md` and
-`docs/control-path/s8-clients-spec.md`. The spec set under `docs/MCP/`
+`docs/control-path/adr/0010-clients-mcp-cli-tui.md`,
+`docs/control-path/s8-clients-spec.md`,
+`docs/control-path/s14-mcp-modern-era-spec.md` (the `2026-07-28` modern
+era), `docs/control-path/s15-mcp-mrtr-confirmation-spec.md` (apply
+confirmation) and `docs/control-path/s17-mcp-subscriptions-spec.md`
+(Resources + `subscriptions/listen` operational event feeds). The spec set under `docs/MCP/`
 describes the legacy server and is kept for reference only — do not treat
 it as current.
 

@@ -12,6 +12,20 @@ Both pipelines have separate recipient lists, separate configuration stores, and
 
 ---
 
+## Three independent mechanisms (S17, 2026-09-04)
+
+xiNAS has three alerting paths that share no code and no event stream:
+
+| Mechanism | Producer | Consumer | Source of the facts |
+|---|---|---|---|
+| Scheduled xiNAS health email | `xinas-health-report.timer` → the health runner (this document) | SMTP recipients | the health engine's checks at run time |
+| xiRAID daemon email notifications | `xiraid-server.service` sendmail transport, configured through `xicli mail` / `xicli settings mail modify` | the daemon's recipient list | the daemon's own polling; **not** an event stream xiNAS reads — xiNAS only manages recipients and intervals |
+| S17 MCP operational resource feeds | the control path's transition engine (`docs/control-path/s17-mcp-subscriptions-spec.md`) | MCP `2026-07-28` clients via `subscriptions/listen` + `resources/read`, and `GET /events` | committed observed-state transitions (`raid_show`, mounts, exports, systemd, heartbeat) |
+
+The xiRAID event list below is the vendor's complete xiRAID Classic 4.4
+list; S17 maps every entry to an event type but derives the facts from its
+own observations, not from the emails.
+
 ## xiNAS SMTP Pipeline
 
 ### Configuration
@@ -249,24 +263,47 @@ A recipient configured at level X receives all notifications at severity X and a
 
 ### Notification Events
 
-xiRAID triggers notifications on the following state changes:
+The complete xiRAID Classic 4.4 list, from
+[AG / Setting up email notifications](https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/setting_up_email_notifications.html)
+(verified 2026-09-04). It is not consumed by xiNAS; it is reproduced so the
+S17 mapping can be checked. `(…)` marks the daemon's placeholders.
 
-| Event | Level | Trigger |
-|-------|-------|---------|
-| RAID degraded | error | Array enters degraded state |
-| RAID offline | error | Array goes offline |
-| RAID unrecovered | error | Array enters unrecovered state |
-| RAID online | info | Array returns to healthy state |
-| License expired | error | License validity check fails |
-| License disk limit exceeded | error | Active disks exceed license allowance |
-| Reconstruction started | info | RAID rebuild begins |
-| Reconstruction progress | info | Periodic progress update during rebuild |
-| Reconstruction completed | info | RAID rebuild finishes successfully |
-| Reconstruction failed | warning | RAID rebuild ends without full recovery |
-| Initialization started | info | New array initialization begins |
-| Initialization progress | info | Periodic progress update during init |
-| Initialization completed | info | Initialization finishes successfully |
-| Initialization failed | warning | Initialization ends without completion |
+| Level | Message | S17 event type |
+|-------|---------|----------------|
+| info | Initialization started on RAID (…) | `raid.operation.started` (initialization) |
+| info | Initialization progress on RAID (…) is (…) percent | `raid.operation.progress` (initialization) |
+| info | Initialization completed on RAID (…) | `raid.operation.completed` (initialization) |
+| info | Reconstruction started on RAID (…) | `raid.operation.started` (reconstruction) |
+| info | Reconstruction progress on RAID (…) is (…) percent | `raid.operation.progress` (reconstruction) |
+| info | Reconstruction completed on RAID (…) | `raid.operation.completed` (reconstruction) |
+| info | System is up after reboot/crash | `system.reboot.detected` |
+| info | RAID (…) is healthy now / RAID (…) is online now | `raid.state.recovered` |
+| info | Drive (…) was returned to RAID (…) | `raid.member.returned` |
+| info | Drive (…) from SparePool (…) was reconnected | `raid.spare.returned` |
+| info | Drive (…) from SparePool (…) was disconnected | `raid.spare.disconnected` |
+| info | Drive (…) in RAID (…) was automatically replaced with drive (…) from SparePool (…) | `raid.spare.replacement.completed` |
+| warning | Initialization not completed on RAID (…) | `raid.operation.failed` (initialization) |
+| warning | Reconstruction not completed on RAID (…) | `raid.operation.failed` (reconstruction) |
+| warning | RAID (…) is read-only now | `raid.state.read_only` |
+| warning | RAID (…) is degraded now | `raid.state.degraded` |
+| warning | After reboot/crash, RAID (…) not restored | `raid.restore.failed` |
+| warning | After reboot/crash, RAID (…) has restored in read only mode | `raid.restore.completed` (`read_only`) |
+| warning | After reboot/crash, RAID (…) has restored in offline state | `raid.restore.completed` (`offline`) |
+| warning | SparePool (…) ran out of drives | `raid.spare_pool.exhausted` |
+| warning | Drive (…) in RAID (…) is offline now | `raid.member.offline` |
+| warning | Could not automatically replace drive (…) [variants] / Can't replace the faulty bdev (…). Replacing (…) with null | `raid.spare.replacement.failed` (source-gated) |
+| warning | The number of errors on the bdev (…) is increased | `raid.device.error_count_increased` (source-gated) |
+| warning | The number of faults on the bdev (…) reached the fault threshold | `raid.device.fault_threshold_reached` (source-gated) |
+| warning | The bdev (…) has critical wear out (…)% | `raid.device.critical_wear` (source-gated) |
+| error | RAID (…) is offline now | `raid.state.offline` |
+| error | RAID (…) is unrecovered now | `raid.state.unrecovered` |
+| error | xiRAID Classic license expired | `raid.license.expired` (source-gated) |
+| error | xiRAID Classic license error: The total number of used drives (…) exceeds the license limit | `raid.license.drive_limit_exceeded` (source-gated) |
+
+The vendor's levels and S17's severities are different surfaces; the S17
+severity table (`s17-mcp-subscriptions-spec.md` §6.4) is authoritative for
+the feeds. "Source-gated" families have no periodic xiNAS source yet; S17
+lists them as inactive in the feed read until one exists.
 
 ### Polling Intervals
 

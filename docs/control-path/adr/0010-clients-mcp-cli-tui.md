@@ -316,7 +316,47 @@ following is layered *behind* it:
    MCP tool list by a catalog flag), the approval page, and a metrics
    endpoint.
 
-## Security
+## Decision — MCP Resources and resource subscriptions (S17, 2026-09-04)
+
+Recorded against `s17-mcp-subscriptions-requirements.md` (validation in
+its Appendix D; contract in `s17-mcp-subscriptions-spec.md`). Layered on
+the transports above:
+
+1. **The modern MCP era (`2026-07-28`) now serves Resources and resource
+   subscriptions**: `resources/list`, `resources/templates/list`,
+   `resources/read` and `subscriptions/listen`, statelessly, on the same
+   `/mcp` endpoint and through `xinas-mcp-stdio`. `resources: { subscribe:
+   true, listChanged: false }` is advertised only when the whole surface
+   (journal, retention, handlers) is installed; a partial build advertises
+   nothing.
+2. **Resources remain absent from the legacy era.** `initialize` keeps
+   advertising `tools` only; the SDK session path answers `resources/*`
+   and `subscriptions/listen` as it did before.
+3. **Standard notifications, not a custom method.** Change signals are
+   `notifications/resources/updated` carrying the subscribed feed URI and
+   the subscription id; there is no `notifications/xinas/*` extension and
+   no event payload inside a notification.
+4. **The journal, not the transport, provides catch-up.** Every event is
+   committed to `operational_events` before any notification is scheduled;
+   clients resume from an opaque cursor through `resources/read`; a cursor
+   older than retention reports a visible gap. Notifications are at-most-once
+   wake-ups that may be coalesced.
+5. **A subscription is bound to the principal that opened it** (bearer, or
+   the UDS local-admin gate) and re-authorized before every delivery; a
+   cursor is not a capability.
+6. **A disconnect removes only the listener.** Closing the HTTP response or
+   a stdio `notifications/cancelled` stops delivery for that subscription
+   and nothing else: monitoring, journal rows and running tasks are
+   untouched.
+7. **Task-status notifications stay with S16.** S17 emits no
+   `notifications/tasks` and does not project Task state into a domain
+   event; a future task notification may reuse the S17 transport only under
+   the S16 notification contract.
+8. **Events are evidence, not inference.** They derive from committed
+   observed-state transitions, the heartbeat tracker and the boot id; a
+   failed or stale collector reports itself and never produces a removal,
+   an outage or a recovery. The xiRAID observation keeps the vendor's raw
+   state words and the four separate progress values for this purpose.
 
 - The api gains NO privilege: every mutator still flows
   plan → apply → task → agent. The only adapter exception is the
@@ -344,8 +384,9 @@ for `control_client.py` against a stub HTTP server.
 TUI pool screens (no API surface), SSE transport, audit/config-history
 backend integration (the degraded entries go live when the bridges
 land), removal of the read-only gRPC passthrough (tracked to the
-API gaining pools/mail/auth-settings resources), MCP resource/prompt
-capabilities (tools only in Phase 0). S15 adds: a TUI screen for pending
+API gaining pools/mail/auth-settings resources), MCP prompt
+capabilities (tools only in Phase 0; S17 adds Resources and resource
+subscriptions on the modern era — see the S17 decision above). S15 adds: a TUI screen for pending
 MCP approvals (the web page, REST and `xinasctl` cover approval; recorded
 in `docs/TODO.md`), and a key-rotation CLI for the `requestState` key
 ring (rotation is a documented file edit + restart).

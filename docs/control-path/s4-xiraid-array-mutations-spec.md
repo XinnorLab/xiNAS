@@ -335,3 +335,23 @@ New **blocker codes** (plan `blockers[]`, not `ErrorCode`s): `dangerous_flag_req
 - **Tuning observe gap** — modify's `before` diff for tuning is only what observed state knows (nothing today). The diff shows `before.tuning: null` honestly; a later parse/raid extension can enrich it.
 - **Observed-vs-public Filesystem shape divergence** — observed rows are status-only while the api-v1.yaml `Filesystem` schema has `spec.backing_device`; the dep walk reads the live observed shape (§7). The read-path projection (or a collector reshape) reconciling the two is pre-existing WS6 territory, not S4's.
 - **`/proc/self/mountinfo` fields for the mount guard** — the device match reads `lib/parse/mountinfo.ts`'s `MountEntry.source`; the external-device match reads `MountEntry.options` (per-mount VFS options) and `MountEntry.super_options` (the filesystem-specific options after the `-` separator, where XFS reports `logdev=` / `rtdev=`). Readers feeding the guard pass both lists through (`MountGuardEntry`); a reader that supplies neither degrades to source-only matching.
+
+## S17 amendment (2026-09-04) — task correlation for domain events
+
+An S17 domain event (`s17-mcp-subscriptions-spec.md` §6.1 `cause`) names
+the xiNAS task that caused it **only** from durable execution context,
+never from timing proximity:
+
+- The engine looks up `tasks` rows whose `kind` is one of the operation
+  kinds that can produce the transition (`xiraid.array.create` →
+  `raid.array.created`; `xiraid.array.delete` → `raid.array.removed`;
+  `xiraid.array.modify` and `xiraid.array.import` → the array-state and
+  operation events of that array) **and** whose persisted
+  `affected_resources` contains the event subject (`XiraidArray/<name>`),
+  in state `running` or `success` (a `plan_only`, `failed` or `cancelled`
+  task never correlates).
+- The most recently updated matching row supplies `cause.taskId`; its
+  `correlation_id` supplies `cause.operationId`. No match → no `cause`.
+- The event remains an observed transition (`timeAccuracy: observed`);
+  the task's own status is reported by the task envelope and `tasks/get`
+  (S16), never by the domain event.
