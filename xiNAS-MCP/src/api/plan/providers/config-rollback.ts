@@ -107,7 +107,7 @@ function baselinePlan(spec: { reason: string }, ctx: PlanContext): PlanResult {
         'NFS exports, network settings, and managed services are reverted.',
     },
     risk_level: 'destructive',
-    rollback_model: 'executor_managed',
+    rollback_model: 'unsupported',
     ...(baseline !== undefined
       ? {
           observed_freshness_ref: {
@@ -300,7 +300,7 @@ function targetedPlan(
     warnings,
     diff,
     risk_level: 'destructive',
-    rollback_model: 'executor_managed',
+    rollback_model: 'changing_access',
     ...(row !== undefined
       ? {
           observed_freshness_ref: {

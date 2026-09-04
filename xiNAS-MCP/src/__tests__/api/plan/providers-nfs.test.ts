@@ -162,7 +162,7 @@ describe('share.create plan provider', () => {
     });
 
     expect(result.risk_level).toBe('non_disruptive');
-    expect(result.rollback_model).toBe('reversible');
+    expect(result.rollback_model).toBe('changing_access');
     expect(result.blockers).toEqual([]);
     expect(result.warnings).toEqual([]);
     expect(result.lease_resources).toBeUndefined();
@@ -279,7 +279,7 @@ describe('share.update plan provider', () => {
       },
     });
     expect(result.risk_level).toBe('changing_access');
-    expect(result.rollback_model).toBe('reversible');
+    expect(result.rollback_model).toBe('changing_access');
     expect(result.blockers).toEqual([]);
     expect(result.warnings).toEqual([]);
   });
@@ -338,7 +338,7 @@ describe('share.delete plan provider', () => {
     ]);
     expect(result.diff).toEqual({ action: 'delete', export_path: '/mnt/data' });
     expect(result.risk_level).toBe('changing_access');
-    expect(result.rollback_model).toBe('reversible');
+    expect(result.rollback_model).toBe('changing_access');
     expect(result.blockers).toEqual([]);
   });
 
@@ -389,7 +389,7 @@ describe('nfs-idmap.set plan provider', () => {
       prior_domain: null,
     });
     expect(result.risk_level).toBe('non_disruptive');
-    expect(result.rollback_model).toBe('reversible');
+    expect(result.rollback_model).toBe('changing_access');
     expect(result.blockers).toEqual([]);
     expect(result.warnings).toEqual([]);
   });
@@ -496,7 +496,7 @@ describe('nfs-profile.update plan provider', () => {
       profile,
     });
     expect(result.risk_level).toBe('non_disruptive');
-    expect(result.rollback_model).toBe('reversible');
+    expect(result.rollback_model).toBe('changing_access');
     expect(result.blockers).toEqual([]);
     expect(result.warnings).toEqual([]);
   });

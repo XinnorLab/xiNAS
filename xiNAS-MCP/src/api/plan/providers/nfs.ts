@@ -290,7 +290,7 @@ const shareCreateProvider: PlanProvider = {
         export_entry: compileShareToExportEntry(shareSpecToCompileInput(share)),
       },
       risk_level: 'non_disruptive',
-      rollback_model: 'reversible',
+      rollback_model: 'changing_access',
       observed_freshness_ref: freshness,
       desired_mutations: [
         {
@@ -366,7 +366,7 @@ const shareUpdateProvider: PlanProvider = {
         export_entry: compileShareToExportEntry(shareSpecToCompileInput(share)),
       },
       risk_level: 'changing_access',
-      rollback_model: 'reversible',
+      rollback_model: 'changing_access',
       state_revision_expected: desired.revision,
       observed_freshness_ref: exportRuleFreshnessRef(ctx, exportId),
       desired_mutations: [
@@ -406,7 +406,7 @@ const shareDeleteProvider: PlanProvider = {
       warnings: warning ? [warning] : [],
       diff: { action: 'delete', export_path: path },
       risk_level: 'changing_access',
-      rollback_model: 'reversible',
+      rollback_model: 'changing_access',
       state_revision_expected: desired.revision,
       observed_freshness_ref: exportRuleFreshnessRef(ctx, exportId),
       desired_mutations: [
@@ -450,7 +450,7 @@ const nfsIdmapSetProvider: PlanProvider = {
       warnings: [],
       diff: { action: 'set_domain', domain, prior_domain: priorDomain },
       risk_level: 'non_disruptive',
-      rollback_model: 'reversible',
+      rollback_model: 'changing_access',
       state_revision_expected: revision,
       observed_freshness_ref: { kind: 'nfs_idmap', id: 'snapshot', revision },
       lease_resources: [{ kind: 'NfsIdmap', id: 'snapshot' }],
@@ -536,7 +536,7 @@ const nfsProfileUpdateProvider: PlanProvider = {
       warnings: [],
       diff: { action: 'update', changed, restart, profile },
       risk_level: restart ? 'changing_access' : 'non_disruptive',
-      rollback_model: 'reversible',
+      rollback_model: 'changing_access',
       ...(desired ? { state_revision_expected: desired.revision } : {}),
       desired_mutations: [
         {

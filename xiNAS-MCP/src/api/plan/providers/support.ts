@@ -65,7 +65,7 @@ export const supportBundleProvider: PlanProvider = {
         excludes: ['/etc/xinas-api', '/etc/xinas-agent', 'raw license material'],
       },
       risk_level: 'non_disruptive',
-      rollback_model: 'executor_managed',
+      rollback_model: 'non_disruptive',
       lease_resources: [{ kind: 'SupportBundle', id: 'default' }],
       enriched_spec: {
         bundle_dir: bundleDir,

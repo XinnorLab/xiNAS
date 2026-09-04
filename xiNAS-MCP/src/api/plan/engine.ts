@@ -92,6 +92,22 @@ export interface PlanResult {
   enriched_spec?: unknown;
 }
 
+/** The api-v1.yaml `Plan.risk_level` vocabulary — the ONLY values a provider may emit (S15 §3.2). */
+export const RISK_LEVELS: ReadonlySet<string> = new Set([
+  'non_disruptive',
+  'changing_access',
+  'destructive',
+  'unsupported_rollback',
+]);
+
+/** The api-v1.yaml `Plan.rollback_model` vocabulary — the ONLY values a provider may emit (S15 §3.2). */
+export const ROLLBACK_MODELS: ReadonlySet<string> = new Set([
+  'non_disruptive',
+  'changing_access',
+  'destructive',
+  'unsupported',
+]);
+
 /** A pluggable preflight for one operation kind (keyed in the registry). */
 export interface PlanProvider {
   /** e.g. 'reference.echo'. */
@@ -160,6 +176,15 @@ export class PlanEngine {
     }
 
     const result = await provider.preflight(this.ctx, args.spec);
+
+    if (!RISK_LEVELS.has(result.risk_level) || !ROLLBACK_MODELS.has(result.rollback_model)) {
+      throw new ApiException(
+        'INTERNAL',
+        `plan provider ${args.operation_kind} returned an off-contract risk_level/rollback_model`,
+        { risk_level: result.risk_level, rollback_model: result.rollback_model },
+        'This is a provider bug: only the api-v1.yaml Plan enum values are allowed.',
+      );
+    }
 
     // The N0 plan-side outputs (S3-NFS §5.1), assembled from the provider
     // result. Only present fields are included (conditional-spread) so a

@@ -194,7 +194,7 @@ describe('PlanEngine.plan', () => {
           warnings: [],
           diff: { changed: true },
           risk_level: 'non_disruptive',
-          rollback_model: 'reversible',
+          rollback_model: 'non_disruptive',
           observed_freshness_ref,
           lease_resources,
           desired_mutations,
@@ -223,7 +223,7 @@ describe('PlanEngine.plan', () => {
           warnings: [],
           diff: { same: true },
           risk_level: 'non_disruptive',
-          rollback_model: 'reversible',
+          rollback_model: 'non_disruptive',
           observed_freshness_ref: { kind: 'ExportRule', id: 'mnt/data', revision },
         };
       },
@@ -250,7 +250,7 @@ describe('PlanEngine.plan', () => {
           warnings: [],
           diff: { x: 1 },
           risk_level: 'non_disruptive',
-          rollback_model: 'reversible',
+          rollback_model: 'non_disruptive',
         };
       },
     };
@@ -269,5 +269,26 @@ describe('PlanEngine.plan', () => {
     expect(a.task.plan_hash).toBe(b.task.plan_hash);
     // The reference provider sets no binding fields → plan_binding stays unset.
     expect(a.task.plan_binding).toBeUndefined();
+  });
+
+  it('S15 V-53: refuses a provider result whose rollback_model or risk_level is off the api-v1 enum', async () => {
+    const off: PlanProvider = {
+      operation_kind: 'test.off',
+      preflight: async () => ({
+        affected_resources: [{ kind: 'Reference', id: 'r1' }],
+        blockers: [],
+        warnings: [],
+        diff: {},
+        risk_level: 'non_disruptive',
+        rollback_model: 'reversible',
+      }),
+    };
+    h.engine.register(off);
+    await expect(
+      h.engine.plan({ ...makePlanArgs(), operation_kind: 'test.off' }),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+    });
+    expect(h.countTasks()).toBe(0);
   });
 });
