@@ -43,6 +43,18 @@ export interface ObservedXiraidArray {
     spare_pool?: string;
     rebuild_progress_pct: number | null;
     check_progress_pct: number | null;
+    /**
+     * S17 (S3 amendment): every state word raid_show reported for the array,
+     * lower-cased and de-duplicated, order preserved — including words
+     * `state` maps to no bucket or to `unknown`. Event generation reads this,
+     * not the compressed `state`.
+     */
+    raw_states: string[];
+    /** S17: the four progress values, kept apart (a finite 0–100, else null). */
+    init_progress_pct: number | null;
+    recon_progress_pct: number | null;
+    restripe_progress_pct: number | null;
+    sdc_progress_pct: number | null;
     usable_capacity_bytes?: number;
     memory_usage_mb?: number;
     /**
@@ -255,6 +267,11 @@ export function parseRaidShow(
         ...(sparepool !== '' ? { spare_pool: sparepool } : {}),
         rebuild_progress_pct: reconProgress,
         check_progress_pct: null,
+        raw_states: [...new Set(states)],
+        init_progress_pct: progressPct(o.init_progress),
+        recon_progress_pct: progressPct(o.recon_progress),
+        restripe_progress_pct: progressPct(o.restripe_progress),
+        sdc_progress_pct: progressPct(o.sdc_progress),
         ...(capacityBytes !== null ? { usable_capacity_bytes: capacityBytes } : {}),
         ...(memoryUsage !== null ? { memory_usage_mb: memoryUsage } : {}),
         ...(discardActive !== null ? { discard_active: discardActive } : {}),
@@ -282,6 +299,17 @@ function devicePath(entry: unknown): string | null {
     if (typeof value === 'string' && value.length > 0) return value;
   }
   return null;
+}
+
+/**
+ * S17: a raid_show progress value (`init_progress`, `recon_progress`,
+ * `restripe_progress`, `sdc_progress`) is a finite number in [0, 100];
+ * anything else — a string, NaN, an out-of-range value — reads as null so a
+ * bad sample is dropped rather than published (SUBS-PROGRESS-003).
+ */
+function progressPct(v: unknown): number | null {
+  const n = numberOrNull(v);
+  return n !== null && Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
 }
 
 function normalizeStates(state: unknown): string[] {

@@ -12,7 +12,12 @@
   "spec": {
     "name": "data",
     "level": "raid6",
-    "member_disk_ids": ["disk-nvme2", "disk-nvme3", "disk-nvme4", "disk-nvme5"],
+    "member_disk_ids": [
+      "disk-nvme2",
+      "disk-nvme3",
+      "disk-nvme4",
+      "disk-nvme5"
+    ],
     "spare_disk_ids": [],
     "group_size": null,
     "synd_cnt": null,
@@ -51,6 +56,13 @@
     "check_progress_pct": null,
     "usable_capacity_bytes": 15360000000000,
     "member_states": [],
-    "observed_at": "2026-06-07T16:42:11Z"
+    "observed_at": "2026-06-07T16:42:11Z",
+    "raw_states": [
+      "online"
+    ],
+    "init_progress_pct": null,
+    "recon_progress_pct": null,
+    "restripe_progress_pct": null,
+    "sdc_progress_pct": null
   }
 }
