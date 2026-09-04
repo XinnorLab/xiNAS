@@ -549,6 +549,35 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 - EULA accepted automatically (`xiraid_accept_eula=true`).
 - No auto-reboot (`xiraid_auto_reboot=false`).
 - License file expected at `/tmp/license` (cleared on reboot — re-enter via the menu before deploying).
+- **Daemon preflight (last task, after the optional reboot).**
+  `nvme_namespace` decides what is on the node from `xicli raid show -f json`
+  ([raid-spec §11](raid-spec.md)), and that needs the xiRAID daemon: with it
+  down the probe exits non-zero, the storage state is `UNKNOWN`, and the play
+  fails fast — one role later, with a message that can only ask "is
+  xiraid-core running?" (how a host install log ended on 2026-09-04, `rc=2`;
+  an absent `xicli` reports the same rc — Ansible's ENOENT — and that case
+  is closed separately by the `xiraid_skip_install` purge fix). The role's own
+  checks cannot catch it: the module check reads `lsmod`, and `xicli -v` is
+  the CLI's argparse version action (its help reads "Print the current
+  version number and exit"), so neither contacts the daemon. Whether
+  `xicli settings eula modify` does is not documented ([xiRAID 4.4.0 Command
+  Reference, settings](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/settings.html)
+  is silent on it), and the preflight does not rely on it either way. So
+  the role ends — after the module check and after any `xiraid_auto_reboot`
+  reboot, so the state it verifies is the final one — by starting
+  `xiraid.target`, the unit Xinnor manages xiRAID through
+  ([4.4.0 Installation Guide, Ubuntu](https://xinnor.io/docs/xiRAID-4.4.0/E/en/IG/installing_xiraid_classic_on_ubuntu.html)
+  and [Update Guide, Ubuntu](https://xinnor.io/docs/xiRAID-4.4.0/E/en/UG/updating_xiraid_classic_on_ubuntu.html)
+  both drive it with `systemctl stop | restart xiraid.target`; a no-op when
+  already active), and then running `xicli raid show -f json` until it exits
+  `0`, retrying 5 × 2 s because the gRPC server binds a moment after the
+  target reports active. If the target cannot be started, or the CLI still
+  fails, the play stops **in this role** with the failing step's output and
+  the remedy named: `systemctl status xiraid.target`,
+  `journalctl -u 'xiraid*' -b`. An exit `0` with an empty reply is the normal
+  fresh-box answer (raid-spec §11), so this is a liveness check only — it
+  never inspects, creates or removes arrays, and needs no rebuild trailer.
+  Carries the `xiraid` and `verify` tags.
 - **Does not wipe `/etc/xiraid` on re-run.** The role ensures `/etc/xiraid`, `/etc/xiraid/raids`, and `/etc/xiraid/pools` exist (mode `0755`) but never deletes them. `apt`'s no-op install on an already-installed `xiraid-core` does not re-run the postinst that creates those subdirs, so the role must create them itself — otherwise `xicli raid create` fails with `ENOENT` on `/etc/xiraid/raids/*.conf.tmp.lock`. Re-running the role on a provisioned node preserves live array config (`raids/*.conf`); scrubbing config is the uninstaller's job (`purge_xiraid`), not this role's. **A purge followed by a fresh install is a different matter**: the postinst does run then, and it resets `/etc/xiraid`, taking `raids/*.conf` and the license store with it. The arrays are still recoverable from drive metadata — see [raid-spec.md §11](raid-spec.md#11-idempotency--the-storage-reset-contract), *Recovering arrays after a purge that already happened*.
 
 ### 3.5 `nvme_namespace` — drive discovery / namespace rebuild

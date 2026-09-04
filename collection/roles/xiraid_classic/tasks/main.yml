@@ -96,3 +96,42 @@
     msg: "Reboot by xiraid_classic role after install"
   when: xiraid_pkgs is changed and xiraid_auto_reboot | bool
   tags: [xiraid, reboot]
+
+# Daemon preflight — deliberately the last thing the role does, after any
+# reboot, so the state it proves is the final one. Nothing above proves the
+# daemon is up: the module check reads lsmod and `xicli -v` is the CLI's
+# version action ("... and exit"), and whether the EULA command needs the
+# daemon is undocumented. nvme_namespace's storage-state probe does need it, and a daemon that never came up used to surface there, one
+# role later, as "Storage state = UNKNOWN". Converge the target here — it is
+# the unit Xinnor manages xiRAID through (4.4.0 IG/UG: `systemctl stop |
+# restart xiraid.target`) — and prove the CLI can read the array list, so
+# the failure names the daemon. An rc of 0 with an empty reply is the normal
+# fresh-box answer; nothing here inspects or touches arrays.
+# Contract: docs/Installer/spec.md §3.4.
+- name: Verify the xiRAID daemon answers before any storage role runs
+  tags: [xiraid, verify]
+  block:
+    - name: Ensure xiraid.target is running
+      ansible.builtin.systemd:
+        name: xiraid.target
+        state: started
+
+    - name: Probe the xiRAID daemon through the CLI (read-only)
+      ansible.builtin.command: xicli raid show -f json
+      register: xiraid_daemon_probe
+      changed_when: false
+      retries: 5
+      delay: 2
+      until: xiraid_daemon_probe.rc == 0
+
+  rescue:
+    - name: Fail because the xiRAID daemon does not answer
+      ansible.builtin.fail:
+        msg: >-
+          xiRAID is installed but its daemon does not answer.
+          Step '{{ ansible_failed_task.name }}' failed:
+          {{ ansible_failed_result.msg | default('') }}
+          {{ ansible_failed_result.stderr | default('') }}
+          The storage roles read the array list through 'xicli raid show', so the
+          play cannot continue. Inspect the daemon with 'systemctl status xiraid.target'
+          and 'journalctl -u xiraid* -b', fix the cause, and re-run.
