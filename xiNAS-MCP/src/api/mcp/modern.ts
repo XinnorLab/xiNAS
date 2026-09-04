@@ -18,7 +18,10 @@
  */
 
 import { type DispatcherOptions, callTool, listTools } from './dispatch.js';
+import { McpProtocolError } from './confirmation/errors.js';
+import { parseMrtrParams } from './confirmation/policy.js';
 import { buildDiscoverResult, isModernProtocolVersion } from './discover.js';
+import { isInputRequired } from './results.js';
 
 /** JSON-RPC 2.0 reserved codes used on this path. */
 const METHOD_NOT_FOUND = -32601;
@@ -35,7 +38,9 @@ export interface JsonRpcResponse {
   jsonrpc: '2.0';
   id: string | number | null;
   result?: unknown;
-  error?: { code: number; message: string };
+  error?: { code: number; message: string; data?: Record<string, unknown> };
+  /** S15: the HTTP status transport.ts answers with; stripped from the JSON body. */
+  httpStatus?: number;
 }
 
 const PROTOCOL_VERSION_META = 'io.modelcontextprotocol/protocolVersion';
@@ -117,7 +122,17 @@ export async function handleModernRequest(
             error: { code: -32602, message: 'invalid params: tools/call requires a string name' },
           };
         }
-        const result = await callTool(params.name, params.arguments ?? {}, opts);
+        // S15 §4/§7: a confirmable retry echoes requestState/inputResponses
+        // in the SAME tools/call params (no separate elicitation method) —
+        // parse them here so dispatch.ts stays transport-agnostic.
+        const mrtr = parseMrtrParams(msg.params);
+        const result = await callTool(params.name, params.arguments ?? {}, opts, {
+          ...mrtr,
+          correlationId: String(rpcId),
+        });
+        if (isInputRequired(result)) {
+          return { jsonrpc: '2.0', id: rpcId, result };
+        }
         return { jsonrpc: '2.0', id: rpcId, result: { ...result, resultType: 'complete' } };
       }
 
@@ -132,6 +147,18 @@ export async function handleModernRequest(
         };
     }
   } catch (err) {
+    if (err instanceof McpProtocolError) {
+      return {
+        jsonrpc: '2.0',
+        id: rpcId,
+        error: {
+          code: err.code,
+          message: err.message,
+          ...(err.data !== undefined ? { data: err.data } : {}),
+        },
+        httpStatus: err.httpStatus,
+      };
+    }
     return {
       jsonrpc: '2.0',
       id: rpcId,

@@ -21,8 +21,16 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { CATALOG, type CatalogEntry } from './catalog.js';
+import type { McpClientInfo, ConfirmationService } from './confirmation/service.js';
+import { isConfirmable, type MrtrParams } from './confirmation/policy.js';
 import { SERVER_INFO } from './discover.js';
-import { type ToolResult, errorResult, text } from './results.js';
+import {
+  type InputRequiredToolResult,
+  type ToolResult,
+  errorResult,
+  isInputRequired,
+  text,
+} from './results.js';
 
 export type { ToolResult } from './results.js';
 
@@ -50,6 +58,10 @@ export interface DispatcherOptions {
   loopbackToken: () => string | undefined;
   allowApply: () => boolean;
   identity: () => McpIdentity;
+  /** S15: the calling client's protocol era + declared elicitation capabilities. */
+  client: McpClientInfo;
+  /** S15: absent when the api has no task engine (read-only contexts). */
+  confirmations?: ConfirmationService;
 }
 
 /** Legacy tool name → replacement pointer (ADR-0010: actionable errors). */
@@ -207,7 +219,8 @@ export async function callTool(
   name: string,
   args: Record<string, unknown>,
   opts: DispatcherOptions,
-): Promise<ToolResult> {
+  mrtr: MrtrParams & { correlationId?: string } = {},
+): Promise<ToolResult | InputRequiredToolResult> {
   const entry = CATALOG.find((e) => e.name === name && mcpVisible(e));
   if (entry === undefined) {
     const replacement = LEGACY_TOOL_MAP[name];
@@ -234,6 +247,39 @@ export async function callTool(
     });
   }
 
+  // S15 §3.1/§3.3 — confirmable calls go through the confirmation service.
+  let confirmationId: string | undefined;
+  if (isConfirmable(entry, args)) {
+    if (opts.client.era !== 'modern') {
+      return errorResult(
+        'MCP_CONFIRMATION_UNSUPPORTED',
+        'mode=apply over MCP requires MCP 2026-07-28 with elicitation support; apply via REST, xinasctl or the TUI instead',
+        { required: 'MCP 2026-07-28 with elicitation', alternatives: ['REST', 'xinasctl', 'TUI'] },
+      );
+    }
+    if (opts.confirmations === undefined) {
+      return errorResult('INTERNAL', 'confirmation service unavailable (api not fully started)');
+    }
+    const identity = opts.identity();
+    const outcome = await opts.confirmations.handle({
+      entry,
+      args,
+      identity,
+      client: opts.client,
+      ...(mrtr.inputResponses !== undefined || mrtr.requestState !== undefined
+        ? {
+            mrtr: {
+              ...(mrtr.inputResponses !== undefined ? { inputResponses: mrtr.inputResponses } : {}),
+              ...(mrtr.requestState !== undefined ? { requestState: mrtr.requestState } : {}),
+            },
+          }
+        : {}),
+      correlationId: mrtr.correlationId ?? 'mcp',
+    });
+    if (outcome.kind !== 'proceed') return outcome.result;
+    confirmationId = outcome.confirmation_id;
+  }
+
   let req: { path: string; body?: unknown };
   try {
     req = buildRequest(entry, args);
@@ -254,6 +300,7 @@ export async function callTool(
       'x-xinas-forwarded-principal': identity.principal,
       'x-xinas-forwarded-role': identity.role,
       'x-xinas-client-type': 'mcp',
+      ...(confirmationId !== undefined ? { 'x-xinas-confirmation': confirmationId } : {}),
       ...(req.body !== undefined ? { 'content-type': 'application/json' } : {}),
     },
     ...(req.body !== undefined ? { body: req.body } : {}),
@@ -288,13 +335,20 @@ export function buildMcpServer(opts: DispatcherOptions): Server {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listTools() }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) =>
-    callTool(
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const r = await callTool(
       request.params.name,
       (request.params.arguments ?? {}) as Record<string, unknown>,
       opts,
-    ),
-  );
+    );
+    // Legacy clients are denied confirmable calls before the service ever
+    // runs (era !== 'modern' above) — an input_required result reaching
+    // here would mean that gate was bypassed.
+    if (isInputRequired(r)) {
+      throw new Error('unreachable: legacy path received input_required');
+    }
+    return r;
+  });
 
   return server;
 }

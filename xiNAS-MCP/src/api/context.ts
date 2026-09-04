@@ -93,6 +93,12 @@ export interface ApiContext {
    * (guarded with `?.`) so the receiver and read-only contexts work without it.
    */
   taskWatch?: TaskWatch;
+  /**
+   * S15: the MRTR confirmation service, built by app.ts over the same store
+   * the task engine consumes from (ctx.tasks.confirmations). Absent in
+   * read-only contexts (no ctx.tasks), where /mcp cannot apply anyway.
+   */
+  mcpConfirmations?: import('./mcp/confirmation/service.js').ConfirmationService;
 }
 
 /**

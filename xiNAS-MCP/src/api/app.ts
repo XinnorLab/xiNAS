@@ -1,12 +1,16 @@
 import express, { type Express, Router } from 'express';
 import type { ApiContext } from './context.js';
+import { confirmationKeyPathFor, resolveConfirmationConfig } from './config.js';
 import { ApiException } from './errors.js';
 import { executorUnavailable } from './handlers/unsupported.js';
 import { rbacMiddleware } from './middleware/rbac.js';
 import { promotedReadsRouter } from './routes/promoted-reads.js';
 import { poolsRouter } from './routes/pools.js';
+import { ConfirmationService } from './mcp/confirmation/service.js';
+import { loadOrCreateKeyRing } from './mcp/confirmation/state.js';
 import { mountMcpTransport } from './mcp/transport.js';
 import { randomBytes } from 'node:crypto';
+import { hostname } from 'node:os';
 import type { HeartbeatTracker } from './heartbeat.js';
 import { internalRouter } from './internal/router.js';
 import { auditMiddleware } from './middleware/audit.js';
@@ -59,6 +63,22 @@ export function createApp(ctx: ApiContext): Express {
 
   // S8 T4: the loopback token is minted per process start (ADR-0010).
   ctx.loopback_token ??= randomBytes(32).toString('hex');
+
+  // S15: the MRTR confirmation service, built over the same store the task
+  // engine consumes from. Absent in read-only contexts (no ctx.tasks), where
+  // /mcp cannot apply anyway.
+  if (ctx.tasks !== undefined) {
+    ctx.mcpConfirmations ??= new ConfirmationService({
+      store: ctx.tasks.confirmations,
+      tasks: ctx.tasks.store,
+      keyRing: loadOrCreateKeyRing(confirmationKeyPathFor(ctx.config)),
+      config: resolveConfirmationConfig(ctx.config),
+      now: () => Date.now(),
+      nodeId: ctx.config.controller_id,
+      hostname: hostname(),
+      audit: ctx.state.audit,
+    });
+  }
 
   app.use(requestIdMiddleware());
   app.use(auditMiddleware(ctx.state));
