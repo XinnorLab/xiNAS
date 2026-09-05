@@ -50,14 +50,11 @@ export function fsUnavailableReason(v: FsView): 'unmounted' | 'unit_failed' | 'r
   return null;
 }
 
-const projection = (v: FsView | null): Record<string, unknown> | undefined =>
-  v === null
-    ? undefined
-    : {
-        mounted: v.mounted,
-        mount_unit_state: v.unitState,
-        read_only: v.readOnly,
-      };
+const projection = (v: FsView): Record<string, unknown> => ({
+  mounted: v.mounted,
+  mount_unit_state: v.unitState,
+  read_only: v.readOnly,
+});
 
 type Level = 'none' | 'warning' | 'critical';
 const LEVEL_SEVERITY: Record<Exclude<Level, 'none'>, Severity> = {
