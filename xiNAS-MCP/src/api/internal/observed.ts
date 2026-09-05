@@ -162,7 +162,13 @@ export function observedHandler(ctx: ApiContext) {
       // inventory/managed_files stay lowercase). H3 stays kind-agnostic; no
       // per-kind special-casing (the ExportRule→Share fold-in is a read-time
       // join in I6, not a write-time merge here).
+      const engine = ctx.events?.engine;
+      let touchedFeeds: ReadonlySet<import('../events/types.js').Feed> | undefined;
       ctx.state.kv.transaction((tx) => {
+        // S17 §8.0: the transition engine runs INSIDE this transaction so an
+        // event commits or rolls back with the observed state it describes.
+        engine?.begin({ observedAt: body.observed_at, completeSnapshots, kv: tx });
+        const kindsInBatch = new Set<Kind>([...completeSnapshots, ...deltas.map((d) => d.kind)]);
         // 1. Apply all deltas — SKIPPING upserts whose value is unchanged
         //    apart from the observed_at stamp. PollDriver full-sweeps every
         //    collector on its interval and collectors re-stamp observed_at
@@ -195,9 +201,26 @@ export function observedHandler(ctx: ApiContext) {
             // anyway so a future CAS variant can't silently push undefined.
             if (result.ok) revisions.push(result.value.revision);
             accepted++;
+            engine?.onChange({
+              kind: delta.kind,
+              id: delta.id,
+              previous: (current?.value as Record<string, unknown> | undefined) ?? null,
+              current: value,
+              previousRevision: current?.revision ?? null,
+            });
           } else if (delta.op === 'delete') {
+            const existing = engine !== undefined ? tx.get(key) : null;
             tx.delete(key);
             accepted++;
+            if (existing !== null) {
+              engine?.onChange({
+                kind: delta.kind,
+                id: delta.id,
+                previous: existing.value as Record<string, unknown>,
+                current: null,
+                previousRevision: existing.revision,
+              });
+            }
           }
         }
 
@@ -216,10 +239,25 @@ export function observedHandler(ctx: ApiContext) {
             if (!upsertedKeys.has(row.key)) {
               tx.delete(row.key);
               deletedByReconcile++;
+              engine?.onChange({
+                kind,
+                id: row.key.slice(prefix.length),
+                previous: row.value as Record<string, unknown>,
+                current: null,
+                previousRevision: row.revision,
+              });
             }
           }
+          engine?.onSnapshot(
+            kind,
+            new Set(deltas.filter((d) => d.op === 'upsert' && d.kind === kind).map((d) => d.id)),
+          );
         }
+        engine?.markAccepted([...kindsInBatch]);
+        touchedFeeds = engine?.commit().feeds;
       });
+      // Post-commit wake-up (S17 §5.6): never inside the transaction.
+      if (touchedFeeds !== undefined && touchedFeeds.size > 0) ctx.events?.notify?.(touchedFeeds);
 
       // 3. GC orphan snapshot-desired payloads — ONLY on a complete ConfigSnapshot
       //    re-emit. That is the only push yielding an authoritative observed set, and

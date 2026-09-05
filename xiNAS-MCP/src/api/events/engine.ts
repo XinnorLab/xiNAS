@@ -136,10 +136,17 @@ export interface SnapshotCtx extends CommonCtx {
   present: ReadonlySet<string>;
 }
 
+/** The kinds an accepted observation batch carried (spec §8.6 freshness). */
+export interface AcceptedCtx extends CommonCtx {
+  kinds: readonly Kind[];
+}
+
 export interface Producer {
   readonly kinds: readonly Kind[];
   onChange?(ctx: ChangeCtx): void;
   onSnapshot?(ctx: SnapshotCtx): void;
+  /** Every producer that opts in sees every accepted batch, whatever its kinds. */
+  onAccepted?(ctx: AcceptedCtx): void;
 }
 
 /** Types a producer may emit for a first observation (spec §8.0). */
@@ -189,6 +196,10 @@ export class TransitionEngine {
 
   get meta(): MetaStore {
     return this.#meta;
+  }
+
+  get config(): EngineConfig {
+    return this.#deps.config;
   }
 
   /** Whether `kind` has had a complete snapshot (as of the last commit). */
@@ -255,6 +266,27 @@ export class TransitionEngine {
       } catch (err) {
         this.#log('error', 'event_producer_failed', {
           kind,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  /**
+   * Record that the open batch carried `kinds` (the per-kind freshness stamp,
+   * D-24) and let producers react (a stale collector recovers here).
+   */
+  markAccepted(kinds: readonly Kind[]): void {
+    const batch = this.#requireBatch();
+    if (kinds.length === 0) return;
+    const ctx: AcceptedCtx = { ...this.#common(batch, false), kinds };
+    for (const p of this.#producers) {
+      if (p.onAccepted === undefined) continue;
+      try {
+        p.onAccepted(ctx);
+      } catch (err) {
+        this.#log('error', 'event_producer_failed', {
+          hook: 'onAccepted',
           error: err instanceof Error ? err.message : String(err),
         });
       }
