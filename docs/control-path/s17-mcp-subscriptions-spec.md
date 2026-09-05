@@ -1067,7 +1067,10 @@ legacy shape (`event_id`, `ts` = `detectedAt`, `kind` = `type`, `severity`,
 fields `feed`, `sequence`, `type`, `subject`, `detected_at`, `occurred_at`,
 `time_accuracy`, `source`, `cursor` (the row's own feed cursor, for paging),
 `previous`, `current`, `operation`, `threshold`, `reason_code`, `cause`,
-`details`. `min_role: viewer` as before. `agent_state_changed` rows written
+`details`. Access is unchanged: the route has no catalog entry, so the RBAC
+deny-by-default applies (admin; corrected during implementation, Task 12 —
+the requirement's viewer parity is for the MCP feeds). `agent_state_changed`
+rows written
 before this release remain readable under the old prefix for one release
 through the same route (merged, oldest first) and are dropped in the next.
 
