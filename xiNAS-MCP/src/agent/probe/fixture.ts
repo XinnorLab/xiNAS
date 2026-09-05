@@ -131,6 +131,7 @@ interface FixtureInventoryProbe {
     cpu: { model?: string; cores?: number; threads: number; arch: string };
     memory: { total_kb: number; available_kb: number; swap_total_kb: number };
     os: { type: string; kernel: string; uptime_seconds: number };
+    boot_id?: string;
     observed_at: string;
   }>;
 }
@@ -376,16 +377,36 @@ export function createFixtureNfsProbe(dir?: string): FixtureNfsProbe {
   };
 }
 
-/** Inventory: a minimal but well-typed snapshot (no /proc reads in fixture mode). */
-export function createFixtureInventoryProbe(): FixtureInventoryProbe {
+/** The boot id a fixture host reports unless <dir>/inventory.json overrides it (S17). */
+export const FIXTURE_BOOT_ID = '00000000-0000-4000-8000-000000000001';
+
+/**
+ * Inventory: a minimal but well-typed snapshot (no /proc reads in fixture
+ * mode). `<dir>/inventory.json` may carry `{ "boot_id": "…" }` so an e2e can
+ * simulate a reboot by rewriting it.
+ */
+export function createFixtureInventoryProbe(dir?: string): FixtureInventoryProbe {
   return {
-    snapshot: () =>
-      Promise.resolve({
+    snapshot: async () => {
+      let bootId = FIXTURE_BOOT_ID;
+      if (dir !== undefined) {
+        try {
+          const raw = JSON.parse(readFileSync(join(dir, 'inventory.json'), 'utf8')) as {
+            boot_id?: unknown;
+          };
+          if (typeof raw.boot_id === 'string' && raw.boot_id.length > 0) bootId = raw.boot_id;
+        } catch {
+          /* absent or malformed: the fixed id */
+        }
+      }
+      return {
         hostname: 'fixture-host',
         cpu: { threads: 0, arch: 'x86_64' },
         memory: { total_kb: 0, available_kb: 0, swap_total_kb: 0 },
         os: { type: 'linux', kernel: '0.0.0-fixture', uptime_seconds: 0 },
+        boot_id: bootId,
         observed_at: new Date().toISOString(),
-      }),
+      };
+    },
   };
 }

@@ -66,3 +66,34 @@ describe('InventoryProbe', () => {
     expect(inv.os.uptime_seconds).toBe(86400);
   });
 });
+
+describe('InventoryProbe — S17 boot id', () => {
+  it('reads and trims /proc/sys/kernel/random/boot_id', async () => {
+    const probe = createInventoryProbe({
+      readFile: fakeReadFile({
+        '/proc/cpuinfo': cpuinfoFixture,
+        '/proc/meminfo': meminfoFixture,
+        '/proc/sys/kernel/random/boot_id': '0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b\n',
+      }) as any,
+      os: fakeOsModule() as any,
+    });
+    const inv = await probe.snapshot();
+    expect(inv.boot_id).toBe('0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b');
+  });
+
+  it('leaves boot_id absent when the file is missing or blank', async () => {
+    const absent = createInventoryProbe({
+      readFile: fakeReadFile({
+        '/proc/cpuinfo': cpuinfoFixture,
+        '/proc/meminfo': meminfoFixture,
+      }) as any,
+      os: fakeOsModule() as any,
+    });
+    expect(await absent.snapshot()).not.toHaveProperty('boot_id');
+    const blank = createInventoryProbe({
+      readFile: fakeReadFile({ '/proc/sys/kernel/random/boot_id': '  \n' }) as any,
+      os: fakeOsModule() as any,
+    });
+    expect(await blank.snapshot()).not.toHaveProperty('boot_id');
+  });
+});

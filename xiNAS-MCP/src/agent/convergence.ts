@@ -322,7 +322,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
   );
 
   // --- Inventory: snapshot() (nested) -> read() (flat). ---
-  const inventoryProbe = fdir !== null ? createFixtureInventoryProbe() : createInventoryProbe();
+  const inventoryProbe = fdir !== null ? createFixtureInventoryProbe(fdir) : createInventoryProbe();
   registry.register(
     new InventoryCollector({
       probe: {
@@ -335,6 +335,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
             cpu_threads: s.cpu.threads,
             mem_total_kb: s.memory.total_kb,
             arch: s.cpu.arch,
+            ...(s.boot_id !== undefined ? { boot_id: s.boot_id } : {}),
           })),
       },
     }),

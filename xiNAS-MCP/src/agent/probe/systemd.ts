@@ -57,12 +57,15 @@ export interface SystemctlProbe {
  *  services themselves. xiRAID unit names are confirmed on hardware
  *  (runbook item) before being added. */
 const S7_ALLOWLIST_ADDITIONS = ['xinas-api.service', 'xinas-agent.service'];
+/** S17 D-18 (agent-spec amendment): the units the system event feed watches.
+ *  A unit that is not installed reads `not-found` and produces no event. */
+const S17_ALLOWLIST_ADDITIONS = ['xinas-nfs-helper.service', 'xiraid-server.service'];
 
 export function createSystemctlProbe(opts: { execFile?: ShowExecFile } = {}): SystemctlProbe {
   const ef: ShowExecFile = opts.execFile ?? (nodeExecFile as unknown as ShowExecFile);
 
   return {
-    allowList: [...DEFAULT_ALLOWLIST, ...S7_ALLOWLIST_ADDITIONS],
+    allowList: [...DEFAULT_ALLOWLIST, ...S7_ALLOWLIST_ADDITIONS, ...S17_ALLOWLIST_ADDITIONS],
 
     getUnitState(name: string): Promise<SystemctlUnitState> {
       return new Promise((resolve) => {
