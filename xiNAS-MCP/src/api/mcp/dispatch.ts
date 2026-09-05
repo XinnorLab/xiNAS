@@ -24,6 +24,7 @@ import { CATALOG, type CatalogEntry } from './catalog.js';
 import type { McpClientInfo, ConfirmationService } from './confirmation/service.js';
 import { isConfirmable, type MrtrParams } from './confirmation/policy.js';
 import { SERVER_INFO } from './discover.js';
+import type { ResourcesOptions } from './resources.js';
 import {
   type InputRequiredToolResult,
   type ToolResult,
@@ -62,6 +63,13 @@ export interface DispatcherOptions {
   client: McpClientInfo;
   /** S15: absent when the api has no task engine (read-only contexts). */
   confirmations?: ConfirmationService;
+  /**
+   * S17: the modern-era resource providers (the event feeds, plus any other
+   * slice's resources). Absent when no journal is installed or
+   * `mcp.subscriptions.enabled` is false — the methods then answer -32601
+   * and discovery advertises no `resources`.
+   */
+  resources?: ResourcesOptions;
 }
 
 /** Legacy tool name → replacement pointer (ADR-0010: actionable errors). */

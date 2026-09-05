@@ -32,7 +32,9 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express, { type Express, type Request, type Response } from 'express';
 import type { ApiContext } from '../context.js';
+import { feedProvider } from '../events/feeds.js';
 import { elicitationModes } from './confirmation/policy.js';
+import type { ResourcesOptions } from './resources.js';
 import { type McpIdentity, buildMcpServer } from './dispatch.js';
 import { handleModernRequest, isModernRequest, isNotification } from './modern.js';
 
@@ -65,6 +67,29 @@ function resolveIdentity(req: Request, ctx: ApiContext): McpIdentity | null {
 
 export function mountMcpTransport(app: Express, ctx: ApiContext): void {
   const sessions = new Map<string, McpSession>();
+
+  // S17 §3: the resource surface exists only when the journal is installed
+  // AND `mcp.subscriptions.enabled`; otherwise the methods are -32601 and
+  // discovery advertises no `resources` (a partial surface is never
+  // advertised).
+  const resources: ResourcesOptions | undefined =
+    ctx.events !== undefined && ctx.events.subscriptions.enabled
+      ? {
+          providers: [
+            feedProvider(ctx.events, {
+              hooks: {
+                isRdmaConfigured: () => {
+                  const row = ctx.state.kv.get<{ spec?: { rdma?: { enabled?: unknown } } }>(
+                    '/xinas/v1/desired/NfsProfile/default',
+                  );
+                  return row?.value.spec?.rdma?.enabled === true;
+                },
+              },
+            }),
+          ],
+          subscribe: true,
+        }
+      : undefined;
 
   // /mcp is mounted ahead of the app-wide express.json(), so it needs its
   // own parser: the modern-era path (S14) has to read `method` and
@@ -138,6 +163,7 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
               ),
             },
             ...(ctx.mcpConfirmations !== undefined ? { confirmations: ctx.mcpConfirmations } : {}),
+            ...(resources !== undefined ? { resources } : {}),
           },
           correlationId,
         );

@@ -201,10 +201,12 @@ describe('mcp modern era — server/discover (S14)', () => {
       expect(typeof result.capabilities.extensions).toBe('object');
     }
 
-    // tools are served; resources/prompts are not implemented (ADR-0010)
-    // and must therefore not be advertised.
+    // tools are served; prompts are not implemented (ADR-0010) and must
+    // therefore not be advertised. resources ARE served on this server
+    // (S17: the journal is installed and mcp.subscriptions is enabled), and
+    // the flags must describe exactly what is implemented.
     expect(result.capabilities.tools).toBeDefined();
-    expect(result.capabilities.resources).toBeUndefined();
+    expect(result.capabilities.resources).toEqual({ subscribe: true, listChanged: false });
     expect(result.capabilities.prompts).toBeUndefined();
 
     // The claim is checked, not asserted: a tools capability must mean

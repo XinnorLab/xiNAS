@@ -202,6 +202,10 @@ export class TransitionEngine {
     return this.#deps.config;
   }
 
+  get controllerId(): string {
+    return this.#deps.controllerId;
+  }
+
   /** Whether `kind` has had a complete snapshot (as of the last commit). */
   baselineDone(kind: Kind): boolean {
     const cached = this.#baseline.get(kind);
