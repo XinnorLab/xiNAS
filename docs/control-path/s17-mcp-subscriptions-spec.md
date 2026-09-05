@@ -328,7 +328,7 @@ other method ever appears on the stream.
 `POST /mcp` (primary listener, the optional `config.mcp.http` listener, or
 the UNIX socket). After the §5.1 checks the handler answers
 `200` with headers `Content-Type: text/event-stream; charset=utf-8`,
-`Cache-Control: no-cache, no-transform`, `Connection: keep-alive`,
+`Cache-Control: no-cache, no-transform`, `Connection: close`,
 `X-Accel-Buffering: no` (V-09), `X-Correlation-ID: <server-minted>`, flushes
 the headers, and writes each message as
 
@@ -337,6 +337,11 @@ event: message
 data: <one-line JSON>
 
 ```
+
+`Connection: close` (found during implementation, Task 10): the stream owns
+its TCP connection, so a keep-alive client must not reuse the socket after
+the stream ends — a server that half-closes a reusable socket after the
+graceful result races the client's next request into a reset.
 
 The `Accept` header must list `text/event-stream` (the transport spec makes
 it mandatory for every POST); if it does not, the request is `406` with a

@@ -15,11 +15,13 @@ import {
   TransitionEngine,
 } from './engine.js';
 import { EventJournal } from './journal.js';
+import { InMemorySubscriptionMetrics, type SubscriptionMetrics } from './metrics.js';
 import { nfsProducer } from './producers/nfs.js';
 import { poolProducer, raidProducer } from './producers/raid.js';
 import { sessionsProducer } from './producers/sessions.js';
 import { storageProducer } from './producers/storage.js';
 import { systemProducer } from './producers/system.js';
+import type { SubscriptionRegistry } from './subscriptions.js';
 import type { Feed } from './types.js';
 
 /** Spec §10 defaults for the parts the engine reads (Task 7 derives them from config). */
@@ -52,6 +54,10 @@ export interface EventsContext {
   engineConfig: EngineConfig;
   /** The resolved `mcp.subscriptions` section (limits, retention, keep-alive…). */
   subscriptions: ResolvedSubscriptionsConfig;
+  /** S17 §12 instruments (in-memory until the S15 registry lands, D-17). */
+  metrics: SubscriptionMetrics;
+  /** The live listeners; installed by server.ts together with `notify`. */
+  registry?: SubscriptionRegistry;
   /**
    * Called after a transaction that added rows commits, with the feeds that
    * gained rows. The subscription registry (S17 §5.6) installs it; absent
@@ -81,6 +87,7 @@ export function createEventsContext(opts: {
   log?: EngineLog;
   taskLookup?: TaskLookup;
   producers?: Producer[];
+  metrics?: SubscriptionMetrics;
 }): EventsContext {
   const now = opts.now ?? Date.now;
   const subscriptions = opts.subscriptions ?? SUBSCRIPTIONS_DEFAULTS;
@@ -88,6 +95,7 @@ export function createEventsContext(opts: {
     ...engineConfigFrom(subscriptions),
     ...(opts.config ?? {}),
   };
+  const metrics = opts.metrics ?? new InMemorySubscriptionMetrics();
   const journal = new EventJournal(opts.db, { controllerId: opts.controllerId, now });
   const engine = new TransitionEngine(
     {
@@ -96,10 +104,20 @@ export function createEventsContext(opts: {
       controllerId: opts.controllerId,
       config: engineConfig,
       now,
+      onInserted: (e) => {
+        metrics.eventCreated(e.feed, e.severity);
+        const observedAt = e.details?.observedAt;
+        if (typeof observedAt === 'string') {
+          const delay = (Date.parse(e.detectedAt) - Date.parse(observedAt)) / 1000;
+          if (Number.isFinite(delay) && delay >= 0) {
+            metrics.detectionDelaySeconds(e.source.component, delay);
+          }
+        }
+      },
       ...(opts.taskLookup !== undefined ? { taskLookup: opts.taskLookup } : {}),
       ...(opts.log !== undefined ? { log: opts.log } : {}),
     },
     opts.producers ?? defaultProducers(),
   );
-  return { journal, engine, engineConfig, subscriptions };
+  return { journal, engine, engineConfig, subscriptions, metrics };
 }

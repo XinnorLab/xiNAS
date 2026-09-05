@@ -10,6 +10,8 @@ import type { ApiContext } from './context.js';
 import { type EventsContext, createEventsContext } from './events/context.js';
 import { createTaskLookup } from './events/engine.js';
 import { applyCollectorMap, emitAgentState } from './events/producers/system.js';
+import { RetentionSweeper } from './events/retention.js';
+import { SubscriptionRegistry } from './events/subscriptions.js';
 import { HeartbeatTracker, createAgentHealthProbe } from './heartbeat.js';
 import { startLeaseSweeper } from './lease-sweeper.js';
 import { loadObservedSchemas } from './observed-schemas.js';
@@ -76,6 +78,31 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
       console[level === 'error' ? 'error' : 'warn'](`[events] ${msg}`, fields ?? {});
     },
   });
+  // The live listeners + the post-commit wake-up hook (S17 §5.6, §7.2) and
+  // the bounded retention sweeper (§7.3). Installed even when
+  // mcp.subscriptions.enabled is false: the journal still records and
+  // GET /events still reads; only the MCP surface is withheld.
+  const registry = new SubscriptionRegistry({
+    config: events.subscriptions,
+    metrics: events.metrics,
+    audit: state.audit,
+  });
+  events.registry = registry;
+  events.notify = (feeds) => registry.notify(feeds);
+  const retention = new RetentionSweeper({
+    journal: events.journal,
+    policy: {
+      retentionDays: events.subscriptions.retention_days,
+      maxRows: events.subscriptions.max_rows,
+    },
+    intervalMs: events.subscriptions.cleanup_interval_s * 1000,
+    metrics: events.metrics,
+    log: (level, msg, fields) => {
+      // eslint-disable-next-line no-console
+      console[level](`[events] ${msg}`, fields ?? {});
+    },
+  });
+  retention.start();
 
   // S2 task engine: plan/apply/task engines over the shared SQLite handle,
   // plus an api→agent RPC client (when an agent socket is configured) the
@@ -264,6 +291,13 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
       tracker?.stop();
       // Stop the periodic lease sweep so no timer fires against a closing db.
       leaseSweeper.stop();
+      retention.stop();
+      // S17 §5.6: every open subscriptions/listen stream gets its graceful
+      // result before the listeners close; then drop idle keep-alive
+      // connections so server.close() does not wait for their timeout.
+      registry.closeAll('shutdown');
+      server.closeIdleConnections?.();
+      mcpServer?.closeIdleConnections?.();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });

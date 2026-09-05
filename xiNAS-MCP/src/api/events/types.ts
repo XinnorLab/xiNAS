@@ -15,6 +15,12 @@ export const FEED_URI_PREFIX = 'xinas://events/';
 export const FEED_MIME = 'application/vnd.xinas.events+json';
 
 export const feedUri = (feed: Feed): string => `${FEED_URI_PREFIX}${feed}`;
+/** The base (subscribable) feed of a URI, or null (query, fragment or unknown path). */
+export const feedOfBaseUri = (uri: string): Feed | null => {
+  if (!uri.startsWith(FEED_URI_PREFIX)) return null;
+  const rest = uri.slice(FEED_URI_PREFIX.length);
+  return (FEEDS as readonly string[]).includes(rest) ? (rest as Feed) : null;
+};
 export const isFeed = (v: unknown): v is Feed =>
   typeof v === 'string' && (FEEDS as readonly string[]).includes(v);
 

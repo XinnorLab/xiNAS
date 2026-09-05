@@ -28,7 +28,7 @@ import type { Kind } from '../../agent/collectors/base.js';
 import { type EventSpec, buildEvent } from './envelope.js';
 import type { EventJournal } from './journal.js';
 import { META_KEYS, MetaStore } from './meta.js';
-import type { Feed } from './types.js';
+import type { EventEnvelope, Feed } from './types.js';
 
 export type Row = Record<string, unknown>;
 
@@ -89,6 +89,8 @@ export interface EngineDeps {
   now: () => number;
   taskLookup?: TaskLookup;
   log?: EngineLog;
+  /** Called for every row actually written (metrics; never for a dedupe hit). */
+  onInserted?: (envelope: EventEnvelope) => void;
 }
 
 /** What a producer emits; the engine fills `detectedAtMs` and defaults `source`. */
@@ -345,6 +347,13 @@ export class TransitionEngine {
       return false;
     }
     const r = this.#deps.journal.insert(input, dedupeKey !== undefined ? { dedupeKey } : {});
+    if (!r.deduplicated) {
+      try {
+        this.#deps.onInserted?.(r.envelope);
+      } catch {
+        /* metrics are best-effort */
+      }
+    }
     return !r.deduplicated;
   }
 

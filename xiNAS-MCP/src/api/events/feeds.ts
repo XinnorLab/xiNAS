@@ -84,12 +84,26 @@ export interface FeedReadEnvelope {
   producers: ProducerFamilies;
 }
 
+export interface GapInfo {
+  feed: Feed;
+  requestedSequence: number;
+  oldestSequence: number | null;
+}
+
+/** Hooks `readFeed` calls (no request context). */
 export interface FeedReadHooks {
   /** Every read, with its outcome (metrics, spec §12). */
   onRead?(feed: Feed, outcome: 'ok' | 'gap' | 'invalid'): void;
   /** A read that returned `gap: true` (one audit row, spec §11). */
-  onGap?(info: { feed: Feed; requestedSequence: number; oldestSequence: number | null }): void;
+  onGap?(info: GapInfo): void;
   /** Lets the envelope report `nfs.rdma` as not configured. */
+  isRdmaConfigured?(): boolean;
+}
+
+/** Hooks the provider takes; `onGap` also learns who read (for the audit row). */
+export interface FeedProviderHooks {
+  onRead?(feed: Feed, outcome: 'ok' | 'gap' | 'invalid'): void;
+  onGap?(info: GapInfo, ctx: ReadCtx): void;
   isRdmaConfigured?(): boolean;
 }
 
@@ -182,15 +196,20 @@ export function readFeed(
 /** The `ResourceProvider` the modern handler registers for the feeds. */
 export function feedProvider(
   events: EventsContext,
-  deps: { now?: () => number; hooks?: FeedReadHooks } = {},
+  deps: { now?: () => number; hooks?: FeedProviderHooks } = {},
 ): ResourceProvider {
   const now = deps.now ?? Date.now;
+  const hooksFor = (ctx: ReadCtx): FeedReadHooks => ({
+    onRead: (feed, outcome) => deps.hooks?.onRead?.(feed, outcome),
+    onGap: (info) => deps.hooks?.onGap?.(info, ctx),
+    isRdmaConfigured: () => deps.hooks?.isRdmaConfigured?.() ?? true,
+  });
   return {
     list: () => feedResources(),
     templates: () => feedTemplates(),
     owns: (uri) => uri.startsWith('xinas://events/'),
     subscribable: (uri) => feedOfBaseUri(uri) !== null,
-    read(uri: string, _ctx: ReadCtx): ReadResourceResult {
+    read(uri: string, ctx: ReadCtx): ReadResourceResult {
       const parts = parseFeedUri(uri);
       const envelope = readFeed(
         events.journal,
@@ -204,7 +223,7 @@ export function feedProvider(
           limitDefault: events.subscriptions.read_limit_default,
           limitMax: events.subscriptions.read_limit_max,
           now,
-          ...(deps.hooks !== undefined ? { hooks: deps.hooks } : {}),
+          hooks: hooksFor(ctx),
         },
       );
       return {
