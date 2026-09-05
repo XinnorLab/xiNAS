@@ -6,6 +6,7 @@
  */
 
 import type { Database } from 'better-sqlite3';
+import { type ResolvedSubscriptionsConfig, SUBSCRIPTIONS_DEFAULTS } from '../config.js';
 import {
   type EngineConfig,
   type EngineLog,
@@ -35,10 +36,22 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   staleness_multiplier: 3,
 };
 
+/** The engine's view of the resolved `mcp.subscriptions` section (spec §10). */
+export function engineConfigFrom(r: ResolvedSubscriptionsConfig): EngineConfig {
+  return {
+    progress: { ...r.progress },
+    capacity: { ...r.capacity, per_filesystem: { ...r.capacity.per_filesystem } },
+    nfs_lock_threshold: { ...r.nfs_lock_threshold },
+    staleness_multiplier: DEFAULT_ENGINE_CONFIG.staleness_multiplier,
+  };
+}
+
 export interface EventsContext {
   journal: EventJournal;
   engine: TransitionEngine;
   engineConfig: EngineConfig;
+  /** The resolved `mcp.subscriptions` section (limits, retention, keep-alive…). */
+  subscriptions: ResolvedSubscriptionsConfig;
   /**
    * Called after a transaction that added rows commits, with the feeds that
    * gained rows. The subscription registry (S17 §5.6) installs it; absent
@@ -62,6 +75,7 @@ export function defaultProducers(): Producer[] {
 export function createEventsContext(opts: {
   db: Database;
   controllerId: string;
+  subscriptions?: ResolvedSubscriptionsConfig;
   config?: Partial<EngineConfig>;
   now?: () => number;
   log?: EngineLog;
@@ -69,7 +83,11 @@ export function createEventsContext(opts: {
   producers?: Producer[];
 }): EventsContext {
   const now = opts.now ?? Date.now;
-  const engineConfig: EngineConfig = { ...DEFAULT_ENGINE_CONFIG, ...(opts.config ?? {}) };
+  const subscriptions = opts.subscriptions ?? SUBSCRIPTIONS_DEFAULTS;
+  const engineConfig: EngineConfig = {
+    ...engineConfigFrom(subscriptions),
+    ...(opts.config ?? {}),
+  };
   const journal = new EventJournal(opts.db, { controllerId: opts.controllerId, now });
   const engine = new TransitionEngine(
     {
@@ -83,5 +101,5 @@ export function createEventsContext(opts: {
     },
     opts.producers ?? defaultProducers(),
   );
-  return { journal, engine, engineConfig };
+  return { journal, engine, engineConfig, subscriptions };
 }

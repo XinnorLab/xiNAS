@@ -5,7 +5,7 @@ import { type OpenedStateStore, openStateStore } from '../state/index.js';
 import { createAgentRpcClient } from './agent-client.js';
 import { createApp } from './app.js';
 import { seedInfrastructure } from './bootstrap.js';
-import { type ApiConfig, loadConfig } from './config.js';
+import { type ApiConfig, loadConfig, resolveSubscriptionsConfig } from './config.js';
 import type { ApiContext } from './context.js';
 import { type EventsContext, createEventsContext } from './events/context.js';
 import { createTaskLookup } from './events/engine.js';
@@ -69,6 +69,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   const events = createEventsContext({
     db: state.db,
     controllerId: config.controller_id,
+    subscriptions: resolveSubscriptionsConfig(config),
     taskLookup: createTaskLookup(state.db),
     log: (level, msg, fields) => {
       // eslint-disable-next-line no-console

@@ -99,6 +99,8 @@ export interface ApiConfig {
     allow_apply?: boolean;
     http?: { host: string; port: number };
     confirmation?: McpConfirmationConfig;
+    /** S17 §10 — operational controls for the event journal and subscriptions. */
+    subscriptions?: McpSubscriptionsConfig;
   };
   /**
    * S2.1 worker pool (s2-task-envelope-spec §5.3). `max_inflight` caps the
@@ -127,6 +129,7 @@ export function loadConfig(opts: { configPath?: string; inline?: ApiConfig } = {
   if (opts.inline) {
     validateTasksSection(opts.inline);
     validateMcpSection(opts.inline);
+    validateSubscriptionsSection(opts.inline);
     return opts.inline;
   }
   const path = opts.configPath ?? DEFAULT_PATH;
@@ -139,6 +142,7 @@ export function loadConfig(opts: { configPath?: string; inline?: ApiConfig } = {
   const config = JSON.parse(raw) as ApiConfig;
   validateTasksSection(config);
   validateMcpSection(config);
+  validateSubscriptionsSection(config);
 
   if (config.internalTokensPath && existsSync(config.internalTokensPath)) {
     const internalRaw = readFileSync(config.internalTokensPath, 'utf8');
@@ -252,5 +256,266 @@ function validateMcpSection(config: ApiConfig): void {
     console.warn(
       'mcp.confirmation.allow_uds_approval=true: break-glass — anyone with root or xinas-admin on this node (an agent included) can approve MCP confirmations; every use is audited as break_glass_used',
     );
+  }
+}
+
+// ── S17 §10: mcp.subscriptions ──────────────────────────────────────────
+
+export interface CapacityThresholds {
+  warning_enter: number;
+  warning_clear: number;
+  critical_enter: number;
+  critical_clear: number;
+}
+
+/** Every field optional; defaults in SUBSCRIPTIONS_DEFAULTS. */
+export interface McpSubscriptionsConfig {
+  enabled?: boolean;
+  retention_days?: number;
+  max_rows?: number;
+  cleanup_interval_s?: number;
+  read_limit_default?: number;
+  read_limit_max?: number;
+  max_uris_per_listen?: number;
+  max_listeners_per_principal?: number;
+  max_listeners_per_process?: number;
+  max_pending_per_stream?: number;
+  keepalive_ms?: number;
+  coalesce_ms?: number;
+  progress?: Partial<{ bucket_pct: number; min_interval_s: number; max_silence_s: number }>;
+  capacity?: Partial<CapacityThresholds> & {
+    per_filesystem?: Record<string, Partial<CapacityThresholds>>;
+  };
+  nfs_lock_threshold?: Partial<{ enter: number; clear: number }>;
+  /** A validated platform threshold; null keeps the temperature family inactive (D-10). */
+  disk_temperature_c?: number | null;
+}
+
+export interface ResolvedSubscriptionsConfig {
+  enabled: boolean;
+  retention_days: number;
+  max_rows: number;
+  cleanup_interval_s: number;
+  read_limit_default: number;
+  read_limit_max: number;
+  max_uris_per_listen: number;
+  max_listeners_per_principal: number;
+  max_listeners_per_process: number;
+  max_pending_per_stream: number;
+  keepalive_ms: number;
+  coalesce_ms: number;
+  progress: { bucket_pct: number; min_interval_s: number; max_silence_s: number };
+  capacity: CapacityThresholds & { per_filesystem: Record<string, Partial<CapacityThresholds>> };
+  nfs_lock_threshold: { enter: number; clear: number };
+  disk_temperature_c: number | null;
+}
+
+export const SUBSCRIPTIONS_DEFAULTS: ResolvedSubscriptionsConfig = {
+  enabled: true,
+  retention_days: 7,
+  max_rows: 100_000,
+  cleanup_interval_s: 3600,
+  read_limit_default: 100,
+  read_limit_max: 500,
+  max_uris_per_listen: 6,
+  max_listeners_per_principal: 4,
+  max_listeners_per_process: 32,
+  max_pending_per_stream: 256,
+  keepalive_ms: 15_000,
+  coalesce_ms: 250,
+  progress: { bucket_pct: 10, min_interval_s: 30, max_silence_s: 600 },
+  capacity: {
+    warning_enter: 80,
+    warning_clear: 75,
+    critical_enter: 90,
+    critical_clear: 85,
+    per_filesystem: {},
+  },
+  nfs_lock_threshold: { enter: 0, clear: 0 },
+  disk_temperature_c: null,
+};
+
+export function resolveSubscriptionsConfig(config: ApiConfig): ResolvedSubscriptionsConfig {
+  const c = config.mcp?.subscriptions ?? {};
+  const d = SUBSCRIPTIONS_DEFAULTS;
+  const { per_filesystem, ...capacityOverrides } = c.capacity ?? {};
+  return {
+    enabled: c.enabled ?? d.enabled,
+    retention_days: c.retention_days ?? d.retention_days,
+    max_rows: c.max_rows ?? d.max_rows,
+    cleanup_interval_s: c.cleanup_interval_s ?? d.cleanup_interval_s,
+    read_limit_default: c.read_limit_default ?? d.read_limit_default,
+    read_limit_max: c.read_limit_max ?? d.read_limit_max,
+    max_uris_per_listen: c.max_uris_per_listen ?? d.max_uris_per_listen,
+    max_listeners_per_principal: c.max_listeners_per_principal ?? d.max_listeners_per_principal,
+    max_listeners_per_process: c.max_listeners_per_process ?? d.max_listeners_per_process,
+    max_pending_per_stream: c.max_pending_per_stream ?? d.max_pending_per_stream,
+    keepalive_ms: c.keepalive_ms ?? d.keepalive_ms,
+    coalesce_ms: c.coalesce_ms ?? d.coalesce_ms,
+    progress: { ...d.progress, ...(c.progress ?? {}) },
+    capacity: {
+      warning_enter: capacityOverrides.warning_enter ?? d.capacity.warning_enter,
+      warning_clear: capacityOverrides.warning_clear ?? d.capacity.warning_clear,
+      critical_enter: capacityOverrides.critical_enter ?? d.capacity.critical_enter,
+      critical_clear: capacityOverrides.critical_clear ?? d.capacity.critical_clear,
+      per_filesystem: { ...(per_filesystem ?? {}) },
+    },
+    nfs_lock_threshold: { ...d.nfs_lock_threshold, ...(c.nfs_lock_threshold ?? {}) },
+    disk_temperature_c:
+      c.disk_temperature_c === undefined ? d.disk_temperature_c : c.disk_temperature_c,
+  };
+}
+
+function subsRange(name: string, value: unknown, min: number, max: number): void {
+  if (value === undefined) return;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new Error(
+      `mcp.subscriptions.${name} must be an integer in [${min}, ${max}], got ${JSON.stringify(value)}`,
+    );
+  }
+}
+
+const SUBS_KEYS = new Set<string>([
+  'enabled',
+  'retention_days',
+  'max_rows',
+  'cleanup_interval_s',
+  'read_limit_default',
+  'read_limit_max',
+  'max_uris_per_listen',
+  'max_listeners_per_principal',
+  'max_listeners_per_process',
+  'max_pending_per_stream',
+  'keepalive_ms',
+  'coalesce_ms',
+  'progress',
+  'capacity',
+  'nfs_lock_threshold',
+  'disk_temperature_c',
+]);
+const CAPACITY_KEYS = new Set<string>([
+  'warning_enter',
+  'warning_clear',
+  'critical_enter',
+  'critical_clear',
+]);
+
+function checkCapacityRules(prefix: string, t: CapacityThresholds): void {
+  if (t.warning_clear >= t.warning_enter)
+    throw new Error(`${prefix}: warning_clear must be < warning_enter`);
+  if (t.critical_clear >= t.critical_enter)
+    throw new Error(`${prefix}: critical_clear must be < critical_enter`);
+  if (t.critical_enter <= t.warning_enter)
+    throw new Error(`${prefix}: critical_enter must be > warning_enter`);
+}
+
+/** S17 §10 / SUBS-CONFIG-002: invalid bounds fail at load, before any listener exists. */
+function validateSubscriptionsSection(config: ApiConfig): void {
+  const c = config.mcp?.subscriptions;
+  if (c === undefined) return;
+  for (const key of Object.keys(c)) {
+    if (!SUBS_KEYS.has(key)) throw new Error(`mcp.subscriptions: unknown key ${key}`);
+  }
+  if (c.enabled !== undefined && typeof c.enabled !== 'boolean') {
+    throw new Error('mcp.subscriptions.enabled must be a boolean');
+  }
+  subsRange('retention_days', c.retention_days, 1, 30);
+  subsRange('max_rows', c.max_rows, 10_000, 1_000_000);
+  subsRange('cleanup_interval_s', c.cleanup_interval_s, 60, 86_400);
+  subsRange('read_limit_default', c.read_limit_default, 1, 500);
+  subsRange('read_limit_max', c.read_limit_max, 1, 500);
+  subsRange('max_uris_per_listen', c.max_uris_per_listen, 1, 6);
+  subsRange('max_listeners_per_principal', c.max_listeners_per_principal, 1, 64);
+  subsRange('max_listeners_per_process', c.max_listeners_per_process, 1, 1024);
+  subsRange('max_pending_per_stream', c.max_pending_per_stream, 16, 4096);
+  subsRange('keepalive_ms', c.keepalive_ms, 1000, 60_000);
+  subsRange('coalesce_ms', c.coalesce_ms, 0, 5000);
+  if (c.progress !== undefined) {
+    for (const key of Object.keys(c.progress)) {
+      if (!['bucket_pct', 'min_interval_s', 'max_silence_s'].includes(key)) {
+        throw new Error(`mcp.subscriptions.progress: unknown key ${key}`);
+      }
+    }
+    subsRange('progress.bucket_pct', c.progress.bucket_pct, 1, 50);
+    subsRange('progress.min_interval_s', c.progress.min_interval_s, 1, 3600);
+    subsRange('progress.max_silence_s', c.progress.max_silence_s, 1, 86_400);
+  }
+  if (c.capacity !== undefined) {
+    const { per_filesystem, ...rest } = c.capacity;
+    for (const key of Object.keys(rest)) {
+      if (!CAPACITY_KEYS.has(key))
+        throw new Error(`mcp.subscriptions.capacity: unknown key ${key}`);
+      subsRange(`capacity.${key}`, (rest as Record<string, unknown>)[key], 1, 100);
+    }
+    if (per_filesystem !== undefined) {
+      if (
+        typeof per_filesystem !== 'object' ||
+        per_filesystem === null ||
+        Array.isArray(per_filesystem)
+      ) {
+        throw new Error(
+          'mcp.subscriptions.capacity.per_filesystem must be an object keyed by mount unit',
+        );
+      }
+      for (const [fsId, o] of Object.entries(per_filesystem)) {
+        if (typeof o !== 'object' || o === null || Array.isArray(o)) {
+          throw new Error(`mcp.subscriptions.capacity.per_filesystem[${fsId}] must be an object`);
+        }
+        for (const key of Object.keys(o)) {
+          if (!CAPACITY_KEYS.has(key)) {
+            throw new Error(
+              `mcp.subscriptions.capacity.per_filesystem[${fsId}]: unknown key ${key}`,
+            );
+          }
+          subsRange(
+            `capacity.per_filesystem[${fsId}].${key}`,
+            (o as Record<string, unknown>)[key],
+            1,
+            100,
+          );
+        }
+      }
+    }
+  }
+  if (c.nfs_lock_threshold !== undefined) {
+    for (const key of Object.keys(c.nfs_lock_threshold)) {
+      if (key !== 'enter' && key !== 'clear') {
+        throw new Error(`mcp.subscriptions.nfs_lock_threshold: unknown key ${key}`);
+      }
+    }
+    subsRange('nfs_lock_threshold.enter', c.nfs_lock_threshold.enter, 0, 1_000_000);
+    subsRange('nfs_lock_threshold.clear', c.nfs_lock_threshold.clear, 0, 1_000_000);
+  }
+  if (c.disk_temperature_c !== undefined && c.disk_temperature_c !== null) {
+    if (
+      typeof c.disk_temperature_c !== 'number' ||
+      !Number.isInteger(c.disk_temperature_c) ||
+      c.disk_temperature_c < 1 ||
+      c.disk_temperature_c > 150
+    ) {
+      throw new Error(
+        'mcp.subscriptions.disk_temperature_c must be an integer in [1, 150] or null',
+      );
+    }
+  }
+
+  // Cross-field rules run over the RESOLVED values so a partial override is
+  // checked against the defaults it will actually run with.
+  const r = resolveSubscriptionsConfig(config);
+  if (r.read_limit_max < r.read_limit_default) {
+    throw new Error('mcp.subscriptions.read_limit_max must be >= read_limit_default');
+  }
+  if (r.progress.max_silence_s < r.progress.min_interval_s) {
+    throw new Error('mcp.subscriptions.progress.max_silence_s must be >= min_interval_s');
+  }
+  checkCapacityRules('mcp.subscriptions.capacity', r.capacity);
+  for (const [fsId, o] of Object.entries(r.capacity.per_filesystem)) {
+    checkCapacityRules(`mcp.subscriptions.capacity.per_filesystem[${fsId}]`, {
+      ...r.capacity,
+      ...o,
+    });
+  }
+  if (r.nfs_lock_threshold.enter > 0 && r.nfs_lock_threshold.clear >= r.nfs_lock_threshold.enter) {
+    throw new Error('mcp.subscriptions.nfs_lock_threshold: clear must be < enter when enabled');
   }
 }
