@@ -1263,7 +1263,15 @@ components:
         snapshot_before: { type: [string, "null"] }
         snapshot_after: { type: [string, "null"] }
         cancel_requested_at: { type: [string, "null"], format: date-time }
-        cancel_refused_reason: { type: [string, "null"] }
+        cancel_refused_reason:
+          type: [string, "null"]
+          description: |
+            Why an agent-side cancel was refused while the row stayed
+            `running`: `agent_not_found` (the executor has no such task
+            in flight) or `irreversible_stage_started` (S16 — the
+            operation passed its point of no return, e.g. `fs.create`
+            once `mkfs` began; the task finishes or fails on its own and
+            is never `cancelled`).
         error_code:
           description: |
             Set on non-success terminal failure states (`failed`,
@@ -1842,6 +1850,9 @@ components:
 
         - `lease_held` — a required resource lease is held by another task.
           `details.holder_task_id` names the holding task.
+        - `irreversible_stage_started` — a cancel arrived after the executor
+          passed its point of no return (S16); `details.stage` names the
+          stage. The task is not cancellable any more and finishes on its own.
         - `idempotency_key_reused` — the same `idempotency_key`+`principal`
           was reused for a different `input_hash`/`plan_hash`.
         - `plan_stale` — the observed snapshot the plan was computed against
@@ -2917,6 +2928,15 @@ paths:
       tags: [tasks]
       operationId: cancelTask
       summary: Request task cancellation (honored at safe checkpoints).
+      description: |
+        Cooperative (ADR-0012): a queued task is cancelled immediately; a
+        running task stops at its next safe stage boundary and rolls its
+        partial work back. `409 CONFLICT` reasons: `not_cancellable`
+        (terminal or plan-only), `dispatch_in_flight` (retry shortly),
+        `agent_not_found` (the executor has no such task), and
+        `irreversible_stage_started` (S16 — the executor passed its point
+        of no return, e.g. `fs.create` after `mkfs` began; `details.stage`
+        names it and the task completes on its own).
       responses:
         '200':
           description: OK

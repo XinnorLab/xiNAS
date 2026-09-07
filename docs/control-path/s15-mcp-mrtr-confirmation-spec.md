@@ -404,13 +404,28 @@ then creates a fresh record and the human decides again.
 
 ### 4.7 Relationship to the MCP Tasks extension
 
-xiNAS's asynchronous apply (`task_id` + `tasks.wait` + the `next` hint,
-S8 §3.1) is **not** the MCP Tasks extension and is not advertised as one
-(S14 §1). Should the extension be adopted later, the confirmation stays in
-the *ephemeral* MRTR workflow that SEP-2322 places **before** a persistent
-task exists: the approval is consumed exactly when the apply task row is
-inserted (§8.3), so a Tasks-extension `task` would be created at that
-same instant. Nothing in this spec assumes the extension.
+Amended 2026-09-04 (S16, `s16-mcp-tasks-spec.md` §8). The Tasks
+extension is now served on the modern path, and the sequencing contract
+between it and this confirmation is:
+
+1. **Every pre-execution MRTR exchange is resolved synchronously.** Each
+   unfinished round answers `resultType: "input_required"` — never
+   `resultType: "task"`, and never a task in `status: "input_required"`.
+2. **No task is created for a pending, declined, cancelled or expired
+   confirmation** (nor for a malformed state, a replay rejection or a
+   policy failure): those answer their `complete` tool errors and no
+   handle is invented.
+3. **The accepted confirmation is consumed in the same transaction that
+   creates the xiNAS apply task** (§8.3, S2 §17.2) — unchanged.
+4. **Only then**, and only when the *final retry* declared
+   `io.modelcontextprotocol/tasks` in its own `_meta`, does the
+   dispatcher project the committed row into a `CreateTaskResult`; a
+   retry without the declaration receives the S8 §3.1 `task_id` +
+   `tasks.wait` result.
+5. **Confirmation state and task state stay separate:** identifiers,
+   replay protection and rounds live in `mcp_confirmations`; the task
+   lives in `tasks`; the only link is `consumed_task_id`. S16 writes
+   neither table, and the record never stores capabilities (§4.8).
 
 ### 4.8 `_meta` handling
 

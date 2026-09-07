@@ -23,6 +23,20 @@ above.
 
 ### Added
 
+- **MCP Tasks extension (`io.modelcontextprotocol/tasks`, S16).** A
+  modern MCP client that declares the extension on an apply request now
+  receives a task handle (`resultType: "task"`, `taskId` = the xiNAS
+  `task_id`) instead of holding the call open, and follows the operation
+  with `tasks/get`, `tasks/update` and `tasks/cancel` — the handle
+  survives client and api restarts because it *is* the durable task. The
+  `fs.create` contract is corrected on the way: every filesystem create
+  plan is `rollback_model: unsupported` (so it is confirmed out-of-band
+  over MCP), and a cancel that arrives after `mkfs` started is refused
+  (`cancel_refused_reason: irreversible_stage_started`) instead of
+  reporting a formatted device as `cancelled`. Clients without the
+  extension keep the `task_id` + `tasks.wait` flow unchanged. See
+  `docs/control-path/s16-mcp-tasks-spec.md`.
+
 - **`install.sh` can install one named published release, so a release
   candidate can go onto a fresh host.** `XINAS_RELEASE_TAG=vX.Y.Z-rc.N`
   selects that release instead of `/releases/latest`, which GitHub defines

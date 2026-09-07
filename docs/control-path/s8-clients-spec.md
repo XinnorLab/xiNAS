@@ -314,6 +314,42 @@ to ask. Two things make that workable, both generated from
 tasks.wait"), generated from the flag rather than written into twenty
 description strings.
 
+### 3.2 Following a long operation with the MCP Tasks extension (S16, 2026-09-04)
+
+A modern client that declares `io.modelcontextprotocol/tasks` on its
+apply request receives a `CreateTaskResult` (`resultType: "task"`,
+`taskId === task_id`) instead of the §3.1 result, and follows the
+operation with the protocol methods. Client-side rules
+(`s16-mcp-tasks-spec.md`):
+
+- **Declare per request.** The capability is read from the request that
+  gets the handle — the *final* confirmation retry, not the first round.
+  Declaring it on one request and not the next is allowed and only
+  changes that response's shape; it never duplicates the apply.
+- **Persist `taskId`.** It is the durable xiNAS `task_id`; a reconnect or
+  client restart resumes with `tasks/get` on the same id. Do not re-apply
+  — an identical retry is idempotent, but there is no need for it.
+- **Honor `pollIntervalMs`.** 2 s normally, 5 s while `mkfs` runs; absent
+  on a terminal task. Faster polling gains nothing (the row changes only
+  on durable stage transitions).
+- **Read cancellation back.** `tasks/cancel` acknowledges the *request*;
+  a later `tasks/get` shows `working` (refused or still stopping),
+  `completed` (it finished first, or it passed a point of no return) or
+  `cancelled` (honored and unwound). Show the `statusMessage` — it says
+  when cancellation can no longer stop the operation.
+- **Terminal result.** `completed` carries the same public Task the REST
+  API returns (as `content[0].text` JSON) with `isError: true` for
+  `failed` / `requires_manual_recovery`; read `error_code`,
+  `error_message`, `remediation_hint` and the `residual` note from it.
+- **Transparent adapters.** A client that hides tasks from its caller
+  polls internally on the interval and returns only the final
+  `CallToolResult`; a client that surfaces tasks shows status and
+  message. Both are supported; neither changes server behavior.
+- **Fallback.** Without the declaration the §3.1 flow (`task_id` +
+  `tasks.wait`) is unchanged. No client is named a supported native
+  Tasks client until a captured run (`hardware-smoke-runbook.md` §5b)
+  proves it; until then Claude Code and Codex use the fallback.
+
 ## 4. The gate (T4)
 
 In the MCP dispatch layer (REST untouched):
@@ -344,6 +380,7 @@ rules are:
 | modern with `elicitation.url` | `destructive` / `unsupported_rollback` / rollback `unsupported` plans: an `input_required` result with a URL to the xiNAS approval page; a xiNAS operator (a *different* credential, or `xinasctl` on the node) approves there; the client's retry (`action: accept`) is consumed only if the record is `approved`, otherwise it waits up to 25 s, re-issues (max 3 rounds), or reports the operator's decline |
 | modern lacking the needed mode | JSON-RPC `-32021` (HTTP 400) naming the missing mode; no record, no task; the model is told to use REST / `xinasctl` / the TUI or a client with that capability. A destructive plan is never downgraded to a form |
 | legacy (`initialize` era) | tool error `MCP_CONFIRMATION_UNSUPPORTED` naming "MCP 2026-07-28 with elicitation" and the alternatives; reads / plan / `support.bundle` / `tasks.cancel` unchanged |
+| modern, confirmed, **with** `io.modelcontextprotocol/tasks` on the accepted retry (S16) | the apply task is returned as a `CreateTaskResult` handle (§3.2) instead of the `task_id` + `tasks.wait` result; the confirmation flow above is identical up to that point |
 
 **Risk → mode** (from the persisted plan document, never from the
 request): `non_disruptive`, `changing_access` → form; `destructive`,
@@ -602,6 +639,14 @@ web page, over REST, or with `xinasctl` (§4.1).
 9. **Legacy denial (S15):** the legacy SDK client's `mode: 'apply'` gets
    `MCP_CONFIRMATION_UNSUPPORTED`; its reads, plan, `support.bundle` and
    `tasks.cancel` are byte-for-byte unchanged from scenario 2–4.
+10. **Tasks-extension parity (S16):** the same `filesystems.create` apply
+    over REST answers 202 + Task, over MCP *without* the extension the
+    §3.1 result with the `tasks.wait` hint, and over MCP *with* it a
+    `CreateTaskResult` whose `taskId` equals the REST `task_id` of an
+    identical idempotent retry; `mkfs` blocked in the fake host keeps
+    the handle `working` across an api restart, a `tasks/cancel` during
+    `mkfs` is acknowledged but refused (`irreversible_stage_started`),
+    and the terminal `completed` result parses to the public Task.
 
 ## 8. Risks
 

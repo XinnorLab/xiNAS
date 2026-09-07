@@ -366,6 +366,53 @@ the transports above:
    an outage or a recovery. The xiRAID observation keeps the vendor's raw
    state words and the four separate progress values for this purpose.
 
+## Decision — MCP Tasks extension (S16, 2026-09-04)
+
+Recorded against `s16-mcp-tasks-requirements.md` (validation in
+`s16-mcp-tasks-spec.md` Appendix A). Layered on the modern era (S14) and
+behind the confirmation (S15):
+
+1. **The official `io.modelcontextprotocol/tasks` extension is served on
+   the modern (`2026-07-28`) path only.** The legacy era keeps its wire
+   shapes and never sees `resultType: "task"` or a `tasks/*` method.
+2. **The xiNAS Task stays the sole durable execution object.** An MCP
+   task is a projection of the `tasks` row — same engine, stages,
+   leases, idempotency, audit, reconcile and retention.
+3. **`CreateTaskResult.taskId` is `Task.task_id`.** No alias table, no
+   client-scoped id, no in-memory job object, no second state machine.
+4. **The server decides whether an eligible `tools/call` returns a
+   task.** Eligibility is catalog metadata (`creates_task`) plus
+   `mode: "apply"` for plan/apply entries; an eligible call from a
+   client that declared the extension on *that* request always gets the
+   handle, whatever the task's state.
+5. **A request without the extension receives today's asynchronous
+   result** — the REST Task envelope with `task_id` and the `tasks.wait`
+   `next` hint — byte-identical to before S16.
+6. **S15 confirmation is synchronous and precedes task creation.** Every
+   MRTR round answers `input_required`; only the accepted retry reaches
+   the apply transaction that consumes the record and inserts the task;
+   the handle is projected from the committed row.
+7. **`tasks/get`, `tasks/update` and `tasks/cancel` are protocol
+   methods; `tasks.get`, `tasks.wait`, `tasks.list` and `tasks.cancel`
+   remain ordinary catalog tools** under their existing RBAC.
+8. **No MCP `tasks/list` (or `tasks/result`) exists** — both are absent
+   from SEP-2663, and listing would weaken the per-principal scoping.
+9. **Extension task access is bound to the authenticated xiNAS
+   principal:** only `Task.principal` may get, update or cancel through
+   the extension; every other case — unknown, pruned, `plan_only`,
+   `imported`, another principal, insufficient role for cancel — is one
+   generic `-32602 task not found or expired`.
+
+Two safety corrections travel with it (`s16-mcp-tasks-spec.md` §9):
+`fs.create` is `rollback_model: unsupported` on every plan (so every
+filesystem create over MCP is confirmed out-of-band), and the agent
+runner refuses cancellation once the `mkfs` stage has started
+(`cancel_refused_reason: irreversible_stage_started`) — a formatted
+device can never be reported `cancelled`. ADR-0007 and ADR-0012 carry
+the matching amendments.
+
+## Security
+
 - The api gains NO privilege: every mutator still flows
   plan → apply → task → agent. The only adapter exception is the
   read-only localhost gRPC client (explicitly deprecated above).
