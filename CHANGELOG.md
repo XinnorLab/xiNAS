@@ -8,6 +8,19 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
+## [3.13.2] - 2026-09-07
+
+Requires-Rebuild: doca_ofed
+
+Hotfix on 3.13.1, cherry-picked from `release/3.14` across eleven release
+candidates: DOCA-Host installs from a pinned release directory so NVIDIA
+moving its `latest` alias no longer breaks installed hosts, the installer
+never purges xiRAID on a run that will not reinstall it, a rebuilt NVMe
+namespace is found by controller serial + NSID instead of its `nvmeXnY`
+name, and the wizard offers a previous install's filesystem back before
+it offers to destroy it. The `doca_ofed` role changed, hence the trailer
+above.
+
 ### Added
 
 - **`install.sh` can install one named published release, so a release
@@ -44,7 +57,35 @@ supported source for installing and updating xiNAS.
   keep depend on. `1` now means only "rebuild from scratch"; every question
   after `Reuse Arrays? → Yes` returns `2`, which goes back to the menu.
 
+- **A direct root login is told that root SSH password access closes.**
+  `install.sh` writes `/etc/ssh/sshd_config.d/10-xinas-root-access.conf`
+  with `PermitRootLogin prohibit-password`; sshd keeps the first value it
+  reads and drop-ins come first, so that file also overrides a
+  `PermitRootLogin yes` in the main config, and a host where root password
+  login was enabled on purpose lost it silently. The installer now
+  announces the change before the drop-in lands, to a run started as root
+  itself (empty `SUDO_USER`): it names the setting, says whether
+  `/root/.ssh/authorized_keys` already holds a key and gives the
+  `ssh-copy-id` command when it does not, and points at the file to revert.
+  Console access and sudo-capable accounts are unaffected. Informational
+  only: no prompt, no change to the exit status.
+
 ### Fixed
+
+- **Pressing Down at the setup menu no longer exits the installer.**
+  `_menu_read_key` in `lib/menu_lib.sh` read exactly two bytes after an
+  `ESC` and recognised only the CSI encoding of the arrow keys
+  (`ESC [ B`); every other sequence fell into a catch-all that answered
+  `ESC`, which every dialog treats as Cancel and the top-level menu turns
+  into `exit 2`. A Down key sent as SS3 (`ESC O B`, application cursor-key
+  mode, which full-screen programs, multiplexers and some terminals leave
+  switched on) or any longer sequence (PgDn, Home, End, F-keys,
+  Ctrl-arrows) ended the session with the "Setup exited — xiNAS was not
+  provisioned" notice and no diagnostic. The reader now collects the whole
+  escape sequence, maps the cursor keys in both encodings, ignores any
+  other complete sequence, and answers `ESC` only for an Escape followed
+  by nothing within 0.25 s. `client_repo/lib/menu_lib.sh` carries the
+  identical change. See `docs/Installer/spec.md` §2.6.
 
 - **DOCA-Host installs from a pinned release directory, so NVIDIA moving
   its `latest` alias no longer breaks every installed host.** The
