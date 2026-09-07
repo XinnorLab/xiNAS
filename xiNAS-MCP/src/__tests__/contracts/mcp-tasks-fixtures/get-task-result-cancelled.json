@@ -1,0 +1,9 @@
+{
+  "resultType": "complete",
+  "taskId": "0192c5f6-0000-7000-8000-000000000001",
+  "status": "cancelled",
+  "statusMessage": "fs.create: cancelled at a safe point after 3s; partial work rolled back",
+  "createdAt": "2026-09-04T19:40:00.000Z",
+  "lastUpdatedAt": "2026-09-04T19:40:03.000Z",
+  "ttlMs": 2592003000
+}

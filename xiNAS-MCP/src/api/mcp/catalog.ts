@@ -45,6 +45,14 @@ export interface CatalogEntry {
    */
   returns_async_task?: boolean;
   /**
+   * S16: this call CREATES (or idempotently replays) the durable xiNAS Task
+   * its success body describes — the operation the handle would represent.
+   * Distinct from `returns_async_task`: `tasks.cancel` returns a Task
+   * envelope but represents nothing new, and must never yield a task
+   * handle (cancelling one task cannot create another).
+   */
+  creates_task?: boolean;
+  /**
    * S15: the engine kinds this plan_apply entry's route can produce (most
    * list one; filesystems.update lists four). The confirmation service
    * requires the plan document's kind to be listed here — a plan_id cannot
@@ -150,6 +158,7 @@ const planApply = (
   min_role: minRole,
   status: 'live',
   returns_async_task: true,
+  creates_task: true,
   operation_kinds: operationKinds,
   ...over,
 });
@@ -393,7 +402,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     name: 'tasks.cancel',
     description:
-      'Request cooperative task cancellation (S10, ADR-0012). Queued tasks cancel immediately; running tasks stop at the next stage boundary AND roll back their partial work (cancelled = nothing changed, best-effort) — a cancel after the last stage completed is ignored and the task finishes success. Allowed via MCP without allow_apply — an emergency stop cannot apply new state (ADR-0010).',
+      "Request cooperative task cancellation (S10, ADR-0012). Queued tasks cancel immediately; running tasks stop at the next stage boundary AND roll back their partial work (cancelled = nothing changed, best-effort) — a cancel after the last stage completed is ignored and the task finishes success. Allowed via MCP without allow_apply — an emergency stop cannot apply new state (ADR-0010). A cancel arriving after the operation's point of no return (e.g. fs.create once mkfs began) is refused with CONFLICT irreversible_stage_started and the task finishes on its own (S16).",
     method: 'POST',
     path: '/tasks/{id}/cancel',
     input_schema: idInput('id', 'task id'),
@@ -417,6 +426,7 @@ export const CATALOG: CatalogEntry[] = [
     min_role: 'operator',
     status: 'live',
     returns_async_task: true,
+    creates_task: true,
   },
   read(
     'support.download',

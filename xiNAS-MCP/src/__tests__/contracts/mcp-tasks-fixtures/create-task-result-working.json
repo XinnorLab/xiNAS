@@ -1,0 +1,10 @@
+{
+  "resultType": "task",
+  "taskId": "0192c5f6-0000-7000-8000-000000000001",
+  "status": "working",
+  "statusMessage": "fs.create: queued, waiting for an executor slot; elapsed 0s",
+  "createdAt": "2026-09-04T19:40:00.000Z",
+  "lastUpdatedAt": "2026-09-04T19:40:00.000Z",
+  "ttlMs": null,
+  "pollIntervalMs": 2000
+}

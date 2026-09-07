@@ -49,7 +49,31 @@ export const errorResult = (code: string, message: string, details?: unknown): T
 });
 
 export function isInputRequired(
-  r: ToolResult | InputRequiredToolResult,
+  r: ToolResult | InputRequiredToolResult | CreateTaskToolResult,
 ): r is InputRequiredToolResult {
   return (r as InputRequiredToolResult).resultType === 'input_required';
+}
+
+/** S16 §5.1: the flat extension Task returned in place of a CallToolResult. */
+export interface CreateTaskToolResult {
+  resultType: 'task';
+  taskId: string;
+  status: 'working' | 'completed' | 'cancelled';
+  statusMessage?: string;
+  createdAt: string;
+  lastUpdatedAt: string;
+  ttlMs: number | null;
+  pollIntervalMs?: number;
+  /**
+   * Review F2: carries REST envelope warnings (e.g. EXECUTOR_DEGRADED) that
+   * would otherwise be dropped on the task-handle path — the zod
+   * `CreateTaskResultSchema` already permits `_meta` via `TaskFields`.
+   */
+  _meta?: Record<string, unknown>;
+}
+
+export function isCreateTaskResult(
+  r: ToolResult | InputRequiredToolResult | CreateTaskToolResult,
+): r is CreateTaskToolResult {
+  return (r as CreateTaskToolResult).resultType === 'task';
 }

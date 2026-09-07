@@ -249,6 +249,14 @@ export interface MockAgentServer {
   respondToTaskBegin(reply: MockTaskBeginReply): void;
   taskBeginCallCount(): number;
   lastTaskBeginParams(): Record<string, unknown> | undefined;
+  /**
+   * Set the payload the mock agent returns for subsequent `task.cancel` RPCs
+   * (S16 §9.2/§10.1 conformance, mcp-tasks.test.ts): default
+   * `{ cancel_requested: true }`. Pass e.g.
+   * `{ cancel_requested: false, reason: 'irreversible_stage_started', stage: 'mkfs' }`
+   * to exercise the refusal path.
+   */
+  respondToTaskCancel(reply: Record<string, unknown>): void;
   /** Closes the UDS listener, destroying any live connections first (idempotent). */
   close(): Promise<void>;
 }
@@ -266,6 +274,8 @@ export async function startMockAgentServer(socketPath: string): Promise<MockAgen
   let taskBeginReply: MockTaskBeginReply = { kind: 'accept' };
   let taskBeginCalls = 0;
   let lastTaskBeginParams: Record<string, unknown> | undefined;
+  // S16 §9.2/§10.1: the mock agent's `task.cancel` answer — default accepts.
+  let taskCancelReply: Record<string, unknown> = { cancel_requested: true };
   // Track live server-side connections so close() can force-destroy them; a
   // half-open UDS conn the client destroyed keeps server.close() from resolving.
   const agentConns = new Set<Socket>();
@@ -318,6 +328,10 @@ export async function startMockAgentServer(socketPath: string): Promise<MockAgen
               })}\n`,
             );
           }
+        } else if (req.method === 'task.cancel') {
+          conn.write(`${JSON.stringify({ jsonrpc: '2.0', id, result: taskCancelReply })}\n`);
+        } else if (req.method === 'task.list_inflight') {
+          conn.write(`${JSON.stringify({ jsonrpc: '2.0', id, result: { tasks: [] } })}\n`);
         } else {
           conn.write(
             `${JSON.stringify({
@@ -349,6 +363,9 @@ export async function startMockAgentServer(socketPath: string): Promise<MockAgen
     },
     lastTaskBeginParams() {
       return lastTaskBeginParams;
+    },
+    respondToTaskCancel(reply) {
+      taskCancelReply = reply;
     },
     async close() {
       if (agentServer) {

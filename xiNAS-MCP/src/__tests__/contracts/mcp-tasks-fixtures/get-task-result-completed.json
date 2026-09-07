@@ -1,0 +1,17 @@
+{
+  "resultType": "complete",
+  "taskId": "0192c5f6-0000-7000-8000-000000000001",
+  "status": "completed",
+  "statusMessage": "fs.create: succeeded in 4m 12s",
+  "createdAt": "2026-09-04T19:40:00.000Z",
+  "lastUpdatedAt": "2026-09-04T19:44:12.000Z",
+  "ttlMs": 2592252000,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"path\":\"/srv/data\",\"sizeBytes\":107374182400}"
+      }
+    ]
+  }
+}
