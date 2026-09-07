@@ -3,7 +3,7 @@ import { createGzip } from 'node:zlib';
 import { dirname, join } from 'node:path';
 import type { Database, Statement } from 'better-sqlite3';
 import { LeaseManager } from './leases.js';
-import { TERMINAL_CONFIRMATION_STATUSES } from '../api/mcp/confirmation/types.js';
+import { TERMINAL_CONFIRMATION_STATUSES } from './confirmation-statuses.js';
 
 export interface GcOptions {
   taskRetentionDays?: number; // default 30

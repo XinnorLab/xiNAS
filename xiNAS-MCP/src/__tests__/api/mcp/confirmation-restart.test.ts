@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../../../api/server.js';
 import { ACK_NO_ROLLBACK } from '../../../api/mcp/confirmation/types.js';
 import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpers.js';
@@ -52,19 +52,26 @@ import {
  *    record between `verifyRetryState`'s read and a `reissue`/`decline` —
  *    a genuine race, not a sequential "changed key" retry — so this suite
  *    asserts the actually-reachable `-32602`.
- *  - Case 4's "the retry gets CONFIRMATION_EXPIRED": `requestState` embeds
- *    the record's `expires_at` verbatim at mint time (`elicitation()`,
- *    `exp: record.expires_at`), and `retry()` requires
- *    `payload.exp === record.expires_at` before it ever reads
- *    `record.status`. The brief's own repro tampers `expires_at` directly
- *    via better-sqlite3 to force the sweep to find an overdue row without
- *    waiting out the real TTL — but that same tamper makes the OLD
- *    requestState's embedded `exp` stop matching the row, so the retry is
- *    refused at the binding-mismatch gate (`-32602`) before it can reach
- *    the status-based `CONFIRMATION_EXPIRED` branch. This is asserted
- *    directly below; the "record is provably expired, the audit trail
- *    says so" half of the brief's intent is the assertions on the
- *    row/audit right after restart, above the retry.
+ *  - Case 4 (S15 fix round 1, F1): the ORIGINAL version of this case forced
+ *    an overdue row by `UPDATE mcp_confirmations SET expires_at = now - 1`
+ *    directly on the closed db — but `requestState` embeds the record's
+ *    `expires_at` verbatim at mint time (`elicitation()`, `exp:
+ *    record.expires_at`), and `retry()` requires `payload.exp ===
+ *    record.expires_at` before it ever reads `record.status`. Tampering the
+ *    row made the OLD requestState's embedded `exp` stop matching it, so
+ *    the retry was refused at the binding-mismatch gate (`-32602`) before
+ *    it could ever reach the status-based `CONFIRMATION_EXPIRED` branch —
+ *    a real path, but not the one the case's own name promised. The case
+ *    below instead advances a FAKED `Date` (`vi.useFakeTimers({ toFake:
+ *    ['Date'] })` — timers/sockets/supertest stay real) past the
+ *    naturally-computed TTL between the two boots and never touches the
+ *    row: `requestState` still binds cleanly, so `retry()` reaches
+ *    `record.status === 'expired'` and answers the tool error
+ *    `CONFIRMATION_EXPIRED`. The original tamper-based repro is kept right
+ *    after it, renamed to what it actually proves: a directly corrupted
+ *    `expires_at` is refused as a binding mismatch, not treated as an
+ *    expiry — a real scenario (a bad migration, a manual DB edit), just
+ *    not the TTL-sweep one.
  */
 
 const CONTROLLER_ID = '00000000-0000-0000-0000-0000000000d1';
@@ -362,8 +369,104 @@ describe('MCP MRTR confirmation expiry sweep — restart recovery (S15 Task 14)'
     await handle.close();
   });
 
-  it('restart past expires_at expires the record with reason restart_sweep and audits it', async () => {
+  it('restart past a naturally-elapsed TTL expires the record with reason restart_sweep, audits it, and the retry gets CONFIRMATION_EXPIRED', async () => {
     const boot = await setupBoot('xinas-mcp-restart-4-');
+    cleanups.push(() => teardownBoot(boot));
+
+    // Matches setupBoot's mcp.confirmation.ttl_seconds: 60.
+    const ttlMs = 60_000;
+
+    // Date only — timers, sockets, and supertest stay real; nothing here
+    // relies on setInterval/setTimeout firing on a mocked clock.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let handle = await startServer({ configPath: boot.configPath });
+      const port = (handle.address as AddressInfo).port;
+      seedShare(handle.state, 'share-a');
+
+      const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
+      const idem = nextId('ik');
+      const args = {
+        id: 'share-a',
+        mode: 'apply',
+        plan_id,
+        expected_revision,
+        idempotency_key: idem,
+      };
+
+      const first = await call(port, 'tok-admin', nextId('call'), 'shares.update', args);
+      const r1 = toolResultOf(first);
+      expect(r1.resultType).toBe('input_required');
+      const requestState = r1.requestState;
+
+      const before = handle.state.db
+        .prepare(
+          'SELECT confirmation_id, status, expires_at FROM mcp_confirmations WHERE plan_id = ?',
+        )
+        .get(plan_id) as { confirmation_id: string; status: string; expires_at: number };
+      expect(before.status).toBe('pending');
+
+      await handle.close();
+
+      // Advance the FAKE clock past the record's real TTL. The row itself
+      // is never touched — only Date.now() moves — so requestState's
+      // embedded `exp` still matches record.expires_at on the retry below.
+      vi.setSystemTime(Date.now() + ttlMs + 1_000);
+
+      handle = await startServer({ configPath: boot.configPath });
+      const port2 = (handle.address as AddressInfo).port;
+
+      const swept = handle.state.db
+        .prepare(
+          'SELECT status, expired_reason, expires_at FROM mcp_confirmations WHERE confirmation_id = ?',
+        )
+        .get(before.confirmation_id) as {
+        status: string;
+        expired_reason: string;
+        expires_at: number;
+      };
+      expect(swept.status).toBe('expired');
+      expect(swept.expired_reason).toBe('restart_sweep');
+      expect(swept.expires_at).toBe(before.expires_at); // row untouched — only the clock moved
+
+      await handle.state.drainer.drainNow();
+      const rows = auditRows(boot.dir);
+      const expiredRow = rows.find(
+        (r) =>
+          r.kind === 'mcp.confirmation.expired' &&
+          r.payload?.confirmation_id === before.confirmation_id,
+      );
+      expect(expiredRow).toBeDefined();
+      expect(expiredRow?.payload?.reason).toBe('restart_sweep');
+
+      // The retry: SAME requestState, row untouched — the binding
+      // cross-check passes, so retry() reaches record.status === 'expired'
+      // and answers the TOOL error (not a JSON-RPC error).
+      const retried = await call(port2, 'tok-admin', nextId('call'), 'shares.update', args, {
+        requestState,
+        inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+      });
+      expect(toolResultOf(retried).isError).toBe(true);
+      const payload = payloadOf(retried);
+      expect(payload.error?.code).toBe('CONFIRMATION_EXPIRED');
+      expect(
+        (payload.error?.details as { expired_reason?: string } | undefined)?.expired_reason,
+      ).toBe('restart_sweep');
+      const taskCount = (
+        handle.state.db
+          .prepare('SELECT COUNT(*) AS n FROM tasks WHERE plan_id = ?')
+          .get(plan_id) as { n: number }
+      ).n;
+      expect(taskCount).toBe(0);
+
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a directly corrupted expires_at survives restart as a binding mismatch, not CONFIRMATION_EXPIRED', async () => {
+    const boot = await setupBoot('xinas-mcp-restart-4b-');
     cleanups.push(() => teardownBoot(boot));
 
     let handle = await startServer({ configPath: boot.configPath });
@@ -392,10 +495,12 @@ describe('MCP MRTR confirmation expiry sweep — restart recovery (S15 Task 14)'
 
     await handle.close();
 
-    // Simulate the record having outlived its TTL by the time of restart
-    // (ttl_seconds: 60 would otherwise take a real minute to elapse) —
-    // the brief's own repro: UPDATE the row directly on the closed db
-    // file via a fresh better-sqlite3 handle.
+    // Directly corrupt expires_at on the closed db file via a fresh
+    // better-sqlite3 handle (e.g. simulating a bad migration or a manual
+    // DB edit) — a DIFFERENT scenario from a naturally-elapsed TTL: this
+    // also desynchronizes the OLD requestState's embedded `exp` from the
+    // row, so the retry is refused as a binding mismatch, not routed
+    // through the status-based expiry path. See the file header.
     const raw = new Database(join(boot.dir, 'x.db'));
     raw
       .prepare('UPDATE mcp_confirmations SET expires_at = ? WHERE confirmation_id = ?')
@@ -411,21 +516,10 @@ describe('MCP MRTR confirmation expiry sweep — restart recovery (S15 Task 14)'
     expect(swept.status).toBe('expired');
     expect(swept.expired_reason).toBe('restart_sweep');
 
-    await handle.state.drainer.drainNow();
-    const rows = auditRows(boot.dir);
-    const expiredRow = rows.find(
-      (r) =>
-        r.kind === 'mcp.confirmation.expired' &&
-        r.payload?.confirmation_id === before.confirmation_id,
-    );
-    expect(expiredRow).toBeDefined();
-    expect(expiredRow?.payload?.reason).toBe('restart_sweep');
-
     // The retry: the OLD requestState's embedded `exp` was minted against
     // the ORIGINAL expires_at, which the tamper above just changed — so
     // retry()'s binding cross-check (payload.exp !== record.expires_at)
-    // refuses it as a mismatch before it ever reads record.status. See
-    // the file header for the full rationale.
+    // refuses it as a mismatch before it ever reads record.status.
     const retried = await call(port2, 'tok-admin', nextId('call'), 'shares.update', args, {
       requestState,
       inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
