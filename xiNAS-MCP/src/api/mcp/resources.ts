@@ -41,7 +41,7 @@ export interface ReadCtx {
 
 export interface ReadResourceResult {
   resultType: 'complete';
-  contents: Array<{ uri: string; mimeType: string; text: string }>;
+  contents: Array<{ uri: string; mimeType: string; text: string; _meta?: Record<string, unknown> }>;
   ttlMs: 0;
   cacheScope: 'private';
 }

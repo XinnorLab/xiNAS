@@ -9,6 +9,58 @@ import {
 } from '../handlers/reads.js';
 import { degradedCollectorWarnings } from '../handlers/collector-health.js';
 import type { ApiContext } from '../context.js';
+import {
+  BLOCK_SIZES,
+  GROUP_SIZE_MAX,
+  GROUP_SIZE_MIN,
+  LEVELS,
+  LEVEL_CONSTRAINTS,
+  STRIP_SIZES_KIB,
+  SYND_CNT_MAX,
+  SYND_CNT_MIN,
+} from '../../lib/xiraid/schema.js';
+import { RAID_CREATE_APP_URI } from '../mcp/apps.js';
+
+/** S18: server-owned wizard constraints; generated from the validator tables. */
+export function raidCreateAppConfig(): Record<string, unknown> {
+  return {
+    app: 'raid_create',
+    resource_uri: RAID_CREATE_APP_URI,
+    levels: [...LEVELS],
+    constraints: Object.fromEntries(
+      LEVELS.map((level) => {
+        const rule = LEVEL_CONSTRAINTS[level];
+        return [
+          level,
+          {
+            min_drives: rule.minDrives,
+            even_members: rule.evenMembers === true,
+            needs_group_size: rule.needsGroupSize,
+            group_size_min: rule.groupSizeMin ?? GROUP_SIZE_MIN,
+            group_size_max: GROUP_SIZE_MAX,
+            needs_synd_cnt: rule.needsSyndCnt,
+            synd_cnt_min: SYND_CNT_MIN,
+            synd_cnt_max: SYND_CNT_MAX,
+          },
+        ];
+      }),
+    ),
+    strip_sizes_kib: [...STRIP_SIZES_KIB],
+    block_sizes: [...BLOCK_SIZES],
+    defaults: { level: 'raid6', strip_size_kib: 128, block_size: 4096 },
+    name: {
+      pattern: '^[A-Za-z0-9_]{1,28}$',
+      reserved: ['power', 'uevent'],
+    },
+    tools: {
+      disks: 'disks.list',
+      arrays: 'arrays.list',
+      pools: 'pools.list',
+      create: 'arrays.create',
+      task_wait: 'tasks.wait',
+    },
+  };
+}
 
 /**
  * Parse a boolean query param. Accepts the strings "true" / "false"
@@ -31,6 +83,13 @@ function parseBoolQuery(raw: unknown, name: string): boolean | undefined {
 
 export function storageRouter(ctx: ApiContext): Router {
   const r = Router();
+
+  // S18: read-only bootstrap for the MCP RAID Create App. Inventory is read
+  // through the ordinary tools so the View sees the same RBAC/audit surface
+  // as every other client. This endpoint exposes only canonical constraints.
+  r.get('/mcp/apps/raid-create', (req, res) => {
+    sendOk(req, res, raidCreateAppConfig());
+  });
 
   r.get('/disks', (req, res) => {
     const rows = listByPrefix<Record<string, unknown>>(ctx.state, '/xinas/v1/observed/Disk/');

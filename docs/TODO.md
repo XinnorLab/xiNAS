@@ -763,3 +763,24 @@ implementation that tests assert against; nothing renders it.
 **Why it was cut.** `lib/metrics.ts` / `GET /api/v1/metrics` are S15 Task
 13, unlanded on the S17 base. **Done** = a `RegistryMetrics` adapter
 registering the same names on the S15 registry.
+
+## MCP — the S18 RAID Create view does not consume the S17 feeds
+
+*Spec: [docs/control-path/s18-mcp-raid-create-app-spec.md](control-path/s18-mcp-raid-create-app-spec.md) §8; S17 spec §16.*
+
+**What is missing.** Live progress inside the view for the array-create task
+it just applied — the `xinas://events/raid/progress` feed carries exactly
+that.
+
+**What the code does instead.** The view follows the `tasks.wait` next hint
+through the host, as every non-App client does.
+
+**Why it was cut.** MCP Apps hosts (specification 2026-01-26) relay tool
+calls and their results to a view; none relays a `subscriptions/listen`
+stream, so a view has no channel on which `notifications/resources/updated`
+could arrive. Building a polling loop over `resources/read` inside the view
+would duplicate what the host already does with the hint.
+
+**What done looks like.** A host that relays subscription notifications to
+views (or an MCP Apps revision that gives a view its own listen), after which
+the view reads `raid/progress` after its cursor and drops the hint loop.

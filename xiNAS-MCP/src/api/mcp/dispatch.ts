@@ -19,8 +19,22 @@
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolRequestSchema,
+  ErrorCode,
+  ListResourcesRequestSchema,
+  ListToolsRequestSchema,
+  McpError,
+  ReadResourceRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import { CATALOG, type CatalogEntry } from './catalog.js';
+import {
+  MCP_UI_EXTENSION,
+  RAID_CREATE_APP_URI,
+  listAppResources,
+  mcpUiExtensionCapability,
+  readAppResource,
+} from './apps.js';
 import type { McpClientInfo, ConfirmationService } from './confirmation/service.js';
 import { isConfirmable, type MrtrParams } from './confirmation/policy.js';
 import { SERVER_INFO } from './discover.js';
@@ -119,6 +133,7 @@ export interface McpTool {
   name: string;
   description: string;
   inputSchema: { type: 'object'; [k: string]: unknown };
+  _meta?: { ui: { resourceUri: string; visibility?: Array<'model' | 'app'> } };
 }
 
 /** Apply-gate verdict for one call (exported for unit tests). */
@@ -218,6 +233,7 @@ export function listTools(): McpTool[] {
         (e.status === 'degraded' ? `${e.description} [DEGRADED backend]` : e.description) +
         asyncClause,
       inputSchema: e.input_schema as { type: 'object'; [k: string]: unknown },
+      ...(e.ui !== undefined ? { _meta: { ui: { ...e.ui } } } : {}),
     };
   });
 }
@@ -339,9 +355,30 @@ export async function callTool(
 
 /** The legacy-era SDK server: a thin wiring of listTools/callTool. */
 export function buildMcpServer(opts: DispatcherOptions): Server {
-  const server = new Server({ ...SERVER_INFO }, { capabilities: { tools: {} } });
+  const server = new Server(
+    { ...SERVER_INFO },
+    {
+      capabilities: {
+        tools: {},
+        resources: {},
+        extensions: { [MCP_UI_EXTENSION]: mcpUiExtensionCapability() },
+      },
+    },
+  );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listTools() }));
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: listAppResources(),
+  }));
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    if (request.params.uri !== RAID_CREATE_APP_URI) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `unknown MCP App resource: ${request.params.uri}`,
+      );
+    }
+    return readAppResource(request.params.uri);
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const r = await callTool(

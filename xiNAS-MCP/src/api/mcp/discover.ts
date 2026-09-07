@@ -17,6 +17,7 @@
  */
 
 import { CATALOG } from './catalog.js';
+import { MCP_UI_EXTENSION, mcpUiExtensionCapability } from './apps.js';
 
 /**
  * Modern protocol versions this server speaks, in order of preference.
@@ -74,13 +75,13 @@ export const INSTRUCTIONS = [
  *
  * Only what is actually served is advertised (requirement §2.4). Prompts are
  * deferred by ADR-0010, so they are absent rather than empty. `resources` is
- * present only when a provider is installed (S17 §3: the journal, its
- * retention sweeper and the resource + listen handlers) — `subscribe` is
- * true iff the S17 feeds are among them, `listChanged` stays false because
- * the list is static for the process lifetime. `extensions` is omitted while
- * no MCP extension is implemented — note that xiNAS's own asynchronous task
- * envelope is a REST contract, NOT the `io.modelcontextprotocol/tasks`
- * extension, and claiming it here would be false.
+ * present when a provider is installed — since S18 that is always the case
+ * (the immutable MCP Apps view); `subscribe` is true iff the S17 feeds are
+ * among the providers, `listChanged` stays false because the list is static
+ * for the process lifetime. `extensions` carries the MCP Apps UI extension
+ * (S18) — note that xiNAS's own asynchronous task envelope is a REST
+ * contract, NOT the `io.modelcontextprotocol/tasks` extension, and claiming
+ * it here would be false.
  */
 export function buildCapabilities(opts: DiscoverOptions = {}): Record<string, unknown> {
   const capabilities: Record<string, unknown> = {};
@@ -88,6 +89,7 @@ export function buildCapabilities(opts: DiscoverOptions = {}): Record<string, un
   if (opts.resources !== undefined) {
     capabilities.resources = { subscribe: opts.resources.subscribe, listChanged: false };
   }
+  capabilities.extensions = { [MCP_UI_EXTENSION]: mcpUiExtensionCapability() };
   return capabilities;
 }
 

@@ -52,9 +52,14 @@ to the other.
   on the modern era for the S17-enabled build — `resources/list`,
   `resources/templates/list`, `resources/read` and `subscriptions/listen`
   are served ahead of the legacy SDK path (§5.2), and
-  `resources: { subscribe: true, listChanged: false }` is advertised only
-  when the complete S17 surface is installed (§4). Resources stay absent
-  from the legacy era. Contract: `s17-mcp-subscriptions-spec.md`.
+  `resources.subscribe` is `true` only when the complete S17 surface is
+  installed (§4). The feeds stay absent from the legacy era. Contract:
+  `s17-mcp-subscriptions-spec.md`. **Amended 2026-09-04 (S18):** one
+  immutable MCP Apps UI resource (`ui://xinas/raid-create`) is served through
+  the same provider seam on the modern era and by the SDK server on the
+  legacy era, so `resources` is always advertised and `extensions` carries
+  `io.modelcontextprotocol/ui`. This exception does not open a generic
+  data-resource surface; see `s18-mcp-raid-create-app-spec.md`.
 - The MCP `tasks` extension (`io.modelcontextprotocol/tasks`). xiNAS has its
   own asynchronous task envelope over REST (`s2-task-envelope-spec.md`) plus
   the `next` hint in tool results; that is *not* the MCP tasks extension and
@@ -157,25 +162,25 @@ versions remain reachable only through `initialize`.
 
 - `tools: {}` — present whenever the catalog exposes at least one
   MCP-visible entry (`binary !== true`), which it always does.
-- `resources` — **present as `{ "subscribe": true, "listChanged": false }`
-  only when `ApiContext.events` is installed** (S17 §3: the journal, its
-  retention sweeper and the resource + listen handlers); absent otherwise,
-  because requirement §2.4 forbids advertising a capability whose methods
-  are unavailable. Other slices that register resources on the modern path
-  (S18 MCP Apps) contribute to the same object: `subscribe` is true iff the
-  S17 feeds are installed, `listChanged` stays `false`.
+- `resources` — **always present** since S18, as
+  `{ "subscribe": <bool>, "listChanged": false }`. The S18 MCP Apps provider
+  is installed unconditionally (the immutable `ui://xinas/raid-create`
+  view); `subscribe` is `true` iff `ApiContext.events` is installed (S17
+  §3: the journal, its retention sweeper and the resource + listen handlers)
+  and `false` otherwise, so the flags describe exactly what is implemented
+  (requirement §2.4). `listChanged` stays `false`: the list is static for
+  the process lifetime.
 - `prompts` — **absent.** No handler exists (ADR-0010 defers them).
-- `extensions` — **absent** while no MCP extension is implemented. When one
-  lands it goes under `capabilities.extensions`; there is never a top-level
+- `extensions.io.modelcontextprotocol/ui` — present since S18 with the
+  supported `text/html;profile=mcp-app` MIME type. There is still never a
+  top-level
   `result.extensions`.
 
 > **Deviation from the requirement document's example.** Requirement §2.3's
-> sample response advertises `resources: {}` and
-> `extensions: {"io.modelcontextprotocol/tasks": {}}`. xiNAS implements
-> neither, so emitting them would violate the requirement's own normative
-> rule in §2.4 ("MUST NOT advertise a capability if the corresponding methods
-> are unavailable"). The normative rule wins; the example is treated as
-> illustrative.
+> sample response advertises the Tasks extension. xiNAS still does not
+> implement that extension. The `resources` claim (S17 feeds, S18 view) and
+> the UI-extension claim (S18) are different: both have matching handlers and
+> therefore satisfy §2.4.
 
 **`_meta["io.modelcontextprotocol/serverInfo"]`** — `{name, version}`, the
 **same constant** the legacy `initialize` reports. One server, one identity
@@ -384,7 +389,7 @@ loopback request produces.
 | 4 | all of `resultType`, `supportedVersions`, `capabilities`, `ttlMs`, `cacheScope`, `serverInfo`, `instructions` | `mcp-discover.test.ts` |
 | 5 | `supportedVersions` contains `2026-07-28` | `mcp-discover.test.ts` (and asserts no legacy version leaks in) |
 | 6 | extensions under `capabilities.extensions`, never top-level | `mcp-discover.test.ts` |
-| 7 | advertised capabilities match available handlers | `mcp-discover.test.ts` — `prompts` absent; `resources` absent without a journal and `{ subscribe: true, listChanged: false }` with one (S17); `tools` present iff the catalog has MCP-visible entries |
+| 7 | advertised capabilities match available handlers | `mcp-discover.test.ts` — `prompts` absent; `resources` `{ subscribe: false, listChanged: false }` without a journal (S18 view only) and `{ subscribe: true, listChanged: false }` with one (S17); `extensions.io.modelcontextprotocol/ui` present (S18); `tools` present iff the catalog has MCP-visible entries |
 | 8 | two calls: no state change, semantically equal | `mcp-discover.test.ts` |
 | 9 | direct modern operational request without discovery | `mcp-discover.test.ts` — stateless `tools/list` + `tools/call` |
 | 10 | official SDK selects modern in `auto` mode | `@modelcontextprotocol/client` 2.0.0 in `versionNegotiation: { mode: 'auto' }` — S15 §15.4 (was "not implementable" until the v2 packages shipped; see below) |

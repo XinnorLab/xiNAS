@@ -37,7 +37,8 @@ import { feedProvider } from '../events/feeds.js';
 import { McpProtocolError } from './confirmation/errors.js';
 import { elicitationModes } from './confirmation/policy.js';
 import { acceptFeeds, openHttpListen, validateListenParams } from './listen.js';
-import type { ResourcesOptions } from './resources.js';
+import type { ResourceProvider, ResourcesOptions } from './resources.js';
+import { appsProvider } from './apps.js';
 import { type McpIdentity, buildMcpServer } from './dispatch.js';
 import { handleModernRequest, isModernRequest, isNotification } from './modern.js';
 
@@ -92,40 +93,42 @@ function reauthorizer(req: Request, ctx: ApiContext): () => boolean {
 export function mountMcpTransport(app: Express, ctx: ApiContext): void {
   const sessions = new Map<string, McpSession>();
 
-  // S17 §3: the resource surface exists only when the journal is installed
-  // AND `mcp.subscriptions.enabled`; otherwise the methods are -32601 and
-  // discovery advertises no `resources` (a partial surface is never
-  // advertised).
+  // S17 §3 + S18: the modern-era resource surface always exists — the S18
+  // MCP Apps view is a provider unconditionally; the S17 feeds join it only
+  // when the journal is installed AND `mcp.subscriptions.enabled`, and
+  // `subscribe` says whether they did (a partial feed surface is never
+  // advertised). Without the feeds `subscriptions/listen` stays -32601.
   const events = ctx.events;
-  const resources: ResourcesOptions | undefined =
+  const feeds: ResourceProvider[] =
     events !== undefined && events.subscriptions.enabled
-      ? {
-          providers: [
-            feedProvider(events, {
-              hooks: {
-                onRead: (feed, outcome) => events.metrics.eventRead(feed, outcome),
-                onGap: (info, readCtx) => {
-                  events.metrics.cursorGap(info.feed);
-                  queueCursorGap(ctx.state.audit, {
-                    principal: readCtx.identity.principal,
-                    correlationId: readCtx.correlationId,
-                    feed: info.feed,
-                    requestedSequence: info.requestedSequence,
-                    oldestSequence: info.oldestSequence,
-                  });
-                },
-                isRdmaConfigured: () => {
-                  const row = ctx.state.kv.get<{ spec?: { rdma?: { enabled?: unknown } } }>(
-                    '/xinas/v1/desired/NfsProfile/default',
-                  );
-                  return row?.value.spec?.rdma?.enabled === true;
-                },
+      ? [
+          feedProvider(events, {
+            hooks: {
+              onRead: (feed, outcome) => events.metrics.eventRead(feed, outcome),
+              onGap: (info, readCtx) => {
+                events.metrics.cursorGap(info.feed);
+                queueCursorGap(ctx.state.audit, {
+                  principal: readCtx.identity.principal,
+                  correlationId: readCtx.correlationId,
+                  feed: info.feed,
+                  requestedSequence: info.requestedSequence,
+                  oldestSequence: info.oldestSequence,
+                });
               },
-            }),
-          ],
-          subscribe: true,
-        }
-      : undefined;
+              isRdmaConfigured: () => {
+                const row = ctx.state.kv.get<{ spec?: { rdma?: { enabled?: unknown } } }>(
+                  '/xinas/v1/desired/NfsProfile/default',
+                );
+                return row?.value.spec?.rdma?.enabled === true;
+              },
+            },
+          }),
+        ]
+      : [];
+  const resources: ResourcesOptions = {
+    providers: [...feeds, appsProvider()],
+    subscribe: feeds.length > 0,
+  };
 
   // /mcp is mounted ahead of the app-wide express.json(), so it needs its
   // own parser: the modern-era path (S14) has to read `method` and
@@ -196,7 +199,9 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
             });
           };
           const registry = events?.registry;
-          if (resources === undefined || registry === undefined || events === undefined) {
+          // Without the S17 feeds (`subscribe` false) there is nothing to listen
+          // to: method not found, exactly as before S18 added the view provider.
+          if (!resources.subscribe || registry === undefined || events === undefined) {
             jsonError(200, -32601, 'method not found: subscriptions/listen');
             return;
           }
@@ -272,7 +277,7 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
               ),
             },
             ...(ctx.mcpConfirmations !== undefined ? { confirmations: ctx.mcpConfirmations } : {}),
-            ...(resources !== undefined ? { resources } : {}),
+            resources,
           },
           correlationId,
         );

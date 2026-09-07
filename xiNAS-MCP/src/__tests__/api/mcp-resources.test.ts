@@ -182,7 +182,8 @@ describe('mcp modern era — event feed resources (S17 §4)', () => {
     expect(result.ttlMs).toBe(0);
     expect(result.cacheScope).toBe('private');
     expect(result).not.toHaveProperty('nextCursor');
-    expect(result.resources.map((x) => x.uri)).toEqual(FEED_URIS);
+    // The six feeds first, then the S18 MCP Apps view the seam lists after them.
+    expect(result.resources.map((x) => x.uri)).toEqual([...FEED_URIS, 'ui://xinas/raid-create']);
     expect(result.resources.map((x) => x.name)).toEqual([
       'RAID events',
       'RAID progress',
@@ -190,12 +191,14 @@ describe('mcp modern era — event feed resources (S17 §4)', () => {
       'NFS events',
       'NFS session events',
       'System events',
+      'xiNAS RAID Create',
     ]);
-    for (const res of result.resources) {
+    for (const res of result.resources.slice(0, FEED_URIS.length)) {
       expect(res.mimeType).toBe('application/vnd.xinas.events+json');
       expect(res.description.length).toBeGreaterThan(10);
       expect(res).not.toHaveProperty('annotations');
     }
+    expect(result.resources[FEED_URIS.length]?.mimeType).toBe('text/html;profile=mcp-app');
   });
 
   it('resources/list rejects a pagination cursor the server never issued', async () => {
@@ -363,7 +366,7 @@ describe('mcp modern era — event feed resources (S17 §4)', () => {
     expect(r.status).toBe(401);
   });
 
-  it('the legacy era still has no resources', async () => {
+  it('the legacy era advertises only the S18 view (no feeds, no subscribe flag)', async () => {
     const init = await rpc(port, {
       jsonrpc: '2.0',
       id: 1,
@@ -375,7 +378,9 @@ describe('mcp modern era — event feed resources (S17 §4)', () => {
       },
     });
     const caps = (init.body.result as { capabilities: Record<string, unknown> }).capabilities;
-    expect(caps.resources).toBeUndefined();
+    // S18: the SDK server serves the MCP Apps view on the legacy era; the S17
+    // feeds and `subscribe` never appear there (mcp-transport.test.ts lists it).
+    expect(caps.resources).toEqual({});
   });
 });
 
@@ -393,17 +398,26 @@ describe('mcp modern era — resources disabled by configuration', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('advertises no resources and answers the methods with -32601', async () => {
+  it('advertises resources without subscribe, serves only the S18 view, refuses listen with -32601', async () => {
     const d = await call(port, 'server/discover');
     expect(
       (d.body.result as { capabilities: Record<string, unknown> }).capabilities.resources,
-    ).toBeUndefined();
-    for (const method of ['resources/list', 'resources/templates/list']) {
-      const r = await call(port, method);
-      expect((r.body.error as { code: number }).code, method).toBe(-32601);
-    }
+    ).toEqual({ subscribe: false, listChanged: false });
+    const list = await call(port, 'resources/list');
+    expect(
+      (list.body.result as { resources: Array<{ uri: string }> }).resources.map((r) => r.uri),
+    ).toEqual(['ui://xinas/raid-create']);
+    const templates = await call(port, 'resources/templates/list');
+    expect((templates.body.result as { resourceTemplates: unknown[] }).resourceTemplates).toEqual(
+      [],
+    );
+    // A feed URI has no owner without the feeds: invalid, not "method not found".
     const r = await call(port, 'resources/read', { uri: 'xinas://events/raid' });
-    expect((r.body.error as { code: number }).code).toBe(-32601);
+    expect((r.body.error as { code: number }).code).toBe(-32602);
+    const l = await call(port, 'subscriptions/listen', {
+      notifications: { resourceSubscriptions: ['xinas://events/raid'] },
+    });
+    expect((l.body.error as { code: number }).code).toBe(-32601);
     // The journal keeps recording regardless.
     expect(handle.events.journal.count()).toBe(0);
   });

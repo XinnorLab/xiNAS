@@ -3,9 +3,9 @@
 > **Extended by S14.** The `/mcp` endpoint this ADR defines serves the MCP
 > legacy protocol era. It additionally serves the modern era
 > (`server/discover`, no session) — see
-> [`../s14-mcp-modern-era-spec.md`](../s14-mcp-modern-era-spec.md). The
-> deferrals below (MCP resources and prompts) still hold, which is why
-> neither is advertised in the discovery capabilities.
+> [`../s14-mcp-modern-era-spec.md`](../s14-mcp-modern-era-spec.md).
+> The original deferral of MCP resources held through S15; S17 lifted it on
+> the modern era (event feeds) and S18 adds the MCP Apps view on both eras.
 >
 > **Amended by S15 (2026-09-04).** The apply gate below is no longer the
 > last word on MCP mutation: after `mcp.allow_apply` passes, every MCP
@@ -14,6 +14,14 @@
 > verifies and consumes that confirmation inside the apply transaction.
 > See §*Decision — MCP apply confirmation (S15)* below and
 > [`../s15-mcp-mrtr-confirmation-spec.md`](../s15-mcp-mrtr-confirmation-spec.md).
+>
+> **Amended by S18 (2026-09-04, merged 2026-09-07).** One immutable MCP Apps
+> UI resource (`ui://xinas/raid-create`) and the `io.modelcontextprotocol/ui`
+> extension are served: on the modern era through the S17 resource provider
+> seam (listed next to the event feeds, never subscribable), on the legacy
+> era through the SDK server's own resource handlers (the feeds stay
+> modern-only). Prompts and general-purpose data resources remain deferred.
+> See [`../s18-mcp-raid-create-app-spec.md`](../s18-mcp-raid-create-app-spec.md).
 
 **Status:** accepted (2026-06-12). Implements ADR-0001's locked "MCP is
 a transport on the same Control API core" decision; extends ADR-0002
@@ -385,8 +393,10 @@ TUI pool screens (no API surface), SSE transport, audit/config-history
 backend integration (the degraded entries go live when the bridges
 land), removal of the read-only gRPC passthrough (tracked to the
 API gaining pools/mail/auth-settings resources), MCP prompt
-capabilities (tools only in Phase 0; S17 adds Resources and resource
-subscriptions on the modern era — see the S17 decision above). S15 adds: a TUI screen for pending
+capabilities and general-purpose MCP data resources (tools only in
+Phase 0; S17 adds Resources and resource subscriptions on the modern era
+— see the S17 decision above; S18 adds one immutable MCP Apps UI resource
+on both eras). S15 adds: a TUI screen for pending
 MCP approvals (the web page, REST and `xinasctl` cover approval; recorded
 in `docs/TODO.md`), and a key-rotation CLI for the `requestState` key
 ring (rotation is a documented file edit + restart).
