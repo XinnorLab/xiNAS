@@ -122,6 +122,11 @@ def test_sticky_skip_install_is_cleared_before_anything_is_purged(menu: str, tmp
     purged = r.index("SUDO:apt-get purge")
     assert purged >= 0, f"the purge itself must still happen: calls={r.calls}"
     assert cleared < purged, f"clear the flag before removing packages: {r.calls}"
+    boxed = r.index("MSG_BOX:")
+    assert not (cleared < boxed < purged), (
+        "the clear needs no decision, so it must not block on a dialog before the "
+        f"purge (a one-line note is fine): calls={r.calls}"
+    )
 
 
 @pytest.mark.parametrize("menu", MENUS)
@@ -132,6 +137,7 @@ def test_flag_is_cleared_even_when_no_xiraid_packages_are_left(menu: str, tmp_pa
     assert r.index("CONFIG_SET:local xiraid_skip_install false") >= 0, (
         f"nothing to purge is not nothing to fix: calls={r.calls}"
     )
+    assert r.index("MSG_BOX:") < 0, f"no dialog on the clear: calls={r.calls}"
 
 
 @pytest.mark.parametrize("menu", MENUS)

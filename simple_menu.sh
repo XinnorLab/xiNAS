@@ -252,7 +252,7 @@ _xinas_clear_skip_install() {
     skip=$(xinas_config_get xiraid_skip_install 2>/dev/null) || return 0
     [ "$skip" = "true" ] || return 0
     xinas_config_set local xiraid_skip_install false
-    msg_box "xiRAID Will Be Installed" "The saved configuration carried xiraid_skip_install=true, left over from an existing-arrays run.\n\nRemoving the xiRAID packages without clearing it would leave this node with no xicli at all, so the flag has been cleared and this run will install xiRAID."
+    echo "xiraid_skip_install was true (left by an existing-arrays run); cleared so this run installs xiRAID"
 }
 
 # Check for installed xiRAID packages and optionally remove them
