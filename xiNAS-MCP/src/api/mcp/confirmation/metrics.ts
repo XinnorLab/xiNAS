@@ -11,6 +11,13 @@ export interface ConfirmationMetrics {
   roundLimit(): void;
   confirmationToApply(seconds: number): void;
   approvedExpired(): void;
+  /**
+   * A3 (S15 §12.1): one record-less audit row (`verification_failed`,
+   * `replay_rejected`, `capability_missing`) was dropped because the
+   * emitting principal exhausted its internal per-minute budget. The
+   * request itself was still refused; only the row is missing.
+   */
+  auditSuppressed(event: string): void;
 }
 
 export const noopMetrics: ConfirmationMetrics = {
@@ -22,10 +29,11 @@ export const noopMetrics: ConfirmationMetrics = {
   roundLimit() {},
   confirmationToApply() {},
   approvedExpired() {},
+  auditSuppressed() {},
 };
 
 /**
- * The nine S15 §12.2 series, registered once on `reg`. Labels are always
+ * The ten S15 §12.2 series, registered once on `reg`. Labels are always
  * bounded (mode, risk, outcome, reason class) — never a principal, id or
  * path. The pending gauge is scrape-time (`gaugeCollect`, review P2): the
  * store is the single source of truth for "open confirmations by mode", so
@@ -95,6 +103,15 @@ export function registryConfirmationMetrics(
     'approved but never consumed',
     [],
   );
+  // A3: record-less audit rows dropped by the per-principal budget. A
+  // non-zero value here means the audit trail for that event class is
+  // incomplete for that minute — the refusals themselves still counted in
+  // the series above, so the two together say "N refusals, M rows".
+  const auditSuppressed = reg.counter(
+    'xinas_mcp_confirmation_audit_suppressed_total',
+    'record-less confirmation audit rows dropped by the per-principal budget',
+    ['event'],
+  );
   return {
     requested: (risk, mode) => requested.inc({ risk, mode }),
     decided: (outcome) => decided.inc({ outcome }),
@@ -104,5 +121,6 @@ export function registryConfirmationMetrics(
     roundLimit: () => roundLimit.inc(),
     confirmationToApply: (s) => latency.observe({}, s),
     approvedExpired: () => approvedExpired.inc(),
+    auditSuppressed: (event) => auditSuppressed.inc({ event }),
   };
 }

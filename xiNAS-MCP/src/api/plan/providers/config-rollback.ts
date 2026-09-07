@@ -30,6 +30,7 @@ import {
   snapshotDesiredKey,
 } from '../../tasks/snapshot-desired.js';
 import type { DesiredMutation, ResourceRef } from '../../tasks/types.js';
+import { DANGEROUS_FLAG_REQUIRED } from '../blockers.js';
 import type { PlanContext, PlanProvider, PlanResult } from '../engine.js';
 
 /**
@@ -73,7 +74,7 @@ interface ObservedSnapshotRow {
 /** The always-on S4 advisory blocker (clients filter it on consent; the
  *  engine enforces the real dangerous flag at apply). */
 const DANGEROUS_BLOCKER = {
-  code: 'dangerous_flag_required',
+  code: DANGEROUS_FLAG_REQUIRED,
   message:
     'config rollback is destructive (the python runner keeps its own pre-change ' +
     'snapshot); apply requires dangerous: true',

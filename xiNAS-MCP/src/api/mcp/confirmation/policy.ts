@@ -36,8 +36,14 @@ export function elicitationModes(meta: unknown): Set<ElicitationMode> {
     return out;
   }
   const e = elicitation as Record<string, unknown>;
-  if (typeof e.form === 'object' && e.form !== null) out.add('form');
-  if (typeof e.url === 'object' && e.url !== null) out.add('url');
+  // A capability value must be an OBJECT: non-null and not an array. The
+  // array case is the one the null check missed — `{ form: [] }` is a
+  // malformed declaration, and admitting it would send a form elicitation
+  // to a client that never claimed it could answer one.
+  const declares = (v: unknown): boolean =>
+    typeof v === 'object' && v !== null && !Array.isArray(v);
+  if (declares(e.form)) out.add('form');
+  if (declares(e.url)) out.add('url');
   // Backwards-compatibility rule: a bare `{}` (no declared keys) means form-only.
   // A key that IS present but doesn't carry a capability object (e.g. `form: null`)
   // does not fall back to this rule — it declares nothing.

@@ -8,7 +8,9 @@
  *
  * Identity resolves ONCE per session at initialize:
  *   bearer → config.tokens (viewer/operator/admin; internal_agent is
- *   refused — the agent has no business on the MCP surface);
+ *   refused — the agent has no business on the MCP surface; a token
+ *   scoped `surface: 'rest'` is refused with the same 401 an unknown
+ *   bearer gets, S15 §3.5);
  *   no bearer over UDS → local_admin (ADR-0001: the socket mode is
  *   the gate); no bearer over TCP → 401.
  *
@@ -52,6 +54,11 @@ function resolveIdentity(req: Request, ctx: ApiContext): McpIdentity | null {
     const token = authHeader.slice(7).trim();
     const principal = ctx.config.tokens[token];
     if (principal === undefined) return null;
+    // A1 (S15 §3.5): a REST-scoped token is not an MCP credential. Returning
+    // null (rather than a distinct error) makes the caller answer the SAME
+    // 401 an unknown bearer gets — a scoped token must not be an oracle for
+    // "this token exists, just not here".
+    if (principal.surface === 'rest') return null;
     if (
       principal.role !== 'viewer' &&
       principal.role !== 'operator' &&
@@ -82,6 +89,9 @@ function reauthorizer(req: Request, ctx: ApiContext): () => boolean {
       const principal = ctx.config.tokens[token];
       return (
         principal !== undefined &&
+        // A1: re-scoping a live token to `rest` is a demotion off this
+        // surface, and stops delivery like a removal or a role demotion.
+        principal.surface !== 'rest' &&
         (principal.role === 'viewer' || principal.role === 'operator' || principal.role === 'admin')
       );
     };
@@ -139,9 +149,15 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
   // "a legacy client retains its existing behavior" is an acceptance
   // criterion (s14 §8, AC13). 4 MB still bounds the endpoint; the largest
   // real tool argument in the catalog is orders of magnitude below it.
-  app.use('/mcp', express.json({ limit: '4mb' }));
+  // A11(j): mounted on the JSON-RPC route itself, NOT on the `/mcp` PREFIX.
+  // The prefix form also fronted the public, unauthenticated approval-page
+  // shell at `/mcp/approvals/*` (S15 §9.3) — a GET that carries no body, so
+  // the parser did nothing useful there while still handing anything that
+  // arrived with a JSON content-type to the body parser before any of our
+  // code ran.
+  const jsonBody = express.json({ limit: '4mb' });
 
-  app.post('/mcp', (req: Request, res: Response) => {
+  app.post('/mcp', jsonBody, (req: Request, res: Response) => {
     void (async () => {
       if (ctx.loopback_fn === undefined) {
         res.status(503).json({
@@ -324,10 +340,17 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
       await server.connect(transport as unknown as Transport);
       await transport.handleRequest(req, res, req.body);
     })().catch((err: unknown) => {
+      // A8: same rule as modern.ts's catch — an unexpected throw here is
+      // never text written for a client, so log it and answer with a fixed
+      // string rather than putting the original on the /mcp wire.
+      console.error(
+        'mcp: unhandled error on POST /mcp:',
+        err instanceof Error ? (err.stack ?? err.message) : String(err),
+      );
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: '2.0',
-          error: { code: -32603, message: err instanceof Error ? err.message : String(err) },
+          error: { code: -32603, message: 'internal error' },
           id: null,
         });
       }

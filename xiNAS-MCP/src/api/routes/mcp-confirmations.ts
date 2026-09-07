@@ -56,8 +56,14 @@ export function renderConfirmation(r: ConfirmationRecord): Record<string, unknow
  * The VERIFIED channel — from the auth verdict (S15 §9.2), never from a
  * header. Exported (F2a) so the `local:uds` -> `uds_break_glass` branch is
  * unit-tested directly, not only indirectly through a route.
+ *
+ * A11(g): the return type is the two channels an AUTH VERDICT can produce,
+ * not the full `ApprovalChannel` union. `mcp_form` is written only by the
+ * MCP client's own form-accept path (`store.consume`) and is never derived
+ * from a credential — typing it in here forced a cast at the one call site
+ * and made the impossible third case look reachable.
  */
-export function channelOf(principal: string): ApprovalChannel {
+export function channelOf(principal: string): Exclude<ApprovalChannel, 'mcp_form'> {
   return principal === 'local:uds' ? 'uds_break_glass' : 'bearer';
 }
 
@@ -119,13 +125,7 @@ export function mcpConfirmationsRouter(ctx: ApiContext): Router {
       const svc = requireConfirmations(ctx);
       const rc = req.context!;
       const body = (req.body ?? {}) as Record<string, unknown>;
-      // channelOf is typed ApprovalChannel (F2a — it mirrors the column's
-      // full type for testability) but its implementation only ever
-      // returns 'bearer' | 'uds_break_glass' — 'mcp_form' is set only by
-      // the MCP client's own form-accept path (store.consume), never
-      // derived from an auth verdict. operatorDecide's `channel` input
-      // keeps its narrower, unchanged shape; this narrows back to it.
-      const channel = channelOf(rc.principal) as 'bearer' | 'uds_break_glass';
+      const channel = channelOf(rc.principal);
       const iface = interfaceOf(req);
       // S15 §9.3 defence in depth only: a request that labels itself as the
       // page must not arrive cross-origin. The label decides nothing else.

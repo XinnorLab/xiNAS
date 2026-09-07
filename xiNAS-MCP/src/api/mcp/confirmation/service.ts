@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AuditAppender } from '../../../state/audit.js';
 import type { ResolvedConfirmationConfig } from '../../config.js';
 import { ApiException } from '../../errors.js';
+import { DANGEROUS_FLAG_REQUIRED } from '../../plan/blockers.js';
 import { planDocumentHash, publicPlan } from '../../plan/document.js';
 import type { PlanDocument, PublicPlan } from '../../plan/document.js';
 import type { TaskStore } from '../../tasks/store.js';
@@ -75,6 +76,17 @@ export type HandleOutcome =
 const MAX_WAITERS_PER_CONFIRMATION = 4;
 const MAX_WAITERS_TOTAL = 32;
 const WAIT_POLL_MS = 250;
+/**
+ * A3 (S15 §12.1) — how many RECORD-LESS audit rows one principal may write
+ * per minute. `verification_failed`, the early `replay_rejected` and
+ * `capability_missing` are all queued BEFORE any quota (they must be: they
+ * fire on calls that never create a record), so without this an
+ * unauthenticated-shaped loop of forged requestStates is an unbounded write
+ * amplifier against the audit chain. Deliberately NOT configurable: it is a
+ * self-protection floor, not an operator knob, and the refusal itself is
+ * never throttled — only the row.
+ */
+const RECORDLESS_AUDIT_PER_MINUTE = 30;
 const URL_MESSAGE =
   'This destructive xiNAS operation requires independent approval by a xiNAS operator. Open the approval page, review the plan, and approve or decline there.';
 
@@ -96,6 +108,10 @@ export class ConfirmationService {
   private readonly metrics: ConfirmationMetrics;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly buckets = new Map<string, { tokens: number; updated: number }>();
+  /** A3: separate from `buckets` — the create-rate quota is an operator
+   *  setting about confirmations; this one is an internal audit-write floor
+   *  and must not be spendable by (or spend) the other. */
+  private readonly recordlessAuditBuckets = new Map<string, { tokens: number; updated: number }>();
   private readonly waiters = new Map<string, number>();
   private totalWaiters = 0;
 
@@ -210,7 +226,7 @@ export class ConfirmationService {
     // same way because TaskEngine.apply enforces the real `dangerous` flag
     // itself at apply time (S15 §3.4) — leaving it in would refuse every
     // destructive plan here and make url mode unreachable.
-    const blocking = doc.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+    const blocking = doc.blockers.filter((b) => b.code !== DANGEROUS_FLAG_REQUIRED);
     if (blocking.length > 0) {
       return err('PRECONDITION_FAILED', 'the plan has unresolved blockers', {
         reason: 'plan_blocked',
@@ -220,6 +236,22 @@ export class ConfirmationService {
 
     // Gate 8 — mode.
     const mode = confirmationModeFor(doc.risk_level, doc.rollback_model);
+
+    // Gate 8 (A2, final review I2) — a destructive apply that does not carry
+    // `dangerous: true` is refused HERE: no record, no elicitation, no
+    // operator asked to approve something the apply transaction will refuse
+    // anyway. The condition is the engine's own gate verbatim
+    // (`engine.ts`: `plan.risk_level === 'destructive' && applyReq.dangerous
+    // !== true`) — never wider: a url mode caused only by
+    // `rollback_model: 'unsupported'` or `risk_level:
+    // 'unsupported_rollback'` needs no flag, and the engine does not ask for
+    // one either. §3.4 still holds: the engine keeps its independent check,
+    // so this is a courtesy refusal, not the enforcement point.
+    if (doc.risk_level === 'destructive' && args.dangerous !== true) {
+      return err('PRECONDITION_FAILED', 'destructive operation requires dangerous: true', {
+        reason: DANGEROUS_FLAG_REQUIRED,
+      });
+    }
 
     if (retryState !== undefined) {
       return this.retry(
@@ -363,7 +395,7 @@ export class ConfirmationService {
     } catch (e) {
       const reason = e instanceof McpProtocolError ? (e.reasonClass ?? 'unknown') : 'unknown';
       this.metrics.stateValidationFailure(reason);
-      queueConfirmationEventRaw(this.audit, 'verification_failed', {
+      this.auditRecordless('verification_failed', input.identity.principal, {
         principal: input.identity.principal,
         tool_name: bindings.tool_name,
         correlation_id: input.correlationId,
@@ -387,7 +419,7 @@ export class ConfirmationService {
       record.expected_revision !== bindings.expected_revision ||
       record.tool_name !== bindings.tool_name;
     if (mismatch) {
-      queueConfirmationEventRaw(this.audit, 'replay_rejected', {
+      this.auditRecordless('replay_rejected', bindings.principal, {
         presented_by: bindings.principal,
         record_principal: record?.principal ?? null,
         confirmation_id: payload.cid,
@@ -551,7 +583,7 @@ export class ConfirmationService {
     // No record exists yet on the initial call; on a retry the record is
     // untouched. Audit without a record: use the bindings (F2 — shares the
     // same record-less shape as verification_failed / replay_rejected).
-    queueConfirmationEventRaw(this.audit, 'capability_missing', {
+    this.auditRecordless('capability_missing', bindings.principal, {
       principal: bindings.principal,
       tool_name: bindings.tool_name,
       plan_id: bindings.plan_id,
@@ -632,18 +664,29 @@ export class ConfirmationService {
   }
 
   private takeToken(principal: string): boolean {
-    const rate = this.config.create_rate_per_minute;
-    const now = this.now();
-    const b = this.buckets.get(principal) ?? { tokens: rate, updated: now };
-    b.tokens = Math.min(rate, b.tokens + ((now - b.updated) / 60_000) * rate);
-    b.updated = now;
-    if (b.tokens < 1) {
-      this.buckets.set(principal, b);
-      return false;
+    return takeFrom(this.buckets, principal, this.config.create_rate_per_minute, this.now());
+  }
+
+  /**
+   * A3 (S15 §12.1) — queue one record-less audit row unless this principal
+   * has spent its per-minute budget. The CALLER has already refused the
+   * request and bumped its own metric: this only decides whether the row is
+   * written, and reports the drop on
+   * `xinas_mcp_confirmation_audit_suppressed_total{event}` so a silenced
+   * trail is visible rather than merely absent.
+   */
+  private auditRecordless(
+    event: 'verification_failed' | 'replay_rejected' | 'capability_missing',
+    principal: string,
+    payload: Record<string, unknown>,
+  ): void {
+    if (
+      !takeFrom(this.recordlessAuditBuckets, principal, RECORDLESS_AUDIT_PER_MINUTE, this.now())
+    ) {
+      this.metrics.auditSuppressed(event);
+      return;
     }
-    b.tokens -= 1;
-    this.buckets.set(principal, b);
-    return true;
+    queueConfirmationEventRaw(this.audit, event, payload);
   }
 
   /** Test-only: whether the per-confirmation waiter count is still tracked at all (F4 — the map must not leak a stale 0 entry). */
@@ -656,8 +699,15 @@ export class ConfirmationService {
   /**
    * View one confirmation with its stored plan and summary — the REST
    * `GET /mcp/confirmations/{id}` payload. Returns null when the
-   * confirmation itself is unknown OR its plan row was GC'd (both read as
-   * "no such confirmation" to the caller). Emits `viewed`.
+   * confirmation itself is unknown. Emits `viewed`.
+   *
+   * A10 (S15 §9.1): when the confirmation EXISTS but its plan row has been
+   * pruned by GC, the answer is still a 404 — the page has nothing to show
+   * — but it says so: `details.reason: 'plan_pruned'` plus the
+   * confirmation id, and a remediation pointing at the list/decline path.
+   * Reading that case as a plain "no such confirmation" told an operator
+   * the record was gone when it is still open, still listed, and still
+   * declinable.
    */
   view(
     id: string,
@@ -671,7 +721,14 @@ export class ConfirmationService {
     if (record === null) return null;
     const planTask = this.tasks.get(record.plan_id);
     const doc = planTask?.plan_document;
-    if (doc === undefined) return null; // the plan row was GC'd: treat as gone
+    if (doc === undefined) {
+      throw new ApiException(
+        'NOT_FOUND',
+        `the plan for confirmation ${id} is no longer stored`,
+        { reason: 'plan_pruned', confirmation_id: id },
+        'the plan row was pruned by GC; the confirmation is listed by `mcp_confirmations list` and can still be declined',
+      );
+    }
     queueConfirmationEvent(this.audit, 'viewed', record, {
       actor: viewer.principal,
       actor_client_type: viewer.client_type,
@@ -851,4 +908,23 @@ export class ConfirmationService {
 
 function err(code: string, message: string, details?: unknown): HandleOutcome {
   return { kind: 'error', result: errorResult(code, message, details) };
+}
+
+/** One leaky-bucket step, shared by the create-rate and audit budgets. */
+function takeFrom(
+  buckets: Map<string, { tokens: number; updated: number }>,
+  principal: string,
+  rate: number,
+  now: number,
+): boolean {
+  const b = buckets.get(principal) ?? { tokens: rate, updated: now };
+  b.tokens = Math.min(rate, b.tokens + ((now - b.updated) / 60_000) * rate);
+  b.updated = now;
+  if (b.tokens < 1) {
+    buckets.set(principal, b);
+    return false;
+  }
+  b.tokens -= 1;
+  buckets.set(principal, b);
+  return true;
 }

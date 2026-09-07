@@ -155,6 +155,21 @@ function paramOf(path: string): string {
   return m?.[1] ?? 'id';
 }
 
+/**
+ * S15: an entry is visible over MCP unless it streams a non-JSON body
+ * (`binary`) or is explicitly marked `mcp_exposed: false` — the approval
+ * commands, which a model must never see as a callable tool even with an
+ * admin token.
+ *
+ * Lives here rather than in `dispatch.ts` so `discover.ts` can share the one
+ * definition without an import cycle (`dispatch.ts` already imports
+ * `SERVER_INFO` from `discover.ts`). `tools/list`, `tools/call` and the
+ * advertised `capabilities.tools` must agree on this predicate or the server
+ * advertises a surface it will not serve.
+ */
+export const mcpVisible = (e: CatalogEntry): boolean =>
+  e.binary !== true && e.mcp_exposed !== false;
+
 export const CATALOG: CatalogEntry[] = [
   // ── arrays (xiRAID) — RAID mutation is admin (legacy matrix) ──
   read('arrays.list', 'GET', '/arrays', 'List xiRAID arrays (observed state).'),

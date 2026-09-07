@@ -8,6 +8,7 @@ import type { ConfirmationMetrics } from '../mcp/confirmation/metrics.js';
 import type { ConfirmationStore } from '../mcp/confirmation/store.js';
 import type { ConfirmationRecord } from '../mcp/confirmation/types.js';
 import { queueConfirmationEvent } from '../mcp/confirmation/audit.js';
+import { DANGEROUS_FLAG_REQUIRED } from '../plan/blockers.js';
 import type { TaskStore } from './store.js';
 import type { DesiredMutation, ResourceRef, Task } from './types.js';
 
@@ -411,7 +412,7 @@ export class TaskEngine {
 
     // S15 §12.2 (Task 13, F1 fix): the two consumed/latency metric calls
     // must not fire until the apply transaction actually COMMITS. The lease
-    // loop (step 4) runs after the confirmation consume() and can still
+    // loop (step 9) runs after the confirmation consume() and can still
     // throw, rolling the whole `db.transaction` back — including the
     // consume() write. Emitting the metrics from inside the transaction
     // body (as before the fix) moved the in-memory counters regardless, so
@@ -491,7 +492,14 @@ export class TaskEngine {
           // — never the row column, which route-computed kinds leave unpinned.
           record.expected_revision !== applyReq.expected_revision ||
           record.expires_at <= now ||
-          record.status !== consumableFrom
+          record.status !== consumableFrom ||
+          // A11(c), belt and braces: a destructive plan may only be backed
+          // by a url-mode (operator-approved) record. The service can never
+          // mint the other pairing — confirmationModeFor sends every
+          // destructive plan to url — so reaching here means the record or
+          // the plan was edited directly, and an MCP client's own form
+          // accept must not stand in for an operator approval.
+          (plan.risk_level === 'destructive' && record.mode !== 'url')
         ) {
           throw new ApiException(
             'PRECONDITION_FAILED',
@@ -506,7 +514,7 @@ export class TaskEngine {
         confirmation = record;
       }
 
-      // 1b. Dangerous gate (reqs §14, ADR-0006 §Delete; S4 T1). Central:
+      // 3. Dangerous gate (reqs §14, ADR-0006 §Delete; S4 T1). Central:
       //     every transport that reaches apply is blocked at this one place.
       //     After idempotency (a true replay of an already-accepted apply
       //     returns the original above), before any write.
@@ -514,12 +522,12 @@ export class TaskEngine {
         throw new ApiException(
           'PRECONDITION_FAILED',
           'destructive operation requires dangerous: true',
-          { reason: 'dangerous_flag_required' },
+          { reason: DANGEROUS_FLAG_REQUIRED },
           'Review the plan blast radius (diff), then re-send the apply with dangerous: true.',
         );
       }
 
-      // 2. Freshness (TOCTOU guard). Capture the apply-time revision of the
+      // 4. Freshness (TOCTOU guard). Capture the apply-time revision of the
       //    highest-pinned resource for `state_revision_at_apply`.
       const stale: StaleEntry[] = [];
       let stateRevisionAtApply = plan.state_revision_expected;
@@ -544,7 +552,7 @@ export class TaskEngine {
         );
       }
 
-      // Observation drift → plan is stale (a separate, coarser signal than
+      // 5. Observation drift → plan is stale (a separate, coarser signal than
       // a desired-revision bump: the world the plan observed has moved on).
       //
       // N0.3 (S3 §5.2): prefer the explicit `observed_freshness_ref`. When the
@@ -588,7 +596,7 @@ export class TaskEngine {
         }
       }
 
-      // N0.3 (S3 §5.3, Model R): apply the plan-declared desired_mutations to
+      // 6. N0.3 (S3 §5.3, Model R): apply the plan-declared desired_mutations to
       // KV, capturing each key's PRIOR value into `desiredRollback` so a failed
       // task can revert the intent. `this.kv` is built over the SAME db handle as
       // this transaction, so these put/delete participate in it — they roll back
@@ -607,7 +615,7 @@ export class TaskEngine {
         }
       }
 
-      // 3. Insert the apply task FIRST (the leases FK needs a real task_id).
+      // 7. Insert the apply task FIRST (the leases FK needs a real task_id).
       //    Optionals are spread conditionally — under exactOptionalPropertyTypes
       //    CreateApplyInput's `?:` fields reject an explicit `undefined`.
       const task = this.store.createApplyTask({
@@ -672,7 +680,7 @@ export class TaskEngine {
         pendingConsumedMetrics = { createdAt: confirmation.created_at, consumedAt };
       }
 
-      // 4. Acquire a lease per resource in the lease set. N0.3 (S3 §5.2): the
+      // 9. Acquire a lease per resource in the lease set. N0.3 (S3 §5.2): the
       //    lease set is `lease_resources` when the plan overrides it (only
       //    `nfs-idmap.set` does — it locks a resource that is not a public
       //    affected resource), else `affected_resources` (S2 behavior). A

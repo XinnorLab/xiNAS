@@ -10,6 +10,7 @@ import {
 } from '../handlers/plan-apply.js';
 import type { RevisionedValue } from '../../state/index.js';
 import { embedMetadata, getOrNull, listByPrefix, sendOk } from '../handlers/reads.js';
+import { DANGEROUS_FLAG_REQUIRED } from '../plan/blockers.js';
 import { publicPlan } from '../plan/document.js';
 import type { PlanProvider } from '../plan/engine.js';
 import { netIfaceUpdateProvider, netPoolApplyProvider } from '../plan/providers/network.js';
@@ -208,7 +209,7 @@ export function networkRouter(ctx: ApiContext): Router {
       // S4 §8: re-run the matching preflight; everything except the
       // engine-owned dangerous code blocks the apply.
       const recheck = await provider.preflight({ kv: ctx.state.kv }, planTask.spec);
-      const blocking = recheck.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+      const blocking = recheck.blockers.filter((b) => b.code !== DANGEROUS_FLAG_REQUIRED);
       if (blocking.length > 0) {
         throw new ApiException(
           'PRECONDITION_FAILED',
@@ -334,7 +335,7 @@ export function networkRouter(ctx: ApiContext): Router {
       }
 
       const recheck = await netPoolApplyProvider.preflight({ kv: ctx.state.kv }, planTask.spec);
-      const blocking = recheck.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+      const blocking = recheck.blockers.filter((b) => b.code !== DANGEROUS_FLAG_REQUIRED);
       if (blocking.length > 0) {
         throw new ApiException(
           'PRECONDITION_FAILED',

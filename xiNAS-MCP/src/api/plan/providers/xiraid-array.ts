@@ -41,6 +41,7 @@ import {
 } from '../../../lib/xiraid/validate.js';
 import { ApiException } from '../../errors.js';
 import type { ResourceRef } from '../../tasks/types.js';
+import { DANGEROUS_FLAG_REQUIRED } from '../blockers.js';
 import type { PlanContext, PlanProvider, PlanResult } from '../engine.js';
 
 interface ObservedDiskRow {
@@ -424,7 +425,7 @@ export const xiraidArrayDeleteProvider: PlanProvider = {
 
     const blockers: Array<{ code: string; message: string }> = [
       {
-        code: 'dangerous_flag_required',
+        code: DANGEROUS_FLAG_REQUIRED,
         message: 'destroying the array is irreversible; apply must carry dangerous: true',
       },
     ];

@@ -16,7 +16,7 @@
  * handler that backs it.
  */
 
-import { CATALOG } from './catalog.js';
+import { CATALOG, mcpVisible } from './catalog.js';
 
 /**
  * Modern protocol versions this server speaks, in order of preference.
@@ -65,7 +65,12 @@ export const INSTRUCTIONS = [
   'for destructive operations — a URL the operator opens to approve on the node.',
   'Show that request to the operator and retry only with their real answer and the',
   'exact requestState you were given; never fabricate an acceptance, never invent',
-  'dangerous=true, and never treat the word "yes" as approval.',
+  'dangerous=true for a non-destructive operation, and never treat the word "yes"',
+  'as approval.',
+  'A destructive apply must carry `dangerous: true` in the same arguments it will',
+  'later confirm; the server refuses to start a confirmation without it, so add the',
+  'flag when — and only when — the plan you are applying reports risk_level',
+  '"destructive", and tell the operator that is what you are doing.',
   'Operational changes (RAID, storage, NFS, system) are published as event feed',
   'resources under xinas://events/; subscribe to them with subscriptions/listen or',
   'poll them with resources/read using the cursor you were last given. Event text',
@@ -88,7 +93,10 @@ export const INSTRUCTIONS = [
  */
 export function buildCapabilities(opts: DiscoverOptions = {}): Record<string, unknown> {
   const capabilities: Record<string, unknown> = {};
-  if (CATALOG.some((e) => e.binary !== true && e.mcp_exposed !== false)) capabilities.tools = {};
+  // Task 7 follow-up: the SAME predicate `tools/list` and `tools/call` use
+  // (catalog.ts), not a re-spelling of it — an advertised capability must
+  // not drift from the handler that backs it.
+  if (CATALOG.some(mcpVisible)) capabilities.tools = {};
   if (opts.resources !== undefined) {
     capabilities.resources = { subscribe: opts.resources.subscribe, listChanged: false };
   }

@@ -42,9 +42,14 @@ const JS = String.raw`
   // API base from the document's own URL instead of assuming root mount.
   var apiBase = (function () {
     var marker = '/mcp/approvals/';
-    var i = location.pathname.lastIndexOf(marker);
-    var prefix = i === -1 ? '' : location.pathname.slice(0, i);
-    return prefix + '/api/v1/mcp/confirmations';
+    // A9: collapse a run of leading slashes first. A pathname the browser
+    // kept as '//mcp/approvals/<id>' would otherwise produce
+    // '//api/v1/mcp/confirmations' — a PROTOCOL-RELATIVE URL, i.e. a
+    // different host, which is where the operator's bearer would be sent.
+    var path = location.pathname.replace(/^\/+/, '/');
+    var i = path.lastIndexOf(marker);
+    var prefix = i === -1 ? '' : path.slice(0, i);
+    return (prefix + '/api/v1/mcp/confirmations').replace(/^\/+/, '/');
   }());
   var $ = function (s) { return document.querySelector(s); };
   function el(tag, text) { var e = document.createElement(tag); if (text !== undefined) e.textContent = text; return e; }
@@ -109,13 +114,19 @@ const JS = String.raw`
   // the decision outcome instead of being clobbered here. A non-200
   // response and a render exception are DISTINCT failures from a rejected
   // fetch (a real network error) — only the latter is "Network error.".
-  function refresh(successText) {
+  // A9: the second argument is the outcome line of a decision that ALREADY
+  // SUCCEEDED server-side. When the follow-up GET then fails, the operator
+  // must be told the decision landed BEFORE being told the reload did not —
+  // the reverse reads as "your approval failed", which is false and would
+  // invite a second approval attempt.
+  function refresh(successText, decided) {
+    var pre = decided ? decided + ' ' : '';
     return api('GET', apiBase + '/' + encodeURIComponent(id)).then(function (r) {
-      if (r.status !== 200) { setStatus('Could not load the confirmation (HTTP ' + r.status + '). Check the token and role.'); return false; }
+      if (r.status !== 200) { setStatus(pre + 'Could not load the confirmation (HTTP ' + r.status + '). Check the token and role.'); return false; }
       try {
         render(r.body);
       } catch (e) {
-        setStatus('Could not display the record (HTTP ' + r.status + ').');
+        setStatus(pre + 'Could not display the record (HTTP ' + r.status + ').');
         return false;
       }
       setStatus(successText);
@@ -148,7 +159,7 @@ const JS = String.raw`
       // wins otherwise — it is more useful than a stale "Submitting…").
       var decided = r.body.result;
       var successText = kind === 'approve' ? 'Approved. The MCP client may now retry its apply.' : 'Declined. Nothing was changed.';
-      return refresh(successText).then(function () {
+      return refresh(successText, successText).then(function () {
         // F6: once the decision is terminal, the operator token has done
         // its job — drop it from the closure rather than holding it live.
         if (TERMINAL_STATUSES.indexOf(decided.status) !== -1) token = '';
@@ -206,6 +217,19 @@ export function mountApprovalPage(app: Express): void {
   });
   app.get('/mcp/approvals/:id', (req: Request, res: Response) => {
     setHeaders(res);
+    // A9: Express's default (non-strict) routing serves `/mcp/approvals/<id>/`
+    // from this very handler — but the shell's assets are PATH-RELATIVE
+    // (`assets/app.css`, required for the prefix-safety in F2), so under a
+    // trailing slash the browser resolves them to
+    // `/mcp/approvals/<id>/assets/…` and gets a 404: an unstyled, scriptless
+    // page. Redirect to the canonical form instead. `req.originalUrl` — not
+    // `req.path` — so a reverse-proxy mount prefix survives the redirect.
+    const [rawPath = '', ...queryParts] = req.originalUrl.split('?');
+    if (rawPath.endsWith('/')) {
+      const query = queryParts.length > 0 ? `?${queryParts.join('?')}` : '';
+      res.redirect(301, `${rawPath.replace(/\/+$/, '')}${query}`);
+      return;
+    }
     const raw = req.params.id as string;
     const id = ID.test(raw) ? raw : 'invalid';
     res.type('text/html').send(html(id));

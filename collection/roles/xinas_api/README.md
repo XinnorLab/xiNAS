@@ -64,6 +64,27 @@ See `defaults/main.yml`. Highlights:
 | `xinas_api_admin_users` | `[]` | Extra **existing** accounts to add to `xinas-admin`; unknown names are skipped, never created. |
 | `xinas_api_controller_id` | `{{ ansible_machine_id \| to_uuid }}` | UUIDv5 derivation; override for pre-assigned IDs. |
 
+### Token surface scope (S15 §3.5, §13)
+
+Each entry in the config's `tokens` map may carry an optional
+`surface` alongside `principal` and `role`:
+
+| Key | Default | Values | Notes |
+|---|---|---|---|
+| `tokens.<token>.surface` | *(absent = `any`)* | `mcp` \| `rest` \| `any` | Which endpoint family the bearer may authenticate on. `mcp` is refused on `/api/v1` with `PERMISSION_DENIED` (`details.reason: token_surface`); `rest` is refused on `/mcp` with the same 401 an unknown bearer gets; `any` is accepted on both. Any other value is fatal at config load. |
+
+**Give the agent's token `surface: mcp` — without it the confirmation gate
+can be bypassed by applying over REST with the same token.** The key is
+hand-edited into `/etc/xinas-api/config.json` (this role writes the
+bootstrap admin token only), and the default is left as `any` so an
+existing deployment keeps working across an upgrade:
+
+```jsonc
+"tokens": {
+  "<the agent's bearer>": { "principal": "mcp:agent", "role": "admin", "surface": "mcp" }
+}
+```
+
 ### MCP apply confirmation (S15)
 
 **Not templated by this role.** `mcp.confirmation.*` is pure runtime

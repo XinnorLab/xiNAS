@@ -10,9 +10,37 @@ export type Role =
   // (route guard lands in a later S1 task).
   | 'internal_agent';
 
+/**
+ * S15 §3.5, §13 — which endpoint family a bearer may authenticate on.
+ *
+ * `any` (the default when the key is absent, and what every token minted
+ * before this key existed keeps meaning) makes the token a REST credential
+ * as well as an MCP one, so the MRTR confirmation gate constrains the
+ * `/mcp` PATH, not the principal: the same bearer applies unconfirmed over
+ * `/api/v1`. `mcp` closes that — the REST surface refuses the token.
+ */
+export type TokenSurface = 'mcp' | 'rest' | 'any';
+
+export const TOKEN_SURFACES: readonly TokenSurface[] = ['mcp', 'rest', 'any'];
+
 export interface TokenPrincipal {
   principal: string;
   role: Role;
+  /**
+   * The endpoint family this token may authenticate on (default `any`):
+   *
+   * - `mcp` — `/mcp` only. `middleware/auth.ts` refuses it on `/api/v1`
+   *   with `PERMISSION_DENIED` / `details.reason: 'token_surface'`.
+   * - `rest` — `/api/v1` only. `transport.ts` `resolveIdentity()` returns
+   *   null, so `/mcp` answers the SAME 401 an unknown bearer gets (no
+   *   oracle for which tokens exist but are scoped elsewhere).
+   * - `any` — both (the default).
+   *
+   * Give an MCP agent's token `surface: 'mcp'`: without it the S15
+   * confirmation gate can be bypassed by applying over REST with the very
+   * same token (S15 §3.5).
+   */
+  surface?: TokenSurface;
 }
 
 export type ApproverPolicy = 'distinct_principal' | 'any_admin';
@@ -194,6 +222,16 @@ function validateTokensSection(config: ApiConfig): void {
       throw new Error(
         `token '${key}': principal '${principal.principal}' is invalid — ` +
           `'local:' is reserved for socket-peer identities`,
+      );
+    }
+    // A1 (S15 §3.5, §13): an unrecognised surface is fatal rather than
+    // silently permissive — a typo like 'MCP' must never widen the token
+    // back to both endpoint families.
+    const surface: unknown = principal.surface;
+    if (surface !== undefined && !TOKEN_SURFACES.includes(surface as TokenSurface)) {
+      throw new Error(
+        `token '${key}': surface ${JSON.stringify(surface)} is invalid — ` +
+          `expected one of ${TOKEN_SURFACES.join(', ')} (omit the key for 'any')`,
       );
     }
   }

@@ -451,6 +451,13 @@ verification §14.4 requires before the gate counts as proven on hardware.
   completes; a destructive apply without URL support fails with JSON-RPC
   `-32021` before any mutation. Record the observed behavior against the
   "expected" rows of S15 §14.4.
+- [ ] **S15 token surface:** with the agent's bearer configured
+  `"surface": "mcp"` (S15 §3.5, §13), replay the same apply body over
+  REST with that token → `401 PERMISSION_DENIED`,
+  `details.reason: token_surface`; the MCP flow with the same token still
+  completes. Without the key (`surface` absent = `any`) the REST apply
+  succeeds unconfirmed — confirm that too, so the difference is observed
+  rather than assumed.
 - [ ] Audit (`/var/log/xinas/audit.jsonl`): `mcp.confirmation.requested`,
   `…approved` (URL), `…consumed`, `…apply_task_created` rows plus exactly
   one `http.*` row for the apply; `GET /api/v1/metrics` shows the counters.
