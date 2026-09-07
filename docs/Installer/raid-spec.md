@@ -847,9 +847,11 @@ reuse path writes it into the operator overlay `playbooks/group_vars/all/20-loca
 where it survives into every later run, including a later clean install. Purging under it
 leaves a host with no `xicli` at all and no role that reinstalls one. `check_remove_xiraid`
 therefore reads the effective configuration first and, when `xiraid_skip_install` is true,
-clears it in the local overlay and says so before touching a package — reaching that
-function at all means this run installs xiRAID itself. Declining the removal still aborts
-the run and changes nothing, exactly as before.
+clears it in the local overlay before touching a package — reaching that function at all
+means this run installs xiRAID itself. The clear is a one-line note in the terminal
+output, not a dialog: it needs no decision from the operator, and the reasoning above is
+the manual's to explain. Declining the removal still aborts the run and changes nothing,
+exactly as before.
 
 This is the same collision the existing-RAID branch hit from the other side (that branch no
 longer calls `check_remove_xiraid` at all); it reappeared through the overlay on
