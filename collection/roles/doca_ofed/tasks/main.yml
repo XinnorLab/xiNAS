@@ -23,11 +23,24 @@
     force: true
   tags: [ofed, repo]
 
-- name: Add DOCA-OFED APT repo
-  ansible.builtin.apt_repository:
-    repo: "deb {{ doca_repo_base }}/{{ doca_repo_component }} /"
-    filename: "mellanox-doca"
-    state: present
+# NVIDIA's `latest` alias re-points to each new DOCA-Host release without
+# notice (2026-08-20: 3.4.0 -> 3.5.0). apt refuses to follow a source whose
+# Suite/Codename changed until an operator confirms it (apt-get(8)
+# --allow-releaseinfo-change), so every host installed from `latest` failed
+# `apt-get update` with exit 100. The source is therefore pinned to one release
+# directory (doca_version), and this task owns the sources file outright:
+# writing it whole retires a stale `latest` line left by an earlier install,
+# which apt_repository (add-only) would have kept beside the pinned one.
+# Contract and migration path: docs/Installer/spec.md §3.2 and §8.5.
+- name: Write the DOCA-OFED APT source (pinned release, file owned whole)
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/mellanox-doca.list
+    content: |
+      # Managed by xiNAS (doca_ofed role): one pinned DOCA-Host release. Do not edit.
+      deb {{ doca_repo_base }}/{{ doca_repo_component }} /
+    owner: root
+    group: root
+    mode: '0644'
   register: repo_added
   tags: [ofed, repo]
 

@@ -125,7 +125,7 @@ export class ConfirmationStore {
     this.approveStmt = db.prepare(
       `UPDATE mcp_confirmations SET status = 'approved', approved_at = @now, approved_by = @by,
           approval_channel = @channel, approval_interface = @iface, decision_reason = @reason
-        WHERE confirmation_id = @id AND status = 'pending'`,
+        WHERE confirmation_id = @id AND status = 'pending' AND expires_at > @now`,
     );
     this.declineStmt = db.prepare(
       `UPDATE mcp_confirmations SET status = 'declined', declined_at = @now, declined_by = @by,

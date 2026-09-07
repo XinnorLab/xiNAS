@@ -40,8 +40,8 @@ Two other places can touch the stack but **do not run by default**:
 
 1. Installs build deps (`dkms`, `build-essential`, `linux-headers-<kernel>`, `libelf-dev`).
 2. Adds Mellanox GPG key and the DOCA-Host APT repo:
-   - Repo URL: `https://linux.mellanox.com/public/repo/doca/latest/ubuntu<22.04|24.04>/x86_64`
-   - File: `/etc/apt/sources.list.d/mellanox-doca.list`
+   - Repo URL: `https://linux.mellanox.com/public/repo/doca/<doca_version>/ubuntu<22.04|24.04>/x86_64` — `doca_version` is pinned to one release directory (`3.4.0` as of 2026-09-07), never NVIDIA's moving `latest` alias; why, and how a host installed from the alias is migrated, is in [spec.md](spec.md) §3.2 and §8.5
+   - File: `/etc/apt/sources.list.d/mellanox-doca.list`, written whole by the role (one `deb` line)
 3. Installs `doca-all`, `mlnx-fw-updater`, `mlnx-nfsrdma-dkms`.
 4. Validates DKMS build succeeded for `mlnx-ofed-kernel` and `nfsrdma`; fails the play if anything is in `added`, `error`, or `broken` state.
 5. Verifies `modinfo mlx5_core` succeeds; warns (does not fail) if `modinfo rpcrdma` fails — that signals NFS-RDMA will be broken until the kernel module is loadable.

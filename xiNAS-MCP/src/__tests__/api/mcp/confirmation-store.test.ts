@@ -291,6 +291,19 @@ describe('ConfirmationStore (S15 §6)', () => {
     expect(h.store.countPendingByMode()).toEqual({ form: 1, url: 0 });
   });
 
+  it('approve refuses an expired-but-not-yet-swept row: expires_at === now returns null (record stays pending, untouched by this guard — the sweep flips it), expires_at - 1 succeeds (F1, S15 §6.3)', () => {
+    h.store.create({ ...input, mode: 'url' }); // c-1, created_at 1_000_000, expires_at 1_300_000
+    h.setClock(1_300_000); // the boundary: expires_at === now
+    expect(h.store.approve('c-1', 'admin:other', 'bearer')).toBeNull();
+    expect(h.store.get('c-1')?.status).toBe('pending');
+
+    h.setClock(1_299_999); // one tick earlier: still open
+    expect(h.store.approve('c-1', 'admin:other', 'bearer')).toMatchObject({
+      status: 'approved',
+      approved_by: 'admin:other',
+    });
+  });
+
   it('sweepExpired expires only open rows past expires_at and reports them; prune deletes old terminals', () => {
     h.store.create(input);
     h.store.create({ ...input, idempotency_key: 'b' });

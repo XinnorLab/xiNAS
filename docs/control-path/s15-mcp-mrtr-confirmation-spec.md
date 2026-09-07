@@ -914,6 +914,8 @@ that label is stored as `approval_interface`, shown to operators, and
 - `distinct_principal` (**default**): the deciding principal must hold
   role `admin` and must differ from the record's `principal`. The
   requester's own MCP credential can never approve its own request.
+  The requester may decline (withdraw) their own record over REST; the
+  policy applies to approval only.
 - `any_admin`: any `admin` principal, including the requester's own —
   for single-operator labs; the config loader logs a warning at startup.
 

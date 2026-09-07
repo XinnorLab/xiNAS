@@ -60,6 +60,49 @@ describe('loadConfig — internal-tokens.json merge', () => {
     }
   });
 
+  it("rejects a token principal starting with 'local:' — reserved for socket-peer identities (S15 Task 11 fix1, F6)", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xinas-config-local-reserved-'));
+    try {
+      writeFileSync(
+        join(dir, 'config.json'),
+        JSON.stringify({
+          controller_id: '00000000-0000-0000-0000-0000000000aa',
+          listen: { kind: 'unix', socket: '/tmp/x.sock' },
+          tokens: { 'bad-token': { principal: 'local:uds', role: 'admin' } },
+          state: { databasePath: '/tmp/x.db', auditJsonlPath: '/tmp/x.jsonl' },
+        }),
+      );
+      expect(() => loadConfig({ configPath: join(dir, 'config.json') })).toThrow(/local:/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a 'local:'-prefixed principal merged in from internal-tokens.json too", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xinas-config-local-reserved-merge-'));
+    try {
+      writeFileSync(
+        join(dir, 'config.json'),
+        JSON.stringify({
+          controller_id: '00000000-0000-0000-0000-0000000000aa',
+          listen: { kind: 'unix', socket: '/tmp/x.sock' },
+          tokens: { 'admin-token-123': { principal: 'admin:bootstrap', role: 'admin' } },
+          state: { databasePath: '/tmp/x.db', auditJsonlPath: '/tmp/x.jsonl' },
+          internalTokensPath: join(dir, 'internal-tokens.json'),
+        }),
+      );
+      writeFileSync(
+        join(dir, 'internal-tokens.json'),
+        JSON.stringify({
+          'agent-token-456': { principal: 'local:sneaky', role: 'internal_agent' },
+        }),
+      );
+      expect(() => loadConfig({ configPath: join(dir, 'config.json') })).toThrow(/local:/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('works when internal-tokens.json is absent (no internalTokensPath set)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'xinas-config-no-internal-'));
     try {

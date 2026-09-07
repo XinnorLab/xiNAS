@@ -100,19 +100,13 @@ describe('client catalog (S8 T2)', () => {
       await setup.cleanup();
     });
 
-    // S15: the catalog entries for the confirmation/approval endpoints and
-    // system.metrics land in this task (Task 7); their backing Express
-    // routes land in a later S15 task (the confirmation service / engine
-    // gate). Excluded here so this regression guard does not fail on a
-    // route that is deliberately not mounted yet — remove this exclusion
-    // once those routes are wired.
-    const ROUTE_NOT_YET_MOUNTED = new Set([
-      'mcp_confirmations.list',
-      'mcp_confirmations.get',
-      'mcp_confirmations.approve',
-      'mcp_confirmations.decline',
-      'system.metrics',
-    ]);
+    // S15: the catalog entry for system.metrics lands ahead of its backing
+    // route (Task 13, the metrics registry). Excluded here so this
+    // regression guard does not fail on a route that is deliberately not
+    // mounted yet — remove this exclusion once that route is wired. The
+    // mcp_confirmations.* entries were the same kind of forward declaration
+    // (Task 7) but their routes landed in Task 11 — no longer excluded.
+    const ROUTE_NOT_YET_MOUNTED = new Set(['system.metrics']);
 
     it('no catalog path hits the NOT_FOUND catch-all', async () => {
       for (const entry of CATALOG) {

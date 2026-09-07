@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { AuditAppender } from '../../../state/audit.js';
 import type { ResolvedConfirmationConfig } from '../../config.js';
-import { planDocumentHash } from '../../plan/document.js';
-import type { PlanDocument } from '../../plan/document.js';
+import { ApiException } from '../../errors.js';
+import { planDocumentHash, publicPlan } from '../../plan/document.js';
+import type { PlanDocument, PublicPlan } from '../../plan/document.js';
 import type { TaskStore } from '../../tasks/store.js';
 import { type CatalogEntry, ROLE_RANK } from '../catalog.js';
 import type { McpIdentity } from '../dispatch.js';
@@ -13,7 +14,7 @@ import {
   McpProtocolError,
   invalidRequestState,
 } from './errors.js';
-import { renderConfirmationMessage } from './message.js';
+import { renderConfirmationMessage, renderSummary } from './message.js';
 import { type ConfirmationMetrics, noopMetrics } from './metrics.js';
 import {
   type ElicitationMode,
@@ -31,6 +32,8 @@ import {
 } from './state.js';
 import type { BindingKey, ConfirmationStore } from './store.js';
 import {
+  ACK_DATA_LOSS,
+  ACK_NO_ROLLBACK,
   type ConfirmationMode,
   type ConfirmationRecord,
   MAX_ROUNDS,
@@ -646,6 +649,192 @@ export class ConfirmationService {
   /** Test-only: whether the per-confirmation waiter count is still tracked at all (F4 — the map must not leak a stale 0 entry). */
   hasWaiterEntry(confirmationId: string): boolean {
     return this.waiters.has(confirmationId);
+  }
+
+  // ── operator surface (S15 §9.1–9.2) ───────────────────────────────────────
+
+  /**
+   * View one confirmation with its stored plan and summary — the REST
+   * `GET /mcp/confirmations/{id}` payload. Returns null when the
+   * confirmation itself is unknown OR its plan row was GC'd (both read as
+   * "no such confirmation" to the caller). Emits `viewed`.
+   */
+  view(
+    id: string,
+    viewer: { principal: string; client_type: 'rest' | 'mcp' },
+  ): {
+    record: ConfirmationRecord;
+    plan: PublicPlan;
+    summary: ReturnType<typeof renderSummary>;
+  } | null {
+    const record = this.store.get(id);
+    if (record === null) return null;
+    const planTask = this.tasks.get(record.plan_id);
+    const doc = planTask?.plan_document;
+    if (doc === undefined) return null; // the plan row was GC'd: treat as gone
+    queueConfirmationEvent(this.audit, 'viewed', record, {
+      actor: viewer.principal,
+      actor_client_type: viewer.client_type,
+    });
+    return {
+      record,
+      plan: publicPlan(doc),
+      summary: renderSummary({ record, document: doc, hostname: this.hostname, now: this.now() }),
+    };
+  }
+
+  /**
+   * The operator decision — REST `POST /mcp/confirmations/{id}/approve|decline`
+   * (S15 §9.2). `channel` is the VERIFIED auth-derived channel the route
+   * computed (`bearer` | `uds_break_glass`); `interface` is the untrusted
+   * `X-Xinas-Approval-Interface` label and is never consulted for policy —
+   * only stored for operators. Throws `ApiException` on every refusal.
+   */
+  operatorDecide(input: {
+    id: string;
+    decision: 'approve' | 'decline';
+    approver: { principal: string; role: string };
+    channel: 'bearer' | 'uds_break_glass';
+    interface?: 'web' | 'rest';
+    acknowledge?: string;
+    reason?: string;
+  }): ConfirmationRecord {
+    const record = this.store.get(input.id);
+    if (record === null) throw new ApiException('NOT_FOUND', `no confirmation ${input.id}`);
+    // F1 (S15 §6.3): an expired-but-not-yet-swept record must not be
+    // approvable — checked before the approver-policy gates below, and
+    // scoped to 'approve' only. Decline stays allowed on an expired row:
+    // it is harmless (the sweep never touches a row that already moved to
+    // a terminal status) and lets an operator clean up a stale request.
+    if (input.decision === 'approve' && record.expires_at <= this.now()) {
+      throw new ApiException('CONFLICT', 'confirmation is expired, not pending', {
+        reason: 'not_pending',
+        status: 'expired',
+      });
+    }
+    // S15 §9.2 — approver policy. `channel` is the route's derivation from
+    // the auth verdict; `interface` is a label and is never consulted here.
+    const isUds = input.channel === 'uds_break_glass';
+    if (isUds && !this.config.allow_uds_approval) {
+      throw new ApiException(
+        'CONFLICT',
+        'UDS peer-trust decisions are break-glass and disabled (mcp.confirmation.allow_uds_approval: false)',
+        { reason: 'approver_policy', config_key: 'mcp.confirmation.allow_uds_approval' },
+        'Decide from the HTTPS approval page or REST with a different admin credential. Enabling the key lets anyone with root or xinas-admin on this node approve (S15 §3.5).',
+      );
+    }
+    // F11: consistent with middleware/rbac.ts and the service's own Gate-2
+    // RBAC check (handle() above) — a role failure is PERMISSION_DENIED
+    // with `required_role`, not a CONFLICT approver_policy. RBAC admits
+    // `internal_agent` here as admin-rank (it must reach /internal/v1
+    // routes), but this decision surface requires the literal 'admin'
+    // role, so internal_agent is refused here too.
+    if (input.approver.role !== 'admin') {
+      throw new ApiException(
+        'PERMISSION_DENIED',
+        `role '${input.approver.role}' may not decide a confirmation (requires admin)`,
+        { required_role: 'admin' },
+      );
+    }
+    if (input.decision === 'approve') {
+      // F3/F5 (S15 §9.2): distinct_principal applies to APPROVE only — the
+      // requester may still decline (withdraw) their own record — and has
+      // no UDS exemption: a uds_break_glass approver is held to the same
+      // distinct-principal rule as a bearer approver.
+      if (
+        this.config.approver_policy === 'distinct_principal' &&
+        input.approver.principal === record.principal
+      ) {
+        throw new ApiException(
+          'CONFLICT',
+          'the requesting principal may not approve its own request',
+          { reason: 'approver_policy' },
+          'Approve with a different admin credential, or xinasctl on the node.',
+        );
+      }
+      if (record.mode === 'form') {
+        throw new ApiException(
+          'CONFLICT',
+          'form-mode confirmations are accepted by the MCP client, not here',
+          { reason: 'form_mode' },
+        );
+      }
+      const needed =
+        record.rollback_model === 'unsupported' || record.risk_level === 'unsupported_rollback'
+          ? ACK_NO_ROLLBACK
+          : record.risk_level === 'destructive'
+            ? ACK_DATA_LOSS
+            : undefined;
+      if (needed !== undefined && input.acknowledge !== needed) {
+        throw new ApiException('INVALID_ARGUMENT', `approval requires acknowledge: "${needed}"`, {
+          required_acknowledge: needed,
+        });
+      }
+      const moved = this.store.approve(
+        record.confirmation_id,
+        input.approver.principal,
+        input.channel,
+        input.interface,
+        input.reason,
+      );
+      if (moved === null) {
+        // F10: report the LIVE status (a second writer may have moved the
+        // record between the read above and this guarded UPDATE), not the
+        // pre-transition snapshot captured in `record`.
+        const live = this.store.get(record.confirmation_id)?.status ?? record.status;
+        throw new ApiException('CONFLICT', `confirmation is ${live}, not pending`, {
+          reason: 'not_pending',
+          status: live,
+        });
+      }
+      const detail = { channel: input.channel, interface: input.interface ?? null };
+      queueConfirmationEvent(this.audit, 'approved', moved, {
+        actor: input.approver.principal,
+        actor_client_type: 'rest',
+        detail,
+        ...(input.reason !== undefined ? { reason: input.reason } : {}),
+      });
+      if (isUds) {
+        queueConfirmationEvent(this.audit, 'break_glass_used', moved, {
+          actor: input.approver.principal,
+          actor_client_type: 'rest',
+          detail: { decision: 'approve' },
+        });
+      }
+      this.metrics.decided('approved');
+      return moved;
+    }
+    const moved = this.store.decline(
+      record.confirmation_id,
+      input.approver.principal,
+      input.channel,
+      input.interface,
+      input.reason,
+    );
+    if (moved === null) {
+      // F10: same rationale as the approve branch above — report the live status.
+      const live = this.store.get(record.confirmation_id)?.status ?? record.status;
+      throw new ApiException('CONFLICT', `confirmation is ${live}, not pending or approved`, {
+        reason: 'not_pending',
+        status: live,
+      });
+    }
+    const detail = { channel: input.channel, interface: input.interface ?? null };
+    queueConfirmationEvent(this.audit, 'declined', moved, {
+      actor: input.approver.principal,
+      actor_client_type: 'rest',
+      detail,
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    });
+    if (isUds) {
+      queueConfirmationEvent(this.audit, 'break_glass_used', moved, {
+        actor: input.approver.principal,
+        actor_client_type: 'rest',
+        detail: { decision: 'decline' },
+      });
+    }
+    this.metrics.decided('declined');
+    return moved;
   }
 
   /** Expire open records past their TTL (startup + timer, S15 §6.3). */
