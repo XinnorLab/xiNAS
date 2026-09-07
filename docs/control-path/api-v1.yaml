@@ -705,6 +705,22 @@ components:
               description: "Observe-only/derived (full-stripe width reported by xiRAID)."
             rebuild_progress_pct: { type: [integer, "null"] }
             check_progress_pct: { type: [integer, "null"] }
+            raw_states:
+              type: array
+              description: "S17: every state word raid_show reported for the array (lower-cased, de-duplicated, order-preserving), including words status.state maps to no bucket or to unknown. Vocabulary: xiRAID Classic 4.4 AG / Showing RAID State."
+              items: { type: string }
+            init_progress_pct:
+              type: [number, "null"]
+              description: "S17: raid_show init_progress, 0-100, never merged with reconstruction progress."
+            recon_progress_pct:
+              type: [number, "null"]
+              description: "S17: raid_show recon_progress, 0-100, never merged with initialization progress."
+            restripe_progress_pct:
+              type: [number, "null"]
+              description: "S17: raid_show restripe_progress, 0-100 (retained for Phase 2 consumers)."
+            sdc_progress_pct:
+              type: [number, "null"]
+              description: "S17: raid_show sdc_progress, 0-100 (retained for Phase 2 consumers)."
             usable_capacity_bytes: { type: integer, format: int64 }
             memory_usage_mb:
               type: [integer, "null"]
@@ -1414,6 +1430,57 @@ components:
         related_resources:
           type: array
           items: { $ref: '#/components/schemas/ResourceRef' }
+        # S17 (docs/control-path/s17-mcp-subscriptions-spec.md §13): additive
+        # projection of the operational-event journal. `kind` mirrors `type`,
+        # `ts` mirrors `detected_at`, `message` mirrors the event summary.
+        feed:
+          type: string
+          enum: [raid, raid/progress, storage, nfs, nfs/sessions, system]
+        sequence: { type: integer, format: int64 }
+        type: { type: string }
+        subject:
+          type: object
+          required: [kind, id]
+          properties:
+            kind: { type: string }
+            id: { type: string }
+        detected_at: { type: string, format: date-time }
+        occurred_at: { type: string, format: date-time }
+        time_accuracy:
+          type: string
+          enum: [source, observed, task]
+        source:
+          type: object
+          properties:
+            kind: { type: string }
+            component: { type: string }
+        cursor:
+          type: string
+          description: "Opaque feed cursor for this row; pass as `after` (with `feed`) to page forward."
+        previous: { type: object, additionalProperties: true }
+        current: { type: object, additionalProperties: true }
+        operation:
+          type: object
+          properties:
+            kind: { type: string }
+            generation: { type: integer }
+            progressPct: { type: number }
+            bucket: { type: integer }
+        threshold:
+          type: object
+          properties:
+            metric: { type: string }
+            value: { type: number }
+            unit: { type: string }
+            enter: { type: number }
+            clear: { type: number }
+        reason_code: { type: string }
+        cause:
+          type: object
+          properties:
+            taskId: { type: string }
+            operationId: { type: string }
+        details: { type: object, additionalProperties: true }
 
     HealthReport:
       type: object
@@ -2889,6 +2956,20 @@ paths:
         - in: query
           name: severity
           schema: { type: string }
+        - in: query
+          name: feed
+          description: "S17: restrict to one operational-event feed."
+          schema:
+            type: string
+            enum: [raid, raid/progress, storage, nfs, nfs/sessions, system]
+        - in: query
+          name: after
+          description: "S17: an opaque feed cursor (requires `feed`); rows after it, ascending."
+          schema: { type: string }
+        - in: query
+          name: limit
+          description: "S17: page size, 1-500 (default 100)."
+          schema: { type: integer, minimum: 1, maximum: 500 }
       responses:
         '200':
           description: OK

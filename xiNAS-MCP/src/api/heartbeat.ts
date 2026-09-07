@@ -1,9 +1,24 @@
-import { randomUUID } from 'node:crypto';
 import type { OpenedStateStore } from '../state/index.js';
 import { createAgentRpcClient } from './agent-client.js';
 import type { Warning } from './envelope.js';
 
 type AgentState = 'healthy' | 'degraded' | 'offline';
+
+/**
+ * S17 §8.6: the tracker no longer writes `/xinas/v1/events/` KV rows; it
+ * hands its transitions and each heartbeat's collector map to these hooks,
+ * which the events context turns into `system.agent.*` and
+ * `system.collector.*` journal rows (D-22, D-24).
+ */
+export interface HeartbeatEventHooks {
+  onAgentState(t: {
+    from: AgentState;
+    to: AgentState;
+    reason: 'connect_refused' | 'heartbeat_timeout';
+    lastHeartbeatAt: string | null;
+  }): void;
+  onCollectorMap(map: Record<string, string>, opts: { agentHealthy: boolean; nowMs: number }): void;
+}
 
 /** Result shape of a single agent.health probe (subset of the RPC result). */
 export interface AgentHealthResult {
@@ -67,6 +82,8 @@ export interface HeartbeatTrackerOptions {
    * Best-effort; throwing is swallowed.
    */
   onReconnect?: () => void;
+  /** S17: journal hooks for agent-state and collector-state events. */
+  events?: HeartbeatEventHooks;
 }
 
 interface FailureOpts {
@@ -126,7 +143,17 @@ export class HeartbeatTracker {
     this.#connectRefused = false;
     if (payload?.version !== undefined) this.#agentVersion = payload.version;
     if (payload?.collectors !== undefined) this.#collectors = payload.collectors;
-    this.currentState(); // trigger transition emit if needed
+    const state = this.currentState(); // trigger transition emit if needed
+    if (payload?.collectors !== undefined) {
+      try {
+        this.#opts.events?.onCollectorMap(payload.collectors, {
+          agentHealthy: state === 'healthy',
+          nowMs: at.getTime(),
+        });
+      } catch {
+        /* best-effort: an event hook failure must not perturb the tracker */
+      }
+    }
   }
 
   recordHeartbeatFailure(at: Date, opts?: FailureOpts): void {
@@ -295,17 +322,12 @@ export class HeartbeatTracker {
   }
 
   #emitStateChange(from: AgentState, to: AgentState): void {
-    const ts = new Date().toISOString();
-    const eventId = randomUUID();
-    const key = `/xinas/v1/events/${ts}/${eventId}`;
     try {
-      this.#opts.state.kv.put(key, {
-        kind: 'agent_state_changed',
-        controller_id: this.#opts.controllerId,
+      this.#opts.events?.onAgentState({
         from,
         to,
         reason: to === 'offline' && this.#connectRefused ? 'connect_refused' : 'heartbeat_timeout',
-        last_successful_heartbeat_at: this.#lastHeartbeatAt?.toISOString() ?? null,
+        lastHeartbeatAt: this.#lastHeartbeatAt?.toISOString() ?? null,
       });
     } catch (_err) {
       // Best-effort: event emission failure does not affect tracker state.

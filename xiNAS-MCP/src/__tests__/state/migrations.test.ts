@@ -18,6 +18,8 @@ describe('migrations runner', () => {
       'kv',
       'leases',
       'mcp_confirmations',
+      'operational_event_meta',
+      'operational_events',
       'schema_version',
       'sqlite_sequence',
       'task_stages',
@@ -34,6 +36,7 @@ describe('migrations runner', () => {
       { version: 4, filename: '004-task-plan-binding.sql' },
       { version: 5, filename: '005-task-stage-total.sql' },
       { version: 6, filename: '006-mcp-confirmations.sql' },
+      { version: 7, filename: '007-operational-events.sql' },
     ]);
   });
 

@@ -136,3 +136,22 @@ On an Ubuntu 22.04/24.04 node with xiRAID + the rebuilt `xinas_agent` role (`Req
 5. `PATCH {quota_mode:'pquota'}` → unit `Options=` rewritten, remount visible to a connected client (expected disruption), `mount | grep prjquota`.
 6. `DELETE` → unit gone, `daemon-reload` clean, data intact (`blkid` still shows the fs).
 7. Journal shows no EACCES/EPERM from the agent throughout (sandbox sufficiency).
+
+## S17 amendment (2026-09-04) — detection fields for storage events
+
+`s17-mcp-subscriptions-spec.md` §8.4 derives storage events from the
+observed `Filesystem` row using exactly these fields, all of which this spec
+already makes real (§5 observe enrichment):
+
+| Event family | Fields | Rule |
+|---|---|---|
+| mount lost / restored | `status.mounted`, `status.mount_unit_state` | lost when `mounted` goes `true → false` or `mount_unit_state` becomes `failed`; restored when `mounted` goes `false → true` |
+| mount failed | `status.mount_unit_state = failed` + a `failed` `fs.mount` task for the unit | the task is the trusted evidence; an `inactive` unit alone is not a failed mount attempt |
+| read-only entered / cleared | `status.effective_mount_options` contains `ro` (the host mount table, PID 1's namespace — §"Which mount table") | evaluated only while `mounted` is `true` on both sides of the comparison |
+| capacity warning / critical / cleared | `status.size_bytes`, `status.free_bytes` | `used_pct = 100 × (size − free) / size`; hysteresis and per-filesystem overrides in S17 §8.4 and §10; missing or non-finite values evaluate nothing |
+| definition added / removed | row presence | an approved `fs.unmanage` task supplies `cause.taskId`; a removed definition is a configuration change, never a mount-loss alarm |
+
+Observed-state transition atomicity is the ingest handler's single
+transaction (agent spec §"Flow A" step 3); the baseline rule (first
+observation emits nothing except an already-crossed capacity threshold) is
+S17 §8.0.

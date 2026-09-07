@@ -8,6 +8,8 @@ interface InventoryResult {
   cpu_threads?: number;
   mem_total_kb?: number;
   arch?: string;
+  /** S17: the kernel boot id; the api derives system.reboot.detected from a change. */
+  boot_id?: string;
 }
 
 interface InventoryProbe {
@@ -84,6 +86,7 @@ export class InventoryCollector implements Collector<'inventory'> {
           ...(result.cpu_threads !== undefined ? { cpu_threads: result.cpu_threads } : {}),
           ...(result.mem_total_kb !== undefined ? { mem_total_kb: result.mem_total_kb } : {}),
           ...(result.arch !== undefined ? { arch: result.arch } : {}),
+          ...(result.boot_id !== undefined ? { boot_id: result.boot_id } : {}),
           observed_at: observedAt,
         },
       },

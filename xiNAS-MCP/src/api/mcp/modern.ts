@@ -21,6 +21,7 @@ import { type DispatcherOptions, callTool, listTools } from './dispatch.js';
 import { McpProtocolError } from './confirmation/errors.js';
 import { parseMrtrParams } from './confirmation/policy.js';
 import { buildDiscoverResult, isModernProtocolVersion } from './discover.js';
+import { listResources, listTemplates, readResource } from './resources.js';
 import { isInputRequired } from './results.js';
 
 /** JSON-RPC 2.0 reserved codes used on this path. */
@@ -106,8 +107,32 @@ export async function handleModernRequest(
     switch (msg.method) {
       case 'server/discover':
         // Stateless, read-only, repeatable: no session is created and no
-        // xiNAS state is touched — the result is built from the catalog.
-        return { jsonrpc: '2.0', id: rpcId, result: buildDiscoverResult() };
+        // xiNAS state is touched — the result is built from the catalog and
+        // the installed resource surface (S17 §3).
+        return {
+          jsonrpc: '2.0',
+          id: rpcId,
+          result: buildDiscoverResult(
+            opts.resources !== undefined
+              ? { resources: { subscribe: opts.resources.subscribe } }
+              : {},
+          ),
+        };
+
+      // S17 §4 — Resources (modern era only; the legacy SDK path is untouched).
+      case 'resources/list':
+      case 'resources/templates/list':
+      case 'resources/read': {
+        if (opts.resources === undefined) break; // → -32601 below
+        const readCtx = { identity: opts.identity(), correlationId };
+        const result =
+          msg.method === 'resources/list'
+            ? listResources(opts.resources.providers, msg.params, readCtx)
+            : msg.method === 'resources/templates/list'
+              ? listTemplates(opts.resources.providers, msg.params, readCtx)
+              : readResource(opts.resources.providers, msg.params, readCtx);
+        return { jsonrpc: '2.0', id: rpcId, result };
+      }
 
       case 'tools/list':
         return {
@@ -143,15 +168,16 @@ export async function handleModernRequest(
       }
 
       default:
-        return {
-          jsonrpc: '2.0',
-          id: rpcId,
-          error: {
-            code: METHOD_NOT_FOUND,
-            message: `method not found: ${String(msg.method)}`,
-          },
-        };
+        break;
     }
+    return {
+      jsonrpc: '2.0',
+      id: rpcId,
+      error: {
+        code: METHOD_NOT_FOUND,
+        message: `method not found: ${String(msg.method)}`,
+      },
+    };
   } catch (err) {
     if (err instanceof McpProtocolError) {
       return {

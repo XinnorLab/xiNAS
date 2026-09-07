@@ -11,6 +11,7 @@ function makeFakeInventoryProbe(
       cpu_threads?: number;
       mem_total_kb?: number;
       arch?: string;
+      boot_id?: string;
     };
   } = {},
 ) {
@@ -89,5 +90,24 @@ describe('InventoryCollector', () => {
     const col = new InventoryCollector({ probe });
     await col.initialSweep().catch(() => {});
     expect(col.health().state).toBe('error');
+  });
+});
+
+describe('InventoryCollector — S17 boot id', () => {
+  it('forwards status.boot_id when the probe reports one', async () => {
+    const probe = makeFakeInventoryProbe({
+      result: { hostname: 'h', os_kernel: '6.8', boot_id: '0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b' },
+    });
+    const col = new InventoryCollector({ probe });
+    const [delta] = await col.initialSweep();
+    const status = delta?.value?.status as Record<string, unknown>;
+    expect(status.boot_id).toBe('0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b');
+  });
+
+  it('omits boot_id when the probe has none', async () => {
+    const probe = makeFakeInventoryProbe({ result: { hostname: 'h', os_kernel: '6.8' } });
+    const col = new InventoryCollector({ probe });
+    const [delta] = await col.initialSweep();
+    expect(delta?.value?.status).not.toHaveProperty('boot_id');
   });
 });

@@ -1,0 +1,20 @@
+{
+  "event_id": "5c1e2c2a-9f4e-4c3b-9d3a-1a2b3c4d5e6f",
+  "ts": "2026-09-04T12:00:03.000Z",
+  "kind": "raid.state.degraded",
+  "severity": "error",
+  "message": "RAID array data: degraded",
+  "related_resources": [{ "kind": "Disk", "id": "nvme-S6B0NX0T123456-1" }],
+  "feed": "raid",
+  "sequence": 3,
+  "type": "raid.state.degraded",
+  "subject": { "kind": "XiraidArray", "id": "data" },
+  "detected_at": "2026-09-04T12:00:03.000Z",
+  "time_accuracy": "observed",
+  "source": { "kind": "observed_transition", "component": "XiraidArray" },
+  "cursor": "MQAwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYWEfcmFpZB8zH2FiY2RlZmdoaWpr",
+  "previous": { "raw_states": ["online"] },
+  "current": { "raw_states": ["degraded"] },
+  "reason_code": "hysteresis",
+  "details": { "array": "data", "rawStates": ["degraded"], "observedAt": "2026-09-04T11:59:58.000Z" }
+}

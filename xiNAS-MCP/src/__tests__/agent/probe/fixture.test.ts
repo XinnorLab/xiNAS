@@ -1,4 +1,8 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { createFixtureInventoryProbe } from '../../../agent/probe/fixture.js';
 
 // ---- S5 T6: nfs fixture passthrough (the e2e blocker seeds) ----
 
@@ -81,5 +85,19 @@ describe('createFixtureNetworkProbe(dir) over net-host-state.json', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('createFixtureInventoryProbe — S17 boot id', () => {
+  it('reports a fixed boot id without a fixture file and the file value when present', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'xinas-fixture-inv-'));
+    const plain = await createFixtureInventoryProbe(dir).snapshot();
+    expect(plain.boot_id).toBe('00000000-0000-4000-8000-000000000001');
+    writeFileSync(join(dir, 'inventory.json'), JSON.stringify({ boot_id: 'b2' }));
+    const fromFile = await createFixtureInventoryProbe(dir).snapshot();
+    expect(fromFile.boot_id).toBe('b2');
+    expect((await createFixtureInventoryProbe().snapshot()).boot_id).toBe(
+      '00000000-0000-4000-8000-000000000001',
+    );
   });
 });

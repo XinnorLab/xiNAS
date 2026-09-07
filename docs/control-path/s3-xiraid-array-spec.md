@@ -399,3 +399,29 @@ array-shaped fake transport will not catch it; cover both shapes.
 - **`wait_online` timeout** — pick a bound that tolerates large-array init without hanging the worker (cap=1) too long; initialization continues in the background after the task succeeds.
 - **Disk-id stability** — the device→`Disk`-id mapping in observe and the id→device resolution at plan time must use the same `Disk` identity scheme; the parser's id is still the provisional device-name key (see the `PROVISIONAL` note in `lib/parse/disk.ts`) — verify against the collector's stable-key behavior during T2 and align if needed.
 - **TLS material** — the adapter reuses `/etc/xraid/net.conf` + the CA cert exactly as `src/grpc/client.ts` does today; if the daemon's cert setup differs on a real node, that surfaces in T5/T10 and is a packaging concern (`xiraid_classic`), not a code one.
+
+## S17 amendment (2026-09-04) — observation contract for event generation
+
+`s17-mcp-subscriptions-spec.md` §8.1 derives RAID events from the observed
+`XiraidArray` row, which needs more than the compressed `status.state`.
+Additive fields on `status` (`api-v1.yaml` updated in the same change;
+existing fields untouched):
+
+| Field | Source | Rule |
+|---|---|---|
+| `raw_states` | the daemon's `state` word list | lower-cased, de-duplicated, order-preserving; **every** word, including ones §5.3 maps to no bucket or to `unknown` |
+| `init_progress_pct` | `init_progress` | integer or finite number in `[0, 100]`, else `null`; never merged with another progress value |
+| `recon_progress_pct` | `recon_progress` | same |
+| `restripe_progress_pct` | `restripe_progress` | same (Phase 2 consumer; retained from Phase 1) |
+| `sdc_progress_pct` | `sdc_progress` | same |
+| `rebuild_progress_pct` | unchanged (`recon_progress ?? init_progress`) | kept for compatibility; not used by event generation |
+
+The member state words already retained on `member_states[].states` and the
+sparepool name on `spec.spare_pool` / `status.spare_pool` are the other
+S17 inputs; `status.observed_at` and the collector's health string
+(`agent.health`) are the observation timestamp and collector health the
+requirement asks for. An unknown state word stays in `raw_states`, still
+maps to `status.state: unknown` (§5.3), and S17 emits one bounded
+`raid.source.unknown_state` per (array, word); it never aborts the
+observation batch. Vendor vocabulary: [AG / Showing RAID State](https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html)
+(xiRAID Classic 4.4).

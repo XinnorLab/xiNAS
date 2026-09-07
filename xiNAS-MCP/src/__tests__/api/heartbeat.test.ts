@@ -100,30 +100,48 @@ describe('HeartbeatTracker — state transitions', () => {
     expect(tracker.currentState()).toBe('degraded');
   });
 
-  it('emits an agent_state_changed event to the KV store on transition', () => {
-    const tracker = makeTracker({ intervalMs: 5_000 });
+  it('hands a state transition to the S17 events hook and writes no KV event row', () => {
+    const calls: unknown[] = [];
+    const tracker = makeTracker({
+      intervalMs: 5_000,
+      events: {
+        onAgentState: (t) => calls.push(t),
+        onCollectorMap: () => {},
+      },
+    });
     const t0 = new Date('2026-05-28T12:00:00.000Z');
     vi.setSystemTime(t0);
     tracker.recordHeartbeatSuccess(t0);
 
-    // Advance to degrade
+    // Advance to degrade; currentState re-evaluates and emits on transition.
     vi.setSystemTime(new Date(t0.getTime() + 11_000));
-    // Calling currentState re-evaluates and emits on transition
     tracker.currentState();
 
-    // Check that an event was written at an /xinas/v1/events/* path
-    const events = state.kv.list({ prefix: '/xinas/v1/events/' });
-    expect(events.length).toBeGreaterThanOrEqual(1);
-    const evt = events[0]?.value as {
-      kind: string;
-      from: string;
-      to: string;
-      controller_id: string;
-    };
-    expect(evt.kind).toBe('agent_state_changed');
-    expect(evt.from).toBe('healthy');
-    expect(evt.to).toBe('degraded');
-    expect(evt.controller_id).toBe('00000000-0000-0000-0000-0000000000aa');
+    expect(calls).toEqual([
+      {
+        from: 'healthy',
+        to: 'degraded',
+        reason: 'heartbeat_timeout',
+        lastHeartbeatAt: t0.toISOString(),
+      },
+    ]);
+    // The legacy /xinas/v1/events/ writer is retired (S17 D-22).
+    expect(state.kv.list({ prefix: '/xinas/v1/events/' })).toEqual([]);
+  });
+
+  it('hands the collector map to the events hook on every successful heartbeat', () => {
+    const maps: unknown[] = [];
+    const tracker = makeTracker({
+      intervalMs: 5_000,
+      events: {
+        onAgentState: () => {},
+        onCollectorMap: (map, opts) => maps.push([map, opts.agentHealthy]),
+      },
+    });
+    const t0 = new Date('2026-05-28T12:00:00.000Z');
+    vi.setSystemTime(t0);
+    tracker.recordHeartbeatSuccess(t0, { collectors: { Disk: 'running' } });
+    expect(maps).toEqual([[{ Disk: 'running' }, true]]);
   });
 
   it('currentWarnings returns EXECUTOR_DEGRADED only when degraded + routeIsMutating=true', () => {
