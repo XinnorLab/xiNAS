@@ -31,6 +31,7 @@ import {
   toApplyPlan,
 } from '../handlers/plan-apply.js';
 import { getOrNull, sendOk } from '../handlers/reads.js';
+import { DANGEROUS_FLAG_REQUIRED } from '../plan/blockers.js';
 import { publicPlan } from '../plan/document.js';
 import {
   xiraidArrayCreateProvider,
@@ -336,7 +337,7 @@ export function arraysRouter(ctx: ApiContext): Router {
         { kv: ctx.state.kv },
         planTask.spec,
       );
-      const blocking = recheck.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+      const blocking = recheck.blockers.filter((b) => b.code !== DANGEROUS_FLAG_REQUIRED);
       if (blocking.length > 0) {
         throw new ApiException(
           'PRECONDITION_FAILED',
@@ -472,7 +473,7 @@ export function arraysRouter(ctx: ApiContext): Router {
         { kv: ctx.state.kv },
         planTask.spec,
       );
-      const blocking = recheck.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+      const blocking = recheck.blockers.filter((b) => b.code !== DANGEROUS_FLAG_REQUIRED);
       if (blocking.length > 0) {
         throw new ApiException(
           'PRECONDITION_FAILED',

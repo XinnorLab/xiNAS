@@ -1,10 +1,16 @@
-export type ConfirmationStatus =
-  | 'pending'
-  | 'approved'
-  | 'declined'
-  | 'cancelled'
-  | 'expired'
-  | 'consumed';
+// S15 Task 14 fix round 1 (F2): the status union and its terminal subset
+// are owned by state/confirmation-statuses.ts (state/gc.ts needs
+// TERMINAL_CONFIRMATION_STATUSES and state/ must never import from api/).
+// Imported (not just re-exported) so ConfirmationStatus is also usable
+// below (ConfirmationRecord.status); re-exported so every existing
+// importer of ConfirmationStatus / TERMINAL_CONFIRMATION_STATUSES from
+// this module keeps working unchanged.
+import type { ConfirmationStatus } from '../../../state/confirmation-statuses.js';
+export type { ConfirmationStatus };
+export {
+  CONFIRMATION_STATUSES,
+  TERMINAL_CONFIRMATION_STATUSES,
+} from '../../../state/confirmation-statuses.js';
 export type ConfirmationMode = 'form' | 'url';
 /** VERIFIED authentication channel of the deciding request — from the auth verdict, never a header. */
 export type ApprovalChannel = 'mcp_form' | 'bearer' | 'uds_break_glass';
@@ -21,12 +27,6 @@ export const MAX_ROUNDS = 3;
 export const REQUEST_KEY = 'confirm_apply';
 export const ACK_DATA_LOSS = 'DATA MAY BE PERMANENTLY LOST';
 export const ACK_NO_ROLLBACK = 'ROLLBACK IS NOT SUPPORTED';
-export const TERMINAL_CONFIRMATION_STATUSES: ReadonlySet<ConfirmationStatus> = new Set([
-  'declined',
-  'cancelled',
-  'expired',
-  'consumed',
-]);
 
 /** One row of mcp_confirmations (S15 §6.1). Epoch-ms timestamps; NULL columns are absent. */
 export interface ConfirmationRecord {

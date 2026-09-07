@@ -85,6 +85,8 @@ export class ConfirmationStore {
   private readonly consumeStmt: Statement;
   private readonly expiredCandidatesStmt: Statement;
   private readonly pruneStmt: Statement;
+  /** M3: `list()`'s four filter shapes, prepared lazily and kept. */
+  private readonly listStmts = new Map<string, Statement>();
 
   constructor(deps: ConfirmationStoreDeps) {
     this.db = deps.db;
@@ -118,9 +120,14 @@ export class ConfirmationStore {
       `SELECT COUNT(*) AS n FROM mcp_confirmations
         WHERE status IN ('pending','approved') AND principal = @principal AND expires_at > @now`,
     );
+    // A6/M1: `expires_at > @now` matches every other open-row predicate in
+    // this store (findOpenByBindings, countOpen, consume). Without it a
+    // lapsed-but-unswept row could be re-issued into a fresh round with a
+    // fresh nonce while its expiry stayed put — a confirmation the service
+    // treats as live but the consume guard would then refuse.
     this.reissueStmt = db.prepare(
       `UPDATE mcp_confirmations SET round = round + 1, request_state_nonce_hash = @nonce
-        WHERE confirmation_id = @id AND status IN ('pending','approved')`,
+        WHERE confirmation_id = @id AND status IN ('pending','approved') AND expires_at > @now`,
     );
     this.approveStmt = db.prepare(
       `UPDATE mcp_confirmations SET status = 'approved', approved_at = @now, approved_by = @by,
@@ -146,6 +153,7 @@ export class ConfirmationStore {
           approved_at = COALESCE(approved_at, @now), approved_by = COALESCE(approved_by, @principal),
           approval_channel = COALESCE(approval_channel, 'mcp_form')
         WHERE confirmation_id = @id AND status = @from AND expires_at > @now
+          AND principal = @principal
           AND mode = CASE @from WHEN 'pending' THEN 'form' ELSE 'url' END`,
     );
     this.expiredCandidatesStmt = db.prepare(
@@ -178,24 +186,41 @@ export class ConfirmationStore {
     return row === undefined ? null : rowToRecord(row);
   }
 
-  list(filter: ConfirmationListFilter): ConfirmationRecord[] {
+  /**
+   * M3: exactly four filter shapes exist (status? × principal?), so the four
+   * statements are prepared once on first use and cached — `list` is the
+   * `GET /mcp/confirmations` hot path and was re-preparing its SQL on every
+   * call, which is the one thing this store otherwise never does.
+   */
+  private listStatement(hasStatus: boolean, hasPrincipal: boolean): Statement {
+    const key = `${hasStatus ? 's' : ''}${hasPrincipal ? 'p' : ''}`;
+    const cached = this.listStmts.get(key);
+    if (cached !== undefined) return cached;
     const clauses: string[] = [];
-    const params: Record<string, unknown> = { limit: filter.limit ?? 100 };
-    if (filter.status !== undefined) {
-      clauses.push('status = @status');
-      params.status = filter.status;
-    }
-    if (filter.principal !== undefined) {
-      clauses.push('principal = @principal');
-      params.principal = filter.principal;
-    }
+    if (hasStatus) clauses.push('status = @status');
+    if (hasPrincipal) clauses.push('principal = @principal');
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    const rows = this.db
-      .prepare(
-        `SELECT ${COLUMNS} FROM mcp_confirmations ${where} ORDER BY created_at DESC, confirmation_id DESC LIMIT @limit`,
-      )
-      .all(params) as Row[];
+    const stmt = this.db.prepare(
+      `SELECT ${COLUMNS} FROM mcp_confirmations ${where} ORDER BY created_at DESC, confirmation_id DESC LIMIT @limit`,
+    );
+    this.listStmts.set(key, stmt);
+    return stmt;
+  }
+
+  list(filter: ConfirmationListFilter): ConfirmationRecord[] {
+    const params: Record<string, unknown> = { limit: filter.limit ?? 100 };
+    if (filter.status !== undefined) params.status = filter.status;
+    if (filter.principal !== undefined) params.principal = filter.principal;
+    const rows = this.listStatement(
+      filter.status !== undefined,
+      filter.principal !== undefined,
+    ).all(params) as Row[];
     return rows.map(rowToRecord);
+  }
+
+  /** Test-only (M3): how many distinct list statements have been prepared. */
+  listStatementShapes(): number {
+    return this.listStmts.size;
   }
 
   /** Expiry is checked inline (`expires_at > now`) so a request racing the 30s sweep sees the same answer (S15 §6.3). */
@@ -216,7 +241,7 @@ export class ConfirmationStore {
   }
 
   reissue(id: string, nonce: string): ConfirmationRecord | null {
-    return this.reissueStmt.run({ id, nonce }).changes === 1 ? this.get(id) : null;
+    return this.reissueStmt.run({ id, nonce, now: this.now() }).changes === 1 ? this.get(id) : null;
   }
 
   approve(
@@ -278,7 +303,17 @@ export class ConfirmationStore {
     return this.expireStmt.run({ id, reason }).changes === 1 ? this.get(id) : null;
   }
 
-  /** The single guarded consume (S15 §8.3 step 8). Runs inside the caller's transaction. */
+  /**
+   * The single guarded consume (S15 §8.3 step 8). Runs inside the caller's
+   * transaction.
+   *
+   * A6/M2: `principal = @principal` makes the guard self-contained. The
+   * engine already checks `record.principal !== applyReq.principal` before
+   * calling, but `@principal` was flowing into the row (as `approved_by`
+   * via COALESCE) without ever being checked against it — so a caller that
+   * reached consume with the wrong principal would have stamped that
+   * principal onto someone else's record.
+   */
   consume(args: {
     confirmation_id: string;
     task_id: string;

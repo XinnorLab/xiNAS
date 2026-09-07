@@ -96,6 +96,11 @@ describe('requestState codec (S15 §7)', () => {
     }
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).not.toContain('AAAAAAAA');
+    // Task 5 follow-up: pin the WRAPPER's exact message. The
+    // "does not contain the key bytes" assertion above is vacuous on any
+    // V8 build whose SyntaxError happens not to quote the offending run —
+    // this one fails on every version if the bare SyntaxError escapes.
+    expect((err as Error).message).toBe(`confirmation key ring ${path} is not valid JSON`);
   });
 
   it('reloading an existing ring is idempotent: the second call returns the same key material', () => {

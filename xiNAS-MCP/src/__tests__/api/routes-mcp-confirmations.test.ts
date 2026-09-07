@@ -768,12 +768,22 @@ describe('local:uds channel over a REAL Unix socket (S15 Task 11 fix1, F2b)', ()
 
     const store = new ConfirmationStore({ db: handle!.state.db, now: () => Date.now() });
     expect(store.get(record.confirmation_id)?.status).toBe('pending');
-    const approved = auditRowsOf().find(
+    const rows = auditRowsOf();
+    const approved = rows.find(
       (r) =>
         r.kind === 'mcp.confirmation.approved' &&
         r.payload.confirmation_id === record.confirmation_id,
     );
     expect(approved).toBeUndefined();
+    // (f): and no break-glass row either. `break_glass_used` is the row an
+    // operator greps to answer "was the boundary ever crossed on this
+    // node?" — a refused attempt must not appear in that answer.
+    const breakGlass = rows.find(
+      (r) =>
+        r.kind === 'mcp.confirmation.break_glass_used' &&
+        r.payload.confirmation_id === record.confirmation_id,
+    );
+    expect(breakGlass).toBeUndefined();
   });
 
   it('with allow_uds_approval: true: 200, approval_channel uds_break_glass, both approved + break_glass_used audited with principal local:uds', async () => {

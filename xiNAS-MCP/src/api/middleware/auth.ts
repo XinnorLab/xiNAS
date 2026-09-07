@@ -37,7 +37,10 @@ function isUnixSocketConnection(req: Request): boolean {
  *      viewer-token caller over UDS from getting silently promoted
  *      to admin. An unknown bearer is a hard 401 (we do NOT fall
  *      through to UDS trust — explicit-but-wrong creds are a worse
- *      signal than no creds).
+ *      signal than no creds). A token carrying `surface: 'mcp'` is
+ *      refused here for the same reason (S15 §3.5): it is an MCP
+ *      credential, and honouring it on REST would let its holder apply
+ *      without the MRTR confirmation the /mcp path enforces.
  *
  *   2. Unix peer-creds. If no bearer header was sent AND the
  *      connection is UDS, trust the caller as admin. The socket
@@ -103,6 +106,30 @@ export function authMiddleware(config: ApiConfig, getLoopbackToken?: () => strin
       const token = authHeader.slice(7).trim();
       const principal = config.tokens[token];
       if (principal) {
+        // A1 (S15 §3.5, final review C1): a token scoped to the MCP
+        // endpoint is not a REST credential. Without this, an agent
+        // holding an "MCP" bearer applies over /api/v1 with no MRTR
+        // confirmation at all — the gate would constrain only the path.
+        // Refused outright: no fall-through to UDS trust (an
+        // explicit-but-wrong-surface credential is the same class of
+        // signal as an unknown bearer, §auth order above).
+        if (principal.surface === 'mcp') {
+          const scoped = makeError(
+            'PERMISSION_DENIED',
+            'this token is scoped to the MCP endpoint',
+            { reason: 'token_surface', surface: 'mcp' },
+          );
+          res.status(errorStatus('PERMISSION_DENIED')).json(
+            buildEnvelope({
+              request_id: ctx.request_id,
+              correlation_id: ctx.correlation_id,
+              state_revision: 0,
+              errors: [scoped],
+              result: null,
+            }),
+          );
+          return;
+        }
         ctx.principal = principal.principal;
         ctx.role = principal.role;
         next();

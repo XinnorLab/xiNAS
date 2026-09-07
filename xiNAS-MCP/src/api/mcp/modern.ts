@@ -220,13 +220,22 @@ export async function handleModernRequest(
         httpStatus: err.httpStatus,
       };
     }
+    // A8 (final review M5): anything that is NOT an McpProtocolError got
+    // here by surprise — a sqlite failure, a filesystem path, a stack-
+    // derived message — and its text was never written for a client to
+    // read. Answer with a fixed string and no `data`, and log the original
+    // against the correlation id so an operator can still find it.
+    // (`ApiException` is not special-cased: it never reaches this path —
+    // the loopback turns REST refusals into tool results, and the operator
+    // routes that do throw one are REST-only.)
+    console.error(
+      `mcp: unexpected error on ${String(msg.method)} [correlation_id=${correlationId}]:`,
+      err instanceof Error ? (err.stack ?? err.message) : String(err),
+    );
     return {
       jsonrpc: '2.0',
       id: rpcId,
-      error: {
-        code: INTERNAL_ERROR,
-        message: err instanceof Error ? err.message : String(err),
-      },
+      error: { code: INTERNAL_ERROR, message: 'internal error' },
     };
   }
 }

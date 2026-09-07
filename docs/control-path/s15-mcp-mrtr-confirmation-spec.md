@@ -1,6 +1,6 @@
 # xiNAS S15 — MCP MRTR safe-operation confirmation (design spec)
 
-**Status:** design (2026-09-04), awaiting review. Extends **ADR-0010** /
+**Status:** implemented (2026-09-05) — Tasks 0–12 via PR #375, Tasks 13–17 and the whole-feature review wave via the follow-up PR into release/3.14; §3.5 token-surface ruling recorded. Extends **ADR-0010** /
 `s8-clients-spec.md` (the `/mcp` transport inside `xinas-api.service`),
 **S14** (`s14-mcp-modern-era-spec.md`, the MCP `2026-07-28` modern era) and
 **S2** (`s2-task-envelope-spec.md`, the plan/apply task engine).
@@ -168,7 +168,7 @@ under `xiNAS-MCP/src/`).
 | 5 | Resolve the plan | new: `plan_only` row + its `plan_document` (§5); missing → `NOT_FOUND` |
 | 6 | Plan ownership and binding | new: document `operation_kind` equals the entry's kind; document `resource_ref` equals the tool's path arguments; document integrity (§5.3) |
 | 7 | Blockers | new: `plan_document.blockers` non-empty after excluding the engine-owned `dangerous_flag_required` advisory (the engine enforces the real flag at apply, §3.4; REST routes filter it the same way) → `PRECONDITION_FAILED` (`details.reason: plan_blocked`, the blocker list) — no record is created (V-26) |
-| 8 | Confirmation mode | §3.2 from the document |
+| 8 | Confirmation mode | §3.2 from the document — and if the plan is `destructive` and the arguments do not carry `dangerous: true`, answer `PRECONDITION_FAILED dangerous_flag_required` with no record (§3.4) |
 | 9 | Execute MRTR | §4 |
 | 10 | Revalidate freshness | inside the apply transaction (existing `PRECONDITION_FAILED` / `CONFLICT plan_stale`) |
 | 11 | Consume + create task | §8, same transaction |
@@ -180,8 +180,9 @@ pre-check only stops a forbidden caller from minting approval records.
 
 ### 3.4 `dangerous` stays independent (MRTR-POL-004)
 
-The confirmation service never reads `dangerous`, and the `dangerous` gate
-(`api/tasks/engine.ts:384-391`) never reads the confirmation. For a
+The confirmation service does not *enforce* `dangerous` — it reads the
+flag only to refuse early (below) — and the `dangerous` gate
+(`api/tasks/engine.ts:521-528`) never reads the confirmation. For a
 destructive plan both must hold: the record is `approved` **and**
 `dangerous: true` is in the apply body. The transaction order in §8.3
 makes "one satisfies the other" structurally impossible: the confirmation
@@ -189,17 +190,41 @@ is *verified* before the `dangerous` gate and *consumed* only after the
 task insert, in the same transaction, so a failed `dangerous` gate leaves
 the record untouched.
 
+Independence is not indifference: the service refuses a destructive apply
+that carries no `dangerous: true` at gate 8 (§3.3), **before** any record
+is created, so no operator approval is ever spent on a call the apply
+transaction will refuse. The condition is the engine's own gate verbatim
+(`risk_level === 'destructive' && dangerous !== true`) and no wider — a
+url mode caused only by `rollback_model: unsupported` or `risk_level:
+unsupported_rollback` needs no flag, because the engine does not ask for
+one either. The engine's check stays exactly where it is: it is the
+enforcement point, and this one is a courtesy.
+
 ### 3.5 Security boundary (review P0)
 
 What MRTR proves is that **a credential other than the requesting MCP
 client's accepted this exact plan**. It cannot prove more than the node's
 own trust model allows:
 
-- The guarantee holds for an agent that reaches the node **only through
-  the MCP endpoint** (a bearer token, or `xinas-mcp-stdio` run by an
-  account that is not root and not in `xinas-admin`). Such an agent cannot
-  read `config.json`, the key ring or the SQLite store, cannot call
-  `xinasctl` over the UDS, and cannot approve.
+- **A bearer token is, by default, a REST credential as well as an MCP
+  one.** `middleware/auth.ts` and `transport.ts` `resolveIdentity()` read
+  the same `config.tokens` table, so an agent holding a token with no
+  `surface` key (`surface: any`, the default, and what every token minted
+  before that key existed means) can send the identical apply to
+  `POST /api/v1/…` and get it applied with **no confirmation at all**:
+  `client_type` is then `rest`, and the MRTR gate keys on `client_type`
+  being `mcp`. MRTR therefore constrains the **path**, not the principal.
+  The guarantee below holds for a bearer-only agent **only when its token
+  is configured `surface: mcp`** (§13), which makes `/api/v1` refuse it
+  with `PERMISSION_DENIED` / `details.reason: 'token_surface'`. Scope
+  every agent token that way; the default is left permissive so an
+  existing deployment does not break on upgrade, not because it is safe.
+- With that scoping in place, the guarantee holds for an agent that
+  reaches the node **only through the MCP endpoint** (a `surface: mcp`
+  bearer, or `xinas-mcp-stdio` run by an account that is not root and not
+  in `xinas-admin`). Such an agent cannot read `config.json`, the key ring
+  or the SQLite store, cannot call `xinasctl` over the UDS, and cannot
+  approve.
 - An agent that holds **root, or membership of `xinas-admin`, on the
   node** is outside the boundary: it can read every bearer token, edit the
   database, the config or the api code, and approve anything. No setting
@@ -915,6 +940,13 @@ over REST has no effect on the MRTR — form acceptance comes from the
 client — so `approve` on a `form` record answers `CONFLICT`
 (`details.reason: form_mode`).
 
+When the confirmation exists but its plan row has been pruned by GC
+(§6.5), `GET …/{id}` still answers `404` — there is no plan to show — but
+it says which case it is: `details: { reason: 'plan_pruned',
+confirmation_id }`, with the remediation "the plan row was pruned by GC;
+the confirmation is listed by `mcp_confirmations list` and can still be
+declined". An unknown id keeps the plain `NOT_FOUND` with no `details`.
+
 ### 9.2 Who may approve (MRTR-OOB-002/005, D-06)
 
 The deciding request's **channel** is derived from the auth middleware's
@@ -966,7 +998,7 @@ Served by `xinas-api` on every listener:
   'none'`, `X-Frame-Options: DENY`, `Cache-Control: no-store`,
   `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`.
 - `GET /mcp/approvals/assets/app.js`, `app.css` — static, inline strings
-  in `api/mcp/approval-page.ts` (no build step, no third-party script,
+  in `api/mcp/confirmation/approval-page.ts` (no build step, no third-party script,
   nothing fetched from anywhere but `'self'`).
 - The script asks for an operator token (`<input type="password">`, never
   persisted, held in a closure), then calls `GET /api/v1/mcp/confirmations/{id}`
@@ -1044,7 +1076,7 @@ identical for every re-issue of the same record except the countdown:
 xiNAS node nas-01 (controller 0000…0778)
 Operation: shares.update (share.update) on Share "share-a"
 Risk: changing_access · Rollback: changing_access
-Client impact: Clients of /srv/share-a from 10.0.0.0/24 lose write access; active sessions are not interrupted.
+Client impact: Affects NFS share share-a, NFS export rule share-a/10.0.0.0/24 (export /srv/share-a); changed: access_mode, clients. Review the diff for the new access rules.
 Affected: Share share-a; ExportRule share-a/10.0.0.0/24
 Warnings: (1) NFS_SESSIONS_ACTIVE — 3 active sessions from 10.0.0.12, 10.0.0.15, 10.0.0.31
 Diff (concise): access_mode: rw → ro; clients: [10.0.0.0/24] (unchanged)
@@ -1052,23 +1084,71 @@ Plan PLAN_UUID · hash 9f3c1a2b7e4d · expires 2026-09-04T10:05:00Z (in 4m58s)
 Choose APPLY to confirm. Any other action leaves xiNAS unchanged.
 ```
 
-Rules: `changing_access` messages list the affected NFS clients,
-exports, addresses and access rules explicitly (from `client_impact`,
-`affected_resources` and the diff); the diff is rendered by a per-kind
-summariser with a 600-character cap and a "… (N more changes; see the
-plan)" tail; the plan hash is abbreviated to 12 hex chars; the message is
-plain text (no markdown, no URLs — V-13 "SHOULD NOT include URLs intended
-to be clickable in any field of a form mode elicitation request").
+Rules: for a `changing_access` plan, `client_impact` is **derived from the
+plan document** by `clientImpact()` (`api/plan/document.ts`), which
+`buildPlanDocument` calls once at plan time so the stored document, the
+form message and the approval page all show the same sentence:
+
+- the **affected resources by kind and id**, taken from
+  `affected_resources` and named with a human label where one exists
+  (`Share` → "NFS share", `ExportRule` → "NFS export rule", `Filesystem`,
+  `NetworkInterface`, …; an unknown kind is named verbatim). No affected
+  resources → "the node configuration". Capped at 5 with a "(+N more)"
+  tail.
+- the **export path**, when the diff carries one — a `path`,
+  `export_path`, `export` or `mountpoint` string at the diff's top level
+  or one level down (the NFS provider nests it in `export_entry`) —
+  rendered as "(export /srv/nfs/a)". Omitted when the diff names none.
+- the **changed top-level field names** of the diff, excluding the
+  narrative keys `action` and `summary` and the path key already reported.
+  Capped at 8 with a "(+N more fields)" tail; omitted when the diff is not
+  an object or has no such keys.
+- a closing "Review the diff for the new access rules." — and the **full
+  (capped) diff is attached to the message** on its own `Diff (concise):`
+  line, so the sentence points at something the operator can actually
+  read.
+
+The derivation runs on the REDACTED diff, so a secret-looking field is
+still listed as changed while its value never appears. `non_disruptive`
+plans read "No impact on NFS clients."; every other risk level reads "May
+affect NFS clients; review the diff." and gets its own `consequences`
+line on the approval page (§10.2).
+
+The diff itself is rendered by a per-kind summariser with a 600-character
+cap and a "… (N more characters; see the plan)" tail; the plan hash is
+abbreviated to 12 hex chars; the message is plain text (no markdown, no
+URLs — V-13 "SHOULD NOT include URLs intended to be clickable in any
+field of a form mode elicitation request").
 
 ### 10.2 Approval-page summary
 
 `GET /api/v1/mcp/confirmations/{id}` returns `summary`: the same lines as
-§10.1 plus a `consequences` sentence generated per `risk_level`
-(`destructive`: "This operation destroys data on [affected resources].
-Data on them may be permanently lost."; `unsupported_rollback` / rollback
-`unsupported`: "xiNAS cannot roll this operation back automatically."),
-and `rollback_limitation` from `rollback_model`. The page shows these
-verbatim.
+§10.1 plus a `consequences` sentence and a `rollback_limitation`
+sentence. The page shows both verbatim.
+
+`consequences` is chosen by `risk_level`, in this order:
+
+| `risk_level` | sentence |
+|---|---|
+| `destructive` | "This operation destroys data on [affected resources]. Data on them may be permanently lost." (no affected resources: "…on the affected resources. Data may be permanently lost.") |
+| `unsupported_rollback` | "This operation cannot be rolled back automatically: if it fails or must be undone, manual recovery is required." |
+| `changing_access` | "This operation changes client access: [`client_impact`, §10.1]" |
+| anything else | "This operation changes the node configuration." |
+
+`unsupported_rollback` is evaluated **before** `changing_access`: it is
+the risk level that sent an otherwise ordinary plan to url mode, and it
+is what the operator most needs to read.
+
+`rollback_limitation` answers `risk_level === 'unsupported_rollback' ||
+rollback_model === 'unsupported'` **first** with "xiNAS cannot roll this
+operation back automatically." — the risk level wins over the model,
+because a document may carry `unsupported_rollback` with a
+`rollback_model` that still reads as recoverable, and promising an
+automatic rollback there would be false. Otherwise it follows
+`rollback_model`: `destructive` → "Rollback is itself destructive: undoing
+this operation cannot restore data."; `changing_access` → "Rollback
+restores the previous access rules; clients may see a brief
+interruption."; anything else → "Rollback is non-disruptive."
 
 ---
 
@@ -1140,6 +1220,21 @@ sha256(canonicalize(payload))`, and `payload`:
 | `consumed` | inside the apply transaction (task id) |
 | `apply_task_created` | same transaction, mirrors the task row |
 
+Three of these events — `verification_failed`, the early
+`replay_rejected` cross-check (§7.3) and `capability_missing` — are
+queued **before** any quota, because they fire on calls that never create
+a record; an attacker looping forged `requestState`s would otherwise be
+an unbounded write amplifier against the audit chain. Each principal
+therefore gets an internal budget of **30 record-less audit rows per
+minute** (`RECORDLESS_AUDIT_PER_MINUTE`, a leaky bucket separate from
+`create_rate_per_minute`, and deliberately **not configurable** — it is a
+self-protection floor, not an operator knob). When the budget is spent
+the request is refused exactly as before and its own metric still counts,
+but the audit row is dropped and
+`xinas_mcp_confirmation_audit_suppressed_total{event}` (§12.2) is
+incremented — so a silenced trail is visible rather than merely absent,
+and that counter next to the refusal counters says "N refusals, M rows".
+
 Each payload carries `confirmation_id`, `plan_id`, `plan_hash`,
 `principal`, `approver` (when any), `operation_kind`, `risk_level`,
 `correlation_id`, `task_id` (when any) and `reason`. These are security
@@ -1170,6 +1265,9 @@ Series:
   consumed; buckets 1, 5, 15, 30, 60, 120, 300, 600, 900)
 - `xinas_mcp_confirmations_approved_expired_total` — approved but never
   consumed
+- `xinas_mcp_confirmation_audit_suppressed_total{event}` — record-less
+  audit rows dropped by the per-principal budget (§12.1); `event` is
+  `verification_failed` | `replay_rejected` | `capability_missing`
 
 No label ever carries a principal, token, id or `requestState`.
 
@@ -1197,16 +1295,49 @@ key and the accepted range.
       "allow_uds_approval": false                         // break-glass only; default false (§3.5)
     }
   },
-  "state": { "confirmationKeyPath": "/var/lib/xinas/mcp-confirmation-keys.json" }
+  "state": { "confirmationKeyPath": "/var/lib/xinas/mcp-confirmation-keys.json" },
+  "tokens": {
+    "<the agent's bearer>": {
+      "principal": "mcp:agent",
+      "role": "admin",
+      "surface": "mcp"                                  // mcp | rest | any (default any)
+    }
+  }
 }
 ```
+
+`tokens[<token>].surface` scopes a bearer to one endpoint family (§3.5).
+It is optional; **the default when the key is absent is `any`**, which is
+what every token minted before this key existed keeps meaning.
+
+| value | `/mcp` | `/api/v1` |
+|---|---|---|
+| `mcp` | accepted | refused: `PERMISSION_DENIED`, message "this token is scoped to the MCP endpoint", `details: { reason: 'token_surface', surface: 'mcp' }`. No fall-through to UDS peer-trust, exactly as for an unknown bearer |
+| `rest` | refused: `resolveIdentity()` returns null, so the endpoint answers the **same 401** an unknown bearer gets (a scoped token must not be an oracle for "this token exists, just not here") | accepted |
+| `any` (default) | accepted | accepted |
+
+Any other value is fatal at config load (`validateTokensSection`), including
+via `internalTokensPath`: `token '<key>': surface "cli" is invalid —
+expected one of mcp, rest, any (omit the key for 'any')`. A typo must never
+silently widen the token back to both families.
+
+**Give the MCP agent's token `surface: mcp`.** Without it the confirmation
+gate can be bypassed by applying over REST with the same token (§3.5). The
+loopback dispatcher is unaffected: it authenticates its own replayed call
+with a process-ephemeral token that is not in `config.tokens` at all. When
+`mcp.allow_apply` is true and any non-agent token is unscoped, the api
+logs a warning at startup naming the principals.
 
 There is **no** key that disables confirmation (D-01). The `xinas_api`
 role templates the defaults; the TUI MCP screen (S8 §6c) is *not* extended
 in this slice (it preserves unknown `mcp.*` keys already). `discover.ts`
 `INSTRUCTIONS` is amended to tell the model that `mode: apply` triggers an
 interactive confirmation, that destructive operations require an operator
-to approve on the node, and that it must never fabricate an acceptance.
+to approve on the node, that a destructive apply must carry
+`dangerous: true` in the same arguments it will later confirm (the server
+refuses to start a confirmation without it, §3.4) while never inventing
+the flag for a non-destructive operation, and that it must never fabricate
+an acceptance.
 
 ---
 

@@ -135,6 +135,9 @@ export function validateFsCreate(spec: FsCreateSpec, facts: FsCreateFacts): Bloc
   }
 
   // --- the destruction gate's advisory (the engine enforces at apply) ---
+  // The code is `api/plan/blockers.ts` DANGEROUS_FLAG_REQUIRED; it stays a
+  // literal here only because `lib/` imports nothing from `api/`
+  // (plan/blockers.test.ts pins the two together).
   if (spec.force === true) {
     push(
       'dangerous_flag_required',

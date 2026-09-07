@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import type { Database as DatabaseInstance } from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type { ResolvedConfirmationConfig } from '../../../api/config.js';
+import { ApiException } from '../../../api/errors.js';
 import { CATALOG, type CatalogEntry } from '../../../api/mcp/catalog.js';
 import type { McpIdentity } from '../../../api/mcp/dispatch.js';
 import {
@@ -10,10 +11,20 @@ import {
   type HandleOutcome,
   type McpClientInfo,
 } from '../../../api/mcp/confirmation/service.js';
+import {
+  type ConfirmationMetrics,
+  registryConfirmationMetrics,
+} from '../../../api/mcp/confirmation/metrics.js';
 import { ConfirmationStore } from '../../../api/mcp/confirmation/store.js';
+import { MetricsRegistry } from '../../../lib/metrics.js';
 import type { KeyRing } from '../../../api/mcp/confirmation/state.js';
 import type { InputRequiredToolResult, ToolResult } from '../../../api/mcp/results.js';
 import { argumentsHash } from '../../../api/mcp/confirmation/policy.js';
+import {
+  INVALID_PARAMS,
+  MISSING_REQUIRED_CLIENT_CAPABILITY,
+  McpProtocolError,
+} from '../../../api/mcp/confirmation/errors.js';
 import {
   PLAN_DOCUMENT_SCHEMA,
   type PlanDocument,
@@ -59,12 +70,14 @@ interface Harness {
   store: ConfirmationStore;
   tasks: TaskStore;
   service: ConfirmationService;
+  /** Present only when the harness was built with `{ metrics: true }`. */
+  registry: MetricsRegistry | undefined;
   setClock(v: number): void;
 }
 
 function harness(
   configOverrides: Partial<ResolvedConfirmationConfig> = {},
-  serviceOverrides: { sleep?: (ms: number) => Promise<void>; audit?: boolean } = {},
+  serviceOverrides: { sleep?: (ms: number) => Promise<void>; audit?: boolean; metrics?: true } = {},
 ): Harness {
   const db = new Database(':memory:');
   runMigrations(db);
@@ -85,6 +98,9 @@ function harness(
     ...configOverrides,
   };
   const audit = serviceOverrides.audit === true ? new AuditAppender(db, NODE_ID) : undefined;
+  const registry = serviceOverrides.metrics === true ? new MetricsRegistry() : undefined;
+  const metrics: ConfirmationMetrics | undefined =
+    registry === undefined ? undefined : registryConfirmationMetrics(registry, store);
   const service = new ConfirmationService({
     store,
     tasks,
@@ -94,6 +110,7 @@ function harness(
     nodeId: NODE_ID,
     hostname: HOSTNAME,
     ...(audit !== undefined ? { audit } : {}),
+    ...(metrics !== undefined ? { metrics } : {}),
     ...(serviceOverrides.sleep !== undefined ? { sleep: serviceOverrides.sleep } : {}),
   });
   return {
@@ -101,6 +118,7 @@ function harness(
     store,
     tasks,
     service,
+    registry,
     setClock(v: number) {
       clock = v;
     },
@@ -615,5 +633,280 @@ describe('ConfirmationService.handle (S15 §3.3, §4, §6.4)', () => {
     });
     expect(outcome.kind).toBe('proceed');
     expect(h.service.hasWaiterEntry(record?.confirmation_id as string)).toBe(false);
+  });
+
+  // ── A2 (final review I2): early dangerous refusal ──────────────────────
+  //
+  // The engine's own gate is `plan.risk_level === 'destructive' &&
+  // applyReq.dangerous !== true` (engine.ts, §3.4). The service refuses on
+  // the SAME condition and no wider one, so no operator approval is ever
+  // spent on a call the engine will refuse.
+
+  it('A2: a destructive plan applied without dangerous: true is refused before any record exists', async () => {
+    const h = harness();
+    const { doc } = seedPlan(h.tasks, FS_CREATE, {
+      risk_level: 'destructive',
+      rollback_model: 'unsupported',
+    });
+    const outcome = await h.service.handle({
+      entry: FS_CREATE,
+      args: baseArgs(doc, FS_CREATE), // no dangerous
+      identity: IDENTITY,
+      client: BOTH_CLIENT,
+      correlationId: 'corr-a2-1',
+    });
+    const error = errorOf(outcome);
+    expect(error.code).toBe('PRECONDITION_FAILED');
+    expect(error.message).toBe('destructive operation requires dangerous: true');
+    expect((error.details as { reason?: string } | undefined)?.reason).toBe(
+      'dangerous_flag_required',
+    );
+    // No record, and therefore no elicitation and no operator to bother.
+    expect(h.store.countOpen()).toBe(0);
+    expect(h.store.list({ limit: 100 })).toEqual([]);
+  });
+
+  it('A2: dangerous: false is refused too (only a literal true satisfies the flag)', async () => {
+    const h = harness();
+    const { doc } = seedPlan(h.tasks, FS_CREATE, {
+      risk_level: 'destructive',
+      rollback_model: 'unsupported',
+    });
+    const outcome = await h.service.handle({
+      entry: FS_CREATE,
+      args: baseArgs(doc, FS_CREATE, { dangerous: false }),
+      identity: IDENTITY,
+      client: BOTH_CLIENT,
+      correlationId: 'corr-a2-2',
+    });
+    expect(errorOf(outcome).details).toMatchObject({ reason: 'dangerous_flag_required' });
+    expect(h.store.list({ limit: 100 })).toEqual([]);
+  });
+
+  it('A2: the same plan WITH dangerous: true still elicits url mode', async () => {
+    const h = harness();
+    const { doc } = seedPlan(h.tasks, FS_CREATE, {
+      risk_level: 'destructive',
+      rollback_model: 'unsupported',
+    });
+    const result = requireInputRequired(
+      await h.service.handle({
+        entry: FS_CREATE,
+        args: baseArgs(doc, FS_CREATE, { dangerous: true }),
+        identity: IDENTITY,
+        client: BOTH_CLIENT,
+        correlationId: 'corr-a2-3',
+      }),
+    );
+    expect(result.inputRequests.confirm_apply?.params.mode).toBe('url');
+    expect(h.store.countOpen()).toBe(1);
+  });
+
+  it('A2: a url mode caused ONLY by rollback_model: unsupported needs no dangerous flag', async () => {
+    const h = harness();
+    const { doc } = seedPlan(h.tasks, FS_CREATE, {
+      risk_level: 'changing_access',
+      rollback_model: 'unsupported',
+    });
+    const result = requireInputRequired(
+      await h.service.handle({
+        entry: FS_CREATE,
+        args: baseArgs(doc, FS_CREATE), // no dangerous
+        identity: IDENTITY,
+        client: BOTH_CLIENT,
+        correlationId: 'corr-a2-4',
+      }),
+    );
+    expect(result.inputRequests.confirm_apply?.params.mode).toBe('url');
+    expect(h.store.countOpen()).toBe(1);
+  });
+
+  it("A2: risk_level 'unsupported_rollback' needs no dangerous flag either (the engine does not require one)", async () => {
+    const h = harness();
+    const { doc } = seedPlan(h.tasks, FS_CREATE, {
+      risk_level: 'unsupported_rollback',
+      rollback_model: 'changing_access',
+    });
+    const result = requireInputRequired(
+      await h.service.handle({
+        entry: FS_CREATE,
+        args: baseArgs(doc, FS_CREATE), // no dangerous
+        identity: IDENTITY,
+        client: BOTH_CLIENT,
+        correlationId: 'corr-a2-5',
+      }),
+    );
+    expect(result.inputRequests.confirm_apply?.params.mode).toBe('url');
+    expect(h.store.countOpen()).toBe(1);
+  });
+
+  // ── A10 (promotion): a GC-pruned plan is explained, not hidden ─────────
+
+  it('A10: view() on a confirmation whose plan row was pruned explains plan_pruned instead of reading as unknown', async () => {
+    const h = harness();
+    const { doc } = seedPlan(h.tasks, FS_CREATE, {
+      risk_level: 'destructive',
+      rollback_model: 'unsupported',
+    });
+    await h.service.handle({
+      entry: FS_CREATE,
+      args: baseArgs(doc, FS_CREATE, { dangerous: true }),
+      identity: IDENTITY,
+      client: BOTH_CLIENT,
+      correlationId: 'corr-a10',
+    });
+    const record = h.store.list({ limit: 1 })[0];
+    expect(record).toBeDefined();
+    const id = record?.confirmation_id as string;
+    // GC prunes the plan_only row out from under the confirmation.
+    h.db.prepare('DELETE FROM tasks WHERE task_id = ?').run(doc.plan_id);
+    let thrown: unknown;
+    try {
+      h.service.view(id, { principal: PRINCIPAL, client_type: 'rest' });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ApiException);
+    const err = thrown as ApiException;
+    expect(err.code).toBe('NOT_FOUND');
+    expect(err.details).toEqual({ reason: 'plan_pruned', confirmation_id: id });
+    expect(err.remediation).toContain('pruned by GC');
+    // The record itself is still listed and still declinable.
+    expect(h.store.get(id)?.status).toBe('pending');
+  });
+
+  it('A10: an unknown confirmation id still reads as a plain null (no plan_pruned claim)', () => {
+    const h = harness();
+    expect(h.service.view('no-such-id', { principal: PRINCIPAL, client_type: 'rest' })).toBeNull();
+  });
+
+  // ── A3 (final review I1): record-less audit rows are bounded ───────────
+
+  it('A3: 31 tampered requestStates in a minute write 30 audit rows; the 31st is still refused -32602 and is counted as suppressed', async () => {
+    const h = harness({}, { audit: true, metrics: true });
+    const { doc } = seedPlan(h.tasks, SHARES_UPDATE, {
+      resource_ref: { kind: 'Resource', id: 'share-a' },
+    });
+    const args = baseArgs(doc, SHARES_UPDATE);
+    const input: HandleInput = {
+      entry: SHARES_UPDATE,
+      args,
+      identity: IDENTITY,
+      client: BOTH_CLIENT,
+      mrtr: { requestState: 'not-a-valid-state' },
+      correlationId: 'corr-a3',
+    };
+    const codes: number[] = [];
+    for (let i = 0; i < 31; i += 1) {
+      try {
+        await h.service.handle(input);
+        throw new Error('expected the forged state to be refused');
+      } catch (e) {
+        expect(e).toBeInstanceOf(McpProtocolError);
+        codes.push((e as McpProtocolError).code);
+      }
+    }
+    // Every one of the 31 is refused identically — throttling the audit
+    // must never soften the refusal.
+    expect(codes).toEqual(new Array(31).fill(INVALID_PARAMS));
+
+    const failures = auditRows(h).filter((r) => r.kind === 'mcp.confirmation.verification_failed');
+    expect(failures).toHaveLength(30);
+
+    const rendered = (h.registry as MetricsRegistry).render();
+    expect(rendered).toContain(
+      'xinas_mcp_confirmation_audit_suppressed_total{event="verification_failed"} 1',
+    );
+    // The refusal counter kept counting all 31.
+    expect(rendered).toMatch(
+      /xinas_mcp_confirmations_state_validation_failures_total\{reason="[a-z]+"\} 31/,
+    );
+  });
+
+  it('A3: the record-less audit bucket is per-principal — a second principal is unaffected', async () => {
+    const h = harness({}, { audit: true, metrics: true });
+    const { doc } = seedPlan(h.tasks, SHARES_UPDATE, {
+      resource_ref: { kind: 'Resource', id: 'share-a' },
+    });
+    const forge = async (identity: McpIdentity): Promise<void> => {
+      try {
+        await h.service.handle({
+          entry: SHARES_UPDATE,
+          args: baseArgs(doc, SHARES_UPDATE),
+          identity,
+          client: BOTH_CLIENT,
+          mrtr: { requestState: 'garbage' },
+          correlationId: 'corr-a3b',
+        });
+      } catch {
+        /* expected */
+      }
+    };
+    for (let i = 0; i < 31; i += 1) await forge(IDENTITY);
+    await forge(IDENTITY_B);
+    const failures = auditRows(h).filter((r) => r.kind === 'mcp.confirmation.verification_failed');
+    // 30 for the first principal + 1 for the second: the second principal
+    // starts with a full bucket.
+    expect(failures).toHaveLength(31);
+    expect(failures.filter((r) => r.payload.principal === PRINCIPAL_B)).toHaveLength(1);
+  });
+
+  it('A3: the bucket refills over time — 30 rows, then 30s later another 15 are audited', async () => {
+    const h = harness({}, { audit: true, metrics: true });
+    const { doc } = seedPlan(h.tasks, SHARES_UPDATE, {
+      resource_ref: { kind: 'Resource', id: 'share-a' },
+    });
+    const input: HandleInput = {
+      entry: SHARES_UPDATE,
+      args: baseArgs(doc, SHARES_UPDATE),
+      identity: IDENTITY,
+      client: BOTH_CLIENT,
+      mrtr: { requestState: 'garbage' },
+      correlationId: 'corr-a3c',
+    };
+    const forge = async (): Promise<void> => {
+      try {
+        await h.service.handle(input);
+      } catch {
+        /* expected */
+      }
+    };
+    for (let i = 0; i < 40; i += 1) await forge();
+    expect(
+      auditRows(h).filter((r) => r.kind === 'mcp.confirmation.verification_failed'),
+    ).toHaveLength(30);
+    h.setClock(1_000_000 + 30_000); // half a minute → half the bucket back
+    for (let i = 0; i < 20; i += 1) await forge();
+    expect(
+      auditRows(h).filter((r) => r.kind === 'mcp.confirmation.verification_failed'),
+    ).toHaveLength(45);
+  });
+
+  it('A3: capability_missing shares the same bucket and the same suppressed counter', async () => {
+    const h = harness({}, { audit: true, metrics: true });
+    const noCaps: McpClientInfo = { era: 'modern', elicitation: new Set(), tasks: false };
+    for (let i = 0; i < 31; i += 1) {
+      const { doc } = seedPlan(h.tasks, SHARES_UPDATE, {
+        resource_ref: { kind: 'Resource', id: `share-${i}` },
+      });
+      try {
+        await h.service.handle({
+          entry: SHARES_UPDATE,
+          args: baseArgs(doc, SHARES_UPDATE),
+          identity: IDENTITY,
+          client: noCaps,
+          correlationId: `corr-a3d-${i}`,
+        });
+        throw new Error('expected MISSING_REQUIRED_CLIENT_CAPABILITY');
+      } catch (e) {
+        expect((e as McpProtocolError).code).toBe(MISSING_REQUIRED_CLIENT_CAPABILITY);
+      }
+    }
+    expect(
+      auditRows(h).filter((r) => r.kind === 'mcp.confirmation.capability_missing'),
+    ).toHaveLength(30);
+    expect((h.registry as MetricsRegistry).render()).toContain(
+      'xinas_mcp_confirmation_audit_suppressed_total{event="capability_missing"} 1',
+    );
   });
 });

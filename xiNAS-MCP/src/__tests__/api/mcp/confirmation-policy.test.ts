@@ -48,6 +48,20 @@ describe('confirmation policy (S15 §3, §14)', () => {
     );
   });
 
+  it('A11 (Task 9 follow-up): an ARRAY-valued capability key declares nothing', () => {
+    const key = 'io.modelcontextprotocol/clientCapabilities';
+    // A capability object is an OBJECT. `{ form: [] }` is a malformed
+    // declaration, and treating it as "form supported" would send an
+    // elicitation to a client that cannot answer it.
+    expect([...elicitationModes({ [key]: { elicitation: { form: [] } } })]).toEqual([]);
+    expect([...elicitationModes({ [key]: { elicitation: { url: [1, 2] } } })]).toEqual([]);
+    // …and a malformed key does NOT fall back to the bare-{} form-only rule
+    // (a key IS present, it is just not a capability object).
+    expect([...elicitationModes({ [key]: { elicitation: { form: [], url: {} } } })]).toEqual([
+      'url',
+    ]);
+  });
+
   it('isConfirmable: plan_apply+apply, direct+requires_mcp_apply, explicit opt-in; nothing else', () => {
     expect(isConfirmable(entry('shares.update'), { mode: 'apply' })).toBe(true);
     expect(isConfirmable(entry('shares.update'), { mode: 'plan' })).toBe(false);

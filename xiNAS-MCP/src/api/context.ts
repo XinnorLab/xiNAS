@@ -39,6 +39,17 @@ export interface TaskEngines {
   agentClient?: AgentRpcClient;
   /** S15 §8: the MCP confirmation store, built over the same state.db. */
   confirmations: import('./mcp/confirmation/store.js').ConfirmationStore;
+  /**
+   * S15 §12.2 (Task 13): the confirmation counters, built ONCE inside
+   * buildTaskEngines over the SAME `MetricsRegistry` instance as
+   * `ApiContext.metrics` — `TaskEngine.apply()` calls `decided('consumed')`
+   * / `confirmationToApply()` on it directly (the service never learns of a
+   * consumption), and app.ts reuses this instance for `ConfirmationService`
+   * so both consumers share one registration instead of registering the
+   * same metric names twice (which throws). Absent when no registry was
+   * supplied to buildTaskEngines (e.g. a test helper that never wires one).
+   */
+  confirmationMetrics?: import('./mcp/confirmation/metrics.js').ConfirmationMetrics;
 }
 
 /**
@@ -111,6 +122,16 @@ export interface ApiContext {
    * which case the observed handler and the heartbeat tracker journal nothing.
    */
   events?: import('./events/context.js').EventsContext;
+  /**
+   * S15 §12.2 (Task 13): the process-wide Prometheus-style registry
+   * `GET /api/v1/metrics` renders. Set by server.ts to the SAME instance
+   * passed into `buildTaskEngines` (so the engine's and the confirmation
+   * service's counters land on the registry the route reads); app.ts
+   * creates one lazily (`??=`) for contexts that never wire one (e.g. a
+   * read-only test context with no ctx.tasks) so the route is always
+   * mountable.
+   */
+  metrics?: import('../lib/metrics.js').MetricsRegistry;
 }
 
 /**

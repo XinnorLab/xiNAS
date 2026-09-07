@@ -1,0 +1,1 @@
+Vendored verbatim from https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/schema/2026-07-28/schema.json on 2026-09-05 (sha256 `ef70b61f99b6d2e5e3b46863822eab08dff6a45bedc7a08914e0e5b133f40203`); do not hand-edit.

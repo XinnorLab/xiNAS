@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,21 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startServer } from '../../../api/server.js';
 import { ACK_NO_ROLLBACK } from '../../../api/mcp/confirmation/types.js';
 import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpers.js';
+import {
+  BOTH,
+  FORM,
+  META,
+  auditRows,
+  call,
+  nextId,
+  payloadOf,
+  planFsCreateForce,
+  planShareUpdate,
+  restCall,
+  rpc,
+  rpcErrorOf,
+  toolResultOf,
+} from './_mrtr-helpers.js';
 
 /**
  * S15 Task 10 — the MRTR confirmation flow over the wire: a confirmable
@@ -51,9 +66,12 @@ import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpe
  *    separately by test 6b (a REST-created plan, no requestState).
  *
  * Task 11 addendum: the REST-approval happy path below reuses
- * `planFsCreateForce` — the only destructive/url-capable plan this suite
- * has (see above) — whose provider sets rollback_model 'unsupported'
- * alongside risk_level 'destructive' (`filesystem.ts` force-create path).
+ * `planFsCreateForce` — the only DESTRUCTIVE plan this suite has (see
+ * above) — whose provider sets rollback_model 'unsupported' alongside
+ * risk_level 'destructive'. Since S16 §9.1 `filesystem.ts` returns
+ * rollback_model 'unsupported' for EVERY create (a completed mkfs is
+ * never undone), so a non-force create is url-mode too; `force: true` is
+ * still what makes this particular plan `risk_level: 'destructive'`.
  * `ConfirmationService.operatorDecide`'s acknowledge table checks
  * rollback_model 'unsupported' BEFORE risk_level 'destructive' (S15 §9.2:
  * rollback unsupported → "ROLLBACK IS NOT SUPPORTED" wins over destructive
@@ -64,173 +82,6 @@ import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpe
  * currently produces. The wrong-phrase/right-phrase pairing itself is
  * covered directly by routes-mcp-confirmations.test.ts.
  */
-
-interface RpcResult {
-  status: number;
-  body: Record<string, unknown>;
-  headers: http.IncomingHttpHeaders;
-}
-
-function rpc(port: number, message: unknown, opts: { token?: string } = {}): Promise<RpcResult> {
-  const payload = JSON.stringify(message);
-  return new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        host: '127.0.0.1',
-        port,
-        path: '/mcp',
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          'content-length': Buffer.byteLength(payload),
-          ...(opts.token !== undefined ? { authorization: `Bearer ${opts.token}` } : {}),
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => {
-          const text = Buffer.concat(chunks).toString('utf8');
-          resolve({
-            status: res.statusCode ?? 0,
-            body: text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {},
-            headers: res.headers,
-          });
-        });
-      },
-    );
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
-}
-
-/** Plain REST call (loopback-free — a real client request) for the plan-ownership test. */
-function restCall(
-  port: number,
-  token: string,
-  method: string,
-  path: string,
-  body: unknown,
-): Promise<{ status: number; body: Record<string, unknown> }> {
-  const payload = JSON.stringify(body);
-  return new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        host: '127.0.0.1',
-        port,
-        path: `/api/v1${path}`,
-        method,
-        headers: {
-          'content-type': 'application/json',
-          'content-length': Buffer.byteLength(payload),
-          authorization: `Bearer ${token}`,
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => {
-          const text = Buffer.concat(chunks).toString('utf8');
-          resolve({
-            status: res.statusCode ?? 0,
-            body: text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {},
-          });
-        });
-      },
-    );
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
-}
-
-const META = (elicitation?: Record<string, object>) => ({
-  'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-  'io.modelcontextprotocol/clientInfo': { name: 'conformance', version: '0' },
-  'io.modelcontextprotocol/clientCapabilities': elicitation === undefined ? {} : { elicitation },
-});
-const FORM = { form: {} };
-const BOTH = { form: {}, url: {} };
-
-let seq = 0;
-function nextId(prefix: string): string {
-  seq += 1;
-  return `${prefix}-${seq}`;
-}
-
-async function call(
-  port: number,
-  token: string,
-  id: string | number,
-  name: string,
-  args: Record<string, unknown>,
-  extra: Record<string, unknown> = {},
-  caps: Record<string, object> | undefined = FORM,
-): Promise<RpcResult> {
-  return rpc(
-    port,
-    {
-      jsonrpc: '2.0',
-      id,
-      method: 'tools/call',
-      params: { _meta: META(caps), name, arguments: args, ...extra },
-    },
-    { token },
-  );
-}
-
-interface ToolResultBody {
-  resultType?: string;
-  content?: Array<{ type: 'text'; text: string }>;
-  isError?: boolean;
-  inputRequests?: Record<string, { method: string; params: Record<string, unknown> }>;
-  requestState?: string;
-}
-
-function toolResultOf(res: RpcResult): ToolResultBody {
-  return (res.body.result ?? {}) as ToolResultBody;
-}
-
-interface ToolPayload {
-  result?: Record<string, unknown>;
-  error?: { code: string; message: string; details?: Record<string, unknown> };
-}
-
-/** Parse the JSON text body of a COMPLETE (non-input_required) tool result. */
-function payloadOf(res: RpcResult): ToolPayload {
-  const r = toolResultOf(res);
-  if (r.content === undefined) return {};
-  return JSON.parse(r.content[0]?.text ?? '{}') as ToolPayload;
-}
-
-function rpcErrorOf(
-  res: RpcResult,
-): { code: number; message: string; data?: Record<string, unknown> } | undefined {
-  return res.body.error as
-    | { code: number; message: string; data?: Record<string, unknown> }
-    | undefined;
-}
-
-interface AuditRow {
-  kind?: string;
-  principal?: string;
-  client_type?: string;
-  payload?: Record<string, unknown>;
-}
-
-function auditRows(dir: string): AuditRow[] {
-  try {
-    return readFileSync(join(dir, 'a.jsonl'), 'utf8')
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((l) => JSON.parse(l) as AuditRow);
-  } catch {
-    return [];
-  }
-}
 
 describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   let dir: string;
@@ -306,6 +157,9 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     // terminal task_progress event) never collides with another test's
     // apply on the SAME resource within this shared-server describe block.
     seedShare(handle.state, 'share-b');
+    // I4(a) dispatches a real apply and must not collide with
+    // share-a/share-b's leases either.
+    seedShare(handle.state, 'share-i4a');
     handle.state.kv.put('/xinas/v1/observed/XiraidArray/data', {
       kind: 'XiraidArray',
       id: 'data',
@@ -348,75 +202,14 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  async function planShareUpdate(
-    token: string,
-    shareId = 'share-a',
-    clients: Array<{ pattern: string; options: string[] }> = [
-      { pattern: '10.0.0.0/8', options: ['ro'] },
-    ],
-  ): Promise<{ plan_id: string; expected_revision: number; risk_level: string }> {
-    const res = await call(port, token, nextId('plan-share'), 'shares.update', {
-      id: shareId,
-      mode: 'plan',
-      spec: { clients },
-    });
-    const payload = payloadOf(res);
-    const result = payload.result as {
-      plan_id: string;
-      state_revision_expected: number;
-      risk_level: string;
-    };
-    return {
-      plan_id: result.plan_id,
-      expected_revision: result.state_revision_expected,
-      risk_level: result.risk_level,
-    };
-  }
-
-  /**
-   * `filesystems.create` with `spec.force: true` is risk_level 'destructive'
-   * / rollback_model 'unsupported', and its plan carries the engine-owned
-   * advisory `dangerous_flag_required` blocker (`lib/fs/validate.ts`
-   * `validateFsCreate`) — the same static advisory `arrays.delete` and
-   * `config.rollback` attach. Fix round 1 (F1, ruling R-10.1) made Gate 7
-   * exclude that one code (every REST apply route already filters it the
-   * same way; `TaskEngine.apply` enforces the real `dangerous` flag at
-   * apply time), so the REAL, unmodified plan document now reaches url
-   * mode over MCP — no hand-edited blockers/hash needed here.
-   */
-  async function planFsCreateForce(
-    token: string,
-    mountpoint: string,
-    backingDevice = '/dev/xi_data',
-  ): Promise<{
-    plan_id: string;
-    expected_revision: number;
-    risk_level: string;
-    blockers: unknown[];
-  }> {
-    const res = await call(port, token, nextId('plan-fs'), 'filesystems.create', {
-      mode: 'plan',
-      spec: { backing_device: backingDevice, mountpoint, force: true },
-    });
-    const payload = payloadOf(res);
-    const result = payload.result as {
-      plan_id: string;
-      state_revision_expected: number;
-      risk_level: string;
-      blockers: unknown[];
-    };
-    return {
-      plan_id: result.plan_id,
-      expected_revision: result.state_revision_expected,
-      risk_level: result.risk_level,
-      blockers: result.blockers,
-    };
-  }
+  // planShareUpdate / planFsCreateForce now live in ./_mrtr-helpers.ts
+  // (Task 14 — shared with confirmation-restart.test.ts); they take `port`
+  // as their first argument since a restart boots a second, different port.
 
   // ── 1. form happy path + audit (brief case 1) ─────────────────────────────
 
   it('form happy path: elicits, retries with the exact requestState, applies, and audits', async () => {
-    const { plan_id, expected_revision, risk_level } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision, risk_level } = await planShareUpdate(port, 'tok-admin');
     expect(risk_level).toBe('changing_access');
     const idem = nextId('ik');
     const args = {
@@ -481,7 +274,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     // A DISTINCT share (share-b): this test's apply succeeds and holds its
     // lease forever (the mock agent never posts a terminal task_progress
     // event), so it must not collide with another test's apply on share-a.
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin', 'share-b');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin', 'share-b');
     const idem = nextId('ik');
     const args = {
       id: 'share-b',
@@ -515,7 +308,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
 
   it('decline returns CONFIRMATION_DECLINED, cancel returns CONFIRMATION_CANCELLED; no task either way', async () => {
     for (const action of ['decline', 'cancel'] as const) {
-      const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+      const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
       const idem = nextId('ik');
       const args = {
         id: 'share-a',
@@ -547,7 +340,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // ── 4. wrong decision + round escalation to the limit (brief case 4) ─────
 
   it('a wrong decision value is treated as a decline', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -568,7 +361,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   });
 
   it('a missing confirm_apply response re-issues, escalating rounds, until CONFIRMATION_ROUND_LIMIT', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -611,7 +404,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // ── 5. tampered requestState (brief case 5) ───────────────────────────────
 
   it('a tampered requestState is refused -32602 "invalid request state" over HTTP 200, no task', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -643,7 +436,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // JSON-RPC -32602 and leaves a replay_rejected audit row naming both
   // principals.
   it('a cross-principal presentation of a valid requestState is refused -32602 (not plan_binding) and audits replay_rejected', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -679,7 +472,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // ── 6. changed arguments / revision / idempotency_key on retry (brief case 6) ─
 
   it('changed arguments or idempotency_key on the retry are refused -32602 (binding mismatch)', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -726,7 +519,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // by the later doc-based `Ruling R-3.1` revision check. It surfaces as the
   // generic JSON-RPC -32602, same as any other tampered/stolen retry.
   it('a changed expected_revision on the retry is refused -32602 (binding mismatch), not PRECONDITION_FAILED', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -790,7 +583,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   });
 
   it('a tampered stored plan_document (hash mismatch) is refused PRECONDITION_FAILED/plan_binding', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     handle.state.db
       .prepare(
         `UPDATE tasks SET plan_document = json_set(plan_document, '$.blockers', json('[{"code":"X","message":"m"}]')) WHERE task_id = ?`,
@@ -813,6 +606,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
 
   it('a destructive (url-mode) plan with only form capability is refused -32021/400 naming url', async () => {
     const { plan_id, expected_revision, risk_level, blockers } = await planFsCreateForce(
+      port,
       'tok-admin',
       '/mnt/t7a',
     );
@@ -846,7 +640,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   });
 
   it('a form-mode plan with no elicitation capability at all is refused -32021 naming form', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     // `call()`'s `caps` parameter defaults to FORM when passed `undefined`
     // (JS default-parameter semantics trigger on `undefined` whether it is
     // omitted or explicit) — so "no elicitation at all" is built directly
@@ -881,7 +675,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // ── 8. url mode (brief case 8) ────────────────────────────────────────────
 
   it('url mode: elicits a url naming the record id, re-issues after url_wait_seconds while pending, and proceeds once approved (with dangerous:true)', async () => {
-    const { plan_id, expected_revision } = await planFsCreateForce('tok-admin', '/mnt/t8a');
+    const { plan_id, expected_revision } = await planFsCreateForce(port, 'tok-admin', '/mnt/t8a');
     const idem = nextId('ik');
     const args = {
       mode: 'apply',
@@ -952,8 +746,11 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     expect(consumed?.consumed_task_id).toBe(taskId);
   }, 10_000);
 
-  it('url mode: an approved confirmation without dangerous:true fails PRECONDITION_FAILED/dangerous_flag_required and stays approved', async () => {
-    const { plan_id, expected_revision } = await planFsCreateForce('tok-admin', '/mnt/t8b');
+  it('A2: a destructive apply without dangerous:true is refused BEFORE any confirmation record exists', async () => {
+    // Was: the flow ran to an operator approval and only then hit the
+    // engine's dangerous gate — a human decision spent on a call that could
+    // never succeed. The service now refuses at gate 8 (S15 §3.3 row 8).
+    const { plan_id, expected_revision } = await planFsCreateForce(port, 'tok-admin', '/mnt/t8b');
     const idem = nextId('ik');
     const args = { mode: 'apply', plan_id, expected_revision, idempotency_key: idem }; // no dangerous
 
@@ -966,30 +763,27 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
       {},
       BOTH,
     );
-    const record = getConfirmationByPlanId(plan_id);
-    handle.state.db
-      .prepare(
-        `UPDATE mcp_confirmations SET status='approved', approved_by='admin:other', approved_at=? WHERE confirmation_id=?`,
-      )
-      .run(Date.now(), record?.confirmation_id as string);
+    const payload = payloadOf(first);
+    expect(payload.error?.code).toBe('PRECONDITION_FAILED');
+    expect(payload.error?.details?.reason).toBe('dangerous_flag_required');
+    // No elicitation, no record, no task — nothing to approve.
+    expect(toolResultOf(first).resultType).toBe('complete');
+    expect(toolResultOf(first).requestState).toBeUndefined();
+    expect(getConfirmationByPlanId(plan_id)).toBeUndefined();
+    expect(countTasksByPlan(plan_id)).toBe(0);
 
-    const res = await call(
+    // The SAME plan with the flag still elicits the url confirmation.
+    const withFlag = await call(
       port,
       'tok-admin',
       nextId('call'),
       'filesystems.create',
-      args,
-      {
-        requestState: toolResultOf(first).requestState,
-        inputResponses: { confirm_apply: { action: 'accept' } },
-      },
+      { ...args, idempotency_key: nextId('ik'), dangerous: true },
+      {},
       BOTH,
     );
-    const payload = payloadOf(res);
-    expect(payload.error?.code).toBe('PRECONDITION_FAILED');
-    expect(payload.error?.details?.reason).toBe('dangerous_flag_required');
-    expect(getConfirmationByPlanId(plan_id)?.status).toBe('approved'); // unchanged
-    expect(countTasksByPlan(plan_id)).toBe(0);
+    expect(toolResultOf(withFlag).resultType).toBe('input_required');
+    expect(getConfirmationByPlanId(plan_id)?.mode).toBe('url');
   });
 
   // ── 11. REST approval (S15 Task 11) ───────────────────────────────────────
@@ -998,6 +792,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
 
   it('REST approval: url happy path — POST /mcp/confirmations/:id/approve, then the MCP retry proceeds to apply', async () => {
     const { plan_id, expected_revision } = await planFsCreateForce(
+      port,
       'tok-admin',
       '/mnt/t11a',
       '/dev/xi_data2', // a distinct array from case 8's — that apply holds its lease forever
@@ -1073,6 +868,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
 
   it("REST approval: the requester's own token on approve is refused 409 approver_policy", async () => {
     const { plan_id, expected_revision } = await planFsCreateForce(
+      port,
       'tok-admin',
       '/mnt/t11b',
       '/dev/xi_data2',
@@ -1219,6 +1015,120 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     expect(listResult.isError ?? false).toBe(false);
   });
 
+  // ── 9b. S15/S16 follow-up: legacy era ignores a forged tasks capability ───
+
+  it('a legacy client that forges the S16 tasks capability in _meta is still refused MCP_CONFIRMATION_UNSUPPORTED — no task, no confirmation row', async () => {
+    interface RpcOut {
+      status: number;
+      body: Record<string, unknown>;
+      session?: string;
+    }
+    function legacyRpc(message: unknown, session?: string): Promise<RpcOut> {
+      const payload = JSON.stringify(message);
+      return new Promise((resolve, reject) => {
+        const req = http.request(
+          {
+            host: '127.0.0.1',
+            port,
+            path: '/mcp',
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json, text/event-stream',
+              'content-length': Buffer.byteLength(payload),
+              authorization: 'Bearer tok-admin',
+              ...(session !== undefined ? { 'mcp-session-id': session } : {}),
+            },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () => {
+              const text = Buffer.concat(chunks).toString('utf8');
+              const sid = res.headers['mcp-session-id'];
+              resolve({
+                status: res.statusCode ?? 0,
+                body: text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {},
+                ...(typeof sid === 'string' ? { session: sid } : {}),
+              });
+            });
+          },
+        );
+        req.on('error', reject);
+        req.write(payload);
+        req.end();
+      });
+    }
+
+    const init = await legacyRpc({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'legacy-forged-tasks', version: '0' },
+      },
+    });
+    const session = init.session as string;
+
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
+    const beforeConfirmations = countConfirmations();
+
+    // No `io.modelcontextprotocol/protocolVersion` in `_meta` — this rides
+    // the legacy SDK session (isModernRequest stays false, modern.ts) — but
+    // `_meta` DOES declare the S16 tasks extension under
+    // clientCapabilities.extensions, exactly what a client would send to
+    // claim task-handle support. `buildMcpServer`'s CallToolRequestSchema
+    // handler (dispatch.ts) never reads `request.params._meta` at all — it
+    // hardcodes `client: { era: 'legacy', elicitation: new Set(), tasks:
+    // false }` for the whole session (transport.ts) — so this forged
+    // declaration must have zero effect: the era gate inside
+    // `isConfirmable`'s branch runs and refuses before task eligibility
+    // (`isTaskEligible`, which also checks `client.era === 'modern'`) is
+    // ever considered.
+    const apply = await legacyRpc(
+      {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: {
+          _meta: {
+            'io.modelcontextprotocol/clientCapabilities': {
+              extensions: { 'io.modelcontextprotocol/tasks': {} },
+            },
+          },
+          name: 'shares.update',
+          arguments: {
+            id: 'share-a',
+            mode: 'apply',
+            plan_id,
+            expected_revision,
+            idempotency_key: nextId('ik'),
+          },
+        },
+      },
+      session,
+    );
+    const result = (apply.body.result ?? {}) as {
+      content?: Array<{ text: string }>;
+      isError?: boolean;
+      resultType?: string;
+      taskId?: string;
+    };
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain('MCP_CONFIRMATION_UNSUPPORTED');
+    // Neither a CreateTaskResult nor its `resultType: 'task'` marker ever
+    // appears — the legacy path would in fact throw ("unreachable") before
+    // answering at all if callTool ever produced one here.
+    expect(result.resultType).toBeUndefined();
+    expect(result.taskId).toBeUndefined();
+
+    expect(getConfirmationByPlanId(plan_id)).toBeUndefined();
+    expect(countConfirmations()).toBe(beforeConfirmations);
+    expect(countTasksByPlan(plan_id)).toBe(0);
+  });
+
   // ── 11. hidden entries (brief case 11) ────────────────────────────────────
 
   it('mcp_confirmations.approve is hidden from tools/call (NOT_FOUND), even for an admin', async () => {
@@ -1233,7 +1143,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // ── F5 (fix round 1) — correlation id is server-owned ─────────────────────
 
   it('a huge client-chosen JSON-RPC id never reaches mcp_confirmations.correlation_id; the server correlation id (echoed on the response header) does, and is <= 64 chars', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const hugeId = 'x'.repeat(5000);
     const res = await call(port, 'tok-admin', hugeId, 'shares.update', {
       id: 'share-a',
@@ -1252,6 +1162,180 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     const record = getConfirmationByPlanId(plan_id);
     expect(record?.correlation_id).toBe(serverCorrelationId);
     expect((record?.correlation_id as string).length).toBeLessThanOrEqual(64);
+  });
+
+  // ── S15 §15.3 concurrency and dispatch-failure properties (I4) ────────────
+
+  it('I4(a): a SECOND accepted retry with the same requestState answers the SAME task_id — one task, one consumption', async () => {
+    // The record is already `consumed` when the second retry arrives, so
+    // `retry()` returns `proceed` and the engine's step-1 idempotency check
+    // hands back the original task through the consumed record (§8.5).
+    // Nothing may consume twice: not a second task row, not a second
+    // `consumed` audit row, and not a different `consumed_task_id`.
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin', 'share-i4a');
+    const args = {
+      id: 'share-i4a',
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+    };
+    const first = await call(port, 'tok-admin', nextId('call'), 'shares.update', args);
+    const accept = {
+      requestState: toolResultOf(first).requestState,
+      inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+    };
+
+    const before = auditRows(dir).length;
+    const a = await call(port, 'tok-admin', nextId('call'), 'shares.update', args, accept);
+    const taskId = (payloadOf(a).result as { task_id?: string })?.task_id;
+    expect(typeof taskId).toBe('string');
+    const afterFirst = getConfirmationByPlanId(plan_id);
+    expect(afterFirst?.status).toBe('consumed');
+    expect(afterFirst?.consumed_task_id).toBe(taskId);
+
+    const b = await call(port, 'tok-admin', nextId('call'), 'shares.update', args, accept);
+    expect(toolResultOf(b).resultType).toBe('complete');
+    expect((payloadOf(b).result as { task_id?: string })?.task_id).toBe(taskId);
+
+    expect(countTasksByPlan(plan_id)).toBe(1);
+    const afterSecond = getConfirmationByPlanId(plan_id);
+    expect(afterSecond?.status).toBe('consumed');
+    expect(afterSecond?.consumed_task_id).toBe(taskId);
+    expect(afterSecond?.consumed_at).toBe(afterFirst?.consumed_at);
+
+    await handle.state.drainer.drainNow();
+    const rows = auditRows(dir).slice(before);
+    const consumedRows = rows.filter(
+      (r) =>
+        r.kind === 'mcp.confirmation.consumed' &&
+        (r.payload as { confirmation_id?: string } | undefined)?.confirmation_id ===
+          afterSecond?.confirmation_id,
+    );
+    expect(consumedRows).toHaveLength(1);
+  });
+
+  // ── S15 follow-up: an inbound confirmation header/argument are inert ──────
+
+  it('a client-supplied X-Xinas-Confirmation header and a confirmation_id argument are both inert — the gate still elicits, and the consumed record is keyed to the server-minted id, never the forged one', async () => {
+    interface RawRpcResult {
+      status: number;
+      body: Record<string, unknown>;
+      headers: http.IncomingHttpHeaders;
+    }
+    function rpcWithForgedHeader(message: unknown): Promise<RawRpcResult> {
+      const payload = JSON.stringify(message);
+      return new Promise((resolve, reject) => {
+        const req = http.request(
+          {
+            host: '127.0.0.1',
+            port,
+            path: '/mcp',
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json, text/event-stream',
+              'content-length': Buffer.byteLength(payload),
+              authorization: 'Bearer tok-admin',
+              // Only the loopback bearer (dispatch.ts callTool → auth.ts
+              // §0) may set this header and have it mean anything. An
+              // ordinary bearer-authenticated /mcp caller sending it must
+              // have it ignored outright, not merged into the confirmation
+              // the gate is about to mint.
+              'x-xinas-confirmation': 'forged',
+            },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () => {
+              const text = Buffer.concat(chunks).toString('utf8');
+              resolve({
+                status: res.statusCode ?? 0,
+                body: text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {},
+                headers: res.headers,
+              });
+            });
+          },
+        );
+        req.on('error', reject);
+        req.write(payload);
+        req.end();
+      });
+    }
+
+    seedShare(handle.state, 'share-forged-hdr');
+    const { plan_id, expected_revision } = await planShareUpdate(
+      port,
+      'tok-admin',
+      'share-forged-hdr',
+    );
+    const args = {
+      id: 'share-forged-hdr',
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+      // A plausible-looking forged argument. shares.update's REST schema has
+      // no such field, so apply-helpers.ts ignores it too (only
+      // ctx.mcp_confirmation_id — set solely from the trusted loopback
+      // header — ever reaches TaskEngine.apply as `confirmation_id`) — but
+      // the point under test is upstream of REST entirely: round 1 must
+      // still elicit, never proceed straight through on the strength of a
+      // client-chosen id.
+      confirmation_id: 'forged',
+    };
+
+    const first = await rpcWithForgedHeader({
+      jsonrpc: '2.0',
+      id: nextId('call'),
+      method: 'tools/call',
+      params: { _meta: META(FORM), name: 'shares.update', arguments: args },
+    });
+    expect(first.status).toBe(200);
+    const r1 = toolResultOf(first);
+    expect(r1.resultType).toBe('input_required');
+    expect(r1.requestState?.startsWith('xc1.')).toBe(true);
+    expect(countTasksByPlan(plan_id)).toBe(0);
+    expect(getConfirmationByPlanId(plan_id)?.status).toBe('pending');
+
+    // The requestState's signed payload carries the REAL confirmation id
+    // (state.ts RequestStatePayload.cid). Decode the body segment — no need
+    // to verify the MAC, this is our own server-issued token — and confirm
+    // it is not the client's forged value.
+    const stateBody = (r1.requestState as string).split('.')[2] as string;
+    const cid = (
+      JSON.parse(Buffer.from(stateBody, 'base64url').toString('utf8')) as { cid: string }
+    ).cid;
+    expect(cid).not.toBe('forged');
+
+    const second = await rpcWithForgedHeader({
+      jsonrpc: '2.0',
+      id: nextId('call'),
+      method: 'tools/call',
+      params: {
+        _meta: META(FORM),
+        name: 'shares.update',
+        arguments: args,
+        requestState: r1.requestState,
+        inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+      },
+    });
+    const r2 = toolResultOf(second);
+    expect(r2.resultType).toBe('complete');
+    expect(r2.isError ?? false).toBe(false);
+    const taskId = (payloadOf(second).result as { task_id?: string })?.task_id;
+    expect(typeof taskId).toBe('string');
+
+    // The consumed record is keyed to the server-minted id decoded above —
+    // the client's forged header and forged argument (both replayed
+    // verbatim on this second call too) never became the confirmation of
+    // record.
+    const consumed = getConfirmationByPlanId(plan_id);
+    expect(consumed?.status).toBe('consumed');
+    expect(consumed?.confirmation_id).toBe(cid);
+    expect(consumed?.confirmation_id).not.toBe('forged');
+    expect(consumed?.consumed_task_id).toBe(taskId);
   });
 });
 
@@ -1305,5 +1389,357 @@ describe('MCP MRTR confirmation — mcp.allow_apply: false (S15 Task 10)', () =>
       handle.state.db.prepare('SELECT COUNT(*) AS n FROM mcp_confirmations').get() as { n: number }
     ).n;
     expect(count).toBe(0);
+  });
+});
+
+/**
+ * I4(b) — a dispatch failure AFTER consumption (S15 §8.4). Its OWN server,
+ * db and mock agent: the shared block above deliberately leaves several
+ * applies in flight forever (its mock agent never posts a terminal
+ * task_progress event), so with the default `tasks.max_inflight` a new
+ * apply there can sit `queued` and never reach `task.begin` at all — which
+ * is exactly the call this case needs the agent to refuse.
+ */
+describe('MCP MRTR confirmation — dispatch failure after consumption (S15 §8.4)', () => {
+  let dir: string;
+  let handle: Awaited<ReturnType<typeof startServer>>;
+  let mockAgent: MockAgentServer;
+  let port: number;
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'xinas-mcp-confirm-dispatchfail-'));
+    const agentSock = join(dir, 'agent.sock');
+    mockAgent = await startMockAgentServer(agentSock);
+    const configPath = join(dir, 'config.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        controller_id: '00000000-0000-0000-0000-0000000000c4',
+        listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
+        tokens: { 'tok-admin': { principal: 'admin:test', role: 'admin' } },
+        state: { databasePath: join(dir, 'x.db'), auditJsonlPath: join(dir, 'a.jsonl') },
+        agent: { socket: agentSock },
+        mcp: { allow_apply: true, confirmation: { url_wait_seconds: 1 } },
+      }),
+    );
+    handle = await startServer({ configPath });
+    port = (handle.address as AddressInfo).port;
+    seedShare(handle.state, 'share-dispatchfail');
+  }, 30_000);
+
+  afterAll(async () => {
+    await handle.close();
+    await mockAgent.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('the task fails FAILED_BEFORE_CHANGE and the record stays consumed with that task id', async () => {
+    // Consumption is committed with the task insert. If the agent then
+    // refuses `task.begin`, the task moves to `failed` before any change
+    // and its leases are released — but the confirmation is NOT rewound:
+    // it was spent on this task, and a fresh apply needs a fresh
+    // confirmation.
+    mockAgent.respondToTaskBegin({
+      kind: 'error',
+      code: -32003,
+      message: 'EXECUTOR_UNSUPPORTED: no such executor',
+    });
+    const { plan_id, expected_revision } = await planShareUpdate(
+      port,
+      'tok-admin',
+      'share-dispatchfail',
+    );
+    const args = {
+      id: 'share-dispatchfail',
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+    };
+    const first = await call(port, 'tok-admin', nextId('call'), 'shares.update', args);
+    const applied = await call(port, 'tok-admin', nextId('call'), 'shares.update', args, {
+      requestState: toolResultOf(first).requestState,
+      inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+    });
+    // The tool call reports the dispatch failure to the client…
+    expect(toolResultOf(applied).isError, JSON.stringify(applied.body)).toBe(true);
+
+    // …the task row exists and is terminally failed before any change, with
+    // its leases released…
+    const task = handle.state.db
+      .prepare(
+        "SELECT task_id, state, error_code FROM tasks WHERE plan_id = ? AND state != 'plan_only'",
+      )
+      .get(plan_id) as { task_id: string; state: string; error_code?: string } | undefined;
+    expect(task?.state).toBe('failed');
+    expect(task?.error_code).toBe('FAILED_BEFORE_CHANGE');
+    expect(
+      (handle.state.db.prepare('SELECT COUNT(*) AS n FROM leases').get() as { n: number }).n,
+    ).toBe(0);
+
+    // …and the confirmation stays consumed, bound to that same task.
+    const record = handle.state.db
+      .prepare('SELECT * FROM mcp_confirmations WHERE plan_id = ?')
+      .get(plan_id) as Record<string, unknown> | undefined;
+    expect(record?.status).toBe('consumed');
+    expect(record?.consumed_task_id).toBe(task?.task_id);
+  }, 20_000);
+});
+
+// ── Task 13 — metrics registry, GET /metrics, confirmation counters ───────
+// (S15 §12.2). A separate server/db: the shared describe block above runs
+// ~20 confirmation flows that deliberately leave records open in every
+// status (tampered state, cross-principal, round-limit, ...), so an exact
+// gauge/counter assertion there would be reading 20 tests' worth of
+// accumulated state rather than this task's own scenario. Isolating it
+// keeps the pending-gauge assertions exact and deterministic.
+
+describe('MCP MRTR confirmation metrics (S15 §12.2, Task 13)', () => {
+  let dir: string;
+  let handle: Awaited<ReturnType<typeof startServer>>;
+  let mockAgent: MockAgentServer;
+  let port: number;
+
+  function getConfirmationByPlanId(planId: string): Record<string, unknown> | undefined {
+    return handle.state.db
+      .prepare('SELECT * FROM mcp_confirmations WHERE plan_id = ? ORDER BY created_at DESC LIMIT 1')
+      .get(planId) as Record<string, unknown> | undefined;
+  }
+
+  async function planShareUpdate(
+    token: string,
+    shareId: string,
+  ): Promise<{ plan_id: string; expected_revision: number }> {
+    const res = await call(port, token, nextId('plan-share'), 'shares.update', {
+      id: shareId,
+      mode: 'plan',
+      spec: { clients: [{ pattern: '10.0.0.0/8', options: ['ro'] }] },
+    });
+    const result = payloadOf(res).result as { plan_id: string; state_revision_expected: number };
+    return { plan_id: result.plan_id, expected_revision: result.state_revision_expected };
+  }
+
+  /** `filesystems.create` force:true — the one destructive/url-capable plan in this suite (see the main describe block's comment). */
+  async function planFsCreateForce(
+    token: string,
+    mountpoint: string,
+  ): Promise<{ plan_id: string; expected_revision: number }> {
+    const res = await call(port, token, nextId('plan-fs'), 'filesystems.create', {
+      mode: 'plan',
+      spec: { backing_device: '/dev/xi_data', mountpoint, force: true },
+    });
+    const result = payloadOf(res).result as { plan_id: string; state_revision_expected: number };
+    return { plan_id: result.plan_id, expected_revision: result.state_revision_expected };
+  }
+
+  /** Raw `GET /api/v1/metrics` (text/plain, not the JSON envelope the other helpers parse). */
+  function metricsGet(
+    token: string,
+  ): Promise<{ status: number; headers: http.IncomingHttpHeaders; text: string }> {
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/api/v1/metrics',
+          method: 'GET',
+          headers: { authorization: `Bearer ${token}` },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            resolve({
+              status: res.statusCode ?? 0,
+              headers: res.headers,
+              text: Buffer.concat(chunks).toString('utf8'),
+            });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'xinas-mcp-confirm-metrics-'));
+    const agentSock = join(dir, 'agent.sock');
+    mockAgent = await startMockAgentServer(agentSock);
+    const configPath = join(dir, 'config.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        controller_id: '00000000-0000-0000-0000-0000000000c3',
+        listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
+        tokens: {
+          'tok-admin': { principal: 'admin:test', role: 'admin' },
+          'tok-viewer': { principal: 'viewer:test', role: 'viewer' },
+        },
+        state: { databasePath: join(dir, 'x.db'), auditJsonlPath: join(dir, 'a.jsonl') },
+        agent: { socket: agentSock },
+        mcp: {
+          allow_apply: true,
+          confirmation: {
+            approval_url_base: 'http://127.0.0.1:1',
+            url_wait_seconds: 1,
+            max_pending_per_principal: 50,
+            max_pending_total: 1000,
+            create_rate_per_minute: 600,
+          },
+        },
+      }),
+    );
+    handle = await startServer({ configPath });
+    port = (handle.address as AddressInfo).port;
+    seedShare(handle.state, 'share-metrics');
+    handle.state.kv.put('/xinas/v1/observed/XiraidArray/data', {
+      kind: 'XiraidArray',
+      id: 'data',
+      spec: {
+        name: 'data',
+        level: 'raid5',
+        member_disk_ids: ['d1', 'd2', 'd3', 'd4'],
+        strip_size_kib: 128,
+      },
+      status: {
+        state: 'optimal',
+        volume_path: '/dev/xi_data',
+        observed_at: '2026-06-10T12:00:00Z',
+      },
+    });
+  }, 30_000);
+
+  afterAll(async () => {
+    await handle.close();
+    await mockAgent.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a form flow funds the counters; GET /api/v1/metrics (viewer role) exposes them with no principal or id labels', async () => {
+    const { plan_id, expected_revision } = await planShareUpdate('tok-admin', 'share-metrics');
+    const args = {
+      id: 'share-metrics',
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+    };
+    const first = await call(port, 'tok-admin', nextId('call'), 'shares.update', args);
+    const requestState = toolResultOf(first).requestState;
+    expect(requestState?.startsWith('xc1.')).toBe(true);
+    const second = await call(port, 'tok-admin', nextId('call'), 'shares.update', args, {
+      requestState,
+      inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+    });
+    expect(toolResultOf(second).resultType).toBe('complete');
+
+    const res = await metricsGet('tok-viewer');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/plain; version=0\.0\.4/);
+    // Label order follows the series' declared labelNames (['risk', 'mode']
+    // in registryConfirmationMetrics), not call-site argument order.
+    expect(res.text).toMatch(
+      /xinas_mcp_confirmations_requested_total\{risk="changing_access",mode="form"\} [1-9]/,
+    );
+    expect(res.text).toMatch(/xinas_mcp_confirmations_decided_total\{outcome="consumed"\} [1-9]/);
+    expect(res.text).toContain('xinas_mcp_confirmation_to_apply_seconds_bucket');
+    expect(res.text).not.toContain('admin:test');
+    expect(res.text).not.toContain('xc1.');
+  });
+
+  it('audit parity: one http.* row for the loopback apply plus the lifecycle rows, none for /mcp frames', async () => {
+    seedShare(handle.state, 'share-metrics-audit');
+    const { plan_id, expected_revision } = await planShareUpdate(
+      'tok-admin',
+      'share-metrics-audit',
+    );
+    const args = {
+      id: 'share-metrics-audit',
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+    };
+
+    await handle.state.drainer.drainNow();
+    const before = auditRows(dir).length;
+
+    const first = await call(port, 'tok-admin', nextId('call'), 'shares.update', args);
+    const requestState = toolResultOf(first).requestState;
+    const second = await call(port, 'tok-admin', nextId('call'), 'shares.update', args, {
+      requestState,
+      inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+    });
+    const taskId = (payloadOf(second).result as { task_id?: string })?.task_id;
+    expect(typeof taskId).toBe('string');
+
+    await handle.state.drainer.drainNow();
+    const rows = auditRows(dir).slice(before);
+    // The audit `kind` this repo records has no /api/v1 prefix (see the
+    // main describe block's file-header comment) — the loopback apply is
+    // the ONE http.* row this flow produces; the two /mcp tools/call
+    // frames (elicit + retry) are never audited at all (app.ts skips /mcp).
+    expect(rows.filter((r) => r.kind === 'http.PATCH./shares/share-metrics-audit')).toHaveLength(1);
+    expect(rows.filter((r) => r.kind === 'http.POST./mcp')).toHaveLength(0);
+    expect(rows.map((r) => r.kind)).toEqual(
+      expect.arrayContaining([
+        'mcp.confirmation.requested',
+        'mcp.confirmation.consumed',
+        'mcp.confirmation.apply_task_created',
+      ]),
+    );
+    const consumed = rows.find((r) => r.kind === 'mcp.confirmation.consumed');
+    expect(consumed?.payload).toMatchObject({
+      confirmation_id: expect.any(String),
+      plan_id: expect.any(String),
+      task_id: expect.any(String),
+      principal: 'admin:test',
+    });
+  });
+
+  it('the pending gauge (review P2) reads the store at scrape time: 1 while a url record is open, 0 once declined', async () => {
+    // The form flow in the first test above already left ONE record
+    // 'consumed' (not pending/approved), so mode="form" reads 0 throughout.
+    const { plan_id, expected_revision } = await planFsCreateForce(
+      'tok-admin',
+      '/mnt/metrics-pending',
+    );
+    const args = {
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+      dangerous: true,
+    };
+    const elicited = await call(
+      port,
+      'tok-admin',
+      nextId('call'),
+      'filesystems.create',
+      args,
+      {},
+      BOTH,
+    );
+    expect(toolResultOf(elicited).inputRequests?.confirm_apply?.params.mode).toBe('url');
+    const record = getConfirmationByPlanId(plan_id);
+    expect(record?.status).toBe('pending');
+
+    const open = await metricsGet('tok-admin');
+    expect(open.text).toContain('xinas_mcp_confirmations_pending{mode="form"} 0');
+    expect(open.text).toContain('xinas_mcp_confirmations_pending{mode="url"} 1');
+
+    const declineRes = await restCall(
+      port,
+      'tok-admin',
+      'POST',
+      `/mcp/confirmations/${record?.confirmation_id as string}/decline`,
+      {},
+    );
+    expect(declineRes.status).toBe(200);
+
+    const closed = await metricsGet('tok-admin');
+    expect(closed.text).toContain('xinas_mcp_confirmations_pending{mode="form"} 0');
+    expect(closed.text).toContain('xinas_mcp_confirmations_pending{mode="url"} 0');
   });
 });

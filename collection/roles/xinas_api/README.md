@@ -64,6 +64,73 @@ See `defaults/main.yml`. Highlights:
 | `xinas_api_admin_users` | `[]` | Extra **existing** accounts to add to `xinas-admin`; unknown names are skipped, never created. |
 | `xinas_api_controller_id` | `{{ ansible_machine_id \| to_uuid }}` | UUIDv5 derivation; override for pre-assigned IDs. |
 
+### Token surface scope (S15 §3.5, §13)
+
+Each entry in the config's `tokens` map may carry an optional
+`surface` alongside `principal` and `role`:
+
+| Key | Default | Values | Notes |
+|---|---|---|---|
+| `tokens.<token>.surface` | *(absent = `any`)* | `mcp` \| `rest` \| `any` | Which endpoint family the bearer may authenticate on. `mcp` is refused on `/api/v1` with `PERMISSION_DENIED` (`details.reason: token_surface`); `rest` is refused on `/mcp` with the same 401 an unknown bearer gets; `any` is accepted on both. Any other value is fatal at config load. |
+
+**Give the agent's token `surface: mcp` — without it the confirmation gate
+can be bypassed by applying over REST with the same token.** The key is
+hand-edited into `/etc/xinas-api/config.json` (this role writes the
+bootstrap admin token only), and the default is left as `any` so an
+existing deployment keeps working across an upgrade:
+
+```jsonc
+"tokens": {
+  "<the agent's bearer>": { "principal": "mcp:agent", "role": "admin", "surface": "mcp" }
+}
+```
+
+### MCP apply confirmation (S15)
+
+**Not templated by this role.** `mcp.confirmation.*` is pure runtime
+config — this role's `xinas-api-config.json.j2` writes no `mcp` block at
+all (S8's `mcp.allow_apply`/`mcp.http` and S15's `mcp.confirmation` are
+both hand-edited into `/etc/xinas-api/config.json` after install, same as
+the rest of "no automated token rotation" above). Every key is optional;
+the api applies these defaults when a key or the whole `mcp.confirmation`
+object is absent (see `src/api/config.ts` `MCP_CONFIRMATION_DEFAULTS`):
+
+| Key | Default | Range | Notes |
+|---|---|---|---|
+| `mcp.confirmation.ttl_seconds` | `300` | `[60, 900]` | How long a pending confirmation record stays valid. |
+| `mcp.confirmation.url_wait_seconds` | `25` | `[1, 55]` | How long a URL-mode retry waits for the operator before re-issuing. |
+| `mcp.confirmation.max_pending_per_principal` | `5` | `[1, 50]` | |
+| `mcp.confirmation.max_pending_total` | `100` | `[1, 1000]` | |
+| `mcp.confirmation.create_rate_per_minute` | `10` | `[1, 600]` | |
+| `mcp.confirmation.approval_url_base` | *(none — URL mode unavailable)* | `https://…`, or `http://` only on a loopback host; no query/fragment | Required for destructive (URL-mode) applies. |
+| `mcp.confirmation.approver_policy` | `distinct_principal` | `distinct_principal` \| `any_admin` | `any_admin` lets the requesting principal approve its own request (logged at startup). |
+| `mcp.confirmation.allow_uds_approval` | `false` | boolean | Break-glass — see below. |
+
+`state.confirmationKeyPath` (also hand-edited, alongside `state.databasePath`
+in the same config file) is the HMAC key ring securing the opaque
+`requestState` MCP clients echo back on a confirmation retry. Default
+`/var/lib/xinas/state/mcp-confirmation-keys.json` (beside the SQLite DB).
+The api creates it on first boot — `0600`, owned by the `xinas-api` user,
+`{ "active": "k1", "keys": { "k1": "<32 random bytes, base64>" } }` — if it
+doesn't already exist; the api refuses to start against a key-ring file
+with any group/world permission bit set or an owner other than itself.
+
+`allow_uds_approval` (default **false**) is the break-glass override: with
+it off, `xinasctl mcp_confirmations approve` over the UDS is refused even
+as root, so an MCP confirmation can only be approved through a channel
+that isn't the node the agent runs on. Setting it `true` lets anyone with
+root or `xinas-admin` membership approve locally — every such approval is
+audited as `mcp.confirmation.break_glass_used` in addition to the normal
+`approved` row, and the config loader logs a warning at startup while it
+is on. This is the S15 §3.5 security boundary made concrete: an agent
+that holds root or `xinas-admin` on the node can already read every
+bearer token and the key ring, so it is outside what MRTR can prove no
+matter how this flag is set — the guarantee only holds when the approval
+happens off that node (the HTTPS approval page, or REST from a separate
+admin session). `allow_uds_approval: true` is for deliberately trading
+that guarantee away on a single-operator/lab deployment, not a default
+anyone should ship.
+
 ## Example play
 
 ```yaml
@@ -153,6 +220,33 @@ There is no automated rotation in Phase 0. To rotate:
 
 A future workstream (auth.RotateToken + RBAC delivery) will replace
 this with a runtime API call that swaps the token without a restart.
+
+### Rotating the MCP confirmation key ring (S15)
+
+The HMAC key ring (`state.confirmationKeyPath`, default
+`/var/lib/xinas/state/mcp-confirmation-keys.json` — see "MCP apply
+confirmation (S15)" above) is loaded once at process start; it has no
+runtime reload, so rotation is restart-based like the admin token above,
+but additive rather than delete-and-recreate — a `requestState` signed
+with an old key must keep verifying until every confirmation minted under
+it has expired, or an in-flight retry is refused.
+
+1. Add a new key under `keys` (any id matching `[A-Za-z0-9_-]{1,16}`, at
+   least 32 random bytes, base64-encoded — e.g.
+   `openssl rand -base64 32`), keeping the old entry:
+   ```json
+   { "active": "k1", "keys": { "k1": "<existing>", "k2": "<new 32 random bytes>" } }
+   ```
+2. Point `active` at the new key: `"active": "k2"`.
+3. `sudo systemctl restart xinas-api` — the new key signs every
+   `requestState` minted from this point on; `k1` still verifies retries
+   against confirmations it already signed.
+4. Wait at least `mcp.confirmation.ttl_seconds` (default 300s, configured
+   max 900s) after the restart, so no confirmation record minted under
+   the old key can still be pending.
+5. Remove the old key's entry from `keys` (leave only `k2`) and restart
+   again. A `requestState` still bearing the removed key id now fails
+   verification the same way a tampered one does.
 
 ## Tags
 

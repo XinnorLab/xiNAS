@@ -47,4 +47,38 @@ describe('OpenAPI schema contract', () => {
       expect(ok).toBe(true);
     });
   }
+
+  // S15 AC15 fix round 1 (F2): the McpConfirmation fixture above is a single
+  // `approved`/`url` record — one fixture per schema name can only pin one
+  // literal per nullable enum. Prove the REST of each enum's literals here by
+  // spreading the fixture with one field overridden per case, so every
+  // `approval_channel` / `approval_interface` / `expired_reason` value the
+  // spec advertises is exercised against the compiled schema, not just the
+  // one the fixture happens to carry.
+  it('McpConfirmation: every approval_channel/approval_interface/expired_reason literal validates', () => {
+    const fixture = JSON.parse(
+      readFileSync(resolve(fixturesDir, 'McpConfirmation.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    const validate = ajv.compile(schemas.McpConfirmation as object);
+    const isValid = (overrides: Record<string, unknown>): boolean =>
+      validate({ ...fixture, ...overrides }) as boolean;
+
+    for (const value of ['mcp_form', 'bearer', 'uds_break_glass']) {
+      expect(isValid({ approval_channel: value }), `approval_channel: ${value}`).toBe(true);
+    }
+    expect(isValid({ approval_channel: 'form' }), "approval_channel: 'form' is not valid").toBe(
+      false,
+    );
+
+    for (const value of ['web', 'rest']) {
+      expect(isValid({ approval_interface: value }), `approval_interface: ${value}`).toBe(true);
+    }
+    expect(isValid({ approval_interface: 'cli' }), "approval_interface: 'cli' is not valid").toBe(
+      false,
+    );
+
+    for (const value of ['ttl', 'round_limit', 'plan_stale', 'revision_changed', 'restart_sweep']) {
+      expect(isValid({ expired_reason: value }), `expired_reason: ${value}`).toBe(true);
+    }
+  });
 });

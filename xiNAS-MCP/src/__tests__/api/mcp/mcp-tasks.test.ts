@@ -1010,6 +1010,77 @@ describe('MCP Tasks extension over the wire (S16 Task 10)', () => {
     expect(rec?.consumed_task_id).toBe(taskId);
   });
 
+  // ── 12b. S15 follow-up: cancel does not disturb the consumed record ──────
+
+  it('tasks/cancel after an MRTR-gated apply leaves the confirmation record consumed, and the identical retry still answers the SAME task (no re-elicitation)', async () => {
+    const freshShare = 'share-cancel-consumed';
+    seedShare(handle.state, freshShare);
+    // Belt and braces: case 9 above already leaves the mock agent set to
+    // accept a cancel, but this test's assertion is about the CONFIRMATION
+    // record, not the cancel verdict — pin the agent's reply explicitly so
+    // this test does not silently depend on suite ordering.
+    mockAgent.respondToTaskCancel({ cancel_requested: true });
+
+    const { plan_id, args, acceptExtra, second } = await applyFormAccept(
+      'tok-admin',
+      freshShare,
+      FORM_TASKS,
+    );
+    const handleResult = resultOf(second);
+    expect(handleResult.resultType).toBe('task');
+    const taskId = handleResult.taskId as string;
+
+    function getConfirmation(): { status: string; consumed_task_id: string | null } | undefined {
+      return handle.state.db
+        .prepare('SELECT status, consumed_task_id FROM mcp_confirmations WHERE plan_id = ?')
+        .get(plan_id) as { status: string; consumed_task_id: string | null } | undefined;
+    }
+
+    const beforeCancel = getConfirmation();
+    expect(beforeCancel?.status).toBe('consumed');
+    expect(beforeCancel?.consumed_task_id).toBe(taskId);
+
+    // Move the task past 'queued' so the cancel exercises a real running
+    // task. Either core verdict (accepted, or refused because the operation
+    // is past its point of no return) is fine here — the property under
+    // test is the confirmation record, not the cancel outcome itself (S16
+    // Task 10 case 9, above, already covers every cancel verdict).
+    await progress(taskId, [{ event_type: 'accepted', stage_total: 1 }]);
+    const cancel = await taskRpc(port, 'tasks/cancel', taskId, 'tok-admin', TASKS_CAP);
+    expect(cancel.status).toBe(200);
+    expect(cancel.body.result).toEqual({ resultType: 'complete' });
+
+    // The confirmation record is untouched by the cancel: still consumed,
+    // still linked to the SAME task. Cancel is a task-lifecycle operation,
+    // not a confirmation-lifecycle one — a future refactor that let a
+    // cancel reopen or reissue the confirmation record would be a gate
+    // reordering bug, exactly what this pins against.
+    const afterCancel = getConfirmation();
+    expect(afterCancel?.status).toBe('consumed');
+    expect(afterCancel?.consumed_task_id).toBe(taskId);
+
+    // The identical retry (same requestState + inputResponses, same args)
+    // must still answer the SAME task — no re-elicitation, no second task —
+    // even though the underlying task has since been asked to cancel.
+    const replay = await call(
+      port,
+      'tok-admin',
+      nextId('call'),
+      'shares.update',
+      args,
+      acceptExtra,
+      FORM_TASKS,
+    );
+    const replayResult = resultOf(replay);
+    expect(replayResult.resultType).toBe('task');
+    expect(replayResult.taskId).toBe(taskId);
+    expect(countTasksByPlan(plan_id)).toBe(1);
+
+    const finalConfirmation = getConfirmation();
+    expect(finalConfirmation?.status).toBe('consumed');
+    expect(finalConfirmation?.consumed_task_id).toBe(taskId);
+  }, 15_000);
+
   // ── 13. polling is read-only ───────────────────────────────────────────
 
   it('ten tasks/get in a row leave lastUpdatedAt unchanged and write no new audit rows', async () => {

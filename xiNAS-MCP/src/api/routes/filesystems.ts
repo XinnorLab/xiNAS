@@ -20,6 +20,7 @@ import {
   toApplyPlan,
 } from '../handlers/plan-apply.js';
 import { getOrNull, sendOk } from '../handlers/reads.js';
+import { DANGEROUS_FLAG_REQUIRED } from '../plan/blockers.js';
 import { publicPlan } from '../plan/document.js';
 import type { PlanProvider } from '../plan/engine.js';
 import {
@@ -121,7 +122,7 @@ export function filesystemsRouter(ctx: ApiContext): Router {
       // §S4-8: re-run preflight against current state; everything except the
       // engine-owned dangerous code blocks the apply.
       const recheck = await fsCreateProvider.preflight({ kv: ctx.state.kv }, planTask.spec);
-      const blocking = recheck.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+      const blocking = recheck.blockers.filter((b) => b.code !== DANGEROUS_FLAG_REQUIRED);
       if (blocking.length > 0) {
         throw new ApiException(
           'PRECONDITION_FAILED',
@@ -278,7 +279,7 @@ export function filesystemsRouter(ctx: ApiContext): Router {
       // S4 §8: re-run the matching preflight; everything except the
       // engine-owned dangerous_flag_required blocks the apply.
       const recheck = await provider.preflight({ kv: ctx.state.kv }, planTask.spec);
-      const blocking = recheck.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+      const blocking = recheck.blockers.filter((b) => b.code !== DANGEROUS_FLAG_REQUIRED);
       if (blocking.length > 0) {
         throw new ApiException(
           'PRECONDITION_FAILED',
@@ -406,7 +407,7 @@ export function filesystemsRouter(ctx: ApiContext): Router {
       }
 
       const recheck = await fsUnmanageProvider.preflight({ kv: ctx.state.kv }, planTask.spec);
-      const blocking = recheck.blockers.filter((b) => b.code !== 'dangerous_flag_required');
+      const blocking = recheck.blockers.filter((b) => b.code !== DANGEROUS_FLAG_REQUIRED);
       if (blocking.length > 0) {
         throw new ApiException(
           'PRECONDITION_FAILED',

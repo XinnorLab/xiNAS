@@ -1,6 +1,7 @@
 import { chmodSync, chownSync, existsSync, unlinkSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { MetricsRegistry } from '../lib/metrics.js';
 import { type OpenedStateStore, openStateStore } from '../state/index.js';
 import { createAgentRpcClient } from './agent-client.js';
 import { createApp } from './app.js';
@@ -14,6 +15,7 @@ import { RetentionSweeper } from './events/retention.js';
 import { SubscriptionRegistry } from './events/subscriptions.js';
 import { HeartbeatTracker, createAgentHealthProbe } from './heartbeat.js';
 import { startLeaseSweeper } from './lease-sweeper.js';
+import { startConfirmationSweeper } from './mcp/confirmation/sweeper.js';
 import { loadObservedSchemas } from './observed-schemas.js';
 import { backfillShareFsidMarkers } from './backfill-fsid-markers.js';
 import { seedShares } from './seed-shares.js';
@@ -23,6 +25,12 @@ import { TaskWatch } from './tasks/watch.js';
 export interface StartServerOptions {
   configPath?: string;
   inline?: ApiConfig;
+  /**
+   * Test-only override for the confirmation-expiry sweep's cadence
+   * (default {@link CONFIRMATION_SWEEP_INTERVAL_MS}, 30 s — see
+   * `mcp/confirmation/sweeper.ts`). Production callers never set this.
+   */
+  confirmationSweepIntervalMs?: number;
 }
 
 export interface ServerHandle {
@@ -116,9 +124,16 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   // watchers through the same fan-out.
   const taskWatch = new TaskWatch();
 
+  // S15 §12.2 (Task 13): created BEFORE buildTaskEngines so the SAME
+  // instance backs the engine's consumed/latency counters, the confirmation
+  // service's other seven series, and the ctx.metrics the /metrics route
+  // renders — one registration of each metric name, one registry.
+  const metrics = new MetricsRegistry();
+
   const tasks = buildTaskEngines({
     state,
     taskWatch,
+    metrics,
     allowMcpApply: () => config.mcp?.allow_apply === true,
     ...(config.agent ? { agentClient: createAgentRpcClient(config.agent.socket) } : {}),
     ...(config.tasks?.max_inflight !== undefined ? { maxInflight: config.tasks.max_inflight } : {}),
@@ -158,6 +173,42 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
     tracker.start();
   }
 
+  // Conditional spread for the optionals — exactOptionalPropertyTypes refuses
+  // an explicit `tracker: undefined` / `observedSchemas: undefined`.
+  const ctx: ApiContext = {
+    config,
+    state,
+    tasks,
+    taskWatch,
+    events,
+    metrics,
+    ...(tracker ? { tracker } : {}),
+    ...(observed ? { observedSchemas: observed.schemas, ajv: observed.ajv } : {}),
+  };
+  // createApp lazily builds ctx.mcpConfirmations (S15) when a task engine is
+  // wired — moved ahead of the startup reconcile() below (S15 §6.5) so the
+  // restart sweep and the timer it starts both see the SAME instance the
+  // /mcp routes dispatch through.
+  const app = createApp(ctx);
+
+  // S15 §6.3/§6.5: expire overdue confirmations BEFORE the task engine's
+  // startup reconcile() — a record whose TTL elapsed while the api was down
+  // must not still look "pending"/"approved" to a client that reconnects
+  // during the reconcile window. Consumed/declined/cancelled rows are never
+  // touched (ConfirmationStore.sweepExpired only candidates
+  // pending/approved past expires_at). Absent (undefined) in a context with
+  // no task engine, same as every other ctx.mcpConfirmations consumer.
+  ctx.mcpConfirmations?.sweepExpired('restart_sweep');
+  const confirmationSweeper =
+    ctx.mcpConfirmations !== undefined
+      ? startConfirmationSweeper({
+          service: ctx.mcpConfirmations,
+          ...(opts.confirmationSweepIntervalMs !== undefined
+            ? { intervalMs: opts.confirmationSweepIntervalMs }
+            : {}),
+        })
+      : undefined;
+
   // Startup reconciliation (s2-task-envelope-spec §9): sweep expired leases and
   // adopt/redispatch in-flight work left by a prior api/agent restart.
   // Best-effort and fire-and-forget — a failure (e.g. agent not up yet) is
@@ -176,18 +227,6 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   // `sweepExpired()` every ~TTL/2 so a leaked lease is reclaimed within ~TTL.
   const leaseSweeper = startLeaseSweeper({ leases: state.leases });
 
-  // Conditional spread for the optionals — exactOptionalPropertyTypes refuses
-  // an explicit `tracker: undefined` / `observedSchemas: undefined`.
-  const ctx: ApiContext = {
-    config,
-    state,
-    tasks,
-    taskWatch,
-    events,
-    ...(tracker ? { tracker } : {}),
-    ...(observed ? { observedSchemas: observed.schemas, ajv: observed.ajv } : {}),
-  };
-  const app = createApp(ctx);
   const server = http.createServer(app);
 
   await new Promise<void>((resolve, reject) => {
@@ -291,6 +330,9 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
       tracker?.stop();
       // Stop the periodic lease sweep so no timer fires against a closing db.
       leaseSweeper.stop();
+      // Stop the periodic confirmation-expiry sweep (S15 §6.3) — same
+      // rationale as the lease sweeper above.
+      confirmationSweeper?.stop();
       retention.stop();
       // S17 §5.6: every open subscriptions/listen stream gets its graceful
       // result before the listeners close; then drop idle keep-alive

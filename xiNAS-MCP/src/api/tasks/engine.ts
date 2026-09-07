@@ -4,9 +4,11 @@ import type { LeaseManager } from '../../state/leases.js';
 import type { AuditAppender } from '../../state/audit.js';
 import { type AgentRpcClient, AgentRpcError } from '../agent-client.js';
 import { ApiException } from '../errors.js';
+import type { ConfirmationMetrics } from '../mcp/confirmation/metrics.js';
 import type { ConfirmationStore } from '../mcp/confirmation/store.js';
 import type { ConfirmationRecord } from '../mcp/confirmation/types.js';
 import { queueConfirmationEvent } from '../mcp/confirmation/audit.js';
+import { DANGEROUS_FLAG_REQUIRED } from '../plan/blockers.js';
 import type { TaskStore } from './store.js';
 import type { DesiredMutation, ResourceRef, Task } from './types.js';
 
@@ -153,6 +155,16 @@ export interface TaskEngineDeps {
   confirmations?: ConfirmationStore;
   /** S15 §12.1: security-event audit sink for the gate's consumed/expired rows. */
   audit?: AuditAppender;
+  /**
+   * S15 §12.2 (Task 13): the confirmation counters. Only `decided('consumed')`
+   * and `confirmationToApply()` are ever called here — the service owns the
+   * other seven series and never learns of a consumption itself (the apply
+   * transaction does, after the fact). Built once in tasks/build.ts over the
+   * same registry `ApiContext.metrics` exposes, so app.ts's
+   * `ConfirmationService` reuses this exact instance instead of registering
+   * the same metric names a second time.
+   */
+  metrics?: ConfirmationMetrics;
   /** Overridable clock for the gate's expiry/consume checks. Default Date.now. */
   clock?: () => number;
   /** S15 §13 (mcp.allow_apply): re-checked in the core, not just at the route. */
@@ -229,6 +241,7 @@ export class TaskEngine {
   /** S15 §8: optional so REST-only/test contexts stay inert (no confirmations wired). */
   private readonly confirmations: ConfirmationStore | undefined;
   private readonly audit: AuditAppender | undefined;
+  private readonly metrics: ConfirmationMetrics | undefined;
   private readonly clock: () => number;
   private readonly allowMcpApply: (() => boolean) | undefined;
   /** Re-entrancy guard: true while a reconcile() pass is in flight. */
@@ -253,6 +266,7 @@ export class TaskEngine {
     this.taskWatch = deps.taskWatch;
     this.confirmations = deps.confirmations;
     this.audit = deps.audit;
+    this.metrics = deps.metrics;
     this.clock = deps.clock ?? (() => Date.now());
     this.allowMcpApply = deps.allowMcpApply;
   }
@@ -416,6 +430,18 @@ export class TaskEngine {
   apply(args: ApplyArgs): Task {
     const { plan, applyReq } = args;
 
+    // S15 §12.2 (Task 13, F1 fix): the two consumed/latency metric calls
+    // must not fire until the apply transaction actually COMMITS. The lease
+    // loop (step 9) runs after the confirmation consume() and can still
+    // throw, rolling the whole `db.transaction` back — including the
+    // consume() write. Emitting the metrics from inside the transaction
+    // body (as before the fix) moved the in-memory counters regardless, so
+    // a lease conflict left them out of sync with the rolled-back DB. Fix:
+    // capture what the emit needs into this local from inside the
+    // transaction, then fire both calls only after `run()` returns
+    // successfully — see the commit-point comment below.
+    let pendingConsumedMetrics: { createdAt: number; consumedAt: number } | undefined;
+
     const run = this.db.transaction((): Task => {
       // 1. Idempotency (SELECT-first; see file header for why).
       const existing = this.store.getByIdempotency(applyReq.idempotency_key, applyReq.principal);
@@ -486,7 +512,14 @@ export class TaskEngine {
           // — never the row column, which route-computed kinds leave unpinned.
           record.expected_revision !== applyReq.expected_revision ||
           record.expires_at <= now ||
-          record.status !== consumableFrom
+          record.status !== consumableFrom ||
+          // A11(c), belt and braces: a destructive plan may only be backed
+          // by a url-mode (operator-approved) record. The service can never
+          // mint the other pairing — confirmationModeFor sends every
+          // destructive plan to url — so reaching here means the record or
+          // the plan was edited directly, and an MCP client's own form
+          // accept must not stand in for an operator approval.
+          (plan.risk_level === 'destructive' && record.mode !== 'url')
         ) {
           throw new ApiException(
             'PRECONDITION_FAILED',
@@ -501,7 +534,7 @@ export class TaskEngine {
         confirmation = record;
       }
 
-      // 1b. Dangerous gate (reqs §14, ADR-0006 §Delete; S4 T1). Central:
+      // 3. Dangerous gate (reqs §14, ADR-0006 §Delete; S4 T1). Central:
       //     every transport that reaches apply is blocked at this one place.
       //     After idempotency (a true replay of an already-accepted apply
       //     returns the original above), before any write.
@@ -509,12 +542,12 @@ export class TaskEngine {
         throw new ApiException(
           'PRECONDITION_FAILED',
           'destructive operation requires dangerous: true',
-          { reason: 'dangerous_flag_required' },
+          { reason: DANGEROUS_FLAG_REQUIRED },
           'Review the plan blast radius (diff), then re-send the apply with dangerous: true.',
         );
       }
 
-      // 2. Freshness (TOCTOU guard). Capture the apply-time revision of the
+      // 4. Freshness (TOCTOU guard). Capture the apply-time revision of the
       //    highest-pinned resource for `state_revision_at_apply`.
       const stale: StaleEntry[] = [];
       let stateRevisionAtApply = plan.state_revision_expected;
@@ -539,7 +572,7 @@ export class TaskEngine {
         );
       }
 
-      // Observation drift → plan is stale (a separate, coarser signal than
+      // 5. Observation drift → plan is stale (a separate, coarser signal than
       // a desired-revision bump: the world the plan observed has moved on).
       //
       // N0.3 (S3 §5.2): prefer the explicit `observed_freshness_ref`. When the
@@ -583,7 +616,7 @@ export class TaskEngine {
         }
       }
 
-      // N0.3 (S3 §5.3, Model R): apply the plan-declared desired_mutations to
+      // 6. N0.3 (S3 §5.3, Model R): apply the plan-declared desired_mutations to
       // KV, capturing each key's PRIOR value into `desiredRollback` so a failed
       // task can revert the intent. `this.kv` is built over the SAME db handle as
       // this transaction, so these put/delete participate in it — they roll back
@@ -602,7 +635,7 @@ export class TaskEngine {
         }
       }
 
-      // 3. Insert the apply task FIRST (the leases FK needs a real task_id).
+      // 7. Insert the apply task FIRST (the leases FK needs a real task_id).
       //    Optionals are spread conditionally — under exactOptionalPropertyTypes
       //    CreateApplyInput's `?:` fields reject an explicit `undefined`.
       const task = this.store.createApplyTask({
@@ -655,9 +688,19 @@ export class TaskEngine {
         queueConfirmationEvent(this.audit, 'apply_task_created', consumed, {
           task_id: task.task_id,
         });
+        // S15 §12.2 (Task 13; F1 fix, fix round 1): the two series with no
+        // ConfirmationService call site — the service never learns of a
+        // consumption; the apply transaction does, right here. Record what
+        // the post-commit emit needs WITHOUT calling `this.metrics` yet —
+        // a later step in this same transaction (the lease loop) can still
+        // throw and roll this consume() back. `consumed.consumed_at` is the
+        // same clock reading `store.consume()` just persisted (falls back
+        // to a fresh read only if the store somehow didn't set it).
+        const consumedAt = consumed.consumed_at ?? this.clock();
+        pendingConsumedMetrics = { createdAt: confirmation.created_at, consumedAt };
       }
 
-      // 4. Acquire a lease per resource in the lease set. N0.3 (S3 §5.2): the
+      // 9. Acquire a lease per resource in the lease set. N0.3 (S3 §5.2): the
       //    lease set is `lease_resources` when the plan overrides it (only
       //    `nfs-idmap.set` does — it locks a resource that is not a public
       //    affected resource), else `affected_resources` (S2 behavior). A
@@ -685,7 +728,19 @@ export class TaskEngine {
     });
 
     try {
-      return run();
+      const task = run();
+      // Commit point: `run()` returned without throwing, so SQLite already
+      // committed the transaction — the consume() write (if any) is
+      // durable. Only now is it safe to move the in-memory counters; a
+      // throw above skips this block entirely, so no metric moves on
+      // rollback (F1 fix).
+      if (pendingConsumedMetrics !== undefined) {
+        this.metrics?.decided('consumed');
+        this.metrics?.confirmationToApply(
+          (pendingConsumedMetrics.consumedAt - pendingConsumedMetrics.createdAt) / 1000,
+        );
+      }
+      return task;
     } catch (err) {
       if (
         err instanceof ApiException &&

@@ -85,14 +85,29 @@ export function renderSummary(input: SummaryInput): {
       doc.affected_resources.length === 0
         ? 'This operation destroys data on the affected resources. Data may be permanently lost.'
         : `This operation destroys data on ${doc.affected_resources.map((r) => `${r.kind} ${r.id}`).join(', ')}. Data on them may be permanently lost.`;
+  } else if (doc.risk_level === 'unsupported_rollback') {
+    // A5 (S15 §10.2): `unsupported_rollback` is a risk level of its own —
+    // it is what sends an otherwise-ordinary plan to url mode. Evaluated
+    // before `changing_access` so a plan that is both never hides the fact
+    // an operator most needs: there is no automatic way back.
+    consequences =
+      'This operation cannot be rolled back automatically: if it fails or must be undone, manual recovery is required.';
   } else if (doc.risk_level === 'changing_access') {
     consequences = `This operation changes client access: ${doc.client_impact}`;
   }
   let rollback_limitation: string;
+  // A5: the risk level wins over the model. A document may carry
+  // `risk_level: 'unsupported_rollback'` with a rollback_model that still
+  // reads as recoverable ('changing_access', 'non_disruptive'); promising an
+  // automatic rollback there would be false.
+  if (doc.risk_level === 'unsupported_rollback' || doc.rollback_model === 'unsupported') {
+    return {
+      message,
+      consequences,
+      rollback_limitation: 'xiNAS cannot roll this operation back automatically.',
+    };
+  }
   switch (doc.rollback_model) {
-    case 'unsupported':
-      rollback_limitation = 'xiNAS cannot roll this operation back automatically.';
-      break;
     case 'destructive':
       rollback_limitation =
         'Rollback is itself destructive: undoing this operation cannot restore data.';

@@ -100,17 +100,8 @@ describe('client catalog (S8 T2)', () => {
       await setup.cleanup();
     });
 
-    // S15: the catalog entry for system.metrics lands ahead of its backing
-    // route (Task 13, the metrics registry). Excluded here so this
-    // regression guard does not fail on a route that is deliberately not
-    // mounted yet — remove this exclusion once that route is wired. The
-    // mcp_confirmations.* entries were the same kind of forward declaration
-    // (Task 7) but their routes landed in Task 11 — no longer excluded.
-    const ROUTE_NOT_YET_MOUNTED = new Set(['system.metrics']);
-
     it('no catalog path hits the NOT_FOUND catch-all', async () => {
       for (const entry of CATALOG) {
-        if (ROUTE_NOT_YET_MOUNTED.has(entry.name)) continue;
         const path = `/api/v1${entry.path.replaceAll(/\{[^}]+\}/g, 'x')}`;
         const req = request(setup.app);
         const r =
@@ -129,23 +120,43 @@ describe('client catalog (S8 T2)', () => {
     }, 30_000);
   });
 
-  it('S15: every plan_apply entry names the engine kinds its route can produce', () => {
-    const byName = new Map(CATALOG.map((e) => [e.name, e]));
-    for (const e of CATALOG.filter((x) => x.mutability === 'plan_apply')) {
-      expect(e.operation_kinds?.length, `${e.name} needs operation_kinds`).toBeGreaterThan(0);
+  /**
+   * M8: pins `operation_kinds` for ALL 18 `plan_apply` entries, not a
+   * hand-picked seven. S15 gate 6 refuses an apply whose plan document
+   * carries an `operation_kind` outside this list, so a provider that
+   * starts emitting a new kind — or an entry that loses one — silently
+   * breaks the MCP apply path for that tool while every other test stays
+   * green. The values are copied from the catalog: the point is drift
+   * detection, not re-deriving them.
+   */
+  it('S15/M8: every plan_apply entry names EXACTLY the engine kinds its route can produce', () => {
+    const EXPECTED: Record<string, string[]> = {
+      'arrays.create': ['xiraid.array.create'],
+      'arrays.import': ['xiraid.array.import'],
+      'arrays.modify': ['xiraid.array.modify'],
+      'arrays.delete': ['xiraid.array.delete'],
+      'filesystems.create': ['fs.create'],
+      'filesystems.update': ['fs.mount', 'fs.unmount', 'fs.grow', 'fs.set_quota_mode'],
+      'filesystems.delete': ['fs.unmanage'],
+      'shares.create': ['share.create'],
+      'shares.update': ['share.update'],
+      'shares.delete': ['share.delete'],
+      'nfs_profiles.update': ['nfs-profile.update'],
+      'nfs_idmap.set': ['nfs-idmap.set'],
+      'network.interfaces.update': ['net.iface.update'],
+      'network.pool.apply': ['net.pool.apply'],
+      'config_history.rollback': ['config.rollback'],
+      'pools.create': ['pool.create'],
+      'pools.modify': ['pool.modify'],
+      'pools.delete': ['pool.delete'],
+    };
+    const planApply = CATALOG.filter((x) => x.mutability === 'plan_apply');
+    // A NEW plan_apply entry must be added to the table above, not skipped.
+    expect(planApply.map((e) => e.name).sort()).toEqual(Object.keys(EXPECTED).sort());
+    expect(planApply).toHaveLength(18);
+    for (const e of planApply) {
+      expect(e.operation_kinds, `${e.name} operation_kinds`).toEqual(EXPECTED[e.name]);
     }
-    expect(byName.get('shares.update')?.operation_kinds).toEqual(['share.update']);
-    expect(byName.get('arrays.create')?.operation_kinds).toEqual(['xiraid.array.create']);
-    expect(byName.get('arrays.import')?.operation_kinds).toEqual(['xiraid.array.import']);
-    expect(byName.get('filesystems.update')?.operation_kinds).toEqual([
-      'fs.mount',
-      'fs.unmount',
-      'fs.grow',
-      'fs.set_quota_mode',
-    ]);
-    expect(byName.get('filesystems.delete')?.operation_kinds).toEqual(['fs.unmanage']);
-    expect(byName.get('config_history.rollback')?.operation_kinds).toEqual(['config.rollback']);
-    expect(byName.get('network.pool.apply')?.operation_kinds).toEqual(['net.pool.apply']);
   });
 
   it('S15: the approval commands exist for the CLI and RBAC but are hidden from MCP', () => {

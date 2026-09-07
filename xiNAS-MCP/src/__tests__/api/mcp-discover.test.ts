@@ -170,6 +170,19 @@ describe('mcp modern era — server/discover (S14)', () => {
     expect(['public', 'private']).toContain(result.cacheScope);
     expect(typeof result.instructions).toBe('string');
     expect(result.instructions.length).toBeGreaterThan(0);
+    // S15 §14: the confirmation-aware guidance — never fabricate an
+    // operator's answer, and route apply through input_required first.
+    expect(result.instructions).toContain('input_required');
+    expect(result.instructions).toContain('approval');
+    expect(result.instructions).toContain('never fabricate an acceptance');
+    // A2 (S15 §3.4): the model must be told the flag is required up front,
+    // not steered away from it — the server refuses to open a confirmation
+    // for a destructive apply that does not carry it.
+    expect(result.instructions).toContain(
+      'A destructive apply must carry `dangerous: true` in the same arguments it will later confirm; the server refuses to start a confirmation without it',
+    );
+    // …while the "do not invent it" rule stays.
+    expect(result.instructions).toContain('never invent');
 
     const serverInfo = result._meta['io.modelcontextprotocol/serverInfo'] as {
       name?: unknown;

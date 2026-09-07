@@ -256,6 +256,14 @@ operations) and `docs/control-path/s17-mcp-subscriptions-spec.md`
 describes the legacy server and is kept for reference only — do not treat
 it as current.
 
+Two S15 rules that bite in practice: every MCP `mode=apply` needs a human
+confirmation *after* `mcp.allow_apply` (an `input_required` form, or an
+operator approval page for destructive plans) — the flag opens the door,
+it does not answer for the operator; and **scope the agent's token with
+`"surface": "mcp"` in `config.json`, or the same token applies over REST
+unconfirmed** (S15 §3.5 — the default `any` makes a bearer a REST
+credential too).
+
 ### Presets
 
 Each preset directory (`presets/default/`, `presets/xinnorVM/`) holds

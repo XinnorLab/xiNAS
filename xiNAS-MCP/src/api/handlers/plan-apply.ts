@@ -51,10 +51,3 @@ export function requireInteger(v: unknown, name: string): number {
   }
   return v;
 }
-
-/** Plain-language NFS-client impact for the Plan envelope. */
-export function clientImpact(riskLevel: string): string {
-  return riskLevel === 'non_disruptive'
-    ? 'No impact on NFS clients.'
-    : 'May affect NFS clients; review the diff.';
-}
