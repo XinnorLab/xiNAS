@@ -229,7 +229,14 @@ fi
 
 # Install required packages unless only updating the repository
 if [ "$UPDATE_ONLY" -eq 0 ]; then
-    run_quiet "Updating package lists" sudo apt-get update -y -qq
+    # --allow-releaseinfo-change: apt refuses (exit 100) a source whose release
+    # identity changed since the last fetch until someone confirms it; NVIDIA's
+    # DOCA `latest` alias did that on 2026-08-20 and every installed host
+    # stopped here. Nobody is at the prompt during a bootstrap, signatures are
+    # verified either way, and accepting once is durable, which carries an
+    # already-installed host through the rest of the install.
+    # docs/Installer/spec.md §8.5.
+    run_quiet "Updating package lists" sudo apt-get update -y -qq --allow-releaseinfo-change
     run_quiet "Installing dependencies (ansible, git, dialog, wget, btop)" \
         sudo apt-get install -y -qq ansible git dialog wget btop
     # Install yq v4 (YAML processor) used by configuration scripts.

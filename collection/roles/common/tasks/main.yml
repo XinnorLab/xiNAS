@@ -70,11 +70,28 @@
     - (xinas_xicli_check.rc | default(1)) != 0
   tags: [preflight, xiraid]
 
-- name: Update apt cache
-  ansible.builtin.apt:
-    update_cache: yes
-    cache_valid_time: 3600
+# apt refuses `apt-get update` (exit 100) for a source whose Suite/Codename/
+# Origin/Label changed since the last fetch, until an operator confirms it with
+# --allow-releaseinfo-change (apt-get(8)). NVIDIA's DOCA `latest` alias did
+# exactly that on 2026-08-20 (3.4.0 -> 3.5.0), and this is the first apt call
+# of a TUI-started update, which has no bootstrap in front of it and runs before
+# doca_ofed can re-pin the source. An unattended converge has no operator to
+# ask and signatures are verified either way, so on failure retry once with the
+# flag; any other cause fails again with apt's own message. Accepting once is
+# durable (apt stores the new release file). docs/Installer/spec.md §3.1, §8.5.
+- name: Update apt cache (retry once if a repository changed its release info)
   tags: [packages]
+  block:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+  rescue:
+    # The apt module has no way to pass --allow-releaseinfo-change, hence the
+    # raw command (ansible-lint command-instead-of-module, waived here only).
+    - name: Update apt cache, accepting a repository release-info change  # noqa: command-instead-of-module
+      ansible.builtin.command: apt-get update --allow-releaseinfo-change
+      changed_when: true
 
 - name: Install baseline packages
   ansible.builtin.apt:

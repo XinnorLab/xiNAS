@@ -1,8 +1,15 @@
 # Role **doca_ofed**
 Installs the NVIDIA DOCA-Host "Everything" profile (`doca-all`) plus the
 firmware updater (`mlnx-fw-updater`) from the official DOCA APT repository
-on Ubuntu. Defaults to the `latest` repo alias so each run pulls the most
-recent DOCA-Host release.
+on Ubuntu. Installs from **one pinned release directory** of that repo
+(`doca_version`, `3.4.0` today), never from NVIDIA's `latest` alias: the
+alias re-points to each new DOCA-Host release without notice, and apt refuses
+to follow a source whose release identity changed until an operator confirms
+it — on 2026-08-20 that turned every installed host's `apt update` into
+`E: Repository … changed its 'Codename' value from '3.4.0' to '3.5.0'`. The
+role writes `/etc/apt/sources.list.d/mellanox-doca.list` whole, so a stale
+`latest` line from an earlier install is retired rather than kept. Contract
+and migration path: `docs/Installer/spec.md` §3.2 and §8.5.
 
 The repo's signing key is fetched from the **component dir's**
 `doca_keyring.gpg` (`<doca_repo_base>/<doca_repo_component>/doca_keyring.gpg`, a
@@ -14,9 +21,11 @@ run so a future rotation self-heals. (This path is the one verified end-to-end o
 DOCA hardware.)
 
 Variables:
-  * `doca_version` – release version string. Default `latest` (NVIDIA's
-    alias to the most recent release); pin to a specific version
-    (e.g. `3.3.0`) or use an LTS alias (e.g. `latest-3.2-LTS`) to lock it.
+  * `doca_version` – one release directory of the DOCA repo (default
+    `3.4.0`). Bump it deliberately after a hardware test, here and in the
+    client's copy of this role, and commit with
+    `Requires-Rebuild: doca_ofed`. Do not set an alias (`latest`, `lts`,
+    `latest-<X.Y>-LTS`): they move, and apt then refuses the source.
   * `doca_distro_series` – Ubuntu series used in repository path.
   * `doca_repo_base` – base URL of the DOCA repository.
   * `doca_repo_component` – component path built from version and distro.
@@ -44,6 +53,12 @@ Reconciled 2026-08-14 against the
   aliases. Both were determined by browsing the public repo tree and are
   verified working on DOCA hardware — but NVIDIA is free to restructure them
   without it being a documented breaking change.
+* **The `latest` alias moves without notice.** On 2026-08-20 its `InRelease`
+  went from `Codename: 3.4.0` to `3.5.0`, and apt refused it on every host
+  that had fetched the old one. Determined from the failing `apt update` and
+  from reading the alias's and the `3.4.0` directory's `InRelease`
+  (2026-09-07); NVIDIA documents neither the alias nor its lifecycle. That is
+  why `doca_version` is a directory, not an alias.
 * **The keyring path and key ID.** The guide only says package managers fetch
   and verify signatures automatically. That the component dir carries a binary
   `doca_keyring.gpg`, that the current key is `DC726C5E41B9CC50`, and that the
