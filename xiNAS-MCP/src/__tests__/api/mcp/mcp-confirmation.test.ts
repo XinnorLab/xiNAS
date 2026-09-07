@@ -1015,6 +1015,120 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     expect(listResult.isError ?? false).toBe(false);
   });
 
+  // ── 9b. S15/S16 follow-up: legacy era ignores a forged tasks capability ───
+
+  it('a legacy client that forges the S16 tasks capability in _meta is still refused MCP_CONFIRMATION_UNSUPPORTED — no task, no confirmation row', async () => {
+    interface RpcOut {
+      status: number;
+      body: Record<string, unknown>;
+      session?: string;
+    }
+    function legacyRpc(message: unknown, session?: string): Promise<RpcOut> {
+      const payload = JSON.stringify(message);
+      return new Promise((resolve, reject) => {
+        const req = http.request(
+          {
+            host: '127.0.0.1',
+            port,
+            path: '/mcp',
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json, text/event-stream',
+              'content-length': Buffer.byteLength(payload),
+              authorization: 'Bearer tok-admin',
+              ...(session !== undefined ? { 'mcp-session-id': session } : {}),
+            },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () => {
+              const text = Buffer.concat(chunks).toString('utf8');
+              const sid = res.headers['mcp-session-id'];
+              resolve({
+                status: res.statusCode ?? 0,
+                body: text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {},
+                ...(typeof sid === 'string' ? { session: sid } : {}),
+              });
+            });
+          },
+        );
+        req.on('error', reject);
+        req.write(payload);
+        req.end();
+      });
+    }
+
+    const init = await legacyRpc({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'legacy-forged-tasks', version: '0' },
+      },
+    });
+    const session = init.session as string;
+
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
+    const beforeConfirmations = countConfirmations();
+
+    // No `io.modelcontextprotocol/protocolVersion` in `_meta` — this rides
+    // the legacy SDK session (isModernRequest stays false, modern.ts) — but
+    // `_meta` DOES declare the S16 tasks extension under
+    // clientCapabilities.extensions, exactly what a client would send to
+    // claim task-handle support. `buildMcpServer`'s CallToolRequestSchema
+    // handler (dispatch.ts) never reads `request.params._meta` at all — it
+    // hardcodes `client: { era: 'legacy', elicitation: new Set(), tasks:
+    // false }` for the whole session (transport.ts) — so this forged
+    // declaration must have zero effect: the era gate inside
+    // `isConfirmable`'s branch runs and refuses before task eligibility
+    // (`isTaskEligible`, which also checks `client.era === 'modern'`) is
+    // ever considered.
+    const apply = await legacyRpc(
+      {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: {
+          _meta: {
+            'io.modelcontextprotocol/clientCapabilities': {
+              extensions: { 'io.modelcontextprotocol/tasks': {} },
+            },
+          },
+          name: 'shares.update',
+          arguments: {
+            id: 'share-a',
+            mode: 'apply',
+            plan_id,
+            expected_revision,
+            idempotency_key: nextId('ik'),
+          },
+        },
+      },
+      session,
+    );
+    const result = (apply.body.result ?? {}) as {
+      content?: Array<{ text: string }>;
+      isError?: boolean;
+      resultType?: string;
+      taskId?: string;
+    };
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain('MCP_CONFIRMATION_UNSUPPORTED');
+    // Neither a CreateTaskResult nor its `resultType: 'task'` marker ever
+    // appears — the legacy path would in fact throw ("unreachable") before
+    // answering at all if callTool ever produced one here.
+    expect(result.resultType).toBeUndefined();
+    expect(result.taskId).toBeUndefined();
+
+    expect(getConfirmationByPlanId(plan_id)).toBeUndefined();
+    expect(countConfirmations()).toBe(beforeConfirmations);
+    expect(countTasksByPlan(plan_id)).toBe(0);
+  });
+
   // ── 11. hidden entries (brief case 11) ────────────────────────────────────
 
   it('mcp_confirmations.approve is hidden from tools/call (NOT_FOUND), even for an admin', async () => {
@@ -1099,6 +1213,129 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
           afterSecond?.confirmation_id,
     );
     expect(consumedRows).toHaveLength(1);
+  });
+
+  // ── S15 follow-up: an inbound confirmation header/argument are inert ──────
+
+  it('a client-supplied X-Xinas-Confirmation header and a confirmation_id argument are both inert — the gate still elicits, and the consumed record is keyed to the server-minted id, never the forged one', async () => {
+    interface RawRpcResult {
+      status: number;
+      body: Record<string, unknown>;
+      headers: http.IncomingHttpHeaders;
+    }
+    function rpcWithForgedHeader(message: unknown): Promise<RawRpcResult> {
+      const payload = JSON.stringify(message);
+      return new Promise((resolve, reject) => {
+        const req = http.request(
+          {
+            host: '127.0.0.1',
+            port,
+            path: '/mcp',
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json, text/event-stream',
+              'content-length': Buffer.byteLength(payload),
+              authorization: 'Bearer tok-admin',
+              // Only the loopback bearer (dispatch.ts callTool → auth.ts
+              // §0) may set this header and have it mean anything. An
+              // ordinary bearer-authenticated /mcp caller sending it must
+              // have it ignored outright, not merged into the confirmation
+              // the gate is about to mint.
+              'x-xinas-confirmation': 'forged',
+            },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () => {
+              const text = Buffer.concat(chunks).toString('utf8');
+              resolve({
+                status: res.statusCode ?? 0,
+                body: text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {},
+                headers: res.headers,
+              });
+            });
+          },
+        );
+        req.on('error', reject);
+        req.write(payload);
+        req.end();
+      });
+    }
+
+    seedShare(handle.state, 'share-forged-hdr');
+    const { plan_id, expected_revision } = await planShareUpdate(
+      port,
+      'tok-admin',
+      'share-forged-hdr',
+    );
+    const args = {
+      id: 'share-forged-hdr',
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+      // A plausible-looking forged argument. shares.update's REST schema has
+      // no such field, so apply-helpers.ts ignores it too (only
+      // ctx.mcp_confirmation_id — set solely from the trusted loopback
+      // header — ever reaches TaskEngine.apply as `confirmation_id`) — but
+      // the point under test is upstream of REST entirely: round 1 must
+      // still elicit, never proceed straight through on the strength of a
+      // client-chosen id.
+      confirmation_id: 'forged',
+    };
+
+    const first = await rpcWithForgedHeader({
+      jsonrpc: '2.0',
+      id: nextId('call'),
+      method: 'tools/call',
+      params: { _meta: META(FORM), name: 'shares.update', arguments: args },
+    });
+    expect(first.status).toBe(200);
+    const r1 = toolResultOf(first);
+    expect(r1.resultType).toBe('input_required');
+    expect(r1.requestState?.startsWith('xc1.')).toBe(true);
+    expect(countTasksByPlan(plan_id)).toBe(0);
+    expect(getConfirmationByPlanId(plan_id)?.status).toBe('pending');
+
+    // The requestState's signed payload carries the REAL confirmation id
+    // (state.ts RequestStatePayload.cid). Decode the body segment — no need
+    // to verify the MAC, this is our own server-issued token — and confirm
+    // it is not the client's forged value.
+    const stateBody = (r1.requestState as string).split('.')[2] as string;
+    const cid = (
+      JSON.parse(Buffer.from(stateBody, 'base64url').toString('utf8')) as { cid: string }
+    ).cid;
+    expect(cid).not.toBe('forged');
+
+    const second = await rpcWithForgedHeader({
+      jsonrpc: '2.0',
+      id: nextId('call'),
+      method: 'tools/call',
+      params: {
+        _meta: META(FORM),
+        name: 'shares.update',
+        arguments: args,
+        requestState: r1.requestState,
+        inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+      },
+    });
+    const r2 = toolResultOf(second);
+    expect(r2.resultType).toBe('complete');
+    expect(r2.isError ?? false).toBe(false);
+    const taskId = (payloadOf(second).result as { task_id?: string })?.task_id;
+    expect(typeof taskId).toBe('string');
+
+    // The consumed record is keyed to the server-minted id decoded above —
+    // the client's forged header and forged argument (both replayed
+    // verbatim on this second call too) never became the confirmation of
+    // record.
+    const consumed = getConfirmationByPlanId(plan_id);
+    expect(consumed?.status).toBe('consumed');
+    expect(consumed?.confirmation_id).toBe(cid);
+    expect(consumed?.confirmation_id).not.toBe('forged');
+    expect(consumed?.consumed_task_id).toBe(taskId);
   });
 });
 
