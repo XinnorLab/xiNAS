@@ -1,4 +1,5 @@
 import express, { type Express, Router } from 'express';
+import { MetricsRegistry } from '../lib/metrics.js';
 import type { ApiContext } from './context.js';
 import { confirmationKeyPathFor, resolveConfirmationConfig } from './config.js';
 import { ApiException } from './errors.js';
@@ -26,6 +27,7 @@ import { groupsRouter } from './routes/groups.js';
 import { healthRouter } from './routes/health.js';
 import { inventoryRouter } from './routes/inventory.js';
 import { mcpConfirmationsRouter } from './routes/mcp-confirmations.js';
+import { metricsRouter } from './routes/metrics.js';
 import { networkRouter } from './routes/network.js';
 import { nfsIdmapRouter } from './routes/nfs-idmap.js';
 import { nfsMutateRouter } from './routes/nfs-mutate.js';
@@ -72,9 +74,20 @@ export function createApp(ctx: ApiContext): Express {
   // S8 T4: the loopback token is minted per process start (ADR-0010).
   ctx.loopback_token ??= randomBytes(32).toString('hex');
 
+  // S15 §12.2 (Task 13): the registry GET /metrics renders. server.ts sets
+  // this to the SAME instance passed into buildTaskEngines (so the
+  // engine's and the confirmation service's counters land where the route
+  // reads); this lazy default only covers a context that never wired one
+  // (e.g. a read-only test context with no ctx.tasks) — /metrics still
+  // mounts there, just with nothing registered on it yet.
+  ctx.metrics ??= new MetricsRegistry();
+
   // S15: the MRTR confirmation service, built over the same store the task
   // engine consumes from. Absent in read-only contexts (no ctx.tasks), where
-  // /mcp cannot apply anyway.
+  // /mcp cannot apply anyway. Reuses ctx.tasks.confirmationMetrics (built
+  // once inside buildTaskEngines) rather than calling
+  // registryConfirmationMetrics again here — a second call over the same
+  // registry would re-register the same metric names and throw.
   if (ctx.tasks !== undefined) {
     ctx.mcpConfirmations ??= new ConfirmationService({
       store: ctx.tasks.confirmations,
@@ -85,6 +98,9 @@ export function createApp(ctx: ApiContext): Express {
       nodeId: ctx.config.controller_id,
       hostname: hostname(),
       audit: ctx.state.audit,
+      ...(ctx.tasks.confirmationMetrics !== undefined
+        ? { metrics: ctx.tasks.confirmationMetrics }
+        : {}),
     });
   }
 
@@ -118,6 +134,8 @@ export function createApp(ctx: ApiContext): Express {
   // S15 §9.1–9.2: the operator approval surface over REST — GET/POST
   // /mcp/confirmations… — and therefore xinasctl's approval commands.
   v1.use(mcpConfirmationsRouter(ctx));
+  // S15 §12.2 (Task 13): GET /metrics — Prometheus text exposition.
+  v1.use(metricsRouter(ctx));
   v1.use(eventsRouter(ctx));
   v1.use(auditRouter(ctx));
   v1.use(configHistoryRouter(ctx));

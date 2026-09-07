@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import type { MetricsRegistry } from '../../lib/metrics.js';
 import type { OpenedStateStore } from '../../state/index.js';
 import type { AgentRpcClient } from '../agent-client.js';
 import type { TaskEngines } from '../context.js';
+import { registryConfirmationMetrics } from '../mcp/confirmation/metrics.js';
 import { ConfirmationStore } from '../mcp/confirmation/store.js';
 import { PlanEngine } from '../plan/engine.js';
 import {
@@ -44,6 +46,18 @@ export interface BuildTaskEnginesOptions {
   taskWatch?: { notify(taskId: string, event: unknown): void };
   /** S15 §13 (mcp.allow_apply): re-checked inside the apply transaction, not just at the route. */
   allowMcpApply?: () => boolean;
+  /**
+   * S15 §12.2 (Task 13): when supplied, the confirmation counters are
+   * registered ONCE on this registry (over the `ConfirmationStore` built
+   * below) and threaded into the `TaskEngine` for its `decided('consumed')`
+   * / `confirmationToApply()` calls. The same registry MUST be the one
+   * `ApiContext.metrics` is set to and `GET /api/v1/metrics` renders —
+   * calling `registryConfirmationMetrics` a second time over the same
+   * registry throws (duplicate metric names), so app.ts reuses
+   * `TaskEngines.confirmationMetrics` for `ConfirmationService` rather than
+   * building its own. Omit in contexts that never expose `/metrics`.
+   */
+  metrics?: MetricsRegistry;
 }
 
 /**
@@ -64,6 +78,12 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
 
   const store = new TaskStore({ db: state.db, now, newId });
   const confirmations = new ConfirmationStore({ db: state.db, now });
+  // S15 §12.2 (Task 13): built ONCE here (needs the store above), before the
+  // TaskEngine that consumes it — see BuildTaskEnginesOptions.metrics.
+  const confirmationMetrics =
+    opts.metrics !== undefined
+      ? registryConfirmationMetrics(opts.metrics, confirmations)
+      : undefined;
   const taskEngine = new TaskEngine({
     db: state.db,
     store,
@@ -75,6 +95,7 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
     ...(opts.maxInflight !== undefined ? { maxInflight: opts.maxInflight } : {}),
     ...(opts.taskWatch !== undefined ? { taskWatch: opts.taskWatch } : {}),
     ...(opts.allowMcpApply !== undefined ? { allowMcpApply: opts.allowMcpApply } : {}),
+    ...(confirmationMetrics !== undefined ? { metrics: confirmationMetrics } : {}),
   });
   const planEngine = new PlanEngine({ store, ctx: { kv: state.kv }, now });
   planEngine.register(referencePlanProvider);
@@ -106,5 +127,6 @@ export function buildTaskEngines(opts: BuildTaskEnginesOptions): TaskEngines {
     leases: state.leases,
     confirmations,
     ...(opts.agentClient ? { agentClient: opts.agentClient } : {}),
+    ...(confirmationMetrics !== undefined ? { confirmationMetrics } : {}),
   };
 }

@@ -100,17 +100,8 @@ describe('client catalog (S8 T2)', () => {
       await setup.cleanup();
     });
 
-    // S15: the catalog entry for system.metrics lands ahead of its backing
-    // route (Task 13, the metrics registry). Excluded here so this
-    // regression guard does not fail on a route that is deliberately not
-    // mounted yet — remove this exclusion once that route is wired. The
-    // mcp_confirmations.* entries were the same kind of forward declaration
-    // (Task 7) but their routes landed in Task 11 — no longer excluded.
-    const ROUTE_NOT_YET_MOUNTED = new Set(['system.metrics']);
-
     it('no catalog path hits the NOT_FOUND catch-all', async () => {
       for (const entry of CATALOG) {
-        if (ROUTE_NOT_YET_MOUNTED.has(entry.name)) continue;
         const path = `/api/v1${entry.path.replaceAll(/\{[^}]+\}/g, 'x')}`;
         const req = request(setup.app);
         const r =

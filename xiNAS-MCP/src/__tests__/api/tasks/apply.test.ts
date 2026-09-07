@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ApiException } from '../../../api/errors.js';
+import type { ConfirmationMetrics } from '../../../api/mcp/confirmation/metrics.js';
 import { ConfirmationStore } from '../../../api/mcp/confirmation/store.js';
 import { TaskEngine } from '../../../api/tasks/engine.js';
 import type { ApplyPlan, ApplyRequest } from '../../../api/tasks/engine.js';
@@ -10,7 +11,10 @@ import { LeaseManager } from '../../../state/leases.js';
 import { runMigrations } from '../../../state/migrations.js';
 
 // Deterministic clock + id-gen so assertions never depend on wall time.
-function makeHarness() {
+// `metrics` is optional (S15 §12.2, Task 13) — omitted, TaskEngine falls
+// back to no metrics calls at all; every existing call site below passes
+// none, so this is additive.
+function makeHarness(opts: { metrics?: ConfirmationMetrics } = {}) {
   const db = new Database(':memory:');
   runMigrations(db);
   // SqliteKvStore's constructor turns on foreign_keys + WAL — the same
@@ -46,6 +50,7 @@ function makeHarness() {
     confirmations,
     clock: () => clock,
     allowMcpApply: () => allowApply,
+    ...(opts.metrics !== undefined ? { metrics: opts.metrics } : {}),
   });
 
   // Seed a desired resource so freshness reads find a current revision.
@@ -653,6 +658,62 @@ describe('TaskEngine.apply — MCP confirmation gate (S15 §8.3)', () => {
       approved_by: 'admin:test',
       approval_channel: 'mcp_form',
     });
+  });
+
+  it('S15 §12.2 (Task 13): a successful MCP apply increments the consumed counter and observes the to-apply latency histogram', () => {
+    // The service never learns of a consumption — TaskEngine.apply calls
+    // decided('consumed') / confirmationToApply() itself, right after the
+    // guarded consume() inside the same transaction the audit rows come
+    // from. A recording fake in place of the registry-backed metrics
+    // verifies the call site without going through lib/metrics.ts.
+    const events: Array<
+      { kind: 'decided'; outcome: string } | { kind: 'latency'; seconds: number }
+    > = [];
+    const fakeMetrics: ConfirmationMetrics = {
+      requested() {},
+      decided(outcome) {
+        events.push({ kind: 'decided', outcome });
+      },
+      capabilityFailure() {},
+      stateValidationFailure() {},
+      replayRejected() {},
+      roundLimit() {},
+      confirmationToApply(seconds) {
+        events.push({ kind: 'latency', seconds });
+      },
+      approvedExpired() {},
+    };
+    h = makeHarness({ metrics: fakeMetrics });
+    createRecord('form'); // created_at = 1_000 (the harness's initial clock)
+    h.setClock(1_000 + 2_500); // requested → consumed, 2.5s later
+    const task = h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: 'c-1' }) });
+    expect(task.state).toBe('queued');
+    expect(h.confirmations.get('c-1')?.status).toBe('consumed');
+
+    expect(events).toContainEqual({ kind: 'decided', outcome: 'consumed' });
+    const latencies = events.filter(
+      (e): e is { kind: 'latency'; seconds: number } => e.kind === 'latency',
+    );
+    expect(latencies).toHaveLength(1);
+    expect(latencies[0]?.seconds).toBeCloseTo(2.5, 5);
+  });
+
+  it('a REST apply (no confirmation gate) never touches the confirmation metrics', () => {
+    const events: unknown[] = [];
+    const fakeMetrics: ConfirmationMetrics = {
+      requested: () => events.push('requested'),
+      decided: () => events.push('decided'),
+      capabilityFailure: () => events.push('capabilityFailure'),
+      stateValidationFailure: () => events.push('stateValidationFailure'),
+      replayRejected: () => events.push('replayRejected'),
+      roundLimit: () => events.push('roundLimit'),
+      confirmationToApply: () => events.push('confirmationToApply'),
+      approvedExpired: () => events.push('approvedExpired'),
+    };
+    h = makeHarness({ metrics: fakeMetrics });
+    const task = h.engine.apply({ plan: makePlan(), applyReq: makeApplyReq() });
+    expect(task.state).toBe('queued');
+    expect(events).toHaveLength(0);
   });
 
   it('url: pending is refused, approved is consumed', () => {

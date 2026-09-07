@@ -1,6 +1,7 @@
 import { chmodSync, chownSync, existsSync, unlinkSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { MetricsRegistry } from '../lib/metrics.js';
 import { type OpenedStateStore, openStateStore } from '../state/index.js';
 import { createAgentRpcClient } from './agent-client.js';
 import { createApp } from './app.js';
@@ -116,9 +117,16 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   // watchers through the same fan-out.
   const taskWatch = new TaskWatch();
 
+  // S15 §12.2 (Task 13): created BEFORE buildTaskEngines so the SAME
+  // instance backs the engine's consumed/latency counters, the confirmation
+  // service's other seven series, and the ctx.metrics the /metrics route
+  // renders — one registration of each metric name, one registry.
+  const metrics = new MetricsRegistry();
+
   const tasks = buildTaskEngines({
     state,
     taskWatch,
+    metrics,
     allowMcpApply: () => config.mcp?.allow_apply === true,
     ...(config.agent ? { agentClient: createAgentRpcClient(config.agent.socket) } : {}),
     ...(config.tasks?.max_inflight !== undefined ? { maxInflight: config.tasks.max_inflight } : {}),
@@ -184,6 +192,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
     tasks,
     taskWatch,
     events,
+    metrics,
     ...(tracker ? { tracker } : {}),
     ...(observed ? { observedSchemas: observed.schemas, ajv: observed.ajv } : {}),
   };

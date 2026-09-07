@@ -4,6 +4,7 @@ import type { LeaseManager } from '../../state/leases.js';
 import type { AuditAppender } from '../../state/audit.js';
 import { type AgentRpcClient, AgentRpcError } from '../agent-client.js';
 import { ApiException } from '../errors.js';
+import type { ConfirmationMetrics } from '../mcp/confirmation/metrics.js';
 import type { ConfirmationStore } from '../mcp/confirmation/store.js';
 import type { ConfirmationRecord } from '../mcp/confirmation/types.js';
 import { queueConfirmationEvent } from '../mcp/confirmation/audit.js';
@@ -153,6 +154,16 @@ export interface TaskEngineDeps {
   confirmations?: ConfirmationStore;
   /** S15 §12.1: security-event audit sink for the gate's consumed/expired rows. */
   audit?: AuditAppender;
+  /**
+   * S15 §12.2 (Task 13): the confirmation counters. Only `decided('consumed')`
+   * and `confirmationToApply()` are ever called here — the service owns the
+   * other seven series and never learns of a consumption itself (the apply
+   * transaction does, after the fact). Built once in tasks/build.ts over the
+   * same registry `ApiContext.metrics` exposes, so app.ts's
+   * `ConfirmationService` reuses this exact instance instead of registering
+   * the same metric names a second time.
+   */
+  metrics?: ConfirmationMetrics;
   /** Overridable clock for the gate's expiry/consume checks. Default Date.now. */
   clock?: () => number;
   /** S15 §13 (mcp.allow_apply): re-checked in the core, not just at the route. */
@@ -229,6 +240,7 @@ export class TaskEngine {
   /** S15 §8: optional so REST-only/test contexts stay inert (no confirmations wired). */
   private readonly confirmations: ConfirmationStore | undefined;
   private readonly audit: AuditAppender | undefined;
+  private readonly metrics: ConfirmationMetrics | undefined;
   private readonly clock: () => number;
   private readonly allowMcpApply: (() => boolean) | undefined;
   /** Re-entrancy guard: true while a reconcile() pass is in flight. */
@@ -253,6 +265,7 @@ export class TaskEngine {
     this.taskWatch = deps.taskWatch;
     this.confirmations = deps.confirmations;
     this.audit = deps.audit;
+    this.metrics = deps.metrics;
     this.clock = deps.clock ?? (() => Date.now());
     this.allowMcpApply = deps.allowMcpApply;
   }
@@ -635,6 +648,14 @@ export class TaskEngine {
         queueConfirmationEvent(this.audit, 'apply_task_created', consumed, {
           task_id: task.task_id,
         });
+        // S15 §12.2 (Task 13): the two series with no ConfirmationService
+        // call site — the service never learns of a consumption; the apply
+        // transaction does, right here. `consumed.consumed_at` is the same
+        // clock reading `store.consume()` just persisted (falls back to a
+        // fresh read only if the store somehow didn't set it).
+        this.metrics?.decided('consumed');
+        const consumedAt = consumed.consumed_at ?? this.clock();
+        this.metrics?.confirmationToApply((consumedAt - confirmation.created_at) / 1000);
       }
 
       // 4. Acquire a lease per resource in the lease set. N0.3 (S3 §5.2): the

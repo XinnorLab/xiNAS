@@ -1307,3 +1307,261 @@ describe('MCP MRTR confirmation — mcp.allow_apply: false (S15 Task 10)', () =>
     expect(count).toBe(0);
   });
 });
+
+// ── Task 13 — metrics registry, GET /metrics, confirmation counters ───────
+// (S15 §12.2). A separate server/db: the shared describe block above runs
+// ~20 confirmation flows that deliberately leave records open in every
+// status (tampered state, cross-principal, round-limit, ...), so an exact
+// gauge/counter assertion there would be reading 20 tests' worth of
+// accumulated state rather than this task's own scenario. Isolating it
+// keeps the pending-gauge assertions exact and deterministic.
+
+describe('MCP MRTR confirmation metrics (S15 §12.2, Task 13)', () => {
+  let dir: string;
+  let handle: Awaited<ReturnType<typeof startServer>>;
+  let mockAgent: MockAgentServer;
+  let port: number;
+
+  function getConfirmationByPlanId(planId: string): Record<string, unknown> | undefined {
+    return handle.state.db
+      .prepare('SELECT * FROM mcp_confirmations WHERE plan_id = ? ORDER BY created_at DESC LIMIT 1')
+      .get(planId) as Record<string, unknown> | undefined;
+  }
+
+  async function planShareUpdate(
+    token: string,
+    shareId: string,
+  ): Promise<{ plan_id: string; expected_revision: number }> {
+    const res = await call(port, token, nextId('plan-share'), 'shares.update', {
+      id: shareId,
+      mode: 'plan',
+      spec: { clients: [{ pattern: '10.0.0.0/8', options: ['ro'] }] },
+    });
+    const result = payloadOf(res).result as { plan_id: string; state_revision_expected: number };
+    return { plan_id: result.plan_id, expected_revision: result.state_revision_expected };
+  }
+
+  /** `filesystems.create` force:true — the one destructive/url-capable plan in this suite (see the main describe block's comment). */
+  async function planFsCreateForce(
+    token: string,
+    mountpoint: string,
+  ): Promise<{ plan_id: string; expected_revision: number }> {
+    const res = await call(port, token, nextId('plan-fs'), 'filesystems.create', {
+      mode: 'plan',
+      spec: { backing_device: '/dev/xi_data', mountpoint, force: true },
+    });
+    const result = payloadOf(res).result as { plan_id: string; state_revision_expected: number };
+    return { plan_id: result.plan_id, expected_revision: result.state_revision_expected };
+  }
+
+  /** Raw `GET /api/v1/metrics` (text/plain, not the JSON envelope the other helpers parse). */
+  function metricsGet(
+    token: string,
+  ): Promise<{ status: number; headers: http.IncomingHttpHeaders; text: string }> {
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/api/v1/metrics',
+          method: 'GET',
+          headers: { authorization: `Bearer ${token}` },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            resolve({
+              status: res.statusCode ?? 0,
+              headers: res.headers,
+              text: Buffer.concat(chunks).toString('utf8'),
+            });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'xinas-mcp-confirm-metrics-'));
+    const agentSock = join(dir, 'agent.sock');
+    mockAgent = await startMockAgentServer(agentSock);
+    const configPath = join(dir, 'config.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        controller_id: '00000000-0000-0000-0000-0000000000c3',
+        listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
+        tokens: {
+          'tok-admin': { principal: 'admin:test', role: 'admin' },
+          'tok-viewer': { principal: 'viewer:test', role: 'viewer' },
+        },
+        state: { databasePath: join(dir, 'x.db'), auditJsonlPath: join(dir, 'a.jsonl') },
+        agent: { socket: agentSock },
+        mcp: {
+          allow_apply: true,
+          confirmation: {
+            approval_url_base: 'http://127.0.0.1:1',
+            url_wait_seconds: 1,
+            max_pending_per_principal: 50,
+            max_pending_total: 1000,
+            create_rate_per_minute: 600,
+          },
+        },
+      }),
+    );
+    handle = await startServer({ configPath });
+    port = (handle.address as AddressInfo).port;
+    seedShare(handle.state, 'share-metrics');
+    handle.state.kv.put('/xinas/v1/observed/XiraidArray/data', {
+      kind: 'XiraidArray',
+      id: 'data',
+      spec: {
+        name: 'data',
+        level: 'raid5',
+        member_disk_ids: ['d1', 'd2', 'd3', 'd4'],
+        strip_size_kib: 128,
+      },
+      status: {
+        state: 'optimal',
+        volume_path: '/dev/xi_data',
+        observed_at: '2026-06-10T12:00:00Z',
+      },
+    });
+  }, 30_000);
+
+  afterAll(async () => {
+    await handle.close();
+    await mockAgent.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a form flow funds the counters; GET /api/v1/metrics (viewer role) exposes them with no principal or id labels', async () => {
+    const { plan_id, expected_revision } = await planShareUpdate('tok-admin', 'share-metrics');
+    const args = {
+      id: 'share-metrics',
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+    };
+    const first = await call(port, 'tok-admin', nextId('call'), 'shares.update', args);
+    const requestState = toolResultOf(first).requestState;
+    expect(requestState?.startsWith('xc1.')).toBe(true);
+    const second = await call(port, 'tok-admin', nextId('call'), 'shares.update', args, {
+      requestState,
+      inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+    });
+    expect(toolResultOf(second).resultType).toBe('complete');
+
+    const res = await metricsGet('tok-viewer');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/plain; version=0\.0\.4/);
+    // Label order follows the series' declared labelNames (['risk', 'mode']
+    // in registryConfirmationMetrics), not call-site argument order.
+    expect(res.text).toMatch(
+      /xinas_mcp_confirmations_requested_total\{risk="changing_access",mode="form"\} [1-9]/,
+    );
+    expect(res.text).toMatch(/xinas_mcp_confirmations_decided_total\{outcome="consumed"\} [1-9]/);
+    expect(res.text).toContain('xinas_mcp_confirmation_to_apply_seconds_bucket');
+    expect(res.text).not.toContain('admin:test');
+    expect(res.text).not.toContain('xc1.');
+  });
+
+  it('audit parity: one http.* row for the loopback apply plus the lifecycle rows, none for /mcp frames', async () => {
+    seedShare(handle.state, 'share-metrics-audit');
+    const { plan_id, expected_revision } = await planShareUpdate(
+      'tok-admin',
+      'share-metrics-audit',
+    );
+    const args = {
+      id: 'share-metrics-audit',
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+    };
+
+    await handle.state.drainer.drainNow();
+    const before = auditRows(dir).length;
+
+    const first = await call(port, 'tok-admin', nextId('call'), 'shares.update', args);
+    const requestState = toolResultOf(first).requestState;
+    const second = await call(port, 'tok-admin', nextId('call'), 'shares.update', args, {
+      requestState,
+      inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+    });
+    const taskId = (payloadOf(second).result as { task_id?: string })?.task_id;
+    expect(typeof taskId).toBe('string');
+
+    await handle.state.drainer.drainNow();
+    const rows = auditRows(dir).slice(before);
+    // The audit `kind` this repo records has no /api/v1 prefix (see the
+    // main describe block's file-header comment) — the loopback apply is
+    // the ONE http.* row this flow produces; the two /mcp tools/call
+    // frames (elicit + retry) are never audited at all (app.ts skips /mcp).
+    expect(rows.filter((r) => r.kind === 'http.PATCH./shares/share-metrics-audit')).toHaveLength(1);
+    expect(rows.filter((r) => r.kind === 'http.POST./mcp')).toHaveLength(0);
+    expect(rows.map((r) => r.kind)).toEqual(
+      expect.arrayContaining([
+        'mcp.confirmation.requested',
+        'mcp.confirmation.consumed',
+        'mcp.confirmation.apply_task_created',
+      ]),
+    );
+    const consumed = rows.find((r) => r.kind === 'mcp.confirmation.consumed');
+    expect(consumed?.payload).toMatchObject({
+      confirmation_id: expect.any(String),
+      plan_id: expect.any(String),
+      task_id: expect.any(String),
+      principal: 'admin:test',
+    });
+  });
+
+  it('the pending gauge (review P2) reads the store at scrape time: 1 while a url record is open, 0 once declined', async () => {
+    // The form flow in the first test above already left ONE record
+    // 'consumed' (not pending/approved), so mode="form" reads 0 throughout.
+    const { plan_id, expected_revision } = await planFsCreateForce(
+      'tok-admin',
+      '/mnt/metrics-pending',
+    );
+    const args = {
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+      dangerous: true,
+    };
+    const elicited = await call(
+      port,
+      'tok-admin',
+      nextId('call'),
+      'filesystems.create',
+      args,
+      {},
+      BOTH,
+    );
+    expect(toolResultOf(elicited).inputRequests?.confirm_apply?.params.mode).toBe('url');
+    const record = getConfirmationByPlanId(plan_id);
+    expect(record?.status).toBe('pending');
+
+    const open = await metricsGet('tok-admin');
+    expect(open.text).toContain('xinas_mcp_confirmations_pending{mode="form"} 0');
+    expect(open.text).toContain('xinas_mcp_confirmations_pending{mode="url"} 1');
+
+    const declineRes = await restCall(
+      port,
+      'tok-admin',
+      'POST',
+      `/mcp/confirmations/${record?.confirmation_id as string}/decline`,
+      {},
+    );
+    expect(declineRes.status).toBe(200);
+
+    const closed = await metricsGet('tok-admin');
+    expect(closed.text).toContain('xinas_mcp_confirmations_pending{mode="form"} 0');
+    expect(closed.text).toContain('xinas_mcp_confirmations_pending{mode="url"} 0');
+  });
+});
