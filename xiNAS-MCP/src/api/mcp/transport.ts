@@ -32,6 +32,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express, { type Express, type Request, type Response } from 'express';
 import type { ApiContext } from '../context.js';
+import { elicitationModes } from './confirmation/policy.js';
 import { type McpIdentity, buildMcpServer } from './dispatch.js';
 import { handleModernRequest, isModernRequest, isNotification } from './modern.js';
 
@@ -114,13 +115,34 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
           res.status(202).end();
           return;
         }
-        const response = await handleModernRequest(req.body, {
-          loopback: (r) => (ctx.loopback_fn as NonNullable<typeof ctx.loopback_fn>)(r),
-          loopbackToken: () => ctx.loopback_token,
-          allowApply: () => ctx.config.mcp?.allow_apply === true,
-          identity: () => modernIdentity,
-        });
-        res.status(200).json(response);
+        // F5 (fix round 1): the correlation id is server-owned — /mcp never
+        // runs requestIdMiddleware (mountMcpTransport is called before
+        // app.use(requestIdMiddleware()) in app.ts, whose "Middleware order
+        // rationale" comment spells this out: "Audit skips /mcp; auth does
+        // not run for /mcp"), so req.context is never populated on this
+        // path. Mint the correlation id here instead, and echo it the way
+        // X-Correlation-ID is echoed on the REST path. Never the JSON-RPC
+        // envelope `id`, which is client-chosen and unbounded.
+        const correlationId = randomUUID();
+        const { httpStatus, ...body } = await handleModernRequest(
+          req.body,
+          {
+            loopback: (r) => (ctx.loopback_fn as NonNullable<typeof ctx.loopback_fn>)(r),
+            loopbackToken: () => ctx.loopback_token,
+            allowApply: () => ctx.config.mcp?.allow_apply === true,
+            identity: () => modernIdentity,
+            client: {
+              era: 'modern',
+              elicitation: elicitationModes(
+                (req.body as { params?: { _meta?: unknown } })?.params?._meta,
+              ),
+            },
+            ...(ctx.mcpConfirmations !== undefined ? { confirmations: ctx.mcpConfirmations } : {}),
+          },
+          correlationId,
+        );
+        res.setHeader('X-Correlation-ID', correlationId);
+        res.status(httpStatus ?? 200).json(body);
         return;
       }
 
@@ -157,6 +179,10 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
         loopbackToken: () => ctx.loopback_token,
         allowApply: () => ctx.config.mcp?.allow_apply === true,
         identity: () => identity,
+        // Legacy clients never satisfy isConfirmable's era check (dispatch.ts
+        // returns MCP_CONFIRMATION_UNSUPPORTED first) — no elicitation and no
+        // confirmations service needed on this path.
+        client: { era: 'legacy', elicitation: new Set() },
       });
       // exactOptionalPropertyTypes friction in the SDK's Transport
       // interface (same cast the legacy server used).

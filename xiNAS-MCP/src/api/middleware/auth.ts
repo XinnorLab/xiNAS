@@ -78,15 +78,23 @@ export function authMiddleware(config: ApiConfig, getLoopbackToken?: () => strin
         ctx.principal = fwdPrincipal;
         ctx.role = fwdRole;
         if (fwdClient === 'mcp') ctx.client_type = 'mcp';
+        const fwdConfirmation = req.header('x-xinas-confirmation');
+        if (typeof fwdConfirmation === 'string' && fwdConfirmation.length > 0) {
+          ctx.mcp_confirmation_id = fwdConfirmation;
+        }
         next();
         return;
       }
       next(new Error('loopback request missing forwarded identity headers'));
       return;
     }
-    if (fwdPrincipal !== undefined || fwdRole !== undefined) {
+    if (
+      fwdPrincipal !== undefined ||
+      fwdRole !== undefined ||
+      req.header('x-xinas-confirmation') !== undefined
+    ) {
       console.warn(
-        `auth: ignoring X-Xinas-Forwarded-* headers from non-loopback caller (principal hint: ${fwdPrincipal ?? '?'})`,
+        `auth: ignoring X-Xinas-Forwarded-*/X-Xinas-Confirmation headers from non-loopback caller (principal hint: ${fwdPrincipal ?? '?'})`,
       );
     }
 

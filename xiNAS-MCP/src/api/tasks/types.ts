@@ -88,6 +88,9 @@ export interface Task {
   /** Prior desired-KV values to revert on apply failure — an array of
    *  DesiredMutation, JSON. Undefined for tasks created before migration 004. */
   desired_rollback?: unknown;
+  /** The public plan exactly as rendered (S15 §5); undefined before migration 006. */
+  plan_document?: import('../plan/document.js').PlanDocument;
+  plan_document_hash?: string;
   snapshot_before?: string;
   snapshot_after?: string;
   agent_acceptance_id?: string;

@@ -25,13 +25,13 @@ import { Router } from 'express';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import {
-  clientImpact,
   requireInteger,
   requireString,
   taskEnvelope,
   toApplyPlan,
 } from '../handlers/plan-apply.js';
 import { getOrNull, sendOk } from '../handlers/reads.js';
+import { publicPlan } from '../plan/document.js';
 import {
   xiraidArrayCreateProvider,
   xiraidArrayDeleteProvider,
@@ -143,7 +143,7 @@ export function arraysRouter(ctx: ApiContext): Router {
       const operationKind = isImportShaped(body.spec)
         ? 'xiraid.array.import'
         : 'xiraid.array.create';
-      const { task, planResult } = await tasks.planEngine.plan({
+      const { task, document } = await tasks.planEngine.plan({
         operation_kind: operationKind,
         spec: body.spec,
         principal: rc.principal,
@@ -153,25 +153,7 @@ export function arraysRouter(ctx: ApiContext): Router {
       });
       rc.operation_id = task.task_id;
       const revision = task.state_revision_expected ?? 0;
-      sendOk(
-        req,
-        res,
-        {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
-          state_revision_expected: revision,
-          observed_revision_expected: planResult.observed_revision_expected ?? null,
-          observed_at: planResult.observed_at ?? null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
-        },
-        [revision],
-      );
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 
@@ -234,6 +216,10 @@ export function arraysRouter(ctx: ApiContext): Router {
           client_type: rc.client_type,
           request_id: rc.request_id,
           correlation_id: rc.correlation_id,
+          expected_revision: expectedRevision, // the integer the route already validated from the body (R-3.1)
+          ...(rc.mcp_confirmation_id !== undefined
+            ? { confirmation_id: rc.mcp_confirmation_id }
+            : {}),
         },
       });
       rc.operation_id = task.task_id;
@@ -286,35 +272,26 @@ export function arraysRouter(ctx: ApiContext): Router {
       // Writability matrix: non-writable keys in the RAW body → per-field
       // 422, before any plan row exists.
       rejectUnwritableKeys(body.spec);
-      const { task, planResult } = await tasks.planEngine.plan({
+      // The modify provider pins no revision (S4 §4: "the plan row does not
+      // persist the observed pin") — compute the CURRENT observed revision
+      // the client must echo at apply, and pass it as document_overrides so
+      // the persisted document carries the SAME value as the rendered
+      // response (S15 §5.1, R-3.1) instead of the engine's unpinned default.
+      const revision = observedArrayRevision(ctx, id) ?? 0;
+      const { task, document } = await tasks.planEngine.plan({
         operation_kind: 'xiraid.array.modify',
         spec: { ...(typeof body.spec === 'object' && body.spec !== null ? body.spec : {}), id },
         principal: rc.principal,
         client_type: rc.client_type,
         request_id: rc.request_id,
         correlation_id: rc.correlation_id,
-      });
-      rc.operation_id = task.task_id;
-      const revision = observedArrayRevision(ctx, id) ?? 0;
-      sendOk(
-        req,
-        res,
-        {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
+        document_overrides: {
           state_revision_expected: revision,
           observed_revision_expected: revision,
-          observed_at: null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
         },
-        [revision],
-      );
+      });
+      rc.operation_id = task.task_id;
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 
@@ -380,6 +357,10 @@ export function arraysRouter(ctx: ApiContext): Router {
           request_id: rc.request_id,
           correlation_id: rc.correlation_id,
           ...(body.dangerous === true ? { dangerous: true } : {}),
+          expected_revision: expectedRevision, // the integer the route already validated from the body (R-3.1)
+          ...(rc.mcp_confirmation_id !== undefined
+            ? { confirmation_id: rc.mcp_confirmation_id }
+            : {}),
         },
       });
       rc.operation_id = task.task_id;
@@ -428,35 +409,25 @@ export function arraysRouter(ctx: ApiContext): Router {
     const id = req.params.id as string;
 
     if (mode === 'plan') {
-      const { task, planResult } = await tasks.planEngine.plan({
+      // Same S4 §4 revision binding as modify (above): the delete provider
+      // pins no revision, so the route computes it and passes it as
+      // document_overrides — the persisted document then carries the SAME
+      // value as the rendered response (S15 §5.1, R-3.1).
+      const revision = observedArrayRevision(ctx, id) ?? 0;
+      const { task, document } = await tasks.planEngine.plan({
         operation_kind: 'xiraid.array.delete',
         spec: { id },
         principal: rc.principal,
         client_type: rc.client_type,
         request_id: rc.request_id,
         correlation_id: rc.correlation_id,
-      });
-      rc.operation_id = task.task_id;
-      const revision = observedArrayRevision(ctx, id) ?? 0;
-      sendOk(
-        req,
-        res,
-        {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
+        document_overrides: {
           state_revision_expected: revision,
           observed_revision_expected: revision,
-          observed_at: null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
         },
-        [revision],
-      );
+      });
+      rc.operation_id = task.task_id;
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 
@@ -523,6 +494,10 @@ export function arraysRouter(ctx: ApiContext): Router {
           request_id: rc.request_id,
           correlation_id: rc.correlation_id,
           ...(body.dangerous === true ? { dangerous: true } : {}),
+          expected_revision: expectedRevision, // the integer the route already validated from the body (R-3.1)
+          ...(rc.mcp_confirmation_id !== undefined
+            ? { confirmation_id: rc.mcp_confirmation_id }
+            : {}),
         },
       });
       rc.operation_id = task.task_id;

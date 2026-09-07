@@ -91,4 +91,29 @@ describe('loopback auth (S8 T4)', () => {
     expect(rows.length).toBeGreaterThan(0); // the /api/v1 row landed
     expect(rows.some((r) => typeof r.kind === 'string' && r.kind.includes('/mcp'))).toBe(false);
   });
+
+  it('S15: X-Xinas-Confirmation is copied into the context ONLY under the loopback bearer', async () => {
+    const token = setup.ctx.loopback_token as string;
+    let seen: string | undefined;
+    setup.app.get('/probe-confirmation', (req, res) => {
+      seen = req.context?.mcp_confirmation_id;
+      res.json({ ok: true });
+    });
+    await request(setup.app)
+      .get('/probe-confirmation')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Xinas-Forwarded-Principal', 'admin:test')
+      .set('X-Xinas-Forwarded-Role', 'admin')
+      .set('X-Xinas-Client-Type', 'mcp')
+      .set('X-Xinas-Confirmation', 'c-123');
+    expect(seen).toBe('c-123');
+
+    seen = undefined;
+    await request(setup.app)
+      .get('/probe-confirmation')
+      .set('Authorization', ADMIN_TOKEN)
+      .set('X-Xinas-Client-Type', 'mcp')
+      .set('X-Xinas-Confirmation', 'c-forged');
+    expect(seen).toBeUndefined();
+  });
 });

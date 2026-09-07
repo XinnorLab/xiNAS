@@ -37,6 +37,8 @@ export interface TaskEngines {
   leases: LeaseManager;
   /** api→agent JSON-RPC client; undefined when no agent socket is configured. */
   agentClient?: AgentRpcClient;
+  /** S15 §8: the MCP confirmation store, built over the same state.db. */
+  confirmations: import('./mcp/confirmation/store.js').ConfirmationStore;
 }
 
 /**
@@ -91,6 +93,12 @@ export interface ApiContext {
    * (guarded with `?.`) so the receiver and read-only contexts work without it.
    */
   taskWatch?: TaskWatch;
+  /**
+   * S15: the MRTR confirmation service, built by app.ts over the same store
+   * the task engine consumes from (ctx.tasks.confirmations). Absent in
+   * read-only contexts (no ctx.tasks), where /mcp cannot apply anyway.
+   */
+  mcpConfirmations?: import('./mcp/confirmation/service.js').ConfirmationService;
 }
 
 /**
@@ -103,6 +111,13 @@ export interface RequestContext {
   principal: string;
   role: Role;
   client_type: 'rest' | 'mcp';
+  /**
+   * S15 §8.1: the MCP confirmation the dispatcher validated, forwarded on the
+   * loopback-only `X-Xinas-Confirmation` header and copied here by
+   * authMiddleware ONLY under the ephemeral loopback bearer. Never read from
+   * a request body.
+   */
+  mcp_confirmation_id?: string;
   /** Set by handlers when they want the audit row to carry an operation_id (e.g. for tasks). */
   operation_id?: string;
   /** Populated by systemWarningsMiddleware from HeartbeatTracker. */

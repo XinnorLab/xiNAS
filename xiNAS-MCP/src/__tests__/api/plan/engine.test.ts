@@ -194,7 +194,7 @@ describe('PlanEngine.plan', () => {
           warnings: [],
           diff: { changed: true },
           risk_level: 'non_disruptive',
-          rollback_model: 'reversible',
+          rollback_model: 'non_disruptive',
           observed_freshness_ref,
           lease_resources,
           desired_mutations,
@@ -223,7 +223,7 @@ describe('PlanEngine.plan', () => {
           warnings: [],
           diff: { same: true },
           risk_level: 'non_disruptive',
-          rollback_model: 'reversible',
+          rollback_model: 'non_disruptive',
           observed_freshness_ref: { kind: 'ExportRule', id: 'mnt/data', revision },
         };
       },
@@ -250,7 +250,7 @@ describe('PlanEngine.plan', () => {
           warnings: [],
           diff: { x: 1 },
           risk_level: 'non_disruptive',
-          rollback_model: 'reversible',
+          rollback_model: 'non_disruptive',
         };
       },
     };
@@ -269,5 +269,37 @@ describe('PlanEngine.plan', () => {
     expect(a.task.plan_hash).toBe(b.task.plan_hash);
     // The reference provider sets no binding fields → plan_binding stays unset.
     expect(a.task.plan_binding).toBeUndefined();
+  });
+
+  it('S15 V-53: refuses a provider result whose rollback_model or risk_level is off the api-v1 enum', async () => {
+    const off: PlanProvider = {
+      operation_kind: 'test.off',
+      preflight: async () => ({
+        affected_resources: [{ kind: 'Reference', id: 'r1' }],
+        blockers: [],
+        warnings: [],
+        diff: {},
+        risk_level: 'non_disruptive',
+        rollback_model: 'reversible',
+      }),
+    };
+    h.engine.register(off);
+    await expect(
+      h.engine.plan({ ...makePlanArgs(), operation_kind: 'test.off' }),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+    });
+    expect(h.countTasks()).toBe(0);
+  });
+
+  it('S15: persists the plan document + hash and returns it; the row round-trips it', async () => {
+    const { task, document } = await h.engine.plan(makePlanArgs());
+    expect(document.plan_id).toBe(task.task_id);
+    expect(document.plan_hash).toBe(task.plan_hash);
+    expect(document.operation_kind).toBe('reference.echo');
+    expect(document.created_by).toEqual({ principal: 'admin:test', client_type: 'rest' });
+    const stored = h.store.get(task.task_id);
+    expect(stored?.plan_document).toEqual(document);
+    expect(stored?.plan_document_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 });

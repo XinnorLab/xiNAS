@@ -17,6 +17,7 @@ describe('migrations runner', () => {
       'audit_outbox',
       'kv',
       'leases',
+      'mcp_confirmations',
       'schema_version',
       'sqlite_sequence',
       'task_stages',
@@ -32,6 +33,7 @@ describe('migrations runner', () => {
       { version: 3, filename: '003-task-spec.sql' },
       { version: 4, filename: '004-task-plan-binding.sql' },
       { version: 5, filename: '005-task-stage-total.sql' },
+      { version: 6, filename: '006-mcp-confirmations.sql' },
     ]);
   });
 
@@ -131,5 +133,82 @@ describe('migrations runner', () => {
     runMigrations(db);
     const after = db.prepare('SELECT COUNT(*) AS n FROM schema_version').get() as { n: number };
     expect(after.n).toBe(before.n);
+  });
+
+  it('006 adds plan_document columns and the mcp_confirmations table (S15)', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+
+    const taskCols = (db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(taskCols).toContain('plan_document');
+    expect(taskCols).toContain('plan_document_hash');
+
+    const confCols = (
+      db.prepare('PRAGMA table_info(mcp_confirmations)').all() as { name: string }[]
+    ).map((c) => c.name);
+    for (const col of [
+      'confirmation_id',
+      'status',
+      'mode',
+      'principal',
+      'role',
+      'tool_name',
+      'operation_kind',
+      'arguments_hash',
+      'plan_id',
+      'plan_hash',
+      'plan_document_hash',
+      'idempotency_key',
+      'expected_revision',
+      'risk_level',
+      'rollback_model',
+      'request_state_nonce_hash',
+      'round',
+      'created_at',
+      'expires_at',
+      'approved_at',
+      'approved_by',
+      'approval_channel',
+      'approval_interface',
+      'declined_at',
+      'declined_by',
+      'decision_reason',
+      'consumed_at',
+      'consumed_task_id',
+      'expired_reason',
+      'correlation_id',
+      'request_id',
+      'node_id',
+    ]) {
+      expect(confCols, `missing column ${col}`).toContain(col);
+    }
+
+    // status is CHECK-constrained
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO mcp_confirmations (confirmation_id, status, mode, principal, role, tool_name,
+             operation_kind, arguments_hash, plan_id, plan_hash, plan_document_hash, idempotency_key,
+             expected_revision, risk_level, rollback_model, request_state_nonce_hash, round,
+             created_at, expires_at, correlation_id, request_id, node_id)
+           VALUES ('c1', 'bogus', 'form', 'p', 'admin', 't', 'k', 'a', 'pl', 'ph', 'dh', 'ik',
+             0, 'non_disruptive', 'non_disruptive', 'nh', 1, 0, 1, 'c', 'r', 'n')`,
+        )
+        .run(),
+    ).toThrow(/CHECK/);
+
+    // a task can be produced by at most one confirmation
+    const insert = db.prepare(
+      `INSERT INTO mcp_confirmations (confirmation_id, status, mode, principal, role, tool_name,
+         operation_kind, arguments_hash, plan_id, plan_hash, plan_document_hash, idempotency_key,
+         expected_revision, risk_level, rollback_model, request_state_nonce_hash, round,
+         created_at, expires_at, consumed_task_id, correlation_id, request_id, node_id)
+       VALUES (?, 'consumed', 'form', 'p', 'admin', 't', 'k', 'a', 'pl', 'ph', 'dh', ?,
+         0, 'non_disruptive', 'non_disruptive', 'nh', 1, 0, 1, 'task-1', 'c', 'r', 'n')`,
+    );
+    insert.run('c2', 'ik-2');
+    expect(() => insert.run('c3', 'ik-3')).toThrow(/UNIQUE/);
   });
 });

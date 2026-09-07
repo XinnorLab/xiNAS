@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ApiException } from '../../../api/errors.js';
+import { ConfirmationStore } from '../../../api/mcp/confirmation/store.js';
 import { TaskEngine } from '../../../api/tasks/engine.js';
 import type { ApplyPlan, ApplyRequest } from '../../../api/tasks/engine.js';
 import { TaskStore } from '../../../api/tasks/store.js';
@@ -29,7 +30,23 @@ function makeHarness() {
     },
   });
 
-  const engine = new TaskEngine({ db, store, leases, kv });
+  let confCounter = 0;
+  const confirmations = new ConfirmationStore({
+    db,
+    now: () => clock,
+    newId: () => `c-${(confCounter += 1)}`,
+  });
+
+  let allowApply = true;
+  const engine = new TaskEngine({
+    db,
+    store,
+    leases,
+    kv,
+    confirmations,
+    clock: () => clock,
+    allowMcpApply: () => allowApply,
+  });
 
   // Seed a desired resource so freshness reads find a current revision.
   // put() with no expected_revision creates it at revision 1.
@@ -41,6 +58,10 @@ function makeHarness() {
     leases,
     store,
     engine,
+    confirmations,
+    setAllowApply(v: boolean) {
+      allowApply = v;
+    },
     setClock(v: number) {
       clock = v;
     },
@@ -553,5 +574,188 @@ describe('TaskEngine.apply — dangerous gate', () => {
       applyReq: makeApplyReq({ dangerous: true }),
     });
     expect(task.state).toBe('queued');
+  });
+});
+
+// ---- S15 §8.3: the MCP confirmation gate inside the apply transaction ----
+
+describe('TaskEngine.apply — MCP confirmation gate (S15 §8.3)', () => {
+  let h: ReturnType<typeof makeHarness>;
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  const mcpReq = (over: Partial<ApplyRequest> = {}): ApplyRequest =>
+    makeApplyReq({ client_type: 'mcp', expected_revision: 1, ...over });
+
+  function createRecord(mode: 'form' | 'url', over: Record<string, unknown> = {}) {
+    return h.confirmations.create({
+      mode,
+      principal: 'admin:test',
+      role: 'admin',
+      tool_name: 'reference.echo',
+      operation_kind: 'reference.echo',
+      arguments_hash: 'ah',
+      plan_id: 'plan-1',
+      plan_hash: 'phash-1',
+      plan_document_hash: 'dh',
+      idempotency_key: 'idem-1',
+      expected_revision: 1,
+      risk_level: 'non_disruptive',
+      rollback_model: 'non_disruptive',
+      request_state_nonce_hash: 'nh',
+      ttl_ms: 300_000,
+      correlation_id: 'corr-1',
+      request_id: 'req-1',
+      node_id: 'node',
+      ...over,
+    } as never);
+  }
+
+  it('refuses an MCP apply that carries no trusted confirmation context (fail closed)', () => {
+    expect(() => h.engine.apply({ plan: makePlan(), applyReq: mcpReq() })).toThrow(ApiException);
+    try {
+      h.engine.apply({ plan: makePlan(), applyReq: mcpReq() });
+    } catch (e) {
+      expect((e as ApiException).details?.reason).toBe('confirmation_required');
+    }
+    expect(h.countTasks()).toBe(0);
+    expect(h.countLeases()).toBe(0);
+  });
+
+  it('a REST apply is untouched by the gate', () => {
+    expect(h.engine.apply({ plan: makePlan(), applyReq: makeApplyReq() }).state).toBe('queued');
+  });
+
+  it('confirmation_exempt (support.bundle) bypasses the gate for an MCP apply', () => {
+    const task = h.engine.apply({
+      plan: makePlan(),
+      applyReq: mcpReq({ confirmation_exempt: true }),
+    });
+    expect(task.state).toBe('queued');
+  });
+
+  it('mcp.allow_apply false is re-checked in the core', () => {
+    createRecord('form');
+    h.setAllowApply(false);
+    expect(() =>
+      h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: 'c-1' }) }),
+    ).toThrow(/disabled/);
+  });
+
+  it('form: a pending record is consumed with the inserted task id in the same transaction', () => {
+    createRecord('form');
+    const task = h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: 'c-1' }) });
+    expect(task.state).toBe('queued');
+    expect(h.confirmations.get('c-1')).toMatchObject({
+      status: 'consumed',
+      consumed_task_id: task.task_id,
+      approved_by: 'admin:test',
+      approval_channel: 'mcp_form',
+    });
+  });
+
+  it('url: pending is refused, approved is consumed', () => {
+    createRecord('url');
+    expect(() =>
+      h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: 'c-1' }) }),
+    ).toThrow(/not approved/);
+    expect(h.countTasks()).toBe(0);
+    h.confirmations.approve('c-1', 'admin:other', 'bearer');
+    const task = h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: 'c-1' }) });
+    expect(h.confirmations.get('c-1')).toMatchObject({
+      status: 'consumed',
+      consumed_task_id: task.task_id,
+      approved_by: 'admin:other',
+    });
+  });
+
+  it('every binding is checked: principal, plan, hash, key, revision, kind, expiry', () => {
+    const cases: Array<[string, Partial<ApplyPlan>, Partial<ApplyRequest>, number]> = [
+      ['principal', {}, { principal: 'admin:someone-else' }, 0],
+      ['plan_id', { plan_id: 'plan-2' }, {}, 0],
+      ['plan_hash', { plan_hash: 'phash-2' }, {}, 0],
+      ['idempotency_key', {}, { idempotency_key: 'idem-9' }, 0],
+      ['expected_revision', {}, { expected_revision: 2 }, 0],
+      ['kind', { kind: 'share.update' }, {}, 0],
+      ['expiry', {}, {}, 300_000],
+    ];
+    for (const [label, planOver, reqOver, advance] of cases) {
+      h = makeHarness();
+      createRecord('form');
+      if (advance > 0) h.setClock(1_000 + advance);
+      expect(
+        () =>
+          h.engine.apply({
+            plan: makePlan(planOver),
+            applyReq: mcpReq({ confirmation_id: 'c-1', ...reqOver }),
+          }),
+        label,
+      ).toThrow(ApiException);
+      expect(h.countTasks(), label).toBe(0);
+      expect(h.confirmations.get('c-1')?.status, label).toBe('pending');
+    }
+  });
+
+  it('a dangerous-gate failure rolls back without consuming; the corrected retry consumes', () => {
+    createRecord('form', { risk_level: 'destructive' });
+    const plan = makePlan({ risk_level: 'destructive' });
+    expect(() => h.engine.apply({ plan, applyReq: mcpReq({ confirmation_id: 'c-1' }) })).toThrow(
+      /dangerous/,
+    );
+    expect(h.confirmations.get('c-1')?.status).toBe('pending');
+    expect(h.countTasks()).toBe(0);
+    const task = h.engine.apply({
+      plan,
+      applyReq: mcpReq({ confirmation_id: 'c-1', dangerous: true }),
+    });
+    expect(h.confirmations.get('c-1')).toMatchObject({
+      status: 'consumed',
+      consumed_task_id: task.task_id,
+    });
+  });
+
+  it('a revision-drift failure expires the record (re-plan required)', () => {
+    createRecord('form');
+    h.bumpResource();
+    expect(() =>
+      h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: 'c-1' }) }),
+    ).toThrow(/revision/);
+    expect(h.confirmations.get('c-1')).toMatchObject({
+      status: 'expired',
+      expired_reason: 'revision_changed',
+    });
+  });
+
+  it('idempotent replay returns the same task only through the consumed record; a consumed record cannot back a second task', () => {
+    createRecord('form'); // c-1
+    const first = h.engine.apply({
+      plan: makePlan(),
+      applyReq: mcpReq({ confirmation_id: 'c-1' }),
+    });
+    const replay = h.engine.apply({
+      plan: makePlan(),
+      applyReq: mcpReq({ confirmation_id: 'c-1' }),
+    });
+    expect(replay.task_id).toBe(first.task_id);
+    expect(h.countTasks()).toBe(1);
+    // same confirmation, different key → the record is consumed → refused
+    expect(() =>
+      h.engine.apply({
+        plan: makePlan(),
+        applyReq: mcpReq({ confirmation_id: 'c-1', idempotency_key: 'idem-2' }),
+      }),
+    ).toThrow(/not approved/);
+  });
+
+  it('the same key with a different, fresh confirmation is idempotency_key_reused', () => {
+    createRecord('form'); // c-1
+    h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: 'c-1' }) });
+    createRecord('form'); // c-2 — same idempotency_key 'idem-1', never consumed
+    expect(() =>
+      h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: 'c-2' }) }),
+    ).toThrow(/idempotency key reused/);
+    expect(h.countTasks()).toBe(1);
+    expect(h.confirmations.get('c-2')?.status).toBe('pending');
   });
 });

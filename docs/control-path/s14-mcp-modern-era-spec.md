@@ -1,8 +1,12 @@
 # xiNAS S14 — MCP modern protocol era (`server/discover`) design spec
 
-**Status:** design (2026-08-24). Extends **ADR-0010** / `s8-clients-spec.md`
+**Status:** design (2026-08-24; amended 2026-09-04 by **S15** — §1 T6,
+§2, §5, §7, §8). Extends **ADR-0010** / `s8-clients-spec.md`
 (the `/mcp` transport hosted inside `xinas-api.service`) with the MCP
-**modern protocol era** introduced by MCP `2026-07-28`.
+**modern protocol era** introduced by MCP `2026-07-28`. Multi Round-Trip
+Requests on `tools/call` are specified in
+[`s15-mcp-mrtr-confirmation-spec.md`](s15-mcp-mrtr-confirmation-spec.md);
+§5.1 below records the protocol-level rules that belong to this era spec.
 
 **Requirements source:** [`docs/MCP/server-discover-requirements.md`](../MCP/server-discover-requirements.md)
 (unmodified incoming text). Where this spec deviates from that document it
@@ -33,6 +37,12 @@ to the other.
 - **T4** Capability generation from the same `CATALOG` the operational
   handlers use — one authority, no second table.
 - **T5** Tests covering acceptance criteria 1–9 and 13–15.
+- **T6 (S15, 2026-09-04)** Multi Round-Trip Requests on `tools/call`: the
+  result union `CallToolResult | InputRequiredResult`, `resultType` on every
+  modern result, parsing of `params.inputResponses` / `params.requestState`,
+  client-capability checks from `_meta`, and the JSON-RPC error mapping
+  (`-32021` → HTTP 400). The confirmation *policy* that uses MRTR lives in
+  S15; the protocol rules are §5.1 here.
 
 ### Out of scope
 
@@ -41,9 +51,14 @@ to the other.
 - The MCP `tasks` extension (`io.modelcontextprotocol/tasks`). xiNAS has its
   own asynchronous task envelope over REST (`s2-task-envelope-spec.md`) plus
   the `next` hint in tool results; that is *not* the MCP tasks extension and
-  advertising it would be a false claim.
-- Acceptance criteria 10, 11, 12 (official TypeScript SDK era selection) —
-  not implementable against any published SDK; see §8 and `docs/TODO.md`.
+  advertising it would be a false claim. S15 §4.7 records how MRTR relates
+  to it (the confirmation stays in the ephemeral workflow, before any task).
+- ~~Acceptance criteria 10, 11, 12 (official TypeScript SDK era selection) —
+  not implementable against any published SDK; see §8 and `docs/TODO.md`.~~
+  **Corrected 2026-09-04:** the modern era shipped as the v2 package family
+  (§2); criteria 10 and 11 are covered by S15 §15.4 with
+  `@modelcontextprotocol/client` 2.0.0. Migrating the *server* side onto the
+  v2 server package remains out of scope (§2, consequence paragraph).
 
 ---
 
@@ -58,15 +73,20 @@ Checked 2026-08-24 against vendor sources, per `CLAUDE.md` §spec-first rule 5.
 | `instructions` and `_meta["io.modelcontextprotocol/serverInfo"]` are **OPTIONAL** upstream (`instructions` optional; `serverInfo` a SHOULD) | same schema + discover.mdx | **Deviation, deliberate.** The requirement document makes both MUST. A response that always carries them is schema-valid, so xiNAS follows the stricter local rule. |
 | Discovery is optional for clients; inline invocation with error handling is a supported alternative | discover.mdx | **Confirmed** — this is requirement §2.5.6, and it is why §5 exists. |
 | Two eras: legacy `2024-10-07`…`2025-11-25` via `initialize`; modern from `2026-07-28` via `server/discover` + `_meta` envelope. SDK modes: default/legacy, `auto` (probe then fall back), pinned (never falls back, rejects with `SdkError(EraNegotiationFailed)`) | [typescript-sdk `docs/protocol-versions.md`](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/protocol-versions.md) | **Confirmed** |
-| **The published `@modelcontextprotocol/sdk` does not implement the modern era.** `1.30.0` (latest on npm, 2026-08-24) has `LATEST_PROTOCOL_VERSION = '2025-11-25'`, `SUPPORTED_PROTOCOL_VERSIONS` topping out there, and **zero** occurrences of `server/discover`, `2026-07-28`, or `versionNegotiation` in its published `dist/`. The repo installs `^1.12.0` and resolves `1.27.1`, which is likewise legacy-only. | `npm pack @modelcontextprotocol/sdk@1.30.0` + grep of the published tarball | **Confirmed absent.** Drives §5 (hand-rolled handling, not SDK handling) and §8. |
+| **The published `@modelcontextprotocol/sdk` does not implement the modern era.** `1.30.0` (latest on npm, 2026-08-24) has `LATEST_PROTOCOL_VERSION = '2025-11-25'`, `SUPPORTED_PROTOCOL_VERSIONS` topping out there, and **zero** occurrences of `server/discover`, `2026-07-28`, or `versionNegotiation` in its published `dist/`. The repo installs `^1.12.0` and resolves `1.27.1`, which is likewise legacy-only. | `npm pack @modelcontextprotocol/sdk@1.30.0` + grep of the published tarball | **Confirmed absent for the `sdk` package** — still true on 2026-09-04 (`1.30.0` remains latest). **Corrected by the next row.** |
+| **The modern era shipped as a separate v2 package family** (2026-09-04, S15 V-21): `@modelcontextprotocol/server`, `@modelcontextprotocol/client`, `@modelcontextprotocol/core` `2.0.0` (npm, published 2026-07-28). Their tarballs contain `server/discover`, `input_required`, `versionNegotiation`, `createRequestStateCodec` and elicitation handling. | `npm pack @modelcontextprotocol/{server,client}@2.0.0` + grep; [typescript-sdk v2 migration guide](https://ts.sdk.modelcontextprotocol.io/v2/migration/support-2026-07-28) | **Confirmed present.** The client package becomes a devDependency for the era-selection and MRTR interop tests (S15 §15.4). |
+| `resultType` is mandatory on every `2026-07-28` result; `tools/call` returns `CallToolResult \| InputRequiredResult`; `-32021` (HTTP 400) signals a missing client capability (S15 V-01, V-02, V-04) | `schema.ts` `Result.resultType`, `CallToolResponse`, `MISSING_REQUIRED_CLIENT_CAPABILITY` | **Confirmed.** Drives §5.1. |
 
-**Consequence of the last row.** The modern era cannot be implemented *through*
-the SDK `Server` class: it has no `DiscoverRequestSchema`, and
+**Consequence of the SDK rows.** The modern era cannot be implemented *through*
+the legacy SDK `Server` class: it has no `DiscoverRequestSchema`, and
 `StreamableHTTPServerTransport` rejects any non-`initialize` POST that carries
 no `Mcp-Session-Id`. Modern-era requests are therefore handled **ahead of** the
 SDK transport, by xiNAS code, against the same catalog (§5). The SDK keeps
 serving the legacy era untouched — which is exactly what requirement §2.5.1
-asks for.
+asks for. The v2 *server* package could serve the era, but rehosting the
+transport on it is a separate migration with its own review; S15 keeps the
+hand-rolled modern handler and adds MRTR to it, and uses the v2 *client* only
+in tests.
 
 ---
 
@@ -182,7 +202,12 @@ handlers into two plain functions:
 
 ```ts
 listTools(): Tool[]
-callTool(name: string, args: Record<string, unknown>, opts: DispatcherOptions): Promise<ToolResult>
+callTool(
+  name: string,
+  args: Record<string, unknown>,
+  opts: DispatcherOptions,          // + client: { era, capabilities } (S15)
+  mrtr?: { inputResponses?: unknown; requestState?: unknown },   // S15
+): Promise<ToolResult | InputRequiredToolResult>
 ```
 
 `buildMcpServer` wires exactly these two into `ListToolsRequestSchema` /
@@ -192,9 +217,55 @@ dispatch**, so the apply gate, the legacy-tool-name pointers, the RBAC
 forwarding, the loopback token and the audit row behave identically in both
 eras — which is what makes acceptance criterion 7 ("advertised capabilities
 match the handlers that are actually available") true rather than asserted.
+The legacy path never receives an `InputRequiredToolResult`: a legacy-era
+confirmable call is answered with a tool error before the confirmation
+service is reached (S15 §14.2), so `buildMcpServer`'s handler type stays
+`ToolResult`.
 
 Unknown modern methods return JSON-RPC `-32601` **Method not found**, per
 JSON-RPC 2.0.
+
+### 5.1 Multi Round-Trip Requests on `tools/call` (S15, 2026-09-04)
+
+Protocol rules the modern handler owns; the confirmation policy that uses
+them is S15.
+
+- **`resultType` on every modern result.** `tools/list` → `{ resultType:
+  'complete', tools }`. `tools/call` → the `ToolResult` plus `resultType:
+  'complete'`, *including* tool errors (`isError: true`). An unfinished MRTR
+  → `{ resultType: 'input_required', inputRequests, requestState }`.
+  `server/discover` already carries `complete`. Before S15 the first two
+  omitted the field — a schema violation the requirement's §4 names; it is
+  fixed first, so that one method never returns one compliant and one
+  non-compliant variant. Legacy results keep their legacy wire shape.
+- **Result union.** The modern `tools/call` answer is `CallToolResult |
+  InputRequiredResult`, discriminated by `resultType`. An
+  `InputRequiredResult` from xiNAS always carries both `inputRequests` (one
+  key, `confirm_apply`, holding an `elicitation/create` request in `form` or
+  `url` mode) and `requestState` (opaque, HMAC-protected).
+- **Retry parsing.** `params.inputResponses` must be an object whose values
+  are bare `ElicitResult`s (`{ action, content? }`; no `{ method, result }`
+  wrapper); `params.requestState` must be a string of at most 4096 bytes.
+  Either malformed → JSON-RPC `-32602`. A `requestState` that fails
+  verification or any binding → `-32602` with the fixed message
+  `invalid request state` and nothing more. The retry must repeat the same
+  method, tool name and arguments; the arguments are bound into the state
+  and any change is rejected.
+- **New JSON-RPC id on every retry.** The handler does not correlate on
+  ids (there is no session); a retry that reuses the previous id is
+  answered as an independent request, and the conformance test pins that
+  xiNAS's own clients never do it.
+- **Capability checks.** Read from the *current* request's
+  `_meta["io.modelcontextprotocol/clientCapabilities"].elicitation`
+  (`{}` ≡ `{ form: {} }`). A missing needed mode → JSON-RPC `-32021`,
+  `data.requiredCapabilities: { elicitation: { <mode>: {} } }`, and
+  `transport.ts` sets **HTTP 400** (the schema mandates it). `-32602`
+  stays HTTP 200. `clientInfo` is never read.
+- **Round limit.** At most three `input_required` rounds per logical
+  confirmation, then the tool error `CONFIRMATION_ROUND_LIMIT`.
+- **Tasks extension.** MRTR here is the ephemeral workflow; if the Tasks
+  extension is ever adopted, the confirmation still completes before any
+  task exists (S15 §4.7).
 
 A modern **notification** (a message with no `id`) is answered with an empty
 HTTP `202` and no response object, matching what the SDK transport does for
@@ -247,6 +318,13 @@ through the loopback under the caller's real principal and role, and
 - `src/mcp-stdio.ts` — **no change.** It is a per-message bridge; a
   `server/discover` line is forwarded and its answer returned verbatim. The
   cached `mcp-session-id` it may attach is ignored by the modern path (§3).
+  It forwards `inputResponses`, `requestState` and `_meta` verbatim too
+  (S15 §14.3).
+- **S15 additions:** `src/api/mcp/confirmation/` (store, `requestState`
+  codec, service, message rendering, approval page, metrics) called from
+  `callTool()`; `transport.ts` maps `-32021` to HTTP 400 and passes the
+  client era + capabilities into `DispatcherOptions.client`; `discover.ts`
+  `INSTRUCTIONS` describes the confirmation flow.
 
 The `/mcp` audit skip and the "exactly one audit row per operation" rule
 (s8 §T2b) are unaffected: `server/discover` performs no loopback call and so
@@ -268,17 +346,19 @@ loopback request produces.
 | 7 | advertised capabilities match available handlers | `mcp-discover.test.ts` — `resources`/`prompts` absent, `tools` present iff the catalog has MCP-visible entries |
 | 8 | two calls: no state change, semantically equal | `mcp-discover.test.ts` |
 | 9 | direct modern operational request without discovery | `mcp-discover.test.ts` — stateless `tools/list` + `tools/call` |
-| 10 | official SDK selects modern in `auto` mode | **Not implementable** — see below |
-| 11 | official SDK pinned to `2026-07-28` connects | **Not implementable** — see below |
+| 10 | official SDK selects modern in `auto` mode | `@modelcontextprotocol/client` 2.0.0 in `versionNegotiation: { mode: 'auto' }` — S15 §15.4 (was "not implementable" until the v2 packages shipped; see below) |
+| 11 | official SDK pinned to `2026-07-28` connects | same client, `{ pin: '2026-07-28' }` — S15 §15.4 |
 | 12 | official SDK in `legacy` mode uses `initialize` | `mcp-integration.test.ts` (existing, real SDK client) |
 | 13 | legacy `2025-11-25` client keeps existing behavior | `mcp-transport.test.ts` + `mcp-integration.test.ts` (existing), plus a new assertion that `initialize` never returns a modern version |
 | 14 | RBAC-dependent capabilities ⇒ `cacheScope: "private"` | `mcp-discover.test.ts` |
 | 15 | 401/403 handled as access errors, not legacy signals | `mcp-discover.test.ts` — unauthenticated discover returns HTTP 401 and **not** `-32601` |
 
-**10 and 11 are blocked on the ecosystem, not on xiNAS.** No published
-`@modelcontextprotocol/sdk` (≤ 1.30.0) implements the modern era, so there is
-no `versionNegotiation: 'auto'` to exercise and no way to pin a client to
-`2026-07-28`. The server side of both criteria is covered by hand-rolled
-JSON-RPC clients in `mcp-discover.test.ts`, which speak the exact wire format
-those SDK modes will produce. Recorded in `docs/TODO.md`; the work is to bump
-the SDK and add the two client-side tests once it ships modern support.
+**10 and 11 were blocked on the ecosystem, not on xiNAS.** When this spec was
+written no published `@modelcontextprotocol/sdk` (≤ 1.30.0) implemented the
+modern era, so the server side of both criteria was covered by hand-rolled
+JSON-RPC clients in `mcp-discover.test.ts` and the client-side tests were
+recorded in `docs/TODO.md`. **As of 2026-09-04 (S15)** the modern era is
+published as `@modelcontextprotocol/client` 2.0.0 (a different package, not
+a bump of `sdk`); S15 adds it as a devDependency, writes the two tests, and
+removes the `docs/TODO.md` entry. The hand-rolled clients stay: they are the
+hostile-input conformance harness the SDK client cannot be.

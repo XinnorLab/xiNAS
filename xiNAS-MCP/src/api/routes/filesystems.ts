@@ -14,13 +14,13 @@ import { FS_IDENTITY_FIELDS, parsePatchIntent } from '../../lib/fs/validate.js';
 import type { ApiContext } from '../context.js';
 import { ApiException } from '../errors.js';
 import {
-  clientImpact,
   requireInteger,
   requireString,
   taskEnvelope,
   toApplyPlan,
 } from '../handlers/plan-apply.js';
 import { getOrNull, sendOk } from '../handlers/reads.js';
+import { publicPlan } from '../plan/document.js';
 import type { PlanProvider } from '../plan/engine.js';
 import {
   fsCreateProvider,
@@ -79,7 +79,7 @@ export function filesystemsRouter(ctx: ApiContext): Router {
     const mode = body.mode;
 
     if (mode === 'plan') {
-      const { task, planResult } = await tasks.planEngine.plan({
+      const { task, document } = await tasks.planEngine.plan({
         operation_kind: 'fs.create',
         spec: body.spec,
         principal: rc.principal,
@@ -89,25 +89,7 @@ export function filesystemsRouter(ctx: ApiContext): Router {
       });
       rc.operation_id = task.task_id;
       const revision = task.state_revision_expected ?? 0;
-      sendOk(
-        req,
-        res,
-        {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
-          state_revision_expected: revision,
-          observed_revision_expected: planResult.observed_revision_expected ?? null,
-          observed_at: planResult.observed_at ?? null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
-        },
-        [revision],
-      );
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 
@@ -161,6 +143,10 @@ export function filesystemsRouter(ctx: ApiContext): Router {
           request_id: rc.request_id,
           correlation_id: rc.correlation_id,
           ...(body.dangerous === true ? { dangerous: true } : {}),
+          expected_revision: expectedRevision, // the integer the route already validated from the body (R-3.1)
+          ...(rc.mcp_confirmation_id !== undefined
+            ? { confirmation_id: rc.mcp_confirmation_id }
+            : {}),
         },
       });
       rc.operation_id = task.task_id;
@@ -230,35 +216,26 @@ export function filesystemsRouter(ctx: ApiContext): Router {
               ? 'fs.grow'
               : 'fs.set_quota_mode';
 
-      const { task, planResult } = await tasks.planEngine.plan({
+      // The PATCH providers pin no revision (S4 §4: "the plan row does not
+      // persist the observed pin") — compute the CURRENT observed revision
+      // and pass it as document_overrides so the persisted document carries
+      // the SAME value the client is told to echo at apply (S15 §5.1, R-3.1)
+      // instead of the engine's unpinned default.
+      const revision = observedFsRevision(ctx, id) ?? 0;
+      const { task, document } = await tasks.planEngine.plan({
         operation_kind: kind,
         spec: { ...(typeof body.spec === 'object' && body.spec !== null ? body.spec : {}), id },
         principal: rc.principal,
         client_type: rc.client_type,
         request_id: rc.request_id,
         correlation_id: rc.correlation_id,
-      });
-      rc.operation_id = task.task_id;
-      const revision = observedFsRevision(ctx, id) ?? 0;
-      sendOk(
-        req,
-        res,
-        {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
+        document_overrides: {
           state_revision_expected: revision,
           observed_revision_expected: revision,
-          observed_at: null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
         },
-        [revision],
-      );
+      });
+      rc.operation_id = task.task_id;
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 
@@ -322,6 +299,10 @@ export function filesystemsRouter(ctx: ApiContext): Router {
           request_id: rc.request_id,
           correlation_id: rc.correlation_id,
           ...(body.dangerous === true ? { dangerous: true } : {}),
+          expected_revision: expectedRevision, // the integer the route already validated from the body (R-3.1)
+          ...(rc.mcp_confirmation_id !== undefined
+            ? { confirmation_id: rc.mcp_confirmation_id }
+            : {}),
         },
       });
       rc.operation_id = task.task_id;
@@ -371,35 +352,23 @@ export function filesystemsRouter(ctx: ApiContext): Router {
     const id = req.params.id as string;
 
     if (mode === 'plan') {
-      const { task, planResult } = await tasks.planEngine.plan({
+      // Same S4 §4 revision binding as PATCH (above): compute the CURRENT
+      // observed revision and pass it as document_overrides (S15 §5.1, R-3.1).
+      const revision = observedFsRevision(ctx, id) ?? 0;
+      const { task, document } = await tasks.planEngine.plan({
         operation_kind: 'fs.unmanage',
         spec: { id },
         principal: rc.principal,
         client_type: rc.client_type,
         request_id: rc.request_id,
         correlation_id: rc.correlation_id,
-      });
-      rc.operation_id = task.task_id;
-      const revision = observedFsRevision(ctx, id) ?? 0;
-      sendOk(
-        req,
-        res,
-        {
-          plan_id: task.task_id,
-          plan_hash: task.plan_hash,
+        document_overrides: {
           state_revision_expected: revision,
           observed_revision_expected: revision,
-          observed_at: null,
-          affected_resources: task.affected_resources,
-          risk_level: planResult.risk_level,
-          client_impact: clientImpact(planResult.risk_level),
-          blockers: planResult.blockers,
-          warnings: planResult.warnings,
-          diff: planResult.diff,
-          rollback_model: planResult.rollback_model,
         },
-        [revision],
-      );
+      });
+      rc.operation_id = task.task_id;
+      sendOk(req, res, publicPlan(document), [revision]);
       return;
     }
 
@@ -457,6 +426,10 @@ export function filesystemsRouter(ctx: ApiContext): Router {
           client_type: rc.client_type,
           request_id: rc.request_id,
           correlation_id: rc.correlation_id,
+          expected_revision: expectedRevision, // the integer the route already validated from the body (R-3.1)
+          ...(rc.mcp_confirmation_id !== undefined
+            ? { confirmation_id: rc.mcp_confirmation_id }
+            : {}),
         },
       });
       rc.operation_id = task.task_id;

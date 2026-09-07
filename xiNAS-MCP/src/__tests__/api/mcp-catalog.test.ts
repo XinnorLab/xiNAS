@@ -100,8 +100,17 @@ describe('client catalog (S8 T2)', () => {
       await setup.cleanup();
     });
 
+    // S15: the catalog entry for system.metrics lands ahead of its backing
+    // route (Task 13, the metrics registry). Excluded here so this
+    // regression guard does not fail on a route that is deliberately not
+    // mounted yet — remove this exclusion once that route is wired. The
+    // mcp_confirmations.* entries were the same kind of forward declaration
+    // (Task 7) but their routes landed in Task 11 — no longer excluded.
+    const ROUTE_NOT_YET_MOUNTED = new Set(['system.metrics']);
+
     it('no catalog path hits the NOT_FOUND catch-all', async () => {
       for (const entry of CATALOG) {
+        if (ROUTE_NOT_YET_MOUNTED.has(entry.name)) continue;
         const path = `/api/v1${entry.path.replaceAll(/\{[^}]+\}/g, 'x')}`;
         const req = request(setup.app);
         const r =
@@ -118,5 +127,46 @@ describe('client catalog (S8 T2)', () => {
         expect(unknownRoute, `${entry.name}: ${entry.method} ${path} is not mounted`).toBe(false);
       }
     }, 30_000);
+  });
+
+  it('S15: every plan_apply entry names the engine kinds its route can produce', () => {
+    const byName = new Map(CATALOG.map((e) => [e.name, e]));
+    for (const e of CATALOG.filter((x) => x.mutability === 'plan_apply')) {
+      expect(e.operation_kinds?.length, `${e.name} needs operation_kinds`).toBeGreaterThan(0);
+    }
+    expect(byName.get('shares.update')?.operation_kinds).toEqual(['share.update']);
+    expect(byName.get('arrays.create')?.operation_kinds).toEqual(['xiraid.array.create']);
+    expect(byName.get('arrays.import')?.operation_kinds).toEqual(['xiraid.array.import']);
+    expect(byName.get('filesystems.update')?.operation_kinds).toEqual([
+      'fs.mount',
+      'fs.unmount',
+      'fs.grow',
+      'fs.set_quota_mode',
+    ]);
+    expect(byName.get('filesystems.delete')?.operation_kinds).toEqual(['fs.unmanage']);
+    expect(byName.get('config_history.rollback')?.operation_kinds).toEqual(['config.rollback']);
+    expect(byName.get('network.pool.apply')?.operation_kinds).toEqual(['net.pool.apply']);
+  });
+
+  it('S15: the approval commands exist for the CLI and RBAC but are hidden from MCP', () => {
+    const byName = new Map(CATALOG.map((e) => [e.name, e]));
+    for (const name of [
+      'mcp_confirmations.list',
+      'mcp_confirmations.get',
+      'mcp_confirmations.approve',
+      'mcp_confirmations.decline',
+    ]) {
+      const e = byName.get(name);
+      expect(e, name).toBeDefined();
+      expect(e?.min_role).toBe('admin');
+      expect(e?.mcp_exposed).toBe(false);
+      expect(e?.requires_mcp_apply).toBe(false);
+    }
+    expect(matchCatalog('POST', '/mcp/confirmations/abc/approve')?.name).toBe(
+      'mcp_confirmations.approve',
+    );
+    expect(matchCatalog('GET', '/mcp/confirmations')?.name).toBe('mcp_confirmations.list');
+    expect(matchCatalog('GET', '/metrics')?.name).toBe('system.metrics');
+    expect(byName.get('system.metrics')?.binary).toBe(true);
   });
 });

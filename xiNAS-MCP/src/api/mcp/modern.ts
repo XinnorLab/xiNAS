@@ -8,6 +8,8 @@
  * stateful, so the two protocol eras cannot share negotiation state — there
  * is none on this side to share.
  *
+ * Every result on this path carries `resultType` (`2026-07-28` `Result.resultType` is mandatory — S14 §5.1). The legacy SDK path is untouched.
+ *
  * This path runs AHEAD of the SDK transport because no published
  * `@modelcontextprotocol/sdk` implements the era: 1.30.0 has no
  * `server/discover` schema, and its StreamableHTTPServerTransport rejects any
@@ -16,7 +18,10 @@
  */
 
 import { type DispatcherOptions, callTool, listTools } from './dispatch.js';
+import { McpProtocolError } from './confirmation/errors.js';
+import { parseMrtrParams } from './confirmation/policy.js';
 import { buildDiscoverResult, isModernProtocolVersion } from './discover.js';
+import { isInputRequired } from './results.js';
 
 /** JSON-RPC 2.0 reserved codes used on this path. */
 const METHOD_NOT_FOUND = -32601;
@@ -33,7 +38,9 @@ export interface JsonRpcResponse {
   jsonrpc: '2.0';
   id: string | number | null;
   result?: unknown;
-  error?: { code: number; message: string };
+  error?: { code: number; message: string; data?: Record<string, unknown> };
+  /** S15: the HTTP status transport.ts answers with; stripped from the JSON body. */
+  httpStatus?: number;
 }
 
 const PROTOCOL_VERSION_META = 'io.modelcontextprotocol/protocolVersion';
@@ -81,10 +88,16 @@ const id = (message: unknown): string | number | null => {
  * caller must get a 401, never `Method not found`, because `-32601` on
  * `server/discover` is the one signal a client is entitled to read as "this
  * server is legacy-only" and downgrade on (requirement §2.5.7-8).
+ *
+ * `correlationId` is the server-owned correlation id for THIS HTTP request
+ * (fix round 1, F5) — never the JSON-RPC envelope `id`, which is
+ * client-chosen and unbounded (S15 §7.3/§12.1 audit rows, and
+ * `mcp_confirmations.correlation_id`, must never carry it verbatim).
  */
 export async function handleModernRequest(
   message: unknown,
   opts: DispatcherOptions,
+  correlationId: string,
 ): Promise<JsonRpcResponse> {
   const msg = message as JsonRpcRequest;
   const rpcId = id(message);
@@ -97,7 +110,11 @@ export async function handleModernRequest(
         return { jsonrpc: '2.0', id: rpcId, result: buildDiscoverResult() };
 
       case 'tools/list':
-        return { jsonrpc: '2.0', id: rpcId, result: { tools: listTools() } };
+        return {
+          jsonrpc: '2.0',
+          id: rpcId,
+          result: { resultType: 'complete', tools: listTools() },
+        };
 
       case 'tools/call': {
         const params = (msg.params ?? {}) as {
@@ -111,8 +128,18 @@ export async function handleModernRequest(
             error: { code: -32602, message: 'invalid params: tools/call requires a string name' },
           };
         }
-        const result = await callTool(params.name, params.arguments ?? {}, opts);
-        return { jsonrpc: '2.0', id: rpcId, result };
+        // S15 §4/§7: a confirmable retry echoes requestState/inputResponses
+        // in the SAME tools/call params (no separate elicitation method) —
+        // parse them here so dispatch.ts stays transport-agnostic.
+        const mrtr = parseMrtrParams(msg.params);
+        const result = await callTool(params.name, params.arguments ?? {}, opts, {
+          ...mrtr,
+          correlationId,
+        });
+        if (isInputRequired(result)) {
+          return { jsonrpc: '2.0', id: rpcId, result };
+        }
+        return { jsonrpc: '2.0', id: rpcId, result: { ...result, resultType: 'complete' } };
       }
 
       default:
@@ -126,6 +153,18 @@ export async function handleModernRequest(
         };
     }
   } catch (err) {
+    if (err instanceof McpProtocolError) {
+      return {
+        jsonrpc: '2.0',
+        id: rpcId,
+        error: {
+          code: err.code,
+          message: err.message,
+          ...(err.data !== undefined ? { data: err.data } : {}),
+        },
+        httpStatus: err.httpStatus,
+      };
+    }
     return {
       jsonrpc: '2.0',
       id: rpcId,

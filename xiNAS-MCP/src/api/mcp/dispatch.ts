@@ -21,7 +21,18 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { CATALOG, type CatalogEntry } from './catalog.js';
+import type { McpClientInfo, ConfirmationService } from './confirmation/service.js';
+import { isConfirmable, type MrtrParams } from './confirmation/policy.js';
 import { SERVER_INFO } from './discover.js';
+import {
+  type InputRequiredToolResult,
+  type ToolResult,
+  errorResult,
+  isInputRequired,
+  text,
+} from './results.js';
+
+export type { ToolResult } from './results.js';
 
 export interface LoopbackRequest {
   method: string;
@@ -47,6 +58,10 @@ export interface DispatcherOptions {
   loopbackToken: () => string | undefined;
   allowApply: () => boolean;
   identity: () => McpIdentity;
+  /** S15: the calling client's protocol era + declared elicitation capabilities. */
+  client: McpClientInfo;
+  /** S15: absent when the api has no task engine (read-only contexts). */
+  confirmations?: ConfirmationService;
 }
 
 /** Legacy tool name → replacement pointer (ADR-0010: actionable errors). */
@@ -83,27 +98,20 @@ export const LEGACY_TOOL_MAP: Record<string, string> = {
 /** Legacy mutators with NO Phase-0 replacement (returns in a later phase). */
 export const RETIRED_TOOL_PREFIXES = ['auth.', 'mail.', 'pool.', 'disk.', 'network.configure'];
 
+/**
+ * S15: an entry is visible over MCP unless it streams a non-JSON body
+ * (`binary`) or is explicitly marked `mcp_exposed: false` — the approval
+ * commands, which a model must never see as a callable tool even with an
+ * admin token.
+ */
+const mcpVisible = (e: CatalogEntry): boolean => e.binary !== true && e.mcp_exposed !== false;
+
 /** An MCP tool descriptor as tools/list returns it. */
 export interface McpTool {
   name: string;
   description: string;
   inputSchema: { type: 'object'; [k: string]: unknown };
 }
-
-export interface ToolResult {
-  [key: string]: unknown;
-  content: Array<{ type: 'text'; text: string }>;
-  isError?: boolean;
-}
-
-const text = (payload: unknown): ToolResult => ({
-  content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
-});
-
-const errorResult = (code: string, message: string, details?: unknown): ToolResult => ({
-  content: [{ type: 'text', text: JSON.stringify({ error: { code, message, details } }, null, 2) }],
-  isError: true,
-});
 
 /** Apply-gate verdict for one call (exported for unit tests). */
 export function gateVerdict(
@@ -188,7 +196,7 @@ export function nextHint(
  * eras would start disagreeing about what the server can do.
  */
 export function listTools(): McpTool[] {
-  return CATALOG.filter((e) => e.binary !== true).map((e) => {
+  return CATALOG.filter(mcpVisible).map((e) => {
     // Generated from the catalog flag rather than written into twenty
     // description strings — the fact a call is asynchronous is what tells a
     // client to expect a task_id instead of a finished result.
@@ -211,8 +219,9 @@ export async function callTool(
   name: string,
   args: Record<string, unknown>,
   opts: DispatcherOptions,
-): Promise<ToolResult> {
-  const entry = CATALOG.find((e) => e.name === name && e.binary !== true);
+  mrtr: MrtrParams & { correlationId?: string } = {},
+): Promise<ToolResult | InputRequiredToolResult> {
+  const entry = CATALOG.find((e) => e.name === name && mcpVisible(e));
   if (entry === undefined) {
     const replacement = LEGACY_TOOL_MAP[name];
     if (replacement !== undefined) {
@@ -238,6 +247,39 @@ export async function callTool(
     });
   }
 
+  // S15 §3.1/§3.3 — confirmable calls go through the confirmation service.
+  let confirmationId: string | undefined;
+  if (isConfirmable(entry, args)) {
+    if (opts.client.era !== 'modern') {
+      return errorResult(
+        'MCP_CONFIRMATION_UNSUPPORTED',
+        'mode=apply over MCP requires MCP 2026-07-28 with elicitation support; apply via REST, xinasctl or the TUI instead',
+        { required: 'MCP 2026-07-28 with elicitation', alternatives: ['REST', 'xinasctl', 'TUI'] },
+      );
+    }
+    if (opts.confirmations === undefined) {
+      return errorResult('INTERNAL', 'confirmation service unavailable (api not fully started)');
+    }
+    const identity = opts.identity();
+    const outcome = await opts.confirmations.handle({
+      entry,
+      args,
+      identity,
+      client: opts.client,
+      ...(mrtr.inputResponses !== undefined || mrtr.requestState !== undefined
+        ? {
+            mrtr: {
+              ...(mrtr.inputResponses !== undefined ? { inputResponses: mrtr.inputResponses } : {}),
+              ...(mrtr.requestState !== undefined ? { requestState: mrtr.requestState } : {}),
+            },
+          }
+        : {}),
+      correlationId: mrtr.correlationId ?? 'mcp',
+    });
+    if (outcome.kind !== 'proceed') return outcome.result;
+    confirmationId = outcome.confirmation_id;
+  }
+
   let req: { path: string; body?: unknown };
   try {
     req = buildRequest(entry, args);
@@ -258,6 +300,7 @@ export async function callTool(
       'x-xinas-forwarded-principal': identity.principal,
       'x-xinas-forwarded-role': identity.role,
       'x-xinas-client-type': 'mcp',
+      ...(confirmationId !== undefined ? { 'x-xinas-confirmation': confirmationId } : {}),
       ...(req.body !== undefined ? { 'content-type': 'application/json' } : {}),
     },
     ...(req.body !== undefined ? { body: req.body } : {}),
@@ -292,13 +335,20 @@ export function buildMcpServer(opts: DispatcherOptions): Server {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listTools() }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) =>
-    callTool(
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const r = await callTool(
       request.params.name,
       (request.params.arguments ?? {}) as Record<string, unknown>,
       opts,
-    ),
-  );
+    );
+    // Legacy clients are denied confirmable calls before the service ever
+    // runs (era !== 'modern' above) — an input_required result reaching
+    // here would mean that gate was bypassed.
+    if (isInputRequired(r)) {
+      throw new Error('unreachable: legacy path received input_required');
+    }
+    return r;
+  });
 
   return server;
 }

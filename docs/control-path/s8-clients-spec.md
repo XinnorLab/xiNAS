@@ -18,6 +18,13 @@ alongside it, on the same endpoint and from the same catalog — see
 [`s14-mcp-modern-era-spec.md`](s14-mcp-modern-era-spec.md). Nothing in this
 spec's legacy behavior changed.
 
+**Extended by S15 (2026-09-04).** MCP `mode=apply` now requires a human
+confirmation *after* the §4 gate passes — see §4.1 below and
+[`s15-mcp-mrtr-confirmation-spec.md`](s15-mcp-mrtr-confirmation-spec.md).
+Reads, `mode=plan`, `support.bundle` and `tasks.cancel` are unchanged;
+`xinasctl` and the TUI are unchanged as clients and `xinasctl` gains the
+approval commands (§4.1).
+
 **Verified integration facts (truth-checked this round).**
 
 - `xinas_api` preflights on `dist/api-server.js` and names `xinas_mcp`
@@ -214,8 +221,23 @@ interface CatalogEntry {
   min_role: 'viewer' | 'operator' | 'admin';  // REST rbacMiddleware + MCP share it
   status: 'live' | 'degraded';
   returns_async_task?: boolean;       // success body is a Task envelope
+  operation_kinds?: string[];         // S15: the engine kinds a plan_apply entry's route can produce
+  mcp_exposed?: boolean;              // S15: default true; false = xinasctl + RBAC only, never an MCP tool
+  confirmation?: 'required';          // S15: explicit opt-in for an entry that fits neither shape
 }
 ```
+
+**S15 fields.** `operation_kinds` lets the confirmation service check that
+a `plan_id` belongs to the tool being applied without trusting the client
+(the plan document's kind must be in the list; most entries list one kind,
+`filesystems.update` lists `fs.mount | fs.unmount | fs.grow |
+fs.set_quota_mode`; pinned per entry by the catalog test against the
+routes). `mcp_exposed: false` is what keeps the approval commands
+(`mcp_confirmations.list/get/approve/decline`) out of `tools/list` and
+`tools/call` while `xinasctl` and `matchCatalog` (RBAC) still see them —
+the model cannot approve its own request even with an admin token.
+`confirmation: 'required'` is forward-looking (S15 §3.1); no entry carries
+it today.
 
 `returns_async_task` marks an entry whose success response is a Task
 envelope (`task_id` + `state`) — the work runs asynchronously and the
@@ -307,6 +329,62 @@ Locked direct entries: `support.bundle` (allow — read-style
 diagnostic), `tasks.cancel` (allow — emergency stop cannot apply new
 state). `MCP_APPLY_DISABLED` is a structured tool error naming
 `mcp.allow_apply` and the REST/CLI alternative.
+
+### 4.1 Apply confirmation (S15)
+
+The gate above answers *whether MCP may apply at all*. When it allows a
+`plan_apply` `mode: 'apply'` (or a `direct` entry with
+`requires_mcp_apply: true`), a second question follows: *has a human
+confirmed this exact plan?* The full contract is S15; the client-facing
+rules are:
+
+| client | what happens on a confirmable call |
+|---|---|
+| modern (`2026-07-28`) with `elicitation.form` | `non_disruptive` / `changing_access` plans: an `input_required` result with a form (`decision: APPLY`) and a `requestState`; the client shows the generated plan summary, the user picks APPLY, the client retries with a new id, `inputResponses` and the exact state → apply proceeds |
+| modern with `elicitation.url` | `destructive` / `unsupported_rollback` / rollback `unsupported` plans: an `input_required` result with a URL to the xiNAS approval page; a xiNAS operator (a *different* credential, or `xinasctl` on the node) approves there; the client's retry (`action: accept`) is consumed only if the record is `approved`, otherwise it waits up to 25 s, re-issues (max 3 rounds), or reports the operator's decline |
+| modern lacking the needed mode | JSON-RPC `-32021` (HTTP 400) naming the missing mode; no record, no task; the model is told to use REST / `xinasctl` / the TUI or a client with that capability. A destructive plan is never downgraded to a form |
+| legacy (`initialize` era) | tool error `MCP_CONFIRMATION_UNSUPPORTED` naming "MCP 2026-07-28 with elicitation" and the alternatives; reads / plan / `support.bundle` / `tasks.cancel` unchanged |
+
+**Risk → mode** (from the persisted plan document, never from the
+request): `non_disruptive`, `changing_access` → form; `destructive`,
+`unsupported_rollback`, or any `rollback_model: unsupported` → URL.
+
+**`mcp.allow_apply` first.** With it false the answer is still
+`MCP_APPLY_DISABLED` and nothing is recorded; confirmation never
+substitutes for the gate, and `dangerous: true` never substitutes for
+confirmation (S15 §3.4).
+
+**User-visible outcomes.** Decline → `CONFIRMATION_DECLINED`; closing the
+dialog → `CONFIRMATION_CANCELLED`; waiting past the TTL (default 300 s) →
+`CONFIRMATION_EXPIRED`; too many rounds → `CONFIRMATION_ROUND_LIMIT`.
+Every one of these is a `complete` tool error stating the confirmation id
+and that **no apply task was created**; a fresh apply starts a fresh
+confirmation. An identical retry after a successful apply returns the
+same task (idempotency); any changed argument, plan, revision or key is
+refused.
+
+**Client fallback.** A client that cannot complete the flow does not get a
+weaker path: the operator applies via REST, `xinasctl <resource> <verb>
+--apply`, or the TUI, each with its own confirmation dialog and the
+`dangerous` flag.
+
+**Interoperability (targets, unverified until the runbook).** Claude
+Code ≥ 2.1.259 (expected: form + URL dialogs, exact state echo, new id
+per retry) and Codex ≥ 0.147 with `protocol_version = "2026-07-28"`
+(expected: form flow; a precise `-32021` if it does not declare URL mode)
+are the target clients; the runbook §5b step is the only proof, and the
+automated stand-in is the v2 SDK client (S15 §15.4). The Codex installed
+on the development Mac is 0.136.0 and needs upgrading first.
+
+**Approval commands.** `xinasctl mcp_confirmations list | get <id> |
+approve <id> --acknowledge "<phrase>" | decline <id> [--reason …]`
+(catalog entries with `mcp_exposed: false`, `min_role: admin`). Over the
+UDS the approver is `local:uds` and `approve` / `decline` are
+**break-glass**: refused unless `mcp.confirmation.allow_uds_approval:
+true` (default false), each use audited as `break_glass_used` — anyone
+with root or `xinas-admin` on the node, an agent included, can use them
+once enabled (S15 §3.5). Destructive records require the exact phrase
+`DATA MAY BE PERMANENTLY LOST`.
 
 ## 5. Read-route promotion (T4)
 
@@ -481,6 +559,13 @@ the retired daemon's config, and is untouched by this reconciliation.
 ADR-0010); there is no `xinas-mcp` binary. The screen's Claude Code
 registration hint uses `… -- ssh -T root@<ip> xinas-mcp-stdio`.
 
+**Confirmation settings (S15).** `mcp.confirmation.*` and
+`state.confirmationKeyPath` are api-config keys the screen does **not**
+edit in this slice; its in-place writes already preserve unknown `mcp.*`
+keys, so they survive a token or transport change. A "pending MCP
+approvals" screen is deferred (`docs/TODO.md`); approval is done on the
+web page, over REST, or with `xinasctl` (§4.1).
+
 ## 7. e2e parity scenarios (T15)
 
 1. **Same plan everywhere:** one share spec via REST, MCP tool call,
@@ -501,6 +586,22 @@ registration hint uses `… -- ssh -T root@<ip> xinas-mcp-stdio`.
    stub result WITH the `CONFIG_HISTORY_NOT_INTEGRATED` warning.
 6. **stdio adapter:** spawn `xinas-mcp-stdio` against the harness api;
    tools/list + a read call succeed under UDS peer trust.
+7. **Confirmation parity (S15):** with `mcp.allow_apply: true`, the same
+   share update via REST applies directly, via `xinasctl --apply` applies
+   directly, and via a modern MCP client returns `input_required` first;
+   after the form accept all three produce a task with the same
+   `plan_hash`, and the MCP audit trail shows exactly one `http.*` row plus
+   the `mcp.confirmation.*` lifecycle rows.
+8. **Destructive parity (S15):** `filesystems.delete` via MCP returns a
+   URL elicitation; a *different* admin token approves it over REST
+   (`POST /mcp/confirmations/{id}/approve` with the acknowledgement
+   phrase); the MCP retry creates the task; `dangerous: true` was still
+   required. The same via `xinasctl … approve` over the UDS is refused
+   with the default config and succeeds — with a `break_glass_used` audit
+   row — only when the harness config sets `allow_uds_approval: true`.
+9. **Legacy denial (S15):** the legacy SDK client's `mode: 'apply'` gets
+   `MCP_CONFIRMATION_UNSUPPORTED`; its reads, plan, `support.bundle` and
+   `tasks.cancel` are byte-for-byte unchanged from scenario 2–4.
 
 ## 8. Risks
 

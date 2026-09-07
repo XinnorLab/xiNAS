@@ -24,6 +24,20 @@ info:
     transports for reads and plans; MCP applies a post-RBAC gate that
     denies mutating tools unless `mcp.allow_apply: true` is configured.
 
+    **MCP apply confirmation (S15, ADR-0010 amendment).** After the
+    `mcp.allow_apply` gate, every MCP `mode=apply` additionally requires a
+    human confirmation carried by an MCP `2026-07-28` Multi Round-Trip
+    Request; destructive plans are approved out of band through the
+    `/mcp/confirmations` routes. `ApplyRequest` is unchanged — no
+    confirmation field exists in this contract, and none may be added to a
+    public request body. The MCP dispatcher forwards the confirmation id on
+    the loopback-only header `X-Xinas-Confirmation`, which — like
+    `X-Xinas-Forwarded-Principal`, `X-Xinas-Forwarded-Role` and
+    `X-Xinas-Client-Type` — is honored only when the request carries the
+    api's ephemeral in-process loopback bearer and is ignored (and logged)
+    from every external caller. REST, `xinasctl` and TUI applies are not
+    affected. Contract: `docs/control-path/s15-mcp-mrtr-confirmation-spec.md`.
+
   license:
     name: Proprietary
     identifier: LicenseRef-Xinnor-Internal
@@ -63,6 +77,10 @@ tags:
     description: Observed local and NSS-resolved user accounts.
   - name: groups
     description: Observed local and NSS-resolved groups.
+  - name: mcp
+    description: >-
+      MCP apply confirmations (S15): the approval records behind MCP
+      `mode=apply`, for operators. Admin only; never exposed as MCP tools.
 
 # ---------------------------------------------------------------------------
 # Security
@@ -276,6 +294,11 @@ components:
         rollback_model:
           type: string
           enum: [non_disruptive, changing_access, destructive, unsupported]
+          description: |
+            The risk class of undoing this operation. This enum is the
+            only vocabulary: S15 normalized the providers that emitted
+            `reversible` / `executor_managed` and the plan engine refuses
+            any value outside it (S15 spec §3.2).
 
     Blocker:
       type: object
@@ -1429,11 +1452,137 @@ components:
           type: array
           items: { $ref: '#/components/schemas/ResourceRef' }
 
+    McpConfirmation:
+      description: |
+        S15 (ADR-0010 amendment): the durable approval record behind one MCP
+        `mode=apply`. Created by the MCP dispatcher before the client is asked
+        to confirm; decided in-band by the client (`mode: form`) or by an
+        operator on these routes / the approval page (`mode: url`); consumed
+        inside the same apply transaction that creates the task. It never
+        carries the `requestState` nonce, a bearer, or the loopback token.
+        Timestamps are ISO strings.
+      type: object
+      required:
+        - confirmation_id
+        - status
+        - mode
+        - principal
+        - role
+        - tool_name
+        - operation_kind
+        - plan_id
+        - plan_hash
+        - idempotency_key
+        - expected_revision
+        - risk_level
+        - rollback_model
+        - arguments_hash
+        - plan_document_hash
+        - round
+        - created_at
+        - expires_at
+        - correlation_id
+        - request_id
+        - node_id
+      properties:
+        confirmation_id:
+          type: string
+          description: 16 random bytes, base64url (22 chars); the approval-page path segment.
+        arguments_hash:
+          type: string
+          description: sha256 over the canonical `{ name, arguments }` of the MCP call the record is bound to.
+        plan_document_hash:
+          type: string
+          description: sha256 over the canonical persisted plan document at record creation.
+        status:
+          type: string
+          enum: [pending, approved, declined, cancelled, expired, consumed]
+        mode:
+          type: string
+          enum: [form, url]
+        principal: { type: string, description: The MCP principal that requested the apply. }
+        role:
+          type: string
+          enum: [viewer, operator, admin]
+        tool_name: { type: string, example: shares.update }
+        operation_kind: { type: string, example: share.update }
+        plan_id: { type: string, format: uuid }
+        plan_hash: { type: string }
+        idempotency_key: { type: string }
+        expected_revision: { type: integer, format: int64 }
+        risk_level:
+          type: string
+          enum: [non_disruptive, changing_access, destructive, unsupported_rollback]
+        rollback_model:
+          type: string
+          enum: [non_disruptive, changing_access, destructive, unsupported]
+        round:
+          type: integer
+          minimum: 1
+          maximum: 3
+          description: Current MRTR round; at most three per confirmation.
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        approved_at: { type: [string, "null"], format: date-time }
+        approved_by: { type: [string, "null"] }
+        approval_channel:
+          type: [string, "null"]
+          enum: [mcp_form, bearer, uds_break_glass, null]
+          description: |
+            The VERIFIED authentication channel of the deciding request,
+            derived from the auth middleware: the MCP client's form accept,
+            a REST bearer token, or UDS peer trust (only possible with
+            `mcp.confirmation.allow_uds_approval: true`, audited as
+            `break_glass_used`). Never taken from a client header.
+        approval_interface:
+          type: [string, "null"]
+          enum: [web, rest, null]
+          description: |
+            UNTRUSTED, self-reported UI label from the
+            `X-Xinas-Approval-Interface` header of the deciding request.
+            Informational only; no check reads it.
+        declined_at: { type: [string, "null"], format: date-time }
+        declined_by: { type: [string, "null"] }
+        decision_reason: { type: [string, "null"], maxLength: 512 }
+        consumed_at: { type: [string, "null"], format: date-time }
+        consumed_task_id: { type: [string, "null"], format: uuid }
+        expired_reason:
+          type: [string, "null"]
+          enum: [ttl, round_limit, plan_stale, revision_changed, restart_sweep, null]
+        correlation_id: { type: string }
+        request_id: { type: string, format: uuid }
+        node_id: { type: string, description: The api's `controller_id`. }
+        plan:
+          description: |
+            Only on `GET /mcp/confirmations/{id}`: the public projection of
+            the plan document persisted at plan time — byte-identical to the
+            `Plan` the requester received.
+          $ref: '#/components/schemas/Plan'
+        summary:
+          description: Only on `GET /mcp/confirmations/{id}`; the human-facing text the approval page shows.
+          type: object
+          properties:
+            message: { type: string }
+            consequences: { type: string }
+            rollback_limitation: { type: string }
+
+    McpConfirmationDecision:
+      description: |
+        Body of `POST /mcp/confirmations/{id}/approve` and `/decline`.
+        `acknowledge` is required on approve for `destructive` records
+        (`DATA MAY BE PERMANENTLY LOST`) and for `unsupported_rollback` /
+        `rollback_model: unsupported` records (`ROLLBACK IS NOT SUPPORTED`),
+        exactly and case-sensitively; ignored on decline.
+      type: object
+      properties:
+        acknowledge: { type: string }
+        reason: { type: string, maxLength: 512 }
+
     AuditEntry:
       type: object
       required: [kind, timestamp, node_id, principal, client_type, request_id]
       properties:
-        kind: { type: string, description: "e.g. http.POST./shares" }
+        kind: { type: string, description: "e.g. http.POST./shares; S15 lifecycle events use mcp.confirmation.<event>" }
         timestamp: { type: string, format: date-time }
         node_id: { type: string }
         principal: { type: string }
@@ -2516,6 +2665,13 @@ paths:
   # exit criterion). Exemptions with rationale: POST /support-bundle
   # (read-style diagnostic) and POST /tasks/{id}/cancel (emergency
   # stop cannot apply new state). REST callers are never gated here.
+  # S15 (ADR-0010 amendment): once the gate allows mode=apply, the MCP
+  # dispatcher additionally requires a human confirmation (an MCP
+  # 2026-07-28 Multi Round-Trip Request) bound to the plan, and the task
+  # engine verifies + consumes it inside the apply transaction for
+  # client_type=mcp only. The same two exemptions apply. Operators act on
+  # the records through /mcp/confirmations below; see
+  # docs/control-path/s15-mcp-mrtr-confirmation-spec.md.
   /health:
     get:
       tags: [health]
@@ -3115,4 +3271,183 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { $ref: '#/components/responses/Conflict' }
         '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  # =========================================================================
+  # MCP apply confirmations (S15, ADR-0010 amendment)
+  # =========================================================================
+  # Operator-facing view of the approval records behind MCP mode=apply.
+  # Admin only. The matching catalog entries carry mcp_exposed: false, so
+  # none of these is ever an MCP tool — a model cannot approve its own
+  # request. The approval page (GET /mcp/approvals/{id}, HTML, outside
+  # /api/v1) is a thin client of these routes.
+  /mcp/confirmations:
+    get:
+      tags: [mcp]
+      operationId: listMcpConfirmations
+      summary: List MCP apply confirmations (admin).
+      description: |
+        Newest first. `status` and `principal` filter; `limit` defaults to
+        100 and is capped at 1000. Records carry no plan document here —
+        fetch one by id for the plan and the human-facing summary.
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, approved, declined, cancelled, expired, consumed]
+        - in: query
+          name: principal
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+      responses:
+        '200':
+          description: OK (result is McpConfirmation[], newest first)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: array
+                        items: { $ref: '#/components/schemas/McpConfirmation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /mcp/confirmations/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    get:
+      tags: [mcp]
+      operationId: getMcpConfirmation
+      summary: Get one MCP apply confirmation with its stored plan (admin).
+      description: |
+        Returns the record plus `plan` (the public projection of the plan
+        document persisted at plan time — exactly what the requester saw)
+        and `summary` (the generated human-facing text). Emits the
+        `mcp.confirmation.viewed` audit event.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/McpConfirmation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /mcp/confirmations/{id}/approve:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    post:
+      tags: [mcp]
+      operationId: approveMcpConfirmation
+      summary: Approve a pending URL-mode confirmation (admin, out of band).
+      description: |
+        Guarded transition `pending → approved`. The approver must satisfy
+        `mcp.confirmation.approver_policy` (default `distinct_principal`:
+        role admin and a principal different from the requester's). A UDS
+        peer-trust decision is break-glass: refused unless
+        `mcp.confirmation.allow_uds_approval: true` (default false) and
+        then audited as `break_glass_used` — otherwise `CONFLICT` with
+        `details.reason: approver_policy`. The plan must also have been
+        created by the requesting MCP principal (S15 §5.3). A
+        record that is not `pending` answers `CONFLICT` `not_pending`; a
+        `mode: form` record answers `CONFLICT` `form_mode` (form acceptance
+        comes from the MCP client, not from here). Destructive and
+        unsupported-rollback records require the exact `acknowledge`
+        phrase (`INVALID_ARGUMENT` otherwise). Approval does not extend the
+        record's TTL and creates no task: the MCP client's retry consumes
+        the record inside the apply transaction.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/McpConfirmationDecision' }
+      responses:
+        '200':
+          description: OK (the updated record)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/McpConfirmation' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /mcp/confirmations/{id}/decline:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    post:
+      tags: [mcp]
+      operationId: declineMcpConfirmation
+      summary: Decline a pending or approved confirmation (admin).
+      description: |
+        Guarded transition `pending | approved → declined`. Same approver
+        policy as approve. A record already terminal answers `CONFLICT`
+        `not_pending`. The MCP client's next retry receives
+        `CONFIRMATION_DECLINED`; nothing is mutated.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/McpConfirmationDecision' }
+      responses:
+        '200':
+          description: OK (the updated record)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result: { $ref: '#/components/schemas/McpConfirmation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/Internal' }
+
+  /metrics:
+    get:
+      tags: [system]
+      operationId: getMetrics
+      summary: Prometheus text exposition of api-internal counters (S15).
+      description: |
+        `text/plain; version=0.0.4`. Today the series are the
+        `xinas_mcp_confirmation*` counters, gauge and histogram defined in
+        `s15-mcp-mrtr-confirmation-spec.md` §12.2; no label ever carries a
+        principal, an id, a token or a `requestState`. Not an envelope —
+        this is the one non-JSON, non-stream read in the API.
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '500': { $ref: '#/components/responses/Internal' }

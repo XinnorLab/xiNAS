@@ -261,6 +261,10 @@ function usage(): string {
     'flags: --socket <path> | --url <http://h:p> --token <tok> | --json |',
     '       --plan | --apply | --spec <json> | -f <file> | --wait | --dangerous',
   );
+  lines.push(
+    '',
+    'approvals: xinasctl mcp_confirmations list|get <id>|approve <id> --acknowledge "<phrase>"|decline <id> [--reason ...]',
+  );
   return lines.join('\n');
 }
 

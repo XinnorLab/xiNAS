@@ -76,6 +76,8 @@ export async function buildTestApp(): Promise<TestSetup & { cleanup(): Promise<v
 export const ADMIN_TOKEN = 'Bearer tok-admin';
 export const OPERATOR_TOKEN = 'Bearer tok-operator';
 export const VIEWER_TOKEN = 'Bearer tok-viewer';
+/** A SECOND, distinct admin principal (S15 §9.2 distinct_principal cases). */
+export const ADMIN2_TOKEN = 'Bearer tok-admin2';
 
 /** Seed a singleton Cluster object. */
 export function seedCluster(state: OpenedStateStore): void {
@@ -150,6 +152,10 @@ export function seedNfsProfile(state: OpenedStateStore): void {
 const MOCK_CONTROLLER_ID = '00000000-0000-0000-0000-000000000099';
 /** internal_agent bearer the mock agent posts observations with. */
 const MOCK_AGENT_TOKEN = 'internal-agent-tok-test';
+/** Same token, ready as an Authorization header (S15 Task 11 fix1, F9: RBAC
+ *  admits internal_agent as admin-rank at the route; the confirmation
+ *  service's own role check refuses it). */
+export const INTERNAL_AGENT_TOKEN = `Bearer ${MOCK_AGENT_TOKEN}`;
 /** Fast heartbeat interval so ticks fire within a test's lifetime. */
 const MOCK_HEARTBEAT_INTERVAL_MS = 200;
 
@@ -225,79 +231,42 @@ export interface MockAgentSetup {
   mockAgent: MockAgentHandle;
   /** The wired S2 engines — exposed so tests can seed/inspect tasks directly (S10). */
   tasks: TaskEngines;
+  /**
+   * The full ApiContext `createApp` was built from — exposed so tests can
+   * reach `ctx.mcpConfirmations` (the ConfirmationService instance the
+   * routes dispatch through) directly, e.g. to exercise `operatorDecide`
+   * for a `local:uds` caller (S15 §9.2), which supertest cannot simulate.
+   */
+  ctx: ApiContext;
   teardown(): Promise<void>;
 }
 
+/** The bare UDS mock-agent surface `startMockAgentServer` returns — no
+ *  HeartbeatTracker/TaskEngines attached (those are `buildTestAppWithMockAgent`'s job). */
+export interface MockAgentServer {
+  /** `null` simulates "the agent hasn't answered yet" — agent.health gets no reply. */
+  respondToHealth(payload: MockAgentHealth | null): void;
+  respondToTaskBegin(reply: MockTaskBeginReply): void;
+  taskBeginCallCount(): number;
+  lastTaskBeginParams(): Record<string, unknown> | undefined;
+  /** Closes the UDS listener, destroying any live connections first (idempotent). */
+  close(): Promise<void>;
+}
+
 /**
- * Build an app wired to a real mock-agent UDS server plus a started
- * HeartbeatTracker. Unlike buildTestApp(), the tracker here uses the
- * production createAgentHealthProbe() pointed at the mock socket, so the
- * tick loop performs real JSON-RPC-over-UDS round-trips and heartbeat state
- * transitions can be exercised end-to-end.
- *
- * Caller MUST call teardown() — it stops the tracker tick (so the runner
- * doesn't hang), closes the mock server, closes the state store, and removes
- * the temp dir.
+ * Boot a bare UDS JSON-RPC mock agent (S15 T10): answers `agent.health` and
+ * `task.begin` exactly like the fixture `buildTestAppWithMockAgent` wires up,
+ * but with no HeartbeatTracker/TaskEngines/app attached — for tests that need
+ * a real agent socket behind a REAL server (`startServer()`, not the
+ * in-process test app) so a dispatched apply's `task.begin` has somewhere to
+ * land.
  */
-export async function buildTestAppWithMockAgent(
-  opts: { maxInflight?: number } = {},
-): Promise<MockAgentSetup> {
-  const dir = mkdtempSync(join(tmpdir(), 'xinas-mock-agent-'));
-  const agentSockPath = join(dir, 'agent.sock');
-
-  const config: ApiConfig = {
-    controller_id: MOCK_CONTROLLER_ID,
-    listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
-    tokens: {
-      'tok-admin': { principal: 'admin:test', role: 'admin' },
-      'tok-operator': { principal: 'operator:test', role: 'operator' },
-      'tok-viewer': { principal: 'viewer:test', role: 'viewer' },
-      [MOCK_AGENT_TOKEN]: { principal: 'agent:root', role: 'internal_agent' },
-    },
-    state: {
-      databasePath: join(dir, 'xinas.db'),
-      auditJsonlPath: join(dir, 'audit.jsonl'),
-    },
-  };
-
-  const state = await openStateStore({
-    databasePath: config.state.databasePath,
-    auditJsonlPath: config.state.auditJsonlPath,
-    nodeId: MOCK_CONTROLLER_ID,
-  });
-
-  // Seed cluster + node so /api/v1/system returns 200; the live agent state
-  // is supplied by the tracker's currentSnapshot(), not the seeded node.
-  seedCluster(state);
-  seedNode(state);
-
-  const tracker = new HeartbeatTracker({
-    intervalMs: MOCK_HEARTBEAT_INTERVAL_MS,
-    controllerId: MOCK_CONTROLLER_ID,
-    state,
-    agentSocketPath: agentSockPath,
-    healthProbe: createAgentHealthProbe(agentSockPath),
-  });
-
-  // Wire the S2 task engines + an agent RPC client pointed at the mock UDS so
-  // the reference route (T4) can dispatch task.begin end-to-end.
-  const tasks = buildTaskEngines({
-    state,
-    agentClient: createAgentRpcClient(agentSockPath),
-    ...(opts.maxInflight !== undefined ? { maxInflight: opts.maxInflight } : {}),
-  });
-
-  const ctx: ApiContext = { config, state, tracker, tasks };
-  const app = createApp(ctx);
-
-  // Boot the mock agent UDS server. It answers agent.health with the
-  // configured payload (empty/offline-ish until respondToHealth is called)
-  // and task.begin per the configured reply (default: accept).
+export async function startMockAgentServer(socketPath: string): Promise<MockAgentServer> {
   let currentHealthPayload: MockAgentHealth | null = null;
   let taskBeginReply: MockTaskBeginReply = { kind: 'accept' };
   let taskBeginCalls = 0;
   let lastTaskBeginParams: Record<string, unknown> | undefined;
-  // Track live server-side connections so teardown can force-destroy them; a
+  // Track live server-side connections so close() can force-destroy them; a
   // half-open UDS conn the client destroyed keeps server.close() from resolving.
   const agentConns = new Set<Socket>();
   let agentServer: Server | null = createServer((conn) => {
@@ -366,12 +335,9 @@ export async function buildTestAppWithMockAgent(
     });
     conn.on('error', () => conn.destroy());
   });
-  await new Promise<void>((resolve) => agentServer?.listen(agentSockPath, resolve));
+  await new Promise<void>((resolve) => agentServer?.listen(socketPath, resolve));
 
-  // Start the heartbeat tick (fires immediately, then every interval).
-  tracker.start();
-
-  const mockAgent: MockAgentHandle = {
+  return {
     respondToHealth(payload) {
       currentHealthPayload = payload;
     },
@@ -384,6 +350,101 @@ export async function buildTestAppWithMockAgent(
     lastTaskBeginParams() {
       return lastTaskBeginParams;
     },
+    async close() {
+      if (agentServer) {
+        const server = agentServer;
+        agentServer = null;
+        for (const c of agentConns) c.destroy();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    },
+  };
+}
+
+/**
+ * Build an app wired to a real mock-agent UDS server plus a started
+ * HeartbeatTracker. Unlike buildTestApp(), the tracker here uses the
+ * production createAgentHealthProbe() pointed at the mock socket, so the
+ * tick loop performs real JSON-RPC-over-UDS round-trips and heartbeat state
+ * transitions can be exercised end-to-end.
+ *
+ * Caller MUST call teardown() — it stops the tracker tick (so the runner
+ * doesn't hang), closes the mock server, closes the state store, and removes
+ * the temp dir.
+ */
+export async function buildTestAppWithMockAgent(
+  opts: { maxInflight?: number } = {},
+): Promise<MockAgentSetup> {
+  const dir = mkdtempSync(join(tmpdir(), 'xinas-mock-agent-'));
+  const agentSockPath = join(dir, 'agent.sock');
+
+  const config: ApiConfig = {
+    controller_id: MOCK_CONTROLLER_ID,
+    listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
+    tokens: {
+      'tok-admin': { principal: 'admin:test', role: 'admin' },
+      'tok-admin2': { principal: 'admin:two', role: 'admin' },
+      'tok-operator': { principal: 'operator:test', role: 'operator' },
+      'tok-viewer': { principal: 'viewer:test', role: 'viewer' },
+      [MOCK_AGENT_TOKEN]: { principal: 'agent:root', role: 'internal_agent' },
+    },
+    state: {
+      databasePath: join(dir, 'xinas.db'),
+      auditJsonlPath: join(dir, 'audit.jsonl'),
+    },
+  };
+
+  const state = await openStateStore({
+    databasePath: config.state.databasePath,
+    auditJsonlPath: config.state.auditJsonlPath,
+    nodeId: MOCK_CONTROLLER_ID,
+  });
+
+  // Seed cluster + node so /api/v1/system returns 200; the live agent state
+  // is supplied by the tracker's currentSnapshot(), not the seeded node.
+  seedCluster(state);
+  seedNode(state);
+
+  const tracker = new HeartbeatTracker({
+    intervalMs: MOCK_HEARTBEAT_INTERVAL_MS,
+    controllerId: MOCK_CONTROLLER_ID,
+    state,
+    agentSocketPath: agentSockPath,
+    healthProbe: createAgentHealthProbe(agentSockPath),
+  });
+
+  // Wire the S2 task engines + an agent RPC client pointed at the mock UDS so
+  // the reference route (T4) can dispatch task.begin end-to-end.
+  const tasks = buildTaskEngines({
+    state,
+    agentClient: createAgentRpcClient(agentSockPath),
+    ...(opts.maxInflight !== undefined ? { maxInflight: opts.maxInflight } : {}),
+  });
+
+  const ctx: ApiContext = { config, state, tracker, tasks };
+  const app = createApp(ctx);
+
+  // Boot the mock agent UDS server. It answers agent.health with the
+  // configured payload (empty/offline-ish until respondToHealth is called)
+  // and task.begin per the configured reply (default: accept).
+  const low = await startMockAgentServer(agentSockPath);
+
+  // Start the heartbeat tick (fires immediately, then every interval).
+  tracker.start();
+
+  const mockAgent: MockAgentHandle = {
+    respondToHealth(payload) {
+      low.respondToHealth(payload);
+    },
+    respondToTaskBegin(reply) {
+      low.respondToTaskBegin(reply);
+    },
+    taskBeginCallCount() {
+      return low.taskBeginCallCount();
+    },
+    lastTaskBeginParams() {
+      return low.lastTaskBeginParams();
+    },
     async postObservation(body) {
       await request(app)
         .post('/internal/v1/observed')
@@ -391,13 +452,8 @@ export async function buildTestAppWithMockAgent(
         .send(body);
     },
     async simulateOffline() {
-      currentHealthPayload = null;
-      if (agentServer) {
-        const server = agentServer;
-        agentServer = null;
-        for (const c of agentConns) c.destroy();
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-      }
+      low.respondToHealth(null);
+      await low.close();
       // Wait for a tick to fire against the now-closed socket so the probe
       // rejects (ECONNREFUSED/ENOENT) and the tracker records connect-refused.
       const deadline = Date.now() + MOCK_HEARTBEAT_INTERVAL_MS * 8 + 500;
@@ -414,15 +470,11 @@ export async function buildTestAppWithMockAgent(
     controllerId: MOCK_CONTROLLER_ID,
     heartbeatIntervalMs: MOCK_HEARTBEAT_INTERVAL_MS,
     tasks,
+    ctx,
     mockAgent,
     async teardown() {
       tracker.stop();
-      if (agentServer) {
-        const server = agentServer;
-        agentServer = null;
-        for (const c of agentConns) c.destroy();
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-      }
+      await low.close();
       await state.close();
       rmSync(dir, { recursive: true, force: true });
     },

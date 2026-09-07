@@ -160,7 +160,7 @@ export const poolCreateProvider: PlanProvider = {
       blockers,
       diff: { action: 'create', name, drives },
       risk_level: 'non_disruptive',
-      rollback_model: 'reversible',
+      rollback_model: 'non_disruptive',
       enriched_spec: { intent: 'create', name, drives },
     };
   },
@@ -218,7 +218,7 @@ export const poolModifyProvider: PlanProvider = {
       blockers,
       diff,
       risk_level: 'non_disruptive',
-      rollback_model: 'reversible',
+      rollback_model: 'non_disruptive',
       enriched_spec: intent,
     };
   },
@@ -255,7 +255,7 @@ export const poolDeleteProvider: PlanProvider = {
       blockers,
       diff: { action: 'delete', name },
       risk_level: 'non_disruptive',
-      rollback_model: 'reversible',
+      rollback_model: 'non_disruptive',
       enriched_spec: { intent: 'delete', name },
     };
   },
