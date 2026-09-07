@@ -171,7 +171,9 @@ On a scratch node (or after `./uninstall.sh`):
   over the UDS as root (peer trust, no token).
 - [ ] MCP exit criterion on hardware: a tool call with `mode=apply`
   → `MCP_APPLY_DISABLED`; flip `mcp.allow_apply: true`, restart the
-  api, same call plans→applies→task success; flip back.
+  api, same call plans→applies→task success; flip back. (A confirmable
+  tool's apply now stops at the S15 MRTR confirmation gate first — see
+  §5i.)
 - [ ] TUI parity: create a share, edit an interface IP, and run the
   RAID delete teardown from the TUI — every step should appear as
   tasks in `xinasctl tasks list` with plan/apply audit rows
@@ -413,6 +415,45 @@ initialization on a scratch array → `raid.operation.started` and the
 
 Until both product rows are filled, the release notes state the
 limitation and point at the polling fallback (spec §16).
+
+## 5i. S15 — MCP apply confirmation
+
+*Spec: [s15-mcp-mrtr-confirmation-spec.md](s15-mcp-mrtr-confirmation-spec.md)
+§14.4 (target clients and expected behavior).* The automated suites
+(`mcp-confirmation.test.ts` against the hand-rolled wire format,
+`sdk-v2-client.test.ts` against the released `@modelcontextprotocol/client`
+2.0.0) prove the confirmation contract end to end, including the client's
+automatic `input_required` round-trip; this section is the target-client
+verification §14.4 requires before the gate counts as proven on hardware.
+
+- [ ] **S15 MCP confirmation (form) — this step is the verification of
+  the target-client behavior in S15 §14.4; nothing before it counts as
+  proof.** With `mcp.allow_apply: true`, from Claude Code ≥ 2.1.259
+  registered against `xinas-mcp-stdio` as a **non-root** account that is
+  not in `xinas-admin` (S15 §3.5): plan a
+  share update, then apply — Claude Code shows the xiNAS form (node,
+  operation, risk, diff, expiry); pick APPLY → the task runs; pick Decline
+  → `CONFIRMATION_DECLINED` and no task. The api journal shows the retry
+  arriving with a NEW JSON-RPC id and the exact `requestState`.
+- [ ] **S15 destructive (URL):** set `mcp.confirmation.approval_url_base`
+  (https, or `http://127.0.0.1:<port>` when testing on the node itself);
+  `filesystems.delete` with `dangerous: true` → Claude Code shows the
+  approval URL and asks consent; open it, load with a *different* admin
+  token, type `DATA MAY BE PERMANENTLY LOST`, approve → the client's retry
+  creates the task. Approving with the requester's own token → refused
+  (`approver_policy`). `xinasctl mcp_confirmations list --status pending`
+  works as root; `approve <id> --acknowledge "…"` as root is **refused**
+  with the default config (break-glass off) and succeeds — leaving a
+  `mcp.confirmation.break_glass_used` audit row — only after setting
+  `allow_uds_approval: true`; set it back to false afterwards.
+- [ ] **S15 Codex ≥ 0.147** with `protocol_version = "2026-07-28"`
+  (upgrade first — the development Mac has 0.136.0): the form flow
+  completes; a destructive apply without URL support fails with JSON-RPC
+  `-32021` before any mutation. Record the observed behavior against the
+  "expected" rows of S15 §14.4.
+- [ ] Audit (`/var/log/xinas/audit.jsonl`): `mcp.confirmation.requested`,
+  `…approved` (URL), `…consumed`, `…apply_task_created` rows plus exactly
+  one `http.*` row for the apply; `GET /api/v1/metrics` shows the counters.
 
 ## 6. Cross-cutting
 

@@ -155,35 +155,6 @@ decided, tested behavior for a failed pools read (degraded banner, not an
 abort). The `disk_in_spare_pool` blocker stays as the preflight backstop for
 REST/MCP/CLI clients.
 
-## MCP — the modern-era SDK client tests (acceptance criteria 10 and 11) are unwritten
-
-*Deferred 2026-08-24, from the `server/discover` / modern-protocol-era change
-(`docs/control-path/s14-mcp-modern-era-spec.md`).*
-
-**What is missing.** Two of the requirement's acceptance criteria are
-client-side: the official TypeScript SDK must select the modern era in
-`versionNegotiation: 'auto'` mode (#10), and must connect without legacy
-fallback when pinned to `2026-07-28` (#11). Neither test exists.
-
-**What the code does instead.** The server implements the modern era in full
-and is exercised by hand-rolled JSON-RPC clients that speak the exact wire
-format those SDK modes produce — stateless `server/discover`, then stateless
-`tools/list` / `tools/call` carrying the `_meta` envelope. Criterion #12
-(SDK in legacy mode) is covered by the existing real-SDK integration test.
-
-**Why it was cut.** No published `@modelcontextprotocol/sdk` implements the
-modern era. Version 1.30.0 — the latest on npm as of 2026-08-24 — still has
-`LATEST_PROTOCOL_VERSION = '2025-11-25'` and contains no occurrence of
-`server/discover`, `2026-07-28`, or `versionNegotiation` anywhere in its
-published `dist/`. There is no `auto` mode to exercise and no version to pin
-to, so the two tests cannot be written against the real SDK at all.
-
-**What done looks like.** `@modelcontextprotocol/sdk` is bumped to the first
-release carrying modern-era support, and `mcp-integration.test.ts` gains two
-cases: a real SDK client in `auto` mode against the api reports a negotiated
-`2026-07-28` and issues no `initialize`; a client pinned to `2026-07-28`
-connects without raising `SdkError(EraNegotiationFailed)`.
-
 ## Installer — the design's secondary repair path for a tree dirtied outside the update flow was never built
 
 *Deferred 2026-08-19, from the preset-overlay change
@@ -763,3 +734,26 @@ implementation that tests assert against; nothing renders it.
 **Why it was cut.** `lib/metrics.ts` / `GET /api/v1/metrics` are S15 Task
 13, unlanded on the S17 base. **Done** = a `RegistryMetrics` adapter
 registering the same names on the S15 registry.
+
+## MCP — the TUI "pending approvals" screen is deferred
+
+*Deferred 2026-09-04, from the S15 MCP confirmation change
+(`docs/control-path/s15-mcp-mrtr-confirmation-spec.md` §9.5, decision D-09).*
+
+**What is missing.** A Management screen in `xinas_menu` listing pending
+MCP confirmations (`GET /api/v1/mcp/confirmations?status=pending`) with
+approve / decline actions, the plan summary, and the typed acknowledgement
+phrase for destructive records.
+
+**What the code does instead.** Operators approve on the web page
+(`/mcp/approvals/{id}`), over REST, or with `xinasctl mcp_confirmations
+approve <id> --acknowledge "…"` over the UDS; all three hit the same routes
+and approver policy.
+
+**Why it was cut.** Three channels already cover approval; the TUI screen is
+additive UI and would have doubled the review surface of a security change.
+
+**What done looks like.** `xinas_menu/screens/mcp_approvals.py` driven by
+`control_client.py`, showing exactly the fields the web page shows (S15
+§9.3), refusing to approve without the phrase, and a pytest against the
+stub server for approve / decline / policy refusal rendering.
