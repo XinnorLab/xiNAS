@@ -13,9 +13,12 @@
  * `xinas://events/<feed>{?after,limit}` family.
  */
 
-import { FEEDS, FEED_URI_PREFIX, type Feed } from '../events/types.js';
+import { FEEDS, FEED_URI_PREFIX, type Feed, feedOfBaseUri } from '../events/types.js';
 import { INVALID_PARAMS, McpProtocolError } from './confirmation/errors.js';
 import type { McpIdentity } from './dispatch.js';
+
+/** Re-exported so the listen path resolves feeds through the same module as reads. */
+export { feedOfBaseUri };
 
 export interface McpResource {
   uri: string;
@@ -203,11 +206,4 @@ export function parseFeedUri(uri: string): FeedUriParts {
     }
   }
   return out;
-}
-
-/** The base (subscribable) feed URI, or null. */
-export function feedOfBaseUri(uri: string): Feed | null {
-  if (!uri.startsWith(FEED_URI_PREFIX)) return null;
-  const rest = uri.slice(FEED_URI_PREFIX.length);
-  return (FEEDS as readonly string[]).includes(rest) ? (rest as Feed) : null;
 }
