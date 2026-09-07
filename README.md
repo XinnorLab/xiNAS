@@ -200,29 +200,38 @@ python3 -m xinas_history gc run                 # Garbage collect old snapshots
 ## Control Path (REST · CLI · MCP)
 
 `xiNAS-MCP/` is the TypeScript control path. A single declarative catalog
-(`src/api/mcp/catalog.ts`, 62 operations) drives three clients at once — the
+(`src/api/mcp/catalog.ts`, 68 operations) drives three clients at once — the
 REST router under `/api/v1`, the generated `xinasctl` command tree, and the MCP
 `tools/list` dispatcher — so the three surfaces cannot drift apart.
 
 The standalone MCP server was retired in favour of an endpoint inside
 `xinas-api.service` (ADR-0010): the Streamable HTTP `/mcp` route plus the
-`xinas-mcp-stdio` adapter used by Claude Code and other MCP clients. **61** of
-the 62 catalog operations are exposed as MCP tools (the binary support-bundle
-download is CLI-only), across 23 namespaces:
+`xinas-mcp-stdio` adapter used by Claude Code and other MCP clients. **62** of
+the 68 catalog operations are exposed as MCP tools. Binary download/metrics
+surfaces stay CLI/HTTP-only, and four approval operations are deliberately
+hidden so a model cannot approve its own request. The tools span 24 namespaces:
 
 `system` · `arrays` · `pools` · `disks` · `filesystems` · `shares` ·
 `export_groups` · `service_ips` · `network` · `users` · `groups` · `quotas` ·
 `nfs_profiles` · `nfs_idmap` · `nfs_sessions` · `health` · `drift` · `tasks` ·
-`config_history` · `audit` · `mail` · `auth` · `support`
+`config_history` · `audit` · `mail` · `auth` · `support` · `mcp_apps`
 
 Mutations use a plan/apply contract (`mode: plan` returns a diff, `mode: apply`
 executes it against an expected `state_revision`), guarded by per-operation RBAC
 (`viewer` / `operator` / `admin`), idempotency keys, and audit logging. MCP
 `mode=apply` is additionally gated by `mcp.allow_apply` in
-`/etc/xinas-api/config.json` — **off by default**.
+`/etc/xinas-api/config.json` — **off by default** — and requires S15 MRTR human
+confirmation.
+
+MCP Apps-capable hosts can invoke `mcp_apps.raid_create` to render the S18 RAID
+Create wizard inline. It loads the observed inventory, offers canonical RAID
+level/strip/block choices and clickable disk selection, requests the existing
+`arrays.create` plan, then hands the reviewed apply to the host-owned MRTR
+confirmation flow.
 
 Contracts: [docs/control-path/adr/0010-clients-mcp-cli-tui.md](docs/control-path/adr/0010-clients-mcp-cli-tui.md),
 [docs/control-path/s8-clients-spec.md](docs/control-path/s8-clients-spec.md),
+[docs/control-path/s18-mcp-raid-create-app-spec.md](docs/control-path/s18-mcp-raid-create-app-spec.md),
 and the OpenAPI schema [docs/control-path/api-v1.yaml](docs/control-path/api-v1.yaml).
 The spec set under `docs/MCP/` describes the retired standalone server and is
 kept for reference only.

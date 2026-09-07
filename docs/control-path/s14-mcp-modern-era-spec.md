@@ -46,8 +46,10 @@ to the other.
 
 ### Out of scope
 
-- MCP resources and prompts (still deferred by ADR-0010) — and therefore
-  **not advertised** in `capabilities`.
+- General-purpose MCP data resources and prompts remain deferred by ADR-0010.
+  **S18 amendment:** one immutable MCP Apps UI resource is implemented and
+  advertised; see `s18-mcp-raid-create-app-spec.md`. This exception does not
+  open a generic resource surface.
 - The MCP `tasks` extension (`io.modelcontextprotocol/tasks`). xiNAS has its
   own asynchronous task envelope over REST (`s2-task-envelope-spec.md`) plus
   the `next` hint in tool results; that is *not* the MCP tasks extension and
@@ -150,20 +152,18 @@ versions remain reachable only through `initialize`.
 
 - `tools: {}` — present whenever the catalog exposes at least one
   MCP-visible entry (`binary !== true`), which it always does.
-- `resources`, `prompts` — **absent.** No handler exists (ADR-0010 defers
-  them), and requirement §2.4 forbids advertising a capability whose methods
-  are unavailable.
-- `extensions` — **absent** while no MCP extension is implemented. When one
-  lands it goes under `capabilities.extensions`; there is never a top-level
+- `resources: {}` — added by S18 because `resources/list` and
+  `resources/read` serve the immutable RAID Create App View. General-purpose
+  data resources remain deferred.
+- `prompts` — **absent.** No handler exists.
+- `extensions.io.modelcontextprotocol/ui` — added by S18 with the supported
+  `text/html;profile=mcp-app` MIME type. There is still never a top-level
   `result.extensions`.
 
 > **Deviation from the requirement document's example.** Requirement §2.3's
-> sample response advertises `resources: {}` and
-> `extensions: {"io.modelcontextprotocol/tasks": {}}`. xiNAS implements
-> neither, so emitting them would violate the requirement's own normative
-> rule in §2.4 ("MUST NOT advertise a capability if the corresponding methods
-> are unavailable"). The normative rule wins; the example is treated as
-> illustrative.
+> sample response advertises the Tasks extension. xiNAS still does not
+> implement that extension. The `resources` and UI-extension claims added by
+> S18 are different: both have matching handlers and therefore satisfy §2.4.
 
 **`_meta["io.modelcontextprotocol/serverInfo"]`** — `{name, version}`, the
 **same constant** the legacy `initialize` reports. One server, one identity
@@ -343,7 +343,7 @@ loopback request produces.
 | 4 | all of `resultType`, `supportedVersions`, `capabilities`, `ttlMs`, `cacheScope`, `serverInfo`, `instructions` | `mcp-discover.test.ts` |
 | 5 | `supportedVersions` contains `2026-07-28` | `mcp-discover.test.ts` (and asserts no legacy version leaks in) |
 | 6 | extensions under `capabilities.extensions`, never top-level | `mcp-discover.test.ts` |
-| 7 | advertised capabilities match available handlers | `mcp-discover.test.ts` — `resources`/`prompts` absent, `tools` present iff the catalog has MCP-visible entries |
+| 7 | advertised capabilities match available handlers | `mcp-discover.test.ts` — `tools` and S18 `resources` have handlers; `prompts` remains absent |
 | 8 | two calls: no state change, semantically equal | `mcp-discover.test.ts` |
 | 9 | direct modern operational request without discovery | `mcp-discover.test.ts` — stateless `tools/list` + `tools/call` |
 | 10 | official SDK selects modern in `auto` mode | `@modelcontextprotocol/client` 2.0.0 in `versionNegotiation: { mode: 'auto' }` — S15 §15.4 (was "not implementable" until the v2 packages shipped; see below) |

@@ -201,11 +201,15 @@ describe('mcp modern era — server/discover (S14)', () => {
       expect(typeof result.capabilities.extensions).toBe('object');
     }
 
-    // tools are served; resources/prompts are not implemented (ADR-0010)
-    // and must therefore not be advertised.
+    // S18 serves one immutable MCP App resource; prompts remain deferred.
     expect(result.capabilities.tools).toBeDefined();
-    expect(result.capabilities.resources).toBeUndefined();
+    expect(result.capabilities.resources).toBeDefined();
     expect(result.capabilities.prompts).toBeUndefined();
+    expect(result.capabilities.extensions).toMatchObject({
+      'io.modelcontextprotocol/ui': {
+        mimeTypes: ['text/html;profile=mcp-app'],
+      },
+    });
 
     // The claim is checked, not asserted: a tools capability must mean
     // tools/list actually answers.
@@ -216,6 +220,43 @@ describe('mcp modern era — server/discover (S14)', () => {
     );
     const tools = (list.body.result as { tools: Array<{ name: string }> }).tools;
     expect(tools.length).toBeGreaterThan(0);
+  });
+
+  it('lists and reads the RAID Create App resource statelessly', async () => {
+    const list = await rpc(
+      port,
+      { jsonrpc: '2.0', id: 'r-list', method: 'resources/list', params: { _meta: META } },
+      { token: 'tok-admin' },
+    );
+    const listResult = list.body.result as {
+      resultType?: string;
+      resources: Array<{ uri: string; mimeType?: string }>;
+    };
+    expect(listResult.resultType).toBe('complete');
+    expect(listResult.resources).toContainEqual(
+      expect.objectContaining({
+        uri: 'ui://xinas/raid-create',
+        mimeType: 'text/html;profile=mcp-app',
+      }),
+    );
+
+    const read = await rpc(
+      port,
+      {
+        jsonrpc: '2.0',
+        id: 'r-read',
+        method: 'resources/read',
+        params: { _meta: META, uri: 'ui://xinas/raid-create' },
+      },
+      { token: 'tok-admin' },
+    );
+    const readResult = read.body.result as {
+      resultType?: string;
+      contents: Array<{ text?: string; mimeType?: string }>;
+    };
+    expect(readResult.resultType).toBe('complete');
+    expect(readResult.contents[0]?.mimeType).toBe('text/html;profile=mcp-app');
+    expect(readResult.contents[0]?.text).toContain('<!doctype html>');
   });
 
   // AC8

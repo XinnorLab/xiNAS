@@ -632,7 +632,7 @@ components:
             block_size: { type: [integer, "null"], description: "512 or 4096 when known; null when not yet probed." }
             group_size:
               type: [integer, "null"]
-              description: "Drives per group. Required for raid50/60/70; 2-32; member count must divide evenly."
+              description: "Drives per group. Required for raid50/60/70; 4-32 (6-32 for raid70); member count must divide evenly."
             synd_cnt:
               type: [integer, "null"]
               description: "Syndrome count (the m of n+m). Required for level n+m; 4-32."
@@ -1933,6 +1933,92 @@ paths:
   # =========================================================================
   # Storage — disks, arrays, filesystems
   # =========================================================================
+  /mcp/apps/raid-create:
+    get:
+      tags: [storage]
+      operationId: getMcpRaidCreateAppConfig
+      summary: Get the server-owned configuration for the MCP RAID Create App.
+      description: >-
+        Read-only bootstrap data for `mcp_apps.raid_create`. Values are derived
+        from the same xiRAID constraint tables used by plan and apply validation.
+        The endpoint does not create a plan, task, confirmation, or storage state.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      result:
+                        type: object
+                        required:
+                          - app
+                          - resource_uri
+                          - levels
+                          - constraints
+                          - strip_sizes_kib
+                          - block_sizes
+                          - defaults
+                          - tools
+                        properties:
+                          app: { type: string, const: raid_create }
+                          resource_uri: { type: string, const: 'ui://xinas/raid-create' }
+                          levels:
+                            type: array
+                            items:
+                              type: string
+                              enum: [raid0, raid1, raid5, raid6, raid7, raid10, raid50, raid60, raid70, "n+m"]
+                          constraints:
+                            type: object
+                            additionalProperties:
+                              type: object
+                              required:
+                                - min_drives
+                                - even_members
+                                - needs_group_size
+                                - group_size_min
+                                - group_size_max
+                                - needs_synd_cnt
+                                - synd_cnt_min
+                                - synd_cnt_max
+                              properties:
+                                min_drives: { type: integer }
+                                even_members: { type: boolean }
+                                needs_group_size: { type: boolean }
+                                group_size_min: { type: integer }
+                                group_size_max: { type: integer }
+                                needs_synd_cnt: { type: boolean }
+                                synd_cnt_min: { type: integer }
+                                synd_cnt_max: { type: integer }
+                          strip_sizes_kib:
+                            type: array
+                            items: { type: integer, enum: [16, 32, 64, 128, 256] }
+                          block_sizes:
+                            type: array
+                            items: { type: integer, enum: [512, 4096] }
+                          defaults:
+                            type: object
+                            required: [level, strip_size_kib, block_size]
+                            properties:
+                              level: { type: string, const: raid6 }
+                              strip_size_kib: { type: integer, const: 128 }
+                              block_size: { type: integer, const: 4096 }
+                          name:
+                            type: object
+                            properties:
+                              pattern: { type: string }
+                              reserved:
+                                type: array
+                                items: { type: string }
+                          tools:
+                            type: object
+                            additionalProperties: { type: string }
+        '401': { $ref: '#/components/responses/PermissionDenied' }
+        '500': { $ref: '#/components/responses/Internal' }
+
   /disks:
     get:
       tags: [storage]

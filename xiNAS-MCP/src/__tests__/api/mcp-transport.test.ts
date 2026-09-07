@@ -95,6 +95,14 @@ describe('mcp transport (S8 T7)', () => {
     const init = await rpc(port, INITIALIZE, { token: 'tok-admin' });
     expect(init.status).toBe(200);
     expect(init.session).toBeTruthy();
+    expect(init.body.result).toMatchObject({
+      capabilities: {
+        resources: {},
+        extensions: {
+          'io.modelcontextprotocol/ui': { mimeTypes: ['text/html;profile=mcp-app'] },
+        },
+      },
+    });
     const session = init.session as string;
 
     const list = await rpc(
@@ -122,6 +130,28 @@ describe('mcp transport (S8 T7)', () => {
     };
     expect(result.isError ?? false).toBe(false);
     expect(JSON.parse(result.content[0]?.text as string)).toHaveProperty('result');
+
+    const resources = await rpc(
+      port,
+      { jsonrpc: '2.0', id: 4, method: 'resources/list', params: {} },
+      { session },
+    );
+    expect(
+      (resources.body.result as { resources: Array<{ uri: string }> }).resources.map((r) => r.uri),
+    ).toContain('ui://xinas/raid-create');
+
+    const read = await rpc(
+      port,
+      {
+        jsonrpc: '2.0',
+        id: 5,
+        method: 'resources/read',
+        params: { uri: 'ui://xinas/raid-create' },
+      },
+      { session },
+    );
+    const content = (read.body.result as { contents: Array<{ text?: string }> }).contents[0];
+    expect(content?.text).toContain('<!doctype html>');
   });
 
   it('TCP without a bearer → 401; unknown bearer → 401', async () => {

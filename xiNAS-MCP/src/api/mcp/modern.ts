@@ -22,6 +22,7 @@ import { McpProtocolError } from './confirmation/errors.js';
 import { parseMrtrParams } from './confirmation/policy.js';
 import { buildDiscoverResult, isModernProtocolVersion } from './discover.js';
 import { isInputRequired } from './results.js';
+import { RAID_CREATE_APP_URI, listAppResources, readAppResource } from './apps.js';
 
 /** JSON-RPC 2.0 reserved codes used on this path. */
 const METHOD_NOT_FOUND = -32601;
@@ -115,6 +116,29 @@ export async function handleModernRequest(
           id: rpcId,
           result: { resultType: 'complete', tools: listTools() },
         };
+
+      case 'resources/list':
+        return {
+          jsonrpc: '2.0',
+          id: rpcId,
+          result: { resultType: 'complete', resources: listAppResources() },
+        };
+
+      case 'resources/read': {
+        const uri = (msg.params ?? {}).uri;
+        if (typeof uri !== 'string' || uri !== RAID_CREATE_APP_URI) {
+          return {
+            jsonrpc: '2.0',
+            id: rpcId,
+            error: { code: -32602, message: `unknown MCP App resource: ${String(uri)}` },
+          };
+        }
+        return {
+          jsonrpc: '2.0',
+          id: rpcId,
+          result: { resultType: 'complete', ...(await readAppResource(uri)) },
+        };
+      }
 
       case 'tools/call': {
         const params = (msg.params ?? {}) as {

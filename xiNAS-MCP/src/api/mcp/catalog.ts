@@ -17,6 +17,8 @@
  * routes land — the catalog only ever lists mounted routes.
  */
 
+import { RAID_CREATE_APP_URI } from './apps.js';
+
 export type Mutability = 'read' | 'plan_apply' | 'direct';
 export type MinRole = 'viewer' | 'operator' | 'admin';
 
@@ -57,6 +59,8 @@ export interface CatalogEntry {
   mcp_exposed?: boolean;
   /** S15: explicit opt-in for an entry that needs confirmation but fits neither shape. */
   confirmation?: 'required';
+  /** S18: optional MCP Apps View linked to this tool. */
+  ui?: { resourceUri: string; visibility?: Array<'model' | 'app'> };
 }
 
 const NO_INPUT: Record<string, unknown> = {
@@ -159,6 +163,13 @@ export const CATALOG: CatalogEntry[] = [
   // ── arrays (xiRAID) — RAID mutation is admin (legacy matrix) ──
   read('arrays.list', 'GET', '/arrays', 'List xiRAID arrays (observed state).'),
   read('arrays.get', 'GET', '/arrays/{id}', 'Get one xiRAID array.'),
+  read(
+    'mcp_apps.raid_create',
+    'GET',
+    '/mcp/apps/raid-create',
+    'Open the interactive xiRAID array creation wizard.',
+    { min_role: 'admin', ui: { resourceUri: RAID_CREATE_APP_URI } },
+  ),
   planApply('arrays.create', 'POST', '/arrays', 'Create a xiRAID array (plan/apply).', 'admin', [
     'xiraid.array.create',
   ]),

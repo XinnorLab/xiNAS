@@ -4,8 +4,7 @@
 > legacy protocol era. It additionally serves the modern era
 > (`server/discover`, no session) — see
 > [`../s14-mcp-modern-era-spec.md`](../s14-mcp-modern-era-spec.md). The
-> deferrals below (MCP resources and prompts) still hold, which is why
-> neither is advertised in the discovery capabilities.
+> The original deferral of MCP resources held through S15.
 >
 > **Amended by S15 (2026-09-04).** The apply gate below is no longer the
 > last word on MCP mutation: after `mcp.allow_apply` passes, every MCP
@@ -14,6 +13,12 @@
 > verifies and consumes that confirmation inside the apply transaction.
 > See §*Decision — MCP apply confirmation (S15)* below and
 > [`../s15-mcp-mrtr-confirmation-spec.md`](../s15-mcp-mrtr-confirmation-spec.md).
+>
+> **Amended by S18 (2026-09-04).** The resources deferral is lifted only for
+> immutable MCP Apps UI resources. `resources/list`, `resources/read`, and the
+> `io.modelcontextprotocol/ui` extension now serve the RAID Create App. Prompts
+> and general-purpose data resources remain deferred. See
+> [`../s18-mcp-raid-create-app-spec.md`](../s18-mcp-raid-create-app-spec.md).
 
 **Status:** accepted (2026-06-12). Implements ADR-0001's locked "MCP is
 a transport on the same Control API core" decision; extends ADR-0002
@@ -344,8 +349,9 @@ for `control_client.py` against a stub HTTP server.
 TUI pool screens (no API surface), SSE transport, audit/config-history
 backend integration (the degraded entries go live when the bridges
 land), removal of the read-only gRPC passthrough (tracked to the
-API gaining pools/mail/auth-settings resources), MCP resource/prompt
-capabilities (tools only in Phase 0). S15 adds: a TUI screen for pending
+API gaining pools/mail/auth-settings resources), general-purpose MCP data
+resources and prompts (S18 permits only immutable MCP Apps UI resources).
+S15 adds: a TUI screen for pending
 MCP approvals (the web page, REST and `xinasctl` cover approval; recorded
 in `docs/TODO.md`), and a key-rotation CLI for the `requestState` key
 ring (rotation is a documented file edit + restart).

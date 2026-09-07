@@ -17,6 +17,7 @@
  */
 
 import { CATALOG } from './catalog.js';
+import { MCP_UI_EXTENSION, listAppResources, mcpUiExtensionCapability } from './apps.js';
 
 /**
  * Modern protocol versions this server speaks, in order of preference.
@@ -67,16 +68,16 @@ export const INSTRUCTIONS = [
 /**
  * Capabilities, generated from the operational catalog.
  *
- * Only what is actually served is advertised (requirement §2.4). MCP
- * resources and prompts are deferred by ADR-0010, so they are absent rather
- * than empty. `extensions` is likewise omitted while no MCP extension is
- * implemented — note that xiNAS's own asynchronous task envelope is a REST
- * contract, NOT the `io.modelcontextprotocol/tasks` extension, and claiming
- * it here would be false.
+ * Only what is actually served is advertised (requirement §2.4). S18 adds one
+ * immutable UI resource and the stable MCP Apps extension; prompts remain
+ * deferred. xiNAS's own asynchronous task envelope is still a REST contract,
+ * NOT the `io.modelcontextprotocol/tasks` extension.
  */
 export function buildCapabilities(): Record<string, unknown> {
   const capabilities: Record<string, unknown> = {};
   if (CATALOG.some((e) => e.binary !== true && e.mcp_exposed !== false)) capabilities.tools = {};
+  if (listAppResources().length > 0) capabilities.resources = {};
+  capabilities.extensions = { [MCP_UI_EXTENSION]: mcpUiExtensionCapability() };
   return capabilities;
 }
 
