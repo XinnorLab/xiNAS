@@ -822,10 +822,16 @@ enable_nfs_rdma() {
     fi
 
     # Install mlnx-nfsrdma-dkms so rpcrdma is rebuilt against the OFED RDMA stack.
+    # Every `apt-get update` in this script passes --allow-releaseinfo-change:
+    # apt refuses (exit 100) a source whose release identity changed since the
+    # last fetch until someone confirms it, and NVIDIA's DOCA `latest` alias did
+    # that on 2026-08-20 under every client that had installed from it. Nobody
+    # is at the prompt here and signatures are verified either way
+    # (docs/Installer/spec.md §8.5).
     if ! dpkg -l mlnx-nfsrdma-dkms 2>/dev/null | awk '$1=="ii"{f=1} END{exit !f}'; then
         if command -v apt-get &>/dev/null; then
             if ! op_run "apt-get install mlnx-nfsrdma-dkms" \
-                bash -c "apt-get update -qq && apt-get install -y -qq mlnx-nfsrdma-dkms"; then
+                bash -c "apt-get update -qq --allow-releaseinfo-change && apt-get install -y -qq mlnx-nfsrdma-dkms"; then
                 op_end "" "Warning" \
                     "mlnx-nfsrdma-dkms not available. Verify the DOCA-Host apt source is enabled.\nTCP mounts still work." || true
                 return 1
@@ -967,7 +973,7 @@ This will install:
         info_box "Installing..." "Installing NFS client tools..."
 
         if command -v apt-get &>/dev/null; then
-            op_run "apt-get install nfs-common" bash -c "apt-get update -qq && apt-get install -y -qq nfs-common" || true
+            op_run "apt-get install nfs-common" bash -c "apt-get update -qq --allow-releaseinfo-change && apt-get install -y -qq nfs-common" || true
         elif command -v yum &>/dev/null; then
             op_run "yum install nfs-utils" yum install -y nfs-utils || true
         elif command -v dnf &>/dev/null; then
@@ -1795,7 +1801,7 @@ Proceed with installation?"; then
     if ! command -v ansible-playbook &>/dev/null; then
         info_box "Installing Ansible..." "Installing Ansible..."
         if command -v apt-get &>/dev/null; then
-            apt-get update -qq
+            apt-get update -qq --allow-releaseinfo-change
             apt-get install -y -qq ansible
         elif command -v yum &>/dev/null; then
             yum install -y ansible
@@ -2077,7 +2083,7 @@ install_gds() {
 
     local _pkg_ok=true
     if command -v apt-get &>/dev/null; then
-        op_run "apt-get install nvidia-gds" bash -c "apt-get update && apt-get install -y nvidia-gds" || _pkg_ok=false
+        op_run "apt-get install nvidia-gds" bash -c "apt-get update --allow-releaseinfo-change && apt-get install -y nvidia-gds" || _pkg_ok=false
     elif command -v yum &>/dev/null; then
         op_run "yum install nvidia-gds" yum install -y nvidia-gds || _pkg_ok=false
     elif command -v dnf &>/dev/null; then
@@ -3609,7 +3615,7 @@ Would you like to install kubectl?"; then
         elif command -v apt-get &>/dev/null; then
             curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg &>/dev/null
             echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
-            apt-get update -qq && apt-get install -y -qq kubectl
+            apt-get update -qq --allow-releaseinfo-change && apt-get install -y -qq kubectl
         else
             msg_box "Manual Install Required" "\
 Could not auto-install kubectl.

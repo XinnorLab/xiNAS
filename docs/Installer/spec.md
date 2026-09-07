@@ -512,12 +512,46 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
   **not** parse the hostname to recover the license hwkey or vice-versa —
   anything validating the license-to-host binding must read
   `xicli license show` directly.
+- **apt cache refresh with one retry.** The role refreshes the cache through
+  the apt module (`cache_valid_time: 3600`); if that fails, it retries once
+  with `apt-get update --allow-releaseinfo-change`, and any other cause fails
+  again with apt's own message. This is the first apt call of a run that the
+  TUI update starts with no bootstrap in front of it, and it runs before
+  `doca_ofed` can re-pin a source whose identity NVIDIA moved (§3.2, §8.5).
 
 ### 3.2 `doca_ofed` — NVIDIA DOCA-Host / OFED
 
 [defaults](../../collection/roles/doca_ofed/defaults/main.yml)
 
-- Repo: `https://linux.mellanox.com/public/repo/doca/latest/ubuntu<ver>/x86_64`.
+- Repo: `https://linux.mellanox.com/public/repo/doca/<doca_version>/ubuntu<ver>/x86_64`,
+  with `doca_version` **pinned to one release directory** — `3.4.0` as of
+  2026-09-07; the value lives in the role defaults and this spec does not fix
+  it. Never the `latest` alias, and not the `latest-<X.Y>-LTS` aliases either:
+  NVIDIA re-points them to each new DOCA-Host release without notice, and apt
+  refuses to follow a source whose release identity changed until an operator
+  confirms it ([apt-get(8)](https://manpages.ubuntu.com/manpages/noble/en/man8/apt-get.8.html),
+  `--allow-releaseinfo-change`, Ubuntu 24.04). **[observed]** On 2026-08-20
+  `doca/latest/ubuntu24.04` moved from `Suite: DOCA-HOST-3.4.0` /
+  `Codename: 3.4.0` to `DOCA-HOST-3.5.0` / `3.5.0` (its `InRelease`, read
+  2026-09-07). From then on every host that had installed from the alias
+  failed `apt-get update` with `E: Repository … changed its 'Codename' value
+  from '3.4.0' to '3.5.0'` (exit 100), and `prepare_system.sh` aborted the
+  install before Ansible ran. Pinned directories keep their identity (the
+  `3.4.0` directory still serves `Codename: 3.4.0`) and NVIDIA keeps them
+  published back to 1.0. Bumping DOCA is a deliberate change: edit
+  `doca_version` in both the server and the client role, test on hardware,
+  and commit with `Requires-Rebuild: doca_ofed`.
+- Sources file: the role **owns `/etc/apt/sources.list.d/mellanox-doca.list`
+  whole** (`copy`, content = the one pinned `deb` line) instead of adding a
+  line with `apt_repository`, which is add-only and would have kept a stale
+  `latest` line beside the pinned one, still failing every refresh. Rewriting
+  the file is what migrates a host installed from `latest`: the pinned URI is
+  new to apt, so no release-identity comparison applies, and apt's list
+  cleanup (apt-get(8) `--list-cleanup`, on by default) drops the old alias's
+  index files on the next refresh. The cache
+  refresh that follows is gated on the file having changed. The uninstaller
+  removes the same path on OFED teardown. How the refreshes that run *before*
+  this role cope with the stale line is §8.5.
 - Repo signing key: fetched from the **component dir's** `doca_keyring.gpg`
   (`<repo_base>/<repo_component>/doca_keyring.gpg`, already a binary keyring) into
   `/etc/apt/trusted.gpg.d/mellanox-doca.gpg`. NVIDIA rotated the DOCA-Host key to
@@ -1260,3 +1294,34 @@ message (e.g. "Client updated to `<tag>`") when either call failed. A
 fetch or checkout failure MUST result in a non-zero exit and an error
 message naming what failed, so a scripted or fleet-wide client rollout
 can detect a host that did not actually update.
+
+### 8.5 apt refresh on a host whose repository identity changed
+
+apt refuses `apt-get update` (exit 100) for a source whose `Suite`,
+`Codename`, `Origin` or `Label` differ from the release file it fetched
+last, until the change is confirmed with `--allow-releaseinfo-change`
+([apt-get(8)](https://manpages.ubuntu.com/manpages/noble/en/man8/apt-get.8.html),
+Ubuntu 24.04; `sources.list(5)` offers no per-source form of it). That
+guard is for an operator at a terminal. xiNAS's refreshes are unattended,
+package signatures are verified either way, and the one xiNAS-managed
+source that ever changed identity — the DOCA `latest` alias, §3.2 — is
+now pinned. So:
+
+- **Bootstrap.** `prepare_system.sh`'s "Updating package lists", the
+  `install.sh` git bootstrap, and every `apt-get update` in
+  `client_setup.sh` pass `--allow-releaseinfo-change`. Accepting once is
+  durable: apt stores the new release file and later plain refreshes
+  compare against it, which is what carries a host installed from
+  `latest` through the rest of the install.
+- **`common`** (the first role, §3.1) refreshes through the apt module
+  and, if that fails, retries once with
+  `apt-get update --allow-releaseinfo-change`; any other cause fails again
+  with apt's own message. This covers the TUI update path, which runs
+  `ansible-playbook` with no bootstrap in front of it.
+- **`doca_ofed`** rewrites its sources file whole (§3.2), so the stale
+  `latest` line is gone before that role's own refresh, and every role
+  after it refreshes against the pinned source.
+- A tag-scoped run that skips both `common` and `doca_ofed` (for example
+  `--tags xiraid_classic`) on a host still carrying the `latest` line can
+  fail with apt's message. The remedy is either command above, run once
+  by the operator.

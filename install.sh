@@ -407,7 +407,8 @@ step "Setting up repository"
 info "Target: ${WHITE}${INSTALL_DIR}${NC}"
 
 if ! command -v git &>/dev/null; then
-    run_quiet "Installing git" bash -c 'apt-get update -qq && apt-get install -y -qq git'
+    # --allow-releaseinfo-change: see prepare_system.sh (docs/Installer/spec.md §8.5).
+    run_quiet "Installing git" bash -c 'apt-get update -qq --allow-releaseinfo-change && apt-get install -y -qq git'
 else
     ok "git found"
 fi

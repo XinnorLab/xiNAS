@@ -46,6 +46,24 @@ supported source for installing and updating xiNAS.
 
 ### Fixed
 
+- **DOCA-Host installs from a pinned release directory, so NVIDIA moving
+  its `latest` alias no longer breaks every installed host.** The
+  `doca_ofed` role tracked `doca/latest`; on 2026-08-20 NVIDIA re-pointed
+  it from 3.4.0 to 3.5.0, and apt — which refuses to follow a source whose
+  release identity changed until told to — failed `apt-get update` with
+  `changed its 'Codename' value` (exit 100) on every host that had
+  installed from the alias, aborting `prepare_system.sh` before Ansible
+  ran. `doca_version` is now `3.4.0` (the release the lab hosts run); the
+  role writes `mellanox-doca.list` whole, so a stale `latest` line is
+  retired instead of kept beside the pinned one; the bootstrap
+  `apt-get update` calls pass `--allow-releaseinfo-change`, which apt
+  remembers, so an already-installed host gets through the install; and
+  `common` retries its cache refresh once with the same flag for the TUI
+  update path, which runs no bootstrap. Bumping DOCA is now a deliberate
+  change (`doca_version` in both roles, `Requires-Rebuild: doca_ofed`).
+  The client role and `client_setup.sh` get the same treatment. See
+  `docs/Installer/spec.md` §3.2 and §8.5.
+
 - **A xiRAID daemon that never came up now fails in `xiraid_classic`, with
   the daemon named.** The role only verified the kernel module and
   `xicli -v`, neither of which needs the daemon, so a host whose

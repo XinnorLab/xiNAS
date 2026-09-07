@@ -50,11 +50,19 @@
   when: mlx_nic_check.rc == 0
   tags: [ofed, repo]
 
-- name: Add DOCA-OFED APT repo
-  ansible.builtin.apt_repository:
-    repo: "deb {{ doca_repo_base }}/{{ doca_repo_component }} /"
-    filename: "mellanox-doca"
-    state: present
+# Pinned to one release directory and written whole, so a stale `latest` line
+# from an earlier install is retired rather than kept beside the pinned one
+# (apt refused the alias when NVIDIA re-pointed it on 2026-08-20). Mirrors the
+# server-side doca_ofed role; contract: docs/Installer/spec.md §3.2 and §8.5.
+- name: Write the DOCA-OFED APT source (pinned release, file owned whole)
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/mellanox-doca.list
+    content: |
+      # Managed by xiNAS (doca_ofed role): one pinned DOCA-Host release. Do not edit.
+      deb {{ doca_repo_base }}/{{ doca_repo_component }} /
+    owner: root
+    group: root
+    mode: '0644'
   register: repo_added
   when: mlx_nic_check.rc == 0
   tags: [ofed, repo]

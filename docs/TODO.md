@@ -21,6 +21,28 @@ deferred and the change that deferred it.
 
 ---
 
+## doca_ofed — DOCA-Host 3.5.0 (and later) is published but not validated on xiNAS hardware
+
+*Deferred 2026-09-07 by the change that pinned `doca_version` to `3.4.0`
+(previously the `latest` alias, which NVIDIA re-pointed to 3.5.0 on
+2026-08-20 and which apt then refused on every installed host).*
+
+**What is missing.** Nobody has run DOCA-Host 3.5.0 through the xiNAS
+stack: the `mlnx-nfsrdma-dkms` build against the shipped kernels, NFS-RDMA
+exports, `ibstat` / `mlx5` bring-up, and the client-side role.
+
+**What the code does instead.** Both `doca_ofed` roles (server and
+`client_repo`) install from the `3.4.0` directory — the release the lab
+hosts already run — and stay there until someone bumps them.
+
+**Why it was cut.** The change was an outage fix; validating a new DOCA
+release is hardware time that had nothing to do with restoring installs.
+
+**Done looks like.** 3.5.0 (or whatever is current then) tested on a lab
+host end to end, `doca_version` bumped in both roles in one commit carrying
+`Requires-Rebuild: doca_ofed`, and the "as of" date in
+`docs/Installer/spec.md` §3.2 refreshed.
+
 ## Installer — the Python TUI has no "Set Root Password" item, but the installer points at one
 
 *Deferred 2026-09-03, noticed while auditing how the installer handles the
