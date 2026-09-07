@@ -82,7 +82,7 @@ describe('fsCreateProvider', () => {
     const { task, planResult } = await h.engine.plan(planArgs(GOOD));
     expect(planResult.blockers).toEqual([]);
     expect(planResult.risk_level).toBe('non_disruptive');
-    expect(planResult.rollback_model).toBe('non_disruptive');
+    expect(planResult.rollback_model).toBe('unsupported');
     expect(task.affected_resources).toEqual([
       { kind: 'Filesystem', id: 'mnt-data.mount' },
       { kind: 'XiraidArray', id: 'data' },

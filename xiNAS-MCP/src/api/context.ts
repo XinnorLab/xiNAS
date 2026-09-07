@@ -100,6 +100,12 @@ export interface ApiContext {
    */
   mcpConfirmations?: import('./mcp/confirmation/service.js').ConfirmationService;
   /**
+   * S16: the task-method service, a projection over `ctx.tasks.store`.
+   * Absent in read-only contexts (no ctx.tasks), where the extension's
+   * three methods answer with `tasks extension unavailable`.
+   */
+  mcpTasks?: import('./mcp/tasks/service.js').McpTasksService;
+  /**
    * S17: the operational-event journal + transition engine. Built by
    * server.ts; absent in unit contexts that never ingest observations, in
    * which case the observed handler and the heartbeat tracker journal nothing.

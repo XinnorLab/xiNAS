@@ -9,6 +9,7 @@ import { poolsRouter } from './routes/pools.js';
 import { mountApprovalPage } from './mcp/confirmation/approval-page.js';
 import { ConfirmationService } from './mcp/confirmation/service.js';
 import { loadOrCreateKeyRing } from './mcp/confirmation/state.js';
+import { McpTasksService } from './mcp/tasks/service.js';
 import { mountMcpTransport } from './mcp/transport.js';
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
@@ -84,6 +85,12 @@ export function createApp(ctx: ApiContext): Express {
       now: () => Date.now(),
       nodeId: ctx.config.controller_id,
       hostname: hostname(),
+      audit: ctx.state.audit,
+    });
+    // S16: the Tasks-extension service — a read projection over the same store.
+    ctx.mcpTasks ??= new McpTasksService({
+      store: ctx.tasks.store,
+      retentionMs: ctx.state.gc.taskRetentionMs,
       audit: ctx.state.audit,
     });
   }

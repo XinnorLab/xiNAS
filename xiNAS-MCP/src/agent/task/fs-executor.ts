@@ -17,7 +17,8 @@
  * stop; unit file present → disable + remove + daemon-reload. The mkfs
  * itself is NOT undone — on a non-force create the device had no
  * filesystem before, so the documented residual is an unmanaged (but
- * formatted) device; rollback emits that note.
+ * formatted) device; rollback emits that note. Cancellation is refused
+ * once `mkfs` starts (S16 §9.2).
  *
  * The spec arriving in task.begin is the api-enriched spec (T7):
  * create fields + unit_name + unit_text + resolved mkfs inputs, so the
@@ -26,6 +27,7 @@
 
 import { buildMkfsArgs } from '../../lib/fs/mkfs.js';
 import { parseFsCreateSpec } from '../../lib/fs/validate.js';
+import { IRREVERSIBLE_STAGE_BY_KIND } from '../../lib/tasks/irreversible-stages.js';
 import type { FsHost } from '../fs/host.js';
 import type { Executor, ExecutorContext, ExecutorStage } from './types.js';
 
@@ -112,6 +114,12 @@ export function makeFsCreateExecutor(opts: FsCreateExecutorOptions): Executor {
   const mkfs: ExecutorStage = {
     name: 'mkfs',
     async run(ctx: ExecutorContext): Promise<void> {
+      // Defense in depth, not the primary guard: the runner's boundary
+      // check + synchronous mark (S16 §9.2) is what refuses a cancel once
+      // this stage has started, so this can only ever observe a flag that
+      // was ACCEPTED before that boundary check ran — never one accepted
+      // after the mark, which requestCancel() now refuses outright. Kept
+      // in case a future executor ever calls this stage's run() directly.
       checkCancelled(ctx, 'mkfs');
       const { resolved } = narrowSpec(ctx);
 
@@ -140,7 +148,6 @@ export function makeFsCreateExecutor(opts: FsCreateExecutorOptions): Executor {
   const installUnit: ExecutorStage = {
     name: 'install_unit',
     async run(ctx: ExecutorContext): Promise<void> {
-      checkCancelled(ctx, 'install_unit');
       const { unitName, unitText } = narrowSpec(ctx);
       await host.writeUnit(unitName, unitText);
       await host.daemonReload();
@@ -151,7 +158,6 @@ export function makeFsCreateExecutor(opts: FsCreateExecutorOptions): Executor {
   const mount: ExecutorStage = {
     name: 'mount',
     async run(ctx: ExecutorContext): Promise<void> {
-      checkCancelled(ctx, 'mount');
       const { spec, unitName } = narrowSpec(ctx);
       await host.enableNow(unitName);
       if (spec.owner_policy !== undefined) {
@@ -183,6 +189,12 @@ export function makeFsCreateExecutor(opts: FsCreateExecutorOptions): Executor {
   return {
     operation_kind: 'fs.create',
     stages: [preflight, mkfs, installUnit, mount, verify],
+    // S16 §9.2: once mkfs has started the device is being formatted and a
+    // cancel-plus-rollback can no longer be truthful. The runner refuses
+    // cancels from here on; the checkCancelled() calls that used to sit at
+    // the top of install_unit/mount were unreachable with the flag set and
+    // are gone.
+    irreversible_from: IRREVERSIBLE_STAGE_BY_KIND['fs.create'] as string,
 
     async rollback(ctx: ExecutorContext): Promise<void> {
       const { spec, unitName } = narrowSpec(ctx);

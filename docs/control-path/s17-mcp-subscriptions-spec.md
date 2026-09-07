@@ -125,6 +125,10 @@ the context; the S14 unit context without a journal keeps advertising
 `tools` only, and the S14 test that pins "`resources` absent" moves to
 "absent without a journal, present with one".
 
+S16 (`s16-mcp-tasks-spec.md` §3.2, 2026-09-04) adds
+`extensions: { "io.modelcontextprotocol/tasks": {} }` to the same object,
+gated on its own readiness; the two advertisements are independent.
+
 `listChanged` is `false` and stays `false` in Phase 1: the six resources
 are constant for the process lifetime, so `resourcesListChanged` in a listen
 filter is never honored (§5.2). `prompts` stays absent.

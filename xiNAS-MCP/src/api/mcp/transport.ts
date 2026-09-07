@@ -40,7 +40,8 @@ import { acceptFeeds, openHttpListen, validateListenParams } from './listen.js';
 import type { ResourceProvider, ResourcesOptions } from './resources.js';
 import { appsProvider } from './apps.js';
 import { type McpIdentity, buildMcpServer } from './dispatch.js';
-import { handleModernRequest, isModernRequest, isNotification } from './modern.js';
+import { handleModernRequest, isModernRequest, isNotification, rpcIdOf } from './modern.js';
+import { parseTasksCapability, validateTaskMethodHeaders } from './tasks/index.js';
 
 interface McpSession {
   transport: StreamableHTTPServerTransport;
@@ -254,6 +255,30 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
           return;
         }
 
+        // S16 §3.1: the Tasks capability is read from THIS request; a
+        // malformed declaration is -32602. S16 §5.6: the task methods must
+        // carry agreeing Mcp-Method / Mcp-Name headers (-32020, HTTP 400).
+        // Both run before the handler so an unauthorized task id is never
+        // examined for a client that cannot use the extension anyway.
+        const meta = (req.body as { params?: { _meta?: unknown } })?.params?._meta;
+        let clientTasks = false;
+        try {
+          clientTasks = parseTasksCapability(meta);
+          validateTaskMethodHeaders((name) => req.header(name), req.body);
+        } catch (err) {
+          if (!(err instanceof McpProtocolError)) throw err;
+          res.status(err.httpStatus).json({
+            jsonrpc: '2.0',
+            id: rpcIdOf(req.body),
+            error: {
+              code: err.code,
+              message: err.message,
+              ...(err.data !== undefined ? { data: err.data } : {}),
+            },
+          });
+          return;
+        }
+
         // F5 (fix round 1): the correlation id is server-owned — /mcp never
         // runs requestIdMiddleware (mountMcpTransport is called before
         // app.use(requestIdMiddleware()) in app.ts, whose "Middleware order
@@ -275,9 +300,11 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
               elicitation: elicitationModes(
                 (req.body as { params?: { _meta?: unknown } })?.params?._meta,
               ),
+              tasks: clientTasks,
             },
             ...(ctx.mcpConfirmations !== undefined ? { confirmations: ctx.mcpConfirmations } : {}),
             resources,
+            ...(ctx.mcpTasks !== undefined ? { tasks: ctx.mcpTasks } : {}),
           },
           correlationId,
         );
@@ -321,8 +348,10 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
         identity: () => identity,
         // Legacy clients never satisfy isConfirmable's era check (dispatch.ts
         // returns MCP_CONFIRMATION_UNSUPPORTED first) — no elicitation and no
-        // confirmations service needed on this path.
-        client: { era: 'legacy', elicitation: new Set() },
+        // confirmations service needed on this path. Likewise a legacy
+        // client never declares the Tasks extension (S16 §3.1 reads it per
+        // request; there is no per-request _meta agreement on this path).
+        client: { era: 'legacy', elicitation: new Set(), tasks: false },
       });
       // exactOptionalPropertyTypes friction in the SDK's Transport
       // interface (same cast the legacy server used).

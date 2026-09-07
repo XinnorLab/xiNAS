@@ -5,18 +5,32 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../../state/migrations.js';
 import { GcSweeper } from '../../state/gc.js';
+import { AuditAppender } from '../../state/audit.js';
 
 function seedTask(
   db: Database.Database,
   task_id: string,
   state: string,
   terminal_at: number | null,
+  overrides: { client_type?: string; principal?: string; kind?: string } = {},
 ) {
+  const { client_type = 'system', principal = 'p', kind = 'k' } = overrides;
   db.prepare(
     `INSERT INTO tasks (task_id, kind, state, principal, client_type, request_id, correlation_id,
                         input_hash, risk_level, affected_resources, created_at, updated_at, terminal_at)
-     VALUES (?, 'k', ?, 'p', 'system', ?, ?, 'h', 'non_disruptive', '[]', ?, ?, ?)`,
-  ).run(task_id, state, `r-${task_id}`, `c-${task_id}`, Date.now(), Date.now(), terminal_at);
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'h', 'non_disruptive', '[]', ?, ?, ?)`,
+  ).run(
+    task_id,
+    kind,
+    state,
+    principal,
+    client_type,
+    `r-${task_id}`,
+    `c-${task_id}`,
+    Date.now(),
+    Date.now(),
+    terminal_at,
+  );
 }
 
 function seedLease(
@@ -107,5 +121,32 @@ describe('GcSweeper', () => {
     expect(result.tasks_deleted).toBe(1);
     expect(result.leases_removed).toBe(1);
     expect(result.tasks_recovered).toBe(1);
+  });
+
+  it('exposes the retention in ms (S16 §6.5)', () => {
+    expect(gc.taskRetentionMs).toBe(30 * 86400 * 1000);
+    expect(new GcSweeper(db, { taskRetentionDays: 1 }).taskRetentionMs).toBe(86400 * 1000);
+  });
+
+  it('audits mcp.task.pruned for pruned MCP-created tasks only (S16 §13.1)', async () => {
+    const audit = new AuditAppender(db, 'node-1');
+    const sweeper = new GcSweeper(db, { taskRetentionDays: 30, archiveDir: dir, audit });
+    const day = 86400 * 1000;
+    seedTask(db, 't-mcp', 'success', Date.now() - 31 * day, {
+      client_type: 'mcp',
+      principal: 'admin:x',
+      kind: 'fs.create',
+    });
+    seedTask(db, 't-rest', 'success', Date.now() - 31 * day, { client_type: 'rest' });
+    await sweeper.sweepTasks();
+    const rows = db.prepare('SELECT entry_json FROM audit_outbox').all() as Array<{
+      entry_json: Buffer;
+    }>;
+    const kinds = rows.map(
+      (r) => JSON.parse(r.entry_json.toString('utf8')) as { kind: string; task_id?: string },
+    );
+    expect(kinds.filter((k) => k.kind === 'mcp.task.pruned').map((k) => k.task_id)).toEqual([
+      't-mcp',
+    ]);
   });
 });

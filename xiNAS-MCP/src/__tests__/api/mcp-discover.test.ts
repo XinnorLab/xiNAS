@@ -214,6 +214,8 @@ describe('mcp modern era — server/discover (S14)', () => {
         mimeTypes: ['text/html;profile=mcp-app'],
       },
     });
+    // S16 §3.2: the Tasks extension shares the same map.
+    expect(result.capabilities.extensions).toMatchObject({ 'io.modelcontextprotocol/tasks': {} });
 
     // The claim is checked, not asserted: a tools capability must mean
     // tools/list actually answers.

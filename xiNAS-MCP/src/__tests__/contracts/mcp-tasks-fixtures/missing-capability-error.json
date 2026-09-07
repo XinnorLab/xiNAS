@@ -1,0 +1,11 @@
+{
+  "code": -32021,
+  "message": "Missing required client capability",
+  "data": {
+    "requiredCapabilities": {
+      "extensions": {
+        "io.modelcontextprotocol/tasks": {}
+      }
+    }
+  }
+}

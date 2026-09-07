@@ -26,10 +26,15 @@
  * This is deliberately NOT a byte proxy and NOT an SDK client: tool
  * traffic is strictly request/response, so per-message bridging is the
  * whole job.
+ *
+ * On the HTTP hop the adapter IS the Streamable HTTP client, so modern
+ * messages carry mirrored `MCP-Protocol-Version` / `Mcp-Method` /
+ * `Mcp-Name` request-metadata headers (S16 §5.6).
  */
 
 import * as http from 'node:http';
 import { createInterface } from 'node:readline';
+import { TASK_METHODS, encodeMcpHeaderValue } from './api/mcp/tasks/headers.js';
 
 const SOCKET = process.env.XINAS_API_SOCKET ?? '/run/xinas/api.sock';
 const TOKEN = process.env.XINAS_MCP_TOKEN;
@@ -97,6 +102,35 @@ interface JsonRpcLine {
 const idKey = (id: unknown): string => JSON.stringify(id);
 
 /**
+ * S16 §5.6: on the HTTP hop the adapter IS the Streamable HTTP client, so
+ * it mirrors the request-metadata headers a conforming client sends —
+ * MCP-Protocol-Version from _meta, Mcp-Method, and Mcp-Name for tools/call
+ * (params.name) and the task methods (params.taskId), base64-sentinel
+ * encoded when not header-safe. Legacy messages (no modern _meta) get
+ * nothing, exactly as before.
+ */
+export function mirrorHeaders(message: unknown): Record<string, string> {
+  const msg = message as {
+    method?: unknown;
+    params?: { _meta?: Record<string, unknown>; name?: unknown; taskId?: unknown };
+  } | null;
+  if (msg === null || typeof msg !== 'object') return {};
+  const version = msg.params?._meta?.['io.modelcontextprotocol/protocolVersion'];
+  if (typeof version !== 'string') return {};
+  const out: Record<string, string> = { 'mcp-protocol-version': version };
+  if (typeof msg.method !== 'string') return out;
+  out['mcp-method'] = msg.method;
+  const name =
+    msg.method === 'tools/call'
+      ? msg.params?.name
+      : TASK_METHODS.has(msg.method)
+        ? msg.params?.taskId
+        : undefined;
+  if (typeof name === 'string') out['mcp-name'] = encodeMcpHeaderValue(name);
+  return out;
+}
+
+/**
  * Incremental SSE parser for one response body: `data:` lines accumulate
  * until a blank line; `event:` names and comment lines (keep-alives) are
  * ignored. The server emits one JSON-RPC message per frame.
@@ -129,12 +163,17 @@ export function createBridge(opts: BridgeOptions): Bridge {
   const live = new Map<string, http.ClientRequest>();
   let closing = false;
 
-  const headersFor = (payload: string, sse: boolean): http.OutgoingHttpHeaders => ({
+  const headersFor = (
+    message: unknown,
+    payload: string,
+    sse: boolean,
+  ): http.OutgoingHttpHeaders => ({
     'content-type': 'application/json',
     accept: sse ? 'application/json, text/event-stream' : 'application/json, text/event-stream',
     'content-length': Buffer.byteLength(payload),
     ...(sessionId !== undefined ? { 'mcp-session-id': sessionId } : {}),
     ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}),
+    ...mirrorHeaders(message),
   });
 
   const errorLine = (id: unknown, code: number, message: string): void => {
@@ -145,7 +184,7 @@ export function createBridge(opts: BridgeOptions): Bridge {
     const payload = JSON.stringify(message);
     return new Promise((resolve, reject) => {
       const req = http.request(
-        { socketPath, path: '/mcp', method: 'POST', headers: headersFor(payload, false) },
+        { socketPath, path: '/mcp', method: 'POST', headers: headersFor(message, payload, false) },
         (res) => {
           const chunks: Buffer[] = [];
           res.on('data', (c: Buffer) => chunks.push(c));
@@ -186,7 +225,7 @@ export function createBridge(opts: BridgeOptions): Bridge {
     const payload = JSON.stringify(message);
     let aborted = false;
     const req = http.request(
-      { socketPath, path: '/mcp', method: 'POST', headers: headersFor(payload, true) },
+      { socketPath, path: '/mcp', method: 'POST', headers: headersFor(message, payload, true) },
       (res) => {
         const isSse = (res.headers['content-type'] ?? '').startsWith('text/event-stream');
         res.setEncoding('utf8');

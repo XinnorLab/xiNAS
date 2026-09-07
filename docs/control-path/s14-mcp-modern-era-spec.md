@@ -142,7 +142,7 @@ test so a future SDK bump cannot silently change it.
 {
   "resultType": "complete",
   "supportedVersions": ["2026-07-28"],
-  "capabilities": { "tools": {} },
+  "capabilities": { "tools": {}, "extensions": { "io.modelcontextprotocol/tasks": {} } },
   "_meta": {
     "io.modelcontextprotocol/serverInfo": { "name": "xinas-api-mcp", "version": "<pkg>" }
   },
@@ -171,16 +171,23 @@ versions remain reachable only through `initialize`.
   (requirement §2.4). `listChanged` stays `false`: the list is static for
   the process lifetime.
 - `prompts` — **absent.** No handler exists (ADR-0010 defers them).
-- `extensions.io.modelcontextprotocol/ui` — present since S18 with the
-  supported `text/html;profile=mcp-app` MIME type. There is still never a
-  top-level
-  `result.extensions`.
+- `extensions` — one map shared by every implemented extension:
+  `io.modelcontextprotocol/ui` (present since S18 with the supported
+  `text/html;profile=mcp-app` MIME type) and `io.modelcontextprotocol/tasks`
+  (present since S16, 2026-09-04, as `{}` — emitted iff the extension's three
+  method handlers and result schema are installed, `TASKS_EXTENSION_READY`,
+  S16 §3.2). It lives under `capabilities.extensions`; there is still never a
+  top-level `result.extensions`. Any other extension stays absent until it is
+  implemented.
 
 > **Deviation from the requirement document's example.** Requirement §2.3's
-> sample response advertises the Tasks extension. xiNAS still does not
-> implement that extension. The `resources` claim (S17 feeds, S18 view) and
-> the UI-extension claim (S18) are different: both have matching handlers and
-> therefore satisfy §2.4.
+> sample response advertises `resources: {}` and the Tasks extension. When
+> this spec was written xiNAS implemented neither, so emitting them would
+> have violated the requirement's own normative rule in §2.4 ("MUST NOT
+> advertise a capability if the corresponding methods are unavailable"). The
+> normative rule wins; the example is treated as illustrative. Since S17/S18
+> `resources` and since S16 the Tasks extension are implemented and
+> advertised; every claim has matching handlers and therefore satisfies §2.4.
 
 **`_meta["io.modelcontextprotocol/serverInfo"]`** — `{name, version}`, the
 **same constant** the legacy `initialize` reports. One server, one identity
@@ -280,7 +287,10 @@ them is S15.
   fixed first, so that one method never returns one compliant and one
   non-compliant variant. Legacy results keep their legacy wire shape.
 - **Result union.** The modern `tools/call` answer is `CallToolResult |
-  InputRequiredResult`, discriminated by `resultType`. An
+  InputRequiredResult | CreateTaskResult`, discriminated by `resultType`
+  (`complete` | `input_required` | `task`). `CreateTaskResult` (S16 §5.1)
+  is the flat extension Task with `resultType: "task"`; the handler stamps
+  `complete` only on a `CallToolResult`. An
   `InputRequiredResult` from xiNAS always carries both `inputRequests` (one
   key, `confirm_apply`, holding an `elicitation/create` request in `form` or
   `url` mode) and `requestState` (opaque, HMAC-protected).
@@ -304,9 +314,9 @@ them is S15.
   stays HTTP 200. `clientInfo` is never read.
 - **Round limit.** At most three `input_required` rounds per logical
   confirmation, then the tool error `CONFIRMATION_ROUND_LIMIT`.
-- **Tasks extension.** MRTR here is the ephemeral workflow; if the Tasks
-  extension is ever adopted, the confirmation still completes before any
-  task exists (S15 §4.7).
+- **Tasks extension.** MRTR here is the ephemeral workflow; the Tasks
+  extension (S16, §5.2) is adopted, and the confirmation still completes
+  before any task exists (S15 §4.7, S16 §8).
 
 A modern **notification** (a message with no `id`) is answered with an empty
 HTTP `202` and no response object, matching what the SDK transport does for
@@ -314,6 +324,36 @@ the legacy era. The stdio adapter independently drops responses to id-less
 messages, so both transports behave the same.
 
 ---
+
+### 5.2 MCP Tasks extension methods (S16, 2026-09-04)
+
+Protocol rules the modern handler and transport own for
+`io.modelcontextprotocol/tasks`; the projection, eligibility and safety
+rules are `s16-mcp-tasks-spec.md`.
+
+- **Routing.** `tasks/get`, `tasks/update` and `tasks/cancel` are routed
+  by `modern.ts` ahead of the `-32601` default, on the modern path only.
+  The legacy SDK path never sees them (the SDK answers `-32601`), and
+  `tasks/list` / `tasks/result` stay `-32601` on both.
+- **Schemas.** Params and results are validated against explicit zod
+  schemas derived from the released `2026-07-28` extension schema
+  (`src/api/mcp/tasks/schema.ts`, pinned by tests). Nothing is imported
+  from the SDK's deprecated `experimental/tasks` (2025-11-25) vocabulary.
+- **Per-request capability.** `client.tasks` is parsed from the current
+  request's `_meta["io.modelcontextprotocol/clientCapabilities"].extensions`
+  (S16 §3.1); a non-object `extensions` or extension entry is `-32602`.
+  A task method without the capability → `-32021`,
+  `data.requiredCapabilities: { extensions: { "io.modelcontextprotocol/tasks": {} } }`,
+  HTTP 400 — the same mapping as the elicitation case above.
+- **Headers (Streamable HTTP).** For the three task methods
+  `transport.ts` requires `Mcp-Method` (= `method`) and `Mcp-Name`
+  (= `params.taskId`, base64 sentinel decoded), and checks
+  `MCP-Protocol-Version` against `_meta` when present; a violation is
+  HTTP 400 + `-32020` (`HeaderMismatch`). Other modern methods keep this
+  spec's existing tolerance (no header validation) — recorded in
+  `docs/TODO.md`. The stdio adapter mirrors the headers on its HTTP hop
+  (§7).
+- **Advertisement.** §4: `capabilities.extensions`.
 
 ## 6. Authentication and authorization
 
@@ -365,7 +405,14 @@ through the loopback under the caller's real principal and role, and
   its SSE response is demultiplexed into one stdout line per `data:`
   payload, an inbound `notifications/cancelled` naming a live listen id
   aborts that HTTP request instead of being forwarded, and the graceful
-  listen result is forwarded like any other message (S17 §5.5).
+  listen result is forwarded like any other message (S17 §5.5). **S16 (2026-09-04):** on every
+  forwarded message carrying a modern `_meta` it mirrors
+  `MCP-Protocol-Version`, `Mcp-Method` and (for `tools/call` and the task
+  methods) `Mcp-Name` onto the HTTP request, base64-sentinel encoded when
+  not header-safe — it is the Streamable HTTP client on that hop (S16 §5.6).
+- **S16 additions:** `src/api/mcp/tasks/` (capability, schema, projection,
+  headers, audit, metrics, service) called from `modern.ts`, `dispatch.ts`
+  and `transport.ts`; `discover.ts` advertises the extension.
 - **S15 additions:** `src/api/mcp/confirmation/` (store, `requestState`
   codec, service, message rendering, approval page, metrics) called from
   `callTool()`; `transport.ts` maps `-32021` to HTTP 400 and passes the

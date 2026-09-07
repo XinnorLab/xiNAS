@@ -9,7 +9,7 @@
  * an isMain check, so nothing is spawned and the process isn't exited.
  */
 import { describe, expect, it } from 'vitest';
-import { connectErrorHint, unreachableMessage } from '../mcp-stdio.js';
+import { connectErrorHint, mirrorHeaders, unreachableMessage } from '../mcp-stdio.js';
 
 function errno(code: string, message: string): NodeJS.ErrnoException {
   const e = new Error(message) as NodeJS.ErrnoException;
@@ -64,5 +64,40 @@ describe('unreachableMessage', () => {
 
   it('handles non-Error throwables via String()', () => {
     expect(unreachableMessage('/sock', 'weird')).toBe('xinas-api unreachable at /sock: weird');
+  });
+});
+
+describe('mirrorHeaders (S16 §5.6)', () => {
+  const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' };
+  it('mirrors version, method and name for modern messages', () => {
+    expect(
+      mirrorHeaders({ method: 'tools/call', params: { _meta: META, name: 'arrays.list' } }),
+    ).toEqual({
+      'mcp-protocol-version': '2026-07-28',
+      'mcp-method': 'tools/call',
+      'mcp-name': 'arrays.list',
+    });
+    expect(mirrorHeaders({ method: 'tasks/get', params: { _meta: META, taskId: 't-1' } })).toEqual({
+      'mcp-protocol-version': '2026-07-28',
+      'mcp-method': 'tasks/get',
+      'mcp-name': 't-1',
+    });
+    expect(mirrorHeaders({ method: 'tools/list', params: { _meta: META } })).toEqual({
+      'mcp-protocol-version': '2026-07-28',
+      'mcp-method': 'tools/list',
+    });
+  });
+  it('encodes an unsafe name with the base64 sentinel', () => {
+    expect(
+      mirrorHeaders({ method: 'tasks/get', params: { _meta: META, taskId: 'täsk' } })[
+        'mcp-name'
+      ]?.startsWith('=?base64?'),
+    ).toBe(true);
+  });
+  it('adds nothing for legacy messages or garbage', () => {
+    expect(
+      mirrorHeaders({ method: 'initialize', params: { protocolVersion: '2025-11-25' } }),
+    ).toEqual({});
+    expect(mirrorHeaders(null)).toEqual({});
   });
 });

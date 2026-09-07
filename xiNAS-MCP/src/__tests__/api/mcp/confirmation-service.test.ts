@@ -41,7 +41,11 @@ const PRINCIPAL_B = 'admin:other-principal';
 const IDENTITY: McpIdentity = { principal: PRINCIPAL, role: 'admin' };
 const IDENTITY_B: McpIdentity = { principal: PRINCIPAL_B, role: 'admin' };
 const OPERATOR_IDENTITY: McpIdentity = { principal: PRINCIPAL, role: 'operator' };
-const BOTH_CLIENT: McpClientInfo = { era: 'modern', elicitation: new Set(['form', 'url']) };
+const BOTH_CLIENT: McpClientInfo = {
+  era: 'modern',
+  elicitation: new Set(['form', 'url']),
+  tasks: false,
+};
 
 const FS_CREATE = CATALOG.find((e) => e.name === 'filesystems.create') as CatalogEntry;
 const SHARES_UPDATE = CATALOG.find((e) => e.name === 'shares.update') as CatalogEntry;

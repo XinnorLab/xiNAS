@@ -85,7 +85,10 @@ export async function openStateStore(opts: OpenStateStoreOptions): Promise<Opene
   // Wire the drainer back to the appender so notifyJsonlAdvanced()
   // keeps AuditAppender.jsonlTail fresh after every drain.
   const drainer = new AuditDrainer(db, { path: opts.auditJsonlPath, audit });
-  const gc = new GcSweeper(db, opts.archiveDir ? { archiveDir: opts.archiveDir } : undefined);
+  const gc = new GcSweeper(db, {
+    audit,
+    ...(opts.archiveDir ? { archiveDir: opts.archiveDir } : {}),
+  });
 
   // Per ADR-0003: drain any rows left pending from a prior process
   // BEFORE returning. recover() handles both clean-restart and

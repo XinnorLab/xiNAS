@@ -161,6 +161,39 @@ is found by `/audit?task_id=` (the S9 task_id mirror).
   long-running screens (RAID create/delete, filesystem create) enable
   it.
 
+### 9. Point of no return (S16 amendment, 2026-09-04)
+
+Decisions 1–3 assume every executor stage can be unwound by
+`rollback()`. `fs.create` cannot: `mkfs.xfs` is never reverted, so a
+cancel honored at the `install_unit` boundary rolled back only the unit
+and reported `cancelled` for a device that had just been formatted —
+violating Decision 1's "AND rolled back". The correction
+(`s16-mcp-tasks-spec.md` §9.2):
+
+- An `Executor` may declare `irreversible_from: <stage name>` — the
+  stage at whose **start** the operation stops being safely cancellable.
+  `fs.create` declares `'mkfs'`; the name is shared with the api through
+  `lib/tasks/irreversible-stages.ts` (the `stage-names.ts` pattern).
+- The runner records `irreversibleStageStarted` on the in-flight task
+  synchronously, immediately after that stage's boundary check and before
+  the `stage_started` event is published. `requestCancel()` returns a
+  verdict and **refuses** (without setting the flag) once the mark is
+  set. Because the RPC handler and the runner share one thread and no
+  `await` separates the check from the mark, the flag can only be set
+  before the boundary check — and is then honored there, before any
+  formatting — or never. Decisions 2 and 3
+  therefore keep producing truthful `cancelled` outcomes.
+- The agent's `task.cancel` answers
+  `{ cancel_requested: false, reason: 'irreversible_stage_started', stage }`;
+  the engine records `cancel_refused_reason: 'irreversible_stage_started'`
+  under the running-state guard and answers `409 CONFLICT`
+  (`details.reason: 'irreversible_stage_started'`), exactly like
+  `agent_not_found`. The task finishes on its own; the operator
+  re-observes.
+- Executors without a declaration keep the generic boundary rule.
+  `xiraid-array-executor` also checks the flag mid-flight and has no
+  declaration yet (`docs/TODO.md`).
+
 ## Alternatives considered
 
 - **Stop-only cancel (keep partial work):** simpler runner change, but
