@@ -1,6 +1,11 @@
 # xiNAS S17 — MCP subscriptions and operational event feeds (design spec)
 
-**Status:** design (2026-09-04), awaiting review. Extends **ADR-0010** /
+**Status:** implemented 2026-09-07 (Phase 1; design validated 2026-09-04).
+Deviations found while implementing are recorded inline where they
+apply — §5.4 (`Connection: close` on the listen response), §13 (`/events`
+access stays the RBAC admin default), and the agent spec's S17 amendment
+item 4 (test-only poll-cadence overrides). Product-client smoke rows
+(§16) are pending. Extends **ADR-0010** /
 `s8-clients-spec.md` (the `/mcp` transport inside `xinas-api.service`),
 **S14** (`s14-mcp-modern-era-spec.md`, the MCP `2026-07-28` modern era),
 **S15** (`s15-mcp-mrtr-confirmation-spec.md`), the **S16** requirements
