@@ -409,6 +409,18 @@ export class TaskEngine {
   apply(args: ApplyArgs): Task {
     const { plan, applyReq } = args;
 
+    // S15 §12.2 (Task 13, F1 fix): the two consumed/latency metric calls
+    // must not fire until the apply transaction actually COMMITS. The lease
+    // loop (step 4) runs after the confirmation consume() and can still
+    // throw, rolling the whole `db.transaction` back — including the
+    // consume() write. Emitting the metrics from inside the transaction
+    // body (as before the fix) moved the in-memory counters regardless, so
+    // a lease conflict left them out of sync with the rolled-back DB. Fix:
+    // capture what the emit needs into this local from inside the
+    // transaction, then fire both calls only after `run()` returns
+    // successfully — see the commit-point comment below.
+    let pendingConsumedMetrics: { createdAt: number; consumedAt: number } | undefined;
+
     const run = this.db.transaction((): Task => {
       // 1. Idempotency (SELECT-first; see file header for why).
       const existing = this.store.getByIdempotency(applyReq.idempotency_key, applyReq.principal);
@@ -648,14 +660,16 @@ export class TaskEngine {
         queueConfirmationEvent(this.audit, 'apply_task_created', consumed, {
           task_id: task.task_id,
         });
-        // S15 §12.2 (Task 13): the two series with no ConfirmationService
-        // call site — the service never learns of a consumption; the apply
-        // transaction does, right here. `consumed.consumed_at` is the same
-        // clock reading `store.consume()` just persisted (falls back to a
-        // fresh read only if the store somehow didn't set it).
-        this.metrics?.decided('consumed');
+        // S15 §12.2 (Task 13; F1 fix, fix round 1): the two series with no
+        // ConfirmationService call site — the service never learns of a
+        // consumption; the apply transaction does, right here. Record what
+        // the post-commit emit needs WITHOUT calling `this.metrics` yet —
+        // a later step in this same transaction (the lease loop) can still
+        // throw and roll this consume() back. `consumed.consumed_at` is the
+        // same clock reading `store.consume()` just persisted (falls back
+        // to a fresh read only if the store somehow didn't set it).
         const consumedAt = consumed.consumed_at ?? this.clock();
-        this.metrics?.confirmationToApply((consumedAt - confirmation.created_at) / 1000);
+        pendingConsumedMetrics = { createdAt: confirmation.created_at, consumedAt };
       }
 
       // 4. Acquire a lease per resource in the lease set. N0.3 (S3 §5.2): the
@@ -686,7 +700,19 @@ export class TaskEngine {
     });
 
     try {
-      return run();
+      const task = run();
+      // Commit point: `run()` returned without throwing, so SQLite already
+      // committed the transaction — the consume() write (if any) is
+      // durable. Only now is it safe to move the in-memory counters; a
+      // throw above skips this block entirely, so no metric moves on
+      // rollback (F1 fix).
+      if (pendingConsumedMetrics !== undefined) {
+        this.metrics?.decided('consumed');
+        this.metrics?.confirmationToApply(
+          (pendingConsumedMetrics.consumedAt - pendingConsumedMetrics.createdAt) / 1000,
+        );
+      }
+      return task;
     } catch (err) {
       if (
         err instanceof ApiException &&

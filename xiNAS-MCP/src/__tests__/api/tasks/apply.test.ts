@@ -698,6 +698,72 @@ describe('TaskEngine.apply — MCP confirmation gate (S15 §8.3)', () => {
     expect(latencies[0]?.seconds).toBeCloseTo(2.5, 5);
   });
 
+  it('S15 §12.2 (Task 13, F1 fix): a lease conflict after consume() rolls the confirmation back too, and emits ZERO metric calls', () => {
+    // Same shape as the top-level "lease held by another task" test, but
+    // driven through an MCP apply so the confirmation's consume() write is
+    // in the same transaction as the lease acquisition that then conflicts.
+    // Before the F1 fix, decided('consumed')/confirmationToApply() fired
+    // right after consume() — INSIDE the transaction — so the in-memory
+    // counters moved even though the DB rolled the consume back.
+    const events: Array<
+      { kind: 'decided'; outcome: string } | { kind: 'latency'; seconds: number }
+    > = [];
+    const fakeMetrics: ConfirmationMetrics = {
+      requested() {},
+      decided(outcome) {
+        events.push({ kind: 'decided', outcome });
+      },
+      capabilityFailure() {},
+      stateValidationFailure() {},
+      replayRejected() {},
+      roundLimit() {},
+      confirmationToApply(seconds) {
+        events.push({ kind: 'latency', seconds });
+      },
+      approvedExpired() {},
+    };
+    h = makeHarness({ metrics: fakeMetrics });
+    createRecord('form'); // c-1, pending
+
+    // Pre-acquire the plan's affected resource for an unrelated task, so the
+    // apply txn's lease loop (which runs AFTER consume()) throws CONFLICT.
+    const holder = h.store.createApplyTask({
+      kind: 'reference.echo',
+      principal: 'admin:other',
+      client_type: 'rest',
+      request_id: '77777777-7777-7777-7777-777777777777',
+      correlation_id: 'corr-lease-metrics',
+      input_hash: 'ihash-lease-metrics',
+      risk_level: 'non_disruptive',
+      affected_resources: [{ kind: 'Share', id: 's1', revision: 1 }],
+    });
+    h.leases.acquire({
+      resource_kind: 'Share',
+      resource_id: 's1',
+      task_id: holder.task_id,
+      ttl_seconds: 60,
+    });
+
+    let thrown: unknown;
+    try {
+      h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: 'c-1' }) });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ApiException);
+    expect((thrown as ApiException).code).toBe('CONFLICT');
+    expect((thrown as ApiException).details).toMatchObject({ reason: 'lease_held' });
+
+    // Rolled back: the confirmation is still pending, not consumed.
+    expect(h.confirmations.get('c-1')?.status).toBe('pending');
+    // Only the holder task survives; the apply task + its consume() rolled back.
+    expect(h.countTasks()).toBe(1);
+
+    // Zero metric calls — the counters must not diverge from the rolled-back DB.
+    expect(events).toHaveLength(0);
+  });
+
   it('a REST apply (no confirmation gate) never touches the confirmation metrics', () => {
     const events: unknown[] = [];
     const fakeMetrics: ConfirmationMetrics = {
