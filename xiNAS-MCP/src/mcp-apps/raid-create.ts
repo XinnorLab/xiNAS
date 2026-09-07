@@ -1,5 +1,6 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { type AffectedResource, affectedResourcesText } from './plan-facts.js';
 import './raid-create.css';
 
 type RaidLevel =
@@ -80,7 +81,7 @@ interface Plan {
   state_revision_expected?: number;
   risk_level?: string;
   rollback_model?: string;
-  affected_resources?: Array<{ kind?: string; id?: string }>;
+  affected_resources?: AffectedResource[];
   blockers?: PlanIssue[];
   warnings?: PlanIssue[];
   diff?: unknown;
@@ -324,6 +325,8 @@ function planPanel(): string {
   }
   const blocked = (plan.blockers?.length ?? 0) > 0;
   const stale = planFingerprint !== fingerprint();
+  // `.plan-facts dd` ellipsises; the title carries the full list on hover.
+  const affected = escapeHtml(affectedResourcesText(plan.affected_resources));
   return `<section class="panel review-panel">
     <div class="section-head">
       <div><span class="eyebrow">03 · REVIEW</span><h2>Server plan</h2></div>
@@ -334,6 +337,7 @@ function planPanel(): string {
       <div><dt>Risk</dt><dd>${escapeHtml(plan.risk_level ?? '—')}</dd></div>
       <div><dt>Rollback</dt><dd>${escapeHtml(plan.rollback_model ?? '—')}</dd></div>
       <div><dt>Revision</dt><dd>${escapeHtml(plan.state_revision_expected ?? 0)}</dd></div>
+      <div><dt>Affected</dt><dd title="${affected}">${affected}</dd></div>
     </dl>
     ${stale ? '<div class="notice warning">Configuration changed after planning. Review a new plan.</div>' : ''}
     <div class="review-grid">
