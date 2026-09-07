@@ -1,8 +1,16 @@
 # Role **doca_ofed**
 Installs the NVIDIA DOCA-Host "Everything" profile (`doca-all`) plus the
 firmware updater (`mlnx-fw-updater`) from the official DOCA APT repository
-on Ubuntu. Defaults to the `latest` repo alias so each run pulls the most
-recent DOCA-Host release.
+on Ubuntu. Installs from **one pinned release directory** of that repo
+(`doca_version`, `3.4.0` today), never from NVIDIA's `latest` alias: the
+alias re-points to each new DOCA-Host release without notice, and apt refuses
+to follow a source whose release identity changed until an operator confirms
+it — on 2026-08-20 that turned every installed host's `apt update` into
+`E: Repository … changed its 'Codename' value from '3.4.0' to '3.5.0'`. The
+role writes `/etc/apt/sources.list.d/mellanox-doca.list` whole, so a stale
+`latest` line from an earlier install is retired rather than kept. The
+server-side role is the reference (`docs/Installer/spec.md` §3.2 and §8.5);
+both roles pin the same version, and a bump changes both.
 
 ### Hardware gate
 
@@ -32,9 +40,11 @@ stale and does not carry it, which made the former `apt_key` import fail
 rotation self-heals. (Mirrors the server-side `doca_ofed` role.)
 
 Variables:
-  * `doca_version` – release version string. Default `latest` (NVIDIA's
-    alias to the most recent release); pin to a specific version
-    (e.g. `3.3.0`) or use an LTS alias (e.g. `latest-3.2-LTS`) to lock it.
+  * `doca_version` – one release directory of the DOCA repo (default
+    `3.4.0`, the same as the server-side role). Bump it deliberately after
+    a hardware test, in both roles at once, with `Requires-Rebuild:
+    doca_ofed`. Do not set an alias (`latest`, `lts`, `latest-<X.Y>-LTS`):
+    they move, and apt then refuses the source.
   * `doca_distro_series` – Ubuntu series used in repository path.
   * `doca_repo_base` – base URL of the DOCA repository.
   * `doca_repo_component` – component path built from version and distro.
