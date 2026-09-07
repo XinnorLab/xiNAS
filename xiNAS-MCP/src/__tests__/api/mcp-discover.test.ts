@@ -170,6 +170,11 @@ describe('mcp modern era — server/discover (S14)', () => {
     expect(['public', 'private']).toContain(result.cacheScope);
     expect(typeof result.instructions).toBe('string');
     expect(result.instructions.length).toBeGreaterThan(0);
+    // S15 §14: the confirmation-aware guidance — never fabricate an
+    // operator's answer, and route apply through input_required first.
+    expect(result.instructions).toContain('input_required');
+    expect(result.instructions).toContain('approval');
+    expect(result.instructions).toContain('never fabricate an acceptance');
 
     const serverInfo = result._meta['io.modelcontextprotocol/serverInfo'] as {
       name?: unknown;
