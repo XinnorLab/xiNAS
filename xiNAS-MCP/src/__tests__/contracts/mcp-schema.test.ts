@@ -9,11 +9,13 @@
  * real `ConfirmationService.handle()` call over a temp in-memory db with a
  * seeded plan, using the same harness pattern as
  * `../api/mcp/confirmation-service.test.ts`. The
- * `MissingRequiredClientCapabilityError` case runs the same service over a
- * client missing the required capability, catches the real thrown
- * `McpProtocolError`, and wraps it exactly the way `modern.ts`'s
- * `handleModernRequest` catch block does (S15 §11) — the same `code`,
- * `message` and `data` fields, not a hand-typed shape.
+ * `MissingRequiredClientCapabilityError` case goes through the actual
+ * production entry point, `modern.ts`'s `handleModernRequest` (the exact
+ * function `transport.ts` calls for every modern-era `/mcp` POST) over a
+ * client missing the required capability — the response body is the real
+ * `{ httpStatus, ...body } = await handleModernRequest(...)` destructure
+ * `transport.ts` itself performs, not a hand-typed shape (S15 §11, fix
+ * round 1 F1).
  */
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -31,9 +33,9 @@ import {
   type McpClientInfo,
 } from '../../api/mcp/confirmation/service.js';
 import { ConfirmationStore } from '../../api/mcp/confirmation/store.js';
-import { McpProtocolError } from '../../api/mcp/confirmation/errors.js';
 import type { KeyRing } from '../../api/mcp/confirmation/state.js';
-import type { McpIdentity } from '../../api/mcp/dispatch.js';
+import type { DispatcherOptions, McpIdentity } from '../../api/mcp/dispatch.js';
+import { handleModernRequest } from '../../api/mcp/modern.js';
 import type { ElicitRequestSpec, InputRequiredToolResult } from '../../api/mcp/results.js';
 import {
   PLAN_DOCUMENT_SCHEMA,
@@ -248,41 +250,57 @@ describe('S15 wire shapes validate against the vendored MCP 2026-07-28 schema', 
       risk_level: 'destructive',
       rollback_model: 'unsupported',
     });
-    const input: HandleInput = {
-      entry: FS_CREATE,
-      // Only `form` is declared; a destructive plan requires `url` — this is
-      // the same scenario as mcp-confirmation.test.ts's "a destructive
-      // (url-mode) plan with only form capability is refused" case.
-      args: baseArgs(doc, FS_CREATE, { dangerous: true }),
-      identity: IDENTITY,
+    // Route through the real production entry point instead of hand-copying
+    // its catch block. `handleModernRequest` is exactly what transport.ts
+    // calls for every modern-era `/mcp` POST — see transport.ts's own
+    // `const { httpStatus, ...body } = await handleModernRequest(...)` /
+    // `res.status(httpStatus ?? 200).json(body)`, mirrored below. Booting a
+    // real HTTP listener (mcp-wire.test.ts's `startServer()` pattern) isn't
+    // needed to exercise that: this file's `harness()` already builds a real
+    // `ConfirmationService` + plan against a real sqlite db, and
+    // `DispatcherOptions.confirmations` accepts that service directly —
+    // `handleModernRequest` calls `dispatch.ts`'s `callTool`, which calls
+    // `confirmations.handle()` (the same real gate the two
+    // `InputRequiredResult` cases above exercise) and lets its thrown
+    // `McpProtocolError` propagate into `handleModernRequest`'s own catch
+    // block, unmodified.
+    const opts: DispatcherOptions = {
+      loopback: async () => {
+        throw new Error('unreachable: the capability gate must throw before any loopback call');
+      },
+      loopbackToken: () => 'unused-token',
+      allowApply: () => true,
+      identity: () => IDENTITY,
       client: FORM_ONLY_CLIENT,
-      correlationId: 'corr-cap',
+      confirmations: h.service,
     };
-    let caught: McpProtocolError | undefined;
-    try {
-      await h.service.handle(input);
-    } catch (err) {
-      if (!(err instanceof McpProtocolError)) throw err;
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    // Mirrors modern.ts's `handleModernRequest` catch block exactly (the
-    // `httpStatus` field is transport-only and stripped before the JSON
-    // body is sent — never part of the wire response).
-    const response = {
-      jsonrpc: '2.0' as const,
+    const message = {
+      jsonrpc: '2.0',
       id: 'call-cap',
-      error: {
-        code: (caught as McpProtocolError).code,
-        message: (caught as McpProtocolError).message,
-        ...((caught as McpProtocolError).data !== undefined
-          ? { data: (caught as McpProtocolError).data }
-          : {}),
+      method: 'tools/call',
+      params: {
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientInfo': { name: 'schema-test', version: '1.0.0' },
+          'io.modelcontextprotocol/clientCapabilities': { elicitation: { form: {} } },
+        },
+        name: FS_CREATE.name,
+        // Only `form` is declared above; a destructive plan requires `url`
+        // — this is the same scenario as mcp-confirmation.test.ts's "a
+        // destructive (url-mode) plan with only form capability is
+        // refused" case.
+        arguments: baseArgs(doc, FS_CREATE, { dangerous: true }),
       },
     };
-    expect(response.error.code).toBe(-32021);
-    expect(response.error.data).toEqual({ requiredCapabilities: { elicitation: { url: {} } } });
-    expect(validateAs('MissingRequiredClientCapabilityError', response)).toEqual([]);
+    const response = await handleModernRequest(message, opts, 'corr-cap');
+    // The same destructure transport.ts performs before answering the HTTP
+    // response — `httpStatus` is transport-only and never part of the wire
+    // body.
+    const { httpStatus, ...body } = response;
+    expect(httpStatus).toBe(400);
+    expect(body.error?.code).toBe(-32021);
+    expect(body.error?.data).toEqual({ requiredCapabilities: { elicitation: { url: {} } } });
+    expect(validateAs('MissingRequiredClientCapabilityError', body)).toEqual([]);
   });
 
   it('a complete CallToolResult with resultType', () => {
