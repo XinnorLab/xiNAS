@@ -721,19 +721,22 @@ a mismatch.
 subscription concern. **Done** = header/body mismatch → HTTP 400 with the
 schema's error, tests on both transports.
 
-## MCP — S17 metrics are in memory until the S15 registry lands
+## MCP — the S17 `RegistryMetrics` adapter is still pending
 
 *Spec: S17 spec §12; decision D-17.*
 
-**What is missing.** Prometheus text exposition of the eleven
-`xinas_mcp_*` / `xinas_operational_event_*` instruments.
+**What is missing.** The S17 `xinas_mcp_*` / `xinas_operational_event_*`
+instruments are not registered on the metrics registry, so
+`GET /api/v1/metrics` does not render them.
 
 **What the code does instead.** `SubscriptionMetrics` has an in-memory
 implementation that tests assert against; nothing renders it.
 
-**Why it was cut.** `lib/metrics.ts` / `GET /api/v1/metrics` are S15 Task
-13, unlanded on the S17 base. **Done** = a `RegistryMetrics` adapter
-registering the same names on the S15 registry.
+**Why it was cut.** The registry itself has LANDED — `lib/metrics.ts` and
+`GET /api/v1/metrics` shipped with S15 Task 13, and the S15 confirmation
+series render there today. Only the S17 side is outstanding. **Done** = a
+`RegistryMetrics` adapter registering the S17 names on that registry
+(`Gauge.inc` is available for the `subscriptionsActive(±1)` mapping).
 
 ## MCP — the TUI "pending approvals" screen is deferred
 

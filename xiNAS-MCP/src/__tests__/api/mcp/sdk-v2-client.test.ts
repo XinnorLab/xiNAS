@@ -257,6 +257,11 @@ describe('@modelcontextprotocol/client 2.0.0 ↔ xinas-api S15 MRTR confirmation
       const consumed = getConfirmationByPlanId(plan_id);
       expect(consumed?.status).toBe('consumed');
       expect(consumed?.consumed_task_id).toBe(payload.result?.task_id);
+      // Task 16 follow-up: the released client's automatic input_required
+      // round-trip must produce exactly ONE apply task. The client re-sends
+      // the same tools/call with the echoed requestState, so a gate that
+      // failed to recognise the retry would leave two.
+      expect(countTasksByPlan(plan_id)).toBe(1);
     } finally {
       await client.close().catch(() => {});
     }

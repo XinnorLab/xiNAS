@@ -76,7 +76,13 @@ describe('mcp transport (S8 T7)', () => {
       JSON.stringify({
         controller_id: '00000000-0000-0000-0000-000000000777',
         listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
-        tokens: { 'tok-admin': { principal: 'admin:test', role: 'admin' } },
+        tokens: {
+          'tok-admin': { principal: 'admin:test', role: 'admin' },
+          // A1 (S15 §3.5): surface-scoped bearers.
+          'tok-mcp-only': { principal: 'mcp:agent', role: 'admin', surface: 'mcp' },
+          'tok-rest-only': { principal: 'admin:rest', role: 'admin', surface: 'rest' },
+          'tok-any': { principal: 'admin:any', role: 'admin', surface: 'any' },
+        },
         state: { databasePath: join(dir, 'x.db'), auditJsonlPath: join(dir, 'a.jsonl') },
         mcp: { http: { host: '127.0.0.1', port: 0 } },
       }),
@@ -127,6 +133,40 @@ describe('mcp transport (S8 T7)', () => {
   it('TCP without a bearer → 401; unknown bearer → 401', async () => {
     expect((await rpc(port, INITIALIZE)).status).toBe(401);
     expect((await rpc(port, INITIALIZE, { token: 'nope' })).status).toBe(401);
+  });
+
+  /**
+   * A1 (S15 §3.5): the MCP surface refuses a `surface: rest` bearer with the
+   * SAME 401 an unknown bearer gets — no oracle that would let a caller
+   * enumerate which tokens exist but are scoped elsewhere.
+   */
+  it("a surface: 'rest' bearer is refused on /mcp with the identical unknown-bearer 401", async () => {
+    const scoped = await rpc(port, INITIALIZE, { token: 'tok-rest-only' });
+    const unknown = await rpc(port, INITIALIZE, { token: 'nope' });
+    expect(scoped.status).toBe(401);
+    expect(scoped.body).toEqual(unknown.body);
+    expect(scoped.session).toBeUndefined();
+  });
+
+  it.each(['tok-mcp-only', 'tok-any', 'tok-admin'])(
+    'a %s bearer initializes on /mcp',
+    async (token) => {
+      const init = await rpc(port, INITIALIZE, { token });
+      expect(init.status).toBe(200);
+      expect(init.session).toBeTruthy();
+    },
+  );
+
+  it("a surface: 'rest' bearer is refused on the modern era too (server/discover 401)", async () => {
+    const res = await rpc(
+      port,
+      { jsonrpc: '2.0', id: 9, method: 'server/discover', params: {} },
+      { token: 'tok-rest-only' },
+    );
+    expect(res.status).toBe(401);
+    expect((res.body.error as { message?: string } | undefined)?.message).toBe(
+      'unauthorized (unknown or missing bearer)',
+    );
   });
 
   it('the dedicated MCP listener serves the same app (REST + /mcp)', async () => {

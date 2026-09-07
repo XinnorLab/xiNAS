@@ -116,4 +116,32 @@ describe('loopback auth (S8 T4)', () => {
       .set('X-Xinas-Confirmation', 'c-forged');
     expect(seen).toBeUndefined();
   });
+
+  it('S15 (d): ALL FOUR forged headers under a valid non-loopback admin token change nothing', async () => {
+    // The complete forgery — principal, role, client_type AND confirmation
+    // id — presented with a real (but not loopback) admin bearer. Every
+    // field must come from the token: `client_type` stays 'rest', so the
+    // MRTR gate in TaskEngine.apply is not even reachable, and
+    // `mcp_confirmation_id` stays unset, so no record can be nominated.
+    const ctx: Record<string, unknown> = {};
+    setup.app.get('/probe-forgery', (req, res) => {
+      ctx.principal = req.context?.principal;
+      ctx.role = req.context?.role;
+      ctx.client_type = req.context?.client_type;
+      ctx.mcp_confirmation_id = req.context?.mcp_confirmation_id;
+      res.json({ ok: true });
+    });
+    const res = await request(setup.app)
+      .get('/probe-forgery')
+      .set('Authorization', ADMIN_TOKEN)
+      .set('X-Xinas-Forwarded-Principal', 'mcp:local_admin')
+      .set('X-Xinas-Forwarded-Role', 'admin')
+      .set('X-Xinas-Client-Type', 'mcp')
+      .set('X-Xinas-Confirmation', 'c-forged');
+    expect(res.status).toBe(200);
+    expect(ctx.principal).toBe('admin:test');
+    expect(ctx.role).toBe('admin');
+    expect(ctx.client_type).toBe('rest');
+    expect(ctx.mcp_confirmation_id).toBeUndefined();
+  });
 });

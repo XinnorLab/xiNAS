@@ -352,4 +352,72 @@ describe('ConfirmationStore (S15 §6)', () => {
     expect(h.store.list({ principal: 'nobody' })).toEqual([]);
     expect(h.store.list({ status: 'pending' })).toHaveLength(2);
   });
+
+  it('M3: list uses one prepared statement per filter shape, not a fresh prepare per call', () => {
+    h.store.create(input);
+    // Four distinct shapes × repeated calls — the assertion is behavioural
+    // (identical answers) plus the statement cache being bounded by shape.
+    for (let i = 0; i < 5; i += 1) {
+      expect(h.store.list({}).map((r) => r.confirmation_id)).toEqual(['c-1']);
+      expect(h.store.list({ status: 'pending' }).map((r) => r.confirmation_id)).toEqual(['c-1']);
+      expect(h.store.list({ principal: 'admin:demo' }).map((r) => r.confirmation_id)).toEqual([
+        'c-1',
+      ]);
+      expect(
+        h.store
+          .list({ status: 'pending', principal: 'admin:demo', limit: 10 })
+          .map((r) => r.confirmation_id),
+      ).toEqual(['c-1']);
+      expect(h.store.list({ status: 'declined' })).toEqual([]);
+      expect(h.store.list({ principal: 'nobody' })).toEqual([]);
+    }
+    expect(h.store.listStatementShapes()).toBe(4);
+  });
+
+  // ── A6 (final review M1, M2): the two missing guarded-UPDATE clauses ──
+
+  it('A6/M1: reissue refuses a row at or past its expiry (the sweeper may not have run yet)', () => {
+    h.store.create(input); // expires_at = 1_300_000
+    h.setClock(1_299_999);
+    expect(h.store.reissue('c-1', 'nh2')?.round).toBe(2);
+    h.setClock(1_300_000); // exactly at expiry — `expires_at > now` is false
+    expect(h.store.reissue('c-1', 'nh3')).toBeNull();
+    h.setClock(1_400_000);
+    expect(h.store.reissue('c-1', 'nh4')).toBeNull();
+    // …and the row was not touched by either refused attempt.
+    const row = h.store.get('c-1');
+    expect(row?.round).toBe(2);
+    expect(row?.request_state_nonce_hash).toBe('nh2');
+    expect(row?.status).toBe('pending');
+  });
+
+  it('A6/M2: consume refuses a different principal and leaves the row pending', () => {
+    h.store.create(input);
+    h.setClock(1_000_001);
+    expect(
+      h.store.consume({
+        confirmation_id: 'c-1',
+        task_id: 't-1',
+        from: 'pending',
+        principal: 'admin:someone-else',
+        now: 1_000_001,
+      }),
+    ).toBe(false);
+    const row = h.store.get('c-1');
+    expect(row?.status).toBe('pending');
+    expect(row?.consumed_task_id).toBeUndefined();
+    expect(row?.consumed_at).toBeUndefined();
+    expect(row?.approved_by).toBeUndefined();
+    // The record's OWN principal still consumes it.
+    expect(
+      h.store.consume({
+        confirmation_id: 'c-1',
+        task_id: 't-1',
+        from: 'pending',
+        principal: 'admin:demo',
+        now: 1_000_001,
+      }),
+    ).toBe(true);
+    expect(h.store.get('c-1')?.status).toBe('consumed');
+  });
 });

@@ -107,6 +107,94 @@ async function flush(turns = 8): Promise<void> {
   }
 }
 
+/** A minimal url-mode destructive record + plan + summary for the A9 drives. */
+function pageRecord(): Record<string, unknown> {
+  const nowMs = Date.now();
+  return {
+    confirmation_id: 'conf-9',
+    status: 'pending',
+    mode: 'url',
+    principal: 'admin:test',
+    role: 'admin',
+    tool_name: 'raid.destroy',
+    operation_kind: 'raid.destroy',
+    plan_id: 'plan-9',
+    plan_hash: 'ph-9',
+    expected_revision: 1,
+    risk_level: 'destructive',
+    rollback_model: 'destructive',
+    node_id: 'node-9',
+    expires_at: new Date(nowMs + 300_000).toISOString(),
+    plan: {
+      affected_resources: [{ kind: 'RaidArray', id: 'raid0' }],
+      warnings: [],
+      diff: { a: 1 },
+    },
+    summary: { message: 'm', consequences: 'c', rollback_limitation: 'r' },
+  };
+}
+
+/**
+ * Run the served page script in a vm with the STUB_IDS element stubs, a
+ * fake `fetch` and a chosen `location.pathname`. Extracted (A9) so the path
+ * and render-edge drives below do not each rebuild the harness.
+ */
+function driveScript(
+  source: string,
+  pathname: string,
+  handler?: (
+    url: string,
+    init: { method?: string; headers?: Record<string, string>; body?: string },
+  ) => FakeFetchResponse,
+): { elements: Record<(typeof STUB_IDS)[number], StubElement>; fetchLog: FetchCall[] } {
+  const elements = Object.fromEntries(STUB_IDS.map((elId) => [elId, makeStubElement()])) as Record<
+    (typeof STUB_IDS)[number],
+    StubElement
+  >;
+  const body = makeStubElement();
+  body.setAttribute('data-confirmation-id', 'conf-9');
+  const fetchLog: FetchCall[] = [];
+  const documentStub = {
+    body,
+    querySelector(sel: string): StubElement {
+      const found = elements[sel.replace(/^#/, '') as (typeof STUB_IDS)[number]];
+      if (!found) throw new Error(`no stub element for selector ${sel}`);
+      return found;
+    },
+    createElement(): StubElement {
+      return makeStubElement();
+    },
+  };
+  const sandbox: Record<string, unknown> = {
+    document: documentStub,
+    fetch: (
+      url: string,
+      init: { method?: string; headers?: Record<string, string>; body?: string },
+    ): Promise<FakeFetchResponse> => {
+      fetchLog.push({
+        url,
+        method: init.method ?? 'GET',
+        headers: init.headers ?? {},
+        body: init.body,
+      });
+      return Promise.resolve(
+        handler?.(url, init) ?? {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ result: pageRecord() }),
+        },
+      );
+    },
+    location: { pathname, search: '' },
+    console,
+    Promise,
+    setTimeout,
+  };
+  sandbox.window = sandbox;
+  vm.runInNewContext(source, sandbox);
+  return { elements, fetchLog };
+}
+
 describe('approval page (S15 §9.3)', () => {
   let setup: Awaited<ReturnType<typeof buildTestApp>>;
   beforeEach(async () => {
@@ -407,5 +495,103 @@ describe('operator approval page — executed script (S15 Task 12 fix1, F1/F2/F3
     // F2: the URL is built from location.pathname's computed base, not a
     // hardcoded root-absolute path — it must carry the /prefix.
     expect(postCall?.url.startsWith('/prefix/api/v1/mcp/confirmations/')).toBe(true);
+  });
+});
+
+/**
+ * A9 (final review M6 + Task 12 candidates h, i) — the three path/render
+ * edges the page was getting wrong.
+ */
+describe('approval page — path and render edges (A9)', () => {
+  let setup: Awaited<ReturnType<typeof buildTestApp>>;
+  beforeEach(async () => {
+    setup = await buildTestApp();
+  });
+  afterEach(async () => {
+    await setup.cleanup();
+  });
+
+  it('a trailing slash 301s to the canonical slash-less path so relative assets resolve', async () => {
+    const res = await request(setup.app).get('/mcp/approvals/abc/');
+    expect(res.status).toBe(301);
+    expect(res.headers.location).toBe('/mcp/approvals/abc');
+    // The security headers are on this response too.
+    for (const [header, value] of Object.entries(APPROVAL_PAGE_HEADERS)) {
+      expect(res.headers[header.toLowerCase()]).toBe(value);
+    }
+  });
+
+  it('the redirect preserves a reverse-proxy path prefix (originalUrl, not path)', async () => {
+    const wrapper = express();
+    wrapper.use('/prefix', setup.app);
+    const res = await request(wrapper).get('/prefix/mcp/approvals/abc/');
+    expect(res.status).toBe(301);
+    expect(res.headers.location).toBe('/prefix/mcp/approvals/abc');
+  });
+
+  it('the redirect keeps the query string', async () => {
+    const res = await request(setup.app).get('/mcp/approvals/abc/?from=email');
+    expect(res.status).toBe(301);
+    expect(res.headers.location).toBe('/mcp/approvals/abc?from=email');
+  });
+
+  it('a path with extra empty segments never reaches the page route at all', async () => {
+    // Express does not match `/mcp/approvals/abc///` against
+    // `/mcp/approvals/:id`, so it falls through to the authenticated
+    // catch-all rather than being redirected — recorded here so the
+    // redirect above is not read as covering it.
+    expect((await request(setup.app).get('/mcp/approvals/abc///')).status).toBe(401);
+  });
+
+  it('the canonical path is served, not redirected', async () => {
+    const res = await request(setup.app).get('/mcp/approvals/abc');
+    expect(res.status).toBe(200);
+  });
+
+  it('a doubled leading slash in location.pathname cannot yield a protocol-relative API base', async () => {
+    const source = (await request(setup.app).get('/mcp/approvals/assets/app.js')).text;
+    const drive = driveScript(source, '//mcp/approvals/conf-9');
+    drive.elements.token.value = 'tok';
+    drive.elements['login-form'].listeners.submit?.[0]?.({ preventDefault: () => {} });
+    await flush();
+    const url = drive.fetchLog[0]?.url as string;
+    expect(url).toBe('/api/v1/mcp/confirmations/conf-9');
+    // Exactly one leading slash — `//api/v1/...` is a protocol-relative URL
+    // and would send the operator's bearer to another host entirely.
+    expect(url.startsWith('/')).toBe(true);
+    expect(url.startsWith('//')).toBe(false);
+  });
+
+  it('a decision that succeeded but whose re-GET failed shows the success line first', async () => {
+    const source = (await request(setup.app).get('/mcp/approvals/assets/app.js')).text;
+    let gets = 0;
+    const drive = driveScript(source, '/mcp/approvals/conf-9', (_url, init) => {
+      const method = init.method ?? 'GET';
+      if (method === 'GET') {
+        gets += 1;
+        // The FIRST load succeeds (so the page can render and be decided
+        // on); the post-decision re-GET fails.
+        return gets === 1
+          ? { ok: true, status: 200, json: () => Promise.resolve({ result: pageRecord() }) }
+          : { ok: false, status: 503, json: () => Promise.resolve({ errors: [] }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ result: { ...pageRecord(), status: 'approved' } }),
+      };
+    });
+    drive.elements.token.value = 'tok';
+    drive.elements['login-form'].listeners.submit?.[0]?.({ preventDefault: () => {} });
+    await flush();
+    drive.elements.reviewed.checked = true;
+    drive.elements.phrase.value = 'DATA MAY BE PERMANENTLY LOST';
+    drive.elements.approve.listeners.click?.[0]?.();
+    await flush();
+
+    const status = drive.elements.status.textContent;
+    expect(status.startsWith('Approved. The MCP client may now retry its apply.')).toBe(true);
+    expect(status).toContain('503');
+    expect(status).not.toBe('Network error.');
   });
 });

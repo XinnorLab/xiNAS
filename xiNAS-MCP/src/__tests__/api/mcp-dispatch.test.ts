@@ -1,12 +1,16 @@
-import { describe, expect, it } from 'vitest';
-import { CATALOG } from '../../api/mcp/catalog.js';
+import { describe, expect, it, vi } from 'vitest';
+import { CATALOG, mcpVisible } from '../../api/mcp/catalog.js';
+import { McpProtocolError } from '../../api/mcp/confirmation/errors.js';
 import {
+  type DispatcherOptions,
   LEGACY_TOOL_MAP,
   buildRequest,
   gateVerdict,
   listTools,
   nextHint,
 } from '../../api/mcp/dispatch.js';
+import { buildCapabilities } from '../../api/mcp/discover.js';
+import { handleModernRequest } from '../../api/mcp/modern.js';
 
 const entry = (name: string) => {
   const e = CATALOG.find((c) => c.name === name);
@@ -112,5 +116,88 @@ describe('S15: hidden catalog entries never surface over MCP', () => {
     expect(names).not.toContain('mcp_confirmations.list');
     expect(names).not.toContain('system.metrics');
     expect(names).toContain('shares.update');
+  });
+
+  it('Task 7 follow-up: discovery advertises tools from the SAME predicate listTools uses', () => {
+    expect(CATALOG.filter(mcpVisible).map((e) => e.name)).toEqual(listTools().map((t) => t.name));
+    expect(buildCapabilities({}).tools).toEqual({});
+  });
+});
+
+/**
+ * A8 (final review M5) — the modern-era catch block used to put
+ * `err.message` straight on the JSON-RPC wire. Any unexpected throw (a
+ * sqlite error, a filesystem path, a stack-derived message) then reached an
+ * MCP client verbatim. Only `McpProtocolError` — whose message and `data`
+ * are written for the wire on purpose — keeps its text.
+ */
+describe('A8: unexpected errors never put raw text on the modern wire', () => {
+  const opts = (thrown: unknown): DispatcherOptions => ({
+    loopback: async () => {
+      throw thrown;
+    },
+    loopbackToken: () => 'unused',
+    allowApply: () => true,
+    identity: () => ({ principal: 'admin:test', role: 'admin' }),
+    client: { era: 'modern', elicitation: new Set(['form', 'url']) },
+  });
+
+  const call = {
+    jsonrpc: '2.0',
+    id: 'call-1',
+    method: 'tools/call',
+    params: {
+      _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' },
+      name: 'arrays.list',
+      arguments: {},
+    },
+  };
+
+  it('a plain Error becomes -32603 "internal error" with no data and no original text', async () => {
+    const errors: unknown[][] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => {
+      errors.push(a);
+    });
+    try {
+      const res = await handleModernRequest(call, opts(new Error('sqlite disk I/O')), 'corr-a8');
+      expect(res.error?.code).toBe(-32603);
+      expect(res.error?.message).toBe('internal error');
+      expect(res.error?.data).toBeUndefined();
+      expect(JSON.stringify(res)).not.toContain('sqlite');
+      // …but the operator can still find it, tied to the correlation id.
+      const logged = errors.map((a) => a.join(' ')).join('\n');
+      expect(logged).toContain('corr-a8');
+      expect(logged).toContain('sqlite disk I/O');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a thrown non-Error is redacted the same way', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await handleModernRequest(call, opts('/etc/xinas-api/config.json'), 'corr-a8b');
+      expect(res.error?.message).toBe('internal error');
+      expect(JSON.stringify(res)).not.toContain('config.json');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('an McpProtocolError keeps its own message and data (they are written for the wire)', async () => {
+    const res = await handleModernRequest(
+      call,
+      opts(
+        new McpProtocolError(-32021, 'Server requires the elicitation capability', {
+          httpStatus: 400,
+          data: { requiredCapabilities: { elicitation: { url: {} } } },
+        }),
+      ),
+      'corr-a8c',
+    );
+    expect(res.error?.code).toBe(-32021);
+    expect(res.error?.message).toBe('Server requires the elicitation capability');
+    expect(res.error?.data).toEqual({ requiredCapabilities: { elicitation: { url: {} } } });
+    expect(res.httpStatus).toBe(400);
   });
 });

@@ -5,14 +5,18 @@ import {
   summarizeDiff,
 } from '../../../api/mcp/confirmation/message.js';
 import type { ConfirmationRecord } from '../../../api/mcp/confirmation/types.js';
-import type { PlanDocument } from '../../../api/plan/document.js';
+import { type PlanDocument, buildPlanDocument } from '../../../api/plan/document.js';
 import { canonicalize } from '../../../lib/canonical-json.js';
 
-const document: PlanDocument = {
-  schema: 1,
+/**
+ * A4: built through `buildPlanDocument` — the production path — so
+ * `client_impact` is whatever `clientImpact()` actually derives. Pinning a
+ * hand-written sentence here let the §10.1 claim drift away from what an
+ * operator is really shown.
+ */
+const document: PlanDocument = buildPlanDocument({
   plan_id: '0d7f6c2e-1111-4222-8333-444455556666',
   operation_kind: 'share.update',
-  resource_ref: { kind: 'Share', id: 'share-a' },
   plan_hash: '9f3c1a2b7e4d'.padEnd(64, '0'),
   state_revision_expected: 42,
   observed_revision_expected: 17,
@@ -22,8 +26,6 @@ const document: PlanDocument = {
     { kind: 'ExportRule', id: 'share-a/10.0.0.0/24' },
   ],
   risk_level: 'changing_access',
-  client_impact:
-    'Clients of /srv/share-a from 10.0.0.0/24 lose write access; active sessions are not interrupted.',
   blockers: [],
   warnings: [
     {
@@ -31,11 +33,16 @@ const document: PlanDocument = {
       message: '3 active sessions from 10.0.0.12, 10.0.0.15, 10.0.0.31',
     },
   ],
-  diff: { access_mode: { before: 'rw', after: 'ro' } },
+  diff: {
+    path: '/srv/share-a',
+    access_mode: { before: 'rw', after: 'ro' },
+    clients: ['10.0.0.0/24'],
+  },
   rollback_model: 'changing_access',
-  created_at: '2026-09-04T10:00:00.000Z',
-  created_by: { principal: 'admin:demo', client_type: 'mcp' },
-};
+  created_at_ms: Date.parse('2026-09-04T10:00:00.000Z'),
+  principal: 'admin:demo',
+  client_type: 'mcp',
+});
 
 const record = {
   confirmation_id: 'c-1',
@@ -77,7 +84,10 @@ describe('confirmation message (S15 §10)', () => {
       'Share "share-a"',
       'Risk: changing_access',
       'Rollback: changing_access',
-      'Client impact: Clients of /srv/share-a from 10.0.0.0/24',
+      // A4: the DERIVED sentence, exactly as buildPlanDocument produced it.
+      'Client impact: Affects NFS share share-a, NFS export rule share-a/10.0.0.0/24 ' +
+        '(export /srv/share-a); changed: access_mode, clients. ' +
+        'Review the diff for the new access rules.',
       'ExportRule share-a/10.0.0.0/24',
       'NFS_SESSIONS_ACTIVE',
       '10.0.0.12',
@@ -168,6 +178,74 @@ describe('confirmation message (S15 §10)', () => {
     expect(s.consequences).toBe(
       'This operation destroys data on the affected resources. Data may be permanently lost.',
     );
+  });
+
+  /**
+   * A5 (final review I5, S15 §10.2) — `unsupported_rollback` is a risk level
+   * in its own right (`confirmationModeFor` sends it to url mode), but the
+   * page used to describe it with the generic "changes the node
+   * configuration" line and, when `rollback_model` was something other than
+   * `unsupported`, with a rollback sentence that contradicted the risk.
+   */
+  describe('A5: unsupported_rollback operator text', () => {
+    const unsupported = (rollbackModel: string) => {
+      const d = {
+        ...document,
+        risk_level: 'unsupported_rollback',
+        rollback_model: rollbackModel,
+      };
+      const r = {
+        ...record,
+        risk_level: 'unsupported_rollback',
+        rollback_model: rollbackModel,
+      } as ConfirmationRecord;
+      return renderSummary({ record: r, document: d, hostname: 'nas-01', now: r.created_at });
+    };
+
+    it('consequences name the manual recovery, whatever the rollback_model says', () => {
+      for (const model of ['unsupported', 'changing_access', 'non_disruptive', 'destructive']) {
+        expect(unsupported(model).consequences).toBe(
+          'This operation cannot be rolled back automatically: if it fails or must be undone, manual recovery is required.',
+        );
+      }
+    });
+
+    it('rollback_limitation is the no-automatic-rollback sentence for the risk level alone', () => {
+      for (const model of ['unsupported', 'changing_access', 'non_disruptive', 'destructive']) {
+        expect(unsupported(model).rollback_limitation).toBe(
+          'xiNAS cannot roll this operation back automatically.',
+        );
+      }
+    });
+
+    it('the unsupported_rollback branch is evaluated BEFORE changing_access', () => {
+      // A changing_access rollback_model must not win the consequences line.
+      expect(unsupported('changing_access').consequences).not.toContain('changes client access');
+    });
+
+    it('a changing_access risk still gets its own consequences and rollback sentences', () => {
+      const s = renderSummary({
+        record,
+        document,
+        hostname: 'nas-01',
+        now: record.created_at,
+      });
+      expect(s.consequences).toBe(
+        `This operation changes client access: ${document.client_impact}`,
+      );
+      expect(s.rollback_limitation).toBe(
+        'Rollback restores the previous access rules; clients may see a brief interruption.',
+      );
+    });
+
+    it('rollback_model: unsupported alone still wins over the model switch', () => {
+      const d = { ...document, rollback_model: 'unsupported' };
+      const r = { ...record, rollback_model: 'unsupported' } as ConfirmationRecord;
+      const s = renderSummary({ record: r, document: d, hostname: 'nas-01', now: r.created_at });
+      expect(s.rollback_limitation).toBe('xiNAS cannot roll this operation back automatically.');
+      // …and the consequences line still follows the RISK level.
+      expect(s.consequences).toBe(`This operation changes client access: ${d.client_impact}`);
+    });
   });
 
   it('renders a url-mode message and never leaks secret hashes (F5)', () => {

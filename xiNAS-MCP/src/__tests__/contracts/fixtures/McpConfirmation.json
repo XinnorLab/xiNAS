@@ -10,8 +10,8 @@
   "plan_hash": "sha256:fixture-plan-hash",
   "idempotency_key": "fixture-ik-1",
   "expected_revision": 3,
-  "risk_level": "changing_access",
-  "rollback_model": "changing_access",
+  "risk_level": "destructive",
+  "rollback_model": "destructive",
   "arguments_hash": "sha256:fixture-arguments-hash",
   "plan_document_hash": "sha256:fixture-plan-document-hash",
   "round": 1,
@@ -39,16 +39,16 @@
     "affected_resources": [
       { "kind": "Share", "id": "fixture-share-1", "revision": 3 }
     ],
-    "risk_level": "changing_access",
+    "risk_level": "destructive",
     "client_impact": "May affect NFS clients; review the diff.",
     "blockers": [],
     "warnings": [],
     "diff": {},
-    "rollback_model": "changing_access"
+    "rollback_model": "destructive"
   },
   "summary": {
     "message": "Confirm updating share fixture-share-1.",
-    "consequences": "NFS clients may briefly lose access while the export options change.",
-    "rollback_limitation": "Rollback restores the previous export options."
+    "consequences": "This operation destroys data on Share fixture-share-1. Data on them may be permanently lost.",
+    "rollback_limitation": "Rollback is itself destructive: undoing this operation cannot restore data."
   }
 }

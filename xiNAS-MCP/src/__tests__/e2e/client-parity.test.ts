@@ -549,7 +549,7 @@ describe.sequential('e2e: S8 client parity (REST / MCP-stdio / xinasctl)', () =>
     },
   );
 
-  it('EXIT CRITERION over stdio: MCP apply → MCP_APPLY_DISABLED; REST applies the same plan', async () => {
+  it('EXIT CRITERION over stdio: MCP apply → MCP_APPLY_DISABLED; the same UNSCOPED token applies the same plan over REST (A1: this is the surface: any default, not a guarantee)', async () => {
     const plan = await (mcp as StdioMcp).callTool(4, 'shares.create', {
       mode: 'plan',
       spec: SHARE_SPEC,
@@ -566,7 +566,11 @@ describe.sequential('e2e: S8 client parity (REST / MCP-stdio / xinasctl)', () =>
     expect(mcpApply.isError).toBe(true);
     expect(JSON.stringify(mcpApply.payload)).toContain('MCP_APPLY_DISABLED');
 
-    // The SAME plan applies via REST (202) — only the MCP transport is gated.
+    // The SAME plan applies via REST (202) with the SAME bearer — because
+    // that bearer carries no `surface` key and therefore defaults to
+    // `any` (S15 §3.5 / A1). This is the honest default, not a security
+    // property: scoping the token `surface: mcp` is what stops it (see
+    // scenario 10 in the MRTR block below).
     const restApply = await restJson(apiSockPath, 'POST', '/api/v1/shares', ADMIN_TOKEN, {
       mode: 'apply',
       plan_id: planId,
@@ -618,12 +622,19 @@ describe.sequential('e2e: S8 client parity (REST / MCP-stdio / xinasctl)', () =>
  *   9. legacy denial — a client with no `_meta` envelope gets
  *      `MCP_CONFIRMATION_UNSUPPORTED` on apply; its reads, plan,
  *      `support.bundle`, and `tasks.cancel` are unaffected.
+ *  10. token surface (A1, S15 §3.5) — an agent bearer configured
+ *      `surface: mcp` is refused on `/api/v1` (`PERMISSION_DENIED`,
+ *      `details.reason: token_surface`) so the confirmation gate cannot be
+ *      bypassed over REST, while the same token's MCP form flow still
+ *      completes.
  */
 describe.sequential('e2e: S8 §7 MCP confirmation parity (S15 scenarios 7-9)', () => {
   const MRTR_CONTROLLER_ID = '00000000-0000-0000-0000-00000000c17f';
   const MRTR_ADMIN_TOKEN = 'e2e-mrtr-admin-tok';
   const MRTR_ADMIN2_TOKEN = 'e2e-mrtr-admin2-tok';
   const MRTR_AGENT_TOKEN = 'e2e-mrtr-agent-tok';
+  /** A1 (S15 §3.5): an agent bearer scoped to the MCP endpoint only. */
+  const MRTR_MCP_SCOPED_TOKEN = 'e2e-mrtr-mcp-scoped-tok';
   const APPROVAL_URL_BASE = 'http://127.0.0.1:1';
   const BOTH_CAPS = { form: {}, url: {} };
 
@@ -808,6 +819,11 @@ describe.sequential('e2e: S8 §7 MCP confirmation parity (S15 scenarios 7-9)', (
           [MRTR_ADMIN_TOKEN]: { principal: 'admin:mrtr1', role: 'admin' },
           [MRTR_ADMIN2_TOKEN]: { principal: 'admin:mrtr2', role: 'admin' },
           [MRTR_AGENT_TOKEN]: { principal: 'agent:root', role: 'internal_agent' },
+          [MRTR_MCP_SCOPED_TOKEN]: {
+            principal: 'admin:mrtr-mcp',
+            role: 'admin',
+            surface: 'mcp',
+          },
         },
         state: { databasePath: dbPath, auditJsonlPath: auditPath },
         agent: { socket: agentSockPath, heartbeat_interval_ms: 300 },
@@ -1188,33 +1204,37 @@ describe.sequential('e2e: S8 §7 MCP confirmation parity (S15 scenarios 7-9)', (
         argsB,
         { modern: true, caps: BOTH_CAPS },
       );
-      expect(firstB.resultType, JSON.stringify(firstB)).toBe('input_required');
-      const urlB = firstB.inputRequests?.confirm_apply?.params.url as string;
-      const confirmationIdB = urlB.split('/').pop() as string;
+      // A2: the refusal now lands BEFORE any elicitation — no URL is
+      // handed out, so no operator approval is ever spent on a call the
+      // apply transaction would refuse anyway (S15 §3.3 row 8, §3.4).
+      expect(firstB.resultType, JSON.stringify(firstB)).toBe('complete');
+      const firstBPayload = firstB.payload as ToolPayload;
+      expect(firstBPayload.error?.code).toBe('PRECONDITION_FAILED');
+      expect(firstBPayload.error?.details?.reason).toBe('dangerous_flag_required');
+      expect(firstB.requestState).toBeUndefined();
+      expect(firstB.inputRequests).toBeUndefined();
 
-      const approveB = await restJson(
+      // …and no mcp_confirmations row exists for that plan.
+      const listed = await restJson(
         apiSockPath,
-        'POST',
-        `/api/v1/mcp/confirmations/${confirmationIdB}/approve`,
+        'GET',
+        '/api/v1/mcp/confirmations?limit=1000',
         MRTR_ADMIN2_TOKEN,
-        { acknowledge: ACK_NO_ROLLBACK },
       );
-      expect(approveB.status, JSON.stringify(approveB.body)).toBe(200);
+      expect(listed.status, JSON.stringify(listed.body)).toBe(200);
+      const rowsB = (listed.body.result as Array<{ plan_id?: string }>) ?? [];
+      expect(rowsB.some((r) => r.plan_id === planBResult.plan_id)).toBe(false);
 
-      const retriedB = await (mrtrMcp as StdioMcp).callTool(
+      // The SAME plan with dangerous:true still elicits the url flow, so
+      // the refusal above is about the flag and nothing else.
+      const withFlagB = await (mrtrMcp as StdioMcp).callTool(
         nextMrtrId(),
         'filesystems.create',
-        argsB,
-        {
-          modern: true,
-          caps: BOTH_CAPS,
-          requestState: firstB.requestState,
-          inputResponses: { confirm_apply: { action: 'accept' } },
-        },
+        { ...argsB, idempotency_key: 'mrtr-fs-b2', dangerous: true },
+        { modern: true, caps: BOTH_CAPS },
       );
-      const retriedBPayload = retriedB.payload as ToolPayload;
-      expect(retriedBPayload.error?.code).toBe('PRECONDITION_FAILED');
-      expect(retriedBPayload.error?.details?.reason).toBe('dangerous_flag_required');
+      expect(withFlagB.resultType, JSON.stringify(withFlagB)).toBe('input_required');
+      expect(withFlagB.inputRequests?.confirm_apply?.params.mode).toBe('url');
     },
   );
 
@@ -1275,6 +1295,95 @@ describe.sequential('e2e: S8 §7 MCP confirmation parity (S15 scenarios 7-9)', (
         expect(cancel.isError, JSON.stringify(cancel.payload)).toBe(false);
       } finally {
         legacy.kill();
+      }
+    },
+  );
+
+  it(
+    "10. token surface (A1, S15 §3.5): the agent's `surface: mcp` bearer is refused on REST " +
+      'with PERMISSION_DENIED/token_surface, while its MCP form flow still completes',
+    { timeout: 30_000 },
+    async () => {
+      const scopedMcp = new StdioMcp(apiSockPath, MRTR_MCP_SCOPED_TOKEN);
+      try {
+        await scopedMcp.send({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-03-26',
+            capabilities: {},
+            clientInfo: { name: 'scoped', version: '0' },
+          },
+        });
+
+        const spec = { clients: [{ pattern: '192.168.0.0/16', options: ['ro'] }] };
+        // The plan is created BY the scoped principal over MCP — a plan
+        // belongs to its creator (gate 6, §5.3 item 7).
+        const plan = await scopedMcp.callTool(2, 'shares.update', {
+          id: 'confirm-share',
+          mode: 'plan',
+          spec,
+        });
+        expect(plan.isError, JSON.stringify(plan.payload)).toBe(false);
+        const planResult = (plan.payload as ToolPayload).result as {
+          plan_id: string;
+          state_revision_expected: number;
+        };
+
+        // The bypass this closes: the SAME bearer applying over REST.
+        const restApply = await restJson(
+          apiSockPath,
+          'PATCH',
+          '/api/v1/shares/confirm-share',
+          MRTR_MCP_SCOPED_TOKEN,
+          {
+            mode: 'apply',
+            plan_id: planResult.plan_id,
+            expected_revision: planResult.state_revision_expected,
+            idempotency_key: 'mrtr-scoped-rest-apply',
+          },
+        );
+        expect(restApply.status, JSON.stringify(restApply.body)).toBe(401);
+        const restError = (restApply.body.errors as Array<Record<string, unknown>>)[0];
+        expect(restError?.code).toBe('PERMISSION_DENIED');
+        expect(restError?.details).toEqual({ reason: 'token_surface', surface: 'mcp' });
+        // Nothing was applied: a read with an unscoped admin token still
+        // shows the share, and no task was created for that key.
+        const tasks = await restJson(
+          apiSockPath,
+          'GET',
+          '/api/v1/tasks?limit=200',
+          MRTR_ADMIN_TOKEN,
+        );
+        const rows = (tasks.body.result as Array<{ idempotency_key?: string }>) ?? [];
+        expect(rows.some((t) => t.idempotency_key === 'mrtr-scoped-rest-apply')).toBe(false);
+
+        // The same token's MCP flow is unaffected: form → accept → task.
+        const mcpArgs = {
+          id: 'confirm-share',
+          mode: 'apply',
+          plan_id: planResult.plan_id,
+          expected_revision: planResult.state_revision_expected,
+          idempotency_key: 'mrtr-scoped-mcp-apply',
+        };
+        const first = await scopedMcp.callTool(3, 'shares.update', mcpArgs, { modern: true });
+        expect(first.resultType, JSON.stringify(first)).toBe('input_required');
+        expect(first.inputRequests?.confirm_apply?.params.mode).toBe('form');
+
+        const accepted = await scopedMcp.callTool(4, 'shares.update', mcpArgs, {
+          modern: true,
+          requestState: first.requestState,
+          inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+        });
+        expect(accepted.resultType, JSON.stringify(accepted)).toBe('complete');
+        expect(accepted.isError, JSON.stringify(accepted.payload)).toBe(false);
+        const taskId = ((accepted.payload as ToolPayload).result as { task_id?: string })?.task_id;
+        expect(typeof taskId).toBe('string');
+        const applied = await waitForTaskTerminal(taskId as string);
+        expect(applied.state, JSON.stringify(applied)).toBe('success');
+      } finally {
+        scopedMcp.kill();
       }
     },
   );

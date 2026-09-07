@@ -154,6 +154,9 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     // terminal task_progress event) never collides with another test's
     // apply on the SAME resource within this shared-server describe block.
     seedShare(handle.state, 'share-b');
+    // I4(a) dispatches a real apply and must not collide with
+    // share-a/share-b's leases either.
+    seedShare(handle.state, 'share-i4a');
     handle.state.kv.put('/xinas/v1/observed/XiraidArray/data', {
       kind: 'XiraidArray',
       id: 'data',
@@ -740,7 +743,10 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     expect(consumed?.consumed_task_id).toBe(taskId);
   }, 10_000);
 
-  it('url mode: an approved confirmation without dangerous:true fails PRECONDITION_FAILED/dangerous_flag_required and stays approved', async () => {
+  it('A2: a destructive apply without dangerous:true is refused BEFORE any confirmation record exists', async () => {
+    // Was: the flow ran to an operator approval and only then hit the
+    // engine's dangerous gate — a human decision spent on a call that could
+    // never succeed. The service now refuses at gate 8 (S15 §3.3 row 8).
     const { plan_id, expected_revision } = await planFsCreateForce(port, 'tok-admin', '/mnt/t8b');
     const idem = nextId('ik');
     const args = { mode: 'apply', plan_id, expected_revision, idempotency_key: idem }; // no dangerous
@@ -754,30 +760,27 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
       {},
       BOTH,
     );
-    const record = getConfirmationByPlanId(plan_id);
-    handle.state.db
-      .prepare(
-        `UPDATE mcp_confirmations SET status='approved', approved_by='admin:other', approved_at=? WHERE confirmation_id=?`,
-      )
-      .run(Date.now(), record?.confirmation_id as string);
+    const payload = payloadOf(first);
+    expect(payload.error?.code).toBe('PRECONDITION_FAILED');
+    expect(payload.error?.details?.reason).toBe('dangerous_flag_required');
+    // No elicitation, no record, no task — nothing to approve.
+    expect(toolResultOf(first).resultType).toBe('complete');
+    expect(toolResultOf(first).requestState).toBeUndefined();
+    expect(getConfirmationByPlanId(plan_id)).toBeUndefined();
+    expect(countTasksByPlan(plan_id)).toBe(0);
 
-    const res = await call(
+    // The SAME plan with the flag still elicits the url confirmation.
+    const withFlag = await call(
       port,
       'tok-admin',
       nextId('call'),
       'filesystems.create',
-      args,
-      {
-        requestState: toolResultOf(first).requestState,
-        inputResponses: { confirm_apply: { action: 'accept' } },
-      },
+      { ...args, idempotency_key: nextId('ik'), dangerous: true },
+      {},
       BOTH,
     );
-    const payload = payloadOf(res);
-    expect(payload.error?.code).toBe('PRECONDITION_FAILED');
-    expect(payload.error?.details?.reason).toBe('dangerous_flag_required');
-    expect(getConfirmationByPlanId(plan_id)?.status).toBe('approved'); // unchanged
-    expect(countTasksByPlan(plan_id)).toBe(0);
+    expect(toolResultOf(withFlag).resultType).toBe('input_required');
+    expect(getConfirmationByPlanId(plan_id)?.mode).toBe('url');
   });
 
   // ── 11. REST approval (S15 Task 11) ───────────────────────────────────────
@@ -1043,6 +1046,57 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     expect(record?.correlation_id).toBe(serverCorrelationId);
     expect((record?.correlation_id as string).length).toBeLessThanOrEqual(64);
   });
+
+  // ── S15 §15.3 concurrency and dispatch-failure properties (I4) ────────────
+
+  it('I4(a): a SECOND accepted retry with the same requestState answers the SAME task_id — one task, one consumption', async () => {
+    // The record is already `consumed` when the second retry arrives, so
+    // `retry()` returns `proceed` and the engine's step-1 idempotency check
+    // hands back the original task through the consumed record (§8.5).
+    // Nothing may consume twice: not a second task row, not a second
+    // `consumed` audit row, and not a different `consumed_task_id`.
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin', 'share-i4a');
+    const args = {
+      id: 'share-i4a',
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+    };
+    const first = await call(port, 'tok-admin', nextId('call'), 'shares.update', args);
+    const accept = {
+      requestState: toolResultOf(first).requestState,
+      inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+    };
+
+    const before = auditRows(dir).length;
+    const a = await call(port, 'tok-admin', nextId('call'), 'shares.update', args, accept);
+    const taskId = (payloadOf(a).result as { task_id?: string })?.task_id;
+    expect(typeof taskId).toBe('string');
+    const afterFirst = getConfirmationByPlanId(plan_id);
+    expect(afterFirst?.status).toBe('consumed');
+    expect(afterFirst?.consumed_task_id).toBe(taskId);
+
+    const b = await call(port, 'tok-admin', nextId('call'), 'shares.update', args, accept);
+    expect(toolResultOf(b).resultType).toBe('complete');
+    expect((payloadOf(b).result as { task_id?: string })?.task_id).toBe(taskId);
+
+    expect(countTasksByPlan(plan_id)).toBe(1);
+    const afterSecond = getConfirmationByPlanId(plan_id);
+    expect(afterSecond?.status).toBe('consumed');
+    expect(afterSecond?.consumed_task_id).toBe(taskId);
+    expect(afterSecond?.consumed_at).toBe(afterFirst?.consumed_at);
+
+    await handle.state.drainer.drainNow();
+    const rows = auditRows(dir).slice(before);
+    const consumedRows = rows.filter(
+      (r) =>
+        r.kind === 'mcp.confirmation.consumed' &&
+        (r.payload as { confirmation_id?: string } | undefined)?.confirmation_id ===
+          afterSecond?.confirmation_id,
+    );
+    expect(consumedRows).toHaveLength(1);
+  });
 });
 
 // ── 10. allow_apply: false (brief case 10) — a separate server/db ──────────
@@ -1096,6 +1150,100 @@ describe('MCP MRTR confirmation — mcp.allow_apply: false (S15 Task 10)', () =>
     ).n;
     expect(count).toBe(0);
   });
+});
+
+/**
+ * I4(b) — a dispatch failure AFTER consumption (S15 §8.4). Its OWN server,
+ * db and mock agent: the shared block above deliberately leaves several
+ * applies in flight forever (its mock agent never posts a terminal
+ * task_progress event), so with the default `tasks.max_inflight` a new
+ * apply there can sit `queued` and never reach `task.begin` at all — which
+ * is exactly the call this case needs the agent to refuse.
+ */
+describe('MCP MRTR confirmation — dispatch failure after consumption (S15 §8.4)', () => {
+  let dir: string;
+  let handle: Awaited<ReturnType<typeof startServer>>;
+  let mockAgent: MockAgentServer;
+  let port: number;
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'xinas-mcp-confirm-dispatchfail-'));
+    const agentSock = join(dir, 'agent.sock');
+    mockAgent = await startMockAgentServer(agentSock);
+    const configPath = join(dir, 'config.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        controller_id: '00000000-0000-0000-0000-0000000000c4',
+        listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
+        tokens: { 'tok-admin': { principal: 'admin:test', role: 'admin' } },
+        state: { databasePath: join(dir, 'x.db'), auditJsonlPath: join(dir, 'a.jsonl') },
+        agent: { socket: agentSock },
+        mcp: { allow_apply: true, confirmation: { url_wait_seconds: 1 } },
+      }),
+    );
+    handle = await startServer({ configPath });
+    port = (handle.address as AddressInfo).port;
+    seedShare(handle.state, 'share-dispatchfail');
+  }, 30_000);
+
+  afterAll(async () => {
+    await handle.close();
+    await mockAgent.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('the task fails FAILED_BEFORE_CHANGE and the record stays consumed with that task id', async () => {
+    // Consumption is committed with the task insert. If the agent then
+    // refuses `task.begin`, the task moves to `failed` before any change
+    // and its leases are released — but the confirmation is NOT rewound:
+    // it was spent on this task, and a fresh apply needs a fresh
+    // confirmation.
+    mockAgent.respondToTaskBegin({
+      kind: 'error',
+      code: -32003,
+      message: 'EXECUTOR_UNSUPPORTED: no such executor',
+    });
+    const { plan_id, expected_revision } = await planShareUpdate(
+      port,
+      'tok-admin',
+      'share-dispatchfail',
+    );
+    const args = {
+      id: 'share-dispatchfail',
+      mode: 'apply',
+      plan_id,
+      expected_revision,
+      idempotency_key: nextId('ik'),
+    };
+    const first = await call(port, 'tok-admin', nextId('call'), 'shares.update', args);
+    const applied = await call(port, 'tok-admin', nextId('call'), 'shares.update', args, {
+      requestState: toolResultOf(first).requestState,
+      inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+    });
+    // The tool call reports the dispatch failure to the client…
+    expect(toolResultOf(applied).isError, JSON.stringify(applied.body)).toBe(true);
+
+    // …the task row exists and is terminally failed before any change, with
+    // its leases released…
+    const task = handle.state.db
+      .prepare(
+        "SELECT task_id, state, error_code FROM tasks WHERE plan_id = ? AND state != 'plan_only'",
+      )
+      .get(plan_id) as { task_id: string; state: string; error_code?: string } | undefined;
+    expect(task?.state).toBe('failed');
+    expect(task?.error_code).toBe('FAILED_BEFORE_CHANGE');
+    expect(
+      (handle.state.db.prepare('SELECT COUNT(*) AS n FROM leases').get() as { n: number }).n,
+    ).toBe(0);
+
+    // …and the confirmation stays consumed, bound to that same task.
+    const record = handle.state.db
+      .prepare('SELECT * FROM mcp_confirmations WHERE plan_id = ?')
+      .get(plan_id) as Record<string, unknown> | undefined;
+    expect(record?.status).toBe('consumed');
+    expect(record?.consumed_task_id).toBe(task?.task_id);
+  }, 20_000);
 });
 
 // ── Task 13 — metrics registry, GET /metrics, confirmation counters ───────

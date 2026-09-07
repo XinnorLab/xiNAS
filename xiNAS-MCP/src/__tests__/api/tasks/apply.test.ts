@@ -14,7 +14,13 @@ import { runMigrations } from '../../../state/migrations.js';
 // `metrics` is optional (S15 §12.2, Task 13) — omitted, TaskEngine falls
 // back to no metrics calls at all; every existing call site below passes
 // none, so this is additive.
-function makeHarness(opts: { metrics?: ConfirmationMetrics } = {}) {
+// `readClock` (Part B, case b) replaces the plain `() => clock` reader for
+// every clock consumer in the harness — engine, task store, confirmation
+// store — so a test can make the clock MOVE between two reads inside one
+// apply transaction.
+function makeHarness(
+  opts: { metrics?: ConfirmationMetrics; readClock?: (base: number) => number } = {},
+) {
   const db = new Database(':memory:');
   runMigrations(db);
   // SqliteKvStore's constructor turns on foreign_keys + WAL — the same
@@ -24,10 +30,11 @@ function makeHarness(opts: { metrics?: ConfirmationMetrics } = {}) {
   const leases = new LeaseManager(db);
 
   let clock = 1_000;
+  const now = (): number => opts.readClock?.(clock) ?? clock;
   let idCounter = 0;
   const store = new TaskStore({
     db,
-    now: () => clock,
+    now,
     newId: () => {
       idCounter += 1;
       return `task-${String(idCounter).padStart(4, '0')}`;
@@ -37,7 +44,7 @@ function makeHarness(opts: { metrics?: ConfirmationMetrics } = {}) {
   let confCounter = 0;
   const confirmations = new ConfirmationStore({
     db,
-    now: () => clock,
+    now,
     newId: () => `c-${(confCounter += 1)}`,
   });
 
@@ -48,7 +55,7 @@ function makeHarness(opts: { metrics?: ConfirmationMetrics } = {}) {
     leases,
     kv,
     confirmations,
-    clock: () => clock,
+    clock: now,
     allowMcpApply: () => allowApply,
     ...(opts.metrics !== undefined ? { metrics: opts.metrics } : {}),
   });
@@ -76,6 +83,14 @@ function makeHarness(opts: { metrics?: ConfirmationMetrics } = {}) {
     },
     countTasks(): number {
       return (db.prepare('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n;
+    },
+    /**
+     * How many task ids the generator has handed out. Unlike `countTasks()`
+     * this survives a rollback, so a test can prove the INSERT actually ran
+     * before a later step threw (Part B, case b).
+     */
+    taskIdsIssued(): number {
+      return idCounter;
     },
     countLeases(): number {
       return (db.prepare('SELECT COUNT(*) AS n FROM leases').get() as { n: number }).n;
@@ -682,6 +697,7 @@ describe('TaskEngine.apply — MCP confirmation gate (S15 §8.3)', () => {
         events.push({ kind: 'latency', seconds });
       },
       approvedExpired() {},
+      auditSuppressed() {},
     };
     h = makeHarness({ metrics: fakeMetrics });
     createRecord('form'); // created_at = 1_000 (the harness's initial clock)
@@ -721,6 +737,7 @@ describe('TaskEngine.apply — MCP confirmation gate (S15 §8.3)', () => {
         events.push({ kind: 'latency', seconds });
       },
       approvedExpired() {},
+      auditSuppressed() {},
     };
     h = makeHarness({ metrics: fakeMetrics });
     createRecord('form'); // c-1, pending
@@ -775,6 +792,7 @@ describe('TaskEngine.apply — MCP confirmation gate (S15 §8.3)', () => {
       roundLimit: () => events.push('roundLimit'),
       confirmationToApply: () => events.push('confirmationToApply'),
       approvedExpired: () => events.push('approvedExpired'),
+      auditSuppressed: () => events.push('auditSuppressed'),
     };
     h = makeHarness({ metrics: fakeMetrics });
     const task = h.engine.apply({ plan: makePlan(), applyReq: makeApplyReq() });
@@ -824,13 +842,87 @@ describe('TaskEngine.apply — MCP confirmation gate (S15 §8.3)', () => {
     }
   });
 
+  it("Part B (a): a forged or unknown confirmation_id is refused and does not touch the caller's real record", () => {
+    // The bindings table above varies the plan/request; this varies the
+    // NOMINATED RECORD — the field an MCP client controls end to end
+    // (`ctx.mcp_confirmation_id`, forwarded by the loopback). An id that
+    // resolves to nothing must refuse exactly like a mismatched binding.
+    for (const forged of ['c-nope', '', "c-1' OR '1'='1", '../c-1']) {
+      h = makeHarness();
+      createRecord('form'); // c-1, the caller's real (still pending) record
+      let thrown: unknown;
+      try {
+        h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: forged }) });
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown, forged).toBeInstanceOf(ApiException);
+      expect((thrown as ApiException).code, forged).toBe('PRECONDITION_FAILED');
+      // An empty string is `undefined`-shaped to the route contract and is
+      // reported as a missing confirmation; anything else resolves to no row.
+      expect(['confirmation_not_approved', 'confirmation_required'], forged).toContain(
+        (thrown as ApiException).details?.reason as string,
+      );
+      expect(h.countTasks(), forged).toBe(0);
+      expect(h.countLeases(), forged).toBe(0);
+      expect(h.confirmations.get('c-1')?.status, forged).toBe('pending');
+    }
+  });
+
+  it('Part B (b): the clock crossing expires_at BETWEEN verify and consume rolls the whole transaction back', () => {
+    // Composition, not a unit: step 2 verifies against `this.clock()`, step
+    // 8 consumes against a SECOND read of the same clock, and the guarded
+    // UPDATE carries its own `expires_at > @now`. If the record lapses in
+    // that window, consume() matches no row → the engine throws → SQLite
+    // rolls back the task INSERT, the desired mutations and any lease.
+    // Nothing may be left behind, and the record must not be consumed.
+    let reads = 0;
+    h = makeHarness({
+      // First read (step 2's verify) sees the record live; every read after
+      // it is past the 300s TTL.
+      readClock: (base) => {
+        reads += 1;
+        return reads === 1 ? base : base + 400_000;
+      },
+    });
+    createRecord('form'); // created via read #1 → created_at 1_000, expires 301_000
+    reads = 0; // reset so the apply's own first read is the verify
+    let thrown: unknown;
+    try {
+      h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: 'c-1' }) });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ApiException);
+    expect((thrown as ApiException).code).toBe('PRECONDITION_FAILED');
+    expect((thrown as ApiException).details).toMatchObject({
+      reason: 'confirmation_not_approved',
+      status: 'consumed',
+    });
+    // The refusal came from the CONSUME step, not from step 2's verify: a
+    // task id was issued (the INSERT ran) and was then rolled back. Without
+    // this the test would pass just as well if verify had refused first.
+    expect(h.taskIdsIssued()).toBe(1);
+    expect(h.countTasks()).toBe(0);
+    expect(h.countLeases()).toBe(0);
+    const record = h.confirmations.get('c-1');
+    expect(record?.status).toBe('pending');
+    expect(record?.consumed_task_id).toBeUndefined();
+    expect(record?.consumed_at).toBeUndefined();
+    expect(record?.approved_by).toBeUndefined();
+  });
+
   it('a dangerous-gate failure rolls back without consuming; the corrected retry consumes', () => {
-    createRecord('form', { risk_level: 'destructive' });
+    // A11(c): a destructive plan may only be backed by a url-mode record,
+    // so this exercises the dangerous gate through the ONLY record shape a
+    // destructive plan can legitimately have (approved url mode).
+    createRecord('url', { risk_level: 'destructive' });
+    h.confirmations.approve('c-1', 'admin:other', 'bearer');
     const plan = makePlan({ risk_level: 'destructive' });
     expect(() => h.engine.apply({ plan, applyReq: mcpReq({ confirmation_id: 'c-1' }) })).toThrow(
       /dangerous/,
     );
-    expect(h.confirmations.get('c-1')?.status).toBe('pending');
+    expect(h.confirmations.get('c-1')?.status).toBe('approved');
     expect(h.countTasks()).toBe(0);
     const task = h.engine.apply({
       plan,
@@ -840,6 +932,52 @@ describe('TaskEngine.apply — MCP confirmation gate (S15 §8.3)', () => {
       status: 'consumed',
       consumed_task_id: task.task_id,
     });
+  });
+
+  it('A11(c): a destructive plan backed by a FORM-mode record is refused (belt and braces)', () => {
+    // The service can never mint this pairing (confirmationModeFor sends
+    // every destructive plan to url mode), so reaching it means the record
+    // or the plan was tampered with directly. The engine refuses with the
+    // same code as any other mode/status mismatch rather than letting an
+    // MCP client's own form accept stand in for an operator approval on a
+    // destructive apply.
+    createRecord('form', { risk_level: 'destructive' });
+    const plan = makePlan({ risk_level: 'destructive' });
+    let thrown: unknown;
+    try {
+      h.engine.apply({ plan, applyReq: mcpReq({ confirmation_id: 'c-1', dangerous: true }) });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ApiException);
+    expect((thrown as ApiException).code).toBe('PRECONDITION_FAILED');
+    expect((thrown as ApiException).details).toMatchObject({
+      reason: 'confirmation_not_approved',
+    });
+    expect(h.countTasks()).toBe(0);
+    expect(h.countLeases()).toBe(0);
+    expect(h.confirmations.get('c-1')?.status).toBe('pending');
+  });
+
+  it('A11(c): the same refusal fires even if the form record was force-flipped to approved', () => {
+    createRecord('form', { risk_level: 'destructive' });
+    h.db
+      .prepare("UPDATE mcp_confirmations SET status = 'approved' WHERE confirmation_id = 'c-1'")
+      .run();
+    expect(() =>
+      h.engine.apply({
+        plan: makePlan({ risk_level: 'destructive' }),
+        applyReq: mcpReq({ confirmation_id: 'c-1', dangerous: true }),
+      }),
+    ).toThrow(/not approved/);
+    expect(h.countTasks()).toBe(0);
+  });
+
+  it('A11(c): a NON-destructive plan with a form record is unaffected', () => {
+    createRecord('form');
+    expect(
+      h.engine.apply({ plan: makePlan(), applyReq: mcpReq({ confirmation_id: 'c-1' }) }).state,
+    ).toBe('queued');
   });
 
   it('a revision-drift failure expires the record (re-plan required)', () => {

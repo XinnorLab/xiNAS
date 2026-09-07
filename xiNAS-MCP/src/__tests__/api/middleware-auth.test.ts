@@ -21,6 +21,10 @@ const config: ApiConfig = {
   tokens: {
     'tok-admin': { principal: 'admin:alice', role: 'admin' },
     'tok-viewer': { principal: 'viewer:bob', role: 'viewer' },
+    // A1 (S15 §3.5): the three surface scopes.
+    'tok-mcp-only': { principal: 'mcp:agent', role: 'admin', surface: 'mcp' },
+    'tok-rest-only': { principal: 'admin:rest', role: 'admin', surface: 'rest' },
+    'tok-any': { principal: 'admin:any', role: 'admin', surface: 'any' },
   },
   state: { databasePath: ':memory:', auditJsonlPath: '/tmp/audit.jsonl' },
 };
@@ -110,5 +114,54 @@ describe('authMiddleware — Unix socket trust', () => {
     expect(status).toBe(401);
     const parsed = JSON.parse(body);
     expect(parsed.errors?.[0]?.code).toBe('PERMISSION_DENIED');
+  });
+
+  it('UDS + an mcp-scoped bearer is refused token_surface — it must NOT fall through to UDS admin (A1)', async () => {
+    const { status, body } = await callOverUds('Bearer tok-mcp-only');
+    expect(status).toBe(401);
+    const parsed = JSON.parse(body);
+    expect(parsed.errors?.[0]?.code).toBe('PERMISSION_DENIED');
+    expect(parsed.errors?.[0]?.details).toEqual({ reason: 'token_surface', surface: 'mcp' });
+  });
+});
+
+/**
+ * A1 (S15 §3.5, final review C1) — a token scoped `surface: mcp` is an MCP
+ * credential only: the REST surface refuses it so the MRTR confirmation
+ * gate cannot be bypassed by replaying the same bearer against /api/v1.
+ */
+describe('authMiddleware — token surface scope (S15 §3.5)', () => {
+  it("refuses a surface: 'mcp' token on REST with PERMISSION_DENIED / token_surface", async () => {
+    const res = await request(appWith(config))
+      .get('/whoami')
+      .set('Authorization', 'Bearer tok-mcp-only');
+    expect(res.status).toBe(401);
+    expect(res.body.errors?.[0]?.code).toBe('PERMISSION_DENIED');
+    expect(res.body.errors?.[0]?.message).toBe('this token is scoped to the MCP endpoint');
+    expect(res.body.errors?.[0]?.details).toEqual({ reason: 'token_surface', surface: 'mcp' });
+  });
+
+  it("accepts a surface: 'rest' token on REST", async () => {
+    const res = await request(appWith(config))
+      .get('/whoami')
+      .set('Authorization', 'Bearer tok-rest-only');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ principal: 'admin:rest', role: 'admin' });
+  });
+
+  it("accepts a surface: 'any' token on REST", async () => {
+    const res = await request(appWith(config))
+      .get('/whoami')
+      .set('Authorization', 'Bearer tok-any');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ principal: 'admin:any', role: 'admin' });
+  });
+
+  it('accepts a token with no surface key at all (the default is any)', async () => {
+    const res = await request(appWith(config))
+      .get('/whoami')
+      .set('Authorization', 'Bearer tok-admin');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ principal: 'admin:alice', role: 'admin' });
   });
 });
