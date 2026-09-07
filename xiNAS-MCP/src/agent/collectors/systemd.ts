@@ -22,6 +22,8 @@ interface SystemdProbe {
 
 interface SystemdUnitCollectorOptions {
   probe: SystemdProbe;
+  /** Poll cadence override (tests only; `XINAS_AGENT_SYSTEMD_POLL_MS`). Default 30 s. */
+  pollIntervalMs?: number;
 }
 
 /**
@@ -38,7 +40,7 @@ interface SystemdUnitCollectorOptions {
  */
 export class SystemdUnitCollector implements Collector<'SystemdUnit'> {
   readonly kind = 'SystemdUnit' as const;
-  readonly pollIntervalMs = 30_000;
+  readonly pollIntervalMs: number;
 
   private readonly probe: SystemdProbe;
   private _health: { state: 'running' | 'stubbed' | 'error'; reason?: string } = {
@@ -47,8 +49,9 @@ export class SystemdUnitCollector implements Collector<'SystemdUnit'> {
   private _subscription: WatchHandle | null = null;
   private readonly _allowSet: Set<string>;
 
-  constructor({ probe }: SystemdUnitCollectorOptions) {
+  constructor({ probe, pollIntervalMs }: SystemdUnitCollectorOptions) {
     this.probe = probe;
+    this.pollIntervalMs = pollIntervalMs ?? 30_000;
     this._allowSet = new Set(probe.allowList);
   }
 

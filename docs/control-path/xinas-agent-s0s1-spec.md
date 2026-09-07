@@ -862,6 +862,12 @@ adds three agent-side facts:
    time of the last accepted batch; the S17 staleness bound is 3 × the
    collector's `pollIntervalMs` from the Flow D table (300 s for the
    backstop-only kinds).
+4. **Poll-cadence overrides for tests.** `XINAS_AGENT_SYSTEMD_POLL_MS`,
+   `XINAS_AGENT_FILESYSTEM_POLL_MS` and `XINAS_AGENT_NFS_POLL_MS` shorten
+   the corresponding collector's poll, following the
+   `XINAS_AGENT_XIRAID_POLL_MS` / `XINAS_AGENT_NETWORK_POLL_MS` pattern, so
+   the S17 e2e can drive unit, capacity and export transitions in seconds.
+   The defaults are unchanged and production never sets them.
 
 Two existing behaviors are load-bearing for S17 and must be preserved: a
 collector whose sweep throws sends **no** complete snapshot (`boot.ts`,

@@ -28,6 +28,8 @@ interface NfsProbe {
 
 interface NfsCollectorOptions {
   probe: NfsProbe;
+  /** Poll cadence override (tests only; `XINAS_AGENT_NFS_POLL_MS`). Default 30 s. */
+  pollIntervalMs?: number;
 }
 
 /**
@@ -44,7 +46,7 @@ interface NfsCollectorOptions {
  */
 export class NfsCollector implements Collector<'NfsSession'> {
   readonly kind = 'NfsSession' as const;
-  readonly pollIntervalMs = 30_000;
+  readonly pollIntervalMs: number;
 
   private readonly probe: NfsProbe;
   private _health: { state: 'running' | 'stubbed' | 'error'; reason?: string } = {
@@ -52,8 +54,9 @@ export class NfsCollector implements Collector<'NfsSession'> {
   };
   private _pollTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor({ probe }: NfsCollectorOptions) {
+  constructor({ probe, pollIntervalMs }: NfsCollectorOptions) {
     this.probe = probe;
+    this.pollIntervalMs = pollIntervalMs ?? 30_000;
   }
 
   async initialSweep(): Promise<ObservationDelta[]> {

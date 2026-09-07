@@ -92,6 +92,16 @@ import { Publisher } from './publisher.js';
 import { XiraidClient, createGrpcTransport } from './xiraid/client.js';
 import { createFakeXiraidTransport } from './xiraid/fake-transport.js';
 
+/**
+ * Poll-cadence override for the e2e suites (the `XINAS_AGENT_XIRAID_POLL_MS`
+ * pattern): a positive finite millisecond value in the named env var
+ * becomes `pollIntervalMs`; anything else leaves the collector's default.
+ */
+function pollOverride(envName: string): { pollIntervalMs?: number } {
+  const ms = Number(process.env[envName] ?? '');
+  return Number.isFinite(ms) && ms > 0 ? { pollIntervalMs: ms } : {};
+}
+
 /** A synchronous-stop event handle (the shape collectors expect). */
 interface SyncStopHandle {
   stop(): void;
@@ -204,6 +214,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
     fdir !== null ? createFixtureFilesystemProbe(fdir) : createFilesystemProbe();
   registry.register(
     new FilesystemCollector({
+      ...pollOverride('XINAS_AGENT_FILESYSTEM_POLL_MS'),
       probe: {
         snapshot: () =>
           filesystemProbe.snapshot().then((rows) =>
@@ -226,6 +237,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
   const nfsProbe = fdir !== null ? createFixtureNfsProbe(fdir) : createNfsProbe();
   registry.register(
     new NfsCollector({
+      ...pollOverride('XINAS_AGENT_NFS_POLL_MS'),
       probe: {
         listSessions: () =>
           nfsProbe.listSessions().then((sessions) =>
@@ -275,6 +287,7 @@ export function buildConvergence(config: AgentConfig): Convergence {
   const systemdProbe = fdir !== null ? createFixtureSystemdProbe(fdir) : createSystemctlProbe();
   registry.register(
     new SystemdUnitCollector({
+      ...pollOverride('XINAS_AGENT_SYSTEMD_POLL_MS'),
       probe: {
         allowList: systemdProbe.allowList,
         getUnitState: (name) => systemdProbe.getUnitState(name),
