@@ -234,6 +234,34 @@ function validateTokensSection(config: ApiConfig): void {
           `expected one of ${TOKEN_SURFACES.join(', ')} (omit the key for 'any')`,
       );
     }
+    // S15 closing round C1: the mcp surface refuses internal_agent tokens
+    // outright (middleware/auth.ts), so scoping one to surface: 'mcp' would
+    // make it unusable on either endpoint family.
+    if (principal.role === 'internal_agent' && surface === 'mcp') {
+      throw new Error(
+        `token '${key}': internal_agent tokens cannot be scoped to mcp — ` +
+          `the MCP surface refuses that role`,
+      );
+    }
+  }
+
+  // S15 closing round C1: a bearer with no surface scoping is a REST
+  // credential too (surface default 'any'), so with mcp.allow_apply: true
+  // it can bypass the S15 confirmation gate entirely by applying over
+  // /api/v1 with the same token. internal_agent tokens are exempt — that
+  // role is refused on the mcp surface (middleware/auth.ts), so they can
+  // never be the mcp side of the bypass this warns about.
+  if (config.mcp?.allow_apply === true) {
+    const unscoped = Object.entries(config.tokens ?? {})
+      .filter(([, p]) => p.role !== 'internal_agent' && (p.surface ?? 'any') === 'any')
+      .map(([, p]) => p.principal);
+    if (unscoped.length > 0) {
+      console.warn(
+        `mcp.allow_apply=true with unscoped token(s) [${unscoped.join(', ')}]: ` +
+          'each is a REST credential too, so the S15 confirmation gate can be bypassed ' +
+          "by applying over /api/v1 with the same bearer — set surface: 'mcp' (S15 §3.5, §13)",
+      );
+    }
   }
 }
 

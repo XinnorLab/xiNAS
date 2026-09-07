@@ -180,8 +180,9 @@ pre-check only stops a forbidden caller from minting approval records.
 
 ### 3.4 `dangerous` stays independent (MRTR-POL-004)
 
-The confirmation service never reads `dangerous`, and the `dangerous` gate
-(`api/tasks/engine.ts:384-391`) never reads the confirmation. For a
+The confirmation service does not *enforce* `dangerous` — it reads the
+flag only to refuse early (below) — and the `dangerous` gate
+(`api/tasks/engine.ts:521-528`) never reads the confirmation. For a
 destructive plan both must hold: the record is `approved` **and**
 `dangerous: true` is in the apply body. The transaction order in §8.3
 makes "one satisfies the other" structurally impossible: the confirmation
@@ -1060,7 +1061,7 @@ identical for every re-issue of the same record except the countdown:
 xiNAS node nas-01 (controller 0000…0778)
 Operation: shares.update (share.update) on Share "share-a"
 Risk: changing_access · Rollback: changing_access
-Client impact: Affects NFS share share-a (export /srv/nfs/a); changed: clients, options. Review the diff for the new access rules.
+Client impact: Affects NFS share share-a, NFS export rule share-a/10.0.0.0/24 (export /srv/share-a); changed: access_mode, clients. Review the diff for the new access rules.
 Affected: Share share-a; ExportRule share-a/10.0.0.0/24
 Warnings: (1) NFS_SESSIONS_ACTIVE — 3 active sessions from 10.0.0.12, 10.0.0.15, 10.0.0.31
 Diff (concise): access_mode: rw → ro; clients: [10.0.0.0/24] (unchanged)
@@ -1308,7 +1309,9 @@ silently widen the token back to both families.
 **Give the MCP agent's token `surface: mcp`.** Without it the confirmation
 gate can be bypassed by applying over REST with the same token (§3.5). The
 loopback dispatcher is unaffected: it authenticates its own replayed call
-with a process-ephemeral token that is not in `config.tokens` at all.
+with a process-ephemeral token that is not in `config.tokens` at all. When
+`mcp.allow_apply` is true and any non-agent token is unscoped, the api
+logs a warning at startup naming the principals.
 
 There is **no** key that disables confirmation (D-01). The `xinas_api`
 role templates the defaults; the TUI MCP screen (S8 §6c) is *not* extended

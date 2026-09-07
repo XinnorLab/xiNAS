@@ -548,6 +548,15 @@ describe('approval page — path and render edges (A9)', () => {
     expect(res.status).toBe(200);
   });
 
+  it('A11(j): the public approval shell is never body-parsed', async () => {
+    const res = await request(setup.app)
+      .get('/mcp/approvals/abc')
+      .set('Content-Type', 'application/json')
+      .send('{not json');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('data-confirmation-id');
+  });
+
   it('a doubled leading slash in location.pathname cannot yield a protocol-relative API base', async () => {
     const source = (await request(setup.app).get('/mcp/approvals/assets/app.js')).text;
     const drive = driveScript(source, '//mcp/approvals/conf-9');

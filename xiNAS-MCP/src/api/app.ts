@@ -59,8 +59,9 @@ export function createApp(ctx: ApiContext): Express {
   //   4. auth runs last; failed auth still triggers the audit
   //      finish hook because audit registered before this.
   // S8 T7: the MCP transport endpoint (ADR-0010) — mounted BEFORE the
-  // json body-parser limit applies to /api/v1 (express.json below also
-  // parses /mcp bodies, which the transport consumes pre-parsed).
+  // json body-parser limit applies to /api/v1. A11(j): POST /mcp mounts
+  // its own express.json() on that route alone (transport.ts), so the
+  // express.json below never touches /mcp bodies.
   // Audit skips /mcp (T4); auth does not run for /mcp (the transport
   // resolves identity itself and replays through the loopback).
   mountMcpTransport(app, ctx);
