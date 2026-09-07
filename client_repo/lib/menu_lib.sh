@@ -60,19 +60,62 @@ _menu_clear_screen() {
 }
 
 
-# Read a single keypress (handles arrow keys)
+# Read a single keypress and name it.
+#
+# Printable keys come back as themselves, Enter as ENTER, Backspace as
+# BACKSPACE, the cursor keys as UP/DOWN/RIGHT/LEFT, a bare Escape as ESC.
+#
+# A cursor key arrives as an escape sequence, and the terminal picks the
+# encoding per session, not per keyboard: normal mode sends CSI (`ESC [ B`
+# for Down); application cursor-key mode — DECCKM, `CSI ? 1 h`, which any
+# full-screen program, multiplexer or terminal may leave switched on — sends
+# SS3 (`ESC O B`). Both are the same key. Reading exactly two bytes after the
+# ESC and matching only the CSI form turned the SS3 form, and every longer
+# sequence (Home/End `ESC [ H`, PgDn `ESC [ 6 ~`, F-keys, Ctrl-arrows), into
+# "ESC" — which every dialog treats as Cancel, and which at the top-level
+# setup menu is `exit 2`: one Down keypress ended the installer. So after an
+# ESC the whole sequence is collected byte by byte, the cursor keys are
+# decoded in either encoding, and any other complete sequence is handed back
+# as UNKNOWN, which no dialog maps to anything. Only an ESC followed by
+# nothing within the inter-byte window is Cancel — the window is generous
+# because a false Cancel here costs the operator the whole setup session.
+# Contract: docs/Installer/spec.md §2.6.
 _menu_read_key() {
-    local key
+    local key seq c code n
     IFS= read -rsn1 key </dev/tty
 
     if [[ "$key" == $'\033' ]]; then
-        read -rsn2 -t 0.1 key </dev/tty
-        case "$key" in
-            '[A') echo "UP" ;;
-            '[B') echo "DOWN" ;;
-            '[C') echo "RIGHT" ;;
-            '[D') echo "LEFT" ;;
-            *)    echo "ESC" ;;
+        # Nothing within the window after the ESC: a bare Escape.
+        if ! IFS= read -rsn1 -t 0.25 c </dev/tty; then
+            echo "ESC"
+            return 0
+        fi
+        seq="$c"
+        case "$c" in
+            '[')
+                # CSI: parameter and intermediate bytes (0x20-0x3F), then one
+                # final byte (0x40-0x7E) closes the sequence. Bounded so a
+                # garbage stream cannot spin here.
+                n=0
+                while [[ $n -lt 16 ]] && IFS= read -rsn1 -t 0.25 c </dev/tty; do
+                    [[ -z "$c" ]] && break
+                    seq+="$c"
+                    n=$((n + 1))
+                    printf -v code '%d' "'$c"
+                    [[ $code -ge 64 && $code -le 126 ]] && break
+                done
+                ;;
+            'O')
+                # SS3: exactly one final byte.
+                IFS= read -rsn1 -t 0.25 c </dev/tty && seq+="$c"
+                ;;
+        esac
+        case "$seq" in
+            '[A'|'OA') echo "UP" ;;
+            '[B'|'OB') echo "DOWN" ;;
+            '[C'|'OC') echo "RIGHT" ;;
+            '[D'|'OD') echo "LEFT" ;;
+            *)         echo "UNKNOWN" ;;
         esac
     elif [[ "$key" == '' ]]; then
         echo "ENTER"

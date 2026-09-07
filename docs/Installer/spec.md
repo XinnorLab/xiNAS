@@ -167,6 +167,37 @@ force color — ANSI codes ahead of `PLAY`/`TASK` would break the ticker's ancho
   ([lib/menu_lib.sh](../../lib/menu_lib.sh)) no longer silently swallows
   unmapped keystrokes: an unrecognized key beeps (`\a`) and flashes a red footer
   hint (`Unknown key — use ←→, Enter, y/n, or Esc`) until the next keypress.
+- **Cursor keys decode in both terminal encodings.** `_menu_read_key`
+  ([lib/menu_lib.sh](../../lib/menu_lib.sh), mirrored byte-for-byte in
+  [client_repo/lib/menu_lib.sh](../../client_repo/lib/menu_lib.sh)) is the
+  one place every bash dialog turns terminal bytes into a key name. After an
+  `ESC` byte it collects the rest of the escape sequence byte by byte — a CSI
+  sequence `ESC [ … <final>` runs to its final byte (`0x40`–`0x7E`), an SS3
+  sequence `ESC O <final>` is exactly one more byte, each byte awaited for at
+  most 0.25 s — and maps the cursor keys in **both** encodings, normal mode
+  `ESC [ A`–`ESC [ D` and application cursor-key mode `ESC O A`–`ESC O D`,
+  to `UP`/`DOWN`/`RIGHT`/`LEFT`. A terminal picks the encoding per session,
+  not per keyboard: DECCKM (`CSI ? 1 h`, "Application Cursor Keys (DECCKM),
+  VT100" under *DEC Private Mode Set (DECSET)* in
+  [XTerm Control Sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)
+  for xterm patch #411,
+  whose cursor-key table lists `CSI A` for normal and `SS3 A` for
+  application mode) is switched on by full-screen programs and by some
+  terminals and multiplexers by default, and it turns the very same Down key
+  from `ESC [ B` into `ESC O B`. Only an `ESC` followed by **nothing** within
+  the window is `ESC`, i.e. Cancel; the window is deliberately generous
+  because a false Cancel at the top-level menu costs the operator the whole
+  setup session. Every other complete sequence — Home/End, PgUp/PgDn, F-keys,
+  modified arrows such as `ESC [ 1 ; 5 B`, Alt-chords — comes back as
+  `UNKNOWN`, which no dialog maps to anything: `menu_select`, `checklist`
+  and `input_box` ignore it and `yes_no` beeps (previous bullet). The reader
+  used to take exactly two bytes after `ESC` and match only the CSI form, so
+  an SS3 arrow — or any longer sequence — read as Cancel, and at the
+  top-level setup menu, where Cancel is `exit 2` (§2.7), one Down keypress
+  ended the installer with the "Setup exited" notice and no diagnostic.
+  Regression coverage:
+  [tests/test_menu_key_decoding.py](../../tests/test_menu_key_decoding.py)
+  drives both copies of the real library through a pty.
 
 ### 2.7 Menu exit-code contract
 
