@@ -57,7 +57,20 @@ export interface InflightTask {
   cancelRequested: boolean;
   /** High-water sequence emitted so far (for diagnostics). */
   sequence: number;
+  /** Name of the executor stage currently running (S16 §9.2). */
+  currentStage?: string;
+  /**
+   * Set (to the stage name) once the executor's `irreversible_from` stage
+   * has started; from then on every `requestCancel` is refused (S16 §9.2).
+   */
+  irreversibleStageStarted?: string;
 }
+
+/** What `requestCancel` decided (S16 §9.2, ADR-0012 §9). */
+export type CancelVerdict =
+  | { accepted: true }
+  | { accepted: false; reason: 'not_found' }
+  | { accepted: false; reason: 'irreversible_stage_started'; stage: string };
 
 export class TaskRunner {
   readonly #bridge: XinasHistoryBridge;
@@ -76,10 +89,25 @@ export class TaskRunner {
     return this.#inflight;
   }
 
-  /** Request cancellation of an in-flight task (cooperative; honored at stage boundaries). */
-  requestCancel(taskId: string): void {
+  /**
+   * Request cancellation of an in-flight task (cooperative; honored at
+   * stage boundaries). Refused — and the flag left unset — once the
+   * executor's irreversible stage has started: the RPC handler and the
+   * runner share one thread, so a cancel is either accepted before that
+   * stage starts (and honored at its boundary) or refused after it.
+   */
+  requestCancel(taskId: string): CancelVerdict {
     const task = this.#inflight.get(taskId);
-    if (task) task.cancelRequested = true;
+    if (!task) return { accepted: false, reason: 'not_found' };
+    if (task.irreversibleStageStarted !== undefined) {
+      return {
+        accepted: false,
+        reason: 'irreversible_stage_started',
+        stage: task.irreversibleStageStarted,
+      };
+    }
+    task.cancelRequested = true;
+    return { accepted: true };
   }
 
   /**
@@ -172,6 +200,14 @@ export class TaskRunner {
         if (inflight.cancelRequested) {
           await this.#runRollback(executor, ctx, emit, drainOutput, nextStageIndex(), 'cancelled');
           return;
+        }
+        // S16 §9.2: marked synchronously right after the boundary check —
+        // no await between the check above and this assignment — so a
+        // cancel arriving during the stage_started publish just below is
+        // therefore refused, not honored.
+        inflight.currentStage = stage.name;
+        if (executor.irreversible_from !== undefined && stage.name === executor.irreversible_from) {
+          inflight.irreversibleStageStarted = stage.name;
         }
         const stageIndex = nextStageIndex();
         await emit('stage_started', {

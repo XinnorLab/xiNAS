@@ -216,7 +216,11 @@ export const fsCreateProvider: PlanProvider = {
         mount_unit: unitText,
       },
       risk_level: destructive ? 'destructive' : 'non_disruptive',
-      rollback_model: destructive ? 'unsupported' : 'non_disruptive',
+      // S16 §9.1 / ADR-0007 §Create (amended): a completed mkfs is never
+      // undone, whether or not the device carried a filesystem before —
+      // so no create is rollback-able. risk_level still distinguishes
+      // force (destructive) from the live-proven-empty case.
+      rollback_model: 'unsupported',
       enriched_spec: {
         ...spec,
         unit_name: unitName,

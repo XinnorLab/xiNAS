@@ -289,7 +289,11 @@ export class TaskEngine {
    *     post-check RPC failure → INTERNAL/EXECUTOR_UNAVAILABLE with NOTHING
    *     durable recorded; accepted → guarded cancel_requested_at write;
    *     not_found → CONFLICT `agent_not_found` + refusal metadata (lease
-   *     expiry/sweep owns desync recovery — no new reconcile action).
+   *     expiry/sweep owns desync recovery — no new reconcile action);
+   *     irreversible_stage_started (S16 §9.2) → CONFLICT
+   *     `irreversible_stage_started` + the stage name, refusal metadata
+   *     recorded, row stays `running` (the task itself is still in
+   *     flight and will report its own terminal).
    */
   async cancel(args: {
     taskId: string;
@@ -376,7 +380,23 @@ export class TaskEngine {
         });
         return updated ?? this.store.get(taskId) ?? task;
       }
-      // Refused (not_found): the agent has no such task in flight.
+      // Refused. Two honest reasons (S10 + S16): the agent has no such
+      // task in flight, or the executor passed its point of no return.
+      const refusal = result as { reason?: unknown; stage?: unknown } | null;
+      if (refusal?.reason === 'irreversible_stage_started') {
+        this.store.transitionIf(taskId, 'running', {
+          cancel_refused_reason: 'irreversible_stage_started',
+        });
+        throw new ApiException(
+          'CONFLICT',
+          'the operation passed its point of no return and can no longer be cancelled',
+          {
+            reason: 'irreversible_stage_started',
+            ...(typeof refusal.stage === 'string' ? { stage: refusal.stage } : {}),
+          },
+          'Let the task finish, then re-observe the resource before deciding on further action.',
+        );
+      }
       this.store.transitionIf(taskId, 'running', { cancel_refused_reason: 'agent_not_found' });
       throw new ApiException(
         'CONFLICT',

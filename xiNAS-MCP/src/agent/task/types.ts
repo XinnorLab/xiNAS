@@ -51,6 +51,15 @@ export interface Executor {
   readonly stages: ExecutorStage[];
   /** Undo this executor's own change after a stage failure. */
   rollback(ctx: ExecutorContext): Promise<void>;
+  /**
+   * Name of the stage at whose START the operation stops being safely
+   * cancellable (S16 §9.2, ADR-0012 §9). Once the runner reaches it,
+   * `requestCancel` is refused instead of setting the flag, so the
+   * boundary check and the stage-throw attribution can never report an
+   * irreversible partial change as `cancelled`. Absent → the generic
+   * ADR-0012 boundary rule applies to every stage.
+   */
+  readonly irreversible_from?: string;
 }
 
 /** The `event_type` taxonomy of a {@link TaskProgressEvent} (api-v1.yaml §6). */

@@ -9,7 +9,19 @@
  *  - mkfsXfs / growfs / enableNow against a device/unit name ending
  *    '-fail' REJECT;
  *  - stop against a unit name ending '-busy' REJECTS (the umount-EBUSY
- *    simulation for the unmount-rollback path).
+ *    simulation for the unmount-rollback path);
+ *  - mkfsXfs against a device ending '-block' OR '_block' BLOCKS until
+ *    `<dir>/mkfs-release` exists (S16 §16.4) — a test process holds an
+ *    agent process's mkfs open via `releaseMkfs()` / `resetMkfsGate()`.
+ *    Both suffixes exist because a REAL xiRAID array name cannot contain
+ *    a hyphen (`lib/xiraid/schema.ts` NAME_RE, vendor-verified against
+ *    `xicli raid create -n`), so `/dev/xi_<name>` can never end in
+ *    '-block' for an array actually observed through the real plan/apply
+ *    pipeline — only a raw device string passed directly to `mkfsXfs()`
+ *    (as the Task 3 unit test does) can. An e2e test that must go through
+ *    real array-name validation (Task 13, `mcp-tasks-fs-create.test.ts`)
+ *    uses a schema-valid array name ending '_block' instead; '-block'
+ *    stays for the existing direct-call unit test.
  *
  * Behaviors the executors rely on:
  *  - mkfsXfs records the exact argv in `ops` (clamp goldens) and sets the
@@ -21,7 +33,7 @@
  *  - growfs bumps the mountpoint's size_bytes by 1 GiB.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { BlkidInfo, FsHost, OwnerPolicy } from './host.js';
 
@@ -74,12 +86,24 @@ function unitField(text: string, field: 'What' | 'Where'): string | undefined {
   return m?.[1];
 }
 
+/** The file whose existence releases a blocked `-block` mkfs (S16 §16.4). */
+export function mkfsReleasePath(dir: string): string {
+  return join(dir, 'mkfs-release');
+}
+const BLOCK_POLL_MS = 50;
+const BLOCK_MAX_MS = 60_000;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 /** Test-support accessors beyond the FsHost contract. */
 export interface FakeFsHostHandle {
   ops(): string[];
   seedBlkid(device: string, info: BlkidInfo): void;
   seedDeviceSize(device: string, bytes: number): void;
   unitText(name: string): string | undefined;
+  /** Release a `-block` device's blocked mkfsXfs call (S16 §16.4). */
+  releaseMkfs(): void;
+  /** Remove the release file so a subsequent `-block` mkfsXfs blocks again. */
+  resetMkfsGate(): void;
 }
 
 export function createFakeFsHost(dir: string): FsHost & FakeFsHostHandle {
@@ -101,6 +125,13 @@ export function createFakeFsHost(dir: string): FsHost & FakeFsHostHandle {
     unitText(name: string): string | undefined {
       return load(dir).units[name];
     },
+    releaseMkfs(): void {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(mkfsReleasePath(dir), 'released\n');
+    },
+    resetMkfsGate(): void {
+      if (existsSync(mkfsReleasePath(dir))) unlinkSync(mkfsReleasePath(dir));
+    },
 
     // ---- FsHost ----
     async blkid(device: string): Promise<BlkidInfo | null> {
@@ -117,6 +148,23 @@ export function createFakeFsHost(dir: string): FsHost & FakeFsHostHandle {
     async mkfsXfs(args: string[]): Promise<void> {
       const device = args[args.length - 1] ?? '';
       failHook(device, 'mkfs');
+      // S16 §16.4: a deliberately blocked format. The gate is a FILE so a
+      // test process can hold an agent process's mkfs open and release it.
+      // '_block' is the schema-valid equivalent of '-block' for an e2e
+      // test that must go through real xiRAID array-name validation
+      // (NAME_RE forbids hyphens) — see the file header.
+      if (device.endsWith('-block') || device.endsWith('_block')) {
+        const release = mkfsReleasePath(dir);
+        const deadline = Date.now() + BLOCK_MAX_MS;
+        while (!existsSync(release)) {
+          if (Date.now() > deadline) {
+            throw new Error(
+              `fake fs host: mkfs on '${device}' blocked > ${BLOCK_MAX_MS} ms without ${release}`,
+            );
+          }
+          await sleep(BLOCK_POLL_MS);
+        }
+      }
       const state = load(dir);
       state.ops.push(`mkfs.xfs ${args.join(' ')}`);
       const labelIdx = args.indexOf('-L');

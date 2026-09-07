@@ -29,7 +29,9 @@
  * surfaces it via `ctx.isCancelRequested()` and an executor honors it at a safe
  * stage boundary. S2's reference executor does NOT check the flag mid-stage, so
  * a cancel of a fast reference task is a no-op in practice — that is expected;
- * cancel is best-effort and the flag is set for executors that do check it.
+ * cancel is best-effort and the flag is set for executors that do check it. It
+ * is refused with `irreversible_stage_started` once the executor's declared
+ * irreversible stage has started (S16 §9.2).
  *
  * ## Errors never crash the agent
  *
@@ -166,17 +168,20 @@ export function makeTaskHandlers(opts: TaskHandlerOptions): {
 
   function cancel(
     params: unknown,
-  ): { cancel_requested: true } | { cancel_requested: false; reason: 'not_found' } {
+  ):
+    | { cancel_requested: true }
+    | { cancel_requested: false; reason: 'not_found' }
+    | { cancel_requested: false; reason: 'irreversible_stage_started'; stage: string } {
     const p = (typeof params === 'object' && params !== null ? params : {}) as Record<
       string,
       unknown
     >;
     const task_id = typeof p['task_id'] === 'string' ? p['task_id'] : '';
-    if (task_id.length === 0 || !runner.getInflight().has(task_id)) {
-      return { cancel_requested: false, reason: 'not_found' };
-    }
-    runner.requestCancel(task_id);
-    return { cancel_requested: true };
+    if (task_id.length === 0) return { cancel_requested: false, reason: 'not_found' };
+    const verdict = runner.requestCancel(task_id);
+    if (verdict.accepted) return { cancel_requested: true };
+    if (verdict.reason === 'not_found') return { cancel_requested: false, reason: 'not_found' };
+    return { cancel_requested: false, reason: 'irreversible_stage_started', stage: verdict.stage };
   }
 
   function listInflight(): {
@@ -187,6 +192,8 @@ export function makeTaskHandlers(opts: TaskHandlerOptions): {
       started_at: string | null;
       sequence: number;
       cancel_requested: boolean;
+      current_stage: string | null;
+      past_point_of_no_return: boolean;
     }>;
   } {
     const tasks: Array<{
@@ -196,6 +203,8 @@ export function makeTaskHandlers(opts: TaskHandlerOptions): {
       started_at: string | null;
       sequence: number;
       cancel_requested: boolean;
+      current_stage: string | null;
+      past_point_of_no_return: boolean;
     }> = [];
     for (const t of runner.getInflight().values()) {
       const record = accepted.get(t.task_id);
@@ -206,6 +215,8 @@ export function makeTaskHandlers(opts: TaskHandlerOptions): {
         started_at: record?.started_at ?? null,
         sequence: t.sequence,
         cancel_requested: t.cancelRequested,
+        current_stage: t.currentStage ?? null,
+        past_point_of_no_return: t.irreversibleStageStarted !== undefined,
       });
     }
     return { tasks };

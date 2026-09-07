@@ -199,6 +199,26 @@ describe('TaskEngine.cancel', () => {
     expect(h.store.get(task.task_id)?.state).toBe('running');
   });
 
+  it('running + RPC refuses irreversible_stage_started → CONFLICT with the stage, refusal metadata, row still running', async () => {
+    const task = h.engine.apply({ plan: makePlan(), applyReq: makeApplyReq() });
+    h.store.transition(task.task_id, { state: 'running' });
+    const client = rpc({
+      cancel_requested: false,
+      reason: 'irreversible_stage_started',
+      stage: 'mkfs',
+    });
+    await expect(
+      h.engine.cancel({ taskId: task.task_id, agentClient: client, trackerOffline: false }),
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      details: { reason: 'irreversible_stage_started', stage: 'mkfs' },
+    });
+    const row = h.store.get(task.task_id);
+    expect(row?.cancel_refused_reason).toBe('irreversible_stage_started');
+    expect(row?.cancel_requested_at).toBeUndefined();
+    expect(row?.state).toBe('running');
+  });
+
   it('running + RPC rejects (post-check failure) → EXECUTOR_UNAVAILABLE, no durable write', async () => {
     const task = h.engine.apply({ plan: makePlan(), applyReq: makeApplyReq() });
     h.store.transition(task.task_id, { state: 'running' });
