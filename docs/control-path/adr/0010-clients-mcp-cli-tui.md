@@ -3,8 +3,9 @@
 > **Extended by S14.** The `/mcp` endpoint this ADR defines serves the MCP
 > legacy protocol era. It additionally serves the modern era
 > (`server/discover`, no session) — see
-> [`../s14-mcp-modern-era-spec.md`](../s14-mcp-modern-era-spec.md). The
-> The original deferral of MCP resources held through S15.
+> [`../s14-mcp-modern-era-spec.md`](../s14-mcp-modern-era-spec.md).
+> The original deferral of MCP resources held through S15; S17 lifted it on
+> the modern era (event feeds) and S18 adds the MCP Apps view on both eras.
 >
 > **Amended by S15 (2026-09-04).** The apply gate below is no longer the
 > last word on MCP mutation: after `mcp.allow_apply` passes, every MCP
@@ -14,11 +15,13 @@
 > See §*Decision — MCP apply confirmation (S15)* below and
 > [`../s15-mcp-mrtr-confirmation-spec.md`](../s15-mcp-mrtr-confirmation-spec.md).
 >
-> **Amended by S18 (2026-09-04).** The resources deferral is lifted only for
-> immutable MCP Apps UI resources. `resources/list`, `resources/read`, and the
-> `io.modelcontextprotocol/ui` extension now serve the RAID Create App. Prompts
-> and general-purpose data resources remain deferred. See
-> [`../s18-mcp-raid-create-app-spec.md`](../s18-mcp-raid-create-app-spec.md).
+> **Amended by S18 (2026-09-04, merged 2026-09-07).** One immutable MCP Apps
+> UI resource (`ui://xinas/raid-create`) and the `io.modelcontextprotocol/ui`
+> extension are served: on the modern era through the S17 resource provider
+> seam (listed next to the event feeds, never subscribable), on the legacy
+> era through the SDK server's own resource handlers (the feeds stay
+> modern-only). Prompts and general-purpose data resources remain deferred.
+> See [`../s18-mcp-raid-create-app-spec.md`](../s18-mcp-raid-create-app-spec.md).
 
 **Status:** accepted (2026-06-12). Implements ADR-0001's locked "MCP is
 a transport on the same Control API core" decision; extends ADR-0002
@@ -321,7 +324,47 @@ following is layered *behind* it:
    MCP tool list by a catalog flag), the approval page, and a metrics
    endpoint.
 
-## Security
+## Decision — MCP Resources and resource subscriptions (S17, 2026-09-04)
+
+Recorded against `s17-mcp-subscriptions-requirements.md` (validation in
+its Appendix D; contract in `s17-mcp-subscriptions-spec.md`). Layered on
+the transports above:
+
+1. **The modern MCP era (`2026-07-28`) now serves Resources and resource
+   subscriptions**: `resources/list`, `resources/templates/list`,
+   `resources/read` and `subscriptions/listen`, statelessly, on the same
+   `/mcp` endpoint and through `xinas-mcp-stdio`. `resources: { subscribe:
+   true, listChanged: false }` is advertised only when the whole surface
+   (journal, retention, handlers) is installed; a partial build advertises
+   nothing.
+2. **Resources remain absent from the legacy era.** `initialize` keeps
+   advertising `tools` only; the SDK session path answers `resources/*`
+   and `subscriptions/listen` as it did before.
+3. **Standard notifications, not a custom method.** Change signals are
+   `notifications/resources/updated` carrying the subscribed feed URI and
+   the subscription id; there is no `notifications/xinas/*` extension and
+   no event payload inside a notification.
+4. **The journal, not the transport, provides catch-up.** Every event is
+   committed to `operational_events` before any notification is scheduled;
+   clients resume from an opaque cursor through `resources/read`; a cursor
+   older than retention reports a visible gap. Notifications are at-most-once
+   wake-ups that may be coalesced.
+5. **A subscription is bound to the principal that opened it** (bearer, or
+   the UDS local-admin gate) and re-authorized before every delivery; a
+   cursor is not a capability.
+6. **A disconnect removes only the listener.** Closing the HTTP response or
+   a stdio `notifications/cancelled` stops delivery for that subscription
+   and nothing else: monitoring, journal rows and running tasks are
+   untouched.
+7. **Task-status notifications stay with S16.** S17 emits no
+   `notifications/tasks` and does not project Task state into a domain
+   event; a future task notification may reuse the S17 transport only under
+   the S16 notification contract.
+8. **Events are evidence, not inference.** They derive from committed
+   observed-state transitions, the heartbeat tracker and the boot id; a
+   failed or stale collector reports itself and never produces a removal,
+   an outage or a recovery. The xiRAID observation keeps the vendor's raw
+   state words and the four separate progress values for this purpose.
 
 - The api gains NO privilege: every mutator still flows
   plan → apply → task → agent. The only adapter exception is the
@@ -349,9 +392,11 @@ for `control_client.py` against a stub HTTP server.
 TUI pool screens (no API surface), SSE transport, audit/config-history
 backend integration (the degraded entries go live when the bridges
 land), removal of the read-only gRPC passthrough (tracked to the
-API gaining pools/mail/auth-settings resources), general-purpose MCP data
-resources and prompts (S18 permits only immutable MCP Apps UI resources).
-S15 adds: a TUI screen for pending
+API gaining pools/mail/auth-settings resources), MCP prompt
+capabilities and general-purpose MCP data resources (tools only in
+Phase 0; S17 adds Resources and resource subscriptions on the modern era
+— see the S17 decision above; S18 adds one immutable MCP Apps UI resource
+on both eras). S15 adds: a TUI screen for pending
 MCP approvals (the web page, REST and `xinasctl` cover approval; recorded
 in `docs/TODO.md`), and a key-rotation CLI for the `requestState` key
 ring (rotation is a documented file edit + restart).

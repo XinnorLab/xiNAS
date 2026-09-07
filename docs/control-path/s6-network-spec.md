@@ -369,3 +369,29 @@ ethernet), `sys-class-net.json` (2× mlx + 1 ethernet), `rdma-links.json`,
 - **Observed-revision churn (repo-wide):** S4/S5 route bindings inherit a
   ≤1-sweep apply window on live hosts; S6 avoids the pattern but does not
   fix the older routes (tracked outside this slice).
+
+## S17 amendment (2026-09-04) — link transitions and NFS-over-RDMA readiness
+
+`s17-mcp-subscriptions-spec.md` §8.5–§8.6 uses the observe enrichment of
+§6 (T5) as follows:
+
+- **Ethernet / IPoIB link:** `status.link_state` (`up | down | unknown`,
+  from the `ip -j` `operstate`); `up → down` is `system.network.link_down`,
+  `down → up` is `system.network.link_up`; `unknown` on either side emits
+  nothing.
+- **RDMA link:** `status.rdma_link_state` (from `rdma link show -j`),
+  same rule → `system.rdma.link_down` / `system.rdma.link_up`.
+- **Which interfaces:** those with a desired row (`managed_by_xinas`,
+  the ADR-0008 adoption) or with `status.rdma_capable: true`. Unmanaged,
+  non-RDMA interfaces (a management NIC) are not in the system feed by
+  default.
+- **Partial monitor records:** the `ip monitor` event path may deliver an
+  attribute subset; the engine compares only fields present in both the
+  previous and the current row, and the 30 s snapshot poll reconciles the
+  rest, so a partial record can never fabricate a down.
+- **NFS over RDMA readiness:** configured iff the desired `NfsProfile`
+  has `spec.rdma.enabled: true`; ready iff the observed
+  `NfsProfile.status.rdma_listening` is `true` and at least one managed
+  interface has `rdma_capable` and `rdma_link_state: up`. The derived
+  `nfs.rdma.unavailable` / `nfs.rdma.recovered` names the affected
+  interfaces; the link events above are the underlying facts.

@@ -1,5 +1,10 @@
 doca_distro_series: "ubuntu{{ ansible_distribution_version }}"
-doca_version: "latest"         # NVIDIA repo alias to the most recent DOCA-Host release
+# One release directory of the DOCA repo, never NVIDIA's moving `latest` alias:
+# when that alias re-pointed (2026-08-20, 3.4.0 -> 3.5.0) apt refused to follow
+# it and every installed host's `apt-get update` failed with exit 100. Bump
+# deliberately after a hardware test, in this role and in the client's copy,
+# and commit with `Requires-Rebuild: doca_ofed`. Contract: docs/Installer/spec.md §3.2.
+doca_version: "3.4.0"
 doca_repo_base: "https://linux.mellanox.com/public/repo/doca"
 doca_repo_component: "{{ doca_version }}/{{ doca_distro_series }}/x86_64"
 

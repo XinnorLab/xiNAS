@@ -201,9 +201,13 @@ describe('mcp modern era — server/discover (S14)', () => {
       expect(typeof result.capabilities.extensions).toBe('object');
     }
 
-    // S18 serves one immutable MCP App resource; prompts remain deferred.
+    // tools are served; prompts are not implemented (ADR-0010) and must
+    // therefore not be advertised. resources ARE served on this server
+    // (S17: the journal is installed and mcp.subscriptions is enabled; S18:
+    // the MCP Apps view), and the flags must describe exactly what is
+    // implemented.
     expect(result.capabilities.tools).toBeDefined();
-    expect(result.capabilities.resources).toBeDefined();
+    expect(result.capabilities.resources).toEqual({ subscribe: true, listChanged: false });
     expect(result.capabilities.prompts).toBeUndefined();
     expect(result.capabilities.extensions).toMatchObject({
       'io.modelcontextprotocol/ui': {

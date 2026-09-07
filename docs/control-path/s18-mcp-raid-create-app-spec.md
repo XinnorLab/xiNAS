@@ -57,7 +57,10 @@ state, or xiRAID request.
 
 ### 3.2 UI resource
 
-`resources/list` contains exactly one S18 entry:
+`resources/list` contains exactly one `ui://` entry, served through the S17
+resource provider seam (`api/mcp/resources.ts`; `appsProvider()` in
+`api/mcp/apps.ts`) next to the `xinas://events/…` feeds whenever those are
+installed:
 
 ```json
 {
@@ -68,8 +71,13 @@ state, or xiRAID request.
 }
 ```
 
-`resources/read` for that URI returns one complete HTML5 document. An unknown
-URI returns an MCP invalid-params error and never falls through to a file path.
+`resources/read` for that URI returns one complete HTML5 document as a
+`CacheableResult` (`ttlMs: 0`, `cacheScope: private`, like every S17 read).
+An unknown `ui://` URI is `-32602` (`invalid resource uri`) and never falls
+through to a file path. The view is never subscribable: a
+`subscriptions/listen` filter naming it is dropped from the honored filter
+silently (S17 §5.3), and `resources/templates/list` carries no template for
+it.
 
 The resource metadata sets an empty external CSP allowlist and requests a
 visible host border. No secrets, bearer tokens, loopback tokens, or local file
@@ -77,8 +85,9 @@ paths may appear in the document.
 
 ### 3.3 Discovery
 
-Legacy `initialize` and modern `server/discover` advertise `resources`. Modern
-discovery additionally advertises:
+Modern `server/discover` advertises `resources` as the union the S17 seam
+computes — `{ "subscribe": <true iff the S17 feeds are installed>,
+"listChanged": false }` — plus:
 
 ```json
 {
@@ -89,6 +98,10 @@ discovery additionally advertises:
   }
 }
 ```
+
+Legacy `initialize` advertises `resources: {}` and the same extension; the
+SDK server lists and reads only the view there (the S17 feeds are
+modern-only).
 
 The tool remains listed for non-App clients; `_meta` is an ignorable
 progressive-enhancement field.
@@ -222,7 +235,9 @@ than hiding it inside the iframe.
 
 S18 does not add a second task monitor. After a successful apply, the existing
 result returns `task_id` and the `tasks.wait` next hint. The host follows that
-hint. Subscription-based progress may be added when S17 is implemented.
+hint. S17 is implemented, but MCP Apps hosts relay tool calls and results to
+a view, not `subscriptions/listen` streams, so the view keeps following the
+hint; recorded in `docs/TODO.md`.
 
 ## 9. Accessibility and layout
 

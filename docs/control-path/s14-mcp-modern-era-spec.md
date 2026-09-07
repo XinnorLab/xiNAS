@@ -46,10 +46,20 @@ to the other.
 
 ### Out of scope
 
-- General-purpose MCP data resources and prompts remain deferred by ADR-0010.
-  **S18 amendment:** one immutable MCP Apps UI resource is implemented and
-  advertised; see `s18-mcp-raid-create-app-spec.md`. This exception does not
-  open a generic resource surface.
+- MCP prompts (still deferred by ADR-0010) — and therefore **not
+  advertised** in `capabilities`. ~~MCP resources likewise.~~ **Amended
+  2026-09-04 (S17):** MCP Resources and resource subscriptions are in scope
+  on the modern era for the S17-enabled build — `resources/list`,
+  `resources/templates/list`, `resources/read` and `subscriptions/listen`
+  are served ahead of the legacy SDK path (§5.2), and
+  `resources.subscribe` is `true` only when the complete S17 surface is
+  installed (§4). The feeds stay absent from the legacy era. Contract:
+  `s17-mcp-subscriptions-spec.md`. **Amended 2026-09-04 (S18):** one
+  immutable MCP Apps UI resource (`ui://xinas/raid-create`) is served through
+  the same provider seam on the modern era and by the SDK server on the
+  legacy era, so `resources` is always advertised and `extensions` carries
+  `io.modelcontextprotocol/ui`. This exception does not open a generic
+  data-resource surface; see `s18-mcp-raid-create-app-spec.md`.
 - The MCP `tasks` extension (`io.modelcontextprotocol/tasks`). xiNAS has its
   own asynchronous task envelope over REST (`s2-task-envelope-spec.md`) plus
   the `next` hint in tool results; that is *not* the MCP tasks extension and
@@ -152,18 +162,25 @@ versions remain reachable only through `initialize`.
 
 - `tools: {}` — present whenever the catalog exposes at least one
   MCP-visible entry (`binary !== true`), which it always does.
-- `resources: {}` — added by S18 because `resources/list` and
-  `resources/read` serve the immutable RAID Create App View. General-purpose
-  data resources remain deferred.
-- `prompts` — **absent.** No handler exists.
-- `extensions.io.modelcontextprotocol/ui` — added by S18 with the supported
-  `text/html;profile=mcp-app` MIME type. There is still never a top-level
+- `resources` — **always present** since S18, as
+  `{ "subscribe": <bool>, "listChanged": false }`. The S18 MCP Apps provider
+  is installed unconditionally (the immutable `ui://xinas/raid-create`
+  view); `subscribe` is `true` iff `ApiContext.events` is installed (S17
+  §3: the journal, its retention sweeper and the resource + listen handlers)
+  and `false` otherwise, so the flags describe exactly what is implemented
+  (requirement §2.4). `listChanged` stays `false`: the list is static for
+  the process lifetime.
+- `prompts` — **absent.** No handler exists (ADR-0010 defers them).
+- `extensions.io.modelcontextprotocol/ui` — present since S18 with the
+  supported `text/html;profile=mcp-app` MIME type. There is still never a
+  top-level
   `result.extensions`.
 
 > **Deviation from the requirement document's example.** Requirement §2.3's
 > sample response advertises the Tasks extension. xiNAS still does not
-> implement that extension. The `resources` and UI-extension claims added by
-> S18 are different: both have matching handlers and therefore satisfy §2.4.
+> implement that extension. The `resources` claim (S17 feeds, S18 view) and
+> the UI-extension claim (S18) are different: both have matching handlers and
+> therefore satisfy §2.4.
 
 **`_meta["io.modelcontextprotocol/serverInfo"]`** — `{name, version}`, the
 **same constant** the legacy `initialize` reports. One server, one identity
@@ -224,6 +241,30 @@ service is reached (S15 §14.2), so `buildMcpServer`'s handler type stays
 
 Unknown modern methods return JSON-RPC `-32601` **Method not found**, per
 JSON-RPC 2.0.
+
+### 5.2 Resources and subscriptions (S17, 2026-09-04)
+
+Four more modern methods are served ahead of the SDK, with the same
+per-request `_meta` validation, identity resolution and `-32601`-never-on-
+auth-failure rule as `tools/*`:
+
+| Method | Result | Notes |
+|---|---|---|
+| `resources/list` | `{ resultType: "complete", resources, ttlMs: 0, cacheScope: "private" }` | the six S17 feeds first, then other providers' resources; never `nextCursor`; a `cursor` param is `-32602` |
+| `resources/templates/list` | `{ resultType: "complete", resourceTemplates, ttlMs: 0, cacheScope: "private" }` | one `{?after,limit}` template per feed |
+| `resources/read` | `{ resultType: "complete", contents: [text], ttlMs: 0, cacheScope: "private" }` | `params.uri` string, allow-list parsed; `inputResponses`/`requestState` present → `-32602` (feeds never elicit); unknown URI → `-32602`, never `-32002` |
+| `subscriptions/listen` | the only modern method answered with `Content-Type: text/event-stream` | ack first, `notifications/resources/updated` per accepted feed, graceful `subscriptions/listen` result on shutdown; details in S17 §5 |
+
+`ttlMs: 0` and `cacheScope: "private"` for the same reasons `server/discover`
+gives them (§4); an event feed is stale the instant it is read, and every
+read runs inside an authorization context. Result shapes are validated
+against the vendored `2026-07-28` schema in the contract tests.
+
+**HTTP SSE and stdio multiplexing.** On Streamable HTTP each
+`subscriptions/listen` POST owns one SSE response; every other modern
+request stays single-JSON. Through `xinas-mcp-stdio` every subscription
+shares stdout and is demultiplexed by `_meta["io.modelcontextprotocol/subscriptionId"]`;
+the adapter's per-message ordering guarantee becomes per-subscription (§7).
 
 ### 5.1 Multi Round-Trip Requests on `tools/call` (S15, 2026-09-04)
 
@@ -315,11 +356,16 @@ through the loopback under the caller's real principal and role, and
   `MAXIMUM_MESSAGE_SIZE`, not the api-wide 1 MB: `StreamableHTTPServerTransport`
   applies no limit of its own, so a tighter cap would change legacy behavior
   (AC13).
-- `src/mcp-stdio.ts` — **no change.** It is a per-message bridge; a
-  `server/discover` line is forwarded and its answer returned verbatim. The
-  cached `mcp-session-id` it may attach is ignored by the modern path (§3).
-  It forwards `inputResponses`, `requestState` and `_meta` verbatim too
-  (S15 §14.3).
+- `src/mcp-stdio.ts` — a per-message bridge for every method except
+  `subscriptions/listen`: a `server/discover` line is forwarded and its
+  answer returned verbatim; the cached `mcp-session-id` it may attach is
+  ignored by the modern path (§3); it forwards `inputResponses`,
+  `requestState` and `_meta` verbatim too (S15 §14.3). **Amended 2026-09-04
+  (S17 D-19):** a `subscriptions/listen` line runs off the serial chain,
+  its SSE response is demultiplexed into one stdout line per `data:`
+  payload, an inbound `notifications/cancelled` naming a live listen id
+  aborts that HTTP request instead of being forwarded, and the graceful
+  listen result is forwarded like any other message (S17 §5.5).
 - **S15 additions:** `src/api/mcp/confirmation/` (store, `requestState`
   codec, service, message rendering, approval page, metrics) called from
   `callTool()`; `transport.ts` maps `-32021` to HTTP 400 and passes the
@@ -343,7 +389,7 @@ loopback request produces.
 | 4 | all of `resultType`, `supportedVersions`, `capabilities`, `ttlMs`, `cacheScope`, `serverInfo`, `instructions` | `mcp-discover.test.ts` |
 | 5 | `supportedVersions` contains `2026-07-28` | `mcp-discover.test.ts` (and asserts no legacy version leaks in) |
 | 6 | extensions under `capabilities.extensions`, never top-level | `mcp-discover.test.ts` |
-| 7 | advertised capabilities match available handlers | `mcp-discover.test.ts` — `tools` and S18 `resources` have handlers; `prompts` remains absent |
+| 7 | advertised capabilities match available handlers | `mcp-discover.test.ts` — `prompts` absent; `resources` `{ subscribe: false, listChanged: false }` without a journal (S18 view only) and `{ subscribe: true, listChanged: false }` with one (S17); `extensions.io.modelcontextprotocol/ui` present (S18); `tools` present iff the catalog has MCP-visible entries |
 | 8 | two calls: no state change, semantically equal | `mcp-discover.test.ts` |
 | 9 | direct modern operational request without discovery | `mcp-discover.test.ts` — stateless `tools/list` + `tools/call` |
 | 10 | official SDK selects modern in `auto` mode | `@modelcontextprotocol/client` 2.0.0 in `versionNegotiation: { mode: 'auto' }` — S15 §15.4 (was "not implementable" until the v2 packages shipped; see below) |

@@ -5,8 +5,13 @@ import { type OpenedStateStore, openStateStore } from '../state/index.js';
 import { createAgentRpcClient } from './agent-client.js';
 import { createApp } from './app.js';
 import { seedInfrastructure } from './bootstrap.js';
-import { type ApiConfig, loadConfig } from './config.js';
+import { type ApiConfig, loadConfig, resolveSubscriptionsConfig } from './config.js';
 import type { ApiContext } from './context.js';
+import { type EventsContext, createEventsContext } from './events/context.js';
+import { createTaskLookup } from './events/engine.js';
+import { applyCollectorMap, emitAgentState } from './events/producers/system.js';
+import { RetentionSweeper } from './events/retention.js';
+import { SubscriptionRegistry } from './events/subscriptions.js';
 import { HeartbeatTracker, createAgentHealthProbe } from './heartbeat.js';
 import { startLeaseSweeper } from './lease-sweeper.js';
 import { loadObservedSchemas } from './observed-schemas.js';
@@ -25,6 +30,8 @@ export interface ServerHandle {
   /** The optional dedicated MCP TCP listener address (S8 T7). */
   mcpAddress?: AddressInfo | string;
   state: OpenedStateStore;
+  /** S17: the journal + engine, exposed for tests. */
+  events: EventsContext;
   close(): Promise<void>;
 }
 
@@ -57,6 +64,45 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   // Compile inbound-observation validators from api-v1.yaml once. Returns null
   // (validation skipped) when the spec isn't shipped — the graceful default.
   const observed = loadObservedSchemas();
+
+  // S17: the operational-event journal + transition engine over the same
+  // xinas.db (migration 007). Built before the heartbeat tracker so the
+  // tracker's transitions and collector maps can be journaled from tick one.
+  const events = createEventsContext({
+    db: state.db,
+    controllerId: config.controller_id,
+    subscriptions: resolveSubscriptionsConfig(config),
+    taskLookup: createTaskLookup(state.db),
+    log: (level, msg, fields) => {
+      // eslint-disable-next-line no-console
+      console[level === 'error' ? 'error' : 'warn'](`[events] ${msg}`, fields ?? {});
+    },
+  });
+  // The live listeners + the post-commit wake-up hook (S17 §5.6, §7.2) and
+  // the bounded retention sweeper (§7.3). Installed even when
+  // mcp.subscriptions.enabled is false: the journal still records and
+  // GET /events still reads; only the MCP surface is withheld.
+  const registry = new SubscriptionRegistry({
+    config: events.subscriptions,
+    metrics: events.metrics,
+    audit: state.audit,
+  });
+  events.registry = registry;
+  events.notify = (feeds) => registry.notify(feeds);
+  const retention = new RetentionSweeper({
+    journal: events.journal,
+    policy: {
+      retentionDays: events.subscriptions.retention_days,
+      maxRows: events.subscriptions.max_rows,
+    },
+    intervalMs: events.subscriptions.cleanup_interval_s * 1000,
+    metrics: events.metrics,
+    log: (level, msg, fields) => {
+      // eslint-disable-next-line no-console
+      console[level](`[events] ${msg}`, fields ?? {});
+    },
+  });
+  retention.start();
 
   // S2 task engine: plan/apply/task engines over the shared SQLite handle,
   // plus an api→agent RPC client (when an agent socket is configured) the
@@ -97,6 +143,17 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
           /* best-effort: a reconcile-trigger failure is non-fatal */
         });
       },
+      // S17 §8.6: agent-state and collector-state events (own transactions).
+      events: {
+        onAgentState: (t) => {
+          const feeds = emitAgentState(events.engine, t);
+          if (feeds.size > 0) events.notify?.(feeds);
+        },
+        onCollectorMap: (map, o) => {
+          const feeds = applyCollectorMap(events.engine, map, o);
+          if (feeds.size > 0) events.notify?.(feeds);
+        },
+      },
     });
     tracker.start();
   }
@@ -126,6 +183,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
     state,
     tasks,
     taskWatch,
+    events,
     ...(tracker ? { tracker } : {}),
     ...(observed ? { observedSchemas: observed.schemas, ajv: observed.ajv } : {}),
   };
@@ -227,11 +285,19 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
       : {}),
     address,
     state,
+    events,
     async close() {
       // Clear the heartbeat tick timer first so no probe fires mid-shutdown.
       tracker?.stop();
       // Stop the periodic lease sweep so no timer fires against a closing db.
       leaseSweeper.stop();
+      retention.stop();
+      // S17 §5.6: every open subscriptions/listen stream gets its graceful
+      // result before the listeners close; then drop idle keep-alive
+      // connections so server.close() does not wait for their timeout.
+      registry.closeAll('shutdown');
+      server.closeIdleConnections?.();
+      mcpServer?.closeIdleConnections?.();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });

@@ -45,6 +45,8 @@ interface FilesystemProbe {
 
 interface FilesystemCollectorOptions {
   probe: FilesystemProbe;
+  /** Poll cadence override (tests only; `XINAS_AGENT_FILESYSTEM_POLL_MS`). Default 60 s. */
+  pollIntervalMs?: number;
 }
 
 /**
@@ -62,7 +64,7 @@ interface FilesystemCollectorOptions {
  */
 export class FilesystemCollector implements Collector<'Filesystem'> {
   readonly kind = 'Filesystem' as const;
-  readonly pollIntervalMs = 60_000;
+  readonly pollIntervalMs: number;
 
   /** Tracks known .mount unit ids so we can emit deletes when they vanish. */
   readonly _knownIds: Set<string> = new Set();
@@ -73,8 +75,9 @@ export class FilesystemCollector implements Collector<'Filesystem'> {
   };
   private _watch: WatchHandle | null = null;
 
-  constructor({ probe }: FilesystemCollectorOptions) {
+  constructor({ probe, pollIntervalMs }: FilesystemCollectorOptions) {
     this.probe = probe;
+    this.pollIntervalMs = pollIntervalMs ?? 60_000;
   }
 
   async initialSweep(): Promise<ObservationDelta[]> {

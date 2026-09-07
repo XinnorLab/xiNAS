@@ -225,3 +225,28 @@ Fixture-mode api+agent (fake NetHost/FsHost/xiraid + fixture probes):
   pass.
 - Journal access: the agent runs as root — `journalctl -u` works; the
   bundle executor caps line counts to bound size.
+
+## S17 amendment (2026-09-04) — collector and service health as events
+
+`s17-mcp-subscriptions-spec.md` §8.5–§8.6 turns two of this spec's health
+inputs into system-feed events:
+
+- **Collector failure / recovery:** the per-collector health string the
+  agent reports in `agent.health` (`running | stubbed | error: <reason>`)
+  and the api captures on every heartbeat. `running → error` is
+  `system.collector.failed` (once per edge, reason bounded to 256
+  characters); `error → running` is `system.collector.recovered` only after
+  a newer observation batch of that kind has been accepted — a health
+  string alone is not a recovery.
+- **Collector staleness:** a kind whose last accepted observation batch is
+  older than 3 × its collector's poll interval (the agent spec's table;
+  300 s for backstop kinds) while the agent is `healthy` is
+  `system.collector.stale`; an accepted batch clears it.
+- **Service units:** the systemd allow-list (`nfs-server`, `nfs-mountd`,
+  `nfs-idmapd`, `xinas-api`, `xinas-agent`, and — added by S17 —
+  `xinas-nfs-helper`, `xiraid-server`) feeds `nfs.service.*` /
+  `system.service.*`; a `not-found` or `masked` unit produces no event.
+- **Drift:** the `nfs.configuration.drift_*` events the S17 requirement
+  allows (MAY) are deferred; when they land they will consume this spec's
+  drift checks and a `skipped` / `not_evaluated` verdict will never emit a
+  `drift_cleared`.

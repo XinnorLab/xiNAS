@@ -690,3 +690,47 @@ describe('sparepool sentinel', () => {
     expect(arr('sp_a')?.status.spare_pool).toBe('sp_a');
   });
 });
+
+describe('S17: raw state words and separate progress values (S3 amendment)', () => {
+  const status = (extra: Record<string, unknown>) =>
+    parseRaidShow([{ name: 'a', level: '5', devices: [], ...extra }], DISK_IDS)[0]?.status;
+
+  it('retains every state word, lower-cased and de-duplicated, in order', () => {
+    const s = status({ state: ['Online', 'initing', 'online', 'need_resize'] });
+    expect(s?.raw_states).toEqual(['online', 'initing', 'need_resize']);
+  });
+
+  it('retains an unknown word and still maps status.state to unknown', () => {
+    const s = status({ state: ['weird'] });
+    expect(s?.raw_states).toEqual(['weird']);
+    expect(s?.state).toBe('unknown');
+  });
+
+  it('keeps the four progress values apart and never merges them', () => {
+    const s = status({
+      state: ['online', 'initing'],
+      init_progress: 37,
+      recon_progress: null,
+      restripe_progress: 'x',
+      sdc_progress: 100.0,
+    });
+    expect(s?.init_progress_pct).toBe(37);
+    expect(s?.recon_progress_pct).toBeNull();
+    expect(s?.restripe_progress_pct).toBeNull();
+    expect(s?.sdc_progress_pct).toBe(100);
+    // The compatibility field keeps its historical merge.
+    expect(s?.rebuild_progress_pct).toBe(37);
+  });
+
+  it('rejects out-of-range or non-finite progress as null', () => {
+    expect(status({ state: ['online'], init_progress: 150 })?.init_progress_pct).toBeNull();
+    expect(status({ state: ['online'], recon_progress: -1 })?.recon_progress_pct).toBeNull();
+    expect(status({ state: ['online'], sdc_progress: Number.NaN })?.sdc_progress_pct).toBeNull();
+    expect(status({ state: ['online'] })?.restripe_progress_pct).toBeNull();
+  });
+
+  it('a string state and a missing state still produce raw_states', () => {
+    expect(status({ state: 'DEGRADED' })?.raw_states).toEqual(['degraded']);
+    expect(status({})?.raw_states).toEqual([]);
+  });
+});

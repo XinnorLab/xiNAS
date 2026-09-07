@@ -136,9 +136,12 @@ describe('mcp transport (S8 T7)', () => {
       { jsonrpc: '2.0', id: 4, method: 'resources/list', params: {} },
       { session },
     );
-    expect(
-      (resources.body.result as { resources: Array<{ uri: string }> }).resources.map((r) => r.uri),
-    ).toContain('ui://xinas/raid-create');
+    const legacyUris = (
+      resources.body.result as { resources: Array<{ uri: string }> }
+    ).resources.map((r) => r.uri);
+    expect(legacyUris).toContain('ui://xinas/raid-create');
+    // The S17 feeds are modern-only: never listed on a legacy session.
+    expect(legacyUris.filter((u) => u.startsWith('xinas://events/'))).toEqual([]);
 
     const read = await rpc(
       port,

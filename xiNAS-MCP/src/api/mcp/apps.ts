@@ -5,7 +5,8 @@
  * bearer: every operation goes through the host's authenticated MCP channel.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import type { ReadResourceResult, ResourceProvider } from './resources.js';
 
 export const MCP_UI_EXTENSION = 'io.modelcontextprotocol/ui';
 export const MCP_APP_MIME_TYPE = 'text/html;profile=mcp-app';
@@ -30,55 +31,82 @@ export function listAppResources(): McpAppResource[] {
 }
 
 /**
- * Resolve only a closed, declared URI. Never turn an attacker-controlled URI
- * into a path. The same relative location works from src/ under tsx and from
- * dist/ after tsc + the Vite single-file build.
+ * The built view. Prefer the Vite single-file bundle; the URL is stable from
+ * both src/api/mcp/apps.ts (tsx development/tests) and dist/api/mcp/apps.js.
+ * A source fallback keeps isolated unit tests useful before a build; the
+ * dev:api script builds the bundle first, so an interactive dev host always
+ * receives the self-contained artifact. Immutable per process, so read once.
  */
-export async function readAppResource(uri: string): Promise<{
-  contents: Array<{
-    uri: string;
-    mimeType: typeof MCP_APP_MIME_TYPE;
-    text: string;
-    _meta: {
-      ui: {
-        csp: { connectDomains: never[]; resourceDomains: never[] };
-        prefersBorder: true;
-      };
-    };
-  }>;
-}> {
-  if (uri !== RAID_CREATE_APP_URI) {
-    throw new TypeError(`unknown MCP App resource: ${uri}`);
-  }
-  // Prefer the Vite single-file bundle. The URL is stable from both
-  // src/api/mcp/apps.ts (tsx development/tests) and dist/api/mcp/apps.js.
-  // A source fallback keeps isolated unit tests useful before a build; the
-  // dev:api script builds the bundle first, so an interactive dev host always
-  // receives the self-contained artifact.
-  let text: string;
+let cachedHtml: string | undefined;
+function loadAppHtml(): string {
+  if (cachedHtml !== undefined) return cachedHtml;
   try {
-    text = await readFile(
+    cachedHtml = readFileSync(
       new URL('../../../dist/mcp-apps/raid-create.html', import.meta.url),
       'utf8',
     );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    text = await readFile(new URL('../../mcp-apps/raid-create.html', import.meta.url), 'utf8');
+    cachedHtml = readFileSync(new URL('../../mcp-apps/raid-create.html', import.meta.url), 'utf8');
+  }
+  return cachedHtml;
+}
+
+export interface McpAppContent {
+  uri: string;
+  mimeType: typeof MCP_APP_MIME_TYPE;
+  text: string;
+  _meta: {
+    ui: {
+      csp: { connectDomains: never[]; resourceDomains: never[] };
+      prefersBorder: true;
+    };
+  };
+}
+
+/**
+ * Resolve only a closed, declared URI. Never turn an attacker-controlled URI
+ * into a path.
+ */
+function appContent(uri: string): McpAppContent {
+  if (uri !== RAID_CREATE_APP_URI) {
+    throw new TypeError(`unknown MCP App resource: ${uri}`);
   }
   return {
-    contents: [
-      {
-        uri,
-        mimeType: MCP_APP_MIME_TYPE,
-        text,
-        _meta: {
-          ui: {
-            csp: { connectDomains: [], resourceDomains: [] },
-            prefersBorder: true,
-          },
-        },
+    uri,
+    mimeType: MCP_APP_MIME_TYPE,
+    text: loadAppHtml(),
+    _meta: {
+      ui: {
+        csp: { connectDomains: [], resourceDomains: [] },
+        prefersBorder: true,
       },
-    ],
+    },
+  };
+}
+
+/** Legacy-era read (the SDK server's handler and the unit tests). */
+export async function readAppResource(uri: string): Promise<{ contents: McpAppContent[] }> {
+  return { contents: [appContent(uri)] };
+}
+
+/**
+ * The modern-era provider: the S17 seam lists the view next to the event
+ * feeds and answers `resources/read` for it; it is never subscribable, so a
+ * `subscriptions/listen` filter naming it is dropped silently (S17 §5.3).
+ */
+export function appsProvider(): ResourceProvider {
+  return {
+    list: () => listAppResources(),
+    templates: () => [],
+    owns: (uri) => uri === RAID_CREATE_APP_URI,
+    read: (uri): ReadResourceResult => ({
+      resultType: 'complete',
+      contents: [appContent(uri)],
+      ttlMs: 0,
+      cacheScope: 'private',
+    }),
+    subscribable: () => false,
   };
 }
 

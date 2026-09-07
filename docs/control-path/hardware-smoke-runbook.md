@@ -374,6 +374,46 @@ ExportGroup / the default NfsProfile are NEVER tombstone-deleted).
   that has live desired rows; behaviour is exactly the S11/S12 adopt (puts the
   captured rows, no removed-domain deletion). No `absent_files` → no tombstone.
 
+## 5h. S17 — subscriptions: product-client smoke protocol
+
+*Spec: [s17-mcp-subscriptions-spec.md](s17-mcp-subscriptions-spec.md) §16
+(SUBS-CLIENT-002).* The automated suites prove the wire contract against
+the released `2026-07-28` schema and the released
+`@modelcontextprotocol/client` 2.0.0; this section records what each
+*product* client actually does with the feeds, which no unit test can.
+
+Record one row per client. Every column is observed, never inferred:
+
+| Column | Where the answer comes from |
+|--------|-----------------------------|
+| client + version | the client's own about/version output |
+| transport | `stdio` via `/usr/local/bin/xinas-mcp-stdio`, or Streamable HTTP against `mcp.http` |
+| issued `subscriptions/listen` | api audit: `mcp.subscription.opened` rows in `/var/log/xinas/audit.jsonl`, or `GET /api/v1/audit?kind=mcp.subscription.opened` |
+| honored filter | the `honoredFilter` in the client's log, or the `mcp.subscription.opened` payload |
+| update reached the client | the client's MCP log showing `notifications/resources/updated` after a driven transition (below) |
+| re-read or surfaced | whether the client re-read `xinas://events/<feed>?after=…` (api audit `mcp.resource.read`) or surfaced the notification to the model |
+| reconnect | close the api (`systemctl restart xinas-api`): does the client re-issue `listen` and read after its last cursor |
+| configuration | the exact client config block used (server entry, env, tokens) |
+
+Driving a transition on hardware without touching data: fail and restore
+`nfs-server.service` (`systemctl kill --signal=SIGKILL nfs-server` then
+`systemctl start nfs-server`) → `nfs.service.unavailable` /
+`nfs.service.recovered` on `xinas://events/nfs`; or start an
+initialization on a scratch array → `raid.operation.started` and the
+`raid/progress` buckets.
+
+- [ ] **Claude Code** — pending (V-29). Row to fill: version, transport,
+  listen issued, honored filter, update received, re-read/surfaced,
+  reconnect, config.
+- [ ] **Codex** — pending (V-29). Same columns.
+- [ ] **Polling-only client** (any client that never issues `listen`):
+  `resources/read` on `xinas://events/nfs?after=<cursor>` returns the
+  driven events with `gap: false`; the `instructions` text names this
+  fallback.
+
+Until both product rows are filled, the release notes state the
+limitation and point at the polling fallback (spec §16).
+
 ## 6. Cross-cutting
 
 1. [ ] **Plan→pause→apply:** plan an array modify, wait 2+ minutes,

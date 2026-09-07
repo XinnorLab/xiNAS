@@ -46,6 +46,8 @@ export interface InventorySnapshot {
     kernel: string;
     uptime_seconds: number;
   };
+  /** S17: /proc/sys/kernel/random/boot_id, trimmed; absent when unreadable. */
+  boot_id?: string;
   observed_at: string;
 }
 
@@ -68,10 +70,12 @@ export function createInventoryProbe(opts: InventoryProbeOptions = {}): Inventor
 
   return {
     async snapshot(): Promise<InventorySnapshot> {
-      const [cpuRaw, memRaw] = await Promise.all([
+      const [cpuRaw, memRaw, bootRaw] = await Promise.all([
         readFileSafe(rf, '/proc/cpuinfo'),
         readFileSafe(rf, '/proc/meminfo'),
+        readFileSafe(rf, '/proc/sys/kernel/random/boot_id'),
       ]);
+      const bootId = bootRaw?.trim();
 
       const cpu = cpuRaw
         ? parseCpuinfo(cpuRaw, os.arch())
@@ -98,6 +102,7 @@ export function createInventoryProbe(opts: InventoryProbeOptions = {}): Inventor
           kernel: os.release(),
           uptime_seconds: Math.floor(os.uptime()),
         },
+        ...(bootId !== undefined && bootId.length > 0 ? { boot_id: bootId } : {}),
         observed_at: new Date().toISOString(),
       };
     },

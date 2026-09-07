@@ -167,6 +167,37 @@ force color — ANSI codes ahead of `PLAY`/`TASK` would break the ticker's ancho
   ([lib/menu_lib.sh](../../lib/menu_lib.sh)) no longer silently swallows
   unmapped keystrokes: an unrecognized key beeps (`\a`) and flashes a red footer
   hint (`Unknown key — use ←→, Enter, y/n, or Esc`) until the next keypress.
+- **Cursor keys decode in both terminal encodings.** `_menu_read_key`
+  ([lib/menu_lib.sh](../../lib/menu_lib.sh), mirrored byte-for-byte in
+  [client_repo/lib/menu_lib.sh](../../client_repo/lib/menu_lib.sh)) is the
+  one place every bash dialog turns terminal bytes into a key name. After an
+  `ESC` byte it collects the rest of the escape sequence byte by byte — a CSI
+  sequence `ESC [ … <final>` runs to its final byte (`0x40`–`0x7E`), an SS3
+  sequence `ESC O <final>` is exactly one more byte, each byte awaited for at
+  most 0.25 s — and maps the cursor keys in **both** encodings, normal mode
+  `ESC [ A`–`ESC [ D` and application cursor-key mode `ESC O A`–`ESC O D`,
+  to `UP`/`DOWN`/`RIGHT`/`LEFT`. A terminal picks the encoding per session,
+  not per keyboard: DECCKM (`CSI ? 1 h`, "Application Cursor Keys (DECCKM),
+  VT100" under *DEC Private Mode Set (DECSET)* in
+  [XTerm Control Sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)
+  for xterm patch #411,
+  whose cursor-key table lists `CSI A` for normal and `SS3 A` for
+  application mode) is switched on by full-screen programs and by some
+  terminals and multiplexers by default, and it turns the very same Down key
+  from `ESC [ B` into `ESC O B`. Only an `ESC` followed by **nothing** within
+  the window is `ESC`, i.e. Cancel; the window is deliberately generous
+  because a false Cancel at the top-level menu costs the operator the whole
+  setup session. Every other complete sequence — Home/End, PgUp/PgDn, F-keys,
+  modified arrows such as `ESC [ 1 ; 5 B`, Alt-chords — comes back as
+  `UNKNOWN`, which no dialog maps to anything: `menu_select`, `checklist`
+  and `input_box` ignore it and `yes_no` beeps (previous bullet). The reader
+  used to take exactly two bytes after `ESC` and match only the CSI form, so
+  an SS3 arrow — or any longer sequence — read as Cancel, and at the
+  top-level setup menu, where Cancel is `exit 2` (§2.7), one Down keypress
+  ended the installer with the "Setup exited" notice and no diagnostic.
+  Regression coverage:
+  [tests/test_menu_key_decoding.py](../../tests/test_menu_key_decoding.py)
+  drives both copies of the real library through a pty.
 
 ### 2.7 Menu exit-code contract
 
@@ -512,12 +543,46 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
   **not** parse the hostname to recover the license hwkey or vice-versa —
   anything validating the license-to-host binding must read
   `xicli license show` directly.
+- **apt cache refresh with one retry.** The role refreshes the cache through
+  the apt module (`cache_valid_time: 3600`); if that fails, it retries once
+  with `apt-get update --allow-releaseinfo-change`, and any other cause fails
+  again with apt's own message. This is the first apt call of a run that the
+  TUI update starts with no bootstrap in front of it, and it runs before
+  `doca_ofed` can re-pin a source whose identity NVIDIA moved (§3.2, §8.5).
 
 ### 3.2 `doca_ofed` — NVIDIA DOCA-Host / OFED
 
 [defaults](../../collection/roles/doca_ofed/defaults/main.yml)
 
-- Repo: `https://linux.mellanox.com/public/repo/doca/latest/ubuntu<ver>/x86_64`.
+- Repo: `https://linux.mellanox.com/public/repo/doca/<doca_version>/ubuntu<ver>/x86_64`,
+  with `doca_version` **pinned to one release directory** — `3.4.0` as of
+  2026-09-07; the value lives in the role defaults and this spec does not fix
+  it. Never the `latest` alias, and not the `latest-<X.Y>-LTS` aliases either:
+  NVIDIA re-points them to each new DOCA-Host release without notice, and apt
+  refuses to follow a source whose release identity changed until an operator
+  confirms it ([apt-get(8)](https://manpages.ubuntu.com/manpages/noble/en/man8/apt-get.8.html),
+  `--allow-releaseinfo-change`, Ubuntu 24.04). **[observed]** On 2026-08-20
+  `doca/latest/ubuntu24.04` moved from `Suite: DOCA-HOST-3.4.0` /
+  `Codename: 3.4.0` to `DOCA-HOST-3.5.0` / `3.5.0` (its `InRelease`, read
+  2026-09-07). From then on every host that had installed from the alias
+  failed `apt-get update` with `E: Repository … changed its 'Codename' value
+  from '3.4.0' to '3.5.0'` (exit 100), and `prepare_system.sh` aborted the
+  install before Ansible ran. Pinned directories keep their identity (the
+  `3.4.0` directory still serves `Codename: 3.4.0`) and NVIDIA keeps them
+  published back to 1.0. Bumping DOCA is a deliberate change: edit
+  `doca_version` in both the server and the client role, test on hardware,
+  and commit with `Requires-Rebuild: doca_ofed`.
+- Sources file: the role **owns `/etc/apt/sources.list.d/mellanox-doca.list`
+  whole** (`copy`, content = the one pinned `deb` line) instead of adding a
+  line with `apt_repository`, which is add-only and would have kept a stale
+  `latest` line beside the pinned one, still failing every refresh. Rewriting
+  the file is what migrates a host installed from `latest`: the pinned URI is
+  new to apt, so no release-identity comparison applies, and apt's list
+  cleanup (apt-get(8) `--list-cleanup`, on by default) drops the old alias's
+  index files on the next refresh. The cache
+  refresh that follows is gated on the file having changed. The uninstaller
+  removes the same path on OFED teardown. How the refreshes that run *before*
+  this role cope with the stale line is §8.5.
 - Repo signing key: fetched from the **component dir's** `doca_keyring.gpg`
   (`<repo_base>/<repo_component>/doca_keyring.gpg`, already a binary keyring) into
   `/etc/apt/trusted.gpg.d/mellanox-doca.gpg`. NVIDIA rotated the DOCA-Host key to
@@ -549,6 +614,35 @@ Effective values listed below come from each role's `defaults/main.yml`, overrid
 - EULA accepted automatically (`xiraid_accept_eula=true`).
 - No auto-reboot (`xiraid_auto_reboot=false`).
 - License file expected at `/tmp/license` (cleared on reboot — re-enter via the menu before deploying).
+- **Daemon preflight (last task, after the optional reboot).**
+  `nvme_namespace` decides what is on the node from `xicli raid show -f json`
+  ([raid-spec §11](raid-spec.md)), and that needs the xiRAID daemon: with it
+  down the probe exits non-zero, the storage state is `UNKNOWN`, and the play
+  fails fast — one role later, with a message that can only ask "is
+  xiraid-core running?" (how a host install log ended on 2026-09-04, `rc=2`;
+  an absent `xicli` reports the same rc — Ansible's ENOENT — and that case
+  is closed separately by the `xiraid_skip_install` purge fix). The role's own
+  checks cannot catch it: the module check reads `lsmod`, and `xicli -v` is
+  the CLI's argparse version action (its help reads "Print the current
+  version number and exit"), so neither contacts the daemon. Whether
+  `xicli settings eula modify` does is not documented ([xiRAID 4.4.0 Command
+  Reference, settings](https://xinnor.io/docs/xiRAID-4.4.0/E/en/CR/settings.html)
+  is silent on it), and the preflight does not rely on it either way. So
+  the role ends — after the module check and after any `xiraid_auto_reboot`
+  reboot, so the state it verifies is the final one — by starting
+  `xiraid.target`, the unit Xinnor manages xiRAID through
+  ([4.4.0 Installation Guide, Ubuntu](https://xinnor.io/docs/xiRAID-4.4.0/E/en/IG/installing_xiraid_classic_on_ubuntu.html)
+  and [Update Guide, Ubuntu](https://xinnor.io/docs/xiRAID-4.4.0/E/en/UG/updating_xiraid_classic_on_ubuntu.html)
+  both drive it with `systemctl stop | restart xiraid.target`; a no-op when
+  already active), and then running `xicli raid show -f json` until it exits
+  `0`, retrying 5 × 2 s because the gRPC server binds a moment after the
+  target reports active. If the target cannot be started, or the CLI still
+  fails, the play stops **in this role** with the failing step's output and
+  the remedy named: `systemctl status xiraid.target`,
+  `journalctl -u 'xiraid*' -b`. An exit `0` with an empty reply is the normal
+  fresh-box answer (raid-spec §11), so this is a liveness check only — it
+  never inspects, creates or removes arrays, and needs no rebuild trailer.
+  Carries the `xiraid` and `verify` tags.
 - **Does not wipe `/etc/xiraid` on re-run.** The role ensures `/etc/xiraid`, `/etc/xiraid/raids`, and `/etc/xiraid/pools` exist (mode `0755`) but never deletes them. `apt`'s no-op install on an already-installed `xiraid-core` does not re-run the postinst that creates those subdirs, so the role must create them itself — otherwise `xicli raid create` fails with `ENOENT` on `/etc/xiraid/raids/*.conf.tmp.lock`. Re-running the role on a provisioned node preserves live array config (`raids/*.conf`); scrubbing config is the uninstaller's job (`purge_xiraid`), not this role's. **A purge followed by a fresh install is a different matter**: the postinst does run then, and it resets `/etc/xiraid`, taking `raids/*.conf` and the license store with it. The arrays are still recoverable from drive metadata — see [raid-spec.md §11](raid-spec.md#11-idempotency--the-storage-reset-contract), *Recovering arrays after a purge that already happened*.
 
 ### 3.5 `nvme_namespace` — drive discovery / namespace rebuild
@@ -1231,3 +1325,34 @@ message (e.g. "Client updated to `<tag>`") when either call failed. A
 fetch or checkout failure MUST result in a non-zero exit and an error
 message naming what failed, so a scripted or fleet-wide client rollout
 can detect a host that did not actually update.
+
+### 8.5 apt refresh on a host whose repository identity changed
+
+apt refuses `apt-get update` (exit 100) for a source whose `Suite`,
+`Codename`, `Origin` or `Label` differ from the release file it fetched
+last, until the change is confirmed with `--allow-releaseinfo-change`
+([apt-get(8)](https://manpages.ubuntu.com/manpages/noble/en/man8/apt-get.8.html),
+Ubuntu 24.04; `sources.list(5)` offers no per-source form of it). That
+guard is for an operator at a terminal. xiNAS's refreshes are unattended,
+package signatures are verified either way, and the one xiNAS-managed
+source that ever changed identity — the DOCA `latest` alias, §3.2 — is
+now pinned. So:
+
+- **Bootstrap.** `prepare_system.sh`'s "Updating package lists", the
+  `install.sh` git bootstrap, and every `apt-get update` in
+  `client_setup.sh` pass `--allow-releaseinfo-change`. Accepting once is
+  durable: apt stores the new release file and later plain refreshes
+  compare against it, which is what carries a host installed from
+  `latest` through the rest of the install.
+- **`common`** (the first role, §3.1) refreshes through the apt module
+  and, if that fails, retries once with
+  `apt-get update --allow-releaseinfo-change`; any other cause fails again
+  with apt's own message. This covers the TUI update path, which runs
+  `ansible-playbook` with no bootstrap in front of it.
+- **`doca_ofed`** rewrites its sources file whole (§3.2), so the stale
+  `latest` line is gone before that role's own refresh, and every role
+  after it refreshes against the pinned source.
+- A tag-scoped run that skips both `common` and `doca_ofed` (for example
+  `--tags xiraid_classic`) on a host still carrying the `latest` line can
+  fail with apt's message. The remedy is either command above, run once
+  by the operator.

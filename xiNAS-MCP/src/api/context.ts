@@ -99,6 +99,12 @@ export interface ApiContext {
    * read-only contexts (no ctx.tasks), where /mcp cannot apply anyway.
    */
   mcpConfirmations?: import('./mcp/confirmation/service.js').ConfirmationService;
+  /**
+   * S17: the operational-event journal + transition engine. Built by
+   * server.ts; absent in unit contexts that never ingest observations, in
+   * which case the observed handler and the heartbeat tracker journal nothing.
+   */
+  events?: import('./events/context.js').EventsContext;
 }
 
 /**

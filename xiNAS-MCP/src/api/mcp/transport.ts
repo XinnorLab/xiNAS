@@ -32,7 +32,13 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express, { type Express, type Request, type Response } from 'express';
 import type { ApiContext } from '../context.js';
+import { queueCursorGap } from '../events/audit.js';
+import { feedProvider } from '../events/feeds.js';
+import { McpProtocolError } from './confirmation/errors.js';
 import { elicitationModes } from './confirmation/policy.js';
+import { acceptFeeds, openHttpListen, validateListenParams } from './listen.js';
+import type { ResourceProvider, ResourcesOptions } from './resources.js';
+import { appsProvider } from './apps.js';
 import { type McpIdentity, buildMcpServer } from './dispatch.js';
 import { handleModernRequest, isModernRequest, isNotification } from './modern.js';
 
@@ -63,8 +69,66 @@ function resolveIdentity(req: Request, ctx: ApiContext): McpIdentity | null {
   return null;
 }
 
+/**
+ * S17 §9.3: the credential a listener was opened with is re-resolved before
+ * every delivery. A bearer is looked up again in the token table (a removed
+ * or demoted token stops delivery); the UDS local-admin gate has nothing to
+ * re-check beyond the socket mode that admitted it.
+ */
+function reauthorizer(req: Request, ctx: ApiContext): () => boolean {
+  const authHeader = req.header('authorization');
+  if (authHeader !== undefined && authHeader.toLowerCase().startsWith('bearer ')) {
+    const token = authHeader.slice(7).trim();
+    return () => {
+      const principal = ctx.config.tokens[token];
+      return (
+        principal !== undefined &&
+        (principal.role === 'viewer' || principal.role === 'operator' || principal.role === 'admin')
+      );
+    };
+  }
+  return () => !req.socket.remoteAddress;
+}
+
 export function mountMcpTransport(app: Express, ctx: ApiContext): void {
   const sessions = new Map<string, McpSession>();
+
+  // S17 §3 + S18: the modern-era resource surface always exists — the S18
+  // MCP Apps view is a provider unconditionally; the S17 feeds join it only
+  // when the journal is installed AND `mcp.subscriptions.enabled`, and
+  // `subscribe` says whether they did (a partial feed surface is never
+  // advertised). Without the feeds `subscriptions/listen` stays -32601.
+  const events = ctx.events;
+  const feeds: ResourceProvider[] =
+    events !== undefined && events.subscriptions.enabled
+      ? [
+          feedProvider(events, {
+            hooks: {
+              onRead: (feed, outcome) => events.metrics.eventRead(feed, outcome),
+              onGap: (info, readCtx) => {
+                events.metrics.cursorGap(info.feed);
+                queueCursorGap(ctx.state.audit, {
+                  principal: readCtx.identity.principal,
+                  correlationId: readCtx.correlationId,
+                  feed: info.feed,
+                  requestedSequence: info.requestedSequence,
+                  oldestSequence: info.oldestSequence,
+                });
+              },
+              isRdmaConfigured: () => {
+                const row = ctx.state.kv.get<{ spec?: { rdma?: { enabled?: unknown } } }>(
+                  '/xinas/v1/desired/NfsProfile/default',
+                );
+                return row?.value.spec?.rdma?.enabled === true;
+              },
+            },
+          }),
+        ]
+      : [];
+  const resources: ResourcesOptions = {
+    providers: [...feeds, appsProvider()],
+    subscribe: feeds.length > 0,
+  };
 
   // /mcp is mounted ahead of the app-wide express.json(), so it needs its
   // own parser: the modern-era path (S14) has to read `method` and
@@ -115,6 +179,81 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
           res.status(202).end();
           return;
         }
+
+        // ── S17 §5: subscriptions/listen is the one modern method answered
+        // with an SSE stream. Every pre-acknowledgment failure is JSON.
+        if ((req.body as { method?: unknown }).method === 'subscriptions/listen') {
+          const correlationId = randomUUID();
+          res.setHeader('X-Correlation-ID', correlationId);
+          const rawId = (req.body as { id?: unknown }).id;
+          const jsonError = (
+            status: number,
+            code: number,
+            message: string,
+            data?: Record<string, unknown>,
+          ): void => {
+            res.status(status).json({
+              jsonrpc: '2.0',
+              id: typeof rawId === 'string' || typeof rawId === 'number' ? rawId : null,
+              error: { code, message, ...(data !== undefined ? { data } : {}) },
+            });
+          };
+          const registry = events?.registry;
+          // Without the S17 feeds (`subscribe` false) there is nothing to listen
+          // to: method not found, exactly as before S18 added the view provider.
+          if (!resources.subscribe || registry === undefined || events === undefined) {
+            jsonError(200, -32601, 'method not found: subscriptions/listen');
+            return;
+          }
+          if (typeof rawId !== 'string' && typeof rawId !== 'number') {
+            jsonError(
+              200,
+              -32600,
+              'invalid request: subscriptions/listen requires a string or number id',
+            );
+            return;
+          }
+          const accept = (req.header('accept') ?? '').toLowerCase();
+          if (!accept.includes('text/event-stream') && !accept.includes('*/*')) {
+            jsonError(406, -32600, 'invalid request: Accept must include text/event-stream');
+            return;
+          }
+          let feeds: ReturnType<typeof acceptFeeds>;
+          try {
+            const filter = validateListenParams(
+              (req.body as { params?: unknown }).params,
+              events.subscriptions.max_uris_per_listen,
+            );
+            feeds = acceptFeeds(filter, resources.providers, {
+              identity: modernIdentity,
+              correlationId,
+            });
+          } catch (err) {
+            if (err instanceof McpProtocolError) {
+              jsonError(err.httpStatus, err.code, err.message, err.data);
+              return;
+            }
+            throw err;
+          }
+          const opened = openHttpListen({
+            req,
+            res,
+            id: rawId,
+            feeds,
+            identity: modernIdentity,
+            reauthorize: reauthorizer(req, ctx),
+            registry,
+            config: events.subscriptions,
+            correlationId,
+          });
+          if (!opened.ok) {
+            jsonError(200, -32000, 'subscription limit reached', {
+              limit: opened.reason === 'principal_limit' ? 'principal' : 'process',
+            });
+          }
+          return;
+        }
+
         // F5 (fix round 1): the correlation id is server-owned — /mcp never
         // runs requestIdMiddleware (mountMcpTransport is called before
         // app.use(requestIdMiddleware()) in app.ts, whose "Middleware order
@@ -138,6 +277,7 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
               ),
             },
             ...(ctx.mcpConfirmations !== undefined ? { confirmations: ctx.mcpConfirmations } : {}),
+            resources,
           },
           correlationId,
         );

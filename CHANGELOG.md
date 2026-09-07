@@ -8,6 +8,19 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
+## [3.13.2] - 2026-09-07
+
+Requires-Rebuild: doca_ofed
+
+Hotfix on 3.13.1, cherry-picked from `release/3.14` across eleven release
+candidates: DOCA-Host installs from a pinned release directory so NVIDIA
+moving its `latest` alias no longer breaks installed hosts, the installer
+never purges xiRAID on a run that will not reinstall it, a rebuilt NVMe
+namespace is found by controller serial + NSID instead of its `nvmeXnY`
+name, and the wizard offers a previous install's filesystem back before
+it offers to destroy it. The `doca_ofed` role changed, hence the trailer
+above.
+
 ### Added
 
 - **`install.sh` can install one named published release, so a release
@@ -44,7 +57,65 @@ supported source for installing and updating xiNAS.
   keep depend on. `1` now means only "rebuild from scratch"; every question
   after `Reuse Arrays? → Yes` returns `2`, which goes back to the menu.
 
+- **A direct root login is told that root SSH password access closes.**
+  `install.sh` writes `/etc/ssh/sshd_config.d/10-xinas-root-access.conf`
+  with `PermitRootLogin prohibit-password`; sshd keeps the first value it
+  reads and drop-ins come first, so that file also overrides a
+  `PermitRootLogin yes` in the main config, and a host where root password
+  login was enabled on purpose lost it silently. The installer now
+  announces the change before the drop-in lands, to a run started as root
+  itself (empty `SUDO_USER`): it names the setting, says whether
+  `/root/.ssh/authorized_keys` already holds a key and gives the
+  `ssh-copy-id` command when it does not, and points at the file to revert.
+  Console access and sudo-capable accounts are unaffected. Informational
+  only: no prompt, no change to the exit status.
+
 ### Fixed
+
+- **Pressing Down at the setup menu no longer exits the installer.**
+  `_menu_read_key` in `lib/menu_lib.sh` read exactly two bytes after an
+  `ESC` and recognised only the CSI encoding of the arrow keys
+  (`ESC [ B`); every other sequence fell into a catch-all that answered
+  `ESC`, which every dialog treats as Cancel and the top-level menu turns
+  into `exit 2`. A Down key sent as SS3 (`ESC O B`, application cursor-key
+  mode, which full-screen programs, multiplexers and some terminals leave
+  switched on) or any longer sequence (PgDn, Home, End, F-keys,
+  Ctrl-arrows) ended the session with the "Setup exited — xiNAS was not
+  provisioned" notice and no diagnostic. The reader now collects the whole
+  escape sequence, maps the cursor keys in both encodings, ignores any
+  other complete sequence, and answers `ESC` only for an Escape followed
+  by nothing within 0.25 s. `client_repo/lib/menu_lib.sh` carries the
+  identical change. See `docs/Installer/spec.md` §2.6.
+
+- **DOCA-Host installs from a pinned release directory, so NVIDIA moving
+  its `latest` alias no longer breaks every installed host.** The
+  `doca_ofed` role tracked `doca/latest`; on 2026-08-20 NVIDIA re-pointed
+  it from 3.4.0 to 3.5.0, and apt — which refuses to follow a source whose
+  release identity changed until told to — failed `apt-get update` with
+  `changed its 'Codename' value` (exit 100) on every host that had
+  installed from the alias, aborting `prepare_system.sh` before Ansible
+  ran. `doca_version` is now `3.4.0` (the release the lab hosts run); the
+  role writes `mellanox-doca.list` whole, so a stale `latest` line is
+  retired instead of kept beside the pinned one; the bootstrap
+  `apt-get update` calls pass `--allow-releaseinfo-change`, which apt
+  remembers, so an already-installed host gets through the install; and
+  `common` retries its cache refresh once with the same flag for the TUI
+  update path, which runs no bootstrap. Bumping DOCA is now a deliberate
+  change (`doca_version` in both roles, `Requires-Rebuild: doca_ofed`).
+  The client role and `client_setup.sh` get the same treatment. See
+  `docs/Installer/spec.md` §3.2 and §8.5.
+
+- **A xiRAID daemon that never came up now fails in `xiraid_classic`, with
+  the daemon named.** The role only verified the kernel module and
+  `xicli -v`, neither of which needs the daemon, so a host whose
+  `xiraid.target` is not running sails through it and stops one role later
+  as storage state `UNKNOWN`, where the message can only ask "is xiraid-core
+  running?". The role now ends, after any post-install reboot,
+  by starting `xiraid.target` and requiring `xicli raid show -f json` to exit
+  0 (retried while the gRPC server binds); otherwise it fails there with the
+  failing step's output and `systemctl status xiraid.target` /
+  `journalctl -u 'xiraid*' -b` as the remedy. Liveness only — it never
+  inspects or touches arrays. See `docs/Installer/spec.md` §3.4.
 
 - **Removing the xiRAID packages no longer leaves a node with no xiRAID at
   all.** `playbooks/site.yml` skips the whole `xiraid_classic` role under
