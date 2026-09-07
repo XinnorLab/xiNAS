@@ -951,7 +951,7 @@ Served by `xinas-api` on every listener:
   'none'`, `X-Frame-Options: DENY`, `Cache-Control: no-store`,
   `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`.
 - `GET /mcp/approvals/assets/app.js`, `app.css` — static, inline strings
-  in `api/mcp/approval-page.ts` (no build step, no third-party script,
+  in `api/mcp/confirmation/approval-page.ts` (no build step, no third-party script,
   nothing fetched from anywhere but `'self'`).
 - The script asks for an operator token (`<input type="password">`, never
   persisted, held in a closure), then calls `GET /api/v1/mcp/confirmations/{id}`
