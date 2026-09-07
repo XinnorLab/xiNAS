@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,21 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startServer } from '../../../api/server.js';
 import { ACK_NO_ROLLBACK } from '../../../api/mcp/confirmation/types.js';
 import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpers.js';
+import {
+  BOTH,
+  FORM,
+  META,
+  auditRows,
+  call,
+  nextId,
+  payloadOf,
+  planFsCreateForce,
+  planShareUpdate,
+  restCall,
+  rpc,
+  rpcErrorOf,
+  toolResultOf,
+} from './_mrtr-helpers.js';
 
 /**
  * S15 Task 10 — the MRTR confirmation flow over the wire: a confirmable
@@ -64,173 +79,6 @@ import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpe
  * currently produces. The wrong-phrase/right-phrase pairing itself is
  * covered directly by routes-mcp-confirmations.test.ts.
  */
-
-interface RpcResult {
-  status: number;
-  body: Record<string, unknown>;
-  headers: http.IncomingHttpHeaders;
-}
-
-function rpc(port: number, message: unknown, opts: { token?: string } = {}): Promise<RpcResult> {
-  const payload = JSON.stringify(message);
-  return new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        host: '127.0.0.1',
-        port,
-        path: '/mcp',
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          'content-length': Buffer.byteLength(payload),
-          ...(opts.token !== undefined ? { authorization: `Bearer ${opts.token}` } : {}),
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => {
-          const text = Buffer.concat(chunks).toString('utf8');
-          resolve({
-            status: res.statusCode ?? 0,
-            body: text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {},
-            headers: res.headers,
-          });
-        });
-      },
-    );
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
-}
-
-/** Plain REST call (loopback-free — a real client request) for the plan-ownership test. */
-function restCall(
-  port: number,
-  token: string,
-  method: string,
-  path: string,
-  body: unknown,
-): Promise<{ status: number; body: Record<string, unknown> }> {
-  const payload = JSON.stringify(body);
-  return new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        host: '127.0.0.1',
-        port,
-        path: `/api/v1${path}`,
-        method,
-        headers: {
-          'content-type': 'application/json',
-          'content-length': Buffer.byteLength(payload),
-          authorization: `Bearer ${token}`,
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => {
-          const text = Buffer.concat(chunks).toString('utf8');
-          resolve({
-            status: res.statusCode ?? 0,
-            body: text.length > 0 ? (JSON.parse(text) as Record<string, unknown>) : {},
-          });
-        });
-      },
-    );
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
-}
-
-const META = (elicitation?: Record<string, object>) => ({
-  'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-  'io.modelcontextprotocol/clientInfo': { name: 'conformance', version: '0' },
-  'io.modelcontextprotocol/clientCapabilities': elicitation === undefined ? {} : { elicitation },
-});
-const FORM = { form: {} };
-const BOTH = { form: {}, url: {} };
-
-let seq = 0;
-function nextId(prefix: string): string {
-  seq += 1;
-  return `${prefix}-${seq}`;
-}
-
-async function call(
-  port: number,
-  token: string,
-  id: string | number,
-  name: string,
-  args: Record<string, unknown>,
-  extra: Record<string, unknown> = {},
-  caps: Record<string, object> | undefined = FORM,
-): Promise<RpcResult> {
-  return rpc(
-    port,
-    {
-      jsonrpc: '2.0',
-      id,
-      method: 'tools/call',
-      params: { _meta: META(caps), name, arguments: args, ...extra },
-    },
-    { token },
-  );
-}
-
-interface ToolResultBody {
-  resultType?: string;
-  content?: Array<{ type: 'text'; text: string }>;
-  isError?: boolean;
-  inputRequests?: Record<string, { method: string; params: Record<string, unknown> }>;
-  requestState?: string;
-}
-
-function toolResultOf(res: RpcResult): ToolResultBody {
-  return (res.body.result ?? {}) as ToolResultBody;
-}
-
-interface ToolPayload {
-  result?: Record<string, unknown>;
-  error?: { code: string; message: string; details?: Record<string, unknown> };
-}
-
-/** Parse the JSON text body of a COMPLETE (non-input_required) tool result. */
-function payloadOf(res: RpcResult): ToolPayload {
-  const r = toolResultOf(res);
-  if (r.content === undefined) return {};
-  return JSON.parse(r.content[0]?.text ?? '{}') as ToolPayload;
-}
-
-function rpcErrorOf(
-  res: RpcResult,
-): { code: number; message: string; data?: Record<string, unknown> } | undefined {
-  return res.body.error as
-    | { code: number; message: string; data?: Record<string, unknown> }
-    | undefined;
-}
-
-interface AuditRow {
-  kind?: string;
-  principal?: string;
-  client_type?: string;
-  payload?: Record<string, unknown>;
-}
-
-function auditRows(dir: string): AuditRow[] {
-  try {
-    return readFileSync(join(dir, 'a.jsonl'), 'utf8')
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((l) => JSON.parse(l) as AuditRow);
-  } catch {
-    return [];
-  }
-}
 
 describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   let dir: string;
@@ -348,75 +196,14 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  async function planShareUpdate(
-    token: string,
-    shareId = 'share-a',
-    clients: Array<{ pattern: string; options: string[] }> = [
-      { pattern: '10.0.0.0/8', options: ['ro'] },
-    ],
-  ): Promise<{ plan_id: string; expected_revision: number; risk_level: string }> {
-    const res = await call(port, token, nextId('plan-share'), 'shares.update', {
-      id: shareId,
-      mode: 'plan',
-      spec: { clients },
-    });
-    const payload = payloadOf(res);
-    const result = payload.result as {
-      plan_id: string;
-      state_revision_expected: number;
-      risk_level: string;
-    };
-    return {
-      plan_id: result.plan_id,
-      expected_revision: result.state_revision_expected,
-      risk_level: result.risk_level,
-    };
-  }
-
-  /**
-   * `filesystems.create` with `spec.force: true` is risk_level 'destructive'
-   * / rollback_model 'unsupported', and its plan carries the engine-owned
-   * advisory `dangerous_flag_required` blocker (`lib/fs/validate.ts`
-   * `validateFsCreate`) — the same static advisory `arrays.delete` and
-   * `config.rollback` attach. Fix round 1 (F1, ruling R-10.1) made Gate 7
-   * exclude that one code (every REST apply route already filters it the
-   * same way; `TaskEngine.apply` enforces the real `dangerous` flag at
-   * apply time), so the REAL, unmodified plan document now reaches url
-   * mode over MCP — no hand-edited blockers/hash needed here.
-   */
-  async function planFsCreateForce(
-    token: string,
-    mountpoint: string,
-    backingDevice = '/dev/xi_data',
-  ): Promise<{
-    plan_id: string;
-    expected_revision: number;
-    risk_level: string;
-    blockers: unknown[];
-  }> {
-    const res = await call(port, token, nextId('plan-fs'), 'filesystems.create', {
-      mode: 'plan',
-      spec: { backing_device: backingDevice, mountpoint, force: true },
-    });
-    const payload = payloadOf(res);
-    const result = payload.result as {
-      plan_id: string;
-      state_revision_expected: number;
-      risk_level: string;
-      blockers: unknown[];
-    };
-    return {
-      plan_id: result.plan_id,
-      expected_revision: result.state_revision_expected,
-      risk_level: result.risk_level,
-      blockers: result.blockers,
-    };
-  }
+  // planShareUpdate / planFsCreateForce now live in ./_mrtr-helpers.ts
+  // (Task 14 — shared with confirmation-restart.test.ts); they take `port`
+  // as their first argument since a restart boots a second, different port.
 
   // ── 1. form happy path + audit (brief case 1) ─────────────────────────────
 
   it('form happy path: elicits, retries with the exact requestState, applies, and audits', async () => {
-    const { plan_id, expected_revision, risk_level } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision, risk_level } = await planShareUpdate(port, 'tok-admin');
     expect(risk_level).toBe('changing_access');
     const idem = nextId('ik');
     const args = {
@@ -481,7 +268,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
     // A DISTINCT share (share-b): this test's apply succeeds and holds its
     // lease forever (the mock agent never posts a terminal task_progress
     // event), so it must not collide with another test's apply on share-a.
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin', 'share-b');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin', 'share-b');
     const idem = nextId('ik');
     const args = {
       id: 'share-b',
@@ -515,7 +302,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
 
   it('decline returns CONFIRMATION_DECLINED, cancel returns CONFIRMATION_CANCELLED; no task either way', async () => {
     for (const action of ['decline', 'cancel'] as const) {
-      const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+      const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
       const idem = nextId('ik');
       const args = {
         id: 'share-a',
@@ -547,7 +334,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // ── 4. wrong decision + round escalation to the limit (brief case 4) ─────
 
   it('a wrong decision value is treated as a decline', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -568,7 +355,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   });
 
   it('a missing confirm_apply response re-issues, escalating rounds, until CONFIRMATION_ROUND_LIMIT', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -611,7 +398,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // ── 5. tampered requestState (brief case 5) ───────────────────────────────
 
   it('a tampered requestState is refused -32602 "invalid request state" over HTTP 200, no task', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -643,7 +430,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // JSON-RPC -32602 and leaves a replay_rejected audit row naming both
   // principals.
   it('a cross-principal presentation of a valid requestState is refused -32602 (not plan_binding) and audits replay_rejected', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -679,7 +466,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // ── 6. changed arguments / revision / idempotency_key on retry (brief case 6) ─
 
   it('changed arguments or idempotency_key on the retry are refused -32602 (binding mismatch)', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -726,7 +513,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // by the later doc-based `Ruling R-3.1` revision check. It surfaces as the
   // generic JSON-RPC -32602, same as any other tampered/stolen retry.
   it('a changed expected_revision on the retry is refused -32602 (binding mismatch), not PRECONDITION_FAILED', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const idem = nextId('ik');
     const args = {
       id: 'share-a',
@@ -790,7 +577,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   });
 
   it('a tampered stored plan_document (hash mismatch) is refused PRECONDITION_FAILED/plan_binding', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     handle.state.db
       .prepare(
         `UPDATE tasks SET plan_document = json_set(plan_document, '$.blockers', json('[{"code":"X","message":"m"}]')) WHERE task_id = ?`,
@@ -813,6 +600,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
 
   it('a destructive (url-mode) plan with only form capability is refused -32021/400 naming url', async () => {
     const { plan_id, expected_revision, risk_level, blockers } = await planFsCreateForce(
+      port,
       'tok-admin',
       '/mnt/t7a',
     );
@@ -846,7 +634,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   });
 
   it('a form-mode plan with no elicitation capability at all is refused -32021 naming form', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     // `call()`'s `caps` parameter defaults to FORM when passed `undefined`
     // (JS default-parameter semantics trigger on `undefined` whether it is
     // omitted or explicit) — so "no elicitation at all" is built directly
@@ -881,7 +669,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // ── 8. url mode (brief case 8) ────────────────────────────────────────────
 
   it('url mode: elicits a url naming the record id, re-issues after url_wait_seconds while pending, and proceeds once approved (with dangerous:true)', async () => {
-    const { plan_id, expected_revision } = await planFsCreateForce('tok-admin', '/mnt/t8a');
+    const { plan_id, expected_revision } = await planFsCreateForce(port, 'tok-admin', '/mnt/t8a');
     const idem = nextId('ik');
     const args = {
       mode: 'apply',
@@ -953,7 +741,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   }, 10_000);
 
   it('url mode: an approved confirmation without dangerous:true fails PRECONDITION_FAILED/dangerous_flag_required and stays approved', async () => {
-    const { plan_id, expected_revision } = await planFsCreateForce('tok-admin', '/mnt/t8b');
+    const { plan_id, expected_revision } = await planFsCreateForce(port, 'tok-admin', '/mnt/t8b');
     const idem = nextId('ik');
     const args = { mode: 'apply', plan_id, expected_revision, idempotency_key: idem }; // no dangerous
 
@@ -998,6 +786,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
 
   it('REST approval: url happy path — POST /mcp/confirmations/:id/approve, then the MCP retry proceeds to apply', async () => {
     const { plan_id, expected_revision } = await planFsCreateForce(
+      port,
       'tok-admin',
       '/mnt/t11a',
       '/dev/xi_data2', // a distinct array from case 8's — that apply holds its lease forever
@@ -1073,6 +862,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
 
   it("REST approval: the requester's own token on approve is refused 409 approver_policy", async () => {
     const { plan_id, expected_revision } = await planFsCreateForce(
+      port,
       'tok-admin',
       '/mnt/t11b',
       '/dev/xi_data2',
@@ -1233,7 +1023,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   // ── F5 (fix round 1) — correlation id is server-owned ─────────────────────
 
   it('a huge client-chosen JSON-RPC id never reaches mcp_confirmations.correlation_id; the server correlation id (echoed on the response header) does, and is <= 64 chars', async () => {
-    const { plan_id, expected_revision } = await planShareUpdate('tok-admin');
+    const { plan_id, expected_revision } = await planShareUpdate(port, 'tok-admin');
     const hugeId = 'x'.repeat(5000);
     const res = await call(port, 'tok-admin', hugeId, 'shares.update', {
       id: 'share-a',

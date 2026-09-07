@@ -19,6 +19,29 @@ function seedTask(
   ).run(task_id, state, `r-${task_id}`, `c-${task_id}`, Date.now(), Date.now(), terminal_at);
 }
 
+/** Minimal row satisfying every NOT NULL column of mcp_confirmations
+ *  (migrations/006-mcp-confirmations.sql). */
+function seedConfirmation(
+  db: Database.Database,
+  confirmation_id: string,
+  status: string,
+  created_at: number,
+) {
+  db.prepare(
+    `INSERT INTO mcp_confirmations (
+       confirmation_id, status, mode, principal, role, tool_name, operation_kind,
+       arguments_hash, plan_id, plan_hash, plan_document_hash, idempotency_key,
+       expected_revision, risk_level, rollback_model, request_state_nonce_hash,
+       round, created_at, expires_at, correlation_id, request_id, node_id
+     ) VALUES (
+       ?, ?, 'form', 'admin:test', 'admin', 'shares.update', 'share.update',
+       'h', 'p-1', 'ph', 'pdh', 'ik-1',
+       1, 'changing_access', 'automatic', 'nh',
+       1, ?, ?, 'c-1', 'r-1', 'n-1'
+     )`,
+  ).run(confirmation_id, status, created_at, created_at + 300_000);
+}
+
 function seedLease(
   db: Database.Database,
   resource_id: string,
@@ -107,5 +130,44 @@ describe('GcSweeper', () => {
     expect(result.tasks_deleted).toBe(1);
     expect(result.leases_removed).toBe(1);
     expect(result.tasks_recovered).toBe(1);
+  });
+
+  // S15 Task 14 — GC prunes terminal mcp_confirmations rows past the same
+  // task-retention window, leaving an OPEN (pending/approved) row alone
+  // regardless of age: TERMINAL_CONFIRMATION_STATUSES
+  // (api/mcp/confirmation/types.ts) are declined/cancelled/expired/consumed
+  // — never pending/approved.
+  it('sweepConfirmations deletes only terminal mcp_confirmations rows older than the retention window', () => {
+    const now = Date.now();
+    const day = 86400 * 1000;
+    seedConfirmation(db, 'c-old-expired', 'expired', now - 31 * day);
+    seedConfirmation(db, 'c-old-pending', 'pending', now - 31 * day);
+
+    const result = gc.sweepConfirmations();
+    expect(result.confirmations_deleted).toBe(1);
+
+    const remaining = (
+      db.prepare('SELECT confirmation_id FROM mcp_confirmations').all() as {
+        confirmation_id: string;
+      }[]
+    ).map((r) => r.confirmation_id);
+    expect(remaining).toEqual(['c-old-pending']);
+  });
+
+  it('sweepAll also prunes terminal mcp_confirmations rows', async () => {
+    const now = Date.now();
+    const day = 86400 * 1000;
+    seedConfirmation(db, 'c-old-declined', 'declined', now - 31 * day);
+    seedConfirmation(db, 'c-recent-declined', 'declined', now - 1 * day);
+
+    const result = await gc.sweepAll();
+    expect(result.confirmations_deleted).toBe(1);
+
+    const remaining = (
+      db.prepare('SELECT confirmation_id FROM mcp_confirmations').all() as {
+        confirmation_id: string;
+      }[]
+    ).map((r) => r.confirmation_id);
+    expect(remaining).toEqual(['c-recent-declined']);
   });
 });
