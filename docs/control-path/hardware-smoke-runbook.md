@@ -181,6 +181,21 @@ On a scratch node (or after `./uninstall.sh`):
   from the TUI (check `ps`/journals during the operations).
 - [ ] One audit row per MCP tool call (`/var/log/xinas/audit.jsonl` —
   no `http.POST./mcp` frames).
+- [ ] **MCP Tasks (S16):** with `mcp.allow_apply: true` and a modern
+  client, `filesystems.create` `mode=plan` shows
+  `rollback_model: unsupported`; the apply is confirmed out-of-band
+  (URL mode) by a second admin; the accepted retry with the Tasks
+  capability answers `resultType: "task"` within seconds while
+  `mkfs.xfs` runs; `tasks/get` reports `working`, the `mkfs` stage,
+  elapsed time and no percentage; `tasks/cancel` during `mkfs` is
+  acknowledged and `xinasctl tasks get <id>` shows
+  `cancel_refused_reason: irreversible_stage_started`; the task ends
+  `success` and `tasks/get` returns `completed` with the public Task.
+  Before naming a client (Claude Code / Codex) a supported native Tasks
+  client, capture that it (1) declares the extension on the retry,
+  (2) accepts `CreateTaskResult`, (3) polls the same `taskId`,
+  (4) renders `isError` on a failed create, and (5) resumes with the
+  same id after a reconnect instead of re-applying.
 
 ## 5c. S9 — config-history bridge, audit query, pools
 

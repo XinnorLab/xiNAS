@@ -52,7 +52,11 @@ const PRINCIPAL_B = 'admin:other-principal';
 const IDENTITY: McpIdentity = { principal: PRINCIPAL, role: 'admin' };
 const IDENTITY_B: McpIdentity = { principal: PRINCIPAL_B, role: 'admin' };
 const OPERATOR_IDENTITY: McpIdentity = { principal: PRINCIPAL, role: 'operator' };
-const BOTH_CLIENT: McpClientInfo = { era: 'modern', elicitation: new Set(['form', 'url']) };
+const BOTH_CLIENT: McpClientInfo = {
+  era: 'modern',
+  elicitation: new Set(['form', 'url']),
+  tasks: false,
+};
 
 const FS_CREATE = CATALOG.find((e) => e.name === 'filesystems.create') as CatalogEntry;
 const SHARES_UPDATE = CATALOG.find((e) => e.name === 'shares.update') as CatalogEntry;
@@ -880,7 +884,7 @@ describe('ConfirmationService.handle (S15 §3.3, §4, §6.4)', () => {
 
   it('A3: capability_missing shares the same bucket and the same suppressed counter', async () => {
     const h = harness({}, { audit: true, metrics: true });
-    const noCaps: McpClientInfo = { era: 'modern', elicitation: new Set() };
+    const noCaps: McpClientInfo = { era: 'modern', elicitation: new Set(), tasks: false };
     for (let i = 0; i < 31; i += 1) {
       const { doc } = seedPlan(h.tasks, SHARES_UPDATE, {
         resource_ref: { kind: 'Resource', id: `share-${i}` },

@@ -12,7 +12,9 @@ import {
   makeFsUnmountExecutor,
   rewriteQuotaFlag,
 } from '../../../agent/task/fs-executor.js';
-import type { ExecutorContext } from '../../../agent/task/types.js';
+import { TaskRunner } from '../../../agent/task/runner.js';
+import type { ExecutorContext, TaskProgressEvent } from '../../../agent/task/types.js';
+import { XinasHistoryBridge } from '../../../agent/task/xinas-history-bridge.js';
 
 function makeCtx(spec: unknown): ExecutorContext & { lines: string[] } {
   const lines: string[] = [];
@@ -329,5 +331,139 @@ describe('fs.grow / fs.set_quota_mode / fs.unmanage executors', () => {
     );
     expect(rewriteQuotaFlag('Options=defaults\n', 'gquota')).toBe('Options=defaults,gquota\n');
     expect(rewriteQuotaFlag('Options=defaults,prjquota\n', 'none')).toBe('Options=defaults\n');
+  });
+});
+
+describe('fs.create — point of no return (S16 §9.2)', () => {
+  it('declares mkfs as irreversible_from, from the shared table', async () => {
+    const { IRREVERSIBLE_STAGE_BY_KIND } = await import(
+      '../../../lib/tasks/irreversible-stages.js'
+    );
+    const executor = makeFsCreateExecutor({
+      host: createFakeFsHost(mkdtempSync(join(tmpdir(), 'x-'))),
+    });
+    expect(executor.irreversible_from).toBe('mkfs');
+    expect(IRREVERSIBLE_STAGE_BY_KIND['fs.create']).toBe('mkfs');
+  });
+
+  it('no stage after mkfs consults the cancel flag (dead checks removed)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'x-'));
+    const host = createFakeFsHost(dir);
+    host.seedDeviceSize('/dev/xi_log', 1073741824);
+    const executor = makeFsCreateExecutor({ host });
+    let flag = false;
+    const ctx = { ...makeCtx(enrichedSpec()), isCancelRequested: () => flag };
+    for (const stage of executor.stages) {
+      if (stage.name === 'install_unit') flag = true; // set only after mkfs finished
+      await stage.run(ctx);
+    }
+    expect(host.ops().filter((o) => o.startsWith('mkfs.xfs'))).toHaveLength(1);
+    expect(await host.readMounts()).toContainEqual({
+      source: '/dev/xi_data',
+      mountpoint: '/mnt/data',
+    });
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('fake FsHost — blocking mkfs gate (S16 §16.4)', () => {
+  it('holds mkfs on a -block device until the release file exists, then records exactly one mkfs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'x-block-'));
+    const host = createFakeFsHost(dir);
+    let done = false;
+    const p = host.mkfsXfs(['-f', '/dev/xi_data-block']).then(() => {
+      done = true;
+    });
+    await new Promise((r) => setTimeout(r, 120));
+    expect(done).toBe(false);
+    expect(host.ops().filter((o) => o.startsWith('mkfs.xfs'))).toHaveLength(0);
+    host.releaseMkfs();
+    await p;
+    expect(done).toBe(true);
+    expect(host.ops().filter((o) => o.startsWith('mkfs.xfs'))).toHaveLength(1);
+    expect(await host.blkid('/dev/xi_data-block')).toMatchObject({ fstype: 'xfs' });
+    host.resetMkfsGate();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('does not block a device without the suffix', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'x-noblock-'));
+    const host = createFakeFsHost(dir);
+    await host.mkfsXfs(['-f', '/dev/xi_data']);
+    expect(host.ops().filter((o) => o.startsWith('mkfs.xfs'))).toHaveLength(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ── S16 §9.2/§9.5: runner-level — cancel refused during mkfs, a LATER stage
+// failure still ends failed (never cancelled), device left formatted ────────
+
+describe('TaskRunner.run(fs.create) — cancel refused during mkfs, later mount failure → failed, device stays formatted (S16 §9.5)', () => {
+  it('refuses the cancel once mkfs starts; the subsequent enableNow failure ends failed/FAILED_PARTIAL_ROLLED_BACK with one mkfs op, a removeUnit rollback op, and the device still reporting xfs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'x-runner-pnr-'));
+    const host = createFakeFsHost(dir);
+    const executor = makeFsCreateExecutor({ host });
+    // '-block' blocks mkfs on this device until releaseMkfs(); '-fail' on the
+    // unit stem trips the fake host's enableNow (the mount stage, AFTER mkfs).
+    const spec = enrichedSpec({
+      unit_name: 'mnt-data-fail.mount',
+      resolved: {
+        ...(enrichedSpec().resolved as Record<string, unknown>),
+        device: '/dev/xi_data-block',
+      },
+    });
+
+    const bridge = new XinasHistoryBridge({
+      runSubprocess: async () => ({ stdout: JSON.stringify({ id: 'snap' }), code: 0 }),
+    });
+    const runner = new TaskRunner({ bridge });
+
+    const events: TaskProgressEvent[] = [];
+    const publish = async (e: TaskProgressEvent): Promise<void> => {
+      events.push(e);
+    };
+
+    const done = runner.run(
+      { task_id: 'pnr-fail', operation_kind: 'fs.create', spec },
+      executor,
+      publish,
+    );
+
+    // Poll until the runner has marked mkfs as the started irreversible
+    // stage — it is currently blocked inside host.mkfsXfs() awaiting release.
+    const deadline = Date.now() + 5000;
+    while (runner.getInflight().get('pnr-fail')?.irreversibleStageStarted !== 'mkfs') {
+      if (Date.now() > deadline) {
+        throw new Error('timed out waiting for the runner to enter the mkfs stage');
+      }
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    // A cancel now is refused — the point of no return has been passed.
+    expect(runner.requestCancel('pnr-fail')).toEqual({
+      accepted: false,
+      reason: 'irreversible_stage_started',
+      stage: 'mkfs',
+    });
+
+    // Let mkfs finish; install_unit then runs, then mount's enableNow fails
+    // on the '-fail' stem.
+    host.releaseMkfs();
+    await done;
+
+    const terminal = events.at(-1);
+    expect(terminal?.event_type).toBe('terminal');
+    expect(terminal?.status).toBe('failed'); // never 'cancelled', despite the refused request
+    expect(terminal?.error_code).toBe('FAILED_PARTIAL_ROLLED_BACK');
+
+    const ops = host.ops();
+    expect(ops.filter((o) => o.startsWith('mkfs.xfs'))).toHaveLength(1);
+    expect(ops).toContain('removeUnit:mnt-data-fail.mount');
+
+    // The residual §9.5 describes: mkfs is never undone, so the device
+    // stays formatted even though the task as a whole failed.
+    expect(await host.blkid('/dev/xi_data-block')).toMatchObject({ fstype: 'xfs' });
+
+    rmSync(dir, { recursive: true, force: true });
   });
 });

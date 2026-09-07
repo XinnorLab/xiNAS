@@ -2,13 +2,21 @@ import { mkdirSync, createWriteStream } from 'node:fs';
 import { createGzip } from 'node:zlib';
 import { dirname, join } from 'node:path';
 import type { Database, Statement } from 'better-sqlite3';
+import { createHash, randomUUID } from 'node:crypto';
+import { canonicalize } from '../lib/canonical-json.js';
 import { LeaseManager } from './leases.js';
+import type { AuditAppender } from './audit.js';
 import { TERMINAL_CONFIRMATION_STATUSES } from './confirmation-statuses.js';
+
+/** Audit kind for a pruned MCP-created task (S16 §13.1); mirrored by api/mcp/tasks/audit.ts. */
+export const MCP_TASK_PRUNED_KIND = 'mcp.task.pruned';
 
 export interface GcOptions {
   taskRetentionDays?: number; // default 30
   archiveDir?: string; // default '/var/lib/xinas/state/archive'
   leaseGraceMs?: number; // additional grace beyond ttl_seconds, default 0
+  /** S16 §13.1: when present, each pruned `client_type: 'mcp'` task queues an `mcp.task.pruned` row. */
+  audit?: AuditAppender;
 }
 
 export interface GcSweepResult {
@@ -21,14 +29,15 @@ export interface GcSweepResult {
 
 export class GcSweeper {
   private readonly db: Database;
-  private readonly taskRetentionMs: number;
+  private readonly retentionMs: number;
   private readonly archiveDir: string;
   private readonly leases: LeaseManager;
   private readonly pruneConfirmationsStmt: Statement;
+  private readonly audit: AuditAppender | undefined;
 
   constructor(db: Database, opts: GcOptions = {}) {
     this.db = db;
-    this.taskRetentionMs = (opts.taskRetentionDays ?? 30) * 86400 * 1000;
+    this.retentionMs = (opts.taskRetentionDays ?? 30) * 86400 * 1000;
     this.archiveDir = opts.archiveDir ?? '/var/lib/xinas/state/archive';
     this.leases = new LeaseManager(db);
     // S15 Task 14 — same terminal-status set and retention window as
@@ -41,6 +50,12 @@ export class GcSweeper {
     this.pruneConfirmationsStmt = db.prepare(
       `DELETE FROM mcp_confirmations WHERE status IN (${terminalStatusList}) AND created_at < ?`,
     );
+    this.audit = opts.audit;
+  }
+
+  /** Terminal-task retention in milliseconds (S16 §6.5 derives `ttlMs` from it). */
+  get taskRetentionMs(): number {
+    return this.retentionMs;
   }
 
   /**
@@ -49,7 +64,7 @@ export class GcSweeper {
    * tasks-YYYYMM.jsonl.gz under archiveDir.
    */
   async sweepTasks(): Promise<{ archived: number; deleted: number }> {
-    const cutoff = Date.now() - this.taskRetentionMs;
+    const cutoff = Date.now() - this.retentionMs;
     const rows = this.db
       .prepare(
         `SELECT * FROM tasks
@@ -79,6 +94,31 @@ export class GcSweeper {
     const info = this.db
       .prepare(`DELETE FROM tasks WHERE task_id IN (${placeholders})`)
       .run(...ids);
+
+    if (this.audit !== undefined) {
+      for (const r of rows) {
+        if (r['client_type'] !== 'mcp') continue;
+        const payload = {
+          task_id: r['task_id'],
+          kind: r['kind'],
+          principal: String(r['principal']),
+          state: r['state'],
+          terminal_at: new Date(r['terminal_at'] as number).toISOString(),
+        };
+        this.audit.queue({
+          kind: MCP_TASK_PRUNED_KIND,
+          principal: String(r['principal']),
+          client_type: 'mcp',
+          request_id: randomUUID(),
+          parameters_hash: `sha256:${createHash('sha256').update(canonicalize(payload)).digest('hex')}`,
+          result_hash: `sha256:${createHash('sha256').update('pruned').digest('hex')}`,
+          operation_id: String(r['task_id']),
+          task_id: String(r['task_id']),
+          payload,
+        });
+      }
+    }
+
     return { archived: rows.length, deleted: info.changes };
   }
 

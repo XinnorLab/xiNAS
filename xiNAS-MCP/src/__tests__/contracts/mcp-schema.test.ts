@@ -55,8 +55,16 @@ const NODE_ID = 'node-test';
 const HOSTNAME = 'test-host';
 const PRINCIPAL = 'admin:demo';
 const IDENTITY: McpIdentity = { principal: PRINCIPAL, role: 'admin' };
-const BOTH_CLIENT: McpClientInfo = { era: 'modern', elicitation: new Set(['form', 'url']) };
-const FORM_ONLY_CLIENT: McpClientInfo = { era: 'modern', elicitation: new Set(['form']) };
+const BOTH_CLIENT: McpClientInfo = {
+  era: 'modern',
+  elicitation: new Set(['form', 'url']),
+  tasks: false,
+};
+const FORM_ONLY_CLIENT: McpClientInfo = {
+  era: 'modern',
+  elicitation: new Set(['form']),
+  tasks: false,
+};
 
 const FS_CREATE = CATALOG.find((e) => e.name === 'filesystems.create') as CatalogEntry;
 const SHARES_UPDATE = CATALOG.find((e) => e.name === 'shares.update') as CatalogEntry;

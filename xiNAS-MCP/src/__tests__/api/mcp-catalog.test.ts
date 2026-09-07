@@ -180,4 +180,18 @@ describe('client catalog (S8 T2)', () => {
     expect(matchCatalog('GET', '/metrics')?.name).toBe('system.metrics');
     expect(byName.get('system.metrics')?.binary).toBe(true);
   });
+
+  it('S16: creates_task marks calls that create the Task they return; tasks.cancel is excluded', () => {
+    for (const e of CATALOG) {
+      if (e.creates_task === true) expect(e.returns_async_task, e.name).toBe(true);
+      if (e.mutability === 'plan_apply') expect(e.creates_task, e.name).toBe(true);
+    }
+    const cancel = CATALOG.find((e) => e.name === 'tasks.cancel');
+    expect(cancel?.returns_async_task).toBe(true);
+    expect(cancel?.creates_task).toBeUndefined();
+    expect(CATALOG.find((e) => e.name === 'support.bundle')?.creates_task).toBe(true);
+    for (const name of ['tasks.get', 'tasks.wait', 'tasks.list']) {
+      expect(CATALOG.find((e) => e.name === name)?.creates_task, name).toBeUndefined();
+    }
+  });
 });

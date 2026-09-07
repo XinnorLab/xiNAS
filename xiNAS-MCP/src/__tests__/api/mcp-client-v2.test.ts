@@ -165,7 +165,8 @@ describe('@modelcontextprotocol/client 2.0.0 ↔ xinas-api S17 feeds', () => {
 
   it('lists and reads all six resources, and lists the cursor templates', async () => {
     const list = await client.listResources();
-    expect(list.resources.map((r) => r.uri)).toEqual(FEED_URIS);
+    // The six S17 feeds, then the S18 MCP Apps view (never subscribable).
+    expect(list.resources.map((r) => r.uri)).toEqual([...FEED_URIS, 'ui://xinas/raid-create']);
     for (const uri of FEED_URIS) {
       const env = await readEnvelope(client, uri);
       expect(env.events, uri).toEqual([]);
@@ -239,7 +240,7 @@ describe('@modelcontextprotocol/client 2.0.0 ↔ xinas-api S17 feeds', () => {
   it('a viewer connects, lists and reads every feed', async () => {
     const viewer = await makeClient('tok-viewer');
     try {
-      expect((await viewer.listResources()).resources).toHaveLength(6);
+      expect((await viewer.listResources()).resources).toHaveLength(7); // six feeds + the S18 view
       for (const uri of FEED_URIS) expect((await readEnvelope(viewer, uri)).gap).toBe(false);
       const sub = await viewer.listen({ resourceSubscriptions: ['xinas://events/nfs'] });
       expect(sub.honoredFilter).toEqual({ resourceSubscriptions: ['xinas://events/nfs'] });

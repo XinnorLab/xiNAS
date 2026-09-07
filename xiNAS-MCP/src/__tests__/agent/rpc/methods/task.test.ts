@@ -54,9 +54,18 @@ function fakeRunner(opts: { autoComplete?: boolean } = {}): FakeRunner {
     getInflight(): ReadonlyMap<string, InflightTask> {
       return inflight;
     },
-    requestCancel(taskId: string): void {
+    requestCancel(taskId: string) {
       const t = inflight.get(taskId);
-      if (t) t.cancelRequested = true;
+      if (!t) return { accepted: false as const, reason: 'not_found' as const };
+      if (t.irreversibleStageStarted !== undefined) {
+        return {
+          accepted: false as const,
+          reason: 'irreversible_stage_started' as const,
+          stage: t.irreversibleStageStarted,
+        };
+      }
+      t.cancelRequested = true;
+      return { accepted: true as const };
     },
     run(begin: { task_id: string; operation_kind: string }): Promise<void> {
       runCalls.push({ task_id: begin.task_id, operation_kind: begin.operation_kind });
@@ -295,5 +304,24 @@ describe('task.cancel', () => {
     };
     expect(result.cancel_requested).toBe(false);
     expect(result.reason).toBe('not_found');
+  });
+
+  it('maps a refused verdict to the irreversible_stage_started wire shape', async () => {
+    const fr = fakeRunner();
+    const handlers = makeTaskHandlers({
+      runner: fr.runner,
+      registry: fakeRegistry(),
+      publish: noopPublish,
+      newAcceptanceId: () => 'a1',
+    });
+    await handlers['task.begin']?.({ task_id: 't7', operation_kind: 'reference.echo', spec: {} });
+    const t = fr.inflight.get('t7');
+    if (t) t.irreversibleStageStarted = 'mkfs';
+    expect(handlers['task.cancel']?.({ task_id: 't7' })).toEqual({
+      cancel_requested: false,
+      reason: 'irreversible_stage_started',
+      stage: 'mkfs',
+    });
+    expect(fr.inflight.get('t7')?.cancelRequested).toBe(false);
   });
 });

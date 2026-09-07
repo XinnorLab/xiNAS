@@ -216,11 +216,19 @@ describe('mcp modern era — server/discover (S14)', () => {
 
     // tools are served; prompts are not implemented (ADR-0010) and must
     // therefore not be advertised. resources ARE served on this server
-    // (S17: the journal is installed and mcp.subscriptions is enabled), and
-    // the flags must describe exactly what is implemented.
+    // (S17: the journal is installed and mcp.subscriptions is enabled; S18:
+    // the MCP Apps view), and the flags must describe exactly what is
+    // implemented.
     expect(result.capabilities.tools).toBeDefined();
     expect(result.capabilities.resources).toEqual({ subscribe: true, listChanged: false });
     expect(result.capabilities.prompts).toBeUndefined();
+    expect(result.capabilities.extensions).toMatchObject({
+      'io.modelcontextprotocol/ui': {
+        mimeTypes: ['text/html;profile=mcp-app'],
+      },
+    });
+    // S16 §3.2: the Tasks extension shares the same map.
+    expect(result.capabilities.extensions).toMatchObject({ 'io.modelcontextprotocol/tasks': {} });
 
     // The claim is checked, not asserted: a tools capability must mean
     // tools/list actually answers.
@@ -231,6 +239,43 @@ describe('mcp modern era — server/discover (S14)', () => {
     );
     const tools = (list.body.result as { tools: Array<{ name: string }> }).tools;
     expect(tools.length).toBeGreaterThan(0);
+  });
+
+  it('lists and reads the RAID Create App resource statelessly', async () => {
+    const list = await rpc(
+      port,
+      { jsonrpc: '2.0', id: 'r-list', method: 'resources/list', params: { _meta: META } },
+      { token: 'tok-admin' },
+    );
+    const listResult = list.body.result as {
+      resultType?: string;
+      resources: Array<{ uri: string; mimeType?: string }>;
+    };
+    expect(listResult.resultType).toBe('complete');
+    expect(listResult.resources).toContainEqual(
+      expect.objectContaining({
+        uri: 'ui://xinas/raid-create',
+        mimeType: 'text/html;profile=mcp-app',
+      }),
+    );
+
+    const read = await rpc(
+      port,
+      {
+        jsonrpc: '2.0',
+        id: 'r-read',
+        method: 'resources/read',
+        params: { _meta: META, uri: 'ui://xinas/raid-create' },
+      },
+      { token: 'tok-admin' },
+    );
+    const readResult = read.body.result as {
+      resultType?: string;
+      contents: Array<{ text?: string; mimeType?: string }>;
+    };
+    expect(readResult.resultType).toBe('complete');
+    expect(readResult.contents[0]?.mimeType).toBe('text/html;profile=mcp-app');
+    expect(readResult.contents[0]?.text).toContain('<!doctype html>');
   });
 
   // AC8

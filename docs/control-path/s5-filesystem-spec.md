@@ -54,7 +54,7 @@ Engine, leases, dangerous gate, SSE — all unchanged S2/S4 machinery.
 
 Engine-side flow per op = S4 verbatim (plan → blockers listed → apply with `expected_revision` binding (`0` for create, current observed otherwise) → filtered re-check → leases → dispatch). The per-op specifics (blockers, risk, stages, rollback) are ADR-0007's §Per-operation contracts — this spec adds only implementation detail:
 
-- **create**: `enriched_spec` carries the fully-resolved mkfs inputs (`label` defaulted, derived `su_kb`/`sw`, `unit_name`, rendered-unit preview in the diff) so the executor needs no KV. Executor `preflight` runs `blkid` on the data device: existing filesystem + `force !== true` → fail before change (the host-side teeth of the gate; the engine already required `dangerous` for `force` plans). The `mkfs` stage resolves the **effective log size** = `min(log_size, blockdev --getsize64 <log_device>)` — the day-1 `_effective_log_size` clamp (host adapter `blockdevSize`; fake host seeds device sizes; a clamped-case golden is mandatory). Rollback is live-state: stop/disable if active, remove the unit if present, `daemon-reload`; mkfs is never reverted (device left formatted, unmanaged).
+- **create**: `enriched_spec` carries the fully-resolved mkfs inputs (`label` defaulted, derived `su_kb`/`sw`, `unit_name`, rendered-unit preview in the diff) so the executor needs no KV. Executor `preflight` runs `blkid` on the data device: existing filesystem + `force !== true` → fail before change (the host-side teeth of the gate; the engine already required `dangerous` for `force` plans). The `mkfs` stage resolves the **effective log size** = `min(log_size, blockdev --getsize64 <log_device>)` — the day-1 `_effective_log_size` clamp (host adapter `blockdevSize`; fake host seeds device sizes; a clamped-case golden is mandatory). Rollback is live-state: stop/disable if active, remove the unit if present, `daemon-reload`; mkfs is never reverted (device left formatted, unmanaged) — which is why **every** create plan is `rollback_model: unsupported` and the `mkfs` stage is the operation's point of no return (§9c, S16).
 - **mount/unmount**: thin executors over `enableNow`/`stop`+`disable` with mountinfo verification; unmount's rollback restarts the unit. The dependency walk (sessions + ExportRules at/under the mountpoint, shares in blast radius) lives in the provider; the host-level guard is the umount `EBUSY` failure itself.
 - **grow**: `xfs_growfs <mountpoint>`; verify via `statfs` (size not smaller than before — captured in preflight); rollback no-op.
 - **set_quota_mode**: preflight captures the current unit text (per-run WeakMap, the S4-T6 pattern); rewrite `Options=` quota flag → `daemon-reload` → `systemctl restart` → verify mounted with the flag in effective options. Rollback: write back the captured unit + `daemon-reload` + restart.
@@ -113,6 +113,33 @@ because the observed handler dedupes unchanged re-pushes (s0s1 spec, Flow
 A step 3) — without that dedupe every ~60 s filesystem sweep bumped the
 revision and staled in-flight plans. Observed revisions now move only on
 content change.
+
+## 9c. `fs.create` rollback model and point of no return (S16, 2026-09-04)
+
+The provider used to report `rollback_model: non_disruptive` for a
+non-force create while the executor's own contract said `mkfs` is not
+undone. Corrected (`s16-mcp-tasks-spec.md` §9, ADR-0007 §Create):
+
+- `rollback_model` is `unsupported` for **every** `fs.create` plan.
+  `risk_level` is unchanged — `destructive` with `force: true`,
+  `non_disruptive` otherwise, the latter only because `preflight`
+  re-proves live (`blkid`) that no filesystem is being destroyed.
+  Consequence over MCP: S15 §3.2 routes every filesystem create to the
+  out-of-band (URL) confirmation. REST, `xinasctl` and the TUI are
+  unaffected (none branches on `rollback_model`).
+- **Point of no return = the start of the `mkfs` stage.** The executor
+  declares `irreversible_from: 'mkfs'` (shared name in
+  `lib/tasks/irreversible-stages.ts`); the runner refuses a cancel that
+  arrives after that (`cancel_refused_reason: irreversible_stage_started`,
+  409 on REST, an acknowledgement on the MCP `tasks/cancel` method). A
+  task can therefore reach `cancelled` only before `mkfs` — with no
+  filesystem change — and never after. The two post-`mkfs`
+  `checkCancelled()` calls in the executor are removed as dead code.
+- **Failure after formatting** keeps the existing rollback (unit removed,
+  unmounted) and terminal (`failed` / `requires_manual_recovery`); the
+  MCP terminal result adds a residual note that the device may carry an
+  unmanaged XFS filesystem and that the operator should re-observe before
+  deciding, never reformat blindly.
 
 ## 10. Open questions / risks
 

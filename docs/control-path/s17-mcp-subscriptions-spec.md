@@ -125,6 +125,10 @@ the context; the S14 unit context without a journal keeps advertising
 `tools` only, and the S14 test that pins "`resources` absent" moves to
 "absent without a journal, present with one".
 
+S16 (`s16-mcp-tasks-spec.md` §3.2, 2026-09-04) adds
+`extensions: { "io.modelcontextprotocol/tasks": {} }` to the same object,
+gated on its own readiness; the two advertisements are independent.
+
 `listChanged` is `false` and stays `false` in Phase 1: the six resources
 are constant for the process lifetime, so `resourcesListChanged` in a listen
 filter is never honored (§5.2). `prompts` stays absent.
@@ -144,13 +148,16 @@ subscribable }`); S17 registers the feed provider, S18 registers its app
 provider at merge time. There is **no**
 configuration switch that advertises a partial capability (requirement
 SUBS-CONFIG-001): `mcp.subscriptions.enabled: false` removes
-`resources` entirely, refuses the four methods with `-32601`, and the
-journal keeps recording (the REST projection still works).
+the feeds: `resources` stays advertised for the S18 view with
+`subscribe: false` (S18 merged 2026-09-07), `resources/list` and
+`resources/read` serve only the view, `resources/templates/list` is empty,
+`subscriptions/listen` is refused with `-32601`, and the journal keeps
+recording (the REST projection still works).
 
-The legacy era (`initialize` + `Mcp-Session-Id`) is untouched: the SDK
-server is still built with `capabilities: { tools: {} }` and answers
-`resources/*` and `subscriptions/listen` exactly as before (method not
-found). Era classification is S14's (`isModernRequest`), and
+The legacy era (`initialize` + `Mcp-Session-Id`) never sees the feeds: the
+SDK server answers `subscriptions/listen` and feed URIs as before (method
+not found / unknown resource); since S18 it advertises `resources: {}` and
+serves only the MCP Apps view there. Era classification is S14's (`isModernRequest`), and
 `Mcp-Session-Id` is still ignored on the modern path (SUBS-PROTO-004).
 
 ---

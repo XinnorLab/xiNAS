@@ -3,9 +3,9 @@
 > **Extended by S14.** The `/mcp` endpoint this ADR defines serves the MCP
 > legacy protocol era. It additionally serves the modern era
 > (`server/discover`, no session) — see
-> [`../s14-mcp-modern-era-spec.md`](../s14-mcp-modern-era-spec.md). The
-> deferrals below (MCP resources and prompts) still hold, which is why
-> neither is advertised in the discovery capabilities.
+> [`../s14-mcp-modern-era-spec.md`](../s14-mcp-modern-era-spec.md).
+> The original deferral of MCP resources held through S15; S17 lifted it on
+> the modern era (event feeds) and S18 adds the MCP Apps view on both eras.
 >
 > **Amended by S15 (2026-09-04).** The apply gate below is no longer the
 > last word on MCP mutation: after `mcp.allow_apply` passes, every MCP
@@ -14,6 +14,14 @@
 > verifies and consumes that confirmation inside the apply transaction.
 > See §*Decision — MCP apply confirmation (S15)* below and
 > [`../s15-mcp-mrtr-confirmation-spec.md`](../s15-mcp-mrtr-confirmation-spec.md).
+>
+> **Amended by S18 (2026-09-04, merged 2026-09-07).** One immutable MCP Apps
+> UI resource (`ui://xinas/raid-create`) and the `io.modelcontextprotocol/ui`
+> extension are served: on the modern era through the S17 resource provider
+> seam (listed next to the event feeds, never subscribable), on the legacy
+> era through the SDK server's own resource handlers (the feeds stay
+> modern-only). Prompts and general-purpose data resources remain deferred.
+> See [`../s18-mcp-raid-create-app-spec.md`](../s18-mcp-raid-create-app-spec.md).
 
 **Status:** accepted (2026-06-12). Implements ADR-0001's locked "MCP is
 a transport on the same Control API core" decision; extends ADR-0002
@@ -358,6 +366,53 @@ the transports above:
    an outage or a recovery. The xiRAID observation keeps the vendor's raw
    state words and the four separate progress values for this purpose.
 
+## Decision — MCP Tasks extension (S16, 2026-09-04)
+
+Recorded against `s16-mcp-tasks-requirements.md` (validation in
+`s16-mcp-tasks-spec.md` Appendix A). Layered on the modern era (S14) and
+behind the confirmation (S15):
+
+1. **The official `io.modelcontextprotocol/tasks` extension is served on
+   the modern (`2026-07-28`) path only.** The legacy era keeps its wire
+   shapes and never sees `resultType: "task"` or a `tasks/*` method.
+2. **The xiNAS Task stays the sole durable execution object.** An MCP
+   task is a projection of the `tasks` row — same engine, stages,
+   leases, idempotency, audit, reconcile and retention.
+3. **`CreateTaskResult.taskId` is `Task.task_id`.** No alias table, no
+   client-scoped id, no in-memory job object, no second state machine.
+4. **The server decides whether an eligible `tools/call` returns a
+   task.** Eligibility is catalog metadata (`creates_task`) plus
+   `mode: "apply"` for plan/apply entries; an eligible call from a
+   client that declared the extension on *that* request always gets the
+   handle, whatever the task's state.
+5. **A request without the extension receives today's asynchronous
+   result** — the REST Task envelope with `task_id` and the `tasks.wait`
+   `next` hint — byte-identical to before S16.
+6. **S15 confirmation is synchronous and precedes task creation.** Every
+   MRTR round answers `input_required`; only the accepted retry reaches
+   the apply transaction that consumes the record and inserts the task;
+   the handle is projected from the committed row.
+7. **`tasks/get`, `tasks/update` and `tasks/cancel` are protocol
+   methods; `tasks.get`, `tasks.wait`, `tasks.list` and `tasks.cancel`
+   remain ordinary catalog tools** under their existing RBAC.
+8. **No MCP `tasks/list` (or `tasks/result`) exists** — both are absent
+   from SEP-2663, and listing would weaken the per-principal scoping.
+9. **Extension task access is bound to the authenticated xiNAS
+   principal:** only `Task.principal` may get, update or cancel through
+   the extension; every other case — unknown, pruned, `plan_only`,
+   `imported`, another principal, insufficient role for cancel — is one
+   generic `-32602 task not found or expired`.
+
+Two safety corrections travel with it (`s16-mcp-tasks-spec.md` §9):
+`fs.create` is `rollback_model: unsupported` on every plan (so every
+filesystem create over MCP is confirmed out-of-band), and the agent
+runner refuses cancellation once the `mkfs` stage has started
+(`cancel_refused_reason: irreversible_stage_started`) — a formatted
+device can never be reported `cancelled`. ADR-0007 and ADR-0012 carry
+the matching amendments.
+
+## Security
+
 - The api gains NO privilege: every mutator still flows
   plan → apply → task → agent. The only adapter exception is the
   read-only localhost gRPC client (explicitly deprecated above).
@@ -385,8 +440,10 @@ TUI pool screens (no API surface), SSE transport, audit/config-history
 backend integration (the degraded entries go live when the bridges
 land), removal of the read-only gRPC passthrough (tracked to the
 API gaining pools/mail/auth-settings resources), MCP prompt
-capabilities (tools only in Phase 0; S17 adds Resources and resource
-subscriptions on the modern era — see the S17 decision above). S15 adds: a TUI screen for pending
+capabilities and general-purpose MCP data resources (tools only in
+Phase 0; S17 adds Resources and resource subscriptions on the modern era
+— see the S17 decision above; S18 adds one immutable MCP Apps UI resource
+on both eras). S15 adds: a TUI screen for pending
 MCP approvals (the web page, REST and `xinasctl` cover approval; recorded
 in `docs/TODO.md`), and a key-rotation CLI for the `requestState` key
 ring (rotation is a documented file edit + restart).

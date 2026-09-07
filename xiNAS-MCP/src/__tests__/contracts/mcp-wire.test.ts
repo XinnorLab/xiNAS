@@ -264,6 +264,7 @@ describe('S17 wire messages validate against the released 2026-07-28 schema', ()
       ['xinas://events/nfs', 'NFS events', 'application/vnd.xinas.events+json'],
       ['xinas://events/nfs/sessions', 'NFS session events', 'application/vnd.xinas.events+json'],
       ['xinas://events/system', 'System events', 'application/vnd.xinas.events+json'],
+      ['ui://xinas/raid-create', 'xiNAS RAID Create', 'text/html;profile=mcp-app'],
     ]);
     for (const res of resources) expect(validateAs('Resource', res)).toEqual([]);
   });

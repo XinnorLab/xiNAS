@@ -42,6 +42,135 @@ release is hardware time that had nothing to do with restoring installs.
 host end to end, `doca_version` bumped in both roles in one commit carrying
 `Requires-Rebuild: doca_ofed`, and the "as of" date in
 `docs/Installer/spec.md` §3.2 refreshed.
+## MCP Tasks — task notifications (`subscriptions/listen`, `notifications/tasks`) are not served
+
+*Deferred 2026-09-04, from the S16 MCP Tasks extension
+(`docs/control-path/s16-mcp-tasks-spec.md` §14, decision D-04).*
+
+**What is missing.** A client cannot subscribe to a task and be pushed
+its status changes; it polls `tasks/get`.
+
+**What the code does instead.** Polling is the extension's mandatory
+completion mechanism and works on both transports; `pollIntervalMs`
+tells the client how often (2 s, 5 s during `mkfs`). The extension is
+advertised without notifications because they are optional in it.
+
+**Why it was cut.** S17's `subscriptions/listen` stream carries resource
+feed notifications only and deliberately emits no `notifications/tasks`
+(ADR-0010, S17 decision 7); task notifications need per-task
+authorization on subscribe, resumption after a transport interruption,
+and the complete status-specific shape on every frame, under the S16
+contract.
+
+**What done looks like.** `subscriptions/listen` with `notifications.taskIds`
+authorized per task against `Task.principal`, `notifications/tasks`
+carrying exactly the `tasks/get` shape, no unrelated progress/message
+frames on the task stream, and a keep-alive; the e2e proves a
+reconnecting subscriber sees no gap.
+
+## MCP Tasks — the S16 counters are not registered with Prometheus
+
+*Deferred 2026-09-04, from S16 (`s16-mcp-tasks-spec.md` §13.2).*
+
+**What is missing.** `TasksMetrics` (handles returned by kind, method
+calls and protocol errors, terminal states, cancel outcomes, time to
+terminal, active projected tasks by status) is an interface with a noop
+implementation; nothing exports it.
+
+**What the code does instead.** The audit trail (`mcp.task.*`) records
+every lifecycle event; there is no counter.
+
+**Why it was cut.** The registry and `GET /metrics` endpoint are S15
+Task 13 and were not on the branch S16 was built on; registering against
+a registry that does not exist yet would have forked it.
+
+**What done looks like.** `registryTasksMetrics(registry)` over
+`lib/metrics.ts` with bounded labels only (no task id, principal, device,
+mountpoint or idempotency key), the active gauge via `gaugeCollect` over
+`TaskStore.countByState`, wired in `app.ts` next to the confirmation
+metrics.
+
+## MCP — header validation covers only the task methods
+
+*Deferred 2026-09-04, from S16 (`s16-mcp-tasks-spec.md` §5.6, V-08).*
+
+**What is missing.** The `2026-07-28` Streamable HTTP transport requires
+`Mcp-Method` on every request and `Mcp-Name` on `tools/call`, and mandates
+HTTP 400 + `-32020` when they are missing or disagree with the body. S14
+never validated them; S16 validates them for `tasks/get`, `tasks/update`
+and `tasks/cancel` only.
+
+**What the code does instead.** `tools/call`, `tools/list` and
+`server/discover` accept requests with no headers at all, as they always
+have; the stdio adapter now mirrors the headers on every modern message
+it forwards, so xiNAS's own clients are conforming.
+
+**Why it was cut.** Extending strictness to `tools/call` changes behavior
+for every existing modern client and test in one step; the task methods
+are new, so strictness there costs nothing.
+
+**What done looks like.** `validateTaskMethodHeaders` generalized to every
+modern method per the transport table, the conformance tests updated,
+and a release note that non-conforming HTTP clients must send the
+headers.
+
+## Tasks — only `fs.create` declares a point of no return
+
+*Deferred 2026-09-04, from S16 (`s16-mcp-tasks-spec.md` §9.6, ADR-0012 §9).*
+
+**What is missing.** `xiraid-array-executor` checks the cancel flag
+mid-flight (ADR-0012 §3) and has no `irreversible_from` declaration;
+whether `xicli raid create` has a stage after which a cancel-plus-rollback
+is no longer truthful was not investigated.
+
+**What the code does instead.** The generic boundary rule: a cancel is
+honored before the next executor stage and the executor's `rollback()`
+runs.
+
+**Why it was cut.** S16's mandatory scenario is the filesystem create;
+the xiRAID contract needs its own vendor-doc check (CLAUDE.md spec-first
+rule 5) before a stage can be declared irreversible.
+
+**What done looks like.** ADR-0006/S3 record, with `xicli` documentation
+cited, which stage (if any) is irreversible; the executor declares it;
+the runner test covers it.
+
+## MCP Tasks — no rate limiting of fast polling
+
+*Deferred 2026-09-04, from S16 (`s16-mcp-tasks-spec.md` §6.4).*
+
+**What is missing.** A client that ignores `pollIntervalMs` and polls
+`tasks/get` in a tight loop is answered every time.
+
+**What the code does instead.** Each poll is one indexed SELECT and one
+render; nothing touches the task. The S15 per-principal token bucket
+exists only for confirmation requests.
+
+**Why it was cut.** Optional in the extension; no observed need.
+
+**What done looks like.** The S15 bucket generalized to the task methods
+with a `-32602`-free, retry-after-carrying protocol error, and a metric
+for rejected polls.
+
+## MCP Tasks — Claude Code and Codex are not verified native Tasks clients
+
+*Deferred 2026-09-04, from S16 (`s16-mcp-tasks-spec.md` §12.4).*
+
+**What is missing.** A captured end-to-end run proving that Claude Code
+(≥ 2.1.259) or Codex declares the extension, accepts `CreateTaskResult`,
+polls the same task, renders `isError`, and resumes rather than
+re-applying after a reconnect.
+
+**What the code does instead.** Both use the fallback (`task_id` +
+`tasks.wait`); the hand-rolled conformance harness is the automated
+stand-in for the wire format.
+
+**Why it was cut.** The installed Codex (0.136.0) predates any documented
+Tasks support; Claude Code's binary contains the extension strings but
+that proves nothing about behavior. Manual, hardware-adjacent.
+
+**What done looks like.** The runbook §5b "MCP Tasks" step captured for a
+named version; S8 §3.2 and this entry updated to name it.
 
 ## Installer — the Python TUI has no "Set Root Password" item, but the installer points at one
 
@@ -737,6 +866,27 @@ implementation that tests assert against; nothing renders it.
 series render there today. Only the S17 side is outstanding. **Done** = a
 `RegistryMetrics` adapter registering the S17 names on that registry
 (`Gauge.inc` is available for the `subscriptionsActive(±1)` mapping).
+
+## MCP — the S18 RAID Create view does not consume the S17 feeds
+
+*Spec: [docs/control-path/s18-mcp-raid-create-app-spec.md](control-path/s18-mcp-raid-create-app-spec.md) §8; S17 spec §16.*
+
+**What is missing.** Live progress inside the view for the array-create task
+it just applied — the `xinas://events/raid/progress` feed carries exactly
+that.
+
+**What the code does instead.** The view follows the `tasks.wait` next hint
+through the host, as every non-App client does.
+
+**Why it was cut.** MCP Apps hosts (specification 2026-01-26) relay tool
+calls and their results to a view; none relays a `subscriptions/listen`
+stream, so a view has no channel on which `notifications/resources/updated`
+could arrive. Building a polling loop over `resources/read` inside the view
+would duplicate what the host already does with the hint.
+
+**What done looks like.** A host that relays subscription notifications to
+views (or an MCP Apps revision that gives a view its own listen), after which
+the view reads `raid/progress` after its cursor and drops the hint loop.
 
 ## MCP — the TUI "pending approvals" screen is deferred
 

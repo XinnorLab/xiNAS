@@ -139,7 +139,7 @@ describe('A8: unexpected errors never put raw text on the modern wire', () => {
     loopbackToken: () => 'unused',
     allowApply: () => true,
     identity: () => ({ principal: 'admin:test', role: 'admin' }),
-    client: { era: 'modern', elicitation: new Set(['form', 'url']) },
+    client: { era: 'modern', elicitation: new Set(['form', 'url']), tasks: false },
   });
 
   const call = {
@@ -199,5 +199,132 @@ describe('A8: unexpected errors never put raw text on the modern wire', () => {
     expect(res.error?.message).toBe('Server requires the elicitation capability');
     expect(res.error?.data).toEqual({ requiredCapabilities: { elicitation: { url: {} } } });
     expect(res.httpStatus).toBe(400);
+  });
+});
+
+describe('S16: task-handle eligibility (spec §4.2)', () => {
+  const modern = (tasks: boolean) => ({
+    era: 'modern' as const,
+    elicitation: new Set<'form' | 'url'>(['form']),
+    tasks,
+  });
+  it('plan_apply apply + modern + declared → eligible; plan / legacy / undeclared / tasks.cancel → not', async () => {
+    const { isTaskEligible } = await import('../../api/mcp/dispatch.js');
+    expect(
+      isTaskEligible(entry('shares.create'), { mode: 'apply' }, { client: modern(true) }),
+    ).toBe(true);
+    expect(isTaskEligible(entry('shares.create'), { mode: 'plan' }, { client: modern(true) })).toBe(
+      false,
+    );
+    expect(
+      isTaskEligible(entry('shares.create'), { mode: 'apply' }, { client: modern(false) }),
+    ).toBe(false);
+    expect(
+      isTaskEligible(
+        entry('shares.create'),
+        { mode: 'apply' },
+        { client: { era: 'legacy', elicitation: new Set(), tasks: false } },
+      ),
+    ).toBe(false);
+    expect(isTaskEligible(entry('support.bundle'), {}, { client: modern(true) })).toBe(true);
+    expect(isTaskEligible(entry('tasks.cancel'), { id: 'x' }, { client: modern(true) })).toBe(
+      false,
+    );
+    expect(isTaskEligible(entry('tasks.wait'), { id: 'x' }, { client: modern(true) })).toBe(false);
+  });
+  it('callTool returns the handle from the service for an eligible call, and the exact fallback otherwise', async () => {
+    const { callTool } = await import('../../api/mcp/dispatch.js');
+    const taskBody = { task_id: 't-9', state: 'queued' };
+    const loopback = async () => ({ status: 202, body: { result: taskBody } });
+    const service = {
+      handleFor: (id: string) =>
+        id === 't-9'
+          ? {
+              resultType: 'task' as const,
+              taskId: 't-9',
+              status: 'working' as const,
+              createdAt: 'a',
+              lastUpdatedAt: 'a',
+              ttlMs: null,
+              pollIntervalMs: 2000,
+            }
+          : null,
+    };
+    const opts = {
+      loopback,
+      loopbackToken: () => 'tok',
+      allowApply: () => true,
+      identity: () => ({ principal: 'p', role: 'admin' as const }),
+      tasks: service as never,
+    };
+    const handle = await callTool('support.bundle', {}, { ...opts, client: modern(true) });
+    expect(handle).toMatchObject({ resultType: 'task', taskId: 't-9' });
+    const fallback = await callTool('support.bundle', {}, { ...opts, client: modern(false) });
+    expect(
+      JSON.parse((fallback as { content: Array<{ text: string }> }).content[0]?.text ?? '{}'),
+    ).toEqual({
+      result: taskBody,
+      next: {
+        tool: 'tasks.wait',
+        args: { id: 't-9', timeout_s: 25 },
+        note: expect.stringContaining('long-running'),
+      },
+    });
+  });
+
+  it("review F2: forwards envelope warnings into the handle as _meta['io.xinas/warnings'], and omits _meta when there are none", async () => {
+    const { callTool } = await import('../../api/mcp/dispatch.js');
+    const taskBody = { task_id: 't-9', state: 'queued' };
+    const baseHandle = {
+      resultType: 'task' as const,
+      taskId: 't-9',
+      status: 'working' as const,
+      createdAt: 'a',
+      lastUpdatedAt: 'a',
+      ttlMs: null,
+      pollIntervalMs: 2000,
+    };
+    // A fake that mirrors the real service's forwarding contract closely
+    // enough to exercise dispatch.ts's plumbing: it echoes back whatever
+    // `warnings` dispatch.ts passed through `extra`.
+    const service = {
+      handleFor: (id: string, _ctx: unknown, extra: { tool_name: string; warnings?: unknown[] }) =>
+        id === 't-9'
+          ? {
+              ...baseHandle,
+              ...(extra.warnings !== undefined && extra.warnings.length > 0
+                ? { _meta: { 'io.xinas/warnings': extra.warnings } }
+                : {}),
+            }
+          : null,
+    };
+    const opts = {
+      loopbackToken: () => 'tok',
+      allowApply: () => true,
+      identity: () => ({ principal: 'p', role: 'admin' as const }),
+      tasks: service as never,
+      client: modern(true),
+    };
+    const warnings = [{ code: 'EXECUTOR_DEGRADED', message: 'x' }];
+
+    const withWarnings = await callTool(
+      'support.bundle',
+      {},
+      {
+        ...opts,
+        loopback: async () => ({ status: 202, body: { result: taskBody, warnings } }),
+      },
+    );
+    expect(withWarnings).toMatchObject({ resultType: 'task', taskId: 't-9' });
+    expect((withWarnings as { _meta?: unknown })._meta).toEqual({
+      'io.xinas/warnings': warnings,
+    });
+
+    const withoutWarnings = await callTool(
+      'support.bundle',
+      {},
+      { ...opts, loopback: async () => ({ status: 202, body: { result: taskBody } }) },
+    );
+    expect((withoutWarnings as { _meta?: unknown })._meta).toBeUndefined();
   });
 });

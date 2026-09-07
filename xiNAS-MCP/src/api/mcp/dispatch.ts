@@ -19,16 +19,33 @@
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolRequestSchema,
+  ErrorCode,
+  ListResourcesRequestSchema,
+  ListToolsRequestSchema,
+  McpError,
+  ReadResourceRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import { CATALOG, type CatalogEntry, mcpVisible } from './catalog.js';
+import {
+  MCP_UI_EXTENSION,
+  RAID_CREATE_APP_URI,
+  listAppResources,
+  mcpUiExtensionCapability,
+  readAppResource,
+} from './apps.js';
 import type { McpClientInfo, ConfirmationService } from './confirmation/service.js';
 import { isConfirmable, type MrtrParams } from './confirmation/policy.js';
 import { SERVER_INFO } from './discover.js';
 import type { ResourcesOptions } from './resources.js';
+import type { McpTasksService } from './tasks/service.js';
 import {
+  type CreateTaskToolResult,
   type InputRequiredToolResult,
   type ToolResult,
   errorResult,
+  isCreateTaskResult,
   isInputRequired,
   text,
 } from './results.js';
@@ -70,6 +87,8 @@ export interface DispatcherOptions {
    * and discovery advertises no `resources`.
    */
   resources?: ResourcesOptions;
+  /** S16: the task-method service; absent in read-only contexts (no ctx.tasks). */
+  tasks?: McpTasksService;
 }
 
 /** Legacy tool name → replacement pointer (ADR-0010: actionable errors). */
@@ -111,6 +130,7 @@ export interface McpTool {
   name: string;
   description: string;
   inputSchema: { type: 'object'; [k: string]: unknown };
+  _meta?: { ui: { resourceUri: string; visibility?: Array<'model' | 'app'> } };
 }
 
 /** Apply-gate verdict for one call (exported for unit tests). */
@@ -187,6 +207,17 @@ export function nextHint(
   };
 }
 
+/** S16 §4.2 steps 1–4: may this call answer with a CreateTaskResult? */
+export function isTaskEligible(
+  entry: CatalogEntry,
+  args: Record<string, unknown>,
+  opts: Pick<DispatcherOptions, 'client'>,
+): boolean {
+  if (entry.creates_task !== true) return false;
+  if (entry.mutability === 'plan_apply' && args.mode !== 'apply') return false;
+  return opts.client.era === 'modern' && opts.client.tasks === true;
+}
+
 /**
  * `tools/list`, independent of any transport or protocol era.
  *
@@ -210,6 +241,7 @@ export function listTools(): McpTool[] {
         (e.status === 'degraded' ? `${e.description} [DEGRADED backend]` : e.description) +
         asyncClause,
       inputSchema: e.input_schema as { type: 'object'; [k: string]: unknown },
+      ...(e.ui !== undefined ? { _meta: { ui: { ...e.ui } } } : {}),
     };
   });
 }
@@ -220,7 +252,7 @@ export async function callTool(
   args: Record<string, unknown>,
   opts: DispatcherOptions,
   mrtr: MrtrParams & { correlationId?: string } = {},
-): Promise<ToolResult | InputRequiredToolResult> {
+): Promise<ToolResult | InputRequiredToolResult | CreateTaskToolResult> {
   const entry = CATALOG.find((e) => e.name === name && mcpVisible(e));
   if (entry === undefined) {
     const replacement = LEGACY_TOOL_MAP[name];
@@ -319,6 +351,29 @@ export async function callTool(
       first?.details,
     );
   }
+  // S16 §4.2 steps 5–7: the handle is projected from the COMMITTED row the
+  // REST apply just returned; anything short of that falls back below.
+  if (isTaskEligible(entry, args, opts) && opts.tasks !== undefined) {
+    const taskId = (envelope.result as { task_id?: unknown } | null)?.task_id;
+    if (typeof taskId === 'string') {
+      const handle = opts.tasks.handleFor(
+        taskId,
+        { identity, correlationId: mrtr.correlationId ?? 'mcp' },
+        {
+          tool_name: entry.name,
+          // Review F2: the handle path returns before the fallback below
+          // builds `text({ result, warnings })` — forward the same
+          // envelope warnings (e.g. EXECUTOR_DEGRADED) so they are not
+          // silently dropped for clients that declared the tasks extension.
+          ...(envelope.warnings !== undefined && envelope.warnings.length > 0
+            ? { warnings: envelope.warnings }
+            : {}),
+        },
+      );
+      if (handle !== null) return handle;
+    }
+  }
+
   const next = nextHint(entry, envelope.result);
   return text({
     result: envelope.result,
@@ -331,9 +386,30 @@ export async function callTool(
 
 /** The legacy-era SDK server: a thin wiring of listTools/callTool. */
 export function buildMcpServer(opts: DispatcherOptions): Server {
-  const server = new Server({ ...SERVER_INFO }, { capabilities: { tools: {} } });
+  const server = new Server(
+    { ...SERVER_INFO },
+    {
+      capabilities: {
+        tools: {},
+        resources: {},
+        extensions: { [MCP_UI_EXTENSION]: mcpUiExtensionCapability() },
+      },
+    },
+  );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listTools() }));
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: listAppResources(),
+  }));
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    if (request.params.uri !== RAID_CREATE_APP_URI) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `unknown MCP App resource: ${request.params.uri}`,
+      );
+    }
+    return readAppResource(request.params.uri);
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const r = await callTool(
@@ -343,9 +419,12 @@ export function buildMcpServer(opts: DispatcherOptions): Server {
     );
     // Legacy clients are denied confirmable calls before the service ever
     // runs (era !== 'modern' above) — an input_required result reaching
-    // here would mean that gate was bypassed.
-    if (isInputRequired(r)) {
-      throw new Error('unreachable: legacy path received input_required');
+    // here would mean that gate was bypassed. Likewise a CreateTaskResult:
+    // isTaskEligible requires era === 'modern' && client.tasks === true, and
+    // legacy clients never declare the extension (client.tasks is false on
+    // this path) — either result reaching here means a gate was bypassed.
+    if (isInputRequired(r) || isCreateTaskResult(r)) {
+      throw new Error('unreachable: legacy path received a modern-only result');
     }
     return r;
   });

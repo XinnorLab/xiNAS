@@ -301,7 +301,9 @@ describe('TaskRunner.run — cancel (S10)', () => {
   it('cancel during stage 1 → boundary stop before stage 2, rollback, terminal(cancelled)', async () => {
     const ref: { runner?: TaskRunner } = {};
     const { executor, rollbackRan } = makeTwoStage({
-      stage1: () => ref.runner?.requestCancel('tc'),
+      stage1: () => {
+        ref.runner?.requestCancel('tc');
+      },
     });
     const events = await run(executor, ref);
     expect(shape(events)).toEqual([
@@ -400,7 +402,9 @@ describe('TaskRunner.run — cancel (S10)', () => {
   it('cancel after the LAST stage completed is ignored → success', async () => {
     const ref: { runner?: TaskRunner } = {};
     const { executor, rollbackRan } = makeTwoStage({
-      stage2: () => ref.runner?.requestCancel('tc'),
+      stage2: () => {
+        ref.runner?.requestCancel('tc');
+      },
     });
     const events = await run(executor, ref);
     expect(events.at(-1)?.status).toBe('success');
@@ -417,6 +421,189 @@ describe('TaskRunner.run — cancel (S10)', () => {
     const terminal = events.at(-1);
     expect(terminal?.status).toBe('failed');
     expect(terminal?.error_code).toBe('FAILED_PARTIAL_ROLLED_BACK');
+  });
+});
+
+// ── S16 §9.2 (ADR-0012 §9): point of no return ──────────────────────────────
+
+function makeIrreversibleExecutor(opts: {
+  beforeIrreversible?: (ctx: ExecutorContext) => void | Promise<void>;
+  duringIrreversible?: (ctx: ExecutorContext) => void | Promise<void>;
+  afterIrreversible?: (ctx: ExecutorContext) => void | Promise<void>;
+}): { executor: Executor; rollbackRan: () => boolean } {
+  let rolledBack = false;
+  const executor: Executor = {
+    operation_kind: 'fs.create',
+    irreversible_from: 'mkfs',
+    stages: [
+      {
+        name: 'preflight',
+        run: async (ctx) => {
+          await opts.beforeIrreversible?.(ctx);
+        },
+      },
+      {
+        name: 'mkfs',
+        run: async (ctx) => {
+          await opts.duringIrreversible?.(ctx);
+        },
+      },
+      {
+        name: 'install_unit',
+        run: async (ctx) => {
+          await opts.afterIrreversible?.(ctx);
+        },
+      },
+    ],
+    async rollback(): Promise<void> {
+      rolledBack = true;
+    },
+  };
+  return { executor, rollbackRan: () => rolledBack };
+}
+
+describe('TaskRunner.run — point of no return (S16 §9.2)', () => {
+  async function run(executor: Executor, ref: { runner?: TaskRunner } = {}) {
+    const events: TaskProgressEvent[] = [];
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+    });
+    const runner = makeRunner(makeBridge(['snap-before', 'snap-after']));
+    ref.runner = runner;
+    await runner.run({ task_id: 'pnr', operation_kind: 'fs.create', spec: {} }, executor, publish);
+    return events;
+  }
+
+  it('a cancel accepted BEFORE the irreversible stage is honored at its boundary; the stage never runs', async () => {
+    const ref: { runner?: TaskRunner } = {};
+    let mkfsRan = false;
+    const verdicts: unknown[] = [];
+    const { executor, rollbackRan } = makeIrreversibleExecutor({
+      beforeIrreversible: () => {
+        verdicts.push(ref.runner?.requestCancel('pnr'));
+      },
+      duringIrreversible: () => {
+        mkfsRan = true;
+      },
+    });
+    const events = await run(executor, ref);
+    expect(verdicts).toEqual([{ accepted: true }]);
+    expect(mkfsRan).toBe(false);
+    expect(rollbackRan()).toBe(true);
+    expect(events.at(-1)?.status).toBe('cancelled');
+  });
+
+  it('a cancel requested WHILE the irreversible stage runs is refused, the flag stays unset, the task completes', async () => {
+    const ref: { runner?: TaskRunner } = {};
+    const verdicts: unknown[] = [];
+    let flagDuringLaterStage: boolean | undefined;
+    const { executor, rollbackRan } = makeIrreversibleExecutor({
+      duringIrreversible: () => {
+        verdicts.push(ref.runner?.requestCancel('pnr'));
+      },
+      afterIrreversible: (ctx) => {
+        flagDuringLaterStage = ctx.isCancelRequested();
+        verdicts.push(ref.runner?.requestCancel('pnr'));
+      },
+    });
+    const events = await run(executor, ref);
+    expect(verdicts).toEqual([
+      { accepted: false, reason: 'irreversible_stage_started', stage: 'mkfs' },
+      { accepted: false, reason: 'irreversible_stage_started', stage: 'mkfs' },
+    ]);
+    expect(flagDuringLaterStage).toBe(false);
+    expect(rollbackRan()).toBe(false);
+    expect(events.at(-1)?.status).toBe('success');
+    expect(shape(events).filter(([t]) => t === 'terminal')).toHaveLength(1);
+  });
+
+  it('a stage failure AFTER the irreversible stage is failed (rolled back), never cancelled, even with a refused cancel', async () => {
+    const ref: { runner?: TaskRunner } = {};
+    const { executor, rollbackRan } = makeIrreversibleExecutor({
+      duringIrreversible: () => {
+        ref.runner?.requestCancel('pnr');
+      },
+      afterIrreversible: () => {
+        throw new Error('enableNow exploded');
+      },
+    });
+    const events = await run(executor, ref);
+    expect(rollbackRan()).toBe(true);
+    const terminal = events.at(-1);
+    expect(terminal?.status).toBe('failed');
+    expect(terminal?.error_code).toBe('FAILED_PARTIAL_ROLLED_BACK');
+  });
+
+  it('an executor without a declaration keeps the S10 rule (cancel during a stage → cancelled at the next boundary)', async () => {
+    const ref: { runner?: TaskRunner } = {};
+    const { executor } = makeTwoStage({
+      stage1: () => {
+        ref.runner?.requestCancel('tc');
+      },
+    });
+    const events: TaskProgressEvent[] = [];
+    const runner = makeRunner(makeBridge(['a', 'b']));
+    ref.runner = runner;
+    await runner.run(
+      { task_id: 'tc', operation_kind: 'reference.echo', spec: {} },
+      executor,
+      async (e) => {
+        events.push(e);
+      },
+    );
+    expect(events.at(-1)?.status).toBe('cancelled');
+  });
+
+  it('requestCancel on an unknown task reports not_found', () => {
+    const runner = makeRunner(makeBridge([]));
+    expect(runner.requestCancel('nope')).toEqual({ accepted: false, reason: 'not_found' });
+  });
+
+  it('getInflight exposes currentStage and irreversibleStageStarted while running', async () => {
+    const ref: { runner?: TaskRunner } = {};
+    let seen: { currentStage?: string; irreversibleStageStarted?: string } | undefined;
+    const { executor } = makeIrreversibleExecutor({
+      duringIrreversible: () => {
+        const t = ref.runner?.getInflight().get('pnr');
+        seen = {
+          ...(t?.currentStage !== undefined ? { currentStage: t.currentStage } : {}),
+          ...(t?.irreversibleStageStarted !== undefined
+            ? { irreversibleStageStarted: t.irreversibleStageStarted }
+            : {}),
+        };
+      },
+    });
+    await run(executor, ref);
+    expect(seen).toEqual({ currentStage: 'mkfs', irreversibleStageStarted: 'mkfs' });
+  });
+
+  it('a cancel requested synchronously from the stage_started publish itself (not from the stage body) is refused — the mark landed before the publish call, closing the runner window (review F1)', async () => {
+    const ref: { runner?: TaskRunner } = {};
+    const verdicts: unknown[] = [];
+    let flagAfterIrreversible: boolean | undefined;
+    const { executor, rollbackRan } = makeIrreversibleExecutor({
+      afterIrreversible: (ctx) => {
+        flagAfterIrreversible = ctx.isCancelRequested();
+      },
+    });
+    const events: TaskProgressEvent[] = [];
+    const runner = makeRunner(makeBridge(['snap-before', 'snap-after']));
+    ref.runner = runner;
+    const publish = vi.fn(async (e: TaskProgressEvent) => {
+      events.push(e);
+      if (e.event_type === 'stage_started' && e.stage_name === 'mkfs') {
+        // Synchronous call, no await before it — simulates a task.cancel
+        // RPC landing while the runner is awaiting the stage_started publish.
+        verdicts.push(runner.requestCancel('pnr'));
+      }
+    });
+    await runner.run({ task_id: 'pnr', operation_kind: 'fs.create', spec: {} }, executor, publish);
+    expect(verdicts).toEqual([
+      { accepted: false, reason: 'irreversible_stage_started', stage: 'mkfs' },
+    ]);
+    expect(flagAfterIrreversible).toBe(false);
+    expect(rollbackRan()).toBe(false);
+    expect(events.at(-1)?.status).toBe('success');
   });
 });
 

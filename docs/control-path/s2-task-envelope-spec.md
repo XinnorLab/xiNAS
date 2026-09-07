@@ -102,6 +102,12 @@ stopped before an executor stage AND ran the executor's `rollback()`
 (best-effort) — `cancelled` implies the partial work was unwound, mirroring
 the receiver's Model R desired-intent revert. Full semantics in §16.
 
+**MCP projection (S16):** the MCP Tasks extension projects this state
+machine without adding a state — `queued`/`running` → `working`,
+`success`/`failed`/`requires_manual_recovery` → `completed` (with
+`isError` on the two failures), `cancelled` → `cancelled`; `plan_only` and
+`imported` are not projectable. §18.
+
 **Dispatch tracking (no second SM):** apply inserts the task `queued` (+ leases + revision check, atomically); the engine then sends `task.begin`; accept → `running` + store `agent_acceptance_id`; reject → `failed (FAILED_BEFORE_CHANGE)` + release leases. Reconcile (§9) reads `(state, agent_acceptance_id, agent inflight set)`.
 
 ---
@@ -404,6 +410,13 @@ and a cancelled row has left the queued set.
      with refusal metadata; recovery remains with the existing
      lease-expiry/sweep path (reconcile's `running` + not-inflight
      no-op is unchanged — S10 adds no new reconcile action).
+   - `cancel_requested: false, reason: 'irreversible_stage_started',
+     stage` (S16, ADR-0012 §9) → the executor passed its declared point
+     of no return (`fs.create` once `mkfs` began). Record
+     `cancel_refused_reason: 'irreversible_stage_started'` (same
+     running-state guard) and return 409 `CONFLICT`
+     (`details.reason: 'irreversible_stage_started'`, `details.stage`).
+     The task finishes or fails on its own; it is never `cancelled`.
 
 ### 16.4 Runner — honoring the flag (agent)
 
@@ -428,6 +441,13 @@ Two rules, no new event types:
   `requires_manual_recovery`. This gives the existing
   `checkCancelled()` throws in the fs-create and xiraid-array-create
   executors correct semantics with zero executor changes.
+- **Point of no return (S16, ADR-0012 §9):** an executor may declare
+  `irreversible_from: <stage>`. Immediately before awaiting that stage
+  the runner marks the task past its point of no return; from then on
+  `requestCancel()` refuses (`irreversible_stage_started`) instead of
+  setting the flag, so neither the boundary check nor the attribution
+  rule can ever turn an irreversible partial change into `cancelled`.
+  `fs.create` declares `mkfs`.
 
 Internal changes: agent `TaskTerminalState` widens with
 `'cancelled'`; `#runRollback()` is parameterized on the
@@ -539,3 +559,33 @@ in-transaction audit caller in the api (the helper was designed for it,
 single operational `http.*` row for the loopback apply is still written by
 the audit middleware after the response, so "exactly one operation row"
 (S8 §7.3) is preserved.
+
+---
+
+## 18. MCP Tasks projection (S16, ADR-0010 amendment)
+
+The MCP Tasks extension (`s16-mcp-tasks-spec.md`) is a **read projection
+of the Task row**; nothing in this section adds a column, a state or a
+write path.
+
+- **Identity.** `CreateTaskResult.taskId` is `task_id`. Creation is the
+  apply transaction of §5.2/§17.2 — the handle is projected only after
+  that transaction committed, so a `tasks/get` for it resolves
+  immediately.
+- **State map.** §4 note; the terminal `CallToolResult` is
+  `renderTask()` minus `plan_document*` and stage `output_url`.
+- **Timestamps.** `createdAt = created_at`, `lastUpdatedAt = updated_at`;
+  a poll never writes `updated_at`.
+- **Access.** Bound to `Task.principal`; every refusal is one generic
+  `-32602`.
+- **Cancellation.** `tasks/cancel` is an adapter over the S10/ADR-0012
+  core through the `tasks.cancel` tool (one loopback, one audit row);
+  the protocol answer is an acknowledgement regardless of the core's
+  verdict, and the client reads the outcome back.
+- **TTL.** Non-terminal tasks are never pruned → `ttlMs: null`. Terminal:
+  `ttlMs = (terminal_at − created_at) + GcSweeper.taskRetentionMs`
+  (default 30 days). After the GC prunes the row (`mcp.task.pruned`
+  audit for MCP-created tasks) the id answers `-32602`.
+- **Restart / GC.** Reconcile (§9) is unchanged; the handle survives an
+  api restart because the row does.
+- **Filesystem cancellation correction.** §16.3/§16.4 amendments above.

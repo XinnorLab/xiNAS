@@ -44,6 +44,8 @@ import {
 export interface McpClientInfo {
   era: 'legacy' | 'modern';
   elicitation: Set<ElicitationMode>;
+  /** S16: this request declared io.modelcontextprotocol/tasks (read per request, never cached). */
+  tasks: boolean;
 }
 
 export interface ConfirmationServiceDeps {

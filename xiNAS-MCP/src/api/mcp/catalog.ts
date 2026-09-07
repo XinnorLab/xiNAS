@@ -17,6 +17,8 @@
  * routes land — the catalog only ever lists mounted routes.
  */
 
+import { RAID_CREATE_APP_URI } from './apps.js';
+
 export type Mutability = 'read' | 'plan_apply' | 'direct';
 export type MinRole = 'viewer' | 'operator' | 'admin';
 
@@ -43,6 +45,14 @@ export interface CatalogEntry {
    */
   returns_async_task?: boolean;
   /**
+   * S16: this call CREATES (or idempotently replays) the durable xiNAS Task
+   * its success body describes — the operation the handle would represent.
+   * Distinct from `returns_async_task`: `tasks.cancel` returns a Task
+   * envelope but represents nothing new, and must never yield a task
+   * handle (cancelling one task cannot create another).
+   */
+  creates_task?: boolean;
+  /**
    * S15: the engine kinds this plan_apply entry's route can produce (most
    * list one; filesystems.update lists four). The confirmation service
    * requires the plan document's kind to be listed here — a plan_id cannot
@@ -57,6 +67,8 @@ export interface CatalogEntry {
   mcp_exposed?: boolean;
   /** S15: explicit opt-in for an entry that needs confirmation but fits neither shape. */
   confirmation?: 'required';
+  /** S18: optional MCP Apps View linked to this tool. */
+  ui?: { resourceUri: string; visibility?: Array<'model' | 'app'> };
 }
 
 const NO_INPUT: Record<string, unknown> = {
@@ -146,6 +158,7 @@ const planApply = (
   min_role: minRole,
   status: 'live',
   returns_async_task: true,
+  creates_task: true,
   operation_kinds: operationKinds,
   ...over,
 });
@@ -174,6 +187,13 @@ export const CATALOG: CatalogEntry[] = [
   // ── arrays (xiRAID) — RAID mutation is admin (legacy matrix) ──
   read('arrays.list', 'GET', '/arrays', 'List xiRAID arrays (observed state).'),
   read('arrays.get', 'GET', '/arrays/{id}', 'Get one xiRAID array.'),
+  read(
+    'mcp_apps.raid_create',
+    'GET',
+    '/mcp/apps/raid-create',
+    'Open the interactive xiRAID array creation wizard.',
+    { min_role: 'admin', ui: { resourceUri: RAID_CREATE_APP_URI } },
+  ),
   planApply('arrays.create', 'POST', '/arrays', 'Create a xiRAID array (plan/apply).', 'admin', [
     'xiraid.array.create',
   ]),
@@ -397,7 +417,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     name: 'tasks.cancel',
     description:
-      'Request cooperative task cancellation (S10, ADR-0012). Queued tasks cancel immediately; running tasks stop at the next stage boundary AND roll back their partial work (cancelled = nothing changed, best-effort) — a cancel after the last stage completed is ignored and the task finishes success. Allowed via MCP without allow_apply — an emergency stop cannot apply new state (ADR-0010).',
+      "Request cooperative task cancellation (S10, ADR-0012). Queued tasks cancel immediately; running tasks stop at the next stage boundary AND roll back their partial work (cancelled = nothing changed, best-effort) — a cancel after the last stage completed is ignored and the task finishes success. Allowed via MCP without allow_apply — an emergency stop cannot apply new state (ADR-0010). A cancel arriving after the operation's point of no return (e.g. fs.create once mkfs began) is refused with CONFLICT irreversible_stage_started and the task finishes on its own (S16).",
     method: 'POST',
     path: '/tasks/{id}/cancel',
     input_schema: idInput('id', 'task id'),
@@ -421,6 +441,7 @@ export const CATALOG: CatalogEntry[] = [
     min_role: 'operator',
     status: 'live',
     returns_async_task: true,
+    creates_task: true,
   },
   read(
     'support.download',

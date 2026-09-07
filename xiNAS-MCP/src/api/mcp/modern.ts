@@ -10,6 +10,13 @@
  *
  * Every result on this path carries `resultType` (`2026-07-28` `Result.resultType` is mandatory — S14 §5.1). The legacy SDK path is untouched.
  *
+ * Methods served: `server/discover`, `resources/list`, `resources/templates/list`,
+ * `resources/read` (S17 §4), `tools/list`, `tools/call`, and the
+ * `io.modelcontextprotocol/tasks` extension's `tasks/get`, `tasks/update` and
+ * `tasks/cancel` (S16 §5.2–§5.4). Everything else, including the
+ * deliberately-unimplemented `tasks/list` and `tasks/result` (SEP-2663),
+ * falls through to `-32601 Method not found`.
+ *
  * This path runs AHEAD of the SDK transport because no published
  * `@modelcontextprotocol/sdk` implements the era: 1.30.0 has no
  * `server/discover` schema, and its StreamableHTTPServerTransport rejects any
@@ -22,7 +29,14 @@ import { McpProtocolError } from './confirmation/errors.js';
 import { parseMrtrParams } from './confirmation/policy.js';
 import { buildDiscoverResult, isModernProtocolVersion } from './discover.js';
 import { listResources, listTemplates, readResource } from './resources.js';
-import { isInputRequired } from './results.js';
+import { type ToolResult, isCreateTaskResult, isInputRequired } from './results.js';
+import { missingTasksCapability } from './tasks/index.js';
+import {
+  CancelTaskParamsSchema,
+  GetTaskParamsSchema,
+  UpdateTaskParamsSchema,
+  parseParams,
+} from './tasks/schema.js';
 
 /** JSON-RPC 2.0 reserved codes used on this path. */
 const METHOD_NOT_FOUND = -32601;
@@ -76,10 +90,11 @@ export function isNotification(message: unknown): boolean {
   return msg !== null && typeof msg === 'object' && msg.id === undefined;
 }
 
-const id = (message: unknown): string | number | null => {
+/** The JSON-RPC envelope `id` (or `null` for a notification / non-object message). */
+export function rpcIdOf(message: unknown): string | number | null {
   const raw = (message as JsonRpcRequest | null)?.id;
   return typeof raw === 'string' || typeof raw === 'number' ? raw : null;
-};
+}
 
 /**
  * Handle one modern-era request. The caller has already authenticated;
@@ -101,7 +116,7 @@ export async function handleModernRequest(
   correlationId: string,
 ): Promise<JsonRpcResponse> {
   const msg = message as JsonRpcRequest;
-  const rpcId = id(message);
+  const rpcId = rpcIdOf(message);
 
   try {
     switch (msg.method) {
@@ -161,15 +176,29 @@ export async function handleModernRequest(
           ...mrtr,
           correlationId,
         });
-        if (isInputRequired(result)) {
+        // A CreateTaskResult carries its own `resultType: 'task'` and must
+        // NOT be stamped `complete`, same as an input_required result.
+        if (isInputRequired(result) || isCreateTaskResult(result)) {
           return { jsonrpc: '2.0', id: rpcId, result };
         }
         return { jsonrpc: '2.0', id: rpcId, result: { ...result, resultType: 'complete' } };
       }
 
+      // S16 §5.2–§5.4 — the io.modelcontextprotocol/tasks methods (modern era only).
+      case 'tasks/get':
+      case 'tasks/update':
+      case 'tasks/cancel':
+        return {
+          jsonrpc: '2.0',
+          id: rpcId,
+          result: await handleTaskMethod(msg.method, msg.params, opts, correlationId),
+        };
+
       default:
         break;
     }
+    // S16: `tasks/list` and `tasks/result` are deliberately absent
+    // (SEP-2663) and land here like any other unimplemented method.
     return {
       jsonrpc: '2.0',
       id: rpcId,
@@ -208,5 +237,47 @@ export async function handleModernRequest(
       id: rpcId,
       error: { code: INTERNAL_ERROR, message: 'internal error' },
     };
+  }
+}
+
+/**
+ * S16 §5.2–§5.4: the extension's three methods. Capability first (-32021,
+ * before anything about the task is learned), then shape (-32602), then
+ * the service's ownership + projection rules. `tasks/list` and
+ * `tasks/result` are deliberately absent (SEP-2663) and fall to -32601.
+ */
+async function handleTaskMethod(
+  method: 'tasks/get' | 'tasks/update' | 'tasks/cancel',
+  params: unknown,
+  opts: DispatcherOptions,
+  correlationId: string,
+): Promise<unknown> {
+  if (opts.client.tasks !== true) throw missingTasksCapability();
+  if (opts.tasks === undefined) {
+    throw new McpProtocolError(
+      INTERNAL_ERROR,
+      'tasks extension unavailable (api has no task engine)',
+    );
+  }
+  const ctx = { identity: opts.identity(), correlationId };
+  switch (method) {
+    case 'tasks/get':
+      return opts.tasks.get(parseParams(GetTaskParamsSchema, params).taskId, ctx);
+    case 'tasks/update': {
+      const p = parseParams(UpdateTaskParamsSchema, params);
+      return opts.tasks.update(
+        p.taskId,
+        p.inputResponses as Record<string, Record<string, unknown>>,
+        ctx,
+      );
+    }
+    case 'tasks/cancel': {
+      const p = parseParams(CancelTaskParamsSchema, params);
+      return opts.tasks.cancel(p.taskId, ctx, async () => {
+        // tasks.cancel is neither confirmable nor task-eligible: always a ToolResult.
+        const r = await callTool('tasks.cancel', { id: p.taskId }, opts, { correlationId });
+        return r as ToolResult;
+      });
+    }
   }
 }

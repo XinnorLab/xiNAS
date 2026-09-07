@@ -66,9 +66,12 @@ import {
  *    separately by test 6b (a REST-created plan, no requestState).
  *
  * Task 11 addendum: the REST-approval happy path below reuses
- * `planFsCreateForce` — the only destructive/url-capable plan this suite
- * has (see above) — whose provider sets rollback_model 'unsupported'
- * alongside risk_level 'destructive' (`filesystem.ts` force-create path).
+ * `planFsCreateForce` — the only DESTRUCTIVE plan this suite has (see
+ * above) — whose provider sets rollback_model 'unsupported' alongside
+ * risk_level 'destructive'. Since S16 §9.1 `filesystem.ts` returns
+ * rollback_model 'unsupported' for EVERY create (a completed mkfs is
+ * never undone), so a non-force create is url-mode too; `force: true` is
+ * still what makes this particular plan `risk_level: 'destructive'`.
  * `ConfirmationService.operatorDecide`'s acknowledge table checks
  * rollback_model 'unsupported' BEFORE risk_level 'destructive' (S15 §9.2:
  * rollback unsupported → "ROLLBACK IS NOT SUPPORTED" wins over destructive
