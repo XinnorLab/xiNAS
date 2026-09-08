@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startServer } from '../../../api/server.js';
-import { ACK_NO_ROLLBACK } from '../../../api/mcp/confirmation/types.js';
+import { ACK_DATA_LOSS } from '../../../api/mcp/confirmation/types.js';
 import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpers.js';
 import {
   BOTH,
@@ -72,15 +72,13 @@ import {
  * rollback_model 'unsupported' for EVERY create (a completed mkfs is
  * never undone), so a non-force create is url-mode too; `force: true` is
  * still what makes this particular plan `risk_level: 'destructive'`.
- * `ConfirmationService.operatorDecide`'s acknowledge table checks
- * rollback_model 'unsupported' BEFORE risk_level 'destructive' (S15 §9.2:
- * rollback unsupported → "ROLLBACK IS NOT SUPPORTED" wins over destructive
- * → "DATA MAY BE PERMANENTLY LOST"), so the required phrase for THIS
- * record is `ACK_NO_ROLLBACK`, not the task-11 brief's literal
- * `ACK_DATA_LOSS` example — the brief's example assumed a destructive plan
- * with a non-'unsupported' rollback_model, which nothing in this codebase
- * currently produces. The wrong-phrase/right-phrase pairing itself is
- * covered directly by routes-mcp-confirmations.test.ts.
+ * The S-02 fix makes `requiredAcknowledgement()` (S15 §9.2 table) check
+ * `risk_level: 'destructive'` first: destructive wins over
+ * `rollback_model: 'unsupported'`, so the required phrase for THIS record
+ * is `ACK_DATA_LOSS`. The precedence itself — destructive-with-unsupported-
+ * rollback needs the data-loss phrase and refuses the rollback phrase,
+ * while a non-destructive rollback-unsupported record needs the rollback
+ * phrase — is pinned directly by routes-mcp-confirmations.test.ts.
  */
 
 describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
@@ -787,8 +785,10 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
   });
 
   // ── 11. REST approval (S15 Task 11) ───────────────────────────────────────
-  // See the file header addendum for why the acknowledge phrase here is
-  // ACK_NO_ROLLBACK, not the task-11 brief's literal ACK_DATA_LOSS example.
+  // See the file header addendum: the S-02 fix makes destructive win over
+  // rollback_model 'unsupported' (S15 §9.2 table), so the phrase for this
+  // record is ACK_DATA_LOSS; the precedence itself is pinned by
+  // routes-mcp-confirmations.test.ts.
 
   it('REST approval: url happy path — POST /mcp/confirmations/:id/approve, then the MCP retry proceeds to apply', async () => {
     const { plan_id, expected_revision } = await planFsCreateForce(
@@ -829,7 +829,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
       'tok-admin2',
       'POST',
       `/mcp/confirmations/${record?.confirmation_id as string}/approve`,
-      { acknowledge: ACK_NO_ROLLBACK },
+      { acknowledge: ACK_DATA_LOSS },
     );
     expect(approveRes.status).toBe(200);
     const approved = approveRes.body.result as Record<string, unknown>;
@@ -889,7 +889,7 @@ describe('MCP MRTR confirmation over the wire (S15 Task 10)', () => {
       'tok-admin', // same principal (admin:test) that requested this confirmation
       'POST',
       `/mcp/confirmations/${record?.confirmation_id as string}/approve`,
-      { acknowledge: ACK_NO_ROLLBACK },
+      { acknowledge: ACK_DATA_LOSS },
     );
     expect(res.status).toBe(409);
     const err = (res.body.errors as Array<Record<string, unknown>> | undefined)?.[0];

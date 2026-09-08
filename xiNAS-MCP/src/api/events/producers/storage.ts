@@ -5,6 +5,7 @@
  * `effective_mount_options`, `size_bytes`, `free_bytes`).
  */
 
+import { correlationFields } from '../engine.js';
 import type { ChangeCtx, EngineConfig, Producer, Row } from '../engine.js';
 import { META_KEYS } from '../meta.js';
 import type { Severity } from '../types.js';
@@ -42,12 +43,24 @@ export function fsView(row: Row | null): FsView | null {
   };
 }
 
-/** Why a filesystem cannot back an export right now (shared with the NFS producer). */
-export function fsUnavailableReason(v: FsView): 'unmounted' | 'unit_failed' | 'ro_option' | null {
-  if (v.unitState === 'failed') return 'unit_failed';
-  if (v.mounted === false) return 'unmounted';
-  if (v.mounted === true && v.readOnly === true) return 'ro_option';
-  return null;
+export type FsReadiness =
+  | { state: 'available' }
+  | { state: 'unavailable'; reason: 'unmounted' | 'unit_failed' | 'ro_option' }
+  | { state: 'unknown'; missing: string[] };
+
+/**
+ * Whether the filesystem can back an export right now (S17 §8.5), or that
+ * this row cannot say. A failed unit and `mounted: false` are proven; a
+ * row that lacks `mounted` or the effective mount options proves neither
+ * the fault nor its absence.
+ */
+export function fsReadiness(v: FsView): FsReadiness {
+  if (v.unitState === 'failed') return { state: 'unavailable', reason: 'unit_failed' };
+  if (v.mounted === false) return { state: 'unavailable', reason: 'unmounted' };
+  if (v.mounted === null) return { state: 'unknown', missing: ['mounted'] };
+  if (v.readOnly === true) return { state: 'unavailable', reason: 'ro_option' };
+  if (v.readOnly === null) return { state: 'unknown', missing: ['effective_mount_options'] };
+  return { state: 'available' };
 }
 
 const projection = (v: FsView): Record<string, unknown> => ({
@@ -168,7 +181,7 @@ function onFilesystemChange(ctx: ChangeCtx): void {
       args: { filesystem: id },
       previous: projection(prev),
       details: baseDetails(ctx, id, prev),
-      ...(cause !== undefined ? { cause, timeAccuracy: 'task' } : {}),
+      ...correlationFields(cause),
     });
     ctx.meta.delete(META_KEYS.capacity(id));
     return;
@@ -184,7 +197,7 @@ function onFilesystemChange(ctx: ChangeCtx): void {
         args: { filesystem: id },
         current: projection(cur),
         details: baseDetails(ctx, id, cur),
-        ...(cause !== undefined ? { cause, timeAccuracy: 'task' } : {}),
+        ...correlationFields(cause),
       });
     }
     evaluateCapacity(ctx, id, cur, true);
@@ -216,8 +229,7 @@ function onFilesystemChange(ctx: ChangeCtx): void {
         previous: projection(prev),
         current: projection(cur),
         details: baseDetails(ctx, id, cur),
-        cause,
-        timeAccuracy: 'task',
+        ...correlationFields(cause),
       });
     }
   } else if (prev.mounted === false && cur.mounted === true) {

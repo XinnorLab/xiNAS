@@ -506,8 +506,18 @@ the `nfs/sessions` feed.
 | `timeAccuracy` | `detectedAt` | `occurredAt` |
 |---|---|---|
 | `observed` (every poll/snapshot-derived event) | the api's commit time (`Date.now()` inside the transaction) | absent — the row's `status.observed_at` is the *collector's* sample time and is copied to `details.observedAt`, not promoted to `occurredAt` |
-| `task` (task-correlated events) | commit time | the task transition's timestamp |
+| `task` (task-correlated events whose task has reached a terminal state) | commit time | the task's terminal transition time (`tasks.terminal_at`) |
 | `source` (a vendor timestamp — none in Phase 1) | commit time | the vendor's |
+
+A correlation with a task that is still `running` names the task in
+`cause` but keeps `timeAccuracy: observed` and carries no `occurredAt`:
+the row's `updated_at` moves with every progress patch and is not a
+transition time, and the api never promotes its own clock to
+`occurredAt`. `TaskLookup` therefore returns `occurredAtMs` only from
+`terminal_at`; `correlationFields()` (`api/events/engine.ts`) is the one
+place that turns a `Cause` into envelope fields, and `buildEvent` refuses
+`timeAccuracy: task | source` without `occurredAtMs` (a producer bug is
+logged and the event skipped, never downgraded silently).
 
 ### 6.4 Severity table (SUBS-EVENT-004)
 
@@ -532,7 +542,7 @@ copied.
 | `raid.device.error_count_increased` (gated) | warning | raid |
 | `raid.device.fault_threshold_reached`, `raid.device.critical_wear` (gated) | error | raid |
 | `raid.license.expired`, `raid.license.drive_limit_exceeded` (gated) | error | raid |
-| `raid.restore.completed` | info (`healthy`), warning (`read_only`), error (`offline`) | raid |
+| `raid.restore.completed` | info (`healthy`, `running`), warning (`read_only`, `unknown`), error (`degraded`, `unhealthy`, `offline`), critical (`unrecovered`) | raid |
 | `raid.restore.failed` | error | raid |
 | `raid.operation.progress` | info | raid/progress |
 | `filesystem.definition.added`, `filesystem.definition.removed` | info | storage |
@@ -676,7 +686,7 @@ under namespaced keys and is read/written inside the same transaction:
 | `restore_pending` | `{ bootId, knownArrays: [...] }` between a reboot detection and the first complete `XiraidArray` snapshot |
 | `collector_last_accepted:<Kind>` | epoch ms of the last accepted batch carrying that kind |
 | `collector_state:<Kind>` | `running` / `failed` / `stale` |
-| `session_candidates` | `{ <sessionId>: { since, previous } }` (D-20) |
+| `session_candidates` | `{ <sessionId>: { kind, epoch, seq, view } }` (D-20) — `epoch` is the engine instance id, `seq` its batch counter |
 | `progress:<array>:<kind>` | `{ generation, lastPct, lastBucket, lastEmitAt }` |
 | `capacity:<fsId>` | `none` / `warning` / `critical` |
 | `unknown_state_warned:<array>` | `[ word… ]` |
@@ -721,14 +731,40 @@ member_states: [{device, states}], spare_pool, spare_disk_ids }`.
 
 - `active(kind)`: `initing ∈ W` (initialization) / `reconstructing ∈ W`
   (reconstruction).
-- `unhealthy(W)`: `W ∩ {degraded, need_recon, need_init, inconsistent,
-  read_only, offline, unrecovered, none} ≠ ∅`.
-- `healthy(W)`: `online ∈ W ∧ ¬unhealthy(W) ∧ ¬active(*)`.
+- `unhealthy`: `W ∩ {degraded, need_recon, need_init, inconsistent,
+  read_only, offline, unrecovered, none} ≠ ∅`, or one of the parser's
+  alternate failure spellings (`broken`, `unusable`, `faulty`, `failed` —
+  `lib/parse/raid.ts`), or any member whose states contain `offline`,
+  `reconstructing` or `need_recon`, or `active(*)`.
+- `unknown`: not `unhealthy`, and one of: a word of `W` outside the
+  vocabulary; a member word outside the vocabulary; a member with no
+  state; no member states for an array whose spec lists members;
+  `online ∉ W`.
+- `healthy`: neither of the above (`online ∈ W`, every member proven
+  `online`, no active operation).
+
+Member states are the four device states xiRAID documents for `raid
+show` (`online`, `offline`, `reconstructing`, `need_recon` — xiRAID
+Classic 4.4 AG, *Showing RAID State*, Table 2, `devices`:
+<https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html>);
+the agent's fixture transport emits the same `[index, path, [states]]`
+tuples the daemon does, so a source that reports no member state at all
+is a fixture defect, not a production shape.
+
+`unknown` is a source problem, not a state: it is reported once per
+(array, word) as `raid.source.unknown_state` (member words included) and
+never completes, fails, recovers or restores anything.
+
+A structural gap — a member with no state words, or no member states at
+all for an array whose spec lists members — is logged as
+`event_source_incomplete` `{ kind: 'XiraidArray', id, missing }` (not
+journaled; `docs/TODO.md`).
 
 **Array lifecycle.** `previous === null ∧ current ≠ null` in a complete
 snapshot after the baseline of the kind → `raid.array.created` (details:
 level, member count; `cause.taskId` when a `success`/`running` xiNAS task
-of kind `xiraid.array.create` for that name exists in `tasks`). `current === null`
+of kind `xiraid.array.create` for that name exists in `tasks`; `timeAccuracy: task`
+only for a `success` one (§6.3)). `current === null`
 (reconcile delete) → `raid.array.removed` (details: `operationInProgress`
 when an operation was active; `cause.taskId` from a matching
 `xiraid.array.delete` task) — unless `restore_pending` is set (§8.2 restore).
@@ -741,8 +777,10 @@ SUBS-RAID-002/003), with `A = active(kind)`:
 |---|---|---|
 | `null` | `A` | `raid.operation.observed_running` (generation 1) |
 | `¬A` | `A` | `raid.operation.started` (generation +1) |
-| `A` | `¬A ∧ healthy` | `raid.operation.completed` |
-| `A` | `¬A ∧ ¬healthy` | `raid.operation.failed`; `details.finalStates = raw_states`; severity per §6.4 |
+| `A` (word, or `raid_op` still active) | `¬A ∧ healthy` | `raid.operation.completed` |
+| `A` (word, or `raid_op` still active) | `¬A ∧ unhealthy` | `raid.operation.failed`; `details.finalStates = raw_states`; severity per §6.4 |
+| `A` (word, or `raid_op` still active) | `¬A ∧ unknown` | nothing: `raid_op` stays active with the same generation, progress state is kept, `event_operation_end_undecided` is logged; the first later `healthy`/`unhealthy` observation emits the terminal event above |
+| `raid_op` active after an undecided end | `A` again | nothing (no new generation) |
 | `A` | row deleted | no operation event (`raid.array.removed` carries `operationInProgress`) |
 
 A `reconstructing` that ends in `need_recon`, `degraded`, `offline` or
@@ -782,14 +820,17 @@ references the pool → `raid.spare_pool.exhausted`; non-empty again →
 **Restore after reboot** (SUBS-RAID-007). When `system.reboot.detected`
 fires (§8.6) the engine stores `restore_pending = { bootId, knownArrays }`
 (the current observed array ids). On the first complete `XiraidArray`
-snapshot afterwards, per known array: present with `healthy` →
-`raid.restore.completed` `{ result: "healthy" }`; present with `read_only ∈
-W` → `{ result: "read_only" }`; present with `offline ∈ W` →
-`{ result: "offline" }`; absent, or present with `none ∈ W` →
-`raid.restore.failed` `{ result: "not_restored" }`. Ordinary transitions
-for that snapshot are emitted as well (they are different facts). Until
-that snapshot arrives (daemon still starting: the collector reports
-`error`, no snapshot is sent) nothing is emitted (V-35).
+snapshot afterwards, per known array, the worst proven fact wins: absent or
+`none ∈ W` → `raid.restore.failed` `{ result: "not_restored" }`; `offline`
+→ `offline`; `unrecovered` → `unrecovered`; `read_only` → `read_only`;
+`degraded ∨ need_recon` → `degraded`; another unhealthy word → `unhealthy`;
+an active operation → `running`; a member-proven fault → `unhealthy`;
+`unknown` per the predicates → `unknown`; only a proven `healthy` →
+`healthy` (all but the first are `raid.restore.completed` with that
+`result`, severities in §6.4). Ordinary
+transitions for that snapshot are emitted as well (they are different
+facts). Until that snapshot arrives (daemon still starting: the collector
+reports `error`, no snapshot is sent) nothing is emitted (V-35).
 
 **Source-gated families** (D-16): `raid.device.*`, `raid.license.*` —
 listed under `producers.inactive` with the reasons from §4.4 until a
@@ -865,17 +906,32 @@ differences produce nothing.
 
 **Backing readiness** (SUBS-NFS-003): for every export path `p` and every
 `Filesystem` row with `mountpoint m` such that `p === m ∨ p.startsWith(m + "/")`
-(the longest such `m` wins; `/srv/data2` never matches `/srv/data`), the
-backing is unavailable when `¬mounted ∨ mount_unit_state = failed ∨
-read_only`. A change of that boolean → `nfs.export.backing_unavailable` /
+(the longest such `m` wins; `/srv/data2` never matches `/srv/data`),
+the backing is **unavailable** when `mount_unit_state = failed ∨ mounted =
+false ∨ (mounted = true ∧ "ro" ∈ effective_mount_options)`, **available**
+when `mounted = true ∧ effective_mount_options` is present without `ro`,
+and **unknown** when the row lacks `mounted` or (while mounted) lacks
+`effective_mount_options`. Only a proven change → `nfs.export.backing_unavailable` /
 `nfs.export.backing_recovered` (subject `ExportRule`, related `Filesystem`).
 Evaluated on both `Filesystem` and `ExportRule` changes.
+
+An `unknown` evaluation keeps the last proven state (meta
+`backing_unavailable:<export>`), emits nothing, and logs
+`event_source_incomplete` `{ kind, id, exportPath, missing, kept }` — the
+rule can neither report the fault nor clear it from a row that does not
+carry the field.
 
 **NFS over RDMA** (SUBS-NFS-004): only when the desired `NfsProfile`
 (`/xinas/v1/desired/NfsProfile/default`) has `spec.rdma.enabled: true`.
 Ready ⇔ observed `NfsProfile.status.rdma_listening = true ∧` at least one
-observed `NetworkInterface` with `rdma_capable ∧ rdma_link_state = up` that
-is managed (`desired` row exists). A change → `nfs.rdma.unavailable` /
+managed (`desired` row exists) observed `NetworkInterface` with
+`rdma_capable ∧ rdma_link_state = up`. Unavailable ⇔ `rdma_listening =
+false`, or `rdma_listening = true` and every managed RDMA interface has
+`rdma_link_state = down`. Anything else — the listener flag absent, or no
+proven-up path while some path reads `unknown` — is undecided: the last
+proven state is kept and `event_source_incomplete` is logged. One proven
+working path is enough for ready; "no proven path" and "every path proven
+down" are different facts. A proven change → `nfs.rdma.unavailable` /
 `nfs.rdma.recovered` (subject `SystemdUnit nfs-server.service`, related:
 the interfaces; details: `listening`, `interfaces`). Not configured → no
 event, reason `not_configured` in `producers.inactive`.
@@ -885,9 +941,12 @@ event, reason `not_configured` in `producers.inactive`.
 protoVersion, lockedFiles }` — no hostnames, users, file names or
 payloads. Row created after baseline → candidate `connected`; confirmed
 `nfs.session.connected` by the next complete `NfsSession` snapshot that
-still contains it (two consecutive observations). Reconcile delete →
-candidate `disconnected`; confirmed by the next complete snapshot without
-it; cancelled by one with it. Candidates are stored in
+still contains it (two consecutive observations) — a snapshot of a *later*
+batch: a later `seq` of the same engine instance, or the first complete
+snapshot after an api restart (the in-process counter restarts with the
+process, so a persisted candidate is never compared against it). Reconcile
+delete → candidate `disconnected`; confirmed by the next complete snapshot
+without it; cancelled by one with it. Candidates are stored in
 `session_candidates`; a batch without a `NfsSession` complete snapshot
 touches no candidate. `proto_version` change → `nfs.session.protocol_changed`.
 Lock threshold: disabled unless `lock_threshold.enter > 0`; `locked_files ≥
@@ -1097,13 +1156,14 @@ JSON-RPC shape enters the OpenAPI document.
 
 | Situation | Behavior |
 |---|---|
-| api restart | listeners gone (clients see an abrupt close); journal, sequence and meta intact; clients re-listen and read after their cursor |
+| api restart | listeners gone (clients see an abrupt close); journal, sequence and meta intact; clients re-listen and read after their cursor; session candidates are confirmed or cancelled by the first complete `NfsSession` snapshot after the restart |
 | agent restart | the boot sweep's complete snapshots are compared with the stored rows: real transitions emit, identical rows are skipped by the handler's dedupe, nothing is a baseline again |
 | xiRAID unavailable | the collector reports `error`, no `XiraidArray` snapshot is sent (V-35); `system.collector.failed` once; stored arrays stay; the next valid snapshot resumes comparison |
 | helper unavailable | same for `NfsSession`/`ExportRule`; session candidates untouched |
 | clock step | ordering is `sequence`; `detectedAt` may be non-monotonic and is never used to order or page |
 | journal insert fails | the observation transaction fails with it (the batch is retried by the agent, `pendingReconcile`); no notification; `system.collector.*` is unaffected. A persistent failure (disk full) surfaces through the api's existing error logging — there is no write loop because the retry is the agent's existing bounded one |
 | notify after commit fails (listener write error) | that listener closes (`error`); rows stay |
+| observation row lacks a field a rule needs (`mounted`, `effective_mount_options`, `rdma_listening`, a link state of `unknown`) | the rule keeps its last proven state and logs `event_source_incomplete`; no domain event (§8.5) |
 
 ---
 
@@ -1175,7 +1235,7 @@ and point at the polling fallback.
 | 10 | array/member/spare/restore transition tests; media/license typed and gated | §8.2, D-16 |
 | 11 | mount/read-only/capacity | §8.4 |
 | 12 | NFS service/export/backing/RDMA/sessions | §8.5 |
-| 13 | missing data never becomes state | §8.0, §8.6, §14 |
+| 13 | missing data never becomes state | §8.0, §8.2 (unknown), §8.5 (incomplete rows), §8.6, §14 |
 | 14 | limits/coalescing/overflow lose no rows | §5.6 |
 | 15 | revocation, redaction | §9, §6.2 |
 | 16 | audit bounded, metric labels bounded | §11, §12 |

@@ -12,7 +12,7 @@
 import { decExportId } from '../../../lib/nfs-export-id.js';
 import type { ChangeCtx, EngineKv, Producer, Row } from '../engine.js';
 import { META_KEYS } from '../meta.js';
-import { type FsView, fsUnavailableReason, fsView } from './storage.js';
+import { type FsView, fsReadiness, fsView } from './storage.js';
 
 const asRecord = (v: unknown): Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -232,10 +232,22 @@ function evaluateBacking(
 ): void {
   const covering = coveringFilesystem(ctx.kv, exportPath);
   if (covering === null) return; // no covering filesystem observed: unknown, not a fault
-  const reason = fsUnavailableReason(covering.view);
+  const readiness = fsReadiness(covering.view);
   const key = META_KEYS.backingUnavailable(exportId);
   const was = ctx.meta.get<boolean>(key) === true;
-  const now = reason !== null;
+  if (readiness.state === 'unknown') {
+    // Neither the fault nor the recovery is proven: keep the last proven
+    // state and say so where an operator can see it (never as a domain event).
+    ctx.log('warn', 'event_source_incomplete', {
+      kind: 'Filesystem',
+      id: covering.id,
+      exportPath,
+      missing: readiness.missing,
+      kept: was ? 'unavailable' : 'available',
+    });
+    return;
+  }
+  const now = readiness.state === 'unavailable';
   if (now === was) return;
   if (mayEmit) {
     ctx.emit({
@@ -244,12 +256,14 @@ function evaluateBacking(
       subject: { kind: 'ExportRule', id: exportPath },
       args: { exportPath },
       relatedResources: [{ kind: 'Filesystem', id: covering.id }],
-      ...(now ? { reasonCode: reason } : { previous: { severity: 'error' } }),
+      ...(readiness.state === 'unavailable'
+        ? { reasonCode: readiness.reason }
+        : { previous: { severity: 'error' } }),
       details: {
         exportPath,
         mountpoint: covering.mountpoint,
         filesystem: covering.id,
-        ...(reason !== null ? { reason } : {}),
+        ...(readiness.state === 'unavailable' ? { reason: readiness.reason } : {}),
         observedAt: ctx.batch.observedAt,
       },
     });
@@ -279,11 +293,12 @@ function evaluateRdma(ctx: ChangeCtx): void {
   const observed = ctx.kv.get<Row>('/xinas/v1/observed/NfsProfile/default');
   if (observed === null) return; // listener state unknown
   const status = asRecord(observed.value.status);
-  const listening = status.rdma_listening === true;
+  const listening = typeof status.rdma_listening === 'boolean' ? status.rdma_listening : null;
   const port = typeof status.rdma_port === 'number' ? status.rdma_port : undefined;
 
   const considered: string[] = [];
   const up: string[] = [];
+  const undecided: string[] = [];
   for (const r of ctx.kv.list<Row>({ prefix: '/xinas/v1/observed/NetworkInterface/' })) {
     const id = typeof r.value.id === 'string' ? r.value.id : '';
     if (id.length === 0) continue;
@@ -292,11 +307,32 @@ function evaluateRdma(ctx: ChangeCtx): void {
     if (ctx.kv.get(`/xinas/v1/desired/NetworkInterface/${id}`) === null) continue;
     considered.push(id);
     if (s.rdma_link_state === 'up') up.push(id);
+    else if (s.rdma_link_state !== 'down') undecided.push(id);
   }
   if (considered.length === 0) return; // no managed RDMA interface observed: unknown
 
-  const ready = listening && up.length > 0;
   const was = ctx.meta.get<boolean>(META_KEYS.rdmaUnavailable) === true;
+  // Ready needs one proven path and a proven listener; unavailable needs a
+  // proven-false listener or every path proven down. Anything else is not
+  // a fact about the serving path and keeps the last proven state.
+  let ready: boolean | null;
+  if (listening === false) ready = false;
+  else if (listening === null) ready = null;
+  else if (up.length > 0) ready = true;
+  else if (undecided.length === 0) ready = false;
+  else ready = null;
+  if (ready === null) {
+    ctx.log('warn', 'event_source_incomplete', {
+      kind: 'NfsProfile',
+      id: 'default',
+      missing: [
+        ...(listening === null ? ['rdma_listening'] : []),
+        ...undecided.map((id) => `NetworkInterface/${id}.rdma_link_state`),
+      ],
+      kept: was ? 'unavailable' : 'available',
+    });
+    return;
+  }
   if (ready === !was) return;
   ctx.emit({
     feed: 'nfs',
@@ -305,9 +341,9 @@ function evaluateRdma(ctx: ChangeCtx): void {
     args: {},
     relatedResources: considered.map((id) => ({ kind: 'NetworkInterface', id })),
     ...(ready ? { previous: { severity: 'error' } } : {}),
-    current: { listening, interfaces_up: up },
+    current: { listening: listening === true, interfaces_up: up },
     details: {
-      listening,
+      listening: listening === true,
       interfaces: up,
       ...(port !== undefined ? { port } : {}),
       observedAt: ctx.batch.observedAt,

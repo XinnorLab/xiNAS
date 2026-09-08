@@ -12,6 +12,7 @@
  * operation starts → members → replacements → progress.
  */
 
+import { correlationFields } from '../engine.js';
 import type { ChangeCtx, Producer, Row, SnapshotCtx } from '../engine.js';
 import { META_KEYS } from '../meta.js';
 import type { OperationKind, Severity } from '../types.js';
@@ -58,6 +59,12 @@ const UNHEALTHY_WORDS: ReadonlySet<string> = new Set([
   'offline',
   'unrecovered',
   'none',
+  // the parser's alternate failure spellings (lib/parse/raid.ts FAILED_STATES):
+  // known words, and each one proves a fault, not an unresolved state.
+  'broken',
+  'unusable',
+  'faulty',
+  'failed',
 ]);
 
 type Condition = 'degraded' | 'read_only' | 'offline' | 'unrecovered';
@@ -75,6 +82,19 @@ const ACTIVE_WORD: Record<OperationKind, string> = {
   reconstruction: 'reconstructing',
 };
 const MEMBER_BLOCKING_WORDS: ReadonlySet<string> = new Set([
+  'offline',
+  'reconstructing',
+  'need_recon',
+]);
+
+/**
+ * Per-device vocabulary: xiRAID Classic 4.4 AG, Showing RAID State, Table 2,
+ * row `devices` (https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html)
+ * documents exactly these four device states — narrower than the array-level
+ * `KNOWN_WORDS`, which is the vocabulary for the array's own `raw_states`.
+ */
+const MEMBER_KNOWN_WORDS: ReadonlySet<string> = new Set([
+  'online',
   'offline',
   'reconstructing',
   'need_recon',
@@ -150,19 +170,38 @@ export function arrayView(row: Row | null): ArrayView | null {
 export const isActive = (v: ArrayView, kind: OperationKind): boolean =>
   v.rawStates.includes(ACTIVE_WORD[kind]);
 
-const membersHealthy = (v: ArrayView): boolean => {
-  for (const states of v.members.values()) {
-    if (states.some((w) => MEMBER_BLOCKING_WORDS.has(w))) return false;
-  }
-  return true;
-};
+export type Health = 'healthy' | 'unhealthy' | 'unknown';
 
-export const isHealthy = (v: ArrayView): boolean =>
-  v.rawStates.includes('online') &&
-  !v.rawStates.some((w) => UNHEALTHY_WORDS.has(w)) &&
-  !isActive(v, 'initialization') &&
-  !isActive(v, 'reconstruction') &&
-  membersHealthy(v);
+/** One member's state words, judged against the four device states xiRAID documents. */
+function memberHealth(states: string[]): Health {
+  if (states.some((w) => MEMBER_BLOCKING_WORDS.has(w))) return 'unhealthy';
+  if (states.length === 0 || states.some((w) => !MEMBER_KNOWN_WORDS.has(w))) return 'unknown';
+  return states.includes('online') ? 'healthy' : 'unknown';
+}
+
+/**
+ * Tri-state health (spec §8.2). `unhealthy` needs a proving word on the
+ * array or on a member; `healthy` needs `online`, no unhealthy word, no
+ * active operation and every member proven `online`; anything the
+ * vocabulary cannot settle — an unknown array or member word, a member with
+ * no state, no member states at all for an array that has members, or no
+ * `online` word — is `unknown`. Unknown is never a completion, a failure
+ * or a recovery (AC13: missing data never becomes state).
+ */
+export function assess(v: ArrayView): Health {
+  const W = v.rawStates;
+  if (W.some((w) => UNHEALTHY_WORDS.has(w))) return 'unhealthy';
+  const members = [...v.members.values()].map(memberHealth);
+  if (members.includes('unhealthy')) return 'unhealthy';
+  if (isActive(v, 'initialization') || isActive(v, 'reconstruction')) return 'unhealthy';
+  if (W.some((w) => !KNOWN_WORDS.has(w))) return 'unknown';
+  if (members.includes('unknown')) return 'unknown';
+  if (v.memberIds.length > 0 && v.members.size === 0) return 'unknown';
+  if (!W.includes('online')) return 'unknown';
+  return 'healthy';
+}
+
+export const isHealthy = (v: ArrayView): boolean => assess(v) === 'healthy';
 
 export function conditions(v: ArrayView): Set<Condition> {
   const out = new Set<Condition>();
@@ -233,7 +272,7 @@ function onArrayChange(ctx: ChangeCtx): void {
           observedAt,
           ...(inProgress !== undefined ? { operationInProgress: inProgress } : {}),
         },
-        ...(cause !== undefined ? { cause, timeAccuracy: 'task' } : {}),
+        ...correlationFields(cause),
       });
     }
     clearArrayMeta(ctx, id);
@@ -242,6 +281,7 @@ function onArrayChange(ctx: ChangeCtx): void {
 
   // Source warnings first: an unknown word is reported once per (array, word).
   warnUnknownWords(ctx, id, cur);
+  warnStructuralGaps(ctx, id, cur);
 
   if (prev === null) {
     if (ctx.baselineDone('XiraidArray')) {
@@ -259,7 +299,7 @@ function onArrayChange(ctx: ChangeCtx): void {
           memberCount: cur.memberIds.length,
           ...(cur.sparePool !== undefined ? { sparePool: cur.sparePool } : {}),
         },
-        ...(cause !== undefined ? { cause, timeAccuracy: 'task' } : {}),
+        ...correlationFields(cause),
       });
     }
     // Baseline exceptions (spec §8.0): an already-running operation, and an
@@ -294,25 +334,40 @@ function onArrayChange(ctx: ChangeCtx): void {
     return;
   }
 
-  // 1. Operation ends.
+  // 1. Operation ends — judged by the durable op record, not by the previous
+  //    row alone, so an end left undecided by an unknown state is settled by
+  //    the first later observation the vocabulary can prove.
   for (const kind of OPERATION_KINDS) {
-    if (isActive(prev, kind) && !isActive(cur, kind)) {
-      const op = meta.get<OpMeta>(META_KEYS.raidOp(id, kind));
-      const generation = op?.generation ?? 1;
-      const healthy = isHealthy(cur);
-      ctx.emit({
-        feed: 'raid',
-        type: healthy ? 'raid.operation.completed' : 'raid.operation.failed',
-        subject,
-        args: { array: id, kind },
-        previous: projection(prev),
-        current: projection(cur),
-        operation: { kind, generation },
-        details: { array: id, kind, generation, finalStates: cur.rawStates, observedAt },
+    const op = meta.get<OpMeta>(META_KEYS.raidOp(id, kind));
+    const wasActive = isActive(prev, kind) || op?.active === true;
+    if (!wasActive || isActive(cur, kind)) continue;
+    const generation = op?.generation ?? 1;
+    const health = assess(cur);
+    if (health === 'unknown') {
+      // Not proven either way: no terminal event; the operation stays active
+      // (same generation) and its progress state is kept for a later decision.
+      if (op === null || !op.active) {
+        meta.set(META_KEYS.raidOp(id, kind), { generation, active: true } satisfies OpMeta);
+      }
+      ctx.log('warn', 'event_operation_end_undecided', {
+        array: id,
+        kind,
+        rawStates: cur.rawStates,
       });
-      meta.set(META_KEYS.raidOp(id, kind), { generation, active: false } satisfies OpMeta);
-      meta.delete(META_KEYS.progress(id, kind));
+      continue;
     }
+    ctx.emit({
+      feed: 'raid',
+      type: health === 'healthy' ? 'raid.operation.completed' : 'raid.operation.failed',
+      subject,
+      args: { array: id, kind },
+      previous: projection(prev),
+      current: projection(cur),
+      operation: { kind, generation },
+      details: { array: id, kind, generation, finalStates: cur.rawStates, observedAt },
+    });
+    meta.set(META_KEYS.raidOp(id, kind), { generation, active: false } satisfies OpMeta);
+    meta.delete(META_KEYS.progress(id, kind));
   }
 
   // 2. State conditions entered, and recovery.
@@ -350,8 +405,10 @@ function onArrayChange(ctx: ChangeCtx): void {
 
   // 3. Operation starts.
   for (const kind of OPERATION_KINDS) {
-    if (!isActive(prev, kind) && isActive(cur, kind)) {
-      const op = meta.get<OpMeta>(META_KEYS.raidOp(id, kind));
+    const op = meta.get<OpMeta>(META_KEYS.raidOp(id, kind));
+    // An operation whose end was never proven (op still active) is not a new
+    // start when its word reappears: same generation, no event.
+    if (!isActive(prev, kind) && isActive(cur, kind) && op?.active !== true) {
       const generation = (op?.generation ?? 0) + 1;
       meta.set(META_KEYS.raidOp(id, kind), { generation, active: true } satisfies OpMeta);
       meta.delete(META_KEYS.progress(id, kind));
@@ -451,8 +508,11 @@ function emitCondition(
 }
 
 function warnUnknownWords(ctx: ChangeCtx, id: string, cur: ArrayView): void {
-  const unknown = cur.rawStates.filter((w) => !KNOWN_WORDS.has(w));
-  if (unknown.length === 0) return;
+  const unknown = new Set(cur.rawStates.filter((w) => !KNOWN_WORDS.has(w)));
+  for (const states of cur.members.values()) {
+    for (const w of states) if (!MEMBER_KNOWN_WORDS.has(w)) unknown.add(w);
+  }
+  if (unknown.size === 0) return;
   const key = META_KEYS.unknownStateWarned(id);
   const warned = new Set(ctx.meta.get<string[]>(key) ?? []);
   let changed = false;
@@ -470,6 +530,25 @@ function warnUnknownWords(ctx: ChangeCtx, id: string, cur: ArrayView): void {
     });
   }
   if (changed) ctx.meta.set(key, [...warned]);
+}
+
+/**
+ * A structural gap in the source row — no member states at all for an array
+ * whose spec lists members, or a member whose state list is empty — is not
+ * an unknown word and warnUnknownWords never sees it, but it leaves the
+ * array `unknown` with no operator-visible signal. Logged (spec §8.5,
+ * docs/TODO.md), never journaled: this is a source-completeness problem,
+ * not a domain event.
+ */
+function warnStructuralGaps(ctx: ChangeCtx, id: string, cur: ArrayView): void {
+  const missing: string[] = [];
+  if (cur.memberIds.length > 0 && cur.members.size === 0) missing.push('member_states');
+  for (const [device, states] of cur.members) {
+    if (states.length === 0) missing.push(`member_states[${device}].states`);
+  }
+  if (missing.length > 0) {
+    ctx.log('warn', 'event_source_incomplete', { kind: 'XiraidArray', id, missing });
+  }
 }
 
 /**
@@ -544,6 +623,32 @@ function clearArrayMeta(ctx: ChangeCtx | SnapshotCtx, id: string): void {
   ctx.meta.delete(META_KEYS.unknownStateWarned(id));
 }
 
+type RestoreResult =
+  | 'healthy'
+  | 'read_only'
+  | 'offline'
+  | 'unrecovered'
+  | 'degraded'
+  | 'unhealthy'
+  | 'running'
+  | 'unknown'
+  | 'not_restored';
+
+/** Worst proven fact first; `healthy` only when `assess` proves it (spec §8.2). */
+function restoreResult(v: ArrayView | null): RestoreResult {
+  if (v === null || v.rawStates.includes('none')) return 'not_restored';
+  const W = v.rawStates;
+  if (W.includes('offline')) return 'offline';
+  if (W.includes('unrecovered')) return 'unrecovered';
+  if (W.includes('read_only')) return 'read_only';
+  if (W.includes('degraded') || W.includes('need_recon')) return 'degraded';
+  if (W.some((w) => UNHEALTHY_WORDS.has(w))) return 'unhealthy';
+  if (OPERATION_KINDS.some((k) => isActive(v, k))) return 'running';
+  const health = assess(v);
+  if (health === 'healthy') return 'healthy';
+  return health === 'unhealthy' ? 'unhealthy' : 'unknown';
+}
+
 /** Restore outcomes on the first complete XiraidArray snapshot after a reboot (spec §8.2). */
 function onArraySnapshot(ctx: SnapshotCtx): void {
   const pending = ctx.meta.get<RestorePending>(META_KEYS.restorePending);
@@ -554,11 +659,7 @@ function onArraySnapshot(ctx: SnapshotCtx): void {
       ? ctx.kv.get<Row>(`/xinas/v1/observed/XiraidArray/${name}`)
       : null;
     const v = row === null ? null : arrayView(row.value);
-    let result: 'healthy' | 'read_only' | 'offline' | 'not_restored';
-    if (v === null || v.rawStates.includes('none')) result = 'not_restored';
-    else if (v.rawStates.includes('offline')) result = 'offline';
-    else if (v.rawStates.includes('read_only')) result = 'read_only';
-    else result = 'healthy';
+    const result = restoreResult(v);
     ctx.emit({
       feed: 'raid',
       type: result === 'not_restored' ? 'raid.restore.failed' : 'raid.restore.completed',

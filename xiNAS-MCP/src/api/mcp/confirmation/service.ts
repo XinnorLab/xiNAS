@@ -33,12 +33,11 @@ import {
 } from './state.js';
 import type { BindingKey, ConfirmationStore } from './store.js';
 import {
-  ACK_DATA_LOSS,
-  ACK_NO_ROLLBACK,
   type ConfirmationMode,
   type ConfirmationRecord,
   MAX_ROUNDS,
   REQUEST_KEY,
+  requiredAcknowledgement,
 } from './types.js';
 
 export interface McpClientInfo {
@@ -818,12 +817,7 @@ export class ConfirmationService {
           { reason: 'form_mode' },
         );
       }
-      const needed =
-        record.rollback_model === 'unsupported' || record.risk_level === 'unsupported_rollback'
-          ? ACK_NO_ROLLBACK
-          : record.risk_level === 'destructive'
-            ? ACK_DATA_LOSS
-            : undefined;
+      const needed = requiredAcknowledgement(record);
       if (needed !== undefined && input.acknowledge !== needed) {
         throw new ApiException('INVALID_ARGUMENT', `approval requires acknowledge: "${needed}"`, {
           required_acknowledge: needed,

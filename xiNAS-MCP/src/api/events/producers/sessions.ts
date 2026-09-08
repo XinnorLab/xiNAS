@@ -5,9 +5,11 @@
  *
  * Debounce: a row that appears (after the kind's baseline) or vanishes
  * (a reconcile delete) becomes a *candidate*; the next complete `NfsSession`
- * snapshot from a LATER batch confirms or cancels it. A batch without a
- * session snapshot — the helper failed, or another collector's batch —
- * touches no candidate, so a helper outage never reads as a disconnect.
+ * snapshot from a LATER batch (a later sequence of the same engine instance,
+ * or the first snapshot after an api restart) confirms or cancels it. A
+ * batch without a session snapshot — the helper failed, or another
+ * collector's batch — touches no candidate, so a helper outage never reads
+ * as a disconnect.
  *
  * Privacy (SUBS-SESSION-004): only the client address, export path,
  * protocol version and lock count leave this module — never the hostname
@@ -26,7 +28,9 @@ interface SessionView {
 
 interface Candidate {
   kind: 'connect' | 'disconnect';
-  /** The batch sequence that created the candidate; a later batch confirms it. */
+  /** The engine instance that created the candidate; absent on rows persisted before epochs existed. */
+  epoch?: string;
+  /** That instance's batch sequence; a later batch of the same instance, or any batch of another, confirms. */
   seq: number;
   view: SessionView;
 }
@@ -92,7 +96,12 @@ function onSessionChange(ctx: ChangeCtx): void {
       // Gone before it was ever confirmed: never reported at all.
       delete candidates[id];
     } else {
-      candidates[id] = { kind: 'disconnect', seq: ctx.batch.seq, view: prev };
+      candidates[id] = {
+        kind: 'disconnect',
+        epoch: ctx.batch.epoch,
+        seq: ctx.batch.seq,
+        view: prev,
+      };
     }
     saveCandidates(ctx, candidates);
     ctx.meta.delete(META_KEYS.lockThreshold(id));
@@ -108,7 +117,7 @@ function onSessionChange(ctx: ChangeCtx): void {
       return;
     }
     if (!ctx.baselineDone('NfsSession')) return;
-    candidates[id] = { kind: 'connect', seq: ctx.batch.seq, view: cur };
+    candidates[id] = { kind: 'connect', epoch: ctx.batch.epoch, seq: ctx.batch.seq, view: cur };
     saveCandidates(ctx, candidates);
     return;
   }
@@ -163,7 +172,10 @@ function onSessionSnapshot(ctx: SnapshotCtx): void {
   const candidates = loadCandidates(ctx);
   let changed = false;
   for (const [id, c] of Object.entries(candidates)) {
-    if (c.seq >= ctx.batch.seq) continue; // same batch: not a second observation yet
+    // Same batch of the same engine instance: not a second observation yet.
+    // A candidate from another instance (the api restarted) or without an
+    // epoch (persisted before epochs existed) is judged by this snapshot.
+    if (c.epoch === ctx.batch.epoch && c.seq >= ctx.batch.seq) continue;
     const present = ctx.present.has(id);
     if (c.kind === 'connect' && present) {
       ctx.emit({

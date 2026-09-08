@@ -585,7 +585,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     name: 'mcp_confirmations.approve',
     description:
-      'Approve a pending URL-mode MCP confirmation out of band (admin; approver policy applies). Destructive records require --acknowledge "DATA MAY BE PERMANENTLY LOST"; unsupported-rollback records require "ROLLBACK IS NOT SUPPORTED".',
+      'Approve a pending URL-mode MCP confirmation out of band (admin; approver policy applies). Destructive records require --acknowledge "DATA MAY BE PERMANENTLY LOST" (also when their rollback is unsupported); records that are only rollback-unsupported require "ROLLBACK IS NOT SUPPORTED".',
     method: 'POST',
     path: '/mcp/confirmations/{id}/approve',
     input_schema: {

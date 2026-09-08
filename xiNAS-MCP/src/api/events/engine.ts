@@ -23,6 +23,7 @@
  * batch: one row, its own transaction.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { Database, Statement } from 'better-sqlite3';
 import type { Kind } from '../../agent/collectors/base.js';
 import { type EventSpec, buildEvent } from './envelope.js';
@@ -63,6 +64,14 @@ export interface EngineConfig {
 export interface Cause {
   taskId: string;
   operationId?: string;
+  /**
+   * Epoch ms of the task transition this correlation vouches for: the
+   * terminal transition (`tasks.terminal_at`) of a task that has finished.
+   * Absent for a task that is still `running` — `updated_at` moves with
+   * every progress patch and is not a transition time, and the api never
+   * substitutes its own clock (S17 §6.3).
+   */
+  occurredAtMs?: number;
 }
 /**
  * Durable task correlation (S4 amendment): kinds + subject identity, never
@@ -100,12 +109,36 @@ export type EmitSpec = Omit<EventSpec, 'detectedAtMs' | 'source'> & {
 };
 export type Emit = (spec: EmitSpec) => void;
 
+/**
+ * The envelope fields a correlation contributes (S17 §6.3): `cause` always
+ * (identifiers only); `timeAccuracy: 'task'` plus `occurredAtMs` only when
+ * the lookup vouched for a transition time. Otherwise the event stays
+ * `observed` and still names the task.
+ */
+export function correlationFields(
+  cause: Cause | undefined,
+): Pick<EmitSpec, 'cause' | 'timeAccuracy' | 'occurredAtMs'> {
+  if (cause === undefined) return {};
+  const wire = {
+    taskId: cause.taskId,
+    ...(cause.operationId !== undefined ? { operationId: cause.operationId } : {}),
+  };
+  return cause.occurredAtMs !== undefined
+    ? { cause: wire, timeAccuracy: 'task', occurredAtMs: cause.occurredAtMs }
+    : { cause: wire };
+}
+
 export interface BatchInfo {
   observedAt: string;
   completeSnapshots: ReadonlySet<Kind>;
   detectedAtMs: number;
   /** Monotonic per engine instance; lets a producer tell "a later batch" apart. */
   seq: number;
+  /**
+   * Random per engine instance. `seq` restarts from 1 with the process, so
+   * "a later batch" is `(epoch === mine && seq > theirs) || epoch !== mine`.
+   */
+  epoch: string;
 }
 
 interface CommonCtx {
@@ -188,6 +221,7 @@ export class TransitionEngine {
   #baseline = new Map<Kind, boolean>();
   #batch: Batch | null = null;
   #seq = 0;
+  readonly #epoch = randomUUID();
 
   constructor(deps: EngineDeps, producers: Producer[] = []) {
     this.#deps = deps;
@@ -224,6 +258,7 @@ export class TransitionEngine {
         completeSnapshots: new Set(batch.completeSnapshots),
         detectedAtMs: this.#deps.now(),
         seq: ++this.#seq,
+        epoch: this.#epoch,
       },
       kv: batch.kv,
       pending: [],
@@ -416,7 +451,7 @@ export function createTaskLookup(db: Database, now: () => number = Date.now): Ta
       const placeholders = kinds.map(() => '?').join(', ');
       const statePlaceholders = states.map(() => '?').join(', ');
       stmt = db.prepare(
-        `SELECT task_id, correlation_id FROM tasks
+        `SELECT task_id, correlation_id, terminal_at FROM tasks
          WHERE kind IN (${placeholders})
            AND state IN (${statePlaceholders})
            AND updated_at >= ?
@@ -434,8 +469,12 @@ export function createTaskLookup(db: Database, now: () => number = Date.now): Ta
       now() - TASK_LOOKUP_WINDOW_MS,
       subject.kind,
       subject.id,
-    ) as { task_id: string; correlation_id: string } | undefined;
+    ) as { task_id: string; correlation_id: string; terminal_at: number | null } | undefined;
     if (row === undefined) return null;
-    return { taskId: row.task_id, operationId: row.correlation_id };
+    return {
+      taskId: row.task_id,
+      operationId: row.correlation_id,
+      ...(typeof row.terminal_at === 'number' ? { occurredAtMs: row.terminal_at } : {}),
+    };
   };
 }

@@ -52,15 +52,14 @@
  *     (`data_block`, `data2_block`) and extend the fake host's gate to also
  *     recognize the `_block` suffix (`src/agent/fs/fake-host.ts`, additive —
  *     the existing `-block` convention and Task 3's test are unchanged).
- *  2. Confirmed against the actual `ConfirmationService.operatorDecide`
- *     acknowledge table (`src/api/mcp/confirmation/service.ts`): the brief
- *     says a REST approval body of `{}` suffices because this create is
- *     "non-destructive". That table keys the required `acknowledge` phrase
- *     off `rollback_model === 'unsupported'` FIRST (before `risk_level`), and
- *     `fsCreateProvider` returns `rollback_model: 'unsupported'` for every
- *     create — force or not (S16 §9.1). So this (non-force) create's
- *     approval requires `ACK_NO_ROLLBACK` ("ROLLBACK IS NOT SUPPORTED"),
- *     exactly like the S15 suite's own `planFsCreateForce` cases.
+ *  2. Confirmed against the actual `requiredAcknowledgement()` table
+ *     (`src/api/mcp/confirmation/types.ts`, S15 §9.2): the brief says a
+ *     REST approval body of `{}` suffices because this create is
+ *     "non-destructive". That table (S15 §9.2) requires `ACK_NO_ROLLBACK`
+ *     for a record that is rollback-unsupported and not destructive;
+ *     `fsCreateProvider` returns `rollback_model: 'unsupported'` and
+ *     `risk_level: 'non_disruptive'` for a non-force create, so this
+ *     approval carries `ACK_NO_ROLLBACK`.
  *
  * Both are harness/fixture corrections to an inaccurate brief description,
  * not production defects — see the report for the full analysis.

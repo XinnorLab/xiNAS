@@ -286,6 +286,17 @@ describe.sequential('e2e: S17 operational event feeds (fixture mode + fake xiRAI
     );
 
   // Fixture writers — each one is what "the world changed" means to the agent.
+  // `devices` uses the real daemon's `[index, path, [states]]` member tuple
+  // (lib/parse/raid.ts `readMember`), not a bare path: a bare-string entry
+  // parses with no per-member state, which makes every array member's
+  // health `unknown` (memberHealth([]) === 'unknown') and no scenario here
+  // is about a member, so every member is proven `online`.
+  const memberDevices = (): Array<[number, string, string[]]> =>
+    ['/dev/nvme1n1', '/dev/nvme2n1', '/dev/nvme3n1', '/dev/nvme4n1'].map((path, index) => [
+      index,
+      path,
+      ['online'],
+    ]);
   const writeArray = (state: string[], extra: Record<string, unknown> = {}): void =>
     writeFileSync(
       join(fixtureDir, 'xiraid-state.json'),
@@ -294,7 +305,7 @@ describe.sequential('e2e: S17 operational event feeds (fixture mode + fake xiRAI
           {
             name: 'data',
             level: '6',
-            devices: ['/dev/nvme1n1', '/dev/nvme2n1', '/dev/nvme3n1', '/dev/nvme4n1'],
+            devices: memberDevices(),
             state,
             ...extra,
           },

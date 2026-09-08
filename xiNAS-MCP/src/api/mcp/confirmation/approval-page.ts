@@ -61,8 +61,9 @@ const JS = String.raw`
       .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); });
   }
   function needsPhrase(rec) {
-    if (rec.rollback_model === 'unsupported' || rec.risk_level === 'unsupported_rollback') return ACK_NO_ROLLBACK;
+    // S15 §9.2: one phrase; data loss is the worse fact and wins.
     if (rec.risk_level === 'destructive') return ACK_DATA_LOSS;
+    if (rec.rollback_model === 'unsupported' || rec.risk_level === 'unsupported_rollback') return ACK_NO_ROLLBACK;
     return null;
   }
   // F4: the plan hash covers the CANONICAL (sorted-keys) form of the diff —

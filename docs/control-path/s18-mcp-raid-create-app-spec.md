@@ -3,7 +3,7 @@
 Status: implementation specification  
 Date: 2026-09-04  
 Depends on: S3 xiRAID array create, S8 MCP catalog/dispatcher, S14 modern MCP,
-S15 MRTR confirmation
+S15 MRTR confirmation, S16 MCP Tasks
 
 ## 1. Objective
 
@@ -135,11 +135,21 @@ following hold:
 - `status.mounted !== true`;
 - `status.xiraid_membership` is absent or null;
 - its device path does not begin `/dev/xi_`;
-- it is not a drive in an observed spare pool.
+- its device path is not a drive of an observed spare pool (pool `drives`
+  are device paths, so membership is decided in the path domain; the stable
+  Disk `id` is never compared against them — `mcp-apps/inventory-facts.ts`).
 
 Disabled disks show a reason. The View MUST NOT manufacture missing identity,
 capacity, health, or eligibility facts. A refresh clears any selected disk that
-became ineligible and invalidates the current plan.
+became ineligible and invalidates the current plan. A refresh that fails on
+any of the three calls, or that succeeds with a `DEGRADED_*` warning on any of
+them, marks the inventory **not current**: the rows stay visible for reading —
+the previously displayed rows when a call failed, the rows the degraded
+refresh returned (possibly empty for the absent backend) when it succeeded
+with the warning — under a banner that names the error or warning; the
+current plan is discarded, and `Review plan` / `Request secure creation` stay
+disabled until a refresh succeeds without a blocking warning. Other warnings are displayed and
+do not block (`mcp-apps/inventory-facts.ts`).
 
 The UI displays stable Disk `id` as the selection identity and may display
 device path, model, serial, capacity, NUMA node, temperature, wear, and health
@@ -233,11 +243,26 @@ than hiding it inside the iframe.
 
 ## 8. Task progress
 
-S18 does not add a second task monitor. After a successful apply, the existing
-result returns `task_id` and the `tasks.wait` next hint. The host follows that
-hint. S17 is implemented, but MCP Apps hosts relay tool calls and results to
-a view, not `subscriptions/listen` streams, so the view keeps following the
-hint; recorded in `docs/TODO.md`.
+S18 adds no task monitor. The host executes the reviewed apply and receives
+one of two results, decided by the capabilities on its final confirmation
+retry (S16 §8 item 4), and MUST continue by the result it actually got —
+the handoff message (`handoffMessage()`, `mcp-apps/plan-facts.ts`) says so:
+
+- **Native** (`io.modelcontextprotocol/tasks` declared): `resultType:
+  "task"` with `taskId` (= the xiNAS `task_id`), `status` and
+  `pollIntervalMs` (S16 §5.1). Follow with `tasks/get` until the status is
+  terminal, then read the terminal `CallToolResult` (S16 §6.6): `completed`
+  with `isError: true` is a failed or manual-recovery task, not a created
+  array.
+- **Fallback** (no extension): `resultType: "complete"` whose text carries
+  `task_id` and `next: { tool: "tasks.wait", args: { id, timeout_s: 25 } }`
+  (S16 §12.1). Follow the hint until `state` is terminal.
+
+Both terminal outcomes report the control-path task only: the xiRAID
+initialization the array starts afterwards is a separate operation, visible
+through `arrays.get` or the `raid` / `raid/progress` feeds (S17 §8.2–§8.3),
+never inferred from the task. The view itself does not consume the S17
+feeds (`docs/TODO.md`).
 
 ## 9. Accessibility and layout
 
@@ -247,10 +272,16 @@ hint; recorded in `docs/TODO.md`.
 - The layout supports 360 px through desktop widths.
 - The View follows the host light/dark preference and does not depend on
   external fonts or images.
+- Re-rendering never steals the keyboard: the active control,
+  its caret and selection are restored after every DOM update, so
+  character-by-character typing, paste, mid-string edits, Tab order and
+  Space on a focused disk behave as in a static form.
 
 ## 10. Failure behavior
 
-- Inventory failures leave the form non-submittable and show the tool error.
+- Inventory failures and `DEGRADED_*` warnings leave the form non-submittable,
+  show the tool error or warning, and never present the last known rows as
+  current (§5).
 - Malformed tool content is treated as an error, not as an empty inventory.
 - Transport failures never clear a previously displayed server error.
 - A plan with blockers is reviewable but not applicable.
@@ -276,6 +307,8 @@ hint; recorded in `docs/TODO.md`.
     and declares no optional sandbox permission.
 12. Typecheck, lint, formatting, unit/contract tests, production build, and
     OpenAPI validation pass.
+13. The handoff arguments are exactly `{ mode, plan_id, expected_revision, idempotency_key }`, and the same arguments reach one task under both result shapes (`__tests__/api/mcp/mcp-apps-handoff.test.ts`).
+14. In a real Chromium (`__tests__/e2e/raid-create-view.test.ts`): typing, paste and mid-string edits keep focus and caret; Tab/Shift+Tab and Space work; one plan request per click; an edit marks the plan stale; a failed or degraded refresh blocks planning; a pooled disk is deselected and disabled by device path.
 
 ## 12. Non-goals
 

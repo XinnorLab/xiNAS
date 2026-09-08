@@ -11,7 +11,11 @@ import {
   ConfirmationStore,
   type CreateConfirmationInput,
 } from '../../api/mcp/confirmation/store.js';
-import { ACK_DATA_LOSS, type ConfirmationRecord } from '../../api/mcp/confirmation/types.js';
+import {
+  ACK_DATA_LOSS,
+  ACK_NO_ROLLBACK,
+  type ConfirmationRecord,
+} from '../../api/mcp/confirmation/types.js';
 import { publicPlan } from '../../api/plan/document.js';
 import { channelOf } from '../../api/routes/mcp-confirmations.js';
 import { startServer } from '../../api/server.js';
@@ -291,6 +295,46 @@ describe('mcp-confirmations routes (S15 Task 11)', () => {
       .send({ acknowledge: ACK_DATA_LOSS });
     expect(right.status).toBe(200);
     expect(right.body.result.status).toBe('approved');
+  });
+
+  it('approve: destructive with unsupported rollback needs the data-loss phrase; the rollback phrase is refused naming it (S-02)', async () => {
+    const record = seedRecord(setup, {
+      principal: 'admin:test',
+      risk_level: 'destructive',
+      rollback_model: 'unsupported',
+    });
+    const rollbackPhrase = await request(setup.app)
+      .post(`/api/v1/mcp/confirmations/${record.confirmation_id}/approve`)
+      .set('Authorization', ADMIN2_TOKEN)
+      .send({ acknowledge: ACK_NO_ROLLBACK });
+    expect(rollbackPhrase.status).toBe(400);
+    expect(rollbackPhrase.body.errors?.[0]?.details?.required_acknowledge).toBe(ACK_DATA_LOSS);
+    expect(setup.tasks.confirmations.get(record.confirmation_id)?.status).toBe('pending');
+    const right = await request(setup.app)
+      .post(`/api/v1/mcp/confirmations/${record.confirmation_id}/approve`)
+      .set('Authorization', ADMIN2_TOKEN)
+      .send({ acknowledge: ACK_DATA_LOSS });
+    expect(right.status).toBe(200);
+    expect(right.body.result.status).toBe('approved');
+  });
+
+  it('approve: a non-destructive record with unsupported rollback needs the rollback phrase', async () => {
+    const record = seedRecord(setup, {
+      principal: 'admin:test',
+      risk_level: 'non_disruptive',
+      rollback_model: 'unsupported',
+    });
+    const wrong = await request(setup.app)
+      .post(`/api/v1/mcp/confirmations/${record.confirmation_id}/approve`)
+      .set('Authorization', ADMIN2_TOKEN)
+      .send({ acknowledge: ACK_DATA_LOSS });
+    expect(wrong.status).toBe(400);
+    expect(wrong.body.errors?.[0]?.details?.required_acknowledge).toBe(ACK_NO_ROLLBACK);
+    const right = await request(setup.app)
+      .post(`/api/v1/mcp/confirmations/${record.confirmation_id}/approve`)
+      .set('Authorization', ADMIN2_TOKEN)
+      .send({ acknowledge: ACK_NO_ROLLBACK });
+    expect(right.status).toBe(200);
   });
 
   it('approve on a form record is CONFLICT form_mode; approve on a terminal record is CONFLICT not_pending', async () => {

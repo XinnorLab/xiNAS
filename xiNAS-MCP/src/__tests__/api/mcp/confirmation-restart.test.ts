@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../../../api/server.js';
-import { ACK_NO_ROLLBACK } from '../../../api/mcp/confirmation/types.js';
+import { ACK_DATA_LOSS } from '../../../api/mcp/confirmation/types.js';
 import { type MockAgentServer, seedShare, startMockAgentServer } from '../_helpers.js';
 import {
   BOTH,
@@ -250,7 +250,7 @@ describe('MCP MRTR confirmation expiry sweep — restart recovery (S15 Task 14)'
       'tok-admin2',
       'POST',
       `/mcp/confirmations/${record.confirmation_id}/approve`,
-      { acknowledge: ACK_NO_ROLLBACK },
+      { acknowledge: ACK_DATA_LOSS },
     );
     expect(approveRes.status).toBe(200);
     expect((approveRes.body.result as { status: string }).status).toBe('approved');

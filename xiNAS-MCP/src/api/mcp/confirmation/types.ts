@@ -28,6 +28,25 @@ export const REQUEST_KEY = 'confirm_apply';
 export const ACK_DATA_LOSS = 'DATA MAY BE PERMANENTLY LOST';
 export const ACK_NO_ROLLBACK = 'ROLLBACK IS NOT SUPPORTED';
 
+/**
+ * The phrase an approval must carry (S15 §9.2) — exactly one, from the
+ * exhaustive risk × rollback table. Data loss is the worse fact: a
+ * `destructive` record always requires the data-loss phrase, even when its
+ * rollback is also unsupported (the approval page's `rollback_limitation`
+ * sentence still states that). Rollback-only records require the rollback
+ * phrase; everything else needs none.
+ */
+export function requiredAcknowledgement(record: {
+  risk_level: string;
+  rollback_model: string;
+}): string | undefined {
+  if (record.risk_level === 'destructive') return ACK_DATA_LOSS;
+  if (record.risk_level === 'unsupported_rollback' || record.rollback_model === 'unsupported') {
+    return ACK_NO_ROLLBACK;
+  }
+  return undefined;
+}
+
 /** One row of mcp_confirmations (S15 §6.1). Epoch-ms timestamps; NULL columns are absent. */
 export interface ConfirmationRecord {
   confirmation_id: string;

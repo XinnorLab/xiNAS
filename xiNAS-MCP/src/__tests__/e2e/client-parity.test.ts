@@ -29,7 +29,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ACK_NO_ROLLBACK } from '../../api/mcp/confirmation/types.js';
+import { ACK_DATA_LOSS } from '../../api/mcp/confirmation/types.js';
 import { openStateStore } from '../../state/index.js';
 import { collectionNotEmpty, waitForAgentReady, waitForObservation } from './_helpers.js';
 
@@ -1150,7 +1150,7 @@ describe.sequential('e2e: S8 §7 MCP confirmation parity (S15 scenarios 7-9)', (
         'approve',
         confirmationIdA,
         '--acknowledge',
-        ACK_NO_ROLLBACK,
+        ACK_DATA_LOSS,
         '--json',
         '--token',
         MRTR_ADMIN2_TOKEN,

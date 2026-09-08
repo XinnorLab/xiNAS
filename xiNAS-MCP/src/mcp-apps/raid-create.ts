@@ -1,6 +1,20 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { type AffectedResource, affectedResourcesText } from './plan-facts.js';
+import {
+  classifyWarnings,
+  type InventoryTrust,
+  type InventoryWarning,
+  inventoryBanner,
+  isPooled,
+  pooledDevicePaths,
+  warningText,
+} from './inventory-facts.js';
+import {
+  type AffectedResource,
+  affectedResourcesText,
+  handoffArguments,
+  handoffMessage,
+} from './plan-facts.js';
 import './raid-create.css';
 
 type RaidLevel =
@@ -108,6 +122,9 @@ let busy = false;
 let statusMessage = 'Connecting to xiNAS…';
 let statusKind: 'info' | 'success' | 'error' = 'info';
 let handoffSent = false;
+let inventoryTrust: InventoryTrust = 'none';
+let inventoryDetail = '';
+let inventoryAdvisories: InventoryWarning[] = [];
 
 function textContent(result: CallToolResult): string {
   const block = result.content?.find((item) => item.type === 'text');
@@ -156,11 +173,7 @@ function formatBytes(bytes: number | undefined): string {
   return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unit]}`;
 }
 
-function poolDiskIds(): Set<string> {
-  return new Set(pools.flatMap((pool) => pool.drives ?? []));
-}
-
-function unavailableReason(disk: Disk): string | null {
+function unavailableReason(disk: Disk, pooled: Set<string>): string | null {
   const status = disk.status ?? {};
   if (status.system_disk === true) return 'System disk';
   if (status.mounted === true) return 'Mounted';
@@ -168,7 +181,7 @@ function unavailableReason(disk: Disk): string | null {
     return `Member of ${status.xiraid_membership.array_id ?? 'an array'}`;
   }
   if (status.device_path?.startsWith('/dev/xi_')) return 'xiRAID volume, not a physical disk';
-  if (poolDiskIds().has(disk.id)) return 'Assigned to a spare pool';
+  if (isPooled(disk, pooled)) return 'Assigned to a spare pool';
   if (status.safe_for_use !== true) return 'Not marked safe for use';
   return null;
 }
@@ -212,6 +225,9 @@ function fingerprint(): string {
 function validationErrors(): string[] {
   if (config === null) return ['Configuration is not loaded'];
   const errors: string[] = [];
+  if (inventoryTrust !== 'trusted') {
+    errors.push('Inventory is not current — refresh before planning.');
+  }
   const name = fieldValue('array-name');
   if (!/^[A-Za-z0-9_]{1,28}$/.test(name)) {
     errors.push('Name must use 1–28 Latin letters, digits, or underscores.');
@@ -278,11 +294,12 @@ function option(value: string | number, selectedValue: string | number): string 
 
 function diskCards(): string {
   if (disks.length === 0) return '<div class="empty">No disks were reported by xiNAS.</div>';
+  const pooled = pooledDevicePaths(pools);
   return disks
     .slice()
     .sort((a, b) => (a.status?.device_path ?? a.id).localeCompare(b.status?.device_path ?? b.id))
     .map((disk) => {
-      const reason = unavailableReason(disk);
+      const reason = unavailableReason(disk, pooled);
       const checked = selected.has(disk.id);
       const health = disk.status?.health;
       const healthLabel =
@@ -323,7 +340,7 @@ function planPanel(): string {
       <p>xiNAS will validate current disk state, topology, leases, and the exact xiRAID request before any change is allowed.</p>
     </section>`;
   }
-  const blocked = (plan.blockers?.length ?? 0) > 0;
+  const blocked = (plan.blockers?.length ?? 0) > 0 || inventoryTrust !== 'trusted';
   const stale = planFingerprint !== fingerprint();
   // `.plan-facts dd` ellipsises; the title carries the full list on hover.
   const affected = escapeHtml(affectedResourcesText(plan.affected_resources));
@@ -352,16 +369,58 @@ function planPanel(): string {
   </section>`;
 }
 
+interface FocusState {
+  selector: string;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  direction: 'forward' | 'backward' | 'none';
+}
+
+/** What the operator was doing before the DOM is replaced (S18 §6.1, §9). */
+function captureFocus(): FocusState | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !root.contains(active)) return null;
+  let selector: string | null = null;
+  if (active.id.length > 0) selector = `#${active.id}`;
+  else if (active instanceof HTMLInputElement && active.dataset.diskId !== undefined) {
+    selector = `input[data-disk-id="${active.dataset.diskId.replaceAll('"', '\\"')}"]`;
+  }
+  if (selector === null) return null;
+  const text = active instanceof HTMLInputElement && active.type === 'text';
+  return {
+    selector,
+    selectionStart: text ? active.selectionStart : null,
+    selectionEnd: text ? active.selectionEnd : null,
+    direction: text ? (active.selectionDirection ?? 'none') : 'none',
+  };
+}
+
+function restoreFocus(state: FocusState | null): void {
+  if (state === null) return;
+  const el = root.querySelector<HTMLElement>(state.selector);
+  if (el === null) return;
+  el.focus({ preventScroll: true });
+  if (
+    el instanceof HTMLInputElement &&
+    state.selectionStart !== null &&
+    state.selectionEnd !== null
+  ) {
+    el.setSelectionRange(state.selectionStart, state.selectionEnd, state.direction);
+  }
+}
+
 function render(): void {
   if (config === null) {
     root.innerHTML = `<div class="loading-shell"><div class="spinner"></div><h1>xiNAS RAID Create</h1><p>${escapeHtml(statusMessage)}</p></div>`;
     return;
   }
+  const focus = captureFocus();
   const level = currentLevel();
   const rule = config.constraints[level];
   const errors = validationErrors();
   const estimate = capacityEstimate();
-  const availableCount = disks.filter((disk) => unavailableReason(disk) === null).length;
+  const pooled = pooledDevicePaths(pools);
+  const availableCount = disks.filter((disk) => unavailableReason(disk, pooled) === null).length;
   const existingName = fieldValue('array-name');
   const existingStrip = fieldValue('strip-size') || String(config.defaults.strip_size_kib);
   const existingBlock = fieldValue('block-size') || String(config.defaults.block_size);
@@ -369,7 +428,8 @@ function render(): void {
   const existingGroup = fieldValue('group-size') || String(rule.group_size_min);
   const existingSynd = fieldValue('synd-count') || String(rule.synd_cnt_min);
 
-  root.innerHTML = `<div class="app-shell">
+  const banner = inventoryBanner(inventoryTrust, inventoryDetail);
+  root.innerHTML = `<div class="app-shell" data-inventory-trust="${inventoryTrust}">
     <header class="hero">
       <div class="brand"><span class="brand-mark">xi</span><span>NAS</span></div>
       <div class="hero-copy"><span class="eyebrow">MCP APP · STORAGE CONTROL</span><h1>Create a xiRAID array</h1><p>Configure topology, select physical disks, and pass an authoritative plan to secure confirmation.</p></div>
@@ -377,13 +437,15 @@ function render(): void {
     </header>
 
     <div class="step-line"><span class="active">01 Configure</span><span class="active">02 Select drives</span><span class="${plan ? 'active' : ''}">03 Review & confirm</span></div>
+    ${banner ? `<div class="notice error" id="inventory-banner" role="alert">${escapeHtml(banner)}</div>` : ''}
+    ${inventoryAdvisories.length > 0 ? `<div class="notice warning" id="inventory-advisories">${inventoryAdvisories.map((w) => escapeHtml(warningText(w))).join('<br />')}</div>` : ''}
 
     <div class="workspace">
       <div class="form-column">
         <section class="panel">
           <div class="section-head"><div><span class="eyebrow">01 · CONFIGURE</span><h2>Array geometry</h2></div><span class="pill">Plan first</span></div>
           <div class="form-grid">
-            <label class="field wide"><span>Array name</span><input id="array-name" value="${escapeHtml(existingName)}" maxlength="28" placeholder="e.g. data_01" autocomplete="off" /><small>1–28 letters, digits, underscore</small></label>
+            <label class="field wide"><span>Array name</span><input id="array-name" type="text" value="${escapeHtml(existingName)}" maxlength="28" placeholder="e.g. data_01" autocomplete="off" /><small>1–28 letters, digits, underscore</small></label>
             <label class="field"><span>RAID level</span><select id="raid-level">${config.levels.map((value) => option(value, level)).join('')}</select><small>Minimum ${rule.min_drives} disks</small></label>
             <label class="field"><span>Strip size</span><select id="strip-size">${config.strip_sizes_kib.map((value) => option(value, existingStrip)).join('')}</select><small>KiB per member strip</small></label>
             <label class="field"><span>Block size</span><select id="block-size">${config.block_sizes.map((value) => option(value, existingBlock)).join('')}</select><small>Bytes</small></label>
@@ -434,6 +496,7 @@ function render(): void {
   </div>`;
 
   bindEvents();
+  restoreFocus(focus);
 }
 
 function invalidatePlan(): void {
@@ -492,20 +555,41 @@ async function refreshInventory(): Promise<void> {
     disks = diskPayload.result;
     arrays = arrayPayload.result;
     pools = poolPayload.result;
+    const pooled = pooledDevicePaths(pools);
     selected = new Set(
       [...selected].filter((id) => {
         const disk = disks.find((candidate) => candidate.id === id);
-        return disk !== undefined && unavailableReason(disk) === null;
+        return disk !== undefined && unavailableReason(disk, pooled) === null;
       }),
     );
     plan = null;
     planFingerprint = '';
     handoffSent = false;
-    statusMessage = `Inventory refreshed · ${disks.length} disks observed`;
-    statusKind = 'success';
+    const all = classifyWarnings([
+      ...(diskPayload.warnings ?? []),
+      ...(arrayPayload.warnings ?? []),
+      ...(poolPayload.warnings ?? []),
+    ]);
+    inventoryAdvisories = all.advisory;
+    if (all.blocking.length > 0) {
+      inventoryTrust = 'degraded';
+      inventoryDetail = all.blocking.map(warningText).join('; ');
+      statusMessage = `Inventory refreshed with warnings · ${disks.length} disks observed`;
+      statusKind = 'error';
+    } else {
+      inventoryTrust = 'trusted';
+      inventoryDetail = '';
+      statusMessage = `Inventory refreshed · ${disks.length} disks observed`;
+      statusKind = 'success';
+    }
   } catch (error) {
     statusMessage = error instanceof Error ? error.message : String(error);
     statusKind = 'error';
+    inventoryTrust = 'failed';
+    inventoryDetail = statusMessage;
+    plan = null;
+    planFingerprint = '';
+    handoffSent = false;
   } finally {
     busy = false;
     render();
@@ -513,7 +597,7 @@ async function refreshInventory(): Promise<void> {
 }
 
 async function requestPlan(): Promise<void> {
-  if (config === null || validationErrors().length > 0) return;
+  if (config === null || validationErrors().length > 0 || inventoryTrust !== 'trusted') return;
   busy = true;
   statusMessage = 'xiNAS is validating the plan…';
   statusKind = 'info';
@@ -545,24 +629,14 @@ async function requestPlan(): Promise<void> {
 
 async function requestSecureApply(): Promise<void> {
   if (config === null || plan === null || planFingerprint !== fingerprint()) return;
+  if (inventoryTrust !== 'trusted') return;
   if ((plan.blockers?.length ?? 0) > 0) return;
   busy = true;
   statusMessage = 'Passing the reviewed plan to the secure host workflow…';
   statusKind = 'info';
   render();
-  const applyArguments = {
-    mode: 'apply',
-    plan_id: plan.plan_id,
-    expected_revision: plan.state_revision_expected ?? 0,
-    idempotency_key: crypto.randomUUID(),
-  };
-  const message = [
-    'I reviewed the xiNAS RAID creation plan in the MCP App and request secure execution.',
-    `Call ${config.tools.create} with exactly these arguments:`,
-    JSON.stringify(applyArguments, null, 2),
-    'Continue through the existing MRTR confirmation flow. Do not bypass confirmation and do not re-plan unless the server reports that this plan is stale.',
-    `After apply, follow ${config.tools.task_wait} until the task reaches a terminal state.`,
-  ].join('\n\n');
+  const applyArguments = handoffArguments(plan, crypto.randomUUID());
+  const message = handoffMessage(config.tools, applyArguments);
   try {
     const response = await app.sendMessage({
       role: 'user',

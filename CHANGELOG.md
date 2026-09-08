@@ -8,6 +8,35 @@ supported source for installing and updating xiNAS.
 
 ## [Unreleased]
 
+### Fixed
+
+- **S17 event producers no longer turn missing data into state.** An
+  unknown xiRAID array or member word neither completes nor fails an
+  initialization/reconstruction (the operation stays active until a proven
+  state settles it) and never reports an array restored `healthy` after a
+  reboot (`degraded`, `running`, `unknown`, `unrecovered`, `unhealthy` are
+  named); a `Filesystem` row without `effective_mount_options` keeps the
+  last proven NFS backing state instead of clearing a read-only fault; an
+  RDMA link reading `unknown` no longer counts as down; session
+  connect/disconnect candidates are confirmed by the first complete
+  snapshot after an api restart; `timeAccuracy: task` is set only with the
+  task's terminal transition time.
+- **MCP confirmation acknowledgement precedence.** A destructive record
+  whose rollback is also unsupported requires `DATA MAY BE PERMANENTLY
+  LOST` (it accepted `ROLLBACK IS NOT SUPPORTED` before); one table drives
+  the service, the approval page, `xinasctl` and `api-v1.yaml`.
+- **RAID Create App.** Typing into the array name keeps focus and caret; a
+  failed or `DEGRADED_*` inventory refresh blocks planning and handoff and
+  keeps the old rows visible as not current; spare-pool drives are excluded
+  by device path; the handoff message tells the host to follow either the
+  native task handle or the `tasks.wait` fallback. A Playwright/Chromium
+  suite now runs in `test:e2e`.
+- **Specs.** S15 §3.5 names the two MRTR trust models (form: host-mediated;
+  url: server-verified distinct credential) instead of one guarantee; S17
+  §8.2/§8.5 carry the tri-state rules; S18 §8 depends on S16.
+
+Requires-Rebuild: xinas_node_build
+
 ## [3.13.2] - 2026-09-07
 
 Requires-Rebuild: doca_ofed

@@ -648,6 +648,11 @@ pre {
   background: var(--warning-soft);
 }
 
+.notice.error {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
 .security-note {
   margin: 9px 3px 0;
   text-align: center;

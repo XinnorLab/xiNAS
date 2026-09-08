@@ -603,4 +603,39 @@ describe('approval page — path and render edges (A9)', () => {
     expect(status).toContain('503');
     expect(status).not.toBe('Network error.');
   });
+
+  it('destructive with unsupported rollback needs the data-loss phrase, not the rollback phrase (S-02)', async () => {
+    const source = (await request(setup.app).get('/mcp/approvals/assets/app.js')).text;
+    const record = { ...pageRecord(), rollback_model: 'unsupported' };
+    const drive = driveScript(source, '/mcp/approvals/conf-9', (_url, init) => {
+      const method = init.method ?? 'GET';
+      if (method === 'GET') {
+        return { ok: true, status: 200, json: () => Promise.resolve({ result: record }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ result: { ...record, status: 'approved' } }),
+      };
+    });
+    drive.elements.token.value = 'tok';
+    drive.elements['login-form'].listeners.submit?.[0]?.({ preventDefault: () => {} });
+    await flush();
+
+    // The rollback phrase is refused even though the record's rollback is
+    // unsupported: destructive wins (S15 §9.2).
+    drive.elements.reviewed.checked = true;
+    drive.elements.phrase.value = 'ROLLBACK IS NOT SUPPORTED';
+    drive.elements.approve.listeners.click?.[0]?.();
+    await flush();
+    expect(drive.elements.status.textContent).toBe('The acknowledgement phrase does not match.');
+    expect(drive.fetchLog.some((c) => c.method === 'POST')).toBe(false);
+
+    drive.elements.phrase.value = 'DATA MAY BE PERMANENTLY LOST';
+    drive.elements.approve.listeners.click?.[0]?.();
+    await flush();
+    const postCall = drive.fetchLog.find((c) => c.method === 'POST');
+    expect(postCall).toBeDefined();
+    expect(JSON.parse(postCall?.body as string).acknowledge).toBe('DATA MAY BE PERMANENTLY LOST');
+  });
 });

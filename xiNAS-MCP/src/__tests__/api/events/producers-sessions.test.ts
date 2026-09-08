@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { TransitionEngine } from '../../../api/events/engine.js';
+import { META_KEYS } from '../../../api/events/meta.js';
 import { sessionsProducer } from '../../../api/events/producers/sessions.js';
 import { type Harness, OBSERVED_AT, type Row, makeHarness, types } from './_engine-harness.js';
 
@@ -102,6 +104,80 @@ describe('NFS sessions producer (S17 §8.5, D-20)', () => {
       ).toEqual([]);
       ev = h.step('NfsSession', ID, session({ locks: 60 }), session({ locks: 49 }));
       expect(types(ev)).toEqual(['nfs.session.lock_threshold_cleared']);
+    });
+  });
+
+  describe('api restart (I-03)', () => {
+    /** A second engine over the SAME journal/db, as a restarted api would build. */
+    function restarted(): (present: string[] | null) => number {
+      const engine = new TransitionEngine(
+        {
+          journal: h.journal,
+          db: h.db,
+          controllerId: h.engine.controllerId,
+          config: h.engine.config,
+          now: () => h.clock.now,
+        },
+        [sessionsProducer],
+      );
+      return (present) =>
+        h.db.transaction(() => {
+          engine.begin({
+            observedAt: OBSERVED_AT,
+            completeSnapshots: present === null ? ['Filesystem'] : ['NfsSession'],
+            kv: h.kv,
+          });
+          if (present !== null) engine.onSnapshot('NfsSession', new Set(present));
+          return engine.commit().count;
+        })();
+    }
+
+    it('confirms a persisted connect candidate on the first complete snapshot after a restart', () => {
+      for (let i = 0; i < 12; i++) h.batch(() => {}); // the old process ran for a while
+      h.step('NfsSession', ID, null, session(), { present: [ID] });
+      const snapshot = restarted();
+      expect(snapshot(null)).toBe(0); // a batch without a session snapshot touches nothing
+      expect(snapshot([ID])).toBe(1);
+      expect(types(h.journal.listAfter('nfs/sessions', 0, 10))).toEqual(['nfs.session.connected']);
+      expect(snapshot([ID])).toBe(0); // confirmed exactly once
+      expect(h.journal.metaGet(META_KEYS.sessionCandidates)).toBeNull();
+    });
+
+    it('cancels a persisted disconnect candidate when the first snapshot after a restart still shows the session', () => {
+      h.step('NfsSession', ID, null, session(), { present: [ID] });
+      h.snapshot('NfsSession', [ID]);
+      h.step('NfsSession', ID, session(), null, { present: [] });
+      const snapshot = restarted();
+      expect(snapshot([ID])).toBe(0);
+      expect(h.journal.metaGet(META_KEYS.sessionCandidates)).toBeNull();
+      expect(types(h.journal.listAfter('nfs/sessions', 0, 10))).toEqual(['nfs.session.connected']);
+    });
+
+    it('confirms a persisted disconnect candidate when the first snapshot after a restart lacks the session', () => {
+      h.step('NfsSession', ID, null, session(), { present: [ID] });
+      h.snapshot('NfsSession', [ID]);
+      h.step('NfsSession', ID, session(), null, { present: [] });
+      expect(restarted()([])).toBe(1);
+      expect(types(h.journal.listAfter('nfs/sessions', 0, 10))).toEqual([
+        'nfs.session.connected',
+        'nfs.session.disconnected',
+      ]);
+    });
+
+    it('a candidate persisted before epochs existed is confirmed by the next complete snapshot', () => {
+      h.journal.metaSet(META_KEYS.sessionCandidates, {
+        [ID]: {
+          kind: 'connect',
+          seq: 999,
+          view: {
+            clientAddr: '10.0.0.1',
+            exportPath: '/srv/data',
+            protoVersion: 'v4.1',
+            lockedFiles: 0,
+          },
+        },
+      });
+      expect(types(h.snapshot('NfsSession', [ID]))).toEqual(['nfs.session.connected']);
     });
   });
 });
