@@ -79,6 +79,11 @@ npm run build && npm run test:e2e
   the tests spawn `dist/api-server.js` and `dist/agent-server.js`, and
   `dist/` is untracked, so an unbuilt tree tests stale or absent code.
   The suite takes ~55 s.
+- **Run the TypeScript suite on Node 20** (`xiNAS-MCP/.nvmrc`; CI's
+  major). `package.json` allows `>=20`, but better-sqlite3's worker threads
+  crash under Node 24/25 on macOS (`RemoveEnvironmentCleanupHook`), which
+  reads as random unit failures. The RAID Create browser suite in
+  `test:e2e` needs `npm run test:e2e:browsers` once per machine.
 
 Dev dependencies: `pip install -e '.[dev]'`.
 
