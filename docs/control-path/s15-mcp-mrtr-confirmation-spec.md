@@ -202,43 +202,76 @@ enforcement point, and this one is a courtesy.
 
 ### 3.5 Security boundary (review P0)
 
-What MRTR proves is that **a credential other than the requesting MCP
-client's accepted this exact plan**. It cannot prove more than the node's
-own trust model allows:
+What MRTR proves depends on the mode. The two modes rest on two different
+trust models, and neither is "a human is proven to have clicked" — each
+names the party the server trusts:
 
-- **A bearer token is, by default, a REST credential as well as an MCP
-  one.** `middleware/auth.ts` and `transport.ts` `resolveIdentity()` read
-  the same `config.tokens` table, so an agent holding a token with no
-  `surface` key (`surface: any`, the default, and what every token minted
-  before that key existed means) can send the identical apply to
-  `POST /api/v1/…` and get it applied with **no confirmation at all**:
-  `client_type` is then `rest`, and the MRTR gate keys on `client_type`
-  being `mcp`. MRTR therefore constrains the **path**, not the principal.
-  The guarantee below holds for a bearer-only agent **only when its token
-  is configured `surface: mcp`** (§13), which makes `/api/v1` refuse it
-  with `PERMISSION_DENIED` / `details.reason: 'token_surface'`. Scope
-  every agent token that way; the default is left permissive so an
-  existing deployment does not break on upgrade, not because it is safe.
-- With that scoping in place, the guarantee holds for an agent that
-  reaches the node **only through the MCP endpoint** (a `surface: mcp`
-  bearer, or `xinas-mcp-stdio` run by an account that is not root and not
-  in `xinas-admin`). Such an agent cannot read `config.json`, the key ring
-  or the SQLite store, cannot call `xinasctl` over the UDS, and cannot
-  approve.
-- An agent that holds **root, or membership of `xinas-admin`, on the
-  node** is outside the boundary: it can read every bearer token, edit the
-  database, the config or the api code, and approve anything. No setting
-  in this spec changes that. For such deployments the approval must be
-  performed **off the agent-controlled node** — the HTTPS approval page
-  opened from another machine with a distinct admin credential — and the
-  MCP surface must not be reachable as root.
-- UDS peer-trust approval (`xinasctl mcp_confirmations approve …` as root
-  or `xinas-admin`) is therefore **break-glass**: disabled by default
-  (`allow_uds_approval: false`, §9.2), enabled only deliberately, and
-  audited as its own event (`break_glass_used`, §12.1) whenever used.
-- A distinct bearer token is a distinct *credential*, not proof of a
-  distinct *person* (D-02). Operators who need that assurance keep the
-  approving token off the machines the agent can read.
+- **Form mode** (`non_disruptive` / `changing_access` with a supported
+  rollback, §3.2) trusts the **MCP host** — the application that renders
+  the elicitation dialog (Claude Code, Codex, …) — to show the generated
+  message (§10.1) to its user and to return that user's decision. The
+  server verifies only that the `ElicitResult` came back with an intact
+  `requestState` bound to the same principal, tool, arguments, plan,
+  revision and key (§7), and that the record is still pending; the
+  approver it records is that same principal (`approval_channel:
+  mcp_form`, §8.3). A client that controls its own MCP messages can
+  therefore fabricate an `accept`: **form mode does not resist a fully
+  agent-controlled client.** What it guarantees is that nothing is applied
+  without a round trip the host can display, log and refuse, and that a
+  replayed, tampered or re-targeted answer is rejected (§7.3–§7.5). It is
+  the right mode for an agent that reaches xiNAS through a host it does
+  not control, which is the deployment MRTR-FORM-001…006 target.
+- **URL mode** (`destructive`, `unsupported_rollback`, `rollback_model:
+  unsupported`) trusts **the server's own record**: the apply proceeds
+  only when a decision written by the approval routes exists (§9.1),
+  taken under `approver_policy` (default `distinct_principal`: an `admin`
+  credential other than the requester's, §9.2), and the client's `accept`
+  is only consent to open the page (§4.4, V-07). This is the mode that
+  proves that **a credential other than the requesting MCP client's
+  accepted this exact plan**. It cannot prove more than the node's own
+  trust model allows:
+  - **A bearer token is, by default, a REST credential as well as an MCP
+    one.** `middleware/auth.ts` and `transport.ts` `resolveIdentity()` read
+    the same `config.tokens` table, so an agent holding a token with no
+    `surface` key (`surface: any`, the default, and what every token minted
+    before that key existed means) can send the identical apply to
+    `POST /api/v1/…` and get it applied with **no confirmation at all**:
+    `client_type` is then `rest`, and the MRTR gate keys on `client_type`
+    being `mcp`. MRTR therefore constrains the **path**, not the principal.
+    The guarantee below holds for a bearer-only agent **only when its token
+    is configured `surface: mcp`** (§13), which makes `/api/v1` refuse it
+    with `PERMISSION_DENIED` / `details.reason: 'token_surface'`. Scope
+    every agent token that way; the default is left permissive so an
+    existing deployment does not break on upgrade, not because it is safe.
+  - With that scoping in place, the guarantee holds for an agent that
+    reaches the node **only through the MCP endpoint** (a `surface: mcp`
+    bearer, or `xinas-mcp-stdio` run by an account that is not root and not
+    in `xinas-admin`). Such an agent cannot read `config.json`, the key ring
+    or the SQLite store, cannot call `xinasctl` over the UDS, and cannot
+    approve.
+  - An agent that holds **root, or membership of `xinas-admin`, on the
+    node** is outside the boundary: it can read every bearer token, edit the
+    database, the config or the api code, and approve anything. No setting
+    in this spec changes that. For such deployments the approval must be
+    performed **off the agent-controlled node** — the HTTPS approval page
+    opened from another machine with a distinct admin credential — and the
+    MCP surface must not be reachable as root.
+  - UDS peer-trust approval (`xinasctl mcp_confirmations approve …` as root
+    or `xinas-admin`) is therefore **break-glass**: disabled by default
+    (`allow_uds_approval: false`, §9.2), enabled only deliberately, and
+    audited as its own event (`break_glass_used`, §12.1) whenever used.
+  - A distinct bearer token is a distinct *credential*, not proof of a
+    distinct *person* (D-02). Operators who need that assurance keep the
+    approving token off the machines the agent can read.
+
+**Policy note (report S-01).** Whether *every* apply, including a
+non-disruptive one, must resist an agent that controls its own client is
+a product decision this spec does not make. Answering "yes" means
+replacing form mode with url mode for every plan (or an operator switch
+to that effect) and is recorded as an open question in §18; until it is
+decided, the guarantee claimed for form mode is the host-mediated one
+above, and no test or sentence in this spec should be read as claiming
+more. Acceptance criterion 3 (§16) is a statement about url mode.
 
 ---
 
@@ -1579,3 +1612,10 @@ against the real client; until then these are **targets**, not claims.
 - **Migration on a busy node:** `006` is additive (two nullable columns,
   one new table); plans made before it cannot be confirmed over MCP and
   say so.
+- **Form-mode trust in the host (open question, S-01):** form mode
+  accepts the host's elicitation result on the requester's own principal.
+  A deployment whose agent controls its host gets no independent
+  confirmation for non-disruptive and access-changing applies. If that
+  deployment must be supported, the fix is a policy knob that sends every
+  plan to url mode (`mcp.confirmation.min_mode: url`, not implemented),
+  not a wording change — decide it explicitly before claiming it.
