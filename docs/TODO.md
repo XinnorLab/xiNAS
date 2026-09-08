@@ -21,6 +21,31 @@ deferred and the change that deferred it.
 
 ---
 
+## MCP — S17 incomplete-source observations are logged, not journaled
+
+*Deferred 2026-09-08, from the S15–S18 validation remediation
+(`docs/superpowers/plans/2026-09-08-s15-s18-validation-remediation.md`, Task 4).*
+
+**What is missing.** A journaled signal for an observation row that lacks a
+field a producer rule needs (a `Filesystem` without
+`effective_mount_options`, an `NfsProfile` without `rdma_listening`, an
+RDMA link reading `unknown`), the way `raid.source.unknown_state` reports a
+RAID word outside the vocabulary.
+
+**What the code does instead.** The producer keeps its last proven state
+and logs `event_source_incomplete` (`{ kind, id, missing, kept }`) through
+the engine log; nothing reaches the feeds, so a client cannot subscribe to
+it.
+
+**Why it was cut.** A new event family is a closed-taxonomy change (§6.4,
+§6.5, `producers` block, contract fixtures) with no consumer yet; the
+domain feeds must not carry a non-domain event to fake one.
+
+**What done looks like.** Either a `*.source.incomplete` family per feed
+(warning, `details: { kind, id, missing }`, listed under `producers`) or a
+counter on the S17 metrics registry once the `RegistryMetrics` adapter
+lands, plus the log line removed.
+
 ## doca_ofed — DOCA-Host 3.5.0 (and later) is published but not validated on xiNAS hardware
 
 *Deferred 2026-09-07 by the change that pinned `doca_version` to `3.4.0`

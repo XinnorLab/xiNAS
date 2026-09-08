@@ -48,6 +48,18 @@ const profileRow = (listening: boolean): Row => ({
   status: { rdma_listening: listening, rdma_port: 20049, observed_at: OBSERVED_AT },
 });
 
+/** The same row with `effective_mount_options` absent (the collector could not read them). */
+const fsRowNoOptions = (id: string, mountpoint: string, o: { mounted?: boolean } = {}): Row => {
+  const row = fsRow(id, mountpoint, o);
+  delete (row.status as Record<string, unknown>).effective_mount_options;
+  return row;
+};
+const profileRowNoListener = (): Row => ({
+  kind: 'NfsProfile',
+  id: 'default',
+  status: { rdma_port: 20049, observed_at: OBSERVED_AT },
+});
+
 const ifaceRow = (id: string, rdma: 'up' | 'down' | 'unknown', capable = true): Row => ({
   kind: 'NetworkInterface',
   id,
@@ -294,6 +306,88 @@ describe('NFS producer (S17 §8.5)', () => {
       );
       expect(types(ev)).toEqual(['nfs.export.backing_recovered']);
     });
+
+    it('missing effective_mount_options keeps the last proven state: no false recovery after a read-only fault (I-02)', () => {
+      const id = 'srv-data2.mount';
+      let ev = h.step(
+        'Filesystem',
+        id,
+        fsRow(id, '/srv/data2'),
+        fsRow(id, '/srv/data2', { ro: true }),
+      );
+      expect(types(ev)).toEqual(['nfs.export.backing_unavailable']);
+      ev = h.step(
+        'Filesystem',
+        id,
+        fsRow(id, '/srv/data2', { ro: true }),
+        fsRowNoOptions(id, '/srv/data2'),
+      );
+      expect(types(ev)).toEqual([]);
+      expect(h.journal.metaGet('backing_unavailable:srv/data2')).toBe(true);
+      ev = h.step('Filesystem', id, fsRowNoOptions(id, '/srv/data2'), fsRow(id, '/srv/data2'));
+      expect(types(ev)).toEqual(['nfs.export.backing_recovered']);
+    });
+
+    it('missing fields while available are silent; a missing mounted flag is unknown too', () => {
+      const id = 'srv-data2.mount';
+      expect(
+        types(h.step('Filesystem', id, fsRow(id, '/srv/data2'), fsRowNoOptions(id, '/srv/data2'))),
+      ).toEqual([]);
+      const noMounted = fsRow(id, '/srv/data2');
+      delete (noMounted.status as Record<string, unknown>).mounted;
+      expect(types(h.step('Filesystem', id, fsRowNoOptions(id, '/srv/data2'), noMounted))).toEqual(
+        [],
+      );
+      expect(h.journal.metaGet('backing_unavailable:srv/data2')).toBeNull();
+    });
+
+    it('unknown before any proven state: the first proven fault is reported once, a failed unit is proven even with missing fields', () => {
+      const id = 'srv-data2.mount';
+      expect(
+        types(h.step('Filesystem', id, fsRow(id, '/srv/data2'), fsRowNoOptions(id, '/srv/data2'))),
+      ).toEqual([]);
+      const ev = h.step(
+        'Filesystem',
+        id,
+        fsRowNoOptions(id, '/srv/data2'),
+        fsRowNoOptions(id, '/srv/data2', { mounted: false }),
+      );
+      expect(types(ev)).toEqual(['nfs.export.backing_unavailable']);
+      expect(ev[0]?.details).toMatchObject({ reason: 'unmounted' });
+      const failed = fsRowNoOptions(id, '/srv/data2', { mounted: false });
+      (failed.status as Record<string, unknown>).mount_unit_state = 'failed';
+      expect(
+        types(
+          h.step('Filesystem', id, fsRowNoOptions(id, '/srv/data2', { mounted: false }), failed),
+        ),
+      ).toEqual([]);
+    });
+
+    it('an incomplete row is logged as a source problem, not journaled', () => {
+      h.close();
+      const logs: unknown[] = [];
+      h = makeHarness({
+        producers: [nfsProducer],
+        log: (level, msg, fields) => logs.push([level, msg, fields]),
+      });
+      h.kv.put(
+        'ExportRule',
+        'srv/data2',
+        exportRow('/srv/data2', [{ host_pattern: '*', options: ['rw'] }]),
+      );
+      const id = 'srv-data2.mount';
+      h.step('Filesystem', id, fsRow(id, '/srv/data2'), fsRowNoOptions(id, '/srv/data2'));
+      expect(logs).toContainEqual([
+        'warn',
+        'event_source_incomplete',
+        expect.objectContaining({
+          kind: 'Filesystem',
+          id,
+          missing: ['effective_mount_options'],
+          kept: 'available',
+        }),
+      ]);
+    });
   });
 
   describe('NFS over RDMA readiness', () => {
@@ -353,6 +447,71 @@ describe('NFS producer (S17 §8.5)', () => {
       h.kv.put('NetworkInterface', 'eth0', ifaceRow('eth0', 'up', false));
       const ev = h.step('NetworkInterface', 'ib0', ifaceRow('ib0', 'up'), ifaceRow('ib0', 'down'));
       expect(types(ev)).toEqual(['nfs.rdma.unavailable']);
+    });
+
+    it('a link turning unknown keeps the last proven state; a proven down is unavailable; a proven up recovers (I-02)', () => {
+      desired(true);
+      managed('ib0');
+      h.kv.put('NfsProfile', 'default', profileRow(true));
+      h.kv.put('NetworkInterface', 'ib0', ifaceRow('ib0', 'up'));
+      expect(
+        types(h.step('NetworkInterface', 'ib0', ifaceRow('ib0', 'up'), ifaceRow('ib0', 'unknown'))),
+      ).toEqual([]);
+      expect(
+        types(
+          h.step('NetworkInterface', 'ib0', ifaceRow('ib0', 'unknown'), ifaceRow('ib0', 'down')),
+        ),
+      ).toEqual(['nfs.rdma.unavailable']);
+      expect(
+        types(
+          h.step('NetworkInterface', 'ib0', ifaceRow('ib0', 'down'), ifaceRow('ib0', 'unknown')),
+        ),
+      ).toEqual([]);
+      expect(
+        types(h.step('NetworkInterface', 'ib0', ifaceRow('ib0', 'unknown'), ifaceRow('ib0', 'up'))),
+      ).toEqual(['nfs.rdma.recovered']);
+    });
+
+    it('with two managed paths: one proven up is ready; one unknown plus one down is undecided; both down is unavailable', () => {
+      desired(true);
+      managed('ib0');
+      managed('ib1');
+      h.kv.put('NfsProfile', 'default', profileRow(true));
+      h.kv.put('NetworkInterface', 'ib0', ifaceRow('ib0', 'up'));
+      h.kv.put('NetworkInterface', 'ib1', ifaceRow('ib1', 'up'));
+      expect(
+        types(h.step('NetworkInterface', 'ib1', ifaceRow('ib1', 'up'), ifaceRow('ib1', 'down'))),
+      ).toEqual([]);
+      expect(
+        types(h.step('NetworkInterface', 'ib0', ifaceRow('ib0', 'up'), ifaceRow('ib0', 'unknown'))),
+      ).toEqual([]);
+      const ev = h.step(
+        'NetworkInterface',
+        'ib0',
+        ifaceRow('ib0', 'unknown'),
+        ifaceRow('ib0', 'down'),
+      );
+      expect(types(ev)).toEqual(['nfs.rdma.unavailable']);
+      expect(ev[0]?.details).toMatchObject({ interfaces: [] });
+    });
+
+    it('a listener whose state is not observed leaves the last proven state; a proven false listener is unavailable', () => {
+      desired(true);
+      managed('ib0');
+      h.kv.put('NfsProfile', 'default', profileRow(true));
+      h.kv.put('NetworkInterface', 'ib0', ifaceRow('ib0', 'up'));
+      expect(
+        types(h.step('NfsProfile', 'default', profileRow(true), profileRowNoListener())),
+      ).toEqual([]);
+      expect(
+        types(h.step('NfsProfile', 'default', profileRowNoListener(), profileRow(false))),
+      ).toEqual(['nfs.rdma.unavailable']);
+      expect(
+        types(h.step('NfsProfile', 'default', profileRow(false), profileRowNoListener())),
+      ).toEqual([]);
+      expect(
+        types(h.step('NfsProfile', 'default', profileRowNoListener(), profileRow(true))),
+      ).toEqual(['nfs.rdma.recovered']);
     });
   });
 });

@@ -899,17 +899,32 @@ differences produce nothing.
 
 **Backing readiness** (SUBS-NFS-003): for every export path `p` and every
 `Filesystem` row with `mountpoint m` such that `p === m ∨ p.startsWith(m + "/")`
-(the longest such `m` wins; `/srv/data2` never matches `/srv/data`), the
-backing is unavailable when `¬mounted ∨ mount_unit_state = failed ∨
-read_only`. A change of that boolean → `nfs.export.backing_unavailable` /
+(the longest such `m` wins; `/srv/data2` never matches `/srv/data`),
+the backing is **unavailable** when `mount_unit_state = failed ∨ mounted =
+false ∨ (mounted = true ∧ "ro" ∈ effective_mount_options)`, **available**
+when `mounted = true ∧ effective_mount_options` is present without `ro`,
+and **unknown** when the row lacks `mounted` or (while mounted) lacks
+`effective_mount_options`. Only a proven change → `nfs.export.backing_unavailable` /
 `nfs.export.backing_recovered` (subject `ExportRule`, related `Filesystem`).
 Evaluated on both `Filesystem` and `ExportRule` changes.
+
+An `unknown` evaluation keeps the last proven state (meta
+`backing_unavailable:<export>`), emits nothing, and logs
+`event_source_incomplete` `{ kind, id, exportPath, missing, kept }` — the
+rule can neither report the fault nor clear it from a row that does not
+carry the field.
 
 **NFS over RDMA** (SUBS-NFS-004): only when the desired `NfsProfile`
 (`/xinas/v1/desired/NfsProfile/default`) has `spec.rdma.enabled: true`.
 Ready ⇔ observed `NfsProfile.status.rdma_listening = true ∧` at least one
-observed `NetworkInterface` with `rdma_capable ∧ rdma_link_state = up` that
-is managed (`desired` row exists). A change → `nfs.rdma.unavailable` /
+managed (`desired` row exists) observed `NetworkInterface` with
+`rdma_capable ∧ rdma_link_state = up`. Unavailable ⇔ `rdma_listening =
+false`, or `rdma_listening = true` and every managed RDMA interface has
+`rdma_link_state = down`. Anything else — the listener flag absent, or no
+proven-up path while some path reads `unknown` — is undecided: the last
+proven state is kept and `event_source_incomplete` is logged. One proven
+working path is enough for ready; "no proven path" and "every path proven
+down" are different facts. A proven change → `nfs.rdma.unavailable` /
 `nfs.rdma.recovered` (subject `SystemdUnit nfs-server.service`, related:
 the interfaces; details: `listening`, `interfaces`). Not configured → no
 event, reason `not_configured` in `producers.inactive`.
@@ -1141,6 +1156,7 @@ JSON-RPC shape enters the OpenAPI document.
 | clock step | ordering is `sequence`; `detectedAt` may be non-monotonic and is never used to order or page |
 | journal insert fails | the observation transaction fails with it (the batch is retried by the agent, `pendingReconcile`); no notification; `system.collector.*` is unaffected. A persistent failure (disk full) surfaces through the api's existing error logging — there is no write loop because the retry is the agent's existing bounded one |
 | notify after commit fails (listener write error) | that listener closes (`error`); rows stay |
+| observation row lacks a field a rule needs (`mounted`, `effective_mount_options`, `rdma_listening`, a link state of `unknown`) | the rule keeps its last proven state and logs `event_source_incomplete`; no domain event (§8.5) |
 
 ---
 
