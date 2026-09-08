@@ -977,14 +977,28 @@ it is enabled emits `break_glass_used` in addition to `approved` /
 `declined` (§12.1), and the config loader logs a warning at startup when
 it is on.
 
-For `risk_level: destructive` the `approve` body MUST carry
-`"acknowledge": "DATA MAY BE PERMANENTLY LOST"` exactly (case-sensitive);
-for `unsupported_rollback` / `rollback_model: unsupported` the phrase is
-`"ROLLBACK IS NOT SUPPORTED"`. A wrong or missing phrase is
-`INVALID_ARGUMENT` and no transition happens. The transition itself is
-the guarded `pending → approved` UPDATE (§6.2) recording `approved_by`,
-the derived `approval_channel`, the self-reported `approval_interface`,
-and the reason.
+Exactly one acknowledgement phrase is ever required, from this exhaustive
+table (`requiredAcknowledgement()` in `confirmation/types.ts`; the approval
+page's `needsPhrase`, `operatorDecide`, the `xinasctl` description and
+`api-v1.yaml` all state the same rule, and
+`__tests__/api/mcp/acknowledgement.test.ts` pins every cell):
+
+| `risk_level` | `rollback_model` | `approve` body MUST carry |
+|---|---|---|
+| `destructive` | any | `"acknowledge": "DATA MAY BE PERMANENTLY LOST"` |
+| `unsupported_rollback` | any | `"acknowledge": "ROLLBACK IS NOT SUPPORTED"` |
+| `non_disruptive` / `changing_access` | `unsupported` | `"acknowledge": "ROLLBACK IS NOT SUPPORTED"` |
+| `non_disruptive` / `changing_access` | anything else | nothing (`{}` is a valid body) |
+
+Data loss is the worse fact, so a record that is both destructive and
+rollback-unsupported requires the data-loss phrase; the page still states
+the second fact in `rollback_limitation` (§10.2) — the warning about data
+loss never disappears because a second risk is present. Phrases are exact
+and case-sensitive; a wrong or missing phrase is `INVALID_ARGUMENT` with
+`details.required_acknowledge` naming the expected one, and no transition
+happens. The transition itself is the guarded `pending → approved` UPDATE
+(§6.2) recording `approved_by`, the derived `approval_channel`, the
+self-reported `approval_interface`, and the reason.
 
 ### 9.3 Approval page (MRTR-OOB-001/003/004, D-02)
 

@@ -420,8 +420,9 @@ UDS the approver is `local:uds` and `approve` / `decline` are
 **break-glass**: refused unless `mcp.confirmation.allow_uds_approval:
 true` (default false), each use audited as `break_glass_used` — anyone
 with root or `xinas-admin` on the node, an agent included, can use them
-once enabled (S15 §3.5). Destructive records require the exact phrase
-`DATA MAY BE PERMANENTLY LOST`.
+once enabled (S15 §3.5). Destructive records require the exact
+phrase `DATA MAY BE PERMANENTLY LOST`; records that are only
+rollback-unsupported require `ROLLBACK IS NOT SUPPORTED` (S15 §9.2).
 
 ## 5. Read-route promotion (T4)
 

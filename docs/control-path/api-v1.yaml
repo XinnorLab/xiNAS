@@ -1644,10 +1644,12 @@ components:
     McpConfirmationDecision:
       description: |
         Body of `POST /mcp/confirmations/{id}/approve` and `/decline`.
-        `acknowledge` is required on approve for `destructive` records
-        (`DATA MAY BE PERMANENTLY LOST`) and for `unsupported_rollback` /
-        `rollback_model: unsupported` records (`ROLLBACK IS NOT SUPPORTED`),
-        exactly and case-sensitively; ignored on decline.
+        `acknowledge` is required on approve, exactly and case-sensitively:
+        `DATA MAY BE PERMANENTLY LOST` for `risk_level: destructive`
+        (whatever the rollback model), `ROLLBACK IS NOT SUPPORTED` for
+        `risk_level: unsupported_rollback` or `rollback_model: unsupported`
+        records that are not destructive; nothing otherwise. Ignored on
+        decline. See the S15 spec §9.2 table.
       type: object
       properties:
         acknowledge: { type: string }
@@ -3556,11 +3558,13 @@ paths:
         created by the requesting MCP principal (S15 §5.3). A
         record that is not `pending` answers `CONFLICT` `not_pending`; a
         `mode: form` record answers `CONFLICT` `form_mode` (form acceptance
-        comes from the MCP client, not from here). Destructive and
-        unsupported-rollback records require the exact `acknowledge`
-        phrase (`INVALID_ARGUMENT` otherwise). Approval does not extend the
-        record's TTL and creates no task: the MCP client's retry consumes
-        the record inside the apply transaction.
+        comes from the MCP client, not from here). Destructive records
+        require `acknowledge: "DATA MAY BE PERMANENTLY LOST"`;
+        rollback-unsupported records that are not destructive require
+        `"ROLLBACK IS NOT SUPPORTED"` (`INVALID_ARGUMENT` naming the
+        expected phrase otherwise). Approval does not extend the record's
+        TTL and creates no task: the MCP client's retry consumes the
+        record inside the apply transaction.
       requestBody:
         required: false
         content:
