@@ -1,5 +1,6 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { isPooled, pooledDevicePaths } from './inventory-facts.js';
 import {
   type AffectedResource,
   affectedResourcesText,
@@ -161,11 +162,10 @@ function formatBytes(bytes: number | undefined): string {
   return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unit]}`;
 }
 
-function poolDiskIds(): Set<string> {
-  return new Set(pools.flatMap((pool) => pool.drives ?? []));
-}
-
-function unavailableReason(disk: Disk): string | null {
+function unavailableReason(
+  disk: Disk,
+  pooled: Set<string> = pooledDevicePaths(pools),
+): string | null {
   const status = disk.status ?? {};
   if (status.system_disk === true) return 'System disk';
   if (status.mounted === true) return 'Mounted';
@@ -173,7 +173,7 @@ function unavailableReason(disk: Disk): string | null {
     return `Member of ${status.xiraid_membership.array_id ?? 'an array'}`;
   }
   if (status.device_path?.startsWith('/dev/xi_')) return 'xiRAID volume, not a physical disk';
-  if (poolDiskIds().has(disk.id)) return 'Assigned to a spare pool';
+  if (isPooled(disk, pooled)) return 'Assigned to a spare pool';
   if (status.safe_for_use !== true) return 'Not marked safe for use';
   return null;
 }
@@ -283,11 +283,12 @@ function option(value: string | number, selectedValue: string | number): string 
 
 function diskCards(): string {
   if (disks.length === 0) return '<div class="empty">No disks were reported by xiNAS.</div>';
+  const pooled = pooledDevicePaths(pools);
   return disks
     .slice()
     .sort((a, b) => (a.status?.device_path ?? a.id).localeCompare(b.status?.device_path ?? b.id))
     .map((disk) => {
-      const reason = unavailableReason(disk);
+      const reason = unavailableReason(disk, pooled);
       const checked = selected.has(disk.id);
       const health = disk.status?.health;
       const healthLabel =
@@ -366,7 +367,8 @@ function render(): void {
   const rule = config.constraints[level];
   const errors = validationErrors();
   const estimate = capacityEstimate();
-  const availableCount = disks.filter((disk) => unavailableReason(disk) === null).length;
+  const pooled = pooledDevicePaths(pools);
+  const availableCount = disks.filter((disk) => unavailableReason(disk, pooled) === null).length;
   const existingName = fieldValue('array-name');
   const existingStrip = fieldValue('strip-size') || String(config.defaults.strip_size_kib);
   const existingBlock = fieldValue('block-size') || String(config.defaults.block_size);
@@ -497,10 +499,11 @@ async function refreshInventory(): Promise<void> {
     disks = diskPayload.result;
     arrays = arrayPayload.result;
     pools = poolPayload.result;
+    const pooled = pooledDevicePaths(pools);
     selected = new Set(
       [...selected].filter((id) => {
         const disk = disks.find((candidate) => candidate.id === id);
-        return disk !== undefined && unavailableReason(disk) === null;
+        return disk !== undefined && unavailableReason(disk, pooled) === null;
       }),
     );
     plan = null;

@@ -135,7 +135,9 @@ following hold:
 - `status.mounted !== true`;
 - `status.xiraid_membership` is absent or null;
 - its device path does not begin `/dev/xi_`;
-- it is not a drive in an observed spare pool.
+- its device path is not a drive of an observed spare pool (pool `drives`
+  are device paths, so membership is decided in the path domain; the stable
+  Disk `id` is never compared against them — `mcp-apps/inventory-facts.ts`).
 
 Disabled disks show a reason. The View MUST NOT manufacture missing identity,
 capacity, health, or eligibility facts. A refresh clears any selected disk that
