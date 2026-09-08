@@ -686,7 +686,7 @@ under namespaced keys and is read/written inside the same transaction:
 | `restore_pending` | `{ bootId, knownArrays: [...] }` between a reboot detection and the first complete `XiraidArray` snapshot |
 | `collector_last_accepted:<Kind>` | epoch ms of the last accepted batch carrying that kind |
 | `collector_state:<Kind>` | `running` / `failed` / `stale` |
-| `session_candidates` | `{ <sessionId>: { since, previous } }` (D-20) |
+| `session_candidates` | `{ <sessionId>: { kind, epoch, seq, view } }` (D-20) — `epoch` is the engine instance id, `seq` its batch counter |
 | `progress:<array>:<kind>` | `{ generation, lastPct, lastBucket, lastEmitAt }` |
 | `capacity:<fsId>` | `none` / `warning` / `critical` |
 | `unknown_state_warned:<array>` | `[ word… ]` |
@@ -896,9 +896,12 @@ event, reason `not_configured` in `producers.inactive`.
 protoVersion, lockedFiles }` — no hostnames, users, file names or
 payloads. Row created after baseline → candidate `connected`; confirmed
 `nfs.session.connected` by the next complete `NfsSession` snapshot that
-still contains it (two consecutive observations). Reconcile delete →
-candidate `disconnected`; confirmed by the next complete snapshot without
-it; cancelled by one with it. Candidates are stored in
+still contains it (two consecutive observations) — a snapshot of a *later*
+batch: a later `seq` of the same engine instance, or the first complete
+snapshot after an api restart (the in-process counter restarts with the
+process, so a persisted candidate is never compared against it). Reconcile
+delete → candidate `disconnected`; confirmed by the next complete snapshot
+without it; cancelled by one with it. Candidates are stored in
 `session_candidates`; a batch without a `NfsSession` complete snapshot
 touches no candidate. `proto_version` change → `nfs.session.protocol_changed`.
 Lock threshold: disabled unless `lock_threshold.enter > 0`; `locked_files ≥
@@ -1108,7 +1111,7 @@ JSON-RPC shape enters the OpenAPI document.
 
 | Situation | Behavior |
 |---|---|
-| api restart | listeners gone (clients see an abrupt close); journal, sequence and meta intact; clients re-listen and read after their cursor |
+| api restart | listeners gone (clients see an abrupt close); journal, sequence and meta intact; clients re-listen and read after their cursor; session candidates are confirmed or cancelled by the first complete `NfsSession` snapshot after the restart |
 | agent restart | the boot sweep's complete snapshots are compared with the stored rows: real transitions emit, identical rows are skipped by the handler's dedupe, nothing is a baseline again |
 | xiRAID unavailable | the collector reports `error`, no `XiraidArray` snapshot is sent (V-35); `system.collector.failed` once; stored arrays stay; the next valid snapshot resumes comparison |
 | helper unavailable | same for `NfsSession`/`ExportRule`; session candidates untouched |

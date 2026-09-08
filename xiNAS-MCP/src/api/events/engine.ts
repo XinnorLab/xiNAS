@@ -23,6 +23,7 @@
  * batch: one row, its own transaction.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { Database, Statement } from 'better-sqlite3';
 import type { Kind } from '../../agent/collectors/base.js';
 import { type EventSpec, buildEvent } from './envelope.js';
@@ -133,6 +134,11 @@ export interface BatchInfo {
   detectedAtMs: number;
   /** Monotonic per engine instance; lets a producer tell "a later batch" apart. */
   seq: number;
+  /**
+   * Random per engine instance. `seq` restarts from 1 with the process, so
+   * "a later batch" is `(epoch === mine && seq > theirs) || epoch !== mine`.
+   */
+  epoch: string;
 }
 
 interface CommonCtx {
@@ -215,6 +221,7 @@ export class TransitionEngine {
   #baseline = new Map<Kind, boolean>();
   #batch: Batch | null = null;
   #seq = 0;
+  readonly #epoch = randomUUID();
 
   constructor(deps: EngineDeps, producers: Producer[] = []) {
     this.#deps = deps;
@@ -251,6 +258,7 @@ export class TransitionEngine {
         completeSnapshots: new Set(batch.completeSnapshots),
         detectedAtMs: this.#deps.now(),
         seq: ++this.#seq,
+        epoch: this.#epoch,
       },
       kv: batch.kv,
       pending: [],
