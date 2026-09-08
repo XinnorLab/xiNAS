@@ -81,6 +81,19 @@ const MEMBER_BLOCKING_WORDS: ReadonlySet<string> = new Set([
   'need_recon',
 ]);
 
+/**
+ * Per-device vocabulary: xiRAID Classic 4.4 AG, Showing RAID State, Table 2,
+ * row `devices` (https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html)
+ * documents exactly these four device states — narrower than the array-level
+ * `KNOWN_WORDS`, which is the vocabulary for the array's own `raw_states`.
+ */
+const MEMBER_KNOWN_WORDS: ReadonlySet<string> = new Set([
+  'online',
+  'offline',
+  'reconstructing',
+  'need_recon',
+]);
+
 // ── row view ───────────────────────────────────────────────────────────
 
 interface ArrayView {
@@ -153,10 +166,10 @@ export const isActive = (v: ArrayView, kind: OperationKind): boolean =>
 
 export type Health = 'healthy' | 'unhealthy' | 'unknown';
 
-/** One member's state words, judged with the same vocabulary as the array. */
+/** One member's state words, judged against the four device states xiRAID documents. */
 function memberHealth(states: string[]): Health {
   if (states.some((w) => MEMBER_BLOCKING_WORDS.has(w))) return 'unhealthy';
-  if (states.length === 0 || states.some((w) => !KNOWN_WORDS.has(w))) return 'unknown';
+  if (states.length === 0 || states.some((w) => !MEMBER_KNOWN_WORDS.has(w))) return 'unknown';
   return states.includes('online') ? 'healthy' : 'unknown';
 }
 
@@ -490,7 +503,7 @@ function emitCondition(
 function warnUnknownWords(ctx: ChangeCtx, id: string, cur: ArrayView): void {
   const unknown = new Set(cur.rawStates.filter((w) => !KNOWN_WORDS.has(w)));
   for (const states of cur.members.values()) {
-    for (const w of states) if (!KNOWN_WORDS.has(w)) unknown.add(w);
+    for (const w of states) if (!MEMBER_KNOWN_WORDS.has(w)) unknown.add(w);
   }
   if (unknown.size === 0) return;
   const key = META_KEYS.unknownStateWarned(id);

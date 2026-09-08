@@ -741,6 +741,14 @@ member_states: [{device, states}], spare_pool, spare_disk_ids }`.
 - `healthy`: neither of the above (`online ∈ W`, every member proven
   `online`, no active operation).
 
+Member states are the four device states xiRAID documents for `raid
+show` (`online`, `offline`, `reconstructing`, `need_recon` — xiRAID
+Classic 4.4 AG, *Showing RAID State*, Table 2, `devices`:
+<https://xinnor.io/docs/xiRAID-4.4.0/E/en/AG/1/showing_raid_state.html>);
+the agent's fixture transport emits the same `[index, path, [states]]`
+tuples the daemon does, so a source that reports no member state at all
+is a fixture defect, not a production shape.
+
 `unknown` is a source problem, not a state: it is reported once per
 (array, word) as `raid.source.unknown_state` (member words included) and
 never completes, fails, recovers or restores anything.
@@ -808,10 +816,11 @@ fires (§8.6) the engine stores `restore_pending = { bootId, knownArrays }`
 snapshot afterwards, per known array, the worst proven fact wins: absent or
 `none ∈ W` → `raid.restore.failed` `{ result: "not_restored" }`; `offline`
 → `offline`; `unrecovered` → `unrecovered`; `read_only` → `read_only`;
-`degraded ∨ need_recon` → `degraded`; another unhealthy word → `unhealthy`;
-an active operation → `running`; `unknown` per the predicates → `unknown`;
-only a proven `healthy` → `healthy` (all but the first are
-`raid.restore.completed` with that `result`, severities in §6.4). Ordinary
+`degraded ∨ need_recon` → `degraded`; another unhealthy word, or a
+member-proven fault, → `unhealthy`; an active operation → `running`;
+`unknown` per the predicates → `unknown`; only a proven `healthy` →
+`healthy` (all but the first are `raid.restore.completed` with that
+`result`, severities in §6.4). Ordinary
 transitions for that snapshot are emitted as well (they are different
 facts). Until that snapshot arrives (daemon still starting: the collector
 reports `error`, no snapshot is sent) nothing is emitted (V-35).

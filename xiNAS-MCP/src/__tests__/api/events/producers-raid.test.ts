@@ -190,6 +190,24 @@ describe('RAID producer (S17 §8.2)', () => {
       expect(types(step(['online'], ['online']))).toEqual([]);
     });
 
+    it('a member reading an array-only word is unknown, not healthy (member vocabulary is narrower)', () => {
+      step(['online'], ['online', 'initing']);
+      const arrayWordOnMember: ArrayOpts = {
+        members: [
+          ['d1', ['online']],
+          ['d2', ['initialized']],
+          ['d3', ['online']],
+        ],
+      };
+      const ev = step(['online', 'initing'], ['online'], undefined, arrayWordOnMember);
+      expect(types(ev)).toEqual(['raid.source.unknown_state']);
+      expect(ev[0]?.details).toMatchObject({ word: 'initialized' });
+      expect(h.journal.metaGet('raid_op:a:initialization')).toEqual({
+        generation: 1,
+        active: true,
+      });
+    });
+
     it('a member with no state is undecided, not healthy', () => {
       step(['online'], ['online', 'initing']);
       const blank: ArrayOpts = {
