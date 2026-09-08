@@ -5,6 +5,7 @@
  * `effective_mount_options`, `size_bytes`, `free_bytes`).
  */
 
+import { correlationFields } from '../engine.js';
 import type { ChangeCtx, EngineConfig, Producer, Row } from '../engine.js';
 import { META_KEYS } from '../meta.js';
 import type { Severity } from '../types.js';
@@ -168,7 +169,7 @@ function onFilesystemChange(ctx: ChangeCtx): void {
       args: { filesystem: id },
       previous: projection(prev),
       details: baseDetails(ctx, id, prev),
-      ...(cause !== undefined ? { cause, timeAccuracy: 'task' } : {}),
+      ...correlationFields(cause),
     });
     ctx.meta.delete(META_KEYS.capacity(id));
     return;
@@ -184,7 +185,7 @@ function onFilesystemChange(ctx: ChangeCtx): void {
         args: { filesystem: id },
         current: projection(cur),
         details: baseDetails(ctx, id, cur),
-        ...(cause !== undefined ? { cause, timeAccuracy: 'task' } : {}),
+        ...correlationFields(cause),
       });
     }
     evaluateCapacity(ctx, id, cur, true);
@@ -216,8 +217,7 @@ function onFilesystemChange(ctx: ChangeCtx): void {
         previous: projection(prev),
         current: projection(cur),
         details: baseDetails(ctx, id, cur),
-        cause,
-        timeAccuracy: 'task',
+        ...correlationFields(cause),
       });
     }
   } else if (prev.mounted === false && cur.mounted === true) {

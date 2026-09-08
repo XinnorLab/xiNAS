@@ -506,8 +506,18 @@ the `nfs/sessions` feed.
 | `timeAccuracy` | `detectedAt` | `occurredAt` |
 |---|---|---|
 | `observed` (every poll/snapshot-derived event) | the api's commit time (`Date.now()` inside the transaction) | absent — the row's `status.observed_at` is the *collector's* sample time and is copied to `details.observedAt`, not promoted to `occurredAt` |
-| `task` (task-correlated events) | commit time | the task transition's timestamp |
+| `task` (task-correlated events whose task has reached a terminal state) | commit time | the task's terminal transition time (`tasks.terminal_at`) |
 | `source` (a vendor timestamp — none in Phase 1) | commit time | the vendor's |
+
+A correlation with a task that is still `running` names the task in
+`cause` but keeps `timeAccuracy: observed` and carries no `occurredAt`:
+the row's `updated_at` moves with every progress patch and is not a
+transition time, and the api never promotes its own clock to
+`occurredAt`. `TaskLookup` therefore returns `occurredAtMs` only from
+`terminal_at`; `correlationFields()` (`api/events/engine.ts`) is the one
+place that turns a `Cause` into envelope fields, and `buildEvent` refuses
+`timeAccuracy: task | source` without `occurredAtMs` (a producer bug is
+logged and the event skipped, never downgraded silently).
 
 ### 6.4 Severity table (SUBS-EVENT-004)
 
@@ -728,7 +738,8 @@ member_states: [{device, states}], spare_pool, spare_disk_ids }`.
 **Array lifecycle.** `previous === null ∧ current ≠ null` in a complete
 snapshot after the baseline of the kind → `raid.array.created` (details:
 level, member count; `cause.taskId` when a `success`/`running` xiNAS task
-of kind `xiraid.array.create` for that name exists in `tasks`). `current === null`
+of kind `xiraid.array.create` for that name exists in `tasks`; `timeAccuracy: task`
+only for a `success` one (§6.3)). `current === null`
 (reconcile delete) → `raid.array.removed` (details: `operationInProgress`
 when an operation was active; `cause.taskId` from a matching
 `xiraid.array.delete` task) — unless `restore_pending` is set (§8.2 restore).

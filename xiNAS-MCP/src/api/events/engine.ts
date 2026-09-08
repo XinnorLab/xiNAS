@@ -63,6 +63,14 @@ export interface EngineConfig {
 export interface Cause {
   taskId: string;
   operationId?: string;
+  /**
+   * Epoch ms of the task transition this correlation vouches for: the
+   * terminal transition (`tasks.terminal_at`) of a task that has finished.
+   * Absent for a task that is still `running` — `updated_at` moves with
+   * every progress patch and is not a transition time, and the api never
+   * substitutes its own clock (S17 §6.3).
+   */
+  occurredAtMs?: number;
 }
 /**
  * Durable task correlation (S4 amendment): kinds + subject identity, never
@@ -99,6 +107,25 @@ export type EmitSpec = Omit<EventSpec, 'detectedAtMs' | 'source'> & {
   dedupeKey?: string;
 };
 export type Emit = (spec: EmitSpec) => void;
+
+/**
+ * The envelope fields a correlation contributes (S17 §6.3): `cause` always
+ * (identifiers only); `timeAccuracy: 'task'` plus `occurredAtMs` only when
+ * the lookup vouched for a transition time. Otherwise the event stays
+ * `observed` and still names the task.
+ */
+export function correlationFields(
+  cause: Cause | undefined,
+): Pick<EmitSpec, 'cause' | 'timeAccuracy' | 'occurredAtMs'> {
+  if (cause === undefined) return {};
+  const wire = {
+    taskId: cause.taskId,
+    ...(cause.operationId !== undefined ? { operationId: cause.operationId } : {}),
+  };
+  return cause.occurredAtMs !== undefined
+    ? { cause: wire, timeAccuracy: 'task', occurredAtMs: cause.occurredAtMs }
+    : { cause: wire };
+}
 
 export interface BatchInfo {
   observedAt: string;
@@ -416,7 +443,7 @@ export function createTaskLookup(db: Database, now: () => number = Date.now): Ta
       const placeholders = kinds.map(() => '?').join(', ');
       const statePlaceholders = states.map(() => '?').join(', ');
       stmt = db.prepare(
-        `SELECT task_id, correlation_id FROM tasks
+        `SELECT task_id, correlation_id, terminal_at FROM tasks
          WHERE kind IN (${placeholders})
            AND state IN (${statePlaceholders})
            AND updated_at >= ?
@@ -434,8 +461,12 @@ export function createTaskLookup(db: Database, now: () => number = Date.now): Ta
       now() - TASK_LOOKUP_WINDOW_MS,
       subject.kind,
       subject.id,
-    ) as { task_id: string; correlation_id: string } | undefined;
+    ) as { task_id: string; correlation_id: string; terminal_at: number | null } | undefined;
     if (row === undefined) return null;
-    return { taskId: row.task_id, operationId: row.correlation_id };
+    return {
+      taskId: row.task_id,
+      operationId: row.correlation_id,
+      ...(typeof row.terminal_at === 'number' ? { occurredAtMs: row.terminal_at } : {}),
+    };
   };
 }

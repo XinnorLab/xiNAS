@@ -12,6 +12,7 @@
  * operation starts → members → replacements → progress.
  */
 
+import { correlationFields } from '../engine.js';
 import type { ChangeCtx, Producer, Row, SnapshotCtx } from '../engine.js';
 import { META_KEYS } from '../meta.js';
 import type { OperationKind, Severity } from '../types.js';
@@ -233,7 +234,7 @@ function onArrayChange(ctx: ChangeCtx): void {
           observedAt,
           ...(inProgress !== undefined ? { operationInProgress: inProgress } : {}),
         },
-        ...(cause !== undefined ? { cause, timeAccuracy: 'task' } : {}),
+        ...correlationFields(cause),
       });
     }
     clearArrayMeta(ctx, id);
@@ -259,7 +260,7 @@ function onArrayChange(ctx: ChangeCtx): void {
           memberCount: cur.memberIds.length,
           ...(cur.sparePool !== undefined ? { sparePool: cur.sparePool } : {}),
         },
-        ...(cause !== undefined ? { cause, timeAccuracy: 'task' } : {}),
+        ...correlationFields(cause),
       });
     }
     // Baseline exceptions (spec §8.0): an already-running operation, and an

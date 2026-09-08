@@ -1,6 +1,9 @@
+import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
+import { correlationFields, createTaskLookup } from '../../../api/events/engine.js';
 import type { Producer } from '../../../api/events/engine.js';
-import { CID, type Harness, makeHarness, types } from './_engine-harness.js';
+import { runMigrations } from '../../../state/migrations.js';
+import { CID, type Harness, OBSERVED_AT, makeHarness, types } from './_engine-harness.js';
 
 /** A producer that emits whatever the test asks for. */
 function scripted(
@@ -136,7 +139,7 @@ describe('TransitionEngine (S17 §8.0)', () => {
     expect(h.engine.baselineDone('XiraidArray')).toBe(true);
   });
 
-  it('correlates a task only through the injected lookup', () => {
+  it('correlates a task only through the injected lookup; a terminal transition time makes it task-accurate', () => {
     const calls: unknown[] = [];
     h = makeHarness({
       producers: [
@@ -147,13 +150,13 @@ describe('TransitionEngine (S17 §8.0)', () => {
             type: 'raid.array.created',
             subject: { kind: 'XiraidArray', id: ctx.id },
             args: { array: ctx.id },
-            ...(cause !== undefined ? { cause, timeAccuracy: 'task' } : {}),
+            ...correlationFields(cause),
           });
         }),
       ],
       taskLookup: (kinds, subject) => {
         calls.push([kinds, subject]);
-        return { taskId: 't-1', operationId: 'c-1' };
+        return { taskId: 't-1', operationId: 'c-1', occurredAtMs: Date.parse(OBSERVED_AT) - 1000 };
       },
     });
     h.batch((e) => e.onSnapshot('XiraidArray', new Set()));
@@ -161,5 +164,72 @@ describe('TransitionEngine (S17 §8.0)', () => {
     expect(calls).toEqual([[['xiraid.array.create'], { kind: 'XiraidArray', id: 'a' }]]);
     expect(events[0]?.cause).toEqual({ taskId: 't-1', operationId: 'c-1' });
     expect(events[0]?.timeAccuracy).toBe('task');
+    expect(events[0]?.occurredAt).toBe('2026-09-04T11:59:59.000Z');
+  });
+
+  it('a correlation without a transition time keeps the event observed and still names the task', () => {
+    h = makeHarness({
+      producers: [
+        scripted((ctx) => {
+          ctx.emit({
+            feed: 'raid',
+            type: 'raid.array.created',
+            subject: { kind: 'XiraidArray', id: ctx.id },
+            args: { array: ctx.id },
+            ...correlationFields(ctx.correlate(['xiraid.array.create'])),
+          });
+        }),
+      ],
+      taskLookup: () => ({ taskId: 't-2' }),
+    });
+    h.batch((e) => e.onSnapshot('XiraidArray', new Set()));
+    const events = h.step('XiraidArray', 'a', null, { status: {} });
+    expect(events[0]?.cause).toEqual({ taskId: 't-2' });
+    expect(events[0]?.timeAccuracy).toBe('observed');
+    expect(events[0]?.occurredAt).toBeUndefined();
+  });
+
+  it('createTaskLookup returns terminal_at for a terminal task and no time for a running one', () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const insert = db.prepare(
+      `INSERT INTO tasks (task_id, kind, state, principal, client_type, request_id, correlation_id,
+         input_hash, risk_level, affected_resources, created_at, updated_at, terminal_at)
+       VALUES (@task_id, @kind, @state, 'p', 'rest', 'r', @correlation_id, 'h', 'non_disruptive',
+         @affected, @created_at, @updated_at, @terminal_at)`,
+    );
+    const now = Date.parse(OBSERVED_AT);
+    const affected = JSON.stringify([{ kind: 'XiraidArray', id: 'a' }]);
+    insert.run({
+      task_id: 't-done',
+      kind: 'xiraid.array.create',
+      state: 'success',
+      correlation_id: 'c-done',
+      affected,
+      created_at: now - 60_000,
+      updated_at: now - 30_000,
+      terminal_at: now - 30_000,
+    });
+    insert.run({
+      task_id: 't-run',
+      kind: 'xiraid.array.create',
+      state: 'running',
+      correlation_id: 'c-run',
+      affected: JSON.stringify([{ kind: 'XiraidArray', id: 'b' }]),
+      created_at: now - 10_000,
+      updated_at: now - 5_000,
+      terminal_at: null,
+    });
+    const lookup = createTaskLookup(db, () => now);
+    expect(lookup(['xiraid.array.create'], { kind: 'XiraidArray', id: 'a' })).toEqual({
+      taskId: 't-done',
+      operationId: 'c-done',
+      occurredAtMs: now - 30_000,
+    });
+    expect(lookup(['xiraid.array.create'], { kind: 'XiraidArray', id: 'b' })).toEqual({
+      taskId: 't-run',
+      operationId: 'c-run',
+    });
+    db.close();
   });
 });

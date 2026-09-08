@@ -305,11 +305,28 @@ describe('RAID producer (S17 §8.2)', () => {
       h = makeHarness({
         producers: [raidProducer, poolProducer],
         taskLookup: (kinds) =>
-          kinds.includes('xiraid.array.create') ? { taskId: 't-c', operationId: 'op-c' } : null,
+          kinds.includes('xiraid.array.create')
+            ? { taskId: 't-c', operationId: 'op-c', occurredAtMs: Date.parse(OBSERVED_AT) - 2000 }
+            : null,
       });
       h.snapshot('XiraidArray', []);
       const ev = h.step('XiraidArray', 'a', null, arrayRow(['online']));
       expect(ev[0]?.cause).toEqual({ taskId: 't-c', operationId: 'op-c' });
+      expect(ev[0]?.timeAccuracy).toBe('task');
+      expect(ev[0]?.occurredAt).toBe('2026-09-04T11:59:58.000Z');
+    });
+
+    it('a still-running creating task is named but leaves the event observed (no invented time)', () => {
+      h.close();
+      h = makeHarness({
+        producers: [raidProducer, poolProducer],
+        taskLookup: (kinds) => (kinds.includes('xiraid.array.create') ? { taskId: 't-r' } : null),
+      });
+      h.snapshot('XiraidArray', []);
+      const ev = h.step('XiraidArray', 'a', null, arrayRow(['online']));
+      expect(ev[0]?.cause).toEqual({ taskId: 't-r' });
+      expect(ev[0]?.timeAccuracy).toBe('observed');
+      expect(ev[0]?.occurredAt).toBeUndefined();
     });
   });
 

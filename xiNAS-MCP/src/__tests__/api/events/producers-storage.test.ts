@@ -86,6 +86,7 @@ describe('storage producer (S17 §8.4)', () => {
       );
       expect(types(ev)).toEqual(['filesystem.mount.failed']);
       expect(ev[0]?.cause).toEqual({ taskId: 't-m', operationId: 'op-m' });
+      expect(ev[0]?.timeAccuracy).toBe('observed');
     });
 
     it('a failed unit on an unmounted filesystem without a task is nothing', () => {
@@ -198,6 +199,7 @@ describe('storage producer (S17 §8.4)', () => {
       const ev = step({}, null);
       expect(types(ev)).toEqual(['filesystem.definition.removed']);
       expect(ev[0]?.cause).toEqual({ taskId: 't-u' });
+      expect(ev[0]?.timeAccuracy).toBe('observed');
       expect(ev[0]?.severity).toBe('info');
     });
   });
