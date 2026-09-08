@@ -143,10 +143,12 @@ Disabled disks show a reason. The View MUST NOT manufacture missing identity,
 capacity, health, or eligibility facts. A refresh clears any selected disk that
 became ineligible and invalidates the current plan. A refresh that fails on
 any of the three calls, or that succeeds with a `DEGRADED_*` warning on any of
-them, marks the inventory **not current**: the previously displayed disks stay
-visible under a banner that names the error or warning, the current plan is
-discarded, and `Review plan` / `Request secure creation` stay disabled until a
-refresh succeeds without a blocking warning. Other warnings are displayed and
+them, marks the inventory **not current**: the rows stay visible for reading —
+the previously displayed rows when a call failed, the rows the degraded
+refresh returned (possibly empty for the absent backend) when it succeeded
+with the warning — under a banner that names the error or warning; the
+current plan is discarded, and `Review plan` / `Request secure creation` stay
+disabled until a refresh succeeds without a blocking warning. Other warnings are displayed and
 do not block (`mcp-apps/inventory-facts.ts`).
 
 The UI displays stable Disk `id` as the selection identity and may display
