@@ -551,7 +551,10 @@ Run: `env PATH=$N20 npm run typecheck && env PATH=$N20 npm run lint && env PATH=
 - [ ] **Step 6: Update the spec**
 
 S17 §8.0 meta table: replace the `session_candidates` row with
-`| `session_candidates` | `{ <sessionId>: { kind, epoch, seq, view } }` (D-20) — `epoch` is the engine instance id, `seq` its batch counter |`.
+
+```
+| `session_candidates` | `{ <sessionId>: { kind, epoch, seq, view } }` (D-20) — `epoch` is the engine instance id, `seq` its batch counter |
+```
 
 §8.5 Sessions: after "confirmed `nfs.session.connected` by the next complete
 `NfsSession` snapshot that still contains it (two consecutive observations)"
@@ -878,7 +881,11 @@ Run: `env PATH=$N20 npm run typecheck && env PATH=$N20 npm run lint && env PATH=
 
 - [ ] **Step 9: Update the spec**
 
-S17 §6.4 row: `| `raid.restore.completed` | info (`healthy`, `running`), warning (`read_only`, `unknown`), error (`degraded`, `unhealthy`, `offline`), critical (`unrecovered`) | raid |`.
+S17 §6.4 row:
+
+```
+| `raid.restore.completed` | info (`healthy`, `running`), warning (`read_only`, `unknown`), error (`degraded`, `unhealthy`, `offline`), critical (`unrecovered`) | raid |
+```
 
 S17 §8.2 "Health predicates": replace the three bullets with
 
@@ -1255,7 +1262,10 @@ down" are different facts. A proven change →
 ```
 
 §14 table: add the row
-`| observation row lacks a field a rule needs (`mounted`, `effective_mount_options`, `rdma_listening`, a link state of `unknown`) | the rule keeps its last proven state and logs `event_source_incomplete`; no domain event (§8.5) |`.
+
+```
+| observation row lacks a field a rule needs (`mounted`, `effective_mount_options`, `rdma_listening`, a link state of `unknown`) | the rule keeps its last proven state and logs `event_source_incomplete`; no domain event (§8.5) |
+```
 
 `docs/TODO.md`: insert right after the `---` line that follows the format
 paragraph (newest first):
@@ -1914,7 +1924,11 @@ never inferred from the task. The view itself does not consume the S17
 feeds (`docs/TODO.md`).
 ```
 
-§11: append `13. The handoff arguments are exactly `{ mode, plan_id, expected_revision, idempotency_key }`, and the same arguments reach one task under both result shapes (`__tests__/api/mcp/mcp-apps-handoff.test.ts`).`
+§11: append
+
+```
+13. The handoff arguments are exactly `{ mode, plan_id, expected_revision, idempotency_key }`, and the same arguments reach one task under both result shapes (`__tests__/api/mcp/mcp-apps-handoff.test.ts`).
+```
 
 - [ ] **Step 8: Commit**
 
