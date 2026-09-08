@@ -1,6 +1,11 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { type AffectedResource, affectedResourcesText } from './plan-facts.js';
+import {
+  type AffectedResource,
+  affectedResourcesText,
+  handoffArguments,
+  handoffMessage,
+} from './plan-facts.js';
 import './raid-create.css';
 
 type RaidLevel =
@@ -550,19 +555,8 @@ async function requestSecureApply(): Promise<void> {
   statusMessage = 'Passing the reviewed plan to the secure host workflow…';
   statusKind = 'info';
   render();
-  const applyArguments = {
-    mode: 'apply',
-    plan_id: plan.plan_id,
-    expected_revision: plan.state_revision_expected ?? 0,
-    idempotency_key: crypto.randomUUID(),
-  };
-  const message = [
-    'I reviewed the xiNAS RAID creation plan in the MCP App and request secure execution.',
-    `Call ${config.tools.create} with exactly these arguments:`,
-    JSON.stringify(applyArguments, null, 2),
-    'Continue through the existing MRTR confirmation flow. Do not bypass confirmation and do not re-plan unless the server reports that this plan is stale.',
-    `After apply, follow ${config.tools.task_wait} until the task reaches a terminal state.`,
-  ].join('\n\n');
+  const applyArguments = handoffArguments(plan, crypto.randomUUID());
+  const message = handoffMessage(config.tools, applyArguments);
   try {
     const response = await app.sendMessage({
       role: 'user',

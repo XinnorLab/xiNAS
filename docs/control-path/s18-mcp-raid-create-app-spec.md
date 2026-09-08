@@ -3,7 +3,7 @@
 Status: implementation specification  
 Date: 2026-09-04  
 Depends on: S3 xiRAID array create, S8 MCP catalog/dispatcher, S14 modern MCP,
-S15 MRTR confirmation
+S15 MRTR confirmation, S16 MCP Tasks
 
 ## 1. Objective
 
@@ -233,11 +233,26 @@ than hiding it inside the iframe.
 
 ## 8. Task progress
 
-S18 does not add a second task monitor. After a successful apply, the existing
-result returns `task_id` and the `tasks.wait` next hint. The host follows that
-hint. S17 is implemented, but MCP Apps hosts relay tool calls and results to
-a view, not `subscriptions/listen` streams, so the view keeps following the
-hint; recorded in `docs/TODO.md`.
+S18 adds no task monitor. The host executes the reviewed apply and receives
+one of two results, decided by the capabilities on its final confirmation
+retry (S16 §8 item 4), and MUST continue by the result it actually got —
+the handoff message (`handoffMessage()`, `mcp-apps/plan-facts.ts`) says so:
+
+- **Native** (`io.modelcontextprotocol/tasks` declared): `resultType:
+  "task"` with `taskId` (= the xiNAS `task_id`), `status` and
+  `pollIntervalMs` (S16 §5.1). Follow with `tasks/get` until the status is
+  terminal, then read the terminal `CallToolResult` (S16 §6.6): `completed`
+  with `isError: true` is a failed or manual-recovery task, not a created
+  array.
+- **Fallback** (no extension): `resultType: "complete"` whose text carries
+  `task_id` and `next: { tool: "tasks.wait", args: { id, timeout_s: 25 } }`
+  (S16 §12.1). Follow the hint until `state` is terminal.
+
+Both terminal outcomes report the control-path task only: the xiRAID
+initialization the array starts afterwards is a separate operation, visible
+through `arrays.get` or the `raid` / `raid/progress` feeds (S17 §8.2–§8.3),
+never inferred from the task. The view itself does not consume the S17
+feeds (`docs/TODO.md`).
 
 ## 9. Accessibility and layout
 
@@ -276,6 +291,7 @@ hint; recorded in `docs/TODO.md`.
     and declares no optional sandbox permission.
 12. Typecheck, lint, formatting, unit/contract tests, production build, and
     OpenAPI validation pass.
+13. The handoff arguments are exactly `{ mode, plan_id, expected_revision, idempotency_key }`, and the same arguments reach one task under both result shapes (`__tests__/api/mcp/mcp-apps-handoff.test.ts`).
 
 ## 12. Non-goals
 
