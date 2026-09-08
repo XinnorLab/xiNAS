@@ -59,6 +59,12 @@ const UNHEALTHY_WORDS: ReadonlySet<string> = new Set([
   'offline',
   'unrecovered',
   'none',
+  // the parser's alternate failure spellings (lib/parse/raid.ts FAILED_STATES):
+  // known words, and each one proves a fault, not an unresolved state.
+  'broken',
+  'unusable',
+  'faulty',
+  'failed',
 ]);
 
 type Condition = 'degraded' | 'read_only' | 'offline' | 'unrecovered';
@@ -275,6 +281,7 @@ function onArrayChange(ctx: ChangeCtx): void {
 
   // Source warnings first: an unknown word is reported once per (array, word).
   warnUnknownWords(ctx, id, cur);
+  warnStructuralGaps(ctx, id, cur);
 
   if (prev === null) {
     if (ctx.baselineDone('XiraidArray')) {
@@ -523,6 +530,25 @@ function warnUnknownWords(ctx: ChangeCtx, id: string, cur: ArrayView): void {
     });
   }
   if (changed) ctx.meta.set(key, [...warned]);
+}
+
+/**
+ * A structural gap in the source row — no member states at all for an array
+ * whose spec lists members, or a member whose state list is empty — is not
+ * an unknown word and warnUnknownWords never sees it, but it leaves the
+ * array `unknown` with no operator-visible signal. Logged (spec §8.5,
+ * docs/TODO.md), never journaled: this is a source-completeness problem,
+ * not a domain event.
+ */
+function warnStructuralGaps(ctx: ChangeCtx, id: string, cur: ArrayView): void {
+  const missing: string[] = [];
+  if (cur.memberIds.length > 0 && cur.members.size === 0) missing.push('member_states');
+  for (const [device, states] of cur.members) {
+    if (states.length === 0) missing.push(`member_states[${device}].states`);
+  }
+  if (missing.length > 0) {
+    ctx.log('warn', 'event_source_incomplete', { kind: 'XiraidArray', id, missing });
+  }
 }
 
 /**

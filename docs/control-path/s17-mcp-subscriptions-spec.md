@@ -732,8 +732,10 @@ member_states: [{device, states}], spare_pool, spare_disk_ids }`.
 - `active(kind)`: `initing ∈ W` (initialization) / `reconstructing ∈ W`
   (reconstruction).
 - `unhealthy`: `W ∩ {degraded, need_recon, need_init, inconsistent,
-  read_only, offline, unrecovered, none} ≠ ∅`, or any member whose states
-  contain `offline`, `reconstructing` or `need_recon`, or `active(*)`.
+  read_only, offline, unrecovered, none} ≠ ∅`, or one of the parser's
+  alternate failure spellings (`broken`, `unusable`, `faulty`, `failed` —
+  `lib/parse/raid.ts`), or any member whose states contain `offline`,
+  `reconstructing` or `need_recon`, or `active(*)`.
 - `unknown`: not `unhealthy`, and one of: a word of `W` outside the
   vocabulary; a member word outside the vocabulary; a member with no
   state; no member states for an array whose spec lists members;
@@ -752,6 +754,11 @@ is a fixture defect, not a production shape.
 `unknown` is a source problem, not a state: it is reported once per
 (array, word) as `raid.source.unknown_state` (member words included) and
 never completes, fails, recovers or restores anything.
+
+A structural gap — a member with no state words, or no member states at
+all for an array whose spec lists members — is logged as
+`event_source_incomplete` `{ kind: 'XiraidArray', id, missing }` (not
+journaled; `docs/TODO.md`).
 
 **Array lifecycle.** `previous === null ∧ current ≠ null` in a complete
 snapshot after the baseline of the kind → `raid.array.created` (details:
@@ -816,8 +823,8 @@ fires (§8.6) the engine stores `restore_pending = { bootId, knownArrays }`
 snapshot afterwards, per known array, the worst proven fact wins: absent or
 `none ∈ W` → `raid.restore.failed` `{ result: "not_restored" }`; `offline`
 → `offline`; `unrecovered` → `unrecovered`; `read_only` → `read_only`;
-`degraded ∨ need_recon` → `degraded`; another unhealthy word, or a
-member-proven fault, → `unhealthy`; an active operation → `running`;
+`degraded ∨ need_recon` → `degraded`; another unhealthy word → `unhealthy`;
+an active operation → `running`; a member-proven fault → `unhealthy`;
 `unknown` per the predicates → `unknown`; only a proven `healthy` →
 `healthy` (all but the first are `raid.restore.completed` with that
 `result`, severities in §6.4). Ordinary

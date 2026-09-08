@@ -209,6 +209,12 @@ describe('RAID producer (S17 §8.2)', () => {
     });
 
     it('a member with no state is undecided, not healthy', () => {
+      h.close();
+      const logs: unknown[] = [];
+      h = makeHarness({
+        producers: [raidProducer, poolProducer],
+        log: (level, msg, fields) => logs.push([level, msg, fields]),
+      });
       step(['online'], ['online', 'initing']);
       const blank: ArrayOpts = {
         members: [
@@ -222,6 +228,41 @@ describe('RAID producer (S17 §8.2)', () => {
         generation: 1,
         active: true,
       });
+      expect(logs).toContainEqual([
+        'warn',
+        'event_source_incomplete',
+        expect.objectContaining({
+          kind: 'XiraidArray',
+          id: 'a',
+          missing: ['member_states[d2].states'],
+        }),
+      ]);
+    });
+
+    it('an undecided operation end logs a warning and keeps the progress meta (I-01)', () => {
+      h.close();
+      const logs: unknown[] = [];
+      h = makeHarness({
+        producers: [raidProducer, poolProducer],
+        log: (level, msg, fields) => logs.push([level, msg, fields]),
+      });
+      step(['online'], ['online', 'initing']);
+      step(['online', 'initing'], ['online', 'initing'], undefined, { init: 42 });
+      step(['online', 'initing'], ['future_state']);
+      expect(logs).toContainEqual([
+        'warn',
+        'event_operation_end_undecided',
+        expect.objectContaining({ array: 'a', kind: 'initialization' }),
+      ]);
+      expect(h.journal.metaGet('progress:a:initialization')).not.toBeNull();
+    });
+
+    it('an alternate failure spelling ends an operation as failed, not unknown (I-01)', () => {
+      step(['online'], ['online', 'initing']);
+      const ev = step(['online', 'initing'], ['failed']);
+      expect(types(ev)).toEqual(['raid.operation.failed']);
+      expect(ev[0]?.severity).toBe('warning');
+      expect(ev[0]?.details).toMatchObject({ finalStates: ['failed'] });
     });
 
     it('the active word reappearing while the end is undecided is not a new start', () => {
@@ -548,6 +589,15 @@ describe('RAID producer (S17 §8.2)', () => {
         ['e', 'raid.restore.completed', 'error', 'unhealthy'],
       ]);
       expect(h.journal.metaGet('restore_pending')).toBeNull();
+    });
+
+    it('an alternate failure spelling restores as unhealthy, not healthy (I-01)', () => {
+      h.journal.metaSet('restore_pending', { bootId: 'b2', knownArrays: ['a'] });
+      h.kv.put('XiraidArray', 'a', arrayRow(['failed']));
+      const ev = h.snapshot('XiraidArray', ['a']);
+      expect(types(ev)).toEqual(['raid.restore.completed']);
+      expect(ev[0]?.details).toMatchObject({ result: 'unhealthy' });
+      expect(ev[0]?.severity).toBe('error');
     });
   });
 });

@@ -29,13 +29,14 @@ deferred and the change that deferred it.
 **What is missing.** A journaled signal for an observation row that lacks a
 field a producer rule needs (a `Filesystem` without
 `effective_mount_options`, an `NfsProfile` without `rdma_listening`, an
-RDMA link reading `unknown`), the way `raid.source.unknown_state` reports a
-RAID word outside the vocabulary.
+RDMA link reading `unknown`, an `XiraidArray` whose members carry no
+state), the way `raid.source.unknown_state` reports a RAID word outside
+the vocabulary.
 
 **What the code does instead.** The producer keeps its last proven state
-and logs `event_source_incomplete` (`{ kind, id, missing, kept }`) through
-the engine log; nothing reaches the feeds, so a client cannot subscribe to
-it.
+and logs `event_source_incomplete` (`{ kind, id, missing, kept }` — the
+export-backing rule adds `exportPath`) through the engine log; nothing
+reaches the feeds, so a client cannot subscribe to it.
 
 **Why it was cut.** A new event family is a closed-taxonomy change (§6.4,
 §6.5, `producers` block, contract fixtures) with no consumer yet; the
