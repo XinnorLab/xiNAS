@@ -137,6 +137,91 @@ describe('RAID producer (S17 §8.2)', () => {
     });
   });
 
+  describe('undecidable states never end an operation (I-01)', () => {
+    it('an unknown array word at the end of an initialization is warned, kept active, and settled by the first proven state', () => {
+      step(['online'], ['online', 'initing']);
+      let ev = step(['online', 'initing'], ['future_state']);
+      expect(types(ev)).toEqual(['raid.source.unknown_state']);
+      expect(h.journal.metaGet('raid_op:a:initialization')).toEqual({
+        generation: 1,
+        active: true,
+      });
+      ev = step(['future_state'], ['online']);
+      expect(types(ev)).toEqual(['raid.operation.completed']);
+      expect(ev[0]?.operation).toEqual({ kind: 'initialization', generation: 1 });
+      expect(h.journal.metaGet('raid_op:a:initialization')).toEqual({
+        generation: 1,
+        active: false,
+      });
+      expect(types(step(['online'], ['online']))).toEqual([]);
+    });
+
+    it('online beside an unknown word is still undecided; a later proven fault is the failure', () => {
+      step(['online'], ['online', 'initing']);
+      expect(types(step(['online', 'initing'], ['online', 'future_state']))).toEqual([
+        'raid.source.unknown_state',
+      ]);
+      const ev = step(['online', 'future_state'], ['offline']);
+      expect(types(ev)).toEqual(['raid.operation.failed', 'raid.state.offline']);
+      expect(ev[0]?.details).toMatchObject({ finalStates: ['offline'], generation: 1 });
+    });
+
+    it('a proven fault beside an unknown word is still a failure', () => {
+      step(['online'], ['online', 'initing']);
+      const ev = step(['online', 'initing'], ['need_init', 'future_state']);
+      expect(types(ev)).toEqual(['raid.source.unknown_state', 'raid.operation.failed']);
+    });
+
+    it('an unknown member word blocks completion (warned once); members proven online complete it once', () => {
+      step(['online'], ['online', 'initing']);
+      const weird: ArrayOpts = {
+        members: [
+          ['d1', ['online']],
+          ['d2', ['future_member_state']],
+          ['d3', ['online']],
+        ],
+      };
+      let ev = step(['online', 'initing'], ['online'], undefined, weird);
+      expect(types(ev)).toEqual(['raid.source.unknown_state']);
+      expect(ev[0]?.details).toMatchObject({ word: 'future_member_state' });
+      expect(types(step(['online'], ['online'], weird, weird))).toEqual([]);
+      ev = step(['online'], ['online'], weird, undefined);
+      expect(types(ev)).toEqual(['raid.operation.completed']);
+      expect(types(step(['online'], ['online']))).toEqual([]);
+    });
+
+    it('a member with no state is undecided, not healthy', () => {
+      step(['online'], ['online', 'initing']);
+      const blank: ArrayOpts = {
+        members: [
+          ['d1', ['online']],
+          ['d2', []],
+          ['d3', ['online']],
+        ],
+      };
+      expect(types(step(['online', 'initing'], ['online'], undefined, blank))).toEqual([]);
+      expect(h.journal.metaGet('raid_op:a:initialization')).toEqual({
+        generation: 1,
+        active: true,
+      });
+    });
+
+    it('the active word reappearing while the end is undecided is not a new start', () => {
+      step(['online'], ['online', 'initing']);
+      step(['online', 'initing'], ['future_state']);
+      expect(types(step(['future_state'], ['online', 'initing']))).toEqual([]);
+      const ev = step(['online', 'initing'], ['online']);
+      expect(types(ev)).toEqual(['raid.operation.completed']);
+      expect(ev[0]?.operation).toEqual({ kind: 'initialization', generation: 1 });
+    });
+
+    it('an unknown word does not recover a condition; the proven healthy row does', () => {
+      expect(types(step(['online'], ['degraded']))).toEqual(['raid.state.degraded']);
+      expect(types(step(['degraded'], ['future_state']))).toEqual(['raid.source.unknown_state']);
+      expect(types(step(['future_state'], ['online']))).toEqual(['raid.state.recovered']);
+    });
+  });
+
   describe('array state conditions', () => {
     it.each([
       [['online', 'read_only'], 'raid.state.read_only', 'error'],
@@ -415,6 +500,36 @@ describe('RAID producer (S17 §8.2)', () => {
       h.journal.metaSet('restore_pending', { bootId: 'b2', knownArrays: ['a'] });
       expect(types(h.snapshot('Pool', []))).toEqual([]);
       expect(h.journal.metaGet('restore_pending')).not.toBeNull();
+    });
+
+    it('names degraded, running, unknown, unrecovered and member-faulted arrays instead of calling them healthy (I-01)', () => {
+      h.journal.metaSet('restore_pending', {
+        bootId: 'b2',
+        knownArrays: ['a', 'b', 'c', 'd', 'e'],
+      });
+      h.kv.put('XiraidArray', 'a', arrayRow(['degraded', 'reconstructing']));
+      h.kv.put('XiraidArray', 'b', { ...arrayRow(['online', 'initing']), id: 'b' });
+      h.kv.put('XiraidArray', 'c', { ...arrayRow(['online', 'future_state']), id: 'c' });
+      h.kv.put('XiraidArray', 'd', { ...arrayRow(['unrecovered']), id: 'd' });
+      h.kv.put('XiraidArray', 'e', {
+        ...arrayRow(['online'], {
+          members: [
+            ['d1', ['online']],
+            ['d2', ['offline']],
+            ['d3', ['online']],
+          ],
+        }),
+        id: 'e',
+      });
+      const ev = h.snapshot('XiraidArray', ['a', 'b', 'c', 'd', 'e']);
+      expect(ev.map((e) => [e.subject.id, e.type, e.severity, e.details?.result])).toEqual([
+        ['a', 'raid.restore.completed', 'error', 'degraded'],
+        ['b', 'raid.restore.completed', 'info', 'running'],
+        ['c', 'raid.restore.completed', 'warning', 'unknown'],
+        ['d', 'raid.restore.completed', 'critical', 'unrecovered'],
+        ['e', 'raid.restore.completed', 'error', 'unhealthy'],
+      ]);
+      expect(h.journal.metaGet('restore_pending')).toBeNull();
     });
   });
 });

@@ -542,7 +542,7 @@ copied.
 | `raid.device.error_count_increased` (gated) | warning | raid |
 | `raid.device.fault_threshold_reached`, `raid.device.critical_wear` (gated) | error | raid |
 | `raid.license.expired`, `raid.license.drive_limit_exceeded` (gated) | error | raid |
-| `raid.restore.completed` | info (`healthy`), warning (`read_only`), error (`offline`) | raid |
+| `raid.restore.completed` | info (`healthy`, `running`), warning (`read_only`, `unknown`), error (`degraded`, `unhealthy`, `offline`), critical (`unrecovered`) | raid |
 | `raid.restore.failed` | error | raid |
 | `raid.operation.progress` | info | raid/progress |
 | `filesystem.definition.added`, `filesystem.definition.removed` | info | storage |
@@ -731,9 +731,19 @@ member_states: [{device, states}], spare_pool, spare_disk_ids }`.
 
 - `active(kind)`: `initing ∈ W` (initialization) / `reconstructing ∈ W`
   (reconstruction).
-- `unhealthy(W)`: `W ∩ {degraded, need_recon, need_init, inconsistent,
-  read_only, offline, unrecovered, none} ≠ ∅`.
-- `healthy(W)`: `online ∈ W ∧ ¬unhealthy(W) ∧ ¬active(*)`.
+- `unhealthy`: `W ∩ {degraded, need_recon, need_init, inconsistent,
+  read_only, offline, unrecovered, none} ≠ ∅`, or any member whose states
+  contain `offline`, `reconstructing` or `need_recon`, or `active(*)`.
+- `unknown`: not `unhealthy`, and one of: a word of `W` outside the
+  vocabulary; a member word outside the vocabulary; a member with no
+  state; no member states for an array whose spec lists members;
+  `online ∉ W`.
+- `healthy`: neither of the above (`online ∈ W`, every member proven
+  `online`, no active operation).
+
+`unknown` is a source problem, not a state: it is reported once per
+(array, word) as `raid.source.unknown_state` (member words included) and
+never completes, fails, recovers or restores anything.
 
 **Array lifecycle.** `previous === null ∧ current ≠ null` in a complete
 snapshot after the baseline of the kind → `raid.array.created` (details:
@@ -752,8 +762,10 @@ SUBS-RAID-002/003), with `A = active(kind)`:
 |---|---|---|
 | `null` | `A` | `raid.operation.observed_running` (generation 1) |
 | `¬A` | `A` | `raid.operation.started` (generation +1) |
-| `A` | `¬A ∧ healthy` | `raid.operation.completed` |
-| `A` | `¬A ∧ ¬healthy` | `raid.operation.failed`; `details.finalStates = raw_states`; severity per §6.4 |
+| `A` (word, or `raid_op` still active) | `¬A ∧ healthy` | `raid.operation.completed` |
+| `A` (word, or `raid_op` still active) | `¬A ∧ unhealthy` | `raid.operation.failed`; `details.finalStates = raw_states`; severity per §6.4 |
+| `A` (word, or `raid_op` still active) | `¬A ∧ unknown` | nothing: `raid_op` stays active with the same generation, progress state is kept, `event_operation_end_undecided` is logged; the first later `healthy`/`unhealthy` observation emits the terminal event above |
+| `raid_op` active after an undecided end | `A` again | nothing (no new generation) |
 | `A` | row deleted | no operation event (`raid.array.removed` carries `operationInProgress`) |
 
 A `reconstructing` that ends in `need_recon`, `degraded`, `offline` or
@@ -793,14 +805,16 @@ references the pool → `raid.spare_pool.exhausted`; non-empty again →
 **Restore after reboot** (SUBS-RAID-007). When `system.reboot.detected`
 fires (§8.6) the engine stores `restore_pending = { bootId, knownArrays }`
 (the current observed array ids). On the first complete `XiraidArray`
-snapshot afterwards, per known array: present with `healthy` →
-`raid.restore.completed` `{ result: "healthy" }`; present with `read_only ∈
-W` → `{ result: "read_only" }`; present with `offline ∈ W` →
-`{ result: "offline" }`; absent, or present with `none ∈ W` →
-`raid.restore.failed` `{ result: "not_restored" }`. Ordinary transitions
-for that snapshot are emitted as well (they are different facts). Until
-that snapshot arrives (daemon still starting: the collector reports
-`error`, no snapshot is sent) nothing is emitted (V-35).
+snapshot afterwards, per known array, the worst proven fact wins: absent or
+`none ∈ W` → `raid.restore.failed` `{ result: "not_restored" }`; `offline`
+→ `offline`; `unrecovered` → `unrecovered`; `read_only` → `read_only`;
+`degraded ∨ need_recon` → `degraded`; another unhealthy word → `unhealthy`;
+an active operation → `running`; `unknown` per the predicates → `unknown`;
+only a proven `healthy` → `healthy` (all but the first are
+`raid.restore.completed` with that `result`, severities in §6.4). Ordinary
+transitions for that snapshot are emitted as well (they are different
+facts). Until that snapshot arrives (daemon still starting: the collector
+reports `error`, no snapshot is sent) nothing is emitted (V-35).
 
 **Source-gated families** (D-16): `raid.device.*`, `raid.license.*` —
 listed under `producers.inactive` with the reasons from §4.4 until a
@@ -1189,7 +1203,7 @@ and point at the polling fallback.
 | 10 | array/member/spare/restore transition tests; media/license typed and gated | §8.2, D-16 |
 | 11 | mount/read-only/capacity | §8.4 |
 | 12 | NFS service/export/backing/RDMA/sessions | §8.5 |
-| 13 | missing data never becomes state | §8.0, §8.6, §14 |
+| 13 | missing data never becomes state | §8.0, §8.2 (unknown), §8.5 (incomplete rows), §8.6, §14 |
 | 14 | limits/coalescing/overflow lose no rows | §5.6 |
 | 15 | revocation, redaction | §9, §6.2 |
 | 16 | audit bounded, metric labels bounded | §11, §12 |

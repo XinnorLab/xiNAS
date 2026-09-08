@@ -31,9 +31,13 @@ const failedBy = (ctx: SeverityContext): Severity => {
 const restoreBy = (ctx: SeverityContext): Severity => {
   switch (ctx.details?.result) {
     case 'healthy':
+    case 'running':
       return 'info';
     case 'read_only':
+    case 'unknown':
       return 'warning';
+    case 'unrecovered':
+      return 'critical';
     default:
       return 'error';
   }
@@ -235,7 +239,17 @@ const DEVICE = obj({
 });
 const RESTORE = obj({
   array: STR,
-  result: ENUM('healthy', 'read_only', 'offline', 'not_restored'),
+  result: ENUM(
+    'healthy',
+    'read_only',
+    'offline',
+    'unrecovered',
+    'degraded',
+    'unhealthy',
+    'running',
+    'unknown',
+    'not_restored',
+  ),
   bootId: STR,
   rawStates: STR_ARRAY,
 });

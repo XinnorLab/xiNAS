@@ -151,19 +151,38 @@ export function arrayView(row: Row | null): ArrayView | null {
 export const isActive = (v: ArrayView, kind: OperationKind): boolean =>
   v.rawStates.includes(ACTIVE_WORD[kind]);
 
-const membersHealthy = (v: ArrayView): boolean => {
-  for (const states of v.members.values()) {
-    if (states.some((w) => MEMBER_BLOCKING_WORDS.has(w))) return false;
-  }
-  return true;
-};
+export type Health = 'healthy' | 'unhealthy' | 'unknown';
 
-export const isHealthy = (v: ArrayView): boolean =>
-  v.rawStates.includes('online') &&
-  !v.rawStates.some((w) => UNHEALTHY_WORDS.has(w)) &&
-  !isActive(v, 'initialization') &&
-  !isActive(v, 'reconstruction') &&
-  membersHealthy(v);
+/** One member's state words, judged with the same vocabulary as the array. */
+function memberHealth(states: string[]): Health {
+  if (states.some((w) => MEMBER_BLOCKING_WORDS.has(w))) return 'unhealthy';
+  if (states.length === 0 || states.some((w) => !KNOWN_WORDS.has(w))) return 'unknown';
+  return states.includes('online') ? 'healthy' : 'unknown';
+}
+
+/**
+ * Tri-state health (spec §8.2). `unhealthy` needs a proving word on the
+ * array or on a member; `healthy` needs `online`, no unhealthy word, no
+ * active operation and every member proven `online`; anything the
+ * vocabulary cannot settle — an unknown array or member word, a member with
+ * no state, no member states at all for an array that has members, or no
+ * `online` word — is `unknown`. Unknown is never a completion, a failure
+ * or a recovery (AC13: missing data never becomes state).
+ */
+export function assess(v: ArrayView): Health {
+  const W = v.rawStates;
+  if (W.some((w) => UNHEALTHY_WORDS.has(w))) return 'unhealthy';
+  const members = [...v.members.values()].map(memberHealth);
+  if (members.includes('unhealthy')) return 'unhealthy';
+  if (isActive(v, 'initialization') || isActive(v, 'reconstruction')) return 'unhealthy';
+  if (W.some((w) => !KNOWN_WORDS.has(w))) return 'unknown';
+  if (members.includes('unknown')) return 'unknown';
+  if (v.memberIds.length > 0 && v.members.size === 0) return 'unknown';
+  if (!W.includes('online')) return 'unknown';
+  return 'healthy';
+}
+
+export const isHealthy = (v: ArrayView): boolean => assess(v) === 'healthy';
 
 export function conditions(v: ArrayView): Set<Condition> {
   const out = new Set<Condition>();
@@ -295,25 +314,40 @@ function onArrayChange(ctx: ChangeCtx): void {
     return;
   }
 
-  // 1. Operation ends.
+  // 1. Operation ends — judged by the durable op record, not by the previous
+  //    row alone, so an end left undecided by an unknown state is settled by
+  //    the first later observation the vocabulary can prove.
   for (const kind of OPERATION_KINDS) {
-    if (isActive(prev, kind) && !isActive(cur, kind)) {
-      const op = meta.get<OpMeta>(META_KEYS.raidOp(id, kind));
-      const generation = op?.generation ?? 1;
-      const healthy = isHealthy(cur);
-      ctx.emit({
-        feed: 'raid',
-        type: healthy ? 'raid.operation.completed' : 'raid.operation.failed',
-        subject,
-        args: { array: id, kind },
-        previous: projection(prev),
-        current: projection(cur),
-        operation: { kind, generation },
-        details: { array: id, kind, generation, finalStates: cur.rawStates, observedAt },
+    const op = meta.get<OpMeta>(META_KEYS.raidOp(id, kind));
+    const wasActive = isActive(prev, kind) || op?.active === true;
+    if (!wasActive || isActive(cur, kind)) continue;
+    const generation = op?.generation ?? 1;
+    const health = assess(cur);
+    if (health === 'unknown') {
+      // Not proven either way: no terminal event; the operation stays active
+      // (same generation) and its progress state is kept for a later decision.
+      if (op === null || !op.active) {
+        meta.set(META_KEYS.raidOp(id, kind), { generation, active: true } satisfies OpMeta);
+      }
+      ctx.log('warn', 'event_operation_end_undecided', {
+        array: id,
+        kind,
+        rawStates: cur.rawStates,
       });
-      meta.set(META_KEYS.raidOp(id, kind), { generation, active: false } satisfies OpMeta);
-      meta.delete(META_KEYS.progress(id, kind));
+      continue;
     }
+    ctx.emit({
+      feed: 'raid',
+      type: health === 'healthy' ? 'raid.operation.completed' : 'raid.operation.failed',
+      subject,
+      args: { array: id, kind },
+      previous: projection(prev),
+      current: projection(cur),
+      operation: { kind, generation },
+      details: { array: id, kind, generation, finalStates: cur.rawStates, observedAt },
+    });
+    meta.set(META_KEYS.raidOp(id, kind), { generation, active: false } satisfies OpMeta);
+    meta.delete(META_KEYS.progress(id, kind));
   }
 
   // 2. State conditions entered, and recovery.
@@ -351,8 +385,10 @@ function onArrayChange(ctx: ChangeCtx): void {
 
   // 3. Operation starts.
   for (const kind of OPERATION_KINDS) {
-    if (!isActive(prev, kind) && isActive(cur, kind)) {
-      const op = meta.get<OpMeta>(META_KEYS.raidOp(id, kind));
+    const op = meta.get<OpMeta>(META_KEYS.raidOp(id, kind));
+    // An operation whose end was never proven (op still active) is not a new
+    // start when its word reappears: same generation, no event.
+    if (!isActive(prev, kind) && isActive(cur, kind) && op?.active !== true) {
       const generation = (op?.generation ?? 0) + 1;
       meta.set(META_KEYS.raidOp(id, kind), { generation, active: true } satisfies OpMeta);
       meta.delete(META_KEYS.progress(id, kind));
@@ -452,8 +488,11 @@ function emitCondition(
 }
 
 function warnUnknownWords(ctx: ChangeCtx, id: string, cur: ArrayView): void {
-  const unknown = cur.rawStates.filter((w) => !KNOWN_WORDS.has(w));
-  if (unknown.length === 0) return;
+  const unknown = new Set(cur.rawStates.filter((w) => !KNOWN_WORDS.has(w)));
+  for (const states of cur.members.values()) {
+    for (const w of states) if (!KNOWN_WORDS.has(w)) unknown.add(w);
+  }
+  if (unknown.size === 0) return;
   const key = META_KEYS.unknownStateWarned(id);
   const warned = new Set(ctx.meta.get<string[]>(key) ?? []);
   let changed = false;
@@ -545,6 +584,32 @@ function clearArrayMeta(ctx: ChangeCtx | SnapshotCtx, id: string): void {
   ctx.meta.delete(META_KEYS.unknownStateWarned(id));
 }
 
+type RestoreResult =
+  | 'healthy'
+  | 'read_only'
+  | 'offline'
+  | 'unrecovered'
+  | 'degraded'
+  | 'unhealthy'
+  | 'running'
+  | 'unknown'
+  | 'not_restored';
+
+/** Worst proven fact first; `healthy` only when `assess` proves it (spec §8.2). */
+function restoreResult(v: ArrayView | null): RestoreResult {
+  if (v === null || v.rawStates.includes('none')) return 'not_restored';
+  const W = v.rawStates;
+  if (W.includes('offline')) return 'offline';
+  if (W.includes('unrecovered')) return 'unrecovered';
+  if (W.includes('read_only')) return 'read_only';
+  if (W.includes('degraded') || W.includes('need_recon')) return 'degraded';
+  if (W.some((w) => UNHEALTHY_WORDS.has(w))) return 'unhealthy';
+  if (OPERATION_KINDS.some((k) => isActive(v, k))) return 'running';
+  const health = assess(v);
+  if (health === 'healthy') return 'healthy';
+  return health === 'unhealthy' ? 'unhealthy' : 'unknown';
+}
+
 /** Restore outcomes on the first complete XiraidArray snapshot after a reboot (spec §8.2). */
 function onArraySnapshot(ctx: SnapshotCtx): void {
   const pending = ctx.meta.get<RestorePending>(META_KEYS.restorePending);
@@ -555,11 +620,7 @@ function onArraySnapshot(ctx: SnapshotCtx): void {
       ? ctx.kv.get<Row>(`/xinas/v1/observed/XiraidArray/${name}`)
       : null;
     const v = row === null ? null : arrayView(row.value);
-    let result: 'healthy' | 'read_only' | 'offline' | 'not_restored';
-    if (v === null || v.rawStates.includes('none')) result = 'not_restored';
-    else if (v.rawStates.includes('offline')) result = 'offline';
-    else if (v.rawStates.includes('read_only')) result = 'read_only';
-    else result = 'healthy';
+    const result = restoreResult(v);
     ctx.emit({
       feed: 'raid',
       type: result === 'not_restored' ? 'raid.restore.failed' : 'raid.restore.completed',
