@@ -141,7 +141,13 @@ following hold:
 
 Disabled disks show a reason. The View MUST NOT manufacture missing identity,
 capacity, health, or eligibility facts. A refresh clears any selected disk that
-became ineligible and invalidates the current plan.
+became ineligible and invalidates the current plan. A refresh that fails on
+any of the three calls, or that succeeds with a `DEGRADED_*` warning on any of
+them, marks the inventory **not current**: the previously displayed disks stay
+visible under a banner that names the error or warning, the current plan is
+discarded, and `Review plan` / `Request secure creation` stay disabled until a
+refresh succeeds without a blocking warning. Other warnings are displayed and
+do not block (`mcp-apps/inventory-facts.ts`).
 
 The UI displays stable Disk `id` as the selection identity and may display
 device path, model, serial, capacity, NUMA node, temperature, wear, and health
@@ -267,7 +273,9 @@ feeds (`docs/TODO.md`).
 
 ## 10. Failure behavior
 
-- Inventory failures leave the form non-submittable and show the tool error.
+- Inventory failures and `DEGRADED_*` warnings leave the form non-submittable,
+  show the tool error or warning, and never present the last known rows as
+  current (§5).
 - Malformed tool content is treated as an error, not as an empty inventory.
 - Transport failures never clear a previously displayed server error.
 - A plan with blockers is reviewable but not applicable.

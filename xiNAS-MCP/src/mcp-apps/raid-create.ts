@@ -1,6 +1,14 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { isPooled, pooledDevicePaths } from './inventory-facts.js';
+import {
+  classifyWarnings,
+  type InventoryTrust,
+  type InventoryWarning,
+  inventoryBanner,
+  isPooled,
+  pooledDevicePaths,
+  warningText,
+} from './inventory-facts.js';
 import {
   type AffectedResource,
   affectedResourcesText,
@@ -114,6 +122,9 @@ let busy = false;
 let statusMessage = 'Connecting to xiNAS…';
 let statusKind: 'info' | 'success' | 'error' = 'info';
 let handoffSent = false;
+let inventoryTrust: InventoryTrust = 'none';
+let inventoryDetail = '';
+let inventoryAdvisories: InventoryWarning[] = [];
 
 function textContent(result: CallToolResult): string {
   const block = result.content?.find((item) => item.type === 'text');
@@ -217,6 +228,9 @@ function fingerprint(): string {
 function validationErrors(): string[] {
   if (config === null) return ['Configuration is not loaded'];
   const errors: string[] = [];
+  if (inventoryTrust !== 'trusted') {
+    errors.push('Inventory is not current — refresh before planning.');
+  }
   const name = fieldValue('array-name');
   if (!/^[A-Za-z0-9_]{1,28}$/.test(name)) {
     errors.push('Name must use 1–28 Latin letters, digits, or underscores.');
@@ -329,7 +343,7 @@ function planPanel(): string {
       <p>xiNAS will validate current disk state, topology, leases, and the exact xiRAID request before any change is allowed.</p>
     </section>`;
   }
-  const blocked = (plan.blockers?.length ?? 0) > 0;
+  const blocked = (plan.blockers?.length ?? 0) > 0 || inventoryTrust !== 'trusted';
   const stale = planFingerprint !== fingerprint();
   // `.plan-facts dd` ellipsises; the title carries the full list on hover.
   const affected = escapeHtml(affectedResourcesText(plan.affected_resources));
@@ -376,7 +390,8 @@ function render(): void {
   const existingGroup = fieldValue('group-size') || String(rule.group_size_min);
   const existingSynd = fieldValue('synd-count') || String(rule.synd_cnt_min);
 
-  root.innerHTML = `<div class="app-shell">
+  const banner = inventoryBanner(inventoryTrust, inventoryDetail);
+  root.innerHTML = `<div class="app-shell" data-inventory-trust="${inventoryTrust}">
     <header class="hero">
       <div class="brand"><span class="brand-mark">xi</span><span>NAS</span></div>
       <div class="hero-copy"><span class="eyebrow">MCP APP · STORAGE CONTROL</span><h1>Create a xiRAID array</h1><p>Configure topology, select physical disks, and pass an authoritative plan to secure confirmation.</p></div>
@@ -384,6 +399,8 @@ function render(): void {
     </header>
 
     <div class="step-line"><span class="active">01 Configure</span><span class="active">02 Select drives</span><span class="${plan ? 'active' : ''}">03 Review & confirm</span></div>
+    ${banner ? `<div class="notice error" id="inventory-banner" role="alert">${escapeHtml(banner)}</div>` : ''}
+    ${inventoryAdvisories.length > 0 ? `<div class="notice warning" id="inventory-advisories">${inventoryAdvisories.map((w) => escapeHtml(warningText(w))).join('<br />')}</div>` : ''}
 
     <div class="workspace">
       <div class="form-column">
@@ -509,11 +526,31 @@ async function refreshInventory(): Promise<void> {
     plan = null;
     planFingerprint = '';
     handoffSent = false;
-    statusMessage = `Inventory refreshed · ${disks.length} disks observed`;
-    statusKind = 'success';
+    const all = classifyWarnings([
+      ...(diskPayload.warnings ?? []),
+      ...(arrayPayload.warnings ?? []),
+      ...(poolPayload.warnings ?? []),
+    ]);
+    inventoryAdvisories = all.advisory;
+    if (all.blocking.length > 0) {
+      inventoryTrust = 'degraded';
+      inventoryDetail = all.blocking.map(warningText).join('; ');
+      statusMessage = `Inventory refreshed with warnings · ${disks.length} disks observed`;
+      statusKind = 'error';
+    } else {
+      inventoryTrust = 'trusted';
+      inventoryDetail = '';
+      statusMessage = `Inventory refreshed · ${disks.length} disks observed`;
+      statusKind = 'success';
+    }
   } catch (error) {
     statusMessage = error instanceof Error ? error.message : String(error);
     statusKind = 'error';
+    inventoryTrust = 'failed';
+    inventoryDetail = statusMessage;
+    plan = null;
+    planFingerprint = '';
+    handoffSent = false;
   } finally {
     busy = false;
     render();
@@ -521,7 +558,7 @@ async function refreshInventory(): Promise<void> {
 }
 
 async function requestPlan(): Promise<void> {
-  if (config === null || validationErrors().length > 0) return;
+  if (config === null || validationErrors().length > 0 || inventoryTrust !== 'trusted') return;
   busy = true;
   statusMessage = 'xiNAS is validating the plan…';
   statusKind = 'info';
@@ -553,6 +590,7 @@ async function requestPlan(): Promise<void> {
 
 async function requestSecureApply(): Promise<void> {
   if (config === null || plan === null || planFingerprint !== fingerprint()) return;
+  if (inventoryTrust !== 'trusted') return;
   if ((plan.blockers?.length ?? 0) > 0) return;
   busy = true;
   statusMessage = 'Passing the reviewed plan to the secure host workflow…';
