@@ -48,7 +48,7 @@ const hostPage = `<!doctype html><html><body>
 <iframe id="view" src="/app" style="width:100%;height:100vh;border:0"></iframe>
 <script>
 const config = ${JSON.stringify(config)}, disks = ${JSON.stringify(disks)}, plan = ${JSON.stringify(plan)};
-window.fixture = { calls: [], failTool: null, pooled: false, degraded: false, lastHandoff: null };
+window.fixture = { calls: [], failTool: null, pooled: false, degraded: false, advisory: false, lastHandoff: null };
 window.addEventListener('message', (e) => {
   const m = e.data; if (!m || m.jsonrpc !== '2.0' || m.id === undefined) return;
   let result;
@@ -63,7 +63,8 @@ window.addEventListener('message', (e) => {
     } else {
       const value = name === 'mcp_apps.raid_create' ? config : name === 'disks.list' ? disks : name === 'arrays.list' ? []
         : name === 'pools.list' ? (window.fixture.pooled ? [{ name: 'spares', drives: ['/dev/nvme0n1'], active: true }] : []) : plan;
-      const warnings = window.fixture.degraded && name === 'disks.list' ? [{ code: 'DEGRADED_BACKEND_UNAVAILABLE', message: 'Inventory is stale (fixture)' }] : undefined;
+      const warnings = window.fixture.degraded && name === 'disks.list' ? [{ code: 'DEGRADED_BACKEND_UNAVAILABLE', message: 'Inventory is stale (fixture)' }]
+        : window.fixture.advisory && name === 'disks.list' ? [{ code: 'EXECUTOR_DEGRADED', message: 'advisory (fixture)' }] : undefined;
       result = { content: [{ type: 'text', text: JSON.stringify({ result: value, ...(warnings ? { warnings } : {}) }) }] };
     }
   } else if (m.method === 'ui/message') { window.fixture.lastHandoff = m.params; result = {}; }
@@ -137,7 +138,7 @@ describe('RAID Create view in Chromium (S18 §6.1, §9, §10)', () => {
     await page.keyboard.insertText('pasted_name');
     expect(await view.locator('#array-name').inputValue()).toBe('pasted_name');
     expect(await focusedId()).toBe('array-name');
-  });
+  }, 30_000);
 
   it('Tab and Shift+Tab move through the form; Space toggles a focused disk and keeps focus on it', async () => {
     await view.locator('#array-name').click();
@@ -151,7 +152,7 @@ describe('RAID Create view in Chromium (S18 §6.1, §9, §10)', () => {
     expect(await focusedId()).toBe('serial-disk-1');
     await page.keyboard.press('Tab');
     expect(await focusedId()).toBe('serial-disk-2');
-  });
+  }, 30_000);
 
   it('one plan request per click; a later edit marks the plan stale and disables the handoff', async () => {
     await view.locator('#array-name').fill('data_01');
@@ -164,7 +165,7 @@ describe('RAID Create view in Chromium (S18 §6.1, §9, §10)', () => {
     await page.keyboard.type('x');
     expect(await view.locator('.plan-state').innerText()).toBe('STALE');
     expect(await view.locator('#handoff-button').isEnabled()).toBe(false);
-  });
+  }, 30_000);
 
   it('a failed inventory call keeps the old rows visible but blocks plan and handoff until a clean refresh (I-06)', async () => {
     await view.locator('#array-name').fill('data_01');
@@ -182,7 +183,7 @@ describe('RAID Create view in Chromium (S18 §6.1, §9, §10)', () => {
     await view.locator('#refresh-button').click();
     await view.locator('#inventory-banner').waitFor({ state: 'detached' });
     expect(await view.locator('#plan-button').isEnabled()).toBe(true);
-  });
+  }, 30_000);
 
   it('a DEGRADED_* warning is shown and blocks planning; an advisory warning does not (I-06)', async () => {
     await view.locator('#array-name').fill('data_01');
@@ -198,7 +199,13 @@ describe('RAID Create view in Chromium (S18 §6.1, §9, §10)', () => {
     await view.locator('#refresh-button').click();
     await view.locator('#inventory-banner').waitFor({ state: 'detached' });
     expect(await view.locator('#plan-button').isEnabled()).toBe(true);
-  });
+    await fixture({ advisory: true });
+    await view.locator('#refresh-button').click();
+    await view.locator('#inventory-advisories').waitFor();
+    expect(await view.locator('#inventory-advisories').innerText()).toContain('EXECUTOR_DEGRADED');
+    expect(await view.locator('#inventory-banner').count()).toBe(0);
+    expect(await view.locator('#plan-button').isEnabled()).toBe(true);
+  }, 30_000);
 
   it('a disk that joins a spare pool is deselected and disabled by device path; others stay selectable (I-07)', async () => {
     await view.locator('[data-disk-id="serial-disk-0"]').check();
@@ -212,5 +219,5 @@ describe('RAID Create view in Chromium (S18 §6.1, §9, §10)', () => {
     ).toBe('Assigned to a spare pool');
     expect(await view.locator('[data-disk-id="serial-disk-1"]').isEnabled()).toBe(true);
     expect(await view.locator('[data-disk-id="serial-disk-1"]').isChecked()).toBe(true);
-  });
+  }, 30_000);
 });

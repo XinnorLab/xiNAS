@@ -173,10 +173,7 @@ function formatBytes(bytes: number | undefined): string {
   return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unit]}`;
 }
 
-function unavailableReason(
-  disk: Disk,
-  pooled: Set<string> = pooledDevicePaths(pools),
-): string | null {
+function unavailableReason(disk: Disk, pooled: Set<string>): string | null {
   const status = disk.status ?? {};
   if (status.system_disk === true) return 'System disk';
   if (status.mounted === true) return 'Mounted';
