@@ -115,6 +115,9 @@ jobs:
     # hang is a plausible failure mode. Without a cap the job inherits GitHub's
     # 6-hour default and holds a runner slot; the suite runs in ~80s including
     # npm ci and the build, so 15 minutes is a wide margin over a healthy run.
+    # The RAID Create view suite drives the built bundle in a real Chromium
+    # (report I-05: DOM-free tests cannot see a lost focus), so the job
+    # installs the browser.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -124,6 +127,12 @@ jobs:
           cache: 'npm'
           cache-dependency-path: xiNAS-MCP/package-lock.json
       - run: npm ci
+        working-directory: xiNAS-MCP
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('xiNAS-MCP/package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
         working-directory: xiNAS-MCP
       - run: npm run build
         working-directory: xiNAS-MCP

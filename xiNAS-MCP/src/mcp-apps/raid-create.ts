@@ -372,11 +372,52 @@ function planPanel(): string {
   </section>`;
 }
 
+interface FocusState {
+  selector: string;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  direction: 'forward' | 'backward' | 'none';
+}
+
+/** What the operator was doing before the DOM is replaced (S18 §6.1, §9). */
+function captureFocus(): FocusState | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !root.contains(active)) return null;
+  let selector: string | null = null;
+  if (active.id.length > 0) selector = `#${active.id}`;
+  else if (active instanceof HTMLInputElement && active.dataset.diskId !== undefined) {
+    selector = `input[data-disk-id="${active.dataset.diskId.replaceAll('"', '\\"')}"]`;
+  }
+  if (selector === null) return null;
+  const text = active instanceof HTMLInputElement && active.type === 'text';
+  return {
+    selector,
+    selectionStart: text ? active.selectionStart : null,
+    selectionEnd: text ? active.selectionEnd : null,
+    direction: text ? (active.selectionDirection ?? 'none') : 'none',
+  };
+}
+
+function restoreFocus(state: FocusState | null): void {
+  if (state === null) return;
+  const el = root.querySelector<HTMLElement>(state.selector);
+  if (el === null) return;
+  el.focus({ preventScroll: true });
+  if (
+    el instanceof HTMLInputElement &&
+    state.selectionStart !== null &&
+    state.selectionEnd !== null
+  ) {
+    el.setSelectionRange(state.selectionStart, state.selectionEnd, state.direction);
+  }
+}
+
 function render(): void {
   if (config === null) {
     root.innerHTML = `<div class="loading-shell"><div class="spinner"></div><h1>xiNAS RAID Create</h1><p>${escapeHtml(statusMessage)}</p></div>`;
     return;
   }
+  const focus = captureFocus();
   const level = currentLevel();
   const rule = config.constraints[level];
   const errors = validationErrors();
@@ -407,7 +448,7 @@ function render(): void {
         <section class="panel">
           <div class="section-head"><div><span class="eyebrow">01 · CONFIGURE</span><h2>Array geometry</h2></div><span class="pill">Plan first</span></div>
           <div class="form-grid">
-            <label class="field wide"><span>Array name</span><input id="array-name" value="${escapeHtml(existingName)}" maxlength="28" placeholder="e.g. data_01" autocomplete="off" /><small>1–28 letters, digits, underscore</small></label>
+            <label class="field wide"><span>Array name</span><input id="array-name" type="text" value="${escapeHtml(existingName)}" maxlength="28" placeholder="e.g. data_01" autocomplete="off" /><small>1–28 letters, digits, underscore</small></label>
             <label class="field"><span>RAID level</span><select id="raid-level">${config.levels.map((value) => option(value, level)).join('')}</select><small>Minimum ${rule.min_drives} disks</small></label>
             <label class="field"><span>Strip size</span><select id="strip-size">${config.strip_sizes_kib.map((value) => option(value, existingStrip)).join('')}</select><small>KiB per member strip</small></label>
             <label class="field"><span>Block size</span><select id="block-size">${config.block_sizes.map((value) => option(value, existingBlock)).join('')}</select><small>Bytes</small></label>
@@ -458,6 +499,7 @@ function render(): void {
   </div>`;
 
   bindEvents();
+  restoreFocus(focus);
 }
 
 function invalidatePlan(): void {

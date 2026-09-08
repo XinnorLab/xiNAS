@@ -272,6 +272,10 @@ feeds (`docs/TODO.md`).
 - The layout supports 360 px through desktop widths.
 - The View follows the host light/dark preference and does not depend on
   external fonts or images.
+- Re-rendering never steals the keyboard: the active control,
+  its caret and selection are restored after every DOM update, so
+  character-by-character typing, paste, mid-string edits, Tab order and
+  Space on a focused disk behave as in a static form.
 
 ## 10. Failure behavior
 
@@ -304,6 +308,7 @@ feeds (`docs/TODO.md`).
 12. Typecheck, lint, formatting, unit/contract tests, production build, and
     OpenAPI validation pass.
 13. The handoff arguments are exactly `{ mode, plan_id, expected_revision, idempotency_key }`, and the same arguments reach one task under both result shapes (`__tests__/api/mcp/mcp-apps-handoff.test.ts`).
+14. In a real Chromium (`__tests__/e2e/raid-create-view.test.ts`): typing, paste and mid-string edits keep focus and caret; Tab/Shift+Tab and Space work; one plan request per click; an edit marks the plan stale; a failed or degraded refresh blocks planning; a pooled disk is deselected and disabled by device path.
 
 ## 12. Non-goals
 
