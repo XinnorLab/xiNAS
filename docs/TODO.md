@@ -34,9 +34,10 @@ state), the way `raid.source.unknown_state` reports a RAID word outside
 the vocabulary.
 
 **What the code does instead.** The producer keeps its last proven state
-and logs `event_source_incomplete` (`{ kind, id, missing, kept }` — the
-export-backing rule adds `exportPath`) through the engine log; nothing
-reaches the feeds, so a client cannot subscribe to it.
+and logs `event_source_incomplete` (`{ kind, id, missing }`, plus `kept`
+where the rule tracks a last-known boolean — the NFS backing and RDMA
+rules — and `exportPath` for the export-backing rule) through the engine
+log; nothing reaches the feeds, so a client cannot subscribe to it.
 
 **Why it was cut.** A new event family is a closed-taxonomy change (§6.4,
 §6.5, `producers` block, contract fixtures) with no consumer yet; the
