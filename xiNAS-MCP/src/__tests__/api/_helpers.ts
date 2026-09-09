@@ -207,6 +207,8 @@ export interface MockAgentHandle {
    * forwarded the raw executor spec end-to-end (T9b).
    */
   lastTaskBeginParams(): Record<string, unknown> | undefined;
+  /** S19a: canned answer for any RPC method (see MockAgentServer.respondToRpc). */
+  respondToRpc(method: string, handler: MockRpcHandler): void;
   /**
    * POST an observation batch to /internal/v1/observed with the internal
    * agent bearer so observed state becomes readable via the public GET
@@ -257,9 +259,19 @@ export interface MockAgentServer {
    * to exercise the refusal path.
    */
   respondToTaskCancel(reply: Record<string, unknown>): void;
+  /**
+   * S19a: answer any RPC method with a canned handler, consulted BEFORE the
+   * built-in branches (agent.health, task.*). The handler returns either a
+   * JSON-RPC `result` or an `error` frame body.
+   */
+  respondToRpc(method: string, handler: MockRpcHandler): void;
   /** Closes the UDS listener, destroying any live connections first (idempotent). */
   close(): Promise<void>;
 }
+
+export type MockRpcHandler = (
+  params: unknown,
+) => { result: unknown } | { error: { code: number; message: string; data?: unknown } };
 
 /**
  * Boot a bare UDS JSON-RPC mock agent (S15 T10): answers `agent.health` and
@@ -276,6 +288,8 @@ export async function startMockAgentServer(socketPath: string): Promise<MockAgen
   let lastTaskBeginParams: Record<string, unknown> | undefined;
   // S16 §9.2/§10.1: the mock agent's `task.cancel` answer — default accepts.
   let taskCancelReply: Record<string, unknown> = { cancel_requested: true };
+  // S19a: per-method canned handlers (health.probe, health.probe.run, …).
+  const rpcHooks = new Map<string, MockRpcHandler>();
   // Track live server-side connections so close() can force-destroy them; a
   // half-open UDS conn the client destroyed keeps server.close() from resolving.
   const agentConns = new Set<Socket>();
@@ -296,7 +310,10 @@ export async function startMockAgentServer(socketPath: string): Promise<MockAgen
           continue;
         }
         const id = req.id ?? null;
-        if (req.method === 'agent.health' && currentHealthPayload) {
+        const hook = typeof req.method === 'string' ? rpcHooks.get(req.method) : undefined;
+        if (hook !== undefined) {
+          conn.write(`${JSON.stringify({ jsonrpc: '2.0', id, ...hook(req.params) })}\n`);
+        } else if (req.method === 'agent.health' && currentHealthPayload) {
           conn.write(`${JSON.stringify({ jsonrpc: '2.0', id, result: currentHealthPayload })}\n`);
         } else if (req.method === 'task.begin') {
           taskBeginCalls += 1;
@@ -366,6 +383,9 @@ export async function startMockAgentServer(socketPath: string): Promise<MockAgen
     },
     respondToTaskCancel(reply) {
       taskCancelReply = reply;
+    },
+    respondToRpc(method, handler) {
+      rpcHooks.set(method, handler);
     },
     async close() {
       if (agentServer) {
@@ -461,6 +481,9 @@ export async function buildTestAppWithMockAgent(
     },
     lastTaskBeginParams() {
       return low.lastTaskBeginParams();
+    },
+    respondToRpc(method, handler) {
+      low.respondToRpc(method, handler);
     },
     async postObservation(body) {
       await request(app)

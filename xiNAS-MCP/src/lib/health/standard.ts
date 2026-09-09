@@ -55,10 +55,12 @@ const CATEGORY_BY_ID: Record<string, HealthCheckResult['category']> = {
   'nfs.loopback': 'nfs',
 };
 
+const RECOMMENDED_FALLBACK =
+  'inspect the agent journal (journalctl -u xinas-agent) for the collection error';
 const RECOMMENDED_BY_STATUS: Record<string, string> = {
   timeout: 'the source did not answer in time; re-run the profile and check agent load',
   permission_denied: 'the agent lacks permission to read this source; check the unit capabilities',
-  error: 'inspect the agent journal (journalctl -u xinas-agent) for the collection error',
+  error: RECOMMENDED_FALLBACK,
 };
 
 /**
@@ -89,7 +91,7 @@ export function collectionFailureCheck(
     symptom: `collection failed: ${section.error?.code ?? section.status}`,
     impact: 'the state behind this check is unknown',
     evidence: { collection },
-    recommended_action: RECOMMENDED_BY_STATUS[section.status] ?? RECOMMENDED_BY_STATUS.error,
+    recommended_action: RECOMMENDED_BY_STATUS[section.status] ?? RECOMMENDED_FALLBACK,
   };
 }
 

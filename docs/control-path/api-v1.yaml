@@ -1502,6 +1502,28 @@ components:
         overall:
           type: string
           enum: [ok, warning, degraded, critical]
+        coverage_status:
+          type: string
+          enum: [complete, partial]
+          description: |
+            S19 §7.3 — `partial` when the agent was unavailable on standard/deep
+            or any probe section failed to collect (`error`, `timeout`,
+            `permission_denied`); `complete` otherwise. Additive; does not
+            change the meaning of `overall`.
+        collection:
+          type: object
+          description: S19 §7.3 — how the probe-backed sections were collected.
+          properties:
+            agent:
+              type: string
+              enum: [answered, unavailable, not_needed]
+              description: '`not_needed` on quick; `unavailable` when the health.probe RPC failed.'
+            sources:
+              type: object
+              description: One entry per probe section the level expects (license, rdma_links, collectors, nfs_profile_render, probes).
+              additionalProperties:
+                type: string
+                enum: [success, error, timeout, permission_denied, not_supported]
         checks:
           type: array
           items: { $ref: '#/components/schemas/HealthCheck' }
@@ -1521,6 +1543,12 @@ components:
         impact: { type: string }
         evidence:
           type: object
+          description: |
+            Free-form per check. Since S19 every check carries
+            `collection: { status, observed_at, code?, message?, source? }`
+            (spec §7.2): `status` is the source's collection status, `source:
+            kv` marks facts read from the state store, and only
+            `not_supported` ever accompanies a `skipped` check.
           additionalProperties: true
         recommended_action: { type: string }
         related_resources:

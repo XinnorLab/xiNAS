@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ADMIN_TOKEN, buildTestApp } from './_helpers.js';
+import { ADMIN_TOKEN, buildTestApp, buildTestAppWithMockAgent } from './_helpers.js';
 
 /** S6 T9 — the first real KV-derived health checks. */
 describe('GET /api/v1/health (S6 network checks)', () => {
@@ -90,8 +90,10 @@ describe('GET /api/v1/health (S6 network checks)', () => {
     const result = await health();
     const check = result.checks.find((c) => c.id === 'network.duplicate-netplan');
     expect(check?.status).toBe('critical');
+    // S19a: every KV-derived check also carries `collection` (spec §7.2)
     expect(check?.evidence).toEqual({
       duplicates: { ibp65s0: ['/etc/netplan/50-cloud-init.yaml'] },
+      collection: { status: 'success', source: 'kv', observed_at: null },
     });
     expect(JSON.stringify(check)).toContain('cleanup: true');
     expect(result.overall).toBe('critical');
@@ -221,5 +223,177 @@ describe('GET /health profiles + /config-history/drift (S7 T6)', () => {
     );
     expect(byId.get('drift.nfs-exports')?.status).toBe('degraded');
     expect(byId.get('nfs.exports')?.status).toBe('degraded');
+  });
+});
+
+// ---- S19a T1: coverage_status + collection (spec §7.3) ----
+
+describe('GET /health coverage_status and collection (S19a, spec §7.3)', () => {
+  let setup: Awaited<ReturnType<typeof buildTestAppWithMockAgent>>;
+  const at = '2023-11-14T22:13:20.000Z';
+  const section = (value: unknown, status = 'success') => ({ status, observed_at: at, value });
+  type Check = { id: string; status: string; evidence: Record<string, unknown> };
+
+  beforeEach(async () => {
+    setup = await buildTestAppWithMockAgent();
+    // A healthy heartbeat, so `agent.connectivity` does not colour `overall`
+    // and the assertions below see only what the probe sections contribute.
+    setup.mockAgent.respondToHealth({
+      status: 'ok',
+      version: 'test',
+      uptime_seconds: 1,
+      controller_id: setup.controllerId,
+      in_flight_tasks: 0,
+      collectors: {},
+    });
+    const deadline = Date.now() + 5_000;
+    while (setup.ctx.tracker?.currentState() !== 'healthy' && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(setup.ctx.tracker?.currentState()).toBe('healthy');
+  });
+  afterEach(async () => {
+    await setup.teardown();
+  });
+
+  const get = (profile: string) =>
+    request(setup.app).get(`/api/v1/health?profile=${profile}`).set('Authorization', ADMIN_TOKEN);
+
+  it('quick: complete coverage, agent not_needed, every check carries kv collection evidence', async () => {
+    const res = await get('quick');
+    expect(res.status).toBe(200);
+    expect(res.body.result.coverage_status).toBe('complete');
+    expect(res.body.result.collection).toEqual({ agent: 'not_needed', sources: {} });
+    for (const c of res.body.result.checks as Check[]) {
+      expect(c.evidence.collection, c.id).toEqual({
+        status: 'success',
+        source: 'kv',
+        observed_at: null,
+      });
+    }
+  });
+
+  it('standard with a schema-2 probe: sources listed; a not_supported source keeps coverage complete', async () => {
+    setup.mockAgent.respondToRpc('health.probe', () => ({
+      result: {
+        schema: 2,
+        sections: {
+          license: {
+            status: 'not_supported',
+            observed_at: at,
+            error: { code: 'TOOL_ABSENT', message: 'ENOENT' },
+          },
+          rdma_links: section([]),
+          collectors: section({ XiraidArray: 'running' }),
+          nfs_profile_render: section(null),
+        },
+      },
+    }));
+    const res = await get('standard');
+    expect(res.status).toBe(200);
+    expect(res.body.result.collection).toEqual({
+      agent: 'answered',
+      sources: {
+        license: 'not_supported',
+        rdma_links: 'success',
+        collectors: 'success',
+        nfs_profile_render: 'success',
+      },
+    });
+    expect(res.body.result.coverage_status).toBe('complete');
+    const byId = new Map((res.body.result.checks as Check[]).map((c) => [c.id, c]));
+    expect(byId.get('xiraid.license')).toMatchObject({
+      status: 'skipped',
+      evidence: { collection: { status: 'not_supported', code: 'TOOL_ABSENT' } },
+    });
+    expect(byId.get('xiraid.service')).toMatchObject({
+      status: 'ok',
+      evidence: { collection: { status: 'success', observed_at: at } },
+    });
+  });
+
+  it('standard with a failed source: coverage partial, the check is degraded, overall follows', async () => {
+    setup.mockAgent.respondToRpc('health.probe', () => ({
+      result: {
+        schema: 2,
+        sections: {
+          license: section({ status: 'active', days_left: 90, features: [] }),
+          rdma_links: {
+            status: 'timeout',
+            observed_at: at,
+            error: { code: 'TIMEOUT', message: 'rdma link show' },
+          },
+          collectors: section({}),
+          nfs_profile_render: section(null),
+        },
+      },
+    }));
+    const res = await get('standard');
+    expect(res.body.result.coverage_status).toBe('partial');
+    expect(res.body.result.collection.sources.rdma_links).toBe('timeout');
+    const byId = new Map((res.body.result.checks as Check[]).map((c) => [c.id, c]));
+    expect(byId.get('network.rdma-live')).toMatchObject({
+      status: 'degraded',
+      evidence: { collection: { status: 'timeout', code: 'TIMEOUT' } },
+    });
+    expect(res.body.result.overall).toBe('degraded');
+  });
+
+  it('deep lists the probes source and feeds the deep checks', async () => {
+    setup.mockAgent.respondToRpc('health.probe', (params) => ({
+      result: {
+        schema: 2,
+        sections: {
+          license: section(null),
+          rdma_links: section([]),
+          collectors: section({}),
+          nfs_profile_render: section(null),
+          ...((params as { level?: string }).level === 'deep'
+            ? {
+                probes: section({
+                  fs_io: [{ mountpoint: '/mnt/a', ok: false, error: 'EIO: write' }],
+                  nfs_loopback: null,
+                }),
+              }
+            : {}),
+        },
+      },
+    }));
+    const res = await get('deep');
+    expect(res.body.result.collection.sources.probes).toBe('success');
+    const byId = new Map((res.body.result.checks as Check[]).map((c) => [c.id, c]));
+    expect(byId.get('filesystem.io')?.status).toBe('critical');
+    expect(byId.get('nfs.loopback')?.status).toBe('skipped');
+    expect(res.body.result.overall).toBe('critical');
+  });
+
+  it('a legacy (schema 1) probe result is mapped to error/LEGACY_AGENT on every section', async () => {
+    setup.mockAgent.respondToRpc('health.probe', () => ({
+      result: { license: null, rdma_links: [], collectors: {}, nfs_profile_render: null },
+    }));
+    const res = await get('standard');
+    expect(res.body.result.coverage_status).toBe('partial');
+    expect(Object.values(res.body.result.collection.sources)).toEqual([
+      'error',
+      'error',
+      'error',
+      'error',
+    ]);
+    const lic = (res.body.result.checks as Check[]).find((c) => c.id === 'xiraid.license');
+    expect((lic?.evidence.collection as { code: string }).code).toBe('LEGACY_AGENT');
+  });
+
+  it('agent error on standard: coverage partial, collection.agent unavailable', async () => {
+    setup.mockAgent.respondToRpc('health.probe', () => ({
+      error: { code: -32603, message: 'down' },
+    }));
+    const res = await get('standard');
+    expect(res.body.result.collection).toEqual({ agent: 'unavailable', sources: {} });
+    expect(res.body.result.coverage_status).toBe('partial');
+    const byId = new Map((res.body.result.checks as Check[]).map((c) => [c.id, c]));
+    expect(byId.get('agent.collectors')?.evidence.collection).toMatchObject({
+      status: 'error',
+      code: 'EXECUTOR_UNAVAILABLE',
+    });
   });
 });
