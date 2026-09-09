@@ -123,6 +123,14 @@ export interface ApiContext {
    */
   events?: import('./events/context.js').EventsContext;
   /**
+   * S19b: the `xinas_health_check` prompt provider plus what it was built
+   * from (resolved config, the profile catalog loaded once at startup, the
+   * effective template and its sha256). Built by app.ts iff
+   * `mcp.health_prompt.enabled`; absent means both eras answer -32601 to
+   * `prompts/*` and advertise no `prompts` capability.
+   */
+  healthPrompt?: import('./health/prompt-context.js').HealthPromptContext;
+  /**
    * S15 §12.2 (Task 13): the process-wide Prometheus-style registry
    * `GET /api/v1/metrics` renders. Set by server.ts to the SAME instance
    * passed into `buildTaskEngines` (so the engine's and the confirmation

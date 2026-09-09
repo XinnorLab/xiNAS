@@ -1,0 +1,115 @@
+import { describe, expect, it } from 'vitest';
+import type { ApiConfig, McpHealthPromptConfig } from '../../api/config.js';
+import { buildHealthPromptContext } from '../../api/health/prompt-context.js';
+import type { ProfileCatalog } from '../../api/health/profiles.js';
+import { HEALTH_PROMPT_TEMPLATE, sha256Hex } from '../../api/mcp/prompts/health-check.js';
+
+const config = (health_prompt?: McpHealthPromptConfig): ApiConfig => ({
+  controller_id: '00000000-0000-0000-0000-0000000000aa',
+  listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
+  tokens: {},
+  state: { databasePath: '/tmp/x/xinas.db', auditJsonlPath: '/tmp/x/audit.jsonl' },
+  ...(health_prompt !== undefined ? { mcp: { health_prompt } } : {}),
+});
+
+const catalog = (names: string[]): ProfileCatalog => ({
+  dir: '/nowhere',
+  dir_present: false,
+  profiles: names.map((name) => ({
+    name,
+    path: null,
+    sha256: null,
+    timeout_seconds: null,
+    sections_enabled: [],
+    sections_without_checker: [],
+  })),
+});
+
+const ctx = { identity: { principal: 'p', role: 'viewer' as const }, correlationId: 'c' };
+
+/** S19b T4 — spec §5.5, §12.1: what app.ts builds once at startup. */
+describe('buildHealthPromptContext', () => {
+  it('is undefined when mcp.health_prompt.enabled is false', () => {
+    expect(buildHealthPromptContext(config({ enabled: false }))).toBeUndefined();
+  });
+
+  it('ships the constant template, hashes it, and lists the loaded profile names', () => {
+    const hp = buildHealthPromptContext(config(), {
+      loadProfiles: () => catalog(['quick', 'site']),
+    });
+    expect(hp?.body).toBe(HEALTH_PROMPT_TEMPLATE);
+    expect(hp?.templateSha256).toBe(sha256Hex(HEALTH_PROMPT_TEMPLATE));
+    expect(hp?.versions).toEqual({
+      prompt: '1.0.0',
+      policy: '1',
+      catalog: '1',
+      report_schema: '1',
+    });
+    expect(hp?.profiles.profiles.map((p) => p.name)).toEqual(['quick', 'site']);
+    const provider = hp?.prompts.providers[0];
+    expect(() =>
+      provider?.get('xinas_health_check', { baseline_profile: 'site' }, ctx),
+    ).not.toThrow();
+    expect(() => provider?.get('xinas_health_check', { baseline_profile: 'deep' }, ctx)).toThrow(
+      /baseline_profile/,
+    );
+    // no audit sink was given: the option is absent, not undefined-valued
+    expect(hp?.prompts).not.toHaveProperty('audit');
+  });
+
+  it('reads the operator override once and reports its hash and the configured versions', () => {
+    const hp = buildHealthPromptContext(
+      config({
+        template_path: '/etc/xinas/health-prompt.md',
+        policy_version: 'site-2',
+        probe_policy_max: 'bounded_active',
+      }),
+      {
+        loadProfiles: () => catalog(['standard']),
+        readTemplate: (p) => `Site body from ${p}\n`,
+      },
+    );
+    expect(hp?.body).toBe('Site body from /etc/xinas/health-prompt.md\n');
+    expect(hp?.templateSha256).toBe(sha256Hex('Site body from /etc/xinas/health-prompt.md\n'));
+    expect(hp?.versions.policy).toBe('site-2');
+    const text =
+      hp?.prompts.providers[0]?.get('xinas_health_check', { probe_policy: 'bounded_active' }, ctx)
+        .messages[0]?.content.text ?? '';
+    expect(text.startsWith('Site body from')).toBe(true);
+    expect(text).toContain('"effective": "bounded_active"');
+    expect(text).toContain('"policy_version": "site-2"');
+  });
+
+  it('fails startup loudly on an unreadable or empty override', () => {
+    const base = { loadProfiles: () => catalog(['standard']) };
+    expect(() =>
+      buildHealthPromptContext(config({ template_path: '/etc/xinas/missing.md' }), {
+        ...base,
+        readTemplate: () => {
+          throw new Error('ENOENT');
+        },
+      }),
+    ).toThrow(/template_path: cannot read \/etc\/xinas\/missing.md: ENOENT/);
+    expect(() =>
+      buildHealthPromptContext(config({ template_path: '/etc/xinas/empty.md' }), {
+        ...base,
+        readTemplate: () => '  \n',
+      }),
+    ).toThrow(/is empty/);
+  });
+
+  it('available.* reflects the catalog entries that exist today', () => {
+    const hp = buildHealthPromptContext(config(), { loadProfiles: () => catalog(['standard']) });
+    const text =
+      hp?.prompts.providers[0]?.get('xinas_health_check', {}, ctx).messages[0]?.content.text ?? '';
+    const block = JSON.parse(
+      text.slice(text.indexOf('---\n{') + 4, text.indexOf('\n<user_symptom>')),
+    ) as { available: Record<string, boolean> };
+    // S19a shipped health.probe.run; health.context / health.catalog land in
+    // this slice (T5/T6) and health.baseline / report_schema / validate in S19c.
+    expect(block.available.probe_run).toBe(true);
+    expect(block.available.baseline).toBe(false);
+    expect(block.available.report_schema).toBe(false);
+    expect(block.available.validate).toBe(false);
+  });
+});

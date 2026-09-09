@@ -340,6 +340,8 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
             ...(ctx.mcpConfirmations !== undefined ? { confirmations: ctx.mcpConfirmations } : {}),
             resources,
             ...(ctx.mcpTasks !== undefined ? { tasks: ctx.mcpTasks } : {}),
+            // S19b §5.1: the prompt provider, iff mcp.health_prompt is enabled.
+            ...(ctx.healthPrompt !== undefined ? { prompts: ctx.healthPrompt.prompts } : {}),
           },
           correlationId,
         );
@@ -387,6 +389,8 @@ export function mountMcpTransport(app: Express, ctx: ApiContext): void {
         // client never declares the Tasks extension (S16 §3.1 reads it per
         // request; there is no per-request _meta agreement on this path).
         client: { era: 'legacy', elicitation: new Set(), tasks: false },
+        // S19b §5.6: the same provider serves the legacy shapes.
+        ...(ctx.healthPrompt !== undefined ? { prompts: ctx.healthPrompt.prompts } : {}),
       });
       // exactOptionalPropertyTypes friction in the SDK's Transport
       // interface (same cast the legacy server used).
