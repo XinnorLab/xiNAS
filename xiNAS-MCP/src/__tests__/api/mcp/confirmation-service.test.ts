@@ -910,3 +910,160 @@ describe('ConfirmationService.handle (S15 §3.3, §4, §6.4)', () => {
     );
   });
 });
+
+// ---- S19a: direct confirmable entries (spec §9.1, ADR-0018 §4) ----
+
+const PROBE_ENTRY: CatalogEntry = {
+  name: 'health.probe.run',
+  description: 'Run one confirmed active health probe.',
+  method: 'POST',
+  path: '/health/probe',
+  input_schema: { type: 'object' },
+  mutability: 'direct',
+  requires_mcp_apply: true,
+  min_role: 'operator',
+  status: 'live',
+  confirmation: 'required',
+};
+const PROBE_ARGS = { probe: 'fs_io', target: 'fs-data' };
+
+function directInput(
+  args: Record<string, unknown> = PROBE_ARGS,
+  identity: McpIdentity = OPERATOR_IDENTITY,
+  mrtr?: HandleInput['mrtr'],
+): HandleInput {
+  return {
+    entry: PROBE_ENTRY,
+    args,
+    identity,
+    client: BOTH_CLIENT,
+    correlationId: 'corr-direct',
+    ...(mrtr !== undefined ? { mrtr } : {}),
+  };
+}
+
+describe('direct confirmable entries (S19a, spec §9.1)', () => {
+  it('initial call → form input_required binding tool + arguments, no plan needed', async () => {
+    const h = harness();
+    const out = await h.service.handle(directInput());
+    const ir = requireInputRequired(out);
+    const rec = h.store.list({})[0];
+    expect(rec).toMatchObject({
+      mode: 'form',
+      status: 'pending',
+      tool_name: 'health.probe.run',
+      operation_kind: 'health.probe.run',
+      plan_id: `direct:${argumentsHash('health.probe.run', PROBE_ARGS)}`,
+      plan_hash: argumentsHash('health.probe.run', PROBE_ARGS),
+      arguments_hash: argumentsHash('health.probe.run', PROBE_ARGS),
+      expected_revision: 0,
+      risk_level: 'non_disruptive',
+      rollback_model: 'non_disruptive',
+      principal: PRINCIPAL,
+      role: 'operator',
+    });
+    const text = JSON.stringify(ir);
+    expect(text).toContain('health.probe.run');
+    expect(text).toContain('fs-data');
+    // no plan task exists for the record — by design
+    expect(h.tasks.get(rec?.plan_id ?? '')).toBeNull();
+  });
+
+  it('retry with decision APPLY → proceed with the record id', async () => {
+    const h = harness();
+    const initial = requireInputRequired(await h.service.handle(directInput()));
+    const rec = h.store.list({})[0];
+    const ok = await h.service.handle(
+      directInput(PROBE_ARGS, OPERATOR_IDENTITY, {
+        requestState: initial.requestState,
+        inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+      }),
+    );
+    expect(ok).toEqual({ kind: 'proceed', confirmation_id: rec?.confirmation_id });
+    // still pending: consumption is the route's job (spec §9.2)
+    expect(h.store.get(rec?.confirmation_id ?? '')?.status).toBe('pending');
+  });
+
+  it('retry with decision DECLINE → CONFIRMATION_DECLINED, record declined', async () => {
+    const h = harness();
+    const initial = requireInputRequired(await h.service.handle(directInput()));
+    const no = await h.service.handle(
+      directInput(PROBE_ARGS, OPERATOR_IDENTITY, {
+        requestState: initial.requestState,
+        inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'DECLINE' } } },
+      }),
+    );
+    expect(errorOf(no).code).toBe('CONFIRMATION_DECLINED');
+    expect(h.store.list({})[0]?.status).toBe('declined');
+  });
+
+  it('the same tool + arguments + principal reuse the open record; different args or principal do not', async () => {
+    const h = harness();
+    await h.service.handle(directInput());
+    await h.service.handle(directInput()); // re-issue, not a new record
+    expect(h.store.countOpen()).toBe(1);
+    await h.service.handle(directInput({ ...PROBE_ARGS, target: 'fs-other' }));
+    await h.service.handle(directInput(PROBE_ARGS, { principal: PRINCIPAL_B, role: 'operator' }));
+    expect(h.store.countOpen()).toBe(3);
+  });
+
+  it('a stolen requestState (other principal) is refused at the binding cross-check', async () => {
+    const h = harness();
+    const initial = requireInputRequired(await h.service.handle(directInput()));
+    await expect(
+      h.service.handle(
+        directInput(
+          PROBE_ARGS,
+          { principal: PRINCIPAL_B, role: 'operator' },
+          {
+            requestState: initial.requestState,
+            inputResponses: { confirm_apply: { action: 'accept', content: { decision: 'APPLY' } } },
+          },
+        ),
+      ),
+    ).rejects.toMatchObject({ code: INVALID_PARAMS });
+  });
+
+  it('a viewer is refused before any record exists', async () => {
+    const h = harness();
+    const out = await h.service.handle(directInput(PROBE_ARGS, { principal: 'v', role: 'viewer' }));
+    expect(errorOf(out).code).toBe('PERMISSION_DENIED');
+    expect(h.store.countOpen()).toBe(0);
+  });
+
+  it('view() renders the direct document; a fresh service over the same db answers plan_pruned', async () => {
+    const h = harness();
+    await h.service.handle(directInput());
+    const id = h.store.list({})[0]?.confirmation_id ?? '';
+    const v = h.service.view(id, { principal: PRINCIPAL, client_type: 'rest' });
+    // PublicPlan drops operation_kind/resource_ref; the affected resource and
+    // the rendered summary carry the probe's identity instead.
+    expect(v?.plan.plan_id).toBe(`direct:${argumentsHash('health.probe.run', PROBE_ARGS)}`);
+    expect(v?.plan.affected_resources).toEqual([{ kind: 'Filesystem', id: 'fs-data' }]);
+    expect(v?.plan.risk_level).toBe('non_disruptive');
+    expect(v?.summary.message).toContain('health.probe.run');
+    expect(v?.summary.message).toContain('fs-data');
+
+    const restarted = new ConfirmationService({
+      store: h.store,
+      tasks: h.tasks,
+      keyRing: keyRing(),
+      config: {
+        ttl_seconds: 300,
+        url_wait_seconds: 1,
+        max_pending_per_principal: 5,
+        max_pending_total: 100,
+        create_rate_per_minute: 10,
+        approval_url_base: 'https://approvals.example.test',
+        approver_policy: 'distinct_principal',
+        allow_uds_approval: false,
+      },
+      now: () => 1_000_000,
+      nodeId: NODE_ID,
+      hostname: HOSTNAME,
+    });
+    expect(() => restarted.view(id, { principal: PRINCIPAL, client_type: 'rest' })).toThrow(
+      /no longer stored/,
+    );
+  });
+});
