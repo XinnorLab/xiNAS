@@ -902,19 +902,19 @@ async function step<T>(stage: ProbeStage, deadline: number, clock: () => number,
 
 1. `open(mountpoint, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)` → `mnt`; `const mntStat = await mnt.stat()`; stage `open`.
 2. stage `dir`: `mkdir(join(mountpoint, PROBE_DIR_NAME), { mode: 0o700 })` ignoring `EEXIST`; `open(dirPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)` (a symlink → `ELOOP`/`ENOTDIR` → mapped to `probe_dir_untrusted`); `dirStat = await dir.stat()`; require `dirStat.dev === mntStat.dev && dirStat.uid === uid && dirStat.isDirectory()` else `throw new StageError('dir', 'probe_dir_untrusted', …)`.
-3. stage `create`: up to 3 attempts: `name = \`probe-${opts.runId ?? 'none'}-${random()}\``; `open(join(dirPath, name), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)`; `EEXIST` → next attempt; other → throw. After opening: `fstat` → require `st.dev === mntStat.dev && st.nlink === 1 && st.isFile()` else `probe_dir_untrusted` (the post-open check that stands in for `openat`). `artifact = { kind: 'file', path }`.
+3. stage `create`: up to 3 attempts: the name is `probe-<runId or none>-<random()>`; `open(join(dirPath, name), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)`; `EEXIST` → next attempt; other → throw. After opening: `fstat` → require `st.dev === mntStat.dev && st.nlink === 1 && st.isFile()` else `probe_dir_untrusted` (the post-open check that stands in for `openat`). `artifact = { kind: 'file', path }`.
 4. stage `write`: `fh.write(PAYLOAD)`; stage `fsync`: `await hooks?.beforeFsync?.(); await fh.sync()`; close.
 5. stage `read`: `open(path, O_RDONLY | O_NOFOLLOW)`, `fstat().ino === written ino`, read `PROBE_PAYLOAD_BYTES`, `Buffer.compare === 0` else `StageError('read', 'READ_BACK_MISMATCH', …)`; close.
-6. `finally` (whenever the file was created): `await hooks?.beforeUnlink?.(); try { await unlink(path); cleanup = { status: 'clean' } } catch (e) { cleanup = { status: 'failed', detail: \`${codeOf(e)}: ${message}\` } }` — the unlink is attempted even after a TIMEOUT; before creation `cleanup = { status: 'not_needed' }`.
+6. `finally` (whenever the file was created): run `hooks?.beforeUnlink?.()`, then `unlink(path)`; success sets `cleanup = { status: 'clean' }`, a failure sets `cleanup = { status: 'failed', detail: '<code>: <message>' }` — the unlink is attempted even after a TIMEOUT; before creation `cleanup = { status: 'not_needed' }`.
 7. Every handle is closed in `finally`. Result `{ ok, started_at, completed_at, artifact, error?, cleanup }`.
 
 `nfsLoopback(exportPath, opts)`:
 
 1. stage `lock`: in-process `let loopbackBusy = false` guard **and** `open(join(root, LOCK_NAME), O_WRONLY | O_CREAT | O_EXCL, 0o600)` after `mkdir(root, { recursive: true, mode: 0o700 })`; on `EEXIST` read the pid inside; if `process.kill(pid, 0)` throws `ESRCH` the lock is stale → `unlink` and retry once; otherwise `StageError('lock', 'PROBE_IN_PROGRESS', 'another loopback probe holds the lock')`. Write `process.pid` into the lock. Result `cleanup: { status: 'not_needed' }` on a lock refusal.
-2. `dir = join(root, \`${opts.runId ?? 'none'}-${random()}\`)`, `mnt = join(dir, 'mnt')`, `mkdir(mnt, { recursive: true, mode: 0o700 })`; `artifact = { kind: 'mountpoint', path: mnt }`.
-3. stage `mount`: `exec('systemd-mount', ['--collect', \`localhost:${exportPath}\`, mnt], left)`; on failure → error result, then `rm(dir, { recursive: true })` → `cleanup: clean` (nothing was mounted).
+2. `dir` is `<root>/<runId or none>-<random()>` and `mnt` is `<dir>/mnt`; `mkdir(mnt, { recursive: true, mode: 0o700 })`; `artifact = { kind: 'mountpoint', path: mnt }`.
+3. stage `mount`: `exec('systemd-mount', ['--collect', 'localhost:' + exportPath, mnt], left)`; on failure → error result, then `rm(dir, { recursive: true })` → `cleanup: clean` (nothing was mounted).
 4. stage `readdir`: `readdir(mnt)`.
-5. `finally` after a successful mount: `exec('systemd-umount', [mnt], min(left, 20_000))` — success → `rmdir(mnt); rmdir(dir)`; `cleanup: { status: 'clean' }`; failure → `cleanup: { status: 'failed', detail: \`systemd-umount: ${message}\` }` and the directory stays. Lock file unlinked and `loopbackBusy = false` in the outermost `finally`.
+5. `finally` after a successful mount: `exec('systemd-umount', [mnt], min(left, 20_000))` — success → `rmdir(mnt); rmdir(dir)`; `cleanup: { status: 'clean' }`; failure → `cleanup: { status: 'failed', detail: 'systemd-umount: <message>' }` and the directory stays. Lock file unlinked and `loopbackBusy = false` in the outermost `finally`.
 
 Default `exec`:
 
@@ -928,7 +928,7 @@ const defaultExec = (file: string, args: string[], timeoutMs: number): Promise<v
   });
 ```
 
-`fake-probe-host.ts`: same state-file protocol; `fsIo` records `touch:<mountpoint>`, `nfsLoopback` records `loopback:<export>` then `loopback-umount:<export>`; failures come from `fail_touch` / `fail_loopback`; outcomes carry `artifact: { kind: 'file', path: \`${mountpoint}/.xinas-health/probe-${runId ?? 'none'}-fake\` }` / `{ kind: 'mountpoint', path: \`/run/xinas/health-probe/${runId ?? 'none'}-fake/mnt\` }`, `cleanup: { status: 'clean' }`, `error: { code: 'FAKE_FAIL', message: 'fake touch failure' | 'fake loopback failure', stage: 'write' | 'mount' }`.
+`fake-probe-host.ts`: same state-file protocol; `fsIo` records `touch:<mountpoint>`, `nfsLoopback` records `loopback:<export>` then `loopback-umount:<export>`; failures come from `fail_touch` / `fail_loopback`; outcomes carry an artifact of kind `file` at `<mountpoint>/.xinas-health/probe-<runId or none>-fake` (fs_io) or of kind `mountpoint` at `/run/xinas/health-probe/<runId or none>-fake/mnt` (loopback), `cleanup: { status: 'clean' }`, and on a listed failure `error: { code: 'FAKE_FAIL', message: 'fake touch failure' | 'fake loopback failure', stage: 'write' | 'mount' }`.
 
 - [ ] **Step 4: GREEN** — `npx vitest run src/__tests__/agent/health/probe-host.test.ts` (the old `makeDeepProbeRunner` block is deleted from this file; Task 6 re-adds its test next to the runner).
 
@@ -1057,7 +1057,7 @@ export function makeHealthProbeRunHandler(deps: HealthProbeRunDeps) {
 }
 ```
 
-`makeDeepProbeRunner`: `const r = await opts.probeHost.fsIo(mountpoint, { runId: null, timeoutMs: 20_000 }); fsIo.push({ mountpoint, ok: r.ok, ...(r.error ? { error: \`${r.error.code}: ${r.error.message}\` } : {}), cleanup: r.cleanup });` and the same for loopback (`nfsLoopback(firstExportPath, { runId: null, timeoutMs: 20_000 })`, row `{ attempted: true, export, ok, error?, cleanup }`). The `DeepProbeResults` type (agent) and `ProbeDeepResults` (lib/standard.ts) gain `cleanup?: { status: 'clean' | 'failed' | 'not_needed'; detail?: string }`; `filesystemIoCheck` adds a `warning` outcome when every fs is ok but some `cleanup.status === 'failed'` (symptom `probe cleanup failed on: …`, `recommended_action: 'remove the listed probe file(s) under .xinas-health by hand'`), and `nfsLoopbackCheck` likewise for a failed umount.
+`makeDeepProbeRunner`: each mountpoint runs `opts.probeHost.fsIo(mountpoint, { runId: null, timeoutMs: 20_000 })` and its row becomes `{ mountpoint, ok, error?, cleanup }` where `error` is the outcome's code and message joined by a colon; the loopback runs `nfsLoopback(firstExportPath, { runId: null, timeoutMs: 20_000 })` and its row is `{ attempted: true, export, ok, error?, cleanup }`. The `DeepProbeResults` type (agent) and `ProbeDeepResults` (lib/standard.ts) gain an optional `cleanup` verdict (`status: clean | failed | not_needed`, `detail?`); `filesystemIoCheck` adds a `warning` outcome when every fs is ok but some cleanup failed (the symptom names the mountpoints, the recommended action is to remove the leftover probe files under `.xinas-health` by hand), and `nfsLoopbackCheck` likewise for a failed umount.
 
 `dispatch.ts`: before the final `-32603` branch:
 
@@ -1379,7 +1379,7 @@ r.post('/health/probe', async (req, res, next) => {
 ### Task 10: Docs, TODO closure, changelog, full gate
 
 **Files:**
-- Modify: `docs/control-path/s19-mcp-health-prompt-spec.md` (Status line: "S19a implemented <date>; S19b–d pending"; inline deviation notes: §7.2 quick-check `collection` is `{ status: 'success', source: 'kv', observed_at: null }` until `health.context` carries per-kind freshness; §9.1 `rollback_model: 'non_disruptive'` instead of `not_applicable` because the vocabulary is closed and the renderer's default sentence is right; §9.3 Node has no `openat`, so the post-open `fstat` device/nlink check is the mitigation; §9.5 `probes_per_run` waits for the S19b ledger)
+- Modify: `docs/control-path/s19-mcp-health-prompt-spec.md` (Status line: "S19a implemented" with the landing date, "S19b–d pending"; inline deviation notes: §7.2 quick-check `collection` is `{ status: 'success', source: 'kv', observed_at: null }` until `health.context` carries per-kind freshness; §9.1 `rollback_model: 'non_disruptive'` instead of `not_applicable` because the vocabulary is closed and the renderer's default sentence is right; §9.3 Node has no `openat`, so the post-open `fstat` device/nlink check is the mitigation; §9.5 `probes_per_run` waits for the S19b ledger)
 - Modify: `docs/TODO.md` — delete "Health — the deep-profile probe artifacts are not hardened"; add "Health — `probes_per_run` is not enforced until the S19b run ledger" (what is missing / what the code does / why / done)
 - Modify: `CHANGELOG.md` Unreleased: Added (typed collection status + `coverage_status`, `health.probe.run`), Fixed (probe artifacts hardened; failed collections no longer look like absent components)
 - Modify: `docs/control-path/hardware-smoke-runbook.md`: the `profile=deep` bullet mentions the per-run names under `.xinas-health` and the per-run mountpoint; a new bullet for `POST /health/probe` (operator token; MCP needs allow_apply + confirmation)

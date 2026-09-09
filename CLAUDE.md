@@ -259,9 +259,11 @@ confirmation), `docs/control-path/s16-mcp-tasks-spec.md` (the
 operations) and `docs/control-path/s17-mcp-subscriptions-spec.md`
 (Resources + `subscriptions/listen` operational event feeds).
 `docs/control-path/s19-mcp-health-prompt-spec.md` with ADR-0018 (the
-`xinas_health_check` prompt and the agentic health-check tools) is a
-**design under validation, not yet implemented** — do not describe its
-tools or the `prompts` capability as live. The spec set under `docs/MCP/`
+`xinas_health_check` prompt and the agentic health-check tools): **S19a
+is live** (typed collection status on `health.probe`/`GET /health`, the
+hardened probe host, `health.probe.run`); **S19b–d are design only** —
+do not describe `health.context`, `health.baseline`, the catalog, the
+report validator or the `prompts` capability as live. The spec set under `docs/MCP/`
 describes the legacy server and is kept for reference only — do not treat
 it as current.
 

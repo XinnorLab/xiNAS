@@ -368,7 +368,8 @@ export const CATALOG: CatalogEntry[] = [
       'health.check',
       'GET',
       '/health',
-      'Run a health profile (quick KV-only; standard/deep add agent probes).',
+      'Run a health profile (quick KV-only; standard/deep add agent probes). ' +
+        'For a single confirmed active probe prefer health.probe.run.',
     ),
     input_schema: {
       type: 'object',

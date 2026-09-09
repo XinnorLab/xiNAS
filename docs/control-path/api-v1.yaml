@@ -2947,7 +2947,10 @@ paths:
         the first desired export — and therefore requires the `operator`
         role (`PERMISSION_DENIED` otherwise); `quick` and `standard` are
         viewer reads. Over MCP, `profile=deep` additionally requires
-        `mcp.allow_apply: true`.
+        `mcp.allow_apply: true`. For a single confirmed active probe
+        prefer `POST /health/probe` (S19). Since S19 the report carries
+        `coverage_status` and `collection` (how each probe section was
+        collected), and every check's `evidence.collection`.
       parameters:
         - in: query
           name: profile

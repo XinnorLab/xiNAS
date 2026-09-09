@@ -298,12 +298,15 @@ show/diff/rollback **degraded**), `tasks.*` (list/get/wait/cancel),
 capabilities/inventory), `audit.query` (**degraded**), `users.list`,
 `groups.list`.
 
-**S19 (design 2026-09-09, not yet implemented)** adds six `health.*`
-entries — `health.context`, `health.catalog`, `health.report_schema`,
-`health.baseline` (viewer reads), `health.report.validate` (a viewer
-`direct` POST with no side effects) and `health.probe.run` (operator,
+**S19** adds six `health.*` entries. **Live since S19a (2026-09-09):**
+`health.probe.run` (`POST /health/probe`; `direct`, operator,
 `requires_mcp_apply`, the first entry carrying `confirmation:
-'required'`). Their ranks and gates are the §13 table of
+'required'` — the confirmation service binds it by tool + arguments,
+`confirmation/direct.ts`, and the route consumes the record before the
+probe runs). **Design, not yet implemented (S19b/c):** `health.context`,
+`health.catalog`, `health.report_schema`, `health.baseline` (viewer
+reads) and `health.report.validate` (a viewer `direct` POST with no side
+effects). Their ranks and gates are the §13 table of
 `s19-mcp-health-prompt-spec.md`; the generation invariant below applies
 to them unchanged.
 

@@ -1,8 +1,14 @@
 # xiNAS S19 — Built-in MCP prompt and agentic health check (design spec)
 
-**Status:** design draft for validation, 2026-09-09. Nothing in this
-document is implemented; every "MUST" describes the intended end state
-the implementation slices in §1 have to reach. Extends **ADR-0009**
+**Status:** design validated 2026-09-09 (defaults of §18 kept);
+**S19a implemented 2026-09-09** — typed collection status (§7), the
+hardened probe host and `health.probe.run` (§9), the S15 direct-entry
+binding (§9.1). S19b (prompt, context, catalog), S19c (baseline adapter,
+report validator) and S19d (acceptance fixtures) are pending; their
+"MUST"s still describe the intended end state. Deviations found while
+implementing S19a are recorded inline where they apply (§7.2 quick-check
+evidence, §9.1 binding fields, §9.3 `openat`/`flock` substitutes, §9.5
+`probes_per_run`). Extends **ADR-0009**
 (`health.probe`, the profile engine), **ADR-0010** / `s8-clients-spec.md`
 (the catalog, the gate, the `/mcp` transport), **S14**
 (`s14-mcp-modern-era-spec.md`, both protocol eras), **S15**
@@ -518,8 +524,15 @@ a client can tell "asked and found none" from "could not ask" (DATA-03).
 `probeUnavailable` (agent did not answer) keeps `degraded` +
 `EXECUTOR_UNAVAILABLE` and adds `collection: { status: 'error', code:
 'EXECUTOR_UNAVAILABLE' }`. The quick (KV-derived) checks add
-`collection: { status: 'success', observed_at: <row observed_at> | null }`
-per fact they consumed.
+`collection: { status: 'success', source: 'kv', observed_at: null }`.
+
+> **Deviation (S19a, implemented).** The design said quick checks would
+> carry the consumed row's `observed_at`; the facts gatherer strips
+> revisions and times today, and threading a per-check time through
+> eleven pure checks buys nothing until a client can compare it against
+> a freshness policy. The per-kind freshness a client needs is
+> `health.context.freshness` (§6.2, S19b); until then the quick evidence
+> says `source: 'kv'` with `observed_at: null`, which is honest.
 
 ### 7.3 `HealthReport` additions (D-06)
 
@@ -665,13 +678,28 @@ confirmation) or `allowed` (REST operator).
 **S15 extension for a confirmable direct entry.** The confirmation
 service today binds a plan document. For `confirmation: 'required'`
 entries it binds instead `{ tool_name, args_sha256 }` with `risk:
-non_disruptive`, `rollback: not_applicable`, no acknowledgement phrase,
-and the same TTL, single-consumption and audit rows as an apply
-confirmation. The approval page shows the probe kind, the target and
-the side effects sentence from the catalog description. This is the
-"permission granted beforehand for a specific scope, usable until it
-expires" of PROBE-02; the `probe_policy` prompt argument is not it
-(ARCH-03).
+non_disruptive`, no acknowledgement phrase, and the same TTL,
+single-consumption and audit rows as an apply confirmation. The form
+elicitation names the tool, the target resource and the arguments
+(`diff`). This is the "permission granted beforehand for a specific
+scope, usable until it expires" of PROBE-02; the `probe_policy` prompt
+argument is not it (ARCH-03).
+
+> **Implemented (S19a, `confirmation/direct.ts`).** The binding reuses
+> the plan-shaped record columns: `plan_id: direct:<arguments_hash>`,
+> `plan_hash` and `idempotency_key` = the arguments hash,
+> `expected_revision: 0`, `operation_kind` = the tool name. The design
+> said `rollback: not_applicable`; the record vocabulary is closed and
+> the summary renderer's default sentence ("Rollback is non-disruptive")
+> is the right one for a self-cleaning probe, so the record carries
+> `rollback_model: 'non_disruptive'`. The synthesized document is kept
+> in memory for `GET /mcp/confirmations/{id}`; after an api restart such
+> a record answers `plan_pruned`, which is consistent — the restart
+> sweep expires it anyway. The route that runs the probe verifies the
+> record (principal, tool, arguments hash, `pending`, `form`, unexpired)
+> and consumes it BEFORE calling the agent (`consumed_task_id:
+> probe:<uuid>`), so a second use, a stolen id or a different argument
+> set never reaches the agent.
 
 ### 9.2 Request and response
 
@@ -718,11 +746,28 @@ removed, not kept as a fallback.
 6. Only the file this run created is ever unlinked; the directory is
    left in place.
 
+> **Implemented (S19a, `agent/health/probe-host.ts`).** Node has no
+> `openat`/`mkdirat`/`unlinkat`: the host opens the mountpoint and the
+> probe directory with `O_DIRECTORY | O_NOFOLLOW` (a symlink fails with
+> `ELOOP` → `probe_dir_untrusted`), `fstat`s the directory (same
+> `st_dev`, owned by the agent's uid — root in production), creates the
+> file with `O_CREAT | O_EXCL | O_NOFOLLOW` (three name attempts on
+> `EEXIST`) and `fstat`s the created file (same device, `nlink === 1`,
+> plain file) as the post-open substitute for the directory-relative
+> open; the read-back re-opens by name and checks the inode. An
+> abandoned (timed-out) step's promise is drained so it cannot become an
+> unhandled rejection. The unlink is attempted whenever the file was
+> created — after a timeout too — and its failure is `cleanup.status:
+> 'failed'` with the errno.
+
 **`nfs_loopback`**
 
 1. `flock` on `/run/xinas/health-probe/.lock` (non-blocking); a held
    lock is `CONFLICT` (`PROBE_IN_PROGRESS`) — loopback probes are
-   serialized per node.
+   serialized per node. *Implemented (S19a):* Node has no `flock`; the
+   host uses an in-process guard plus an `O_CREAT | O_EXCL` lock file
+   carrying the agent's pid, reclaimed once when that pid is gone
+   (`ESRCH`). A refused lock is a result with `error.stage: 'lock'`.
 2. Mountpoint `/run/xinas/health-probe/<run_id|none>-<random>/mnt`,
    created 0700; `systemd-mount --collect localhost:<export> <mnt>`
    bounded by `timeout_s`; `readdir`; `systemd-umount <mnt>`; the
@@ -750,9 +795,14 @@ prompt text already forbids it.
 
 - `active_probes_per_node` (default 1): one probe in flight per agent,
   any kind; a second concurrent request is `CONFLICT`
-  (`PROBE_IN_PROGRESS`).
+  (`PROBE_IN_PROGRESS`). *Implemented (S19a):* the `health.probe.run`
+  RPC handler's in-flight guard, plus the loopback lock shared with the
+  deep profile; the api maps the agent's `PROBE_IN_PROGRESS` to `409`.
 - `probes_per_run` (default 4): counted in the run ledger per `run_id`;
-  exceeded → `PRECONDITION_FAILED` (`probe_budget_exhausted`).
+  exceeded → `PRECONDITION_FAILED` (`probe_budget_exhausted`). *Not
+  enforced in S19a:* the ledger arrives with `health.context` (S19b);
+  until then `run_id` is accepted, echoed and carried into the artifact
+  name and the audit row only (`docs/TODO.md`).
 - Everything else in `limits` (analysis time, tool calls, roles,
   retries) is recorded and reported, not enforced: xiNAS cannot see the
   host's tool-call loop.
